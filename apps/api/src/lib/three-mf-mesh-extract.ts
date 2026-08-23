@@ -1,8 +1,8 @@
 /**
  * Node ZIP I/O for the shared 3MF geometry import.
  *
- * Every DECISION — which plate, which parts, component recursion, transform composition,
- * re-centring, part naming, the triangle cap — lives in `@printstream/shared/three-mf`
+ * Every DECISION, which plate, which parts, component recursion, transform composition,
+ * re-centring, part naming, the triangle cap, lives in `@printstream/shared/three-mf`
  * (`mesh-extract.ts`), because the browser runs the same extraction over a file the user picked in
  * the public 3MF editor, where nothing is uploaded. This file only answers "give me that entry's
  * bytes" with yauzl, and maps the shared refusal onto an HTTP 400.
@@ -26,8 +26,8 @@ const MAX_MODEL_ENTRY_BYTES = 64 * 1024 * 1024
  * Reads the archive off disk.
  *
  * An ABSENT entry reads as null, which the extractor skips (a dangling `<component>` reference must
- * not fail the whole import). Every other failure — a corrupt ZIP, an unreadable file, an entry over
- * the size cap — is rethrown: swallowing those turned "this archive is broken" into "this 3MF
+ * not fail the whole import). Every other failure, a corrupt ZIP, an unreadable file, an entry over
+ * the size cap, is rethrown: swallowing those turned "this archive is broken" into "this 3MF
  * contains no importable model geometry", which sends the user looking at the wrong thing.
  */
 function nodeImportSource(filePath: string): ThreeMfImportSource {

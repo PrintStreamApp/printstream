@@ -1,11 +1,11 @@
 /**
- * The shell for public tools — pages that need no account, workspace, or plugin graph.
+ * The shell for public tools: pages that need no account, workspace, or plugin graph.
  *
  * Sits alongside `MarketingApp` as a third `Root` branch. It supplies what those pages do need and
  * the marketing branch does not: full-height layout for a 3D viewport, and the app's Joy theme +
  * chrome variables (App's own `AppThemeProvider` lives inside App, which this branch never mounts).
  *
- * It does NOT create a React Query client — `main.tsx` already provides one above `Root`, so both
+ * It does NOT create a React Query client: `main.tsx` already provides one above `Root`, so both
  * shells inherit it. The editor loads through queries even when its data is local, so that matters.
  *
  * Core, not private: the tools are capability the open-source and self-hosted builds serve too. The
@@ -57,13 +57,13 @@ export default function PublicToolApp() {
           <Suspense fallback={<ToolLoading />}>
             <Routes>
               <Route path="/3mf-editor" element={<LocalProjectEditor />} />
-              {/* Any other path is the one-render hand-off to the app branch — render nothing rather
+              {/* Any other path is the one-render hand-off to the app branch: render nothing rather
                   than redirecting, exactly as the marketing shell does. */}
               <Route path="*" element={null} />
             </Routes>
           </Suspense>
         </Box>
-        {/* Every toast the editor raises — an import refused, a save failed — is rendered by this
+        {/* Every toast the editor raises (an import refused, a save failed) is rendered by this
             host or by nothing at all. Without a Toaster here, `toast.error` on `/3mf-editor` went
             nowhere, so a 3MF with no importable geometry looked like a click that simply did
             nothing. It needs the same `StatusToastStack` as `App`: bare, it was an in-flow child of

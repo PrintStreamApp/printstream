@@ -4,7 +4,7 @@
  * Pure and catalog-agnostic on purpose: the process, filament and machine dialogs all answer the
  * same three questions (does this key render at all, does this page still have content, how many
  * settings does the current filter leave on it) and used to answer them with three hand-copied
- * loops that had already drifted — the process dialog counted matches under both the search box and
+ * loops that had already drifted: the process dialog counted matches under both the search box and
  * "Changed only", the filament dialog counted only the search. Extracting them means a page's tab
  * count and its visibility can never disagree, because both walk this one predicate.
  *
@@ -21,7 +21,7 @@ export interface CatalogFilterContext {
   normalizedQuery: string
   /** Whether the "Changed only" filter is on. */
   showChangedOnly: boolean
-  /** Conditional visibility — the process dialog's field-state engine. Defaults to always visible. */
+  /** Conditional visibility: the process dialog's field-state engine. Defaults to always visible. */
   isKeyVisible?: (key: string) => boolean
   /** Counts toward "Changed only" and the tab emphasis. */
   isModified: (key: string) => boolean
@@ -55,7 +55,7 @@ export function isKeyShown(key: string, context: CatalogFilterContext): boolean 
   return true
 }
 
-/** Whether either filter is engaged — the tabs show per-page counts only then. */
+/** Whether either filter is engaged: the tabs show per-page counts only then. */
 export function catalogFiltersActive(context: Pick<CatalogFilterContext, 'normalizedQuery' | 'showChangedOnly'>): boolean {
   return Boolean(context.normalizedQuery) || context.showChangedOnly
 }
@@ -74,7 +74,7 @@ export function countShownPerPage(context: CatalogFilterContext): number[] {
     pageKeys(context.catalog, index).filter((key) => isKeyShown(key, context)).length)
 }
 
-/** Whether each page has anything to show — pages with none are hidden entirely. */
+/** Whether each page has anything to show: pages with none are hidden entirely. */
 export function pagesWithContent(context: CatalogFilterContext): boolean[] {
   return context.catalog.pages.map((_page, index) =>
     pageKeys(context.catalog, index).some((key) => isKeyShown(key, context)))
@@ -98,7 +98,7 @@ export function pagesWithModified(context: CatalogFilterContext): Set<number> {
   return result
 }
 
-/** How many settings count as modified across the whole catalog — the title's "*" and the badge. */
+/** How many settings count as modified across the whole catalog: the title's "*" and the badge. */
 export function countModified(context: CatalogFilterContext): number {
   const unfiltered: CatalogFilterContext = { ...context, normalizedQuery: '', showChangedOnly: false }
   return Object.keys(context.catalog.options)

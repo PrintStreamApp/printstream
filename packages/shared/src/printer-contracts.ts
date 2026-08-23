@@ -195,7 +195,7 @@ export const printerSchema = printerBaseSchema.extend({
   updatedAt: z.string(),
   /**
    * Whether a LAN access code is stored. Browser-facing responses populate this
-   * and **blank the `accessCode` field itself** — the access code is the printer's
+   * and **blank the `accessCode` field itself**: the access code is the printer's
    * MQTT/FTPS/RTSP credential and must never reach the browser (the see development notes and
    * `toPublicPrinterDto`). Server-internal/transport DTOs leave it unset and carry
    * the real `accessCode`. Optional so internal builders need not set it.
@@ -237,7 +237,7 @@ export const amsSlotSchema = z.object({
    * Whether the AMS reports physical filament/spool presence in this slot, from
    * the printer's `tray_exist_bits`.
    *
-   * **Absent means the report did not say — never that the slot is empty.** Read it
+   * **Absent means the report did not say, never that the slot is empty.** Read it
    * as `slot.occupied ?? <your own fallback>`; treating a missing value as `false`
    * empties slots that are physically loaded.
    *
@@ -394,7 +394,7 @@ export type PrinterPressureAdvanceProfilesResponse = z.infer<typeof printerPress
  * index computed by `amsTrayIndex()` (classic `ams_id * 4 + slot_id` = 0-15, but
  * AMS HT / N3S units run 128-152), while external spools use Bambu's virtual
  * tray ids (`255` main/right, `254` deputy/left). Validation defers to
- * `isPhysicalAmsTrayIndex` so the accepted ranges stay in one place — an old flat
+ * `isPhysicalAmsTrayIndex` so the accepted ranges stay in one place, an old flat
  * `max(15)` cap silently rejected every H2/H2D print that touched an AMS HT slot.
  */
 export const printerTrayMappingSchema = z.union([
@@ -554,7 +554,7 @@ export type PrinterError = z.infer<typeof printerErrorSchema>
 /**
  * One firmware module reported in the printer's `info.command=get_version`
  * reply. Bambu firmware is delivered as a single OTA package, but the printer
- * reports each sub-module's installed version separately — the main board
+ * reports each sub-module's installed version separately: the main board
  * (`ota`), each AMS unit (`ams/0`, `ams/1`, ...), and assorted controllers
  * (`mc`, `th`, `esp32`, ...). `ota` is also surfaced as
  * {@link PrinterStatus.firmwareVersion}; the rest let the UI show whether,
@@ -656,7 +656,7 @@ export const printerStatusSchema = z.object({
   sdCardPresent: z.boolean().nullable(),
   /**
    * Instance `identify_id`s the firmware reports as skipped for the current print
-   * (`print.s_obj`). Null until the printer has sent a state-bearing report — older
+   * (`print.s_obj`). Null until the printer has sent a state-bearing report: older
    * firmware never does. Defaulted so payloads produced before this field existed
    * still parse.
    */
@@ -888,13 +888,13 @@ export const printerCommandSchema = z.discriminatedUnion('type', [
   }),
   /**
    * Directly set the pressure-advance K value for an AMS slot. Sends
-   * `extrusion_cali_set` with a flat `tray_id`/`k_value` payload — NOT the
-   * `filaments[]` structure the profile commands use — mirroring how BambuStudio
+   * `extrusion_cali_set` with a flat `tray_id`/`k_value` payload, NOT the
+   * `filaments[]` structure the profile commands use, mirroring how BambuStudio
    * saves a manual PA entry.
    *
    * **API-only: nothing in the web app calls this.** The AMS slot editor manages K
    * through the profile commands (`createAmsPressureAdvanceProfile` then
-   * `selectAmsPressureAdvanceProfile`, in that order — creating a profile without
+   * `selectAmsPressureAdvanceProfile`, in that order: creating a profile without
    * selecting it does not apply it). This variant stays for direct API consumers and
    * for firmware that has no profile support; do not wire it into the slot editor as
    * a shortcut, or a slot ends up with a K value no profile accounts for.
@@ -1032,7 +1032,7 @@ export const printJobSchema = z.object({
    * The project 3MF this print was sliced from, preserved exactly as it was handed to
    * the slicer, plus the settings that produced it. Present only for prints of something
    * this workspace sliced (never for direct uploads or externally started jobs), and
-   * cleared once the project is deleted — so a null here means "slice again is not
+   * cleared once the project is deleted, so a null here means "slice again is not
    * offered", never "look it up somewhere else".
    */
   sourceProjectFileId: z.string().nullable().default(null),
@@ -1068,7 +1068,7 @@ export type PrintJob = z.infer<typeof printJobSchema>
 
 /**
  * Repairable `project_settings.config` defects. The MEMBERS live here as one list so a new defect
- * cannot be added to the type and forgotten in a schema — every wire schema derives from this.
+ * cannot be added to the type and forgotten in a schema, every wire schema derives from this.
  * The checks themselves live in `repairs/` (see `collectSettingsRepairReasons`).
  */
 export const threeMfSettingsRepairReasons = ['flushMatrix', 'variantIndex', 'filamentIds', 'filamentPhysics', 'inheritsGroup', 'objectExtruder'] as const
@@ -1091,7 +1091,7 @@ export const libraryFileSchema = z.object({
   plateCount: z.number().int().nonnegative().optional(),
   /**
    * The derived 3MF metadata (chips, plate count, geometry-only/object-export flags) has not
-   * been computed for this file version yet — the API is deriving it in the background and
+   * been computed for this file version yet: the API is deriving it in the background and
    * broadcasts a library change when it lands, so a listing showing "processing" self-heals.
    * While true, the metadata fields above are EMPTY, not "known to be absent": the web renders
    * a processing indicator instead of a bare card, and must not latch decisions that depend on
@@ -1102,7 +1102,7 @@ export const libraryFileSchema = z.object({
   metadataPending: z.boolean().optional(),
   /**
    * A 3MF with no Bambu project metadata (a vanilla/CAD mesh container). Such a file is
-   * not an openable project — the web treats it like STL/STEP (preview-only card, mesh
+   * not an openable project: the web treats it like STL/STEP (preview-only card, mesh
    * thumbnail, importable into projects). Absent for other kinds and for real projects.
    */
   geometryOnly: z.boolean().optional(),
@@ -1114,10 +1114,10 @@ export const libraryFileSchema = z.object({
    */
   objectExport: z.boolean().optional(),
   /**
-   * The project's embedded settings contradict its own machine topology — today a
+   * The project's embedded settings contradict its own machine topology, today a
    * `flush_volumes_matrix` that is not `filaments^2 x extruders`, which a machine retarget to a
    * dual-nozzle printer leaves behind and which BambuStudio reads out of bounds, killing the
-   * slice. Advisory: nothing is repaired automatically — the user repairs IN THE EDITOR, where
+   * slice. Advisory: nothing is repaired automatically: the user repairs IN THE EDITOR, where
    * Repair stages the fix as an undoable edit (`SceneEdit.repairSettings`) that a save persists;
    * the print-prep dialog blocks printing a flagged file and points there.
    */
@@ -1132,7 +1132,7 @@ export const libraryFileSchema = z.object({
    * - `inheritsGroup`: `inherits_group` is not `filaments + 2` long, left behind by a save that
    *   changed the filament count. The CLI sizes its filament-name vector from that array and then
    *   indexes `filament_settings_id` with it unguarded, so it reads past the end and SIGSEGVs while
-   *   LOADING the project — exit 139 before slicing starts.
+   *   LOADING the project: exit 139 before slicing starts.
    * Absent/empty on a healthy project. `needsSettingsRepair` stays the gate.
    */
   settingsRepairReasons: z.array(threeMfSettingsRepairReasonSchema).optional(),
@@ -1155,7 +1155,7 @@ export const libraryFileSchema = z.object({
    *
    * Exposed so a long-lived editor session can tell whether the file moved under it: the editor
    * records this at open and re-reads it at save, and warns when they differ. Saving anyway is
-   * allowed and is the documented behaviour — the session authors from the bytes it opened, so
+   * allowed and is the documented behaviour: the session authors from the bytes it opened, so
    * the other save stays in history but is not an ancestor of ours.
    */
   currentVersionNumber: z.number().int().positive().optional(),
@@ -1220,7 +1220,7 @@ export const libraryThreeMfSceneBedSchema = z.object({
   maxY: z.number(),
   plateType: z.string().nullable(),
   /**
-   * The printer whose bed this placement describes — the slice dialog's target when one is
+   * The printer whose bed this placement describes: the slice dialog's target when one is
    * chosen, else the model resolved from the file's own project settings. Null when neither is
    * known (the generic 256mm fallback bed).
    *
@@ -1308,7 +1308,7 @@ export type LibraryThreeMfSceneInstance = z.infer<typeof libraryThreeMfSceneInst
 /**
  * Inputs to BambuStudio's prepare-mode wipe-tower footprint estimate
  * (`PartPlate::estimate_wipe_tower_size`). The rendered footprint is NOT
- * `prime_tower_width` squared — it grows with the purge volume, layer height and
+ * `prime_tower_width` squared, it grows with the purge volume, layer height and
  * filament count and depends on the plate's tallest object, so the final size is
  * derived client-side once the scene (filament count + heights) is known.
  */
@@ -1327,7 +1327,7 @@ export const libraryThreeMfPrimeTowerSizingSchema = z.object({
   needWipeTower: z.boolean(),
   /**
    * Vase mode, which suppresses the tower against the filament-count term (never against the
-   * forcing conditions above — BambuStudio returns early for those). Defaulted so a scene produced
+   * forcing conditions above: BambuStudio returns early for those). Defaulted so a scene produced
    * before this field existed still parses as "not vase mode", which is the common case.
    */
   spiralMode: z.boolean().default(false)
@@ -1483,7 +1483,7 @@ export const printFromLibrarySchema = z.object({
   allowIncompatibleFilament: z.boolean().default(false),
   allowPlateTypeMismatch: z.boolean().default(false),
   /**
-   * Consent to print a file sliced for a different class of machine than the target — one with a
+   * Consent to print a file sliced for a different class of machine than the target, one with a
    * Filament Track Switch, or one without. Deliberately SEPARATE from
    * `allowIncompatibleFilament`: that flag means "the tray assignments I chose are right", which is
    * a different judgement from "this file was sliced for a different machine and I accept that".
@@ -1496,8 +1496,8 @@ export const printFromLibrarySchema = z.object({
    * "these are the right materials", which says nothing about whether enough of them is left,
    * and one checkbox must never grant two unrelated permissions.
    *
-   * The queue's unattended dispatch sets this true. A queue that stalls on an ESTIMATE — the
-   * printer only reports a percent, and only for tagged spools — would be worse than a print
+   * The queue's unattended dispatch sets this true. A queue that stalls on an ESTIMATE, the
+   * printer only reports a percent, and only for tagged spools, would be worse than a print
    * that pauses when it runs dry, which is what the printer does anyway.
    */
   allowInsufficientFilament: z.boolean().default(false),
@@ -1585,7 +1585,7 @@ export const threeMfPlateObjectSchema = z.object({
   id: z.number().int().nonnegative(),
   name: z.string(),
   /**
-   * Instance `identify_id`s of this object on the plate — the per-instance handles Bambu
+   * Instance `identify_id`s of this object on the plate: the per-instance handles Bambu
    * firmware keys `skip_objects` on (from `model_settings.config` model_instances, or the
    * slice_info entry's own identify_id). Empty when the file carries none. Defaulted so
    * payloads produced before this field existed still parse.
@@ -1593,7 +1593,7 @@ export const threeMfPlateObjectSchema = z.object({
   identifyIds: z.array(z.number().int()).default([]),
   /**
    * This object's per-object PROCESS overrides from `model_settings.config`. Carried to the browser
-   * so the prepare-print dialog — which never loads the scene — can show them and re-send them
+   * so the prepare-print dialog, which never loads the scene, can show them and re-send them
    * WHOLE: the slice-time transform is authoritative per object, so a partial map drops whatever it
    * omits. Defaulted so payloads produced before this field existed still parse.
    */
@@ -1631,7 +1631,7 @@ export const threeMfPlateSchema = z.object({
   weight: z.number().nullable().optional(),
   /**
    * Layer-based filament changes baked in `custom_gcode_per_layer.xml` (by print height in
-   * mm) — the prepare-print dialog seeds its editable list from these. Absent on payloads
+   * mm): the prepare-print dialog seeds its editable list from these. Absent on payloads
    * from older servers.
    */
   filamentChanges: z.array(z.object({ z: z.number(), filamentId: z.number().int().positive() })).optional(),
@@ -1651,12 +1651,20 @@ export const threeMfProjectFilamentSchema = z.object({
    * older server or bridge.
    */
   filamentPresetName: z.string().nullable().optional(),
+  /**
+   * The slot's `filament_vendor`, verbatim. Carried because a preset's BRAND is not derivable from
+   * its name: a Polymaker preset is called "PolyLite PLA", so a project preset minted without this
+   * brands itself "PolyLite PLA" while the installed preset of the same name brands "Polymaker
+   * PolyLite PLA", and any comparison between them fails to match a preset against itself.
+   * Optional: absent from an older server or bridge, which reads as "vendor unknown".
+   */
+  filamentVendor: z.string().nullable().optional(),
   color: z.string().nullable(),
   nozzleId: z.number().int().min(0).nullable(),
   chamberTemperature: z.number().nullable(),
   /**
    * The project's `filament_is_support` / `filament_soluble` flags for this slot. Null when the
-   * 3MF (or an older server/bridge) carried neither — "unknown", not false. The support-interface
+   * 3MF (or an older server/bridge) carried neither: "unknown", not false. The support-interface
    * recommendation prompt classifies materials from these, falling back to naming when null.
    */
   isSupport: z.boolean().nullable().optional(),

@@ -3,7 +3,7 @@
  *
  * Deliberately NOT part of the 3MF index: the index is cached per file version and versioned, so
  * adding a field to it costs a `THREE_MF_INDEX_PARSER_VERSION` bump and a re-parse of every stored
- * project — for data only the editor can act on, and only while a project is open. The editor
+ * project, for data only the editor can act on, and only while a project is open. The editor
  * already holds the whole archive in the tab (`editorReadsArchiveInBrowser`), so this is a read of
  * bytes that are in hand.
  *
@@ -18,7 +18,7 @@ export type { EmbeddedProjectPreset }
 /**
  * The presets this project carries inside itself, each flagged used or not.
  *
- * `removed` are entries the session has already removed — they are dropped from the list rather
+ * `removed` are entries the session has already removed, they are dropped from the list rather
  * than shown greyed, because the removal is undoable and the list is the state of the project as it
  * would save right now.
  */
@@ -44,7 +44,7 @@ export function readEmbeddedProjectPresets(
       if (Array.isArray(ids)) settingsIds = ids.filter((id): id is string => typeof id === 'string')
     } catch {
       // An unparseable project config means we cannot say what is referenced. Every preset then
-      // reports unused, which would offer the user a removal we cannot stand behind — so report
+      // reports unused, which would offer the user a removal we cannot stand behind, so report
       // nothing instead.
       return []
     }

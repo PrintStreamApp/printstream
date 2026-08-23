@@ -3,12 +3,12 @@
  *
  * Runs fflate's SYNCHRONOUS codecs inside one dedicated worker, replacing fflate's async API on
  * the main thread. That API spawns a worker per zip entry, so a single project open burst-spawned
- * dozens of workers — and under CPU starvation its machinery wedged without ever invoking the
+ * dozens of workers, and under CPU starvation its machinery wedged without ever invoking the
  * callback, leaving an unsettleable promise (the editor's eternal "Loading plates…"). Here the
  * whole operation is ONE task in ONE worker that the client (`zipArchiveClient.ts`, the
  * counterpart that owns the deadline + main-thread fallback) terminates deterministically.
  *
- * Inputs arrive structured-cloned, never transferred — zip entries can be views into a LIVE open
+ * Inputs arrive structured-cloned, never transferred: zip entries can be views into a LIVE open
  * archive, and detaching those buffers would corrupt the project they came from. Outputs are
  * worker-owned, so their buffers transfer back zero-copy.
  */

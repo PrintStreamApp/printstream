@@ -5,12 +5,12 @@
  *
  * - HTTP CRUD for spools (`/api/plugins/filament-manager/spools`), manual
  *   quantity adjustments, slot assignment, recycle/restore, and a consumption
- *   ledger — see `routes.ts`.
+ *   ledger: see `routes.ts`.
  * - Auto-adds RFID-tagged Bambu spools on AMS insert and re-associates known
  *   spools with their current slot, syncing remaining filament from the
- *   printer's remain% — see `status-sync.ts` (gated by the per-workspace
+ *   printer's remain%: see `status-sync.ts` (gated by the per-workspace
  *   `autoAddBambuSpools` setting, default on).
- * - Decrements non-Bambu spools by per-job grams when a print finishes — see
+ * - Decrements non-Bambu spools by per-job grams when a print finishes: see
  *   `consumption.ts`. (Hybrid tracking: Bambu spools use remain%, others use
  *   per-job consumption.)
  *

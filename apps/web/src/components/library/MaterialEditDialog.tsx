@@ -1,10 +1,10 @@
 /**
- * Material edit dialog — the expanded type/preset/color inputs for ONE material slot,
+ * Material edit dialog: the expanded type/preset/color inputs for ONE material slot,
  * opened from the material's compact swatch row in `SliceSettingsPanel` (directly when no
  * printer is targeted, otherwise through that row's "Choose manually" menu item; the row
  * itself keeps only the swatch + nozzle picker). Edits apply immediately through the
- * slice controller's setters — the same live semantics the inputs had when they sat
- * inline on the row — so "Done" only closes; there is no separate apply/cancel state.
+ * slice controller's setters, the same live semantics the inputs had when they sat
+ * inline on the row, so "Done" only closes; there is no separate apply/cancel state.
  *
  * In 'add' mode the same inputs choose what a slot WILL be before it exists (`AddMaterialDialog`
  * owns that pending state), which is why the close callback reports the user's intent rather than
@@ -40,7 +40,7 @@ export function MaterialEditDialog({
   /**
    * 'edit' retunes an existing slot; 'add' picks what a NOT-YET-CREATED slot will be, so the
    * caller creates it only on a 'done' close. Adding first and asking after produced slots the
-   * user never chose — see `AddedMaterialChoice`.
+   * user never chose: see `AddedMaterialChoice`.
    */
   mode?: 'edit' | 'add'
   filamentIndex: number
@@ -59,9 +59,9 @@ export function MaterialEditDialog({
   /** Carries the user's intent: 'add' mode creates the slot only on 'done'. */
   onClose: (outcome: 'done' | 'cancel') => void
 }) {
-  // Edits apply LIVE through the controller — that is what keeps the editor's dirty flag and undo
+  // Edits apply LIVE through the controller, that is what keeps the editor's dirty flag and undo
   // history correct. So Cancel restores the values the dialog opened with rather than staging edits
-  // until Done — same outcome for the user, without diverging from that live-apply contract.
+  // until Done: same outcome for the user, without diverging from that live-apply contract.
   const opened = useRef({ option: selectedOption, color, typeFilter })
   const revertAndClose = () => {
     const initial = opened.current
@@ -111,7 +111,7 @@ export function MaterialEditDialog({
               placeholder="Choose a material profile"
               onChange={onMaterialOptionChange}
             />
-            {/* The field shows the ALIAS, which is the same text for every variant of a product —
+            {/* The field shows the ALIAS, which is the same text for every variant of a product,
                 including a workspace preset derived from a built-in. Reading it as confirmation of
                 which preset is bound is therefore a mistake the field invites, so name the literal
                 preset underneath whenever it says more. The option rows already do this; the field
@@ -119,18 +119,18 @@ export function MaterialEditDialog({
             {selectedOption?.profileId && selectedOption.material && selectedOption.material !== (selectedOption.presetLabel ?? selectedOption.label) && (
               <FormHelperText sx={{ color: 'text.tertiary' }}>{selectedOption.material}</FormHelperText>
             )}
-            {/* Only flag the cases needing the user to act — and always say WHY Done is disabled
+            {/* Only flag the cases needing the user to act, and always say WHY Done is disabled
                 rather than leaving a dead button with no explanation. */}
             {!selectedOption && (
               <FormHelperText sx={{ color: 'warning.400' }}>
                 {materialOptions.length > 0
                   ? 'Choose a preset for this material to continue.'
-                  : 'No preset is available for this type on the selected printer — pick another type.'}
+                  : 'No preset is available for this type on the selected printer: pick another type.'}
               </FormHelperText>
             )}
             {selectedOption && selectedOption.source !== 'manual' && !selectedOption.profileId && (
               <FormHelperText sx={{ color: 'warning.400' }}>
-                No preset matches this filament — pick one from the list.
+                No preset matches this filament: pick one from the list.
               </FormHelperText>
             )}
           </FormControl>
@@ -153,7 +153,7 @@ export function MaterialEditDialog({
         <DialogActions buttonFlex="0 1 auto" sx={{ pt: 1, justifyContent: 'flex-end' }}>
           <Button type="button" variant="plain" color="neutral" onClick={revertAndClose}>Cancel</Button>
           {/* A slot with no preset would be dropped from the slice request, so this cannot
-              confirm one — the user picks a preset or cancels back to what was there. In 'add'
+              confirm one: the user picks a preset or cancels back to what was there. In 'add'
               mode that is also what stops a slot existing before its material is chosen. */}
           <Button type="button" onClick={() => onClose('done')} disabled={!selectedOption} sx={{ minWidth: 96 }}>
             {mode === 'add' ? 'Add' : 'Done'}
@@ -175,7 +175,7 @@ function SliceMaterialAutocomplete({
   placeholder: string
   onChange: (option: SliceMaterialOption | null) => void
 }) {
-  // The FIELD shows the slicing preset actually in effect — choosing a loaded
+  // The FIELD shows the slicing preset actually in effect: choosing a loaded
   // filament ("Michael's PLA") sets type/preset/colour and the field reads the
   // matched preset ("PLA Basic - Custom"), BambuStudio-style. The filament name
   // still labels the option rows below, where the choice is made.
@@ -189,7 +189,7 @@ function SliceMaterialAutocomplete({
   return (
     <DeferredKeyboardAutocomplete
       options={options}
-      // "No preset" is a real, reachable state — switching the type clears the previous
+      // "No preset" is a real, reachable state: switching the type clears the previous
       // pick, and a tray whose preset never resolved opens with none. So the field is
       // nullable and clearable; `Done` is what refuses to confirm an empty slot. (This
       // was `disableClearable` with `value ?? undefined` on the assumption that a slot
@@ -205,7 +205,7 @@ function SliceMaterialAutocomplete({
       getOptionLabel={(option) => option.label}
       // Search the whole identity, not just the displayed label. The label is the ALIAS, which has
       // the vendor prefix stripped ("PLA Basic"), so typing a brand matched no built-in preset at
-      // all — the reason a separate Brand dropdown was needed, and why removing it in favour of
+      // all: the reason a separate Brand dropdown was needed, and why removing it in favour of
       // "just type it" did not work. Terms are ANDed so "bambu pla basic" narrows rather than
       // widening, and the literal preset name is searchable too ("@BBL A1" finds that variant).
       filterOptions={(available, state) => filterSliceMaterialOptions(available, state.inputValue, displayValue)}
@@ -229,7 +229,7 @@ function SliceMaterialAutocomplete({
                   {[option.brand, option.metadata].filter(Boolean).join(' · ')}
                 </Typography>
                 {/* The LITERAL preset name. The row above shows the alias, which is the same text
-                    for every machine variant of a product — so without this there is no way to see
+                    for every machine variant of a product, so without this there is no way to see
                     which variant a pick actually landed on. Only when it adds something. */}
                 {option.profileId && option.material && option.material !== option.label && (
                   <Typography level="body-xs" textColor="text.tertiary" sx={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>

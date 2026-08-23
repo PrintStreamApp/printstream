@@ -11,7 +11,7 @@ import type { SxProps } from '@mui/joy/styles/types'
  * Popper wiring for a cursor-anchored context menu (zero-size virtual anchor at the
  * right-click point). `flip` moves the menu to the other side of the cursor when that
  * side fits; when NEITHER side fits, `preventOverflow` must shift it back inside the
- * viewport — and Popper's default only constrains the main axis, which for a vertical
+ * viewport, and Popper's default only constrains the main axis, which for a vertical
  * placement is the horizontal one, so tall menus used to run off the bottom edge.
  * `altAxis: true` adds the vertical constraint and `tether: false` lets the shift move
  * the menu past (over) the anchor point instead of stopping beside it.

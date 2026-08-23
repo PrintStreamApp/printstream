@@ -1,5 +1,5 @@
 /**
- * Persists the material tune dialog's "Save in this 3MF" overrides into a freshly-baked project —
+ * Persists the material tune dialog's "Save in this 3MF" overrides into a freshly-baked project:
  * the save-side half the feature was missing (the overrides previously lived only in controller
  * state and rode slice requests; a save/reopen silently lost them).
  *
@@ -9,7 +9,7 @@
  * a later (or same-save) machine switch instead of rebinding it away.
  *
  * Best-effort like the other save-side improvement passes: returns null (caller keeps the input
- * path) when there is nothing to write, the settings are unreadable, or preset resolution fails —
+ * path) when there is nothing to write, the settings are unreadable, or preset resolution fails,
  * a save must never fail because an override could not be persisted; the override still rides the
  * slice request either way.
  *

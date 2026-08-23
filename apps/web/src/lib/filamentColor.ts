@@ -16,7 +16,7 @@ import {
   type FilamentColorSwatchOption
 } from '@printstream/shared'
 
-// Canonical resolution lives in @printstream/shared — re-exported here for existing consumers.
+// Canonical resolution lives in @printstream/shared: re-exported here for existing consumers.
 export {
   COMMON_FILAMENT_COLOR_SWATCHES,
   commonFilamentColorName,
@@ -131,7 +131,7 @@ function hueAngle(ap: number, b: number): number {
 }
 
 /**
- * CIEDE2000 colour difference between two CIELAB colours — the current CIE standard for perceptual
+ * CIEDE2000 colour difference between two CIELAB colours: the current CIE standard for perceptual
  * colour distance. Unlike a raw Euclidean metric it weights lightness, chroma, and hue separately
  * (with a blue-region hue-rotation term), so a saturated colour is not judged close to a grey of
  * similar lightness. 0 = identical; ~1 is a just-noticeable difference. Implementation follows

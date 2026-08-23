@@ -2,7 +2,7 @@
  * Camera streaming needs ffmpeg, so standalone executables embed a pinned
  * static build (plus its GPL license text) as SEA assets. On startup this
  * module extracts it once into `<dataDir>/tools/ffmpeg-<tag>/` and points
- * `BRIDGE_FFMPEG_PATH` at it — the camera code in @printstream/bridge-runtime
+ * `BRIDGE_FFMPEG_PATH` at it: the camera code in @printstream/bridge-runtime
  * spawns that path instead of relying on a system install. Operators can still
  * override with their own BRIDGE_FFMPEG_PATH; system PATH ffmpeg is the
  * fallback for dev runs and builds without the asset.
@@ -10,7 +10,7 @@
  * Shared, because BOTH standalone builds relay cameras: the bridge executable
  * and the native self-hosted server, whose in-box bridge owns the LAN. The
  * server shipped without ffmpeg at first, which silently disabled the camera on
- * every RTSP printer (X/H series) while leaving the TLS ones (P1/A1) working —
+ * every RTSP printer (X/H series) while leaving the TLS ones (P1/A1) working,
  * a "camera is broken on my H2D" that looked like a printer-specific bug.
  *
  * The env var keeps its `BRIDGE_` name because it belongs to the camera runtime

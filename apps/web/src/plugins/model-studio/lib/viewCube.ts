@@ -5,7 +5,7 @@
  *
  * Owns the canonical Bambu-style view presets (iso/front/back/left/right/top/
  * bottom), the helpers that turn a preset into a camera direction/up, the ortho
- * frame-radius math used to fit plated content, and `createViewCube` — a small
+ * frame-radius math used to fit plated content, and `createViewCube`, a small
  * factory that builds the secondary WebGL renderer + clickable cube and returns
  * handles to sync its orientation, dispose it, and react to face clicks.
  *
@@ -16,7 +16,7 @@ import * as THREE from 'three'
 export const BAMBU_THREE_MF_ISO_VIEW = { x: -0.5, y: -0.5, z: Math.SQRT1_2 } as const
 export const BAMBU_THREE_MF_ISO_UP = { x: 0, y: 0, z: 1 } as const
 /**
- * The editor's default "home" camera direction — a slightly-elevated **front** view
+ * The editor's default "home" camera direction, a slightly-elevated **front** view
  * (no left/right rotation), distinct from the iso corner view. Shared so the read-only
  * G-code preview can open at the same angle the full editor does. Consumers normalize it
  * and scale by their own view distance; the up vector is {@link BAMBU_THREE_MF_ISO_UP}.
@@ -26,7 +26,7 @@ export const BAMBU_THREE_MF_ORTHO_MARGIN = 1.04
 export const VIEW_CUBE_SIZE = 92
 
 /**
- * Distance from the viewport's left and bottom edges, in px — the SAME on both, so the cube sits
+ * Distance from the viewport's left and bottom edges, in px, the SAME on both, so the cube sits
  * squarely in the corner. It used to be nudged out of frame at xs (-18) to hide the transparent
  * margin the old wide frustum baked into the canvas; the canvas now hugs the cube, so this is a
  * real inset and matches the 8px the toolbar keeps from the top-right.
@@ -238,7 +238,7 @@ export function createViewCube(
         disposable.geometry?.dispose()
         const materials = Array.isArray(disposable.material) ? disposable.material : disposable.material ? [disposable.material] : []
         for (const material of materials) {
-          // Free the face CanvasTextures too — Material.dispose() doesn't release `.map`.
+          // Free the face CanvasTextures too: Material.dispose() doesn't release `.map`.
           for (const value of Object.values(material as unknown as Record<string, unknown>)) {
             if (value && (value as THREE.Texture).isTexture) (value as THREE.Texture).dispose()
           }
@@ -248,7 +248,7 @@ export function createViewCube(
       renderer.dispose()
       // dispose() alone leaves the WebGL context alive until the canvas is garbage-
       // collected; browsers cap live contexts (~8-16) and evict the OLDEST when the cap
-      // is hit — which kills an unrelated healthy viewer. Release it deterministically.
+      // is hit, which kills an unrelated healthy viewer. Release it deterministically.
       renderer.forceContextLoss()
     }
   }

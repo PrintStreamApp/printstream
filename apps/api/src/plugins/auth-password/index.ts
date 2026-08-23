@@ -3,17 +3,17 @@
  *
  * The self-hosted (OSS) sign-in provider: basic email/password accounts with
  * no email infrastructure required. It is the build-exclusive counterpart to the
- * cloud `auth-local` provider (passkeys + one-time email codes) — exactly one of
+ * cloud `auth-local` provider (passkeys + one-time email codes), exactly one of
  * the two is registered per deployment (see `isSelfHostedDeployment` and the API
  * plugin `builtin` wiring).
  *
  * Routes:
- * - `GET/POST /api/plugins/auth-password/enabled` — provider enable state.
- * - `GET /api/plugins/auth-password/status` — setup summary for the setup UI.
- * - `POST /api/plugins/auth-password/bootstrap/admin` — first-run admin + password.
- * - `POST /api/plugins/auth-password/sign-in` — email/password sign-in.
- * - `GET|POST /api/plugins/auth-password/me/password[/change]` — self-service.
- * - `POST|DELETE /api/plugins/auth-password/users/:userId/password` — admin set/reset.
+ * - `GET/POST /api/plugins/auth-password/enabled`: provider enable state.
+ * - `GET /api/plugins/auth-password/status`: setup summary for the setup UI.
+ * - `POST /api/plugins/auth-password/bootstrap/admin`: first-run admin + password.
+ * - `POST /api/plugins/auth-password/sign-in`: email/password sign-in.
+ * - `GET|POST /api/plugins/auth-password/me/password[/change]`: self-service.
+ * - `POST|DELETE /api/plugins/auth-password/users/:userId/password`: admin set/reset.
  */
 import type { RegisteredAuthProvider } from '../../lib/auth-registry.js'
 import {

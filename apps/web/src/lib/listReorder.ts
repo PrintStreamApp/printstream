@@ -4,8 +4,8 @@
  * `hooks/useListReorderDrag.ts` owns the pointer-event state machine that feeds it.
  *
  * The strip drops BETWEEN tiles (insertion gaps 0..N), never onto a tile: a drop onto a tile is
- * ambiguous — "insert after" when dragging forward and "insert before" when dragging backward
- * mean different landings from the same drop point — while a gap means one position in both
+ * ambiguous, "insert after" when dragging forward and "insert before" when dragging backward
+ * mean different landings from the same drop point, while a gap means one position in both
  * directions and both orientations.
  */
 

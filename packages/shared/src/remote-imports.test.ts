@@ -203,7 +203,7 @@ test('parseMakerWorldModelUrl reads the design id from slugged and bare model pa
   )
 })
 
-// The profile rides in the fragment, which never reaches a server by itself — this is
+// The profile rides in the fragment, which never reaches a server by itself, this is
 // why the parse has to run where the user's whole pasted string is still intact.
 test('parseMakerWorldModelUrl reads the profile id out of the fragment', () => {
   assert.deepEqual(

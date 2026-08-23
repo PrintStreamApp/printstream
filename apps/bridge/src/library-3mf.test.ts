@@ -337,7 +337,7 @@ test('readBridgeLibraryThreeMfIndex distinguishes A1 mini from A1 (mini must not
         ['Metadata/project_settings.config', Buffer.from(JSON.stringify({ printer_model: [model] }))]
       ])
       const index = await readBridgeLibraryThreeMfIndex(sourcePath)
-      // "Bambu Lab A1 mini" contains " A1 ", which used to short-circuit to A1 — making the
+      // "Bambu Lab A1 mini" contains " A1 ", which used to short-circuit to A1, making the
       // slice dialog pair A1 filament profiles with the project's A1-mini machine profile.
       assert.deepEqual(index.compatiblePrinterModels, [expected])
     }

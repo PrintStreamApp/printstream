@@ -302,14 +302,14 @@ async function readPlateBundle(plateOutput: PlateOutput): Promise<PlateBundle> {
  * Ensure a sliced `.gcode.3mf` carries a per-plate MODEL thumbnail.
  *
  * The degradation half of the cover-rendering contract (docs/slicer-cover-rendering.md): when
- * the CLI's own renderer could not run — no weston/OSMesa/gl-osmesa-shim in the runtime (the
+ * the CLI's own renderer could not run, no weston/OSMesa/gl-osmesa-shim in the runtime (the
  * native self-hosted app, deliberately), a GL failure, or an all-plate export that skipped the
- * thumbnail stage — the output lands without `plate_N.png` and the library would show a
+ * thumbnail stage: the output lands without `plate_N.png` and the library would show a
  * misleading toolpath fallback or just the kind label. Copy any missing `plate_N.png` /
  * `plate_N_small.png` from the slicer INPUT. That must be the ORIGINAL input, not the prepared
  * copy: `prepareInputThreeMf` strips stale previews from the copy when filament colours change,
  * counting on this reader to restore the originals wherever fresh renders were impossible.
- * Best-effort: skips plates the input can't supply and never throws — a missing thumbnail must
+ * Best-effort: skips plates the input can't supply and never throws, a missing thumbnail must
  * not fail a slice.
  */
 export async function backfillPlateThumbnails(outputPath: string, inputPath: string): Promise<void> {

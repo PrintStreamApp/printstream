@@ -4,8 +4,8 @@
  * Thin React wrapper over the framework-free {@link EditorHistoryModel}: it owns the
  * scene-restore side effects (cloning, setState, slice-config restore) and mirrors the
  * model's flags into React state so the toolbar/Save button re-render. It also wraps
- * the slice controller's structural edits — printer target, nozzle, plate type, material
- * add/remove — so those route through the same undo/redo as scene edits. Pulled out of
+ * the slice controller's structural edits, printer target, nozzle, plate type, material
+ * add/remove, so those route through the same undo/redo as scene edits. Pulled out of
  * EditorView so the component body keeps to scene wiring and rendering.
  *
  * The slice config lives in the host `SliceFileModal`, not in the editor's scene state, so
@@ -41,11 +41,11 @@ export interface EditorHistoryParams {
   sliceConfig: SliceSettingsController | undefined
   /** Live set of materials any object/part/layer/paint OR support setting references (remove-guard). */
   usedFilamentIds: Set<number>
-  /** Subset of {@link usedFilamentIds} used ONLY for supports — drives the accurate remove-blocked copy. */
+  /** Subset of {@link usedFilamentIds} used ONLY for supports: drives the accurate remove-blocked copy. */
   supportOnlyFilamentIds: Set<number>
   /**
    * The project was CREATED in the editor (new-project scaffold / fileless start). Its seeded
-   * machine target is genuinely unsaved work — the scaffold has no machine of its own — so the
+   * machine target is genuinely unsaved work, the scaffold has no machine of its own, so the
    * retarget term of {@link EditorHistory.hasUnsavedChanges} counts from the start instead of
    * baselining the seed as "what the file carries".
    */
@@ -67,7 +67,7 @@ export interface EditorHistory {
   rebaseFilamentSources: (sourceRemap: Map<number, number>) => void
   /**
    * `isDirty` OR a machine target the FILE does not carry yet (a seeded target on a new/machineless
-   * project, tracked as a signature-vs-baseline diff — see the retarget-signature block).
+   * project, tracked as a signature-vs-baseline diff: see the retarget-signature block).
    */
   hasUnsavedChanges: boolean
   canUndo: boolean
@@ -96,7 +96,7 @@ export function useEditorHistory({
   supportOnlyFilamentIds,
   editorBorn = false
 }: EditorHistoryParams): EditorHistory {
-  // useRef (not useMemo) so the undo stacks persist for the editor's lifetime — a
+  // useRef (not useMemo) so the undo stacks persist for the editor's lifetime, a
   // useMemo value may be discarded and recreated by React, which would drop history.
   const modelRef = useRef<EditorHistoryModel | null>(null)
   modelRef.current ??= new EditorHistoryModel(HISTORY_LIMIT)
@@ -137,20 +137,20 @@ export function useEditorHistory({
   restoreConfigRef.current = sliceConfig?.restoreConfig
 
   // A pending machine retarget the FILE does not yet carry is unsaved work, so it enables Save
-  // even though nothing recorded — the case this covers is a SEEDED target (a new-project
+  // even though nothing recorded: the case this covers is a SEEDED target (a new-project
   // scaffold, or a machineless file), where no user gesture ran through the recording wrappers.
   // `retargetTarget != null` alone cannot express that: the controller materializes it whenever a
   // machine + process are resolved, i.e. ALWAYS in a working session, which kept Save lit
   // permanently (before and after every save). Instead we compare a signature of the target's
   // ESSENTIALS against a baseline:
   // - The baseline is captured from the first resolved target while the session is still
-  //   pristine (nothing recorded, not dirty) — the seeds mirror the opened file — and re-captured
+  //   pristine (nothing recorded, not dirty), the seeds mirror the opened file, and re-captured
   //   by `markSaved`, since the save just baked exactly this target.
   // - An editor-born project captures NO initial baseline: its seeded target is real pending
   //   work (the scaffold has no machine), so any resolved target lights Save until the first save.
   // - The essentials deliberately EXCLUDE filamentMappings and processSettingOverrides: edits to
   //   those mark dirty through their own listeners, and both embed per-session filament ids that
-  //   a save renumbers — including them would re-light Save right after saving (the original bug,
+  //   a save renumbers, including them would re-light Save right after saving (the original bug,
   //   reintroduced through the side door).
   const retargetSignature = sliceConfig?.retargetTarget
     ? JSON.stringify({
@@ -162,7 +162,7 @@ export function useEditorHistory({
       })
     : null
   // State (not a ref): markSaved re-baselines after a save where `dirty` may already be false
-  // (a seeded-target-only save), and the Save button must still grey — that needs a render.
+  // (a seeded-target-only save), and the Save button must still grey, that needs a render.
   const [retargetBaseline, setRetargetBaseline] = useState<string | null>(null)
   const retargetSignatureRef = useRef(retargetSignature)
   retargetSignatureRef.current = retargetSignature
@@ -172,7 +172,7 @@ export function useEditorHistory({
     // index first, the profile catalogue after), so a baseline captured at the first resolve
     // drifts as the later inputs land, lighting Save on a freshly-opened untouched project. The first
     // user gesture records history BEFORE mutating (see sliceConfigForPanel), so canUndo/dirty
-    // are already true by the time the gesture's signature arrives — the baseline freezes on the
+    // are already true by the time the gesture's signature arrives: the baseline freezes on the
     // pre-gesture value exactly. An editor-born project never baselines its seeds: a scaffold
     // has no machine of its own, so its seeded target is genuinely unsaved work.
     if (editorBorn) return
@@ -184,7 +184,7 @@ export function useEditorHistory({
 
   // A save renumbers the live session's filament ids, but the retained frames must NOT follow:
   // each frame carries its own slot list, its own per-slot maps and a scene that references those
-  // same ids, so it is self-consistent — translating half of it is what would break it. Only
+  // same ids, so it is self-consistent: translating half of it is what would break it. Only
   // `sourceIndex` points outside the frame, into the file's slot order, so only that moves.
   const rebaseFilamentSources = useCallback((sourceRemap: Map<number, number>) => {
     modelRef.current!.mapFrames((entry) => (entry.sliceConfig
@@ -228,7 +228,7 @@ export function useEditorHistory({
    * Record a material edit as an undoable step, coalescing a burst into one.
    *
    * The FIRST edit of a burst snapshots (callers run this before delegating to the controller, so
-   * the snapshot is the pre-edit state — which is what undo must restore); later edits inside the
+   * the snapshot is the pre-edit state, which is what undo must restore); later edits inside the
    * window only extend it. So a drag collapses to a single step whose target is the colour the user
    * started from, not an intermediate one they never chose.
    */
@@ -254,7 +254,7 @@ export function useEditorHistory({
 
   // Global process-setting edits (profile switch + the process-settings dialog, both rendered by
   // the host slice modal) call this BEFORE mutating the controller. Snapshot the current material
-  // state — which now carries processProfileId/processSettingOverrides — so the edit is undoable
+  // state, which now carries processProfileId/processSettingOverrides, so the edit is undoable
   // and lights Save. Mirrors the material-picker listener (markSettingsDirty) above.
   useEffect(() => {
     const ref = sliceConfig?.processEditListenerRef
@@ -300,7 +300,7 @@ export function useEditorHistory({
 
   const markSaved = useCallback(() => {
     modelRef.current!.markSaved()
-    // The save baked exactly the current target, so it becomes the new baseline — Save greys
+    // The save baked exactly the current target, so it becomes the new baseline: Save greys
     // until the target genuinely changes again (see the retarget-signature block above).
     setRetargetBaseline(retargetSignatureRef.current)
     syncFlags()
@@ -312,13 +312,13 @@ export function useEditorHistory({
   //
   // Every wrapped setter here must correspond to ONE user gesture. The printer picks arrive as
   // the controller's combined `selectPrinter`/`selectPrinterModel` actions for exactly that
-  // reason — wrapping the underlying id/mode setters separately would record a frame each and
+  // reason: wrapping the underlying id/mode setters separately would record a frame each and
   // take two undos to reverse one pick.
   //
   // Changing the printer target also re-derives state the editor owns: the scene queries are
   // keyed on the target model, so each plate's bed and unprintable zones are rewritten when the
   // new target's scenes arrive (see the resync effect in EditorView). That rewrite is NOT
-  // recorded, and must not be — it is derived, so undoing back to the previous target restores
+  // recorded, and must not be, it is derived, so undoing back to the previous target restores
   // the previous bed on its own from the cached scene.
   const sliceConfigForPanel = useMemo<SliceSettingsController | undefined>(() => {
     if (!sliceConfig) return undefined
@@ -332,7 +332,7 @@ export function useEditorHistory({
       setNozzleDiameter: (value) => { recordSliceConfigHistory(); sliceConfig.setNozzleDiameter(value) },
       setNozzleFlow: (value) => { recordSliceConfigHistory(); sliceConfig.setNozzleFlow(value) },
       onAddFilament: (choice) => { recordSliceConfigHistory(); sliceConfig.onAddFilament(choice) },
-      // BambuStudio parity: only an OBJECT reference blocks removal — reassign the object first.
+      // BambuStudio parity: only an OBJECT reference blocks removal: reassign the object first.
       // A material referenced solely by a process setting (support / support interface, infill or
       // wall filament) is removable: BambuStudio drops the setting back to "Default" instead of
       // refusing, and the controller does the same, remapping the surviving references to their
@@ -350,7 +350,7 @@ export function useEditorHistory({
         recordSliceConfigHistory()
         sliceConfig.onRemoveFilament(projectFilamentId)
       },
-      // A reorder is one drop gesture — one checkpoint, one Ctrl+Z. The snapshot's sessionSlots
+      // A reorder is one drop gesture, one checkpoint, one Ctrl+Z. The snapshot's sessionSlots
       // carry the order, so undo restores the pre-drag list (and the filament-INDEX overrides,
       // which live in the same snapshot).
       onReorderFilament: (fromIndex: number, insertAt: number) => {
@@ -363,7 +363,7 @@ export function useEditorHistory({
       // Material profile/colour edits feed `desiredFilaments` into the saved 3MF, so they count as
       // unsaved changes. They are applied through the controller's own picker Modal rather than
       // this wrapper (see materialEditListenerRef), so a checkpoint recorded here would capture
-      // the wrong moment — they only flip the sticky dirty flag for the Save button.
+      // the wrong moment, they only flip the sticky dirty flag for the Save button.
       handleMaterialOptionChange: (projectFilamentId, option) => { recordMaterialEdit(); sliceConfig.handleMaterialOptionChange(projectFilamentId, option) },
       setFilamentColors: (value) => { recordMaterialEdit(); sliceConfig.setFilamentColors(value) },
       setFilamentToolheadIds: (value) => { recordMaterialEdit(); sliceConfig.setFilamentToolheadIds(value) }

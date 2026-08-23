@@ -3,7 +3,7 @@
  * process is visible instead of being debugged.
  *
  * **Owns its own poll on purpose.** The 5s health query used to live in `App`, which meant every
- * tick re-rendered the entire tree — measured at ~56ms per tick on a library page with ten cards
+ * tick re-rendered the entire tree: measured at ~56ms per tick on a library page with ten cards
  * rendered, and nothing at all with one, because the cost is the tree underneath rather than the
  * badge. Dev-only, so no user ever paid it, but it polluted every main-thread profile taken in dev
  * (including the one that first went looking for it). Keeping the query here bounds the re-render
@@ -35,7 +35,7 @@ function formatRuntimeClock(value: string): string {
 
 export function DevRuntimeStatus({ webStartedAt }: DevRuntimeStatusProps) {
   // Only ever mounted in dev (the caller gates on `browserEnv.devMode`), so the poll needs no
-  // `enabled` guard of its own — not mounting is the guard.
+  // `enabled` guard of its own, not mounting is the guard.
   const health = useQuery({
     queryKey: ['dev-health'],
     queryFn: ({ signal }) => apiFetch<DevHealthResponse>('/api/health', { signal }),

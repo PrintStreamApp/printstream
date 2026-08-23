@@ -1,13 +1,13 @@
 /**
  * A slice-settings controller for a host with no server behind it.
  *
- * The library builds its controller inside `SliceFileModal` from live workspace data — printers,
+ * The library builds its controller inside `SliceFileModal` from live workspace data: printers,
  * AMS trays, the workspace's custom presets, slice dispatch. The public editor has none of that, but it
  * DOES need the half of the controller that is about the project itself: which slicer target, which
  * printer model and nozzle, which process and filament presets, and the project's materials.
  *
  * So this is deliberately REDUCED rather than a stub of all 81 fields. The printer, AMS-tray, and
- * slice-dispatch fields are present because the type requires them, but inert — and every surface
+ * slice-dispatch fields are present because the type requires them, but inert, and every surface
  * that would render them is already hidden: `SliceSettingsPanel` drops the Plate and Objects
  * sections in `editor` mode, and now hides the printer picker when there are no printers. Nothing
  * here renders a control that cannot work.
@@ -32,7 +32,7 @@ export interface LocalSliceSettingsInput {
 /**
  * Merge the user's browser-stored presets into a catalogue, so the pickers show both.
  *
- * A local preset SHADOWS a built-in of the same kind and name — the user uploading a preset called
+ * A local preset SHADOWS a built-in of the same kind and name: the user uploading a preset called
  * "0.20mm Standard" means theirs, and showing two entries with one name would make the choice
  * arbitrary. This mirrors how the api merges a workspace's custom presets over the built-ins.
  */

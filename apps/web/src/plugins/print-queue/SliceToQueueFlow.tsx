@@ -1,7 +1,7 @@
 /**
  * Slice-then-queue flow for an unsliced project 3MF. Slicing needs a target model
  * (gcode is machine-specific), but the queued item must NOT be pinned to a specific
- * printer — the matcher picks the printer at dispatch. So once slicing finishes this
+ * printer: the matcher picks the printer at dispatch. So once slicing finishes this
  * hands the sliced output to the queue's own add dialog (which defaults to "any
  * eligible printer", auto-constrained to the sliced model), instead of the print
  * setup's forced printer selection.
@@ -37,7 +37,7 @@ export function SliceToQueueFlow({
   const [jobId, setJobId] = useState<string | null>(null)
 
   // If the user leaves before the sliced output is added to the queue it's still a hidden
-  // slice artifact — discard it so it isn't orphaned. Once the add "keeps" (un-hides) it,
+  // slice artifact: discard it so it isn't orphaned. Once the add "keeps" (un-hides) it,
   // discard is a server-side no-op, so this is safe to call on every close.
   const handleClose = useCallback(() => {
     if (jobId) {

@@ -20,7 +20,7 @@ export const LOCAL_SLICE_FILE_ID = 'local-project'
 /**
  * Whether `id` is the local stand-in rather than a library row.
  *
- * Null/undefined is NOT local — it is "no file at all", a different fact with the same consequence
+ * Null/undefined is NOT local, it is "no file at all", a different fact with the same consequence
  * here but not everywhere, so callers that care keep the distinction.
  */
 export function isLocalSliceFileId(id: string | null | undefined): boolean {
@@ -28,7 +28,7 @@ export function isLocalSliceFileId(id: string | null | undefined): boolean {
 }
 
 /**
- * The id of a real SERVER file, or null when there is none — the question every gate that decides
+ * The id of a real SERVER file, or null when there is none: the question every gate that decides
  * whether to call a workspace route actually means to ask.
  */
 export function serverSourceFileId(id: string | null | undefined): string | null {

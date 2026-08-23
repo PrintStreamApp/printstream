@@ -3,7 +3,7 @@
  *
  * The public editor has no library behind it: the file comes from a picker or a drop, is parsed in
  * the tab (`threeMfArchive.ts`), and is written back by `clientThreeMfBake.ts`. This module is the
- * bit in between — where the bytes come from and where they go.
+ * bit in between: where the bytes come from and where they go.
  *
  * Two tiers, because browser support is split:
  *  - **File System Access** (Chromium): we keep the handle the user picked, so "Save" overwrites
@@ -18,7 +18,7 @@ import { downloadBlob } from '../../../lib/downloadBlob'
 
 /**
  * Minimal structural typings for the File System Access API, which the bundled DOM lib does not
- * declare. Narrow on purpose — only what this module calls, so a future lib.dom that does declare
+ * declare. Narrow on purpose, only what this module calls, so a future lib.dom that does declare
  * these stays compatible.
  */
 interface FileSystemWritable {
@@ -54,7 +54,7 @@ export interface LocalProjectFile {
   blob: Blob
   /**
    * Overwrite the file the user opened. Null when this file arrived by a route that yields no
-   * writable handle (a drop, an `<input type=file>`, or a browser without File System Access) —
+   * writable handle (a drop, an `<input type=file>`, or a browser without File System Access):
    * the caller falls back to {@link downloadProjectBytes} and should word its UI accordingly.
    */
   saveInPlace: ((bytes: Uint8Array) => Promise<void>) | null
@@ -69,7 +69,7 @@ export function supportsFileSystemAccess(): boolean {
 /**
  * Show the system file picker.
  *
- * Resolves null when the user dismisses it — a cancelled picker is a normal outcome, not an error
+ * Resolves null when the user dismisses it, a cancelled picker is a normal outcome, not an error
  * to surface. Any other failure propagates, since it means the pick genuinely broke.
  */
 export async function openLocalProjectFile(): Promise<LocalProjectFile | null> {
@@ -94,7 +94,7 @@ export async function openLocalProjectFile(): Promise<LocalProjectFile | null> {
  *
  * The input is ATTACHED to the document and removed only once it has answered. A detached input is
  * eligible for garbage collection as soon as this function returns, taking its `change` listener
- * with it — the user then picks a file and nothing happens at all, with no error anywhere to
+ * with it: the user then picks a file and nothing happens at all, with no error anywhere to
  * explain why. `cancel` is handled too so the promise cannot hang on a dismissed dialog.
  */
 export function pickLocalProjectFileViaInput(): Promise<LocalProjectFile | null> {
@@ -112,7 +112,7 @@ export function pickLocalProjectFileViaInput(): Promise<LocalProjectFile | null>
 }
 
 /**
- * Wrap a file that arrived without a picker — a drop, or an `<input type=file>`. There is no
+ * Wrap a file that arrived without a picker, a drop, or an `<input type=file>`. There is no
  * writable handle in either case, so this project can only ever be saved as a download.
  */
 export function localProjectFileFromFile(file: File): LocalProjectFile {
@@ -187,7 +187,7 @@ async function writeHandle(handle: FileHandle, bytes: Uint8Array): Promise<void>
 }
 
 /**
- * A handle from `showOpenFilePicker` carries READ permission only — writing to it needs an explicit
+ * A handle from `showOpenFilePicker` carries READ permission only: writing to it needs an explicit
  * readwrite grant, which the browser prompts for. Without this, the first Save on an opened file
  * fails with NotAllowedError even though the user picked the file themselves.
  *

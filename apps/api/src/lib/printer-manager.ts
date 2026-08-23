@@ -304,7 +304,7 @@ class PrinterManager {
     this.cancelPendingBridgePrinterOffline(printerId)
 
     // Live telemetry is proof the LAN connection works, so any probe-derived
-    // connection warning is stale — clear it. The periodic LAN probe opens a
+    // connection warning is stale: clear it. The periodic LAN probe opens a
     // second short-lived MQTT connection that a busy (e.g. printing) printer can
     // reject, producing a false warning the next real frame should retire.
     if (entry.status.connectionWarnings && entry.status.connectionWarnings.length > 0) {
@@ -356,8 +356,8 @@ class PrinterManager {
 
   /**
    * The bridge's outbound session dropped. Rather than blanking every printer on
-   * the bridge offline immediately — sessions reconnect within seconds and the
-   * printers never actually left — start a per-printer grace timer. A fresh
+   * the bridge offline immediately, sessions reconnect within seconds and the
+   * printers never actually left, start a per-printer grace timer. A fresh
    * report from the reconnected bridge cancels it; only a session that stays
    * down past {@link BRIDGE_OFFLINE_GRACE_MS} surfaces its printers as offline.
    */
@@ -368,7 +368,7 @@ class PrinterManager {
     }
   }
 
-  /** Arm the grace timer for one printer (idempotent — keeps an existing timer). */
+  /** Arm the grace timer for one printer (idempotent: keeps an existing timer). */
   private scheduleBridgePrinterOffline(printerId: string): void {
     if (this.pendingOfflineTimers.has(printerId)) return
     const timer = setTimeout(() => {
@@ -394,7 +394,7 @@ class PrinterManager {
    * Hint that a discovered printer is broadcasting again and should reconnect if
    * still offline. Scoped to the bridge that observed the discovery: serials are
    * only unique per workspace, so we act only on managed printers assigned to the
-   * reporting `bridgeId` — never on a same-serial printer in another workspace/bridge.
+   * reporting `bridgeId`, never on a same-serial printer in another workspace/bridge.
    */
   hintOnline(serial: string, bridgeId: string): boolean {
     const offlineMatches = Array.from(this.managed.values())

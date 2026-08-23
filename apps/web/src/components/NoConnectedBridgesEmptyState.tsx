@@ -12,7 +12,7 @@ import { useRuntimePolicy } from '../lib/runtimePolicy'
  * point them at Settings > Bridges. In managed-bridge mode the server owns a
  * single bundled bridge the operator never manages, so the same condition
  * instead means that bundled printer connection service has not come online
- * yet — the copy drops all "bridge" wording and we never offer the (hidden)
+ * yet: the copy drops all "bridge" wording and we never offer the (hidden)
  * bridges settings page.
  */
 export function NoConnectedBridgesEmptyState({

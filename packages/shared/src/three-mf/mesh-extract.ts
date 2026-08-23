@@ -1,13 +1,13 @@
 /**
  * Geometry-only extraction of a 3MF's printed meshes into a staged-import mesh
- * (BambuStudio's "load geometry only"), so a 3MF can be added to an open editor project — or
- * swapped in via Replace — exactly like an STL/STEP import.
+ * (BambuStudio's "load geometry only"), so a 3MF can be added to an open editor project, or
+ * swapped in via Replace, exactly like an STL/STEP import.
  *
  * Shared because both hosts import geometry and must agree on what a file contributes: the api
  * reads an upload through yauzl, and the browser reads a file the user picked for the public 3MF
  * editor, where nothing is uploaded. Only the byte source differs, so it is injected as a
- * {@link ThreeMfImportSource} and everything else — plate choice, component recursion, transform
- * composition, re-centring, part naming — lives here once. Keep it Node-free (no `node:` imports,
+ * {@link ThreeMfImportSource} and everything else, plate choice, component recursion, transform
+ * composition, re-centring, part naming, lives here once. Keep it Node-free (no `node:` imports,
  * no Buffer): a change here lands on both surfaces at once.
  *
  * Contract: the extracted geometry is the file's FIRST non-empty plate, one part per placed part
@@ -16,7 +16,7 @@
  * place the import like any STL/STEP. Helper volumes (negative/modifier/support blocker/enforcer)
  * ARE carried, each keeping its `subtype`, because BambuStudio's "Import Object"
  * (`LoadType::LoadGeometry` -> `LoadStrategy::LoadModel`) loads a 3MF's ModelObjects whole and its
- * importer applies every volume's type unconditionally (`bbs_3mf.cpp`: `volume->set_type(...)`) —
+ * importer applies every volume's type unconditionally (`bbs_3mf.cpp`: `volume->set_type(...)`),
  * only the CONFIG is dropped. They are deliberately excluded from the MERGED mesh and from the
  * re-centring, though: those drive bounds, the thumbnail, and where the import rests, and an aid
  * must not print, shift the model, or lift it off the bed. Project-level data (materials, paint,
@@ -26,7 +26,7 @@
  *
  * Vanilla 3MFs (no Bambu `Metadata/model_settings.config`) fall back to a root-model parse: every
  * build item is extracted with its build transform, named from the `<object name>` attribute.
- * Meshes keep their source indexing (3MF is already an indexed format), so no weld pass is needed —
+ * Meshes keep their source indexing (3MF is already an indexed format), so no weld pass is needed:
  * unlike STL/STEP parsing.
  *
  * Counterparts: `apps/api/src/lib/three-mf-mesh-extract.ts` (Node ZIP I/O) and
@@ -37,6 +37,7 @@ import { MAX_IMPORT_TRIANGLES } from './mesh-stl.js'
 import { composeThreeMfTransforms, parseRootBuildItemTransforms, parseRootModelComponents } from './scene-parser.js'
 import type { ThreeMfScene } from './scene-parser.js'
 import type { ImportedMesh, ImportedMeshPart } from './imported-mesh.js'
+import { threeMfModelUnitFactor } from './model-unit.js'
 
 /** Guards against a malicious/degenerate component graph (self-referential objects). */
 const MAX_COMPONENT_DEPTH = 8
@@ -46,8 +47,8 @@ const IDENTITY_TRANSFORM: readonly number[] = [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 
 /**
  * A user-facing refusal: the file carries nothing importable, or more than the caller allows.
  *
- * Its own class so each host maps it to its own transport — the api to a 400, the browser to the
- * import toast — without either having to pattern-match a message.
+ * Its own class so each host maps it to its own transport, the api to a 400, the browser to the
+ * import toast, without either having to pattern-match a message.
  */
 export class ThreeMfImportError extends Error {}
 
@@ -61,7 +62,7 @@ export interface ThreeMfImportSource {
    *
    * Null means "not in this archive" and nothing else: the extractor skips those (a dangling
    * `<component>` reference must not fail a whole import). A corrupt archive, an unreadable file, or
-   * an over-size entry must THROW — reporting those as absent turns "this file is broken" into "this
+   * an over-size entry must THROW: reporting those as absent turns "this file is broken" into "this
    * 3MF contains no importable model geometry".
    */
   readEntryText(entryPath: string): Promise<string | null>
@@ -97,6 +98,13 @@ export async function extractThreeMfImportMesh(
       : 'This 3MF contains no importable model geometry.')
   }
 
+  // A foreign 3MF may declare its coordinate space in inches, metres or microns. BambuStudio
+  // honours the attribute and always writes `millimeter` itself, so this is 1 for every Bambu
+  // project and only bites on CAD exports, which arrive 25.4x too small when it is ignored.
+  // Applied to the FINAL positions rather than threaded through component resolution because the
+  // factor scales the whole coordinate space, transforms and translations included.
+  const unitFactor = threeMfModelUnitFactor(await source.readEntryText('3D/3dmodel.model') ?? '')
+
   const entryXmlCache = new Map<string, string>()
   const parts: ImportedMeshPart[] = []
   const nameCounts = new Map<string, number>()
@@ -116,14 +124,30 @@ export async function extractThreeMfImportMesh(
   if (parts.length === 0) {
     throw new ThreeMfImportError('This 3MF contains no importable model geometry.')
   }
-  return mergeParts(recentreParts(parts))
+  return mergeParts(recentreParts(scaleParts(parts, unitFactor)))
+}
+
+/** Convert every part's positions to millimetres; a no-op at the 1.0 every Bambu project declares. */
+function scaleParts(parts: ImportedMeshPart[], factor: number): ImportedMeshPart[] {
+  if (factor === 1) return parts
+  return parts.map((part) => ({
+    ...part,
+    mesh: {
+      ...part.mesh,
+      positions: part.mesh.positions.map((value) => value * factor),
+      bounds: {
+        min: { x: part.mesh.bounds.min.x * factor, y: part.mesh.bounds.min.y * factor, z: part.mesh.bounds.min.z * factor },
+        max: { x: part.mesh.bounds.max.x * factor, y: part.mesh.bounds.max.y * factor, z: part.mesh.bounds.max.z * factor }
+      }
+    }
+  }))
 }
 
 /**
  * Translate every part by ONE shared offset so the import's PRINTED footprint is centred on the XY
  * origin and rests on Z=0, preserving the parts' relative arrangement. The extracted meshes
  * otherwise carry the source file's plate-absolute coordinates, and the editor places an import by
- * its instance position assuming near-origin mesh coordinates (like a typical STL/STEP) — without
+ * its instance position assuming near-origin mesh coordinates (like a typical STL/STEP), without
  * this the import lands plate-offset-plus-spot, off the bed.
  *
  * The offset is measured from the printed geometry ALONE, then applied to every part including the
@@ -160,7 +184,7 @@ async function resolvePartSources(source: ThreeMfImportSource, objectId?: number
     return await resolveSceneSources(source, objectId)
   } catch {
     // Missing/foreign Metadata (a vanilla 3MF): fall back to the root model's own build items.
-    // A real read failure (corrupt ZIP) resurfaces from the fallback's own read — which is why a
+    // A real read failure (corrupt ZIP) resurfaces from the fallback's own read, which is why a
     // source must throw for those and reserve `null` for a genuinely ABSENT entry. Swallowing them
     // into null reports a broken archive as "no importable model geometry".
     return resolveVanillaSources(source, objectId)
@@ -172,7 +196,7 @@ async function resolveSceneSources(source: ThreeMfImportSource, objectId?: numbe
   for (const plateIndex of plateIndexes.length > 0 ? plateIndexes : [1]) {
     const scene = await source.readScene(plateIndex)
     if (objectId != null) {
-      // Object-scoped (the Replace flow): the object's first instance, object-local — only the
+      // Object-scoped (the Replace flow): the object's first instance, object-local, only the
       // component transforms apply, so the caller controls final placement.
       const instance = scene.instances.find((entry) => entry.objectId === objectId)
       if (!instance) continue
@@ -185,7 +209,7 @@ async function resolveSceneSources(source: ThreeMfImportSource, objectId?: numbe
       }))
     }
     // Whole-file: the first plate that has PRINTABLE parts, at plate-local placements. Helper
-    // volumes ride along but can't qualify a plate on their own — a plate holding only aids has
+    // volumes ride along but can't qualify a plate on their own, a plate holding only aids has
     // nothing to import.
     const parts = scene.parts.map((part) => ({
       entryPath: part.entryPath,
@@ -214,7 +238,7 @@ async function resolveVanillaSources(source: ThreeMfImportSource, objectId?: num
         objectId: component.objectId,
         transform: placement ? composeThreeMfTransforms(placement, component.transform) : component.transform,
         name: namesByObjectId.get(rootObjectId) ?? null,
-        // A vanilla (non-Bambu) 3MF has no volume types at all — everything is printed geometry.
+        // A vanilla (non-Bambu) 3MF has no volume types at all, everything is printed geometry.
         subtype: null
       })
     }
@@ -259,7 +283,7 @@ function decodeXmlEntities(value: string): string {
 /**
  * Read one object's mesh from a model entry, recursing through `<component>` references (a sub-entry
  * object may itself be an assembly) and baking `transform` into the vertices. Returns null when the
- * object cannot be found — the part is skipped rather than failing the whole import, matching how
+ * object cannot be found: the part is skipped rather than failing the whole import, matching how
  * the scene renderer tolerates dangling references.
  */
 async function extractComponentMesh(
@@ -398,7 +422,7 @@ function mergeMeshes(meshes: ImportedMesh[]): ImportedMesh {
  * Fold the parts into the staged import's shape: a merged mesh plus (when there is more than one
  * solid) the per-part list the editor renders and the bake writes as `<component>` parts.
  *
- * The merged mesh is PRINTED geometry only — it feeds bounds, the triangle count, the thumbnail,
+ * The merged mesh is PRINTED geometry only, it feeds bounds, the triangle count, the thumbnail,
  * and the single-solid render path, none of which may show or be inflated by an aid. A lone printed
  * solid therefore still keeps a parts list whenever a helper volume rides with it; collapsing to the
  * bare merged mesh (the single-part shortcut) would drop the aid entirely.

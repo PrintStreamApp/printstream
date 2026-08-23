@@ -2,8 +2,8 @@
  * "Help & feedback" dialog: starts a support conversation with the PrintStream
  * team (feedback, bug report, or question), available to every signed-in user.
  * On the hosted deployment it opens a two-way conversation via
- * `POST /api/support/conversations` — with markdown support and optional file
- * attachments — and the `help.conversations` plugin slot below the form lists
+ * `POST /api/support/conversations`, with markdown support and optional file
+ * attachments, and the `help.conversations` plugin slot below the form lists
  * the user's existing conversations so replies are readable from the same
  * footer button (the Account → Messages composer passes
  * `showConversations={false}` because that page already shows the list).
@@ -60,7 +60,7 @@ export function HelpFeedbackDialog({
 
   const submit = async () => {
     if (selfHosted) {
-      // Self-hosted installs cannot reach the platform — hand the message to
+      // Self-hosted installs cannot reach the platform: hand the message to
       // the user's mail app addressed to the project inbox instead.
       const subject = `PrintStream ${KIND_LABELS[kind].toLowerCase()}`
       window.location.href = `mailto:${SUPPORT_CONTACT_EMAIL}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(message.trim())}`

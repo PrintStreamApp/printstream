@@ -587,7 +587,7 @@ export function LibraryFileRow({
 /**
  * Read-only "favorited" indicator overlaid on the top-left of a file's thumbnail.
  * Rendered only for favorited files; favoriting itself happens from the file's
- * actions menu. Non-interactive — clicks pass through to the row/tile beneath it.
+ * actions menu. Non-interactive: clicks pass through to the row/tile beneath it.
  */
 function FavoriteStarBadge({ matchActionsButton = false }: { matchActionsButton?: boolean }) {
   return (
@@ -610,7 +610,7 @@ function FavoriteStarBadge({ matchActionsButton = false }: { matchActionsButton?
         ...(matchActionsButton ? { width: '2rem', height: '2rem' } : {})
       }}
     >
-      {/* htmlColor sets the SVG fill directly — a gold-yellow favorite star (no Joy
+      {/* htmlColor sets the SVG fill directly, a gold-yellow favorite star (no Joy
           token is a true yellow; `warning` is amber) that won't inherit theme text color. */}
       <StarRoundedIcon fontSize="small" htmlColor="gold" />
     </Box>
@@ -1059,7 +1059,7 @@ function renderTagChip({
       variant="soft"
       color={color}
       startDecorator={pending ? (
-        // Sized to the chip's tiny type scale — Joy's smallest stock spinner would dwarf it.
+        // Sized to the chip's tiny type scale: Joy's smallest stock spinner would dwarf it.
         <CircularProgress
           color="neutral"
           sx={{ '--CircularProgress-size': compact ? '9px' : '11px', '--CircularProgress-trackThickness': '2px', '--CircularProgress-progressThickness': '2px' }}
@@ -1148,7 +1148,7 @@ function renderFilamentDot(tag: FileTagDescriptor) {
 }
 
 function FilamentTooltipBody({ label, color }: { label: string; color: string | null }) {
-  // Bambu marketing names only when the filament's own name is Bambu-branded —
+  // Bambu marketing names only when the filament's own name is Bambu-branded,
   // a bare hex must not resolve to another family's marketing colour.
   const bambuMaterial = brandFromPresetName(label.trim()) === 'Bambu' ? bambuMaterialFromPresetName(label) : null
   const headerBg = color ?? 'var(--joy-palette-neutral-800)'
@@ -1250,8 +1250,8 @@ function summarizeChipLabel(label: string): { shortLabel: string; truncated: boo
  */
 /**
  * Full-cover overlay marking a file whose backing source (e.g. a disconnected
- * bridge) is temporarily unavailable. Replaces per-card explanatory text — the
- * page-level banner carries the full reason — with a compact icon; the reason
+ * bridge) is temporarily unavailable. Replaces per-card explanatory text, the
+ * page-level banner carries the full reason, with a compact icon; the reason
  * stays available on hover.
  */
 function FileUnavailableOverlay({ reason, iconSize }: { reason: string; iconSize: number }) {
@@ -1295,10 +1295,10 @@ export function FileThumbnail({
 }) {
   const [failed, setFailed] = useState(false)
   // Every previewable kind resolves to a server thumbnail URL. 3MF/gcode embed a
-  // BambuStudio-rendered plate PNG (iso, material colour — including sliced gcode.3mf,
+  // BambuStudio-rendered plate PNG (iso, material colour, including sliced gcode.3mf,
   // whose mesh is stripped via --min-save so a client render isn't possible anyway).
   // STL/STEP carry no embedded image: the model-studio plugin renders one on the client
-  // (Three.js) and uploads it, after which the server serves that persisted PNG here —
+  // (Three.js) and uploads it, after which the server serves that persisted PNG here,
   // so the expensive mesh fetch + render (and, for STEP, server-side tessellation) runs
   // once per file version instead of on every view.
   // Cache-bust on uploadedAt: saving a new version keeps the same file id (and thus URL),
@@ -1315,7 +1315,7 @@ export function FileThumbnail({
   //    server-side; the mesh provider renders the mesh AND uploads the PNG, so the
   //    next view is served from the server.
   //  - project 3MF/gcode: a sliced gcode.3mf may carry no embedded plate PNG; render from
-  //    the scene. (A geometry-only 3MF has no plated scene — its fallback is the mesh.)
+  //    the scene. (A geometry-only 3MF has no plated scene, its fallback is the mesh.)
   const isMeshFile = file.kind === 'stl' || file.kind === 'step' || (file.kind === '3mf' && file.geometryOnly === true)
   const meshProvider = isMeshFile ? getMeshThumbnailProvider() : null
   const sceneProvider = !isMeshFile && (file.kind === '3mf' || file.kind === 'gcode') ? getSceneThumbnailProvider() : null

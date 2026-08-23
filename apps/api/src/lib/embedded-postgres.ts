@@ -6,7 +6,7 @@
  * cluster under a local data directory (portable binaries shipped by the
  * `embedded-postgres` package, which has a real `linux-arm64` build for the
  * Raspberry Pi target) and hands back the `DATABASE_URL` the rest of the app
- * connects through. When it is disabled (the default — the Docker and cloud
+ * connects through. When it is disabled (the default: the Docker and cloud
  * deployments, which connect to an operator-managed external database) this is a
  * no-op and the operator-provided `DATABASE_URL` is used unchanged. The native
  * single-file build always enables it (it has no external-database option).
@@ -14,8 +14,8 @@
  * ## Transport (no port to collide with)
  *
  * On Linux the cluster listens on a **Unix domain socket only** (no TCP
- * port at all), so it can never clash with another application's port. On Windows
- * — where Postgres/Prisma Unix-socket support is unreliable — it binds a
+ * port at all), so it can never clash with another application's port. On Windows,
+ * where Postgres/Prisma Unix-socket support is unreliable, it binds a
  * **loopback TCP port chosen free at startup**, which likewise cannot collide.
  * Setting `EMBEDDED_POSTGRES_PORT` overrides both with a fixed loopback TCP port.
  *
@@ -23,8 +23,8 @@
  *
  * The Prisma client captures `DATABASE_URL` from the env module the moment it is
  * constructed, and the env module parses `process.env` the first time it is
- * imported. So the embedded cluster must be started — and `process.env.DATABASE_URL`
- * rewritten to point at it — *before* the env module (and therefore Prisma) is
+ * imported. So the embedded cluster must be started, and `process.env.DATABASE_URL`
+ * rewritten to point at it, *before* the env module (and therefore Prisma) is
  * imported. That makes this supervisor a deliberate **pre-env** boundary: the
  * `server.ts` entrypoint calls it before importing the app, and it reads its own
  * handful of settings from `process.env` rather than from the env module it must
@@ -52,7 +52,7 @@ const EMBEDDED_USER = 'postgres'
  * Superuser password. The cluster is reachable only over a private socket (or a
  * loopback port) and its data directory is already as sensitive as this
  * credential, so a stable local password (not a real secret) keeps restarts
- * idempotent — initdb sets it once and every later boot presents the same value.
+ * idempotent, initdb sets it once and every later boot presents the same value.
  */
 const EMBEDDED_PASSWORD = 'postgres'
 const DEFAULT_DATA_DIR = './data/postgres'
@@ -100,7 +100,7 @@ function findFreeLoopbackPort(): Promise<number> {
 /**
  * Throws a clear error if another process is already running a cluster on this
  * data directory. Postgres' own `postmaster.pid` is the source of truth (its
- * first line is the postmaster PID); a stale file left by a crash is ignored —
+ * first line is the postmaster PID); a stale file left by a crash is ignored:
  * Postgres cleans it up itself on the next start.
  */
 function assertNoLiveCluster(dataDir: string): void {
@@ -172,7 +172,7 @@ export async function startEmbeddedPostgresIfEnabled(
   const { default: EmbeddedPostgresCtor } = await import('embedded-postgres')
   // embedded-postgres rejects `start()`/`initialise()` without a useful Error
   // (the real reason only reaches `onError`), so capture the last message and
-  // rethrow it with context — otherwise startup failures surface as `undefined`.
+  // rethrow it with context, otherwise startup failures surface as `undefined`.
   // Postgres' own diagnostics (e.g. "PostgreSQL by a user with administrative
   // permissions is not permitted") arrive on `onLog` as often as `onError`, so
   // track the last non-empty message from either channel to attach to a failure.

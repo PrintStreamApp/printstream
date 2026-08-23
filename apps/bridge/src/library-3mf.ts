@@ -7,7 +7,7 @@
  * only as a fallback).
  *
  * The 3MF index parsing itself lives in the shared `@printstream/shared/three-mf` module, which the
- * API consumes too — so there is no longer a hand-kept mirror to keep in step. This module owns the
+ * API consumes too, so there is no longer a hand-kept mirror to keep in step. This module owns the
  * bridge-side ZIP I/O, the in-memory index cache, and the single-plate 3MF slimming used for
  * dispatch. The result is validated by `bridgeLibraryThreeMfIndexSchema`, which strips any field the
  * schema omits.
@@ -86,7 +86,7 @@ export async function readBridgeLibraryThreeMfIndex(filePath: string): Promise<B
   }
 
   const thumbnailPlateFiles = await readPlateThumbnailFiles(filePath).catch(() => new Map<number, string>())
-  // Layer G-code sidecar (filament changes / pauses) — optional; most projects have none.
+  // Layer G-code sidecar (filament changes / pauses): optional; most projects have none.
   let customGcodeXml: string | null = null
   try {
     customGcodeXml = (await readEntry(filePath, CUSTOM_GCODE_PER_LAYER_ENTRY)).toString('utf8')

@@ -1,8 +1,8 @@
 /**
  * Single-item "Start print" dialog for the print queue.
  *
- * Lets the user pick a connected, idle printer and map each required filament to an AMS slot — reusing
- * the print dialog's {@link PrinterMapping} — so a queued item can run even when no printer has the exact
+ * Lets the user pick a connected, idle printer and map each required filament to an AMS slot, reusing
+ * the print dialog's {@link PrinterMapping}, so a queued item can run even when no printer has the exact
  * sliced material loaded. Printers are listed most-ready-first with per-aspect match chips (model /
  * nozzle / material) so it's obvious which printer needs the least fiddling. The slot picker is pre-filled
  * from the automatic match for the chosen printer (so a fully-loaded printer is one click); the user can
@@ -30,7 +30,7 @@ import { useSlotFilamentIdentityLookup } from '../../lib/slotFilamentIdentity'
 import { matchPrinterAspects, type PrinterAspectMatch } from './printerAspectMatch'
 import { MatchChip } from './MatchChip'
 
-/** Printer name + its per-aspect match chips — rendered both inside each dropdown option and as the
+/** Printer name + its per-aspect match chips: rendered both inside each dropdown option and as the
  *  selected value, so the chosen printer (and how ready it is) is always visible on the closed picker. */
 function PrinterMatchChips({ match }: { match: PrinterAspectMatch }) {
   return (
@@ -59,7 +59,7 @@ function toMappingFilaments(item: QueueItem): ThreeMfProjectFilament[] {
     filamentType: filament.filamentType,
     filamentName: filament.filamentName ?? null,
     color: filament.color,
-    // The extruder binding snapshotted at add time — lets the slot picker and the
+    // The extruder binding snapshotted at add time: lets the slot picker and the
     // auto match keep a dual-nozzle filament on its own side.
     nozzleId: filament.nozzleId ?? null,
     chamberTemperature: null
@@ -100,8 +100,8 @@ export function QueueStartDialog({
     return map
   }, [item])
 
-  // Printers the user can start on right now — connected, idle, model-compatible, and not excluded by a
-  // pinned target — ranked most-ready first (the one needing the fewest material overrides leads).
+  // Printers the user can start on right now, connected, idle, model-compatible, and not excluded by a
+  // pinned target, ranked most-ready first (the one needing the fewest material overrides leads).
   const ranked = useMemo(() => printers
     .map((printer) => ({ printer, match: matchPrinterAspects(item, printer, statuses[printer.id], allowTypeOnlyMatch) }))
     .filter(({ printer, match }) => {
@@ -191,7 +191,7 @@ export function QueueStartDialog({
   return (
     <Modal open onClose={onClose}>
       <ModalDialog sx={{ maxWidth: 520, width: '100%' }}>
-        <DialogTitle>Start print — {printedName}</DialogTitle>
+        <DialogTitle>Start print: {printedName}</DialogTitle>
         <DialogContent>
           <Stack spacing={1.5}>
             {ranked.length === 0 ? (
@@ -211,7 +211,7 @@ export function QueueStartDialog({
                 ) : null}
 
                 <FormControl size="sm">
-                  <FormLabel>Printer — most ready first</FormLabel>
+                  <FormLabel>Printer: most ready first</FormLabel>
                   {/* The shared picker rather than a local dropdown: a farm needs search, a model
                       filter and paging, and this is the same control the slice settings use. The
                       readiness chips ride its per-row `meta`, and the ranking its `rank`. */}
@@ -230,7 +230,7 @@ export function QueueStartDialog({
                 {printerPickerOpen && (
                   <PrinterPickerDialog
                     open
-                    title="Choose a printer — most ready first"
+                    title="Choose a printer: most ready first"
                     entries={ranked.map(({ printer, match }, index) => ({
                       printer,
                       rank: index,
@@ -238,7 +238,7 @@ export function QueueStartDialog({
                       // nozzle, plate), so restating them here would print every label twice per
                       // row. Meta keeps what is queue-specific: the material-readiness count,
                       // plus a match chip only for an aspect that needs attention. The collapsed
-                      // button row (PrinterOptionRow) keeps the full set — no hardware chips there.
+                      // button row (PrinterOptionRow) keeps the full set, no hardware chips there.
                       meta: (
                         <>
                           {match.nozzle !== 'match' && <MatchChip label={match.nozzleLabel} state={match.nozzle} />}
@@ -276,7 +276,7 @@ export function QueueStartDialog({
                   </>
                 ) : (
                   <Typography level="body-xs" textColor="text.tertiary">
-                    This print has no material requirements — start it on the selected printer.
+                    This print has no material requirements: start it on the selected printer.
                   </Typography>
                 )}
               </>

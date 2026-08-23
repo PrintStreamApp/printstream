@@ -2,8 +2,8 @@
  * The one description of a helper volume (support blocker/enforcer, modifier, negative part):
  * its label, its explanatory hint, and the colour it renders in.
  *
- * Single source of truth on purpose. These volumes appear in four places — the translucent
- * viewport mesh, the added-part panel, the "Add …" context menu, and the sidebar part rows — and
+ * Single source of truth on purpose. These volumes appear in four places, the translucent
+ * viewport mesh, the added-part panel, the "Add …" context menu, and the sidebar part rows, and
  * the colour used to be duplicated across two tables, so the SAME support blocker rendered one red
  * while it was a session-added part and a different red once a save turned it into a real
  * `<component>`. Everything now reads its colour from here.

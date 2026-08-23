@@ -3,14 +3,14 @@
  * and its per-extruder companion `flush_multiplier`.
  *
  * OWNS: deciding whether a project's flush sizing matches its machine topology, and rebuilding the
- * pieces that do not. Pure string/array work — the callers own their own ZIP/HTTP I/O.
+ * pieces that do not. Pure string/array work: the callers own their own ZIP/HTTP I/O.
  *
  * CONTRACT. BambuStudio stores the matrix as `extruder_count` CONSECUTIVE BLOCKS, each a
  * `filament_count x filament_count` row-major matrix (`PrintConfig.hpp`
  * `get_flush_volumes_matrix`/`set_flush_volumes_matrix` slice block `e` as
  * `[size/nozzles*e, size/nozzles*(e+1))`; `BambuStudio.cpp` sizes it
  * `project_filament_count * project_filament_count * new_extruder_count`). So the required length
- * is filaments^2 x extruders, NOT filaments^2 — the extruder factor is the part that is easy to
+ * is filaments^2 x extruders, NOT filaments^2: the extruder factor is the part that is easy to
  * miss on a single-nozzle machine, where it is 1. `flush_multiplier` (and `flush_multiplier_fast`)
  * carry ONE ENTRY PER EXTRUDER; old single-nozzle saves store a bare scalar, which BambuStudio
  * parses as a one-entry list.
@@ -20,14 +20,14 @@
  * undersized matrix inside its flush-volume recompute block, which it skips unless the CLI passed
  * `--filament-colour`, the matrix is absent entirely, the extruder count differs from the
  * project's own, or `nozzle_volume_type` mismatches. A retarget satisfies none of those, so the
- * short matrix survives and the engine reads the second extruder's block out of bounds —
+ * short matrix survives and the engine reads the second extruder's block out of bounds,
  * a deterministic SIGSEGV at ~71% ("Detect overhangs for auto-lift", CLI exit 139). Diagnosed
  * 2026-07-21 against BambuStudio 2.7.1.62; reproduced with a one-entry matrix on a 2-extruder
  * project and fixed by nothing but padding it to two entries.
  *
  * WHY THE MULTIPLIER RULE EXISTS. `GCode.cpp` validates the matrix against
- * `filament_colour.size()^2 * flush_multiplier.size()` — the heads count comes from
- * `flush_multiplier`, NOT `nozzle_diameter` — escaping only when the filament count is exactly 1.
+ * `filament_colour.size()^2 * flush_multiplier.size()`, the heads count comes from
+ * `flush_multiplier`, NOT `nozzle_diameter`, escaping only when the filament count is exactly 1.
  * So a project whose matrix is correct by OUR rule but whose multiplier still has the old
  * machine's length fails every multi-filament slice at "Generating G-code" with
  * "Flush volumes matrix do not match to the correct size!" (CLI exit 156, return -100). An ABSENT
@@ -37,7 +37,7 @@
  *
  * An ABSENT matrix is deliberately NOT a defect: absence is one of the conditions that makes
  * BambuStudio compute the matrix itself, so those projects slice correctly. The multiplier
- * detection is likewise gated on the recompute NOT firing — see
+ * detection is likewise gated on the recompute NOT firing: see
  * {@link isFlushMultiplierInconsistent} for the exact model.
  */
 
@@ -57,14 +57,14 @@ export interface FlushVolumesMatrixInspection {
   matrixInconsistent: boolean
   /** The multiplier will fail the engine's g-code-time size check (the exit-156 class). */
   multiplierInconsistent: boolean
-  /** Either defect — what `collectSettingsRepairReasons` reports as `flushMatrix`. */
+  /** Either defect: what `collectSettingsRepairReasons` reports as `flushMatrix`. */
   inconsistent: boolean
 }
 
 /**
  * Inspect a raw `project_settings.config` JSON string.
  *
- * Returns null when the settings are absent/unparseable or carry no filament list — callers must
+ * Returns null when the settings are absent/unparseable or carry no filament list: callers must
  * treat that as "unknown", never as "healthy", so an unreadable project is not silently reported
  * as repaired.
  */
@@ -79,7 +79,7 @@ export function inspectProjectFlushVolumesMatrix(projectSettingsJson: string | n
   if (!parsed || typeof parsed !== 'object') return null
   const record = parsed as Record<string, unknown>
   // Filament count comes from `filament_colour` (BambuStudio's own `project_filament_count`);
-  // extruder count from `nozzle_diameter`, which has ONE ENTRY PER EXTRUDER — do not use the
+  // extruder count from `nozzle_diameter`, which has ONE ENTRY PER EXTRUDER: do not use the
   // deduplicated `extractProjectNozzleSizes`, which collapses a dual-0.4 machine back to one.
   const filamentCount = Array.isArray(record.filament_colour) ? record.filament_colour.length : 0
   const extruderCount = Array.isArray(record.nozzle_diameter) ? Math.max(record.nozzle_diameter.length, 1) : 1
@@ -105,7 +105,7 @@ export function inspectProjectFlushVolumesMatrix(projectSettingsJson: string | n
  * BambuStudio keeps two, and `prime_volume_mode` picks between them: its flushing dialog reads and
  * WRITES `flush_multiplier_fast` in Fast mode and `flush_multiplier` otherwise
  * (`WipeTowerDialog.cpp`). Both the editor and the bake go through this so an edit made in one mode
- * cannot be written to the key the other reads — which would look like the edit silently did
+ * cannot be written to the key the other reads, which would look like the edit silently did
  * nothing. Any unrecognised/absent mode means the default, matching the config's own default.
  */
 export function flushMultiplierKeyForPrimeVolumeMode(mode: unknown): 'flush_multiplier' | 'flush_multiplier_fast' {
@@ -127,7 +127,7 @@ export function expectedFlushVolumesMatrixLength(filamentCount: number, extruder
  *
  * Undersized is the dangerous case (out-of-bounds read -> engine segfault); oversized is merely
  * wrong (the engine reads stale flush volumes out of the leading block). Both are reported so a
- * repair restores the documented shape. Returns false for an absent/empty matrix — see the module
+ * repair restores the documented shape. Returns false for an absent/empty matrix: see the module
  * header for why that case is safe.
  */
 export function isFlushVolumesMatrixInconsistent(
@@ -146,10 +146,10 @@ export function isFlushVolumesMatrixInconsistent(
  *
  * This deliberately models the ENGINE's behaviour rather than flagging every off-length value,
  * because a flagged file blocks print-prep and several off-length shapes slice fine today:
- *  - matrix absent: the CLI recomputes matrix AND multiplier itself — healthy.
- *  - one filament: `GCode.cpp` escapes its size check entirely — healthy.
+ *  - matrix absent: the CLI recomputes matrix AND multiplier itself: healthy.
+ *  - one filament: `GCode.cpp` escapes its size check entirely: healthy.
  *  - `nozzle_volume_type` length differing from the extruder count (including absent): that very
- *    mismatch triggers the CLI's flush recompute, which resizes the multiplier — healthy. Verified
+ *    mismatch triggers the CLI's flush recompute, which resizes the multiplier: healthy. Verified
  *    against real library files (a 5-filament dual-nozzle project with `['1']` + a one-entry
  *    `nozzle_volume_type` slices clean; the same multiplier with a consistent two-entry
  *    `nozzle_volume_type` is the reproduced exit 156). The recompute's remaining triggers cannot
@@ -157,7 +157,7 @@ export function isFlushVolumesMatrixInconsistent(
  *    extruder count always equals the project's own (a cross-machine slice retargets the project
  *    natively before the CLI sees it).
  *  - `flush_multiplier_fast` is NOT checked: the engine reads it only in fast purge mode, and
- *    genuine Bambu Studio dual-nozzle saves routinely carry a one-entry value there — flagging it
+ *    genuine Bambu Studio dual-nozzle saves routinely carry a one-entry value there: flagging it
  *    would mark shipping-and-slicing files defective.
  */
 export function isFlushMultiplierInconsistent(
@@ -218,7 +218,7 @@ export function repairFlushVolumesMatrix(
  *
  * Mirrors BambuStudio's `get_flush_volumes_matrix`, which slices block `e` as
  * `[size/nozzles*e, size/nozzles*(e+1))`. Returns null when the stored matrix is absent or does not
- * hold that block at the given topology — callers must then show "not set" (BambuStudio computes
+ * hold that block at the given topology: callers must then show "not set" (BambuStudio computes
  * the matrix itself when it is absent) rather than rendering a grid of zeroes, which would read as
  * "purge nothing" and, if saved, mean exactly that.
  */
@@ -270,7 +270,7 @@ export function writeFlushVolumesMatrixBlocks(blocks: ReadonlyArray<ReadonlyArra
 /**
  * Resize a `flush_multiplier`/`flush_multiplier_fast` value to one entry per extruder: existing
  * entries are kept (a legacy bare scalar counts as one), a grown tail repeats the last entry, and
- * a value with no entries at all is authored from `padDefault` — BambuStudio's own defaults are
+ * a value with no entries at all is authored from `padDefault`: BambuStudio's own defaults are
  * `'1'` (normal) and `'1.2'` (fast), which is also exactly what its recompute writes, so this is a
  * derivation rather than a guess.
  *

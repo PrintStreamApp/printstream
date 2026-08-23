@@ -20,7 +20,7 @@ test('hiding the sidebar gives the whole width to the viewport, on both sides', 
     const layout = buildEditorGridLayout({ ...base, sidebarSide, showPanel: false })
     assert.equal(layout.gridTemplateColumns.sm, 'minmax(0, 1fr)', `${sidebarSide}: one column`)
     assert.equal(layout.gridTemplateAreas.sm, '"plates" "viewport"')
-    // No stranded row where the panel used to be — that would leave a gap, not a hidden panel.
+    // No stranded row where the panel used to be, that would leave a gap, not a hidden panel.
     assert.equal(layout.gridTemplateRows.xs, 'auto minmax(0, 1fr)')
     assert.equal(layout.gridTemplateAreas.xs, '"plates" "viewport"')
   }
@@ -54,7 +54,7 @@ test('a vertical strip becomes a column beside the viewport, away from the sideb
   assert.equal(left.gridTemplateAreas.sm, '"panel viewport plates"')
   assert.equal(left.gridTemplateColumns.sm, '388px minmax(0, 1fr) 116px')
 
-  // Narrow widths keep stacking — a rail there would eat width the viewport needs.
+  // Narrow widths keep stacking, a rail there would eat width the viewport needs.
   assert.equal(right.gridTemplateAreas.xs, '"plates" "viewport" "panel"')
 })
 
@@ -77,7 +77,7 @@ test('the strip goes vertical exactly when it buys the viewport a better shape',
   assert.equal(sized(1920, 620), 'vertical')
   // A tall window: height is what there is most of, so spend it on the band.
   assert.equal(sized(1280, 1400), 'horizontal')
-  // A typical desktop with the sidebar open is already near 4:3 — leave it alone.
+  // A typical desktop with the sidebar open is already near 4:3: leave it alone.
   assert.equal(sized(1500, 900), 'horizontal')
   // Hiding the sidebar hands that width to the viewport and overshoots, so spending some of it on
   // a rail now costs nothing and buys the height back.

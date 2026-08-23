@@ -42,7 +42,7 @@ const BRIDGE_LAST_SEEN_UPDATE_INTERVAL_MS = 60_000
  * idle-close a proxied WebSocket after ~100s with no traffic in the
  * server->client direction; the bridge's upstream `bridge.heartbeat` does not
  * reset that timer, so without a server-originated frame the session is reaped
- * roughly every 100s — flipping every printer on the bridge offline until it
+ * roughly every 100s: flipping every printer on the bridge offline until it
  * reconnects. Pinging well inside that window keeps the session alive (and, as
  * with the /ws client heartbeat, reaps half-open bridge sockets). The bridge's
  * `ws` client auto-responds to these pings with pongs, so no bridge change is
@@ -115,7 +115,7 @@ export function attachBridgeSessionServer(server: HttpServer): AttachedBridgeSes
     let authenticating = false
     let lastHeartbeatPersistedAtMs = 0
     // Surface contract drift (a bridge frame this server can't decode) once per
-    // socket — enough to be observable without letting a noisy/pre-auth socket
+    // socket: enough to be observable without letting a noisy/pre-auth socket
     // flood the log buffer.
     let loggedParseFailure = false
     const helloTimer = setTimeout(() => {
@@ -208,7 +208,7 @@ export function attachBridgeSessionServer(server: HttpServer): AttachedBridgeSes
       if (authenticatedBridgeId) {
         // A reconnect/duplicate replaces the connection (registerConnection closes
         // the old socket) before this close fires. If a newer session already owns
-        // this bridge id, skip all bridge-wide teardown — marking its printers
+        // this bridge id, skip all bridge-wide teardown: marking its printers
         // offline / clearing discovery here would clobber the live new session.
         if (!bridgeSessionManager.isActiveConnection(authenticatedBridgeId, authenticatedConnection ?? undefined)) {
           return

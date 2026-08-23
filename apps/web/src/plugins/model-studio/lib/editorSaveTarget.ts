@@ -3,7 +3,7 @@
  *
  * The editor produces a `SceneEdit`; what happens next differs entirely by host. The library host
  * POSTs it and the server bakes and persists a `LibraryFile` version. A host with only a local file
- * bakes in the tab and writes bytes back to the user's disk — nothing is persisted anywhere, and
+ * bakes in the tab and writes bytes back to the user's disk, nothing is persisted anywhere, and
  * there is no library to invalidate or slice controller to notify.
  *
  * That last part is why {@link EditorSaveTarget.isLibraryBacked} exists rather than the hook
@@ -21,7 +21,7 @@ export interface EditorSavedFile {
   id: string
   name: string
   /**
-   * The version row this save archived — the content that was current until now, i.e. the bytes
+   * The version row this save archived: the content that was current until now, i.e. the bytes
    * this save authored FROM. The caller pins it so the NEXT save authors from the same original
    * rather than from this save's output (see `contentBase` in the shared save schema).
    *
@@ -37,7 +37,7 @@ export interface EditorSaveTarget {
    *
    * @returns the saved file's identity, or null when the save did not happen for a reason the user
    *   already knows about (they dismissed a destination picker). A FAILURE throws instead, so the
-   *   caller can surface it — a silent null would look like a successful save that saved nothing.
+   *   caller can surface it, a silent null would look like a successful save that saved nothing.
    */
   persist(payload: SaveArrangedThreeMf): Promise<EditorSavedFile | null>
   /** Bake without persisting, for the "download a copy" paths. */

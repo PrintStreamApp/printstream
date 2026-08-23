@@ -1,15 +1,15 @@
 /**
- * "Save as a different printer" for the 3MF editor — done on our end by rewriting the
+ * "Save as a different printer" for the 3MF editor: done on our end by rewriting the
  * project's machine settings, NOT by re-slicing. After an arrangement is baked,
  * {@link buildEditedThreeMf} preserves the project's *embedded* machine, so saving an A1-mini
  * project after switching to H2D would otherwise keep A1 mini.
  *
- * Flow: resolve the target machine profile (full, via the slicer's profile resolver — a data
+ * Flow: resolve the target machine profile (full, via the slicer's profile resolver, a data
  * lookup, not slicing), overwrite the machine field set in `project_settings.config` and
  * re-derive the topology-dependent maps ({@link retargetProjectSettingsToMachine}), then REBIND
  * each filament slot's physics to its preset on the new machine (BambuStudio's machine-switch
- * alias re-selection — see {@link resolveFilamentSlotRebinds}; the user's material CHOICES —
- * family, colours, nozzle assignment — survive, and recorded overrides keep their values), then
+ * alias re-selection, see {@link resolveFilamentSlotRebinds}; the user's material CHOICES,
+ * family, colours, nozzle assignment: survive, and recorded overrides keep their values), then
  * write the result back into the 3MF. The layout (`model_settings.config`) is untouched. Works
  * for any Bambu machine the slicer has a profile for. See docs/project-printer-retarget.md.
  */
@@ -43,12 +43,12 @@ const PROJECT_SETTINGS_ENTRY = 'Metadata/project_settings.config'
  * Author a resolved machine's COMPLETE settings into a baked project 3MF; returns the new path.
  *
  * The companion to {@link retargetSavedProjectMachine} for callers that already hold the resolved
- * machine profile — notably the transient SLICE bake. PrintStream is the source of truth for the
+ * machine profile, notably the transient SLICE bake. PrintStream is the source of truth for the
  * 3MF: every project we emit must define its own machine, so the slicer never has to retarget it
  * and never depends on built-in profile fallbacks surviving. Without this an editor slice can hand
  * over a project that names `printer_model: H2D` while carrying none of H2D's extruder-indexed
  * dual-nozzle topology, and the CLI then either refuses it ("missing its dual-nozzle machine data")
- * or slices with no print volume — "no object fully inside the print volume", exit 206.
+ * or slices with no print volume: "no object fully inside the print volume", exit 206.
  *
  * Best-effort: returns null rather than throwing when the machine can't be resolved or the embedded
  * settings are unreadable, so an unexpected profile downgrades to the previous behaviour instead of
@@ -67,7 +67,7 @@ export async function authorProjectMachineFromProfile(input: {
   })
   if (!machineConfig) return null
 
-  // A scaffold with no embedded settings authors from an empty object — the machine profile
+  // A scaffold with no embedded settings authors from an empty object: the machine profile
   // supplies every field, exactly like BambuStudio picking a printer for a fresh project.
   const projectSettingsRaw = await readEntry(input.arrangedPath, PROJECT_SETTINGS_ENTRY).catch(() => null)
   let projectSettings: Record<string, unknown> = {}
@@ -99,14 +99,14 @@ export async function authorProjectMachineFromProfile(input: {
 }
 
 /**
- * Does the project already define `targetModel` COMPLETELY — the right machine, with the full
+ * Does the project already define `targetModel` COMPLETELY: the right machine, with the full
  * topology that machine needs?
  *
  * "Same printer" is not the same as "fully defined": a project can name `printer_model: H2D` while
  * carrying none of H2D's extruder-indexed dual-nozzle arrays, which is precisely the state that made
  * the CLI refuse it ("missing its dual-nozzle machine data") or slice with no print volume. Callers
  * use this to decide whether a same-model save still needs the machine authored in. Unreadable or
- * absent settings count as incomplete — the safe direction, since that is what a scaffold looks like.
+ * absent settings count as incomplete: the safe direction, since that is what a scaffold looks like.
  */
 export async function projectHasCompleteMachine(arrangedPath: string, targetModel: string | null): Promise<boolean> {
   const raw = await readEntry(arrangedPath, PROJECT_SETTINGS_ENTRY).catch(() => null)
@@ -158,7 +158,7 @@ export async function retargetSavedProjectMachine(input: RetargetSavedProjectInp
   }
 
   // A project with no embedded settings (a new-project scaffold whose save carried no
-  // project_settings rewrites) retargets from an empty object — the resolved machine and
+  // project_settings rewrites) retargets from an empty object: the resolved machine and
   // process profiles supply every field, exactly like BambuStudio picking a printer for a
   // fresh project.
   const projectSettingsRaw = await readEntry(input.arrangedPath, PROJECT_SETTINGS_ENTRY).catch(() => null)
@@ -174,7 +174,7 @@ export async function retargetSavedProjectMachine(input: RetargetSavedProjectInp
   const printerModel = firstString(machineConfig.printer_model) ?? deriveModelFromMachineName(machineFile.name)
   // The machine step alone, so the rebind selection can read the RETARGETED filament layout (its
   // variant widths and slot names come from the new machine, not the old one). The full apply
-  // below re-runs it — cheap, pure, and it keeps the shared composition the single definition of
+  // below re-runs it: cheap, pure, and it keeps the shared composition the single definition of
   // the operation's ORDER rather than open-coding half of it here.
   const machineRetargeted = retargetProjectSettingsToMachine(projectSettings, machineConfig, {
     printerSettingsId: machineFile.name,
@@ -187,7 +187,7 @@ export async function retargetSavedProjectMachine(input: RetargetSavedProjectInp
   // makes the project openable/printable on the new machine.
   const processConfig = await resolveTargetProcessConfig(input)
 
-  // Rebind each filament slot's PHYSICS to its preset on the NEW machine — BambuStudio's
+  // Rebind each filament slot's PHYSICS to its preset on the NEW machine: BambuStudio's
   // machine-switch semantics (`PresetBundle::update_compatible` re-selects filament presets by
   // ALIAS, so values become the new variant's; only recorded user overrides survive). Without
   // this the old machine's numeric columns ride along as fossils that read as phantom "changed
@@ -230,17 +230,17 @@ export async function retargetSavedProjectMachine(input: RetargetSavedProjectInp
 /**
  * Best-effort save-side heal for an H2-family project whose embedded settings LOST their
  * dual-nozzle machine block (a filament rewrite once deleted the extruder-indexed machine
- * arrays — see MACHINE_DOMAIN_ARRAY_KEYS in three-mf-scene-builder). Re-authors the machine
+ * arrays: see MACHINE_DOMAIN_ARRAY_KEYS in three-mf-scene-builder). Re-authors the machine
  * from the project's own `printer_settings_id` (resolved as a builtin machine preset via the
- * slicer), then re-applies the edit's nozzle assignment — the retarget resets
+ * slicer), then re-applies the edit's nozzle assignment: the retarget resets
  * `filament_nozzle_map` to the machine default, and with the topology restored the assignment
  * write works again (it no-ops without `physical_extruder_map`, which is exactly how the damage
  * also made the L/R choice silently stop saving).
  *
  * Returns the path to the healed 3MF, or null when the project doesn't need (or can't get) the
  * heal: settings absent/unreadable, not an H2-family machine, topology intact, or the machine
- * preset unresolvable (e.g. a custom preset name — the slicer's slice-time heal still covers
- * those). Never throws: a heal failure must not fail the save that triggered it — it logs and
+ * preset unresolvable (e.g. a custom preset name: the slicer's slice-time heal still covers
+ * those). Never throws: a heal failure must not fail the save that triggered it, it logs and
  * the save proceeds with the un-healed bake (which still slices via the slicer-side heal).
  */
 export async function healSavedProjectMachineTopology(input: {
@@ -305,7 +305,7 @@ export async function healSavedProjectMachineTopology(input: {
  * else the same FAMILY's variant for that machine (preferring the retargeted machine's nozzle),
  * else no rebind (the slot keeps its values). Custom presets outrank builtins of the same name,
  * matching the profile list. Returns null when nothing would change, or on any catalogue
- * failure — the rebind is an improvement pass and must never block the save.
+ * failure: the rebind is an improvement pass and must never block the save.
  *
  * Also reused (with the project's OWN machine as the "target") by the tune-override persistence
  * pass in `save-filament-overrides.ts`, which needs the same per-slot resolved preset configs to
@@ -330,7 +330,7 @@ export async function resolveFilamentSlotRebinds(input: {
   } catch {
     return null
   }
-  // The MATCHING is shared with the public editor's save — see `selectFilamentRebindTargets`.
+  // The MATCHING is shared with the public editor's save: see `selectFilamentRebindTargets`.
   // Only the config resolution below is host-specific.
   const selections = selectFilamentRebindTargets({
     filamentSettingsIds: input.record.filament_settings_id,
@@ -367,7 +367,7 @@ export async function resolveFilamentSlotRebinds(input: {
 async function resolveTargetProcessConfig(input: RetargetSavedProjectInput): Promise<Record<string, string | string[]> | null> {
   if (!input.retarget.processProfileId) return null
   // resolveSlicingPresetFiles skips project-embedded ("project:") presets, so those fall through
-  // to null and the project keeps its embedded process — intended (a project preset has no separate
+  // to null and the project keeps its embedded process, intended (a project preset has no separate
   // file to resolve, and cross-family targets hide project presets anyway).
   const [processFile] = await resolveSlicingPresetFiles(input.workspaceId, [
     { id: input.retarget.processProfileId, kind: 'process' }

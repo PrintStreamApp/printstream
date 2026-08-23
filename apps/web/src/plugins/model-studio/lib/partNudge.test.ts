@@ -11,7 +11,7 @@ test('an unrotated object takes the plate delta unchanged', () => {
 
 test('a 180-degree-rotated object flips the delta, so "right" still moves right on screen', () => {
   // Local -x renders as world +x under the object's 180 rotation. Without the conversion the part
-  // took +1 local and visibly moved LEFT — the reported bug.
+  // took +1 local and visibly moved LEFT: the reported bug.
   const local = plateDeltaToPartLocal(new THREE.Matrix4().makeRotationZ(Math.PI), 1, 0)
   assert.ok(Math.abs(local.x + 1) < 1e-9, `expected -1, got ${local.x}`)
 })

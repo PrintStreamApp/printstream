@@ -3,10 +3,10 @@
  *
  * The third and last facet of the editor backend seam (after `EditorImportStore` and
  * `EditorSaveTarget`). BOTH implementations now read the project out of an archive inflated in the
- * tab; they differ only in how the archive got there — a host with the file in hand (the public
+ * tab; they differ only in how the archive got there, a host with the file in hand (the public
  * editor) already has it, while the library host downloads it from `/api/library/:id/archive`.
  *
- * Every read therefore runs the SAME parsers — `@printstream/shared/three-mf` — over the SAME
+ * Every read therefore runs the SAME parsers, `@printstream/shared/three-mf`, over the SAME
  * bytes. That is the property worth protecting here: while the library host read a server-parsed
  * index and per-plate scenes, the two editors could sit on subtly different scenes for one file,
  * and did (a missing process seed on the public side, a mis-seeded nozzle on the library side).
@@ -30,18 +30,18 @@ import { openClientThreeMfProjectFromBytes, type ClientThreeMfProject } from './
  * a wedged transport. The archive's first read is legitimately silent much longer: a bridge-owned
  * file is pulled to the API, read, and compressed IN FULL before a byte reaches the browser, so
  * time-to-first-byte scales with the whole project on a cold open. Retrying is also the wrong
- * trade at this size — a re-download costs more than the transient stall it recovers, unlike a
+ * trade at this size, a re-download costs more than the transient stall it recovers, unlike a
  * mesh entry.
  */
 const ARCHIVE_STALL_MS = 90_000
 
 // Dev used to fork here (an 8s budget + one retry) because Vite's http-proxy-based `/api` proxy
 // wedged a share of requests that follow an aborted large response. That wedge is fixed at the
-// source — dev `/api` traffic now flows through the hand-rolled `devApiProxy` middleware (see
-// apps/web/devApiProxy.ts for the measurements) — so dev shares production's single long attempt.
+// source, dev `/api` traffic now flows through the hand-rolled `devApiProxy` middleware (see
+// apps/web/devApiProxy.ts for the measurements), so dev shares production's single long attempt.
 
 export interface EditorProjectSource {
-  /** The project's parsed plate index — plates, filaments, objects, predictions. */
+  /** The project's parsed plate index: plates, filaments, objects, predictions. */
   loadIndex(signal?: AbortSignal): Promise<ThreeMfIndex>
   /**
    * One plate's scene: where every object sits, and the bed it sits on. `printerModel` re-places
@@ -59,7 +59,7 @@ export interface EditorProjectSource {
    * The filament presets this project carries INSIDE itself, each flagged used or not.
    *
    * Optional: a source that cannot enumerate archive entries returns none, which is also the right
-   * answer for a project that has none. Not part of the 3MF INDEX on purpose — the index is cached
+   * answer for a project that has none. Not part of the 3MF INDEX on purpose: the index is cached
    * per file version, so a field there costs a parser-version bump and a re-parse of every stored
    * project, for data only an open editor can act on.
    */
@@ -67,7 +67,7 @@ export interface EditorProjectSource {
   /**
    * The project's own `project_settings.config`, raw.
    *
-   * For settings the editor edits WHOLE rather than key-by-key — today the purge volumes, which
+   * For settings the editor edits WHOLE rather than key-by-key, today the purge volumes, which
    * need the machine's dead volumes and flush datasets alongside the stored matrix. Like
    * {@link loadEmbeddedPresets} this is deliberately not on the 3MF index: the index is cached per
    * file version, so putting a settings blob there would cost a parser-version bump and a re-parse
@@ -78,7 +78,7 @@ export interface EditorProjectSource {
   loadProjectSettings?(): Promise<string | null>
   /**
    * Release what the source holds (object URLs, the inflated archive). Only the creator of a
-   * source may call this — a host that supplies its own owns its lifetime.
+   * source may call this, a host that supplies its own owns its lifetime.
    */
   dispose?(): void
 }
@@ -87,7 +87,7 @@ export interface EditorProjectSource {
  * The library source: downloads the whole 3MF once, then answers every read from it.
  *
  * @param resourceBase `/api/library/:id` or `/api/library/versions/:versionId`.
- * @param fileName internal only — see `openClientThreeMfProjectFromBytes`.
+ * @param fileName internal only: see `openClientThreeMfProjectFromBytes`.
  */
 export function createArchiveProjectSource(resourceBase: string, fileName = 'project.3mf'): EditorProjectSource {
   let opening: Promise<ClientThreeMfProject> | null = null
@@ -95,8 +95,8 @@ export function createArchiveProjectSource(resourceBase: string, fileName = 'pro
   /**
    * Bumped by `dispose`. Releasing must NOT latch a permanent "disposed" flag: the caller disposes
    * from an effect cleanup, and React runs that cleanup spuriously (StrictMode remounts every
-   * component in dev). A latch made the source look healthy — index, scenes and mesh entries all
-   * resolve through `open()` — while `opened` stayed null forever, so ONLY plate thumbnails broke,
+   * component in dev). A latch made the source look healthy, index, scenes and mesh entries all
+   * resolve through `open()`, while `opened` stayed null forever, so ONLY plate thumbnails broke,
    * silently, and only in dev. Releasing to a re-openable state costs one revalidated refetch in
    * that case and nothing in production.
    */
@@ -145,7 +145,7 @@ export function createArchiveProjectSource(resourceBase: string, fileName = 'pro
     loadEntry: async (entryPath) => await (await open()).loadEntryBytes(entryPath),
 
     // Sync by interface (the plate strip reads it during render), so it can only answer once the
-    // archive is open. Null means "not yet" — the strip shows its loading tile and asks again on
+    // archive is open. Null means "not yet": the strip shows its loading tile and asks again on
     // the next render, which the index landing already triggers.
     plateThumbnailUrl: (plateIndex) => opened?.plateThumbnailUrl(plateIndex) ?? null,
 
@@ -154,7 +154,7 @@ export function createArchiveProjectSource(resourceBase: string, fileName = 'pro
     loadProjectSettings: async () => (await open()).archive.indexEntries().projectSettingsJson,
 
     // Releases the archive and revokes its object URLs, and leaves the source RE-OPENABLE on
-    // purpose — see `generation`.
+    // purpose: see `generation`.
     dispose: () => {
       generation += 1
       opened?.dispose()

@@ -1,6 +1,6 @@
 /**
  * Minimal ambient declaration for `occt-import-js` (no types are shipped upstream).
- * Only the subset we use — instantiating the WASM module and reading STEP files — is declared.
+ * Only the subset we use, instantiating the WASM module and reading STEP files, is declared.
  */
 declare module 'occt-import-js' {
   interface OcctMeshAttributeArray {
@@ -24,7 +24,7 @@ declare module 'occt-import-js' {
   /**
    * Triangulation parameters for the readers. `null` selects occt-import-js's own
    * defaults (a `bounding_box_ratio` linear deflection of 0.001), which facets curved
-   * surfaces on larger parts — pass explicit values for predictable quality.
+   * surfaces on larger parts: pass explicit values for predictable quality.
    */
   export interface OcctTriangulationParams {
     linearUnit?: 'millimeter' | 'centimeter' | 'meter' | 'inch' | 'foot'

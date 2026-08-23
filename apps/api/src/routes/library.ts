@@ -384,7 +384,7 @@ const LIBRARY_FILE_IDS_QUERY_LIMIT = 1000
 /**
  * Parse the flat listing's optional `ids` query into a de-duplicated, bounded id
  * list. Returns `null` when no `ids` param was supplied (normal capped listing),
- * or the id array (possibly empty) when it was — so an explicit `?ids=` with no
+ * or the id array (possibly empty) when it was, so an explicit `?ids=` with no
  * ids resolves to "no files" rather than falling through to the full library.
  */
 export function parseLibraryFileIdsQuery(value: unknown): string[] | null {
@@ -502,7 +502,7 @@ libraryRouter.get('/browse', requireRequestPermission(LIBRARY_VIEW_PERMISSION), 
 
   // Favorites-only and all-folders search are both flat, cross-folder views: they
   // ignore the current folder scope. Favorites-only additionally shows no folder
-  // rows — just the user's starred files in one flat list across the bridge.
+  // rows, just the user's starred files in one flat list across the bridge.
   const flatList = searching || favoritesOnly
   const [fileRows, folderRows] = await Promise.all([
     prisma.libraryFile.findMany({
@@ -669,8 +669,8 @@ libraryRouter.patch('/folders/:id', requireRequestPermission(LIBRARY_MANAGE_PERM
 
 /**
  * Delete a folder. Refuses when it has contents unless `?recursive=true`, in
- * which case the whole subtree — descendant folders, files, and version
- * history — is removed (the client confirms with the user first).
+ * which case the whole subtree, descendant folders, files, and version
+ * history, is removed (the client confirms with the user first).
  */
 libraryRouter.delete('/folders/:id', requireRequestPermission(LIBRARY_MANAGE_PERMISSION), async (request, response) => {
   const folderId = requireRouteParam(request.params.id, 'Folder id')
@@ -1050,7 +1050,7 @@ libraryRouter.delete('/versions/:versionId', requireRequestPermission(LIBRARY_MA
     })
     if (!sharedByCurrent && sharedByOtherVersion === 0) {
       // The version row is already gone; a byte-cleanup failure only leaks storage, so don't fail
-      // the request — but log it so the orphan is traceable.
+      // the request, but log it so the orphan is traceable.
       await deleteLibraryFileBytes({ ownerBridgeId: version.ownerBridgeId, storedPath: version.storedPath })
         .catch((error) => console.warn(`[library] failed to delete bytes for removed version ${version.id}: ${(error as Error).message}`))
     }
@@ -1093,7 +1093,7 @@ libraryRouter.delete('/:id/current-version', requireRequestPermission(LIBRARY_MA
     const file = await tx.libraryFile.update({
       where: { id: current.id },
       data: {
-        // The previous version's bytes become the current content verbatim — the file
+        // The previous version's bytes become the current content verbatim: the file
         // now *is* that version (number and all), not a new "restored from" copy.
         storedPath: prev.storedPath,
         ownerBridgeId: prev.ownerBridgeId,
@@ -1233,7 +1233,7 @@ libraryRouter.get('/versions/:versionId/scene-entry', requireRequestPermission(L
   const versionId = requireRouteParam(request.params.versionId, 'Version id')
   const row = await prisma.libraryFileVersion.findUnique({ where: { id: versionId } }) as LibraryFileVersionRow | null
   if (!row) throw notFound('Version not found')
-  // Sub-model entries (Bambu part files) OR the root model entry — objects created by
+  // Sub-model entries (Bambu part files) OR the root model entry: objects created by
   // the editor (cut halves, split shells, primitives) carry their mesh inline there.
   const entryPath = z.string().trim().regex(/^3D\/(?:Objects\/[^/]+\.model|3dmodel\.model)$/i).parse(request.query.path)
   if (sendNotModifiedIfLibraryFileFresh(request, response, row, `scene-entry:${entryPath}`)) return
@@ -1391,7 +1391,7 @@ libraryRouter.get('/:id/scene-entry', requireRequestPermission(LIBRARY_VIEW_PERM
   const fileId = requireRouteParam(request.params.id, 'File id')
   const row = await prisma.libraryFile.findUnique({ where: { id: fileId } }) as LibraryFileRow | null
   if (!row) throw notFound('File not found')
-  // Sub-model entries (Bambu part files) OR the root model entry — objects created by
+  // Sub-model entries (Bambu part files) OR the root model entry: objects created by
   // the editor (cut halves, split shells, primitives) carry their mesh inline there.
   const entryPath = z.string().trim().regex(/^3D\/(?:Objects\/[^/]+\.model|3dmodel\.model)$/i).parse(request.query.path)
   if (sendNotModifiedIfLibraryFileFresh(request, response, row, `scene-entry:${entryPath}`)) return
@@ -1453,7 +1453,7 @@ libraryRouter.get('/:id/thumbnail', requireRequestPermission(LIBRARY_VIEW_PERMIS
 
 /**
  * Persist a client-rendered STL/STEP preview PNG so later views (any client/session)
- * are served the bytes instead of re-fetching the mesh and re-rendering — and, for
+ * are served the bytes instead of re-fetching the mesh and re-rendering, and, for
  * STEP, re-tessellating server-side. The web renderer is the only producer; the body
  * is a raw PNG. `?v=<uploadedAt>` guards against a client that rendered a now-stale
  * version racing a fresh upload: a mismatch is accepted as a no-op rather than caching
@@ -1493,7 +1493,7 @@ libraryRouter.put(
  * Binary STL bytes for a library model file, scoped to viewers (not downloaders) and
  * without an audit-log entry, so the web client can render a 3D preview/thumbnail for
  * files that carry no embedded image. STL is shipped verbatim; STEP is tessellated to
- * STL server-side (BambuStudio-matched quality — the bridge ships no 3D renderer and the
+ * STL server-side (BambuStudio-matched quality: the bridge ships no 3D renderer and the
  * browser can't read STEP), then shipped for client-side rendering by the model-studio
  * plugin. 3MF/gcode keep using `/thumbnail`.
  */
@@ -1513,7 +1513,7 @@ libraryRouter.get('/:id/mesh', requireRequestPermission(LIBRARY_VIEW_PERMISSION)
   try {
     let stl: Buffer
     if (row.kind === '3mf') {
-      // Only geometry-only 3MFs (vanilla mesh containers) serve a single mesh here —
+      // Only geometry-only 3MFs (vanilla mesh containers) serve a single mesh here:
       // real projects have per-plate previews and never render through this route.
       const index = await readPlateIndex(onDisk, signal)
       if (!index.geometryOnly) throw notFound('No mesh available')
@@ -1521,7 +1521,7 @@ libraryRouter.get('/:id/mesh', requireRequestPermission(LIBRARY_VIEW_PERMISSION)
     } else {
       const buffer = await readFile(onDisk)
       if (signal.aborted) return
-      // STEP carries no triangle mesh — tessellate it to STL once per cache window (the ETag
+      // STEP carries no triangle mesh: tessellate it to STL once per cache window (the ETag
       // 304 above short-circuits warm clients before this point). STL ships verbatim.
       stl = row.kind === 'step' ? Buffer.from(meshToBinaryStl(await tessellateStepMesh(buffer))) : buffer
     }
@@ -1692,7 +1692,7 @@ libraryRouter.put('/:id/favorite', requireRequestPermission(LIBRARY_VIEW_PERMISS
 
   if (parsed.data.favorite) {
     // A favorite has nothing to update, so this is create-or-ignore: a duplicate
-    // (already favorited) is an idempotent no-op. (Plain create — not upsert — so it
+    // (already favorited) is an idempotent no-op. (Plain create, not upsert, so it
     // takes the workspace-scoping extension's create path, which injects the workspace id.)
     try {
       await prisma.libraryFileFavorite.create({ data: { workspaceId, userId: ownerKey, libraryFileId: row.id } })
@@ -1718,7 +1718,7 @@ libraryRouter.post('/:id/print', requireRequestPermission(PRINTS_DISPATCH_PERMIS
   if (!parsed.success) {
     const reason = parsed.error.issues[0]?.message ?? 'Invalid print payload'
     // A boundary rejection starts no job (nothing in the Jobs list), so log the
-    // reason — e.g. "Invalid AMS tray index" — for self-hosted diagnosis.
+    // reason: e.g. "Invalid AMS tray index", for self-hosted diagnosis.
     console.warn(`[dispatch] print payload rejected for file ${fileId}: ${reason}`)
     throw badRequest(reason)
   }
@@ -1776,7 +1776,7 @@ libraryRouter.post('/:id/reprint', requireRequestPermission(PRINTS_DISPATCH_PERM
   }
   const file = await prisma.libraryFile.findUnique({ where: { id: fileId } })
   if (!file) throw notFound('File not found')
-  // Resolve the target printer through the workspace gate — getPrinter() alone is keyed by
+  // Resolve the target printer through the workspace gate: getPrinter() alone is keyed by
   // id only, which would let a workspace start a print on another workspace's printer.
   const printer = await requireWorkspaceOwnedConnectedPrinter(parsed.data.printerId)
 
@@ -1870,7 +1870,7 @@ libraryRouter.post('/:id/reprint', requireRequestPermission(PRINTS_DISPATCH_PERM
     },
     publish: () => printerManager.publishCommand(printer.id, { print: printPayload })
   })
-  if (!trackedJobId) throw badRequest('Printer is not connected — command was not delivered')
+  if (!trackedJobId) throw badRequest('Printer is not connected: command was not delivered')
   annotateRequestAuditLog(request, {
     action: 'reprint-print',
     resource: 'print job',
@@ -1899,7 +1899,7 @@ function resolveRequestedPlateName(fileName: string, index: ParsedThreeMfIndex |
  *
  * Logs before rethrowing because every caller converts the failure to a bare `404 File missing on
  * disk`, which erases the only server-side trace of WHY a file the database knows about could not
- * be served — for a bridge-owned file that is a transfer failure (bridge offline, RPC error, disk
+ * be served, for a bridge-owned file that is a transfer failure (bridge offline, RPC error, disk
  * full), and the 404 alone sends you looking at the file instead of the transport. `storedPath` is
  * a filename the user already sees; nothing secret goes to the log.
  */
@@ -1975,7 +1975,7 @@ async function toDto(row: {
   let metadataPending = false
   if (row.kind === '3mf' || row.kind === 'gcode') {
     try {
-      // List path (`cacheOnly`): read the chips persisted on the row — O(1), no
+      // List path (`cacheOnly`): read the chips persisted on the row: O(1), no
       // parse, no bridge RPC. On a miss/stale row, return empty chips now and warm
       // (inspect + derive + persist) in the background so the next listing is
       // served from the row. Single-file/upload paths derive fresh inline.
@@ -2021,7 +2021,7 @@ async function toDto(row: {
     } catch {
       chips = { plateCount: 0, compatiblePrinterModels: [], plateTypeChips: [], nozzleSizeChips: [], projectFilamentChips: [] }
       // An inline derive failure (e.g. the owning bridge is unreachable) leaves the metadata
-      // unresolved, not absent — list-path warms keep retrying, so "pending" stays honest.
+      // unresolved, not absent: list-path warms keep retrying, so "pending" stays honest.
       metadataPending = true
     }
   }
@@ -2148,12 +2148,12 @@ const MAX_ARCHIVE_RESPONSE_BYTES = 256 * 1024 * 1024
 
 /**
  * ETag variant for the archive. Bump it whenever a bug could have left TRUNCATED bodies in browser
- * caches — the ETag is keyed on the file's bytes, so an unchanged file keeps its old ETag, the
+ * caches: the ETag is keyed on the file's bytes, so an unchanged file keeps its old ETag, the
  * server answers 304, and the browser happily re-serves the broken copy forever. Fixing the server
  * is not enough on its own; the tag has to change to orphan those entries.
  *
  * Note the tag is derived from METADATA (see {@link buildLibraryFileEtag}), never from the bytes
- * actually sent — so a body that went out wrong still carries a perfectly valid-looking tag. That
+ * actually sent, so a body that went out wrong still carries a perfectly valid-looking tag. That
  * is why this constant exists at all, and why each incident needs its own bump.
  *
  * v2: the first cut served the archive with a bare `createReadStream().pipe()`, whose body never
@@ -2164,21 +2164,21 @@ const MAX_ARCHIVE_RESPONSE_BYTES = 256 * 1024 * 1024
  * v3: a concurrent fill of the API's local copy of a bridge-owned file could hand this route a
  * partially-written file (fixed in `bridge-library-files.ts` by filling a temp file and renaming
  * it into place). The short body that produced went out as a 200, was stored, and every later open
- * revalidated into it — one project stayed unopenable in one browser while the same bytes opened
+ * revalidated into it, one project stayed unopenable in one browser while the same bytes opened
  * everywhere else. `sendModelBuffer` now declares a `Content-Length`, so a short body can no longer
  * be stored as a complete one; this bump clears the entries written before it did.
  */
 const ARCHIVE_ETAG_VARIANT = 'archive-v3'
 
 /**
- * Serve a library file's whole 3MF to a client that will parse it in the browser — the editor's
+ * Serve a library file's whole 3MF to a client that will parse it in the browser: the editor's
  * read path (`createArchiveProjectSource` in the web app's model-studio plugin).
  *
  * Deliberately separate from {@link sendLibraryFileDownload}, and deliberately gated on
  * `library.view` rather than `library.download`, because this is not a download: it serves the same
  * bytes the `/scene`, `/scene-entry`, and `/plates` routes already expose piecewise, to the same
  * audience, so that one parser produces the scene instead of two. It carries no
- * `Content-Disposition`, is not audited as a download, and is conditional — reopening an unchanged
+ * `Content-Disposition`, is not audited as a download, and is conditional: reopening an unchanged
  * project revalidates to 304 rather than re-sending the archive.
  *
  * Consequence worth naming: a viewer's tab now holds the complete file, so `library.download`
@@ -2205,7 +2205,7 @@ async function sendLibraryFileArchive(
 
   // Through `sendModelBuffer`, NOT a bare `createReadStream().pipe()`. A raw pipe is what
   // `/download` does, and it works there because a download is consumed by the browser writing to
-  // disk — but read back through `fetch().arrayBuffer()` (which is how the editor consumes this)
+  // disk, but read back through `fetch().arrayBuffer()` (which is how the editor consumes this)
   // the body never completes behind the Vite dev proxy: headers and most of the body arrive, then
   // the tail never does. Verified directly: curl fetched the same URL in 37ms while the browser
   // hung indefinitely, and the same file served through this helper is fine.
@@ -2318,7 +2318,7 @@ async function sendLibraryFileThumbnail(
   // Geometry-only 3MFs have no embedded plate PNGs; like STL/STEP they get a
   // client-rendered mesh thumbnail persisted via PUT /:id/thumbnail. Serve that cache
   // when present (content-addressed on the per-version storedPath, so a version swap
-  // can never show a stale render) and fall through to the embedded lookups — which
+  // can never show a stale render) and fall through to the embedded lookups, which
   // 404 for such files, telling the client to render (and upload) one.
   if (row.kind === '3mf') {
     const meshRender = await readMeshThumbnailCache(row)
@@ -2367,7 +2367,7 @@ async function sendLibraryFileScene(
   row: { kind: string; ownerBridgeId?: string | null; storedPath: string; sizeBytes: number; uploadedAt: Date }
 ): Promise<void> {
   // gcode.3mf still embeds the model (3D/3dmodel.model), so it has a plated mesh scene
-  // too — used for the client-rendered thumbnail fallback when no plate PNG is embedded.
+  // too: used for the client-rendered thumbnail fallback when no plate PNG is embedded.
   if (row.kind !== '3mf' && row.kind !== 'gcode') throw notFound('No plated 3D scene available')
   const plateIndex = parsePlateIndexQuery(request.query.plate)
   // Optional target-printer override: show the selected printer's bed + unprintable
@@ -2423,7 +2423,7 @@ async function sendLibraryFilePlateGcode(
   try {
     const buffer = await readEntry(onDisk, entryPath, signal, 256 * 1024 * 1024)
     // Route through sendModelBuffer (gzip + chunk-stream) like the other large
-    // library payloads — gcode compresses ~5-10x and the chunked send avoids the
+    // library payloads: gcode compresses ~5-10x and the chunked send avoids the
     // Vite-dev-proxy tail-truncation a bare response.send() of a big body hits.
     await sendModelBuffer(request, response, buffer, 'text/plain; charset=utf-8')
   } catch (error) {
@@ -2465,7 +2465,7 @@ async function resolveLibraryFilePreviewAsset(
 /** Derive the cached library chip bundle from a parsed 3MF index. */
 function deriveChips(index: ParsedThreeMfIndex): DerivedChips {
   // A geometry-only 3MF's plates are fabricated placeholders (see the shared index
-  // parser), so a plate count would be a lie — report none and carry the flag so the
+  // parser), so a plate count would be a lie: report none and carry the flag so the
   // web renders the file like STL/STEP instead of a project.
   if (index.geometryOnly) {
     return { plateCount: 0, compatiblePrinterModels: [], plateTypeChips: [], nozzleSizeChips: [], projectFilamentChips: [], geometryOnly: true }
@@ -2611,7 +2611,7 @@ function assertDemoLibraryFileMutationAllowed(request: Request, row: { hidden: b
 
 async function isDescendant(candidateId: string, ancestorId: string): Promise<boolean> {
   let current: string | null = candidateId
-  // Bounded walk — folder trees are tiny and parentId chains terminate at null.
+  // Bounded walk: folder trees are tiny and parentId chains terminate at null.
   for (let depth = 0; depth < 64 && current; depth++) {
     if (current === ancestorId) return true
     const parent: { parentId: string | null } | null = await prisma.libraryFolder.findUnique({

@@ -1,5 +1,5 @@
 /**
- * Implementation behind the shared `Markdown` component — split out so
+ * Implementation behind the shared `Markdown` component: split out so
  * `react-markdown` (and remark-gfm) load lazily and stay off the core bundle.
  * Import `Markdown` from `./Markdown` instead of using this directly.
  *

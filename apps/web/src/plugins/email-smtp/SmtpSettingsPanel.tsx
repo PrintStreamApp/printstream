@@ -1,6 +1,6 @@
 /**
  * SMTP server settings panel (self-hosted). Configures the operator's mail
- * server that backs email-based features. The password is write-only — the API
+ * server that backs email-based features. The password is write-only: the API
  * never returns it; leaving the field blank keeps the stored value.
  */
 import { useEffect, useState } from 'react'
@@ -128,7 +128,7 @@ export function SmtpSettingsPanel() {
           type="password"
           value={password}
           onChange={(event) => setPassword(event.target.value)}
-          placeholder={hasPassword ? 'Stored — leave blank to keep' : '(optional)'}
+          placeholder={hasPassword ? 'Stored: leave blank to keep' : '(optional)'}
           autoComplete="new-password"
         />
       </FormControl>

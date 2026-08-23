@@ -12,7 +12,7 @@
  * left-aligned.
  *
  * It owns LOADING too, not just empty-vs-content. Left to callers that state
- * became the word "Loading…" in nineteen files — which says only that
+ * became the word "Loading…" in nineteen files, which says only that
  * something is happening, where a skeleton says what is coming and stops the
  * page jumping when it lands.
  *
@@ -26,7 +26,7 @@
  * card. That was the tell that a convention was being invented rather than
  * followed.
  *
- * The placeholder itself is the app-wide `EmptyState` — this only decides where
+ * The placeholder itself is the app-wide `EmptyState`, this only decides where
  * it sits and what surrounds it.
  */
 import { Alert, Box, Stack } from '@mui/joy'
@@ -77,7 +77,7 @@ export function ListSection({
         <>
           {children}
           {/* Under the list, left-aligned. Inside the empty state the same
-              actions are centred by the card — the two placements are the
+              actions are centred by the card: the two placements are the
               convention, not an accident of where each tab put its button. */}
           {actions ? <Box sx={{ alignSelf: 'flex-start' }}>{actions}</Box> : null}
         </>

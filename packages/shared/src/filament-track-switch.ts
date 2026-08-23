@@ -1,6 +1,6 @@
 /**
  * Single source of truth for what a Filament Track Switch (FTS) MEANS once its
- * state has been parsed — readiness, reachability, and the extruder an input
+ * state has been parsed: readiness, reachability, and the extruder an input
  * ultimately feeds. Parsing lives in the API's `bambu-report-parser.ts`; every
  * surface that has to *decide* something from `PrinterStatus.filamentTrackSwitch`
  * comes here instead of re-deriving it.
@@ -11,7 +11,7 @@
  * slicer about the machine.
  *
  * Contract mirrored from BambuStudio (`DevFilaSwitch`, `SelectMachineDialog`):
- *   - readiness is `DevFilaSwitch::IsReady` — installed is NOT enough, because a
+ *   - readiness is `DevFilaSwitch::IsReady`, installed is NOT enough, because a
  *     switch that has not been set up on the printer routes nothing;
  *   - a file sliced for an FTS machine must not print on a non-FTS machine, and
  *     vice versa (`SelectMachine.cpp` refuses the mismatch outright).
@@ -38,7 +38,7 @@ export type FilamentTrackSwitchInput = 'A' | 'B'
  * UNVERIFIED against firmware (none ships FTS support yet), and the strict
  * every-unit rule is the part most likely to be wrong: a machine with more AMS
  * units than the switch's two inputs would never read as ready here. That is
- * what Studio does, so it is what we do — but if a real payload shows units
+ * what Studio does, so it is what we do, but if a real payload shows units
  * legitimately sitting outside the switch, relax this to the units that report
  * an input rather than inventing a different rule.
  */
@@ -64,7 +64,7 @@ export function isFilamentTrackSwitchInstalled(status: {
  * Extruder id the given switch input ultimately feeds, or `null` when the
  * output is unmapped. Note this is the CURRENT routing: the point of the switch
  * is that it can be re-routed mid-print, so never cache this as a slot's fixed
- * nozzle binding — use {@link isDualReachableAmsUnit} for reachability.
+ * nozzle binding: use {@link isDualReachableAmsUnit} for reachability.
  */
 export function extruderIdForSwitchInput(
   trackSwitch: FilamentTrackSwitch,
@@ -75,7 +75,7 @@ export function extruderIdForSwitchInput(
 
 /**
  * Can this AMS unit feed either nozzle? True for any unit docked to a switch
- * input. Such a unit deliberately carries a `null` `nozzleId` — a hard nozzle
+ * input. Such a unit deliberately carries a `null` `nozzleId`, a hard nozzle
  * binding would filter it out of pickers it belongs in.
  */
 export function isDualReachableAmsUnit(unit: Pick<AmsUnit, 'switchInput'>): boolean {
@@ -114,13 +114,13 @@ export function filamentTrackSwitchMatchesSlice(
 /**
  * Should a surface warn that this file and this printer disagree about the switch?
  *
- * The ONE rule every print surface uses — the two dialogs and the API guard — so a dispatch can
+ * The ONE rule every print surface uses, the two dialogs and the API guard, so a dispatch can
  * never be refused by a check the dialog did not show, or vice versa. Returns the printer's side of
  * the mismatch (`printerHasSwitch`) so callers can phrase it, or `null` when there is nothing to
  * say.
  *
  * Returns `null` for both kinds of "unknown", which are NOT the same as agreement:
- *   - no printer status, or a printer that never mentions an FTS (`null` on the wire) — today that
+ *   - no printer status, or a printer that never mentions an FTS (`null` on the wire), today that
  *     is every machine, since no firmware reports one;
  *   - a file whose flag is `undefined`, meaning an older server did not send it. `false` is a real
  *     answer ("sliced without a switch"); `undefined` is the absence of one, and warning on it
@@ -138,7 +138,7 @@ export function filamentTrackSwitchMismatch(
 }
 
 /**
- * The mismatch itself, as a clause and with no instruction attached — for a dialog that offers its
+ * The mismatch itself, as a clause and with no instruction attached, for a dialog that offers its
  * own confirm control and would read oddly if the text also told the user to confirm.
  */
 export function filamentTrackSwitchMismatchDetail(printerHasSwitch: boolean): string {

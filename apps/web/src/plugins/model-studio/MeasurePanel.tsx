@@ -1,6 +1,6 @@
 /**
  * Floating readout panel for the editor's two-point measure tool: the distance and per-axis deltas
- * between the two picked points, or the next-click hint. Presentational only — the picked points
+ * between the two picked points, or the next-click hint. Presentational only: the picked points
  * live in EditorView.
  */
 import { Button, Sheet, Stack, Typography } from '@mui/joy'

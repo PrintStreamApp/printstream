@@ -6,8 +6,8 @@
  * top-level section: the import sub-view at `/library/import` is where users paste provider
  * URLs, review detection results, and import.
  *
- * Reached from MENU entries on the surfaces that already do this job — the library's Upload
- * split button and the printers page's Print split button — rather than a toolbar button of
+ * Reached from MENU entries on the surfaces that already do this job, the library's Upload
+ * split button and the printers page's Print split button, rather than a toolbar button of
  * its own. Importing from a URL is another way to do what those controls already do, so a
  * third adjacent button just competed with them.
  *

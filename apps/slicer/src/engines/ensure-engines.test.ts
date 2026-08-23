@@ -31,7 +31,7 @@ test('an explicit list is honoured, and a typo does not take the rest down with 
   const real = listCatalogue(...LINUX)[0]!.id
   const { ids, unknown } = resolvePreloadEngineIds(`${real}, not-an-engine`, ...LINUX)
   // One stale entry in a deployment's configuration must not leave the slicer
-  // with no engine at all — the failure would be total and silent.
+  // with no engine at all: the failure would be total and silent.
   assert.deepEqual(ids, [real])
   assert.deepEqual(unknown, ['not-an-engine'])
 })

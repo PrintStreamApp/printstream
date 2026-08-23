@@ -73,7 +73,7 @@ export function BridgeSettingsSection() {
     : (getBrowserEnv().devMode ? placeholderBridgeDownloads() : [])
   const bridges = bridgesQuery.data?.bridges ?? []
   // The origin a bridge registers with is this PrintStream server's public URL,
-  // i.e. the site the operator is viewing now — pre-fill the Docker snippet with it.
+  // i.e. the site the operator is viewing now: pre-fill the Docker snippet with it.
   const bridgeServerUrl = typeof window !== 'undefined' ? window.location.origin : 'https://your-server.example.com'
   const listError = bridgesQuery.error ? extractErrorMessage(bridgesQuery.error) : null
 
@@ -98,7 +98,7 @@ export function BridgeSettingsSection() {
             <Typography level="body-sm">
               A bridge links the printers on your local network to PrintStream and stores your library
               files. Because it owns that connection and your files, it needs to stay running on an
-              always-on machine near your printers — any computer that stays powered on works.
+              always-on machine near your printers: any computer that stays powered on works.
             </Typography>
           </Stack>
           <ConnectivityGuideButton sx={{ ml: 'auto' }} />
@@ -109,7 +109,7 @@ export function BridgeSettingsSection() {
         <PageSectionHeading
           icon={<DownloadRoundedIcon />}
           title="Install a bridge"
-          description="Run the bridge on a computer near your printers — install a native build or run it with Docker. It shows a connect code once it starts."
+          description="Run the bridge on a computer near your printers, install a native build or run it with Docker. It shows a connect code once it starts."
         />
         <BridgeInstallCard
           downloads={bridgeDownloads}
@@ -381,7 +381,7 @@ function BridgeDetailsDialog({ bridge, onClose }: { bridge: BridgeSummary; onClo
   const updateActionPending = checkBridgeUpdate.isPending || startBridgeUpdate.isPending
   const bridgeActionPending = renameBridge.isPending || removeBridge.isPending || testBridge.isPending || updateActionPending
   // A manual command on `updateAvailable` means this bridge updates by image
-  // pull (see the API's bridge-update-policy) — the in-app update action could
+  // pull (see the API's bridge-update-policy): the in-app update action could
   // only re-answer "pull manually", so keep the button on "Check for updates".
   const canStartBridgeUpdate = bridge.update.status !== 'current' &&
     bridge.update.status !== 'imageUpdateRequired' &&
@@ -534,7 +534,7 @@ function BridgeDetailsDialog({ bridge, onClose }: { bridge: BridgeSummary; onClo
                   <Typography level="body-xs">
                     Recording… {capture.frameCount.toLocaleString()} frame{capture.frameCount === 1 ? '' : 's'} captured
                     {capture.droppedFrames > 0 ? ` (${capture.droppedFrames.toLocaleString()} dropped)` : ''}
-                    {capture.truncated ? ' — size limit reached' : ''}.
+                    {capture.truncated ? ': size limit reached' : ''}.
                   </Typography>
                 )}
                 <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} flexWrap="wrap" useFlexGap>

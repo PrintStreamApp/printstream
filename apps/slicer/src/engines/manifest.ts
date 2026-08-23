@@ -2,8 +2,8 @@
  * The installed-engine manifest, as something that changes while we run.
  *
  * `targets.json` used to be written once at image build time and only ever
- * read. Nothing writes it at build time any more — the container downloads its
- * engines at runtime like the native app — so this is the only writer, and it
+ * read. Nothing writes it at build time any more, the container downloads its
+ * engines at runtime like the native app, so this is the only writer, and it
  * accumulates: engines are added and removed on a running service.
  *
  * The install ROOT is the manifest's own directory. That keeps one setting
@@ -72,7 +72,7 @@ export async function readManifest(): Promise<EngineManifest> {
  * BambuStudio's own file-version refusal tells users a project should come from
  * a stable build; they exist only so a project saved by a beta desktop can be
  * sliced at all. So: the newest STABLE installed, falling back to whatever is
- * installed if a deployment has nothing but betas — a default that cannot slice
+ * installed if a deployment has nothing but betas, a default that cannot slice
  * is worse than a beta one.
  */
 export function chooseDefaultTargetId(targets: ManifestEngine[]): string | null {
@@ -97,7 +97,7 @@ export function compareVersions(a: string, b: string): number {
  * Add or replace one engine, then re-pick the default.
  *
  * Written to a temp file and renamed, so a reader never sees a half-written
- * manifest — `slicer-targets.ts` parses this on a schedule the writer does not
+ * manifest: `slicer-targets.ts` parses this on a schedule the writer does not
  * control.
  */
 export async function upsertEngine(engine: Omit<ManifestEngine, 'isDefault'>): Promise<EngineManifest> {
@@ -118,7 +118,7 @@ async function writeManifest(targets: ManifestEngine[]): Promise<EngineManifest>
   const manifest: EngineManifest = {
     defaultTargetId,
     // `isDefault` is DERIVED here rather than trusted from the caller, so the
-    // flag and `defaultTargetId` cannot disagree — two representations of one
+    // flag and `defaultTargetId` cannot disagree, two representations of one
     // fact, and the build-time script writes both too.
     targets: targets.map((target) => ({ ...target, isDefault: target.id === defaultTargetId }))
   }

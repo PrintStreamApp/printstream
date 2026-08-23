@@ -86,7 +86,7 @@ test('FileThumbnail for an STL file serves the persisted server thumbnail, rende
     </CssVarsProvider>
   )
 
-  // The thumbnail is served from the server (the warm path) — not rendered up front.
+  // The thumbnail is served from the server (the warm path), not rendered up front.
   const img = view.getByRole('img', { name: stlFile.name })
   assert.match(img.getAttribute('src') ?? '', /\/api\/library\/file-stl\/thumbnail/)
   assert.equal(rendered, 0)

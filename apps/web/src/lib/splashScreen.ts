@@ -60,7 +60,7 @@ export function dismissSplashScreenImmediately(): void {
 }
 
 /**
- * Re-show the boot splash after it was dismissed — e.g. when the user enters the app from a marketing
+ * Re-show the boot splash after it was dismissed: e.g. when the user enters the app from a marketing
  * page and the heavy app chunk has to load. {@link completeSplashScreen} hides it again once ready.
  */
 export function showSplashScreen(): void {

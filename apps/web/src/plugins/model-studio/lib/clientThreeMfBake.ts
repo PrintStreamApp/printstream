@@ -5,7 +5,7 @@
  * layer. Everything that decides WHAT the output contains lives in `@printstream/shared/three-mf`
  * (`readThreeMfBakeSource` + `planEditedThreeMf`); this module only reads entries out of an
  * already-inflated archive and writes the result with fflate. If you find yourself adding a rule
- * about 3MF content here, it belongs in the shared module instead — that is the whole point of the
+ * about 3MF content here, it belongs in the shared module instead, that is the whole point of the
  * split, and the api would otherwise not get the fix.
  *
  * Why it exists: the public editor opens a file the user picked and must be able to save it back
@@ -51,7 +51,7 @@ export interface ClientBakeOutput {
  *
  * `machineRetarget` saves the project FOR A DIFFERENT PRINTER. It runs after the bake and before
  * the archive is written, which is the same position the api's `retargetSavedProjectMachine` pass
- * holds relative to its own bake — deliberately, so the two hosts produce the same file. It is a
+ * holds relative to its own bake, deliberately, so the two hosts produce the same file. It is a
  * separate parameter rather than a `ThreeMfBakeOptions` field because the plan is RESOLVED input
  * (preset configs the host fetched), not a bake decision, and it is a FUNCTION of the baked
  * settings because the rebind targets are picked from the filament list this bake just wrote.
@@ -84,7 +84,7 @@ export async function bakeClientThreeMf(
       const rewritten = transform(archive.entryText(entryPath) ?? '')
       if (rewritten !== null) output[entryPath] = encoder.encode(rewritten)
     }
-    // Appended entries never displace one the copy pass already wrote — a 3MF reader rejects an
+    // Appended entries never displace one the copy pass already wrote, a 3MF reader rejects an
     // archive with duplicate names, and the transform is the more specific answer for that entry.
     for (const extra of plan.copy.appendEntries) {
       if (output[extra.name] === undefined) output[extra.name] = encoder.encode(extra.content)
@@ -95,6 +95,18 @@ export async function bakeClientThreeMf(
 
   if (machineRetarget) await applyMachineRetargetToEntries(output, machineRetarget)
 
+  // Judge the bake on what it WROTE, the same check the api runs after its own write
+  // (`three-mf-scene-builder.ts`). This host needs it more, not less: the api can re-inspect a
+  // stored file later, while the public editor hands the bytes straight back to the user's disk and
+  // never sees them again. Runs after the transforms, since the project-settings one is lazy.
+  //
+  // Reports and never rewrites, for the same reason as the api: healing here would hide the
+  // authoring bug that produced the defect, and repairs are the user's to ask for.
+  const settingsRepairReasons = plan.settingsRepairReasons()
+  if (settingsRepairReasons.length > 0) {
+    console.warn(`[three-mf-bake] wrote a project with repairable settings defects: ${settingsRepairReasons.join(', ')}`)
+  }
+
   return { bytes: await deflateArchive(output), result: plan.result }
 }
 
@@ -102,7 +114,7 @@ export async function bakeClientThreeMf(
  * Rewrite the baked archive's settings entries for the target machine, in place.
  *
  * A project with no `project_settings.config` (a from-scratch scaffold) is retargeted from an empty
- * object, exactly as the api does — the resolved machine supplies every field, the way BambuStudio
+ * object, exactly as the api does: the resolved machine supplies every field, the way BambuStudio
  * picking a printer for a fresh project does. Unreadable settings abort the retarget rather than
  * being replaced: losing the printer switch is recoverable, dropping settings the user's only copy
  * of the file still carries is not.
@@ -119,7 +131,7 @@ async function applyMachineRetargetToEntries(
     try {
       projectSettings = JSON.parse(decoder.decode(existing)) as ProfileRecord
     } catch (error) {
-      // Abort the retarget rather than replacing settings we could not read — see the doc above.
+      // Abort the retarget rather than replacing settings we could not read: see the doc above.
       console.warn('[editor] project settings could not be parsed; saving without the machine retarget:',
         error instanceof Error ? error.message : error)
       return
@@ -137,7 +149,7 @@ async function applyMachineRetargetToEntries(
 }
 
 /**
- * Deflate through the dedicated zip worker (bounded, always settles — a wedged save must surface
+ * Deflate through the dedicated zip worker (bounded, always settles, a wedged save must surface
  * an error, never hang "Saving…"). Level 6 matches what BambuStudio writes.
  */
 function deflateArchive(entries: Record<string, Uint8Array>): Promise<Uint8Array> {

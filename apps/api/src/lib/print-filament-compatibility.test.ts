@@ -144,7 +144,7 @@ test('a tray nozzle mismatch blocks without the override and passes with it', as
     nozzleSizes: []
   })
   // The mapped tray's AMS feeds nozzle 0 while the filament is sliced for
-  // nozzle 1 — a hard mismatch when the parsed binding is trusted.
+  // nozzle 1, a hard mismatch when the parsed binding is trusted.
   const input = {
     ...SCOPE,
     plate: 1,
@@ -215,7 +215,7 @@ test('a file must be printed on the kind of machine it was sliced for (Filament 
     plate: 1, printerModel: 'H2D', printerStatus: undefined, amsMapping: [0]
   }))
 
-  // The SD-card / automatic path must enforce it too — a file already sitting on the printer is
+  // The SD-card / automatic path must enforce it too, a file already sitting on the printer is
   // exactly the case where nobody re-checked what it was sliced for.
   await assert.rejects(assertAutomaticPrintCompatibility({
     ...SCOPE,

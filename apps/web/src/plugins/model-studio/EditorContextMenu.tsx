@@ -5,9 +5,9 @@
  * permission), repair mesh, add part volumes
  * (negative/modifier/blocker), change material, object settings, centre / drop / reset /
  * mirror transforms, move to another plate, and delete. Multi-selection (the clicked
- * object is a member): a reduced bulk menu (BambuStudio-style) — duplicate, assemble,
+ * object is a member): a reduced bulk menu (BambuStudio-style), duplicate, assemble,
  * export as STL (merged into one, or one file per object), change material, set
- * printable / skip, object settings, move to plate, delete — each applied to the
+ * printable / skip, object settings, move to plate, delete, each applied to the
  * whole selection.
  *
  * Presentational: every action is a callback and the parent owns the menu's open state
@@ -48,7 +48,7 @@ type Axis = 'x' | 'y' | 'z'
 
 /**
  * Which list the menu is showing. Submenus swap the content in place rather than cascading a
- * nested popup, so the view carries whatever the submenu needs — the add-part list needs to know
+ * nested popup, so the view carries whatever the submenu needs: the add-part list needs to know
  * which volume type the user picked before choosing its geometry.
  */
 type MenuView =
@@ -74,7 +74,7 @@ export interface EditorContextMenuProps {
   onDuplicateIndependent: (key: string) => void
   /** Unlink this copy from the others. Absent when the model has no other copies. */
   onMakeIndependent?: (key: string) => void
-  /** Rename the object (single selection only) — the object list rows have no rename shortcut. */
+  /** Rename the object (single selection only): the object list rows have no rename shortcut. */
   onRename: (key: string) => void
   onSplitToObjects: (key: string) => void
   /** Whether the "Assemble N objects" item shows (a multi-selection includes this object). */
@@ -86,7 +86,7 @@ export interface EditorContextMenuProps {
   onReplaceFromFile: (key: string) => void
   /**
    * Export targets (BambuStudio's "Export as one STL" / "Export as STLs…", plus the
-   * beyond-parity single-object 3MF project export — download or save to library —
+   * beyond-parity single-object 3MF project export, download or save to library,
    * which keeps parts/materials/paint). Single selection uses the per-key handlers;
    * a multi-selection uses the merged pair (whole selection → one STL) plus the
    * separate pair (one STL per object). Each is present only when the user holds the
@@ -105,7 +105,7 @@ export interface EditorContextMenuProps {
   canRepair: boolean
   /** Mark this object's mesh for repair on save (welds cracked vertices, drops junk facets). */
   onRepairMesh: (key: string) => void
-  /** Already marked for repair this session — the item reports that instead of re-marking. */
+  /** Already marked for repair this session: the item reports that instead of re-marking. */
   isRepairMarked: boolean
   /** Add a part of `subtype` built from a generated primitive. */
   onAddPartVolume: (key: string, subtype: SceneEditPartSubtype, shape: PrimitiveKind) => void
@@ -120,8 +120,17 @@ export interface EditorContextMenuProps {
   filamentOptions: ReadonlyArray<FilamentOption>
   /** Assign one material to every part of every selected object. */
   onChangeMaterial: (filamentId: number) => void
-  /** Set the whole selection's Printable flag (multi-selection only). */
+  /** Set the selection's Printable flag. Handles one object as readily as many. */
   onSetPrintable: (printable: boolean) => void
+  /**
+   * Whether the CLICKED instance is currently printable, so the single-object menu can offer the
+   * one action that applies rather than both. Null when the caller cannot resolve it, which hides
+   * the item instead of guessing a state and mislabelling the action.
+   *
+   * Only the single-object branch uses it: a multi-selection can be mixed, so that branch keeps its
+   * two explicit items rather than deriving one label from several instances.
+   */
+  printable?: boolean | null
   /** Open per-object process settings for the selection; absent without slice settings. */
   onEditObjectSettings?: () => void
   /** Centre/reset/mirror act on the SELECTED object (parity with the old inline menu). */
@@ -142,7 +151,7 @@ export function EditorContextMenu({
   onExportProjectDownload, onExportProjectToLibrary, onExportMergedDownload, onExportMergedToLibrary, onExportSeparateDownload,
   onExportSeparateToLibrary, canRepair, onRepairMesh,
   isRepairMarked, onAddPartVolume, onAddPartFromFile, onAddPartFromLibrary,
-  filamentOptions, onChangeMaterial, onSetPrintable, onEditObjectSettings, onCenterOnPlate,
+  filamentOptions, onChangeMaterial, onSetPrintable, printable, onEditObjectSettings, onCenterOnPlate,
   onDropToBed, onResetRotation, onResetScale, onMirror, otherPlates, onMoveToPlate, onDelete
 }: EditorContextMenuProps) {
   const { key } = contextMenu
@@ -153,6 +162,23 @@ export function EditorContextMenu({
     <MenuItem onClick={(event) => { event.stopPropagation(); setView({ kind: 'material' }) }}>
       <ListItemDecorator><PaletteRoundedIcon /></ListItemDecorator>
       Change material{suffix}…
+    </MenuItem>
+  )
+  /**
+   * Printability for ONE object, offered as the single action that applies rather than as both.
+   *
+   * The only affordance used to be the Switch on the sidebar row, which is invisible to anyone
+   * working in the viewport, so a right-click could not skip a model. BambuStudio carries a
+   * Printable item in its object menu too (`append_menu_item_printable`), beside the per-object
+   * settings items, which is where this sits.
+   *
+   * The multi branch keeps its two explicit items instead: a mixed selection has no single state to
+   * label, and "Set printable" / "Skip printing" says plainly what it will do to all of them.
+   */
+  const printableItem = !multi && printable != null && (
+    <MenuItem onClick={() => { onSetPrintable(!printable); onClose() }}>
+      <ListItemDecorator>{printable ? <PrintDisabledRoundedIcon /> : <PrintRoundedIcon />}</ListItemDecorator>
+      {printable ? 'Skip printing' : 'Set printable'}
     </MenuItem>
   )
   const objectSettingsItem = onEditObjectSettings && (
@@ -300,7 +326,7 @@ export function EditorContextMenu({
             Skip printing{suffix}
           </MenuItem>
           <ListDivider />
-          {/* Centring has real N-object semantics — the selection moves as a unit and keeps its
+          {/* Centring has real N-object semantics: the selection moves as a unit and keeps its
               relative layout (BambuStudio's `Selection::center`), so it belongs here rather than
               being one of the per-object placement items below. */}
           <MenuItem onClick={() => { onCenterOnPlate(); onClose() }}>
@@ -371,11 +397,12 @@ export function EditorContextMenu({
               Add {addedPartLabel(subtype).toLowerCase()}…
             </MenuItem>
           ))}
-          {(changeMaterialItem || objectSettingsItem) && (
+          {(changeMaterialItem || objectSettingsItem || printableItem) && (
             <>
               <ListDivider />
               {changeMaterialItem}
               {objectSettingsItem}
+              {printableItem}
             </>
           )}
           <ListDivider />

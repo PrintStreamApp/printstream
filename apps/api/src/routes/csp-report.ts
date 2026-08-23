@@ -2,7 +2,7 @@
  * Content-Security-Policy violation report sink.
  *
  * The CSP served by `lib/content-security-policy.ts` names this endpoint in
- * its `report-uri` directive, so browsers POST every violation here — in
+ * its `report-uri` directive, so browsers POST every violation here, in
  * report-only *and* enforce mode. Reports land in the server log (and the
  * in-app Logs tab via the console capture), giving operators a signal for
  * policy regressions across real users' browsers instead of relying on

@@ -9,13 +9,13 @@
  * the push and calls `showNotification`.
  *
  * Routes:
- * - `GET /api/plugins/notifications-browser` — public key + subscription count.
- * - `POST /api/plugins/notifications-browser/subscriptions` — register a subscription.
- * - `POST /api/plugins/notifications-browser/subscriptions/lookup` — whether an
+ * - `GET /api/plugins/notifications-browser`: public key + subscription count.
+ * - `POST /api/plugins/notifications-browser/subscriptions`: register a subscription.
+ * - `POST /api/plugins/notifications-browser/subscriptions/lookup`: whether an
  *   endpoint is registered in the current scope (POST because the endpoint is a
  *   capability URL that must stay out of query strings and logs).
- * - `DELETE /api/plugins/notifications-browser/subscriptions` — unregister by endpoint.
- * - `POST /api/plugins/notifications-browser/dismissals` — sync a notification
+ * - `DELETE /api/plugins/notifications-browser/subscriptions`: unregister by endpoint.
+ * - `POST /api/plugins/notifications-browser/dismissals`: sync a notification
  *   dismissal to the actor's other devices (excluded from the audit trail).
  *
  * Audit note: subscription changes are annotated, but push endpoint URLs are
@@ -32,7 +32,7 @@
  * subscriptions belonging to the scope the event originated from.
  *
  * A browser has exactly ONE push subscription per origin, so the same
- * endpoint is expected to appear in several scopes' lists — one entry per
+ * endpoint is expected to appear in several scopes' lists, one entry per
  * workspace the user enabled notifications in on that device. Enabling a
  * workspace must therefore never invalidate the device's existing
  * subscription, and disabling removes the endpoint from that scope only.
@@ -44,7 +44,7 @@
  * Besides the HTTP dismissal sync above, the plugin listens for
  * `notification.dismiss` bus events (read-state dismissal: the notification's
  * subject was seen in the app) and retracts tag-matched notifications from
- * the targeted users' devices — or the whole originating scope when the
+ * the targeted users' devices, or the whole originating scope when the
  * event carries no targets.
  */
 import { z } from 'zod'
@@ -156,7 +156,7 @@ export const notificationsBrowserPlugin: ApiPlugin = {
     context.router.post('/subscriptions/lookup', requireRequestPermission(SETTINGS_MANAGE_PERMISSION), async (request, response) => {
       // Read-only status probe (fired on every settings-panel mount); a POST
       // only because the endpoint is a capability URL that must stay out of
-      // query strings — no state changes, so no audit row.
+      // query strings, no state changes, so no audit row.
       skipRequestAuditLog(request)
       const workspaceId = request.workspace?.id ?? null
       const workspaceDelivery = await getOrCreateScopedDelivery(workspaceId)
@@ -186,7 +186,7 @@ export const notificationsBrowserPlugin: ApiPlugin = {
 
     context.router.post('/dismissals', requireRequestPermission(SETTINGS_MANAGE_PERMISSION), async (request, response) => {
       // Fires once per dismissed notification just to sync the dismissal to
-      // the actor's other devices — no durable state changes, so a row per
+      // the actor's other devices, no durable state changes, so a row per
       // dismissal would only be audit noise.
       skipRequestAuditLog(request)
       const workspaceId = request.workspace?.id ?? null
@@ -247,7 +247,7 @@ export const notificationsBrowserPlugin: ApiPlugin = {
 
     // Read-state dismissal: when a notification's subject was seen in the app
     // (e.g. a support thread was read), retract the delivered notification by
-    // its tag — targeted at specific users' devices, or across the whole
+    // its tag: targeted at specific users' devices, or across the whole
     // originating scope when the event carries no targets.
     const handleDismiss = async (event: { tag: string; workspaceId: string | null; targetUserIds?: string[] }) => {
       const dismissPayload = { type: 'dismiss', tag: event.tag }

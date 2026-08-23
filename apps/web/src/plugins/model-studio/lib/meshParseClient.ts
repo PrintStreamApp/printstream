@@ -2,7 +2,7 @@
  * Main-thread client for the mesh-parse worker pool.
  *
  * Routes 3MF/STL geometry parsing to `meshParseWorker` so a huge object never freezes the editor,
- * and falls back to the synchronous parsers in `threeMfScene` when the worker mechanism fails — so
+ * and falls back to the synchronous parsers in `threeMfScene` when the worker mechanism fails, so
  * worker problems degrade to a slow load instead of a broken one. The worker returns finished
  * geometry as transferred typed arrays; we just rebuild the BufferGeometry.
  *
@@ -12,7 +12,7 @@
  * silent for all of those, so the only symptom is that nothing ever comes back. The worker
  * therefore posts a `ready` handshake once its module has evaluated, and no task is dispatched
  * before it arrives. A pool that never reports ready is retired ONCE, for the session, after
- * {@link POOL_READY_TIMEOUT_MS} — every later parse then goes straight to the main thread. That is
+ * {@link POOL_READY_TIMEOUT_MS}, every later parse then goes straight to the main thread. That is
  * the difference between one short wait per session and one multi-second wait PER MESH ENTRY,
  * followed by the main-thread parse anyway: opening an 8-entry project in such a browser used to
  * cost 8 x 20s of dead waiting before any geometry appeared.
@@ -27,7 +27,7 @@
  *    fall back to a main-thread parse: a brief freeze beats a load that never finishes. Node tests
  *    take this path by design, which is why a pool that was never attempted stays quiet.
  *  - DATA failures are the file's fault. The STL path does NOT retry them, because
- *    `parseStlGeometry` is the same code as the worker's `buildStlGeometry` — the retry would fail
+ *    `parseStlGeometry` is the same code as the worker's `buildStlGeometry`: the retry would fail
  *    identically, with a freeze on the way to the same message. The 3MF path DOES retry, because
  *    its fallback is a genuinely different reader (`DOMParser` against the worker's regex pass) and
  *    can succeed where the other could not.
@@ -46,7 +46,7 @@ export class MeshParseDataError extends Error {}
  *
  * Sized to make a FALSE retirement impossible rather than to fail fast: a healthy pool never waits
  * for this (the handshake lands in ~0.7s even in dev, where the worker pulls three + three-stdlib
- * as unbundled dev chunks), and a broken one pays it once for the whole session — so headroom is
+ * as unbundled dev chunks), and a broken one pays it once for the whole session, so headroom is
  * nearly free while retiring a working pool would cost main-thread parsing until the tab reloads.
  */
 export const POOL_READY_TIMEOUT_MS = 5_000
@@ -182,7 +182,7 @@ function createPoolWorker(): PoolWorker {
  * Drop one worker and start a replacement in its slot.
  *
  * A worker that blew a size-scaled deadline, or raised a worker-level error after a sibling had
- * already proved the module graph loads, is a single casualty — the pool keeps working. A failure
+ * already proved the module graph loads, is a single casualty: the pool keeps working. A failure
  * BEFORE any worker has ever reported ready is different in kind (the graph itself is broken, so
  * the replacement would fail the same way) and retires the whole pool instead.
  */

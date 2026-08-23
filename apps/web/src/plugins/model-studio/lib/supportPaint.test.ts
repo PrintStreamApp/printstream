@@ -63,7 +63,7 @@ test('applySupportPaintBrush paints facing triangles within the radius only', ()
 
 test('applySupportPaintBrush paints large triangles it touches, splitting to the brush', () => {
   // One large triangle: the centroid is ~23mm from the brushed corner, far beyond the
-  // brush radius — the brush sphere touches the surface, so it must paint, and the
+  // brush radius: the brush sphere touches the surface, so it must paint, and the
   // partial coverage must produce a split tree rather than painting the whole polygon.
   const scan = buildTriangleScanData(new Float32Array([0, 0, 0, 50, 0, 0, 0, 50, 0]))
   const codes: Record<number, string> = {}
@@ -322,7 +322,7 @@ test('a partially covered triangle splits so paint follows the brush', () => {
 })
 
 // A partially painted triangle's filament must still count as "in use". The whole-triangle decode
-// returns null for a split code, which let a painted second material read as unused — it stayed
+// returns null for a split code, which let a painted second material read as unused, it stayed
 // removable and the prime tower never appeared (the plate genuinely prints two materials).
 test('collectColorPaintFilamentIds finds filaments in whole-triangle AND split codes', () => {
   const whole = new Set<number>()

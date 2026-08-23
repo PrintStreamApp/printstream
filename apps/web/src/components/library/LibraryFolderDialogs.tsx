@@ -1,7 +1,7 @@
 /**
  * Library folder CRUD dialogs: create, rename, and move a folder. Each is a
  * self-contained, props-only modal that performs its own `apiFetch` mutation and
- * calls back on success — no shared page state flows through them. `MoveFolderModal`
+ * calls back on success, no shared page state flows through them. `MoveFolderModal`
  * owns `flattenFoldersForSelect`, the parent-folder option builder it alone uses.
  */
 import { useMemo, useState } from 'react'
@@ -108,7 +108,7 @@ export function RenameFolderModal({
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const canSubmit = name.trim().length > 0 && name !== folder.name
-  // Whole name selected on open — folders have no extension to protect.
+  // Whole name selected on open: folders have no extension to protect.
   const nameInputProps = useNameInputProps({ onAccept: () => void submit(), canAccept: canSubmit && !submitting })
   const submit = async () => {
     setSubmitting(true)

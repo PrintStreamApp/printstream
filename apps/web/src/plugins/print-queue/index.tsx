@@ -4,7 +4,7 @@
  * Contributes the print-queue section at the top of the core Jobs page (the
  * `jobs.sections` slot): a shared, reorderable print backlog whose items show
  * a live eligibility badge (matched against each printer's loaded AMS material) and
- * are dispatched on demand. The section is eager-loaded with the app shell — this is
+ * are dispatched on demand. The section is eager-loaded with the app shell, this is
  * core app functionality, not a heavy/optional surface, so it should be ready on
  * first paint. The legacy top-level "/queue" route stays registered (unlisted) as a
  * redirect to /jobs so old bookmarks and landing-page preferences keep working.

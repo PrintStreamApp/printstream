@@ -1,7 +1,7 @@
 /**
  * Bambu Lab cloud relay: performs one named cloud call from the bridge's own network.
  *
- * Owns the HTTP half of the `bambu.cloud.request` RPC — URL construction, the client
+ * Owns the HTTP half of the `bambu.cloud.request` RPC: URL construction, the client
  * identity we present to Bambu, and the TOTP CSRF dance. It owns no policy: it does
  * not decide whether a credential is dead, whether to retry, or what a status means.
  * The API plugin (`apps/api/src/plugins/bambu-cloud-sync/`) owns all of that, because
@@ -10,7 +10,7 @@
  *
  * Why the bridge at all: on a multi-workspace deployment every workspace would
  * otherwise reach Bambu from one shared egress IP, and Bambu's edge rate-limits and
- * challenges per-IP — one busy workspace would degrade the feature for all of them.
+ * challenges per-IP, one busy workspace would degrade the feature for all of them.
  * Relaying puts a household's traffic on that household's own connection.
  *
  * **Secrets.** The access token and (during sign-in only) the account password pass
@@ -30,7 +30,7 @@ import {
  * makes the source unambiguous: this is an unofficial client and must never present
  * itself as BambuStudio. (Bambu's May 2026 post on cloud access called out a fork for
  * exactly that.) Our neutral `version` query parameter is the other half of the same
- * posture — see `BAMBU_SLICER_API_VERSION`.
+ * posture: see `BAMBU_SLICER_API_VERSION`.
  */
 const USER_AGENT = 'PrintStream/1.0 (+https://printstream.app)'
 
@@ -136,8 +136,8 @@ function prepareRequest(apiHost: string, params: PlainBambuCloudRequestParams): 
 /**
  * TOTP sign-in, which does not go where everything else goes.
  *
- * The code is verified at `bambulab.com/api/sign-in/tfa` — the WEB origin, not the API
- * host — and that origin enforces double-submit CSRF: without the `bbl_csrf_token`
+ * The code is verified at `bambulab.com/api/sign-in/tfa`, the WEB origin, not the API
+ * host, and that origin enforces double-submit CSRF: without the `bbl_csrf_token`
  * cookie the request is refused before the code is even read, and with the cookie but
  * no matching header it is refused as `missing_header`. Only `GET /api/csrf` mints
  * one. A CSRF rejection therefore looks nothing like a wrong code and must not be
@@ -245,7 +245,7 @@ async function fetchWithTimeout(url: string, init: RequestInit, signal?: AbortSi
   return await fetch(url, { ...init, signal: composed })
 }
 
-/** Operation name only — the params carry the account password and the access token. */
+/** Operation name only: the params carry the account password and the access token. */
 export function describeOperation(params: BridgeBambuCloudRequestParams): string {
   return `${params.request.operation} (${params.region})`
 }

@@ -4,7 +4,7 @@
  * Owns the rule a bare title cannot: when several stacked sections all render runs of identical
  * outlined cards, nothing marks where one section ends and the next begins, because the gap
  * between sections is barely larger than the gap between cards. Every section therefore gets the
- * same anatomy — its own icon, a `title-lg` title, its item count, one line naming what belongs
+ * same anatomy, its own icon, a `title-lg` title, its item count, one line naming what belongs
  * in it, and a full-width rule closing the header off from the cards beneath.
  *
  * Purely presentational. The section's anchor id and `scrollMarginTop` stay on the caller's
@@ -22,7 +22,7 @@ import { Box, Chip, Divider, Stack, Typography } from '@mui/joy'
 import { type ReactNode } from 'react'
 
 /**
- * `spacing` for the Stack that holds a page's sections — the gap BETWEEN sections.
+ * `spacing` for the Stack that holds a page's sections: the gap BETWEEN sections.
  *
  * It has to read as clearly larger than the gaps inside a section (cards at 1, heading blocks at
  * 1.25) or the sections merge into one wall, which is the whole problem {@link PageSectionHeading}
@@ -50,7 +50,7 @@ export function PageSectionHeading({
   actions?: ReactNode
   /**
    * Typography level for the title. `h3` when this section IS a page rather
-   * than one of several stacked on one — a section that becomes its own route
+   * than one of several stacked on one, a section that becomes its own route
    * must not keep a heading a size smaller than every other top-level view's.
    */
   level?: 'title-lg' | 'h3'
@@ -71,7 +71,7 @@ export function PageSectionHeading({
             endDecorator={count != null && count > 0 ? (
               // `component="span"`, not Chip's default `div`: Typography renders as a
               // `<p>` at every level this takes, and a `<div>` inside a `<p>` is invalid
-              // HTML — React logs a validateDOMNesting error, and the browser's parser
+              // HTML: React logs a validateDOMNesting error, and the browser's parser
               // is entitled to close the paragraph early and reparent the chip. Joy sets
               // the chip's `display` from its own class, so the tag swap is visually inert.
               <Chip component="span" size="sm" variant="soft" color="neutral">{count}</Chip>

@@ -2,7 +2,7 @@
  * The account scope has more than one host, and only one of them was ever
  * exercised. Account -> Messages linked to `/account/messages` from
  * `/platform/account`, which matches no route, and the router's catch-all sent
- * the click to the home page rather than failing — so these assertions are
+ * the click to the home page rather than failing, so these assertions are
  * about the PREFIX, which is the part that silently went missing.
  */
 import assert from 'node:assert/strict'

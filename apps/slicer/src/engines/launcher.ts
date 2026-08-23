@@ -9,11 +9,11 @@
  * what they can assume, and pretending otherwise is what kept them on separate
  * installers for so long:
  *
- * - `native` — an engine installed at runtime onto an unknown machine. No shell
+ * - `native`, an engine installed at runtime onto an unknown machine. No shell
  *   guarantees on Windows, no display (measured: the CLI slices with glfwInit
  *   failing, and plate thumbnails are supplied by the caller), and on Linux it
  *   must bind to the sysroot we installed rather than the host's libraries.
- * - `container` — our own image, which already carries the runtime libraries as
+ * - `container`: our own image, which already carries the runtime libraries as
  *   OS packages (amd64) or a baked x86-64 sysroot for qemu (arm64), plus the
  *   weston + GL-shim thumbnail stack.
  *   `docker/bambu-studio-cli.sh` is what knows how to combine those, and it
@@ -21,7 +21,7 @@
  *   already sets from the manifest.
  *
  * The strategy is what decides whether an install needs to fetch a sysroot at
- * all — a question that used to be answered by platform alone, which is why
+ * all, a question that used to be answered by platform alone, which is why
  * installing an engine inside the container demanded a closure it neither had
  * nor needed.
  */
@@ -81,7 +81,7 @@ export function launchStrategyNeedsSysroot(
  * normally would resolve GTK, WebKit and the rest against whatever the machine
  * happens to have, which on a headless server is nothing and on a desktop is
  * often the wrong WebKit ABI. The AppImage's own `bin/` comes FIRST on that
- * path — it bundles libavcodec/libavutil/libswscale and nothing else, and those
+ * path, it bundles libavcodec/libavutil/libswscale and nothing else, and those
  * three are not in the sysroot. Verified: a full slice, exit 0, with no host
  * library reachable.
  */
@@ -92,7 +92,7 @@ export function buildSlicerEngineCommand(
 ): SlicerEngineCommand {
   // The image's launcher takes the engine directory through `SLICER_APPDIR`
   // rather than an argument, and every spawn site already sets it from the
-  // manifest's `appDir` — so there is nothing to prefix.
+  // manifest's `appDir`, so there is nothing to prefix.
   if (strategy === 'container') {
     return { execute: CONTAINER_LAUNCHER_PATH, argsPrefix: [] }
   }

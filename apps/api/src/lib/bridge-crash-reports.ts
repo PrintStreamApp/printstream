@@ -2,7 +2,7 @@
  * Ingest of bridge-reported crashes.
  *
  * A bridge reports (over its session) when it detected on startup that its
- * previous run died without a clean shutdown — see the bridge crash-tracker.
+ * previous run died without a clean shutdown: see the bridge crash-tracker.
  * This module records that report three ways:
  *  - a durable crash summary on the `Bridge` row (drives the web's health UI),
  *  - an operational log entry the owning workspace can see in the Logs view, and
@@ -78,8 +78,8 @@ export async function ingestBridgeCrashReport(input: {
 
   const windowMinutes = Math.max(1, Math.round(report.windowSeconds / 60))
   const message = looping
-    ? `Bridge "${bridge.name}" is crash-looping: ${report.recentCrashCount} crashes in the last ${windowMinutes}m${reason ? `. Last error: ${reason}` : ' (no reason captured — likely a hard kill)'}`
-    : `Bridge "${bridge.name}" crashed and restarted${reason ? `: ${reason}` : ' (no reason captured — likely a hard kill)'}`
+    ? `Bridge "${bridge.name}" is crash-looping: ${report.recentCrashCount} crashes in the last ${windowMinutes}m${reason ? `. Last error: ${reason}` : ' (no reason captured: likely a hard kill)'}`
+    : `Bridge "${bridge.name}" crashed and restarted${reason ? `: ${reason}` : ' (no reason captured: likely a hard kill)'}`
   pushSystemLog({ level: 'error', message, workspaceId })
   broadcastLogsChanged(workspaceId)
   broadcastBridgesChanged(workspaceId)

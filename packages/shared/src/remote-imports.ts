@@ -49,7 +49,7 @@ export type RemoteImportPrintableStatus = z.infer<typeof remoteImportPrintableSt
 /**
  * Hosts whose images the import UI is willing to render.
  *
- * Matched as exact host or dot-suffix, never as a substring — `evil-bblmw.com`
+ * Matched as exact host or dot-suffix, never as a substring: `evil-bblmw.com`
  * must not pass. MakerWorld serves covers from its `bblmw.com` CDN; Printables
  * from `media.printables.com`.
  */
@@ -61,7 +61,7 @@ export const REMOTE_IMPORT_THUMBNAIL_HOSTS = [
 
 /**
  * The same host set as CSP `img-src` sources, so the sanitizer and the policy
- * cannot drift apart — a cover that passes {@link sanitizeRemoteImportThumbnailUrl}
+ * cannot drift apart, a cover that passes {@link sanitizeRemoteImportThumbnailUrl}
  * and is then blocked by CSP fails silently, with a broken card and no error.
  *
  * Each host appears TWICE on purpose: CSP's `*.example.com` does not match the
@@ -78,7 +78,7 @@ export const REMOTE_IMPORT_THUMBNAIL_CSP_SOURCES: string[] = REMOTE_IMPORT_THUMB
  * Narrows an untrusted thumbnail URL to one that is safe to put in an `<img src>`.
  *
  * The value reaches the web app through the extension handoff query string, which
- * the user (or anything that can craft a link to the import page) controls — so it
+ * the user (or anything that can craft a link to the import page) controls, so it
  * is filtered here rather than at the render site, where a caller could forget.
  * Returns null for anything that is not `https:` on an allow-listed provider host,
  * which also rejects `javascript:`/`data:` payloads outright.
@@ -147,7 +147,7 @@ export const remoteImportUrlImportRequestSchema = z.object({
   url: z.string().trim().url(),
   /**
    * Bridge to store the bytes on. Still required: it is the fallback when no folder
-   * is named, and the only thing an extension client knows about — it has no folder
+   * is named, and the only thing an extension client knows about, it has no folder
    * tree to choose from.
    */
   bridgeId: z.string().trim().min(1),
@@ -182,7 +182,7 @@ export type RemoteImportProviderCapability = z.infer<typeof remoteImportProvider
  * Whether this workspace can pull a MakerWorld model server-side, and under whose
  * account. All three fields are needed to say anything useful: the feature is off
  * until `enabled`, unusable without `accountConnected`, and `accountLabel` is the
- * account a download will actually run as — a workspace shares ONE Bambu connection,
+ * account a download will actually run as, a workspace shares ONE Bambu connection,
  * so that is frequently not the person clicking. Null label means not connected.
  */
 export const remoteImportMakerWorldCapabilitySchema = z.object({
@@ -454,7 +454,7 @@ function isMakerWorldModelPage(url: URL): boolean {
  * shared MakerWorld link often carries the profile in its FRAGMENT
  * (`…/models/578636-slug#profileId-499360`). Fragments never reach a server on their
  * own, so this parse has to happen wherever the user's full pasted string is still
- * intact and the id forwarded explicitly — the browser, or a request body that
+ * intact and the id forwarded explicitly: the browser, or a request body that
  * carried the whole URL.
  *
  * A null `instanceId` is normal, not a failure: the model's own `defaultInstanceId`

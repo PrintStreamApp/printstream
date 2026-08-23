@@ -3,7 +3,7 @@
  *
  * Two kinds of rows must never surface in listings, browse, name matching, or
  * overwrite resolution:
- * - `hidden` rows: transient artifacts — "print from local file" uploads,
+ * - `hidden` rows: transient artifacts: "print from local file" uploads,
  *   unsaved sliced outputs, print-history snapshots, editor new-project
  *   scaffolds. They stay reachable BY ID (re-dispatch, history reprints, the
  *   editor).

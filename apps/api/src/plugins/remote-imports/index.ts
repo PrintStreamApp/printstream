@@ -4,7 +4,7 @@
  * Imports printable files from a pasted URL into the bridge-backed library. Two
  * routes in: a DIRECT file URL is downloaded here behind the SSRF guard, and a
  * MAKERWORLD model page is resolved through the workspace's connected Bambu Lab
- * account (see `makerworld-client.ts`) — that account is the only credential
+ * account (see `makerworld-client.ts`), that account is the only credential
  * MakerWorld accepts, so no amount of scraping substitutes for it.
  *
  * Printables publishes no link this can fetch, so it stays unsupported here; the
@@ -23,11 +23,11 @@
  * `/import-upload`, and `/extension-context`.
  *
  * Routes (mounted under `/api/plugins/remote-imports`):
- * - `GET  /capabilities`      — providers, importable/direct-print types, landing folder.
- * - `GET  /extension-context` — sign-in + workspace bootstrap for the extension.
- * - `POST /resolve`           — detect provider and import strategy for a pasted URL.
- * - `POST /import-url`        — download a direct file URL into the library.
- * - `POST /import-upload`     — accept file bytes from the browser helper / extension.
+ * - `GET  /capabilities`: providers, importable/direct-print types, landing folder.
+ * - `GET  /extension-context`: sign-in + workspace bootstrap for the extension.
+ * - `POST /resolve`: detect provider and import strategy for a pasted URL.
+ * - `POST /import-url`: download a direct file URL into the library.
+ * - `POST /import-upload`: accept file bytes from the browser helper / extension.
  */
 import { lookup as dnsLookup } from 'node:dns/promises'
 import { createWriteStream } from 'node:fs'
@@ -80,12 +80,12 @@ const MAX_REMOTE_IMPORT_REDIRECTS = 5
 /**
  * Whether MakerWorld imports may use the workspace's Bambu Lab connection.
  *
- * **Absent means ON** — this is an opt-OUT. It started as an opt-in on the reasoning
+ * **Absent means ON**, this is an opt-OUT. It started as an opt-in on the reasoning
  * that connecting that account (in `bambu-cloud-sync`) is consent to sync presets and
  * not to fetch models under the same identity. That protected almost nothing in
  * practice: the account credential is the ONLY way to download from MakerWorld, this
  * plugin is already disabled by default, and anyone able to flip this switch could
- * equally enable the plugin — so all the extra step did was leave the plugin's headline
+ * equally enable the plugin, so all the extra step did was leave the plugin's headline
  * feature dead until the user found a second toggle.
  *
  * It survives as an off switch for the case the consent argument was really about: an
@@ -100,7 +100,7 @@ const uploadDir = path.join(tmpdir(), 'printstream-remote-imports')
  * Library kinds this plugin accepts, as `classifyLibraryFileKind` reports them.
  *
  * One list feeds the guard, the rejection message, and what `/capabilities`
- * advertises, so those three cannot disagree — they did once, with STEP files
+ * advertises, so those three cannot disagree, they did once, with STEP files
  * importing fine while both strings claimed they could not.
  */
 const IMPORTABLE_LIBRARY_FILE_KINDS = ['3mf', 'gcode', 'stl', 'step'] as const
@@ -145,13 +145,13 @@ const uploadSingle = (field: string) => singleUploadWithLimit({
 })
 
 /**
- * Demo-mode gate, as middleware so it runs BEFORE multer stages bytes on disk —
+ * Demo-mode gate, as middleware so it runs BEFORE multer stages bytes on disk:
  * throwing from inside the handler would orphan the temp file, which nothing
  * sweeps.
  *
  * Deliberately passes no bypass permission: `assertFileUploadsAllowed` skips the
  * check for anyone holding the permission it is handed, and every route here
- * already gates on `LIBRARY_UPLOAD_PERMISSION` — so passing that same permission
+ * already gates on `LIBRARY_UPLOAD_PERMISSION`, so passing that same permission
  * would make the gate unreachable rather than lenient.
  */
 function requireFileUploadsAllowed(request: Request, _response: ExpressResponse, next: NextFunction): void {
@@ -216,7 +216,7 @@ export function createRemoteImportsPlugin(input: {
       // Ungated on purpose: this is the extension's BOOTSTRAP, and it must be able
       // to tell "not signed in" from "signed in but cannot upload anywhere". A
       // permission gate collapses both into a 401, leaving the extension unable to
-      // prompt correctly. Nothing sensitive escapes — the workspace list is already
+      // prompt correctly. Nothing sensitive escapes: the workspace list is already
       // filtered to workspaces the caller may upload to, and an anonymous caller
       // gets an empty list unless auth is disabled entirely (an open install, where
       // every workspace is reachable anyway).
@@ -265,7 +265,7 @@ export function createRemoteImportsPlugin(input: {
 
           // A MakerWorld model page has no direct file URL, but the connected Bambu
           // account can resolve one. Tried BEFORE the server-download check, which
-          // would otherwise reject the page as "needs a browser helper" — the answer
+          // would otherwise reject the page as "needs a browser helper": the answer
           // this path exists to change.
           const makerWorldRef = parseMakerWorldModelUrl(importUrl)
           if (makerWorldRef) {
@@ -511,7 +511,7 @@ async function countWorkspaceBridges<TWorkspace extends ExtensionWorkspace>(
  * What the UI needs to say about MakerWorld imports: whether the workspace turned
  * the feature on, whether an account is actually reachable, and whose it is.
  *
- * Resolved together because they are only meaningful together — "enabled" with no
+ * Resolved together because they are only meaningful together: "enabled" with no
  * connected account is a button that always fails, and a connected account with the
  * setting off must not be used. The account label is display-only; the token behind
  * it never leaves the server.
@@ -530,14 +530,14 @@ async function describeMakerWorldCapability(
 }
 
 async function readMakerWorldOptIn(context: ApiPluginContext, workspaceId: string): Promise<boolean> {
-  // Absent means ON — only an explicit 'false' disables it. See the setting's doc.
+  // Absent means ON, only an explicit 'false' disables it. See the setting's doc.
   return (await context.settings.forWorkspace(workspaceId).get(MAKERWORLD_ACCOUNT_IMPORT_SETTING)) !== 'false'
 }
 
 /**
  * The credential for a MakerWorld download, or a 400 explaining which half is
  * missing. Both refusals are ordinary states a user can fix, so they get their own
- * messages rather than one generic "unavailable" — the fixes are in different places
+ * messages rather than one generic "unavailable": the fixes are in different places
  * (this plugin's setting vs the Bambu Cloud connection).
  */
 async function resolveOptedInMakerWorldCredential(
@@ -570,7 +570,7 @@ async function createLibraryImport(input: {
     throw badRequest(IMPORTABLE_EXTENSIONS_MESSAGE)
   }
 
-  // Only create the landing folder when the caller named no destination — an import
+  // Only create the landing folder when the caller named no destination, an import
   // into a chosen folder must not also mint `Imported models` as a side effect.
   const folderId = input.folderId ?? await ensureLibraryFolderPath({
     workspaceId: input.workspaceId,
@@ -662,13 +662,13 @@ async function fetchRemoteImportUrl(url: string): Promise<globalThis.Response> {
 
 /**
  * Rejects URLs that resolve into the deployment's own network, before any request
- * is made — and again for every redirect hop (see {@link fetchRemoteImportUrl}),
+ * is made, and again for every redirect hop (see {@link fetchRemoteImportUrl}),
  * because the first hop being public says nothing about where hop two points.
  *
  * Known residual gap: the name is resolved here and then independently again by
  * `fetch`, so a record that changes between the two (DNS rebinding) can still slip
  * through. Closing it means pinning the resolved address into the connection,
- * which `fetch` exposes no hook for — a custom dispatcher `lookup` is the fix if
+ * which `fetch` exposes no hook for, a custom dispatcher `lookup` is the fix if
  * this ever guards something more valuable than a file download.
  */
 export async function assertRemoteImportUrlAllowed(
@@ -686,7 +686,7 @@ export async function assertRemoteImportUrlAllowed(
   }
 
   // `URL.hostname` keeps the brackets on an IPv6 literal (`[::1]`), which `isIP`
-  // does not recognise — strip them so a literal address is range-checked here
+  // does not recognise: strip them so a literal address is range-checked here
   // rather than falling through to a DNS lookup that would only error out.
   const hostname = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, '')
   if (hostname === 'localhost' || hostname.endsWith('.localhost')) {
@@ -769,9 +769,9 @@ function isBlockedIpv4Address(address: string): boolean {
 
 function isBlockedIpv6Address(address: string): boolean {
   if (address === '::' || address === '::1') return true
-  // Link-local is fe80::/10 — fe80 through febf, not only the fe80: prefix.
+  // Link-local is fe80::/10: fe80 through febf, not only the fe80: prefix.
   if (/^fe[89ab][0-9a-f]:/.test(address)) return true
-  // Unique-local is fc00::/7 — fc00 through fdff.
+  // Unique-local is fc00::/7: fc00 through fdff.
   if (/^f[cd][0-9a-f]{2}:/.test(address)) return true
   if (address.startsWith('ff')) return true
   return false

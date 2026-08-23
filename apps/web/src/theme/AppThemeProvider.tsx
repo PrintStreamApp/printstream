@@ -8,14 +8,14 @@
  * `extendTheme` merges its own stock LIGHT palette in regardless, and Joy's mode
  * is persisted per origin in `localStorage`, where the stored value OUTRANKS
  * `defaultMode`. So a single stray write of `"light"` puts the whole app on a
- * palette nobody has ever looked at — white surfaces, near-black text, and no UI
+ * palette nobody has ever looked at: white surfaces, near-black text, and no UI
  * anywhere to undo it, permanently, on that browser.
  *
  * That is not hypothetical: a scratch page mounting a bare `<CssVarsProvider>`
  * (whose own default mode is `light`) on the dev origin wrote `joy-mode: "light"`,
  * and every later load of the real app inherited it. The marketing page's feature
- * cards — the one surface using a plain `Card variant="outlined"` rather than
- * hardcoded colours — rendered solid white.
+ * cards, the one surface using a plain `Card variant="outlined"` rather than
+ * hardcoded colours, rendered solid white.
  *
  * Two defences, because either alone leaves a hole:
  *
@@ -24,8 +24,8 @@
  *    else served from the same host and port can set ours. Our keys cannot be
  *    reached by a provider that does not name them.
  * 2. **Normalise on load.** The stored mode is forced back to `dark` before Joy
- *    reads it, so a value that somehow got written — by an older build, a devtools
- *    edit, a future `setMode` call — self-heals on the next page load instead of
+ *    reads it, so a value that somehow got written, by an older build, a devtools
+ *    edit, a future `setMode` call, self-heals on the next page load instead of
  *    sticking forever.
  *
  * Enforced by `AppThemeProvider.test.ts`, which fails the build on a raw
@@ -41,7 +41,7 @@ import type { ReactNode } from 'react'
 /**
  * Namespaced so a co-located Joy surface writing Joy's default `joy-mode` cannot
  * reach us. Changing these strings strands every browser's stored value on the old
- * key — harmless here (the only legal value is the one we force anyway), but it
+ * key: harmless here (the only legal value is the one we force anyway), but it
  * would matter the moment the mode becomes a real preference.
  */
 const MODE_STORAGE_KEY = 'printstream-color-mode'
@@ -53,7 +53,7 @@ const FORCED_MODE = 'dark'
 /**
  * Overwrite any stored mode with `dark` before Joy reads it.
  *
- * Runs at module scope — i.e. at import time, ahead of the first render — because
+ * Runs at module scope: i.e. at import time, ahead of the first render, because
  * Joy resolves the mode from storage while rendering. Best-effort by design:
  * storage can throw (Safari private mode, a blocked third-party context) and a
  * theme preference is never worth failing a page load over. If it does throw, the

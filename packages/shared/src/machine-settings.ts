@@ -3,7 +3,7 @@
  *
  * Thin by design: a machine preset has no project-embedded counterpart the way filament and process
  * presets do (a 3MF embeds those but only NAMES its printer), so there is no baseline-vs-embedded
- * diffing here — the resolved preset is the baseline. Everything else reuses the process catalog's
+ * diffing here: the resolved preset is the baseline. Everything else reuses the process catalog's
  * types and comparators, which is why the generated catalog is typed `ProcessSettingsCatalog`.
  *
  * What this module OWNS beyond the catalog re-export is the COLUMN model: over half the machine
@@ -35,7 +35,7 @@ export function diffMachineConfig(base: ProcessConfig, edited: ProcessConfig): P
  *
  * Built over the RESOLVED config rather than the editor's own, because the editor only ever sees
  * the catalog's 77 options. BambuStudio's printer tab edits the rest through bespoke widgets we do
- * not have — the printable area, bed shape and exclusion zones, the model/variant identity — and a
+ * not have, the printable area, bed shape and exclusion zones, the model/variant identity, and a
  * save assembled from the editable keys alone would drop every one of them, quietly rebuilding the
  * preset around a different bed. So the resolved config is the base and only the keys the user
  * could actually change are laid over it.
@@ -67,7 +67,7 @@ const MOTION_ABILITY_PAGE_ID = 'motion-ability'
 /**
  * One editable element of a machine option.
  *
- * `label` is set only when the option really has more than one column — BambuStudio names its
+ * `label` is set only when the option really has more than one column: BambuStudio names its
  * extruder page "Extruder" (no number) on a single-extruder machine and only draws the
  * Normal/Silent legend in silent mode, so a lone column carries no label either.
  */
@@ -85,7 +85,7 @@ const SINGLE_COLUMN: readonly MachineSettingColumn[] = [{ index: 0 }]
  *
  * BambuStudio derives this from `nozzle_diameter`'s length and nothing else
  * (`TabPrinter::build_unregular_pages`: `m_extruders_count = nozzle_diameter->values.size()`),
- * so a preset whose other per-extruder vectors are shorter still has this many extruders — the
+ * so a preset whose other per-extruder vectors are shorter still has this many extruders: the
  * short ones are simply un-resized, which is why {@link machineColumnValue} falls back rather
  * than reporting a missing column.
  */
@@ -98,7 +98,7 @@ export function machineExtruderCount(config: ProcessConfig): number {
  * Whether the preset's motion limits carry a second (Silent mode) column.
  *
  * Mirrors `TabPrinter::build_kinematics_page`, which appends the option a second time at index 1
- * only when `m_use_silent_mode` — itself just `m_config->opt_bool("silent_mode")`. With silent
+ * only when `m_use_silent_mode`, itself just `m_config->opt_bool("silent_mode")`. With silent
  * mode off the machine never reads element 1, so offering it would invite an edit that does
  * nothing.
  */
@@ -113,12 +113,12 @@ export function machineSupportsSilentMode(config: ProcessConfig): boolean {
  *
  * A machine vector's elements are indexed by DIFFERENT things per page, which is the whole reason
  * this is page-driven rather than a property of the option:
- * - Extruder page — one element per extruder (`nozzle_diameter`, `retraction_length`,
+ * - Extruder page, one element per extruder (`nozzle_diameter`, `retraction_length`,
  *   `extruder_offset`, ...). BambuStudio builds one page per extruder and passes the extruder index
  *   to every `append_single_option_line`.
- * - Motion ability page — element 0 is Normal mode and element 1 is Silent mode, NOT extruders
+ * - Motion ability page: element 0 is Normal mode and element 1 is Silent mode, NOT extruders
  *   (`append_option_line` appends index 1 behind `m_use_silent_mode`).
- * - Everywhere else — element 0 only. `nozzle_type` is a vector but its Basic information line is
+ * - Everywhere else: element 0 only. `nozzle_type` is a vector but its Basic information line is
  *   an `append_single_option_line` with no index, so BambuStudio shows the first element alone.
  *
  * A non-vector option always gets the single unlabelled column, whatever page it is on.
@@ -158,7 +158,7 @@ export function machineColumnValue(value: ProcessConfigValue | undefined, index:
  * `value` with one column replaced, widened to cover `index` if it was shorter.
  *
  * Widening repeats element 0 rather than padding with blanks, matching the fallback
- * {@link machineColumnValue} displays — otherwise editing extruder 2 of a one-element vector would
+ * {@link machineColumnValue} displays, otherwise editing extruder 2 of a one-element vector would
  * write an empty string into extruder 1's slot, which the engine reads as a missing value.
  * A scalar stays scalar when column 0 is edited, so a preset that never had a vector here does not
  * grow one.

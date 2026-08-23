@@ -7,10 +7,10 @@
  * users exist yet.
  *
  * Routes:
- * - `GET /api/plugins/auth-oauth/config` — current provider configuration.
- * - `PUT /api/plugins/auth-oauth/config` — update issuer/client settings.
- * - `GET /api/plugins/auth-oauth/authorize` — begin the OAuth redirect flow.
- * - `GET /api/plugins/auth-oauth/callback` — complete the OAuth flow and set
+ * - `GET /api/plugins/auth-oauth/config`: current provider configuration.
+ * - `PUT /api/plugins/auth-oauth/config`: update issuer/client settings.
+ * - `GET /api/plugins/auth-oauth/authorize`: begin the OAuth redirect flow.
+ * - `GET /api/plugins/auth-oauth/callback`: complete the OAuth flow and set
  *   the normal auth session cookie.
  */
 import crypto from 'node:crypto'
@@ -54,7 +54,7 @@ const OAUTH_STATE_COOKIE_NAME = 'printstream_oauth_state'
 const OAUTH_VERIFIER_COOKIE_NAME = 'printstream_oauth_verifier'
 const OAUTH_REDIRECT_COOKIE_NAME = 'printstream_oauth_redirect'
 // NOTE: This is an OAuth2 code flow (PKCE + state) that reads identity from the
-// userinfo endpoint — it does NOT validate an OIDC id_token. No `nonce` is sent
+// userinfo endpoint, it does NOT validate an OIDC id_token. No `nonce` is sent
 // or stored, because nothing verifies an id_token's nonce; CSRF/code-injection
 // is covered by `state` + PKCE. To become full OIDC, validate the id_token
 // (JWKS signature + iss/aud/exp + nonce) and reintroduce the nonce here.
@@ -178,7 +178,7 @@ export function createAuthOauthPlugin(overrides: Partial<AuthOauthPluginDeps> = 
 
         const dto = toOauthConfigDto(await readOauthConfig(context.settings))
         // Record the non-secret config surface. The clientSecret is never
-        // logged or audited — only whether one is configured.
+        // logged or audited, only whether one is configured.
         annotateRequestAuditLog(request, {
           action: 'update-auth-provider-config',
           resource: 'auth provider configuration',

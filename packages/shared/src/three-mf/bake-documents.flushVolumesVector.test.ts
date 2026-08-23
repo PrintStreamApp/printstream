@@ -4,7 +4,7 @@ import { applyFilamentList } from './bake-documents.js'
 import type { SceneEditFilament } from '../three-mf-scene.js'
 
 /**
- * `flush_volumes_vector` is `[unload_i, load_i]` PAIRS, one per filament slot — BambuStudio seeds
+ * `flush_volumes_vector` is `[unload_i, load_i]` PAIRS, one per filament slot: BambuStudio seeds
  * missing flush-matrix cells from `filaments[2*i] + filaments[2*j+1]`. Its 2N length hides it from
  * `applyFilamentList`'s generic length-N remap, and BambuStudio itself only ever resizes it at the
  * tail (its own mid-list delete leaves it misaligned), so the pairs must be moved with their slots
@@ -25,7 +25,7 @@ const slot = (type: string, settingsId: string, sourceIndex: number): SceneEditF
 test('a reorder moves each slot\'s [unload, load] pair with it', () => {
   const after = JSON.parse(applyFilamentList(
     project(['101', '102', '201', '202', '301', '302']),
-    // ABS first, then PLA, then PETG — a pure permutation of the same materials.
+    // ABS first, then PLA, then PETG, a pure permutation of the same materials.
     [slot('ABS', 'Generic ABS', 2), slot('PLA', 'Bambu PLA Basic', 0), slot('PETG', 'Generic PETG', 1)]
   )) as Record<string, unknown>
   assert.deepEqual(after.flush_volumes_vector, ['301', '302', '101', '102', '201', '202'])

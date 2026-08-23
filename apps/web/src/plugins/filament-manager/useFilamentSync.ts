@@ -8,8 +8,8 @@
  *
  * Contract: **callers do not opt in.** `useSpoolsQuery` / `useFilamentStatsQuery` mount
  * this themselves, so no surface can read a stale spool by forgetting to subscribe. It
- * used to be mounted only by the Filament page, and every other reader — the print,
- * slice, storage-print and queue dialogs' slot pickers, the AMS slot editors — held
+ * used to be mounted only by the Filament page, and every other reader, the print,
+ * slice, storage-print and queue dialogs' slot pickers, the AMS slot editors, held
  * whatever the cache had when it opened. Swapping a spool then redrew the slot's swatch
  * (that comes from the live printer status) while its NAME and remaining figure still
  * described the spool that had been taken out.

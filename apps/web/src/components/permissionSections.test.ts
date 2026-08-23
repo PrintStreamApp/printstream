@@ -2,7 +2,7 @@
  * Where each permission lands in the role editor.
  *
  * "Other" is the fallback, and anything sitting there is a permission whose
- * home nobody chose — which is how an operator ends up scrolling past the
+ * home nobody chose, which is how an operator ends up scrolling past the
  * section that decides authority over customer money to find it at the bottom
  * with no heading of its own.
  *

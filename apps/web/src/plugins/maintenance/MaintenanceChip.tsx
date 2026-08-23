@@ -1,7 +1,7 @@
 /**
  * Overdue-maintenance chip on a printer card header.
  *
- * Renders nothing unless that printer has something due — an always-present
+ * Renders nothing unless that printer has something due, an always-present
  * "0 due" chip would spend most of its life adding noise to a card that already
  * competes for space.
  *

@@ -156,7 +156,7 @@ test('an unknown printer model resolves the generic schedule', () => {
 test('clearing an interval records it; setting one removes the record', () => {
   assert.deepEqual(nextClearedIntervals([], { intervalDays: null }), ['days'])
   assert.deepEqual(nextClearedIntervals(['days'], { intervalDays: 30 }), [])
-  // An absent field leaves the list untouched — a patch that only flips `disabled`
+  // An absent field leaves the list untouched, a patch that only flips `disabled`
   // must not resurrect an interval the user cleared earlier.
   assert.deepEqual(nextClearedIntervals(['days'], {}), ['days'])
   assert.deepEqual(

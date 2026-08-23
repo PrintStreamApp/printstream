@@ -27,7 +27,7 @@ import { useLocalStorageState } from '../hooks/useLocalStorageState'
  * Reads a scalar preference that may be stored in either of two formats.
  *
  * `usePersistentState` JSON-serializes, so the workspace directory's saved sort
- * is `"name"` — with the quotes — while this hook writes the bare `name`. Both
+ * is `"name"`, with the quotes, while this hook writes the bare `name`. Both
  * are accepted, so moving a view onto this hook does not silently reset the
  * sort every operator already had; the next write lands in the bare form and the
  * quoted one is simply left behind.
@@ -54,7 +54,7 @@ export function useDirectorySortState<T extends string>({
   legacySortDirectionKeys = [],
   onChange
 }: {
-  /** Storage key for the field. A persisted identifier — renaming one needs `legacySortByKeys`. */
+  /** Storage key for the field. A persisted identifier: renaming one needs `legacySortByKeys`. */
   sortByKey: string
   sortDirectionKey: string
   /** The menu's options, and the set a stored field is validated against. */
@@ -66,7 +66,7 @@ export function useDirectorySortState<T extends string>({
   legacySortByKeys?: ReadonlyArray<string>
   legacySortDirectionKeys?: ReadonlyArray<string>
   /**
-   * Run after either half changes — pass `() => setPage(1)`. Optional only
+   * Run after either half changes: pass `() => setPage(1)`. Optional only
    * because a caller may already reset the page by another route (the workspace
    * directory resets on its filters too, in one effect); every other caller
    * should pass it.

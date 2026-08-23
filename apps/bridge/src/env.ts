@@ -75,7 +75,7 @@ const envSchema = z.object({
   // Path to the managed-bridge provisioning token, shared with the API over a
   // mounted volume. When this file is present the bridge reads it and presents
   // the token at registration so the managed server auto-pairs it into the sole
-  // workspace — no connect-code step. Absent for cloud and remote-bridge
+  // workspace, no connect-code step. Absent for cloud and remote-bridge
   // installs, which pair by hand.
   MANAGED_BRIDGE_TOKEN_FILE: z.string().default('/run/provision/managed-bridge-token'),
   BRIDGE_STATE_FILE: z.string().default('/data/bridge-state.json'),

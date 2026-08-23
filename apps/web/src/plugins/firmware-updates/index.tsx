@@ -6,7 +6,7 @@
  * - Renders an "Update" Chip in the `printer.card.headerChips` slot
  *   when the printer's installed firmware is older than the latest
  *   version published by Bambu Lab. The chip is the only thing the
- *   plugin contributes to the core layout — the card is unchanged
+ *   plugin contributes to the core layout: the card is unchanged
  *   when no update is available, and uninstalling the plugin removes
  *   the chip without touching anything else.
  * - Clicking the chip or choosing "Firmware updates..." from the
@@ -17,7 +17,7 @@
  *   envelope so the dialog stays responsive without polling.
  *
  * The actual flash still has to be triggered from the printer's
- * screen (Settings > Firmware) — Bambu does not expose a remote
+ * screen (Settings > Firmware): Bambu does not expose a remote
  * trigger, even on LAN.
  */
 /* eslint-disable react-refresh/only-export-components -- plugin entry exports a component intentionally */
@@ -333,12 +333,12 @@ function FirmwareUpdateDetailsDialog({
   return (
     <Modal open onClose={onClose}>
       <ModalDialog sx={{ maxWidth: 520, width: '100%' }}>
-        <DialogTitle>Firmware update — {printerName}</DialogTitle>
+        <DialogTitle>Firmware update: {printerName}</DialogTitle>
         <DialogContent>
           <Stack spacing={1.5}>
             {/* isFetching, not isLoading: a stale-cache initialData render can leave
                 the report absent while a refetch is in flight, and isLoading is false
-                then — the dialog would sit blank instead of showing the skeleton. */}
+                then: the dialog would sit blank instead of showing the skeleton. */}
             {!update && (
               updatesQuery.isFetching ? (
                 <ListSkeleton rows={2} />
@@ -454,7 +454,7 @@ function FirmwareUpdateDetailsDialog({
                         intermediate step
                         {prerequisiteInstallable
                           ? '.'
-                          : ", which isn't available to upload here yet — download it from Bambu Lab and flash it from the printer screen."}
+                          : ", which isn't available to upload here yet: download it from Bambu Lab and flash it from the printer screen."}
                       </Typography>
                       {prerequisiteInstallable && (
                         <Button

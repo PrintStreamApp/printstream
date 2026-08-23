@@ -37,7 +37,7 @@ cameraRouter.get('/:printerId/snapshot', async (request, response) => {
     response.setHeader('Content-Type', 'image/jpeg')
     // Allow short browser cache so reusing the same `?t=` URL (e.g.
     // when a dialog opens) hits cache instead of refetching from the
-    // printer over TLS — that round-trip caused a visible black gap.
+    // printer over TLS, that round-trip caused a visible black gap.
     // The client already cache-busts via the `t` query param every 5s.
     response.setHeader('Cache-Control', 'private, max-age=10')
     response.send(frame)

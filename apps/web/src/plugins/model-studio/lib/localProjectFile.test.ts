@@ -119,7 +119,7 @@ function picked(writes: Uint8Array[]): number[][] {
 
 test('the input fallback keeps its element alive until the user answers', async () => {
   // A DETACHED input is collectable the moment the picker call returns, taking its change listener
-  // with it — the user picks a file and nothing happens, with no error to explain why. This is the
+  // with it: the user picks a file and nothing happens, with no error to explain why. This is the
   // regression that made "I chose a file and nothing happened" possible.
   const { window } = installJsdomGlobals()
   try {

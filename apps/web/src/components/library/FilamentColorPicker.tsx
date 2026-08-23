@@ -2,7 +2,7 @@
  * Filament colour control: a colour-swatch button that opens a modal with the brand-aware swatch grid
  * (e.g. "Bambu PLA Basic colors") plus a custom hex / colour-input option. Extracted from
  * `SliceSettingsPanel` so the 3D editor's slice settings AND the print-queue custom-material picker
- * share one control — the swatch family follows the chosen material exactly the same way in both.
+ * share one control: the swatch family follows the chosen material exactly the same way in both.
  */
 import { useState } from 'react'
 import { Box, Button, DialogActions, FormControl, FormLabel, Input, ModalDialog, Sheet, Stack, Typography } from '@mui/joy'
@@ -38,7 +38,7 @@ export function FilamentColorPicker({
   const [customColorOpen, setCustomColorOpen] = useState(false)
   const [draftColor, setDraftColor] = useState(() => normalizeSliceFilamentColor(color).toUpperCase())
   const normalizedColor = normalizeSliceFilamentColor(color).toUpperCase()
-  // The colour NAME resolves through the shared project resolver — it derives the Bambu family from
+  // The colour NAME resolves through the shared project resolver, it derives the Bambu family from
   // the type, so it works for a loaded preset whose brand is "Bambu Lab" (not exactly "Bambu") and
   // whose `material` is a full profile name. Falls back to the hex only when truly unknown.
   const filamentName = [brand, material].filter(Boolean).join(' ') || null

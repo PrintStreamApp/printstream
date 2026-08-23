@@ -5,7 +5,7 @@
  * OWNS: the port of `FlushVolCalculator` (`libslic3r/FlushVolCalc.cpp`), its measured-dataset
  * lookup (`FlushVolPredictor.cpp`), and the per-extruder matrix builder
  * (`WipingDialog::CalcFlushingVolumes`, `slic3r/GUI/WipeTowerDialog.cpp`). Pure arithmetic over
- * colours and a few project/machine values — callers own reading `project_settings.config` and
+ * colours and a few project/machine values: callers own reading `project_settings.config` and
  * shaping the result into the stored matrix ({@link module:flush-volumes-matrix}).
  *
  * CONTRACT. {@link calcFlushVolumesMatrix} returns the volumes BambuStudio's "Re-calculate" button
@@ -17,12 +17,12 @@
  * WHY THE DATASET MATTERS. Studio does not trust the colour formula where it has measurements: it
  * ships lookup tables of real purge volumes between Bambu's own filament colours
  * (`resources/flush/flush_data_*.txt`) and prefers a table hit over the formula, matching colours
- * within DeltaE2000 <= 5. The gap is not cosmetic — measured against the standard table, the
+ * within DeltaE2000 <= 5. The gap is not cosmetic: measured against the standard table, the
  * formula alone is a mean 80 mm3 out and up to +286 mm3 (grey -> yellow: 180 measured, 466
  * computed), always over-purging. So a dataset-less calculation would quietly tell users to waste
  * filament while disagreeing with the numbers Bambu Studio shows for the same project. We therefore
  * read the tables from the BambuStudio image our slicer already runs rather than reimplementing
- * them; {@link FlushVolumeDataset} is that table, and its ABSENCE is a supported state — the
+ * them; {@link FlushVolumeDataset} is that table, and its ABSENCE is a supported state: the
  * formula alone is exactly what Studio falls back to when its own data file is missing
  * (`FlushVolPredictor::m_valid == false`).
  *
@@ -44,12 +44,12 @@ import { FLUSH_VOLUME_MODEL } from './generated/flush-volume-model.generated.js'
  * Round to 32-bit float.
  *
  * BambuStudio computes this whole chain in `float`, and JavaScript numbers are doubles, so a
- * straight transcription drifts in the last bit — which `Math.trunc` at the end turns into a
+ * straight transcription drifts in the last bit, which `Math.trunc` at the end turns into a
  * visible off-by-one. It is not hypothetical: BLACK -> WHITE, the most common two-material pairing
  * there is, computed 559 against Studio's 560, because `1*0.3 + 1*0.59 + 1*0.11` is 0.999... in
  * double but exactly 1 once rounded to float. So every step that C++ stores into a `float` is
  * rounded here too. Where C++ uses a DOUBLE literal (`0.3`, `0.67`, `1.3`, `M_PI`) the arithmetic
- * genuinely happens in double and is rounded only on assignment — those spots round once, at the
+ * genuinely happens in double and is rounded only on assignment, those spots round once, at the
  * end, and the difference between the two is exactly the case above.
  */
 const f32 = Math.fround
@@ -73,15 +73,15 @@ export interface FlushRgbColor {
 export interface FlushVolumeDataset {
   colors: FlushRgbColor[]
   volumes: ReadonlyMap<string, number>
-  /** Smallest measured volume in the table — Studio's floor for the multiplier UI's range hint. */
+  /** Smallest measured volume in the table: Studio's floor for the multiplier UI's range hint. */
   minVolume: number
 }
 
-/** BambuStudio's `g_min_flush_volume_from_support` — a swap AWAY from support never purges less. */
+/** BambuStudio's `g_min_flush_volume_from_support`, a swap AWAY from support never purges less. */
 export const FLUSH_MIN_VOLUME_FROM_SUPPORT = FLUSH_VOLUME_MODEL.minVolumeFromSupport
-/** BambuStudio's `g_flush_volume_to_support` — a swap TO support material is a flat cost. */
+/** BambuStudio's `g_flush_volume_to_support`, a swap TO support material is a flat cost. */
 export const FLUSH_VOLUME_TO_SUPPORT = FLUSH_VOLUME_MODEL.volumeToSupport
-/** BambuStudio's `g_max_flush_volume` — the ceiling every calculated volume is clamped to. */
+/** BambuStudio's `g_max_flush_volume`: the ceiling every calculated volume is clamped to. */
 export const FLUSH_MAX_VOLUME = FLUSH_VOLUME_MODEL.maxVolume
 /** BambuStudio's `g_min_flush_multiplier` / `g_max_flush_multiplier` (WipeTowerDialog.cpp). */
 export const FLUSH_MULTIPLIER_RANGE = {
@@ -100,7 +100,7 @@ export function flushDatasetKey(from: FlushRgbColor, to: FlushRgbColor): string 
  * Parse one of BambuStudio's `resources/flush/*.txt` tables.
  *
  * Format: a header line, a whitespace-separated palette line of `#rrggbb`, a column-name line, then
- * `<src> <dst> <volume>` rows. Returns null when any line fails to parse — Studio treats a
+ * `<src> <dst> <volume>` rows. Returns null when any line fails to parse: Studio treats a
  * malformed file as no file at all (`m_valid = false`), and a partially-read table would silently
  * mix measured and computed volumes in one matrix.
  */
@@ -147,7 +147,7 @@ function parseFlushHexColor(value: string | undefined): FlushRgbColor | null {
  * Look a pair up in a measured table, snapping each end to the nearest palette colour first.
  *
  * Returns null when either end has no similar palette colour, or the snapped pair was never
- * measured — the caller must then compute the volume rather than substituting a default.
+ * measured: the caller must then compute the volume rather than substituting a default.
  */
 export function lookupMeasuredFlushVolume(
   dataset: FlushVolumeDataset | null | undefined,
@@ -207,7 +207,7 @@ export function calcFlushVolume(input: {
 
   // Studio compares a 0-255 luminance against a 0-1 threshold here, so `isFromDark` is true for
   // everything but near-black and `isToLight` only for near-black: in practice the 1.3x boost
-  // applies to swaps INTO black on the dual-nozzle datasets. Ported as written — see the module
+  // applies to swaps INTO black on the dual-nozzle datasets. Ported as written: see the module
   // header. (`dark_color_thres` / `light_color_thres` in FlushVolCalc.cpp.)
   const darkColorThreshold = FLUSH_VOLUME_MODEL.darkColorThresholdNumerator / 255
   const lightColorThreshold = FLUSH_VOLUME_MODEL.lightColorThresholdNumerator / 255
@@ -246,7 +246,7 @@ export function calcFlushVolumeFromColor(
 
   // Two asymmetries Studio bakes in: a difference reads stronger when the destination is BRIGHT
   // (so a light-over-dark swap costs much more), and when the destination is darker the hue term is
-  // capped by how dark it is — hiding a hue shift under a dark colour is cheap.
+  // capped by how dark it is: hiding a hue shift under a dark colour is cheap.
   const fromLuminance = flushLuminance(fromR, fromG, fromB)
   const toLuminance = flushLuminance(toR, toG, toB)
   let luminanceFlush: number
@@ -282,7 +282,7 @@ function flushLuminance(r: number, g: number, b: number): number {
   return f32(r * rw + g * gw + b * bw)
 }
 
-/** Law of cosines — `calc_triangle_3rd_edge`, float-stepped like the original. */
+/** Law of cosines: `calc_triangle_3rd_edge`, float-stepped like the original. */
 function triangleThirdEdge(edgeA: number, edgeB: number, degreesBetween: number): number {
   const cosine = f32(Math.cos(toRadians(degreesBetween)))
   const squares = f32(f32(edgeA * edgeA) + f32(edgeB * edgeB))
@@ -318,7 +318,7 @@ function rgbToHsv(r: number, g: number, b: number): [number, number, number] {
   return [hue, saturation, max]
 }
 
-/** CIE L*a*b* for the dataset lookup — `FlushPredict::RGB2LAB`, D65 white point. */
+/** CIE L*a*b* for the dataset lookup: `FlushPredict::RGB2LAB`, D65 white point. */
 function rgbToLab(color: FlushRgbColor): { l: number; a: number; b: number } {
   const gamma = (x: number): number => x > 0.04045 ? Math.pow((x + 0.055) / 1.055, 2.4) : x / 12.92
   const red = gamma(color.r / 255) * 100
@@ -334,7 +334,7 @@ function rgbToLab(color: FlushRgbColor): { l: number; a: number; b: number } {
   return { l: 116 * fy - 16, a: 500 * (fx - fy), b: 200 * (fy - fz) }
 }
 
-/** CIEDE2000 — `FlushPredict::calc_color_distance`, ported term for term. */
+/** CIEDE2000: `FlushPredict::calc_color_distance`, ported term for term. */
 export function flushColorDistance(from: FlushRgbColor, to: FlushRgbColor): number {
   const lab1 = rgbToLab(from)
   const lab2 = rgbToLab(to)
@@ -405,7 +405,7 @@ export interface FlushCalcFilament {
   colors: FlushRgbColor[]
   /** Alpha per entry of {@link colors}; 0 means transparent, which counts as white. */
   alphas?: number[]
-  /** `filament_is_support` for this slot — support material has its own flat volumes. */
+  /** `filament_is_support` for this slot: support material has its own flat volumes. */
   isSupport: boolean
 }
 
@@ -415,7 +415,7 @@ export interface FlushCalcFilament {
  * `minFlushVolumes` is per FILAMENT (from {@link resolveMinFlushVolumes}) and indexed by the SOURCE
  * slot, not the destination. Support material short-circuits both ways: swapping to support is a
  * flat {@link FLUSH_VOLUME_TO_SUPPORT}, and swapping away from it never drops below
- * {@link FLUSH_MIN_VOLUME_FROM_SUPPORT} — a support interface that carries the previous colour is
+ * {@link FLUSH_MIN_VOLUME_FROM_SUPPORT}, a support interface that carries the previous colour is
  * the failure this guards against.
  */
 export function calcFlushVolumesMatrix(input: {
@@ -450,12 +450,12 @@ export function calcFlushVolumesMatrix(input: {
 }
 
 /**
- * Per-filament "dead volume" floor for one extruder — `get_min_flush_volumes` (`Plater.cpp`).
+ * Per-filament "dead volume" floor for one extruder: `get_min_flush_volumes` (`Plater.cpp`).
  *
  * It is the nozzle's own volume, less whatever a long retraction pulls back out of the melt zone
  * before the swap, so a machine that retracts on cut purges less. The retraction term applies only
  * when BOTH the machine and the filament enable it, and the filament's own distance is used only at
- * the machine's `EnableFilament` level (2) — at `EnableMachine` (1) every filament uses the
+ * the machine's `EnableFilament` level (2), at `EnableMachine` (1) every filament uses the
  * machine's distance.
  *
  * Values come from `project_settings.config`; each is optional and defaults the way Studio's config

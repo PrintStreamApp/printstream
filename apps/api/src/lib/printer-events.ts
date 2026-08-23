@@ -38,11 +38,11 @@ export interface PrinterEvents {
   'print.job.starting': (event: { printerId: string; jobId: string; taskId: string | null; fileName: string }) => void
   /**
    * Cross-plugin lifecycle for a queue item linked to an order print (the
-   * print-queue emits; the orders plugin listens). Keeps the plugins decoupled —
-   * neither imports the other — while letting queuing/dispatch advance the order:
-   * - `order-print.queued`     — the print was added to the queue (mark it queued).
-   * - `order-print.unqueued`   — removed from the queue before dispatch (revert).
-   * - `order-print.dispatched` — dispatched from the queue onto `printerId` as
+   * print-queue emits; the orders plugin listens). Keeps the plugins decoupled,
+   * neither imports the other, while letting queuing/dispatch advance the order:
+   * - `order-print.queued`: the print was added to the queue (mark it queued).
+   * - `order-print.unqueued`: removed from the queue before dispatch (revert).
+   * - `order-print.dispatched`: dispatched from the queue onto `printerId` as
    *   `fileName`/`plate` (orders records the started print and then syncs its result).
    */
   'order-print.queued': (event: { workspaceId: string; orderPrintId: string }) => void

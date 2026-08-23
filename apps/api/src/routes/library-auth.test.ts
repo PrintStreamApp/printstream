@@ -1446,7 +1446,7 @@ test('library scene renders support/modifier helper subtypes tagged and material
     assert.ok(Array.isArray(body.parts))
     assert.ok(body.parts.length > 0)
     // Support blockers/enforcers and modifier volumes are rendered translucently in the
-    // editor, so the scene keeps them — tagged with their subtype and carrying no
+    // editor, so the scene keeps them: tagged with their subtype and carrying no
     // filament/material (a helper must never define an instance's name or colour).
     const helper = body.parts.find((part: { objectId?: number }) => part.objectId === 56)
     assert.ok(helper, 'expected support helper 56 to be rendered')
@@ -1506,14 +1506,14 @@ test('library scene entry streams the requested internal model xml', async () =>
 
 /**
  * The editor parses the 3MF in the browser, so it needs the whole archive. That read is gated on
- * `library.view` — NOT `library.download` — or every viewer who can open the editor today would
+ * `library.view`, NOT `library.download`, or every viewer who can open the editor today would
  * lose it. Pinned because flipping this gate back would silently take the editor away from a whole
  * role, and because the archive is what makes the editor self-sufficient after open.
  */
 test('library archive streams the whole 3MF to view-permitted actors, and revalidates', async () => {
   // Padded past `sendModelBuffer`'s 4KB compression threshold so the fixture exercises the path a
   // real project takes rather than the small-payload shortcut. The filler is deterministic
-  // pseudo-random bytes because the archive is DEFLATED — anything periodic compresses back below
+  // pseudo-random bytes because the archive is DEFLATED: anything periodic compresses back below
   // the threshold and the test silently stops covering what it claims to.
   const filler = Buffer.alloc(64 * 1024)
   let seed = 0x12345678
@@ -1559,7 +1559,7 @@ test('library archive streams the whole 3MF to view-permitted actors, and revali
     // Served through `sendModelBuffer`, not a bare stream pipe. Load-bearing, not cosmetic: a raw
     // `createReadStream().pipe()` body never completes when read back through
     // `fetch().arrayBuffer()` behind the Vite dev proxy, which is exactly how the editor consumes
-    // this — the open hangs with headers received and the tail never arriving.
+    // this: the open hangs with headers received and the tail never arriving.
     assert.equal(response.headers.get('content-encoding'), 'gzip')
     // Not a download: no attachment disposition, so this cannot be mistaken for the gated route.
     assert.equal(response.headers.get('content-disposition'), null)
@@ -1567,7 +1567,7 @@ test('library archive streams the whole 3MF to view-permitted actors, and revali
     // A ZIP, i.e. the real archive rather than a parsed representation of it.
     assert.deepEqual([...bytes.slice(0, 2)], [0x50, 0x4b])
 
-    // Reopening an unchanged project must not re-send the archive — it is now the big body.
+    // Reopening an unchanged project must not re-send the archive, it is now the big body.
     const etag = response.headers.get('etag')
     assert.ok(etag)
     const revalidated = await fetch(`${baseUrl}/api/library/file-1/archive`, {
@@ -1612,7 +1612,7 @@ test('library mesh streams raw STL bytes to view-permitted actors', async () => 
 })
 
 test('library mesh is unavailable for non-mesh kinds', async () => {
-  // gcode: rejected by the kind gate outright. (3MF is no longer rejected up front —
+  // gcode: rejected by the kind gate outright. (3MF is no longer rejected up front:
   // geometry-only 3MFs serve their extracted mesh; project 3MFs 404 after inspection.)
   prisma.libraryFile.findUnique = ((async () => ({
     id: 'file-1',
@@ -1712,7 +1712,7 @@ test('download link mint returns a self-contained URL whose token is persisted o
 
     const token = body.url.slice(prefix.length, body.url.lastIndexOf('/'))
     assert.ok(token.length > 0)
-    // The raw token must never be stored — only its SHA-256 hash.
+    // The raw token must never be stored, only its SHA-256 hash.
     assert.equal(createdData?.tokenHash, createHash('sha256').update(token).digest('hex'))
     assert.notEqual(createdData?.tokenHash, token)
     assert.equal(createdData?.libraryFileId, 'file-1')

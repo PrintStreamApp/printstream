@@ -4,7 +4,7 @@
  *
  * Owns every maintenance mutation for one printer and the cache invalidation
  * that follows: marking a task done changes both this list and the overdue chip
- * on the printers grid, so both query keys are invalidated together — a section
+ * on the printers grid, so both query keys are invalidated together, a section
  * that only refreshed itself would leave the chip stating the opposite.
  *
  * Renders `null` when the printer id is missing or the request 404s (the plugin

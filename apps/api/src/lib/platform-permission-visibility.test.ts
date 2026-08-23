@@ -6,13 +6,13 @@ process.env.NODE_ENV = 'test'
  * Effective permissions are the group's grants passed through
  * `filterPermissionsForPlatformContext`, which keeps only the platform-visible
  * set. A permission seeded onto a role but missing from that set is granted and
- * then silently dropped — the operator holds it in the database and is refused
+ * then silently dropped: the operator holds it in the database and is refused
  * by the route, which reads as a 403 nobody can explain from either side.
  *
  * This is not hypothetical: while auditing, the running dev API answered 403 on
  * the account routes with the grants present in its own database. That turned
  * out to be a stale build in a long-lived process rather than a code fault, but
- * nothing in the suite would have distinguished the two — this test is what
+ * nothing in the suite would have distinguished the two, this test is what
  * tells them apart, because it fails only when the SETS genuinely disagree.
  */
 import assert from 'node:assert/strict'

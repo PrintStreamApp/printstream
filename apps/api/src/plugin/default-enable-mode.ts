@@ -15,7 +15,7 @@
  * `plugin:<name>:_enabled` row, which wins over the mode either way.
  *
  * **The signal is plugin state, not "is the database empty".** It used to be
- * the latter — a total `Setting` count taken at first plugin registration —
+ * the latter, a total `Setting` count taken at first plugin registration,
  * which left the policy hostage to whatever else happened to write a row first.
  * On self-hosted builds `registerLicenseEnforcement()` stamps
  * `license:first-run-at` from module scope, racing plugin registration, so a
@@ -35,8 +35,8 @@ export type PluginDefaultEnableMode = 'enabled' | 'disabled'
 /**
  * @param existingPluginSettingCount rows whose key starts with
  * {@link PLUGIN_SETTING_PREFIX}. An install that has ever run a plugin has at
- * least one — the auth provider records its setup there when the first user is
- * created — while a fresh database has none.
+ * least one, the auth provider records its setup there when the first user is
+ * created, while a fresh database has none.
  */
 export function derivePluginDefaultEnableMode(
   existingPluginSettingCount: number

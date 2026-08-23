@@ -70,7 +70,7 @@ test('formatSliceFileVersionError ignores unrelated output', () => {
 /**
  * The generic exit codes (-100 especially) say only "slicing failed"; BambuStudio prints the actual
  * reason a line or two earlier. Surfacing it is the difference between a user knowing what is wrong
- * and someone reading 48 lines of progress JSON out of the job log — which is how Ryan's
+ * and someone reading 48 lines of progress JSON out of the job log, which is how Ryan's
  * "Flush volumes matrix do not match to the correct size!" was found.
  */
 test('a generic engine failure carries the engine\'s own last words', async () => {

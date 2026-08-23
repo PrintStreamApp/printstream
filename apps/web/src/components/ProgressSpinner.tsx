@@ -4,7 +4,7 @@
  *
  * Exists for the same reason: Joy draws an indeterminate `CircularProgress` arc
  * from `--CircularProgress-percent`, taken from the `value` prop, so
- * `determinate={x != null} value={x ?? 0}` spins a zero-length arc — a bare track
+ * `determinate={x != null} value={x ?? 0}` spins a zero-length arc, a bare track
  * ring with nothing moving on it. Determinacy is derived from `value` here too,
  * so that pair cannot be written.
  *
@@ -21,7 +21,7 @@ const DETERMINATE_TWEEN_MS = 320
 export interface ProgressSpinnerProps extends Omit<CircularProgressProps, 'determinate' | 'value'> {
   /**
    * Percentage 0-100, or `null`/`undefined` while the extent is unknown. Never
-   * coerce an unknown value to `0` — see `ProgressBar`.
+   * coerce an unknown value to `0`: see `ProgressBar`.
    */
   value?: number | null
 }

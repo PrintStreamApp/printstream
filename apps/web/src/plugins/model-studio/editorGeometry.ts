@@ -40,8 +40,8 @@ export const ADDED_PART_MESH_NAME = 'addedPartVolume'
 /**
  * The part identity tag on a render group, whichever kind it is: `partRef` for a part baked into
  * the project's 3MF, `importPartRef` for a solid of a still-unsaved import. The two are kept as
- * DIFFERENT keys on purpose — they bake through different `SceneEdit` seams (real 3MF object ids
- * vs import + solid index) — but every consumer that only needs "which part is this group?"
+ * DIFFERENT keys on purpose, they bake through different `SceneEdit` seams (real 3MF object ids
+ * vs import + solid index), but every consumer that only needs "which part is this group?"
  * (gizmo attach, drag write-back, selection outlines) must accept both, or a multi-solid import's
  * parts silently become unselectable.
  */
@@ -49,8 +49,8 @@ export const ADDED_PART_MESH_NAME = 'addedPartVolume'
  * Convert a PLATE-axis movement into the object-local delta that moves a part the same way.
  *
  * Arrow keys (and the manual position inputs) speak plate axes, but a part's stored position is
- * object-local. Without this conversion a rotated object sends its part the opposite way — press
- * right, the part goes left — and a scaled one moves it the wrong distance. Rotation AND scale are
+ * object-local. Without this conversion a rotated object sends its part the opposite way, press
+ * right, the part goes left, and a scaled one moves it the wrong distance. Rotation AND scale are
  * inverted (a 2x object needs half the local delta); translation is irrelevant for a direction.
  */
 export function plateDeltaToPartLocal(rotorMatrixWorld: THREE.Matrix4, dx: number, dy: number, dz = 0): THREE.Vector3 {
@@ -61,7 +61,7 @@ export function plateDeltaToPartLocal(rotorMatrixWorld: THREE.Matrix4, dx: numbe
 /**
  * The part a render group draws, or null. `partIndex` is the IDENTITY (the part's ordinal within
  * its object, BambuStudio's own key); `componentObjectId` is the MESH it references and is NOT
- * unique — several volumes of one object legitimately share a mesh, and keying on it made an edit
+ * unique: several volumes of one object legitimately share a mesh, and keying on it made an edit
  * to one of them hit every sibling that shared it.
  */
 export function partGroupRef(node: THREE.Object3D): { componentObjectId: number; partIndex: number } | null {
@@ -100,7 +100,7 @@ export const PAINT_CHANNEL_SPECS: Record<TrianglePaintChannel, {
 }
 
 /**
- * Modes that put the move/rotate/scale gizmo on the selection — i.e. the ones where a
+ * Modes that put the move/rotate/scale gizmo on the selection: i.e. the ones where a
  * transform readout means anything. Every other mode (paint, cut, lay-face, brim ears,
  * measure) detaches the gizmo and drives its own floating panel instead. Single source of
  * truth for both the detach decision and whether the readout renders, so the two can't drift.
@@ -168,14 +168,14 @@ export type ImportGeometryCache = Map<string, Promise<THREE.BufferGeometry>>
 /**
  * Per-session geometry caches are unbounded by default and only freed at editor unmount, so a long
  * session over a big multi-plate project accumulates every parsed BufferGeometry (each solid can be
- * 1MB+) for the whole session — GC/GPU pressure that eventually loses the WebGL context. Cap them
+ * 1MB+) for the whole session: GC/GPU pressure that eventually loses the WebGL context. Cap them
  * (LRU: a hit refreshes recency via {@link touchCacheEntry}) and dispose the evicted geometry, which
  * is safe because the live plate uses per-instance CLONES of these cached originals, not the
  * originals themselves.
  */
 // Generous enough to hold a large plate's objects (each part-file object is its own key) plus a few
 // neighbouring plates, so eviction targets genuinely cold geometry from earlier plate visits rather
-// than thrashing within one build. (Disposing-then-cloning is still safe — clone copies CPU arrays —
+// than thrashing within one build. (Disposing-then-cloning is still safe, clone copies CPU arrays,
 // so even an undersized cap degrades to re-upload, never a crash.)
 export const GEOMETRY_CACHE_MAX_ENTRIES = 128
 /** Move a hit entry to the most-recently-used end so eviction drops genuinely cold geometry. */
@@ -209,7 +209,7 @@ export const ROTATE_SNAP_FINE = THREE.MathUtils.degToRad(15)
 /**
  * Resolve once the browser has had a chance to paint. Awaited before a synchronous,
  * main-thread-blocking rebuild (e.g. switching plates) so a just-shown loading overlay
- * renders first — otherwise the await-chain that follows starves the paint and the work
+ * renders first, otherwise the await-chain that follows starves the paint and the work
  * looks like a silent UI freeze. Falls back to a short timer if rAF is paused (backgrounded
  * tab) so the rebuild never stalls.
  */
@@ -251,8 +251,8 @@ export function nextIdle(): Promise<void> {
 /**
  * Remove (and dispose) every prime tower under `root`.
  *
- * The tower has TWO adders — the async plate build and the live used-material toggle in
- * `EditorView` — so neither may trust a single ref to find "the" tower: doing so left an orphaned
+ * The tower has TWO adders, the async plate build and the live used-material toggle in
+ * `EditorView`, so neither may trust a single ref to find "the" tower: doing so left an orphaned
  * one in the scene (duplicate towers). Both call this first, which makes tower placement
  * idempotent regardless of which ran last.
  */
@@ -328,7 +328,7 @@ export function syncBrimEarMarkerMatrices(group: THREE.Object3D): void {
  * World AABB of an instance's PRINTABLE geometry only (its `Mesh` parts), ignoring
  * decorations like the slightly-enlarged edge-outline `LineSegments`. Those edges are
  * scaled 1.0004x around the part-local origin, so for an object baked far from its local
- * origin they dip below the actual mesh — which previously skewed resting and lifted the
+ * origin they dip below the actual mesh, which previously skewed resting and lifted the
  * object off the bed.
  */
 export function printableMeshBox(object: THREE.Object3D, precise = true): THREE.Box3 {
@@ -340,10 +340,10 @@ export function printableMeshBox(object: THREE.Object3D, precise = true): THREE.
     // Non-printed aids must NOT affect resting or the selection box. Exclude modifier/support
     // volumes AND viewport-only overlays that sit at the bed (z=0): the place-on-face pick hull
     // (`isFaceHull`), the prime tower, and brim-ear markers. Including the face hull was the
-    // "lay flat leaves the part floating" bug — the hull's z=0 box made restObjectOnBed think the
+    // "lay flat leaves the part floating" bug: the hull's z=0 box made restObjectOnBed think the
     // object already touched the bed, so it never dropped the freshly rotated geometry.
     if (mesh.userData.isHelperVolume || mesh.userData.isFaceHull || mesh.userData.isPrimeTower) return
-    // Paint overlays are a lifted visual aid (and can be 100k+ triangles) — never part of the
+    // Paint overlays are a lifted visual aid (and can be 100k+ triangles), never part of the
     // printable bounds, and walking them per-vertex here is what made dragging a painted part hitch.
     if (mesh.userData.isPaintOverlay) return
     if (mesh.name === BRIM_EAR_MARKER_NAME) return
@@ -387,7 +387,7 @@ export function pointInTriangle(
 
 /**
  * Rasterize an instance's actual triangles (projected to XY) into a set of grid
- * cells — the true footprint, so concave/curved parts don't collide just because
+ * cells: the true footprint, so concave/curved parts don't collide just because
  * their bounding box or convex hull would. Each triangle marks its three vertex
  * cells (so thin features register) plus any cells whose centre it covers.
  */
@@ -451,7 +451,7 @@ export function rasterizePolygonCells(polygon: Array<{ x: number; y: number }>):
 }
 
 /**
- * Which nozzle an exclude zone's label requires, as a RUNTIME nozzle id (1 = left, 0 = right) —
+ * Which nozzle an exclude zone's label requires, as a RUNTIME nozzle id (1 = left, 0 = right),
  * the same space `filament.nozzleId` uses everywhere else. It previously answered in a private
  * 1 = left / 2 = right space while every caller compared it against runtime ids, so `has(2)` was
  * never true: right-nozzle objects were never held out of a left-nozzle-only zone, and a
@@ -467,8 +467,8 @@ export function zoneRequiredNozzle(label: string | null): number | null {
 
 /**
  * Do two footprint cell sets overlap by a meaningful area? Requires several shared
- * cells (not just one boundary cell) so objects that merely touch — or whose edges
- * round into the same 2 mm cell — aren't flagged as colliding.
+ * cells (not just one boundary cell) so objects that merely touch, or whose edges
+ * round into the same 2 mm cell, aren't flagged as colliding.
  */
 export function footprintCellsOverlap(a: Set<number>, b: Set<number>, minSharedCells = 4): boolean {
   const [small, large] = a.size <= b.size ? [a, b] : [b, a]
@@ -492,7 +492,7 @@ export function groupTransformSignature(group: THREE.Object3D): string {
 /**
  * An object's footprint SHAPE signature: its orientation + scale but NOT its position. Two poses
  * with the same shape signature differ only by a translation, so their footprints are the same
- * shape shifted — letting the placement-warning recompute shift cached cells instead of
+ * shape shifted: letting the placement-warning recompute shift cached cells instead of
  * re-rasterizing (see {@link shiftFootprintCells}). Same fields/precision as
  * {@link groupTransformSignature} minus position.
  */
@@ -507,7 +507,7 @@ export function groupShapeSignature(group: THREE.Object3D): string {
  * (it carries no rotation) plus its rotor child's rotation. Full float precision so the
  * selection box stays pixel-accurate during a drag, while letting the animation loop skip
  * the expensive precise-bounds recompute on frames where nothing moved (idle selection or
- * a camera-only orbit) — the per-frame vertex walk was the main avoidable editor cost.
+ * a camera-only orbit): the per-frame vertex walk was the main avoidable editor cost.
  */
 export function selectionBoxSignature(group: THREE.Object3D): string {
   const { position: p, scale: s } = group
@@ -524,7 +524,7 @@ export function bedsEqual(a: EditorPlate['bed'], b: EditorPlate['bed']): boolean
 /**
  * Does an axis-aligned XY footprint overlap any unprintable exclude zone? Tested against each
  * zone's bounding box (zones are corner/edge rectangles), which is conservative for any
- * non-rectangular zone — safe, since it only keeps the tower further clear of the excluded area.
+ * non-rectangular zone: safe, since it only keeps the tower further clear of the excluded area.
  */
 export function footprintHitsExcludeZones(
   minX: number, maxX: number, minY: number, maxY: number,
@@ -553,7 +553,7 @@ export interface PlacementWarning {
   name: string
   issues: string[]
   /**
-   * The object does not FIT the plate (past its edge, or inside a truly unprintable area) — as
+   * The object does not FIT the plate (past its edge, or inside a truly unprintable area), as
    * opposed to a collision or floating, which the user can fix without resizing the bed. Machine
    * switching keys its "no longer fits the new bed" warning on this, so a smaller target bed is
    * reported at switch time instead of surfacing as the CLI's exit-206 at slice time.
@@ -564,8 +564,8 @@ export interface PlacementWarning {
 /**
  * Detect placement problems for the printed objects on a plate, mirroring
  * BambuStudio's prepare-view checks: collisions, floating above the bed, extending
- * past the plate, sitting in a truly unprintable area, and — for dual-nozzle
- * machines — sitting in a nozzle-only area the object's nozzle can't reach (e.g. a
+ * past the plate, sitting in a truly unprintable area, and, for dual-nozzle
+ * machines, sitting in a nozzle-only area the object's nozzle can't reach (e.g. a
  * left-nozzle object in the "Right nozzle only area"), and overlapping the purge/prime
  * tower's footprint. Zone and tower tests use the object's true rasterized footprint,
  * not its bounding box.
@@ -598,7 +598,7 @@ export function computePlacementWarnings(
     requiredNozzle: zoneRequiredNozzle(zone.label)
   }))
   // Rasterize the purge/prime tower's footprint once (only present on multi-filament
-  // plates) so objects that intrude into it are flagged — BambuStudio keeps the tower
+  // plates) so objects that intrude into it are flagged: BambuStudio keeps the tower
   // clear of printed parts. The tower is draggable, so the caller passes its live rect.
   const towerCells = primeTower
     ? rasterizePolygonCells([
@@ -613,7 +613,7 @@ export function computePlacementWarnings(
     if (box.min.z > 0.3) add(instance.key, 'floats above the plate')
     const footprint = footprints.get(instance.key)
     // Use the shape-accurate footprint (the rasterized cells where geometry actually
-    // sits) for the off-plate test, not the AABB — a curved/diagonal object's AABB pokes
+    // sits) for the off-plate test, not the AABB, a curved/diagonal object's AABB pokes
     // past the plate even when no geometry reaches that corner (false positive). A cell is
     // only "past" when it clears the edge by ~a cell, so geometry resting at the edge
     // (quantized into a boundary cell) doesn't trip it. Falls back to the AABB if a
@@ -691,7 +691,7 @@ export function computePlacementWarnings(
       }
     })
   // Appended rather than folded into the object loop above: the tower is not an instance, so it has
-  // no entry to hang off. `offBed` stays false — it is a reachability problem, not a bed-size one,
+  // no entry to hang off. `offBed` stays false, it is a reachability problem, not a bed-size one,
   // and the machine-switch warning counts off-bed OBJECTS.
   if (towerIssue) {
     warnings.push({ key: PRIME_TOWER_WARNING_KEY, name: 'Purge tower', issues: [towerIssue], offBed: false })
@@ -791,7 +791,7 @@ export function setObjectPrintedStyle(object: THREE.Object3D, printed: boolean):
 
 /**
  * Build a translucent convex-hull overlay (in the group's local frame) to show the
- * "place on face" candidate faces — including a pseudo-face/lid over open ends like
+ * "place on face" candidate faces, including a pseudo-face/lid over open ends like
  * a cup, which BambuStudio also exposes. Returns null if the object has too few
  * points. Tag it with `isFaceHull` so picking can target it.
  */
@@ -823,11 +823,11 @@ export function buildFaceHullOverlay(group: THREE.Object3D): THREE.Mesh | null {
   const geometry = buildHullGeometry(group)
   if (!geometry) return null
   // The convex hull is nearly coincident with the printed surface over large areas, so depth
-  // testing it against the object z-fights badly (per-fragment flicker — the "triangle artifacts",
+  // testing it against the object z-fights badly (per-fragment flicker: the "triangle artifacts",
   // worst when a hull face sits right on an object face, e.g. viewing a part from below the bed).
   // polygonOffset can't reliably separate a near-coincident curved hull. Instead, take the overlay
   // out of the depth fight: depthTest:false so it always draws over the printed surface. FrontSide
-  // (not DoubleSide) so only the camera-facing hull tints — no back-face double-render muddiness —
+  // (not DoubleSide) so only the camera-facing hull tints, no back-face double-render muddiness,
   // and so picking only hits faces you can see. renderOrder keeps it on top of the opaque scene.
   const overlay = new THREE.Mesh(
     geometry,
@@ -845,7 +845,7 @@ export function buildFaceHullOverlay(group: THREE.Object3D): THREE.Mesh | null {
     new THREE.MeshBasicMaterial({ color: 0x8fd0ff, transparent: true, opacity: 0.42, side: THREE.DoubleSide, depthWrite: false, depthTest: false })
   )
   // Tag the highlight fill as part of the hull too: it is a separate child mesh, so without this
-  // printableMeshBox/buildHullGeometry would count the hovered face's geometry — when that face is
+  // printableMeshBox/buildHullGeometry would count the hovered face's geometry: when that face is
   // the bottom (sitting at z=0) it polluted the rest box and the part floated after lay-flat.
   fill.userData.isFaceHull = true
   fill.renderOrder = 7

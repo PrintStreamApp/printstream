@@ -1,17 +1,17 @@
 /**
- * Independent object copies for the 3MF bake — BambuStudio's copy/paste semantics.
+ * Independent object copies for the 3MF bake: BambuStudio's copy/paste semantics.
  *
  * BambuStudio distinguishes two ways to have "another one of these", and so do we:
  * placing a second instance against the same `objectId` is a LINKED copy (BS's toolbar "+" /
- * `increase_instances`, which adds a `ModelInstance` to the same `ModelObject` — one mesh, shared
+ * `increase_instances`, which adds a `ModelInstance` to the same `ModelObject`, one mesh, shared
  * parts, materials, paint, and per-object config), while an INDEPENDENT copy is a whole new object
  * (BS's Ctrl+C/V, `Model::add_object(*src_object)`). This module owns the second one.
  *
  * **Contract.** {@link applyObjectClones} runs as a PRE-PASS, before any other edit is applied. For
- * each {@link SceneEditObjectClone} it deep-copies the source object — its mesh or its whole
+ * each {@link SceneEditObjectClone} it deep-copies the source object, its mesh or its whole
  * `<components>` subtree, plus every component object those reference, plus its
  * `model_settings.config` entry (parts with subtypes/extruders/per-part config, and the object's own
- * config) — into freshly allocated ids. It then returns the edit rewritten so the copy's NEGATIVE
+ * config), into freshly allocated ids. It then returns the edit rewritten so the copy's NEGATIVE
  * placeholder id is replaced by the new real object id, and every per-part reference to a SOURCE
  * component id is replaced by the copy's corresponding new component id.
  *
@@ -19,7 +19,7 @@
  * time `buildEditedThreeMfDocuments` applies instances, paint, part transforms, added parts,
  * per-object overrides and the rest, every id it sees is real.
  *
- * **Invariant:** a placeholder that no clone declares is an error, not a silently dropped edit —
+ * **Invariant:** a placeholder that no clone declares is an error, not a silently dropped edit,
  * a dangling negative id would otherwise bake as a missing object and lose the user's copy.
  *
  * Counterpart on the web side: `EditorInstanceSource` kind `clone` in
@@ -50,8 +50,8 @@ export interface ObjectCloneResult {
   partFileEntries: Array<{ name: string; content: string }>
   /**
    * Each copy's placeholder id and the real `object_id` it baked as. Callers that key per-object
-   * data by id OUTSIDE the `SceneEdit` — per-object process overrides, which ride the save/slice
-   * request rather than the edit — re-key through this, exactly as they do for a replaced object.
+   * data by id OUTSIDE the `SceneEdit`, per-object process overrides, which ride the save/slice
+   * request rather than the edit, re-key through this, exactly as they do for a replaced object.
    */
   resolvedIds: Array<{ originalObjectId: number; bakedObjectId: number }>
 }
@@ -102,7 +102,7 @@ function withObjectId(objectXml: string, objectId: number): string {
  * A Bambu object is either mesh-bearing or a `<components>` assembly whose parts are separate
  * objects; both shapes are copied, and the assembly's component references are re-pointed at the
  * copied part objects so the two objects never share a resource. Production-extension `p:UUID`
- * attributes are dropped from the copies and re-minted by the caller's `genUuid` where required —
+ * attributes are dropped from the copies and re-minted by the caller's `genUuid` where required,
  * a duplicated UUID is invalid and BambuStudio's loader rejects it.
  */
 function cloneObjectXml(
@@ -178,7 +178,7 @@ function resolveObjectId(objectId: number, clones: ReadonlyMap<number, ClonedObj
 
 /**
  * Resolve a MESH-scoped part reference (paint): both the owning object and, for a copy, the part's
- * component id — a copy gets its own mesh entries, so the id must be remapped.
+ * component id, a copy gets its own mesh entries, so the id must be remapped.
  */
 function resolvePartMesh<T extends { objectId: number; componentObjectId: number }>(
   entry: T,
@@ -196,7 +196,7 @@ function resolvePartMesh<T extends { objectId: number; componentObjectId: number
 /**
  * Resolve an ORDINAL-scoped part reference (filament / process overrides / type / transform). Only
  * the owning object moves: a copy is a deep copy of the source's parts IN ORDER, so part N of the
- * copy is part N of the source. That is the whole benefit of BambuStudio's positional identity —
+ * copy is part N of the source. That is the whole benefit of BambuStudio's positional identity,
  * there is no per-part id to remap and therefore no way for the mapping to go stale.
  */
 function resolvePartSlot<T extends { objectId: number }>(
@@ -211,7 +211,7 @@ function resolvePartSlot<T extends { objectId: number }>(
  * Materialise the edit's independent object copies and return the edit with every clone
  * placeholder resolved. A no-op (same documents, same edit) when the edit declares no clones.
  *
- * Throws when a clone names a source object the base project does not contain — the user's copy
+ * Throws when a clone names a source object the base project does not contain: the user's copy
  * would otherwise bake as nothing.
  */
 export function applyObjectClones(
@@ -248,7 +248,7 @@ export function applyObjectClones(
     clones.set(clone.objectId, copied.ids)
     if (copied.partFileMeshes.length > 0) {
       // The copy's meshes get their own sub-model entry, and its root object's components are
-      // re-pointed at it — otherwise both objects would name the SOURCE's part file.
+      // re-pointed at it, otherwise both objects would name the SOURCE's part file.
       const partFilePath = `3D/Objects/printstream_object_${copied.ids.objectId}.model`
       partFileEntries.push({ name: partFilePath, content: renderClonePartFileModel(copied.partFileMeshes) })
       const repathed = copied.objectsXml.map((xml) => xml.replace(

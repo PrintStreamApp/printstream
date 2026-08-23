@@ -7,8 +7,8 @@
  * guard passed against an inverted ternary, which is precisely the mistake worth catching.
  *
  * The menus take the callback as OPTIONAL and hide the row when it is absent, so what is asserted
- * here is the row's presence, and — for the split button, whose primary click is the library on the
- * workspace host — which handler the primary action falls through to.
+ * here is the row's presence, and, for the split button, whose primary click is the library on the
+ * workspace host, which handler the primary action falls through to.
  */
 import assert from 'node:assert/strict'
 import { after, afterEach, test } from 'node:test'
@@ -109,8 +109,8 @@ test("the Add button's primary action falls through to the file picker with no l
 
 /**
  * The object context menu is the OTHER two entry points, and it decides for itself whether to pass
- * `onPickLibrary` down. Testing only the leaf list would miss an always-truthy inline arrow here —
- * the likeliest way this regresses — so the parent is rendered too.
+ * `onPickLibrary` down. Testing only the leaf list would miss an always-truthy inline arrow here,
+ * the likeliest way this regresses, so the parent is rendered too.
  */
 function renderObjectMenu(props: Record<string, unknown>) {
   const noop = () => undefined

@@ -1,18 +1,18 @@
 /**
- * Client-side 3MF archive reader — unzips a 3MF the browser already holds and exposes its entries
+ * Client-side 3MF archive reader: unzips a 3MF the browser already holds and exposes its entries
  * to the shared parsers.
  *
  * A 3MF is a ZIP. Everywhere else in the product a 3MF is unzipped server-side (the API's
  * `three-mf-internal.ts` / the bridge's `library-3mf.ts`) because the bytes live on a bridge. The
  * public 3MF editor has no server copy on purpose: the user's file is read straight from their
  * disk, so the unzip has to happen here. Counterpart of the API's `readSceneManifest` /
- * `readPlateIndex` ZIP I/O — the parsing itself is the SAME shared code
+ * `readPlateIndex` ZIP I/O: the parsing itself is the SAME shared code
  * (`@printstream/shared/three-mf`), only the byte source differs.
  *
  * Contract: {@link openThreeMfArchive} decompresses the whole archive once, up front, and every
  * accessor after that is synchronous and allocation-cheap. That is the right trade for the editor
  * (the user is about to look at every plate anyway) but means peak memory is roughly the
- * uncompressed project — hence {@link MAX_CLIENT_THREE_MF_BYTES}.
+ * uncompressed project, hence {@link MAX_CLIENT_THREE_MF_BYTES}.
  */
 import { unzipArchiveBytes } from './zipArchiveClient'
 import { CUSTOM_GCODE_PER_LAYER_ENTRY, THREE_MF_SLICE_INFO_ENTRY as SLICE_INFO_ENTRY, type ThreeMfSceneEntries } from '@printstream/shared/three-mf'
@@ -28,7 +28,7 @@ const PLATE_THUMBNAIL_PATTERN = /^Metadata\/plate_(\d+)\.png$/
 
 /**
  * Refuse archives above this size. Everything is held decompressed in memory here, and a browser
- * tab that runs out of heap dies with no recoverable error — a clear "too large, open it in the
+ * tab that runs out of heap dies with no recoverable error, a clear "too large, open it in the
  * app" message is strictly better. Comfortably above any hand-authored project.
  */
 export const MAX_CLIENT_THREE_MF_BYTES = 256 * 1024 * 1024
@@ -36,7 +36,7 @@ export const MAX_CLIENT_THREE_MF_BYTES = 256 * 1024 * 1024
 export interface ThreeMfArchive {
   /**
    * Every entry name in the archive, in no particular order. The bake's copy pass needs this to
-   * carry through the entries it does not rewrite (meshes, thumbnails, vendor metadata) — a 3MF
+   * carry through the entries it does not rewrite (meshes, thumbnails, vendor metadata), a 3MF
    * holds far more than the editor models, and dropping the rest would corrupt the project.
    */
   entryNames(): string[]
@@ -64,7 +64,7 @@ export class ThreeMfArchiveError extends Error {}
  * Decompress a 3MF the user picked from disk.
  *
  * @throws {ThreeMfArchiveError} when the file is too large, is not a ZIP, or carries no
- *   `3D/3dmodel.model` — i.e. every case where the caller should show "this is not a 3MF we can
+ *   `3D/3dmodel.model`: i.e. every case where the caller should show "this is not a 3MF we can
  *   open" rather than a broken editor.
  */
 export async function openThreeMfArchive(file: Blob): Promise<ThreeMfArchive> {
@@ -88,8 +88,8 @@ export function assertThreeMfSizeWithinLimit(byteLength: number): void {
  * Wrap already-decompressed entries as an archive.
  *
  * Exported so a WORKER that unzipped synchronously (it is already off the main thread, so fflate's
- * sync codec is the right one there) gets the identical accessors — entry decoding, the text cache,
- * the scene/index entry selection — rather than a second implementation of them. The import-staging
+ * sync codec is the right one there) gets the identical accessors, entry decoding, the text cache,
+ * the scene/index entry selection, rather than a second implementation of them. The import-staging
  * worker takes this path; `openThreeMfArchive` is the main-thread one.
  *
  * @throws {ThreeMfArchiveError} when the entries carry no `3D/3dmodel.model`.
@@ -137,7 +137,7 @@ function createArchive(entries: Record<string, Uint8Array>): ThreeMfArchive {
       const rootModelXml = entryText(ROOT_MODEL_ENTRY)
       const modelSettingsXml = entryText(MODEL_SETTINGS_ENTRY)
       // Both are required by the scene parse. A geometry-only 3MF (a vanilla CAD export) has no
-      // model_settings at all — that is not an error, it simply has no plated scene, and the
+      // model_settings at all, that is not an error, it simply has no plated scene, and the
       // caller falls back to the mesh preview exactly as the library does.
       if (rootModelXml == null || modelSettingsXml == null) return null
       return {
@@ -160,7 +160,7 @@ function createArchive(entries: Record<string, Uint8Array>): ThreeMfArchive {
 
 async function inflateArchive(bytes: Uint8Array): Promise<Record<string, Uint8Array>> {
   // Off the main thread via the dedicated zip worker (a large project would otherwise freeze the
-  // page for seconds mid-open), and guaranteed to settle — fflate's own async API could wedge
+  // page for seconds mid-open), and guaranteed to settle: fflate's own async API could wedge
   // without erroring, which is exactly the never-resolving open this call must not produce.
   try {
     return await unzipArchiveBytes(bytes)

@@ -1,7 +1,7 @@
 /**
  * The two "needs attention" dialogs for a printer card: the assistant (surfaces the printer's
  * current attention reason and quick recovery actions) and the filament-recovery loader. They are
- * linked — the assistant's "load filament" action hands off to the recovery dialog. Grouped out of
+ * linked: the assistant's "load filament" action hands off to the recovery dialog. Grouped out of
  * PrinterCard so the handoff wiring lives in one place.
  */
 import type { Printer, PrinterCommand, PrinterStatus } from '@printstream/shared'

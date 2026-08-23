@@ -3,7 +3,7 @@
  *
  * Pure module (no Three.js) so the packing is unit-testable. Footprints arrive as
  * rasterized grid-cell keys (the same 2mm grid and key packing the editor's
- * placement-warning rasterizer uses — see `footprintCellKey`); the result is a
+ * placement-warning rasterizer uses: see `footprintCellKey`); the result is a
  * per-item XY translation in mm. Largest items place first, each at the free spot
  * closest to the plate centre, with a configurable clearance ring kept between
  * items (but not against the plate edge), mirroring Bambu Studio's defaults.
@@ -25,7 +25,7 @@ export function decodeFootprintCellKey(key: number): [number, number] {
 /**
  * Translate a footprint cell set by a whole number of grid cells. A pure move keeps an object's
  * footprint SHAPE, so the placement-warning recompute can shift the cached cells (O(cells)) instead
- * of re-rasterizing every triangle (O(triangles)) — the difference between a smooth and a frozen
+ * of re-rasterizing every triangle (O(triangles)): the difference between a smooth and a frozen
  * drop for a high-poly / many-part object. The shift rounds to the 2mm grid, which is the
  * collision resolution anyway, so no accuracy is lost.
  */
@@ -67,7 +67,7 @@ export interface ArrangeResult {
  *
  * Every item's CURRENT footprint stays stamped in the occupancy grid until that
  * item is actually moved (and is re-stamped if it cannot fit), so placements
- * never land on top of an item that ends up staying put — a partial arrange
+ * never land on top of an item that ends up staying put, a partial arrange
  * leaves no overlaps, only unplaced items.
  */
 export function arrangePlateItems(items: ReadonlyArray<ArrangeItemInput>, options: ArrangeOptions): ArrangeResult {
@@ -129,7 +129,7 @@ export function arrangePlateItems(items: ReadonlyArray<ArrangeItemInput>, option
   for (const item of prepared) stampFootprint(item.cells, 0, 0, 1)
 
   // Candidate anchor positions for an item's bounding-box CENTRE, nearest the plate
-  // centre first — Bambu packs centre-out so plates fill from the middle.
+  // centre first: Bambu packs centre-out so plates fill from the middle.
   const centerCX = (minCX + maxCX) / 2
   const centerCY = (minCY + maxCY) / 2
   const candidates: Array<[number, number]> = []
@@ -174,7 +174,7 @@ export function arrangePlateItems(items: ReadonlyArray<ArrangeItemInput>, option
       break
     }
     if (!placed) {
-      // It stays where it is — put its footprint back so later items avoid it.
+      // It stays where it is: put its footprint back so later items avoid it.
       stampFootprint(item.cells, 0, 0, 1)
       unplaced.push(item.key)
     }

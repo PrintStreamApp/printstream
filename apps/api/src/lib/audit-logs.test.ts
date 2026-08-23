@@ -408,7 +408,7 @@ test('every dispatch route feeds the audit helper the gates its own schema expos
     allowInsufficientFilament: true
   }
 
-  // Library print — carries all three.
+  // Library print: carries all three.
   const libraryPrint = printFromLibrarySchema.parse({
     fileId: 'file-1', printerId: 'printer-1', ...allOverrides
   })
@@ -423,7 +423,7 @@ test('every dispatch route feeds the audit helper the gates its own schema expos
   // restored from the history row, only re-granted per request.
   assert.deepEqual(printOverrideAuditMetadata(reprintJobSchema.parse({})), {})
 
-  // Printer-storage print — deliberately has NO plate-type gate to bypass (nothing compares a
+  // Printer-storage print, deliberately has NO plate-type gate to bypass (nothing compares a
   // stored file against the printer's plate), so it records the other two and only those.
   const storagePrint = printerStoragePrintSchema.parse({ path: '/model.3mf', ...allOverrides })
   assert.deepEqual(printOverrideAuditMetadata(storagePrint), {

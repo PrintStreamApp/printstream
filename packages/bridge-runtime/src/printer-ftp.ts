@@ -6,7 +6,7 @@
  * MQTT print commands as `ftp:///<filename>`. Auth uses the same
  * `bblp` / access-code pair as MQTT.
  *
- * Invariant (H2-series): the H2D's vsftpd runs `require_ssl_reuse` — every
+ * Invariant (H2-series): the H2D's vsftpd runs `require_ssl_reuse`, every
  * data connection must RESUME the control connection's TLS session or the
  * printer rejects the transfer ("522 SSL connection failed: session reuse
  * required") and closes the control socket. basic-ftp tries to satisfy this,
@@ -144,7 +144,7 @@ function openResumingDataConnection(
  * PASV strategy that ignores the host returned by the server and
  * reuses the control-connection IP for the data socket. Mirrors
  * basic-ftp's `enterPassiveModeIPv4_forceControlHostIP`, which is
- * declared in the type defs but not exported at runtime — plus TLS
+ * declared in the type defs but not exported at runtime: plus TLS
  * session resumption on the data connection (see module header).
  */
 async function pasvForceControlHost(ftp: FTPContext): Promise<FTPResponse> {
@@ -449,7 +449,7 @@ async function uploadFileToPrinterPathWithClient(
       // Best-effort: drop the partially-written remote file so a failed or aborted
       // upload doesn't leave a truncated archive on the printer's SD card (a later
       // reprint/storage-print of that name would dispatch a corrupt 3MF). The remove
-      // itself may fail if the connection is what dropped — that's fine.
+      // itself may fail if the connection is what dropped, that's fine.
       await client.remove(remoteFilename).catch(() => undefined)
       throw error
     }

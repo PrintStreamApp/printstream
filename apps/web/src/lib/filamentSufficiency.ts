@@ -22,18 +22,18 @@ export interface FilamentRemainingStatus {
 }
 
 /**
- * The one shared remaining-badge text, e.g. `67% (~670g)`. The weight is always an estimate — printer
- * trays report only a percent (grams are roughly percent * 10) and tracked spool weights drift — so it
+ * The one shared remaining-badge text, e.g. `67% (~670g)`. The weight is always an estimate, printer
+ * trays report only a percent (grams are roughly percent * 10) and tracked spool weights drift, so it
  * carries a leading `~` and, when a percent is known, sits in brackets after the percent. Every surface routes
- * through here — the print dialogs' AMS slot pickers (`SlotOptionLabel` in `PrinterMapping` /
+ * through here: the print dialogs' AMS slot pickers (`SlotOptionLabel` in `PrinterMapping` /
  * `StoragePrintModal` / `SliceFileModal`) and the library/queue material pickers
- * ({@link filamentRemainingStatus} → `FilamentOptionLabel`) — so the estimate marker, brackets, and
+ * ({@link filamentRemainingStatus} → `FilamentOptionLabel`), so the estimate marker, brackets, and
  * placement stay identical instead of drifting.
  */
 export function formatFilamentRemaining(
   remainingGrams: number,
   remainPercent?: number | null,
-  /** True when the grams sum across several spools — adds a "total" suffix so that's clear. */
+  /** True when the grams sum across several spools: adds a "total" suffix so that's clear. */
   aggregated = false
 ): string {
   const weight = `~${remainingGrams}g${aggregated ? ' total' : ''}`
@@ -44,7 +44,7 @@ export function filamentRemainingStatus(
   remainingGrams: number | null | undefined,
   requiredGrams: number | null | undefined,
   remainPercent?: number | null,
-  /** True when the grams sum across several spools — adds a "total" suffix so that's clear. */
+  /** True when the grams sum across several spools: adds a "total" suffix so that's clear. */
   aggregated = false
 ): FilamentRemainingStatus | null {
   if (remainingGrams == null) return null

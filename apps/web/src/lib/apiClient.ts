@@ -18,7 +18,7 @@ export interface ApiClientOptions {
    *
    * Opt-in, and meant for polled endpoints, where a fetch that never settles is a permanent
    * silent outage rather than one slow load: React Query leaves that query `fetching` forever, so
-   * the interval never fires again AND every `invalidateQueries` on the key waits on it — which
+   * the interval never fires again AND every `invalidateQueries` on the key waits on it, which
    * is how a stalled job-list poll left the Slice button spinning over a finished slice.
    *
    * The budget covers the body, not just the headers: the stall this guards against (a large
@@ -122,7 +122,7 @@ export async function apiFetch<T>(path: string, options: ApiClientOptions = {}):
 
     if (response.status === 204) return undefined as T
 
-    // Inside the try, so the timeout still covers reading the body — a stalled body is the
+    // Inside the try, so the timeout still covers reading the body, a stalled body is the
     // failure mode `timeoutMs` exists for.
     const payload = await parseResponsePayload(response, !response.ok)
 

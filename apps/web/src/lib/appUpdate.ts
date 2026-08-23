@@ -12,7 +12,7 @@
  *   becomes visible. This keeps long-lived PWA installs from drifting
  *   even if the user never closes the tab.
  *
- * PrintStream is a real-time printer dashboard — being even one deploy
+ * PrintStream is a real-time printer dashboard: being even one deploy
  * behind can mean a stale `PrinterStatus` schema or a missing route
  * (e.g. plate thumbnails / library plates). Aggressive updates trade
  * a tiny bit of bandwidth for never debugging a stuck precache again.

@@ -1,17 +1,17 @@
 import { summarizeSliceProgress } from './slice-progress.js'
 
 /**
- * Turns a BambuStudio CLI *engine crash* (a signal death — SIGABRT/SIGSEGV, which the launcher
+ * Turns a BambuStudio CLI *engine crash* (a signal death: SIGABRT/SIGSEGV, which the launcher
  * shell surfaces as exit code 134-139) that happened **after the slice started** into a clear,
  * user-facing message that names the stage it died in.
  *
  * Why the post-load gate: a signal death during project *load/teardown* is often a transient
  * emulation flake that a re-run clears, so the caller keeps retrying those (returns null here). A
- * crash once the per-plate slice is underway is deterministic — the engine cannot process this
+ * crash once the per-plate slice is underway is deterministic: the engine cannot process this
  * model's geometry at that stage, and it re-crashes identically on every retry (verified on a real
  * torus model that segfaults at "Detect overhangs for auto-lift" across every bundled engine version
- * and every print-setting/orientation permutation). Surfacing it as an actionable message — instead
- * of the opaque "exited with code 139" — also makes the API skip the pointless retry, because the
+ * and every print-setting/orientation permutation). Surfacing it as an actionable message, instead
+ * of the opaque "exited with code 139", also makes the API skip the pointless retry, because the
  * message no longer matches its transient-crash predicate.
  *
  * Returns null when the run had not reached the slicing stage (leave it classified as transient).
@@ -23,7 +23,7 @@ export function formatSliceEngineCrashError(output: string, exitCode: number | n
   const stage = lastStage ? ` while processing "${lastStage}"` : ''
   return (
     `The slicing engine crashed${stage} on this model (engine exit ${exitCode ?? 'signal'}). ` +
-    `This is an engine limitation on the model's geometry, not a print-setting problem — it will fail the same way on a retry. ` +
+    `This is an engine limitation on the model's geometry, not a print-setting problem, it will fail the same way on a retry. ` +
     `Try repairing or simplifying the model, re-exporting it from your CAD tool, or slicing a different plate.`
   )
 }
@@ -34,7 +34,7 @@ export function formatSliceEngineCrashError(output: string, exitCode: number | n
  * BambuStudio refuses to open a 3MF saved by a NEWER version than itself, printing
  *   `[error]   Version Check: File Version 2.8.0.50 not supported by current cli version 02.07.01.62`
  * on **stdout** and exiting before it loads anything ("run found error, return -24" -> process exit
- * code 232). Nothing about the project is wrong and no setting can work around it — the engine
+ * code 232). Nothing about the project is wrong and no setting can work around it: the engine
  * simply predates the file. Without this the user sees only "Slicer CLI exited with code 232",
  * which reads as a broken model rather than "save it from an older Bambu Studio, or slice it with a
  * newer engine".

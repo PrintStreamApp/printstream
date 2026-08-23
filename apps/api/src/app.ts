@@ -65,7 +65,7 @@ if (env.TRUST_PROXY) {
   } else if (/^\d+$/.test(value)) {
     app.set('trust proxy', Number.parseInt(value, 10))
   } else {
-    // Comma-separated IP/CIDR list — Express accepts a string or array.
+    // Comma-separated IP/CIDR list: Express accepts a string or array.
     app.set('trust proxy', value.split(',').map((entry) => entry.trim()).filter(Boolean))
   }
 }
@@ -112,10 +112,10 @@ app.use(
   })
 )
 // Helmet's other protections stay on; we set our own CSP below (helmet's strict
-// default would block the proxied MJPEG / blob: camera frames). HSTS is production-only —
+// default would block the proxied MJPEG / blob: camera frames). HSTS is production-only:
 // see `lib/security-headers.ts` for why sending it over plain-HTTP dev is actively harmful.
 app.use(helmet(buildSecurityHeaderOptions(env.NODE_ENV)))
-// Content-Security-Policy for the served SPA — restores XSS defense-in-depth while
+// Content-Security-Policy for the served SPA: restores XSS defense-in-depth while
 // allowing the camera/stream resource paths. Report-only by default (safe); set
 // CSP_ENFORCE=true to enforce. See content-security-policy.ts.
 const cspHeaderName = env.CSP_ENFORCE ? 'Content-Security-Policy' : 'Content-Security-Policy-Report-Only'

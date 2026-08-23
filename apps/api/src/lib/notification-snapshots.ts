@@ -12,7 +12,7 @@
  *     reports `finished` only after the build plate has been lowered,
  *     by which point the chamber camera is usually pointing at empty
  *     space. To get a useful "finished" image we capture a frame
- *     opportunistically while the print is still on the bed — once
+ *     opportunistically while the print is still on the bed, once
  *     the progress crosses a high watermark, and again right at the
  *     printing→finished transition. The notification formatter
  *     prefers this cached frame and only falls back to a live capture
@@ -385,7 +385,7 @@ export function startNotificationSnapshotPrecapture(): void {
     const state = ensureState(status.printerId)
     const nextKey = jobKeyFor(status)
 
-    // New job (or job change) — clear the per-job dedupe flag. We keep
+    // New job (or job change): clear the per-job dedupe flag. We keep
     // a stale `latest` around so an in-flight notification can still
     // find it; the next high-watermark capture replaces it.
     if (state.jobKey !== nextKey) {

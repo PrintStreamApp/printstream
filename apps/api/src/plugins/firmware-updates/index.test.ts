@@ -328,7 +328,7 @@ test('firmware-updates report surfaces the offline floor and stepping-stone prer
 test('firmware-updates upload is rejected when installed firmware is below the offline floor', async () => {
   const realFetch = globalThis.fetch
   mock.method(printerManager, 'getPrinter', () => printer)
-  // P1S below the 01.07.00.00 offline floor — the printer has no Update Offline option.
+  // P1S below the 01.07.00.00 offline floor: the printer has no Update Offline option.
   mock.method(printerManager, 'getStatus', () => ({ online: true, firmwareVersion: '01.06.00.00', sdCardPresent: true } as never))
   mock.method(globalThis, 'fetch', firmwareFetchMock(realFetch, [{ version: '01.10.00.00', url: 'https://public-cdn.bblmw.com/example.zip' }]))
 

@@ -10,7 +10,7 @@ function fileOfKind(kind: LibraryFile['kind'], name: string): LibraryFile {
 test('isPreviewOnlyLibraryFile is true for STL and STEP, false for printable/editable kinds', () => {
   assert.equal(isPreviewOnlyLibraryFile(fileOfKind('stl', 'part.stl')), true)
   assert.equal(isPreviewOnlyLibraryFile(fileOfKind('step', 'bracket.step')), true)
-  // 3MF projects are editable and gcode is directly printable — they have their own
+  // 3MF projects are editable and gcode is directly printable, they have their own
   // default action, so they are not "preview only".
   assert.equal(isPreviewOnlyLibraryFile(fileOfKind('3mf', 'project.3mf')), false)
   assert.equal(isPreviewOnlyLibraryFile(fileOfKind('gcode', 'sliced.gcode.3mf')), false)
@@ -38,7 +38,7 @@ test('geometry-only 3MFs classify like STL: preview-only, never sliceable/editab
   const geometryOnly = { ...fileOfKind('3mf', 'widget.3mf'), geometryOnly: true }
   assert.equal(isPreviewOnlyLibraryFile(geometryOnly), true)
   assert.equal(isUnslicedThreeMfFile(geometryOnly), false)
-  // The flag is only meaningful when true — absent/false keeps project behavior.
+  // The flag is only meaningful when true: absent/false keeps project behavior.
   assert.equal(isPreviewOnlyLibraryFile({ ...fileOfKind('3mf', 'project.3mf'), geometryOnly: false }), false)
   assert.equal(isUnslicedThreeMfFile({ ...fileOfKind('3mf', 'project.3mf'), geometryOnly: false }), true)
 })
@@ -62,7 +62,7 @@ test('a metadata-pending file shows a single processing tag on every tag surface
     assert.equal(meta[0]?.pending, true)
     assert.match(meta[0]?.label ?? '', /processing/i)
   }
-  // The indicator never appears once metadata is settled — even when it settled to nothing.
+  // The indicator never appears once metadata is settled, even when it settled to nothing.
   const settled = { ...pending, metadataPending: undefined }
   assert.equal(buildFullFileTags(settled).meta.length, 0)
   assert.equal(buildCompactFileTags(settled).meta.some((tag) => tag.pending), false)

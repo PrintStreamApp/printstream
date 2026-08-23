@@ -9,7 +9,7 @@
  * snapshot so `useSyncExternalStore` re-renders consumers.
  *
  * The watch registry is module-level (shared across all mounts), and on every WS
- * reconnect (`onOpen`) the still-active watches are re-sent — the server forgets
+ * reconnect (`onOpen`) the still-active watches are re-sent: the server forgets
  * subscriptions when the socket drops, so without this replay a reconnected page
  * would silently stop receiving snapshots.
  */

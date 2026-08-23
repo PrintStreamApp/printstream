@@ -3,20 +3,20 @@
  *
  * They ship inside the slicer image (see `apps/slicer/src/flush-data.ts` for why they are served
  * rather than vendored), so this is a small proxied fetch parsed by the SHARED
- * `parseFlushVolumeDataset` — the same parser the API and slicer sides use, so the format cannot be
+ * `parseFlushVolumeDataset`, the same parser the API and slicer sides use, so the format cannot be
  * understood two ways.
  *
  * Absence is a supported state, not an error: an install with no slicer configured, or an engine
  * that ships no tables, yields an empty map and the calculation falls back to Studio's colour
- * formula — exactly what Studio itself does with a missing data file. So this never throws into the
+ * formula, exactly what Studio itself does with a missing data file. So this never throws into the
  * dialog; a failed fetch is a quieter calculation, not a broken one.
  *
  * `basePath` selects the surface: the workspace route by default, the anonymous catalogue for the
- * public 3MF editor (same shape, no account) — mirroring `bedModel.ts`.
+ * public 3MF editor (same shape, no account): mirroring `bedModel.ts`.
  *
  * The sibling {@link useFlushCalibration} closes the drift gap the tables alone cannot: our port is
  * verified against the vendored SOURCE, but the slicer IMAGE is bumped independently of it, so the
- * engine is also asked for its own answer and the two are compared. That check is a diagnostic —
+ * engine is also asked for its own answer and the two are compared. That check is a diagnostic,
  * it never blocks the dialog, it only decides how confidently the footnote can speak.
  */
 import { useQuery } from '@tanstack/react-query'
@@ -54,7 +54,7 @@ export async function fetchFlushDatasets(input: {
 /**
  * Whether the engine agrees with our port, checked against its OWN computed matrix.
  *
- * `null` means "not checked" (no slicer, an engine too old to probe, a failed fetch) — which is not
+ * `null` means "not checked" (no slicer, an engine too old to probe, a failed fetch), which is not
  * the same as agreeing, and the dialog says so rather than claiming parity it did not verify.
  */
 export function useFlushCalibration(

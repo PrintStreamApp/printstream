@@ -80,7 +80,7 @@ test('a report from the reconnected bridge cancels the pending offline (no flick
   printerManager.ingestBridgeReport(printer.id, {}, 'bridge-1') // bridge is back
   mock.timers.tick(60_000) // well past the original window
 
-  assert.equal(printerManager.getStatus(printer.id)?.online, true, 'printer stayed online — no flicker')
+  assert.equal(printerManager.getStatus(printer.id)?.online, true, 'printer stayed online, no flicker')
   assert.equal(offlineEmits.length, 0, 'a recovered session never surfaces offline')
 
   stop()

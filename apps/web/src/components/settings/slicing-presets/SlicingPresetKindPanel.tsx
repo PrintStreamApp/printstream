@@ -2,7 +2,7 @@
  * The list of custom presets for ONE profile kind: search, that kind's filter facets, sorting,
  * selection, paging and delete.
  *
- * One panel is mounted per tab, and Joy unmounts the inactive ones — which is what keeps a
+ * One panel is mounted per tab, and Joy unmounts the inactive ones, which is what keeps a
  * selection, a page index or a filter from a printer tab leaking into the material tab. Sort
  * order and page size are the deliberate exception: they persist and are shared across kinds,
  * because they are a display preference rather than a property of the list being shown.
@@ -147,7 +147,7 @@ export function SlicingPresetKindPanel({ kind, profiles, emptyDescription, stick
   const sources = sourceSelection ?? defaultSources
   // Counted against the DEFAULT, not against "showing everything". The panel opens on the
   // workspace's own presets, so counting that as an active filter lit up "Filters (1)" on a
-  // list nobody had filtered yet — and since Clear returns to that same default, clearing
+  // list nobody had filtered yet, and since Clear returns to that same default, clearing
   // left the badge at 1 and read as a button that does nothing.
   const activeFilterCount = countActiveSlicingPresetFacets(facetSelections) + (slicingPresetSourcesAreDefault(sources, defaultSources) ? 0 : 1)
   const selectedProfileIdSet = React.useMemo(() => new Set(selectedProfileIds), [selectedProfileIds])
@@ -166,7 +166,7 @@ export function SlicingPresetKindPanel({ kind, profiles, emptyDescription, stick
 
   const groupFacet = findSlicingPresetFacet(kind, groupFacetId)
   // Grouped mode shows every match under its group heading and drops paging, matching the spool
-  // library (`plugins/filament-manager/SpoolResults.tsx`) — paging a grouped list would cut
+  // library (`plugins/filament-manager/SpoolResults.tsx`): paging a grouped list would cut
   // groups in half.
   const groups = React.useMemo(
     () => groupFacet ? groupSlicingPresetsByFacet(sortedProfiles, groupFacet) : null,
@@ -209,7 +209,7 @@ export function SlicingPresetKindPanel({ kind, profiles, emptyDescription, stick
   function clearFilters() {
     setPage(0)
     setFacetSelections({})
-    // Back to the default view, not to "everything" — clearing should return the manager to what it
+    // Back to the default view, not to "everything": clearing should return the manager to what it
     // opens as, whichever default that kind resolved to.
     setSourceSelection(null)
   }
@@ -275,7 +275,7 @@ export function SlicingPresetKindPanel({ kind, profiles, emptyDescription, stick
         filamentProfileName={openProfile.name}
         sourceFileId={null}
         // Null, not 0: there is no project slot here, and the request schema requires a POSITIVE
-        // slot index — 0 failed validation and the dialog opened empty with "Number must be
+        // slot index: 0 failed validation and the dialog opened empty with "Number must be
         // greater than 0".
         projectFilamentId={null}
         initialOverrides={{}}
@@ -311,7 +311,7 @@ export function SlicingPresetKindPanel({ kind, profiles, emptyDescription, stick
     </Suspense>
   )
 
-  // The kind has no presets at all — not even built-ins, so the slicer has nothing installed.
+  // The kind has no presets at all, not even built-ins, so the slicer has nothing installed.
   if (profiles.length === 0) {
     return <EmptyState compact icon={<SearchRoundedIcon />} title="No presets yet" description={emptyDescription} />
   }
@@ -489,7 +489,7 @@ export function SlicingPresetKindPanel({ kind, profiles, emptyDescription, stick
  * something is already painted behind them. That held while this manager lived solely in a dialog
  * (`ScrollableModalDialog` supplies `background.surface`), but Settings, then Slicing puts it on
  * the page, where the rows landed straight on the app's background gradient with nothing framing
- * them — an unbounded list beside sibling blocks that are all outlined cards.
+ * them, an unbounded list beside sibling blocks that are all outlined cards.
  *
  * Framed here rather than by the settings host so both hosts get one list, and so the frame cannot
  * drift from the rows it belongs to. `overflow: hidden` is what keeps the first and last row's

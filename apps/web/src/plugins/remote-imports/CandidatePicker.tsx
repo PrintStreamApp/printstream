@@ -1,7 +1,7 @@
 /**
  * Card grid for choosing which provider file to import.
  *
- * Owns the whole "which file?" surface on the remote-import page — it replaced a
+ * Owns the whole "which file?" surface on the remote-import page, it replaced a
  * `Select` plus a separate review card, so each card carries its own detail and
  * there is nothing to confirm elsewhere. Selection state is not held here: the
  * parent owns `candidateUrl` and the picker reports clicks through `onSelect`.

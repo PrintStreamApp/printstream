@@ -33,7 +33,7 @@ test('STEP tessellation quality matches BambuStudio defaults', () => {
   // BambuStudio meshes STEP with an absolute 0.003mm chord error + 0.5 rad angular deflection
   // (load_step defaults in src/libslic3r/Format/STEP). occt loads STEP already scaled to mm, so
   // an absolute_value deflection of 0.003 applies the same chord error. Reverting to occt's
-  // null-params default (a 0.001 bounding-box ratio) re-introduces faceted curves — guard it.
+  // null-params default (a 0.001 bounding-box ratio) re-introduces faceted curves: guard it.
   assert.equal(STEP_TESSELLATION.linearUnit, 'millimeter')
   assert.equal(STEP_TESSELLATION.linearDeflectionType, 'absolute_value')
   assert.equal(STEP_TESSELLATION.linearDeflection, 0.003)
@@ -104,7 +104,7 @@ test('weldImportedMeshVertices drops triangles degenerate after welding', () => 
 
 /**
  * THE IMPORT PAINT CONTRACT. Triangle painting stores codes by triangle INDEX, so the mesh the
- * editor renders and the mesh the bake writes must agree on triangle order exactly — otherwise
+ * editor renders and the mesh the bake writes must agree on triangle order exactly, otherwise
  * painting an import marks the wrong facets, silently and without any error.
  *
  * Both sides read the stored `ImportedMesh.indices` in the same order: `meshToBinaryStl` (what the

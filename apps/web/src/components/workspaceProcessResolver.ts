@@ -9,8 +9,8 @@
  *
  * WHY IT IS A MODULE rather than three inline `apiFetch` calls: the request was being written out by
  * hand at three call sites, and one of them (`ProcessSettingsDialog`) also hand-mirrored the RESPONSE
- * as a local structural type. That mirror is the failure the root the development notes names — a field the
- * shared contract grows is silently dropped at a boundary that re-declares it — and it had already
+ * as a local structural type. That mirror is the failure the root the development notes names, a field the
+ * shared contract grows is silently dropped at a boundary that re-declares it, and it had already
  * started: `baselineOrigin` had to be added to the copy by hand before the dialog could see it.
  *
  * Counterpart: `POST /api/slicing/profiles/resolve-process` (apps/api `routes/slicing.ts`), which
@@ -25,7 +25,7 @@ import type { ProcessConfigResolver } from './ProcessSettingsDialog'
  *
  * `options.signal` is for the query-driven callers (per the web conventions, a query function passes
  * TanStack's signal through). It is a second OPTIONAL parameter rather than part of the request so
- * this stays structurally assignable to {@link ProcessConfigResolver} — the seam the dialog takes,
+ * this stays structurally assignable to {@link ProcessConfigResolver}: the seam the dialog takes,
  * which knows nothing about cancellation. `ProcessSettingsDialog` exercises that assignability by
  * calling `(resolveConfig ?? resolveWorkspaceProcessConfig)(…)`, so a drift is a compile error.
  */

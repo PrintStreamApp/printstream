@@ -132,7 +132,7 @@ export function SettingsView({
   const showsWorkspaceLogs = hasWorkspaceContext && canManageSettings
   const showsWorkspaceBridges = hasWorkspaceContext && canManageSettings && !managedBridge
   // Shown everywhere, unlike before. INSTALLING an engine is still self-hosted
-  // only — the slicer is shared, so one tenant's removal would break another's
+  // only: the slicer is shared, so one tenant's removal would break another's
   // slicing, and the API refuses it there. But choosing which engines this
   // workspace SHOWS is a per-workspace preference that matters most on the
   // hosted plan, where every version is installed and most workspaces want one.
@@ -172,7 +172,7 @@ export function SettingsView({
       ? 'full-width'
       : 'centered'
   // Saved printer views are offered as landing targets alongside the core
-  // pages. Fetched only while the General section is open — the rest of the
+  // pages. Fetched only while the General section is open: the rest of the
   // settings shell has no use for the list.
   const printerViewsQuery = usePrinterViewsQuery(visibleSubview === 'general' && hasWorkspaceContext)
   const landingPageOptionsWithViews = React.useMemo(
@@ -315,7 +315,7 @@ export function SettingsView({
 
           {/*
             Hidden where there is nothing to choose between. A self-hosted
-            workspace has exactly one destination, and the shell forces it — a
+            workspace has exactly one destination, and the shell forces it, a
             picker that silently loses every time is worse than no picker. The
             nav-order card below hides itself the same way, via its own empty
             option list.

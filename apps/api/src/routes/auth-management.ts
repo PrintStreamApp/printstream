@@ -1,13 +1,13 @@
 /**
  * Core auth management routes, provider-independent (they operate on identities,
  * roles, and sessions, not on how a user authenticates). Route families:
- * - `/me` — the current user's own profile (self-service, no manage permission).
- * - `/groups`, `/status` — roles/permission groups (view/create/edit/delete gated
+ * - `/me`: the current user's own profile (self-service, no manage permission).
+ * - `/groups`, `/status`: roles/permission groups (view/create/edit/delete gated
  *   by the matching `AUTH_ROLES_*` permission).
- * - `/users` — create/edit/delete users, assign roles, and view/revoke their
+ * - `/users`: create/edit/delete users, assign roles, and view/revoke their
  *   sessions (each gated by the matching `AUTH_USERS_*` permission).
- * - `/service-accounts` — issue/edit/revoke non-human API identities.
- * - `/session-policy` — deployment-wide session lifetime/idle policy.
+ * - `/service-accounts`: issue/edit/revoke non-human API identities.
+ * - `/session-policy`: deployment-wide session lifetime/idle policy.
  *
  * Two security invariants cut across the mutating routes:
  * - Privilege ceiling: an actor may not create, edit, or assign a user,
@@ -419,7 +419,7 @@ authManagementRouter.post('/users', requireAuthenticatedRequestPermission(AUTH_U
   // workspace admin holds `auth.roles.edit` and could grant one back to
   // themselves, so the restriction sits above workspace roles.
   //
-  // Assigning someone already IN the organisation is untouched — that is the
+  // Assigning someone already IN the organisation is untouched, that is the
   // day-to-day act this must not get in the way of.
   await assertWorkspaceMayAddPerson(workspaceId, email)
 
@@ -431,7 +431,7 @@ authManagementRouter.post('/users', requireAuthenticatedRequestPermission(AUTH_U
       groupIds
     })
     // A workspace member is a member of that workspace's organisation. Applied
-    // here, on the write, so the two can never disagree — and one-directional:
+    // here, on the write, so the two can never disagree, and one-directional:
     // this does not put anyone in a workspace, nor grant them any billing.
     await joinWorkspaceOrganisation(workspaceId, createdUserId)
 
@@ -898,7 +898,7 @@ function assertUserUpdatePermissions(
 /**
  * Describes a pending membership change, for the guards that must vet it.
  *
- * `nextGroupIds === undefined` means "not changing roles" — distinct from an
+ * `nextGroupIds === undefined` means "not changing roles": distinct from an
  * empty array, which means "remove every role".
  */
 interface MembershipChange {
@@ -912,9 +912,9 @@ interface MembershipChange {
  * their ability to sign in, or their existence.
  *
  * Computed ONCE and shared by both guards below. It used to be written out in
- * each of them — the same `nextGroupIds !== undefined && !memberships.some(...)`
+ * each of them, the same `nextGroupIds !== undefined && !memberships.some(...)`
  * expression, differing only in whether the admin key was read from a local
- * variable — so a fix to one (a group id from another workspace, a renamed admin
+ * variable, so a fix to one (a group id from another workspace, a renamed admin
  * key, a nested-group role) would have silently left the other on the old
  * behaviour, firing one guard and not the other on the same request.
  */

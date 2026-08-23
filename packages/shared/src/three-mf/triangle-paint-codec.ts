@@ -1,23 +1,23 @@
 /**
- * Bambu/PrusaSlicer TriangleSelector paint-tree CODEC — the string half of triangle painting.
+ * Bambu/PrusaSlicer TriangleSelector paint-tree CODEC: the string half of triangle painting.
  *
  * A painted triangle's 3MF attribute (`paint_supports`/`paint_seam`/`paint_color`) is a hex string
  * encoding a recursive split tree (TriangleSelector::serialize):
  * - The bitstream is read 4 bits per hex digit, LSB-first, digits consumed from the END of the
  *   string (FacetsAnnotation builds the string reversed).
  * - Each node: 2 bits split-side count. Leaves follow with 2 bits of state; state 3 (0b11) marks
- *   an extension — 4-bit chunks follow, each `15` adding 15, the final chunk (<15) completing
+ *   an extension: 4-bit chunks follow, each `15` adding 15, the final chunk (<15) completing
  *   `state = 3 + sum`. Split nodes follow with 2 bits special side, then their `splits + 1`
  *   children serialized in REVERSE child order.
  *
  * States are channel-dependent: supports/seam use 1 = enforcer, 2 = blocker; colour paint uses the
  * 1-BASED FILAMENT ID. State 0 is unpainted. That id-carrying colour channel is why this module
- * lives in the shared package: both the web editor (brush tools, viewport tinting — see the
+ * lives in the shared package: both the web editor (brush tools, viewport tinting: see the
  * geometric half in `apps/web/src/plugins/model-studio/lib/trianglePaintTree.ts`) and the bake
  * (`three-mf/bake-documents.ts`, which must re-key base-file paint when a save renumbers the
  * filament slots) read and write these codes, and two codecs would drift.
  *
- * The wire format is BambuStudio's — changing the encoding breaks every file in the field.
+ * The wire format is BambuStudio's: changing the encoding breaks every file in the field.
  */
 
 export type PaintTreeNode =
@@ -131,7 +131,7 @@ export function isPaintTreeEmpty(node: PaintTreeNode): boolean {
  * paint silently repoints at whatever material now sits at the old number. That is worse than
  * losing it: the model keeps its painted regions and quietly prints them in the wrong colour.
  *
- * A state the remap cannot translate — its material was removed by this save — becomes 0
+ * A state the remap cannot translate, its material was removed by this save, becomes 0
  * (unpainted), mirroring how every other seam drops a reference to a deleted material rather than
  * inventing a substitute. State 0 is already unpainted and is never remapped.
  *
@@ -180,7 +180,7 @@ export function remapColorPaintMap(
 /**
  * Rewrite every `paint_color` attribute in a model entry's XML through a filament-id remap.
  *
- * This is the bake's pass over BASE mesh content — parts the session never painted stream through
+ * This is the bake's pass over BASE mesh content: parts the session never painted stream through
  * the save byte-for-byte, so their codes still speak the OLD slot order and only a whole-entry
  * rewrite can catch them (session-touched parts are re-keyed upstream in the edit and then
  * overwrite whatever this wrote, so applying both is safe). A code whose paint empties out has its

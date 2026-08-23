@@ -201,7 +201,7 @@ function buildSoftAlertStyles(color: string) {
 }
 
 /**
- * Hover/keyboard-focus feedback for the app's selectable ROWS — menu items, select options,
+ * Hover/keyboard-focus feedback for the app's selectable ROWS: menu items, select options,
  * autocomplete options, list buttons.
  *
  * Joy's own plain-variant hover is a `neutral-800` fill, which on these dark palettes lands a few
@@ -222,7 +222,7 @@ const ROW_HOVER_STYLES = {
 /**
  * Cell padding for every `Table` in the app, by size.
  *
- * Joy's stock values are tighter than anything else we draw — a `size="sm"`
+ * Joy's stock values are tighter than anything else we draw, a `size="sm"`
  * table (our directory baseline) gives a row 4px of vertical padding and sits
  * its outermost cells 8px from the surrounding Sheet's border, so a table reads
  * as a denser block than the cards and lists beside it.
@@ -232,7 +232,7 @@ const ROW_HOVER_STYLES = {
  * so the row's content clears the container edge instead of hugging the border.
  * Without it, evening out the interior gaps alone still leaves both ends tight.
  *
- * Any table with a narrow fixed-width column has to budget for this — the outer
+ * Any table with a narrow fixed-width column has to budget for this: the outer
  * gutter eats into a fixed width, and Joy's tables are `table-layout: fixed`,
  * so an icon-only column sized to the old padding overflows its cell.
  */
@@ -324,7 +324,7 @@ export function createAppTheme(palette: PrintStreamThemePalette) {
             // Joy colors the 1px separator between grouped buttons with the
             // palette's OUTLINED border color regardless of the group's variant.
             // This theme's soft controls use a `${color}-700` background (see
-            // buildSoftControlStyles) — the same shade — so soft groups (split
+            // buildSoftControlStyles), the same shade, so soft groups (split
             // buttons, toolbars) lost their separators entirely. Pick a shade per
             // variant that contrasts with that variant's actual background.
             const shade = ownerState.variant === 'soft' ? 500 : ownerState.variant === 'solid' ? 700 : 600
@@ -545,7 +545,7 @@ export function createAppTheme(palette: PrintStreamThemePalette) {
             borderColor: 'var(--printstream-modal-dialog-border)',
             boxShadow: 'var(--printstream-surface-panel-shadow)',
             // The maximized / full-screen modes exist to escape the viewport clamp above, and Joy
-            // applies these styleOverrides AFTER `sx` — so a dialog cannot lift it from its own
+            // applies these styleOverrides AFTER `sx`, so a dialog cannot lift it from its own
             // styles at any specificity short of `!important`. `lib/dialogPresentation.ts` marks the
             // element instead and the exemption lives here, next to the rule it lifts. It also
             // clears Joy's own `layout="center"` caps, which are narrower still.

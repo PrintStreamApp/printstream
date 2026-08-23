@@ -8,8 +8,8 @@
  *
  * When that reassignment *fully drains* a disconnected sibling bridge (every one
  * of its printers now lives on the connected bridge), we treat it as the same
- * physical install returning under a new identity — the exact situation a
- * corrupt/reset state file produces — and re-home its bridge-owned library too.
+ * physical install returning under a new identity, the exact situation a
+ * corrupt/reset state file produces, and re-home its bridge-owned library too.
  * The files sit on the same disk at unchanged `storedPath`s, so only ownership
  * (`ownerBridgeId`) needs to move for them to become reachable again.
  */
@@ -87,10 +87,10 @@ export async function recoverBridgePrinterAssignments(input: {
   const supersededBridgeIds = new Set<string>()
   for (const printer of recoveredPrinters) {
     // Log a transfer that takes a printer off a *different* (disconnected) sibling
-    // bridge — this is the path that, on a spoofed/over-broad discovery snapshot,
+    // bridge, this is the path that, on a spoofed/over-broad discovery snapshot,
     // can flap ownership of a temporarily-offline sibling's printer. Logging keeps
     // the reassignment auditable/diagnosable. (Reachability-gating the transfer is
-    // deferred: it intersects the bridge-replacement re-pairing flow — rob-2.)
+    // deferred: it intersects the bridge-replacement re-pairing flow: rob-2.)
     if (printer.bridgeId && printer.bridgeId !== input.bridgeId) {
       supersededBridgeIds.add(printer.bridgeId)
       console.warn(`[bridge-recovery] reassigned printer ${printer.id} (serial ${printer.serial}) from bridge ${printer.bridgeId} to ${input.bridgeId} after rediscovery`)
@@ -111,8 +111,8 @@ export async function recoverBridgePrinterAssignments(input: {
  * Re-parents the bridge-owned library (files, folders, and archived versions)
  * from each disconnected sibling that this recovery *fully drained* onto the
  * connected bridge. Draining every printer off a sibling is our signal that the
- * connected bridge is that sibling's physical replacement, so its library — which
- * physically lives on the same disk under unchanged `storedPath`s — should follow.
+ * connected bridge is that sibling's physical replacement, so its library, which
+ * physically lives on the same disk under unchanged `storedPath`s, should follow.
  *
  * Gated on the sibling having zero printers left so a printer that merely roamed
  * between two live machines never drags an unrelated library with it.

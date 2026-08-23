@@ -2,7 +2,7 @@
  * Add a maintenance task the catalog does not cover.
  *
  * This is the escape hatch that keeps a printer usable before its model reaches
- * the catalog — a machine released after this build falls back to the generic
+ * the catalog, a machine released after this build falls back to the generic
  * schedule, and anything specific to it gets added here rather than waiting for
  * an update. It also covers a shop's own routines, which Bambu will never
  * publish.

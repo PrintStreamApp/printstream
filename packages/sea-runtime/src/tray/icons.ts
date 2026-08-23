@@ -5,7 +5,7 @@
  * multi-size ICO for the Windows NotifyIcon and the Add/Remove Programs entry.
  * The ICO is hand-assembled (32bpp BGRA, bottom-up, with the 1bpp AND mask each
  * entry requires) because GDI+ `new Icon()` rejects the mask-less ICOs some
- * encoders emit — which made the brand icon silently fall back to a generic one.
+ * encoders emit, which made the brand icon silently fall back to a generic one.
  */
 import { mkdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'

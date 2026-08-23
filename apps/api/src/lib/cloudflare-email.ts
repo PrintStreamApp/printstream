@@ -43,7 +43,7 @@ export function isCloudflareEmailConfigured(): boolean {
   try {
     return readCloudflareEmailConfig() != null
   } catch {
-    // Partial config (some vars set, others missing) — treat as not configured.
+    // Partial config (some vars set, others missing): treat as not configured.
     return false
   }
 }

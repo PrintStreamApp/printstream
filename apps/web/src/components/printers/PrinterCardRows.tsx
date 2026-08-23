@@ -167,7 +167,7 @@ export function AmsUnitRow({
       <Stack direction="row" justifyContent="space-between" alignItems="center" spacing={1}>
         <Stack direction="row" spacing={0.5} alignItems="center" sx={{ minWidth: 0 }}>
           {/* Truncate the unit label rather than letting it wrap under the
-              readouts — narrow (single-slot) unit cards have no vertical room. */}
+              readouts: narrow (single-slot) unit cards have no vertical room. */}
           <Typography level="body-xs" textColor="text.tertiary" noWrap>AMS {amsUnitLetter(unit.unitId)}</Typography>
         </Stack>
         <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minHeight: '1rem', flexShrink: 0 }}>
@@ -184,7 +184,7 @@ export function AmsUnitRow({
             <Tooltip
               variant="outlined"
               size="sm"
-              title={`Humidity level ${unit.humidityLevel}/5 — ${humidityLevelLabel(unit.humidityLevel)} (older AMS units do not report a percentage).`}
+              title={`Humidity level ${unit.humidityLevel}/5: ${humidityLevelLabel(unit.humidityLevel)} (older AMS units do not report a percentage).`}
             >
               <Typography level="body-xs" textColor="text.tertiary" noWrap>
                 {`Lv ${unit.humidityLevel}/5`}
@@ -425,7 +425,7 @@ export function AmsUnitRow({
                     level="body-xs"
                     sx={{ color: textColor, fontWeight: 'md' }}
                   >
-                    —
+,
                   </Typography>
                 )}
                 {/* Thin rounded remaining bar across the bottom; the fill

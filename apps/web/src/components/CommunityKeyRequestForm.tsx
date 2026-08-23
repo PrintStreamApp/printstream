@@ -2,7 +2,7 @@
  * Getting the free community key without leaving the install.
  *
  * Enforcement reaches the Docker/OSS build, and the only route to the free key
- * it accepts used to run through a signed-in account on the vendor's site —
+ * it accepts used to run through a signed-in account on the vendor's site,
  * asking someone who self-hosts, often precisely to avoid a vendor account, to
  * register in order to keep printing. This asks for an address and nothing
  * else.
@@ -11,7 +11,7 @@
  * could act on one. A licensed install has nothing to request, and a member who
  * cannot install a key cannot use one either.
  *
- * The request goes to the SERVER, which relays it — the browser may be on a
+ * The request goes to the SERVER, which relays it: the browser may be on a
  * segment with no route out while the machine running PrintStream is not. The
  * paste box above stays for exactly that case: an install with no egress, whose
  * operator fetches a key from another device.
@@ -45,7 +45,7 @@ export function CommunityKeyRequestForm() {
           <Typography level="body-sm">{`Sent to ${sentTo}.`}</Typography>
           <Typography level="body-xs" textColor="text.tertiary">
             Paste the key above when it arrives. We also kept it on an account for that address, so
-            you can sign in at printstream.app later to find it again or upgrade — there is no
+            you can sign in at printstream.app later to find it again or upgrade, there is no
             password to set and nothing else to do.
           </Typography>
         </Stack>
@@ -78,7 +78,7 @@ export function CommunityKeyRequestForm() {
         </Button>
       </Stack>
       {/* The same agreement the vendor's own form takes, asked here because
-          this is where the person is. The API requires it too — a client that
+          this is where the person is. The API requires it too, a client that
           forgets it must fail rather than agree on someone's behalf. */}
       <Checkbox
         size="sm"

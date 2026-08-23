@@ -4,10 +4,10 @@
  * recorder that receives a small attribution sample for each completed
  * workspace-scoped API request; {@link installFeatureUsageCapture} feeds it.
  * Self-hosted/OSS builds register nothing, so the middleware passes requests
- * through untouched — exactly like the plugin plan-gate registry this mirrors.
+ * through untouched, exactly like the plugin plan-gate registry this mirrors.
  *
  * Contract: recording is strictly best-effort and must never affect request
- * handling — the recorder is invoked after the response has finished, a
+ * handling: the recorder is invoked after the response has finished, a
  * recorder error is logged and swallowed, and the sample deliberately carries
  * no body, query, or header data (attribution only: who-ish, where, outcome).
  * Which samples *mean* anything (mutations vs reads, which paths map to which
@@ -19,7 +19,7 @@ export interface FeatureUsageSample {
   workspaceId: string
   actorType: 'user' | 'service-account'
   method: string
-  /** The request path as received (`request.path`) — not the matched route pattern. */
+  /** The request path as received (`request.path`), not the matched route pattern. */
   path: string
   statusCode: number
 }
@@ -28,7 +28,7 @@ export type FeatureUsageRecorder = (sample: FeatureUsageSample) => void
 
 let recorder: FeatureUsageRecorder | null = null
 
-/** Register the deployment's recorder (pass null to clear — tests only). */
+/** Register the deployment's recorder (pass null to clear: tests only). */
 export function registerFeatureUsageRecorder(next: FeatureUsageRecorder | null): void {
   recorder = next
 }

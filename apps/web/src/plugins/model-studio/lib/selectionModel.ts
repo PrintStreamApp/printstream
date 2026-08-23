@@ -2,7 +2,7 @@
  * Pure selection rules for the editor's multi-select, mirroring BambuStudio's
  * object-list semantics:
  *
- * - The selection holds whole objects OR parts (volumes), never a mix — picking one
+ * - The selection holds whole objects OR parts (volumes), never a mix: picking one
  *   kind converts the selection to that kind (BambuStudio `Selection::add` resets
  *   rather than mixing modes).
  * - Parts multi-select only WITHIN one object: toggling a part of a different object
@@ -12,9 +12,9 @@
  *   (the anchor) to the target, replacing the previous selection but keeping the
  *   anchor as the primary.
  *
- * Parts are keyed geometry-level (`objectId` + the part's ORDINAL `partIndex`) — the same
+ * Parts are keyed geometry-level (`objectId` + the part's ORDINAL `partIndex`), the same
  * identity used by filament reassignment, part-type changes, and per-part process
- * overrides — so a part selection means "this part on every instance of the object".
+ * overrides, so a part selection means "this part on every instance of the object".
  */
 
 /** Selected parts of ONE object (BambuStudio volume-mode selection). */

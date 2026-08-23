@@ -13,7 +13,7 @@ test('broadcastLibraryChangedDebounced coalesces a warm burst into one broadcast
     seen.push({ type: event.type, workspaceId })
   }) as typeof wsBroadcaster.broadcast
   try {
-    // A listing with several stale rows lands several warms back to back — the exact burst
+    // A listing with several stale rows lands several warms back to back: the exact burst
     // this exists to coalesce, because each broadcast refetches every client's library list.
     broadcastLibraryChangedDebounced('workspace-a', 30)
     broadcastLibraryChangedDebounced('workspace-a', 30)

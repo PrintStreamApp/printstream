@@ -19,7 +19,7 @@ import yauzl, { type Entry, type ZipFile } from 'yauzl'
  *
  * Entry paths are resolved against the destination and rejected if they escape
  * it. The archive comes from a checksum-pinned download, so a traversal entry
- * would mean the pin was already defeated — but an extractor that writes outside
+ * would mean the pin was already defeated, but an extractor that writes outside
  * its target on request is the wrong thing to have in the tree regardless.
  */
 export function extractZip(zipPath: string, destination: string): Promise<void> {

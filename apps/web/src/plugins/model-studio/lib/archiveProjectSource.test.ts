@@ -8,7 +8,7 @@ import { createArchiveProjectSource } from './editorProjectSource'
  *
  * What these pin is the SHARING, not the parsing (`localProjectPipeline.test.ts` covers that): the
  * source is handed to several independent React Query readers that call it concurrently and abort
- * independently, and getting that wrong is expensive in a way types cannot catch — a per-read
+ * independently, and getting that wrong is expensive in a way types cannot catch, a per-read
  * download would re-fetch a 21MB archive four or five times per open, and a cached rejection would
  * make a project permanently unopenable after one dropped request.
  */
@@ -33,7 +33,7 @@ function archiveBytes(): Uint8Array {
     '3D/3dmodel.model': strToU8(MODEL_XML),
     'Metadata/model_settings.config': strToU8(MODEL_SETTINGS_XML),
     // A plate thumbnail, because that is the ONLY read served off the source's live archive rather
-    // than through the shared open() — and therefore the only one a disposal bug can break.
+    // than through the shared open(), and therefore the only one a disposal bug can break.
     'Metadata/plate_1.png': new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
     'Metadata/project_settings.config': strToU8(JSON.stringify({
       filament_type: ['PLA'],
@@ -104,7 +104,7 @@ test('later reads reuse the archive rather than re-downloading it', async () => 
 })
 
 /**
- * React runs effect cleanups spuriously — StrictMode remounts every component in dev — so the
+ * React runs effect cleanups spuriously, StrictMode remounts every component in dev, so the
  * caller's `dispose()` fires on a source that is still in use. The first cut latched a permanent
  * `disposed` flag, which broke ONLY plate thumbnails (everything else resolves through the shared
  * open()) and ONLY in dev: the strip showed loading spinners forever on a project whose plates all

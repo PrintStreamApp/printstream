@@ -12,7 +12,7 @@ import { machineSettingsCatalog } from './machine-settings.js'
  * both plurals stripped; removing only the trailing one left `coFloatsOrPercent`, matched no case,
  * and fell through to `string`. A key typed `string` loses BOTH things that matter here: its
  * `default` (so `applyProcessConfigDefaults` cannot fill it, and a preset that omits the key reads
- * as "changed" against a project that sets it — the dialog flagged it, reset landed on the same
+ * as "changed" against a project that sets it: the dialog flagged it, reset landed on the same
  * value, and the marker cleared) and its percent-aware comparator (so "50" and "50%" compare
  * unequal).
  */
@@ -81,7 +81,7 @@ test('every option a catalog LAYS OUT carries a label', () => {
   // unnamed number boxes on Motion ability (the limits define only `def->full_label`, which the
   // parser was dropping) and a nameless switch for `spaghetti_detector`, which BambuStudio has
   // commented out of both PrintConfig.cpp and its printer tab. Options the catalog carries but
-  // never lays out are exempt — they exist for the conditional engine to read, not to render.
+  // never lays out are exempt, they exist for the conditional engine to read, not to render.
   for (const [name, catalog] of [
     ['process', processSettingsCatalog],
     ['filament', filamentSettingsCatalog],

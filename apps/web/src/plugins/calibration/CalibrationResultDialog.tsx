@@ -2,8 +2,8 @@
  * Result entry + save for a printed calibration run. The user reports the
  * measurement (best band height for a tower, smoothest patch for a flow plate),
  * sees the computed value, then chooses how widely to save it: to this spool, or
- * to a filament identity (toggle which fields must match), and — for pressure
- * advance — optionally straight to the printer's own K profile.
+ * to a filament identity (toggle which fields must match), and, for pressure
+ * advance, optionally straight to the printer's own K profile.
  *
  * One button does everything: it always submits the CURRENT form measurement and
  * then saves, so the previewed value and the saved value can never diverge. (A
@@ -49,8 +49,8 @@ export const CalibrationResultDialog = memo(function CalibrationResultDialog({ r
 
   const save = useMutation({
     mutationFn: async () => {
-      // Always submit the measurement currently on screen before saving — never trust a
-      // previously recorded one — so the previewed value is the one that gets saved.
+      // Always submit the measurement currently on screen before saving, never trust a
+      // previously recorded one, so the previewed value is the one that gets saved.
       await submitCalibrationMeasurement(run.id, {
         measurement: run.parameters.kind === 'flowRatio'
           ? { kind: 'flowRatio', selectedOffset: offset }
@@ -63,7 +63,7 @@ export const CalibrationResultDialog = memo(function CalibrationResultDialog({ r
       void invalidate()
       void queryClient.invalidateQueries({ queryKey: calibrationKeys.results })
       // Saving with `applyToPrinter` writes a K profile onto the printer itself, which
-      // the AMS slot editor lists — and that editor is usually still open behind this
+      // the AMS slot editor lists, and that editor is usually still open behind this
       // dialog, since the wizard is launched from the slot's own menu. Without this it
       // kept showing the pre-run list, so the profile the user just made looked like it
       // had not been created. Only refreshes THIS browser; a second client still needs
@@ -74,7 +74,7 @@ export const CalibrationResultDialog = memo(function CalibrationResultDialog({ r
       toast.success('Calibration saved')
       onClose()
     }
-    // Errors surface once via the global mutation error handler (main.tsx) — no local onError toast.
+    // Errors surface once via the global mutation error handler (main.tsx), no local onError toast.
   })
 
   const [applyToPrinter, setApplyToPrinter] = useState(!isFlow)
@@ -107,7 +107,7 @@ export const CalibrationResultDialog = memo(function CalibrationResultDialog({ r
             </DialogSection>
 
             <DialogSection title="Save for" description="Reused automatically the next time this filament is loaded on a printer of the same model.">
-              {/* Only offer the scope radios when there is a real choice — a run tied to a spool can save
+              {/* Only offer the scope radios when there is a real choice, a run tied to a spool can save
                   just for that spool or for any matching filament. Without a spool the only option is
                   matching filament, so a one-option radio group would just be noise: show the match
                   fields directly instead. */}
@@ -139,7 +139,7 @@ export const CalibrationResultDialog = memo(function CalibrationResultDialog({ r
                     variant="soft"
                     placement="top"
                     sx={{ maxWidth: 280 }}
-                    title="Writes this K value into a pressure-advance profile on the printer itself and selects it, so it is applied even for prints you start outside PrintStream (from the printer, Bambu Studio, or Handy). Leave it off to keep the value in PrintStream only — it is still applied automatically whenever PrintStream starts a print with this filament."
+                    title="Writes this K value into a pressure-advance profile on the printer itself and selects it, so it is applied even for prints you start outside PrintStream (from the printer, Bambu Studio, or Handy). Leave it off to keep the value in PrintStream only, it is still applied automatically whenever PrintStream starts a print with this filament."
                   >
                     <IconButton size="sm" variant="plain" color="neutral" aria-label="What does saving to the printer's own K profile do?">
                       <HelpOutlineRoundedIcon fontSize="small" />

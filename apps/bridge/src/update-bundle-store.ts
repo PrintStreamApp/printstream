@@ -7,7 +7,7 @@
  * fragment's identity env from it). Bundles are published gzipped; the
  * manifest's `sha256`/`sizeBytes`/`signature` describe the DECOMPRESSED file
  * (same convention as the standalone binaries), so verification happens after
- * gunzip. No zip extraction, no node_modules symlink — the bundle carries
+ * gunzip. No zip extraction, no node_modules symlink: the bundle carries
  * everything, which is what makes this revival safe where the old dist-tree
  * scheme was not.
  */

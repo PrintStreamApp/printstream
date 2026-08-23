@@ -6,7 +6,7 @@ import { retargetProjectSettingsToMachine } from './machine-retarget.js'
  * BambuStudio refuses to OPEN a project whose `filament_self_index` does not have exactly one
  * entry per `filament_extruder_variant` row (PresetBundle.cpp, gated on `extruder_variant_list`):
  * it throws "Invalid configuration file" in the GUI. The CLI is more tolerant, which is why this
- * went unnoticed — files sliced happily and could not be opened in Bambu Studio.
+ * went unnoticed: files sliced happily and could not be opened in Bambu Studio.
  *
  * The absent case is NOT benign: the option's default is a 1-element vector, so a missing key
  * compares as size 1 and fails the equality check for any real multi-variant machine.
@@ -34,7 +34,7 @@ test('a retarget writes filament_self_index alongside filament_extruder_variant'
   const out = retarget(['PLA', 'PETG'])
   const variants = out.filament_extruder_variant as string[]
   const selfIndex = out.filament_self_index as string[]
-  assert.ok(Array.isArray(selfIndex), 'filament_self_index must be written — its absence reads as size 1 to BambuStudio')
+  assert.ok(Array.isArray(selfIndex), 'filament_self_index must be written, its absence reads as size 1 to BambuStudio')
   assert.equal(selfIndex.length, variants.length, 'BambuStudio requires one index entry per variant row')
   assert.ok(variants.length >= 2, 'and at least one row per filament')
   // 1-based, grouped per filament: BambuStudio scans for the FIRST row matching each id.
@@ -79,7 +79,7 @@ test('an ordinary save does NOT silently repair an existing broken project', asy
   const { applyFilamentList } = await import('./three-mf/bake-documents.js')
   // Deliberate: repairing a stored project is a USER action, surfaced by `needsSettingsRepair` and
   // invoked from the editor banner. Healing at rest would mutate someone's file without their
-  // say-so and make the next such defect undiagnosable — the same rule the flush matrix follows.
+  // say-so and make the next such defect undiagnosable, the same rule the flush matrix follows.
   const after = JSON.parse(applyFilamentList(BROKEN_H2D_PROJECT, [
     { color: '#FFFFFF', type: 'PLA', sourceIndex: 0 },
     { color: '#000000', type: 'PLA', sourceIndex: 1 }
@@ -102,6 +102,6 @@ test('the defect is DETECTED, so the user can be asked to repair it', async () =
 test('a project with no variant topology is not flagged at all', async () => {
   const { inspectProjectFilamentSelfIndex } = await import('./filament-variant-index.js')
   // No `extruder_variant_list` means BambuStudio never runs the check, so there is nothing to
-  // report — flagging it would send users to a repair that changes nothing.
+  // report: flagging it would send users to a repair that changes nothing.
   assert.equal(inspectProjectFilamentSelfIndex(JSON.stringify({ filament_type: ['PLA'], filament_colour: ['#FFFFFF'] })), null)
 })

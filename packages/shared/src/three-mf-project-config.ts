@@ -1,7 +1,7 @@
 /**
  * Extracts a 3MF project's embedded PROCESS and per-FILAMENT config from its flattened
- * `Metadata/project_settings.config` (a fully-merged JSON record). Pure — a parsed record in, a
- * structured result out — so both surfaces run it: the API's workspace resolve routes
+ * `Metadata/project_settings.config` (a fully-merged JSON record). Pure, a parsed record in, a
+ * structured result out, so both surfaces run it: the API's workspace resolve routes
  * (`resolveProjectProcessConfig` / `resolveProjectFilamentConfig`) read the file server-side, and the
  * public 3MF editor runs it over the archive it unzipped in the browser (no server copy exists there).
  *
@@ -24,7 +24,7 @@ export interface ProjectProcessConfig {
   /** Process keys the 3MF records as changed from system (`different_settings_to_system[0]`). */
   overriddenKeys: string[]
   /**
-   * Whether the file CARRIES a changed-from-system record for this slot at all — which makes
+   * Whether the file CARRIES a changed-from-system record for this slot at all, which makes
    * {@link overriddenKeys} authoritative, including when it is empty ("nothing was changed").
    *
    * Distinct from `overriddenKeys.length === 0`, and the distinction is the whole point: a 3MF
@@ -35,8 +35,8 @@ export interface ProjectProcessConfig {
 }
 
 /**
- * Parses the process slot (index 0) of Bambu's `different_settings_to_system` — a `;`-separated list
- * of keys changed from the system preset — keeping only keys known to the process catalog.
+ * Parses the process slot (index 0) of Bambu's `different_settings_to_system`, a `;`-separated list
+ * of keys changed from the system preset, keeping only keys known to the process catalog.
  */
 /**
  * Whether `different_settings_to_system` carries an entry for the PROCESS slot. An entry of `""`
@@ -88,7 +88,7 @@ export interface ProjectFilamentConfig {
   presetName: string | null
   /** Filament keys the 3MF records as changed from system for this slot. */
   overriddenKeys: string[]
-  /** See {@link ProjectProcessConfig.declaresOverrides} — same contract, per filament slot. */
+  /** See {@link ProjectProcessConfig.declaresOverrides}: same contract, per filament slot. */
   declaresOverrides: boolean
 }
 
@@ -117,7 +117,7 @@ export function extractFilamentOverriddenKeys(value: unknown, projectFilamentId:
  * `project_settings.config`, at the given 1-based filament slot. BambuStudio stores each per-filament
  * setting as a parallel array keyed by 0-based slot, so the slot's value is `array[projectFilamentId
  * - 1]`; a bare scalar (rare) applies to all slots. VARIANT EXPANSION (BambuStudio 2.x): on machines
- * with extruder variants the numeric settings are `filaments x variants` long — slot i owns the
+ * with extruder variants the numeric settings are `filaments x variants` long: slot i owns the
  * V-wide block at i*V (V read from `filament_extruder_variant` over the identity-array filament
  * count). Such a slot's value is kept as that VECTOR, matching the per-variant shape an installed
  * preset resolves to on the same machine, so downstream scalarize/shape handling treats both sides
@@ -129,7 +129,7 @@ export function extractProjectFilamentConfig(projectSettings: unknown, projectFi
   if (!Number.isInteger(projectFilamentId) || projectFilamentId < 1) return null
   const record = projectSettings as Record<string, unknown>
   const slot = projectFilamentId - 1
-  // Filament count from the IDENTITY arrays only — the numeric arrays can be variant-expanded, and
+  // Filament count from the IDENTITY arrays only: the numeric arrays can be variant-expanded, and
   // on already-diseased files (a pre-variant-aware save) even stale-length; identity is what the
   // save path rewrites authoritatively.
   const filamentCount = Math.max(
@@ -137,7 +137,7 @@ export function extractProjectFilamentConfig(projectSettings: unknown, projectFi
     Array.isArray(record.filament_colour) ? record.filament_colour.length : 0,
     Array.isArray(record.filament_type) ? record.filament_type.length : 0
   )
-  // A slot the project does not have carries no project config — say so rather than reading past the
+  // A slot the project does not have carries no project config: say so rather than reading past the
   // end. The variant branch below slices, and an out-of-range slice is `[]` whose `.every()` is
   // vacuously true, so every variant-expanded key was written as an empty array and then read as a
   // change against the preset (a 4th material on a 3-filament project reported 39 of them).
@@ -152,7 +152,7 @@ export function extractProjectFilamentConfig(projectSettings: unknown, projectFi
       const width = filamentKeyWidth(key, variantCount)
       if (width > 1 && value.length === filamentCount * width) {
         const block = value.slice(slot * width, (slot + 1) * width)
-        // `[].every()` is vacuously true — an empty block means the array is shorter than the slot
+        // `[].every()` is vacuously true, an empty block means the array is shorter than the slot
         // claims, which is absence, not an empty value.
         if (block.length > 0 && block.every((entry): entry is string => typeof entry === 'string')) config[key] = block
         continue

@@ -100,7 +100,7 @@ test('getSelectedTrayWarningMessages: warns when the printer reports no storage 
   assert.equal(withoutStorage.length, 1)
   assert.match(withoutStorage[0] ?? '', /no storage/)
 
-  // Unknown (null) storage state must NOT warn — the printer simply has not reported yet.
+  // Unknown (null) storage state must NOT warn: the printer simply has not reported yet.
   const unknownStorage = getSelectedTrayWarningMessages({
     mapping: [],
     trayByMappingValue: new Map(),
@@ -114,7 +114,7 @@ test('a single-plate project does not get a "Plate 1" suffix it cannot be distin
   // Numbering one plate out of one distinguishes nothing; it just makes every sliced file noisier.
   assert.equal(buildSlicedPlateLabel(null, 1, 1), null)
   assert.equal(buildSlicedOutputFileName('Test.3mf', { plateNumber: 1, plateCount: 1 }), 'Test.gcode.3mf')
-  // A NAMED plate still shows even as the only one — the user named it, so it carries information
+  // A NAMED plate still shows even as the only one: the user named it, so it carries information
   // a bare number does not.
   assert.equal(buildSlicedPlateLabel('Left half', 1, 1), 'Left half')
   assert.equal(buildSlicedOutputFileName('Test.3mf', { plateName: 'Left half', plateNumber: 1, plateCount: 1 }), 'Test - Left half.gcode.3mf')
@@ -159,7 +159,7 @@ test('an AMS behind a Filament Track Switch stays available to both nozzles', ()
     nozzles: [{ extruderId: 0 }, { extruderId: 1 }],
     externalSpools: [],
     // Unit 0 is wired straight to nozzle 0; unit 1 reaches BOTH through switch input A, even though
-    // its reported nozzleId still says 0 — a stale binding the switch has made meaningless.
+    // its reported nozzleId still says 0, a stale binding the switch has made meaningless.
     ams: [unit(0), unit(1, { switchInput: 'A' })]
   } as never
 

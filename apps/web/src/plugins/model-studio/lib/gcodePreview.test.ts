@@ -109,7 +109,7 @@ test('parseGcodeLayers interpolates G2/G3 arc moves into segments on the arc', (
 })
 
 test('parseGcodeLayers keeps a Z-changing (helical) arc on a single layer, not one per sub-segment', () => {
-  // A spiral arc whose Z rises across the sweep — previously each interpolated sub-segment bumped
+  // A spiral arc whose Z rises across the sweep: previously each interpolated sub-segment bumped
   // the layer counter, exploding layerCount. It should count as one layer (keyed off the move).
   const gcode = [
     'G90', 'M82',
@@ -326,7 +326,7 @@ test('buildLayeredGcodePreview allocates exact-size quantized buffers', () => {
   const normals = geometry.getAttribute('normal') as THREE.BufferAttribute
   const colors = geometry.getAttribute('color') as THREE.BufferAttribute
   const index = geometry.getIndex()!
-  // The backing ArrayBuffers are trimmed to what welding/caps actually used — the previous
+  // The backing ArrayBuffers are trimmed to what welding/caps actually used: the previous
   // worst-case allocation (4 rings per segment) retained the full oversized buffers on
   // dense plates via subarray views.
   assert.equal((positions.array as Float32Array).buffer.byteLength, positions.count * 3 * 4)
@@ -341,7 +341,7 @@ test('buildLayeredGcodePreview allocates exact-size quantized buffers', () => {
 
 test('buildLayeredGcodePreview precomputes bounds so freed CPU arrays are never re-read', () => {
   // The renderer frees the CPU arrays after upload (onUpload); its sort pass lazily
-  // computes a null boundingSphere in the SAME frame, after the free — so the builder
+  // computes a null boundingSphere in the SAME frame, after the free, so the builder
   // must leave every geometry with bounds already computed.
   const gcode = [
     'G90', 'M82',
@@ -452,14 +452,14 @@ test('parseGcodeDuration formats via the header regex: hours and days', () => {
  * Winding, checked as pure geometry with no GPU involved.
  *
  * Each triangle's GEOMETRIC normal (from its vertex order) must agree with the OUTWARD normal the
- * builder authored per vertex — `pushVertex` is given an explicit outward direction, so the two
+ * builder authored per vertex: `pushVertex` is given an explicit outward direction, so the two
  * agreeing is exactly "this triangle is wound front-side out". That invariant holds for any path
  * shape; an earlier cut of this compared against the solid's centre instead, which is only valid
  * for a CONVEX solid and reported false failures the moment the path turned a corner.
  *
  * It matters because the mesh was drawn `side: DoubleSide`, shading BOTH faces of all 2.6M
  * triangles (measured on a real plate) for back faces a closed bead can never show. Culling them
- * is free only if the winding is consistent — which DoubleSide let us never establish.
+ * is free only if the winding is consistent, which DoubleSide let us never establish.
  */
 function windingReport(geometry: THREE.BufferGeometry): { total: number; inward: number } {
   const position = geometry.getAttribute('position')
@@ -506,7 +506,7 @@ test('every bead triangle faces outward, so back-face culling is safe', () => {
 })
 
 test('winding holds through a welded joint and a direction reversal', () => {
-  // A corner welds two segments (shared ring) and reverses direction — the cases where a
+  // A corner welds two segments (shared ring) and reverses direction: the cases where a
   // hand-rolled winding is most likely to flip.
   // E is ABSOLUTE here, so each move must raise it or the parser reads a travel and the corner
   // never gets built (the first cut of this test silently checked one straight segment).
@@ -543,7 +543,7 @@ function drawnTriangles(preview: ReturnType<typeof buildLayeredGcodePreview>): S
 
 // The bead is split into one mesh PER LAYER so three can sort them front-to-back (`painterSortStable`
 // orders opaque objects by ascending camera z, which lets early-Z discard buried fragments). A
-// single mesh drew layer 0 first — back-to-front for a top-down camera — so every layer was shaded
+// single mesh drew layer 0 first, back-to-front for a top-down camera, so every layer was shaded
 // and then painted over. The split must not change WHICH triangles are drawn, only their order.
 test('the layer split draws one mesh per layer and nothing else changes', () => {
   const parsed = parseGcodeLayers([
@@ -556,7 +556,7 @@ test('the layer split draws one mesh per layer and nothing else changes', () => 
   const meshes = preview.object.children.filter((c) => (c as unknown as { isMesh?: boolean }).isMesh)
   assert.equal(meshes.length, 3, 'one mesh per layer')
 
-  // Each layer's bounds must be its OWN, not the whole print's — the trap when geometries share a
+  // Each layer's bounds must be its OWN, not the whole print's: the trap when geometries share a
   // position buffer, because computeBoundingSphere would read all of it and cull nothing.
   const zs = meshes.map((m) => (m as THREE.Mesh).geometry.boundingBox!.min.z)
   assert.deepEqual([...zs].sort((a, b) => a - b), zs, 'layer bounds ascend with Z')
@@ -583,7 +583,7 @@ test('scrubbing hides upper layers and truncates the top one, as the single mesh
   assert.ok(bottomOnly.size > 0 && bottomOnly.size < both.size, 'hiding the top layer draws less')
   for (const triangle of bottomOnly) assert.ok(both.has(triangle), 'and draws a SUBSET, not different geometry')
 
-  // `single` shows only the top layer — disjoint from the bottom-only set.
+  // `single` shows only the top layer: disjoint from the bottom-only set.
   preview.setVisibleLayers(1, { single: true })
   const topOnly = drawnTriangles(preview)
   assert.ok(topOnly.size > 0)

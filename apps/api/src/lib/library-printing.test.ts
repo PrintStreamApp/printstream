@@ -110,7 +110,7 @@ test('validateLibraryPrint runs the pre-flight checks but never dispatches', asy
   let dispatched = false
   printDispatcher.enqueueSnapshotPrint = (async () => { dispatched = true; return makeJob() }) as typeof printDispatcher.enqueueSnapshotPrint
 
-  await validateLibraryPrint(makePrintInput(), 'workspace-1') // resolves — all checks pass
+  await validateLibraryPrint(makePrintInput(), 'workspace-1') // resolves, all checks pass
   assert.equal(dispatched, false) // ...and it never starts a real print
 })
 
@@ -159,7 +159,7 @@ test('library print carries the printed file\'s re-slice provenance onto the dis
 
 test('library print takes the re-slice provenance from the file it actually dispatches', async () => {
   // A disconnected owner makes this substitute a duplicate on a connected bridge. That copy is a
-  // different file with its own history, so the provenance must follow the substitution — reading
+  // different file with its own history, so the provenance must follow the substitution: reading
   // it off the requested file would attribute one project's settings to another file's bytes.
   prisma.libraryFile.findFirst = ((async () => makeLibraryFile({
     id: 'old-file',

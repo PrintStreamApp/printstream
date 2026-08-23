@@ -8,8 +8,8 @@
  * the verdict. The check is best-effort: any network/registry failure degrades
  * to an `unknown` status and never throws into a request path.
  *
- * The request path (`getAppUpdateInfo`) is non-blocking — it returns the cached
- * verdict and kicks a background refresh when stale — so the footer endpoint
+ * The request path (`getAppUpdateInfo`) is non-blocking, it returns the cached
+ * verdict and kicks a background refresh when stale, so the footer endpoint
  * stays fast even on the first hit.
  */
 import { type AppUpdateInfo, type AppUpdateStatusValue } from '@printstream/shared'

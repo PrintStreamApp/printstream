@@ -3,7 +3,7 @@
  * item followed by the printer's loaded materials, grouped by AMS unit and rendered with the
  * remaining-quantity badge (`LoadedMaterialOptionLabel`).
  *
- * Owned as one component because the two triggers must offer the SAME choices in the same order —
+ * Owned as one component because the two triggers must offer the SAME choices in the same order:
  * the material row's swatch (assign a loaded material to an existing slot) and the Materials
  * header's Add button (create a slot from a loaded material). They diverged when the Add button
  * could only open the manual dialog, so a user with a loaded AMS had to name a preset by hand for a
@@ -29,7 +29,7 @@ export interface LoadedMaterialMenuSource {
 
 export function LoadedMaterialMenuItems({ loaded, manualLabel, onChooseManually, selectedMaterialOptionId }: {
   loaded: LoadedMaterialMenuSource
-  /** Wording for the manual item — the two triggers assign vs create, so they word it differently. */
+  /** Wording for the manual item: the two triggers assign vs create, so they word it differently. */
   manualLabel: string
   onChooseManually: () => void
   /** Ticks the row already assigned to this slot; absent when creating a new one. */

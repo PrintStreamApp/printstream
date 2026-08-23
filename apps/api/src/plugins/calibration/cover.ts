@@ -72,7 +72,7 @@ function draw(kind: CalibrationKind): Canvas {
 
   if (kind === 'pressureAdvance') {
     // A tall column with a rounded top, split-shaded for a lit-from-right look, banded across its
-    // height (the K steps) with a seam line down the right side — a pressure-advance tower.
+    // height (the K steps) with a seam line down the right side, a pressure-advance tower.
     const left = s(190)
     const right = s(322)
     const top = s(96)
@@ -87,7 +87,7 @@ function draw(kind: CalibrationKind): Canvas {
     // Seam line just inside the right edge.
     c.roundedRect(right - s(16), top + s(14), right - s(10), bottom - s(8), 0, INK, 120)
   } else {
-    // A 3x3 grid of tiles on a plate — a flow-ratio plate. A faint per-tile brightness ramp hints at
+    // A 3x3 grid of tiles on a plate, a flow-ratio plate. A faint per-tile brightness ramp hints at
     // the range of flow values being compared.
     c.roundedRect(s(120), s(150), s(392), s(392), s(24), ACCENT_DARK, 90)
     const tile = s(66)

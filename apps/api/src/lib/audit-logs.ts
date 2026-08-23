@@ -165,7 +165,7 @@ export function annotateRequestAuditLog(
  * The safety gates a print request may deliberately bypass, as audit metadata.
  *
  * Every one of these means the user was SHOWN a reason not to print and chose to anyway, so the
- * durable trail is the only place that record survives — the request body is long gone by the time
+ * durable trail is the only place that record survives: the request body is long gone by the time
  * anyone asks why a print came out wrong, and "was this dispatched over a warning?" is the first
  * question worth answering. Mirrors how the slicing route records `allowNewerProjectFile`.
  *
@@ -193,7 +193,7 @@ export function printOverrideAuditMetadata(overrides: {
 /**
  * Excludes the current request from the durable audit trail. Reserve this for
  * high-frequency endpoints with no audit value (per-notification dismissal
- * syncs, polling-style mutations) where a row per request would be noise —
+ * syncs, polling-style mutations) where a row per request would be noise:
  * the analogue of the path-based skips in {@link shouldSkipAuditLog}, but
  * declared by the owning route so plugins do not leak paths into this module.
  */
@@ -343,7 +343,7 @@ const UPLOAD_CHUNK_PATH = /^\/api\/library\/uploads\/[^/]+\/chunks$/
 export function shouldSkipAuditLog(path: string, statusCode: number): boolean {
   if (path === '/api/health') return true
   if (path === '/api/logs' && statusCode === 204) return false
-  // A large upload PUTs dozens of 16 MiB chunks, each an audited mutation — pure
+  // A large upload PUTs dozens of 16 MiB chunks, each an audited mutation: pure
   // noise. The upload is still audited once at POST /uploads/:id/complete.
   if (UPLOAD_CHUNK_PATH.test(path)) return true
   return false

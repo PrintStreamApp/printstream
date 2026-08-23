@@ -1,7 +1,7 @@
 /**
  * Material mapping for a queue item pinned to a specific printer. Per required filament the user
  * keeps the loaded-AMS-slot mapper (the {@link PrinterMapping} the Print dialog uses) OR toggles to
- * "Material" and picks a Filament-library / Custom material instead — useful when the desired
+ * "Material" and picks a Filament-library / Custom material instead: useful when the desired
  * material isn't loaded yet. A material-mode filament leaves its AMS slot at the `-1` auto sentinel;
  * the dispatch merge (`mergeAmsMapping`, API) resolves it to a matching loaded slot at start time.
  */

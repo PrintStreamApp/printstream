@@ -135,7 +135,7 @@ test('a worker result is used as-is, with no main-thread parse behind it', async
   assert.equal(warnings.length, 0)
 })
 
-test('a bad STL is not re-parsed on the main thread — the fallback is the same code', async () => {
+test('a bad STL is not re-parsed on the main thread: the fallback is the same code', async () => {
   const { parseStlGeometryAsync, MeshParseDataError } = await loadClient('stl-data-error', {
     onConstruct: (worker) => worker.reply({ kind: 'ready' }),
     onTask: (worker, request) => worker.reply({
@@ -167,7 +167,7 @@ test('a bad 3MF entry IS retried on the main thread, whose reader is a different
 
   // The worker reads the entry with regexes; the fallback uses `DOMParser`, so it can read files
   // the worker cannot. Node has no `DOMParser`, so reaching the fallback surfaces as that failure
-  // rather than the worker's `MeshParseDataError` — which is exactly the distinction under test.
+  // rather than the worker's `MeshParseDataError`, which is exactly the distinction under test.
   await assert.rejects(
     () => parseThreeMfModelEntryAsync(new TextEncoder().encode('<model/>')),
     (error: unknown) => !(error instanceof MeshParseDataError)

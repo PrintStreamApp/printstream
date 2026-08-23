@@ -34,7 +34,7 @@ interface DefaultWorkspaceDeps {
 export async function ensureDefaultWorkspace(deps: DefaultWorkspaceDeps = {}): Promise<string | null> {
   // Unset derives from the deployment: a self-hosted install should come up
   // usable with zero configuration, while the cloud's workspaces only ever come
-  // from signups — its empty database is first-run, and auto-minting a "My
+  // from signups, its empty database is first-run, and auto-minting a "My
   // Workspace" there put a stray workspace in front of the platform operator.
   const enabled = deps.enabled ?? env.AUTO_CREATE_DEFAULT_WORKSPACE ?? isSelfHostedDeployment()
   const client = deps.client ?? rootPrisma

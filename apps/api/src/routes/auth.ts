@@ -69,7 +69,7 @@ authRouter.get('/bootstrap', async (request, response) => {
     workspaceHasConnectedBridges,
     // With auth disabled in this workspace's scope, route guards bypass
     // permission enforcement, so report the full workspace permission set as
-    // server truth — otherwise the web shell hides navigation it may use.
+    // server truth, otherwise the web shell hides navigation it may use.
     permissions: !authUsesExplicitPermissions(request.auth) && activeWorkspace
       ? filterPermissionsForWorkspaceContext(permissionValues)
       : request.auth.permissions,
@@ -251,12 +251,12 @@ async function resolveBootstrapActor(request: import('express').Request) {
  * The workspaces a user belongs to and may sign into.
  *
  * One implementation because there were two identical copies, and a soft-deleted
- * workspace leaked through BOTH of them — the visibility audit fixed the lists
+ * workspace leaked through BOTH of them: the visibility audit fixed the lists
  * that query `workspace` directly and missed the pair that reach it through a
  * membership. A deleted workspace kept appearing in the chooser, which is worse
  * than not deleting it: it is listed, enterable, and gone from everywhere else.
  *
- * `loginDisabled` and `deletedAt` are different refusals and both belong here —
+ * `loginDisabled` and `deletedAt` are different refusals and both belong here,
  * one is "this person may not sign in", the other is "this workspace is on its
  * way out".
  */

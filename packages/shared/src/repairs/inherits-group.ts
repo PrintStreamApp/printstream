@@ -14,7 +14,7 @@
  *         current_filaments_system_name[index-1] = current_filaments_name[index-1];
  *
  * `current_filaments_name` comes from `filament_settings_id`, so an `inherits_group` describing
- * MORE slots than the project actually has reads past the end of the filament names — SIGSEGV
+ * MORE slots than the project actually has reads past the end of the filament names: SIGSEGV
  * while LOADING the project, before slicing starts, surfacing as an opaque exit 139 that the
  * crash classifier then retries three times. Observed in production on a project taken from 5
  * filaments to 1 whose `inherits_group` kept all 7 entries.
@@ -46,7 +46,7 @@ export interface InheritsGroupInspection {
   filamentCount: number
   inconsistent: boolean
   /**
-   * Whether a correct replacement can be produced. False means "broken but not safely fixable" —
+   * Whether a correct replacement can be produced. False means "broken but not safely fixable":
    * surfaced rather than hidden, because a defect flagged to the user and then silently skipped by
    * the repair is indistinguishable from a repair that failed.
    */
@@ -55,12 +55,12 @@ export interface InheritsGroupInspection {
 
 /**
  * Bring `inherits_group` back to `filaments + 2`, preserving the process entry (first) and the
- * machine entry (LAST — it moves when the count changes) and keeping each surviving slot's parent.
+ * machine entry (LAST, it moves when the count changes) and keeping each surviving slot's parent.
  *
- * @returns the array to write, or null when there is nothing to do — no `inherits_group`, no
+ * @returns the array to write, or null when there is nothing to do, no `inherits_group`, no
  *   filament set to size it against, or it is already the right width. A project with FEWER
  *   entries than it needs is padded with empty strings, which the CLI reads as "this slot is a
- *   system preset" — the same value BambuStudio itself writes for an uninherited slot, and the
+ *   system preset", the same value BambuStudio itself writes for an uninherited slot, and the
  *   only honest one, since the real parent of a slot that was never recorded cannot be derived.
  */
 export function repairInheritsGroup(record: Record<string, unknown>): string[] | null {
@@ -78,7 +78,7 @@ export function repairInheritsGroup(record: Record<string, unknown>): string[] |
   const next = Array.from({ length: expected }, (_unused, index) => current[index] ?? '')
   next[0] = current[0] ?? ''
   // The machine lives at the END of both arrays, so it is carried across by position from the end,
-  // never by index — that is precisely what a naive truncate gets wrong.
+  // never by index, that is precisely what a naive truncate gets wrong.
   next[expected - 1] = current[current.length - 1] ?? ''
   // A slot beyond what the old array described has no recorded parent; empty is the honest value.
   for (let slot = 1; slot < expected - 1; slot++) {
@@ -91,7 +91,7 @@ export function repairInheritsGroup(record: Record<string, unknown>): string[] |
  * Inspect a raw `project_settings.config` JSON string for the width invariant.
  *
  * Returns null when the settings are absent/unparseable, when the project has no `inherits_group`,
- * or when it declares no filament set to size that array against — all genuinely unaffected rather
+ * or when it declares no filament set to size that array against, all genuinely unaffected rather
  * than "healthy by luck".
  */
 export function inspectProjectInheritsGroup(
@@ -118,7 +118,7 @@ export function inspectProjectInheritsGroup(
     expectedLength,
     filamentCount,
     inconsistent: actualLength !== expectedLength,
-    // Asked of the repair itself, never re-derived here — one implementation decides both.
+    // Asked of the repair itself, never re-derived here, one implementation decides both.
     repairable: repairInheritsGroup(record) !== null
   }
 }

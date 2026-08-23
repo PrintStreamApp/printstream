@@ -16,13 +16,13 @@ import { useRuntimePolicy } from '../lib/runtimePolicy'
 
 /**
  * Cross-page notice for bridges that need updating. Mounted once above workspace page
- * content so an out-of-date bridge is surfaced wherever the operator is — not only in
- * settings — with an in-place "Update bridge" action. Bridges whose status blocks
+ * content so an out-of-date bridge is surfaced wherever the operator is, not only in
+ * settings, with an in-place "Update bridge" action. Bridges whose status blocks
  * printing are shown in danger; the server also refuses to dispatch through them
  * (see `print-dispatcher.ts`), so this banner is the user-facing half of that gate.
  *
  * Renders nothing when no bridge needs attention, or when the bridges list is
- * unavailable (e.g. the viewer lacks settings access) — the server guard still
+ * unavailable (e.g. the viewer lacks settings access): the server guard still
  * protects the print path in that case.
  */
 export function BridgeUpdateBanner() {

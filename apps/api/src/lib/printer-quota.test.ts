@@ -73,7 +73,7 @@ test("a refusal reason from the raise reaches the operator instead of the generi
 })
 
 test('a surface with no raise still refuses at the limit', async () => {
-  // The cloud registers no `raiseLimit` — it meters after the add — so the gate
+  // The cloud registers no `raiseLimit`, it meters after the add, so the gate
   // must behave exactly as it did before the seam existed.
   registerPrinterQuota({
     getLimit: async () => 2,
@@ -85,7 +85,7 @@ test('a surface with no raise still refuses at the limit', async () => {
 
 test('a second registration is refused rather than silently replacing the first', () => {
   // Build-exclusive by design, so a collision is a wiring bug. Letting the
-  // second win silently drops whichever cap registered first — on a
+  // second win silently drops whichever cap registered first, on a
   // misconfigured build that is licence enforcement, i.e. the cap vanishes
   // exactly where it is the only thing protecting a paid product.
   registerPrinterQuota({

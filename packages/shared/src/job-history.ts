@@ -2,8 +2,8 @@
  * The merged job-history contract: finished PRINT jobs and terminal SLICING jobs presented as
  * one filterable, sortable, server-paginated list (the Jobs view's "Job history" section).
  *
- * The history must page as a MERGED list — interleaving two independently-paged sources cannot
- * produce correct random-access pages — so the API merges, filters, sorts, and pages here
+ * The history must page as a MERGED list, interleaving two independently-paged sources cannot
+ * produce correct random-access pages, so the API merges, filters, sorts, and pages here
  * (`selectJobHistoryPage`, called by `GET /api/jobs/history`) and the web renders the page it is
  * given (`JobsView`, the counterpart). The derivation of an entry's identity/result/sort-keys/
  * search text lives in ONE place (`deriveJobHistoryFields`) used by both sides, so what the
@@ -12,7 +12,7 @@
  * Search matches the display text users see on the cards (display file name, printer name,
  * result/status label, slicer name) plus the ISO timestamp. This deliberately diverges from the
  * old client-side search in one way: dates match in ISO form ("2026-08-10"), not the browser's
- * locale rendering — the server has no client locale, and two half-matching haystacks would be
+ * locale rendering: the server has no client locale, and two half-matching haystacks would be
  * worse than one predictable form.
  *
  * The query's list parameters (`printerIds`, `results`) ride the URL comma-separated.
@@ -126,7 +126,7 @@ export function deriveJobHistoryFields(
 
 /**
  * Merge, filter, sort, and page the history. Callers pass FINISHED print jobs and TERMINAL
- * slicing jobs only — active work belongs to the live sections, not history.
+ * slicing jobs only: active work belongs to the live sections, not history.
  *
  * Materializes both full sets to merge them; fine into the tens of thousands of jobs this
  * bounds the WIRE payload for (the old endpoint shipped the whole set to the browser instead).

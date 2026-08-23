@@ -3,7 +3,7 @@
  *
  * Renders a "New 3MF" button in the library toolbar. A new project is backed
  * by a hidden, empty 3MF "scaffold" so it opens the SAME full editor (settings,
- * materials, slice) as an existing file — no file-less code path. The scaffold stays
+ * materials, slice) as an existing file, no file-less code path. The scaffold stays
  * out of the library (hidden); the user's real file is created when they Save, and the
  * scaffold is discarded when the editor closes.
  *
@@ -38,7 +38,7 @@ export function LibraryCreateAction(props: Record<string, unknown>) {
         onDiscard: () => {
           // Best-effort: abandoning a new project should never surface an error to the user, and
           // the server sweeps un-discarded scaffolds anyway (pruneHiddenLibraryFiles). But it must
-          // not be SILENT — a discard that keeps failing is invisible except as hidden scaffold
+          // not be SILENT, a discard that keeps failing is invisible except as hidden scaffold
           // rows piling up, which is exactly how the leak this replaced went unnoticed.
           void apiFetch(`/api/editor/scaffold/${file.id}/discard`, { method: 'POST' }).catch((error: unknown) => {
             console.warn(`[model-studio] could not discard the abandoned project scaffold ${file.id}`, error)

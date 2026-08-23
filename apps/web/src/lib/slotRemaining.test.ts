@@ -129,8 +129,8 @@ test('does not treat external spools as auto-refill candidates', () => {
 
 test('two manually-set spools that match each other still pool for auto-refill', () => {
   // The reported bug: auto-refill appeared to work only for Bambu RFID spools. Nothing about
-  // the printer's chaining depends on RFID — it matches on the declared preset, which the AMS
-  // dialog writes for a hand-set spool too — so the badge must appear with no tag in sight.
+  // the printer's chaining depends on RFID, it matches on the declared preset, which the AMS
+  // dialog writes for a hand-set spool too, so the badge must appear with no tag in sight.
   const tray = makeManualTray()
   const sibling = makeManualTray()
 
@@ -143,7 +143,7 @@ test('two manually-set spools that match each other still pool for auto-refill',
   })
 
   assert.equal(result.usesAutoRefill, true)
-  // Nothing about either spool is measurable, so it is unknown — never "empty".
+  // Nothing about either spool is measurable, so it is unknown, never "empty".
   assert.equal(result.insufficient, false)
   assert.equal(result.remainGrams, null)
 })

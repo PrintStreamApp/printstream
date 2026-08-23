@@ -1,13 +1,13 @@
 /**
  * Reads everything the flushing-volumes editor needs out of a project's `project_settings.config`.
  *
- * OWNS: turning one raw settings document into the machine context the calculation runs against —
+ * OWNS: turning one raw settings document into the machine context the calculation runs against:
  * per-extruder dataset codes and dead volumes, the stored matrix split into per-extruder blocks,
  * the multiplier and which key it lives in. Keeping this in one place is the point: the dialog, the
  * bake and the repair pass must agree on where these values come from, and a UI that re-derived
  * "how many extruders" or "which multiplier key" on its own is how the two halves drift apart.
  *
- * CONTRACT. Returns null only when the document is unreadable or names no filaments — treat that
+ * CONTRACT. Returns null only when the document is unreadable or names no filaments: treat that
  * as "unknown", never as "no flush settings". `storedBlocks` is null when the project carries no
  * matrix (legitimate: BambuStudio computes one) OR when the stored matrix does not match the
  * project's own topology (the defect `needsSettingsRepair` flags), and the two are distinguished by
@@ -29,13 +29,13 @@ export interface ProjectFlushContext {
   extruderCount: number
   /** Per-extruder `filaments x filaments` blocks, or null when unset/mis-sized (see above). */
   storedBlocks: number[][][] | null
-  /** True when a matrix IS stored but contradicts the topology — the repairable defect. */
+  /** True when a matrix IS stored but contradicts the topology: the repairable defect. */
   matrixInconsistent: boolean
   /** One entry per extruder, defaulted to the engine's own default when absent or short. */
   multiplier: number[]
   /** Which key `multiplier` came from, decided by `prime_volume_mode`. */
   multiplierKey: 'flush_multiplier' | 'flush_multiplier_fast'
-  /** `nozzle_flush_dataset` per extruder — selects which measured table applies. */
+  /** `nozzle_flush_dataset` per extruder: selects which measured table applies. */
   datasetCodes: number[]
   /** Per-extruder, then per-filament dead volume floors (`get_min_flush_volumes`). */
   minFlushVolumes: number[][]
@@ -59,7 +59,7 @@ export function readProjectFlushContext(projectSettingsJson: string | null | und
   const filamentColors = stringList(record.filament_colour)
   const filamentCount = filamentColors.length
   if (filamentCount <= 0) return null
-  // One entry per NOZZLE — never the deduplicated nozzle-size list, which collapses a dual-0.4
+  // One entry per NOZZLE, never the deduplicated nozzle-size list, which collapses a dual-0.4
   // machine back to one and would size the matrix a whole block short.
   const extruderCount = Math.max(numberList(record.nozzle_diameter).length, 1)
 
@@ -95,7 +95,7 @@ export function readProjectFlushContext(projectSettingsJson: string | null | und
     matrixInconsistent,
     multiplier,
     multiplierKey,
-    // Resolved through the VARIANT table, not by position — see `resolveExtruderVariantIndices`.
+    // Resolved through the VARIANT table, not by position: see `resolveExtruderVariantIndices`.
     // Absent means dataset 0, the config default.
     datasetCodes: variantIndices.map((variantIndex) => datasetCodesRaw[variantIndex] ?? 0),
     // Every extruder gets extruder 0's dead volumes. That is not a simplification on our side: the
@@ -122,7 +122,7 @@ export function readProjectFlushContext(projectSettingsJson: string | null | und
 }
 
 /**
- * Suggest the whole matrix for a project — every extruder's block, from its own settings.
+ * Suggest the whole matrix for a project, every extruder's block, from its own settings.
  *
  * The one place that composes "read the project" with "calculate", so the dialog, the calibration
  * check and any future caller cannot pair them differently. Returns one block per extruder.
@@ -166,7 +166,7 @@ export interface FlushCalibrationVerdict {
  * `settingsJson` and `engineMatrix` must come from the SAME engine run (the slicer's
  * `/flush-calibration`), so any difference is genuinely ours rather than an input mismatch.
  * Disagreement means the engine we slice with has moved away from the vendored source our
- * constants were generated from — the drift the generator's test cannot see, because the image and
+ * constants were generated from: the drift the generator's test cannot see, because the image and
  * the vendored source are bumped independently.
  *
  * Returns null when the settings are unreadable, which is "unknown", not "agrees".
@@ -207,14 +207,14 @@ function parseFlushHexAlpha(value: string): number {
  * Which row of a VARIANT-WIDE machine array each extruder reads.
  *
  * On a machine with extruder variants (H2D and friends) arrays like `nozzle_flush_dataset` and
- * `nozzle_volume` carry one entry per (extruder x variant) — five entries for two extruders — and
+ * `nozzle_volume` carry one entry per (extruder x variant), five entries for two extruders, and
  * the entry an extruder uses is NOT its position. BambuStudio finds it by matching the extruder's
  * `<extruder_type> <nozzle_volume_type>` against `printer_extruder_variant` while requiring
  * `printer_extruder_id` to be that extruder's 1-based id (`DynamicPrintConfig::get_index_for_extruder`).
  *
  * Reading positionally is wrong in a way that looks right: index 0 happens to be correct for the
  * first extruder, so a dual-nozzle machine mis-prices only its SECOND nozzle's purges. Caught by
- * comparing against the real engine — an H2D resolves both extruders to dataset 1, where naive
+ * comparing against the real engine, an H2D resolves both extruders to dataset 1, where naive
  * indexing gives the second one dataset 2 and a different measured table.
  *
  * Falls back to positional when the machine declares no variant table (every single-variant

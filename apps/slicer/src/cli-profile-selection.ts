@@ -1,6 +1,6 @@
 import type { SlicingPresetKind } from '@printstream/shared'
 
-/** Anything carrying a preset kind — these selectors care about nothing else. */
+/** Anything carrying a preset kind, these selectors care about nothing else. */
 type PresetKinded = {
   kind: SlicingPresetKind
 }
@@ -27,18 +27,18 @@ export function selectCliProfileFiles<T extends PresetKinded>(
 
 /**
  * Which profile files reach the settings-repair export (`ensureEmbeddedProjectSettings` ->
- * `--export-settings`). ALWAYS all of them — this deliberately does NOT apply
+ * `--export-settings`). ALWAYS all of them, this deliberately does NOT apply
  * {@link selectCliProfileFiles}'s machine drop.
  *
  * That drop is right for the slice, where the rewritten 3MF already carries the machine. The
  * export is the opposite situation: it loads NO 3MF at all, so a dropped machine leaves
  * BambuStudio with no printer to test the process preset's `compatible_printers` against, and
- * `run()` fails every process as incompatible (exit 239 CLI_PROCESS_NOT_COMPATIBLE — verified:
+ * `run()` fails every process as incompatible (exit 239 CLI_PROCESS_NOT_COMPATIBLE: verified:
  * process-only exits -17, machine + process exports fine). The API then retries without the
  * builtin profiles, so the slice silently completes on the project's own presets instead of the
  * process the user picked.
  *
- * The export equally cannot run with HALF a pair — a machine and no process (the normal state of
+ * The export equally cannot run with HALF a pair, a machine and no process (the normal state of
  * a slice whose process is the project's own `project:` preset, which resolves to no file by
  * design) exits 239 just as deterministically, and when the machine is a CUSTOM preset the API's
  * builtin-drop retry cannot recover it. `ensureMachineProcessPairForExport` in

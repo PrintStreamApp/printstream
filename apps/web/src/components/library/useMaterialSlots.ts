@@ -1,5 +1,5 @@
 /**
- * The MATERIAL SLOTS core of the slice-settings controller — the one implementation of the
+ * The MATERIAL SLOTS core of the slice-settings controller: the one implementation of the
  * per-slot material state both hosts share (audit invariant I9: the workspace `SliceFileModal`
  * and the public editor's `useLocalSliceSettingsController` must be one controller core
  * parameterized by capability, never two encodings).
@@ -7,13 +7,13 @@
  * Owns, per project filament slot (keyed by session `projectFilamentId`):
  * - the picked material option / colour / toolhead / type filter / per-material tune overrides,
  * - the session's own material LIST once it diverges from the file (Bambu-style add/remove), held
- *   as `sessionSlots` rather than as a delta over the file — see {@link SessionFilamentSlot} for
+ *   as `sessionSlots` rather than as a delta over the file: see {@link SessionFilamentSlot} for
  *   why, and `onProjectSaved` for how it folds back once a save persists the divergence,
  * - the emitted artefacts: `desiredFilaments` (the full ordered list a save/slice bakes) and
  *   `filamentMappingResult` (the per-slot slicer mappings + unresolved gate),
  * - the reconciliation effects that keep picks valid across catalogue/machine changes, and the
  *   post-save rebase that moves the per-slot keyed state onto the refetched base (see
- *   `onProjectSaved`) — the session→saved id renumbering's controller-side half.
+ *   `onProjectSaved`): the session→saved id renumbering's controller-side half.
  *
  * The host supplies everything catalogue/machine-derived (profiles, options, machine profile) and
  * a callback for the one cross-domain write (remapping filament-INDEX references in process /
@@ -46,7 +46,7 @@ export type SliceProjectFilament = ReturnType<typeof buildSliceDialogProjectFila
  * The session used to be a delta over the file (`removed` ids + `added` slots), which made the list
  * unrepresentable whenever the file moved underneath it: after a save the base is the NEW list, so
  * replaying "remove slot 2" deletes whatever slot 2 has since become, and an undo could not put a
- * removed material back at all. Holding the list itself removes the moving frame of reference —
+ * removed material back at all. Holding the list itself removes the moving frame of reference,
  * a captured list is self-describing, so restoring one is exact.
  */
 export interface SessionFilamentSlot {
@@ -64,7 +64,7 @@ export interface SessionFilamentSlot {
   /**
    * Per-material "tune" overrides for this slot.
    *
-   * Held ON the slot rather than in a map keyed by session id — the first field moved off that
+   * Held ON the slot rather than in a map keyed by session id: the first field moved off that
    * keying. Per-slot state in an id-keyed map is why the session id space needs renumbering at all:
    * a save rewrites the ids and every map has to be walked across. State that travels WITH its slot
    * needs no such walk, and cannot be orphaned by a remap that misses a map.
@@ -75,8 +75,8 @@ export interface SessionFilamentSlot {
   /**
    * The user explicitly changed this slot's material PROFILE (dropdown or loaded-material picker).
    * A profile change writes a new `filament_settings_id`, and unlike a recolour it is not
-   * detectable by comparing values — the baked short name "Bambu PLA Basic" never equals the
-   * resolved "Bambu PLA Basic @BBL H2D 0.4 nozzle" — so the explicit edit is recorded instead.
+   * detectable by comparing values, the baked short name "Bambu PLA Basic" never equals the
+   * resolved "Bambu PLA Basic @BBL H2D 0.4 nozzle", so the explicit edit is recorded instead.
    * Programmatic default application sets option ids directly and never flags this.
    */
   profileEdited?: boolean
@@ -93,7 +93,7 @@ export interface SessionFilamentSlot {
   pickedToolheadId?: string
 }
 
-/** The file's slots as a session list — each slot cloning the settings of the base slot it came from. */
+/** The file's slots as a session list, each slot cloning the settings of the base slot it came from. */
 function materialiseFrom(base: readonly SliceProjectFilament[]): SessionFilamentSlot[] {
   return base.map((filament, index) => ({
     projectFilamentId: filament.projectFilamentId,
@@ -199,7 +199,7 @@ function mergeUnder(base: Record<number, string>, over: Record<number, string>):
  * Re-point a captured snapshot's `sourceIndex` values at the base list a save has just rewritten.
  *
  * This is the ONLY thing a retained undo frame needs when a save renumbers the slots. Everything
- * else in a frame — the slot list, its ids, and every per-slot map — is self-describing, so a
+ * else in a frame, the slot list, its ids, and every per-slot map, is self-describing, so a
  * restored frame is coherent on its own terms; `sourceIndex` is the single field that reaches
  * OUTSIDE the frame, into the file's slot order. A source the save dropped becomes null, which
  * authors that slot from its preset instead of cloning a block that no longer exists.
@@ -232,7 +232,7 @@ export function buildFilamentSourceRemap(savedSourceIndexes: ReadonlyArray<numbe
   return map
 }
 
-/** The material fields of `SliceConfigSnapshot` — captured/restored by the host's snapshot pair. */
+/** The material fields of `SliceConfigSnapshot`: captured/restored by the host's snapshot pair. */
 export interface MaterialSlotsSnapshot {
   /** The session's own list, or null while it still follows the file. See {@link SessionFilamentSlot}. */
   sessionSlots: SessionFilamentSlot[] | null
@@ -254,7 +254,7 @@ export interface MaterialSlotsParams {
    * The target machine's actual toolheads (`buildSliceDialogToolheads`). Used to keep per-slot
    * nozzle assignments VALID for the current machine: a dual-nozzle project switched to a
    * single-nozzle printer otherwise keeps `nozzle-1` selections (and the baked slot nozzle is 1
-   * too), so the save/slice emitted nozzle 1 on a one-extruder machine — BambuStudio then reads
+   * too), so the save/slice emitted nozzle 1 on a one-extruder machine: BambuStudio then reads
    * that extruder out of bounds and SIGSEGVs mid-slice (CLI exit 139). Empty/one entry ⇒ no slot
    * may carry a nozzle id at all.
    */
@@ -266,13 +266,13 @@ export interface MaterialSlotsParams {
   visibleFilamentsFilter?: (filament: SliceProjectFilament) => boolean
   /**
    * A slot was removed at this 1-based POSITION in the pre-removal ordered list. The host remaps
-   * its filament-INDEX references (process overrides + per-object overrides) — those live with the
+   * its filament-INDEX references (process overrides + per-object overrides), those live with the
    * process state, not here. Called BEFORE the removal mutates the list.
    */
   onFilamentRemoved?: (removedPosition: number) => void
   /**
    * The list was reordered: `remap` is the 1-based old-position → new-position permutation over
-   * the pre-reorder ordered list. Same host duty as `onFilamentRemoved` — remap the filament-INDEX
+   * the pre-reorder ordered list. Same host duty as `onFilamentRemoved`: remap the filament-INDEX
    * references (`permuteFilamentIndexOverrides` and friends). Called BEFORE the move mutates the
    * list.
    */
@@ -290,11 +290,11 @@ export interface AddedMaterialChoice {
   optionId: string
   /** Chosen colour; normalized on the way into the slot. */
   color: string
-  /** Slot label — the option's material type (e.g. "PLA"). */
+  /** Slot label: the option's material type (e.g. "PLA"). */
   label: string
   /**
    * Nozzle the material goes on, when the pick implies one. A material chosen from the printer came
-   * out of a specific tray, and on a dual-nozzle machine that tray belongs to one toolhead — so
+   * out of a specific tray, and on a dual-nozzle machine that tray belongs to one toolhead, so
    * cloning the first slot's nozzle would quietly put it on the wrong one. Absent for a manual pick,
    * which says nothing about nozzles.
    */
@@ -302,7 +302,7 @@ export interface AddedMaterialChoice {
 }
 
 export interface MaterialSlots {
-  /** Base slots minus removed, plus session-added — the full ordered list (session id space). */
+  /** Base slots minus removed, plus session-added: the full ordered list (session id space). */
   projectFilaments: SliceProjectFilament[]
   /** `projectFilaments` narrowed by the host's filter (what mappings and pickers cover). */
   visibleProjectFilaments: SliceProjectFilament[]
@@ -323,7 +323,7 @@ export interface MaterialSlots {
   /** Move a slot to an insertion gap (0..N, between-tiles drag semantics). */
   handleReorderFilament: (fromIndex: number, insertAt: number) => void
   handleMaterialOptionChange: (projectFilamentId: number, option: SliceMaterialOption | null) => void
-  /** See `SliceSettingsController.materialEditListenerRef` — the editor's unsaved-flag hook. */
+  /** See `SliceSettingsController.materialEditListenerRef`: the editor's unsaved-flag hook. */
   materialEditListenerRef: React.MutableRefObject<(() => void) | null>
   desiredFilaments: SceneEditFilament[] | null
   filamentMappingResult: ReturnType<typeof buildFilamentMappings>
@@ -337,7 +337,7 @@ export interface MaterialSlots {
    * Seed the option picks + colours from the baked index (the host's one-shot "apply the file's
    * defaults" moment, gated by ITS readiness latch). Composes the seed with the compat
    * reconciliation in ONE updater, so the result matches "seed, then reconcile" regardless of
-   * where the host's effect sits relative to this hook's own — intra-flush effect order must not
+   * where the host's effect sits relative to this hook's own, intra-flush effect order must not
    * be load-bearing across the module boundary.
    */
   applyBakedMaterialDefaults: () => void
@@ -353,7 +353,7 @@ export function useMaterialSlots(params: MaterialSlotsParams): MaterialSlots {
     materialOptions, selectedMachineProfile, toolheadOptions, visibleFilamentsFilter, onFilamentRemoved, onFilamentReordered
   } = params
 
-  // The session's material list. ALWAYS a real list, never "null, so read the file instead" —
+  // The session's material list. ALWAYS a real list, never "null, so read the file instead",
   // that null was a moving reference, and a snapshot holding it restored whatever the file had
   // become rather than what the user saw. Whether it is the SESSION's list or merely a view of the
   // file is a separate, explicit fact: `sessionOwned`.
@@ -363,7 +363,7 @@ export function useMaterialSlots(params: MaterialSlotsParams): MaterialSlots {
     buildInitialFilamentColorSelection(file, bakedIndex),
     buildInitialFilamentToolheadSelection(file, bakedIndex)
   ))
-  // True once the list is the session's own — an add, a remove, or an undo restoring a specific
+  // True once the list is the session's own, an add, a remove, or an undo restoring a specific
   // list. Until then the file may replace it wholesale (a refetch, a version change); afterwards
   // only a save may, by folding the divergence in. Separating this from the STORAGE is what lets
   // per-slot state live on the slots without every write pretending the user diverged.
@@ -371,7 +371,7 @@ export function useMaterialSlots(params: MaterialSlotsParams): MaterialSlots {
   const sessionOwnedRef = useRef(sessionOwned)
   sessionOwnedRef.current = sessionOwned
   // The editor's unsaved-flag hook for edits applied through the controller's OWN dialogs (which
-  // stay mounted behind the editor) — see SliceSettingsController.materialEditListenerRef.
+  // stay mounted behind the editor): see SliceSettingsController.materialEditListenerRef.
   const materialEditListenerRef = useRef<(() => void) | null>(null)
 
   const slotList = sessionSlots
@@ -381,7 +381,7 @@ export function useMaterialSlots(params: MaterialSlotsParams): MaterialSlots {
   const projectFilaments = useMemo<SliceProjectFilament[]>(
     () => {
       // Plate usage is the FILE's answer, not the session's, so it is read live per render rather
-      // than frozen onto the slot — the slim dialog narrows by it and the active plate changes
+      // than frozen onto the slot: the slim dialog narrows by it and the active plate changes
       // without the material list changing at all. A slot the file has no counterpart for (a fresh
       // add) is always shown.
       const usedByBaseId = new Map(baseProjectFilaments.map((filament) => [filament.projectFilamentId, filament.usedOnSelectedPlate]))
@@ -401,14 +401,14 @@ export function useMaterialSlots(params: MaterialSlotsParams): MaterialSlots {
   baseProjectFilamentsRef.current = baseProjectFilaments
   // Slot-carried state is still READ in its old id-keyed shape so no consumer has to change while
   // the storage moves; these are the shims. Each write applies the caller's updater to that shape
-  // and folds the result back onto the slots — returning the SAME list when nothing changed, since
+  // and folds the result back onto the slots: returning the SAME list when nothing changed, since
   // an updater that always mints a new list turns an unstable caller into a render loop.
   /**
    * Apply an id-keyed record write onto the slots that hold that state.
    *
    * INVARIANT: a key with no matching slot is silently DISCARDED (the write maps over the existing
    * list). That is correct for a stale write naming a removed slot, but it means these setters
-   * cannot introduce a slot — so state for a slot being ADDED must be written as fields of the slot
+   * cannot introduce a slot, so state for a slot being ADDED must be written as fields of the slot
    * itself, in the same update that appends it (see `handleAddFilament`). Writing it through these
    * setters from inside the appending updater silently lost every pick whose dispatch React
    * evaluated eagerly, which rendered added materials as a bare "PLA" with no preset.
@@ -475,7 +475,7 @@ export function useMaterialSlots(params: MaterialSlotsParams): MaterialSlots {
 
   // Reconcile the option picks against the CURRENT compatible set: preserve the user's selection
   // while it still resolves to a compatible option; when it does not, hand it over to the same
-  // PRODUCT built for this machine before falling back to the target machine's default — so a
+  // PRODUCT built for this machine before falling back to the target machine's default, so a
   // cross-model switch never leaves a slot pointing at a foreign option, and never silently
   // discards a material the user chose this session (see repointMaterialOptionToCompatibleAlias).
   // Every updater here returns the SAME state identity when nothing changed: these effects key on
@@ -499,13 +499,13 @@ export function useMaterialSlots(params: MaterialSlotsParams): MaterialSlots {
       return recordsEqual(current, next) ? current : next
     })
   }, [bakedIndex, compatibleFilamentProfiles, file, filamentProfiles, materialOptions, selectedMachineProfile, setFilamentMaterialOptionIds])
-  // Merge baked colours/toolheads UNDER the session's — a late-arriving index fills gaps without
+  // Merge baked colours/toolheads UNDER the session's, a late-arriving index fills gaps without
   // overwriting what the user already picked.
   //
   // Keyed on the SLOT LIST as well as the index, and that is load-bearing. These setters are
   // projections that map over the slots that already exist (see `writeSlotRecord`), so a seed for a
   // slot the list has not caught up with is silently discarded. The file's own materials arrive in
-  // two steps — a short DTO view first, the full index after — so on a 3-material project the seed
+  // two steps, a short DTO view first, the full index after, so on a 3-material project the seed
   // ran against 2 slots and the third material lost its nozzle assignment permanently, because the
   // index never changed again to re-trigger this. Re-running when the slot ids change is what
   // closes that window; `mergeUnder` returns the SAME record when nothing differs, so the extra
@@ -549,7 +549,7 @@ export function useMaterialSlots(params: MaterialSlotsParams): MaterialSlots {
     // never through the setFilamentMaterialOptionIds/Colors/ToolheadIds setters: those are
     // projections that map over the slots that already exist (see `writeSlotRecord`), so a write
     // for an id that is not in the list yet is silently dropped. Calling them from inside this
-    // updater lost every pick whose dispatch React evaluated eagerly — which is to say every add
+    // updater lost every pick whose dispatch React evaluated eagerly, which is to say every add
     // after the first, because the first also flipped `sessionOwned` and took the other path.
     setSessionSlots((slots) => {
       const maxId = Math.max(0, ...baseProjectFilaments.map((entry) => entry.projectFilamentId), ...slots.map((entry) => entry.projectFilamentId))
@@ -563,16 +563,16 @@ export function useMaterialSlots(params: MaterialSlotsParams): MaterialSlots {
         label: choice.label,
         color,
         nozzleId: template?.nozzleId ?? null,
-        // Seeded ONLY from what the user picked in the add dialog — nothing is cloned from the first
+        // Seeded ONLY from what the user picked in the add dialog, nothing is cloned from the first
         // material and nothing falls back to a machine default. A slot invented before the user said
         // what it should be reads as a real choice they never made: a default preset (Bambu PLA
         // Basic) meeting the default colour (#FFFFFF) is named by the identity resolver as the
-        // genuine product "Bambu PLA Basic, Jade White". An empty pick is equally unacceptable — it
+        // genuine product "Bambu PLA Basic, Jade White". An empty pick is equally unacceptable, it
         // bakes a null filament_settings_id and the slicer substitutes Generic PLA.
         pickedOptionId: choice.optionId,
         pickedColor: color,
         // Toolhead is a nozzle ASSIGNMENT rather than part of the material's identity, so cloning
-        // the template's still matches what the user would otherwise pick by hand — unless the pick
+        // the template's still matches what the user would otherwise pick by hand, unless the pick
         // named one itself (a tray belongs to a toolhead), which always wins.
         pickedToolheadId: choice.toolheadId ?? templateSlot?.pickedToolheadId ?? ''
       }]
@@ -580,10 +580,10 @@ export function useMaterialSlots(params: MaterialSlotsParams): MaterialSlots {
   }, [projectFilaments, baseProjectFilaments])
 
   const handleRemoveFilament = useCallback((projectFilamentId: number) => {
-    // BambuStudio parity: a material can be removed even while a process setting references it —
+    // BambuStudio parity: a material can be removed even while a process setting references it:
     // the setting falls back to "Default" rather than the delete being refused. Those settings
     // store the material's POSITION in the ordered list, so every reference above the removed one
-    // also shifts down (the host remaps them — see onFilamentRemoved). Done BEFORE the removal so
+    // also shifts down (the host remaps them: see onFilamentRemoved). Done BEFORE the removal so
     // the position still resolves against the pre-removal list. `projectFilaments` is a dependency,
     // not incidental: captured stale, a removal after an add computes the wrong position.
     const removedPosition = projectFilaments.findIndex((filament) => filament.projectFilamentId === projectFilamentId) + 1
@@ -597,11 +597,11 @@ export function useMaterialSlots(params: MaterialSlotsParams): MaterialSlots {
 
   /**
    * Move the slot at `fromIndex` into insertion gap `insertAt` (0..N, the between-tiles semantics
-   * the drag strip produces — same conversion as `movePlate`). Session ids stay untouched, so
+   * the drag strip produces: same conversion as `movePlate`). Session ids stay untouched, so
    * paint, badges, and every id-keyed pick follow their material through the move; the SAVE turns
    * the new order into new slot numbers via `sourceIndex`, exactly as removal does. Position-space
    * references (the filament-INDEX process settings) are the one thing that must move NOW, via
-   * `onFilamentReordered` — they name positions, not ids.
+   * `onFilamentReordered`, they name positions, not ids.
    */
   const handleReorderFilament = useCallback((fromIndex: number, insertAt: number) => {
     const count = projectFilaments.length
@@ -648,14 +648,14 @@ export function useMaterialSlots(params: MaterialSlotsParams): MaterialSlots {
     materialEditListenerRef.current?.()
   }, [setFilamentMaterialOptionIds, setFilamentColors, setFilamentToolheadIds])
 
-  // Latest catalogue inputs for applyBakedMaterialDefaults — read through a ref so the callback
+  // Latest catalogue inputs for applyBakedMaterialDefaults: read through a ref so the callback
   // is stable and immune to where the host's readiness effect sits in declaration order.
   const paramsRef = useRef(params)
   paramsRef.current = params
   const applyBakedMaterialDefaults = useCallback(() => {
     const { file: f, bakedIndex: baked, filamentProfiles: profiles, compatibleFilamentProfiles: compatible, materialOptions: options, selectedMachineProfile: machine, baseProjectFilaments: base } = paramsRef.current
     // Slots the FILE has no counterpart for (session adds). The baked seed speaks only for the
-    // file's own filaments, so it must not answer for these — it re-seeds from scratch, and a bare
+    // file's own filaments, so it must not answer for these, it re-seeds from scratch, and a bare
     // replace would clear an added material's preset. Reachable whenever the latch re-arms after an
     // add (the host re-applies on a slicer-target switch), which is how a material the user had just
     // chosen came back blank.
@@ -687,7 +687,7 @@ export function useMaterialSlots(params: MaterialSlotsParams): MaterialSlots {
     })
   }, [setFilamentMaterialOptionIds, setFilamentColors])
 
-  // Identity of the BASE material list (ids/labels/colors/nozzles — not the plate-usage flag,
+  // Identity of the BASE material list (ids/labels/colors/nozzles, not the plate-usage flag,
   // which changes on plate switches). Used to detect the post-save refetch below.
   const baseFilamentSignature = useMemo(
     () => JSON.stringify(baseProjectFilaments.map((filament) => [filament.projectFilamentId, filament.label, filament.color, filament.nozzleId])),
@@ -695,21 +695,21 @@ export function useMaterialSlots(params: MaterialSlotsParams): MaterialSlots {
   )
   // Pending reset armed by a successful editor save: the saved file bakes the CURRENT list as its
   // slots 1..N, so once the refetched base reflects that, the session goes back to FOLLOWING the
-  // file — the divergence has been persisted, so keeping it would show every slot twice. `savedIds`
+  // file: the divergence has been persisted, so keeping it would show every slot twice. `savedIds`
   // records each slot's session id in save order so the per-slot keyed state can follow the
   // renumbering; `savedSourceIndexes` does the same for the retained undo frames (see
   // `buildFilamentSourceRemap`).
   /**
    * A project save persisted the session's list. Renumber it IN MEMORY, immediately.
    *
-   * The save wrote the current slots as the file's 1..N, so the session already knows the answer —
+   * The save wrote the current slots as the file's 1..N, so the session already knows the answer,
    * it does not have to ask the file. This used to arm a pending rebase and wait for the refetched
    * index to say what had just been saved, which meant the correctness of the material list
    * depended on a request landing, in an order the caller had to get right: arming after the
    * invalidation lost the race and showed an added material twice until the editor was reopened.
    *
-   * Ownership goes back to the file because the two now agree, so the refetch — whenever it lands,
-   * or never — is an ordinary `adoptBase` that refreshes file-derived labels and changes nothing
+   * Ownership goes back to the file because the two now agree, so the refetch, whenever it lands,
+   * or never, is an ordinary `adoptBase` that refreshes file-derived labels and changes nothing
    * else. Returns the old→new base-index map for anything still holding pre-save `sourceIndex`
    * values (the editor's undo frames).
    */
@@ -730,7 +730,7 @@ export function useMaterialSlots(params: MaterialSlotsParams): MaterialSlots {
   }, [sessionOwned, sessionSlots])
 
   /**
-   * The file's list changed under a session that does NOT own its list — a refetch, a version
+   * The file's list changed under a session that does NOT own its list, a refetch, a version
    * switch, or the post-save refresh. The file decides membership and order; the session keeps what
    * it knows about each surviving slot. A session that owns its list is left alone: it is the user's
    * until a save folds it in.
@@ -756,7 +756,7 @@ export function useMaterialSlots(params: MaterialSlotsParams): MaterialSlots {
   /**
    * The full ordered filament list baked into the saved/sliced 3MF. `sourceIndex` tells the
    * writer which original filament to clone slicer settings from for each slot; `nozzleId`
-   * carries the per-slot nozzle assignment. ALWAYS emitted when materials exist — see the
+   * carries the per-slot nozzle assignment. ALWAYS emitted when materials exist: see the
    * delta-save rule in `docs/slicer-architecture.md` (a "changed vs base" gate lost data twice).
    */
   const desiredFilaments = useMemo<SceneEditFilament[] | null>(() => {
@@ -774,7 +774,7 @@ export function useMaterialSlots(params: MaterialSlotsParams): MaterialSlots {
         // The selected preset name so the material choice persists as `filament_settings_id`.
         // Null keeps the slot's existing preset. Only a RESOLVED preset's name may persist: a
         // loaded AMS option with no matched profile carries the tray's display identity in
-        // `material`, and writing that into filament_settings_id poisons the saved project — the
+        // `material`, and writing that into filament_settings_id poisons the saved project: the
         // name matches no catalog preset, so slice-time physics re-derivation silently falls
         // back to Generic PLA.
         settingsId: selectedOption?.profileId ? selectedOption.material : null,
@@ -784,14 +784,14 @@ export function useMaterialSlots(params: MaterialSlotsParams): MaterialSlots {
         // key BambuStudio BINDS a slot on, so a slot naming PETG HF while carrying the old
         // material's ABS id makes BambuStudio fabricate a junk project preset. Resolved from
         // `profileId` rather than the option's own fields because only the preset knows its id.
-        // Null when the option resolved no preset — the bake then reports unknown rather than
+        // Null when the option resolved no preset: the bake then reports unknown rather than
         // letting the previous material's id stand.
         filamentId: (selectedOption?.profileId
           ? filamentProfiles.find((profile) => profile.id === selectedOption.profileId)?.filamentIds?.[0]
           : null) ?? null,
         sourceIndex,
         // The chosen toolhead's runtime nozzle id (0 = right, 1 = left), falling back to the slot's
-        // baked nozzle so unchanged slots keep their assignment — but ONLY when the current machine
+        // baked nozzle so unchanged slots keep their assignment, but ONLY when the current machine
         // actually has that nozzle. A dual-nozzle project switched to a single-nozzle printer
         // otherwise carried nozzle 1 through (from the pick AND the baked value), which BambuStudio
         // reads out of bounds and SIGSEGVs on (exit 139). Null on single-nozzle machines.
@@ -803,14 +803,14 @@ export function useMaterialSlots(params: MaterialSlotsParams): MaterialSlots {
   const materialSnapshot = useMemo<MaterialSlotsSnapshot>(() => ({
     // Always a concrete list, which is the point of holding one: a frame describes what the user
     // saw, so it survives the file changing underneath it.
-    // The slots ARE the material state now — picks, overrides, filter, flags and order together.
+    // The slots ARE the material state now: picks, overrides, filter, flags and order together.
     // Nothing else belongs here: a second copy of any of it is a snapshot that can disagree with
     // itself, which is what the id-keyed records were.
     sessionSlots
   }), [sessionSlots])
   const restoreMaterialSnapshot = useCallback((snapshot: MaterialSlotsSnapshot) => {
     if (snapshot.sessionSlots) setSessionSlots(snapshot.sessionSlots)
-    // A restored frame is a SPECIFIC list to honour, so the file may no longer replace it — the
+    // A restored frame is a SPECIFIC list to honour, so the file may no longer replace it: the
     // hazard this whole design exists to remove is a captured list that defers to a moved file.
     setSessionOwned(true)
   }, [])

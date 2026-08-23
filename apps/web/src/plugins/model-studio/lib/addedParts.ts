@@ -1,10 +1,10 @@
 /**
- * The addable part volumes and where their geometry comes from — BambuStudio's "Add part / Add
+ * The addable part volumes and where their geometry comes from: BambuStudio's "Add part / Add
  * negative part / Add modifier / Add support blocker / Add support enforcer", each of which can be
  * a built-in primitive or a loaded mesh.
  *
  * Owns two things the editor would otherwise spread across the context menu and `EditorView`:
- * the menu's subtype ORDER and labels (a normal part is called "Part", not a helper volume — its
+ * the menu's subtype ORDER and labels (a normal part is called "Part", not a helper volume, its
  * name and colour do not come from `helperVolumes.ts`), and the staging of a new part's mesh into
  * an `importId` + a client-render triangle soup, whatever the source.
  *
@@ -22,7 +22,7 @@ import { triangleSoupToBinaryStl } from './meshCut'
 
 /**
  * The subtypes the "Add …" menu offers, in BambuStudio's order (`ADD_VOLUME_MENU_ITEMS` in
- * `src/slic3r/GUI/GUI_Factories.cpp`) — a normal part first, then the helper volumes.
+ * `src/slic3r/GUI/GUI_Factories.cpp`), a normal part first, then the helper volumes.
  */
 export const ADDED_PART_SUBTYPES: SceneEditPartSubtype[] = [
   'normal_part',
@@ -52,7 +52,7 @@ export interface StagedAddedPartGeometry {
   importId: string
   /** Client render geometry: non-indexed triangle soup, centred on the origin (9 floats/tri). */
   soup: Float32Array
-  /** Suggested part name — the primitive's label, or the loaded model's file name. */
+  /** Suggested part name: the primitive's label, or the loaded model's file name. */
   name: string
 }
 
@@ -92,7 +92,7 @@ async function soupFromStagedImport(store: EditorImportStore, importId: string, 
  * Stage a new part's geometry, whatever its source, as an import id + a soup to render locally.
  *
  * `size` is the target largest dimension (mm) for a generated primitive and is ignored for a
- * loaded model, which keeps its own real-world size — scaling someone's mesh to fit would silently
+ * loaded model, which keeps its own real-world size: scaling someone's mesh to fit would silently
  * change the dimensions they modelled, and the gizmo is right there if they want it smaller.
  */
 export async function stageAddedPartGeometry(
@@ -106,13 +106,19 @@ export async function stageAddedPartGeometry(
     const stl = triangleSoupToBinaryStl(soup)
     const staged = await store.stageFile(
       new File([stl], `${source.shape}.stl`, { type: 'application/octet-stream' }),
+      'part',
       signal
     )
     return { importId: staged.importId, soup, name: staged.name }
   }
+  // Every source here stages as `part`: a part is placed by ONE point relative to its host
+  // (`addedPartDropPosition`), which only works against a soup centred on every axis, as
+  // `primitivePartSoup` produces. The whole-object normalisation floors Z instead, which would drop
+  // a helper volume half its own height above where the user put it — invisible, since an aid is
+  // translucent and does not print.
   const staged = source.kind === 'file'
-    ? await store.stageFile(source.file, signal)
-    : await store.stageFromLibrary(source.libraryFileId, undefined, signal)
+    ? await store.stageFile(source.file, 'part', signal)
+    : await store.stageFromLibrary(source.libraryFileId, 'part', undefined, signal)
   return { importId: staged.importId, soup: await soupFromStagedImport(store, staged.importId, signal), name: staged.name }
 }
 
@@ -121,8 +127,8 @@ export async function stageAddedPartGeometry(
  *
  * Helper volumes land at the host's centre: a support blocker or modifier is meant to sit INSIDE
  * the geometry it acts on, and it renders translucent so it stays visible there. A normal part is
- * opaque printed geometry, so it lands beside the host instead — at the right-front-bottom corner
- * of its bounding box, like BambuStudio (`ObjectList::load_generic_subobject`) — where it is
+ * opaque printed geometry, so it lands beside the host instead, at the right-front-bottom corner
+ * of its bounding box, like BambuStudio (`ObjectList::load_generic_subobject`), where it is
  * visible and grabbable rather than buried.
  */
 export function addedPartDropPosition(

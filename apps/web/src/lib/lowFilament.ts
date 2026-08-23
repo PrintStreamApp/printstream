@@ -8,7 +8,7 @@
  * the matcher can pick a slot it believes holds enough and the dialog then flag it.
  *
  * The rule itself is `@printstream/shared`'s `findLowFilamentSlots`, which the API's dispatch
- * guard also runs — this module only owns the web's tray shapes and labels.
+ * guard also runs, this module only owns the web's tray shapes and labels.
  */
 import {
   findLowFilamentSlots,
@@ -22,7 +22,7 @@ import type { SlotFilamentIdentityLookup } from './slotFilamentIdentity'
 
 /**
  * The mapped slots that will run out on this printer, worst shortfall first. Empty when the
- * printer has no status, nothing is mapped, or no mapped slot can be measured — most spools
+ * printer has no status, nothing is mapped, or no mapped slot can be measured: most spools
  * report nothing usable, so an empty result means "nothing to warn about", not "checked and fine".
  */
 export function findPrinterLowFilamentSlots(

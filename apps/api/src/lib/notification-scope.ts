@@ -36,7 +36,7 @@ export function messageNotificationScope(context: ApiPluginContext, workspaceId:
 
 /**
  * Per-user channel routes (opt-ins, device registrations) at the platform
- * scope are for platform users only — a workspace user has no business
+ * scope are for platform users only, a workspace user has no business
  * subscribing to operator events.
  */
 export function assertPlatformScopeActor(request: Request): void {
@@ -60,7 +60,7 @@ function escapeRegExp(value: string): string {
  * Enumerate the workspace ids that hold a value for one of a plugin's
  * per-workspace settings (stored under `plugin:<name>:workspace:<id>:<key>`).
  * Used by channels that must fan a platform-wide user-targeted message out
- * across every scope a user registered in — deliberately a cross-workspace
+ * across every scope a user registered in, deliberately a cross-workspace
  * read, so callers should treat the result as scope ids only.
  */
 export async function listWorkspaceScopesWithPluginSetting(

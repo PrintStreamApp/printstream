@@ -9,7 +9,7 @@
  *
  * The opt-in is its own switch rather than something implied by having a Bambu Lab
  * account connected: that account is connected for preset sync, and using the same
- * credential to fetch models is a separate decision — one that also affects other
+ * credential to fetch models is a separate decision, one that also affects other
  * members, since a workspace shares one connection. The copy therefore names the
  * account rather than just saying "connected".
  *
@@ -61,7 +61,7 @@ export function RemoteImportsSettingsPanel() {
           </Stack>
           <Switch
             // Default ON (absent means enabled), so an unloaded state must not paint an
-            // unchecked switch — that reads as "someone turned this off".
+            // unchecked switch, that reads as "someone turned this off".
             checked={makerWorld?.enabled ?? true}
             disabled={capabilitiesQuery.isPending || setEnabled.isPending}
             onChange={(event) => setEnabled.mutate(event.target.checked)}

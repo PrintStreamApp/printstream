@@ -54,13 +54,13 @@ export function CalibrationView() {
   const [showNew, setShowNew] = useState(false)
   const [resultRun, setResultRun] = useState<CalibrationRun | null>(null)
   // Stable across the parent's frequent re-renders (printer-status ticks) so the
-  // memoized dialogs don't re-render — otherwise a fresh inline `onClose` each
+  // memoized dialogs don't re-render, otherwise a fresh inline `onClose` each
   // render defeats React.memo and thrashes their dropdowns.
   const closeNewDialog = useCallback(() => setShowNew(false), [])
   const closeResultDialog = useCallback(() => setResultRun(null), [])
 
   // Shares the `['printers']` cache key with the rest of the app, which stores the
-  // full `{ printers }` response — read `.printers`, never treat data as the array.
+  // full `{ printers }` response: read `.printers`, never treat data as the array.
   const printersQuery = useQuery<{ printers: Printer[] }>({
     queryKey: ['printers'],
     queryFn: ({ signal }) => apiFetch<{ printers: Printer[] }>('/api/printers', { signal })
@@ -69,7 +69,7 @@ export function CalibrationView() {
     queryKey: calibrationKeys.runs,
     queryFn: ({ signal }) => fetchCalibrationRuns(signal),
     // Poll only while a run is still working (the slice queue and print dispatch emit no WS event we
-    // subscribe to here). Once a run reaches awaitingResult the interval stops — but the print often
+    // subscribe to here). Once a run reaches awaitingResult the interval stops, but the print often
     // finishes while this tab is backgrounded (the user starts it, then goes to watch the printer),
     // which pauses the interval, so refetch on focus too or a returning user sees a stale page with no
     // "Enter result" action until a manual reload.
@@ -83,7 +83,7 @@ export function CalibrationView() {
   const printers = useMemo(() => printersQuery.data?.printers ?? [], [printersQuery.data])
 
   // This page shows each run's slice progress inline (status chip + next-step line), so the global
-  // slicing toast for a calibration run is redundant — suppress it while its slice is in flight.
+  // slicing toast for a calibration run is redundant: suppress it while its slice is in flight.
   const slicingJobIds = runs.filter((run) => run.status === 'slicing' && run.slicingJobId).map((run) => run.slicingJobId!).join(',')
   useEffect(() => {
     const cleanups = slicingJobIds ? slicingJobIds.split(',').map((jobId) => suppressJobToast('slicing', jobId)) : []

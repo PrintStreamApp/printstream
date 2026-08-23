@@ -23,7 +23,7 @@ async function* walk(dir: string): AsyncGenerator<string> {
  *
  * Joy persists its mode per ORIGIN, and a stored value outranks `defaultMode`. A
  * bare `<CssVarsProvider>` defaults to `light`, so mounting one anywhere on the
- * origin — a scratch page, a demo route, a stray import — writes `light` into
+ * origin, a scratch page, a demo route, a stray import, writes `light` into
  * storage and every subsequent load of the real app inherits it. This app has no
  * light palette, so the result is Joy's untested stock light theme with no way for
  * the user to get back. That happened once already, via a throwaway probe page on

@@ -253,7 +253,7 @@ test('a builtin-to-builtin re-pick does not re-inject the carry map', async () =
 })
 
 test('it does not latch a built-in while the project preset is still loading', () => {
-  // The library host feeds this hook from TWO parallel queries — the slicer catalogue and the 3MF
+  // The library host feeds this hook from TWO parallel queries: the slicer catalogue and the 3MF
   // index that carries the project's own preset. When the catalogue wins the race the list is
   // POPULATED BUT INCOMPLETE, and re-picking against it swapped a user's custom project preset for
   // a stock one permanently (the "prefer the project's preset" rung is first-pick-only, so the

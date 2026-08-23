@@ -13,7 +13,7 @@ function mesh(maxX: number): ImportedMesh {
 }
 
 test('stageImport summarizes a single-solid import as one part named after the import', () => {
-  const summary = stageImport({ workspaceId: 't1', name: 'Widget', format: 'stl', mesh: mesh(10) })
+  const summary = stageImport({ workspaceId: 't1', name: 'Widget', format: 'stl', mesh: mesh(10), normalize: 'object' })
   assert.equal(summary.parts.length, 1)
   assert.equal(summary.parts[0]?.name, 'Widget')
   assert.equal(summary.parts[0]?.triangleCount, 1)
@@ -28,7 +28,27 @@ test('stageImport summarizes a multi-solid import as one part per named solid', 
       { name: 'Hole modifier 1', mesh: mesh(5) }
     ]
   }
-  const summary = stageImport({ workspaceId: 't1', name: 'CHM Cylinder', format: 'step', mesh: merged })
+  const summary = stageImport({ workspaceId: 't1', name: 'CHM Cylinder', format: 'step', mesh: merged, normalize: 'object' })
   assert.deepEqual(summary.parts.map((part) => part.name), ['Cylinder', 'Hole modifier 1'])
   assert.equal(summary.parts.length, 2)
+})
+
+// The store normalises a whole OBJECT to the editor's pivot convention (XY centre on the origin,
+// lowest point at z = 0) so its `position` places its own centre and the rotate gizmo pivots there
+// rather than at whatever point the file's exporter chose.
+test('stageImport rebases an object import to the editor pivot', () => {
+  const summary = stageImport({ workspaceId: 't1', name: 'Widget', format: 'stl', mesh: mesh(10), normalize: 'object' })
+  assert.deepEqual(summary.bounds.min, { x: -5, y: -5, z: 0 })
+  assert.deepEqual(summary.bounds.max, { x: 5, y: 5, z: 0 })
+})
+
+// And must NOT touch a PART. An added part is centred on every axis by `primitivePartSoup` and then
+// placed by that single point inside its host (`addedPartDropPosition` drops a helper volume at the
+// host's centre), so flooring its Z would bury it half its own height above where the user put it —
+// invisibly, since a helper volume is translucent and never prints. Both shapes go through this one
+// entry point and nothing about the bytes tells them apart, which is why the caller states it.
+test('stageImport leaves a part import exactly as staged', () => {
+  const summary = stageImport({ workspaceId: 't1', name: 'Blocker', format: 'stl', mesh: mesh(10), normalize: 'part' })
+  assert.deepEqual(summary.bounds.min, { x: 0, y: 0, z: 0 })
+  assert.deepEqual(summary.bounds.max, { x: 10, y: 10, z: 0 })
 })

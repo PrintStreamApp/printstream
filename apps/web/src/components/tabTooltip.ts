@@ -15,7 +15,7 @@ import type { ShellTab } from './AppShell'
  * A tab with no visible text has the tooltip as the ONLY way to know what it
  * is, so the tooltip must name it, and adds the description after the name
  * when there is one. A tab whose label is already on screen must not repeat
- * that label — it either adds something (its description) or stays silent,
+ * that label, it either adds something (its description) or stays silent,
  * because a tooltip echoing the word under the pointer is noise that follows
  * the reader around the bar.
  *

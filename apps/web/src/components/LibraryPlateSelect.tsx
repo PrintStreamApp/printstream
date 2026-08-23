@@ -160,7 +160,7 @@ export function LibraryPlateCardPicker({
               color={selected ? 'primary' : 'neutral'}
               onClick={() => onChange(plate.index)}
               sx={{
-                // `flex` fixes the MAIN axis, which flips with the orientation — in a rail the
+                // `flex` fixes the MAIN axis, which flips with the orientation, in a rail the
                 // tile fills the width and its height is what must not stretch.
                 flex: '0 0 auto',
                 width: orientation === 'vertical' ? '100%' : (collapsed ? 'auto' : 140),
@@ -328,7 +328,7 @@ function PlateThumb({
       sx={{ width: size }}
       contentSx={{ backgroundColor: 'var(--joy-palette-neutral-800)', borderColor: 'var(--joy-palette-neutral-700)' }}
     >
-      {/* Eager, like the card strip below — see the note there for why lazy loading strands
+      {/* Eager, like the card strip below: see the note there for why lazy loading strands
           these thumbnails in a dialog. */}
       <Box
         component="img"
@@ -391,7 +391,7 @@ function PlateCardThumb({
       {thumbnailUrl
         ? (
           // NOT `loading="lazy"`. These tiles are a handful of small images that are on screen the
-          // moment their dialog opens, so deferring them buys nothing — and inside a dialog Chrome
+          // moment their dialog opens, so deferring them buys nothing, and inside a dialog Chrome
           // routinely never un-defers them: measured in the 3D plate preview, all four tiles sat at
           // `complete: false` with an empty `currentSrc` indefinitely while fully visible, though
           // the same URL loaded in ~200ms through a fresh `Image()` and in 1ms when the element's

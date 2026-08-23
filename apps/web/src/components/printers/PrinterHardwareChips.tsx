@@ -2,7 +2,7 @@
  * The hardware-identity chips for a machine: the soft-neutral model chip, the soft-primary
  * nozzle-size chip, and the soft-neutral installed-plate chip. Extracted from the printer card's
  * header (PrinterCardHardwareChips) so the printer picker rows render a machine exactly as its
- * card does — same chips, same colours, same label text. Callers own placement and any
+ * card does: same chips, same colours, same label text. Callers own placement and any
  * surface-specific tooltip on the model chip (the card wraps it in IP/Wi-Fi facts); the nozzle
  * and plate chips explain themselves via fixed tooltips.
  */

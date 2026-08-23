@@ -68,7 +68,7 @@ test('the preserved project gains the process preset the slice ran with, plus it
 test('the resolved preset wins over the project\'s declared changes, because the engine does too', async () => {
   // Established by A/B against the real engine: the same project sliced with and without this pass
   // produced identical G-code (`grid/5/monotonicline`) while the project declared
-  // `3dhoneycomb/4/monotonic` — a process preset loaded on the command line overrides the project's
+  // `3dhoneycomb/4/monotonic`, a process preset loaded on the command line overrides the project's
   // embedded process values outright. So restoring the project's deltas here would leave the kept
   // project describing a print that never happened, and they are inert on a re-slice anyway.
   const dir = await mkdtemp(path.join(tmpdir(), 'authoring-declared-'))
@@ -196,7 +196,7 @@ test('a per-material override is recorded as a user change, not baked in silentl
 })
 
 test('an unresolvable process preset leaves the project its own settings', async () => {
-  // A `project:` preset has no file to resolve — the project's embedded settings ARE that preset,
+  // A `project:` preset has no file to resolve: the project's embedded settings ARE that preset,
   // so overwriting them with nothing would be strictly destructive.
   const dir = await mkdtemp(path.join(tmpdir(), 'authoring-project-preset-'))
   try {
@@ -214,7 +214,7 @@ test('an unresolvable process preset leaves the project its own settings', async
       fileName: 'part.3mf'
     })
 
-    // Nothing changed, so nothing is written — the caller keeps the prepared bytes.
+    // Nothing changed, so nothing is written: the caller keeps the prepared bytes.
     assert.equal(authoredPath, null)
     assert.equal(resolveCalls, 0, 'a project preset is not even sent to the slicer')
   } finally {
@@ -239,7 +239,10 @@ test('the project records the Filament Track Switch machine it was sliced for', 
       hasFilamentTrackSwitch: true
     })
     assert.ok(authored)
-    assert.equal((await readProjectSettings(authored)).has_filament_switcher, true)
+    // The STRING "1", not a JSON boolean: `load_from_json` handles only string and array values and
+    // drops anything else as "invalid json type" (`Config.cpp:1004-1008`), so a JSON `true` would be
+    // silently ignored and the file would claim nothing at all.
+    assert.equal((await readProjectSettings(authored)).has_filament_switcher, '1')
 
     // Sliced WITHOUT one: nothing is written, because an absent key already means "no switch" to
     // BambuStudio's CLI. Writing `false` everywhere would rewrite every project on every slice.
@@ -254,7 +257,7 @@ test('the project records the Filament Track Switch machine it was sliced for', 
       hasFilamentTrackSwitch: false
     }), null)
 
-    // A project carrying a STALE `true`, re-sliced for a machine without the switch, is corrected —
+    // A project carrying a STALE `true`, re-sliced for a machine without the switch, is corrected,
     // otherwise the file would keep claiming a machine it was not sliced for and be refused.
     const stale = path.join(dir, 'stale.3mf')
     await writeProject(stale, { layer_height: '0.2', has_filament_switcher: true })
@@ -268,6 +271,20 @@ test('the project records the Filament Track Switch machine it was sliced for', 
     })
     assert.ok(cleared)
     assert.equal('has_filament_switcher' in await readProjectSettings(cleared), false)
+
+    // A stale "0" is NOT worth clearing: it already says what an absent key says, so rewriting it
+    // would force a full 3MF rewrite on every slice for no change in meaning. It is also a truthy
+    // JS string, which is why the check cannot be a plain truthiness test.
+    const off = path.join(dir, 'off.3mf')
+    await writeProject(off, { layer_height: '0.2', has_filament_switcher: '0' })
+    assert.equal(await authorSliceSettingsIntoProject({
+      workspaceId: 'workspace-1',
+      slicerTargetId: 'bambustudio-2-7-1',
+      target: makeTarget({}),
+      projectPath: off,
+      fileName: 'off.3mf',
+      hasFilamentTrackSwitch: false
+    }), null, 'a project carrying an explicit "0" was rewritten for no reason')
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -306,3 +323,4 @@ async function writeProject(filePath: string, settings: Record<string, unknown>)
     zip.end()
   })
 }
+

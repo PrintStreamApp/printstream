@@ -1,9 +1,9 @@
 /**
  * The saved printer-views list (`GET /api/printer-views`) as a shared React
- * Query resource. Owns the cache key shape so every consumer — the printers
+ * Query resource. Owns the cache key shape so every consumer: the printers
  * dashboard (which also writes the cache from its create/update/delete
  * mutations) and the Default page landing setting (which offers views as
- * landing targets) — reads one cache entry per workspace scope.
+ * landing targets): reads one cache entry per workspace scope.
  *
  * The key is scoped by the same workspace-preference scope key the dashboard
  * uses for its localStorage preferences (workspace id, or `platform` for the

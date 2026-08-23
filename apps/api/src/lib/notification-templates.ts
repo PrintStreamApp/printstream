@@ -9,7 +9,7 @@
  * dispatch time.
  *
  * State is global (shared across all channels). Per-channel overrides
- * are intentionally not supported in v1 — most users want one set of
+ * are intentionally not supported in v1: most users want one set of
  * messages everywhere; if that changes we can layer a per-plugin
  * override on top without breaking this contract.
  *
@@ -76,7 +76,7 @@ const DEFINITIONS: TemplateDefinition[] = [
   },
   {
     event: 'job.finished.success',
-    label: 'Print finished — success',
+    label: 'Print finished: success',
     defaults: {
       enabled: true,
       title: '{{printerName}}: Print finished',
@@ -86,7 +86,7 @@ const DEFINITIONS: TemplateDefinition[] = [
   },
   {
     event: 'job.finished.failed',
-    label: 'Print finished — failed',
+    label: 'Print finished: failed',
     defaults: {
       enabled: true,
       title: '{{printerName}}: Print failed',
@@ -96,7 +96,7 @@ const DEFINITIONS: TemplateDefinition[] = [
   },
   {
     event: 'job.finished.cancelled',
-    label: 'Print finished — cancelled',
+    label: 'Print finished: cancelled',
     defaults: {
       enabled: true,
       title: '{{printerName}}: Print cancelled',

@@ -35,7 +35,7 @@ export interface EditorPartContextMenuProps {
   /**
    * Whether any selected part accepts a material at all. False for a selection made up purely of
    * support blockers/enforcers and negative volumes, which have none (BambuStudio shows no
-   * extruder for them either) — the item is hidden rather than offered as a no-op.
+   * extruder for them either): the item is hidden rather than offered as a no-op.
    */
   materialAssignable: boolean
   onChangeMaterial: (filamentId: number) => void

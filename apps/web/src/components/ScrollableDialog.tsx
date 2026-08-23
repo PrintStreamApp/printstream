@@ -25,7 +25,7 @@ function sxArray<T>(value: T | readonly T[] | undefined): T[] {
  * `presentation` switches the shell between its normal footprint and the shared maximized /
  * full-screen modes (`lib/dialogPresentation.ts`). The mode is applied LAST, so it wins over the
  * caller's own width; leave it unset (or `standard`) for an ordinary dialog. Switching it only
- * changes props on the same elements — nothing remounts, so a WebGL canvas in the body survives the
+ * changes props on the same elements, nothing remounts, so a WebGL canvas in the body survives the
  * toggle.
  */
 export const ScrollableModalDialog = React.forwardRef<HTMLDivElement, ModalDialogProps & { presentation?: DialogPresentation }>(
@@ -46,7 +46,7 @@ export const ScrollableModalDialog = React.forwardRef<HTMLDivElement, ModalDialo
             // The scroller's PADDING is owned entirely by the presentation (standard included), not
             // set here and overridden per mode: MUI emits a responsive value's `xs` entry as
             // `@media (min-width:0px)`, and that media block beats a later flat override however the
-            // `sx` array is ordered — a maximized dialog silently kept this shell's 8px gutter.
+            // `sx` array is ordered, a maximized dialog silently kept this shell's 8px gutter.
             boxSizing: 'border-box',
             '& .MuiModalDialog-root': {
               maxHeight: MODAL_DIALOG_VIEWPORT_MAX_HEIGHT_FALLBACK,
@@ -69,7 +69,7 @@ export const ScrollableModalDialog = React.forwardRef<HTMLDivElement, ModalDialo
               width: '100%'
             },
             // An enlarged mode replaces the dialog's footprint, so the caller's own size declarations
-            // are removed rather than merely overridden — see `withoutDialogSizing`.
+            // are removed rather than merely overridden: see `withoutDialogSizing`.
             ...(presentation === 'standard' ? sxArray(sx) : sxArray(sx).map(withoutDialogSizing)),
             mode.dialogSx
           ]}
@@ -93,7 +93,7 @@ function assignRef<T>(ref: React.ForwardedRef<T>, value: T | null) {
  * `pinToBottom` anchors the scroll position at the bottom of the content for
  * chat-style threads whose newest entry sits last: the body becomes a
  * `column-reverse` flex container, whose scroll origin is the bottom edge, so
- * the latest message is visible on open and stays pinned as more arrive — with
+ * the latest message is visible on open and stays pinned as more arrive, with
  * no scroll-to-bottom JS (and none of its post-paint jump). When the content is
  * shorter than the body it simply hugs the bottom, which is the expected
  * chat-thread look.

@@ -2,7 +2,7 @@
  * Cross-plugin bridge: the print-queue emits `order-print.*` events on the shared
  * printerEvents bus when a queued item is linked to an order print. These handlers
  * mirror the queue lifecycle onto the order print so queuing and dispatching from the
- * queue advance the order — without either plugin importing the other.
+ * queue advance the order, without either plugin importing the other.
  *
  * The state reuses the existing order-print machinery (no new columns): an order print
  * with `status='started'` but no `startedPrinterId` reads as **queued**; setting the

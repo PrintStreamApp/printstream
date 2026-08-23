@@ -1,16 +1,16 @@
 /**
- * Shared filament label for the material pickers — the queue's `MaterialPickerDialog`, the queue row
- * dropdown, and the slice dialog's "Choose material" picker — laid out to match the print dialog's AMS
+ * Shared filament label for the material pickers, the queue's `MaterialPickerDialog`, the queue row
+ * dropdown, and the slice dialog's "Choose material" picker, laid out to match the print dialog's AMS
  * slot option ({@link SlotOptionLabel} in `PrinterMapping.tsx`): a colour circle (optionally carrying a
  * slot badge like `A1` via `swatchLabel`), a title line that folds
  * brand + type + colour into one string ("Bambu ABS · Jade White"), a meta line stacked *below* the
  * title carrying any caller detail (e.g. "File default") plus the remaining-quantity badge, and an
  * optional warning glyph on the right (e.g. for a type that differs from what the file was sliced
- * for) — the same trailing glyph the slot option shows for an incompatible slot.
+ * for), the same trailing glyph the slot option shows for an incompatible slot.
  *
  * The remaining badge leads with the percent when known ("50% · 480g") to mirror the slot badge, and
- * when the print's required grams are known it grades sufficiency in three states — **enough**,
- * **low** (warning: enough but within a thin headroom), and **short** (danger: less than required) —
+ * when the print's required grams are known it grades sufficiency in three states, **enough**,
+ * **low** (warning: enough but within a thin headroom), and **short** (danger: less than required),
  * so the user sees not just "low or not" but whether the material actually has enough. Kept visually
  * in step with the slot picker so the print and add-to-queue dialogs read as the same control.
  */
@@ -49,9 +49,9 @@ export function FilamentOptionLabel({
   remainingGrams?: number | null
   /** Remaining as a percent of net weight; leads the badge ("50% · 480g") when known. */
   remainPercent?: number | null
-  /** Grams this print needs — when both are known, an insufficient remaining badge warns/turns danger. */
+  /** Grams this print needs: when both are known, an insufficient remaining badge warns/turns danger. */
   requiredGrams?: number | null
-  /** True when the remaining grams sum across multiple spools — adds a "total" suffix to the badge. */
+  /** True when the remaining grams sum across multiple spools: adds a "total" suffix to the badge. */
   aggregated?: boolean
   /** When set, a trailing warning glyph with this tooltip (e.g. a type mismatch vs the sliced file). */
   warningLabel?: string | null
@@ -70,7 +70,7 @@ export function FilamentOptionLabel({
     : type
   const title = [brandType || null, resolvedColorName].filter(Boolean).join(' · ') || 'Material'
   const status = filamentRemainingStatus(remainingGrams, requiredGrams, remainPercent, aggregated)
-  // Whether a second (meta) line renders. The warning glyph only spans two grid rows when it does —
+  // Whether a second (meta) line renders. The warning glyph only spans two grid rows when it does,
   // otherwise it forces a phantom second row that pushes the single title line above centre.
   const hasMeta = Boolean(secondary || status)
   return (

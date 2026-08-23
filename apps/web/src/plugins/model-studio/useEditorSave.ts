@@ -2,7 +2,7 @@
  * Save / apply / close flows for the 3MF project editor.
  *
  * Owns the "is a save in flight" and Save-As dialog state and the handlers that turn the live
- * scene into a persisted 3MF (new version, Save-As, or the single-object "Export as 3MF" —
+ * scene into a persisted 3MF (new version, Save-As, or the single-object "Export as 3MF",
  * which saves a filtered copy WITHOUT adopting it as the editor's saved state), hand a built
  * SceneEdit back to the host at slice time ("Use this layout"), and guard closing while there
  * are unsaved edits. Pulled out of EditorView so the component body keeps to scene wiring and
@@ -62,7 +62,7 @@ export interface EditorSaveParams {
   /**
    * This project was CREATED in the editor (a new-project scaffold or a fileless start) rather
    * than opened from a library file. Such a project keeps its instances import-backed for the
-   * whole session, so its saves bake from the editor state alone — see {@link EditorSave.savedFile}.
+   * whole session, so its saves bake from the editor state alone: see {@link EditorSave.savedFile}.
    */
   editorBorn: boolean
   /** Slice-time apply (only present when launched from the slice dialog). */
@@ -75,14 +75,14 @@ export interface EditorSaveParams {
   /** Where a save goes. Defaults to the library-backed api target. */
   saveTarget?: EditorSaveTarget
   /**
-   * Whether the project has a material yet — BambuStudio parity, a project must have one before it
+   * Whether the project has a material yet: BambuStudio parity, a project must have one before it
    * can be saved. Defaults to reading the slice controller; a host without one (the public editor)
    * answers from its own materials, or the gate would reject every save.
    */
   hasMaterials?: () => boolean
   /**
    * A project save baked the session's filament ids renumbered by this SESSION->SAVED map (the
-   * emit-side translation in `buildSceneEditOut`) — the live editor state must follow, or its
+   * emit-side translation in `buildSceneEditOut`): the live editor state must follow, or its
    * instances keep pointing at ids the saved project no longer has (mesh colours fall back to the
    * originally-seeded scene colours, and the NEXT save re-translates already-stale ids). Called
    * only for project-adopting saves (never the single-object export) and only when the map is not
@@ -100,7 +100,7 @@ export interface EditorSaveParams {
 export interface EditorSave {
   /**
    * The library file an editor-born project was saved into, once it has been saved. The editor
-   * ADOPTS that file in place — it keeps its scene and stays open rather than re-mounting on the
+   * ADOPTS that file in place, it keeps its scene and stays open rather than re-mounting on the
    * saved file, so a plain Save no longer looks like the project reloaded. Null until the first
    * save (and always null for a project opened from a file, which already has its own base).
    */
@@ -119,7 +119,7 @@ export interface EditorSave {
   handleSaveAs: (name: string, destinationFolderId: string | null) => void
   /** Export ONE object as its own new 3MF project file (keeps the editor on the source project). */
   handleExportObjectAs3mf: (key: string, name: string, destinationFolderId: string | null) => void
-  /** Same single-object 3MF bake, streamed back as a browser download — nothing lands in the library. */
+  /** Same single-object 3MF bake, streamed back as a browser download, nothing lands in the library. */
   handleExportObjectAs3mfDownload: (key: string, fileName: string) => void
 }
 
@@ -157,7 +157,7 @@ export function useEditorSave({
   const [saveAsOpen, setSaveAsOpen] = useState(false)
   const [savedFile, setSavedFile] = useState<{ id: string; name: string } | null>(null)
   // Saves of an editor-born project target the adopted file once it exists, and always bake from
-  // the editor state — never from the bytes of the save before them (see `ignoreBaseContent`).
+  // the editor state, never from the bytes of the save before them (see `ignoreBaseContent`).
   const effectiveBaseFileId = savedFile?.id ?? baseFileId
   const effectiveBaseVersionId = savedFile ? null : baseVersionId
 
@@ -173,7 +173,7 @@ export function useEditorSave({
 
   /**
    * The file's version counter as this session last knew it: at open, then one higher after each
-   * of our own saves. Tracking OUR saves is what makes the check meaningful — comparing against a
+   * of our own saves. Tracking OUR saves is what makes the check meaningful: comparing against a
    * fixed open-time value would flag our second save as somebody else's work.
    */
   const expectedVersionNumberRef = useRef<number | null>(null)
@@ -187,7 +187,7 @@ export function useEditorSave({
    * Ask before superseding a save someone else made while this session was open.
    *
    * We author from the bytes we opened (see the content-base pin), so their version stays in
-   * history but is NOT an ancestor of ours — that is the decision, and it is exactly the thing a
+   * history but is NOT an ancestor of ours, that is the decision, and it is exactly the thing a
    * user should get to see rather than discover later in the version list. Read fresh, never
    * through the query cache, or the check answers from whatever this session last saw.
    *
@@ -207,7 +207,7 @@ export function useEditorSave({
     if (current === null) return true
 
     const expected = expectedVersionNumberRef.current
-    // Our save adds one, whatever we found — so the baseline is right even if we let a conflict through.
+    // Our save adds one, whatever we found, so the baseline is right even if we let a conflict through.
     expectedVersionNumberRef.current = current + 1
     if (expected === null || current === expected) return true
 
@@ -265,13 +265,13 @@ export function useEditorSave({
           // project dirty and say nothing, rather than reporting a save that did not happen.
           if (!file) return null
           // Before anything else: the bytes we authored from now live at an archived id. Pinning is
-          // not conditional on `asProject` — a single-object export writes a real version too, and
+          // not conditional on `asProject`, a single-object export writes a real version too, and
           // leaving the pin on a head that has moved would silently re-chain the next save.
           adoptArchivedVersion(file.id, file.archivedVersionId)
           if (asProject) {
             markSaved()
             // The save renumbered the session's filament ids to the desired list's 1..N (the
-            // emit-side translation in buildSceneEditOut); the live editor state must follow — see
+            // emit-side translation in buildSceneEditOut); the live editor state must follow: see
             // onFilamentsRenumbered. Computed HERE, from the same controller list the bake used,
             // so the two sides of the invariant can never disagree about the map.
             if (onFilamentsRenumbered) {
@@ -280,8 +280,8 @@ export function useEditorSave({
               if (remap) onFilamentsRenumbered(remap)
             }
             // The saved 3MF bakes the session's material list as its filament list; tell the
-            // controller so it renumbers to match. It does that IN MEMORY and immediately — it wrote
-            // the list, so it does not need the refetched index to tell it what it just saved — which
+            // controller so it renumbers to match. It does that IN MEMORY and immediately, it wrote
+            // the list, so it does not need the refetched index to tell it what it just saved, which
             // is why there is no ordering constraint here any more. This call used to have to happen
             // BEFORE the invalidation below, because the controller detected the save by watching its
             // base material list change; arming late lost the race and an added material rendered
@@ -328,7 +328,7 @@ export function useEditorSave({
   const collectObjectProcessOverrides = useCallback((scope?: EditorState): Record<string, Record<string, string | string[]>> | undefined => {
     const value = sliceConfigRef.current?.perObjectSettings?.value
     if (!value) return undefined
-    // Identities that can carry per-object settings — placed objects PLUS the retained identity of
+    // Identities that can carry per-object settings: placed objects PLUS the retained identity of
     // every replaced object (see objectIdsAcceptingOverrides). `scope` narrows that to a synthetic
     // state (the single-object export), so only that object's overrides ride along.
     const source = scope ?? stateRef.current
@@ -347,7 +347,7 @@ export function useEditorSave({
   }, [sliceConfigRef])
 
   // Per-MATERIAL tune overrides ("Save in this 3MF"), keyed by the material's 1-based SAVED slot
-  // position — the position in the desired list the save bakes as slots 1..N — never its session
+  // position, the position in the desired list the save bakes as slots 1..N, never its session
   // id, which a material add/remove renumbers (audit invariant I4). Empty ⇒ omit.
   const collectFilamentSettingOverrides = useCallback((): Record<string, Record<string, string | string[]>> | undefined => {
     const config = sliceConfigRef.current
@@ -363,7 +363,7 @@ export function useEditorSave({
   const handleSaveVersion = useCallback(() => {
     const current = stateRef.current
     if (!current) return
-    // A library save needs a file to version. A local one does not have (or need) an id at all —
+    // A library save needs a file to version. A local one does not have (or need) an id at all:
     // requiring one here made Save a no-op for a project opened from disk.
     if (saveTarget.isLibraryBacked && effectiveBaseFileId === null) return
     // Busy from the click, not from `runSave`: the concurrent-save check is a network read and the
@@ -399,7 +399,7 @@ export function useEditorSave({
     const current = stateRef.current
     if (!current) return
     setSaveAsOpen(false)
-    // Busy before the capture — same reason as `handleSaveVersion`.
+    // Busy before the capture: same reason as `handleSaveVersion`.
     setSaving(true)
     void (async () => {
       try {
@@ -407,7 +407,7 @@ export function useEditorSave({
         const thumbnails = await captureAllPlateThumbnails(current)
         const retarget = sliceConfigRef.current?.retargetTarget ?? undefined
         // A project born in the editor has never been persisted, so its first save is a "save as"
-        // only mechanically — there is no earlier file to strand the user on, and its own scaffold
+        // only mechanically, there is no earlier file to strand the user on, and its own scaffold
         // holds nothing the editor state doesn't model. Bake from the state so the editor can adopt
         // the result instead of re-mounting on it.
         const firstSaveOfEditorBornProject = editorBorn && savedFile === null
@@ -435,7 +435,7 @@ export function useEditorSave({
         }
         // A real "save as" DOES make a new file while an older one stays behind, so leaving the
         // editor on the old project would silently send further edits to the wrong file. Re-open
-        // on the new one — and re-reading it is also what turns this session's staged imports into
+        // on the new one, and re-reading it is also what turns this session's staged imports into
         // in-project objects, which an adopted project deliberately skips.
         onSavedAs?.(saved)
       } finally {
@@ -449,7 +449,7 @@ export function useEditorSave({
    * file through the normal save pipeline, so its parts, per-part materials/types, paint,
    * added volumes, and per-object process overrides all survive (everything an STL export
    * flattens away). Unlike Save-As, the editor stays on the source project and its dirty
-   * state is untouched — the export is a copy, not a save of the project.
+   * state is untouched: the export is a copy, not a save of the project.
    */
   const handleExportObjectAs3mf = useCallback((key: string, name: string, destinationFolderId: string | null) => {
     const current = stateRef.current
@@ -474,7 +474,7 @@ export function useEditorSave({
             retarget,
             slicerTargetId: retarget ? sliceConfigRef.current?.selectedSlicerTargetId : undefined,
             // Marker: the library treats the export as a reusable model (preview on click),
-            // not an openable project — see the shared index parser's model-kind doc.
+            // not an openable project: see the shared index parser's model-kind doc.
             objectExport: true
           },
           `Exported “${name}”`,
@@ -488,7 +488,7 @@ export function useEditorSave({
 
   /**
    * "Download 3MF project": the same single-object bake as {@link handleExportObjectAs3mf}
-   * but streamed straight back as a download (`POST /api/editor/export-3mf` — see the route's
+   * but streamed straight back as a download (`POST /api/editor/export-3mf`: see the route's
    * doc for the no-persist contract). Uses the stall-guarded model fetch because the baked
    * 3MF is a large body on the same web→API path as model downloads.
    */

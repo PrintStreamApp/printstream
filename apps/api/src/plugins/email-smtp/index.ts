@@ -8,10 +8,10 @@
  * registry, never by importing this plugin.
  *
  * Routes (all gated by `settings.manage`, audited, secret never echoed):
- * - `GET /api/plugins/email-smtp` — current SMTP config (no password).
- * - `PUT /api/plugins/email-smtp/config` — set host/port/secure/username/from + password.
- * - `DELETE /api/plugins/email-smtp/config` — clear all SMTP settings.
- * - `POST /api/plugins/email-smtp/test` — send a test email to a given address.
+ * - `GET /api/plugins/email-smtp`: current SMTP config (no password).
+ * - `PUT /api/plugins/email-smtp/config`: set host/port/secure/username/from + password.
+ * - `DELETE /api/plugins/email-smtp/config`: clear all SMTP settings.
+ * - `POST /api/plugins/email-smtp/test`: send a test email to a given address.
  */
 import { z } from 'zod'
 import { SETTINGS_MANAGE_PERMISSION } from '@printstream/shared'

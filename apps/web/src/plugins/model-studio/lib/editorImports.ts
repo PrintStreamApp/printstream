@@ -12,7 +12,7 @@
  * itself is fetched as a binary STL (rendered with `STLLoader.parse`) rather than
  * shipped as JSON.
  */
-import { extractErrorMessage, type StagedImport } from '@printstream/shared'
+import { extractErrorMessage, type ImportNormalization, type StagedImport } from '@printstream/shared'
 import type { EditorImportStore } from './editorImportStore'
 import { buildApiUrl } from '../../../lib/apiUrl'
 import { readWorkspaceContextHeader } from '../../../lib/workspaceContext'
@@ -25,7 +25,7 @@ import { fetchModelBytes } from './modelFetch'
 export function importMeshUrl(importId: string, partIndex?: number): string {
   const base = buildApiUrl(`/api/editor/imports/${encodeURIComponent(importId)}/mesh`)
   if (partIndex == null) return base
-  // buildApiUrl may already have added a query (e.g. ?workspace=…), so use the right separator —
+  // buildApiUrl may already have added a query (e.g. ?workspace=…), so use the right separator,
   // a second `?` makes the server read `part` as part of the workspace value, so every solid would
   // wrongly fetch the full merged mesh (7× the bytes → the "model download stalled" the user hit).
   const separator = base.includes('?') ? '&' : '?'
@@ -49,9 +49,16 @@ async function readImportResponse(response: Response): Promise<StagedImport> {
 }
 
 /** Stage a foreign model from the user's filesystem (multipart, field `file`). */
-export async function stageImportFromFile(file: File, signal?: AbortSignal): Promise<StagedImport> {
+export async function stageImportFromFile(
+  file: File,
+  normalize: ImportNormalization,
+  signal?: AbortSignal
+): Promise<StagedImport> {
   const form = new FormData()
   form.append('file', file)
+  // A multipart text field beside the file; the server rebases only an `object` (see
+  // `ImportNormalization`), so an added part must reach it as `part` or its Z gets floored.
+  form.append('normalize', normalize)
   const response = await fetch(buildApiUrl('/api/editor/imports'), {
     method: 'POST',
     credentials: 'include',
@@ -65,6 +72,7 @@ export async function stageImportFromFile(file: File, signal?: AbortSignal): Pro
 /** Stage a foreign model from an existing library file (optionally a single object). */
 export async function stageImportFromLibrary(
   libraryFileId: string,
+  normalize: ImportNormalization,
   objectId: number | undefined,
   signal?: AbortSignal
 ): Promise<StagedImport> {
@@ -72,7 +80,7 @@ export async function stageImportFromLibrary(
     method: 'POST',
     credentials: 'include',
     headers: { Accept: 'application/json', 'Content-Type': 'application/json', ...workspaceHeaders() },
-    body: JSON.stringify(objectId == null ? { libraryFileId } : { libraryFileId, objectId }),
+    body: JSON.stringify(objectId == null ? { libraryFileId, normalize } : { libraryFileId, objectId, normalize }),
     signal
   })
   return readImportResponse(response)
@@ -97,7 +105,7 @@ export async function fetchImportMesh(importId: string, partIndex?: number, sign
 
 /**
  * The api-backed {@link EditorImportStore}: geometry is uploaded, parsed server-side, and held in a
- * workspace-keyed LRU that the bake resolves `importId`s from — which is why `importsForBake` is empty
+ * workspace-keyed LRU that the bake resolves `importId`s from, which is why `importsForBake` is empty
  * and `dispose` has nothing to release. Stateless, so one shared instance is fine.
  */
 export const apiImportStore: EditorImportStore = {

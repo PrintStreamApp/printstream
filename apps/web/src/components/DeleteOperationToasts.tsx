@@ -2,7 +2,7 @@
  * Global toasts for long-running deletes (library sweeps, printer removals),
  * grouped so a batch of them costs one toast with a line each.
  *
- * Renders into the app's single `StatusToastStack` as a child of it — it must
+ * Renders into the app's single `StatusToastStack` as a child of it, it must
  * not portal a stack of its own, or two stacks land in the same corner.
  */
 import { useEffect, useMemo, useState } from 'react'

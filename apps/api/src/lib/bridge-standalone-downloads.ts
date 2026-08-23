@@ -28,7 +28,7 @@ export function listBridgeStandaloneDownloads(
   options: { releasesDir?: string, assetOrigin?: string | null, serverUrlOverride?: string | null } = {}
 ): BridgeStandaloneDownloadsResult {
   // Checked BEFORE the manifest is read, so a mismatched build is never
-  // formatted into a link — an offered download is an installed bridge.
+  // formatted into a link, an offered download is an installed bridge.
   const consistency = describeBridgeReleaseConsistency(
     options.releasesDir ? { releasesDir: options.releasesDir } : {}
   )

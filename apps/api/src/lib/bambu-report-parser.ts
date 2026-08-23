@@ -1121,18 +1121,18 @@ function parseAms(
     }
   }
   // `tray_exist_bits` is the printer's authoritative per-slot occupancy, and it
-  // describes EVERY slot — including any this report said nothing else about, which the
+  // describes EVERY slot, including any this report said nothing else about, which the
   // per-tray loop above cannot reach because it only visits trays the payload carried.
   //
   // A BACKSTOP, not a fix for anything observed. A bridge capture of an H2D
   // (`bambu-report-parser.capture.test.ts`) shows this firmware always sending the
   // complete four-tray list per unit and stripping a removed slot's object to
-  // `{id, state}` — so the loop already reaches every slot and the sweep changes
+  // `{id, state}`, so the loop already reaches every slot and the sweep changes
   // nothing there. It is kept because it is idempotent when the list IS complete
   // (same bits, same answer) and costs one pass, while the alternative is trusting one
   // firmware on one model. Do not cite it as fixing a reported symptom.
   //
-  // Runs only when the bits are present: absence is not emptiness. That case is real —
+  // Runs only when the bits are present: absence is not emptiness. That case is real,
   // the same capture has AMS frames carrying full tray identity and no bitmap at all.
   if (trayExistBits !== null) {
     for (const unit of units) {
@@ -1173,15 +1173,15 @@ type ClearableFilamentSlot = Pick<
 /**
  * Blank every spool-identity field on a slot the printer reports as empty.
  *
- * The one definition of what "empty" clears, shared by all three callers — the
- * per-tray merge, the exist-bits sweep, and the external/virtual tray — so they
+ * The one definition of what "empty" clears, shared by all three callers, the
+ * per-tray merge, the exist-bits sweep, and the external/virtual tray, so they
  * cannot drift.
  *
  * Why every field and not just the visible ones: a removed slot's tray object arrives
  * stripped to `{id, state}` (observed, see `bambu-report-parser.capture.test.ts`), and
  * every identity field falls back to the PREVIOUS slot when absent. So without a full
  * clear the merge quietly reconstructs the spool that just left. A partial clear is
- * worse still — the external path used to blank only the colour, leaving an "empty"
+ * worse still: the external path used to blank only the colour, leaving an "empty"
  * slot advertising the removed spool's RFID tag and K profile. BambuStudio renders
  * `!is_exists` as empty regardless of any lingering RFID data; this mirrors that.
  *
@@ -1300,7 +1300,7 @@ function parseAmsUnitSwitchInputFromInfo(unit: Record<string, unknown>): 'A' | '
  * NOT the same mapping as `amsTrayIndex` in `@printstream/shared`, despite the family
  * resemblance: that one produces `ams_mapping` VALUES for a print command (where an HT
  * unit's index is its unit id). These are bitmap positions. Two different Bambu
- * numbering schemes that agree for classic AMS and diverge for HT — do not merge them.
+ * numbering schemes that agree for classic AMS and diverge for HT: do not merge them.
  *
  * Returns null rather than guessing for a type whose band is unmapped, mirroring
  * `GetTrayId`'s `assert(0); return -1`. That matters because callers CLEAR a slot on
@@ -1330,19 +1330,19 @@ function amsTrayExistBitIndex(unitId: number, slotId: number, unitType: AmsUnitT
  *
  * Decoded from a bridge capture, since BambuStudio ignores the field (it reads `state`
  * on the extruder/chamber/nozzle objects as packed bit fields, never on a tray):
- * **bit 0 is occupancy** and **bit 1 is "identity known"** — bit 1 tracks `tray_type`
+ * **bit 0 is occupancy** and **bit 1 is "identity known"**: bit 1 tracks `tray_type`
  * being populated and goes meaningless once bit 0 clears. Bits 2-4 appear only in
  * transients while a spool is being inserted and are not decoded.
  *
  * **Read the sample sizes before trusting that.** 994 of the 996 observations are bit
  * 0 SET across 32 slots on 7 printers, which is solid. The evidence that it CLEARS is
- * two samples, two seconds apart, from one slot on one printer — and clearing is the
+ * two samples, two seconds apart, from one slot on one printer, and clearing is the
  * direction that would do something. If bit 0 turns out to mean "ready to feed" rather
  * than "spool present" on some model, using it would blank a loaded slot's identity,
  * and the merge would keep it blank until a later report refilled it.
  *
  * So: not wired in, and the asymmetry is the reason rather than the correlation being
- * weak. It also would not pay for itself — the gap it could plausibly fill is a frame
+ * weak. It also would not pay for itself: the gap it could plausibly fill is a frame
  * with an AMS block and no bitmap, and of the 112 trays across the 19 such captured
  * frames only 68 carried `state`, every one of them reading occupied. Revisit if a
  * capture ever shows a removal announced in a frame that omits the bitmap; a
@@ -1810,15 +1810,15 @@ function parseExternalSpools(
         ? null
         : previous?.trayUuid ?? null
     // The virtual tray has no `tray_exist_bits`, so "is anything in it" is inferred from
-    // whether anything identifies it — and `trayUuid` has to be part of that test, or a
+    // whether anything identifies it, and `trayUuid` has to be part of that test, or a
     // slot can be published as empty (colour blanked) while still carrying the tag that
     // tells `collectPresences` a spool IS loaded there.
     //
     // In practice this term is expected to be inert: no populated `tray_uuid` has been
     // observed from an external holder, and BambuStudio's `parse_vt_tray` defaults the
     // field to "0" (which `parseTrayUuid` maps to null). It is written this way because
-    // the field IS in the wire format and Studio parses it — identically to an AMS tray,
-    // with no model gate anywhere — so the contradiction is unreachable rather than
+    // the field IS in the wire format and Studio parses it, identically to an AMS tray,
+    // with no model gate anywhere, so the contradiction is unreachable rather than
     // merely unlikely. Nothing here establishes whether any model reads RFID at the
     // external holder; do not cite this comment in either direction.
     const isEmpty = filamentType === null
@@ -2030,7 +2030,7 @@ function parseNozzleMaterialToken(value: unknown): Omit<InstalledNozzleSpec, 'di
  * Returns `undefined` when the report carries no nozzle-system data so the prior
  * rack state is preserved across partial MQTT deltas, and only yields a non-null
  * rack once the printer shows a rack marker (a `holder` block, a parked nozzle,
- * or a previously-seen rack) — so non-H2C machines never surface a rack.
+ * or a previously-seen rack), so non-H2C machines never surface a rack.
  *
  * NOTE: `device.nozzle.info[]` is already consumed by `parseInstalledNozzleSpecs`,
  * but the rack flag, `holder` block, and swap ids have NOT been verified against
@@ -2093,7 +2093,7 @@ function parseNozzleRack(
 /**
  * Filament Track Switch (FTS) state: installed flag from `print.aux` bit 29,
  * connections from `print.device.fila_switch`. Mirrors BambuStudio's
- * `DevFilaSwitch::ParseFilaSwitchInfo`, including its array ordering quirk —
+ * `DevFilaSwitch::ParseFilaSwitchInfo`, including its array ordering quirk:
  * `in[0]`/`out[0]` are the switch's B side, `in[1]`/`out[1]` the A side.
  * Returns `undefined` (leave status untouched) for the fleet-wide case of no
  * FTS signal, and clears previous state to `null` when the module disappears.
@@ -2380,7 +2380,7 @@ function isHexBitSet(value: string | null, bitIndex: number): boolean {
 /**
  * A tray's `remain` reading, or null when the printer is telling us it does not know.
  *
- * Firmware reports `remain: -1` for a spool it cannot measure — anything without an
+ * Firmware reports `remain: -1` for a spool it cannot measure: anything without an
  * RFID tag, which is every third-party and manually-set spool. Clamping that to `0`
  * (as this did) is not a harmless normalization: it turns "unmeasured" into "empty",
  * which reads downstream as a spool that cannot finish anything. Consumers gate the

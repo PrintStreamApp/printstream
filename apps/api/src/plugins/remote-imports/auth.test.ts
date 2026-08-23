@@ -37,7 +37,7 @@ type PersistedInput = Parameters<typeof persistLibraryFileFromLocalPath>[0]
 /**
  * Stands in for `persistLibraryFileFromLocalPath`, recording what the plugin asked
  * it to persist. The real helper owns folder/bridge resolution, dedupe, versioning,
- * attribution, and the audit entry — this suite asserts the plugin DELEGATES those
+ * attribution, and the audit entry, this suite asserts the plugin DELEGATES those
  * rather than re-testing them here (they are covered by the library-files suite).
  */
 function recordingPersist(): {
@@ -89,7 +89,7 @@ test('remote imports require upload permission', async () => {
 })
 
 // Regression: the gate used to pass LIBRARY_UPLOAD_PERMISSION as its own bypass
-// permission, which every caller past the route guard necessarily holds — so demo
+// permission, which every caller past the route guard necessarily holds, so demo
 // installs accepted unrestricted imports while appearing to be protected.
 test('remote imports refuse to import in demo mode even for upload-capable users', async () => {
   await withRemoteImportsApp({
@@ -415,7 +415,7 @@ test('remote imports persist direct file URLs through the shared library helper'
     assert.equal(body.file.name, 'widget.gcode.3mf')
     assert.equal(body.resolution.strategy, 'server-download')
     assert.equal(body.canPrintDirectly, true)
-    // A gcode row carries derived metadata, and nothing has parsed it yet — the DTO
+    // A gcode row carries derived metadata, and nothing has parsed it yet: the DTO
     // must say "pending" rather than assert empty chips as a settled answer.
     assert.equal(body.file.metadataPending, true)
     assert.deepEqual(body.file.compatiblePrinterModels, [])
@@ -431,7 +431,7 @@ test('remote imports persist direct file URLs through the shared library helper'
 })
 
 // STEP used to import fine while the rejection message and `/capabilities` both
-// claimed it could not — `classifyLibraryFileKind` returns 'step', not 'other'.
+// claimed it could not: `classifyLibraryFileKind` returns 'step', not 'other'.
 test('remote imports accept STEP files, matching what capabilities advertises', async () => {
   const { calls, persist } = recordingPersist()
   stub(prisma.libraryFolder, 'findFirst', async () => null)
@@ -475,7 +475,7 @@ test('remote imports accept STEP files, matching what capabilities advertises', 
 })
 
 // The full three-call chain: design -> instance f3mf -> signed CDN URL. Asserts the
-// two facts that are easy to get wrong and fail only against the real service — the
+// two facts that are easy to get wrong and fail only against the real service: the
 // API calls carry `Bearer <token>`, and the signed URL is fetched WITHOUT it.
 test('MakerWorld pages import through the connected account when opted in', async () => {
   const { calls, persist } = recordingPersist()
@@ -536,7 +536,7 @@ test('MakerWorld pages import through the connected account when opted in', asyn
   assert.equal(download?.authorization, null)
 })
 
-// A URL that already names the profile must not cost a design lookup — that request
+// A URL that already names the profile must not cost a design lookup, that request
 // is pure latency, and on a captcha-throttled account it is a second chance to fail.
 test('MakerWorld URLs carrying a profile id skip the design lookup', async () => {
   const { persist } = recordingPersist()
@@ -769,7 +769,7 @@ async function withRemoteImportsApp(
       : []
   )
   // The plugin reaches the account through the core registry, never by importing
-  // bambu-cloud-sync — so the test registers a resolver the same way that plugin does.
+  // bambu-cloud-sync, so the test registers a resolver the same way that plugin does.
   const unregisterAccount = bambuAccountResolvers.register(async () => workspaceState.bambuAccount ?? null)
 
   await plugin.register({

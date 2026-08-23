@@ -450,7 +450,7 @@ export function bambuColorsForMaterial(material: string | null): BambuColorSwatc
  * Returns `null` when the hex is not in the catalog.
  *
  * When a material hint is provided the lookup is scoped to that material
- * family ONLY — deliberately no cross-material fallback. Bambu reuses hexes
+ * family ONLY, deliberately no cross-material fallback. Bambu reuses hexes
  * across families under different marketing names (`#FFFFFF` is "Jade White"
  * in PLA Basic but plain "White" in ASA), so a global fallback hands a
  * filament another family's marketing name (the "custom ASA labelled Jade

@@ -1,5 +1,5 @@
 /**
- * The printers dashboard's default view — which view the bare `/printers`
+ * The printers dashboard's default view, which view the bare `/printers`
  * address opens with. Two tiers, mirroring `editorViewportSettings.ts`: a
  * **workspace-wide shared default** persisted server-side
  * (`GeneralSettings.printersDefaultViewId`, via `/api/settings`) and a
@@ -8,9 +8,9 @@
  *
  * The device tier keeps the pre-two-tier storage key (it used to be the ONLY
  * tier, labelled just "Set as default"), so existing devices keep the default
- * they chose — reinterpreted as an override now that a workspace default
+ * they chose: reinterpreted as an override now that a workspace default
  * exists underneath it. Its value space grew one member: the stored string is
- * a view id, the reserved `overview` sentinel (`OVERVIEW_VIEW_ROUTE_ID` — it
+ * a view id, the reserved `overview` sentinel (`OVERVIEW_VIEW_ROUTE_ID`, it
  * cannot collide with a cuid) pins the Overview on this device even when the
  * workspace default is a view, and `null`/absent means "follow the workspace
  * default". Old stored values are plain view ids, which parse unchanged.
@@ -64,7 +64,7 @@ export function useSharedDefaultPrinterViewId(): string | null {
  *
  * A device override wins outright: a view id (if it still exists), or the
  * `overview` sentinel pinning the Overview. A stale override falls through to
- * the shared tier rather than to Overview — the dashboard clears it shortly
+ * the shared tier rather than to Overview: the dashboard clears it shortly
  * after anyway, and falling through matches what that clear will produce. A
  * stale shared id degrades to Overview; nothing here writes the shared tier.
  */

@@ -90,7 +90,7 @@ export function buildLibraryFolderRoute(workspaceSlug: string, folderId: string 
  * Route that opens the library on a file AND asks it to start the slice flow for it.
  *
  * The handoff for surfaces that produce a file but do not own the slice/print dialog
- * stack — today the remote-import view, whose "Import and print" lands an unsliced
+ * stack, today the remote-import view, whose "Import and print" lands an unsliced
  * project. `LibraryView` consumes `slice`/`sliceFlow` once and strips them, so this is
  * a one-shot instruction rather than sticky state: sharing or refreshing the resulting
  * URL will not reopen the dialog.
@@ -116,7 +116,7 @@ export function buildLibrarySliceHandoffRoute(input: {
 /** Static path segment for the "Favorite Files" view (its own route, so it is bookmarkable + in history). */
 export const LIBRARY_FAVORITES_SEGMENT = 'favorites'
 
-/** Route for the favorites view — a flat, cross-folder list of the user's starred files. */
+/** Route for the favorites view, a flat, cross-folder list of the user's starred files. */
 export function buildLibraryFavoritesRoute(workspaceSlug: string, bridgeId: string | null): string {
   const path = `${LIBRARY_ROUTE}/${LIBRARY_FAVORITES_SEGMENT}`
   const route = bridgeId ? `${path}?bridge=${encodeURIComponent(bridgeId)}` : path

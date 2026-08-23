@@ -1,7 +1,7 @@
 /**
  * Rename-file dialog: edits only a library file's base name, keeping its
  * extension (and the sliced/printable classification that hangs off it) fixed.
- * Self-contained and props-only — performs its own `apiFetch` PATCH and reports
+ * Self-contained and props-only: performs its own `apiFetch` PATCH and reports
  * success via `onSaved`.
  */
 import { useState } from 'react'
@@ -23,7 +23,7 @@ export function RenameFileModal({
 }) {
   // The extension is fixed: renaming must never change a file's type (and the
   // sliced/printable classification that hangs off it), so only the base name is
-  // editable — the extension renders read-only after the input, like the save dialogs.
+  // editable: the extension renders read-only after the input, like the save dialogs.
   const { baseName: initialBaseName, extension } = splitLibraryFileNameForRename(file.name)
   const [baseName, setBaseName] = useState(initialBaseName)
   const [error, setError] = useState<string | null>(null)
@@ -47,7 +47,7 @@ export function RenameFileModal({
     if (!canSubmit || submitting) return
     void submit()
   }
-  // Focused, selected, and Enter-committed — the base name is the only thing this dialog asks for.
+  // Focused, selected, and Enter-committed: the base name is the only thing this dialog asks for.
   const nameInputProps = useNameInputProps({ onAccept: () => void submit(), canAccept: canSubmit && !submitting })
   return (
     <Modal open onClose={onClose}>

@@ -1,8 +1,8 @@
 /**
  * Per-kind filter facets for the slicing-profile manager.
  *
- * The three profile kinds carry genuinely different metadata — a nozzle diameter means nothing to
- * a filament preset, a material type means nothing to a printer preset — so the manager shows one
+ * The three profile kinds carry genuinely different metadata, a nozzle diameter means nothing to
+ * a filament preset, a material type means nothing to a printer preset, so the manager shows one
  * kind at a time (a tab per kind) with only the facets that apply to it. This module owns which
  * facets each kind has and how a profile's values are read; the UI only renders what it is given.
  *
@@ -61,7 +61,7 @@ const PROCESS_FACETS: ReadonlyArray<SlicingPresetFacet> = [
     label: 'Layer height',
     placeholder: 'All layer heights',
     // The preset's real `layer_height`, falling back to the name token for presets
-    // that carry none (3MF project profiles) — same rule as the slice picker.
+    // that carry none (3MF project profiles): same rule as the slice picker.
     valuesOf: (profile) => uniqueStrings([resolveProfileLayerHeight(profile)])
   }
 ]
@@ -129,7 +129,7 @@ const UNGROUPED_LABEL = 'Unspecified'
 /**
  * Buckets `profiles` by a facet's values.
  *
- * A profile with SEVERAL values for the facet appears under each of them — a quality preset
+ * A profile with SEVERAL values for the facet appears under each of them, a quality preset
  * compatible with six printers shows up under all six, which is the point of grouping by
  * compatible printer ("what can I use on the X1C?"). Rows are therefore not a partition of the
  * list, and the group counts can exceed the total. Selection is by profile id, so a profile

@@ -34,7 +34,7 @@ const definitions = new Map<string, PlatformNotificationEventDefinition>()
 
 /**
  * Register platform events (idempotent per event id; later registrations
- * replace earlier ones). Call at startup — core or private modules.
+ * replace earlier ones). Call at startup: core or private modules.
  */
 export function registerPlatformNotificationEvents(entries: PlatformNotificationEventDefinition[]): void {
   for (const entry of entries) {

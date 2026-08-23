@@ -119,6 +119,20 @@ export function buildPlateObjectsWithPreview(
  * Project-level metadata/config entries are preserved so printer logs and
  * cover lookup can still understand the job, while Bambu's per-plate
  * G-code/config/thumbnail entries for other plates are dropped.
+ *
+ * The surviving plate is RENUMBERED to 1, because a one-plate archive that still calls itself plate
+ * 3 is one BambuStudio refuses to read: `load_gcode_3mf_from_stream` indexes `plate_data_list` by
+ * `plater_id - 1` and bails on any id above the plate count (`bbs_3mf.cpp:1633-1639`, the twin of
+ * the project-loader guard at `:2323-2329`). That costs the printer's own SD browser the file's
+ * title, time, weight and thumbnail (`PrinterFileSystem.cpp:973`) and makes print-from-SD fail with
+ * "Failed to parse model information" (`MediaFilePanel.cpp:690`). The print itself is unaffected
+ * either way: firmware consumes the gcode entry named in the upload parameter and never reads this.
+ *
+ * Only the two IDENTITY fields move. Entry names (`Metadata/plate_3.gcode`, its thumbnails) and the
+ * `gcode_file` / `thumbnail_file` pointers are left exactly as they are, because the importer
+ * resolves every asset through those stored strings (`:4539-4547`, extracted by literal name at
+ * `:1674`) and never rebuilds a name from the index. Renaming them would also mean rewriting the
+ * upload parameter, i.e. changing live print protocol to fix a metadata read.
  */
 export function createSinglePlateThreeMf(sourcePath: string, outputPath: string, plate: number): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -226,12 +240,25 @@ function filterSliceInfoXml(xml: string, selectedPlate: number): string {
   const filtered = xml.replace(/<plate\b[^>]*>[\s\S]*?<\/plate>/g, (block) => {
     const indexMatch = /<metadata\s+key="index"\s+value="(\d+)"\s*\/>/.exec(block)
     if (Number(indexMatch?.[1]) === selectedPlate) {
-      keptPlate = block
-      return block
+      keptPlate = renumberPlateMetadata(block, 'index')
+      return keptPlate
     }
     return ''
   })
   return keptPlate ? filtered : xml
+}
+
+/**
+ * Point one plate block's identity key at plate 1.
+ *
+ * `slice_info`'s `index` and `model_settings`' `plater_id` are the SAME key space to the importer:
+ * the slice record is attached by looking its `index` up in the map built from `plater_id`
+ * (`bbs_3mf.cpp:4593-4597`). A miss leaves `m_curr_plater` null and `_handle_end_config_plater`
+ * then returns false (`:4766-4770`), aborting the parse outright. So the two are renumbered together
+ * or not at all: fixing one alone is worse than fixing neither.
+ */
+function renumberPlateMetadata(block: string, key: 'index' | 'plater_id'): string {
+  return block.replace(new RegExp(`(<metadata\\s+key="${key}"\\s+value=")\\d+(")`), '$11$2')
 }
 
 function filterModelSettingsXml(xml: string, selectedPlate: number): string {
@@ -239,8 +266,8 @@ function filterModelSettingsXml(xml: string, selectedPlate: number): string {
   const filtered = xml.replace(/<plate\b[^>]*>[\s\S]*?<\/plate>/g, (block) => {
     const plateIdMatch = /<metadata\s+key="plater_id"\s+value="(\d+)"\s*\/>/.exec(block)
     if (Number(plateIdMatch?.[1]) === selectedPlate) {
-      keptPlate = block
-      return block
+      keptPlate = renumberPlateMetadata(block, 'plater_id')
+      return keptPlate
     }
     return ''
   })
@@ -278,7 +305,7 @@ export type { ObjectProcessOverrides } from '@printstream/shared/three-mf'
  *
  * Object selection is expressed by marking the deselected objects' `<build><item>` entries
  * `printable="0"` in `3D/3dmodel.model` (the same marker the 3D editor's Printable toggle writes).
- * That flag is NOT itself honored by the BambuStudio CLI — the slicer service reads it back and
+ * That flag is NOT itself honored by the BambuStudio CLI: the slicer service reads it back and
  * passes the matching `identify_id`s to the CLI's `--skip-objects` flag, which is what actually
  * excludes them (see `apps/slicer/src/skip-objects.ts`). Removing the `<model_instance>` blocks
  * instead does nothing (the CLI re-derives plate membership from build-item geometry), and physically
@@ -287,7 +314,7 @@ export type { ObjectProcessOverrides } from '@printstream/shared/three-mf'
  * `model_settings.config`.
  *
  * `customGcode` merges slice-time layer filament changes / pauses into
- * `Metadata/custom_gcode_per_layer.xml` (replace-per-listed-plate semantics — see
+ * `Metadata/custom_gcode_per_layer.xml` (replace-per-listed-plate semantics: see
  * {@link mergeCustomGcodePerLayer}); the entry is upserted when the source archive has none.
  */
 export async function createObjectCustomizedThreeMf(
@@ -310,7 +337,7 @@ export async function createObjectCustomizedThreeMf(
   if (selected && plate > 0) {
     // A missing/unreadable model_settings.config is benign here: there are then no per-plate
     // model_instances to map a selection against, so we slice all objects (the prior behavior). A
-    // genuinely corrupt archive is not silently dropped — the rewriteThreeMfEntries pass below
+    // genuinely corrupt archive is not silently dropped: the rewriteThreeMfEntries pass below
     // re-opens the same file and surfaces the error, failing the job.
     const modelSettingsXml = await readEntry(sourcePath, 'Metadata/model_settings.config')
       .then((buffer) => buffer.toString('utf8'))
@@ -334,7 +361,7 @@ export async function createObjectCustomizedThreeMf(
   if (customGcode && (customGcode.filamentChanges !== undefined || customGcode.pauses !== undefined)) {
     // Transform covers a source that already has the sidecar; the append upserts it when
     // absent (rewriteThreeMfEntries only appends names the copy pass did not write). An
-    // empty merge result still writes '' — the scene builder's established "cleared" form.
+    // empty merge result still writes '': the scene builder's established "cleared" form.
     transforms[CUSTOM_GCODE_PER_LAYER_ENTRY] = (xml) => mergeCustomGcodePerLayer(xml, customGcode.filamentChanges, customGcode.pauses)
     appendEntries.push({ name: CUSTOM_GCODE_PER_LAYER_ENTRY, content: mergeCustomGcodePerLayer(null, customGcode.filamentChanges, customGcode.pauses) })
   }
@@ -344,7 +371,7 @@ export async function createObjectCustomizedThreeMf(
 /**
  * Move each replaced object's per-object process overrides onto the baked `object_id` its
  * "Replace with…" geometry landed on (`replacedObjectIds` comes from {@link buildEditedThreeMf}).
- * The original object is gone from the arranged 3MF — its instances reference the staged import —
+ * The original object is gone from the arranged 3MF, its instances reference the staged import,
  * so an override keyed by the original id would match nothing; re-keying makes it apply to the
  * replacement instead. Untouched objects keep their original key. Returns the input unchanged when
  * there were no replacements.
@@ -384,15 +411,15 @@ export interface PlateSkipIdentifyIds {
   identifyIds: number[]
   /** Requested object ids with no matching instance on the plate (or no usable identify_id). */
   unmatchedObjectIds: number[]
-  /** Total instances placed on the plate — lets callers refuse a skip-everything selection. */
+  /** Total instances placed on the plate: lets callers refuse a skip-everything selection. */
   plateInstanceCount: number
 }
 
 /**
- * Map deselected plate objects to instance `identify_id`s using a parsed 3MF index — the single
+ * Map deselected plate objects to instance `identify_id`s using a parsed 3MF index: the single
  * resolver behind both the library dispatch (`print-dispatcher.ts`) and printer-storage print
  * flows. `identify_id` is the per-instance handle Bambu keys `skip_objects` on (the G-code's
- * "unique label id") — a DIFFERENT id space from the model `object_id` — so the post-start skip
+ * "unique label id"), a DIFFERENT id space from the model `object_id`, so the post-start skip
  * must send these, never the object ids themselves. `objectIds` are the plates index's own
  * `objects[].id` values, whatever id space that index carries: model_settings-derived objects use
  * `object_id`, while slice_info-derived objects (gcode-only exports with no `model_instance`

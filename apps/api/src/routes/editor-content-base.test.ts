@@ -21,7 +21,7 @@ import { HttpError } from '../lib/http-error.js'
  * the pinned row was swept.
  *
  * `/export-3mf` rather than `/save`: it runs the identical bake and content-base resolution but
- * persists nothing, so these stay hermetic — no bridge, no library writes.
+ * persists nothing, so these stay hermetic, no bridge, no library writes.
  */
 
 const p = prisma as unknown as Record<string, Record<string, unknown>>
@@ -90,7 +90,7 @@ const BAKEABLE_EDIT = { plates: [{ index: 1 }], instances: [], filaments: [{ col
 
 test('a save that ignores base content does not fail on a content base that no longer exists', async () => {
   stubOnlyTargetFileExists()
-  // An editor-born session pins its new-project SCAFFOLD — a hidden row that is discarded on
+  // An editor-born session pins its new-project SCAFFOLD, a hidden row that is discarded on
   // abandon and swept by `pruneHiddenLibraryFiles`. Once it is gone the pin dangles, and the save
   // must not care: it already declared it wants none of those bytes.
   const result = await postExport({

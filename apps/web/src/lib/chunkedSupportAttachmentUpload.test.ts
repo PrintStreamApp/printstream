@@ -17,8 +17,8 @@ const UPLOAD_PATH = '/api/support/attachments'
  * emulates the API's begin/chunk/status/complete protocol, with an injectable
  * hook to fail specific chunk attempts so we can exercise retry-with-resume.
  *
- * The stub tracks `received` the way the server does — appends must arrive at
- * the current offset — so a client that resumes from the wrong place fails here
+ * The stub tracks `received` the way the server does, appends must arrive at
+ * the current offset, so a client that resumes from the wrong place fails here
  * exactly as it would against the real API.
  */
 async function runUpload(

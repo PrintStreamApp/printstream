@@ -68,8 +68,8 @@ interface PrinterNotificationState {
   stage: PrinterStatus['stage']
   /**
    * Error codes (device + HMS) already notified for the current job episode.
-   * Sticky across status updates — including transient empty HMS lists that
-   * MQTT reconnects emit before the first full report — so the same set of
+   * Sticky across status updates, including transient empty HMS lists that
+   * MQTT reconnects emit before the first full report, so the same set of
    * errors is never re-notified. Reset when a job (re)enters an active stage.
    */
   notifiedErrorCodes: Set<string>

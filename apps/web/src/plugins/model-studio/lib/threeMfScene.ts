@@ -244,7 +244,7 @@ function flattenPlanarPatchNormals(geometry: THREE.BufferGeometry): THREE.Buffer
 /**
  * Build the bed surface for a plate: a translucent plane and a millimetre grid with edge
  * coordinate labels, centred at `(centerX, centerY)` on the z=0 plane. The print area gets no
- * border square — the grid is the plate.
+ * border square: the grid is the plate.
  */
 export function createPreviewPlateSurface({
   width,
@@ -263,14 +263,14 @@ export function createPreviewPlateSurface({
   excludeAreas?: Array<{ polygon: Array<{ x: number; y: number }>; label?: string | null }>
   /**
    * Draw the tinted surface fill. Turned off when the real 3D build plate is rendered underneath,
-   * where it only z-fights the mesh. Everything else — grid, measurement ticks, unprintable zones
-   * — is drawn either way; the modelled plate supplies a surface, not a scale.
+   * where it only z-fights the mesh. Everything else: grid, measurement ticks, unprintable zones,
+   * is drawn either way; the modelled plate supplies a surface, not a scale.
    */
   showSurfaceFill?: boolean
   /**
    * Which edge the measurement ticks run along. `rear` is used with the 3D plate: every bed mesh
    * extends well past the print area at the FRONT for its handle (H2D: -18.5mm), so front ticks
-   * would land on top of it — the rear edge is clear.
+   * would land on top of it: the rear edge is clear.
    */
   axisLabelEdge?: 'front' | 'rear'
 }): THREE.Object3D {
@@ -451,7 +451,7 @@ function createBedAxisLabels(minX: number, maxX: number, minY: number, maxY: num
  * Sprite (billboarding read as odd): the numbers behave like markings printed on
  * the plate, which means they DO foreshorten at grazing camera angles. That is
  * accepted; the historical "numbers fade away when zoomed out" bug was the mipmap
- * alpha-collapse below, not the flat orientation — keep mipmaps off either way.
+ * alpha-collapse below, not the flat orientation: keep mipmaps off either way.
  */
 function createAxisTickLabel(text: string, heightMm: number): THREE.Object3D | null {
   const fontSize = 44
@@ -470,7 +470,7 @@ function createAxisTickLabel(text: string, heightMm: number): THREE.Object3D | n
   context.fillText(text, canvas.width / 2, canvas.height / 2)
 
   const texture = new THREE.CanvasTexture(canvas)
-  // NO mipmaps — this is what keeps the numbers visible at every zoom. The canvas is a thin glyph
+  // NO mipmaps, this is what keeps the numbers visible at every zoom. The canvas is a thin glyph
   // on a fully transparent background, so mip levels average the glyph away with transparent black:
   // once the label minifies past the base level (any zoomed-out view), sampled alpha collapses to
   // ~0 and the number disappears entirely (verified by pixel probe: brightest pixel 35 -> 197 after
@@ -593,14 +593,14 @@ function createPolygonHatchLines(points: THREE.Vector2[], spacing: number): THRE
 
 /**
  * Build the renderable object for one 3MF/STL part: a shaded mesh plus, for parts
- * resting on the bed, subtle edge outlines — matching the read-only preview so the
+ * resting on the bed, subtle edge outlines: matching the read-only preview so the
  * editor and preview render identically.
  *
  * `transform` is applied to the mesh/edges (a part's component transform, or null
  * when the geometry is already in the parent's frame). `clearanceTransform` (the
  * full geometry→world transform, defaults to `transform`) decides whether the part
  * clears the bed, which selects the floating (shadow-casting, smoother) vs grounded
- * (edge-outlined) material — so the caller can account for a parent placement that
+ * (edge-outlined) material, so the caller can account for a parent placement that
  * is applied to the group rather than the mesh.
  */
 export function createThreeMfPartObject(
@@ -612,7 +612,7 @@ export function createThreeMfPartObject(
     subtype?: string | null
     /**
      * Project filament palette (1-based ids). When provided, the part's parsed
-     * `paint_color` triangles render as an overlay tinted with these colours — used by
+     * `paint_color` triangles render as an overlay tinted with these colours: used by
      * the read-only previews/thumbnails (the editor manages its own live overlays).
      */
     colorPaintFilaments?: ReadonlyArray<{ id: number; color: string | null }> | null
@@ -628,7 +628,7 @@ export function createThreeMfPartObject(
   const hasBedClearance = (clearanceBounds?.min.z ?? 0) > THREE_MF_BED_CLEARANCE_THRESHOLD
 
   // Support blockers/enforcers and modifier/negative volumes render as translucent coloured
-  // volumes (BambuStudio-style) and don't participate in resting/collision/clearance — they're
+  // volumes (BambuStudio-style) and don't participate in resting/collision/clearance, they're
   // tagged isHelperVolume so the editor's bounds + footprint checks skip them.
   const helperColor = helperVolumeSpec(options.subtype)?.color ?? null
   if (helperColor !== null) {
@@ -700,7 +700,7 @@ export function createThreeMfPartObject(
 }
 
 /** Release geometry/material GPU resources for an object and its descendants. */
-/** Dispose a material AND any textures it holds — `Material.dispose()` does not free `.map` etc. */
+/** Dispose a material AND any textures it holds: `Material.dispose()` does not free `.map` etc. */
 export function disposeMaterial(material: THREE.Material): void {
   for (const value of Object.values(material as unknown as Record<string, unknown>)) {
     if (value && (value as THREE.Texture).isTexture) (value as THREE.Texture).dispose()
@@ -728,8 +728,8 @@ export function disposeObject3D(object: THREE.Object3D): void {
  *
  * The indirection exists because the bytes have two sources: a library file streams them from the
  * API's `scene-entry` endpoint, while the public 3MF editor already holds the whole archive in
- * memory and never uploads it. Both hand back the SAME unmodified zip-entry XML — `scene-entry`
- * does no server-side parsing — so the rest of the pipeline cannot tell them apart.
+ * memory and never uploads it. Both hand back the SAME unmodified zip-entry XML, `scene-entry`
+ * does no server-side parsing, so the rest of the pipeline cannot tell them apart.
  */
 export type ThreeMfEntryLoader = (entryPath: string, signal?: AbortSignal) => Promise<string>
 
@@ -745,7 +745,7 @@ export function createLibraryThreeMfEntryLoader(fileId: string): ThreeMfEntryLoa
 }
 
 /**
- * Build a plated 3MF scene's MESH parts (coloured by material) as a group — no plate
+ * Build a plated 3MF scene's MESH parts (coloured by material) as a group, no plate
  * surface. Shared by the modal previewer (which adds a plate around it), the library
  * thumbnail fallback (which wants the bare model at Bambu's iso angle), and the public
  * 3MF editor. Throws if no previewable geometry is found.

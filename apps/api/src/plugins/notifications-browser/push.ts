@@ -16,7 +16,7 @@ const SUBSCRIPTIONS_KEY = 'subscriptions'
 /**
  * Default `mailto:` claim included in every signed push request.
  * Push services require *some* contact, but we don't want to ask the
- * user to set one — the address is opaque to end users.
+ * user to set one: the address is opaque to end users.
  */
 const DEFAULT_VAPID_SUBJECT = 'mailto:printstream@local'
 

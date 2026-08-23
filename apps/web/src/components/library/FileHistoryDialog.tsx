@@ -1,7 +1,7 @@
 /**
  * Version-history dialog for a library file: lists every stored version with its
  * per-version actions (print / edit / preview / download / restore). Self-contained
- * and props-only — it owns its own versions query and restore mutation, and surfaces
+ * and props-only, it owns its own versions query and restore mutation, and surfaces
  * action intents (print/slice/preview a version) back to the caller via callbacks so
  * the page can open the matching dialog. Owns the version helpers nothing else uses.
  */

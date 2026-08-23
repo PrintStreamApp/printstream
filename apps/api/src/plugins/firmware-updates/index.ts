@@ -9,7 +9,7 @@
  * 2. For LAN-only updates, downloads the requested firmware file and
  *    uploads it to the printer's SD card root via the existing FTPS
  *    helper. The actual flash still happens from the printer screen
- *    (Settings > Firmware) — Bambu does not expose a remote trigger.
+ *    (Settings > Firmware): Bambu does not expose a remote trigger.
  *
  * Upload progress is broadcast to web clients via the shared
  * `plugin.event` envelope so the firmware page can show a live
@@ -42,7 +42,7 @@ import { evaluateOfflineUpdate, evaluatePrerequisite } from './firmware-constrai
 /**
  * Firmware binaries are downloaded server-side and staged on the printer SD card,
  * so the source URL (scraped from Bambu's download page) is pinned to Bambu's own
- * hosts/CDN over https — never an arbitrary, attacker-influenced URL.
+ * hosts/CDN over https, never an arbitrary, attacker-influenced URL.
  */
 const FIRMWARE_ALLOWED_HOSTS = ['bblmw.com', 'bambulab.com'] as const
 
@@ -262,7 +262,7 @@ export const firmwareUpdatesPlugin: ApiPlugin = {
         offlineUpdate: evaluateOfflineUpdate(apiKey, currentVersion),
         // Per-module versions (each AMS unit, controllers) minus `ota`, which is
         // already reported as `currentVersion`. Bambu publishes no separate
-        // "latest" for these, so they are display-only — they let the user see
+        // "latest" for these, so they are display-only, they let the user see
         // whether an AMS unit lags the main firmware.
         modules: (status?.firmwareModules ?? [])
           .filter((module) => module.name !== 'ota')
@@ -483,7 +483,7 @@ export const firmwareUpdatesPlugin: ApiPlugin = {
 
     context.router.post('/updates/:printerId/upload', requireRequestPermission(PRINTERS_MANAGE_PERMISSION), async (request, response) => {
       const printerId = requireRouteParam(request.params.printerId, 'printerId')
-      // Firmware upload is a safety-relevant SD write — gate on workspace ownership, not
+      // Firmware upload is a safety-relevant SD write: gate on workspace ownership, not
       // just the bare printer id from the manager.
       const printer = await requireWorkspaceOwnedConnectedPrinter(printerId)
 
@@ -493,7 +493,7 @@ export const firmwareUpdatesPlugin: ApiPlugin = {
       }
 
       // Below the model's offline floor the printer has no "Update Offline" option,
-      // so a staged package can never be flashed — reject rather than upload a dead
+      // so a staged package can never be flashed: reject rather than upload a dead
       // file. (The UI also blocks this; this is the boundary backstop.)
       const offlineUpdate = evaluateOfflineUpdate(resolveApiKey(printer.model), status?.firmwareVersion ?? null)
       if (offlineUpdate.belowMinimum && offlineUpdate.minimumVersion) {
@@ -571,7 +571,7 @@ interface UpdateReport {
   printerId: string
   printerName: string
   model: string
-  /** Whether the printer is currently reachable — firmware can only be uploaded when online. */
+  /** Whether the printer is currently reachable: firmware can only be uploaded when online. */
   online: boolean
   currentVersion: string | null
   sdCardPresent: boolean | null
@@ -581,8 +581,8 @@ interface UpdateReport {
   releaseNotes: string | null
   /**
    * Whether offline (SD-card) updates are usable on this printer right now. Below
-   * the model's floor the printer cannot flash a staged package — it must be
-   * updated online once first — so the UI warns instead of staging a dead file.
+   * the model's floor the printer cannot flash a staged package, it must be
+   * updated online once first, so the UI warns instead of staging a dead file.
    */
   offlineUpdate: {
     minimumVersion: string | null
@@ -591,7 +591,7 @@ interface UpdateReport {
   /**
    * Installed firmware versions for the printer's sub-modules (each AMS unit,
    * controllers), excluding the main board (`ota`, already in `currentVersion`).
-   * Display-only — Bambu ships these inside the main OTA package and publishes
+   * Display-only: Bambu ships these inside the main OTA package and publishes
    * no separate "latest" to compare against.
    */
   modules: Array<{

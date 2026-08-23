@@ -10,7 +10,7 @@ const WEB_PLUGIN = path.resolve(HERE, '../../../../web/src/plugins/bambu-cloud-s
 /**
  * A REGRESSION guard, not a style rule.
  *
- * Nothing polls Bambu for preset changes — by design. That makes the WEB side the only
+ * Nothing polls Bambu for preset changes, by design. That makes the WEB side the only
  * thing that ever asks, and it means a break here is silent: `/status` still answers, the
  * chip still renders `null`, every test still passes, and the feature simply never
  * appears. That shipped once, when the background pass was removed and the chip was left
@@ -27,7 +27,7 @@ test('a preset surface actually triggers the check, since nothing else will', as
 
   assert.ok(
     sources.some((source) => source.includes('bambu-cloud-sync/check')),
-    'no web surface calls /check — with no background pass, nothing would ever work out '
+    'no web surface calls /check, with no background pass, nothing would ever work out '
       + 'whether presets are outstanding, and the indicator would never appear'
   )
 })

@@ -5,7 +5,7 @@
  * need it now: the slice dialog, and the public 3MF editor, which has no printers or dispatch but
  * still has to pick a process preset. Extracting it means one wiring rather than two that drift.
  *
- * The compatibility and ranking RULES are not here — they live in `lib/slicingPresetMatching.ts` and
+ * The compatibility and ranking RULES are not here, they live in `lib/slicingPresetMatching.ts` and
  * `lib/slicingPresetSelection.ts` and are only composed by this hook. What this owns is the
  * decision of WHEN to re-pick, which is the part that is easy to get subtly wrong.
  *
@@ -56,13 +56,13 @@ export interface ProcessProfileSelectionInput {
    */
   resetToken?: unknown
   /**
-   * Whether the profile list is COMPLETE — specifically, whether the project's own embedded presets
+   * Whether the profile list is COMPLETE: specifically, whether the project's own embedded presets
    * have been merged in yet. Defaults to true for hosts that build the list from one source.
    *
    * Load-bearing, not cosmetic. The library host feeds this hook from TWO independent queries: the
    * slicer catalogue and the 3MF index (fetched in parallel on purpose). When the catalogue wins
    * that race the list is populated but MISSING the `project:` preset, so the re-pick below sees a
-   * non-empty list that does not contain the project's own preset and latches a built-in — and it
+   * non-empty list that does not contain the project's own preset and latches a built-in, and it
    * never recovers, because the "prefer the project's own preset" rung is first-pick-only and a
    * selection now exists. That silently swapped a user's custom project preset for a stock one.
    * An EMPTY list was always safe (nothing to pick); a partial one is the dangerous state.
@@ -95,7 +95,7 @@ export function useProcessProfileSelection(input: ProcessProfileSelectionInput):
   // Deliberately starts EMPTY and lets the effect below make the first pick, one render later.
   // Picking here instead looked equivalent but ran before `projectPresetsReady` could be consulted,
   // so a host whose catalogue had prefetched (the library dialog always has) latched a built-in on
-  // mount — and the effect then saw a selection that WAS in the compatible list and returned early,
+  // mount, and the effect then saw a selection that WAS in the compatible list and returned early,
   // making the swap permanent. An empty id for one render is the price of not guessing.
   const [processProfileId, setProcessProfileId] = useState('')
   const [processSettingOverrides, setProcessSettingOverrides] = useState<Record<string, string | string[]>>({})
@@ -125,7 +125,7 @@ export function useProcessProfileSelection(input: ProcessProfileSelectionInput):
   }, [resetToken])
 
   useEffect(() => {
-    // Never re-pick against a half-built list — see `projectPresetsReady`.
+    // Never re-pick against a half-built list: see `projectPresetsReady`.
     if (!projectPresetsReady) return
     if (processProfileId && compatibleProcessProfiles.some((profile) => profile.id === processProfileId)) return
     if (!processProfileId && processProfileSelectionTouchedRef.current) return
@@ -133,7 +133,7 @@ export function useProcessProfileSelection(input: ProcessProfileSelectionInput):
       const previousName = selectedAnyProcessProfile?.name ?? bakedProcessProfileName ?? null
       // FIRST pick only: the project's OWN embedded preset beats an identically-named installed
       // one, because it carries the 3MF's saved overrides (wall_loops and friends) where the
-      // installed preset would collapse them to its defaults — BambuStudio likewise loads a
+      // installed preset would collapse them to its defaults: BambuStudio likewise loads a
       // project's embedded settings on open. Deliberately not on a RE-pick: a machine switch drops
       // the project preset from the compatible list on purpose, and re-selecting it would slice an
       // A1-authored process on an H2D. (Before S2 this rung lived in the workspace host's

@@ -129,7 +129,7 @@ test('resolveQueueableLibraryFile rejects recycled, missing, hidden-non-slice, a
   )
   // Missing id.
   await assert.rejects(() => resolveQueueableLibraryFile(fakePrisma([]), 'missing', { unhide: rejectingUnhide }), /not found/i)
-  // Hidden but not a slice output — never auto-kept.
+  // Hidden but not a slice output, never auto-kept.
   await assert.rejects(
     () => resolveQueueableLibraryFile(
       fakePrisma([{ id: 'h', name: 'widget.gcode.3mf', hidden: true, origin: 'upload', deletedAt: null }]),

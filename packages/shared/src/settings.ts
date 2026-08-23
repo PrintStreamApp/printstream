@@ -45,12 +45,12 @@ export type EditorSidebarSideSetting = z.infer<typeof editorSidebarSideSchema>
  * options in the process-settings editor; it is the workspace-wide default that
  * a per-device override (browser localStorage) can shadow.
  * `landingPage` controls which workspace page opens first when the app enters a
- * workspace — a core page, an enabled plugin page, or a saved printer view's
+ * workspace, a core page, an enabled plugin page, or a saved printer view's
  * `/printers/views/<id>` address (see the web's `lib/printerViewRoutes.ts`).
  * `printersDefaultViewId` is the saved printer view the bare `/printers` address
  * opens with (`null` = the built-in Overview). Like the editor viewport
  * preferences it is a workspace-wide default that a per-device override (browser
- * localStorage) can shadow — see the web's `lib/printerViewDefaults.ts`. A
+ * localStorage) can shadow: see the web's `lib/printerViewDefaults.ts`. A
  * stored id whose view was since deleted is treated as Overview by readers; the
  * API clears it when the referenced view is deleted.
  * `quickStartDismissed` hides the Get started page once a workspace is set up;
@@ -59,7 +59,7 @@ export type EditorSidebarSideSetting = z.infer<typeof editorSidebarSideSchema>
  * `supportAccessPermissions` controls what non-bypass support users can do.
  * `editorShowBedModel` and `editorSidebarSide` are the model studio's viewport
  * preferences. Like `slicerDeveloperMode` these are workspace-wide DEFAULTS that a
- * per-device override (browser localStorage) can shadow — a workspace can set the
+ * per-device override (browser localStorage) can shadow, a workspace can set the
  * house style while a given machine still differs (e.g. a left-handed layout, or a
  * weak GPU skipping the modelled plate).
  */

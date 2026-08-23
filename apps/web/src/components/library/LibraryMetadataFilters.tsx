@@ -5,7 +5,7 @@
  * Each facet is **multi-select**: pick any number of values (OR within a facet,
  * AND across facets); an empty selection means "all". Shared by the Library page
  * and every library picker (print dialog, order picker, file picker) so the
- * filter set is identical everywhere — and so it is the single place to evolve.
+ * filter set is identical everywhere, and so it is the single place to evolve.
  * Driven by the `useLibraryFilters` hook's state; each `Select` disables itself
  * when its facet has no values, uses `MultiSelectOption` (a leading check on the
  * selected values), and `disablePortal` so opening it does not dismiss the

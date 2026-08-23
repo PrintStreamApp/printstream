@@ -3,7 +3,7 @@
  * shortcuts, and `EditorView` must not handle the same keys in a listener of its own.
  *
  * This is a source scan because the failure is invisible at runtime: both listeners are attached to
- * `window`, so neither shadows the other and `preventDefault` does not stop the sibling — the action
+ * `window`, so neither shadows the other and `preventDefault` does not stop the sibling: the action
  * simply runs TWICE. That shipped: every Ctrl+Z undid two steps, which is how a save-then-undo
  * looked like it had lost the restored material when it had actually restored and then undone again.
  */

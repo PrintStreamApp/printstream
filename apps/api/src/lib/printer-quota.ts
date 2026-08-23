@@ -1,8 +1,8 @@
 /**
  * Printer quota hook. Core exposes a single optional registration point that a
  * deployment surface fills to cap printers and to report count changes for
- * usage metering. When nothing is registered — an unconfigured cloud, or a
- * licensed self-hosted install with no cap — printers are unlimited and count
+ * usage metering. When nothing is registered, an unconfigured cloud, or a
+ * licensed self-hosted install with no cap, printers are unlimited and count
  * changes are ignored, so core behaviour is unchanged.
  *
  * Two surfaces fill it, and they are mutually exclusive by build: the cloud
@@ -14,7 +14,7 @@
  * population.** A limit covering the whole install checked against one
  * workspace's printers is lifted by making a second workspace; an account-wide
  * free allowance checked per workspace is lifted the same way. Both live
- * registrations learned this the hard way — the licence cap counts the whole
+ * registrations learned this the hard way: the licence cap counts the whole
  * install, and the cloud's free allowance counts the whole ACCOUNT even though
  * its limit is expressed per workspace.
  *
@@ -30,7 +30,7 @@ interface PrinterQuotaRegistration {
   getLimit: (workspaceId: string) => Promise<number | null>
   /**
    * Count the printers `getLimit` is measured against. Required, and it must
-   * span the same population as the limit — see the module header.
+   * span the same population as the limit: see the module header.
    */
   countPrinters: (workspaceId: string) => Promise<number>
   /** Message for a rejected add. Defaults to plan-upgrade wording. */
@@ -48,8 +48,8 @@ interface PrinterQuotaRegistration {
    *
    * Not implemented by the cloud, which meters AFTER the add
    * (`syncPrinterQuantity`) because its own database is the authority on the
-   * count. A licensed install has no such authority — its allowance is signed
-   * into a key by someone else — so it must raise first and add second.
+   * count. A licensed install has no such authority, its allowance is signed
+   * into a key by someone else, so it must raise first and add second.
    *
    * Throw `conflict(...)` to refuse with a specific reason (declined payment,
    * no subscription behind the key); return null to fall back to
@@ -67,10 +67,10 @@ export function registerPrinterQuota(next: PrinterQuotaRegistration): void {
   if (registration) {
     // Throws rather than warning: the two surfaces are build-exclusive, so a
     // collision is a wiring bug, not a runtime condition. Letting the second win
-    // silently drops whichever cap registered first — on a misconfigured build
+    // silently drops whichever cap registered first, on a misconfigured build
     // that is licence enforcement, i.e. the cap disappears exactly where it is
     // the only thing protecting a paid product.
-    throw new Error('[printer-quota] a second quota registration was attempted — only one surface may cap printers')
+    throw new Error('[printer-quota] a second quota registration was attempted, only one surface may cap printers')
   }
   registration = next
 }
@@ -84,7 +84,7 @@ export function __resetPrinterQuotaForTests(): void {
  * Throw a 409 when creating another printer would exceed the applicable limit.
  *
  * A surface that can buy its way past the limit gets one attempt at
- * `raiseLimit` first — see its doc for why that is worth billing inline.
+ * `raiseLimit` first: see its doc for why that is worth billing inline.
  */
 export async function assertPrinterQuotaOrThrow(workspaceId: string): Promise<void> {
   if (!registration) return

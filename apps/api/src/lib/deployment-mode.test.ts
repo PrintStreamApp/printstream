@@ -2,11 +2,11 @@
  * The three deployments, and the implication that used to be an `||`.
  *
  * `PRINTSTREAM_NATIVE` semantically implies self-hosted, and that was encoded at
- * exactly ONE of sixteen `isSelfHostedDeployment()` call sites — inside
+ * exactly ONE of sixteen `isSelfHostedDeployment()` call sites, inside
  * `license-enforcement.ts`. Every other consumer (auth-provider selection,
  * default-workspace bootstrap, workspace context, print dispatch, bridge
  * updates, admin plugins, email delivery) got the unpatched answer, and was safe
- * only because the native bundle happens to ship no `src/private` directory —
+ * only because the native bundle happens to ship no `src/private` directory:
  * i.e. the `||` was load-bearing solely under a configuration that would already
  * be broken. These pin the implication in the model, so a native build can no
  * longer be told it is cloud.

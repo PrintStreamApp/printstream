@@ -49,7 +49,7 @@ function makeSpool(overrides: Partial<FilamentSpool> = {}): FilamentSpool {
 }
 
 test('spoolTitle combines brand, material and colour', () => {
-  assert.equal(spoolTitle(makeSpool()), 'Bambu PLA — Scarlet Red')
+  assert.equal(spoolTitle(makeSpool()), 'Bambu PLA: Scarlet Red')
   assert.equal(spoolTitle(makeSpool({ brand: null, colorName: null, colorHex: null })), 'PLA')
 })
 

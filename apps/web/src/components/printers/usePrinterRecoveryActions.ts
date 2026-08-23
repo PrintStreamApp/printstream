@@ -1,7 +1,7 @@
 /**
  * Resolves a printer's recovery/control action surface from its live status: per-action
  * availability (allowed + reason), which actions to show (driven by the printer's reported recovery
- * actions and stage), and the request handlers that fire each command — some behind a confirm
+ * actions and stage), and the request handlers that fire each command, some behind a confirm
  * prompt. Extracted from PrinterCard so the card body isn't dominated by recovery wiring; the card
  * feeds the results into the footer-action builder and the assistant/recovery dialogs.
  */

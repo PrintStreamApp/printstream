@@ -3,19 +3,19 @@
  *
  * Core owns the QUESTION and the enforcement; a deployment surface owns the
  * answer. On the multi-workspace cloud that answer is "the person who owns the
- * billing account this workspace belongs to" — they pay for it, so a workspace
+ * billing account this workspace belongs to", they pay for it, so a workspace
  * admin must not be able to lock them out of the thing they are being billed
  * for. Nothing fills this on a self-hosted install, where there is no account
  * above the workspace and every admin is already the top of the hierarchy.
  *
  * A registry rather than a direct call because the cloud module lives under
- * `src/private/` and core must never import it — the same shape as
+ * `src/private/` and core must never import it, the same shape as
  * `printer-quota.ts` and `billing-scope.ts`.
  *
  * **This is a floor, not a ceiling.** It never grants anything: the owner still
  * has to hold a role to use the workspace. It only refuses the specific changes
  * that would strand them, and it is checked alongside `assertAdminLockoutNotTriggered`
- * rather than instead of it — the two protect different people for different
+ * rather than instead of it: the two protect different people for different
  * reasons and either can be the one that fires.
  */
 
@@ -23,7 +23,7 @@
  * Answers whether a user is protected in a workspace, and why.
  *
  * The reason is shown to the admin who tried, so it must say who is protected
- * and by what — "you cannot remove this user" with no explanation reads as a
+ * and by what: "you cannot remove this user" with no explanation reads as a
  * bug in the People page.
  */
 export type ProtectedWorkspaceMemberResolver = (

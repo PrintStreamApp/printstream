@@ -33,7 +33,7 @@ test('repair keeps the process entry and carries the machine across from the END
   const record = JSON.parse(project(1, PRODUCTION_STALE)) as Record<string, unknown>
   const repaired = repairInheritsGroup(record)
 
-  // The machine sits LAST, so it moves when the count changes — a naive truncate would leave a
+  // The machine sits LAST, so it moves when the count changes, a naive truncate would leave a
   // filament's parent sitting in the machine slot, which is how the CLI resolves the printer.
   assert.deepEqual(repaired, [
     '0.20mm Strength @BBL P1P',
@@ -55,7 +55,7 @@ test('an inherits_group too SHORT is padded, keeping the machine last', () => {
   assert.equal(repaired?.length, 5)
   assert.equal(repaired?.[0], 'proc')
   assert.equal(repaired?.[4], 'machine')
-  // Slots with no recorded parent are EMPTY, never guessed — the CLI reads empty as "system preset".
+  // Slots with no recorded parent are EMPTY, never guessed: the CLI reads empty as "system preset".
   assert.deepEqual(repaired?.slice(1, 4), ['f1', '', ''])
 })
 

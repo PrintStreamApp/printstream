@@ -7,7 +7,7 @@ import { ClearBridgeCrashHistoryButton } from './ClearBridgeCrashHistoryButton'
 /**
  * Cross-page notice for bridges that are actively crash-looping. Mounted once
  * above workspace page content so a persistently-crashing bridge is visible wherever
- * the operator is, not only in settings — its printers keep disconnecting while it
+ * the operator is, not only in settings, its printers keep disconnecting while it
  * flaps, so this warrants app-wide attention. A one-off crash is deliberately NOT
  * shown here (it is surfaced by a settings chip + a user notification); this banner
  * is reserved for the ongoing crash-loop case.
@@ -54,7 +54,7 @@ function BridgeCrashBannerItem({ bridge }: { bridge: BridgeSummary }) {
         </Stack>
         <Typography level="body-sm">
           It keeps stopping and restarting, so its printers may repeatedly disconnect. Check the bridge machine and its
-          logs. Once it is sorted out, clear the crash history to hide this — it returns if the bridge crashes again.
+          logs. Once it is sorted out, clear the crash history to hide this, it returns if the bridge crashes again.
         </Typography>
         {bridge.crash.lastReason && (
           <Typography level="body-xs" textColor="text.tertiary" sx={{ wordBreak: 'break-word' }}>

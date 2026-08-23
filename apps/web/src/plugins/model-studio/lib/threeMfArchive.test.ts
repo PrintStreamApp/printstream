@@ -4,17 +4,17 @@ import { zipSync, strToU8 } from 'fflate'
 import { MAX_CLIENT_THREE_MF_BYTES, ThreeMfArchiveError, openThreeMfArchive } from './threeMfArchive'
 
 /**
- * The archive reader's ERROR contract — what `openThreeMfArchive` refuses, and with what.
+ * The archive reader's ERROR contract: what `openThreeMfArchive` refuses, and with what.
  *
  * Its three rejections are the only thing standing between a user's stray file and a viewer that
  * either shows nothing or kills the tab, and they are a real API: `LocalProjectEditor.tsx` catches
  * `ThreeMfArchiveError` and renders `caught.message` verbatim to the user. So the error TYPE and the
- * message text are both load-bearing — swapping either for a bare `Error` or a codec's internal
+ * message text are both load-bearing: swapping either for a bare `Error` or a codec's internal
  * wording is invisible to typecheck and to every other test in this directory.
  *
  * The valid-file cases are the control: a reader that rejected everything would satisfy the failure
  * assertions alone. The size cap is exercised with a stubbed `Blob.size` rather than 256MB of real
- * bytes — the guard reads `size` and nothing else, so allocating the payload would prove nothing
+ * bytes: the guard reads `size` and nothing else, so allocating the payload would prove nothing
  * extra and cost a quarter-gigabyte per run.
  */
 
@@ -55,8 +55,8 @@ async function rejectionOf(promise: Promise<unknown>): Promise<unknown> {
 
 /**
  * Every one of these messages is shown to the user unedited, so they must read as an explanation,
- * not as a leaked internal. The jargon list is the vocabulary of the layers underneath — fflate and
- * the zip worker — which the reader exists to translate away.
+ * not as a leaked internal. The jargon list is the vocabulary of the layers underneath, fflate and
+ * the zip worker, which the reader exists to translate away.
  */
 function assertUserPresentable(caught: unknown): asserts caught is ThreeMfArchiveError {
   assert.ok(
@@ -81,7 +81,7 @@ test('a valid 3MF opens and exposes its entries', async () => {
 
 test('a geometry-only 3MF opens; having no scene metadata is not an archive error', async () => {
   // A vanilla CAD export carries no `model_settings.config`. That is the mesh-preview case the
-  // library already handles, so the reader must hand it back rather than reject it — only the root
+  // library already handles, so the reader must hand it back rather than reject it, only the root
   // model entry is mandatory.
   const archive = await openThreeMfArchive(threeMfBlob({ '3D/3dmodel.model': MODEL_XML }))
 
@@ -111,7 +111,7 @@ test('a file exactly at the cap still opens', async () => {
 })
 
 test('a ZIP with no 3D/3dmodel.model is refused', async () => {
-  // Unzips perfectly — an ordinary archive, or a 3MF-adjacent bundle. Without this check the editor
+  // Unzips perfectly, an ordinary archive, or a 3MF-adjacent bundle. Without this check the editor
   // opens onto an empty scene, which reads as a broken viewer rather than as the wrong file.
   const caught = await rejectionOf(openThreeMfArchive(threeMfBlob({
     'Metadata/model_settings.config': '<config></config>',

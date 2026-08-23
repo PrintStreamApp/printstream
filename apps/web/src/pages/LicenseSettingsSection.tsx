@@ -5,11 +5,11 @@
  * subscriptions and has no key.
  *
  * Three keys can be installed and the copy must not conflate them:
- * - **Community** — free, perpetual, personal/non-commercial. Satisfies the
+ * - **Community**: free, perpetual, personal/non-commercial. Satisfies the
  *   Docker/OSS build only.
- * - **Lifetime** — a one-time purchase: perpetual commercial use, with an
+ * - **Lifetime**, a one-time purchase: perpetual commercial use, with an
  *   annual updates & support addon that can lapse without stopping the app.
- * - **Pro subscription** — carries an `expiresAt` and refreshes itself against
+ * - **Pro subscription**: carries an `expiresAt` and refreshes itself against
  *   the vendor cloud, so it needs no operator attention at all. The one thing
  *   worth surfacing is the run window, since a subscription that ends will
  *   eventually stop this install.
@@ -77,7 +77,7 @@ export function LicenseSettingsSection({ canManage }: { canManage: boolean }) {
   const isNative = enforcement?.native === true
   const isCommercial = status?.valid === true && status.edition === 'commercial'
   const isCommunity = status?.valid === true && status.edition === 'community'
-  // An expired key is still *installed* — say so, rather than "unlicensed",
+  // An expired key is still *installed*: say so, rather than "unlicensed",
   // which would send the operator hunting for a key they already pasted.
   const isExpired = status?.expired === true
   const subscription = status ? isSubscriptionKey(status) : false
@@ -107,10 +107,10 @@ export function LicenseSettingsSection({ canManage }: { canManage: boolean }) {
                 ? 'This license has expired. If it came with a Pro subscription, check that the subscription is still active; otherwise enter a new key below.'
                 : isNative
                   ? (isCommunity
-                      ? 'A community key is installed, but the native app requires a commercial license — community keys cover the Docker build only.'
+                      ? 'A community key is installed, but the native app requires a commercial license: community keys cover the Docker build only.'
                       : 'The native app requires a commercial license. Enter one below to keep full functionality past the evaluation period.')
                   : isCommunity
-                    ? 'Community edition — licensed for personal, non-commercial use only. A commercial license is required for business use.'
+                    ? 'Community edition: licensed for personal, non-commercial use only. A commercial license is required for business use.'
                     : 'This install needs a license. A community key is free for personal, non-commercial use; business use needs Pro or a Lifetime license.'}
               <Box sx={{ mt: 0.5 }}>
                 <Typography
@@ -129,19 +129,19 @@ export function LicenseSettingsSection({ canManage }: { canManage: boolean }) {
             <Stack spacing={0.5}>
               <Typography level="body-sm" textColor="text.tertiary">
                 {subscription ? 'Pro subscription' : 'Lifetime license'}
-                {status?.licensee ? ` — ${status.licensee}` : ''}
+                {status?.licensee ? `: ${status.licensee}` : ''}
                 {status?.maxPrinters != null
                   ? `. Covers ${status.maxPrinters} printer${status.maxPrinters === 1 ? '' : 's'}.`
                   : '. Unlimited printers.'}
               </Typography>
               {subscription && status?.expiresAt != null ? (
                 <Typography level="body-xs" textColor="text.tertiary">
-                  {`Renews automatically — this key is valid through ${formatDate(status.expiresAt)} and refreshes itself daily. Nothing to re-enter.`}
+                  {`Renews automatically, this key is valid through ${formatDate(status.expiresAt)} and refreshes itself daily. Nothing to re-enter.`}
                 </Typography>
               ) : null}
               {subscription && status?.metered ? (
                 <Typography level="body-xs" textColor="text.tertiary">
-                  Add or remove printers whenever you like — your subscription follows, charged or
+                  Add or remove printers whenever you like, your subscription follows, charged or
                   credited prorated for the current billing period.
                 </Typography>
               ) : null}

@@ -8,7 +8,7 @@
  * Worth having because the synthetic tests next door encode what we BELIEVE a report
  * looks like, and several of those beliefs turned out to be wrong. In particular this
  * firmware always sends the complete four-tray list per unit and strips a removed slot's
- * object to `{id, state}` rather than omitting it or leaving stale RFID data on it — so
+ * object to `{id, state}` rather than omitting it or leaving stale RFID data on it, so
  * the shapes the hand-written tests exercise are not the shapes the printer sends.
  */
 import assert from 'node:assert/strict'
@@ -57,13 +57,13 @@ const swappedSlot = (status: PrinterStatus) =>
 test('replaying a real spool swap clears the slot and then marks it occupied again', () => {
   const [loaded, removed, reinserted] = replay()
 
-  // Frame 1 — the tagged spool, `tray_exist_bits: "ff"` (both units full).
+  // Frame 1: the tagged spool, `tray_exist_bits: "ff"` (both units full).
   assert.equal(swappedSlot(loaded!)?.occupied, true)
   assert.equal(swappedSlot(loaded!)?.filamentType, 'PLA')
   assert.equal(swappedSlot(loaded!)?.trayInfoIdx, 'GFA10')
   assert.equal(swappedSlot(loaded!)?.trayUuid, 'CBB9BB03DF524B5780C5C048F0F6EF67')
 
-  // Frame 2 — removed. The bits drop to "f7" (bit 3 clear) and the tray object is
+  // Frame 2: removed. The bits drop to "f7" (bit 3 clear) and the tray object is
   // stripped to `{id, state}`, so every identity field has to come from the bit rather
   // than from the payload contradicting itself.
   assert.equal(swappedSlot(removed!)?.occupied, false)
@@ -73,7 +73,7 @@ test('replaying a real spool swap clears the slot and then marks it occupied aga
   assert.equal(swappedSlot(removed!)?.color, null)
   assert.equal(swappedSlot(removed!)?.remainPercent, null)
 
-  // Frame 3 — an untagged spool in the same slot. The bit comes back but the printer
+  // Frame 3, an untagged spool in the same slot. The bit comes back but the printer
   // reports no identity for it at all, which is the third-party placeholder state:
   // occupied, nothing known. It must NOT inherit the removed spool's identity.
   assert.equal(swappedSlot(reinserted!)?.occupied, true)

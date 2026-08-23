@@ -1,6 +1,6 @@
 /**
  * Loopback control channel for a standalone SEA app over a **named pipe**
- * (Windows) or **Unix domain socket** (mac/Linux) — no TCP port is ever bound.
+ * (Windows) or **Unix domain socket** (mac/Linux), no TCP port is ever bound.
  * A CLI (and, through it, a tray) connect to read status and trigger updates. It
  * is pull-based: nothing runs until a client connects, and there is no on-disk
  * status file for antivirus/indexers/backup agents to react to.

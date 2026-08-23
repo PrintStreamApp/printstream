@@ -2,7 +2,7 @@
  * Process shutdown hook registry.
  *
  * The graceful-shutdown sequence lives in `index.ts`, but some teardown is owned
- * by the pre-env boot stage in `server.ts` — most importantly stopping the
+ * by the pre-env boot stage in `server.ts`: most importantly stopping the
  * embedded Postgres cluster, whose `stop()` handle `index.ts` has no other way to
  * reach (boot starts the cluster before the app, including this module, loads).
  * Boot code registers a hook here; `shutdown()` drains them as part of teardown,

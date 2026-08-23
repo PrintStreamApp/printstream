@@ -4,7 +4,7 @@
  * locally for instant feedback.
  *
  * The read hooks mount `useFilamentSync` themselves, so a surface cannot subscribe to
- * a spool and then miss the WS `plugin.event` that changes it — the freshness is a
+ * a spool and then miss the WS `plugin.event` that changes it: the freshness is a
  * property of reading the data, not something each caller has to remember.
  */
 import { useCallback } from 'react'

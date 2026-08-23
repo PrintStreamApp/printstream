@@ -11,7 +11,7 @@
  *
  * Safe to call before the bridge's WebSocket session exists (the managed
  * auto-pair path runs during the registration HTTP request): the session
- * handoff is guarded on an active connection and skipped when there is none —
+ * handoff is guarded on an active connection and skipped when there is none:
  * the bridge then learns its workspace from the `bridge.welcome` the session
  * server sends once it connects.
  */

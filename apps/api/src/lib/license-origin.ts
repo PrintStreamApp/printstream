@@ -8,7 +8,7 @@
  *
  * **The key decides, not the config.** A signed `refreshOrigin` cannot drift
  * from the truth, whereas `LICENSE_REFRESH_ORIGIN` is a local setting that can
- * be wrong — and wrong in the worst possible way, because a refresh sent to the
+ * be wrong, and wrong in the worst possible way, because a refresh sent to the
  * wrong deployment fails silently and only surfaces weeks later when the run
  * window lapses, looking like an expired key rather than a misconfiguration.
  *
@@ -32,7 +32,7 @@ import { getInstalledLicenseKey } from './license-state.js'
  *
  * Also the answer for a key whose issuer did not know its own public URL. It is
  * a constant rather than an env default so that "the operator set this" stays
- * distinguishable from "nobody set this" — the whole precedence rule below
+ * distinguishable from "nobody set this": the whole precedence rule below
  * depends on telling those apart.
  */
 export const DEFAULT_LICENSE_ORIGIN = 'https://printstream.app'
@@ -66,7 +66,7 @@ export function resolveLicenseRefreshOrigin(key: string | null | undefined, publ
 /**
  * The verified key's own origin, or null when it does not name one.
  *
- * `publicKeyPem` follows `verifyLicenseToken`'s convention — it exists so tests
+ * `publicKeyPem` follows `verifyLicenseToken`'s convention, it exists so tests
  * can drive this from a throwaway keypair, since core carries no signer and
  * cannot mint a token the embedded vendor key would accept.
  */
@@ -90,7 +90,7 @@ export function resetLicenseOriginWarningForTests(): void {
  * The deployment THIS install belongs to, resolved from its installed key.
  *
  * The same answer as {@link resolveLicenseRefreshOrigin}, with the key looked up
- * rather than passed — for callers outside the licensing flow that need to reach
+ * rather than passed, for callers outside the licensing flow that need to reach
  * their own cloud (the native app fetching its slicer runtime, say) and would
  * otherwise invent a second "which deployment" setting. There is one such
  * question and it has one answer; a build that refreshes its licence against

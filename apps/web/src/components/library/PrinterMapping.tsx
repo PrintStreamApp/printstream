@@ -59,7 +59,7 @@ function traySlotId(tray: PrinterTrayOption): number | null {
  * (so the user can pre-set values when later switching plates).
  *
  * Every used filament must have an explicit tray before the print can be
- * dispatched — the printer doesn't pick slots itself. The dialogs pre-fill
+ * dispatched: the printer doesn't pick slots itself. The dialogs pre-fill
  * rows from the shared matcher's exact-match suggestion (see
  * `lib/autoTrayMatch.ts`); pass those ids as `autoSelectedFilamentIds` so the
  * rows are visibly flagged as auto-selected rather than silently filled, and
@@ -112,7 +112,7 @@ export function PrinterMapping({
   if (trayGroups.length === 0) {
     return (
       <Typography level="body-xs" textColor="text.tertiary" sx={{ mt: 1 }}>
-        {printer.name} has no reported printer trays yet — using printer default.
+        {printer.name} has no reported printer trays yet: using printer default.
       </Typography>
     )
   }
@@ -330,7 +330,7 @@ function SlotOptionLabel({
   // Canonical identity label: a tracked spool names the slot as itself
   // ("Michael's PLA · White"); otherwise "Bambu PLA Basic · Jade White" only
   // for genuine (RFID) Bambu trays; custom filament reads as its type + common
-  // colour ("PLA · White") — never a fabricated "Bambu <family>" brand claim.
+  // colour ("PLA · White"), never a fabricated "Bambu <family>" brand claim.
   const resolveSlotFilament = useSlotFilamentIdentityLookup()
   const spool = resolveSlotFilament(printerId, trayAmsId(tray), traySlotId(tray))
   const identity = resolveFilamentIdentity({ ...tray, spool })
@@ -346,7 +346,7 @@ function SlotOptionLabel({
     autoRefillEnabled
   })
   // Which of a slot's remaining signals may be believed is `knownRemainGrams`' call, made
-  // once inside `getSlotRemainingState` — the tracked spool's figure first (filament-manager
+  // once inside `getSlotRemainingState`: the tracked spool's figure first (filament-manager
   // covers non-RFID custom spools), then the percent estimate for RFID trays only. Untracked
   // third-party filament grades to null and shows nothing rather than a guess. Re-deriving
   // that precedence here is how the label and the insufficiency highlight came to disagree.
@@ -420,7 +420,7 @@ function SlotOptionLabel({
           <AutoSelectedGlyph />
         )}
         {/* The refill badge is NOT nested under the remaining figure. It used to be, and
-            `remainingDetail` is null for any spool that is neither RFID-tagged nor tracked —
+            `remainingDetail` is null for any spool that is neither RFID-tagged nor tracked,
             so the badge could never appear on exactly the manually-set spools the printer
             happily chains, and auto-refill looked like a Bambu-spool-only feature. */}
         {(remainingDetail || remainingState.usesAutoRefill) && (
@@ -467,7 +467,7 @@ function SlotOptionLabel({
 function AutoSelectedGlyph() {
   return (
     <Tooltip
-      title="Auto-selected — this slot holds an exact match for the material. Pick another slot to change it."
+      title="Auto-selected, this slot holds an exact match for the material. Pick another slot to change it."
       variant="soft"
       size="sm"
     >

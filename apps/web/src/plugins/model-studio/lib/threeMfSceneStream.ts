@@ -2,7 +2,7 @@
  * Streams a plated 3MF scene's meshes into a Three.js group, one archive entry at a time.
  *
  * Split out of `PreviewView` so the read-only preview and the public 3MF editor share one
- * implementation — they differ only in where the mesh bytes come from, which is what
+ * implementation, they differ only in where the mesh bytes come from, which is what
  * {@link ThreeMfEntryBytesLoader} abstracts: a library file streams them from the API's
  * `scene-entry` endpoint, the public viewer reads them out of an archive it unzipped locally and
  * never uploaded. Both yield the SAME unmodified zip-entry XML (`scene-entry` does no server-side
@@ -36,7 +36,7 @@ export function createLibraryThreeMfEntryBytesLoader(resourceBase: string): Thre
 /**
  * Parse and place every part of `scene` into `plateGroup`.
  *
- * @throws when the plate yielded no placeable geometry — the caller surfaces that as "nothing to
+ * @throws when the plate yielded no placeable geometry: the caller surfaces that as "nothing to
  *   preview" rather than showing an empty plate that looks like a rendering failure.
  */
 export async function streamThreeMfSceneParts(
@@ -62,7 +62,7 @@ export async function streamThreeMfSceneParts(
     const bytes = await loadEntryBytes(entryPath, signal)
     const modelMap = await parseThreeMfModelEntryAsync(bytes)
     if (signal.aborted) {
-      // The viewer moved on (plate/file switch) — drop the freshly parsed geometry rather than
+      // The viewer moved on (plate/file switch): drop the freshly parsed geometry rather than
       // attaching it to a group that's about to be disposed.
       for (const geometry of modelMap.values()) geometry.dispose()
       return
@@ -76,7 +76,7 @@ export async function streamThreeMfSceneParts(
           color: part.color ?? scene.projectFilaments?.[0]?.color ?? null,
           transform: createThreeMfMatrix(part.transform),
           // Without the subtype a support blocker / modifier / negative volume renders as an
-          // ordinary opaque part in the default filament — it reads as printed geometry that
+          // ordinary opaque part in the default filament, it reads as printed geometry that
           // isn't in the file. The editor has always passed this; the preview must match, or
           // the same project looks different depending on which surface opened it.
           subtype: part.subtype,

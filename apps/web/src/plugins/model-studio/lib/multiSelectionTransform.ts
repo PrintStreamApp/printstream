@@ -1,14 +1,14 @@
 /**
- * Rigid-body math for transforming a MULTI-selection as one body — BambuStudio's
+ * Rigid-body math for transforming a MULTI-selection as one body: BambuStudio's
  * `Selection::rotate` / `scale_and_translate` semantics (Instance mode, `World|Relative`, the
  * gizmo default): every member's OFFSET orbits the selection pivot while its own orientation /
  * scale composes with the delta, so the selection keeps its internal layout. The deltas are
  * always recomputed from a drag-start snapshot, never accumulated per frame, mirroring Studio's
- * drag-start cache (`set_caches`) — incremental composition would drift.
+ * drag-start cache (`set_caches`), incremental composition would drift.
  *
  * The pivots mirror Studio's two caches, which are DIFFERENT points on an asymmetric selection:
  * rotation pivots on the selection's minimum enclosing sphere centre (`m_cache.rotation_pivot`,
- * a Bambu divergence from PrusaSlicer's AABB centre — Selection.cpp:2683) while translate/scale
+ * a Bambu divergence from PrusaSlicer's AABB centre: Selection.cpp:2683) while translate/scale
  * pivot on the selection AABB centre (`m_cache.dragging_center`). Studio also renders each gizmo
  * at its own pivot, which is why {@link selectionPivot} is mode-keyed.
  *
@@ -38,7 +38,7 @@ export type MultiTransformMode = 'translate' | 'rotate' | 'scale'
 
 /**
  * The proxy's delta since drag start. The proxy is re-seated to identity rotation/unit scale on
- * attach, so `start` is normally identity — computed generally anyway so a stale proxy state can
+ * attach, so `start` is normally identity: computed generally anyway so a stale proxy state can
  * never read as a phantom transform.
  */
 export function selectionDeltaFromProxy(current: SelectionMemberPose, start: SelectionMemberPose): SelectionDelta {
@@ -58,10 +58,10 @@ export function selectionDeltaFromProxy(current: SelectionMemberPose, start: Sel
  * A member's new pose under the selection delta, rigid-body about `pivot`:
  * - translate: same world displacement for every member (Studio `Selection::translate`);
  * - rotate: offset orbits the pivot AND the member's orientation composes with the rotation
- *   (`transform_instance_relative`, `T(pivot)·R·T(-pivot)` premultiplied) — all axes, not just Z;
+ *   (`transform_instance_relative`, `T(pivot)·R·T(-pivot)` premultiplied), all axes, not just Z;
  * - scale: offsets push away from / pull toward the pivot while each member scales
  *   (`scale_and_translate`). Factors compose onto the outer-group scale, which our T·S·R group
- *   structure applies along WORLD axes — matching Studio's world-coordinates scale, where
+ *   structure applies along WORLD axes: matching Studio's world-coordinates scale, where
  *   non-uniform factors on a multi-selection are explicitly allowed (a Bambu divergence).
  *
  * Composing a world rotation into the rotor quaternion is exact for uniformly-scaled members;
@@ -131,7 +131,7 @@ interface Sphere {
  * Centre of the minimum enclosing sphere of a point set (Welzl's algorithm). Studio computes
  * this over the selection's convex-hull vertices with CGAL; we feed member AABB corners, whose
  * sphere encloses the same geometry with the centre in practically the same place. Deterministic
- * (no shuffle — the inputs are a few dozen box corners, so the worst case is irrelevant).
+ * (no shuffle: the inputs are a few dozen box corners, so the worst case is irrelevant).
  */
 export function minEnclosingSphereCenter(points: ReadonlyArray<THREE.Vector3>): THREE.Vector3 | null {
   if (points.length === 0) return null

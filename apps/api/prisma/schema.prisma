@@ -449,6 +449,13 @@ model Bridge {
   releaseFingerprint     String?
   protocolVersion        Int?
   runnerAbiVersion       String?
+  /// Host OS and CPU the bridge reports (`process.platform` / `process.arch`, e.g. "win32"/"x64").
+  /// Null for a bridge older than this field, which must read as "unknown" rather than as a
+  /// default platform. Recorded because packaging behaviour differs by OS and nothing else on this
+  /// row says which one it is, so "how many Windows bridges are deployed" was unanswerable.
+  /// Diagnostic only: never a gate on what a bridge may do.
+  platform               String?
+  arch                   String?
   updateChannel          String    @default("stable")
   updateStatus           String?
   latestAvailableVersion String?

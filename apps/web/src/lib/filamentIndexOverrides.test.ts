@@ -13,7 +13,7 @@ test('a reference to the removed material falls back to Default', () => {
 })
 
 // The value is a POSITION in the ordered list, so deleting a material renumbers everything above
-// it — without this, removing material 2 leaves "support interface" pointing at a shifted slot.
+// it, without this, removing material 2 leaves "support interface" pointing at a shifted slot.
 test('references above the removed material shift down', () => {
   assert.equal(remapFilamentIndexValue('3', 2), '2')
   assert.equal(remapFilamentIndexValue('4', 2), '3')

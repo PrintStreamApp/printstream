@@ -54,7 +54,7 @@ test('formatStatusToastGroupHeadline counts what is running against what is list
     member({ active: true, color: 'primary', progress: 10 }),
     member({ active: true, color: 'neutral', progress: null })
   ])
-  // The finished one is still a row in the toast, so the headline names it too —
+  // The finished one is still a row in the toast, so the headline names it too:
   // "Sending 2 prints" above three rows reads as a miscount.
   const someFinished = summarizeStatusToastGroup([
     member({ active: true, color: 'primary', progress: 10 }),

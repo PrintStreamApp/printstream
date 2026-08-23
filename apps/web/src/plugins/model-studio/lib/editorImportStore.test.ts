@@ -5,8 +5,8 @@
  * consumer, so "Load from library…" rendered on a host with no library and opened a workspace
  * picker that 403s; and the file input's `accept` was a hardcoded four-extension literal, so the
  * picker offered STEP and 3MF to a store that stages neither and only errored after the user had
- * chosen. Neither is catchable by the type checker — an optional callback passed unconditionally
- * type-checks fine — so the wiring is pinned at the source level below.
+ * chosen. Neither is catchable by the type checker, an optional callback passed unconditionally
+ * type-checks fine, so the wiring is pinned at the source level below.
  */
 import assert from 'node:assert/strict'
 import test from 'node:test'
@@ -21,7 +21,7 @@ const PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
 
 /**
  * The `onX={…}` expression containing `at`, brace-matched so a nested object or arrow body does not
- * end it early. Returns null when `at` is not inside a JSX prop at all — which the caller treats as
+ * end it early. Returns null when `at` is not inside a JSX prop at all, which the caller treats as
  * ungated, since an unrecognized shape is exactly when a reviewer should look.
  */
 function enclosingJsxProp(source: string, at: number): string | null {
@@ -48,7 +48,7 @@ test('the api store offers every format its server can convert', () => {
 test('a server-less store offers the same formats, having no library to import from', () => {
   const store = createLocalImportStore()
   // The one genuine difference between the hosts: no library. FORMATS are equal now that the 3MF
-  // extraction and the STEP fold are shared and the OCCT WASM loads in the tab — a file must not
+  // extraction and the STEP fold are shared and the OCCT WASM loads in the tab, a file must not
   // import differently depending on which host opened it.
   assert.equal(store.supportsLibrarySource, false)
   assert.deepEqual([...store.importableFormats].sort(), [...apiImportStore.importableFormats].sort())
@@ -58,7 +58,7 @@ test('a server-less store offers the same formats, having no library to import f
 
 test('an unsupported extension is still refused by name', async () => {
   const store = createLocalImportStore()
-  const error = await store.stageFile(new File([new Uint8Array([1, 2, 3])], 'notes.txt'))
+  const error = await store.stageFile(new File([new Uint8Array([1, 2, 3])], 'notes.txt'), 'object')
     .then(() => null, (thrown: unknown) => thrown)
   assert.ok(error instanceof LocalImportError)
   assert.match(error.message, /notes\.txt/)
@@ -76,7 +76,7 @@ test('nothing opens the workspace library picker without checking the store has 
   // Pin the gate's DEFINITION, not just its shape: `const canImportFromLibrary = true` satisfies
   // every ternary below while restoring the entire bug, and no render test mounts EditorView.
   assert.match(normalized, /const canImportFromLibrary = importStore\.supportsLibrarySource/)
-  // Any spelling that OPENS the picker, not just `(true)` — a functional updater (`(open) => !open`)
+  // Any spelling that OPENS the picker, not just `(true)`, a functional updater (`(open) => !open`)
   // is the same operation and slipped straight past a literal match. Closing it (`(false)`) is
   // legitimately ungated: the dialog's own onClose must work regardless of the store.
   const opens = [...normalized.matchAll(/setLibraryPickerOpen\((?!false\))/g)].map((match) => match.index)

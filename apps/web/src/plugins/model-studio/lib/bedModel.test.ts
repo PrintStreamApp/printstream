@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { bedOpacityForCameraHeight } from './bedModel'
 
-// The plate must not occlude the models when the user orbits underneath it — the plain grid is
+// The plate must not occlude the models when the user orbits underneath it: the plain grid is
 // see-through by nature, and a solid modelled plate is not.
 test('the plate stays opaque at or above plate level', () => {
   assert.equal(bedOpacityForCameraHeight(500), 1)

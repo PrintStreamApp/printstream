@@ -1,7 +1,7 @@
 import { useMediaQueryMatch } from './useMediaQueryMatch'
 
 /**
- * True on touch-only devices (coarse primary pointer, no hover) — phones and
+ * True on touch-only devices (coarse primary pointer, no hover): phones and
  * tablets, where focusing a text input summons an on-screen keyboard. False on
  * desktops and on touchscreen laptops whose primary pointer is a mouse/trackpad.
  * Use this (not `useMobileViewport`) for behavior that exists because of the

@@ -1,5 +1,5 @@
 /**
- * Classification of a 3MF part's `subtype` (BambuStudio's `ModelVolumeType`) — the single source
+ * Classification of a 3MF part's `subtype` (BambuStudio's `ModelVolumeType`): the single source
  * of truth for the three questions every consumer asks about a part: which type is it really,
  * does it print, and does it carry a filament?
  *
@@ -42,7 +42,7 @@ const HELPER_SUBTYPES = new Set<SceneEditPartSubtype>([
 
 /**
  * The {@link SceneEditPartSubtype} a raw 3MF `subtype`/`volume_type` string means. An absent or
- * unrecognized value is a normal part — the 3MF default, and the safe reading for a file written
+ * unrecognized value is a normal part: the 3MF default, and the safe reading for a file written
  * by a tool whose vocabulary we don't know.
  */
 export function canonicalThreeMfPartSubtype(subtype: string | null | undefined): SceneEditPartSubtype {
@@ -60,7 +60,7 @@ export function isNonRenderableThreeMfPartSubtype(subtype: string | null): boole
 }
 
 /**
- * Whether a part of this subtype can be assigned a filament — true for normal parts and for
+ * Whether a part of this subtype can be assigned a filament: true for normal parts and for
  * modifiers, false for support blockers/enforcers and negative volumes. Mirrors BambuStudio, which
  * draws the extruder swatch for `MODEL_PART` and `PARAMETER_MODIFIER` only
  * (`ObjectDataViewModelNode::set_extruder_icon`): a modifier region can change the filament printed

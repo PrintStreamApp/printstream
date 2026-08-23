@@ -2,7 +2,7 @@
  * Anonymous, read-only access to the slicer's BUILT-IN catalogue.
  *
  * The public 3MF editor runs with no account and no workspace, but it still has to know which
- * machines, processes, and filaments exist — a project's presets are meaningless without the
+ * machines, processes, and filaments exist, a project's presets are meaningless without the
  * catalogue they name. That data is not workspace data: it is BambuStudio's bundled presets, shipped
  * inside the slicer image and identical for everyone.
  *
@@ -38,7 +38,7 @@ export const publicSlicingRouter = Router()
 const CATALOGUE_CACHE_SECONDS = 60 * 60
 
 /**
- * The built-in profile catalogue. No workspace customs — those require a workspace by definition, and
+ * The built-in profile catalogue. No workspace customs, those require a workspace by definition, and
  * a caller here has none.
  */
 publicSlicingRouter.get('/profiles', async (request, response) => {
@@ -104,7 +104,7 @@ publicSlicingRouter.post('/resolve-filament', async (request, response) => {
 
 /**
  * Sibling of {@link resolve-process} for a BUILTIN machine preset, so the public editor can retarget
- * a project to a different printer while SAVING it — the settings rewrite runs in the browser (the
+ * a project to a different printer while SAVING it: the settings rewrite runs in the browser (the
  * file never leaves it), but the target machine's full preset lives in the slicer image and can only
  * come from here. Builtin-only for the same reason as the others: a custom machine preset is
  * workspace data.
@@ -124,7 +124,7 @@ publicSlicingRouter.post('/resolve-machine', async (request, response) => {
 })
 
 /**
- * The public twin of `/api/slicing/flush-calibration` — engine data, nothing workspace-specific.
+ * The public twin of `/api/slicing/flush-calibration`: engine data, nothing workspace-specific.
  */
 publicSlicingRouter.get('/flush-calibration', async (request, response) => {
   const targetId = typeof request.query.targetId === 'string' ? request.query.targetId : null
@@ -135,7 +135,7 @@ publicSlicingRouter.get('/flush-calibration', async (request, response) => {
 
 /**
  * BambuStudio's measured flush tables for the public editor's flushing-volumes calculation. Carries
- * nothing workspace-specific — it is engine data — so it is publicly cacheable like the rest of the
+ * nothing workspace-specific, it is engine data, so it is publicly cacheable like the rest of the
  * anonymous catalogue, and answers `{}` rather than 404 when the engine ships none.
  */
 publicSlicingRouter.get('/flush-data', async (request, response) => {

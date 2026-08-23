@@ -12,7 +12,7 @@ test('it keeps catalog process keys and drops unknown ones', () => {
   const result = extractProjectProcessConfig({
     wall_loops: '4',
     sparse_infill_density: '15%',
-    // Not a process catalog key — must be dropped.
+    // Not a process catalog key: must be dropped.
     some_unknown_key: 'x',
     // A filament/other key that isn't in the process catalog is also dropped.
     filament_type: ['PLA']
@@ -86,8 +86,8 @@ test('extractProjectFilamentConfig reads a variant-expanded slot as its V-wide b
 
 test('extractProjectFilamentConfig falls back to a plain slot read when an array matches neither width', () => {
   // A diseased file (pre-variant-aware save left 10 stale columns beside 1 filament): no mapping
-  // can read it correctly, so the plain [slot-1] read stands — an honest display of what the file
-  // carries — until a re-save heals the arrays.
+  // can read it correctly, so the plain [slot-1] read stands, an honest display of what the file
+  // carries, until a re-save heals the arrays.
   const rec = {
     filament_settings_id: ['Bambu PETG HF @BBL H2D 0.4 nozzle'],
     filament_extruder_variant: ['Direct Drive Standard', 'Direct Drive High Flow'],
@@ -104,7 +104,7 @@ test('extractFilamentOverriddenKeys reads the slot at index=projectFilamentId an
 
 // Regression (2026-07-28, reported live): adding a 4th material to a 3-filament project showed 39
 // changed settings. The variant-expanded branch sliced PAST the end of every array, and `[].every()`
-// is true, so the out-of-range slot was written as an empty array for all 39 variant-expanded keys —
+// is true, so the out-of-range slot was written as an empty array for all 39 variant-expanded keys,
 // each of which then read as "changed" against the preset. A slot the project does not have carries
 // no project config at all.
 test('extractProjectFilamentConfig: a slot beyond the project\'s filament count has no config', () => {
@@ -150,7 +150,7 @@ test('an empty changed-from-system entry is a declaration; a missing one is not'
   assert.equal(extractProjectProcessConfig(withoutRecord)?.declaresOverrides, false)
   assert.equal(extractProjectFilamentConfig(withoutRecord, 1)?.declaresOverrides, false)
 
-  // A slot past the end of the record is undeclared too — reading past it must not read as "clean".
+  // A slot past the end of the record is undeclared too: reading past it must not read as "clean".
   assert.equal(extractProjectFilamentConfig(withRecord, 2)?.declaresOverrides, true)
   const shortRecord = { ...withRecord, different_settings_to_system: ['wall_loops'] }
   assert.equal(extractProjectFilamentConfig(shortRecord, 1)?.declaresOverrides, false)

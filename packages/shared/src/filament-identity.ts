@@ -1,12 +1,12 @@
 /**
- * Canonical filament identity resolution — THE single place that decides what a
+ * Canonical filament identity resolution: THE single place that decides what a
  * filament is called (brand, type, subtype/preset, colour name) from raw tray,
  * spool, and preset data. Both the web and the API resolve through here so every
  * surface (AMS grids, slice dialogs, print dialogs, spool ingestion, calibration
  * identity) presents and persists the same identity for the same filament.
  *
- * The one gating rule (do not re-implement it elsewhere): Bambu MARKETING names
- * — colour names like "Jade White" and preset names like "Bambu PLA Basic" —
+ * The one gating rule (do not re-implement it elsewhere): Bambu MARKETING names,
+ * colour names like "Jade White" and preset names like "Bambu PLA Basic":
  * are shown only for a GENUINE Bambu filament, meaning a readable RFID tag
  * (`trayUuid`) whose preset id is Bambu's own (or unmapped). A user-assigned
  * Bambu preset id (`trayInfoIdx`) on custom filament, a matched slicing
@@ -57,15 +57,15 @@ export interface FilamentSpoolIdentityInput {
 
 /** The canonical resolved identity of a physical filament. */
 export interface ResolvedFilamentIdentity {
-  /** Readable RFID tag with a Bambu (or unmapped) preset id — unlocks marketing names. */
+  /** Readable RFID tag with a Bambu (or unmapped) preset id: unlocks marketing names. */
   genuineBambu: boolean
   /** 'Bambu' (genuine), the tray's third-party preset brand, or the tracked spool's brand. */
   brand: string | null
   /** Filament type as reported ("PLA"); spool field wins over the tray. */
   type: string | null
-  /** Bambu material family ("PLA Basic") — only when the tray's preset id declares it. */
+  /** Bambu material family ("PLA Basic"), only when the tray's preset id declares it. */
   subtype: string | null
-  /** Full preset name ("Bambu PLA Basic") — genuine Bambu only. */
+  /** Full preset name ("Bambu PLA Basic"): genuine Bambu only. */
   presetName: string | null
   colorHex: string | null
   colors: string[]
@@ -75,8 +75,8 @@ export interface ResolvedFilamentIdentity {
 
 /**
  * A genuine Bambu spool is identified by a readable RFID tag (`trayUuid`), which the AMS only
- * reports for real Bambu filament. Only such spools — not a user-assigned Bambu slicing preset
- * (`trayInfoIdx`), which can be attached to any physical filament — should surface Bambu's
+ * reports for real Bambu filament. Only such spools, not a user-assigned Bambu slicing preset
+ * (`trayInfoIdx`), which can be attached to any physical filament, should surface Bambu's
  * marketing colour names (e.g. "Jade White"). Custom/third-party filament reads as its plain
  * common colour ("White").
  */
@@ -179,7 +179,7 @@ export function resolveFilamentIdentity(
   const genuineBambu = isGenuineBambuTray(input)
   const spool = input.spool ?? null
 
-  // Subtype only when the tray's preset id declares it — never inferred from the
+  // Subtype only when the tray's preset id declares it, never inferred from the
   // bare filament type (that inference is what branded custom PLA "PLA Basic").
   const presetSubtype = presetName ? bambuMaterialFromPresetName(presetName) : null
 
@@ -204,8 +204,8 @@ export function resolveFilamentIdentity(
 }
 
 /**
- * Short display label for a resolved identity — "Bambu PLA Basic · Jade White",
- * "PolyLite PLA · White", or "PLA · White" — for slot rows in print/slice
+ * Short display label for a resolved identity, "Bambu PLA Basic · Jade White",
+ * "PolyLite PLA · White", or "PLA · White", for slot rows in print/slice
  * dialogs. Never claims a brand or preset the identity did not establish.
  */
 export function filamentIdentityLabel(identity: ResolvedFilamentIdentity): string | null {
@@ -218,7 +218,7 @@ export function filamentIdentityLabel(identity: ResolvedFilamentIdentity): strin
 /**
  * Colour label for a filament known by its preset/brand name (slicing options, queued jobs, spool
  * library) rather than a live AMS tray. Bambu's marketing colour names apply only when the filament
- * is Bambu-branded — its `filamentName` resolves to the "Bambu" brand (e.g. "Bambu PLA Basic").
+ * is Bambu-branded, its `filamentName` resolves to the "Bambu" brand (e.g. "Bambu PLA Basic").
  * A generic or custom filament ("Generic PLA", a user's own brand) keeps its plain common colour
  * name even though its type maps to a Bambu material, so custom white PLA reads "White", not
  * "Jade White". Pass the brand as `filamentName` when there is no sliced preset name.
@@ -271,8 +271,8 @@ export function normalizeFilamentPalette(
 }
 
 /**
- * Genuine-tray swatch lookup: material-scoped first, then — because a GENUINE
- * Bambu tray's hex is authoritative even when its material family is unmapped —
+ * Genuine-tray swatch lookup: material-scoped first, then, because a GENUINE
+ * Bambu tray's hex is authoritative even when its material family is unmapped,
  * a global fallback. Non-genuine paths must use `bambuSwatchForHex` directly
  * (material-scoped only) so custom filament never inherits another family's
  * marketing name.

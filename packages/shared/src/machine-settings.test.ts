@@ -53,7 +53,7 @@ test('the extruder page gives one labelled column per extruder', () => {
 
 test('a single-extruder printer gets one unlabelled column', () => {
   // BambuStudio names the page "Extruder" with no number when there is only one, so the control
-  // needs no name of its own either — the line label already says what it is.
+  // needs no name of its own either: the line label already says what it is.
   const columns = machineColumnsForPage('retraction_length', 'extruder', { nozzle_diameter: ['0.4'] })
   assert.deepEqual(columns, [{ index: 0 }])
 })
@@ -84,7 +84,7 @@ test('a non-vector option is a single column even on the extruder page', () => {
 test('a column reads its own element, falling back to the first', () => {
   assert.equal(machineColumnValue(['0.8', '1.2'], 1), '1.2')
   assert.equal(machineColumnValue('0.8', 0), '0.8')
-  // A vector shorter than the extruder count is normal — BambuStudio resizes lazily — and must read
+  // A vector shorter than the extruder count is normal, BambuStudio resizes lazily, and must read
   // as the first extruder's value, not as blank.
   assert.equal(machineColumnValue(['0.8'], 1), '0.8')
   assert.equal(machineColumnValue(undefined, 0), '')

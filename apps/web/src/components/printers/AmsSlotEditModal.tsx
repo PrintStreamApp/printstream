@@ -134,7 +134,7 @@ export function AmsSlotEditModal({
   const send = useMutation({
     mutationFn: async () => {
       // A Bambu RFID spool reports its own filament/color/temps, so the slot
-      // fields are read-only — only the pressure advance selection is editable.
+      // fields are read-only, only the pressure advance selection is editable.
       // Skip setAmsSlot in that case so we never overwrite the detected spool.
       if (!isBambuSpool) {
         const trayColor = color.replace('#', '').padEnd(8, 'F').slice(0, 8).toUpperCase()
@@ -287,7 +287,7 @@ export function AmsSlotEditModal({
   const pressureAdvanceProfilesQuery = useQuery({
     queryKey: pressureAdvanceProfilesQueryKey,
     // Pressure advance (flow dynamics / K-value) calibration applies to Bambu
-    // RFID spools too, not just custom filament — the only requirement is a
+    // RFID spools too, not just custom filament: the only requirement is a
     // known filament id to scope the profiles to.
     enabled: trayInfoIdx !== '',
     queryFn: fetchPressureAdvanceProfiles
@@ -410,7 +410,7 @@ export function AmsSlotEditModal({
   // Lets the filament-manager plugin's "Pick from library" populate the form.
   const applyFilamentFromLibrary = useCallback((values: { filamentType?: string | null; colorHex?: string | null; trayInfoIdx?: string | null }) => {
     // A spool with no preset id must CLEAR the slot's previous trayInfoIdx (custom
-    // filament, empty idx) — silently keeping the old id left e.g. a stale ASA
+    // filament, empty idx): silently keeping the old id left e.g. a stale ASA
     // preset id on a slot re-assigned to custom PLA, mislabelling it everywhere.
     if ('trayInfoIdx' in values) setTrayInfoIdx(values.trayInfoIdx ?? '')
     if (values.filamentType) setType(values.filamentType)

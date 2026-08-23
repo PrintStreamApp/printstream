@@ -9,7 +9,7 @@ import { test } from 'node:test'
 // Deployment mode is fixed when env.ts parses and static imports hoist above
 // assignments, so the flag is cleared first and the subject imported
 // dynamically. With the flag unset the mode is derived, and one input is
-// whether private modules are PRESENT — true in this repo, false in the public
+// whether private modules are PRESENT: true in this repo, false in the public
 // snapshot, where the cloud case therefore cannot exist at all. The one test
 // that pins cloud behaviour is skipped there rather than asserting something
 // that build can never be; the rest are deployment-agnostic.
@@ -79,7 +79,7 @@ test('unset derives from the deployment: the cloud never auto-creates', {
   // The control first: under SELF_HOSTED=true this case would prove nothing.
   assert.equal(isSelfHostedDeployment(), false)
   // The bug this pins: with a static `true` default, a hosted deployment's
-  // EMPTY database — its legitimate first-run state — minted a stray
+  // EMPTY database, its legitimate first-run state, minted a stray
   // "My Workspace" at boot (observed live the day staging was reset).
   const { client, created } = fakeClient(0)
   const slug = await ensureDefaultWorkspace({

@@ -1,8 +1,16 @@
 /**
- * `SceneEdit.repairSettings` — the staged, undoable twin of the API repair route, for hosts with
- * no stored file behind the project (the public editor). The bake applies the SAME shared repair
- * implementations, so a repaired file cannot differ by which surface repaired it, and a healthy
- * document rides through untouched.
+ * `SceneEdit.repairSettings`: the staged, undoable repair the editor's Repair button sets, and the
+ * ONLY repair path there is. A server-side repair route existed once and was removed deliberately:
+ * repairs are explicit and user-driven, with no automatic rewriting behind the user's back. Riding
+ * a save is what gives that its teeth, the result persists as a new library version, so the
+ * pre-repair bytes stay restorable, and it works unchanged for hosts with no stored file behind
+ * the project (the public editor). The bake applies the shared repair implementations, so a
+ * repaired file cannot differ by which surface repaired it, and a healthy document rides through
+ * untouched.
+ *
+ * Whether a repair STICKS across a save + reopen is pinned separately, in
+ * `settings-repair-roundtrip.test.ts`, a repair that writes the fix and then has it regenerated
+ * away by a later bake stage would pass every assertion here.
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
@@ -119,7 +127,7 @@ test('repairSettings writes the missing object-level extruder while baking', () 
 })
 
 test('without repairSettings the bake leaves a part-only object as it was', () => {
-  // The flag is the user's explicit action — nothing heals at rest, saves included.
+  // The flag is the user's explicit action, nothing heals at rest, saves included.
   const edit = editWith({
     instances: [{ objectId: 166, plateIndex: 1, position: at, rotation: at, scale: { x: 1, y: 1, z: 1 } }]
   })

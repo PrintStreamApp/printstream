@@ -8,12 +8,12 @@
  *         || extruder_variant_count < num_filaments)
  *         throw RuntimeError("Invalid configuration file: " + name_or_path);
  *
- * Break it and Bambu Studio refuses to OPEN the project at all — the user sees "Invalid
+ * Break it and Bambu Studio refuses to OPEN the project at all: the user sees "Invalid
  * configuration file", plus a misleading "The file does not contain any geometry data" because the
  * throw aborts the load before the meshes are read. Our own CLI slice path is more tolerant, which
  * is exactly how this hid: files sliced fine and simply could not be opened in Bambu Studio.
  *
- * `filament_self_index` is 1-BASED and repeats per variant row — BambuStudio scans it for the first
+ * `filament_self_index` is 1-BASED and repeats per variant row: BambuStudio scans it for the first
  * row matching each filament id to locate that filament's variant block. Absence is NOT benign: the
  * option's default is a ONE-element vector, so a missing key compares as size 1 against a
  * multi-row variant list and throws.
@@ -38,7 +38,7 @@ function unique(values: readonly string[]): string[] {
 /**
  * The variant rows each filament owns, in `filament_extruder_variant` order.
  *
- * Blocks are NOT uniform width — that is the whole reason the index cannot be derived from a row
+ * Blocks are NOT uniform width, that is the whole reason the index cannot be derived from a row
  * count alone, and why this and the variant array must be produced together.
  */
 export function buildFilamentVariantRows(
@@ -68,7 +68,7 @@ export function buildFilamentVariantRows(
  * WITHOUT touching the variant array itself (callers that rebuild the layout wholesale use
  * {@link buildFilamentVariantRows} instead).
  *
- * @returns the index to write, or null when there is nothing to do — the project has no variant
+ * @returns the index to write, or null when there is nothing to do: the project has no variant
  *   topology, the existing index already matches, or the shape cannot be reconstructed with
  *   confidence. Returning null rather than guessing matters: a WRONG index is as fatal as a
  *   missing one, and the honest failure is to leave the file as it was.
@@ -116,7 +116,7 @@ export function repairFilamentSelfIndex(record: Record<string, unknown>): string
  *
  * Used by `applyFilamentList` after it permutes the per-filament arrays: uniform variant blocks
  * make the index order-invariant (`[1,1,2,2]` describes any order of two same-width materials),
- * but blocks are NOT uniform — a moved TPU slot changes the widths and the stored index silently
+ * but blocks are NOT uniform, a moved TPU slot changes the widths and the stored index silently
  * misdescribes the layout while keeping the length that {@link repairFilamentSelfIndex}'s
  * length-only check passes. Same derivation and same refusal contract as the repair: null when the
  * project has no variant topology or the rebuilt layout disagrees with the stored row count,
@@ -142,7 +142,7 @@ export function rebuildFilamentSelfIndex(record: Record<string, unknown>): strin
 export interface FilamentSelfIndexInspection {
   /** Variant rows the project declares (`filament_extruder_variant`). */
   variantRows: number
-  /** Stored index entries. 0 when the key is ABSENT, which IS a defect here — BambuStudio's
+  /** Stored index entries. 0 when the key is ABSENT, which IS a defect here: BambuStudio's
    *  default for the option is a one-element vector, so absence fails its equality check. */
   actualLength: number
   filamentCount: number
@@ -155,7 +155,7 @@ export interface FilamentSelfIndexInspection {
  * Inspect a raw `project_settings.config` JSON string for the load-time invariant.
  *
  * Returns null when the settings are absent/unparseable, or when the project carries no variant
- * topology at all — BambuStudio only runs the check for projects with `extruder_variant_list`, so
+ * topology at all: BambuStudio only runs the check for projects with `extruder_variant_list`, so
  * everything else is genuinely unaffected rather than "healthy by luck".
  */
 export function inspectProjectFilamentSelfIndex(

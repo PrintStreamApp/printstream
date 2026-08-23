@@ -21,7 +21,7 @@ async function* walk(dir: string): AsyncGenerator<string> {
  * Every lazily-loaded dialog must show something while its chunk downloads.
  *
  * This is a REGRESSION guard, not a style rule: `fallback={null}` on a code-split dialog means the
- * click that opens it paints nothing at all until the chunk lands — on the 3MF editor that was
+ * click that opens it paints nothing at all until the chunk lands, on the 3MF editor that was
  * ~800KB of dead air, which reads as a click that did nothing. `LazyDialogFallback` renders the
  * dialog's shell instead. A new `lazy()` dialog added without a fallback silently reintroduces the
  * bug and no other test would catch it, so the check lives at the source level.

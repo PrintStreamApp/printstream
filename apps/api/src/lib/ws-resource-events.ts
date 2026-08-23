@@ -71,12 +71,12 @@ export function broadcastLibraryChanged(workspaceId?: string | null): void {
 const pendingLibraryChangedBroadcasts = new Map<string, ReturnType<typeof setTimeout>>()
 
 /**
- * Trailing-debounced {@link broadcastLibraryChanged} for high-fan-out BACKGROUND writes — the
+ * Trailing-debounced {@link broadcastLibraryChanged} for high-fan-out BACKGROUND writes: the
  * derived-metadata warms a listing triggers land one per stale row (every row, after a parser
  * version bump), and a broadcast apiece would refetch every client's library list N times. One
  * broadcast per workspace per quiet window is enough: the refetch it triggers reads ALL rows'
  * persisted state, whichever subset had landed by then, and any warm that finishes later
- * reschedules. Request-path mutations keep calling {@link broadcastLibraryChanged} directly —
+ * reschedules. Request-path mutations keep calling {@link broadcastLibraryChanged} directly,
  * a user-visible action should signal immediately.
  */
 export function broadcastLibraryChangedDebounced(workspaceId: string, delayMs = 500): void {
@@ -126,7 +126,7 @@ export function broadcastSlicingChanged(workspaceId?: string | null): void {
 /**
  * The slicer PROFILE catalogue changed (custom profile create/delete). Distinct from
  * {@link broadcastSlicingChanged} so a slice's sub-second progress stream does not invalidate the
- * (slow) profiles query — only profile mutations do.
+ * (slow) profiles query, only profile mutations do.
  */
 export function broadcastSlicingPresetsChanged(workspaceId?: string | null): void {
   broadcastResourceChange({ resource: 'slicing.profiles', workspaceId })

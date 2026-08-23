@@ -46,7 +46,7 @@ export type StoredSlicingPreset = z.infer<typeof storedSlicingPresetSchema>
  *
  * Defined by EXCLUSION on purpose. Listing the metadata keys instead meant every
  * field added to `slicingPresetSummarySchema` had to be added here, to the merge,
- * and to the pick — and missing one silently dropped it from custom (workspace-uploaded)
+ * and to the pick, and missing one silently dropped it from custom (workspace-uploaded)
  * presets while builtin presets carried it (issue #66). Inverting it puts the
  * maintenance burden on the small, stable identity set, so a new metadata field
  * flows through with no change here at all.
@@ -111,7 +111,7 @@ export async function createCustomSlicingPresets(workspaceId: string, input: Upl
   const createdKeys = new Set(createdProfiles.map((profile) => buildProfileLookupKey(profile.kind, profile.name)))
   const collisions = existingProfiles.filter((profile) => createdKeys.has(buildProfileLookupKey(profile.kind, profile.name)))
   const collisionNames = [...new Set(collisions.map((profile) => profile.name))]
-  // Without an explicit overwrite, don't touch storage — report the collisions so the user can
+  // Without an explicit overwrite, don't touch storage: report the collisions so the user can
   // confirm or decline replacing them.
   if (collisionNames.length > 0 && !input.overwrite) {
     return { profiles: [], replaced: [], conflicts: collisionNames }
@@ -132,7 +132,7 @@ export async function createCustomSlicingPresets(workspaceId: string, input: Upl
  * Every custom preset with its stored JSON and last-write time.
  *
  * The listing API returns summaries, which is right for the manager but not enough for
- * a caller that has to reason about a preset's CONTENT — currently the Bambu cloud sync
+ * a caller that has to reason about a preset's CONTENT: currently the Bambu cloud sync
  * (`plugins/bambu-cloud-sync/`), which diffs a preset against its parent to build a
  * push payload and compares `updatedAt` against the value it recorded at last sync to
  * tell whether the user has edited it here since.
@@ -147,8 +147,8 @@ export async function listCustomSlicingPresetRecords(workspaceId: string): Promi
  *
  * Separate from `createCustomSlicingPresets` because that one is the UPLOAD path: it
  * parses files, reports name collisions, and refuses to overwrite without consent. A
- * caller that already holds parsed preset JSON and has decided what should win — a
- * cloud sync applying a pull — needs neither, and routing it through the upload path
+ * caller that already holds parsed preset JSON and has decided what should win, a
+ * cloud sync applying a pull, needs neither, and routing it through the upload path
  * would make it re-serialize its content into a fake file just to be parsed back.
  *
  * All records are written in ONE read-modify-write so a multi-preset sync cannot
@@ -296,7 +296,7 @@ function resolveInheritedProfileMetadata(
  * Merge an `inherits` parent's metadata with the child's, the child winning per key.
  *
  * `extractProfileMetadata` already drops absent keys, so a key present on the child
- * is a real value and correctly shadows the parent — including an explicit `false`
+ * is a real value and correctly shadows the parent, including an explicit `false`
  * (a child that turns `filament_is_support` off must not inherit the parent's `true`).
  */
 function mergeProfileMetadata(parent: Partial<ProfileMetadata>, child: Partial<ProfileMetadata>): Partial<ProfileMetadata> {
@@ -304,7 +304,7 @@ function mergeProfileMetadata(parent: Partial<ProfileMetadata>, child: Partial<P
 }
 
 /**
- * The metadata half of a resolved summary — everything but the identity keys.
+ * The metadata half of a resolved summary, everything but the identity keys.
  *
  * Destructured rather than key-listed so a field added to the summary schema is
  * carried automatically; only the (stable) identity set is spelled out.

@@ -5,7 +5,7 @@
  *
  * - **Flow ratio:** a grid of patches baked as separate objects, each carrying a
  *   per-object `print_flow_ratio` metadata override so one slice prints every
- *   patch at its own ratio (the process recipe — wall count, top layers, infill —
+ *   patch at its own ratio (the process recipe, wall count, top layers, infill,
  *   is applied as whole-plate slice overrides by the caller, not here).
  * - **Pressure advance:** one tower baked as a single object, plus a raw
  *   `Metadata/custom_gcode_per_layer.xml` sidecar that injects `M400` + `M900 K…`

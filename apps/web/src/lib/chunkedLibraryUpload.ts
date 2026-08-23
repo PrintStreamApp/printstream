@@ -44,7 +44,7 @@ const DEFAULT_RATE_LIMIT_WAIT_SECONDS = 5
  * headroom for the rest of the app. Until the first snapshot arrives (or
  * against an older server without the headers) a conservative client-side
  * sliding window applies instead. The reactive Retry-After handling below
- * stays as the final safety net — the budget is shared with other tabs and
+ * stays as the final safety net: the budget is shared with other tabs and
  * devices whose spending we only see when our own responses report it.
  */
 const UPLOAD_WRITES_PER_MINUTE = 90
@@ -64,7 +64,7 @@ let serverWriteBudget: ServerWriteBudget | null = null
 
 /** Refresh the budget snapshot from a response's RateLimit headers. */
 function recordUploadWriteBudget(headers: Headers): void {
-  // headers.get() returns null when absent, and Number(null) is 0 — parse
+  // headers.get() returns null when absent, and Number(null) is 0: parse
   // each header explicitly so a header-less response never records a
   // zero-budget snapshot (which would stall the queue forever).
   const limit = parsePositiveHeaderNumber(headers.get('RateLimit-Limit'))

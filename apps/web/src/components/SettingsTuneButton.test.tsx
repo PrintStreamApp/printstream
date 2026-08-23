@@ -19,7 +19,7 @@ test('shows the changed count in the badge, hides it at zero, and fires onClick'
       <SettingsTuneButton changedCount={3} title="Per-object settings" ariaLabel="Per-object settings for Cube" onClick={() => { clicks += 1 }} />
     </CssVarsProvider>
   )
-  // The count is visible when there are overrides — the whole point of the convention.
+  // The count is visible when there are overrides: the whole point of the convention.
   assert.ok(screen.getByText('3'))
   const button = screen.getByRole('button', { name: 'Per-object settings for Cube' })
   fireEvent.click(button)
@@ -36,7 +36,7 @@ test('shows the changed count in the badge, hides it at zero, and fires onClick'
 })
 
 // Regression: the badge sits ON the button, so a click landing on the count hit the badge and the
-// button did nothing — reported as "clicking the badge doesn't open the settings".
+// button did nothing: reported as "clicking the badge doesn't open the settings".
 test('the badge does not swallow clicks aimed at the button', () => {
   render(
     <CssVarsProvider>

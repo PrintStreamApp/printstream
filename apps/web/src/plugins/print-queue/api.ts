@@ -84,7 +84,7 @@ export function useDispatchQueueItem() {
 /**
  * Dry-run ("Check") a queued item: runs every pre-flight check a real Start runs (file resolved +
  * readable on the bridge, printer connected, guards, compatibility) and reports what would happen,
- * without uploading or starting. Read-only — does not invalidate the queue.
+ * without uploading or starting. Read-only: does not invalidate the queue.
  */
 export function useDryRunQueueItem() {
   return useMutation({

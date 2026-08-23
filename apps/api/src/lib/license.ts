@@ -1,7 +1,7 @@
 /**
  * License key verification (core/public). Reads compact self-hosted license
  * tokens: `PSL1.<base64url(payload)>.<base64url(ed25519 signature)>`, validating
- * them against the embedded vendor public key so any build — including OSS — can
+ * them against the embedded vendor public key so any build, including OSS, can
  * check a key but never mint one.
  *
  * **This module verifies only, deliberately.** The signing half lives in
@@ -26,7 +26,7 @@ const TOKEN_PREFIX = LICENSE_TOKEN_PREFIX
  * Vendor license public key (production). Keys issued by the hosted service are
  * signed with the matching private key (`PRINTSTREAM_LICENSE_SIGNING_KEY`, a
  * cloud-only secret that never ships); embedding only the public half lets any
- * build — including OSS — validate a key but never forge one.
+ * build, including OSS, validate a key but never forge one.
  */
 const LICENSE_PUBLIC_KEY_PEM = `-----BEGIN PUBLIC KEY-----
 MCowBQYDK2VwAyEAASSkRDutYm4lun9jOAAaqHB++LHub6ChS5Zufa4LCMQ=
@@ -60,7 +60,7 @@ export function verifyLicenseToken(token: string, publicKeyPem: string = LICENSE
  *
  * `valid` folds in expiry: a correctly-signed but expired key reads
  * `valid: false, expired: true`, so a caller that checks only `valid` fails
- * closed. Lapsed *updates* are reported separately and never clear `valid` —
+ * closed. Lapsed *updates* are reported separately and never clear `valid`:
  * the addon buys newer builds and support, not the right to run.
  */
 export function readLicenseStatus(
@@ -68,7 +68,7 @@ export function readLicenseStatus(
   nowSeconds = Math.floor(Date.now() / 1000),
   /**
    * How the token's signature is checked. Defaults to the embedded vendor key,
-   * which is what an INSTALL must use — it trusts one issuer and nothing else.
+   * which is what an INSTALL must use, it trusts one issuer and nothing else.
    *
    * A cloud deployment that issues its own keys passes its issuer-derived
    * verifier instead (`verifyIssuedLicenseToken`), so it can read the keys it

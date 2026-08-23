@@ -4,7 +4,7 @@
  * unit-testable; `detectBridgePlatformKey` gathers the browser hints,
  * including Chromium's high-entropy UA-Client-Hints architecture when
  * available. A null result simply means the UI lists all packages without a
- * recommendation (phones, tablets, Macs, unknown platforms — there is no
+ * recommendation (phones, tablets, Macs, unknown platforms, there is no
  * macOS package).
  */
 import type { BridgeStandaloneDownload } from '@printstream/shared'
@@ -109,7 +109,7 @@ export function isMacPlatform(hints: Pick<BridgePlatformHints, 'userAgent' | 'ua
   const platform = hints.uaDataPlatform?.toLowerCase() ?? ''
   if (platform) return platform === 'macos'
   const userAgent = hints.userAgent ?? ''
-  // iOS user agents say "like Mac OS X" — they are not Macs.
+  // iOS user agents say "like Mac OS X", they are not Macs.
   if (/iPhone|iPad|iPod/i.test(userAgent)) return false
   return /Mac OS X|Macintosh/i.test(userAgent)
 }

@@ -8,7 +8,7 @@
  * `uploadedFile` / `error` query params.
  *
  * URL state is part of that contract, so the Source URL and the selected candidate are
- * mirrored into the query string rather than held only in component state — a handoff
+ * mirrored into the query string rather than held only in component state, a handoff
  * link has to reconstruct the same screen.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
@@ -90,7 +90,7 @@ export function RemoteImportsView() {
   // paste can tell "leftover files from the handoff" from "files for the URL in the field".
   const [handoffUrl] = useState(() => (searchParams.has('candidates') ? (searchParams.get('url') ?? '').trim() : ''))
   // With no extension handoff, a pasted direct file URL still resolves to one
-  // candidate — show it in the same grid so that path keeps a confirmation surface.
+  // candidate: show it in the same grid so that path keeps a confirmation surface.
   const { candidates: pickerCandidates, staleHandoff: staleProviderCandidates } = useMemo(
     () => selectPickerCandidates({
       handoffCandidates: providerCandidates,
@@ -166,7 +166,7 @@ export function RemoteImportsView() {
   }, [bridgeId, bridges, browseQuery.data?.activeBridgeId])
 
   // Keep the selection inside the list on screen. The picker is a radio group, so "nothing
-  // selected" is only a legitimate state while the list is leftovers from a previous page —
+  // selected" is only a legitimate state while the list is leftovers from a previous page,
   // there, auto-selecting would quietly make a stale file the import target.
   useEffect(() => {
     if (pickerCandidates.length === 0) return
@@ -225,8 +225,8 @@ export function RemoteImportsView() {
         } else {
           // An unsliced project cannot go straight to a printer, and MakerWorld hands
           // back project files, so this is the COMMON case rather than an edge one.
-          // Hand off to the library's prepare-print flow — the one surface that knows
-          // how to slice-then-print — rather than importing and falling silent.
+          // Hand off to the library's prepare-print flow, the one surface that knows
+          // how to slice-then-print, rather than importing and falling silent.
           navigate(buildLibrarySliceHandoffRoute({
             workspaceSlug: workspaceSlug ?? '',
             fileId: result.file.id,
@@ -244,7 +244,7 @@ export function RemoteImportsView() {
   const goToLibrary = useCallback(() => navigate(libraryPath), [navigate, libraryPath])
   const closePrintModal = useCallback(() => setPrintTarget(null), [])
 
-  // Arrived from the printers page's Print menu, so printing is the intent — lead with
+  // Arrived from the printers page's Print menu, so printing is the intent: lead with
   // it rather than making the user find it after a plain import.
   const printFirst = searchParams.get('print') === '1'
   const makerWorldRef = useMemo(() => (importUrl ? parseMakerWorldModelUrl(importUrl) : null), [importUrl])
@@ -255,7 +255,7 @@ export function RemoteImportsView() {
   // so this pair is what turns a silent no-op into an explanation.
   const printWasRequested = importMutation.variables?.openPrintSetup === true
   const importedPrintable = importMutation.data?.canPrintDirectly === true
-  // Land in the folder the file went to, not the library root — with slicing being the
+  // Land in the folder the file went to, not the library root, with slicing being the
   // next step for most imports, "somewhere in the library" is not a useful destination.
   const goToImportedFolder = useCallback(
     () => navigate(
@@ -316,7 +316,7 @@ export function RemoteImportsView() {
                 value={url}
                 placeholder="https://…"
                 onChange={(event) => setUrl(event.target.value)}
-                // Browser-assist URLs cannot be imported from here at all — opening the page is
+                // Browser-assist URLs cannot be imported from here at all: opening the page is
                 // the actual next step, so it sits on the field rather than further down the card.
                 endDecorator={resolution.strategy === 'browser-assist' && (
                   <Button
@@ -337,7 +337,7 @@ export function RemoteImportsView() {
               </FormHelperText>
             </FormControl>
 
-            {/* Nothing this page can fetch itself, so the extension's files stay listed below —
+            {/* Nothing this page can fetch itself, so the extension's files stay listed below,
                 say so, otherwise the picker looks like it answered the URL that was just typed. */}
             {showStaleCandidatesNotice && (
               <Alert size="sm" variant="soft" color="neutral" startDecorator={<ExtensionRoundedIcon />}>
@@ -404,7 +404,7 @@ export function RemoteImportsView() {
               </Alert>
             ) : makerWorldRef ? (
               // MakerWorld resolves server-side through the connected account, so it must
-              // NOT get the browser-helper panel — `detectRemoteImportUrl` still calls it
+              // NOT get the browser-helper panel: `detectRemoteImportUrl` still calls it
               // `browser-assist` (that classification predates the account path and is what
               // an extension-only client still needs). Saying "install a helper" beside
               // "downloads as your Bambu account" is two answers to one question.
@@ -438,7 +438,7 @@ export function RemoteImportsView() {
 
             {/* Which Bambu account a MakerWorld download runs as, and why it might not
                 run at all. A workspace shares ONE connection, so this is regularly not
-                the person clicking — say so before the import, not after. */}
+                the person clicking: say so before the import, not after. */}
             {makerWorldRef && makerWorld && (
               <Alert
                 size="sm"
@@ -483,7 +483,7 @@ export function RemoteImportsView() {
             </Stack>
 
             {/* A disabled button with no explanation is the whole reason `readiness`
-                returns a reason at all — render it whenever there is one. */}
+                returns a reason at all: render it whenever there is one. */}
             {readiness.reason && (
               <Typography level="body-sm" textColor="text.tertiary">
                 {readiness.reason}
@@ -502,7 +502,7 @@ export function RemoteImportsView() {
                     {`The file is now in ${destinationLabel}.`}
                   </Typography>
                   {/* "Import and print" on a file that is not already sliced would otherwise
-                      just import and fall silent — the print step it promised never opens,
+                      just import and fall silent: the print step it promised never opens,
                       with nothing on screen saying why. Say it, and point at where slicing
                       happens. */}
                   {printWasRequested && !importedPrintable && (
@@ -522,7 +522,7 @@ export function RemoteImportsView() {
       )}
 
       {/* The library's own destination picker, so choosing where an import lands works
-          exactly like choosing where a save or move lands — including showing each
+          exactly like choosing where a save or move lands, including showing each
           bridge as a root folder once there is more than one. */}
       {destinationOpen && (
         <LibraryDestinationDialog
@@ -559,7 +559,7 @@ export function RemoteImportsView() {
  * The failure notice, with provider-specific recovery steps when there are any.
  *
  * One component because a failed import and the extension's `?error=` handoff are the
- * same thing to the user — rendering them from two copied blocks is exactly how the
+ * same thing to the user: rendering them from two copied blocks is exactly how the
  * wording drifted apart before.
  */
 function RemoteImportErrorAlert({

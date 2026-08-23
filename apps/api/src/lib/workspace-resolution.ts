@@ -76,12 +76,12 @@ interface WideOpenDefaultWorkspaceDeps extends SoleWorkspaceDeps {
 
 /**
  * Resolves the workspace that context-less requests should default into on a
- * deployment that runs "wide open" (no auth provider enabled anywhere — the
+ * deployment that runs "wide open" (no auth provider enabled anywhere: the
  * documented fresh self-hosted install state, in which nobody can be signed
  * in). Returns the workspace only when the choice is unambiguous: exactly one
  * enabled, non-demo workspace, with no enabled auth provider in either the
  * platform scope or that workspace's scope. A provider that is enabled but
- * still awaiting setup also blocks the fallback — that install is mid-setup,
+ * still awaiting setup also blocks the fallback, that install is mid-setup,
  * not wide open.
  */
 export async function resolveWideOpenDefaultWorkspace(deps: WideOpenDefaultWorkspaceDeps = {}): Promise<RequestWorkspaceSummary | null> {

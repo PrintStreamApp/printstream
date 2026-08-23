@@ -1,5 +1,5 @@
 /**
- * Behavioural cover for the status observer — the half of spool tracking that reacts to
+ * Behavioural cover for the status observer: the half of spool tracking that reacts to
  * what the AMS reports. `collectPresences`/`signature` were the only tested parts, so
  * "the printer reports a removal" was covered while "the library reacts to it" was not.
  */
@@ -114,7 +114,7 @@ test('a spool removed from its slot loses its association', async () => {
 
 test('a status carrying no AMS units never unassigns anything', async () => {
   // A fresh ManagedPrinter starts from `makeOfflineStatus`, which has no AMS at all.
-  // Read as presences that would be "every slot is empty" — and it used to be.
+  // Read as presences that would be "every slot is empty", and it used to be.
   const test = harness({ loadedHere: () => [loadedRow()] })
 
   // Both shapes of "told us nothing": no units at all, and a unit with no slots parsed.
@@ -129,7 +129,7 @@ test('a status carrying no AMS units never unassigns anything', async () => {
 test('an ONLINE placeholder with no AMS units still never unassigns anything', async () => {
   // The trap an earlier `!status.online` guard missed entirely: `hintOnline` merges
   // `{ online: true }` onto the untouched AMS-less placeholder when a bridge's SSDP
-  // sweep spots the printer, so the wipe was reachable with `online: true` — in exactly
+  // sweep spots the printer, so the wipe was reachable with `online: true`, in exactly
   // the post-restart window the guard was written for.
   const test = harness({ loadedHere: () => [loadedRow()] })
 

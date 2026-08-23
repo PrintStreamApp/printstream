@@ -22,21 +22,21 @@ test('invalidateLibraryQueries refreshes the library slices but never the editor
     ['library-folders'],
     ['library-plates'],
     ['library-recycle-bin'],
-    // The "changed vs preset" badges are keyed by file ID, which a save keeps — without this
+    // The "changed vs preset" badges are keyed by file ID, which a save keeps, without this
     // bust a save that rewrote project_settings serves the pre-save count until staleTime.
     ['process-baked-changes'],
     ['filament-baked-changes'],
-    // Held at staleTime Infinity and keyed by file id, so only an explicit bust refreshes it —
+    // Held at staleTime Infinity and keyed by file id, so only an explicit bust refreshes it,
     // and its value reaches a slice request, not just a badge.
     ['slice-project-process-carry'],
-    // Single-file metadata DTOs (name, version counter, repair flags) — NOT a scene cache.
+    // Single-file metadata DTOs (name, version counter, repair flags), NOT a scene cache.
     // Skipping it left the editor's repair banner gating on pre-repair flags, so a successful
     // repair read as having done nothing.
     ['library-file']
   ])
   // Load-bearing absence. The editor reads its project from an archive downloaded ONCE per
   // session, so refetching these after a save re-reads the PRE-save bytes and stores them as
-  // fresh — poisoning the cache for the next editor session rather than refreshing anything.
+  // fresh: poisoning the cache for the next editor session rather than refreshing anything.
   // `EditorView` removes these keys on unmount instead.
   assert.ok(!calls.some((key) => key?.some((part) => String(part).startsWith('library-editor'))))
 })
@@ -44,7 +44,7 @@ test('invalidateLibraryQueries refreshes the library slices but never the editor
 test('invalidateLibraryListQueries refreshes the list slices but NOT the editor scene caches', async () => {
   const { calls, invalidateQueries } = recordInvalidations()
   await invalidateLibraryListQueries({ invalidateQueries })
-  // List slices only — refetching the editor scenes here would rebuild an open 3D view.
+  // List slices only: refetching the editor scenes here would rebuild an open 3D view.
   assert.deepEqual(calls, [
     ['library-browse'],
     ['library-files'],

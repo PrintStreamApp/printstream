@@ -181,7 +181,7 @@ test('reassigning every part of an object moves the object-level extruder with i
   const modelSettingsXml = bakeBaseWith([{ objectId: 10, partIndex: 0, filamentId: 2 }])
   const block = objectBlock(modelSettingsXml, 10)
   assert.deepEqual(partExtruders(block), ['2'])
-  // A stale object-level `1` here is what the CLI would slice by — the part change must carry it.
+  // A stale object-level `1` here is what the CLI would slice by: the part change must carry it.
   assert.equal(objectLevelExtruder(block), '2', `object-level extruder must follow the parts:\n${block}`)
 })
 
@@ -191,4 +191,64 @@ test('reassigning one part of a mixed-material object leaves the object-level ex
   assert.deepEqual(partExtruders(block), ['2', '3'])
   // Parts now disagree (2 vs 3): the object's own default is not derivable, so it must not change.
   assert.equal(objectLevelExtruder(block), '1')
+})
+
+/**
+ * An imported object with NO filament of its own must still be BOUND, not left implicit.
+ *
+ * Reproduces a real project: a multi-solid 3MF imported onto a plate carried per-solid materials
+ * for its lettering but none for its body, and the instance itself had none (an import starts at
+ * `filamentId: null`). The bake wrote the lettering's `extruder` on its parts and NOTHING at object
+ * level, so the body printed filament 1 only because the ENGINE defaults it there
+ * (`bbs_3mf.cpp`: object extruder `0`/out-of-range -> 1). The file said nothing, the sidebar showed
+ * "1", and the saved project was flagged `objectExtruder` with mixed part coverage, which the repair
+ * declines to touch, a dead end the user could not clear.
+ *
+ * Binding to 1 is what BambuStudio itself materialises on load, so it is behaviour-preserving by
+ * construction: every uncovered part already prints filament 1.
+ */
+test('an imported object with no filament of its own is bound to filament 1, not left implicit', () => {
+  const edit = editWith({
+    // No `filamentId` on the instance: nothing in the session claims a material for the object.
+    instances: [{ importId: 'imp-3', plateIndex: 1, position: at, rotation: at, scale: { x: 1, y: 1, z: 1 } }],
+    // Only the lettering solid carries one, exactly as the imported 3MF supplied it.
+    importPartFilaments: [{ importId: 'imp-3', partIndex: 1, filamentId: 2 }]
+  } as Partial<SceneEdit>)
+  const imports: ImportedObjectInput[] = [{
+    importId: 'imp-3',
+    name: 'Branded Clipboard',
+    mesh: TRIANGLE,
+    parts: [
+      { name: 'Clipboard', mesh: TRIANGLE },
+      { name: 'Lettering', mesh: TRIANGLE }
+    ]
+  }]
+  const { modelSettingsXml, importIdToObjectId } = buildEditedThreeMfDocuments(
+    NEW_PROJECT_MODEL_XML,
+    NEW_PROJECT_MODEL_SETTINGS_XML,
+    null,
+    edit,
+    imports
+  )
+  const block = objectBlock(modelSettingsXml, importIdToObjectId.get('imp-3')!)
+  assert.equal(objectLevelExtruder(block), '1', `an unassigned object must still be bound:\n${block}`)
+  // The body follows the object's binding; the lettering keeps the material it came in with.
+  assert.deepEqual(partExtruders(block), ['1', '2'])
+})
+
+test('a single-mesh import with no filament of its own is bound to filament 1', () => {
+  const edit = editWith({
+    instances: [{ importId: 'imp-4', plateIndex: 1, position: at, rotation: at, scale: { x: 1, y: 1, z: 1 } }]
+  } as Partial<SceneEdit>)
+  const imports: ImportedObjectInput[] = [{ importId: 'imp-4', name: 'Plain', mesh: TRIANGLE }]
+  const { modelSettingsXml, importIdToObjectId } = buildEditedThreeMfDocuments(
+    NEW_PROJECT_MODEL_XML,
+    NEW_PROJECT_MODEL_SETTINGS_XML,
+    null,
+    edit,
+    imports
+  )
+  const block = objectBlock(modelSettingsXml, importIdToObjectId.get('imp-4')!)
+  assert.equal(objectLevelExtruder(block), '1', `an unassigned import must still be bound:\n${block}`)
+  assert.deepEqual(partExtruders(block), ['1'])
 })

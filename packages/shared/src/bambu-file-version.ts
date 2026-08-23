@@ -11,7 +11,7 @@
  *
  * Two properties of that check drive everything here, and both are easy to get wrong:
  *  - It compares **major and minor ONLY**. Patch and build are ignored, so a 2.7.1.62 engine opens
- *    any 2.7.x project including 2.7.9, and refuses 2.8.0 — comparing full version strings would
+ *    any 2.7.x project including 2.7.9, and refuses 2.8.0: comparing full version strings would
  *    both over- and under-report.
  *  - It is a REFUSAL, not a degradation: nothing about the project is wrong and no setting works
  *    around it. The only outs are a newer engine or the CLI's own `--allow-newer-file` escape
@@ -43,7 +43,7 @@ export function formatBambuVersion(version: string | null | undefined): string |
 }
 
 /**
- * True when `projectVersion` would be refused by an engine at `engineVersion` — i.e. exactly the
+ * True when `projectVersion` would be refused by an engine at `engineVersion`: i.e. exactly the
  * condition BambuStudio itself tests (major.minor only). False whenever either side is unknown:
  * an unparseable version must never block a slice that would have worked.
  */

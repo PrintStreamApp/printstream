@@ -2,7 +2,7 @@
  * Resolution of the Postgres client tools (`pg_dump` / `pg_restore`) the
  * server backup system shells out to.
  *
- * Contract: `resolvePgTools()` never throws — it reports either both tool
+ * Contract: `resolvePgTools()` never throws, it reports either both tool
  * paths or a human-readable reason backups are unavailable on this build, so
  * the settings UI can say WHY instead of failing at run time. The probe result
  * is cached for the process lifetime (tools do not appear mid-run).
@@ -127,7 +127,7 @@ function toolVersion(command: string): Promise<string | null> {
 
 /**
  * Runs a Postgres client tool to completion, capturing stderr for the error
- * message. Throws with the tool's own complaint on a non-zero exit — a failed
+ * message. Throws with the tool's own complaint on a non-zero exit, a failed
  * dump's stderr is the diagnosis, never to be swallowed.
  */
 export function runPgTool(command: string, args: string[]): Promise<void> {

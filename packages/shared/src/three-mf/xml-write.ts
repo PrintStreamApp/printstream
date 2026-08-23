@@ -5,7 +5,7 @@
  * user-supplied text (object names, source-file names, filament colours) back into XML attributes
  * safely, and needs to build regexes around ids it read out of the document.
  *
- * Lives in shared rather than the API because the bake runs in two places — the API (yauzl/yazl
+ * Lives in shared rather than the API because the bake runs in two places: the API (yauzl/yazl
  * over a file on disk) and the browser (fflate over bytes the user picked). Keep this Node-free.
  */
 

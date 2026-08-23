@@ -1,6 +1,6 @@
 /**
  * Composer-side state for support-message attachments (cloud-only). Files
- * upload immediately when picked (a resumable chunked upload — see
+ * upload immediately when picked (a resumable chunked upload: see
  * `chunkedSupportAttachmentUpload.ts` and the API's upload-then-claim
  * lifecycle); the send then references the uploaded ids via `attachmentIds`.
  * A removed or abandoned upload is simply never claimed and the server sweeps
@@ -138,7 +138,7 @@ export function useSupportAttachmentDrafts(uploadPath: string) {
     attachmentIds: drafts
       .filter((draft) => draft.status === 'ready')
       .map((draft) => draft.attachment!.id),
-    /** True while any pick is still uploading — hold the send. */
+    /** True while any pick is still uploading: hold the send. */
     uploading: drafts.some((draft) => draft.status === 'uploading'),
     atCapacity: drafts.length >= SUPPORT_ATTACHMENTS_MAX_PER_MESSAGE
   }), [drafts, addFiles, remove, reset])

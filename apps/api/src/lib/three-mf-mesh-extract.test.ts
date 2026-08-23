@@ -100,10 +100,10 @@ test('extracts a Bambu 3MF plate as one part per printed object, placements pres
   ], async (filePath) => {
     const mesh = await extractThreeMfImportMesh(filePath)
     assert.ok(mesh.parts, 'multi-object plate should carry parts')
-    // Helper volumes ride along, keeping their type — BambuStudio's Import Object loads a 3MF's
+    // Helper volumes ride along, keeping their type: BambuStudio's Import Object loads a 3MF's
     // ModelVolumes whole (only the config is dropped), so a blocker must survive the round-trip.
     assert.deepEqual(mesh.parts!.map((part) => part.name), ['Box', 'Lid', 'Blocker'])
-    // Raw 3MF strings, carried verbatim (Bambu marks ordinary parts `normal_part`) — consumers
+    // Raw 3MF strings, carried verbatim (Bambu marks ordinary parts `normal_part`): consumers
     // classify through canonicalThreeMfPartSubtype rather than testing truthiness.
     assert.deepEqual(mesh.parts!.map((part) => part.subtype ?? null), ['normal_part', 'normal_part', 'support_blocker'])
     // ...but the MERGED mesh is printed geometry only: it feeds bounds, the triangle count, and
@@ -241,4 +241,40 @@ test('throws when the requested objectId does not exist', async () => {
       /not found in this 3MF/
     )
   })
+})
+
+test('a 3MF declaring inches is imported at millimetre scale', async () => {
+  // BambuStudio honours `<model unit>` (`bbs_get_unit_factor`, `bbs_3mf.cpp:618-635`) and always
+  // writes `millimeter` itself, so this only bites on foreign files -- and a CAD tool exporting in
+  // inches is ordinary. Read as millimetres, the model arrives 25.4x too small: no error, just a
+  // model the user has to notice and rescale by hand.
+  const dir = await mkdtemp(path.join(tmpdir(), 'three-mf-unit-'))
+  try {
+    const rootModel = (unit: string) => [
+      '<?xml version="1.0" encoding="UTF-8"?>',
+      `<model unit="${unit}" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">`,
+      '  <resources>',
+      inlineMeshObject(1),
+      '  </resources>',
+      '  <build><item objectid="1"/></build>',
+      '</model>'
+    ].join('\n')
+
+    const mmPath = path.join(dir, 'mm.3mf')
+    const inchPath = path.join(dir, 'inch.3mf')
+    await writeZipFixture(mmPath, [['3D/3dmodel.model', rootModel('millimeter')]])
+    await writeZipFixture(inchPath, [['3D/3dmodel.model', rootModel('inch')]])
+
+    const mm = await extractThreeMfImportMesh(mmPath)
+    const inch = await extractThreeMfImportMesh(inchPath)
+
+    const widthOf = (mesh: { bounds: { min: { x: number }; max: { x: number } } }) => mesh.bounds.max.x - mesh.bounds.min.x
+    assert.ok(Math.abs(widthOf(mm) - 10) < 1e-6, `the millimetre control changed: ${widthOf(mm)}`)
+    assert.ok(
+      Math.abs(widthOf(inch) - 254) < 1e-4,
+      `an inch-declared 10-unit triangle should import as 254mm, got ${widthOf(inch)}`
+    )
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
 })

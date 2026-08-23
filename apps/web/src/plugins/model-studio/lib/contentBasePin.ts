@@ -2,14 +2,14 @@
  * Which bytes an editor session authors its saves FROM.
  *
  * Owns one rule, because getting it wrong is invisible: the pin identifies **what we opened**, and
- * it may move exactly ONCE — from "that file's head" to the durable version id the first save
+ * it may move exactly ONCE, from "that file's head" to the durable version id the first save
  * archives, which is the same bytes under a name that will not move again. Every later save
  * archives our OWN output, so adopting one of those would resume authoring each save from the
  * previous save's result, which is the chaining this exists to stop (one stranded mesh object per
  * solid per save on an import-backed project; see the shared save schema's `contentBase`).
  *
  * Counterpart: `resolvePinnedContentBase` in the API's editor route, which reads the pin without
- * scoping it to the save target — after a saveAs the session writes to a NEW file while still
+ * scoping it to the save target: after a saveAs the session writes to a NEW file while still
  * authoring from the original's bytes.
  */
 
@@ -21,7 +21,7 @@ export interface EditorContentBasePin {
 
 /**
  * The pin an editor session starts with: the file it opened, at the version it opened (null for
- * "current"). Null for a project with no base file at all — an editor-born project bakes from its
+ * "current"). Null for a project with no base file at all, an editor-born project bakes from its
  * own state (`ignoreBaseContent`) and has no bytes to author from.
  */
 export function initialContentBasePin(

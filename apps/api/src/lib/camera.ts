@@ -51,7 +51,7 @@ export async function* streamFrames(printer: Printer, signal?: AbortSignal): Asy
 	let resume: (() => void) | null = null
 
 	// The consumer (frame pacer) deliberately sleeps between frames, so a burst from
-	// the bridge could otherwise grow `queue` without bound — full JPEG buffers per
+	// the bridge could otherwise grow `queue` without bound: full JPEG buffers per
 	// printer held in the API heap. Live video should drop, not buffer: cap the number
 	// of queued frames and discard the oldest when we exceed it. Error/close items are
 	// control signals and are never dropped.

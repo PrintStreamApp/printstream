@@ -11,7 +11,7 @@
  * switch re-picks a builtin, `applyProcessProfileToProjectSettings` overwrites every process key, so
  * anything not surfaced as an override is silently lost. The caller resolves the project preset
  * against NO target (`targetId: null`) so the system baseline is matched by NAME regardless of the
- * machine currently selected — a machine-scoped resolve would fail to find an A1 baseline once the
+ * machine currently selected, a machine-scoped resolve would fail to find an A1 baseline once the
  * target is H2D, collapsing the diff to empty and dropping the carry.
  */
 import {
@@ -28,7 +28,7 @@ import {
  *
  * When the baseline resolved, the deltas are the value-diff of the effective config against it. When
  * it did NOT (parent preset not installed, so the endpoint returns the 3MF's own
- * `different_settings_to_system` as `overriddenKeys`), that list is authoritative — valued from the
+ * `different_settings_to_system` as `overriddenKeys`), that list is authoritative: valued from the
  * effective config.
  */
 export function deriveProjectCarryOverrides(

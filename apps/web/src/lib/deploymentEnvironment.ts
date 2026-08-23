@@ -4,8 +4,8 @@
  *
  * Derived at runtime (the same web build ships to every cloud stack and to OSS
  * self-hosters, so this cannot be baked at build time): the canonical cloud
- * staging/dev hostnames, plus `devMode` for local development. Everything else —
- * production cloud and self-hosters — is treated as production and gets no tag,
+ * staging/dev hostnames, plus `devMode` for local development. Everything else,
+ * production cloud and self-hosters, is treated as production and gets no tag,
  * so a self-hoster's own `dev.*`/`staging.*` subdomain never picks up a label.
  */
 export type DeploymentEnvironment = 'dev' | 'staging' | 'production'

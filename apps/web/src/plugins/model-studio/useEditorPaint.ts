@@ -217,7 +217,7 @@ export function useEditorPaint(params: EditorPaintParams): EditorPaint {
 
   // Coalesce overlay rebuilds to at most one per animation frame. buildTrianglePaintOverlay
   // re-meshes the part's ENTIRE (growing) paint map, so doing it synchronously on every pointermove
-  // made freehand strokes stutter — and pointermove can fire faster than the display. During a
+  // made freehand strokes stutter, and pointermove can fire faster than the display. During a
   // stroke we mark each touched (mesh, channel) dirty and rebuild once per frame from the latest
   // codes; the paint itself still applies on every move (only the re-meshing is throttled), and the
   // trailing frame after the last move renders the final state. Reads are via effectivePaintCodes so
@@ -262,7 +262,7 @@ export function useEditorPaint(params: EditorPaintParams): EditorPaint {
 
   // Live recolour WITHOUT a plate rebuild. buildInstanceGroup now reads colours via refs (stable
   // w.r.t. colour), so a filament swatch edit no longer tears down + rebuilds the whole active plate
-  // (the jank-2/SCALE-5 hot path — recolouring fired the full build effect on every picker tick).
+  // (the jank-2/SCALE-5 hot path: recolouring fired the full build effect on every picker tick).
   // Instead, walk the live groups and update each tagged part mesh's material colour + emissive lift
   // in place, and re-tint colour-paint overlays (whose tint follows the filament's live colour).
   // Modifier/added-part volumes carry no `recolor` tag (fixed subtype colour) so they're untouched.
@@ -442,13 +442,13 @@ export function useEditorPaint(params: EditorPaintParams): EditorPaint {
     recordHistoryRef.current?.()
     const stateKey = PAINT_CHANNEL_SPECS[channel].stateKey
     const channelPaint = state[stateKey] ?? (state[stateKey] = {})
-    // A single-solid import has an EMPTY `parts` array — its one mesh is solid 0 — so clearing has
+    // A single-solid import has an EMPTY `parts` array, its one mesh is solid 0, so clearing has
     // to fall back to that rather than iterating nothing and appearing to do nothing.
     const partIds = instance.parts.length > 0
       ? instance.parts.filter((part) => !isNonRenderableThreeMfPartSubtype(part.subtype)).map((part) => part.componentObjectId)
       : [0]
     for (const componentObjectId of partIds) {
-      // An empty map means "no paint" — emitted so existing source paint is stripped.
+      // An empty map means "no paint": emitted so existing source paint is stripped.
       channelPaint[supportPaintKey(hostId, componentObjectId)] = {}
     }
     const group = selectedKeyRef.current ? groupByKeyRef.current.get(selectedKeyRef.current) : null

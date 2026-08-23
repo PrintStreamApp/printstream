@@ -1,6 +1,6 @@
 /**
  * The dialog-side bridge into the shared print matcher. The matcher itself is
- * covered in `packages/shared`; these tests pin the web-only adaptations —
+ * covered in `packages/shared`; these tests pin the web-only adaptations:
  * tracked-spool grams reaching the right slot (including the AMS HT 128+ band,
  * whose tray index reverse-maps to `amsId = unitId`, not `unitId * 4`), and
  * the auto-selected derivation that drives the row markers.
@@ -64,7 +64,7 @@ test('computeAutoTrayMapping suggests exact matches only and returns empty with 
     }]
   })
   const filaments = [filament(1, 'PLA', '#FF0000'), filament(2, 'PETG', '#000000')]
-  // #1 has an exact match (slot 1); #2 is PETG — the type-only PLA candidates must stay unselected.
+  // #1 has an exact match (slot 1); #2 is PETG: the type-only PLA candidates must stay unselected.
   assert.deepEqual(computeAutoTrayMapping('printer-1', status, filaments, new Map(), NO_SPOOLS), [1, -1])
   assert.deepEqual(computeAutoTrayMapping('printer-1', undefined, filaments, new Map(), NO_SPOOLS), [])
 })

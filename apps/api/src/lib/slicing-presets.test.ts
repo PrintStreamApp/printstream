@@ -158,7 +158,7 @@ test('overwriting a preset keeps its id so references to it survive the edit', a
     overwrite: true
   })
 
-  // The id is what every saved reference points at — a slice request, a print job's chosen
+  // The id is what every saved reference points at, a slice request, a print job's chosen
   // preset, and the Bambu-cloud sync map. Re-minting it on each save silently orphans all of them.
   assert.equal(overwritten.profiles[0]?.id, originalId)
   const listed = await listCustomSlicingPresets('workspace-1')
@@ -206,7 +206,7 @@ async function createPresetArchiveBase64(entries: Array<[string, Record<string, 
 
 // Seam: a workspace preset inherits its parent's identity fields, and an explicit
 // override on the child wins. `filament_is_support` is the one where absent-vs-false
-// matters — an omitted false would let an inherited `true` leak through the `??` merge
+// matters, an omitted false would let an inherited `true` leak through the `??` merge
 // and type a model filament as support (issue #66).
 test('listCustomSlicingPresets inherits the support flag and lets a child override it off', async () => {
   let settingValue: string | null = null
@@ -286,7 +286,7 @@ test('listCustomSlicingPresets inherits layerHeight from a built-in parent', asy
 // The web resolver needs to tell a derivative from the preset it was derived from: a child inherits
 // its parent's `filament_id`, so identity alone cannot separate them, and an AMS tray reporting
 // GFA00 matched a user's "Bambu PLA Basic - Cryogrip Pro Glacier" as readily as the built-in.
-// `derivedFromPresetName` is that signal, and it is IDENTITY — a child of a child names its own
+// `derivedFromPresetName` is that signal, and it is IDENTITY, a child of a child names its own
 // immediate parent and must never inherit its grandparent's value through the metadata merge.
 test('a custom profile reports the preset it inherits from, never its parent\'s', async () => {
   let settingValue: string | null = null
@@ -323,6 +323,6 @@ test('a custom profile reports the preset it inherits from, never its parent\'s'
   assert.equal(child?.derivedFromPresetName, 'Bambu PLA Basic - Custom')
   assert.equal(parent?.derivedFromPresetName, 'Bambu PLA Basic @BBL H2D')
   // The child still inherits the METADATA it needs (the shared filament id that made the two
-  // indistinguishable in the first place) — only the derived-from relation stays per-preset.
+  // indistinguishable in the first place), only the derived-from relation stays per-preset.
   assert.deepEqual(child?.filamentIds, ['GFA00'])
 })

@@ -559,7 +559,7 @@ test('shared filament action availability validates AMS and external spool actio
   assert.deepEqual(getAmsUnloadFilamentAvailability(readySwitchStatus, 0, 1), { allowed: true, reason: null })
 
   // The external spool bypasses the switched feed path entirely, so it stays blocked even when the
-  // switch IS set up — this is a property of the hardware being fitted, not of its configuration.
+  // switch IS set up, this is a property of the hardware being fitted, not of its configuration.
   const externalBlocked = 'Loading and unloading the external spool is not supported while a Filament Track Switch is fitted.'
   assert.deepEqual(getExternalSpoolLoadAvailability(readySwitchStatus, 254), { allowed: false, reason: externalBlocked })
   assert.deepEqual(getExternalSpoolUnloadAvailability(readySwitchStatus, 254), { allowed: false, reason: externalBlocked })

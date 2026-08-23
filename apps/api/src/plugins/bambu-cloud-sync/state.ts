@@ -7,7 +7,7 @@
  * read whole, and written whole.
  *
  * **The binding is by id, both ways.** A record maps Bambu's `setting_id` to our
- * `custom:<uuid>`. Nothing in a sync matches presets by NAME — names are display text,
+ * `custom:<uuid>`. Nothing in a sync matches presets by NAME: names are display text,
  * they drift, and two kinds can share one. (BambuStudio does match by name locally,
  * which is why renaming a preset in Studio forks it into two; keying on the id is what
  * makes a rename stay one preset here.)
@@ -20,7 +20,7 @@
  *
  * **Only the ACCESS token is encrypted at rest** (via `secret-encryption.ts`); the
  * refresh token beside it is stored verbatim. Both are secrets and neither may reach
- * a DTO — see `publicConnectionState` — but their at-rest protection differs today.
+ * a DTO, see `publicConnectionState`, but their at-rest protection differs today.
  * The `refreshToken` field doc explains why and what the fix costs; do not read this
  * paragraph as "the credential is encrypted".
  */
@@ -47,7 +47,7 @@ const presetHoldSchema = z.object({
  *
  * `missingRemotely` means the preset vanished from Bambu's listing (deleted in Studio
  * or the account) while the local copy survives. `missingLocally` means the local
- * preset is gone (deleted here, by any path — the normal delete button does not need
+ * preset is gone (deleted here, by any path: the normal delete button does not need
  * to know this plugin exists) while Bambu's copy survives. Either way the binding is
  * FROZEN the moment this is set: pull/push skip it entirely until a person resolves
  * it via `/presets/:presetId/resolve-delete`, so a deletion never propagates on its own.
@@ -90,7 +90,7 @@ const connectionSchema = z.object({
   /** Encrypted at rest. Never returned to the browser. */
   accessToken: z.string(),
   /**
-   * NOT encrypted at rest — unlike {@link accessToken}, this is stored verbatim.
+   * NOT encrypted at rest: unlike {@link accessToken}, this is stored verbatim.
    * `writeConnection` encrypts only the access token, so with `SECRETS_KEY` set the
    * two halves of the same credential have different protection, and a reader of the
    * `Setting` table gets a token that mints fresh access tokens. That is a gap, not a
@@ -100,7 +100,7 @@ const connectionSchema = z.object({
    * Fixing it is small and back-compatible: encrypt on write and decrypt on read, as
    * the access token does. `secret-encryption.ts` stores a self-describing `enc:1:`
    * prefix and returns unprefixed values unchanged, so already-stored plaintext keeps
-   * working and is re-encrypted on the next write — no migration, no forced reconnect.
+   * working and is re-encrypted on the next write, no migration, no forced reconnect.
    *
    * Bambu issues this alongside every access token (`TokenResp` in BambuStudio's
    * `HttpServer.cpp`); without it a lapsed access token means a full password + 2FA
@@ -115,7 +115,7 @@ const connectionSchema = z.object({
    *
    * Observed against a live account: both are **the same instant**, 90 days out. The
    * refresh token does NOT outlive the access token, so renewal cannot be left until the
-   * access token is nearly dead — at that point the refresh token is nearly dead too.
+   * access token is nearly dead, at that point the refresh token is nearly dead too.
    */
   expiresAt: z.string().nullish(),
   refreshExpiresAt: z.string().nullish(),
@@ -127,7 +127,7 @@ const connectionSchema = z.object({
    */
   issuedAt: z.string().nullish(),
   connectedAt: z.string(),
-  /** Who connected it — a per-workspace credential still has a person behind it. */
+  /** Who connected it, a per-workspace credential still has a person behind it. */
   connectedByUserId: z.string().nullable(),
   /**
    * `expired` means Bambu answered with its signed expiry. Only that sets it; an
@@ -149,10 +149,10 @@ const connectionSchema = z.object({
   pendingDeletes: z.array(z.string()).default([]),
   /**
    * Bambu `setting_id`s a person deliberately chose to stop tracking after a
-   * `missingLocally` freeze — the preset was deleted here, and declining the "remove
+   * `missingLocally` freeze: the preset was deleted here, and declining the "remove
    * from Bambu Cloud too?" prompt means "leave the cloud copy alone", not "bring it
    * back". Without this, dropping the binding alone would make the very next pull look
-   * at Bambu's still-listed copy, see no binding, and re-import it — reappearing right
+   * at Bambu's still-listed copy, see no binding, and re-import it: reappearing right
    * after the user deleted it, the opposite of what they asked for. Cleared on
    * disconnect along with the rest of the connection; there is no in-app way to
    * un-ignore one today short of reconnecting.
@@ -161,7 +161,7 @@ const connectionSchema = z.object({
   /**
    * What the last CHECK found, and when. Written by `checkBambuCloudSync` (the background
    * pass and the explicit refresh) so a surface can show whether anything is outstanding
-   * without making a Bambu call of its own — an editor open must not cost an API request.
+   * without making a Bambu call of its own, an editor open must not cost an API request.
    * Distinct from `lastSyncedAt`, which records the last time work was actually done.
    */
   lastCheck: z.object({
@@ -178,11 +178,11 @@ export type BambuCloudConnection = z.infer<typeof connectionSchema>
  * The connection as the browser may see it: everything except the token.
  *
  * Built by omission of the one secret field rather than by listing the safe ones, so a
- * field added above cannot be forgotten here — but the token is named explicitly, so
+ * field added above cannot be forgotten here, but the token is named explicitly, so
  * removing it can never be an accident either.
  */
 export interface PublicBambuCloudConnection extends Omit<BambuCloudConnection, 'accessToken'> {
-  /** True when a token is held at all — never the token itself. */
+  /** True when a token is held at all, never the token itself. */
   hasCredential: boolean
 }
 
@@ -212,7 +212,7 @@ export async function readConnection(store: PluginSettingStore, logger: PluginLo
 }
 
 /**
- * Persists the connection. Encrypts the access token ONLY — `refreshToken` goes to
+ * Persists the connection. Encrypts the access token ONLY: `refreshToken` goes to
  * storage as-is; see its field doc. If you add encryption there, add the matching
  * `decryptSecret` to {@link readConnection} in the same change, or every existing
  * connection reads back as ciphertext and silently fails to refresh.
@@ -226,7 +226,7 @@ export async function clearConnection(store: PluginSettingStore): Promise<void> 
 }
 
 /**
- * Marks the credential dead. Called ONLY for Bambu's signed expiry — never for a bare
+ * Marks the credential dead. Called ONLY for Bambu's signed expiry, never for a bare
  * 401, an unreachable cloud, or a challenge, any of which would otherwise disconnect a
  * session that still works.
  */

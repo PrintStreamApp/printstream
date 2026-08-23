@@ -4,14 +4,14 @@
  * Owns the one piece of this that is easy to get wrong twice: the subscription is a
  * module singleton per sync, so a hook mounted once per slot row or once per printer
  * card still attaches ONE `wsClient` listener. Without that, every mounted copy
- * re-parses every frame — printer status included, which arrives per printer per
- * second — to decide it had nothing to do.
+ * re-parses every frame, printer status included, which arrives per printer per
+ * second, to decide it had nothing to do.
  *
  * Use it for data a PLUGIN owns, where the reader is core code that has no idea the
  * answer arrives over a socket: mount the returned hook inside the plugin's own read
  * hooks so freshness is a property of reading the data, never something each calling
  * surface has to remember. Core-owned caches are invalidated centrally in
- * `hooks/usePrinterWebSocket.ts` instead — that one listener already exists, so adding
+ * `hooks/usePrinterWebSocket.ts` instead, that one listener already exists, so adding
  * a key there costs nothing.
  *
  * Assumes the single app-wide `QueryClient` provided in `main.tsx`: the first
@@ -31,7 +31,7 @@ export type WsQuerySyncSelector = (event: WsEvent) => readonly QueryKey[] | null
 
 /**
  * @param selectKeys maps an event to the keys it stales.
- * @returns a hook taking `enabled` — pass the plugin's per-workspace activation gate so
+ * @returns a hook taking `enabled`: pass the plugin's per-workspace activation gate so
  * a disabled plugin neither fetches nor listens.
  */
 export function createWsQuerySync(selectKeys: WsQuerySyncSelector): (enabled?: boolean) => void {

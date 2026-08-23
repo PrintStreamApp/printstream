@@ -7,14 +7,14 @@
  * Its consumer is slicing: a job cancels when the tab that started it closes.
  *
  * The grace period covers what the socket layer cannot tell apart: an in-app navigation that
- * remounts the socket, a laptop lid, and a two-second network blip all look exactly like a close —
+ * remounts the socket, a laptop lid, and a two-second network blip all look exactly like a close,
  * and the consumer reacts by destroying work. Reconnecting inside the grace retracts the departure
  * with nothing observed.
  *
  * A tab whose DOCUMENT is going away is a different case, and it says so with {@link leaving}
  * (`pagehide` -> a beacon), which departs it at once. That covers closing the tab and reloading it
  * alike: both take the user out of the editor and the slice dialog, and a slice started there is
- * persisted HIDDEN from the library with no action on its toast — so finishing it produces a file
+ * persisted HIDDEN from the library with no action on its toast, so finishing it produces a file
  * the user cannot reach while holding a slicer the next job wants. The beacon is best-effort by
  * nature (a killed tab sends nothing), so the grace remains the backstop rather than the plan.
  *
@@ -58,7 +58,7 @@ export class ClientSessions {
 
   /** A socket for this tab closed. Starts the grace only when it was the tab's last one. */
   disconnected(clientId: string): void {
-    // An id we are not tracking has nothing left to depart from — it already did, via `leaving`
+    // An id we are not tracking has nothing left to depart from, it already did, via `leaving`
     // (whose beacon lands before the socket close), or it was never counted. Scheduling a grace
     // here would report the same tab a second time, and its consumer cancels work on every report.
     if (!this.openSockets.has(clientId)) return
@@ -88,7 +88,7 @@ export class ClientSessions {
   }
 
   /**
-   * The tab's document is unloading — depart it NOW rather than after the grace.
+   * The tab's document is unloading: depart it NOW rather than after the grace.
    *
    * Deliberately ignores the socket count: the beacon routinely arrives before the socket close,
    * and waiting for a tally that is about to drop to zero anyway would just reintroduce the delay

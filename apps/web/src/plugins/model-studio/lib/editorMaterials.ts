@@ -2,7 +2,7 @@
  * The materials seam: everything the 3MF editor needs to know about a project's filaments, and
  * nothing else.
  *
- * The editor used to read materials straight off `SliceSettingsController` — a ~90-field object
+ * The editor used to read materials straight off `SliceSettingsController`, a ~90-field object
  * built inline inside `SliceFileModal` and welded to `/api/printers` and `/api/slicing/*`. Since
  * every add-object path, material swatch, colour-paint overlay, save, and 3MF export keys on those
  * filaments, that one dependency made the editor unmountable anywhere the slice dialog could not
@@ -12,7 +12,7 @@
  *  - the library host derives them from the live slice controller ({@link editorMaterialsFromSliceConfig}),
  *    so a material the user edits mid-session retitles and recolours immediately;
  *  - a host with only a file derives them from the project's own filament list
- *    ({@link editorMaterialsFromProjectFilaments}) — which the shared 3MF index parser already
+ *    ({@link editorMaterialsFromProjectFilaments}), which the shared 3MF index parser already
  *    produces, in the browser, with no server involved.
  *
  * Slot ids are BambuStudio's 1-based project filament ids. They are the same numbers colour-paint
@@ -33,7 +33,7 @@ export interface EditorMaterials {
   colorById: Record<number, string>
 }
 
-/** No materials at all — a project whose filament list has not resolved yet. */
+/** No materials at all, a project whose filament list has not resolved yet. */
 export const EMPTY_EDITOR_MATERIALS: EditorMaterials = { options: [], colorById: {} }
 
 /** The subset of the slice controller this seam consumes. */
@@ -75,7 +75,7 @@ export function editorMaterialsFromSliceConfig(sliceConfig: SliceConfigMaterials
 }
 
 /**
- * Materials read straight off a parsed 3MF, for a host with no slice controller — the public
+ * Materials read straight off a parsed 3MF, for a host with no slice controller: the public
  * editor, where the file was opened from the user's disk and never uploaded.
  *
  * There is no live selection to layer on, so the project's own labels and colours ARE the answer.

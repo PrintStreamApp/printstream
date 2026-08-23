@@ -5,7 +5,7 @@
  * This file only wires the FIRST-PARTY built-ins. Third-party plugins are a
  * separate path: they are uploaded as `.zip` archives, extracted into
  * `PLUGINS_DIR`, and re-loaded on each boot by `loadInstalledExternalPlugins`
- * (`plugin/installer.ts`, invoked from `src/index.ts`) — not registered here.
+ * (`plugin/installer.ts`, invoked from `src/index.ts`), not registered here.
  */
 import { pluginRegistry } from './registry.js'
 import { isSelfHostedDeployment } from '../lib/deployment-mode.js'

@@ -1,6 +1,6 @@
 /**
- * The one printer picker. Every surface that asks "which machine?" renders THIS — the slice
- * settings sidebar, the queue's start dialog, and anything added later — so a farm is searched,
+ * The one printer picker. Every surface that asks "which machine?" renders THIS, the slice
+ * settings sidebar, the queue's start dialog, and anything added later, so a farm is searched,
  * filtered, grouped and sorted the same way wherever it is chosen from.
  *
  * Composed like the other directory pickers (`MaterialPickerDialog`, the library file picker):
@@ -11,12 +11,12 @@
  * Callers supply ENTRIES rather than bare printers, so a surface that knows more about a machine
  * can say so without this component learning about queues, slicing or calibration: `meta` renders
  * per-row (readiness chips), `rank` orders a "best match" sort, `disabled` blocks a row. It stays
- * a core component — plugins may import it, it must never import them.
+ * a core component: plugins may import it, it must never import them.
  *
  * Machine state and hardware identity are the picker's own: every row carries the card's stage
  * chip (Idle / Printing / Offline) and hardware chips (model, nozzle size, installed plate, via
  * PrinterHardwareChips), read from live statuses the picker subscribes to itself rather than
- * asking callers to plumb them through the entries — so every surface gets identical chips for
+ * asking callers to plumb them through the entries, so every surface gets identical chips for
  * free, and `meta` stays purely surface-specific. The subscription strips telemetry (see
  * usePrinterStatuses) and every caller mounts this dialog only while it is open, so status ticks
  * cannot thrash a closed picker or its dropdowns.
@@ -40,7 +40,7 @@ import { formatPlateTypeLabel, formatPrinterModelLabel } from '../lib/slicingPre
 /** One selectable machine, plus whatever the calling surface knows about it. */
 export interface PrinterPickerEntry {
   printer: Printer
-  /** Right-aligned per-row content — readiness chips, anything the caller can judge. Don't
+  /** Right-aligned per-row content: readiness chips, anything the caller can judge. Don't
    * restate stage or hardware identity: the picker renders those chips on every row itself. */
   meta?: ReactNode
   /** Lower sorts first under "Best match". Absent everywhere hides that sort option entirely. */
@@ -65,7 +65,7 @@ export function PrinterPickerDialog({
   onClose: () => void
   entries: PrinterPickerEntry[]
   selectedPrinterId: string | null
-  /** Null only reaches here when `anyOption` is set — see its docs. */
+  /** Null only reaches here when `anyOption` is set: see its docs. */
   onSelect: (printer: Printer | null) => void
   title?: string
   /**
@@ -292,7 +292,7 @@ export function PrinterPickerDialog({
                           // Under a model group heading the model chip would restate the heading
                           // on every row, so it only renders when grouping is off; the nozzle and
                           // plate chips render whenever the value is known. The stage chip always
-                          // renders — unlike the card (empty row = healthy), a picker is where
+                          // renders: unlike the card (empty row = healthy), a picker is where
                           // Idle-vs-Printing-vs-Offline decides the choice.
                           const status = statuses[entry.printer.id]
                           const showModelChip = bucket.label == null
@@ -351,10 +351,10 @@ function PrinterPickerRow({
   selected: boolean
   title: string
   subtitle?: ReactNode
-  /** The machine's live stage chip — leads the cluster, mirroring the card's live-state-first order. */
+  /** The machine's live stage chip: leads the cluster, mirroring the card's live-state-first order. */
   status?: ReactNode
   meta?: ReactNode
-  /** The machine's fixed identity chips (model, nozzle, plate) — rendered after `meta`, mirroring
+  /** The machine's fixed identity chips (model, nozzle, plate): rendered after `meta`, mirroring
    * the card's transient-state-first, hardware-last order. */
   hardware?: ReactNode
   disabled?: boolean
@@ -374,7 +374,7 @@ function PrinterPickerRow({
         '&:hover': disabled ? undefined : { borderColor: 'primary.500' }
       }}
     >
-      {/* The chip cluster wraps under the name at phone widths instead of crushing it — a picker
+      {/* The chip cluster wraps under the name at phone widths instead of crushing it, a picker
           exists to compare machines, so the chips must stay readable rather than clamp away. */}
       <Stack direction="row" spacing={1} rowGap={0.5} useFlexGap alignItems="center" flexWrap="wrap" sx={{ minWidth: 0 }}>
         <Stack sx={{ minWidth: 0, flex: '1 1 auto' }}>

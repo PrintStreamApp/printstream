@@ -22,7 +22,7 @@ test('a tab that closes is reported gone once the grace elapses', async () => {
   sessions.reset()
 })
 
-test('a reload retracts the departure — the tab reconnects inside the grace', async () => {
+test('a reload retracts the departure: the tab reconnects inside the grace', async () => {
   // The failure this guards: a reload, an in-app navigation, and a two-second blip are all just a
   // socket close, and the consumer reacts by cancelling the user's slice.
   const sessions = new ClientSessions(GRACE_MS)

@@ -1,7 +1,7 @@
 /**
  * Rich create/edit dialog for a queued print. Mirrors the Print dialog's control:
  * a visual plate picker, print settings, and material mapping that adapts to the
- * target — a specific printer reuses the Print dialog's AMS tray mapper
+ * target, a specific printer reuses the Print dialog's AMS tray mapper
  * ({@link PrinterMapping}), while "any printer" maps generally via the filament
  * library / custom entry ({@link QueueMaterialEditor}). Used both to add new items
  * and to edit a queued one before it dispatches.
@@ -174,7 +174,7 @@ export function QueueItemDialog({ open, onClose, onBack, fixedFile, defaultPlate
   const activePlate = useMemo(() => plates.find((plate) => plate.index === plateIndex) ?? plates[0], [plates, plateIndex])
 
   // A sliced single-plate output keeps its source plate number (e.g. only "Plate 2"
-  // exists), so the default index of 1 would not exist in the file — snap to the first
+  // exists), so the default index of 1 would not exist in the file: snap to the first
   // real plate once they load, otherwise the create rejects with "Plate N does not exist".
   useEffect(() => {
     const first = plates[0]
@@ -193,7 +193,7 @@ export function QueueItemDialog({ open, onClose, onBack, fixedFile, defaultPlate
   )
 
   // The file's own required filaments on the active plate (the shared builder keeps
-  // usedGrams + nozzleId flowing — hand-built copies silently dropped them).
+  // usedGrams + nozzleId flowing: hand-built copies silently dropped them).
   const fileFilaments = useMemo<QueueRequiredFilament[]>(
     () => (activePlate?.filaments ?? []).map(queueRequiredFilamentFromPlate),
     [activePlate]
@@ -219,7 +219,7 @@ export function QueueItemDialog({ open, onClose, onBack, fixedFile, defaultPlate
   }
 
   // Default AMS mapping for a specific-printer target (overridden once the user edits a slot).
-  // Exact matches only, nozzle/refill/remaining-aware — the same suggestion the print dialogs show.
+  // Exact matches only, nozzle/refill/remaining-aware, the same suggestion the print dialogs show.
   const resolveSlotFilament = useSlotFilamentIdentityLookup()
   const computedMapping = useMemo(() => {
     if (target.kind !== 'printer' || !target.printerId) return []

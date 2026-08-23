@@ -9,7 +9,7 @@ import { formatBambuVersion } from '@printstream/shared'
  * Warning + explicit opt-in for a project saved by a NEWER Bambu Studio than the selected slicer
  * engine.
  *
- * Bambu Studio refuses to open such a project outright — the CLI exits before loading anything, so
+ * Bambu Studio refuses to open such a project outright: the CLI exits before loading anything, so
  * there is no setting or retry that gets past it. It does provide an escape hatch
  * (`--allow-newer-file`), which is what the checkbox enables, mirroring how Bambu Studio itself
  * lets you open a newer project after warning you.
@@ -45,7 +45,7 @@ export function ProjectVersionWarningAlert({ projectVersion, engineVersion, ackn
           sx={{ mt: 1 }}
           checked={acknowledged}
           onChange={(event) => onAcknowledgedChange(event.target.checked)}
-          label="Slice it anyway — settings added since this project's version may be ignored, so check the result before printing"
+          label="Slice it anyway: settings added since this project's version may be ignored, so check the result before printing"
         />
       </div>
     </Alert>

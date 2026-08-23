@@ -82,7 +82,7 @@ function splitRoute(path: string): { pathname: string; suffix: string } {
  * "Context", because that is what changes and it is the only word true of all
  * three destinations. NOT "cloud workspace" (the list also holds the billing
  * context and, for an operator, the platform context, so naming it after one
- * mislabels the other two) and NOT "account" (nothing here switches accounts —
+ * mislabels the other two) and NOT "account" (nothing here switches accounts:
  * the billing context is one area of the SAME account, alongside its
  * workspaces).
  *
@@ -97,6 +97,6 @@ export const CONTEXT_CHOOSER_LABEL = 'Switch context'
  * The chooser page's own heading.
  *
  * A question, so the page needs no collective noun for the three things below
- * it — "Choose a context" is the app's internal vocabulary, not the user's.
+ * it: "Choose a context" is the app's internal vocabulary, not the user's.
  */
 export const CONTEXT_CHOOSER_TITLE = 'Where do you want to work?'

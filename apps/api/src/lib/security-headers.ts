@@ -1,8 +1,8 @@
 /**
  * Helmet options for the API's response security headers.
  *
- * Exists as its own module so the one environment-dependent decision here — whether to send
- * HSTS — can be tested without importing `app.ts`, which builds the whole Express app (and its
+ * Exists as its own module so the one environment-dependent decision here, whether to send
+ * HSTS, can be tested without importing `app.ts`, which builds the whole Express app (and its
  * plugins and database wiring) at import time.
  *
  * Counterpart: `app.ts`, the only caller.
@@ -21,7 +21,7 @@ export interface SecurityHeaderOptions {
  * HSTS is correct only where the deployment terminates TLS.
  *
  * The header instructs the BROWSER never to use http for this host again, and browsers honour it
- * per hostname — `localhost` included. A single dev response therefore pins localhost to https for
+ * per hostname: `localhost` included. A single dev response therefore pins localhost to https for
  * a year, and every later plain-HTTP request fails at the transport with a certificate error, long
  * after the header stopped being sent. Clearing it needs a manual browser reset, so the cost of
  * sending it wrongly is far higher than the cost of omitting it in dev.

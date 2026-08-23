@@ -3,8 +3,8 @@
  *
  * A plugin that owns filament/spool inventory (today: `filament-manager`) can
  * register a resolver that answers "which spool is loaded in this AMS slot, and
- * what is its identity?". Other plugins that need that association — e.g.
- * `calibration`, to tie a run to the loaded spool and reuse its saved value —
+ * what is its identity?". Other plugins that need that association: e.g.
+ * `calibration`, to tie a run to the loaded spool and reuse its saved value:
  * consult the registry through this shared core seam instead of importing the
  * owning plugin or reaching into its tables.
  *
@@ -68,7 +68,7 @@ class SlotFilamentResolverRegistry {
         const result = await resolver(query)
         if (result) return result
       } catch (error) {
-        // Best-effort: a failing resolver must not break the consumer, but log it — a silent
+        // Best-effort: a failing resolver must not break the consumer, but log it, a silent
         // failure here shows up downstream as a run/print with no spool for no visible reason.
         console.warn('[slot-filament] a resolver threw; falling back', error instanceof Error ? error.message : error)
       }

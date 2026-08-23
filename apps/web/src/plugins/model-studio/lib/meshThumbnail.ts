@@ -15,7 +15,7 @@
  *
  * Each fresh render is also uploaded (best-effort) to `PUT /api/library/:id/thumbnail`,
  * which persists it server-side. That makes the render a once-per-file-version cost: the
- * next view — for this client or any other — is served the stored PNG straight from
+ * next view, for this client or any other, is served the stored PNG straight from
  * `FileThumbnail`'s `<img>`, with no mesh fetch, STEP tessellation, or WebGL render.
  */
 import * as THREE from 'three'
@@ -189,7 +189,7 @@ function uploadRenderedThumbnail(file: LibraryFile, dataUrl: string): void {
   void (async () => {
     try {
       // Decode the data URL by hand: `fetch(dataUrl)` counts as a connect-src request,
-      // which the app's CSP blocks — that silently disabled thumbnail persistence
+      // which the app's CSP blocks, that silently disabled thumbnail persistence
       // everywhere CSP is enforced (the render succeeded, the PUT never happened, and
       // every later view re-rendered from scratch).
       const comma = dataUrl.indexOf(',')
@@ -211,7 +211,7 @@ function uploadRenderedThumbnail(file: LibraryFile, dataUrl: string): void {
 }
 
 /**
- * Render (or return a cached) PNG data URL preview for a raw-mesh library file — STL,
+ * Render (or return a cached) PNG data URL preview for a raw-mesh library file: STL,
  * STEP, or a geometry-only 3MF (all served as STL by `/mesh`). Resolves to `null` when
  * the preview can't be produced (aborted, fetch/parse failure) so callers fall back to
  * the kind label.

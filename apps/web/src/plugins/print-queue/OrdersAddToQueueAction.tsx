@@ -6,7 +6,7 @@
  * recorded in the shared module store; the always-mounted `orders.overlays` host
  * ({@link LibraryAddToQueueHost}) renders the flow, since the order card re-renders.
  *
- * Cross-plugin by contract: orders exposes the slot + context, the print-queue fills it —
+ * Cross-plugin by contract: orders exposes the slot + context, the print-queue fills it:
  * neither imports the other.
  */
 import { Button, IconButton, Tooltip } from '@mui/joy'

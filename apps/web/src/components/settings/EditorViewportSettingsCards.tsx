@@ -11,7 +11,7 @@
  * Self-contained like `SlicerDeveloperModeCard`: reads and writes the same `['general-settings']`
  * React Query cache App.tsx owns (so a save here keeps app-wide consumers in sync) and derives
  * edit permission from the cached auth bootstrap. Rendered in the editor settings dialog rather
- * than the Settings page, because that is where these are used — but the workspace tier is NOT
+ * than the Settings page, because that is where these are used, but the workspace tier is NOT
  * editor-only state, which is why they live in core settings components.
  */
 import type { EditorSidebarSideSetting } from '@printstream/shared'
@@ -26,7 +26,7 @@ type DeviceChoice<T extends string> = 'follow-default' | T
 export function BuildPlateSettingCard() {
   const { canManageSettings, settings, save, saveError } = useGeneralSettingsEditor()
   // With no workspace there is no shared tier to follow, so the card shows one plain setting rather
-  // than a default plus an override of it — see `useViewportSettingsDeviceOnly`.
+  // than a default plus an override of it: see `useViewportSettingsDeviceOnly`.
   const deviceOnly = useViewportSettingsDeviceOnly()
   const sharedEnabled = settings?.editorShowBedModel ?? true
   const [deviceOverride, setDeviceOverride] = useShowBedModelOverride()
@@ -57,7 +57,7 @@ export function BuildPlateSettingCard() {
     <GeneralSettingCard
       title="3D build plate"
       description="Show the printer’s modelled build plate instead of the plain grid. Turn it off for a plain grid on every printer, including those with no plate model."
-      // Reset means "back to the shipped default" — the plate is on by default, so a shared value
+      // Reset means "back to the shipped default": the plate is on by default, so a shared value
       // of true is already reset.
       resetDisabled={deviceOverride == null && !(canManageSettings && !sharedEnabled)}
       onReset={() => {

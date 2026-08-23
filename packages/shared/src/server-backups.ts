@@ -1,7 +1,7 @@
 /**
  * Server backup contracts (issue #78): the install's built-in whole-install
- * backups — one `pg_dump` of the database plus a snapshot of the persistent
- * data tree per backup — and the staged restore flow. Self-hosted installs
+ * backups, one `pg_dump` of the database plus a snapshot of the persistent
+ * data tree per backup, and the staged restore flow. Self-hosted installs
  * manage them from Settings; cloud deployments from the platform workspace.
  *
  * Counterparts: `apps/api/src/lib/server-backup-*.ts` (engine/schedule/restore),

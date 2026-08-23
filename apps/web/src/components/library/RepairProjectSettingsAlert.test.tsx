@@ -45,7 +45,7 @@ function renderAlert(props: {
 /**
  * The defect repaired IN THE EDITOR must offer a button. Save itself greys out on a project with no
  * unsaved edits, so before this the notice named a remedy ("saving writes them back") beside a
- * control the user could not press — unreachable on exactly the projects that needed it, which is
+ * control the user could not press: unreachable on exactly the projects that needed it, which is
  * every freshly-opened one.
  */
 test('filamentPhysics offers a Repair action when the host can repair', () => {
@@ -62,20 +62,20 @@ test('filamentPhysics renders advisory-only when the host cannot repair', () => 
   renderAlert({ reasons: ['filamentPhysics'] })
 
   assert.equal(screen.queryByRole('button', { name: /repair/i }), null)
-  assert.ok(screen.getByText(/Saving this project from the editor writes them back/i))
+  assert.ok(screen.getByText(/Open it in the editor and save to restore them/i))
 })
 
 /**
  * The public editor opens a file off the user's disk: there is no library row to POST to, so the
- * route's button must not render. The notice still does — knowing the file is broken is useful even
+ * route's button must not render. The notice still does: knowing the file is broken is useful even
  * where this surface cannot fix it.
  */
 test('a project with no stored file still warns, without the route button', () => {
   renderAlert({ reasons: ['flushMatrix'] })
 
   assert.equal(screen.queryByRole('button', { name: /repair/i }), null)
-  assert.ok(screen.getByText(/don’t match its printer/i))
-  assert.ok(screen.getByText(/Open it in the editor and press Repair, then save the project/i))
+  assert.ok(screen.getByText(/left over from a different printer/i))
+  assert.ok(screen.getByText(/Open it in the editor and press Repair, then save/i))
 })
 
 /**
@@ -90,7 +90,7 @@ test('mixed defects with an editor session stage everything behind one button', 
   fireEvent.click(screen.getByRole('button', { name: /repair/i }))
   assert.equal(staged, 1)
   assert.ok(screen.getByText(/need repairing/i))
-  assert.ok(screen.getByText(/stages the fix as an edit/i))
+  assert.ok(screen.getByText(/Repair, then save the project/i))
 })
 
 /**
@@ -102,7 +102,7 @@ test('a surface without an editor session gets the advisory, never a button', ()
   renderAlert({ reasons: ['filamentIds'] })
 
   assert.equal(screen.queryByRole('button', { name: /repair/i }), null)
-  assert.ok(screen.getByText(/Open it in the editor and press Repair, then save the project/i))
+  assert.ok(screen.getByText(/Open it in the editor and press Repair, then save/i))
 })
 
 /**
@@ -122,7 +122,7 @@ test('a failed in-editor repair replaces the body with its reason', () => {
 
 /**
  * A failure must be legible at a glance, not a swapped paragraph inside an identically-styled
- * warning — reported as "hard to tell that the message even changed".
+ * warning: reported as "hard to tell that the message even changed".
  */
 test('a failed in-editor repair is visually distinct, not just different text', () => {
   const { container } = renderAlert({

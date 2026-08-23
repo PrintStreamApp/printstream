@@ -16,7 +16,7 @@
  * trip the editor was not already making.
  *
  * CONTRACT: best-effort and additive. A slot whose preset cannot be resolved is left without a
- * config, and the bake then falls back to its previous drop behaviour for that save — no worse than
+ * config, and the bake then falls back to its previous drop behaviour for that save, no worse than
  * before, and never the OLD material's values under a new name. A resolver that throws is logged
  * and treated as unresolved rather than failing the user's save.
  *
@@ -34,7 +34,7 @@ export interface FilamentConfigAuthoringContext {
   /**
    * Preset id per BAKED slot (1..N by desired-list position), for the slots the user has resolved.
    * Controller records are keyed by SESSION `projectFilamentId`, which drifts from position after a
-   * mid-session remove or reorder — convert them with {@link rekeyByBakedSlot} before passing.
+   * mid-session remove or reorder: convert them with {@link rekeyByBakedSlot} before passing.
    */
   profileIdByFilamentId: Record<number, string | undefined>
 }
@@ -44,7 +44,7 @@ export interface FilamentConfigAuthoringContext {
  *
  * The slice controller keys per-material state by session `projectFilamentId`, which equals the
  * baked slot number only while the session list still matches the file. After a mid-session remove
- * or reorder the two diverge until the save renumbers — and reading a session-keyed record by
+ * or reorder the two diverge until the save renumbers, and reading a session-keyed record by
  * position hands one slot another slot's data. Callers convert at this boundary, against the
  * CURRENT ordered slot list, so the authoring functions below can trust their keys to be baked
  * slots. Entries whose session id no longer appears in the list (a removed slot) are dropped.
@@ -65,7 +65,7 @@ export function rekeyByBakedSlot<T>(
  * One slot's preset as the repair resolved it: the values, plus what BambuStudio needs to BIND them.
  *
  * The binding travels with the config rather than being re-derived at save time for the same reason
- * the config itself is pinned — it is what the user accepted, and the catalogue can move underneath.
+ * the config itself is pinned, it is what the user accepted, and the catalogue can move underneath.
  */
 export interface RepairedFilamentPreset {
   config: ProcessConfig
@@ -80,7 +80,7 @@ export interface RepairedFilamentPreset {
  *
  * The "missing material settings" repair is an undoable EDIT: it resolves every slot up front and
  * pins the result in `EditorState.repairedFilamentConfigs`. Those pinned values are what the user
- * accepted (and what the banner cleared on), so the save must carry exactly them — re-resolving
+ * accepted (and what the banner cleared on), so the save must carry exactly them: re-resolving
  * could return something different if the catalogue moved underneath, and would silently save a
  * value nobody agreed to. Slots without a pin are left for {@link attachResolvedFilamentConfigs}.
  *
@@ -94,7 +94,7 @@ export function applyRepairedFilamentConfigs(
   return {
     ...edit,
     filaments: edit.filaments.map((filament, index) => {
-      // Keys are baked slots (1..N by position) — the caller re-keyed its session-id record via
+      // Keys are baked slots (1..N by position): the caller re-keyed its session-id record via
       // `rekeyByBakedSlot`, the same contract `attachResolvedFilamentConfigs` relies on below.
       const preset = repaired[index + 1]
       if (!preset) return filament
@@ -124,11 +124,11 @@ export async function attachResolvedFilamentConfigs(
   if (!resolve || !edit.filaments || edit.filaments.length === 0) return edit
 
   const resolved = await Promise.all(edit.filaments.map(async (filament, index) => {
-    // The desired list bakes as slots 1..N, and the context keys on those baked slots — the
+    // The desired list bakes as slots 1..N, and the context keys on those baked slots: the
     // caller converted its session-id records via `rekeyByBakedSlot`, so a session that removed
     // or reordered materials still resolves each slot's own preset.
     const profileId = context.profileIdByFilamentId[index + 1]
-    // Already carries the user's repaired config — do not overwrite it with a fresh resolve.
+    // Already carries the user's repaired config: do not overwrite it with a fresh resolve.
     if (filament.config) return filament
     // No preset picked for this slot, or its name never resolved: nothing to author from.
     if (!profileId || !filament.settingsId) return filament
@@ -140,7 +140,7 @@ export async function attachResolvedFilamentConfigs(
         projectFilamentId: index + 1
       })
       // `config` is the slot's EFFECTIVE config (preset plus whatever the project declared), which
-      // is what the file should carry — not `baseConfig`, which is the untouched preset and would
+      // is what the file should carry, not `baseConfig`, which is the untouched preset and would
       // discard the user's own in-project tweaks.
       if (!response.config) return filament
       return {

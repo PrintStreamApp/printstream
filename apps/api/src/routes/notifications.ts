@@ -90,7 +90,7 @@ notificationsRouter.delete('/templates/:event', requireRequestPermission(SETTING
 /**
  * Platform-scope template endpoints. The event set is the deployment's
  * registered platform events (dynamic, unlike the printer-event enum), and
- * the templates live under the platform settings scope — so these routes are
+ * the templates live under the platform settings scope, so these routes are
  * platform-workspace only: a workspace-context request must not reach platform
  * configuration with workspace-scoped authority.
  */

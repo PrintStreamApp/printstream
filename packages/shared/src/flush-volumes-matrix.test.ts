@@ -119,7 +119,7 @@ test('a per-extruder flush_multiplier is healthy however it fails elsewhere', ()
   const inspection = inspectProjectFlushVolumesMatrix(JSON.stringify({
     ...dualNozzleTwoFilaments,
     flush_multiplier: ['1', '1'],
-    // A one-entry fast multiplier is what genuine Bambu Studio dual-nozzle saves carry — it is
+    // A one-entry fast multiplier is what genuine Bambu Studio dual-nozzle saves carry, it is
     // only read in fast purge mode and must never flag a file.
     flush_multiplier_fast: ['1.2']
   }))
@@ -142,7 +142,7 @@ test('the multiplier check models the engine escapes: one filament, absent matri
     flush_multiplier: ['1']
   }))?.multiplierInconsistent, false)
   // `nozzle_volume_type` shorter than the extruder count (or absent): that mismatch triggers the
-  // CLI's flush recompute, which resizes the multiplier — such files slice clean today, and
+  // CLI's flush recompute, which resizes the multiplier: such files slice clean today, and
   // flagging them would block print-prep on working projects.
   assert.equal(inspectProjectFlushVolumesMatrix(JSON.stringify({
     ...dualNozzleTwoFilaments,
@@ -213,7 +213,7 @@ test('a stored matrix reads back block-per-extruder, and round-trips', () => {
 
 test('reading a block refuses a matrix that does not match the topology', () => {
   // An ABSENT matrix is legitimate (BambuStudio computes it), and a WRONG-sized one is the
-  // exit-139 defect — neither may be rendered as a grid of zeroes the user could then save.
+  // exit-139 defect: neither may be rendered as a grid of zeroes the user could then save.
   assert.equal(readFlushVolumesMatrixBlock(null, 0, 2, 2), null)
   assert.equal(readFlushVolumesMatrixBlock([], 0, 2, 2), null)
   assert.equal(readFlushVolumesMatrixBlock(['0', '90', '900', '0'], 0, 2, 2), null)

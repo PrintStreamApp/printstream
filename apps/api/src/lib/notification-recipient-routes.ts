@@ -4,12 +4,12 @@
  * per scope. Mounted on each channel plugin's router so both Discord and
  * ntfy expose the identical contract:
  *
- * - `GET /` — `{ configured, recipients }` (labels + audience only; the
+ * - `GET /`: `{ configured, recipients }` (labels + audience only; the
  *   destination URLs are secrets and never leave the server).
- * - `POST /recipients` — add an entry. `audience: 'everyone'` is the shared
+ * - `POST /recipients`: add an entry. `audience: 'everyone'` is the shared
  *   scope destination; `audience: 'mine'` binds the entry to the REQUESTING
- *   user (self-service only — see the recipients module header for why).
- * - `DELETE /recipients/:id` — remove an entry.
+ *   user (self-service only: see the recipients module header for why).
+ * - `DELETE /recipients/:id`: remove an entry.
  */
 import { z } from 'zod'
 import { SETTINGS_MANAGE_PERMISSION } from '@printstream/shared'
@@ -45,7 +45,7 @@ export interface ChannelRecipientRouteOptions {
   fallbackConfigured?: () => boolean
 }
 
-/** A recipient as serialized to the settings UI — deliberately URL-free. */
+/** A recipient as serialized to the settings UI, deliberately URL-free. */
 export interface ChannelRecipientView {
   id: string
   label: string

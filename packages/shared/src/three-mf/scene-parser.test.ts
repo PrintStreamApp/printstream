@@ -149,7 +149,7 @@ test('a project that names no prime-tower position defaults to a reachable spot,
 test('vase mode is parsed onto the tower sizing, so the tower gate can match BambuStudio', () => {
   // `Print::has_wipe_tower`: with the tower enabled it returns early for the forcing conditions,
   // and only then falls through to `!spiral_mode && filament_diameter.size() > 1`. So vase mode
-  // suppresses the tower against the FILAMENT COUNT but never against timelapse/wrapping — a
+  // suppresses the tower against the FILAMENT COUNT but never against timelapse/wrapping, a
   // distinction the gate cannot make without this flag.
   const sizingFor = (extra: Record<string, unknown>) => buildSceneManifest({
     rootModelXml: ROOT_MODEL_XML,

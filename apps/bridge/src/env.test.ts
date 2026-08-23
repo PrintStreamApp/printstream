@@ -5,7 +5,7 @@ import { test } from 'node:test'
 import { resolveWorkspacePath } from './env.js'
 
 // Derive the workspace root the same way env.ts does (three levels above this
-// directory) instead of hardcoding an absolute checkout path — the suite must
+// directory) instead of hardcoding an absolute checkout path: the suite must
 // pass from any checkout location (CI, git worktrees).
 const workspaceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 

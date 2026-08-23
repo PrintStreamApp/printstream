@@ -1,11 +1,11 @@
 /**
- * The "something to sync" notice shown on surfaces that USE presets — the 3D editor's
- * slice sidebar and the prepare-print dialog — via the `slicing.presets.syncStatus` slot.
+ * The "something to sync" notice shown on surfaces that USE presets, the 3D editor's
+ * slice sidebar and the prepare-print dialog, via the `slicing.presets.syncStatus` slot.
  *
  * Exists because BambuStudio syncs on every launch and PrintStream deliberately does not:
  * presets are curated, so rewriting them on a schedule is not a call to make on someone's
  * behalf. The compromise is that opening a preset surface ASKS whether anything is
- * outstanding and says so here — at the moment someone is actually choosing a preset,
+ * outstanding and says so here, at the moment someone is actually choosing a preset,
  * rather than only in Settings where they would have to think to look.
  *
  * **This mount IS the trigger.** Nothing polls Bambu on a timer, so if this component
@@ -13,7 +13,7 @@
  * both sides: one listing read at most, and the API serves a cached answer for ten
  * minutes, so opening the editor twenty times in that window is one Bambu call rather
  * than twenty. (An earlier revision read `/status` instead, which only replays a stored
- * result — with no background pass left to produce one, this could never appear.)
+ * result, with no background pass left to produce one, this could never appear.)
  *
  * Renders nothing at all unless there is something to say: no account connected, or
  * nothing outstanding, means nothing rendered. A sidebar that always carries a badge stops
@@ -52,7 +52,7 @@ export function BambuCloudSyncStatus(): JSX.Element | null {
     queryKey: CHECK_QUERY_KEY,
     queryFn: ({ signal }) => apiFetch<CheckResponse>('/api/plugins/bambu-cloud-sync/check', { method: 'POST', signal }),
     // Two layers of restraint on top of each other: this keeps a mount from re-asking the
-    // API, and the API keeps a re-ask from reaching Bambu. Neither alone is enough — the
+    // API, and the API keeps a re-ask from reaching Bambu. Neither alone is enough: the
     // editor and the print dialog mount this independently.
     staleTime: 5 * 60_000,
     // A workspace with no Bambu account is the common case; retrying its non-answer on
@@ -130,8 +130,8 @@ export function BambuCloudSyncStatus(): JSX.Element | null {
 /**
  * One row: what is outstanding on the left, what you can do about it on the right.
  *
- * Full width and allowed to WRAP, because both hosts are narrow — the editor sidebar is
- * ~540px and the print-prep dialog is narrower — and this has to survive a 375px phone.
+ * Full width and allowed to WRAP, because both hosts are narrow, the editor sidebar is
+ * ~540px and the print-prep dialog is narrower, and this has to survive a 375px phone.
  * An earlier revision sat inside the Process header next to `Manage`, which at sidebar
  * width wrapped its own buttons onto two lines, clipped `Manage`, and gave the panel a
  * horizontal scrollbar.

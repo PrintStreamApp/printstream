@@ -8,7 +8,7 @@
  *
  * Destinations are a per-scope recipients list (shared team webhooks for
  * broadcast notifications, self-bound personal webhooks for the requesting
- * user's targeted messages — see `lib/notification-recipients.ts`). Each
+ * user's targeted messages: see `lib/notification-recipients.ts`). Each
  * workspace stores its list via `context.settings.forWorkspace(workspaceId)`, the
  * platform workspace in the plugin's base store; a pre-list `webhookUrl`
  * setting keeps working as an implicit shared entry until first write.

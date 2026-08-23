@@ -35,7 +35,7 @@ function ChoiceGroupLabel({ children }: { children: ReactNode }) {
  * The default title names none of the three, for the same reason the tab that
  * opens this page does not: the list holds cloud workspaces, the billing
  * context and (for an operator) the platform context, so naming it after one
- * mislabels the other two. The group heading below IS "Cloud workspaces" —
+ * mislabels the other two. The group heading below IS "Cloud workspaces",
  * that one covers only the cards it sits above. Both strings come from
  * `workspaceRoute.ts` so the door and the room cannot disagree again.
  */
@@ -71,7 +71,7 @@ export function WorkspaceSelectionView({
 
           The subtracted constants cover `AppShell`'s chrome above and below this
           content: its own padding, the tab bar, the two 4-unit gaps in its
-          content column, and the footer. They are deliberately GENEROUS — the
+          content column, and the footer. They are deliberately GENEROUS: the
           previous 9rem/11rem were about the footer's height too small, which is
           what pushed this page past the viewport and put a scrollbar on a screen
           holding four cards.
@@ -80,7 +80,7 @@ export function WorkspaceSelectionView({
           is already `minHeight: 100vh` with `mt: auto` on the footer, so it
           fills the viewport and pins the footer regardless of what this asks
           for. Over-reserving is the only way to overflow. `100vh`, not `100dvh`,
-          to match the shell root this is measuring against — mixing the two
+          to match the shell root this is measuring against: mixing the two
           drifts by the mobile URL bar.
         */
         minHeight: {

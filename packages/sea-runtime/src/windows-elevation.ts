@@ -21,7 +21,7 @@ export function processIsElevated(): boolean {
 }
 
 /**
- * Hides this process's own console window — used so a double-clicked,
+ * Hides this process's own console window: used so a double-clicked,
  * console-subsystem exe that drives a GUI shows only the GUI, not a console.
  *
  * Only hides when we OWN the console (a bare double-click), never when run from
@@ -64,7 +64,7 @@ export function clearOwnMarkOfTheWeb(): void {
  * when elevation was denied/cancelled or could not be requested, so callers can
  * fall back to manual guidance rather than letting the unhandled error crash.
  *
- * `hidden` starts the elevated process with no console window — used when the
+ * `hidden` starts the elevated process with no console window: used when the
  * elevated run presents its own GUI, so the console-subsystem exe does not flash
  * a second window behind it.
  */
@@ -85,10 +85,10 @@ export type UninstallChoice = 'purge' | 'keep' | 'cancel'
 
 /**
  * Asks whether to keep or delete data on uninstall, so the choice is presented
- * once in the uninstall flow itself — the same for the tray, Settings → Apps,
+ * once in the uninstall flow itself, the same for the tray, Settings → Apps,
  * and the CLI. Uses a force-shown WinForms dialog (not MessageBox): launched
  * with `windowsHide`, the host carries SW_HIDE, which a MessageBox shown from a
- * GUI-subsystem host does not reliably override — so we build a real form and
+ * GUI-subsystem host does not reliably override, so we build a real form and
  * call ShowWindow on its own handle (the same mechanism the setup window uses).
  * System-DPI aware so it is crisp. Returns the button pressed via exit code;
  * defaults to 'cancel' on any failure.
@@ -192,14 +192,14 @@ exit $script:result
 
 /**
  * Removes the install dir after this process exits. The dir holds the running
- * executable — locked by this uninstaller and any leftover tray process — so a
+ * executable, locked by this uninstaller and any leftover tray process, so a
  * detached, hidden PowerShell waits, kills any remaining `<exeBaseName>`
  * processes to release the lock, then retries the delete. This is why uninstall
  * does not ask the operator to delete the program folder by hand.
  *
  * **Best-effort, but no longer silent.** Every step suppressed its errors, so a
  * failure left ~100 MB of executable in Program Files with nothing written
- * anywhere — found only by looking. It now retries for a minute rather than ten
+ * anywhere: found only by looking. It now retries for a minute rather than ten
  * seconds (an antivirus scan of a 100 MB binary outlasts the old window easily)
  * and, if it still cannot delete, records why under %TEMP%. %TEMP% and not the
  * app's own logs directory: a purging uninstall has just deleted that.
@@ -248,8 +248,8 @@ export function scheduleWindowsInstallDirCleanup(installDir: string, exeBaseName
  * icon spawned from the elevated installer would run as administrator, where its
  * notification-area icon often fails to appear; a one-shot scheduled task with a
  * Limited run level drops back to the user's session. The action is given as a
- * (`execute`, `argument`) pair so callers can run a console exe directly or —
- * to avoid a visible console window — run it hidden via `wscript <launcher.vbs>`.
+ * (`execute`, `argument`) pair so callers can run a console exe directly or,
+ * to avoid a visible console window, run it hidden via `wscript <launcher.vbs>`.
  * `taskName` is the transient scheduled-task name (each app passes its own so
  * they never collide). Returns false (so the caller can fall back to a direct
  * spawn) if the ScheduledTasks cmdlets are unavailable or the task could not be

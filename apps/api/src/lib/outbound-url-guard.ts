@@ -83,7 +83,7 @@ function isBlockedAddress(host: string): boolean {
     if (normalized === '::1' || normalized === '::') return true // loopback / unspecified
     if (normalized.startsWith('fe80')) return true // link-local
     // IPv4-mapped IPv6, either dotted (::ffff:127.0.0.1) or, as `URL` normalizes
-    // it, hex (::ffff:7f00:1) — recheck the embedded IPv4.
+    // it, hex (::ffff:7f00:1): recheck the embedded IPv4.
     const mappedDotted = normalized.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/)
     if (mappedDotted?.[1]) return isBlockedAddress(mappedDotted[1])
     const mappedHex = normalized.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/)

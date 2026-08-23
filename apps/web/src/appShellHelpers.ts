@@ -23,7 +23,7 @@ export const DEVICE_PLATFORM_APP_THEME_OVERRIDE_KEY = 'printstream.general.appTh
  *
  * It needs a third key because it is neither of the other two. The scope has no
  * workspace context, so it used to fall through to the WORKSPACE device
- * override paired with the shared setting — and a shared setting read without a
+ * override paired with the shared setting, and a shared setting read without a
  * workspace resolves to the `platform:` scope, which is the OPERATOR's. A
  * customer's billing pages were therefore styled by whatever theme the operator
  * had chosen for the platform.
@@ -53,7 +53,7 @@ export const DEVICE_SLICER_DEVELOPER_MODE_OVERRIDE_KEY = 'printstream.slicer.dev
  * Model studio viewport overrides. Workspace-scoped (like the nav-order and landing-page overrides,
  * and unlike the device-global theme/developer-mode ones): each workspace sets its own shared
  * default, so a device override that leaked across workspaces would silently shadow a default it
- * was never chosen against. The suffix is the workspace slug — see `lib/editorViewportSettings.ts`.
+ * was never chosen against. The suffix is the workspace slug: see `lib/editorViewportSettings.ts`.
  */
 export const DEVICE_EDITOR_SHOW_BED_MODEL_OVERRIDE_KEY_PREFIX = 'printstream.editor.bedModel3d.override'
 export const DEVICE_EDITOR_SIDEBAR_SIDE_OVERRIDE_KEY_PREFIX = 'printstream.editor.sidebarSide.override'

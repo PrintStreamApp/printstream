@@ -2,7 +2,7 @@
  * Shared directory-toolbar controls reused across every browse surface (library,
  * jobs, printers, slicing profiles, plugin directories, etc.).
  *
- * `DirectoryPrimaryToolbar` is the primary row — search, sort, grouping, filters,
+ * `DirectoryPrimaryToolbar` is the primary row: search, sort, grouping, filters,
  * and page-size. When the row can't fit its controls side by side (narrow
  * viewport, phone, or `compactControls`), sort/grouping/filters collapse into a
  * single combined "options" dropdown. The individual menus (`DirectoryFiltersMenu`,
@@ -61,7 +61,7 @@ type PageSizeOption<T extends string | number> = {
 /**
  * Toolbar control sizing. The sort/grouping/filters/page-size controls are all
  * the same kind of dropdown button (leading icon + current value + chevron) and
- * the same compact size — bounded by a sensible min/max rather than stretched —
+ * the same compact size, bounded by a sensible min/max rather than stretched,
  * so the row reads as one consistent set.
  */
 const TOOLBAR_CONTROL_SX = { minWidth: 130, maxWidth: 220 } as const
@@ -83,7 +83,7 @@ function ToolbarButtonLabel({ children }: { children: ReactNode }) {
 /**
  * Shared outside-pointer close for the toolbar dropdown panels. Joy's Menu
  * dismisses on focus-out, which never fires when a panel holds non-focusable
- * regions (the filters form) — so add an explicit outside-pointer close. The
+ * regions (the filters form), so add an explicit outside-pointer close. The
  * disablePortal listboxes inside a panel render within the menu, so option
  * clicks count as inside and keep the panel open.
  */
@@ -109,8 +109,8 @@ function useToolbarDropdownClose(
 /**
  * The shared shell for every primary-toolbar dropdown control (sort, grouping,
  * filters, page size). An outlined neutral button shows a leading icon, the
- * current value, and a chevron — styled to read like the native printers
- * "View:" select — and opens an anchored panel. `variant="list"` is a plain
+ * current value, and a chevron, styled to read like the native printers
+ * "View:" select, and opens an anchored panel. `variant="list"` is a plain
  * options menu; `variant="panel"` is a wider padded surface (the filters form),
  * which is allowed to overflow so nested `Select` listboxes are not clipped.
  */
@@ -171,7 +171,7 @@ function ToolbarMenuButton({
 
 /**
  * A single-select option row for the list menus (sort, grouping, page size). The
- * current value is shown with Joy's `selected` highlight only — no checkmark.
+ * current value is shown with Joy's `selected` highlight only, no checkmark.
  * Checkmarks are reserved for multi-select dropdowns (see {@link MultiSelectOption}),
  * where they signal that more than one value can be picked.
  */
@@ -246,13 +246,13 @@ export function DirectoryPrimaryToolbar<TSort extends string, TPageSize extends 
   /**
    * Offset the pinned toolbar sticks at, within ITS scroll container. Defaults to sitting below
    * the page's sticky tab nav, which is only correct on a page. A toolbar rendered inside its
-   * own scroller (a dialog body) must pass its own offset — with the page value it pins ~86px
+   * own scroller (a dialog body) must pass its own offset, with the page value it pins ~86px
    * down from the top of that scroller, floating in the middle of the content.
    */
   stickyTop?: ModalSafeStickyTop
   /**
    * Solid background for the pinned toolbar. The default (blur only) is tuned for the page's
-   * atmospheric gradient, where a fill reads as a dark band — but on a flat surface like a
+   * atmospheric gradient, where a fill reads as a dark band, but on a flat surface like a
    * dialog the blur is too weak and the scrolling rows show through the controls.
    */
   stickySurface?: string
@@ -270,7 +270,7 @@ export function DirectoryPrimaryToolbar<TSort extends string, TPageSize extends 
    *
    * A directory whose listing has nothing to order by (the slicing-presets
    * panel, whose rows come back in one fixed order) previously had to satisfy
-   * these anyway, and did it with a one-option list and two no-op handlers — a
+   * these anyway, and did it with a one-option list and two no-op handlers, a
    * control the operator can open and change that does nothing at all. Omit
    * them and the sort button is not rendered.
    */
@@ -356,7 +356,7 @@ export function DirectoryPrimaryToolbar<TSort extends string, TPageSize extends 
       sx={isPinned
         ? {
             // Stick below the page's sticky tab nav (desktop) / safe-area inset (mobile).
-            // No background colour — a solid/translucent fill reads as a dark band over the
+            // No background colour, a solid/translucent fill reads as a dark band over the
             // page's atmospheric gradient. Just a backdrop blur: the smooth gradient is
             // virtually unchanged at rest (no visible band), while content scrolling
             // underneath is frosted rather than overlapping the controls sharply. The
@@ -556,7 +556,7 @@ function DirectoryControlsMenu<TSort extends string, TGroup extends string>({
  * Filters as a dropdown button matching the other toolbar controls (a leading
  * tune icon, an active-count in the label, and a chevron). Opens a small panel
  * holding the filter controls plus an optional Clear action. This is the
- * **standard** directory-filters affordance — pass the structured `filters`
+ * **standard** directory-filters affordance: pass the structured `filters`
  * config to {@link DirectoryPrimaryToolbar}, or render this directly. Filter
  * `Select`s passed as children should set
  * `slotProps={{ listbox: { disablePortal: true } }}` so opening one doesn't
@@ -644,7 +644,7 @@ export function DirectoryGroupingMenu<T extends string>({
 /**
  * Sort as a single dropdown button (leading sort icon that mirrors the
  * direction + current field). The panel lists the sort fields, then a divider
- * and Ascending/Descending — so field and direction both live inside the one
+ * and Ascending/Descending, so field and direction both live inside the one
  * control. Picking a field closes the menu; toggling direction keeps it open.
  */
 export function DirectorySortMenu<T extends string>({

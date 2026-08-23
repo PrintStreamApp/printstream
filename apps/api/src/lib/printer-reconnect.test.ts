@@ -52,7 +52,7 @@ test('reconnectPrinter just reconnects when the newer host is not attributed to 
   const result = await reconnectPrinter(printer, {
     discovery: {
       // A discovery entry with a different host but no owning bridge id must not
-      // drive a host rewrite — we cannot scope it safely.
+      // drive a host rewrite, we cannot scope it safely.
       get() {
         return { host: '192.168.1.77' }
       }

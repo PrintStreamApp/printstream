@@ -1,7 +1,7 @@
 /**
  * Plate-strip entry points to a plate's options menu, and the tile-image sourcing rule.
  *
- * The kebab and a right-click on the tile must reach the SAME menu — the right-click was added
+ * The kebab and a right-click on the tile must reach the SAME menu: the right-click was added
  * later, and the risk it carries is divergence (a second, thinner menu) or a right-click that
  * silently switches the active plate, which rebuilds the whole scene for what is only a rename.
  *
@@ -106,8 +106,8 @@ test('only the right-clicked plate opens a menu', () => {
 })
 
 test('live thumbnails follow the plate identity through a reorder, not its position', () => {
-  // Plate 3 (plateId 103) was dragged to position 1: indices renumber 1..3 but each plateId —
-  // and therefore each cached image — must travel with its plate. Keying the cache on the live
+  // Plate 3 (plateId 103) was dragged to position 1: indices renumber 1..3 but each plateId,
+  // and therefore each cached image, must travel with its plate. Keying the cache on the live
   // index is the bug where the moved plate's image showed on BOTH its old and new tiles.
   renderStrip({
     plates: [plate(1, { plateId: 103 }), plate(2, { plateId: 101 }), plate(3, { plateId: 102 })],

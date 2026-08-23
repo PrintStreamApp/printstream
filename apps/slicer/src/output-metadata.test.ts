@@ -185,7 +185,7 @@ test('rewriteProjectSettingsMetadata leaves filament_settings_id alone when no f
 
   // Was: overwritten with the cleaned material names. A material name is a DISPLAY identity, not
   // a preset the catalog contains, so writing it left the project naming a preset nothing could
-  // resolve — and an already-partial config could then never be repaired at slice time.
+  // resolve, and an already-partial config could then never be repaired at slice time.
   assert.deepEqual(rewritten.filament_settings_id, ['Bambu ABS @base', 'Bambu ABS @BBL H2D'])
 })
 
@@ -219,7 +219,7 @@ test('rewriteProjectSettingsMetadata preserves selected dual-nozzle assignments'
 })
 
 test('rewriteProjectSettingsMetadata writes runtime nozzle ids verbatim under a non-identity physical_extruder_map (H2D 0300-4010 regression)', () => {
-  // A toolheadId carries a runtime nozzle id (0 = right, 1 = left) — the same space
+  // A toolheadId carries a runtime nozzle id (0 = right, 1 = left), the same space
   // the index parser (`extractNozzleMapping`) canonicalises every BambuStudio quirk
   // into, and the same space `filament_nozzle_map` is read back in. The write path
   // must echo that id verbatim. Re-inverting it through `physical_extruder_map`
@@ -414,7 +414,7 @@ test('rewriteProjectSettingsMetadata emits printer_model as Bambu\'s per-model n
 })
 
 test('applyManualFilamentMapToModelSettings forces Manual mode + pins filament_maps on every plate (CLI source of truth)', () => {
-  // model_settings.config — not project_settings.config — is what the slicer CLI reads
+  // model_settings.config, not project_settings.config, is what the slicer CLI reads
   // for filament_map_mode, so a manual nozzle choice must be forced here or the slice
   // stays "Auto For Flush" and the chosen nozzle is discarded.
   const xml = [
@@ -443,8 +443,8 @@ test('applyManualFilamentMapToModelSettings replaces an existing filament_maps i
 })
 
 test('applyManualFilamentMapToModelSettings inserts the assignment when the source plate has no filament_map_mode (the real case)', () => {
-  // Source 3MFs carry no filament_map_mode at all — the CLI defaults to "Auto For Flush"
-  // at slice time — so the transform must ADD it per plate, not only replace an existing one.
+  // Source 3MFs carry no filament_map_mode at all, the CLI defaults to "Auto For Flush"
+  // at slice time, so the transform must ADD it per plate, not only replace an existing one.
   const xml = '<config>\n  <plate>\n    <metadata key="plater_id" value="1"/>\n    <metadata key="plater_name" value=""/>\n  </plate>\n</config>'
   const out = applyManualFilamentMapToModelSettings(xml, '1 2 2')
   assert.match(out, /filament_map_mode" value="Manual"/)
@@ -460,7 +460,7 @@ test('applyManualFilamentMapToModelSettings inserts the assignment when the sour
 // mode for multi extruder printer" (exit 188). Every slot must carry a valid extruder.
 // A mapping with no resolved profile carries the material's DISPLAY identity ("Bambu PETG Basic"),
 // not a preset name. Writing that into filament_settings_id overwrote the project's own correct
-// preset ("Bambu PETG Basic @BBL H2D 0.4 nozzle") with a string no catalog contains — so a project
+// preset ("Bambu PETG Basic @BBL H2D 0.4 nozzle") with a string no catalog contains, so a project
 // whose config was partial could no longer be repaired, and the slice failed naming a filament the
 // user never picked (print-from-printer-card, no materials chosen).
 test('rewriteProjectSettingsMetadata keeps the project preset when a mapping has no resolved profile', () => {
@@ -523,7 +523,7 @@ test('buildManualNozzleAssignment covers every filament, including ones with no 
 
   assert.ok(assignment)
   assert.equal(assignment.filament_map_mode, 'Manual')
-  assert.equal(assignment.filament_map.length, 2, 'one entry per filament — a short array is an OOB read in the CLI')
+  assert.equal(assignment.filament_map.length, 2, 'one entry per filament, a short array is an OOB read in the CLI')
   for (const value of assignment.filament_map) {
     assert.ok(Number.isFinite(Number.parseInt(value, 10)), `"${value}" is not a usable extruder`)
     assert.ok(Number.parseInt(value, 10) >= 1, 'extruders are 1-based in filament_map')

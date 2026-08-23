@@ -35,7 +35,7 @@ test('resolves the bed mesh from BambuStudio\'s model name', async () => {
 
 test('resolves from our canonical model key, skipping variant profiles that declare no bed', async () => {
   // Regression: the editor passes the canonical key (`H2D`), and the first name-matching profile
-  // in that directory is a nozzle VARIANT ("… 0.2 nozzle.json") which carries no bed_model — so
+  // in that directory is a nozzle VARIANT ("… 0.2 nozzle.json") which carries no bed_model, so
   // matching on name alone silently resolved to nothing and the plate never rendered.
   const appDir = await buildAppDir()
   try {

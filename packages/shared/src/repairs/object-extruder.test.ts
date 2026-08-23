@@ -30,11 +30,9 @@ test('flags and repairs an object whose extruder lives only on its part', () => 
   const inspection = inspectModelSettingsObjectExtruders(PART_ONLY)
   assert.equal(inspection?.inconsistent, true)
   assert.deepEqual(inspection?.repairable, [{ objectId: 166, name: 'Track' }])
-  assert.deepEqual(inspection?.ambiguous, [])
 
-  const { xml, repaired, ambiguous } = repairModelSettingsObjectExtruders(PART_ONLY)
+  const { xml, repaired } = repairModelSettingsObjectExtruders(PART_ONLY)
   assert.deepEqual(repaired, [{ objectId: 166, name: 'Track', extruder: 2 }])
-  assert.deepEqual(ambiguous, [])
   // The entry lands in the object's HEAD (after the last object metadata, before the part), which
   // is where BambuStudio and the bake writers put it.
   assert.match(xml, /<metadata key="name" value="Track"\/>\n {4}<metadata key="extruder" value="2"\/>\n {4}<part/)
@@ -47,7 +45,7 @@ test('never flags the shape BambuStudio itself writes (extruder at both levels)'
     '<metadata key="name" value="Track"/>',
     '<metadata key="name" value="Track"/>\n    <metadata key="extruder" value="1"/>'
   )
-  // Object-level 1 with a part on 2 is a legitimate per-part material override — not a defect.
+  // Object-level 1 with a part on 2 is a legitimate per-part material override, not a defect.
   assert.equal(inspectModelSettingsObjectExtruders(xml)?.inconsistent, false)
   assert.equal(repairModelSettingsObjectExtruders(xml).xml, xml)
 })
@@ -56,7 +54,7 @@ test('divergent but fully-covered parts repair from the first part (the slot is 
   // Two parts means components layout (3MF objects are mesh XOR components), where the CLI binds
   // each part's own extruder (measured: a mixed-material components object with no object-level
   // entry sliced each part with its assigned filament). Every carrying part has an entry, so the
-  // object slot changes nothing for the engine — writing the first part's value just restores the
+  // object slot changes nothing for the engine: writing the first part's value just restores the
   // BambuStudio document shape instead of stranding the object in a "needs attention" loop.
   const xml = [
     '<config>',
@@ -74,16 +72,15 @@ test('divergent but fully-covered parts repair from the first part (the slot is 
   const inspection = inspectModelSettingsObjectExtruders(xml)
   assert.equal(inspection?.inconsistent, true)
   assert.deepEqual(inspection?.repairable, [{ objectId: 20, name: 'Duo' }])
-  assert.deepEqual(inspection?.ambiguous, [])
   const result = repairModelSettingsObjectExtruders(xml)
   assert.deepEqual(result.repaired, [{ objectId: 20, name: 'Duo', extruder: 2 }])
-  // The parts keep their own (divergent) entries — only the object head gains its slot.
+  // The parts keep their own (divergent) entries, only the object head gains its slot.
   assert.match(result.xml, /<metadata key="name" value="Duo"\/>\n\s*<metadata key="extruder" value="2"\/>/)
   assert.match(result.xml, /<part id="21" subtype="normal_part">\n\s*<metadata key="extruder" value="3"\/>/)
   assert.equal(inspectModelSettingsObjectExtruders(result.xml)?.inconsistent, false)
 })
 
-test('a carrying part with no extruder of its own blocks the derivation (it inherits the object slot)', () => {
+test('a carrying part with no extruder of its own repairs to filament 1, never to a sibling\'s slot', () => {
   const xml = [
     '<config>',
     '  <object id="30">',
@@ -97,13 +94,16 @@ test('a carrying part with no extruder of its own blocks the derivation (it inhe
     '  </object>',
     '</config>'
   ].join('\n')
-  // Writing object=2 would silently move the inheriting part off the default — not derivable.
+  // Writing object=2 would silently move the inheriting part onto a material nobody chose for it.
+  // Writing 1 cannot: BambuStudio already resolves the absent object slot to 1, so "Inheritor"
+  // prints filament 1 before and after: the repair only makes that explicit.
   const inspection = inspectModelSettingsObjectExtruders(xml)
-  assert.deepEqual(inspection?.repairable, [])
-  assert.deepEqual(inspection?.ambiguous, [{ objectId: 30, name: 'Pair' }])
+  assert.deepEqual(inspection?.repairable, [{ objectId: 30, name: 'Pair' }])
   const result = repairModelSettingsObjectExtruders(xml)
-  assert.equal(result.xml, xml)
-  assert.deepEqual(result.ambiguous, [{ objectId: 30, name: 'Pair' }])
+  assert.deepEqual(result.repaired, [{ objectId: 30, name: 'Pair', extruder: 1 }])
+  assert.match(result.xml, /<metadata key="name" value="Pair"\/>\s*<metadata key="extruder" value="1"\/>/)
+  // The covered sibling keeps the material it declares; only the object head gained an entry.
+  assert.match(result.xml, /<part id="30"[\s\S]*?value="2"/)
 })
 
 test('helper volumes never make an object repairable', () => {
@@ -145,4 +145,36 @@ test('a document with no object blocks is nothing to judge', () => {
   assert.equal(inspectModelSettingsObjectExtruders(platesOnly), null)
   assert.equal(inspectModelSettingsObjectExtruders(null), null)
   assert.equal(inspectModelSettingsObjectExtruders(''), null)
+})
+
+test('an object head with no metadata to anchor on is still repaired, and success is never claimed falsely', () => {
+  // Our own bake writes this shape: an `<object>` whose only child is the `<part>`, with no
+  // object-level `name`/`layer_height` metadata to insert after. The writer used to bail here and
+  // return the block untouched WHILE the caller had already recorded it as repaired, so Repair
+  // reported success, changed no bytes, and the banner came back on reopen. Third confirmed cause
+  // of "I pressed Repair and it did not stick".
+  const xml = [
+    '<config>',
+    '  <object id="5">',
+    '    <part id="5" subtype="normal_part">',
+    '      <metadata key="extruder" value="2"/>',
+    '    </part>',
+    '  </object>',
+    '</config>'
+  ].join('\n')
+  assert.equal(inspectModelSettingsObjectExtruders(xml)?.inconsistent, true)
+  const result = repairModelSettingsObjectExtruders(xml)
+  assert.notEqual(result.xml, xml, 'the repair must actually write the object-level entry')
+  assert.deepEqual(result.repaired, [{ objectId: 5, name: null, extruder: 2 }])
+  // The invariant that makes `repaired` trustworthy anywhere it is reported or logged.
+  assert.equal(inspectModelSettingsObjectExtruders(result.xml)?.inconsistent, false)
+})
+
+test('an object that cannot be rewritten is never reported as repaired', () => {
+  // `repaired` must mean "bytes changed", not "we intended to". A malformed block that the writer
+  // declines must fall out of the list rather than claim a fix that did not happen.
+  const malformed = '<config>\n  <object id="7"\n</config>'
+  const result = repairModelSettingsObjectExtruders(malformed)
+  assert.deepEqual(result.repaired, [])
+  assert.equal(result.xml, malformed)
 })

@@ -4,7 +4,7 @@ import { fetchModelBytes, fetchModelText, ModelFetchStallError } from './modelFe
 
 /**
  * Build a fake `fetch` whose body either streams the given chunks or stalls forever. The
- * stalling reader rejects when the request signal aborts — mirroring real fetch semantics, so
+ * stalling reader rejects when the request signal aborts: mirroring real fetch semantics, so
  * the stall-timeout path is exercised end to end.
  */
 function installFakeFetch(opts: { chunks?: Uint8Array[]; stallForever?: boolean; status?: number }) {
@@ -114,7 +114,7 @@ test('fetchModelBytes caps how many downloads run at once', async () => {
 
 test('fetchModelBytes throws ModelFetchStallError if the response never starts', async () => {
   // A fetch that hangs before producing a response (no headers) must fail on the headers budget,
-  // not hang forever — this is the connect/queue/time-to-first-byte guard.
+  // not hang forever, this is the connect/queue/time-to-first-byte guard.
   const original = globalThis.fetch
   globalThis.fetch = ((_url: string, init: RequestInit = {}) => {
     const signal = init.signal as AbortSignal | undefined

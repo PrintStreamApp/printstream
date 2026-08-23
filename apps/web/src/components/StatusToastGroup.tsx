@@ -1,5 +1,5 @@
 /**
- * One toast for a batch of like jobs — the answer to "send four prints, get four
+ * One toast for a batch of like jobs: the answer to "send four prints, get four
  * screen-filling toasts".
  *
  * Owns the collapsed/expanded presentation so every job surface (dispatch,

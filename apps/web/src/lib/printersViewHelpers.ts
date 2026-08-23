@@ -388,8 +388,8 @@ export function formatDispatchProgress(job: PrintDispatchJob): string {
 
 /** Convert a 0-based AMS unit id to its Bambu letter label (0 -> A, 1 -> B, ...). */
 /**
- * Human label for a slot/spool's filament. Bambu preset names (e.g. "Bambu PLA Basic") — and the
- * "Bambu <material>" fallback — are only surfaced for a genuinely identified Bambu spool (an RFID
+ * Human label for a slot/spool's filament. Bambu preset names (e.g. "Bambu PLA Basic"), and the
+ * "Bambu <material>" fallback, are only surfaced for a genuinely identified Bambu spool (an RFID
  * `trayUuid`). A custom filament that was merely assigned a Bambu slicing preset (`trayInfoIdx`)
  * reads as its plain filament type, so it is not mislabelled as a Bambu product. Pass the slot's
  * `trayUuid` via `options`.

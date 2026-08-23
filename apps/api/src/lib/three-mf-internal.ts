@@ -23,7 +23,7 @@ export { escapeRegExp, escapeXmlAttribute } from '@printstream/shared/three-mf'
 
 /**
  * Read one entry from the archive into a `Buffer`. Throws if the entry
- * is missing or larger than `maxBytes` (default 8 MiB — enough for any
+ * is missing or larger than `maxBytes` (default 8 MiB: enough for any
  * realistic plate thumbnail or slice-info XML).
  */
 export function readEntry(
@@ -77,7 +77,7 @@ export function readEntry(
  * can edit several entries at once (e.g. `Metadata/model_settings.config` AND `3D/3dmodel.model` for
  * slice-time object customization). An empty `transforms` map produces a verbatim copy.
  * `appendEntries` are added after the copy pass, but ONLY the ones the source did not already
- * contain (a transform still wins for an existing entry) — use it to upsert an entry that may be
+ * contain (a transform still wins for an existing entry): use it to upsert an entry that may be
  * absent, e.g. `project_settings.config` on a settings-less new-project scaffold.
  */
 export function rewriteThreeMfEntries(

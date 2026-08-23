@@ -1,7 +1,7 @@
 /**
  * Waits out the native app's in-place update restart: after
  * `POST /api/app/update/start` is accepted the server goes down, swaps its
- * binary, and comes back as a DIFFERENT build — so "it's back" is a revision
+ * binary, and comes back as a DIFFERENT build, so "it's back" is a revision
  * change, not a reachable endpoint (the dying process can answer a poll with
  * the old build for a while). Counterpart: `AppVersionFooter.tsx`, which
  * reloads the page once this resolves.

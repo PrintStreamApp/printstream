@@ -1,12 +1,12 @@
 /**
- * Produces the editor's `SliceSettingsController` for a host with NO server behind it — the public
+ * Produces the editor's `SliceSettingsController` for a host with NO server behind it: the public
  * 3MF editor. `SliceFileModal` builds the same controller from live workspace data (printers, AMS
  * trays, workspace presets, dispatch); this builds the half that is about the PROJECT (slicer target,
  * printer model + nozzle + plate, process preset, and materials) from what a local host can reach:
  * the anonymous catalogue (`/api/public/slicing/*`) plus the user's browser-stored presets.
  *
  * It deliberately reuses the SAME shared helpers `SliceFileModal` uses (`lib/slicingPresetMatching`,
- * the extracted `useProcessProfileSelection`), so the business rules live in one place — this hook
+ * the extracted `useProcessProfileSelection`), so the business rules live in one place, this hook
  * only orchestrates them for a printer-less host. The printer/dispatch fields the type requires are
  * present but inert (no printers, `manualProfile` always, no slicing), and every surface that would
  * render them is already hidden: `SliceSettingsPanel` drops the Plate/Objects sections in editor
@@ -15,7 +15,7 @@
  * The process and material "tune" dialogs work here too, through the anonymous resolvers in
  * `lib/localProcessResolver.ts` / `lib/localFilamentResolver.ts` (built-ins via
  * `/api/public/slicing/resolve-*`, project presets straight out of the in-tab 3MF). This hook owns
- * only the OPEN state for the material one — the dialogs themselves are rendered by the host, which
+ * only the OPEN state for the material one: the dialogs themselves are rendered by the host, which
  * is why `filamentSettingsFilamentId` and the ungated resolvers are returned alongside the
  * controller rather than buried in it.
  *
@@ -74,13 +74,13 @@ const NOOP_NAVIGATE = (() => undefined) as unknown as ReturnType<typeof useNavig
 export interface LocalSliceSettings {
   controller: SliceSettingsController
   /**
-   * The printer model the editor should render the bed + zones for — passed to `EditorView` as a
+   * The printer model the editor should render the bed + zones for: passed to `EditorView` as a
    * SEPARATE prop (like the library host does), not part of the controller, so a model switch moves
    * the bed. Undefined when unresolved, which leaves the editor on the project's own bed.
    */
   targetPrinterModel: string | undefined
   /**
-   * Anonymous resolver for the process tune dialogs — passed to `EditorView` (per-object dialogs)
+   * Anonymous resolver for the process tune dialogs: passed to `EditorView` (per-object dialogs)
    * and used by the host to render the GLOBAL process dialog, which no shared component renders for
    * a server-less host (the library host's still-mounted slice dialog does that job).
    */
@@ -88,7 +88,7 @@ export interface LocalSliceSettings {
   /**
    * Anonymous resolver for the MATERIAL tune dialog, which the host renders for the same reason as
    * the process one. Ungated (unlike the controller's `resolveFilamentConfig`, which waits for the
-   * catalogue so the sidebar badge cannot cache a wrong count) — a dialog is opened long after the
+   * catalogue so the sidebar badge cannot cache a wrong count), a dialog is opened long after the
    * catalogue has settled.
    */
   resolveFilamentConfig: FilamentConfigResolver
@@ -96,7 +96,7 @@ export interface LocalSliceSettings {
   processSettingsDialogOpen: boolean
   /**
    * Material choices for the global process dialog's filament-index settings ("Support/raft
-   * base" etc.) and its support-interface suggestion prompt — the same shared builder the
+   * base" etc.) and its support-interface suggestion prompt, the same shared builder the
    * workspace host feeds its dialog from. Without them those settings render as bare number
    * inputs and the suggestion never fires.
    */
@@ -142,7 +142,7 @@ export function useLocalSliceSettingsController(params: LocalSliceSettingsContro
   // The same shared ladder the workspace host uses (never a prerelease); before S2 this was a
   // third hand-written copy of it.
   const selectedSlicerTargetId = resolveSlicerTargetId(slicerTargets, targetsQuery.data?.defaultTargetId, slicerTargetIntent)
-  // An updater form has to see the RESOLVED id, not the sparse intent — see the workspace host.
+  // An updater form has to see the RESOLVED id, not the sparse intent: see the workspace host.
   const selectedSlicerTargetIdRef = useRef(selectedSlicerTargetId)
   selectedSlicerTargetIdRef.current = selectedSlicerTargetId
   const setSelectedSlicerTargetId = useCallback((value: React.SetStateAction<string>) => {
@@ -150,7 +150,7 @@ export function useLocalSliceSettingsController(params: LocalSliceSettingsContro
   }, [])
 
   const profilesQuery = useQuery(publicSlicingPresetsQueryOptions(selectedSlicerTargetId))
-  // Browser storage is read at OPEN and then only when the user has been in the preset manager —
+  // Browser storage is read at OPEN and then only when the user has been in the preset manager:
   // held state, not a per-render read, so an editor session cannot have its catalogue change under
   // it. The same user-initiated carve-out the workspace host's `refreshSlicingPresets` is.
   const [localProfiles, setLocalProfiles] = useState(listLocalSlicingPresets)
@@ -174,7 +174,7 @@ export function useLocalSliceSettingsController(params: LocalSliceSettingsContro
   const projectFilamentProfiles = useMemo(() => buildProjectSlicingPresets(bakedIndex, 'filament'), [bakedIndex])
   // The catalogue INCLUDING every project preset. The config resolver must read this one: it is
   // what resolves a `project:` preset out of the in-tab archive, and the picker's list below has
-  // the redundant ones removed — resolving against that would starve the very query that decides
+  // the redundant ones removed: resolving against that would starve the very query that decides
   // which are redundant.
   const unfilteredFilamentProfiles = useMemo(
     () => mergeProjectSlicingPresets(installedFilamentProfiles, projectFilamentProfiles),
@@ -182,7 +182,7 @@ export function useLocalSliceSettingsController(params: LocalSliceSettingsContro
   )
 
   // ---- Machine target (printer-less: the shared core with no real-printer context) ----
-  // The project is parsed in the tab, so its index is already in hand — `projectResolved` is
+  // The project is parsed in the tab, so its index is already in hand: `projectResolved` is
   // simply true here, where the workspace host waits on a request.
   const {
     selectedPrinterModel, selectPrinterModel,
@@ -209,7 +209,7 @@ export function useLocalSliceSettingsController(params: LocalSliceSettingsContro
   const processProfilesRef = useRef(processProfiles)
   processProfilesRef.current = processProfiles
   // One cache per open project. A BUILT-IN preset resolves from the slicer image, so its config is a
-  // pure function of (presetId, targetId) and cannot change while the tab is open — yet the badge,
+  // pure function of (presetId, targetId) and cannot change while the tab is open, yet the badge,
   // the repair, the save's authoring pass and every parent lookup each resolved independently, and
   // a project whose slots share a preset resolved it once per slot. See `builtinPresetCache.ts`.
   // `project` is a deliberate RESET KEY, not a value the factory reads: it is what
@@ -236,7 +236,7 @@ export function useLocalSliceSettingsController(params: LocalSliceSettingsContro
     (request) => buildLocalFilamentConfigResolver({ project, filamentProfiles: filamentProfilesRef.current, resolveBuiltin: resolveBuiltinFilament })(request),
     [project, resolveBuiltinFilament]
   )
-  // Which project presets say nothing their installed twin does not — so the picker can present
+  // Which project presets say nothing their installed twin does not, so the picker can present
   // them as the system preset, the way BambuStudio does. Declared AFTER the resolver because it
   // resolves through it (this host has no server file to resolve against).
   const redundantProjectPresetCandidates = useMemo(
@@ -261,7 +261,7 @@ export function useLocalSliceSettingsController(params: LocalSliceSettingsContro
     [processProfiles]
   )
   // Resolve the project's OWN preset (no target) to derive its genuine deltas, so a machine switch
-  // carries them onto the new preset — the same mechanism as the workspace host, via the resolver.
+  // carries them onto the new preset, the same mechanism as the workspace host, via the resolver.
   const projectProcessResolveQuery = useQuery({
     queryKey: ['local-project-process-carry', projectProcessProfileId],
     queryFn: () => resolveProcessConfig({ processProfileId: projectProcessProfileId as string, targetId: null, sourceFileId: null }),
@@ -292,26 +292,26 @@ export function useLocalSliceSettingsController(params: LocalSliceSettingsContro
   const [processSettingsDialogOpen, setProcessSettingsDialogOpen] = useState(false)
   const [objectProcessOverrides, setObjectProcessOverrides] = useState<Record<string, Record<string, string | string[]>>>({})
 
-  // ---- Materials (the shared slot core — see useMaterialSlots) ----
+  // ---- Materials (the shared slot core: see useMaterialSlots) ----
   const compatibleFilamentProfiles = useMemo(
     () => filamentProfiles.filter((profile) => isFilamentProfileCompatible(profile, selectedMachineProfile, selectedProcessProfile, selectedPrinterModel, selectedNozzleDiameters)),
     [filamentProfiles, selectedMachineProfile, selectedNozzleDiameters, selectedPrinterModel, selectedProcessProfile]
   )
   const materialOptions = useMemo(() => buildSliceMaterialOptions(compatibleFilamentProfiles, []), [compatibleFilamentProfiles])
   // Which material's tune dialog is open. Owned here because the sidebar row opens it through the
-  // controller, but RENDERED by the host — a server-less host has no still-mounted slice dialog to
+  // controller, but RENDERED by the host, a server-less host has no still-mounted slice dialog to
   // render it from, which is the same split the global process dialog uses.
   const [filamentSettingsFilamentId, setFilamentSettingsFilamentId] = useState<number | null>(null)
   const processEditListenerRef = useRef<(() => void) | null>(null)
 
   const baseProjectFilaments = useMemo(() => buildSliceDialogProjectFilaments(file, bakedIndex, selectedPlate), [bakedIndex, file, selectedPlate])
-  // Removing a slot must remap the filament-INDEX references living with the process state —
+  // Removing a slot must remap the filament-INDEX references living with the process state:
   // see useMaterialSlots.onFilamentRemoved (positions above the removed one shift down).
   const handleFilamentIndexRemap = useCallback((removedPosition: number) => {
     setProcessSettingOverrides((current) => remapFilamentIndexOverrides(current, removedPosition))
     setObjectProcessOverrides((current) => remapPerObjectFilamentIndexOverrides(current, removedPosition))
   }, [setProcessSettingOverrides])
-  // A reorder renumbers every position at once — same duty, permutation form.
+  // A reorder renumbers every position at once: same duty, permutation form.
   const handleFilamentIndexPermute = useCallback((remap: ReadonlyMap<number, number>) => {
     setProcessSettingOverrides((current) => permuteFilamentIndexOverrides(current, remap))
     setObjectProcessOverrides((current) => permutePerObjectFilamentIndexOverrides(current, remap))
@@ -339,7 +339,7 @@ export function useLocalSliceSettingsController(params: LocalSliceSettingsContro
     materialOptions,
     selectedMachineProfile,
     toolheadOptions: sliceToolheads,
-    // The editor shows every project material (no per-plate narrowing) — see the modal's rule.
+    // The editor shows every project material (no per-plate narrowing): see the modal's rule.
     onFilamentRemoved: handleFilamentIndexRemap,
     onFilamentReordered: handleFilamentIndexPermute
   })
@@ -397,7 +397,7 @@ export function useLocalSliceSettingsController(params: LocalSliceSettingsContro
   const slicerDataReady = Boolean(targetsQuery.data) && !profilesQuery.isLoading && (profilesQuery.data?.length ?? 0) > 0
 
   const controller: SliceSettingsController = {
-    // Supplied by `EditorView`, which holds the archive these are read from — see the note on the
+    // Supplied by `EditorView`, which holds the archive these are read from: see the note on the
     // library host's controller.
     flushVolumes: null,
     file,
@@ -429,7 +429,7 @@ export function useLocalSliceSettingsController(params: LocalSliceSettingsContro
       slicerDataReady,
       profilesError: profilesQuery.isError ? 'Failed to load slicing presets.' : null
     },
-    // Printer surface — inert (no LAN access from a browser). Every renderer of these is hidden.
+    // Printer surface, inert (no LAN access from a browser). Every renderer of these is hidden.
     printers: [],
     selectedPrinter: null,
     lockedPreferredPrinter: null,

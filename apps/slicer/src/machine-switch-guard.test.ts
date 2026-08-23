@@ -53,7 +53,7 @@ test('a machine-less new-project scaffold retargets to the chosen H2D machine (n
 })
 
 test('does not retarget when there is no machine preset to author from', () => {
-  // The legacy fallback-manual path ships no machine profile file — leave the input
+  // The legacy fallback-manual path ships no machine profile file: leave the input
   // untouched (the CLI resolves neutral defaults) rather than trying to retarget.
   const input = {
     request: {
@@ -120,7 +120,7 @@ test('HEALS a nominally-H2D project that lacks the H2 dual-nozzle metadata by re
   // Regression for the field incident: a filament rewrite once deleted the extruder-indexed
   // machine arrays from a saved H2D project (nozzle_diameter, physical_extruder_map, …).
   // With a machine preset available, the same-model "switch" re-authors the machine block
-  // from the bundled preset — the file slices instead of hard-failing with "open it in
+  // from the bundled preset: the file slices instead of hard-failing with "open it in
   // Bambu Studio and re-save".
   const input = {
     request: {
@@ -157,7 +157,7 @@ test('still rejects a topology-less H2D project when no machine preset is availa
       },
       plate: 0
     },
-    // No machine profile file in the request — nothing to author the machine block from.
+    // No machine profile file in the request, nothing to author the machine block from.
     profileFiles: [{ kind: 'process', name: '0.20mm Standard @BBL H2D' }],
     projectSettings: {
       printer_model: 'Bambu Lab H2D',

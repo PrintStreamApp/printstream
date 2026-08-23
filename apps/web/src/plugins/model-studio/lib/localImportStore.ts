@@ -10,14 +10,14 @@
  * primitives are GENERATED in the browser, serialized to binary STL, uploaded, and then downloaded
  * back as STL purely so the server could hold them. Here they never leave.
  *
- * Parsing and welding come from `@printstream/shared/three-mf`, the same code the api runs — the
+ * Parsing and welding come from `@printstream/shared/three-mf`, the same code the api runs: the
  * weld especially, since an unwelded import reaches the slicer as triangle soup and mangles small
  * features.
  *
  * It stages every format the api does. STL parses inline; a 3MF's geometry is extracted by the
  * SHARED extractor over an in-tab archive (`localThreeMfImport.ts`) and a STEP is tessellated by the
  * same OpenCASCADE build the api runs, loaded lazily in the tab (`localStepImport.ts`). Only the
- * byte source and the WASM loading differ from the api — never the resulting mesh, which is the
+ * byte source and the WASM loading differ from the api, never the resulting mesh, which is the
  * point: a file must import identically whichever host opened it.
  *
  * `importableFormats` still exists because a host's capabilities are not assumed: the picker's
@@ -29,9 +29,10 @@ import {
   detectImportFormat,
   meshToBinaryStl,
   parseStlMesh,
+  rebaseImportedMesh,
   type ImportedMesh
 } from '@printstream/shared/three-mf'
-import type { StagedImport, StagedImportFormat } from '@printstream/shared'
+import type { ImportNormalization, StagedImport, StagedImportFormat } from '@printstream/shared'
 import type { EditorImportStore } from './editorImportStore'
 import { ThreeMfArchiveError } from './threeMfArchive'
 import { ImportStagingDataError, disposeImportStagingWorker, stageImportGeometry } from './importStagingClient'
@@ -56,7 +57,7 @@ function importDisplayName(fileName: string): string {
  *
  * A {@link ThreeMfImportError} is the shared extractor's considered refusal ("no importable
  * geometry", "too many triangles") and is already user-facing, so it passes through verbatim.
- * Anything else is a parse or WASM-load failure, where the raw message is noise — but the FORMAT is
+ * Anything else is a parse or WASM-load failure, where the raw message is noise, but the FORMAT is
  * worth naming, because a STEP failure is usually the ~7 MB tessellator failing to load rather than
  * anything wrong with the file.
  */
@@ -72,12 +73,12 @@ function importFailureMessage(format: StagedImportFormat, error: unknown): strin
 
 export interface LocalImportStore extends EditorImportStore {
   /**
-   * Stage geometry the editor generated itself — a cut half, a split shell, an added primitive.
+   * Stage geometry the editor generated itself, a cut half, a split shell, an added primitive.
    * These are already binary STL because that is what the upload path needed; keeping the same
    * entry point means the cut/split/primitive callers do not care which store they are talking to.
    */
   stageStlBytes(name: string, bytes: Uint8Array): StagedImport
-  /** The staged mesh bytes, synchronously — this store already holds them. */
+  /** The staged mesh bytes, synchronously, this store already holds them. */
   meshBytes(importId: string, partIndex?: number): Uint8Array
 }
 
@@ -94,28 +95,34 @@ interface StagedEntry {
  *
  * A DATA failure (the file has no geometry, is over the triangle cap, is not a ZIP) is re-thrown as
  * is: re-running it on the main thread would freeze the tab on the way to the identical message.
- * Anything else means the worker MECHANISM is unavailable — no `Worker` (every node test takes this
- * path), a module that would not load, a wedged task — and the same work runs inline, because a
+ * Anything else means the worker MECHANISM is unavailable, no `Worker` (every node test takes this
+ * path), a module that would not load, a wedged task, and the same work runs inline, because a
  * brief freeze beats an import that cannot happen at all.
  */
 async function stageGeometry(
   format: StagedImportFormat,
   file: File,
-  bytes: Uint8Array
+  bytes: Uint8Array,
+  normalize: ImportNormalization
 ): Promise<{ mesh: ImportedMesh; stl: Uint8Array; partStls: Uint8Array[] }> {
   try {
-    return await stageImportGeometry(format, bytes)
+    return await stageImportGeometry(format, bytes, normalize)
   } catch (error) {
     if (error instanceof ImportStagingDataError) throw new LocalImportError(error.message)
     if (typeof Worker !== 'undefined') {
       console.warn('[import] staging worker unavailable; parsing on the main thread', error)
     }
     // The fallback leaves `partStls` empty; `stage` then serializes each part inline, which is the
-    // freeze this whole path exists to avoid — acceptable only because it is the last resort.
-    if (format === 'stl') return { mesh: parseStlMesh(bytes), stl: bytes, partStls: [] }
-    const mesh = format === '3mf'
-      ? await extractThreeMfImportFromFile(file)
-      : await tessellateStepInBrowser(bytes)
+    // freeze this whole path exists to avoid: acceptable only because it is the last resort.
+    const mesh = format === 'stl'
+      ? parseStlMesh(bytes)
+      : format === '3mf'
+        ? await extractThreeMfImportFromFile(file)
+        : await tessellateStepInBrowser(bytes)
+    // The same normalisation the worker applies, and the reason the STL branch can no longer hand
+    // the picked bytes back untouched as its STL: rebasing the mesh but not the bytes would render
+    // the model at its file coordinates while baking it at the origin.
+    if (normalize === 'object') rebaseImportedMesh(mesh)
     return { mesh, stl: meshToBinaryStl(mesh), partStls: [] }
   }
 }
@@ -128,7 +135,7 @@ export function createLocalImportStore(): LocalImportStore {
   /**
    * `partStls` come from whoever produced the mesh, aligned with `mesh.parts`. Serializing them here
    * instead put an assembly's whole triangle set through a SECOND pass on the main thread, in the
-   * middle of the import — so the staging worker does it, and only the fallback pays for it inline.
+   * middle of the import, so the staging worker does it, and only the fallback pays for it inline.
    */
   const stage = (name: string, mesh: ImportedMesh, stl: Uint8Array, format: StagedImportFormat, partStls: Uint8Array[] = []): StagedImport => {
     const importId = `local-${nextId++}`
@@ -193,24 +200,24 @@ export function createLocalImportStore(): LocalImportStore {
       return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
     },
 
-    async stageFile(file, signal) {
+    async stageFile(file, normalize, signal) {
       const format = detectImportFormat(file.name)
       if (!format) throw new LocalImportError(`${file.name} is not a model this editor can import.`)
       // The api names an import `path.parse(originalname).name`; matching it is what makes the same
       // file import under the same object name on both hosts. The name is baked into the saved 3MF,
-      // so a mismatch is not cosmetic — and it reached added primitives too, which arrive here as
+      // so a mismatch is not cosmetic, and it reached added primitives too, which arrive here as
       // `cube.stl` and were listed as "cube.stl" on one host and "cube" on the other.
       const name = importDisplayName(file.name)
       const bytes = new Uint8Array(await file.arrayBuffer())
       try {
         // Off the main thread: OCCT tessellation and a 3MF's mesh parse + STL serialization are
         // seconds of work on a real assembly, and inline they freeze the tab with a spinner that
-        // never paints. The STL the viewport loads is serialized FROM the same mesh the bake writes
-        // — paint lands per triangle INDEX, so the two orderings have to be the one ordering.
-        const { mesh, stl, partStls } = await stageGeometry(format, file, bytes)
+        // never paints. The STL the viewport loads is serialized FROM the same mesh the bake writes,
+        // paint lands per triangle INDEX, so the two orderings have to be the one ordering.
+        const { mesh, stl, partStls } = await stageGeometry(format, file, bytes, normalize)
         // Staging is slow enough that the caller may have given up meanwhile (dialog closed, editor
         // unmounted). Check before inserting: `stage` mutates the store, and an abandoned entry
-        // would otherwise sit in `entries` — and in `importsForBake()` — until dispose.
+        // would otherwise sit in `entries`, and in `importsForBake()`, until dispose.
         signal?.throwIfAborted()
         return stage(name, mesh, stl, format, partStls)
       } catch (error) {
@@ -250,7 +257,7 @@ export function createLocalImportStore(): LocalImportStore {
     },
 
     dispose() {
-      // Releases the staging worker with its instantiated OCCT runtime (~7 MB) — an editor that has
+      // Releases the staging worker with its instantiated OCCT runtime (~7 MB), an editor that has
       // closed has no use for it, and the next import starts a fresh one.
       disposeImportStagingWorker()
       for (const url of urls.values()) URL.revokeObjectURL(url)

@@ -2,25 +2,25 @@
  * On-disk backup snapshots of the bridge's user data (issue #61).
  *
  * Owns the snapshot FORMAT and the write/list/prune mechanics for
- * `BRIDGE_BACKUP_DIR` — a directory deliberately outside the bridge's own data
+ * `BRIDGE_BACKUP_DIR`, a directory deliberately outside the bridge's own data
  * dir (its own bind mount in Docker), so wiping or recreating the app can never
  * take the only copy of the user's files with it. Scheduling, status, and RPC
  * wiring live in the counterpart `backup-manager.ts`.
  *
- * What a snapshot contains — exactly the set that makes a restored bridge whole
+ * What a snapshot contains, exactly the set that makes a restored bridge whole
  * (the same two-item list the Docker→standalone migration copies):
  *   - `bridge-state.json`: the durable install identity. Restoring it is what
  *     re-binds a rebuilt bridge to its server record, printers, and library.
  *     It carries the runtime token, so the copy is written 0600 and the backup
  *     dir is created 0700.
  *   - every library file, EXCEPT `replica-*` (regenerable cross-bridge dispatch
- *     replicas — cache, re-fetched from the owning bridge on demand).
+ *     replicas: cache, re-fetched from the owning bridge on demand).
  *
  * Format: one directory per snapshot (`backup-<timestamp>/{manifest.json,
  * bridge-state.json, library/...}`), each independently complete and restorable
  * with plain `cp`. Library files are content-stable once fully written (stored
  * paths are minted per version and never rewritten), so unchanged files are
- * HARDLINKED to the previous snapshot's copy — a daily snapshot costs only the
+ * HARDLINKED to the previous snapshot's copy, a daily snapshot costs only the
  * delta, and pruning any snapshot never breaks another (link counts). Where
  * hardlinks are unavailable (exFAT USB drive, network share) every file is
  * copied instead.
@@ -33,7 +33,7 @@
  *     chunked library uploads append in place at their final path, so a fresh
  *     mtime means "possibly still being written". It is picked up next run.
  *   - Retention is the shared smart ladder (`selectBackupsToPrune`), applied
- *     only after a successful snapshot — a failing backup must never eat the
+ *     only after a successful snapshot, a failing backup must never eat the
  *     history it exists to provide.
  */
 import path from 'node:path'
@@ -279,7 +279,7 @@ async function scanLibraryFiles(libraryDir: string): Promise<Array<{ name: strin
   for (const entry of names) {
     if (!entry.isFile()) continue
     // `replica-*` files are cross-bridge dispatch replicas: cache, re-fetched
-    // from the file's owning bridge — see the API's bridge-library-files.ts.
+    // from the file's owning bridge: see the API's bridge-library-files.ts.
     if (entry.name.startsWith('replica-')) continue
     try {
       const info = await stat(path.join(libraryDir, entry.name))
@@ -333,7 +333,7 @@ async function placeLibraryFile(input: { source: string; previousCopy: string | 
       await link(input.previousCopy, input.destination)
       return 'linked'
     } catch {
-      // Previous copy gone or links unsupported here — fall through to a copy.
+      // Previous copy gone or links unsupported here: fall through to a copy.
     }
   }
   try {

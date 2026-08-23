@@ -65,7 +65,7 @@ void finalizeApp()
   })
   .then(() => {
     // Surface a clear message on a bind failure (esp. EADDRINUSE) instead of letting it
-    // bubble up as an uncaught 'error' event — which crashes silently in the native GUI
+    // bubble up as an uncaught 'error' event, which crashes silently in the native GUI
     // build and as a bare stack trace on the CLI.
     httpServer.on('error', (error: NodeJS.ErrnoException) => {
       if (error.code === 'EADDRINUSE') {
@@ -96,14 +96,14 @@ void finalizeApp()
     // Re-apply the built-in PLATFORM roles on every boot, because a release that
     // adds a permission to a built-in role has to reach deployments that already
     // have those rows. Until this ran at startup the only thing that refreshed
-    // them was an operator opening Access Management — so a deploy adding
+    // them was an operator opening Access Management, so a deploy adding
     // `accounts.*` left the Admin role without it, and every route gated on the
     // new permission answered 403 with nothing in the UI or the database to
     // explain why. Observed on staging; see `default-auth-groups.ts`.
     //
     // Cheap and idempotent (three rows, one upsert each) and safe to repeat: the
     // seeds are the source of truth for built-in roles, and custom roles are
-    // never touched. Workspace-scoped built-ins stay lazy on purpose — there is
+    // never touched. Workspace-scoped built-ins stay lazy on purpose, there is
     // one set per workspace, so seeding them all here would grow with the
     // deployment; they are re-applied per workspace on the same Access
     // Management read.
@@ -189,7 +189,7 @@ function shutdown(signal: NodeJS.Signals) {
     // ONE Ctrl-C delivers two signals in quick succession under the dev runner: the terminal
     // SIGINTs the whole process group, then `concurrently` SIGTERMs its children. Exit immediately
     // (keeping dev Ctrl-C snappy), but DON'T print the "forcing immediate exit" notice for that
-    // near-instant doubled signal — it's the same Ctrl-C, not the user impatiently pressing again.
+    // near-instant doubled signal, it's the same Ctrl-C, not the user impatiently pressing again.
     // A repeat that arrives well later is a genuine second Ctrl-C and gets the notice.
     if (Date.now() - shutdownStartedAt > 1_000) {
       console.warn(`Received ${signal} again; forcing immediate exit`)
@@ -204,7 +204,7 @@ function shutdown(signal: NodeJS.Signals) {
   stopPrintJobRecorder()
   stopDispatchReconcile()
   stopActivePrintObjectCache()
-  // `httpServer.close()` only stops accepting new connections — it waits
+  // `httpServer.close()` only stops accepting new connections, it waits
   // for active sockets (WS clients, keep-alives) to drain, which can hang
   // tsx/nodemon restarts indefinitely. Force-drop them so the process
   // exits promptly.
@@ -216,7 +216,7 @@ function shutdown(signal: NodeJS.Signals) {
     .finally(() => {
       httpServer.close(() => process.exit(0))
     })
-  // Hard-exit fallback for a stray handle that outlives graceful teardown — most often a connected
+  // Hard-exit fallback for a stray handle that outlives graceful teardown: most often a connected
   // printer's MQTT disconnect that never settles, or embedded Postgres. Short in dev so `npm run dev`
   // Ctrl-C feels instant; longer in production to let in-flight requests drain. (`unref` so an
   // already-idle loop still exits early; a second Ctrl-C bypasses this entirely.)

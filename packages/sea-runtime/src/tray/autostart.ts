@@ -1,6 +1,6 @@
 /**
  * Per-user autostart entries that launch `<exe> tray run` at desktop login: XDG
- * autostart on Linux and the HKCU Run key on Windows. These are user-level — no
+ * autostart on Linux and the HKCU Run key on Windows. These are user-level, no
  * elevation needed. Parameterized by the app identity.
  */
 import { mkdir, rm, writeFile } from 'node:fs/promises'

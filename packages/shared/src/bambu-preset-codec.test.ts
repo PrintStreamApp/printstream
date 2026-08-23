@@ -71,8 +71,8 @@ test('a scalar option stays a scalar even when it looks like a list', () => {
 
 test('a numeric JSON value becomes a string, because the local form is strings', () => {
   // Bambu sends some options as JSON numbers. `filament_flow_ratio` is a per-extruder
-  // vector option, so it lands as a one-element array of strings — the shape a local
-  // preset stores — rather than a bare number.
+  // vector option, so it lands as a one-element array of strings, the shape a local
+  // preset stores, rather than a bare number.
   const decoded = decodeCloudPresetSetting({ filament_flow_ratio: 0.98 } as Record<string, unknown>)
   assert.deepEqual(decoded.filament_flow_ratio, ['0.98'])
 })
@@ -101,7 +101,7 @@ test('a numeric vector option omitted from every hand-maintained catalog still r
   // hotend_cooling_rate/hotend_heating_rate/grab_length/nozzle_flush_dataset/
   // physical_extruder_map are real coFloats/coInts PrintConfig options, but none of them
   // appear in filament/process/machine-settings.generated.ts (those are scoped to what
-  // the tune DIALOG shows) or in the old hand-maintained exception list — only the
+  // the tune DIALOG shows) or in the old hand-maintained exception list, only the
   // generated BAMBU_PRESET_OPTION_SHAPES table, built from every `this->add()` in the
   // vendored source, sees them. Treating them as string-like by mistake would c-style-
   // quote and semicolon-join them instead of comma-joining, corrupting the value.

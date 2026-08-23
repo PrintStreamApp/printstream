@@ -60,7 +60,7 @@ test('a custom project preset resolves its baseline from the STANDARD parent (pr
   const result = await resolver({ processProfileId: buildProjectSlicingPresetId('process', '0.20mm Standard @BBL H2D - Ryan'), targetId: 't1', sourceFileId: null })
   assert.equal(calls[0]?.id, buildBuiltinSlicingPresetId('process', '0.20mm Standard @BBL H2D'), 'the H2D parent (not H2C) was resolved')
   assert.equal(result.baseConfig.wall_loops, '2', 'baseline is the standard parent')
-  // Was asserted as "diff is computed, not the recorded list" — the inversion this now corrects.
+  // Was asserted as "diff is computed, not the recorded list": the inversion this now corrects.
   // top_shell_layers matches the parent and is undeclared, so only wall_loops is a real change.
   assert.deepEqual(result.overriddenKeys, ['wall_loops'], 'the recorded list is carried, not discarded')
   assert.equal(result.declaresOverrides, true)

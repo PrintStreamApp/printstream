@@ -1,16 +1,16 @@
 /**
- * Main-thread client for `zipArchiveWorker.ts` — whole-archive zip/unzip that ALWAYS settles.
+ * Main-thread client for `zipArchiveWorker.ts`, whole-archive zip/unzip that ALWAYS settles.
  *
  * Owns the contract the archive read/write paths rely on: every call ends in resolved bytes or a
  * thrown error, bounded in time. The previous approach (fflate's async API on the main thread)
  * could wedge without erroring under CPU starvation, which left the editor on "Loading plates…"
  * forever with no error state and a pile of leaked per-entry workers. Here each operation gets one
- * dedicated worker, a size-scaled deadline, and `terminate()` in a `finally` — a wedged worker is
+ * dedicated worker, a size-scaled deadline, and `terminate()` in a `finally`, a wedged worker is
  * killed, not leaked.
  *
  * Failure semantics, two distinct classes:
  *  - DATA errors (corrupt zip, bad entry) reject with the codec's message and are NOT retried on
- *    the main thread — the same bytes would just fail again.
+ *    the main thread, the same bytes would just fail again.
  *  - MECHANISM failures (no `Worker` global, the worker module failing to load, the deadline
  *    expiring) fall back to fflate's synchronous codec on the main thread: a brief freeze beats an
  *    open or save that never settles. Node tests take this path by design (no `Worker` there), so
@@ -24,7 +24,7 @@ export const ZIP_ARCHIVE_BASE_DEADLINE_MS = 30_000
 
 /**
  * Deadline for one worker operation, scaled by payload size: the base plus ~1ms per KB (≈1MB/s of
- * assumed codec throughput — generous even for a weak machine, while still bounding a wedged
+ * assumed codec throughput: generous even for a weak machine, while still bounding a wedged
  * worker to minutes rather than forever).
  */
 export function zipArchiveDeadlineMs(byteLength: number): number {
@@ -42,8 +42,8 @@ class WorkerUnavailableError extends Error {
 }
 
 /**
- * Run one request on a fresh dedicated worker. The worker is terminated in `finally` — including
- * on deadline expiry — so no code path can leak it. Inputs are posted WITHOUT a transfer list
+ * Run one request on a fresh dedicated worker. The worker is terminated in `finally`, including
+ * on deadline expiry, so no code path can leak it. Inputs are posted WITHOUT a transfer list
  * (structured clone): zip entries can be views into a live open archive, and detaching those
  * buffers would corrupt the project they came from.
  */

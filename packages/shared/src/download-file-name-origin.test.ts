@@ -2,7 +2,7 @@
  * The filename is the bridge's most durable piece of provenance.
  *
  * Windows' Mark of the Web is deleted by setup before it elevates, so a retry
- * of the same downloaded file has already lost it — and a retry is exactly what
+ * of the same downloaded file has already lost it, and a retry is exactly what
  * follows a failed install. The name survives that, a copy to another machine,
  * and a browser's "(1)" dedupe, so it is read first.
  */
@@ -53,7 +53,7 @@ test('an unstamped name yields nothing, so the baked default stands', () => {
 
 test('a stamp that is not an http(s) origin is refused', () => {
   assert.equal(readOriginFromDownloadFileName('bridge--from--file--C_\\evil.exe'), null)
-  // A bare word is no longer junk — it is a label under the default host — so a
+  // A bare word is no longer junk, it is a label under the default host, so a
   // junk token now yields a well-formed origin that simply does not resolve.
   // That is the better failure: a visible connection error beats silently
   // falling back to the cloud, which is the bug this whole stamp exists to stop.
@@ -99,7 +99,7 @@ test('a subdomain of the default host is written as its label alone', () => {
 
 test("a host that is not ours keeps its full name", () => {
   // The short form means "a subdomain of the default host". Applying it blindly
-  // would resolve a self-hoster's printstream.acme.com to acme.printstream.app —
+  // would resolve a self-hoster's printstream.acme.com to acme.printstream.app,
   // a real server, just not theirs.
   for (const origin of ['https://printstream.acme.com', 'https://ps.example.com:8443', 'http://printer.lan:4000']) {
     const stamped = stampDownloadFileNameWithOrigin('bridge-abc-linux-x64', origin)

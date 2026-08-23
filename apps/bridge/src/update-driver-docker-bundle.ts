@@ -8,7 +8,7 @@
  * the install.
  *
  * The bundle only ever installs onto a runner whose ABI matches the bundle's
- * EXACTLY — the image bakes the pinned Node version into
+ * EXACTLY: the image bakes the pinned Node version into
  * `BRIDGE_RUNNER_ABI_VERSION` (`node<version>-ffmpeg7-v1`), so new JS never
  * runs on a different Node than it was built for (a Node-patch behavior skew
  * broke H2D FTPS once; see nodejs/node#64402). An ABI mismatch reports
@@ -86,7 +86,7 @@ export function createDockerBundleUpdateDriver(): BridgeUpdateDriver {
         console.log(`Bridge build ${env.BRIDGE_BUILD_REVISION ?? shortBridgeFingerprint(ownFingerprint)} confirmed healthy.`)
       }
       // Minimal retention: with the active release confirmed, nothing else on
-      // disk has a purpose — prune immediately (steady state: one release).
+      // disk has a purpose: prune immediately (steady state: one release).
       const removed = await cleanupConfirmedBridgeReleases(env.BRIDGE_RELEASES_DIR)
       if (removed.length > 0) {
         console.log(`Removed superseded bridge releases: ${removed.join(', ')}`)

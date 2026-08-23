@@ -32,7 +32,7 @@ export const SESSION_DURATION_OPTIONS: Array<{
 ]
 export const USER_PAGE_SIZE_OPTIONS = [10, 25, 50] as const
 export const USER_DIRECTORY_VIEW_MODE_KEY = 'bambu.auth.users.viewMode'
-// Persisted user-directory controls (sort, filters, page size) — survive reloads.
+// Persisted user-directory controls (sort, filters, page size): survive reloads.
 export const USER_DIRECTORY_SORT_KEY = 'bambu.auth.users.sort'
 export const USER_DIRECTORY_SORT_DIR_KEY = 'bambu.auth.users.sortDir'
 export const USER_DIRECTORY_STATUS_FILTER_KEY = 'bambu.auth.users.statusFilter'

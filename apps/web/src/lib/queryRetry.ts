@@ -3,7 +3,7 @@
  *
  * Owned here rather than inline in the query client so the rule can be tested:
  * it decides how long every failure in the app takes to become visible, and the
- * cost of getting it wrong is invisible in normal use — a screen that sits blank
+ * cost of getting it wrong is invisible in normal use, a screen that sits blank
  * for seconds before admitting something went wrong.
  *
  * Counterpart: `main.tsx` installs it as the QueryClient's default `retry`.
@@ -29,7 +29,7 @@ const RETRYABLE_CLIENT_STATUSES = new Set([408, 429])
  * those really do differ between attempts.
  *
  * A non-`ApiError` (a dropped connection, a parse failure) has no status and is
- * treated as retryable — the transport, not the server, is what failed.
+ * treated as retryable: the transport, not the server, is what failed.
  */
 export function shouldRetryQuery(failureCount: number, error: unknown): boolean {
   const status = error instanceof ApiError ? error.status : null

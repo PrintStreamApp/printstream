@@ -37,8 +37,13 @@ import {
   writeFlushVolumesMatrixBlocks
 } from '../flush-volumes-matrix.js'
 import { inspectProjectFilamentSelfIndex, rebuildFilamentSelfIndex, repairFilamentSelfIndex } from '../filament-variant-index.js'
+import { assertAcyclicComponentGraph } from './component-graph.js'
+import { ensureApplicationMarker } from './application-marker.js'
+import { parseSourcePlateMetadata, preservedPlateMetadata, type PlateMetadataEntry } from './plate-metadata.js'
+import { dropEngineHostileOverrides } from '../settings-value-guard.js'
+import { degenerateTransformMessage, findDegenerateTransformColumn } from './transform-validity.js'
 import { remapColorPaintInModelXml } from './triangle-paint-codec.js'
-import { threeMfPartSubtypeCarriesFilament } from '../three-mf-part-subtype.js'
+import { canonicalThreeMfPartSubtype, threeMfPartSubtypeCarriesFilament } from '../three-mf-part-subtype.js'
 import type {
   SceneEdit,
   SceneEditFilament,
@@ -76,7 +81,7 @@ import { escapeXmlAttribute } from './xml-write.js'
 /**
  * Does the base model use the 3MF Production Extension? BambuStudio always saves with it
  * (`requiredextensions="p"`, every object/component carrying a `p:UUID`). When it is in force, the
- * Bambu Studio **GUI** load path requires a `p:UUID` on every `<object>`/`<component>` — its parser
+ * Bambu Studio **GUI** load path requires a `p:UUID` on every `<object>`/`<component>`, its parser
  * tolerates the absence, but the GUI drops UUID-less nodes during volume building, so a project we
  * saved with UUID-less injected objects loads as ZERO model objects and the GUI reports
  * "The file does not contain any geometry data." (The CLI slicer tolerates it, which is why slicing
@@ -156,7 +161,7 @@ interface ArrangedInstance {
  * the root isn't clean), and the plate at 0-based position `i` sits at column `i % cols`, row
  * `i / cols`, each cell offset by a per-axis stride of `bed * (1 + 1/5)` (rows grow toward −Y).
  * Slicing a plate checks its objects fall inside that plate's grid cell, so an origin that does not
- * match the grid pushes later plates outside the print volume (slicer exit 206) — the previous
+ * match the grid pushes later plates outside the print volume (slicer exit 206): the previous
  * single-row layout did exactly that for the 3rd+ plate. The scene reader removes this same offset
  * (see {@link resolveProjectPlateOrigin}) to give the editor plate-local coordinates.
  */
@@ -165,6 +170,13 @@ function computePlateOrigins(
   plateWidth: number,
   plateDepth: number
 ): Map<number, { x: number; y: number }> {
+  // BambuStudio indexes `plate_data_list` by `plater_id - 1` and refuses the whole project when any
+  // id exceeds the plate COUNT (`bbs_3mf.cpp:2323-2329`, and the same guard again at `:1633-1639`
+  // for a printer-stored `.gcode.3mf`). Sorting alone does not make `[1, 3]` safe. Refused rather
+  // than renumbered: the editor already reindexes every plate mutation to 1..N, so a sparse set is a
+  // caller that disagrees with us about which plate is which, and silently moving its plate 3 to
+  // position 2 would attach that plate's thumbnails and gcode pointers to different work.
+  assertDensePlateIndexes(plates)
   const ordered = [...plates].sort((left, right) => left.index - right.index)
   const cols = computePlateColumnCount(ordered.length)
   const strideX = plateWidth * (1 + LOGICAL_PART_PLATE_GAP)
@@ -213,6 +225,13 @@ function assignArrangedInstances(instances: ResolvedEditInstance[], origins: Map
     const local = instance.matrix && instance.matrix.length === 12
       ? [...instance.matrix]
       : threeMfTransformFromTRS(instance.position, instance.rotation, instance.scale)
+    // Held to the same rule whichever form it arrived in. A zero scale axis makes the importer
+    // return before `set_transformation` (`bbs_3mf.cpp:4299-4307`), so the object loses its position
+    // and rotation too and reappears unrotated at the plate origin, with no error anywhere.
+    const degenerate = findDegenerateTransformColumn(local)
+    if (degenerate) {
+      throw new Error(`Scene edit places object ${instance.objectId} with a degenerate transform: ${degenerateTransformMessage(degenerate).toLowerCase()}`)
+    }
     local[9] = (local[9] ?? 0) + origin.x
     local[10] = (local[10] ?? 0) + origin.y
     arranged.push({ objectId: instance.objectId, instanceId, plateIndex: instance.plateIndex, transform: local, printable: instance.printable })
@@ -268,8 +287,8 @@ interface ModelSettingsIdentifyIds {
 
 /**
  * Read every `model_instance`'s `identify_id` out of a `model_settings.config`. The id is
- * BambuStudio's per-instance handle (`loaded_id` in the engine) — the ONLY key the CLI's
- * `--skip-objects` flag accepts — so the bake must carry it through (or mint one) for the
+ * BambuStudio's per-instance handle (`loaded_id` in the engine), the ONLY key the CLI's
+ * `--skip-objects` flag accepts, so the bake must carry it through (or mint one) for the
  * per-object/instance "Printable" exclusion to be enforceable on the rewritten file.
  */
 function parseModelSettingsIdentifyIds(modelSettingsXml: string): ModelSettingsIdentifyIds {
@@ -291,7 +310,9 @@ function parseModelSettingsIdentifyIds(modelSettingsXml: string): ModelSettingsI
 function renderArrangedModelSettingsPlates(
   arranged: ArrangedInstance[],
   plates: SceneEdit['plates'],
-  sourceIdentifyIds: ModelSettingsIdentifyIds
+  sourceIdentifyIds: ModelSettingsIdentifyIds,
+  sourcePlates: ReadonlyMap<number, PlateMetadataEntry[]>,
+  filamentSetStable: boolean
 ): string {
   const instancesByPlate = new Map<number, ArrangedInstance[]>()
   for (const instance of arranged) {
@@ -302,7 +323,7 @@ function renderArrangedModelSettingsPlates(
   // Every instance carries an identify_id: a returning (objectId, instanceId) keeps the
   // source's, new/duplicated instances get fresh ids above the source's maximum. Without
   // one the CLI assigns its own loaded_id at load time, which the slicer service cannot
-  // predict — making printable="0" instances impossible to translate into --skip-objects.
+  // predict, making printable="0" instances impossible to translate into --skip-objects.
   let nextIdentifyId = sourceIdentifyIds.maxId + 1
   const identifyIdFor = (instance: ArrangedInstance): number => {
     const preserved = sourceIdentifyIds.byInstance.get(`${instance.objectId}:${instance.instanceId}`)
@@ -315,6 +336,19 @@ function renderArrangedModelSettingsPlates(
   const blocks = ordered.map((plate) => {
     const lines = [`  <plate>`, `    <metadata key="plater_id" value="${plate.index}"/>`]
     if (plate.name) lines.push(`    <metadata key="plater_name" value="${escapeXmlAttribute(plate.name)}"/>`)
+    // Everything the SceneEdit cannot express, carried from the source block. Without this the
+    // re-render below silently discarded the plate's bed type, print sequence, vase mode and
+    // nozzle grouping on every save (`plate-metadata.ts` has the policy and the reasoning).
+    // `rawValue` is re-emitted unescaped because it is still the source's escaped text.
+    // Keyed on the plate's SOURCE number, never its new one. `plate.index` is a position the
+    // editor renumbers on every add, delete and reorder, so looking the source block up by it hands
+    // a deleted plate's bed type and vase mode to whichever plate took its number, which is the
+    // exact misattribution this carry exists to prevent. Falls back to the position only when the
+    // edit does not say, which is an older client whose plates cannot have moved through it.
+    const sourcePlateNumber = plate.sourceIndex ?? plate.index
+    for (const carried of preservedPlateMetadata(sourcePlates.get(sourcePlateNumber), filamentSetStable)) {
+      lines.push(`    <metadata key="${carried.key}" value="${carried.rawValue}"/>`)
+    }
     for (const instance of instancesByPlate.get(plate.index) ?? []) {
       lines.push(
         `    <model_instance>`,
@@ -349,7 +383,7 @@ export interface ImportedObjectInput {
   /**
    * Named sub-solids when the import is a multi-solid assembly (a STEP with several parts). When
    * present (>1), the import bakes as ONE object whose solids are `<component>` parts, each with
-   * its own `model_settings` `<part>` entry — instead of a single merged `<object><mesh>`. The
+   * its own `model_settings` `<part>` entry, instead of a single merged `<object><mesh>`. The
    * top-level {@link ImportedObjectInput.mesh} is the merged geometry, used only when this is absent.
    */
   parts?: Array<{ name: string; mesh: ImportedMesh; subtype?: string | null }>
@@ -357,7 +391,7 @@ export interface ImportedObjectInput {
 
 // The `Application: BambuStudio-…` metadata is what makes BambuStudio recognize the file as its
 // own project (`is_bbl_3mf`). Without it the CLI refuses per-plate slicing ("not support to slice
-// plate N, reset to 0") and drops per-plate custom G-code — so a from-scratch project (new-project
+// plate N, reset to 0") and drops per-plate custom G-code, so a from-scratch project (new-project
 // scaffold or a generated calibration plate) must carry it, exactly like a saved Bambu file does.
 export const NEW_PROJECT_MODEL_XML = [
   '<?xml version="1.0" encoding="UTF-8"?>',
@@ -383,10 +417,29 @@ export const THREE_MF_CONTENT_TYPES_XML = [
   '</Types>'
 ].join('\n')
 
+/**
+ * The package relationships for an archive we build from scratch.
+ *
+ * The three thumbnail relationships mirror what BambuStudio's own exporter writes when a project
+ * carries no explicit cover (`bbs_3mf.cpp:6829-6850`), TARGETS INCLUDED: it emits these same
+ * `Metadata/plate_1.png` / `_small.png` defaults unconditionally, without checking that the entry
+ * exists, and those are exactly the names `embedPlateThumbnails` writes. So this is copying the
+ * engine's output rather than choosing a convention.
+ *
+ * Not load-bearing for any consumer we know of, which is why it went unnoticed: the importer falls
+ * back to the `Metadata/plate_1.png` literal when the relationship is absent (`:1504`), the printer
+ * file browser falls back to the plate's own `thumbnail_file`, and our readers resolve thumbnails by
+ * name and never open this document. It is written because our fresh archives were the only files
+ * in the wild missing it (33 of 33 real projects carry it), and a format divergence with no current
+ * consumer is still one a stricter reader can find later.
+ */
 export const THREE_MF_RELS_XML = [
   '<?xml version="1.0" encoding="UTF-8"?>',
   '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">',
   '  <Relationship Target="/3D/3dmodel.model" Id="rel-1" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/>',
+  '  <Relationship Target="/Metadata/plate_1.png" Id="rel-2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/thumbnail"/>',
+  '  <Relationship Target="/Metadata/plate_1.png" Id="rel-4" Type="http://schemas.bambulab.com/package/2021/cover-thumbnail-middle"/>',
+  '  <Relationship Target="/Metadata/plate_1_small.png" Id="rel-5" Type="http://schemas.bambulab.com/package/2021/cover-thumbnail-small"/>',
   '</Relationships>'
 ].join('\n')
 
@@ -409,7 +462,7 @@ export function subModelPathsForObjects(modelXml: string, objectIds: ReadonlySet
 
 /**
  * Every `/3D/Objects/*.model` ZIP entry the root model references (no leading slash). Used by the
- * bake's copy pass to reach mesh entries it never loads into memory — e.g. re-keying colour paint
+ * bake's copy pass to reach mesh entries it never loads into memory: e.g. re-keying colour paint
  * on a filament-slot permutation, which must visit EVERY mesh entry, not just the ones an edit
  * touched.
  */
@@ -476,7 +529,7 @@ function renderImportedMeshObjectXml(
   genUuid: (() => string) | null,
   /**
    * Triangle paint for this mesh, by channel attribute and triangle index. Indices are positions
-   * in `mesh.indices` — the SAME order the editor rendered through `meshToBinaryStl`, which is
+   * in `mesh.indices`, the SAME order the editor rendered through `meshToBinaryStl`, which is
    * what makes painting an unsaved import safe (contract pinned in `mesh-import.test.ts`).
    */
   paint?: ReadonlyMap<TrianglePaintAttribute, Record<string, string>>
@@ -516,7 +569,7 @@ function renderImportedMeshObjectXml(
  * object. `extruder` records the placing instance's filament at BOTH levels, exactly as
  * desktop BambuStudio writes it: the OBJECT-level entry is what the CLI slices by (a
  * part-level entry alone is ignored for an inline-mesh object, which silently printed the
- * object with filament 1 — A/B-verified on a real project), and the part-level entry is
+ * object with filament 1, A/B-verified on a real project), and the part-level entry is
  * what keeps the part's material on reopen/preview.
  */
 function renderImportedModelSettingsObjectXml(objectId: number, name: string, extruder: number | null): string {
@@ -535,13 +588,13 @@ function renderImportedModelSettingsObjectXml(objectId: number, name: string, ex
 /**
  * Render a multi-solid import's ROOT object: a `<components>` object (no mesh of its own) that
  * references each solid's mesh object by an identity transform. This is the object a build item
- * places, so the whole assembly moves/clones as one — exactly how BambuStudio loads a multi-part
+ * places, so the whole assembly moves/clones as one, exactly how BambuStudio loads a multi-part
  * STEP. (3MF requires an object be mesh XOR components; the solids carry the meshes.)
  *
  * When `partPath` is set the solids live in a separate `/3D/Objects/…model` sub-model (the
  * Production-Extension "split" layout BambuStudio writes); each component then carries `p:path` so
  * the reader resolves the solid in that part file. When null the solids are inline in the root model
- * (same-file lookup) — the fallback for non-production projects.
+ * (same-file lookup): the fallback for non-production projects.
  */
 function renderImportedComponentsObjectXml(
   objectId: number,
@@ -601,10 +654,10 @@ interface ImportedPartFileEntry {
  * Render the `model_settings.config` entry for a multi-solid import: one `<part subtype="normal_part">`
  * per solid (keyed by its component object id, named, carrying the placing instance's filament as
  * `extruder` so every part keeps a material). Mirrors {@link renderImportedModelSettingsObjectXml}
- * for the single-mesh case, including the OBJECT-level `extruder` — the entry the CLI slices by;
+ * for the single-mesh case, including the OBJECT-level `extruder`: the entry the CLI slices by;
  * the per-part entries alone are not honored.
  */
-function renderImportedMultiPartModelSettingsXml(
+export function renderImportedMultiPartModelSettingsXml(
   objectId: number,
   name: string,
   objectExtruder: number | null,
@@ -615,11 +668,16 @@ function renderImportedMultiPartModelSettingsXml(
     `    <metadata key="name" value="${escapeXmlAttribute(name)}"/>`,
     ...(objectExtruder != null ? [`    <metadata key="extruder" value="${objectExtruder}"/>`] : []),
     ...parts.flatMap((part) => [
-      `    <part id="${part.componentObjectId}" subtype="${escapeXmlAttribute(part.subtype ?? 'normal_part')}">`,
+      // Canonicalised, never written raw. `ModelVolume::type_from_string` is an exact match on five
+      // strings and DEFAULTS TO MODEL_PART for anything else (`Model.cpp:3400-3416`), so a stray
+      // `ParameterModifier` does not fail, it prints the modifier as solid geometry. Nothing
+      // observed produces a non-canonical value today; this is the rule `three-mf-part-subtype.ts`
+      // already states, applied at the one place that writes the attribute.
+      `    <part id="${part.componentObjectId}" subtype="${escapeXmlAttribute(canonicalThreeMfPartSubtype(part.subtype))}">`,
       `      <metadata key="name" value="${escapeXmlAttribute(part.name)}"/>`,
       ...(part.extruder != null ? [`      <metadata key="extruder" value="${part.extruder}"/>`] : []),
       // Per-part process overrides set on the unsaved import, baked into the part's metadata
-      // (process-setting keys only — structural keys must not be forgeable through this map).
+      // (process-setting keys only: structural keys must not be forgeable through this map).
       ...Object.entries(part.processOverrides ?? {}).filter(([key]) => isProcessSettingKey(key)).map(([key, value]) =>
         `      <metadata key="${escapeXmlAttribute(key)}" value="${escapeXmlAttribute(Array.isArray(value) ? value.join(';') : value)}"/>`),
       '    </part>'
@@ -649,11 +707,39 @@ function injectModelSettingsObjects(xml: string, objectsXml: string): string {
  * Strip original objects that no instance in the edited build references anymore (an object
  * the editor's Cut tool replaced with staged-import halves, or a model the user deleted).
  * BambuStudio's 3MF loader re-instantiates resources objects that lack a build item (it adds
- * a default instance), so an orphaned original would silently reappear in the slice — landing
+ * a default instance), so an orphaned original would silently reappear in the slice: landing
  * on top of the kept geometry and failing the plate. Objects referenced as a component of
  * another object (same-file assemblies in generic 3MFs) are conservatively kept; Bambu part
  * objects live in separate /3D/Objects files, so cut-away root objects never match that.
  */
+/**
+ * Refuse to place an object the model does not contain.
+ *
+ * Throws rather than dropping the instance: a placement naming a missing object means the caller and
+ * the base project disagree about what exists (a stale editor session against a concurrently-saved
+ * file is the realistic route), and silently saving the subset would persist that disagreement as
+ * deleted models. Named ids are listed so the failure says which.
+ */
+function assertPlacedObjectsExist(modelXml: string, arranged: ReadonlyArray<{ objectId: number }>): void {
+  const present = new Set<number>()
+  for (const match of modelXml.matchAll(/<object\b[^>]*?\bid="(\d+)"/g)) {
+    present.add(Number.parseInt(match[1]!, 10))
+  }
+  const missing = [...new Set(arranged.map((instance) => instance.objectId))].filter((id) => !present.has(id))
+  if (missing.length > 0) {
+    throw new Error(`Scene edit places object${missing.length > 1 ? 's' : ''} ${missing.join(', ')}, which this project does not contain`)
+  }
+}
+
+/** Plate ids must be exactly 1..N, or BambuStudio refuses the project outright. */
+function assertDensePlateIndexes(plates: ReadonlyArray<{ index: number }>): void {
+  const seen = [...plates].map((plate) => plate.index).sort((left, right) => left - right)
+  const dense = seen.every((index, position) => index === position + 1)
+  if (!dense) {
+    throw new Error(`Scene edit numbers its plates ${seen.join(', ')}; plates must be numbered 1 to ${seen.length} with no gaps`)
+  }
+}
+
 function removeUnreferencedObjects(
   modelXml: string,
   modelSettingsXml: string,
@@ -676,6 +762,24 @@ function removeUnreferencedObjects(
 }
 
 /** Assemble the two edited 3MF documents (model + model_settings) from a base and the imports. */
+/**
+ * How many filaments the SOURCE project declared, or -1 when it says nothing.
+ *
+ * Used to tell an APPEND from an untouched list. An identity slot remap only says no existing slot
+ * moved, and appending moves nothing, so the remap alone reports a grown list as stable and the
+ * filament-indexed plate keys are carried at the old width. -1 for an unreadable source, which can
+ * never equal a real length, so the keys drop rather than being carried against an unknown.
+ */
+function sourceFilamentCount(projectSettingsJson: string | null): number {
+  if (!projectSettingsJson) return -1
+  try {
+    const parsed = JSON.parse(projectSettingsJson) as Record<string, unknown>
+    return Array.isArray(parsed.filament_colour) ? parsed.filament_colour.length : -1
+  } catch {
+    return -1
+  }
+}
+
 export function buildEditedThreeMfDocuments(
   baseModelXml: string,
   baseModelSettingsXml: string,
@@ -697,7 +801,7 @@ export function buildEditedThreeMfDocuments(
   const genUuid: (() => string) | null = modelUsesProductionExtension(baseModelXml) ? () => globalThis.crypto.randomUUID() : null
   // A save that PERMUTES the filament slots must re-key the BASE file's colour paint before
   // anything copies or builds on it: paint leaf states are 1-based filament ids, and a part the
-  // session never painted otherwise streams its codes through in the OLD slot order — the painted
+  // session never painted otherwise streams its codes through in the OLD slot order: the painted
   // regions survive and silently print in whatever material now holds the old number. Done here,
   // ahead of the clone pre-pass, so independent copies duplicate re-keyed meshes; parts the session
   // DID paint arrive in the edit already re-keyed (`rebaseSceneEditFilamentIds`) and overwrite this
@@ -815,7 +919,18 @@ export function buildEditedThreeMfDocuments(
     // A multi-solid import (STEP assembly) bakes as one object whose solids are component parts;
     // imports consumed as an added part volume stay single-mesh (applyAddedParts wraps them).
     const multiParts = !isPartImport && imported.parts && imported.parts.length > 1 ? imported.parts : null
-    const objectExtruder = toExtruder(importFilament.get(imported.importId) ?? null)
+    // An imported object is ALWAYS bound, never left implicit. An import starts at
+    // `filamentId: null`, and writing nothing made the object's material a property of the ENGINE
+    // rather than of the file: BambuStudio materialises extruder 1 for an object whose entry is
+    // absent, `0`, or past the filament count (`bbs_3mf.cpp`, the block that also clamps volumes),
+    // so the object printed filament 1 with nothing anywhere saying so. That left saved projects
+    // flagged `objectExtruder` with mixed part coverage, the one shape the repair declines to
+    // guess at, and no way for a user to clear it.
+    //
+    // 1 is not a guess: it is the value the engine already applies, so binding it changes nothing
+    // about what prints and merely makes the file state what it does. It is also what desktop
+    // BambuStudio writes back after a load-then-save round trip.
+    const objectExtruder = toExtruder(importFilament.get(imported.importId) ?? null) ?? 1
     if (multiParts) {
       const componentIds = multiParts.map(() => {
         const id = nextObjectId
@@ -830,7 +945,7 @@ export function buildEditedThreeMfDocuments(
       const solidMeshXmls = multiParts.map((part, i) => renderImportedMeshObjectXml(componentIds[i]!, part.mesh, genUuid, solidPaint?.get(i)))
       if (genUuid) {
         // Production extension: emit the solids as a separate /3D/Objects sub-model and reference
-        // them by p:path — so a plate fetches/parses only this import's part file, not the whole
+        // them by p:path, so a plate fetches/parses only this import's part file, not the whole
         // root model, and the layout matches BambuStudio's. The root keeps just the small assembly.
         const partFilePath = `3D/Objects/printstream_object_${objectId}.model`
         partFileEntries.push({ name: partFilePath, content: renderImportedPartFileModel(solidMeshXmls) })
@@ -849,14 +964,14 @@ export function buildEditedThreeMfDocuments(
           componentObjectId: componentIds[i]!,
           name: part.name,
           // A helper volume carries no material (BambuStudio writes extruder 0), so it must
-          // never inherit the object's — see threeMfPartSubtypeCarriesFilament.
+          // never inherit the object's: see threeMfPartSubtypeCarriesFilament.
           extruder: threeMfPartSubtypeCarriesFilament(partTypes?.get(i) ?? part.subtype ?? null)
             ? toExtruder(partFilaments?.get(i) ?? null) ?? objectExtruder
             : null,
           // Per-part process overrides set on the unsaved import (keyed by solid index).
           processOverrides: partProcess?.get(i),
           // The type the user chose on the unsaved import ("Change type") wins; otherwise the
-          // solid keeps the type it was imported WITH — a 3MF's support blocker stays a blocker
+          // solid keeps the type it was imported WITH, a 3MF's support blocker stays a blocker
           // instead of silently baking as printed geometry.
           subtype: partTypes?.get(i) ?? part.subtype ?? undefined
         }))
@@ -894,12 +1009,12 @@ export function buildEditedThreeMfDocuments(
   let modelXml = injectResourcesObjects(baseModelXml, meshObjects.join('\n'))
   modelXml = replaceThreeMfBuildSection(modelXml, renderArrangedBuildItems(arranged, genUuid))
 
-  // A material add/remove/reorder remaps each part's `extruder` — and the per-object/per-part
-  // filament-index process overrides — from its OLD filament slot to the new id. This applies ONLY
+  // A material add/remove/reorder remaps each part's `extruder`, and the per-object/per-part
+  // filament-index process overrides, from its OLD filament slot to the new id. This applies ONLY
   // to parts inherited from the BASE project: every part the bake authors below (imported solids
   // via `settingsObjects`, added volumes, per-part reassignments) is already written in the NEW
-  // filament-id space, so it must not be remapped. Remapping the base HERE — before those parts
-  // are injected — is what keeps a fresh multi-solid import's per-part materials from being
+  // filament-id space, so it must not be remapped. Remapping the base HERE, before those parts
+  // are injected, is what keeps a fresh multi-solid import's per-part materials from being
   // double-remapped and collapsed to filament 1. No-op when the filament set is unchanged.
   let baseModelSettingsForInject = baseModelSettingsXml
   if (slotRemap) {
@@ -909,7 +1024,27 @@ export function buildEditedThreeMfDocuments(
   let modelSettingsXml = injectModelSettingsObjects(baseModelSettingsForInject, settingsObjects.join('\n'))
   modelSettingsXml = replaceModelSettingsPlates(
     modelSettingsXml,
-    renderArrangedModelSettingsPlates(arranged, edit.plates, parseModelSettingsIdentifyIds(baseModelSettingsXml))
+    renderArrangedModelSettingsPlates(
+      arranged,
+      edit.plates,
+      parseModelSettingsIdentifyIds(baseModelSettingsXml),
+      parseSourcePlateMetadata(baseModelSettingsXml),
+      // The filament-scoped plate keys are positional over the filament list, so they only survive
+      // while that list is untouched. An edit with no filament list changes nothing about it.
+      //
+      // BOTH halves are needed. An identity remap only says no slot MOVED; appending a material
+      // leaves slots 1..n mapping to themselves, so the remap alone reports "stable" and the keys
+      // are carried at the OLD width against a longer filament list. Measured on a real 8-material
+      // project: adding a 9th kept `filament_maps` and `first_layer_print_sequence` 8 entries wide,
+      // which is the same one-per-filament-array-left-short defect this file repairs elsewhere.
+      // A slot the edit did not carry over contributes no remap entry, so comparing the list length
+      // against the remap size catches an add, and a removal or reorder already fails the identity
+      // test.
+      edit.filaments == null || (
+        isIdentityFilamentSlotRemap(filamentSlotIdRemap(edit.filaments))
+        && edit.filaments.length === sourceFilamentCount(projectSettingsJson)
+      )
+    )
   )
 
   // Attach added part volumes BEFORE the unreferenced-object sweep: a part mesh is
@@ -924,7 +1059,24 @@ export function buildEditedThreeMfDocuments(
     modelSettingsXml = applied.modelSettingsXml
   }
 
+  // Every placed object must EXIST before the sweep below runs, because the sweep is seeded from the
+  // build items: an id naming nothing keeps the whole model from being referenced, so the real
+  // objects are stripped as unused and the file is left with one item pointing at nothing. That is
+  // silent geometry loss on our side and a refused open on BambuStudio's (`bbs_3mf.cpp:4205-4210`
+  // aborts the parse rather than skipping the item). Checked here rather than at the schema, which
+  // is context-free and cannot know which ids the base project holds.
+  assertPlacedObjectsExist(modelXml, arranged)
+
   const cleaned = removeUnreferencedObjects(modelXml, modelSettingsXml, new Set(arranged.map((instance) => instance.objectId)))
+  // The components are only complete once the imports, clones and added parts are all in. A cycle
+  // among them hangs the importer outright rather than failing, so it must never reach a file.
+  assertAcyclicComponentGraph(cleaned.modelXml)
+  // We author Bambu-shaped documents whatever the base was, so the file has to SAY so: without the
+  // generator marker the importer forces `dont_load_config` and skips the whole config half of the
+  // archive (`bbs_3mf.cpp:1905-1908`), opening the project as bare geometry with every setting gone.
+  // Only the from-scratch scaffold used to write it, so a save over any base that lacked one
+  // inherited the defect and could never recover from it.
+  cleaned.modelXml = ensureApplicationMarker(cleaned.modelXml)
   modelXml = cleaned.modelXml
   modelSettingsXml = cleaned.modelSettingsXml
 
@@ -962,10 +1114,23 @@ export function buildEditedThreeMfDocuments(
   // solids / added volumes / per-part reassignments keep the new-id extruders written for them.
 
   // The model_settings half of the staged settings repair (object-level extruder bindings), LAST
-  // so it inspects the final part set every edit above produced. Same implementation as the API
-  // repair route; inspect-gated, so an unaffected document rides through untouched. Ambiguous
-  // objects (mixed part coverage) are left alone here exactly as the route leaves them — the
-  // banner re-derives from the saved file and reports them again.
+  // so it inspects the final part set every edit above produced. Inspect-gated, so an unaffected
+  // document rides through untouched.
+  //
+  // This save IS the repair. A server-side repair route used to exist and was REMOVED on purpose:
+  // repairs are explicit and user-driven, never applied behind the user's back. Do not reintroduce
+  // one: rewriting a stored file outside a save the user asked for breaks the `repairs/index.ts`
+  // contract that nothing heals at rest, and loses the pre-repair bytes that a new library version
+  // is what preserves.
+  //
+  // Every flagged object is repairable, so a staged repair CLEARS the file: the saved bytes must
+  // re-inspect clean. That holds on two conditions, BOTH of which have been broken here before and
+  // are pinned by `settings-repair-roundtrip.test.ts`: the derivation must never decline a shape it
+  // flagged (mixed part coverage used to be reported un-repairable), and the writer must never
+  // decline a block the derivation accepted (an object head with no metadata to anchor on used to
+  // be returned untouched while still being counted as repaired). Either one produces the same
+  // user-visible failure: the button is pressed, the save succeeds, and the banner is back on the
+  // next open.
   if (edit.repairSettings) {
     modelSettingsXml = repairModelSettingsObjectExtruders(modelSettingsXml).xml
   }
@@ -1058,7 +1223,7 @@ function applyAddedParts(
 }
 
 /**
- * Append a `<part>` (with subtype + name, plus any per-volume config metadata — how
+ * Append a `<part>` (with subtype + name, plus any per-volume config metadata: how
  * BambuStudio persists modifier-volume overrides) to a parent's model_settings entry.
  */
 function addModelSettingsPartEntry(
@@ -1125,7 +1290,7 @@ function setPartExtruderMetadata(partBlock: string, extruder: number): string {
  *
  * The OBJECT-level `extruder` follows the parts whenever they leave every filament-carrying part
  * on ONE slot: that entry is what the CLI actually slices by, so leaving it stale (or absent, in
- * an import-format object) silently prints the object with the old filament — the part-level
+ * an import-format object) silently prints the object with the old filament: the part-level
  * entries alone are not honored (A/B-verified; see `repairs/object-extruder.ts` for the stored
  * files this already happened to). Parts that DISAGREE leave the object entry alone: the object's
  * own default is not derivable from a per-part divergence, exactly like BambuStudio changing one
@@ -1186,8 +1351,8 @@ export function applyPartProcessOverrides(modelSettingsXml: string, overrides: S
       const stripped = partBody.replace(/[ \t]*<metadata\s+key="([^"]+)"\s+value="[^"]*"\s*\/>\n?/g, (line, key: string) =>
         isProcessSettingKey(key) ? '' : line)
       // Inject ONLY process-setting keys. A stale/hand-built request whose override map carries
-      // structural metadata (matrix, source_offset_*, name, extruder) must not clobber — or
-      // duplicate — the part's real entries, which the strip above deliberately preserved.
+      // structural metadata (matrix, source_offset_*, name, extruder) must not clobber, or
+      // duplicate, the part's real entries, which the strip above deliberately preserved.
       const injected = Object.entries(partOverrides).filter(([key]) => isProcessSettingKey(key)).map(([key, value]) => {
         const serialized = Array.isArray(value) ? value.join(';') : value
         return `\n      <metadata key="${escapeXmlAttribute(key)}" value="${escapeXmlAttribute(serialized)}"/>`
@@ -1203,6 +1368,24 @@ export function applyPartProcessOverrides(modelSettingsXml: string, overrides: S
  * `model_settings.config`. Keyed by objectId + the part's ORDINAL like
  * {@link applyPartProcessOverrides}; the type is shared by every instance of the object.
  */
+export /**
+ * Drop the legacy `volume_type` / `part_type` metadata from a retyped part.
+ *
+ * The importer applies the `subtype` ATTRIBUTE first and then walks the part's metadata, where
+ * either of these calls `set_type` again (`bbs_3mf.cpp:5216` then `:5229-5230`). So a surviving
+ * legacy entry silently OVERRIDES the type the user just chose, and because `type_from_string`
+ * defaults to `MODEL_PART` for an unrecognised string, an old CamelCase value turns a modifier into
+ * printed geometry rather than merely ignoring the change.
+ *
+ * Nothing observed writes these keys (BambuStudio's own writer is commented out at
+ * `bbs_3mf.cpp:8000-8004`, and they appear in 0 of 141 real files), so this is closing the channel
+ * rather than fixing a live defect. It runs only on parts a retype touched: a key we do not write
+ * is still not ours to delete from a file we were not asked to change.
+ */
+function stripLegacyVolumeTypeMetadata(partBlock: string): string {
+  return partBlock.replace(/[ \t]*<metadata\s+key="(?:volume_type|part_type)"[^>]*\/>\n?/g, '')
+}
+
 export function applyPartTypeChanges(modelSettingsXml: string, changes: SceneEditPartTypeChange[]): string {
   const byObjectPart = new Map<number, Map<number, string>>()
   for (const change of changes) {
@@ -1223,14 +1406,14 @@ export function applyPartTypeChanges(modelSettingsXml: string, changes: SceneEdi
         return `<part${partAttrs.replace(/\bsubtype="[^"]*"/, `subtype="${escapeXmlAttribute(subtype)}"`)}>`
       }
       return `<part${partAttrs} subtype="${escapeXmlAttribute(subtype)}">`
-    })
+    }).replace(/<part\b[^>]*>[\s\S]*?<\/part>/g, (partBlock) => stripLegacyVolumeTypeMetadata(partBlock))
   })
 }
 
 /**
  * Apply part-placement changes (move/rotate/scale a part inside its object). The
- * authoritative placement — what BambuStudio and the CLI slicer load into the volume's
- * transformation — is the part's `<component transform>` in the 3D model (12 numbers,
+ * authoritative placement, what BambuStudio and the CLI slicer load into the volume's
+ * transformation, is the part's `<component transform>` in the 3D model (12 numbers,
  * column-major 3x3 + translation), so that is rewritten. The `matrix` metadata in the
  * part's `model_settings.config` block (16 numbers, ROW-major 4x4) is only BambuStudio's
  * source-record (`volume->source.transform`); it is mirrored to the same matrix when
@@ -1329,7 +1512,7 @@ function filamentColourOut(value: string): string {
 /**
  * Per-filament arrays that carry IDENTITY / STRUCTURE (a user choice or the key that drives
  * slice-time re-resolution), not material physics. On a material change these are kept (remapped
- * from the source slot) while every other filament-indexed array is dropped — see
+ * from the source slot) while every other filament-indexed array is dropped: see
  * {@link applyFilamentList}. `filament_settings_id` must stay: it names the new preset the slicer
  * re-derives physics from; `filament_nozzle_map` is a project-level assignment no filament preset
  * would restore.
@@ -1339,14 +1522,26 @@ const FILAMENT_IDENTITY_KEYS = new Set([
   'filament_type',
   'filament_settings_id',
   'filament_ids',
-  'filament_nozzle_map'
+  'filament_nozzle_map',
+  // Says WHAT the material is, not how it prints, so it belongs here rather than with the physics.
+  // It is also the only remaining record that a slot is a support material now that `filament_type`
+  // stores the RAW type: the engine derives the `PLA-S` the user sees from this flag plus
+  // `filament_type` (`PrintConfig.cpp:7569-7638`). Dropping it turned a support slot into an
+  // ordinary PLA in the saved file, where the old derived spelling had at least still said so.
+  'filament_is_support',
+  // Not identity, but it may never be dropped either: `PresetBundle.cpp` reads
+  // `config.option<ConfigOptionFloats>("filament_diameter")->values.size()` with NO null check, so
+  // an absent key is a null dereference and BambuStudio dies opening the project instead of
+  // reporting anything. An absent key and an empty one are not the same thing, and a key the engine
+  // assumes into existence is not optional.
+  'filament_diameter'
 ])
 
 /**
  * Machine-domain arrays that live in `project_settings.config` but are indexed by EXTRUDER (or
  * are machine-level lists), NOT by filament. {@link applyFilamentList} identifies filament-indexed
  * arrays by length, and on a dual-nozzle machine with exactly two filaments every one of these
- * length-2 arrays is indistinguishable from a filament array by length alone — the remap would
+ * length-2 arrays is indistinguishable from a filament array by length alone: the remap would
  * corrupt them on an add/remove and the material-change drop DELETED them (a real save on an H2D
  * stripped `nozzle_diameter`/`physical_extruder_map`/`extruder_type`/`extruder_variant_list`,
  * leaving a project the slicer's machine-switch guard rejects as missing its dual-nozzle
@@ -1358,7 +1553,7 @@ const FILAMENT_IDENTITY_KEYS = new Set([
  * in real projects (`extruder_nozzle_stats`, `extruder_ams_count`, `start_end_points`) and the
  * project-level printer-compatibility declarations. The bare extruder-indexed names are listed;
  * their per-filament override twins use `filament_*` prefixes and stay strippable. An unknown NEW
- * machine key from a future BambuStudio would still be misclassified — the slicer-side same-model
+ * machine key from a future BambuStudio would still be misclassified: the slicer-side same-model
  * topology heal (machine-switch-guard) backstops that by re-authoring the machine block.
  */
 const MACHINE_DOMAIN_ARRAY_KEYS = new Set([
@@ -1389,7 +1584,7 @@ const MACHINE_DOMAIN_ARRAY_KEYS = new Set([
   'machine_min_extruding_rate', 'machine_min_travel_rate',
   'machine_max_jerk_x', 'machine_max_jerk_y', 'machine_max_jerk_z', 'machine_max_jerk_e',
   'machine_max_force_Y', 'machine_bed_mass_Y', 'machine_max_printed_mass',
-  // PrintConfig.cpp init_extruder_option_keys — the bare extruder-indexed names as they appear in
+  // PrintConfig.cpp init_extruder_option_keys: the bare extruder-indexed names as they appear in
   // project_settings (the filament-override twins are `filament_*`-prefixed and stay strippable).
   'nozzle_diameter', 'min_layer_height', 'max_layer_height', 'extruder_offset',
   'retraction_length', 'z_hop', 'retraction_speed', 'retract_lift_above', 'retract_lift_below',
@@ -1399,7 +1594,7 @@ const MACHINE_DOMAIN_ARRAY_KEYS = new Set([
   // Runtime-derived machine maps + project-level printer compatibility (not in the BBS preset
   // lists, but extruder-indexed / machine-identity in real project files).
   'extruder_nozzle_stats', 'extruder_ams_count', 'start_end_points', 'print_compatible_printers',
-  // Per-EXTRUDER flush sizing + nozzle volume types (project keys, not preset keys — see
+  // Per-EXTRUDER flush sizing + nozzle volume types (project keys, not preset keys: see
   // flush-volumes-matrix.ts). On a dual-nozzle machine with two filaments these length-2 arrays
   // are indistinguishable from filament arrays by length, and remapping them swaps or resizes the
   // per-extruder entries: a filament add stretched `flush_multiplier` past the extruder count,
@@ -1413,9 +1608,9 @@ const MACHINE_DOMAIN_ARRAY_KEYS = new Set([
  *
  * To stay resilient to BambuStudio version differences (project_settings carries many
  * parallel filament-indexed arrays we don't enumerate), EVERY top-level array whose
- * length equals the current filament count — except the machine/extruder-domain keys in
+ * length equals the current filament count: except the machine/extruder-domain keys in
  * {@link MACHINE_DOMAIN_ARRAY_KEYS}, which are extruder-indexed and merely length-collide
- * with the filament count on dual-nozzle machines — is remapped by an index map: a desired slot
+ * with the filament count on dual-nozzle machines: is remapped by an index map: a desired slot
  * copies its `sourceIndex` (an existing filament's settings) so new/cloned slots inherit
  * a valid profile, then `filament_colour`/`filament_type` are set from the desired list.
  * The square `flush_volumes_matrix` (count x count) is rebuilt row/column-wise. When the
@@ -1423,20 +1618,20 @@ const MACHINE_DOMAIN_ARRAY_KEYS = new Set([
  * the slicer fills the rest from the filament profiles supplied at slice time.
  *
  * VARIANT EXPANSION (BambuStudio 2.x). On machines with extruder variants (H2D, and X1C's
- * standard/high-flow pair) the numeric filament settings are `filaments x variants` long —
+ * standard/high-flow pair) the numeric filament settings are `filaments x variants` long:
  * slot i owns the V-wide block at i*V, V read from `filament_extruder_variant`'s length.
  * Those arrays get the same treatment block-wise (remap on reorder, drop on material change),
  * but ONLY for keys positively classified as filament-domain (the filament catalog +
- * `filament_extruder_variant` itself, which always survives by remap — it is the layout's
+ * `filament_extruder_variant` itself, which always survives by remap, it is the layout's
  * identity column): an N*V length alone would convict per-plate arrays. A filament-catalog
  * array whose length matches NEITHER width is provably stale (a pre-variant-aware save left
- * it behind) and is dropped so the slicer re-derives it — one re-save heals a diseased file.
+ * it behind) and is dropped so the slicer re-derives it, one re-save heals a diseased file.
  *
  * MATERIAL CHANGE (e.g. ABS -> PETG). Cloning `sourceIndex`'s arrays copies the OLD material's
  * per-filament physics (chamber/plate/nozzle temps, flow, cooling, retraction, ...), so a naive
  * remap leaves the project "PETG by name, ABS by temperature". When any slot's material identity
  * (type or `settingsId`) differs from its source slot, we therefore DROP every non-identity
- * filament array — which also removes the `nozzle_temperature` completeness sentinel. The slicer's
+ * filament array, which also removes the `nozzle_temperature` completeness sentinel. The slicer's
  * {@link ensureEmbeddedProjectSettings} / `ensureFilamentCoverage` (apps/slicer) then re-derives
  * the physics from the kept `filament_settings_id` preset names at slice time, so the new material
  * slices with its own temperatures. This heals only NEW saves (the embedded config the slicer
@@ -1489,12 +1684,12 @@ export function applyFilamentList(projectSettingsJson: string, filaments: SceneE
     const materialChanged = filaments.some((_filament, i) => slotMaterialChanged(i))
     materialChangedBySlot = slotMaterialChanged
     // When the caller resolved the new presets, the old material's physics is REPLACED rather than
-    // dropped — see `authorFilamentPhysics` below. The drop stays for a caller that could not
+    // dropped: see `authorFilamentPhysics` below. The drop stays for a caller that could not
     // resolve them, so nothing regresses.
     const authoringPhysics = materialChanged && filaments.some((filament) => filament.config != null)
     // BambuStudio 2.x VARIANT EXPANSION: on machines with extruder variants (H2D dual-nozzle, and
     // even X1C's standard/high-flow pair) the numeric per-filament settings carry one value per
-    // (filament x variant) — `filament_extruder_variant` is that same layout's identity column, so
+    // (filament x variant): `filament_extruder_variant` is that same layout's identity column, so
     // its length over the filament count gives the block width. A remap/drop that only recognizes
     // `length === oldCount` silently skips every such array, which is how a material switch kept
     // the OLD material's physics: identity keys (N-long) renamed the filament to PETG while the
@@ -1504,18 +1699,18 @@ export function applyFilamentList(projectSettingsJson: string, filaments: SceneE
     const variantCount = variantColumns > oldCount && variantColumns % oldCount === 0 ? variantColumns / oldCount : 1
     for (const [key, value] of Object.entries(record)) {
       if (!Array.isArray(value)) continue
-      // Machine/extruder-domain arrays are indexed by extruder, not filament — on a machine
+      // Machine/extruder-domain arrays are indexed by extruder, not filament, on a machine
       // whose extruder count happens to equal the filament count (2 and 2 on a dual-nozzle
       // H2D) the length test below cannot tell them apart, and remapping or dropping them
       // destroys the project's machine topology. Never touch them here.
       if (MACHINE_DOMAIN_ARRAY_KEYS.has(key)) continue
       // The custom layer print sequences hold filament ids as VALUES (an ordered "print these
-      // slots in this order" list, plus layer-range bounds), not one entry per slot — when a
+      // slots in this order" list, plus layer-range bounds), not one entry per slot: when a
       // sequence's length happens to equal the filament count, the positional remap below would
       // scramble it. They are re-keyed value-wise at the end of this function instead.
       if (key === 'first_layer_print_sequence' || key === 'other_layers_print_sequence') continue
       if (key === 'flush_volumes_matrix') {
-        // One `filaments x filaments` block PER EXTRUDER, not a single square — see
+        // One `filaments x filaments` block PER EXTRUDER, not a single square: see
         // `expectedFlushVolumesMatrixLength`. Remapping only the first block (which is all a
         // square rebuild produces) leaves a dual-nozzle project a block short, and BambuStudio
         // reads the missing block out of bounds and segfaults mid-slice.
@@ -1524,6 +1719,39 @@ export function applyFilamentList(projectSettingsJson: string, filaments: SceneE
           ? value.length / (oldCount * oldCount)
           : 0
         if (sourceBlocks > 0) {
+          // A pair involving a filament the project did not have is SEEDED, never cloned from the
+          // slot the new one was added beside. BambuStudio seeds it from `flush_volumes_vector`
+          // (`update_multi_material_filament_presets`: `i == j ? 0 : filaments[2i] + filaments[2j+1]`,
+          // 140 + 140 = 280 by default) and writes 0 only on the diagonal.
+          //
+          // Cloning read the SOURCE slot's own diagonal for the new pair, which is hard zero, so
+          // adding a material left the print purging NOTHING between it and the slot it was added
+          // beside: the new colour prints contaminated until it clears itself. Worst on a
+          // single-filament project, whose stored matrix is just `["0"]` and whose every cloned
+          // cell was therefore zero. Nothing detected any of it, because the guard here is a length
+          // test and the matrix came out the right length.
+          const flushVector = stringArray(record.flush_volumes_vector)
+          // ALWAYS strings, never the source's cell type. `parse_str_arr` accepts only array and
+          // string elements and returns false on anything else (`Config.cpp:836-860`), so a JSON
+          // NUMBER is fatal whether or not the array is mixed: the loader logs, `break`s out of the
+          // key loop (`:996-1000`) and then returns success (`:1123`), silently dropping every key
+          // ordered after this one. This used to match the source's type, which preserved a numeric
+          // matrix faithfully into a file the engine cannot read. Strings are also what BambuStudio
+          // itself emits for every vector option (`Config.cpp:1512-1523` serialises through a
+          // `vector<string>`), so this is matching the engine rather than choosing a format.
+          const cell = (amount: number): string => String(amount)
+          const seedFor = (row: number, col: number): string => {
+            if (row === col) return cell(0)
+            const unload = Number.parseFloat(flushVector[row * 2] ?? '')
+            const load = Number.parseFloat(flushVector[col * 2 + 1] ?? '')
+            // No usable vector: keep BambuStudio's own default pair rather than invent a number.
+            if (!Number.isFinite(unload) || !Number.isFinite(load)) return cell(280)
+            return cell(unload + load)
+          }
+          // Carried cells are normalised too: a source that arrived numeric must not survive as
+          // numeric just because its value was reachable.
+          const carryCell = (raw: unknown): string | undefined =>
+            raw == null ? undefined : typeof raw === 'number' ? String(raw) : typeof raw === 'string' ? raw : undefined
           const next: unknown[] = []
           for (let extruder = 0; extruder < extruderCount; extruder++) {
             // A retarget that ADDED an extruder has no block for it yet; seed it from the last
@@ -1531,7 +1759,10 @@ export function applyFilamentList(projectSettingsJson: string, filaments: SceneE
             const base = Math.min(extruder, sourceBlocks - 1) * oldCount * oldCount
             for (let row = 0; row < newCount; row++) {
               for (let col = 0; col < newCount; col++) {
-                next.push(value[base + sourceFor(row) * oldCount + sourceFor(col)] ?? '0')
+                const carried = row < oldCount && col < oldCount
+                next.push(carried
+                  ? carryCell(value[base + sourceFor(row) * oldCount + sourceFor(col)]) ?? seedFor(row, col)
+                  : seedFor(row, col))
               }
             }
           }
@@ -1540,7 +1771,7 @@ export function applyFilamentList(projectSettingsJson: string, filaments: SceneE
         continue
       }
       if (key === 'flush_volumes_vector') {
-        // `[unload_i, load_i]` PAIRS, one per filament slot — BambuStudio seeds new matrix cells
+        // `[unload_i, load_i]` PAIRS, one per filament slot: BambuStudio seeds new matrix cells
         // from `filaments[2*i] + filaments[2*j+1]` (PresetBundle::update_multi_material_filament_
         // presets). Its 2N length hides it from the generic remap below, and BambuStudio itself
         // only ever resizes it at the TAIL, so a mid-list remove or reorder must move the pairs
@@ -1553,7 +1784,7 @@ export function applyFilamentList(projectSettingsJson: string, filaments: SceneE
         continue
       }
       // Variant-expanded arrays are handled ONLY for keys we can positively classify as
-      // filament-domain (the filament catalog, plus the layout's own identity column) — unlike the
+      // filament-domain (the filament catalog, plus the layout's own identity column): unlike the
       // N-long path below, an N*V length is too weak a signal on its own (a 4-plate project with
       // 2 filaments x 2 variants would convict per-plate arrays like `wipe_tower_x`).
       // Classified by BambuStudio's OPTION rule, not by length. A length test both convicts and
@@ -1564,11 +1795,20 @@ export function applyFilamentList(projectSettingsJson: string, filaments: SceneE
         && (key === 'filament_extruder_variant' || isFilamentVariantOption(key))
       if (isVariantExpanded) {
         // Slot i owns the V-wide block starting at i*V. The layout's identity column
-        // (`filament_extruder_variant`) must ALWAYS survive by block-remap — losing it breaks the
+        // (`filament_extruder_variant`) must ALWAYS survive by block-remap: losing it breaks the
         // variant topology every other N*V-long key is decoded against.
-        if (key !== 'filament_extruder_variant' && materialChanged) {
-          // Same rule as the N-long arrays below: drop the OLD material's physics wholesale; the
-          // slicer re-derives every column from the kept `filament_settings_id` at slice time.
+        if (key !== 'filament_extruder_variant' && materialChanged && !authoringPhysics) {
+          // Same rule, and the same GATE, as the N-long arrays below: drop the OLD material's
+          // physics only when the caller could not resolve the new presets, and let the slicer
+          // re-derive every column from the kept `filament_settings_id` at slice time.
+          //
+          // The gate used to be missing here, which is not a smaller version of the same bug: a
+          // dropped key is unrecoverable within the save, because `rebindProjectFilamentPhysics`
+          // below only rewrites keys still PRESENT. So an editor save that HAD resolved the presets
+          // still lost every `filament_options_with_variant` key, three of the five completeness
+          // sentinels among them, and wrote a project BambuStudio opens as unnamed default presets.
+          // The N-long keys beside them were re-authored correctly, which is what made the damage
+          // look partial and material-specific rather than variant-specific.
           delete record[key]
           continue
         }
@@ -1582,12 +1822,20 @@ export function applyFilamentList(projectSettingsJson: string, filaments: SceneE
       }
       if (value.length !== oldCount) {
         // A filament-catalog array whose length matches NEITHER the filament count NOR its
-        // variant-expanded width is provably stale — leftovers from an earlier filament set that a
+        // variant-expanded width is provably stale: leftovers from an earlier filament set that a
         // pre-variant-aware save failed to rewrite (production files carry 10 columns beside a
         // 1-entry filament list). No index mapping can read it correctly, so drop it and let the
-        // slicer re-derive from `filament_settings_id`; this is what lets one re-save heal an
-        // already-diseased file. Keys outside the filament catalog (per-plate arrays like
-        // `wipe_tower_x`, unknown domains) are left alone — length alone doesn't convict them.
+        // slicer re-derive from `filament_settings_id`. Keys outside the filament catalog (per-plate
+        // arrays like `wipe_tower_x`, unknown domains) are left alone: length alone doesn't
+        // convict them.
+        //
+        // SCOPED TO THE TUNE CATALOGUE ON PURPOSE, and narrower than what detection judges: the
+        // inspector reads BambuStudio's full filament option list, so a handful of variant-scoped
+        // keys it can flag (`volumetric_speed_coefficients`, `filament_preheat_temperature_delta`)
+        // are invisible here. That is not a gap to close by widening this set. Deleting more of a
+        // user's document during an ORDINARY save is the behind-the-scenes repair this project
+        // deliberately does not do; those keys are rewritten by `restoreFilamentPhysics` when the
+        // user asks for a repair, which `settings-repair-roundtrip.test.ts` pins end to end.
         if (FILAMENT_SETTING_KEYS.has(key) && !FILAMENT_IDENTITY_KEYS.has(key)) delete record[key]
         continue
       }
@@ -1602,7 +1850,7 @@ export function applyFilamentList(projectSettingsJson: string, filaments: SceneE
     }
     // `different_settings_to_system` is `[process, ...filament slots, machine]` (length oldCount+2),
     // so the generic remap above skips it. Rebuild it by hand: each new slot follows its source
-    // slot's record, but a slot whose MATERIAL changed gets a BLANK record — its in-project changes
+    // slot's record, but a slot whose MATERIAL changed gets a BLANK record, its in-project changes
     // belonged to the old material, and the material dialog treats this record as the authoritative
     // "changed within this 3MF" signal, so a stale entry would flag keys the new material never
     // touched.
@@ -1617,13 +1865,13 @@ export function applyFilamentList(projectSettingsJson: string, filaments: SceneE
     // `inherits_group` has the SAME `[process, ...filament slots, machine]` layout and must be
     // rebuilt with it. Leaving it at the OLD width is FATAL, not untidy: the CLI sizes its
     // filament-system-name vector from THIS array (`current_filaments_system_name.resize(size - 2)`)
-    // and then indexes `filament_settings_id` with it, unguarded — so an entry left behind by a
+    // and then indexes `filament_settings_id` with it, unguarded, so an entry left behind by a
     // removed slot makes BambuStudio read past the end of the filament names and SIGSEGV while
     // loading the project, before slicing starts (opaque exit 139). Seen in production: a project
     // taken from 5 filaments to 1 kept 7 entries here and killed every slice of that file.
     //
     // `applyFilamentPresetBindings` also rebuilds this array, but only when at least one slot
-    // resolved a preset — the SIZE invariant has to hold regardless of whether it did.
+    // resolved a preset: the SIZE invariant has to hold regardless of whether it did.
     const inheritsGroup = record.inherits_group
     if (Array.isArray(inheritsGroup) && inheritsGroup.length === oldCount + 2) {
       record.inherits_group = [
@@ -1641,7 +1889,7 @@ export function applyFilamentList(projectSettingsJson: string, filaments: SceneE
   // cloned from the slot it came from. This is what keeps a saved project self-contained: the file
   // carries the material's own temperatures, flow, cooling and retraction rather than only its name,
   // so BambuStudio can bind the slot to a NAMED preset instead of inventing an unnamed one from bare
-  // defaults. Runs INSTEAD of the wholesale drop above, never after it — `rebindProjectFilamentPhysics`
+  // defaults. Runs INSTEAD of the wholesale drop above, never after it: `rebindProjectFilamentPhysics`
   // only rewrites keys that are still present, so a dropped key would stay dropped. It preserves a
   // slot's genuine in-project overrides by contract (`different_settings_to_system`), which is the
   // behaviour a save wants: the user's own tweaks outlive a material change.
@@ -1657,10 +1905,21 @@ export function applyFilamentList(projectSettingsJson: string, filaments: SceneE
 
   // A project whose physics was DROPPED by an older save has no arrays left for
   // `rebindProjectFilamentPhysics` to rewrite (it only touches keys still present), so the values are
-  // written from scratch instead — see `repairs/restore-filament-physics.ts` for why the column width
+  // written from scratch instead: see `repairs/restore-filament-physics.ts` for why the column width
   // has to come from the preset rather than be guessed. This is what makes SAVING the repair for the
   // `filamentPhysics` defect: reopening an affected project and saving restores its materials.
-  if (inspectProjectFilamentPhysics(projectSettingsJson)?.inconsistent === true) {
+  //
+  // Judged on the RECORD THIS PASS HAS BUILT, not on the document that came in. Reading the input
+  // meant a physics defect introduced by this same pass could never be restored by it, and one was:
+  // the variant-scoped drop wrote a project missing three of the five completeness sentinels while
+  // the input was healthy, so this gate saw nothing to do. That specific cause is fixed, but the
+  // gate that hid it was the more general fault, and it is the same rule the bake's output check
+  // follows: judge what was produced.
+  //
+  // Not a widening of what gets repaired. An unchanged pass produces the input, so an already-broken
+  // project behaves exactly as before, and the restore still writes nothing without resolved presets
+  // to write from, which is what keeps the deliberate no-preset drop above intact.
+  if (inspectProjectFilamentPhysics(JSON.stringify(record))?.inconsistent === true) {
     restoreFilamentPhysics(record, filaments.map((filament) => (filament.config as ProcessConfig | null) ?? null))
   }
 
@@ -1678,14 +1937,23 @@ export function applyFilamentList(projectSettingsJson: string, filaments: SceneE
   // Authoritative colour/type from the desired list (overrides the cloned values above).
   record.filament_colour = filaments.map((filament) => filamentColourOut(filament.color))
   const previousTypes = Array.isArray(record.filament_type) ? record.filament_type : []
+  // Written as `SceneEditFilament.type` gives it, which is the DERIVED display type ("PLA-S").
+  //
+  // That spelling is wrong for the engine: `get_filament_temp_type` (`Print.cpp:2703-2710`)
+  // matches raw type names only, so a support slot falls out of the temperature-compatibility
+  // tally and mixing it with a high-temp filament is not reported. Storing the raw type was tried and REVERTED, because
+  // `slotMaterialChanged` compares this same `filament.type` against the stored value: making the
+  // two different spellings marks every support slot as changed on every save, which drops the
+  // material physics and wipes that slot's `inherits_group`. Fixing it means teaching the
+  // COMPARISON to derive both sides, not just changing what is written.
   record.filament_type = filaments.map((filament, i) => filament.type ?? (typeof previousTypes[i] === 'string' ? previousTypes[i] : 'PLA'))
   // Persist the chosen filament preset name per slot so a material PROFILE change (e.g. PLA -> PETG)
-  // survives a save — otherwise `filament_settings_id` keeps the prior preset and the project reopens
+  // survives a save, otherwise `filament_settings_id` keeps the prior preset and the project reopens
   // as the old material (with a name/type mismatch). A slot with no explicit `settingsId` keeps the
   // value carried over from its source slot above.
   // NEVER an empty name. An empty entry resolves to no preset, so BambuStudio mints a
   // project-embedded preset out of its BARE CONFIG DEFAULTS (max volumetric speed 2, flow ratio 1,
-  // `compatible_printers` All) and names it `(<project>.3mf)` — the empty name plus its project
+  // `compatible_printers` All) and names it `(<project>.3mf)`: the empty name plus its project
   // suffix, with `1(<project>.3mf)` for a second one. It then writes that junk preset into the file
   // as a `Metadata/filament_settings_N.config` sidecar and re-embeds it on EVERY later save (see
   // `PresetCollection::get_project_embedded_presets`), so one bad save follows the project forever
@@ -1694,7 +1962,7 @@ export function applyFilamentList(projectSettingsJson: string, filaments: SceneE
   //
   // The remap above only supplies a name when the base HAD a filament list; an editor-born project
   // (`oldCount === 0`) has none, so a slot whose material never resolved to a preset arrived here
-  // with nothing. It inherits the name of the slot its physics were cloned from instead — the same
+  // with nothing. It inherits the name of the slot its physics were cloned from instead, the same
   // `sourceIndex` every other per-filament array is remapped through, so the name and the physics
   // describe one material. The gate below guarantees at least one resolved name exists to fall back
   // to, which is what makes the empty case unreachable rather than merely unlikely.
@@ -1721,9 +1989,9 @@ export function applyFilamentList(projectSettingsJson: string, filaments: SceneE
   }
 
   // `filament_ids` is BambuStudio's BINDING key, and it must describe the same preset as
-  // `filament_settings_id` above. BambuStudio guarantees that by construction — both arrays are
+  // `filament_settings_id` above. BambuStudio guarantees that by construction, both arrays are
   // parallel projections of one selected-preset list (`PresetBundle`: `filament_settings_id` gets
-  // `preset.name`, `filament_ids` gets `preset.filament_id`) — so they cannot drift. Ours could,
+  // `preset.name`, `filament_ids` gets `preset.filament_id`), so they cannot drift. Ours could,
   // because `filament_ids` is an IDENTITY key above and identity keys are cloned from the slot a
   // material came FROM. That is right for a colour or a nozzle pick (user choices worth carrying)
   // and wrong here: the id is derived from the material, so switching a slot's material kept the old
@@ -1735,7 +2003,7 @@ export function applyFilamentList(projectSettingsJson: string, filaments: SceneE
   //
   // Mirrors BambuStudio for the unknown case too: it emplaces `preset.filament_id`, which is `""`
   // when the preset declares none (after the parent-preset fallback), so an unknown id is an EMPTY
-  // entry that keeps the array positional — never a stale value, and never a dropped key.
+  // entry that keeps the array positional, never a stale value, and never a dropped key.
   {
     const previousIds = Array.isArray(record.filament_ids) ? record.filament_ids : []
     const previousIdAt = (index: number): string | null =>
@@ -1752,8 +2020,8 @@ export function applyFilamentList(projectSettingsJson: string, filaments: SceneE
 
   // Scalar filament-INDEX process values (`support_filament` and friends) each name a 1-based slot
   // (0 = "Default": the object's own filament), so a save that renumbers slots must move them like
-  // the parallel arrays above. A value whose slot was removed — or that dangled beyond the old
-  // list — has its key deleted, falling back to the default the way BambuStudio's own delete path
+  // the parallel arrays above. A value whose slot was removed, or that dangled beyond the old
+  // list, has its key deleted, falling back to the default the way BambuStudio's own delete path
   // and the session-side `remapFilamentIndexOverrides` do.
   const slotIdRemap = filamentSlotIdRemap(filaments)
   for (const key of FILAMENT_INDEX_PROCESS_KEYS) {
@@ -1771,7 +2039,7 @@ export function applyFilamentList(projectSettingsJson: string, filaments: SceneE
   // chunks of `[rangeStart, rangeEnd, ...filamentIds]` (BambuStudio's ParameterUtils.cpp). An id
   // whose slot was removed is dropped from every chunk, mirroring BambuStudio's delete handling
   // (`PartPlate::update_first_layer_print_sequence_when_delete_filament`); a file whose chunks
-  // would come out unequal — the flat encoding cannot express that — is left untouched instead.
+  // would come out unequal, the flat encoding cannot express that, is left untouched instead.
   if (Array.isArray(record.first_layer_print_sequence)
     && record.first_layer_print_sequence.length > 0
     && String(record.first_layer_print_sequence[0]) !== '0') {
@@ -1808,6 +2076,33 @@ export function applyFilamentList(projectSettingsJson: string, filaments: SceneE
     const rebuiltSelfIndex = rebuildFilamentSelfIndex(record)
     if (rebuiltSelfIndex) record.filament_self_index = rebuiltSelfIndex
   }
+  // And bring it back to the layout's length whenever THIS save changed the filament count,
+  // whatever the remap looked like.
+  //
+  // Gated on the count, not run unconditionally, because those are different acts. Writing a
+  // correctly sized array for a list we just grew or shrank is AUTHORING: we invalidated the old
+  // one, so leaving it is writing a defect. Conforming an array on a save that changed nothing
+  // would be repairing someone's stored file without being asked, which is the thing
+  // `repairs/index.ts` forbids and `machine-retarget-variant-index.test.ts` pins.
+  //
+  // A remap only describes slots that SURVIVED, so appending a material and removing the last one
+  // both look like the identity and skipped the rebuild above, while `filament_extruder_variant`
+  // (a variant-scoped key) grew or shrank with the filament list. `filament_self_index` is in
+  // neither the filament catalog nor the variant option set, so no other branch of this loop
+  // resizes it either: it simply fell through at its old length.
+  //
+  // BambuStudio REFUSES TO OPEN the result. `load_config_file_config` throws "Invalid configuration
+  // file" when `filament_extruder_variant.size() != filament_self_index.size()`, so an ordinary
+  // Add-material wrote a project the user could no longer open in Studio. The CLI rebuilds the array
+  // itself before slicing, which is exactly why this stayed invisible: the file still sliced here.
+  //
+  // Same implementation the parse-side inspection and the staged repair use, so a file cannot be
+  // authored into a shape one of them would call broken. Null means unreconstructable, which leaves
+  // the old value for the inspection to flag rather than writing a plausible wrong one.
+  if (oldCount > 0 && newCount !== oldCount) {
+    const conformedSelfIndex = repairFilamentSelfIndex(record)
+    if (conformedSelfIndex) record.filament_self_index = conformedSelfIndex
+  }
 
   return JSON.stringify(record)
 }
@@ -1816,13 +2111,13 @@ export function applyFilamentList(projectSettingsJson: string, filaments: SceneE
  * Persist the editor's per-material dual-nozzle assignment into `project_settings.config`.
  *
  * `filament_nozzle_map` is written **verbatim** as each slot's runtime nozzle id (0 = right,
- * 1 = left) — the same nozzle-id space the index parser (`extractNozzleMapping`) reads back and
+ * 1 = left), the same nozzle-id space the index parser (`extractNozzleMapping`) reads back and
  * the slicer writes. Per the nozzle-mapping invariant, do NOT remap it through
  * `physical_extruder_map`: a second inversion mis-assigns nozzles on non-identity machines (the
  * H2D's `["1","0"]`) and fails dual-nozzle offset calibration (printer error 0300-4010).
  *
  * `extruder_nozzle_stats` is rebuilt so an extruder reads "active" iff a filament is assigned to
- * it — otherwise a stale single-active reading short-circuits `extractNozzleMapping` and forces
+ * it, otherwise a stale single-active reading short-circuits `extractNozzleMapping` and forces
  * every filament onto one nozzle (which is exactly how a save silently reverts to the old nozzle).
  * The rebuild is coarse (one `Standard` bucket per extruder) and only runs when the edit assigns
  * EVERY slot a nozzle, so the active/inactive set is complete; the slicer regenerates the precise
@@ -1867,15 +2162,15 @@ export function applyNozzleAssignmentToProjectSettings(projectSettingsJson: stri
   })
   record.filament_nozzle_map = nozzleMap
   // `extruder_nozzle_stats` is `VolumeType#count` per EXTRUDER, and the count IS how many filaments
-  // that extruder feeds — BambuStudio's own save of a 3-filament dual-nozzle project reads
+  // that extruder feeds: BambuStudio's own save of a 3-filament dual-nozzle project reads
   // ["Standard#2","Standard#1"] for a 2/1 split, matching this. It must be rewritten whenever the
   // assignment changes: our index parser treats an extruder with count 0 as inactive and
   // short-circuits every filament onto the other nozzle, so a stale value makes a reassignment
   // silently fail to persist (pinned in `apps/api/src/lib/three-mf.test.ts`).
   //
   // The corruption seen in production came from the RETARGET recomputing this from
-  // `extruder_max_nozzle_count` instead — that is a different quantity (["1","1"] on the very
-  // machine whose stats are ["Standard#2","Standard#1"]) — and it now preserves the value instead.
+  // `extruder_max_nozzle_count` instead, that is a different quantity (["1","1"] on the very
+  // machine whose stats are ["Standard#2","Standard#1"]), and it now preserves the value instead.
   if (filaments.every((filament) => filament.nozzleId != null)) {
     record.extruder_nozzle_stats = extruderUsage.map((count) => `Standard#${count}`)
   }
@@ -1928,7 +2223,7 @@ function upsertXmlIntAttribute(attrs: string, key: string, value: number): strin
  * The 1-based old-slot → new-slot map a desired filament list implies. `sourceIndex` names the
  * 0-based old slot each new slot was seeded from (null means "same slot"); the FIRST new slot
  * referencing an old slot wins, since kept slots precede cloned adds in the desired list. An old
- * slot with no entry was removed by this save — consumers drop or default references to it.
+ * slot with no entry was removed by this save: consumers drop or default references to it.
  */
 export function filamentSlotIdRemap(filaments: SceneEditFilament[]): Map<number, number> {
   const remap = new Map<number, number>()
@@ -1941,7 +2236,7 @@ export function filamentSlotIdRemap(filaments: SceneEditFilament[]): Map<number,
 
 /**
  * True when the remap moves nothing: every kept slot keeps its number. A pure tail shrink counts
- * as identity — a dangling reference above the new count is clamped by each consumer (BambuStudio
+ * as identity, a dangling reference above the new count is clamped by each consumer (BambuStudio
  * reads an out-of-range paint state / extruder as unpainted/default), so the whole-archive mesh
  * rewrites gated on this stay reserved for saves that actually permute slots.
  */
@@ -1956,7 +2251,7 @@ export function isIdentityFilamentSlotRemap(remap: ReadonlyMap<number, number>):
  * Re-key every 1-based filament reference in `model_settings.config` metadata: the part/object
  * `extruder` assignments plus the per-object/per-part filament-index process overrides
  * (`support_filament` and friends). A reference whose material was removed falls back the way
- * BambuStudio's delete path does — `extruder` to material 1 (a part must have SOME material), the
+ * BambuStudio's delete path does: `extruder` to material 1 (a part must have SOME material), the
  * process keys to absent (their 0/"Default" state, meaning the object's own filament).
  */
 function remapModelSettingsFilamentRefs(modelSettingsXml: string, remap: ReadonlyMap<number, number>): string {
@@ -2025,10 +2320,10 @@ export function applyTrianglePaintToModelEntry(
  */
 /**
  * Map each `SceneEdit.repairedObjectIds` root object to the entry + mesh-carrying object ids that
- * actually hold its geometry: `entryPath -> {mesh objectId}`. Mirrors {@link resolvePartPaintByEntry}
- * — a Bambu project keeps each object's mesh in its own `3D/Objects/*.model`, so the id the editor
+ * actually hold its geometry: `entryPath -> {mesh objectId}`. Mirrors {@link resolvePartPaintByEntry},
+ * a Bambu project keeps each object's mesh in its own `3D/Objects/*.model`, so the id the editor
  * marked is a root that references the real mesh objects through `<components>`. An object with an
- * inline mesh (no components — e.g. a from-scratch scaffold) carries its own id in the root entry.
+ * inline mesh (no components: e.g. a from-scratch scaffold) carries its own id in the root entry.
  */
 export function resolveRepairMeshesByEntry(baseModelXml: string, repairedObjectIds: readonly number[]): Map<string, Set<number>> {
   const byEntry = new Map<string, Set<number>>()
@@ -2155,7 +2450,7 @@ export function mergeCustomGcodePerLayer(
  * Re-key the 1-based filament ids inside a `custom_gcode_per_layer.xml` document after a save that
  * renumbers the filament slots.
  *
- * Only tool-change layers (`type="2"`) reference a material — their `extruder` attribute is the
+ * Only tool-change layers (`type="2"`) reference a material, their `extruder` attribute is the
  * filament the print switches to. A change targeting a removed material is dropped outright,
  * as BambuStudio's delete path does (`Plater::on_filaments_delete` removes the ToolChange item).
  * Other layer types keep their `extruder` verbatim: a pause writes a placeholder `extruder="1"`
@@ -2205,7 +2500,7 @@ export function serializeBrimEarPoints(brimEars: SceneEditObjectBrimEars[], mode
 /**
  * The ordered `project_settings.config` rewrites a SceneEdit calls for: the filament set
  * (add/remove materials) and per-slot dual-nozzle assignment, the plate type, per-plate
- * prime-tower corners, and — last, so authoring always wins first — the staged settings repairs.
+ * prime-tower corners, and, last, so authoring always wins first, the staged settings repairs.
  * Empty when the edit touches none of them.
  */
 export function buildProjectSettingsTransforms(edit: SceneEdit): Array<(json: string) => string> {
@@ -2238,7 +2533,7 @@ export function buildProjectSettingsTransforms(edit: SceneEdit): Array<(json: st
 /**
  * Apply the settings-level shared repairs to a `project_settings.config` document: flush sizing
  * (`flush_volumes_matrix` + `flush_multiplier`), `filament_self_index`, `filament_ids`, and
- * `inherits_group` — each defect's single
+ * `inherits_group`, each defect's single
  * repair implementation from `repairs/`, so detection and repair can never disagree. Every step is
  * inspect-gated, so a healthy document rides through byte-identical. `inherits_group` runs last
  * because it reads the filament slot count the other steps do not change. The model_settings half
@@ -2318,7 +2613,11 @@ export function applyGlobalProcessOverrides(projectSettingsJson: string, overrid
   }
   if (!parsed || typeof parsed !== 'object') return projectSettingsJson
   const record = parsed as Record<string, unknown>
-  for (const [key, value] of Object.entries(overrides)) record[key] = value
+  // A cleared numeric field arrives as "", which BambuStudio's scalar deserialisers fail on, and the
+  // resulting throw abandons every key it had not yet applied (`settings-value-guard.ts` has the
+  // full trace). Dropping loses nothing: an empty value says only that the box is empty, and
+  // omitting the override leaves the setting at whatever it already was.
+  for (const [key, value] of Object.entries(dropEngineHostileOverrides(overrides))) record[key] = value
   return JSON.stringify(record)
 }
 
@@ -2340,8 +2639,8 @@ function applyProjectPlateType(projectSettingsJson: string, plateType: string): 
 /**
  * Write the editor's purge volumes into `flush_volumes_matrix` and the mode's multiplier key.
  *
- * The edit is checked against the topology of the document it is landing in — the filament set
- * this very bake just wrote — and DROPPED if it does not match, leaving the matrix
+ * The edit is checked against the topology of the document it is landing in, the filament set
+ * this very bake just wrote, and DROPPED if it does not match, leaving the matrix
  * {@link applyFilamentList} already remapped. That is deliberate: a matrix authored for a
  * different material list describes purges between filaments that no longer exist, and forcing it
  * to fit would either scramble the numbers or write the out-of-bounds shape that segfaults the

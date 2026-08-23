@@ -3,7 +3,7 @@
  *
  * Used from BOTH contexts that tessellate STEP in the browser: the import-staging worker (the normal
  * path) and the main-thread fallback in `localStepImport.ts`. Module state is per-context, so each
- * keeps its own instance — which is what we want: the worker's stays warm across imports, and the
+ * keeps its own instance, which is what we want: the worker's stays warm across imports, and the
  * fallback only ever loads if a worker was unavailable.
  *
  * Two things this exists to get right, both easy to lose:

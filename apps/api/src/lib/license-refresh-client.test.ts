@@ -18,7 +18,7 @@ const lifetime = { expiresAt: null, updatesUntil: 1_800_000_000, edition: 'comme
 const community = { expiresAt: null, updatesUntil: null, edition: 'community', valid: true }
 const unlicensed = { expiresAt: null, updatesUntil: null, edition: null, valid: false }
 
-test('a subscription key refreshes on the timer — its run window depends on it', () => {
+test('a subscription key refreshes on the timer, its run window depends on it', () => {
   assert.equal(shouldContactVendor(subscription, false), true)
   assert.equal(shouldContactVendor(subscription, true), true)
 })

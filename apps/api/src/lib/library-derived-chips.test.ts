@@ -38,7 +38,7 @@ test('parse returns null for missing or malformed json', () => {
 
 test('parse returns null once the file has a NEW version, at the same parser version', () => {
   // The real defect: a settings repair persists a new version, `derivedChipsVersion` still equals
-  // the current constant, and the list kept serving the pre-repair chips — so a repaired project
+  // the current constant, and the list kept serving the pre-repair chips, so a repaired project
   // went on advertising `needsSettingsRepair` and the repair read as broken.
   const stale = serializeDerivedChips({ ...sample, needsSettingsRepair: true, settingsRepairReasons: ['variantIndex'] }, PATH_V1)
   assert.equal(parseDerivedChips(stale, LIBRARY_DERIVED_CHIPS_VERSION, PATH_V2), null)

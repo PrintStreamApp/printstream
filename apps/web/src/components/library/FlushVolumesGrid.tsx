@@ -1,5 +1,5 @@
 /**
- * The N x N purge-volume grid for one extruder — BambuStudio's "Flushing volumes" table.
+ * The N x N purge-volume grid for one extruder: BambuStudio's "Flushing volumes" table.
  *
  * Rows are the filament being swapped OUT, columns the one being swapped IN, which is the same
  * orientation BambuStudio uses and the same order `flush_volumes_matrix` stores (row-major, row =
@@ -8,7 +8,7 @@
  *
  * Its own file because the dialog around it (tabs, multiplier, calculate, repair notice) is a
  * separate concern from rendering the table, and the table is the part that has to survive a
- * 375px viewport — it scrolls inside its own container so a 16-material project never makes the
+ * 375px viewport, it scrolls inside its own container so a 16-material project never makes the
  * page scroll sideways.
  */
 import { Box, Input, Sheet, Stack, Tooltip, Typography } from '@mui/joy'
@@ -90,7 +90,7 @@ export function FlushVolumesGrid({ filaments, values, onChange, disabled }: {
                     variant="soft"
                     sx={{ borderRadius: 'sm', height: 32, display: 'grid', placeItems: 'center', opacity: 0.5 }}
                   >
-                    <Typography level="body-xs" textColor="text.tertiary">—</Typography>
+                    <Typography level="body-xs" textColor="text.tertiary">: </Typography>
                   </Sheet>
                 )
               }

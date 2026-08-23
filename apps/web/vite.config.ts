@@ -24,7 +24,7 @@ export default defineConfig(({ command, mode }) => {
     optimizeDeps: {
       // The model-studio mesh-parse web worker imports three + three-stdlib. Without
       // pre-bundling, dev serves their raw ESM graph (hundreds of modules) into the
-      // worker context, which stalls the worker from ever starting here — so the STL/STEP
+      // worker context, which stalls the worker from ever starting here, so the STL/STEP
       // preview hangs until the worker-task timeout falls back to a slow main-thread
       // parse. Pre-bundling them makes the worker load one optimized chunk.
       include: ['three', 'three-stdlib']
@@ -135,13 +135,13 @@ export default defineConfig(({ command, mode }) => {
       },
       // When the dev server runs from source behind a TLS-terminating reverse proxy
       // (e.g. cloudflared → tunnel.printstream.example.com), Vite's host check would reject the
-      // proxied Host — allow it via VITE_DEV_ALLOWED_HOSTS (comma-separated).
+      // proxied Host, allow it via VITE_DEV_ALLOWED_HOSTS (comma-separated).
       allowedHosts: env.VITE_DEV_ALLOWED_HOSTS
         ? env.VITE_DEV_ALLOWED_HOSTS.split(',').map((host) => host.trim()).filter(Boolean)
         : undefined,
       // HMR is left to Vite's client inference rather than a forced host/port: the client dials the
-      // SAME origin that served the page — ws://localhost:5173 for local access and
-      // wss://<proxy-host>(:443) through the tunnel — so BOTH access paths get HMR. The old
+      // SAME origin that served the page, ws://localhost:5173 for local access and
+      // wss://<proxy-host>(:443) through the tunnel, so BOTH access paths get HMR. The old
       // VITE_DEV_HMR_HOST → { host, protocol:'wss', clientPort:443 } override fixed the tunnel but
       // broke localhost, because one static socket target can't serve both.
       fs: {
@@ -152,7 +152,7 @@ export default defineConfig(({ command, mode }) => {
       // requests that follow an aborted large response (see the measurements in devApiProxy.ts).
       // Upgrades never reach a connect middleware, so these two entries stay here.
       // Target is overridable so a second dev web server can be pointed at a
-      // second API — running one of each on spare ports is how you exercise
+      // second API: running one of each on spare ports is how you exercise
       // in-progress API changes without restarting the one you are using.
       proxy: {
         '/api/bridge-runtime/connect': { target: `ws://localhost:${apiPort}`, ws: true },

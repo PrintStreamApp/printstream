@@ -1,7 +1,7 @@
 /**
  * Slicer engines: which Bambu Studio versions this deployment can slice with.
  *
- * Self-hosted only, and that is a tenancy rule rather than a product one — the
+ * Self-hosted only, and that is a tenancy rule rather than a product one: the
  * slicer is shared by every workspace, so on the cloud one admin's removal would
  * break slicing for everyone else. The API refuses there too; this just avoids
  * offering a control that would 404.
@@ -21,7 +21,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '../lib/apiClient'
 import { ProgressBar } from '../components/ProgressBar'
 
-/** "1.7 GB" — a byte count tells an operator nothing about whether it fits. */
+/** "1.7 GB", a byte count tells an operator nothing about whether it fits. */
 function formatSize(bytes: number): string {
   const gb = bytes / 1_000_000_000
   return gb >= 1 ? `${gb.toFixed(1)} GB` : `${Math.round(bytes / 1_000_000)} MB`
@@ -73,7 +73,7 @@ export function SlicerEnginesSection({ canManage }: { canManage: boolean }) {
   }
 
   if (data && !data.available) {
-    // "Cannot tell", never "nothing installed" — see the response contract.
+    // "Cannot tell", never "nothing installed": see the response contract.
     return (
       <Alert color="neutral" variant="soft">
         The slicer is not reachable right now, so its engines cannot be listed.
@@ -126,14 +126,14 @@ function EngineCard({ engine, isDefault, canManage, busy, onChange }: {
             <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
               <Typography level="title-sm">{engine.label}</Typography>
               {isDefault ? <Chip size="sm" variant="soft" color="primary">Default</Chip> : null}
-              {/* Installable, never chosen automatically — Bambu ships these as
+              {/* Installable, never chosen automatically: Bambu ships these as
                   pre-releases and their own file-version refusal tells users a
                   project should come from a stable build. */}
               {engine.prerelease ? <Chip size="sm" variant="soft" color="warning">Beta</Chip> : null}
             </Stack>
             <Typography level="body-xs" textColor="text.tertiary">
               {engine.installed
-                ? `Installed — about ${formatSize(engine.installBytes)} on disk`
+                ? `Installed: about ${formatSize(engine.installBytes)} on disk`
                 : `${formatSize(engine.downloadBytes)} download, about ${formatSize(engine.installBytes)} on disk`}
             </Typography>
           </Stack>
@@ -178,7 +178,7 @@ function EngineCard({ engine, isDefault, canManage, busy, onChange }: {
             />
             <Typography level="body-xs" textColor="text.tertiary">
               {engine.status?.label}
-              {engine.status?.fraction !== undefined ? ` — ${Math.round(engine.status.fraction * 100)}%` : ''}
+              {engine.status?.fraction !== undefined ? `: ${Math.round(engine.status.fraction * 100)}%` : ''}
             </Typography>
           </Stack>
         ) : null}

@@ -1,32 +1,33 @@
 /**
- * Filament-physics REBIND for a machine retarget — the data half of BambuStudio's machine-switch
+ * Filament-physics REBIND for a machine retarget: the data half of BambuStudio's machine-switch
  * semantics. When BambuStudio switches printers, `PresetBundle::update_compatible` re-selects
  * every filament preset by ALIAS (the machine-agnostic family name, "Bambu PETG HF") with top
  * priority, so the effective per-filament values become the NEW machine variant's; only the
  * user's own recorded overrides survive. Our save-side retarget rewrote the machine topology but
  * carried the per-filament numeric columns forward verbatim, leaving the OLD variant's values
- * baked under the new machine — "fossils" that read as phantom "changed vs preset" markers ever
+ * baked under the new machine: "fossils" that read as phantom "changed vs preset" markers ever
  * after (production case: X1C's engine-default `pre_start_fan_time` 0 flagged against H2D's
  * stock 2 forever).
  *
  * Contract:
  * - Only keys PRESENT in the record are rewritten. An absent key already means "the preset's
- *   value at load", which re-derives for the new machine on its own — writing it would only
+ *   value at load", which re-derives for the new machine on its own: writing it would only
  *   grow the file.
  * - A slot's key recorded in `different_settings_to_system` is a genuine user override: its OLD
  *   value is preserved (broadcast to the new variant width), never replaced by the preset.
  * - A present key the new preset does not define drops for non-overridden slots (absence =
- *   preset default) — kept only while some slot's override needs the column to exist.
+ *   preset default): kept only while some slot's override needs the column to exist.
  * - Column layout follows the RETARGETED record: `filaments x variants`, the variant width read
  *   from `filament_extruder_variant` (which the machine retarget has already rebuilt for the new
  *   machine). Old values are read variant-aware from whatever width they had.
  *
- * Pure — a parsed record + resolved preset configs in, a new record out. The API resolves the
+ * Pure, a parsed record + resolved preset configs in, a new record out. The API resolves the
  * rebind targets (name/alias matching + the slicer's profile resolver) in
  * `apps/api/src/lib/save-retarget.ts`; this module never fetches.
  */
 import { canonicalBambuModelKey } from './bambu-model-keys.js'
 import { filamentKeyWidth, filamentVariantsPerSlot } from './variant-options.js'
+import { filamentIdForPresetName } from './repairs/filament-ids.js'
 import { filamentSettingsCatalog, FILAMENT_SETTING_KEYS, isFilamentIdentitySettingKey } from './filament-settings.js'
 import { FILAMENT_PRESET_DEFAULTS } from './generated/preset-options.generated.js'
 import type { ProcessConfig } from './process-settings.js'
@@ -35,16 +36,23 @@ import { extractFilamentOverriddenKeys } from './three-mf-project-config.js'
 /** How one filament slot rebinds on the new machine. */
 export interface FilamentSlotRebind {
   /**
-   * The resolved (flattened) config of the preset this slot rebinds to on the NEW machine —
+   * The resolved (flattened) config of the preset this slot rebinds to on the NEW machine:
    * null when no rebind target resolved, which leaves the slot's values untouched.
    */
   config: ProcessConfig | null
-  /** The rebound preset name persisted into `filament_settings_id`; null keeps the current name. */
+  /**
+   * The rebound preset name persisted into `filament_settings_id`; null keeps the current name.
+   *
+   * Setting it also rewrites the slot's `filament_ids` entry, derived from this name. The two
+   * describe one preset and BambuStudio binds on the id, so they are written together here rather
+   * than asked of each caller: a caller that renamed and forgot the id is exactly how slice-time
+   * preset authoring drifted them apart.
+   */
   settingsId?: string | null
 }
 
 /**
- * The machine-agnostic family name of a Bambu filament preset — everything before the
+ * The machine-agnostic family name of a Bambu filament preset, everything before the
  * ` @<printer>` suffix ("Bambu PETG HF @BBL X1C" -> "Bambu PETG HF"). This is the preset's
  * `alias` in BambuStudio's own profile JSONs, which its machine switch re-selects by.
  */
@@ -64,21 +72,21 @@ function scalarAt(value: unknown, index: number): string | null {
 }
 
 /**
- * Persist per-material tune-dialog overrides into a project's `project_settings.config` — the
+ * Persist per-material tune-dialog overrides into a project's `project_settings.config`: the
  * save-side counterpart of the slice path's `settingOverrides` collapse ("Save in this 3MF" was
  * previously a session-only override that vanished on save/reopen). For every overridden key the
  * whole column set is written (a per-filament key's array must cover every slot): the overridden
  * slot takes the override, other slots keep their existing value, and slots with neither fall
- * back to their preset's resolved value — a key that STILL cannot cover every slot is skipped
+ * back to their preset's resolved value, a key that STILL cannot cover every slot is skipped
  * whole rather than written partially (a short/blank column mis-columns every reader).
  *
- * Every written key is also appended to the slot's `different_settings_to_system` record — the
+ * Every written key is also appended to the slot's `different_settings_to_system` record: the
  * durable "this is a user override" marker that `rebindProjectFilamentPhysics` preserves across a
  * later machine retarget. Without the record a retarget could not tell a tune edit from a fossil
  * and would rebind it away.
  *
  * Pure; the caller (API save route) resolves `slotConfigs` with the slicer. Positions are 1-based
- * SAVED slot positions — the caller emits them post-renumber, never session ids.
+ * SAVED slot positions: the caller emits them post-renumber, never session ids.
  */
 export function applyFilamentSlotOverrides(
   record: Record<string, unknown>,
@@ -95,7 +103,7 @@ export function applyFilamentSlotOverrides(
   if (positions.length === 0) return record
 
   // Variants the PROJECT declares. How many columns a given key actually gets is decided per option
-  // below — this is only the ceiling for the ones that are variant-scoped.
+  // below, this is only the ceiling for the ones that are variant-scoped.
   const variantCount = filamentVariantsPerSlot(record, identityCount)
 
   const next: Record<string, unknown> = { ...record }
@@ -123,7 +131,7 @@ export function applyFilamentSlotOverrides(
       const width = filamentKeyWidth(key, variantCount)
       // Read the slot's OWN COLUMN VECTOR, not a single scalar. Collapsing the slot to column 0 and
       // then repeating it across the variants destroyed every later column: BambuStudio stores
-      // genuinely different values per variant (`filament_max_volumetric_speed` is ["25","40"] —
+      // genuinely different values per variant (`filament_max_volumetric_speed` is ["25","40"]:
       // Standard, High Flow), so the High Flow value came back rewritten to the Standard one and
       // BambuStudio reported it as the user's own change.
       const existingColumn = (variant: number): string | null =>
@@ -136,7 +144,7 @@ export function applyFilamentSlotOverrides(
           ?? existingColumn(variant)
           ?? scalarAt(presetValue, variant)
           // Only column 0 may stand in for a missing column, and only from the SAME source that
-          // supplied it — never as a way to invent a variant nobody specified.
+          // supplied it, never as a way to invent a variant nobody specified.
           ?? (variant === 0 ? scalarAt(override, 0) ?? scalarAt(presetValue, 0) : null)
       if (column(0) == null) {
         complete = false
@@ -197,7 +205,7 @@ export interface FilamentRebindSelection {
  * for that machine (preferring one matching the target machine preset's nozzle token), else nothing
  * (the slot keeps its values).
  *
- * Pure selection only — resolving each chosen preset's CONFIG is the caller's job, because the two
+ * Pure selection only: resolving each chosen preset's CONFIG is the caller's job, because the two
  * hosts reach it differently (the api through the slicer + its workspace preset files, the browser
  * through the anonymous resolve endpoint). Returns null when the record has no usable slot list,
  * which callers treat as "nothing to rebind".
@@ -259,7 +267,7 @@ export function rebindProjectFilamentPhysics(
     Array.isArray(record.filament_type) ? record.filament_type.length : 0
   )
   // Defensive: the caller derives `slots` from the same record, so a mismatch means the record
-  // changed underneath — leave it alone rather than mis-column it.
+  // changed underneath: leave it alone rather than mis-column it.
   if (identityCount === 0 || slots.length !== identityCount) return record
   if (slots.every((slot) => slot.config == null && slot.settingsId == null)) return record
 
@@ -272,7 +280,7 @@ export function rebindProjectFilamentPhysics(
     if (!FILAMENT_SETTING_KEYS.has(key) || isFilamentIdentitySettingKey(key)) continue
     const value = record[key]
     if (typeof value !== 'string' && !Array.isArray(value)) continue
-    // How wide this option is ALLOWED to be here — from BambuStudio's per-option rule, never from
+    // How wide this option is ALLOWED to be here, from BambuStudio's per-option rule, never from
     // one number applied to every key. Writing a per-slot key at variant width is what made a
     // 3-material project reopen with 6 (see `variant-options.ts`).
     const width = filamentKeyWidth(key, variantCount)
@@ -289,7 +297,7 @@ export function rebindProjectFilamentPhysics(
       const presetValue = slots[slot]?.config?.[key]
       let slotColumns: string[] | null
       if (overriddenBySlot[slot]!.has(key)) {
-        // Genuine user override — survives the machine switch, PER COLUMN. It used to take the
+        // Genuine user override: survives the machine switch, PER COLUMN. It used to take the
         // slot's first column and repeat it across the variants, which silently rewrote every later
         // variant to the first one: a slot that declared `filament_max_volumetric_speed` as changed
         // came back ["25","25"] where BambuStudio had ["25","40"] (Standard, High Flow), and
@@ -300,8 +308,8 @@ export function rebindProjectFilamentPhysics(
           : null
       } else if (presetValue != null) {
         // Rebind to the new variant's value. Preset arrays already carry per-variant columns.
-        // Per COLUMN, and never by repeating column 0. The variants genuinely differ —
-        // BambuStudio writes `filament_max_volumetric_speed: ["25","40"]` (Standard, High Flow) —
+        // Per COLUMN, and never by repeating column 0. The variants genuinely differ,
+        // BambuStudio writes `filament_max_volumetric_speed: ["25","40"]` (Standard, High Flow),
         // so a preset that spells out only the first column used to overwrite High Flow with the
         // Standard value, and BambuStudio then reported it as the user's own change on a project
         // that had merely been re-saved. A column the preset does not supply keeps what the PROJECT
@@ -312,19 +320,19 @@ export function rebindProjectFilamentPhysics(
             ?? scalarAt(presetValue, 0)
             ?? '')
       } else {
-        // The new preset does not define the key, so the slot takes the OPTION'S DEFAULT — which is
+        // The new preset does not define the key, so the slot takes the OPTION'S DEFAULT, which is
         // what BambuStudio itself stores for an unset value (its own save has
         // `pressure_advance: ["0.02","0.02","0.02"]`, `ironing_fan_speed: ["-1","-1","-1"]`).
         //
         // This used to DROP the key instead, reasoning that absence equals the preset default at
         // load. It does not: BambuStudio reads a missing filament key as a deviation and mints a
-        // `(<project>.3mf)` preset rather than binding the user's own. MEASURED — nine keys the
+        // `(<project>.3mf)` preset rather than binding the user's own. MEASURED: nine keys the
         // resolver never returns were written by the repair and deleted again here, and the slot
         // would not bind until they survived. Filling with the DEFAULT rather than keeping the old
         // value preserves what dropping was actually for: the previous material's physics still
         // must not linger after a material change.
-        // WHICH absence is this? A slot with NO config at all was never touched — the caller is
-        // re-authoring a sibling — and its values must stand: "a save must not quietly normalise
+        // WHICH absence is this? A slot with NO config at all was never touched, the caller is
+        // re-authoring a sibling, and its values must stand: "a save must not quietly normalise
         // settings the user did not touch" is a load-bearing invariant, pinned by
         // `bake-documents.filamentSettingsId.test.ts`. Only a slot that HAS a config (its material
         // changed) and simply lacks this key falls to the option default, so the previous material's
@@ -334,7 +342,7 @@ export function rebindProjectFilamentPhysics(
             ? Array.from({ length: width }, (_unused, variant) => scalarAt(value, slot * oldWidth + variant) ?? oldScalar)
             : null
         } else {
-          // Same default source as the authoring pass — BambuStudio's PrintConfig default for the
+          // Same default source as the authoring pass: BambuStudio's PrintConfig default for the
           // option, falling back to the tune dialog's narrower catalogue. Using only the catalogue
           // here left preset options it does not list (`filament_extruder_compatibility`) with an
           // empty value, which the drop-vote below then discarded entirely.
@@ -352,7 +360,7 @@ export function rebindProjectFilamentPhysics(
       columns.push(slotColumns)
     }
     if (!anyColumn) {
-      // No slot has a preset value or an override for this key — drop it wholesale.
+      // No slot has a preset value or an override for this key: drop it wholesale.
       delete next[key]
       continue
     }
@@ -361,10 +369,26 @@ export function rebindProjectFilamentPhysics(
 
   const settingsIds = Array.isArray(record.filament_settings_id) ? [...record.filament_settings_id] : null
   if (settingsIds) {
+    // The NAME and the ID are one fact about a slot, so they are written together, here, from the
+    // same input. BambuStudio binds a slot on `filament_ids` and shows `filament_settings_id`, so a
+    // slot reading "Bambu PLA Basic" while carrying PETG's `GFG02` makes it fabricate a
+    // defaults-only `(<project>.3mf)` preset instead of opening the material.
+    //
+    // They used to have two producers: this function renamed and never touched the id, so slice-time
+    // preset authoring drifted them apart in the very project it hands the engine and preserves for
+    // "Slice again". Deriving the id here rather than taking it from the caller is what makes the
+    // drift inexpressible for the next caller too.
+    const ids = Array.isArray(record.filament_ids) ? record.filament_ids.map((entry) => (typeof entry === 'string' ? entry : '')) : null
     slots.forEach((slot, index) => {
-      if (slot.settingsId) settingsIds[index] = slot.settingsId
+      if (!slot.settingsId) return
+      settingsIds[index] = slot.settingsId
+      // Only a RENAME owns the id. An unknown preset writes EMPTY, which is what BambuStudio writes
+      // for an id it does not recognise; keeping the old one would be a confident lie about which
+      // material the slot is, and that lie is the whole defect.
+      if (ids) ids[index] = filamentIdForPresetName(slot.settingsId) ?? ''
     })
     next.filament_settings_id = settingsIds
+    if (ids) next.filament_ids = ids
   }
   return next
 }

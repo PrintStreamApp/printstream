@@ -73,7 +73,7 @@ test('the colour formula reproduces BambuStudio exactly', () => {
   }
 })
 
-test('black to white lands on 560, not 559 — the port keeps BambuStudio float precision', () => {
+test('black to white lands on 560, not 559: the port keeps BambuStudio float precision', () => {
   // The regression this guards: computed in double, the luminance of white is 0.999... and the
   // result truncates one low. It is the most common two-material pairing there is, so an
   // off-by-one here is the first number a user would compare against Bambu Studio.
@@ -166,7 +166,7 @@ test('a multi-colour filament is priced by its worst pairing', () => {
   const multi = calcFlushVolumesMatrix({
     filaments: [
       { colors: [rgb('#FFFFFF')], isSupport: false },
-      // Same slot, but it also carries black — the swap must be priced for the black.
+      // Same slot, but it also carries black: the swap must be priced for the black.
       { colors: [rgb('#FFFFFE'), rgb('#000000')], isSupport: false }
     ],
     minFlushVolumes: [0, 0], datasetCode: 0, dataset: null
@@ -241,8 +241,8 @@ function findWorkspaceRoot(): string | null {
  * Guards the generated model against vendor drift, the same way `variant-options.test.ts` guards
  * its mirrored sets: re-derive from the vendored source and require an exact match.
  *
- * SKIPS when `tmp/bambustudio-src` is absent — it is a developer convenience, not a checked-in
- * dependency — which makes this a ratchet for whoever bumps the vendored source, i.e. exactly
+ * SKIPS when `tmp/bambustudio-src` is absent, it is a developer convenience, not a checked-in
+ * dependency, which makes this a ratchet for whoever bumps the vendored source, i.e. exactly
  * whoever would introduce the drift.
  */
 test('the generated flush model still matches the vendored BambuStudio source', async (t) => {
@@ -258,7 +258,7 @@ test('the generated flush model still matches the vendored BambuStudio source', 
   assert.deepEqual(
     JSON.parse(JSON.stringify(FLUSH_VOLUME_MODEL)),
     JSON.parse(JSON.stringify(extractFlushVolumeModel(src))),
-    'Re-run scripts/dev/generate-flush-volume-model.mjs — BambuStudio retuned the flush calculation'
+    'Re-run scripts/dev/generate-flush-volume-model.mjs: BambuStudio retuned the flush calculation'
   )
 })
 

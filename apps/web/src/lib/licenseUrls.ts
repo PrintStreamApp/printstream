@@ -7,7 +7,7 @@ export const COMMUNITY_LICENSE_URL = 'https://printstream.app/self-host/communit
 
 /**
  * Where a Lifetime holder extends their updates & support year. Only ever shown
- * once a licence's updates window is known to be lapsing or lapsed — a
+ * once a licence's updates window is known to be lapsing or lapsed, a
  * perpetual key keeps the install running regardless, so surfacing this any
  * earlier would read as "your licence is expiring", which it is not.
  */

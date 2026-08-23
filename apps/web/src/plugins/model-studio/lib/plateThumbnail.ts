@@ -8,7 +8,7 @@
  *
  * The thumbnail uses the same Bambu-style iso framing as the main editor so the
  * snapshot reflects the edited layout. It does NOT take ownership of the passed
- * group's geometry/materials — the caller keeps and disposes those.
+ * group's geometry/materials: the caller keeps and disposes those.
  */
 import * as THREE from 'three'
 import { BAMBU_THREE_MF_ISO_UP, BAMBU_THREE_MF_ISO_VIEW } from './viewCube'
@@ -57,12 +57,12 @@ export function createPlateThumbnailRenderer(): PlateThumbnailRenderer {
     render(group, bed) {
       scene.add(group)
       // Freshly-built groups (non-active plates) haven't had their world matrices computed yet, so
-      // force an update before measuring — otherwise the box sits at the local origin and the model
+      // force an update before measuring, otherwise the box sits at the local origin and the model
       // renders off-centre.
       group.updateMatrixWorld(true)
 
       // Hide non-model scene dressing (bed surface, prime tower) so the thumbnail shows just the
-      // printed models — like Bambu's. Restored after the snapshot.
+      // printed models: like Bambu's. Restored after the snapshot.
       const hidden: THREE.Object3D[] = []
       group.traverse((child) => {
         if ((child.userData?.isBedSurface || child.userData?.isPrimeTower || child.userData?.isHelperVolume) && child.visible) {
@@ -72,8 +72,8 @@ export function createPlateThumbnailRenderer(): PlateThumbnailRenderer {
       })
 
       // Frame on the visible model geometry (not the bed) so the part fills the thumbnail.
-      // traverseVisible (not traverse) so meshes inside hidden groups — e.g. the bed
-      // surface's plane, which is hidden via its group root above — don't inflate the
+      // traverseVisible (not traverse) so meshes inside hidden groups: e.g. the bed
+      // surface's plane, which is hidden via its group root above: don't inflate the
       // framing box and shrink the model in the snapshot.
       const box = new THREE.Box3()
       group.traverseVisible((child) => {

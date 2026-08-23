@@ -235,7 +235,7 @@ test('ingestBridgeReport reuses the API parser pipeline for bridged status', () 
 test('ingestBridgeReport retires a stale LAN connection warning once telemetry resumes', () => {
   printerManager.add(printer, 'workspace-1', 'bridge-1')
 
-  // The periodic LAN probe flags a (false) rejection — e.g. a busy printer that
+  // The periodic LAN probe flags a (false) rejection: e.g. a busy printer that
   // refused the probe's extra MQTT connection.
   printerManager.ingestBridgeConnectionValidation(printer.id, {
     ok: false,

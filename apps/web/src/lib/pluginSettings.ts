@@ -90,7 +90,7 @@ export function isPluginActiveByName(
  * should show ({@link isPluginActiveByName}).
  *
  * The two differ only before plugin state has loaded: a tab must not appear until
- * we know the plugin is active, but a route must — unmounting it during that
+ * we know the plugin is active, but a route must: unmounting it during that
  * window 404s a deep link that was perfectly valid, which is how an external
  * hand-off (the remote-import Chrome helper posting to `/library/import`) loses
  * its payload on a cold load.

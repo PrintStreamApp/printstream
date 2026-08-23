@@ -61,7 +61,7 @@ function writableData(input: Partial<SpoolCreateInput>): Prisma.FilamentSpoolUnc
   }
   // Canonical vendor spelling on the way in. A spool typed "Bambu Lab" and one auto-ingested from a
   // tray (where `resolveFilamentIdentity` yields "Bambu") are the same manufacturer, but a stored
-  // spool's own brand OVERRIDES the derived one — so the two spellings coexisted in one inventory,
+  // spool's own brand OVERRIDES the derived one, so the two spellings coexisted in one inventory,
   // splitting the brand filter and labelling the same filament two ways across surfaces.
   assign('brand', input.brand ? normalizeFilamentVendorLabel(input.brand) || input.brand : input.brand ?? undefined)
   assign('filamentType', input.filamentType)
@@ -219,7 +219,7 @@ type UsageGroupRow = {
 /**
  * `groupBy` is not callable on the `AnyPrismaClient` union (its conditional
  * overloads don't unify), so bind it to a concrete signature for the two
- * filament-usage groupings — same workaround as `print-outcome-breakdown.ts`.
+ * filament-usage groupings: same workaround as `print-outcome-breakdown.ts`.
  */
 type UsageGroupBy = (args: {
   by: ['filamentType'] | ['brand']
@@ -231,7 +231,7 @@ type UsageGroupBy = (args: {
  * Aggregate filament *used* (net weight minus remaining, per spool) across the
  * workspace's inventory, grouped by filament type and by brand. Reads the
  * inventory delta rather than the consumption ledger so it counts both
- * printer-tracked (Bambu remain%) and per-job-tracked spools — the ledger has
+ * printer-tracked (Bambu remain%) and per-job-tracked spools: the ledger has
  * no rows for the Bambu half. Recycled (soft-deleted) spools are excluded;
  * archived/used-up spools are kept so their past usage still counts. Slice
  * shaping is shared with the platform-wide aggregation via `buildFilamentUsageSlices`.

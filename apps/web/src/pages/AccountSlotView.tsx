@@ -14,7 +14,7 @@
  * print the title twice.
  *
  * The slots are filled by PRIVATE cloud plugins and are empty in a public
- * build, so callers must not register these routes unconditionally —
+ * build, so callers must not register these routes unconditionally:
  * `accountSlotHasContent` (in `lib/accountSlots.ts`) answers that, and the OSS
  * build simply has no such pages.
  *

@@ -25,7 +25,7 @@ test('a preset no slot names is reported unused', () => {
   assert.equal(hasUnusedEmbeddedPresets(presets), true)
 })
 
-/** Matching is on the EXACT name, the way BambuStudio binds — not a prefix or a normalised form. */
+/** Matching is on the EXACT name, the way BambuStudio binds, not a prefix or a normalised form. */
 test('a near-miss name does not count as used', () => {
   const presets = classifyEmbeddedProjectPresets(
     [{ entryPath: 'Metadata/filament_settings_1.config', json: preset('Bambu PETG HF @BBL H2D') }],

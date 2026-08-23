@@ -10,7 +10,7 @@
  * - clears the slot association of RFID spools that are no longer present.
  *
  * Manual, non-RFID assignments (`bambuUuid == null`) are never auto-unassigned
- * here — the AMS can only see RFID spools, so it must not clobber them.
+ * here: the AMS can only see RFID spools, so it must not clobber them.
  *
  * Runs outside any request context, so it uses `rootPrisma` with an explicit
  * workspace filter on every query. A per-printer signature skips DB work when the
@@ -18,8 +18,8 @@
  *
  * Three rules keep the association honest, and each one is a bug this had:
  * - **Only a status carrying AMS UNITS is evidence.** A report with no units at all is
- *   a printer that has not told us about its trays — the placeholder a fresh
- *   `ManagedPrinter` starts from — and letting it reach the unassign loop wipes every
+ *   a printer that has not told us about its trays, the placeholder a fresh
+ *   `ManagedPrinter` starts from, and letting it reach the unassign loop wipes every
  *   association on the printer. `online` is not the test: several paths publish that
  *   placeholder with `online: true`.
  * - **The signature records SUCCESS, not attendance.** Recording it before the DB work
@@ -133,7 +133,7 @@ export function createStatusObserver(context: ApiPluginContext): (status: Printe
     // Reporting NO AMS units is not the same as reporting empty ones, and only the
     // second is evidence. A fresh `ManagedPrinter` starts from `makeOfflineStatus`,
     // whose `ams` is `[]`, and several paths publish that placeholder before the
-    // printer's first real report — `hintOnline` on an SSDP sighting, an unparseable
+    // printer's first real report: `hintOnline` on an SSDP sighting, an unparseable
     // bridge frame, any partial delta with no `ams` key. Reaching the unassign loop it
     // reads as "every slot is empty" and clears every RFID association on the printer.
     //
@@ -142,7 +142,7 @@ export function createStatusObserver(context: ApiPluginContext): (status: Printe
     // A real removal always arrives as a unit WITH empty slots, which passes here.
     //
     // Tested as "no SLOTS anywhere" rather than "no units", because both shapes mean the
-    // same thing — a unit cloned forward from a previous status with no `tray` array
+    // same thing, a unit cloned forward from a previous status with no `tray` array
     // parsed yet has told us nothing about its trays either.
     //
     // The trade-off, stated: a printer that genuinely has no AMS never runs the
@@ -268,9 +268,9 @@ export function createStatusObserver(context: ApiPluginContext): (status: Printe
 
       if (autoAdd) {
         const netWeightGrams = 1000
-        // Canonical identity fills the human-facing fields the tray encodes —
+        // Canonical identity fills the human-facing fields the tray encodes,
         // materialSubtype from the preset id ("PLA Basic") and the marketing
-        // colour name ("Jade White") — so calibration/queue matching and every
+        // colour name ("Jade White"), so calibration/queue matching and every
         // display surface see the same identity this spool was born with.
         const identity = resolveFilamentIdentity({
           color: presence.color,
@@ -307,7 +307,7 @@ export function createStatusObserver(context: ApiPluginContext): (status: Printe
 
     // Clear the association of RFID spools previously loaded on this printer
     // that are no longer present at their slot. Manual (non-RFID) assignments
-    // are left untouched — the AMS cannot observe them.
+    // are left untouched: the AMS cannot observe them.
     const loadedHere = await rootPrisma.filamentSpool.findMany({
       where: { workspaceId, loadedPrinterId: status.printerId, deletedAt: null, NOT: { bambuUuid: null } }
     })

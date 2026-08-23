@@ -1,5 +1,5 @@
 /**
- * Whether the import buttons are usable, and — when they are not — the reason to show.
+ * Whether the import buttons are usable, and, when they are not, the reason to show.
  *
  * Pulled out of `RemoteImportsView` because the enablement rule had silently gone wrong:
  * it allowed only a direct file URL or a picked candidate, so once MakerWorld pages

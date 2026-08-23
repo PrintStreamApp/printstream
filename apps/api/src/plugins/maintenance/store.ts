@@ -3,7 +3,7 @@
  * the completion log.
  *
  * Owns the rule that a `PrinterMaintenanceTask` row exists ONLY when the user has
- * changed something — {@link upsertTaskOverride} writes one on demand, and every
+ * changed something: {@link upsertTaskOverride} writes one on demand, and every
  * read tolerates its absence. That is what lets a catalog interval change reach
  * existing installs instead of being frozen at whatever was copied in at setup.
  *
@@ -77,7 +77,7 @@ export async function listTaskRows(
 /**
  * The newest completion per (serial, taskKey). Postgres has no portable
  * "latest per group" through Prisma, so this orders by completion time and keeps
- * the first row seen per key — correct as long as the ordering stays descending.
+ * the first row seen per key: correct as long as the ordering stays descending.
  */
 export async function listLatestCompletions(
   prisma: WorkspaceScopedPrismaClient,
@@ -101,7 +101,7 @@ export async function listLatestCompletions(
 
 /**
  * Narrow the multi-printer completion map down to one printer, re-keyed by task
- * key alone — the shape `resolvePrinterTasks` expects.
+ * key alone: the shape `resolvePrinterTasks` expects.
  */
 export function completionsForPrinter(
   latest: Map<string, MaintenanceLogRow>,
@@ -246,8 +246,8 @@ export async function upsertTaskOverride(
 }
 
 /**
- * Create a user-defined task. The row IS the task — there is no catalog entry
- * behind it — so its title is required and deleting the row deletes the task.
+ * Create a user-defined task. The row IS the task, there is no catalog entry
+ * behind it, so its title is required and deleting the row deletes the task.
  */
 export async function createCustomTask(
   prisma: WorkspaceScopedPrismaClient,
@@ -281,8 +281,8 @@ export async function createCustomTask(
 }
 
 /**
- * Delete a custom task and its history. Catalog tasks are never deleted — the
- * catalog would just re-supply them on the next read — so callers reject that
+ * Delete a custom task and its history. Catalog tasks are never deleted, the
+ * catalog would just re-supply them on the next read, so callers reject that
  * case before getting here.
  */
 export async function deleteCustomTask(

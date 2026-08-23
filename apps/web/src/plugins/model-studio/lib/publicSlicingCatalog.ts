@@ -58,7 +58,7 @@ export function publicSlicerTargetsQueryOptions() {
     queryKey: ['public-slicer-targets'] as const,
     queryFn: async ({ signal }: { signal?: AbortSignal }): Promise<PublicSlicerTargets> => {
       const body = await fetchWithStallGuard<PublicTargetsResponse>(
-        '/api/public/slicing/targets', signal, 'Loading slicer versions stalled — retrying.'
+        '/api/public/slicing/targets', signal, 'Loading slicer versions stalled: retrying.'
       )
       return {
         configured: body.configured,
@@ -86,7 +86,7 @@ export function publicSlicingPresetsQueryOptions(targetId: string) {
     queryFn: async ({ signal }: { signal?: AbortSignal }): Promise<SlicingPresetSummary[]> => {
       const params = new URLSearchParams({ targetId })
       const body = await fetchWithStallGuard<{ profiles: SlicingPresetSummary[] }>(
-        `/api/public/slicing/profiles?${params.toString()}`, signal, 'Loading slicing presets stalled — retrying.'
+        `/api/public/slicing/profiles?${params.toString()}`, signal, 'Loading slicing presets stalled: retrying.'
       )
       return body.profiles
     },

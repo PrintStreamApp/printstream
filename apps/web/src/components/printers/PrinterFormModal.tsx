@@ -251,7 +251,7 @@ export function PrinterFormModal({
   const manualPrintsValue = manualPrintsInput ?? formatManualStatPrefill(storedManualStats?.manualPrints)
   const manualPrintHoursValue = manualPrintHoursInput ?? formatManualStatPrefill(storedManualStats?.manualPrintHours)
   // Managed-bridge installs own a single bundled bridge, so picking a
-  // "connection location" is meaningless — auto-select it and hide the control.
+  // "connection location" is meaningless: auto-select it and hide the control.
   // Fall back to the picker if more than one bridge somehow exists.
   const { managedBridge } = useRuntimePolicy()
   const hideBridgePicker = managedBridge && bridges.length === 1
@@ -639,7 +639,7 @@ export function PrinterFormModal({
                 {connectionValidation?.ok && (
                   <Alert color="success" variant="soft" startDecorator={<CheckCircleRoundedIcon />}>
                     <Typography level="body-sm">
-                      Connection successful — the printer is reachable in LAN mode{connectionValidation.developerModeEnabled ? ' with developer mode enabled' : ''}.
+                      Connection successful: the printer is reachable in LAN mode{connectionValidation.developerModeEnabled ? ' with developer mode enabled' : ''}.
                     </Typography>
                   </Alert>
                 )}

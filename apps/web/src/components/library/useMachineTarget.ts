@@ -1,5 +1,5 @@
 /**
- * The MACHINE-TARGET core of the slice-settings controller — the one implementation of the
+ * The MACHINE-TARGET core of the slice-settings controller: the one implementation of the
  * printer / model / machine-profile / nozzle / plate-type target both hosts share (audit invariant
  * I9), and the only holder of the user's picks in that domain.
  *
@@ -7,7 +7,7 @@
  * wrappers below. Every value it exposes is DERIVED from that intent plus the resolved inputs, by
  * the pure cascade in `lib/machineTargetResolution.ts` (invariants I1, I3, I5). Before S2 the same
  * answers lived in six useStates reconciled by five effects here and four more in the workspace
- * host, arbitrated by two "touched" refs — which is why "who set this value?" had no answer.
+ * host, arbitrated by two "touched" refs, which is why "who set this value?" had no answer.
  *
  * What that buys, beyond the deletions:
  * - a user pick is never silently overwritten; when the current machine cannot represent it the
@@ -50,13 +50,13 @@ export interface MachineTargetParams {
   printers?: Printer[]
   /** Seeds and pins the target to this printer (the locked print-prep flow). */
   lockedPreferredPrinter?: Printer | null
-  /** The project's 3MF index request settled — data, error, or nothing to fetch. */
+  /** The project's 3MF index request settled: data, error, or nothing to fetch. */
   projectResolved: boolean
   /** The profile catalogue for the current engine target settled. */
   catalogueResolved: boolean
   /**
    * Bumped by the host when the engine target changes. A different catalogue means picks made
-   * against the old one no longer bind, so the whole intent clears — uniformly, unlike the pre-S2
+   * against the old one no longer bind, so the whole intent clears: uniformly, unlike the pre-S2
    * reset which cleared the model's touched flag and the process's but not the plate's.
    */
   resetToken?: unknown
@@ -66,7 +66,7 @@ export interface MachineTarget {
   targetMode: 'realPrinter' | 'manualProfile'
   printerId: string
   selectedPrinter: Printer | null
-  /** Picks a printer AND the target mode in one gesture — two calls would cost two Ctrl+Z. */
+  /** Picks a printer AND the target mode in one gesture, two calls would cost two Ctrl+Z. */
   selectPrinter: (printer: Printer | null) => void
   selectedPrinterModel: string
   manualPrinterModel: string
@@ -90,7 +90,7 @@ export interface MachineTarget {
   printerCompatibleProcessProfiles: SlicingPresetSummary[]
   /** User picks the current inputs cannot represent. Reported, never silently applied. */
   conflicts: MachineTargetConflict[]
-  /** Where each value came from — for waiting-vs-answered UI and conflict copy, never for guards. */
+  /** Where each value came from, for waiting-vs-answered UI and conflict copy, never for guards. */
   origins: Record<MachineTargetField, MachineTargetOrigin>
   /** Both async inputs settled: the target is final for these inputs. */
   resolved: boolean

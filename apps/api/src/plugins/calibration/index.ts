@@ -10,7 +10,7 @@
  * Extension surfaces: HTTP routes at `/api/plugins/calibration` (`routes.ts`).
  * External deps: none beyond the slicing/print pipeline, the printer event bus,
  * MQTT (for the optional pressure-advance push), and Prisma. It never imports
- * another plugin — the loaded filament's spool/identity comes from the shared
+ * another plugin: the loaded filament's spool/identity comes from the shared
  * `slotFilamentResolvers` seam (filled by whichever filament plugin is present),
  * with the printer's live AMS status filling any gaps.
  */
@@ -48,7 +48,7 @@ const deps: CalibrationRunManagerDeps = {
     // Prefer the tracked spool's rich identity (brand/colour/subtype + spoolId, so the run can be
     // saved "for this spool") when a filament plugin resolves the slot; fall back to the printer's
     // live tray for the fields it reports when no spool is tracked. The colour fallback derives a
-    // human label from the tray's colour hex ("White", or the hex itself) — never `trayName`,
+    // human label from the tray's colour hex ("White", or the hex itself), never `trayName`,
     // which is a material sub-brand / raw tray code (e.g. "A00-B9"), not a colour.
     const spool = await slotFilamentResolvers.resolve({ workspaceId, printerId, amsId, slotId })
     return {
@@ -74,7 +74,7 @@ const deps: CalibrationRunManagerDeps = {
     const model = printerModelSchema.safeParse(input.printerModel).success ? input.printerModel : 'unknown'
     const context = resolvePressureAdvanceCommandContext(status, input.amsId)
     // Associate the K profile with the tray's Bambu preset when it has one; empty for custom
-    // filament — the printer accepts an empty filament id and applies it to the tray all the same
+    // filament: the printer accepts an empty filament id and applies it to the tray all the same
     // (verified on hardware).
     const slot = status?.ams.find((unit) => unit.unitId === input.amsId)?.slots.find((entry) => entry.slot === input.slotId)
     const filamentId = slot?.trayInfoIdx ?? ''
@@ -96,7 +96,7 @@ const deps: CalibrationRunManagerDeps = {
     const matchesTarget = (profile: PrinterPressureAdvanceProfile) => sameName(profile) && Math.abs(profile.kValue - input.kValue) < 0.0005
     const newest = (profiles: PrinterPressureAdvanceProfile[]) => [...profiles].sort((left, right) => right.caliIdx - left.caliIdx)[0]
 
-    // Creating a K profile does NOT apply it — the tray keeps its current selection until the
+    // Creating a K profile does NOT apply it: the tray keeps its current selection until the
     // profile is selected (verified on Farm 06). So reuse an existing matching profile; otherwise
     // clear stale same-name profiles (avoid accumulation), create the new one, then select it.
     let profiles = await loadProfiles()

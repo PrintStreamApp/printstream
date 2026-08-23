@@ -1,8 +1,8 @@
 /**
  * Calibration run orchestration: the state machine that turns a wizard request
  * into a printed test and, finally, a saved value. It reuses the normal pipeline
- * end to end — geometry → hidden library 3MF → the slicing job queue → the print
- * dispatcher — so a calibration print behaves like any other job.
+ * end to end, geometry → hidden library 3MF → the slicing job queue → the print
+ * dispatcher, so a calibration print behaves like any other job.
  *
  * Lifecycle: `startRun` builds + slices (status `slicing`); `syncSliceStatus`
  * lazily advances to `readyToPrint`/`failed` when the slice finishes; `printRun`
@@ -141,7 +141,7 @@ export async function autoApplyOnLoad(
     try {
       colorName = (await deps.resolveSlotFilament(db, event.workspaceId, event.printerId, event.amsId, event.slotId)).colorName
     } catch {
-      // keep null — colour simply doesn't constrain the match
+      // keep null: colour simply doesn't constrain the match
     }
   }
   const identity: FilamentIdentity & { spoolId: string | null } = {
@@ -339,11 +339,11 @@ export async function printRun(deps: CalibrationRunManagerDeps, db: AnyPrismaCli
     nozzleOffsetCalibration: 'auto',
     allowIncompatibleFilament: true,
     // The run was sliced for the plate the user chose (defaulting to the installed one), so the
-    // plate is already deliberate — don't re-block at dispatch. If they overrode to a plate that is
+    // plate is already deliberate: don't re-block at dispatch. If they overrode to a plate that is
     // not installed, that was their explicit choice.
     allowPlateTypeMismatch: true,
     // NOT waived, unlike the two above. A calibration plate is sliced by us, for this printer, moments
-    // earlier — so its Filament Track Switch flag already matches the machine. A mismatch here would
+    // earlier, so its Filament Track Switch flag already matches the machine. A mismatch here would
     // mean the switch was fitted or removed mid-run, which is worth stopping for rather than printing
     // a calibration whose results would be meaningless.
     allowFilamentTrackSwitchMismatch: false,
@@ -355,7 +355,7 @@ export async function printRun(deps: CalibrationRunManagerDeps, db: AnyPrismaCli
 /**
  * Advance any `printing` run for this printer whose sliced output matches the
  * finished job to `awaitingResult`. Called from the `print-job.finished` bus
- * listener (best-effort — the user can also enter a result manually).
+ * listener (best-effort: the user can also enter a result manually).
  */
 export async function handlePrintFinished(db: AnyPrismaClient, workspaceId: string, printerId: string, outputFileId: string | null): Promise<void> {
   const runs = await db.calibrationRun.findMany({ where: { workspaceId, printerId, status: 'printing' } })

@@ -1,13 +1,13 @@
 /**
  * Slice-then-print flow for a project 3MF, as a self-contained dialog stack.
  *
- * The same two steps `LibraryView`/`PrintersView` run inline — slice settings
+ * The same two steps `LibraryView`/`PrintersView` run inline, slice settings
  * (`SliceFileModal`, `flow="print"`) and then the print setup once the output is ready
- * (`SliceThenPrintModal`) — packaged for callers that hold only a file ID and want the
+ * (`SliceThenPrintModal`), packaged for callers that hold only a file ID and want the
  * whole flow. Sibling of `SliceToQueueFlow`, which ends at the queue instead of a printer.
  *
  * Its caller today is print history's "Slice again": re-slicing the project a finished print
- * was produced from. That is why the file is FETCHED here rather than passed in — the preserved
+ * was produced from. That is why the file is FETCHED here rather than passed in: the preserved
  * project is a hidden library row no listing carries, so the caller has an id and nothing else.
  *
  * The output is always hidden (`hiddenOutput`), matching every other print-now path: the user
@@ -68,7 +68,7 @@ export function SliceThenPrintFlow({
       return apiFetch<SlicingJobResponse>('/api/slicing/jobs', { method: 'POST', body })
     },
     onSuccess: (response) => {
-      // Seeded rather than awaited — see slicingJobsCache: waiting on a list refetch to
+      // Seeded rather than awaited: see slicingJobsCache: waiting on a list refetch to
       // hand the job over is what wedges the button.
       seedSlicingJob(queryClient, response.job)
       refreshSlicingJobs(queryClient)

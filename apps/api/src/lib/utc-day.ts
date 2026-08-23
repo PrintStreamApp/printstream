@@ -16,7 +16,7 @@ export function addUtcDays(date: Date, days: number): Date {
   return copy
 }
 
-/** `YYYY-MM-DD` of the instant's UTC calendar day — the wire form for day buckets. */
+/** `YYYY-MM-DD` of the instant's UTC calendar day: the wire form for day buckets. */
 export function toUtcDateKey(date: Date): string {
   return date.toISOString().slice(0, 10)
 }

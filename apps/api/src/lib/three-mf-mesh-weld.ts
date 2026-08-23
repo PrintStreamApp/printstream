@@ -5,7 +5,7 @@
  * soup by definition; OCCT tessellates each BRep face independently). BambuStudio's
  * slicer chains layer contours by vertex/edge INDEX (`chain_open_polylines_exact`), so a
  * soup mesh falls entirely into its 2mm proximity gap-closing heuristic, which
- * mis-stitches small features — zero-clearance inlays (embossed text pockets) print
+ * mis-stitches small features: zero-clearance inlays (embossed text pockets) print
  * fused/unfilled as if the wall generator were broken. New imports are welded at parse
  * time (`mesh-import.ts`); this module heals PREVIOUSLY-SAVED projects on their way to
  * the slicer, without touching the library file itself.
@@ -124,7 +124,7 @@ const MAX_MODEL_ENTRY_BYTES = 64 * 1024 * 1024
 /**
  * Produce a copy of `sourcePath` at `outputPath` with all soup meshes welded. Returns
  * true when a healed copy was written; false when every mesh was already welded (no
- * copy is produced — the caller keeps slicing the original).
+ * copy is produced: the caller keeps slicing the original).
  */
 export async function healUnweldedThreeMfMeshes(sourcePath: string, outputPath: string): Promise<boolean> {
   const entryNames = await listModelEntryNames(sourcePath)

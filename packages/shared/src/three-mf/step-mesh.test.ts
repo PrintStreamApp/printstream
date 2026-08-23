@@ -1,7 +1,7 @@
 /**
  * The STEP fold both hosts share.
  *
- * The WASM tessellator is not exercised here — it is the same upstream build on both sides, and
+ * The WASM tessellator is not exercised here, it is the same upstream build on both sides, and
  * running it would make this a 7 MB integration test. What IS worth pinning is everything we decide
  * after OCCT answers: the quality settings it is asked for, how per-solid output becomes one import,
  * and the refusals. Those are the parts that could drift between the api and the browser, which is

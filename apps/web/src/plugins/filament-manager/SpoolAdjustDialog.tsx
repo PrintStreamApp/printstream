@@ -1,5 +1,5 @@
 /**
- * Quick "adjust remaining" dialog — a weigh-in or refill that sets an absolute
+ * Quick "adjust remaining" dialog, a weigh-in or refill that sets an absolute
  * remaining gram value and appends a manual ledger entry. Handy for non-Bambu
  * spools whose remaining is tracked from print consumption and occasionally
  * needs a correction.

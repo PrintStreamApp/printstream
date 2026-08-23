@@ -40,7 +40,7 @@ async function captureError(run: () => Promise<unknown>): Promise<BambuCloudErro
 
 test('a wrong password reaches the browser as Bambu\'s own message, not a 500', async () => {
   // THE regression this file exists for. `BambuCloudError` used to extend plain `Error`,
-  // so the API's error middleware — which only preserves the message of an `HttpError` —
+  // so the API's error middleware, which only preserves the message of an `HttpError`,
   // answered a bare 500 "Internal server error" and left the real text in the server log.
   // A wrong password was indistinguishable from a crash.
   const error = await captureError(() => beginBambuCloudLogin(
@@ -51,7 +51,7 @@ test('a wrong password reaches the browser as Bambu\'s own message, not a 500', 
   ))
 
   assert.ok(error instanceof HttpError, 'must be an HttpError or the middleware discards the message')
-  assert.equal(error.statusCode, 400, 'Bambu rejected the supplied credentials — a bad request, not a server fault')
+  assert.equal(error.statusCode, 400, 'Bambu rejected the supplied credentials, a bad request, not a server fault')
   assert.match(error.message, /Incorrect account or password/)
   // Bambu's own wording leads; the raw status is not repeated at the user.
   assert.doesNotMatch(error.message, /returned 400/)
@@ -114,7 +114,7 @@ test('a Bambu server fault is reported as an upstream failure, not our own', asy
 test('a transport failure becomes a readable error rather than escaping as a 500', async () => {
   // A raw `fetch` rejection (DNS, connection refused, the request timeout firing) is not
   // an HttpError, so unconverted it would surface as "Internal server error" with the
-  // cause only in the log — the same failure mode as the wrong-password case above.
+  // cause only in the log, the same failure mode as the wrong-password case above.
   const error = await captureError(() => listBambuCloudSettings(
     contextThrowing(new TypeError('fetch failed')),
     { region: 'global', accessToken: 'token' }
@@ -126,7 +126,7 @@ test('a transport failure becomes a readable error rather than escaping as a 500
 })
 
 test('an expiry raised by the transport layer keeps its classification', async () => {
-  // `runCall`'s catch must not re-wrap an already-classified error and lose its kind —
+  // `runCall`'s catch must not re-wrap an already-classified error and lose its kind:
   // the sync engine keys "should I mark this credential dead?" off exactly that.
   const original = new BambuCloudError('already classified', 'expired', 401)
   const error = await captureError(() => listBambuCloudSettings(
@@ -164,7 +164,7 @@ test('a login response yields the whole credential, not just the access token', 
   )
 
   assert.equal(credential.refreshToken, 'r')
-  // Relative seconds are resolved to absolute instants — a lifetime is meaningless once
+  // Relative seconds are resolved to absolute instants, a lifetime is meaningless once
   // it has been written to disk and read back days later.
   const expiresAt = Date.parse(credential.expiresAt ?? '')
   assert.ok(expiresAt >= before + 3_600_000 && expiresAt <= Date.now() + 3_600_000)

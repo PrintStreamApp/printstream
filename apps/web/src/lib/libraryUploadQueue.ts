@@ -1,8 +1,8 @@
 /**
  * Module-level library upload store with per-file progress, cancel, and retry.
  *
- * Lives outside the React tree so a file/folder upload keeps running — and keeps
- * reporting progress — when the user navigates away from the library (only a full
+ * Lives outside the React tree so a file/folder upload keeps running, and keeps
+ * reporting progress, when the user navigates away from the library (only a full
  * page reload aborts it). Files upload sequentially through the rate-limit-paced
  * chunked uploader; each file's destination is pinned at enqueue time, so
  * navigation never redirects an in-flight batch. Cache refresh rides the server's
@@ -180,7 +180,7 @@ async function runUpload(entry: InternalEntry): Promise<void> {
     entry.phase = null
     entry.abort = null
     if (unchanged) {
-      toast.show({ message: `${entry.name} is unchanged — no new version created.`, tone: 'neutral', durationMs: 5000 })
+      toast.show({ message: `${entry.name} is unchanged, no new version created.`, tone: 'neutral', durationMs: 5000 })
     }
     scheduleAutoDismiss(entry.id)
     emitChange()

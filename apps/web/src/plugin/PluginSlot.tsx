@@ -17,7 +17,7 @@ interface PluginSlotProps {
    * Core default rendered when no active plugin contributes to this slot. It is also forwarded to
    * each contribution as a `fallback` prop, so a single-owner "override" slot (one plugin replacing
    * a core fragment) can render the core default itself when it has nothing to contribute for the
-   * current context — e.g. an AMS slot with no linked spool. Leave unset (default `null`) for
+   * current context: e.g. an AMS slot with no linked spool. Leave unset (default `null`) for
    * append-only extension points.
    */
   fallback?: ReactNode

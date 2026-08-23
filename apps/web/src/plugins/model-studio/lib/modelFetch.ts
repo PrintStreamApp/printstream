@@ -4,7 +4,7 @@
  * Geometry entries can be multi-megabyte and, for bridge-owned files, are streamed
  * web -> API -> bridge. If the transport commits a response but then stalls mid-body (a wedged
  * proxy, a flaky connection, a momentarily stuck bridge RPC), a plain `fetch().text()` never
- * settles — and the editor's plate-build loop awaits it forever, leaving the viewport stuck. This
+ * settles, and the editor's plate-build loop awaits it forever, leaving the viewport stuck. This
  * drains the body chunk-by-chunk and aborts when no bytes arrive for `stallMs`, turning an
  * infinite hang into a thrown error. A stalled attempt is RETRIED once before surfacing, because
  * most stalls here are transient (a single slow bridge RPC), and a retry quietly recovers.
@@ -22,12 +22,12 @@ export const MODEL_FETCH_STALL_MS = 20_000
 
 /**
  * No response headers within this long is treated as a stuck request. Covers connect and
- * time-to-first-byte — the concurrency-slot wait is excluded, so this is not charged against a
+ * time-to-first-byte: the concurrency-slot wait is excluded, so this is not charged against a
  * request merely waiting its turn.
  */
 export const MODEL_FETCH_HEADERS_MS = 45_000
 
-/** Total attempts (1 retry) before a stall surfaces — transient bridge stalls recover on retry. */
+/** Total attempts (1 retry) before a stall surfaces: transient bridge stalls recover on retry. */
 export const MODEL_FETCH_ATTEMPTS = 2
 
 export class ModelFetchStallError extends Error {
@@ -90,7 +90,7 @@ async function fetchModelBytesOnce(url: string, init: RequestInit, stallMs: numb
     if (timer) clearTimeout(timer)
     timer = setTimeout(() => {
       // Operational log: identifies exactly which download stalled, in which phase, and whether
-      // the concurrency pool was starved — without it, a stall is invisible past the user toast.
+      // the concurrency pool was starved, without it, a stall is invisible past the user toast.
       console.warn(
         `[modelFetch] ${phase}-phase stall after ${Math.round(performance.now() - startedAt)}ms ` +
         `(slotWait=${slotWaitMs}ms, active=${activeModelFetches}, queued=${modelFetchWaiters.length}): ${url}`

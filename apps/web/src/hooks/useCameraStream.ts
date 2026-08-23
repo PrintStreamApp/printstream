@@ -1,7 +1,7 @@
 /**
  * Hook that subscribes to a printer's camera feed over the shared
  * WebSocket. Calls `onFrame` with the latest decoded JPEG `ImageBitmap`
- * (frames that arrive while a decode is in flight are coalesced — only the
+ * (frames that arrive while a decode is in flight are coalesced, only the
  * newest is decoded), suitable for painting onto a canvas without flicker.
  *
  * On mount it sends `camera.subscribe`; on unmount `camera.unsubscribe`.
@@ -45,7 +45,7 @@ export function useCameraStream(
         }
         onFrameRef.current(bitmap)
       }).catch(() => {
-        // Bad frame — ignore
+        // Bad frame: ignore
       }).finally(() => {
         decodeInFlight = false
         if (pendingJpeg) queueMicrotask(decodeLatestFrame)

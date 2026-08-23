@@ -1,13 +1,13 @@
 /**
  * Keeping filament-index process settings pointing at the right material when the material LIST
- * changes shape — a material removed, or the list reordered.
+ * changes shape, a material removed, or the list reordered.
  *
  * BambuStudio lets you delete a material even while a setting references it: the referencing
  * setting falls back to "Default" and everything else keeps pointing at the same material. We
  * mirror that, which is what makes removal safe to allow rather than block.
  *
  * The subtlety is that these settings store a POSITION in the ordered filament list (the index
- * the slicer reads), not a stable id — so removing position N does not just clear refs to N, it
+ * the slicer reads), not a stable id, so removing position N does not just clear refs to N, it
  * shifts every higher reference down by one, and reordering the list renumbers every reference.
  * Miss that and deleting material 2 of 3 silently repoints "support interface" from material 3 to
  * whatever now sits at 3 (nothing), or worse, at a material the user never chose.

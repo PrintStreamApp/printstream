@@ -1,7 +1,7 @@
 /**
  * Builds the list of filament sources offered for recovery when a print is paused on a filament
  * runout: every AMS slot and external spool that can currently be loaded, with the load command
- * to run. Pure (no React) — extracted from PrinterCard so the card's body stays render-focused.
+ * to run. Pure (no React): extracted from PrinterCard so the card's body stays render-focused.
  */
 import {
   getAmsLoadFilamentAvailability,

@@ -6,12 +6,12 @@
  * target names the machine actually selected.
  *
  * Extracted from `slicingPresetMatching` so `filamentPresetResolver` can apply compatibility as a
- * FILTER without a cycle — that module imports the resolver, so the resolver could not import the
+ * FILTER without a cycle, that module imports the resolver, so the resolver could not import the
  * check back. Which is why compatibility used to be a soft RANK inside the resolver rather than a
  * filter: presets targeting other printers stayed eligible and were merely outscored. BambuStudio
  * never offers an incompatible preset in the first place, so a rank was ours, not its.
  *
- * Depends only on `@printstream/shared` and the printer-model alias table, and must stay that way —
+ * Depends only on `@printstream/shared` and the printer-model alias table, and must stay that way:
  * anything it imports becomes importable by the resolver.
  */
 import type { SlicingPresetSummary } from '@printstream/shared'
@@ -99,7 +99,7 @@ export function matchesCompatiblePrinters(profile: SlicingPresetSummary, selecte
   // The machine profile is what is actually sent to the slicer, so it is the
   // authority for compatibility. Deriving the key from `model` first let a
   // model/machine mismatch (e.g. model "A1" while the machine profile is "A1 mini")
-  // accept a full-A1 filament against an A1-mini machine — BambuStudio then rejects
+  // accept a full-A1 filament against an A1-mini machine: BambuStudio then rejects
   // it at slice time ("filament ... is not compatible with printer", exit 251).
   const selectedModelKey = canonicalBambuModelKey(selectedMachineProfile.name) ?? canonicalBambuModelKey(model)
   return compatiblePrinters.some((compatiblePrinter) => {
@@ -165,7 +165,7 @@ export function matchesProfilePrinterTarget(profile: SlicingPresetSummary, selec
  * of them.
  *
  * Reads the raw declared fields rather than {@link extractProfilePrinterTargets}, whose alias
- * expansion folds "Bambu Lab A1 mini" into A1's own alias family — the exact conflation this
+ * expansion folds "Bambu Lab A1 mini" into A1's own alias family: the exact conflation this
  * rejects. Model KEYS, not text: `tokenBoundaryIncludes` accepts "a1" inside "a1 mini" because the
  * space is a legitimate token boundary, so text alone cannot separate a model from a longer one
  * that contains it.

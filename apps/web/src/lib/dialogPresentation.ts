@@ -12,14 +12,14 @@
  *
  * Why this is shared rather than per-dialog `sx`: every mode has to escape the app-wide viewport
  * clamp the theme puts on EVERY `ModalDialog` (`modalDialogAutoScrollStyles`), and Joy applies theme
- * `styleOverrides` AFTER `sx` — so a dialog cannot size past that clamp from its own `sx` at all,
+ * `styleOverrides` AFTER `sx`, so a dialog cannot size past that clamp from its own `sx` at all,
  * however it phrases it. The one escape hatch is the `data-dialog-presentation` attribute, whose
  * matching rules live beside the clamp in `theme/buildTheme.ts`. Left to per-dialog `sx`, this drifted
  * into three different "full screen" sizes (99vw, 96vw, 100vw-inside-a-padded-overflow), none of
  * which actually reached the edge of a phone screen.
  *
  * Insets: maximized positions against `--app-top-inset` / `--app-safe-bottom` rather than centring on
- * the raw viewport, because the status bar / title bar overlays the top — centring on the raw
+ * the raw viewport, because the status bar / title bar overlays the top: centring on the raw
  * viewport puts the gutter in the wrong place and pushes the dialog under the chrome. Full screen
  * deliberately ignores both: it IS the screen, and its own content is responsible for staying clear
  * of the notch.
@@ -32,16 +32,16 @@ import type { ModalDialogProps } from '@mui/joy'
 import type { Theme } from '@mui/joy/styles'
 import type { SystemStyleObject } from '@mui/system'
 
-/** One `sx` object — deliberately not the wider `SxProps`, so a caller can merge it into an array. */
+/** One `sx` object, deliberately not the wider `SxProps`, so a caller can merge it into an array. */
 type DialogStyles = SystemStyleObject<Theme>
 
 /**
  * How much of the screen a dialog takes.
  *
- * - `standard` — the dialog's own footprint, clamped to the viewport by the theme.
- * - `maximized` — the whole screen bar a gutter, keeping the dialog's border, radius and chrome so
+ * - `standard`: the dialog's own footprint, clamped to the viewport by the theme.
+ * - `maximized`: the whole screen bar a gutter, keeping the dialog's border, radius and chrome so
  *   the page behind still reads as present.
- * - `fullscreen` — edge to edge, no border, radius or shadow. The dialog IS the screen.
+ * - `fullscreen`: edge to edge, no border, radius or shadow. The dialog IS the screen.
  */
 export type DialogPresentation = 'standard' | 'maximized' | 'fullscreen'
 
@@ -54,7 +54,7 @@ export const DIALOG_PRESENTATION_ATTRIBUTE = 'data-dialog-presentation'
 
 /**
  * Gutter left around a maximized dialog: small enough to read as "the whole screen", wide enough that
- * the page behind still shows at the edges — which is the whole difference from `fullscreen`.
+ * the page behind still shows at the edges, which is the whole difference from `fullscreen`.
  */
 export const MAXIMIZED_DIALOG_GUTTER = '0.75rem'
 
@@ -68,7 +68,7 @@ export interface DialogPresentationInputs {
   fullScreen?: boolean
   /** Size when neither toggle is on. A dialog that is near-full by nature passes `maximized`. */
   base?: Exclude<DialogPresentation, 'fullscreen'>
-  /** A presentation the HOST imposes, winning over both toggles — e.g. a page that is the dialog. */
+  /** A presentation the HOST imposes, winning over both toggles: e.g. a page that is the dialog. */
   locked?: DialogPresentation
 }
 
@@ -135,7 +135,7 @@ const DIALOG_SIZING_KEYS = ['width', 'minWidth', 'maxWidth', 'height', 'minHeigh
  * including `@media (min-width:0px)` for `xs`, and a media block beats a later flat declaration at
  * equal specificity. Measured: a maximized preview kept its 1120px/96vw width and overflowed the
  * gutter it was supposed to fill. Removing the keys sidesteps the cascade entirely, and works whatever
- * breakpoints the caller happened to use. `sx` entries that are functions or arrays pass through — a
+ * breakpoints the caller happened to use. `sx` entries that are functions or arrays pass through, a
  * theme callback is not a footprint declaration.
  */
 export function withoutDialogSizing<T>(styles: T): T {
@@ -160,7 +160,7 @@ export interface ScrollableDialogPresentation {
  * The wrapper's padding is the gutter here, because the dialog is a flow child of the scroller rather
  * than an absolutely-positioned box: sizing the dialog to the viewport instead would push it past the
  * padding and hand the user a scrollbar over a "full screen" view. Every mode therefore returns the
- * scroller's padding OUTRIGHT, standard included — it is not an override layered on a shell default.
+ * scroller's padding OUTRIGHT, standard included, it is not an override layered on a shell default.
  * That is deliberate: `sx` merging cannot reliably override a RESPONSIVE value with a flat one,
  * because MUI emits a breakpoint object's `xs` entry as `@media (min-width:0px)` and a media block
  * outranks the plain declaration it was meant to replace whatever the array order. Measured: a

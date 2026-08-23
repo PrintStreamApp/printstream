@@ -1,11 +1,11 @@
 /**
- * One preset in the slicing-profile manager — the workspace's own or a built-in. The kind chip is deliberately absent: the
- * list is already scoped to one kind by the active tab, so the row shows what the tab does not —
+ * One preset in the slicing-profile manager: the workspace's own or a built-in. The kind chip is deliberately absent: the
+ * list is already scoped to one kind by the active tab, so the row shows what the tab does not:
  * the preset's own metadata (printer model, nozzle, material, brand).
  *
  * Laid out as a dense LINE, not a card: these lists run to hundreds of presets (594 process presets
  * on a stock catalogue), so a card per preset meant scrolling past a handful at a time. Reads
- * table-like — aligned columns, a hairline between rows, a hover highlight — without being a
+ * table-like, aligned columns, a hairline between rows, a hover highlight, without being a
  * `<table>`, which would not survive the 375px width this has to work at. The row owns its own
  * separator so the list container can stack rows with no gap.
  */
@@ -69,7 +69,7 @@ export function SlicingPresetRow({
       {/* The name is the row's identity, so it takes the slack and truncates rather than wrapping. */}
       <Typography level="body-sm" noWrap sx={{ minWidth: '8rem', flex: 1 }}>{profile.name}</Typography>
       {isBuiltin && <Chip size="sm" variant="soft" color="neutral" sx={{ flexShrink: 0 }}>Built-in</Chip>}
-      {/* Metadata and the timestamp are the first things to go as the row narrows — the name and
+      {/* Metadata and the timestamp are the first things to go as the row narrows: the name and
           the actions are what a phone needs. Hidden rather than wrapped, which is what kept the
           row one line tall. */}
       {shownValues.length > 0 && (
@@ -78,7 +78,7 @@ export function SlicingPresetRow({
           spacing={0.5}
           sx={{
             // Capped and shrinkable, unlike the name: a process preset can carry a dozen printer
-            // chips, and letting them hold their width squeezed the name — the row's identity —
+            // chips, and letting them hold their width squeezed the name, the row's identity,
             // down to an ellipsis. They clip instead; the full set is in the "+N" tooltip.
             minWidth: 0,
             flexShrink: 1,

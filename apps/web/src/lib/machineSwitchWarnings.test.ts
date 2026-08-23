@@ -42,7 +42,7 @@ test('a layer height outside the new machine envelope is reported in the offendi
 })
 
 test('a layer height exactly on a bound is in range, and unknown bounds never invent a warning', () => {
-  // An older slicer image reports no envelope at all — a missing bound must stay silent.
+  // An older slicer image reports no envelope at all, a missing bound must stay silent.
   assert.deepEqual(machineSwitchWarnings({ printerModel: 'A1 mini', layerHeight: 0.28, machineProfile: machine({ maxLayerHeight: 0.28 }) }), [])
   assert.deepEqual(machineSwitchWarnings({ printerModel: 'A1 mini', layerHeight: 0.9, machineProfile: machine({}) }), [])
   assert.deepEqual(machineSwitchWarnings({ printerModel: 'A1 mini', layerHeight: 0.9, machineProfile: null }), [])

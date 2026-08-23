@@ -1,7 +1,7 @@
 /**
  * The LAYOUT is what this must get right, so the fixtures are the widths measured on a real
  * dual-nozzle (H2D) project saved by BambuStudio: `nozzle_temperature` carries 2 values per slot
- * (variant-expanded) while `filament_density` carries 1. Getting that wrong is not cosmetic — an
+ * (variant-expanded) while `filament_density` carries 1. Getting that wrong is not cosmetic, an
  * undersized `slots x variants` array makes BambuStudio read out of bounds and die mid-slice.
  */
 import assert from 'node:assert/strict'
@@ -20,7 +20,7 @@ const dropped = () => ({
   filament_ids: ['GFG02', 'GFG02', 'GFA00'],
   // The variant layout SURVIVES the physics drop (it is an identity key), and it is what says a
   // variant-scoped option needs 2 columns per slot here. Without it the restore correctly falls
-  // back to 1 — writing narrow is recoverable, writing wide corrupts the slot count.
+  // back to 1: writing narrow is recoverable, writing wide corrupts the slot count.
   filament_extruder_variant: [
     'Direct Drive Standard', 'Direct Drive High Flow',
     'Direct Drive Standard', 'Direct Drive High Flow',
@@ -36,7 +36,7 @@ test('restores each key at the preset\'s own width, matching BambuStudio\'s layo
   assert.deepEqual(record.nozzle_temperature, ['245', '245', '245', '245', '220', '220'])
   assert.deepEqual(record.filament_flow_ratio, ['0.95', '0.95', '0.95', '0.95', '0.98', '0.98'])
   assert.deepEqual(record.filament_density, ['1.28', '1.28', '1.26'])
-  // The whole compared block is authored, including keys no preset here defines — BambuStudio's
+  // The whole compared block is authored, including keys no preset here defines: BambuStudio's
   // comparison config starts from the DEFAULT PRESET (not from PrintConfig option defaults), so an
   // omitted key takes that preset's value, which need not match the user's. `filament_notes` is the
   // one exception: BambuStudio writes it as a bare `""` we cannot reproduce per slot.
@@ -57,7 +57,7 @@ test('identity keys are never touched', () => {
 
 /**
  * A key one slot's preset defines and another's does not must still be WRITTEN, with the option's
- * default standing in for the slot that lacks it — which is exactly what BambuStudio does (verified
+ * default standing in for the slot that lacks it, which is exactly what BambuStudio does (verified
  * against its own save: `pressure_advance` is ["0.02","0.02","0.02"]).
  *
  * SUPERSEDES a test that asserted such a key was skipped entirely. That behaviour dropped the key
@@ -70,7 +70,7 @@ test('a key some slot does not define is filled from the option default, not dro
   const record = dropped()
   restoreFilamentPhysics(record, [PETG, sparse, PLA])
 
-  // Every slot defines nozzle_temperature, so it is written — at the project's variant width.
+  // Every slot defines nozzle_temperature, so it is written, at the project's variant width.
   assert.deepEqual(record.nozzle_temperature, ['245', '245', '999', '999', '220', '220'])
   // Slot 2 defines no density: it takes the catalogue default rather than a neighbour's value.
   const density = record.filament_density as string[]
@@ -82,13 +82,13 @@ test('a key some slot does not define is filled from the option default, not dro
 
 /**
  * SUPERSEDES a test that expected a scalar to broadcast across the variants. The variants genuinely
- * differ — BambuStudio writes `filament_max_volumetric_speed: ["25","40"]` for one slot — so copying
+ * differ, BambuStudio writes `filament_max_volumetric_speed: ["25","40"]` for one slot, so copying
  * column 0 into column 1 invents a value, and BambuStudio then reports it as the user's own change.
  * A short source means the preset was never flattened onto its parent; skip rather than guess.
  */
 test('a source short of the variant width is skipped, never padded from column 0', () => {
   const scalarTemp = { nozzle_temperature: ['210'], filament_density: ['1.20'] } as unknown as ProcessConfig
-  // `1.20` canonicalises to `1.2` — BambuStudio writes numbers without redundant decimals, and a
+  // `1.20` canonicalises to `1.2`: BambuStudio writes numbers without redundant decimals, and a
   // cosmetic `.0` is enough to make a compared key differ from the preset.
   const record = dropped()
   const result = restoreFilamentPhysics(record, [scalarTemp, scalarTemp, scalarTemp])
@@ -100,7 +100,7 @@ test('a source short of the variant width is skipped, never padded from column 0
 })
 
 /**
- * REPLACES a test that asserted the opposite — that an unresolved slot still occupied its columns,
+ * REPLACES a test that asserted the opposite, that an unresolved slot still occupied its columns,
  * filled with empty strings. That is what shipped, and it corrupted a real project: with a width of
  * 2 the padding pushed every physics array to 6 entries for a 3-slot file, and because
  * `parseProjectFilaments` sizes the material list from the longest filament array, the project
@@ -146,7 +146,7 @@ test('no resolved presets leaves the project alone', () => {
  * A resolved preset is a preset DOCUMENT, not a bag of settings: it also carries `type`,
  * `instantiation`, `inherits`, `include`, `setting_id`, `filament_id` and `compatible_printers`.
  * Copying those into a project's config produced a file BambuStudio refused to open at all
- * ("invalid config file") — strictly worse than the mis-binding the change was meant to fix.
+ * ("invalid config file"): strictly worse than the mis-binding the change was meant to fix.
  */
 test('preset bookkeeping never reaches the project config', () => {
   const document = {
@@ -172,7 +172,7 @@ test('preset bookkeeping never reaches the project config', () => {
 test('a partially-damaged project keeps its present keys and gains only the missing ones', () => {
   // The CHM - H2 shape: blunt detection fires on a file where SOME keys survived (here a
   // nozzle_temperature carrying an in-project tweak on slot 2). The restore must write the
-  // missing sentinels and leave the healthy key alone — overwriting it from the presets would
+  // missing sentinels and leave the healthy key alone: overwriting it from the presets would
   // quietly normalise a value the user never touched.
   const record = {
     ...dropped(),
@@ -195,4 +195,48 @@ test('a stale-width key is rewritten from the presets, not preserved', () => {
   }
   restoreFilamentPhysics(record, [PETG, PETG, PLA])
   assert.deepEqual(record.filament_density, ['1.28', '1.28', '1.26'])
+})
+
+/**
+ * A NON-UNIFORM variant layout is restored at its real per-slot widths, and an UNREADABLE one is
+ * refused rather than split evenly.
+ *
+ * TPU owns every printer variant while its neighbours share the standard ones, so PLA + TPU on an
+ * H2D is 2 + 3 = 5 rows across 2 slots. Writing one width for every slot truncated the TPU column
+ * away and left the array short of the layout the project declares, the out-of-bounds shape that
+ * kills a slice, while the file stayed flagged, so the user could never clear it.
+ */
+const NON_UNIFORM = {
+  filament_colour: ['#1', '#2'],
+  filament_type: ['PLA', 'TPU'],
+  filament_settings_id: ['Bambu PLA Basic @BBL H2D', 'Bambu TPU 95A HF @BBL H2D'],
+  filament_extruder_variant: ['Direct Drive Standard', 'Direct Drive High Flow', 'Direct Drive Standard', 'Direct Drive High Flow', 'Direct Drive TPU High Flow'],
+  filament_density: ['1.26', '1.21'],
+  filament_diameter: ['1.75', '1.75']
+}
+const NON_UNIFORM_SOURCES = [
+  { nozzle_temperature: ['220', '220'], nozzle_temperature_initial_layer: ['220', '220'], filament_flow_ratio: ['0.98', '0.98'] },
+  { nozzle_temperature: ['230', '230', '235'], nozzle_temperature_initial_layer: ['230', '230', '235'], filament_flow_ratio: ['1', '1', '1'] }
+]
+
+test('a non-uniform layout is restored at each slot\'s own width', () => {
+  // `filament_self_index` names the owning slot per row, which is what makes the split readable.
+  const record: Record<string, unknown> = { ...NON_UNIFORM, filament_self_index: ['1', '1', '2', '2', '2'] }
+  const result = restoreFilamentPhysics(record, NON_UNIFORM_SOURCES as never)
+  assert.deepEqual(record.nozzle_temperature, ['220', '220', '230', '230', '235'])
+  assert.ok(result.restoredKeys.includes('nozzle_temperature'))
+  // Detection and repair are one implementation: what the restore writes must inspect clean.
+  assert.equal(inspectProjectFilamentPhysics(JSON.stringify(record))?.inconsistent, false)
+})
+
+test('an unreadable layout leaves the variant keys alone rather than splitting them evenly', () => {
+  // Rows that do not divide by the slot count, and no self-index to say how they are shared. An
+  // even split would write 4 values for a 5-row layout, which is the undersized array that makes
+  // BambuStudio read out of bounds mid-slice.
+  const record: Record<string, unknown> = { ...NON_UNIFORM }
+  const result = restoreFilamentPhysics(record, NON_UNIFORM_SOURCES as never)
+  assert.equal(record.nozzle_temperature, undefined, 'a guessed split must never be written')
+  assert.ok(result.skippedKeys.includes('nozzle_temperature'), 'and the refusal must be reported')
+  // Per-slot keys are unaffected by an unreadable VARIANT layout and are still restored.
+  assert.ok(result.restoredKeys.length > 0)
 })

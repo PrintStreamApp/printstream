@@ -21,7 +21,7 @@ import type { ReactNode } from 'react'
  * control is already named by the line's own label.
  */
 export interface SettingsFieldColumn {
-  /** Unique within the line — the key, or `${key}#${index}` for a vector column. */
+  /** Unique within the line: the key, or `${key}#${index}` for a vector column. */
   id: string
   /** The catalog key this column edits. */
   settingKey: string
@@ -35,7 +35,7 @@ export interface SettingsFieldColumn {
   enumRestriction?: string[]
   /** Bulk editing: the selection disagrees on this value, so no single one is true. */
   mixed?: boolean
-  /** Rendered immediately before the control — the filament dialog's override checkbox. */
+  /** Rendered immediately before the control: the filament dialog's override checkbox. */
   prefix?: ReactNode
   onChange: (value: string) => void
 }
@@ -50,7 +50,7 @@ export interface SettingsCatalogAdapter {
    * SET while matching the value it inherits, because that pin is still an override.
    */
   isModified: (key: string) => boolean
-  /** An edit made in this session — colours the LINE label amber. */
+  /** An edit made in this session: colours the LINE label amber. */
   isUnsaved: (key: string) => boolean
   /**
    * Colours the FIELD amber. Defaults to {@link isUnsaved}. The process dialog separates the two:
@@ -59,14 +59,14 @@ export interface SettingsCatalogAdapter {
    * between the two.
    */
   isFieldChanged?: (key: string) => boolean
-  /** An override the PRESET carries over its parent — bold + italic, never counted. */
+  /** An override the PRESET carries over its parent: bold + italic, never counted. */
   isPresetOverride: (key: string) => boolean
   canReset: (key: string) => boolean
   onReset: (key: string) => void
   /** The baseline a changed value replaced, for the hover. */
   originalOf: (key: string) => { value: string; label: string } | null
   /**
-   * A leading dot on the line label, for a state that emphasis alone cannot express — the process
+   * A leading dot on the line label, for a state that emphasis alone cannot express: the process
    * dialog's per-object "set, but matching the inherited value" case, which is resettable despite
    * showing no value difference. Return null for no marker.
    */

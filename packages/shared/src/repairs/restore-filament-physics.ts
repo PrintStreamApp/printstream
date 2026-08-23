@@ -3,29 +3,29 @@
  *
  * OWNS the layout problem. `rebindProjectFilamentPhysics` cannot do this: it only rewrites keys that
  * are still PRESENT, and here they are gone entirely. Writing them from scratch means knowing how
- * many columns each key needs per slot, and that is NOT one number — measured on a real dual-nozzle
+ * many columns each key needs per slot, and that is NOT one number: measured on a real dual-nozzle
  * project, `nozzle_temperature` carries 2 values per slot (variant-expanded) while `filament_density`
  * carries 1. A single guessed width would under- or over-size half the arrays, and an undersized
  * `slots x variants` array is what makes BambuStudio read out of bounds and die mid-slice (see
  * `flush-volumes-matrix.ts`).
  *
  * THE SOURCE OF TRUTH IS THE OPTION, NOT THE PRESET. Width is decided by BambuStudio's config
- * definition — `filament_options_with_variant`, mirrored in `variant-options.ts` — times
+ * definition, `filament_options_with_variant`, mirrored in `variant-options.ts`, times
  * the variant count this project declares in `filament_extruder_variant`. It was previously taken
  * from whatever shape the resolved preset happened to carry, which is wrong in both directions: a
  * preset can spell a per-slot value out per variant, or carry a scalar for a variant-scoped key.
  * That mistake wrote `filament_density` and `chamber_temperatures` at variant width, and since
  * `parseProjectFilaments` sizes the material list from the LONGEST filament array, a 3-material
- * project reopened showing 6 — after which BambuStudio could bind neither the printer nor the
+ * project reopened showing 6: after which BambuStudio could bind neither the printer nor the
  * filaments and fabricated a `(<project>.3mf)` preset for each.
  *
  * CONTRACT: only writes keys EVERY resolved preset defines, and only when EVERY slot resolved. A key
- * some slot lacks is skipped whole and reported in `skippedKeys` — padding the gap with `''` is the
+ * some slot lacks is skipped whole and reported in `skippedKeys`: padding the gap with `''` is the
  * guess this module exists to refuse, and an empty value is itself what makes BambuStudio mint a
  * defaults-only preset. A scalar broadcasts across the variants; nothing is ever widened past what
  * the project declares. Keys the project already carries at an acceptable width are PRESERVED, not
  * rewritten: detection is blunt enough to fire on partially-damaged files, and there the missing or
- * stale keys are the defect — overwriting a healthy key would quietly normalise in-project values
+ * stale keys are the defect: overwriting a healthy key would quietly normalise in-project values
  * on slots the user never touched.
  *
  * Detection is {@link inspectProjectFilamentPhysics}; see the `repairs/index.ts` contract for why
@@ -33,7 +33,7 @@
  */
 import { filamentSettingsCatalog } from '../filament-settings.js'
 import { FILAMENT_PRESET_DEFAULTS, FILAMENT_PRESET_OPTIONS } from '../generated/preset-options.generated.js'
-import { filamentVariantsPerSlot, isFilamentVariantOption } from '../variant-options.js'
+import { filamentVariantRowCount, filamentVariantRowsPerSlot, isFilamentVariantOption } from '../variant-options.js'
 import { isAcceptableFilamentValueWidth } from './filament-physics.js'
 import type { ProcessConfig } from '../process-settings.js'
 
@@ -42,7 +42,7 @@ import type { ProcessConfig } from '../process-settings.js'
  *
  * BambuStudio writes `filament_notes` as a bare `""` even on a three-filament project, where every
  * other filament option is a per-slot array. Authored the normal way it came out `["","",""]`, which
- * `diff()` sees as different from `""` — and one differing key is all it takes for BambuStudio to
+ * `diff()` sees as different from `""`, and one differing key is all it takes for BambuStudio to
  * mint a `(<project>.3mf)` copy instead of binding the user's preset. It is free-text notes with no
  * effect on the print, so leaving it to the default costs nothing.
  */
@@ -73,7 +73,7 @@ export interface RestoredFilamentPhysics {
 /**
  * BambuStudio's serialization of a numeric value: no redundant decimals.
  *
- * A resolved preset can carry `"12.0"` where BambuStudio's own project writes `"12"` — the same
+ * A resolved preset can carry `"12.0"` where BambuStudio's own project writes `"12"`, the same
  * number, a different string. It matters because binding a slot to its preset requires EVERY
  * compared key to match, so a cosmetic `.0` is enough to make BambuStudio mint a `(<project>.3mf)`
  * copy instead. Non-numeric values (gcode, names, percents, `nil`) are returned untouched.
@@ -107,7 +107,7 @@ export function restoreFilamentPhysics(
   const slotCount = sources.length
   const unresolvedSlots = sources.map((config, index) => (config ? null : index + 1)).filter((slot): slot is number => slot !== null)
   // ALL-OR-NOTHING, because these arrays are POSITIONAL and the width is per-key, not per-slot. One
-  // unresolved slot used to still consume its `width` columns, filled with empty strings — which
+  // unresolved slot used to still consume its `width` columns, filled with empty strings, which
   // both wrote a guessed value (the module forbids exactly that) and, wherever width was 2, pushed
   // the array past the real slot count. `parseProjectFilaments` sizes the material list from the
   // LONGEST filament array, so a 3-material project reopened with 6 materials, the last three
@@ -115,21 +115,21 @@ export function restoreFilamentPhysics(
   // `["245","245","245","245","",""]` for three slots, because the third slot's preset
   // (an inherited variant) resolves in a workspace catalogue but not in the anonymous one.
   //
-  // Leaving the project untouched keeps it merely UNREPAIRED — it stays flagged and the user can
-  // repair it from a host that resolves every slot — instead of trading one defect for a worse one.
+  // Leaving the project untouched keeps it merely UNREPAIRED, it stays flagged and the user can
+  // repair it from a host that resolves every slot, instead of trading one defect for a worse one.
   if (slotCount === 0 || unresolvedSlots.length > 0) return { restoredKeys: [], unresolvedSlots, skippedKeys: [] }
 
   // EVERY filament option in the catalogue, not merely the ones a resolved preset happened to carry.
   //
   // BambuStudio writes the COMPLETE filament block and reads an absent key as "not what the preset
-  // says", so a key no preset mentioned — `pressure_advance`, `ironing_fan_speed`,
-  // `default_filament_colour` and six others, none of which the resolver returns — left the project
+  // says", so a key no preset mentioned, `pressure_advance`, `ironing_fan_speed`,
+  // `default_filament_colour` and six others, none of which the resolver returns, left the project
   // looking deviant. BambuStudio then refused to bind the slot to the user's own preset and minted a
   // `(<project>.3mf)` copy instead. Writing only what we had is what made a repaired project open
   // wrong; writing the whole block is what BambuStudio itself does.
   //
   // Extra keys are safe in a way missing ones are not: a slot carrying MORE than BambuStudio would
-  // write still binds (measured — our files have carried ~70 such keys throughout and the built-in
+  // write still binds (measured: our files have carried ~70 such keys throughout and the built-in
   // slots bound cleanly), while one short of it does not.
   const keys = new Set<string>()
   // BambuStudio's OWN filament option list, so the block is complete by its definition rather than
@@ -139,25 +139,28 @@ export function restoreFilamentPhysics(
     keys.add(key)
   }
   // NOT unioned with "whatever the presets carry". A resolved preset is a preset DOCUMENT: besides
-  // settings it holds bookkeeping — `type`, `instantiation`, `inherits`, `include`, `setting_id`,
-  // `filament_id`, `compatible_printers` — and copying those into a project's config produced a file
+  // settings it holds bookkeeping, `type`, `instantiation`, `inherits`, `include`, `setting_id`,
+  // `filament_id`, `compatible_printers`, and copying those into a project's config produced a file
   // BambuStudio refused to open at all ("invalid config file"), which is worse than the mis-binding
   // this was trying to fix. The vendor list above is already complete over the settings (it covers
   // `counter_coef_*`, `hole_coef_*`, `circle_compensation_speed`, `diameter_limit` and the rest that
   // the tune-dialog catalogue omits), so there is nothing left for a union to add.
 
-  // The project's OWN variant layout decides how wide a variant-scoped key is here. Read once.
-  const variantsPerSlot = filamentVariantsPerSlot(record, slotCount)
+  // The project's OWN variant layout decides how wide a variant-scoped key is here. Read once, and
+  // PER SLOT: the blocks are not equal width (a TPU slot owns every printer variant while its
+  // neighbours share the standard ones), so one number applied to every slot silently truncates the
+  // wider slot's last column and leaves the array short of the layout it declares.
+  const rowsPerSlot = filamentVariantRowsPerSlot(record, slotCount)
 
   const restoredKeys: string[] = []
   const skippedKeys: string[] = []
   for (const key of keys) {
-    // A slot whose preset does not define the key takes the OPTION'S DEFAULT — but only when at
+    // A slot whose preset does not define the key takes the OPTION'S DEFAULT, but only when at
     // least ONE slot supplied a value, so the array has real content to be positional about.
     //
     // A key NO slot defines is omitted instead. BambuStudio builds the comparison config by starting
     // from the DEFAULT preset and overlaying only the keys the project carries
-    // (`load_external_preset`), so an absent key already reads as its default — writing it changes
+    // (`load_external_preset`), so an absent key already reads as its default: writing it changes
     // nothing except the chance of getting its SHAPE wrong. That is not hypothetical:
     // `filament_notes` written as `["","",""]` differed from BambuStudio's scalar `""`, and one
     // differing key is enough for it to mint a `(<project>.3mf)` copy instead of binding the preset.
@@ -166,7 +169,7 @@ export function restoreFilamentPhysics(
     //
     // PRESERVE-PRESENT: a key the project already carries at an acceptable width is left alone.
     // Detection is blunt (any missing sentinel flags the file), so this runs on PARTIALLY-damaged
-    // projects too — where the missing/stale keys are the defect, and rewriting a healthy key from
+    // projects too: where the missing/stale keys are the defect, and rewriting a healthy key from
     // the presets would quietly normalise in-project values on slots the user never touched (a
     // changed slot's present keys are re-authored by `rebindProjectFilamentPhysics`, not here).
     // The width rule is shared with the inspector, so a key skipped here can never stay flagged.
@@ -174,7 +177,7 @@ export function restoreFilamentPhysics(
     const existingLength = Array.isArray(existing)
       ? existing.length
       : typeof existing === 'string' && existing !== '' ? 1 : 0
-    if (existingLength > 0 && isAcceptableFilamentValueWidth(key, existingLength, slotCount, variantsPerSlot)) continue
+    if (existingLength > 0 && isAcceptableFilamentValueWidth(key, existingLength, slotCount, filamentVariantRowCount(record))) continue
     const perSlotColumns = sources.map((config) => columnsFor(config?.[key]))
     // WIDTH, in two cases:
     //  - VARIANT-scoped keys take the project's variant count. Never the preset's shape: a preset may
@@ -186,12 +189,22 @@ export function restoreFilamentPhysics(
     //    `filament_dev_ams_drying_ams_limitations`. Forcing them to 1 made every one differ from the
     //    preset, and BambuStudio binds a slot only when NO compared key differs.
     const sourceWidth = perSlotColumns.find((columns) => columns !== null)?.length ?? 1
-    const width = isFilamentVariantOption(key) ? variantsPerSlot : sourceWidth
+    // Variant-scoped keys follow the per-slot layout; everything else is uniform across slots.
+    const variantScoped = isFilamentVariantOption(key)
+    // An unreadable layout (rows that do not divide evenly, with no `filament_self_index` to say how
+    // they are shared) leaves the variant keys ALONE. Splitting them evenly anyway would undersize
+    // the wider slot, the out-of-bounds shape that kills a slice, and inventing the division is
+    // the guess this module exists to refuse. Reported, so the caller can say why it stopped short.
+    if (variantScoped && rowsPerSlot === null) {
+      skippedKeys.push(key)
+      continue
+    }
+    const widthFor = (slot: number): number => (variantScoped ? rowsPerSlot![slot] ?? 1 : sourceWidth)
     const fallback = FILAMENT_PRESET_DEFAULTS[key] ?? filamentSettingsCatalog.options[key]?.default
     // No source value AND no default means we have nothing truthful to write. OMIT the key rather
     // than emit `''`: BambuStudio omits such options itself (`bed_type` is in its filament option
     // list and absent from its saves), and an empty string is as much a deviation from the preset as
-    // an absence — it is what made BambuStudio mint a project preset in the first place.
+    // an absence, it is what made BambuStudio mint a project preset in the first place.
     // Nothing to write and nothing to default to.
     if (fallback === undefined && perSlotColumns.every((columns) => columns === null)) {
       skippedKeys.push(key)
@@ -204,25 +217,27 @@ export function restoreFilamentPhysics(
     }
     const perSlot = perSlotColumns.map((columns) => columns ?? [fallback as string])
     // A source SHORT of the width cannot be completed without inventing a column, and the variants
-    // genuinely differ — BambuStudio's own file carries `filament_max_volumetric_speed: ["25","40"]`
+    // genuinely differ: BambuStudio's own file carries `filament_max_volumetric_speed: ["25","40"]`
     // for one slot. Repeating column 0 wrote 25 for High Flow, and BambuStudio reported it as the
     // user's change. Inheritance is where a missing column gets filled (from the parent preset); by
     // the time a source reaches here it is either complete or unusable.
-    // Short of the width means a variant column is genuinely unknown — the variants differ, so
+    // Short of the width means a variant column is genuinely unknown: the variants differ, so
     // repeating column 0 would invent one (that is how High Flow got the Standard value). A source
     // that came from the option default is uniform by definition, so widen that one; anything else
     // short is unusable.
-    const widened = perSlot.map((columns) => {
+    const widened = perSlot.map((columns, slot) => {
       const values = columns as string[]
-      return values.length === 1 && values[0] === fallback ? Array.from({ length: width }, () => fallback as string) : values
+      return values.length === 1 && values[0] === fallback
+        ? Array.from({ length: widthFor(slot) }, () => fallback as string)
+        : values
     })
-    if (widened.some((columns) => columns.length < width)) {
+    if (widened.some((columns, slot) => columns.length < widthFor(slot))) {
       skippedKeys.push(key)
       continue
     }
     // Anything WIDER is truncated to what this project declares, so a preset from a machine with
     // more variants cannot stretch the array past the slot layout.
-    record[key] = widened.flatMap((columns) => columns.slice(0, width))
+    record[key] = widened.flatMap((columns, slot) => columns.slice(0, widthFor(slot)))
     restoredKeys.push(key)
   }
 

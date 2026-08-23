@@ -1,7 +1,7 @@
 /**
  * Workspace-safe resolution of a live printer for request handlers.
  *
- * `printerManager.getPrinter()` is an in-memory map keyed by printer id ALONE — it
+ * `printerManager.getPrinter()` is an in-memory map keyed by printer id ALONE, it
  * performs no workspace check, so trusting it directly for authorization lets one workspace
  * read/mutate/print on another workspace's connected printer by id. Printer ids are CUIDs
  * but leak across workspaces (shared bridges, logs, support flows), so id secrecy is not an

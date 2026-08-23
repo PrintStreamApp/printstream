@@ -3,7 +3,7 @@ process.env.NODE_ENV = 'test'
 /**
  * What a host is offered, and what it must never be offered.
  *
- * The pins are generated, so these do not re-check the data — they check the
+ * The pins are generated, so these do not re-check the data, they check the
  * rules layered over it, each of which has a wrong answer that looks right:
  * offering a beta as the default, offering x86-64 artifacts to an ARM Linux host
  * that cannot run them, or letting the two lists of engines drift apart.
@@ -108,7 +108,7 @@ test('the default engine is the flagged one, never the head of the list', async 
   assert.ok(chosen, 'linux-x64 must have an installable default')
 
   // The bug this pins: the pinned list is OLDEST first, and the first-run
-  // install took its head — so a fresh container fetched Bambu Studio 2.6.0.51
+  // install took its head, so a fresh container fetched Bambu Studio 2.6.0.51
   // instead of the current default. Caught by booting a real image, not by a
   // type error.
   assert.notEqual(chosen.id, installable[0]?.id, 'the default must not be the oldest entry')
@@ -121,7 +121,7 @@ test('arm64 Linux has engines in our container and none on a bare host', async (
 
   // The regression this pins: dropping the baked engines left an arm64 image
   // with nothing installable and therefore no slicing at all, while the README
-  // advertises arm64 through qemu. The artifact is x86-64 either way — the
+  // advertises arm64 through qemu. The artifact is x86-64 either way: the
   // container is what can run it.
   assert.equal(assetPlatformKey('linux', 'arm64', 'container'), 'linux-x64')
   assert.ok(listCatalogue('linux', 'arm64', 'container').length > 0)

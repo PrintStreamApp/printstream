@@ -44,7 +44,7 @@ export function MaterialPickerDialog({
 }) {
   const [search, setSearch] = useState('')
   // Default to filtering to the sliced file's (compatible) type so the picker leads with usable
-  // materials — but only when the library actually has that type, otherwise fall back to all types
+  // materials, but only when the library actually has that type, otherwise fall back to all types
   // so the dialog isn't empty on open. Clearable like any filter.
   const [types, setTypes] = useState<string[]>(() => {
     const required = (filamentType ?? '').trim().toLowerCase()
@@ -162,7 +162,7 @@ export function MaterialPickerDialog({
                   materials.length === 0
                     ? 'Add spools in the Filament tab, or use a custom material.'
                     : excludeLoaded
-                      ? 'Every matching material is loaded in a machine — clear "Exclude spools loaded in machines" to show them.'
+                      ? 'Every matching material is loaded in a machine: clear "Exclude spools loaded in machines" to show them.'
                       : 'Try a different search or clear the type filter.'
                 }
               />
@@ -205,7 +205,7 @@ export function MaterialPickerDialog({
                           remainPercent={excludeLoaded ? material.availablePercent : material.remainPercent}
                           requiredGrams={requiredGrams}
                           aggregated={(excludeLoaded ? material.spoolCount - material.loadedSpoolCount : material.spoolCount) > 1}
-                          warningLabel={mismatch ? `Sliced for ${filamentType} — a different material type may not print correctly.` : null}
+                          warningLabel={mismatch ? `Sliced for ${filamentType}, a different material type may not print correctly.` : null}
                         />
                       </Sheet>
                     )

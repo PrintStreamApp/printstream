@@ -2,7 +2,7 @@
  * Translate a slice-ready 3MF's "not printable" objects into BambuStudio's `--skip-objects` flag.
  *
  * BambuStudio's CLI excludes objects from a plate's slice ONLY via the
- * `--skip-objects "<identify_id,…>"` command-line flag — keyed on each instance's `identify_id`
+ * `--skip-objects "<identify_id,…>"` command-line flag: keyed on each instance's `identify_id`
  * (which the loader stores as `loaded_id`). It does NOT honor the build item's `printable="0"`
  * attribute, nor a `skip_objects` value embedded in the project config. (Verified against the
  * bundled CLI: marking the build items unprintable slices every object; passing the identify_ids
@@ -11,11 +11,11 @@
  * The print/slice dialog's per-object selection expresses exclusion as `printable="0"` on the build
  * `<item>` (`setBuildItemsUnprintableXml` in the API), and the 3D editor's per-instance Printable
  * toggle writes the same marker through the scene bake. This module reads that intent back out and
- * maps each unprintable `<item>` to its instance `identify_id` via `model_settings.config` — the
- * value `--skip-objects` keys on — so no 3MF surgery is needed (removing instances corrupts the
+ * maps each unprintable `<item>` to its instance `identify_id` via `model_settings.config`, the
+ * value `--skip-objects` keys on, so no 3MF surgery is needed (removing instances corrupts the
  * `<assemble>` cross-references). Real Bambu source projects carry `identify_id`s natively, and the
  * API's scene bake preserves them (minting fresh ones for new instances) so editor-rewritten 3MFs
- * stay skippable too — see `renderArrangedModelSettingsPlates` in the API's three-mf-scene-builder.
+ * stay skippable too: see `renderArrangedModelSettingsPlates` in the API's three-mf-scene-builder.
  */
 import { readZipEntryText } from './zip-io.js'
 
@@ -24,8 +24,8 @@ import { readZipEntryText } from './zip-io.js'
  * `identify_id`s of every instance excluded by a `printable="0"` build `<item>`.
  *
  * Granularity: an object's build items appear in instance-id order (the writer's and reader's
- * shared convention), so a mixed object — some items printable, some not, from the editor's
- * per-INSTANCE toggle — skips exactly the toggled instances. An object whose items are ALL
+ * shared convention), so a mixed object, some items printable, some not, from the editor's
+ * per-INSTANCE toggle, skips exactly the toggled instances. An object whose items are ALL
  * unprintable (the dialog's object-level deselection) skips every one of its instances, even
  * when the instance metadata outnumbers the build items. Empty when nothing is excluded.
  */

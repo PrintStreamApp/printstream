@@ -25,13 +25,13 @@ test('saveArrangedThreeMf carries an optional retarget machine + slicer target',
   assert.equal(withRetarget.retarget?.printerModel, 'H2D')
   assert.equal(withRetarget.slicerTargetId, 'bambustudio-2-7-1-57')
 
-  // Retarget is optional — a plain arrangement save still validates.
+  // Retarget is optional, a plain arrangement save still validates.
   const plain = saveArrangedThreeMfSchema.parse({ baseFileId: 'f1', mode: 'newVersion', sceneEdit })
   assert.equal(plain.retarget, undefined)
 })
 
 test('exportArrangedThreeMf is the bake payload without persistence targeting', () => {
-  // No mode/folder/bridge — and name stays optional (it only labels the audit entry).
+  // No mode/folder/bridge, and name stays optional (it only labels the audit entry).
   const parsed = exportArrangedThreeMfSchema.parse({ baseFileId: 'f1', sceneEdit, retarget, slicerTargetId: 't1' })
   assert.equal(parsed.retarget?.printerModel, 'H2D')
   assert.equal(parsed.name, undefined)
@@ -72,7 +72,7 @@ test('seam/support/colour paint accepts long sub-triangle split codes', () => {
 
 test('preserved slice settings survive the JSON round trip they are stored as', () => {
   // The blob is a persisted column, so everything that identifies the slice must come back
-  // out — a settings shape that silently drops its presets would seed "Slice again" with
+  // out, a settings shape that silently drops its presets would seed "Slice again" with
   // defaults and quietly print something else. (The target is re-parsed, so it gains the
   // filament-mapping `source` default; that is normalization, not loss.)
   const settings = { slicerTargetId: 'bambustudio-2-7-1-57', target: retarget, plate: 2 }

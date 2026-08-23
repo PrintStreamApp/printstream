@@ -3,14 +3,14 @@
  * that will actually slice.
  *
  * WHY. The flush calculation exists twice: BambuStudio's compiled code, and our port of it
- * (`@printstream/shared` `flush-volume-calc.ts`). The port is verified against the vendored SOURCE
- * — but the slicer IMAGE and that vendored source are bumped independently, so an engine upgrade
+ * (`@printstream/shared` `flush-volume-calc.ts`). The port is verified against the vendored SOURCE,
+ * but the slicer IMAGE and that vendored source are bumped independently, so an engine upgrade
  * can move the numbers with nothing failing anywhere. This closes that gap: the engine is asked for
  * its own answer at runtime, and disagreement becomes observable instead of silent.
  *
  * HOW. The CLI recomputes `flush_volumes_matrix` whenever `--filament-colour` is passed
  * (`BambuStudio.cpp`, the block guarded on `selected_filament_colors_option`), and
- * `--export-settings` runs that path WITHOUT slicing and without an input model — so this is a
+ * `--export-settings` runs that path WITHOUT slicing and without an input model, so this is a
  * fast, model-free probe rather than a slice. It returns both the merged settings the engine
  * produced and the matrix it computed from them, so the caller can re-derive from exactly those
  * inputs and compare like for like (`evaluateFlushCalibration`).
@@ -18,7 +18,7 @@
  * This is a DIAGNOSTIC, not the source of the numbers users edit: it runs once per target and is
  * cached, because a CLI round-trip is far too slow to sit behind a grid someone is typing in.
  *
- * It already earned its keep — it caught `readProjectFlushContext` reading a variant-wide machine
+ * It already earned its keep, it caught `readProjectFlushContext` reading a variant-wide machine
  * array positionally, which mis-priced every purge on a dual-nozzle machine's SECOND extruder while
  * the first stayed correct. No amount of testing the calculator could have found that.
  */
@@ -64,7 +64,7 @@ export interface FlushCalibrationInput {
 }
 
 /**
- * Run the probe. Returns null when the engine could not answer — no slicer, a preset triple this
+ * Run the probe. Returns null when the engine could not answer, no slicer, a preset triple this
  * image does not carry, a timeout. That is a supported outcome: calibration is a diagnostic, so its
  * absence must never break the feature it is checking.
  */
@@ -111,7 +111,7 @@ export async function runFlushCalibration(input: FlushCalibrationInput): Promise
     }
   } catch (error) {
     // The verdict degrades to "unchecked", which is indistinguishable from "no slicer to ask" at
-    // every surface above — so log the reason here or a probe that is failing for a REAL cause
+    // every surface above, so log the reason here or a probe that is failing for a REAL cause
     // (missing CLI, unreadable export) looks exactly like one that was never attempted.
     console.warn('[slicer] flush calibration probe failed', (error as Error).message)
     return null

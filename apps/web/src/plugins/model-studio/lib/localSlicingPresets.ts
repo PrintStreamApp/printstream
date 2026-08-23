@@ -1,7 +1,7 @@
 /**
  * Slicing presets the user uploaded on a host with no workspace to keep them in.
  *
- * Signed in, presets belong to the workspace and the api stores them — that is unchanged. This is
+ * Signed in, presets belong to the workspace and the api stores them, that is unchanged. This is
  * only for the public editor, where there is no account and nowhere else to put them, so they live
  * in the browser and never leave the machine (the same promise the file itself carries).
  *
@@ -11,7 +11,7 @@
  * is local, via the bounded zip worker (`zipArchiveClient.ts`).
  *
  * Storage is `localStorage` rather than IndexedDB on purpose: a preset is a few KB of JSON, a whole
- * bundle a few hundred, so the simpler synchronous store is a better fit than an async schema — and
+ * bundle a few hundred, so the simpler synchronous store is a better fit than an async schema, and
  * a quota failure is reported plainly rather than being swallowed. Revisit if presets ever grow to
  * megabytes.
  */
@@ -39,7 +39,7 @@ export class LocalSlicingPresetError extends Error {}
  * Keeps the legacy `…Profiles` spelling on purpose. Everything else in this area was renamed
  * profile -> preset, but this key names data already sitting in users' browsers: renaming it
  * would silently orphan every preset they have uploaded to the public editor. Reserved, not
- * missed — migrate it only with a read-old/write-new pass.
+ * missed: migrate it only with a read-old/write-new pass.
  */
 const STORAGE_KEY = 'printstream.modelStudio.localSlicingProfiles'
 
@@ -58,7 +58,7 @@ export function listLocalSlicingPresets(): LocalSlicingPreset[] {
 /**
  * Parse an uploaded preset file and store it. A bundle yields several presets, all stored.
  *
- * Replaces any stored preset of the same kind and name — re-uploading an edited preset is the
+ * Replaces any stored preset of the same kind and name: re-uploading an edited preset is the
  * expected way to update one, and silently keeping both would leave the user picking between
  * identical-looking entries.
  */
@@ -107,7 +107,7 @@ async function inflatePresetArchive(bytes: Uint8Array): Promise<UploadedProfileE
   const decoder = new TextDecoder()
   const entries: UploadedProfileEntry[] = []
   for (const [path, content] of Object.entries(files)) {
-    // Directory markers and anything that is not a preset document are not errors — a
+    // Directory markers and anything that is not a preset document are not errors, a
     // BambuStudio export carries other files alongside the presets.
     if (path.endsWith('/') || !path.toLowerCase().endsWith('.json')) continue
     entries.push({ content: decoder.decode(content) })
@@ -131,7 +131,7 @@ function isLocalProfile(value: unknown): value is LocalSlicingPreset {
 
 function readStorage(): Storage | null {
   try {
-    // Via `window`, matching `useLocalStorageState` — the app's other browser-storage consumer.
+    // Via `window`, matching `useLocalStorageState`: the app's other browser-storage consumer.
     return typeof window === 'undefined' ? null : window.localStorage
   } catch {
     // Storage access throws outright when the browser blocks it (private mode, third-party

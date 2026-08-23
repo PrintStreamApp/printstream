@@ -4,8 +4,8 @@
  *
  * The FTS is a 2-in/2-out routing module between the AMS units and the two
  * nozzles of a dual-nozzle machine, so an AMS behind it can feed either nozzle.
- * Bambu exposes no command to drive it — routing is chosen by the printer during
- * a print and set up on the printer's own screen — so this surface is purely
+ * Bambu exposes no command to drive it, routing is chosen by the printer during
+ * a print and set up on the printer's own screen, so this surface is purely
  * informational, like `NozzleRackSection`.
  *
  * Rendered only when `status.filamentTrackSwitch` is present; the tab is hidden

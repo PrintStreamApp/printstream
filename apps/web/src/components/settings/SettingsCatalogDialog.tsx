@@ -4,7 +4,7 @@
  * footer's Reset all / Cancel / Update preset / Save as preset / Apply.
  *
  * It owns LAYOUT and FILTERING only. Everything about where a value comes from, what counts as
- * changed, and what a save writes lives in the caller's {@link SettingsCatalogAdapter} — which is
+ * changed, and what a save writes lives in the caller's {@link SettingsCatalogAdapter}, which is
  * what lets one shell serve three genuinely different dialogs (process, filament, machine).
  *
  * This exists because the process and filament dialogs were near-copies that had already drifted:
@@ -42,15 +42,15 @@ import type { SettingsCatalogAdapter } from './settingsCatalogAdapter'
  *
  * Structured rather than a `ReactNode` slot so the documented button order (destructive-left,
  * primary-rightmost, Cancel innermost) is enforced in one place instead of being retyped per
- * dialog — which is how one of these footers ended up unable to wrap on a phone.
+ * dialog, which is how one of these footers ended up unable to wrap on a phone.
  */
 export interface SettingsCatalogDialogActions {
   onResetAll: () => void
   onCancel: () => void
   saving: boolean
-  /** "Update preset" — omit when the preset is not the user's own (BambuStudio's system-preset rule). */
+  /** "Update preset": omit when the preset is not the user's own (BambuStudio's system-preset rule). */
   onUpdatePreset?: () => void
-  /** "Save as preset" — omit where there is no preset destination (per-object editing). */
+  /** "Save as preset": omit where there is no preset destination (per-object editing). */
   onSaveAsPreset?: () => void
   /** The primary action; omit for a dialog editing a stored preset, which has nothing to apply to. */
   apply?: { label: string; onApply: () => void }
@@ -133,7 +133,7 @@ export function SettingsCatalogDialog(props: SettingsCatalogDialogProps): JSX.El
   return (
     <BackAwareModal open={open} onClose={onClose}>
       <ScrollableModalDialog sx={{ maxWidth: 720, width: '100%' }}>
-        <Typography level="h4">{titlePrefix} — {modifiedCount > 0 ? '*' : ''}{presetName}</Typography>
+        <Typography level="h4">{titlePrefix}: {modifiedCount > 0 ? '*' : ''}{presetName}</Typography>
         {subtitle}
         {header}
         {loading && (
@@ -184,7 +184,7 @@ export function SettingsCatalogDialog(props: SettingsCatalogDialogProps): JSX.El
                 flexWrap: 'nowrap',
                 flexShrink: 0,
                 // The list scrolls rather than wraps (overflowX/nowrap above), but a Tab defaults to
-                // `white-space: normal` and is shrinkable — so instead of scrolling, tabs squeezed
+                // `white-space: normal` and is shrinkable, so instead of scrolling, tabs squeezed
                 // below their text and wrapped onto two lines while the row still had slack. Pinning
                 // each tab to its own width is what makes the scroll actually engage.
                 '& > *': { flexShrink: 0, whiteSpace: 'nowrap' }

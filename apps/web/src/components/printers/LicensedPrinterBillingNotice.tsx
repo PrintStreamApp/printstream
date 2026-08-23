@@ -5,8 +5,8 @@
  * The core counterpart of the cloud's `PrinterBillingNotice`, and it exists for
  * the same reason: a silent price increase is a trust (and chargeback) problem,
  * and a refusal the user could not have read about first is just a dead end.
- * Only the two builds differ — this one reads the installed licence, that one
- * reads the workspace's plan — so they never render together (the cloud is not
+ * Only the two builds differ, this one reads the installed licence, that one
+ * reads the workspace's plan, so they never render together (the cloud is not
  * an enforcing build, and a self-hosted install has no billing module).
  *
  * Three states, and nothing otherwise:

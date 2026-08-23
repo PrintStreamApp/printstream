@@ -9,7 +9,7 @@
  * **This is an unofficial API.** Nothing here is published or guaranteed by Bambu
  * Lab; every shape was read off BambuStudio's own source, the reverse-engineered
  * network-plugin research at `ClusterM/open-bamboo-networking`, or a live capture.
- * So every field is optional-by-default and every consumer must fail soft — a
+ * So every field is optional-by-default and every consumer must fail soft, a
  * contract change must degrade to "sync unavailable", never wedge the preset
  * manager.
  *
@@ -19,7 +19,7 @@
  *    itself matches locally by name, which is why renaming a preset in Studio forks
  *    it; we key on the id so a rename stays one preset.)
  * 2. **Timestamps are only ever compared server-clock to server-clock.** `update_time`
- *    is Bambu's clock. A workspace's own clock never enters a comparison with it —
+ *    is Bambu's clock. A workspace's own clock never enters a comparison with it:
  *    local edits are detected by comparing our stored `updatedAt` against the copy we
  *    recorded at last sync, both ours. See `shouldPullFromCloud`.
  */
@@ -35,7 +35,7 @@ export const bambuCloudRegionSchema = z.enum(['global', 'china'])
 export type BambuCloudRegion = z.infer<typeof bambuCloudRegionSchema>
 
 interface BambuCloudHosts {
-  /** Host serving `/v1/...` — where every preset call goes. */
+  /** Host serving `/v1/...`: where every preset call goes. */
   readonly api: string
   /**
    * The web origin. Only TOTP sign-in lives here (`/api/sign-in/tfa`), and it is
@@ -70,7 +70,7 @@ export const BAMBU_SLICER_API_VERSION = '1.0.0.0'
 
 /**
  * Bambu's name for each preset kind, which is not ours: it calls a process preset
- * `print` and a machine preset `printer`. The mapping is the wire boundary — inside
+ * `print` and a machine preset `printer`. The mapping is the wire boundary, inside
  * PrintStream a preset is always `machine` / `process` / `filament`.
  */
 export const bambuCloudPresetTypeSchema = z.enum(['print', 'printer', 'filament'])
@@ -97,7 +97,7 @@ export function bambuCloudTypeFromPresetKind(kind: SlicingPresetKind): BambuClou
 }
 
 /**
- * One entry in the listing. Metadata only — the preset's actual settings need a
+ * One entry in the listing. Metadata only: the preset's actual settings need a
  * per-id detail fetch, which is why a sync costs 1 + N round-trips.
  *
  * `.passthrough()` on purpose: the listing carries fields we do not model, and an
@@ -121,7 +121,7 @@ export type BambuCloudSettingSummary = z.infer<typeof bambuCloudSettingSummarySc
 
 /**
  * Per-type buckets in the listing. `private` is the user's own presets; `public` is
- * Bambu's bundled catalogue — the same hundreds of entries for every account, which
+ * Bambu's bundled catalogue, the same hundreds of entries for every account, which
  * we never import (they are the slicer image's system presets already).
  */
 const bambuCloudSettingBucketSchema = z.object({
@@ -147,7 +147,7 @@ export type BambuCloudSettingList = z.infer<typeof bambuCloudSettingListSchema>
  *
  * Deliberately NOT built from `bambuCloudSettingSummarySchema`: the two look alike but
  * differ on the one field that matters. A listing row always carries `setting_id`; a
- * DETAIL read does not — you asked for it by id, so Bambu does not echo it back. Deriving
+ * DETAIL read does not, you asked for it by id, so Bambu does not echo it back. Deriving
  * this from the summary made `setting_id` required and every single pull threw at the
  * parse before the preset was ever read, which reads as "every preset failed to sync"
  * with a Zod dump for a message. Verified against a live account: the detail response is
@@ -155,7 +155,7 @@ export type BambuCloudSettingList = z.infer<typeof bambuCloudSettingListSchema>
  * setting, filament_id}`.
  *
  * `setting_id` stays optional here rather than being dropped, because create/update DO
- * return it — that is how a newly created preset's cloud id is learned.
+ * return it, that is how a newly created preset's cloud id is learned.
  */
 export const bambuCloudSettingDetailSchema = z.object({
   /** Present on create/update responses; absent on a detail read. */
@@ -174,7 +174,7 @@ export const bambuCloudSettingDetailSchema = z.object({
 export type BambuCloudSettingDetail = z.infer<typeof bambuCloudSettingDetailSchema>
 
 /**
- * The body shape shared by create (`POST`) and update (`PATCH`) — Bambu takes the
+ * The body shape shared by create (`POST`) and update (`PATCH`): Bambu takes the
  * same envelope for both.
  *
  * `setting` is a **diff against the parent preset**, not a full config: BambuStudio's
@@ -242,7 +242,7 @@ export type BambuCloudRequest = z.infer<typeof bambuCloudRequestSchema>
  * What a relay reports back: the raw HTTP outcome, not a verdict.
  *
  * The bridge deploys separately from the API and lags it, so it deliberately does NOT
- * interpret the response — every "is this token dead / is this a Cloudflare challenge /
+ * interpret the response, every "is this token dead / is this a Cloudflare challenge /
  * did this succeed" rule lives API-side, where it can be fixed by an API deploy alone.
  * The bridge's only job is to make the call and hand back what came out.
  */
@@ -267,8 +267,8 @@ export const BAMBU_CLOUD_BODY_TEXT_LIMIT = 2000
  * Whether a 401 is Bambu's genuine "this token is dead" answer.
  *
  * Expiry is signalled by `{"code":4,"error":"Please login."}`. Other 401s happen for
- * reasons that are not the credential — per-endpoint scope/region rejections, and
- * transient edge blips — so treating any 401 as expiry signs the workspace out on a
+ * reasons that are not the credential, per-endpoint scope/region rejections, and
+ * transient edge blips, so treating any 401 as expiry signs the workspace out on a
  * single stray rejection. An unsigned 401 is deliberately NOT expiry.
  */
 export function isBambuCloudExpiryResponse(response: Pick<BambuCloudResponse, 'status' | 'body'>): boolean {
@@ -314,7 +314,7 @@ export function isBambuCloudQuotaResponse(response: Pick<BambuCloudResponse, 'st
  * Bambu's clock as epoch **seconds**, or null when it cannot be read.
  *
  * Two formats appear for the same instant: the listing and detail responses use
- * `"YYYY-MM-DD HH:MM:SS"` (UTC, no zone marker — appending `Z` is what keeps a server
+ * `"YYYY-MM-DD HH:MM:SS"` (UTC, no zone marker: appending `Z` is what keeps a server
  * in a non-UTC zone from reading it as local time), while `values_map` round-trips it
  * as a decimal unix-seconds string. Both are accepted so a caller never has to know
  * which endpoint a timestamp came from.

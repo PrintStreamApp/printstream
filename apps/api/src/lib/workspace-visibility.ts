@@ -2,7 +2,7 @@
  * Central visibility scope for workspace queries.
  *
  * A deleted workspace keeps its rows so a platform admin can restore it, which
- * means the rows are still there to be found — and a soft delete that leaks into
+ * means the rows are still there to be found, and a soft delete that leaks into
  * a listing is worse than no soft delete at all, because the workspace reads as
  * gone while remaining reachable. The exclusion therefore lives here rather than
  * being remembered at each of the two dozen places that query workspaces.
@@ -13,8 +13,8 @@
  * - the platform admin listing, which shows them so they can be restored;
  * - restore itself, which has to load one to clear its `deletedAt`.
  *
- * Anything else — auth bootstrap, the workspace chooser, billing, people,
- * support access, plugin fan-out, stats — must not see them. A user whose only
+ * Anything else, auth bootstrap, the workspace chooser, billing, people,
+ * support access, plugin fan-out, stats, must not see them. A user whose only
  * workspace was deleted should land where a user with no workspace lands, not
  * in a workspace that no longer exists.
  */

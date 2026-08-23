@@ -2,13 +2,13 @@
  * The slicing-preset manager: upload BambuStudio presets and manage the custom ones.
  *
  * Presets are split onto a tab per kind (printer / process / material) because the three carry
- * different metadata and so need different filters — a nozzle diameter means nothing to a
+ * different metadata and so need different filters, a nozzle diameter means nothing to a
  * material preset. Each tab owns its own search, filters, selection and paging
  * (`SlicingPresetKindPanel`); this shell owns only the query, the upload card and the tabs.
  *
  * Rendered in TWO places, and titled by neither of them: `SlicingPresetsDialog` (opened from the
  * editor's gear and the slice sidebar's Manage buttons) and Settings, then Slicing. Hence no
- * heading here, and the sticky props — the dialog is its own scroll container, the settings page
+ * heading here, and the sticky props: the dialog is its own scroll container, the settings page
  * is not.
  *
  * Deliberately the same component in both rather than a settings copy: curating presets and
@@ -54,8 +54,8 @@ export function SlicingPresetsSettingsSection({ stickyTop, stickySurface }: {
   const allProfiles = React.useMemo(() => profilesQuery.data?.profiles ?? [], [profilesQuery.data])
   const customByKind = React.useMemo(() => groupProfilesByKind(allProfiles.filter((profile) => profile.source === 'custom')), [allProfiles])
   // Every preset of the kind, built-in included: the panel's Source filter decides what shows, and
-  // it defaults to the workspace's own. The tab COUNT stays the custom count — it answers "how many
-  // have I made?", which a built-in total would drown — but a zero is left OFF rather than shown,
+  // it defaults to the workspace's own. The tab COUNT stays the custom count, it answers "how many
+  // have I made?", which a built-in total would drown, but a zero is left OFF rather than shown,
   // because a kind with none of its own opens on the built-ins, and "Printer 0" over 202 rows reads
   // as a broken count instead of "you have not customised one yet".
   const byKind = React.useMemo(() => groupProfilesByKind(allProfiles), [allProfiles])
@@ -76,7 +76,7 @@ export function SlicingPresetsSettingsSection({ stickyTop, stickySurface }: {
         workspace, and the static variant deliberately skips the enabled check (it exists
         for auth/setup surfaces that must render before a plugin-manager session does).
         Using it here rendered the Bambu Cloud panel for workspaces that had the plugin
-        turned off — far enough to type credentials into before anything said no.
+        turned off: far enough to type credentials into before anything said no.
       */}
       <PluginSlot name="slicing.presets.sync" />
 

@@ -3,12 +3,12 @@
  *
  * Two legs, because Bambu almost always demands a second factor: the account and
  * password, then either a code it emails or one from the user's authenticator app.
- * Which of the two is asked for is decided by Bambu, not by us — the API reports it
+ * Which of the two is asked for is decided by Bambu, not by us: the API reports it
  * back from the first leg, so there is no "which kind of 2FA do you have?" question.
  *
  * The password is sent once, used for that call, and never stored (nor is it kept in
  * component state past the step). Only the issued token is persisted, encrypted, by the
- * API — it never comes back to the browser.
+ * API, it never comes back to the browser.
  *
  * Counterpart: `apps/api/src/plugins/bambu-cloud-sync/index.ts` (`/connect`, `/connect/verify`).
  */
@@ -77,7 +77,7 @@ export function BambuCloudConnectDialog({ onClose, onConnected }: {
     return (
       <FormDialog
         title="Connect a Bambu Lab account"
-        description="Signs in to Bambu Lab to sync your slicing presets. Your printers stay exactly as they are — this reads and writes your account's preset library, nothing else."
+        description="Signs in to Bambu Lab to sync your slicing presets. Your printers stay exactly as they are, this reads and writes your account's preset library, nothing else."
         submitLabel="Continue"
         busy={busy}
         submitDisabled={!account.trim() || !password}

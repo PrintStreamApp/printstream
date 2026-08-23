@@ -4,13 +4,13 @@
  *
  * Ported from BambuStudio's own sync (`GUI_App::sync_preset` +
  * `PresetCollection::need_sync` in the vendored source), because the goal is to be a
- * well-behaved second client on a library Studio also writes to — not to invent a
+ * well-behaved second client on a library Studio also writes to, not to invent a
  * better protocol for an API we do not control.
  *
  * **Ordering is the conflict rule.** Pull runs first, then push. That is what makes a
  * genuine two-sided conflict resolve cloud-wins: if the cloud copy is newer it lands
  * locally first, which also resets the local-edit marker, so the push pass has nothing
- * left to send. There is no timestamp comparison ACROSS the two clocks anywhere — see
+ * left to send. There is no timestamp comparison ACROSS the two clocks anywhere: see
  * `state.ts` for why that matters.
  *
  * **A preset is never pushed before its parent.** A child's `base_id` must be the
@@ -24,15 +24,15 @@
  * whole account. A hold is cleared when the user edits the preset or reconnects.
  *
  * **A deletion on either side is a question, never an action.** `reconcileDeletions`
- * runs before pull/push and diffs each binding's two sides — does the local preset
- * still exist, does Bambu's listing still carry the setting id — against the current
+ * runs before pull/push and diffs each binding's two sides, does the local preset
+ * still exist, does Bambu's listing still carry the setting id, against the current
  * remote listing and the local preset table. A binding missing on exactly one side is
  * FROZEN (removed from the active set pull/push operate on, so neither can quietly
  * recreate the missing half) and reported for a person to resolve via
  * `/presets/:presetId/resolve-delete`; the API index owns what each answer does.
- * Missing on BOTH sides needs no question — the binding is simply dropped. Symmetric
+ * Missing on BOTH sides needs no question: the binding is simply dropped. Symmetric
  * with the earlier `pendingDeletes` queue (still used for the confirmed-delete-from-
- * here-too case), except that queue only ever fires from an explicit user action —
+ * here-too case), except that queue only ever fires from an explicit user action,
  * this reconciliation is what NOTICES a deletion that happened outside PrintStream's
  * own delete flow (Studio, or the ordinary local delete button, which has no reason to
  * know this plugin exists).
@@ -81,7 +81,7 @@ import type { PluginLogger, PluginSettingStore } from '../../plugin/types.js'
  * Serializes every read-modify-write over a workspace's preset-bindings blob:
  * `runBambuCloudSync` (the background pass, and a user's "Sync now") and
  * `resolvePendingDeletion` (a user answering a pending-deletion banner) each read the
- * full bindings list, decide what changes, and write the whole list back — with no
+ * full bindings list, decide what changes, and write the whole list back, with no
  * locking that would otherwise let two of these overlap for one workspace and have the
  * later write silently clobber the earlier one (a confirmed deletion resurrected by a
  * sync that started before the resolve call, for instance). Keyed by workspaceId so
@@ -95,7 +95,7 @@ export interface SyncPresetOutcome {
   detail?: string
 }
 
-/** A binding awaiting a person's decision — see `reconcileDeletions`. */
+/** A binding awaiting a person's decision: see `reconcileDeletions`. */
 export interface PendingDeletionOutcome {
   presetId: string
   name: string
@@ -116,12 +116,12 @@ export interface BambuCloudSyncResult {
   /** Presets Bambu rejected. Each is now on hold and will not be retried. */
   failed: SyncPresetOutcome[]
   /**
-   * Still local, but gone from Bambu's listing — deleted in Studio or the account.
+   * Still local, but gone from Bambu's listing: deleted in Studio or the account.
    * Frozen until `/presets/:presetId/resolve-delete` says what to do.
    */
   missingRemotely: PendingDeletionOutcome[]
   /**
-   * Still in Bambu Cloud, but the local preset is gone — deleted here by any path.
+   * Still in Bambu Cloud, but the local preset is gone: deleted here by any path.
    * Frozen the same way.
    */
   missingLocally: PendingDeletionOutcome[]
@@ -166,7 +166,7 @@ async function runBambuCloudSyncLocked(context: SyncContext): Promise<BambuCloud
     const result = emptyResult(route)
 
     const remote = collectRemotePresets(list)
-    // A snapshot taken NOW, before pull writes anything — reconciliation only needs to
+    // A snapshot taken NOW, before pull writes anything: reconciliation only needs to
     // know which presets currently exist, and using this rather than a fresh fetch
     // after pull matters: push (below) needs its OWN fresh fetch taken AFTER pull, so
     // its local-edit check compares against what pull just wrote, not what was here
@@ -176,7 +176,7 @@ async function runBambuCloudSyncLocked(context: SyncContext): Promise<BambuCloud
 
     // Same planner the cheap check uses, so what a surface shows as outstanding and what
     // this pass actually does are one decision, not two that can disagree. It also owns
-    // the pull exclusions — frozen bindings, declined imports (`ignoredRemoteSettingIds`)
+    // the pull exclusions: frozen bindings, declined imports (`ignoredRemoteSettingIds`)
     // and confirmed-but-not-yet-drained deletes (`pendingDeletes`); that last one because
     // `propagateConfirmedDeletes` runs AFTER pull here, so without it pull re-imports the
     // preset the user just deleted and the next pass pushes it back up as new.
@@ -271,7 +271,7 @@ async function fetchRemoteListing(
 ): Promise<{ remote: CachedRemoteListing['remote']; route: 'bridge' | 'direct' }> {
   const { list, route } = await listBambuCloudSettings(callContext, session)
   const remote = collectRemotePresets(list)
-  // Only the user's OWN presets are kept — `collectRemotePresets` already drops Bambu's
+  // Only the user's OWN presets are kept: `collectRemotePresets` already drops Bambu's
   // bundled catalogue, which is ~1800 entries and would make this cache absurd.
   await context.store.set(REMOTE_LISTING_CACHE_KEY, JSON.stringify({ at: new Date().toISOString(), route, remote } satisfies CachedRemoteListing))
   return { remote, route }
@@ -297,7 +297,7 @@ export function isBambuCloudSyncPlanEmpty(plan: BambuCloudSyncPlan): boolean {
 /**
  * Decides what is outstanding, WITHOUT fetching a single preset body or writing anything.
  *
- * One `listSettings` call plus local comparison — the per-preset detail reads that make a
+ * One `listSettings` call plus local comparison: the per-preset detail reads that make a
  * real sync expensive are exactly the part a "is there anything to do?" question does not
  * need. That is what makes it cheap enough to run on a timer and read on every editor open.
  *
@@ -371,7 +371,7 @@ function planFromState(
  * Runs the cheap check and records the answer, writing nothing else.
  *
  * "Nothing else" is exact: no preset is created, edited or deleted here, and nothing is
- * sent to Bambu beyond the one listing read. What it DOES persist is bookkeeping — the
+ * sent to Bambu beyond the one listing read. What it DOES persist is bookkeeping: the
  * freeze on a binding whose two sides disagree (that is how a deletion becomes a question
  * a person can answer) and `lastCheck`, which is what lets a surface show the state
  * without making a call of its own.
@@ -381,7 +381,7 @@ export async function checkBambuCloudSync(
   options: {
     /**
      * Reuse a stored Bambu listing younger than this instead of fetching one. 0 forces a
-     * fresh fetch. Only the LISTING is reused — see the note on this function.
+     * fresh fetch. Only the LISTING is reused: see the note on this function.
      */
     maxListingAgeMs?: number
   } = {}
@@ -399,7 +399,7 @@ export async function checkBambuCloudSync(
     try {
       // The CACHE IS THE LISTING, never the verdict. Bambu's listing is the expensive,
       // rate-limited part; the rest of the answer is local state we already hold. Caching
-      // the verdict instead meant editing a preset here showed nothing for ten minutes —
+      // the verdict instead meant editing a preset here showed nothing for ten minutes,
       // a stale answer to a question whose inputs had all changed locally, which reads as
       // the feature being broken. Reusing only the listing keeps Bambu calls just as rare
       // while a local edit or deletion shows up on the very next look.
@@ -443,17 +443,17 @@ interface ReconcileDeletionsResult {
 /**
  * Diffs every binding against the current remote listing and local preset table, and
  * decides which of three things happened to it: nothing (both sides still agree),
- * a deletion nobody has answered for yet (exactly one side is gone — FREEZE and ask),
- * or a deletion that already happened everywhere (both sides gone — nothing to ask,
+ * a deletion nobody has answered for yet (exactly one side is gone, FREEZE and ask),
+ * or a deletion that already happened everywhere (both sides gone, nothing to ask,
  * just forget the binding).
  *
  * Runs once, before pull and push, so neither of them can see a binding this pass just
- * froze — see the two skip checks in `pullNewerCloudPresets` / `pushLocalChanges` for
+ * froze: see the two skip checks in `pullNewerCloudPresets` / `pushLocalChanges` for
  * why that matters (recreating the exact thing the user just deleted).
  *
  * An already-frozen binding is re-checked every pass: if the missing side came back
- * (the user recreated the preset locally with the SAME id — not possible today, but the
- * check costs nothing — or Bambu's listing lagged and the preset reappears), it resumes
+ * (the user recreated the preset locally with the SAME id, not possible today, but the
+ * check costs nothing, or Bambu's listing lagged and the preset reappears), it resumes
  * normal syncing rather than staying stuck waiting for a decision that no longer means
  * anything.
  */
@@ -589,7 +589,7 @@ async function pushLocalChanges(
 ): Promise<BambuPresetBinding[]> {
   // Fetched fresh HERE, after pull has already run: the local-edit check below compares
   // a preset's `updatedAt` against the binding's `localUpdatedAt`, and pull just wrote a
-  // new one for anything it pulled — comparing against a pre-pull snapshot would make
+  // new one for anything it pulled: comparing against a pre-pull snapshot would make
   // every just-pulled preset look locally edited and push it straight back up.
   const presets = await listCustomSlicingPresetRecords(context.workspaceId)
   const byPresetId = new Map(bindings.map((binding) => [binding.presetId, binding]))
@@ -597,7 +597,7 @@ async function pushLocalChanges(
   const quotaBlocked = new Set(connection.quotaBlockedKinds)
 
   for (const preset of orderParentsFirst(presets)) {
-    // Awaiting a decision on `missingRemotely` — the cloud copy is gone and the user
+    // Awaiting a decision on `missingRemotely`: the cloud copy is gone and the user
     // hasn't said whether to delete this one too. Pushing now would recreate it in
     // Bambu Cloud under a brand new id before they got to answer.
     if (frozenPresetIds.has(preset.id)) continue
@@ -615,7 +615,7 @@ async function pushLocalChanges(
       continue
     }
     // Unchanged since the last successful sync: nothing to send. This is the local-edit
-    // check, and both sides of it are OUR timestamp — never Bambu's.
+    // check, and both sides of it are OUR timestamp, never Bambu's.
     if (!isNew && binding.localUpdatedAt === preset.updatedAt) continue
 
     const record = parsePresetContent(preset)
@@ -680,7 +680,7 @@ async function pushLocalChanges(
  * Removes cloud presets the user confirmed deleting.
  *
  * Queued rather than deleted inline at request time so a confirmed removal is not lost
- * to a network blip — but never inferred: a preset only lands in this queue when the
+ * to a network blip, but never inferred: a preset only lands in this queue when the
  * user explicitly asked for it to be removed from their Bambu account too.
  */
 async function propagateConfirmedDeletes(
@@ -717,12 +717,12 @@ export interface ResolvedPendingDeletion {
 }
 
 /**
- * Answers a deletion `reconcileDeletions` froze. The route (`index.ts`) stays thin —
+ * Answers a deletion `reconcileDeletions` froze. The route (`index.ts`) stays thin,
  * this owns the actual state transition so it can be tested the same way as the rest
  * of the engine, without an HTTP harness.
  *
  * Returns `null` when the preset has no pending decision (already resolved, or never
- * had one); the route turns that into 404. Never throws for that case — "nothing to
+ * had one); the route turns that into 404. Never throws for that case: "nothing to
  * resolve" is a normal outcome, not a failure.
  */
 export async function resolvePendingDeletion(
@@ -752,14 +752,14 @@ async function resolvePendingDeletionLocked(
       // Gone from Bambu Cloud; the user agrees the local copy should go too.
       await deleteCustomSlicingPreset(workspaceId, presetId).catch((error) => {
         // Already gone (a second click, or removed through the ordinary delete flow
-        // in the meantime) is not a failure to resolve — the binding still needs
+        // in the meantime) is not a failure to resolve: the binding still needs
         // clearing either way.
         if (!(error instanceof Error) || error.message !== 'Slicing profile not found') throw error
       })
     } else {
       // Gone here; the user agrees Bambu Cloud's copy should go too. Queued rather
       // than deleted inline so a network blip mid-request can't lose a confirmed
-      // delete — the next sync pass drains it via `propagateConfirmedDeletes`.
+      // delete: the next sync pass drains it via `propagateConfirmedDeletes`.
       const connection = await readConnection(store, logger)
       if (connection) {
         await writeConnection(store, { ...connection, pendingDeletes: [...new Set([...connection.pendingDeletes, binding.settingId])] })
@@ -768,7 +768,7 @@ async function resolvePendingDeletionLocked(
   } else if (kind === 'missingLocally') {
     // Declining "remove from Bambu Cloud too" means "leave it there", not "bring it
     // back here". Without this, the next pull would see an unbound preset Bambu still
-    // lists and re-import it — reappearing right after the user deleted it.
+    // lists and re-import it: reappearing right after the user deleted it.
     const connection = await readConnection(store, logger)
     if (connection) {
       await writeConnection(store, {
@@ -779,7 +779,7 @@ async function resolvePendingDeletionLocked(
   }
   // A `missingRemotely` decline needs no further action beyond clearing the binding
   // below: the survivor has no binding, so the next sync treats it as an ordinary new
-  // local preset and creates it in Bambu Cloud fresh — the one direction where coming
+  // local preset and creates it in Bambu Cloud fresh: the one direction where coming
   // back automatically is the wanted outcome.
 
   await writePresetBindings(store, bindings.filter((entry) => entry.presetId !== presetId))
@@ -790,8 +790,8 @@ async function resolvePendingDeletionLocked(
  * Presets ordered so a parent is always considered before anything inheriting from it.
  *
  * Depth is counted along the local `inherits` chain; a name that is not one of ours
- * (a system preset) terminates the walk at depth 0. A cycle — which a hand-edited
- * preset can create — stops at the visited set rather than looping forever.
+ * (a system preset) terminates the walk at depth 0. A cycle, which a hand-edited
+ * preset can create, stops at the visited set rather than looping forever.
  */
 function orderParentsFirst(presets: StoredSlicingPreset[]): StoredSlicingPreset[] {
   const byKindAndName = new Map(presets.map((preset) => [`${preset.kind}:${preset.name}`, preset]))
@@ -822,7 +822,7 @@ function orderParentsFirst(presets: StoredSlicingPreset[]): StoredSlicingPreset[
  * `setting` is sent as stored, which is already the diff-against-parent form Bambu
  * expects: a preset that arrived from the cloud was stored from Bambu's own diff, and
  * a BambuStudio user-preset export is a diff too (`inherits` plus the overrides). What
- * must NOT happen is expanding it into a full config — every inherited value would
+ * must NOT happen is expanding it into a full config, every inherited value would
  * become a local override and the preset would stop tracking its parent.
  */
 function buildPayload(preset: StoredSlicingPreset, record: Record<string, unknown>, baseId: string): BambuCloudSettingPayload {

@@ -1,7 +1,7 @@
 /**
  * A preset uploaded through the editor's "Manage" dialog is a BambuStudio EXPORT, and those are
  * deltas: `inherits` names the parent and the document carries only the changed keys. Treating one
- * as a complete config is what made a repair report success and write nothing — the repair only
+ * as a complete config is what made a repair report success and write nothing: the repair only
  * writes keys EVERY slot defines, and a delta defines a handful.
  */
 import assert from 'node:assert/strict'
@@ -23,7 +23,7 @@ test('a thin BambuStudio export is flattened onto its parent', async () => {
   assert.deepEqual(out.config.nozzle_temperature, ['245', '245'], 'the parent fills the rest')
   assert.equal(out.config.inherits, undefined, 'bookkeeping keys are not settings')
   assert.equal(out.config.from, undefined)
-  // The parent comes back too — by NAME, for the project's `inherits_group`, and by VALUE, so the
+  // The parent comes back too, by NAME, for the project's `inherits_group`, and by VALUE, so the
   // resolver can measure the whole SLOT against it. Without both, a saved project cannot bind a slot
   // to a user preset (see `filament-preset-binding.ts`).
   assert.equal(out.parentName, 'Bambu PETG HF @BBL H2D')
@@ -35,7 +35,7 @@ test('no parent leaves the preset thin rather than inventing values', async () =
   const orphan = { id: 'local:filament:X', kind: 'filament' as const, name: 'X', raw: { filament_density: ['1.30'] }, addedAt: '' }
   const out = await flattenLocalPreset(orphan, [], async () => PARENT as never)
   assert.deepEqual(Object.keys(out.config), ['filament_density'])
-  // "Unknown", not "system" — the save then leaves the project's own record alone.
+  // "Unknown", not "system": the save then leaves the project's own record alone.
   assert.equal(out.parentName, null)
   assert.deepEqual(out.changedKeys, [])
   assert.equal(out.parentConfig, null)
@@ -78,7 +78,7 @@ test('a delta at full width replaces the parent value', async () => {
 /**
  * "No parent" and "parent would not resolve" both return `parentConfig: null`, but they mean
  * opposite things about COMPLETENESS, and a caller that conflates them tells the user something
- * false about their own file — the tune dialog said a self-contained preset "is based on one that
+ * false about their own file: the tune dialog said a self-contained preset "is based on one that
  * isn't available here". Only the second case is short of inherited values.
  */
 test('a self-contained preset is complete, not a preset whose parent went missing', async () => {

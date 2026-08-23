@@ -19,7 +19,7 @@ afterEach(() => {
 })
 
 // Generous failsafe timeout: the loop resolves the instant the predicate is true, so a happy run
-// stays fast — the ceiling only exists to fail a genuinely stuck test, and must tolerate a busy CPU.
+// stays fast: the ceiling only exists to fail a genuinely stuck test, and must tolerate a busy CPU.
 async function waitForCondition(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
   const startedAt = Date.now()
   while (!predicate()) {

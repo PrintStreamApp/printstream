@@ -1,5 +1,5 @@
 /**
- * Windows guided install/uninstall window — a small WinForms dialog (logo,
+ * Windows guided install/uninstall window, a small WinForms dialog (logo,
  * progress bar, live output, and an optional "Open" button) shown in place of a
  * console. Windows only; `startSetupGui` returns null elsewhere so callers keep
  * their console output. Shared by every PrintStream Node SEA (the self-hosted
@@ -7,18 +7,18 @@
  *
  * Like the tray, the window is a self-contained PowerShell script run by the
  * stock `powershell`; the Node side drives it by writing a progress JSON file
- * the window polls — the same status-file pattern the tray uses, no IPC.
+ * the window polls, the same status-file pattern the tray uses, no IPC.
  *
  * Showing a window from a double-clicked console exe is fiddly, so the mechanism
  * is deliberate and the same on every caller:
  *  - PowerShell is spawned with `windowsHide` so no console pops (essential for
  *    a GUI-subsystem host, harmless otherwise). windowsHide also sets the
- *    process show state to SW_HIDE, which WinForms would apply to the form — so
+ *    process show state to SW_HIDE, which WinForms would apply to the form, so
  *    the script overrides it by calling ShowWindow on the form's own handle once
  *    the message loop runs. This works regardless of the host's PE subsystem.
  *  - The script is emitted with a UTF-8 BOM and reads the progress file as UTF-8,
  *    because Windows PowerShell 5.1 otherwise decodes both as the ANSI codepage
- *    and mangles non-ASCII (… —).
+ *    and mangles non-ASCII (…: ).
  *  - The form auto-scales (AutoScaleMode = Dpi) so the layout tracks the display
  *    DPI instead of the title font overrunning hand-placed controls.
  *  - PowerShell's stdout/stderr go to a diagnostic log, so a window that fails to
@@ -34,7 +34,7 @@ import path from 'node:path'
 import { trayIconIcoBuffer } from './tray/icons.js'
 
 export interface SetupGuiOptions {
-  /** App id (kebab) — names the temp dir and the diagnostic log file. */
+  /** App id (kebab): names the temp dir and the diagnostic log file. */
   appId: string
   /** Display name shown in the title and the Open button. */
   appName: string
@@ -55,7 +55,7 @@ export interface SetupGuiOptions {
   title: string
   /** Final phase text on success, e.g. "PrintStream is ready". */
   readyText: string
-  /** Show the primary action button — install flows do, uninstall flows don't. */
+  /** Show the primary action button, install flows do, uninstall flows don't. */
   showOpen: boolean
   /**
    * Label for the primary action button (defaults to "Open <appName>"). The
@@ -64,7 +64,7 @@ export interface SetupGuiOptions {
    */
   openLabel?: string
   /**
-   * Show a button that copies `copyText` to the clipboard — the bridge uses it
+   * Show a button that copies `copyText` to the clipboard: the bridge uses it
    * for the connect code, so the operator can paste it into their workspace.
    */
   showCopy?: boolean
@@ -75,7 +75,7 @@ export interface SetupGuiOptions {
 interface SetupProgress {
   status: 'running' | 'done' | 'error'
   phase: string
-  /** Prominent bold line above the output — a connect code or the app URL. */
+  /** Prominent bold line above the output, a connect code or the app URL. */
   highlight: string
   /** Value the Copy button puts on the clipboard (e.g. the bare connect code). */
   copyText: string
@@ -101,7 +101,7 @@ export interface SetupGui {
   /**
    * Resolves once the window is on screen with its current phase painted (or a
    * short timeout). Callers await this before triggering a UAC prompt so the
-   * user sees the window — and *why* admin is needed — before the prompt, rather
+   * user sees the window, and *why* admin is needed, before the prompt, rather
    * than the prompt appearing over a blank screen.
    */
   whenVisible(): Promise<void>
@@ -168,7 +168,7 @@ export function startSetupGui(options: SetupGuiOptions): SetupGui | null {
     // needs the AND mask that `trayIconIcoBuffer` hand-assembles.
     writeFileSync(iconPath, options.logoIco ?? trayIconIcoBuffer())
     // Lead with a UTF-8 BOM (U+FEFF) so Windows PowerShell 5.1 decodes the
-    // script's non-ASCII (… —) as UTF-8 instead of the ANSI codepage.
+    // script's non-ASCII (…: ) as UTF-8 instead of the ANSI codepage.
     writeFileSync(scriptPath, `${'\ufeff'}${generateSetupGuiScript({
       ...options,
       progressFile,
@@ -270,7 +270,7 @@ $appUserModelId = '${q(input.appUserModelId)}'
 # Win32 surface: System DPI awareness (which WinForms scales against) and
 # ShowWindow/SetForegroundWindow to force the form visible. The host launches us
 # with windowsHide (so no console pops), but that sets our process show state to
-# SW_HIDE — which WinForms applies to the main form. We override it on the form's
+# SW_HIDE, which WinForms applies to the main form. We override it on the form's
 # own handle once the message loop runs (see the timer's first tick).
 Add-Type -Name Win32 -Namespace SetupUi -MemberDefinition '
   [System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
@@ -281,15 +281,15 @@ Add-Type -Name Win32 -Namespace SetupUi -MemberDefinition '
 try { [void][SetupUi.Win32]::SetProcessDPIAware() } catch {}
 # Claim our own taskbar identity BEFORE any window exists. Form.Icon alone is not
 # enough here: the taskbar groups and icons a button by the process's
-# AppUserModelID, which for a PowerShell-hosted window resolves to PowerShell —
+# AppUserModelID, which for a PowerShell-hosted window resolves to PowerShell,
 # so the installer shows up as, and groups under, a stray PowerShell script.
 # Must run before the first window is created; Windows caches the id per process.
 try { [void][SetupUi.Win32]::SetCurrentProcessExplicitAppUserModelID($appUserModelId) } catch {}
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
-# Route any unhandled WinForms exception (e.g. from a timer tick) to stderr — the
-# diagnostic log — instead of popping a .NET crash dialog in the user's face.
+# Route any unhandled WinForms exception (e.g. from a timer tick) to stderr: the
+# diagnostic log, instead of popping a .NET crash dialog in the user's face.
 try { [System.Windows.Forms.Application]::add_ThreadException({ param($s, $e) try { Write-Error ($e.Exception | Out-String) } catch {} }) } catch {}
 try {
 
@@ -354,7 +354,7 @@ $form.Controls.Add($bar)
 
 # A RichTextBox, not a TextBox, for one reason: SelectionHangingIndent.
 #
-# Message boundaries have to be visible — a wrapped line that starts at column
+# Message boundaries have to be visible, a wrapped line that starts at column
 # zero looks exactly like a new message. A TextBox cannot indent a continuation,
 # so the alternative was wrapping the text ourselves, which means predicting the
 # control's usable width in characters. That prediction was wrong (MeasureText
@@ -388,7 +388,7 @@ $highlight.Size = New-Object System.Drawing.Size(560, 36)
 $form.Controls.Add($highlight)
 
 # Buttons live in a right-to-left flow panel so they pack to the right and
-# AutoSize to their text — they never clip or overlap, whatever the DPI or which
+# AutoSize to their text, they never clip or overlap, whatever the DPI or which
 # optional buttons are shown. Added in right-to-left visual order. (Named
 # $buttonBar, distinct from the $bar progress bar above.)
 $buttonBar = New-Object System.Windows.Forms.FlowLayoutPanel
@@ -413,7 +413,7 @@ if ($showOpen) {
   $open.Padding = New-Object System.Windows.Forms.Padding(10, 6, 10, 6)
   $open.Enabled = $false
   # Start-Process on a URL goes through ShellExecute, which opens it in the
-  # default browser. (This window is unelevated, so the browser is too — no need
+  # default browser. (This window is unelevated, so the browser is too, no need
   # for the old explorer.exe indirection, which opened a file window instead.)
   $open.add_Click({ if ($script:appUrl) { Start-Process $script:appUrl }; $form.Close() })
   $buttonBar.Controls.Add($open)
@@ -464,7 +464,7 @@ $timer.add_Tick({
     for ($i = $script:seen; $i -lt $p.lines.Count; $i++) {
       # An empty entry is dropped rather than rendered: message boundaries come
       # from the hanging indent now, so a spacer line is just a gap in the middle
-      # of the log — which is what it looked like.
+      # of the log, which is what it looked like.
       $entry = ([string]$p.lines[$i]).Trim()
       if (-not $entry) { continue }
       # Applied per append rather than once at construction: the indent is a
@@ -510,7 +510,7 @@ $form.Add_Shown({
 })
 [System.Windows.Forms.Application]::Run($form)
 } catch {
-  # The window failed to render — there is nowhere on screen to show this, so
+  # The window failed to render, there is nowhere on screen to show this, so
   # emit it to stderr, which the launcher captures into the diagnostic log.
   Write-Error ($_ | Out-String)
   exit 1

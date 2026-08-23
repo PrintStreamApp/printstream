@@ -62,7 +62,7 @@ export function registerAuthPasswordBootstrapRoutes(
     const email = parsed.data.email.trim().toLowerCase()
     const displayName = parsed.data.displayName?.trim() || null
     const workspace = getCurrentWorkspace()
-    // Hash before opening the transaction — argon2id is intentionally slow and
+    // Hash before opening the transaction: argon2id is intentionally slow and
     // should not hold a database transaction open.
     const passwordHash = await services.hashPassword(parsed.data.password)
     let createdUserId: string | null = null
@@ -167,7 +167,7 @@ export function registerAuthPasswordBootstrapRoutes(
       await writeScopedAuthProviderSetupComplete(context.settings, true)
 
       // Sign the new admin in immediately. A session failure must not fail the
-      // bootstrap — the admin can simply sign in with the password they just set.
+      // bootstrap: the admin can simply sign in with the password they just set.
       let authenticated = false
       try {
         const session = await createUserSession(context.prisma, created.user.id, {

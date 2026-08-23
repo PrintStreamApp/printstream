@@ -63,7 +63,7 @@ test('an update is a PATCH against the setting id, not a delete-and-recreate', a
     }
   })
 
-  assert.equal(calls.length, 1, 'an update must be one call — a delete first would destroy the preset if the recreate failed')
+  assert.equal(calls.length, 1, 'an update must be one call, a delete first would destroy the preset if the recreate failed')
   assert.equal(calls[0]?.method, 'PATCH')
   assert.match(calls[0]?.url ?? '', /\/v1\/iot-service\/api\/slicer\/setting\/PFUS1\?/)
 })

@@ -144,8 +144,8 @@ test('override + resolve schemas validate their shapes', () => {
 
 // Regression (2026-07-19, reported on the H2D "Kawasaki" project): a support material read as
 // permanently "changed vs preset" the moment the project was reopened. Its embedded config held
-// only identity keys — filament_type PLA-S against Bambu's "Support For PLA/PETG" preset, which
-// declares itself PLA — so the badge counted a difference the user never made.
+// only identity keys, filament_type PLA-S against Bambu's "Support For PLA/PETG" preset, which
+// declares itself PLA, so the badge counted a difference the user never made.
 test('identity keys never count as a filament settings change', async () => {
   const { prepareResolvedFilamentState, resolvedFilamentModifiedKeys } = await import('./filament-settings.js')
   const state = prepareResolvedFilamentState({
@@ -205,7 +205,7 @@ test('an installed preset with no parent attributes nothing to the preset', asyn
 
 // Regression (2026-07-28, observed on "Best Shot Golf (PETG)" slot 1 against a dual-nozzle target):
 // a filament value is stored PER EXTRUDER VARIANT, and every comparison here collapsed to element 0.
-// The project carried max volumetric speed ["25","25"] under a preset saying ["25","40"] — equal on
+// The project carried max volumetric speed ["25","25"] under a preset saying ["25","40"]: equal on
 // element 0, so no badge, no yellow, no reset button, while the second extruder sliced at 25.
 test('per-variant drift past element 0 is a change; a scalar still means "same for every variant"', async () => {
   const { prepareResolvedFilamentState, resolvedFilamentModifiedKeys, filamentVariantValuesEqual } =
@@ -254,7 +254,7 @@ test('a project slot\'s values carry to a same-type preset only, per BambuStudio
   assert.equal(filamentSlotValuesCarryTo(petgSlot, { filament_type: ['PETG'] }), true, 'PETG -> PETG keeps the slot')
   // Types are compared RAW, not derived. `Tab::select_preset` reads
   // `config.option("filament_type")->values[0]` on both presets and sets `no_transfer` only when
-  // THOSE differ — the derived type (which folds in `filament_is_support`, so a support PLA reads
+  // THOSE differ: the derived type (which folds in `filament_is_support`, so a support PLA reads
   // PLA-S) is a DISPLAY concept. This assertion previously expected `false`, which discarded a
   // user's tuned values on a switch BambuStudio carries them through.
   const supportSlot = { filament_type: 'PLA', filament_is_support: '1', filament_ids: 'GFS00' }
@@ -271,7 +271,7 @@ test('a project slot\'s values carry to a same-type preset only, per BambuStudio
 // PRODUCTION REGRESSION (Best Shot Golf (PETG), 2026-07-29). Every material showed three changes
 // the user never made, in warning colour, with no reset icon and a "Reset all" that did nothing.
 // The 3MF DECLARES these three keys in `different_settings_to_system`, but their values are
-// identical to the preset — so treating the declared record as the modified marker flagged them
+// identical to the preset, so treating the declared record as the modified marker flagged them
 // while the value-diff-based reset affordance correctly offered nothing to reset.
 //
 // BambuStudio does not work that way: its marker is `PresetCollection::dirty_options`, a value diff
@@ -325,7 +325,7 @@ test('a session edit counts even when the file declared nothing for that key', a
 test('with no preset to diff against, the declared record is taken at its word', async () => {
   const { prepareResolvedFilamentState, resolvedFilamentModifiedKeys } = await import('./filament-settings.js')
   // The named preset is not installed, so the route sends `baseConfig` as a stand-in COPY of
-  // `config` and flags it. A value diff is then empty by construction — reporting "nothing changed"
+  // `config` and flags it. A value diff is then empty by construction: reporting "nothing changed"
   // for a project whose preset went missing would be a confident lie, and it is indistinguishable
   // from the stock-project payload above without the flag.
   const state = prepareResolvedFilamentState({

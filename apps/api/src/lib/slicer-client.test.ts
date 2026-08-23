@@ -155,7 +155,7 @@ test('slicer client spreads concurrent slices across instances and routes progre
     cleanupPaths.add(path.dirname(resultB.artifactPath))
 
     // Once a job completes, its instance binding is dropped. That reports as `unclaimed`, NOT as a
-    // lost slice — the watchdog must never fail a job for finishing normally.
+    // lost slice: the watchdog must never fail a job for finishing normally.
     assert.deepEqual(await client.progress('job-a'), { kind: 'unclaimed' })
   } finally {
     await stubA.close()
@@ -323,7 +323,7 @@ function makeRequest() {
 }
 // Seam: slicer -> API -> browser. This hop used to rebuild each summary field by
 // hand, so a field added to the shared schema was silently dropped on the way to
-// the slice dialog — `filamentIsSupport` reached the API and never reached the
+// the slice dialog: `filamentIsSupport` reached the API and never reached the
 // picker, hiding every support preset (issue #66).
 test('slicer client carries every schema field through, including the support flag and layer height', async () => {
   const server = createServer((request, response) => {

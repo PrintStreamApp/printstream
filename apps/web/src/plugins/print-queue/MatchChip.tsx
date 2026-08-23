@@ -12,7 +12,7 @@ import HelpOutlineRounded from '@mui/icons-material/HelpOutlineRounded'
 import type { ReactNode } from 'react'
 import type { AspectState } from './printerAspectMatch'
 
-// NB: never pass `sx` to a @mui/icons-material icon in this Joy-only app — it reaches for the Material
+// NB: never pass `sx` to a @mui/icons-material icon in this Joy-only app, it reaches for the Material
 // theme's breakpoints and crashes (`createEmptyBreakpointObject` → reading 'length'). As a Joy Chip
 // `startDecorator` (no `sx`) the icon is sized by Joy's `--Icon-fontSize`, so it's safe.
 export function MatchChip({ label, state, icon }: { label: ReactNode; state: AspectState | 'info'; icon?: ReactNode }) {

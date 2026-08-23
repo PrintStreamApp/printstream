@@ -239,7 +239,7 @@ function formatActivityActor(entry: PrintJob['activity'][number]): string {
 }
 
 function FilamentTooltipBody({ label, color }: { label: string; color: string | null }) {
-  // Bambu marketing names only when the filament's own name is Bambu-branded —
+  // Bambu marketing names only when the filament's own name is Bambu-branded,
   // a bare hex must not resolve to another family's marketing colour.
   const bambuMaterial = brandFromPresetName(label.trim()) === 'Bambu' ? bambuMaterialFromPresetName(label) : null
   const headerBg = color ?? 'var(--joy-palette-neutral-800)'

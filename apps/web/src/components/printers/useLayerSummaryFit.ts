@@ -17,7 +17,7 @@ export interface LayerSummaryFit {
   setRemainingSummaryWidth: (width: number) => void
   /** Report the measured width of the ETA label. */
   setEtaSummaryWidth: (width: number) => void
-  /** True when the summary is shown and fits — render the centered summary. */
+  /** True when the summary is shown and fits: render the centered summary. */
   showCenteredLayerSummary: boolean
   /** True when the summary is wanted but the measured widths don't fit. */
   hideLayerSummaryForWidth: boolean

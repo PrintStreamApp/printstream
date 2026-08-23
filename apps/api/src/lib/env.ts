@@ -42,7 +42,7 @@ const bridgeBuildMetadata = readBridgeBuildMetadata()
  * "Unset" and "set to nothing" mean the same thing for every variable here.
  *
  * Load-bearing rather than tidy: this repo maps env into containers as
- * `VAR: ${VAR:-}`, which passes an EMPTY STRING when the `.env` line is absent —
+ * `VAR: ${VAR:-}`, which passes an EMPTY STRING when the `.env` line is absent,
  * so a schema that only admits `undefined` rejects the most common operator
  * mistake, and a `z.parse` failure at module load kills the process before it
  * can log anything useful. `PLATFORM_ADMIN_EMAIL` shipped that way: an empty
@@ -108,7 +108,7 @@ const envSchema = z.object({
    * among several. It is also the WebAuthn relying-party id and expected
    * origin (`auth-local/passkeys.ts`), the OIDC redirect base (`auth-oauth`),
    * the fallback for deciding the `Secure` cookie flag (`auth-session.ts`),
-   * and — on the cloud — the origin every Paddle checkout is pinned to. An
+   * and, on the cloud, the origin every Paddle checkout is pinned to. An
    * operator who reads this as "only needed for a split topology" and drops it
    * on the cloud breaks every passkey sign-in, because the relying-party id
    * silently becomes `localhost`.
@@ -119,7 +119,7 @@ const envSchema = z.object({
   AUTH_LOCAL_EMAIL_CODE_TTL_MINUTES: positiveIntEnv(15),
   /**
    * Create a default workspace on first start when the database has none.
-   * Tri-state on purpose: unset derives from the deployment — self-hosted
+   * Tri-state on purpose: unset derives from the deployment: self-hosted
    * installs get one (the app should just work out of the box), the
    * multi-workspace cloud does not (its workspaces come from signups, and an
    * empty database is the FIRST-RUN state, not a broken one). See
@@ -130,7 +130,7 @@ const envSchema = z.object({
   DEFAULT_WORKSPACE_NAME: z.string().default('My Workspace'),
   // Master key for encrypting stored secrets at rest (e.g. OAuth client secrets)
   // via `secret-encryption.ts`. Any non-empty string works (it is hashed to a
-  // 32-byte AES key). When unset, secrets are stored as-is — set it in production.
+  // 32-byte AES key). When unset, secrets are stored as-is: set it in production.
   SECRETS_KEY: optionalStringEnv(),
   // How long durable audit-log rows are retained before scheduled maintenance
   // prunes them. Default 1 year; raise for stricter compliance retention.
@@ -152,8 +152,8 @@ const envSchema = z.object({
   // Paddle billing (cloud-only; unset in self-hosted/OSS builds). The private
   // billing module reads these; when absent, billing is inert and plans are unlimited.
   /**
-   * Master launch switch for billing enforcement (cloud-only). While false —
-   * the beta default — plans exist but nothing is enforced or sold: no Free
+   * Master launch switch for billing enforcement (cloud-only). While false,
+   * the beta default, plans exist but nothing is enforced or sold: no Free
    * printer cap, no Pro plugin gating, and checkout/portal actions are
    * refused. Paddle config (below) can be present for admin surfaces and
    * webhook processing without turning enforcement on. Flip to true at launch
@@ -173,7 +173,7 @@ const envSchema = z.object({
    * Which native-build channel this deployment offers for download.
    *
    * `stable` is the shipping app. `staging` is the test channel, whose binaries
-   * verify licences against staging's throwaway signing key — so they accept
+   * verify licences against staging's throwaway signing key, so they accept
    * keys this staging deployment issues and REJECT every real one. Setting this
    * to `staging` on production would hand paying customers a build that refuses
    * their licence, which is why it is an explicit named value rather than
@@ -186,7 +186,7 @@ const envSchema = z.object({
    * set in Paddle's checkout settings (e.g. `PRINTSTRM`).
    *
    * Configured rather than read from Paddle because Paddle's API does not expose
-   * it — it is a dashboard setting with no endpoint behind it. Configured rather
+   * it, it is a dashboard setting with no endpoint behind it. Configured rather
    * than hardcoded because a wrong value here is worse than none: an unfamiliar
    * name on a statement is what a chargeback starts as, and telling someone the
    * wrong one sends them looking for a charge that is not there under that name.
@@ -220,7 +220,7 @@ const envSchema = z.object({
   PADDLE_PRICE_SELF_HOSTED_PRO_PER_PRINTER: optionalStringEnv(),
   /**
    * Paddle price id for the Lifetime self-hosted license: a one-time,
-   * perpetual, commercial-use key. Self-hosted only — it confers no cloud plan.
+   * perpetual, commercial-use key. Self-hosted only, it confers no cloud plan.
    */
   PADDLE_PRICE_LIFETIME: optionalStringEnv(),
   /**
@@ -258,8 +258,8 @@ const envSchema = z.object({
    * OVERRIDE for where a self-hosted install refreshes a subscription-backed
    * license key. Normally leave this unset: the key itself names the deployment
    * that issued it (`refreshOrigin`), which cannot drift from the truth because
-   * it is signed. Setting this wins anyway — an operator behind a rewriting
-   * proxy needs an escape hatch — and a disagreement with the key is logged.
+   * it is signed. Setting this wins anyway, an operator behind a rewriting
+   * proxy needs an escape hatch, and a disagreement with the key is logged.
    *
    * Resolution lives in `license-origin.ts`, never read directly: the fallback
    * chain is the contract, not this variable. Perpetual keys never refresh, so
@@ -271,7 +271,7 @@ const envSchema = z.object({
    * Where the built-in server backups live (issue #78). Deliberately its own
    * mount in the Compose stack (`/backups`) and a sibling of the data tree on
    * the native build, so wiping or recreating the app cannot take the backups
-   * with it. UNSET disables backups entirely — a default inside the container
+   * with it. UNSET disables backups entirely, a default inside the container
    * filesystem would let an install with an un-updated compose file write
    * "backups" that die with the container. Cloud manages the surface from the
    * platform workspace (workspace admins never see it).
@@ -300,7 +300,7 @@ const envSchema = z.object({
   /**
    * Base URL(s) of the standalone slicer runtime. Accepts a comma-separated
    * list to fan slices out across multiple identical sidecars (each instance
-   * should run one slice at a time — see `SLICING_MAX_CONCURRENT_JOBS`).
+   * should run one slice at a time: see `SLICING_MAX_CONCURRENT_JOBS`).
    * The parsed list is exported as `SLICER_SERVICE_URLS`.
    */
   SLICER_SERVICE_URL: optionalStringEnv(),
@@ -309,7 +309,7 @@ const envSchema = z.object({
    * Total slicing jobs the API runs at once across all slicer instances.
    * Defaults to the number of configured `SLICER_SERVICE_URL` entries so
    * adding a sidecar adds a slot; override only to run more than one
-   * concurrent slice per instance (not recommended — concurrent CLI runs in
+   * concurrent slice per instance (not recommended: concurrent CLI runs in
    * one container contend on the shared BambuStudio home dir).
    */
   SLICING_MAX_CONCURRENT_JOBS: optionalPositiveIntEnv(),
@@ -330,7 +330,7 @@ const envSchema = z.object({
   // keeps the native update check inert on Docker/dev runs.
   PRINTSTREAM_SERVER_FINGERPRINT: optionalStringEnv(),
   // The native app's one-click in-place update (native-update-apply.ts). All
-  // published by apps/server/src at boot, absent everywhere else — their
+  // published by apps/server/src at boot, absent everywhere else, their
   // absence is what keeps the apply path refusing on Docker/dev runs:
   // - PRINTSTREAM_SERVER_EXE: the installed executable to swap. Only ever set
   //   by a PACKAGED native run, so a dev process can never swap its own node.
@@ -390,7 +390,7 @@ const envSchema = z.object({
   PLUGINS_DIR: z.string().default('./data/plugins'),
   /**
    * Directory of the built web SPA (`apps/web/dist`) for the API to serve on
-   * its own port, alongside `/api` and `/ws` — the single-container topology
+   * its own port, alongside `/api` and `/ws`: the single-container topology
    * (no separate nginx `web` service). The combined Docker image points this at
    * the embedded `dist`. Leave unset for the split topology, where nginx or a
    * CDN serves the SPA and the API only handles `/api` + `/ws`. See
@@ -403,10 +403,10 @@ const envSchema = z.object({
    * `req.secure` reflect the original client instead of the proxy.
    *
    * Accepted values mirror Express:
-   * - `true` — trust all proxies (use only when the proxy network is
+   * - `true`: trust all proxies (use only when the proxy network is
    *   tightly controlled).
-   * - integer — number of hops to trust (e.g. `1` for a single nginx).
-   * - IP / CIDR list (comma-separated) — trust specific upstreams.
+   * - integer: number of hops to trust (e.g. `1` for a single nginx).
+   * - IP / CIDR list (comma-separated): trust specific upstreams.
    * Leave unset in single-process / direct-to-internet deployments.
    */
   TRUST_PROXY: optionalStringEnv(),
@@ -450,7 +450,7 @@ const envSchema = z.object({
   // Observability: when enabled, an OpenTelemetry meter provider exposes a
   // Prometheus `/metrics` endpoint on `METRICS_PORT` for an internal scraper.
   // Off by default so the OSS/self-hosted build runs no telemetry stack unless
-  // an operator opts in. The port is internal — do not proxy it publicly.
+  // an operator opts in. The port is internal: do not proxy it publicly.
   METRICS_ENABLED: booleanEnv(false),
   METRICS_PORT: positiveIntEnv(9464),
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development')

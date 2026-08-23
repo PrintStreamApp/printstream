@@ -197,7 +197,7 @@ test('a PLA interface on a homogeneous PETG plate proposes the combination set (
 test('the combination table outranks the soluble-interface fallback', () => {
   // PVA over a PLA model matches BOTH the table (PLA <- PVA) and the soluble fallback.
   // Studio consults the table first; its set enables support and switches to tree(auto),
-  // which the fallback set never does — and it omits independent_support_layer_height.
+  // which the fallback set never does, and it omits independent_support_layer_height.
   const result = recommendSupportSettingsForInterfaceFilament({
     interfaceFilamentId: 2,
     supportFilamentId: 0,
@@ -218,7 +218,7 @@ test('the combination table outranks the soluble-interface fallback', () => {
 })
 
 test('a table hit whose values are already configured suppresses the fallback prompt too', () => {
-  // Mirrors Tab.cpp: once the JSON query matches, the hard-coded cases are never consulted —
+  // Mirrors Tab.cpp: once the JSON query matches, the hard-coded cases are never consulted,
   // even when every table value is already in place and the fallback WOULD still move keys
   // (independent_support_layer_height is only in the fallback set).
   const result = recommendSupportSettingsForInterfaceFilament({

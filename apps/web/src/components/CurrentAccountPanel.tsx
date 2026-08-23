@@ -133,7 +133,7 @@ export function CurrentAccountPanel({
     meta: { suppressGlobalErrorToast: true },
     mutationFn: () => apiFetch<void>('/api/auth/logout', { method: 'POST' }),
     onSuccess: async () => {
-      // Cloud: leave the app entirely — a hard load of the marketing home
+      // Cloud: leave the app entirely, a hard load of the marketing home
       // drops all signed-in state (WS connection, caches, sticky entered-app
       // branch) and boots the light marketing bundle. Self-hosted has no
       // marketing surface, so stay in the SPA on the sign-in wall.
@@ -226,7 +226,7 @@ export function CurrentAccountPanel({
    * its own Messages tab, so the card restated a tab they can already see. It
    * stays for everyone else, whose workspaces do not all have that tab.
    *
-   * It renders only when a plugin fills the slot — empty in a public build,
+   * It renders only when a plugin fills the slot: empty in a public build,
    * where the route does not exist and the card would be a dead end.
    */
   const showsMessagesDestination = !isSupportUser && accountSlotHasContent(ACCOUNT_MESSAGES_SLOT)
@@ -479,7 +479,7 @@ export function CurrentAccountPanel({
 
 /**
  * The panel's own page heading. Distinct from {@link PageSectionHeading}, which titles the
- * sections BELOW it — this one has no icon, count, or rule so the sections cannot outweigh it.
+ * sections BELOW it, this one has no icon, count, or rule so the sections cannot outweigh it.
  */
 function AccountPageHeading({
   title,

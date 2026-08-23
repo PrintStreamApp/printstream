@@ -26,7 +26,7 @@ export function useNotificationChannelEntries() {
   const present = mergePlugins(pluginCatalogQuery.data?.plugins ?? [], webPluginRegistry.list())
     .filter((entry): entry is MergedPluginEntry => isNotificationPlugin(entry.name))
     .filter((entry) => entry.api != null)
-  // Channels that exist in this context, enabled or not — hosts use this to
+  // Channels that exist in this context, enabled or not: hosts use this to
   // decide whether a Notifications section exists at all (the panel's own
   // "enable a plugin" empty state covers the none-enabled case).
   const availableChannels = present.filter((entry) =>

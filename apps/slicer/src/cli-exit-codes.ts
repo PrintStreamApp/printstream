@@ -8,7 +8,7 @@
  *
  * HOW THE CODES WORK. BambuStudio calls `flush_and_exit(ret)` with a NEGATIVE return code (the
  * `CLI_*` constants in `libslic3r/Utils.hpp`) and prints `run found error, return <N>, exit...`.
- * The process exit code is the low byte, i.e. `256 + N` — so -24 surfaces as 232, -5 as 251,
+ * The process exit code is the low byte, i.e. `256 + N`, so -24 surfaces as 232, -5 as 251,
  * -17 as 239. We prefer parsing the printed `return <N>` because it is unambiguous; the exit-code
  * arithmetic is only a fallback, and is deliberately NOT applied to 134-139, which are signal
  * deaths (128 + signal) that would otherwise collide with the -117..-122 range.
@@ -20,7 +20,7 @@
  * CONTRACT: the returned message always KEEPS the `Slicer CLI exited with code <exit>` prefix.
  * The API's retry classifier (`isLikelyBuiltinProfileCompatibilityExit` in
  * `apps/api/src/lib/slicing-jobs.ts`) matches that exact shape to decide whether to drop
- * incompatible builtin profiles and retry — changing the prefix silently disables that recovery.
+ * incompatible builtin profiles and retry: changing the prefix silently disables that recovery.
  *
  * Source of the code list: BambuStudio `src/libslic3r/Utils.hpp` (the `CLI_*` defines) cross-checked
  * against the `cli_errors` message map in `src/BambuStudio.cpp`. New codes in a future engine simply
@@ -111,12 +111,50 @@ export function formatSliceCliExitError(output: string, exitCode: number | null)
   const returnCode = resolveCliReturnCode(output, exitCode)
   const detail = returnCode === null ? null : CLI_RETURN_CODE_MESSAGES[returnCode]
   const engine = extractEngineErrorLine(output)
-  const explained = detail ? `${prefix}: ${detail}` : prefix
+  const rejected = returnCode === CLI_INVALID_VALUES ? extractRejectedSettingKeys(output) : []
+  const named = rejected.length > 0 ? `${detail ?? ''} Rejected: ${rejected.join(', ')}.`.trim() : detail
+  const explained = named ? `${prefix}: ${named}` : prefix
   return engine ? `${explained} (engine: ${engine})` : explained
 }
 
+/** `CLI_INVALID_VALUES_IN_3MF`: the engine refused one or more setting VALUES before slicing. */
+const CLI_INVALID_VALUES = -18
+
 /**
- * The engine's OWN last words before it gave up — e.g. `Flush volumes matrix do not match to the
+ * Which settings the engine rejected, lifted from its own report.
+ *
+ * The CLI runs `DynamicPrintConfig::validate` before slicing and prints every offending option to
+ * stderr under a `Param values in 3mf/config error:` header, one `key: reason` per line. Without
+ * those keys the message says a value is rejected and leaves the user to guess which of several
+ * hundred settings it was.
+ *
+ * Read from the ENGINE rather than re-derived from our own option bounds on purpose. We carry
+ * `min`/`max` on every option and could sweep them ourselves, but that would be a second
+ * implementation of the engine's rule, free to disagree with the engine it exists to predict, and
+ * it is exactly that shape of duplication that produces the defects this codebase keeps repairing.
+ * The engine has already answered; this only reports the answer.
+ *
+ * Keys only, not the reasons: the reasons are BambuStudio's own strings, and the point here is to
+ * say where to look.
+ */
+function extractRejectedSettingKeys(output: string): string[] {
+  const keys: string[] = []
+  let inBlock = false
+  for (const raw of output.split(/\r?\n/)) {
+    const line = raw.trim()
+    if (/^Param values in 3mf\/config error:/i.test(line)) { inBlock = true; continue }
+    if (!inBlock) continue
+    // The block runs until anything that is not a `key: reason` pair, which is where the engine's
+    // own exit logging resumes.
+    const match = line.match(/^([a-z0-9_]+):\s*\S/i)
+    if (!match?.[1]) break
+    if (!keys.includes(match[1])) keys.push(match[1])
+  }
+  return keys
+}
+
+/**
+ * The engine's OWN last words before it gave up: e.g. `Flush volumes matrix do not match to the
  * correct size!`.
  *
  * The generic codes (-100 above all) say "slicing failed" and nothing else, while BambuStudio
@@ -131,7 +169,7 @@ export function formatSliceCliExitError(output: string, exitCode: number | null)
  */
 function extractEngineErrorLine(output: string): string | null {
   // Scans the WHOLE output, both streams. It must NOT stop at `run found error`: that line is on
-  // stdout while the specific complaint often lands on stderr, and the two arrive concatenated —
+  // stdout while the specific complaint often lands on stderr, and the two arrive concatenated:
   // stopping there picked the vague `found slicing or export error for partplate 1` over the
   // useful `Flush volumes matrix do not match to the correct size!` sitting in the other stream.
   let tagged: string | null = null

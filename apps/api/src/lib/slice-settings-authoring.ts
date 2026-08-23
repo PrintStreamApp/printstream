@@ -9,7 +9,7 @@
  * silently outrank the chosen preset on the compatibility-fallback retry (the residual of "picked
  * Extra Fine, silently got the project's 0.20mm").
  *
- * So this runs as a step of the rewrite chain, on the project the engine is about to slice —
+ * So this runs as a step of the rewrite chain, on the project the engine is about to slice:
  * upholding the pipeline's rule that PrintStream authors the 3MF and the CLI only slices it. The
  * file we keep is then literally the file that was sliced, not a reconstruction of it.
  *
@@ -18,15 +18,15 @@
  * `rebindProjectFilamentPhysics`, `applyFilamentSlotOverrides`) rather than restating what each
  * setting kind means. Order is fixed by that shared composition: the machine must already be
  * authored (`authorProjectMachineFromProfile`) because the process and filament steps index the
- * topology maps it rebuilds — so this must run AFTER the machine step in the chain.
+ * topology maps it rebuilds, so this must run AFTER the machine step in the chain.
  *
  * INVARIANT, and the reason this is safe to run before the engine rather than after: the authored
  * config must describe what the engine actually did, so authoring cannot change a slice's output.
- * MEASURED, not assumed — the same project sliced with and without this pass produced identical
+ * MEASURED, not assumed, the same project sliced with and without this pass produced identical
  * process settings in the G-code (`grid/5/monotonicline`). What that A/B also established is which
  * side wins: a process preset passed on the command line OVERRIDES the project's embedded process
  * values, so a project's `different_settings_to_system` deltas are inert once a preset is loaded.
- * This module therefore lets the preset win rather than restoring those deltas — restoring them
+ * This module therefore lets the preset win rather than restoring those deltas: restoring them
  * would leave the kept project describing a print that never happened (it declared
  * `3dhoneycomb/4/monotonic` while the engine used the preset's values).
  */
@@ -37,6 +37,8 @@ import {
   applyFilamentSlotOverrides,
   applyProcessProfileToProjectSettings,
   canonicalCurrBedType,
+  dropEngineHostileOverrides,
+  serializeProcessBool,
   rebindProjectFilamentPhysics,
   type FilamentSlotRebind,
   type ProcessConfig,
@@ -58,7 +60,7 @@ export interface AuthorSliceSettingsInput {
   fileName: string
   /**
    * Whether the target printer has a set-up Filament Track Switch, resolved from LIVE printer
-   * status by the caller (the browser never supplies it — it would go stale between the dialog and
+   * status by the caller (the browser never supplies it, it would go stale between the dialog and
    * the slice, and a wrong value produces a file the printer refuses).
    *
    * `false`/omitted for manual-profile targets and every machine without the module.
@@ -72,15 +74,24 @@ export interface AuthorSliceSettingsInput {
  * the file it had) or the project's settings could not be read.
  *
  * Best-effort by design and never throws: every step is independently skippable, and a slice that
- * would have worked before must still work. An unresolvable preset — notably a `project:` preset,
- * which has no separate file — leaves the project's own embedded value alone, correct because that
+ * would have worked before must still work. An unresolvable preset, notably a `project:` preset,
+ * which has no separate file, leaves the project's own embedded value alone, correct because that
  * value IS the preset in that case.
  *
  * The process step lets the resolved preset win over the project's declared deltas (see the module
- * header: the engine does the same). The FILAMENT step is deliberately the other way round —
+ * header: the engine does the same). The FILAMENT step is deliberately the other way round:
  * `rebindProjectFilamentPhysics` preserves a slot's declared keys by contract, which is right there
  * because a filament preset binds per slot rather than being loaded wholesale over the project.
  */
+/** Whether a project-settings value MEANS true, in any of the spellings a config carries. */
+function isTruthyConfigValue(value: unknown): boolean {
+  if (typeof value === 'boolean') return value
+  if (typeof value === 'number') return value !== 0
+  if (typeof value === 'string') return value === '1' || value.toLowerCase() === 'true'
+  if (Array.isArray(value)) return isTruthyConfigValue(value[0])
+  return false
+}
+
 export async function authorSliceSettingsIntoProject(input: AuthorSliceSettingsInput): Promise<string | null> {
   const raw = await readEntry(input.projectPath, PROJECT_SETTINGS_ENTRY).catch(() => null)
   if (!raw || raw.length === 0) return null
@@ -100,15 +111,17 @@ export async function authorSliceSettingsIntoProject(input: AuthorSliceSettingsI
   if (processConfig) {
     // The preset WINS over whatever the project declared, because that is what the engine did:
     // an A/B of the same project sliced with and without this pass produced identical G-code
-    // (`grid/5/monotonicline`) even though the project declared `3dhoneycomb/4/monotonic` — a
+    // (`grid/5/monotonicline`) even though the project declared `3dhoneycomb/4/monotonic`, a
     // loaded process preset overrides the project's embedded process values outright. Carrying
     // the project's deltas forward here would leave the kept project describing a print that
     // never happened, and they would be equally inert on a re-slice.
     settings = applyProcessProfileToProjectSettings(settings, processConfig, input.target.processSettingOverrides ?? {})
   } else if (input.target.processSettingOverrides) {
-    // No resolvable preset (a project preset), but the overrides still happened — write them over
+    // No resolvable preset (a project preset), but the overrides still happened: write them over
     // the project's own process values so they are not silently lost with the preset.
-    for (const [key, value] of Object.entries(input.target.processSettingOverrides)) settings[key] = value
+    // Same empty-numeric guard the bake applies (`@printstream/shared` `settings-value-guard.ts`):
+    // a cleared field written as "" makes the engine abandon every key after it, silently.
+    for (const [key, value] of Object.entries(dropEngineHostileOverrides(input.target.processSettingOverrides))) settings[key] = value
   }
 
   settings = await applyFilamentSelection(settings, input)
@@ -124,18 +137,24 @@ export async function authorSliceSettingsIntoProject(input: AuthorSliceSettingsI
   // with the printer in front of it.
   //
   // Under our Manual `filament_map_mode` the grouping half is inert (that path only runs for auto
-  // modes) — this is authored so the file states what it was sliced for, both for our own
+  // modes), this is authored so the file states what it was sliced for, both for our own
   // consistency check and so it reopens correctly in BambuStudio.
   //
   // Written only when TRUE, and cleared when a project carries a stale `true`: an absent key
   // already means "no switch" to BambuStudio's CLI and to `filamentTrackSwitchMatchesSlice`, so
   // writing `false` everywhere would force a project rewrite on every slice for no change in
   // meaning.
+  //
+  // Written as the STRING "1", never a JSON boolean. `load_from_json` handles only string and array
+  // values and drops anything else with "invalid json type for <key>" (`Config.cpp:1004-1008`), so a
+  // JSON `true` here would be silently ignored and the file would claim nothing. Every bool in a
+  // real project is a "1"/"0" string; 0 of 33 sampled projects contain a JSON boolean anywhere.
   if (input.hasFilamentTrackSwitch === true) {
-    settings.has_filament_switcher = true
-  } else if (settings.has_filament_switcher) {
-    // Only a TRUTHY stale value is worth clearing. Deleting an existing `false` would mean the same
-    // thing either way and would force a full 3MF rewrite on every slice of such a project.
+    settings.has_filament_switcher = serializeProcessBool(true)
+  } else if (isTruthyConfigValue(settings.has_filament_switcher)) {
+    // Only a value that MEANS true is worth clearing. An existing "0" already says what an absent
+    // key says, so deleting it would force a full 3MF rewrite on every slice for no change in
+    // meaning. Note "0" is a truthy JS string, so this cannot be a plain truthiness test.
     delete settings.has_filament_switcher
   }
 
@@ -159,7 +178,7 @@ export async function authorSliceSettingsIntoProject(input: AuthorSliceSettingsI
  *
  * Two steps in this order for the same reason the retarget uses it: the rebind writes preset
  * values (and preserves anything the project already declared as a user override), and the override
- * pass then writes the session's own values AND records them in `different_settings_to_system` —
+ * pass then writes the session's own values AND records them in `different_settings_to_system`,
  * which is what makes them reopen as user changes rather than as invisible drift.
  */
 async function applyFilamentSelection(
@@ -200,7 +219,7 @@ async function applyFilamentSelection(
 async function resolveProcessConfig(input: AuthorSliceSettingsInput): Promise<ProcessConfig | null> {
   if (!input.target.processProfileId) return null
   try {
-    // Skips `project:` presets, which have no separate file — those fall through to null so the
+    // Skips `project:` presets, which have no separate file, those fall through to null so the
     // project keeps the embedded process that IS the preset.
     const [file] = await resolveSlicingPresetFiles(input.workspaceId, [
       { id: input.target.processProfileId, kind: 'process' }
@@ -212,7 +231,7 @@ async function resolveProcessConfig(input: AuthorSliceSettingsInput): Promise<Pr
       content: file.content
     })
   } catch (error) {
-    // A resolve failure costs fidelity, not the slice — the kept project keeps its own process. Worth
+    // A resolve failure costs fidelity, not the slice: the kept project keeps its own process. Worth
     // a line, because the symptom (re-slicing shows the wrong preset) is otherwise unexplainable.
     console.warn(`[slice-authoring] could not resolve process preset ${input.target.processProfileId}`, (error as Error).message)
     return null
@@ -236,7 +255,7 @@ async function resolveFilamentConfig(
     })
     return config ? { config, name: file.name } : null
   } catch (error) {
-    // Per SLOT, and once per slice — not a hot loop. Same reasoning as the process preset above.
+    // Per SLOT, and once per slice, not a hot loop. Same reasoning as the process preset above.
     console.warn(`[slice-authoring] could not resolve filament preset ${mapping.profileId} for slot ${mapping.projectFilamentId}`, (error as Error).message)
     return null
   }

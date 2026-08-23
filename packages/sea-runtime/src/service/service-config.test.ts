@@ -41,7 +41,7 @@ test('WinSW config and paths reflect the spec (win32 layout)', () => {
 })
 
 test('WinSW config emits a service account only when one is set', () => {
-  // Default (LocalSystem): no <serviceaccount> block — the bridge's case.
+  // Default (LocalSystem): no <serviceaccount> block: the bridge's case.
   assert.equal(/<serviceaccount>/.test(generateWinswConfig(baseSpec)), false)
 
   // The self-hosted server pins NetworkService so PostgreSQL (which refuses to
@@ -59,7 +59,7 @@ test('WinSW config emits a service account only when one is set', () => {
  * It failed silently in production exactly once and only on Windows. The bridge
  * exited 0 to be restarted after a self-update; WinSW restarts only on a FAILED
  * exit, so it read that as a clean stop and left the service down until someone
- * noticed. systemd's `Restart=always` restarts on any code, so Linux hid it —
+ * noticed. systemd's `Restart=always` restarts on any code, so Linux hid it,
  * and since every server deploy triggers a lockstep self-update, every deploy
  * was taking standalone Windows bridges offline.
  */
@@ -77,4 +77,16 @@ test('systemd does not report an intentional restart as a failed unit', () => {
 
 test('WinSW restarts on a failed exit, which is what the restart code produces', () => {
   assert.match(generateWinswConfig(baseSpec), /<onfailure action="restart"/)
+})
+
+// Windows service recovery has exactly three slots (first / second / SUBSEQUENT failures) and the
+// third is the one it repeats forever; anything WinSW is not given stays "Take No Action". One
+// entry therefore restarts ONCE and then leaves the service Stopped, and a self-update guarantees
+// an intentional non-zero exit that Windows counts as a failure. Seen on a real install: its
+// `sc qfailure` listed a single RESTART action, and the bridge sat Stopped with an update pending.
+// This is the Windows half of systemd's Restart=always, so it must keep restarting indefinitely.
+test('WinSW keeps restarting after the SECOND failure, not just the first', () => {
+  const actions = [...generateWinswConfig(baseSpec).matchAll(/<onfailure action="([a-z]+)"/g)]
+  assert.equal(actions.length, 3, 'all three Windows recovery slots must be filled')
+  assert.deepEqual(actions.map((match) => match[1]), ['restart', 'restart', 'restart'])
 })

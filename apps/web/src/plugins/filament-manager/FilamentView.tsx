@@ -3,7 +3,7 @@
  * grouping, sort, and list/icon views. Remaining filament shows both
  * graphically (bar) and numerically. The directory controls + grouped/paginated
  * rendering are the shared spool primitives ({@link useSpoolDirectory},
- * {@link SpoolDirectoryToolbar}, {@link SpoolResults}) — the same ones the
+ * {@link SpoolDirectoryToolbar}, {@link SpoolResults}), the same ones the
  * AMS-slot spool picker uses, so the two stay in sync.
  *
  * Desktop adds a multi-select mode ({@link useSpoolSelection}) with a bulk action

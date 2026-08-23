@@ -2,7 +2,7 @@
  * The one-click native update, and its hard promises: never armed off the
  * packaged native app, never applied unsigned, and the licence key never
  * follows the download redirect off our origin. (The pre-migration database
- * backup is the boot side's job — apps/server/src/pre-update-backup.ts — and
+ * backup is the boot side's job, apps/server/src/pre-update-backup.ts, and
  * is tested there.)
  */
 import assert from 'node:assert/strict'

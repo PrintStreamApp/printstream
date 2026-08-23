@@ -10,7 +10,7 @@ import {
 } from './license-origin.js'
 
 /**
- * Core carries no signer, so — like `license.test.ts` — these drive the resolver
+ * Core carries no signer, so, like `license.test.ts`, these drive the resolver
  * from tokens pre-signed with a throwaway keypair, passed explicitly.
  */
 const TEST_PUBLIC_KEY_PEM = `-----BEGIN PUBLIC KEY-----
@@ -21,7 +21,7 @@ MCowBQYDK2VwAyEA+cS1Gsms20cDaxSC2SAErlD3F8zrHa30jUkByBGXvGU=
 const KEY_WITH_ORIGIN =
   'PSL1.eyJ2IjoxLCJpZCI6ImxpY190ZXN0IiwiZWRpdGlvbiI6ImNvbW1lcmNpYWwiLCJsaWNlbnNlZSI6IkFjbWUgQ29ycCIsImlzc3VlZEF0IjoxNzAwMDAwMDAwLCJ1cGRhdGVzVW50aWwiOjE4MDAwMDAwMDAsImV4cGlyZXNBdCI6MTgwMDAwMDAwMCwibWF4UHJpbnRlcnMiOjQsInJlZnJlc2hPcmlnaW4iOiJodHRwczovL3N0YWdpbmcucHJpbnRzdHJlYW0uYXBwIn0.lE_ARn0h6Aw6NIkO7QCb3yZ2D6lVprI0yFiACzjSyGx9ZdWpbRmGOZi0Wx6ZAQd8PtM7Jm3uhhhzVBSrxJQUBQ'
 
-/** The same payload with no `refreshOrigin` — a key issued before the field existed. */
+/** The same payload with no `refreshOrigin`, a key issued before the field existed. */
 const KEY_WITHOUT_ORIGIN =
   'PSL1.eyJ2IjoxLCJpZCI6ImxpY190ZXN0IiwiZWRpdGlvbiI6ImNvbW1lcmNpYWwiLCJsaWNlbnNlZSI6IkFjbWUgQ29ycCIsImlzc3VlZEF0IjoxNzAwMDAwMDAwLCJ1cGRhdGVzVW50aWwiOjE4MDAwMDAwMDAsImV4cGlyZXNBdCI6MTgwMDAwMDAwMCwibWF4UHJpbnRlcnMiOjR9.i3o3u23scKawSj5ccYj9FUPZaWKVz2WsmVRdeJzmi3e36eoXBrNd7ibzZbQAxJeonL0HIW3GG7fv1bZVFgoIAQ'
 

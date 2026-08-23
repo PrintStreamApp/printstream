@@ -50,13 +50,13 @@ export function QueueItemCard(props: QueueItemCardProps) {
   const { item, summary, canManage, busy } = props
   const reorderable = item.status === 'queued' || item.status === 'held'
   const editable = item.status === 'queued' || item.status === 'held' || item.status === 'failed'
-  // The start button now opens a dialog (pick printer + map slots), so it's offered for any queued item —
+  // The start button now opens a dialog (pick printer + map slots), so it's offered for any queued item,
   // even one with no exact-material match, since the dialog lets the user choose the slots themselves.
   const dispatchable = item.status === 'queued'
-  // "Check" dry-runs the dispatch (no print) — useful before starting, and to diagnose a failure.
+  // "Check" dry-runs the dispatch (no print): useful before starting, and to diagnose a failure.
   const checkable = item.status === 'queued' || item.status === 'failed'
 
-  // The name as it shows when printing — drop the .gcode(.3mf)/.3mf extension. The title is the label
+  // The name as it shows when printing: drop the .gcode(.3mf)/.3mf extension. The title is the label
   // when one is set; the source filename then moves to its own line (and isn't repeated otherwise).
   const printedName = item.label ?? stripPrintFileExtension(item.fileName)
   const plateLabel = item.plateName ?? (item.kind === '3mf' ? `Plate ${item.plateIndex}` : null)
@@ -162,7 +162,7 @@ export function QueueItemCard(props: QueueItemCardProps) {
             ) : null}
 
             {checkable ? (
-              <Tooltip title="Check — see what Start will do (no print)">
+              <Tooltip title="Check: see what Start will do (no print)">
                 <span>
                   <IconButton size="sm" variant="plain" color="neutral" disabled={busy} onClick={props.onCheck}>
                     <FactCheckRounded />
@@ -192,7 +192,7 @@ function stripPrintFileExtension(name: string): string {
 
 /**
  * Brand + type identity for a missing required filament, e.g. "Bambu PLA Basic · Jade White" (or just
- * "PLA" when the brand/colour name aren't known). No raw hex — the accompanying swatch carries the colour.
+ * "PLA" when the brand/colour name aren't known). No raw hex: the accompanying swatch carries the colour.
  */
 function describeMissingIdentity(filament: QueueRequiredFilament): string {
   const brand = (filament.filamentName ?? '').trim()
@@ -300,7 +300,7 @@ function EligibilityBadge({
     )
   }
   if (summary.waitingForFreePrinter) {
-    return <Chip size="sm" variant="soft" color="neutral">Ready — waiting for a free printer</Chip>
+    return <Chip size="sm" variant="soft" color="neutral">Ready: waiting for a free printer</Chip>
   }
   return <Chip size="sm" variant="soft" color="success">{recommendedName ? `Ready → ${recommendedName}` : 'Ready'}</Chip>
 }

@@ -9,7 +9,7 @@ import { test } from 'node:test'
 import { inspectProjectFilamentIds, repairFilamentIds, filamentIdForPresetName } from './filament-ids'
 import { collectSettingsRepairReasons } from './index'
 
-// EVERY physics sentinel, so the ids stay this project's ONLY defect (see filament-physics.ts —
+// EVERY physics sentinel, so the ids stay this project's ONLY defect (see filament-physics.ts:
 // detection there is blunt, and any missing sentinel would add `filamentPhysics` to the reasons).
 const PHYSICS = {
   nozzle_temperature: ['245', '245', '220'],
@@ -31,7 +31,7 @@ const BROKEN = {
 }
 
 test('the machine suffix is not part of the material name', () => {
-  // Truncating at the first `@` is what reproduces the id BambuStudio itself writes — everything
+  // Truncating at the first `@` is what reproduces the id BambuStudio itself writes, everything
   // after it qualifies the MACHINE (plate type, nozzle size), not the filament.
   assert.equal(filamentIdForPresetName('Bambu PETG HF @BBL H2D 0.4 nozzle'), 'GFG02')
   assert.equal(filamentIdForPresetName('Bambu PLA Basic @BBL H2D - 55 degree plate'), 'GFA00')
@@ -80,7 +80,7 @@ test('a consistent project is not flagged, and an empty id is not a contradictio
   assert.equal(inspectProjectFilamentIds(JSON.stringify(consistent))?.inconsistent, false)
   assert.deepEqual(collectSettingsRepairReasons(JSON.stringify(consistent)), [])
 
-  // BambuStudio writes '' for a preset that declares no id — a truthful unknown, not a wrong claim.
+  // BambuStudio writes '' for a preset that declares no id, a truthful unknown, not a wrong claim.
   const unknown = { nozzle_temperature: ['245'], filament_settings_id: ['Bambu PETG HF @BBL H2D 0.4 nozzle'], filament_ids: [''] }
   assert.equal(inspectProjectFilamentIds(JSON.stringify(unknown))?.inconsistent, false)
 })

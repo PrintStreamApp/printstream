@@ -3,8 +3,8 @@
  *
  * Renders the toolpath the way Bambu Studio's preview does: every extrusion as a solid 3D
  * ribbon at its real width (`; LINE_WIDTH:`) and layer height (`; LAYER_HEIGHT:`), coloured by
- * feature type (`; FEATURE:` — outer wall, infill, ...). Bambu emits the bulk of walls as arc
- * moves (G2/G3 arc-fitting is on by default), so those are interpolated into segments — without
+ * feature type (`; FEATURE:`: outer wall, infill, ...). Bambu emits the bulk of walls as arc
+ * moves (G2/G3 arc-fitting is on by default), so those are interpolated into segments, without
  * that the preview would draw only the rare straight moves and look like sparse 2D lines.
  *
  * Moves are grouped BY LAYER so the preview can scrub the print (a vertical slider sets the top
@@ -109,7 +109,7 @@ export interface GcodeStats {
   headerTotalSeconds: number | null
   /** Total extruded filament length (mm of filament E). */
   filamentMm: number
-  /** Highest extrusion Z (mm) — the printed height. */
+  /** Highest extrusion Z (mm): the printed height. */
   maxZ: number
 }
 
@@ -117,7 +117,7 @@ export interface ParsedGcodeLayers {
   /** Number of detected print layers (distinct extrusion Z heights). */
   layerCount: number
   /**
-   * Each layer's extrusion Z in mm — the layer's top, matching the `top_z` a layer
+   * Each layer's extrusion Z in mm: the layer's top, matching the `top_z` a layer
    * pause or filament change is stored at (length = layerCount).
    */
   layerZ: number[]
@@ -164,7 +164,7 @@ const DEFAULT_LAYER_HEIGHT = 0.2
 const ARC_CHORD_TOLERANCE = 0.08
 /**
  * Max chord length (mm) when tessellating an arc. Sag tolerance alone lets large-radius arcs
- * emit multi-millimetre flat chords — visible straight facets that sit out of phase layer to
+ * emit multi-millimetre flat chords: visible straight facets that sit out of phase layer to
  * layer because each loop's seam starts at a different angle. Capping chord length keeps the
  * silhouette round regardless of radius.
  */
@@ -217,7 +217,7 @@ export function parseGcodeLayers(text: string): ParsedGcodeLayers {
     while (travelLayers.length <= index) travelLayers.push([])
   }
 
-  // Advance to a new layer when an extruding MOVE's target Z changes — called ONCE per move
+  // Advance to a new layer when an extruding MOVE's target Z changes: called ONCE per move
   // (not per interpolated arc sub-segment), so a Z-changing arc is one layer, not hundreds.
   const advanceLayerForZ = (targetZ: number) => {
     if (currentLayerZ === null || Math.abs(targetZ - currentLayerZ) > Z_EPSILON) {
@@ -446,7 +446,7 @@ export function representativeLayerHeight(heights: Float32Array): number {
 }
 
 /**
- * Anti-moire shading for zoomed-out views — the shading analogue of mipmapping. Bead shading
+ * Anti-moire shading for zoomed-out views: the shading analogue of mipmapping. Bead shading
  * repeats at two pitches: vertically every layer (~0.2 mm) on walls, and in-plane every bead
  * width (~0.4 mm) on flat surfaces (top/bottom skins, infill). Once a screen pixel spans about
  * one repeat, the bright-top/dark-side alternation under-samples into interference bands. Each
@@ -509,7 +509,7 @@ export interface LayeredGcodePreview {
   setVisibleLayers: (topLayer: number, options?: { single?: boolean; showTravel?: boolean; moveEnd?: number }) => void
   /** Number of scrubbable extrusion moves rendered on a layer (drives the move slider). */
   moveCount: (layer: number) => number
-  /** The layer's print Z in mm (its top) — what a layer pause or filament change keys on. */
+  /** The layer's print Z in mm (its top): what a layer pause or filament change keys on. */
   layerZ: (layer: number) => number
   dispose: () => void
 }
@@ -562,7 +562,7 @@ interface ExtrusionGeometryBuild {
   layerIndexEnd: number[]
   /**
    * Cumulative VERTEX count at the end of each layer. Vertices are emitted layer by layer, so this
-   * gives each layer a contiguous range — which is what lets a per-layer mesh compute its own
+   * gives each layer a contiguous range, which is what lets a per-layer mesh compute its own
    * bounds while sharing one position buffer with every other layer.
    */
   layerVertexEnd: number[]
@@ -579,8 +579,8 @@ interface ExtrusionGeometryBuild {
  * Build the merged extrusion mesh (see {@link buildLayeredGcodePreview}). Two passes over
  * the parsed segments: the first records each joint's weld/miter decision and counts
  * exactly how many vertices/indices the welded tubes and caps need; the second fills
- * exact-size buffers. (The previous single pass allocated the no-weld worst case — four
- * rings per segment — which over-allocated hundreds of MB on a dense multi-hour plate and
+ * exact-size buffers. (The previous single pass allocated the no-weld worst case, four
+ * rings per segment, which over-allocated hundreds of MB on a dense multi-hour plate and
  * kept it alive via subarray views.) Vertex data is quantized where precision allows:
  * int8 normalized normals, uint8 normalized colours, uint8 macro-up flags, and a uint16
  * index when the mesh is small enough; positions stay float32.
@@ -597,8 +597,8 @@ function buildExtrusionGeometry(parsed: ParsedGcodeLayers): ExtrusionGeometryBui
   const segCount = pos.length / 6 // 2 vertices (6 floats) per segment
   const P = PROFILE.length
 
-  // Pass 1: weld/miter decision per segment — STORED, so pass 2 cannot diverge from the
-  // counted sizes — plus the exact vertex/index totals.
+  // Pass 1: weld/miter decision per segment, STORED, so pass 2 cannot diverge from the
+  // counted sizes, plus the exact vertex/index totals.
   const jointWeld = new Uint8Array(segCount)
   const jointPx = new Float32Array(segCount)
   const jointPy = new Float32Array(segCount)
@@ -620,7 +620,7 @@ function buildExtrusionGeometry(parsed: ParsedGcodeLayers): ExtrusionGeometryBui
 
       // Does the NEXT segment continue this path? (Shared endpoint, same feature/height, a near
       // width, and a joint shallow enough to miter.) If so, the shared ring is emitted once with
-      // the mitered perp and reused — the tube stays continuous instead of leaving a wedge gap
+      // the mitered perp and reused: the tube stays continuous instead of leaving a wedge gap
       // at the bend; a small width change tapers smoothly through the averaged joint ring.
       if (seg + 1 < endSeg) {
         const n = (seg + 1) * 6
@@ -688,7 +688,7 @@ function buildExtrusionGeometry(parsed: ParsedGcodeLayers): ExtrusionGeometryBui
   }
   /**
    * A side quad, wound so its front face points OUT of the bead. Orientation is load-bearing now
-   * that the mesh is back-face culled — `gcodePreview.test.ts` asserts every triangle's geometric
+   * that the mesh is back-face culled: `gcodePreview.test.ts` asserts every triangle's geometric
    * normal agrees with the outward normal `pushVertex` authored for it.
    */
   const pushQuad = (a: number, b: number, c: number, d: number) => {
@@ -760,7 +760,7 @@ function buildExtrusionGeometry(parsed: ParsedGcodeLayers): ExtrusionGeometryBui
       if (!weldNext) pushCap(endBase, dx, dy, false)
       weldRingBase = weldNext ? endBase : -1
 
-      // Connect the two rings into a closed tube (P side quads), wound outward — see pushQuad.
+      // Connect the two rings into a closed tube (P side quads), wound outward: see pushQuad.
       for (let p = 0; p < P; p++) {
         const p1 = (p + 1) % P
         pushQuad(startBase + p, endBase + p, endBase + p1, startBase + p1)
@@ -788,25 +788,25 @@ function buildExtrusionGeometry(parsed: ParsedGcodeLayers): ExtrusionGeometryBui
 
 /**
  * Build a volumetric extrusion mesh: each segment becomes a boxed ribbon (top + two side faces)
- * at its real width and layer height, vertex-coloured by feature type — so the print reads like
+ * at its real width and layer height, vertex-coloured by feature type, so the print reads like
  * Bambu Studio's preview rather than flat lines. Consecutive segments of the same path (shared
  * endpoint, same feature/height, near width) are welded into one continuous tube with a mitered
- * joint ring, every open tube end is capped, and shading uses smooth per-vertex normals — without
+ * joint ring, every open tube end is capped, and shading uses smooth per-vertex normals, without
  * this, curved walls (arcs tessellated into short segments) show wedge gaps at every bend,
  * see-through holes at line ends, and one visible shading facet per segment. One merged
  * indexed geometry; the layer slider just moves the index draw range (O(1), no rebuilds). Travel
  * moves stay thin lines, hidden by default.
  *
  * Memory contract: the CPU-side buffer arrays are FREED after the renderer uploads them
- * (onUpload) — callers must do any bounds/raycast work that reads vertex data before the
+ * (onUpload): callers must do any bounds/raycast work that reads vertex data before the
  * first render, and a lost WebGL context must be recovered by rebuilding the preview, not
  * by three's automatic restore (which would re-upload from the freed arrays).
  */
 /**
  * One mesh per layer, over ONE shared set of vertex buffers.
  *
- * The point is DRAW ORDER, not culling. A single mesh draws its triangles in buffer order — layer 0
- * first — which for a camera looking down at a plate is back-to-front, the worst case: every layer
+ * The point is DRAW ORDER, not culling. A single mesh draws its triangles in buffer order, layer 0
+ * first, which for a camera looking down at a plate is back-to-front, the worst case: every layer
  * is fully shaded and then painted over by the one above it, so a 45-layer print shades each pixel
  * ~45 times. Three sorts opaque OBJECTS front-to-back (`painterSortStable`, ascending camera-space
  * z) precisely so early-Z can reject hidden fragments before the fragment shader runs, but it
@@ -836,7 +836,7 @@ function buildPerLayerMeshes(
     const indexEnd = layerIndexEnd[layer]!
     if (indexEnd <= indexStart) continue
     const geometry = new THREE.BufferGeometry()
-    // Shared instances — one upload for all layers, not one per layer.
+    // Shared instances, one upload for all layers, not one per layer.
     for (const [name, attribute] of Object.entries(source.attributes)) geometry.setAttribute(name, attribute)
     geometry.setIndex(new THREE.BufferAttribute(indexArray.subarray(indexStart, indexEnd), 1))
 
@@ -857,7 +857,7 @@ function buildPerLayerMeshes(
       geometry.boundingBox = new THREE.Box3(new THREE.Vector3(minX, minY, minZ), new THREE.Vector3(maxX, maxY, maxZ))
       const centre = geometry.boundingBox.getCenter(new THREE.Vector3())
       // The corner distance bounds every vertex in the box, so this sphere always contains the
-      // layer — never tight, never wrong, and it costs one pass instead of two.
+      // layer, never tight, never wrong, and it costs one pass instead of two.
       geometry.boundingSphere = new THREE.Sphere(centre, centre.distanceTo(geometry.boundingBox.max))
     } else {
       geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 0)
@@ -875,18 +875,18 @@ export function buildLayeredGcodePreview(parsed: ParsedGcodeLayers): LayeredGcod
   const build = buildExtrusionGeometry(parsed)
   // FrontSide, not DoubleSide: a bead is a CLOSED tube (capped at every open end, welded rings
   // through joints), so its back faces are always occluded by its own front faces and shading them
-  // was pure cost — doubled per-fragment PBR work across a mesh measured at 2.6M triangles on a
+  // was pure cost: doubled per-fragment PBR work across a mesh measured at 2.6M triangles on a
   // real plate, on a preview that resets the GPU process. Back-face culling happens before fragment
   // shading, so it also drops half the raster work, and the image is identical.
   //
-  // This is only safe because the winding is now consistent — `gcodePreview.test.ts` asserts every
+  // This is only safe because the winding is now consistent: `gcodePreview.test.ts` asserts every
   // triangle's geometric normal agrees with the outward normal the builder authored. It was NOT
   // consistent before (all side quads were inverted, and one cap of every path), which is what
   // DoubleSide was quietly covering for.
   const material = new THREE.MeshStandardMaterial({ vertexColors: true, side: THREE.FrontSide, roughness: 0.82, metalness: 0.0 })
   applyMoireFade(material, representativeLayerHeight(parsed.extrusionHeights), medianPositive(parsed.extrusionWidths, DEFAULT_EXTRUSION_WIDTH))
   const { geometry: extrusionGeometry, layerIndexEnd, layerVertexEnd, layerMoveEnd, moveEndIndex } = build
-  // One mesh per layer so three can sort them front-to-back — see buildPerLayerMeshes. Their bounds
+  // One mesh per layer so three can sort them front-to-back: see buildPerLayerMeshes. Their bounds
   // are real (not the whole plate), so frustum culling is left ON here, unlike the single mesh this
   // replaced, whose draw-range scrubbing invalidated any bounds it might have had.
   const layerMeshes = buildPerLayerMeshes(extrusionGeometry, layerIndexEnd, layerVertexEnd, material)
@@ -899,7 +899,7 @@ export function buildLayeredGcodePreview(parsed: ParsedGcodeLayers): LayeredGcod
   for (const mesh of layerMeshes) group.add(mesh)
   group.add(travel)
 
-  // Copy the small per-layer tables out of `parsed` — the closures below must not
+  // Copy the small per-layer tables out of `parsed`: the closures below must not
   // reference `parsed` itself, or they'd pin the multi-MB parse arrays (positions,
   // widths, roles) in memory for the preview's whole lifetime.
   const layerCount = parsed.layerCount
@@ -907,9 +907,9 @@ export function buildLayeredGcodePreview(parsed: ParsedGcodeLayers): LayeredGcod
   const travelLayerEnd = parsed.travelLayerEnd
 
   // Precompute bounds BEFORE registering the onUpload frees below. The renderer's sort
-  // pass lazily computes a null boundingSphere during projectObject — AFTER
+  // pass lazily computes a null boundingSphere during projectObject, AFTER
   // objects.update() has already uploaded and freed the arrays earlier in the same
-  // frame — so a lazy compute would read a null array, throw, and kill the render loop
+  // frame, so a lazy compute would read a null array, throw, and kill the render loop
   // on the object's first frame. Precomputed bounds also make the caller's framing
   // (Box3.setFromObject) free.
   // The per-layer geometries already carry hand-computed bounds (buildPerLayerMeshes); the source

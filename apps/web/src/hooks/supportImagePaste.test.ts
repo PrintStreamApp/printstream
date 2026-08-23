@@ -4,7 +4,7 @@ import { markdownImageLabel, pastedImageFilename, uploadingPlaceholder } from '.
 
 test('pastedImageFilename keeps meaningful names and renames generic clipboard ones', () => {
   assert.equal(pastedImageFilename({ name: 'bed-adhesion.png', type: 'image/png' }, 1), 'bed-adhesion.png')
-  // Browsers name clipboard screenshots `image.png` (or similar) — rename those.
+  // Browsers name clipboard screenshots `image.png` (or similar): rename those.
   assert.equal(pastedImageFilename({ name: 'image.png', type: 'image/png' }, 1), 'pasted-image-1.png')
   assert.equal(pastedImageFilename({ name: 'image.jpeg', type: 'image/jpeg' }, 2), 'pasted-image-2.jpg')
   assert.equal(pastedImageFilename({ name: '', type: 'image/webp' }, 3), 'pasted-image-3.webp')

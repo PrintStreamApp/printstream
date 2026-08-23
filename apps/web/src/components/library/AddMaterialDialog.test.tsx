@@ -50,7 +50,7 @@ function renderAddDialog() {
 }
 
 // The whole point of this dialog: the slot used to be appended the instant "Add material" was
-// clicked, then seeded from the first material — or, failing that, from a machine default preset
+// clicked, then seeded from the first material, or, failing that, from a machine default preset
 // plus #FFFFFF, which the filament identity resolver names as the real product "Bambu PLA Basic,
 // Jade White". Users saw a specific filament they had never chosen, and opening it showed no
 // preset selected. Nothing may be created before a material is confirmed.

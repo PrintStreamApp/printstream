@@ -55,7 +55,7 @@ export async function deleteCalibrationResult(resultId: string): Promise<void> {
   await apiFetch(`/api/plugins/calibration/results/${resultId}`, { method: 'DELETE' })
 }
 
-/** A run is still working (slicing or printing) — poll while any is in these states. */
+/** A run is still working (slicing or printing): poll while any is in these states. */
 export function isCalibrationRunActive(run: CalibrationRun): boolean {
   return run.status === 'slicing' || run.status === 'readyToPrint' || run.status === 'printing'
 }

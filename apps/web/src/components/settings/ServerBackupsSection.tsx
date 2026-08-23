@@ -22,10 +22,10 @@ import { usePromptDialog } from '../PromptDialogProvider'
  * Server backups (issue #78): status of the install's scheduled whole-install
  * backups (database dump + persistent data tree), a manual "Back up now", and
  * per-backup restore/delete. Hosted by the workspace Settings on self-hosted
- * installs and by Platform settings on cloud — same endpoints, whose authority
+ * installs and by Platform settings on cloud: same endpoints, whose authority
  * differs per deployment (see the route header). Restore is staged: the API
  * takes a safety backup, then restarts to apply the chosen backup before the
- * app reopens the database — so a successful restore looks like a short
+ * app reopens the database, so a successful restore looks like a short
  * outage. API counterpart: `apps/api/src/routes/server-backups.ts`.
  */
 export function ServerBackupsSection({ canManage }: { canManage: boolean }) {
@@ -71,7 +71,7 @@ export function ServerBackupsSection({ canManage }: { canManage: boolean }) {
     const typed = await promptText({
       title: `Restore the backup from ${formatDateTime(snapshot.createdAt)}?`,
       description:
-        'Restoring replaces EVERYTHING on this install — every workspace, printer, job, user, and library file — '
+        'Restoring replaces EVERYTHING on this install (every workspace, printer, job, user, and library file) '
         + 'with the state in this backup. A safety backup of the current state is taken first, then the app '
         + 'restarts to apply the restore, which looks like a short outage.',
       label: 'Type restore to confirm',
@@ -113,7 +113,7 @@ export function ServerBackupsSection({ canManage }: { canManage: boolean }) {
       <PageSectionHeading
         icon={<BackupRoundedIcon />}
         title="Backups"
-        description="Automatic backups of everything on this install — the database and all stored files — kept on this machine's disk with smart retention."
+        description="Automatic backups of everything on this install (the database and all stored files) kept on this machine's disk with smart retention."
         count={snapshots.length}
         actions={(
           <Button

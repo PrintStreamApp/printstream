@@ -8,13 +8,13 @@
  *
  * BambuStudio sizes its per-filament vectors from the loaded filament count and
  * indexes them by the project's slot ids. Hand it 1 preset for a 2-filament
- * project and it does not error — it broadcasts that preset across every slot, so
+ * project and it does not error, it broadcasts that preset across every slot, so
  * a PETG slot silently inherits a support filament's 210°C, and the loader then
  * reads out of bounds and segfaults (opaque exit 139; issue #66).
  *
  * The list used to be built from whichever presets the REQUEST could resolve to a
  * file, which is not one-per-slot: a slot left on the project's own preset
- * (`project:…`) resolves to no file by design — the 3MF's embedded settings ARE
+ * (`project:…`) resolves to no file by design: the 3MF's embedded settings ARE
  * that preset. So the common case of "change one material, leave the other" sent
  * a 1-entry list for a 2-slot project. That is why re-picking every preset by hand
  * made a failing project slice: it gave every slot a file.
@@ -23,7 +23,7 @@
  * user's per-material overrides) → the preset the 3MF names for that slot →
  * Generic PLA as a structural stand-in. Only if a slot can satisfy none of those
  * does the whole list collapse to null, leaving the project's embedded config to
- * drive every slot — which is what BambuStudio's own project loader does anyway
+ * drive every slot, which is what BambuStudio's own project loader does anyway
  * (`PresetBundle::load_config_model` scatters the project config column-wise onto
  * a complete default preset; it never needs per-slot preset files).
  *
@@ -53,7 +53,7 @@ export interface FilamentSlotCoverageInput {
   requestedProfileIds: ReadonlySet<string>
   /**
    * The input 3MF's per-slot `filament_settings_id`. Authoritative for the slot
-   * COUNT and for the preset each slot names — by this point the pre-slice
+   * COUNT and for the preset each slot names, by this point the pre-slice
    * metadata rewrite has already written the request's choices into it.
    */
   embeddedPresetNames: readonly string[]
@@ -66,7 +66,7 @@ export const FALLBACK_FILAMENT_PRESET_NAME = 'Generic PLA'
 
 /**
  * One preset source per project slot, or `null` when full coverage is impossible
- * (see the invariant above — a short list is never returned).
+ * (see the invariant above, a short list is never returned).
  *
  * Returns null for a project with no filament slots at all, which is simply
  * "nothing to load" rather than a failure.
@@ -99,7 +99,7 @@ export async function buildFilamentSlotCoverage(input: FilamentSlotCoverageInput
     }
 
     if (fallbackExists === undefined) fallbackExists = await input.hasBuiltinPreset(FALLBACK_FILAMENT_PRESET_NAME)
-    // Nothing can cover this slot, so no list can be complete — see the invariant.
+    // Nothing can cover this slot, so no list can be complete: see the invariant.
     if (!fallbackExists) return null
     sources.push({ origin: 'builtin', name: FALLBACK_FILAMENT_PRESET_NAME })
   }

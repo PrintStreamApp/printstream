@@ -29,7 +29,7 @@ after(() => {
 })
 
 function renderDialog() {
-  // gcTime: Infinity — react-query imported after jsdom detects a browser and would otherwise
+  // gcTime: Infinity: react-query imported after jsdom detects a browser and would otherwise
   // leave a ref'd 5-minute timer holding the runner open.
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } })
   return render(
@@ -42,7 +42,7 @@ function renderDialog() {
 }
 
 /**
- * The preset manager is a separate dialog now, reached only from the sidebar's Manage action —
+ * The preset manager is a separate dialog now, reached only from the sidebar's Manage action,
  * this dialog must not grow it back, as either a tab or a link. Both are `BackAwareModal`s, so a
  * link that closes this one to open that one is popped straight back shut.
  */

@@ -203,7 +203,7 @@ export function PrinterViewsModal({
         <Typography level="h4">{isCreatingView ? 'New view' : 'View settings'}</Typography>
         <Typography level="body-sm" textColor="text.tertiary">
           {isCreatingView
-            ? 'Save the current dashboard view — its sort, grouping, filters, layout, and card content — as a named view.'
+            ? 'Save the current dashboard view, its sort, grouping, filters, layout, and card content, as a named view.'
             : `Configure ${currentViewLabel}: layout and card content. Sort, grouping, and filters are set from the toolbar.`}
         </Typography>
 

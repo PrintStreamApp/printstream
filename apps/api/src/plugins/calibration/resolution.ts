@@ -3,8 +3,8 @@
  *
  * Priority (see the plugin design): a spool-specific result beats an identity
  * match, which beats nothing (leave the printer's own behavior alone). Among
- * identity matches, the most specific wins — the one constraining the most
- * fields — so "Polymaker PLA Pro Metallic Silver" is preferred over the broader
+ * identity matches, the most specific wins, the one constraining the most
+ * fields, so "Polymaker PLA Pro Metallic Silver" is preferred over the broader
  * "Polymaker PLA Pro". Every non-null identity field on a result must equal the
  * spool's field; a null field is a wildcard.
  *
@@ -41,7 +41,7 @@ function identityMatches(result: ResolvableCalibrationResult, filament: Calibrat
   return IDENTITY_FIELDS.every((field) => result[field] == null || result[field] === filament[field])
 }
 
-/** Number of constrained (non-null) identity fields — higher is more specific. */
+/** Number of constrained (non-null) identity fields: higher is more specific. */
 function specificity(result: ResolvableCalibrationResult): number {
   return IDENTITY_FIELDS.reduce((count, field) => count + (result[field] != null ? 1 : 0), 0)
 }

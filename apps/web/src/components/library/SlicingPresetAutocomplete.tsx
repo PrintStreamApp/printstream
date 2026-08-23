@@ -1,9 +1,9 @@
 /**
  * The grouped slicing-profile picker (process/machine presets) shared by the slice settings
  * panel and the process-settings dialog's profile switcher. Groups options the Bambu way
- * (3MF project presets / User presets / System presets — group band styling comes
+ * (3MF project presets / User presets / System presets, group band styling comes
  * from `DeferredKeyboardAutocomplete`), keeps option names on ONE line (ellipsized), and
- * surfaces the full preset name via tooltips — on each option and on the selected value —
+ * surfaces the full preset name via tooltips, on each option and on the selected value,
  * because real preset names ("0.20mm Balanced Strength @BBL H2D - Ryan") routinely outgrow
  * the control.
  */
@@ -63,7 +63,7 @@ export function SlicingPresetAutocomplete({
         <DeferredKeyboardAutocomplete
           options={profiles}
           // NULL, not undefined. `disableClearable` narrows Joy's value TYPE to `T`, which tempted
-          // a `value ?? undefined` — but undefined is how React spells "uncontrolled", so every time
+          // a `value ?? undefined`, but undefined is how React spells "uncontrolled", so every time
           // the selection stopped being compatible (any printer-model switch) React logged a
           // controlled→uncontrolled error and reset the input's internal state. Null is a normal
           // controlled "nothing selected" at runtime; only the type objects, hence the cast.
@@ -76,7 +76,7 @@ export function SlicingPresetAutocomplete({
           }}
           getOptionLabel={labelFor}
           // Opening with the committed selection must show the FULL catalog (select-like
-          // semantics): the input carries the selected name — with the '* ' modified marker it
+          // semantics): the input carries the selected name, with the '* ' modified marker it
           // no longer equals the option label, so the default filter would narrow the list to
           // the chosen option and the user couldn't browse without clearing the field first.
           // Once the user actually edits the text, normal type-to-filter resumes.
@@ -84,15 +84,15 @@ export function SlicingPresetAutocomplete({
             value && state.inputValue === valueDisplayName ? options : filterByDisplayName(options, state)
           )}
           // `selected` can be undefined: with disableClearable the value is passed as
-          // `value ?? undefined`, and Joy still runs this comparator while filtering — which it
+          // `value ?? undefined`, and Joy still runs this comparator while filtering, which it
           // does exactly when the current selection stops being compatible (switching the printer
           // model to one the selected profile does not support). Optional-chain or it throws
           // mid-render and takes the editor down with it.
           isOptionEqualToValue={(option, selected) => option.id === selected?.id}
           groupBy={(profile) => isProjectSlicingPresetId(profile.id) ? '3MF project presets' : profile.source === 'custom' ? 'User presets' : 'System presets'}
           placeholder={placeholder}
-          // There is always a selected profile — a cleared value would leave the slice with no
-          // process at all — so drop Joy's clear (x) affordance.
+          // There is always a selected profile, a cleared value would leave the slice with no
+          // process at all, so drop Joy's clear (x) affordance.
           disableClearable
           selectOnFocus
           handleHomeEndKeys

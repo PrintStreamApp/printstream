@@ -73,7 +73,7 @@ export function createRateLimitMiddleware(options: RateLimitOptions): RequestHan
 
 /**
  * Advertise the budget on every response (IETF draft `RateLimit-*` headers) so
- * clients with bursty workloads — e.g. chunked library uploads — can pace
+ * clients with bursty workloads: e.g. chunked library uploads: can pace
  * themselves against the real budget instead of guessing. Stacked limiters
  * each call this; the headers keep the most-restrictive snapshot (lowest
  * remaining) seen for the request.

@@ -72,7 +72,7 @@ test('native runs a 14-day evaluation window, then limits', () => {
   assert.equal(pastGrace.mode, 'limited')
 })
 
-test('Docker/OSS gets the longer grace window — the requirement is new there', () => {
+test('Docker/OSS gets the longer grace window: the requirement is new there', () => {
   const stillFine = computeLicenseMode({
     enforced: true,
     native: false,
@@ -104,7 +104,7 @@ test('a commercial key clears both builds', () => {
   assert.equal(licenseSatisfies(status(), true), true)
 })
 
-test('an expired key satisfies nothing — a lapsed subscription must stop working', () => {
+test('an expired key satisfies nothing, a lapsed subscription must stop working', () => {
   const lapsed = status({ valid: false, expired: true, expiresAt: 1_700_000_000 })
   assert.equal(licenseSatisfies(lapsed, false), false)
   assert.equal(licenseSatisfies(lapsed, true), false)
@@ -144,7 +144,7 @@ test('a Docker/OSS install upgrading into enforcement is dated from the upgrade'
   // Enforcement was native-only before, so this path never ran on Docker and no
   // stamp exists. If an absent stamp were treated as "long ago", every existing
   // self-hoster would land straight in `limited` on the release that introduces
-  // the requirement — locked out before being told.
+  // the requirement: locked out before being told.
   const before = Date.now()
   const upserts = stubSettings({})
   const firstRun = await getFirstRunAt()

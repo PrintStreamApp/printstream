@@ -47,7 +47,7 @@ export function primitiveTriangleSoup(kind: PrimitiveKind): Float32Array {
 /**
  * Primitive soup for an added PART volume (normal part / negative part / modifier / support
  * blocker or enforcer), scaled so its largest dimension is `size` mm and centred on the ORIGIN in
- * every axis — unlike {@link primitiveTriangleSoup}, whose primitives rest on the bed. Centring is
+ * every axis: unlike {@link primitiveTriangleSoup}, whose primitives rest on the bed. Centring is
  * what lets the caller place the part by a single point relative to its host model, and it makes
  * the gizmo pivot the part's own centre rather than a corner.
  */

@@ -7,13 +7,13 @@
  *
  * Two clients are exported:
  *
- * - {@link prisma} — default for all request-scoped code. A `$extends`
+ * - {@link prisma}: default for all request-scoped code. A `$extends`
  *   wrapper that automatically injects `workspaceId` into writes and merges
  *   it into reads for every model listed in {@link WORKSPACE_SCOPED_MODELS}.
  *   The workspace comes from the {@link AsyncLocalStorage} context set by
  *   the `installWorkspaceContext` middleware.
  *
- * - {@link rootPrisma} — escape hatch for deliberate platform-wide
+ * - {@link rootPrisma}: escape hatch for deliberate platform-wide
  *   operations (workspace CRUD, background jobs, event-driven recording).
  *   Code that uses `rootPrisma` must supply its own workspace filtering.
  *
@@ -21,13 +21,13 @@
  *
  * - Every Prisma model with a `workspaceId` column must appear in either
  *   `WORKSPACE_SCOPED_MODELS` (auto-scoped here) or `WORKSPACE_SCOPED_EXCEPTION_MODELS`
- *   (a deliberate, hand-scoped exception — see that set). A test enforces this so
+ *   (a deliberate, hand-scoped exception: see that set). A test enforces this so
  *   a new `workspaceId` model cannot be silently left unscoped.
  * - Ownership-check operations (`findUnique`, `update`, `delete`,
  *   `upsert`) do a workspace-ownership pre-read so a foreign/missing row is
  *   reported as not-found. Write ops also merge `workspaceId` into their own
  *   `where` (and `upsert` into its `create`) so the database enforces
- *   ownership atomically at mutation time — closing the read-then-mutate
+ *   ownership atomically at mutation time: closing the read-then-mutate
  *   TOCTOU window without a per-operation interactive transaction.
  * - Nested `connect` / `include` relations are **not** workspace-scoped
  *   by this extension. Routes that accept user-supplied relation IDs
@@ -89,15 +89,15 @@ export const WORKSPACE_SCOPED_MODELS = new Set([
  * extension below, because the per-workspace scoping cannot express their access
  * pattern. They are instead hand-scoped at every call site:
  *
- * - `AuthGroup` — its `workspaceId` is **nullable**: `workspaceId = null` rows are
+ * - `AuthGroup`, its `workspaceId` is **nullable**: `workspaceId = null` rows are
  *   platform-wide groups shared by every workspace. Auto-scoping would force the
  *   current workspace and hide platform groups (and break platform-user
  *   administration that legitimately spans workspaces). Reads go through
  *   `buildScopedAuthGroupWhere` (workspaceId = current workspace, or null for platform).
- * - `AuthWorkspaceMembership` — the user-to-workspace link itself; auth flows query it
+ * - `AuthWorkspaceMembership`: the user-to-workspace link itself; auth flows query it
  *   with explicit `{ workspaceId, userId }` (and workspace-compound uniques), including
  *   cross-workspace lookups of which workspaces a user belongs to.
- * - `SupportConversation` — cloud support messaging. Its `workspaceId` is a
+ * - `SupportConversation`: cloud support messaging. Its `workspaceId` is a
  *   nullable point-in-time snapshot (no FK) recording which workspace the
  *   conversation came from; the inbox is platform-wide and every query goes
  *   through `rootPrisma` in the private cloud support routes.
@@ -146,7 +146,7 @@ const OWNERSHIP_CHECK_OPERATIONS = new Set([
  * Ownership-checked WRITE ops (excludes the read variants and `upsert`, which is
  * scoped separately via {@link scopeOwnedMutationArgs} / {@link scopeUpsertArgs}).
  * For these the workspace id is merged into the mutation `where` so the row is
- * matched-and-mutated in one statement — closing the read-then-mutate TOCTOU
+ * matched-and-mutated in one statement: closing the read-then-mutate TOCTOU
  * window without an interactive transaction.
  */
 const WRITE_OWNERSHIP_OPERATIONS = new Set([
@@ -162,7 +162,7 @@ export type OwnershipCheckDecision = 'proceed' | 'return-null' | 'not-found'
 /**
  * Decides how an ownership-checked operation proceeds once we've read the target
  * row's owner. Pure (no DB) so the rule is unit-testable. Key correctness point:
- * `upsert` must be allowed to CREATE when no workspace-owned row exists yet — earlier
+ * `upsert` must be allowed to CREATE when no workspace-owned row exists yet: earlier
  * a missing row was rejected as not-found before the create path could run, which
  * broke e.g. the first cross-bridge `libraryFileReplica.upsert`.
  */
@@ -171,7 +171,7 @@ export function decideOwnershipCheck(
   existing: { workspaceId: string } | null,
   workspaceId: string
 ): OwnershipCheckDecision {
-  // A row that exists but belongs to another workspace is never accessible — report
+  // A row that exists but belongs to another workspace is never accessible: report
   // it as not-found for every operation (no cross-workspace read/update/delete/upsert).
   if (existing && existing.workspaceId !== workspaceId) return 'not-found'
   // upsert creates when absent and updates the workspace-owned row when present.
@@ -301,7 +301,7 @@ export const prisma: PrismaClient = basePrisma.$extends({
 
         if (OWNERSHIP_CHECK_OPERATIONS.has(operation)) {
           // Ownership pre-read: a foreign or missing row becomes not-found / null
-          // before any mutation runs. (Deliberately NOT wrapped in $transaction —
+          // before any mutation runs. (Deliberately NOT wrapped in $transaction:
           // the previous interactive-transaction wrapper ran the read and the
           // mutation on separate connections, so it provided neither atomicity nor
           // serializable isolation, only a wasteful per-op BEGIN/COMMIT. Write ops

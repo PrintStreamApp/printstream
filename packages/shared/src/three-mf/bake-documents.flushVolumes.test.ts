@@ -3,7 +3,7 @@
  *
  * The whole reason this rides its own SceneEdit field rather than the generic global-process
  * override channel is ORDERING: overrides are applied last, after the repair pass, so a mis-sized
- * matrix arriving that way would be written verbatim with nothing left to catch it — and a
+ * matrix arriving that way would be written verbatim with nothing left to catch it, and a
  * mis-sized `flush_volumes_matrix` is read out of bounds by the engine and segfaults mid-slice
  * (exit 139). These tests pin the two guarantees that buys: the edit lands AFTER the filament
  * remap (so the user's numbers win) and BEFORE the repair (so a stale one is still caught).
@@ -86,7 +86,7 @@ test('a matrix sized for a different material list is DROPPED, not forced to fit
 
 test('a matrix missing an extruder block is dropped rather than left short', () => {
   const after = applyEdit(dualNozzleProject, {
-    // One block, two extruders — exactly the exit-139 shape.
+    // One block, two extruders, exactly the exit-139 shape.
     flushVolumes: { matrix: [[[0, 111], [222, 0]]], multiplier: [1, 1] }
   })
   assert.deepEqual(after.flush_volumes_matrix, dualNozzleProject.flush_volumes_matrix)
@@ -113,7 +113,7 @@ test('Fast purge mode writes the fast multiplier, leaving the normal one alone',
 })
 
 test('no flushVolumes edit leaves the project untouched, including an ABSENT matrix', () => {
-  // Absence is legitimate — it is what makes BambuStudio compute the matrix itself — so opening
+  // Absence is legitimate, it is what makes BambuStudio compute the matrix itself, so opening
   // the dialog and cancelling must not materialise one.
   const { flush_volumes_matrix: _omitted, ...withoutMatrix } = singleNozzleProject
   const after = applyEdit(withoutMatrix, {})

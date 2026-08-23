@@ -184,7 +184,7 @@ test('slicing jobs emit elapsed-time heartbeats when live output is unavailable'
 
 test('a slice the slicer stops acknowledging fails with the real reason, not a hang or a cancel', async () => {
   // The scenario this exists for: the slicer service restarts mid-slice. Its POST can sit
-  // half-open until the 30-minute ceiling, so the progress channel is the only prompt signal —
+  // half-open until the 30-minute ceiling, so the progress channel is the only prompt signal,
   // and it used to be discarded while the job kept claiming it was slicing.
   const jobs = new SlicingJobs({
     progressPollIntervalMs: 5,
@@ -199,7 +199,7 @@ test('a slice the slicer stops acknowledging fails with the real reason, not a h
   slicerClient.progress = (async () => ({ kind: 'unknown' })) as typeof slicerClient.progress
   slicerClient.run = ((async (input: { signal?: AbortSignal }) => {
     aborted = input.signal
-    // Never resolves on its own — only the watchdog's abort can end this slice, which is the
+    // Never resolves on its own, only the watchdog's abort can end this slice, which is the
     // half-open socket the ceiling would otherwise cover for.
     await new Promise<void>((resolve) => input.signal?.addEventListener('abort', () => resolve(), { once: true }))
     throw new Error('The operation was aborted')
@@ -315,7 +315,7 @@ test('listActive drops finished jobs older than the recency window while list ke
       assert.equal(raw.includes(queued.id), true)
     })
 
-    // Age a CLONE of the real persisted record far past the recency window, then rehydrate —
+    // Age a CLONE of the real persisted record far past the recency window, then rehydrate:
     // the store never exposes a way to backdate a live job, and hand-writing a record from
     // scratch would drift from the persisted shape the hydrator actually accepts.
     const persisted = JSON.parse(await readFile(stateFilePath, 'utf8')) as { jobs: Array<Record<string, unknown>> }
@@ -405,7 +405,7 @@ test('slicing jobs persist slice-to-print artifacts as hidden files', async () =
 test('a successful slice keeps the project it handed the engine, linked to the output', async () => {
   // The project the CLI actually consumed lives in a temp dir that runSlicerJob deletes on
   // the way out, so this asserts the preserved bytes are read WHILE they still exist and are
-  // the prepared project — not the library file, and not the sliced G-code.
+  // the prepared project, not the library file, and not the sliced G-code.
   const preserved: Array<{ bytes: string; fileName: string; outputId: string; settings: unknown }> = []
   const jobs = new SlicingJobs({
     progressPollIntervalMs: 10,
@@ -574,9 +574,9 @@ test('a slice whose output is not persisted keeps no project', async () => {
 })
 
 test('the job list carries a finished job as its outcome line alone', async () => {
-  // The list is polled by every open tab and grows with history — measured at 471 KB over 194
+  // The list is polled by every open tab and grows with history: measured at 471 KB over 194
   // jobs, of which `output` was 208 KB. A finished job is rendered from its LAST system line (its
-  // outcome) and nothing else, so that is all the list ships. An ACTIVE job must keep stdout — its
+  // outcome) and nothing else, so that is all the list ships. An ACTIVE job must keep stdout, its
   // progress frames come from there.
   const jobs = new SlicingJobs({ progressPollIntervalMs: 5, resolveSource: passthroughResolveSource, authorSliceSettings: noAuthoring })
   let releaseRun: (() => void) | undefined
@@ -848,7 +848,7 @@ test('slicing jobs retry when compatibility fallback matches generated builtin:m
 
 test('slicing jobs retry without builtin machine/process after a settings-merge compatibility failure', async () => {
   // Regression: the slicer now fails fast (instead of segfaulting) when its project-settings
-  // repair export hits CLI_PROCESS_NOT_COMPATIBLE (exit 239) — e.g. a stale slice dialog pairing
+  // repair export hits CLI_PROCESS_NOT_COMPATIBLE (exit 239): e.g. a stale slice dialog pairing
   // an X1C process with an H2D machine. That message must keep flowing into the existing
   // exit-239 compatibility fallback so the slice recovers onto the project's own presets.
   const jobs = new SlicingJobs({ progressPollIntervalMs: 10, progressHeartbeatIntervalMs: 10_000, resolveSource: passthroughResolveSource, authorSliceSettings: noAuthoring })

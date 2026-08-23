@@ -92,7 +92,7 @@ function matchesUserStatusFilter(user: AuthUser, filter: UserStatusFilter): bool
 
 /**
  * Multi-select role filter: an empty selection means "all". Otherwise a user
- * matches if it satisfies ANY selected value — the `UNASSIGNED` sentinel matches
+ * matches if it satisfies ANY selected value: the `UNASSIGNED` sentinel matches
  * users with no role, and a group id matches users in that group.
  */
 function matchesUserRoleFilter(user: AuthUser, filters: string[]): boolean {

@@ -106,7 +106,7 @@ export type ProcessSettingOverrides = z.infer<typeof processSettingOverridesSche
  *
  * Enumerated explicitly rather than detected from the catalogue's `guiType`: BambuStudio marks
  * these `i_enum_open`, but it uses that same widget for plain numeric settings that ship preset
- * choices — `support_interface_top_layers` / `_bottom_layers` are LAYER COUNTS with enum values
+ * choices: `support_interface_top_layers` / `_bottom_layers` are LAYER COUNTS with enum values
  * 0..3. Keying the material picker off `i_enum_open` therefore rendered "Top interface layers"
  * as a material select, showing its default of 3 as "material 3" and letting a material choice
  * be written back as a layer count.
@@ -152,7 +152,7 @@ export type ResolveProcessConfigRequest = z.infer<typeof resolveProcessConfigReq
  * Response for `/profiles/resolve-process`. Carries two baselines so the editor can show
  * settings baked into a 3MF as modified/resettable:
  * - `config`: the profile's **effective** config (for a project 3MF this is its embedded,
- *   already-overridden config — the base the slicer merges further overrides onto).
+ *   already-overridden config: the base the slicer merges further overrides onto).
  * - `baseConfig`: the **preset baseline** to reset toward, and the "changed HERE" diff source.
  *   Equal to `config` for installed presets; for a project 3MF it is the resolved system preset
  *   (when resolvable).
@@ -169,7 +169,7 @@ export interface ResolveProcessConfigResponse {
   overriddenKeys: string[]
   /**
    * Whether the 3MF carried a changed-from-system record at all, which makes `overriddenKeys`
-   * AUTHORITATIVE — including when empty. Mirrors BambuStudio, which applies the file's declared
+   * AUTHORITATIVE, including when empty. Mirrors BambuStudio, which applies the file's declared
    * list rather than diffing configs (`update_non_diff_values_to_base_config`): a key that differs
    * from the preset but is not declared is drift the vendor normalizes away, not a user change.
    * Absent/false means the writer recorded nothing and the value diff is all we have.
@@ -179,8 +179,8 @@ export interface ResolveProcessConfigResponse {
    * Whether {@link baseConfig} is a REAL preset resolved for this slot, rather than a copy of
    * `config` standing in because the named preset is not installed here.
    *
-   * The distinction cannot be recovered from the payload — a project that changed nothing and a
-   * project whose preset went missing both send `baseConfig` deep-equal to `config` — and
+   * The distinction cannot be recovered from the payload, a project that changed nothing and a
+   * project whose preset went missing both send `baseConfig` deep-equal to `config`, and
    * conflating them is what put three un-resettable "changes" on every material of a stock project.
    * When true, a value diff is meaningful and is the modified marker (BambuStudio's
    * `dirty_options`). When false there is nothing to diff against, so {@link overriddenKeys} is the
@@ -190,7 +190,7 @@ export interface ResolveProcessConfigResponse {
   baselineResolved?: boolean
   /**
    * Which preset the returned `baseConfig` actually IS, when it is not the one that was asked for.
-   * Absent means it is — see {@link SettingsBaselineOrigin}. The dialog turns this into the caveat
+   * Absent means it is: see {@link SettingsBaselineOrigin}. The dialog turns this into the caveat
    * it shows; only the anonymous resolvers ever set it.
    */
   baselineOrigin?: SettingsBaselineOrigin
@@ -302,7 +302,7 @@ export function createProcessConfigAccessor(config: ProcessConfig): ProcessConfi
  *
  * `catalog` defaults to the PROCESS catalog; the machine catalog passes its own
  * (see `applyMachineConfigDefaults`). Keys outside the catalog are carried through
- * untouched — that is what keeps a machine preset's non-catalog values
+ * untouched, that is what keeps a machine preset's non-catalog values
  * (`printable_area`, `bed_shape`, `printer_model`) alive across an edit-and-save.
  */
 export function applyProcessConfigDefaults(
@@ -688,7 +688,7 @@ export function isAdvancedModeOption(option: ProcessSettingOption): boolean {
  *
  * The editor normally hides BambuStudio's `develop`-tier options (see
  * {@link isAdvancedModeOption}); enabling developer mode reveals them too. This is the tier
- * gate only — a revealed option is still subject to the usual conditional
+ * gate only, a revealed option is still subject to the usual conditional
  * visibility/enable rules from {@link computeProcessFieldStates}.
  */
 export function isProcessOptionVisibleInMode(option: ProcessSettingOption, showDeveloperOptions: boolean): boolean {
@@ -729,7 +729,7 @@ export function diffProcessConfig(
  * reports FALSE CHANGES: BambuStudio serializes one value several ways depending on where it was
  * written. A preset JSON stores `monotonic_travel_into_wall` as `"45.0"` while the same setting in
  * a 3MF's project config is `"45%"` (`ConfigOptionPercent::serialize` always appends `%`, and its
- * `deserialize` deliberately ignores the suffix) — the same 45% either way. Comparing the strings
+ * `deserialize` deliberately ignores the suffix), the same 45% either way. Comparing the strings
  * flagged the key as modified in the settings dialogs and emitted a pointless slice override.
  *
  * The one type where the suffix is meaningful is `floatOrPercent`: there `"400"` is 400 mm and
@@ -764,7 +764,7 @@ export function processConfigValuesEqual(
     // per-extruder array whose every element matches it. BambuStudio serializes per-extruder
     // settings (speeds, temps) as a scalar on a single-extruder machine and as an N-element array
     // on a multi-extruder one (H2D/H2C/H2D Pro); the two forms are the same value. Comparing them
-    // by wrapping the scalar in a 1-element array — the previous behaviour — failed the length
+    // by wrapping the scalar in a 1-element array, the previous behaviour, failed the length
     // check, so a project authored scalar showed every such setting as "changed" against a
     // dual-nozzle preset, and resetting was a no-op that only cleared the marker ("Initial layer
     // 50 -> 50"). A genuinely non-uniform array (["50","60"]) still differs from the scalar.
@@ -785,8 +785,8 @@ export function processConfigValuesEqual(
  *
  * These forms are interchangeable across the places a value is written, and the difference is not
  * something a user can see or act on. A builtin process preset never mentions `post_process`, while
- * BambuStudio's project config always serializes the full option set and writes `"post_process": []`
- * — treated as different, the "Post-processing Scripts" box read as MODIFIED with an empty textarea
+ * BambuStudio's project config always serializes the full option set and writes `"post_process": []`,
+ * treated as different, the "Post-processing Scripts" box read as MODIFIED with an empty textarea
  * on both sides of a reset.
  */
 function isUnsetProcessValue(value: ProcessConfigValue | undefined): boolean {
@@ -795,7 +795,7 @@ function isUnsetProcessValue(value: ProcessConfigValue | undefined): boolean {
   return value === ''
 }
 
-/** Scalar half of {@link processConfigValuesEqual} — one serialized value against another. */
+/** Scalar half of {@link processConfigValuesEqual}, one serialized value against another. */
 function processScalarsEqual(a: string, b: string | undefined, option?: ProcessSettingOption): boolean {
   if (b === undefined) return false
   if (a === b) return true
@@ -843,14 +843,14 @@ export function serializeProcessBool(value: boolean): string {
 
 /**
  * Catalog keys whose FINAL sliced value (the resolved profile's effective config + the given
- * session overrides) differs from the external preset baseline — what a fresh
+ * session overrides) differs from the external preset baseline: what a fresh
  * ProcessSettingsDialog would flag as modified, surfaced as the slice dialog's pre-open "changed
  * values" badge. Overrides that push a drifted value BACK to the baseline reduce the count (a
  * fully reset profile reads 0 even though heal overrides ride the slice request). Counterpart of
  * `resolvedFilamentModifiedKeys` in `filament-settings.ts`.
  */
 /**
- * {@link resolvedProcessModifiedKeys} narrowed to the keys a user can actually SEE — the count the
+ * {@link resolvedProcessModifiedKeys} narrowed to the keys a user can actually SEE: the count the
  * settings dialog shows, so the pre-open badge and the dialog can never disagree (they used to:
  * a modified setting whose controlling toggle is off is hidden by the dialog but was still counted
  * by the badge, leaving a "2" beside a dialog listing one changed row).
@@ -872,7 +872,7 @@ export function resolvedVisibleProcessModifiedKeys(
   const modified = resolvedProcessModifiedKeys(response, overrides)
   if (modified.length === 0) return modified
   // The field-state engine judges visibility against the FINAL config (defaults applied, session
-  // overrides on top) — the same value the dialog feeds it.
+  // overrides on top), the same value the dialog feeds it.
   const finalConfig = { ...applyProcessConfigDefaults(response.config), ...overrides }
   const context: ProcessVisibilityContext = { ...defaultProcessVisibilityContext, ...options.visibilityContext }
   const states = computeProcessFieldStates(finalConfig, context).states
@@ -886,12 +886,12 @@ export function resolvedVisibleProcessModifiedKeys(
 }
 
 /**
- * Keys the PRESET overrides relative to its own parent — emphasis only.
+ * Keys the PRESET overrides relative to its own parent: emphasis only.
  *
  * Deliberately NOT part of {@link resolvedProcessModifiedKeys}: BambuStudio keeps the two as
  * separate queries (`current_dirty_options` vs `current_different_from_parent_options`) and only
- * the former drives its modified marker. `Tab::update_changed_ui` is a single base-class method —
- * not virtual, no per-type override — so this is the same rule the FILAMENT tab follows, which is
+ * the former drives its modified marker. `Tab::update_changed_ui` is a single base-class method,
+ * not virtual, no per-type override, so this is the same rule the FILAMENT tab follows, which is
  * why this mirrors `resolvedFilamentPresetOverrideKeys` exactly rather than inventing a variant.
  *
  * Empty when no parent resolved, which collapses the distinction rather than inventing one.
@@ -935,8 +935,8 @@ export function resolvedProcessModifiedKeys(
     // (`PresetCollection::dirty_options`); the declared record decides which of the file's values
     // survive loading, not what counts as changed.
     if (processConfigValuesEqual(baseline[key], finalConfig[key], option)) continue
-    // With a record present, an UNDECLARED difference is drift BambuStudio normalizes away at load
-    // — not this project's change. A key the user edited this session always counts.
+    // With a record present, an UNDECLARED difference is drift BambuStudio normalizes away at load,
+    // not this project's change. A key the user edited this session always counts.
     if (response.declaresOverrides === true
       && !declared.has(key)
       && processConfigValuesEqual(effective[key], finalConfig[key], option)) continue

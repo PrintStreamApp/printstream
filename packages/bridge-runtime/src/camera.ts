@@ -335,7 +335,7 @@ async function captureRtspSnapshot(url: string, signal?: AbortSignal): Promise<B
       chunks.push(chunk)
       // `-frames:v 1` should make ffmpeg exit after one frame, but some RTSP sources
       // hold the pipe open afterwards. As soon as we have a complete JPEG, kill ffmpeg
-      // and return rather than draining stdout to EOF — otherwise a misbehaving camera
+      // and return rather than draining stdout to EOF, otherwise a misbehaving camera
       // pins the process (and its RTSP/TLS connection) for the full 15s process timeout.
       const assembled = Buffer.concat(chunks)
       if (isCompleteJpeg(assembled)) {

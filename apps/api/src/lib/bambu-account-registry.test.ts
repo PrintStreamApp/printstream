@@ -36,7 +36,7 @@ test('returns the first resolver that has a credential', async () => {
   off1(); off2(); off3()
 })
 
-// A throwing resolver must read as "no account", never take the whole lookup down —
+// A throwing resolver must read as "no account", never take the whole lookup down,
 // otherwise one plugin's bug becomes another plugin's outage.
 test('a throwing resolver is skipped rather than propagated', async () => {
   const off1 = bambuAccountResolvers.register(async () => { throw new Error('store unavailable') })

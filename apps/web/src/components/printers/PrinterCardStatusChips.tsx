@@ -70,7 +70,7 @@ export function PrinterCardStatusChips({
       {/*
         A connection probe only flags a problem when the printer is NOT successfully
         streaming telemetry: a live, online printer (e.g. mid-print) is proof the LAN
-        link works, so we never show this then — it would be a false positive. Surface
+        link works, so we never show this then, it would be a false positive. Surface
         it only while the printer is offline, where it explains *why* it isn't connecting.
       */}
       {!isOnline && status?.connectionWarnings && status.connectionWarnings.length > 0 && (

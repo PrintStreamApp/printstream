@@ -14,7 +14,7 @@ process.env.NODE_ENV = 'test'
  * a mutation in a billing flow nobody exercises daily: retiring an account,
  * issuing a licence, renaming a key, self-hosted checkout, claiming a
  * community key, and creating a workspace from the billing scope. Typecheck
- * cannot catch it — `unknown` accepts a string quite happily — so the guard has
+ * cannot catch it, `unknown` accepts a string quite happily, so the guard has
  * to be a source check, in the same spirit as `LazyDialogFallback.test.ts`.
  */
 import assert from 'node:assert/strict'
@@ -72,12 +72,12 @@ test('the scan actually reaches the files it is meant to check', () => {
   assert.ok(files.length > 100, `expected to walk the web source, found ${files.length} files`)
   // Anchored on a CORE file: the public snapshot ships no `private/` at all, so
   // a control that names one fails there for a reason that has nothing to do
-  // with the walk — which is not a control, it is a false alarm.
+  // with the walk, which is not a control, it is a false alarm.
   assert.ok(
     files.some((file) => file.endsWith(path.join('lib', 'apiClient.ts'))),
     'the walk should reach the core lib modules'
   )
-  // Where every offender actually lived — asserted only where that tree exists.
+  // Where every offender actually lived, asserted only where that tree exists.
   if (existsSync(path.join(SRC, 'private'))) {
     assert.ok(
       files.some((file) => file.includes(path.join('private', 'cloud'))),

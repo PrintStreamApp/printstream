@@ -3,7 +3,7 @@
  *
  * The enable/disable state it shows is PER WORKSPACE (resolved server-side
  * via the scope lookup), while permission and the underlying push
- * subscription are per device — the panel surfaces both so "enabled in
+ * subscription are per device: the panel surfaces both so "enabled in
  * another workspace but not here" reads as exactly that instead of a
  * mystery toggle.
  */

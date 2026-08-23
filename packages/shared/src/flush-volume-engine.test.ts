@@ -3,7 +3,7 @@
  *
  * WHY THIS EXISTS SEPARATELY. `flush-volume-calc.test.ts` pins the calculator against Studio's
  * compiled code, but it feeds that calculator inputs WE derived. This suite starts one step
- * earlier — from a real `project_settings.config` — so it covers the derivation too, and that is
+ * earlier, from a real `project_settings.config`, so it covers the derivation too, and that is
  * exactly where the bug was: the calculator was perfect while `readProjectFlushContext` read a
  * variant-wide machine array positionally, mis-pricing every purge on a dual-nozzle machine's
  * SECOND extruder while the first stayed correct. No amount of calculator testing could see it.
@@ -17,7 +17,7 @@
  *                --load-filaments "<f1>.json;<f2>.json" \
  *                --filament-colour "#RRGGBBAA;..." --export-settings out.config
  *
- * SKIPS without the vendored BambuStudio resources, since the measured tables live there — same
+ * SKIPS without the vendored BambuStudio resources, since the measured tables live there: same
  * developer-convenience rule as the other vendored-source tests.
  */
 import assert from 'node:assert/strict'
@@ -67,7 +67,7 @@ const ENGINE_FIXTURES: Array<[string, Record<string, unknown>, string[]]> = [
     filament_retraction_distances_when_cut: ['nil', 'nil', 'nil', 'nil'], prime_volume_mode: 'Default'
   }, ['0', '297', '596', '0', '0', '297', '596', '0']],
 
-  // Single-nozzle, three materials, and dataset 0 — the branch where a measured hit picks up the
+  // Single-nozzle, three materials, and dataset 0: the branch where a measured hit picks up the
   // extruder dead volume (black -> yellow is a measured 450, quoted as 513 against a 107 nozzle).
   ['X1C black -> yellow -> green', {
     filament_colour: ['#000000FF', '#F4EE2AFF', '#00AE42FF'], filament_is_support: ['0', '0', '0'],
@@ -174,7 +174,7 @@ test('the calibration verdict agrees with the engine, and notices when it does n
   const reformatted = engineMatrix.map((entry) => `${Number(entry).toFixed(1)}`)
   assert.equal(evaluateFlushCalibration({ settingsJson, engineMatrix: reformatted, datasets })?.agrees, true)
 
-  // Unreadable settings are UNKNOWN, never "agrees" — a probe we cannot interpret must not be
+  // Unreadable settings are UNKNOWN, never "agrees", a probe we cannot interpret must not be
   // reported to the user as a verified match.
   assert.equal(evaluateFlushCalibration({ settingsJson: '{}', engineMatrix, datasets }), null)
 })

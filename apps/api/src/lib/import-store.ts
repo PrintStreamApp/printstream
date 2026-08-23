@@ -4,10 +4,11 @@
  * When a user imports an STL/STEP (from disk or the library), it is parsed to a mesh and held here
  * keyed by a generated `importId`. The editor references the import by id in its `SceneEdit`; the
  * mesh is baked into the output 3MF only when the arrangement is sliced or saved. Entries are
- * deliberately ephemeral (in-memory, LRU + TTL) — losing them on restart just means re-importing.
+ * deliberately ephemeral (in-memory, LRU + TTL): losing them on restart just means re-importing.
  */
 import { randomUUID } from 'node:crypto'
-import { MemoryLruCache, type SceneEdit, type StagedImport, type StagedImportFormat } from '@printstream/shared'
+import { MemoryLruCache, type ImportNormalization, type SceneEdit, type StagedImport, type StagedImportFormat } from '@printstream/shared'
+import { rebaseImportedMesh } from '@printstream/shared/three-mf'
 import { badRequest } from './http-error.js'
 import type { ImportedMesh } from './mesh-import.js'
 import type { ImportedObjectInput } from './three-mf.js'
@@ -57,7 +58,14 @@ export function stageImport(input: {
   name: string
   format: StagedImportFormat
   mesh: ImportedMesh
+  /** See {@link ImportNormalization}: only a whole OBJECT is rebased, never a part. */
+  normalize: ImportNormalization
 }): StagedImport {
+  // Normalised HERE, before anything can read it, so the editor's mesh fetch and the bake's
+  // `resolveSceneEditImports` see the same geometry: rebasing in either reader alone would put the
+  // two out of step by the offset. Scoped to `object` because an added PART is centred on every
+  // axis by its caller and placed by that point inside its host.
+  if (input.normalize === 'object') rebaseImportedMesh(input.mesh)
   const record: StagedImportRecord = {
     importId: randomUUID(),
     workspaceId: input.workspaceId,

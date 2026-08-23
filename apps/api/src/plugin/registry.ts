@@ -5,12 +5,12 @@
  * Plugins have two independent state bits, both persisted in the
  * `Setting` table so they survive restarts:
  *
- * - `installed` — whether the plugin is provisioned at all. Uninstalling
+ * - `installed`: whether the plugin is provisioned at all. Uninstalling
  *   deactivates the plugin and clears every scoped `Setting` row except
  *   the install flag itself, so the plugin starts from a clean slate
  *   when reinstalled. Requests to an uninstalled plugin's sub-router
  *   return 404.
- * - `enabled` — whether an installed platform-scoped plugin is active.
+ * - `enabled`: whether an installed platform-scoped plugin is active.
  *   Workspace-scoped plugins keep their own workspace-local enablement while the
  *   platform stores only the allow/default policy for workspaces.
  *
@@ -363,7 +363,7 @@ export class PluginRegistry {
         return off
       },
       registerSlotFilamentResolver: (resolver) => {
-        // Only answer for workspaces this plugin is enabled for, mirroring print guards — a
+        // Only answer for workspaces this plugin is enabled for, mirroring print guards, a
         // disabled filament plugin must not leak spool associations into other plugins.
         const scopedResolver: SlotFilamentResolver = (query) =>
           this.isEnabledForWorkspace(entry, query.workspaceId) ? resolver(query) : Promise.resolve(null)
@@ -396,7 +396,7 @@ export class PluginRegistry {
     }
     entry.shutdownHandlers = []
     // Drop any routes the plugin registered. Express has no public API for
-    // removing routes, but the sub-router is ours — clearing its stack in
+    // removing routes, but the sub-router is ours: clearing its stack in
     // place means subsequent requests fall through to the guard's 503.
     entry.pluginRouter.stack.length = 0
   }
@@ -461,7 +461,7 @@ export class PluginRegistry {
           return existing.value
         }
 
-        // Only plugin state answers "did this install predate the policy" —
+        // Only plugin state answers "did this install predate the policy":
         // see the reasoning in `default-enable-mode.ts`. A total row count put
         // the answer at the mercy of any other boot-time write.
         const pluginSettingCount = await prisma.setting.count({
@@ -630,7 +630,7 @@ export class PluginRegistry {
   async unregister(name: string): Promise<void> {
     const entry = this.registered.get(name)
     if (!entry) return
-    // Tear down what is actually wired (`active`), not `enabled` — a plugin can
+    // Tear down what is actually wired (`active`), not `enabled`, a plugin can
     // be active without being platform-`enabled` (e.g. a workspace-surface plugin),
     // and gating on `enabled` would leak its subscriptions/connections. Matches
     // `uninstall`, which also keys teardown on `active`.

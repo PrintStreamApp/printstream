@@ -1,7 +1,7 @@
 /**
  * Search / status-filter / status-grouping / pagination state for the Queue view,
  * persisted across reloads under stable `print-queue.*` keys. Sort is intentionally
- * locked to "Manual order" — the backlog is hand-ordered (drag / move up-down), so
+ * locked to "Manual order": the backlog is hand-ordered (drag / move up-down), so
  * exposing other sort fields would fight the manual order. Display only: filtering and
  * grouping never change the underlying order used by reorder.
  */

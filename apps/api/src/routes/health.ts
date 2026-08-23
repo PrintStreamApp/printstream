@@ -1,8 +1,8 @@
 /**
  * Health endpoints.
  *
- * - `GET /api/health` — liveness: the process is up and serving. Unconditional.
- * - `GET /api/health/ready` — readiness: the API can actually serve requests
+ * - `GET /api/health`: liveness: the process is up and serving. Unconditional.
+ * - `GET /api/health/ready`: readiness: the API can actually serve requests
  *   (a time-bounded `SELECT 1` against Postgres). Returns 503 when not ready so
  *   orchestrators/load balancers don't route traffic to a DB-less instance.
  */

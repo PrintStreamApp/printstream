@@ -73,7 +73,7 @@ test('getBridgeReleaseManifest announces the promoted build with merged fragment
 
     // The two fragments describe different runner families. Top-level ABI
     // coordinates must come from the Docker (bundle) fragment regardless of
-    // merge order — legacy Docker bridges gate installs on them — while each
+    // merge order, legacy Docker bridges gate installs on them, while each
     // artifact carries its own family's coordinate.
     assert.equal(manifest.current?.runnerAbiVersion, 'node22-ffmpeg7-v1')
     assert.equal(manifest.current?.minimumRunnerAbiVersion, 'node22-ffmpeg7-v1')
@@ -200,7 +200,7 @@ test('buildBridgeUpdateSummary omits the manual command when a matching app bund
     await writeFile(path.join(releasesDir, `bridge-${FP.slice(0, 12)}.release.json`), JSON.stringify(bundleFragment()), 'utf8')
 
     // The promoted build ships an app bundle for this bridge's exact runner
-    // ABI, so the in-app "Update bridge" action self-applies — no manual step.
+    // ABI, so the in-app "Update bridge" action self-applies, no manual step.
     const selfApplying = buildBridgeUpdateSummary({
       releaseFingerprint: OTHER_FP,
       protocolVersion: 1,
@@ -276,7 +276,7 @@ test('buildBridgeUpdateSummary reports a bundled self-hosted bridge as current r
 
 test('isSupportedRunnerAbiVersion accepts both Docker ABI spellings and the SEA ABI', () => {
   // Legacy images report the bare family string; bundle-self-update images
-  // embed the exact pinned Node version. Both must stay print-compatible —
+  // embed the exact pinned Node version. Both must stay print-compatible:
   // rejecting the legacy spelling would blanket-block every existing Docker
   // bridge (`runnerUpdateRequired` blocks printing).
   assert.equal(isSupportedRunnerAbiVersion('node22-ffmpeg7-v1'), true)

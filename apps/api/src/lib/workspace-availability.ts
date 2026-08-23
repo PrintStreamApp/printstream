@@ -8,7 +8,7 @@
  * module retires whole customer accounts, and every workspace under a retired
  * one is unusable. That arrives through {@link registerWorkspaceUnavailability}
  * rather than a `private/` import (core must never reach into that directory)
- * and rather than the cloud module copying `disabled` onto each workspace —
+ * and rather than the cloud module copying `disabled` onto each workspace,
  * a copy could not tell, on restore, which of them had been disabled on their
  * own beforehand. Same registry shape as `printer-quota.ts`.
  */

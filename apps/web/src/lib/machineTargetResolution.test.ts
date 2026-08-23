@@ -1,8 +1,8 @@
 /**
  * The machine-target cascade (see machineTargetResolution.ts). Pins the ladders, the two bugs S2
  * fixes (the min-of-union nozzle seed and E9's silent plate swap), and the property the whole
- * design rests on: a user pick is honoured whenever the inputs can represent it, and REPORTED —
- * never quietly replaced — when they cannot.
+ * design rests on: a user pick is honoured whenever the inputs can represent it, and REPORTED,
+ * never quietly replaced, when they cannot.
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
@@ -55,7 +55,7 @@ function resolveWith(extra: Partial<MachineTargetInputs>, intent: MachineTargetI
   return resolveMachineTarget(inputs(extra), intent)
 }
 
-/** Both async inputs settled — the normal steady state. */
+/** Both async inputs settled: the normal steady state. */
 function settled(extra: Partial<MachineTargetInputs> = {}): Partial<MachineTargetInputs> {
   return { projectResolved: true, catalogueResolved: true, ...extra }
 }
@@ -104,7 +104,7 @@ test('a user pick beats the project, and a pick the catalogue cannot offer is re
 // ---- nozzle ---------------------------------------------------------------------------------
 
 test("the nozzle seeds from the PROJECT, not from the smallest option (the pre-S2 bug)", () => {
-  // Before S2 this landed on 0.4 — a value nothing in this scenario offers — and then no machine
+  // Before S2 this landed on 0.4, a value nothing in this scenario offers, and then no machine
   // profile matched it, so the submit gate reported an incompatible printer profile on a project
   // that was perfectly fine.
   const result = resolveWith({
@@ -171,7 +171,7 @@ test("the project's named machine profile is preferred over list order", () => {
 
 test('no compatible machine profile resolves to no selection rather than an incompatible one', () => {
   // '' is what `resolveSliceDisabledReason` turns into "No matching printer profile is installed
-  // for this printer and nozzle" — the honest message. Before S2 the stale id survived here and the
+  // for this printer and nozzle": the honest message. Before S2 the stale id survived here and the
   // user was told their profile "doesn't match the target printer" instead.
   const result = resolveWith({ machineProfiles: [A1_04], bakedIndex: index({ compatiblePrinterModels: ['H2D'] }), ...settled() })
   assert.equal(result.printerProfileId, '')

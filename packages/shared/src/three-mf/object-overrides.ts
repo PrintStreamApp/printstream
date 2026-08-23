@@ -15,7 +15,7 @@ import { decodeXmlAttributeValue, escapeXmlAttribute } from './xml-write.js'
 export type ObjectProcessOverrides = Record<string, Record<string, string | string[]>>
 
 /**
- * Read the per-object process overrides out of ONE `<object>` block's head — the metadata before
+ * Read the per-object process overrides out of ONE `<object>` block's head: the metadata before
  * its first `<part>`.
  *
  * The read half of {@link applyObjectProcessOverridesXml}, kept beside it so the two cannot drift:
@@ -28,7 +28,7 @@ export type ObjectProcessOverrides = Record<string, Record<string, string | stri
  *
  * Allowlisted to real process keys, because an object's head also carries identity and placement
  * metadata (`name`, `extruder`, `source_object_id`, `matrix`, …) that is emphatically not a
- * process override — treating it as one would write junk back on the next save.
+ * process override: treating it as one would write junk back on the next save.
  */
 export function readObjectProcessOverridesFromHead(objectHead: string): Record<string, string> {
   const overrides: Record<string, string> = {}
@@ -79,8 +79,8 @@ export function applyObjectProcessOverridesXml(xml: string, overridesByObjectId:
  * Move per-object overrides from the ids the REQUEST used onto the ids the bake actually wrote.
  *
  * Overrides are keyed by baked `object_id`, but a replaced object or an independent copy is
- * addressed by an identity that does not exist in the file yet — a retained original id or a
- * negative placeholder — and only the bake knows what it became. Anything not listed is left
+ * addressed by an identity that does not exist in the file yet, a retained original id or a
+ * negative placeholder, and only the bake knows what it became. Anything not listed is left
  * alone, so this is safe to run over a whole override set.
  *
  * Idempotent: re-running it after the keys have moved is a no-op, because the original key is gone.

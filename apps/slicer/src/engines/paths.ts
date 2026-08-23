@@ -6,7 +6,7 @@
  * native app share it without either knowing the other's paths.
  *
  * The **sysroot is shared, not per engine.** It is the Ubuntu runtime closure
- * the AppImages expect from the host — the same 314 MB regardless of which
+ * the AppImages expect from the host, the same 314 MB regardless of which
  * engine loads it. Nesting it under one engine would download it again for the
  * second, and removing that engine would break the others; hence a sibling.
  *

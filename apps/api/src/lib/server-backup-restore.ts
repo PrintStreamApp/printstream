@@ -15,7 +15,7 @@
  *     migrations touch the database): drop + recreate the database,
  *     `pg_restore` the dump, replace the persistent data tree from the
  *     snapshot, and hand back to the boot path, which then runs migrations
- *     forward — the established upgrade contract, and exactly the state a
+ *     forward: the established upgrade contract, and exactly the state a
  *     restored dump is in.
  *
  * Crash posture: the marker is renamed to a single-attempt name before any
@@ -94,7 +94,7 @@ export async function stageServerRestore(backupName: string): Promise<string> {
 
   // The safety backup is not optional: restoring over the only copy of the
   // current state turns a mis-click into data loss. Its failure fails the
-  // staging — "no backup" and "about to destroy the database" must not meet.
+  // staging: "no backup" and "about to destroy the database" must not meet.
   await createServerBackup('pre-restore')
 
   const marker: RestoreMarker = { version: 1, backupName, requestedAt: new Date().toISOString() }
@@ -113,7 +113,7 @@ export interface AppliedRestore {
 
 /**
  * Boot-time half. Returns null on the ordinary boot (no marker). On a staged
- * restore it either completes fully or THROWS — a half-restored database must
+ * restore it either completes fully or THROWS, a half-restored database must
  * fail the boot loudly, never serve traffic. The caller (`server.ts`) runs
  * migrations forward after a successful apply.
  */

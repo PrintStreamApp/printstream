@@ -4,7 +4,7 @@
  * sources); the deploy promotes the server's own build by writing a pointer
  * file next to the published artifact fragments, the manifest announces that
  * build, and bridges whose fingerprint differs update to it. There are no
- * release versions — humans see build revisions and dates.
+ * release versions: humans see build revisions and dates.
  */
 import {
   bridgeBuildSchema,
@@ -25,7 +25,7 @@ const CURRENT_BRIDGE_PROTOCOL_VERSION = 1
  * Docker runner ABI family. Legacy images report the bare `node22-ffmpeg7-v1`;
  * bundle-self-update images embed the EXACT pinned Node version
  * (`node22.22.3-ffmpeg7-v1`) so an app bundle can only ever be installed onto a
- * runner with an identical runtime — new JS silently running on a different
+ * runner with an identical runtime: new JS silently running on a different
  * Node patch is the skew class behind the H2D FTPS incident (nodejs/node#64402).
  * Both spellings are protocol-compatible with the server, so both stay
  * supported here; the exact-match gating happens in the bridge's bundle driver.
@@ -64,12 +64,12 @@ export interface BridgeReleaseConsistency {
  * deploy run with `--skip-bridge-promotion`, or one whose bridge build never
  * published, moves the app forward and leaves the pointer behind. Nothing
  * reported that, so a server could serve a bridge older than itself
- * indefinitely — observed on staging, where the download page offered an
+ * indefinitely: observed on staging, where the download page offered an
  * installer that rejected the very flag the page told people to pass.
  *
  * UNKNOWN counts as matching, on purpose. A self-hosted image, a local build, or
  * anything that did not record a fingerprint would otherwise have its downloads
- * withheld over a value that was never populated — breaking working installs to
+ * withheld over a value that was never populated: breaking working installs to
  * report a problem they do not have.
  */
 export function describeBridgeReleaseConsistency(options: { releasesDir?: string } = {}): BridgeReleaseConsistency {
@@ -95,7 +95,7 @@ const RELEASE_ASSETS_PATH = '/api/bridge-runtime/release-assets/'
  * `PUBLIC_BASE_URL` when set, else the origin the request arrived on. The
  * explicit setting matters behind proxy chains that hide the original
  * protocol (e.g. Cloudflare terminating TLS and reaching the origin over
- * plain HTTP) — bridges compare full origins, so `http://` vs `https://`
+ * plain HTTP): bridges compare full origins, so `http://` vs `https://`
  * fails their same-origin download check.
  */
 export function resolveBridgeAssetOrigin(requestOrigin: string | null): string | null {
@@ -133,7 +133,7 @@ export function getBridgeReleaseManifest(
   // Self-hosted bundles update lock-step with the app: the bridge ships inside
   // the bundle and must never converge to a separately-promoted build. Advertise
   // no installable `current` so a bundled bridge's updater has nothing to act on
-  // even if one were ever wired in — the lock-step guarantee then holds at the
+  // even if one were ever wired in: the lock-step guarantee then holds at the
   // manifest layer, not only by the bundled bridge using the image-pull driver.
   // Mirrors the self-hosted short-circuit in `resolveBridgeUpdateStatus`.
   if (isSelfHostedDeployment()) {
@@ -160,7 +160,7 @@ export function getBridgeReleaseManifest(
  * Points the build's release-asset URLs at the given origin (the one the
  * manifest request came in on). CI publishes one fragment set to every server
  * with a single baked base URL, but each server stores the assets itself and
- * bridges enforce that downloads are same-origin with their own server — so
+ * bridges enforce that downloads are same-origin with their own server, so
  * every server must hand out its own URLs. Foreign-host URLs (not under the
  * release-assets route) pass through untouched.
  */
@@ -215,7 +215,7 @@ function resolveBridgeUpdateStatus(
 ): BridgeUpdateStatus {
   // Self-hosted (OSS Docker stack and native SEA) ships the bridge inside the
   // application bundle, so it is lockstep with the server by construction and
-  // cannot update independently — the whole bundle updates as a unit. The
+  // cannot update independently: the whole bundle updates as a unit. The
   // release-pointer drift comparison below is a cloud-only concept (it drives
   // separately-installed home bridges that legitimately self-update), so a
   // bundled bridge is definitionally `current`. Reporting anything else would
@@ -267,7 +267,7 @@ function resolveManualUpdateCommand(status: BridgeUpdateStatus, runnerAbiVersion
   // `updateAvailable` on a Docker bridge is only self-serviceable when the
   // promoted build publishes an app bundle this bridge can activate; otherwise
   // (no bundle published, or an image-pull-only bridge) the in-app "Update
-  // bridge" action can only answer "pull manually" — surface the command up
+  // bridge" action can only answer "pull manually": surface the command up
   // front so the operator is not sent through a doomed click to learn it.
   if (status === 'updateAvailable' && !dockerBridgeCanSelfApply(currentBuild, runnerAbiVersion)) {
     return 'docker compose pull bridge && docker compose up -d bridge'
@@ -308,7 +308,7 @@ function readCurrentBridgeBuildPointer(releasesDir: string): CurrentBridgeBuildP
  * null when no artifacts for the promoted build have been published yet.
  *
  * Today only the standalone binary fragment is published (Docker bridges update
- * by image pull, so no app-bundle fragment exists). The merge stays general —
+ * by image pull, so no app-bundle fragment exists). The merge stays general,
  * each fragment's ABI coordinates are pushed onto its own artifacts (`bundle` /
  * `binaries[*]`), and a bundle-carrying fragment, if one were ever present
  * again, would still supply the merged build's top-level coordinates.

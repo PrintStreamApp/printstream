@@ -101,7 +101,7 @@ function renderPicker() {
 }
 
 // Regression: a search term left standing after opening a folder made the folder
-// unreachable — the term kept filtering the destination's children, so a folder that
+// unreachable: the term kept filtering the destination's children, so a folder that
 // matched only by name opened onto an apparently empty listing.
 test('opening a folder found by search clears the search and shows the folder contents', async () => {
   const view = renderPicker()

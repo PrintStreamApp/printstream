@@ -1,5 +1,5 @@
 /**
- * The public 3MF editor's anonymous filament-config resolver — the `resolveConfig` seam the material
+ * The public 3MF editor's anonymous filament-config resolver: the `resolveConfig` seam the material
  * "tune" dialog and the sidebar's per-material "changed vs preset" badge call to seed a filament's
  * baseline. The filament counterpart of `buildLocalProcessConfigResolver`.
  *
@@ -10,7 +10,7 @@
  *   `project_settings.config` at the filament's SLOT column (via the shared
  *   `extractProjectFilamentConfig`), with the baseline resolved by matching the slot's parent preset
  *   NAME to a built-in in the loaded catalogue and resolving THAT through the public endpoint. This
- *   is exactly what the workspace route does with the file it reads server-side — here the file only
+ *   is exactly what the workspace route does with the file it reads server-side, here the file only
  *   exists in the tab.
  * - BROWSER-STORED preset (`local:filament:`) -> the document the user uploaded through the
  *   "Manage" dialog, read straight from that store. NOT unresolvable, despite there being no
@@ -63,7 +63,7 @@ export const resolveBuiltinFilamentViaApi: BuiltinFilamentResolver = (filamentPr
 
 /**
  * Build the resolver for one open project. `filamentProfiles` is read live (the catalogue loads
- * async), so the caller passes the current list on each call — keep the returned function itself
+ * async), so the caller passes the current list on each call: keep the returned function itself
  * stable at the call site if it feeds an effect.
  */
 export function buildLocalFilamentConfigResolver(input: {
@@ -81,7 +81,7 @@ export function buildLocalFilamentConfigResolver(input: {
       // Baseline, in order of fidelity: (1) a built-in with the EXACT slot preset name; (2) the
       // built-in PARENT of a workspace custom preset (unavailable here); (3) nothing resolvable ->
       // fall back to the slot's changed-from-system keys. Same three-tier rule as the process
-      // resolver — see `buildLocalProcessConfigResolver`.
+      // resolver: see `buildLocalProcessConfigResolver`.
       let baseline: ResolveFilamentConfigResponse['config'] | null = null
       // Which of the three tiers we land on is not just a value: it changes what a marker MEANS, so
       // it is reported alongside rather than left for a caller to guess at.
@@ -102,21 +102,21 @@ export function buildLocalFilamentConfigResolver(input: {
       return baseline
         ? { config: project.config, baseConfig: baseline, overriddenKeys: project.overriddenKeys, declaresOverrides: project.declaresOverrides, baselineOrigin }
         // No preset resolved: `baseConfig` is a stand-in copy, so only the declared record can say
-        // what changed. Flagged explicitly — the payload cannot be told apart from an unmodified
+        // what changed. Flagged explicitly: the payload cannot be told apart from an unmodified
         // project otherwise. Same contract as the workspace route.
         : { config: project.config, baseConfig: project.config, overriddenKeys: project.overriddenKeys, declaresOverrides: project.declaresOverrides, baselineResolved: false, baselineOrigin }
     }
     if (slicingPresetProvenance(filamentProfileId) === 'builtin') {
       const preset = await resolveBuiltinFilament(filamentProfileId, targetId)
       // ...but only while the slot still holds the same MATERIAL. Pointing a slot at a different
-      // material must carry nothing over — see `filamentSlotValuesCarryTo`, which encodes
+      // material must carry nothing over: see `filamentSlotValuesCarryTo`, which encodes
       // BambuStudio's own rule (`Tab::select_preset` sets `no_transfer` on a filament_type change).
-      // An EMPTY slot says nothing — overlaying it would blank the preset the caller asked for.
+      // An EMPTY slot says nothing: overlaying it would blank the preset the caller asked for.
       const slot = projectFilamentId ? readProjectFilamentSlot(input.project, projectFilamentId) : null
       const slotValues = slot && Object.keys(slot.config).length > 0 ? slot.config : null
       const slotConfig = slotValues && filamentSlotValuesCarryTo(slotValues, preset.config) ? slotValues : null
-      // A system preset needs no parent named, but the SLOT's drift over it still has to be declared
-      // — `different_settings_to_system` is what BambuStudio exempts from normalization, so an
+      // A system preset needs no parent named, but the SLOT's drift over it still has to be declared,
+      // `different_settings_to_system` is what BambuStudio exempts from normalization, so an
       // under-declared override is silently reset to the preset's value on open, and a STALE
       // over-declaration keeps a value the preset would have replaced.
       const systemBinding = (effective: ProcessConfig) => ({
@@ -145,14 +145,14 @@ export function buildLocalFilamentConfigResolver(input: {
       }
     }
     // A preset the user uploaded into THIS BROWSER (the "Manage" dialog's store). The header used to
-    // say a non-builtin preset was "impossible on an anonymous host" — that stopped being true when
+    // say a non-builtin preset was "impossible on an anonymous host", that stopped being true when
     // that store was added, and the gap was invisible until a repair needed the values: a project
     // naming an uploaded preset threw here, so the whole all-or-nothing repair failed on a preset
     // the user could see listed in Manage.
     const stored = listLocalSlicingPresets().find((preset) => preset.id === filamentProfileId && preset.kind === 'filament')
     if (stored) {
       // FLATTENED onto its parent first. A BambuStudio export is a delta (`inherits` + the changed
-      // keys), so handing `raw` out directly gave a slot a handful of values — enough to look
+      // keys), so handing `raw` out directly gave a slot a handful of values: enough to look
       // resolved, not enough for the repair to write anything. See `localPresetInheritance.ts`.
       const { config, parentName, parentConfig, parentUnresolved } = await flattenLocalPreset(stored, input.filamentProfiles,
         async (builtinId) => (await resolveBuiltinFilament(builtinId, targetId)).config ?? null)
@@ -168,7 +168,7 @@ export function buildLocalFilamentConfigResolver(input: {
         // no parent is complete, and telling that user their preset "is based on one that isn't
         // available here" would be a false statement about their own file.
         ...(parentUnresolved ? { baselineOrigin: { kind: 'partial' as const } } : {}),
-        // A save needs the parent's name to bind this slot — a user preset whose project does not
+        // A save needs the parent's name to bind this slot, a user preset whose project does not
         // name its parent reopens in BambuStudio as a `(<project>.3mf)` copy however right its
         // values are. Reported only when the parent actually resolved; the declared changes are the
         // SLOT's (preset deltas plus any project drift) measured against that same system preset,

@@ -1,7 +1,7 @@
 /**
  * Filament-manager plugin (web side).
  *
- * Adds the top-level **Filament** tab (custom spool icon on mobile) — a spool
+ * Adds the top-level **Filament** tab (custom spool icon on mobile), a spool
  * inventory with search/filter/sort/group, list and icon views, and graphical +
  * numeric remaining-filament. Also contributes the plugin-manager settings panel
  * for the `autoAddBambuSpools` toggle, and the filament stats cards into the stats slot.

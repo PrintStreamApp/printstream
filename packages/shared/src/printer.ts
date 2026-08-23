@@ -7,9 +7,9 @@
  *
  * This module is a thin barrel over three focused layers (each re-exported
  * verbatim, so importers keep using `./printer.js` unchanged):
- * - `./printer-contracts.js` — the wire/DTO Zod schemas and inferred types.
- * - `./printer-capabilities.js` — model -> capability tables and helpers.
- * - `./printer-actions.js` — action-availability logic and reason strings.
+ * - `./printer-contracts.js`: the wire/DTO Zod schemas and inferred types.
+ * - `./printer-capabilities.js`: model -> capability tables and helpers.
+ * - `./printer-actions.js`: action-availability logic and reason strings.
  *
  * Dependencies flow one way: contracts <- capabilities <- actions.
  */

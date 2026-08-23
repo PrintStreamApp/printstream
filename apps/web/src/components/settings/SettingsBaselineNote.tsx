@@ -4,7 +4,7 @@
  * Shown when the dialog could not resolve the preset a project actually used and fell back to
  * something weaker. The RESOLVER reports which fallback it took (`SettingsBaselineOrigin`) and
  * `describeSettingsBaseline` turns that into this text, so the note can never claim a baseline that
- * was not actually consulted — the dialog is not re-deriving anything. Without a note the user sees
+ * was not actually consulted: the dialog is not re-deriving anything. Without a note the user sees
  * a "changed" set measured from somewhere other than where they assume, with nothing saying so.
  *
  * One component rather than an Alert per dialog because the condition is identical on each and the

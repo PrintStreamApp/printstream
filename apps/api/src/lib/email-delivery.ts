@@ -77,7 +77,7 @@ export async function sendEmail(input: EmailInput): Promise<void> {
   await transport.send(input)
 }
 
-// Built-in Cloudflare transport — the cloud email path. It is treated as
+// Built-in Cloudflare transport: the cloud email path. It is treated as
 // unconfigured in self-hosted builds so OSS email delivery (and features gated on
 // it, like password reset) depend solely on the operator's own SMTP setup, even
 // if stray CLOUDFLARE_EMAIL_* env happens to be present.

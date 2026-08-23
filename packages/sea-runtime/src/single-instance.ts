@@ -22,7 +22,7 @@ export function acquireSingleInstanceLock(lockPath: string): boolean {
   try {
     mkdirSync(path.dirname(lockPath), { recursive: true })
   } catch {
-    return true // can't manage the lock dir — don't block startup on it
+    return true // can't manage the lock dir: don't block startup on it
   }
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -40,13 +40,13 @@ export function acquireSingleInstanceLock(lockPath: string): boolean {
       return true
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
-        return true // e.g. a permissions issue — degrade to no guard, don't wedge
+        return true // e.g. a permissions issue: degrade to no guard, don't wedge
       }
       const ownerPid = readLockPid(lockPath)
       if (ownerPid !== null && ownerPid !== process.pid && isProcessAlive(ownerPid)) {
         return false // a live instance holds it
       }
-      // Stale (dead owner) or our own leftover — drop it and retry once.
+      // Stale (dead owner) or our own leftover: drop it and retry once.
       try {
         rmSync(lockPath, { force: true })
       } catch {
@@ -72,7 +72,7 @@ function isProcessAlive(pid: number): boolean {
     return true
   } catch (error) {
     // ESRCH: no such process. EPERM: it exists but is owned by another account
-    // (e.g. the LocalSystem service vs a user launch) — still alive.
+    // (e.g. the LocalSystem service vs a user launch), still alive.
     return (error as NodeJS.ErrnoException).code === 'EPERM'
   }
 }

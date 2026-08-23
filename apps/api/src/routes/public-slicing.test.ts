@@ -12,7 +12,7 @@ import { slicerClient } from '../lib/slicer-client.js'
 /**
  * The point of this surface is that it is anonymous AND carries nothing workspace-specific. Both halves
  * are asserted: a caller with no session gets the catalogue, and what comes back is exactly what the
- * slicer reported — no custom profiles, which by definition belong to a workspace this caller does
+ * slicer reported, no custom profiles, which by definition belong to a workspace this caller does
  * not have.
  */
 
@@ -53,7 +53,7 @@ test('the built-in catalogue is served without any session', async () => {
   ] as unknown as Awaited<ReturnType<typeof slicerClient.profiles>>
 
   await withApp(async (baseUrl) => {
-    // No cookie, no workspace header, no permission — the whole point of the surface.
+    // No cookie, no workspace header, no permission: the whole point of the surface.
     const response = await fetch(`${baseUrl}/profiles`)
     assert.equal(response.status, 200)
     const body = await response.json() as { profiles: Array<{ id: string }> }
@@ -65,7 +65,7 @@ test('the built-in catalogue is served without any session', async () => {
 })
 
 test('the catalogue is exactly what the slicer reported, with nothing workspace-owned added', async () => {
-  // The workspace route merges custom profiles in. This one must not — a caller here has no workspace,
+  // The workspace route merges custom profiles in. This one must not, a caller here has no workspace,
   // so any custom preset appearing would be someone else's.
   const builtin = [{ id: 'process:0.20mm', kind: 'process', name: '0.20mm Standard' }]
   let workspaceArgumentSeen: unknown = 'not-called'
@@ -119,7 +119,7 @@ test('a bed-model request with no printerModel is a bad request, not a 500', asy
 })
 
 test('a printer with no bundled bed model answers 404 rather than erroring', async () => {
-  // Not every printer ships a modelled plate, and the editor falls back to its millimetre grid — so a
+  // Not every printer ships a modelled plate, and the editor falls back to its millimetre grid, so a
   // miss is a normal answer the client acts on, never a failure.
   slicerClient.bedModel = async () => null
 
@@ -130,7 +130,7 @@ test('a printer with no bundled bed model answers 404 rather than erroring', asy
 })
 
 // The public editor rewrites a project's machine IN THE BROWSER when saving it for a different
-// printer, but the target machine's full preset only exists inside the slicer image — this route is
+// printer, but the target machine's full preset only exists inside the slicer image, this route is
 // the one hop that cannot move into the tab. Counterpart:
 // `apps/web/src/plugins/model-studio/lib/localMachineRetarget.ts`.
 test('a built-in printer preset resolves anonymously, for the browser-side machine retarget', async () => {
@@ -170,7 +170,7 @@ test('a workspace machine preset id is refused here rather than reaching a works
 
 test('a built-in preset of the wrong kind cannot be resolved as a machine', async () => {
   // The id parses, so only the `kind` half of the guard stands between a process preset name and the
-  // machine resolver — which against a real slicer could answer 200 from the wrong catalogue.
+  // machine resolver, which against a real slicer could answer 200 from the wrong catalogue.
   let resolved = 0
   slicerClient.resolveMachineConfig = async () => { resolved += 1; return null }
 
@@ -199,7 +199,7 @@ test('a built-in process preset resolves anonymously, with the preset as its own
     assert.equal(response.status, 200)
     const body = await response.json() as { config: Record<string, unknown>; baseConfig: Record<string, unknown>; overriddenKeys: string[] }
     assert.equal(body.config.print_settings_id, '0.20mm Standard @BBL X1C')
-    // A builtin carries no baked overrides, so there is nothing to reset toward but itself — the editor
+    // A builtin carries no baked overrides, so there is nothing to reset toward but itself: the editor
     // would badge phantom "modified" settings if these two ever diverged here.
     assert.deepEqual(body.baseConfig, body.config)
     assert.deepEqual(body.overriddenKeys, [])

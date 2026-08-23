@@ -20,7 +20,7 @@ export function generateWindowsTrayScript(input: {
 # menu renders crisply on high-DPI displays. System (not Per-Monitor V2) is
 # deliberate: .NET Framework WinForms natively scales menus/fonts to the system
 # DPI, but does NOT scale them under Per-Monitor V2 without an app.config opt-in
-# we cannot ship — so Per-Monitor V2 leaves the menu bitmap-stretched (blurry).
+# we cannot ship, so Per-Monitor V2 leaves the menu bitmap-stretched (blurry).
 try {
   Add-Type -Name DpiAware -Namespace Native -MemberDefinition '[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool SetProcessDPIAware();'
   [void][Native.DpiAware]::SetProcessDPIAware()
@@ -91,7 +91,7 @@ $restartServiceItem.add_Click({ Start-Process -FilePath $exePath -ArgumentList '
 $updateItem = $menu.Items.Add('Update ' + $appName)
 $updateItem.Visible = $false
 $updateItem.add_Click({
-  $notify.ShowBalloonTip(4000, $appName, 'Updating ' + $appName + ' — approve the administrator prompt.', [System.Windows.Forms.ToolTipIcon]::Info)
+  $notify.ShowBalloonTip(4000, $appName, 'Updating ' + $appName + ': approve the administrator prompt.', [System.Windows.Forms.ToolTipIcon]::Info)
   Start-Process -FilePath $exePath -ArgumentList 'update','apply' -Verb RunAs
 })
 $logsItem = $menu.Items.Add('View logs')

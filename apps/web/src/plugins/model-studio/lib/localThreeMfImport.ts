@@ -4,7 +4,7 @@
  * The api answers the same question by unzipping the upload with yauzl; here the file never leaves
  * the tab, so it is unzipped in a worker (`zipArchiveClient` via {@link openThreeMfArchive}) and fed
  * to the SAME shared extractor. Nothing about which plate, which parts, or how they are re-centred
- * lives here — that is `@printstream/shared/three-mf`'s `mesh-extract.ts`, so the two hosts cannot
+ * lives here, that is `@printstream/shared/three-mf`'s `mesh-extract.ts`, so the two hosts cannot
  * disagree about what a given file contributes.
  *
  * Counterpart: `apps/api/src/lib/three-mf-mesh-extract.ts`.
@@ -43,7 +43,7 @@ export function threeMfArchiveImportSource(archive: ThreeMfArchive): ThreeMfImpo
 /**
  * Extract a picked 3MF's printed geometry, in the tab.
  *
- * The archive is disposable — it exists only for this extraction — so it is opened and dropped here
+ * The archive is disposable, it exists only for this extraction, so it is opened and dropped here
  * rather than being held, unlike the OPEN project's archive which the editor keeps for its session.
  */
 export async function extractThreeMfImportFromFile(file: Blob): Promise<ImportedMesh> {

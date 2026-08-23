@@ -8,7 +8,7 @@
  *
  * The chips are instead persisted on `LibraryFile.derivedChipsJson` (+
  * `derivedChipsVersion`, the parser version they were built with) so the list
- * reads them straight off the row it already fetched — O(1) per row, no parse, no
+ * reads them straight off the row it already fetched: O(1) per row, no parse, no
  * RPC. Rows are populated lazily: the list warms any file whose cache is missing
  * or stale in the background, so the next listing is fully served from the row.
  */
@@ -25,9 +25,9 @@ export interface DerivedChips {
   plateTypeChips: LibraryFile['plateTypeChips']
   nozzleSizeChips: LibraryFile['nozzleSizeChips']
   projectFilamentChips: LibraryFile['projectFilamentChips']
-  /** Geometry-only 3MF (no Bambu project metadata) — the web treats it like STL/STEP. */
+  /** Geometry-only 3MF (no Bambu project metadata): the web treats it like STL/STEP. */
   geometryOnly?: boolean
-  /** Editor single-object export (marker-stamped) — model-like default treatment. */
+  /** Editor single-object export (marker-stamped): model-like default treatment. */
   objectExport?: boolean
   /** Embedded settings contradict the project's machine topology; the user can repair it. */
   needsSettingsRepair?: boolean
@@ -43,7 +43,7 @@ export interface DerivedChips {
  * Persisted envelope: the chips PLUS the file version they describe.
  *
  * The source path is part of the cache key, not decoration. `storedPath` is per-VERSION, so
- * comparing it is what makes a new version invalidate the chips — see {@link parseDerivedChips}.
+ * comparing it is what makes a new version invalidate the chips: see {@link parseDerivedChips}.
  * Legacy rows hold a bare `DerivedChips` object with no envelope; those parse as stale and re-warm.
  */
 interface PersistedDerivedChips {
@@ -62,7 +62,7 @@ export function serializeDerivedChips(chips: DerivedChips, sourcePath: string): 
  * The version stamp alone is NOT a sufficient staleness test, and treating it as one was a real
  * bug: saving a new version (a settings repair, a re-upload) leaves `derivedChipsVersion` equal to
  * the current constant, so every `cacheOnly` surface kept serving the PREVIOUS version's chips
- * indefinitely — a repaired project still advertising `needsSettingsRepair`, so the repair looked
+ * indefinitely, a repaired project still advertising `needsSettingsRepair`, so the repair looked
  * like it had failed. Nothing clears this cache on write, by design: the test is what must be
  * blunt, so a writer that forgets cannot reintroduce the staleness.
  */

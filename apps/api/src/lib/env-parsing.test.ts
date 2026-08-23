@@ -2,7 +2,7 @@
  * Empty means unset, for every variable.
  *
  * The bug this pins: `PLATFORM_ADMIN_EMAIL` was declared as a plain
- * `.email().optional()`, so an EMPTY value reached the email check and failed —
+ * `.email().optional()`, so an EMPTY value reached the email check and failed,
  * and env parsing runs at module load, so the failure killed the API process
  * before it could log anything useful. Empty is not a hypothetical input here:
  * the compose files map env as `VAR: ${VAR:-}`, which passes an empty string
@@ -41,7 +41,7 @@ test('a real value still has to be valid', () => {
   assert.equal(email.safeParse('  admin@example.com  ').success && email.parse('  admin@example.com  '), 'admin@example.com')
 })
 
-test('the rule holds for defaulted values too — empty falls back to the default', () => {
+test('the rule holds for defaulted values too: empty falls back to the default', () => {
   const origin = trimmedEnv(z.string().default('http://localhost:5173'))
   assert.equal(origin.parse(''), 'http://localhost:5173')
   assert.equal(origin.parse(undefined), 'http://localhost:5173')

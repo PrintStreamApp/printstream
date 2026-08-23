@@ -5,7 +5,7 @@
  * upper and a lower half, and each open cross-section is capped (multiple loops and holes
  * supported) so both halves stay solid, sliceable meshes. The halves are serialized as binary
  * STL and staged through the editor's existing foreign-import endpoint, so the backend bakes
- * them into the 3MF exactly like any imported model — no new API surface.
+ * them into the 3MF exactly like any imported model, no new API surface.
  *
  * Caps only form where the cross-section's boundary chains close; an unclosed chain (a hole in
  * a broken source mesh) is skipped rather than failing the cut.
@@ -30,7 +30,7 @@ const CHAIN_QUANTUM = 1e-4
  * non-mesh helpers. Paint overlays are real meshes parented under the part mesh, so without
  * the skip a painted object's painted triangles would be collected twice.
  * `includeModifierVolumes` keeps helper volumes (negative/modifier/blocker/enforcer meshes)
- * in the soup — used when a specific part is exported deliberately, never for the solid
+ * in the soup: used when a specific part is exported deliberately, never for the solid
  * geometry walks (cut/split/assemble/whole-object export).
  */
 export function collectWorldTriangles(
@@ -263,12 +263,12 @@ export function rebaseTriangleSoup(soup: Float32Array): { offset: { x: number; y
  * Which side(s) of an axis-aligned cut a HELPER volume belongs to.
  *
  * BambuStudio's rule verbatim (`ModelObject::process_modifier_cut`, Model.cpp): a modifier /
- * negative / blocker volume is **never geometrically cut** — it is assigned by its bounding box in
+ * negative / blocker volume is **never geometrically cut**, it is assigned by its bounding box in
  * the cut plane's frame, and one that STRADDLES the plane is carried onto BOTH halves so each piece
  * keeps the region it needs. Our cut is axis-aligned, so the plane's frame is just `axis` vs
  * `offset` where BambuStudio uses z vs 0.
  *
- * An empty soup belongs to neither side rather than to both — carrying a volume with no geometry
+ * An empty soup belongs to neither side rather than to both: carrying a volume with no geometry
  * would put an invisible part on every piece.
  */
 export function helperVolumeCutSides(
@@ -289,7 +289,7 @@ export function helperVolumeCutSides(
   return { lower: max <= offset || straddles, upper: min >= offset || straddles }
 }
 
-/** Shift a triangle soup by `-offset`, in place — the half's rebase applied to a carried volume. */
+/** Shift a triangle soup by `-offset`, in place: the half's rebase applied to a carried volume. */
 export function shiftTriangleSoup(soup: Float32Array, offset: { x: number; y: number; z: number }): Float32Array {
   for (let i = 0; i < soup.length; i += 3) {
     soup[i] = soup[i]! - offset.x

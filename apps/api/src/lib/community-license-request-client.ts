@@ -4,7 +4,7 @@
  * The install makes this call, not the browser. The operator's browser may sit
  * on a segment with no route out (a print farm on an isolated VLAN is the norm,
  * not the exception), while the server already reaches the vendor for key
- * refresh — so the half of the system that is known to have egress is the half
+ * refresh, so the half of the system that is known to have egress is the half
  * that asks. It also keeps the vendor endpoint free of CORS.
  *
  * There is no key installed yet, by definition, so the origin cannot come from
@@ -27,7 +27,7 @@ export type CommunityLicenseRequestOutcome =
  * @returns whether the vendor accepted the request. Never throws: every failure
  * here is something the operator needs shown, not a 500.
  *
- * A refusal carries the vendor's own message when there is one — it is the side
+ * A refusal carries the vendor's own message when there is one, it is the side
  * that knows why (rate limited, issuance switched off) and its wording will
  * outlive any guess made here.
  */

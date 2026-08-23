@@ -1,5 +1,5 @@
 /**
- * One slicing job by id (`GET /api/slicing/jobs/:id` — the full record, any age). The dialogs
+ * One slicing job by id (`GET /api/slicing/jobs/:id`: the full record, any age). The dialogs
  * that watch a job they just started (slice-then-print, calibration) use this instead of
  * scanning the list query: the list now carries only active/recent jobs, and a dialog left open
  * past that window must keep seeing its job.
@@ -8,7 +8,7 @@ import { isActiveSlicingJob, type SlicingJobResponse } from '@printstream/shared
 import { useQuery } from '@tanstack/react-query'
 import { apiFetch } from '../lib/apiClient'
 
-/** Same wedge guard as the list fetch — see `useSlicingJobs`. */
+/** Same wedge guard as the list fetch: see `useSlicingJobs`. */
 const SLICING_JOB_TIMEOUT_MS = 20_000
 
 export function useSlicingJob(jobId: string | null | undefined) {

@@ -3,10 +3,10 @@
  *
  * A "from scratch" project 3MF (PrintStream's calibration scaffolds and new-project saves, built
  * by `buildEditedThreeMf(null, …)`) carries the `Application: BambuStudio-…` marker so the CLI
- * takes its BBL-project path — which is required to slice per-plate and keep the injected
+ * takes its BBL-project path, which is required to slice per-plate and keep the injected
  * `custom_gcode_per_layer.xml` (without the marker the CLI logs "not support to slice plate N,
  * reset to 0" and drops the per-layer G-code). But that BBL-project loader dereferences the
- * project's embedded `project_settings.config`, and a scaffold 3MF has none — so the CLI
+ * project's embedded `project_settings.config`, and a scaffold 3MF has none, so the CLI
  * segfaults (SIGSEGV / exit 139) at load, before it reads the model.
  *
  * A hand-merge of the machine/process/filament presets does NOT satisfy the loader (it fills ~150
@@ -14,21 +14,21 @@
  * via a fast `--export-settings` pass over the very `--load-settings`/`--load-filaments` the slice
  * will use, then embed that as the 3MF's `project_settings.config`. The slice's own
  * `--load-settings` still overrides these values (3mf-embedded settings are lowest priority), so
- * the embedded config only needs to be structurally complete — which a genuine export is.
+ * the embedded config only needs to be structurally complete, which a genuine export is.
  *
  * A scaffold save can embed a PARTIAL config (the editor's chosen filaments / plate type /
- * retargeted machine — see the API's `buildEditedThreeMf` + `retargetSavedProjectMachine`), which
+ * retargeted machine: see the API's `buildEditedThreeMf` + `retargetSavedProjectMachine`), which
  * is just as unsafe for the loader as no config. Those are detected by
  * {@link hasCompleteEmbeddedProjectSettings} (cross-domain sentinel keys) and repaired the same
  * way, with the partial values overlaid onto the genuine export so the user's choices
  * (`curr_bed_type`, filament colours, machine identity) still win. This matters MOST for a
- * project-preset slice (`project:process:…`), which loads no external profiles at all — the CLI
+ * project-preset slice (`project:process:…`), which loads no external profiles at all: the CLI
  * then reads the embedded settings bare and a partial config segfaults it deterministically at
  * load; the export args for that case are derived from the preset names the settings themselves
  * carry, resolved against the slicer's builtin catalog.
  *
  * MATERIAL CHANGE. The editor's save path (the API's `applyFilamentList`) deliberately DROPS the
- * old material's per-filament physics — including the `nozzle_temperature` completeness sentinel —
+ * old material's per-filament physics, including the `nozzle_temperature` completeness sentinel,
  * whenever a slot's material changes (e.g. ABS -> PETG), so the saved config lands here INCOMPLETE
  * on purpose. This module then re-derives that slot's physics from the preset names the settings
  * still carry (`ensureFilamentCoverage` -> `buildFilamentCoverageFromEmbedded`), so the new
@@ -76,7 +76,7 @@ export async function hasEmbeddedProjectSettings(inputPath: string): Promise<boo
 }
 
 /**
- * Whether the 3MF embeds a structurally COMPLETE `project_settings.config` — one safe for the
+ * Whether the 3MF embeds a structurally COMPLETE `project_settings.config`, one safe for the
  * CLI's BBL-project loader (see the module header). Exposed for tests.
  */
 export async function hasCompleteEmbeddedProjectSettings(inputPath: string): Promise<boolean> {
@@ -120,8 +120,8 @@ async function builtinProfilePathForName(profileDir: string, kind: 'machine' | '
  * Build `--load-settings`/`--load-filaments` args for the settings export by resolving the
  * preset NAMES the embedded settings themselves carry (`printer_settings_id`,
  * `print_settings_id`, `filament_settings_id`) against the slicer's flattened builtin profile
- * catalog. This is what lets a PROJECT-PRESET slice — which deliberately loads no external
- * profiles (the embedded settings are the preset) — still synthesize a complete config when the
+ * catalog. This is what lets a PROJECT-PRESET slice, which deliberately loads no external
+ * profiles (the embedded settings are the preset), still synthesize a complete config when the
  * embedded settings turn out to be partial. Null when nothing resolves (e.g. custom presets),
  * in which case the caller slices as-is.
  */
@@ -133,7 +133,7 @@ async function buildExportArgsFromEmbeddedPresetNames(
   const processPath = await builtinProfilePathForName(profileDir, 'process', firstStringValue(embedded.print_settings_id))
   // Slot COUNT is load-bearing, so resolve filaments through the padding helper rather than
   // dropping the names that miss. This used to filter unresolved slots out, emitting a
-  // `--load-filaments` list SHORTER than the project's filament count — BambuStudio then reads
+  // `--load-filaments` list SHORTER than the project's filament count: BambuStudio then reads
   // its per-filament vectors out of bounds and segfaults while loading (opaque exit 139, the
   // same out-of-bounds shape as the `filament_map` crash in issue #63). A 3MF whose
   // `filament_settings_id` holds an unresolvable DISPLAY name ("Bambu PETG Basic" instead of
@@ -154,10 +154,10 @@ async function buildExportArgsFromEmbeddedPresetNames(
  * each `filament_settings_id` entry resolves to its builtin preset, or Generic PLA when it does
  * not, so the export keeps the project's slot COUNT and gives each slot its own material. Null
  * when the settings name no filaments. This is what makes a material-changed project (whose editor
- * save DROPPED the old material's physics — see the API's `applyFilamentList`) re-derive the NEW
+ * save DROPPED the old material's physics: see the API's `applyFilamentList`) re-derive the NEW
  * material's temperatures/flow instead of collapsing to a single Generic PLA baseline.
  *
- * **Invariant: the returned list covers EVERY named slot or is null — never a short list.**
+ * **Invariant: the returned list covers EVERY named slot or is null, never a short list.**
  * BambuStudio sizes its per-filament vectors from the loaded filament count and indexes them by
  * the project's slot ids, so a list shorter than the project's filament count reads out of bounds
  * and segfaults the loader (exit 139). Returning null instead leaves the caller to slice without
@@ -185,7 +185,7 @@ async function buildFilamentCoverageFromEmbedded(
 
 /** `inherits_group` is positional: `[process, filament1..N, machine]` (what the API's sanitize and
  * BambuStudio's own writer both assume). The PROCESS lineage is entry 0; the MACHINE lineage is the
- * last entry — and only when the array is long enough that they are distinct entries. */
+ * last entry, and only when the array is long enough that they are distinct entries. */
 function processInheritsFromGroup(embedded: Record<string, unknown> | null): string | null {
   const group = embedded && Array.isArray(embedded.inherits_group) ? embedded.inherits_group : []
   return group.length >= 2 ? firstStringValue(group[0]) : null
@@ -203,7 +203,7 @@ function stringListValue(value: unknown): string[] {
 
 /**
  * The name the CLI tests process compatibility against for a loaded machine preset: its own name
- * for a system preset, its `inherits` (the system base) for a User preset — mirroring
+ * for a system preset, its `inherits` (the system base) for a User preset: mirroring
  * `load_config_file` in BambuStudio's CLI (`config_from == "system" ? name : inherits`).
  */
 function machineSystemName(machine: Record<string, unknown>): string | null {
@@ -219,7 +219,7 @@ interface LoadSettingsClassification {
   paths: string[]
   machine: Record<string, unknown> | null
   process: Record<string, unknown> | null
-  /** True when any file could not be read/parsed/classified — leave such args alone. */
+  /** True when any file could not be read/parsed/classified: leave such args alone. */
   unknown: boolean
 }
 
@@ -257,20 +257,20 @@ function withoutLoadSettings(args: readonly string[], loaded: LoadSettingsClassi
 /**
  * The export cannot run with HALF a machine/process pair. `--export-settings` loads no 3MF, so
  * with a machine loaded and no process the CLI tests the (absent) project's
- * `print_compatible_printers` — an empty list, whose "compatible with everything" carve-out only
- * applies when no new printer was loaded — and exits 239 "process not compatible with printer";
+ * `print_compatible_printers`, an empty list, whose "compatible with everything" carve-out only
+ * applies when no new printer was loaded, and exits 239 "process not compatible with printer";
  * a process with no machine fails the same test from the other side (both verified against the
  * 2.7.1 CLI, and mirrored in `BambuStudio.cpp`'s exit-239 block). The slice itself is fine with
  * either half: the rewritten 3MF carries the other. Only this export needs the pairing.
  *
- * So when the args carry exactly one half, derive the other from names the inputs already declare —
+ * So when the args carry exactly one half, derive the other from names the inputs already declare,
  * preferring the embedded settings' own lineage so the baseline stays close to what the slice will
- * actually use — keeping only a candidate whose `compatible_printers` pairing the CLI will accept
+ * actually use, keeping only a candidate whose `compatible_printers` pairing the CLI will accept
  * (same containment test, against the machine's SYSTEM name). When nothing resolvable is
  * compatible, drop the loaded half instead: a filaments-only export succeeds (the no-presets
  * branch of the CLI's check treats an empty list as compatible), and the export is only a
  * structural baseline the embedded settings overlay anyway. Args whose `--load-settings` files
- * cannot be classified are returned untouched — never meddle where the pairing cannot be seen.
+ * cannot be classified are returned untouched, never meddle where the pairing cannot be seen.
  */
 async function ensureMachineProcessPairForExport(
   args: readonly string[],
@@ -299,7 +299,7 @@ async function ensureMachineProcessPairForExport(
       log(`Settings export: pairing the machine with process "${name}" (a machine preset cannot export without one)`)
       return withExtraLoadSettingsPath(args, loaded, processPath)
     }
-    log('Settings export: no compatible process preset resolves — exporting without the machine preset')
+    log('Settings export: no compatible process preset resolves: exporting without the machine preset')
     return withoutLoadSettings(args, loaded)
   }
 
@@ -320,19 +320,19 @@ async function ensureMachineProcessPairForExport(
     log(`Settings export: pairing the process with machine "${name}" (a process preset cannot export without one)`)
     return withExtraLoadSettingsPath(args, loaded, machinePath)
   }
-  log('Settings export: no compatible machine preset resolves — exporting without the process preset')
+  log('Settings export: no compatible machine preset resolves: exporting without the process preset')
   return withoutLoadSettings(args, loaded)
 }
 
 /**
  * The export must cover the FILAMENT domain too: with no filament preset loaded, the exported
  * config omits the nullable per-filament override arrays (`filament_retraction_length`,
- * `filament_z_hop_types`, …) and the bare BBL-project loader still segfaults on the merge —
+ * `filament_z_hop_types`, …) and the bare BBL-project loader still segfaults on the merge:
  * verified against the 2.7.1 CLI. When the args carry no `--load-filaments` (the project's
  * filament names didn't resolve, or the slice loads only a process), cover the filament domain
  * from the presets the embedded settings NAME (so a material-changed project slices with the new
  * material's real physics), padding unresolved slots with Generic PLA; fall back to a single
- * Generic PLA when the settings name no filaments. The export is only a structural baseline — the
+ * Generic PLA when the settings name no filaments. The export is only a structural baseline: the
  * project's own values are overlaid on top.
  */
 async function ensureFilamentCoverage(
@@ -352,7 +352,7 @@ interface ExportMergedProjectSettingsResult {
   /** Non-zero (or null on spawn/signal death) CLI exit when the export failed; 0 on success. */
   exitCode: number | null
   /**
-   * Most specific reason the CLI gave for a failed export — the last `[error]` log line's text
+   * Most specific reason the CLI gave for a failed export: the last `[error]` log line's text
    * (BambuStudio reports these on STDOUT, e.g. "process not compatible with printer"), falling
    * back to the last non-empty output line. Null on success or when nothing was captured.
    */
@@ -387,7 +387,7 @@ async function exportMergedProjectSettings(input: {
   const exitCode = await new Promise<number | null>((resolve, reject) => {
     const child = spawn(input.cliPath, args, {
       // BambuStudio logs its errors (boost log `[error]` lines) to STDOUT, so both streams must
-      // be captured — with stdout ignored, a compatibility failure here is undiagnosable.
+      // be captured, with stdout ignored, a compatibility failure here is undiagnosable.
       stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...input.env, SLICER_APPDIR: input.appDir ?? input.env.SLICER_APPDIR }
     })
@@ -460,7 +460,7 @@ export async function copyThreeMfWithProjectSettings(inputPath: string, outputPa
  * when there is nothing to synthesize from (no load args and no resolvable preset names).
  *
  * Failure semantics: when the settings export RUNS and fails, this THROWS with the CLI's exit
- * code and reason instead of letting the slice proceed — a partial/absent config reaching the
+ * code and reason instead of letting the slice proceed, a partial/absent config reaching the
  * BBL-project loader is a deterministic segfault, so "slicing as-is" could only ever trade a
  * clear error (e.g. "process not compatible with printer") for an opaque exit 139. The thrown
  * message keeps the `Slicer CLI exited with code N` shape the API's compatibility/crash retry
@@ -489,7 +489,7 @@ export async function ensureEmbeddedProjectSettings(input: {
 
   // Args the settings export runs with. Normally the slice's own profile args; a PROJECT-PRESET
   // slice loads none (the embedded settings ARE the preset), so derive them from the preset names
-  // the embedded settings carry — the case that used to be skipped outright and let a partial
+  // the embedded settings carry: the case that used to be skipped outright and let a partial
   // config reach the loader bare (deterministic SIGSEGV at "Start to load files").
   let exportArgs: readonly string[] = input.profileArgs
   const hasLoadSettings = exportArgs.includes('--load-settings') || exportArgs.includes('--load-filaments')
@@ -500,8 +500,8 @@ export async function ensureEmbeddedProjectSettings(input: {
     if (!derived) {
       // Reaching here means the embedded config FAILED the completeness check above and nothing
       // can repair it: no `--load-*` args, and none of the preset names it carries resolve. That
-      // is deterministically fatal — the BBL-project loader segfaults on a partial config at
-      // "Start to load files" — so fail with what is actually wrong instead of slicing into an
+      // is deterministically fatal, the BBL-project loader segfaults on a partial config at
+      // "Start to load files", so fail with what is actually wrong instead of slicing into an
       // opaque exit 139 (and, because the crash classifier then retries, doing it three times).
       //
       // Deliberately NOT shaped like `Slicer CLI exited with code N`: this is not recoverable by
@@ -526,7 +526,7 @@ export async function ensureEmbeddedProjectSettings(input: {
 
   // Name the keys and the arg count. This step REPLACES the project's settings with the CLI's
   // merged export, so when the slice then dies at load, the first question is what made a project
-  // look partial at all — and a bare "completing partial settings" cannot answer it. A real
+  // look partial at all, and a bare "completing partial settings" cannot answer it. A real
   // incident (a project whose STORED settings were complete, yet reached here) could not be
   // diagnosed from the logs because the missing key was never recorded.
   input.log(embedded === null
@@ -546,7 +546,7 @@ export async function ensureEmbeddedProjectSettings(input: {
     // is absent or partial, and the BBL-project loader deterministically segfaults on both (an
     // opaque exit 139 that used to burn a crash-retry too). Fail with the CLI's own reason
     // instead. The message deliberately keeps the `Slicer CLI exited with code N` shape: the
-    // API's slicing queue recognizes exit 239 (CLI_PROCESS_NOT_COMPATIBLE — e.g. a stale dialog
+    // API's slicing queue recognizes exit 239 (CLI_PROCESS_NOT_COMPATIBLE: e.g. a stale dialog
     // pairing an X1C process with an H2D machine) and retries without the incompatible built-in
     // profiles, so the slice recovers onto the project's own presets instead of failing.
     const detail = exported.failureDetail ? ` (${exported.failureDetail})` : ''

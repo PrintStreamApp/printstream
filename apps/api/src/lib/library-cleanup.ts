@@ -9,13 +9,13 @@
  * Without cleanup these would accumulate forever, so we age them out
  * after `LIBRARY_TRANSIENT_RETENTION_DAYS` (default 7) of not being
  * touched. Three further passes handle: unreferenced sliced outputs
- * (origin='slice', never kept or snapshotted — swept after
+ * (origin='slice', never kept or snapshotted: swept after
  * `LIBRARY_UNREFERENCED_SLICE_RETENTION_HOURS`), preserved project
  * snapshots no job or kept output points at any more (the "no job, no
  * kept project" rule), and expired recycle-bin entries
  * (`LIBRARY_RECYCLE_RETENTION_DAYS`).
  *
- * Eligibility is based on `uploadedAt` rather than "last printed" — we
+ * Eligibility is based on `uploadedAt` rather than "last printed", we
  * don't track print recency on the row, and the Bambu firmware keeps
  * its own copy on the SD card anyway, so the on-disk copy here is just
  * a convenience for re-issuing `project_file` from PrintStream.
@@ -49,7 +49,7 @@ const DEMO_TRANSIENT_RETENTION_MS = 12 * ONE_HOUR_MS
 const DORMANT_BRIDGE_RETENTION_MS = 7 * ONE_DAY_MS
 // An upload session untouched for this long is treated as abandoned. Keyed off
 // the session file's mtime (rewritten on every chunk), so this is inactivity,
-// not wall-clock age — a multi-hour large upload over a slow link is safe.
+// not wall-clock age, a multi-hour large upload over a slow link is safe.
 const UPLOAD_SESSION_RETENTION_MS = 24 * ONE_HOUR_MS
 
 let timer: NodeJS.Timeout | null = null
@@ -157,12 +157,12 @@ export async function pruneRecycledLibraryFiles(
 }
 
 /**
- * Delete unreferenced sliced outputs — hidden gcode artifacts produced by
+ * Delete unreferenced sliced outputs: hidden gcode artifacts produced by
  * "slice without saving" / slice-then-print runs that were never kept
  * (un-hidden) and never snapshotted for print history. The dialogs discard
  * these on close, but a closed browser or crashed tab leaks them; this pass
  * sweeps the leak after LIBRARY_UNREFERENCED_SLICE_RETENTION_HOURS (default
- * 24) — much sooner than the general transient retention. Only rows tagged
+ * 24): much sooner than the general transient retention. Only rows tagged
  * origin='slice' qualify, so transient uploads and editor scaffolds keep
  * their longer window.
  */
@@ -173,7 +173,7 @@ export async function pruneUnreferencedSlicedOutputs(
   const stale = await rootPrisma.libraryFile.findMany({
     // Belt-and-suspenders: never prune a slice output a print-queue item still points at. The add-to-queue
     // path un-hides the output (so `hidden: true` shouldn't match a queued one), but this guards against
-    // any path that leaves a queue-referenced output hidden — losing it would break dispatch.
+    // any path that leaves a queue-referenced output hidden: losing it would break dispatch.
     where: { hidden: true, snapshotKey: null, origin: 'slice', uploadedAt: { lt: cutoff }, queueItems: { none: {} } },
     select: { id: true, ownerBridgeId: true, storedPath: true }
   })
@@ -196,16 +196,16 @@ export async function pruneUnreferencedSlicedOutputs(
  *
  * The rule this enforces is "no job, no kept project": a slice preserves the project it handed the
  * engine, but that is only worth keeping if the user went on to START A PRINT (or deliberately kept
- * the sliced output). A slice they abandoned should leave nothing behind — and snapshot rows are
+ * the sliced output). A slice they abandoned should leave nothing behind, and snapshot rows are
  * exempt from every other pass here (they are the retained variant), so without this pass an
  * abandoned slice leaks its project bytes permanently.
  *
  * `discardHiddenSlicedOutput` already deletes promptly when the user closes the dialog; this is the
- * backstop for the paths that never reach it — a closed tab, a crashed browser, or the sliced output
+ * backstop for the paths that never reach it, a closed tab, a crashed browser, or the sliced output
  * itself being aged out by {@link pruneUnreferencedSlicedOutputs}. Run AFTER that pass so a single
  * maintenance cycle reclaims both.
  *
- * Only ever removes rows with BOTH a `snapshotKey` and `origin='snapshot'` — the print-file snapshots
+ * Only ever removes rows with BOTH a `snapshotKey` and `origin='snapshot'`: the print-file snapshots
  * share the first marker, so the pair is what identifies a preserved project, and a row referenced by
  * any library file or any print job is left alone (the row is content-addressed, so it can be shared).
  */
@@ -243,7 +243,7 @@ export async function pruneUnreferencedProjectSnapshots(
  * `<libraryDir>/.uploads/<id>.part` alongside a `<id>.json` session file, and
  * only deletes them when the client calls `/complete` or `DELETE /uploads/:id`.
  * A closed tab or dropped connection between chunks leaves both files behind,
- * each up to LIBRARY_MAX_UPLOAD_BYTES — unbounded disk growth on a busy install
+ * each up to LIBRARY_MAX_UPLOAD_BYTES: unbounded disk growth on a busy install
  * (the same volume the embedded Postgres and bridge use). Expiry is keyed off
  * the session file's mtime, which the route rewrites on every received chunk, so
  * a slow-but-still-active upload is never reaped mid-flight.

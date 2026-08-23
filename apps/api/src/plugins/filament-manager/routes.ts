@@ -2,7 +2,7 @@
  * HTTP routes for the filament-manager plugin, mounted at
  * `/api/plugins/filament-manager`. Reads use `LIBRARY_VIEW`; mutations use
  * `LIBRARY_MANAGE`; the auto-add toggle uses `SETTINGS_MANAGE`. Handlers stay
- * thin — data logic lives in `store.ts`, serialization in `dto.ts`.
+ * thin: data logic lives in `store.ts`, serialization in `dto.ts`.
  */
 import {
   LIBRARY_MANAGE_PERMISSION,

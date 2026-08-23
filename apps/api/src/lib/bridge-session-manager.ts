@@ -20,7 +20,7 @@
  *
  * Reconnect semantics: `registerConnection` force-closes any prior socket for
  * the same bridge (code 4009) and replaces it. In-flight RPCs are keyed by
- * bridge id, not by connection object, so a reconnect does NOT reject them —
+ * bridge id, not by connection object, so a reconnect does NOT reject them,
  * they stay pending and either resolve if the new session answers or hit their
  * timeout. `unregisterConnection` only rejects pending RPCs when the closing
  * socket is still the registered one, so a stale socket's teardown can't cancel
@@ -81,7 +81,7 @@ class BridgeSessionManager {
   /**
    * Whether `connection` is the currently-registered session for `bridgeId`.
    * A closing socket uses this to tell a genuine disconnect from a reconnect/
-   * duplicate that a newer session has already replaced — in the latter case the
+   * duplicate that a newer session has already replaced, in the latter case the
    * bridge id now belongs to the live session and its teardown must be skipped.
    */
   isActiveConnection(bridgeId: string, connection?: BridgeConnection): boolean {

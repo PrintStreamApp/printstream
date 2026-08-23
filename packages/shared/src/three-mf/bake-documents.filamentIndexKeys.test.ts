@@ -61,7 +61,7 @@ test('first_layer_print_sequence follows the permutation and AUTO stays untouche
     project({ first_layer_print_sequence: ['0'] }),
     reversed
   )) as Record<string, unknown>
-  // A leading 0 means AUTO — the entry carries no filament ids (BambuStudio's own guard).
+  // A leading 0 means AUTO: the entry carries no filament ids (BambuStudio's own guard).
   assert.deepEqual(auto.first_layer_print_sequence, ['0'])
 })
 
@@ -83,7 +83,7 @@ test('filament_self_index is rebuilt for the new slot order when TPU changes the
       filament_type: ['PLA', 'TPU', 'ABS'],
       extruder_variant_list: ['Direct Drive Standard'],
       printer_extruder_variant: ['Direct Drive Standard', 'Direct Drive High Flow'],
-      // TPU spans both printer variants where the others share the non-TPU row set — the layout
+      // TPU spans both printer variants where the others share the non-TPU row set: the layout
       // buildFilamentVariantRows derives. Stored index matches the CURRENT order.
       filament_extruder_variant: [
         'Direct Drive Standard', 'Direct Drive High Flow',

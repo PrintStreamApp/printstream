@@ -1,8 +1,8 @@
 /**
  * Slicing-profile selection and display helpers shared by the slice/print flows.
  * Resolves baked profile names to installed, built-in, or 3MF-embedded
- * (`project:`) presets — mirroring how BambuStudio names, filters, and falls back
- * between presets — and maps the slice form's gating state to a disabled-reason
+ * (`project:`) presets, mirroring how BambuStudio names, filters, and falls back
+ * between presets, and maps the slice form's gating state to a disabled-reason
  * string. Project profiles carry the 3MF's saved overrides and are treated
  * specially so a user's authored settings survive through to the slicer.
  */
@@ -16,6 +16,29 @@ import {
 
 export function isSelectableSlicingPreset(profile: SlicingPresetSummary): boolean {
   return !isProjectSlicingPresetId(profile.id)
+}
+
+/**
+ * BambuStudio's `Preset::alias`: the preset name up to the first `@`, right-trimmed.
+ *
+ * IDENTITY, not display, and that distinction is the whole reason it exists separately. Both
+ * formatters below consult `filamentVendor` — one PREPENDS the brand, the other STRIPS it — while
+ * the same preset reaches us with that field populated (an installed profile) or absent (a project
+ * preset minted from a 3MF, which records no vendor on the summary). So either formatter used as a
+ * comparison key fails to match a preset against ITSELF, and in opposite directions: the branded
+ * form breaks Polymaker ("Polymaker PolyLite PLA" vs "PolyLite PLA"), the display form breaks Bambu
+ * ("PLA Basic" vs "Bambu PLA Basic"). Swapping one for the other only moves the bug.
+ *
+ * Mirrors `PresetCollection::set_custom_preset_alias` (`Preset.cpp`), which is what
+ * `PreferedFilamentsProfileMatch` scores at INT_MAX when handing a material to a new machine.
+ *
+ * Lossy ON PURPOSE: two presets differing only past the `@` share an alias. That is what makes it
+ * the right key for "the same product built for another machine" and the WRONG key for BINDING a
+ * slot, which matches the raw name exactly (`find_preset_internal`).
+ */
+export function slicingPresetAlias(profile: SlicingPresetSummary): string {
+  const atIndex = profile.name.indexOf('@')
+  return (atIndex === -1 ? profile.name : profile.name.slice(0, atIndex)).trim() || profile.name.trim()
 }
 
 /**
@@ -43,13 +66,13 @@ export function formatSlicingPresetDisplayName(profile: SlicingPresetSummary): s
 }
 
 /**
- * The same alias, but BRAND-QUALIFIED — for labels that stand alone, with no vendor grouping
+ * The same alias, but BRAND-QUALIFIED, for labels that stand alone, with no vendor grouping
  * around them to supply the brand (the materials list rows, the material dialog's preset field).
  *
  * Why this exists rather than reusing {@link formatSlicingPresetDisplayName}: that one drops the
  * vendor because its callers are pickers that GROUP by vendor, so repeating it in every row is
  * noise. A standalone label has no such context, and dropping the vendor there made the SAME
- * material render differently depending on where its preset came from — an installed catalogue
+ * material render differently depending on where its preset came from, an installed catalogue
  * preset declares `filamentVendor` and lost its prefix ("PLA Basic"), while the identical preset
  * carried inside a 3MF declares no vendor and kept it ("Bambu PLA Basic"). Provenance is not
  * something the user can see, so the two read as different materials.
@@ -76,10 +99,10 @@ export function formatSlicingPresetBrandedName(profile: SlicingPresetSummary): s
  * any alias two profiles in that list share.
  *
  * {@link formatSlicingPresetDisplayName} drops everything from the `@` on, which is right for a
- * picker grouped by vendor — until two presets in the same list collapse onto one label. A
+ * picker grouped by vendor, until two presets in the same list collapse onto one label. A
  * workspace preset derived from a built-in does exactly that ("Bambu PLA Basic @BBL H2D" and
  * "Bambu PLA Basic @BBL H2D - 55 degree plate" both render "Bambu PLA Basic"), and then the two
- * rows are not merely noisy, they are IMPOSSIBLE to choose between — the user cannot tell which
+ * rows are not merely noisy, they are IMPOSSIBLE to choose between: the user cannot tell which
  * row is which, and the selected value reads the same either way.
  *
  * Only collisions pay: everything with a unique alias keeps the clean label. The qualifier is the
@@ -184,15 +207,15 @@ export function isSelectableOrProjectFallbackSlicingPreset(
 }
 
 /**
- * Resolves the preset a preset FIELD names — `default_print_profile`,
- * `default_filament_profile` — against the catalogue. Matches any profile kind,
+ * Resolves the preset a preset FIELD names, `default_print_profile`,
+ * `default_filament_profile`, against the catalogue. Matches any profile kind,
  * including project (3MF-embedded) profiles.
  *
  * Exact (normalized) only, deliberately. These fields are references inside
  * BambuStudio's own preset system, so the name either names an installed preset or
  * names nothing; a substring fallback here let a user's renamed derivative
  * ("0.20mm Standard @BBL H2D - Ryan") satisfy a reference to the builtin it was
- * derived from. A miss is a real answer — the caller falls through to its next
+ * derived from. A miss is a real answer: the caller falls through to its next
  * rule rather than slicing with a preset nobody chose (issue #68).
  */
 export function pickSlicingPresetByDeclaredName(
@@ -241,7 +264,7 @@ export function extractLayerHeightToken(value: string | null | undefined): strin
  * available, preferring one whose filament type matches the project filament.
  *
  * `displayFilamentType` is the DERIVED type (`PLA-S`), and candidates are derived
- * the same way before comparing — a preset's raw `filament_type` is the base
+ * the same way before comparing, a preset's raw `filament_type` is the base
  * polymer, so a raw-to-derived comparison never matches a support filament.
  * A support slot will not accept a model-filament default (or vice versa): the
  * caller falls through to its own next rule rather than silently printing
@@ -262,7 +285,7 @@ export function pickMachineDefaultFilamentProfile(
   const wantedType = displayFilamentType?.trim().toLowerCase()
   if (!wantedType) return candidates[0] ?? null
 
-  // An ABSENT `filamentIsSupport` means unknown, never "not support" — a catalogue
+  // An ABSENT `filamentIsSupport` means unknown, never "not support", a catalogue
   // served by a slicer that predates the field carries none, and vetoing on it there
   // would leave every support slot with no default at all.
   const wantsSupport = isSupportDisplayFilamentType(wantedType)
@@ -276,14 +299,14 @@ export function pickMachineDefaultFilamentProfile(
 }
 
 /**
- * Pick the conventional default process preset for a fresh selection — the 0.20mm
- * "Standard" profile (BambuStudio's out-of-the-box default) — so a new project lands on
+ * Pick the conventional default process preset for a fresh selection, the 0.20mm
+ * "Standard" profile (BambuStudio's out-of-the-box default), so a new project lands on
  * 0.20mm Standard rather than whatever preset happens to be first in the list. Falls back
  * to a 0.20mm preset of any name if no explicit "Standard" exists.
  */
 export function pickStandardProcessProfile(profiles: SlicingPresetSummary[]): SlicingPresetSummary | null {
   const twentyMicron = profiles.filter((profile) => resolveProfileLayerHeight(profile) === '0.20mm')
-  // The quality TIER genuinely has no field of its own — BambuStudio encodes it in
+  // The quality TIER genuinely has no field of its own: BambuStudio encodes it in
   // the preset name ("0.20mm Standard @BBL X1C"), so this one stays a name read.
   return twentyMicron.find((profile) => profile.name.toLowerCase().includes('standard')) ?? twentyMicron[0] ?? null
 }
@@ -294,7 +317,7 @@ function normalizedProfileText(value: string): string {
 
 /** Inputs to {@link resolveSliceDisabledReason}: the slice form's gating signals. */
 export interface SliceDisabledReasonInput {
-  /** Whether the slice is fully valid (when true, there is no reason — returns null). */
+  /** Whether the slice is fully valid (when true, there is no reason: returns null). */
   canSlice: boolean
   configured: boolean
   selectedSlicerTargetId: string
@@ -348,9 +371,9 @@ export function resolveSliceDisabledReason(input: SliceDisabledReasonInput): str
   if (input.printerProfileId.length === 0) return 'No matching printer profile is installed for this printer and nozzle.'
   if (input.printerProfileIncompatible) return 'The selected printer profile doesn’t match the target printer.'
   if (input.processProfileId.length === 0) return 'Choose a print-settings profile.'
-  if (input.processProfileIncompatible) return 'The selected print settings aren’t compatible with the target printer — choose a compatible profile.'
+  if (input.processProfileIncompatible) return 'The selected print settings aren’t compatible with the target printer: choose a compatible profile.'
   if (input.nozzleDiameterCount === 0) return 'Choose a nozzle size.'
-  if (input.staleFilamentSelection) return 'A material slot’s filament is no longer available — choose it again.'
+  if (input.staleFilamentSelection) return 'A material slot’s filament is no longer available: choose it again.'
   if (input.missingFilamentProfile) return 'Assign a filament to every material slot.'
   if (input.missingFilamentToolhead) return 'Assign a nozzle to every material slot.'
   if (input.targetMode === 'realPrinter' && input.printerId.length === 0) return 'Choose a printer to slice for.'

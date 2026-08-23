@@ -8,8 +8,8 @@
  * reads every live editor value through
  * stable refs/callbacks passed in by {@link EditorView}, so the long-lived render loop
  * and event handlers always see current state without re-subscribing. The scene refs
- * themselves (scene/camera/orbit/transform/plateRoot/...) stay declared in EditorView —
- * other code reads them — and are threaded in here as params.
+ * themselves (scene/camera/orbit/transform/plateRoot/...) stay declared in EditorView,
+ * other code reads them, and are threaded in here as params.
  */
 import { useEffect, useRef, useState, type Dispatch, type MutableRefObject, type SetStateAction } from 'react'
 import * as THREE from 'three'
@@ -116,14 +116,14 @@ export interface EditorSceneParams {
    * The browser would not grant a WebGL context. Reported rather than thrown: an unguarded
    * constructor here takes the whole editor route down through the error boundary, losing the
    * user's unsaved session for what is a recoverable browser state. See the counterpart overlay
-   * in `PreviewView` — Chrome blocks a page that has caused repeated context loss, and only a
+   * in `PreviewView`: Chrome blocks a page that has caused repeated context loss, and only a
    * fresh document lifts that, so the message says so instead of offering a retry that cannot work.
    */
   onContextRefused?: (message: string) => void
   // Selection.
   selectedKeyRef: MutableRefObject<string | null>
   extraSelectedKeysRef: MutableRefObject<ReadonlyArray<string>>
-  /** Selected PARTS of one object (BambuStudio volume-mode) — drives per-part highlight boxes. */
+  /** Selected PARTS of one object (BambuStudio volume-mode): drives per-part highlight boxes. */
   partSelectionRef: MutableRefObject<PartSelection | null>
   allSelectedKeysRef: MutableRefObject<() => string[]>
   selectExclusiveRef: MutableRefObject<(key: string | null) => void>
@@ -131,7 +131,7 @@ export interface EditorSceneParams {
   selectedAddedPartKeyRef: MutableRefObject<string | null>
   /**
    * Existing baked part currently holding the gizmo (counterpart of selectedAddedPartKey),
-   * identified by its ORDINAL within the object — see the note on `selectedBakedPart` in
+   * identified by its ORDINAL within the object: see the note on `selectedBakedPart` in
    * `EditorView`; `componentObjectId` is a mesh reference and does not identify a part.
    */
   selectedBakedPartRef: MutableRefObject<{ objectId: number; partIndex: number } | null>
@@ -189,8 +189,8 @@ export interface EditorSceneParams {
   regenerateActiveThumbnailRef: MutableRefObject<(() => void) | null>
   /**
    * Fired once when a paint STROKE ends. Paint mutates the editor state in place (a clone per
-   * pointer-move would be brutal), so nothing keyed on state identity — the used-materials set
-   * above all — would otherwise see it. See EditorView's paint revision.
+   * pointer-move would be brutal), so nothing keyed on state identity, the used-materials set
+   * above all, would otherwise see it. See EditorView's paint revision.
    */
   paintCommittedRef: MutableRefObject<(() => void) | null>
   /** Rebuild the place-on-face hull after a lay-flat re-orients the part (the hull bakes orientation). */
@@ -206,8 +206,8 @@ export interface EditorSceneParams {
 /**
  * Initialize renderer/camera/controls once a container exists, and own them for the
  * viewport's lifetime. The effect deliberately depends only on the containers and the
- * context-loss rebuild counter — never on the live editor values, which arrive as
- * stable refs through {@link EditorSceneParams} — so the renderer and its listeners
+ * context-loss rebuild counter, never on the live editor values, which arrive as
+ * stable refs through {@link EditorSceneParams}, so the renderer and its listeners
  * are built once and never torn down and rebuilt on an ordinary EditorView re-render.
  */
 export function useEditorScene(params: EditorSceneParams): void {
@@ -318,8 +318,8 @@ export function useEditorScene(params: EditorSceneParams): void {
     cameraRef.current = camera
 
     // Logarithmic depth buffer (matching the read-only plated PreviewView) so coincident
-    // coplanar surfaces — e.g. SVG/text parts resting flush on a backdrop, or stacked
-    // duplicate parts — don't z-fight into a flickering, semi-transparent mess across the
+    // coplanar surfaces: e.g. SVG/text parts resting flush on a backdrop, or stacked
+    // duplicate parts: don't z-fight into a flickering, semi-transparent mess across the
     // wide 0.1..5000 depth range the bed + gizmos need.
     let renderer: THREE.WebGLRenderer
     try {
@@ -330,7 +330,7 @@ export function useEditorScene(params: EditorSceneParams): void {
     }
     // Cap DPR at 2 (like the view cube): on a 3x-DPR phone or 4K display the
     // editor's AA + log-depth + 2048² shadow + always-on loop would otherwise
-    // render ~9x the fragments — a large mobile GPU/battery/thermal cost.
+    // render ~9x the fragments, a large mobile GPU/battery/thermal cost.
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
     renderer.setSize(Math.max(container.clientWidth, 1), Math.max(container.clientHeight, 1))
     renderer.shadowMap.enabled = true
@@ -338,7 +338,7 @@ export function useEditorScene(params: EditorSceneParams): void {
     container.appendChild(renderer.domElement)
 
     // A reclaimed WebGL context (GPU pressure, driver reset) leaves the canvas permanently
-    // black. Rebuild the scene once by re-running this effect via contextGeneration — but
+    // black. Rebuild the scene once by re-running this effect via contextGeneration, but
     // rate-capped: if the fresh context dies again within 30s, the device genuinely cannot
     // host the scene right now and rebuild-looping would only make the pressure worse.
     const onContextLost = (event: Event) => {
@@ -360,7 +360,7 @@ export function useEditorScene(params: EditorSceneParams): void {
     orbit.target.set(0, 0, 20)
     orbit.update()
     orbitRef.current = orbit
-    // This camera is brand new at the generic home pose (target (0,0,20) — the
+    // This camera is brand new at the generic home pose (target (0,0,20): the
     // front-left corner of a Bambu bed). Clear the framed-view latch so the next
     // plate build reframes it on the bed centre: a key latched by the previous
     // scene/camera would otherwise skip the reframe and leave the view stuck
@@ -433,7 +433,7 @@ export function useEditorScene(params: EditorSceneParams): void {
       }
       if (group) {
         // Cheap (transformed-AABB) box on selection: the precise per-vertex walk froze selecting a
-        // many-part high-poly object for a beat — the hitch when you drag an object that wasn't
+        // many-part high-poly object for a beat: the hitch when you drag an object that wasn't
         // already selected (the pointer-down selects it first). It is exact for an axis-aligned
         // object and only loosens slightly around a reoriented one, and the box is visual-only.
         selectionBoxValue.copy(printableMeshBox(group, false))
@@ -449,7 +449,7 @@ export function useEditorScene(params: EditorSceneParams): void {
     setSelectionHighlightRef.current = setSelectionHighlight
 
     // Dimmer outline boxes for the EXTRA selected instances (multi-select). Synced
-    // every frame in animate() — membership from the ref, bounds via the cheap
+    // every frame in animate(): membership from the ref, bounds via the cheap
     // transformed-AABB path so co-drags track without per-vertex walks.
     const extraSelectionBoxes = new Map<string, THREE.Box3Helper>()
     const syncExtraSelectionBoxes = () => {
@@ -622,7 +622,7 @@ export function useEditorScene(params: EditorSceneParams): void {
     // placement-warning recompute mid-drag and run it once when the drag finishes.
     let gizmoDragging = false
     // Did the drag that just ended change the object's ORIENTATION (rotate/scale)? A pure move keeps
-    // the object axis-aligned, so its cheap transformed-AABB selection box is already exact — only a
+    // the object axis-aligned, so its cheap transformed-AABB selection box is already exact, only a
     // rotate/scale needs the expensive per-vertex precise walk on the drop frame. Without this, every
     // drop of a high-poly / many-part object re-walked all vertices and froze for a beat.
     let lastDragChangedOrientation = false
@@ -639,11 +639,11 @@ export function useEditorScene(params: EditorSceneParams): void {
 
     // Multi-selection gizmo drag (the gizmo is attached to the pivot proxy): a drag-start
     // snapshot of every member and the proxy, so each frame recomputes the members' rigid-body
-    // pose from scratch — Studio does the same from its `set_caches` snapshot; incremental
+    // pose from scratch: Studio does the same from its `set_caches` snapshot; incremental
     // composition would accumulate error. See lib/multiSelectionTransform.ts for the semantics
     // and the two deliberate divergences (no Alt "independent" mode; unselected sibling
     // instances of a member's object are never re-oriented the way Studio's
-    // synchronize_unselected_instances does — our linked copies keep independent placements).
+    // synchronize_unselected_instances does: our linked copies keep independent placements).
     let multiDrag: {
       pivot: THREE.Vector3
       proxyStart: SelectionMemberPose
@@ -687,7 +687,7 @@ export function useEditorScene(params: EditorSceneParams): void {
     /**
      * Re-seat the proxy on the (possibly just-moved) selection for the NEXT drag: pivot at the
      * mode's selection centre, identity rotation/unit scale so the next delta reads clean.
-     * Cheap boxes on purpose — a precise per-vertex walk here is what the drop-frame
+     * Cheap boxes on purpose, a precise per-vertex walk here is what the drop-frame
      * optimisation removed, and a few mm of pivot slop on a rotated hi-poly mesh is invisible.
      */
     const reseatMultiPivot = () => {
@@ -729,7 +729,7 @@ export function useEditorScene(params: EditorSceneParams): void {
           snapGuides.position.copy(multiDrag.pivot)
           snapGuides.visible = true
           // Relative readout (Studio labels its multi-selection rotate field "Rotate (relative)"
-          // and zeroes it at drag start) — there is no single absolute angle for N members.
+          // and zeroes it at drag start), there is no single absolute angle for N members.
           setRotationReadoutRef.current?.(0)
         } else {
           snapGuides.visible = false
@@ -753,7 +753,7 @@ export function useEditorScene(params: EditorSceneParams): void {
         return
       }
       // Added part volumes transform freely inside their object: no bed rest, no
-      // group write-back — just persist the part's object-local placement.
+      // group write-back, just persist the part's object-local placement.
       const partMesh = attachedPartMesh()
       if (partMesh) {
         snapGuides.visible = false
@@ -779,7 +779,7 @@ export function useEditorScene(params: EditorSceneParams): void {
           if (outer) {
             // Always re-rest on drag end: scaling/rotating can move the lowest point, so
             // pin the object's bottom back to the bed (no float). Scale also rests every
-            // frame (see onObjectChange) so this is a no-op for scale — no release jump.
+            // frame (see onObjectChange) so this is a no-op for scale, no release jump.
             restObjectOnBed(outer)
             writeBackGroupTransform(outer)
             syncSelectedTransformRef.current?.(outer)
@@ -792,11 +792,11 @@ export function useEditorScene(params: EditorSceneParams): void {
     // Write the live transform back into state and the manual-input panel as the user
     // drags. Scaling rests the object on the bed every frame so it grows UPWARD from the
     // bed (the bottom never leaves z=0), regardless of which handle (uniform white or a
-    // single coloured axis) is used — TransformControls computes scale from the pointer
+    // single coloured axis) is used: TransformControls computes scale from the pointer
     // delta, not the object's position, so adjusting z here doesn't perturb the drag.
     const onObjectChange = () => {
       // Multi-selection: the gizmo drives the pivot proxy; apply its delta rigid-body to every
-      // member — offsets orbit/scale about the pivot while each member's own orientation/scale
+      // member, offsets orbit/scale about the pivot while each member's own orientation/scale
       // composes (Studio's transform_instance_relative). Recomputed from the drag-start
       // snapshot each frame, never accumulated.
       if (multiDrag) {
@@ -961,7 +961,7 @@ export function useEditorScene(params: EditorSceneParams): void {
     brushCursor.renderOrder = 6
     scene.add(brushCursor)
     // Sphere-brush cursor: a translucent ball CENTERED on the hit point, conveying the brush's 3D
-    // reach (it paints every triangle within `radius` in 3D, wrapping around curves) — distinct from
+    // reach (it paints every triangle within `radius` in 3D, wrapping around curves): distinct from
     // the flat ring the circle/cylinder brush uses. The fill is depth-tested so it reads as half-
     // buried in the surface; the wireframe is drawn on top so the full extent stays visible. Unit
     // radius, scaled to the brush radius like the ring.
@@ -1063,7 +1063,7 @@ export function useEditorScene(params: EditorSceneParams): void {
       if (gizmoControl.axis) return
 
       // Measure tool: a motionless click places a point (resolved on pointer-up so
-      // drags still orbit); nothing else — selection and drags are suspended.
+      // drags still orbit); nothing else: selection and drags are suspended.
       if (gizmoModeRef.current === 'measure') {
         measureClickStart = { x: event.clientX, y: event.clientY }
         return
@@ -1148,7 +1148,7 @@ export function useEditorScene(params: EditorSceneParams): void {
 
       // Plain click on a multi-selection MEMBER keeps the selection (so the drag below
       // moves the whole set); a motionless release collapses to just that object. Tools
-      // other than Move collapse immediately — they operate on a single primary.
+      // other than Move collapse immediately, they operate on a single primary.
       if (typeof key === 'string' && wasExtra) {
         if (gizmoModeRef.current !== 'translate') {
           selectExclusiveRef.current(key)
@@ -1205,7 +1205,7 @@ export function useEditorScene(params: EditorSceneParams): void {
         const partRef = firstMesh?.object.parent ? partGroupRef(firstMesh.object.parent) : null
         if (partRef && extraSelectedKeysRef.current.length === 0) {
           const instance = activePlateRef.current?.instances.find((entry) => entry.key === key)
-          // Imports drill down too — their solids carry `importPartRef` and take the gizmo the
+          // Imports drill down too, their solids carry `importPartRef` and take the gizmo the
           // same way (see handleSelectPart), keyed by the import's synthetic object identity.
           const ownerId = instance
             ? (instance.source.kind === 'object' ? instance.objectId : instance.source.replacedObjectId ?? null)
@@ -1237,7 +1237,7 @@ export function useEditorScene(params: EditorSceneParams): void {
           recordHistoryRef.current?.()
           // Read the clicked face's world normal BEFORE baking (the raycast hit reflects the
           // current visual). A shearing object renders an exact matrix with matrixAutoUpdate off,
-          // so its rotor/position edits are ignored until baked to editable T·S·R — without this,
+          // so its rotor/position edits are ignored until baked to editable T·S·R, without this,
           // restObjectOnBed's position change is a no-op and the object floats. Mirrors the gizmo
           // drag / mutateSelectedGroup paths.
           const worldNormal = faceHit.face.normal.clone().transformDirection(faceHit.object.matrixWorld).normalize()
@@ -1260,7 +1260,7 @@ export function useEditorScene(params: EditorSceneParams): void {
           writeBackGroupTransform(group)
           syncSelectedTransformRef.current?.(group)
           regenerateActiveThumbnailRef.current?.()
-          // The hull bakes the part's orientation, so rebuild it for the new pose — otherwise the
+          // The hull bakes the part's orientation, so rebuild it for the new pose, otherwise the
           // hull + its highlight linger in the pre-lay-flat orientation.
           rebuildFaceHullRef.current()
         }
@@ -1297,7 +1297,7 @@ export function useEditorScene(params: EditorSceneParams): void {
         brushSphereCursor.visible = false
       }
       // Place-on-face: highlight the hull face under the pointer so the user sees exactly which
-      // face they'll lay flat before clicking. (Hover only — selection still happens on pointerdown.)
+      // face they'll lay flat before clicking. (Hover only: selection still happens on pointerdown.)
       if (gizmoModeRef.current === 'layFace') {
         const hull = faceHullRef.current
         if (hull) {
@@ -1316,7 +1316,7 @@ export function useEditorScene(params: EditorSceneParams): void {
       raycaster.setFromCamera(pointer, camera)
       if (!raycaster.ray.intersectPlane(bedPlane, dragPoint)) return
       if (towerDragObject) {
-        // Keep the tower's whole footprint on the bed AND out of unprintable zones — Bambu never
+        // Keep the tower's whole footprint on the bed AND out of unprintable zones: Bambu never
         // lets the purge tower leave the plate or sit in an excluded area. Clamp the centre to the
         // bed, then accept the new X/Y only if the resulting footprint clears every exclude zone
         // (tested per-axis so the tower slides along a zone edge instead of sticking).
@@ -1470,7 +1470,7 @@ export function useEditorScene(params: EditorSceneParams): void {
     let lastPaintChannel: TrianglePaintChannel | null | undefined
     let lastPaintSelectedKey: string | null | undefined
     // Painted-triangle overlay visibility (BambuStudio parity + perf). Support/seam paint show ONLY
-    // for the SELECTED object while their own tool is active — they're annotations, and a painted
+    // for the SELECTED object while their own tool is active, they're annotations, and a painted
     // part's overlay is a very dense mesh (100k+ leaf sub-triangles at the 0.2mm split limit) that
     // tanks the frame rate if drawn all the time. Colour paint always shows (it IS the print's
     // colour). Everything is dropped mid-manipulation (drag/gizmo/tower) so it can't make a move
@@ -1504,7 +1504,7 @@ export function useEditorScene(params: EditorSceneParams): void {
         for (const instance of plate.instances) {
           const group = groupByKeyRef.current.get(instance.key)
           if (!group || !isInstancePrintedRef.current(instance)) continue
-          // Footprint rasterization is O(triangles) — brutal for a many-part high-poly object and,
+          // Footprint rasterization is O(triangles): brutal for a many-part high-poly object and,
           // forced on every drop, the freeze after dragging one around the plate. It only depends on
           // SHAPE (orientation+scale), so a pure move keeps the cached cells and just shifts them by
           // the whole-cell translation delta (O(cells)); only a rotate/scale (shape sig change)
@@ -1565,7 +1565,7 @@ export function useEditorScene(params: EditorSceneParams): void {
       const shouldRender = needsRender || interacting || dragJustEnded || (now - lastRenderStamp) >= IDLE_RENDER_INTERVAL_MS
       if (shouldRender) {
         // Re-apply paint-overlay visibility (see helper above) whenever the active tool, the selection,
-        // or the manipulation state changes — not every frame.
+        // or the manipulation state changes, not every frame.
         const activePaintChannel = activePaintChannelRef.current
         const paintSelectedKey = selectedKeyRef.current
         if (interactingChanged || activePaintChannel !== lastPaintChannel || paintSelectedKey !== lastPaintSelectedKey) {
@@ -1577,14 +1577,14 @@ export function useEditorScene(params: EditorSceneParams): void {
         // own updateMatrixWorld during render). The PRECISE walk (per-vertex) is the priciest
         // per-frame work for high-poly models, so: only recompute when the object actually moved
         // (idle selections / camera orbits skip it), and while dragging use the cheap transformed-
-        // AABB path so high-poly drags stay smooth — then restore the precise box on the drop frame.
+        // AABB path so high-poly drags stay smooth, then restore the precise box on the drop frame.
         if (selectionBox && selectionTarget) {
           const sig = selectionBoxSignature(selectionTarget)
           if (sig !== selectionBoxSig || dragJustEnded) {
             selectionBoxSig = sig
             // Precise (per-vertex) is only needed to hug a REORIENTED object. Mid-drag stays cheap; a
-            // move-drop stays cheap too (translation keeps the box exact); only a rotate/scale drop —
-            // or a non-drag change (undo, manual rotate) — pays the precise walk.
+            // move-drop stays cheap too (translation keeps the box exact); only a rotate/scale drop,
+            // or a non-drag change (undo, manual rotate), pays the precise walk.
             const precise = interacting ? false : (dragJustEnded ? lastDragChangedOrientation : true)
             selectionBoxValue.copy(printableMeshBox(selectionTarget, precise))
           }
@@ -1603,7 +1603,7 @@ export function useEditorScene(params: EditorSceneParams): void {
       // Re-check placement (~4x/sec) so collision/off-plate/floating/unprintable/tower
       // warnings stay current without wiring every mutation path. The recompute (footprint
       // rasterization + per-object Box3 builds) is skipped WHILE actively dragging an object,
-      // the gizmo, or the purge tower — that per-tick work was stuttering drags. Movement is
+      // the gizmo, or the purge tower, that per-tick work was stuttering drags. Movement is
       // still constrained live in the pointer handlers (e.g. the tower stays on the plate and
       // out of exclude zones); only the advisory warnings are deferred. They refresh on the
       // exact frame the drag ends (the interacting→idle edge), not just on the next 15-frame tick.
@@ -1692,7 +1692,7 @@ export function useEditorScene(params: EditorSceneParams): void {
       scene.remove(transform as unknown as THREE.Object3D)
       scene.remove(multiPivot)
       if (multiPivotRef.current === multiPivot) multiPivotRef.current = null
-      // Before forceContextLoss below, which fires webglcontextlost on our own canvas —
+      // Before forceContextLoss below, which fires webglcontextlost on our own canvas,
       // a deliberate teardown must not be misread as a GPU failure and trigger a rebuild.
       renderer.domElement.removeEventListener('webglcontextlost', onContextLost)
       renderer.dispose()

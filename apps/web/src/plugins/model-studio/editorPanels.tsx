@@ -121,7 +121,7 @@ export const TOOL_PANEL_ANCHOR = {
  * Plate selector strip: a live thumbnail per plate (rendered offscreen from the
  * edited layout), with add-plate and per-plate delete. The selected plate is
  * highlighted. Reordering is pointer-based (mouse drag / touch hold-and-drag) and drops into
- * the gap BETWEEN tiles — see `useListReorderDrag`.
+ * the gap BETWEEN tiles: see `useListReorderDrag`.
  */
 export function PlateThumbnailStrip({
   plates,
@@ -150,7 +150,7 @@ export function PlateThumbnailStrip({
   /**
    * Which way the strip runs. Vertical is a rail beside the viewport, chosen by
    * `choosePlateStripOrientation` when a horizontal band would letterbox the 3D area. Only the
-   * axis changes — tiles, collapse, drag-reorder and the options menu are identical.
+   * axis changes: tiles, collapse, drag-reorder and the options menu are identical.
    */
   orientation?: 'horizontal' | 'vertical'
 }) {
@@ -159,7 +159,7 @@ export function PlateThumbnailStrip({
   const { drag, setContainerElement, setTileElement, handleTilePointerDown, shouldSuppressClick } =
     useListReorderDrag({ vertical, itemIndices: plateIndices, onDrop: onReorderPlate })
   // Which tile's options menu is open. Held here (rather than letting each Dropdown own its
-  // state) so a right-click anywhere on a tile can open that tile's menu — the same menu the
+  // state) so a right-click anywhere on a tile can open that tile's menu, the same menu the
   // kebab opens, so the two entry points can never drift apart.
   const [menuPlateIndex, setMenuPlateIndex] = useState<number | null>(null)
   // Collapsed mode trades the thumbnails for name-only chips so the 3D viewport gets the
@@ -205,7 +205,7 @@ export function PlateThumbnailStrip({
         const embedded = liveThumbnail ? null : embeddedThumbnailUrl(plate)
         const thumbnail = liveThumbnail ?? embedded
         // No live render and no embedded PNG means the plate is genuinely still loading
-        // (e.g. a freshly added empty plate before it's opened) — show a spinner.
+        // (e.g. a freshly added empty plate before it's opened): show a spinner.
         const loading = !thumbnail
         const label = plateDisplayName(plate.name, plate.index)
         return (
@@ -410,20 +410,20 @@ interface ToolbarEntry {
 
 /**
  * A toolbar button: icon-only on phones, icon above a small caption on desktop
- * (keeps each button narrow so the whole row fits typical editor widths — Joy
+ * (keeps each button narrow so the whole row fits typical editor widths: Joy
  * has no vertical-content button variant, hence the column-flex override).
  *
  * ButtonGroup rounds its corners by cloning DIRECT children with
- * `data-first-child`/`data-last-child` and styling `& > [data-*-child]` — those
+ * `data-first-child`/`data-last-child` and styling `& > [data-*-child]`, those
  * attributes land on this component, so they must be forwarded to the real
  * button (still a direct DOM child: Tooltip renders no wrapper element).
  */
 function ToolbarButton({ entry, layout, ...groupAttrs }: {
   entry: ToolbarEntry
   /**
-   * `stacked` — icon above a caption (the desktop top strip).
-   * `icon` — icon only (phones, where captions never fit).
-   * `rail` — icon plus a label that stays collapsed until the rail is hovered; the rail
+   * `stacked`: icon above a caption (the desktop top strip).
+   * `icon`: icon only (phones, where captions never fit).
+   * `rail`: icon plus a label that stays collapsed until the rail is hovered; the rail
    *   container owns that hover rule (see RAIL_HOVER_LABEL_SX), so hovering anywhere on the
    *   rail expands every button together rather than one at a time.
    */
@@ -435,7 +435,7 @@ function ToolbarButton({ entry, layout, ...groupAttrs }: {
   const color = entry.active ? ('primary' as const) : ('neutral' as const)
   const railLabel = entry.short ?? entry.label
   // In the rail the label is already on screen while hovering, so a tooltip repeating it is
-  // just noise — keep one only where the full label says more than the short caption.
+  // just noise: keep one only where the full label says more than the short caption.
   const tooltipTitle = layout === 'rail' && railLabel === entry.label ? '' : entry.label
   return (
     <Tooltip title={tooltipTitle} placement={layout === 'rail' ? 'right' : 'bottom'}>
@@ -530,14 +530,14 @@ export function GizmoToolbar({
   onArrangeAll: () => void
   /**
    * `vertical` is the photo-editor left rail (sm+): icon-only buttons stacked down the
-   * viewport's left edge. `horizontal` is the phone layout — a wrapping strip across the top.
+   * viewport's left edge. `horizontal` is the phone layout, a wrapping strip across the top.
    */
   orientation?: 'horizontal' | 'vertical'
 }) {
   const isMobile = useMobileViewport()
   // Captions would make the rail far too wide, so the vertical form is icon-only like phones.
   const layout = orientation === 'vertical' ? ('rail' as const) : isMobile ? ('icon' as const) : ('stacked' as const)
-  // Selection tools: everything here needs a selected object — the modal editing
+  // Selection tools: everything here needs a selected object: the modal editing
   // tools (the active one highlights) plus the one-shot Drop/Orient actions.
   const tools: ToolbarEntry[] = [
     ...([
@@ -565,7 +565,7 @@ export function GizmoToolbar({
     { key: 'orient', label: 'Auto-orient (rest on the largest flat face)', short: 'Orient', icon: <AutoFixHighRoundedIcon />, disabled, onClick: onAutoOrient }
   ]
   // Utilities that work without a selection: plate-wide arrange and measure
-  // (still a mode — it highlights while active — but it never edits the scene).
+  // (still a mode, it highlights while active, but it never edits the scene).
   const utilities: ToolbarEntry[] = [
     { key: 'arrange', label: 'Auto-arrange all objects on this plate', short: 'Arrange', icon: <GridViewRoundedIcon />, disabled: arrangeDisabled, onClick: onArrangeAll },
     { key: 'measure', label: 'Measure', icon: <StraightenRoundedIcon />, active: mode === 'measure', disabled: busy, onClick: () => onChange('measure') }
@@ -692,7 +692,7 @@ export function TransformPanel({
   mode: TransformGizmoMode
   /**
    * Shown above the rows when the values describe something other than the selected
-   * object — e.g. a selected PART's object-local placement (BambuStudio's "Volume
+   * object: e.g. a selected PART's object-local placement (BambuStudio's "Volume
    * Operations" title). Omitted for the plain object transform.
    */
   heading?: string
@@ -758,7 +758,7 @@ export function TransformPanel({
  * Performance wrapper around {@link TransformPanel} that OWNS the live transform values.
  *
  * The readout updates at drag frequency (~30x/sec). If those values lived in EditorView's state,
- * every tick would re-render the whole editor — including the object/part sidebar, which for a
+ * every tick would re-render the whole editor, including the object/part sidebar, which for a
  * many-part model is hundreds of Joy rows and janks the drag. Instead this component holds the
  * value locally and exposes its setter through `setterRef`, so the render loop pushes live values
  * straight here without touching EditorView. `initial` seeds it (and re-seeds on selection change,
@@ -789,7 +789,7 @@ export function LiveTransformPanel({
 /**
  * One labelled axis group (Position / Rotation / Scale).
  *
- * The header is a fixed-height row so every group's inputs sit on the same baseline —
+ * The header is a fixed-height row so every group's inputs sit on the same baseline:
  * Scale carries the uniform-lock button, and without a pinned height that one button made
  * its header taller and pushed the Scale fields out of line with the other two.
  */
@@ -903,7 +903,7 @@ function roundForDisplay(value: number): string {
 /**
  * "Add" split button: the default click opens the library file picker (the common case); the
  * dropdown offers uploading a local file or a primitive solid. On a host with no library the
- * library row is hidden and the default click uploads instead — see {@link onAddFromLibrary}.
+ * library row is hidden and the default click uploads instead: see {@link onAddFromLibrary}.
  */
 export function AddObjectMenu({
   importing,
@@ -919,7 +919,7 @@ export function AddObjectMenu({
   disabledReason?: string
   /**
    * Omitted on a host with no library (`EditorImportStore.supportsLibrarySource`), which hides the
-   * row AND hands the split button's primary action to {@link onImportFile} — otherwise the
+   * row AND hands the split button's primary action to {@link onImportFile}, otherwise the
    * control's main click does nothing on the public editor.
    */
   onAddFromLibrary?: () => void
@@ -927,7 +927,7 @@ export function AddObjectMenu({
   onAddPrimitive: (kind: PrimitiveKind) => void
 }) {
   return (
-    // Soft: the panel's Add is not the editor's primary action. Both halves gate together —
+    // Soft: the panel's Add is not the editor's primary action. Both halves gate together,
     // every add path needs the same import machinery.
     <SplitButton
       ariaLabel="add object"
@@ -993,7 +993,7 @@ export function SaveSplitButton({
 }) {
   // Solid primary: Save is the footer's primary action (Slice sits soft to its left).
   // "Save (version)" overwrites the open file, so it greys out until there are unsaved
-  // edits (matching Bambu Studio's Ctrl+S). "Save as new…" always stays available — both
+  // edits (matching Bambu Studio's Ctrl+S). "Save as new…" always stays available, both
   // as the new-project path (no version to save) and as a safety valve if a change ever
   // slips past dirty tracking. That is the one split-button state where the caret outlives
   // its primary half, so the group de-emphasises with it (see `SplitButton`).
@@ -1037,7 +1037,7 @@ export function SliceSplitButton({
   // Phones are tight on footer width; "Slice plate" wraps to two lines there.
   const isMobile = useMobileViewport()
   return (
-    // Soft: Save (solid, rightmost) is the footer's primary action. Both halves gate together —
+    // Soft: Save (solid, rightmost) is the footer's primary action. Both halves gate together:
     // slicing one plate and slicing all of them are unavailable for the same reasons.
     <SplitButton
       ariaLabel="slice"
@@ -1106,7 +1106,7 @@ function FilamentBadge({
   const interactive = Boolean(onReassign && options && options.length > 0)
   const mixed = Boolean(mixedColors && mixedColors.length > 1)
   if (filamentId == null && !mixed && !interactive) return null
-  // The digit users see is the material's POSITION in the sidebar order, not the session id —
+  // The digit users see is the material's POSITION in the sidebar order, not the session id:
   // the two diverge after a mid-session remove/reorder (ids stay stable until the save
   // renumbers). Falls back to the id only when the caller has no options list to derive from.
   const displayNumber = filamentId == null
@@ -1142,7 +1142,7 @@ function FilamentBadge({
   }
   return (
     <Dropdown>
-      <Tooltip title={title ?? (mixed ? 'Mixed materials — choose one for every part' : 'Change material')}>
+      <Tooltip title={title ?? (mixed ? 'Mixed materials: choose one for every part' : 'Change material')}>
         <MenuButton
           variant="plain"
           color="neutral"
@@ -1163,7 +1163,7 @@ function FilamentBadge({
             sx={{ display: 'flex', alignItems: 'center', gap: 1 }}
           >
             <Box sx={{ flexShrink: 0, width: 16, height: 16, borderRadius: '3px', bgcolor: option.color || 'neutral.softBg', border: '1px solid rgba(255,255,255,0.18)' }} />
-            <span>Material {option.number}{option.label ? ` — ${option.label}` : ''}{option.colorName ? ` (${option.colorName})` : ''}</span>
+            <span>Material {option.number}{option.label ? `: ${option.label}` : ''}{option.colorName ? ` (${option.colorName})` : ''}</span>
           </MenuItem>
         ))}
       </Menu>
@@ -1201,7 +1201,7 @@ function buildMixedSwatchGradient(colors: string[]): string {
 function HelperVolumeSwatch({ subtype }: { subtype: SceneEditHelperVolumeSubtype }) {
   const spec = HELPER_VOLUME_SPECS[subtype]
   return (
-    <Tooltip title={`${spec.label} — ${spec.hint}`}>
+    <Tooltip title={`${spec.label}: ${spec.hint}`}>
       <Box
         sx={{
           width: 12,
@@ -1355,23 +1355,23 @@ export function ObjectList({
       {instances.map((instance) => {
         // The object identity used for per-object settings AND per-part filament reassignment:
         // an in-project object's Bambu id, or an import's stable identity (synthetic for a fresh
-        // import, the replaced object's id for "Replace with…") — so a not-yet-saved import's
+        // import, the replaced object's id for "Replace with…"), so a not-yet-saved import's
         // parts are reassignable and its process is editable without a save first.
         const perObjectId = instance.source.kind === 'object'
           ? instance.objectId
           : (instance.source.replacedObjectId ?? null)
         const sliceObject = perObjectId != null && perObject?.sliceObjectIds.has(perObjectId) ? perObjectId : null
         // Printability is an editor-owned per-instance flag (BambuStudio's "Printable"),
-        // so the toggle shows for every object on the plate — including just-moved ones —
+        // so the toggle shows for every object on the plate, including just-moved ones,
         // independent of the slice dialog's per-plate object selection.
         const printing = instance.printable
         const overrideCount = sliceObject != null ? perObject!.overrideCountFor(sliceObject) : 0
-        // Objects can hold multiple parts, each on its own filament — list them nested.
+        // Objects can hold multiple parts, each on its own filament: list them nested.
         const showParts = instance.parts.length > 1
         // The object-level badge summarises its PRINTED parts: one material when they agree (show
         // it like any single-material row), otherwise the indeterminate mixed swatch. Single-part
         // objects fall back to the instance's own filament. Helper volumes are excluded from both
-        // the summary and the reassignment behind it — see printedParts().
+        // the summary and the reassignment behind it: see printedParts().
         const materialParts = printedParts(instance)
         const partMaterial = summarizeInstanceMaterial(instance, resolveId, liveColor)
         return (
@@ -1384,7 +1384,7 @@ export function ObjectList({
               sx={{ borderRadius: 'sm', bgcolor: instance.key === selectedKey ? 'neutral.softBg' : extraSelectedKeys?.includes(instance.key) ? 'neutral.plainActiveBg' : undefined }}
             >
               <Stack direction="row" spacing={0.5} alignItems="center" sx={{ width: '100%', minWidth: 0 }}>
-                <Tooltip title={printing ? 'Printable — toggle to skip' : 'Skipped — toggle to print'} variant="soft">
+                <Tooltip title={printing ? 'Printable, toggle to skip' : 'Skipped, toggle to print'} variant="soft">
                   <Switch
                     size="sm"
                     checked={printing}
@@ -1406,7 +1406,7 @@ export function ObjectList({
                 {linkedCopyCountFor && linkedCopyCountFor(instance.key) > 1 && (
                   // Linkage is otherwise invisible: users discover it by editing one copy and
                   // watching another change. BambuStudio has the same ambiguity; we name it.
-                  <Tooltip title={`Linked copy — ${linkedCopyCountFor(instance.key)} instances share this object's parts, materials, paint and settings. Right-click to make one independent.`}>
+                  <Tooltip title={`Linked copy: ${linkedCopyCountFor(instance.key)} instances share this object's parts, materials, paint and settings. Right-click to make one independent.`}>
                     <Chip size="sm" variant="soft" color="neutral" sx={{ flexShrink: 0 }}>
                       x{linkedCopyCountFor(instance.key)}
                     </Chip>
@@ -1419,7 +1419,7 @@ export function ObjectList({
                     mixedColors={partMaterial.mixedColors}
                     options={filamentOptions}
                     title={materialParts.length > 1
-                      ? (partMaterial.mixedColors ? "Mixed materials — set all parts' material" : "Set all parts' material")
+                      ? (partMaterial.mixedColors ? "Mixed materials: set all parts' material" : "Set all parts' material")
                       : 'Change material'}
                     onReassign={(fid) => onReassignFilament(materialParts.map((p) => ({ objectId: perObjectId, partIndex: p.partIndex })), fid)}
                   />
@@ -1442,7 +1442,7 @@ export function ObjectList({
                     && selectedBakedPart.partIndex === part.partIndex))
               // BambuStudio draws the extruder swatch for normal parts and modifiers only: a
               // blocker/enforcer/negative volume has no material to show, so its row leads with
-              // the subtype chip instead — the same marker the session-added rows below use.
+              // the subtype chip instead, the same marker the session-added rows below use.
               const partSubtype = canonicalThreeMfPartSubtype(part.subtype)
               const helperSubtype = partSubtype === 'normal_part' ? null : partSubtype
               const partCarriesFilament = threeMfPartSubtypeCarriesFilament(part.subtype)
@@ -1505,7 +1505,7 @@ export function ObjectList({
             {(addedPartsFor?.(instance) ?? []).map((part) => (
               // Part volumes added THIS session (support blocker/enforcer, modifier, negative):
               // they only become real `<component>` parts at save time, so list them from the
-              // session state — otherwise a freshly added blocker is invisible here until a
+              // session state, otherwise a freshly added blocker is invisible here until a
               // save + reopen. Clicking hands the part the transform gizmo.
               <ListItem
                 key={part.key}

@@ -5,7 +5,7 @@ import { buildWorkspacePath, isPlatformWorkspacePath, parseWorkspacePathname } f
  * Names of the Account plugin slots that also have their own top-level pages.
  *
  * Constants rather than string literals because three places have to agree on
- * each one — the plugin that fills it, the route that hosts it, and the nav tab
+ * each one: the plugin that fills it, the route that hosts it, and the nav tab
  * and Account link that point at that route. A typo in any of them fails
  * silently as an empty page.
  *
@@ -35,7 +35,7 @@ export const ACCOUNT_MESSAGES_SUBPATH = '/messages'
  * slug from elsewhere would navigate out of the page being viewed.
  *
  * The host matters because each prefixes the account scope differently, and a
- * sub-path built without the prefix matches NO route on the platform — where
+ * sub-path built without the prefix matches NO route on the platform: where
  * the router's catch-all quietly sends the click to the home page instead of
  * erroring, so a dead link looks like a working one until someone follows it.
  * That is exactly how Account -> Messages went home from `/platform/account`.
@@ -52,7 +52,7 @@ export function buildAccountPath(currentPathname: string, subPath = ''): string 
 }
 
 /**
- * Whether any registered plugin fills this slot — i.e. whether the page behind
+ * Whether any registered plugin fills this slot: i.e. whether the page behind
  * it has anything to show.
  *
  * The registry is populated at module load (built-in plugins register when the

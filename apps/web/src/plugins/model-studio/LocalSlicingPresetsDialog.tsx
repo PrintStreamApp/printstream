@@ -1,5 +1,5 @@
 /**
- * The slicing-preset manager for a host with NO workspace behind it — the public 3MF editor.
+ * The slicing-preset manager for a host with NO workspace behind it: the public 3MF editor.
  *
  * Counterpart of `components/library/SlicingPresetsDialog.tsx`, which is the workspace manager and
  * talks to `/api/slicing/profiles`. Nothing here touches the api: presets are parsed and stored in
@@ -74,7 +74,7 @@ export function LocalSlicingPresetsDialog({ open, onClose }: {
     setUploading(true)
     try {
       // Re-uploading an edited preset REPLACES the stored one of the same kind and name, so there
-      // is no conflict prompt to mirror from the workspace manager — see `addLocalSlicingPresets`.
+      // is no conflict prompt to mirror from the workspace manager: see `addLocalSlicingPresets`.
       await addLocalSlicingPresets(file)
       setPresets(listLocalSlicingPresets())
     } catch (caught) {

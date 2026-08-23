@@ -3,7 +3,7 @@
  *
  * Both cases have been wrong at some point: every tab once carried a tooltip
  * that just repeated the label under the pointer, and the fix for that briefly
- * left the icon-only tabs — the ones with no visible text at all — as the only
+ * left the icon-only tabs, the ones with no visible text at all, as the only
  * tabs a tooltip would have helped.
  */
 import assert from 'node:assert/strict'

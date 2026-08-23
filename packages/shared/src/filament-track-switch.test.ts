@@ -16,7 +16,7 @@ import type { FilamentTrackSwitch } from './printer-contracts.js'
 
 /**
  * The FTS semantics ported from BambuStudio's `DevFilaSwitch` / `SelectMachineDialog`. No firmware
- * exposes this yet, so these fixtures ARE the contract — they encode what the C++ does, and a
+ * exposes this yet, so these fixtures ARE the contract, they encode what the C++ does, and a
  * change here should mean the vendored source changed or a real payload disagreed with it.
  */
 
@@ -36,7 +36,7 @@ function buildSwitch(overrides: Partial<FilamentTrackSwitch> = {}): FilamentTrac
 test('a switch is only ready when every AMS unit names its input', () => {
   const trackSwitch = buildSwitch()
 
-  // Mirrors DevFilaSwitch::IsReady — a unit with no switcher pos makes the whole switch unusable.
+  // Mirrors DevFilaSwitch::IsReady, a unit with no switcher pos makes the whole switch unusable.
   assert.equal(
     isFilamentTrackSwitchReady({ filamentTrackSwitch: trackSwitch, ams: [{ switchInput: 'A' }, { switchInput: 'B' }] }),
     true
@@ -84,7 +84,7 @@ test('a slice matches a printer only when both agree about the switch', () => {
   assert.equal(filamentTrackSwitchMatchesSlice(true, false), false)
   assert.equal(filamentTrackSwitchMatchesSlice(false, true), false)
 
-  // An absent flag reads as "no switch", exactly as BambuStudio's CLI defaults it — so a project
+  // An absent flag reads as "no switch", exactly as BambuStudio's CLI defaults it, so a project
   // saved before the switch existed prints on a switch-less machine and is refused on one with it.
   assert.equal(filamentTrackSwitchMatchesSlice(null, false), true)
   assert.equal(filamentTrackSwitchMatchesSlice(undefined, true), false)
@@ -124,13 +124,13 @@ test('the mismatch rule treats both kinds of unknown as "nothing to say"', () =>
   assert.equal(filamentTrackSwitchMismatch(true, withSwitch), null)
   assert.equal(filamentTrackSwitchMismatch(false, withoutSwitch), null)
 
-  // Unknown #1 — the printer never mentions an FTS (every machine today) or is offline. Warning
+  // Unknown #1: the printer never mentions an FTS (every machine today) or is offline. Warning
   // here would fire on every file on every printer in the field.
   assert.equal(filamentTrackSwitchMismatch(true, { filamentTrackSwitch: null }), null)
   assert.equal(filamentTrackSwitchMismatch(true, null), null)
   assert.equal(filamentTrackSwitchMismatch(true, undefined), null)
 
-  // Unknown #2 — the FILE's flag is undefined because an older server did not send it. Distinct
+  // Unknown #2: the FILE's flag is undefined because an older server did not send it. Distinct
   // from `false`, which is a real answer, so undefined must not be read as "sliced without one".
   assert.equal(filamentTrackSwitchMismatch(undefined, withSwitch), null)
   assert.deepEqual(filamentTrackSwitchMismatch(false, withSwitch), { printerHasSwitch: true })

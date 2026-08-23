@@ -1,6 +1,6 @@
 /**
  * The shared identity derivations (see sceneEditIdentity.ts). These are the gates deciding whether
- * an edit SURVIVES the bake, so getting one subtly wrong does not fail loudly — it accepts the
+ * an edit SURVIVES the bake, so getting one subtly wrong does not fail loudly, it accepts the
  * user's edit and silently drops it.
  */
 import assert from 'node:assert/strict'
@@ -67,7 +67,7 @@ test('a per-part key round-trips, and a malformed one drops rather than emitting
 
 /*
  * DATA LOSS regression (2026-07-28, "Best Shot Golf (PETG) 2"): per-object settings vanished one
- * PLATE per save. Proven from the bridge's own version history — object overrides went 4 -> 4 -> 4
+ * PLATE per save. Proven from the bridge's own version history: object overrides went 4 -> 4 -> 4
  * -> 2 -> 0 entries, and which ones died tracked the ACTIVE PLATE. The session map holds only the
  * objects in scope (the slice dialog reseeds it from the active plate), so every save inferred
  * "cleared" from "absent" and stripped every other plate's settings.
@@ -80,7 +80,7 @@ test('an object absent from the session map is not mentioned, so the save cannot
   const selected = selectObjectProcessOverridesForSave({ '165': { enable_support: '1' } }, accepting)
   assert.deepEqual(selected, { '165': { enable_support: '1' } })
   // The point of the test: nothing was emitted for the absent objects. An entry of ANY kind for
-  // them — `{}` included — is what erased them.
+  // them, `{}` included, is what erased them.
   for (const id of ['57', '59', '162']) {
     assert.equal(Object.hasOwn(selected ?? {}, id), false, `object ${id} must not be mentioned`)
   }

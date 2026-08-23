@@ -11,14 +11,14 @@ type BrowserAssistPanelProps = {
 }
 
 /**
- * The notice for a page PrintStream cannot fetch itself — in practice a Printables
+ * The notice for a page PrintStream cannot fetch itself, in practice a Printables
  * model page, since MakerWorld now resolves server-side through the connected Bambu
  * Lab account.
  *
  * Two audiences, and the difference matters: someone running the companion browser
  * helper gets the handoff instructions, while someone without it is told plainly that
  * this site is not importable yet and what to do instead. The helper is not pitched or
- * linked to anyone — see `browserAssistState.ts` for why.
+ * linked to anyone: see `browserAssistState.ts` for why.
  *
  * It stands in for `RemoteImportsView`'s generic resolution alert for these URLs (that
  * alert is suppressed there). The link that opens the provider page lives on the Source
@@ -31,7 +31,7 @@ export function BrowserAssistPanel({ extensionDetected, providerLabel }: Browser
   return (
     <Alert
       variant="soft"
-      // Neutral, not warning: nothing has gone wrong — this site simply publishes no
+      // Neutral, not warning: nothing has gone wrong, this site simply publishes no
       // link PrintStream can fetch.
       color={detected ? 'success' : 'neutral'}
       startDecorator={detected ? <ExtensionRoundedIcon /> : <InfoOutlinedIcon />}

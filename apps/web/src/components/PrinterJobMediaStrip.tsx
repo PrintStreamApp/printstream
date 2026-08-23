@@ -522,7 +522,7 @@ function CameraTile({
                 // fill the screen. The modal-tuned height caps below would otherwise leave
                 // black gaps and pin the stream to the top; in fullscreen we fill the
                 // viewport, float the header as an overlay, and let the stream centre in the
-                // whole screen instead. Do NOT set `position` here — the UA `:fullscreen`
+                // whole screen instead. Do NOT set `position` here: the UA `:fullscreen`
                 // rule already pins the element with position: fixed; inset: 0.
                 '&:fullscreen': {
                   width: '100%',

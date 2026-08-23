@@ -1,5 +1,5 @@
 /**
- * Slicing presets dialog — the manager for the BambuStudio presets a workspace has uploaded
+ * Slicing presets dialog: the manager for the BambuStudio presets a workspace has uploaded
  * (printer, material, process).
  *
  * Split out of the editor settings dialog once the slice sidebar grew its own "Manage" action:
@@ -9,7 +9,7 @@
  * under the gear.
  *
  * Core, not part of the model-studio plugin, because both the editor (a plugin) and the shared
- * slice settings panel (core) open it — core must never import a plugin.
+ * slice settings panel (core) open it: core must never import a plugin.
  */
 import { Box, Button, DialogActions, Typography } from '@mui/joy'
 import { useScrollbarGutter } from '../../hooks/useScrollbarGutter'

@@ -467,7 +467,7 @@ function PluginSectionCard({
             </Typography>
           ) : planBlocked ? (
             <Typography level="body-sm" textColor="text.tertiary">
-              Included in the Pro plan — upgrade this workspace to use it.
+              Included in the Pro plan: upgrade this workspace to use it.
             </Typography>
           ) : !enabled ? (
             <Typography level="body-sm" textColor="text.tertiary">

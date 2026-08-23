@@ -1,7 +1,7 @@
 /**
  * 3MF (Bambu flavor) reader: parse a 3MF archive into typed index/scene structures.
  *
- * Both pure parses live in the shared `@printstream/shared/three-mf` module — the index parse
+ * Both pure parses live in the shared `@printstream/shared/three-mf` module: the index parse
  * (`buildThreeMfIndex`, also consumed by the bridge in `apps/bridge/src/library-3mf.ts`) and the
  * scene parse (`buildSceneManifest`, also consumed by the web's client-side public 3MF editor).
  * This module owns only the Node-side ZIP I/O and caching around them, so there is no hand-kept
@@ -10,9 +10,9 @@
  * A 3MF file is a ZIP. Bambu Studio packs per-plate gcode and PNG thumbnails alongside an XML index
  * at `Metadata/slice_info.config` that lists the plates and the filaments each one uses. This module
  * exposes:
- *  - {@link readPlateIndex} — read the slice-info/model-settings entries and build a typed index.
- *  - {@link readSceneManifest} — parse the plated scene (objects/instances/bed) for the 3D editor.
- *  - {@link readPreviewAssets} — list embedded STL/STEP preview meshes.
+ *  - {@link readPlateIndex}: read the slice-info/model-settings entries and build a typed index.
+ *  - {@link readSceneManifest}: parse the plated scene (objects/instances/bed) for the 3D editor.
+ *  - {@link readPreviewAssets}: list embedded STL/STEP preview meshes.
  *
  * Results for {@link readPlateIndex} are cached in memory outside development mode (small LRU + TTL).
  * The parser is deliberately tolerant: unknown XML attributes are ignored, and a missing slice-info
@@ -156,7 +156,7 @@ export async function readPlateIndex(filePath: string, signal?: AbortSignal): Pr
   }
 
   const thumbnailPlateFiles = await readPlateThumbnailFiles(filePath, signal).catch(() => new Map<number, string>())
-  // Layer G-code sidecar (filament changes / pauses) — optional; most projects have none.
+  // Layer G-code sidecar (filament changes / pauses): optional; most projects have none.
   const customGcodeXml = await readEntry(filePath, CUSTOM_GCODE_PER_LAYER_ENTRY, signal)
     .then((buffer) => buffer.toString('utf8'))
     .catch(() => null)
@@ -228,7 +228,7 @@ export async function readSceneManifest(
 
   const [rootModelXml, modelSettingsXml, projectSettingsJson, brimEarPointsText, customGcodeText] = await Promise.all([
     readEntry(filePath, '3D/3dmodel.model', signal, 64 * 1024 * 1024).then((buffer) => buffer.toString('utf8')),
-    // Default 8 MiB cap — matches the bridge's bound for the same entry; only the
+    // Default 8 MiB cap: matches the bridge's bound for the same entry; only the
     // mesh XML above legitimately outgrows it.
     readEntry(filePath, 'Metadata/model_settings.config', signal).then((buffer) => buffer.toString('utf8')),
     readEntry(filePath, 'Metadata/project_settings.config', signal, 8 * 1024 * 1024)

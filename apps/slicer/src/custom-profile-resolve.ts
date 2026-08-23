@@ -56,7 +56,7 @@ export async function resolveCustomProfileConfigWith(
   const custom = JSON.parse(content) as ProfileRecord
   const merged = await mergeInheritedBase(custom, kind, readSystemPreset, new Set())
   merged.type = kind
-  // A custom preset is a User preset, and the CLI refuses to load one whose `from` says otherwise —
+  // A custom preset is a User preset, and the CLI refuses to load one whose `from` says otherwise,
   // it fails the ENTIRE run with exit 251, naming only the file path. Stamped here rather than at
   // the write site because the sparse diff may carry no `from` AND resolve no base to inherit one
   // from, and because presets already stored without it must slice without a data migration.

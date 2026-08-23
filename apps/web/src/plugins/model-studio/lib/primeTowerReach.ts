@@ -8,15 +8,15 @@
  * WHY. On a dual-nozzle machine each extruder reaches its own rectangle, and the strips only one of
  * them can reach are published on the scene's bed as exclude zones labelled "Left/Right nozzle
  * only" (`computeNozzleOnlyZones` in the shared scene parser). For an OBJECT such a strip is merely
- * a constraint — printing it there is fine as long as it uses only that nozzle, which is what the
+ * a constraint: printing it there is fine as long as it uses only that nozzle, which is what the
  * per-object check tests. **The tower is different in kind: every filament purges into it, so it is
  * used by every extruder.** A tower in a single-nozzle strip is therefore unprintable no matter how
- * the materials are assigned — the other nozzle physically cannot get to it.
+ * the materials are assigned: the other nozzle physically cannot get to it.
  *
  * BambuStudio agrees and says so in its own words: on a machine switch its CLI notes the tower "may
  * have been placed in a single-nozzle-only zone from the source printer" and shifts it into the
  * shared area (`BambuStudio.cpp`, the `shrink_to_new_bed == 0` branch), where "shared" is
- * `Print::get_extruder_shared_printable_polygon()` — the INTERSECTION of every extruder's printable
+ * `Print::get_extruder_shared_printable_polygon()`: the INTERSECTION of every extruder's printable
  * area. We enforce the same rule earlier, while the user is placing it.
  *
  * Only nozzle-only zones are considered here. Ordinary unprintable zones (the X1/P1 corner cutout)
@@ -73,7 +73,7 @@ function overlaps(a: TowerRect, b: TowerRect): boolean {
  * The user-facing reason the tower cannot be printed where it is, or null when it is fine.
  *
  * Names the zone as the machine does ("Left nozzle only"), because that is the label drawn on the
- * plate — the user can see the region the message is talking about.
+ * plate: the user can see the region the message is talking about.
  */
 export function primeTowerReachIssue(
   tower: TowerRect | null,
@@ -95,7 +95,7 @@ export function primeTowerReachIssue(
  * aimed, rather than jumping across the bed. Returns the corrected MIN corner (what the editor
  * stores as the tower position). Zones are re-tested after each shift because pushing clear of one
  * strip can slide the tower into the opposite one on a narrow bed; if no free spot is reachable the
- * last position is returned rather than looping — a tower that cannot fit the shared area is a
+ * last position is returned rather than looping, a tower that cannot fit the shared area is a
  * warning to surface, not something to solve by moving it somewhere equally wrong.
  */
 export function clampPrimeTowerIntoReach(

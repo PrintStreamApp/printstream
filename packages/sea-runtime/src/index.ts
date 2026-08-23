@@ -1,12 +1,12 @@
 /**
- * `@printstream/sea-runtime` — the generic, non-cloud plumbing shared by every
+ * `@printstream/sea-runtime`: the generic, non-cloud plumbing shared by every
  * PrintStream Node SEA (single-file executable) build.
  *
  * This is **public/core** code (it ships in the open-source snapshot). The cloud
  * bridge's standalone build (`apps/bridge/src/private/sea/**`, private) and the
  * self-hosted native app build both consume it, so the two stay in lockstep
  * instead of hand-copying packaging logic. Anything specific to a particular
- * app — its identity, server defaults, update wiring, docker migration — stays
+ * app, its identity, server defaults, update wiring, docker migration, stays
  * in that app; this package holds only service/packaging primitives,
  * parameterized by a service spec and (where needed) injected asset accessors.
  *
@@ -19,12 +19,12 @@ export { parseConfigLines, readConfigFileValues, writeConfigFileValues } from '.
 export { acquireSingleInstanceLock } from './single-instance.js'
 
 // Loopback control channel (named pipe / Unix socket); the provider is generic.
-export { BridgeNotRunningError, requestControl, streamControl } from './control-client.js'
+export { ControlChannelTimeoutError, ControlChannelUnavailableError, requestControl, streamControl } from './control-client.js'
 export { startControlServer } from './control-server.js'
 export type { ControlProvider, ControlServerHandle } from './control-server.js'
 
 // Tray: assets, per-OS provider scripts, and the orchestrators (spawn the tray,
-// install launcher + login-autostart entries) — all parameterized by app identity.
+// install launcher + login-autostart entries), all parameterized by app identity.
 export { trayIconIcoBuffer, trayIconPngBuffer, writeTrayIconFiles } from './tray/icons.js'
 export type { TrayIconFiles } from './tray/icons.js'
 export { generateWindowsTrayScript } from './tray/windows-tray.js'
@@ -94,7 +94,7 @@ export {
   standalonePlatformKey
 } from './paths.js'
 
-// Service plumbing — parameterized entirely by a ServiceSpec (and, for WinSW, an
+// Service plumbing: parameterized entirely by a ServiceSpec (and, for WinSW, an
 // injected asset accessor); no app identity is baked in.
 export { SERVICE_RESTART_EXIT_CODE } from './service/spec.js'
 export type { ServiceSpec } from './service/spec.js'
@@ -108,6 +108,7 @@ export { parseMarkOfTheWeb, readMarkOfTheWebOrigin } from './download-origin.js'
 export {
   WINSW_ASSET_KEY,
   createWinswController,
+  ensureServiceRecoveryActions,
   generateWinswConfig,
   winswConfigPath,
   winswWrapperPath

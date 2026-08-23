@@ -1,8 +1,8 @@
 /**
  * Core's seam for the billing scopes a user may switch into.
  *
- * The workspace switcher is CORE — it renders workspaces, the platform scope,
- * and now billing — but billing itself is cloud-only and lives under
+ * The workspace switcher is CORE, it renders workspaces, the platform scope,
+ * and now billing, but billing itself is cloud-only and lives under
  * `src/private`, which core must never import. So core exposes this registry,
  * the cloud module fills it at startup, and a public build leaves it empty and
  * behaves exactly as it did before billing scopes existed.
@@ -71,7 +71,7 @@ export async function userHasAccountMembership(userId: string | null): Promise<b
  * Empty is the ordinary answer, not a failure: it covers a public build, an
  * anonymous visitor, and every signed-in user who has not been granted billing
  * access. A resolver that throws is treated as none rather than failing the
- * whole auth bootstrap — the switcher losing an entry is recoverable, a shell
+ * whole auth bootstrap: the switcher losing an entry is recoverable, a shell
  * that cannot start is not.
  */
 export async function listCustomersForUser(userId: string | null): Promise<CustomerSummary[]> {

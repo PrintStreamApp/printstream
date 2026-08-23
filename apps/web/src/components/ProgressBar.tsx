@@ -1,5 +1,5 @@
 /**
- * The app's linear progress indicator — the ONE way a surface shows "this is
+ * The app's linear progress indicator: the ONE way a surface shows "this is
  * running" and, when it can, how far along it is.
  *
  * Owns three things every caller used to hand-roll, two of which they got wrong:
@@ -42,7 +42,7 @@ const REDUCED_MOTION_CIRCULATION = '4s linear 0s infinite normal none running'
 export interface ProgressBarProps extends Omit<LinearProgressProps, 'determinate' | 'value'> {
   /**
    * Percentage 0-100, or `null`/`undefined` when the work is running but its
-   * extent is unknown — which renders the indeterminate cycle. Never coerce an
+   * extent is unknown, which renders the indeterminate cycle. Never coerce an
    * unknown value to `0`: that is a claim the work has not started, and it is
    * what made these bars render empty.
    */

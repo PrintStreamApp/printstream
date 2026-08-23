@@ -1,9 +1,9 @@
 /**
- * Filament (material) settings editor dialog — the material "tune" dialog opened from the settings
+ * Filament (material) settings editor dialog: the material "tune" dialog opened from the settings
  * icon next to a material's trashbin in the slice dialog. It owns the FILAMENT value space and lets
  * the user persist the result three ways, like Bambu Studio: save within this slice/3MF (the
  * per-material override that rides the slice), save as a new workspace preset, or update the
- * original (custom presets only — builtin Bambu presets are read-only, so that button is hidden).
+ * original (custom presets only: builtin Bambu presets are read-only, so that button is hidden).
  *
  * The chrome (tabs, search, "Changed only", footer) comes from
  * `settings/SettingsCatalogDialog.tsx`, shared with the process and machine editors; this dialog
@@ -63,13 +63,13 @@ export interface FilamentSettingsDialogProps {
   /**
    * What the Apply button commits to: a `project` (the 3D editor, where the override persists with
    * the next project save) or a one-off `slice` (the print/slice dialog). Only changes the button
-   * wording — mirrors {@link ProcessSettingsDialogProps.applyScope} so the two dialogs read alike.
+   * wording: mirrors {@link ProcessSettingsDialogProps.applyScope} so the two dialogs read alike.
    */
   /**
    * What the dialog is editing FOR.
    *
    * 'slice' / 'project' edit a slice's config and emit an override map through `onApply`.
-   * 'preset' edits the stored preset ITSELF — opened from the slicer-profiles settings, where
+   * 'preset' edits the stored preset ITSELF: opened from the slicer-profiles settings, where
    * there is no slice to apply to: the Apply button is hidden and `onApply` is never called, so
    * the only ways out are Save as preset, Update preset (custom presets only, via
    * `canEditOriginal`) and Cancel. That mirrors BambuStudio, where editing a SYSTEM preset can
@@ -80,7 +80,7 @@ export interface FilamentSettingsDialogProps {
    * How the dialog resolves a preset's base config. Defaults to the WORKSPACE route
    * (`/api/slicing/profiles/resolve-filament`). The public 3MF editor passes an anonymous resolver
    * (built-in presets via `/api/public/slicing/...`; project filaments from the in-tab 3MF slot), so
-   * it can run with no workspace. Additive — omitting it preserves the exact library behaviour.
+   * it can run with no workspace. Additive: omitting it preserves the exact library behaviour.
    */
   resolveConfig?: FilamentConfigResolver
   /** Emits the sparse override map for THIS material back to the slice dialog (per-material). */
@@ -117,10 +117,10 @@ export default function FilamentSettingsDialog(props: FilamentSettingsDialogProp
   const [bakedKeys, setBakedKeys] = useState<Set<string>>(new Set())
   /** See the twin in ProcessSettingsDialog: a declared record narrows what counts as this project's. */
   const [declaresOverrides, setDeclaresOverrides] = useState(false)
-  /** False when no preset resolved to diff against — see {@link ResolvedFilamentState.baselineResolved}. */
+  /** False when no preset resolved to diff against: see {@link ResolvedFilamentState.baselineResolved}. */
   const [baselineResolved, setBaselineResolved] = useState(true)
   /**
-   * What the change markers ended up being measured against, straight from the resolver — see
+   * What the change markers ended up being measured against, straight from the resolver: see
    * {@link SettingsBaselineOrigin}. Not a prop: a host computing it separately answered per PRESET
    * while the resolver answers per SLOT, and knew nothing of browser-stored presets.
    */
@@ -130,7 +130,7 @@ export default function FilamentSettingsDialog(props: FilamentSettingsDialogProp
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   // Each key's original per-filament vector length (before scalarizing), so an emitted override can
-  // be broadcast back to that shape at slice time — a scalar written where a multi-variant machine
+  // be broadcast back to that shape at slice time, a scalar written where a multi-variant machine
   // expects N values would slice under-length.
   const baseShapesRef = useRef<Record<string, number>>({})
 
@@ -154,7 +154,7 @@ export default function FilamentSettingsDialog(props: FilamentSettingsDialogProp
       .then((response) => {
         if (cancelled) return
         // "Modified" = the value differs from the preset OUTSIDE the project (value-diff vs the
-        // resolved parent), same as the process dialog — this is what surfaces real embedded
+        // resolved parent), same as the process dialog, this is what surfaces real embedded
         // deviations a project-preset slice would print with. The shared prepare helper is also
         // what drives the slice dialog's pre-open "changed values" badge, so the two agree.
         const state = prepareResolvedFilamentState(response)
@@ -225,7 +225,7 @@ export default function FilamentSettingsDialog(props: FilamentSettingsDialogProp
    * True when this project/session changed the key relative to the preset in use.
    *
    * Two conditions, both required, and the first is what keeps the surface honest: the value must
-   * actually DIFFER from the preset — the same test {@link canReset} uses — so anything marked
+   * actually DIFFER from the preset, the same test {@link canReset} uses, so anything marked
    * changed can always be reset, and "Reset all" always clears the marks. BambuStudio agrees: its
    * modified marker is `PresetCollection::dirty_options`, a value diff against the selected preset.
    * The declared record (`different_settings_to_system`) decides which of the file's values SURVIVE
@@ -233,8 +233,8 @@ export default function FilamentSettingsDialog(props: FilamentSettingsDialogProp
    * the marker put three permanently-un-resettable "changes" on every material of a stock project.
    *
    * The exception is a preset that did not resolve (`baselineResolved` false): there is nothing to
-   * diff against, so the record is the only evidence a setting was changed and is taken at its word
-   * — an honest "changed, and we cannot say from what". Mirrors ProcessSettingsDialog.
+   * diff against, so the record is the only evidence a setting was changed and is taken at its word,
+   * an honest "changed, and we cannot say from what". Mirrors ProcessSettingsDialog.
    */
   const isProjectChange = (key: string): boolean => {
     if (raw === null) return false
@@ -250,7 +250,7 @@ export default function FilamentSettingsDialog(props: FilamentSettingsDialogProp
   }
 
   /**
-   * The keys BambuStudio renders with an enable checkbox — its filament "Setting Overrides" page.
+   * The keys BambuStudio renders with an enable checkbox, its filament "Setting Overrides" page.
    * Unchecked means the value is nil ("not overridden"); checked restores a real value. Derived
    * from the catalog page rather than a second hand-kept list, so the two cannot drift.
    */
@@ -260,7 +260,7 @@ export default function FilamentSettingsDialog(props: FilamentSettingsDialogProp
   ), [])
 
   /**
-   * An override the PRESET itself carries relative to its parent — emphasis only, never a badge and
+   * An override the PRESET itself carries relative to its parent: emphasis only, never a badge and
    * never caught by "changed only". BambuStudio keeps this as a separate question from "modified"
    * (`current_different_from_parent_options` vs `current_dirty_options`), and only the latter drives
    * its modified marker. Counting these made a user preset's own saved settings look like edits the
@@ -272,7 +272,7 @@ export default function FilamentSettingsDialog(props: FilamentSettingsDialogProp
 
   /**
    * What a changed value replaced. A project change is measured against the preset; an override the
-   * preset carries is measured against its parent — so the tooltip names which baseline it is
+   * preset carries is measured against its parent, so the tooltip names which baseline it is
    * showing rather than leaving "original" ambiguous between the two.
    */
   const originalOf = (key: string): { value: string; label: string } | null => {
@@ -305,7 +305,7 @@ export default function FilamentSettingsDialog(props: FilamentSettingsDialogProp
    *
    * Measured against the effective base, not the preset, so baked-but-untouched values aren't
    * re-sent while a RESET of a baked deviation becomes an explicit override back to the preset
-   * value — which is what actually heals a drifted project filament at slice time.
+   * value, which is what actually heals a drifted project filament at slice time.
    */
   const changedOverrides = (): FilamentSettingOverrides => {
     if (!raw) return {}
@@ -377,7 +377,7 @@ export default function FilamentSettingsDialog(props: FilamentSettingsDialogProp
    *
    * One column per key: the filament tab edits element 0 and broadcasts, because a material's
    * per-variant values describe the same spool on different extruders rather than separate things
-   * to set. (The machine dialog is the opposite case — see `machineColumnsForPage`.)
+   * to set. (The machine dialog is the opposite case: see `machineColumnsForPage`.)
    */
   // Suppressed while loading or errored: the caveat describes a config that is not on screen yet.
   const baselineNoteText = loading || error ? null : describeSettingsBaseline(baselineOrigin, 'filament')
@@ -396,8 +396,8 @@ export default function FilamentSettingsDialog(props: FilamentSettingsDialogProp
         prefix: isOverride ? (
           <Tooltip
             title={overridden
-              ? 'Overriding the printer setting — uncheck to use the printer value'
-              : 'Not overridden — check to set a filament-specific value'}
+              ? 'Overriding the printer setting: uncheck to use the printer value'
+              : 'Not overridden: check to set a filament-specific value'}
             variant="soft"
           >
             <Checkbox

@@ -32,7 +32,7 @@ test('both Bambu timestamp spellings parse to the same instant', () => {
 
 test('an unreadable Bambu timestamp is null, never zero', () => {
   // Zero is a real comparable timestamp and would make an unparseable remote read as
-  // infinitely OLD — the opposite of the safe answer.
+  // infinitely OLD: the opposite of the safe answer.
   for (const value of ['', '   ', 'yesterday', '2026-13-45 99:99:99', null, undefined]) {
     assert.equal(parseBambuCloudUpdateTime(value), null, `expected null for ${JSON.stringify(value)}`)
   }
@@ -108,7 +108,7 @@ test('preset kinds round-trip through Bambu\'s own naming', () => {
 
 /**
  * The exact top-level shape a live Bambu account returns for a detail read. Captured
- * from a real response, values trimmed. `setting_id` is genuinely absent — the caller
+ * from a real response, values trimmed. `setting_id` is genuinely absent: the caller
  * asked for it BY id, so Bambu does not echo it.
  */
 const LIVE_DETAIL_RESPONSE = {
@@ -134,7 +134,7 @@ const LIVE_DETAIL_RESPONSE = {
 test('a detail read parses even though Bambu omits setting_id from it', () => {
   // THE regression: this schema was derived from the LISTING summary, which requires
   // `setting_id`. A detail response has no such field, so every pull threw at the parse
-  // before the preset was read — 49 presets reported as "could not sync" with a Zod dump
+  // before the preset was read: 49 presets reported as "could not sync" with a Zod dump
   // for a message, and a sync that claimed everything was already up to date.
   const parsed = bambuCloudSettingDetailSchema.parse(LIVE_DETAIL_RESPONSE)
 

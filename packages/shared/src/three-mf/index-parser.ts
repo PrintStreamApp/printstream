@@ -1,11 +1,11 @@
 /**
- * 3MF (Bambu flavor) index parser — the pure string→typed-index core shared by the API
+ * 3MF (Bambu flavor) index parser: the pure string→typed-index core shared by the API
  * (`apps/api/src/lib/three-mf-reader.ts`) and the bridge
  * (`apps/bridge/src/library-3mf.ts`).
  *
  * Library files are bridge-owned by default, so the bridge normally produces the 3MF index the web
  * sees (via the `library.inspect3mf` RPC); the API runs the same parse for the local-copy/fallback
- * path. Both apps used to keep a hand-copied mirror of this logic — this module is the single source
+ * path. Both apps used to keep a hand-copied mirror of this logic, this module is the single source
  * of truth so they can never drift. It is deliberately Node-free (pure string/JSON/regex work): the
  * ZIP I/O that feeds it the raw XML/JSON entries stays in each app.
  *
@@ -40,24 +40,24 @@ export { decodeXmlAttributeValue }
  * v15: filament slot count also counts the support/soluble flag arrays (a project whose flags
  *      outran its colours/types/names used to lose its trailing filament slots).
  * v20: `needsSettingsRepair` also covers a `filament_self_index` that does not match the
- *      variant rows — Bambu Studio refuses to OPEN such a project (`filament-variant-index.ts`).
- * v16: `needsSettingsRepair` — flush matrix vs machine topology mismatch (see
+ *      variant rows: Bambu Studio refuses to OPEN such a project (`filament-variant-index.ts`).
+ * v16: `needsSettingsRepair`: flush matrix vs machine topology mismatch (see
  *      flush-volumes-matrix.ts).
- * v17: `projectVersion` — the Bambu Studio version that saved the project, for the
+ * v17: `projectVersion`: the Bambu Studio version that saved the project, for the
  *      newer-than-the-engine refusal check (see bambu-file-version.ts).
- * v19: per-object `processOverrides` — so the prepare-print dialog (which never loads the scene)
+ * v19: per-object `processOverrides`, so the prepare-print dialog (which never loads the scene)
  *      can show and re-send them; a partial map is dropped by the authoritative slice transform.
- * v21: per-slot `filamentPresetName` — the raw `filament_settings_id`, because the display name
+ * v21: per-slot `filamentPresetName`: the raw `filament_settings_id`, because the display name
  *      beside it strips the machine suffix and cannot identify a preset (see the field's doc).
  * v22: the plain X1 is recognized. Not a shape change but a VALUE one: an X1 project previously
  *      reported no compatible model at all, so cached indexes hold that miss and must re-derive.
  * v23: `settingsRepairReasons` also covers a slot whose `filament_ids` entry names a different
- *      material from its preset. A VALUE change — cached indexes were derived before the reason
+ *      material from its preset. A VALUE change: cached indexes were derived before the reason
  *      existed, so they report an affected project as clean and must re-derive.
  * v24: `settingsRepairReasons` also covers a project that names filament presets but carries none of
  *      their values. Same VALUE-change reasoning as v23.
  * v25: `settingsRepairReasons` also covers `inherits_group` left at the width of a filament set the
- *      project no longer has — the engine reads the filament names past their end and SIGSEGVs
+ *      project no longer has: the engine reads the filament names past their end and SIGSEGVs
  *      while LOADING (exit 139). Same VALUE-change reasoning as v23: affected projects sitting in
  *      the cache report clean and must re-derive.
  * v26: `settingsRepairReasons` also covers objects whose material lives only in part-level
@@ -65,10 +65,10 @@ export { decodeXmlAttributeValue }
  *      1), and `filamentPhysics` detection was blunted (ANY missing sentinel or a stale-width
  *      filament array flags, not only the all-dropped shape). Same VALUE-change reasoning as v23.
  * v27: `flushMatrix` also flags a `flush_multiplier` the engine's g-code-time size check rejects
- *      (exit 156, "Flush volumes matrix do not match to the correct size!") — see
+ *      (exit 156, "Flush volumes matrix do not match to the correct size!"): see
  *      `isFlushMultiplierInconsistent`. Same VALUE-change reasoning as v23.
  */
-export const THREE_MF_INDEX_PARSER_VERSION = 28
+export const THREE_MF_INDEX_PARSER_VERSION = 29
 
 /** Per-plate metadata recovered from `model_settings.config` (labels + object/filament backfill). */
 export interface ModelSettingsPlateMetadata {
@@ -87,7 +87,7 @@ export interface ModelSettingsPlateMetadata {
 /**
  * The project's support filament ids (`support_filament` / `support_interface_filament`), used as
  * the fallback when an object enables support but doesn't override which filament it uses. Whether a
- * given object actually uses support is read per-object, not from the project default — see
+ * given object actually uses support is read per-object, not from the project default: see
  * {@link parseModelSettingsObjectFilamentIds}.
  */
 interface ModelSettingsSupportConfig {
@@ -164,14 +164,14 @@ export function buildThreeMfIndex(
     if (metadata?.thumbnailFile && !plate.thumbnailFile) plate.thumbnailFile = metadata.thumbnailFile
     // Prefer model_settings objects over slice_info's: their ids are the model `object_id`
     // used everywhere downstream (scene instances, slice-time model_instance removal, and
-    // per-object overrides), whereas slice_info lists objects by `identify_id` — a different
+    // per-object overrides), whereas slice_info lists objects by `identify_id`, a different
     // id space that wouldn't match the instances, breaking the per-object print toggle and
     // ghosting the whole model. Fall back to slice_info objects only when model_settings has none.
     if ((metadata?.objects.length ?? 0) > 0) {
       plate.objects = metadata!.objects
     }
     if (plate.filaments.length === 0 && (metadata?.usedFilamentIds.length ?? 0) > 0) {
-      // Stale-ref filter as in buildModelSettingsOnlyPlates — see filterUsedFilamentIds.
+      // Stale-ref filter as in buildModelSettingsOnlyPlates: see filterUsedFilamentIds.
       plate.filaments = filterUsedFilamentIds(metadata?.usedFilamentIds ?? [], knownFilamentIds).map((id) => ({
         id,
         filamentType: null,
@@ -186,7 +186,7 @@ export function buildThreeMfIndex(
     }
     // Project-wide support: add the dedicated support material(s) to every unsliced plate so they
     // can be assigned/mapped, even though we can't tell pre-slice which plates actually use them.
-    // Only filaments flagged `filament_is_support` are added — never the support-BASE color — so a
+    // Only filaments flagged `filament_is_support` are added, never the support-BASE color, so a
     // regular print colour never appears "used" on a plate whose geometry doesn't use it.
     if (!usingSliceInfo && projectSupport.enabled) {
       for (const supportFilamentId of projectSupport.filamentIds) {
@@ -213,7 +213,7 @@ export function buildThreeMfIndex(
     }
     // Baked layer G-code (filament changes / pauses), so pre-slice surfaces can show and
     // edit them without opening the archive again. Omitted (not []) when the sidecar has
-    // no entries for the plate — absent and empty mean the same downstream.
+    // no entries for the plate: absent and empty mean the same downstream.
     if (customGcodeXml) {
       const changes = parseCustomGcodeToolChanges(customGcodeXml, plate.index)
       if (changes.length > 0) plate.filamentChanges = changes.map(({ z, filamentId }) => ({ z, filamentId }))
@@ -229,7 +229,7 @@ export function buildThreeMfIndex(
     }
   }
 
-  // Geometry-only 3MF: no Bambu project metadata at all — neither slice_info nor
+  // Geometry-only 3MF: no Bambu project metadata at all: neither slice_info nor
   // model_settings produced a plate (the plates above are fabricated placeholders).
   // Such a file is a mesh container (a vanilla CAD export), not an openable project:
   // the editor's scene parse requires model_settings, so consumers route these files
@@ -241,21 +241,21 @@ export function buildThreeMfIndex(
   // The project's embedded settings contradict its own machine topology, which makes BambuStudio
   // read out of bounds and abort the slice (see flush-volumes-matrix.ts). Surfaced so the editor
   // and the slice dialog can offer a repair instead of letting the user hit an opaque CLI crash;
-  // nothing repairs it automatically — the file is only rewritten when the user asks.
+  // nothing repairs it automatically: the file is only rewritten when the user asks.
   // Two independent invariants, reported SEPARATELY. One boolean was not enough: the repair banner
   // has to tell the user what is actually wrong with THEIR file, and the two failures have nothing
-  // in common from where they sit — one makes slicing fail, the other stops Bambu Studio opening
+  // in common from where they sit, one makes slicing fail, the other stops Bambu Studio opening
   // the project at all. `needsSettingsRepair` stays as the gate so existing callers are unaffected.
-  // Which defects exist is owned by `repairs/` — this path only reports what it is told, so a new
+  // Which defects exist is owned by `repairs/`, this path only reports what it is told, so a new
   // repairable defect never edits the parser.
   const settingsRepairReasons = collectSettingsRepairReasons(projectSettingsJson, modelSettingsXml)
   const needsSettingsRepair = settingsRepairReasons.length > 0
   // The Bambu Studio build that saved this project. BambuStudio REFUSES to open a project from a
-  // newer version than the engine slicing it (major.minor only — see bambu-file-version.ts), so
+  // newer version than the engine slicing it (major.minor only: see bambu-file-version.ts), so
   // the slice dialog needs this to warn before the user burns a job on an exit-232 refusal.
   const projectVersion = extractProjectVersion(projectSettingsJson)
   // Which kind of machine this was sliced for. A file sliced with a Filament Track Switch must not
-  // be printed on a machine without one (and vice versa) — BambuStudio refuses the mismatch
+  // be printed on a machine without one (and vice versa): BambuStudio refuses the mismatch
   // outright, so the print dialogs need this to say why before the printer does.
   const slicedWithFilamentTrackSwitch = extractSlicedWithFilamentTrackSwitch(projectSettingsJson)
 
@@ -265,7 +265,7 @@ export function buildThreeMfIndex(
 /**
  * `project_settings.config` key the editor's single-object export stamps on its output
  * (value {@link PRINTSTREAM_MODEL_KIND_OBJECT_EXPORT}). Such a file is a full Bambu
- * project by construction — that is what preserves the object's parts/materials/paint —
+ * project by construction, that is what preserves the object's parts/materials/paint,
  * but it exists to be a reusable MODEL, so the library's default treatment is model-like
  * (preview on click) while project capabilities (slice/edit) stay reachable from menus.
  * BambuStudio tolerates the foreign key: its JSON config loader records unrecognized
@@ -343,7 +343,7 @@ export function buildModelSettingsOnlyPlates(
 
 /**
  * Drop object/part `extruder` references beyond the project's filament list. Such a ref is STALE
- * data — a save that removed materials without rewriting every reference (seen in production: a
+ * data, a save that removed materials without rewriting every reference (seen in production: a
  * 1-filament project whose part still said extruder 2). BambuStudio clamps them on load; surfacing
  * them here fabricates a filament, which flips every "multi-material" consumer (the editor renders
  * a prime tower on a single-filament plate). A file with no project filament list has nothing to
@@ -437,8 +437,8 @@ function parseSliceInfo(xml: string): BridgeLibraryThreeMfPlate[] {
 
 /**
  * Parse `project_settings.config` (JSON) for the project's global filament
- * list. Bambu Studio writes parallel arrays — `filament_colour`,
- * `filament_type`, `filament_ids`, `filament_settings_id` — keyed by 0-based
+ * list. Bambu Studio writes parallel arrays, `filament_colour`,
+ * `filament_type`, `filament_ids`, `filament_settings_id`, keyed by 0-based
  * index. We expose them as 1-based ids to match the references in
  * `slice_info.config`'s `<filament id="N" .../>` entries.
  */
@@ -461,10 +461,16 @@ export function parseProjectFilaments(json: string): BridgeLibraryThreeMfProject
   // itself, so classification (see `support-recommendations.ts`) must read them, not that union.
   const supportFlags = stringArray(record.filament_is_support)
   const solubleFlags = stringArray(record.filament_soluble)
+  // The slot's `filament_vendor`. Carried because a preset's BRAND is not derivable from its name:
+  // Polymaker ships "PolyLite PLA", so a project preset minted without this field brands itself
+  // "PolyLite PLA" where the installed preset of the very same name brands "Polymaker PolyLite PLA".
+  // Any comparison between the two then fails to match a preset against itself, and only for
+  // third-party vendors, since every Bambu preset name already begins with its brand.
+  const vendors = stringArray(record.filament_vendor)
   // Every parallel array counts toward the slot total, including the support/soluble
   // flags: omitting them truncated the filament list whenever they were the longest,
   // and those flags now drive preset filtering (`resolveDisplayFilamentType`).
-  const length = Math.max(colors.length, types.length, names.length, chamberTemperatures.length, supportFlags.length, solubleFlags.length)
+  const length = Math.max(colors.length, types.length, names.length, chamberTemperatures.length, supportFlags.length, solubleFlags.length, vendors.length)
   const out: BridgeLibraryThreeMfProjectFilament[] = []
   for (let i = 0; i < length; i++) {
     out.push({
@@ -476,11 +482,14 @@ export function parseProjectFilaments(json: string): BridgeLibraryThreeMfProject
       // built-in ("Bambu PLA Basic @BBL H2D") and a workspace preset inheriting it ("… - 55 degree
       // plate") both collapse to "Bambu PLA Basic". No installed preset is literally named that, so
       // binding a slot by the display name can never match exactly and always falls through to
-      // ranked inference — where catalogue order decides between the two. This is the name
+      // ranked inference: where catalogue order decides between the two. This is the name
       // BambuStudio itself looks up (`PresetCollection::load_external_preset` ->
       // `find_preset_internal(original_name)`), so binding reads THIS field and display reads the
       // other. Null only when the 3MF names no preset for the slot.
       filamentPresetName: names[i]?.trim() || null,
+      // Verbatim, NOT normalized: `normalizeFilamentVendorLabel` folds "Bambu Lab" to "Bambu" for
+      // display, and this is the identity side. Consumers normalize when they render.
+      filamentVendor: vendors[i]?.trim() || null,
       color: normalizeColor(colors[i]),
       nozzleId: null,
       chamberTemperature: chamberTemperatures[i] ?? null,
@@ -533,7 +542,7 @@ export function extractPlateType(projectSettingsJson: string | null): string | n
 /**
  * The Bambu Studio version stamped into `project_settings.config` (`version`, zero-padded like
  * `"02.08.00.50"`). Mirrors the `3D/3dmodel.model` `Application` metadata; project_settings is used
- * because the parser already receives it. Null when absent or unparseable — callers must treat that
+ * because the parser already receives it. Null when absent or unparseable: callers must treat that
  * as "unknown" and never as "compatible".
  */
 export function extractProjectVersion(projectSettingsJson: string | null): string | null {
@@ -726,7 +735,7 @@ function extractNozzleMapping(
     }
     // `slice_info` only lists the filaments its LAST SLICE used, so on a project sliced before a
     // material was added it is authoritative but incomplete. Keep its precedence for the filaments
-    // it knows about, and fall back to `filament_nozzle_map` for the ones it predates — returning
+    // it knows about, and fall back to `filament_nozzle_map` for the ones it predates: returning
     // it alone dropped those, so a nozzle the user picked and saved (correctly written to
     // `filament_nozzle_map`) read back as "no nozzle" forever, and the next save wrote that
     // nothing straight back into the file.
@@ -833,7 +842,7 @@ function sliceInfoHasConcreteFilamentUsage(sliceInfoXml: string | null): boolean
  *
  * `slice_info.config` describes a PREVIOUS slice: one `<filament>` entry per filament that slice
  * used. Callers writing a 3MF use this to check the record still describes the project's current
- * filament set — BambuStudio builds its per-plate nozzle grouping from these entries, so a record
+ * filament set: BambuStudio builds its per-plate nozzle grouping from these entries, so a record
  * covering a different set makes the engine derive a mismatched filament map (a SHORTER one is an
  * out-of-bounds read that aborts the slice; see docs/slicer-architecture.md).
  */
@@ -983,7 +992,7 @@ export function normalizePrinterModelName(value: string | undefined): PrinterMod
   // The plain X1, AFTER its two suffixed siblings and on a token boundary so "X1C"/"X1E"/"X2D"
   // can never reach it. Without this branch a genuine X1 project's `printer_model`
   // ("Bambu Lab X1") normalized to null, the index reported no compatible model at all, and the
-  // slice/editor target fell back to the first machine in the catalogue — an A1.
+  // slice/editor target fell back to the first machine in the catalogue, an A1.
   if (/(^|[^A-Z0-9])X1($|[^A-Z0-9])/.test(canonical)) return 'X1'
   if (canonical.includes('X2D')) return 'X2D'
   if (canonical.includes('P1S')) return 'P1S'
@@ -991,7 +1000,7 @@ export function normalizePrinterModelName(value: string | undefined): PrinterMod
   if (canonical.includes('P1P')) return 'P1P'
   if (canonical.includes('A2L')) return 'A2L'
   // A1 mini MUST be tested before A1: "BAMBU LAB A1 MINI" contains " A1 " and would
-  // otherwise classify as A1 — which made the slice dialog auto-match A1 filament
+  // otherwise classify as A1, which made the slice dialog auto-match A1 filament
   // profiles against the project's A1-mini machine profile and fail the CLI (#28).
   if (canonical.includes('A1 MINI') || canonical.includes('A1MINI')) return 'A1mini'
   if (/(^|[^A-Z0-9])A1($|[^A-Z0-9])/.test(canonical)) return 'A1'
@@ -1143,7 +1152,7 @@ function parseModelSettingsObjectFilamentIds(
 
     // Support filaments are a global process setting, not per-object geometry. Inferring them
     // from the project-wide `enable_support` default would attribute the support material to
-    // EVERY object — flooding every plate's "used filaments" with it even when a plate's
+    // EVERY object: flooding every plate's "used filaments" with it even when a plate's
     // geometry never triggers support. So we only attribute support filaments to an object that
     // carries its OWN `enable_support` opt-in. (Once a project is sliced, slice_info.config gives
     // the authoritative per-plate filament list and supersedes this estimate entirely.)
@@ -1191,7 +1200,7 @@ function parseProjectSupportConfig(projectSettingsJson: string | null): ModelSet
  * The project's support state for the per-plate filament estimate: whether support is enabled
  * project-wide (`enable_support`) and which filaments are dedicated support materials
  * (`filament_is_support`, a parallel `'0'`/`'1'` array of 1-based filament ids). Only dedicated
- * support materials are surfaced across plates — the support-base color is a regular print colour
+ * support materials are surfaced across plates: the support-base color is a regular print colour
  * and is left to the geometry to claim.
  */
 function parseProjectDedicatedSupport(projectSettingsJson: string | null): { enabled: boolean; filamentIds: number[] } {
@@ -1277,7 +1286,7 @@ function* iterateCustomGcodePlateLayers(text: string | null, plateIndex: number)
 /**
  * Parse one plate's ToolChange entries (type="2") from `custom_gcode_per_layer.xml`:
  * `{ z, filamentId, color }` per change, ordered as stored. Other entry types are
- * intentionally skipped — pauses have their own parser below.
+ * intentionally skipped: pauses have their own parser below.
  */
 export function parseCustomGcodeToolChanges(
   text: string | null,

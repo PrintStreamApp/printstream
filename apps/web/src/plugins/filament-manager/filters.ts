@@ -53,18 +53,18 @@ export const STATUS_COLORS: Record<FilamentSpoolStatus, 'success' | 'primary' | 
 export function friendlyColorName(spool: Pick<FilamentSpool, 'colorName' | 'colorHex' | 'filamentType' | 'brand'>): string | null {
   if (spool.colorName) return spool.colorName
   // Resolve Bambu's palette names (e.g. "Jade White") only for Bambu-branded spools; a custom
-  // spool reads as its plain common name ("White"). The brand — not a slicing preset that can be
-  // attached to any filament — is the source of truth, so it is passed as the resolver's name.
+  // spool reads as its plain common name ("White"). The brand, not a slicing preset that can be
+  // attached to any filament, is the source of truth, so it is passed as the resolver's name.
   return resolveProjectFilamentColorName({ color: spool.colorHex, filamentName: spool.brand, filamentType: spool.filamentType })
     ?? spool.colorHex
 }
 
-/** Human title for a spool, e.g. "Bambu PLA Basic — Scarlet Red". */
+/** Human title for a spool, e.g. "Bambu PLA Basic: Scarlet Red". */
 export function spoolTitle(spool: FilamentSpool): string {
   const material = spool.materialSubtype ?? spool.filamentType
   const left = [spool.brand, material].filter(Boolean).join(' ')
   const color = friendlyColorName(spool)
-  return color ? `${left || material} — ${color}` : (left || material)
+  return color ? `${left || material}: ${color}` : (left || material)
 }
 
 /** Brand + material identity for a loaded spool, e.g. "Michael's PLA" (no colour; the AMS tooltip

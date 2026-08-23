@@ -44,7 +44,7 @@ export async function assertAuthProviderCanChangeState(input: {
     // In the cloud, disabling a workspace's last sign-in method (reverting it to
     // open access) is reserved for platform/support users. Self-hosted has no
     // authority above the workspace admin, so they may turn their own sign-in
-    // back off — and can re-enable it, since an auth-disabled workspace still
+    // back off, and can re-enable it, since an auth-disabled workspace still
     // grants auth-provider management.
     if (input.isPlatformUser || selfHosted) {
       return

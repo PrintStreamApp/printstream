@@ -128,7 +128,7 @@ test('display-type drift: a genuine tray naming the required preset matches desp
 test('the -BASIC grade equals its base type; other granular grades stay distinct', () => {
   // Studio 2.7.1.62 writes granular types into sliced files ("PLA-BASIC" for Generic PLA) while
   // the AMS wire stays coarse ("PLA"). BASIC is the plain grade, so it must bridge without any
-  // Bambu identity — but flow/fill-distinct grades (HF, CF) must NOT match a plain tray.
+  // Bambu identity, but flow/fill-distinct grades (HF, CF) must NOT match a plain tray.
   const basic = { ...required(1, 'PLA-BASIC', '#000000'), filamentName: 'Generic PLA' }
   const plainTray = evaluateQueueMatch([basic], [slot(0, 'PLA', '#000000')], EXACT)
   assert.equal(plainTray.matched, true)
@@ -442,7 +442,7 @@ test('queueItemCreateSchema accepts an optional order link', () => {
   })
   assert.deepEqual(linked.orderLink, { orderId: 'order-1', orderPrintId: 'print-1' })
 
-  // A partial link is rejected — both ids are required to link an order print.
+  // A partial link is rejected, both ids are required to link an order print.
   assert.equal(queueItemCreateSchema.safeParse({ libraryFileId: 'f', orderLink: { orderId: 'o' } }).success, false)
 })
 

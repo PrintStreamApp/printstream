@@ -4,7 +4,7 @@
  * `getSlotRemainingState` reported `usesAutoRefill` correctly for a pair of manually-set
  * spools, and the badge still never appeared: it was nested inside the block that renders
  * the remaining estimate, which is null for any spool that is neither RFID-tagged nor
- * tracked. So the one case the user reported — two hand-set spools backing each other up —
+ * tracked. So the one case the user reported, two hand-set spools backing each other up,
  * was exactly the case that could not display it, and auto-refill looked Bambu-only.
  *
  * A pure test cannot catch that (the state was already right), and neither can the type

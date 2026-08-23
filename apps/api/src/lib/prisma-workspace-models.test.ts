@@ -16,7 +16,7 @@ test('every model with a workspaceId is classified (auto-scoped or documented ex
   // If this fails, a new workspaceId model was added without deciding whether the
   // scoping extension can auto-scope it (-> WORKSPACE_SCOPED_MODELS) or it must be
   // hand-scoped (-> WORKSPACE_SCOPED_EXCEPTION_MODELS, with rationale). Do not leave
-  // it unscoped — that is a cross-workspace leak.
+  // it unscoped, that is a cross-workspace leak.
   assert.deepEqual(unclassified, [], `Unclassified workspaceId models: ${unclassified.join(', ') || '(none)'}`)
 })
 

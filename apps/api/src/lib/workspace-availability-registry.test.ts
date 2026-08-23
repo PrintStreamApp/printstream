@@ -4,7 +4,7 @@ process.env.NODE_ENV = 'test'
  * The seam that lets the cloud module retire a whole account.
  *
  * Core cannot import `private/`, and the cloud module must not copy `disabled`
- * onto each workspace — a copy could not tell, on restore, which of them had
+ * onto each workspace, a copy could not tell, on restore, which of them had
  * been disabled on their own beforehand, so restoring would silently re-enable
  * those too. So availability is DERIVED through this registry, and these tests
  * pin the two properties that makes possible: an outside reason can disable a

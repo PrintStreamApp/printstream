@@ -36,8 +36,8 @@ export function LibraryBreadcrumb({
         const dropKey = crumb.id ?? '__root'
         const dropEnabled = Boolean(onCrumbDrop) && crumb.dropTarget !== 'none'
         const dropActive = dropActiveCrumbId === dropKey
-        // Ancestors (including the root) read as LINKS — coloured with a hover
-        // underline — so the path is obviously clickable; the current location is
+        // Ancestors (including the root) read as LINKS, coloured with a hover
+        // underline, so the path is obviously clickable; the current location is
         // plain bold text with a trailing slash so it reads as a directory path.
         const content = !isLast && crumb.navigable ? (
           <Button
@@ -95,7 +95,7 @@ export function LibraryBreadcrumb({
   )
 }
 /**
- * Breadcrumb row for the library pickers — mirrors the library view's header: the folder
+ * Breadcrumb row for the library pickers: mirrors the library view's header: the folder
  * breadcrumb on the left (swapped for a static "Favorite Files" label while the favorites
  * filter is on), with a "favorites only" star toggle at the right end. Pass the picker's
  * own configured `<LibraryBreadcrumb>` as children (it carries each picker's navigation).

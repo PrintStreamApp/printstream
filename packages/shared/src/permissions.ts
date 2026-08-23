@@ -97,8 +97,8 @@ export type PermissionDefinition = z.infer<typeof permissionDefinitionSchema>
  *
  * Platform-only, and deliberately granular: these gate real money and other
  * people's credentials. Before them the licence routes checked only the
- * `isPlatformUser` boolean, so the built-in Support role — defined with no
- * permissions at all — could reveal, revoke and issue any customer's key.
+ * `isPlatformUser` boolean, so the built-in Support role, defined with no
+ * permissions at all, could reveal, revoke and issue any customer's key.
  */
 export const ACCOUNTS_CREATE_PERMISSION: Permission = 'accounts.create'
 export const ACCOUNTS_PEOPLE_MANAGE_PERMISSION: Permission = 'accounts.people.manage'

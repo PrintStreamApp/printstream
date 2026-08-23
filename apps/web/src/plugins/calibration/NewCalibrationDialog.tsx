@@ -41,8 +41,8 @@ type TestKind = 'pressureAdvance' | 'flowPass1' | 'flowPass2'
 
 const TEST_LABELS: Record<TestKind, string> = {
   pressureAdvance: 'Pressure advance tower',
-  flowPass1: 'Flow ratio — coarse (pass 1)',
-  flowPass2: 'Flow ratio — fine (pass 2)'
+  flowPass1: 'Flow ratio: coarse (pass 1)',
+  flowPass2: 'Flow ratio: fine (pass 2)'
 }
 
 /**
@@ -106,7 +106,7 @@ export const NewCalibrationDialog = memo(function NewCalibrationDialog({ printer
         filamentType: slot.filamentType
       })))
       // The printer's live reported nozzle(s). The persisted printer row's `currentNozzleDiameters`
-      // is frequently empty, so read the diameter from live status too — otherwise the machine
+      // is frequently empty, so read the diameter from live status too, otherwise the machine
       // profile auto-pick can't tell 0.4 from 0.2 and a 0.2-nozzle profile slices the wrong way.
       const nozzleDiameters = (status?.nozzles ?? [])
         .map((nozzle) => Number(nozzle.diameter))
@@ -136,7 +136,7 @@ export const NewCalibrationDialog = memo(function NewCalibrationDialog({ printer
   const profilesUsable = slicingPresetsResponseIsUsable(profiles)
 
   // Scope the huge catalogue (2000+ filaments, 700+ processes, 400+ machines) down to what is
-  // compatible with the chosen printer BEFORE rendering it — otherwise the dropdowns mount
+  // compatible with the chosen printer BEFORE rendering it, otherwise the dropdowns mount
   // thousands of <Option> nodes and every interaction re-renders them, freezing the dialog.
   // Each list is memoized so the Selects render a stable, small set of options.
   const model = selectedPrinter?.model ?? ''
@@ -152,7 +152,7 @@ export const NewCalibrationDialog = memo(function NewCalibrationDialog({ printer
     [profiles, model, nozzleDiameters]
   )
   // When the printer reports no nozzle diameter the compatible set spans 0.2/0.4/0.6/0.8; default to
-  // the 0.4 nozzle (by far the most common) rather than whichever variant sorts first — a 0.2 profile
+  // the 0.4 nozzle (by far the most common) rather than whichever variant sorts first, a 0.2 profile
   // makes a 0.20mm-layer process invalid and crashes the slice.
   const resolvedMachine = machineId
     ?? (machineProfiles.find((profile) => /\b0\.4\b/.test(profile.name)) ?? machineProfiles[0])?.id
@@ -192,7 +192,7 @@ export const NewCalibrationDialog = memo(function NewCalibrationDialog({ printer
   const resolvedPlate = plateTypeOverride ?? currentPlate ?? plateOptions[0] ?? null
 
   // Memoize the <Option> element arrays so editing a number field (start K, flow ratio, …) does not
-  // re-render hundreds of dropdown options — Joy renders every Select's options into the DOM, so
+  // re-render hundreds of dropdown options: Joy renders every Select's options into the DOM, so
   // stable element references let React skip that subtree when unrelated state changes.
   const slotOptions = useMemo(() => slots.map((slot) => <Option key={`${slot.amsId}:${slot.slotId}`} value={`${slot.amsId}:${slot.slotId}`}>{slot.label}</Option>), [slots])
   const machineOptions = useMemo(() => machineProfiles.map((profile) => <Option key={profile.id} value={profile.id}>{profile.name}</Option>), [machineProfiles])
@@ -222,11 +222,11 @@ export const NewCalibrationDialog = memo(function NewCalibrationDialog({ printer
     },
     onSuccess: (run) => {
       void queryClient.invalidateQueries({ queryKey: calibrationKeys.runs })
-      // Hand off to the slice-progress tracker (rendered below) rather than closing — it carries the
+      // Hand off to the slice-progress tracker (rendered below) rather than closing, it carries the
       // user through slicing to the Print action and then lands them on the Calibration page.
       setStartedRun(run)
     }
-    // Errors surface once via the global mutation error handler (main.tsx) — no local onError toast.
+    // Errors surface once via the global mutation error handler (main.tsx), no local onError toast.
   })
 
   if (startedRun) return <CalibrationSlicePrintModal run={startedRun} onClose={onClose} />

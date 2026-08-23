@@ -37,7 +37,7 @@ const panelPlugin: WebPlugin = {
 }
 
 // A route must outlive the plugin-state load window that a nav tab deliberately
-// waits out — otherwise a cold-loaded deep link 404s before the answer arrives.
+// waits out, otherwise a cold-loaded deep link 404s before the answer arrives.
 test('shouldMountPluginRouteByName keeps plugin deep links mounted until plugin state loads', () => {
   const apiPluginsByName = new Map<string, ApiPluginInfo>()
   assert.equal(shouldMountPluginRouteByName('remote-imports', apiPluginsByName, false), true)

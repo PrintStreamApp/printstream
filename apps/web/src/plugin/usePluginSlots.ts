@@ -3,7 +3,7 @@
  * enabled-state filtering.
  *
  * Its own module (rather than living next to `<PluginSlot />`) because a host
- * sometimes has to know whether a slot has contributors BEFORE it renders — a
+ * sometimes has to know whether a slot has contributors BEFORE it renders, a
  * toolbar that becomes a split button only when its menu has entries cannot learn
  * that from a component whose whole job is to render nothing in that case.
  *

@@ -62,7 +62,7 @@ export function showDemoFileUploadNotice(): void {
 
 /**
  * Starting card-content settings for the single-printer view, used as the
- * default of an overridable workspace preference (the "Edit view" dialog) — not
+ * default of an overridable workspace preference (the "Edit view" dialog), not
  * a hardcoded, non-editable layout. The single-printer card favors the
  * full-width camera over the thumbnail snapshot, so `fullWidthSnapshot` is on
  * and `cameraThumbnail` is off by default; every other block is shown.

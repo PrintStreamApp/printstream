@@ -58,7 +58,7 @@ test('a project with no matrix opens on the suggestion, per extruder', () => {
 })
 
 test('an unset matrix previews until the user touches something', () => {
-  // Absence is legitimate — it is what makes BambuStudio compute the matrix itself — so merely
+  // Absence is legitimate, it is what makes BambuStudio compute the matrix itself, so merely
   // opening the dialog must not adopt a matrix the project never had.
   const unset = context({ storedBlocks: null })
   assert.equal(isPreviewingFlushVolumes({ context: unset, touched: false }), true)
@@ -69,13 +69,13 @@ test('an unset matrix previews until the user touches something', () => {
 
 test('provenance never claims parity that was not checked', () => {
   const verdict = (agrees: boolean) => ({ agrees, engine: [], ours: [] })
-  // A verdict outranks merely having the tables — it was checked against the real engine.
+  // A verdict outranks merely having the tables, it was checked against the real engine.
   assert.equal(resolveFlushProvenance({ hasMeasuredTables: true, calibration: verdict(true) }), 'engine-verified')
   assert.equal(resolveFlushProvenance({ hasMeasuredTables: true, calibration: verdict(false) }), 'engine-disagrees')
   // The regression this guards: "not checked" must not collapse into "agrees".
   assert.equal(resolveFlushProvenance({ hasMeasuredTables: true, calibration: null }), 'measured-unverified')
   assert.equal(resolveFlushProvenance({ hasMeasuredTables: false, calibration: null }), 'formula-only')
-  // A disagreement is still reported even with no tables — the engine's word beats our inference.
+  // A disagreement is still reported even with no tables: the engine's word beats our inference.
   assert.equal(resolveFlushProvenance({ hasMeasuredTables: false, calibration: verdict(false) }), 'engine-disagrees')
 })
 

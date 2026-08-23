@@ -6,12 +6,12 @@ import { useLocalStorageState } from './useLocalStorageState'
  * view's sort / grouping / filters / page size / view mode, etc.). Thin wrapper
  * over {@link useLocalStorageState} that handles JSON (de)serialization and
  * routes every read through `sanitize`, so a stale, partial, or hand-edited
- * entry can never crash the view — it degrades to a valid value instead.
+ * entry can never crash the view, it degrades to a valid value instead.
  *
  * `sanitize` receives the parsed JSON (`unknown`) and must return a fully valid
  * value of `T` (typically by merging the stored fields over the defaults and
- * dropping anything unrecognized). Keep it stable — define it at module scope or
- * wrap it in `useCallback` — because it keys the storage read.
+ * dropping anything unrecognized). Keep it stable, define it at module scope or
+ * wrap it in `useCallback`, because it keys the storage read.
  *
  * The returned setter is React's `useState` dispatch, so functional updates
  * (`setValue(prev => ...)`) work, which is what per-field setters built on top of

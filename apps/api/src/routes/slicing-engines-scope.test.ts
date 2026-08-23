@@ -4,14 +4,14 @@ process.env.NODE_ENV = 'test'
  * Who may manage slicer engines.
  *
  * The slicer is shared by every workspace on a deployment, but the routes are
- * workspace-scoped — so on the cloud, one workspace's admin removing an engine
+ * workspace-scoped, so on the cloud, one workspace's admin removing an engine
  * would break slicing for every other tenant. The gate is a TENANCY rule, not a
  * product one, so it is pinned apart from the permission check: a refactor that
  * keeps the permission but drops this would reintroduce a cross-tenant hazard
  * with nothing failing.
  *
  * `resolveDeploymentKind` is the decision the routes stand on, tested directly
- * because the alternative — booting a router with a faked deployment — asserts
+ * because the alternative, booting a router with a faked deployment, asserts
  * the mock more than the rule.
  */
 import assert from 'node:assert/strict'

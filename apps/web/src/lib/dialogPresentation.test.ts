@@ -76,7 +76,7 @@ test('standard adds no geometry, so an ordinary dialog keeps its own footprint',
 test('EVERY mode states the scroller padding outright, standard included', () => {
   // The shell must not set a default that the modes override: MUI emits a responsive value's `xs`
   // entry as `@media (min-width:0px)`, and that media block beats a later flat declaration whatever
-  // the `sx` array order. Measured — a maximized dialog kept the shell's 8px gutter over its own
+  // the `sx` array order. Measured, a maximized dialog kept the shell's 8px gutter over its own
   // 12px. A mode that says nothing about padding silently inherits the wrong gutter again.
   for (const presentation of ['standard', 'maximized', 'fullscreen'] as const) {
     const { overflowSx } = scrollableDialogPresentation(presentation)

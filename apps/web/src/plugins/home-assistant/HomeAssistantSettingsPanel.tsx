@@ -2,7 +2,7 @@
  * Home Assistant settings panel.
  *
  * Rendered inside the Plugin Manager accordion for the home-assistant plugin.
- * Shows bridge status, install instructions, and Lovelace card examples — no
+ * Shows bridge status, install instructions, and Lovelace card examples, no
  * standalone route is registered; everything lives in Settings > Plugins.
  */
 import {

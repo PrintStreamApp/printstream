@@ -1,7 +1,7 @@
 /**
  * The printer name leading a printer card's header: a button that opens the detail view when
  * `onOpenDetails` is supplied, plain text otherwise. It flexes to fill the header row, which is
- * what pushes every chip that follows it to the trailing edge — but it also reserves a minimum
+ * what pushes every chip that follows it to the trailing edge, but it also reserves a minimum
  * width, because the name matters more than the trailing chips: when the row runs short the
  * header's chip clamp in PrinterCard drops chips instead of letting them crush the name to
  * nothing. Extracted from PrinterCard to keep the header row readable; its counterpart at the
@@ -24,7 +24,7 @@ export function PrinterCardName({ printer, cardRef, onOpenDetails }: PrinterCard
       direction="row"
       spacing={1}
       alignItems="center"
-      // The minWidth is the name's guaranteed floor — chips wrap out of the header's
+      // The minWidth is the name's guaranteed floor: chips wrap out of the header's
       // one-line clamp (see PrinterCard) before the name can shrink past it.
       sx={{ minWidth: '4.5rem', flex: 1 }}
     >

@@ -3,7 +3,7 @@
  *
  * The fixture is the shape of an actual dual-nozzle (H2D) save, including the part that trips
  * everyone: `nozzle_volume` and `nozzle_flush_dataset` carry FIVE entries for two extruders,
- * because on a machine with extruder variants they are indexed by (extruder x variant) — so an
+ * because on a machine with extruder variants they are indexed by (extruder x variant), so an
  * extruder's row is NOT its position, and reading positionally is wrong in the worst way, since
  * index 0 is right for the first extruder and only the SECOND nozzle is silently mis-priced.
  *
@@ -48,7 +48,7 @@ test('a dual-nozzle project reads one matrix block per extruder', () => {
 
 test('a variant-wide machine array is resolved through the variant table, not by position', () => {
   // The real H2D layout: five (extruder x variant) rows for two extruders. Extruder 2's row is
-  // index 2 — `Direct Drive Standard` with `printer_extruder_id` 2 — NOT index 1. Reading
+  // index 2, `Direct Drive Standard` with `printer_extruder_id` 2, NOT index 1. Reading
   // positionally gives it dataset 2 (a different measured table) and silently mis-prices every
   // purge on the second nozzle while the first stays correct. Confirmed against the real CLI:
   // this machine resolves BOTH extruders to dataset 1.
@@ -67,7 +67,7 @@ test('a variant-wide machine array is resolved through the variant table, not by
 })
 
 test('a machine with no variant table falls back to positional rows', () => {
-  // Every single-variant machine — BambuStudio's own `index = 0` default degrades to this.
+  // Every single-variant machine: BambuStudio's own `index = 0` default degrades to this.
   const context = readProjectFlushContext(JSON.stringify(h2dProject))
   assert.ok(context)
   assert.deepEqual(context.datasetCodes, [1, 2])
@@ -113,7 +113,7 @@ test('an absent multiplier falls back to the engine default for its key', () => 
 })
 
 test('an absent matrix reads as unset, and a mis-sized one as the repairable defect', () => {
-  // Absent is legitimate — it is what makes BambuStudio compute the matrix itself.
+  // Absent is legitimate, it is what makes BambuStudio compute the matrix itself.
   const { flush_volumes_matrix: _omitted, ...absent } = h2dProject
   const absentContext = readProjectFlushContext(JSON.stringify(absent))
   assert.equal(absentContext?.storedBlocks, null)

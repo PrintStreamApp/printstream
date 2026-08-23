@@ -1,5 +1,5 @@
 /**
- * Main-thread client for `importStagingWorker.ts` — staging an import's geometry off-thread.
+ * Main-thread client for `importStagingWorker.ts`: staging an import's geometry off-thread.
  *
  * Owns the worker's lifetime, the per-task deadline, and the fallback, so `localImportStore` only
  * has to ask for a mesh.
@@ -7,12 +7,12 @@
  * The worker is PERSISTENT, unlike `zipArchiveClient`'s one-shot-per-operation worker, for one
  * reason: the STEP tessellator is a ~7 MB WASM instance and a fresh worker would re-download and
  * re-instantiate it on every import. It is created lazily (nothing is paid by a session that never
- * imports) and torn down on a deadline, so a wedged task still cannot leak — the next call simply
+ * imports) and torn down on a deadline, so a wedged task still cannot leak: the next call simply
  * gets a new worker.
  *
  * Failure semantics, mirroring `zipArchiveClient`'s split:
  *  - DATA errors ({@link ImportStagingDataError}) are the file's fault and are NOT retried on the
- *    main thread — the same bytes would fail the same way, and doing it twice would freeze the tab
+ *    main thread, the same bytes would fail the same way, and doing it twice would freeze the tab
  *    on the way to the identical message.
  *  - MECHANISM failures (no `Worker`, the module failing to load, the deadline expiring) reject
  *    plainly, and the caller falls back to the main-thread path. Node tests take this path by
@@ -91,12 +91,13 @@ export function disposeImportStagingWorker(): void {
 /**
  * Stage a picked file's geometry, off the main thread where possible.
  *
- * @throws {ImportStagingDataError} when the file itself cannot be staged — do not retry.
- * @throws {Error} when the worker mechanism failed — the caller should fall back.
+ * @throws {ImportStagingDataError} when the file itself cannot be staged: do not retry.
+ * @throws {Error} when the worker mechanism failed: the caller should fall back.
  */
 export async function stageImportGeometry(
   format: ImportStagingRequest['format'],
-  bytes: Uint8Array
+  bytes: Uint8Array,
+  normalize: ImportStagingRequest['normalize']
 ): Promise<StagedImportGeometry> {
   const active = ensureWorker()
   const id = nextRequestId
@@ -113,7 +114,7 @@ export async function stageImportGeometry(
       resolve({ id, ok: false, error: 'Import staging worker made no progress in time', dataError: false })
     }, importStagingDeadlineMs(bytes.byteLength))
     pending.set(id, (message) => { clearTimeout(timer); resolve(message) })
-    active.postMessage({ id, format, buffer: transferable } satisfies ImportStagingRequest, [transferable])
+    active.postMessage({ id, format, normalize, buffer: transferable } satisfies ImportStagingRequest, [transferable])
   })
 
   if (response.ok) return { mesh: response.mesh, stl: response.stl, partStls: response.partStls }

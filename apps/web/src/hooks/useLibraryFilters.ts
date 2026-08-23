@@ -2,7 +2,7 @@
  * Owns the Library view's filter/search/sort/pagination concern, extracted
  * verbatim from `pages/LibraryView.tsx`: the search box + deferred search, the
  * four metadata filters (file type, printer model, nozzle size, plate type; each
- * multi-select — an empty selection means "no filter" for that facet), the
+ * multi-select, an empty selection means "no filter" for that facet), the
  * filters dialog open flag, page/page-size, and the persisted sort. From
  * those it derives the distinct filter option lists, the metadata/search-filtered
  * entries, and the sorted+paginated page the browser renders.
@@ -12,7 +12,7 @@
  * the user navigates. The browse/folders queries do NOT depend on this filter
  * state, so it lives here rather than in the view.
  *
- * Invariant: behavior-preserving — the bodies below are moved unchanged from
+ * Invariant: behavior-preserving: the bodies below are moved unchanged from
  * LibraryView. Selection state (and `selectedVisibleFiles`) stays in the view;
  * it reads `filteredFiles` from this hook's return.
  */

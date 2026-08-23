@@ -19,7 +19,7 @@ test('generated geometry stages without leaving the browser', () => {
     assert.equal(staged.triangleCount, 1)
     assert.deepEqual(staged.bounds.max, { x: 10, y: 10, z: 0 })
 
-    // The bake takes the mesh itself, not an id to resolve server-side — which is what removes
+    // The bake takes the mesh itself, not an id to resolve server-side, which is what removes
     // the upload/download round-trip the api store required.
     const [imported] = store.importsForBake()
     assert.equal(imported?.importId, staged.importId)
@@ -50,11 +50,11 @@ test('a STEP that cannot be tessellated names the format rather than leaking the
   const store = createLocalImportStore()
   try {
     await assert.rejects(
-      () => store.stageFile(new File([new Uint8Array()], 'Assembly.step')),
+      () => store.stageFile(new File([new Uint8Array()], 'Assembly.step'), 'object'),
       (error: Error) => error instanceof LocalImportError && /STEP/.test(error.message)
     )
     await assert.rejects(
-      () => store.stageFile(new File([new Uint8Array()], 'notes.txt')),
+      () => store.stageFile(new File([new Uint8Array()], 'notes.txt'), 'object'),
       LocalImportError
     )
   } finally {
@@ -65,10 +65,10 @@ test('a STEP that cannot be tessellated names the format rather than leaking the
 test('an STL picked from disk is parsed and welded in the tab', async () => {
   const store = createLocalImportStore()
   try {
-    const staged = await store.stageFile(new File([new Uint8Array(triangleStl())], 'Picked.stl'))
+    const staged = await store.stageFile(new File([new Uint8Array(triangleStl())], 'Picked.stl'), 'object')
     // The extension is dropped, matching the api's `path.parse(originalname).name`. The name is
     // baked into the saved 3MF, so the two hosts naming the same file differently is a real
-    // divergence, not cosmetic — and it reached generated geometry too ("cube.stl" vs "cube").
+    // divergence, not cosmetic, and it reached generated geometry too ("cube.stl" vs "cube").
     assert.equal(staged.name, 'Picked')
     assert.equal(staged.triangleCount, 1)
     // The weld is what makes the mesh indexed rather than triangle soup: three distinct corners,
@@ -83,7 +83,7 @@ test('only the final extension is dropped from an import name', async () => {
   const store = createLocalImportStore()
   try {
     // A version in the name must survive; the api's path.parse does the same.
-    const staged = await store.stageFile(new File([new Uint8Array(triangleStl())], 'Bracket v1.2.stl'))
+    const staged = await store.stageFile(new File([new Uint8Array(triangleStl())], 'Bracket v1.2.stl'), 'object')
     assert.equal(staged.name, 'Bracket v1.2')
   } finally {
     store.dispose()
@@ -119,7 +119,7 @@ test('meshUrl survives being detached from the store', () => {
  * The store's half of the worker contract: WHICH failures get a second attempt.
  *
  * A file the worker refused must surface that refusal as-is. Re-parsing it on the main thread would
- * freeze the tab for seconds on the way to the identical message — the exact cost the worker exists
+ * freeze the tab for seconds on the way to the identical message: the exact cost the worker exists
  * to avoid, paid for nothing.
  */
 test('a file the staging worker refused is not parsed again on the main thread', async () => {
@@ -139,7 +139,7 @@ test('a file the staging worker refused is not parsed again on the main thread',
   const store = createLocalImportStore()
   try {
     await assert.rejects(
-      () => store.stageFile(new File([new Uint8Array([1, 2, 3])], 'Empty.3mf')),
+      () => store.stageFile(new File([new Uint8Array([1, 2, 3])], 'Empty.3mf'), 'object'),
       (error: Error) => error instanceof LocalImportError && /no importable model geometry/.test(error.message)
     )
     assert.equal(staged, 1, 'exactly one attempt: the refusal is final')

@@ -1,7 +1,7 @@
 /**
  * HTTP routes for the calibration plugin, mounted at `/api/plugins/calibration`.
  * Reads use `printers.view`; run/print/save mutations use `printers.control`
- * (they dispatch prints and printer commands). Handlers stay thin — orchestration
+ * (they dispatch prints and printer commands). Handlers stay thin, orchestration
  * lives in `run-manager.ts`, data access in `store.ts`.
  */
 import {

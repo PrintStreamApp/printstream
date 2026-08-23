@@ -9,7 +9,7 @@ import { ensureWindowsLaunchVbs, ensureWindowsTrayVbs } from './launcher.js'
  * `ensureWindowsTrayVbs` builds its path with `path.win32`, so on a POSIX test
  * runner it returns a backslash-joined RELATIVE name and writes it into the
  * current directory. Every test therefore runs from a scratch directory and
- * restores the old one — without this the suite drops literal `\Program
+ * restores the old one, without this the suite drops literal `\Program
  * Files\...` files into the repository (which it did, once).
  */
 function inScratchDir(body: (dir: string) => void): void {

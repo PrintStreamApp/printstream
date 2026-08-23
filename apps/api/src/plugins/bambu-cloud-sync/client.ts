@@ -9,7 +9,7 @@
  * Bambu's error shapes is an API-side fix, with no bridge rollout.
  *
  * **Failure posture.** Every function throws `BambuCloudError` with a `kind`, and no
- * caller may treat an unclassified failure as "the credential is dead" — a stray edge
+ * caller may treat an unclassified failure as "the credential is dead", a stray edge
  * 401 or a Cloudflare challenge must leave the stored credential alone, or a single
  * blip signs the workspace out of a session that still works.
  */
@@ -31,7 +31,7 @@ import { performBambuCloudCall, type BambuCloudCallRoute } from './transport.js'
 import type { PluginLogger } from '../../plugin/types.js'
 
 export type BambuCloudFailureKind =
-  /** Bambu's signed "Please login." — the stored credential is genuinely dead. */
+  /** Bambu's signed "Please login.": the stored credential is genuinely dead. */
   | 'expired'
   /** Cloudflare stood in front of the API. Not an auth problem and not ours to fix. */
   | 'challenge'
@@ -58,8 +58,8 @@ function httpStatusForFailure(kind: BambuCloudFailureKind, upstreamStatus: numbe
     case 'challenge':
       return 503
     case 'http':
-      // Bambu rejected what the user supplied (a wrong password or verification code)
-      // — that is a bad request, not a server fault. Anything Bambu failed on its own
+      // Bambu rejected what the user supplied (a wrong password or verification code),
+      // that is a bad request, not a server fault. Anything Bambu failed on its own
       // (5xx, or a transport failure we recorded as status 0) is an upstream problem.
       return upstreamStatus === 0 || upstreamStatus >= 500 ? 502 : 400
   }
@@ -99,7 +99,7 @@ export interface BambuCloudSession {
  * short-lived relative to the refresh token, so keeping only the access token means the
  * connection silently dies at an unpredictable moment and the user has to redo password
  * plus 2FA. `expiresIn`/`refreshExpiresIn` are SECONDS from now, per BambuStudio's own
- * `TokenResp` (`src/slic3r/GUI/HttpServer.cpp`) — stored as absolute instants, because a
+ * `TokenResp` (`src/slic3r/GUI/HttpServer.cpp`): stored as absolute instants, because a
  * relative lifetime is meaningless once written to disk.
  */
 export interface BambuCloudCredential {
@@ -157,7 +157,7 @@ export interface CallContext {
 /**
  * One call, through the injected transport when a caller supplied one.
  *
- * A transport-level throw — DNS failure, connection refused, the 20s timeout firing —
+ * A transport-level throw, DNS failure, connection refused, the 20s timeout firing,
  * is converted here rather than left to propagate. Left raw it is not an `HttpError`,
  * so the API's error middleware answers a bare 500 "Internal server error" and the
  * actual cause only reaches the server log; classifying it keeps every failure out of
@@ -172,7 +172,7 @@ async function runCall(
   } catch (error) {
     if (error instanceof BambuCloudError) throw error
     const detail = error instanceof Error ? error.message : 'unknown error'
-    // Upstream status 0 — there was no response at all to read one from.
+    // Upstream status 0, there was no response at all to read one from.
     throw new BambuCloudError(`Could not reach Bambu Cloud (${detail}).`, 'http', 0)
   }
 }
@@ -181,7 +181,7 @@ async function runCall(
  * Parses a Bambu response body, turning a schema mismatch into a sentence.
  *
  * A raw `ZodError` message is a JSON dump of the issue list. Left to propagate it
- * becomes the text the user reads — which is exactly what happened when a detail read
+ * becomes the text the user reads, which is exactly what happened when a detail read
  * turned out not to carry `setting_id`: fifty presets each reported a paragraph of JSON
  * instead of "Bambu Cloud returned this preset in an unexpected format". Naming the
  * offending fields keeps it diagnosable without pasting the whole dump at someone.
@@ -260,7 +260,7 @@ export async function verifyBambuCloudTotp(
   const reason = typeof body.reason === 'string' ? body.reason : ''
   if (error.toLowerCase().includes('csrf') || reason === 'missing_cookie' || reason === 'missing_header') {
     throw new BambuCloudError(
-      'Bambu Cloud refused the sign-in request before checking your code (security-token error). Your code is fine — please try again.',
+      'Bambu Cloud refused the sign-in request before checking your code (security-token error). Your code is fine: please try again.',
       'http',
       response.status
     )
@@ -279,8 +279,8 @@ export async function verifyBambuCloudTotp(
  * token are both gone the user has to redo password plus 2FA. Refreshing costs one call
  * per token lifetime, which is nothing like polling.
  *
- * **Status: not known to work.** `POST /v1/user-service/user/refreshtoken` is real — it
- * answers 401 where invented sibling paths answer 404 — but it returns that SAME 401 for a
+ * **Status: not known to work.** `POST /v1/user-service/user/refreshtoken` is real, it
+ * answers 401 where invented sibling paths answer 404, but it returns that SAME 401 for a
  * valid refresh token as for a garbage one, with the body shape (camelCase, snake_case)
  * and a bearer header making no difference. So it is not reading the request the way this
  * assumes. Studio reaches refresh through the closed BambuNetworkEngine, and its local
@@ -305,7 +305,7 @@ export async function refreshBambuCloudCredential(
  *
  * Three-valued on purpose: `null` means "could not tell" (Bambu unreachable, 5xx, a
  * challenge). A caller must report its last known state for `null` and never treat it
- * as a rejection — an outage would otherwise disconnect every workspace at once.
+ * as a rejection, an outage would otherwise disconnect every workspace at once.
  */
 export async function checkBambuCloudSession(
   context: CallContext,
@@ -355,7 +355,7 @@ export async function createBambuCloudSetting(
  *
  * PATCH, never delete-then-create: Bambu answers PUT with 405, which is why the
  * destructive workaround is common, but PATCH against the setting id is what
- * BambuStudio's own `put_setting` performs. The distinction is not cosmetic — a
+ * BambuStudio's own `put_setting` performs. The distinction is not cosmetic, a
  * delete-then-create whose create fails destroys the user's preset, and it re-mints
  * the `setting_id` that every device's local copy is bound to.
  */
@@ -419,7 +419,7 @@ function assertOk(response: BambuCloudResponse, context: string): void {
 
   // Bambu's own text is written for a person ("Incorrect account or password.") and is
   // more useful than anything we could add, so lead with it and drop the status noise.
-  // The bare status is a fallback for when it says nothing usable — not the headline.
+  // The bare status is a fallback for when it says nothing usable, not the headline.
   const detail = readErrorMessage(asRecord(response.body)) ?? response.bodyText?.slice(0, 200)
   throw new BambuCloudError(
     detail ? `${context}: ${detail}` : `${context}: Bambu Cloud returned ${response.status}.`,

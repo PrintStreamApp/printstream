@@ -5,8 +5,8 @@
  *
  * Before showing a push notification, the notifications-browser service
  * worker (`public/push-handler.js`) asks each visible window client whether
- * the notification's tag is claimed here; if it is — and the document is
- * focused — the OS notification is suppressed, because the user is already
+ * the notification's tag is claimed here; if it is, and the document is
+ * focused, the OS notification is suppressed, because the user is already
  * looking at the thing it would announce. Core owns the registry so any
  * surface (core, plugin, or private module) can claim a tag without
  * importing the notifications plugin.

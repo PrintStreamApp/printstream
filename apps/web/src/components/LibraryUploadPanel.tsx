@@ -40,7 +40,7 @@ function statusLabel(entry: LibraryUploadEntry): string {
     case 'done':
       return 'Uploaded'
     case 'unchanged':
-      return 'Unchanged — no new version'
+      return 'Unchanged, no new version'
     case 'cancelled':
       return 'Cancelled'
     case 'failed':

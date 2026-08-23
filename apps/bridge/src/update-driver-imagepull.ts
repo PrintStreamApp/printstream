@@ -2,9 +2,9 @@
  * Update driver for Docker installs. Docker bridges update by pulling a newer
  * image (`docker compose pull && docker compose up -d`), not in place: there is
  * no launcher, releases directory, or signed app bundle. This driver therefore
- * only *reports* whether the server has moved to a different build — the passive
+ * only *reports* whether the server has moved to a different build, the passive
  * out-of-sync / image-update status the API already derives from the bridge's
- * reported fingerprint covers the rest — and tells operators to pull when an
+ * reported fingerprint covers the rest, and tells operators to pull when an
  * install is requested.
  *
  * The standalone (SEA) packaging keeps its in-place self-updater

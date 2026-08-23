@@ -3,7 +3,7 @@
  *
  * Contributes a settings panel in the Plugin Manager section that shows
  * bridge status and install instructions. No dedicated route or tab bar
- * entry is registered — all guidance lives inline in Settings > Plugins.
+ * entry is registered, all guidance lives inline in Settings > Plugins.
  * Eager-loaded with the app shell (a light settings panel, no heavy deps).
  */
 import type { WebPlugin } from '../../plugin/types'

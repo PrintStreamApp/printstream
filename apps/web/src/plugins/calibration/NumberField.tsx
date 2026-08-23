@@ -4,7 +4,7 @@
  * optional unit decorator, and reports parsed numbers.
  *
  * While focused it holds the raw text in a local draft so transient states
- * ("", "-", "0.") never round-trip through the numeric prop — a directly-bound
+ * ("", "-", "0.") never round-trip through the numeric prop, a directly-bound
  * controlled number input would coerce an emptied field straight back to 0
  * ("backspace the 0" then becomes "010"). The draft is dropped on blur, snapping
  * the display back to the canonical value.

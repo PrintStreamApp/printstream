@@ -36,7 +36,7 @@ export async function reconnectPrinter(
 ): Promise<PrinterReconnectResult> {
   const discovered = deps.discovery.get(printer.serial)
   // Only refresh the saved host from a discovery entry we can attribute to a
-  // specific bridge — the host update is scoped to that bridge's own printers.
+  // specific bridge: the host update is scoped to that bridge's own printers.
   if (discovered && discovered.bridgeId && discovered.host !== printer.host) {
     const updated = await deps.reconcileHost({
       serial: printer.serial,

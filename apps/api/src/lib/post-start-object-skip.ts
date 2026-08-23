@@ -32,7 +32,7 @@ export const POST_START_SKIP_TIMEOUT_MS = 30 * 60 * 1000
 export interface ArmPostStartObjectSkipInput {
   printerId: string
   printerModel: string
-  /** The dispatch job id — also the tracked `PrintJob` id `print-job.started` reports. */
+  /** The dispatch job id, also the tracked `PrintJob` id `print-job.started` reports. */
   dispatchJobId: string
   /** For log lines only. */
   jobName: string
@@ -63,7 +63,7 @@ export function armPostStartObjectSkip(input: ArmPostStartObjectSkipInput): () =
     disarm()
     // Firmware that accepted the start command's `skip_objects` reports the skipped
     // instance ids back as `s_obj`. When every requested id is already there, the
-    // mid-print fallback is redundant — stand down. A null (never reported — older
+    // mid-print fallback is redundant: stand down. A null (never reported: older
     // firmware, or no state-bearing report yet) or incomplete list falls through to
     // the mid-print command for the full requested list; re-skipping an id the
     // firmware already skipped is harmless.

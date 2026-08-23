@@ -2,15 +2,15 @@
  * Watchdog over the slicer's live-progress channel: decides when a running slice has actually been
  * LOST, so the job fails with a real reason instead of reassuring the user for half an hour.
  *
- * OWNS the "is this slice still alive?" judgement. Pure — the polling, the CLI output, and the job
+ * OWNS the "is this slice still alive?" judgement. Pure: the polling, the CLI output, and the job
  * state machine stay in `slicing-jobs.ts`; this module only folds poll outcomes into a verdict.
  *
  * WHY. The slice itself is one long-lived POST to the slicer service, bounded only by
  * `SLICING_REQUEST_TIMEOUT_MS` (30 minutes). When the service dies mid-slice that POST usually
- * fails fast — but not always: a SIGKILLed process inside a container, or a proxy between the API
+ * fails fast, but not always: a SIGKILLed process inside a container, or a proxy between the API
  * and the service, routinely leaves the socket HALF-OPEN, and the API then waits out the full
  * ceiling. Meanwhile the progress poller was swallowing every error and the job kept appending
- * its healthy "Slicing... 8m elapsed" heartbeat, which is not merely unhelpful — it is a confident
+ * its healthy "Slicing... 8m elapsed" heartbeat, which is not merely unhelpful, it is a confident
  * claim that work is happening, emitted while the slicer has no idea the job exists.
  *
  * The progress channel is an INDEPENDENT signal that answers within a second, so it is the right
@@ -80,7 +80,7 @@ export function slicerContactLostForMs(state: SlicerContactState, nowMs: number)
 /**
  * The user-facing failure message once the grace for the current streak has elapsed, else null.
  *
- * Both messages name a next action, because both are recoverable by re-slicing — the point of
+ * Both messages name a next action, because both are recoverable by re-slicing: the point of
  * failing early is that the user gets to make that call in seconds rather than half an hour.
  */
 export function slicerContactGiveUpMessage(
@@ -103,7 +103,7 @@ export function slicerContactGiveUpMessage(
 /**
  * The periodic status line for a job, shown to the USER (the web renders the newest system line
  * verbatim). While in contact it reassures with the elapsed time; once contact is lost it must NOT
- * claim progress — it reports the silence instead, so the status tells the truth from the first
+ * claim progress, it reports the silence instead, so the status tells the truth from the first
  * missed poll rather than only at the give-up point.
  *
  * `elapsedLabel` is the caller's already-formatted total elapsed time (e.g. "8m 20s").

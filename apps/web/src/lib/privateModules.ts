@@ -3,13 +3,13 @@
  *
  * The private directory holds the closed-source cloud surface (marketing
  * site, platform workspace administration) and is stripped from the public
- * open-source export, so discovery uses `import.meta.glob` — an empty or
+ * open-source export, so discovery uses `import.meta.glob`, an empty or
  * missing directory simply yields no modules and the app must render its
  * core fallbacks (see App.tsx).
  *
  * Invariants:
  * - Private modules may import core components/libs; core code must never
- *   import from `src/private` directly — only through this host.
+ *   import from `src/private` directly, only through this host.
  * - Everything here must degrade gracefully when no module is present:
  *   `marketingModule` / `platformAdminModule` are simply `null`.
  */
@@ -33,7 +33,7 @@ export interface PublicRouteContext {
   /** Route into the app for the current actor (workspace landing or chooser). */
   appHref: string
   /**
-   * Route to the actor's account page (billing lives there) — the workspace
+   * Route to the actor's account page (billing lives there): the workspace
    * account when a workspace is active, otherwise the same as `appHref`.
    */
   accountHref: string
@@ -54,7 +54,7 @@ export interface PublicRouteContext {
 export interface PrivatePublicRoute {
   path: string
   /**
-   * Render with the public (marketing) chrome — no shell tabs or identity —
+   * Render with the public (marketing) chrome, no shell tabs or identity,
    * and skip the sign-in wall. Routes without it (e.g. pure redirects) still
    * bypass the auth gate but keep the default chrome.
    */
@@ -107,7 +107,7 @@ export interface PrivateWebModule {
 }
 
 // `import.meta.glob` is a Vite build-time transform (the literal call form is
-// required). Under `node --test` (no Vite) it is undefined and throws — guard so
+// required). Under `node --test` (no Vite) it is undefined and throws: guard so
 // importing this module from the plugin host stays test-safe; the result there is
 // simply no private modules, matching a public build.
 let discovered: Record<string, { default?: PrivateWebModule }> = {}

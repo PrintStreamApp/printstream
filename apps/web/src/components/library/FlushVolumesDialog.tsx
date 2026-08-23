@@ -1,5 +1,5 @@
 /**
- * Edit how much filament is purged on each material change — BambuStudio's "Flushing volumes for
+ * Edit how much filament is purged on each material change: BambuStudio's "Flushing volumes for
  * filament change" dialog, with its per-pair grid, per-extruder multiplier and re-calculation.
  *
  * WHY IT EXISTS. These volumes decide most of the waste on a multi-material print, and until now
@@ -7,8 +7,8 @@
  * met as a bad print or, when the stored matrix contradicted the machine, as a failed slice. So
  * this is also where that defect is surfaced in context, rather than only as a banner on a file.
  *
- * WHAT "UNSET" MEANS. A project may legitimately carry NO matrix — that absence is what makes
- * BambuStudio compute one at slice time — so opening this dialog must not materialise a matrix.
+ * WHAT "UNSET" MEANS. A project may legitimately carry NO matrix, that absence is what makes
+ * BambuStudio compute one at slice time, so opening this dialog must not materialise a matrix.
  * Until the user edits or calculates, it shows the suggestion as a preview and saves nothing; the
  * moment they change a value, the whole grid becomes the project's own and is written on save.
  *
@@ -16,7 +16,7 @@
  * verified against its compiled code AND against the engine's live answer; it prefers Studio's
  * MEASURED tables where they cover a colour pair and falls back to the colour formula elsewhere.
  * The tables are fetched from the slicer image, so an install with no slicer still calculates, one
- * fidelity step down — which is why the footnote names which of the two produced what is on screen,
+ * fidelity step down, which is why the footnote names which of the two produced what is on screen,
  * and says so plainly when the engine itself disagrees with us (`evaluateFlushCalibration`).
  *
  * Counterpart: `SceneEdit.flushVolumes` and the bake's `applyFlushVolumes`, which checks the grid
@@ -61,7 +61,7 @@ export interface FlushVolumesDialogProps {
   datasets: FlushDatasets
   /**
    * Whether the engine's own computed matrix agreed with ours, or null when it was never checked
-   * (no slicer to ask). Only ever changes the footnote — a disagreement is a fidelity caveat, not a
+   * (no slicer to ask). Only ever changes the footnote, a disagreement is a fidelity caveat, not a
    * reason to withhold the editor.
    */
   calibration: FlushCalibrationVerdict | null
@@ -75,7 +75,7 @@ export interface FlushVolumesDialogProps {
 export function FlushVolumesDialog({
   open, onClose, context, filaments, extruderLabels, datasets, calibration, value, onApply, onRepair
 }: FlushVolumesDialogProps): JSX.Element {
-  // What BambuStudio's "Re-calculate" would produce, per extruder, for the SESSION's materials —
+  // What BambuStudio's "Re-calculate" would produce, per extruder, for the SESSION's materials:
   // through the shared composer, so the dialog cannot pair "read the project" with "calculate"
   // differently from the calibration check that verifies the pairing against the real engine.
   const suggestionBlocks = useMemo(
@@ -112,7 +112,7 @@ export function FlushVolumesDialog({
     setBlocks((current) => current.map((block, index) => index === extruderIndex ? suggestion(index) : block))
   }
 
-  // Where the numbers came from, and how confidently we may say so — see `lib/flushVolumesModel.ts`.
+  // Where the numbers came from, and how confidently we may say so: see `lib/flushVolumesModel.ts`.
   const footnote = FLUSH_PROVENANCE_NOTE[resolveFlushProvenance({
     hasMeasuredTables: Object.keys(datasets).length > 0,
     calibration
@@ -205,7 +205,7 @@ export function FlushVolumesDialog({
           <Button
             type="button"
             // Nothing to save while previewing: the project deliberately carries no matrix, and
-            // writing the suggestion back would materialise one the user never asked for — the
+            // writing the suggestion back would materialise one the user never asked for: the
             // absence is what lets BambuStudio compute it at slice time. The alert above says how
             // to claim these values (change one).
             disabled={previewing}

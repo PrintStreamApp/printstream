@@ -3,7 +3,7 @@
  *
  * The container used to ship every engine baked into its image. Engines are
  * downloaded at runtime now, by the same installer the native app uses, into a
- * directory the operator chooses — which makes boot the moment a fresh install
+ * directory the operator chooses, which makes boot the moment a fresh install
  * has nothing to slice with.
  *
  * **What "supposed to have" means differs by who is running it**, which is the
@@ -12,7 +12,7 @@
  * - A self-hosted install wants ONE engine (~530 MB) and adds others itself.
  *   That is the unset default.
  * - The hosted deployment wants ALL of them, because its users cannot install
- *   engines — engine management is refused there on purpose — and a project
+ *   engines, engine management is refused there on purpose, and a project
  *   saved by an older Bambu Studio still has to be sliceable. It sets
  *   `SLICER_PRELOAD_ENGINES=all`.
  *
@@ -21,8 +21,8 @@
  *
  * **Best-effort and non-blocking, deliberately.** It runs after the server is
  * listening and never fails a boot: an install with no internet, or a slicer
- * started purely to serve profiles, must still come up. The cost is asymmetric
- * — a failed download is a log line and a retry next boot, whereas a download
+ * started purely to serve profiles, must still come up. The cost is asymmetric,
+ * a failed download is a log line and a retry next boot, whereas a download
  * that blocks `listen()` is a container that never reports healthy.
  */
 import { defaultCatalogueEngine, listCatalogue } from './catalogue.js'

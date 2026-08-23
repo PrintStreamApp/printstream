@@ -6,7 +6,7 @@
  * This is the single source of truth for that story. The in-app
  * `ConnectivityGuideDialog` renders it during workspace setup, and the cloud
  * marketing site (private module) reuses the same steps so the two surfaces
- * never drift. Keep the copy deployment-neutral — it ships in the public
+ * never drift. Keep the copy deployment-neutral, it ships in the public
  * self-hosted build too, so cloud-specific framing belongs in the private
  * marketing pages, and managed-bridge wording lives in the dialog.
  */

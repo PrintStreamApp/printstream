@@ -7,8 +7,8 @@
  * login-disabled user stops receiving mail even if their opt-in row lingers.
  *
  * User-targeted messages (`targetUserIds`) instead mail the target users'
- * account addresses directly — transactional semantics, independent of the
- * digest opt-in — and messages flagged `emailHandledExternally` are skipped
+ * account addresses directly, transactional semantics, independent of the
+ * digest opt-in, and messages flagged `emailHandledExternally` are skipped
  * because their emitter already sent its own email.
  */
 import type { NotificationMessage } from '@printstream/shared'
@@ -22,7 +22,7 @@ import { readEmailSubscribers } from '../../lib/notification-subscribers.js'
 export function createEmailNotificationHandler(context: ApiPluginContext) {
   return async function handle(message: NotificationMessage): Promise<void> {
     // The emitter already sends its own transactional email for this event
-    // (e.g. support messaging) — delivering it here would double-mail.
+    // (e.g. support messaging): delivering it here would double-mail.
     if (message.emailHandledExternally) return
     // Skip cheaply when no transport can deliver (e.g. OSS before SMTP is set up).
     if (!(await isEmailDeliveryConfigured())) return
@@ -59,7 +59,7 @@ async function resolveScopeSubscriberRecipients(
 
 /**
  * Recipients for a user-targeted message: the target users' account emails.
- * Deliberately NOT intersected with the per-scope digest opt-in — targeted
+ * Deliberately NOT intersected with the per-scope digest opt-in: targeted
  * messages are personally addressed (a reply to your suggestion, a support
  * thread you handle), so they behave like transactional mail.
  */

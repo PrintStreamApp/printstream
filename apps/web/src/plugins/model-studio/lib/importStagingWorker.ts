@@ -4,7 +4,7 @@
  * Everything expensive about an import lives here: OCCT tessellating a STEP (WASM, seconds for a
  * real assembly), regex-parsing a 3MF's mesh XML into millions of vertices, the vertex weld, and
  * serializing the result to binary STL. On the main thread that is a frozen tab with a spinner that
- * never paints — the same failure `meshParseWorker.ts` was written for, and the public editor's
+ * never paints, the same failure `meshParseWorker.ts` was written for, and the public editor's
  * import path was the one geometry path still doing it inline.
  *
  * The 3MF branch unzips SYNCHRONOUSLY (fflate's sync codec) because it is already off the main
@@ -13,9 +13,9 @@
  * rather than a worker-local copy.
  *
  * Failure semantics matter to the client and are split deliberately:
- *  - `dataError: true` — the FILE is the problem (no geometry, over the triangle cap, not a ZIP,
+ *  - `dataError: true`: the FILE is the problem (no geometry, over the triangle cap, not a ZIP,
  *    OCCT refused it). Re-running on the main thread would fail identically, so the client must not.
- *  - `dataError: false` — the MECHANISM failed (module load, OOM). The client falls back to the
+ *  - `dataError: false`: the MECHANISM failed (module load, OOM). The client falls back to the
  *    main-thread path, which is a brief freeze rather than a failed import.
  *
  * Counterpart: `importStagingClient.ts` (owns the worker lifetime, deadline, and fallback).
@@ -27,9 +27,11 @@ import {
   extractThreeMfImportMesh,
   meshToBinaryStl,
   parseStlMesh,
+  rebaseImportedMesh,
   stepMeshFromOcctResult,
   type ImportedMesh
 } from '@printstream/shared/three-mf'
+import type { ImportNormalization } from '@printstream/shared'
 import { ThreeMfArchiveError, assertThreeMfSizeWithinLimit, threeMfArchiveFromEntries } from './threeMfArchive'
 import { threeMfArchiveImportSource } from './localThreeMfImport'
 import { loadOcctReader } from './occtLoader'
@@ -37,6 +39,8 @@ import { loadOcctReader } from './occtLoader'
 export interface ImportStagingRequest {
   id: number
   format: 'stl' | 'step' | '3mf'
+  /** Whether the staged geometry is a whole OBJECT (normalised to the editor pivot) or a PART. */
+  normalize: ImportNormalization
   buffer: ArrayBuffer
 }
 
@@ -45,7 +49,7 @@ export type ImportStagingResponse =
       id: number
       ok: true
       mesh: ImportedMesh
-      /** Binary STL of the merged mesh — what the viewport loads for a single-solid import. */
+      /** Binary STL of the merged mesh: what the viewport loads for a single-solid import. */
       stl: Uint8Array
       /**
        * Binary STL per solid, aligned with `mesh.parts`. Serialized HERE rather than by the store:
@@ -71,27 +75,37 @@ function isDataError(error: unknown): boolean {
     .test(error.message)
 }
 
-async function stage(format: ImportStagingRequest['format'], bytes: Uint8Array): Promise<{ mesh: ImportedMesh; stl: Uint8Array }> {
-  if (format === 'stl') {
-    // The picked bytes ARE the STL the viewport loads; re-serializing would only churn memory.
-    return { mesh: parseStlMesh(bytes), stl: bytes }
-  }
+async function parseImportMesh(format: ImportStagingRequest['format'], bytes: Uint8Array): Promise<ImportedMesh> {
+  if (format === 'stl') return parseStlMesh(bytes)
   if (format === '3mf') {
     assertThreeMfSizeWithinLimit(bytes.byteLength)
     const archive = threeMfArchiveFromEntries(unzipSync(bytes))
-    const mesh = await extractThreeMfImportMesh(threeMfArchiveImportSource(archive))
-    return { mesh, stl: meshToBinaryStl(mesh) }
+    return await extractThreeMfImportMesh(threeMfArchiveImportSource(archive))
   }
   const read = await loadOcctReader()
-  const mesh = stepMeshFromOcctResult(read(bytes))
+  return stepMeshFromOcctResult(read(bytes))
+}
+
+async function stage(
+  format: ImportStagingRequest['format'],
+  bytes: Uint8Array,
+  normalize: ImportStagingRequest['normalize']
+): Promise<{ mesh: ImportedMesh; stl: Uint8Array }> {
+  const mesh = await parseImportMesh(format, bytes)
+  // Normalise BEFORE serializing, so the viewport's STL and the mesh the bake writes are the same
+  // geometry. An STL import used to hand the picked bytes straight back as the viewport's copy,
+  // which was free but is no longer possible: rebasing the mesh and not the bytes would render the
+  // model at its file coordinates while baking it at the origin. One serialization pass is the cost
+  // of the two halves agreeing, and it runs here in the worker rather than on the main thread.
+  if (normalize === 'object') rebaseImportedMesh(mesh)
   return { mesh, stl: meshToBinaryStl(mesh) }
 }
 
 ctx.onmessage = (event: MessageEvent<ImportStagingRequest>) => {
-  const { id, format, buffer } = event.data
+  const { id, format, normalize, buffer } = event.data
   void (async () => {
     try {
-      const { mesh, stl } = await stage(format, new Uint8Array(buffer))
+      const { mesh, stl } = await stage(format, new Uint8Array(buffer), normalize)
       const partStls = (mesh.parts ?? []).map((part) => meshToBinaryStl(part.mesh))
       // Every STL buffer is transferred (all freshly built here, nothing else references them); the
       // mesh's plain number arrays go by structured clone, which the bake needs them as.

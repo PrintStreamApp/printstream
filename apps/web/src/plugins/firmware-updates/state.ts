@@ -21,7 +21,7 @@ export interface AvailableVersion {
 /**
  * Whether offline (SD-card) updates are usable on a printer right now. Below the
  * model's floor the printer has no on-screen "Update Offline" option, so a staged
- * package can never be flashed — it must be updated online once first.
+ * package can never be flashed, it must be updated online once first.
  */
 export interface OfflineUpdateInfo {
   minimumVersion: string | null
@@ -39,7 +39,7 @@ export interface UpdateReport {
   printerId: string
   printerName: string
   model: string
-  /** Whether the printer is currently reachable — firmware can only be uploaded when online. */
+  /** Whether the printer is currently reachable: firmware can only be uploaded when online. */
   online: boolean
   currentVersion: string | null
   sdCardPresent: boolean | null
@@ -168,12 +168,12 @@ export type FirmwareVersionsLoadState = 'ready' | 'loading' | 'unavailable'
  * The installed/latest versions and the downloadable version list arrive in the
  * same report, but a stale-cache `initialData` render can show installed/latest
  * while a slow remote refetch (Bambu's wiki + download pages) is still repopulating
- * the list — leaving the dropdown, changelog, and upload button blank with no hint
+ * the list, leaving the dropdown, changelog, and upload button blank with no hint
  * that anything is happening. This collapses that into one state:
  *
- * - `ready`        — at least one installable version is known; show the picker.
- * - `loading`      — none known yet and a fetch is in flight; show a spinner.
- * - `unavailable`  — the fetch has settled and still found nothing installable.
+ * - `ready`, at least one installable version is known; show the picker.
+ * - `loading`: none known yet and a fetch is in flight; show a spinner.
+ * - `unavailable`: the fetch has settled and still found nothing installable.
  */
 export function getFirmwareVersionsLoadState(
   installableVersions: AvailableVersion[],

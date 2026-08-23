@@ -148,7 +148,7 @@ export const authBootstrapSchema = z.object({
    * Billing scopes this user may switch into, alongside their workspaces and
    * (for platform users) the platform scope.
    *
-   * Empty for anyone without explicit billing access — which is everyone until
+   * Empty for anyone without explicit billing access, which is everyone until
    * an account owner grants it, because being added to a workspace must never
    * hand someone the payment method. Empty in a public build too: an OSS install
    * has no billing relationship at all, so the switcher simply has nothing extra
@@ -320,7 +320,7 @@ export const bootstrapLocalAdminResponseSchema = z.object({
   }),
   /**
    * The emailed code, when one was issued. Null once the claim signs the new
-   * admin in directly — there is nothing left to verify, and emailing a live
+   * admin in directly, there is nothing left to verify, and emailing a live
    * credential nobody needs is worse than not sending it.
    */
   invite: authUserInviteResultSchema.nullable(),

@@ -42,7 +42,7 @@ function mockResponse() {
     get streamed() {
       return streamedChunks.length ? Buffer.concat(streamedChunks) : undefined
     },
-    /** How many writes the body arrived in — the proxy-survival property, not just the bytes. */
+    /** How many writes the body arrived in: the proxy-survival property, not just the bytes. */
     get chunkCount() {
       return streamedChunks.length
     }
@@ -62,7 +62,7 @@ test('sendModelBuffer streams gzipped large payloads when the client accepts gzi
   assert.equal(ctx.headers['content-type'], 'application/xml; charset=utf-8')
   assert.equal(ctx.headers['content-encoding'], 'gzip')
   assert.deepEqual(ctx.varies, ['Accept-Encoding'])
-  // Streamed in chunks (no res.send) — collect them and verify they're the compressed payload.
+  // Streamed in chunks (no res.send): collect them and verify they're the compressed payload.
   assert.ok(ctx.streamed && ctx.streamed.length < payload.length, 'compressed body should be smaller')
   assert.deepEqual(gunzipSync(ctx.streamed!), payload, 'gunzipped streamed body should match the original')
 })
@@ -89,7 +89,7 @@ test('sendModelBuffer skips compression for tiny payloads even when gzip is acce
 
 // The declared length is the only thing that makes a short body fail loudly instead of reaching
 // the client as a silently truncated file. Assert it on BOTH paths and against the bytes actually
-// written, not against the caller's buffer — on the gzip path those differ.
+// written, not against the caller's buffer, on the gzip path those differ.
 test('sendModelBuffer declares a Content-Length matching the bytes it writes', async () => {
   for (const acceptEncoding of ['gzip, deflate, br', undefined]) {
     const payload = Buffer.from('<model>'.repeat(2000), 'utf8')

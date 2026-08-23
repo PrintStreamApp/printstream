@@ -1,7 +1,7 @@
 /**
  * The printer-card AMS section: a responsive grid of {@link AmsUnitRow}s (one per AMS unit, each
  * spanning a column count proportional to its slots) followed by any external spools. Slot/unit
- * actions are passed in already gated by permission — an absent handler hides that action.
+ * actions are passed in already gated by permission, an absent handler hides that action.
  * Extracted from PrinterCard to keep the card body render-focused.
  */
 import { Box } from '@mui/joy'

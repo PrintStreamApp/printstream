@@ -10,7 +10,7 @@
  *
  * These handlers guarantee the failure is logged to the same sink as other
  * diagnostics, then exit non-zero so the orchestrator (cloud) or service
- * supervisor/tray (native) restarts a clean process — the standard posture, since
+ * supervisor/tray (native) restarts a clean process: the standard posture, since
  * process state is unreliable after an uncaught fault. The log/exit seams are
  * injectable so the behavior is unit-testable without emitting real process events.
  */

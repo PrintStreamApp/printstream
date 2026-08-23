@@ -43,7 +43,7 @@ export function LibraryPickerModal({
 }: {
   /** Optional printer name shown in the dialog title. Omit when the
    * caller has not yet chosen a printer (e.g. the page-level Print
-   * button) — the user picks the printer in the subsequent PrintModal. */
+   * button): the user picks the printer in the subsequent PrintModal. */
   printerName?: string
   printerModel?: PrinterModel
   canSlice: boolean

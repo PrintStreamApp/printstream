@@ -31,7 +31,7 @@ function fakeProject(): ClientThreeMfProject {
 /**
  * Ids come from the real builder, not a `builtin:kind:name` template: a builtin id base64url-encodes
  * its name, so a hand-written one fails `slicingPresetProvenance` and every "is this a builtin?"
- * branch silently becomes unreachable — which is how the baseline-note test below passed vacuously.
+ * branch silently becomes unreachable, which is how the baseline-note test below passed vacuously.
  */
 const profile = (kind: SlicingPresetSummary['kind'], name: string, extra: Partial<SlicingPresetSummary> = {}): SlicingPresetSummary => ({
   id: buildBuiltinSlicingPresetId(kind, name), source: 'builtin', kind, name, printerModels: ['X1C'], ...extra
@@ -43,7 +43,7 @@ const TARGET_ID = 't1'
  * Seed the anonymous catalogue the controller reads, keyed through the query-options builders
  * rather than by literal.
  *
- * What that buys is NOT detection of a key rename — both sides move together, by design. It is that
+ * What that buys is NOT detection of a key rename, both sides move together, by design. It is that
  * a seed can never point at a key nobody reads: with literals, a consumer drifting off the builder
  * left these tests green while the public editor's sidebar rendered empty. The literal keys
  * themselves are pinned once, in `lib/publicSlicingCatalog.test.ts`.
@@ -71,7 +71,7 @@ function seededClient() {
 async function renderController() {
   const client = seededClient()
   let result: ReturnType<typeof useLocalSliceSettingsController> | null = null
-  // Stable across renders, like the real host's project prop — an inline fakeProject() would
+  // Stable across renders, like the real host's project prop, an inline fakeProject() would
   // change identity every render, which no real caller does.
   const project = fakeProject()
   function Probe() {
@@ -112,7 +112,7 @@ test('the badge resolver is withheld until the built-in catalogue is loaded', as
   const client = new QueryClient({ defaultOptions: { queries: { gcTime: Infinity, retry: false } } })
   seedCatalogue(client, []) // catalogue not yet loaded
   let result: ReturnType<typeof useLocalSliceSettingsController> | null = null
-  // Stable across renders, like the real host's project prop — an inline fakeProject() would
+  // Stable across renders, like the real host's project prop, an inline fakeProject() would
   // change identity every render, which no real caller does.
   const project = fakeProject()
   function Probe() {
@@ -145,7 +145,7 @@ test('material options derive from the compatible filament presets', async () =>
 test('it exposes the target printer model for the bed (separate from the controller)', async () => {
   const client = seededClient()
   let result: ReturnType<typeof useLocalSliceSettingsController> | null = null
-  // Stable across renders, like the real host's project prop — an inline fakeProject() would
+  // Stable across renders, like the real host's project prop, an inline fakeProject() would
   // change identity every render, which no real caller does.
   const project = fakeProject()
   function Probe() {
@@ -154,7 +154,7 @@ test('it exposes the target printer model for the bed (separate from the control
   }
   await act(async () => { render(React.createElement(QueryClientProvider, { client }, React.createElement(Probe))) })
   await act(async () => {})
-  // The project targets X1C, so the bed the editor renders is the X1C bed — and it is NOT a field of
+  // The project targets X1C, so the bed the editor renders is the X1C bed, and it is NOT a field of
   // the controller, so a model switch feeds EditorView's separate prop.
   assert.equal(result!.targetPrinterModel, 'X1C')
 })
@@ -164,7 +164,7 @@ test('it builds filament choices for the global process dialog (issue #86)', asy
   // bare number inputs and the support-interface suggestion prompt can never fire.
   const client = seededClient()
   let result: ReturnType<typeof useLocalSliceSettingsController> | null = null
-  // Stable across renders, like the real host's project prop — an inline fakeProject() would
+  // Stable across renders, like the real host's project prop, an inline fakeProject() would
   // change identity every render, which no real caller does.
   const project = fakeProject()
   function Probe() {

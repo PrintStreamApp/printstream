@@ -7,7 +7,7 @@
  * (`editorShowBedModel` / `editorSidebarSide`, via `/api/settings`, workspace-scoped) plus an optional
  * **per-device override** in browser localStorage. The effective value is `override ?? sharedDefault`.
  *
- * Both tiers matter here: a workspace can set the house layout while one machine still differs — a
+ * Both tiers matter here: a workspace can set the house layout while one machine still differs, a
  * left-handed panel, or a weak GPU that skips the modelled plate. Before this, these were
  * device-only, so a workspace had no way to set a default at all.
  *
@@ -30,7 +30,7 @@ import { useAuthBootstrapQuery } from './authQuery'
 import { apiFetch } from './apiClient'
 
 /**
- * Marks a host that has no workspace behind it — the public editor, where a file comes from the
+ * Marks a host that has no workspace behind it: the public editor, where a file comes from the
  * user's disk and there is no workspace, no `/api/settings`, and nobody to set a house default.
  *
  * The two-tier model is meaningless there: "workspace default vs this device" collapses to just

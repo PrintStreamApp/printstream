@@ -10,7 +10,7 @@ import { editorMaterialsFromProjectFilaments } from './editorMaterials'
 import type { LocalProjectFile } from './localProjectFile'
 
 /**
- * The whole local path end to end — open a file, read it through the project source, save it back —
+ * The whole local path end to end, open a file, read it through the project source, save it back,
  * because the pieces each having tests did not stop the HOST from wiring them together wrongly.
  * The specific near-miss: passing no archive to the save target, which bakes a valid but empty 3MF
  * and silently discards every mesh in the user's project.

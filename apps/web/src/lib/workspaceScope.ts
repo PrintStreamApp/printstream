@@ -1,6 +1,6 @@
 /**
  * Workspace-scoping for the React Query cache. Every key holding server data is
- * scoped by a string derived from the current URL — `workspace:<slug>` for a
+ * scoped by a string derived from the current URL: `workspace:<slug>` for a
  * workspace, `platform` for the platform workspace, or `ambient` when neither
  * applies. `workspaceQueryKeys` builds the scoped keys; `usePrinterWebSocket`
  * and the invalidation helpers key off the same scope.

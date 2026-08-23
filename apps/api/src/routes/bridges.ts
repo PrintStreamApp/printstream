@@ -3,7 +3,7 @@
  *
  * Owns the workspace-facing bridge surface: listing, connect/rename/delete, the
  * connection test/ping, system-log and debug-capture retrieval, crash-history
- * clearing, and update check/start — the bridge-side ones routed to the owning
+ * clearing, and update check/start: the bridge-side ones routed to the owning
  * bridge through `bridgeSessionManager`.
  */
 import express from 'express'
@@ -122,14 +122,14 @@ bridgesRouter.get('/downloads', (request, response) => {
  *
  * The packaged executable carries one baked origin (the cloud) and cannot be
  * varied per download, so a binary fetched from anywhere else registers with
- * the cloud instead of the server that served it — silently, since it then
+ * the cloud instead of the server that served it: silently, since it then
  * prints a connect URL for the wrong host. Returning the origin here is what
  * lets the download surface say so.
  *
  * Null when this server IS the baked default: telling a cloud customer to
  * configure the value it already has adds a step whose only possible outcome is
  * a typo. Null too when the origin cannot be resolved, because a guess here is
- * worse than the existing default — a wrong URL fails to connect at all,
+ * worse than the existing default, a wrong URL fails to connect at all,
  * whereas the default at least works for the common case.
  */
 export function standaloneBridgeServerUrlOverride(assetOrigin: string | null): string | null {
@@ -162,7 +162,7 @@ bridgesRouter.post('/connect', async (request, response) => {
     name: parsed.name
   })
 
-  // Never record the bridge connect code — it is a secret.
+  // Never record the bridge connect code, it is a secret.
   annotateRequestAuditLog(request, {
     action: 'connect-bridge',
     resource: 'bridge',
@@ -217,8 +217,8 @@ bridgesRouter.patch('/:id', async (request, response) => {
  * Clear a bridge's recorded crash history (the `Bridge` crash summary that
  * `deriveBridgeCrashState` reads).
  *
- * Why this exists: the summary is self-healing — it ages out once the last
- * crash leaves the rolling window — but until then the crash-loop banner shows
+ * Why this exists: the summary is self-healing, it ages out once the last
+ * crash leaves the rolling window, but until then the crash-loop banner shows
  * on every workspace page. This is the escape hatch for an operator who has
  * already dealt with the cause and does not want to wait out the window. It
  * clears the record for the WHOLE workspace, which is why it is a server action
@@ -226,10 +226,10 @@ bridgesRouter.patch('/:id', async (request, response) => {
  * than "dismiss".
  *
  * Deliberately does NOT reset the bridge's own rolling crash window (its
- * on-disk run-state marker — see `apps/bridge/src/crash-tracker.ts`): doing so
+ * on-disk run-state marker: see `apps/bridge/src/crash-tracker.ts`): doing so
  * would need an RPC to a bridge that, in exactly this situation, is likely to
  * be down or restarting. So a bridge that crashes again inside its window
- * re-reports its full count and the alert returns — correct, because it is in
+ * re-reports its full count and the alert returns: correct, because it is in
  * fact still crash-looping. Nothing is lost either way: every report also
  * writes an operational log entry, which this does not touch.
  *
@@ -421,7 +421,7 @@ bridgesRouter.get('/:id/debug-capture/download', async (request, response) => {
 /**
  * On-disk bridge backups. The bridge owns the snapshots and the schedule (see
  * `apps/bridge/src/backup-manager.ts`); these routes are thin RPC pass-throughs
- * like the debug-capture trio. `run` only STARTS a backup — completion arrives
+ * like the debug-capture trio. `run` only STARTS a backup: completion arrives
  * as a pushed `bridge.backup.status` message broadcast over the `bridge.backup`
  * WS event.
  */

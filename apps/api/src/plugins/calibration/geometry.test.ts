@@ -11,7 +11,7 @@ function signedVolume(positions: number[], indices: number[]): number {
     const ax = positions[a]!, ay = positions[a + 1]!, az = positions[a + 2]!
     const bx = positions[b]!, by = positions[b + 1]!, bz = positions[b + 2]!
     const cx = positions[c]!, cy = positions[c + 1]!, cz = positions[c + 2]!
-    // (b x c) . a / 6, summed — positive for outward (CCW) winding.
+    // (b x c) . a / 6, summed: positive for outward (CCW) winding.
     const crossX = by * cz - bz * cy
     const crossY = bz * cx - bx * cz
     const crossZ = bx * cy - by * cx

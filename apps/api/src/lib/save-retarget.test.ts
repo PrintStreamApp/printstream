@@ -94,7 +94,7 @@ test('heals a damaged H2D project: re-authors the machine block and re-applies t
   // …the filament identity untouched…
   assert.deepEqual(healed.filament_settings_id, DAMAGED_H2D_SETTINGS.filament_settings_id)
   // …and the edit's L/R nozzle choice applied ON TOP of the retarget's default map (which the
-  // heal would otherwise leave as the machine default — the exact "my nozzle pick doesn't save"
+  // heal would otherwise leave as the machine default: the exact "my nozzle pick doesn't save"
   // symptom).
   assert.deepEqual(healed.filament_nozzle_map, ['1', '0'])
 })
@@ -163,7 +163,7 @@ test('authorProjectMachineFromProfile gives an editor slice the dual-nozzle topo
   cleanupDirs.push(path.dirname(authoredPath))
   const authored = JSON.parse((await readEntry(authoredPath, 'Metadata/project_settings.config')).toString('utf8')) as Record<string, unknown>
 
-  // The project now defines its own machine — this is what the CLI was missing.
+  // The project now defines its own machine, this is what the CLI was missing.
   assert.equal(hasDualNozzleMachineShape(authored), true)
   assert.deepEqual(authored.physical_extruder_map, ['1', '0'])
   assert.deepEqual(authored.extruder_type, ['Direct Drive', 'Direct Drive'])
@@ -176,7 +176,7 @@ test('authorProjectMachineFromProfile gives an editor slice the dual-nozzle topo
 test('projectHasCompleteMachine separates "same printer" from "fully defined"', async () => {
   // A save used to skip authoring whenever the selected model matched the project's, which left a
   // project naming printer_model H2D but carrying none of H2D's dual-nozzle topology exactly as it
-  // was — the state that made the slicer fail with exit 206. Matching the model is not enough.
+  // was: the state that made the slicer fail with exit 206. Matching the model is not enough.
   const damagedPath = await writeThreeMf({
     '3D/3dmodel.model': '<model/>',
     'Metadata/project_settings.config': JSON.stringify(DAMAGED_H2D_SETTINGS)
@@ -193,7 +193,7 @@ test('projectHasCompleteMachine separates "same printer" from "fully defined"', 
   // A different target still needs authoring even though this project is complete for H2D.
   assert.equal(await projectHasCompleteMachine(completePath, 'Bambu Lab A1 mini'), false, 'cross-model')
 
-  // A settings-less scaffold is incomplete — the safe direction (author rather than assume).
+  // A settings-less scaffold is incomplete: the safe direction (author rather than assume).
   const scaffoldPath = await writeThreeMf({ '3D/3dmodel.model': '<model/>' })
   assert.equal(await projectHasCompleteMachine(scaffoldPath, 'Bambu Lab H2D'), false, 'no settings at all')
 })

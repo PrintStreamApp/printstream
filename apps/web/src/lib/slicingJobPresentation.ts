@@ -29,7 +29,7 @@ export function getLatestSlicingProgressFrame(job: SlicingJob): SlicingProgressF
 export function formatSlicingProgress(job: SlicingJob, progressFrame: SlicingProgressFrame | null): string {
   // The engine's own progress belongs to a RUNNING slice only. Its last frame survives in the
   // output after the job ends, and rendering it left a finished slice reading "Exporting 3mf
-  // (97%)" next to a "Ready" chip. A finished job reports its outcome instead — which `finish()`
+  // (97%)" next to a "Ready" chip. A finished job reports its outcome instead, which `finish()`
   // wrote as the job's final system line ("Ready to print", "Sliced file saved to the library").
   if (isActiveSlicingJob(job) && progressFrame) {
     if (progressFrame.totalPercent == null) return progressFrame.message

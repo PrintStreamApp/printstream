@@ -331,10 +331,10 @@ test('resolveSliceDisabledReason reports an empty machine profile as the blockin
 test('resolveSliceDisabledReason surfaces the slicer-profiles error before per-field reasons', () => {
   assert.equal(
     resolveSliceDisabledReason(buildSliceDisabledReasonInput({
-      profilesError: 'Couldn’t load slicer profiles — the slicer may be restarting. Reopen the editor to try again.',
+      profilesError: 'Couldn’t load slicer profiles: the slicer may be restarting. Reopen the editor to try again.',
       printerProfileId: ''
     })),
-    'Couldn’t load slicer profiles — the slicer may be restarting. Reopen the editor to try again.'
+    'Couldn’t load slicer profiles: the slicer may be restarting. Reopen the editor to try again.'
   )
 })
 
@@ -347,11 +347,11 @@ test('resolveSliceDisabledReason reports loading before incomplete-settings reas
 
 test('resolveSliceDisabledReason flags a set-but-incompatible process selection', () => {
   // Regression: a slice dialog whose state predated a printer switch submitted an X1C process
-  // against an H2D target — the id was non-empty, so the old gates let it through and the slicer
+  // against an H2D target: the id was non-empty, so the old gates let it through and the slicer
   // hard-rejected it ("process not compatible with printer"). The reason must name the mismatch.
   assert.equal(
     resolveSliceDisabledReason(buildSliceDisabledReasonInput({ processProfileIncompatible: true })),
-    'The selected print settings aren’t compatible with the target printer — choose a compatible profile.'
+    'The selected print settings aren’t compatible with the target printer: choose a compatible profile.'
   )
 })
 
@@ -407,7 +407,7 @@ test('formatSlicingPresetBrandedName names a filament the same way whichever pro
     formatSlicingPresetBrandedName(fromProject),
     'provenance must not change how a material is named'
   )
-  // The grouped pickers still get the compact form — vendor is their group header.
+  // The grouped pickers still get the compact form: vendor is their group header.
   assert.equal(formatSlicingPresetDisplayName(fromCatalogue), 'PLA Basic')
 })
 
@@ -427,14 +427,14 @@ test('a vendor is spelled the same whether it comes from metadata or the preset 
   assert.equal(normalizeFilamentVendorLabel('Bambu Lab'), 'Bambu')
   assert.equal(normalizeFilamentVendorLabel('Bambu'), 'Bambu')
   assert.equal(normalizeFilamentVendorLabel('  Bambu Lab  '), 'Bambu')
-  // Other vendors pass through untouched — this is a spelling rule, not a brand table.
+  // Other vendors pass through untouched, this is a spelling rule, not a brand table.
   assert.equal(normalizeFilamentVendorLabel('Polymaker'), 'Polymaker')
   assert.equal(normalizeFilamentVendorLabel(null), '')
 })
 
 test('picker labels stay clean until two presets share an alias, then show the full names', () => {
   // The failure this guards: a workspace preset derived from a built-in aliases to the same text,
-  // so both rows read "Bambu PLA Basic" and the user cannot tell which is which — nor read the
+  // so both rows read "Bambu PLA Basic" and the user cannot tell which is which, nor read the
   // selected value back afterwards. Only the colliding pair pays; unique aliases stay short.
   const profiles: SlicingPresetSummary[] = [
     { id: 'builtin:pla', source: 'builtin', kind: 'filament', name: 'Bambu PLA Basic @BBL H2D', filamentVendor: 'Bambu Lab' },

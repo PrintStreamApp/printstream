@@ -18,7 +18,7 @@
  *   request covering every printer, so N printer cards do not make N requests.
  *
  * Interval fields use `null` to mean "no interval of this kind" and are absent
- * when unchanged — a PATCH that omits `intervalDays` leaves it alone, while one
+ * when unchanged, a PATCH that omits `intervalDays` leaves it alone, while one
  * sending `null` clears it. That distinction is the whole reason the task table
  * carries `intervalsCleared`.
  */
@@ -90,7 +90,7 @@ export type MaintenanceScheduleInfo = z.infer<typeof maintenanceScheduleInfoSche
 export const maintenanceUsageSchema = z.object({
   /** Lifetime print hours; null when unavailable. */
   printHours: z.number().nonnegative().nullable(),
-  /** Lifetime filament mass in kilograms — one roll is one kilogram. Null when untracked. */
+  /** Lifetime filament mass in kilograms, one roll is one kilogram. Null when untracked. */
   filamentKilograms: z.number().nonnegative().nullable()
 })
 export type MaintenanceUsageDto = z.infer<typeof maintenanceUsageSchema>
@@ -153,14 +153,14 @@ export const maintenanceTaskPatchRequestSchema = z.object({
   intervalPrintHours: intervalPatchSchema,
   intervalFilamentKilograms: intervalPatchSchema,
   disabled: z.boolean().optional(),
-  /** Custom tasks only — the catalog owns wording for its own tasks. */
+  /** Custom tasks only: the catalog owns wording for its own tasks. */
   title: z.string().trim().min(1).max(120).optional(),
   lubricant: maintenanceLubricantSchema.optional()
 })
 export type MaintenanceTaskPatchRequest = z.infer<typeof maintenanceTaskPatchRequestSchema>
 
 /**
- * Define a task the catalog does not cover — the escape hatch for a printer
+ * Define a task the catalog does not cover: the escape hatch for a printer
  * model newer than this build, or a shop's own routine.
  */
 export const maintenanceCustomTaskRequestSchema = z.object({

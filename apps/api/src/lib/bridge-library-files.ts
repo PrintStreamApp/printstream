@@ -35,8 +35,8 @@ const BRIDGE_LIBRARY_CHUNK_RPC_TIMEOUT_MS = 120_000
 const BRIDGE_LIBRARY_DERIVED_CACHE_TTL_MS = 90 * 24 * 60 * 60 * 1000
 /**
  * TTL for the `_bridge-cache` local copies of bridge-owned files. These are pure
- * caches — {@link ensureBridgeLibraryLocalCopy} re-fetches from the bridge on
- * demand — but they are FULL file copies, so without a prune the directory keeps
+ * caches, {@link ensureBridgeLibraryLocalCopy} re-fetches from the bridge on
+ * demand, but they are FULL file copies, so without a prune the directory keeps
  * one permanent copy of every file ever dispatched/sliced (observed multi-GB in
  * production). mtime doubles as last-validated-use (see the touch in
  * `ensureBridgeLibraryLocalCopy`), making this an LRU: only copies unused for
@@ -46,13 +46,13 @@ const BRIDGE_LIBRARY_LOCAL_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000
 /**
  * How stale a local copy's mtime may get before a validated use refreshes it.
  * Throttled (rather than touching on every use) because the in-memory 3MF index
- * cache keys on mtime — an unconditional touch would invalidate that cache and
+ * cache keys on mtime, an unconditional touch would invalidate that cache and
  * force a re-parse on every access.
  */
 const BRIDGE_LIBRARY_LOCAL_CACHE_TOUCH_AFTER_MS = 24 * 60 * 60 * 1000
 /**
  * Version for the on-disk derived 3MF index cache. Derived from the shared parser version
- * ({@link THREE_MF_INDEX_PARSER_VERSION}) so the index shape and the cache invalidate together —
+ * ({@link THREE_MF_INDEX_PARSER_VERSION}) so the index shape and the cache invalidate together:
  * bumping the shared parser version drops stale derived entries automatically.
  */
 const BRIDGE_LIBRARY_DERIVED_CACHE_VERSION = THREE_MF_INDEX_PARSER_VERSION
@@ -190,7 +190,7 @@ export async function inspectBridgeLibraryThreeMf(input: {
  * parsing locally.
  *
  * The VERSION clause is the load-bearing one: the bridge deploys separately from the API, so after
- * a shared-parser bump an un-upgraded bridge keeps producing indexes without the new fields — and
+ * a shared-parser bump an un-upgraded bridge keeps producing indexes without the new fields, and
  * because Zod fills their defaults, nothing downstream can tell. Those indexes would then be
  * cached (and chip-stamped) as CURRENT, so the missing fields never appear until the file itself
  * changes. Real incident: `needsSettingsRepair`/`projectVersion` stayed absent for files indexed
@@ -344,7 +344,7 @@ export async function pruneBridgeLibraryLocalCache(maxAgeMs = BRIDGE_LIBRARY_LOC
 
 /**
  * Coalesce concurrent local-copy fills for the same cache path. The sibling rationale on
- * {@link inflightReplicaBuilds} applies here too — several routes (`/archive`, `/thumbnail`,
+ * {@link inflightReplicaBuilds} applies here too: several routes (`/archive`, `/thumbnail`,
  * `/mesh`, `/scene-entry`, `/preview-asset`, `/download`) resolve the same bridge file, so two of
  * them landing on a cold cache together is ordinary rather than exotic. Deduping onto one transfer
  * also spares the bridge a duplicate multi-megabyte upload.
@@ -357,7 +357,7 @@ const inflightLocalCopies = new Map<string, Promise<string>>()
  *
  * Contract callers rely on: the returned path is readable IN FULL the moment it is returned. Routes
  * `readFile` it immediately, and a short read there surfaces to the user as a corrupt 3MF rather
- * than as a transfer error — so a fill must never be observable through this path while it is still
+ * than as a transfer error, so a fill must never be observable through this path while it is still
  * in progress. That is what {@link inflightLocalCopies} and the rename in
  * {@link copyBridgeLibraryFileToLocalCache} together guarantee.
  */
@@ -396,7 +396,7 @@ async function fillBridgeLibraryLocalCopy(
 
 /**
  * Bump a validated local copy's mtime so the LRU prune sees it as recently used.
- * Throttled to once per {@link BRIDGE_LIBRARY_LOCAL_CACHE_TOUCH_AFTER_MS} —
+ * Throttled to once per {@link BRIDGE_LIBRARY_LOCAL_CACHE_TOUCH_AFTER_MS},
  * touching on every use would needlessly invalidate the mtime-keyed in-memory
  * 3MF index cache. Best-effort: a failed touch only risks an earlier prune,
  * which the on-demand re-fetch absorbs.
@@ -596,7 +596,7 @@ async function clearBridgeLibraryLocalCache(bridgeId: string, storedPath: string
 function resolveBridgeLibraryDerivedCachePath(bridgeId: string, storedPath: string): string {
   const digest = createHash('sha256').update(`${bridgeId}\0${storedPath}`).digest('hex')
   // Version segment invalidates older derived indexes (e.g. those parsed before per-plate
-  // `objects` existed) — old directories become orphaned and are removed by TTL pruning.
+  // `objects` existed): old directories become orphaned and are removed by TTL pruning.
   return path.join(bridgeLibraryDerivedCacheDir, bridgeId, `v${BRIDGE_LIBRARY_DERIVED_CACHE_VERSION}`, digest)
 }
 
@@ -710,7 +710,7 @@ async function requestBridgeLibraryChunk(bridgeId: string, storedPath: string, o
 /**
  * Pull a bridge-owned file into the local cache.
  *
- * Fills a private temp file and renames it into place — NEVER the target path itself. `rename` is
+ * Fills a private temp file and renames it into place, NEVER the target path itself. `rename` is
  * atomic within a directory, so any reader sees either the previous copy or the finished one. An
  * in-place fill is what made this dangerous: it truncates first, so a caller already holding this
  * path (see {@link ensureBridgeLibraryLocalCopy}) could read a half-written file and report the

@@ -6,8 +6,8 @@
  * integration never needs to poll.
  *
  * Routes:
- * - `GET /api/plugins/home-assistant` — bridge metadata and counts.
- * - `GET /api/plugins/home-assistant/snapshot` — full printer + AMS snapshot
+ * - `GET /api/plugins/home-assistant`: bridge metadata and counts.
+ * - `GET /api/plugins/home-assistant/snapshot`: full printer + AMS snapshot
  *   (used on first connect; thereafter updates arrive via WebSocket).
  *
  * WebSocket events emitted (type `plugin.event`, pluginName `home-assistant`):

@@ -48,8 +48,8 @@ function target(overrides: Partial<SlicingManualProfileTarget> = {}): SlicingMan
 interface RecordedCall { kind: 'machine' | 'process' | 'filament'; id: string; targetId: string | null }
 
 /**
- * Records every lookup with BOTH arguments, so a test can assert a resolver was never reached and
- * — just as importantly — that the one that was reached got the preset id rather than the target
+ * Records every lookup with BOTH arguments, so a test can assert a resolver was never reached and,
+ * just as importantly, that the one that was reached got the preset id rather than the target
  * id. Both params are `string`, so a swap at the call site type-checks and would otherwise pass.
  */
 function stubResolvers(overrides: Partial<LocalRetargetResolvers> = {}) {
@@ -103,7 +103,7 @@ test('an unresolvable machine leaves the project on its embedded printer rather 
   const { resolvers } = stubResolvers({
     machine: async () => { throw new Error('offline') }
   })
-  // The save still proceeds — this is the one hard requirement, so its absence means "do nothing".
+  // The save still proceeds, this is the one hard requirement, so its absence means "do nothing".
   assert.equal(await buildLocalMachineRetargetPlan(input({ resolvers })), null)
 })
 
@@ -204,7 +204,7 @@ test('the real resolvers post the ids the anonymous routes actually parse', asyn
 test('an unresolved slicer target is sent as null, not as an empty string', async () => {
   const { calls, resolvers } = stubResolvers()
   // `resolveSlicerTargetId` returns '' until the targets query settles, and the resolve routes'
-  // schema REJECTS '' while accepting null — so passing it through 400s the retarget and saves the
+  // schema REJECTS '' while accepting null, so passing it through 400s the retarget and saves the
   // project on its old printer with nothing but a console warning.
   const plan = await buildLocalMachineRetargetPlan(input({ slicerTargetId: null, resolvers }))
   assert.ok(plan)
@@ -221,7 +221,7 @@ test('unreadable project settings skip the filament rebind rather than guessing 
 /**
  * The rebind half is the reason the seam exists, and the tests above all stop short of it (they pass
  * `projectSettings: null`). Without a case that reaches it, gutting `resolveFilamentRebinds` to
- * `return null` leaves the whole file green — while the user's materials silently keep the OLD
+ * `return null` leaves the whole file green, while the user's materials silently keep the OLD
  * machine's physics.
  */
 const H2D_PLA = buildBuiltinSlicingPresetId('filament', 'Bambu PLA Basic @BBL H2D')

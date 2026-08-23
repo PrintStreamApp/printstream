@@ -1,5 +1,5 @@
 /**
- * "The slicer is still downloading" — said to whoever is waiting on it.
+ * "The slicer is still downloading": said to whoever is waiting on it.
  *
  * The container ships no engine and fetches one on first start, so there is a
  * window on a brand-new install where slicing simply does not work. Without
@@ -28,7 +28,7 @@ import { apiFetch } from '../lib/apiClient'
 import { StatusToast, StatusToastDismissButton } from './StatusToast'
 import { ProgressBar } from './ProgressBar'
 
-/** Brisk while a download runs — the label and percentage are the whole point. */
+/** Brisk while a download runs: the label and percentage are the whole point. */
 const INSTALLING_POLL_MS = 4_000
 /**
  * Slow, and only while there is no slicer: this is what NOTICES an install that
@@ -84,7 +84,7 @@ export function EngineInstallToast() {
         {failed ? null : (
           <Box>
             <Typography level="body-xs" textColor="text.tertiary">
-              {percent != null ? `${install.label} — ${percent}%` : install.label}
+              {percent != null ? `${install.label}: ${percent}%` : install.label}
             </Typography>
             {/* Determinate only where there is a real total: a bar that invents
                 a position is worse than one that admits it is working. */}

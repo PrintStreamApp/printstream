@@ -1,15 +1,15 @@
 /**
- * A 3MF project opened entirely in the browser — the client-side counterpart of the API's
+ * A 3MF project opened entirely in the browser: the client-side counterpart of the API's
  * `readPlateIndex` / `readSceneManifest`.
  *
  * Everywhere else a 3MF is parsed on the server because the bytes live on a bridge. The public
  * 3MF editor has no server copy on purpose: the user picks a file from their disk and it never
  * leaves the machine. So this module pairs the browser ZIP reader (`threeMfArchive.ts`) with the
- * SAME shared parsers the API uses (`@printstream/shared/three-mf`) — the parse is identical, only
+ * SAME shared parsers the API uses (`@printstream/shared/three-mf`): the parse is identical, only
  * the byte source differs, which is what keeps the two surfaces from drifting.
  *
  * Contract: {@link openClientThreeMfProject} resolves once the archive is inflated and the index is
- * parsed (fast — metadata only); per-plate scenes and mesh bytes are pulled lazily from the already
+ * parsed (fast: metadata only); per-plate scenes and mesh bytes are pulled lazily from the already
  * inflated archive. The caller MUST call {@link ClientThreeMfProject.dispose} to release the object
  * URLs handed out for plate thumbnails.
  */
@@ -26,12 +26,12 @@ export interface ClientThreeMfProject {
   /**
    * The inflated archive behind this project. Exposed because SAVING needs it: the bake copies
    * every entry it does not rewrite, and baking without it would silently produce a 3MF containing
-   * only the scaffold — every mesh and all vendor metadata gone.
+   * only the scaffold, every mesh and all vendor metadata gone.
    */
   archive: ThreeMfArchive
   /**
    * The plated scene for a 1-based plate index, or null when the project carries no plated scene
-   * metadata (a geometry-only 3MF — a vanilla CAD export). Callers fall back to a plain mesh view,
+   * metadata (a geometry-only 3MF, a vanilla CAD export). Callers fall back to a plain mesh view,
    * exactly as the library does for those files.
    */
   sceneForPlate(plateIndex: number, overrideModel?: PrinterModel | null): LibraryThreeMfScene | null
@@ -54,7 +54,7 @@ export async function openClientThreeMfProject(file: File): Promise<ClientThreeM
  * This is how the LIBRARY editor opens a project: it downloads the whole 3MF from
  * `/api/library/:id/archive` and parses it here, so the workspace and public editors run one
  * parser over one byte source instead of two (see `createArchiveProjectSource`). `fileName` is
- * internal bookkeeping — the library host names files from its own DTO, not from this.
+ * internal bookkeeping: the library host names files from its own DTO, not from this.
  */
 export async function openClientThreeMfProjectFromBytes(
   fileName: string,

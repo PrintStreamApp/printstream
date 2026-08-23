@@ -8,7 +8,7 @@
  * `extractProfileMetadata` is the superset: it also reads the machine-only
  * `default_print_profile` / `default_filament_profile` fallbacks. Callers that
  * don't carry those fields (e.g. the API's `ProfileMetadata` pick) simply drop
- * them downstream — the extra keys are tolerated, never required.
+ * them downstream: the extra keys are tolerated, never required.
  */
 
 /** Split a `;`/`,`-delimited string or array into a de-duplicated list of trimmed non-empty strings. */
@@ -63,7 +63,7 @@ export function booleanValue(value: unknown): boolean | undefined {
 
 /**
  * Drop empty strings, empty arrays, and nullish values so absent metadata stays
- * absent. `false` and `0` are deliberately KEPT — they are meaningful values,
+ * absent. `false` and `0` are deliberately KEPT, they are meaningful values,
  * not absence, and dropping them would let an inherited `true` leak past an
  * explicit override during the `??` merge.
  */
@@ -82,13 +82,13 @@ export function omitEmptyMetadata<T extends Record<string, string | string[] | n
  * BambuStudio falls back to when the current preset is incompatible with the
  * selected printer (used to mirror that fallback on a cross-model switch).
  */
-/** The LARGEST of a per-extruder minimum list — the tightest lower bound the machine supports. */
+/** The LARGEST of a per-extruder minimum list: the tightest lower bound the machine supports. */
 function maxNumber(value: unknown): number | undefined {
   const values = numberList(value)
   return values && values.length > 0 ? Math.max(...values) : undefined
 }
 
-/** The SMALLEST of a per-extruder maximum list — the tightest upper bound the machine supports. */
+/** The SMALLEST of a per-extruder maximum list: the tightest upper bound the machine supports. */
 function minNumber(value: unknown): number | undefined {
   const values = numberList(value)
   return values && values.length > 0 ? Math.min(...values) : undefined

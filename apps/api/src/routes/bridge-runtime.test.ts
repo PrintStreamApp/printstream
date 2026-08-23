@@ -82,7 +82,7 @@ test('managed-bridge register consults the sole workspace when the provisioning 
   enableManagedMode()
   stubDormantBridgeCreate()
   // Returning no candidates keeps resolveSoleWorkspace ambiguous, so the route
-  // leaves the bridge unpaired — letting us assert the lookup happened without
+  // leaves the bridge unpaired: letting us assert the lookup happened without
   // exercising the full pairing chain.
   let soleWorkspaceLookups = 0
   rootPrisma.workspace.findMany = ((async () => {
@@ -412,7 +412,7 @@ test('register re-binds a returning bridge by installation id instead of creatin
     const response = await fetch(`${baseUrl}/api/bridge-runtime/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      // No bridgeId/runtimeToken — the bridge cleared them, but kept its install id.
+      // No bridgeId/runtimeToken: the bridge cleared them, but kept its install id.
       body: JSON.stringify({ installationId: 'install-xyz', name: 'PrintStream Bridge', version: '0.2.0' })
     })
 

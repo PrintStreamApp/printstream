@@ -64,7 +64,7 @@ afterEach(() => {
 function mockWorkspaceLookup(): void {
   // findFirst, not findUnique: resolution scopes out soft-deleted workspaces,
   // which a unique lookup cannot express. The stub asserts the scope is present
-  // rather than merely accepting it — dropping it would let a deleted workspace
+  // rather than merely accepting it: dropping it would let a deleted workspace
   // be entered, which no test above would otherwise notice.
   prisma.workspace.findFirst = ((async (input: { where: { slug?: string; id?: string; deletedAt?: null } }) => {
     assert.equal(input.where.deletedAt, null, 'workspace resolution must exclude deleted workspaces')

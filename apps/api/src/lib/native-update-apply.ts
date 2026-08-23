@@ -1,15 +1,15 @@
 /**
  * One-click in-place update for the native single-file app: the USER-INITIATED
  * apply half of the native update channel (`native-update-check.ts` is the
- * notify half). Runs inside the service process itself — in the native bundle
- * the API *is* the service — so the web endpoint, the control-channel op, and
+ * notify half). Runs inside the service process itself, in the native bundle
+ * the API *is* the service, so the web endpoint, the control-channel op, and
  * the tray all converge here with no elevation prompt.
  *
  * Sequence: resolve the promoted build → refuse anything unsigned → download
  * via the licensed redirect → verify sha256 + size + Ed25519 → swap the
  * executable via renames → exit with `SERVICE_RESTART_EXIT_CODE` so the
  * service manager restarts into the new binary. The pre-migration DATABASE
- * backup happens on the other side of that restart — the new binary's first
+ * backup happens on the other side of that restart: the new binary's first
  * boot cold-copies the still-offline cluster before migrating
  * (`apps/server/src/pre-update-backup.ts`); the portable PostgreSQL ships no
  * pg_dump, and the restart window is when a plain copy is consistent.
@@ -23,7 +23,7 @@
  *
  * **Inert off the native build.** Every path refuses unless the boot published
  * the native env contract (see `env.ts`): most importantly
- * `PRINTSTREAM_SERVER_EXE`, which only a packaged native run sets — so a dev
+ * `PRINTSTREAM_SERVER_EXE`, which only a packaged native run sets, so a dev
  * process can never swap its own node binary.
  *
  * **The licence key never reaches a third party.** The download endpoint
@@ -71,7 +71,7 @@ interface ApplySeams {
 /**
  * Download, verify, and stage the promoted build, then restart the process.
  * Resolves BEFORE the process exits (the exit is scheduled a moment out) so
- * the HTTP/control caller gets its response. Never throws — every failure
+ * the HTTP/control caller gets its response. Never throws, every failure
  * comes back as `{ accepted: false }` with a user-facing message, because
  * each caller (route, control op, tray-driven CLI) would otherwise invent its
  * own wording for the same failures.
@@ -150,7 +150,7 @@ async function runApply(seams: ApplySeams): Promise<NativeUpdateApplyResult> {
     backupPath
   })
 
-  const message = `Updating to build ${shortFingerprint(build.fingerprint)} — the app is restarting. If it was started in a terminal, start it again.`
+  const message = `Updating to build ${shortFingerprint(build.fingerprint)}: the app is restarting. If it was started in a terminal, start it again.`
   console.log(`[native-update] ${message}`)
   const exitForRestart = seams.exitForRestart ?? (() => {
     setTimeout(() => process.exit(SERVICE_RESTART_EXIT_CODE), RESTART_EXIT_DELAY_MS).unref()
@@ -162,7 +162,7 @@ async function runApply(seams: ApplySeams): Promise<NativeUpdateApplyResult> {
 /**
  * First request carries the licence header and does not follow the redirect;
  * the signed URL is then fetched bare. A refusal (invalid key, lapsed updates
- * window) surfaces the channel's own message rather than a bare status code —
+ * window) surfaces the channel's own message rather than a bare status code,
  * that message is the renewal prompt.
  */
 async function fetchLicensedBinary(binary: ServerReleaseBinary, licenseKey: string | null): Promise<Response> {
@@ -214,7 +214,7 @@ function shortFingerprint(fingerprint: string): string {
 /**
  * A PEM set through a dotenv-style config file arrives single-line with `\n`
  * escapes; a PEM set programmatically (tests) arrives with real newlines. Both
- * must reach `createPublicKey` as real PEM — the same normalization the
+ * must reach `createPublicKey` as real PEM, the same normalization the
  * bridge's `BRIDGE_UPDATE_PUBLIC_KEY` env applies.
  */
 function normalizePemEnvValue(value: string | undefined): string | undefined {

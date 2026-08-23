@@ -6,14 +6,14 @@
  * `Object.getOwnPropertyDescriptor` reports `value: undefined`). The only handle on the real method
  * is the value you read by accessing it. Suites therefore override methods with raw
  * `Object.defineProperty`, which forces each file to hand-track an `originalX` per method plus a
- * matching restore block in `afterEach` — easy to get wrong (a missed restore leaks into the next
+ * matching restore block in `afterEach`: easy to get wrong (a missed restore leaks into the next
  * test).
  *
  * Both helpers capture the real method by reading it once, then restore it by re-pinning that value
  * (the same thing the hand-written teardown blocks did). Pick one:
  * - `usePrismaStubs()` for new/rewritten suites: `stub(prisma.model, 'method', impl)` auto-restores.
  * - `restorePrismaMethodsAfterEach([...])` to migrate an existing suite without touching its (often
- *   multi-line) `Object.defineProperty` setup sites — it just removes the bookkeeping.
+ *   multi-line) `Object.defineProperty` setup sites, it just removes the bookkeeping.
  */
 import { afterEach } from 'node:test'
 
@@ -44,7 +44,7 @@ export function usePrismaStubs(): PrismaStubber {
 /**
  * Migration-friendly alternative: capture the listed Prisma delegate methods once (at module load)
  * and restore them after every test. Use for an existing suite that already overrides methods with
- * raw `Object.defineProperty` — it removes the per-method `originalX` variables and the restore block
+ * raw `Object.defineProperty`, it removes the per-method `originalX` variables and the restore block
  * without having to rewrite every setup site.
  */
 // `target` is `unknown` (not `object`) so callers can pass `prisma.model` references directly: the

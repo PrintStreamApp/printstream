@@ -5,7 +5,7 @@
  * The editor is the editable counterpart; this view never mutates a `SceneEdit`.
  *
  * It owns a Three.js renderer "rig" created ONCE per open and reused across plate
- * switches and query refetches — recreating it per switch churned WebGL contexts
+ * switches and query refetches: recreating it per switch churned WebGL contexts
  * and could evict the editor's context underneath (see the model-studio WebGL
  * lifecycle notes). Render is on-demand (idle = no GPU work). It can preview a
  * live library file or an archived version, and shows a "Reload 3D view" overlay
@@ -68,7 +68,7 @@ const PREVIEW_HOME_VIEW_DIRECTION = (() => {
 
 /**
  * The viewer's persistent renderer rig. Created ONCE per modal open (per preview mode) and
- * reused across plate switches and query-state flips — WebGL contexts are a capped
+ * reused across plate switches and query-state flips, WebGL contexts are a capped
  * browser-wide resource, so only the previewed content is swapped per load, never the
  * renderer/canvas. The framing fields are mutable shared state between the rig's resize
  * handler and the content loader (which learns the model bounds).
@@ -94,7 +94,7 @@ interface PreviewRig {
   syncViewCubeOrientation: () => void
   /**
    * Request a redraw. Rendering is on-demand: the loop only draws when the camera moved
-   * (OrbitControls 'change') or something marked the scene dirty — a static preview costs
+   * (OrbitControls 'change') or something marked the scene dirty, a static preview costs
    * no GPU time. Content changes (object attach, streamed part, draw-range scrub, resize)
    * must invalidate.
    */
@@ -137,9 +137,9 @@ export function PreviewView(props: Record<string, unknown>) {
   /**
    * Why the 3D view is dead, when it is.
    *
-   * 'lost' — the context was reclaimed (GPU pressure, driver reset). Rebuilding the rig usually
+   * 'lost': the context was reclaimed (GPU pressure, driver reset). Rebuilding the rig usually
    * works, so offer it.
-   * 'refused' — the browser would not GRANT a new context. Chrome blocks a page that has caused
+   * 'refused': the browser would not GRANT a new context. Chrome blocks a page that has caused
    * repeated context loss ("Web page caused context loss and was blocked"), and no amount of
    * rebuilding gets one back: only a fresh document does. Retrying from here re-entered the same
    * overlay with the same button, so the recovery affordance looked broken at exactly the moment
@@ -173,7 +173,7 @@ export function PreviewView(props: Record<string, unknown>) {
   )
   // Maximized frees the viewer from its fixed dvh band; full screen drops the plate picker and
   // header too. Both come from the shared dialog modes, which also own the rule that only the
-  // maximized preference is remembered — see `hooks/useDialogPresentationState.ts`.
+  // maximized preference is remembered: see `hooks/useDialogPresentationState.ts`.
   const { presentation, maximized, setMaximized, fullScreen, setFullScreen } = useDialogPresentationState({
     maximizedStorageKey: 'bambu.preview.maximized'
   })
@@ -219,7 +219,7 @@ export function PreviewView(props: Record<string, unknown>) {
   })
   const plates = useMemo(() => platesQuery.data?.plates ?? [], [platesQuery.data])
 
-  // The 3D build plate, honouring the same preference the editor writes — a plate that looks one
+  // The 3D build plate, honouring the same preference the editor writes, a plate that looks one
   // way while editing and another while previewing the slice of that same file is exactly the
   // inconsistency this shares. The scene carries the printer it was placed for; a file whose
   // printer is unknown, or a printer with no bundled mesh, keeps the plain grid.
@@ -273,7 +273,7 @@ export function PreviewView(props: Record<string, unknown>) {
 
   // Renderer rig lifecycle: one WebGL context pair (viewer + view cube) per open, torn
   // down only when the modal closes, the preview mode changes (different camera/renderer
-  // options), or the containers remount. Plate switches and query-state flips reuse it —
+  // options), or the containers remount. Plate switches and query-state flips reuse it:
   // recreating contexts on those churned against the browser's live-context cap, and the
   // resulting oldest-context eviction is what "crashed" this viewer or the editor under it.
   useEffect(() => {
@@ -308,7 +308,7 @@ export function PreviewView(props: Record<string, unknown>) {
 
     // Log depth only for the plated 3MF scene, whose coincident coplanar part surfaces
     // z-fight across the wide depth range. G-code toolpaths have no such geometry, and
-    // logarithmic depth writes gl_FragDepth — which disables early-Z rejection, a real
+    // logarithmic depth writes gl_FragDepth, which disables early-Z rejection, a real
     // per-fragment cost when the toolpath mesh runs to millions of double-sided triangles.
     let renderer: THREE.WebGLRenderer
     try {
@@ -333,7 +333,7 @@ export function PreviewView(props: Record<string, unknown>) {
     controls.enablePan = true
     // Zoom toward the POINTER, not the orbit target. OrbitControls dollies by a MULTIPLICATIVE
     // factor toward `target`, so each step covers less ground as you approach and the approach
-    // asymptotes — reported as "the more I zoom in, the slower zooming becomes, to the point I
+    // asymptotes: reported as "the more I zoom in, the slower zooming becomes, to the point I
     // can't get as close as I'd like". `zoomToCursor` also walks the target toward the cursor, so
     // rotation stops swinging around the plate centre once you have zoomed into a detail.
     controls.zoomToCursor = true
@@ -441,12 +441,12 @@ export function PreviewView(props: Record<string, unknown>) {
     const animate = () => {
       // update() re-applies damping and detects external camera moves; it fires 'change'
       // (-> invalidate) only when the camera actually moved, so an idle preview skips the
-      // render below entirely — no steady-state GPU cost.
+      // render below entirely, no steady-state GPU cost.
       controls.update()
       if (needsRender) {
         needsRender = false
         // Refit the depth range to the content before every draw. The G-code preview renders with
-        // a LINEAR depth buffer (log depth is off here on purpose — it costs early-Z on a
+        // a LINEAR depth buffer (log depth is off here on purpose, it costs early-Z on a
         // million-triangle toolpath mesh), so a fixed 0.1-to-10000 range resolves depth to about a
         // tenth of a millimetre at the framed distance: coarser than a layer, and far coarser than
         // the 0.01mm the grid and nozzle-only zones sit above the plate. Everything z-fought.
@@ -496,7 +496,7 @@ export function PreviewView(props: Record<string, unknown>) {
     resizeObserver?.observe(container)
 
     // Pause the editor's render loop (when this modal sits above it) for as long as this
-    // viewer owns a live renderer — two full scenes must not render concurrently.
+    // viewer owns a live renderer, two full scenes must not render concurrently.
     const releaseOverlayHold = acquireOverlayViewerHold()
 
     setRig(rigState)
@@ -505,7 +505,7 @@ export function PreviewView(props: Record<string, unknown>) {
       releaseOverlayHold()
       setRig(null)
       cancelAnimationFrame(frame)
-      // Before forceContextLoss below, which fires webglcontextlost on our own canvas —
+      // Before forceContextLoss below, which fires webglcontextlost on our own canvas:
       // the handler must not misread our deliberate teardown as a GPU failure.
       renderer.domElement.removeEventListener('webglcontextlost', onContextLost)
       window.removeEventListener('resize', onResize)
@@ -514,7 +514,7 @@ export function PreviewView(props: Record<string, unknown>) {
       controls.dispose()
       renderer.dispose()
       // Release the context immediately: contexts left to GC count against the browser's
-      // live-context cap, and hitting the cap evicts the OLDEST live context — killing a
+      // live-context cap, and hitting the cap evicts the OLDEST live context: killing a
       // healthy viewer (often the editor scene under this modal).
       renderer.forceContextLoss()
       viewCube.dispose()
@@ -642,7 +642,7 @@ export function PreviewView(props: Record<string, unknown>) {
     if (isMeshPreviewMode(previewMode)) {
       // Both STL and STEP load from /mesh: it returns STL bytes (STL verbatim, STEP
       // server-tessellated to BambuStudio-matched quality) through sendModelBuffer, so the
-      // body is chunk-streamed + gzipped — it survives the Vite dev proxy (a raw /download
+      // body is chunk-streamed + gzipped, it survives the Vite dev proxy (a raw /download
       // pipe stalls on large bodies), gets ETag/304 caching, and is gated on view (not
       // download) permission, which is the right scope for a preview.
       const meshUrl = buildApiUrl(`${resourceBase}/mesh`)
@@ -691,7 +691,7 @@ export function PreviewView(props: Record<string, unknown>) {
       }
 
       // Show the plate (correctly oriented) immediately, then stream the parts in off the main thread
-      // so each model appears as it parses with an "N of M" bar — instead of the whole plate blocking
+      // so each model appears as it parses with an "N of M" bar, instead of the whole plate blocking
       // on one big synchronous DOM parse and popping in at once.
       const plateGroup = buildPlatePreviewBed(sceneData, bedModel)
       attachObject(plateGroup)
@@ -744,7 +744,7 @@ export function PreviewView(props: Record<string, unknown>) {
     previewMode,
     selectedPlate,
     // The bed mesh resolves asynchronously (and flips with the preference), so the content has to
-    // rebuild when it lands — otherwise the plate keeps whichever surface it was first built with.
+    // rebuild when it lands, otherwise the plate keeps whichever surface it was first built with.
     bedModel
   ])
 
@@ -768,14 +768,14 @@ export function PreviewView(props: Record<string, unknown>) {
   }, [gcodeTopLayer, gcodeSingleLayer, gcodeMoveEnd, gcodeLayerCount, rig])
 
   // A stale failure overlay must not survive a close/reopen of the modal. Reopening genuinely is
-  // a fresh attempt even for 'refused' — the block is per document, and the browser may have
+  // a fresh attempt even for 'refused': the block is per document, and the browser may have
   // recovered by then; if it has not, the next construction sets 'refused' again immediately.
   useEffect(() => {
     if (!open) setViewerContextFailure(null)
   }, [open])
 
   // Keyboard scrubbing (Bambu-style): Up/Down step the visible top layer, Left/Right scrub
-  // moves within that layer — mirroring the on-screen layer and move sliders. Active only
+  // moves within that layer: mirroring the on-screen layer and move sliders. Active only
   // while a layered G-code preview is shown and focus isn't in a form control.
   useEffect(() => {
     if (previewMode !== 'plate-gcode' || gcodeLayerCount === 0) return
@@ -836,7 +836,7 @@ export function PreviewView(props: Record<string, unknown>) {
   /**
    * Only adapt the axis while EXPANDED, where the body is `flex: 1 1 0` and its box is set by the
    * dialog. Un-expanded the body is content-sized over a fixed-height 3D band, so its height
-   * DEPENDS on whether the strip is a row — feeding that back into the chooser is a loop whose two
+   * DEPENDS on whether the strip is a row: feeding that back into the chooser is a loop whose two
    * states can map to each other and flip-flop forever. It is also the right answer on the merits:
    * a fixed 62dvh band has no height for a rail to reclaim.
    */
@@ -916,7 +916,7 @@ export function PreviewView(props: Record<string, unknown>) {
             >
               <Box ref={setViewerContainer} sx={{ position: 'absolute', inset: 0 }} />
               {/* On the 3D area, not in the dialog header: this mode enlarges the viewport alone, so
-                  the control belongs on the thing it resizes — the editor's viewport toolbar carries
+                  the control belongs on the thing it resizes: the editor's viewport toolbar carries
                   its twin the same way. `soft` because `plain` disappears against the scene. Full
                   screen drops the dialog's padding, which brings the close X down over this corner,
                   so step left of it there. With the G-code scrubbers up it steps clear of each one
@@ -1126,7 +1126,7 @@ export function PreviewView(props: Record<string, unknown>) {
  * height, per-feature time breakdown (colour-keyed to the toolpath palette), and
  * filament usage. Feature times are the parser's feedrate estimate NORMALIZED so the
  * total matches the slicer's own prediction (slice_info `prediction`, else the gcode
- * header estimate) — proportions from the moves, authority from the slicer.
+ * header estimate): proportions from the moves, authority from the slicer.
  */
 function GcodeStatsPanel({
   stats,
@@ -1301,7 +1301,7 @@ function resolvePreviewMode(file: LibraryFile | null): PreviewMode {
   if (!file) return null
   if (file.kind === 'stl') return 'stl'
   if (file.kind === 'step') return 'step'
-  // A geometry-only 3MF has no plated scene to render — it previews as a single mesh,
+  // A geometry-only 3MF has no plated scene to render, it previews as a single mesh,
   // exactly like STL (`/mesh` serves its extracted geometry as STL bytes).
   if (file.kind === '3mf') return file.geometryOnly === true ? 'stl' : '3mf'
   if (file.kind === 'gcode') return 'plate-gcode'
@@ -1332,7 +1332,7 @@ function buildPlatePreviewBed(scene: LibraryThreeMfScene, bedModel: THREE.Buffer
  * Matches the editor's treatment exactly (`EditorView`): with a bed model the flat surface fill is
  * dropped and the coordinate ticks move to the rear edge, so the mesh reads as the plate rather
  * than competing with a painted-on square. The mesh is positioned from the printable area's
- * ORIGIN (its minimum corner), never its centre — see lib/bedModel.ts for why centring skews it.
+ * ORIGIN (its minimum corner), never its centre: see lib/bedModel.ts for why centring skews it.
  */
 function buildPreviewPlateSurface(
   bed: { minX: number; maxX: number; minY: number; maxY: number; excludeAreas: LibraryThreeMfScene['bed']['excludeAreas'] },
@@ -1366,7 +1366,7 @@ function buildPlateGcodePreviewObject(
   bedModel: THREE.BufferGeometry | null
 ): THREE.Object3D {
   // The layered parser already emits raw G-code coordinates (printer Z-up), matching the
-  // Z-up plated scene — so, unlike three's Y-up GCodeLoader output, no rotation is needed.
+  // Z-up plated scene, so, unlike three's Y-up GCodeLoader output, no rotation is needed.
   object.updateMatrixWorld(true)
 
   const bounds = new THREE.Box3().setFromObject(object)

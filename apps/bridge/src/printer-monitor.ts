@@ -14,7 +14,7 @@
  *   silently freeze even while the socket looks healthy.
  * - A watchdog recreates the client with a *fresh* clientId when no report has
  *   arrived for a while, instead of trusting in-place auto-reconnect to recover
- *   a stuck session — the only thing that previously fixed it was a full restart.
+ *   a stuck session: the only thing that previously fixed it was a full restart.
  *
  * When a debug capture is active, every MQTT send/receive and connection
  * transition is mirrored into the capture buffer (see `debug-capture.ts`).
@@ -108,7 +108,7 @@ export class BridgePrinterMonitor {
   /**
    * Whether this printer currently has a live persistent MQTT connection. A
    * healthy monitor connection is proof the LAN link works, so the periodic LAN
-   * probe skips these printers — opening a second connection to a busy printer
+   * probe skips these printers: opening a second connection to a busy printer
    * only risks a false "rejected" warning.
    */
   isConnected(printerId: string): boolean {
@@ -279,7 +279,7 @@ export class BridgePrinterMonitor {
   /**
    * Tear down an mqtt client we are discarding (watchdog recreate or printer
    * removal). After removing our handlers, attach a no-op `error` sink BEFORE
-   * `end(true)`: mqtt.js can still emit a late `error` during/after teardown —
+   * `end(true)`: mqtt.js can still emit a late `error` during/after teardown:
    * most notably a `connack timeout` fired from an internal timer for a printer
    * that accepted the TCP socket but never completed the MQTT handshake. With no
    * listener, Node promotes that to an *unhandled* `error` event and crashes the

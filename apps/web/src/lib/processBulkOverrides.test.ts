@@ -1,7 +1,7 @@
 /**
  * Pins the bulk (multi-target) per-object override semantics behind the settings dialog's
- * mixed-value handling (issue #84): what seeds as uniform vs "Mixed", what an apply emits, and —
- * the invariant the old replace-with-first-member apply violated — that untouched mixed keys
+ * mixed-value handling (issue #84): what seeds as uniform vs "Mixed", what an apply emits, and,
+ * the invariant the old replace-with-first-member apply violated, that untouched mixed keys
  * survive an apply with each member's own value intact.
  */
 import assert from 'node:assert/strict'
@@ -37,7 +37,7 @@ test('a key set on only some members is mixed even when the set values agree', (
 })
 
 test('value comparison is option-aware: serialization variants of one value are uniform', () => {
-  // A percent option serializes as "20" in a preset JSON and "20%" in a 3MF's project config —
+  // A percent option serializes as "20" in a preset JSON and "20%" in a 3MF's project config,
   // the same 20% either way (see processConfigValuesEqual). Raw string comparison would show
   // the user a phantom "Mixed".
   const seed = summarizeBulkOverrides([

@@ -9,8 +9,8 @@
  *
  * The mapping UI is the shared {@link PrinterMapping} (this file used to carry
  * a drifted copy), and the default tray selection is the shared print matcher
- * via `lib/autoTrayMatch.ts` — exact type+colour matches only, nozzle- and
- * remaining-aware — layered UNDER the user's explicit picks with
+ * via `lib/autoTrayMatch.ts`, exact type+colour matches only, nozzle- and
+ * remaining-aware, layered UNDER the user's explicit picks with
  * `mergeAmsMapping` so a live status update can never clobber a chosen slot.
  */
 import { useEffect, useMemo, useState } from 'react'
@@ -161,7 +161,7 @@ export function StoragePrintModal({
   })
   const plates = useMemo(() => platesQuery.data?.plates ?? [], [platesQuery.data])
   const projectFilaments = useMemo(() => platesQuery.data?.projectFilaments ?? [], [platesQuery.data])
-  // Same rule and same alert as the library print dialog — a file already on the printer's storage
+  // Same rule and same alert as the library print dialog, a file already on the printer's storage
   // still has to have been sliced for the kind of machine it is about to print on. Undefined (an
   // older server that does not send the flag) reads as unknown, not as "no switch".
   const trackSwitchMismatches = useMemo(() => {
@@ -256,8 +256,8 @@ export function StoragePrintModal({
     [mappedCompatibilityIssues]
   )
   /**
-   * Mapped slots that will run out. Grades `effectiveMapping` — the merge of the user's picks over
-   * the matcher's suggestion — so it describes exactly what Start would send. One printer here, so
+   * Mapped slots that will run out. Grades `effectiveMapping`, the merge of the user's picks over
+   * the matcher's suggestion, so it describes exactly what Start would send. One printer here, so
    * the entry needs no name to tell it apart.
    */
   const lowFilamentEntries = useMemo(

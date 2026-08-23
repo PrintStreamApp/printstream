@@ -158,7 +158,7 @@ export type NotificationMessage = z.infer<typeof notificationMessageSchema>
 /**
  * A platform-scope notification template (operator events, e.g. a bridge
  * crash or deployment-registered events). Unlike the printer-event templates
- * the event set is dynamic — deployments register their own definitions — so
+ * the event set is dynamic, deployments register their own definitions, so
  * `event` is an open string validated server-side against the registry.
  */
 export const platformNotificationTemplateSchema = z.object({

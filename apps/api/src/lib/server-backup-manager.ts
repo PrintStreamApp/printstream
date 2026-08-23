@@ -6,15 +6,15 @@
  * `server-backup-restore.ts`; the web counterpart is the Backups settings
  * section (self-hosted Settings and, on cloud, Platform settings). Registered
  * from `index.ts` alongside the other interval sweeps (library cleanup et al.)
- * on every deployment — cloud installs schedule backups too, managed from the
+ * on every deployment: cloud installs schedule backups too, managed from the
  * platform workspace.
  *
  * Contract for callers:
  *   - `startServerBackup` only STARTS a run and returns the status snapshot
  *     (a full dump can take minutes); the UI polls the list endpoint while
  *     `running` is true.
- *   - A failed backup never wedges the app: it lands in `lastError`, logs, and
- *     — for SCHEDULED runs — emits the `server-backup-failed` platform
+ *   - A failed backup never wedges the app: it lands in `lastError`, logs, and,
+ *     for SCHEDULED runs: emits the `server-backup-failed` platform
  *     notification so an install is not silently unprotected. Manual runs
  *     surface their failure to the user who clicked, so they do not notify.
  *   - The scheduler is a due-check (every 15 min against `lastBackupAt`), not

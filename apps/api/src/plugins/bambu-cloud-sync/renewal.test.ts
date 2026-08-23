@@ -13,7 +13,7 @@ test('a fresh credential is not renewed', () => {
 test('renewal happens with most of the window still to spare', () => {
   // Measured on a live account: Bambu expires the access token and the refresh token at
   // the SAME instant, 90 days out. So renewal cannot wait until the access token is
-  // nearly dead — the refresh token would be nearly dead too, and a single missed window
+  // nearly dead: the refresh token would be nearly dead too, and a single missed window
   // (server down, workspace paused) costs a full password + 2FA sign-in.
   const issued = Date.now()
   const expires = issued + 90 * DAY

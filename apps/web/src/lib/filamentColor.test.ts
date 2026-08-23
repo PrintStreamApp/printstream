@@ -276,7 +276,7 @@ test('resolveProjectFilamentColorName uses sliced material context before naming
     'Jade White'
   )
   // Generic and custom-brand filament keep plain common names even though the type maps to a
-  // Bambu material — a white "Generic PLA" or a user's own brand is "White", not "Jade White".
+  // Bambu material, a white "Generic PLA" or a user's own brand is "White", not "Jade White".
   assert.equal(
     resolveProjectFilamentColorName({
       color: '#FFFFFF',

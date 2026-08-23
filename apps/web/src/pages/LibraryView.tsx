@@ -1,7 +1,7 @@
 /**
  * Library top-level view: browse folders/files, upload, rename/move/recycle,
  * file versions, and the in-view 3D preview overlay. It hosts the shared
- * slice/print dialog stack defined in `components/library/` — `SliceFileModal`,
+ * slice/print dialog stack defined in `components/library/`: `SliceFileModal`,
  * `SliceThenPrintModal`, `SliceResultModal`, `PrintModal`, and the
  * `SliceSettingsPanel`/`SliceSettingsController` (the latter also drives the
  * model studio's borrowed slice config).
@@ -146,7 +146,7 @@ type SliceThenPrintTarget = {
  * Library file list with upload, delete, “Send to printer” and a
  * folder tree. Per-row actions are extensible via the
  * `library.fileActions` plugin slot. Folders are pure metadata
- * grouping — the on-disk layout under `LIBRARY_DIR` stays flat.
+ * grouping: the on-disk layout under `LIBRARY_DIR` stays flat.
  */
 export function LibraryView() {
   const { confirm } = usePromptDialog()
@@ -172,8 +172,8 @@ export function LibraryView() {
   // editor saves via "Save as new" (prompting for name + destination) rather than overwriting
   // the throwaway scaffold. Set from the scaffold flow's `onDiscard` presence.
   const [sliceTargetIsNewProject, setSliceTargetIsNewProject] = useState(false)
-  // How the slice/editor dialog was opened: 'library' (the Edit action — slice/save
-  // focused) or 'print' (the Print action — slice-then-print focused, matching the
+  // How the slice/editor dialog was opened: 'library' (the Edit action, slice/save
+  // focused) or 'print' (the Print action, slice-then-print focused, matching the
   // PrintersView print dialog's 3MF flow).
   const [sliceFlow, setSliceFlow] = useState<'library' | 'print'>('library')
   // When set, the slice dialog targets this archived version of sliceTarget.
@@ -275,7 +275,7 @@ export function LibraryView() {
     queryFn: ({ signal }) => apiFetch<SlicingCapabilities>('/api/slicing/capabilities', { signal }),
     enabled: authBootstrapQuery.isSuccess ? (canUploadLibrary && canViewLibrary) : false,
     // When the slicer is configured but not yet healthy (e.g. restarting), keep polling so
-    // the editor/slice UI recovers on its own — the user just waits instead of hitting a
+    // the editor/slice UI recovers on its own: the user just waits instead of hitting a
     // dead-end "reopen the editor" error.
     refetchInterval: (query) => {
       const data = query.state.data
@@ -292,7 +292,7 @@ export function LibraryView() {
   const allFolders = useMemo(() => foldersQuery.data?.folders ?? [], [foldersQuery.data])
   const browseData = browseQuery.data
   const bridgeRootMode = browseData?.mode === 'bridge-root'
-  // How many files are sitting in the recycle bin, for the badge on its toolbar button — a soft
+  // How many files are sitting in the recycle bin, for the badge on its toolbar button, a soft
   // delete is otherwise invisible, so files accumulate there unnoticed. Deliberately the SAME query
   // key `LibraryRecycleBinModal` uses: opening the bin then needs no second fetch, and the two can
   // never disagree about what it holds. `invalidateLibraryListQueries` already refreshes this key,
@@ -335,7 +335,7 @@ export function LibraryView() {
   )
   // The server caps a single folder/search at a fixed file count and flags the
   // overflow so a huge folder can't balloon one response. Surface it instead of
-  // silently dropping rows — the user narrows via a subfolder or search.
+  // silently dropping rows: the user narrows via a subfolder or search.
   const browseTruncated = browseData?.truncated ?? false
   const browseFileLimitLabel = browseData?.fileLimit?.toLocaleString() ?? ''
   const libraryFilters = useLibraryFilters({ visibleFiles, childFolders, currentFolderId, requestedBridgeId, deferredSearch, sort, favoritesOnly })
@@ -403,7 +403,7 @@ export function LibraryView() {
     if (bridgeResourceUnavailable) return false
     if (canDispatchPrints && isDirectPrintableFileName(file.name)) return true
     // Preview-first files (STL/STEP, geometry-only 3MFs, single-object model exports)
-    // open the read-only 3D preview — but only when the previewer (model-studio) is
+    // open the read-only 3D preview, but only when the previewer (model-studio) is
     // installed, so the card isn't a dead click. Checked before the editor branch:
     // a model EXPORT is an unsliced project too, but its default action is the preview
     // (slice/edit stay in the explicit menu actions).
@@ -432,7 +432,7 @@ export function LibraryView() {
     }
   }
 
-  // A callback to run when the slice dialog closes — used to discard a new-project
+  // A callback to run when the slice dialog closes: used to discard a new-project
   // scaffold the user abandoned (a saved copy is a separate visible file).
   const sliceTargetCleanupRef = useRef<(() => void) | null>(null)
 
@@ -470,8 +470,8 @@ export function LibraryView() {
   /**
    * Deep link into the slice/print flow: `?slice=<fileId>&sliceFlow=print`.
    *
-   * Exists so a surface that produces a file elsewhere — today the remote-import view,
-   * whose "Import and print" lands an unsliced 3MF — can hand off to the ONE flow that
+   * Exists so a surface that produces a file elsewhere, today the remote-import view,
+   * whose "Import and print" lands an unsliced 3MF, can hand off to the ONE flow that
    * knows how to prepare it, instead of rebuilding this page's dialog stack. The params
    * are consumed once and stripped, so a refresh or a back-navigation does not reopen
    * a dialog the user already dismissed.
@@ -525,7 +525,7 @@ export function LibraryView() {
       const keepSliceDialogOpen = variables.keepDialogOpen || variables.action === 'print'
       if (!keepSliceDialogOpen) closeSliceDialog()
       // Hand the job to the dialogs below from the POST response and refresh the list
-      // afterwards, without awaiting it — see slicingJobsCache for why awaiting here left the
+      // afterwards, without awaiting it: see slicingJobsCache for why awaiting here left the
       // Slice button spinning over a slice that had already finished.
       seedSlicingJob(queryClient, response.job)
       refreshSlicingJobs(queryClient)
@@ -1181,7 +1181,7 @@ export function LibraryView() {
               }}
             />
             {/* Directory picker for "Upload folder…": the picked tree is replicated as
-                library folders (metadata only — file bytes stay flat on the bridge). */}
+                library folders (metadata only: file bytes stay flat on the bridge). */}
             <input
               ref={folderInputRef}
               type="file"
@@ -1534,7 +1534,7 @@ export function LibraryView() {
         <SliceFileModal
           // Re-mount on a different file/version: the dialog holds per-file state (material
           // colors/nozzles, the one-shot material-defaults latch, the user's target picks) that
-          // must never survive a target swap — a reused instance shows the PREVIOUS project's
+          // must never survive a target swap, a reused instance shows the PREVIOUS project's
           // materials. Mirrors EditorView.
           key={`${sliceTarget.id}:${sliceVersionId ?? 'current'}`}
           file={sliceTarget}
@@ -1554,7 +1554,7 @@ export function LibraryView() {
           submitAction={startSlicingJob.variables?.action ?? null}
           submitError={startSlicingJob.error instanceof Error ? startSlicingJob.error.message : null}
           onClose={closeSliceDialog}
-          // "Save as" in the editor makes a NEW file — re-target the dialog to it (the key includes
+          // "Save as" in the editor makes a NEW file: re-target the dialog to it (the key includes
           // the file id, so this cleanly re-mounts the editor on the just-saved project).
           onSavedAs={(saved) => { void openSliceForSavedFile(saved) }}
           onSubmit={(input, action, options) => startSlicingJob.mutate({ file: sliceTarget, versionId: sliceVersionId, action, keepDialogOpen: options?.keepDialogOpen, ...input })}

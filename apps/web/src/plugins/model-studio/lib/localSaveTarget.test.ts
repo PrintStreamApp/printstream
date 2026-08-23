@@ -9,6 +9,16 @@ import type { LocalProjectFile } from './localProjectFile'
 
 const MODEL_XML = '<?xml version="1.0" encoding="UTF-8"?>\n<model unit="millimeter"><resources></resources><build></build></model>'
 
+/**
+ * The same model, but declaring object 3. A build item naming an object the model does not contain
+ * is refused by the bake: it would leave the real objects unreferenced and strip them, and
+ * BambuStudio aborts the parse on it. A fixture that PLACES an object has to declare it.
+ */
+const MODEL_XML_WITH_OBJECT_3 = MODEL_XML.replace(
+  '<resources></resources>',
+  '<resources><object id="3" type="model"><mesh><vertices/><triangles/></mesh></object></resources>'
+)
+
 const BASE_PAYLOAD: SaveArrangedThreeMf = {
   baseFileId: null,
   baseVersionId: null,
@@ -70,9 +80,9 @@ test('a local save is never library-backed, so the caller skips library bookkeep
 
 test('per-object settings reach the saved file rather than being dropped', async () => {
   // These ride the save REQUEST, not the SceneEdit, so they are easy to lose on the way to the
-  // bake — and losing them looks like a successful save until the next slice comes out wrong.
+  // bake, and losing them looks like a successful save until the next slice comes out wrong.
   const zip = zipSync({
-    '3D/3dmodel.model': strToU8(MODEL_XML),
+    '3D/3dmodel.model': strToU8(MODEL_XML_WITH_OBJECT_3),
     'Metadata/model_settings.config': strToU8('<config><object id="3"><metadata key="name" value="Widget"/></object></config>')
   })
   const archive = await openThreeMfArchive(new Blob([new Uint8Array(zip)]))
@@ -285,7 +295,7 @@ test('an unresolvable machine leaves the project on its own printer rather than 
 
 test('a single-object export is never retargeted', async () => {
   // An export is one object taken OUT of the project, not the project being saved for another
-  // printer — and the api's export path does not retarget either.
+  // printer, and the api's export path does not retarget either.
   const calls = stubResolveFetch()
   const archive = await x1cProjectArchive()
   const target = createLocalSaveTarget({

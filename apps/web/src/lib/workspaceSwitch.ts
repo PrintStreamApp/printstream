@@ -115,7 +115,7 @@ export function isWorkspaceLandingReady(input: WorkspaceLandingReadyInput): bool
   if (input.routeWorkspaceSlug == null) {
     // Never ready before the auth bootstrap resolves: the landing redirect
     // would fire with no workspace context, sending `/` to a bare slug-less
-    // page path that the catch-all bounces straight back to `/` — an
+    // page path that the catch-all bounces straight back to `/`, an
     // infinite redirect loop racing the bootstrap response.
     return input.authBootstrapReady
       && (input.activeWorkspaceSlug == null || (input.sharedSettingsReady && input.deviceLandingPageOverrideLoaded))
@@ -133,7 +133,7 @@ function readPathname(path: string): string {
 }
 
 function pathIsAvailable(path: string, input: WorkspaceLandingPathInput): boolean {
-  // Any printers-page address is available exactly when the printers page is —
+  // Any printers-page address is available exactly when the printers page is,
   // including a saved view's `/printers/views/<id>` landing target. Whether the
   // view still exists is not knowable here (the list loads per workspace); the
   // printers page itself degrades a stale view address to its bare route.

@@ -45,7 +45,7 @@ test('a project filament resolves its slot column + a name-matched builtin basel
   assert.equal(calls[0]?.id, PETG_BUILTIN, 'the parent builtin was resolved by name')
   assert.equal(result.config.nozzle_temperature, '270')
   assert.equal(result.baseConfig.nozzle_temperature, '250')
-  // Carried alongside the resolved baseline now — `wall_loops` is not a filament key, so the
+  // Carried alongside the resolved baseline now: `wall_loops` is not a filament key, so the
   // catalogue filter drops it and only the real one survives.
   assert.deepEqual(result.overriddenKeys, ['nozzle_temperature'])
   assert.equal(result.declaresOverrides, true)
@@ -109,7 +109,7 @@ test('a workspace/custom filament id is not resolvable on an anonymous host', as
 // same badge, whichever host opened it.
 test('a builtin preset is measured against the slot the project actually carries', async () => {
   const { resolveBuiltin } = stubBuiltin({ filament_type: ['PETG'], filament_max_volumetric_speed: ['25', '40'] })
-  // One filament, TWO extruder variants — `filament_extruder_variant` is the layout's identity
+  // One filament, TWO extruder variants: `filament_extruder_variant` is the layout's identity
   // column, so without it the parser reads element 0 rather than the slot's 2-wide block.
   const project = projectWith({
     filament_settings_id: ['Bambu PETG Basic'],
@@ -142,7 +142,7 @@ test('a slot holding another material carries nothing to the preset', async () =
 // Switching a slot onto a different preset. The project declares NO changes for this slot, so
 // nothing follows it: the new preset's values stand and nothing reads as changed. Before, the whole
 // slot config was dragged across and every key where it differed from the chosen preset was
-// reported as this project's change — a stock slot moved onto a variant that touches two keys
+// reported as this project's change, a stock slot moved onto a variant that touches two keys
 // announced "2 changes" the user never made, and kept two numbers BambuStudio would have replaced
 // (`Tab::select_preset` carries the dirty options only).
 test('only the declared changes follow a slot onto a different preset', async () => {
@@ -189,8 +189,8 @@ test('a slot with no declared record still carries its values onto a new preset'
     projectFilamentId: 1
   })
 
-  assert.equal(result.config.supertack_plate_temp, '40', 'undeclared but unknown — keep it rather than discard it')
-  assert.equal(result.declaresOverrides, false, 'recorded nothing — not the same as recording that nothing changed')
+  assert.equal(result.config.supertack_plate_temp, '40', 'undeclared but unknown: keep it rather than discard it')
+  assert.equal(result.declaresOverrides, false, 'recorded nothing, not the same as recording that nothing changed')
 })
 
 /**
@@ -198,7 +198,7 @@ test('a slot with no declared record still carries its values onto a new preset'
  *
  * The dialog turns `baselineOrigin` into the caveat it shows. It used to be computed separately in
  * the controller, which got it wrong twice over: it answered per PRESET while this answers per
- * SLOT, and it never looked at browser-stored presets at all — so the one case with a genuinely
+ * SLOT, and it never looked at browser-stored presets at all, so the one case with a genuinely
  * incomplete baseline was the one case that said nothing.
  */
 test('an exact built-in match reports an exact baseline, so the dialog stays quiet', async () => {

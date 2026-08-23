@@ -56,7 +56,7 @@ export interface TextPromptDialogOptions {
    * Submit through the server and let IT decide whether the value is acceptable.
    *
    * Return null to accept (the dialog closes and the promise resolves with the
-   * value), or a message to reject — the dialog stays open, shows the message,
+   * value), or a message to reject: the dialog stays open, shows the message,
    * and keeps what the user typed.
    *
    * This exists because the alternative is shipping the server's rule to the
@@ -64,7 +64,7 @@ export interface TextPromptDialogOptions {
    * existing names sent to the page, which is a partial copy of a constraint the
    * database already enforces: it cannot see anything outside what was fetched,
    * and it goes stale the moment someone else takes the name. With this, the
-   * only authority is the endpoint, and the dialog just repeats what it said —
+   * only authority is the endpoint, and the dialog just repeats what it said:
    * beside the field, rather than as an alert on the surface behind it after the
    * dialog has closed and taken the typed value with it.
    *
@@ -207,7 +207,7 @@ export function PromptDialogProvider({ children }: { children: ReactNode }) {
   const promptError = validationError ?? submitError
 
   /**
-   * Submitting is what CLOSES the dialog, not the click — a server that rejects
+   * Submitting is what CLOSES the dialog, not the click, a server that rejects
    * the value keeps it open with the message and everything the user typed.
    */
   const submitPromptDialog = useCallback(async () => {

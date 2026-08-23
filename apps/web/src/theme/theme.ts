@@ -176,7 +176,7 @@ export const auroraTheme = createAppTheme({
  *
  * The padding and height here are the baseline for a row that does no fitting.
  * `AppShell`'s desktop row does, so `navDensitySx` below restates both at every
- * rung and wins on specificity — change one and check the other.
+ * rung and wins on specificity: change one and check the other.
  */
 export const sectionTabSx = {
   /**
@@ -185,7 +185,7 @@ export const sectionTabSx = {
    * TabList sets `overflowX: auto`) rather than every tab shrinking.
    *
    * `1 0 auto`, not `1 1 auto`: with shrink enabled and a floor of 0 the tabs
-   * always gave way, so EVERY label truncated a little and none was readable —
+   * always gave way, so EVERY label truncated a little and none was readable,
    * and because the row then always fitted, the scroll it is supposed to fall
    * back on never engaged. Growing is still wanted (the tabs fill the pill);
    * only the shrinking was wrong.
@@ -226,12 +226,12 @@ export const sectionTabSx = {
  *
  * Every rung is stated here, `comfortable` included, so the ladder reads as one
  * table rather than three steps measured against a baseline kept elsewhere.
- * The first three keep every label — only `icons` hides one, and by then the
+ * The first three keep every label, only `icons` hides one, and by then the
  * words genuinely do not fit. See the hook for why truncation is not a rung.
  *
  * The padding is deliberately tighter than a button's would be. A tab grows to
  * fill the pill anyway (`sectionTabSx` sets `flex: 1 0 auto`), so generous
- * padding buys no breathing room at a comfortable width — it only inflates the
+ * padding buys no breathing room at a comfortable width, it only inflates the
  * tab's INTRINSIC width, which is the thing the fitting loop measures, and so
  * costs a rung earlier than it needs to.
  */

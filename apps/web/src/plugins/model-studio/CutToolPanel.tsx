@@ -2,7 +2,7 @@
  * Floating control panel for the editor's plane-cut tool: axis (X/Y/Z), plane position (numeric +
  * slider, clamped to the object's range), which halves to keep, and Cut/Cancel.
  *
- * Pure presentational surface — the cut state, the live cut-plane preview mesh, and the actual
+ * Pure presentational surface: the cut state, the live cut-plane preview mesh, and the actual
  * mesh-cut execution all live in EditorView; this only renders the controls and calls back.
  */
 import { Button, ButtonGroup, Checkbox, Input, Sheet, Slider, Stack, Typography } from '@mui/joy'
@@ -18,7 +18,7 @@ export interface CutToolPanelProps {
   setCutOffset: (value: number) => void
   /** The selected object's extent along the cut axis (panel only renders when this is known). */
   cutRange: { min: number; max: number }
-  /** `cutOffset` clamped into `cutRange` — what the slider/preview actually use. */
+  /** `cutOffset` clamped into `cutRange`: what the slider/preview actually use. */
   clampedCutOffset: number
   cutKeepLower: boolean
   setCutKeepLower: (value: boolean) => void

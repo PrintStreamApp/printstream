@@ -1,6 +1,6 @@
 /**
  * Records, per filament slot, which SYSTEM preset the slot's preset derives from and what it
- * changed — the two fields BambuStudio needs to bind a slot to a USER preset.
+ * changed: the two fields BambuStudio needs to bind a slot to a USER preset.
  *
  * WHY THIS IS NOT COSMETIC. Opening a project, BambuStudio rebuilds each slot's config and compares
  * it to the installed preset of the same name (`PresetCollection::load_external_preset` ->
@@ -16,11 +16,11 @@
  * That normalization replaces every key NOT named in `different_settings_to_system` with the base
  * preset's own value, so any residual drift in the file is erased before the comparison. A SYSTEM
  * preset gets it for free from the second branch. A USER preset only gets it if the project names
- * its parent in `inherits_group` — and BambuStudio's own saves do exactly that.
+ * its parent in `inherits_group`, and BambuStudio's own saves do exactly that.
  *
  * MEASURED: a repaired project whose slot values were byte-identical to a BambuStudio-written file
  * still refused to bind slot 3, the one slot pointing at a user preset. The only difference between
- * the two files was `inherits_group[3]` — `"Bambu PLA Basic @BBL H2D"` in theirs, empty in ours.
+ * the two files was `inherits_group[3]`: `"Bambu PLA Basic @BBL H2D"` in theirs, empty in ours.
  *
  * THE TWO FIELDS ARE ONE FACT AND MUST AGREE. With a parent named, `different_settings_to_system`
  * stops being advisory and becomes the list of keys allowed to survive normalization: a key the
@@ -37,7 +37,7 @@ import type { ProcessConfig } from './process-settings.js'
 
 /**
  * Identity, not physics. These describe WHICH filament a slot holds, so a difference in them is not
- * a setting the user changed and must never reach `different_settings_to_system` — BambuStudio
+ * a setting the user changed and must never reach `different_settings_to_system`: BambuStudio
  * would then exempt them from normalization and compare a project-shaped value (one entry per slot)
  * against a preset-shaped one.
  */
@@ -52,7 +52,7 @@ const IDENTITY_KEYS = new Set([
   'filament_self_index'
 ])
 
-/** What a slot's preset inherits from, and what it changed. Both, or neither — see the header. */
+/** What a slot's preset inherits from, and what it changed. Both, or neither: see the header. */
 export interface FilamentPresetBinding {
   /** The preset's `inherits` (a SYSTEM preset name). Null for a system preset, which needs none. */
   inherits: string | null
@@ -65,7 +65,7 @@ export interface FilamentPresetBinding {
  *
  * Compared with {@link filamentConfigValuesEqual} rather than `===`, because a preset JSON and its
  * parent routinely spell one value differently (`"45.0"` vs `"45%"`, absent vs empty) and a string
- * comparison would declare phantom changes — which here is not merely cosmetic noise: an
+ * comparison would declare phantom changes, which here is not merely cosmetic noise: an
  * over-declared key is exempted from normalization, so the file's value is kept where the parent's
  * was wanted.
  *
@@ -89,7 +89,7 @@ export function filamentPresetChangedKeys(preset: ProcessConfig, parent: Process
  * Write each slot's binding into the project config, in place.
  *
  * LAYOUT: both arrays are `[process, ...filaments, printer]`, so slot `i` lives at `i + 1`. A slot
- * with no binding keeps whatever the project already had — this is additive, and a caller that
+ * with no binding keeps whatever the project already had, this is additive, and a caller that
  * could not resolve a preset must not be able to blank a record it knows nothing about.
  *
  * A binding with no parent (`inherits: null`) writes an EMPTY inherits entry, which is correct

@@ -1,6 +1,6 @@
 /**
  * Self-hosted license enforcement (core). Owns the question "may this install
- * add printers and start prints?" and nothing else — it never gates reading,
+ * add printers and start prints?" and nothing else, it never gates reading,
  * and never locks data away.
  *
  * **Who is enforced.** Every self-hosted build: the native (paid) app and the
@@ -10,7 +10,7 @@
  * cloud licenses through subscriptions instead and is never enforced here.
  *
  * **What satisfies it** differs by build, and only here:
- * - Docker/OSS accepts a community *or* commercial key — non-commercial
+ * - Docker/OSS accepts a community *or* commercial key: non-commercial
  *   self-hosting is free, so a free community key clears the gate.
  * - The native app requires `commercial`; community keys cover Docker only.
  * In both, an *expired* key counts as no key (`readLicenseStatus` folds expiry
@@ -20,11 +20,11 @@
  * functional for a window measured from first boot, then drops to `limited`:
  * printer adds and print dispatch are refused; everything already there keeps
  * working and stays visible. Docker/OSS gets the longer window because for
- * those installs the requirement is *new* — an existing deployment upgrading
+ * those installs the requirement is *new*, an existing deployment upgrading
  * into this must have time to fetch a free community key, not discover the
  * lock mid-print.
  *
- * Failures fail open throughout — a transient DB error must never brick a
+ * Failures fail open throughout, a transient DB error must never brick a
  * paying customer's install. The one thing that must fail *closed* is an
  * expired key, and that is decided from the token itself, not from a query.
  *
@@ -62,7 +62,7 @@ const LEGACY_NATIVE_FIRST_RUN_KEY = scopeSettingKeyForWorkspace(null, 'license.n
 const CACHE_TTL_MS = 60_000
 
 export const NATIVE_LIMITED_MESSAGE =
-  'The evaluation period has ended — enter a commercial license under Settings → License to continue. The native app requires a commercial license; community keys cover the Docker build only.'
+  'The evaluation period has ended: enter a commercial license under Settings → License to continue. The native app requires a commercial license; community keys cover the Docker build only.'
 
 export const SELF_HOSTED_LIMITED_MESSAGE =
   'This install needs a license to keep adding printers and starting prints. Add a free community key (personal, non-commercial use) or a commercial key under Settings → License.'
@@ -109,7 +109,7 @@ export function computeLicenseMode(input: {
  *
  * Exported for tests, because this decides what happens to installs that ALREADY
  * EXIST when enforcement ships. Only reached when `isLicenseEnforced()` is true,
- * which was native-only before — so a Docker/OSS install carries no stamp and is
+ * which was native-only before, so a Docker/OSS install carries no stamp and is
  * dated from the upgrade, giving it the full grace window rather than a window
  * that expired before it was ever told about.
  */
@@ -201,19 +201,19 @@ export async function assertLicenseAllowsPrinterAdd(): Promise<void> {
  * Register the license print guard and printer allowance (called once at boot).
  *
  * The guard path is synchronous, so it reads the cached mode and refreshes it
- * in the background when stale — a just-expired evaluation takes effect within
+ * in the background when stale, a just-expired evaluation takes effect within
  * a minute rather than blocking the dispatch hot path on a DB read.
  *
  * The printer allowance is counted **install-wide, not per workspace**: the
  * cap is a property of the key, and counting per workspace would let anyone lift
  * it by creating a second workspace. Registering here is safe because the cloud
- * billing module — the only other `registerPrinterQuota` caller — is absent
+ * billing module, the only other `registerPrinterQuota` caller, is absent
  * from exactly the builds this runs in.
  *
  * On a **metered** key (self-hosted Pro) the allowance is not a wall: adding a
  * printer past it buys the capacity inline and removing one credits it back, so
  * the install meters like a cloud workspace. Every other key keeps the old
- * behaviour — a fixed allowance and a refusal — because there is no
+ * behaviour, a fixed allowance and a refusal, because there is no
  * subscription behind it to grow.
  */
 export function registerLicenseEnforcement(): void {
@@ -233,8 +233,8 @@ export function registerLicenseEnforcement(): void {
     // Buy the capacity rather than refusing, for a key that has a subscription
     // behind it. This is what makes a self-hosted install feel like a cloud
     // workspace: the operator adds a printer, the cloud bills the difference,
-    // and the add goes through in the same request. Everything else — Lifetime,
-    // community, a cancelled subscription — refuses with its own reason.
+    // and the add goes through in the same request. Everything else, Lifetime,
+    // community, a cancelled subscription, refuses with its own reason.
     raiseLimit: async (needed) => {
       // A fixed key (Lifetime, community) has no subscription to grow. Falling
       // through to `describeLimit` is right here: "upgrade your license" is the
@@ -260,7 +260,7 @@ export function registerLicenseEnforcement(): void {
     // for.
     onCountChanged: async () => {
       // Nothing to meter on a community or Lifetime key, and this fires on every
-      // printer add and remove — so the cheap local check comes before the count
+      // printer add and remove, so the cheap local check comes before the count
       // and the request. `requestLicensedPrinters` refuses those keys anyway;
       // this just keeps the common case free.
       if (!(await getInstalledLicenseStatus()).metered) return

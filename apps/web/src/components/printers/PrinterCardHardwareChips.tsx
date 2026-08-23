@@ -3,8 +3,8 @@
  * an IP / Wi-Fi tooltip and the current nozzle-size chip. They render after the live status and
  * plugin chips (and before the actions menu) so transient state reads first and the fixed
  * hardware identity stays right-aligned. Being last in the header's one-line chip clamp
- * (see PrinterCard) also makes them the first to drop when the row runs short — nozzle size,
- * then model — so the printer name and live status keep their room. The chips themselves are the
+ * (see PrinterCard) also makes them the first to drop when the row runs short, nozzle size,
+ * then model, so the printer name and live status keep their room. The chips themselves are the
  * shared PrinterHardwareChips (also rendered on printer picker rows); this wrapper only adds the
  * card's IP/Wi-Fi tooltip.
  */

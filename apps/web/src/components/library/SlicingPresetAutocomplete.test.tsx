@@ -31,7 +31,7 @@ const PROFILES = [
 ]
 
 test('opening with a committed (modified) selection lists the FULL catalog, not just the chosen option', () => {
-  // Regression: the controlled input carries the selected display name — with the '* '
+  // Regression: the controlled input carries the selected display name, with the '* '
   // modified marker it no longer equals the option label, so the default filter narrowed the
   // open list to the chosen option and the rest of the catalog was unreachable without
   // clearing the field first.

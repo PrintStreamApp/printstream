@@ -1,6 +1,6 @@
 /**
- * The three printer SD-storage browsers reachable from the card's actions menu — general files,
- * sliced models, and timelapses — each a {@link PrinterStorageModal} preset. Grouped out of
+ * The three printer SD-storage browsers reachable from the card's actions menu, general files,
+ * sliced models, and timelapses, each a {@link PrinterStorageModal} preset. Grouped out of
  * PrinterCard so the card's render tree isn't cluttered with three near-identical modal configs.
  */
 import type { Printer } from '@printstream/shared'

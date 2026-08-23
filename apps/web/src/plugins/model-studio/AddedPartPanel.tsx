@@ -1,11 +1,11 @@
 /**
- * Floating panel for the added part volume currently holding the gizmo — BambuStudio's part
+ * Floating panel for the added part volume currently holding the gizmo: BambuStudio's part
  * properties, reduced to what an added volume actually has: its type, its material (only when the
  * type carries one), per-volume process settings (modifiers), and remove.
  *
  * Presentational: `EditorView` owns the selection and every mutation. The type Select offers all
  * five subtypes, so a part added as a support blocker can become a printed part without being
- * removed and re-added — the same retype `ObjectList`'s part rows offer for baked parts.
+ * removed and re-added, the same retype `ObjectList`'s part rows offer for baked parts.
  */
 import { Box, Button, Option, Select, Sheet, Stack, Typography } from '@mui/joy'
 import { threeMfPartSubtypeCarriesFilament, type SceneEditPartSubtype } from '@printstream/shared'
@@ -90,7 +90,7 @@ export function AddedPartPanel({
                   bgcolor: option.color || 'neutral.softBg', border: '1px solid rgba(255,255,255,0.18)'
                 }}
               />
-              Material {option.number}{option.label ? ` — ${option.label}` : ''}
+              Material {option.number}{option.label ? `: ${option.label}` : ''}
             </Option>
           ))}
         </Select>

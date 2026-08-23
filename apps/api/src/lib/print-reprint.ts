@@ -140,8 +140,8 @@ export function buildReprintOptions(
  * Re-dispatch a finished history job.
  *
  * `assertPermission` is invoked with the resolved job kind at the same point
- * the route previously asserted permission — before any per-kind validation or
- * side effect — so the caller can enforce request-scoped authorization. It
+ * the route previously asserted permission, before any per-kind validation or
+ * side effect, so the caller can enforce request-scoped authorization. It
  * should throw on failure.
  */
 export async function reprintJobFromRow(input: {
@@ -160,7 +160,7 @@ export async function reprintJobFromRow(input: {
     const targetPrinterId = overrides.printerId ?? row.printerId
     const printer = await prisma.printer.findFirst({ where: { id: targetPrinterId, workspaceId } })
     if (!printer) throw notFound('Printer not found')
-    if (!printerManager.getPrinter(printer.id)) throw badRequest('Printer is not connected — command was not delivered')
+    if (!printerManager.getPrinter(printer.id)) throw badRequest('Printer is not connected: command was not delivered')
 
     const blocked = printGuards.evaluate({ printerId: printer.id, source: 'calibration' })
     if (blocked) throw conflict(blocked.reason ?? 'Calibration blocked by a plugin')
@@ -170,7 +170,7 @@ export async function reprintJobFromRow(input: {
       printerName: printer.name,
       option: row.calibrationOption
     })
-    if (!started) throw badRequest('Printer is not connected — command was not delivered')
+    if (!started) throw badRequest('Printer is not connected: command was not delivered')
 
     return {
       kind: 'calibration',

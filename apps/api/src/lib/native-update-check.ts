@@ -1,5 +1,5 @@
 /**
- * "Is there a newer native build?" — asked by the native single-file app.
+ * "Is there a newer native build?", asked by the native single-file app.
  *
  * The Docker bundle has had an update notice since it shipped (`app-update-check.ts`,
  * which reads GHCR). This module is the NOTIFY half for the native bundle; the
@@ -7,13 +7,13 @@
  * module's manifest fetch so both read the channel one way.
  *
  * **Anonymous by design.** The request carries no licence key, no installation
- * id, and no telemetry — it is a plain GET for a manifest. That matters twice
+ * id, and no telemetry, it is a plain GET for a manifest. That matters twice
  * over: a perpetual key must make no unprompted request that identifies the
  * install (the promise `license-refresh-client.ts` keeps and the FAQ states),
  * and an owner whose updates window has LAPSED still has to be told a release
  * exists, because that notice is how they learn there is something to renew for.
- * The licence is checked when a build is downloaded, not when it is checked for
- * — see `private/cloud/server-release-channel.ts`.
+ * The licence is checked when a build is downloaded, not when it is checked for,
+ * see `private/cloud/server-release-channel.ts`.
  *
  * **Inert unless this is an identifiable native build.** A dev run, a Docker
  * run, or a native binary built locally without a baked fingerprint all report
@@ -57,7 +57,7 @@ let inFlight: Promise<void> | null = null
  * The identity this process was built with.
  *
  * Published as env by `apps/server/src/run.ts` before it imports the API, the
- * same way it hands over every other native-only setting — the bake belongs to
+ * same way it hands over every other native-only setting: the bake belongs to
  * the native build, and the API only reads it. Empty or absent (any non-native
  * run, or a locally-built binary) means the check never fires.
  */
@@ -86,7 +86,7 @@ export function nativeUpdateOrigin(): string {
  * The live server's current native build, freshly fetched and schema-parsed.
  * Shared by the notify check below and the apply driver
  * (`native-update-apply.ts`), so both read the manifest one way. Throws on
- * network/shape failures — the notify path degrades that to `unknown`, the
+ * network/shape failures: the notify path degrades that to `unknown`, the
  * apply path surfaces it.
  */
 export async function fetchCurrentServerBuild(): Promise<ServerReleaseManifest['current']> {

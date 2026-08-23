@@ -44,7 +44,7 @@ function renderShell(presentation?: 'standard' | 'maximized' | 'fullscreen') {
 }
 
 /**
- * The attribute is the ONLY way an enlarged dialog escapes the theme's app-wide viewport clamp — Joy
+ * The attribute is the ONLY way an enlarged dialog escapes the theme's app-wide viewport clamp: Joy
  * applies theme `styleOverrides` after `sx`, so the clamp cannot be lifted from the dialog's own
  * styles. Dropping it fails silently: the dialog still renders, just short of the screen edge.
  */

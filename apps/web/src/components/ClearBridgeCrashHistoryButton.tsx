@@ -9,7 +9,7 @@ import { invalidateBridgeQueries } from '../lib/bridgeQueryInvalidation'
  * `DELETE /api/bridges/:id/crash-history`).
  *
  * Shared by the cross-page {@link BridgeCrashBanner} and the bridge Manage
- * dialog's crash alert so both surfaces offer one action with one wording — the
+ * dialog's crash alert so both surfaces offer one action with one wording: the
  * banner is the whole reason this exists, and a second, differently-labelled
  * copy in settings is how the two would drift apart.
  *

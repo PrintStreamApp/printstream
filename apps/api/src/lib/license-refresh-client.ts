@@ -3,7 +3,7 @@
  * alive by asking the vendor cloud to re-sign it, on a timer.
  *
  * **This is the only thing a self-hosted install phones home for**, and it is
- * deliberately narrow: it sends the license key and nothing else — no printer
+ * deliberately narrow: it sends the license key and nothing else, no printer
  * counts, no telemetry, no install identifier beyond the key's own id. Nothing
  * else in a self-hosted deployment contacts us.
  *
@@ -16,7 +16,7 @@
  * A Lifetime key is not inert, though: renewing the annual updates addon
  * re-signs it, and the extension is a SIGNED field the install cannot learn any
  * other way. So a **user-initiated** refresh (`userInitiated`, the Settings
- * button) is allowed to fetch one. The distinction is consent, not capability —
+ * button) is allowed to fetch one. The distinction is consent, not capability,
  * someone pressing "Refresh license" has asked us to be contacted; a background
  * timer has not been asked anything. A community key is genuinely inert and is
  * skipped either way.
@@ -51,7 +51,7 @@ let timer: NodeJS.Timeout | null = null
  * the whole privacy contract in one predicate, so it should be hard to change
  * by accident.
  *
- * - Subscription key (`expiresAt` set): always — its run window is what the
+ * - Subscription key (`expiresAt` set): always, its run window is what the
  *   refresh exists to push forward.
  * - Lifetime key (perpetual, but with an updates window): only when a person
  *   asked, because its window changes rarely and never on its own.
@@ -115,7 +115,7 @@ export async function refreshInstalledLicense(
     }
     if (parsed.data.outcome === 'revoked') {
       // Leave the key in place: it is still valid until its window elapses, and
-      // removing it would end access immediately — the opposite of the intent.
+      // removing it would end access immediately: the opposite of the intent.
       console.warn('[license] the vendor reports this license is no longer active', { message: parsed.data.message })
       return 'revoked'
     }
@@ -128,7 +128,7 @@ export async function refreshInstalledLicense(
 
 /**
  * Start the refresh timer (called once at boot). No-op on builds that do not
- * enforce a license — the cloud has no installed key to refresh.
+ * enforce a license: the cloud has no installed key to refresh.
  */
 export function startLicenseRefreshScheduler(): void {
   if (!isLicenseEnforced() || timer) return

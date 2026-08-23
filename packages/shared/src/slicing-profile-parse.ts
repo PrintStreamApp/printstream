@@ -1,10 +1,10 @@
 /**
- * Reading a BambuStudio preset the user supplied — validation, kind detection, and unpacking a
+ * Reading a BambuStudio preset the user supplied: validation, kind detection, and unpacking a
  * preset ARCHIVE into its individual presets.
  *
  * Shared because both surfaces accept preset uploads: the api stores them against a workspace, and
  * the public editor keeps them in the user's own browser (no account, so nowhere else to put them).
- * The rules for what counts as a valid preset, and what kind it is, must not differ between those —
+ * The rules for what counts as a valid preset, and what kind it is, must not differ between those,
  * a file accepted in one place and rejected in the other would be indefensible.
  *
  * ZIP INFLATE is the one part that stays per-surface, injected as {@link PresetArchiveReader}: the
@@ -49,8 +49,8 @@ export function isZipArchiveBytes(bytes: Uint8Array): boolean {
 /**
  * The only `from` values BambuStudio's CLI will load a preset with.
  *
- * `load_config_file` in `BambuStudio.cpp` rejects anything else outright — including the EMPTY
- * string its own `CreatePresetsDialog` writes — and the rejection kills the whole run with
+ * `load_config_file` in `BambuStudio.cpp` rejects anything else outright, including the EMPTY
+ * string its own `CreatePresetsDialog` writes, and the rejection kills the whole run with
  * CLI_CONFIG_FILE_ERROR (-5, surfacing as exit 251), not just the offending preset. Note the
  * asymmetric casing: `system` must be lowercase, while `User` and `user` are both accepted.
  */
@@ -66,7 +66,7 @@ export function isCliSupportedPresetFrom(value: unknown): boolean {
  *
  * A preset with no `from` is not a hypothetical: presets minted by our OWN settings dialogs carry
  * `name` + `type` and nothing else, so every slice that loads one dies at exit 251. Callers pass
- * the provenance to fall back to — `system` for a shipped catalogue preset, `User` for anything a
+ * the provenance to fall back to: `system` for a shipped catalogue preset, `User` for anything a
  * user uploaded or saved.
  */
 export function ensureCliSupportedPresetFrom(record: Record<string, unknown>, fallback: 'system' | 'User'): void {
@@ -126,7 +126,7 @@ function isInternalBambuStudioResourceName(value: string): boolean {
  * Turn an upload into its individual presets. A base64 payload that is a ZIP is inflated through
  * `readArchive`; anything else is treated as a single preset document.
  *
- * A single-preset archive keeps the name the user gave the upload — a bundle of several keeps each
+ * A single-preset archive keeps the name the user gave the upload, a bundle of several keeps each
  * preset's own name, since one supplied name cannot describe them all.
  */
 export async function extractUploadedProfiles(
@@ -158,7 +158,7 @@ export async function extractUploadedProfiles(
 }
 
 function decodeBase64(value: string): Uint8Array {
-  // `atob` in the browser, `Buffer` in Node — each exists only in its own runtime, and shared code
+  // `atob` in the browser, `Buffer` in Node, each exists only in its own runtime, and shared code
   // must not carry Node types, hence the structural lookup rather than a direct reference.
   const runtime = globalThis as unknown as {
     atob?: (encoded: string) => string

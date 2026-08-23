@@ -64,7 +64,7 @@ test('repairSingleMeshXml is a no-op (null) on an already-clean mesh', () => {
 })
 
 test('repairSingleMeshXml leaves a non-conforming mesh untouched (null)', () => {
-  // Missing <triangles> block — not a serialization we understand.
+  // Missing <triangles> block, not a serialization we understand.
   const weird = '<mesh><vertices><vertex x="0" y="0" z="0"/></vertices></mesh>'
   assert.equal(repairSingleMeshXml(weird), null)
 })
@@ -119,7 +119,7 @@ test('repairObjectMeshesInModelEntry repairs only the named objects and preserve
   // Vertex 3 welded onto vertex 1; the second triangle became a duplicate of the first and dropped.
   assert.equal(result.stats.weldedVertices, 1)
   assert.equal(result.stats.duplicateTrianglesRemoved, 1)
-  // Paint on the surviving triangle rides through the repair — the property that lets repair run
+  // Paint on the surviving triangle rides through the repair: the property that lets repair run
   // in place on a painted object instead of replacing its geometry.
   assert.match(result.xml, /paint_color="9"/)
   // Object 6 was not named and must be byte-identical.
@@ -129,4 +129,48 @@ test('repairObjectMeshesInModelEntry repairs only the named objects and preserve
 test('repairObjectMeshesInModelEntry is a no-op (null) when the named object is already clean', () => {
   assert.equal(repairObjectMeshesInModelEntry(twoObjectEntryXml(), new Set([6])), null)
   assert.equal(repairObjectMeshesInModelEntry(twoObjectEntryXml(), new Set([999])), null)
+})
+
+test('a repair that would empty the mesh is declined', () => {
+  // Every triangle is a sliver whose corners weld together, so the repair would remove all of them.
+  // BambuStudio does not report an emptied mesh: `_generate_current_object_list` skips any object
+  // whose `Geometry::empty()` is true (`bbs_3mf.cpp:5010`, `:791`) and the error that would have
+  // caught the resulting volume-less object is commented out at `:2123-2127`, so the object just
+  // disappears from the plate. A repair the user asked for must not silently delete their model.
+  const allDegenerate = [
+    '<mesh>',
+    ' <vertices>',
+    '  <vertex x="0" y="0" z="0"/>',
+    '  <vertex x="0.0000001" y="0" z="0"/>',
+    '  <vertex x="0" y="0.0000001" z="0"/>',
+    ' </vertices>',
+    ' <triangles>',
+    '  <triangle v1="0" v2="1" v3="2"/>',
+    ' </triangles>',
+    '</mesh>'
+  ].join('\n')
+  assert.equal(repairSingleMeshXml(allDegenerate), null, 'the repair emptied the mesh instead of declining')
+})
+
+test('a repair that leaves geometry behind still applies', () => {
+  // The control: one degenerate triangle beside a real one must still be cleaned up. Declining here
+  // would turn the emptiness guard into "never repair anything".
+  const mixed = [
+    '<mesh>',
+    ' <vertices>',
+    '  <vertex x="0" y="0" z="0"/>',
+    '  <vertex x="10" y="0" z="0"/>',
+    '  <vertex x="0" y="10" z="0"/>',
+    '  <vertex x="0.0000001" y="0" z="0"/>',
+    ' </vertices>',
+    ' <triangles>',
+    '  <triangle v1="0" v2="1" v3="2"/>',
+    '  <triangle v1="0" v2="3" v3="1"/>',
+    ' </triangles>',
+    '</mesh>'
+  ].join('\n')
+  const result = repairSingleMeshXml(mixed)
+  assert.ok(result, 'a repairable mesh was declined')
+  assert.ok(result.stats.degenerateTrianglesRemoved > 0 || result.stats.weldedVertices > 0)
+  assert.match(result.xml, /<triangle /, 'the surviving triangle was dropped')
 })

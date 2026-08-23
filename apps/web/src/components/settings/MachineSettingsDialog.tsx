@@ -5,20 +5,20 @@
  * another.
  *
  * SIMPLER: there is no project branch. A 3MF embeds its filament and process settings but only
- * NAMES its printer, so a machine preset is always an installed one — no `sourceFileId`, no baked
+ * NAMES its printer, so a machine preset is always an installed one, no `sourceFileId`, no baked
  * overrides, no "the file changed this" bookkeeping. The resolved preset IS the baseline, and the
  * only diff that matters is against the preset's parent. There is likewise nothing to apply to, so
  * the dialog runs at `applyScope: 'preset'`: Save as preset / Update preset / Cancel, no Apply.
  *
  * FUSSIER: over half the machine catalog's options are vectors, and their elements are indexed by
- * different things per page — extruders on the Extruder page, Normal/Silent mode on Motion ability,
+ * different things per page: extruders on the Extruder page, Normal/Silent mode on Motion ability,
  * and nothing at all elsewhere. Editing element 0 (what the process dialog's scalar accessor does)
  * would silently change extruder 1 of an H2D and leave extruder 2 unreachable, so this dialog asks
  * `machineColumnsForPage` and renders one control per column. See `@printstream/shared`'s
  * `machine-settings.ts` for the rule and its BambuStudio sources.
  *
  * A save writes the FULL resolved config, not just the catalog's 77 keys, so the printer's
- * bespoke non-catalog values — `printable_area`, `bed_shape`, `printer_model` — survive an edit
+ * bespoke non-catalog values, `printable_area`, `bed_shape`, `printer_model`, survive an edit
  * untouched. BambuStudio edits those through widgets this dialog does not have; dropping them would
  * silently rebuild the preset around a different bed.
  *
@@ -62,7 +62,7 @@ interface ResolveMachineResponse {
   baseConfig?: Record<string, string | string[]>
 }
 
-/** Which catalog page a key belongs to — the column rule is page-driven. */
+/** Which catalog page a key belongs to: the column rule is page-driven. */
 const PAGE_ID_BY_KEY: ReadonlyMap<string, string> = new Map(
   machineSettingsCatalog.pages.flatMap((page) =>
     page.groups.flatMap((group) => group.lines.flatMap((line) => line.keys.map((key) => [key, page.id] as const))))
@@ -143,13 +143,13 @@ export default function MachineSettingsDialog(props: MachineSettingsDialogProps)
     }))
   }
 
-  /** A value differing from the preset as saved — the only kind of change this dialog can have. */
+  /** A value differing from the preset as saved: the only kind of change this dialog can have. */
   const isChanged = (key: string): boolean =>
     baseConfig !== null
     && !processConfigValuesEqual(baseConfig[key], config[key], machineSettingsCatalog.options[key])
 
   /**
-   * An override the PRESET itself carries relative to its parent — emphasis only, never counted.
+   * An override the PRESET itself carries relative to its parent: emphasis only, never counted.
    * BambuStudio keeps this as a separate question from "modified"
    * (`current_different_from_parent_options` vs `current_dirty_options`).
    */
@@ -210,8 +210,8 @@ export default function MachineSettingsDialog(props: MachineSettingsDialogProps)
    * Save the edited printer as a preset. `overwrite` updates the original custom preset in place.
    *
    * Written over the RESOLVED config rather than the editor's own, so every key BambuStudio's
-   * printer tab edits through a widget we do not have — the printable area, the bed shape and
-   * exclusion zones, the model and variant identity — is carried through exactly as it arrived.
+   * printer tab edits through a widget we do not have, the printable area, the bed shape and
+   * exclusion zones, the model and variant identity, is carried through exactly as it arrived.
    * Only the catalog keys the user could actually see are replaced.
    */
   const savePreset = async (name: string, overwrite: boolean) => {

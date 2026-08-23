@@ -87,7 +87,7 @@ test('include templates are merged and override the inherited generic value', as
   // per-machine `... template machine_start_gcode` profiles pulled in via `include`; the
   // inherits chain only carries a generic single-nozzle fallback. The generator must merge
   // the included value (overriding the generic) so the flattened machine profile the
-  // editor/retarget resolve reads reports the machine-specific gcode — otherwise an H2D
+  // editor/retarget resolve reads reports the machine-specific gcode, otherwise an H2D
   // project slices with an A1-style start sequence.
   const root = await mkdtemp(path.join(tmpdir(), 'full-profiles-include-'))
   try {

@@ -16,7 +16,7 @@
  *   copy/select-all.
  *
  * Copy/cut/paste operate on an in-memory object clipboard held here (deep-cloned instance snapshots),
- * so paste survives a cut or a delete and repeats — matching BambuStudio, not the OS clipboard.
+ * so paste survives a cut or a delete and repeats: matching BambuStudio, not the OS clipboard.
  */
 import { useEffect, useRef, type MutableRefObject } from 'react'
 import { duplicateInstance, type EditorInstance, type EditorPlate } from './lib/editorModel'

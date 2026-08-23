@@ -2,7 +2,7 @@
  * The preset upload control for the slicing-profile manager.
  *
  * The server reports a same-name collision as a 409 rather than replacing silently, so an
- * overwrite is always the user's explicit second decision — the retry re-posts with
+ * overwrite is always the user's explicit second decision: the retry re-posts with
  * `overwrite: true`.
  */
 import React from 'react'

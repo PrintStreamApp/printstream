@@ -227,7 +227,7 @@ function setWholeTriangleState(codes: SupportPaintCodes, i: number, state: numbe
  * the world-space hit point/ray and brush radius.
  *
  * When `seedTriangle` is given, the dab grows breadth-first from the hit triangle over
- * shared edges, enqueueing only viewer-facing neighbours (`normal · direction < 0`) —
+ * shared edges, enqueueing only viewer-facing neighbours (`normal · direction < 0`):
  * Bambu's rule, which keeps the brush off disconnected geometry that merely falls
  * inside the cursor (essential for the infinite circle cylinder). Without a seed every
  * facing triangle is tested directly (centroid broad phase + exact cursor test).
@@ -436,7 +436,7 @@ export function applyBucketFill(options: {
  * Height-range paint (TriangleSelector's HeightRange cursor): paint every triangle
  * crossing the world-z band `[zBottom, zTop]`, splitting at the band planes with
  * Bambu's fixed fine edge limit (0.1mm world) so the edges come out crisp. Unlike the
- * brush this ignores facing and connectivity — the band wraps the whole part.
+ * brush this ignores facing and connectivity: the band wraps the whole part.
  * `localToWorld` maps geometry-local points to world (the caller passes the mesh's
  * matrixWorld); `averageScale` converts the world edge limit to local units.
  */
@@ -504,7 +504,7 @@ export function decodeWholeTriangleColorState(code: string): number | null {
  * {@link decodeWholeTriangleColorState} answers only "is this triangle entirely one filament?"
  * (it returns null for a split code, which the overlay renders as mixed). Anything asking "which
  * materials does this print USE" must walk the whole tree instead: a brush dab splits triangles,
- * so a partially-painted model's second filament is invisible to the whole-triangle decode — which
+ * so a partially-painted model's second filament is invisible to the whole-triangle decode, which
  * is what let a painted material still read as unused (removable, and no prime tower).
  */
 export function collectColorPaintFilamentIds(code: string, into: Set<number>): void {
@@ -531,7 +531,7 @@ export function encodeWholeTriangleColorState(filamentId: number): string | null
  * Per-source-triangle meshing cache for {@link buildTrianglePaintOverlay}. Maps a painted source
  * triangle index to the leaf-sub-triangle vertex data its CURRENT code decoded to. Pass the same
  * cache across rebuilds of one part+channel so a dab only re-meshes the triangles whose code
- * changed — decoding + walking the split tree (the expensive part: a full part can expand to
+ * changed: decoding + walking the split tree (the expensive part: a full part can expand to
  * 100k+ leaf sub-triangles at the 0.2mm edge limit, ~100ms to rebuild from scratch every dab) is
  * skipped for the (overwhelming majority of) untouched triangles. The merge below is then just a
  * typed-array copy of the cached chunks. Keyed by source-triangle index; entries hold the `code`
@@ -560,7 +560,7 @@ export function buildTrianglePaintOverlay(
     if (custom != null) return custom
     return state === 1 ? options.palette.enforcer : state === 2 ? options.palette.blocker : options.palette.mixed
   }
-  // Decode each painted triangle's split tree into lifted, vertex-coloured leaf sub-triangles —
+  // Decode each painted triangle's split tree into lifted, vertex-coloured leaf sub-triangles:
   // reusing the cached chunk when the triangle's code is unchanged. The overlay is unlit
   // (MeshBasicMaterial) so it carries position + colour only; no per-vertex normals needed.
   const chunks: Array<{ positions: Float32Array; colors: Float32Array }> = []
@@ -596,7 +596,7 @@ export function buildTrianglePaintOverlay(
       color.setHex(stateColor(state))
       for (const vertex of leaf) {
         // Lift the overlay slightly off the surface along the face normal: both viewers render with
-        // a logarithmic depth buffer, which writes gl_FragDepth and so BYPASSES polygonOffset —
+        // a logarithmic depth buffer, which writes gl_FragDepth and so BYPASSES polygonOffset,
         // without the physical lift the overlay z-fights the base mesh into stripes.
         positions.push(
           vertex.x + faceNormal.x * PAINT_OVERLAY_LIFT,

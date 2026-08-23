@@ -12,7 +12,7 @@ const hasBuiltinPreset = async (name: string) => CATALOGUE.has(name)
 
 // The exact field shape: a 2-filament project where slot 1 stays on the project's
 // own preset (no file) and slot 2 uses a builtin. This used to emit ONE path for
-// TWO slots — BambuStudio broadcast the support preset onto the PETG slot (210°C
+// TWO slots: BambuStudio broadcast the support preset onto the PETG slot (210°C
 // for PETG) and then segfaulted the loader with exit 139 (issue #66).
 test('a slot left on the project preset is covered from the 3MF, not dropped', async () => {
   const paths = await buildFilamentSlotCoverage({
@@ -46,7 +46,7 @@ test('a slot whose 3MF name resolves to nothing is padded with Generic PLA, keep
   const paths = await buildFilamentSlotCoverage({
     slots: [{ projectFilamentId: 1, profileId: null }, { projectFilamentId: 2, profileId: null }],
     requestedProfileIds: new Set<string>(),
-    // A poisoned/unknown display name in slot 1 — the shape that produced the
+    // A poisoned/unknown display name in slot 1: the shape that produced the
     // "names filament \"Bambu PETG Basic\"" failures.
     embeddedPresetNames: ['Bambu PETG Basic', 'Bambu Support For PLA/PETG @BBL H2D'],
     hasBuiltinPreset

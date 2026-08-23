@@ -4,7 +4,7 @@
  * Bridges have no release versions: every build is identified by its release
  * fingerprint (a content hash over the bridge-relevant sources), the server's
  * manifest announces the build the server itself runs, and bridges converge to
- * it whenever their own fingerprint differs — including downgrades after a
+ * it whenever their own fingerprint differs, including downgrades after a
  * server rollback (lockstep). How an update is obtained and applied depends on
  * packaging: Docker installs swap signed app bundles under the releases
  * directory, standalone installs replace their own binary in place. Each

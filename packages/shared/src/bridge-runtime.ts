@@ -32,8 +32,8 @@ export const bridgeRuntimeRegistrationRequestSchema = z.object({
    * Durable per-install identity, generated once by the bridge and persisted
    * across credential resets (unlike `bridgeId`/`runtimeToken`, which the bridge
    * clears when a server rejects them). Lets the server recognize a returning
-   * physical bridge whose runtime credentials were lost — e.g. after pointing it
-   * at a different database — and re-bind it to its existing record (keeping its
+   * physical bridge whose runtime credentials were lost: e.g. after pointing it
+   * at a different database, and re-bind it to its existing record (keeping its
    * printers and library) instead of minting a duplicate bridge. High-entropy and
    * treated as a secret: never logged or surfaced to the browser.
    */
@@ -45,6 +45,15 @@ export const bridgeRuntimeRegistrationRequestSchema = z.object({
   protocolVersion: z.number().int().nonnegative().optional(),
   runnerAbiVersion: z.string().trim().min(1).max(120).optional(),
   releaseFingerprint: z.string().trim().min(1).max(120).optional(),
+  /**
+   * The host OS and CPU the bridge runs on (`process.platform` / `process.arch`, e.g. "win32" and
+   * "x64"). Recorded because packaging-level behaviour differs by OS and nothing else in a Bridge
+   * row says which one it is: when a Windows service-recovery defect turned up, there was no way to
+   * ask how many Windows bridges were in the field, only to guess from install names. Optional, so
+   * a bridge older than this field reads as "platform unknown" rather than being rejected.
+   */
+  platform: z.string().trim().min(1).max(40).optional(),
+  arch: z.string().trim().min(1).max(40).optional(),
   /**
    * Managed-bridge provisioning token. When a self-hosted server runs in
    * managed-bridge mode and this matches the server-generated token, the bridge
@@ -81,6 +90,15 @@ export const bridgeRuntimeHelloMessageSchema = z.object({
   protocolVersion: z.number().int().nonnegative().optional(),
   runnerAbiVersion: z.string().trim().min(1).max(120).optional(),
   releaseFingerprint: z.string().trim().min(1).max(120).optional(),
+  /**
+   * The host OS and CPU the bridge runs on (`process.platform` / `process.arch`, e.g. "win32" and
+   * "x64"). Recorded because packaging-level behaviour differs by OS and nothing else in a Bridge
+   * row says which one it is: when a Windows service-recovery defect turned up, there was no way to
+   * ask how many Windows bridges were in the field, only to guess from install names. Optional, so
+   * a bridge older than this field reads as "platform unknown" rather than being rejected.
+   */
+  platform: z.string().trim().min(1).max(40).optional(),
+  arch: z.string().trim().min(1).max(40).optional(),
   /** Legacy field from versioned bridges; ignored. */
   updateChannel: z.string().trim().optional()
 })
@@ -144,7 +162,7 @@ export const bridgeHeartbeatMessageSchema = z.object({
  * numbers (no telemetry runtime of its own); the API re-exposes them on its
  * Prometheus endpoint labelled by bridge/workspace. Gauges are instantaneous;
  * `apiReconnectsTotal` is cumulative since the bridge process started (it may
- * reset to 0 on bridge restart — Prometheus handles counter resets).
+ * reset to 0 on bridge restart: Prometheus handles counter resets).
  */
 export const bridgeMetricsSnapshotSchema = z.object({
   printersMonitored: z.number().int().nonnegative(),
@@ -422,7 +440,7 @@ export const bridgeBuildSchema = z.object({
     signature: z.string().min(1),
     sizeBytes: z.number().int().nonnegative(),
     /**
-     * Docker runner ABI this bundle requires — an EXACT match with the
+     * Docker runner ABI this bundle requires, an EXACT match with the
      * image-baked `BRIDGE_RUNNER_ABI_VERSION` (which embeds the pinned Node
      * version), so a bundle never runs on a different runtime than it was
      * built for.
@@ -708,7 +726,7 @@ export const bridgeLibraryThreeMfObjectSchema = z.object({
   id: z.number().int().positive(),
   name: z.string().min(1),
   /**
-   * `identify_id`s of this object's `model_instance`s on the plate — the per-instance
+   * `identify_id`s of this object's `model_instance`s on the plate: the per-instance
    * handles Bambu firmware keys `skip_objects` on. From `model_settings.config` when the
    * index is model-settings derived (one per instance), or the entry's own slice_info
    * `identify_id` when slice_info supplied the objects. Empty when the file carries none.
@@ -745,18 +763,25 @@ export const bridgeLibraryThreeMfProjectFilamentSchema = z.object({
   filamentType: z.string().nullable(),
   filamentName: z.string().nullable(),
   /**
-   * The slot's raw `filament_settings_id` — the name BambuStudio looks a preset up by. Optional
+   * The slot's raw `filament_settings_id`: the name BambuStudio looks a preset up by. Optional
    * because a bridge on an older parser sends none; treat absent as "identity unknown" and fall
    * back to `filamentName`, which is a DISPLAY value and cannot identify a preset on its own.
    */
   filamentPresetName: z.string().nullable().optional(),
+  /**
+   * The slot's `filament_vendor`, verbatim. A preset's BRAND is not derivable from its name (a
+   * Polymaker preset is called "PolyLite PLA"), so without this a project preset brands itself
+   * differently from the installed preset of the same name and the two stop comparing equal.
+   * Optional: absent from a bridge on an older parser, which reads as "vendor unknown".
+   */
+  filamentVendor: z.string().nullable().optional(),
   color: z.string().nullable(),
   nozzleId: z.number().int().nonnegative().nullable(),
   chamberTemperature: z.number().nullable(),
   /**
    * The project's `filament_is_support` / `filament_soluble` flags for this slot. Null when the
    * 3MF (or a bridge running an older parser) carried neither, which consumers must treat as
-   * "unknown" and not as false — see `support-recommendations.ts`.
+   * "unknown" and not as false: see `support-recommendations.ts`.
    */
   isSupport: z.boolean().nullable().optional(),
   isSoluble: z.boolean().nullable().optional()
@@ -799,7 +824,7 @@ export const bridgeLibraryThreeMfIndexSchema = z.object({
   printerProfileName: z.string().nullable().default(null),
   processProfileName: z.string().nullable().default(null),
   /**
-   * No Bambu project metadata (a vanilla/CAD-exported mesh container — see the shared
+   * No Bambu project metadata (a vanilla/CAD-exported mesh container: see the shared
    * index parser): consumers treat the file like STL/STEP, never as an openable project.
    * Defaulted so an index from a not-yet-updated bridge parses as a project (the
    * pre-existing behavior).
@@ -814,7 +839,7 @@ export const bridgeLibraryThreeMfIndexSchema = z.object({
   /**
    * The project's embedded settings contradict its own machine topology (today: a
    * `flush_volumes_matrix` that is not `filaments^2 x extruders`, which BambuStudio reads out of
-   * bounds and dies on mid-slice). Advisory only — nothing repairs it automatically; the editor
+   * bounds and dies on mid-slice). Advisory only, nothing repairs it automatically; the editor
    * and slice dialog offer the user an explicit Repair. Defaulted false so an index from a
    * not-yet-updated bridge keeps the pre-existing behavior.
    */
@@ -829,7 +854,7 @@ export const bridgeLibraryThreeMfIndexSchema = z.object({
   projectVersion: z.string().nullable().default(null),
   /**
    * Sliced for a machine with a Filament Track Switch (`has_filament_switcher`). A file must be
-   * printed on the kind of machine it was sliced for — BambuStudio refuses the mismatch — so the
+   * printed on the kind of machine it was sliced for, BambuStudio refuses the mismatch, so the
    * print dialogs compare this against the target printer. Defaulted false because an absent key
    * means "no switch" everywhere, including in BambuStudio's own CLI.
    */
@@ -839,7 +864,7 @@ export const bridgeLibraryThreeMfIndexSchema = z.object({
 export type BridgeLibraryThreeMfIndex = z.infer<typeof bridgeLibraryThreeMfIndexSchema>
 
 /**
- * `bambu.cloud.request` — relay one Bambu Lab cloud call through the bridge.
+ * `bambu.cloud.request`: relay one Bambu Lab cloud call through the bridge.
  *
  * Counterparts: `apps/bridge/src/bambu-cloud-relay.ts` performs the call;
  * `apps/api/src/plugins/bambu-cloud-sync/transport.ts` decides when to use it.
@@ -850,7 +875,7 @@ export type BridgeLibraryThreeMfIndex = z.infer<typeof bridgeLibraryThreeMfIndex
  * bridge sends a household's own traffic from that household's own connection. The
  * API keeps a direct path for workspaces with no bridge, or an offline/older one.
  *
- * The params carry a NAMED operation, never a URL — see `bambuCloudOperationSchema`
+ * The params carry a NAMED operation, never a URL: see `bambuCloudOperationSchema`
  * for why a URL-forwarding relay would be an SSRF proxy into the bridge's LAN.
  */
 export const bridgeBambuCloudRequestParamsSchema = bambuCloudRequestSchema
@@ -892,7 +917,7 @@ export const bridgeLibraryInspect3mfResultSchema = z.object({
   /**
    * The `THREE_MF_INDEX_PARSER_VERSION` the bridge built this index with. The bridge deploys
    * separately from the API, so after a parser bump an un-upgraded bridge returns indexes that are
-   * silently missing the new fields — Zod fills their defaults and nothing looks wrong. The API
+   * silently missing the new fields: Zod fills their defaults and nothing looks wrong. The API
    * compares this against its own parser version and re-parses the file locally when the bridge
    * lags, instead of caching (and version-stamping as current) an index that was never complete.
    * Defaults 0 so a bridge from before this field always reads as outdated.

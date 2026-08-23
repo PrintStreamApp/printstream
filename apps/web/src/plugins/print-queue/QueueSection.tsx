@@ -3,7 +3,7 @@
  * `jobs.sections` slot (host: `apps/web/src/pages/JobsView.tsx`). Shows the shared,
  * reorderable backlog: each queued item carries a live eligibility badge (recomputed
  * from the WS-fed printer-status cache via the shared matcher) and the manual
- * dispatch actions — single "Start now", "Start all idle", hold/resume, re-queue,
+ * dispatch actions: single "Start now", "Start all idle", hold/resume, re-queue,
  * reorder, and remove. Registers a "Queue" entry in the page's SectionNav through
  * the slot's `registerSection` callback, and renders nothing when the viewer lacks
  * the queue's permissions (the host page has its own jobs-permission gate).
@@ -125,7 +125,7 @@ export function QueueSection(props: Record<string, unknown>) {
     [items, contexts, allowTypeOnlyMatch]
   )
 
-  // Fleet-level match per item — does any connected printer satisfy the model / nozzle requirement — for
+  // Fleet-level match per item, does any connected printer satisfy the model / nozzle requirement, for
   // the card's match chips. (Material is already conveyed by the swatches + eligibility badge.)
   const fleetMatchById = useMemo(() => {
     const statuses = printerStatusQuery.data ?? {}
@@ -209,7 +209,7 @@ export function QueueSection(props: Record<string, unknown>) {
         // real paths go ahead with is what this check used to get wrong.
         toast.warn(result.printerName ? `Would start on ${result.printerName}. ${result.warning}` : result.warning)
       } else if (result.ok) {
-        toast.success(result.printerName ? `Ready — would start on ${result.printerName}` : 'Ready to start')
+        toast.success(result.printerName ? `Ready: would start on ${result.printerName}` : 'Ready to start')
       } else {
         toast.error(`Start would fail: ${result.reason ?? 'unknown reason'}`)
       }

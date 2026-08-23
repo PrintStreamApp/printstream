@@ -1,7 +1,7 @@
 /**
  * Slice-then-print tracker for a calibration run, mirroring the library's
  * `SliceThenPrintModal` flow: it stays open after the wizard starts a run, shows
- * live slice progress, and — once the slice is ready — offers a Print button that
+ * live slice progress, and, once the slice is ready, offers a Print button that
  * dispatches the calibration to the printer/slot the wizard already chose. Unlike
  * the library flow it does not hand off to `PrintModal` (there is no printer/AMS
  * choice to make), and leaving does not orphan anything: the run is a tracked
@@ -78,12 +78,12 @@ export function CalibrationSlicePrintModal({ run: initialRun, onClose }: { run: 
     onClose()
   }, [location.pathname, navigate, onClose])
 
-  // Errors surface once via the global mutation error handler (main.tsx) — no local onError toast.
+  // Errors surface once via the global mutation error handler (main.tsx), no local onError toast.
   const print = useMutation({
     mutationFn: () => printCalibrationRun(run.id),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: calibrationKeys.runs })
-      toast.success('Calibration print started — measure it and enter the result when it finishes')
+      toast.success('Calibration print started: measure it and enter the result when it finishes')
       handleClose()
     }
   })

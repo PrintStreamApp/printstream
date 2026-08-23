@@ -20,7 +20,7 @@ function bridgeComposeSnippet(serverUrl: string): string {
     '  bridge:',
     `    image: ${BRIDGE_IMAGE}`,
     '    restart: unless-stopped',
-    '    network_mode: host  # optional — see note below',
+    '    network_mode: host  # optional: see note below',
     '    environment:',
     `      BRIDGE_SERVER_URL: ${serverUrl}`,
     '      BRIDGE_NAME: PrintStream Bridge',
@@ -47,7 +47,7 @@ export function BridgeDockerDialog({ serverUrl, onClose }: { serverUrl: string; 
             <CopyableCodeBlock text={bridgeComposeSnippet(serverUrl)} copyAriaLabel="Copy compose file" />
             <Typography level="body-sm" textColor="text.tertiary">
               <Typography component="code" level="body-sm">network_mode: host</Typography> is optional. It lets the
-              bridge auto-discover printers on your LAN (SSDP) without extra Docker multicast setup — the bridge is
+              bridge auto-discover printers on your LAN (SSDP) without extra Docker multicast setup: the bridge is
               outbound-only and publishes no ports of its own. Without it the bridge still works; you just add
               printers by IP address instead.
             </Typography>

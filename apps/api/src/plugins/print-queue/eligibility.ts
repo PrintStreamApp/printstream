@@ -102,7 +102,7 @@ export type DispatchTarget =
  * load-balanced order.
  *
  * When `explicitAmsMapping` is supplied (the single-item "redo the materials" override), the
- * automatic material match is skipped — the user chose the slots — and only placement is validated
+ * automatic material match is skipped, the user chose the slots, and only placement is validated
  * (printer connected, target/model/sliced-model fit, idle). The given mapping is returned verbatim.
  */
 export function resolveDispatchTarget(

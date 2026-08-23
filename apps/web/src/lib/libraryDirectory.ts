@@ -106,7 +106,7 @@ export function compareLibraryFiles(a: LibraryFile, b: LibraryFile, sort: Librar
 
 /**
  * Sort folders (always by name, honoring direction) and files (by the active
- * sort). Callers that paginate MUST sort before slicing pages — sorting only
+ * sort). Callers that paginate MUST sort before slicing pages, sorting only
  * the visible page leaves the global order as whatever the API returned.
  */
 export function sortLibraryEntries(

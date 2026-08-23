@@ -122,7 +122,7 @@ export function usePrinterWebSocket(enabled = true, scopeKey = 'default'): void 
           void queryClient.invalidateQueries({ queryKey: ['print-queue'] })
         }
         if (event.resource === 'slicing') {
-          // Job state/progress only — NOT the profiles catalogue. Slice progress fires sub-second;
+          // Job state/progress only, NOT the profiles catalogue. Slice progress fires sub-second;
           // refetching the (slow) profiles query on every tick is the slice-time network spam.
           // Every source a slicing change can be read through goes stale together: the active
           // list, any watched single job, and the merged history (a finishing job moves there).
@@ -140,7 +140,7 @@ export function usePrinterWebSocket(enabled = true, scopeKey = 'default'): void 
           // A finished job also rewrites the durable counters derived from it
           // (`recordFinishedPrinterStats`), and nothing else refreshed them. The printer
           // detail page renders the stats grid directly ABOVE the job history, so the two
-          // sat side by side disagreeing about whether the print had happened — the kind
+          // sat side by side disagreeing about whether the print had happened: the kind
           // of staleness that reads as a bug in the numbers rather than in the cache.
           void queryClient.invalidateQueries({ queryKey: ['printer-stats'] })
           void queryClient.invalidateQueries({ queryKey: ['workspace-stats'] })

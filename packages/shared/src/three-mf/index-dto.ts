@@ -7,7 +7,7 @@
  *
  * Shared because two surfaces now produce this DTO: the api's `/plates` route, and the browser
  * reading a file the user opened locally. Mapping it in one place is what stops a plate looking
- * thumbnail-less on one surface and not the other — a cast between the two shapes silently drops
+ * thumbnail-less on one surface and not the other, a cast between the two shapes silently drops
  * `hasThumbnail`, which is the kind of difference nothing fails on and a user just sees.
  */
 import type { BridgeLibraryThreeMfIndex } from '../bridge-runtime.js'
@@ -33,7 +33,7 @@ export function toThreeMfIndexDto(index: BridgeLibraryThreeMfIndex): ThreeMfInde
     supportFilamentIds: index.supportFilamentIds,
     printerProfileName: index.printerProfileName,
     processProfileName: index.processProfileName,
-    // The repair flags belong to the VERSION whose bytes were parsed — this DTO is how an editor
+    // The repair flags belong to the VERSION whose bytes were parsed, this DTO is how an editor
     // opened on an archived version learns that version is defective (the library DTO's flags
     // describe the file's head, which may already be repaired).
     needsSettingsRepair: index.needsSettingsRepair,

@@ -85,7 +85,7 @@ test('grouping buckets by a facet value, sorted', () => {
   assert.deepEqual(groups.map((group) => [group.label, group.profiles.length]), [['PETG', 1], ['PLA', 1]])
 })
 
-// A quality preset compatible with several printers belongs under each of them — that is the
+// A quality preset compatible with several printers belongs under each of them, that is the
 // point of grouping by compatible printer, so the groups deliberately do not partition the list.
 test('a profile with several values appears in every matching group', () => {
   const multi = profile({

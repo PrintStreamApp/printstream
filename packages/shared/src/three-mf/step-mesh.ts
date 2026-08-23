@@ -1,7 +1,7 @@
 /**
  * Turning an OpenCASCADE (occt-import-js) STEP read into a staged-import mesh.
  *
- * The WASM module itself is NOT loaded here: it is ~7 MB and each host loads it differently — the
+ * The WASM module itself is NOT loaded here: it is ~7 MB and each host loads it differently: the
  * api imports the npm package directly, the web app code-splits it and points it at a bundled
  * `.wasm` asset. What both hosts must agree on is the tessellation QUALITY and how OCCT's per-solid
  * output becomes one import, so those live here and neither surface can drift into producing a
@@ -25,7 +25,7 @@ import type { ImportedMesh, ImportedMeshPart } from './imported-mesh.js'
  * for typical parts) visibly facets curved surfaces; these values fix that.
  *
  * Typed structurally rather than as `OcctTriangulationParams` so this module carries no dependency
- * on the occt package — only the hosts that actually load the WASM do.
+ * on the occt package, only the hosts that actually load the WASM do.
  */
 export const STEP_TESSELLATION: {
   linearUnit: 'millimeter'
@@ -59,7 +59,7 @@ export interface OcctReadResult {
  * render/bake path). `parts` is populated only when more than one solid is present.
  *
  * @throws {Error} when the read failed or produced no geometry, and when the tessellated output
- *   exceeds the shared import triangle budget — checked BEFORE the arrays are amplified into JS.
+ *   exceeds the shared import triangle budget: checked BEFORE the arrays are amplified into JS.
  */
 export function stepMeshFromOcctResult(result: OcctReadResult): ImportedMesh {
   if (!result.success || result.meshes.length === 0) throw new Error('STEP file could not be tessellated')

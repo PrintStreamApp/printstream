@@ -9,7 +9,7 @@
  * unavailable (e.g. raw G-code) we fall back to attributing the job's aggregate
  * grams iff exactly one tracked spool is loaded on the printer.
  *
- * Failed/cancelled prints are not decremented — the partial amount consumed is
+ * Failed/cancelled prints are not decremented: the partial amount consumed is
  * unknown, mirroring how production stats bucket waste separately.
  *
  * Runs outside a request context: `rootPrisma` with explicit workspace filters.

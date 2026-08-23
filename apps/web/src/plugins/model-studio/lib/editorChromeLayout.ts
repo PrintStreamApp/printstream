@@ -2,8 +2,8 @@
  * The desktop editor's grid geometry as a function of which chrome is showing.
  *
  * The editor lays plate strip / viewport / sidebar out as ONE grid whose areas flip with the
- * sidebar-side preference. Hiding a region therefore cannot be a `display: none` on that region —
- * its row or column would stay, leaving a gap where the plate strip used to be — so the template
+ * sidebar-side preference. Hiding a region therefore cannot be a `display: none` on that region,
+ * its row or column would stay, leaving a gap where the plate strip used to be, so the template
  * itself has to change. That is three interacting strings (columns, rows, areas) x two breakpoints
  * x two toggles, which is exactly the kind of inline ternary pile that hides a wrong case.
  *
@@ -12,7 +12,7 @@
  * `display: none` for the same reason). Counterpart: the toolbar toggles in `EditorView`.
  */
 
-/** The editor grid's gutter in px — Joy's `gap: 1`. Named so the measuring side agrees with the CSS. */
+/** The editor grid's gutter in px: Joy's `gap: 1`. Named so the measuring side agrees with the CSS. */
 export const EDITOR_GRID_GAP_PX = 8
 
 /** Plate-strip footprint, in px, in each orientation (tile + padding + its scrollbar). */
@@ -21,7 +21,7 @@ export const PLATE_STRIP_VERTICAL_THICKNESS = 116
 
 /**
  * Aspect the 3D area aims for. A build plate is square and is viewed at an angle, with the toolbar
- * across the top and the view cube in a bottom corner — so a mildly landscape box frames it with the
+ * across the top and the view cube in a bottom corner, so a mildly landscape box frames it with the
  * least dead space. Used only to CHOOSE between two layouts, never to force a size.
  */
 export const EDITOR_VIEWPORT_TARGET_ASPECT = 4 / 3
@@ -35,7 +35,7 @@ export type PlateStripOrientation = 'horizontal' | 'vertical'
  * the window: on a short, wide window a horizontal strip squeezes the viewport into a letterbox,
  * while on a tall one a vertical rail wastes width the viewport wanted. Scores both against
  * {@link EDITOR_VIEWPORT_TARGET_ASPECT} in LOG space, so "twice too wide" and "twice too tall" are
- * penalised equally — a linear distance would quietly favour wide layouts.
+ * penalised equally, a linear distance would quietly favour wide layouts.
  */
 export function choosePlateStripOrientation(input: {
   bodyWidth: number

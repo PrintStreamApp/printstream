@@ -33,7 +33,7 @@ test('a marker whose backup is gone aborts without touching anything and does no
   const applied = await applyStagedServerRestoreIfPending()
   assert.equal(applied, null)
   // The pending marker is consumed (renamed to the failed marker), so the next
-  // boot does not retry — a rejected restore must be re-staged deliberately.
+  // boot does not retry, a rejected restore must be re-staged deliberately.
   assert.ok(!existsSync(path.join(backupsDir, 'restore-pending.json')))
   assert.ok(!existsSync(path.join(backupsDir, 'restore-attempt.json')))
   assert.ok(existsSync(path.join(backupsDir, 'restore-failed.json')))

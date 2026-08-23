@@ -27,11 +27,11 @@ test('evaluateOfflineUpdate reports the X1 / A1 / X1E floors', () => {
 })
 
 test('evaluateOfflineUpdate never guesses a block for unknown models or unknown firmware', () => {
-  // H2 series shipped with offline updates — no floor.
+  // H2 series shipped with offline updates, no floor.
   assert.deepEqual(evaluateOfflineUpdate('h2d', '01.00.00.00'), { minimumVersion: null, belowMinimum: false })
   // Unmapped / unknown API key.
   assert.deepEqual(evaluateOfflineUpdate(null, '01.00.00.00'), { minimumVersion: null, belowMinimum: false })
-  // Installed firmware not yet known — do not block on a guess.
+  // Installed firmware not yet known: do not block on a guess.
   assert.equal(evaluateOfflineUpdate('p1', null).belowMinimum, false)
 })
 

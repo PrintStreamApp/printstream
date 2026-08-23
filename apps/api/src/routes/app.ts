@@ -33,7 +33,7 @@ appRouter.get('/version', async (request, response) => {
   // active in a given process.
   const update = native ? getNativeUpdateInfo() : getAppUpdateInfo()
   // The registry check answers "is there a newer build"; the license answers
-  // "may this install take it". Kept apart on purpose — `app-update-check.ts`
+  // "may this install take it". Kept apart on purpose: `app-update-check.ts`
   // stays a pure registry reader, and the entitlement is applied once, here at
   // the boundary. Only `updateAvailable` is rewritten: a lapsed addon is a
   // renewal prompt on an available update, never a claim of being up to date.
@@ -53,7 +53,7 @@ appRouter.get('/version', async (request, response) => {
 
 /**
  * Whether THIS viewer would clear the update endpoint's permission gate. The
- * same assert the POST runs — not a bare permission-list check — because a
+ * same assert the POST runs, not a bare permission-list check, because a
  * fresh native install runs with auth disabled, where enforcement is bypassed
  * rather than permissions granted; a raw list check would hide the button from
  * exactly the operator the endpoint would accept.
@@ -69,7 +69,7 @@ function viewerMayApplyUpdate(request: Request): boolean {
 
 /**
  * One-click in-place update of the native app. Accepted means the process is
- * about to restart into the new build — the caller should expect the
+ * about to restart into the new build: the caller should expect the
  * connection to drop and poll `/version` until the revision changes. Every
  * refusal (already current, busy, unsigned build, licence refusal, backup
  * failure) is a 409 whose message says why.

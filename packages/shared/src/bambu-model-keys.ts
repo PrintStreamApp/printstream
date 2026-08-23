@@ -1,6 +1,6 @@
 /**
  * Canonical Bambu printer model keys, name/alias resolution, and the
- * process-compatibility families — the single source of truth shared by the web
+ * process-compatibility families: the single source of truth shared by the web
  * slice dialogs (profile matching, machine-switch warnings) and the slicer
  * service's cross-model machine-switch guard. Keys are the short model codes
  * (`H2D`, `X2D`, `P1S`, `A1MINI`, ...); aliases cover Bambu's internal device
@@ -54,7 +54,7 @@ export function normalizeBambuStudioPrinterModelOption(value: string): string {
 
 /**
  * Resolves a printer name, model string, or BambuStudio value (string or the
- * first entry of a serialized string array) to its canonical Bambu model key —
+ * first entry of a serialized string array) to its canonical Bambu model key:
  * the `printerModelSchema` enum form (`H2D`, `H2DPRO`, `X1C`, `A1mini`, ...),
  * so the result round-trips through every API that validates a PrinterModel
  * (e.g. the editor's bed override). Returns null for non-Bambu printers or
@@ -83,7 +83,7 @@ export function canonicalBambuModelKey(value: unknown): string | null {
   if (normalized.includes('A2L')) return 'A2L'
   if (normalized.includes('A1 MINI') || normalized.includes('A1M')) return 'A1mini'
   // Word-boundary matches: real values include "BAMBU LAB A1" / "BAMBU LAB X1"
-  // (no trailing space), which a bare `includes(' A1 ')` misses — and a
+  // (no trailing space), which a bare `includes(' A1 ')` misses, and a
   // substring test would wrongly catch X1C/A1M, so those are checked above.
   if (/(^|[^A-Z0-9])A1($|[^A-Z0-9])/.test(normalized)) return 'A1'
   if (/(^|[^A-Z0-9])X1($|[^A-Z0-9])/.test(normalized)) return 'X1'

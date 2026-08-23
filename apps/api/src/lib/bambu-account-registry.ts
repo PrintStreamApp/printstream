@@ -3,13 +3,13 @@
  *
  * The plugin that owns the workspace's Bambu Cloud connection (`bambu-cloud-sync`)
  * registers a resolver here; other plugins that need to act as the signed-in Bambu
- * user — today `remote-imports`, to download a MakerWorld model — ask this core seam
+ * user, today `remote-imports`, to download a MakerWorld model, ask this core seam
  * instead of importing the owning plugin or reading its setting keys. Mirrors
  * `slot-filament-registry.ts`.
  *
  * Trust boundary, and why it is drawn here: the resolver hands back a REAL account
  * access token, which is the user's whole Bambu identity, not a scoped download
- * grant — Bambu issues nothing narrower. So this seam is for first-party built-in
+ * grant: Bambu issues nothing narrower. So this seam is for first-party built-in
  * plugins only, every consumer must gate on its own explicit user opt-in (enabling
  * the connection for preset sync is not consent to anything else), and the token
  * must never reach the browser, a log line, or an error message. `accountLabel` is
@@ -27,7 +27,7 @@ export interface BambuAccountCredential {
   /**
    * Bearer token for Bambu's APIs. Accepted by `api.bambulab.com` AND by
    * `makerworld.com` (verified: `Authorization: Bearer <token>` authorizes
-   * `design-service` reads and model downloads). Secret — never log or serialize it.
+   * `design-service` reads and model downloads). Secret, never log or serialize it.
    */
   accessToken: string
   /** Which Bambu region the connection belongs to; picks the API host. */
@@ -57,7 +57,7 @@ class BambuAccountRegistry {
 
   /**
    * Ask each registered resolver in turn and return the first credential found.
-   * `null` means no connected, unexpired account for this workspace — callers must
+   * `null` means no connected, unexpired account for this workspace: callers must
    * treat that as a normal state and say so in the UI, not as an error.
    */
   async resolve(query: BambuAccountQuery): Promise<BambuAccountCredential | null> {

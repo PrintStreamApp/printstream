@@ -7,7 +7,7 @@
  * 3-material project reopen with 6). So when the vendored source is present, re-derive both sets
  * from it and require an exact match.
  *
- * SKIPS when `tmp/bambustudio-src` is absent — it is a developer convenience, not a checked-in
+ * SKIPS when `tmp/bambustudio-src` is absent, it is a developer convenience, not a checked-in
  * dependency, so this must not fail a machine or a CI job that never vendored it. That makes the
  * test a ratchet for whoever DOES have the source (i.e. whoever is bumping it), which is exactly
  * when drift is introduced.
@@ -41,7 +41,7 @@ function findWorkspaceRoot(): string | null {
 function extractCppSet(source: string, name: string): string[] {
   const declaration = `std::set<std::string> ${name} = {`
   const start = source.indexOf(declaration)
-  assert.notEqual(start, -1, `${name} not found in PrintConfig.cpp — the vendored source changed shape`)
+  assert.notEqual(start, -1, `${name} not found in PrintConfig.cpp: the vendored source changed shape`)
   const end = source.indexOf('\n};', start)
   assert.notEqual(end, -1, `${name} has no closing brace`)
   return [...source.slice(start + declaration.length, end).matchAll(/"([A-Za-z_0-9]+)"/g)].map((match) => match[1]!)
@@ -73,7 +73,7 @@ test('the vendored variant-option sets still match BambuStudio', { skip: vendore
 /** The identifiers in a brace-delimited C++ list, with commented-out entries excluded. */
 function extractCppList(source: string, declaration: string): Set<string> {
   const start = source.indexOf(declaration)
-  assert.notEqual(start, -1, `${declaration} not found — the vendored source changed shape`)
+  assert.notEqual(start, -1, `${declaration} not found: the vendored source changed shape`)
   const open = source.indexOf('{', start)
   const end = source.indexOf('};', open)
   const body = source.slice(open + 1, end).replace(/\/\*[\s\S]*?\*\//g, '')
@@ -84,8 +84,8 @@ function extractCppList(source: string, declaration: string): Set<string> {
 const NON_SETTING = ['inherits', 'compatible_printers', 'compatible_printers_condition', 'compatible_prints', 'compatible_prints_condition']
 
 /**
- * `Preset::printer_options()` is a CONCATENATION of three vectors, and the third — the extruder
- * options — is where `nozzle_diameter`, `extruder_offset` and `extruder_colour` live. This test
+ * `Preset::printer_options()` is a CONCATENATION of three vectors, and the third, the extruder
+ * options, is where `nozzle_diameter`, `extruder_offset` and `extruder_colour` live. This test
  * exists mostly to pin that: mirroring only the literal `s_Preset_printer_options` yields a list
  * missing the single most load-bearing machine key, and the retarget filters its copy by this list,
  * so the omission would silently stop writing the target machine's nozzle diameter.
@@ -122,7 +122,7 @@ test('the vendored printer and process option lists still match BambuStudio', { 
 test('the vendored filament preset option list still matches BambuStudio', { skip: vendored ? false : 'tmp/bambustudio-src not vendored' }, () => {
   const preset = readFileSync(join(root!, 'tmp/bambustudio-src/src/libslic3r/Preset.cpp'), 'utf8')
   const start = preset.indexOf('s_Preset_filament_options')
-  assert.notEqual(start, -1, 's_Preset_filament_options not found — Preset.cpp changed shape')
+  assert.notEqual(start, -1, 's_Preset_filament_options not found: Preset.cpp changed shape')
   const open = preset.indexOf('{', start)
   const end = preset.indexOf('};', open)
   // Commented-out entries are deliberately excluded by BambuStudio, so they must not count.

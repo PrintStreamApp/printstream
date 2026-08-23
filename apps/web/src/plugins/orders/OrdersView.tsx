@@ -160,7 +160,7 @@ export function OrdersView() {
     enabled: authBootstrapQuery.isSuccess ? canReadOrdersPage : false
   })
   // Resolve only the library files the loaded templates/orders actually reference,
-  // not the whole library — the picker browses via /browse, so this list is purely
+  // not the whole library: the picker browses via /browse, so this list is purely
   // a metadata lookup for already-chosen file ids (thumbnails, plates). Loading the
   // entire library here would re-introduce an unbounded fetch and, with the listing
   // cap, silently fail to resolve files older than the cap.
@@ -252,7 +252,7 @@ export function OrdersView() {
     onSuccess: (response, variables) => {
       // Keep the slice dialog mounted beneath the print flow so its "Back" returns to
       // slice settings; abandoning the print tears both down together.
-      // The list refresh is not awaited — see slicingJobsCache.
+      // The list refresh is not awaited: see slicingJobsCache.
       seedSlicingJob(queryClient, response.job)
       refreshSlicingJobs(queryClient)
       setSliceThenPrintTarget({

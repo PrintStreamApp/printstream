@@ -85,7 +85,7 @@ export const DEFAULT_SLICING_PRESET_SOURCES: ReadonlyArray<SlicingPresetSource> 
 
 /**
  * ...unless the workspace has never made one of this kind, in which case that default hides
- * everything and the empty state has nothing to offer — "No presets match" with a disabled Clear,
+ * everything and the empty state has nothing to offer: "No presets match" with a disabled Clear,
  * over a catalogue of built-ins one un-obvious filter away.
  *
  * A stock install hits this on the Printer tab every time, because printer presets are the one kind
@@ -101,7 +101,7 @@ export function defaultSlicingPresetSources(
 }
 
 /**
- * Whether the source filter is untouched — order-insensitive, since the Select returns its own.
+ * Whether the source filter is untouched, order-insensitive, since the Select returns its own.
  * Compared against the RESOLVED default so the "Filters (N)" badge does not count the view the
  * panel opened as.
  */

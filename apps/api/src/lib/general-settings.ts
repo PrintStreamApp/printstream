@@ -14,7 +14,7 @@ const APP_THEME_KEY = 'app:general:theme'
 const UNCONSTRAINED_WIDTH_KEY = 'app:general:unconstrainedWidth'
 const SLICER_DEVELOPER_MODE_KEY = 'app:general:slicerDeveloperMode'
 const LANDING_PAGE_KEY = 'app:general:landingPage'
-// Value is a PrinterView id; an empty string encodes "no default" (Overview) —
+// Value is a PrinterView id; an empty string encodes "no default" (Overview):
 // the store interface has no delete, so clearing writes ''.
 const PRINTERS_DEFAULT_VIEW_KEY = 'app:general:printersDefaultViewId'
 const NAV_TAB_ORDER_KEY = 'app:general:navTabOrder'
@@ -153,7 +153,7 @@ export async function updateGeneralSettings(
 /**
  * Clear the workspace's default printer view when the view it names is deleted,
  * so the setting never advertises a dangling id. Readers tolerate a stale id
- * anyway (they fall back to the Overview), so a raced delete is harmless —
+ * anyway (they fall back to the Overview), so a raced delete is harmless,
  * this just keeps the stored state honest. Runs in the caller's workspace scope.
  */
 export async function clearPrintersDefaultViewIdIfMatches(

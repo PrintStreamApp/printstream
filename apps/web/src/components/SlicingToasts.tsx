@@ -62,11 +62,11 @@ export function SlicingToasts() {
     return jobs
       // A slice belongs to the tab that started it: its progress is that tab's business, and
       // toasting it in every other open tab (and in every teammate's) was noise about work they
-      // did not ask for and cannot act on. A job with NO owner is not a browser's — a script or
-      // an integration started it — so it stays visible to everyone rather than to nobody.
+      // did not ask for and cannot act on. A job with NO owner is not a browser's, a script or
+      // an integration started it, so it stays visible to everyone rather than to nobody.
       .filter((job) => job.ownerClientId == null || job.ownerClientId === readTabSessionId())
       .filter((job) => isActiveSlicingJob(job) || now - Date.parse(job.updatedAt) <= RECENT_MS)
-      // Once dismissed, stay dismissed — even for an "active" job. A stale/stuck toast (client
+      // Once dismissed, stay dismissed, even for an "active" job. A stale/stuck toast (client
       // missed the completion event) would otherwise be un-dismissable, leaving only Cancel.
       .filter((job) => !dismissed.has(job.id))
       .filter((job) => !suppressedJobIds.has(job.id))

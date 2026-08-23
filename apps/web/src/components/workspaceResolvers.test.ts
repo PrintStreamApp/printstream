@@ -3,7 +3,7 @@
  *
  * This is a regression guard, not tidiness. `ProcessSettingsDialog` used to call
  * `/api/slicing/profiles/resolve-process` itself, typed against a hand-written structural copy of
- * `ResolveProcessConfigResponse` — and the copy had already started to rot: `baselineOrigin` was
+ * `ResolveProcessConfigResponse`, and the copy had already started to rot: `baselineOrigin` was
  * invisible to the dialog until someone remembered to add it to the mirror by hand. That is exactly
  * the boundary failure the root the development notes names ("rebuilding a shared type field-by-field at a
  * boundary silently drops every field the contract later grows").
@@ -50,7 +50,7 @@ test('each workspace resolve route is fetched from exactly one module', async ()
   }
   // Control: if the owners stopped fetching, the scan below is measuring nothing.
   assert.equal(owned, OWNERS.size, 'each owner module should perform exactly one fetch')
-  assert.deepEqual(offenders, [], 'call the resolver module instead — it names the shared response type')
+  assert.deepEqual(offenders, [], 'call the resolver module instead, it names the shared response type')
 })
 
 test('nothing re-declares the resolve responses as a local structural type', async () => {

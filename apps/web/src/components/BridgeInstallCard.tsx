@@ -1,7 +1,7 @@
 /**
  * Install card for the bridge. A single Install button opens a menu of every
- * native package grouped by OS — with the one matching the visitor's detected
- * machine highlighted and flagged "Compatible with this machine" — plus a "Run
+ * native package grouped by OS, with the one matching the visitor's detected
+ * machine highlighted and flagged "Compatible with this machine", plus a "Run
  * with Docker" entry for users who prefer the published container image.
  * Choosing a native package opens a dialog with per-OS instructions and the
  * download button; choosing Docker opens the compose quick-start. Always renders
@@ -43,7 +43,7 @@ export function BridgeInstallCard({ downloads, detectedPlatformKey, serverUrl, s
       <CardContent>
         {isMac ? (
           <Typography level="body-sm" textColor="text.tertiary" sx={{ mb: 1 }}>
-            There is no native macOS build — run the bridge with Docker, or install it on an
+            There is no native macOS build: run the bridge with Docker, or install it on an
             always-on Windows or Linux machine.
           </Typography>
         ) : null}
@@ -130,7 +130,7 @@ function BridgeInstallDialog({ download, serverUrlOverride, onClose }: {
   return (
     <BackAwareModal open onClose={onClose}>
       <ScrollableModalDialog sx={{ width: { xs: '100%', sm: 480 } }}>
-        <DialogTitle>Install the bridge — {bridgePlatformLabel(download.platformKey)}</DialogTitle>
+        <DialogTitle>Install the bridge: {bridgePlatformLabel(download.platformKey)}</DialogTitle>
         <ScrollableDialogBody sx={{ mt: 1, p: 0 }}>
           <Stack spacing={1.25}>
             <Typography level="body-sm" textColor="text.tertiary">
@@ -166,7 +166,7 @@ function BridgeInstallDialog({ download, serverUrlOverride, onClose }: {
  * text: the executable bakes in the cloud origin, so a download from anywhere
  * else has to pass `--server-url`, and a double-click cannot. Left to the
  * ordinary instruction it would install successfully and register with the
- * cloud — a wrong outcome that reports itself as a right one.
+ * cloud, a wrong outcome that reports itself as a right one.
  */
 function BridgeInstallHint({ platformKey, fileName, serverUrlOverride }: {
   platformKey: string
@@ -191,18 +191,18 @@ function BridgeInstallHint({ platformKey, fileName, serverUrlOverride }: {
           that. Use &ldquo;Connect a bridge&rdquo; to pair it.
         </Typography>
         {/* The download's filename carries the server, and the installer reads
-            it — so the ordinary double-click joins THIS server with nothing to
+            it, so the ordinary double-click joins THIS server with nothing to
             type. (Windows' Mark of the Web is only a backstop: setup strips it
             before elevating, since SmartScreen refuses to elevate a marked exe,
             so it is gone by the second attempt.) The fallback is spelled out
-            because the NAME is not guaranteed either — a browser appends " (1)"
-            to a duplicate download, and users rename things — and a silent fall
+            because the NAME is not guaranteed either, a browser appends " (1)"
+            to a duplicate download, and users rename things, and a silent fall
             back to the cloud is exactly the confusion this flow exists to
             prevent. */}
         {serverUrlOverride ? (
           <>
             <Typography level="body-sm" textColor="text.tertiary">
-              It joins this server automatically, from its filename — keep the name as downloaded.
+              It joins this server automatically, from its filename: keep the name as downloaded.
               If it reports a different server, install from a terminal instead:
             </Typography>
             <CopyableCodeBlock text={`.\\${fileName} setup${serverUrlFlag}`} copyAriaLabel="Copy command" />

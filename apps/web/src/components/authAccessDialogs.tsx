@@ -342,7 +342,7 @@ export function CreateAuthUserDialog({
                 {/*
                   People already in this organisation come first, because that
                   is the common case and picking one cannot typo into a stranger
-                  — which is the mistake the email field invites. Absent
+, which is the mistake the email field invites. Absent
                   entirely when there is nobody to offer, so a workspace with no
                   organisation behind it sees exactly the form it always had.
                 */}
@@ -589,8 +589,8 @@ export function AuthGroupEditorDialog({
             {creating
               ? 'Create role'
               : isEditable
-                ? `Edit role — ${group?.name ?? 'Role'}`
-                : `Role permissions — ${group?.name ?? 'Role'}`}
+                ? `Edit role: ${group?.name ?? 'Role'}`
+                : `Role permissions: ${group?.name ?? 'Role'}`}
           </DialogTitle>
           <DialogContent>
             <Stack spacing={1}>
@@ -745,7 +745,7 @@ export function DeleteAuthGroupDialog({
     <Modal open onClose={() => !deleting && onClose()}>
       <ScrollableModalDialog sx={{ width: 'min(520px, 100%)' }}>
         <ModalClose disabled={deleting} />
-        <DialogTitle>Delete role — {group.name}</DialogTitle>
+        <DialogTitle>Delete role: {group.name}</DialogTitle>
         <DialogContent>
           <Stack spacing={1}>
             <Typography level="body-sm" textColor="text.tertiary">
@@ -892,7 +892,7 @@ export function AuthUserManagementDialog({
     <Modal open onClose={() => !savingAccess && !mutatingLifecycle && onClose()}>
       <ScrollableModalDialog sx={{ width: 'min(720px, 100%)' }}>
         <ModalClose disabled={savingAccess || mutatingLifecycle} />
-        <DialogTitle>Manage user — {user.displayName?.trim() || user.email}</DialogTitle>
+        <DialogTitle>Manage user: {user.displayName?.trim() || user.email}</DialogTitle>
         <DialogContent>
           <Stack spacing={0.75}>
             <Typography level="body-sm" textColor="text.tertiary">
@@ -1099,7 +1099,7 @@ export function DeleteAuthUserDialog({
     <Modal open onClose={() => !deleting && onClose()}>
       <ScrollableModalDialog sx={{ width: 'min(520px, 100%)' }}>
         <ModalClose disabled={deleting} />
-        <DialogTitle>Delete user — {user.displayName?.trim() || user.email}</DialogTitle>
+        <DialogTitle>Delete user: {user.displayName?.trim() || user.email}</DialogTitle>
         <DialogContent>
           <Stack spacing={1}>
             <Typography level="body-sm" textColor="text.tertiary">
@@ -1218,7 +1218,7 @@ export function AuthServiceAccountEditorDialog({
         <DialogTitle>
           {creating
             ? 'Create service account'
-            : `Edit service account — ${serviceAccount?.name ?? 'Service account'}`}
+            : `Edit service account: ${serviceAccount?.name ?? 'Service account'}`}
         </DialogTitle>
         <DialogContent>
           <Stack spacing={0.75}>

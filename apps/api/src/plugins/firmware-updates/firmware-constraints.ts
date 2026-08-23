@@ -4,15 +4,15 @@
  * PrintStream installs firmware by staging Bambu's offline upgrade package on the
  * printer's SD card; the user then flashes it from the printer screen via
  * Settings > Firmware > Update Offline. Two Bambu-documented limitations can make
- * a staged package non-flashable, and neither is visible from the version list —
+ * a staged package non-flashable, and neither is visible from the version list,
  * so we surface them in the update report instead of letting the upload silently
  * lead nowhere:
  *
- * 1. Offline-update floor — a model's on-screen "Update Offline" option only
+ * 1. Offline-update floor, a model's on-screen "Update Offline" option only
  *    appears once the *installed* firmware reaches a minimum version. Below it the
  *    printer has to be updated online (Bambu Handy / Bambu Studio) once, so staging
  *    a file over the LAN does nothing.
- * 2. Prerequisite ("stepping-stone") hop — some target versions cannot be flashed
+ * 2. Prerequisite ("stepping-stone") hop, some target versions cannot be flashed
  *    directly from an old enough installed version; an intermediate "bridge" /
  *    "helper" build must be installed first.
  *
@@ -24,7 +24,7 @@
  * - Offline floors: per-model "Firmware Upgrade via microSD Card" prerequisites
  *   (P1 >= 01.07.00.00, X1/X1C >= 01.08.02.00, A1/A1 mini >= 01.04.00.00,
  *   X1E >= 01.01.02.00; the H2 series shipped with offline updates).
- * - Hops: per-model firmware release histories — P1 "Bridge Firmware" 01.09.01.00
+ * - Hops: per-model firmware release histories: P1 "Bridge Firmware" 01.09.01.00
  *   and X1E "helper firmware" 01.01.50.02.
  */
 import { compareVersions } from './firmware-source.js'
@@ -70,7 +70,7 @@ export interface OfflineUpdateEligibility {
   /**
    * True when the installed firmware is known and below `minimumVersion`: the
    * SD-card flow cannot help, so the printer must be updated online first.
-   * Stays false while the installed version is unknown — we never guess a block.
+   * Stays false while the installed version is unknown, we never guess a block.
    */
   belowMinimum: boolean
 }

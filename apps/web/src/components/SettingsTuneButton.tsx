@@ -1,12 +1,12 @@
 /**
  * Tune (settings-editor) icon button with a corner Badge showing how many values differ from the
- * preset — the single "open settings, N changed" control shared by every slice surface: materials,
+ * preset: the single "open settings, N changed" control shared by every slice surface: materials,
  * per-object, and per-part.
  *
- * One component so all of them indicate changes the SAME way — a count in a corner badge — rather
+ * One component so all of them indicate changes the SAME way, a count in a corner badge, rather
  * than the older `variant`/`color` flip, which was invisible on a lone row with no unchanged
- * sibling to compare against. A corner Badge (not an inline chip) keeps the button width — and
- * each row's column alignment — constant whether or not there are changes. Joy hides the badge at
+ * sibling to compare against. A corner Badge (not an inline chip) keeps the button width, and
+ * each row's column alignment, constant whether or not there are changes. Joy hides the badge at
  * a zero count (no `showZero`), so an unchanged row shows a plain icon.
  */
 import { Badge, IconButton, Tooltip } from '@mui/joy'
@@ -30,7 +30,7 @@ export function SettingsTuneButton({ changedCount, title, ariaLabel, disabled, o
           color="primary"
           badgeInset="15%"
           // The badge sits ON the button, so it swallowed clicks aimed at the corner it covers and
-          // the button did nothing. It is a label, never a target — let the press fall through.
+          // the button did nothing. It is a label, never a target: let the press fall through.
           slotProps={{ badge: { sx: { pointerEvents: 'none' } } }}
         >
           <IconButton

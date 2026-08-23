@@ -6,7 +6,7 @@
  *
  * The distinction matters and is easy to get wrong: a lapsed updates period
  * must never stop the app or lock data. The customer keeps the build they have,
- * forever — they simply stop receiving newer ones. Anything that reads this
+ * forever, they simply stop receiving newer ones. Anything that reads this
  * helper should degrade to "you are on the build you own", never to an error.
  *
  * Fails **open**: an unreadable license, an unlicensed install, or a community
@@ -23,7 +23,7 @@ type ReadStatus = () => Promise<LicenseStatus>
 /**
  * Whether this install is entitled to newer builds and priority support.
  *
- * @param readStatus injection point for tests — the fail-open branch below is
+ * @param readStatus injection point for tests: the fail-open branch below is
  * the behaviour most worth covering and cannot be reached otherwise.
  * @returns false only when a valid key is installed AND its updates window has
  * demonstrably passed.

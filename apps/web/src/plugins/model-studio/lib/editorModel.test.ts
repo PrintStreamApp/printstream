@@ -208,21 +208,21 @@ test('exactTransformIfShearing flags a foreign T·R·S (rotate+non-uniform) matr
   const pos = new THREE.Vector3(5, -3, 1)
   const rot = new THREE.Euler(0.2, 0.6, -0.4, 'XYZ')
   const nonUniform = new THREE.Vector3(2, 1, 0.5)
-  // Foreign Bambu convention: T·R·S (scale inside rotation) — shears relative to the editor's T·S·R.
+  // Foreign Bambu convention: T·R·S (scale inside rotation): shears relative to the editor's T·S·R.
   const foreign = new THREE.Matrix4()
     .makeTranslation(pos.x, pos.y, pos.z)
     .multiply(new THREE.Matrix4().makeRotationFromEuler(rot))
     .multiply(new THREE.Matrix4().makeScale(nonUniform.x, nonUniform.y, nonUniform.z))
   assert.ok(exactTransformIfShearing(transform12(foreign)) !== undefined, 'foreign T·R·S should be kept exact')
 
-  // The editor's own convention: T·S·R — reproducible from TRS, so no exact matrix needed.
+  // The editor's own convention: T·S·R: reproducible from TRS, so no exact matrix needed.
   const own = new THREE.Matrix4()
     .makeTranslation(pos.x, pos.y, pos.z)
     .multiply(new THREE.Matrix4().makeScale(nonUniform.x, nonUniform.y, nonUniform.z))
     .multiply(new THREE.Matrix4().makeRotationFromEuler(rot))
   assert.equal(exactTransformIfShearing(transform12(own)), undefined)
 
-  // Uniform scale + rotation is representable either way — no exact matrix.
+  // Uniform scale + rotation is representable either way, no exact matrix.
   const uniform = new THREE.Matrix4()
     .makeTranslation(pos.x, pos.y, pos.z)
     .multiply(new THREE.Matrix4().makeRotationFromEuler(rot))
@@ -297,6 +297,66 @@ test('replaceInstanceGeometry retains placement, material, printability, name an
   assert.equal(next.nameOverridden, true)
   // The source instance is left untouched (replacement returns a fresh instance).
   assert.equal(source.source.kind, 'object')
+})
+
+// A staged import's origin IS its centre (`ImportNormalization` normalises whole objects that way),
+// but an in-project Bambu object's is not: its mesh routinely carries plate coordinates, so its
+// origin can sit far from where the model appears. Copying `position` across therefore drops the
+// replacement's CENTRE onto the original's ORIGIN and the model jumps by the difference. The caller
+// passes where the old object actually SAT, and the replacement lands there.
+test('replaceInstanceGeometry lands the replacement where the old object SAT, not on its origin', () => {
+  const source = instanceFromStagedImport(STAGED)
+  source.source = { kind: 'object' }
+  source.objectId = 9
+  // The object's origin, which for a Bambu mesh need not be anywhere near its rendered centre.
+  source.position.set(0, 0, 4)
+
+  const replacement: StagedImport = { ...STAGED, importId: 'imp-2', name: 'Gear.stl' }
+  const next = replaceInstanceGeometry(source, replacement, 9, undefined, { x: 128, y: 128 })
+
+  // XY comes from where it sat. Z is SOLVED so the body rests on the bed (Studio's `ensure_on_bed`)
+  // rather than inherited: an inherited rotation moves the mesh's floor, so keeping the source's z
+  // would sink or float the replacement until the user happened to drag it.
+  assert.deepEqual([next.position.x, next.position.y, next.position.z], [128, 128, 0])
+
+  // No centre available (an instance with no live group, e.g. on a non-active plate): keep the
+  // source's own placement rather than guessing one.
+  const blind = replaceInstanceGeometry(source, replacement, 9, undefined, null)
+  assert.deepEqual([blind.position.x, blind.position.y, blind.position.z], [0, 0, 4])
+})
+
+// The case a naive `position = oldCentre` gets wrong, and the one that shipped broken.
+// `position` places the local ORIGIN, and a staged import's origin is its XY centre but its Z
+// FLOOR. Inherit a rotation and that un-centred axis turns into the plane: -90 degrees about X maps
+// local z onto world y, so the origin sits at the EDGE of the rotated footprint and the model lands
+// a half-body away with its edge on the old centre. Studio rotates the centring offset into the
+// object's frame for exactly this reason (`get_matrix(true)` * mesh_offset delta).
+test('replaceInstanceGeometry centres a ROTATED replacement, and rests it on the bed', () => {
+  const source = instanceFromStagedImport(STAGED)
+  source.source = { kind: 'object' }
+  source.objectId = 9
+  source.position.set(0, 0, 0)
+  // Laid flat, exactly like the object this was found on.
+  source.rotation.set(-Math.PI / 2, 0, 0)
+
+  // A staged import as the server now normalises one: centred in XY, floored in Z (0..20 tall).
+  const replacement: StagedImport = {
+    ...STAGED,
+    importId: 'imp-2',
+    name: 'Gear.stl',
+    bounds: { min: { x: -5, y: -5, z: 0 }, max: { x: 5, y: 5, z: 20 } }
+  }
+  const next = replaceInstanceGeometry(source, replacement, 9, undefined, { x: 100, y: 100 })
+
+  // -90 about X maps local (x,y,z) to world (x, z, -y). Local z (0..20) becomes world y, so the
+  // rotated body spans 20mm in Y with its centre 10mm PAST the origin: the position has to pull
+  // back by that 10, or the origin (and so the model's edge) lands on the old centre instead.
+  assert.equal(Math.round(next.position.x * 1000) / 1000, 100)
+  assert.equal(Math.round(next.position.y * 1000) / 1000, 90)
+  // Its world centre therefore lands exactly on the target.
+  assert.equal(Math.round((next.position.y + 10) * 1000) / 1000, 100)
+  // Local y (-5..5) becomes world z, so resting on the bed means lifting by 5.
+  assert.equal(Math.round(next.position.z * 1000) / 1000, 5)
 })
 
 test('buildSceneEdit emits meshReplacements and a name override for a replaced object', () => {
@@ -376,7 +436,7 @@ test('seeded plates carry a unique session identity and remember their source in
   assert.deepEqual(state.plates.map((plate) => plate.sourcePlateIndex), [1, 2, 3])
   // A scaffold plate has no archive plate behind it.
   assert.equal(seedEmptyEditorState().plates[0]?.sourcePlateIndex, null)
-  // Identity survives the undo snapshot — dropping it there would resurrect the index-keyed
+  // Identity survives the undo snapshot: dropping it there would resurrect the index-keyed
   // thumbnail drift the moment a reorder is undone.
   const snapshot = cloneEditorState(state)
   assert.deepEqual(snapshot.plates.map((plate) => plate.plateId), plateIds)
@@ -385,7 +445,7 @@ test('seeded plates carry a unique session identity and remember their source in
 
 test('seededActivePlateIndex maps the preferred SOURCE plate onto the reindexed live plates', () => {
   // The regression shape: a Bambu per-plate "export sliced file" carries ONLY the exported plate,
-  // keeping its number — the parsed index has one plate whose index is 2, which reindexes to live
+  // keeping its number: the parsed index has one plate whose index is 2, which reindexes to live
   // index 1. Assigning the source index (2) directly left activePlate unresolvable and the editor
   // on "Loading plates…" forever, state fully seeded behind it.
   const singleExported = threeMfIndexSchema.parse({
@@ -619,7 +679,7 @@ test('an added part on an UNSAVED import emits its host as an importId', () => {
   }
 
   // The host is addressed by importId, NOT by the synthetic object id (which means nothing
-  // server-side) and not by objectId 0 — the bake resolves it through importIdToObjectId.
+  // server-side) and not by objectId 0: the bake resolves it through importIdToObjectId.
   assert.deepEqual(buildSceneEdit(state).addedParts, [{
     importId: 'imp-1',
     meshImportId: 'part-imp-1',
@@ -678,7 +738,7 @@ test('replacing a model forgets its added parts rather than reattaching them to 
     }]
   }
 
-  // The replacement RETAINS object 7's identity, which is the same key addedParts uses — so
+  // The replacement RETAINS object 7's identity, which is the same key addedParts uses, so
   // without the explicit drop the old shape's blocker would silently ride onto the new mesh.
   dropAddedPartsForReplacedHost(state, object)
   const replacement = replaceInstanceGeometry(object, { ...STAGED, importId: 'imp-2' }, 7)
@@ -703,7 +763,7 @@ test('the single-object export centres by the rendered footprint, not by the ins
   const placed = exported?.plates[0]?.instances[0]
   // Shifted by (bedCentre - footprintCentre) = (100-40, 100-30), so the GEOMETRY lands centred.
   // Assigning the bed centre to `position` (the old behaviour) would have put it at (100, 100),
-  // leaving the mesh at (130, 120) — the half-off-the-bed export.
+  // leaving the mesh at (130, 120): the half-off-the-bed export.
   assert.equal(placed?.position.x, 70)
   assert.equal(placed?.position.y, 80)
 
@@ -731,7 +791,7 @@ test('a moved sub-part of an unsaved import emits importPartTransforms, not part
   assert.deepEqual(edit.importPartTransforms, [
     { importId: 'imp-1', partIndex: 1, matrix: [1, 0, 0, 0, 1, 0, 0, 0, 1, 3, 4, 5] }
   ])
-  // partTransforms addresses baked 3MF object ids, which an unsaved import does not have — the
+  // partTransforms addresses baked 3MF object ids, which an unsaved import does not have: the
   // move would be silently dropped if it went out that way.
   assert.equal(edit.partTransforms, undefined)
 })
@@ -761,7 +821,7 @@ test('an independent copy gets its own identity and inherits the source session 
 
   const edit = buildSceneEdit(state)
   assert.deepEqual(edit.objectClones, [{ objectId: copy.objectId, sourceObjectId: 3 }])
-  // A part is addressed by its ORDINAL, which a copy shares with its source — so unlike the mesh
+  // A part is addressed by its ORDINAL, which a copy shares with its source, so unlike the mesh
   // ids the clone pre-pass remaps, there is nothing per-part to translate here.
   assert.ok(edit.partTypeChanges?.some((entry) => entry.objectId === copy.objectId && entry.partIndex === 11))
 
@@ -772,7 +832,7 @@ test('an independent copy gets its own identity and inherits the source session 
 
 test('a SINGLE-solid import (an added cube) emits its paint as solid 0', () => {
   const state: EditorState = seedEmptyEditorState()
-  // A primitive / plain STL stages as ONE solid, so `parts` is empty — the case that made painting
+  // A primitive / plain STL stages as ONE solid, so `parts` is empty: the case that made painting
   // an added cube silently do nothing.
   const cube = instanceFromStagedImport(STAGED)
   assert.equal(cube.parts.length, 0, 'a single-solid import carries no part rows')
@@ -785,7 +845,7 @@ test('a SINGLE-solid import (an added cube) emits its paint as solid 0', () => {
   assert.deepEqual(edit.importPaint, [
     { importId: 'imp-1', partIndex: 0, channel: 'support', triangles: { '0': '8', '3': '4' } }
   ])
-  // It must NOT also emit as object paint — an unsaved import has no baked object to address.
+  // It must NOT also emit as object paint, an unsaved import has no baked object to address.
   assert.equal(edit.supportPaint, undefined)
 })
 
@@ -986,7 +1046,7 @@ test('findFreePlatePosition centres the first model on an empty plate', () => {
 })
 
 /**
- * A one-object plate with a printed part, a support blocker, and a modifier — the shape that
+ * A one-object plate with a printed part, a support blocker, and a modifier: the shape that
  * exposed helper volumes wearing the object's material in the sidebar.
  */
 const sceneWithHelperParts = () => libraryThreeMfSceneSchema.parse({
@@ -1048,7 +1108,7 @@ test('seeding never gives a support blocker the object material, and never bakes
 })
 
 // SESSION -> SAVED filament renumbering: a save that removed/reordered materials bakes the desired
-// list as slots 1..N, so every filament id the editor emits — and then holds live — must follow.
+// list as slots 1..N, so every filament id the editor emits, and then holds live, must follow.
 // The production repro: 5 slots reduced to 1 (kept session id 2); an untranslated emit wrote a part
 // `extruder="2"` into a 1-filament file, and the untranslated live state made the mesh colour
 // lookup miss, reverting the viewport to the originally-seeded colour after Save.
@@ -1146,7 +1206,7 @@ test('both rebase halves carry COLOUR PAINT onto the saved filament ids', () => 
   assert.deepEqual(Object.keys(nextEdit.colorPaint![0]!.triangles), ['0'], 'the removed material’s triangle goes')
   assert.equal(decodePaintTree(nextEdit.colorPaint![0]!.triangles[0]!)!.kind === 'leaf'
     && (decodePaintTree(nextEdit.colorPaint![0]!.triangles[0]!) as { state: number }).state, 1)
-  // Supports/seam encode enforcer/blocker constants, NOT filament ids — remapping them would
+  // Supports/seam encode enforcer/blocker constants, NOT filament ids: remapping them would
   // corrupt the channel, so they must pass through untouched.
   const supports = nextEdit.importPaint!.find((entry) => entry.channel === 'support')!
   assert.equal(supports.triangles[0], kept, 'a non-colour channel is left alone')

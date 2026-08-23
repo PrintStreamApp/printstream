@@ -4,7 +4,7 @@
  *
  * The library builds both from server data; the public editor has neither a server nor a library
  * row, but it HAS parsed the file in the tab, so the same information is already in hand. This is a
- * pure mapping — no fetch, no I/O.
+ * pure mapping, no fetch, no I/O.
  *
  * Why the synthesized `LibraryFile` carries EMPTY chips: every slice helper that reads project
  * materials / plate type / nozzle (`buildSliceDialogProjectFilaments`, `resolveInitialPlateType`,
@@ -32,7 +32,7 @@ export function localBakedIndex(project: ClientThreeMfProject): ThreeMfIndex {
  * empty by design (see the module note); the library-only lifecycle fields take their neutral
  * defaults since a local file has no versions, stars, or print history.
  *
- * `uploadedAt` is stamped from the current time — it is display-only and not read by any slice
+ * `uploadedAt` is stamped from the current time, it is display-only and not read by any slice
  * helper, so a non-deterministic value here is harmless (and this runs only in the browser).
  */
 export function localSliceLibraryFile(project: ClientThreeMfProject): LibraryFile {

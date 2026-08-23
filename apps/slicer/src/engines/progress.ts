@@ -3,7 +3,7 @@
  *
  * An engine is 220-470 MB compressed and unpacks to over a gigabyte. On a fast
  * link that is seconds; on a slow one it is many minutes. Either way a
- * synchronous request is the wrong shape — it ties the outcome to a socket
+ * synchronous request is the wrong shape, it ties the outcome to a socket
  * staying up, and a wedged download becomes a caller waiting on a timeout long
  * enough that they assume the app is broken.
  *
@@ -12,7 +12,7 @@
  * jobs, which solved this already.
  *
  * Deliberately in memory. A restart loses the record, which is correct: the
- * install died with the process, and the manifest — written only on success —
+ * install died with the process, and the manifest, written only on success,
  * is the durable truth about what is actually installed.
  */
 export type EngineInstallState = 'installing' | 'failed'
@@ -45,7 +45,7 @@ export function finishInstall(id: string): void {
 
 /**
  * Kept, not cleared, so the UI can say WHY rather than silently reverting to
- * "not installed" — which reads as the click having done nothing.
+ * "not installed", which reads as the click having done nothing.
  */
 export function failInstall(id: string, error: string): void {
   const current = inFlight.get(id)

@@ -3,7 +3,7 @@
  * user-defined task) rename and delete it.
  *
  * Each interval is an optional number with its own "track this" switch, because
- * the three states the wire distinguishes — inherit, set to a value, cleared —
+ * the three states the wire distinguishes, inherit, set to a value, cleared,
  * cannot be expressed by an empty text field alone. Clearing every interval is
  * allowed and means the task only ever comes due if the printer asks for it.
  *

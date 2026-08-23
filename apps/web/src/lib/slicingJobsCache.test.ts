@@ -73,7 +73,7 @@ test('seedSlicingJob leaves a cold cache alone instead of inventing a one-job li
 
 test('a mutation that refreshes the job list settles even while the list fetch is wedged', async () => {
   const queryClient = buildClient()
-  // A list fetch that never settles — the real-world shape is a large response whose transport
+  // A list fetch that never settles: the real-world shape is a large response whose transport
   // stalls after committing, which leaves the query `fetching` forever.
   const observer = new QueryObserver<SlicingJobsResponse>(queryClient, {
     queryKey: SCOPE_KEY,
@@ -83,7 +83,7 @@ test('a mutation that refreshes the job list settles even while the list fetch i
   await settleTasks()
 
   // The hazard this module exists to prevent: awaiting the invalidation never returns, and
-  // query-core holds the mutation `pending` until every onSuccess promise settles — so the
+  // query-core holds the mutation `pending` until every onSuccess promise settles, so the
   // button spins forever over a slice the server already finished.
   let awaitedInvalidationSettled = false
   void queryClient.invalidateQueries({ queryKey: ['slicing-jobs'] }).then(() => { awaitedInvalidationSettled = true })

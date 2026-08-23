@@ -1,6 +1,6 @@
 /**
- * The filament presets a project carries INSIDE itself — BambuStudio's `Metadata/filament_settings_N.config`
- * sidecars — and which of them nothing uses any more.
+ * The filament presets a project carries INSIDE itself, BambuStudio's `Metadata/filament_settings_N.config`
+ * sidecars, and which of them nothing uses any more.
  *
  * WHY THEY EXIST AT ALL. When a slot names a preset BambuStudio cannot bind (an unknown name, an
  * empty one, a preset the user does not have installed), it fabricates one from the project's values
@@ -16,7 +16,7 @@
  * the same project carries none.
  *
  * CONTRACT: this module only REPORTS. Removal is an explicit user action (`SceneEdit.removedEmbeddedPresets`)
- * for the same reason every other defect in a saved project is — see `repairs/index.ts`. An embedded
+ * for the same reason every other defect in a saved project is: see `repairs/index.ts`. An embedded
  * preset can be the only surviving record of settings the user tuned, so dropping one on their
  * behalf is not ours to decide even when nothing references it today.
  *
@@ -53,7 +53,7 @@ export interface EmbeddedProjectPreset {
 /**
  * Classify a project's embedded presets against the slots that could reference them.
  *
- * `settingsIds` is the project's `filament_settings_id` — the names slots bind by. Matching is on
+ * `settingsIds` is the project's `filament_settings_id`: the names slots bind by. Matching is on
  * the exact name, the way BambuStudio binds (`find_preset_internal`); a preset whose name cannot be
  * read is reported unused-but-unnamed rather than silently dropped from the list, so the user can
  * still see that the file carries something.
@@ -88,7 +88,7 @@ export function classifyEmbeddedProjectPresets(
 /**
  * Whether a project's embedded presets include any nothing references.
  *
- * Cheap enough to call per render; used to decide whether the editor shows the section at all — a
+ * Cheap enough to call per render; used to decide whether the editor shows the section at all, a
  * project with no sidecars (the normal case) should not grow an empty panel.
  */
 export function hasUnusedEmbeddedPresets(presets: readonly EmbeddedProjectPreset[]): boolean {

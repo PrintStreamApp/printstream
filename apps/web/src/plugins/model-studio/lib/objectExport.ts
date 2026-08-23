@@ -3,7 +3,7 @@
  * per-object "Export as one STL"). The object's model parts are merged from its live
  * render group, so baked part matrices and the instance's world placement (rotation,
  * scale, mirror) are already applied; the merged soup is then re-centred on the origin
- * with its bottom on Z=0 — matching BambuStudio's align-to-origin and how this editor
+ * with its bottom on Z=0: matching BambuStudio's align-to-origin and how this editor
  * places re-imported meshes.
  *
  * Negative parts, modifiers, and support blockers/enforcers are excluded: their meshes
@@ -14,7 +14,7 @@
  *
  * Also covers the other BambuStudio export shapes: several objects merged into one STL
  * (`buildObjectsStl`, the multi-selection "Export as one STL") and specific parts of one
- * object (`buildPartsStl`, the part menu's export — which DOES include a selected helper
+ * object (`buildPartsStl`, the part menu's export, which DOES include a selected helper
  * volume, since picking it is explicit).
  */
 import type * as THREE from 'three'
@@ -53,7 +53,7 @@ function concatSoups(soups: ReadonlyArray<Float32Array>): Float32Array {
 /**
  * Serialize one object's render group as binary STL (world transforms baked,
  * re-centred to origin, bottom on the bed plane). Returns null when the group
- * holds no solid geometry — e.g. an object whose every part is a modifier.
+ * holds no solid geometry: e.g. an object whose every part is a modifier.
  */
 export function buildObjectStl(group: THREE.Object3D): ArrayBuffer | null {
   return buildObjectsStl([group])
@@ -75,8 +75,8 @@ export function buildObjectsStl(groups: ReadonlyArray<THREE.Object3D>): ArrayBuf
 
 /**
  * Serialize specific PARTS of one object's render group as one binary STL. Parts are
- * matched by the render tags carried on part groups — `partRef` (baked in-project
- * parts) or `importPartRef` (solids of a multi-solid import, e.g. a STEP assembly) —
+ * matched by the render tags carried on part groups: `partRef` (baked in-project
+ * parts) or `importPartRef` (solids of a multi-solid import, e.g. a STEP assembly),
  * against the part-selection's ORDINAL (`partIndex`) key space. Unlike the whole-object
  * export, a selected helper volume (negative/modifier/blocker/enforcer part) IS
  * exported: picking the part is the deliberate ask for that volume's mesh.

@@ -16,7 +16,7 @@
  * 5. Persist the install in the `Plugin` table so it can be re-loaded
  *    on the next boot, and register with the runtime `pluginRegistry`.
  *
- * Web plugins are not supported through uploads yet — the web bundle
+ * Web plugins are not supported through uploads yet: the web bundle
  * is built ahead of time. Manifests with a `web` field are accepted
  * but the field is ignored for now; this leaves the door open for a
  * future loader without changing the package format.

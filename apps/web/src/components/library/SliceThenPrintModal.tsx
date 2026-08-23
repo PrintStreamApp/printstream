@@ -46,7 +46,7 @@ function isSlicingInProgress(status: string): boolean {
 
 /**
  * Run an orphan-cleanup (cancel an in-flight slice / discard an unkept output) on a REAL unmount
- * only — NOT React 18 StrictMode's dev mount→unmount→remount. StrictMode runs setup→cleanup→setup
+ * only, NOT React 18 StrictMode's dev mount→unmount→remount. StrictMode runs setup→cleanup→setup
  * synchronously to stress-test effects; a naive unmount cleanup here would fire that throwaway
  * cleanup and cancel a slice the instant the tracker opens. So the side effect is deferred a
  * macrotask and cleared if the component re-mounts in the same tick (StrictMode), while a genuine
@@ -94,7 +94,7 @@ export function SliceThenPrintModal({
   printTitle?: string
   printSubmitLabel?: string
   /**
-   * When set, render this instead of the print setup once slicing is ready — e.g. the
+   * When set, render this instead of the print setup once slicing is ready: e.g. the
    * queue flow hands the sliced output to its own add dialog (no forced printer choice)
    * rather than going to printer selection.
    */
@@ -109,7 +109,7 @@ export function SliceThenPrintModal({
   /**
    * Override the final print submission (default posts to the slicing job's
    * own print endpoint). `outputFile` is the sliced library file being
-   * dispatched — e.g. the orders flow records it against the order item.
+   * dispatched: e.g. the orders flow records it against the order item.
    */
   submitPrint?: (input: {
     printerId: string
@@ -295,7 +295,7 @@ export function SliceThenPrintModal({
         </ScrollableDialogBody>
         <DialogActions>
           {job && isSlicingInProgress(job.status) ? (
-            // No plain "Close" while slicing runs — dismissing would orphan the job and
+            // No plain "Close" while slicing runs: dismissing would orphan the job and
             // could hand off a half-finished slice, so the only exit cancels the slice.
             <Button type="button" variant="plain" color="danger" onClick={handleDismiss}>
               Cancel slicing
@@ -338,7 +338,7 @@ export function SliceResultModal({
   onClose: () => void
 }) {
   const queryClient = useQueryClient()
-  // The job's own record, not the list — see the sibling dialog above.
+  // The job's own record, not the list: see the sibling dialog above.
   const slicingJobQuery = useSlicingJob(jobId)
   useEffect(() => suppressJobToast('slicing', jobId), [jobId])
   const [printing, setPrinting] = useState(false)
@@ -386,7 +386,7 @@ export function SliceResultModal({
   )
   const cancelSlicing = useMutation({
     mutationFn: () => apiFetch<SlicingJobResponse>(`/api/slicing/jobs/${jobId}/cancel`, { method: 'POST' }),
-    // Seeded, not awaited — see slicingJobsCache.
+    // Seeded, not awaited: see slicingJobsCache.
     onSuccess: (response) => { seedSlicingJob(queryClient, response.job); refreshSlicingJobs(queryClient) }
   })
   const [saveDestinationOpen, setSaveDestinationOpen] = useState(false)
@@ -496,7 +496,7 @@ export function SliceResultModal({
         </ScrollableDialogBody>
         <DialogActions>
           {job && isSlicingInProgress(job.status) ? (
-            // No plain "Close" while slicing runs — leaving would orphan the output, so the
+            // No plain "Close" while slicing runs, leaving would orphan the output, so the
             // explicit exit cancels (backdrop/escape also cancel via handleClose).
             <Button type="button" variant="plain" color="danger" loading={cancelSlicing.isPending} onClick={() => cancelSlicing.mutate()}>
               Cancel slicing

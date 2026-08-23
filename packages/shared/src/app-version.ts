@@ -16,8 +16,8 @@ import { z } from 'zod'
  * - `current`: the running revision matches the registry's latest tag.
  * - `updateAvailable`: the registry's latest tag is a different build.
  * - `updatesLapsed`: a newer build exists, but this install's updates &
- *   support period has ended. The app keeps running the build it has — a
- *   perpetual license never stops working — so this is a renewal prompt, not
+ *   support period has ended. The app keeps running the build it has, a
+ *   perpetual license never stops working, so this is a renewal prompt, not
  *   an error. Only reachable on a licensed install whose key carries an
  *   `updatesUntil` in the past; community keys are perpetual and never lapse.
  * - `unknown`: the check has not completed or could not reach the registry.
@@ -37,7 +37,7 @@ export const appUpdateInfoSchema = z.object({
   imageRef: z.string().nullable(),
   /**
    * Where to GET the newer build, for channels that hand out a file rather than
-   * an image to pull — today the native single-file app. Null on the Docker
+   * an image to pull, today the native single-file app. Null on the Docker
    * channel, where `imageRef` is the answer. Kept as a separate field rather
    * than overloading `imageRef` because the two call for different copy: one is
    * a command to run, the other is a link to follow.
@@ -56,7 +56,7 @@ export const appVersionResponseSchema = z.object({
   /** Registry update status; null unless this is the published open-core image. */
   update: appUpdateInfoSchema.nullable(),
   /**
-   * True when THIS VIEWER may apply the available update in place — only ever
+   * True when THIS VIEWER may apply the available update in place, only ever
    * true on the native single-file app, for a viewer with settings-manage
    * permission, while `update.status` is `updateAvailable` and a binary exists
    * for this platform. Drives the footer's one-click update; the server

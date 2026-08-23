@@ -7,7 +7,7 @@ import { rootPrisma } from './prisma.js'
 import { pruneDeletedWorkspaces } from './workspace-cleanup.js'
 
 /**
- * The sweep is the only irreversible half of workspace deletion — everything a
+ * The sweep is the only irreversible half of workspace deletion, everything a
  * user clicks is recoverable, and this is what stops being so. Its window and
  * its failure isolation are therefore the parts worth pinning.
  */
@@ -25,7 +25,7 @@ test('only workspaces past the retention window are swept', async () => {
   await pruneDeletedWorkspaces(NOW)
 
   // A deleted workspace still inside its window is restorable, so the sweep
-  // must not be able to see it at all — the filter is the guarantee.
+  // must not be able to see it at all: the filter is the guarantee.
   assert.ok(where)
   assert.equal(where.deletedAt.not, null)
   assert.equal(NOW.getTime() - where.deletedAt.lte.getTime(), 30 * DAY)
@@ -56,7 +56,7 @@ test('a deleted workspace is scoped out by the shared predicate', async () => {
   const { visibleWorkspacesWhere, visibleWorkspaceScope } = await import('./workspace-visibility.js')
 
   // The predicate pins `deletedAt` even against a caller that tries to set it,
-  // so no call site can widen the scope by accident — which is the failure mode
+  // so no call site can widen the scope by accident, which is the failure mode
   // a per-site filter invites.
   assert.deepEqual(visibleWorkspacesWhere({ slug: 'shop' }), { slug: 'shop', deletedAt: null })
   assert.deepEqual(

@@ -62,7 +62,7 @@ slicingRouter.get('/capabilities', requireRequestPermission(LIBRARY_VIEW_PERMISS
   const capabilities = await slicerClient.capabilities()
   // The workspace's own choice about which engines its users see. Applied HERE,
   // in the one place every slice surface reads its targets from, rather than in
-  // each picker — a second list that forgot to filter is how a hidden engine
+  // each picker, a second list that forgot to filter is how a hidden engine
   // reappears in one dialog.
   const targets = filterVisibleEngines(
     capabilities.targets,
@@ -94,7 +94,7 @@ slicingRouter.get('/capabilities', requireRequestPermission(LIBRARY_VIEW_PERMISS
  * A thin proxy: the slicer OWNS its engines and these routes only carry the
  * request across the process boundary. The fan-out across configured instances,
  * and the rule that an engine counts as installed only when every instance has
- * it, live in `slicer-client.ts` — routing a slice to an instance missing the
+ * it, live in `slicer-client.ts`: routing a slice to an instance missing the
  * engine is the failure this exists to prevent.
  *
  * Gated on settings-manage, not library-view: installing downloads gigabytes and
@@ -103,7 +103,7 @@ slicingRouter.get('/capabilities', requireRequestPermission(LIBRARY_VIEW_PERMISS
  *
  * SELF-HOSTED ONLY, and that is a tenancy rule rather than a product one. The
  * slicer is shared by every workspace on a deployment, but these routes are
- * workspace-scoped — so on the cloud one workspace's admin could remove an
+ * workspace-scoped, so on the cloud one workspace's admin could remove an
  * engine every other workspace slices with. The cloud bakes its engines into the
  * image and we manage them; a single-tenant install is the only place where
  * "the operator" and "every affected tenant" are the same person.
@@ -154,7 +154,7 @@ slicingRouter.put('/engine-visibility', requireRequestPermission(SETTINGS_MANAGE
 slicingRouter.get('/engines', requireRequestPermission(SETTINGS_MANAGE_PERMISSION), async (_request, response) => {
   assertEngineManagementAvailable()
   const listing = await slicerClient.listEngines()
-  // Null means "cannot tell" — unconfigured, or an instance did not answer.
+  // Null means "cannot tell": unconfigured, or an instance did not answer.
   // Reported as unavailable rather than empty, so the UI never invites a
   // reinstall of engines that are probably there.
   const body: SlicerEngineListResponse = slicerEngineListResponseSchema.parse(
@@ -194,9 +194,9 @@ slicingRouter.delete('/engines/:id', requireRequestPermission(SETTINGS_MANAGE_PE
 })
 
 slicingRouter.get('/jobs', requireRequestPermission(JOBS_VIEW_PERMISSION), async (request, response) => {
-  // ACTIVE jobs plus a short just-finished window — the subset the polled consumers (the
+  // ACTIVE jobs plus a short just-finished window, the subset the polled consumers (the
   // slicing toast stack, the Jobs view's in-progress section; web counterpart
-  // `hooks/useSlicingJobs.ts`) actually read — so this frequently-polled body stays bounded as
+  // `hooks/useSlicingJobs.ts`) actually read, so this frequently-polled body stays bounded as
   // history grows. The full history is paged with filters by `GET /api/jobs/history`, and a
   // single job (any age) by `GET /jobs/:id`. Sent through the gzip sender for the same reason
   // `/profiles` is: repetitive JSON, and a one-shot `response.json()` is what the Vite dev proxy
@@ -240,7 +240,7 @@ slicingRouter.get('/profiles', requireRequestPermission(LIBRARY_VIEW_PERMISSION)
   const targetId = typeof request.query.targetId === 'string' ? request.query.targetId : null
   const builtinProfiles = await slicerClient.profiles(targetId)
   const customProfiles = await listCustomSlicingPresets(workspaceId, builtinProfiles)
-  // The full catalogue is thousands of profile summaries (multi-MB JSON) — the largest JSON
+  // The full catalogue is thousands of profile summaries (multi-MB JSON): the largest JSON
   // body the web app loads. Send it through the gzip/piped-chunk sender rather than a single
   // `response.json()` buffer: the one-shot write is what the Vite dev proxy intermittently
   // stalls on for large bodies (dropped tail → the dialog's fetch hangs forever), the same
@@ -282,7 +282,7 @@ slicingRouter.get('/flush-data', requireRequestPermission(LIBRARY_VIEW_PERMISSIO
 
 /**
  * BambuStudio's own computed flush matrix, so the editor can verify our port against the engine
- * that will actually slice. Diagnostic only — `{ calibration: null }` when it cannot be probed.
+ * that will actually slice. Diagnostic only: `{ calibration: null }` when it cannot be probed.
  */
 slicingRouter.get('/flush-calibration', requireRequestPermission(LIBRARY_VIEW_PERMISSION), async (request, response) => {
   const targetId = typeof request.query.targetId === 'string' ? request.query.targetId : null
@@ -304,7 +304,7 @@ slicingRouter.post('/profiles/resolve-process', requireRequestPermission(LIBRARY
     // The preset the project names may itself derive from another; that second hop is what
     // separates "this project changed it" from "the preset it uses changed it".
     const parent = baseline ? await resolveParentProcessConfigByPresetName(workspaceId, parsed.data.targetId ?? null, project.presetName) : null
-    // Declared record carried in both branches — see the note on the filament twin below.
+    // Declared record carried in both branches: see the note on the filament twin below.
     const responseBody: ResolveProcessConfigResponse = baseline
       ? {
           config: project.config,
@@ -319,13 +319,13 @@ slicingRouter.post('/profiles/resolve-process', requireRequestPermission(LIBRARY
           overriddenKeys: project.overriddenKeys,
           declaresOverrides: project.declaresOverrides,
           // No preset resolved: `baseConfig` is a stand-in copy, so a value diff is empty by
-          // construction and only the declared record can say what changed. Say so explicitly —
+          // construction and only the declared record can say what changed. Say so explicitly:
           // the payload alone cannot be told apart from a project that changed nothing.
           baselineResolved: false,
           // Same fact, in the form the DIALOG renders: the markers are the file's own record rather
           // than a comparison. The workspace hits this whenever a project names a preset that was
           // since renamed or deleted, and stayed silent about it while the anonymous host explained
-          // itself — the same file, two different amounts of honesty.
+          // itself, the same file, two different amounts of honesty.
           baselineOrigin: { kind: 'declared' }
         }
     response.json(responseBody)
@@ -339,7 +339,7 @@ slicingRouter.post('/profiles/resolve-process', requireRequestPermission(LIBRARY
     content: profileFile.content
   })
   if (!config) throw notFound('Process profile could not be resolved')
-  // An installed preset is what the caller's values are measured AGAINST, so it is the baseConfig —
+  // An installed preset is what the caller's values are measured AGAINST, so it is the baseConfig,
   // nothing is "changed" until something changes it. Its own deviations from its parent ride in
   // `parentConfig` and are emphasis only. Baselining against the parent here is what made a custom
   // preset's saved settings read as project changes, offered with a reset button that would have
@@ -372,7 +372,7 @@ slicingRouter.post('/profiles/resolve-filament', requireRequestPermission(LIBRAR
     const parent = baseline ? await resolveParentFilamentConfigByPresetName(workspaceId, parsed.data.targetId ?? null, project.presetName) : null
     // The declared record rides along even when the baseline resolves. It used to be dropped
     // (`overriddenKeys: []`) on the reasoning that a resolved preset makes the value diff
-    // sufficient — which inverts BambuStudio, where the file's list is what says a setting was
+    // sufficient, which inverts BambuStudio, where the file's list is what says a setting was
     // changed and everything else is normalized back to the preset. Dropping it meant a slot the
     // file explicitly declares UNMODIFIED could still be reported as changed.
     const responseBody: ResolveFilamentConfigResponse = baseline
@@ -389,13 +389,13 @@ slicingRouter.post('/profiles/resolve-filament', requireRequestPermission(LIBRAR
           overriddenKeys: project.overriddenKeys,
           declaresOverrides: project.declaresOverrides,
           // No preset resolved: `baseConfig` is a stand-in copy, so a value diff is empty by
-          // construction and only the declared record can say what changed. Say so explicitly —
+          // construction and only the declared record can say what changed. Say so explicitly:
           // the payload alone cannot be told apart from a project that changed nothing.
           baselineResolved: false,
           // Same fact, in the form the DIALOG renders: the markers are the file's own record rather
           // than a comparison. The workspace hits this whenever a project names a preset that was
           // since renamed or deleted, and stayed silent about it while the anonymous host explained
-          // itself — the same file, two different amounts of honesty.
+          // itself, the same file, two different amounts of honesty.
           baselineOrigin: { kind: 'declared' }
         }
     response.json(responseBody)
@@ -409,7 +409,7 @@ slicingRouter.post('/profiles/resolve-filament', requireRequestPermission(LIBRAR
     content: profileFile.content
   })
   if (!config) throw notFound('Filament profile could not be resolved')
-  // An installed preset is what the caller's values are measured AGAINST, so it is the baseConfig —
+  // An installed preset is what the caller's values are measured AGAINST, so it is the baseConfig,
   // nothing is "changed" until something changes it. Its own deviations from its parent ride in
   // `parentConfig` and are emphasis only. Baselining against the parent here is what made a user
   // preset's saved settings (a raised bed temp) read as project changes, offered with a reset
@@ -425,8 +425,8 @@ slicingRouter.post('/profiles/resolve-filament', requireRequestPermission(LIBRAR
     ? await resolveProjectFilamentConfig(parsed.data.sourceFileId, parsed.data.projectFilamentId).catch(() => null)
     : null
   // ...but only while the slot still holds the same MATERIAL. Pointing a slot at a different
-  // material must carry nothing over — PETG's 245C has no business following the slot to PLA Basic
-  // — and the save path already drops those values for exactly this reason (`applyFilamentList`'s
+  // material must carry nothing over: PETG's 245C has no business following the slot to PLA Basic,
+  // and the save path already drops those values for exactly this reason (`applyFilamentList`'s
   // slotMaterialChanged), so reporting them as this project's values described settings that were
   // about to be discarded. Mirrors BambuStudio's `Tab::select_preset`; see
   // `filamentSlotValuesCarryTo`.
@@ -453,8 +453,8 @@ slicingRouter.post('/profiles/resolve-filament', requireRequestPermission(LIBRAR
     parentConfig: parentConfig ?? undefined,
     // What a SAVE needs to bind this slot: the system preset's name (null when the preset IS
     // system, which BambuStudio normalizes by another route) plus the slot's declared changes.
-    // Measured against the SYSTEM preset in the chain — the parent for a user preset, the preset
-    // itself when it IS system — because that is what `different_settings_to_system` names, and the
+    // Measured against the SYSTEM preset in the chain, the parent for a user preset, the preset
+    // itself when it IS system, because that is what `different_settings_to_system` names, and the
     // subject is the SLOT (preset plus whatever the project carried), not the preset alone.
     presetInherits: parentName ?? null,
     presetChangedKeys: filamentPresetChangedKeys(carried ? { ...config, ...carried } : config, parentConfig ?? config),
@@ -638,7 +638,7 @@ async function resolveProjectProcessConfig(sourceFileId: string | null): Promise
  * Resolves the baseline a project's process config should be diffed/reset against: the **named
  * parent profile** (`print_settings_id`) as it exists in this workspace's slicer profiles (custom
  * preferred over builtin, mirroring the profile list). Returns its fully-resolved config, or null
- * when that profile is not installed here — in which case the editor falls back to the 3MF's
+ * when that profile is not installed here, in which case the editor falls back to the 3MF's
  * `different_settings_to_system` signal (which is relative to the system preset, not the parent).
  *
  * Resolving the exact parent (e.g. "0.20mm Standard @BBL H2D - Ryan") is what lets the editor show
@@ -688,7 +688,7 @@ async function resolveProjectFilamentConfig(sourceFileId: string | null, project
 /**
  * The preset a CUSTOM profile derives from, or null for a built-in / a preset that declares none.
  *
- * Read from the stored JSON's `inherits` — the same field `listCustomSlicingPresets` merges
+ * Read from the stored JSON's `inherits`, the same field `listCustomSlicingPresets` merges
  * metadata along. Used to give a preset editor a baseline of its PARENT, so the dialog's "modified"
  * markers show what this preset actually overrides rather than diffing it against itself.
  */
@@ -704,7 +704,7 @@ function parentPresetNameOf(profileFile: { source: 'builtin' | 'custom'; content
 }
 
 /** The installed filament preset carrying `presetName`, custom before builtin. */
-/** The parent config of the PROCESS preset with this name — the second hop for a project preset. */
+/** The parent config of the PROCESS preset with this name: the second hop for a project preset. */
 async function resolveParentProcessConfigByPresetName(workspaceId: string, targetId: string | null, presetName: string | null): Promise<ProcessConfig | null> {
   if (!presetName) return null
   const builtinProfiles = await slicerClient.profiles(targetId)
@@ -748,13 +748,13 @@ async function resolveParentFilamentConfigByPresetName(workspaceId: string, targ
 }
 
 /**
- * "My tab is going away" — sent by `pagehide` as a beacon, so a close or a RELOAD reaps the tab's
+ * "My tab is going away": sent by `pagehide` as a beacon, so a close or a RELOAD reaps the tab's
  * running slices at once instead of after the socket grace.
  *
  * A slice started from the editor is persisted hidden from the library and its toast offers no
  * action, so once the user is out of the editor the artifact is unreachable: finishing it only
  * holds a slicer the next job wants. Beacons cannot be awaited or retried by the sender, so this
- * stays best-effort — the grace in `client-sessions` is still the backstop.
+ * stays best-effort: the grace in `client-sessions` is still the backstop.
  *
  * The `client` id is not an authentication signal (any caller can send any value), so this is
  * permission-gated like the cancel it stands in for, and can only ever reap work that id created.

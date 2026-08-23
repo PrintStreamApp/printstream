@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import { outputReachedSlicingStage, outputSignalsSliceComplete, summarizeSliceProgress } from './slice-progress.js'
 
 // The real crash sequence captured from a torus model that segfaults at "Detect overhangs for
-// auto-lift" (66%) — the fixture the engine-crash classification is built around.
+// auto-lift" (66%): the fixture the engine-crash classification is built around.
 const OVERHANG_CRASH_OUTPUT = [
   '{"message":"Prepare slicing","plate_count":0,"plate_index":0,"plate_percent":3,"total_percent":3}',
   '{"message":"Slicing begins","plate_count":1,"plate_index":1,"plate_percent":4,"total_percent":6}',
@@ -44,7 +44,7 @@ test('outputSignalsSliceComplete matches the BambuStudio success line', () => {
 })
 
 test('outputSignalsSliceComplete ignores in-progress and unrelated lines', () => {
-  // "Exporting 3mf" (97%) is the step the slice gets stuck on — it is NOT completion.
+  // "Exporting 3mf" (97%) is the step the slice gets stuck on, it is NOT completion.
   assert.equal(outputSignalsSliceComplete('{"message":"Exporting 3mf","plate_percent":97,"total_percent":97}'), false)
   assert.equal(outputSignalsSliceComplete('{"message":"Slicing finished","total_percent":93}'), false)
   assert.equal(outputSignalsSliceComplete('[2026-06-28] [warning] all done loading the project'), false)

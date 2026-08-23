@@ -222,7 +222,7 @@ export class BridgeRuntimeClient {
   }
   constructor(private readonly options: BridgeRuntimeClientOptions = {}) {
     // Capture console output into a ring buffer so the `system.logs` RPC can
-    // surface bridge diagnostics in the web app — essential for native builds,
+    // surface bridge diagnostics in the web app: essential for native builds,
     // whose console output is otherwise hidden in an on-disk service log file.
     installBridgeLogCapture()
     this.simulator = options.simulator ?? null
@@ -247,7 +247,7 @@ export class BridgeRuntimeClient {
     if (this.pendingCrashReport) {
       const reason = this.pendingCrashReport.reason?.split('\n', 1)[0]
       console.warn(
-        `Previous bridge run ended without a clean shutdown${reason ? `: ${reason}` : ' (no reason captured — likely a hard kill)'}. Reporting it to the workspace.`
+        `Previous bridge run ended without a clean shutdown${reason ? `: ${reason}` : ' (no reason captured: likely a hard kill)'}. Reporting it to the workspace.`
       )
     }
 
@@ -262,7 +262,7 @@ export class BridgeRuntimeClient {
 
     // Jittered exponential backoff so a fleet of bridges doesn't reconnect in
     // lockstep when the API restarts (each reconnect drives registration + DB
-    // recovery server-side — a synchronized 5s beat is a thundering herd). The
+    // recovery server-side, a synchronized 5s beat is a thundering herd). The
     // delay resets to the base once a connection has held for a while.
     let reconnectDelayMs = RECONNECT_DELAY_MS
     let attempt = 0
@@ -358,7 +358,12 @@ export class BridgeRuntimeClient {
       ...(env.BRIDGE_RELEASE_FINGERPRINT ? { releaseFingerprint: env.BRIDGE_RELEASE_FINGERPRINT } : {}),
       ...(provisionSecret ? { provisionSecret } : {}),
       protocolVersion: env.BRIDGE_PROTOCOL_VERSION,
-      runnerAbiVersion: env.BRIDGE_RUNNER_ABI_VERSION
+      runnerAbiVersion: env.BRIDGE_RUNNER_ABI_VERSION,
+      // Diagnostic only: nothing gates on these. They exist so a packaging-level question
+      // ("which of these bridges run Windows?") is answerable from the data rather than guessed
+      // from install names.
+      platform: process.platform,
+      arch: process.arch
     }
 
     let response: Response
@@ -448,7 +453,9 @@ export class BridgeRuntimeClient {
           ...(env.BRIDGE_SOURCE_FINGERPRINT ? { sourceFingerprint: env.BRIDGE_SOURCE_FINGERPRINT } : {}),
           ...(env.BRIDGE_RELEASE_FINGERPRINT ? { releaseFingerprint: env.BRIDGE_RELEASE_FINGERPRINT } : {}),
           protocolVersion: env.BRIDGE_PROTOCOL_VERSION,
-          runnerAbiVersion: env.BRIDGE_RUNNER_ABI_VERSION
+          runnerAbiVersion: env.BRIDGE_RUNNER_ABI_VERSION,
+          platform: process.platform,
+          arch: process.arch
         })))
         heartbeatTimer = setInterval(() => {
           if (socket.readyState === WebSocket.OPEN) {
@@ -1099,7 +1106,7 @@ export class BridgeRuntimeClient {
   private scheduleBridgeRestart(): void {
     if (this.restartScheduled) return
     this.restartScheduled = true
-    // An update-triggered restart is intentional, not a crash — mark the run
+    // An update-triggered restart is intentional, not a crash: mark the run
     // clean so the next start does not report it.
     markCleanShutdown(this.crashMarkerPath)
     setTimeout(() => process.exit(0), 500)

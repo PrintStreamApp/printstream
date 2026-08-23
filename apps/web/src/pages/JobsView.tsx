@@ -150,7 +150,7 @@ function sanitizeHistoryPageSize(value: unknown): number {
 
 const EMPTY_PRINTER_OPTIONS: JobHistoryResponse['printerOptions'] = []
 
-/** The server-paged history request — every value here is also part of the query key. */
+/** The server-paged history request, every value here is also part of the query key. */
 function buildJobHistoryUrl(input: {
   page: number
   pageSize: number
@@ -246,7 +246,7 @@ export function JobsView() {
     enabled: canViewJobs && !showNoConnectedBridgesPlaceholder
   })
   const slicingJobsQuery = useSlicingJobs({ enabled: canViewJobs && !showNoConnectedBridgesPlaceholder })
-  // The merged print+slicing history, paged/filtered/sorted SERVER-side (GET /api/jobs/history —
+  // The merged print+slicing history, paged/filtered/sorted SERVER-side (GET /api/jobs/history:
   // the shared selectJobHistoryPage owns the semantics). Every control that changes what a page
   // contains is part of the key; the page index itself is requested 1-based.
   const historyQuery = useQuery({
@@ -370,7 +370,7 @@ export function JobsView() {
   const printers = printersQuery.data?.printers ?? EMPTY_PRINTERS
   const printersById = useMemo(() => new Map(printers.map((printer) => [printer.id, printer])), [printers])
   const printerNames = useMemo(() => new Map(printers.map((printer) => [printer.id, printer.name])), [printers])
-  // Facet from the server, derived over the WHOLE history — a filtered page must not shrink it.
+  // Facet from the server, derived over the WHOLE history, a filtered page must not shrink it.
   const historyPrinterOptions = historyQuery.data?.printerOptions ?? EMPTY_PRINTER_OPTIONS
   // Drop any selected printer that no longer appears in the history options.
   useEffect(() => {
@@ -493,7 +493,7 @@ export function JobsView() {
           />
         ) : (
           <>
-      {/* Plugin-contributed sections above the core ones — e.g. the print-queue
+      {/* Plugin-contributed sections above the core ones: e.g. the print-queue
           plugin's backlog (apps/web/src/plugins/print-queue/QueueSection.tsx).
           Renders nothing when no plugin contributes. */}
       <PluginSlot name="jobs.sections" context={{ registerSection }} />
@@ -847,7 +847,7 @@ export function JobsView() {
                     </Button>
                   ) : canReslice ? (
                     // The G-code is gone (deleted, or never re-printable) but its project
-                    // survives — re-slicing is the only way back to this print, so offer it
+                    // survives: re-slicing is the only way back to this print, so offer it
                     // on its own rather than hiding it behind an unavailable Reprint.
                     <Button
                       size="sm"

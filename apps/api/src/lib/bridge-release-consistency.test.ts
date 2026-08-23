@@ -25,7 +25,7 @@ function releasesDirWithPointer(sourceFingerprint: string): string {
 
 test('a promoted build that is not this server\'s is refused, with a reason', () => {
   // The env-derived expectation is absent in tests, so a mismatch cannot be
-  // manufactured here without one — assert the shape the route depends on and
+  // manufactured here without one, assert the shape the route depends on and
   // let the unknown-is-fine rule below carry the safety argument.
   const dir = releasesDirWithPointer('0000000000000000000000000000000000000000000000000000000000000000')
   const result = listBridgeStandaloneDownloads({ releasesDir: dir })

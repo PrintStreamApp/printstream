@@ -7,7 +7,7 @@
  *
  * Destinations are a per-scope recipients list (shared topics for broadcast
  * notifications, self-bound personal topics for the requesting user's
- * targeted messages — see `lib/notification-recipients.ts`). Each workspace
+ * targeted messages: see `lib/notification-recipients.ts`). Each workspace
  * stores its list via `context.settings.forWorkspace(workspaceId)`, the platform
  * workspace in the plugin's base store; a pre-list `topicUrl` setting keeps
  * working as an implicit shared entry.

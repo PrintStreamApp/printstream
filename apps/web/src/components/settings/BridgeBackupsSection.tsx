@@ -47,7 +47,7 @@ export function BridgeBackupsSection({ bridge, actionsDisabled }: { bridge: Brid
       </Box>
       {!online ? (
         // The API's status mirror drops on disconnect, so an offline bridge's
-        // backup state is genuinely unknown — say that, not "not set up".
+        // backup state is genuinely unknown: say that, not "not set up".
         <Typography level="body-xs" textColor="text.tertiary">
           Backup status is available while the bridge is online.
         </Typography>

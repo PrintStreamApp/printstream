@@ -10,17 +10,17 @@
  * could: `filament_ids` used to be carried positionally from the slot a material came FROM, so
  * switching a project's material left the old material's id under the new name. BambuStudio cannot
  * reconcile the two, so it fabricates a defaults-only project preset per slot named
- * `(<project>.3mf)` — the slot then carries neither the material's real physics nor a usable
+ * `(<project>.3mf)`: the slot then carries neither the material's real physics nor a usable
  * identity. Seen on a real ABS project switched to PETG: `["GFB00","GFB00","GFS06"]` (ABS, ABS,
  * Support for ABS) beside names reading PETG HF and PLA Basic.
  *
  * The save path no longer produces this (the bake authors `filament_ids` from the chosen presets).
- * This module exists for files ALREADY saved with it, which do not heal at rest — see the contract
+ * This module exists for files ALREADY saved with it, which do not heal at rest: see the contract
  * in `repairs/index.ts`: repairing is an explicit user action, staged in the editor.
  *
  * CONSERVATIVE BY CONSTRUCTION, and this is the point: a slot is only corrected when its preset name
  * resolves to a catalogue id EXACTLY. An unresolvable name (a custom or third-party preset) is left
- * untouched and reported, never guessed at — inventing a plausible-looking id is precisely the
+ * untouched and reported, never guessed at, inventing a plausible-looking id is precisely the
  * failure this repairs, and a heuristic that strips custom suffixes to find a "close" match would
  * reintroduce it. Callers surface the unresolved slots so the user knows the repair was partial.
  */
@@ -57,7 +57,7 @@ export interface FilamentIdInspection {
  *
  * `Bambu PETG HF @BBL H2D 0.4 nozzle` -> `Bambu PETG HF`. The `@<machine>` part is a compatibility
  * tag rather than part of the material's name, and everything after it (` - 55 degree plate`, the
- * nozzle size) qualifies the machine, not the filament — which is why truncating at the FIRST `@`
+ * nozzle size) qualifies the machine, not the filament, which is why truncating at the FIRST `@`
  * is right and reproduces the id BambuStudio itself writes.
  */
 export function filamentPresetBaseName(presetName: string): string {
@@ -83,7 +83,7 @@ function stringArrayAt(value: unknown): string[] | null {
 /**
  * Inspect a project's filament id/name agreement.
  *
- * Returns null when there is nothing to judge (unparseable settings, or no filament arrays) — those
+ * Returns null when there is nothing to judge (unparseable settings, or no filament arrays), those
  * files are not affected, as distinct from "inspected and consistent".
  *
  * A slot counts as contradictory only when BOTH ids are known and DIFFER. An absent or empty
@@ -111,7 +111,7 @@ export function inspectProjectFilamentIds(
   const unresolved: FilamentIdSlotInspection[] = []
   for (const [index, presetName] of names.entries()) {
     const currentId = ids[index] ?? ''
-    // Empty is an honest "unknown", not a contradiction — nothing to repair.
+    // Empty is an honest "unknown", not a contradiction, nothing to repair.
     if (currentId === '') continue
     const expectedId = filamentIdForPresetName(presetName)
     if (expectedId === currentId) continue
@@ -133,7 +133,7 @@ export function inspectProjectFilamentIds(
  * Rewrite the resolvable slots' ids in place on a parsed settings record.
  *
  * Returns the slots it changed. Slots in {@link FilamentIdInspection.unresolved} are deliberately
- * left as they are — see the module header. A no-op returns an empty array and leaves `record`
+ * left as they are: see the module header. A no-op returns an empty array and leaves `record`
  * untouched, so callers can decide not to persist anything.
  */
 export function repairFilamentIds(record: Record<string, unknown>): FilamentIdSlotInspection[] {

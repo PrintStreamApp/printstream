@@ -30,7 +30,7 @@ test('catchAllRouteDecision redirects genuinely unknown paths home', () => {
 
 test('catchAllRouteDecision waits for a known plugin route while the catalog is still resolving', () => {
   // The hard-refresh bug: /queue is a real plugin route but its catalog hasn't landed yet on a cold load.
-  // Must NOT redirect home — wait for the route to mount.
+  // Must NOT redirect home: wait for the route to mount.
   assert.equal(catchAllRouteDecision({ isKnownPluginRoute: true, pluginCatalogResolving: true, hasPluginState: false }), 'wait')
 })
 
@@ -41,6 +41,6 @@ test('catchAllRouteDecision defers a known plugin route to plugin handling once 
 })
 
 test('catchAllRouteDecision redirects a known plugin route home when the catalog will never load', () => {
-  // e.g. signed out: the catalog query is disabled, so no plugin route will ever mount — fall through to home.
+  // e.g. signed out: the catalog query is disabled, so no plugin route will ever mount: fall through to home.
   assert.equal(catchAllRouteDecision({ isKnownPluginRoute: true, pluginCatalogResolving: false, hasPluginState: false }), 'redirect-home')
 })

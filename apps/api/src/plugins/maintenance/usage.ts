@@ -8,7 +8,7 @@
  * Two contracts callers depend on:
  *
  * - The totals match what the printer detail page's stats card shows
- *   (`lib/printer-stats.ts`) — print hours include the user's manual
+ *   (`lib/printer-stats.ts`): print hours include the user's manual
  *   pre-PrintStream adjustment, so a maintenance interval and the stat above it
  *   cannot disagree.
  * - `filamentKilograms` is **null, not zero**, when no print has recorded

@@ -7,7 +7,7 @@
  * of truth (and owns the defaults), so this component is mostly a
  * controlled-form wrapper around `/api/notifications/templates` (workspace
  * print events) or `/api/notifications/platform-templates` (platform
- * operator events — a dynamic, deployment-registered set with no snapshot
+ * operator events, a dynamic, deployment-registered set with no snapshot
  * media; the panel renders nothing when the deployment registers none).
  */
 import { useEffect, useMemo, useState } from 'react'

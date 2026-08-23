@@ -348,7 +348,7 @@ test('pruneRecycledLibraryFiles defers an entry whose owning bridge is offline (
   })
 
   // The owning bridge is offline, so neither the bytes nor the DB row are
-  // touched — the row survives for a later run once the bridge reconnects.
+  // touched: the row survives for a later run once the bridge reconnects.
   assert.equal(result.removed, 0)
   assert.deepEqual(deletedIds, [])
   assert.deepEqual(deletedBytes, [])

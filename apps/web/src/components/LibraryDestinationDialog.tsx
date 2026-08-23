@@ -118,7 +118,7 @@ export function LibraryDestinationDialog({
   const canSubmit = (fileNameField ? trimmedOutputFileName.length > 0 : true) && !submitting
 
   // A save name collides only when the FINAL name (base + declared extension)
-  // matches an existing file exactly — the server's replace predicate. A looser
+  // matches an existing file exactly: the server's replace predicate. A looser
   // base-name match would warn about files the save won't touch (e.g. saving
   // `benchy` + `.gcode.3mf` next to `benchy.gcode`).
   const conflictingFile = useMemo(() => {
@@ -139,7 +139,7 @@ export function LibraryDestinationDialog({
     onSubmit({ outputFileName: fileNameField ? trimmedOutputFileName : undefined, outputFolderId: currentFolderId })
   }
 
-  // Enter in the name field does what the confirm button does — a save dialog whose only text
+  // Enter in the name field does what the confirm button does, a save dialog whose only text
   // input needs a mouse trip to commit reads as broken.
   const nameInputProps = useNameInputProps({ onAccept: () => void submit(), canAccept: canSubmit })
 

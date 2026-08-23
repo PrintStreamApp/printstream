@@ -11,11 +11,11 @@
  *   still select the plate;
  * - touch: a hold (`TOUCH_HOLD_MS`) activates the drag; moving beyond the slop before the hold
  *   elapses is a scroll and aborts the pending drag. Once active, a non-passive `touchmove`
- *   blocker prevents the page/strip from scrolling under the drag — this must be a raw listener
+ *   blocker prevents the page/strip from scrolling under the drag, this must be a raw listener
  *   because pointer events cannot cancel native scrolling. (Touch long-press previously opened
  *   the tile's context menu; that menu stays reachable via the tile's kebab button.)
  *
- * The drop lands in an insertion GAP between tiles (0..N), never on a tile — see
+ * The drop lands in an insertion GAP between tiles (0..N), never on a tile: see
  * `lib/listReorder.ts` for why. A pointer released outside the strip (plus a margin)
  * cancels the drag, which is also the escape hatch for a drag the user regrets.
  */
@@ -62,7 +62,7 @@ interface DragSession {
 
 export function useListReorderDrag(options: {
   vertical: boolean
-  /** Live plate indices in strip order — the order tile extents are read in. */
+  /** Live plate indices in strip order: the order tile extents are read in. */
   itemIndices: readonly number[]
   onDrop: (fromIndex: number, insertAt: number) => void
 }): {
@@ -70,7 +70,7 @@ export function useListReorderDrag(options: {
   setContainerElement: (element: HTMLElement | null) => void
   setTileElement: (itemIndex: number, element: HTMLElement | null) => void
   handleTilePointerDown: (itemIndex: number, event: React.PointerEvent) => void
-  /** True exactly once after a drag completed — swallow the click the drop synthesizes. */
+  /** True exactly once after a drag completed: swallow the click the drop synthesizes. */
   shouldSuppressClick: () => boolean
 } {
   const [drag, setDrag] = useState<ListReorderDragState | null>(null)
@@ -191,7 +191,7 @@ export function useListReorderDrag(options: {
       if (!session.active) {
         const distance = Math.hypot(moveEvent.clientX - session.startX, moveEvent.clientY - session.startY)
         if (session.pointerType === 'touch') {
-          // Movement before the hold elapses is a scroll gesture — let the browser have it.
+          // Movement before the hold elapses is a scroll gesture: let the browser have it.
           if (distance > TOUCH_SCROLL_SLOP_PX) session.detach()
         } else if (distance > MOUSE_DRAG_SLOP_PX) {
           activate()

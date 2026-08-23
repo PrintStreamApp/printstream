@@ -29,7 +29,7 @@ export const SUPPORT_ATTACHMENT_MAX_BYTES = 150 * 1024 * 1024
  *
  * The per-file cap alone would let one message carry
  * `MAX_PER_MESSAGE * MAX_BYTES` (750 MB) of durable platform storage, so the
- * total is bounded separately and enforced at claim time — the only point where
+ * total is bounded separately and enforced at claim time: the only point where
  * the whole set is known.
  */
 export const SUPPORT_ATTACHMENTS_MAX_TOTAL_BYTES = 300 * 1024 * 1024
@@ -72,7 +72,7 @@ export const supportAttachmentChunkResponseSchema = z.object({
 export type SupportAttachmentChunkResponse = z.infer<typeof supportAttachmentChunkResponseSchema>
 
 /**
- * Response of `GET .../attachments/uploads/:id` — the server's authoritative
+ * Response of `GET .../attachments/uploads/:id`: the server's authoritative
  * received-byte count, which a client re-reads to resume after a failed chunk.
  */
 export const supportAttachmentUploadStatusResponseSchema = z.object({

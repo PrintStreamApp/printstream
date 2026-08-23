@@ -4,7 +4,7 @@
  * Owns the lazy resolve queries behind the tune buttons in `SliceSettingsPanel`: for a
  * PROJECT-embedded process/filament profile, fetch its resolved config once (React Query cached)
  * and count how far the FINAL sliced values (embedded config + the session's overrides) differ
- * from the external preset — via the shared `resolvedProcessModifiedKeys` /
+ * from the external preset: via the shared `resolvedProcessModifiedKeys` /
  * `resolvedFilamentModifiedKeys`, the same math the settings dialogs flag with, so badge and
  * dialog can never disagree. Healing property: overrides that reset a drifted value back to the
  * preset REDUCE the count (a fully reset material reads 0 even though heal overrides ride the
@@ -38,7 +38,7 @@ export function useFilamentChangedCount(input: {
   overrides: ProcessConfig
   /**
    * Anonymous resolver (public 3MF editor). When present the baseline is resolved through it rather
-   * than the workspace route — and WITHOUT requiring a server `sourceFileId`, since it reads the project
+   * than the workspace route, and WITHOUT requiring a server `sourceFileId`, since it reads the project
    * filament's slot from the in-tab 3MF. Absent → the workspace route as before.
    */
   resolveConfig?: FilamentConfigResolver
@@ -94,7 +94,7 @@ export function useFilamentChangedCount(input: {
  * from the catalogue, which lands the slot on the installed preset the way BambuStudio does.
  *
  * Compared with NO session overrides on purpose: the question is whether the FILE differs from the
- * preset, not whether the user has since changed something — that is the badge's question, and it
+ * preset, not whether the user has since changed something, that is the badge's question, and it
  * shares this query's cache rather than refetching.
  *
  * Caveat worth knowing: "unchanged" is judged over the keys our catalogue models. A 3MF carrying a
@@ -104,7 +104,7 @@ export function useFilamentChangedCount(input: {
 export function useUnchangedProjectFilamentPresetIds(input: {
   slicerTargetId: string
   sourceFileId: string | null
-  /** One entry per project preset — the FIRST slot that names it, matching how the preset is minted. */
+  /** One entry per project preset: the FIRST slot that names it, matching how the preset is minted. */
   presets: Array<{ filamentProfileId: string; projectFilamentId: number }>
   resolveConfig?: FilamentConfigResolver
 }): Set<string> {
@@ -154,12 +154,12 @@ export function useProcessChangedCount(input: {
   overrides: ProcessConfig
   /**
    * Anonymous resolver (public 3MF editor). When present the baseline is resolved through it rather
-   * than the workspace route — and WITHOUT requiring a server `sourceFileId`, since it reads a project
+   * than the workspace route, and WITHOUT requiring a server `sourceFileId`, since it reads a project
    * preset from the in-tab 3MF. Absent → the workspace route as before.
    */
   resolveConfig?: ProcessConfigResolver
   /**
-   * The dialog's visibility inputs, so the badge counts exactly the rows the dialog would show —
+   * The dialog's visibility inputs, so the badge counts exactly the rows the dialog would show,
    * a conditionally-hidden modified setting must not inflate the badge (see
    * `resolvedVisibleProcessModifiedKeys`).
    */

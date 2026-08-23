@@ -10,12 +10,12 @@
  *   server-backup-<timestamp>/
  *     manifest.json   - versions, migration set, per-file index
  *     db.dump         - pg_dump -Fc of the whole database (all workspaces,
- *                       auth, settings, every plugin's tables — schema-proof)
+ *                       auth, settings, every plugin's tables: schema-proof)
  *     data/           - the persistent data tree (allowlist below)
  *
  * The data tree is an ALLOWLIST, not "everything under ./data": the data dir
  * also holds regenerable caches, CI-published release artifacts, the backups
- * dir itself, and (native) the live Postgres cluster — dragging any of those
+ * dir itself, and (native) the live Postgres cluster: dragging any of those
  * in makes backups huge, recursive, or unrestorable. Cache subtrees inside
  * the library dir (`_bridge-cache` etc.) are excluded for the same reason.
  *
@@ -25,7 +25,7 @@
  * bridge's backup store and `pre-update-backup.ts`: stage-then-rename so a
  * crash can never leave a directory that LOOKS complete; a quiesce window so
  * an in-flight upload is skipped rather than half-copied; retention (the
- * shared smart ladder, scheduled snapshots only — manual and pre-restore
+ * shared smart ladder, scheduled snapshots only: manual and pre-restore
  * snapshots are keep-until-deleted) runs only after a successful backup; the
  * dump is verified with `pg_restore --list` before the snapshot is declared
  * complete ("verify, don't trust").
@@ -61,7 +61,7 @@ const FREE_SPACE_MARGIN_BYTES = 512 * 1024 * 1024
 /**
  * The persistent data tree, relative to the data dir (the parent of
  * `LIBRARY_DIR`). Everything else under the data dir is a cache, a release
- * artifact, the embedded DB cluster, or the backups themselves — see the
+ * artifact, the embedded DB cluster, or the backups themselves: see the
  * module header. `bridge-state.json` covers the native build's in-box bridge
  * identity, which lives in the same tree.
  */
@@ -101,7 +101,7 @@ export interface ServerBackupManifest {
   /**
    * Migration names applied when the backup was taken (lexically ordered, the
    * Prisma convention). The restore guard refuses a backup whose set contains
-   * a migration this install does not ship — that is a backup from a NEWER
+   * a migration this install does not ship, that is a backup from a NEWER
    * app, and migrating it "forward" would be a downgrade.
    */
   appliedMigrations: string[]
@@ -116,7 +116,7 @@ export interface ServerBackupManifest {
 
 /**
  * Null when `BACKUPS_DIR` is unset: backups are off, and every caller treats
- * that as "unavailable, with a reason" rather than inventing a location — a
+ * that as "unavailable, with a reason" rather than inventing a location, a
  * default inside the container filesystem would write backups that die with
  * the container.
  */
@@ -461,7 +461,7 @@ async function placeFile(input: { source: string; previousCopy: string | null; d
       await link(input.previousCopy, input.destination)
       return 'linked'
     } catch {
-      // Previous copy gone or links unsupported here — fall through to a copy.
+      // Previous copy gone or links unsupported here: fall through to a copy.
     }
   }
   try {
@@ -482,7 +482,7 @@ interface DatabaseInfo {
 /**
  * Version, size, and applied-migration set of the live database, read over a
  * short-lived plain `pg` connection (the backup path must not depend on
- * Prisma being healthy — restore is the tool you reach for when things are
+ * Prisma being healthy: restore is the tool you reach for when things are
  * broken).
  */
 async function readDatabaseInfo(): Promise<DatabaseInfo> {

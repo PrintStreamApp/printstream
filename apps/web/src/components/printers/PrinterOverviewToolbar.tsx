@@ -1,6 +1,6 @@
 /**
  * The printers-overview directory toolbar: search, sort, grouping, attribute
- * filters, and page size. Deliberately omits the list/icon view-mode toggle —
+ * filters, and page size. Deliberately omits the list/icon view-mode toggle,
  * on this page the saved-views selector + "Edit view" button in the page header
  * are the "view" mechanism instead (see PrintersView).
  *

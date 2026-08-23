@@ -14,9 +14,9 @@
  * - 300 is the brand shade (links, selected-tab text, alpha tints); solid
  *   controls instead use a DEEP accent fill with white text so primary
  *   buttons sit in the same register as every other control (neutral
- *   soft/outlined, warning/danger, Code Dark's blue) — a light fill with
+ *   soft/outlined, warning/danger, Code Dark's blue), a light fill with
  *   dark text read as out of place next to them.
- * - 600-900 are deliberately dark and desaturated — soft/outlined primary
+ * - 600-900 are deliberately dark and desaturated, soft/outlined primary
  *   controls fill from them, and a bright shade there reads as loud mud
  *   instead of a quiet tinted surface.
  */
@@ -33,7 +33,7 @@ export function isFlatAppTheme(value: AppThemeSetting): value is FlatAppTheme {
 interface FlatThemeBase {
   /** Flat page background (no gradient). */
   body: string
-  /** Card/panel fill — one shade darker than the body, per the reference apps. */
+  /** Card/panel fill, one shade darker than the body, per the reference apps. */
   panel: string
   /** Hairline border for panels and nav chrome. */
   border: string
@@ -222,8 +222,8 @@ const SLATE_BASE: FlatThemeBase = {
 }
 
 /**
- * The bright ends (50-500) are deliberately muted — mid-lightness, LOW
- * saturation — rather than the reference apps' pastel/neon accents, so the
+ * The bright ends (50-500) are deliberately muted, mid-lightness, LOW
+ * saturation, rather than the reference apps' pastel/neon accents, so the
  * accent sits WITH the matte grays instead of glowing on top of them
  * (design feedback: literal reference-app pastels read overly bright on
  * these bases). Code Dark keeps VS Code's literal button blue, which is

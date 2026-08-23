@@ -121,7 +121,7 @@ function PrinterCardComponent({
   const [storageDialogOpen, setStorageDialogOpen] = useState(false)
   // Two specialized variants of the storage browser. Models opens at the
   // root and filters to printable slices; Timelapses opens at /timelapse
-  // and limits to .mp4 files (read-only — no print action).
+  // and limits to .mp4 files (read-only, no print action).
   const [modelsDialogOpen, setModelsDialogOpen] = useState(false)
   const [timelapsesDialogOpen, setTimelapsesDialogOpen] = useState(false)
   const [amsSettingsDialogOpen, setAmsSettingsDialogOpen] = useState(false)
@@ -652,7 +652,7 @@ function PrinterCardComponent({
             One-line clamp: when the row runs short, chips wrap onto a second line that the
             maxHeight hides, so whole chips drop out (last in DOM first) rather than squeezing
             the printer name below its reserved floor (see PrinterCardName). Keep the chips
-            ordered most- to least-important — the static hardware chips go last so nozzle
+            ordered most- to least-important: the static hardware chips go last so nozzle
             size, then model, are the first to give way.
           */}
           <Box
@@ -664,7 +664,7 @@ function PrinterCardComponent({
               flexWrap: 'wrap',
               gap: 1,
               minWidth: 0,
-              // Exactly one sm-chip line — every chip in this row is size="sm" (revisit if a
+              // Exactly one sm-chip line, every chip in this row is size="sm" (revisit if a
               // taller header chip appears). The 8px row gap puts a wrapped second line fully
               // below the clamp, so hidden chips never peek through, and matching the chip
               // height keeps the visible line vertically centered while chips are dropped.

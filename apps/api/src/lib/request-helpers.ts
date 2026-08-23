@@ -52,7 +52,7 @@ const MODEL_BODY_CHUNK_BYTES = 64 * 1024
  * than through a `createGzip()` stream so it can have both:
  *
  * - **Written in many small chunks.** A large single-buffer `res.send()` is truncated mid-stream by
- *   the Vite dev proxy (and other size-limited proxies) — the browser receives most of the body,
+ *   the Vite dev proxy (and other size-limited proxies): the browser receives most of the body,
  *   waits for a tail that never arrives, and the editor's geometry load hangs. Small chunks pass
  *   through cleanly.
  * - **Sent with a `Content-Length`.** This is what makes a short body FAIL rather than corrupt. A
@@ -60,7 +60,7 @@ const MODEL_BODY_CHUNK_BYTES = 64 * 1024
  *   that ended: the browser accepts it, may cache it, and the caller gets a truncated buffer with
  *   no error. Downstream that surfaces as "this file could not be opened as a 3MF archive", which
  *   points at the file rather than at the transport. With a length declared, the browser rejects
- *   the response and `fetchModelBytes` throws — and it will not store a partial response either,
+ *   the response and `fetchModelBytes` throws, and it will not store a partial response either,
  *   which matters because these routes are conditional (see `ARCHIVE_ETAG_VARIANT` in
  *   `routes/library.ts`, where a cached broken body once outlived the bug that produced it).
  *

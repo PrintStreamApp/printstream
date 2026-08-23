@@ -3,17 +3,17 @@
  * These are the single source of truth for turning a Bambu 3MF's already-unzipped entries into
  * typed structures; every consumer owns its own ZIP I/O and caching.
  *
- * - `index-parser.ts` — slice-info / model-settings / project-settings → `BridgeLibraryThreeMfIndex`
+ * - `index-parser.ts`: slice-info / model-settings / project-settings → `BridgeLibraryThreeMfIndex`
  *   (what plates and filaments the project has). Used by the API
  *   (`apps/api/src/lib/three-mf-reader.ts`) and the bridge (`apps/bridge/src/library-3mf.ts`).
- * - `scene-parser.ts` — root model / model-settings → `ThreeMfScene` (where every object sits on a
+ * - `scene-parser.ts`: root model / model-settings → `ThreeMfScene` (where every object sits on a
  *   plate). Used by the API's `readSceneManifest` and by the web's public 3MF editor, which unzips
  *   in the browser so the file never leaves the user's machine.
  *
- * The 3MF *writer* lives here for the same reason. `bake.ts` is the entry point — it says which
+ * The 3MF *writer* lives here for the same reason. `bake.ts` is the entry point, it says which
  * source entries a bake reads (with their size caps) and returns a PLAN of entry rewrites for the
- * caller to apply. `bake-documents.ts` beneath it is the whole bake as pure document transforms — mesh injection, build-item and plate regeneration, per-part edits, and the
- * `project_settings.config` rewrites — with `object-clone.ts` (independent object copies),
+ * caller to apply. `bake-documents.ts` beneath it is the whole bake as pure document transforms, mesh injection, build-item and plate regeneration, per-part edits, and the
+ * `project_settings.config` rewrites, with `object-clone.ts` (independent object copies),
  * `mesh-repair.ts` (the admesh-equivalent weld/prune the editor applies on request), and
  * `xml-write.ts` (attribute escaping) beneath it. Nothing here touches an archive: each consumer
  * supplies the entry text and writes the result with its own ZIP layer, which is what lets the api

@@ -5,10 +5,10 @@
  * Each scope (workspace, or the plugin's base store at the platform
  * scope) keeps a list of destination entries. An entry is either:
  *
- * - shared (`userId` unset): receives the scope's broadcast notifications —
+ * - shared (`userId` unset): receives the scope's broadcast notifications,
  *   the classic team channel/topic; or
  * - user-bound (`userId` set): receives ONLY that user's targeted messages
- *   (`targetUserIds`) — a private channel or personal topic. Binding is
+ *   (`targetUserIds`), a private channel or personal topic. Binding is
  *   self-service by design: an entry may only be bound to the user who
  *   creates it, because personal messages can carry private content
  *   (support-reply previews) that must not be routed to a destination
@@ -17,7 +17,7 @@
  * Legacy single-URL configs (`webhookUrl` / `topicUrl` setting) read as an
  * implicit shared entry until the first recipients write migrates them.
  * Destination URLs are secrets: they are stored server-side, never echoed
- * to the browser, and never logged — surfaces show the entry label only.
+ * to the browser, and never logged: surfaces show the entry label only.
  */
 import { randomUUID } from 'node:crypto'
 import type { NotificationMessage } from '@printstream/shared'
@@ -28,7 +28,7 @@ const RECIPIENTS_KEY = 'recipients'
 
 export interface ChannelRecipient {
   id: string
-  /** Destination URL (webhook/topic). Secret — never serialized to clients. */
+  /** Destination URL (webhook/topic). Secret, never serialized to clients. */
   url: string
   label: string
   /** Bound user (self-service): entry receives only this user's targeted messages. */
@@ -94,7 +94,7 @@ export async function writeChannelRecipients(
 export function createChannelRecipient(input: {
   url: string
   label?: string
-  /** Bind to this user (must be the requesting user — see module header). */
+  /** Bind to this user (must be the requesting user: see module header). */
   userId?: string
   userName?: string
 }): ChannelRecipient {
@@ -128,9 +128,9 @@ export interface ResolveChannelDeliveryOptions extends LegacyKeyOptions {
  *
  * Broadcast messages go to the shared entries of their own scope (or the
  * channel fallback when the scope has none). Targeted messages go to
- * entries bound to a targeted user — within the message's scope when it has
+ * entries bound to a targeted user, within the message's scope when it has
  * a workspace, across every scope holding recipients when it does not
- * (platform-wide personal events) — deduplicated by URL.
+ * (platform-wide personal events), deduplicated by URL.
  */
 export async function resolveChannelDeliveryUrls(options: ResolveChannelDeliveryOptions): Promise<string[]> {
   const { message } = options

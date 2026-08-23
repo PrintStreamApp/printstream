@@ -33,7 +33,7 @@ export interface ParsedMeshEntry {
 /**
  * Worker -> client: exactly one `ready` per worker, then one message per task.
  *
- * `dataError` says the BYTES failed, not the mechanism — the client uses it to decide whether a
+ * `dataError` says the BYTES failed, not the mechanism: the client uses it to decide whether a
  * main-thread retry could possibly do better. Anything thrown by the parsers is reported that way:
  * they are pure functions of their input, so a throw is the input's fault.
  */

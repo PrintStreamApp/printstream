@@ -73,7 +73,7 @@ export function deleteMaintenanceTask(printerId: string, taskKey: string): Promi
  * (`printHours`, `filamentKilograms`) advance from `PrinterStats`, which the API rewrites
  * on job completion, and `evaluateMaintenanceTask` grades on whichever elapses FIRST.
  * The header below used to reason only about calendar days, which is why nothing
- * refreshed these — a shop-floor grid left open all day would never surface a task that
+ * refreshed these, a shop-floor grid left open all day would never surface a task that
  * came due mid-afternoon.
  */
 export const useMaintenanceSync = createWsQuerySync((event) => (

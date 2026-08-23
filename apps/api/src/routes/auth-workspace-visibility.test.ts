@@ -6,7 +6,7 @@ process.env.NODE_ENV = 'test'
  * Found by actually signing in: a workspace deleted the day before was still
  * listed, and still enterable. The visibility audit had fixed every list that
  * queries `Workspace` directly and missed the two that reach it THROUGH a
- * membership — `authWorkspaceMembership.findMany({ select: { workspace } })`
+ * membership: `authWorkspaceMembership.findMany({ select: { workspace } })`
  * names no workspace conditions at all, so nothing looked unfiltered.
  *
  * That is worse than not soft-deleting: the workspace is gone from billing,

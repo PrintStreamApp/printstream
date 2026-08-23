@@ -4,7 +4,7 @@
  * Owns the persisted width (a per-device localStorage display pref, repo convention) and the
  * pointer wiring for the grab strip on the panel's inner edge: pointer capture keeps move events on
  * the handle for the whole drag, and the new width is measured from whichever panel edge the grid
- * holds still — the OUTER one, since the flexible viewport column takes the rest. That edge flips
+ * holds still: the OUTER one, since the flexible viewport column takes the rest. That edge flips
  * with the sidebar's side, so the caller passes it in; getting it wrong makes the drag run
  * backwards. Widths are clamped so neither the panel nor the 3D viewport can collapse.
  * Double-click resets to the default. The mobile (xs) layout stacks and never renders the handle,
@@ -48,7 +48,7 @@ export function useSidebarResize(side: EditorSidebarSide = 'right'): { sidebarWi
     const handle = event.currentTarget
     // The handle lives inside the panel column. The panel's OUTER edge is the one the grid holds
     // still while dragging (the flexible viewport column absorbs the change), so the width is
-    // always measured from it — which edge that is depends on the side.
+    // always measured from it, which edge that is depends on the side.
     const panelBounds = handle.parentElement?.getBoundingClientRect()
     if (!panelBounds) return
     const fixedEdge = side === 'left' ? panelBounds.left : panelBounds.right

@@ -3,7 +3,7 @@
  *
  * Owns the one rule the plate strip and the rename prompt have to agree on: a plate with no
  * stored name still READS as "Plate N", so that is the text the user believes the plate is
- * called — and therefore the text the rename dialog must hand them, pre-selected, rather than
+ * called, and therefore the text the rename dialog must hand them, pre-selected, rather than
  * an empty field with a placeholder. Keeping the strip's label and the prompt's starting value
  * in one place is what stops the two drifting apart again.
  *

@@ -14,7 +14,7 @@
  *   threaded into that slot's feed path. Threaded filament deforms when the
  *   chamber exceeds its heat-distortion point (the spool itself may stay in
  *   the AMS once unthreaded), so the risk assessment only considers occupied
- *   slots — matching Bambu Studio's pre-start check.
+ *   slots: matching Bambu Studio's pre-start check.
  * - Some of Bambu's own recommended drying temperatures exceed the same
  *   material's heat-distortion limit (TPU, PVA, support). That is intentional
  *   upstream data, not a bug here: those materials are meant to be dried
@@ -192,7 +192,7 @@ export interface AmsDryingSlotRisk {
 /**
  * Slots whose threaded filament would deform at the requested drying
  * temperature. Non-empty means the caller should be warned (and, on the API
- * side, must acknowledge the risk) before the cycle starts — mirroring the
+ * side, must acknowledge the risk) before the cycle starts: mirroring the
  * check Bambu Studio and the printer LCD apply.
  */
 export function assessAmsDryingRisk(unit: AmsUnit, temperature: number): AmsDryingSlotRisk[] {

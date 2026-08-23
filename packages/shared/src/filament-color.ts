@@ -2,7 +2,7 @@
  * Common (brand-neutral) filament colour naming, shared by the web and the API.
  *
  * `commonFilamentColorName` maps an exact hex to a curated human colour name
- * ("White", "Gray") — deliberately generic, never a Bambu marketing name
+ * ("White", "Gray"), deliberately generic, never a Bambu marketing name
  * (those require genuine-Bambu identity gating, which stays in the web's
  * `filamentColor.ts`). `filamentColorLabel` is the storable fallback label:
  * the common name when the hex is a known swatch, otherwise the normalized

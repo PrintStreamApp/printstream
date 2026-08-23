@@ -8,8 +8,8 @@
  *
  * Repeats of an identical plain toast collapse into the entry already on screen
  * (`count`), so a failure fired once per item does not paper the screen with
- * copies of one sentence. Toasts the caller holds a handle to — an action, an
- * `onClose`, a loading/progress state — never merge; see `findMergeableEntry`.
+ * copies of one sentence. Toasts the caller holds a handle to, an action, an
+ * `onClose`, a loading/progress state, never merge; see `findMergeableEntry`.
  * Batches of DIFFERENT but like items (print sends, slices, deletes) are a
  * different problem, solved by `components/StatusToastGroup`.
  */
@@ -97,7 +97,7 @@ function buildEntry(id: number, input: ToastInput, previous?: ToastEntry): Toast
  * Only plain, self-dismissing toasts collapse: one carrying an action, an
  * `onClose`, or a progress/loading state is a live handle its caller updates and
  * dismisses by id, so merging it would silently drop one of those callbacks.
- * That leaves the case this exists for — the same error fired N times in a row
+ * That leaves the case this exists for, the same error fired N times in a row
  * filling the screen with copies of itself.
  */
 function findMergeableEntry(input: ToastInput, message: string, tone: ToastTone): ToastEntry | undefined {

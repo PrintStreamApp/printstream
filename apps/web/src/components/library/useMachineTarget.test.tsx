@@ -5,8 +5,8 @@
  * undo restores it.
  *
  * Written first as a characterization net for the pre-S2 effect web (see the audit's S2 entry).
- * Two assertions it originally recorded were bugs — a 0.6-nozzle project seeding 0.4, and a plate
- * the new machine could not offer being swapped silently — and both are now flipped to the fixed
+ * Two assertions it originally recorded were bugs, a 0.6-nozzle project seeding 0.4, and a plate
+ * the new machine could not offer being swapped silently, and both are now flipped to the fixed
  * behaviour, called out in place.
  */
 import assert from 'node:assert/strict'
@@ -60,12 +60,12 @@ function renderTarget(params: Params) {
   return renderHook((p: Params) => useMachineTarget(p), { initialProps: params })
 }
 
-/** Both async inputs settled — the normal steady state. */
+/** Both async inputs settled: the normal steady state. */
 const SETTLED = { projectResolved: true, catalogueResolved: true }
 
 // ---- seeding --------------------------------------------------------------------------------
 
-test('the model stays unresolved until the project says otherwise — nothing guesses', () => {
+test('the model stays unresolved until the project says otherwise, nothing guesses', () => {
   const { result } = renderTarget(baseParams({ machineProfiles: [H2D_04, A1_04] }))
   assert.equal(result.current.manualPrinterModel, 'unknown', '"unknown" is the not-known value (issue #66)')
   assert.equal(result.current.origins.printerModel, 'unseeded')
@@ -97,7 +97,7 @@ test('the machine profile follows the model with no writer of its own', () => {
 
 test('FIXED (was the min-of-union seed): a 0.6-nozzle project opens on 0.6', () => {
   // The pre-S2 seed took the ascending minimum of a union that always contained a hardcoded 0.4, so
-  // this project opened on a 0.4 nozzle that nothing offered — leaving no compatible machine
+  // this project opened on a 0.4 nozzle that nothing offered, leaving no compatible machine
   // profile and a Slice button blocked as "printer profile doesn't match the target printer".
   const { result } = renderTarget(baseParams({
     file: libraryFile({ nozzleSizeChips: ['0.6'] }),

@@ -8,8 +8,8 @@
  *
  * The precedence contract: the matcher's output is a SUGGESTION layered UNDER
  * explicit picks via the shared `mergeAmsMapping` (explicit slots win, `-1`
- * falls back to the computed match) — the same model the API's queue dispatch
- * uses — so a recomputed match can never clobber a user's or caller's choice.
+ * falls back to the computed match), the same model the API's queue dispatch
+ * uses, so a recomputed match can never clobber a user's or caller's choice.
  */
 import {
   evaluateQueueMatch,
@@ -75,7 +75,7 @@ export function computeAutoTrayMapping(
 
 /**
  * Filament ids whose EFFECTIVE selection came from the auto match rather than
- * an explicit pick — i.e. the rows the "auto-selected" marker should flag.
+ * an explicit pick: i.e. the rows the "auto-selected" marker should flag.
  */
 export function autoSelectedFilamentIds(
   filaments: readonly ThreeMfProjectFilament[],

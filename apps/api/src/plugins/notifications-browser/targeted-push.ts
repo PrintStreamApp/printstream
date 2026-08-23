@@ -10,7 +10,7 @@
  *   caller-supplied deliverability filter (membership) still applies.
  * - Without one (platform-wide personal events, e.g. a reply to your
  *   suggestion), delivery spans the platform scope plus every workspace scope
- *   that holds subscriptions — a user's device endpoint appears once per
+ *   that holds subscriptions, a user's device endpoint appears once per
  *   workspace they enabled, so fan-out dedupes by endpoint.
  */
 import type { StoredSubscription } from './push.js'

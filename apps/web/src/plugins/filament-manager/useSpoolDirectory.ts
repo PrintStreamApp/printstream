@@ -4,8 +4,8 @@
  * and the AMS-slot spool picker so both expose the same controls and derive the
  * visible/grouped/paged spools identically.
  *
- * The display preferences — sort field + direction, grouping, filter facets,
- * page size, and view mode — persist to localStorage under `storageKey` so they
+ * The display preferences, sort field + direction, grouping, filter facets,
+ * page size, and view mode, persist to localStorage under `storageKey` so they
  * survive a reload; the search box and the current page index stay ephemeral.
  * Each caller passes its own key (see {@link SPOOL_DIRECTORY_PREFS_KEY} /
  * {@link SPOOL_PICKER_PREFS_KEY}) so the tab and the picker don't share state.

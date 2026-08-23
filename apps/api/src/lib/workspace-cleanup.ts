@@ -6,7 +6,7 @@
  * irreversible half of the feature, which is why it lives on its own rather than
  * inside the delete endpoint: nothing a user clicks should be able to reach it.
  *
- * Runs from the daily artifact maintenance pass because that is what it is — the
+ * Runs from the daily artifact maintenance pass because that is what it is: the
  * hard delete cascades the workspace's rows, and its stored BYTES have to go
  * with them or they orphan forever with nothing left pointing at them.
  *
@@ -46,7 +46,7 @@ export async function pruneDeletedWorkspaces(now: Date = new Date()): Promise<Wo
   for (const workspace of due) {
     try {
       // Bytes BEFORE the cascade, or the rows that point at them are gone and
-      // the files are unreachable — the same ordering the platform delete uses.
+      // the files are unreachable, the same ordering the platform delete uses.
       await deleteWorkspaceArtifactBytes(workspace.id)
       await rootPrisma.workspace.delete({ where: { id: workspace.id } })
       removed += 1

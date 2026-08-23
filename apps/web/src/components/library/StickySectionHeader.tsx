@@ -1,7 +1,7 @@
 /**
  * Sticky section headers for the slice-settings column.
  *
- * Both surfaces that render it — the 3D editor's sidebar and the prepare-print dialog — are one
+ * Both surfaces that render it, the 3D editor's sidebar and the prepare-print dialog, are one
  * tall scrolling column of `title row + outlined body` sections, and a long section (the model
  * list above all) used to scroll its own title away, taking that section's Add button with it.
  *
@@ -10,7 +10,7 @@
  * 1. A header must COVER the one already pinned above it, never push it off. That only holds
  *    while every header is a DIRECT CHILD of the scrolling column: `position: sticky` cannot
  *    escape its parent, so a section wrapped in its own `<Stack>` makes that wrapper the
- *    containing block and its bottom edge evicts the header — which visibly shoves the pinned
+ *    containing block and its bottom edge evicts the header, which visibly shoves the pinned
  *    header out of the way instead of sliding under it. z-index cannot fix that; the element is
  *    being MOVED, not painted under. Callers therefore render the header and its body as
  *    SIBLINGS (which is why `PlatePausesSection` and friends return fragments, not a wrapper).
@@ -18,9 +18,9 @@
  * 2. The background must be the SCROLL CONTAINER's own colour. Sticky headers need an opaque
  *    background or the content scrolling beneath reads through the text, but any colour that is
  *    not exactly the scroller's paints a visible bar across every header while it is unpinned.
- *    The sections do not all scroll in the same container — the editor sidebar scrolls inside a
+ *    The sections do not all scroll in the same container, the editor sidebar scrolls inside a
  *    `background.level1` Sheet, the prepare-print dialog inside the `background.surface`
- *    ModalDialog — so one shared token is provably wrong for one of them. Each scroll container
+ *    ModalDialog, so one shared token is provably wrong for one of them. Each scroll container
  *    names its own colour with {@link StickySectionScope}; the default suits a plain dialog
  *    surface, which is what an unpainted scroller inside a modal shows through to.
  *
@@ -39,7 +39,7 @@ import { Stack, type StackProps } from '@mui/joy'
 const STICKY_SECTION_HEADER_MIN_HEIGHT = '2rem'
 
 /**
- * Above the section bodies scrolling underneath, which is the whole point — but that also puts an
+ * Above the section bodies scrolling underneath, which is the whole point, but that also puts an
  * opaque band over anything else absolutely positioned in the same corner. Joy's `ModalClose` sits
  * at z-index 1, so a host whose close button shares the header's row must lift it ABOVE this value
  * or the header both hides it and swallows its clicks (the editor's objects bottom-sheet does).
@@ -62,7 +62,7 @@ export function StickySectionScope({ background, children }: { background: strin
 /**
  * One section's header row, pinned to the top of the enclosing scroll container for as long as
  * its section is on screen. Must be rendered as a direct child of the scrolling column, beside
- * (not wrapping) the section's body — see the module header.
+ * (not wrapping) the section's body: see the module header.
  */
 export function StickySectionHeader({ children, sx, ...props }: StackProps) {
   const background = useContext(StickySectionBackgroundContext)

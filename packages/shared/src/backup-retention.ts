@@ -1,7 +1,7 @@
 /**
  * Smart backup retention: which snapshots of a rolling backup series to keep.
  *
- * Owns the pruning POLICY only — callers own the on-disk snapshots and apply
+ * Owns the pruning POLICY only: callers own the on-disk snapshots and apply
  * the returned decision. Shared so every backup surface (today the bridge's
  * on-disk snapshots, next the server-side backups of issue #78) ages its
  * history the same way instead of each growing its own keep-N constant.
@@ -9,7 +9,7 @@
  * The scheme is the Duplicati-style ladder: keep everything recent, then thin
  * to one per week, then one per month, then drop. Within a week/month bucket
  * the OLDEST snapshot is kept, so the survivor's age is stable as the window
- * slides — keeping the newest instead would make "the weekly backup" a moving
+ * slides: keeping the newest instead would make "the weekly backup" a moving
  * target that never ages past the bucket boundary.
  */
 

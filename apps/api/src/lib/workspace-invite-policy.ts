@@ -5,7 +5,7 @@
  * organisation that governs it is cloud-only and lives under `src/private`,
  * which core must never import. So core asks through this registry, the cloud
  * module answers from the account's policy, and a public build registers
- * nothing and permits everything — an OSS install has no organisation to be
+ * nothing and permits everything, an OSS install has no organisation to be
  * restricted by.
  *
  * **Why the policy cannot be a workspace permission.** A workspace admin holds
@@ -59,7 +59,7 @@ export function registerWorkspaceInvitePolicy(
 /**
  * People already in this workspace's organisation who are not in the workspace.
  *
- * Empty in a public build, which has no organisations — the picker simply does
+ * Empty in a public build, which has no organisations: the picker simply does
  * not appear and adding by email works as it always has.
  */
 export async function listOrganisationCandidates(
@@ -74,7 +74,7 @@ export async function listOrganisationCandidates(
  *
  * The invariant is one-directional: being in a workspace puts you in its
  * organisation, but being in the organisation puts you in no workspace. Applied
- * on write so the two can never disagree — a reconciliation pass would leave a
+ * on write so the two can never disagree, a reconciliation pass would leave a
  * window where the People list is missing someone who already has access.
  *
  * Best-effort on purpose, unlike the invite policy: this RECORDS a consequence
@@ -98,7 +98,7 @@ export async function joinWorkspaceOrganisation(
  * Whether this workspace may introduce a person who has no account yet, or who
  * is outside its organisation.
  *
- * Permits when there is NO POLICY to apply — no resolver registered (a public
+ * Permits when there is NO POLICY to apply, no resolver registered (a public
  * build has no organisations) or no workspace in context. That is an absence,
  * not a failure, and the two must not be conflated.
  *
@@ -122,7 +122,7 @@ export async function workspaceMayInviteNewPeople(workspaceId: string | null | u
  * anyone holding the workspace permission, so turning the policy off narrows
  * what admins can do without stopping them running their team.
  *
- * Throws rather than guessing if either lookup fails — see
+ * Throws rather than guessing if either lookup fails: see
  * `workspaceMayInviteNewPeople`.
  */
 export async function assertWorkspaceMayAddPerson(

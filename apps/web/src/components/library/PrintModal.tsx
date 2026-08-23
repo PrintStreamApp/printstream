@@ -143,7 +143,7 @@ interface AmsMappingsBySerial {
    * filament `id - 1`) → dispatch tray mapping value. Standard AMS trays use
    * the global tray index; external spools use the virtual ids `255` / `254`.
    *
-   * This is the EXPLICIT layer only — rows the user picked or a caller's
+   * This is the EXPLICIT layer only: rows the user picked or a caller's
    * `defaultAmsMapping` replay. `-1` (or absent) means "no explicit pick";
    * the effective mapping merges the matcher's auto suggestion underneath
    * (see `effectiveMappings`), and unset rows are omitted from the wire payload.
@@ -386,7 +386,7 @@ export function PrintModal({
   )
   /**
    * Automatic slot suggestions per selected printer (exact type+colour matches,
-   * nozzle- and remaining-aware — see `lib/autoTrayMatch.ts`). Layered UNDER the
+   * nozzle- and remaining-aware: see `lib/autoTrayMatch.ts`). Layered UNDER the
    * user's explicit picks in `mappings` via the shared `mergeAmsMapping`
    * precedence (explicit slots win, `-1` falls back to the match), so neither a
    * caller-supplied `defaultAmsMapping` replay nor a row the user touched can
@@ -408,7 +408,7 @@ export function PrintModal({
     }
     return next
   }, [autoMappings, mappings, selectedIds])
-  /** Rows whose effective selection is the matcher's (not an explicit pick) — flagged in the mapping UI. */
+  /** Rows whose effective selection is the matcher's (not an explicit pick): flagged in the mapping UI. */
   const autoSelectedIdsByPrinter = useMemo(() => {
     const next: Record<string, Set<number>> = {}
     for (const printerId of selectedIds) {
@@ -533,7 +533,7 @@ export function PrintModal({
   // A file sliced for a machine WITH a Filament Track Switch groups its filaments across the
   // extruders differently from one sliced without, so it must be printed on the kind of machine it
   // was made for. `file.slicedWithFilamentTrackSwitch` is undefined on an older server, which the
-  // shared rule treats as unknown rather than "no switch" — so a lagging deployment warns about
+  // shared rule treats as unknown rather than "no switch", so a lagging deployment warns about
   // nothing instead of warning about everything.
   const trackSwitchMismatches = useMemo(
     () => selectedIds.flatMap((printerId) => {
@@ -548,8 +548,8 @@ export function PrintModal({
     [file.slicedWithFilamentTrackSwitch, printers, selectedIds, statuses]
   )
   /**
-   * Mapped slots that will run out, per selected printer. Reads `effectiveMappings` — the merge of
-   * the user's picks over the matcher's suggestion — so it grades exactly what submit will send,
+   * Mapped slots that will run out, per selected printer. Reads `effectiveMappings`, the merge of
+   * the user's picks over the matcher's suggestion, so it grades exactly what submit will send,
    * and recomputes as the user re-picks a slot or status streams in.
    */
   const lowFilamentEntries = useMemo(
@@ -785,8 +785,8 @@ export function PrintModal({
   )
   const hasPlateTypeIssues = plateTypeIssueEntries.length > 0
   // Only a positively conflicting diameter blocks dispatch. An issue with no
-  // selected diameter means detection failed and nothing is saved — "unknown",
-  // not "incompatible" — so it warns without blocking, matching the API guard
+  // selected diameter means detection failed and nothing is saved, "unknown",
+  // not "incompatible", so it warns without blocking, matching the API guard
   // (`assertPrinterHardwareCompatibility` ignores unknowns the same way).
   const hasHardNozzleDiameterIssues = nozzleDiameterIssueEntries
     .some(([, issues]) => issues.some((issue) => issue.selectedDiameter !== null))

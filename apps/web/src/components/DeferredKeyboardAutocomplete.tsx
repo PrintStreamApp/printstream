@@ -9,17 +9,17 @@
  * already-focused field again lifts the suppression, and that same tap summons
  * the keyboard for type-to-filter. The suppression re-arms on blur. Desktop
  * pointers and hardware keyboards are untouched (`inputMode` only affects
- * virtual keyboards), so this is safe as a drop-in for every autocomplete —
+ * virtual keyboards), so this is safe as a drop-in for every autocomplete:
  * use it instead of the bare Joy `Autocomplete` in app UI.
  *
  * Also owns the app-wide GROUPED listbox styling: when `groupBy` is set, the
  * group subheaders get a banded/bordered sticky treatment (see
  * `GROUPED_LISTBOX_SX`) so groups read as separators instead of blending into
- * the options — one place, consistent across every grouped picker.
+ * the options, one place, consistent across every grouped picker.
  *
  * Implementation constraint: the repeat-tap listener is attached natively via a
  * ref because Joy's input slot only composes `onBlur`/`onFocus`/`onMouseDown`
- * from `slotProps.input` — any other handler passed there is silently dropped
+ * from `slotProps.input`: any other handler passed there is silently dropped
  * by `mergeSlotProps`.
  */
 import { useEffect, useRef, useState } from 'react'
@@ -31,8 +31,8 @@ import { useTouchPointer } from './useTouchPointer'
 /**
  * Listbox styling applied to every GROUPED autocomplete (`groupBy` set): Joy's default group
  * subheaders render as plain muted text that blends into the options, so give them a banded,
- * bordered, sticky header row instead. Lives here (merged automatically) so all grouped pickers
- * — process/machine profiles, materials, Bambu preset pickers — separate their groups the same
+ * bordered, sticky header row instead. Lives here (merged automatically) so all grouped pickers,
+ * process/machine profiles, materials, Bambu preset pickers: separate their groups the same
  * way without per-site styling.
  */
 const GROUPED_LISTBOX_SX: SxProps = {
@@ -75,7 +75,7 @@ export function DeferredKeyboardAutocomplete<
 
     const handleTouchStart = () => {
       // A tap on the already-focused field means the user wants to type. Lift the
-      // suppression during touchstart — before the tap completes — so this same
+      // suppression during touchstart, before the tap completes, so this same
       // tap brings up the keyboard instead of needing yet another one.
       if (input.ownerDocument.activeElement === input) {
         setTypingEnabled(true)

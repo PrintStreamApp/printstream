@@ -57,7 +57,7 @@ test('a new version (new storedPath) misses the cache so it regenerates', async 
   await writeMeshThumbnailCache(v1, png(1))
 
   // The new version has its own collision-free storedPath, so it does not see the
-  // old render — exactly the "regenerate when content changes" behaviour we want.
+  // old render, exactly the "regenerate when content changes" behaviour we want.
   assert.equal(await readMeshThumbnailCache(v2), null)
   assert.ok(await readMeshThumbnailCache(v1))
 })

@@ -3,7 +3,7 @@
  *
  * One persistent server attached to the same HTTP server as Express.
  * Connections are indexed by workspace so a workspace-scoped broadcast (the hot
- * path — every printer status delta) touches only that workspace's sockets
+ * path, every printer status delta) touches only that workspace's sockets
  * rather than scanning every connected client. Platform-wide broadcasts
  * (workspaceId === null) still walk the full client map, but those are rare.
  *
@@ -39,9 +39,9 @@ export interface WsBroadcaster {
   /**
    * Fan out a WS event to connected clients.
    *
-   * @param workspaceId — pass a workspace ID to restrict delivery to that
+   * @param workspaceId: pass a workspace ID to restrict delivery to that
    *   workspace's connections. Pass `null` to broadcast to every connected
-   *   client (platform-wide events only — use deliberately).
+   *   client (platform-wide events only: use deliberately).
    */
   broadcast(event: WsEvent, workspaceId: string | null): void
   broadcastSnapshotUpdated(printerId: string, capturedAt: number, workspaceId?: string | null): void
@@ -213,7 +213,7 @@ export function attachWebSocketServer(server: HttpServer): AttachedWebSocketServ
     const desiredCameraSubscriptions = new Set<string>()
     const desiredSnapshotWatches = new Set<string>()
     // The socket doubles as the "is that browser tab still open?" signal for work a tab owns
-    // (today: its slicing jobs). Untrusted and non-authorizing — see client-sessions.ts.
+    // (today: its slicing jobs). Untrusted and non-authorizing: see client-sessions.ts.
     const clientId = readClientSessionId(request)
     if (clientId) clientSessions.connected(clientId)
     wsBroadcaster.add(socket, context)
@@ -448,7 +448,7 @@ async function replayStatusesForWorkspace(socket: WebSocket, workspace: RequestW
   if (visiblePrinterIds.size === 0) return
 
   // Look up each of the workspace's printers by id rather than scanning every
-  // managed printer in the process — keeps replay O(workspace printers) on connect.
+  // managed printer in the process: keeps replay O(workspace printers) on connect.
   for (const printerId of visiblePrinterIds) {
     const status = printerManager.getStatus(printerId)
     if (!status) continue
@@ -505,7 +505,7 @@ function sendWsError(socket: WebSocket, message: string): void {
 async function readPrinterWorkspaceId(printerId: string): Promise<string | null> {
   // Status/job/snapshot events fan out at MQTT cadence (live deltas plus a 30s
   // pushall per printer), so resolve the workspace from the manager's in-memory cache
-  // first — a Postgres findUnique per event would scale DB load with telemetry rate,
+  // first, a Postgres findUnique per event would scale DB load with telemetry rate,
   // not user activity. Fall back to the DB only on a cache miss.
   const cached = printerManager.getWorkspaceId(printerId)
   if (cached) return cached

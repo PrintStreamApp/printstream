@@ -7,7 +7,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
  * **Every instance reading a key sees another instance's write.** These are PREFERENCES: two
  * mounted copies of one setting disagreeing is always a bug, not a feature. Without this, a
  * settings dialog that wrote a preference updated only its own control while the surface the
- * preference governs kept its stale value until it remounted — the setting looked broken, and it
+ * preference governs kept its stale value until it remounted: the setting looked broken, and it
  * only showed up where localStorage is the ONLY tier (the public editor's viewport preferences;
  * inside a workspace the same controls also write a server-side default whose React Query cache
  * update re-rendered everyone, hiding this).
@@ -80,7 +80,7 @@ export function useLocalStorageState<T>(
    * without this guard each notification would produce a new state object and notify back forever.
    */
   const syncedRef = useRef<string | null>(null)
-  // Read through refs so the subscription below depends only on `key` — callers routinely pass
+  // Read through refs so the subscription below depends only on `key`: callers routinely pass
   // inline `parse` functions, which would otherwise resubscribe on every render.
   const parseRef = useRef(parse)
   parseRef.current = parse

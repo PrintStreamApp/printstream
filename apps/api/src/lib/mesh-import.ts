@@ -1,8 +1,8 @@
 /**
  * Foreign-geometry import: parse STL and tessellate STEP into a plain triangle mesh that the 3MF
  * builder can inject as a new `<object><mesh>` and the editor can render. Output is intentionally
- * minimal — flat `positions` (3 floats/vertex) and `indices` (3 ints/triangle) plus an axis-aligned
- * bounding box — so it maps 1:1 onto 3MF `<vertices>`/`<triangles>` and onto a Three.js geometry.
+ * minimal, flat `positions` (3 floats/vertex) and `indices` (3 ints/triangle) plus an axis-aligned
+ * bounding box, so it maps 1:1 onto 3MF `<vertices>`/`<triangles>` and onto a Three.js geometry.
  * A multi-solid STEP additionally carries its individual named solids as `parts`, so the editor
  * imports it as one object with many parts (rather than collapsing the assembly into one blob).
  *
@@ -10,7 +10,7 @@
  * lazily on first STEP import so STL-only installs never pay for it. LOADING it is all this module
  * still owns for STEP: the quality settings (`STEP_TESSELLATION`, pinned to BambuStudio's defaults
  * so an import matches what the same file looks like in BambuStudio) and the per-solid fold are
- * shared with the browser host — see `@printstream/shared/three-mf` `step-mesh.ts`.
+ * shared with the browser host: see `@printstream/shared/three-mf` `step-mesh.ts`.
  */
 import type { StagedImportFormat } from '@printstream/shared'
 

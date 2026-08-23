@@ -11,7 +11,7 @@
  *
  *     { "filament_type": "\"PLA\"", "layer_height": "0.2" }
  *
- * Studio converts on both legs of its sync and so must we — a preset stored in the wrong
+ * Studio converts on both legs of its sync and so must we, a preset stored in the wrong
  * shape does not merely look wrong in the manager (a material named `"PLA"`, quotes
  * included); the fields our own code reads by name, like `filament_type` and
  * `compatible_printers`, stop matching anything.
@@ -38,7 +38,7 @@ interface OptionShape {
  * Keys the codec needs that are NOT `PrintConfig` options, so `BAMBU_PRESET_OPTION_SHAPES`
  * (generated from `this->add(...)` calls) cannot see them: `filament_id` in particular is
  * read via a runtime `dynamic_cast` in the vendored source rather than declared with
- * `this->add()`. Kept manual and short deliberately — everything that IS a real
+ * `this->add()`. Kept manual and short deliberately, everything that IS a real
  * `PrintConfig` option (including identity/compatibility keys like `compatible_printers`,
  * `inherits`, `filament_settings_id`) comes from the generated table, so this list cannot
  * silently go stale the way a full hand-maintained exception list did.
@@ -59,7 +59,7 @@ function optionShape(key: string): OptionShape | null {
  *
  * BambuStudio's own `escape_strings_cstyle` quotes only when it must (whitespace, a
  * quote, a backslash), but the payloads actually observed on this endpoint are quoted
- * regardless — `"filament_type": "\"PLA\""`, where `PLA` needs no quoting — and Studio
+ * regardless, `"filament_type": "\"PLA\""`, where `PLA` needs no quoting, and Studio
  * writes the same doubled form into `filament_settings_id`. Quoting unconditionally is
  * what makes a pulled preset re-encode to the bytes it arrived as, so a round-trip
  * through PrintStream does not rewrite every string option in the user's cloud library.
@@ -79,7 +79,7 @@ function escapeStringsCStyle(values: string[]): string {
 }
 
 /**
- * `unescape_strings_cstyle`: split on `;` at the top level only — a separator inside a
+ * `unescape_strings_cstyle`: split on `;` at the top level only, a separator inside a
  * quoted element is part of that element, which is why this cannot be a plain `split`.
  * Returns null when the input is malformed (an unterminated quote), so the caller can
  * pass the raw value through rather than store a mangled one.
@@ -137,7 +137,7 @@ function unescapeStringsCStyle(serialized: string): string[] | null {
  * One cloud value in local (`.json` preset) form.
  *
  * Bambu sends some numeric options as JSON numbers rather than strings, so a scalar is
- * coerced to a string here — the local form is strings throughout.
+ * coerced to a string here: the local form is strings throughout.
  */
 function decodeValue(key: string, value: unknown): unknown {
   if (value === null || value === undefined) return value
@@ -161,7 +161,7 @@ function encodeValue(key: string, value: unknown): unknown {
 
   const elements = value.map((entry) => String(entry))
   const shape = optionShape(key)
-  // An unknown key that arrived as an array is still a vector — join it the safe way
+  // An unknown key that arrived as an array is still a vector: join it the safe way
   // (c-style escaping round-trips a numeric element unchanged, a `;` in a string is
   // only preserved by quoting).
   if (!shape || shape.stringLike) return escapeStringsCStyle(elements)
@@ -190,7 +190,7 @@ export function decodeCloudPresetSetting(setting: Record<string, unknown>): Reco
 /**
  * A local preset record as a cloud `setting` map.
  *
- * Drops the envelope keys and our own bookkeeping so the payload carries settings only —
+ * Drops the envelope keys and our own bookkeeping so the payload carries settings only:
  * Bambu rejects a payload whose `setting` contains its envelope fields, and `type`/`name`
  * are sent alongside it, not inside it.
  */

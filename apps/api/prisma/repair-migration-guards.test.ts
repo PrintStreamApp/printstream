@@ -3,7 +3,7 @@
  *
  * It exists because the squash left both hosted deployments short of the
  * datamodel (see its own header), so it runs against every database on every
- * deploy — including the overwhelming majority that were built by `init` and
+ * deploy, including the overwhelming majority that were built by `init` and
  * already have everything. One unguarded `CREATE TABLE` or `ADD COLUMN` in
  * there fails the deploy for all of them, and the failure surfaces as a
  * container that will not start rather than as a test.

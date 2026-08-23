@@ -623,7 +623,7 @@ const SELF_HOSTED_BUNDLE_UPDATE_MESSAGE =
 
 test('bridge update check/start are inert no-ops on a self-hosted bundle', async () => {
   // The bundled bridge is lockstep with the app; the update actions must not
-  // persist a status or contact the bridge — they return a "updates with the
+  // persist a status or contact the bridge, they return a "updates with the
   // bundle" no-op before doing any work.
   const previous = env.SELF_HOSTED
   env.SELF_HOSTED = true

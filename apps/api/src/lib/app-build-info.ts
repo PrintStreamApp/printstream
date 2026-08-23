@@ -6,7 +6,7 @@
  *  - `revision`: the git commit the image was built from.
  *  - `published`: "true" only for the open-core image published to GHCR (the
  *    public `docker-publish` workflow sets `PRINTSTREAM_IMAGE_PUBLISHED=true`).
- *    That image — and only that image — has a registry update channel.
+ *    That image, and only that image, has a registry update channel.
  *
  * When the file is absent or carries the "unknown" placeholder (a source/dev
  * run, or a build that did not pass the ARGs) there is no baked identity and
@@ -69,7 +69,7 @@ export function getAppBuildInfo(): AppBuildInfo {
   } catch {
     // No metadata file. The native single-file app has no Docker build ARGs to
     // write one, so its host publishes the revision baked into the binary as
-    // env instead (apps/server/src/run.ts) — without this fallback the native
+    // env instead (apps/server/src/run.ts), without this fallback the native
     // footer renders nothing at all, update notice included. `published` stays
     // false: that flag means the GHCR image channel specifically.
     revision = readBakedRevision(env.PRINTSTREAM_SERVER_BUILD_REVISION)

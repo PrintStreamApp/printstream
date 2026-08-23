@@ -3,18 +3,18 @@
  *
  * The dispatcher executes in-process (the heap is the live executor), but every
  * lifecycle transition is written through to the `DispatchJob` table so that a
- * restart can reconcile dispatches that were in flight when the process died —
+ * restart can reconcile dispatches that were in flight when the process died,
  * and so the per-printer dispatch guard can eventually become cluster-wide.
  *
  * Safety boundary (the dispatcher's "rob-1" restart contract): `startCommandAttemptedAt`
- * is set — and durably committed — immediately BEFORE the MQTT start command is
+ * is set, and durably committed, immediately BEFORE the MQTT start command is
  * published. A row with it NULL therefore provably never started a print and is safe to
  * reconcile/clean up; a row with it set may correspond to a real running print and must
  * be left alone for the status recorder to resolve.
  *
  * All write-through helpers except {@link markDispatchStartAttempted} are best-effort:
  * a journal hiccup must never break a print, so they swallow and log errors. The start
- * marker is the exception — callers MUST await it and abort the dispatch if it rejects,
+ * marker is the exception: callers MUST await it and abort the dispatch if it rejects,
  * because the reconcile's safety depends on that marker being durable before publish.
  */
 import { rootPrisma } from './prisma.js'
@@ -26,7 +26,7 @@ import { rootPrisma } from './prisma.js'
  * awaiting them (a journal hiccup must never block a print), so on their own they
  * carry no happens-before relationship. Under connection-pool contention a late
  * enqueue INSERT could commit *after* a terminal UPDATE that ran first and found
- * no row — leaving the terminal state dropped and the row stuck at its seed
+ * no row, leaving the terminal state dropped and the row stuck at its seed
  * `queued` forever (observed live: dispatches logged `failed` yet the journal row
  * stayed `queued`). Chaining every write for a given id onto a per-id tail restores
  * the call order the fire-and-forget calls drop, so INSERT -> uploading -> terminal
@@ -77,7 +77,7 @@ export interface DispatchJournalSeed {
 /**
  * Whether an orphaned journal row is safe to reconcile (mark interrupted + clean up its
  * upload). Pure so the rob-1 rule is unit-testable: only pre-publish rows
- * (`startCommandAttemptedAt` NULL) in a non-terminal state qualify — anything that may
+ * (`startCommandAttemptedAt` NULL) in a non-terminal state qualify: anything that may
  * have published a start command is left for the status recorder.
  */
 export function isReconcilableDispatch(
@@ -129,7 +129,7 @@ export async function recordDispatchStatus(
 }
 
 /**
- * Durably mark that a start command is about to be published — the rob-1 boundary.
+ * Durably mark that a start command is about to be published: the rob-1 boundary.
  * NOT best-effort: the caller MUST await this and abort the dispatch if it rejects, so
  * a later crash can never misclassify a started print as a safe-to-clean pre-publish row.
  */
@@ -144,7 +144,7 @@ export async function markDispatchStartAttempted(id: string): Promise<void> {
 
 /**
  * Boot reconcile: mark every pre-publish, non-terminal journal row as `interrupted`.
- * Platform-wide (all workspaces) — a deliberate startup operation. Returns the count.
+ * Platform-wide (all workspaces), a deliberate startup operation. Returns the count.
  * Mirrors {@link isReconcilableDispatch}; the two MUST stay in sync.
  */
 export async function reconcileInterruptedDispatches(): Promise<number> {
@@ -188,7 +188,7 @@ const DISPATCH_JOURNAL_RETENTION_MS = 90 * 24 * 60 * 60 * 1000
 /**
  * Retention prune: delete journal rows whose dispatch finished (any terminal
  * state) longer than the retention window ago. The journal is operational
- * bookkeeping, not print history (`PrintJob` is history) — without a prune it
+ * bookkeeping, not print history (`PrintJob` is history), without a prune it
  * grows by one row per dispatch forever. Scoping on `finishedAt` leaves
  * in-flight rows (`queued`/`uploading`, finishedAt NULL) for the boot reconcile,
  * and elderly `interrupted` rows are covered too: their orphaned-SD cleanup is

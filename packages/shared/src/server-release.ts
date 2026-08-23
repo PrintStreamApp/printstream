@@ -4,8 +4,8 @@
  *
  * Served by the cloud's `/api/server-runtime/releases` (private,
  * `apps/api/src/private/cloud/server-release-channel.ts`) and consumed by the
- * core polling client + apply driver in `apps/api/src/lib/native-update-*.ts`
- * — a cross-process payload, so both sides go through this schema rather than
+ * core polling client + apply driver in `apps/api/src/lib/native-update-*.ts`,
+ * a cross-process payload, so both sides go through this schema rather than
  * hand-written field lists.
  *
  * Builds are content-addressed by release fingerprint (no semver, equality

@@ -3,7 +3,7 @@
  *
  * WHY THIS EXISTS. Depth precision in a perspective projection is governed almost entirely by the
  * NEAR plane, and it degrades with the square of the view distance. The G-code preview is the one
- * 3D surface here that renders with a LINEAR depth buffer — the editor and the plated 3MF preview
+ * 3D surface here that renders with a LINEAR depth buffer: the editor and the plated 3MF preview
  * both enable `logarithmicDepthBuffer`, which is deliberately off here because it writes
  * `gl_FragDepth` and so disables early-Z rejection, a real per-fragment cost on a toolpath mesh of
  * millions of double-sided triangles. With a fixed `near = 0.1` and a `far` scaled to the content
@@ -18,7 +18,7 @@
  * a logarithmic buffer would, at the cost of a few arithmetic ops per frame.
  *
  * Counterpart: `PreviewView.tsx`, which owns the camera and calls this before each draw. The
- * ORTHOGRAPHIC (3MF) branch does not need it — orthographic depth is uniform across the range.
+ * ORTHOGRAPHIC (3MF) branch does not need it, orthographic depth is uniform across the range.
  */
 
 /** Never let the near plane reach zero, whatever the content: the projection divides by it. */
@@ -39,7 +39,7 @@ const NEAR_FLOOR_RADIUS_FRACTION = 0.005
  * The radius floor above is a CONTENT-sized constant, so on a 350mm plate it pins the near plane at
  * ~1.3mm however close the camera gets. Dollying nearer than that puts the camera inside its own
  * near plane: the toolpaths vanish and zooming appears to stop working (reported as "zooming is
- * less and less effective until it does nothing"). The controls were never stuck — the distance
+ * less and less effective until it does nothing"). The controls were never stuck: the distance
  * keeps halving, there is just nothing left un-clipped to see. Taking the SMALLER of the two floors
  * means the radius floor still governs at normal viewing distances (unchanged precision there) and
  * the distance floor takes over exactly when the camera closes in, so individual extrusions stay
@@ -57,7 +57,7 @@ const NEAR_FLOOR_DISTANCE_FRACTION = 0.02
  */
 export function fitPerspectiveDepthRange(distance: number, radius: number): { near: number; far: number } {
   // Non-finite inputs are coerced, not trusted: `Math.max(NaN, x)` is NaN, and a NaN plane makes
-  // the projection matrix singular — the canvas renders nothing, with no error anywhere.
+  // the projection matrix singular: the canvas renders nothing, with no error anywhere.
   const safeRadius = Number.isFinite(radius) ? Math.max(radius, 1) : 1
   const safeDistance = Number.isFinite(distance) ? Math.max(distance, 0) : 0
   // The floor is the tighter of the two: content-sized while the camera is far enough away for it
@@ -69,7 +69,7 @@ export function fitPerspectiveDepthRange(distance: number, radius: number): { ne
   )
   const near = Math.max(safeDistance - safeRadius, insideFloor, ABSOLUTE_NEAR_FLOOR)
   // `near + safeRadius` only matters in the degenerate case where the distance is ~0; otherwise the
-  // back of the sphere dominates. Keep it tight — every unit of unused far range costs precision.
+  // back of the sphere dominates. Keep it tight, every unit of unused far range costs precision.
   const far = Math.max(safeDistance + safeRadius, near + safeRadius)
   return { near, far }
 }

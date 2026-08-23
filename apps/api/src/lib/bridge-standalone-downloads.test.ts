@@ -7,7 +7,7 @@ import { listBridgeStandaloneDownloads } from './bridge-standalone-downloads.js'
 import { env } from './env.js'
 
 // Pin cloud mode: `getBridgeReleaseManifest` (which this maps from) advertises no
-// build on a self-hosted deployment — the public open-core build is self-hosted
+// build on a self-hosted deployment: the public open-core build is self-hosted
 // by default (no `src/private`). Standalone bridge downloads are a cloud-only
 // surface; this suite asserts that cloud mapping.
 env.SELF_HOSTED = false

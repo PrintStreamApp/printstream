@@ -215,7 +215,7 @@ const workspaceManagerOperationsPermissions = [
  *
  * Read-only for Support so they can answer "what does this customer have"
  * without being able to change it; the write half sits with Manager, who
- * already provisions customer workspaces. Comping is deliberately NOT here —
+ * already provisions customer workspaces. Comping is deliberately NOT here,
  * it rides `billing.manage`, which only Admin holds, because a comp gives away
  * revenue indefinitely and the schema has no expiry on it.
  *

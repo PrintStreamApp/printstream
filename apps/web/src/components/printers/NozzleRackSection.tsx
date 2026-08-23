@@ -4,7 +4,7 @@
  *
  * The H2C has a static left nozzle and a swappable right-side nozzle system: a
  * rack of spare hotends the printer swaps automatically during prints. Bambu
- * exposes no manual "load nozzle N" command, so this surface is informational —
+ * exposes no manual "load nozzle N" command, so this surface is informational,
  * it lists the mounted and parked hotends and the current changer state.
  *
  * Rendered only when `status.nozzleRack` is present (H2C only); the tab is

@@ -1,6 +1,6 @@
 /**
  * Floating control panel for the editor's manual brim-ear tool: the ear diameter for newly placed
- * ears, plus Clear/Done. Presentational only — placement and the ear state live in EditorView.
+ * ears, plus Clear/Done. Presentational only: placement and the ear state live in EditorView.
  */
 import { Button, Chip, Sheet, Slider, Stack, Typography } from '@mui/joy'
 import { TOOL_PANEL_ANCHOR } from './editorPanels'

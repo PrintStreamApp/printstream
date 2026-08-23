@@ -86,7 +86,7 @@ test('selection helpers toggle one profile or all filtered profiles', () => {
   assert.deepEqual(setAllFilteredSlicingPresetsSelected(allSelected, filteredProfiles, false), [])
 })
 
-/** A built-in preset of the given kind — the shape a stock catalogue arrives as. */
+/** A built-in preset of the given kind: the shape a stock catalogue arrives as. */
 function builtinPreset(id: string, kind: SlicingPresetSummary['kind']): SlicingPresetSummary {
   return { id, source: 'builtin', kind, name: id } as SlicingPresetSummary
 }
@@ -109,8 +109,8 @@ test('an empty list still resolves a usable default', () => {
 })
 
 test('the filter badge counts a source choice only when it differs from the resolved default', () => {
-  // Counted against the RESOLVED default, so the view a tab OPENS as never lights up "Filters (1)"
-  // — and Clear, which returns to that same default, is never a button that does nothing.
+  // Counted against the RESOLVED default, so the view a tab OPENS as never lights up "Filters (1)",
+  // and Clear, which returns to that same default, is never a button that does nothing.
   assert.equal(slicingPresetSourcesAreDefault(['custom'], ['custom']), true)
   assert.equal(slicingPresetSourcesAreDefault(['builtin', 'custom'], ['custom', 'builtin']), true)
   assert.equal(slicingPresetSourcesAreDefault(['builtin'], ['custom', 'builtin']), false)

@@ -1,5 +1,5 @@
 /**
- * Two-tier control for the printers dashboard's default view — which view the
+ * Two-tier control for the printers dashboard's default view, which view the
  * bare `/printers` address opens with: a workspace-wide shared default
  * (`GeneralSettings.printersDefaultViewId`, editable with manage-settings) and
  * a per-device override anyone may set (`lib/printerViewDefaults.ts`).
@@ -7,7 +7,7 @@
  * Follows the general-settings card shape (`EditorViewportSettingsCards`,
  * `SlicerDeveloperModeCard`): self-contained, rendered from the printers View
  * settings dialog rather than the Settings page because that is where views are
- * managed — but the workspace tier is not dialog-local state, which is why it
+ * managed, but the workspace tier is not dialog-local state, which is why it
  * lives in core settings components.
  */
 import { Alert, Option, Select } from '@mui/joy'

@@ -3,7 +3,7 @@
  * level above their workspaces.
  *
  * Reached from the workspace switcher alongside the platform scope, but it is
- * NOT a workspace context switch — the account is named in the URL and the API
+ * NOT a workspace context switch: the account is named in the URL and the API
  * scopes on customer membership, so no workspace is selected and none of
  * the workspace-context machinery (headers, cookies, WS scoping) is involved. That
  * keeps a scope with no printers out of code written to assume there are some.
@@ -43,13 +43,13 @@ export const BILLING_SCOPE_SECTIONS = [
   {
     id: 'workspaces',
     // "Cloud plans", not "Cloud workspaces": this names the same kind of thing
-    // as "Self-hosted licenses" next to it — the commercial artifact, not the
+    // as "Self-hosted licenses" next to it: the commercial artifact, not the
     // container it attaches to. A workspace reads as an organisational unit, so
     // a customer hunting for their Pro subscription had no reason to open a tab
     // about workspaces, which is the failure this label exists to prevent.
     //
     // The cost is real and accepted: workspaces are also CREATED and DELETED
-    // here, and one does not delete a plan. That mismatch is the lesser one —
+    // here, and one does not delete a plan. That mismatch is the lesser one:
     // being unable to find where Pro lives is worse than being mildly surprised
     // that removal sits under plans.
     //
@@ -64,7 +64,7 @@ export const BILLING_SCOPE_SECTIONS = [
     //
     // It also has to spell out that a workspace IS the unit Pro is sold on.
     // Nothing else on this page says so, and "workspace" reads as an
-    // organisational container, not a subscription — so someone looking for
+    // organisational container, not a subscription, so someone looking for
     // "where is my Pro subscription" has no reason to look here.
     description: 'One plan per workspace we host for you. Add, remove, and change them here.'
   },
@@ -124,7 +124,7 @@ export const BILLING_SCOPE_SECTION_ROUTE = `${BILLING_SCOPE_ROUTE}/:section`
 
 /**
  * The section a URL segment names, or the default when it names nothing we
- * serve — a stale bookmark should land on the scope, not on a blank page.
+ * serve, a stale bookmark should land on the scope, not on a blank page.
  */
 export function parseBillingScopeSection(section: string | undefined): BillingScopeSectionId {
   return BILLING_SCOPE_SECTIONS.some((entry) => entry.id === section)

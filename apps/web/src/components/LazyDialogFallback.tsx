@@ -3,13 +3,13 @@
  *
  * Every heavy dialog here is code-split, so the click that opens one is followed by a chunk
  * download before anything renders. With the `fallback={null}` these boundaries used to carry, the
- * screen showed literally nothing for that whole window — on the 3MF editor (~800KB of chunks:
+ * screen showed literally nothing for that whole window, on the 3MF editor (~800KB of chunks:
  * EditorView + threeMfScene + BackAwareModal) that reads as a dead click, and users click again.
  * This renders the dialog's SHELL immediately instead, so the surface appears on the same frame as
  * the click and only its contents arrive late.
  *
  * The shell deliberately mirrors the real dialog's footprint (`variant`), so the swap when the
- * chunk lands is a fill-in rather than a resize. Pair every `lazy()` dialog with this — the label
+ * chunk lands is a fill-in rather than a resize. Pair every `lazy()` dialog with this: the label
  * is the only per-call decision, and it should name what is opening ("Opening the editor…"), not
  * the mechanism.
  *
@@ -44,7 +44,7 @@ function LoadingBody({ label }: { label: string }) {
 
 export function LazyDialogFallback({ label, variant = 'dialog' }: LazyDialogFallbackProps) {
   // `open` is unconditional: the fallback only exists while React is suspended, and it unmounts
-  // itself the moment the real dialog mounts. Closing is therefore not its job — a dismissible
+  // itself the moment the real dialog mounts. Closing is therefore not its job, a dismissible
   // shell would leave the pending import with nowhere to render.
   if (variant === 'maximized') {
     // The same shared geometry the real dialog uses, so the swap when the chunk lands is a fill-in

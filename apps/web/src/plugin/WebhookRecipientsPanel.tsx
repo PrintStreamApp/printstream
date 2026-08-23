@@ -6,7 +6,7 @@
  *
  * Each entry is either a shared destination (receives this workspace's
  * broadcast notifications) or a personal one (receives only YOUR targeted
- * notifications — support replies, suggestion activity). Destination URLs
+ * notifications: support replies, suggestion activity). Destination URLs
  * are secrets: the server never echoes them, so the list shows labels only.
  * Lives under the plugin host so importing it does not violate the
  * "plugins don't import each other" rule.

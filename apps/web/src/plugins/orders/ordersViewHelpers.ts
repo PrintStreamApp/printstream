@@ -18,7 +18,7 @@
  * concerns; keep new pure helpers here rather than re-growing the view.
  *
  * Note: `stopEventPropagation` is a trivial per-plugin copy. Date formatting is
- * NOT duplicated here — order views use the shared `formatDateTime` from
+ * NOT duplicated here, order views use the shared `formatDateTime` from
  * `lib/time` so dates render consistently with the rest of the app.
  */
 import type {

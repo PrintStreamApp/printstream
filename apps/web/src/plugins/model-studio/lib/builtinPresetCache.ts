@@ -3,19 +3,19 @@
  *
  * WHY: the anonymous `/api/public/slicing/resolve-*` endpoints answer from the slicer IMAGE, so a
  * built-in preset's config is a pure function of `(presetId, targetId)` and cannot change while the
- * tab is open. It was nonetheless re-fetched constantly — the per-material badge, the repair, the
+ * tab is open. It was nonetheless re-fetched constantly: the per-material badge, the repair, the
  * save's authoring pass and `flattenLocalPreset`'s parent lookup each resolve independently, and
  * every material of a project sharing one preset resolved it once per slot. MEASURED on opening a
  * three-material project: nine `resolve-filament` round trips where three distinct presets were
  * involved, several of them concurrent duplicates of each other.
  *
  * DEDUPLICATION IS THE POINT, not just caching. The promise is stored, not the value, so callers
- * that ask at the same moment share one request rather than racing several identical ones — the
+ * that ask at the same moment share one request rather than racing several identical ones: the
  * common case here, since a project's slots resolve in parallel.
  *
  * NOT CACHED: anything that depends on the user's browser-stored presets or on the open project.
  * Those change under the tab (the "Manage" dialog writes them, the editor edits the project), and a
- * stale answer there is a wrong answer. `refreshSlicingPresets` deliberately does NOT clear this —
+ * stale answer there is a wrong answer. `refreshSlicingPresets` deliberately does NOT clear this:
  * uploading a preset cannot change what a BUILT-IN resolves to.
  *
  * A REJECTED lookup is evicted so a transient failure does not poison the tab for its lifetime.

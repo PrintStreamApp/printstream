@@ -9,7 +9,7 @@
  * `assertFilamentTrackSwitchMatch` in the API for why the hard block is not safe for us).
  *
  * Its confirm is bound to `allowFilamentTrackSwitchMismatch`, NOT to the tray dialogs'
- * `allowIncompatibleFilament` — accepting the trays you picked is a different judgement from
+ * `allowIncompatibleFilament`: accepting the trays you picked is a different judgement from
  * accepting a file sliced for another class of machine, and one checkbox must not grant both.
  *
  * Renders nothing when there is no mismatch, so callers can mount it unconditionally.

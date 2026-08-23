@@ -12,8 +12,8 @@ import {
 
 /**
  * These presets never reach a server, so the browser is the only thing validating them. The parse
- * is the SHARED one on purpose — a file the workspace would accept must not be rejected here, and
- * vice versa — so what is worth asserting locally is the storage behaviour around it.
+ * is the SHARED one on purpose, a file the workspace would accept must not be rejected here, and
+ * vice versa, so what is worth asserting locally is the storage behaviour around it.
  */
 
 const filamentPreset = JSON.stringify({
@@ -48,7 +48,7 @@ test('a .json preset is parsed and kept in the browser', async () => {
     assert.equal(added[0]?.kind, 'filament')
     assert.equal(added[0]?.name, 'My PETG')
 
-    // It survives as stored state, which is the whole point — there is no server to re-ask.
+    // It survives as stored state, which is the whole point, there is no server to re-ask.
     const listed = listLocalSlicingPresets()
     assert.equal(listed.length, 1)
     assert.equal(listed[0]?.raw.filament_type?.toString(), 'PETG')

@@ -3,12 +3,12 @@
  *
  * When a project authored for a smaller printer (e.g. a P1S, 256×256) is sliced on a larger one
  * (e.g. an H2D, 350×320), BambuStudio lays the plates out in a grid whose stride is the *bed* size,
- * so plate 2+'s objects — which carry the source bed's per-plate global offset — land outside the
+ * so plate 2+'s objects, which carry the source bed's per-plate global offset, land outside the
  * target plate's region. The CLI then reports `CLI_NO_SUITABLE_OBJECTS` (exit 206, "no object fully
  * inside the plate").
  *
  * BambuStudio's CLI only auto-fixes this (`translate_models`) when it treats the load as a forced
- * machine switch — which it does NOT when a target-compatible process is loaded (the normal case).
+ * machine switch, which it does NOT when a target-compatible process is loaded (the normal case).
  * Rather than coax the CLI, we apply the same shift ourselves: for each plate `i` we move its objects
  * by the difference between the target and source plate centers, which is the closed form below.
  * Derived from BambuStudio's `compute_origin_using_new_size` (`origin = col·W·(1+GAP)`,
@@ -46,7 +46,7 @@ export function plateRecenterOffset(plateIndex: number, plateCount: number, sour
 /**
  * Rewrite a `3D/3dmodel.model` XML so every build `<item>`'s translation is shifted by its plate's
  * {@link plateRecenterOffset}. `objectPlateIndex` maps each build-item `objectid` to its 0-based plate
- * (built from `model_settings.config` — see {@link buildObjectPlateIndex}). Items whose object has no
+ * (built from `model_settings.config`: see {@link buildObjectPlateIndex}). Items whose object has no
  * known plate, and the rest of the document, are left untouched. A no-op when the beds match.
  */
 export function recenterBuildItemsXml(

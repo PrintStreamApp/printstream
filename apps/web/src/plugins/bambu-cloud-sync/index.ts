@@ -3,7 +3,7 @@
  *
  * Contributes two surfaces, both through slots core renders empty when this plugin is
  * absent: the account panel in the slicing-preset manager (`slicing.presets.sync`), and
- * the "something to sync" notice on the surfaces that USE presets — the 3D editor's slice
+ * the "something to sync" notice on the surfaces that USE presets: the 3D editor's slice
  * sidebar and the prepare-print dialog (`slicing.presets.syncStatus`).
  *
  * Counterpart: `apps/api/src/plugins/bambu-cloud-sync/index.ts`.
@@ -19,7 +19,7 @@ export const bambuCloudSyncWebPlugin: WebPlugin = {
   slots: [
     { name: 'slicing.presets.sync', component: BambuCloudSyncCard },
     // Shown where presets are USED (editor sidebar, prepare-print dialog), not just where
-    // they are managed — that is the point of checking without auto-syncing.
+    // they are managed, that is the point of checking without auto-syncing.
     { name: 'slicing.presets.syncStatus', component: BambuCloudSyncStatus }
   ]
 }

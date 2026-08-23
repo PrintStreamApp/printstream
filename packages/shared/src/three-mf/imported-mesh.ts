@@ -2,7 +2,7 @@
  * The staged-import mesh contract: geometry handed to the 3MF writer to be baked into a project as
  * a new object.
  *
- * Types only — the producers are per-surface and stay where they are (the api's `mesh-import.ts`
+ * Types only: the producers are per-surface and stay where they are (the api's `mesh-import.ts`
  * parses STL and tessellates STEP through occt WASM; the browser will parse its own). What has to
  * be shared is the SHAPE, because the bake consumes it and the bake runs on both sides.
  *
@@ -35,7 +35,7 @@ export interface ImportedMeshPart {
   mesh: ImportedMesh
   /**
    * Raw 3MF `subtype` when this solid is a HELPER volume (support blocker/enforcer, modifier,
-   * negative part). Absent/null for printed geometry — and always so for STL/STEP, which have no
+   * negative part). Absent/null for printed geometry, and always so for STL/STEP, which have no
    * volume concept. Carried from the 3MF extractor to the bake so an imported blocker is written
    * back as a blocker (see `renderImportedMultiPartModelSettingsXml`).
    */

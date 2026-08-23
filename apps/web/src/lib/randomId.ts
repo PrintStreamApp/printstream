@@ -6,7 +6,7 @@
  * absent and calling it throws "crypto.randomUUID is not a function".
  * `crypto.getRandomValues` has no such restriction, so fall back to
  * assembling an RFC 4122 v4 UUID from it. The last-resort Math.random path
- * only exists for exotic environments with no WebCrypto at all — these ids
+ * only exists for exotic environments with no WebCrypto at all, these ids
  * key client-side drafts and editor instances, not anything security-bearing.
  */
 export function randomUUID(): string {

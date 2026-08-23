@@ -1,7 +1,7 @@
 /**
  * Install and remove slicer engines on a running service.
  *
- * Engines used to be baked into the container image at build time — seven of
+ * Engines used to be baked into the container image at build time: seven of
  * them, ~7 GB. They are now managed at runtime, which is what lets the native
  * app ship with none and fetch the one it needs, and lets any operator add a
  * version to slice a project a newer desktop build saved.
@@ -9,7 +9,7 @@
  * Two ordering rules carry the safety:
  *
  * - The MANIFEST ENTRY IS WRITTEN LAST. A failure part way through leaves an
- *   unreferenced directory, never a registered engine whose files are missing —
+ *   unreferenced directory, never a registered engine whose files are missing:
  *   the slicer would spawn the latter and fail per slice instead of once.
  * - The SHARED SYSROOT is installed before the engine that needs it and removed
  *   only with the last one. It is the Ubuntu runtime closure every Linux engine
@@ -222,7 +222,7 @@ async function downloadPinned(
  * Unpack an AppImage without squashfs tools on the host.
  *
  * Type-2 AppImages self-extract with `--appimage-extract`, needing neither FUSE
- * nor unsquashfs — only that the runtime can execute, which on the x86-64 hosts
+ * nor unsquashfs, only that the runtime can execute, which on the x86-64 hosts
  * this serves it can. It writes `squashfs-root` into the CWD, so it runs with
  * `cwd` set and the result is renamed into place.
  */
@@ -232,7 +232,7 @@ async function extractAppImage(appImagePath: string, appDir: string): Promise<vo
   // An AppImage unpacks by RUNNING itself, and the artifact is x86-64. On arm64
   // that only works through the same emulator the container uses to run the
   // engine, invoked explicitly rather than trusting the host to have registered
-  // a binfmt handler — a Raspberry Pi generally has not.
+  // a binfmt handler, a Raspberry Pi generally has not.
   const emulator = appImageEmulator()
   if (emulator) {
     await run(emulator, [appImagePath, '--appimage-extract'], { cwd: workDir, maxBuffer: 32 * 1024 * 1024 })
@@ -251,7 +251,7 @@ async function extractAppImage(appImagePath: string, appDir: string): Promise<vo
  * the host runs it directly.
  *
  * Mirrors `docker/bambu-studio-cli.sh`, which reaches for the same binary under
- * the same variable — the launcher and the installer must agree about how an
+ * the same variable: the launcher and the installer must agree about how an
  * x86-64 binary gets executed on this machine, or an engine installs and then
  * cannot start.
  */

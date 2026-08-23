@@ -1,6 +1,6 @@
 /**
  * Pull-based registry for the tracked identity of the filament loaded in a
- * printer slot — the web analogue of the API's `slot-filament-registry`. Core
+ * printer slot: the web analogue of the API's `slot-filament-registry`. Core
  * surfaces that label a physical slot (print-dialog tray pickers, the slice
  * dialog's loaded-material options) resolve the loaded SPOOL through here and
  * feed it into `resolveFilamentIdentity`, so a tracked custom spool reads as
@@ -8,7 +8,7 @@
  *
  * The filament-manager plugin registers a hook (from its `init`, before the
  * React tree mounts, so the hook identity is stable for the whole session);
- * when no plugin registers — or the plugin is disabled for the workspace — the
+ * when no plugin registers, or the plugin is disabled for the workspace, the
  * lookup resolves nothing and callers fall back to tray-derived identity.
  */
 import { useMemo } from 'react'
@@ -22,7 +22,7 @@ export type SlotFilamentIdentity = FilamentSpoolIdentityInput & {
   spoolId: string
   /** The slicing preset (filament profile name) the spool is pinned to; null = auto-match. */
   slicingPresetName?: string | null
-  /** Tracked remaining quantity — covers non-RFID spools the printer can't estimate. */
+  /** Tracked remaining quantity: covers non-RFID spools the printer can't estimate. */
   remainingGrams?: number | null
   remainPercent?: number | null
 }
@@ -47,7 +47,7 @@ let registration: SlotFilamentIdentityRegistration | null = null
 
 /**
  * Register the loaded-spool lookup hook. Must be called from a plugin `init`
- * (before the React tree mounts) — consumers branch on the registration at
+ * (before the React tree mounts): consumers branch on the registration at
  * render time, so it must not change during a session.
  */
 export function registerSlotFilamentIdentityHook(

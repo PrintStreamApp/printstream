@@ -177,7 +177,7 @@ app.get('/health', async (_request, response) => {
   const defaultTarget = resolveSlicerTarget(registry)
   // The in-flight install rides on HEALTH, not just the admin-only engines
   // route: a fresh container has no engine, and the person who notices is
-  // whoever tried to slice — who cannot read the engines route at all.
+  // whoever tried to slice, who cannot read the engines route at all.
   const installing = anyInstallStatus()
   response.json({
     name: defaultTarget?.label ?? 'PrintStream slicer',
@@ -203,7 +203,7 @@ app.get('/profiles', async (request, response) => {
 
 /**
  * The 3D build-plate mesh for a printer model, from the bundled BambuStudio resources.
- * Optional decoration for the editor's bed view — a miss answers 404 so the client falls
+ * Optional decoration for the editor's bed view, a miss answers 404 so the client falls
  * back to the plain millimetre grid rather than showing an error.
  */
 app.get('/bed-model', async (request, response) => {
@@ -245,7 +245,7 @@ app.get('/flush-data', async (request, response) => {
 /**
  * Ask the engine to compute a flush matrix, so the API/web can check our port against it.
  *
- * Diagnostic only — see `flush-calibration.ts`. Answers `{ calibration: null }` rather than an
+ * Diagnostic only: see `flush-calibration.ts`. Answers `{ calibration: null }` rather than an
  * error whenever the engine cannot be probed (no usable preset triple, a timeout, an old engine):
  * a missing self-check must never look like a broken feature.
  *
@@ -392,7 +392,7 @@ app.post('/slice', async (request, response) => {
   const cliAbort = new AbortController()
   // Register cleanup EAGERLY (before any await): on a genuine cancel/disconnect the response 'close'
   // fires while we're still slicing, so a cleanup listener added later (e.g. in `finally`) would be
-  // installed after 'close' already emitted and never run — leaking the work dir + activeSliceOutput
+  // installed after 'close' already emitted and never run: leaking the work dir + activeSliceOutput
   // on every cancel/timeout until the shared volume fills. One listener covers cancel, error, and
   // success: `writableFinished` is false only on a real client disconnect (so we abort the CLI then),
   // and cleanup always runs once the response closes for any reason.
@@ -470,7 +470,7 @@ app.post('/slice', async (request, response) => {
       metadata: slicedArtifactMetadata
     })
     // Backfill any plate_N.png the CLI did not render (GL unavailable, or an all-plate export
-    // that skipped the thumbnail stage) from the ORIGINAL input — deliberately not the prepared
+    // that skipped the thumbnail stage) from the ORIGINAL input, deliberately not the prepared
     // copy, which may have had stale previews stripped (see prepareInputThreeMf). No-op when
     // the CLI rendered fresh covers.
     if (outputFileName.toLowerCase().endsWith('.3mf')) {
@@ -579,14 +579,14 @@ async function runCli(input: {
     log: (message) => appendStructuredOutput(input.outputLines, 'system', message)
   })
   // A "from scratch" scaffold 3MF (calibration prints, new-project saves) carries the BBL marker
-  // but no — or only a partial — embedded project_settings.config, which segfaults the CLI's
+  // but no, or only a partial, embedded project_settings.config, which segfaults the CLI's
   // BBL-project loader. Synthesize/complete it from the slice's own profiles so it loads; a no-op
   // for real projects that already embed a complete one. Runs before the all-plate branch so a
   // multi-plate scaffold's per-plate slices load too.
   //
   // The export gets its OWN arg set: it loads no 3MF, so unlike the slice it needs the machine
   // profile handed to it explicitly (see `selectSettingsExportProfileFiles`). Only re-materialized
-  // when the slice's selection actually dropped something, and silently — the caller already
+  // when the slice's selection actually dropped something, and silently: the caller already
   // logged whatever `prepareProfileArgs` had to say about this same file set.
   const exportProfileFiles = selectSettingsExportProfileFiles(input.profileFiles)
   const exportProfileArgs = exportProfileFiles.length === cliProfileFiles.length
@@ -661,7 +661,7 @@ async function runCli(input: {
   // Manual dual-nozzle assignment: only the CLI flag makes it take effect (filament-map-args.ts).
   const filamentMapArgs = buildFilamentMapArgs(input.manualFilamentMap)
   // The user was warned this project is newer than the engine and chose to slice anyway; without
-  // the flag BambuStudio refuses to open it at all (exit 232). Never inferred — only ever set from
+  // the flag BambuStudio refuses to open it at all (exit 232). Never inferred, only ever set from
   // the request's explicit acknowledgement, because bypassing the vendor's version gate can let an
   // older engine silently misread newer settings.
   const allowNewerFileArgs = input.allowNewerProjectFile && supportedFlags.has('--allow-newer-file')
@@ -795,7 +795,7 @@ async function recenterRepairedProjectForLargerBed(repairedPath: string, sourceP
   const machineProfile = await readMergedMachineProfile(input.slicerTarget.profileDir, input.machineSwitchProfileName).catch(() => null)
   const targetBed = machineProfile ? bedSizeFromPrintableArea(machineProfile.printable_area) : null
   if (!sourceBed || !targetBed) return
-  // Only onto a larger bed (source smaller in at least one dim, not smaller in either) — BambuStudio's
+  // Only onto a larger bed (source smaller in at least one dim, not smaller in either): BambuStudio's
   // `shrink_to_new_bed==1` centering. A smaller target is a different case (objects may not fit) we leave alone.
   const larger = targetBed.width > sourceBed.width || targetBed.depth > sourceBed.depth
   const notSmaller = targetBed.width >= sourceBed.width && targetBed.depth >= sourceBed.depth
@@ -925,7 +925,7 @@ async function executeCli(input: {
       let stdoutCombined = ''
       const child = spawn(input.slicerTarget.cliPath, [...input.slicerTarget.cliArgsPrefix, ...args], {
         // `detached` makes the child its own process-group leader so termination can
-        // signal the whole group — the launcher runs the CLI with helper processes
+        // signal the whole group: the launcher runs the CLI with helper processes
         // (a per-slice weston; qemu on arm64) that a bare child.kill() would orphan.
         detached: true,
         stdio: ['ignore', 'pipe', 'pipe'],
@@ -971,7 +971,7 @@ async function executeCli(input: {
         if (idleMs >= env.SLICER_STALL_TIMEOUT_MS) {
           console.warn(`[slicer:executeCli] no CLI output for ${idleMs}ms; terminating (stalled)`)
           cancelTermination = terminateSlicerChild(child)
-          reject(new Error('Slicer stopped responding (no progress). It may have stalled — try slicing again.'))
+          reject(new Error('Slicer stopped responding (no progress). It may have stalled: try slicing again.'))
         }
       }, 5_000)
       guard.unref?.()
@@ -1018,7 +1018,7 @@ async function executeCli(input: {
         clearTimers()
         cleanupAbort()
         // Trust BambuStudio's own success marker over a non-zero teardown exit under
-        // emulation — the artifact is already fully written.
+        // emulation: the artifact is already fully written.
         if (sliceSucceeded || code === 0) resolve()
         else {
           const stderrTail = stderrCombined.trim().split(/\r?\n/u).filter(Boolean).slice(-5).join(' | ')
@@ -1193,7 +1193,7 @@ interface BuiltinProfileSummary {
 
 /**
  * Parsing every bundled preset (read + JSON.parse + resolve each one's `inherits` chain) is the
- * dominant cost of the `/profiles` endpoint — hundreds of files — and the editor calls it on every
+ * dominant cost of the `/profiles` endpoint, hundreds of files, and the editor calls it on every
  * open. The presets are static per slicer image, so cache the parsed catalogue per profile dir and
  * reuse it until the `*_full` dirs' mtimes change (a re-extract/upgrade). A cache miss is taken
  * whenever a dir can't be stat'd (mid-extraction) so a partial catalogue is never cached.
@@ -1218,11 +1218,11 @@ async function listBuiltinProfiles(profileDir: string): Promise<BuiltinProfileSu
     const directory = path.join(profileDir, `${kind}_full`)
     // A populated slicer image always has these dirs; a readdir failure here means the target's
     // preset dirs aren't ready yet (restart / mid-extraction) and we'd otherwise silently return a
-    // partial, builtin-less catalogue. Log it so the condition is observable — the API/web treat a
+    // partial, builtin-less catalogue. Log it so the condition is observable: the API/web treat a
     // builtin-less response as transient and retry (see `slicingPresetsResponseIsUsable`), but the
     // swallowed error left no trace of why the editor briefly saw a custom-only profile list.
     const entries = await readdir(directory, { withFileTypes: true }).catch((error) => {
-      console.warn(`listBuiltinProfiles: cannot read ${kind} presets at ${directory} — returning none for this kind:`, error instanceof Error ? error.message : error)
+      console.warn(`listBuiltinProfiles: cannot read ${kind} presets at ${directory}: returning none for this kind:`, error instanceof Error ? error.message : error)
       return []
     })
     for (const entry of entries) {
@@ -1262,7 +1262,7 @@ async function prepareProfileArgs(input: {
   workDir: string
   profileDir: string
   /**
-   * The 3MF the CLI will actually load — already carrying the request's per-slot
+   * The 3MF the CLI will actually load, already carrying the request's per-slot
    * choices in `filament_settings_id` (the pre-slice metadata rewrite ran in
    * `prepareInputThreeMf`). It is the authority for the filament slot COUNT.
    */
@@ -1298,7 +1298,7 @@ async function prepareProfileArgs(input: {
   // whenever a slot stayed on the project's own preset, which BambuStudio then
   // broadcast across every slot before segfaulting (issue #66).
   const embeddedSettings = await readThreeMfProjectSettings(input.inputPath).catch((error: unknown) => {
-    // Not fatal — the request's own mappings still give a slot count — but it costs us
+    // Not fatal, the request's own mappings still give a slot count, but it costs us
     // the per-slot preset names, so say so rather than silently degrading coverage.
     console.warn('[slicer] could not read embedded project settings for filament slot coverage', (error as Error).message)
     return null
@@ -1314,7 +1314,7 @@ async function prepareProfileArgs(input: {
   if (!slotSources && slotCount > 0) {
     // The invariant chose "no filament presets" over a short list. Record it: an
     // unexplained absence here is what made the out-of-bounds crash opaque before.
-    input.log?.(`No filament preset covers all ${slotCount} project slots — slicing from the project's own embedded settings instead.`)
+    input.log?.(`No filament preset covers all ${slotCount} project slots: slicing from the project's own embedded settings instead.`)
   }
 
   const filamentPaths: string[] = []
@@ -1418,9 +1418,9 @@ async function prepareInputThreeMf(input: {
     profileFiles: input.profileFiles,
     projectSettings
   })
-  // Cross-model slice: retarget the project's embedded machine OURSELVES — the same
+  // Cross-model slice: retarget the project's embedded machine OURSELVES, the same
   // native `retargetProjectSettingsToMachine` rewrite the editor's "save as a different
-  // printer" uses — so PrintStream stays the source of truth for the 3MF's machine and
+  // printer" uses, so PrintStream stays the source of truth for the 3MF's machine and
   // the CLI receives a project that already natively targets the requested printer. No
   // CLI `--estimate-mode` round-trip, no dependency on the slicer version's flags.
   const needsMachineSwitch = shouldRetargetEmbeddedMachine({
@@ -1429,7 +1429,7 @@ async function prepareInputThreeMf(input: {
     projectSettings
   })
   if (needsMachineSwitch && !machineSwitchProfileName) {
-    throw new Error('Slicing for a different printer requires an installed machine profile — pick one and slice again.')
+    throw new Error('Slicing for a different printer requires an installed machine profile: pick one and slice again.')
   }
   const machineSwitchProfile = needsMachineSwitch && machineSwitchProfileName
     ? await readMergedMachineProfile(input.slicerTarget.profileDir, machineSwitchProfileName)
@@ -1444,7 +1444,7 @@ async function prepareInputThreeMf(input: {
 
   const metadata = buildSlicedArtifactMetadata(input.request, input.profileFiles)
 
-  // A previous slice's nozzle groups crash the CLI at load on every printer — see
+  // A previous slice's nozzle groups crash the CLI at load on every printer: see
   // `stale-slice-info.ts`. Worth a rewrite on its own, so it joins the gate below rather than
   // riding along only when something else already needed one.
   const sliceInfoXml = await readZipEntryText(input.inputPath, 'Metadata/slice_info.config').catch(() => '')
@@ -1452,7 +1452,7 @@ async function prepareInputThreeMf(input: {
 
   // Whether the project SETTINGS are being rewritten, which is a different question from whether a
   // new file is being written: a slice_info-only sanitize produces a copy whose settings are
-  // untouched. The distinction is load-bearing — `rewroteProjectSettings` drops the machine profile
+  // untouched. The distinction is load-bearing: `rewroteProjectSettings` drops the machine profile
   // from `--load-settings` (`cli-profile-selection.ts`), correct only when the copy carries a
   // retargeted/identity-stamped machine of its own.
   const rewritesProjectSettings = Boolean(metadata) || Boolean(machineSwitchProfile)
@@ -1466,12 +1466,12 @@ async function prepareInputThreeMf(input: {
     }
   }
   // The slicer CLI reads `filament_map_mode` from model_settings.config (per plate),
-  // not project_settings.config — so a manual nozzle choice must be forced there or the
+  // not project_settings.config, so a manual nozzle choice must be forced there or the
   // CLI auto-assigns nozzles for flush and ignores the chosen Left/Right. The MAP that goes
   // with that mode is a separate matter: the CLI ignores it in both configs and only reads
   // `--filament-map`, so the assignment is also returned for the CLI args (see
-  // `filament-map-args.ts` — without the flag the slice aborts on a garbage extruder id).
-  // Build the per-plate Manual map from the same assignment we write into project_settings — against
+  // `filament-map-args.ts`, without the flag the slice aborts on a garbage extruder id).
+  // Build the per-plate Manual map from the same assignment we write into project_settings, against
   // the TARGET machine's extruder map when the project is being retargeted (the source's
   // single-nozzle map would otherwise suppress the assignment on a switch to dual-nozzle).
   const nozzleAssignmentSettings = projectSettings && machineSwitchProfile
@@ -1486,7 +1486,7 @@ async function prepareInputThreeMf(input: {
   // the CLI's own filament_color_changed check can never notice. Drop the previews from
   // the prepared copy instead: a GL-capable runtime re-renders them into the sliced output
   // (see bambu-studio-cli.sh), and one that cannot render leaves them missing for
-  // `backfillPlateThumbnails` to restore from the ORIGINAL input — today's behaviour.
+  // `backfillPlateThumbnails` to restore from the ORIGINAL input, today's behaviour.
   const stripStalePlatePreviews = Boolean(metadata && projectSettings && metadataChangesFilamentColours(projectSettings, metadata))
   const hasEmbeddedProjectSettings = await rewriteThreeMfProjectSettings(input.inputPath, input.outputPath, (settings) => {
     let rewrittenSettings = settings
@@ -1512,7 +1512,7 @@ async function prepareInputThreeMf(input: {
     appendStructuredOutput(input.outputLines, 'system', 'Filament colours changed; dropped the source\'s plate previews so fresh ones can be rendered')
   }
   if (!hasEmbeddedProjectSettings) {
-    // No embedded settings means the Manual mode this assignment depends on was never written —
+    // No embedded settings means the Manual mode this assignment depends on was never written:
     // passing the map on the CLI would pin an assignment the plate never asked for. Keep the
     // rewritten copy anyway when it carries the stale-nozzle-group fix, which is what stands
     // between this file and a SIGSEGV at load.
@@ -1998,7 +1998,7 @@ function normalizeOutputFileName(fileName: string): string {
   // (BambuStudio itself exports names like "Mount (landscape).gcode.3mf"); the name is
   // passed to the slicer CLI as a single argv token (spawn is invoked without a shell,
   // and the args template is tokenized before {outputFileName} is substituted). Strip
-  // only path separators, FAT-reserved characters, and non-printable/non-ASCII — the
+  // only path separators, FAT-reserved characters, and non-printable/non-ASCII: the
   // same set as the API's normalizeOutputFileName and sanitizeRemoteName; this name is
   // reported back and REPLACES the caller's requested output name, so anything stripped
   // here disfigures the library file name (e.g. "(ABS)" used to become "_ABS_").
@@ -2025,7 +2025,7 @@ async function tryReadSlicingMetadata(workDir: string, outputFileName: string): 
         candidates.push(entry.name)
       }
     }
-  } catch { /* work dir unreadable — fall back to the expected name only */ }
+  } catch { /* work dir unreadable: fall back to the expected name only */ }
   for (const candidate of candidates) {
     const parsed = await readSlicingMetadataFile(path.join(workDir, candidate))
     if (parsed) return parsed
@@ -2145,7 +2145,7 @@ const SLICE_MAX_HEADER_BYTES = 2 * 1024 * 1024
 /**
  * Remove leftover per-job scratch dirs under SLICER_WORK_DIR at startup. Each slice
  * normally rm's its own work dir when the response closes, but a slicer crash/restart
- * mid-slice orphans the dir — over time those fill the (shared) work volume. At boot no
+ * mid-slice orphans the dir: over time those fill the (shared) work volume. At boot no
  * slice is in flight, so every job dir is an orphan and safe to delete. The persistent
  * BambuStudio home/data dirs (which live under the work dir in the default layout) are
  * preserved.
@@ -2175,7 +2175,7 @@ async function sweepStaleWorkDirs(): Promise<void> {
 /**
  * Prewarm the builtin-profile catalogue for every target at startup. Building it cold
  * means reading + parsing thousands of preset JSONs (and their `inherits` chains), which
- * otherwise lands on the FIRST `/profiles` request after a (re)start — the "Loading slicer
+ * otherwise lands on the FIRST `/profiles` request after a (re)start: the "Loading slicer
  * data…" wait in the web dialog. The mtime-signature cache in `listBuiltinProfiles` keeps
  * every later request cheap; this just moves the cold build off the request path.
  */
@@ -2195,7 +2195,7 @@ async function prewarmBuiltinProfiles(): Promise<void> {
 
 /** A running slicer server: the port it actually bound, and how to stop it. */
 export interface SlicerServerHandle {
-  /** The bound port. Resolved, not requested — `port: 0` picks a free one. */
+  /** The bound port. Resolved, not requested: `port: 0` picks a free one. */
   port: number
   close(): Promise<void>
 }
@@ -2210,7 +2210,7 @@ export interface SlicerServerHandle {
  * behaviour because it is one server, not two implementations.
  *
  * @param options.port overrides `SLICER_PORT`. Pass 0 to bind a free port and
- * read it back from the handle — what an in-process host wants, since it then
+ * read it back from the handle: what an in-process host wants, since it then
  * points `SLICER_SERVICE_URL` at itself and never has to reserve a fixed one.
  * @param options.background sweeps stale work dirs and prewarms the builtin
  * profile cache. On by default; a caller that starts several servers in one
@@ -2224,7 +2224,7 @@ export function startSlicerServer(options: {
     void sweepStaleWorkDirs()
     void prewarmBuiltinProfiles()
     // After the sweep: the container ships no engines, so whatever this host is
-    // configured to have gets fetched here. Never awaited — see the module.
+    // configured to have gets fetched here. Never awaited: see the module.
     void ensureEnginesInstalled(env.SLICER_PRELOAD_ENGINES)
   }
   const requestedPort = options.port ?? env.SLICER_PORT
@@ -2241,7 +2241,7 @@ export function startSlicerServer(options: {
         // accepts any caller, so it MUST stay on a private/loopback-only network
         // (the default compose keeps it on an internal network). Warn loudly so an
         // operator who widens the bind doesn't unknowingly expose an unauthenticated
-        // code-execution service — set SLICER_SERVICE_TOKEN to require auth.
+        // code-execution service: set SLICER_SERVICE_TOKEN to require auth.
         console.warn('[slicer] SLICER_SERVICE_TOKEN is not set: running WITHOUT authentication. Keep this service on a private/loopback-only network, or set SLICER_SERVICE_TOKEN to require a bearer token.')
       }
       resolve({

@@ -1,7 +1,7 @@
 /**
  * Paste-to-attach for support composers: pasting an image into the message
  * textarea uploads it as a normal attachment draft AND drops an inline
- * markdown placeholder at the cursor — `![name](uploading:<key>)` while the
+ * markdown placeholder at the cursor: `![name](uploading:<key>)` while the
  * upload runs, rewritten to `![name](attachment:<id>)` when it lands (or
  * removed if the upload fails or the chip is deleted before it finishes).
  *

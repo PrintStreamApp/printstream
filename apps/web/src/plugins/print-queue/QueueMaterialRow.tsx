@@ -3,10 +3,10 @@
  * **file default**, the **nearest-matching** Filament-library materials (with remaining quantity),
  * a **Browse all materials…** entry that opens the searchable {@link MaterialPickerDialog}, and a
  * one-off **Custom** material. The custom row is brand + type + colour: the brand field is a freeSolo
- * Autocomplete seeded with the slicer's real filament **brands** (e.g. "Bambu Lab") — a convenient
+ * Autocomplete seeded with the slicer's real filament **brands** (e.g. "Bambu Lab"), a convenient
  * starting point, but any brand can be typed; the type dropdown picks the material; and the colour
  * reuses the editor's {@link FilamentColorPicker} (brand-aware swatch family + custom colour). All default
- * to the sliced brand + type + colour. The selected mode is tracked explicitly — picking "Custom" sticks
+ * to the sliced brand + type + colour. The selected mode is tracked explicitly: picking "Custom" sticks
  * even when its values equal the file default. The chosen type+colour drive the queue matcher (brand is
  * display-only, like a library material); a type that differs from what the file was sliced for warns but
  * is allowed.
@@ -33,11 +33,11 @@ export function QueueMaterialRow({
   file: QueueRequiredFilament
   value: QueueRequiredFilament
   materials: LibraryMaterial[]
-  /** Grams this filament needs on the plate — drives the remaining "enough?" indicator. */
+  /** Grams this filament needs on the plate: drives the remaining "enough?" indicator. */
   requiredGrams?: number
   onChange: (next: QueueRequiredFilament) => void
 }) {
-  // Explicit "user picked Custom" flag — the real fix for Custom doing nothing. Reset when the
+  // Explicit "user picked Custom" flag: the real fix for Custom doing nothing. Reset when the
   // underlying sliced filament changes (e.g. a plate change re-seeds the row to the file default).
   const [forceCustom, setForceCustom] = useState(false)
   const [browseOpen, setBrowseOpen] = useState(false)
@@ -54,13 +54,13 @@ export function QueueMaterialRow({
   const selectValue = mode === 'lib' && libMatch ? `lib:${libMatch.key}` : mode
   const isCustom = mode === 'custom'
 
-  // The gcode is sliced for the file's type; a different type may print badly — warn (not block).
+  // The gcode is sliced for the file's type; a different type may print badly: warn (not block).
   const fileType = (file.filamentType ?? '').trim()
   const currentType = (value.filamentType ?? '').trim()
   const typeMismatch = fileType !== '' && currentType !== '' && currentType.toLowerCase() !== fileType.toLowerCase()
   const typeMissing = currentType === ''
   const warn = typeMismatch || typeMissing
-  const mismatchText = `Sliced for ${file.filamentType} — a different material type may not print correctly.`
+  const mismatchText = `Sliced for ${file.filamentType}, a different material type may not print correctly.`
   // Tooltip for the trailing warning glyph on the selected value (mirrors the slot picker's glyph).
   const selectedWarningLabel = typeMismatch ? mismatchText : typeMissing ? 'Choose a material type so the queue can match a printer.' : null
   // Warn on a suggestion whose type differs from what the file was sliced for.
@@ -170,7 +170,7 @@ export function QueueMaterialRow({
               options={brands}
               inputValue={value.filamentName ?? ''}
               onInputChange={(_event, next, reason) => {
-                // 'reset' fires when an option is picked (and on blur) — only react to actual typing / clear.
+                // 'reset' fires when an option is picked (and on blur), only react to actual typing / clear.
                 if (reason === 'reset') return
                 onChange({ ...value, id: file.id, filamentName: next.trim() === '' ? null : next })
               }}
@@ -209,7 +209,7 @@ export function QueueMaterialRow({
 
       {warn ? (
         <Stack direction="row" spacing={0.5} alignItems="center" sx={{ pl: 0.5 }}>
-          {/* Inline SVG (Joy-themed) rather than an @mui/icons-material icon — a Material icon with
+          {/* Inline SVG (Joy-themed) rather than an @mui/icons-material icon, a Material icon with
               `sx` reaches for the Material theme's breakpoints, which a Joy-only app doesn't carry. */}
           <Box component="svg" viewBox="0 0 24 24" aria-hidden sx={{ width: 16, height: 16, display: 'block', fill: 'currentColor', color: 'warning.plainColor', flexShrink: 0 }}>
             <path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z" />

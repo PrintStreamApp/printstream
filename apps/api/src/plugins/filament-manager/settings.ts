@@ -1,6 +1,6 @@
 /**
  * Per-workspace settings for the filament-manager plugin. Currently one toggle:
- * `autoAddBambuSpools` (default ON) — whether inserting an RFID-tagged Bambu
+ * `autoAddBambuSpools` (default ON): whether inserting an RFID-tagged Bambu
  * spool into any AMS slot auto-creates a library spool. Stored in the plugin's
  * workspace-scoped `Setting` store.
  */

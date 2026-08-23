@@ -2,7 +2,7 @@
  * One maintenance task in the printer detail section: what the job is, when it
  * is next due, and the two actions on it (mark done, adjust).
  *
- * Purely presentational — mutations belong to `MaintenanceSection`, which owns
+ * Purely presentational: mutations belong to `MaintenanceSection`, which owns
  * the query invalidation. Memoized with stable callbacks because its parent sits
  * on the printers page, which re-renders on live status.
  */

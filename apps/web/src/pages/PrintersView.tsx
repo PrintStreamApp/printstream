@@ -165,7 +165,7 @@ export function PrintersView() {
   // `printers.print.menu` slot, so this is a split button whose menu collapses
   // to a plain button when nothing contributes.
   const [pageLibraryPickerOpen, setPageLibraryPickerOpen] = useState(false)
-  // Decides the Print control's SHAPE, so it has to be known before render — an empty
+  // Decides the Print control's SHAPE, so it has to be known before render, an empty
   // split-button menu is a caret that opens nothing.
   const hasPrintSourcePlugins = usePluginSlots('printers.print.menu').length > 0
   const [sortDialogOpen, setSortDialogOpen] = useState(false)
@@ -559,7 +559,7 @@ export function PrintersView() {
   const editPrinter = useMutation({
     mutationFn: ({ id, input }: { id: string; input: PrinterFormValues }) => {
       // Access code is write-only: the server never sends it back, so a blank
-      // field means "keep the current code" — omit it from the patch entirely.
+      // field means "keep the current code": omit it from the patch entirely.
       const { accessCode, ...rest } = input
       const body = accessCode.trim() ? input : rest
       return apiFetch<{ printer: Printer }>(`/api/printers/${id}`, { method: 'PATCH', body })
@@ -637,7 +637,7 @@ export function PrintersView() {
     onSuccess: (response, variables) => {
       // Keep the slice dialog mounted beneath the print flow so its "Back" returns to
       // slice settings; the whole flow is torn down together via closePrintFlow.
-      // The list refresh is not awaited — see slicingJobsCache.
+      // The list refresh is not awaited: see slicingJobsCache.
       seedSlicingJob(queryClient, response.job)
       refreshSlicingJobs(queryClient)
       if (variables.action === 'print') {
@@ -710,7 +710,7 @@ export function PrintersView() {
   })
 
   // Shared by the desktop and mobile view Selects. Switching views is a
-  // navigation — every view has its own address (see lib/printerViewRoutes.ts) —
+  // navigation, every view has its own address (see lib/printerViewRoutes.ts),
   // so bookmarks and back/forward work; the draft clears in the same batch to
   // avoid one frame of the next view under the previous view's unsaved edits.
   //

@@ -32,7 +32,7 @@ export const bridgeUpdateStatusSchema = z.enum([
 export type BridgeUpdateStatus = z.infer<typeof bridgeUpdateStatusSchema>
 
 /**
- * Bridge update-status policy helpers — the single source of truth shared by the API
+ * Bridge update-status policy helpers: the single source of truth shared by the API
  * (print guard) and the web (notices, gating, action buttons) so all three decisions
  * stay consistent.
  *
@@ -151,7 +151,7 @@ export type BridgeCrashState = 'healthy' | 'unstable' | 'looping'
 
 /**
  * Derive a bridge's crash state from its reported crash health. A crash only
- * counts while it is inside the rolling window — a bridge that crashed once and
+ * counts while it is inside the rolling window, a bridge that crashed once and
  * has been stable since reads as healthy again, so a stale count never pins the
  * UI to "unstable" forever.
  */
@@ -168,7 +168,7 @@ export function deriveBridgeCrashState(crash: BridgeCrashHealth, nowMs: number):
  * (snapshots of its identity file + library written to `BRIDGE_BACKUP_DIR`, a
  * directory outside its own data dir) and reports this status to the API, which
  * mirrors it into the bridge summary and broadcasts changes over the
- * `bridge.backup` WS event — same delivery shape as the debug-capture status.
+ * `bridge.backup` WS event: same delivery shape as the debug-capture status.
  * `configured` is false when the bridge has no backup directory set (or the
  * bridge predates the feature and never reports).
  */
@@ -285,7 +285,7 @@ export type BridgeStandaloneDownload = z.infer<typeof bridgeStandaloneDownloadSc
 /**
  * The origin a packaged bridge assumes when its config file names none.
  *
- * Baked into the standalone executable, so it cannot be varied per download —
+ * Baked into the standalone executable, so it cannot be varied per download:
  * the artifact is content-addressed and signed by CI, and rewriting it would
  * break the fingerprint the update mechanism compares. Shared so the server can
  * tell whether ITS origin is the one the binary would pick on its own.
@@ -301,7 +301,7 @@ export const bridgeStandaloneDownloadsResponseSchema = z.object({
    * Null is the ordinary cloud case and renders NO extra step: a customer
    * downloading from printstream.app gets a binary that is already correct, and
    * an instruction to configure what is already configured invites them to
-   * mistype it. Non-null is every other deployment — a staging host, and any
+   * mistype it. Non-null is every other deployment, a staging host, and any
    * self-hosted server, whose bridges would otherwise register with the cloud.
    */
   serverUrlOverride: z.string().url().nullable().default(null),
@@ -351,7 +351,7 @@ const FILE_NAME_ORIGIN_MARKER = '--from--'
  * cannot be dropped outright, though: a self-hosted server on plain http is
  * normal on a LAN, and assuming https there yields a bridge that cannot reach
  * its own server. Keeping the marker only for the exception buys the shorter
- * name without that failure — and, incidentally, still decodes the older
+ * name without that failure, and, incidentally, still decodes the older
  * `https--` names, which are on disks already.
  *
  * **A subdomain of the default host is written as its label alone**, so
@@ -359,7 +359,7 @@ const FILE_NAME_ORIGIN_MARKER = '--from--'
  * deployment of ours that is not production (production is the baked default and
  * is never stamped at all), which is the only case these names are routinely
  * read in. The suffix is DERIVED from the default server URL rather than written
- * out again, so the two cannot disagree — and anything that is not such a
+ * out again, so the two cannot disagree, and anything that is not such a
  * subdomain, notably a self-hoster's own domain, still carries its full host.
  * Without that fallback the short form would silently resolve
  * `printstream.acme.com` to `acme.printstream.app`.
@@ -378,7 +378,7 @@ export function encodeOriginForFileName(origin: string): string {
       if (label && !label.includes('.')) return label
     }
   } catch {
-    // Not parseable as a URL — fall through to the literal encoding, which the
+    // Not parseable as a URL: fall through to the literal encoding, which the
     // decoder will reject rather than turning into a plausible wrong origin.
   }
   const encoded = origin.replace('://', '--').replaceAll(':', '_')
@@ -391,7 +391,7 @@ export function decodeOriginFromFileName(token: string): string | null {
   // punycode label carries one, e.g. `xn--bcher-kva.de`), so only a leading
   // `http--`/`https--` can be the scheme separator.
   const explicitScheme = /^https?--/.test(token)
-  // A bare label — no scheme, no dot, no port — is a subdomain of the default
+  // A bare label, no scheme, no dot, no port, is a subdomain of the default
   // host. Checked before the full-host path because that path requires a dot,
   // which is exactly what distinguishes the two forms.
   const bareLabel = !explicitScheme && !token.includes('.') && !token.includes('_')
@@ -407,7 +407,7 @@ export function decodeOriginFromFileName(token: string): string | null {
     // that one is supplied, any junk word parses as a host. Require a dot on
     // that path so garbage stays garbage. Safe for the origins that reach it:
     // no CA issues certificates for single-label names, so an https origin
-    // always has one — and a single-label intranet host is necessarily http,
+    // always has one, and a single-label intranet host is necessarily http,
     // which takes the explicit branch above and is not checked here.
     if (!explicitScheme && !bareLabel && !url.hostname.includes('.')) return null
     return url.origin
@@ -422,7 +422,7 @@ export function decodeOriginFromFileName(token: string): string | null {
  * The filename is the one piece of provenance that survives everything the
  * installer does to the file: Windows' own Mark of the Web is deleted by setup
  * before it elevates (SmartScreen refuses to elevate a marked executable), so a
- * retry after a failed install has already lost it — and retrying is exactly
+ * retry after a failed install has already lost it, and retrying is exactly
  * what someone does after a failed install.
  */
 export function stampDownloadFileNameWithOrigin(fileName: string, origin: string): string {

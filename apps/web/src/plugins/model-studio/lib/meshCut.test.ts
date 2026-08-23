@@ -156,7 +156,7 @@ test('splitTriangleSoup separates disconnected shells, largest first', () => {
   combined.set(big, small.length)
   const parts = splitTriangleSoup(combined)
   assert.equal(parts.length, 2)
-  // Both shells come out intact (exact volumes, watertight), in either order —
+  // Both shells come out intact (exact volumes, watertight), in either order:
   // the largest-first sort is by triangle count and these tie at 12 triangles.
   const volumes = parts.map((part) => Math.round(signedVolume(part))).sort((a, b) => a - b)
   assert.deepEqual(volumes, [1000, 8000])
@@ -167,7 +167,7 @@ test('splitTriangleSoup separates disconnected shells, largest first', () => {
 })
 
 // USER-REPORTED DATA LOSS (2026-07-29): cutting an object lost its modifiers/blockers. A helper
-// volume is never geometrically cut — BambuStudio assigns it by bounding box and carries a volume
+// volume is never geometrically cut: BambuStudio assigns it by bounding box and carries a volume
 // that STRADDLES the plane onto BOTH halves (`ModelObject::process_modifier_cut`, Model.cpp). These
 // pin that rule; the editor's cut handler carries whatever they select onto each half.
 test('a helper volume entirely on one side of the cut goes to that side only', () => {
@@ -178,7 +178,7 @@ test('a helper volume entirely on one side of the cut goes to that side only', (
 })
 
 test('a helper volume straddling the cut is carried onto BOTH halves', () => {
-  // Not cut in half — each piece keeps the whole volume, because the region it describes is
+  // Not cut in half, each piece keeps the whole volume, because the region it describes is
   // meaningful to both. This is the case that silently vanished before.
   const straddling = boxSoup(0, 0, 5, 4, 4, 15)
   assert.deepEqual(helperVolumeCutSides(straddling, 'z', 10), { lower: true, upper: true })
@@ -205,7 +205,7 @@ test('an empty helper volume belongs to neither side', () => {
 test('a carried volume keeps its placement RELATIVE to the half it rides on', () => {
   // The invariant the whole carry rests on. The half's mesh is rebased by `rebaseTriangleSoup`, and
   // the carried volume is shifted by that SAME offset and re-attached with an identity transform
-  // into the same space — so their relative geometry is preserved exactly and there is no frame
+  // into the same space, so their relative geometry is preserved exactly and there is no frame
   // left to get wrong. Get this wrong and the modifier lands somewhere else, which is worse for the
   // user than losing it.
   const half = boxSoup(0, 0, 4, 10, 10, 14)      // not resting on the bed, so offset.z is non-zero

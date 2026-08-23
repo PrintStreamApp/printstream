@@ -8,7 +8,7 @@ import type { ReactNode } from 'react'
  *
  * Owns the Joy wiring (a `Dropdown` around a `ButtonGroup` of `Button` + `MenuButton`, with the
  * `Menu` as the Dropdown's second child so the group marks only its two buttons for corner radii)
- * and — the reason this is shared rather than hand-rolled per caller — the rule for the state
+ * and, the reason this is shared rather than hand-rolled per caller, the rule for the state
  * where the primary action is unavailable but the menu is not.
  *
  * Contract: `disabled` means the WHOLE control is unavailable (both halves grey, menu cannot
@@ -49,7 +49,7 @@ export function SplitButton({
   startDecorator?: ReactNode
   /** Spinner on the primary half. Joy treats a loading button as disabled. */
   loading?: boolean
-  /** The whole control is unavailable — both halves grey and the menu cannot open. */
+  /** The whole control is unavailable, both halves grey and the menu cannot open. */
   disabled?: boolean
   /** Only the primary action is unavailable; the menu stays reachable. */
   primaryDisabled?: boolean
@@ -86,7 +86,7 @@ export function SplitButton({
       </ButtonGroup>
       {/* The decorator rule pins the icon gutter for every item. Joy sizes a
           `ListItemDecorator` per MenuItem, and in practice it does NOT come out the
-          same for all of them — measured in this menu, the first item's decorator
+          same for all of them: measured in this menu, the first item's decorator
           took `--ListItemDecorator-size` (40px) while its siblings collapsed to 0,
           so identical markup rendered labels 20px apart. Declaring it once here
           means an item cannot be misaligned by what it happens to sit next to,
@@ -104,7 +104,7 @@ export function SplitButton({
   )
   // A disabled native button swallows hover events, so the tooltip has to sit on an element that
   // still receives them. It wraps the whole group rather than the primary half because a wrapper
-  // INSIDE the group would take the first/last-child corner radii that belong to the button —
+  // INSIDE the group would take the first/last-child corner radii that belong to the button,
   // hence the "phrase it as state" rule on `disabledReason`, since the live caret shows it too.
   if ((disabled || primaryDisabled) && disabledReason) {
     return (
@@ -125,7 +125,7 @@ export function SplitButton({
  * as two unrelated buttons instead of one with two entry points. Muting both halves keeps them at
  * one weight, and the emphasis returning is then a useful signal that the action is available.
  *
- * A fully `disabled` group keeps its own variant/color — Joy greys both halves anyway, so there is
+ * A fully `disabled` group keeps its own variant/color: Joy greys both halves anyway, so there is
  * no mismatch to correct, and rewriting it would make the two disabled states look different.
  */
 // eslint-disable-next-line react-refresh/only-export-components -- pure leaf rule colocated with its sole caller.

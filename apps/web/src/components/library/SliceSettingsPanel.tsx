@@ -113,9 +113,9 @@ export interface SliceSettingsController {
   selectedSlicerTargetId: string
   setSelectedSlicerTargetId: React.Dispatch<React.SetStateAction<string>>
   /**
-   * Set when the project was saved by a NEWER Bambu Studio than the selected engine — which
+   * Set when the project was saved by a NEWER Bambu Studio than the selected engine, which
    * BambuStudio refuses to open outright (exit 232). NOT rendered by this panel: the sidebar is
-   * too narrow for the warning + "slice it anyway" acknowledgement, so each host places it wide —
+   * too narrow for the warning + "slice it anyway" acknowledgement, so each host places it wide:
    * the plain slice dialog in its body, the editor as a banner under its title (the same spot as
    * the settings-repair notice). It rides the controller so the editor can reach it at all;
    * without that the editor showed only the disabled-reason tooltip, a dead end.
@@ -132,7 +132,7 @@ export interface SliceSettingsController {
     hasCapabilities: boolean
     capabilitiesError: string | null
     configured: boolean
-    /** Slicer is installed but not currently healthy (e.g. restarting) — show a wait, not an error. */
+    /** Slicer is installed but not currently healthy (e.g. restarting): show a wait, not an error. */
     slicerRestarting: boolean
     slicerDataReady: boolean
     profilesError: string | null
@@ -145,14 +145,14 @@ export interface SliceSettingsController {
   /**
    * Pick (or clear) the real printer to target. ONE action rather than the underlying
    * `printerId` + `targetMode` setters so a single user gesture stays a single undoable
-   * step in the editor — two wrapped setters would push two history frames and take two
+   * step in the editor, two wrapped setters would push two history frames and take two
    * Ctrl+Z to reverse. Same reason {@link selectPrinterModel} exists.
    */
   selectPrinter: (printer: Printer | null) => void
   selectedPrinterModel: string
   /**
    * Pick the manual printer model. Records it as the user's INTENT, which is what stops the
-   * derived target from steering it back — part of the same gesture, so it must not be a
+   * derived target from steering it back: part of the same gesture, so it must not be a
    * separate call the editor's undo wrapper cannot see.
    */
   selectPrinterModel: (model: string) => void
@@ -268,7 +268,7 @@ export interface SliceSettingsController {
    * Add/remove materials (Bambu-style). `desiredFilaments` is the full ordered filament
    * list to bake into the saved/sliced 3MF, or null when the user has not changed the
    * count (so unchanged projects don't rewrite project_settings.config). `onAddFilament`
-   * appends a slot from a material the user confirmed in the add dialog — nothing is created
+   * appends a slot from a material the user confirmed in the add dialog, nothing is created
    * until then; `onRemoveFilament` drops one (the UI disables removing the last). Only
    * surfaced in the editor ('editor' mode).
    */
@@ -282,7 +282,7 @@ export interface SliceSettingsController {
   onAddFilament: (choice: AddedMaterialChoice) => void
   onRemoveFilament: (projectFilamentId: number) => void
   /**
-   * Drag-reorder a material to an insertion gap (0..N, between-rows semantics — same conversion
+   * Drag-reorder a material to an insertion gap (0..N, between-rows semantics: same conversion
    * as the plate strip's `movePlate`). Slot NUMBERS are positional identity in the saved 3MF, so
    * the reorder is persisted by the next save renumbering the slots; session ids stay stable
    * meanwhile and row numbers are derived from position. Editor mode only, like add/remove.
@@ -290,7 +290,7 @@ export interface SliceSettingsController {
   onReorderFilament: (fromIndex: number, insertAt: number) => void
   /**
    * Whether a material is assigned to any object/part (the 3D editor supplies live usage).
-   * When it returns true the material can't be removed — BambuStudio parity. Absent → not gated.
+   * When it returns true the material can't be removed: BambuStudio parity. Absent → not gated.
    */
   filamentInUse?: (projectFilamentId: number) => boolean
   /**
@@ -300,7 +300,7 @@ export interface SliceSettingsController {
    */
   filamentSupportOnly?: (projectFilamentId: number) => boolean
   /**
-   * Purge-volume editing (`FlushVolumesDialog`) — the editor only, and only when the project has
+   * Purge-volume editing (`FlushVolumesDialog`): the editor only, and only when the project has
    * more than one material, mirroring BambuStudio, which shows its flushing button exactly when a
    * prime tower is in play. Null elsewhere, and the Materials header renders no button.
    *
@@ -335,7 +335,7 @@ export interface SliceSettingsController {
   /**
    * Notification from the editor's save flow that the project was just persisted with the
    * CURRENT material list (add/remove overlays baked into the file as slots 1..N). The
-   * controller uses it to rebase its session overlay onto the refreshed file — without it,
+   * controller uses it to rebase its session overlay onto the refreshed file, without it,
    * an added material appears twice after Save (once from the refetched base, once from the
    * still-pending overlay) until the editor is reopened.
    */
@@ -359,12 +359,12 @@ export interface SliceSettingsController {
    */
   resolveConfig?: ProcessConfigResolver
   /**
-   * How this host resolves a filament preset's config — the filament counterpart of `resolveConfig`.
+   * How this host resolves a filament preset's config: the filament counterpart of `resolveConfig`.
    * The library host passes `resolveWorkspaceFilamentConfig`, the public 3MF editor its anonymous one,
    * and either may pass `undefined` while its catalogue is still loading.
    *
    * REQUIRED (though nullable) on purpose. It was optional, and the library host simply never set
-   * it — which type-checked perfectly while disabling the editor's save-time preset resolution, so
+   * it, which type-checked perfectly while disabling the editor's save-time preset resolution, so
    * every library save silently kept dropping the material physics it was meant to restore. Being
    * required turns forgetting it into a compile error; passing `undefined` is still allowed, but
    * only deliberately.
@@ -388,7 +388,7 @@ export interface SliceSettingsController {
 export interface SliceConfigSnapshot {
   // Printer target. Just the user's PICKS: printer, model, nozzle, flow, plate. Everything else
   // about the target (machine profile, option lists, compatibility) re-derives from them, so it
-  // cannot be restored into an inconsistent combination — which is why the pre-S2 snapshot had to
+  // cannot be restored into an inconsistent combination, which is why the pre-S2 snapshot had to
   // carry "touched" flags alongside the values to put the defaulting effects back in the right mode.
   selectedSlicerTargetId: string
   machineTargetIntent: MachineTargetIntent
@@ -396,7 +396,7 @@ export interface SliceConfigSnapshot {
   /**
    * The session's own material list, or null while it still follows the file. Captured as a LIST
    * (not a delta over the file) so restoring it is exact even after a save rewrote the file's
-   * slots — that is what lets undo put a removed material back. See `SessionFilamentSlot`.
+   * slots, that is what lets undo put a removed material back. See `SessionFilamentSlot`.
    */
   sessionSlots: SessionFilamentSlot[] | null
   // Process
@@ -411,7 +411,7 @@ export interface SliceConfigSnapshot {
 
 /**
  * Shared slice-settings surface. `mode='simple'` renders the full set for the slim
- * prepare-print dialog — incl. the all/single-plate selector plus, below Materials
+ * prepare-print dialog, incl. the all/single-plate selector plus, below Materials
  * (mirroring the editor sidebar's order), the inline Objects list (print toggles +
  * per-object settings) and the per-plate filament-change/pause sections.
  * `mode='editor'` omits those: the 3D editor has its own plate strip and renders
@@ -430,7 +430,7 @@ export function SliceSettingsPanel({ controller, mode, onManagePresets, canEditP
    */
   onManagePresets?: () => void
   /**
-   * Whether stored presets can be read and written — i.e. there is a workspace behind this panel.
+   * Whether stored presets can be read and written: i.e. there is a workspace behind this panel.
    * Gates the printer-preset gear; the preset's NAME shows either way.
    *
    * A capability flag rather than the `onManagePresets`-style callback its siblings use, and
@@ -443,7 +443,7 @@ export function SliceSettingsPanel({ controller, mode, onManagePresets, canEditP
   /**
    * Status for a preset SOURCE the host wires up (today: the Bambu Cloud sync's "3 preset
    * updates available" chip). Passed as a node rather than rendered here for the same
-   * reason `onManagePresets` is a callback — only a host with a workspace has one. The
+   * reason `onManagePresets` is a callback, only a host with a workspace has one. The
    * public editor has no workspace and no plugin graph, so it passes nothing and this
    * renders nothing; a `PluginSlot` placed directly in this shared panel would reach into
    * both hosts, including that one.
@@ -455,7 +455,7 @@ export function SliceSettingsPanel({ controller, mode, onManagePresets, canEditP
    * A COMPONENT prop rather than a controller field, deliberately: this is project-FILE state the
    * editor owns in `EditorState` (removals are undoable and apply on save), not slicing config, and
    * the ~90-field controller is the wrong home for something only one host can act on. Un-defaulted
-   * like `onManagePresets` — the prepare-print dialog can see a project's presets but cannot save,
+   * like `onManagePresets`: the prepare-print dialog can see a project's presets but cannot save,
    * so it passes nothing and the section does not render.
    */
   embeddedPresets?: readonly EmbeddedProjectPreset[]
@@ -487,10 +487,10 @@ export function SliceSettingsPanel({ controller, mode, onManagePresets, canEditP
   // The inline Objects + per-plate G-code sections are simple-mode only: the 3D editor
   // renders its own object list and G-code sections after this panel.
   const showInlineObjects = mode === 'simple'
-  // Add/remove materials is an editing affordance (Bambu-style) — only in the editor.
+  // Add/remove materials is an editing affordance (Bambu-style), only in the editor.
   const showMaterialEditing = mode === 'editor'
   // Drag-reorder for the material rows (editor only, like add/remove). Items are POSITIONS in the
-  // ordered list — slot order is positional identity in the saved 3MF, so the drop hands the
+  // ordered list: slot order is positional identity in the saved 3MF, so the drop hands the
   // controller a (fromIndex, insertion gap) pair and the save renumbers the slots. Same pointer
   // state machine as the editor's plate strip, so touch gets hold-to-drag here too.
   const materialRowIndices = useMemo(() => projectFilaments.map((_unused, index) => index), [projectFilaments])
@@ -502,7 +502,7 @@ export function SliceSettingsPanel({ controller, mode, onManagePresets, canEditP
   const loadedMaterialsForAdd = targetMode === 'realPrinter' ? loadedMaterialOptions : []
   /**
    * A loaded material as a new slot's identity. Same three fields the add dialog produces (see
-   * `AddMaterialDialog`), so both paths create identical slots, plus the tray's toolhead — picking
+   * `AddMaterialDialog`), so both paths create identical slots, plus the tray's toolhead: picking
    * from the printer says which nozzle the material is on, which a manual pick does not.
    */
   const addedChoiceFromOption = (option: SliceMaterialOption): AddedMaterialChoice => ({
@@ -516,7 +516,7 @@ export function SliceSettingsPanel({ controller, mode, onManagePresets, canEditP
   // No printers means nothing to pick: an empty "Printer" autocomplete is noise in a workspace that
   // has not added one yet, and on a host that cannot have them at all (the public editor, where a
   // browser cannot reach a printer) it would be a control that can never do anything. Targeting a
-  // printer MODEL is separate and stays — it is what decides process compatibility.
+  // printer MODEL is separate and stays, it is what decides process compatibility.
   const showPrinterPicker = printers.length > 0
   // The target model is unresolved until the project's index says what it is (or, for a project
   // that names none, until the catalogue arrives and a default is chosen). Nothing guesses in the
@@ -559,7 +559,7 @@ export function SliceSettingsPanel({ controller, mode, onManagePresets, canEditP
       {!slicerStatus.capabilitiesLoading && slicerStatus.capabilitiesError && (
         <Alert color="danger" variant="soft" startDecorator={<ErrorOutlineRoundedIcon />}>{slicerStatus.capabilitiesError}</Alert>
       )}
-      {/* Slicer is installed but starting/restarting — keep the user waiting (the
+      {/* Slicer is installed but starting/restarting: keep the user waiting (the
           capabilities query polls and recovers) rather than showing a dead-end error. */}
       {!slicerStatus.capabilitiesLoading && !slicerStatus.capabilitiesError && slicerStatus.slicerRestarting && (
         <Stack direction="row" spacing={1} alignItems="center" sx={{ py: 2 }}>
@@ -578,7 +578,7 @@ export function SliceSettingsPanel({ controller, mode, onManagePresets, canEditP
           <Typography level="body-sm" textColor="text.secondary">Loading slicer data…</Typography>
         </Stack>
       )}
-      {/* When the slicer is restarting, the profile-load failure is transient — show the
+      {/* When the slicer is restarting, the profile-load failure is transient: show the
           wait above instead of the "reopen the editor" error. */}
       {slicerStatus.profilesError && !slicerStatus.slicerRestarting && (
         <Alert color="danger" variant="soft" startDecorator={<ErrorOutlineRoundedIcon />}>{slicerStatus.profilesError}</Alert>
@@ -695,7 +695,7 @@ export function SliceSettingsPanel({ controller, mode, onManagePresets, canEditP
           Which machine preset the selects above actually resolved to, and the way into its
           settings. Named rather than left implicit: Model + Nozzle + Flow pick a preset by
           cascade (`lib/machineTargetResolution.ts`), and until now nothing on screen said which
-          one won — so "edit the printer's settings" had no subject. Mirrors the Process and
+          one won, so "edit the printer's settings" had no subject. Mirrors the Process and
           Materials sections, where the gear always sits beside the preset it edits.
 
           The NAME shows in every host; the gear only where stored presets can be written, so the
@@ -709,7 +709,7 @@ export function SliceSettingsPanel({ controller, mode, onManagePresets, canEditP
               {selectedMachineProfile.name}
             </Typography>
             {canEditPrinterPreset && (
-              <Tooltip title={`Edit printer settings — ${selectedMachineProfile.name}`}>
+              <Tooltip title={`Edit printer settings: ${selectedMachineProfile.name}`}>
                 <span>
                   <IconButton
                     size="sm"
@@ -727,7 +727,7 @@ export function SliceSettingsPanel({ controller, mode, onManagePresets, canEditP
           </Stack>
         )}
         {/* A pick this target cannot represent. Sits with the controls it is about, and stays
-            visible while the conflict lasts — a toast would vanish while the wrong value remains
+            visible while the conflict lasts, a toast would vanish while the wrong value remains
             on screen. The pick itself is kept, so switching back restores it. */}
         {targetConflicts && targetConflicts.length > 0 && (
           <Stack spacing={0.5} sx={{ mt: 1 }}>
@@ -859,7 +859,7 @@ export function SliceSettingsPanel({ controller, mode, onManagePresets, canEditP
                 />
               </Box>
               <Tooltip title={selectedProcessProfile
-                ? (processChangedCount > 0 ? `Edit process settings — ${processChangedCount} changed vs preset` : 'Edit process settings')
+                ? (processChangedCount > 0 ? `Edit process settings: ${processChangedCount} changed vs preset` : 'Edit process settings')
                 : 'Choose a quality profile first'}
               >
                 <span>
@@ -888,14 +888,14 @@ export function SliceSettingsPanel({ controller, mode, onManagePresets, canEditP
             {/* Opens the picker; the slot is created only once a material is confirmed. */}
             {/* Beside Add material, not as a section of its own: this is an occasional housekeeping
                 trip into the project file, not something to keep on screen while choosing materials.
-                Hidden when the project carries none — most do — so it is never a dead affordance,
+                Hidden when the project carries none (most do), so it is never a dead affordance,
                 and the count makes its presence the information. */}
             {embeddedPresets && onRemoveEmbeddedPreset && embeddedPresets.length > 0 && (
               // Icon + count rather than a labelled button: spelled out it took ~160px of a
               // ~540px sidebar (narrower again in the prepare-print dialog) and pushed itself
               // and `Add material` into wrapping onto two lines each. The header cannot simply
-              // wrap — every header is a uniform height so pinned ones cover each other exactly
-              // (see StickySectionHeader) — so the SECONDARY control gets smaller. The count is
+              // wrap, every header is a uniform height so pinned ones cover each other exactly
+              // (see StickySectionHeader), so the SECONDARY control gets smaller. The count is
               // still the information, now as a badge, with the label in the tooltip.
               <Tooltip title={`Project presets (${embeddedPresets.length})`}>
                 <Badge badgeContent={embeddedPresets.length} size="sm" color="neutral" sx={{ ml: 'auto' }}>
@@ -1037,7 +1037,7 @@ export function SliceSettingsPanel({ controller, mode, onManagePresets, canEditP
                           // Padding is pinned on the BUTTONS, not through `& > *`: at that
                           // specificity Joy's own per-variant padding still won for the soft
                           // children (12px) while the solid one took the 8px, so choosing a nozzle
-                          // shrank the group by ~9px and the row jumped. Measured, not guessed —
+                          // shrank the group by ~9px and the row jumped. Measured, not guessed:
                           // the earlier note here blamed borders, which account for under 1.5px.
                           '& .MuiButton-root': { minWidth: 0, paddingInline: '8px' }
                         }}
@@ -1098,14 +1098,14 @@ export function SliceSettingsPanel({ controller, mode, onManagePresets, canEditP
                       const supportOnly = filamentSupportOnly?.(filament.projectFilamentId) ?? false
                       const removeDisabled = projectFilaments.length <= 1 || inUse
                       // `inUse` covers OBJECT references only. A material used just by a process
-                      // setting stays removable — the setting falls back to "Default" — so say so
+                      // setting stays removable, the setting falls back to "Default", so say so
                       // rather than leaving the user to guess what happens to their supports.
                       const removeTitle = projectFilaments.length <= 1
                         ? 'A project needs at least one material'
                         : inUse
-                          ? 'This material is used by an object — reassign it before removing'
+                          ? 'This material is used by an object: reassign it before removing'
                           : supportOnly
-                            ? 'Remove material — supports using it fall back to the default material'
+                            ? 'Remove material: supports using it fall back to the default material'
                             : 'Remove material'
                       return (
                         <Tooltip title={removeTitle}>
@@ -1151,7 +1151,7 @@ export function SliceSettingsPanel({ controller, mode, onManagePresets, canEditP
           {/* Below the list, not in the header: the header already carries Add material (and
               sometimes Project presets), and this is a per-PAIR setting that only means anything
               once you can see which materials the project has. BambuStudio places it the same way,
-              and gates it the same way — one material has nothing to purge into. */}
+              and gates it the same way, one material has nothing to purge into. */}
           {flushVolumes && projectFilaments.length > 1 && (
             <Box>
               <Button
@@ -1177,7 +1177,7 @@ export function SliceSettingsPanel({ controller, mode, onManagePresets, canEditP
                 return (
                   <ListItem key={object.id}>
                     <Stack direction="row" spacing={1} alignItems="center" sx={{ width: '100%', minWidth: 0 }}>
-                      <Tooltip title={printing ? `Will ${flow === 'print' ? 'print' : 'slice'} — toggle to skip` : 'Skipped — toggle to include'} variant="soft">
+                      <Tooltip title={printing ? `Will ${flow === 'print' ? 'print' : 'slice'}, toggle to skip` : 'Skipped, toggle to include'} variant="soft">
                         <Switch
                           size="sm"
                           checked={printing}
@@ -1279,7 +1279,7 @@ export function SliceSettingsPanel({ controller, mode, onManagePresets, canEditP
           context={flushVolumes.context}
           // The SESSION's materials, not the project's: a material added or reordered this session
           // is what the user is looking at, and it is what the save will bake. `isSupport` still
-          // comes from the project by slot — a material added this session has no stored flag, and
+          // comes from the project by slot, a material added this session has no stored flag, and
           // false is right for it.
           filaments={projectFilaments.map((filament, index): FlushGridFilament => ({
             slot: index + 1,
@@ -1323,7 +1323,7 @@ export function SliceSettingsPanel({ controller, mode, onManagePresets, canEditP
  * Material "tune" button + pre-open changed-values badge. Its own component (rather than inline in
  * the material row map) so the per-material resolve hook is legal; the badge counts how far the
  * material's FINAL sliced values (embedded config + session overrides) differ from the external
- * preset — same math as the FilamentSettingsDialog, so badge and dialog always agree.
+ * preset: same math as the FilamentSettingsDialog, so badge and dialog always agree.
  */
 function FilamentTuneButton(props: {
   filamentIndex: number
@@ -1348,7 +1348,7 @@ function FilamentTuneButton(props: {
     <SettingsTuneButton
       changedCount={changedCount}
       title={filamentProfileId
-        ? (changedCount > 0 ? `Edit filament settings — ${changedCount} changed vs preset` : 'Edit filament settings')
+        ? (changedCount > 0 ? `Edit filament settings: ${changedCount} changed vs preset` : 'Edit filament settings')
         : 'Choose a material profile first'}
       ariaLabel={`Edit filament settings for material ${filamentIndex + 1}`}
       disabled={!filamentProfileId || !slicerTargetId}

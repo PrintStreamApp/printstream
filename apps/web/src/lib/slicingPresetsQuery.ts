@@ -2,7 +2,7 @@
  * Shared React Query definition for the slicer profile catalogue.
  *
  * Used by the slice dialog's live query AND by views that PREFETCH the catalogue as soon
- * as the slicer is known healthy — so the "Loading slicer data…" wait happens in the
+ * as the slicer is known healthy, so the "Loading slicer data…" wait happens in the
  * background before the dialog opens, not while the user watches. One definition keeps
  * the query key, usability check, and retry/staleness behavior identical everywhere: a
  * prefetch with different options would either duplicate the cache entry or poison it
@@ -20,7 +20,7 @@ export const SLICING_PRESETS_STALE_TIME_MS = 5 * 60_000
  * Abort a catalogue fetch that produces nothing for this long. The response is the largest JSON
  * body the app loads (multi-MB), and a transport that wedges mid-body (the Vite dev proxy's
  * intermittent large-body stall; a dropped LB connection in prod) otherwise hangs the fetch
- * FOREVER — no error, so no retry, and the slice dialog sits on "Loading slicer data…" until
+ * FOREVER, no error, so no retry, and the slice dialog sits on "Loading slicer data…" until
  * closed (unmount aborts the fetch) and reopened (a fresh fetch succeeds). Timing out turns the
  * stall into an error React Query retries (×5 with backoff), so the dialog self-heals. Generous:
  * a healthy load takes a couple of seconds even on slow dev.
@@ -33,7 +33,7 @@ export function slicingPresetsQueryOptions(targetId: string) {
     queryFn: async ({ signal }: { signal?: AbortSignal }) => {
       const params = new URLSearchParams()
       params.set('targetId', targetId)
-      // Compose the query's cancel signal with the stall timeout (manual composition —
+      // Compose the query's cancel signal with the stall timeout (manual composition:
       // AbortSignal.any is still too new to rely on across the supported browsers).
       const controller = new AbortController()
       const onOuterAbort = () => controller.abort()
@@ -50,7 +50,7 @@ export function slicingPresetsQueryOptions(targetId: string) {
         // A stall-triggered abort must surface as a plain Error: React Query treats caller
         // aborts as cancellation (no retry), but a stalled transport should retry.
         if (stalled && !signal?.aborted) {
-          throw new Error('Loading slicing presets stalled — retrying.')
+          throw new Error('Loading slicing presets stalled: retrying.')
         }
         throw error
       } finally {
@@ -63,7 +63,7 @@ export function slicingPresetsQueryOptions(targetId: string) {
       // custom-only catalogue (Slice disabled; loaded materials mislabelled). Throw so
       // React Query retries with backoff instead of poisoning the cache.
       if (!slicingPresetsResponseIsUsable(result.profiles)) {
-        throw new Error('Couldn’t load slicing presets — the slicer may be restarting. Reopen the editor to try again.')
+        throw new Error('Couldn’t load slicing presets: the slicer may be restarting. Reopen the editor to try again.')
       }
       return result
     },

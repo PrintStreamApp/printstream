@@ -71,7 +71,7 @@ export function PlatformView({
   const canManagePlugins = bootstrapCapabilities?.canManagePlugins ?? false
   const canViewLogs = bootstrapCapabilities?.canViewLogs ?? false
   // The Notifications section exists when any notification channel runs on
-  // the platform surface (enabled or not — the panel's empty state guides
+  // the platform surface (enabled or not: the panel's empty state guides
   // enabling); deployments with none hide the section entirely.
   const hasPlatformNotificationChannels = useNotificationChannelEntries().availableChannels.length > 0
   // Cloud only: on self-hosted installs the same section lives in the

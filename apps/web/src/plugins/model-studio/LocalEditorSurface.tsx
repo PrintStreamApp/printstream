@@ -1,21 +1,21 @@
 /**
  * Mounts `EditorView` for an open local project, wiring the local seams plus the local slice-settings
  * controller. Kept separate from {@link LocalProjectEditor} so the controller's hooks (catalogue
- * queries, settings state) run only while a project is actually open — a hook cannot be called
+ * queries, settings state) run only while a project is actually open, a hook cannot be called
  * conditionally, so the "no project yet" branch must not host it.
  *
  * Slicing is deliberately NOT wired here (`onSlice` omitted): a browser cannot reach printers or the
- * slicer. With neither `onSlice` nor `onApply`, `EditorView`'s footer renders NO slice control at all
- * — not a disabled one — so the surface never advertises an action this host cannot perform.
- * Everything else — arrange, transform, materials, process presets, plate/nozzle/model — works
- * against the settings sidebar the controller feeds. The import seam differs in ONE way here — the
+ * slicer. With neither `onSlice` nor `onApply`, `EditorView`'s footer renders NO slice control at all,
+ * not a disabled one, so the surface never advertises an action this host cannot perform.
+ * Everything else, arrange, transform, materials, process presets, plate/nozzle/model, works
+ * against the settings sidebar the controller feeds. The import seam differs in ONE way here: the
  * local store has no library to import from, which `EditorView` reads off the store; formats are
  * the same on both hosts. Materials are derived by `EditorView` from the controller (no separate
  * `materials` prop), so a material pick or recolour in the sidebar updates the 3D view live.
  *
  * This host renders the three surfaces that have no still-mounted slice dialog to render them from:
  * the global process tune dialog, the per-material tune dialog, and the slicing-preset manager. The
- * manager is the BROWSER-STORAGE one — the workspace manager's every request needs a workspace, so
+ * manager is the BROWSER-STORAGE one: the workspace manager's every request needs a workspace, so
  * handing the editor that one is what made "Manage" report a permission error here.
  */
 import { Suspense, lazy, useCallback, useMemo, useRef } from 'react'
@@ -109,7 +109,7 @@ export function LocalEditorSurface({ project, projectFile, importStore, archiveR
         // Straight off the in-tab parse: this host has no library DTO to read them from, and the
         // reasons are a pure function of the project's settings. Without them a file opened from
         // disk showed no warning at all, even though `filamentPhysics` is precisely the defect this
-        // host CAN fix — its save resolves presets and writes the values back.
+        // host CAN fix, its save resolves presets and writes the values back.
         repairReasons={project.index.settingsRepairReasons}
         presetManager={presetManager}
         hosting="page"
@@ -144,7 +144,7 @@ export function LocalEditorSurface({ project, projectFile, importStore, archiveR
         const option = controller.materialOptions.find(
           (entry) => entry.id === controller.filamentMaterialOptionIds[filamentSettingsFilamentId]
         )
-        // Resolve the material's slicing-preset id the same way the tune button does — see the
+        // Resolve the material's slicing-preset id the same way the tune button does: see the
         // button in SliceSettingsPanel. No id means nothing to base an edit on.
         const profileId = option?.profileId
           ?? (option?.id.startsWith('profile:') ? option.id.slice('profile:'.length) : null)

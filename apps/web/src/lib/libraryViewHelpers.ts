@@ -152,7 +152,7 @@ export function humanizeProjectName(value: string): string {
  *
  * `plateCount` suppresses the NUMBERED fallback on a single-plate project: "Plate 1" is noise
  * there, since it distinguishes nothing. An explicitly NAMED plate still shows even when it is the
- * only one — the user named it on purpose, so it carries information a number does not.
+ * only one: the user named it on purpose, so it carries information a number does not.
  */
 export function buildSlicedPlateLabel(
   plateName: string | null | undefined,
@@ -268,7 +268,7 @@ export function filamentsForMapping(
  * The filaments to offer for AMS mapping on the print dialog.
  *
  * For a SLICED plate, `slice_info.config` lists exactly the filaments the plate
- * consumes, so we narrow the project palette to those (`usedIds`) — a multi-plate
+ * consumes, so we narrow the project palette to those (`usedIds`), a multi-plate
  * project then shows only the selected plate's filaments.
  *
  * For an UNSLICED plate, `usedIds` is only a geometry estimate built from each
@@ -276,7 +276,7 @@ export function filamentsForMapping(
  * NOT colour-PAINTED filaments (paint lives in the mesh, not the extruder field).
  * Filtering by that estimate would hide a painted secondary colour (e.g. black on
  * a white base) and make it un-mappable, so we fall back to the full project
- * palette — matching what the editor and Bambu Studio show.
+ * palette: matching what the editor and Bambu Studio show.
  */
 export function visibleMappingFilaments(
   filaments: ThreeMfProjectFilament[],
@@ -331,7 +331,7 @@ export function buildPrinterTrayGroups(status: PrinterStatus | undefined): Print
   for (const unit of status.ams) {
     const groupLabel = `AMS ${amsUnitLetter(unit.unitId)}`
     // A unit behind a Filament Track Switch feeds EITHER nozzle, so it must not
-    // carry a nozzle binding into the pickers — `filterTrayGroupsForFilament`
+    // carry a nozzle binding into the pickers: `filterTrayGroupsForFilament`
     // would otherwise hide it from the nozzle it can also reach.
     const unitNozzleId = effectiveAmsNozzleId(unit)
     groups.push({
@@ -514,7 +514,7 @@ export type CreateSlicingJobBodyExtras = {
  * Every slice/print entry point (library, printers, orders, print queue) emits the same
  * `SliceFileSubmitInput`; funnelling them all through this one builder keeps the wire shape in
  * lockstep. Hand-building the body per call site is how the printers flow silently dropped
- * `selectedObjectIds` and printed deselected objects — the object-selection, per-object override,
+ * `selectedObjectIds` and printed deselected objects: the object-selection, per-object override,
  * and `sceneEdit` fields are fixed here so no caller can omit them again. The genuinely per-caller
  * differences (archived source version, output destination, hidden-output rule) are passed as
  * `extras`.

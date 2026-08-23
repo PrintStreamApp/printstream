@@ -138,7 +138,7 @@ workspaceStatsRouter.get('/', async (request, response) => {
     }
   ] satisfies WorkspaceStatsResponse['quickStartItems']
   // Managed-bridge installs own the bundled bridge themselves, so the operator
-  // never "connects" one — drop that onboarding step.
+  // never "connects" one: drop that onboarding step.
   const quickStartItems = isManagedBridgeMode()
     ? allQuickStartItems.filter((item) => item.id !== 'connect-bridge')
     : allQuickStartItems

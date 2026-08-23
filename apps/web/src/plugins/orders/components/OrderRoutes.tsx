@@ -1,9 +1,9 @@
 /**
  * Route-level components for the orders plugin.
  *
- * Owns the three section routes mounted by `OrdersView` — the orders list
+ * Owns the three section routes mounted by `OrdersView`, the orders list
  * (`OrdersListRoute`), the templates list (`TemplatesListRoute`), and the
- * single-order detail (`OrderDetailRoute`) — plus the shared `OrdersTableSection`
+ * single-order detail (`OrderDetailRoute`), plus the shared `OrdersTableSection`
  * that renders an active/completed orders table (toolbar, pagination, and order
  * cards). These compose the shared leaves from `./OrderShared`, the cards from
  * `./OrderCards`, and the pure transforms from `../ordersViewHelpers`.
@@ -261,7 +261,7 @@ export function TemplatesListRoute({
   onTemplateSearchChange: (value: string) => void
   onTemplatesPageChange: (page: number) => void
   onTemplatesPageSizeChange: (value: number) => void
-  /** Returns to the orders list — this route is a nested view of it, not a peer tab. */
+  /** Returns to the orders list, this route is a nested view of it, not a peer tab. */
   onBack: () => void
   onCreateTemplate: () => void
   onCreateOrder: (template: OrderTemplate) => void
@@ -472,7 +472,7 @@ export function OrdersTableSection({
   icon: ReactNode
   title: string
   description: string
-  /** Total orders in this bucket, unfiltered — the search/sort state below is not part of the label. */
+  /** Total orders in this bucket, unfiltered: the search/sort state below is not part of the label. */
   count: number
   orders: Order[]
   visibleOrders: Order[]

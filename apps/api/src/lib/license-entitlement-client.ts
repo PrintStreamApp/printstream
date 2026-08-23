@@ -8,10 +8,10 @@
  * a cloud workspace just adds a printer and is metered. This closes that gap:
  * adding a printer past the covered count asks the cloud to raise the
  * entitlement, the cloud bills the difference, and the printer is allowed in the
- * same request — the same experience, with the money handled the same way.
+ * same request, the same experience, with the money handled the same way.
  *
  * **The install asks; the cloud decides.** The count is not sent as a fact to be
- * trusted — `maxPrinters` only moves once Paddle has taken the money, and it
+ * trusted: `maxPrinters` only moves once Paddle has taken the money, and it
  * comes back signed. That ordering is what makes the whole scheme work on the
  * Docker/OSS build, where this file is open source and a self-reported number
  * would mean nothing.
@@ -22,7 +22,7 @@
  * their fleet.
  *
  * Failure posture: a refusal or a network error leaves the install exactly as it
- * was — the previous entitlement still applies, and the caller surfaces why. It
+ * was: the previous entitlement still applies, and the caller surfaces why. It
  * must never fail open (that would sell nothing) and never fail destructively
  * (a cloud outage must not shrink a running farm).
  *
@@ -53,7 +53,7 @@ const UNREACHABLE: EntitlementChangeResult = {
  * `printers` is the TOTAL the install wants covered, never a delta: this call
  * charges a card, and a retry after a lost response must not charge twice.
  *
- * Returns `unchanged` when the subscription already covered that many — a
+ * Returns `unchanged` when the subscription already covered that many, a
  * success, not a no-op to be retried.
  */
 export async function requestLicensedPrinters(printers: number): Promise<EntitlementChangeResult> {
@@ -102,7 +102,7 @@ export async function requestLicensedPrinters(printers: number): Promise<Entitle
       }
       // The enforcement cache is NOT dropped here on purpose: doing so would
       // make this module import `license-enforcement.ts`, which registers the
-      // quota hook that calls this one. Callers invalidate instead — see the
+      // quota hook that calls this one. Callers invalidate instead: see the
       // `applied` handling in `registerLicenseEnforcement` and the license route.
     }
     return { outcome: parsed.data.outcome, maxPrinters: parsed.data.maxPrinters, message: null }

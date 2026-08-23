@@ -75,7 +75,7 @@ function rectsOverlap(a: ReturnType<typeof movedBounds>, b: ReturnType<typeof mo
 test('a partial arrange never leaves items overlapping', () => {
   // A fills the left side; B sits on the right with too little room to repack both
   // with clearance. The old packer ignored not-yet-placed items, so it moved A to
-  // the plate centre and then left the unfittable B "in place" — overlapping A.
+  // the plate centre and then left the unfittable B "in place": overlapping A.
   const a = rectCells(0, 0, 60, 60)
   const b = rectCells(64, 0, 100, 60)
   const result = arrangePlateItems(
@@ -99,7 +99,7 @@ test('blocked cells are never covered', () => {
 
 test('shiftFootprintCells translates cells by whole cells, matching a re-rasterization of the moved shape', () => {
   // The placement-warning recompute relies on this: a pure move keeps the footprint SHAPE, so
-  // shifting the cached cells must equal rasterizing the shape at the new position — the difference
+  // shifting the cached cells must equal rasterizing the shape at the new position: the difference
   // between a smooth and a frozen drop for a many-part object.
   const shape = new Set(rectCells(10, 10, 30, 24))
   const dCellX = 15

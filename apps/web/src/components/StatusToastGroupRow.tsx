@@ -1,5 +1,5 @@
 /**
- * One item inside a `StatusToastGroup`: collapsed it is a single line — name,
+ * One item inside a `StatusToastGroup`: collapsed it is a single line: name,
  * status word, its own actions, and a hairline progress bar while it runs;
  * expanded it adds the secondary line, the error, and whatever detail node the
  * surface passed.
@@ -20,7 +20,7 @@ import { StatusToastIconAction } from './StatusToast'
 
 export interface StatusToastGroupItem {
   id: string
-  /** Primary one-line label — usually the file name. */
+  /** Primary one-line label: usually the file name. */
   title: string
   /** Short status word rendered beside the title (`Sending`, `Failed`). */
   statusLabel: string
@@ -29,7 +29,7 @@ export interface StatusToastGroupItem {
   active: boolean
   /** Percent 0-100, or `null` while running with no reported extent. */
   progress: number | null
-  /** Secondary line (printer, bytes, phase) — shown when the item is expanded. */
+  /** Secondary line (printer, bytes, phase): shown when the item is expanded. */
   summary?: string
   error?: string | null
   /** Compact icon actions for the row (cancel, retry); always visible. */

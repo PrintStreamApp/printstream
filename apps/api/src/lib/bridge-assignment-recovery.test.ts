@@ -144,7 +144,7 @@ test('does not re-home the library while the drained bridge still owns printers'
   rootPrisma.printer.updateMany = ((async () => ({ count: 1 })) as unknown) as typeof rootPrisma.printer.updateMany
   printerManager.update = (() => {}) as typeof printerManager.update
 
-  // A printer still lives on the old bridge (it merely roamed) — leave its library put.
+  // A printer still lives on the old bridge (it merely roamed): leave its library put.
   rootPrisma.printer.count = ((async () => 1) as unknown) as typeof rootPrisma.printer.count
   rootPrisma.libraryFile.updateMany = (() => { throw new Error('library must not be re-homed') }) as typeof rootPrisma.libraryFile.updateMany
 

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { LibraryFile, SlicingPresetSummary, ThreeMfFilament, ThreeMfIndex, ThreeMfProjectFilament } from '@printstream/shared'
 import { resolveInitialManualPrinterModel, isProcessProfileCompatible, buildFilamentMappings, buildBakedFilamentProfileSelection, buildProcessFilamentChoices, buildProjectSlicingPresets, buildSliceDialogProjectFilaments, plateModelFilamentIds, buildProfileMaterialOptionId, buildRedundantProjectPresetCandidates, buildSliceMaterialOptions, filterSliceMaterialOptions, isFilamentProfileCompatible, repointMaterialOptionToCompatibleAlias, narrowMaterialOptions, resolveProfileMaterialType, slicingPresetsResponseIsUsable, type SliceMaterialOption } from './slicingPresetMatching'
+import { formatSlicingPresetBrandedName, formatSlicingPresetDisplayName } from './slicingPresetSelection'
 
 function materialOption(overrides: Partial<SliceMaterialOption> & { id: string }): SliceMaterialOption {
   return {
@@ -97,7 +98,7 @@ function plate(index: number, filamentIds: number[]): ThreeMfIndex['plates'][num
   }
 }
 
-/** A plate with no slice metadata — its filament list is only a geometry estimate. */
+/** A plate with no slice metadata, its filament list is only a geometry estimate. */
 function unslicedPlate(index: number, filamentIds: number[]): ThreeMfIndex['plates'][number] {
   return { ...plate(index, filamentIds), weight: null, prediction: null }
 }
@@ -440,7 +441,7 @@ test('a model PLA preset stays out of the PLA-S bucket', () => {
 })
 
 // A 3MF's own support filament carries `filament_is_support` per slot, so the project
-// preset it synthesizes must be typed PLA-S too — otherwise the project's own material
+// preset it synthesizes must be typed PLA-S too, otherwise the project's own material
 // disappears from its own picker.
 test("a project 3MF's support filament synthesizes a preset typed PLA-S", () => {
   const bakedIndex = {
@@ -469,7 +470,7 @@ test('a preset known only by name still derives the support display type', () =>
 /**
  * A project's own process preset is normally the basis for that project and stays selectable. The
  * exception is a real MACHINE change: process values like speed, acceleration, and cooling are
- * machine-tuned, and retargeting rewrites machine-owned keys only — so an A1-authored process left
+ * machine-tuned, and retargeting rewrites machine-owned keys only, so an A1-authored process left
  * selected on an H2D would slice with A1 values, which is what Ryan hit changing A1 -> H2D.
  */
 function projectProcess(name: string): SlicingPresetSummary {
@@ -579,7 +580,7 @@ test('a preset declaring only the A1 mini is not offered for an A1', () => {
 
 // Switching printer model silently reverted a material the user had chosen: the pick's preset was
 // built for the old machine, so it left the compatible catalogue, the reconcile dropped it, and the
-// slot re-seeded from the FILE — "Bambu PLA Basic" chosen on a P1P became the project's original
+// slot re-seeded from the FILE: "Bambu PLA Basic" chosen on a P1P became the project's original
 // "Generic PLA" on an A1. BambuStudio hands over to the same ALIAS instead
 // (PreferedFilamentsProfileMatch scores a matching alias at INT_MAX).
 test('a material pick hands over to the same product built for the new machine', () => {
@@ -610,6 +611,55 @@ test('a material pick hands over to the same product built for the new machine',
   )
 })
 
+// The handover has to survive the two ways the SAME preset reaches this function with different
+// metadata: an installed profile declares `filament_vendor`, a project preset minted from a 3MF
+// declares none. Both display formatters consult that field and so brand the two sides differently
+// -- in OPPOSITE directions, which is why one vendor alone could never have caught it. BambuStudio's
+// alias consults no vendor at all: `Preset.cpp` truncates the preset name at the first `@` and trims
+// (`set_custom_preset_alias`), so it is symmetric by construction.
+test('a material pick hands over whichever way the preset names its vendor', () => {
+  // Polymaker: the brand is NOT the first word, so the branded form prefixes it on the installed
+  // side ("Polymaker PolyLite PLA") and cannot on the project side ("PolyLite PLA").
+  const projectPoly: SlicingPresetSummary = {
+    id: 'project:filament:PolyLite%20PLA%20%40BBL%20H2D', source: 'custom', kind: 'filament',
+    name: 'PolyLite PLA @BBL H2D', filamentType: 'PLA'
+  }
+  const installedPolyA1: SlicingPresetSummary = {
+    id: 'builtin:filament:polylite-pla-a1', source: 'builtin', kind: 'filament',
+    name: 'PolyLite PLA @BBL A1', filamentType: 'PLA', filamentVendor: 'Polymaker',
+    compatiblePrinters: ['Bambu Lab A1 0.4 nozzle']
+  }
+  assert.equal(
+    repointMaterialOptionToCompatibleAlias(
+      buildProfileMaterialOptionId(projectPoly.id),
+      [projectPoly, installedPolyA1],
+      buildSliceMaterialOptions([installedPolyA1], [])
+    ),
+    buildProfileMaterialOptionId(installedPolyA1.id)
+  )
+
+  // Bambu: the brand IS the first word, so the display form STRIPS it on the installed side
+  // ("PLA Basic") and cannot on the project side ("Bambu PLA Basic"). Swapping one formatter for
+  // the other would fix the case above and break this one.
+  const projectBambu: SlicingPresetSummary = {
+    id: 'project:filament:Bambu%20PLA%20Basic%20%40BBL%20P1P', source: 'custom', kind: 'filament',
+    name: 'Bambu PLA Basic @BBL P1P', filamentType: 'PLA'
+  }
+  const installedBambuA1: SlicingPresetSummary = {
+    id: 'builtin:filament:pla-basic-a1', source: 'builtin', kind: 'filament',
+    name: 'Bambu PLA Basic @BBL A1', filamentType: 'PLA', filamentVendor: 'Bambu Lab',
+    compatiblePrinters: ['Bambu Lab A1 0.4 nozzle']
+  }
+  assert.equal(
+    repointMaterialOptionToCompatibleAlias(
+      buildProfileMaterialOptionId(projectBambu.id),
+      [projectBambu, installedBambuA1],
+      buildSliceMaterialOptions([installedBambuA1], [])
+    ),
+    buildProfileMaterialOptionId(installedBambuA1.id)
+  )
+})
+
 test('the material picker searches brand and literal preset name, not just the displayed alias', () => {
   const builtin: SlicingPresetSummary = {
     id: 'builtin:filament:pla-basic-a1', source: 'builtin', kind: 'filament',
@@ -621,7 +671,7 @@ test('the material picker searches brand and literal preset name, not just the d
   const displayed = options.find((option) => option.id === buildProfileMaterialOptionId(builtin.id))!
 
   // The label is the ALIAS ("PLA Basic") with the vendor stripped, so a brand query used to match
-  // nothing among built-ins — which is what a separate Brand dropdown existed to work around.
+  // nothing among built-ins, which is what a separate Brand dropdown existed to work around.
   assert.equal(displayed.label, 'PLA Basic')
   assert.equal(filterSliceMaterialOptions(options, 'bambu', '').length, 2)
   // Terms are ANDed, so more words narrow.
@@ -648,7 +698,7 @@ test('a query equal to the current selection lists every option, not just that o
   assert.equal(filterSliceMaterialOptions(options, 'Bambu PLA Matte', 'Bambu PLA Basic').length, 1)
 })
 
-// Only a project preset with an installed twin is worth comparing — and the twin is found by ALIAS,
+// Only a project preset with an installed twin is worth comparing, and the twin is found by ALIAS,
 // since the 3MF names "Bambu PETG HF" while the catalogue carries "Bambu PETG HF @BBL H2D 0.4
 // nozzle". Matching raw names made every project preset a non-candidate, so none was ever checked.
 test('redundant-project-preset candidates match the installed twin by alias', () => {
@@ -694,6 +744,74 @@ test('redundant-project-preset candidates still match when the slot carries its 
     buildRedundantProjectPresetCandidates(projectProfiles, [installed], index),
     [{ filamentProfileId: projectProfiles[0]!.id, projectFilamentId: 1 }]
   )
+})
+
+// A THIRD-PARTY preset whose vendor is not the first word of its name. The alias is a display
+// form: it prefixes the vendor, which an installed preset knows from `filament_vendor` and a
+// project preset (minted from the 3MF, which records no vendor) cannot. So the two sides brand
+// the SAME preset differently -- installed "Polymaker PolyLite PLA" against project "PolyLite
+// PLA" -- and the twin was never found. Bambu hid it: "Bambu PLA Basic" already starts with its
+// brand, so both sides agree and every fixture here happened to be Bambu.
+//
+// The consequence was not cosmetic. Never nominated means never checked, so the project preset
+// stayed in the catalogue, shadowed its installed twin under the same label, and carried the
+// `profileId: null` every project preset carries -- which is what the filament-physics repair
+// resolves through. A Polymaker slot could therefore not be repaired at all: the defect blocked
+// its own fix. Match the RAW name too, which is what BambuStudio binds on
+// (`find_preset_internal(original_name)`, an exact lookup with no branding applied).
+test('redundant-project-preset candidates match a twin whose vendor is not its name prefix', () => {
+  const installed: SlicingPresetSummary = {
+    id: 'builtin:filament:polylite-pla-h2d', source: 'builtin', kind: 'filament',
+    name: 'PolyLite PLA @BBL H2D', filamentType: 'PLA', filamentVendor: 'Polymaker'
+  }
+  const index = {
+    projectFilaments: [{
+      id: 1,
+      filamentName: 'PolyLite PLA',
+      filamentPresetName: 'PolyLite PLA @BBL H2D',
+      filamentType: 'PLA',
+      color: null,
+      nozzleId: null,
+      chamberTemperature: null
+    }]
+  } as unknown as ThreeMfIndex
+  const projectProfiles = buildProjectSlicingPresets(index, 'filament')
+
+  assert.deepEqual(
+    buildRedundantProjectPresetCandidates(projectProfiles, [installed], index),
+    [{ filamentProfileId: projectProfiles[0]!.id, projectFilamentId: 1 }]
+  )
+  // Still nothing to fall back to when the catalogue does not carry that preset at all.
+  assert.deepEqual(buildRedundantProjectPresetCandidates(projectProfiles, [], index), [])
+})
+
+// Closing the asymmetry at SOURCE rather than at each comparison: the 3MF records `filament_vendor`
+// per slot, so a minted project preset now declares the same vendor its installed twin does and the
+// two brand identically. Asserted on the FORMATTER, because that is the thing that consulted the
+// missing field; every comparison built on it inherits the fix, and a future one cannot reintroduce
+// the split by reaching for the branded name again.
+test('a project preset brands identically to its installed twin, both vendors', () => {
+  const index = {
+    projectFilaments: [
+      { id: 1, filamentName: 'PolyLite PLA', filamentPresetName: 'PolyLite PLA @BBL H2D', filamentVendor: 'Polymaker', filamentType: 'PLA', color: null, nozzleId: null, chamberTemperature: null },
+      { id: 2, filamentName: 'Bambu PLA Basic', filamentPresetName: 'Bambu PLA Basic @BBL H2D', filamentVendor: 'Bambu Lab', filamentType: 'PLA', color: null, nozzleId: null, chamberTemperature: null }
+    ]
+  } as unknown as ThreeMfIndex
+  const [projectPoly, projectBambu] = buildProjectSlicingPresets(index, 'filament')
+  const installedPoly: SlicingPresetSummary = {
+    id: 'builtin:filament:polylite-pla-h2d', source: 'builtin', kind: 'filament',
+    name: 'PolyLite PLA @BBL H2D', filamentType: 'PLA', filamentVendor: 'Polymaker'
+  }
+  const installedBambu: SlicingPresetSummary = {
+    id: 'builtin:filament:pla-basic-h2d', source: 'builtin', kind: 'filament',
+    name: 'Bambu PLA Basic @BBL H2D', filamentType: 'PLA', filamentVendor: 'Bambu Lab'
+  }
+
+  assert.equal(formatSlicingPresetBrandedName(projectPoly!), formatSlicingPresetBrandedName(installedPoly))
+  assert.equal(formatSlicingPresetBrandedName(projectBambu!), formatSlicingPresetBrandedName(installedBambu))
+  // And the display form too, which strips rather than prepends: it was wrong the other way round.
+  assert.equal(formatSlicingPresetDisplayName(projectPoly!), formatSlicingPresetDisplayName(installedPoly))
+  assert.equal(formatSlicingPresetDisplayName(projectBambu!), formatSlicingPresetDisplayName(installedBambu))
 })
 
 // Two slots whose presets differ only past the `@` are TWO presets. Minting them
@@ -775,7 +893,7 @@ function unslicedPetgPlaIndex(): ThreeMfIndex {
 
 test('plateModelFilamentIds excludes the support-referenced slot on an UNSLICED plate', () => {
   // The unsliced estimate attributes the interface slot to opted-in objects (plate 3 lists it),
-  // and `usedOnSelectedPlate` treats every material as used when no plate is sliced — both of
+  // and `usedOnSelectedPlate` treats every material as used when no plate is sliced, both of
   // which wrongly broke homogeneity for the issue-#79 repro file.
   assert.deepEqual([...plateModelFilamentIds(unslicedPetgPlaIndex(), 3) ?? []].sort(), [1, 2])
   assert.deepEqual([...plateModelFilamentIds(unslicedPetgPlaIndex(), 1) ?? []].sort(), [1])
@@ -799,7 +917,7 @@ test('plateModelFilamentIds excludes filament_is_support slots even when the pla
 
 test('plateModelFilamentIds never subtracts down to an empty set', () => {
   // A single-colour project whose one colour is ALSO set as the support base: the referenced
-  // slot is the only candidate, so it IS the model material — dropping it would silently
+  // slot is the only candidate, so it IS the model material: dropping it would silently
   // disable the recommendation for exactly the projects that configured support.
   const index = {
     projectFilaments: [{ id: 1, filamentType: 'PETG', filamentName: 'PETG', isSupport: false }],

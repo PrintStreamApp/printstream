@@ -51,7 +51,7 @@ test('parseReport extracts ota as firmwareVersion and every module as firmwareMo
 test('parseReport resolves AMS unit type from the info DevAmsType code', () => {
   // `info` bits 0-3 carry the DevAmsType code: 1 = classic AMS, 4 = N3S (AMS HT).
   // The H2C/H2D number AMS HT units from 128, and their global tray index is the
-  // unit id itself — so the type must survive onto the normalized unit.
+  // unit id itself, so the type must survive onto the normalized unit.
   const delta = parseReport(
     {
       print: {
@@ -280,7 +280,7 @@ test('parseReport derives AmsUnit.switchInput from info bits 24-27 when routed v
 })
 
 test('parseReport reports an unmeasurable remain as unknown rather than empty', () => {
-  // Firmware sends `remain: -1` for any spool it cannot weigh — every third-party and
+  // Firmware sends `remain: -1` for any spool it cannot weigh, every third-party and
   // manually-set one. Clamping that to 0 made the whole AMS read as empty spools, so the
   // print dialogs marked every hand-set slot as too low to finish anything.
   const delta = parseReport(
@@ -342,7 +342,7 @@ const slotOf = (delta: ReturnType<typeof parseReport>, slotId: number) =>
 test('parseReport clears a removed AMS slot whose tray object is absent from the delta', () => {
   // A delta usually carries only the trays it has something to say about. The removal
   // is announced by dropping slot 2's exist bit ('f' -> 'b'), and slot 2's tray object
-  // is simply not in the payload — so the bits are the ONLY signal that it is gone.
+  // is simply not in the payload, so the bits are the ONLY signal that it is gone.
   const delta = parseReport(
     {
       print: {
@@ -399,7 +399,7 @@ test('parseReport leaves every slot alone when a delta carries no exist bits', (
 
 test('parseReport reads a shortened exist bitmap as the higher units being empty', () => {
   // `tray_exist_bits` is one device-wide bitmap on `print.ams`, and Bambu omits its
-  // leading zeroes — so '1f' means unit 1 slot 0 is loaded, and a later 'f' means it
+  // leading zeroes, so '1f' means unit 1 slot 0 is loaded, and a later 'f' means it
   // is not. This is the assumption the sweep rests on; pin it so a firmware that
   // reports per-unit bitmaps instead would fail here rather than silently wiping a unit.
   const both = parseReport(

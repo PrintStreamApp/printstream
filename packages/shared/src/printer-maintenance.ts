@@ -4,19 +4,19 @@
  *
  * Owns two things and nothing else:
  *
- * 1. The **catalog** — a set of named schedules plus a model-key -> schedule map.
+ * 1. The **catalog**, a set of named schedules plus a model-key -> schedule map.
  *    Every interval here is copied from Bambu's own wiki page for that model
  *    (each schedule carries the `wikiUrl` it came from). Nothing is invented: a
  *    job Bambu describes only by symptom ("when squeaking", "when under-
  *    extruding") is either omitted or carries no interval, because a made-up
  *    number reads exactly like a sourced one once it is on screen.
- * 2. The **due math** — `evaluateMaintenanceTask`, which turns a task
+ * 2. The **due math**: `evaluateMaintenanceTask`, which turns a task
  *    definition + the user's overrides + the last completion into a status.
  *
  * Contract for callers: a task can be driven by up to three interval kinds
  * (calendar days, print hours, filament kilograms) and is due when the FIRST of
- * them elapses. Bambu states the trigger in different units per job — "every
- * three months", "every 200 print hours", "every 3 rolls" — and one roll is one
+ * them elapses. Bambu states the trigger in different units per job, "every
+ * three months", "every 200 print hours", "every 3 rolls", and one roll is one
  * kilogram, which is why filament mass is a first-class trigger rather than a
  * spool counter. Usage triggers read `PrinterStats`, whose filament totals are
  * null when no print recorded filament use, so a trigger whose metric is
@@ -28,7 +28,7 @@
  * `PRINTER_MAINTENANCE_SCHEDULES`. `printer-maintenance.test.ts` fails when a
  * key in `KNOWN_BAMBU_PRINTER_MODEL_KEYS` has no mapping, so a model added to
  * `bambu-model-keys.ts` cannot silently ship with no schedule. Until a model is
- * classified — and for any printer that is not a recognized Bambu at all — the
+ * classified, and for any printer that is not a recognized Bambu at all, the
  * `generic` schedule stands in; it is flagged `generic: true` so the UI can say
  * plainly that the intervals are not model-specific.
  *
@@ -57,14 +57,14 @@ export interface MaintenanceTaskDefinition {
   /**
    * Bambu's wording for the interval, shown verbatim. Their guidance is often a
    * range ("every 3-5 rolls") or conditional ("every 2 rolls for carbon fibre"),
-   * and the numeric interval takes the conservative end — this preserves what
+   * and the numeric interval takes the conservative end, this preserves what
    * was actually said so the shortened figure is not mistaken for the whole rule.
    */
   intervalNote?: string
   /**
    * Canonical 16-char HMS codes (`formatHmsCode` form) that mean the printer is
    * asking for THIS job. When one is active the task is due regardless of its
-   * intervals — the machine's own counter outranks ours.
+   * intervals: the machine's own counter outranks ours.
    */
   hmsCodes?: readonly string[]
 }
@@ -110,7 +110,7 @@ const SCHEDULES = {
       {
         key: 'x-axis',
         title: 'Clean the X-axis carbon rods',
-        summary: 'Wipe the carbon rods with isopropyl alcohol. Never grease them — grease causes binding and is very hard to remove.',
+        summary: 'Wipe the carbon rods with isopropyl alcohol. Never grease them: grease causes binding and is very hard to remove.',
         lubricant: 'none',
         intervalDays: DAYS_PER_MONTH,
         intervalNote: 'Monthly, or every 5 rolls when printing ABS/ASA.'
@@ -171,7 +171,7 @@ const SCHEDULES = {
       {
         key: 'x-axis',
         title: 'Clean the X-axis carbon rods',
-        summary: 'Wipe the carbon rods with isopropyl alcohol. Never grease them — grease causes binding and is very hard to remove.',
+        summary: 'Wipe the carbon rods with isopropyl alcohol. Never grease them: grease causes binding and is very hard to remove.',
         lubricant: 'none',
         intervalDays: DAYS_PER_MONTH
       },
@@ -342,7 +342,7 @@ const SCHEDULES = {
         summary: 'Full XY clean and re-lubrication. Apply oil in drops along each shaft, 1-2 drops every 5 cm.',
         lubricant: 'oil',
         intervalDays: 2 * DAYS_PER_MONTH,
-        intervalNote: 'Bambu tiers this by usage: monthly at 5+ printing hours a day, every 2 months at 1-5, every 3 months below 1. The default here is the middle tier — adjust it to match how hard this printer runs.'
+        intervalNote: 'Bambu tiers this by usage: monthly at 5+ printing hours a day, every 2 months at 1-5, every 3 months below 1. The default here is the middle tier: adjust it to match how hard this printer runs.'
       },
       {
         key: 'z-axis',
@@ -528,7 +528,7 @@ const SCHEDULES = {
       {
         key: 'x-axis',
         title: 'Clean and lubricate the X axis',
-        summary: 'Clean the X-axis rail or rods. Check your printer\'s wiki page for whether it wants oil, grease, or neither — some rails are damaged by grease.',
+        summary: 'Clean the X-axis rail or rods. Check your printer\'s wiki page for whether it wants oil, grease, or neither, some rails are damaged by grease.',
         lubricant: 'none',
         intervalDays: DAYS_PER_MONTH
       },
@@ -561,7 +561,7 @@ export const PRINTER_MAINTENANCE_SCHEDULES: Readonly<Record<string, MaintenanceS
 
 /**
  * Which schedule each canonical Bambu model key uses. Models share an entry only
- * where Bambu ships them the same wiki page — the H2 models each publish their
+ * where Bambu ships them the same wiki page: the H2 models each publish their
  * own table and genuinely differ (H2D wants Y and Z monthly where H2C/H2S want
  * them quarterly), so they are not one family here even though they are one
  * family for slicing.
@@ -587,8 +587,8 @@ export const GENERIC_MAINTENANCE_SCHEDULE: MaintenanceSchedule = SCHEDULES.gener
 
 /**
  * Resolve the schedule for a printer model string (any form
- * `canonicalBambuModelKey` accepts). Falls back to the `generic` schedule —
- * flagged `generic: true` — for an unrecognized or not-yet-classified model, so
+ * `canonicalBambuModelKey` accepts). Falls back to the `generic` schedule,
+ * flagged `generic: true`, for an unrecognized or not-yet-classified model, so
  * a printer released after this build still tracks something rather than
  * showing an empty list.
  */
@@ -636,7 +636,7 @@ export interface MaintenanceTrigger {
   /** Calendar date this trigger comes due. Only ever set for the `days` trigger. */
   dueAt: Date | null
   /**
-   * Set when the metric this trigger needs is not being recorded — filament mass
+   * Set when the metric this trigger needs is not being recorded: filament mass
    * with no tracked prints, for instance. The trigger is inert rather than
    * treated as zero progress.
    */
@@ -693,7 +693,7 @@ function buildTrigger(
  * beats ours.
  *
  * A task that has never been marked done reports `not-logged` rather than
- * `due` — the printer's age is not a completion, and starting every task in a
+ * `due`: the printer's age is not a completion, and starting every task in a
  * red state on day one trains people to ignore the list. Marking it done once
  * starts the clock.
  */

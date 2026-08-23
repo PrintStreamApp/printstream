@@ -939,7 +939,7 @@ async function readTemplateItemIndex(
  * for the same printer, library file name, and plate whose `startedAt` is at or
  * after the order print's own start. That job's finished/result state is copied
  * onto `lastPrint*`; a no-op when nothing changed. Only meaningful while the
- * order print is `started` — other states return unchanged.
+ * order print is `started`: other states return unchanged.
  */
 async function syncOrderPrintState(prismaClient: AnyPrismaClient, orderPrintId: string) {
   const existing = await prismaClient.orderPrint.findUnique({ where: { id: orderPrintId } })
@@ -1238,7 +1238,7 @@ function normalizeProjectFilaments(projectFilaments: readonly ThreeMfProjectFila
     color: normalizeNullableText(filament.color),
     nozzleId: filament.nozzleId ?? null,
     chamberTemperature: filament.chamberTemperature ?? null,
-    // Null means "the project never said", which downstream classification treats as unknown —
+    // Null means "the project never said", which downstream classification treats as unknown:
     // preserve that rather than collapsing a missing flag to false.
     isSupport: filament.isSupport ?? null,
     isSoluble: filament.isSoluble ?? null

@@ -1,6 +1,6 @@
 /**
  * Per-(item, printer) readiness breakdown for the print queue: how well one printer matches a queued
- * item across the dimensions that decide whether it can run now — sliced-for **model**, **nozzle**
+ * item across the dimensions that decide whether it can run now: sliced-for **model**, **nozzle**
  * diameter, **plate** type, and loaded **material**. Used by the start dialog to rank printers
  * most-ready-first and show per-aspect chips, and by the queue card to show fleet-level match chips.
  * Material is overridable (the start dialog lets the user pick slots) and the plate can be swapped /
@@ -33,12 +33,12 @@ export interface PrinterAspectMatch {
   plate: AspectState
   material: AspectState
   /** Display values for the chips (this printer's actual model / nozzle / plate, and loaded-vs-needed
-   *  material count) — `null` when the item imposes no such constraint. */
+   *  material count): `null` when the item imposes no such constraint. */
   modelLabel: string
   nozzleLabel: string | null
   plateLabel: string | null
   materialLabel: string | null
-  /** Sort key — higher is more ready (fewer overrides needed). */
+  /** Sort key: higher is more ready (fewer overrides needed). */
   score: number
 }
 
@@ -126,7 +126,7 @@ export function matchPrinterAspects(
   }
 }
 
-/** Whether any of the given printers satisfies an aspect — for the card's fleet-level chips. */
+/** Whether any of the given printers satisfies an aspect, for the card's fleet-level chips. */
 export function fleetAspectState(matches: PrinterAspectMatch[], aspect: 'model' | 'nozzle' | 'plate' | 'material'): AspectState {
   if (matches.length === 0) return 'unknown'
   if (matches.every((match) => match[aspect] === 'na')) return 'na'

@@ -13,7 +13,7 @@
 import type { ImportedMesh, ImportedMeshBounds } from './imported-mesh.js'
 import type { StagedImportFormat } from '../slicing.js'
 
-/** A DataView over exactly this view's bytes — a Uint8Array may be a window onto a larger buffer. */
+/** A DataView over exactly this view's bytes, a Uint8Array may be a window onto a larger buffer. */
 function viewOf(bytes: Uint8Array): DataView {
   return new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
 }
@@ -25,23 +25,67 @@ export const MAX_IMPORT_TRIANGLES = 5_000_000
  * Weld exact-duplicate vertex positions into shared indexed vertices (dropping triangles
  * degenerate after the weld). STL is triangle soup by definition and OCCT tessellates each
  * BRep face independently, so without this every imported mesh reaches the 3MF as an
- * index-level soup — and BambuStudio's slicer chains layer contours by vertex/edge INDEX
+ * index-level soup, and BambuStudio's slicer chains layer contours by vertex/edge INDEX
  * (`chain_open_polylines_exact`), dumping a soup mesh entirely into its 2mm proximity
  * gap-closing heuristic. That mis-stitches small features: zero-clearance inlays (text
  * pockets) print fused/unfilled, looking like the wall generator is broken. Exact equality
- * is the right tolerance — duplicated corners are written from the same source floats.
+ * is the right tolerance: duplicated corners are written from the same source floats.
  */
 
 /**
  * Weld exact-duplicate vertex positions into shared indexed vertices (dropping triangles
  * degenerate after the weld). STL is triangle soup by definition and OCCT tessellates each
  * BRep face independently, so without this every imported mesh reaches the 3MF as an
- * index-level soup — and BambuStudio's slicer chains layer contours by vertex/edge INDEX
+ * index-level soup, and BambuStudio's slicer chains layer contours by vertex/edge INDEX
  * (`chain_open_polylines_exact`), dumping a soup mesh entirely into its 2mm proximity
  * gap-closing heuristic. That mis-stitches small features: zero-clearance inlays (text
  * pockets) print fused/unfilled, looking like the wall generator is broken. Exact equality
- * is the right tolerance — duplicated corners are written from the same source floats.
+ * is the right tolerance: duplicated corners are written from the same source floats.
  */
+/**
+ * Translate a staged import so its XY bounding-box centre sits at the origin and its lowest point
+ * at z = 0, returning the offset removed. Mutates `mesh` (and every part) in place.
+ *
+ * WHY. An editor instance's `position` places its LOCAL ORIGIN, and the rotate gizmo attaches to a
+ * rotor at that origin, so rotation happens about the origin. A file's own coordinates put that
+ * origin wherever the exporter did — commonly a corner, or centred in XY with z running 0..height —
+ * and the object then rotates about a corner or an edge instead of about itself. Placement code
+ * compensates by offsetting `position` by the mesh centroid (`stagedFootprint`), which lands the
+ * model correctly but leaves the ORIGIN, and therefore the pivot, displaced by exactly that
+ * centroid.
+ *
+ * ONLY FOR A WHOLE OBJECT. An added PART is centred on every axis instead
+ * (`primitivePartSoup`), because `addedPartDropPosition` places it by a single point relative to
+ * its host — drop a helper volume at the host's centre and flooring its Z would bury it half its
+ * height too high. So the caller states which it is staging (`ImportNormalization`); this is not a
+ * blanket rule the store can apply on its own.
+ *
+ * The same normalisation two sibling paths already do: the cut/split/assemble paths rebase their
+ * triangle soups (`rebaseTriangleSoup`, which states this same centre-XY/floor-Z convention), and a
+ * 3MF import is centred during extraction (`recentreParts` in `mesh-extract.ts`). STL and STEP had
+ * neither. Idempotent, so applying it after either sibling changes nothing.
+ *
+ * ONE offset for the whole import, taken from the MERGED mesh and applied to every part: parts
+ * share the merged mesh's coordinate space, so rebasing each to its own centre would collapse a
+ * multi-solid assembly onto itself.
+ */
+export function rebaseImportedMesh(mesh: ImportedMesh): { offset: { x: number; y: number; z: number } } {
+  const { min, max } = mesh.bounds
+  const offset = { x: (min.x + max.x) / 2, y: (min.y + max.y) / 2, z: min.z }
+  if (offset.x === 0 && offset.y === 0 && offset.z === 0) return { offset }
+  const shift = (target: ImportedMesh): void => {
+    for (let i = 0; i + 2 < target.positions.length; i += 3) {
+      target.positions[i] = (target.positions[i] ?? 0) - offset.x
+      target.positions[i + 1] = (target.positions[i + 1] ?? 0) - offset.y
+      target.positions[i + 2] = (target.positions[i + 2] ?? 0) - offset.z
+    }
+    target.bounds = computeMeshBounds(target.positions)
+  }
+  shift(mesh)
+  for (const part of mesh.parts ?? []) shift(part.mesh)
+  return { offset }
+}
+
 export function weldImportedMeshVertices(mesh: ImportedMesh): ImportedMesh {
   const vertexCount = Math.floor(mesh.positions.length / 3)
   const keyToIndex = new Map<string, number>()
@@ -76,7 +120,7 @@ export function weldImportedMeshVertices(mesh: ImportedMesh): ImportedMesh {
  * Reject a mesh whose triangle count exceeds the import budget. The STL parsers
  * cap their input directly; STEP is tessellated by OCCT (WASM) with no inherent
  * output bound, so its produced triangle count must be checked here before the
- * JS-side positions/indices amplification — otherwise a small STEP file can
+ * JS-side positions/indices amplification, otherwise a small STEP file can
  * tessellate into a multi-gigabyte mesh and exhaust the process (an authenticated
  * memory-exhaustion vector via /imports and /:id/mesh).
  */
@@ -85,7 +129,7 @@ export function weldImportedMeshVertices(mesh: ImportedMesh): ImportedMesh {
  * Reject a mesh whose triangle count exceeds the import budget. The STL parsers
  * cap their input directly; STEP is tessellated by OCCT (WASM) with no inherent
  * output bound, so its produced triangle count must be checked here before the
- * JS-side positions/indices amplification — otherwise a small STEP file can
+ * JS-side positions/indices amplification, otherwise a small STEP file can
  * tessellate into a multi-gigabyte mesh and exhaust the process (an authenticated
  * memory-exhaustion vector via /imports and /:id/mesh).
  */

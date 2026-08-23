@@ -2,12 +2,12 @@
  * A stable id for THIS browser tab.
  *
  * Backed by `sessionStorage`, which is exactly the scope wanted: unique per tab, and it survives a
- * reload or an in-tab navigation. (A duplicated tab inherits the id — a rare edge the consumers
+ * reload or an in-tab navigation. (A duplicated tab inherits the id, a rare edge the consumers
  * below tolerate, and the only alternative would not survive a reload.)
  *
  * Used to give a slicing job an owning tab: only the owning tab shows its progress toast, and the
  * API cancels the job once that tab has gone. The same id rides the `/ws` connection as `client`,
- * which is how the server knows the tab is still there — counterpart:
+ * which is how the server knows the tab is still there: counterpart:
  * `apps/api/src/lib/client-sessions.ts`.
  */
 import { buildApiUrl } from './apiUrl'
@@ -16,7 +16,7 @@ const TAB_SESSION_KEY = 'printstream.tabSessionId'
 
 /**
  * Falls back to a per-page-load id when `sessionStorage` is unavailable (private modes, embedded
- * webviews, SSR). That is strictly weaker — a reload then reads as a new tab — so it degrades to
+ * webviews, SSR). That is strictly weaker, a reload then reads as a new tab, so it degrades to
  * "the toast disappears and the slice is cancelled on reload" rather than to a crash.
  */
 let fallbackId: string | null = null
@@ -46,7 +46,7 @@ export function readTabSessionId(): string {
  * Tell the API this tab's document is going away, so its running slices are reaped NOW rather than
  * after the socket grace. Covers closing the tab and reloading it alike: both drop the user out of
  * the editor and the slice dialog, and an editor slice is persisted hidden from the library with no
- * action on its toast — so letting it finish yields a file the user cannot reach while holding a
+ * action on its toast, so letting it finish yields a file the user cannot reach while holding a
  * slicer the next job wants.
  *
  * `sendBeacon` because an unload handler cannot await a fetch; the request is queued by the browser
@@ -55,7 +55,7 @@ export function readTabSessionId(): string {
  * relying on this.
  *
  * Bound to `pagehide`, not `beforeunload`: `beforeunload` is unreliable on mobile Safari and blocks
- * the bfcache. A bfcache eviction (`persisted: true`) is deliberately NOT reported — that page can
+ * the bfcache. A bfcache eviction (`persisted: true`) is deliberately NOT reported, that page can
  * come back, and cancelling a slice for a back-swipe would be a false positive of the exact kind
  * the grace exists to avoid.
  */

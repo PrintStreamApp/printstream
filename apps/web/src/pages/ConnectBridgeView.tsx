@@ -27,7 +27,7 @@ export function ConnectBridgeView({
   onConnect: (workspaceId: string) => void
 }) {
   // A single accessible workspace (or, in single-workspace contexts, the active
-  // one) needs no chooser — route straight to its Bridges page.
+  // one) needs no chooser: route straight to its Bridges page.
   const soleTarget = workspaces.length === 1
     ? workspaces[0]?.id ?? null
     : workspaces.length === 0 && activeWorkspaceId

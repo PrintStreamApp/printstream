@@ -175,12 +175,12 @@ jobsRouter.get('/', requireRequestPermission(JOBS_VIEW_PERMISSION), async (reque
 })
 
 /**
- * The merged job history — finished prints + terminal slicing jobs — filtered, sorted, and
+ * The merged job history, finished prints + terminal slicing jobs, filtered, sorted, and
  * PAGED server-side (the shared `selectJobHistoryPage` owns the semantics; the Jobs view's
  * history section is the counterpart). Pagination lives here because the history is a MERGE of
  * two sources: the browser cannot page a merged list correctly from two independently-paged
  * endpoints, and shipping both full histories (the old shape) grew without bound. Both source
- * sets are still materialized server-side per request — same cost `GET /` always paid — so this
+ * sets are still materialized server-side per request, same cost `GET /` always paid, so this
  * bounds the wire, not the server; see the note on `selectJobHistoryPage`.
  */
 jobsRouter.get('/history', requireRequestPermission(JOBS_VIEW_PERMISSION), async (request, response) => {
@@ -433,7 +433,7 @@ async function toPrintJobDto(row: PrintJobRow, activity: AuditLogEntry[]) {
  * The "Slice again" affordance for a history row: the preserved project 3MF and the
  * settings that produced this print, or nulls when re-slicing is not offered.
  *
- * All three collapse to null together — a soft-deleted (recycled) project is treated as
+ * All three collapse to null together, a soft-deleted (recycled) project is treated as
  * absent so the action never opens a dialog on a file the user has thrown away, and the
  * legacy jobs query has no such columns at all. Settings are best-effort on top: a row
  * whose blob no longer parses still offers the project, just without seeded settings.

@@ -1,9 +1,9 @@
 /**
  * The chrome every status toast shares: the fixed stack (top of the screen on a
- * phone, bottom-right on desktop — see `lib/toastPlacement.ts`), the toast
+ * phone, bottom-right on desktop: see `lib/toastPlacement.ts`), the toast
  * surface itself, and the small controls that sit inside one.
  *
- * There is exactly ONE `StatusToastStack` per entry branch — `App` mounts one,
+ * There is exactly ONE `StatusToastStack` per entry branch: `App` mounts one,
  * `PublicToolApp` mounts the other, and `Root` only ever renders one branch. A
  * surface that renders toasts contributes them as children of the stack above it
  * and must not portal a second one, or the two overlap in the same corner.

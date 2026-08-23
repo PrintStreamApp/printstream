@@ -6,7 +6,7 @@
  * runner (`/app/bridge-runner.cjs`). If an activated bundle dies before its
  * post-update health check clears, the launcher records the failed
  * fingerprint as held back, restores the previous release pointer, and
- * retries once — the same crash-rollback semantics as the SEA self-updater.
+ * retries once, the same crash-rollback semantics as the SEA self-updater.
  *
  * This is the FIXED POINT of the bundle self-update scheme: the launcher only
  * ships with the image and is never self-updated, so it must stay tiny,
@@ -64,8 +64,8 @@ async function main(): Promise<void> {
 /**
  * Identity env injected into an activated bundle, read from the release's
  * `manifest.json`. The image-drift fingerprint stays whatever the image env
- * carries (it describes the runner image, which only the launcher — running
- * from the image — can vouch for; a bundle has no image metadata of its own).
+ * carries (it describes the runner image, which only the launcher, running
+ * from the image, can vouch for; a bundle has no image metadata of its own).
  */
 async function readActiveBridgeReleaseEnv(entrypoint: string): Promise<Record<string, string>> {
   const relative = path.relative(path.resolve(releasesDir), entrypoint)

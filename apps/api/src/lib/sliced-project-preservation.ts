@@ -2,9 +2,9 @@
  * Keeping the project a slice was produced from, so a finished print can be sliced again.
  *
  * Owns one step of the slicing pipeline: the project 3MF exactly as it was handed to the
- * engine — after every rewrite the pipeline applies (arranged scene, object selection,
+ * engine: after every rewrite the pipeline applies (arranged scene, object selection,
  * per-object overrides, authored machine, the slice's own presets and overrides via
- * `slice-settings-authoring.ts`, mesh weld), before the slicer's own mechanical prep — is
+ * `slice-settings-authoring.ts`, mesh weld), before the slicer's own mechanical prep: is
  * stored as a hidden, content-deduped snapshot and recorded on the sliced OUTPUT row,
  * together with the settings that produced it.
  *
@@ -18,7 +18,7 @@
  * what makes the association survive the output being deleted.
  *
  * Counterpart on the web: `SliceThenPrintFlow`, which re-opens the preserved project in the
- * prepare-print dialog. Counterpart in cleanup: nothing — a snapshot row is never swept
+ * prepare-print dialog. Counterpart in cleanup: nothing, a snapshot row is never swept
  * (`library-cleanup.ts` skips rows with a `snapshotKey`), which is deliberate and is why
  * callers must only preserve a project whose output was actually persisted.
  */
@@ -29,7 +29,7 @@ import { prisma } from './prisma.js'
 
 export interface PreserveSlicedProjectInput {
   workspaceId: string
-  /** Display name for the preserved project — the source project's name, not the output's. */
+  /** Display name for the preserved project: the source project's name, not the output's. */
   fileName: string
   /** Local path to the prepared project. Must still exist; the caller owns deleting it. */
   preparedProjectPath: string

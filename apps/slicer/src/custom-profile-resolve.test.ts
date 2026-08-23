@@ -110,7 +110,7 @@ test('stamps a CLI-loadable `from` on a preset that carries none', async () => {
   assert.equal(merged.from, 'User')
 })
 
-test('replaces an EMPTY `from` — the value BambuStudio\'s own create-preset dialog writes', async () => {
+test('replaces an EMPTY `from`: the value BambuStudio\'s own create-preset dialog writes', async () => {
   const reader: SystemPresetReader = async () => null
 
   const merged = await resolveCustomProfileConfigWith(JSON.stringify({

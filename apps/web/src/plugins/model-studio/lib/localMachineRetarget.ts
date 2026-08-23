@@ -8,13 +8,13 @@
  * functions need, from what an anonymous browser can reach: `/api/public/slicing/resolve-machine`,
  * `-process`, and `-filament`, which serve BambuStudio's bundled presets out of the slicer image.
  *
- * That server hop is the one part that cannot move into the tab — the preset bodies are the
+ * That server hop is the one part that cannot move into the tab: the preset bodies are the
  * slicer's own data, not the user's file. Everything after it (the settings rewrite, the ZIP) runs
  * locally, so the project still never leaves the machine.
  *
  * Best-effort by design, matching the api: a plan that cannot be built returns null and the save
  * proceeds un-retargeted rather than failing, and an individual slot or the process preset failing
- * to resolve degrades that part only. The one hard requirement is the machine config — without it
+ * to resolve degrades that part only. The one hard requirement is the machine config, without it
  * there is nothing to retarget TO.
  *
  * Counterpart: `apps/api/src/lib/save-retarget.ts` (the workspace host).
@@ -45,7 +45,7 @@ interface ResolveMachineConfigResponse {
 
 /**
  * The three anonymous preset lookups this module needs, injected so the retarget's DECISIONS can be
- * exercised without a server — the same seam shape as `localFilamentResolver`'s `resolveBuiltin`.
+ * exercised without a server, the same seam shape as `localFilamentResolver`'s `resolveBuiltin`.
  * {@link PUBLIC_RETARGET_RESOLVERS} is the real one and the default; nothing in the app passes
  * anything else.
  */
@@ -55,7 +55,7 @@ export interface LocalRetargetResolvers {
   filament(profileId: string, targetId: string | null): Promise<ResolveFilamentConfigResponse>
 }
 
-/** The anonymous catalogue endpoints. Built-ins only — see the module header. */
+/** The anonymous catalogue endpoints. Built-ins only: see the module header. */
 export const PUBLIC_RETARGET_RESOLVERS: LocalRetargetResolvers = {
   machine: (machineProfileId, targetId) =>
     apiFetch<ResolveMachineConfigResponse>('/api/public/slicing/resolve-machine', {
@@ -75,10 +75,10 @@ export const PUBLIC_RETARGET_RESOLVERS: LocalRetargetResolvers = {
 }
 
 export interface LocalMachineRetargetInput {
-  /** The editor's current target — the controller's `retargetTarget`. Null means nothing to do. */
+  /** The editor's current target: the controller's `retargetTarget`. Null means nothing to do. */
   target: SlicingManualProfileTarget | null
   /**
-   * Which slicer build to resolve the presets from. NULL — never `''` — while the targets query is
+   * Which slicer build to resolve the presets from. NULL, never `''`, while the targets query is
    * unsettled: the routes take a nullable `targetId` and fall back to the default build, but they
    * REJECT an empty string, which 400s the whole retarget and saves the project on its OLD printer
    * with only a console warning.
@@ -90,7 +90,7 @@ export interface LocalMachineRetargetInput {
    * `project_settings.config` means.
    */
   projectSettings: ProfileRecord | null
-  /** The catalogue the rebind picks from — built-ins plus the user's browser-stored presets. */
+  /** The catalogue the rebind picks from: built-ins plus the user's browser-stored presets. */
   filamentPresets: readonly SlicingPresetSummary[]
   /** Defaults to the anonymous endpoints; overridden only by tests. */
   resolvers?: LocalRetargetResolvers
@@ -164,7 +164,7 @@ async function resolveTargetProcessConfig(
  *
  * The slot list is read from the MACHINE-retargeted settings, not the project's current ones: the
  * retarget rebuilds the filament variant layout for the new machine, and picking against the old
- * one is what would mis-column the result. Only built-in targets resolve — a browser-stored preset
+ * one is what would mis-column the result. Only built-in targets resolve, a browser-stored preset
  * is an unflattened BambuStudio document, and flattening it needs the slicer.
  */
 async function resolveFilamentRebinds(
@@ -194,12 +194,12 @@ async function resolveFilamentRebinds(
       : null
     // A preset the user uploaded into THIS BROWSER resolves from that store, not the builtin
     // endpoint. Without this it fell to `config: null`, and a null slot makes
-    // `rebindProjectFilamentPhysics` DROP the key for every slot — so retargeting a project whose
+    // `rebindProjectFilamentPhysics` DROP the key for every slot, so retargeting a project whose
     // third material is an uploaded preset deleted the physics the repair had just restored, and the
     // file reopened still flagged. That is the same blind spot fixed in `localFilamentResolver`.
     const stored = target ? listLocalSlicingPresets().find((preset) => preset.id === target.id && preset.kind === 'filament') : undefined
     if (stored) {
-      // Flattened onto its parent, same as the resolver — a delta preset would otherwise rebind the
+      // Flattened onto its parent, same as the resolver, a delta preset would otherwise rebind the
       // slot to a near-empty config, and `rebindProjectFilamentPhysics` drops every key no slot
       // defines, deleting the physics a repair had just restored.
       const flattened = await flattenLocalPreset(stored, [], async (builtinId) => {

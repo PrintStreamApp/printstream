@@ -1,5 +1,5 @@
 /**
- * Add-material dialog — picks what a new material slot WILL be, before the slot exists.
+ * Add-material dialog: picks what a new material slot WILL be, before the slot exists.
  *
  * OWNS the pending type/preset/colour for a slot that has not been created yet, which is the whole
  * reason it is separate from `MaterialEditDialog`'s live-apply path: there is no slot to apply to.
@@ -20,7 +20,7 @@ import {
 } from '../../lib/slicingPresetMatching'
 import type { AddedMaterialChoice } from './useMaterialSlots'
 
-/** Neutral starting colour. Unlike the old seed this is only ever a STARTING point — the user sees
+/** Neutral starting colour. Unlike the old seed this is only ever a STARTING point: the user sees
  *  and confirms it, so a resulting Bambu colour name reflects a real choice. */
 const ADD_MATERIAL_START_COLOR = '#FFFFFF'
 

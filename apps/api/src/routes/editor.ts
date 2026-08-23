@@ -3,15 +3,15 @@
  *
  * Backs the interactive plate editor's foreign-geometry import and persistence:
  * - stage an STL/STEP/3MF from an upload or an existing library file (parsed/tessellated/extracted
- *   to a mesh held transiently and referenced by `importId` in a `SceneEdit`; 3MF is geometry-only —
+ *   to a mesh held transiently and referenced by `importId` in a `SceneEdit`; 3MF is geometry-only:
  *   see `lib/three-mf-mesh-extract.ts`),
  * - stream a staged import back as binary STL for rendering,
  * - bake an edited arrangement (base project or a new one, plus imports) into a 3MF and persist it
- *   as a new library file or a new version of the base — or stream the bake back as a download
+ *   as a new library file or a new version of the base, or stream the bake back as a download
  *   without persisting anything (`/export-3mf`).
  *
  * Slicing the unsaved arrangement goes through the existing slicing route; this module owns import
- * staging and saving only. Route handlers stay thin — mesh parsing lives in `lib/mesh-import.ts`,
+ * staging and saving only. Route handlers stay thin: mesh parsing lives in `lib/mesh-import.ts`,
  * staging in `lib/import-store.ts`, and 3MF assembly in `lib/three-mf.ts`.
  */
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
@@ -26,12 +26,13 @@ import {
   LIBRARY_UPLOAD_PERMISSION,
   exportArrangedThreeMfSchema,
   saveArrangedThreeMfSchema,
+  importNormalizationSchema,
   stageImportFromLibrarySchema,
   type ExportArrangedThreeMf,
   type StagedImport
 } from '@printstream/shared'
 import { z } from 'zod'
-import { annotateRequestAuditLog } from '../lib/audit-logs.js'
+import { annotateRequestAuditLog, skipRequestAuditLog } from '../lib/audit-logs.js'
 import { requireRequestPermission } from '../lib/authorization.js'
 import { resolveLibraryFileToLocalPath } from '../lib/bridge-library-files.js'
 import { persistFilamentSettingOverrides } from '../lib/save-filament-overrides.js'
@@ -94,7 +95,17 @@ editorRouter.post(
       ? await extractThreeMfMeshFromBuffer(file.buffer)
       : await parseImportedMesh(file.buffer, format)
     const name = path.parse(file.originalname).name || 'Imported model'
-    const staged = stageImport({ workspaceId, name, format, mesh })
+    // A multipart field, so it arrives as text beside the file. Defaulting rather than rejecting a
+    // request that omits it: `object` is the common case, and the CLIENT type already makes the
+    // choice mandatory (`ImportNormalization`), so an omission here means a hand-made request.
+    const normalize = importNormalizationSchema.catch('object').parse(request.body?.normalize)
+    const staged = stageImport({ workspaceId, name, format, mesh, normalize })
+    // Deliberately unaudited: staging is TRANSIENT and high-frequency. The mesh goes to an in-memory
+    // LRU with a 2h TTL and nothing durable is created; one editor session stages an import per
+    // added model, per cut half, per split shell, per carried helper volume and per primitive. What
+    // actually materialises is audited where it lands, on `/save` (which records the object copy and
+    // repaired-mesh counts). An entry here would be noise that buries those.
+    skipRequestAuditLog(request)
     response.status(201).json({ import: staged satisfies StagedImport })
   }
 )
@@ -122,7 +133,10 @@ editorRouter.post(
       ? await extractThreeMfImportMesh(localPath, parsed.data.objectId != null ? { objectId: parsed.data.objectId } : undefined)
       : await parseImportedMesh(await readFile(localPath), format)
     const name = path.parse(libraryFile.name).name || 'Imported model'
-    const staged = stageImport({ workspaceId, name, format, mesh })
+    const staged = stageImport({ workspaceId, name, format, mesh, normalize: parsed.data.normalize })
+    // Transient and high-frequency, exactly as for the upload route above: audited where the
+    // geometry is persisted, not where it is staged.
+    skipRequestAuditLog(request)
     response.status(201).json({ import: staged satisfies StagedImport })
   }
 )
@@ -166,7 +180,7 @@ function parseArrangedBody<T>(schema: { safeParse: (body: unknown) => z.SafePars
 }
 
 /**
- * Resolve an explicit content base — the bytes the editor pinned at open — to something
+ * Resolve an explicit content base, the bytes the editor pinned at open, to something
  * `resolveLibraryFileToLocalPath` can read.
  *
  * Workspace-scoped like every other lookup here, but deliberately NOT scoped to the save target: the
@@ -220,7 +234,7 @@ async function bakeArrangedThreeMf(
 
   // Editing an archived version: build from THAT version's bytes. The save target is
   // unchanged (the parent file), so persisting archives the current content and the
-  // edited result becomes a NEW version — the old version is never mutated.
+  // edited result becomes a NEW version: the old version is never mutated.
   const baseVersion = baseVersionId
     ? await prisma.libraryFileVersion.findFirst({
       where: { id: baseVersionId, workspaceId, libraryFileId: baseFileId ?? undefined },
@@ -230,21 +244,21 @@ async function bakeArrangedThreeMf(
   if (baseVersionId && !baseVersion) throw notFound('Base version not found')
 
   // An explicit content base (the editor pinning the version it OPENED) is resolved WITHOUT
-  // reference to the save target — see the schema doc. A saveAs continues the session against a
+  // reference to the save target: see the schema doc. A saveAs continues the session against a
   // new file while still authoring from the original's bytes, so scoping this lookup to
   // `baseFileId` would reject exactly the case the field exists for.
   //
   // Skipped entirely under `ignoreBaseContent`, and that guard is load-bearing rather than an
   // optimisation: an editor-born session pins its new-project SCAFFOLD, which is a hidden row that
   // gets discarded on abandon and swept by `pruneHiddenLibraryFiles`. Resolving a pin whose bytes
-  // are then thrown away turned "the scaffold is gone" into a hard 404 on every subsequent save —
+  // are then thrown away turned "the scaffold is gone" into a hard 404 on every subsequent save,
   // a save that had no need of those bytes in the first place.
   const pinnedBase = input.contentBase && !input.ignoreBaseContent
     ? await resolvePinnedContentBase(workspaceId, input.contentBase)
     : null
 
   // `ignoreBaseContent` keeps the base file as the save TARGET (name/folder/bridge, resolved
-  // above) but bakes from the editor state alone — see the schema doc: re-reading the previous
+  // above) but bakes from the editor state alone: see the schema doc: re-reading the previous
   // save's bytes strands one orphaned mesh object per solid per save for an import-backed
   // project, which is what forced the editor to re-mount on the saved file after every save.
   const baseSource = input.ignoreBaseContent ? null : (pinnedBase ?? baseVersion ?? baseFile)
@@ -269,7 +283,7 @@ async function bakeArrangedThreeMf(
     await createObjectCustomizedThreeMf(workingPath, customizedPath, 0, { objectProcessOverrides: rekeyed })
     workingPath = customizedPath
   }
-  // Persist per-MATERIAL tune-dialog overrides ("Save in this 3MF") into project_settings —
+  // Persist per-MATERIAL tune-dialog overrides ("Save in this 3MF") into project_settings:
   // values AND their different_settings_to_system record, which is what makes the retarget
   // below preserve them instead of rebinding them away as fossils. Must run BEFORE the retarget
   // for exactly that reason. Best-effort: null means nothing to write / could not write, and the
@@ -305,7 +319,7 @@ async function bakeArrangedThreeMf(
   if (retarget && !(await projectHasCompleteMachine(workingPath, retarget.printerModel))) {
     // Either a genuine printer CHANGE, or the same printer on a project that never carried that
     // machine's full definition (e.g. one naming `printer_model: H2D` without H2D's dual-nozzle
-    // topology). Both need the machine authored in — we are the source of truth for the 3MF, so a
+    // topology). Both need the machine authored in, we are the source of truth for the 3MF, so a
     // saved project must define its own machine rather than leaning on slice-time fallbacks.
     bakedPath = await retargetSavedProjectMachine({
       workspaceId,
@@ -316,13 +330,22 @@ async function bakeArrangedThreeMf(
     })
     extraCleanupDirs.push(path.dirname(bakedPath))
   } else if (retarget) {
-    // Already complete for this machine — nothing to author, and re-running the retarget would
+    // Already complete for this machine, nothing to author, and re-running the retarget would
     // overwrite the user's process settings for no gain.
   } else {
     // Same-model save: if the base project LOST its dual-nozzle machine block (a filament
     // rewrite once stripped the extruder-indexed machine arrays), re-author it from the
-    // project's own machine preset so the file heals at rest instead of staying unsliceable.
-    // Best-effort — null means "not needed or not possible" and the save proceeds unchanged.
+    // project's own machine preset so this save cannot produce an unsliceable project.
+    //
+    // This is AUTHORING, not repair, and the distinction is the one `repairs/index.ts` draws.
+    // It runs on the file the bake just produced, in a temp dir, before anything is persisted;
+    // it never touches a stored file. A stored project is only ever rewritten by a save the user
+    // asked for, which is why there is no server-side repair route. (This comment used to say the
+    // file "heals at rest", which describes the exact thing the contract forbids and is not what
+    // happens here.) The save records `machineTopologyHealed` in its audit entry either way, so a
+    // project whose machine block was re-authored says so.
+    //
+    // Best-effort: null means "not needed or not possible" and the save proceeds unchanged.
     const healedPath = await healSavedProjectMachineTopology({
       workspaceId,
       arrangedPath: workingPath,
@@ -352,7 +375,7 @@ editorRouter.post(
     let extraCleanupDirs: string[] = []
     try {
       // The target name is needed before the bake (the retarget artifact is named after it),
-      // but the newVersion branch needs the base file's name — resolved inside the bake — so
+      // but the newVersion branch needs the base file's name, resolved inside the bake, so
       // compute the saveAs form here and patch the newVersion form after.
       const saveAsName = parsed.name && !parsed.name.toLowerCase().endsWith('.3mf') ? `${parsed.name}.3mf` : parsed.name
       const baked = await bakeArrangedThreeMf(workspaceId, parsed, workDir, mode === 'newVersion' ? 'edited.3mf' : saveAsName!)
@@ -384,12 +407,12 @@ editorRouter.post(
         action: 'upload',
         resource: 'library file',
         summary: `Saved edited 3MF ${created.name}.`,
-        // Counts only — never the edit's contents. `objectCopyCount` and `repairedMeshCount` are
+        // Counts only, never the edit's contents. `objectCopyCount` and `repairedMeshCount` are
         // here because both MATERIALISE new or altered geometry in the saved file, so a support
         // question about an unexpected object or a changed mesh can be answered from the trail.
         metadata: { fileId: created.id, mode, baseFileId: baseFileId ?? null, bakedFromEditorStateOnly: parsed.ignoreBaseContent === true, importCount: baked.importCount, objectCopyCount: parsed.sceneEdit?.objectClones?.length ?? 0, repairedMeshCount: (parsed.sceneEdit?.repairedObjectIds?.length ?? 0) + (parsed.sceneEdit?.repairedImportIds?.length ?? 0), retargetedTo: parsed.retarget?.printerModel ?? null, machineTopologyHealed: baked.machineTopologyHealed, globalProcessOverridesPersisted: parsed.processSettingOverrides != null && Object.keys(parsed.processSettingOverrides).length > 0 }
       })
-      // `archivedVersionId` is the content that was current until this save — i.e. the bytes this
+      // `archivedVersionId` is the content that was current until this save: i.e. the bytes this
       // save authored FROM. The editor pins it so its next save authors from the same original
       // instead of from this save's output (see `contentBase` in the shared schema). Null when the
       // save created a new file rather than a version, in which case the caller keeps its
@@ -403,7 +426,7 @@ editorRouter.post(
 )
 
 /**
- * Bake an edited arrangement and stream the 3MF back as a download — the download
+ * Bake an edited arrangement and stream the 3MF back as a download: the download
  * counterpart of a saveAs ("Download 3MF project"): nothing is persisted server-side,
  * so there is no library row to clean up and no visible residue. Gated on the library
  * DOWNLOAD permission to match the editor's other export-download items (the web hides
@@ -448,7 +471,7 @@ const newProjectSchema = z.object({
 /**
  * Create a brand-new project: a hidden, empty 3MF "scaffold" that backs the editor so
  * a new project gets the SAME full editor (settings/materials/slice) as an existing file
- * without a file-less code path. It stays out of the library (hidden) — the user's real
+ * without a file-less code path. It stays out of the library (hidden): the user's real
  * file is created when they Save; the scaffold is discarded on close (see /scaffold/:id/discard).
  */
 editorRouter.post('/new-project', requireRequestPermission(LIBRARY_UPLOAD_PERMISSION), async (request, response) => {

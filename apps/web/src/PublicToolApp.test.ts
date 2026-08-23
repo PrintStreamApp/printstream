@@ -4,7 +4,7 @@
  * `App` mounts the `Toaster` inside its `StatusToastStack`; `PublicToolApp` is a separate entry
  * branch and got neither. Every `toast.error` on `/3mf-editor` therefore went nowhere: importing a
  * 3MF with no printable geometry raised the right refusal, and the page showed absolutely nothing,
- * which reads as a click that did not register. Nothing else catches this — the editor's own tests
+ * which reads as a click that did not register. Nothing else catches this: the editor's own tests
  * never mount a shell, and a missing toast host is not a type error.
  */
 import assert from 'node:assert/strict'
@@ -24,7 +24,7 @@ test('the public shell mounts a toast host', async () => {
 test('the public shell positions its toasts through the shared stack', async () => {
   const source = await readFile(path.join(SRC_ROOT, 'PublicToolApp.tsx'), 'utf8')
   // A bare `Toaster` renders as an ordinary flex child of the full-height editor column, so every
-  // toast steals height from the 3D viewport instead of floating over it — and none of the stack's
+  // toast steals height from the 3D viewport instead of floating over it, and none of the stack's
   // placement (portalled, fixed, above the modal layer, top-of-screen on a phone) applies.
   assert.match(source, /<StatusToastStack>\s*<Toaster\s*\/>\s*<\/StatusToastStack>/)
 })

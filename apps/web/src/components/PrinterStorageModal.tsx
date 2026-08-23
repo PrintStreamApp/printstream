@@ -105,7 +105,7 @@ interface Props {
   /** When false, hide rename/delete/select actions. */
   allowManage?: boolean
   /**
-   * When true, render a flat recursive listing of files only — no path
+   * When true, render a flat recursive listing of files only, no path
    * bar, no folder navigation, no folder rows. Used by the Models
    * browser to mirror what Bambu Studio / Handy show: a single list of
    * sliced files regardless of where they live on the SD card.
@@ -260,7 +260,7 @@ export function PrinterStorageModal({
     }
   })
 
-  // Apply caller-provided extension filter to files only — folders are
+  // Apply caller-provided extension filter to files only: folders are
   // kept so the user can drill in further (e.g. into `/cache/`). In
   // flat mode all entries are files anyway, but we drop any stray
   // directory entries defensively and apply the filter.

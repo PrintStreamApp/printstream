@@ -2,7 +2,7 @@
  * Tiny external store for shell-tab notification badges.
  *
  * Core owns only the mechanism: `AppShell` renders a dot on any tab whose
- * `value` is in the set, and plugins (or private modules) drive it — e.g. the
+ * `value` is in the set, and plugins (or private modules) drive it: e.g. the
  * cloud support plugin marks the Account tab when the platform has replied to
  * one of the user's conversations, and the platform Messages tab when a
  * workspace message is unread. Removing every writer leaves all tabs undotted.

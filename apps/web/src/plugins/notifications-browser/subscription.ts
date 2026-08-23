@@ -9,12 +9,12 @@
  * leaves the browser subscription alive for the other workspaces. The only
  * time the subscription is recreated is when the server's VAPID key no
  * longer matches the one the subscription was created with (server
- * reinstall/migration) — at that point every scope's stored entry is
+ * reinstall/migration), at that point every scope's stored entry is
  * already undeliverable.
  *
  * Per-device permission state is intrinsic to the browser; the per-workspace
  * enabled state lives server-side and is read via the scope-aware
- * `subscriptions/lookup` endpoint — never shadowed in localStorage.
+ * `subscriptions/lookup` endpoint, never shadowed in localStorage.
  */
 import { apiFetch } from '../../lib/apiClient'
 
@@ -30,7 +30,7 @@ export interface BrowserNotificationsSupportState {
    * Whether the page is running in a secure context (HTTPS, or a
    * `localhost` origin). Browsers gate Service Workers and the Push API
    * on this, so over plain HTTP `serviceWorker`/`pushManager` below are
-   * also absent — we track it separately to explain *why* rather than
+   * also absent, we track it separately to explain *why* rather than
    * blaming the browser.
    */
   secureContext: boolean
@@ -141,7 +141,7 @@ export async function enableBrowserNotificationsInCurrentWorkspace(): Promise<vo
   }
 
   const registration = await getRegistration()
-  if (!registration) throw new Error('Service worker is not ready yet — refresh and try again')
+  if (!registration) throw new Error('Service worker is not ready yet: refresh and try again')
 
   const info = await apiFetch<PluginInfo>(BROWSER_NOTIFICATIONS_PLUGIN_PATH)
   if (!info.publicKey) throw new Error('Server did not return a VAPID public key')

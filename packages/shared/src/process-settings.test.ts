@@ -152,7 +152,7 @@ test('value equality is option-aware: serialized form does not make a change', (
   assert.equal(processConfigValuesEqual('400', '400%', floatOrPercent), false)
   assert.equal(processConfigValuesEqual('400%', '400.0%', floatOrPercent), true)
   assert.equal(processConfigValuesEqual('0.2', '0.20', float), true)
-  // Non-numeric types stay exact — and an unparseable numeric value never compares equal.
+  // Non-numeric types stay exact, and an unparseable numeric value never compares equal.
   assert.equal(processConfigValuesEqual('grid', 'Grid', enumOption), false)
   assert.equal(processConfigValuesEqual('nil', 'nan', float), false)
   // Without option metadata the comparison degrades to raw strings.
@@ -230,7 +230,7 @@ test('resolvedProcessModifiedKeys counts final-vs-baseline diffs, healed by over
   // A session override back to the baseline value heals the badge to zero.
   assert.deepEqual(resolvedProcessModifiedKeys(response, { layer_height: '0.2' }), [])
   // The 3MF record stands in when the baseline could not resolve. The route sends `baseConfig` as a
-  // stand-in copy of `config` there, which is byte-identical to a project that changed nothing —
+  // stand-in copy of `config` there, which is byte-identical to a project that changed nothing,
   // so `baselineResolved: false` is what tells the two apart. Without it, a stock project's
   // declared-but-unchanged keys were reported as changes nobody could reset.
   assert.deepEqual(
@@ -259,7 +259,7 @@ test('resolvedProcessModifiedKeys counts final-vs-baseline diffs, healed by over
 // BambuStudio shares that widget with numeric settings that ship preset choices, so
 // "Top interface layers" (a LAYER COUNT defaulting to 3) rendered as a material select and
 // showed material 3. The filament-index list must stay exactly the settings whose value IS a
-// filament index — and every one of them must be an int with no enum choices of its own.
+// filament index, and every one of them must be an int with no enum choices of its own.
 test('the filament-index process keys are filament indices, not numeric settings sharing the widget', async () => {
   const { processSettingsCatalog } = await import('./generated/process-settings.generated.js')
   const catalog = processSettingsCatalog.options as unknown as Record<string, { type: string; enumValues?: string[]; guiType?: string }>

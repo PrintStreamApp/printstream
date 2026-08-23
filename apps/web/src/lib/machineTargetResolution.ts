@@ -1,6 +1,6 @@
 /**
- * The one place that answers "what machine is this project being prepared for?" — engine target,
- * printer, model, machine profile, nozzle, and plate type — from a resolved-inputs snapshot plus
+ * The one place that answers "what machine is this project being prepared for?", engine target,
+ * printer, model, machine profile, nozzle, and plate type, from a resolved-inputs snapshot plus
  * the user's explicit picks.
  *
  * OWNS the whole cascade, and owns it as a DERIVATION: nothing here is stored. Before S2 these
@@ -14,8 +14,8 @@
  * - The only mutable state is {@link MachineTargetIntent}. A field absent from it is derived; a
  *   field present in it is the user's, and is honoured whenever the current inputs can represent
  *   it. Nothing else may write a machine-target value (invariant I1).
- * - `origins` explains where each value came from. It is an OUTPUT — for the "Loading…"
- *   placeholder and for conflict copy — and must never become an input to a guard, or the
+ * - `origins` explains where each value came from. It is an OUTPUT, for the "Loading…"
+ *   placeholder and for conflict copy, and must never become an input to a guard, or the
  *   pre-S2 arbitration problem grows back.
  * - `conflicts` lists user picks the current inputs cannot represent. They are reported, never
  *   silently swapped (invariant I5, and the E9 fix): the intent KEEPS the requested value, so
@@ -25,7 +25,7 @@
  *
  * Readiness is two flags, and both must count a terminal FAILURE as resolved or the form waits
  * forever on a project index that will never arrive. Until `resolved`, fields answer with the best
- * available value and the model may still be `'unknown'` — see `resolveInitialManualPrinterModel`
+ * available value and the model may still be `'unknown'`: see `resolveInitialManualPrinterModel`
  * for why not-knowing is represented rather than guessed.
  *
  * Counterparts: `components/library/useMachineTarget.ts` (the hook that holds the intent),
@@ -78,7 +78,7 @@ export interface MachineTargetInputs {
   machineProfiles: SlicingPresetSummary[]
   processProfiles: SlicingPresetSummary[]
   /**
-   * The project's 3MF index request reached a terminal state — data, an error, or nothing to
+   * The project's 3MF index request reached a terminal state: data, an error, or nothing to
    * fetch. NOT "data arrived": a failed index must not strand the form (before S2 that only worked
    * by accident, through a `!platesQuery.data` clause in the readiness flag).
    */
@@ -94,7 +94,7 @@ export interface MachineTargetInputs {
 export type MachineTargetField = 'printerModel' | 'nozzleDiameter' | 'plateType' | 'printerProfileId'
 
 /**
- * Where a resolved value came from. `unseeded` means the inputs cannot answer yet — render it as
+ * Where a resolved value came from. `unseeded` means the inputs cannot answer yet: render it as
  * waiting, never as a real answer.
  */
 export type MachineTargetOrigin = 'unseeded' | 'user' | 'project' | 'printer' | 'catalogue' | 'default'
@@ -138,7 +138,7 @@ export interface MachineTargetResolution {
  * The engine target to slice with: the user's pick while it still exists, else the declared
  * default, else the first STABLE target, else anything.
  *
- * Never falls back onto a prerelease engine — betas are opt-in only (they exist so a project saved
+ * Never falls back onto a prerelease engine: betas are opt-in only (they exist so a project saved
  * by a beta desktop build can be sliced at all). Encoded three times before S2 (two ladders in the
  * workspace host, one in the public host), which is exactly the F6 shape that drifts.
  */
@@ -159,7 +159,7 @@ export function resolveSlicerTargetId(
  *
  * Deliberately not `resolveSliceDialogNozzleDiameterOptions(...)[0]`, which is what the pre-S2 seed
  * used: that unions every source (including a hardcoded 0.4) and takes the ascending minimum, so a
- * 0.6-nozzle project always opened on 0.4 — and then no machine profile matched the 0.4 it had just
+ * 0.6-nozzle project always opened on 0.4, and then no machine profile matched the 0.4 it had just
  * invented, which the submit gate reported as an incompatible printer profile.
  */
 export function resolveProjectNozzleDiameter(file: LibraryFile, bakedIndex: ThreeMfIndex | null): string | null {
@@ -185,15 +185,15 @@ export function resolveMachineTarget(inputs: MachineTargetInputs, intent: Machin
   const conflicts: MachineTargetConflict[] = []
   const resolved = projectResolved && catalogueResolved
 
-  // 1. Printer. A locked printer wins over the intent — the print-prep flow is pinned to it, and
+  // 1. Printer. A locked printer wins over the intent: the print-prep flow is pinned to it, and
   //    before S2 that was an effect racing the user's own picker.
   const selectedPrinter = lockedPreferredPrinter
     ?? (intent.printerId ? printers.find((printer) => printer.id === intent.printerId) ?? null : null)
   const targetMode: 'realPrinter' | 'manualProfile' = selectedPrinter ? 'realPrinter' : 'manualProfile'
   const printerId = selectedPrinter?.id ?? ''
 
-  // 2. Model. The user's pick, then the project's own, then — only once BOTH inputs have settled,
-  //    so "the project really has no model" and "first available" both mean something — the first
+  // 2. Model. The user's pick, then the project's own, then, only once BOTH inputs have settled,
+  //    so "the project really has no model" and "first available" both mean something, the first
   //    installed machine. Until then it stays 'unknown' rather than showing a machine nobody chose.
   const printerModelOptions = ensurePrinterModelOptions(file.compatiblePrinterModels, selectedPrinter?.model, machineProfiles)
   const projectModel = bakedIndex?.compatiblePrinterModels[0] ?? null
@@ -246,7 +246,7 @@ export function resolveMachineTarget(inputs: MachineTargetInputs, intent: Machin
   const parsedNozzle = Number.parseFloat(nozzleDiameter)
   const selectedNozzleDiameters = Number.isFinite(parsedNozzle) && parsedNozzle > 0 ? [parsedNozzle] : []
 
-  // 4. Machine profile — derived only; there is no user picker for it, and adding one would need an
+  // 4. Machine profile: derived only; there is no user picker for it, and adding one would need an
   //    intent field rather than another writer.
   const compatibleMachineProfiles = machineProfiles.filter((profile) => isMachineProfileCompatible(profile, selectedPrinterModel, selectedNozzleDiameters))
   const selectableMachineProfiles = compatibleMachineProfiles.filter(isSelectableSlicingPreset)
@@ -289,7 +289,7 @@ export function resolveMachineTarget(inputs: MachineTargetInputs, intent: Machin
   else if (plateFromPrinter) { plateType = plateFromPrinter; plateOrigin = 'printer' }
   else if (plateFromProject) { plateType = plateFromProject; plateOrigin = 'project' }
   else {
-    // Never BambuStudio's rank-0 Cool Plate as the blind default — an unrelated profiles recompute
+    // Never BambuStudio's rank-0 Cool Plate as the blind default, an unrelated profiles recompute
     // must not silently move a project onto a plate nobody chose.
     plateType = matchPlateTypeByLabel(plateTypeOptions, 'textured_pei_plate') ?? plateTypeOptions[0] ?? ''
     plateOrigin = 'default'
@@ -326,7 +326,7 @@ export function resolveMachineTarget(inputs: MachineTargetInputs, intent: Machin
     },
     // Only once the inputs have settled: a half-loaded catalogue cannot yet offer the user's pick,
     // and reporting that would flash "no installed profile targets the A1" during an ordinary load.
-    // The VALUES are unaffected — a pick that becomes representable applies on its own.
+    // The VALUES are unaffected, a pick that becomes representable applies on its own.
     conflicts: resolved ? conflicts : [],
     resolved
   }

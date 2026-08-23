@@ -8,15 +8,15 @@
  * "my previous run crashed" to the cloud, which the API turns into a log entry
  * and a user notification.
  *
- * Mechanism — a durable run-state marker file in the bridge's data directory:
+ * Mechanism, a durable run-state marker file in the bridge's data directory:
  * - On every start the bridge writes `{ startedAt, cleanShutdown: false, … }`.
- * - On an *intentional* exit — SIGTERM/SIGINT from the supervisor, or a
- *   self-scheduled update restart — it flips `cleanShutdown` to true.
+ * - On an *intentional* exit, SIGTERM/SIGINT from the supervisor, or a
+ *   self-scheduled update restart, it flips `cleanShutdown` to true.
  * - On a *crash* (uncaughtException / unhandledRejection / hard kill) it does
  *   NOT. So the next start, reading a marker whose `cleanShutdown !== true`,
  *   knows the previous run crashed. The fatal handlers additionally record the
- *   error text so the report can carry a reason (hard kills — OOM/SIGKILL/native
- *   fault — leave none, which is itself signal).
+ *   error text so the report can carry a reason (hard kills, OOM/SIGKILL/native
+ *   fault, leave none, which is itself signal).
  *
  * A rolling window of recent crash timestamps distinguishes a one-off crash from
  * a crash-loop with no server coordination: old entries age out, so the count
@@ -169,7 +169,7 @@ export function markCleanShutdown(markerPath: string): void {
  *
  * uncaughtException/unhandledRejection record the reason then exit(1) so the
  * supervisor restarts the bridge (continuing after an arbitrary fatal error
- * risks corrupted state — the point is to *report* it, not soldier on). SIGTERM
+ * risks corrupted state: the point is to *report* it, not soldier on). SIGTERM
  * /SIGINT mark a clean shutdown then exit(0) so a supervisor stop or a deploy is
  * never mistaken for a crash. Idempotent: safe to call once per process.
  */

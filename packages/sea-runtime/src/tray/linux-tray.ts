@@ -6,7 +6,7 @@
  * The menu mirrors the Windows tray item-for-item, revealing items
  * from the status fields present (an "Open <app>" item when an `appUrl` is set).
  * Desktop Linux tray
- * support is best-effort — the script exits with code 3 when GTK bindings are
+ * support is best-effort: the script exits with code 3 when GTK bindings are
  * missing and the runner explains the CLI remains available.
  */
 export function generateLinuxTrayScript(input: {
@@ -62,7 +62,7 @@ def bridge_status():
     except ProcessLookupError:
         return None
     except PermissionError:
-        pass  # exists but owned by the service account — still alive
+        pass  # exists but owned by the service account, still alive
     except Exception:
         return None
     return status

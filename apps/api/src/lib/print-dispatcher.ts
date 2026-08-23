@@ -9,7 +9,7 @@
  *
  * Restart contract (durability): dispatch jobs and the per-printer queues are
  * in-memory only. On a *graceful* shutdown (deploy/SIGTERM), `stop()` drains
- * in-flight work — queued jobs are cancelled and in-flight uploads aborted so
+ * in-flight work: queued jobs are cancelled and in-flight uploads aborted so
  * any landed SD bytes are deleted and the tracked PrintJob record is cancelled.
  * Jobs already 'sent' are left alone: the SD file is the live print, which keeps
  * running and reconciles via the print-job recorder on the next status. An
@@ -17,7 +17,7 @@
  * can still leak a partial SD file and leave a taskId-less 'unknown' PrintJob
  * row; that row self-heals only if a later terminal status arrives. A boot-time
  * reconcile for that crash case is intentionally deferred (it must not fail a
- * print that actually started — see `print-dispatch-jobs:rob-1`).
+ * print that actually started: see `print-dispatch-jobs:rob-1`).
  */
 import { randomUUID } from 'node:crypto'
 import { mkdtemp, rm, stat } from 'node:fs/promises'
@@ -93,7 +93,7 @@ interface DispatchJobState {
    * Re-slice provenance carried from the printed library file onto the history row:
    * the preserved project 3MF this artifact was sliced from, and the settings that
    * produced it. Null whenever the file was not sliced here (a direct upload, or an
-   * output from before project preservation shipped). Recorded, never acted on —
+   * output from before project preservation shipped). Recorded, never acted on:
    * dispatch always sends the artifact it was given.
    */
   sourceProjectFileId: string | null
@@ -114,7 +114,7 @@ interface DispatchJobState {
   /**
    * Instance `identify_id`s to skip (resolved from the request's `skipObjects` object
    * ids at enqueue time), or null when the user deselected nothing. Sent as the start
-   * command's `skip_objects` field (the primary mechanism — what Bambu Handy sends);
+   * command's `skip_objects` field (the primary mechanism: what Bambu Handy sends);
    * because older firmware ignores that field, runJob also arms a one-shot post-start
    * `skip_objects` fallback for the same ids.
    */
@@ -176,8 +176,8 @@ class PrintDispatcher {
   /**
    * Refuse to dispatch through a bridge whose update status is incompatible
    * (protocol/runner/image out of date or unsupported). Such a bridge may still be
-   * connected enough to report status, but it must not run printer-affecting actions
-   * — an out-of-date bridge is exactly how a server fix fails to reach the print path.
+   * connected enough to report status, but it must not run printer-affecting actions,
+   * an out-of-date bridge is exactly how a server fix fails to reach the print path.
    * The web surfaces the same status with an in-place "Update bridge" action; this is
    * the server-side backstop so a stale bridge cannot print even if the UI is bypassed.
    */
@@ -185,8 +185,8 @@ class PrintDispatcher {
     // On a self-hosted bundle the bridge ships with the app and is lockstep by
     // construction, so its self-reported `updateStatus` must never gate printing
     // (see `resolveBridgeUpdateStatus`). A stale/blocking value there would
-    // otherwise refuse dispatch before the job is even created — the print would
-    // never appear in Jobs — for an "update" the operator has no way to apply.
+    // otherwise refuse dispatch before the job is even created, the print would
+    // never appear in Jobs, for an "update" the operator has no way to apply.
     if (isSelfHostedDeployment()) return
     // `Bridge` is not in WORKSPACE_SCOPED_MODELS, so we scope explicitly with the
     // caller's workspaceId. rootPrisma is used deliberately (no auto-scoping needed for a
@@ -225,7 +225,7 @@ class PrintDispatcher {
     const blocked = printGuards.evaluate({ printerId: printer.id, source: 'dispatch' })
     if (blocked) throw new Error(blocked.reason ?? 'Print blocked by a plugin')
     if (!snapshot.ownerBridgeId) throw new Error('Library snapshots must be bridge-backed')
-    // Reserve the printer now — no await has run since the active-dispatch check, so
+    // Reserve the printer now, no await has run since the active-dispatch check, so
     // this closes the prep-window race. Release once the job is registered or fails.
     this.reservedPrinterIds.add(printer.id)
     try {
@@ -393,7 +393,7 @@ class PrintDispatcher {
   /**
    * Graceful-shutdown drain. Cancels queued jobs and aborts in-flight uploads
    * (runJob then deletes any landed SD bytes and cancels the tracked record),
-   * leaving 'sent' jobs — the live prints — untouched. Awaits the per-printer
+   * leaving 'sent' jobs, the live prints, untouched. Awaits the per-printer
    * queues so that cleanup runs within the caller's shutdown budget. Best-effort:
    * an exceeded budget force-exits, which is still better than abandoning silently.
    */
@@ -484,7 +484,7 @@ class PrintDispatcher {
       try {
         // Durably cross the rob-1 boundary BEFORE publishing: once this commits, a
         // later crash treats the dispatch as "may have started" and never auto-cleans
-        // its SD bytes. If it can't be recorded, abort before publish — a safe,
+        // its SD bytes. If it can't be recorded, abort before publish, a safe,
         // retryable failure beats risking a post-crash cleanup of a real print.
         await markDispatchStartAttempted(job.id)
       } catch (error) {
@@ -538,7 +538,7 @@ class PrintDispatcher {
         return
       }
       // Note: skipObjectIds are per-INSTANCE identify_ids, so their count can
-      // exceed the number of deselected objects — keep the message countless.
+      // exceed the number of deselected objects: keep the message countless.
       this.finish(
         job,
         'sent',
@@ -819,7 +819,7 @@ export interface ProjectFilePrintCommandInput {
   /**
    * Instance `identify_id`s to exclude from the print, sent as the payload's
    * `skip_objects` array (what Bambu Handy sends; there is an is_support_partskip
-   * capability bit, and firmware without it ignores the field — callers keep the
+   * capability bit, and firmware without it ignores the field: callers keep the
    * post-start mid-print skip as a fallback). Omitted entirely when empty.
    */
   skipObjects?: number[] | null
@@ -837,8 +837,8 @@ const AMS_MAPPING_2_UNSET = 0xff
  * trays (254/255) become -1 on the wire: the flat array only carries physical
  * tray indices, and the external selection rides in `ams_mapping2`. H2-family
  * firmware rejects raw 254/255 in the flat array with 0700-8012 "Failed to get
- * AMS mapping table" (verified by BambuStudio request-topic captures — see the
- * bambuddy project's start_print notes — and matching BambuStudio's own
+ * AMS mapping table" (verified by BambuStudio request-topic captures, see the
+ * bambuddy project's start_print notes, and matching BambuStudio's own
  * `get_ams_mapping_result`, which -1s virtual trays before pushing v0).
  */
 function flatAmsMappingEntry(trayIndex: number): number {
@@ -852,11 +852,11 @@ function flatAmsMappingEntry(trayIndex: number): number {
  * external virtual trays → false; a mapping naming no tray at all (absent, or
  * every entry pruned to -1) carries no signal, so the caller's flag stands.
  *
- * Deriving here — not in each caller — is what keeps every dispatch path
+ * Deriving here, not in each caller, is what keeps every dispatch path
  * correct at once: the web dialogs hardcode `useAms: true`, and sending that
  * for an all-external print makes firmware build an AMS mapping table it
  * cannot satisfy, failing 07FF-8012 at print start when no AMS is attached
- * (public issue #9, P1S with its AMS disconnected — Bambu Studio itself prints
+ * (public issue #9, P1S with its AMS disconnected: Bambu Studio itself prints
  * fine there because it sends `use_ams: false`).
  */
 function resolveEffectiveUseAms(useAms: boolean, amsMapping: number[] | null | undefined): boolean {
@@ -870,7 +870,7 @@ function resolveEffectiveUseAms(useAms: boolean, amsMapping: number[] | null | u
 
 /**
  * The `ams_mapping2` entry for a stored tray index. The wire key has NO
- * underscore before the 2 — verified from real BambuStudio request-topic
+ * underscore before the 2: verified from real BambuStudio request-topic
  * captures (bambuddy); the `ams_mapping_2` spelling that appears in a
  * BambuStudio *log statement* is silently ignored by firmware. H2-family
  * firmware needs this v2 form to resolve AMS HT trays (the 128+ band): with a
@@ -881,7 +881,7 @@ function resolveEffectiveUseAms(useAms: boolean, amsMapping: number[] | null | u
  * - regular slots `{unit, slot}`; AMS HT `{128+, 0}` (tray index IS the unit id)
  * - unmapped (-1 from plate pruning) -> 0xff/0xff
  * - external virtual trays: dual-nozzle machines keep the chosen 254/255
- *   (deputy/main); single-nozzle machines always send 255 — their status
+ *   (deputy/main); single-nozzle machines always send 255, their status
  *   reports the external tray as 254, but firmware routes `ams_id: 254` to
  *   AMS tray 0, so only VIRTUAL_TRAY_MAIN_ID is valid there
  * - the AMS Lite Mixed band (24-27) is sent unset: ambiguous in reverse
@@ -900,17 +900,17 @@ function amsMapping2Entry(trayIndex: number, dualNozzles: boolean): { ams_id: nu
 
 /**
  * Build the Bambu `project_file` MQTT print-start command. The single source
- * for this payload shape — the dispatcher and the printer-storage / reprint
+ * for this payload shape: the dispatcher and the printer-storage / reprint
  * routes all go through here so every print path sends an identical command.
  * Object skipping rides in the payload's `skip_objects` array (see
  * {@link ProjectFilePrintCommandInput.skipObjects}).
  *
  * The AMS mapping is sent in both wire forms: the flat `ams_mapping` array
- * (physical tray indices, virtual trays -1 — see {@link flatAmsMappingEntry})
+ * (physical tray indices, virtual trays -1: see {@link flatAmsMappingEntry})
  * plus the `ams_mapping2` unit/slot pairs ({@link amsMapping2Entry}), and it
  * decides the wire `use_ams` ({@link resolveEffectiveUseAms}). This is
  * the exact shape verified working on H2D/H2C hardware including AMS HT
- * fetches; do not add speculative fields without a wire capture — the
+ * fetches; do not add speculative fields without a wire capture: the
  * `ams_mapping_info`/`nozzles_info` names we once inferred from BambuStudio
  * internals are not on the wire and firmware ignored them.
  */
@@ -996,7 +996,7 @@ async function resolvePlateAmsMapping(
  * ({@link readPlateIndex}), never a direct `model_settings.config` lookup: gcode-only exports
  * (Bambu Studio "sliced plate" files, MakerWorld print profiles) carry no `model_instance`
  * blocks at all, so the index falls back to slice_info objects whose ids are ALREADY
- * identify_ids — an id space a model_settings lookup can never match. Re-deriving through the
+ * identify_ids, an id space a model_settings lookup can never match. Re-deriving through the
  * same parser keeps the id space aligned with whatever the user actually deselected.
  *
  * Unlike the AMS-mapping prune above, this is NOT fail-safe-passthrough: the user explicitly
@@ -1059,7 +1059,7 @@ async function readPlateUsedFilamentIndices(localPath: string, plate: number): P
  * -1s. `ams_mapping[i]` is the tray for project filament `i` (0-based). A plate that uses
  * only filament 0 of a 3-filament project yields `[tray]` rather than `[tray, x, y]`, so
  * the printer treats it as the single-nozzle job it is. Empty `usedFilamentIndices` (read
- * failed) or no matching used entry leaves the mapping unchanged — never break a print.
+ * failed) or no matching used entry leaves the mapping unchanged, never break a print.
  */
 export function prunePlateAmsMapping(amsMapping: number[], usedFilamentIndices: ReadonlySet<number>): number[] {
   if (usedFilamentIndices.size === 0) return amsMapping
@@ -1216,7 +1216,7 @@ function delay(ms: number): Promise<void> {
 
 /**
  * Bambu firmware rejects names containing path separators or non-ASCII chars; FAT
- * also reserves `<>:"|?*`. Everything else (brackets, +, ', etc.) is kept — Bambu
+ * also reserves `<>:"|?*`. Everything else (brackets, +, ', etc.) is kept: Bambu
  * Studio itself sends names like "Mount (landscape).gcode.3mf" to printers.
  */
 export function sanitizeRemoteName(name: string): string {

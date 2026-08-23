@@ -5,16 +5,16 @@
  * second line of defense against an injected/compromised script. This policy
  * restores defense-in-depth while allowing what the app genuinely needs:
  *
- * - `img-src`/`media-src 'self' data: blob:` — camera frames and cover/thumbnail
+ * - `img-src`/`media-src 'self' data: blob:`: camera frames and cover/thumbnail
  *   images are rendered from `blob:`/`data:` object URLs built off WebSocket JPEG
  *   frames and proxied MJPEG/snapshot bytes (the case the old "CSP off" comment
  *   worried about). These are allowed; everything else cross-origin is not.
- * - `connect-src 'self'` — HTTP + same-origin WebSocket; blocks exfiltration of
+ * - `connect-src 'self'`: HTTP + same-origin WebSocket; blocks exfiltration of
  *   data to an attacker-controlled host, the usual XSS payload goal.
  * - `object-src 'none'`, `base-uri 'self'`, `frame-ancestors 'none'`,
- *   `form-action 'self'` — kill plugin embeds, `<base>` hijacking, clickjacking,
+ *   `form-action 'self'`: kill plugin embeds, `<base>` hijacking, clickjacking,
  *   and form-action hijacking outright.
- * - `worker-src 'self' blob:` — the model-studio mesh-parsing web worker.
+ * - `worker-src 'self' blob:`: the model-studio mesh-parsing web worker.
  *
  * `script-src` still allows `'unsafe-inline'` because vite-plugin-pwa inlines a
  * small service-worker registration snippet into index.html; tightening that to a
@@ -34,7 +34,7 @@ import { REMOTE_IMPORT_THUMBNAIL_CSP_SOURCES } from '@printstream/shared'
 // and opens the checkout in an iframe from `*.paddle.com` (e.g. `buy.paddle.com`,
 // `sandbox-buy.paddle.com`), calling Paddle's APIs and loading card-brand images
 // from the same host set. Allow-listing these is inert on self-hosted/OSS builds
-// (which never load Paddle.js) — it only widens what the cloud checkout needs.
+// (which never load Paddle.js), it only widens what the cloud checkout needs.
 const PADDLE = 'https://*.paddle.com'
 
 // Cloudflare Web Analytics. When a deployment is proxied by Cloudflare with
@@ -75,7 +75,7 @@ export interface ContentSecurityPolicyOptions {
    * Origin of a first-party analytics tracker (e.g. a self-hosted Umami at
    * `https://analytics.example.com`). Trackers of that shape need exactly two
    * allowances: loading their script (`script-src`) and posting their event
-   * beacons (`connect-src`) — nothing wider. Unset on installs without
+   * beacons (`connect-src`), nothing wider. Unset on installs without
    * cross-origin analytics.
    */
   analyticsOrigin?: string | null

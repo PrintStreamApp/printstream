@@ -4,17 +4,17 @@
  * Owns the Bambu-faithful process VALUE SPACE: resolving a preset's base config, BambuStudio's
  * conditional visibility/enable rules, its value-coercion clamps, and what counts as changed
  * against a preset, a project's baked overrides, or an object's inherited config. The chrome it
- * renders inside — tabs, search, "Changed only", the footer — belongs to
+ * renders inside, tabs, search, "Changed only", the footer, belongs to
  * `settings/SettingsCatalogDialog.tsx`, which the filament and machine editors share; this dialog
  * reaches it through a {@link SettingsCatalogAdapter}. The user edits values against the resolved
  * base config; the dialog emits the sparse override map (changed keys) back to the slice dialog and
  * can optionally persist the result as a reusable custom process preset.
  *
  * The catalog's `develop`-tier options are hidden unless developer mode is on
- * (`useEffectiveSlicerDeveloperMode` — the workspace default from the Slicing
+ * (`useEffectiveSlicerDeveloperMode`: the workspace default from the Slicing
  * settings page, optionally overridden per device); the shell applies that gate.
  *
- * Per-object mode (`baseOverlay` present) additionally supports BULK editing — one dialog for a
+ * Per-object mode (`baseOverlay` present) additionally supports BULK editing, one dialog for a
  * multi-selection of objects or parts (`initialOverridesByMember`): keys the members disagree on
  * render as "Mixed" and, untouched, keep each member's own value on apply. The seed/apply rules
  * live in `lib/processBulkOverrides.ts`.
@@ -64,7 +64,7 @@ export interface ProcessSettingsDialogProps {
   initialOverrides: ProcessSettingOverrides
   /**
    * Per-object BULK editing (a multi-selection): one override map per selected member, in
-   * selection order. When present with more than one entry, the dialog seeds from ALL of them —
+   * selection order. When present with more than one entry, the dialog seeds from ALL of them:
    * keys the members agree on show their value, keys they disagree on show as "Mixed" and, left
    * untouched, preserve each member's own value on apply (see `lib/processBulkOverrides.ts`).
    * Only meaningful with `baseOverlay` (per-object mode); `initialOverrides` should then be the
@@ -93,7 +93,7 @@ export interface ProcessSettingsDialogProps {
   titlePrefix?: string
   /**
    * The project's materials for filament-index settings (support/raft base+interface,
-   * walls/infill filament) — see {@link SettingValueField}. Omitted, those fall back to
+   * walls/infill filament): see {@link SettingValueField}. Omitted, those fall back to
    * bare number inputs.
    */
   filamentChoices?: SettingFilamentChoice[]
@@ -106,7 +106,7 @@ export interface ProcessSettingsDialogProps {
    * What the dialog is editing FOR.
    *
    * 'slice' / 'project' edit a slice's config and emit an override map through `onApply`.
-   * 'preset' edits the stored preset ITSELF — opened from the slicer-profiles settings, where
+   * 'preset' edits the stored preset ITSELF: opened from the slicer-profiles settings, where
    * there is no slice to apply to: the Apply button is hidden and `onApply` is never called, so
    * the only ways out are Save as preset, Update preset (custom presets only, via
    * `canEditOriginal`) and Cancel. That mirrors BambuStudio, where editing a SYSTEM preset can
@@ -123,15 +123,15 @@ export interface ProcessSettingsDialogProps {
    * How the dialog resolves a preset's base config. Defaults to the WORKSPACE route
    * (`/api/slicing/profiles/resolve-process`). The public 3MF editor passes an anonymous resolver
    * (built-in presets via `/api/public/slicing/...`; project presets from the in-tab 3MF), so it can
-   * run with no workspace. Additive — omitting it preserves the exact library behaviour.
+   * run with no workspace. Additive: omitting it preserves the exact library behaviour.
    */
   resolveConfig?: ProcessConfigResolver
   /**
    * Omitted for `applyScope: 'preset'`, which has nothing to apply to.
    *
    * `meta.clearedKeys` names keys the user RESET (relevant to per-object bulk editing, where the
-   * caller merges per member: assign `overrides`, delete `clearedKeys`, and leave everything else
-   * — the untouched "Mixed" keys — alone). Single-target callers may ignore it: there `overrides`
+   * caller merges per member: assign `overrides`, delete `clearedKeys`, and leave everything else,
+   * the untouched "Mixed" keys: alone). Single-target callers may ignore it: there `overrides`
    * is the complete final map, so replacement is equivalent.
    */
   onApply?: (overrides: ProcessSettingOverrides, meta: { clearedKeys: string[] }) => void
@@ -147,14 +147,14 @@ export type ProcessConfigResolver = (request: {
 /**
  * The one setting whose change offers a follow-up recommendation (see
  * `offerSupportRecommendation`). Not in `PER_OBJECT_PROCESS_KEYS`, so the prompt can only ever
- * appear in the global process dialog — per-object editing never reaches it.
+ * appear in the global process dialog: per-object editing never reaches it.
  */
 const SUPPORT_INTERFACE_FILAMENT_KEY = 'support_interface_filament'
 
 /**
  * Display form of a recommended serialized scalar for the suggestion prompt: bools as on/off,
  * enum codes through the catalogue's labels, numbers with the option's unit. The combination
- * table changes up to a dozen settings — including turning support ON and switching its type —
+ * table changes up to a dozen settings, including turning support ON and switching its type,
  * so the prompt names what each setting becomes, not just which settings move.
  */
 function formatRecommendedSettingValue(option: ProcessSettingOption | undefined, value: string): string {
@@ -172,7 +172,7 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
   const allowedKeySet = useMemo(() => (allowedKeys ? new Set(allowedKeys) : null), [allowedKeys])
   const isKeyAllowed = (key: string): boolean => allowedKeySet === null || allowedKeySet.has(key)
   // Reveal BambuStudio's develop-tier options only when developer mode is on (workspace
-  // default, optionally overridden per device — see useEffectiveSlicerDeveloperMode). The shell
+  // default, optionally overridden per device: see useEffectiveSlicerDeveloperMode). The shell
   // applies the tier gate itself; this only tells it which mode it is in.
   const showDeveloperOptions = useEffectiveSlicerDeveloperMode()
   // `baseConfig` is the preset baseline (reset target); `sliceBase` is the effective config the
@@ -193,21 +193,21 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
    */
   const [declaresOverrides, setDeclaresOverrides] = useState(false)
   /**
-   * False when the response carried no `baseConfig` — the named preset is not installed, so the
+   * False when the response carried no `baseConfig`: the named preset is not installed, so the
    * baseline is a copy of the profile's own values and a value diff can only ever be empty. The
    * declared record is then the only evidence of a change there is.
    */
   const [baselineResolved, setBaselineResolved] = useState(true)
   /**
    * What the change markers ended up being measured against, straight from the resolver. Held here
-   * rather than taken as a prop so the caveat can never disagree with the config it describes — a
+   * rather than taken as a prop so the caveat can never disagree with the config it describes, a
    * host computing it separately answered per PRESET while the resolver answers per REQUEST.
    */
   const [baselineOrigin, setBaselineOrigin] = useState<SettingsBaselineOrigin | undefined>(undefined)
   const [config, setConfig] = useState<ProcessConfig>({})
   // PER-OBJECT mode (baseOverlay present): the keys EXPLICITLY set as per-object overrides, tracked
   // apart from value equality. BambuStudio lists a per-object setting as "set" whenever it is present
-  // in the object's config — even if its value matches the inherited one (it still PINS the value
+  // in the object's config, even if its value matches the inherited one (it still PINS the value
   // against later global changes). We mirror that: an explicit override is shown (bold), counted, and
   // resettable (reset REMOVES it) regardless of whether its value differs. Unused in global mode
   // (empty), where overrides are the value-diff, so global behaviour is unchanged.
@@ -228,7 +228,7 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
 
   // Callers pass `visibilityContext` as a fresh object literal each render (e.g. the editor:
   // `visibilityContext={{ ...perObject.visibilityContext, isGlobalConfig: false }}`), so identity-
-  // keying this memo would recompute it — and the expensive `computeProcessFieldStates` below — on
+  // keying this memo would recompute it, and the expensive `computeProcessFieldStates` below, on
   // every parent render while the dialog is open. Content-key it instead (mirrors `baseOverlayKey`).
   const visibilityContextKey = JSON.stringify(props.visibilityContext ?? null)
   const context: ProcessVisibilityContext = useMemo(
@@ -240,7 +240,7 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
   // Callers pass `baseOverlay`/`initialOverrides` as fresh object literals each render (e.g.
   // the per-part dialog: `baseOverlay={{ ...globalOverrides, ...objectOverrides }}`). Keying
   // the load effect on their identity would re-resolve the process config on every parent
-  // re-render — flashing "Loading…" and resetting the form mid-edit. Depend on a stable
+  // re-render: flashing "Loading…" and resetting the form mid-edit. Depend on a stable
   // content hash instead so it reloads only when the values actually change.
   const baseOverlayKey = JSON.stringify(baseOverlay ?? null)
   const initialOverridesKey = JSON.stringify(initialOverridesByMember ?? initialOverrides ?? null)
@@ -269,7 +269,7 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
           setSliceBase(globalEffective)
           setBaseConfig(globalEffective)
           // A per-object override is measured against the OBJECT's inherited config, which has no
-          // "parent preset" of its own — the distinction does not apply here.
+          // "parent preset" of its own: the distinction does not apply here.
           setParentBaseline(null)
           setBakedKeys(new Set())
           // Per-object: the inherited config IS the baseline, so it always resolves.
@@ -323,7 +323,7 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
   /**
    * True when this project/session changed the key relative to the preset in use.
    *
-   * The value must actually DIFFER from the preset — the same test the reset affordance uses — so a
+   * The value must actually DIFFER from the preset, the same test the reset affordance uses, so a
    * key marked modified can always be reset and "Reset all" always clears the marks. BambuStudio
    * agrees: its modified marker is `PresetCollection::dirty_options`, a value diff against the
    * selected preset. The declared record decides which of the file's values SURVIVE loading
@@ -336,13 +336,13 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
   const isModified = (key: string): boolean => {
     if (baseConfig === null) return false
     // A per-object key that is explicitly set counts as modified even when its value matches the
-    // inherited one (see `explicitKeys`) — it is still an override.
+    // inherited one (see `explicitKeys`), it is still an override.
     if (perObjectMode && explicitKeys.has(key)) return true
     const option = processSettingsCatalog.options[key]
     if (!baselineResolved) return bakedKeys.has(key)
     if (processConfigValuesEqual(baseConfig[key], config[key], option)) return false
     // With a record present, an undeclared difference is version drift between the preset and the
-    // file — which BambuStudio normalizes away, not the user's change. An in-session edit always
+    // file, which BambuStudio normalizes away, not the user's change. An in-session edit always
     // counts, because the user just made it.
     if (declaresOverrides
       && !bakedKeys.has(key)
@@ -357,10 +357,10 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
     baseConfig !== null && !processConfigValuesEqual(baseConfig[key], config[key], processSettingsCatalog.options[key])
 
   /**
-   * An override the PRESET itself carries relative to its parent — emphasis only, never counted and
+   * An override the PRESET itself carries relative to its parent: emphasis only, never counted and
    * never caught by "changed only". BambuStudio keeps this as a separate question from "modified"
    * (`current_different_from_parent_options` vs `current_dirty_options`), in a single non-virtual
-   * `Tab::update_changed_ui` that every preset type shares — so this matches the material dialog's
+   * `Tab::update_changed_ui` that every preset type shares, so this matches the material dialog's
    * `isPresetOverride` rather than being a process-specific idea.
    */
   const isPresetOverride = (key: string): boolean =>
@@ -369,7 +369,7 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
 
   /**
    * What a changed value replaced. A project change is measured against the preset; an override the
-   * preset carries is measured against its parent — so the hover names which baseline it is showing
+   * preset carries is measured against its parent, so the hover names which baseline it is showing
    * rather than leaving "original" ambiguous between the two.
    */
   const originalOf = (key: string): { value: string; label: string } | null => {
@@ -395,7 +395,7 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
   /**
    * Whether a key renders at all: allowed by the per-object subset, and not hidden by the
    * conditional engine (a setting whose controlling toggle is off). Developer-tier gating and the
-   * search/changed filters are the shell's job — this is the part only this dialog can answer.
+   * search/changed filters are the shell's job, this is the part only this dialog can answer.
    */
   const isKeyVisible = (key: string): boolean =>
     isKeyAllowed(key) && getProcessFieldState(fieldStates.states, key).visible
@@ -417,7 +417,7 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
   }
 
   // Editing a per-object value makes that key an explicit override (it stays set until reset, even
-  // if edited back to the inherited value) — BambuStudio's model. Editing also resolves a "Mixed"
+  // if edited back to the inherited value): BambuStudio's model. Editing also resolves a "Mixed"
   // key: the typed value now applies uniformly to every member.
   const markExplicit = (key: string) => {
     if (!perObjectMode) return
@@ -447,8 +447,8 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
   /**
    * BambuStudio's "Suggestion" prompt: choosing a support interface material that calls for a
    * different support geometry (soluble, a dedicated support material, or PLA over TPU) offers
-   * the settings it recommends. Decision logic — including "the config already matches, say
-   * nothing" — lives in `recommendSupportSettingsForInterfaceFilament`; this only asks and applies.
+   * the settings it recommends. Decision logic, including "the config already matches, say
+   * nothing", lives in `recommendSupportSettingsForInterfaceFilament`; this only asks and applies.
    *
    * Applies through `commit`, the same path a manual edit takes, so the proposed values land in
    * the dialog's config and ride the existing modified/reset markers and the Apply diff. Nothing
@@ -514,7 +514,7 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
     if (baseConfig[key] === undefined) delete next[key]
     else next[key] = baseConfig[key]
     // Resetting a per-object override REMOVES it (the object goes back to inheriting the global),
-    // even when its value already matched — that is the whole point of the "set but matching" case.
+    // even when its value already matched, that is the whole point of the "set but matching" case.
     // On a "Mixed" key, reset clears the override from EVERY member (back to inherited for all).
     if (perObjectMode && explicitKeys.has(key)) {
       setExplicitKeys((prev) => { const nextKeys = new Set(prev); nextKeys.delete(key); return nextKeys })
@@ -528,7 +528,7 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
     commit(next)
   }
 
-  /** True when a key can be reset — a value differs from the baseline, OR (per-object) it is an
+  /** True when a key can be reset, a value differs from the baseline, OR (per-object) it is an
    * explicit override that reset would remove even though its value matches. */
   const canReset = (key: string): boolean => {
     if (baseConfig === null) return false
@@ -537,7 +537,7 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
   }
 
   /**
-   * Differs from what is SAVED — an edit made in this session, as opposed to an override the preset
+   * Differs from what is SAVED, an edit made in this session, as opposed to an override the preset
    * already carries relative to its parent. BambuStudio colours only the former (Tab.cpp
    * `update_changed_ui`: a value equal to the last saved one takes the default text colour, a value
    * differing from it takes `m_modified_label_clr`).
@@ -548,7 +548,7 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
   /**
    * The overrides to emit. Per-object mode preserves EVERY explicitly-set key (even one whose value
    * matches the inherited config), so a value-matching pin survives an apply instead of being
-   * dropped by the value-diff — while still-mixed keys are emitted in NEITHER set, which is what
+   * dropped by the value-diff, while still-mixed keys are emitted in NEITHER set, which is what
    * lets each member keep its own value. Global mode emits the value-diff relative to the slice
    * base so baked-but-untouched keys aren't re-sent.
    */
@@ -641,7 +641,7 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
     isModified,
     isUnsaved,
     // The FIELD marks any value differing from the preset baseline, while the LINE marks only what
-    // this session changed relative to the effective slice base — a 3MF's baked overrides sit
+    // this session changed relative to the effective slice base, a 3MF's baked overrides sit
     // between the two, and collapsing them would either hide a real deviation or colour one the
     // user did not make.
     isFieldChanged: isValueChanged,
@@ -657,12 +657,12 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
       if (!keys.some((key) => isModified(key))) return null
       if (keys.some((key) => isValueChanged(key))) return null
       if (keys.some((key) => mixedKeys.has(key))) {
-        return { tooltip: 'Set to different values across the selection — edit to apply one value to everything, or reset to clear it everywhere' }
+        return { tooltip: 'Set to different values across the selection: edit to apply one value to everything, or reset to clear it everywhere' }
       }
       return {
         tooltip: bulkSelection
-          ? 'Set on every selected item (matches the inherited value) — reset to inherit'
-          : 'Set for this object (matches the inherited value) — reset to inherit'
+          ? 'Set on every selected item (matches the inherited value): reset to inherit'
+          : 'Set for this object (matches the inherited value): reset to inherit'
       }
     }
   }
@@ -722,8 +722,8 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
           PER-OBJECT mode has no preset destination: the edit is a SUBSET of keys layered on the
           project's process (`allowedKeys` + `baseOverlay`), so "save as preset" would mint a full
           process preset silently carrying the whole inherited config. With one destination left,
-          naming it ("Apply to this project") implies a choice that does not exist — the title
-          already says whose settings these are ("Object settings — <name>").
+          naming it ("Apply to this project") implies a choice that does not exist: the title
+          already says whose settings these are ("Object settings: <name>").
         */
         onUpdatePreset: !perObjectMode && canEditOriginal ? () => void handleUpdateOriginal() : undefined,
         onSaveAsPreset: perObjectMode ? undefined : () => void handleSaveAsPreset(),

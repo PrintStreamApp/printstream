@@ -1,13 +1,13 @@
 /**
- * OS launcher entries — a Start Menu shortcut (Windows) or an application-menu
- * `.desktop` entry (Linux) — each running one `<exe> <verb>` in the user's
+ * OS launcher entries, a Start Menu shortcut (Windows) or an application-menu
+ * `.desktop` entry (Linux), each running one `<exe> <verb>` in the user's
  * session. Installed by `installTrayLauncher` and removed by
  * `uninstallTrayLauncher`. Parameterized by the app identity.
  *
  * An app may register SEVERAL entries, and the reason is what users expect from
  * an application menu: clicking the app's own name must open the app. The
  * self-hosted server installs a "PrintStream" entry that opens the web UI plus a
- * "PrintStream Tray" entry that brings the tray icon back — before that, the
+ * "PrintStream Tray" entry that brings the tray icon back: before that, the
  * only entry showed a tray icon, and a user who clicked "PrintStream" got what
  * looked like nothing happening.
  *
@@ -103,7 +103,7 @@ export function ensureWindowsTrayVbs(exePath: string): string {
 /**
  * Writes a hidden-launch VBScript (in the install dir) and returns its path.
  * `wscript` has no console of its own, and `Run(.., 0, False)` starts the
- * console-subsystem app hidden — so launching from the Start Menu never flashes
+ * console-subsystem app hidden, so launching from the Start Menu never flashes
  * a blank window that, if the user closed it, would take the launched process
  * down with it.
  *

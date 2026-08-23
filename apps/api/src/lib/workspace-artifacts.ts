@@ -3,8 +3,8 @@
  * children) are removed.
  *
  * Workspace deletion relies on Prisma `onDelete: Cascade` to drop the DB rows, but
- * the actual bytes those rows point at — library files (and versions) on the
- * bridge, plus print-job thumbnails/snapshots on disk — are not in the database
+ * the actual bytes those rows point at, library files (and versions) on the
+ * bridge, plus print-job thumbnails/snapshots on disk, are not in the database
  * and would otherwise be orphaned forever (a data-retention/GDPR gap and a slow
  * disk leak). This enumerates them while the rows still exist and removes the
  * bytes, then detaches the workspace's printers from the in-process manager so their
@@ -12,7 +12,7 @@
  *
  * Best-effort: every byte delete is isolated so one failure (e.g. an offline
  * bridge) is logged but never blocks the workspace deletion. Call this BEFORE
- * `prisma.workspace.delete` — afterwards the rows are gone and cannot be enumerated.
+ * `prisma.workspace.delete`: afterwards the rows are gone and cannot be enumerated.
  */
 import { deleteLibraryFileBytes } from './bridge-library-files.js'
 import { deletePrintJobSnapshot } from './print-job-snapshots.js'

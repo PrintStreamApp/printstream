@@ -63,7 +63,43 @@ export async function buildEditedThreeMf(
   } else {
     await writeFreshThreeMf(outputPath, plan.freshEntries ?? [])
   }
+  // Judge the bake on what it WROTE. Every other invariant check runs on a file at rest, so a
+  // defect the bake introduces stays invisible until someone reopens the project, which is how a
+  // variant-scoped physics drop and an unbound object each reached users. Runs after the write
+  // because the project-settings transform is applied lazily by it.
+  //
+  // Reports, never blocks or rewrites: the save has already succeeded, the reasons are all
+  // repairable, and the file carries them into the same banner a reopen would raise. Healing here
+  // instead would hide the authoring bug that produced them.
+  const reasons = plan.settingsRepairReasons()
+  if (reasons.length > 0) {
+    console.warn(`[three-mf-bake] wrote ${outputPath} with repairable settings defects: ${reasons.join(', ')}${describeUnresolvedFilaments(edit)}`)
+  }
   return plan.result
+}
+
+/**
+ * Why a `filamentPhysics` repair could not have worked, when that is the answer.
+ *
+ * The restore is all-or-nothing across slots: the arrays are positional and per-key wide, so one
+ * unresolved slot cannot be padded without both guessing a value and pushing the array past the real
+ * slot count. It therefore writes NOTHING and the project stays flagged: correct, but from the
+ * outside indistinguishable from a repair that silently failed, which is exactly how it was reported
+ * ("I pressed Repair, it said it worked, and the banner came back").
+ *
+ * Naming the slots is the difference between an unexplained banner and a fixable one: a preset that
+ * resolves in a workspace catalogue but not in the anonymous one is the known trigger, so the same
+ * file can be repairable from one host and not another. Returns empty when every slot resolved, so
+ * the line stays quiet about filaments when they are not the reason.
+ */
+function describeUnresolvedFilaments(edit: SceneEdit): string {
+  const filaments = edit.filaments ?? []
+  if (filaments.length === 0) return ''
+  const unresolved = filaments
+    .map((filament, index) => (filament.config == null ? index + 1 : null))
+    .filter((slot): slot is number => slot !== null)
+  if (unresolved.length === 0) return ''
+  return ` (filament slots ${unresolved.join(', ')} resolved no preset, so their values could not be restored)`
 }
 
 /**

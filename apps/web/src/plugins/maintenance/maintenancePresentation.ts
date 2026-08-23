@@ -2,14 +2,14 @@
  * Presentation rules for maintenance status: colours, status wording, and the
  * phrasing of an interval or a due date.
  *
- * One module because the same task appears in three places — the printer card
- * chip, the section list, and the edit dialog — and a status that reads "Due" in
+ * One module because the same task appears in three places, the printer card
+ * chip, the section list, and the edit dialog, and a status that reads "Due" in
  * one and "Overdue" in another looks like two different states of two different
  * things. Every surface formats through here.
  *
  * Intervals are stored in days but read badly that way past a couple of months:
  * Bambu's guidance is written in months, so 90 days is shown as "3 months", not
- * "90 days". The stored unit does not change — only the wording.
+ * "90 days". The stored unit does not change, only the wording.
  */
 import type { MaintenanceStatus, MaintenanceTaskDto, MaintenanceTriggerDto } from '@printstream/shared'
 
@@ -44,7 +44,7 @@ export function formatDayInterval(days: number): string {
 /**
  * The interval line under a task title, e.g. "Every 3 months, or every 3 kg of
  * filament". Multiple intervals are joined with "or" because whichever elapses
- * first wins — "and" would read as needing both.
+ * first wins: "and" would read as needing both.
  */
 export function formatIntervals(task: Pick<MaintenanceTaskDto, 'intervals'>): string {
   const parts: string[] = []

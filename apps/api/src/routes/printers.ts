@@ -449,7 +449,7 @@ printersRouter.patch('/:id', requireRequestPermission(PRINTERS_MANAGE_PERMISSION
   printerManager.update(dto, updated.workspaceId, updated.bridgeId)
   await Promise.all(Array.from(new Set([existing.bridgeId, updated.bridgeId].filter((bridgeId): bridgeId is string => Boolean(bridgeId)))).map(syncBridgePrinterConfig))
   // Record which fields were edited. The LAN access code is a secret: never
-  // record its value — only note that it changed.
+  // record its value, only note that it changed.
   const editableFields = ['name', 'host', 'serial', 'accessCode', 'model', 'bridgeId', 'currentPlateType', 'currentNozzleDiameters', 'manualPrints', 'manualPrintHours'] as const
   const changedFields = editableFields.filter((field) => request.body[field] !== undefined)
   annotateRequestAuditLog(request, {
@@ -527,7 +527,7 @@ printersRouter.post('/:id/command', async (request, response) => {
     if (blocked) throw conflict(blocked.reason ?? 'Calibration blocked by a plugin')
     const calibrationJobId = await startCalibrationJob({ printerId: existing.id, printerName: existing.name, option })
     if (!calibrationJobId) {
-      throw badRequest('Printer is not connected — command was not delivered')
+      throw badRequest('Printer is not connected: command was not delivered')
     }
     annotateRequestAuditLog(request, {
       action: 'start-calibration',
@@ -556,7 +556,7 @@ printersRouter.post('/:id/command', async (request, response) => {
         response.status(202).end()
         return
       }
-      throw badRequest('Printer is not connected — command was not delivered')
+      throw badRequest('Printer is not connected: command was not delivered')
     }
   }
   const commandAudit = describePrinterCommandAudit(parsed.data)
@@ -685,7 +685,7 @@ function getPrinterCommandPermission(
  * Maps a printer command to a readable audit action/resource/summary. Every
  * command type produces an entry so the durable audit trail stays readable;
  * the `:id/command` handler attaches the command type (and, for AMS slot
- * commands, the unit/slot indices — never filament secrets) as metadata.
+ * commands, the unit/slot indices, never filament secrets) as metadata.
  *
  * `calibrate` is intentionally absent: it is audited on its own success path
  * (with the calibration option + job id) before this helper runs.
@@ -1283,7 +1283,7 @@ function normalizePrinterPath(raw: unknown): string {
  * Bambu firmware-managed directories that never contain user-printable
  * models. Skipping them keeps the recursive Models listing fast on
  * printers with full SD cards (timelapses, camera dumps, etc.). The
- * list is intentionally conservative — anything not on it is treated
+ * list is intentionally conservative: anything not on it is treated
  * as a possible custom folder and will be searched.
  */
 const RECURSIVE_SKIP_DIRS: ReadonlySet<string> = new Set([
@@ -1300,7 +1300,7 @@ const RECURSIVE_SKIP_DIRS: ReadonlySet<string> = new Set([
   'thumbnail'
 ])
 
-/** GET /api/printers/:id/storage?path=/&recursive=1 — list files+folders. */
+/** GET /api/printers/:id/storage?path=/&recursive=1: list files+folders. */
 printersRouter.get('/:id/storage', requireRequestPermission(PRINTER_STORAGE_VIEW_PERMISSION), async (request, response) => {
   const printer = await requireWorkspaceOwnedConnectedPrinter(requireRouteParam(request.params.id, 'Printer id'))
   if (!printer) throw notFound('Printer not found or not connected')
@@ -1497,7 +1497,7 @@ printersRouter.get('/:id/storage/plates', requireRequestPermission(PRINTER_STORA
       processProfileName: index.processProfileName,
       // The print dialog warns when this disagrees with the machine, so it has to survive the
       // narrowing above. Plate entries are reshaped here (`hasThumbnail` replaces the file name),
-      // which is why this response is projected field by field rather than passed through — when
+      // which is why this response is projected field by field rather than passed through: when
       // you add an index field, add it here too or the dialog silently never sees it.
       slicedWithFilamentTrackSwitch: index.slicedWithFilamentTrackSwitch
     } satisfies ThreeMfIndex)
@@ -1507,7 +1507,7 @@ printersRouter.get('/:id/storage/plates', requireRequestPermission(PRINTER_STORA
   }
 })
 
-/** DELETE /api/printers/:id/storage?path=/x.3mf&type=file — remove a file or empty directory. */
+/** DELETE /api/printers/:id/storage?path=/x.3mf&type=file: remove a file or empty directory. */
 printersRouter.delete('/:id/storage', requireRequestPermission(PRINTERS_MANAGE_STORAGE_EDIT_SCOPE), async (request, response) => {
   const printer = await requireWorkspaceOwnedConnectedPrinter(requireRouteParam(request.params.id, 'Printer id'))
   if (!printer) throw notFound('Printer not found or not connected')
@@ -1570,7 +1570,7 @@ printersRouter.post('/:id/storage/delete-jobs', requireRequestPermission(PRINTER
   response.status(202).json({ job })
 })
 
-/** POST /api/printers/:id/storage/rename — rename or move a file/folder. */
+/** POST /api/printers/:id/storage/rename: rename or move a file/folder. */
 printersRouter.post('/:id/storage/rename', requireRequestPermission(PRINTERS_MANAGE_STORAGE_EDIT_SCOPE), async (request, response) => {
   const printer = await requireWorkspaceOwnedConnectedPrinter(requireRouteParam(request.params.id, 'Printer id'))
   if (!printer) throw notFound('Printer not found or not connected')
@@ -1599,7 +1599,7 @@ printersRouter.post('/:id/storage/rename', requireRequestPermission(PRINTERS_MAN
 })
 
 /**
- * POST /api/printers/:id/storage/print — start a print of a file already
+ * POST /api/printers/:id/storage/print: start a print of a file already
  * present on the printer's storage. No upload happens; we just publish
  * the `project_file` MQTT command pointing at the existing path.
  */
@@ -1645,7 +1645,7 @@ printersRouter.post('/:id/storage/print', requireRequestPermission(PRINTS_DISPAT
   }
 
   // Resolve deselected objects to the instance identify_ids the firmware skips on,
-  // through the same (cached) plates index the storage plates route serves — the ids the
+  // through the same (cached) plates index the storage plates route serves: the ids the
   // client selected against. Fail-loud like the library dispatcher: the user explicitly
   // deselected objects, so printing them anyway would violate intent.
   const skipIdentifyIds = resolveStorageSkipIdentifyIds(
@@ -1682,7 +1682,7 @@ printersRouter.post('/:id/storage/print', requireRequestPermission(PRINTS_DISPAT
     printerStatus
   )
   // Printing a file already on the printer's SD is still a print start, so it must
-  // honor plugin print guards (e.g. plate-clearing) like dispatch and reprint do —
+  // honor plugin print guards (e.g. plate-clearing) like dispatch and reprint do,
   // otherwise this route is a hole that prints onto an uncleared plate.
   const blocked = printGuards.evaluate({ printerId: printer.id, source: 'reprint' })
   if (blocked) throw conflict(blocked.reason ?? 'Print blocked by a plugin')
@@ -1747,7 +1747,7 @@ printersRouter.post('/:id/storage/print', requireRequestPermission(PRINTS_DISPAT
   })
   if (!trackedJobId) {
     disarmPostStartSkip?.()
-    throw badRequest('Printer is not connected — command was not delivered')
+    throw badRequest('Printer is not connected: command was not delivered')
   }
   annotateRequestAuditLog(request, {
     action: 'start-printer-storage-print',

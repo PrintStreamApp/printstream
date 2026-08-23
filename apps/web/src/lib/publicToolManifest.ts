@@ -1,5 +1,5 @@
 /**
- * Public tool routes — pages that work with no account, no workspace, and no server data.
+ * Public tool routes: pages that work with no account, no workspace, and no server data.
  *
  * Distinct from the private marketing manifest (`marketingManifest.ts`) on purpose. Marketing pages
  * are cloud-only and vanish from the open-source build; these are CORE capability, so a self-hosted

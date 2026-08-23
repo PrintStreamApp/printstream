@@ -2,7 +2,7 @@
  * HTTP routes for the maintenance plugin, mounted at `/api/plugins/maintenance`.
  *
  * Reads use `printers.view`; mutations use `printers.manage` rather than
- * `printers.control` — logging a service or retiming an interval administers the
+ * `printers.control`: logging a service or retiming an interval administers the
  * printer record and sends nothing to the machine.
  *
  * Handlers stay thin: data access is in `store.ts`, the catalog/override merge in
@@ -251,7 +251,7 @@ export function registerMaintenanceRoutes(context: ApiPluginContext): void {
     const printer = await requirePrinter(requireRouteParam(request.params.printerId, 'Printer id'))
     const taskKey = requireRouteParam(request.params.taskKey, 'Task key')
     if (!isCustomMaintenanceTaskKey(taskKey)) {
-      // Deleting a catalog task is meaningless — the next read re-supplies it from
+      // Deleting a catalog task is meaningless: the next read re-supplies it from
       // the catalog. Switching it off is the supported way to silence one.
       throw badRequest('Catalog maintenance tasks cannot be deleted; disable the task instead')
     }

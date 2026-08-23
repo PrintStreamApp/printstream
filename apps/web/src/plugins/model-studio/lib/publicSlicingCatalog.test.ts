@@ -3,7 +3,7 @@
  * controller reads, the "no target yet" gate, the descriptor mapping the settings panel depends
  * on, and the stall guard that is the module's whole reason to exist.
  *
- * Time is driven with the runner's mock timers rather than waited out — the guard arms a plain
+ * Time is driven with the runner's mock timers rather than waited out: the guard arms a plain
  * global `setTimeout`, so ticking it exercises the real 25-second budget in microseconds. The
  * network seam is the global `fetch` that `apiFetch` calls (nothing here is stubbed at the module
  * level), so the composed abort signal under test is the one the guard actually hands the request.

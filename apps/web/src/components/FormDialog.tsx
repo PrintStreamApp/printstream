@@ -1,14 +1,14 @@
 /**
  * The shell every "fill this in and submit" dialog shares.
  *
- * Chrome only — the dialog surface, close affordance, title, description, error
+ * Chrome only: the dialog surface, close affordance, title, description, error
  * banner and footer. Callers supply the fields, usually grouped with
  * {@link DialogSection}.
  *
  * Exists because the same shell was being retyped per dialog and drifting each
  * time: one grew a `ModalClose` and the others did not, errors appeared as a
- * danger `Alert` in one and bare red text in another, and — the reason this is
- * a correctness fix rather than a tidy-up — the footer's button ORDER was
+ * danger `Alert` in one and bare red text in another, and, the reason this is
+ * a correctness fix rather than a tidy-up, the footer's button ORDER was
  * inverted in a newer dialog, putting Cancel where every other dialog in the
  * app puts the confirm action. Joy's `DialogActions` lays its children out in
  * source order, so that is decided by whoever types the JSX, which is exactly

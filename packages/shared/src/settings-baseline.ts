@@ -2,14 +2,14 @@
  * What a settings dialog's "changed" markers are actually measured against.
  *
  * A tune dialog shows changes RELATIVE to a preset. Usually that preset is the one the project
- * names, and the markers mean exactly what the user assumes. Sometimes it cannot be — the public
- * 3MF editor has no access to a workspace's custom presets — and the resolver substitutes something
+ * names, and the markers mean exactly what the user assumes. Sometimes it cannot be, the public
+ * 3MF editor has no access to a workspace's custom presets, and the resolver substitutes something
  * weaker. When that happens the markers are still the best available answer, but they no longer mean
  * what they appear to, and the difference is invisible: the same dialog, the same dots, a different
  * question answered.
  *
- * So the RESOLVER reports which case it landed in, and the dialog says so. The alternative — a host
- * re-deriving "did that preset resolve?" beside the resolver that already knows — is what shipped
+ * So the RESOLVER reports which case it landed in, and the dialog says so. The alternative, a host
+ * re-deriving "did that preset resolve?" beside the resolver that already knows, is what shipped
  * first, and it was wrong in two ways at once: it answered per PRESET while the resolver answers per
  * SLOT, and it had no idea about presets the user had uploaded into their own browser, so the one
  * case with a genuinely incomplete baseline was also the one case that said nothing.
@@ -20,7 +20,7 @@
  */
 
 /**
- * Absent means {@link SettingsBaselineOrigin} `exact` — the overwhelmingly common case, and what
+ * Absent means {@link SettingsBaselineOrigin} `exact`: the overwhelmingly common case, and what
  * every workspace-route response means, so neither host has to set it to say "nothing to explain".
  */
 export type SettingsBaselineOrigin =
@@ -43,9 +43,9 @@ export type SettingsBaselineOrigin =
 export function describeSettingsBaseline(origin: SettingsBaselineOrigin | undefined, kindWord: string): string | null {
   switch (origin?.kind) {
     case 'parent':
-      return `This project's ${kindWord} preset isn't available here, so changes are shown against "${origin.name}", the standard preset it's based on — an edit whose value matches that standard isn't flagged.`
+      return `This project's ${kindWord} preset isn't available here, so changes are shown against "${origin.name}", the standard preset it's based on, an edit whose value matches that standard isn't flagged.`
     case 'partial':
-      return `This ${kindWord} preset is based on one that isn't available here, so changes are shown against only the values the preset defines itself — anything it inherits isn't compared.`
+      return `This ${kindWord} preset is based on one that isn't available here, so changes are shown against only the values the preset defines itself: anything it inherits isn't compared.`
     case 'declared':
       return `This project's ${kindWord} preset isn't available here and nothing standard matches it, so the changes shown are the ones the file itself recorded rather than a comparison against a preset.`
     default:

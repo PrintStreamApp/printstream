@@ -4,7 +4,7 @@
  * Owns the typed filament settings catalog (generated from BambuStudio's
  * `TabFilament::build()` layout + `PrintConfig.cpp` metadata) consumed by the material "tune"
  * dialog (the settings icon next to the trashbin in the slice/editor material list). The dialog
- * mirrors the process settings dialog — tabs, search, per-key reset — so this module deliberately
+ * mirrors the process settings dialog, tabs, search, per-key reset, so this module deliberately
  * REUSES the process module's catalog-agnostic surface (`ProcessSettingOption`, `ProcessConfig`,
  * `diffProcessConfig`, `processConfigValuesEqual`, `processSettingOverridesSchema`) rather than
  * cloning it; only the catalog data, the default-fill (catalog-scoped), and the resolve contract
@@ -49,7 +49,7 @@ export type {
   ProcessSettingOverrides as FilamentSettingOverrides
 } from './process-settings.js'
 
-// Value-equality and bool serialization are catalog-independent — reuse verbatim. Callers pass the
+// Value-equality and bool serialization are catalog-independent: reuse verbatim. Callers pass the
 // option (from `filamentSettingsCatalog.options[key]`) so percent/float values that differ only in
 // serialized form don't read as changed; see `processConfigValuesEqual`.
 export {
@@ -80,7 +80,7 @@ export function isFilamentSettingKey(key: string): boolean {
 /**
  * Keys that say WHICH material a slot holds, not how it is tuned. They are excluded from the
  * "changed vs preset" math: a saved project always records them (the writer keeps them as the
- * slot's identity — see FILAMENT_IDENTITY_KEYS in the API's scene builder), and they routinely
+ * slot's identity: see FILAMENT_IDENTITY_KEYS in the API's scene builder), and they routinely
  * disagree with the preset for reasons the user never chose. Bambu's "Support For PLA/PETG"
  * preset, for instance, declares `filament_type: PLA` while the material is selected as PLA-S,
  * so counting it reported a permanent phantom change on a filament nobody had edited.
@@ -100,7 +100,7 @@ export function isFilamentIdentitySettingKey(key: string): boolean {
 }
 
 /**
- * Collapse every per-filament array to its element-0 scalar — the value BambuStudio's filament tab
+ * Collapse every per-filament array to its element-0 scalar: the value BambuStudio's filament tab
  * edits (`get_option(key, 0)`). A filament preset resolved for a multi-extruder-variant machine
  * serializes each per-filament setting as an N-element vector (e.g. `["0","0"]`), while a project's
  * per-slot config is a single scalar. The material dialog normalizes both through this so a value
@@ -154,18 +154,18 @@ export interface ResolvedFilamentState {
   baseline: ProcessConfig
   /**
    * The preset's own parent. Differences between `baseline` and this belong to the PRESET, not to
-   * the project — rendered as emphasis only, never badged, never caught by "changed only". Equal to
+   * the project: rendered as emphasis only, never badged, never caught by "changed only". Equal to
    * `baseline` when no parent resolved, which collapses the distinction rather than inventing one.
    */
   parentBaseline: ProcessConfig
   /** The 3MF's changed-from-system record for this slot (`different_settings_to_system`). */
   bakedKeys: string[]
-  /** See {@link ResolveFilamentConfigResponse.declaresOverrides} — carried so the badge can apply it. */
+  /** See {@link ResolveFilamentConfigResponse.declaresOverrides}: carried so the badge can apply it. */
   declaresOverrides: boolean
   /**
    * Whether a real PRESET resolved to diff against. False when the response carried no `baseConfig`
    * (the named preset is not installed), in which case {@link baseline} is just a copy of the
-   * profile's own values and a value diff can only ever be empty — so the declared record is the
+   * profile's own values and a value diff can only ever be empty, so the declared record is the
    * only evidence of a change there is. Consumers must branch on this rather than silently
    * reporting "nothing changed" for a project whose preset went missing.
    */
@@ -176,7 +176,7 @@ export interface ResolvedFilamentState {
   shapes: Record<string, number>
   /**
    * The same three configs BEFORE the element-0 collapse. The dialog edits scalars (BambuStudio's
-   * filament tab does too), but a value can differ on a LATER variant only — so every "is this
+   * filament tab does too), but a value can differ on a LATER variant only, so every "is this
    * changed" question compares these through {@link filamentVariantValuesEqual}, not the scalars.
    */
   raw: { effective: ProcessConfig; baseline: ProcessConfig; parentBaseline: ProcessConfig }
@@ -217,7 +217,7 @@ export function prepareResolvedFilamentState(response: ResolveFilamentConfigResp
 }
 
 /**
- * Keys the PRESET overrides relative to its own parent — emphasis only.
+ * Keys the PRESET overrides relative to its own parent: emphasis only.
  *
  * Deliberately not part of {@link resolvedFilamentModifiedKeys}: BambuStudio keeps the two as
  * separate queries (`current_dirty_options` vs `current_different_from_parent_options`) and only
@@ -237,7 +237,7 @@ export function resolvedFilamentPresetOverrideKeys(state: ResolvedFilamentState)
 
 /**
  * Catalog keys whose FINAL sliced value (effective config + the given session overrides) differs
- * from the external preset — the count a fresh dialog would flag, and the number the slice
+ * from the external preset: the count a fresh dialog would flag, and the number the slice
  * dialog's pre-open badge shows. Note the healing property: overrides that push a drifted value
  * BACK to the preset value reduce this count (a fully reset material reads 0 even though heal
  * overrides ride the slice request).
@@ -251,7 +251,7 @@ export function resolvedFilamentPresetOverrideKeys(state: ResolvedFilamentState)
  * `["25","40"]` matched on element 0 and reported nothing, while slicing the second extruder at a
  * value the preset never asked for.
  *
- * A SCALAR still means "this value, for every variant" — which is why the collapse existed at all
+ * A SCALAR still means "this value, for every variant", which is why the collapse existed at all
  * (a preset resolves to `["270","270"]` where the project stores `"270"`, and length-sensitive
  * equality flagged every such key). So a scalar equals a vector when it equals EVERY element, and
  * two vectors compare element-wise. Differing lengths with neither side scalar cannot be aligned,
@@ -279,7 +279,7 @@ export function filamentVariantValuesEqual(
  * Whether a project slot's baked values still describe the material a slot is being pointed at.
  *
  * A 3MF bakes each slot's tuning into `project_settings.config`, and those values keep applying when
- * the user picks a different preset for that slot — which is right while the MATERIAL is the same
+ * the user picks a different preset for that slot, which is right while the MATERIAL is the same
  * (this is how a project keeps a raised flow ratio on stock PETG) and wrong the moment it is not:
  * PETG's 245C nozzle temperature has no business following the slot to PLA Basic.
  *
@@ -289,7 +289,7 @@ export function filamentVariantValuesEqual(
  * Types are compared DERIVED (see `resolveDisplayFilamentType` in `slicing-preset-identity.ts`), so a support filament counts as
  * its own material rather than as its base polymer.
  *
- * Returns true when either side has no type to compare — absence is not proof of a mismatch, and
+ * Returns true when either side has no type to compare: absence is not proof of a mismatch, and
  * discarding a project's real values on a guess is the worse failure.
  */
 export function filamentSlotValuesCarryTo(slotConfig: ProcessConfig, presetConfig: ProcessConfig): boolean {
@@ -300,7 +300,7 @@ export function filamentSlotValuesCarryTo(slotConfig: ProcessConfig, presetConfi
 }
 
 /**
- * The RAW `filament_type` of a config — what BambuStudio's transfer decision reads.
+ * The RAW `filament_type` of a config: what BambuStudio's transfer decision reads.
  *
  * Deliberately not the DERIVED display type. `Tab::select_preset` compares
  * `config.option("filament_type")->values[0]` on both presets and sets `no_transfer` only when those
@@ -318,7 +318,7 @@ function rawFilamentTypeOf(config: ProcessConfig): string | undefined {
  * {@link diffFilamentConfig} in per-variant space: the sparse map of keys whose value differs from
  * `base` once LATER extruder variants are compared too. Used by the material dialog to emit its
  * overrides, so a drift the dialog flags (project `["25","25"]` under a preset `["25","40"]`) also
- * has a reset that emits something — the element-0 diff emitted nothing there, leaving a reset
+ * has a reset that emits something: the element-0 diff emitted nothing there, leaving a reset
  * button that visibly did nothing.
  */
 export function diffFilamentVariantConfig(base: ProcessConfig, edited: ProcessConfig): FilamentSettingOverridesMap {
@@ -348,8 +348,8 @@ export function resolvedFilamentModifiedKeys(state: ResolvedFilamentState, overr
     // survive loading, not what counts as changed. Flagging a declared key whose value equals the
     // preset is what put three un-resettable "changes" on every material of a stock project.
     if (filamentVariantValuesEqual(state.raw.baseline[key], finalConfig[key], option)) continue
-    // With a record present, an UNDECLARED difference is drift BambuStudio normalizes away at load
-    // — not this project's change. A key the user edited this session always counts.
+    // With a record present, an UNDECLARED difference is drift BambuStudio normalizes away at load,
+    // not this project's change. A key the user edited this session always counts.
     if (state.declaresOverrides
       && !declared.has(key)
       && filamentVariantValuesEqual(state.raw.effective[key], finalConfig[key], option)) continue
@@ -363,7 +363,7 @@ export function resolvedFilamentModifiedKeys(state: ResolvedFilamentState, overr
  *
  * Simpler than its filament/process siblings on purpose: a machine preset is never embedded in a
  * 3MF the way a filament or process preset is, so there is no project slot to read from and no
- * baseline-vs-embedded distinction — the resolved preset IS the baseline.
+ * baseline-vs-embedded distinction: the resolved preset IS the baseline.
  */
 export const resolveMachineConfigRequestSchema = z.object({
   machineProfileId: z.string().trim().min(1),
@@ -382,7 +382,7 @@ export const resolveFilamentConfigRequestSchema = z.object({
    */
   sourceFileId: z.string().trim().min(1).nullable().optional(),
   /**
-   * 1-based filament slot index within the source 3MF for a `project:` filament — selects which
+   * 1-based filament slot index within the source 3MF for a `project:` filament: selects which
    * per-filament column of the embedded arrays to read. Ignored for installed/custom presets.
    */
   projectFilamentId: z.number().int().positive().nullable().optional()
@@ -390,9 +390,9 @@ export const resolveFilamentConfigRequestSchema = z.object({
 export type ResolveFilamentConfigRequest = z.infer<typeof resolveFilamentConfigRequestSchema>
 
 /**
- * Response for `/profiles/resolve-filament` — same contract as `/profiles/resolve-process`.
+ * Response for `/profiles/resolve-filament`: same contract as `/profiles/resolve-process`.
  * - `config`: the profile's effective values (for a `project:` filament, the 3MF's embedded slot
- *   column) — the base the slicer merges further overrides onto.
+ *   column): the base the slicer merges further overrides onto.
  * - `baseConfig`: the preset baseline to reset toward and value-diff against ("modified" = the
  *   value differs from the preset OUTSIDE the project). Equal to `config` for installed presets;
  *   the resolved parent preset for a project filament when resolvable.
@@ -403,20 +403,20 @@ export interface ResolveFilamentConfigResponse {
   /** The values in force: a project slot's embedded config, or an installed preset's own. */
   config: ProcessConfig
   /**
-   * What `config` is measured against — the PRESET in use. A difference here is a change carried by
+   * What `config` is measured against: the PRESET in use. A difference here is a change carried by
    * this project (or this editing session), which is what gets badged and coloured.
    */
   baseConfig: ProcessConfig
   /**
-   * What `baseConfig` is measured against — the preset's PARENT. A difference here is an override
+   * What `baseConfig` is measured against: the preset's PARENT. A difference here is an override
    * the preset itself carries, which BambuStudio deliberately does NOT call modified
    * (`Tab.cpp update_changed_ui`: differs-from-system but equals-saved renders in the default
    * colour, not the modified one). Omitted when the parent cannot be resolved, or when the preset
-   * has none — then nothing is attributed to the preset and everything reads against `baseConfig`.
+   * has none, then nothing is attributed to the preset and everything reads against `baseConfig`.
    */
   parentConfig?: ProcessConfig
   /**
-   * The name of the preset {@link parentConfig} came from — the preset's `inherits`.
+   * The name of the preset {@link parentConfig} came from: the preset's `inherits`.
    *
    * Not a display field. A saved project must name it in `inherits_group` or BambuStudio will not
    * bind the slot to a USER preset at all; see `filament-preset-binding.ts` for the vendor rule.
@@ -424,7 +424,7 @@ export interface ResolveFilamentConfigResponse {
    */
   presetInherits?: string | null
   /**
-   * Keys where the preset differs from {@link parentConfig} — the `different_settings_to_system`
+   * Keys where the preset differs from {@link parentConfig}: the `different_settings_to_system`
    * entry a saved project must carry alongside {@link presetInherits}. The pair is one fact: with a
    * parent named, an UNDER-declared key is normalized back to the parent's value on open, so an
    * inaccurate list breaks binding just as an absent parent does.
@@ -433,19 +433,19 @@ export interface ResolveFilamentConfigResponse {
   overriddenKeys: string[]
   /**
    * Whether the 3MF carried a changed-from-system record for this slot at all, which makes
-   * `overriddenKeys` AUTHORITATIVE — including when empty. Mirrors BambuStudio, which applies the
+   * `overriddenKeys` AUTHORITATIVE, including when empty. Mirrors BambuStudio, which applies the
    * file's declared list rather than diffing configs (`update_non_diff_values_to_base_config`): a
    * key that differs from the preset but is not declared is drift the vendor normalizes away, not
    * a user change. Absent/false means the writer recorded nothing and the value diff is all we
-   * have — which is why this is not just `overriddenKeys.length === 0`.
+   * have, which is why this is not just `overriddenKeys.length === 0`.
    */
   declaresOverrides?: boolean
   /**
    * Whether {@link baseConfig} is a REAL preset resolved for this slot, rather than a copy of
    * `config` standing in because the named preset is not installed here.
    *
-   * The distinction cannot be recovered from the payload — a project that changed nothing and a
-   * project whose preset went missing both send `baseConfig` deep-equal to `config` — and
+   * The distinction cannot be recovered from the payload, a project that changed nothing and a
+   * project whose preset went missing both send `baseConfig` deep-equal to `config`, and
    * conflating them is what put three un-resettable "changes" on every material of a stock project.
    * When true, a value diff is meaningful and is the modified marker (BambuStudio's
    * `dirty_options`). When false there is nothing to diff against, so {@link overriddenKeys} is the
@@ -455,7 +455,7 @@ export interface ResolveFilamentConfigResponse {
   baselineResolved?: boolean
   /**
    * Which preset the returned `baseConfig` actually IS, when it is not the one that was asked for.
-   * Absent means it is — see {@link SettingsBaselineOrigin}. The dialog turns this into the caveat
+   * Absent means it is: see {@link SettingsBaselineOrigin}. The dialog turns this into the caveat
    * it shows; only the anonymous resolvers ever set it.
    */
   baselineOrigin?: SettingsBaselineOrigin

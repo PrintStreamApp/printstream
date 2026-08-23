@@ -231,7 +231,7 @@ test('unhideSlicedOutput replaces an existing same-name file with version archiv
 test('unhideSlicedOutput moves the re-slice link onto the file it merged into', async () => {
   // The surviving row now holds the OUTPUT's bytes, so it must hold the output's preserved
   // project too. Keeping the replaced file's would point "Slice again" at a project that
-  // produced different G-code — and the output row is deleted here, so nothing else would
+  // produced different G-code, and the output row is deleted here, so nothing else would
   // reference the project it was sliced from.
   let updateArgs: { where: { id: string }; data: Record<string, unknown> } | null = null
   stub(prisma.libraryFile, 'findUnique', async () => ({
@@ -350,7 +350,7 @@ test('unhideSlicedOutput appends .gcode.3mf unless the full compound extension i
 
 test('discarding an unsaved slice also drops the preserved project nothing else references', async () => {
   // Snapshot rows are exempt from every cleanup pass, so a discard that leaves the project behind
-  // leaks its bytes permanently — one copy per discarded slice, never reclaimed. Found by actually
+  // leaks its bytes permanently, one copy per discarded slice, never reclaimed. Found by actually
   // discarding a slice on the dev stack and finding the snapshot row still there.
   const deleted: string[] = []
   stub(prisma.libraryFile, 'findUnique', async (args: { where: { id: string } }) => (

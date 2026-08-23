@@ -3,17 +3,17 @@
  *
  * OWNS the three derivations the collectors kept re-deriving inline: which baked objects are
  * actually placed, which import carries a replaced object's identity, and how a per-part key
- * decomposes. Audit finding F6 — the same rule encoded N times — counted the placed-object set
+ * decomposes. Audit finding F6, the same rule encoded N times, counted the placed-object set
  * rebuilt in 8 places and the synthetic-import map in 7.
  *
  * WHY it matters beyond tidiness: these are the gates that decide whether an edit SURVIVES the
- * bake. A collector that builds the set slightly differently does not fail loudly — it accepts the
+ * bake. A collector that builds the set slightly differently does not fail loudly, it accepts the
  * user's edit and then silently drops it, which is shape (2) of the "no feature may require a save
  * first" trap documented in this plugin'the s development notes. One definition means a fix reaches every
  * collector at once, and a new collector inherits the right behaviour by construction.
  *
  * Every helper is pure and takes the whole `EditorState`, so callers cannot accidentally scope the
- * question to one plate — the edits these gate are project-wide.
+ * question to one plate: the edits these gate are project-wide.
  */
 import type { EditorState } from './editorModel'
 
@@ -112,8 +112,8 @@ export function objectIdsAcceptingOverrides(state: Pick<EditorState, 'plates'>):
  * The per-object process overrides a save should carry, from the session map and the set of
  * identities that can hold them.
  *
- * ABSENCE IS NOT A DELETE. `sessionOverrides` holds only the objects currently in scope — the slice
- * dialog reseeds it from the ACTIVE PLATE's baked overrides — so an object on another plate is
+ * ABSENCE IS NOT A DELETE. `sessionOverrides` holds only the objects currently in scope, the slice
+ * dialog reseeds it from the ACTIVE PLATE's baked overrides, so an object on another plate is
  * missing for a reason that has nothing to do with the user's intent. Inferring a clear from
  * absence is what silently erased other plates' per-object settings, one plate per save, until the
  * project had none left. A real clear is an EXPLICIT empty entry (the per-object dialog's onApply
@@ -121,7 +121,7 @@ export function objectIdsAcceptingOverrides(state: Pick<EditorState, 'plates'>):
  * absent is simply not mentioned, and the bake leaves objects it is not given alone.
  *
  * Returns undefined when nothing is to be said, so the save omits the field rather than sending an
- * empty map — which the bake would read as "no object has overrides".
+ * empty map, which the bake would read as "no object has overrides".
  */
 export function selectObjectProcessOverridesForSave(
   sessionOverrides: Record<string, Record<string, string | string[]>> | undefined,

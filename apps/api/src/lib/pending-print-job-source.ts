@@ -20,7 +20,7 @@ export interface PendingPrintJobSource {
   /**
    * Re-slice provenance for the printed artifact: the preserved project 3MF it was
    * sliced from and the settings that produced it. Optional because only the library
-   * dispatch path knows them — calibration and externally-observed starts never do.
+   * dispatch path knows them: calibration and externally-observed starts never do.
    */
   sourceProjectFileId?: string | null
   sliceSettingsJson?: string | null

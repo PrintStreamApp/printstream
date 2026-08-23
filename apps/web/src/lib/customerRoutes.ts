@@ -2,7 +2,7 @@
  * The account-scoped API base, built once.
  *
  * `/api/customers/:id` was assembled by hand in six places (two shells, three
- * panels, a hook), each remembering to `encodeURIComponent` on its own — and it
+ * panels, a hook), each remembering to `encodeURIComponent` on its own, and it
  * is also the React Query key prefix for everything under an account, so two
  * spellings meant two cache entries for one resource. The People page fetched
  * workspace roles twice for exactly that reason, and one copy could sit an hour
@@ -10,7 +10,7 @@
  *
  * Lives in CORE, not `private/cloud`: `App.tsx` and `MarketingApp.tsx` build
  * this path when auth bootstrap reports an account, and core must never import
- * from a private directory — that directory is deleted in the public build.
+ * from a private directory, that directory is deleted in the public build.
  * The path is inert there, because nothing reports an account.
  *
  * Counterpart: `apps/api/src/private/cloud/billing-scope-routes.ts`, mounted at

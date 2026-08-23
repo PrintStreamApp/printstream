@@ -4,7 +4,7 @@
  * usage counters.
  *
  * This module owns the **override merge**, and it is the only place that does
- * it — the client receives intervals already resolved, so no surface can drift
+ * it: the client receives intervals already resolved, so no surface can drift
  * on the precedence rules. Those rules:
  *
  * - An override interval wins over the catalog's.
@@ -14,7 +14,7 @@
  * - A `custom:` task has no catalog entry at all; its row supplies everything,
  *   and its catalog intervals report as all-null so the UI offers no reset.
  *
- * The due-date arithmetic itself is NOT here — it lives in
+ * The due-date arithmetic itself is NOT here, it lives in
  * `@printstream/shared` (`evaluateMaintenanceTask`) so the rules are testable
  * without a database and identical wherever they are applied.
  */
@@ -150,7 +150,7 @@ function buildTaskDto(
   const evaluation = evaluateMaintenanceTask({
     definition: {
       // Feed the ALREADY-MERGED intervals through as the definition, and pass no
-      // override — the merge happened above, where the cleared-vs-inherit rule
+      // override: the merge happened above, where the cleared-vs-inherit rule
       // lives. Passing both would apply precedence twice.
       intervalDays: intervals.days ?? undefined,
       intervalPrintHours: intervals.printHours ?? undefined,

@@ -159,7 +159,7 @@ async function resolveWorkspaceRequestContext(request: Pick<Request, 'headers'>)
   const explicitSlug = normalizeWorkspaceSlug(explicitSelection)
   if (explicitSlug) {
     // findFirst, not findUnique: a deleted workspace must resolve to nothing at
-    // all. "Deleted" is not "disabled" — disabled is an operator flag on a
+    // all. "Deleted" is not "disabled": disabled is an operator flag on a
     // workspace that still exists, whereas this one should behave as though it
     // never did, which is why it falls through to notFound rather than the
     // disabled branch below.
@@ -329,7 +329,7 @@ function normalizeWorkspaceSlug(value: string | null): string | null {
  * Wide-open fallback: on an install with no auth provider enabled anywhere
  * (so nobody can be signed in), context-less requests default into the single
  * workspace so the web app lands inside it instead of a dead-end sign-in
- * wall. Requests carrying any sign-in credential are excluded — a session
+ * wall. Requests carrying any sign-in credential are excluded, a session
  * implies auth is enabled in some scope, and the session's own workspace binding
  * must win. Dynamic import: workspace-resolution (transitively) imports this module.
  */
@@ -346,7 +346,7 @@ async function resolveWideOpenRequestContext(request: Pick<Request, 'headers'>):
   }
 
   // A session cookie only disqualifies the request when it resolves to a
-  // live session — stale cookies left behind by older deployments on the
+  // live session: stale cookies left behind by older deployments on the
   // same domain must not dead-end a wide-open install.
   const secretHash = readRequestAuthSessionSecretHash(request as Request)
   if (secretHash) {
@@ -372,7 +372,7 @@ async function resolveWideOpenRequestContext(request: Pick<Request, 'headers'>):
   // Self-hosted (OSS) is a single-workspace deployment with no separate platform
   // sign-in. Once the workspace enables auth it is no longer "wide open", but an
   // anonymous, context-less request (e.g. the `/auth` screen after sign-out)
-  // still needs to land in the sole workspace so its sign-in provider is shown —
+  // still needs to land in the sole workspace so its sign-in provider is shown,
   // otherwise the platform scope has no enabled provider and the screen is empty.
   if (isSelfHostedDeployment()) {
     const soleWorkspace = await resolveSoleWorkspace()

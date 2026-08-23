@@ -36,7 +36,7 @@ function defaultPrivateModulesDir(): string {
  * present. The public open-source export strips `src/private` entirely, so this
  * doubles as the canonical "is this the cloud build?" signal. Used at startup
  * (before the async module load) to pick build-exclusive behavior such as the
- * active auth provider — see `isSelfHostedDeployment`.
+ * active auth provider: see `isSelfHostedDeployment`.
  */
 export function hasPrivateModules(dirOverride?: string): boolean {
   const modulesDir = dirOverride ?? defaultPrivateModulesDir()

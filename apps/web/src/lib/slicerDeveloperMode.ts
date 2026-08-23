@@ -55,7 +55,7 @@ export function useSlicerDeveloperModeOverride(): [boolean | null, (value: boole
  * preferences use, and it had missed the rule they follow: `/api/settings` needs a workspace, so the
  * public editor was requesting it on every open and taking a 401 for a value that can only ever be
  * the device override there. (It reads 200 in a tab that happens to be signed in, which is why the
- * request survived a network review — an anonymous visitor, the only kind this host has, gets 401.)
+ * request survived a network review, an anonymous visitor, the only kind this host has, gets 401.)
  */
 export function useSharedSlicerDeveloperMode(): boolean {
   const deviceOnly = useViewportSettingsDeviceOnly()

@@ -5,7 +5,7 @@ import { remapColorPaintInModelXml } from './triangle-paint-codec.js'
 import type { SceneEdit } from '../slicing.js'
 
 /**
- * A filament-slot PERMUTATION must re-key every base-file structure that speaks 1-based slot ids —
+ * A filament-slot PERMUTATION must re-key every base-file structure that speaks 1-based slot ids,
  * including content the session never touched, which otherwise streams through the save
  * byte-for-byte in the OLD order. Each test pins one such structure. The permutation used
  * throughout swaps a 3-material list end-to-end (old 1 -> new 3, old 2 -> new 2, old 3 -> new 1),
@@ -96,7 +96,7 @@ function reorderEdit(): SceneEdit {
   } as unknown as SceneEdit
 }
 
-/** The same slots in their original order — no re-key work may fire. */
+/** The same slots in their original order, no re-key work may fire. */
 function identityEdit(): SceneEdit {
   const edit = reorderEdit()
   return {
@@ -156,7 +156,7 @@ test('a same-count reorder drops slice_info instead of carrying stale per-id rec
   const transform = plan.copy?.transforms.get('Metadata/slice_info.config')
   assert.ok(transform, 'slice_info must be addressed on a permutation')
   assert.equal(transform(BASE_SLICE_INFO_XML), null,
-    'the record describes the OLD order (and the reader prefers its group ids) — the honest result is no record')
+    'the record describes the OLD order (and the reader prefers its group ids): the honest result is no record')
 })
 
 test('remapColorPaintInModelXml drops paint whose material was removed and keeps other channels', () => {

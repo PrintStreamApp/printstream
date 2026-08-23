@@ -1,8 +1,8 @@
 /**
  * Importing a 3MF's geometry in the tab.
  *
- * What a given file CONTRIBUTES — which plate, which parts, the re-centring, the helper-volume
- * rules — is decided by the shared extractor and covered by the api's suite against real archives
+ * What a given file CONTRIBUTES, which plate, which parts, the re-centring, the helper-volume
+ * rules, is decided by the shared extractor and covered by the api's suite against real archives
  * (`apps/api/src/lib/three-mf-mesh-extract.test.ts`). What only exists here is the browser's byte
  * source: that an in-tab archive answers the extractor's three questions the same way yauzl does,
  * including the vanilla-3MF path, which is selected by `readScene` THROWING rather than returning
@@ -52,7 +52,7 @@ test('a vanilla 3MF (no Bambu metadata) imports its build items', async () => {
 
 test('the import is re-centred on the origin, not left at its plate coordinates', async () => {
   // The build item above places the cube at (120, 90). An import that kept those coordinates would
-  // land plate-offset-plus-spot — off the bed — because the editor positions imports near-origin.
+  // land plate-offset-plus-spot, off the bed, because the editor positions imports near-origin.
   const mesh = await extractThreeMfImportFromFile(archiveBlob({ '3D/3dmodel.model': cubeModelXml() }))
   assert.ok(Math.abs((mesh.bounds.min.x + mesh.bounds.max.x) / 2) < 1e-6, 'centred in X')
   assert.ok(Math.abs((mesh.bounds.min.y + mesh.bounds.max.y) / 2) < 1e-6, 'centred in Y')
@@ -63,7 +63,7 @@ test('the archive source answers the extractor the way the api ZIP reader does',
   const archive = await openThreeMfArchive(archiveBlob({ '3D/3dmodel.model': cubeModelXml() }))
   const source = threeMfArchiveImportSource(archive)
   assert.ok((await source.readEntryText('3D/3dmodel.model'))?.includes('<model'))
-  // Absent entries read as null rather than throwing — the extractor skips those parts.
+  // Absent entries read as null rather than throwing: the extractor skips those parts.
   assert.equal(await source.readEntryText('3D/Objects/nope.model'), null)
   // No Bambu scene metadata: throwing is what selects the vanilla fallback.
   await assert.rejects(() => source.readScene(1))

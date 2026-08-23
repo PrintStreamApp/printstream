@@ -41,7 +41,7 @@ test('shrinking the filament set cuts `inherits_group` to slots + 2', () => {
 test('the surviving slot keeps its own parent, and the process/machine ends are preserved', () => {
   const after = JSON.parse(applyFilamentList(project(5), keepFirst)) as Record<string, unknown>
 
-  // The machine entry lives at the END, so it MOVES when the filament count changes — copying the
+  // The machine entry lives at the END, so it MOVES when the filament count changes: copying the
   // array verbatim would leave the machine slot holding a filament's parent.
   assert.deepEqual(after.inherits_group, [
     '0.20mm Strength @BBL P1P',

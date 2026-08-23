@@ -71,7 +71,7 @@ export default function MarketingApp() {
             {routes.map((route) => (
               <Route key={route.path} path={route.path} element={route.render(context)} />
             ))}
-            {/* Any non-marketing path (the one-render "enter app" transition): render nothing — Root's
+            {/* Any non-marketing path (the one-render "enter app" transition): render nothing: Root's
                 sticky enteredApp flag mounts the full app on the next render. Never redirect here. */}
             <Route path="*" element={null} />
           </Routes>

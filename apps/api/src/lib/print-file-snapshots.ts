@@ -9,7 +9,7 @@
  * Snapshots are content-addressed: the key is `sha256:basename`, so slicing or
  * printing the same bytes repeatedly stores exactly one copy. They are the one
  * hidden variant `library-cleanup.ts` never sweeps (it skips rows with a
- * `snapshotKey`), which is what makes the retention promise durable — and what
+ * `snapshotKey`), which is what makes the retention promise durable, and what
  * makes writing one a deliberate act rather than a cache fill.
  */
 import { createHash } from 'node:crypto'
@@ -109,12 +109,12 @@ export async function ensureLibrarySnapshotRecord(file: SnapshotLibraryFile): Pr
  * Store a file that exists only on local disk as a hidden, content-deduped snapshot.
  *
  * The counterpart of {@link ensureLibrarySnapshotRecord} for bytes that were never a
- * library file — today the prepared project 3MF the slicer was handed, which lives in
+ * library file, today the prepared project 3MF the slicer was handed, which lives in
  * a temp dir that is deleted the moment the slice returns. Hashing happens locally
  * (the bytes are already here) rather than by round-tripping through the bridge.
  *
  * Idempotent: identical bytes under the same name resolve to the existing row without
- * re-uploading. Never overwrites or versions anything — a snapshot row is immutable.
+ * re-uploading. Never overwrites or versions anything, a snapshot row is immutable.
  */
 export async function ensureLibrarySnapshotFromLocalPath(input: {
   workspaceId: string

@@ -59,7 +59,7 @@ function scopedAuthProviderStateKey(key: string): string {
  * provider off. Reads the same keys and legacy fallback as
  * `readScopedAuthProviderEnabled`, just for many scopes at once.
  *
- * Availability only — it says nothing about who may enter a workspace, which
+ * Availability only, it says nothing about who may enter a workspace, which
  * stays with membership and `loginDisabled`.
  */
 export async function filterWorkspacesWithAuthProviderEnabled(

@@ -3,7 +3,7 @@
  *
  * Used when a file has no embedded server thumbnail. It renders the plate's MODEL mesh in its
  * material colour at Bambu's iso angle with no plate surface (reusing the editor's offscreen
- * renderer), so the thumbnail looks like the part — matching a normal 3MF thumbnail. It never
+ * renderer), so the thumbnail looks like the part: matching a normal 3MF thumbnail. It never
  * falls back to a G-code toolpath render: a toolpath is a misleading "thumbnail", and sliced
  * outputs strip the mesh (--min-save) so a toolpath would otherwise be all that's left. Only
  * invoked after the server thumbnail fails, so files that already have one pay nothing.
@@ -39,7 +39,7 @@ function getSharedThumbnailRenderer() {
 /**
  * Render a library file's MODEL mesh (material colour, Bambu iso angle) to a PNG data URL, or
  * null if no mesh scene can be built. This is only the FALLBACK for `FileThumbnail` when a file
- * has no embedded plate PNG — and a thumbnail must look like the part, never the toolpath, so it
+ * has no embedded plate PNG, and a thumbnail must look like the part, never the toolpath, so it
  * deliberately does NOT fall back to a G-code render (sliced outputs strip the mesh via
  * --min-save, which would otherwise leave only a misleading toolpath thumbnail).
  */

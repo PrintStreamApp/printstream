@@ -89,7 +89,7 @@ function parseRecordedPrintStartOptions(json: string | null | undefined): Record
 /**
  * A row we wrote ourselves from a validated selection should always read back, so a failure
  * here is either a corrupted column or an incompatible change to
- * `printStartOptionSelectionSchema` — and the latter would silently un-fix issue #97 for every
+ * `printStartOptionSelectionSchema`, and the latter would silently un-fix issue #97 for every
  * row already recorded. Degrading to "unknown" is still the right RUNTIME behavior (a re-print
  * that falls back beats a history page that 500s on one bad row), so this logs and continues.
  * Safe to log: the column holds print-start enums, never a secret.

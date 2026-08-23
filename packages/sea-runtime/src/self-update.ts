@@ -7,7 +7,7 @@
  * swap (`exe` -> `exe.old`, `exe.new` -> `exe`; Windows allows renaming a
  * running image), the pending-update state file that counts boot attempts, and
  * crash-loop rollback with a per-fingerprint hold-back. What to download, when,
- * and what "healthy" means stay with the consuming app's driver — the bridge
+ * and what "healthy" means stay with the consuming app's driver: the bridge
  * confirms health on successful registration, the server once its stack serves.
  *
  * Contract callers rely on: after `swapExecutableInPlace` + `writeSelfUpdateState`,

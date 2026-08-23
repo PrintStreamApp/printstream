@@ -1,6 +1,6 @@
 /**
- * Per-plate layer G-code sections — "Filament changes" (whole-plate material swaps at a
- * print height) and "Pauses" (stop-and-resume at a print height) — plus the material
+ * Per-plate layer G-code sections, "Filament changes" (whole-plate material swaps at a
+ * print height) and "Pauses" (stop-and-resume at a print height), plus the material
  * option row + `FilamentOption` shape their pickers share.
  *
  * Core-owned (not model-studio) because BOTH surfaces render them: the 3D editor's
@@ -183,7 +183,7 @@ export function PlatePausesSection({ pauses, onChange }: {
  * The per-plate "Filament changes" section: layer-based whole-plate material swaps
  * entered by print height (mm). Renders like the settings sidebar's other sections
  * (title row + outlined container, above {@link PlatePausesSection}) with the Add
- * action anchored right and a compact swatch+id material select — the open listbox
+ * action anchored right and a compact swatch+id material select: the open listbox
  * still shows the full material names.
  *
  * Header and body are siblings for the same sticky reason as {@link PlatePausesSection}.

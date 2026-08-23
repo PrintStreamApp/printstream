@@ -4,7 +4,7 @@
  * This is the heavy, DOM-free core of the editor's geometry load: it turns a 3MF model entry
  * (XML) or a binary STL into processed `THREE.BufferGeometry` (welded, creased, planar-patch
  * corrected). It imports only `three` / `three-stdlib` so it runs unchanged on the main thread
- * (the fallback) AND inside a Web Worker (`meshParseWorker.ts`) — which is the point: a single
+ * (the fallback) AND inside a Web Worker (`meshParseWorker.ts`), which is the point: a single
  * 50 MB+ object would otherwise parse synchronously on the main thread and freeze the UI for
  * seconds. Off-threading needs a DOM-free parser, so the 3MF XML is read with regex (the same
  * approach as the shared `@printstream/shared/three-mf` index parser) rather than `DOMParser`.
@@ -38,7 +38,7 @@ const PAINT_SEAM_RE = /paint_seam="([^"]*)"/
 const PAINT_COLOR_RE = /paint_color="([^"]*)"/
 
 /**
- * Parse a 3MF model entry's `<object>` meshes into raw vertex/index/paint arrays — DOM-free, so it
+ * Parse a 3MF model entry's `<object>` meshes into raw vertex/index/paint arrays: DOM-free, so it
  * runs in a worker. Standard 3MF writes `<vertex x y z>` and `<triangle v1 v2 v3 [paint_*]>` with
  * those attributes leading (Bambu + our own writer both do), which the positional regexes rely on.
  */
@@ -56,7 +56,7 @@ export function parseThreeMfMeshArrays(xmlText: string): ThreeMfMeshArrays[] {
 
     // One pass per element type into plain arrays. The regexes match only real vertex/triangle tags
     // (they require the leading attributes), so the <vertices>/<triangles> container tags are
-    // skipped — avoiding an off-by-one from counting '<triangle' inside '<triangles>'.
+    // skipped: avoiding an off-by-one from counting '<triangle' inside '<triangles>'.
     const positionsList: number[] = []
     VERTEX_RE.lastIndex = 0
     let vertexMatch: RegExpExecArray | null
@@ -84,7 +84,7 @@ export function parseThreeMfMeshArrays(xmlText: string): ThreeMfMeshArrays[] {
         Number.parseInt(triangleMatch[3] ?? '0', 10)
       )
       const rest = triangleMatch[4] ?? ''
-      // `paint` is rare relative to triangle count — only run the attribute regexes when present.
+      // `paint` is rare relative to triangle count, only run the attribute regexes when present.
       if (rest.includes('paint_')) {
         const support = PAINT_SUPPORTS_RE.exec(rest)?.[1]
         if (support) supportPaint[triangleIndex] = support

@@ -1,13 +1,13 @@
 /**
  * Subscribe to the workspace's live printer statuses.
  *
- * The cache is fed by `usePrinterWebSocket` from MQTT deltas, so there is nothing to fetch — the
+ * The cache is fed by `usePrinterWebSocket` from MQTT deltas, so there is nothing to fetch: the
  * query exists only to read and subscribe. It was hand-rolled identically in four places before
  * this; one definition means one place to change the semantics.
  *
  * SUBSCRIBE ONLY WHERE THE VALUE IS READ. Statuses arrive a few times a SECOND, and every observer
  * re-renders on each frame whether or not it uses the data. `LibraryView` subscribed purely to
- * forward the value to a dialog that is usually closed, and paid ~100ms of render 4x/s for it —
+ * forward the value to a dialog that is usually closed, and paid ~100ms of render 4x/s for it:
  * measured at 50 long tasks / 4.5s per 15s on an idle library page, which is the stutter that
  * surfaced while orbiting the 3D editor. Silencing that one subscription took it to zero. So a
  * component that only PASSES statuses along should not subscribe; let the consumer call this.
@@ -21,8 +21,8 @@ import { readCurrentWorkspaceScopeKey, workspaceQueryKeys } from '../lib/workspa
  *
  * STRIPS known telemetry rather than selecting a read-set, deliberately. Getting this wrong by
  * leaving a new noisy field in only costs some re-renders; getting it wrong the other way silently
- * removes something a consumer reads. Everything structural — AMS units and their slots, external
- * spools, nozzle identity/diameter/flow — survives, because that is what the material pickers and
+ * removes something a consumer reads. Everything structural, AMS units and their slots, external
+ * spools, nozzle identity/diameter/flow, survives, because that is what the material pickers and
  * the tray map are built from.
  */
 function withoutTelemetry(status: PrinterStatus): PrinterStatus {
@@ -49,7 +49,7 @@ function withoutTelemetry(status: PrinterStatus): PrinterStatus {
  * Stripped projections, keyed by the raw status object they came from.
  *
  * A frame changes ONE printer, but the select runs over the whole map, so without this every
- * printer was re-stripped — fresh objects for statuses that had not moved. That cost twice: the
+ * printer was re-stripped: fresh objects for statuses that had not moved. That cost twice: the
  * allocation, and then `replaceEqualDeep` having to walk each one to discover it was equal after
  * all. Reusing the projection makes an untouched printer identical BY REFERENCE, which that walk
  * short-circuits on (`if (a === b) return a`, and again per key), so the comparison collapses to
@@ -58,7 +58,7 @@ function withoutTelemetry(status: PrinterStatus): PrinterStatus {
  * A WeakMap because the key is the status object itself: entries die with the frames that produced
  * them, and identity keying means two workspaces can never collide.
  *
- * ASSUMES status objects are never mutated in place — cache-key identity is the only staleness
+ * ASSUMES status objects are never mutated in place: cache-key identity is the only staleness
  * check there is. That holds because the cache is written through `setQueryData`, which produces
  * new objects; an in-place mutation would already defeat React Query's own structural sharing.
  */
@@ -86,7 +86,7 @@ export function usePrinterStatuses(options: {
    *
    * Load-bearing for the slice dialog, which the 3D editor borrows its controller from: without
    * it, opening the editor put back the whole per-frame render cost the library page had just been
-   * freed from — measured at 53 long tasks / 5.0s per 15s with the editor merely open and idle.
+   * freed from: measured at 53 long tasks / 5.0s per 15s with the editor merely open and idle.
    * React Query's structural sharing returns the previous reference when the stripped result is
    * deeply equal, so an identical projection notifies nobody.
    *

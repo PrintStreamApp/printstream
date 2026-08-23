@@ -13,7 +13,7 @@
  * spend only padding and gap, so every label still reads at full size; the
  * fourth drops a type step; `icons` is the first that hides anything, and is
  * only reached when the words genuinely will not fit. Truncating labels is NOT
- * a level — a row of half-words is unreadable in a way that a row of icons is
+ * a level, a row of half-words is unreadable in a way that a row of icons is
  * not, and the icons keep their meaning through the tooltip.
  *
  * The row's own `overflowX: auto` remains the final backstop below `icons`.
@@ -21,7 +21,7 @@
  * Contract: the caller puts `ref` on the SCROLL CONTAINER (the element whose
  * `scrollWidth` overflows) and styles its descendants from the
  * `data-nav-density` attribute this writes. The returned `density` is for
- * callers that must change what they RENDER rather than how it looks — the
+ * callers that must change what they RENDER rather than how it looks: the
  * tooltip has to name a tab whose label is hidden. Layout must be driven by
  * the attribute, not by that value: the fitting loop measures inside one
  * layout pass, before React re-renders.
@@ -36,7 +36,7 @@ import { useLayoutEffect, useRef, useState } from 'react'
  *
  * The order of what gets spent is deliberate, cheapest first: PADDING (three
  * rungs of it), then type size, then the words themselves. A tab's padding is
- * slack — its text never reaches the edge — so it can go a long way before
+ * slack, its text never reaches the edge, so it can go a long way before
  * anything a reader relies on is touched, and shrinking the type while that
  * slack is still there makes the row harder to read for no reason.
  *
@@ -51,7 +51,7 @@ export type NavDensity = (typeof NAV_DENSITY_LEVELS)[number]
 export const TIGHTEST_NAV_DENSITY: NavDensity = 'icons'
 
 /**
- * @param signature changes when the tabs themselves do, forcing a re-fit —
+ * @param signature changes when the tabs themselves do, forcing a re-fit,
  *   a resize is not the only thing that changes what has to fit.
  */
 export function useFittedNavDensity<T extends HTMLElement>(signature: string) {
@@ -87,7 +87,7 @@ export function useFittedNavDensity<T extends HTMLElement>(signature: string) {
 
     // A label's width is not final at mount. A webfont arriving afterwards
     // re-measures every one of them, and the row can outgrow the level chosen
-    // for it — while the row's own box, set by its parent, never changes. So
+    // for it, while the row's own box, set by its parent, never changes. So
     // the observer below cannot see this happen and the row would sit
     // overflowing at a level that measured as fitting.
     let cancelled = false
@@ -98,7 +98,7 @@ export function useFittedNavDensity<T extends HTMLElement>(signature: string) {
     if (typeof ResizeObserver === 'undefined') return () => { cancelled = true }
     // The BORDER box, and deliberately not the observer's own `contentRect`.
     // Each level changes the row's padding, which changes its content box
-    // without changing the space it was given — so a content-box comparison
+    // without changing the space it was given, so a content-box comparison
     // treats our own write as new information and re-fits in response to
     // itself. The border box is set by the parent and only moves when the
     // space genuinely does.

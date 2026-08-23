@@ -94,7 +94,7 @@ export const BAMBU_FILAMENT_PRESET_NAMES: Record<string, string> = {
 }
 
 /**
- * The filament to seed a slot with when nothing better can be resolved — a brand-new project's
+ * The filament to seed a slot with when nothing better can be resolved, a brand-new project's
  * first material, or an added slot with no template to clone. "Generic PLA" (GFL99) is a system
  * preset present for every machine and nozzle, so it is always sliceable; callers that DO know the
  * machine prefer its own `default_filament_profile` (Bambu PLA Basic) and only fall back to this.
@@ -108,7 +108,7 @@ export const DEFAULT_FILAMENT_COLOR = '#FFFFFF'
  *
  * BambuStudio writes `filament_vendor: "Bambu Lab"`, while every name-derived path yields "Bambu"
  * (preset names read "Bambu PLA Basic", never "Bambu Lab PLA Basic"). Presets that carry no vendor
- * field — a 3MF's own project presets — can only take the name-derived form, so without one rule
+ * field, a 3MF's own project presets, can only take the name-derived form, so without one rule
  * the same vendor appears both ways in a single picker, which reads as two different brands.
  */
 export function normalizeFilamentVendorLabel(vendor: string | null | undefined): string {

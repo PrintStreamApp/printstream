@@ -32,7 +32,7 @@ after(() => {
 type SubmitInput = { outputFileName?: string; outputFolderId: string | null }
 
 function renderDialog(onSubmit: (input: SubmitInput) => void) {
-  // gcTime: Infinity — react-query imported after jsdom detects a browser and would otherwise
+  // gcTime: Infinity: react-query imported after jsdom detects a browser and would otherwise
   // leave a ref'd 5-minute timer holding the runner open.
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } })
   return render(

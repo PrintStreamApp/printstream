@@ -99,7 +99,7 @@ test('a second sync with nothing changed sends no writes at all', async () => {
   assert.deepEqual(second.pulled, [])
   assert.deepEqual(second.created, [])
   assert.deepEqual(second.updated, [])
-  // A pull must not look like a local edit on the next pass — that would push the
+  // A pull must not look like a local edit on the next pass, that would push the
   // preset straight back up and churn the user's cloud library on every sync.
   assert.deepEqual(calls.filter((call) => call.operation !== 'listSettings'), [])
 })
@@ -165,7 +165,7 @@ test('when both sides changed, the cloud copy wins and nothing is pushed back', 
   const result = await runSyncWithFakeCloud(store)
 
   // Pull runs before push, so the cloud copy lands first and clears the local-edit
-  // marker — which is exactly how Studio's ordering resolves this.
+  // marker, which is exactly how Studio's ordering resolves this.
   assert.deepEqual(result.pulled.map((entry) => entry.name), ['My PLA'])
   assert.deepEqual(result.updated, [])
   assert.equal(calls.some((call) => call.operation === 'patchSetting'), false)
@@ -286,7 +286,7 @@ test('a preset deleted in Bambu Cloud is frozen, reported, and never silently pu
   const stillLocal = await listCustomSlicingPresetRecords(WORKSPACE_ID)
   assert.equal(stillLocal.length, 1, 'the local copy must not be deleted on its own')
 
-  // Editing the survivor while frozen must not push a brand new cloud preset for it —
+  // Editing the survivor while frozen must not push a brand new cloud preset for it,
   // that would answer a question nobody asked yet.
   await upsertCustomSlicingPresetRecords(WORKSPACE_ID, [{
     id: existing?.id,
@@ -365,7 +365,7 @@ test('confirming a cloud-side deletion removes the local copy and clears the fre
   assert.deepEqual(resolved, { kind: 'missingRemotely' })
   assert.equal((await listCustomSlicingPresetRecords(WORKSPACE_ID)).length, 0)
 
-  // The freeze is gone too — nothing left to report.
+  // The freeze is gone too, nothing left to report.
   const after = await runSyncWithFakeCloud(store)
   assert.deepEqual(after.missingRemotely, [])
 })
@@ -410,7 +410,7 @@ test('confirming a local-side deletion queues the cloud copy for removal', async
 
   const resolved = await resolvePendingDeletion(WORKSPACE_ID, store, logger, existing?.id ?? '', 'confirm')
   assert.deepEqual(resolved, { kind: 'missingLocally' })
-  // Queued, not deleted inline — a network blip mid-request must not lose it.
+  // Queued, not deleted inline, a network blip mid-request must not lose it.
   assert.equal(cloudPresets.has('PFUS1'), true)
 
   calls = []
@@ -421,7 +421,7 @@ test('confirming a local-side deletion queues the cloud copy for removal', async
 
 test('confirming a local-side deletion must not re-import the preset before the delete drains', async () => {
   // THE regression. `propagateConfirmedDeletes` drains AFTER pull in the same pass, and
-  // confirming drops the binding — so pull used to see an unbound remote preset and
+  // confirming drops the binding, so pull used to see an unbound remote preset and
   // re-import the very thing the user had just deleted. The cloud copy then went away,
   // leaving a resurrected LOCAL copy with no binding, which the next pass pushed back up
   // as a brand new cloud preset. It did this to six of Ryan's presets in one click.
@@ -497,7 +497,7 @@ test('a sync in flight cannot clobber a concurrent resolve-delete for the same w
   const [existing] = await listCustomSlicingPresetRecords(WORKSPACE_ID)
 
   // An unrelated cloud preset the next sync will need to fetch (a `getSetting` call
-  // during pull) — that call happens AFTER the sync reads the bindings blob, which is
+  // during pull), that call happens AFTER the sync reads the bindings blob, which is
   // where the real race window sits. Delaying the FIRST call (`listSettings`) instead
   // would pause the sync before it ever reads bindings and could not reproduce this.
   cloudPresets.set('PFUS2', {
@@ -507,11 +507,11 @@ test('a sync in flight cannot clobber a concurrent resolve-delete for the same w
     setting: { filament_type: '"PETG"' }
   })
 
-  // Start a slow sync — its bindings snapshot is captured almost immediately (listing
-  // resolves fast), then it stalls fetching PFUS2's detail — and, WHILE it is stalled,
+  // Start a slow sync, its bindings snapshot is captured almost immediately (listing
+  // resolves fast), then it stalls fetching PFUS2's detail, and, WHILE it is stalled,
   // resolve the pending deletion it already knows about. Without a per-workspace lock,
   // the sync's stale snapshot still carries the frozen binding, and its final write
-  // would overwrite whatever the resolve call just did — resurrecting a binding the
+  // would overwrite whatever the resolve call just did: resurrecting a binding the
   // user just confirmed deleting.
   const slowSync = runSyncWithFakeCloud(store, { delayMs: 30, delayOperation: 'getSetting' })
   await delay(5) // let the slow sync read its bindings snapshot and reach the stall
@@ -519,7 +519,7 @@ test('a sync in flight cannot clobber a concurrent resolve-delete for the same w
   await slowSync
 
   assert.deepEqual(resolved, { kind: 'missingRemotely' })
-  // PFUS2 legitimately gets pulled in as its own new local preset by the slow sync —
+  // PFUS2 legitimately gets pulled in as its own new local preset by the slow sync:
   // the assertion that matters is that "My PLA" specifically stayed deleted.
   const presetsAfter = await listCustomSlicingPresetRecords(WORKSPACE_ID)
   assert.equal(presetsAfter.some((preset) => preset.id === existing?.id), false)
@@ -557,7 +557,7 @@ async function runSyncWithFakeCloud(
     call: async (_workspaceId, request) => {
       const operation = request.request.operation
       // Delaying `listSettings` (the FIRST call) would pause the sync before it ever
-      // reads the bindings blob, which cannot reproduce a bindings race — the real
+      // reads the bindings blob, which cannot reproduce a bindings race: the real
       // window is between the bindings read and the final write, i.e. during a LATER
       // call, so a caller wanting to exercise that race must name a later operation.
       if (options.delayMs && (!options.delayOperation || options.delayOperation === operation)) {
@@ -651,7 +651,7 @@ test('a check reports what a sync would do, and writes nothing anywhere', async 
   assert.deepEqual(plan.pushable.map((entry) => entry.name), ['Local only'])
 
   // ONE listing read and nothing else. No preset bodies fetched, nothing created,
-  // patched or deleted — that is what makes this cheap enough to run on a timer.
+  // patched or deleted, that is what makes this cheap enough to run on a timer.
   assert.deepEqual(calls.map((call) => call.operation), ['listSettings'])
   // The local library is untouched: the cloud preset was NOT imported.
   const presets = await listCustomSlicingPresetRecords(WORKSPACE_ID)
@@ -688,7 +688,7 @@ test('a check records its answer so a surface can read it without calling Bambu'
 })
 
 test('a check still notices a deletion and freezes it for a decision', async () => {
-  // Freezing is bookkeeping, not a write to presets or the cloud — and it is the only way
+  // Freezing is bookkeeping, not a write to presets or the cloud, and it is the only way
   // a deletion becomes a question the user can answer, so the check must still do it.
   const store = createStore()
   await connect(store)
@@ -706,7 +706,7 @@ test('a check still notices a deletion and freezes it for a decision', async () 
 
 test('a reused listing still reflects a preset edited here since', async () => {
   // The cache is the LISTING, never the verdict. Caching the verdict meant a local edit
-  // showed nothing until the cache aged out — a stale answer to a question whose inputs
+  // showed nothing until the cache aged out, a stale answer to a question whose inputs
   // had all changed locally, which reads as the feature being broken.
   const store = createStore()
   await connect(store)

@@ -4,7 +4,7 @@
  * The helper is deliberately UNADVERTISED: it is being published to the Chrome Web
  * Store rather than handed out as an unpacked GitHub build, so nothing here offers a
  * download, install steps, or a link. The endpoints it uses still work, so anyone
- * already running it keeps their handoff — this only governs what we say.
+ * already running it keeps their handoff, this only governs what we say.
  *
  * The rule: mention the helper ONLY to someone who already has it. A user without it
  * gets an honest statement of what PrintStream cannot do yet, never a pitch for

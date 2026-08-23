@@ -10,7 +10,7 @@
  * first task that runs AFTER that paint. Awaiting this between "set busy" and "start work" is what
  * makes the busy state visible. Falls back to a plain timeout where rAF is unavailable (jsdom).
  *
- * Costs one frame (~16ms) — negligible against the work it precedes, and never worth adding to
+ * Costs one frame (~16ms): negligible against the work it precedes, and never worth adding to
  * work that is already fast.
  */
 export function afterNextPaint(): Promise<void> {

@@ -6,7 +6,7 @@
  * resets*: the runtime drops bridgeId/runtimeToken when the API rejects them
  * (e.g. the bridge was pointed at a different database), but keeps the
  * installationId so the server can recognize the returning physical bridge and
- * re-bind it to its existing record — instead of registering a duplicate and
+ * re-bind it to its existing record, instead of registering a duplicate and
  * stranding its printers/library.
  *
  * Because losing the installationId is what strands a bridge, the store is
@@ -100,13 +100,13 @@ async function preserveCorruptState(filePath: string): Promise<string | null> {
 }
 
 /**
- * Loads bridge state, guaranteeing a durable installationId — generating and
+ * Loads bridge state, guaranteeing a durable installationId: generating and
  * persisting one on first run (and for a legacy file that predates the field,
  * while preserving any credentials it already holds). Credentials are included
  * only when both `bridgeId` and `runtimeToken` are present.
  *
  * Throws {@link CorruptBridgeStateError} when the file exists but is unreadable,
- * rather than treating it as a first run — minting a replacement identity there
+ * rather than treating it as a first run: minting a replacement identity there
  * is what orphans a returning bridge under a duplicate record.
  */
 export async function loadBridgeState(filePath: string): Promise<BridgeState> {
@@ -134,7 +134,7 @@ export async function loadBridgeState(filePath: string): Promise<BridgeState> {
 /**
  * Persists bridge state atomically: the payload is written to a sibling temp
  * file, flushed to disk, then renamed into place. A crash or full disk (ENOSPC)
- * mid-write therefore fails without ever truncating the existing good file — the
+ * mid-write therefore fails without ever truncating the existing good file: the
  * durable installationId cannot be lost to a partial write.
  */
 export async function writeBridgeState(filePath: string, state: BridgeState): Promise<void> {

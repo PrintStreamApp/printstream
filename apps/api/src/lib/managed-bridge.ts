@@ -33,7 +33,7 @@ export function isManagedBridgeMode(): boolean {
  * Returns the managed-bridge provisioning token, creating it on first use.
  * Reads `MANAGED_BRIDGE_TOKEN_FILE`; if it is absent or empty, generates a
  * random token and writes it (owner-only). Returns null when not in managed
- * mode — there is no token to issue. The API ensures this at startup so the
+ * mode, there is no token to issue. The API ensures this at startup so the
  * bundled bridge can read the file before it first registers.
  */
 export function ensureManagedBridgeToken(): string | null {
@@ -43,7 +43,7 @@ export function ensureManagedBridgeToken(): string | null {
     const existing = readFileSync(file, 'utf8').trim()
     if (existing) return existing
   } catch {
-    // Missing or unreadable — fall through and create it.
+    // Missing or unreadable: fall through and create it.
   }
   const token = randomBytes(32).toString('base64url')
   mkdirSync(path.dirname(file), { recursive: true })

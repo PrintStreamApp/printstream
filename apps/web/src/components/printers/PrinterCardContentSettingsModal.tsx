@@ -8,7 +8,7 @@ import { PrinterCardContentSettingsFields } from './PrinterCardContentSettingsFi
 /**
  * The single-printer view editor: a focused "Edit view" dialog exposing only
  * the per-card content toggles. Unlike PrinterViewsModal it has no name,
- * layout, filter, or printer-selection controls — the single-printer view
+ * layout, filter, or printer-selection controls: the single-printer view
  * always shows one card, and these settings apply to it for every printer.
  */
 export function PrinterCardContentSettingsModal({

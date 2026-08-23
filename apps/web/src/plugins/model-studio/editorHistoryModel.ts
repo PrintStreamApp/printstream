@@ -3,7 +3,7 @@
  *
  * Framework-free so it can be unit-tested in isolation; the React wrapper lives in
  * useEditorHistory.ts. The machine owns the undo/redo stacks and decides whether the
- * project has unsaved changes; it does NOT know how to restore a scene — the caller
+ * project has unsaved changes; it does NOT know how to restore a scene: the caller
  * injects an `applyAndInvert` callback that performs the restore and returns the
  * inverse entry for the opposite stack.
  *
@@ -12,7 +12,7 @@
  *   overrides) advance a monotonic version id. The project is dirty while the
  *   current version differs from the version at the last save. Because version ids
  *   are never reused, undoing every edit back to the saved checkpoint returns the
- *   current version to the saved one and the project reads clean again — and a new
+ *   current version to the saved one and the project reads clean again, and a new
  *   edit after undoing always gets a fresh id, so branching never collides into a
  *   false "clean".
  * - **Non-undoable edits** (material profile/colour/nozzle changes, which are not
@@ -106,7 +106,7 @@ export class EditorHistoryModel {
    *
    * For an id-space migration, NOT for editing history. A save that adds/removes materials
    * renumbers the session filament ids, and the frames on these stacks are frozen copies taken
-   * BEFORE that happened — so undoing past such a save would restore ids that no longer mean what
+   * BEFORE that happened, so undoing past such a save would restore ids that no longer mean what
    * they say (audit F7's last un-owned crossing). The renumber owns every holder of the space
    * (invariant I4) and the stacks are holders; this is how they move.
    *

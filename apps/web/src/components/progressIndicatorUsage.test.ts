@@ -31,8 +31,8 @@ async function* walk(dir: string): AsyncGenerator<string> {
  * from the same `value` prop a determinate bar uses for its *position*, so the
  * natural-looking `determinate={x != null} value={x ?? 0}` renders a zero-width
  * segment: the indeterminate bar animates nothing and reads as stuck. Fourteen
- * surfaces independently wrote that pair, and nothing — typecheck, lint, or render
- * test — objects to it, because both props are individually valid.
+ * surfaces independently wrote that pair, and nothing, typecheck, lint, or render
+ * test, objects to it, because both props are individually valid.
  *
  * `ProgressBar`/`ProgressSpinner` derive determinacy from `value`, which makes the
  * pair unwritable. This keeps the raw props from coming back. Note that a bare

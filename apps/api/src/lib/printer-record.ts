@@ -60,7 +60,7 @@ export function serializePrinterNozzleDiameters(value: readonly PrinterNozzleDia
 
 /**
  * Server-internal printer DTO that carries the real LAN access code. Use this for
- * transport/manager paths. Never send the result to the browser — use
+ * transport/manager paths. Never send the result to the browser: use
  * `toPublicPrinterDto` for anything that reaches an HTTP/WS response.
  */
 export function toPrinterDto(row: PrinterRowLike): Printer {

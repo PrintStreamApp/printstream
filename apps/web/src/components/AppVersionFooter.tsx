@@ -16,14 +16,14 @@ import { ConfirmActionDialog } from './ConfirmActionDialog'
  *
  * On the native app the hint is also the TRIGGER: `canApplyUpdate` (settings
  * managers only) makes the chip clickable, and confirming posts
- * `/api/app/update/start` — the server backs up its database, verifies the
+ * `/api/app/update/start`: the server backs up its database, verifies the
  * signed build, swaps its executable, and restarts (`native-update-apply.ts`).
  * The page then polls `/api/app/version` until a different build answers and
  * reloads itself.
  *
  * `updatesLapsed` is the same hint with a renewal prompt: a newer build exists
  * but the install's updates & support period has ended. It is deliberately
- * still a chip and not a warning — the build they own keeps running.
+ * still a chip and not a warning: the build they own keeps running.
  */
 export function AppVersionFooter() {
   const { data } = useQuery({
@@ -91,7 +91,7 @@ export function AppVersionFooter() {
         title="Update PrintStream?"
         description={restarting
           ? 'PrintStream is restarting into the new build. This page reloads automatically when it is back.'
-          : `PrintStream will download and verify${targetBuild}, then restart into it — its database is backed up before anything migrates. ` +
+          : `PrintStream will download and verify${targetBuild}, then restart into it, its database is backed up before anything migrates. ` +
             'The app will be unavailable for a minute; anything printing continues on the printer.'}
         confirmLabel="Update now"
         color="primary"
@@ -119,10 +119,10 @@ export function AppVersionFooter() {
 function describeUpdate(update: NonNullable<AppVersionResponse['update']>, canApply: boolean): string {
   const target = update.latestShortRevision ? ` (build ${update.latestShortRevision})` : ''
   if (update.status === 'updatesLapsed') {
-    return `A newer build is available${target}, but updates and priority support for this license have ended. Renew to install it — the build you have keeps running.`
+    return `A newer build is available${target}, but updates and priority support for this license have ended. Renew to install it: the build you have keeps running.`
   }
   if (canApply) {
-    return `A newer version is available${target}. Click to update — the app backs up its database and restarts itself.`
+    return `A newer version is available${target}. Click to update: the app backs up its database and restarts itself.`
   }
   // Two channels want different sentences: the Docker operator runs a command,
   // the native viewer is pointed at whoever can click the button. Saying

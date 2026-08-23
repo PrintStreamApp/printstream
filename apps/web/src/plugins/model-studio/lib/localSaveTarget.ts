@@ -6,12 +6,12 @@
  * no File System Access). Nothing is persisted server-side and there is no library to invalidate.
  *
  * Per-object process overrides ride the save REQUEST rather than the `SceneEdit`, so they are only
- * visible here — they are handed to the bake explicitly. The api applies the same transform in its
+ * visible here, they are handed to the bake explicitly. The api applies the same transform in its
  * own later pass while preparing a slice; the browser folds it into its single bake.
  *
  * The MACHINE RETARGET rides the request the same way (`payload.retarget`) and is applied here for
  * the same reason: the api runs it as a post-bake pass over the file it just wrote, so the browser
- * runs it as a post-bake pass over the file it just wrote. Both call the same shared rewrite — see
+ * runs it as a post-bake pass over the file it just wrote. Both call the same shared rewrite: see
  * `lib/localMachineRetarget.ts`. Without it a printer switch was simply lost on save: the bake
  * preserves the project's embedded machine, so reopening showed the original printer again.
  */
@@ -27,14 +27,14 @@ import { saveLocalProjectAs, suggestedSaveName, type LocalProjectFile } from './
 export interface LocalSaveTargetOptions {
   /** The opened project's archive, or null for a project built from scratch in the editor. */
   archive: () => ThreeMfArchive | null
-  /** Staged geometry to bake in — the local store holds the meshes the `SceneEdit` refers to. */
+  /** Staged geometry to bake in: the local store holds the meshes the `SceneEdit` refers to. */
   importStore: EditorImportStore
   /** The file being edited, or null before the project has ever been written to disk. */
   projectFile: () => LocalProjectFile | null
   /** Called after a save writes somewhere new, so the host can adopt the handle for later saves. */
   onProjectFileChanged: (file: LocalProjectFile) => void
   /**
-   * The filament catalogue a machine retarget picks its slot rebinds from — built-ins plus the
+   * The filament catalogue a machine retarget picks its slot rebinds from: built-ins plus the
    * user's browser-stored presets, read live because it settles asynchronously after open.
    */
   filamentPresets: () => readonly SlicingPresetSummary[]

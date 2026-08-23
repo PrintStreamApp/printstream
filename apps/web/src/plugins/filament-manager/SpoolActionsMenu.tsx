@@ -1,6 +1,6 @@
 /**
  * Overflow actions for a spool row/card: edit, adjust remaining, unload, and
- * recycle. Pure presentational leaf — the parent view owns the mutations and
+ * recycle. Pure presentational leaf: the parent view owns the mutations and
  * confirmations and passes handlers in.
  */
 import MoreVertRoundedIcon from '@mui/icons-material/MoreVertRounded'

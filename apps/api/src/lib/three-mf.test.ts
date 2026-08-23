@@ -40,7 +40,7 @@ const projectSettingsJson = JSON.stringify({
 })
 
 test('buildThreeMfIndex flags geometry-only 3MFs (no Bambu metadata) and only those', () => {
-  // Vanilla mesh container: neither slice_info nor model_settings — the plate is fabricated.
+  // Vanilla mesh container: neither slice_info nor model_settings: the plate is fabricated.
   const vanilla = buildThreeMfIndex(null, null, new Map())
   assert.equal(vanilla.geometryOnly, true)
   assert.equal(vanilla.plates.length, 1)
@@ -66,7 +66,7 @@ test('single-object model exports round-trip the model-kind marker', () => {
 
 test('buildThreeMfIndex distinguishes A1 mini from A1 (mini must not classify as A1)', () => {
   const miniSettings = JSON.stringify({ printer_model: ['Bambu Lab A1 mini'] })
-  // "Bambu Lab A1 mini" contains " A1 ", which used to short-circuit to A1 — making the
+  // "Bambu Lab A1 mini" contains " A1 ", which used to short-circuit to A1, making the
   // slice dialog pair A1 filament profiles with the project's A1-mini machine profile.
   assert.deepEqual(buildThreeMfIndex(null, miniSettings, new Map()).compatiblePrinterModels, ['A1mini'])
   const a1Settings = JSON.stringify({ printer_model: ['Bambu Lab A1'] })
@@ -295,7 +295,7 @@ test('nozzle assignment round-trips a left<->right swap through the index parser
 
 // Production incident (2026-07-19, H2D): a support material saved with no nozzle assignment left
 // an EMPTY entry in filament_nozzle_map. BambuStudio read it as an extruder index and landed on
-// garbage — "filament Sup.PLA can not be printed on extruder 23075, under manual mode for multi
+// garbage: "filament Sup.PLA can not be printed on extruder 23075, under manual mode for multi
 // extruder printer", exit 188. The file must never be written with a hole in the map.
 test('an unassigned filament never leaves a hole in filament_nozzle_map', () => {
   const projectSettings = JSON.stringify({
@@ -320,8 +320,8 @@ test('an unassigned filament never leaves a hole in filament_nozzle_map', () => 
 
 // Regression (2026-07-19, H2D "Kawasaki" project): a nozzle the user picked for a SECOND material
 // saved correctly into filament_nozzle_map but read back as "no nozzle", so the L|R control showed
-// nothing and the next save wrote that nothing into the file. slice_info was stale — recorded by an
-// earlier slice that used only filament 1 — and its mapping won outright, dropping filament 2.
+// nothing and the next save wrote that nothing into the file. slice_info was stale, recorded by an
+// earlier slice that used only filament 1, and its mapping won outright, dropping filament 2.
 test('a stale slice_info does not drop nozzles for filaments it predates', () => {
   const sliceInfo = `
 <config>
@@ -366,7 +366,7 @@ test('nozzle assignment round-trips with no slice_info filament assignments (ver
 
 test('nozzle assignment clears a stale single-active short-circuit so a move to the other nozzle persists', () => {
   // A project sliced with BOTH materials on the left nozzle: extruder_nozzle_stats marks only the
-  // left extruder active, which short-circuits every filament onto that nozzle on read — this is
+  // left extruder active, which short-circuits every filament onto that nozzle on read, this is
   // the "saves left no matter what" state before the fix.
   const sliceInfo = `
 <config>
@@ -475,7 +475,7 @@ test('applyFilamentList drops the old material physics when a slot changes mater
 // Regression for the H2D "missing its dual-nozzle machine data" incident: on a dual-nozzle
 // machine with exactly TWO filaments, every extruder-indexed machine array is length 2 as well,
 // so the length-based filament-array detection matched them and a material-change save DELETED
-// nozzle_diameter / physical_extruder_map / extruder_type / extruder_variant_list — leaving a
+// nozzle_diameter / physical_extruder_map / extruder_type / extruder_variant_list, leaving a
 // project the slicer's machine-switch guard rejects. Machine-domain arrays must survive verbatim.
 test('applyFilamentList never drops or remaps extruder-indexed machine arrays that length-collide with the filament count', () => {
   const machineBlock = {
@@ -499,7 +499,7 @@ test('applyFilamentList never drops or remaps extruder-indexed machine arrays th
     nozzle_temperature: ['255', '220'],
     ...machineBlock
   })
-  // Slot 1's material changes (PLA-S support -> ABS-S support) — the exact incident shape.
+  // Slot 1's material changes (PLA-S support -> ABS-S support): the exact incident shape.
   const filaments: SceneEditFilament[] = [
     { color: '#001489', sourceIndex: 0, type: 'PETG', settingsId: 'Bambu PETG Basic @BBL H2D 0.4 nozzle' },
     { color: '#FFFFFF', sourceIndex: 1, type: 'ABS-S', settingsId: 'Bambu Support for ABS @BBL H2D' }
@@ -538,7 +538,7 @@ test('applyFilamentList does not length-remap machine arrays when a filament slo
 
 test('applyFilamentList blanks a changed slot\'s different_settings_to_system record, keeping process/machine and unchanged slots', () => {
   // The material dialog treats a slot's different_settings_to_system entry as the authoritative
-  // "changed within this 3MF" signal — a record inherited from the OLD material would flag keys
+  // "changed within this 3MF" signal, a record inherited from the OLD material would flag keys
   // the new material never touched. Layout: [process, ...filament slots, machine].
   const projectSettings = JSON.stringify({
     filament_colour: ['#FFC72C', '#000000'],
@@ -556,7 +556,7 @@ test('applyFilamentList blanks a changed slot\'s different_settings_to_system re
 })
 
 // BambuStudio 2.x VARIANT EXPANSION: numeric filament settings carry one value per
-// (filament x extruder variant) — N*V-long arrays that the length==N logic used to skip
+// (filament x extruder variant): N*V-long arrays that the length==N logic used to skip
 // entirely. That skip is how a material switch kept the OLD material's physics (a production
 // H2D save renamed 5 X1C filaments to 1 PETG while nozzle_temperature kept all 10 stale
 // columns), showing phantom "changed vs preset" badges. Slot i owns the V-wide block at i*V.
@@ -591,7 +591,7 @@ test('applyFilamentList block-remaps variant-expanded arrays on a remove without
     filament_extruder_variant: ['Direct Drive Standard', 'Direct Drive High Flow', 'Direct Drive Standard', 'Direct Drive High Flow'],
     nozzle_temperature: ['270', '272', '245', '247']
   })
-  // Keep only the PETG slot (its identity unchanged) — its V-wide block must follow it to slot 1.
+  // Keep only the PETG slot (its identity unchanged), its V-wide block must follow it to slot 1.
   const filaments: SceneEditFilament[] = [
     { color: '#000000', sourceIndex: 1, type: 'PETG', settingsId: 'Bambu PETG HF @BBL H2D 0.4 nozzle' }
   ]
@@ -604,7 +604,7 @@ test('applyFilamentList block-remaps variant-expanded arrays on a remove without
 test('applyFilamentList heals stale filament-catalog arrays whose length matches neither width', () => {
   // The production disease: a pre-variant-aware save left 10 physics columns (5 old filaments x 2
   // variants) beside a 1-entry filament list. No index mapping can read them, so a re-save must
-  // drop them (the slicer re-derives from filament_settings_id) — while arrays we cannot
+  // drop them (the slicer re-derives from filament_settings_id), while arrays we cannot
   // positively classify as filament-domain (per-plate wipe_tower_x, unknown keys) survive.
   const projectSettings = JSON.stringify({
     filament_colour: ['#000000'],
@@ -615,7 +615,7 @@ test('applyFilamentList heals stale filament-catalog arrays whose length matches
     wipe_tower_x: ['165', '15', '15', '15', '15', '15', '15', '15', '15', '15'],
     some_future_key: ['a', 'b', 'c']
   })
-  // Identity-preserving save (no material change) — healing must not depend on one.
+  // Identity-preserving save (no material change): healing must not depend on one.
   const filaments: SceneEditFilament[] = [
     { color: '#000000', sourceIndex: 0, type: 'PETG', settingsId: 'Bambu PETG HF @BBL H2D 0.4 nozzle' }
   ]
@@ -660,7 +660,7 @@ test('applyFilamentList keeps physics (full clone) when only colour changes, no 
   const next = JSON.parse(applyFilamentList(projectSettings, filaments)) as Record<string, unknown>
 
   assert.deepEqual(next.filament_colour, ['#123456', '#654321'])
-  // Physics is retained (cloned) because the material did not change — the config stays complete.
+  // Physics is retained (cloned) because the material did not change: the config stays complete.
   assert.deepEqual(next.chamber_temperatures, ['60', '60'])
   assert.deepEqual(next.nozzle_temperature, ['270', '270'])
 })
@@ -942,7 +942,7 @@ test('plateObjectIdsFromModelSettingsXml reads the target plate object ids only'
 })
 
 // Two plates; object 3 has TWO instances on plate 1 (identify_ids 153 and 154), and object 11
-// reappears on plate 2 under a different identify_id — plate scoping must never leak that one.
+// reappears on plate 2 under a different identify_id: plate scoping must never leak that one.
 const MULTI_INSTANCE_MODEL_SETTINGS_XML = [
   '<config>',
   '  <plate>',
@@ -1213,8 +1213,8 @@ test('applyPartProcessOverrides sets a part\'s process metadata without touching
 })
 
 test('applyPartProcessOverrides refuses to inject structural keys smuggled into the override map', () => {
-  // A June-2026 editor bug seeded override maps from ALL part metadata — including matrix and
-  // source_offset_* — which, injected back, duplicated the part's structural entries. Only
+  // A June-2026 editor bug seeded override maps from ALL part metadata, including matrix and
+  // source_offset_*, which, injected back, duplicated the part's structural entries. Only
   // process-setting keys may pass through.
   const xml = '<config><object id="3"><part id="4"><metadata key="name" value="B"/><metadata key="matrix" value="1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1"/></part></object></config>'
   const out = applyPartProcessOverrides(xml, [{
@@ -1435,6 +1435,51 @@ test('readPlateIndex surfaces the dedicated support material on every unsliced p
   }
 })
 
+test('createSinglePlateThreeMf renumbers the plate consistently across both config files', async () => {
+  // `slice_info`'s `index` and `model_settings`' `plater_id` are ONE key space to the importer: the
+  // slice record attaches by looking its index up in the map built from plater_id
+  // (`bbs_3mf.cpp:4593-4597`), and a miss leaves `m_curr_plater` null, at which point
+  // `_handle_end_config_plater` returns false (`:4766-4770`) and the whole parse aborts. Renumbering
+  // one and not the other is therefore worse than renumbering neither.
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-test-'))
+  const sourcePath = path.join(tempDir, 'source.3mf')
+  const outputPath = path.join(tempDir, 'plate-3.3mf')
+
+  try {
+    await writeZipFixture(sourcePath, [
+      ['3D/3dmodel.model', Buffer.from('<model/>', 'utf8')],
+      ['Metadata/slice_info.config', Buffer.from([
+        '<config>',
+        '  <plate><metadata key="index" value="1"/></plate>',
+        '  <plate><metadata key="index" value="3"/><metadata key="prediction" value="4200"/></plate>',
+        '</config>'
+      ].join('\n'), 'utf8')],
+      ['Metadata/model_settings.config', Buffer.from([
+        '<config>',
+        '  <plate><metadata key="plater_id" value="1"/></plate>',
+        '  <plate><metadata key="plater_id" value="3"/><metadata key="thumbnail_file" value="Metadata/plate_3.png"/></plate>',
+        '</config>'
+      ].join('\n'), 'utf8')],
+      ['Metadata/plate_3.gcode', Buffer.from('plate-three', 'utf8')]
+    ])
+
+    await createSinglePlateThreeMf(sourcePath, outputPath, 3)
+
+    const sliceInfo = (await readEntry(outputPath, 'Metadata/slice_info.config')).toString('utf8')
+    const modelSettings = (await readEntry(outputPath, 'Metadata/model_settings.config')).toString('utf8')
+    const sliceIndex = /key="index" value="(\d+)"/.exec(sliceInfo)?.[1]
+    const platerId = /key="plater_id" value="(\d+)"/.exec(modelSettings)?.[1]
+    assert.equal(sliceIndex, '1', 'the slice record still names the source plate')
+    assert.equal(platerId, '1', 'the plate still names the source plate')
+    assert.equal(sliceIndex, platerId, 'the two identity keys disagree, which aborts the import')
+    // The plate's own payload rides along untouched.
+    assert.match(sliceInfo, /key="prediction" value="4200"/)
+    assert.match(modelSettings, /value="Metadata\/plate_3\.png"/)
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
+})
+
 test('createSinglePlateThreeMf strips bulk 3D payload while keeping the selected plate gcode', async () => {
   const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-test-'))
   const sourcePath = path.join(tempDir, 'source.3mf')
@@ -1473,12 +1518,21 @@ test('createSinglePlateThreeMf strips bulk 3D payload while keeping the selected
     await assert.rejects(() => readEntry(outputPath, 'Metadata/plate_1.gcode'))
     await assert.rejects(() => readEntry(outputPath, '3D/Textures/huge.texture'))
     assert.match((await readEntry(outputPath, '3D/3dmodel.model')).toString('utf8'), /<build\/>/)
+    // The surviving plate is RENUMBERED to 1. A one-plate archive still calling itself plate 2 is one
+    // BambuStudio refuses to read (`bbs_3mf.cpp:1633-1639` bails on an id above the plate count),
+    // which costs the printer's SD browser the title, time, weight and thumbnail.
     const filteredSliceInfo = (await readEntry(outputPath, 'Metadata/slice_info.config')).toString('utf8')
-    assert.match(filteredSliceInfo, /value="2"/)
-    assert.doesNotMatch(filteredSliceInfo, /value="1"/)
+    assert.match(filteredSliceInfo, /key="index" value="1"/)
+    assert.doesNotMatch(filteredSliceInfo, /key="index" value="2"/)
     const filteredModelSettings = (await readEntry(outputPath, 'Metadata/model_settings.config')).toString('utf8')
-    assert.match(filteredModelSettings, /value="2"/)
-    assert.doesNotMatch(filteredModelSettings, /value="1"/)
+    assert.match(filteredModelSettings, /key="plater_id" value="1"/)
+    assert.doesNotMatch(filteredModelSettings, /key="plater_id" value="2"/)
+    // Only the identity fields move. The importer resolves every asset through the stored pointer
+    // (`bbs_3mf.cpp:4539-4547`, extracted by literal name at `:1674`) and never rebuilds a name from
+    // the index, so rewriting these would break the very lookup the renumber exists to enable -- and
+    // would mean changing the upload parameter, i.e. live print protocol.
+    assert.match(filteredSliceInfo, /key="gcode_file" value="Metadata\/plate_2\.gcode"/)
+    assert.match(filteredModelSettings, /key="gcode_file" value="Metadata\/plate_2\.gcode"/)
     assert.equal((await readEntry(outputPath, 'Metadata/plate_2.gcode.md5')).toString('utf8'), 'md5-plate-two')
     await assert.rejects(() => readEntry(outputPath, 'Metadata/plate_1.gcode.md5'))
   } finally {
@@ -1644,7 +1698,7 @@ test('partFilaments on SOME parts round-trips without painting the untouched par
   // Regression: an object whose parts carry no extruder metadata (they inherit), with a
   // filament assigned to only SOME parts. The reader used to report the first assigned
   // part's filament as the INSTANCE filament, so on reload the editor seeded the untouched
-  // parts with the reassigned sibling's material — and the next save baked it onto them.
+  // parts with the reassigned sibling's material, and the next save baked it onto them.
   const modelXml = [
     '<?xml version="1.0" encoding="UTF-8"?>',
     '<model xmlns:p="http://schemas.microsoft.com/3dmanufacturing/production/2015/06">',
@@ -1703,7 +1757,7 @@ test('partFilaments on SOME parts round-trips without painting the untouched par
     // The reassigned part carries filament 2; the untouched sibling stays unassigned.
     assert.equal(partFilament(2), 2)
     assert.equal(partFilament(1), null)
-    // The instance is NOT uniformly assigned, so it reports no instance-level filament —
+    // The instance is NOT uniformly assigned, so it reports no instance-level filament:
     // the editor must not seed the untouched part from a sibling's assignment.
     assert.equal(scene.instances.find((entry) => entry.objectId === 3)?.filamentId, null)
     // A uniformly-assigned object still reports its filament at the instance level.
@@ -2078,7 +2132,7 @@ test('brim ear points serialize to Bambu object ordinals and parse back by objec
 
 test('brim ear ordinals count only build-placed roots, not injected import component objects', () => {
   // A multi-solid import: component mesh objects (50, 51) precede the placed root (52); only the
-  // root has a build <item>. The root's ordinal must be 1 — the components must not shift it.
+  // root has a build <item>. The root's ordinal must be 1: the components must not shift it.
   const model = [
     '<model><resources>',
     '<object id="50" type="model"><mesh/></object>',
@@ -2366,8 +2420,16 @@ test('writeArrangedThreeMf adds a filament: parallel arrays grow, new slot clone
     // The cloned slot inherits filament_settings_id + temperature from sourceIndex 0.
     assert.deepEqual(settings.filament_settings_id, ['Bambu PLA Basic', 'Generic PETG', 'Bambu PLA Basic'])
     assert.deepEqual(settings.nozzle_temperature, ['220', '240', '220'])
-    // 2x2 -> 3x3 flush matrix, row/col cloned from [0,1,0].
-    assert.deepEqual(settings.flush_volumes_matrix, [0, 280, 0, 280, 0, 280, 0, 280, 0])
+    // 2x2 -> 3x3 flush matrix. The two existing slots keep the values the project had; every pair
+    // involving the NEW slot is seeded like BambuStudio does it (`flush_volumes_vector[2i] +
+    // [2j+1]`, 280 by default), with 0 only on the diagonal. This used to clone the source slot's
+    // row and column, which read that slot's own diagonal for the new pair and wrote 0, so the
+    // print purged nothing between two genuinely different materials.
+    // Cells come out as STRINGS even though the fixture is numeric: BambuStudio's `parse_str_arr`
+    // accepts only string and array elements and returns false on anything else
+    // (`Config.cpp:836-860`), whereupon the loader breaks out of the key loop and reports success,
+    // silently dropping every key after this one. The engine writes vectors as strings too.
+    assert.deepEqual(settings.flush_volumes_matrix, ['0', '280', '280', '280', '0', '280', '280', '280', '0'])
     // The Box part used material 2, which is kept -> its extruder stays 2 (not remapped).
     const config = (await readEntry(outputPath, 'Metadata/model_settings.config')).toString('utf8')
     assert.match(config, /<metadata key="extruder" value="2"\/>/)
@@ -2400,7 +2462,7 @@ test('writeArrangedThreeMf removes a filament: arrays shrink and parts reassign 
     assert.deepEqual(settings.filament_colour, ['#FF0000'])
     assert.deepEqual(settings.filament_type, ['PLA'])
     assert.deepEqual(settings.filament_settings_id, ['Bambu PLA Basic'])
-    assert.deepEqual(settings.flush_volumes_matrix, [0])
+    assert.deepEqual(settings.flush_volumes_matrix, ['0'])
 
     // The Box part referenced extruder 2, which no longer exists -> clamped to 1.
     const config = (await readEntry(outputPath, 'Metadata/model_settings.config')).toString('utf8')
@@ -2415,7 +2477,7 @@ test('writeArrangedThreeMf sizes the flush matrix per EXTRUDER on a dual-nozzle 
   // Regression (prod, 2026-07-21): `flush_volumes_matrix` is filaments^2 PER EXTRUDER, but the
   // rebuild treated it as a single square. A 1-filament project retargeted onto a dual-nozzle
   // machine kept a 1-entry matrix where 2 are required, and BambuStudio read the missing block
-  // out of bounds — a deterministic segfault at ~71% (CLI exit 139).
+  // out of bounds, a deterministic segfault at ~71% (CLI exit 139).
   const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-flushdual-'))
   const sourcePath = path.join(tempDir, 'source.3mf')
   const outputPath = path.join(tempDir, 'dual.3mf')
@@ -2441,7 +2503,7 @@ test('writeArrangedThreeMf sizes the flush matrix per EXTRUDER on a dual-nozzle 
     await writeArrangedThreeMf(sourcePath, outputPath, edit)
 
     const settings = await readProjectSettings(outputPath)
-    assert.deepEqual(settings.flush_volumes_matrix, [0, 0])
+    assert.deepEqual(settings.flush_volumes_matrix, ['0', '0'])
   } finally {
     await rm(tempDir, { recursive: true, force: true })
   }
@@ -2449,7 +2511,7 @@ test('writeArrangedThreeMf sizes the flush matrix per EXTRUDER on a dual-nozzle 
 
 test('writeArrangedThreeMf persists a material profile change: filament_settings_id + type follow the desired list', async () => {
   // Regression: changing a material (e.g. PLA -> PETG) without adding/removing slots used to be
-  // dropped — `filament_settings_id` was never written, so the saved project kept the old preset
+  // dropped: `filament_settings_id` was never written, so the saved project kept the old preset
   // (with a name/type mismatch) and reopened as the previous material.
   const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-filprofile-'))
   const sourcePath = path.join(tempDir, 'source.3mf')
@@ -2486,7 +2548,7 @@ test('writeArrangedThreeMf persists a material profile change: filament_settings
 // PREVIOUS slice used, and BambuStudio builds its per-plate nozzle grouping from those entries.
 // Adding a material to an already-sliced project used to carry the old, shorter record forward
 // (only group_id was rewritten, never the entry set), so the next slice derived a SHORT filament
-// map and read it out of bounds — "filament Sup.PLA can not be printed on extruder 21840", exit
+// map and read it out of bounds: "filament Sup.PLA can not be printed on extruder 21840", exit
 // 188. A record that does not describe the saved filament set must not survive the save.
 test('saving a material onto an already-sliced project drops the now-mismatched slice record', async () => {
   const { buildEditedThreeMf } = await import('./three-mf.js')
@@ -2525,7 +2587,7 @@ test('saving a material onto an already-sliced project drops the now-mismatched 
 test('saving from a settings-less new-project scaffold synthesizes project_settings.config (materials + plate type survive)', async () => {
   // Regression: a new-project scaffold carries no Metadata/project_settings.config, and the
   // filament/plate-type rewrites used to be registered only as copy-pass transforms of an
-  // EXISTING entry — so the first save of a new project silently dropped the chosen material
+  // EXISTING entry, so the first save of a new project silently dropped the chosen material
   // and plate type, and the project reopened with defaults.
   const { buildEditedThreeMf } = await import('./three-mf.js')
   const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-scaffold-'))
@@ -2556,12 +2618,12 @@ test('saving from a settings-less new-project scaffold synthesizes project_setti
 })
 
 test('re-saving an editor-born project onto its own output is stable (no duplicate or lost parts)', async () => {
-  // The editor keeps a new project's instances IMPORT-backed for the whole session — nothing
+  // The editor keeps a new project's instances IMPORT-backed for the whole session, nothing
   // re-reads the file to turn a staged import into an in-project object. This pins the invariant
   // that makes that safe, and with it the editor's ability to stay open after saving instead of
   // re-mounting on the just-saved file: because `SceneEdit.instances` is authoritative for what is
   // placed, re-baking the same edit onto the previous save's output neither duplicates the import
-  // nor strands the old object's geometry — and per-part materials survive the round trip (the
+  // nor strands the old object's geometry, and per-part materials survive the round trip (the
   // failure mode of the remapModelSettingsFilamentRefs (then remapPartExtruders) double-remap bug, which surfaced on exactly this path).
   const { buildEditedThreeMf } = await import('./three-mf.js')
   const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-resave-'))
@@ -2608,8 +2670,12 @@ test('re-saving an editor-born project onto its own output is stable (no duplica
     assert.equal(first.placed, 1)
     // One root object plus one mesh object per solid.
     assert.equal(first.objects, 3)
-    // The solid moved to material 2 carries its own extruder; the other inherits the object's.
-    assert.deepEqual(first.extruders, ['2'])
+    // Object-level binding first, then one entry per solid: the object is bound to filament 1
+    // (nothing in the edit claims a material for it, and 1 is what the engine resolves an absent
+    // slot to anyway), solid A follows that binding, and solid B keeps its own material 2.
+    // This used to read `['2']`, no object entry and nothing for solid A, which is the shape
+    // that made an object's material a property of the ENGINE rather than of the file.
+    assert.deepEqual(first.extruders, ['1', '1', '2'])
 
     // Saves #2 and #3 bake from the editor state alone (`ignoreBaseContent`), which is what the
     // API does for an editor-born project. Each reproduces save #1 exactly, so the editor can
@@ -2717,13 +2783,13 @@ test('rewriteThreeMfEntries upserts appendEntries: appended when absent, transfo
 // The author-anew contract, from the save side. The editor's state is seeded ONCE
 // (`if (stateRef.current) return` in EditorView), so it keeps its synthetic import ids for the
 // whole session and re-sends the SAME import on every save. That is only safe because each save is
-// authored from the ORIGINAL opened bytes, which hold no import — so re-injecting is correct and
+// authored from the ORIGINAL opened bytes, which hold no import, so re-injecting is correct and
 // save N reproduces save 1 exactly.
 //
 // Chaining onto the previous save's output instead (which already contains that geometry) injects
 // it a second time and strands the earlier copy unreferenced: one dead mesh object per solid per
 // save, silently, on every ordinary project with an import. Both halves are asserted below,
-// because the defect is invisible in the placed scene — only the object COUNT shows it.
+// because the defect is invisible in the placed scene, only the object COUNT shows it.
 test('a save authored from the original is stable; chaining onto the last save strands a copy per solid', async () => {
   const { buildEditedThreeMf } = await import('./three-mf.js')
   const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-resave-'))
@@ -2758,7 +2824,7 @@ test('a save authored from the original is stable; chaining onto the last save s
     const objectsAfterFirstSave = await countObjects(firstSavePath)
     assert.ok(objectsAfterFirstSave > objectsInOriginal, 'the first save injects the import')
 
-    // Save again from the ORIGINAL — what a pinned content base gives the bake.
+    // Save again from the ORIGINAL: what a pinned content base gives the bake.
     await buildEditedThreeMf(originalPath, secondSavePath, edit, imports)
     const objectsAfterSecondSave = await countObjects(secondSavePath)
 
@@ -2779,7 +2845,7 @@ test('a save authored from the original is stable; chaining onto the last save s
       'chaining strands one object PER SOLID'
     )
     // Only ONE instance is placed either way, so the extras are dead weight rather than a visible
-    // duplicate — which is exactly why the file grew silently.
+    // duplicate, which is exactly why the file grew silently.
     const scene = await readSceneManifest(secondSavePath, 1)
     assert.equal(scene.instances.length, 1)
     assert.equal((await readSceneManifest(chainedPath, 1)).instances.length, 1)
@@ -2858,7 +2924,7 @@ test('buildEditedThreeMf bakes a multi-solid import as one object with many norm
     assert.equal(componentIds.length, 2)
     // Both solids exist as mesh objects.
     assert.equal((modelXml.match(/<mesh>/g) ?? []).length, 2)
-    // Exactly one build item — the assembly places as a single object.
+    // Exactly one build item: the assembly places as a single object.
     assert.equal((modelXml.match(/<item objectid=/g) ?? []).length, 1)
 
     const settingsXml = (await readEntry(outputPath, 'Metadata/model_settings.config')).toString('utf8')
@@ -2877,7 +2943,7 @@ test('buildEditedThreeMf bakes a multi-solid import as one object with many norm
     assert.equal(scene.instances[0]?.parts[0]?.processOverrides, undefined)
 
     // Re-open + re-save flow: the baked import is now an in-project object. Editing a part's
-    // process settings and saving again must persist — and the parts must keep their names.
+    // process settings and saving again must persist, and the parts must keep their names.
     const bakedObjectId = scene.instances[0]!.objectId
     const bakedParts = scene.instances[0]!.parts
     assert.ok(bakedParts.every((part) => part.componentObjectId > 0), 'parts have baked component ids')
@@ -2907,8 +2973,8 @@ test('buildEditedThreeMf bakes a multi-solid import as one object with many norm
 test('buildEditedThreeMf keeps a multi-solid import\'s per-part materials when the filament set changes (no double-remap)', async () => {
   // Regression (fresh multi-solid STEP import saved as "everything material 1"): the material
   // add/remove part-extruder remap pass used to run over the WHOLE model_settings, so it
-  // double-remapped the freshly-baked import parts — which are ALREADY authored in new-filament-id
-  // space — through an OLD-slot->NEW-id map. When that map didn't cover a part's id it fell back to
+  // double-remapped the freshly-baked import parts, which are ALREADY authored in new-filament-id
+  // space, through an OLD-slot->NEW-id map. When that map didn't cover a part's id it fell back to
   // filament 1, collapsing every solid onto material 1. The remap must touch only the BASE project's
   // inherited parts; imported solids are injected afterward and left as written.
   const { buildEditedThreeMf } = await import('./three-mf.js')
@@ -2950,7 +3016,7 @@ test('buildEditedThreeMf keeps a multi-solid import\'s per-part materials when t
 })
 
 test('buildEditedThreeMf preserves source identify_ids and mints fresh ones for new instances', async () => {
-  // identify_id is the CLI's per-instance handle (`loaded_id`) — the only key `--skip-objects`
+  // identify_id is the CLI's per-instance handle (`loaded_id`): the only key `--skip-objects`
   // accepts. The bake must carry the source ids through (and mint unique ones for duplicates)
   // or per-object/instance exclusion silently stops working on every editor-rewritten project.
   const { buildEditedThreeMf } = await import('./three-mf.js')
@@ -2988,7 +3054,7 @@ test('buildEditedThreeMf preserves source identify_ids and mints fresh ones for 
     const duplicate = instances.find((entry) => entry.objectId === 3 && entry.instanceId === 1)
     assert.ok((duplicate?.identifyId ?? 0) > 204, 'new instance id is minted above the source maximum')
     assert.equal(new Set(instances.map((entry) => entry.identifyId)).size, instances.length)
-    // The unprintable duplicate's build item carries printable="0" — with the identify_id above,
+    // The unprintable duplicate's build item carries printable="0", with the identify_id above,
     // the slicer's --skip-objects translation can now enforce the editor's Printable toggle.
     const modelXml = (await readEntry(outputPath, '3D/3dmodel.model')).toString('utf8')
     const object3Items = [...modelXml.matchAll(/<item objectid="3"[^>]*\/>/g)].map((match) => match[0])
@@ -3054,7 +3120,7 @@ test('buildEditedThreeMf applies part-type changes on baked parts and import sol
 
 test('buildEditedThreeMf stamps p:UUID on injected nodes for a production-extension project, but not for a core 3MF', async () => {
   // Bambu Studio's GUI rejects a saved project ("The file does not contain any geometry data") when a
-  // requiredextensions="p" model has editor-injected objects/components without a p:UUID — its parser
+  // requiredextensions="p" model has editor-injected objects/components without a p:UUID, its parser
   // tolerates the absence but the GUI volume builder drops UUID-less nodes (the CLI slices it fine,
   // which is why this only showed up on GUI open). A core 3MF (no production extension) must NOT gain
   // spurious UUIDs.
@@ -3152,7 +3218,7 @@ test('per-object process overrides on a fresh import re-key onto the baked objec
         { importId: 'imp-1', plateIndex: 1, position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } }
       ],
       // The editor renames the imported object and emits a meshReplacements entry so its
-      // overrides re-key onto the baked object — both must survive a save (not just a slice).
+      // overrides re-key onto the baked object, both must survive a save (not just a slice).
       objectNames: [{ importId: 'imp-1', name: 'Spacer 2' }],
       meshReplacements: [{ objectId: -1, importId: 'imp-1' }]
     }
@@ -3244,7 +3310,7 @@ test('buildEditedThreeMf removes objects the edit no longer references (cut/dele
     }
     // The Cut tool replaced object 3 with a staged-import half and the user kept only it:
     // object 3 is absent from the edit. Object 11 stays. The baked 3MF must not keep object 3
-    // anywhere — BambuStudio re-instantiates resources objects that lack a build item, so an
+    // anywhere: BambuStudio re-instantiates resources objects that lack a build item, so an
     // orphaned original would reappear in the slice on top of the kept half.
     const edit: SceneEdit = {
       plates: [{ index: 1 }],
@@ -3501,7 +3567,7 @@ test('an imported 3MF solid keeps its helper-volume type (and gets no extruder) 
       ]
     }
     // A 3MF import whose second solid came in as a support blocker (BambuStudio's Import Object
-    // keeps volume types), with no `importPartTypes` — the user changed nothing.
+    // keeps volume types), with no `importPartTypes`: the user changed nothing.
     await buildEditedThreeMf(null, outputPath, edit, [{
       importId: 'imp-1',
       name: 'Cover',
@@ -3627,7 +3693,7 @@ test('paint, brim ears and repair all apply to a NOT-YET-SAVED import', async ()
       instances: [
         { importId: 'imp-1', plateIndex: 1, position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } }
       ],
-      // None of these has a baked object id to address — the whole point of the no-save-first rule.
+      // None of these has a baked object id to address: the whole point of the no-save-first rule.
       importPaint: [{ importId: 'imp-1', partIndex: 0, channel: 'support', triangles: { '0': '8' } }],
       importBrimEars: [{ importId: 'imp-1', points: [{ x: 1, y: 2, z: 0, radius: 3 }] }],
       repairedImportIds: ['imp-1']
@@ -3982,7 +4048,7 @@ test('readSceneManifest derives H2C nozzle-only zones from the per-model fallbac
   const sourcePath = path.join(tempDir, 'source.3mf')
   try {
     // A realistic H2C export: references the machine profile, so it carries no
-    // embedded extruder_printable_area — the per-model fallback must supply it.
+    // embedded extruder_printable_area: the per-model fallback must supply it.
     const settings = JSON.stringify({ printer_model: ['Bambu Lab H2C'] })
     await writeZipFixture(sourcePath, [
       ['3D/3dmodel.model', Buffer.from(ARRANGE_MODEL_XML, 'utf8')],
@@ -4187,6 +4253,6 @@ test('extractSceneBed reports the printer the bed was placed for', async () => {
   const embedded = extractSceneBed(JSON.stringify({ printer_model: 'Bambu Lab X1 Carbon' }), null)
   assert.equal(embedded.bed.printerModel, 'X1C')
 
-  // Null when neither is known — the generic fallback bed, which has no plate mesh to fetch.
+  // Null when neither is known: the generic fallback bed, which has no plate mesh to fetch.
   assert.equal(extractSceneBed(null, null).bed.printerModel, null)
 })

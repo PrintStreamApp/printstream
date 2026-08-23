@@ -318,7 +318,7 @@ test('stop() cancels queued jobs, aborts in-flight uploads, and leaves sent prin
     // In-flight upload is aborted (runJob then performs the SD cleanup + cancelled finish).
     assert.equal(controller.signal.aborted, true)
     assert.equal(jobs.get('stop-uploading')?.cancelRequested, true)
-    // A print already sent to the printer is the live print — left untouched.
+    // A print already sent to the printer is the live print: left untouched.
     assert.equal(jobs.get('stop-sent')?.status, 'sent')
   } finally {
     jobs.clear()
@@ -463,7 +463,7 @@ test('buildProjectFilePrintCommand maps options onto the project_file payload', 
 })
 
 test('buildProjectFilePrintCommand encodes the mapping wire forms across the tray-index bands', () => {
-  // Regular units, an AMS HT (128+ band, tray index IS the unit id — needs the
+  // Regular units, an AMS HT (128+ band, tray index IS the unit id: needs the
   // ams_mapping2 form or H2 firmware fails 0701-8012 at the first HT fetch), a
   // pruned -1 hole (0xff/0xff), external virtual trays (flat array carries -1;
   // H2 firmware rejects raw 254/255 there), and the ambiguous AMS Lite Mixed
@@ -490,7 +490,7 @@ test('buildProjectFilePrintCommand encodes the mapping wire forms across the tra
   assert.equal('ams_mapping_2' in dual, false)
 
   // Single-nozzle machines report the external tray as 254, but firmware only
-  // routes ams_id 255 to the external spool there — 254 targets AMS tray 0.
+  // routes ams_id 255 to the external spool there: 254 targets AMS tray 0.
   const single = buildProjectFilePrintCommand({ ...base, amsMapping: [254, 3], dualNozzles: false })
   assert.deepEqual(single.ams_mapping, [-1, 3])
   assert.deepEqual(single.ams_mapping2, [
@@ -501,7 +501,7 @@ test('buildProjectFilePrintCommand encodes the mapping wire forms across the tra
 
 test('buildProjectFilePrintCommand derives use_ams from the mapping (BambuStudio parity)', () => {
   // Mirrors SelectMachineDialog: an all-external mapping prints with
-  // use_ams: false — sending true makes firmware build an AMS mapping table it
+  // use_ams: false: sending true makes firmware build an AMS mapping table it
   // cannot satisfy and fail 07FF-8012 at print start on AMS-less machines
   // (public issue #9, P1S with its AMS disconnected). Any physical tray forces
   // true; a mapping with no trays at all carries no signal, so the caller's

@@ -1,7 +1,7 @@
 /**
  * One settings line: the label column, its value controls, and each control's reset.
  *
- * Catalog-agnostic — everything that varies between the process, filament and machine dialogs
+ * Catalog-agnostic, everything that varies between the process, filament and machine dialogs
  * arrives through {@link SettingsCatalogAdapter}. A line may render several controls for two
  * different reasons, and they look the same on screen: several KEYS on one line (BambuStudio's
  * "Nozzle: initial layer / other layers") or several COLUMNS of one key (a machine vector, one per
@@ -23,7 +23,7 @@ export interface SettingsCatalogLineRowProps {
   lineLabel?: string
   /** The line's keys, already filtered to those the dialog is showing. */
   keys: string[]
-  /** The line is a monospace editor (G-code) — spans the row and renders as code. */
+  /** The line is a monospace editor (G-code): spans the row and renders as code. */
   code?: boolean
   /** The line spans the row without being code (BambuStudio's Notes fields). */
   fullWidth?: boolean
@@ -51,7 +51,7 @@ export function SettingsCatalogLineRow(props: SettingsCatalogLineRowProps): JSX.
   //
   // `isModified` earns bold without amber on its own: that is a change a 3MF BAKED IN, which this
   // session did not make and so must not be coloured like an unsaved edit, but which is still
-  // counted, filterable and resettable — so the row has to look like something.
+  // counted, filterable and resettable, so the row has to look like something.
   const lineUnsaved = keys.some((key) => adapter.isUnsaved(key))
   const lineModified = keys.some((key) => adapter.isModified(key))
   const linePresetOverride = keys.some((key) => adapter.isPresetOverride(key))

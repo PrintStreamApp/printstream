@@ -1,5 +1,5 @@
 /**
- * BambuStudio's per-material-combination support recommendations — the vendored table from
+ * BambuStudio's per-material-combination support recommendations: the vendored table from
  * `resources/profiles/BBL/filament/support_recommended_params.json` (v3.0) plus the lookup that
  * mirrors `query_support_recommended_params_for_combination` (ConfigManipulation.cpp) and
  * `PresetBundle::load_support_recommended_params`.
@@ -8,20 +8,20 @@
  * run at all (homogeneous model materials, an interface actually selected) and filtering the
  * result against a live config belong to `support-recommendations.ts`, the one caller.
  *
- * How Studio actually matches — the JSON is more decorative than it looks:
+ * How Studio actually matches: the JSON is more decorative than it looks:
  * - Entries declare `model_material_type`/`support_material_type` (`name` vs `type`) and a
  *   `priority`, but the LOOKUP consults neither: load flattens every entry into a map keyed
- *   `"<support>|<model>"`, and the query probes four key combinations in a fixed order —
+ *   `"<support>|<model>"`, and the query probes four key combinations in a fixed order,
  *   interface name+model name, interface type+model name, interface name+model type, interface
- *   type+model type — taking the first hit. That probe order IS the precedence; the declared
+ *   type+model type, taking the first hit. That probe order IS the precedence; the declared
  *   kinds are kept here as documentation of each entry's intent, and `priority` is omitted
  *   because Studio loads it and never reads it.
  * - Studio gates the whole table on `printer_model == "Bambu Lab X2D"` (Tab.cpp). We deliberately
  *   do NOT: the entries encode material pairings (what releases cleanly from what), not printer
- *   geometry, and the prompt is confirm-only — so every printer gets the suggestion.
+ *   geometry, and the prompt is confirm-only, so every printer gets the suggestion.
  *
  * Name normalization: Studio matches its preset ALIAS (the name minus the `@printer` suffix)
- * case-sensitively. Our classification names arrive less uniformly — a 3MF carries the full
+ * case-sensitively. Our classification names arrive less uniformly, a 3MF carries the full
  * preset name with the suffix, while picker labels drop the vendor prefix (see
  * `formatSlicingPresetDisplayName`, which strips it because those pickers group by vendor). So
  * keys here are compared case-insensitively with the `@printer` suffix stripped, and a candidate
@@ -39,10 +39,10 @@ import { serializeProcessBool } from './process-settings.js'
 /** One vendored combination: "when <supportMaterials> supports <modelMaterial>, recommend this". */
 export interface SupportRecommendedCombination {
   modelMaterial: string
-  /** How Studio's JSON declares the model side is meant to match (not consulted — see header). */
+  /** How Studio's JSON declares the model side is meant to match (not consulted: see header). */
   modelMatch: 'name' | 'type'
   supportMaterials: readonly string[]
-  /** How Studio's JSON declares the support side is meant to match (not consulted — see header). */
+  /** How Studio's JSON declares the support side is meant to match (not consulted: see header). */
   supportMatch: 'name' | 'type'
   /** Recommended values as serialized process-config scalars, unfiltered. */
   changes: Readonly<Record<string, string>>
@@ -94,7 +94,7 @@ const TREE_HYBRID_INTERFACE_CHANGES: Readonly<Record<string, string>> = {
   support_style: 'tree_hybrid'
 }
 
-/** Interface-contact keys only — no support enablement (the engineering-filament pairings). */
+/** Interface-contact keys only, no support enablement (the engineering-filament pairings). */
 const INTERFACE_CONTACT_CHANGES: Readonly<Record<string, string>> = {
   support_top_z_distance: '0',
   support_interface_pattern: 'rectilinear_interlaced',
@@ -103,7 +103,7 @@ const INTERFACE_CONTACT_CHANGES: Readonly<Record<string, string>> = {
 
 /**
  * The table, transcribed 1:1 from Studio's `support_recommended_params.json` combinations
- * (including its inconsistent "For"/"for" casing — matching is case-insensitive anyway).
+ * (including its inconsistent "For"/"for" casing: matching is case-insensitive anyway).
  * Keep the order and content diffable against the vendored JSON when re-vendoring.
  */
 export const SUPPORT_RECOMMENDED_COMBINATIONS: readonly SupportRecommendedCombination[] = [
@@ -173,7 +173,7 @@ export function normalizeMaterialNameKey(value: string): string {
   return stripPresetPrinterSuffix(value).replace(/\s+/g, ' ').trim().toLowerCase()
 }
 
-/** A name candidate also tries the `Bambu`-prefixed form — see the header on vendor stripping. */
+/** A name candidate also tries the `Bambu`-prefixed form: see the header on vendor stripping. */
 function nameKeyCandidates(name: string | null | undefined): string[] {
   if (!name) return []
   const key = normalizeMaterialNameKey(name)
@@ -203,8 +203,8 @@ function lookupMap(): Map<string, SupportRecommendedCombination> {
 
 /**
  * The recommendation for an interface/model material pairing, or null when the table has none.
- * Probes Studio's four key combinations in its order — interface name+model name, type+name,
- * name+type, type+type — so a name pairing always beats a type pairing.
+ * Probes Studio's four key combinations in its order, interface name+model name, type+name,
+ * name+type, type+type, so a name pairing always beats a type pairing.
  *
  * Callers own the preconditions Studio checks before querying (a real interface selection,
  * homogeneous model materials) and the filtering of `changes` against the live config.

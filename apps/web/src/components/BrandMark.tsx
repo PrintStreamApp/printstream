@@ -3,12 +3,12 @@
  *
  * Sign-in and the scope chooser both render OUTSIDE the app's normal chrome:
  * the shell's logo bar only exists once you are in a workspace, so those two
- * screens carried no brand mark at all — a visitor's first and last view of the
+ * screens carried no brand mark at all, a visitor's first and last view of the
  * product was an unlabelled card.
  *
  * Core, not `private/cloud`: both surfaces are core, and the public build ships
  * them. The private marketing pages have their own richer header
- * (`MarketingPageHeader`), which is a different thing — it also offers a way
+ * (`MarketingPageHeader`), which is a different thing, it also offers a way
  * back to the site.
  */
 import { Box, Stack, Typography } from '@mui/joy'

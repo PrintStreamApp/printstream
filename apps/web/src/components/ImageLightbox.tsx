@@ -3,7 +3,7 @@
  * button and the image letterboxed to fit the viewport. Shared by every
  * surface that expands an inline thumbnail (job history media, support
  * message attachments) so image viewing behaves the same everywhere.
- * Render it conditionally — mounting it means open.
+ * Render it conditionally: mounting it means open.
  */
 import { Box, ModalClose, ModalDialog, Typography } from '@mui/joy'
 import { BackAwareModal as Modal } from './BackAwareModal'

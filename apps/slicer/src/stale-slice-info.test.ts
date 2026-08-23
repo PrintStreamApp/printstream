@@ -1,7 +1,7 @@
 /**
  * Stale sliced-result nozzle groups (see stale-slice-info.ts). A single `group_id` left over from
  * an older BambuStudio slice used to segfault the CLI at load (exit 139) before any geometry was
- * read — reproduced on a real project on both an H2D and an A1 mini.
+ * read: reproduced on a real project on both an H2D and an A1 mini.
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
@@ -45,7 +45,7 @@ test('every filament is cleared, not just the first', () => {
 })
 
 test('a document with nothing to strip is left byte-identical and reports clean', () => {
-  // What BambuStudio 2.x writes for a project it has not sliced — the known-good control file.
+  // What BambuStudio 2.x writes for a project it has not sliced: the known-good control file.
   const headerOnly = '<?xml version="1.0" encoding="UTF-8"?>\n<config>\n  <header>\n'
     + '    <header_item key="X-BBL-Client-Version" value="02.05.00.66"/>\n  </header>\n</config>'
   assert.equal(sliceInfoCarriesNozzleGroupIds(headerOnly), false)

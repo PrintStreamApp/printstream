@@ -10,7 +10,7 @@
  *
  * OTel is the instrumentation layer on purpose: the same `record*` calls can be
  * pointed at a different/extra backend (or traces added) later without touching
- * call sites. The Prometheus port is internal — do not proxy it publicly.
+ * call sites. The Prometheus port is internal: do not proxy it publicly.
  */
 import { monitorEventLoopDelay } from 'node:perf_hooks'
 import type { Counter, Histogram } from '@opentelemetry/api'
@@ -57,7 +57,7 @@ export function isMetricsEnabled(): boolean {
 /**
  * Bring up the meter provider + Prometheus exporter. Safe to call once at
  * startup; a no-op (and `false`) when `METRICS_ENABLED` is off or already
- * initialized. A bind/import failure is logged and swallowed — metrics are
+ * initialized. A bind/import failure is logged and swallowed: metrics are
  * optional and must never take the API down.
  */
 export async function initMetrics(providers: MetricsProviders): Promise<boolean> {

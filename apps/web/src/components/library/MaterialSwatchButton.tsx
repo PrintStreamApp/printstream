@@ -7,8 +7,8 @@
  *    `MaterialEditDialog` directly, as the row always did.
  *  - available: opens a menu whose first item opens that dialog for a manual pick, followed by
  *    the loaded materials themselves, grouped and rendered like every other loaded-filament
- *    surface (`LoadedMaterialOptionLabel`). Assigning what is already in the printer — the
- *    common case once a printer is selected — is then two clicks, which is why this menu
+ *    surface (`LoadedMaterialOptionLabel`). Assigning what is already in the printer, the
+ *    common case once a printer is selected, is then two clicks, which is why this menu
  *    replaced the dialog's old "Choose from printer" shortcut and its stacked picker Modal.
  *
  * The menu assigns through the caller's controller, so the 3D editor's dirty flag and undo see
@@ -35,7 +35,7 @@ export function MaterialSwatchButton({
   /** Preset (or project filament) name shown on the row. */
   presetName: string
   /**
-   * The resolved preset's FULL name including the `@<printer>` variant portion, for the tooltip —
+   * The resolved preset's FULL name including the `@<printer>` variant portion, for the tooltip:
    * the row label strips it for space, and nothing else in the app surfaced it (BambuStudio shows
    * it in its preset combo). Null falls back to the display name.
    */
@@ -43,18 +43,18 @@ export function MaterialSwatchButton({
   colorName: string
   /** Normalized hex the row is painted with. */
   color: string
-  /** No slicing preset matched this filament — the row warns and the tooltip says to pick one. */
+  /** No slicing preset matched this filament: the row warns and the tooltip says to pick one. */
   presetUnmatched: boolean
   /** Currently-assigned material option, so the menu can mark it. */
   selectedMaterialOptionId: string | null
-  /** Null (or empty) when no printer material is on offer — the click then opens the dialog. */
+  /** Null (or empty) when no printer material is on offer: the click then opens the dialog. */
   loadedMaterials: LoadedMaterialMenuSource | null
   onOpenMaterialDialog: () => void
 }) {
   const menuMaterials = loadedMaterials && loadedMaterials.groups.length > 0 ? loadedMaterials : null
   const title = presetUnmatched
-    ? 'No preset matches this filament — click to pick one'
-    : `${fullPresetName ?? presetName} · ${colorName} — ${menuMaterials ? 'change material' : 'edit material'}`
+    ? 'No preset matches this filament: click to pick one'
+    : `${fullPresetName ?? presetName} · ${colorName}: ${menuMaterials ? 'change material' : 'edit material'}`
   const label = `${menuMaterials ? 'Change' : 'Edit'} material ${filamentIndex + 1}: ${presetName}, ${colorName}`
   const rowSx: SxProps = {
     appearance: 'none',

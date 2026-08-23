@@ -39,7 +39,7 @@ test('the range still brackets the content when the camera dollies inside it', (
 test('the near plane keeps giving way as the camera closes in, so zoom never dead-ends', () => {
   // The reported bug: on a 350mm plate the near floor was a content-sized constant
   // (radius * 0.005 = 1.25mm), so past that distance the camera sat inside its own near plane and
-  // the view clipped to nothing — zooming looked broken. The near plane must stay in FRONT of the
+  // the view clipped to nothing: zooming looked broken. The near plane must stay in FRONT of the
   // camera at every distance, including well inside a single extrusion.
   for (const distance of [10, 4, 1, 0.4, 0.1]) {
     const { near, far } = fitPerspectiveDepthRange(distance, BED_RADIUS)

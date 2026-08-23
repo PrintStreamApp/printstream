@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { buildThreeMfIndex, extractProjectVersion, extractSlicedWithFilamentTrackSwitch, normalizePrinterModelName, parseModelSettingsPlates } from './index-parser.js'
+import { buildThreeMfIndex, extractProjectVersion, extractSlicedWithFilamentTrackSwitch, normalizePrinterModelName, parseModelSettingsPlates, parseProjectFilaments } from './index-parser.js'
 
 test('extractProjectVersion reads the Bambu Studio version that saved the project', () => {
   // Used to warn before a slice: BambuStudio refuses a project newer than the engine (exit 232).
   assert.equal(extractProjectVersion(JSON.stringify({ version: '02.08.00.50' })), '02.08.00.50')
   assert.equal(extractProjectVersion(JSON.stringify({ version: ' 01.09.05.51 ' })), '01.09.05.51')
-  // Unknown must stay null — never guessed, or the dialog would warn (or not) on invented data.
+  // Unknown must stay null, never guessed, or the dialog would warn (or not) on invented data.
   assert.equal(extractProjectVersion(JSON.stringify({})), null)
   assert.equal(extractProjectVersion(JSON.stringify({ version: 'v2.8' })), null)
   assert.equal(extractProjectVersion('not json'), null)
@@ -46,7 +46,7 @@ test('per-object process overrides reach the index, scoped to the object and to 
   const overridden = objects.find((object) => object.id === 7)
   // The object's own two process settings, and NOT the part's wall_loops=9 sitting below it.
   assert.deepEqual(overridden?.processOverrides, { wall_loops: '4', sparse_infill_density: '35%' })
-  // name/extruder/matrix are identity and placement, not overrides — writing them back as process
+  // name/extruder/matrix are identity and placement, not overrides: writing them back as process
   // settings on the next save would be junk.
   assert.equal(overridden?.processOverrides.name, undefined)
   assert.equal(overridden?.processOverrides.extruder, undefined)
@@ -58,7 +58,7 @@ test('a project filament slot keeps the raw filament_settings_id, not just the d
   // `filamentName` is a DISPLAY value: it strips the `@BBL…` machine suffix, which collapses a
   // built-in and any workspace preset inheriting it onto one string. Since no installed preset is
   // literally named that, binding a slot by it can never match exactly and falls through to ranked
-  // inference — which is how a project naming "Bambu PLA Basic @BBL H2D" bound to a workspace
+  // inference, which is how a project naming "Bambu PLA Basic @BBL H2D" bound to a workspace
   // "… - 55 degree plate" variant and reported bed-temperature changes the user never made.
   // BambuStudio binds on this raw string (`find_preset_internal(original_name)`), so we keep it.
   const projectSettings = JSON.stringify({
@@ -91,7 +91,7 @@ test('normalizePrinterModelName tells the X1 family apart, plain X1 included', (
   assert.equal(normalizePrinterModelName('Bambu Lab X1 Carbon'), 'X1C')
   assert.equal(normalizePrinterModelName('X1C'), 'X1C')
   assert.equal(normalizePrinterModelName('Bambu Lab X1E'), 'X1E')
-  // Nor may a model that merely CONTAINS the digits reach it — the A1-vs-A1-mini trap's twin.
+  // Nor may a model that merely CONTAINS the digits reach it: the A1-vs-A1-mini trap's twin.
   assert.equal(normalizePrinterModelName('Bambu Lab X2D'), 'X2D')
   assert.equal(normalizePrinterModelName('Bambu Lab H2D'), 'H2D')
   assert.equal(normalizePrinterModelName('Bambu Lab A1 mini'), 'A1mini')
@@ -107,10 +107,44 @@ test('has_filament_switcher is read as the machine the project was sliced for', 
   assert.equal(extractSlicedWithFilamentTrackSwitch('{"has_filament_switcher": false}'), false)
   assert.equal(extractSlicedWithFilamentTrackSwitch('{"has_filament_switcher": "0"}'), false)
 
-  // ABSENT is false, not unknown — that is how BambuStudio's CLI defaults it, and it is what every
+  // ABSENT is false, not unknown, that is how BambuStudio's CLI defaults it, and it is what every
   // project saved before the switch existed has to read as.
   assert.equal(extractSlicedWithFilamentTrackSwitch('{}'), false)
   assert.equal(extractSlicedWithFilamentTrackSwitch(null), false)
   // Unparseable settings must not throw or report true.
   assert.equal(extractSlicedWithFilamentTrackSwitch('{not json'), false)
+})
+
+// A preset's BRAND is not derivable from its name: Polymaker ships "PolyLite PLA", so a project
+// preset minted without the vendor brands itself differently from the installed preset of the very
+// same name, and any comparison between the two fails to match a preset against ITSELF. The 3MF
+// records the vendor per slot, so carry it rather than re-deriving a guess downstream.
+test('a project filament carries its slot vendor, so a project preset can brand like its twin', () => {
+  const slots = parseProjectFilaments(JSON.stringify({
+    filament_settings_id: ['PolyLite PLA @BBL H2D', 'Bambu PLA Basic @BBL H2D'],
+    filament_type: ['PLA', 'PLA'],
+    filament_vendor: ['Polymaker', 'Bambu Lab'],
+    filament_colour: ['#C12E1F', '#FFFFFF']
+  }))
+
+  // Verbatim, not folded to a display label: "Bambu Lab" normalizes to "Bambu" only when rendered.
+  assert.deepEqual(slots.map((slot) => slot.filamentVendor), ['Polymaker', 'Bambu Lab'])
+
+  // Absent stays NULL rather than guessed from the name, which is what "vendor unknown" has to
+  // mean for a 3MF that records none (or a bridge on an older parser).
+  const noVendor = parseProjectFilaments(JSON.stringify({
+    filament_settings_id: ['PolyLite PLA @BBL H2D'],
+    filament_type: ['PLA']
+  }))
+  assert.equal(noVendor[0]?.filamentVendor, null)
+})
+
+// The vendor array counts toward the slot total like every other parallel array: a project whose
+// vendor list outruns the rest must not have its material list silently truncated.
+test('the vendor array counts toward the slot total', () => {
+  const slots = parseProjectFilaments(JSON.stringify({
+    filament_type: ['PLA'],
+    filament_vendor: ['Polymaker', 'Bambu Lab', 'Bambu Lab']
+  }))
+  assert.equal(slots.length, 3)
 })

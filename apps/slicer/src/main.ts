@@ -4,7 +4,7 @@
  * Thin on purpose. Everything is in `index.ts`, which exports
  * {@link startSlicerServer} so the native self-hosted app can host the same
  * server in-process instead of running a sidecar. This file is only the
- * "be a service" half — bind the configured port and die loudly if it fails.
+ * "be a service" half: bind the configured port and die loudly if it fails.
  */
 import { startSlicerServer } from './index.js'
 

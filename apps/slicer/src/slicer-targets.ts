@@ -27,7 +27,7 @@ const runtimeSlicerTargetSchema = slicingTargetDescriptorSchema.extend({
    * (`ld-linux --library-path … <binary>`) so the install does not resolve GTK
    * and WebKit against the host, which on a headless server has neither. A
    * wrapper script would do the same job, but generating one reintroduces shell
-   * quoting on a path where an argument may contain spaces — and Windows has no
+   * quoting on a path where an argument may contain spaces, and Windows has no
    * shell to rely on.
    */
   cliArgsPrefix: z.array(z.string()).default([]),

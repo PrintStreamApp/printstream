@@ -117,7 +117,7 @@ export async function persistLibraryFileFromLocalPath(input: {
   // Skip creating a redundant version when the upload is byte-identical to the
   // current file. We have the new bytes locally (`sourcePath`) before sending
   // them to the bridge, so hash here and compare against the current version's
-  // hash on the bridge — identical content never gets stored or versioned. A
+  // hash on the bridge: identical content never gets stored or versioned. A
   // probe failure falls through to a normal upload rather than blocking it.
   if (overwriteTarget) {
     const unchangedFile = await resolveUnchangedOverwrite(ownerBridgeId, overwriteTarget, input.sourcePath)
@@ -133,7 +133,7 @@ export async function persistLibraryFileFromLocalPath(input: {
   let created: PersistedLibraryFileRow
   // Id of the version row this write archived, i.e. the content that was current a moment ago.
   // Returned because the editor pins it as its content base: after its FIRST save, "the bytes we
-  // opened" no longer live at the file's head — they live here. Without it the editor would have
+  // opened" no longer live at the file's head, they live here. Without it the editor would have
   // to go hunting through version history to author its next save from the same original.
   let archivedVersionId: string | null = null
   const uploadedAt = new Date()
@@ -159,7 +159,7 @@ export async function persistLibraryFileFromLocalPath(input: {
             createdById: attribution.createdById,
             createdByName: attribution.createdByName,
             // Fresh content replaces whatever the previous version's
-            // provenance was — including the re-slice link, which described the
+            // provenance was, including the re-slice link, which described the
             // bytes being replaced. A slice re-sets it immediately afterwards
             // (see `preserveSlicedProject`); an upload correctly leaves it clear.
             sourceProjectFileId: null,
@@ -256,7 +256,7 @@ async function hashLocalFile(filePath: string): Promise<string> {
 }
 
 /**
- * Resolve — creating as needed — a chain of nested folders below `baseFolderId`
+ * Resolve, creating as needed, a chain of nested folders below `baseFolderId`
  * and return the deepest folder's id. Used by folder-structure uploads, where
  * the client sends each file's folder path relative to the upload destination.
  * Folders are metadata-only (file bytes stay flat on the bridge), so this only
@@ -310,7 +310,7 @@ type FolderTreeFileRow = {
 
 /**
  * Delete a folder and everything beneath it: descendant folder rows are
- * removed, and the contained files move to the recycle bin (soft delete —
+ * removed, and the contained files move to the recycle bin (soft delete,
  * bytes and version history stay restorable until the bin's retention
  * window expires). Rows change in one transaction: the file→folder FK is
  * SetNull, so the recycled files' folder pointers clear together with the
@@ -359,7 +359,7 @@ export async function deleteLibraryFolderTree(
 function buildLibraryStoredPath(fileName: string): string {
   const safe = fileName.replace(/[^\w.-]+/g, '_')
   // A short random token disambiguates two uploads of the same name within the
-  // same millisecond — without it they'd resolve to one storedPath and the two
+  // same millisecond, without it they'd resolve to one storedPath and the two
   // concurrent writers would truncate/append over each other (and one's failure
   // cleanup would delete the other's bytes).
   return `${Date.now()}-${randomBytes(4).toString('hex')}-${safe}`
@@ -462,7 +462,7 @@ export async function unhideSlicedOutput(
           createdById: output.createdById,
           createdByName: output.createdByName,
           // The surviving row now holds the OUTPUT's bytes, so it must hold the output's
-          // re-slice provenance too — keeping the replaced file's would describe a project
+          // re-slice provenance too: keeping the replaced file's would describe a project
           // that no longer produced this content. The output row is deleted just above, so
           // this is also what keeps its preserved project referenced.
           sourceProjectFileId: output.sourceProjectFileId,
@@ -485,7 +485,7 @@ export async function unhideSlicedOutput(
 
 /**
  * Discard a "slice without saving" output that the user never kept. Deletes the file
- * (bytes + versions + row) ONLY while it is still hidden — if it has since been saved
+ * (bytes + versions + row) ONLY while it is still hidden: if it has since been saved
  * (un-hidden) or is otherwise visible, this is a no-op so we never delete kept files.
  * Returns whether a file was deleted.
  */
@@ -507,11 +507,11 @@ export async function discardHiddenSlicedOutput(fileId: string): Promise<boolean
  *
  * Snapshot rows are exempt from every cleanup pass (`library-cleanup.ts` skips rows with a
  * `snapshotKey`), so without this a discarded "slice without saving" leaks its project bytes
- * permanently — one copy per discard, never reclaimed. Deliberately conservative: it only deletes
+ * permanently, one copy per discard, never reclaimed. Deliberately conservative: it only deletes
  * when NOTHING else points at the snapshot, because the same content-addressed row is shared by
  * every slice of identical bytes, and a print's history row references it too.
  *
- * Best-effort — a failure here leaks bytes, which must not fail the discard the user asked for.
+ * Best-effort, a failure here leaks bytes, which must not fail the discard the user asked for.
  */
 async function discardUnreferencedProjectSnapshot(projectFileId: string | null): Promise<void> {
   if (!projectFileId) return

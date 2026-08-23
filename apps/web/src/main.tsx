@@ -45,7 +45,7 @@ async function clearOldOriginState(): Promise<void> {
 }
 
 // A cold load of a public marketing page must not show the app-boot splash ("Loading the app…"),
-// so dismiss it immediately and skip the boot-progress text — Root renders the light marketing
+// so dismiss it immediately and skip the boot-progress text: Root renders the light marketing
 // branch. Real app loads (and entering the app from marketing, see Root) keep/re-show the splash.
 // Public tools get the same treatment for the same reason: they render their own surface and never
 // wait on app bootstrap, so the "Loading the app…" splash would be a lie.
@@ -65,7 +65,7 @@ if (browserEnv.devMode) {
 const root = ReactDOM.createRoot(document.getElementById('root')!)
 
 bootProgress(34, 'Registering updates')
-// Built-in plugins register when the app shell chunk loads (see App.tsx), not here — so a cold
+// Built-in plugins register when the app shell chunk loads (see App.tsx), not here, so a cold
 // load of a marketing page never pulls the plugin graph. Root lazy-loads the app branch.
 bootProgress(58, 'Preparing')
 
@@ -86,7 +86,7 @@ const reportQueryError = (error: unknown, query: { meta?: unknown }): void => {
   if (shouldSuppressGlobalErrorToast(query.meta)) return
   if (shouldSuppressPassiveAuthQueryError(error)) return
   const message = extractErrorMessage(error, 'Something went wrong')
-  // A background query hitting a disabled plugin self-heals silently — toasting dead-route errors the
+  // A background query hitting a disabled plugin self-heals silently, toasting dead-route errors the
   // user never triggered would just be noise.
   if (selfHealDisabledPlugin(message)) return
   toast.error(message)
@@ -110,7 +110,7 @@ const queryClient = new QueryClient({
     queries: {
       staleTime: 5_000,
       refetchOnWindowFocus: false,
-      // Never retry a request the server REFUSED — see `queryRetry.ts` for why.
+      // Never retry a request the server REFUSED: see `queryRetry.ts` for why.
       retry: shouldRetryQuery
     }
   },

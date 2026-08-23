@@ -1,5 +1,5 @@
 /**
- * AMS tray-index math — the single source of truth for converting between a
+ * AMS tray-index math: the single source of truth for converting between a
  * physical AMS slot (`unitId` + `slotId`) and the "global tray index" Bambu uses
  * in the `ams_mapping` print payload.
  *
@@ -137,7 +137,7 @@ export interface AmsSlotRef {
  * tracking can find the loaded spool. Returns `null` for indices outside any
  * known band.
  *
- * Note: AMS Lite Mixed (N9) indices (24-27) are *not* disambiguated here — they
+ * Note: AMS Lite Mixed (N9) indices (24-27) are *not* disambiguated here, they
  * fall inside the regular band and reverse-map as regular slots. That printer
  * family is out of scope for consumption tracking; classic AMS and the H2 AMS HT
  * band are handled exactly.

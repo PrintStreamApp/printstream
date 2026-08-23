@@ -53,7 +53,7 @@ export const plateClearingPlugin: ApiPlugin = {
   async register(context) {
     // All plugin state is per-workspace: configuration (`clearLastJobOnClear`) and
     // per-printer clear state live in `context.settings.forWorkspace(workspaceId)`, never
-    // the platform-global store — otherwise one workspace's toggle would change every
+    // the platform-global store, otherwise one workspace's toggle would change every
     // workspace's. The printer's workspace is resolved via `printerManager.getWorkspaceId`.
     const workspaceStore = (workspaceId: string) => context.settings.forWorkspace(workspaceId)
 
@@ -76,7 +76,7 @@ export const plateClearingPlugin: ApiPlugin = {
     // --- print guard --------------------------------------------------
     context.registerPrintGuard((decision) => {
       // We can't await inside the guard, but the cached `Setting` row
-      // is already persisted — readers are cheap. To keep the guard
+      // is already persisted: readers are cheap. To keep the guard
       // synchronous we cache the latest known state per printer in
       // memory, refreshed on every event below.
       const cached = clearedCache.get(decision.printerId)

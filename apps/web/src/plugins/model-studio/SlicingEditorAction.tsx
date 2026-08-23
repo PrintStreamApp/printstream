@@ -2,7 +2,7 @@
  * Slot button for the `slicing.editor` extension point.
  *
  * Renders an "Open full editor" button in the slicing dialog's footer and, when
- * clicked, opens the heavy interactive editor (lazy-loaded) — the "full" slicer
+ * clicked, opens the heavy interactive editor (lazy-loaded): the "full" slicer
  * mode. The editor renders the SAME slice settings (via `sliceConfig`) and can
  * save the project or slice+print a plate directly; the host keeps the slice
  * dialog mounted so the print flow layers above the editor.
@@ -55,7 +55,7 @@ export function SlicingEditorAction(props: Record<string, unknown>) {
   const hostOnClose = typeof props.onClose === 'function' ? (props.onClose as () => void) : undefined
   const [open, setOpen] = useState(autoOpen)
   // This host HAS a workspace, so its manager is the workspace one. The public editor supplies its own
-  // browser-storage manager instead — see `LocalEditorSurface`.
+  // browser-storage manager instead: see `LocalEditorSurface`.
   const presetManager = useCallback(
     (managerProps: { open: boolean; onClose: () => void }) => <SlicingPresetsDialog {...managerProps} />,
     []

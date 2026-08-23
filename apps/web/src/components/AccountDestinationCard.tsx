@@ -2,9 +2,9 @@
  * A link from the Account page to one of its spun-out pages (Billing,
  * Messages).
  *
- * Both used to render inline as stacked sections. They outgrew that — Billing
+ * Both used to render inline as stacked sections. They outgrew that, Billing
  * carries a plan, a promo notice, payment history, a self-hosted key and a
- * licence list; Messages is a conversation inbox — so each is now its own route
+ * licence list; Messages is a conversation inbox, so each is now its own route
  * and Account points at it.
  *
  * Deliberately a card rather than a nav link: it keeps the icon, name, and
@@ -38,7 +38,7 @@ export function AccountDestinationCard({
       sx={{
         textDecoration: 'none',
         // The whole card is the target, so the affordance has to be the card
-        // rather than the title — a hover that only lit the text would make the
+        // rather than the title, a hover that only lit the text would make the
         // rest of it look inert.
         transition: 'border-color 120ms ease, background-color 120ms ease',
         '&:hover': { borderColor: 'primary.400', backgroundColor: 'background.level1' }

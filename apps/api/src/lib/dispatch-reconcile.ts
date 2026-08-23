@@ -9,7 +9,7 @@
  * isn't available at boot.
  *
  * Safety: only `interrupted` rows are cleaned, and a row only becomes `interrupted` if it
- * never crossed the rob-1 start boundary — so deleting its SD file can never remove a file
+ * never crossed the rob-1 start boundary, so deleting its SD file can never remove a file
  * a real print is using. We also skip a printer that has an active dispatch to avoid racing
  * a fresh upload of the same file name.
  */

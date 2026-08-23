@@ -6,8 +6,8 @@
  */
 
 /**
- * BambuStudio prints this exact progress line once a slice — including the final
- * gcode/3MF export — has fully succeeded. It is the last message before the process
+ * BambuStudio prints this exact progress line once a slice, including the final
+ * gcode/3MF export, has fully succeeded. It is the last message before the process
  * exits, so seeing it means the output file is completely written.
  *
  * Under qemu emulation (arm64 dev / self-host) the process can then hang in teardown
@@ -25,7 +25,7 @@ const SLICE_STAGE_PATTERN = /"message"\s*:\s*"([^"]+)"[^}]*?"total_percent"\s*:\
 /**
  * The `total_percent` at which BambuStudio has finished loading the project and started the actual
  * per-plate slice ("Slicing begins"). A crash at or beyond this point is happening in the slicing
- * engine on the model's geometry, not in project load/teardown — the distinction the caller uses to
+ * engine on the model's geometry, not in project load/teardown: the distinction the caller uses to
  * separate a deterministic engine crash (do not retry, name the stage) from a transient load/teardown
  * flake (still worth one retry under emulation). Kept as a percent (not the stage string) so a locale
  * or wording change upstream doesn't silently reclassify every crash as transient.

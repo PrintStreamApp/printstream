@@ -3,7 +3,7 @@
  * discover them at slice time.
  *
  * BambuStudio reports these conditions too (it never silently moves a user's objects), so surfacing
- * them is parity — the gap was only WHEN: an off-bed object previously showed up as the CLI's
+ * them is parity: the gap was only WHEN: an off-bed object previously showed up as the CLI's
  * "no object fully inside the print volume" (exit 206) after a slice attempt, and a layer height
  * outside the new machine's envelope was clamped by BambuStudio with no notice at all.
  *
@@ -34,7 +34,7 @@ export interface MachineSwitchWarningInput {
 
 /**
  * Both warnings, or an empty list when the switch is clean. Layer height is only judged when BOTH
- * the process height and the machine's envelope are known — a missing bound must never invent a
+ * the process height and the machine's envelope are known, a missing bound must never invent a
  * warning (older slicer images do not report the envelope at all).
  */
 export function machineSwitchWarnings(input: MachineSwitchWarningInput): MachineSwitchWarning[] {
@@ -61,12 +61,12 @@ export function machineSwitchWarnings(input: MachineSwitchWarningInput): Machine
     if (minLayerHeight != null && layerHeight < minLayerHeight - tolerance) {
       warnings.push({
         key: 'layerHeight',
-        message: `This project's ${layerHeight}mm layer height is below the ${model}'s minimum (${minLayerHeight}mm). Pick a compatible process preset — the slicer will otherwise clamp it.`
+        message: `This project's ${layerHeight}mm layer height is below the ${model}'s minimum (${minLayerHeight}mm). Pick a compatible process preset: the slicer will otherwise clamp it.`
       })
     } else if (maxLayerHeight != null && layerHeight > maxLayerHeight + tolerance) {
       warnings.push({
         key: 'layerHeight',
-        message: `This project's ${layerHeight}mm layer height is above the ${model}'s maximum (${maxLayerHeight}mm). Pick a compatible process preset — the slicer will otherwise clamp it.`
+        message: `This project's ${layerHeight}mm layer height is above the ${model}'s maximum (${maxLayerHeight}mm). Pick a compatible process preset: the slicer will otherwise clamp it.`
       })
     }
   }
@@ -78,7 +78,7 @@ export function machineSwitchWarnings(input: MachineSwitchWarningInput): Machine
  * The user-facing half of `resolveMachineTarget`'s conflicts: a pick the current target cannot
  * represent, named alongside what is in force instead.
  *
- * This exists because the pre-S2 reconciliation made the swap SILENTLY — a plate the new machine
+ * This exists because the pre-S2 reconciliation made the swap SILENTLY, a plate the new machine
  * did not offer became Textured PEI with no signal, which is the E9 guard violation the audit
  * recorded. Reporting it is the fix; the pick itself is still held (see `MachineTargetIntent`), so
  * switching back to a machine that offers it restores the choice.

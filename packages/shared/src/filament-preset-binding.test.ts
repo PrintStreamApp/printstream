@@ -1,6 +1,6 @@
 /**
  * The measured failure: a repaired project whose slot values were byte-identical to a
- * BambuStudio-written file still would not bind slot 3 — the one slot backed by a USER preset. The
+ * BambuStudio-written file still would not bind slot 3: the one slot backed by a USER preset. The
  * two files differed in exactly one place, `inherits_group[3]`. Everything here pins that pair.
  */
 import assert from 'node:assert/strict'
@@ -69,7 +69,7 @@ test('a system preset writes an empty inherits entry, clearing any stale one', (
 
 /**
  * A caller that could not resolve a preset must not be able to blank a record it knows nothing
- * about — the project's own declared changes are the only evidence left in that case.
+ * about: the project's own declared changes are the only evidence left in that case.
  */
 test('a slot with no binding keeps whatever the project had', () => {
   const record: Record<string, unknown> = {

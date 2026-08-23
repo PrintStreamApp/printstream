@@ -4,7 +4,7 @@
  *
  * Owns only the routing decision and the fallback. It does not build URLs (the bridge
  * relay and `directBambuCloudRequest` do) and it does not interpret responses (the
- * client does) — a non-2xx answer is a successful relay, not a transport failure.
+ * client does), a non-2xx answer is a successful relay, not a transport failure.
  *
  * **Bridge-preferred, and why.** On a multi-workspace deployment every workspace would
  * otherwise reach Bambu from one shared egress IP. Bambu's edge rate-limits and

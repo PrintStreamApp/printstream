@@ -1,6 +1,6 @@
 /**
- * Self-hosted license management (core). Read the installed license status, and
- * — with `settings.manage` — install or remove a license key. Ships in OSS so
+ * Self-hosted license management (core). Read the installed license status, and,
+ * with `settings.manage`, install or remove a license key. Ships in OSS so
  * self-hosted operators can enter their commercial or community key; in the
  * multi-workspace cloud licensing is via subscriptions, so the key is simply unset.
  */
@@ -29,7 +29,7 @@ export const licenseRouter = Router()
  * fourth (`/check`) spreads it.
  *
  * `printerCount` is install-wide, matching what `printer-quota.ts` enforces the
- * cap against — a workspace-scoped count would understate the fleet on a
+ * cap against, a workspace-scoped count would understate the fleet on a
  * multi-workspace install and tell the add dialog the wrong thing about money.
  */
 async function readLicenseStatusResponse(): Promise<LicenseStatusResponse> {
@@ -38,7 +38,7 @@ async function readLicenseStatusResponse(): Promise<LicenseStatusResponse> {
     getLicenseEnforcement(),
     // Only where a licence is actually enforced. This route is reachable
     // without a session (the licence banner renders pre-auth), and on the
-    // multi-workspace cloud an install-wide count is the PLATFORM total —
+    // multi-workspace cloud an install-wide count is the PLATFORM total:
     // handing that to an anonymous caller is a stats leak, and no cloud surface
     // reads the number anyway.
     isLicenseEnforced() ? rootPrisma.printer.count() : Promise.resolve(0)
@@ -75,7 +75,7 @@ licenseRouter.put('/', requireRequestPermission(SETTINGS_MANAGE_PERMISSION), asy
 /**
  * Ask the vendor for a free community key, from an install with no account.
  *
- * Relayed by the server rather than called from the browser — see
+ * Relayed by the server rather than called from the browser: see
  * `community-license-request-client.ts` for why. Gated on `settings.manage`
  * like installing a key: it names this machine's operator to a third party and
  * puts their address on a licence, which is not something any workspace member
@@ -108,7 +108,7 @@ licenseRouter.post('/community-request', requireRequestPermission(SETTINGS_MANAG
 licenseRouter.post('/check', requireRequestPermission(SETTINGS_MANAGE_PERMISSION), async (_request, response) => {
   // `userInitiated`: this route exists only because someone pressed "Refresh
   // license". That consent is what lets a perpetual Lifetime key contact the
-  // vendor to collect a renewed updates window — the background timer stays
+  // vendor to collect a renewed updates window: the background timer stays
   // silent for it. See `license-refresh-client.ts`.
   const outcome = await refreshInstalledLicense({ userInitiated: true })
   const body: LicenseCheckResponse = { outcome, ...(await readLicenseStatusResponse()) }

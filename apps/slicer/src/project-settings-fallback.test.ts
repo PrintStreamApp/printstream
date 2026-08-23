@@ -38,7 +38,7 @@ test('copyThreeMfWithProjectSettings adds project_settings.config and preserves 
 
     assert.equal(await hasEmbeddedProjectSettings(output), true)
     assert.equal(await readZipEntryText(output, 'Metadata/project_settings.config'), '{"from":"project","name":"project_settings"}')
-    // Other entries survive unchanged — the injected 3MF must still carry the model + custom gcode.
+    // Other entries survive unchanged: the injected 3MF must still carry the model + custom gcode.
     assert.equal(await readZipEntryText(output, '3D/3dmodel.model'), '<model/>')
     assert.equal(await readZipEntryText(output, 'Metadata/custom_gcode_per_layer.xml'), '<custom_gcodes_per_layer/>')
   } finally {
@@ -74,7 +74,7 @@ test('ensureEmbeddedProjectSettings is a no-op (no CLI) for a project that embed
       env: {},
       log: () => {}
     })
-    // Same path back, and the CLI was never spawned (path is bogus) — proves normal slicing is untouched.
+    // Same path back, and the CLI was never spawned (path is bogus): proves normal slicing is untouched.
     assert.equal(result, input)
   } finally {
     await rm(dir, { recursive: true, force: true })
@@ -101,7 +101,7 @@ test('hasCompleteEmbeddedProjectSettings distinguishes a full config from the pa
 test('ensureEmbeddedProjectSettings completes a PARTIAL embedded config, overlaying its values on the export', async () => {
   // Regression: a new-project save embeds only the chosen filaments/plate type (and possibly a
   // retargeted machine). Embedding that as-is is as unsafe for the CLI's BBL-project loader as no
-  // config at all, so the fallback must still synthesize — while keeping the project's values on top.
+  // config at all, so the fallback must still synthesize, while keeping the project's values on top.
   const dir = await mkdtemp(path.join(tmpdir(), 'ps-fallback-'))
   try {
     // Stand-in for the CLI's --export-settings: writes a "genuine merged config" to the last arg.
@@ -159,7 +159,7 @@ test('ensureEmbeddedProjectSettings is a no-op when there are no --load-settings
 // Regression for the print-from-printer-card failure: a project whose embedded config is
 // INCOMPLETE and names presets this slicer cannot resolve (a workspace-only custom process such
 // as "0.24mm Standard @BBL H2D - Ryan") used to be sliced as-is. The BBL-project loader segfaults
-// on a partial config at "Start to load files", so the user got an opaque exit 139 — three times,
+// on a partial config at "Start to load files", so the user got an opaque exit 139, three times,
 // because the crash classifier retried it. Fail with what is actually wrong instead.
 test('ensureEmbeddedProjectSettings fails fast when the embedded config is incomplete and names no resolvable presets', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'ps-fallback-'))
@@ -206,7 +206,7 @@ test('ensureEmbeddedProjectSettings fails fast when the embedded config is incom
 
 test('ensureEmbeddedProjectSettings completes a project-preset slice (no load args) via the presets the settings name', async () => {
   // Regression for the deterministic exit-139: a slice using the PROJECT process preset loads no
-  // external profiles, so the CLI reads the embedded settings bare — and a partial config (what a
+  // external profiles, so the CLI reads the embedded settings bare, and a partial config (what a
   // pre-fix scaffold save embedded, or any incomplete third-party file) segfaults the loader at
   // "Start to load files". The fallback must derive its export args from the preset NAMES the
   // settings carry, resolved against the slicer's builtin catalog.
@@ -265,7 +265,7 @@ test('ensureEmbeddedProjectSettings completes a project-preset slice (no load ar
 
 test('ensureEmbeddedProjectSettings falls back to Generic PLA when the named filament does not resolve', async () => {
   // The exact failing shape from the field: the pre-slice metadata rewrite stores filament
-  // DISPLAY names ("Bambu PLA Basic") in filament_settings_id, which match no catalog file — and
+  // DISPLAY names ("Bambu PLA Basic") in filament_settings_id, which match no catalog file, and
   // an export with NO filament preset omits the per-filament override arrays
   // (filament_retraction_length, …), on which the bare loader still segfaults. The export args
   // must cover the filament domain via the Generic PLA fallback.
@@ -317,7 +317,7 @@ test('ensureEmbeddedProjectSettings covers a material-changed slot from its NAME
   // The material-leak fix: the editor save DROPPED the old material's physics (incl. the
   // nozzle_temperature sentinel) on a material change, so this config lands incomplete on purpose.
   // The slice loads a machine profile (--load-settings) but no --load-filaments, so filament
-  // coverage must be derived from the NEW preset names the settings still carry — otherwise the
+  // coverage must be derived from the NEW preset names the settings still carry, otherwise the
   // re-synth would collapse to Generic PLA and the new material would slice with generic temps.
   const dir = await mkdtemp(path.join(tmpdir(), 'ps-fallback-'))
   try {
@@ -376,7 +376,7 @@ test('ensureEmbeddedProjectSettings covers a material-changed slot from its NAME
 test('ensureEmbeddedProjectSettings THROWS the CLI reason when the settings export fails, instead of slicing the partial config', async () => {
   // Regression for the Kawasaki funnel incident: a stale slice-dialog selection paired an X1C
   // process with the H2D machine, the export exited 239 (CLI_PROCESS_NOT_COMPATIBLE), and the old
-  // "slice the scaffold 3MF as-is" fallback fed the partial config to the BBL-project loader —
+  // "slice the scaffold 3MF as-is" fallback fed the partial config to the BBL-project loader,
   // a deterministic segfault surfaced as an opaque exit 139. The failure must instead carry the
   // CLI's own reason, in the `Slicer CLI exited with code N` shape the API's compatibility
   // classifier keys on (so it can drop the incompatible built-ins and retry).
@@ -477,7 +477,7 @@ test('ensureEmbeddedProjectSettings refuses a partial project-preset config nami
 
 // Regression for the exit-139 reproduced from the field: a 2-filament project whose FIRST slot
 // names an unresolvable display name ("Bambu PETG Basic" rather than the real
-// "Bambu PETG Basic @BBL H2D 0.4 nozzle" — a name poisoned into the 3MF by an old save). The
+// "Bambu PETG Basic @BBL H2D 0.4 nozzle", a name poisoned into the 3MF by an old save). The
 // export args used to filter the miss out and pass ONE `--load-filaments` path for a TWO-filament
 // project; BambuStudio sizes its per-filament vectors from that count, indexes them by the
 // project's slot ids, and segfaults the loader at "Start to load files".
@@ -540,7 +540,7 @@ test('an unresolvable filament name is PADDED, never dropped, so --load-filament
 
 test('names the missing sentinel keys when it completes a partial config', async () => {
   // Without this the job log said only "Completing partial embedded project settings", which is
-  // not enough to diagnose a project that reached this path despite embedding complete settings —
+  // not enough to diagnose a project that reached this path despite embedding complete settings,
   // and this step REPLACES the settings, so the following slice inherits whatever it produced.
   const dir = await mkdtemp(path.join(tmpdir(), 'ps-fallback-'))
   try {
@@ -577,12 +577,12 @@ test('names the missing sentinel keys when it completes a partial config', async
 })
 
 // The CLI cannot export with HALF a machine/process pair: a machine preset with no process makes
-// it test the (unloaded) project's `print_compatible_printers` — always empty here since
-// `--export-settings` loads no 3MF — and exit 239 "process not compatible with printer"; a process
+// it test the (unloaded) project's `print_compatible_printers`, always empty here since
+// `--export-settings` loads no 3MF, and exit 239 "process not compatible with printer"; a process
 // with no machine fails the same check from the other side. The pairing tests below pin the repair:
 // derive the missing half from the embedded settings' own lineage, or drop the half that was
 // loaded. (The production shape: an editor slice whose material change stripped the filament
-// physics, targeting a CUSTOM machine with the project's own process — the custom machine survives
+// physics, targeting a CUSTOM machine with the project's own process: the custom machine survives
 // the API's builtin-drop retry, so without the pairing the job can never succeed.)
 
 test('settings export derives a process from the embedded lineage when the args carry only a machine', async () => {
@@ -597,12 +597,12 @@ test('settings export derives a process from the embedded lineage when the args 
     const profileDir = path.join(dir, 'profiles')
     await mkdir(path.join(profileDir, 'process_full'), { recursive: true })
     await mkdir(path.join(profileDir, 'filament_full'), { recursive: true })
-    // The process the project's own preset inherits from — compatible with the machine's base.
+    // The process the project's own preset inherits from: compatible with the machine's base.
     await writeFile(
       path.join(profileDir, 'process_full', '0.28mm Extra Draft @BBL P1P.json'),
       JSON.stringify({ type: 'process', name: '0.28mm Extra Draft @BBL P1P', from: 'system', compatible_printers: ['Bambu Lab P1P 0.4 nozzle'] })
     )
-    // The machine's default process also exists — the LINEAGE candidate must win over it.
+    // The machine's default process also exists: the LINEAGE candidate must win over it.
     await writeFile(
       path.join(profileDir, 'process_full', '0.20mm Standard @BBL P1P.json'),
       JSON.stringify({ type: 'process', name: '0.20mm Standard @BBL P1P', from: 'system', compatible_printers: ['Bambu Lab P1P 0.4 nozzle'] })
@@ -619,7 +619,7 @@ test('settings export derives a process from the embedded lineage when the args 
     }))
     // Partial embedded settings, as the material-change drop leaves them: process block intact,
     // filament physics (the nozzle_temperature sentinel) gone, preset names naming a custom
-    // process that resolves nowhere — only its inherits_group lineage does.
+    // process that resolves nowhere, only its inherits_group lineage does.
     const input = await writeThreeMf(dir, 'mike.3mf', {
       '3D/3dmodel.model': '<model/>',
       'Metadata/project_settings.config': JSON.stringify({
@@ -669,7 +669,7 @@ test('settings export drops the machine when no compatible process can be derive
     const profileDir = path.join(dir, 'profiles')
     await mkdir(path.join(profileDir, 'process_full'), { recursive: true })
     await mkdir(path.join(profileDir, 'filament_full'), { recursive: true })
-    // The only resolvable process targets a DIFFERENT machine — loading it beside this machine
+    // The only resolvable process targets a DIFFERENT machine: loading it beside this machine
     // would 239 just like loading no process at all, so the machine has to go instead.
     await writeFile(
       path.join(profileDir, 'process_full', '0.20mm Standard @BBL P1P.json'),

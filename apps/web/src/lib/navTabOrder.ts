@@ -8,7 +8,7 @@
  * tabs named in the order come first in that order, then any remaining tabs fall back
  * to their default position, so the order survives plugins/tabs being added or removed.
  * A stored custom order may still name retired tabs (e.g. the old '/queue' tab, now a
- * section of /jobs) — unknown values are simply ignored, so no migration is needed.
+ * section of /jobs): unknown values are simply ignored, so no migration is needed.
  */
 
 /** Built-in default order of primary content tabs (by route value). */

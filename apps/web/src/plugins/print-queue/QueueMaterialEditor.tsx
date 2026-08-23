@@ -33,7 +33,7 @@ export function QueueMaterialEditor({ fileFilaments, value, usedGramsById, onCha
   if (fileFilaments.length === 0) {
     return (
       <Typography level="body-xs" textColor="text.tertiary">
-        This file reports no filaments to map — it will print on any connected printer.
+        This file reports no filaments to map, it will print on any connected printer.
       </Typography>
     )
   }

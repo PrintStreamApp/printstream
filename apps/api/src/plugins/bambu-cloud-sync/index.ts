@@ -8,7 +8,7 @@
  * and the sign-in flow.
  *
  * **Presets are never polled.** What is outstanding is worked out only when a person opens
- * a surface that uses presets (a cached check) or presses Sync — see `CHECK_CACHE_TTL_MS`.
+ * a surface that uses presets (a cached check) or presses Sync: see `CHECK_CACHE_TTL_MS`.
  * The single exception is credential RENEWAL (`TOKEN_REFRESH_TICK_MS`), which is scheduled
  * for a different reason entirely: the token lapses on Bambu's clock, not on ours, and
  * letting it die means the user redoes password plus 2FA with no warning.
@@ -16,7 +16,7 @@
  * **A plugin, not core.** It integrates with an external service, so an air-gapped,
  * LAN-only or simply uninterested install can remove it and keep a fully working preset
  * manager. Imported presets are ordinary workspace presets (`custom:<uuid>` rows through
- * `lib/slicing-presets.ts`) — removing the plugin strands the sync, never the presets.
+ * `lib/slicing-presets.ts`): removing the plugin strands the sync, never the presets.
  *
  * **This is not a walk-back of LAN Only Mode.** Nothing here touches a printer or asks
  * a printer to talk to Bambu. The only thing read or written is the *account's preset
@@ -66,11 +66,11 @@ const PLUGIN_NAME = 'bambu-cloud-sync'
  *
  * Preset state is NEVER polled: what is outstanding is worked out only when a person
  * opens a surface that uses presets, or presses Sync. A workspace nobody is looking at
- * generates no preset traffic at all. This TTL is what makes the on-open trigger safe —
+ * generates no preset traffic at all. This TTL is what makes the on-open trigger safe:
  * opening the editor twenty times in ten minutes is one Bambu call, not twenty.
  *
  * (The one thing that DOES run on a timer is the credential refresh below, which is a
- * different question entirely — see `TOKEN_REFRESH_TICK_MS`.)
+ * different question entirely: see `TOKEN_REFRESH_TICK_MS`.)
  */
 const CHECK_CACHE_TTL_MS = 10 * 60_000
 
@@ -79,14 +79,14 @@ const CHECK_CACHE_TTL_MS = 10 * 60_000
  *
  * This is the only scheduled work in the plugin, and it exists for one reason: Bambu's
  * access token lapses on its own clock, and when it and the refresh token are both gone
- * the user must redo password plus 2FA — silently, at a moment nothing predicts. So the
+ * the user must redo password plus 2FA: silently, at a moment nothing predicts. So the
  * tick is not a poll. It reads stored expiry times, does nothing for a workspace whose
  * token is still healthy, and calls Bambu roughly once per token lifetime.
  *
  * **Renewal is a FRACTION of the token's life, not a fixed lead, because Bambu expires
  * both tokens at the same instant.** Measured on a live account: `expiresIn` and
  * `refreshExpiresIn` were identical, 90 days out. So waiting until the access token is
- * nearly dead means reaching for a refresh token that is also nearly dead — one missed
+ * nearly dead means reaching for a refresh token that is also nearly dead, one missed
  * window (server down, workspace paused) and the account needs a full 2FA sign-in. At 75%
  * of a 90-day life that leaves a three-week margin, and it still only costs one call per
  * token. A fraction also survives Bambu changing the lifetime: a fixed lead would be
@@ -116,7 +116,7 @@ const resolveDeleteRequestSchema = z.object({
    * `confirm` carries out the deletion the freeze is asking about (delete the local
    * copy for a `missingRemotely` binding; queue the cloud copy's removal for a
    * `missingLocally` one). `decline` keeps both sides as they are now and simply stops
-   * tracking the binding — a `missingRemotely` preset becomes an ordinary local-only
+   * tracking the binding, a `missingRemotely` preset becomes an ordinary local-only
    * preset (synced fresh, as new, next pass); a `missingLocally` one leaves the cloud
    * copy untouched and forgotten.
    */
@@ -141,13 +141,13 @@ export const bambuCloudSyncPlugin: ApiPlugin = {
       const active = bindings.filter((binding) => !binding.pendingConfirmation)
       // A fresher name for `missingRemotely` (the local preset still exists and may have
       // been renamed since); `missingLocally` has no live preset to read one from, so it
-      // keeps whatever name the binding recorded — see `reconcileDeletions` in sync.ts.
+      // keeps whatever name the binding recorded: see `reconcileDeletions` in sync.ts.
       const presetsById = new Map((await listCustomSlicingPresetRecords(workspaceId)).map((preset) => [preset.id, preset]))
       response.json({
         connection: publicConnectionState(connection),
         syncedPresetCount: active.length,
         heldPresetCount: active.filter((binding) => binding.hold).length,
-        // Read straight off the last background check — this endpoint must stay free of
+        // Read straight off the last background check, this endpoint must stay free of
         // Bambu calls, because the editor and print-prep dialog poll it on every open.
         outstanding: connection?.lastCheck
           ? {
@@ -266,8 +266,8 @@ export const bambuCloudSyncPlugin: ApiPlugin = {
      *
      * Called by the surfaces that use presets when they open. No preset is created,
      * edited or deleted, and nothing is written to Bambu. Bambu's LISTING is reused while
-     * it is younger than {@link CHECK_CACHE_TTL_MS} — the verdict itself is always
-     * recomputed, so a preset edited here is reflected immediately — and `force` skips
+     * it is younger than {@link CHECK_CACHE_TTL_MS}, the verdict itself is always
+     * recomputed, so a preset edited here is reflected immediately, and `force` skips
      * even that.
      *
      * A workspace with no account connected is a 200 with `connected: false`, not an
@@ -289,7 +289,7 @@ export const bambuCloudSyncPlugin: ApiPlugin = {
       // most once per TTL.
       const plan = await checkBambuCloudSync({ workspaceId, store, logger }, { maxListingAgeMs: force ? 0 : CHECK_CACHE_TTL_MS })
       // Deliberately unaudited: every editor and print-prep open calls this, and it changes
-      // nothing a reviewer would ever ask about — it records what is outstanding and freezes
+      // nothing a reviewer would ever ask about, it records what is outstanding and freezes
       // a binding whose two sides disagree. The acts that follow from it (`/sync`,
       // `/presets/:id/resolve-delete`) are the ones that carry consequences, and both are
       // annotated.
@@ -307,7 +307,7 @@ export const bambuCloudSyncPlugin: ApiPlugin = {
     })
 
     /**
-     * Answers a deletion the sync engine froze — see `reconcileDeletions` in `sync.ts`.
+     * Answers a deletion the sync engine froze: see `reconcileDeletions` in `sync.ts`.
      * A deletion on EITHER side always lands here rather than happening on its own; the
      * actual state transition lives in `resolvePendingDeletion` so it stays testable
      * without an HTTP harness.
@@ -408,7 +408,7 @@ function startTokenRefresh(context: ApiPluginContext): NodeJS.Timeout[] {
 export function isBambuCredentialDueForRenewal(issuedAt: string | null | undefined, expiresAtMs: number, nowMs: number): boolean {
   const issuedAtMs = issuedAt ? Date.parse(issuedAt) : Number.NaN
   // Without a known issue time there is no lifetime to take a fraction of. Fall back to
-  // renewing once the token is inside its last quarter-day — better a late renewal than
+  // renewing once the token is inside its last quarter-day: better a late renewal than
   // none, and this only applies to credentials stored before `issuedAt` existed.
   if (!Number.isFinite(issuedAtMs) || issuedAtMs >= expiresAtMs) return expiresAtMs - nowMs <= 6 * 60 * 60_000
   const lifetime = expiresAtMs - issuedAtMs
@@ -433,7 +433,7 @@ async function refreshWorkspaceCredentialIfDue(workspaceId: string, context: Api
   const refreshUsable = connection.refreshToken
     && (refreshExpiresAt === null || !Number.isFinite(refreshExpiresAt) || refreshExpiresAt > Date.now())
   if (!refreshUsable) {
-    // No refresh token (or it has outlived its own window). Nothing to try — but the
+    // No refresh token (or it has outlived its own window). Nothing to try, but the
     // ACCESS token may still be perfectly good, so say nothing and change nothing. The
     // connection is marked expired only when Bambu actually rejects it in real use.
     return
@@ -461,7 +461,7 @@ async function refreshWorkspaceCredentialIfDue(workspaceId: string, context: Api
   } catch (error) {
     // **A failed renewal must never disconnect a working account.** Renewal is an
     // optimisation on top of a credential that is still valid until `expiresAt`; treating
-    // its failure as expiry would throw away a good token — and this endpoint is not
+    // its failure as expiry would throw away a good token, and this endpoint is not
     // currently known to work at all (see the note on `refreshBambuCloudCredential`), so
     // that would disconnect every account at 75% of its life for no reason. Log it and
     // leave the credential exactly as it is; genuine expiry is detected where it actually

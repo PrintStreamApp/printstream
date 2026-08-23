@@ -4,7 +4,7 @@
  * The hosted deployment installs every Bambu Studio version it supports,
  * because its users cannot install one themselves and a project saved by an
  * older Studio still has to be sliceable. That leaves a picker offering seven
- * versions to a workspace that only ever uses one — so a workspace hides the
+ * versions to a workspace that only ever uses one, so a workspace hides the
  * ones it does not want to see.
  *
  * Presentation only. Hiding an engine takes it out of the pickers; it does not
@@ -90,7 +90,7 @@ export function SlicerEngineVisibilityCard({ canManage }: { canManage: boolean }
             <Typography level="title-sm">Engines this workspace shows</Typography>
             <Typography level="body-sm" textColor="text.tertiary">
               Hide the Bambu Studio versions you never slice with. This only changes the lists your
-              workspace sees — projects that already name a hidden version still slice.
+              workspace sees: projects that already name a hidden version still slice.
             </Typography>
           </Stack>
 

@@ -58,7 +58,7 @@ test('useLocalStorageState reloads changed keys without overwriting the next key
 })
 
 /**
- * Two independent readers of ONE key — a settings dialog and the surface its preference governs.
+ * Two independent readers of ONE key, a settings dialog and the surface its preference governs.
  * The write must reach both, or the setting looks broken until the surface remounts. This is the
  * public editor's viewport preferences: localStorage is their only tier, so nothing else propagates.
  */

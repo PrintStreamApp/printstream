@@ -1,12 +1,27 @@
 /**
- * Client for the bridge control channel (named pipe / Unix socket). Used by the
- * CLI `status`/`update` commands; the tray reaches the bridge through the CLI
+ * Client for a standalone app's control channel (named pipe / Unix socket). Used
+ * by the CLI `status`/`update` commands; the tray reaches the app through the CLI
  * rather than speaking the socket itself.
+ *
+ * This module is shared by every SEA app (the cloud bridge and the self-hosted
+ * server today), so nothing it can surface to a user may name one of them. It
+ * used to say "The bridge did not respond." on a timeout, which the SERVER's CLI
+ * printed verbatim, telling a self-hosted operator about a "bridge": a word this
+ * product already uses for a different thing. Each CLI translates these into its
+ * own wording; keep what escapes from here app-neutral.
  */
 import { connect } from 'node:net'
 
-/** Connection failed because nothing is listening (bridge not running). */
-export class BridgeNotRunningError extends Error {}
+/** Connection failed because nothing is listening on the control channel. */
+export class ControlChannelUnavailableError extends Error {}
+
+/**
+ * The channel accepted the connection and then went quiet past the deadline,
+ * which normally means the app died mid-operation. A distinct type rather than a
+ * message a caller has to string-match, so a reworded message cannot silently
+ * stop a CLI from explaining it.
+ */
+export class ControlChannelTimeoutError extends Error {}
 
 export function requestControl<T>(socketPath: string, op: string, timeoutMs = 600_000): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -20,7 +35,13 @@ export function requestControl<T>(socketPath: string, op: string, timeoutMs = 60
       fn()
       socket.end()
     }
-    const timer = setTimeout(() => finish(() => reject(new Error('The bridge did not respond.'))), timeoutMs)
+    const timer = setTimeout(() => {
+      finish(() => reject(new ControlChannelTimeoutError('The control channel did not respond.')))
+      // `finish` ends the socket politely, which a peer that has stopped
+      // responding may never complete, leaving the handle (and the caller's
+      // event loop) open. A timeout already means it is not talking to us.
+      socket.destroy()
+    }, timeoutMs)
 
     socket.on('connect', () => socket.write(`${JSON.stringify({ op })}\n`))
     socket.on('data', (chunk) => {
@@ -38,7 +59,7 @@ export function requestControl<T>(socketPath: string, op: string, timeoutMs = 60
     })
     socket.on('error', (error: NodeJS.ErrnoException) => finish(() => {
       reject(error.code === 'ENOENT' || error.code === 'ECONNREFUSED'
-        ? new BridgeNotRunningError('The bridge is not running.')
+        ? new ControlChannelUnavailableError('Nothing is listening on the control channel.')
         : error)
     }))
   })
@@ -48,7 +69,7 @@ export function requestControl<T>(socketPath: string, op: string, timeoutMs = 60
  * Open a long-lived control request that yields many newline-delimited JSON
  * messages (e.g. `logs.follow`), invoking `onMessage` for each. Resolves when
  * the server closes the stream or the caller aborts via `options.signal`;
- * rejects with {@link BridgeNotRunningError} when nothing is listening.
+ * rejects with {@link ControlChannelUnavailableError} when nothing is listening.
  */
 export function streamControl(
   socketPath: string,
@@ -98,7 +119,7 @@ export function streamControl(
     socket.on('close', () => finish(() => resolve()))
     socket.on('error', (error: NodeJS.ErrnoException) => finish(() => {
       reject(error.code === 'ENOENT' || error.code === 'ECONNREFUSED'
-        ? new BridgeNotRunningError('The bridge is not running.')
+        ? new ControlChannelUnavailableError('Nothing is listening on the control channel.')
         : error)
     }))
   })

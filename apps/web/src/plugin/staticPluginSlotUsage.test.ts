@@ -22,7 +22,7 @@ async function* walk(dir: string): AsyncGenerator<string> {
 const EXEMPT_SLOTS = new Map<string, string>([
   // The auth plugins are always installed AND always enabled (they back the platform's
   // own sign-in), and most of these surfaces render BEFORE a plugin-manager session
-  // exists — which is precisely what StaticPluginSlot was built for. Routing them
+  // exists, which is precisely what StaticPluginSlot was built for. Routing them
   // through the enabled check would gate sign-in on a query that needs sign-in.
   ['auth.signIn', 'auth plugins are always enabled; renders pre-session'],
   ['auth.recentVerification', 'auth plugins are always enabled; renders pre-session'],
@@ -31,7 +31,7 @@ const EXEMPT_SLOTS = new Map<string, string>([
   ['account.security', 'auth plugins are always enabled'],
   ['settings.authenticationProviders', 'auth plugins are always enabled'],
   ['settings.authenticationSetup', 'auth plugins are always enabled; renders during setup'],
-  // Calibration's always-mounted wizard host. It renders nothing on its own — it only
+  // Calibration's always-mounted wizard host. It renders nothing on its own, it only
   // shows a wizard its LAUNCH points ask for, and those go through `PluginSlot`, so a
   // disabled calibration plugin has nothing to open it. Inert rather than correct: if
   // this host ever renders on its own it should move to `PluginSlot`.
@@ -41,25 +41,25 @@ const EXEMPT_SLOTS = new Map<string, string>([
 /**
  * A REGRESSION guard, not a style rule.
  *
- * `StaticPluginSlot` renders a slot's contributions WITHOUT consulting plugin state —
+ * `StaticPluginSlot` renders a slot's contributions WITHOUT consulting plugin state,
  * no enabled check, no runtime-surface check. That is correct for the surfaces it was
  * built for: auth/setup screens that must render before a plugin-manager session
  * exists, and private cloud modules (billing, support, platform) that are not toggleable
  * plugins at all.
  *
  * It is wrong for a slot fed by a toggleable built-in plugin under `src/plugins/`.
- * Using it there renders the plugin's UI in workspaces that turned the plugin off —
+ * Using it there renders the plugin's UI in workspaces that turned the plugin off,
  * which shipped once for `slicing.presets.sync`, where the Bambu Cloud panel appeared
  * for workspaces without the plugin and let someone type account credentials into a
  * form the API would only reject at submit (the plugin router answers 503 when
- * disabled, so nothing leaked — it was purely a dead end).
+ * disabled, so nothing leaked, it was purely a dead end).
  *
  * Nothing else catches this: both components take the same props and typecheck
  * identically, and the failure only shows up in a workspace with the plugin disabled.
  */
 test('a built-in plugin slot is never rendered through StaticPluginSlot', async () => {
   // Slot names contributed by built-in (toggleable) web plugins, read from source
-  // rather than imported — importing a plugin entry pulls in Joy and its icons, which
+  // rather than imported: importing a plugin entry pulls in Joy and its icons, which
   // the node test runner cannot load.
   const pluginSlotNames = new Map<string, string>()
   for await (const file of walk(PLUGINS_ROOT)) {
@@ -70,7 +70,7 @@ test('a built-in plugin slot is never rendered through StaticPluginSlot', async 
       if (slotName) pluginSlotNames.set(slotName, path.relative(SRC_ROOT, file))
     }
   }
-  assert.ok(pluginSlotNames.size > 0, 'found no built-in plugin slots — the scan pattern went stale')
+  assert.ok(pluginSlotNames.size > 0, 'found no built-in plugin slots: the scan pattern went stale')
 
   const offenders: string[] = []
   for await (const file of walk(SRC_ROOT)) {

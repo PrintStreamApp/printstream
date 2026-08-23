@@ -2,8 +2,8 @@
  * Process entry point (pre-env boot stage).
  *
  * This wrapper exists so the embedded database can be brought up and its
- * `DATABASE_URL` published into `process.env` *before* the env module — and the
- * Prisma client it configures — are first imported. It therefore statically
+ * `DATABASE_URL` published into `process.env` *before* the env module, and the
+ * Prisma client it configures, are first imported. It therefore statically
  * imports only the embedded-postgres supervisor (which is careful not to import
  * the env module) and defers the real server to a dynamic `import('./index.js')`
  * once the database URL is settled. See `embedded-postgres.ts` for the ordering
@@ -30,7 +30,7 @@ async function main(): Promise<void> {
     registerShutdownHook(() => embedded.stop())
   }
 
-  // A staged backup restore applies HERE — the one window where the database
+  // A staged backup restore applies HERE: the one window where the database
   // URL is settled but neither Prisma nor migrations have touched the DB. A
   // no-op on every ordinary boot. (Dynamic import: the module reads the env
   // snapshot, which must not be taken before the URL above is published. On
@@ -41,7 +41,7 @@ async function main(): Promise<void> {
 
   if (embedded || restored) {
     // The CLI-free applier provisions a fresh cluster from the baseline snapshot
-    // and forward-applies any new migrations — the Docker stack's CLI bootstrap
+    // and forward-applies any new migrations: the Docker stack's CLI bootstrap
     // is not in this bundle, and a freshly-restored database (either stack)
     // must be migrated forward to the installed schema before the app opens it.
     const { applyPendingMigrations } = await import('./lib/apply-migrations.js')
@@ -79,7 +79,7 @@ started.catch((error) => {
     error instanceof Error
       ? (error.stack ?? error.message)
       : error == null
-        ? '(no error detail — see the logged output above for the underlying cause)'
+        ? '(no error detail: see the logged output above for the underlying cause)'
         : String(error)
   console.error('Fatal error during startup:', detail)
   process.exit(1)

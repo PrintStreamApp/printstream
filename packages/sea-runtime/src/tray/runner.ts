@@ -40,7 +40,7 @@ export interface RunTrayInput {
   /**
    * The service's log directory, opened by the tray's "View logs" item. Baked in
    * at launch (not read from the status file) so it works even when the service
-   * is down — exactly when the operator needs the logs.
+   * is down, exactly when the operator needs the logs.
    */
   logsDir: string
 }
@@ -66,7 +66,7 @@ export async function runTray(input: RunTrayInput): Promise<TrayRunResult> {
     const exitCode = await new Promise<number>((resolve, reject) => {
       // windowsHide keeps the provider's console (PowerShell/wscript) from
       // allocating a visible window when the tray is launched from a session
-      // with no console of its own — otherwise an empty window lingers.
+      // with no console of its own, otherwise an empty window lingers.
       const child = spawn(command.executable, command.args, { stdio: ['ignore', 'inherit', 'inherit'], windowsHide: true })
       child.on('error', reject)
       child.on('exit', (code) => resolve(code ?? 0))

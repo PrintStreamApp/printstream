@@ -99,7 +99,7 @@ test('the checked-in migrations replay from empty into exactly the current schem
 /**
  * Integration: provision a throwaway database from baseline, then prove
  * idempotency. Gated on a reachable Postgres so the unit suite stays green in CI
- * without a database — set TEST_ADMIN_DATABASE_URL (or DATABASE_URL) to a cluster
+ * without a database: set TEST_ADMIN_DATABASE_URL (or DATABASE_URL) to a cluster
  * where we may CREATE/DROP DATABASE to exercise it.
  */
 test('applyPendingMigrations baselines a fresh database then is a no-op', async (t) => {
@@ -189,7 +189,7 @@ async function canConnect(databaseUrl: string): Promise<boolean> {
 /**
  * The pre-squash upgrade, which is what every deployed database does exactly
  * once. Simulates the old world: the schema is present and the history names the
- * 66 migrations `00000000000000_init` replaced, one of them left FAILED — the
+ * 66 migrations `00000000000000_init` replaced, one of them left FAILED: the
  * state that blocks `prisma migrate deploy` outright (P3009).
  */
 test('applyPendingMigrations collapses a pre-squash history without re-running anything', async (t) => {

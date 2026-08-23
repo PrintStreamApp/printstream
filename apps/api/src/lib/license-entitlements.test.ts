@@ -3,7 +3,7 @@
  *
  * The rule this guards is a product promise: a lapsed updates window must never
  * stop the app or lock data away. It only withholds newer builds. Every path
- * that cannot answer confidently therefore has to answer "entitled" — a
+ * that cannot answer confidently therefore has to answer "entitled", a
  * transient DB error must not look identical to an expired addon.
  */
 import assert from 'node:assert/strict'
@@ -42,7 +42,7 @@ test('a lapsed window is the ONLY thing that withholds updates', async () => {
   assert.match(reason, /keeps running/i, 'the message must say the current build still works')
 })
 
-test('a community key is entitled — perpetual, with no window to lapse', async () => {
+test('a community key is entitled: perpetual, with no window to lapse', async () => {
   assert.equal(await areUpdatesEntitled(reading(status({ edition: 'community', updatesUntil: null }))), true)
 })
 

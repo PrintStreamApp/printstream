@@ -5,7 +5,7 @@
  * It exists to enforce one rule: **a mutation must never await the job list.** TanStack keeps a
  * mutation `isPending` until every `onSuccess` promise settles (query-core `Mutation.execute`), so
  * `await queryClient.invalidateQueries(['slicing-jobs'])` inside `onSuccess` ties the Slice
- * button's spinner — and the result/print dialog opened after it — to a workspace-wide list
+ * button's spinner, and the result/print dialog opened after it, to a workspace-wide list
  * request. That request is large (every job, with its CLI log) and only gets larger with history,
  * so the user waits on it for no gain: the slice is already queued server-side by then. When the
  * transport stalls it never settles at all, and the button spins forever over a slice that
@@ -21,7 +21,7 @@ import type { SlicingJob, SlicingJobResponse, SlicingJobsResponse } from '@print
 import { readCurrentWorkspaceScopeKey, workspaceQueryKeys } from './workspaceScope'
 
 /**
- * Place a job the API just returned into the current workspace's cached list — and into the
+ * Place a job the API just returned into the current workspace's cached list, and into the
  * job's own single-job cache (`useSlicingJob`'s key), so a dialog watching it by id renders on
  * the first frame instead of after a refetch.
  *
@@ -42,7 +42,7 @@ export function seedSlicingJob(queryClient: QueryClient, job: SlicingJob): void 
 
 /**
  * Refresh the job list in the background. Deliberately not awaited (see the module header) and
- * deliberately keyed on the bare `slicing-jobs` prefix, which matches every workspace scope —
+ * deliberately keyed on the bare `slicing-jobs` prefix, which matches every workspace scope:
  * mirroring how the WS `resource.changed` handler invalidates it.
  */
 export function refreshSlicingJobs(queryClient: QueryClient): void {

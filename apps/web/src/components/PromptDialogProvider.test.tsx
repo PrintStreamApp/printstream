@@ -2,7 +2,7 @@
  * `submitValue`: the server decides, and its answer arrives where the user is
  * typing.
  *
- * The alternative this replaced was shipping the rule to the browser — a rename
+ * The alternative this replaced was shipping the rule to the browser, a rename
  * that must not collide checked a list of existing names fetched into the page,
  * which is a partial copy of a database constraint and goes stale the moment
  * anyone else takes the name.
@@ -72,7 +72,7 @@ test('a rejected submit keeps the dialog open, the message visible, and the typi
   assert.equal(resolved, undefined)
   assert.deepEqual(attempts, ['My Workspace'])
 
-  // Editing clears the server's answer — it was about the value that WAS in the
+  // Editing clears the server's answer, it was about the value that WAS in the
   // field, and leaving it up would reject the new name before anything asked.
   typeName('My Workspace 2')
   await waitFor(() => {

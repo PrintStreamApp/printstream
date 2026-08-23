@@ -31,12 +31,12 @@ export interface ScrollbarGutter {
 }
 
 /**
- * @param watch value to re-measure on beyond size changes — pass the rendered `children` so a
+ * @param watch value to re-measure on beyond size changes: pass the rendered `children` so a
  * content swap that keeps the same box size (a tab's rows replaced by an empty state) is caught.
  * Size changes are observed directly and need no help.
  */
 export function useScrollbarGutter(watch?: unknown): ScrollbarGutter {
-  // The element lives in state, not a ref, so attaching it re-runs the measurement — a ref would
+  // The element lives in state, not a ref, so attaching it re-runs the measurement, a ref would
   // still be null on the render that mounts the container.
   const [element, setElement] = useState<HTMLElement | null>(null)
   const [hasVerticalOverflow, setHasVerticalOverflow] = useState(false)

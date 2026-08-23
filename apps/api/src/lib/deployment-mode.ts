@@ -1,6 +1,6 @@
 /**
  * Distinguishes the self-hosted (open-source) deployment from the hosted cloud
- * deployment. This drives build-exclusive behavior — most importantly which
+ * deployment. This drives build-exclusive behavior: most importantly which
  * built-in auth provider is registered: self-hosted runs `auth-password`
  * (email/password, no email infrastructure required), cloud runs `auth-local`
  * (passkeys + one-time email codes via Cloudflare email).
@@ -16,15 +16,15 @@ import { hasPrivateModules } from './private-modules.js'
 /**
  * The three deployments this codebase actually has.
  *
- * They used to be two orthogonal booleans owned by two modules —
+ * They used to be two orthogonal booleans owned by two modules,
  * `isSelfHostedDeployment()` here and a raw `env.PRINTSTREAM_NATIVE` read in
- * `license-enforcement.ts` — with the implication "native is self-hosted"
+ * `license-enforcement.ts`, with the implication "native is self-hosted"
  * encoded as an `||` at ONE of the sixteen call sites. Every other consumer
  * (auth-provider selection, default-workspace bootstrap, workspace context,
  * print dispatch, bridge updates, admin plugins, email delivery) got the
  * unpatched answer. That was safe only because the native bundle happens to
  * ship no `src/private` directory, i.e. the `||` was load-bearing solely under
- * a configuration that would already be broken — which is the signal that the
+ * a configuration that would already be broken, which is the signal that the
  * model was wrong rather than that the patch was needed.
  */
 export type DeploymentKind =
@@ -67,7 +67,7 @@ export function resolveDeploymentKind(input: {
   return (input.selfHosted ?? !input.hasPrivateModules) ? 'self-hosted' : 'cloud'
 }
 
-/** True for everything the operator runs themselves — Docker/OSS and native alike. */
+/** True for everything the operator runs themselves: Docker/OSS and native alike. */
 export function isSelfHostedDeployment(): boolean {
   return deploymentKind() !== 'cloud'
 }

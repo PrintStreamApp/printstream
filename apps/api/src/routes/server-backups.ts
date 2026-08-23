@@ -3,10 +3,10 @@
  * restore. Deployment-dependent authority:
  *
  *  - Self-hosted: the settings-manage permission, the same gate as the app
- *    update action (`routes/app.ts`) — install ≈ workspace there, and on a
+ *    update action (`routes/app.ts`), install ≈ workspace there, and on a
  *    fresh install with auth disabled enforcement is bypassed rather than
  *    granted, which is exactly the operator these endpoints exist for.
- *  - Cloud: PLATFORM context only (the platform workspace, a platform user) —
+ *  - Cloud: PLATFORM context only (the platform workspace, a platform user),
  *    a backup spans every workspace on the install, so a workspace admin must
  *    never see it; outside platform context the routes 404 so the surface
  *    does not exist.
@@ -39,7 +39,7 @@ serverBackupsRouter.use((request, response, next) => {
     return
   }
   // Cloud: whole-install backups exist only at the platform scope. 404, not
-  // 403, outside it — for a workspace admin the surface does not exist.
+  // 403, outside it, for a workspace admin the surface does not exist.
   const isPlatformUser = request.auth.actor.type === 'user' && request.auth.actor.isPlatformUser === true
   if (request.workspace || !isPlatformUser) {
     next(notFound('Server backups are managed from the platform workspace.'))

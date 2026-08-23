@@ -41,7 +41,7 @@ test('skipObjectIdentifyIdsFromXml skips all instances of an unprintable object'
 
 test('skipObjectIdentifyIdsFromXml skips only the toggled instance of a mixed object', () => {
   // The editor's per-INSTANCE Printable toggle: object 81 has two build items (instance-id
-  // order), only the SECOND is unprintable — so only identify_id 4002 is skipped.
+  // order), only the SECOND is unprintable, so only identify_id 4002 is skipped.
   const mixedModel = MODEL_XML.replace(
     '  <item objectid="126" p:UUID="0000007e-0000-0000-0000-000000000000" transform="1 0 0 0 1 0 0 0 1 0 0 0" printable="0"/>',
     [

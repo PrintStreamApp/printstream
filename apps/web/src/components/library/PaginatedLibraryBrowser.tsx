@@ -4,7 +4,7 @@
  *
  * Two modes, matching the Library view:
  * - **Grouped** (`group !== 'none'`): folders first, then a titled section per
- *   file group. No pagination — all filtered entries show.
+ *   file group. No pagination, all filtered entries show.
  * - **Ungrouped**: the current page of folders+files wrapped in a
  *   `PaginatedSection` (pagination rows above and below).
  *

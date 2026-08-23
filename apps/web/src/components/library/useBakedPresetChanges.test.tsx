@@ -4,7 +4,7 @@
  * MEASURED on `/3mf-editor`: opening a project fired
  * `POST /api/slicing/profiles/resolve-process?workspace=none` and took a 403. The gates asked
  * `Boolean(sourceFileId)`, and a host with no workspace synthesizes a `LibraryFile` so the shared
- * slice-settings machinery works unchanged — its id is truthy, so the gate read it as "there is a
+ * slice-settings machinery works unchanged, its id is truthy, so the gate read it as "there is a
  * server file to resolve against" and enabled the fetch during the window before the anonymous
  * resolver is handed over.
  */

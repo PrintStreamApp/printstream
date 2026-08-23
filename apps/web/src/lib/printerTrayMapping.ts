@@ -20,7 +20,7 @@
  *
  * The tray-group BUILDERS, the default-mapping seeding, the compatibility-issue
  * computation, and the picker COMPONENTS still differ between the two sites and
- * are deliberately NOT shared here — see the dedup notes in those files.
+ * are deliberately NOT shared here: see the dedup notes in those files.
  *
  * The group type is generic over the tray-option element so the two sites can
  * keep their own (drifted) tray-option shapes while still sharing this logic;

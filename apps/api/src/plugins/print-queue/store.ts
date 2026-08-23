@@ -95,8 +95,8 @@ export interface InspectedQueuePlate {
 
 /**
  * Backfill each filament's `usedGrams` and `nozzleId` from `source` (matched by filament id) when it
- * doesn't already carry them. Both are authoritative slice data tied to the filament SLOT — they
- * don't change when the user overrides a material's type/color/brand — so an explicit material
+ * doesn't already carry them. Both are authoritative slice data tied to the filament SLOT, they
+ * don't change when the user overrides a material's type/color/brand, so an explicit material
  * override (which omits them) gets them filled in from the inspected plate (or the prior stored row).
  */
 export function withPlateSliceDataFrom(

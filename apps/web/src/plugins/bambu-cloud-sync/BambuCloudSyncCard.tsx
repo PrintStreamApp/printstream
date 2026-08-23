@@ -6,7 +6,7 @@
  * of a manual sync is reported per preset, because "synced" alone hides the two answers
  * that matter: what it decided to leave alone, and what Bambu rejected.
  *
- * A deletion on either side never happens on its own — the sync engine freezes it and
+ * A deletion on either side never happens on its own: the sync engine freezes it and
  * reports it as a pending decision (`/status`'s `pendingDeletionConfirmations`), which
  * this card renders as its own banner with an explicit Confirm/Decline pair per preset.
  * Sourced from `/status` rather than the last sync's own result so it survives a page
@@ -130,7 +130,7 @@ export function BambuCloudSyncCard(): JSX.Element {
 
         <Typography level="body-sm" textColor="text.tertiary">
           Keeps your presets and the ones in Bambu Studio in step, both ways. Whichever copy was
-          edited most recently wins. This does not connect your printers to Bambu&apos;s cloud — only
+          edited most recently wins. This does not connect your printers to Bambu&apos;s cloud, only
           your account&apos;s preset library is read and written.
         </Typography>
 
@@ -236,7 +236,7 @@ export function BambuCloudSyncCard(): JSX.Element {
  * Skipped and failed presets are listed by name with their reason rather than counted:
  * a preset that quietly stopped syncing is the failure mode that costs people work, and
  * a number alone gives them nothing to act on. Deletions needing a decision get only a
- * count here — the persistent `pendingDeletions` banner above is where they are acted on.
+ * count here: the persistent `pendingDeletions` banner above is where they are acted on.
  */
 function SyncResultSummary({ result }: { result: SyncResult }): JSX.Element {
   const changed = result.pulled.length + result.created.length + result.updated.length + result.deleted.length

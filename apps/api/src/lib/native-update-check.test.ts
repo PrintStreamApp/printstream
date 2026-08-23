@@ -5,7 +5,7 @@
  * The anonymity is not incidental. It is what lets the check run on a perpetual
  * key without breaking the promise that such an install makes no request
  * identifying itself, and it is what lets an owner whose updates window has
- * LAPSED still be told a release exists — which is how they learn there is
+ * LAPSED still be told a release exists, which is how they learn there is
  * something to renew for.
  */
 import assert from 'node:assert/strict'
@@ -103,7 +103,7 @@ test('a native build with no baked fingerprint never asks', async () => {
   })
 })
 
-test('the request is anonymous — no licence key, no installation id', async () => {
+test('the request is anonymous, no licence key, no installation id', async () => {
   await withManifest(manifest({ fingerprint: 'newbuild' }), async (captured) => {
     asNative('oldbuild')
     getNativeUpdateInfo()

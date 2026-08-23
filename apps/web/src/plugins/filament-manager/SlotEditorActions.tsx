@@ -1,8 +1,8 @@
 /**
  * Contributed into the AMS / external-spool editors (`ams.slotEditor`,
  * `externalSpool.editor` plugin slots). Lets the user either pick a spool from
- * the filament library — filling the editor's filament fields and recording the
- * slot assignment — or save the currently-entered filament as a new library
+ * the filament library, filling the editor's filament fields and recording the
+ * slot assignment, or save the currently-entered filament as a new library
  * spool loaded into this slot. Renders nothing if the host context is missing,
  * so the editors work unchanged when the plugin is disabled.
  *

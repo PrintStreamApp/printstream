@@ -194,7 +194,7 @@ export function AmsDryingModal({
   const dryingPhaseDescription = formatAmsDryingPhaseDescription(unit)
   const temperatureRange = amsDryingTemperatureRange(unit.type)
   // Live: recomputes as tray state updates, so unloading a flagged spool
-  // clears the warning without reopening the dialog. Risks are advisory —
+  // clears the warning without reopening the dialog. Risks are advisory:
   // starting anyway sends `acknowledgeRisks` so the API lets it through.
   const dryingRisks = assessAmsDryingRisk(unit, parsedTemperature)
   const canStart =

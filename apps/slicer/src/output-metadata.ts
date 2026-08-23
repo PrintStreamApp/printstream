@@ -45,7 +45,7 @@ export function buildSlicedArtifactMetadata(
   for (const mapping of request.target.filamentMappings ?? []) {
     // Only a RESOLVED profile's name may become `filament_settings_id`. A mapping with no
     // `profileId` carries the material's DISPLAY identity ("Bambu PETG Basic") rather than a
-    // preset name ("Bambu PETG Basic @BBL H2D 0.4 nozzle") — writing that overwrites the
+    // preset name ("Bambu PETG Basic @BBL H2D 0.4 nozzle"): writing that overwrites the
     // project's own, correct preset name with a string no catalog contains. The project is then
     // left naming a preset nothing can resolve, and a partial config (the editor's
     // material-change drop) can no longer be repaired at slice time: the slice fails naming a
@@ -79,9 +79,9 @@ export function rewriteProjectSettingsMetadata(
   const next = { ...settings }
 
   if (metadata.printerProfileName) {
-    // Emit `printer_model` exactly as BambuStudio reports it per model — the machine
+    // Emit `printer_model` exactly as BambuStudio reports it per model, the machine
     // preset name without its nozzle-size suffix ("Bambu Lab H2D 0.4 nozzle" ->
-    // "Bambu Lab H2D"), as a plain string — instead of our internal short code, so the
+    // "Bambu Lab H2D"), as a plain string, instead of our internal short code, so the
     // sliced project does not stray from what Bambu writes. Derived from the loaded
     // machine profile, so it is correct for every model without a lookup table.
     next.printer_model = bambuPrinterModelName(metadata.printerProfileName)
@@ -92,7 +92,7 @@ export function rewriteProjectSettingsMetadata(
     // not from printer_settings_id (BambuStudio.cpp: current_printer_system_name).
     // A project saved with an inherited/custom machine preset keeps its old parent
     // there (e.g. "Bambu Lab P1P 0.4 nozzle"), and since 2.7.1 the CLI validates every
-    // loaded filament preset against that name — so a stale slot fails the slice with
+    // loaded filament preset against that name, so a stale slot fails the slice with
     // "filament preset ... is not compatible with printer <old machine>". Blank it so
     // the CLI treats the rewritten printer_settings_id as the system identity.
     clearInheritsGroupSlot(next, 'machine')
@@ -115,7 +115,7 @@ export function rewriteProjectSettingsMetadata(
     if (filament.color) setArrayValue(next, 'filament_colour', index, filament.color)
     if (filament.profileName) setArrayValue(next, 'filament_settings_id', index, filament.profileName)
     if (filament.nozzleId != null) {
-      // `filament.nozzleId` is already a runtime nozzle id (0 = right, 1 = left) — the
+      // `filament.nozzleId` is already a runtime nozzle id (0 = right, 1 = left): the
       // same space the index parser (`extractNozzleMapping`) canonicalises every
       // BambuStudio quirk into, and the same space `filament_nozzle_map` is read back
       // in. Write it through verbatim so an assignment the user did not change
@@ -129,7 +129,7 @@ export function rewriteProjectSettingsMetadata(
   }
 
   // Pin a manual nozzle assignment on dual-nozzle machines (see
-  // buildManualNozzleAssignment). NOTE: this pair is not what the CLI acts on — it takes the
+  // buildManualNozzleAssignment). NOTE: this pair is not what the CLI acts on, it takes the
   // MODE from the per-plate `model_settings.config` metadata and the MAP from the
   // `--filament-map` command-line flag (see `filament-map-args.ts`). We still write it here so
   // the saved artifact's metadata matches the gcode.
@@ -181,8 +181,8 @@ export function buildManualNozzleAssignment(
   // with an unchecked `filament_maps[plate_filaments[i] - 1]` (BambuStudio.cpp ~6822). A short
   // array is therefore an out-of-bounds vector read, not a defaulted one: the CLI reports a
   // garbage extruder ("filament Sup.PLA can not be printed on extruder 21840, under manual mode
-  // for multi extruder printer") and aborts. Slots we did not assign — a filament with no nozzle
-  // choice, such as a support material — must still carry a valid extruder.
+  // for multi extruder printer") and aborts. Slots we did not assign, a filament with no nozzle
+  // choice, such as a support material, must still carry a valid extruder.
   const filamentCount = Math.max(
     filamentMap.length,
     ...[...metadata.filamentByProjectId.keys()],
@@ -201,12 +201,12 @@ export function buildManualNozzleAssignment(
 
 /**
  * Force per-plate manual filament mapping in a 3MF's `model_settings.config` (XML).
- * This is the authoritative source the slicer CLI reads for `filament_map_mode` — it
+ * This is the authoritative source the slicer CLI reads for `filament_map_mode`, it
  * ignores the value in `project_settings.config` and in loaded presets, so without
  * this the slice stays "Auto For Flush" and the chosen nozzle is discarded. Sets every
  * plate's mode to "Manual" and writes `filament_maps` (the same 1-indexed
  * slicer-extruder-per-filament map as {@link buildManualNozzleAssignment}'s `filament_map`,
- * joined by spaces — BambuStudio's own whitespace form for this attribute).
+ * joined by spaces: BambuStudio's own whitespace form for this attribute).
  *
  * Do not rely on the map written here to take effect: `--filament-map` must carry the same
  * values (`filament-map-args.ts`), or the CLI can fall back to its one-entry default and abort
@@ -214,13 +214,13 @@ export function buildManualNozzleAssignment(
  */
 export function applyManualFilamentMapToModelSettings(modelSettingsXml: string, filamentMaps: string): string {
   // Insert (not just replace) the assignment into every <plate> block. Source 3MFs
-  // usually carry NO filament_map_mode at all — the CLI injects "Auto For Flush" as a
-  // default at slice time — so a replace-only pass is a no-op and the chosen nozzle is
+  // usually carry NO filament_map_mode at all, the CLI injects "Auto For Flush" as a
+  // default at slice time, so a replace-only pass is a no-op and the chosen nozzle is
   // lost. Strip any pre-existing mode/maps in the plate, then inject a fresh Manual
   // pair right after the opening tag (metadata order within a plate is not
   // significant). Verified against BambuStudio 2.7.1.62: flipping this plate's mode here
   // flips what the CLI reports, even under --load-settings. The map beside it is a weaker
-  // signal — on the issue #63 repro, changing these values changed nothing about the
+  // signal, on the issue #63 repro, changing these values changed nothing about the
   // assignment the CLI used, which is why the map also goes on the command line.
   const inject = `<metadata key="filament_map_mode" value="Manual"/>\n        <metadata key="filament_maps" value="${escapeXmlAttribute(filamentMaps)}"/>`
   return modelSettingsXml.replace(/<plate>([\s\S]*?)<\/plate>/g, (_block, inner: string) => {
@@ -402,13 +402,13 @@ function cleanFilamentProfileName(value: string | null | undefined): string | nu
 }
 
 /**
- * True when applying `metadata` will change a filament colour the project already carries —
+ * True when applying `metadata` will change a filament colour the project already carries:
  * the exact condition under which the source file's embedded plate previews (rendered with
  * the OLD colours) go stale. This is our side of BambuStudio's own `filament_color_changed`
  * check, which the CLI can never hit for us: we rewrite the colours INTO the project before
  * it looks (nothing rides `--filament-colour`), so from where it sits nothing ever changed.
  * The caller reacts by dropping the stale previews (see `isPlatePreviewEntry`). Comparison
- * is RGB — alpha is ignored, matching what `normalizeFilamentColor` keeps.
+ * is RGB: alpha is ignored, matching what `normalizeFilamentColor` keeps.
  */
 export function metadataChangesFilamentColours(
   settings: Record<string, unknown>,
@@ -429,7 +429,7 @@ export function metadataChangesFilamentColours(
  * cover, no-light, top and pick renders). The slice pipeline drops these from the prepared
  * input when `metadataChangesFilamentColours` says they are stale, so the CLI's thumbnail
  * stage re-renders them with the new colours instead of carrying the old ones into the
- * sliced output. Runtimes that cannot render (no weston/OSMesa/shim — see
+ * sliced output. Runtimes that cannot render (no weston/OSMesa/shim: see
  * bambu-studio-cli.sh) regain the originals via `backfillPlateThumbnails`, which reads the
  * ORIGINAL input, not the prepared copy.
  */

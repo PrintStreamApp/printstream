@@ -1,5 +1,5 @@
 /**
- * The printer-card metrics row: temperature readouts (nozzle — single or dual, bed, chamber) plus
+ * The printer-card metrics row: temperature readouts (nozzle: single or dual, bed, chamber) plus
  * print-speed, door, and duct chips. Each readout/chip is gated by the card's content settings and
  * live status; temperature, speed, and nozzle-changer readouts deep-link into the matching
  * controls-dialog tab when permitted.

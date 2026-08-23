@@ -125,7 +125,7 @@ test('a second local cache fill cannot leave the first caller holding a partial 
       : 0
     // The whole file arrives in one chunk, so each caller makes exactly two calls: a completeness
     // probe, then its body. That keeps these indices meaningful whichever way the fill is
-    // implemented — a coalescing one simply never reaches 2 and 3.
+    // implemented, a coalescing one simply never reaches 2 and 3.
     //
     // Call 1 is the first caller's body. Holding it parks that fill mid-transfer, which is the only
     // window in which a second fill can touch the same target.
@@ -791,7 +791,7 @@ test('ensureBridgeLibraryLocalCopy refreshes recency on a validated stale copy s
 test('an index from a bridge on an older parser version is re-parsed locally, not trusted', async () => {
   // The bridge deploys separately from the API. After a parser bump, an un-upgraded bridge keeps
   // returning indexes that silently lack the new fields (Zod fills their defaults), and those were
-  // cached and chip-stamped as CURRENT — which is how `needsSettingsRepair`/`projectVersion` never
+  // cached and chip-stamped as CURRENT, which is how `needsSettingsRepair`/`projectVersion` never
   // appeared for files indexed while the bridge lagged. The version clause makes the API pull the
   // bytes and parse with its own (current) parser instead.
   const { shouldFallbackToLocalThreeMfParse } = await import('./bridge-library-files.js')
@@ -811,7 +811,7 @@ test('an index from a bridge on an older parser version is re-parsed locally, no
 
   // A structurally healthy index from a CURRENT bridge is trusted.
   assert.equal(shouldFallbackToLocalThreeMfParse({ index: healthyIndex, parserVersion: THREE_MF_INDEX_PARSER_VERSION } as never), false)
-  // The same index from a LAGGING bridge is not — its fields may be silently defaulted.
+  // The same index from a LAGGING bridge is not, its fields may be silently defaulted.
   assert.equal(shouldFallbackToLocalThreeMfParse({ index: healthyIndex, parserVersion: THREE_MF_INDEX_PARSER_VERSION - 1 } as never), true)
   // A bridge that predates version reporting entirely parses as 0 and always re-parses.
   assert.equal(shouldFallbackToLocalThreeMfParse({ index: healthyIndex, parserVersion: 0 } as never), true)

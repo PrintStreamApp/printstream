@@ -4,7 +4,7 @@
  * The hosted deployment installs every engine, because its users cannot install
  * one themselves and a project saved by an older Bambu Studio still has to be
  * sliceable. That leaves a picker listing seven versions to a workspace that
- * only ever uses one — so a workspace can hide the ones it does not want to
+ * only ever uses one, so a workspace can hide the ones it does not want to
  * see.
  *
  * **Presentation only, and that is deliberate.** Hiding an engine removes it
@@ -16,8 +16,8 @@
  * answers.
  *
  * Stored as an ALLOW list rather than a deny list. A deny list silently adopts
- * every engine added later — the opposite of what a workspace that curated its
- * list was asking for — but an empty or absent record means "everything", so
+ * every engine added later, the opposite of what a workspace that curated its
+ * list was asking for, but an empty or absent record means "everything", so
  * nothing has to be configured for the ordinary case.
  *
  * Counterpart: `apps/api/src/routes/slicing.ts` (`/capabilities`), which is the
@@ -44,7 +44,7 @@ export async function readVisibleEngineIds(workspaceId: string): Promise<string[
   const parsed = parseVisibleEngineIds(row.value)
   // An empty stored list would hide every engine and leave the workspace unable
   // to slice at all, with no way back except this setting. Treated as "not
-  // configured" — the same thing the absent row means.
+  // configured", the same thing the absent row means.
   return parsed && parsed.length > 0 ? parsed : null
 }
 

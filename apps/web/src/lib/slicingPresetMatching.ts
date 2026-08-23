@@ -8,7 +8,7 @@
  * building, and filament colour/mapping normalization.
  *
  * Everything here is a side-effect-free data transform over `SlicingPresetSummary`,
- * `ThreeMfIndex`, `LibraryFile`, and printer status/spool data — no React, no
+ * `ThreeMfIndex`, `LibraryFile`, and printer status/spool data, no React, no
  * component state. The text/token matchers intentionally mirror BambuStudio's
  * permissive profile-family behavior; prefer the explicit profile metadata and
  * fall back to normalized name/condition matching only as those functions document.
@@ -82,7 +82,7 @@ import { resolveFilamentIdentity } from './filamentColor'
 import type { SettingFilamentChoice } from '../components/settings/SettingValueField'
 import type { SlotFilamentIdentityLookup } from './slotFilamentIdentity'
 import { resolveFilamentPreset, resolveProjectFilamentPreset } from './filamentPresetResolver'
-import { formatSlicingPresetBrandedName, formatSlicingPresetDisplayName } from './slicingPresetSelection'
+import { formatSlicingPresetBrandedName, formatSlicingPresetDisplayName, slicingPresetAlias } from './slicingPresetSelection'
 import { amsUnitLetter } from './printerTrayMapping'
 
 /**
@@ -92,7 +92,7 @@ import { amsUnitLetter } from './printerTrayMapping'
  * The slicer can answer while it is restarting or still indexing its bundled
  * `*_full/` system-preset dirs, returning only the workspace's custom profiles
  * (or nothing). BambuStudio always ships builtin machine/process/filament
- * presets, so a builtin-less response is never legitimate — it means the slicer
+ * presets, so a builtin-less response is never legitimate, it means the slicer
  * replied early. Caching that partial result strands the editor on a custom-only
  * catalogue: no builtin machine profile to auto-pick (Slice silently disabled),
  * and every loaded/AMS material collapses to the nearest custom filament (e.g.
@@ -135,6 +135,12 @@ export function buildProjectSlicingPresets(bakedIndex: ThreeMfIndex | null, kind
       kind,
       name,
       filamentType: filament.filamentType ?? undefined,
+      // The 3MF records `filament_vendor` per slot, so a project preset brands itself the same way
+      // its installed twin does. Without it the two disagree for any vendor whose name is not the
+      // first word of the preset ("Polymaker PolyLite PLA" vs "PolyLite PLA"), which is enough to
+      // stop a comparison matching a preset against ITSELF. Undefined when the 3MF (or a bridge on
+      // an older parser) recorded none, which brands from the name as before.
+      filamentVendor: filament.filamentVendor ?? undefined,
       // The 3MF records `filament_is_support` per slot, so a project's support
       // material carries its flag rather than relying on its name reading as one.
       filamentIsSupport: filament.isSupport ?? undefined,
@@ -174,19 +180,29 @@ export function buildRedundantProjectPresetCandidates(
   bakedIndex: ThreeMfIndex | null
 ): Array<{ filamentProfileId: string; projectFilamentId: number }> {
   if (!bakedIndex) return []
-  // Compare alias to alias, running BOTH sides through the same formatter. A 3MF's
-  // `filament_settings_id` is not an alias — BambuStudio writes the full name with
-  // its machine suffix ("Bambu PLA Basic @BBL H2D") — and project presets are now
-  // minted from exactly that, so neither side is pre-shortened and only the
-  // formatter makes them comparable. Widening to the alias is right HERE, where the
-  // question is "is there an installed twin worth diffing against". It must never
-  // be mistaken for how a slot BINDS to a preset, which matches the raw name
-  // exactly, because two presets can share an alias and differ only past the `@`.
-  const alias = (profile: SlicingPresetSummary) => normalizedProfileText(formatSlicingPresetBrandedName(profile))
-  const installedNames = new Set(installedProfiles.map(alias))
+  // RAW name first, because that is what BambuStudio binds on
+  // (`find_preset_internal(original_name)`, an exact lookup with no branding applied) and a 3MF's
+  // `filament_settings_id` is the full name with its machine suffix ("PolyLite PLA @BBL H2D").
+  //
+  // BambuStudio's alias stays as a WIDENING, for the slots that carry only the display name
+  // ("Bambu PETG HF" against a catalogue "Bambu PETG HF @BBL H2D 0.4 nozzle"). It is
+  // `slicingPresetAlias`, derived from the name alone, and NOT either display formatter: those
+  // consult `filamentVendor`, which an installed preset declares and a project preset minted from
+  // the 3MF does not, so they brand the same preset differently on the two sides. Never nominated
+  // meant never checked, so a third-party project preset stayed in the catalogue and shadowed its
+  // installed twin under the same label, carrying the `profileId: null` that the filament-physics
+  // repair resolves through: the defect blocked its own repair.
+  //
+  // Neither test may be mistaken for how a slot BINDS to a preset. The question here is only "is
+  // there an installed twin worth diffing against"; two presets can share an alias and differ only
+  // past the `@`, which is why the raw test is the precise one and the alias merely widens it.
+  const alias = (profile: SlicingPresetSummary) => normalizedProfileText(slicingPresetAlias(profile))
+  const rawName = (profile: SlicingPresetSummary) => normalizedProfileText(profile.name)
+  const installedAliases = new Set(installedProfiles.map(alias))
+  const installedRawNames = new Set(installedProfiles.map(rawName))
   const candidates: Array<{ filamentProfileId: string; projectFilamentId: number }> = []
   for (const profile of projectProfiles) {
-    if (!installedNames.has(alias(profile))) continue
+    if (!installedRawNames.has(rawName(profile)) && !installedAliases.has(alias(profile))) continue
     // Raw to raw: the profile carries the slot's `filament_settings_id` verbatim.
     const slot = bakedIndex.projectFilaments.find(
       (filament) => ((filament.filamentPresetName ?? filament.filamentName) ?? '').trim() === profile.name
@@ -250,7 +266,7 @@ export type SliceMaterialOption = {
   /** Canonical colour name of the loaded filament ("White", "Jade White"). */
   colorName: string | null
   /**
-   * Remaining quantity from the TRACKED spool (filament-manager) — covers non-RFID
+   * Remaining quantity from the TRACKED spool (filament-manager): covers non-RFID
    * custom spools the printer cannot estimate. Null when untracked; callers may
    * fall back to the RFID tray estimate.
    */
@@ -320,7 +336,7 @@ export function isFilamentProfileCompatible(
 
 /**
  * True only when the preset's own name identifies a printer model AND that model differs from the
- * one selected. An unnamed or unrecognised machine answers false — absence of evidence must not
+ * one selected. An unnamed or unrecognised machine answers false: absence of evidence must not
  * read as a mismatch.
  */
 export function namesADifferentPrinterModel(profile: SlicingPresetSummary, model: string): boolean {
@@ -388,7 +404,7 @@ export function matchesPlateType(profile: SlicingPresetSummary, plateType: strin
 
 /**
  * The standard BambuStudio bed types every Bambu printer accepts. Profiles only carry
- * their DEFAULT bed (`curr_bed_type`), so these are always offered — otherwise targets
+ * their DEFAULT bed (`curr_bed_type`), so these are always offered, otherwise targets
  * whose profiles name a single plate (e.g. P1S) never list SuperTack at all.
  */
 export const BAMBU_STUDIO_PLATE_TYPES = ['cool_plate', 'engineering_plate', 'high_temp_plate', 'textured_pei_plate', 'supertack_plate']
@@ -450,7 +466,7 @@ export function resolveProjectPlateType(file: LibraryFile, bakedIndex: ThreeMfIn
 /**
  * The plate-type option whose display LABEL matches `desired` (label-insensitive), or null.
  * Label-based so the code form (`high_temp_plate`) and a profile's label form (`High Temp Plate`)
- * resolve to the same option — otherwise the same logical plate falls out of its own option list
+ * resolve to the same option, otherwise the same logical plate falls out of its own option list
  * (the value-form differs between sources) and the selection is silently dropped.
  */
 export function matchPlateTypeByLabel(options: readonly string[], desired: string | null | undefined): string | null {
@@ -463,7 +479,7 @@ export function matchPlateTypeByLabel(options: readonly string[], desired: strin
  * Resolve which plate type to select from `options`, in priority order: the current choice
  * (matched by label so a value-form change never drops it), the selected printer's loaded plate,
  * then a stable default (Textured PEI, then the first option). Deliberately never snaps to
- * BambuStudio's rank-0 Cool Plate as a fallback — an unrelated profiles recompute must not
+ * BambuStudio's rank-0 Cool Plate as a fallback, an unrelated profiles recompute must not
  * silently change the user's plate to Cool Plate.
  */
 export function resolvePreferredPlateType(
@@ -482,7 +498,7 @@ export function resolvePreferredPlateType(
  *
  * 0.4 is a LAST-RESORT entry so the picker is never empty, not a member of the union: appended
  * unconditionally it put a phantom 0.4 in front of a 0.6-only project's list, and the pre-S2 seed
- * (which took the ascending minimum) then chose it — leaving a 0.4 nozzle paired with a 0.6 machine
+ * (which took the ascending minimum) then chose it, leaving a 0.4 nozzle paired with a 0.6 machine
  * profile, which the submit gate reports as an incompatible printer profile. Seeding now goes
  * through `resolveMachineTarget`'s ladder (`lib/machineTargetResolution.ts`), which asks the
  * project first; this list only decides what is SELECTABLE.
@@ -589,7 +605,7 @@ export function buildInitialFilamentMaterialOptionSelection(file: LibraryFile, b
  * A slot the resolver cannot identify is LEFT OUT rather than filled with a
  * nearest guess: the dialog then shows it as unassigned and refuses the slice with
  * a reason, which is the whole point of making unresolved first-class (issue #66).
- * The selected machine profile — not the model string — is the compatibility
+ * The selected machine profile, not the model string, is the compatibility
  * authority here, matching what actually reaches the slicer.
  */
 export function buildBakedFilamentProfileSelection(bakedIndex: ThreeMfIndex, profiles: SlicingPresetSummary[], machineProfile: SlicingPresetSummary | null = null): Record<number, string> {
@@ -638,7 +654,7 @@ export function buildInitialFilamentToolheadSelection(file: LibraryFile, bakedIn
 /**
  * Whether a plate carries real slice metadata. An UNSLICED plate's filament list
  * is only a geometry estimate built from each object's `extruder` metadata, which
- * captures the base extruder but NOT colour-PAINTED filaments — so it must not be
+ * captures the base extruder but NOT colour-PAINTED filaments, so it must not be
  * trusted to narrow a project's material/mapping list (it would hide a painted
  * secondary colour). A SLICED plate's `slice_info` records exact per-plate usage.
  */
@@ -672,7 +688,7 @@ export function buildSliceDialogProjectFilaments(
     // Support materials are referenced by process SETTINGS (support_filament /
     // support_interface_filament), not by any object's extruder id, so a plate's sliced
     // filament list omits them until a slice actually consumed them. Without this a material
-    // assigned as the support interface is missing from the print dialog entirely — it cannot be
+    // assigned as the support interface is missing from the print dialog entirely, it cannot be
     // mapped to a tray, and the print goes out without it. Union only when the plate HAS slice
     // data: with none, every material is already treated as in use below.
     if (platedFilamentIds.length > 0) {
@@ -695,7 +711,7 @@ export function buildSliceDialogProjectFilaments(
 }
 
 /**
- * The 1-based project-filament ids the selected plate's MODEL OBJECTS print with — the
+ * The 1-based project-filament ids the selected plate's MODEL OBJECTS print with: the
  * model-material side of the support-interface recommendation (`modelFilamentIds` on
  * `recommendSupportSettingsForInterfaceFilament`), approximating BambuStudio's scan of the
  * current plate's volume extruders. Null when there is no baked index (host cannot tell;
@@ -703,15 +719,15 @@ export function buildSliceDialogProjectFilaments(
  *
  * This deliberately does NOT reuse `usedOnSelectedPlate`: that is a display flag whose
  * fallback is "every material is in use" (unsliced plates, plate 0), and which unions the
- * support-referenced slots in — both exactly wrong for the homogeneity gate, which needs the
+ * support-referenced slots in, both exactly wrong for the homogeneity gate, which needs the
  * set NARROW (the issue-#79 repro file read as PETG+PLA and never consulted the table). The
  * trust calculus differs too: narrowing the print-mapping list can drop a needed material
- * from a print, while narrowing this set only changes whether a confirm-only prompt appears —
+ * from a print, while narrowing this set only changes whether a confirm-only prompt appears,
  * so the unsliced geometry estimate is good enough here even though the mapping list refuses
  * to trust it.
  *
  * Slots referenced only by the support process settings (`supportFilamentIds`: the configured
- * base/interface plus `filament_is_support` slots) are subtracted — Studio's volume scan never
+ * base/interface plus `filament_is_support` slots) are subtracted: Studio's volume scan never
  * sees them unless geometry also prints with them, which the index cannot distinguish. The one
  * guard: never subtract down to an empty set, because then the referenced slot IS the model
  * material (a single-colour project whose colour doubles as the support base).
@@ -731,16 +747,16 @@ export function plateModelFilamentIds(bakedIndex: ThreeMfIndex | null, selectedP
   )
   const modelIds = new Set(candidateIds.filter((id) => !supportFlagged.has(id) && !supportReferenced.has(id)))
   if (modelIds.size > 0) return modelIds
-  // Dedicated support materials stay excluded even in the fallback — they are never model
+  // Dedicated support materials stay excluded even in the fallback, they are never model
   // geometry, whereas a support-REFERENCED ordinary colour can be.
   return new Set(candidateIds.filter((id) => !supportFlagged.has(id)))
 }
 
 /**
  * Material choices for filament-index process settings ("Support/raft base" etc.) in the global
- * `ProcessSettingsDialog` — ONE builder for every host that renders that dialog (the workspace
+ * `ProcessSettingsDialog`, ONE builder for every host that renders that dialog (the workspace
  * slice/print dialog and the public editor's local controller), so the hosts cannot drift.
- * Ids are the 1-based POSITION in the full ordered list — the index the slicer reads — not
+ * Ids are the 1-based POSITION in the full ordered list, the index the slicer reads, not
  * `projectFilamentId`, which can diverge from position after a removal.
  *
  * `filamentType`/`isSupport`/`isSoluble`/`materialName`/`usedByPlateModels` ride along for
@@ -749,7 +765,7 @@ export function plateModelFilamentIds(bakedIndex: ThreeMfIndex | null, selectedP
  * selected option filling the gaps (a session-ADDED slot has no baked entry at all, and
  * without its option's type the table's type-matched entries could never fire for it); a
  * wrong classification only means the prompt is offered or withheld, and the user still
- * decides. `usedByPlateModels` comes from `plateModelFilamentIds` — NOT `usedOnSelectedPlate`,
+ * decides. `usedByPlateModels` comes from `plateModelFilamentIds`, NOT `usedOnSelectedPlate`,
  * whose unsliced-plate fallback marks every material used and broke the homogeneity gate
  * (see that helper's doc). A session-added slot is never a model material (the file's objects
  * cannot print with it), which the id-space lookup gives for free.
@@ -802,7 +818,7 @@ export interface ResolvedFilamentMapping {
   source: SliceMaterialOption['source']
   trayId: number | null
   toolheadId: string | undefined
-  /** DISPLAY text for the slot. Never treated as a preset name — see `output-metadata.ts`. */
+  /** DISPLAY text for the slot. Never treated as a preset name: see `output-metadata.ts`. */
   material: string
   color: string
   settingOverrides: Record<string, string | string[]> | undefined
@@ -822,7 +838,7 @@ export interface FilamentMappingResult {
 /**
  * Build the per-slot filament mappings for a slice request.
  *
- * Every project filament yields either a mapping or an entry in `unresolved` —
+ * Every project filament yields either a mapping or an entry in `unresolved`,
  * a slot is never silently dropped.
  */
 export function buildFilamentMappings(
@@ -879,7 +895,7 @@ export function buildSliceMaterialOptions(profiles: SlicingPresetSummary[], load
     label: formatSlicingPresetDisplayName(profile),
     // BambuStudio's own terms for these groups (PresetComboBoxes.cpp): "System presets" and
     // "User presets". It says PRESET in the picker even though its prose elsewhere says "profile",
-    // and this dialog is the picker — so match it here rather than inventing a third vocabulary.
+    // and this dialog is the picker, so match it here rather than inventing a third vocabulary.
     // The 3MF group has no BambuStudio counterpart: it loads a project's presets as the named
     // preset (dirty when values differ) rather than listing them separately.
     group: isProjectSlicingPreset(profile) ? '3MF project presets' : profile.source === 'custom' ? 'User presets' : 'System presets',
@@ -936,15 +952,15 @@ export function buildLoadedPrinterMaterialOptions(
   const nozzleCount = source.nozzleCount
   for (const unit of source.ams) {
     // A unit behind a Filament Track Switch feeds EITHER nozzle, so it must not pin a material to
-    // one toolhead here — that assignment becomes the sliced `filament_map`, which would undo the
+    // one toolhead here, that assignment becomes the sliced `filament_map`, which would undo the
     // routing freedom the switch exists to provide.
     const unitNozzleId = effectiveAmsNozzleId(unit)
     const group = formatPrinterMaterialSourceGroup(`AMS ${amsUnitLetter(unit.unitId)}`, unitNozzleId, nozzleCount)
     for (const slot of unit.slots) {
       if (slot.occupied === false || !hasLoadedMaterialDetails(slot.trayName, slot.filamentType, slot.color)) continue
       const fallbackLabel = slot.trayName?.trim() || slot.filamentType?.trim() || `AMS ${unit.unitId + 1} slot ${slot.slot + 1}`
-      // The FILAMENT's own resolved identity — tracked spool first, then the
-      // tray — is authoritative for who the filament is (label, brand, colour
+      // The FILAMENT's own resolved identity, tracked spool first, then the
+      // tray, is authoritative for who the filament is (label, brand, colour
       // naming); a matched profile only decides which slicing preset to use.
       // Deriving the brand/label from the profile is what labelled custom
       // filament "Bambu Lab ..." and unlocked marketing colours.
@@ -1109,7 +1125,7 @@ export function narrowMaterialOptions(options: SliceMaterialOption[], materialTy
 }
 
 /**
- * The material type a preset is FILTERED and LABELLED by — BambuStudio's derived
+ * The material type a preset is FILTERED and LABELLED by: BambuStudio's derived
  * display type, not the preset's raw `filament_type`.
  *
  * A support preset is typed by its base polymer (`filament_type: ["PLA"]`) plus a
@@ -1200,7 +1216,7 @@ export function extractMaterialBrand(value: string): string {
  * are ANDed so "bambu pla basic" narrows instead of widening.
  *
  * `displayValue` is the text the field shows for the current selection. A query equal to it means
- * the user has opened a filled field without typing, which must list EVERYTHING — otherwise
+ * the user has opened a filled field without typing, which must list EVERYTHING, otherwise
  * clicking in to change your mind offers only the option you already have. MUI applies that rule to
  * its own filter by blanking the query, but only when the input matches `getOptionLabel`; this
  * picker displays the branded alias while `getOptionLabel` returns the plain one, so the rule never
@@ -1237,11 +1253,11 @@ export function buildProfileMaterialOptionId(profileId: string): string {
  * BambuStudio's `update_compatible(Always)` instead re-selects among the newly compatible presets,
  * and its `PreferedFilamentsProfileMatch` gives a matching preset ALIAS priority over everything
  * else (`std::numeric_limits<int>::max()`). The alias is the product name without the `@<printer>`
- * suffix, which is exactly what `presetLabel` carries — so "Bambu PLA Basic @BBL P1P" hands over to
+ * suffix, which is exactly what `presetLabel` carries, so "Bambu PLA Basic @BBL P1P" hands over to
  * "Bambu PLA Basic @BBL A1" and the material survives the switch.
  *
  * @returns the option id to use instead, or null when no compatible option shares the alias (the
- *   vendor publishes no variant for this machine) — the caller then falls back to the file's own
+ *   vendor publishes no variant for this machine): the caller then falls back to the file's own
  *   default, which is the honest answer.
  */
 export function repointMaterialOptionToCompatibleAlias(
@@ -1253,9 +1269,19 @@ export function repointMaterialOptionToCompatibleAlias(
   const profileId = optionId.slice('profile:'.length)
   const previous = allProfiles.find((profile) => profile.id === profileId)
   if (!previous || previous.kind !== 'filament') return null
-  const alias = formatSlicingPresetBrandedName(previous)
+  // Both sides through `slicingPresetAlias`, never a display label: it is the one form derived from
+  // the NAME alone, so a preset still matches itself when one side declares a vendor and the other
+  // does not (an installed profile against the project preset for the same material). Matching on
+  // `presetLabel` meant a Polymaker material silently failed to hand over and fell back to the
+  // file's default, where a Bambu one survived.
+  const alias = slicingPresetAlias(previous)
   if (!alias) return null
-  return options.find((option) => option.source === 'manual' && option.presetLabel === alias)?.id ?? null
+  const aliasByProfileId = new Map(allProfiles.map((profile) => [profile.id, slicingPresetAlias(profile)]))
+  return options.find((option) =>
+    option.source === 'manual'
+    && option.profileId != null
+    && aliasByProfileId.get(option.profileId) === alias
+  )?.id ?? null
 }
 
 export function hasLoadedMaterialDetails(trayName: string | null, filamentType: string | null, color: string | null): boolean {
@@ -1278,8 +1304,8 @@ export function ensureOptionValues(values: string[], fallbacks: string[]): strin
 /**
  * The target model to start from: the 3MF's own, or `'unknown'` when the project has not said yet.
  *
- * `'unknown'` is the codebase's established "not known" value — compatibility checks short-circuit
- * on it and `canonicalBambuModelKey` maps it to null — so an unresolved target behaves as absent
+ * `'unknown'` is the codebase's established "not known" value, compatibility checks short-circuit
+ * on it and `canonicalBambuModelKey` maps it to null, so an unresolved target behaves as absent
  * rather than as a specific machine.
  *
  * It deliberately does NOT fall back to the first available model. That guess produced a

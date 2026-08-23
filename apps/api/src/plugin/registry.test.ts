@@ -407,7 +407,7 @@ test('a fresh install defaults plugins to disabled even when boot has already wr
   const originalSetting = prisma.setting
   // The real shape of the bug: on a self-hosted build `registerLicenseEnforcement()`
   // stamps `license:first-run-at` from module scope, so by the time the first plugin
-  // registers the table is no longer empty — while no plugin has ever run.
+  // registers the table is no longer empty, while no plugin has ever run.
   const rows = new Map<string, string>([['license:first-run-at', new Date(0).toISOString()]])
 
   Object.defineProperty(prisma, 'setting', {

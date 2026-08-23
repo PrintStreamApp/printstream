@@ -2,7 +2,7 @@
  * Part-row wiring in the object list.
  *
  * A part is addressed by its ORDINAL within its object (`partIndex`), never by
- * `componentObjectId` — that is the MESH it references, and BambuStudio writes the same id for
+ * `componentObjectId`, that is the MESH it references, and BambuStudio writes the same id for
  * every volume sharing a mesh. Both are `number`, so handing a callback the wrong one type-checks
  * cleanly and fails only at runtime: selection lands on the first part sharing the mesh, and with
  * duplicate ids the other parts become unreachable. These tests pin the ordinal at every part-row
@@ -27,7 +27,7 @@ type ListProps = Parameters<typeof ObjectList>[0]
 type Instance = ListProps['instances'][number]
 
 /**
- * One object whose four parts share a single mesh id (21) after a distinct first part — the shape
+ * One object whose four parts share a single mesh id (21) after a distinct first part: the shape
  * of a real assembly with repeated modifier cubes, and the case where mesh id and ordinal diverge.
  * No `componentObjectId` here equals its ordinal, so a caller that passes the wrong one is caught
  * even without duplicates.

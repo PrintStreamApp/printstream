@@ -1,6 +1,6 @@
 /**
  * Presentation helpers for the H2C nozzle-changer (rack) surfaces: the printer
- * card chip and the controls-dialog section. Pure formatting only — the rack
+ * card chip and the controls-dialog section. Pure formatting only: the rack
  * data comes from `PrinterStatus.nozzleRack` (see the shared contract), which is
  * `null` on every non-H2C machine, so callers must null-check first.
  */

@@ -6,7 +6,7 @@ import { bakeClientThreeMf } from './clientThreeMfBake'
 import { openThreeMfArchive } from './threeMfArchive'
 
 /**
- * These cover the browser's half of the bake — the ZIP layer and the copy pass. What the output
+ * These cover the browser's half of the bake: the ZIP layer and the copy pass. What the output
  * CONTAINS is decided by the shared plan, which the api's 124-test bake suite already exercises;
  * what is unproven here is that applying that plan with fflate produces a valid, complete archive.
  */

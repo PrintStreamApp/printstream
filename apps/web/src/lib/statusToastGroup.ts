@@ -1,5 +1,5 @@
 /**
- * Aggregate presentation for a grouped status toast — the one line that stands
+ * Aggregate presentation for a grouped status toast: the one line that stands
  * in for N jobs while they are collapsed.
  *
  * Owns two rules the three job-toast surfaces (dispatch, slicing, deletes) used
@@ -17,7 +17,7 @@ export type StatusToastColor = 'neutral' | 'primary' | 'success' | 'warning' | '
 
 /** The slice of a toast item this module reasons about. */
 export interface StatusToastGroupMember {
-  /** Still running (queued counts as running — it is work that has not landed). */
+  /** Still running (queued counts as running, it is work that has not landed). */
   active: boolean
   color: StatusToastColor
   /** Percent 0-100, or `null` while running with no reported extent. */

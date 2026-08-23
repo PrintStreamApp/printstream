@@ -82,7 +82,7 @@ export const wsResourceChangedEventSchema = z.object({
     'print-queue',
     'slicing',
     // The slicer PROFILE catalogue (machines/processes/filaments). Emitted only when profiles
-    // actually change (custom profile create/delete), NOT on slice progress — so the slow profiles
+    // actually change (custom profile create/delete), NOT on slice progress, so the slow profiles
     // query is not refetched sub-second for the duration of a slice. Distinct from 'slicing', which
     // fires on every job state/progress change and invalidates only the jobs list.
     'slicing.profiles',
@@ -115,7 +115,7 @@ export type WsBridgeDebugCaptureEvent = z.infer<typeof wsBridgeDebugCaptureEvent
 /**
  * Live on-disk backup state for a bridge. Emitted when a backup starts,
  * finishes, or fails so the settings controls update in real time without
- * polling — a full first backup can run for minutes.
+ * polling, a full first backup can run for minutes.
  */
 export const wsBridgeBackupEventSchema = z.object({
   type: z.literal('bridge.backup'),

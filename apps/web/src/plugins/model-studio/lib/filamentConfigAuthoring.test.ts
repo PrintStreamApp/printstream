@@ -97,13 +97,13 @@ test('applyRepairedFilamentConfigs is a no-op without a pin', () => {
 })
 
 /**
- * Session ids equal baked slots only until a mid-session remove or reorder — after that, reading a
+ * Session ids equal baked slots only until a mid-session remove or reorder: after that, reading a
  * session-keyed record by position hands one slot another slot's data (a slot once inherited the
  * preset of whichever slot happened to share its position). The boundary conversion is what keeps
  * the authoring functions' position reads honest.
  */
 test('rekeyByBakedSlot follows a reordered session list', () => {
-  // Session slots [3, 1, 2] — the user dragged material 3 first; the save bakes them as slots 1..3.
+  // Session slots [3, 1, 2]: the user dragged material 3 first; the save bakes them as slots 1..3.
   assert.deepEqual(
     rekeyByBakedSlot({ 1: 'p-pla', 2: 'p-petg', 3: 'p-abs' }, [3, 1, 2]),
     { 1: 'p-abs', 2: 'p-pla', 3: 'p-petg' }

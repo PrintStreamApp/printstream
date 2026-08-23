@@ -5,7 +5,7 @@
  *
  * The contract callers rely on: the positional input is the LAST occurrence of the input path in
  * the arg list, and everything generated goes immediately before it. That matters because the
- * args template can mention `{input}` more than once — the default template ends
+ * args template can mention `{input}` more than once: the default template ends
  * `… --export-json {input} {input}`, where the first occurrence is `--export-json`'s VALUE and
  * only the second is the positional. Splicing before the first occurrence would land the
  * generated args between `--export-json` and its filename, silently corrupting both. Today that
@@ -22,7 +22,7 @@ export function ensurePositionalInputArgument(args: string[], inputPath: string)
 /**
  * Splice generated arguments immediately before the positional input (the last occurrence of
  * `inputPath`), so they can never be mistaken for a preceding flag's value. Falls back to
- * appending when the input is absent — callers normally run {@link ensurePositionalInputArgument}
+ * appending when the input is absent: callers normally run {@link ensurePositionalInputArgument}
  * first, which makes that unreachable.
  */
 export function insertArgsBeforePositionalInput(args: string[], inputPath: string, extraArgs: string[]): string[] {

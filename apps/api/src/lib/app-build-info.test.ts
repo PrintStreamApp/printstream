@@ -7,7 +7,7 @@ import type { AppUpdateInfo } from '@printstream/shared'
 test('the native binary revision env feeds the build identity when no metadata file exists', () => {
   // The native app has no Docker build ARGs to write app-build-metadata.json;
   // its host publishes the baked revision as env. Without this fallback the
-  // native footer rendered nothing at all — update notice included.
+  // native footer rendered nothing at all: update notice included.
   const previous = env.PRINTSTREAM_SERVER_BUILD_REVISION
   resetAppBuildInfoCache()
   env.PRINTSTREAM_SERVER_BUILD_REVISION = 'nativerev1234'

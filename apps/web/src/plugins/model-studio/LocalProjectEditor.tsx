@@ -2,7 +2,7 @@
  * The 3MF editor, hosted against a file on the user's own machine.
  *
  * This is the assembly point: it opens a file the user picked, builds the four local
- * implementations of the editor's seams — project source, import store, save target, materials —
+ * implementations of the editor's seams, project source, import store, save target, materials,
  * and hands them to the SAME `EditorView` the library uses. There is deliberately no second editor
  * and no reduced feature set; what differs is only where bytes come from and go.
  *
@@ -10,7 +10,7 @@
  * writes back through the handle the user granted (or downloads a copy where the browser has no
  * File System Access API).
  *
- * Hosts that mount this must provide a React Query client — `EditorView` loads through queries even
+ * Hosts that mount this must provide a React Query client: `EditorView` loads through queries even
  * when the source is local. See the public shell.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -90,7 +90,7 @@ export function LocalProjectEditor({ intro }: LocalProjectEditorProps) {
   const projectRef = useRef<ClientThreeMfProject | null>(null)
   projectRef.current = project
   // The OPENED archive, not null: the bake copies through every entry it does not rewrite, so baking
-  // without it would save a 3MF containing only the scaffold — all geometry lost.
+  // without it would save a 3MF containing only the scaffold, all geometry lost.
   const archiveRef = useCallback(() => projectRef.current?.archive ?? null, [])
 
   if (!project) {

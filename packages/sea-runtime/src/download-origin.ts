@@ -4,7 +4,7 @@
  * For a SEA distribution whose job is to CONNECT somewhere: one artifact is
  * served to every environment, so the binary carries a baked default that is
  * right for the cloud and wrong everywhere else, and nothing it receives later
- * can correct it. The bridge is that case — it registers with a server before
+ * can correct it. The bridge is that case, it registers with a server before
  * it holds anything signed.
  *
  * The self-hosted server app deliberately does NOT use this. Its equivalent
@@ -14,7 +14,7 @@
  * it; this is the fallback for when none does.
  *
  * This half is Windows' Mark of the Web (`Zone.Identifier:HostUrl`), and it is
- * genuinely best-effort — notably NOT durable, because a guided install deletes
+ * genuinely best-effort, notably NOT durable, because a guided install deletes
  * the mark before elevating (SmartScreen refuses to elevate a marked
  * executable), so it is gone by the second attempt. Callers read the stamped
  * FILENAME first, which survives that; the filename codec lives in
@@ -23,7 +23,7 @@
  *
  * Null is the ordinary answer for a cloud download or a locally built binary.
  * The caller then keeps its baked default, which is the behaviour that predates
- * this module — so provenance can only ever add accuracy, never break an install.
+ * this module, so provenance can only ever add accuracy, never break an install.
  */
 import { readFileSync } from 'node:fs'
 

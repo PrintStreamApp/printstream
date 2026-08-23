@@ -9,7 +9,7 @@
  *
  * Guards must be cheap and synchronous; they run on every print
  * dispatch and reprint. They are intentionally not part of the plugin
- * lifecycle (no install/uninstall plumbing) — a plugin opts out of
+ * lifecycle (no install/uninstall plumbing), a plugin opts out of
  * guarding by removing its guard function via the unsubscribe handle
  * during shutdown. Built-in core code never touches this module.
  */

@@ -6,7 +6,7 @@
  * readings and ships them as a `bridge.metrics` snapshot over the existing,
  * already-authenticated bridge -> API session (see `runtime.ts`); the API
  * re-exposes them on its Prometheus endpoint, labelled by bridge/workspace. This
- * piggyback avoids any inbound scrape route — remote bridges sit behind NAT and
+ * piggyback avoids any inbound scrape route: remote bridges sit behind NAT and
  * cannot be scraped directly. Mirrors the log-forwarding pattern in
  * `bridge-logs.ts`.
  */

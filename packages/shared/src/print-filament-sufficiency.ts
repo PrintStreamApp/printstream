@@ -1,5 +1,5 @@
 /**
- * "Will the slots this print mapped actually last?" — the plate-level low-filament
+ * "Will the slots this print mapped actually last?": the plate-level low-filament
  * rule, shared by the print dialogs' confirmation and the API's dispatch guard.
  *
  * Owns: which mapped slots are short, and the sentence describing one. It owns
@@ -8,7 +8,7 @@
  * check can never disagree) nor slot labelling (each caller has its own).
  *
  * Contract: only slots that can be measured are ever reported. A spool with no
- * RFID tag and no tracked figure is UNGRADEABLE, never "empty" — see
+ * RFID tag and no tracked figure is UNGRADEABLE, never "empty": see
  * `knownRemainGrams`. A slot the printer's auto-refill chains to a mate is judged
  * on the pool's combined total, so a backed-up slot is reported only when the
  * whole pool falls short. That is what "too little, and no backup" means here.
@@ -16,7 +16,7 @@
  * Why it never hard-blocks more than the browser warned about: the API cannot see
  * filament-manager's tracked grams (core must not import a plugin), so it grades
  * on the RFID percent alone and reads every manually-set spool as ungradeable.
- * It can therefore only ever report a SUBSET of what the dialog showed — the
+ * It can therefore only ever report a SUBSET of what the dialog showed: the
  * direction that matters, since a refusal the dialog never displayed would be a
  * print the user cannot get out of.
  */
@@ -31,7 +31,7 @@ export interface LowFilamentSlot {
   trayIndex: number
   /** What the plate states it will consume. */
   requiredGrams: number
-  /** What the slot holds — or its whole refill pool, when `pooled`. */
+  /** What the slot holds, or its whole refill pool, when `pooled`. */
   remainGrams: number
   /**
    * The slot is chained to at least one auto-refill mate and the pool is STILL
@@ -55,7 +55,7 @@ export interface LowFilamentInput {
  * Every mapped slot that will run out, worst shortfall first.
  *
  * Empty when nothing is mapped, nothing states its usage, or no slot can be
- * measured — an empty result means "nothing to warn about", never "checked and
+ * measured, an empty result means "nothing to warn about", never "checked and
  * fine", because most of these signals are simply absent for third-party spools.
  */
 export function findLowFilamentSlots({
@@ -116,6 +116,6 @@ export function lowFilamentIssueSentence(issue: LowFilamentSlot, slotLabel: stri
   const needed = Math.round(issue.requiredGrams)
   return remaining < needed
     ? `${slotLabel}${backup} has about ${remaining}g of ${material}left, and this plate needs ${needed}g.`
-    : `${slotLabel}${backup} has about ${remaining}g of ${material}left — barely over the ${needed}g`
+    : `${slotLabel}${backup} has about ${remaining}g of ${material}left: barely over the ${needed}g`
       + ' this plate needs, with nothing spare for purging.'
 }

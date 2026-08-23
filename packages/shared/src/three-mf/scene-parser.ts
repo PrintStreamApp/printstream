@@ -1,20 +1,20 @@
 /**
- * 3MF (Bambu flavor) scene parser — the pure entry-strings→plated-scene core.
+ * 3MF (Bambu flavor) scene parser: the pure entry-strings→plated-scene core.
  *
  * Sibling of `index-parser.ts` and split for the same reason: the parse is pure string/JSON/regex
  * work, so it belongs next to the index parser where every consumer can reach it, while each app
  * keeps its own ZIP I/O and caching. Consumers today:
- *  - `apps/api/src/lib/three-mf-reader.ts` (`readSceneManifest`) — Node ZIP I/O + an LRU cache.
- *  - `apps/web` public 3MF editor — unzips in the browser so the file never leaves the machine.
+ *  - `apps/api/src/lib/three-mf-reader.ts` (`readSceneManifest`): Node ZIP I/O + an LRU cache.
+ *  - `apps/web` public 3MF editor: unzips in the browser so the file never leaves the machine.
  *
  * Where the index parser answers "what plates and filaments does this project have", this answers
- * "where does every object sit on plate N" — the flattened render list (`parts`), the editable
+ * "where does every object sit on plate N": the flattened render list (`parts`), the editable
  * per-object grouping (`instances`), the bed and its unprintable zones, and the prime tower.
  *
  * Deliberately Node-free: no `node:` imports, no Buffer, no DOM. Feed it the five already-unzipped
  * entries listed on {@link ThreeMfSceneEntries}.
  *
- * Coordinates: `parts[].transform` and `instances[].transform` are PLATE-LOCAL — the 3MF's
+ * Coordinates: `parts[].transform` and `instances[].transform` are PLATE-LOCAL: the 3MF's
  * build-item transform with the plate-grid origin removed, so a viewer/editor manipulates objects
  * relative to the plate centre. The arrangement writer (`three-mf-scene-builder.ts`) re-adds that
  * origin at save/slice time; the two must stay inverses of each other.
@@ -44,19 +44,19 @@ import {
 
 /**
  * The already-unzipped 3MF entries the scene parse needs. Only `rootModelXml` and
- * `modelSettingsXml` are required — the rest degrade to sensible defaults (generic bed, no brim
+ * `modelSettingsXml` are required: the rest degrade to sensible defaults (generic bed, no brim
  * ears, no layer G-code), which is what lets a vanilla CAD-exported 3MF still render.
  */
 export interface ThreeMfSceneEntries {
-  /** `3D/3dmodel.model` — object components, build items, and their transforms. */
+  /** `3D/3dmodel.model`: object components, build items, and their transforms. */
   rootModelXml: string
-  /** `Metadata/model_settings.config` — plates, instances, per-object/part metadata. */
+  /** `Metadata/model_settings.config`: plates, instances, per-object/part metadata. */
   modelSettingsXml: string
-  /** `Metadata/project_settings.config` — filament palette, bed, prime tower. */
+  /** `Metadata/project_settings.config`: filament palette, bed, prime tower. */
   projectSettingsJson?: string | null
-  /** `Metadata/brim_ear_points.txt` — manual brim ears. */
+  /** `Metadata/brim_ear_points.txt`: manual brim ears. */
   brimEarPointsText?: string | null
-  /** `Metadata/custom_gcode_per_layer.xml` — layer filament changes and pauses. */
+  /** `Metadata/custom_gcode_per_layer.xml`: layer filament changes and pauses. */
   customGcodeText?: string | null
 }
 
@@ -137,7 +137,7 @@ export interface ThreeMfPrimeTowerSizing {
   needWipeTower: boolean
   /**
    * Vase mode. BambuStudio suppresses the prime tower entirely in spiral mode unless a forcing
-   * condition (wrapping detection / smooth timelapse) applies — see `Print::has_wipe_tower`, whose
+   * condition (wrapping detection / smooth timelapse) applies: see `Print::has_wipe_tower`, whose
    * final term is `!spiral_mode && filament_diameter.size() > 1`.
    */
   spiralMode: boolean
@@ -217,7 +217,7 @@ const RAW_SCENE_BED_DIMENSIONS_BY_PRINTER_MODEL: Partial<Record<PrinterModel, { 
   A1mini: { width: 180, depth: 180 },
   A2L: { width: 330, depth: 320 },
   // Bed sizes from BambuStudio's per-model `printable_area`. The dual-nozzle models also
-  // have per-extruder reach below — the bed width MUST match the extruder union or a
+  // have per-extruder reach below: the bed width MUST match the extruder union or a
   // phantom unreachable strip appears past the last nozzle-only zone.
   X2D: { width: 256, depth: 256 },
   H2D: { width: 350, depth: 320 },
@@ -279,7 +279,7 @@ const NOZZLE_ONLY_ZONE_LABELS = ['Left nozzle only area', 'Right nozzle only are
  *
  * @param overrideModel Render the scene against this printer's bed instead of the project's own
  *   (the slice dialog's target). Null/undefined keeps the project's model.
- * @throws when the 3MF carries no plated scene metadata at all — there is no meaningful empty
+ * @throws when the 3MF carries no plated scene metadata at all, there is no meaningful empty
  *   scene to return, and callers surface this as "this file cannot be opened in the editor".
  */
 export function buildSceneManifest(
@@ -332,7 +332,7 @@ export function buildSceneManifest(
     for (const component of components) {
       const metadata = partMetadata.get(component.objectId) ?? null
       const subtype = metadata?.subtype ?? null
-      // Helper volumes are rendered (translucently) too, so keep them — but they never define
+      // Helper volumes are rendered (translucently) too, so keep them, but they never define
       // the instance's name/material. Only a modifier among them carries a filament of its own
       // (it can change the material printed inside its region); a support blocker/enforcer or
       // negative volume has none, and must not inherit one.
@@ -368,11 +368,11 @@ export function buildSceneManifest(
     }
     // Instance-level filament: only when EVERY printed part carries the same explicit
     // filament (single-part objects, uniformly-assigned assemblies, and objects whose
-    // parts all inherit an object-level extruder — part metadata inherits that above).
+    // parts all inherit an object-level extruder: part metadata inherits that above).
     // Picking the first non-null part here mislabeled partially-assigned objects: the
     // editor seeds an unassigned part's filament from the instance, so after reassigning
     // SOME parts and saving, a reload painted the untouched parts with the reassigned
-    // sibling's filament — and the next save baked that onto every part.
+    // sibling's filament, and the next save baked that onto every part.
     const firstPrintedFilamentId = printedPartFilamentIds[0] ?? null
     const instanceFilamentId = firstPrintedFilamentId != null
       && printedPartFilamentIds.every((id) => id === firstPrintedFilamentId)
@@ -441,7 +441,7 @@ function parsePrimeTower(projectSettingsJson: string | null, plateIndex: number)
   // (`WIPE_TOWER_DEFAULT_X_POS` / `_Y_POS`, PartPlate.cpp). Mid-bed, NOT hard against the left
   // edge: the previous 15/220 put the tower inside a dual-nozzle machine's left-nozzle-only strip
   // (an H2D's shared area starts at x=25), so a project that never positioned its tower opened
-  // unprintable — and saving baked that 15 in. See `lib/primeTowerReach.ts` for why the tower,
+  // unprintable, and saving baked that 15 in. See `lib/primeTowerReach.ts` for why the tower,
   // unlike an object, may never sit in such a strip.
   const x = xs[index] ?? xs[0] ?? 165
   const y = ys[index] ?? ys[0] ?? 250
@@ -520,8 +520,8 @@ export function parseRootModelComponents(xml: string): Map<number, ThreeMfRootCo
       components.push({ entryPath, objectId, transform })
     }
 
-    // Objects that carry their mesh inline (no sub-model components) — including the imported meshes
-    // the editor injects — are treated as a single self-referential component so the scene reader and
+    // Objects that carry their mesh inline (no sub-model components), including the imported meshes
+    // the editor injects, are treated as a single self-referential component so the scene reader and
     // the web geometry loader pick them up from the root model entry.
     if (components.length === 0 && /<mesh\b/.test(block)) {
       components.push({ entryPath: '3D/3dmodel.model', objectId: rootObjectId, transform: [...IDENTITY_THREE_MF_TRANSFORM] })
@@ -542,7 +542,7 @@ export const BRIM_EAR_POINTS_ENTRY = 'Metadata/brim_ear_points.txt'
  */
 export function parseRootModelObjectIdOrder(xml: string): number[] {
   // Brim-ear ordinals are over the PLACED root objects (those with a build <item>), in document
-  // order — NOT every <object>. A multi-solid import injects component mesh objects that aren't
+  // order, NOT every <object>. A multi-solid import injects component mesh objects that aren't
   // build-placed; counting them would shift the ordinal and map ears to the wrong object.
   const buildItemIds = new Set<number>()
   const buildBlock = xml.match(/<build\b[^>]*>[\s\S]*?<\/build>/)?.[0] ?? ''
@@ -649,13 +649,13 @@ export function parseModelSettingsScene(xml: string): {
     // Object-level metadata lives BEFORE the first `<part>`; scanning the whole block would
     // misread a PART's name/extruder as the object's. That leak made an extruder-less part
     // inherit its sibling's reassigned extruder (via the `?? objectExtruderId` below), so a
-    // partially-reassigned object reopened — and re-saved — with every part on one material.
+    // partially-reassigned object reopened, and re-saved, with every part on one material.
     const objectHead = objectHeadOf(block)
     const objectName = readModelSettingsMetadataString(objectHead, 'name')
     if (objectName != null) objectNamesById.set(objectId, objectName)
     const objectExtruderId = readModelSettingsMetadataInt(objectHead, 'extruder')
 
-    // Per-object PROCESS overrides are object-level `<metadata>` too — the editor re-seeds them
+    // Per-object PROCESS overrides are object-level `<metadata>` too: the editor re-seeds them
     // into its per-object gear on reopen. Shared with the index parser (and with the WRITER it has
     // to round-trip against) so the three cannot disagree about what counts as an override.
     const overrides = readObjectProcessOverridesFromHead(objectHead)
@@ -756,7 +756,7 @@ export function extractSceneBed(
     if (fallbackArea) excludeAreas.push({ polygon: fallbackArea.map((point) => ({ ...point })), label: null })
   }
 
-  // Per-extruder reachable areas — used for the bed extent and the "nozzle only" zones.
+  // Per-extruder reachable areas: used for the bed extent and the "nozzle only" zones.
   let extruderAreas = parseExtruderPrintableAreas(record.extruder_printable_area)
   if (extruderAreas.length === 0 && fallbackModel) {
     const fallbackAreas = BBL_FALLBACK_EXTRUDER_PRINTABLE_AREA_BY_MODEL[fallbackModel]
@@ -1009,7 +1009,7 @@ function hasOneToOneSceneFilamentMap(filamentMaps: number[]): boolean {
  * An unparseable token becomes `0` (which both readers already treat as "no
  * mapping") rather than being filtered out: dropping it would shift every later
  * slot one position left, so each part after the bad entry would resolve to the
- * WRONG filament — and the editor would then write that wrong slot back into
+ * WRONG filament, and the editor would then write that wrong slot back into
  * `model_settings.config` on save. A silent wrong-material save is far worse than
  * an ignored entry.
  */

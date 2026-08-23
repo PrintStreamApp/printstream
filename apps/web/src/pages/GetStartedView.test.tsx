@@ -79,7 +79,7 @@ test('GetStartedView shows the theme and support-access tips on cloud installs',
 
 test('GetStartedView points a new workspace at the plugin catalogue', async () => {
   // Most plugins ship disabled, so this card is the only thing surfacing them
-  // outside settings — it must render on self-hosted as well as cloud.
+  // outside settings, it must render on self-hosted as well as cloud.
   for (const selfHosted of [false, true]) {
     const view = renderView({ selfHosted })
     const pluginTip = await view.findByText('Add more features')
@@ -101,7 +101,7 @@ test('GetStartedView renders the tips without links when the viewer cannot open 
   const themeTip = await view.findByText('Make it yours')
   assert.equal(themeTip.closest('a'), null)
   assert.equal(view.getByText('Keep it private').closest('a'), null)
-  // Still shown, just not actionable — the card explains what plugins are for
+  // Still shown, just not actionable: the card explains what plugins are for
   // even to someone who cannot turn one on.
   assert.equal(view.getByText('Add more features').closest('a'), null)
 })

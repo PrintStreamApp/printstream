@@ -30,7 +30,7 @@ export function buildApiUrlWithContext(path: string, apiBaseUrl: string, workspa
 /**
  * The socket also carries this tab's id as `client`. It is how the API knows the tab is still
  * open: an owned slicing job is cancelled once its tab's last socket has stayed gone (see
- * `apps/api/src/lib/client-sessions.ts`). Not an auth signal — anyone can send any value; it only
+ * `apps/api/src/lib/client-sessions.ts`). Not an auth signal: anyone can send any value; it only
  * ever narrows what a tab is shown or reaps work that tab itself started.
  */
 export function buildWebSocketUrl(path = '/ws'): string {

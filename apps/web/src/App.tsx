@@ -181,12 +181,12 @@ const baseCoreTabs: ReadonlyArray<ShellTab> = [
 ]
 
 // Default left-to-right order for the leading plugin tabs (Orders, Filament,
-// then Calibration — Calibration sits after Filament); any other plugin tab falls
+// then Calibration: Calibration sits after Filament); any other plugin tab falls
 // back to alphabetical after these. The final interleaving with core tabs is
 // governed by DEFAULT_NAV_TAB_ORDER.
 const PLUGIN_TAB_DEFAULT_ORDER: readonly string[] = ['/orders', '/filament', '/calibration']
 
-// Register built-in plugins when this (lazy-loaded) app-shell chunk first loads — moved out of
+// Register built-in plugins when this (lazy-loaded) app-shell chunk first loads: moved out of
 // main.tsx so a cold load of a marketing page never pulls in the plugin graph. Runs once at module
 // import, before <App> first renders (which reads webPluginRegistry.routes()).
 registerBuiltinPlugins()
@@ -636,7 +636,7 @@ export function App() {
   const platformWorkspaceLandingRoute = buildPlatformWorkspacePath()
   const publicDemoLandingRoute = buildWorkspacePath(PUBLIC_DEMO_WORKSPACE_SLUG, '/printers')
   const isWorkspaceSelectionRoute = routeWorkspaceSlug == null && appPathname === buildWorkspaceSelectionPath()
-  // The connect-bridge deep link is a focused, workspace-agnostic landing — show
+  // The connect-bridge deep link is a focused, workspace-agnostic landing: show
   // it with the same clean chrome as the workspace chooser (no tabs/workspace
   // label), not wrapped in the workspace or platform shell.
   const isConnectBridgeRoute = routeWorkspaceSlug == null && appPathname === '/connect-bridge'
@@ -700,7 +700,7 @@ export function App() {
   const effectiveNavTabOrder = deviceNavTabOrderOverride ?? sharedNavTabOrder
   const settingsTab = useMemo(() => coreTabs.find((tab) => tab.value === '/settings') ?? null, [coreTabs])
   // Core content tabs resolve on auth bootstrap but plugin tabs (Queue, Orders,
-  // Filament) only after the plugin catalog query settles — a later, separate
+  // Filament) only after the plugin catalog query settles, a later, separate
   // round-trip. Rendering as each source arrives makes tabs visibly pop into the
   // bar one wave after another (worst on a workspace switch, which clears the
   // catalog first). Hold the whole content-tab set until the catalog has settled
@@ -879,7 +879,7 @@ export function App() {
    * The billing scope carries no content tabs of its own.
    *
    * It is neither a workspace nor the platform, so it must not inherit either
-   * one's navigation — which it otherwise does, because the shell keeps showing
+   * one's navigation, which it otherwise does, because the shell keeps showing
    * whichever context the browser was last in. Landing on a customer's licences
    * under a row of Printers/Library/Jobs tabs (or the platform's Workspaces and
    * Suggestions) invites a click that leaves the page it was meant to be.
@@ -890,7 +890,7 @@ export function App() {
    * The billing scope's own tabs.
    *
    * Its sections ARE the scope's navigation, so they take the shell's main tab
-   * row exactly as a workspace's pages do — the workspace content tabs are what
+   * row exactly as a workspace's pages do: the workspace content tabs are what
    * belonged to a scope this is not, and they are the ones dropped. The
    * switcher and account tabs stay: dropping every tab once took the switcher
    * with it and left the scope with no exit but the browser's back button.
@@ -904,7 +904,7 @@ export function App() {
             ...(entry.description ? { description: entry.description } : {}),
             icon: BILLING_SCOPE_SECTION_ICONS[entry.id],
             // Like every workspace tab: the mobile dock renders icon-only
-            // (label in the tooltip) — with labels, seven tabs overflow a
+            // (label in the tooltip), with labels, seven tabs overflow a
             // 375px dock.
             mobileIcon: BILLING_SCOPE_SECTION_ICONS[entry.id],
             // Settings is a gear everywhere else in the app, so it is a gear
@@ -955,7 +955,7 @@ export function App() {
   const appFooterTrailing = (
     <Stack spacing={0.75} alignItems="center" useFlexGap>
       <Stack direction="row" spacing={1} useFlexGap alignItems="center" justifyContent="center" sx={{ flexWrap: 'wrap' }}>
-        {/* Platform users staff the support inbox — hide the help entry point there. */}
+        {/* Platform users staff the support inbox: hide the help entry point there. */}
         {!inPlatformMode && <HelpFeedbackButton />}
         <PluginSlot name="shell.footer" />
       </Stack>
@@ -1394,7 +1394,7 @@ export function App() {
                 {/*
                   Billing and Messages are their own pages, not sections of
                   Account. Registered only when a plugin actually fills the
-                  slot, so a public build — where both are empty — has no route
+                  slot, so a public build (where both are empty) has no route
                   that renders a blank page.
                 */}
                 {/*
@@ -1426,7 +1426,7 @@ export function App() {
                 />
                 {/* The platform's copy of the workspace route above. An
                     operator has an account of their own and reaches it with no
-                    workspace selected, so the slot renders unwrapped — its list
+                    workspace selected, so the slot renders unwrapped, its list
                     is scoped to the user, not to a workspace. Without this the
                     Account page's own Messages link matched no route and the
                     catch-all sent the click to the home page. */}
@@ -1483,7 +1483,7 @@ export function App() {
                   return <Route key={`${route.pluginName}:scoped:${route.path}`} path={workspaceScopedRoutePath(route.path)} element={renderWorkspaceContextElement(<Element />)} />
                 })}
                 {/* A known plugin route (e.g. /orders) on a cold load isn't mounted yet while the plugin
-                    catalog resolves — wait rather than redirect home. See catchAllRouteDecision. */}
+                    catalog resolves: wait rather than redirect home. See catchAllRouteDecision. */}
                 <Route
                   path="*"
                   element={catchAllDecision === 'wait'

@@ -1,6 +1,6 @@
 /**
  * MEASURED before this existed: opening a three-material project fired nine `resolve-filament`
- * round trips for three distinct presets, several of them concurrent duplicates — the badge, the
+ * round trips for three distinct presets, several of them concurrent duplicates: the badge, the
  * repair, the save's authoring pass and the parent lookup each resolved independently.
  */
 import assert from 'node:assert/strict'
@@ -35,7 +35,7 @@ test('concurrent lookups share one request', async () => {
   assert.equal(calls, 1, 'three simultaneous asks must be one request')
 })
 
-/** `targetId` is part of the identity — the same preset resolves differently per slicer version. */
+/** `targetId` is part of the identity, the same preset resolves differently per slicer version. */
 test('the same preset against a different target is a different entry', async () => {
   const cache = createBuiltinPresetCache()
   let calls = 0
@@ -58,7 +58,7 @@ test('kinds do not collide', async () => {
 })
 
 /**
- * A cached REJECTION would poison the preset for the life of the tab — the user would retry, get
+ * A cached REJECTION would poison the preset for the life of the tab: the user would retry, get
  * the same instant failure, and have no way to recover short of a reload.
  */
 test('a failed lookup is evicted so a retry can succeed', async () => {

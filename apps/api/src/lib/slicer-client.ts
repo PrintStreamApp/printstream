@@ -56,14 +56,14 @@ export interface SlicerRunResult {
 }
 
 /**
- * One live-progress poll's outcome. Distinguishing these is the whole point — see
+ * One live-progress poll's outcome. Distinguishing these is the whole point: see
  * {@link SlicerClient.progress} and the watchdog in `slicer-contact.ts`.
  *
- * - `output` — the instance answered; `lines` is its CLI output so far (possibly unchanged).
- * - `unclaimed` — no instance is bound to this job yet (queued), or it has just been released.
+ * - `output`: the instance answered; `lines` is its CLI output so far (possibly unchanged).
+ * - `unclaimed`, no instance is bound to this job yet (queued), or it has just been released.
  *   Says nothing about health.
- * - `unknown` — the bound instance answered 404: it is running, and this job is not on it.
- * - `unreachable` — the instance could not be reached or returned an error status.
+ * - `unknown`: the bound instance answered 404: it is running, and this job is not on it.
+ * - `unreachable`: the instance could not be reached or returned an error status.
  */
 export type SlicerProgressResult =
   | { kind: 'output'; lines: SlicingOutputLine[] }
@@ -256,7 +256,7 @@ export class SlicerClient {
   /**
    * The 3D build-plate mesh (binary STL) for a printer model, from the slicer's bundled
    * BambuStudio resources, or null when this target has none. Decoration for the editor's bed
-   * view, so a miss is normal and logged at debug volume only — the client falls back to the
+   * view, so a miss is normal and logged at debug volume only: the client falls back to the
    * plain millimetre grid. See apps/slicer/src/bed-model.ts.
    */
   async bedModel(targetId: string | null | undefined, printerModel: string): Promise<Buffer | null> {
@@ -291,7 +291,7 @@ export class SlicerClient {
    * Returns `{}` rather than throwing when no slicer answers or the engine ships none: the
    * calculation degrades to Studio's colour formula, which is what Studio itself does with a
    * missing data file, so an install with no slicer still gets a working dialog. Parsing belongs to
-   * the shared `parseFlushVolumeDataset` — this only moves bytes. See apps/slicer/src/flush-data.ts.
+   * the shared `parseFlushVolumeDataset`, this only moves bytes. See apps/slicer/src/flush-data.ts.
    */
   async flushDatasets(targetId: string | null | undefined): Promise<Record<string, string>> {
     for (const baseUrl of this.baseUrls) {
@@ -326,7 +326,7 @@ export class SlicerClient {
    * can check our port against the engine that will actually slice (`evaluateFlushCalibration`).
    *
    * A diagnostic: null whenever the engine cannot be probed, which must never break the dialog it
-   * checks. The probe runs the CLI without slicing, but it is still a process spawn — callers cache
+   * checks. The probe runs the CLI without slicing, but it is still a process spawn: callers cache
    * it per target rather than calling it per interaction. See apps/slicer/src/flush-calibration.ts.
    */
   async flushCalibration(targetId: string | null | undefined): Promise<{ settingsJson: string; matrix: string[] } | null> {
@@ -366,7 +366,7 @@ export class SlicerClient {
   private async runOnInstance(baseUrl: string, input: SlicerRunInput): Promise<SlicerRunResult> {
     // The slice request travels to the slicer as a base64 HTTP header, so it must stay small.
     // The editor's per-plate thumbnails (base64 PNGs) are only needed by the API (it bakes them
-    // into the sliced output after the slice) — the slicer already receives the arranged 3MF, so
+    // into the sliced output after the slice): the slicer already receives the arranged 3MF, so
     // strip them from the envelope to avoid blowing the header size limit (HTTP 431).
     const slicerRequest = input.request.sceneEdit?.plateThumbnails
       ? { ...input.request, sceneEdit: { ...input.request.sceneEdit, plateThumbnails: undefined } }
@@ -475,7 +475,7 @@ export class SlicerClient {
    * (production runs two) and a slice lands on whichever is least busy. An
    * engine present on only some instances is therefore not usable: it would
    * slice or fail depending on routing. So an engine reads as installed only
-   * when EVERY instance has it, and a partial state surfaces as not-installed —
+   * when EVERY instance has it, and a partial state surfaces as not-installed,
    * which the install below then repairs.
    */
   async listEngines(): Promise<SlicerEngineListing | null> {
@@ -518,7 +518,7 @@ export class SlicerClient {
    * Both calls return promptly: the slicer answers an install with 202 and does
    * the download in the background, so nothing here waits on a multi-hundred-
    * megabyte transfer. Progress is read back through {@link listEngines}, which
-   * is also what makes a partial state visible — an engine reads as installed
+   * is also what makes a partial state visible, an engine reads as installed
    * only once every instance has it.
    *
    * Issued to all instances together. They are separate containers with
@@ -552,7 +552,7 @@ export class SlicerClient {
       }
     }))
     if (failures.length > 0) {
-      throw new Error(`Could not ${action} ${id} on ${failures.length} slicer instance(s) — ${failures.join('; ')}`)
+      throw new Error(`Could not ${action} ${id} on ${failures.length} slicer instance(s): ${failures.join('; ')}`)
     }
   }
 
@@ -597,7 +597,7 @@ export class SlicerClient {
   }): Promise<{ headers: Headers }> {
     const requestBody = Readable.toWeb(createReadStream(input.sourcePath)) as unknown as BodyInit
     // Bound the slice (the long call) by SLICING_REQUEST_TIMEOUT_MS combined with the caller's
-    // cancel signal — otherwise a slicer that stalls mid-stream leaves the job slicing forever,
+    // cancel signal, otherwise a slicer that stalls mid-stream leaves the job slicing forever,
     // holding a concurrency slot. The timeout aborts both the fetch and the body pipeline below.
     const signal = AbortSignal.any([input.signal, AbortSignal.timeout(env.SLICING_REQUEST_TIMEOUT_MS)])
     const requestInit: RequestInit & { duplex: 'half'; dispatcher: Agent } = {
@@ -706,7 +706,7 @@ function parseSlicerTargets(value: unknown): SlicingTargetDescriptor[] {
  *
  * Deliberately not a hand-written field list: this used to rebuild each summary
  * field by field, so every field added to `slicingPresetSummarySchema` was
- * silently dropped here on its way to the browser — `filamentIsSupport` and
+ * silently dropped here on its way to the browser: `filamentIsSupport` and
  * `layerHeight` both arrived at the API and never reached the slice dialog
  * (issue #66). Validating against the schema keeps this hop honest as the
  * contract grows.
@@ -745,7 +745,7 @@ function parseOutputLinesHeader(value: string | null | undefined): SlicingOutput
 
 /**
  * Parse the worker's slice output lines through the SHARED schema, for the same
- * reason as {@link parseProfiles} — a hand-listed field set silently drops
+ * reason as {@link parseProfiles}, a hand-listed field set silently drops
  * anything the contract grows (issue #66).
  *
  * `createdAt` is stamped here when the worker omitted it rather than rejecting

@@ -99,7 +99,7 @@ export function collectBulkOverridesResult(input: {
 
 /**
  * Merges a bulk result onto one member's existing override map. Pure; returns a new map (possibly
- * empty — whether an empty map is kept or deleted is the caller's storage convention).
+ * empty: whether an empty map is kept or deleted is the caller's storage convention).
  *
  * Generic over the value type because object overrides store `string | string[]` while part
  * overrides store pre-serialized `string`s.

@@ -8,7 +8,7 @@
  * `apps/api/src/lib/bridge-backup-status.ts` and `routes/bridges.ts`.
  *
  * Contract for callers:
- *   - `startBridgeBackup` only STARTS a run and returns the status snapshot —
+ *   - `startBridgeBackup` only STARTS a run and returns the status snapshot,
  *     a first full backup can take minutes, far past any RPC timeout; the
  *     completed status is pushed through the change listener instead. A start
  *     while a run is active is a no-op returning the current status.

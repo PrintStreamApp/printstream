@@ -137,7 +137,7 @@ test('websocket replay only sends printer statuses for the selected workspace co
     return []
   }) as unknown) as typeof rootPrisma.printer.findMany
   // Replay looks each workspace printer up by id (getStatus), not by scanning all
-  // snapshots — so only printer-1 (the workspace's printer per the findMany stub)
+  // snapshots, so only printer-1 (the workspace's printer per the findMany stub)
   // is ever requested here.
   mock.method(printerManagerPrototype, 'getStatus', (printerId: string) =>
     ({ printerId, online: true, stage: 'printing' }) as never)
@@ -181,7 +181,7 @@ test('websocket replay honors the workspace query parameter for browser tab isol
     return []
   }) as unknown) as typeof rootPrisma.printer.findMany
   // Replay looks each workspace printer up by id (getStatus), not by scanning all
-  // snapshots — so only printer-1 (the workspace's printer per the findMany stub)
+  // snapshots, so only printer-1 (the workspace's printer per the findMany stub)
   // is ever requested here.
   mock.method(printerManagerPrototype, 'getStatus', (printerId: string) =>
     ({ printerId, online: true, stage: 'printing' }) as never)
@@ -346,7 +346,7 @@ test('websocket replay binds workspace-scoped user sessions to their session wor
     return []
   }) as unknown) as typeof rootPrisma.printer.findMany
   // Replay looks each workspace printer up by id (getStatus), not by scanning all
-  // snapshots — so only printer-1 (the workspace's printer per the findMany stub)
+  // snapshots, so only printer-1 (the workspace's printer per the findMany stub)
   // is ever requested here.
   mock.method(printerManagerPrototype, 'getStatus', (printerId: string) =>
     ({ printerId, online: true, stage: 'printing' }) as never)

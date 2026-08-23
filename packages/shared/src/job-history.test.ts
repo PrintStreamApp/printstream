@@ -1,7 +1,7 @@
 /**
  * Pins the merged job-history semantics behind GET /api/jobs/history: the merge order, the
  * shared filters (printer/result/search) the server applies before paging, the facet rules,
- * and the paging math — including the totalUnfiltered/total split the view's gates rely on.
+ * and the paging math, including the totalUnfiltered/total split the view's gates rely on.
  */
 import assert from 'node:assert/strict'
 import test from 'node:test'

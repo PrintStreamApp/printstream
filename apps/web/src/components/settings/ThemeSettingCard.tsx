@@ -1,6 +1,6 @@
 /**
  * The Theme picker card: a shared default (persisted through /api/settings
- * in the caller's scope — workspace or platform) plus a browser-local
+ * in the caller's scope: workspace or platform) plus a browser-local
  * per-device override. Rendered by both the workspace Settings view and the
  * Platform workspace so the two surfaces stay identical; each passes its own
  * scope's values and override handlers.

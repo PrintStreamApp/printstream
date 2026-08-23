@@ -55,8 +55,8 @@ async function resolveLibraryPrintSource(fileId: string, workspaceId: string): P
 }
 
 /**
- * Run every pre-flight check a real Start runs — file resolved, source readable on the bridge, printable,
- * printer connected, print guards, and 3MF plate/filament compatibility — WITHOUT uploading or starting.
+ * Run every pre-flight check a real Start runs, file resolved, source readable on the bridge, printable,
+ * printer connected, print guards, and 3MF plate/filament compatibility, WITHOUT uploading or starting.
  * Throws the same HttpErrors `enqueueLibraryPrint` would (e.g. 'File missing on bridge'), so a "dry run"
  * surfaces exactly what a real Start would hit. Used by the print-queue dry-run/"Check" action.
  */
@@ -114,7 +114,7 @@ export async function enqueueLibraryPrintSource(
   source: LibraryPrintSource
 ): Promise<PrintDispatchJob> {
   // Log pre-flight rejections: they abort BEFORE a dispatch job exists, so
-  // nothing appears in the Jobs list and — if the client mishandles the 4xx —
+  // nothing appears in the Jobs list and, if the client mishandles the 4xx,
   // the user sees a print that "silently never starts". This line is the only
   // server-side trace of why (self-hosted operators read it via docker logs).
   const { printer, index } = await assertLibraryPrintSourceReady(input, source).catch((error: unknown) => {
@@ -158,7 +158,7 @@ export async function enqueueLibraryPrintSource(
 
 /**
  * Every pre-flight check a print must pass before dispatch (everything except the snapshot record +
- * FTPS upload + MQTT start): printable name, printer connected, print guards, and — for a 3MF — that the
+ * FTPS upload + MQTT start): printable name, printer connected, print guards, and, for a 3MF, that the
  * file is readable on the bridge plus plate/filament/nozzle compatibility. Throws on the first failure;
  * returns the printer row + parsed index for the caller to reuse.
  */

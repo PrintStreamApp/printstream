@@ -3,7 +3,7 @@
  * signed token: `PSL1.<base64url(payload)>.<base64url(ed25519 signature)>`. The
  * vendor's cloud signs with a private key; every build verifies with an embedded
  * public key (so keys can be verified but never forged, and no secret ships in
- * OSS). See `apps/api/src/lib/license.ts` for the verifying crypto — the signing
+ * OSS). See `apps/api/src/lib/license.ts` for the verifying crypto: the signing
  * half is cloud-only and deliberately absent from every shipped build.
  *
  * Two independent clocks ride in the payload and are routinely confused:
@@ -14,7 +14,7 @@
  *
  * **The payload is a persisted wire format.** Keys already in customers' hands
  * are parsed by whatever build they are running, so every field added after v1
- * shipped must be optional with a back-compatible default — a key issued before
+ * shipped must be optional with a back-compatible default, a key issued before
  * the field existed has to keep verifying, and must read as the pre-field
  * behaviour (perpetual, unlimited). Adding a *required* field, or a new
  * `edition` enum member, silently invalidates existing keys on older installs,
@@ -24,7 +24,7 @@
 import { z } from 'zod'
 
 /**
- * What the key permits. `commercial` covers business use — held both by a
+ * What the key permits. `commercial` covers business use: held both by a
  * Lifetime purchase and by a Pro subscription's self-hosted key; the two are
  * told apart by `expiresAt` (null = perpetual Lifetime), not by a distinct
  * edition, precisely because older builds would reject an unknown enum member.
@@ -44,7 +44,7 @@ export const licensePayloadSchema = z.object({
   issuedAt: z.number().int().nonnegative(),
   /**
    * Updates & priority support are included until this unix time. `null` means
-   * perpetual — community keys, which only attest non-commercial use. Lapsing
+   * perpetual: community keys, which only attest non-commercial use. Lapsing
    * blocks *updates and support surfaces*, never the app itself.
    */
   updatesUntil: z.number().int().nonnegative().nullable(),
@@ -62,7 +62,7 @@ export const licensePayloadSchema = z.object({
    * For self-hosted Pro this is the metered count, and it moves: the install
    * ASKS for a new total (`/api/license/entitlement`), the cloud bills the
    * difference, and the answer comes back as a re-signed key carrying the new
-   * value. The install never reports its fleet and is never trusted to — the
+   * value. The install never reports its fleet and is never trusted to: the
    * number is only ever what someone paid for.
    */
   maxPrinters: z.number().int().positive().nullable().default(null),
@@ -73,7 +73,7 @@ export const licensePayloadSchema = z.object({
    * cloud, which is what those keys have always used.
    *
    * Signed rather than configured because the alternative is an install pointed
-   * at the wrong deployment by a local setting — a refresh that fails silently
+   * at the wrong deployment by a local setting, a refresh that fails silently
    * and only surfaces weeks later, when the run window lapses on a key that was
    * never actually renewable. A key knowing its own home cannot drift from it.
    *
@@ -119,8 +119,8 @@ export const licenseStatusSchema = z.object({
 export type LicenseStatus = z.infer<typeof licenseStatusSchema>
 
 /**
- * Self-hosted license enforcement state. Applies to every self-hosted build —
- * native *and* Docker/OSS — since PolyForm Noncommercial already forbids the
+ * Self-hosted license enforcement state. Applies to every self-hosted build,
+ * native *and* Docker/OSS, since PolyForm Noncommercial already forbids the
  * commercial use being gated; the multi-workspace cloud licenses via subscriptions
  * instead and is always `unrestricted`.
  *
@@ -138,9 +138,9 @@ export const licenseEnforcementSchema = z.object({
   /** True when running inside the native (paid) distribution. */
   native: z.boolean(),
   /**
-   * `unrestricted` — licensed, or not an enforcing build.
-   * `evaluation` — inside the initial window; fully functional.
-   * `limited` — window elapsed with no sufficient key; adds/dispatch blocked.
+   * `unrestricted`: licensed, or not an enforcing build.
+   * `evaluation`, inside the initial window; fully functional.
+   * `limited`: window elapsed with no sufficient key; adds/dispatch blocked.
    */
   mode: z.enum(['unrestricted', 'evaluation', 'limited']),
   /** When the evaluation window ends/ended (evaluation or limited mode). */
@@ -152,7 +152,7 @@ export const licenseStatusResponseSchema = z.object({
   status: licenseStatusSchema,
   enforcement: licenseEnforcementSchema,
   /**
-   * Printers on this INSTALL, across every workspace — the same count the cap is
+   * Printers on this INSTALL, across every workspace, the same count the cap is
    * enforced against (`printer-quota.ts` counts install-wide, because counting
    * per workspace would let anyone lift the cap by making a second one).
    *
@@ -166,7 +166,7 @@ export type LicenseStatusResponse = z.infer<typeof licenseStatusResponseSchema>
 
 /**
  * Result of an operator-triggered "check for license updates" (`POST
- * /api/license/check`). `skipped` means there was nothing to check — no key
+ * /api/license/check`). `skipped` means there was nothing to check, no key
  * installed, or a perpetual one that never phones home.
  */
 export const licenseCheckResponseSchema = licenseStatusResponseSchema.extend({
@@ -192,11 +192,11 @@ export const licenseRefreshRequestSchema = z.object({
   /**
    * The install asking. A licence covers ONE installation, so the first refresh
    * to present a key claims it and later ones from a DIFFERENT install are
-   * refused — without this, each install counted only its own printers against
+   * refused, without this, each install counted only its own printers against
    * the same entitlement, so a 3-printer licence quietly became 3 per install.
    *
    * Optional: an install that predates this still refreshes, it simply does not
-   * claim the binding. Treat it as a secret like the key itself — never log it.
+   * claim the binding. Treat it as a secret like the key itself, never log it.
    */
   installationId: z.string().trim().min(1).max(200).optional()
 })
@@ -204,8 +204,8 @@ export type LicenseRefreshRequest = z.infer<typeof licenseRefreshRequestSchema>
 
 export const licenseRefreshResponseSchema = z.object({
   /**
-   * `renewed` — use `key`. `unchanged` — the installed key is still current.
-   * `revoked` — the backing subscription ended; the install should stop
+   * `renewed`: use `key`. `unchanged`: the installed key is still current.
+   * `revoked`: the backing subscription ended; the install should stop
    * refreshing and let the current key run out its window.
    */
   outcome: z.enum(['renewed', 'unchanged', 'revoked']),
@@ -218,7 +218,7 @@ export type LicenseRefreshResponse = z.infer<typeof licenseRefreshResponseSchema
 /**
  * Self-hosted → cloud request to change how many printers a licence covers.
  *
- * The install does not decide its own entitlement — it asks, the cloud bills the
+ * The install does not decide its own entitlement, it asks, the cloud bills the
  * difference, and the answer comes back signed into a new key. That is the whole
  * reason this is a network call rather than a local setting: the enforcement
  * code that reads `maxPrinters` ships in the open-source build, so a locally
@@ -232,7 +232,7 @@ export const licenseEntitlementRequestSchema = z.object({
   /** Required here, unlike refresh: a billing change must name the install it is for. */
   installationId: z.string().trim().min(1).max(200),
   /**
-   * The TOTAL the install wants to be entitled to, never a delta — a retried
+   * The TOTAL the install wants to be entitled to, never a delta, a retried
    * request after a lost response must not bill a second time.
    */
   printers: z.number().int().min(1).max(1000)
@@ -241,9 +241,9 @@ export type LicenseEntitlementRequest = z.infer<typeof licenseEntitlementRequest
 
 export const licenseEntitlementResponseSchema = z.object({
   /**
-   * `applied` — billing changed and `key` carries the new allowance.
-   * `unchanged` — the subscription already covered this many.
-   * `refused` — `message` says why (no subscription, not this install's key,
+   * `applied`: billing changed and `key` carries the new allowance.
+   * `unchanged`: the subscription already covered this many.
+   * `refused`: `message` says why (no subscription, not this install's key,
    * payment declined); the install keeps the entitlement it had.
    */
   outcome: z.enum(['applied', 'unchanged', 'refused']),
@@ -262,7 +262,7 @@ export type LicenseEntitlementResponse = z.infer<typeof licenseEntitlementRespon
  * has to speak this shape. The cloud side that answers it is private.
  *
  * The email is the whole identity. It is never verified before the key is
- * issued, because the key is DELIVERED to it — possession of the inbox is the
+ * issued, because the key is DELIVERED to it: possession of the inbox is the
  * proof, and a confirmation round trip would only add a step to the same
  * outcome.
  */

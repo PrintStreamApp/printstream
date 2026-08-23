@@ -6,9 +6,9 @@ import { ZIP_ARCHIVE_BASE_DEADLINE_MS, unzipArchiveBytes, zipArchiveDeadlineMs, 
 /**
  * The bounded zip codec behind every client-side archive open and save.
  *
- * What these pin is the SETTLING contract: every call resolves or rejects — the fflate async API
+ * What these pin is the SETTLING contract: every call resolves or rejects: the fflate async API
  * this replaced could wedge without erroring, leaving the editor on "Loading plates…" forever.
- * Node has no `Worker`, so these deliberately exercise the main-thread fallback leg — the same leg
+ * Node has no `Worker`, so these deliberately exercise the main-thread fallback leg, the same leg
  * a browser lands on when the worker fails or times out; the worker leg is bounded by construction
  * (size-scaled deadline + terminate in `finally`), whose numbers the deadline test pins.
  */

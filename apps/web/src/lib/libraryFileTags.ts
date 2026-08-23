@@ -17,7 +17,7 @@ export interface FileTagDescriptor {
   kind: FileTagKind
   dotColor?: string | null
   chipSx?: Record<string, unknown>
-  /** Metadata is still being derived — renderers may add an in-progress decorator. */
+  /** Metadata is still being derived: renderers may add an in-progress decorator. */
   pending?: boolean
 }
 
@@ -33,10 +33,10 @@ export function shouldShowLibraryPlateTypeTags(file: LibraryFile): boolean {
   return file.kind === 'gcode' || file.kind === '3mf'
 }
 
-/** A plain project 3MF (no embedded gcode) — printable only after slicing. */
+/** A plain project 3MF (no embedded gcode): printable only after slicing. */
 export function isUnslicedThreeMfFile(file: LibraryFile): boolean {
   // A geometry-only 3MF (no Bambu project metadata) is a mesh container, not an
-  // openable/sliceable project — it belongs to the preview-only class below, exactly
+  // openable/sliceable project, it belongs to the preview-only class below, exactly
   // like STL/STEP, and every "pick a file to slice" surface must skip it.
   return file.name.toLowerCase().endsWith('.3mf') && !isDirectPrintableFileName(file.name) && file.geometryOnly !== true
 }
@@ -55,7 +55,7 @@ export function isPreviewOnlyLibraryFile(file: LibraryFile): boolean {
 /**
  * Files whose DEFAULT click opens the 3D preview rather than their primary action.
  * Beyond the preview-only class, this includes single-object model exports
- * (`objectExport`): full projects internally, but saved to be reused as models — so a
+ * (`objectExport`): full projects internally, but saved to be reused as models, so a
  * click previews them (plated mode), while slicing/editing stays available through the
  * explicit menu actions (they still count as `isUnslicedThreeMfFile`).
  */
@@ -65,7 +65,7 @@ export function isPreviewFirstLibraryFile(file: LibraryFile): boolean {
 
 /**
  * Meta chip descriptors exactly as the icon card renders them (plate count,
- * printer models, nozzle sizes, plate types — same order, colors, and short
+ * printer models, nozzle sizes, plate types: same order, colors, and short
  * plate labels), for surfaces outside the browser such as the version
  * history dialog that must mirror the icon-card chips.
  */
@@ -138,7 +138,7 @@ function buildMetaTagDescriptors(
   options: { includePlateTypes?: boolean; includeNozzleSizes?: boolean; shortPlateLabels?: boolean } = {}
 ): FileTagDescriptor[] {
   // Metadata still deriving server-side: every chip field is empty because it is UNKNOWN, not
-  // absent — say so instead of rendering a silently bare card. The API broadcasts a library
+  // absent: say so instead of rendering a silently bare card. The API broadcasts a library
   // change when the derive lands, so this tag replaces itself with the real chips.
   if (file.metadataPending) {
     return [{

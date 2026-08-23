@@ -8,7 +8,7 @@
  *   3. `GET <url>`                                        -> the .3mf (signed, ~5 min, NO auth)
  *
  * Contract callers rely on: steps 1-2 are authenticated with the Bambu Cloud ACCESS
- * TOKEN as a bearer. That is not an assumption — MakerWorld accepts the same token
+ * TOKEN as a bearer. That is not an assumption: MakerWorld accepts the same token
  * `api.bambulab.com` issues, and rejects it without the `Bearer` scheme (403,
  * "Please log in to download models"). Step 3's URL is pre-signed (`at`/`exp` query
  * params) and must be fetched WITHOUT the Authorization header.
@@ -16,7 +16,7 @@
  * Why this exists at all: MakerWorld model pages expose no stable direct-download
  * URL, so the alternative is the companion Chrome extension replaying the same call
  * from the user's logged-in browser. Doing it here means the feature works with no
- * extension installed — at the cost of every member's download running under the one
+ * extension installed, at the cost of every member's download running under the one
  * account the workspace connected, which is why the caller gates on an explicit
  * opt-in and the UI names the account.
  *
@@ -28,7 +28,7 @@
  * hit Bambu from one shared IP. These calls go direct from the API. Relaying them
  * would need new named operations on the bridge protocol (the relay takes named
  * operations, never URLs, so it cannot become an SSRF proxy), and the bridge deploys
- * separately — so a lagging bridge would have to fall back here anyway.
+ * separately, so a lagging bridge would have to fall back here anyway.
  */
 import { assertSafeOutboundUrl } from '../../lib/outbound-url-guard.js'
 import { badRequest, HttpError } from '../../lib/http-error.js'
@@ -198,7 +198,7 @@ async function makerWorldApiGet(input: {
  *
  * The distinction that matters: 401/403 means the stored Bambu credential is the
  * problem (reconnect), while 418 is the anti-bot challenge, which only clears by the
- * user visiting MakerWorld themselves — no amount of retrying here helps, so say so
+ * user visiting MakerWorld themselves, no amount of retrying here helps, so say so
  * rather than surfacing a bare status. Mirrors the guidance the browser helper shows
  * (`errorGuidance.ts`), so the two paths tell the user the same story.
  */

@@ -115,7 +115,7 @@ export interface ApiPluginContext {
    * The plugin owning that connection registers one; plugins that need to act as the
    * signed-in Bambu user consult `bambuAccountResolvers` rather than importing this
    * one. Scoped to workspaces the registering plugin is enabled for, and removed
-   * automatically when it stops. The resolved token is the user's whole account —
+   * automatically when it stops. The resolved token is the user's whole account:
    * see the trust boundary in `lib/bambu-account-registry.ts` before consuming it.
    */
   registerBambuAccountResolver(resolver: BambuAccountResolver): () => void

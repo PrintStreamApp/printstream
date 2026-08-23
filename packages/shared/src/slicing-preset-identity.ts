@@ -3,10 +3,10 @@
  *
  * Owns the preset id codec and the derived-display-type rule that every layer
  * (web slice dialog, API job resolution, slicer worker) must agree on. Before
- * this module the same three id shapes were minted and parsed in five places —
+ * this module the same three id shapes were minted and parsed in five places:
  * `buildBuiltinProfileId` in the slicer, `parseBuiltinSlicingPresetId` in the
  * API, `buildProjectSlicingPresetId` in the web app, and three independent
- * `'project:'` literals — so "the same preset" had several spellings and no
+ * `'project:'` literals, so "the same preset" had several spellings and no
  * authoritative comparison (issue #66).
  *
  * Contract callers rely on:
@@ -17,7 +17,7 @@
  * - The three id shapes are a **persisted wire format**, not an internal detail.
  *   Builtin ids travel in slice requests and are stored on `SlicingJob` rows;
  *   custom ids are stored in the workspace's `Setting` blob. Their encodings must
- *   not change without a data migration — this module only centralises them.
+ *   not change without a data migration, this module only centralises them.
  * - `id -> provenance` is total and pure: any string classifies, with unknown
  *   shapes reported as `null` rather than guessed.
  *
@@ -31,7 +31,7 @@ import type { SlicingPresetKind } from './slicing.js'
  * Where a preset came from, which decides how much authority it carries.
  *
  * `project` presets are the 3MF's own embedded settings and are **the basis for
- * the slice** — they win over an identically-named installed preset because they
+ * the slice**, they win over an identically-named installed preset because they
  * carry the user's authored overrides. `workspace` presets are workspace-uploaded
  * custom presets. `builtin` presets ship with BambuStudio.
  */
@@ -79,7 +79,7 @@ export function slicingPresetProvenance(id: string | null | undefined): SlicingP
 /**
  * Whether an id names a 3MF-embedded preset. Project presets are the slice's
  * basis, so they are never filtered out by printer-compatibility gates and are
- * never resolved to a preset FILE — the project's own settings already describe
+ * never resolved to a preset FILE: the project's own settings already describe
  * them (see `resolveSlicingPresetFiles`).
  */
 export function isProjectSlicingPresetId(id: string | null | undefined): boolean {
@@ -92,7 +92,7 @@ export function buildBuiltinSlicingPresetId(kind: SlicingPresetKind, name: strin
 
 /**
  * Decode a `builtin:<kind>:<base64url(name)>` id. Returns `null` for any other
- * shape, an unknown kind, or an undecodable/empty name — never a partial result,
+ * shape, an unknown kind, or an undecodable/empty name, never a partial result,
  * because a half-parsed builtin id downstream becomes a preset file path.
  */
 export function parseBuiltinSlicingPresetId(id: string): { kind: SlicingPresetKind; name: string } | null {
@@ -138,7 +138,7 @@ function asSlicingPresetKind(value: string | undefined): SlicingPresetKind | nul
  * `src/libslic3r/PrintConfig.cpp`). A support filament is typed by its base
  * polymer in the preset JSON (`filament_type: ["PLA"]`) and carries a separate
  * `filament_is_support: ["1"]` flag, but every surface that shows or filters by
- * type — the AMS, the 3MF's project filaments, BambuStudio's own picker — speaks
+ * type, the AMS, the 3MF's project filaments, BambuStudio's own picker, speaks
  * the derived `PLA-S`. Comparing a project filament's `PLA-S` against a preset's
  * raw `PLA` matched nothing, hiding every valid support preset from the material
  * picker (issue #66); deriving both sides through this function is what makes
@@ -172,7 +172,7 @@ export function resolveDisplayFilamentType(input: {
 
 /**
  * Whether a derived display type marks a support filament (`PLA-S`, `PA-S`,
- * `ABS-S`). Only for reading a type string that has already lost its flag —
+ * `ABS-S`). Only for reading a type string that has already lost its flag:
  * prefer the `filamentIsSupport` field wherever it is carried.
  */
 export function isSupportDisplayFilamentType(value: string | null | undefined): boolean {

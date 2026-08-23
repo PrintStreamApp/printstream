@@ -9,7 +9,7 @@
  * keep working and are transparently re-encrypted the next time they are written.
  *
  * When `SECRETS_KEY` is unset (common in dev / single-box self-hosting), encryption
- * is a no-op pass-through and a one-time warning is logged — the security posture is
+ * is a no-op pass-through and a one-time warning is logged: the security posture is
  * unchanged from before this module existed, but production should set the key.
  */
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
@@ -56,7 +56,7 @@ export function encryptSecret(plaintext: string): string {
 /**
  * Decrypts a stored secret. Legacy plaintext (no `enc:` prefix) is returned as-is.
  * Throws if an encrypted value is encountered without a usable `SECRETS_KEY`, or if
- * authentication fails (tampering / wrong key) — callers should treat that as a
+ * authentication fails (tampering / wrong key): callers should treat that as a
  * configuration error rather than silently dropping the secret.
  */
 export function decryptSecret(stored: string): string {

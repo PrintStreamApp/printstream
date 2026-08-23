@@ -49,7 +49,7 @@ test('retargets project_settings to the target machine, preserving filaments + l
   assert.deepEqual(out.physical_extruder_map, ['1', '0'])
 
   // Dependent runtime maps are re-derived for the new (dual-extruder) topology. The per-FILAMENT
-  // nozzle map keeps each slot's own assignment when the target still has that nozzle — both
+  // nozzle map keeps each slot's own assignment when the target still has that nozzle, both
   // filaments were on nozzle 0 and H2D has one, so they stay there. (This assertion used to expect
   // `physical_extruder_map` copied in verbatim, which only looked right because a 2-filament project
   // and a 2-extruder machine have the same length: it silently split the two filaments across
@@ -139,7 +139,7 @@ test('applyProcessProfileToProjectSettings blanks the inherited process parent a
 test('retarget to a dual-nozzle machine resizes flush_volumes_matrix for the new extruder count', () => {
   // Regression: `flush_volumes_matrix` is a PROJECT key, so the machine-profile overwrite never
   // touched it and a single-nozzle-sized matrix survived onto a 2-extruder machine. BambuStudio
-  // then read the missing second block out of bounds and segfaulted at ~71% (CLI exit 139) —
+  // then read the missing second block out of bounds and segfaulted at ~71% (CLI exit 139):
   // reproduced on real projects retargeted onto both dual-nozzle machine families.
   const singleFilamentProject = { ...a1Project, filament_colour: ['#F2754E'], flush_volumes_matrix: ['0'] }
   const out = retargetProjectSettingsToMachine(singleFilamentProject, h2dMachine, {
@@ -184,7 +184,7 @@ test('retarget to a dual-nozzle machine resizes flush_multiplier for the new ext
     printerModel: 'Bambu Lab H2D'
   })
   assert.deepEqual(scalar.flush_multiplier, ['1', '1'])
-  // An absent multiplier is authored outright — the engine's default is one entry, which fails the
+  // An absent multiplier is authored outright: the engine's default is one entry, which fails the
   // same check on a two-extruder machine.
   const absent = retargetProjectSettingsToMachine({ ...project, flush_multiplier: undefined }, h2dMachine, {
     printerSettingsId: 'Bambu Lab H2D 0.4 nozzle',
@@ -244,7 +244,7 @@ test('retarget to a single-nozzle machine truncates a dual-length flush_multipli
 
 // `filament_nozzle_map` is indexed by FILAMENT, not by extruder. Copying `physical_extruder_map`
 // into it produced a wrong-LENGTH map whenever the filament count differed from the extruder count,
-// and BambuStudio then read a filament's extruder past the end of that vector — the documented
+// and BambuStudio then read a filament's extruder past the end of that vector: the documented
 // "can not be printed on extruder <garbage>" abort / mid-slice SIGSEGV (CLI exit 139).
 test('retarget rebuilds filament_nozzle_map per FILAMENT, not per extruder', () => {
   // 3 filaments onto a 2-extruder machine: the map must have 3 entries, not 2.
@@ -394,7 +394,7 @@ test('a one-element preset vector does not widen a scalar the project holds bare
 
 /**
  * `extruder_nozzle_stats` is `VolumeType#count` per extruder, where the count is how many filaments
- * that extruder feeds — the BAKE owns it (it changes with every nozzle assignment). It is NOT
+ * that extruder feeds: the BAKE owns it (it changes with every nozzle assignment). It is NOT
  * `extruder_max_nozzle_count`, which is a different quantity: a real H2D project carries
  * `["Standard#2","Standard#1"]` beside `extruder_max_nozzle_count: ["1","1"]`, so recomputing it
  * here flattened the project's own correct value to `["Standard#1","Standard#1"]` on every save.
@@ -411,7 +411,7 @@ test('extruder_nozzle_stats survives a retarget that cannot derive it', () => {
 /**
  * A resolved machine profile carries LEGACY keys BambuStudio has since renamed or dropped, and the
  * retarget used to copy every key it found. That wrote four keys into every retargeted project that
- * neither the source file nor a BambuStudio save of the same project contains — measured on a real
+ * neither the source file nor a BambuStudio save of the same project contains: measured on a real
  * repaired project. One of them, `deretract_speed_extruder_change`, arrived as a 5-entry array on a
  * 2-extruder machine: a per-extruder vector at the wrong length is the shape that makes BambuStudio
  * read out of bounds mid-slice.
@@ -442,7 +442,7 @@ test('legacy machine keys BambuStudio does not carry never reach the project', (
 
 /**
  * `filament_volume_map` is indexed by FILAMENT, exactly like `filament_nozzle_map`. It was written
- * from the machine's `default_nozzle_volume_type`, which is indexed by EXTRUDER — so a 3-filament
+ * from the machine's `default_nozzle_volume_type`, which is indexed by EXTRUDER, so a 3-filament
  * project on a 2-extruder machine got a 2-entry map, and BambuStudio reads the third filament's
  * entry past the end. Same defect `filament_nozzle_map` already carried a fix for.
  */
@@ -467,4 +467,68 @@ test('filament_volume_map is one entry per filament, valued by that filament\'s 
   // nozzle 1 is extruder index 0 ("Standard" = 0). Reading the volume types positionally by nozzle
   // id would invert this, which is why the lookup goes through the map.
   assert.deepEqual(volumeMap, ['1', '0', '1'])
+})
+
+/**
+ * `print_extruder_variant` and `print_extruder_id` are a PAIR. The engine treats a broken one as no
+ * topology at all: `ensure_variant_and_get_len` erases BOTH when either is missing
+ * (`Preset.cpp:225-228`) and falls back to the default length, so a dual-extruder project comes back
+ * behaving single-extruder; and `BambuStudio.cpp:3085-3090` abandons its entire remap when the two
+ * lengths disagree. Neither failure says anything to the user.
+ */
+test('a process variant retarget writes the id alongside the variant', () => {
+  const project = {
+    ...a1Project,
+    print_extruder_variant: ['Direct Drive Standard'],
+    print_extruder_id: ['1'],
+    // A variant-scoped process key, so the column remap has something to move.
+    outer_wall_speed: ['200']
+  }
+  const out = retargetProjectSettingsToMachine(project, h2dMachine, {
+    printerSettingsId: 'Bambu Lab H2D 0.4 nozzle',
+    printerModel: 'Bambu Lab H2D'
+  })
+  const variants = out.print_extruder_variant as string[] | undefined
+  const ids = out.print_extruder_id as string[] | undefined
+  assert.ok(variants && variants.length > 1, 'the process columns were not widened for the H2D')
+  assert.ok(ids, 'the variant list was written with no matching id list, which the engine erases')
+  assert.equal(ids.length, variants.length, 'the pair disagrees on length, which abandons the remap')
+})
+
+test('an unknown machine topology leaves the pair alone rather than half-writing it', () => {
+  // Precondition: NOTHING declares `extruder_variant_list`, so `printer_extruder_id` is never
+  // rebuilt and there are no ids to pair a new variant list with. Without the guard this wrote
+  // `print_extruder_variant: ["A","B"]` beside `print_extruder_id: ["1"]` -- a pair whose lengths
+  // disagree, which makes the engine abandon its whole remap (`BambuStudio.cpp:3085-3090`) while our
+  // process columns have already been widened to match the variant list.
+  //
+  // Every machine profile Bambu bundles does declare `extruder_variant_list`, so this is robustness
+  // rather than a live user-facing bug; it is cheap because the answer is simply to do nothing.
+  const project = {
+    printer_settings_id: 'Bambu Lab A1 mini 0.4 nozzle',
+    printer_model: 'Bambu Lab A1 mini',
+    nozzle_diameter: ['0.4'],
+    physical_extruder_map: ['0'],
+    filament_type: ['PLA'],
+    filament_settings_id: ['Bambu PLA Basic @BBL A1M'],
+    print_extruder_variant: ['Direct Drive Standard'],
+    print_extruder_id: ['1'],
+    outer_wall_speed: ['200']
+  }
+  const machineWithoutVariantList = {
+    name: 'Mystery 0.4 nozzle',
+    type: 'machine',
+    printer_model: 'Mystery',
+    nozzle_diameter: ['0.4', '0.4'],
+    printer_extruder_variant: ['A', 'B']
+  }
+  const out = retargetProjectSettingsToMachine(project, machineWithoutVariantList, {
+    printerSettingsId: 'Mystery 0.4 nozzle',
+    printerModel: 'Mystery'
+  })
+  const variants = out.print_extruder_variant as string[] | undefined
+  const ids = out.print_extruder_id as string[] | undefined
+  assert.deepEqual(variants, ['Direct Drive Standard'], 'a variant list was written with no ids to match it')
+  assert.deepEqual(ids, ['1'])
+  assert.equal(variants?.length, ids?.length, 'the pair disagrees on length')
 })

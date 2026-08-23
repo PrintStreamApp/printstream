@@ -27,7 +27,7 @@ export interface ShellTab<TValue extends string = string> {
   ariaLabel?: string
   /**
    * What the tab is FOR, shown as its tooltip when the label is already on
-   * screen. Omit it and a readable tab gets no tooltip at all — a tooltip that
+   * screen. Omit it and a readable tab gets no tooltip at all, a tooltip that
    * repeats the word under the pointer is noise, so this has to earn its place
    * by saying something the label does not.
    */
@@ -49,7 +49,7 @@ interface AppShellProps<TValue extends string> {
   /**
    * Icon for the context being named. The shell only ever receives the NAME,
    * which cannot say whether "Home" is a workspace, an account or the
-   * platform — and those behave nothing alike.
+   * platform, and those behave nothing alike.
    */
   workspaceChooserIcon?: ReactNode
   showNavigationFrame?: boolean
@@ -146,7 +146,7 @@ export function AppShell<TValue extends string>({
           md: 'calc(var(--app-top-inset, 0px) + 10px)'
         },
         pb: {
-          // The 78px clears the FIXED mobile nav bar below — so it is reserved
+          // The 78px clears the FIXED mobile nav bar below, so it is reserved
           // only when that bar is actually rendered. Reserving it unconditionally
           // pushed every tab-less page (the workspace chooser, sign-in) past the
           // viewport by exactly the height of a bar that was not there.
@@ -259,8 +259,8 @@ export function AppShell<TValue extends string>({
                     boxShadow: 'none'
                   }}
                 >
-                  {/* No logo in this bar. It cost ~54px of a 375px-wide dock — enough to push a
-                      tab off the end — and it duplicated the desktop header's home affordance
+                  {/* No logo in this bar. It cost ~54px of a 375px-wide dock: enough to push a
+                      tab off the end, and it duplicated the desktop header's home affordance
                       while the bar's whole job is reaching the tabs. */}
                   {tabs.map((tab) => (
                     // The app's tooltip rather than the browser's `title`, which

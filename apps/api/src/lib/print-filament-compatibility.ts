@@ -113,7 +113,7 @@ export async function assertAutomaticPrintCompatibility(
 ): Promise<void> {
   assertCompatiblePrinterModel(input.index?.compatiblePrinterModels ?? [], input.printerModel)
   // Printing a .3mf already sitting on the printer's storage still has to agree with the machine
-  // about the switch — BambuStudio checks its SD-card path the same way (`slicing_with_fila_switch`
+  // about the switch: BambuStudio checks its SD-card path the same way (`slicing_with_fila_switch`
   // reads the plate data under `FROM_SDCARD_VIEW`). Skipped when there is no index to read it from.
   //
   // BEFORE the `allowIncompatibleFilament` early return, not after: that flag consents to the TRAY
@@ -203,7 +203,7 @@ function assertPrinterHardwareCompatibility(
  *
  * OVERRIDABLE via `allowFilamentTrackSwitchMismatch`, which is a deliberate divergence from
  * BambuStudio. Studio refuses this outright, but only when the printer sets
- * `is_support_check_track_switch_match_slice_printer` — a capability flag we do not parse and
+ * `is_support_check_track_switch_match_slice_printer`, a capability flag we do not parse and
  * cannot verify without FTS firmware. Without it, a hard block would make every file sliced before
  * a switch was fitted un-printable on that machine, all at once, with re-slicing the only way out.
  * So we surface it and let the user proceed, the same posture as the tray/nozzle checks.
@@ -234,13 +234,13 @@ function assertFilamentTrackSwitchMatch(
  * prints that are perfectly fine, to prevent something the printer already handles by pausing.
  *
  * What counts as too little comes from the shared `findLowFilamentSlots`, and each sentence from
- * the shared `lowFilamentIssueSentence` — the same two the print dialog warns from, so a dispatch
+ * the shared `lowFilamentIssueSentence`, the same two the print dialog warns from, so a dispatch
  * can never be refused by a check the dialog never showed.
  *
  * Holding that promise means grading the SAME NUMBERS, not merely running the same function. The
  * browser attaches filament-manager's tracked grams to each slot before grading, and
  * `knownRemainGrams` REPLACES the printer's percent estimate with them rather than taking the
- * lower of the two — so a tray the printer calls half empty can genuinely hold plenty (a 5kg
+ * lower of the two, so a tray the printer calls half empty can genuinely hold plenty (a 5kg
  * spool, or a hand-weighed figure on a manually tracked one). Grading without those grams was
  * therefore not a subset of the dialog's signals but a different, sometimes STRICTER answer, and
  * it refused prints whose dialog raised no warning and offered no confirmation to tick.

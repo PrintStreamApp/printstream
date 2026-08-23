@@ -36,7 +36,7 @@ test('genuine Bambu tray resolves marketing identity (brand, preset, Jade White)
   assert.equal(filamentIdentityLabel(identity), 'Bambu PLA Basic · Jade White')
 })
 
-test('custom tray never claims Bambu identity — plain type + common colour', () => {
+test('custom tray never claims Bambu identity: plain type + common colour', () => {
   const identity = resolveFilamentIdentity(CUSTOM_PLA_WHITE)
   assert.equal(identity.genuineBambu, false)
   assert.equal(identity.brand, null)

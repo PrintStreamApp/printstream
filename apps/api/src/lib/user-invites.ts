@@ -1,8 +1,8 @@
 /**
  * Core's seam for sending someone a sign-in invite.
  *
- * Inviting is an AUTH PROVIDER's job — only it knows how a person proves who
- * they are — but the places that need to invite are not auth surfaces. The
+ * Inviting is an AUTH PROVIDER's job, only it knows how a person proves who
+ * they are, but the places that need to invite are not auth surfaces. The
  * billing scope's People list adds a colleague to the organisation, and that
  * colleague almost never has an account yet; without an invite they are handed a
  * membership they have no way to reach.
@@ -10,7 +10,7 @@
  * It cannot simply call the provider's own invite route: that one is gated on a
  * WORKSPACE permission, and the person doing the inviting here holds billing on
  * an ACCOUNT and may administer no workspace at all. Same shape as
- * `billing-scope.ts` and `workspace-invite-policy.ts` — core exposes the
+ * `billing-scope.ts` and `workspace-invite-policy.ts`: core exposes the
  * registry, the provider fills it at activation, and a deployment with no
  * provider that can invite simply cannot, which callers must treat as ordinary.
  *

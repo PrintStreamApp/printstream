@@ -5,14 +5,14 @@
  * plates (move/rotate/scale, add/duplicate/delete, auto-arrange/orient), edit
  * materials and per-object overrides, paint supports/seams/colour, plane-cut and
  * split objects, add part volumes, place brim ears, schedule per-layer filament
- * changes, and measure — then hands back a `SceneEdit` (the locked shared
+ * changes, and measure, then hands back a `SceneEdit` (the locked shared
  * contract) on apply. Heavy: lazy-loaded by the `SlicingEditorAction` slot button
  * via `React.lazy`.
  *
  * Transform convention: each instance group's matrix is seeded by decomposing the
  * scene's plate-local 12-element transform (position/quaternion/scale, Euler XYZ).
  * On apply we read each group's position/rotation(Euler XYZ)/scale straight into
- * the `SceneEdit` instance — the backend recomposes M = T * R(eulerXYZ) * S. Values
+ * the `SceneEdit` instance: the backend recomposes M = T * R(eulerXYZ) * S. Values
  * stay plate-local (plate origin is never baked in).
  */
 import { type ComponentProps, type ReactNode, lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -282,7 +282,7 @@ import { useEditorScene } from './useEditorScene'
 /**
  * The 1-based filament ids referenced as support material by a process-override map
  * (`support_filament` / `support_interface_filament`). `'0'` / non-positive means "use the
- * default", i.e. no specific material — those are ignored. Used to count support materials as
+ * default", i.e. no specific material, those are ignored. Used to count support materials as
  * "in use" for the material remove-guard.
  */
 function supportFilamentRefs(overrides: Record<string, string | string[]> | undefined): number[] {
@@ -342,7 +342,7 @@ interface EditorViewProps {
   /**
    * Where to fetch BambuStudio's measured flush tables. Defaults to the workspace route; the
    * public editor passes the anonymous one. Same shape as {@link bedModelPath}, and for the same
-   * reason — the data is engine-owned and identical either way, only the surface differs.
+   * reason: the data is engine-owned and identical either way, only the surface differs.
    */
   flushDataPath?: string
   /** Sibling of {@link flushDataPath} for the engine self-check; same workspace/public split. */
@@ -363,7 +363,7 @@ interface EditorViewProps {
   /**
    * Repairable defects in the OPEN project, for a host whose project is not a library file.
    *
-   * The library host needs nothing here — it reads them off the file DTO. A host that opened the
+   * The library host needs nothing here, it reads them off the file DTO. A host that opened the
    * project from disk has no DTO, and the reasons are a pure function of the parsed settings
    * (`collectSettingsRepairReasons`), so it passes them in rather than the notice being
    * workspace-only. Without this the public editor showed no warning at all on a file it could
@@ -380,7 +380,7 @@ interface EditorViewProps {
   presetManager?: (props: { open: boolean; onClose: () => void }) => ReactNode
   /**
    * Status for a host-provided preset source (the Bambu Cloud sync chip), forwarded to
-   * `SliceSettingsPanel`. Only the workspace host passes one — the public editor has no
+   * `SliceSettingsPanel`. Only the workspace host passes one: the public editor has no
    * workspace or plugin graph. See the prop's doc there.
    */
   presetSourceStatus?: ReactNode
@@ -403,28 +403,28 @@ interface EditorViewProps {
   /**
    * The project's materials. Optional: with a slice controller present the editor derives them
    * from it, which is what the library host relies on. A host without one (the public editor)
-   * passes them explicitly — see `lib/editorMaterials.ts`.
+   * passes them explicitly: see `lib/editorMaterials.ts`.
    */
   materials?: EditorMaterials
   /**
-   * Where staged geometry lives — uploads to the api by default, or the caller's own store when
+   * Where staged geometry lives: uploads to the api by default, or the caller's own store when
    * there is no server to stage on. See `lib/editorImportStore.ts`.
    */
   importStore?: EditorImportStore
   /**
-   * Where the project is READ from — the api by default, or an archive the caller opened locally.
+   * Where the project is READ from: the api by default, or an archive the caller opened locally.
    * See `lib/editorProjectSource.ts`.
    */
   projectSource?: EditorProjectSource
   /**
-   * Where a save GOES — a library version by default, or the user's own file. See
+   * Where a save GOES, a library version by default, or the user's own file. See
    * `lib/editorSaveTarget.ts`.
    */
   saveTarget?: EditorSaveTarget
   /**
    * Where the editor is being hosted. `dialog` (default) is the modal the library opens OVER a page,
    * so it sits maximized with a gutter and the page behind still reads as present. `page` is a host
-   * where the editor IS the page — there is nothing behind it, so it takes the screen outright and
+   * where the editor IS the page, there is nothing behind it, so it takes the screen outright and
    * the user's own full-screen toggle has nothing left to hide.
    */
   hosting?: 'dialog' | 'page'
@@ -449,7 +449,7 @@ type TransformControlsSnap = {
   setScaleSnap: (snap: number | null) => void
 }
 
-/** How a plate edit touches the live 3D scene — see {@link EditorView}'s `updatePlates`. */
+/** How a plate edit touches the live 3D scene: see {@link EditorView}'s `updatePlates`. */
 type PlateEditKind = 'structure' | 'transform' | 'material' | 'visibility' | 'inert'
 
 /** Stable empty per-object overrides so the override editor doesn't re-fetch each render. */
@@ -479,7 +479,7 @@ const LIBRARY_PICKER_COPY: Record<'import' | ModelSourceRequest['kind'], { title
   },
   replace: {
     title: 'Replace from library',
-    description: 'Choose an STL, STEP, or 3MF file to swap in for the selected object — its position and settings are kept.'
+    description: 'Choose an STL, STEP, or 3MF file to swap in for the selected object, its position and settings are kept.'
   },
   addPart: {
     title: 'Add part from library',
@@ -520,9 +520,9 @@ function EditorView({
 }: EditorViewProps) {
   // `hasNoBaseFile` gates DATA loading (a fileless project seeds empty, skipping the scene
   // queries). A scaffold-backed new project DOES have a base file (it carries the bed/settings),
-  // so it still loads — only the SAVE/heading behaviour treats it as new.
+  // so it still loads, only the SAVE/heading behaviour treats it as new.
   // Gates DATA loading. A locally-opened project has no library file id but DOES have a project to
-  // read, so a supplied source counts as having one — otherwise the editor would seed empty and
+  // read, so a supplied source counts as having one, otherwise the editor would seed empty and
   // ignore the file the user just picked.
   const hasNoBaseFile = baseFileId === null && projectSourceProp == null
   const isNewProject = hasNoBaseFile || isNewProjectScaffold
@@ -566,7 +566,7 @@ function EditorView({
   const importAccept = useMemo(() => importFileAccept(importStore), [importStore])
   // A save target that is not library-backed writes to the user's own file. There is no library
   // folder to choose and no "version" concept, so Save means "write it back" and Save-as means
-  // "ask the OS where" — never the library destination dialog.
+  // "ask the OS where", never the library destination dialog.
   const savesToLocalFile = saveTarget != null && !saveTarget.isLibraryBacked
   // Memoized on `resourceBase`: the source owns one downloaded archive, so an identity that
   // changed each render would re-download the project and re-key every query that depends on it.
@@ -593,7 +593,7 @@ function EditorView({
     queryClient.removeQueries({ queryKey: ['library-editor-scene-initial', baseFileId] })
     queryClient.removeQueries({ queryKey: ['library-editor-scenes-rest', baseFileId] })
     // The file's own DTO goes too. Nothing invalidates this key (`library-files` does not prefix-match
-    // `library-file`), so at a 60s staleTime a reopen inside that window inherits the PRE-save row —
+    // `library-file`), so at a 60s staleTime a reopen inside that window inherits the PRE-save row,
     // including `currentVersionNumber`, which seeds the concurrent-save baseline. That made an
     // ordinary save-close-reopen-save loop accuse the user of overwriting their own previous save.
     queryClient.removeQueries({ queryKey: ['library-file', baseFileId] })
@@ -627,7 +627,7 @@ function EditorView({
    * Attach this session's (or the source mesh's) paint overlays to a freshly built part mesh.
    *
    * Shared by the in-project and IMPORT render paths so an import's solids show paint exactly like
-   * a baked part's — they are painted through the same state map, keyed by the model's editor
+   * a baked part's, they are painted through the same state map, keyed by the model's editor
    * identity, and emitted as `importPaint` at bake time.
    */
   const seedPartPaintOverlays = useCallback((mesh: THREE.Mesh, objectId: number, componentObjectId: number) => {
@@ -655,7 +655,7 @@ function EditorView({
   })
 
   // The presets the project carries inside itself. `staleTime: Infinity` because they come from the
-  // archive this session already holds and nothing outside the session can change them — the file
+  // archive this session already holds and nothing outside the session can change them: the file
   // on disk is not re-read until the next open (see `in-memory-after-open`).
   const embeddedPresetsQuery = useQuery({
     queryKey: ['library-editor-embedded-presets', baseFileId, baseVersionId ?? 'current'],
@@ -680,15 +680,15 @@ function EditorView({
   // project has any material at all. Support materials count even though no geometry references
   // them directly: the baked `support_filament`/`support_interface_filament` (from the loaded
   // index) plus any live session override of those settings. We track the OBJECT side and the
-  // SUPPORT side separately so the remove-blocked copy can be accurate — `supportOnlyFilamentIds`
+  // SUPPORT side separately so the remove-blocked copy can be accurate: `supportOnlyFilamentIds`
   // is the materials used ONLY for supports (no object/part/layer/paint reference), which earn the
   // "used for supports" wording rather than "used by an object". Both are derived through a stable
-  // string key so they only change identity when the materials actually in use change — not on
-  // every drag — so they can gate the memoized settings-panel controller.
+  // string key so they only change identity when the materials actually in use change, not on
+  // every drag, so they can gate the memoized settings-panel controller.
   const bakedSupportFilamentIds = platesQuery.data?.supportFilamentIds
   const sessionSupportOverrides = sliceConfig?.perObjectSettings
   // Paint mutates `EditorState` IN PLACE (a clone per pointer-move would be brutal), so the state
-  // object's identity does not change when a stroke lands — and the usage memo below is keyed on
+  // object's identity does not change when a stroke lands, and the usage memo below is keyed on
   // it. This revision is bumped once per committed stroke (and by clear-paint) so the used-material
   // set re-derives: without it a painted material stayed "unused" (removable, and no prime tower)
   // until some unrelated edit happened to replace the state object.
@@ -708,7 +708,7 @@ function EditorView({
     }
     // Colour-painted triangles reference materials through their paint codes. Walk the whole split
     // TREE, not just whole-triangle codes: a brush dab splits triangles, so a partially painted
-    // model's second filament would otherwise read as unused — removable, and no prime tower.
+    // model's second filament would otherwise read as unused: removable, and no prime tower.
     for (const channel of [state?.colorPaint]) {
       for (const codes of Object.values(channel ?? {})) {
         for (const code of Object.values(codes)) collectColorPaintFilamentIds(code, objectIds)
@@ -727,7 +727,7 @@ function EditorView({
     // The index only does that for an object carrying its OWN `enable_support` opt-in (see
     // `parseModelSettingsObjectFilamentIds`), which is the case the project-wide toggle hides: a
     // process with support DISABLED but a support-interface material set, plus per-object overrides
-    // turning support on, really does print in that material — so it must not read as "referenced
+    // turning support on, really does print in that material, so it must not read as "referenced
     // only by a setting" and be freely removable. A support material no plate attributes stays
     // support-only (removable, BambuStudio drops the setting to Default). Deliberately conservative:
     // the attribution comes from the baked file, so turning those overrides off in-session keeps the
@@ -763,18 +763,18 @@ function EditorView({
   const [sceneReady, setSceneReady] = useState(false)
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const [gizmoMode, setGizmoMode] = useState<GizmoMode>('translate')
-  // 3D build plate (BambuStudio's modelled bed) — shared with the read-only previews, so the
+  // 3D build plate (BambuStudio's modelled bed): shared with the read-only previews, so the
   // preference and its default live in the hook. Printers with no bundled bed mesh fall back to
   // the plain grid on their own.
   const showBedModel = useShowBedModel()
-  // Which side the settings/objects panel sits on (desktop only — the narrow layout stacks it
+  // Which side the settings/objects panel sits on (desktop only: the narrow layout stacks it
   // below the viewport regardless). Read-only here: the workspace default and this device's
   // override are both edited in the editor settings dialog.
   const sidebarSide = useEffectiveSidebarSide()
   const [bedModelGeometry, setBedModelGeometry] = useState<THREE.BufferGeometry | null>(null)
   const [editorSettingsOpen, setEditorSettingsOpen] = useState(false)
   // The preset manager is its own dialog, supplied by the host and reached from the sidebar's
-  // "Manage" action; the gear opens editor settings. Deliberately no path from one to the other —
+  // "Manage" action; the gear opens editor settings. Deliberately no path from one to the other:
   // see EditorSettingsDialog.
   const [slicingPresetsOpen, setSlicingPresetsOpen] = useState(false)
   const openSlicingPresets = useCallback(() => setSlicingPresetsOpen(true), [])
@@ -802,7 +802,7 @@ function EditorView({
   }, [gizmoMode])
 
   // Fetch the printer's 3D plate mesh only while the option is on. A printer with no bundled
-  // bed simply resolves null and the grid stays — see lib/bedModel.ts.
+  // bed simply resolves null and the grid stays: see lib/bedModel.ts.
   //
   // Each cached geometry is released when it is replaced: switching printer model refetches, and
   // without this every switch leaked a bed geometry (CPU arrays plus its GPU upload). Disposing
@@ -854,7 +854,7 @@ function EditorView({
   const selectedAddedPartKeyRef = useRef(selectedAddedPartKey)
   selectedAddedPartKeyRef.current = selectedAddedPartKey
   // Existing baked part (objectId + the part's ORDINAL within the object) currently holding
-  // the transform gizmo — the counterpart of selectedAddedPartKey for parts already in the
+  // the transform gizmo: the counterpart of selectedAddedPartKey for parts already in the
   // 3MF. Never keyed by `componentObjectId`: that is the MESH the part references, and one
   // mesh may back several parts of the same object, so it does not identify a part.
   // Placement edits are geometry-level: they apply to every instance of the object and
@@ -889,7 +889,7 @@ function EditorView({
   const placementWarningsVisible = placementWarnings.length > 0 && placementWarningsSig !== dismissedWarningsSig
   const lastWarningSigRef = useRef('')
   // MACHINE-SWITCH WARNINGS. BambuStudio reports these too (it never silently moves a user's
-  // objects, and it clamps an out-of-range layer height without comment) — the gap was only WHEN:
+  // objects, and it clamps an out-of-range layer height without comment): the gap was only WHEN:
   // an off-bed object used to surface as the CLI's "no object fully inside the print volume"
   // (exit 206) after a slice attempt, long after the switch that caused it. Fires once per model
   // change, and only after the warnings have settled for the NEW bed (the placement validator runs
@@ -927,11 +927,11 @@ function EditorView({
   const [importing, setImporting] = useState(false)
   const [libraryPickerOpen, setLibraryPickerOpen] = useState(false)
   // What the next picked library file / uploaded local file is FOR. The library picker and the
-  // hidden file input are shared by three flows, so the pending request — not a boolean each —
+  // hidden file input are shared by three flows, so the pending request, not a boolean each,
   // decides where the staged import lands. Null means "add it to the plate as a new model".
   const [modelRequest, setModelRequest] = useState<ModelSourceRequest | null>(null)
   // Pending export-to-library request (destination dialog open). 'object'/'merged'/'parts'
-  // save one named STL; 'separate' saves one STL per selected object (no name field —
+  // save one named STL; 'separate' saves one STL per selected object (no name field,
   // each file is named after its object). Downloads never set this; they run immediately.
   const [exportRequest, setExportRequest] = useState<
     | { kind: 'object'; key: string }
@@ -946,7 +946,7 @@ function EditorView({
   const perObject = sliceConfig?.perObjectSettings ?? null
   // Which instances actually print (BambuStudio's per-object "Printable" toggle). This is
   // an editor-owned per-instance flag carried through moves/duplicates and baked into the
-  // SceneEdit, so it stays correct across plate changes — unlike the slice dialog's per-plate
+  // SceneEdit, so it stays correct across plate changes: unlike the slice dialog's per-plate
   // object selection, which is keyed off the static baked index.
   const isInstancePrinted = useCallback((instance: EditorInstance) => instance.printable, [])
   const isInstancePrintedRef = useRef(isInstancePrinted)
@@ -960,7 +960,7 @@ function EditorView({
   const [editingPart, setEditingPart] = useState<{ objectId: number; partIndexes: ReadonlyArray<number>; name: string } | null>(null)
   // Modifier part whose per-volume process overrides are being edited (dialog open).
   const [editingPartKey, setEditingPartKey] = useState<string | null>(null)
-  // One override map per selected object, in selection order — the bulk dialog seeds from ALL of
+  // One override map per selected object, in selection order: the bulk dialog seeds from ALL of
   // them (disagreements render as "Mixed") rather than only the first member's map.
   const editingObjectMemberOverrides = useMemo(
     () => (editingObject && perObject
@@ -977,7 +977,7 @@ function EditorView({
     (raw) => (raw === 'true' ? true : raw === 'false' ? false : null),
     String
   )
-  // The editor is maximized by nature — it has no smaller footprint to shrink to — so only the
+  // The editor is maximized by nature, it has no smaller footprint to shrink to, so only the
   // full-screen toggle is offered, and a page host locks the whole thing to full screen. The shared
   // modes own the geometry and the rule that this toggle is never persisted (it hides Save).
   const { presentation, fullScreen, setFullScreen } = useDialogPresentationState({
@@ -989,7 +989,7 @@ function EditorView({
   const showEditorChrome = !fullScreen
   const showSidebar = showEditorChrome && !sidebarCollapsed
   // The plate strip runs along whichever axis leaves the 3D area best proportioned, which depends on
-  // the space actually available — so the body is measured rather than guessed from breakpoints.
+  // the space actually available, so the body is measured rather than guessed from breakpoints.
   const [bodyNode, setBodyNode] = useState<HTMLDivElement | null>(null)
   const [bodySize, setBodySize] = useState({ width: 0, height: 0 })
   useEffect(() => {
@@ -1015,8 +1015,8 @@ function EditorView({
     gap: EDITOR_GRID_GAP_PX
   })
   // On phones the 3D view and the sidebar can't sit side by side, so the user toggles between
-  // them. The sidebar tab holds the SAME content as the desktop panel — settings, the object
-  // list, the per-plate G-code rows — rather than splintering the object list into a surface of
+  // them. The sidebar tab holds the SAME content as the desktop panel, settings, the object
+  // list, the per-plate G-code rows, rather than splintering the object list into a surface of
   // its own, which hid it behind a second gesture and let the two layouts drift apart.
   const [mobileView, setMobileView] = useState<'view' | 'settings'>('view')
   const fileInputRef = useRef<HTMLInputElement | null>(null)
@@ -1028,21 +1028,21 @@ function EditorView({
   // Rotation readout shown while the rotate gizmo or body-rotate is dragging.
   const [rotationReadout, setRotationReadout] = useState<number | null>(null)
   // Per-plate thumbnail data URLs, keyed by the plate's session identity (`plateId`, NEVER the
-  // live index — reorders/removes renumber indices and an index-keyed cache leaves each image
+  // live index: reorders/removes renumber indices and an index-keyed cache leaves each image
   // parked on the position it was captured at while the plates move out from under it).
   const [plateThumbnails, setPlateThumbnails] = useState<Record<number, string>>({})
   /**
-   * Plates (by `plateId`) whose thumbnail can no longer be trusted after a material was recoloured
-   * — BOTH sources. The embedded PNG was baked by an earlier save, and a live thumbnail is just a
+   * Plates (by `plateId`) whose thumbnail can no longer be trusted after a material was recoloured,
+   * BOTH sources. The embedded PNG was baked by an earlier save, and a live thumbnail is just a
    * cached image of a plate that is not currently built, so neither follows a colour change. Only
    * the ACTIVE plate is genuinely repainted (the recolour traversal walks the groups in the live
    * scene, which are its).
    *
-   * The strip stops showing a stale plate immediately — one advertising the wrong colour is worse
-   * than one that admits it is loading — and a background pass re-renders them one at a time.
+   * The strip stops showing a stale plate immediately, one advertising the wrong colour is worse
+   * than one that admits it is loading, and a background pass re-renders them one at a time.
    */
   const [staleEmbeddedPlates, setStaleEmbeddedPlates] = useState<ReadonlySet<number>>(() => new Set())
-  // Live (client-rendered) thumbnails — only set for plates the user has opened/edited. Read via
+  // Live (client-rendered) thumbnails, only set for plates the user has opened/edited. Read via
   // a ref at save time to know which plates to re-render.
   const plateThumbnailsRef = useRef(plateThumbnails)
   plateThumbnailsRef.current = plateThumbnails
@@ -1060,13 +1060,13 @@ function EditorView({
   // Incremental-sync tokens: a scene edit that changes only transforms or only part materials must
   // NOT tear down and rebuild every part's geometry (murder on a hundred-part object). Instead of
   // bumping `rebuildToken`, such edits bump one of these and a light effect updates the live groups
-  // in place — positions for `transform`, mesh colours for `material`. See `updatePlates`.
+  // in place: positions for `transform`, mesh colours for `material`. See `updatePlates`.
   const [transformSyncToken, setTransformSyncToken] = useState(0)
   const [materialSyncToken, setMaterialSyncToken] = useState(0)
   /** Saved filament ids a renumber is waiting on before it recolours; see handleFilamentsRenumbered. */
   const pendingRenumberIdsRef = useRef<number[] | null>(null)
   // Bumped to rebuild ONLY the place-on-face hull (not the whole plate) after a lay-flat re-orients
-  // the part — the hull bakes the rotor's rotation in group-local space, so it must be rebuilt to
+  // the part: the hull bakes the rotor's rotation in group-local space, so it must be rebuilt to
   // follow the new orientation instead of lingering stale.
   const [faceHullToken, setFaceHullToken] = useState(0)
   const rebuildFaceHullRef = useRef<() => void>(() => undefined)
@@ -1112,11 +1112,11 @@ function EditorView({
     usedFilamentIds,
     supportOnlyFilamentIds,
     // A scaffold has no machine of its own, so its SEEDED target is unsaved work from the start
-    // (no baseline is captured until the first save) — see the retarget-signature block.
+    // (no baseline is captured until the first save): see the retarget-signature block.
     editorBorn: isNewProject
   })
   // Read through a ref so the save handler stays stable (it is built far below, and the history
-  // action is re-created per render) — the same shape as recordHistoryRef/undoRef.
+  // action is re-created per render), the same shape as recordHistoryRef/undoRef.
   const rebaseHistoryFilamentSourcesRef = useRef(rebaseHistoryFilamentSources)
   rebaseHistoryFilamentSourcesRef.current = rebaseHistoryFilamentSources
 
@@ -1134,7 +1134,7 @@ function EditorView({
   const saveAsBridgeId = bridgeId
   const saveAsInitialFolderId = bridgeId ? folderId : null
   const saveAsSuggestedName = baseFileQuery.data ? splitLibraryFileNameForRename(baseFileQuery.data.file.name).baseName : ''
-  // Non-null only while the OPENED project is the one flagged as needing repair — an editor
+  // Non-null only while the OPENED project is the one flagged as needing repair, an editor
   // opened on a new-project scaffold or an archived version has no repairable stored file.
   const needsSettingsRepairFileId = baseFileId !== null
     && !isNewProject
@@ -1144,9 +1144,9 @@ function EditorView({
     : null
   // The defects to warn about, from whichever source this host has: the library DTO, the OPENED
   // VERSION's own parse for an archived open, or the host's own parse. Kept separate from the file
-  // id above because a host can have reasons and NO file (the public editor) — conflating the two
+  // id above because a host can have reasons and NO file (the public editor): conflating the two
   // is what made the notice workspace-only. An archived version reads its OWN parsed index, never
-  // the library DTO: the DTO describes the file's head, which may already be repaired — that
+  // the library DTO: the DTO describes the file's head, which may already be repaired, that
   // mismatch is how defective old versions opened with no warning at all while the head was clean.
   const openedArchivedVersion = baseFileId !== null && !isNewProject && baseVersionId != null
   const rawSettingsRepairReasons: readonly ThreeMfSettingsRepairReason[] =
@@ -1195,7 +1195,7 @@ function EditorView({
     () => new Set((platesQuery.data?.plates ?? []).filter((plate) => plate.hasThumbnail).map((plate) => plate.index)),
     [platesQuery.data]
   )
-  // Resolved through the plate's SOURCE index — the archive's numbering — never its live index:
+  // Resolved through the plate's SOURCE index, the archive's numbering, never its live index:
   // after a reorder the plate at position 1 must keep fetching the PNG of the source plate it
   // came from, and a session-added plate (no source) has no embedded image at any position.
   const embeddedPlateThumbnailUrl = useCallback(
@@ -1215,7 +1215,7 @@ function EditorView({
   //
   // Frozen after the first resolution: this only governs which plate loads first on open. The
   // editor mirrors the active plate back to the host's plate-number (for slicing), which feeds
-  // back in as `initialPlateIndex` — if `preferredPlateIndex` followed that, every plate switch
+  // back in as `initialPlateIndex`: if `preferredPlateIndex` followed that, every plate switch
   // would re-key and refetch the "initial" scene, flip the load gate, and reload the viewport.
   const frozenPreferredPlateRef = useRef<number | null>(null)
   const preferredPlateIndex = useMemo(() => {
@@ -1252,7 +1252,7 @@ function EditorView({
     queryFn: async ({ signal }) => {
       const scenes = new Map<number, LibraryThreeMfScene>()
       // Bound the fan-out: a naive Promise.all over all rest plates fires N simultaneous /scene
-      // requests on open, each forcing a full server-side root-model parse — an N-wide spike right
+      // requests on open, each forcing a full server-side root-model parse, an N-wide spike right
       // when the editor is mounting. A small worker pool turns that burst into a throttled trickle
       // (each plate's parse is cheap and now server-cached, so re-selecting one is free).
       const REST_SCENE_CONCURRENCY = 3
@@ -1305,7 +1305,7 @@ function EditorView({
         .map((plate) => plate.plateId)
     )
     // `preferredPlateIndex` is a SOURCE index; the seeded plates are positional. Assigning it
-    // directly deadlocked on archives whose plate list doesn't start at 1 — see the helper's doc.
+    // directly deadlocked on archives whose plate list doesn't start at 1: see the helper's doc.
     setActivePlateIndex(seededActivePlateIndex(seeded.plates, preferredPlateIndex))
     setState(seeded)
   }, [hasNoBaseFile, platesQuery.data, initialSceneSettled, scenesByPlate, preferredPlateIndex])
@@ -1314,7 +1314,7 @@ function EditorView({
   // before their scene loaded (only still-empty plates, so a user edit on a seemingly
   // empty plate is never clobbered; not an undoable edit), and keep every plate's bed +
   // unprintable zones in sync with the selected target printer (the scene queries refetch
-  // when `targetPrinterModel` changes — it's in their keys). These MUST stay one effect:
+  // when `targetPrinterModel` changes, it's in their keys). These MUST stay one effect:
   // `stateRef.current` only updates on render, so two sibling effects deriving next-state
   // from it on the same `scenesByPlate` change would have the second overwrite the first
   // (which is exactly how late-loaded plates briefly shipped empty).
@@ -1326,18 +1326,18 @@ function EditorView({
     // via a FUNCTIONAL updater that maps over the latest `prev`. Other effects keyed on
     // the same `scenesByPlate` change also setState in this flush; if each spread a stale
     // `stateRef.current` snapshot, the last writer would clobber the others (this is how
-    // late-loaded plates ended up empty — the per-part re-hydrate effect overwrote the
+    // late-loaded plates ended up empty: the per-part re-hydrate effect overwrote the
     // plate fill). Composing over `prev` makes the writes additive.
     // All three maps key on `plateId`: scenes are fetched by SOURCE index and the updater below
     // composes over a `prev` whose LIVE indices may have moved since this snapshot (a reorder
     // setState in the same flush), so neither index can address "the same plate" reliably.
     const filledPlates = new Map<number, EditorPlate>()
     const nextBeds = new Map<number, EditorPlate['bed']>()
-    // Per-plate {dx,dy} to shift already-placed instances when the bed's ORIGIN moves under them —
+    // Per-plate {dx,dy} to shift already-placed instances when the bed's ORIGIN moves under them:
     // see below. Absent for plates whose bed didn't move that way.
     const recenter = new Map<number, { dx: number; dy: number }>()
     // Session-added plates have no scene of their own but share the project's one printer bed,
-    // so they borrow any loaded scene's bed — otherwise a printer switch would leave them on the
+    // so they borrow any loaded scene's bed, otherwise a printer switch would leave them on the
     // bed they copied from their template plate at add time.
     const anyScene = scenesByPlate.values().next().value as LibraryThreeMfScene | undefined
     for (const plate of snapshot.plates) {
@@ -1360,7 +1360,7 @@ function EditorView({
         // Objects placed before the real printer bed resolved were positioned against the
         // origin-centred FALLBACK bed (min < 0, centre at 0,0). When the real, 0-based bed
         // (min >= 0) arrives, an object left at its fallback coordinates sits near the machine's
-        // front-left corner — partly off the plate — and the slice fails with BambuStudio's
+        // front-left corner, partly off the plate, and the slice fails with BambuStudio's
         // CLI_NO_SUITABLE_OBJECTS (exit 206). Shift each placed instance by the bed-centre delta so
         // it keeps the same position RELATIVE TO THE PLATE instead of stranding at the old origin.
         // Only for this fallback -> real transition (not real -> real printer switches, which
@@ -1402,7 +1402,7 @@ function EditorView({
     // A bed change (printer-model switch) or late plate fill rebuilds the plate. Ideally a
     // bed-only change would replace just the bed surface and keep the models, but the 3D build
     // plate model (`bedModelGeometry`) is a dependency of the build effect and reloads on a
-    // printer switch, so the build effect rebuilds regardless — decoupling the bed surface from
+    // printer switch, so the build effect rebuilds regardless: decoupling the bed surface from
     // the model build is a separate change. See docs/slicer-architecture.md.
     setRebuildToken((token) => token + 1)
   }, [scenesByPlate])
@@ -1452,7 +1452,7 @@ function EditorView({
     }
     if (Object.keys(additions).length === 0) return
     // Functional updater so this composes with the plate-fill effect that also runs on
-    // this `scenesByPlate` change — a `{ ...stateRef.current }` spread here would clobber
+    // this `scenesByPlate` change, a `{ ...stateRef.current }` spread here would clobber
     // the freshly-filled plates with the pre-fill snapshot.
     setState((prev) => prev
       ? { ...prev, partProcessOverrides: { ...(prev.partProcessOverrides ?? {}), ...additions } }
@@ -1469,7 +1469,7 @@ function EditorView({
    * Instances to LIST in the sidebar: only the models the viewport has actually rendered
    * ({@link renderedInstanceKeys}), so the list and the 3D view always agree.
    *
-   * Filtered UNCONDITIONALLY — not just while `viewportBuilding` — because the plate's instances are
+   * Filtered UNCONDITIONALLY, not just while `viewportBuilding`, because the plate's instances are
    * seeded a beat BEFORE the build effect starts, so a "show everything when not building" guard
    * listed them all, blanked on build start, then refilled (a visible flash on open). The set can't
    * go stale: `activeInstanceKeys` is a dependency of the build effect, so any instance-set change
@@ -1497,12 +1497,12 @@ function EditorView({
   const projectFilamentCountRef = useRef(0)
   // filamentId -> runtime nozzleId (1 = left, 0 = right) for the active plate, so per-object
   // nozzle reach can be checked against the labeled nozzle-only zones. Values come straight from
-  // the parsed index, so they are runtime ids — `zoneRequiredNozzle` answers in the same space.
+  // the parsed index, so they are runtime ids: `zoneRequiredNozzle` answers in the same space.
   const filamentNozzleRef = useRef<Map<number, number>>(new Map())
   {
     const map = new Map<number, number>()
     // The baked index speaks SOURCE plate numbers, so resolve through the active plate's own
-    // source identity — the live index drifts from it after a reorder, and never matched at all
+    // source identity: the live index drifts from it after a reorder, and never matched at all
     // on archives whose plate list doesn't start at 1. A session-added plate has no baked entry
     // and gets an empty map: the index knows nothing about it.
     const activeSourceIndex = activePlate?.sourcePlateIndex ?? null
@@ -1541,6 +1541,10 @@ function EditorView({
   const plateRootRef = useRef<THREE.Group | null>(null)
   const geometryCacheRef = useRef<GeometryCache>(new Map())
   const importGeometryCacheRef = useRef<ImportGeometryCache>(new Map())
+  // Bound after `worldFootprintCenterFor` is declared (it reads the live scene groups, set up further
+  // down). A ref, like `setGroupBrimEarMarkersRef`, so the replace path can ask where an instance
+  // actually SITS without a circular declaration.
+  const worldFootprintCenterForRef = useRef<((key: string) => { x: number; y: number } | null) | null>(null)
   // Maps instance key -> Three.js group, so selection/gizmo can find the object.
   const groupByKeyRef = useRef<Map<string, THREE.Group>>(new Map())
   // View-cube preset applier, rebound by the init effect once the camera exists.
@@ -1574,7 +1578,7 @@ function EditorView({
   const extraSelectedKeysRef = useRef(extraSelectedKeys)
   extraSelectedKeysRef.current = extraSelectedKeys
   // Selected PARTS of one object (BambuStudio volume-mode). Mutually exclusive with the
-  // object selection above — selecting either kind clears the other (never mixed), and
+  // object selection above: selecting either kind clears the other (never mixed), and
   // parts only multi-select within one object (rules in lib/selectionModel.ts). Geometry-
   // level (objectId+componentObjectId), so it means "this part on every copy".
   const [partSelection, setPartSelection] = useState<PartSelection | null>(null)
@@ -1632,7 +1636,7 @@ function EditorView({
       return next.length === current.length ? current : next
     })
   }, [activePlateIndex, state, selectedKey])
-  // Part selection follows the project: drop parts whose owning object (on any plate —
+  // Part selection follows the project: drop parts whose owning object (on any plate:
   // part identity is geometry-level) or the parts themselves vanished (delete/undo/replace).
   useEffect(() => {
     setPartSelection((current) => {
@@ -1661,7 +1665,7 @@ function EditorView({
   const primeTowerObjRef = useRef<THREE.Object3D | null>(null)
   // Index of the plate the viewport last started building, so a rebuild can tell a genuine
   // plate switch (defer for a loading indicator) from a same-plate rebuild (build immediately,
-  // no partial-then-reload flicker — e.g. when slice-config/filament data settles after open).
+  // no partial-then-reload flicker: e.g. when slice-config/filament data settles after open).
   const prevBuiltPlateIndexRef = useRef<number | null>(null)
   // Commits a dragged prime-tower position back into state (rebound below).
   const movePrimeTowerRef = useRef<((x: number, y: number) => void) | null>(null)
@@ -1687,7 +1691,7 @@ function EditorView({
     setContextMenu({ x: menu.x, y: menu.y, kind: 'object', key: menu.key })
   }
   // The context menu is a bare anchored Menu (no Dropdown), so it lacks Joy's built-in
-  // click-away/Escape handling — wire it up below. `contextMenuListboxRef` is the menu's
+  // click-away/Escape handling: wire it up below. `contextMenuListboxRef` is the menu's
   // listbox (for outside-click detection); the open + escape-suppress refs let the editor
   // Modal ignore the Escape we (or a re-right-click) dispatch to close the menu, so a right
   // click never tears down the whole editor.
@@ -1729,7 +1733,7 @@ function EditorView({
   // NOTE: cache-owned fetches deliberately take no AbortSignal. The promise is shared
   // across builds (prefetch + sequential assembly, superseding rebuilds), so tying it
   // to one build's signal let that build's teardown abort a fetch a NEWER build was
-  // awaiting — the model never appeared and the AbortError surfaced as an error toast.
+  // awaiting: the model never appeared and the AbortError surfaced as an error toast.
   // Builds cancel by checking their own `cancelled` flag after each await; a fetch
   // that outlives every consumer just completes into the cache (or evicts on failure).
   const fetchGeometry = useCallback((entryPath: string) => {
@@ -1744,7 +1748,7 @@ function EditorView({
       // must fail loudly (so the viewport shows an error/retry) rather than freeze the build.
       const bytes = await projectSource.loadEntry(entryPath)
       // Parse + process off the main thread (worker pool) so a huge object (50MB+ of mesh XML)
-      // doesn't freeze the editor while it builds — falls back to a main-thread parse on worker error.
+      // doesn't freeze the editor while it builds: falls back to a main-thread parse on worker error.
       return parseThreeMfModelEntryAsync(bytes)
     })()
     cache.set(entryPath, promise)
@@ -1798,12 +1802,12 @@ function EditorView({
       // color baked into the source scene.
       const meshFilamentId = resolveColorFilamentIdRef.current(instance.filamentId)
       // Colours are read via the ref (not the `filamentColors` prop) so buildInstanceGroup is stable
-      // w.r.t. colour edits — a swatch change recolours in place (see the recolor effect) instead of
+      // w.r.t. colour edits, a swatch change recolours in place (see the recolor effect) instead of
       // re-running this whole builder and rebuilding the plate. Each coloured mesh is tagged with its
       // resolved filament id + a static fallback so that effect can recompute its live colour.
       const meshColor = (meshFilamentId != null && filamentColorsRef.current?.[meshFilamentId]) || instance.color
       // Full geometry->world transform (the placement applied to the group below) so the
-      // shared part builder computes bed clearance — and thus picks the same material and
+      // shared part builder computes bed clearance, and thus picks the same material and
       // edge outlines as the read-only preview.
       const placement = instance.exactMatrix
         ? createThreeMfMatrix(instance.exactMatrix)
@@ -1829,7 +1833,7 @@ function EditorView({
             // renders translucent like a baked part of that type.
             const partGroup = createThreeMfPartObject(geometry, { color: partColor, clearanceTransform: placement, subtype: part.subtype })
             // Part identity for per-part export. Deliberately NOT `partRef`: that key drives the
-            // baked-part gizmo/selection write-back, whose transforms bake by REAL 3MF object id —
+            // baked-part gizmo/selection write-back, whose transforms bake by REAL 3MF object id,
             // an import's synthetic identity must stay out of that path.
             partGroup.userData.importPartRef = { componentObjectId: part.componentObjectId, partIndex: part.partIndex }
             if (!isNonRenderableThreeMfPartSubtype(part.subtype)) {
@@ -1839,7 +1843,7 @@ function EditorView({
                 partMesh.userData.recolor = { filamentId: partFilamentId, fallbackColor: part.color || instance.color }
                 // Paintable: an import's solids paint like any part. The key is the import's
                 // synthetic identity + its SOLID INDEX, which `collectImportPaint` maps back to
-                // (importId, partIndex) — the same indexing the bake writes paint at.
+                // (importId, partIndex), the same indexing the bake writes paint at.
                 const paintHostId = addedPartHostId(instance)
                 if (paintHostId != null) {
                   partMesh.userData.supportPaintPart = {
@@ -1861,7 +1865,7 @@ function EditorView({
             applyLayerBandOverlays(importMesh.material as THREE.Material, layerBandUniformsRef.current)
             importMesh.userData.recolor = { filamentId: meshFilamentId, fallbackColor: instance.color }
             // Paintable, exactly like a multi-solid import's parts. A single-solid import has an
-            // EMPTY `parts` array, so its one mesh is solid 0 — the index `collectImportPaint`
+            // EMPTY `parts` array, so its one mesh is solid 0: the index `collectImportPaint`
             // emits and the bake reads back. Without this tag the brush finds no target and paint
             // silently does nothing (an added cube in a new project is the common case).
             const paintHostId = addedPartHostId(instance)
@@ -1895,7 +1899,7 @@ function EditorView({
             subtype: part.subtype
           })
           // The part matrix lives on the GROUP (children stay part-local) so the part
-          // gizmo renders where the part actually sits — attached to an identity group
+          // gizmo renders where the part actually sits, attached to an identity group
           // it appeared at the object's origin, over the main part. Write-backs stay
           // layout-agnostic: they read group.matrix x child matrix.
           partGroup.applyMatrix4(partTransform)
@@ -1946,10 +1950,10 @@ function EditorView({
       return group
     },
     // resolveColorFilamentId is read via its ref (not a dep) so a late filament/slice-config
-    // settle on open doesn't recreate this builder and trigger a redundant second plate rebuild
-    // — colours are applied/refreshed by the dedicated recolor effect, not by rebuilding geometry.
+    // settle on open doesn't recreate this builder and trigger a redundant second plate rebuild,
+    // colours are applied/refreshed by the dedicated recolor effect, not by rebuilding geometry.
     // seedPartPaintOverlays is stable (its only dep, colorPaintStateColor, has empty deps), so
-    // listing it cannot retrigger a plate rebuild — it now owns the colour-paint tint lookup the
+    // listing it cannot retrigger a plate rebuild, it now owns the colour-paint tint lookup the
     // builder used to reference directly.
     [seedPartPaintOverlays, fetchGeometry, fetchImportGeometry]
   )
@@ -2047,7 +2051,7 @@ function EditorView({
       } else {
         // Follows live swatch edits like every other printed mesh. No part ref: the recolour
         // effect finds none and falls back to the instance's filament, which is the right answer
-        // for a part that inherited it — and `refreshAddedPartMeshes` rebuilds on an explicit
+        // for a part that inherited it, and `refreshAddedPartMeshes` rebuilds on an explicit
         // per-part reassignment anyway.
         mesh.userData.recolor = { filamentId: partFilamentId, fallbackColor: instance.color ?? undefined }
       }
@@ -2059,7 +2063,7 @@ function EditorView({
 
   /**
    * Re-derive every built group's added-part meshes from the current editor state. Covers
-   * import-backed instances too — `effectiveAddedParts` returns nothing for a model that has no
+   * import-backed instances too: `effectiveAddedParts` returns nothing for a model that has no
    * parts, and an unsaved import can host them (see {@link addedPartHostId}).
    */
   const refreshAddedPartMeshes = useCallback(() => {
@@ -2108,7 +2112,7 @@ function EditorView({
     const matrix = threeMfTransformFromMatrix(effective)
     if (!state.partTransforms) state.partTransforms = {}
     state.partTransforms[partSlotKey(selected.objectId, selected.partIndex)] = matrix
-    // Match by the identity the part row keys on — the part's ORDINAL within its object — so a
+    // Match by the identity the part row keys on, the part's ORDINAL within its object, so a
     // multi-solid import's solids update every copy too. Addressing by `componentObjectId` moved
     // every volume that shared the dragged one's MESH: four modifier cubes cut from one cube mesh
     // all collapsed onto whichever one was dragged.
@@ -2123,7 +2127,7 @@ function EditorView({
     }
     // Mirror the drag delta onto the other instances' matching part groups (their child
     // matrices equal the dragged one's, so the same delta lands on the same placement). Within the
-    // dragged part's OWN instance exactly one node matches — itself — and it is skipped.
+    // dragged part's OWN instance exactly one node matches, itself, and it is skipped.
     for (const instance of activePlateRef.current?.instances ?? []) {
       if (!ownsSelectedPart(instance)) continue
       const group = groupByKeyRef.current.get(instance.key)
@@ -2174,7 +2178,7 @@ function EditorView({
       marker.userData.brimEarLocal = { x: ear.x, y: ear.y, z: ear.z }
       marker.renderOrder = 2
       // The marker's matrix is fully baked by syncBrimEarMarkerMatrices (flat on the
-      // bed, world-scale radius) — local position/rotation/scale are never used.
+      // bed, world-scale radius): local position/rotation/scale are never used.
       marker.matrixAutoUpdate = false
       rotor.add(marker)
     })
@@ -2209,7 +2213,7 @@ function EditorView({
     if (edit.kind === 'add') {
       const rotor = (edit.group.userData.rotor as THREE.Group | undefined) ?? edit.group
       rotor.updateWorldMatrix(true, false)
-      // Bambu rule: the clicked surface point drops straight down to the bed — brim
+      // Bambu rule: the clicked surface point drops straight down to the bed: brim
       // ears are first-layer features, so a click anywhere on a side wall places the
       // ear underneath it (world z just below the bed, matching GLGizmoBrimEars).
       const world = edit.worldPoint.clone()
@@ -2347,10 +2351,10 @@ function EditorView({
 
   /**
    * Mirror a transform into the manual-input panel: an instance group's plate-local TRS,
-   * or — when the gizmo holds a part (added mesh / baked part group) — the part's
+   * or, when the gizmo holds a part (added mesh / baked part group), the part's
    * OBJECT-local placement, BambuStudio's "Volume Operations" behaviour.
    */
-  // Compute the manual-panel transform (position/rotation/scale) from a gizmo target. Pure — the
+  // Compute the manual-panel transform (position/rotation/scale) from a gizmo target. Pure: the
   // caller decides whether to push it live (drag) or into state (selection); see below.
   const computeSelectedTransform = useCallback((object: THREE.Object3D): SelectedTransform | null => {
     const fromTrs = (position: THREE.Vector3, rotation: THREE.Euler, scale: THREE.Vector3): SelectedTransform => ({
@@ -2436,8 +2440,8 @@ function EditorView({
     // stale latched key matching the new plate, which must not skip the switch reframe.
     const viewKey = `${activePlateIndex}|${bedCenterX},${bedCenterY},${bedWidth},${bedDepth}`
     // Reframe the camera SYNCHRONOUSLY here (not at the async swap below). frameDefaultView
-    // only reads the bed centre/distance refs set just above — it's independent of the geometry
-    // — and on open the build effect can run several times while slice-config/filament data
+    // only reads the bed centre/distance refs set just above, it's independent of the geometry,
+    // and on open the build effect can run several times while slice-config/filament data
     // settles. If the reframe waited for the swap, the first run would latch the view key but
     // get superseded before swapping, and the surviving run (key already latched) would skip the
     // reframe entirely, leaving the initial plate framed on the default camera.
@@ -2452,7 +2456,7 @@ function EditorView({
     // Render strategy turns on whether the live plate is EMPTY:
     //  - A genuine plate switch clears it (just below), and the first open starts empty: build
     //    straight onto the live plateRoot and reveal each model as it finishes, so loading reads
-    //    as steady progress instead of one late pop-in — and we never hold two plates' geometry
+    //    as steady progress instead of one late pop-in, and we never hold two plates' geometry
     //    at once (lower peak memory on a switch).
     //  - When the plate already has content (same-plate add/remove/duplicate, or a settling
     //    rebuild on open) build into a DETACHED staging group and swap it in atomically once
@@ -2472,7 +2476,7 @@ function EditorView({
     const incremental = groupByKeyRef.current.size === 0
     setBuildIncremental(incremental)
     // Publish the load count SYNCHRONOUSLY (before the async build's first paint/prefetch) so the
-    // progress bar shows the real total from the first frame — otherwise a partly-loaded plate reads
+    // progress bar shows the real total from the first frame, otherwise a partly-loaded plate reads
     // as finished while the count is still null. Count per-PART (the actual download units, mirroring
     // the prefetch fan-out below), not per-object, so a single multi-solid assembly still shows
     // granular progress instead of a stuck "1 of 1". The prefetch bumps `done` as each part settles.
@@ -2483,12 +2487,12 @@ function EditorView({
     ), 0)
     setBuildProgress(totalLoadUnits > 0 ? { done: 0, total: totalLoadUnits } : null)
     // Identifies the bed geometry currently on the plate. On an incremental (empty-plate) rebuild
-    // the plate is not cleared, so a bed added on a previous pass persists — but the bed DIMENSIONS
+    // the plate is not cleared, so a bed added on a previous pass persists, but the bed DIMENSIONS
     // can change underneath it (a scene refetch once the target printer resolves: e.g. the pre-model
     // 256 fallback -> the printer's real 350x320). Replace the bed when its signature changed rather
     // than skipping because "a bed already exists", which stranded the stale bed until an Arrange /
     // add-model forced the atomic-swap path. The atomic (staging) path always rebuilds the bed.
-    // The 3D plate rides on the bed surface group, so its presence belongs in the signature —
+    // The 3D plate rides on the bed surface group, so its presence belongs in the signature,
     // otherwise toggling the option leaves the previously-built bed in place.
     const bedModel = showBedModel ? bedModelGeometry : null
     const bedSignature = JSON.stringify([bedWidth, bedDepth, bedCenterX, bedCenterY, activePlate.bed.excludeAreas, Boolean(bedModel)])
@@ -2534,7 +2538,7 @@ function EditorView({
       if (cancelled) { discardStaging(); return }
 
       // Advance the progress bar as each part download settles (success OR failure), so the
-      // indicator reflects real download progress — even for one big multi-part assembly. Guarded on
+      // indicator reflects real download progress, even for one big multi-part assembly. Guarded on
       // `cancelled` so a superseded build never writes progress for a plate the user left.
       let loadedUnits = 0
       const bumpLoaded = () => {
@@ -2570,8 +2574,8 @@ function EditorView({
           }
           if (group) {
             // Rest every object on the bed as it's built and persist the corrected z into state
-            // (in place, like writeBack — no re-render). Objects must sit on the bed for slicing,
-            // and this guarantees nothing is ever displayed floating/sunk — so a later move/scale
+            // (in place, like writeBack, no re-render). Objects must sit on the bed for slicing,
+            // and this guarantees nothing is ever displayed floating/sunk, so a later move/scale
             // never "snaps" it to the bed (the long-standing jump bug).
             restObjectOnBed(group)
             instance.position.z = group.position.z
@@ -2602,7 +2606,7 @@ function EditorView({
       }
       if (cancelled) { discardStaging(); return }
       // Now that the plate's models are present, size the prime tower to the print height (its
-      // depth depends on height) and place it on the bed — but only when the print would actually
+      // depth depends on height) and place it on the bed, but only when the print would actually
       // USE more than one material (the live session set: parts, paint, layer changes, support
       // references), since that's the only time a purge/prime tower is generated. A project that
       // merely CARRIES extra materials, or a switched-in process preset with the tower enabled,
@@ -2628,7 +2632,7 @@ function EditorView({
       primeTowerObjRef.current = builtTower
       // Re-attach the gizmo to the selected instance if it is on this plate.
       reattachGizmo()
-      // All of this plate's models are now in the scene — refresh placement warnings now so a
+      // All of this plate's models are now in the scene: refresh placement warnings now so a
       // rebuild-driven change (undo/redo, delete, duplicate, plate switch) reflects in the panel
       // immediately rather than on the next rAF poll tick (which can lag, or never arrive if a
       // drag flag was left stuck). The poll remains as a backstop for non-rebuild moves.
@@ -2659,7 +2663,7 @@ function EditorView({
       setBuildIncremental(false)
     }
     // showBedModel/bedModelGeometry are read when building the bed surface, so a toggle (or a
-    // late-arriving mesh) has to rebuild the plate — without them the option appears to do nothing.
+    // late-arriving mesh) has to rebuild the plate, without them the option appears to do nothing.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activePlateIndex, activeInstanceKeys, buildInstanceGroup, sceneReady, rebuildToken, showBedModel, bedModelGeometry])
 
@@ -2668,8 +2672,8 @@ function EditorView({
     if (!transform) return
     const group = selectedKey ? groupByKeyRef.current.get(selectedKey) : null
     // With a part on the gizmo, drop the object-level selection box (BambuStudio's
-    // volume selection): only the part's own highlight shows, so the whole object —
-    // and especially the main part — no longer reads as selected.
+    // volume selection): only the part's own highlight shows, so the whole object,
+    // and especially the main part, no longer reads as selected.
     setSelectionHighlightRef.current?.(selectedAddedPartKey || selectedBakedPart ? null : group ?? null)
     if (!group) {
       transform.detach()
@@ -2719,13 +2723,28 @@ function EditorView({
         transform.attach(gizmoMode === 'rotate' ? rotorOf(group) : group)
         transform.setMode(gizmoMode)
       }
-    } else if (extraSelectedKeys.length > 0) {
-      // MULTI-selection: the gizmo attaches to the pivot proxy at the selection's centre —
-      // BambuStudio renders its gizmos there (AABB centre for move/scale, min-enclosing-sphere
-      // centre for rotate) and transforms the selection as ONE rigid body about that pivot;
-      // useEditorScene applies the proxy's per-frame delta to every member. Cheap boxes on
-      // purpose: this runs on every selection change, where a precise per-vertex walk is the
-      // select-hitch the cheap selection box already removed. The readout panel keeps showing
+    } else {
+      // OBJECT selection, one or many: the gizmo attaches to the pivot proxy at the selection's
+      // GEOMETRIC centre, and `useEditorScene` applies the proxy's per-frame delta rigid-body to
+      // every member.
+      //
+      // BambuStudio centres its gizmos on the selection unconditionally, with no single-vs-multi
+      // distinction — `GLGizmoMove` on `selection.get_bounding_box().center()` (:49), `GLGizmoScale`
+      // on the box transform's translation (:246), `GLGizmoRotate` on the bounding SPHERE centre
+      // (:549, `init_data_from_selection`, which runs for a selection of one). We used to attach a
+      // single object to its group (move/scale) or rotor (rotate), both of which sit at the object's
+      // local ORIGIN — and an origin is wherever the file's exporter put it, so an object rotated
+      // about a corner, or about the middle of one end once a z-from-zero model was laid flat.
+      // Normalising IMPORT geometry (`ImportNormalization`) makes origin and centre coincide for a
+      // staged import, but an in-project Bambu object carries plate coordinates and can never be
+      // fixed that way; centring the pivot is what covers both.
+      //
+      // No new inaccuracy for the single case: `applySelectionDelta` composes a world rotation into
+      // the rotor quaternion, which is exact for uniform scale and, for a non-uniformly scaled
+      // member, is the SAME approximation the single-object rotate gizmo already made.
+      //
+      // Cheap boxes on purpose: this runs on every selection change, where a precise per-vertex walk
+      // is the select-hitch the cheap selection box already removed. The readout panel keeps showing
       // the PRIMARY object's values (panelTarget stays `group`).
       const proxy = multiPivotRef.current
       const boxes: THREE.Box3[] = []
@@ -2740,17 +2759,21 @@ function EditorView({
         proxy.scale.set(1, 1, 1)
         transform.attach(proxy)
       } else {
+        // No proxy yet (viewport still mounting) or an empty box: the origin-attached gizmo is the
+        // honest fallback rather than a pivot guessed from nothing.
         transform.attach(gizmoMode === 'rotate' ? rotorOf(group) : group)
       }
-      transform.setMode(gizmoMode)
-    } else {
-      transform.attach(gizmoMode === 'rotate' ? rotorOf(group) : group)
       transform.setMode(gizmoMode)
     }
     // Selection/gizmo change is low-frequency: seed the readout through state, which both mounts the
     // panel (the gate) and re-seeds its value. Live drag updates then flow through the setter ref.
     const seeded = computeSelectedTransform(panelTarget)
     if (seeded) setSelectedTransform(seeded)
+    // `extraSelectedKeys` is a re-run TRIGGER, not a value read here: the member boxes come from
+    // `allSelectedKeysRef` (a ref, so it cannot change this callback's identity), and the pivot has
+    // to be re-seated whenever the selection gains or loses a member. Dropping it as the rule
+    // suggests would freeze the pivot at whatever the selection was when the mode last changed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedKey, gizmoMode, selectedAddedPartKey, selectedBakedPart, extraSelectedKeys, computeSelectedTransform])
 
   const reattachGizmoRef = useRef(reattachGizmo)
@@ -2761,7 +2784,7 @@ function EditorView({
     reattachGizmo()
   }, [reattachGizmo])
 
-  // Selecting a different instance drops back to object-level transform — unless the
+  // Selecting a different instance drops back to object-level transform, unless the
   // selected part belongs to the newly selected instance's object (the added-part list
   // row selects the instance and the part together; clearing here would undo it).
   useEffect(() => {
@@ -2792,7 +2815,7 @@ function EditorView({
   }, [isInstancePrinted, activePlate, rebuildToken])
 
   // Show the convex-hull face overlay while "place on face" is active so the user
-  // can pick a face to lay down — including pseudo-faces over open ends.
+  // can pick a face to lay down, including pseudo-faces over open ends.
   useEffect(() => {
     if (gizmoMode !== 'layFace' || !selectedKey) return undefined
     const group = groupByKeyRef.current.get(selectedKey)
@@ -2957,9 +2980,9 @@ function EditorView({
    * Render a fresh thumbnail for EVERY plate from the current arrangement and return them
    * as base64 PNGs for embedding in a saved 3MF / sliced gcode. The live per-plate regen is
    * keyed on the instance set (`platesSignature`), so it does not refire when objects are
-   * merely moved/rotated/scaled — capturing here at save/slice time guarantees the persisted
+   * merely moved/rotated/scaled: capturing here at save/slice time guarantees the persisted
    * output's thumbnail matches the real layout instead of a stale one. Also refreshes the
-   * live plate-strip previews as a side effect — unless `updateLive: false`, for renders of
+   * live plate-strip previews as a side effect, unless `updateLive: false`, for renders of
    * a synthetic state (the single-object 3MF export) that must not repaint the strip.
    * `force: true` renders plates the user never opened (the export's plate is synthetic,
    * so it has no live thumbnail to key the default skip on).
@@ -2973,14 +2996,14 @@ function EditorView({
         // `only` (plateIds) narrows a FORCED capture to specific plates, so refreshing a stale
         // embedded thumbnail costs one plate's geometry rather than the whole project's.
         if (options?.only && !options.only.has(plate.plateId)) continue
-        // Re-render plates the user has actually opened — they have a live thumbnail and their
-        // geometry is already cached, so this is cheap — plus plates whose POSITION no longer
+        // Re-render plates the user has actually opened, they have a live thumbnail and their
+        // geometry is already cached, so this is cheap, plus plates whose POSITION no longer
         // matches the source archive's. The bake copies the source's per-plate PNG entries in
         // place and the reopened file resolves each plate's preview by position, so a displaced
         // plate saved without a fresh capture shows another plate's image after reopen. Other
         // unopened plates are skipped: their original embedded PNG is still right, so a large
         // multi-plate project never loads every plate's geometry just to save. A displaced plate
-        // whose scene has not arrived yet renders nothing useful — leave it skipped (its bytes
+        // whose scene has not arrived yet renders nothing useful: leave it skipped (its bytes
         // are no staler than they were).
         const displaced = plate.sourcePlateIndex !== plate.index
           && !pendingScenePlatesRef.current.has(plate.plateId)
@@ -3011,7 +3034,7 @@ function EditorView({
    *
    * Keyed on the COLOUR MAP rather than `materialSyncToken` deliberately: that token is also
    * bumped at the end of every plate build to reconcile part colours, so marking from it invalidated
-   * every unopened plate on OPEN and dragged the whole project's geometry into the background —
+   * every unopened plate on OPEN and dragged the whole project's geometry into the background,
    * exactly the up-front build cost the plate strip exists to avoid. A colour map that changed
    * VALUES is the narrow signal; first population is a seed, not a change.
    */
@@ -3043,13 +3066,13 @@ function EditorView({
   }, [filamentColors, stateRef, activePlateIndex])
 
   /**
-   * Re-render the plates whose embedded thumbnail a recolour invalidated — ONE per pass, so a
+   * Re-render the plates whose embedded thumbnail a recolour invalidated, ONE per pass, so a
    * multi-plate project refreshes progressively instead of blocking on the whole set.
    *
    * This is the deliberate exception to the "never build a non-active plate in the background"
    * rule below: it runs only after a material was actually recoloured, only for plates the user
    * has not opened, and it is bounded by that set draining. It also costs far less than it used
-   * to — the project's meshes come from the archive already inflated in the tab, so building a
+   * to: the project's meshes come from the archive already inflated in the tab, so building a
    * plate is local work rather than a per-entry fetch.
    */
   useEffect(() => {
@@ -3075,7 +3098,7 @@ function EditorView({
     return () => { cancelled = true }
   }, [staleEmbeddedPlates, captureAllPlateThumbnails, stateRef])
 
-  // Non-active plates no longer render in the background to fill the plate strip — that made
+  // Non-active plates no longer render in the background to fill the plate strip, that made
   // large multi-plate projects fetch + build every plate's geometry up front (very janky).
   // The strip shows each plate's embedded PNG thumbnail until the user opens it; a plate gets
   // a live client-rendered thumbnail only once it's the active plate (regenerateActivePlateThumbnail).
@@ -3118,8 +3141,8 @@ function EditorView({
   }, [filamentOptions, paintColorFilamentId, setPaintColorFilamentId])
 
   // Layer G-code edits recolour via the shared band-shader uniforms (the effect above, keyed on
-  // state) — every part material already reads them, and the continuous render loop shows the new
-  // bands next frame — so they need no rebuild ('inert').
+  // state), every part material already reads them, and the continuous render loop shows the new
+  // bands next frame, so they need no rebuild ('inert').
   /** Replace the active plate's layer-based filament changes (history-recorded). */
   const setActivePlateFilamentChanges = useCallback((changes: EditorFilamentChange[]) => {
     updatePlates((plates) => plates.map((plate) => (
@@ -3145,15 +3168,15 @@ function EditorView({
    * - `material`: part filament reassignment → recolour the existing meshes in place.
    * - `visibility`: printable toggles → the re-dim effect (keyed on state) already handles it.
    * - `inert`: no active-plate viewport change (renames, per-plate layer G-code, other-plate edits).
-   * Non-`structure` kinds MUST NOT change the geometry or key set of the active plate — only the
-   * listed attribute — or the in-place sync will desync from state. When unsure, use `structure`.
+   * Non-`structure` kinds MUST NOT change the geometry or key set of the active plate, only the
+   * listed attribute, or the in-place sync will desync from state. When unsure, use `structure`.
    */
   const updatePlates = useCallback((updater: (plates: EditorPlate[]) => EditorPlate[], kind: PlateEditKind = 'structure') => {
     recordHistory()
     setState((current) => {
       if (!current) return current
-      // Spread `...current` so the session-only fields kept on the state object — support/seam/
-      // colour paint, brim ears, and added part volumes (all mutated in place via stateRef) —
+      // Spread `...current` so the session-only fields kept on the state object, support/seam/
+      // colour paint, brim ears, and added part volumes (all mutated in place via stateRef),
       // survive a plate-structure edit instead of being silently dropped.
       return { ...current, plates: updater(current.plates) }
     })
@@ -3168,7 +3191,7 @@ function EditorView({
   // build (group.position/scale + rotor.rotation, EditorView build lines ~1440). Runs after the
   // state commit (stateRef is refreshed in the render body). An exact-matrix instance renders a
   // baked matrix with matrixAutoUpdate off and rotor identity, so its transform can't be set this
-  // way — if any is present we fall back to a full rebuild (rare: rotated + non-uniformly scaled).
+  // way: if any is present we fall back to a full rebuild (rare: rotated + non-uniformly scaled).
   useEffect(() => {
     if (transformSyncToken === 0) return
     const current = stateRef.current
@@ -3180,7 +3203,7 @@ function EditorView({
       const instance = byKey.get(key)
       if (!instance) continue
       // A group in exact-matrix render mode (matrixAutoUpdate off, built for a shearing object)
-      // can't be moved by setting position — and an arrange can bake such an object to T·S·R,
+      // can't be moved by setting position, and an arrange can bake such an object to T·S·R,
       // leaving its group still in that mode until a rebuild. Detect the render state, not the
       // instance flag, and fall back to a full rebuild for the whole plate (rare).
       if (!group.matrixAutoUpdate) { needsRebuild = true; break }
@@ -3231,7 +3254,7 @@ function EditorView({
     }
     refreshPaintOverlaysRef.current()
     // A material-only edit deliberately skips the plate rebuild, which is the other place a
-    // snapshot is taken — so mirror the recolour into the plate strip here, as the transform sync
+    // snapshot is taken, so mirror the recolour into the plate strip here, as the transform sync
     // does. Without this the strip keeps showing the pre-reassignment colours until the next
     // structural edit or plate switch.
     regenerateActiveThumbnailRef.current?.()
@@ -3241,7 +3264,7 @@ function EditorView({
   }, [materialSyncToken])
 
   /**
-   * The prime tower's height — the last layer that still needs a PURGE, not the top of the print.
+   * The prime tower's height: the last layer that still needs a PURGE, not the top of the print.
    *
    * Two rules, both BambuStudio's:
    *  - HELPER VOLUMES DO NOT COUNT. Support blockers/enforcers, negative parts and modifiers are
@@ -3251,11 +3274,11 @@ function EditorView({
    *  - THE TOWER ENDS AT THE LAST MATERIAL CHANGE. Above the SECOND-tallest filament only one
    *    material is still printing, so nothing purges past that height; a layer-based filament
    *    change purges at its own z. A filament we cannot place geometrically (a support material the
-   *    baked index attributes to the plate has no mesh of its own — it prints wherever its objects
+   *    baked index attributes to the plate has no mesh of its own, it prints wherever its objects
    *    do) forces the full printable height instead of guessing low.
    *
    * Per-filament heights are attributed per INSTANCE, so a filament used only by a short part is
-   * credited with its object's full height — deliberately the conservative direction (a slightly
+   * credited with its object's full height, deliberately the conservative direction (a slightly
    * tall tower is harmless; a short one would misrepresent the purge).
    */
   const computePrimeTowerHeight = useCallback((groups: Map<string, THREE.Group>, plateIndex: number): number => {
@@ -3287,7 +3310,7 @@ function EditorView({
     }
     if (printableTop <= 0) return 0
     // A material the baked index attributes to this plate but that owns no mesh here (support) may
-    // purge at any layer its objects reach. The baked index speaks SOURCE plate numbers — resolve
+    // purge at any layer its objects reach. The baked index speaks SOURCE plate numbers: resolve
     // through the live plate's own source identity (the live index drifts after a reorder); a
     // session-added plate has no baked entry to consult.
     const bakedPlate = plate.sourcePlateIndex !== null
@@ -3306,7 +3329,7 @@ function EditorView({
 
   // Keep the prime tower's PRESENCE in step with the live used-material count. The tower is created
   // during a plate rebuild, but assigning a material or painting is a 'material'/paint edit that
-  // deliberately skips the rebuild — so without this the tower only appeared/vanished at the next
+  // deliberately skips the rebuild, so without this the tower only appeared/vanished at the next
   // structural edit (undo/redo, delete, plate switch), which is exactly how a single-material plate
   // ended up showing one. Add/remove in place instead; the tower is a bed fixture with no per-model
   // state, so re-creating it is cheap. The scene's on-demand render loop paints it on the next frame
@@ -3314,12 +3337,12 @@ function EditorView({
   const activePlatePrimeTower = state?.plates.find((plate) => plate.index === activePlateIndex)?.primeTower ?? null
   // BambuStudio's own gate (`Print::has_wipe_tower`): the tower exists when the process enables it
   // (which is what makes `primeTower` non-null at parse time) AND either a forcing condition holds
-  // (wrapping detection / smooth timelapse — `sizing.needWipeTower`) or the PROJECT carries more
+  // (wrapping detection / smooth timelapse: `sizing.needWipeTower`) or the PROJECT carries more
   // than one filament. Per-PLATE usage is deliberately NOT part of it: BS keys on the project's
   // filament count, which is why a single-material plate of a multi-material project really does
-  // get a (small) tower in the slice — verified in our own sliced output. Mirroring the slicer
+  // get a (small) tower in the slice: verified in our own sliced output. Mirroring the slicer
   // keeps the preview honest; second-guessing it made the editor hide a tower the G-code contains.
-  // Spiral (vase) mode suppresses the tower outright — but only against the filament-count term:
+  // Spiral (vase) mode suppresses the tower outright, but only against the filament-count term:
   // BS returns early for the forcing conditions, so a wrapping/timelapse tower still exists in vase
   // mode. The ordering below mirrors that.
   const projectFilamentCount = sliceConfig?.projectFilaments.length ?? platesQuery.data?.projectFilaments.length ?? 0
@@ -3344,7 +3367,7 @@ function EditorView({
   }, [activePlatePrimeTower, towerRequired, projectFilamentCount, computePrimeTowerHeight, activePlateIndex, sceneReady, rebuildToken])
 
   // A filament SWATCH edit recolours the live meshes through useEditorPaint's in-place effect
-  // (declared earlier, so it has already run when this fires) — no rebuild, hence no snapshot.
+  // (declared earlier, so it has already run when this fires), no rebuild, hence no snapshot.
   // Refresh the strip on the settled colour; see {@link THUMBNAIL_RECOLOUR_DEBOUNCE_MS}.
   const thumbnailColourSettledRef = useRef(false)
   useEffect(() => {
@@ -3385,7 +3408,7 @@ function EditorView({
       const instance = stateRef.current?.plates.flatMap((plate) => plate.instances)
         .find((entry) => entry.key === instanceKey)
       // A multi-solid import renders per-solid groups too (tagged `importPartRef`), so its parts
-      // take the gizmo like an in-project object's — the placement emits as
+      // take the gizmo like an in-project object's: the placement emits as
       // `importPartTransforms` instead of `partTransforms`. Single-mesh instances have no part
       // group to attach to, so they fall through to the bulk selection.
       if (instance && (instance.source.kind === 'object' || instance.parts.length > 1)) {
@@ -3437,7 +3460,7 @@ function EditorView({
   }, [selectExclusive])
 
   // Right-click on list rows: keep the selection when clicking a member (bulk menu),
-  // otherwise select just the clicked row first — same rule as the viewport.
+  // otherwise select just the clicked row first: same rule as the viewport.
   const handleObjectRowContextMenu = useCallback((key: string, position: { x: number; y: number }) => {
     if (!allSelectedKeysRef.current().includes(key)) selectExclusive(key)
     setContextMenu({ ...position, kind: 'object', key })
@@ -3488,7 +3511,7 @@ function EditorView({
   }, [updatePlates])
 
   /**
-   * Whether a material change means anything for these parts — true as soon as ONE of them can
+   * Whether a material change means anything for these parts: true as soon as ONE of them can
    * hold a filament. A selection of only support blockers/enforcers and negative volumes has no
    * material to change, so the part context menu drops the item instead of offering a no-op
    * (`reassignFilament` would skip them anyway).
@@ -3505,7 +3528,7 @@ function EditorView({
 
   // Change parts' Bambu volume type (BambuStudio's "Change type": normal / negative /
   // modifier / support blocker / enforcer), for one part or a whole part selection. The
-  // type is a property of the object's part — shared across instances and plates — so it
+  // type is a property of the object's part, shared across instances and plates, so it
   // is recorded once per part in partTypeChanges (for the bake) and reflected onto every
   // matching part.subtype (for the list and the viewport, which restyles on the rebuild).
   const handleChangePartTypes = useCallback((targets: ReadonlyArray<{ objectId: number; partIndex: number }>, subtype: SceneEditPartSubtype) => {
@@ -3518,7 +3541,7 @@ function EditorView({
         ...plate,
         instances: plate.instances.map((instance) => {
           // Object parts key on the Bambu object id; import parts on the import's synthetic
-          // object identity (replacedObjectId) — same ownership rule as filament reassignment.
+          // object identity (replacedObjectId): same ownership rule as filament reassignment.
           const ownerId = instance.source.kind === 'object' ? instance.objectId : instance.source.replacedObjectId
           if (ownerId == null || !instance.parts.some((part) => targetSet.has(partSlotKey(ownerId, part.partIndex)))) return instance
           // Retyping to a support blocker/enforcer or negative volume drops the part's material:
@@ -3586,7 +3609,7 @@ function EditorView({
     const plate = stateRef.current?.plates.find((entry) => entry.index === activePlateIndex)
     if (plate) {
       // Measure what is already on the plate (cheap AABB per built model) so placement accounts for
-      // the real footprints instead of a fixed radius around each origin — otherwise a large model
+      // the real footprints instead of a fixed radius around each origin, otherwise a large model
       // lands on top of its neighbours. Empty => let findFreePlatePosition use its nominal fallback.
       const occupied: PlateFootprintRect[] = []
       for (const placed of plate.instances) {
@@ -3614,13 +3637,13 @@ function EditorView({
   }, [activePlateIndex, updatePlates])
 
   // Persist a dragged prime tower's new lower-left corner into the active plate. The drag already
-  // moved the live tower object (useEditorScene), so this is an `inert` state write — a full plate
+  // moved the live tower object (useEditorScene), so this is an `inert` state write, a full plate
   // rebuild here just flashes the "loading object" overlay for a move that is already on screen.
   const handleMovePrimeTower = useCallback((cornerX: number, cornerY: number) => {
     updatePlates((plates) => plates.map((plate) => {
       if (plate.index !== activePlateIndex || !plate.primeTower) return plate
       // Every extruder purges into the tower, so it may not be dropped in a single-nozzle-only
-      // zone — clamp the drag instead of letting the user create an unprintable plate and only
+      // zone: clamp the drag instead of letting the user create an unprintable plate and only
       // learn about it from a warning. See `lib/primeTowerReach.ts`.
       const tower = primeTowerObjRef.current
       const width = typeof tower?.userData.towerWidth === 'number' ? tower.userData.towerWidth : 0
@@ -3712,7 +3735,7 @@ function EditorView({
       cutKeepUpper && upper.length > 0 ? { soup: upper, suffix: sides.upper, side: 'upper' as const } : null
     ].filter((half): half is CutHalf => half !== null)
     if (halves.length === 0) {
-      toast.error('Nothing to keep — move the cut plane or keep at least one side.')
+      toast.error('Nothing to keep: move the cut plane or keep at least one side.')
       return
     }
     setCutting(true)
@@ -3724,19 +3747,23 @@ function EditorView({
         const { offset } = rebaseTriangleSoup(half.soup)
         const stl = triangleSoupToBinaryStl(half.soup)
         const file = new File([stl], `${instance.name} (${half.suffix}).stl`, { type: 'application/octet-stream' })
-        const mainImport = await importStore.stageFile(file)
+        const mainImport = await importStore.stageFile(file, 'object')
         // BambuStudio never cuts a helper volume: each is carried WHOLE onto the half (or both
-        // halves) it overlaps — see `helperVolumeCutSides`. Staged per half because each half is its
+        // halves) it overlaps: see `helperVolumeCutSides`. Staged per half because each half is its
         // own import, and shifted by that half's rebase so an identity placement is exact.
         const carried = await Promise.all(helperVolumes
           .filter((volume) => helperVolumeCutSides(volume.soup, cutAxis, clampedCutOffset)[half.side])
           .map(async (volume) => {
             const soup = shiftTriangleSoup(volume.soup.slice(), offset)
+            // `part`, NOT `object`: this volume is carried at IDENTITY (its world triangles are
+            // already baked into `soup`, shifted by the half's own rebase) and is placed below with
+            // a zero position. Normalising it would re-centre those triangles and move the blocker
+            // off the geometry it was drawn on.
             const stagedVolume = await importStore.stageFile(new File(
               [triangleSoupToBinaryStl(soup)],
               `${volume.name}.stl`,
               { type: 'application/octet-stream' }
-            ))
+            ), 'part')
             return { volume, importId: stagedVolume.importId, soup }
           }))
         return { import: mainImport, offset, carried }
@@ -3753,7 +3780,7 @@ function EditorView({
         return next
       })
       // Each half's carried volumes, keyed by that half's host identity (an import's synthetic
-      // object id — see `addedPartHostId`), so they need no save first.
+      // object id: see `addedPartHostId`), so they need no save first.
       const carriedByHost = new Map<number, EditorAddedPart[]>()
       replacements.forEach((replacement, index) => {
         const hostId = addedPartHostId(replacement)
@@ -3776,7 +3803,7 @@ function EditorView({
       })
       // One history entry for the whole cut, so a single undo restores the object AND its volumes.
       // Hand-rolled rather than `updatePlates` because the carried volumes and the plate swap must
-      // land in the same commit — added parts live beside `plates` on the state root.
+      // land in the same commit: added parts live beside `plates` on the state root.
       recordHistoryRef.current?.()
       setState((current) => {
         if (!current) return current
@@ -3808,10 +3835,10 @@ function EditorView({
    * objects"): each shell becomes its own import-backed instance, replacing the
    * original in one undoable step. Parts keep their world XY spots and rest on the bed.
    *
-   * Helper volumes (modifiers/blockers) are DISCARDED, matching BambuStudio — its
+   * Helper volumes (modifiers/blockers) are DISCARDED, matching BambuStudio, its
    * `ModelObject::split` skips every `!MODEL_PART` volume, because which shell should own a volume
    * that overlaps several has no obvious answer. Unlike BambuStudio we say so rather than dropping
-   * them silently, since it is the user's work going away. (The CUT does carry them — there the
+   * them silently, since it is the user's work going away. (The CUT does carry them, there the
    * plane gives an unambiguous rule.)
    */
   const handleSplitToObjects = useCallback(async (key: string) => {
@@ -3826,7 +3853,7 @@ function EditorView({
       return
     }
     if (parts.length > 50) {
-      toast.error(`${instance.name} has ${parts.length} shells — too many to split into objects.`)
+      toast.error(`${instance.name} has ${parts.length} shells, too many to split into objects.`)
       return
     }
     setImporting(true)
@@ -3835,7 +3862,7 @@ function EditorView({
         const { offset } = rebaseTriangleSoup(soup)
         const stl = triangleSoupToBinaryStl(soup)
         const file = new File([stl], `${instance.name} (part ${index + 1}).stl`, { type: 'application/octet-stream' })
-        return { import: await importStore.stageFile(file), offset }
+        return { import: await importStore.stageFile(file, 'object'), offset }
       }))
       const replacements = staged.map(({ import: stagedImport, offset }) => {
         const next = instanceFromStagedImport(stagedImport, importStore.meshUrl)
@@ -3852,7 +3879,7 @@ function EditorView({
       setSelectedKey(replacements[0]!.key)
       toast.success(`Split ${instance.name} into ${replacements.length} objects.`
         + (discardedHelpers > 0
-          ? ` ${discardedHelpers} helper volume${discardedHelpers === 1 ? '' : 's'} could not be carried over — undo to get ${discardedHelpers === 1 ? 'it' : 'them'} back.`
+          ? ` ${discardedHelpers} helper volume${discardedHelpers === 1 ? '' : 's'} could not be carried over: undo to get ${discardedHelpers === 1 ? 'it' : 'them'} back.`
           : ''))
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Unable to split the model.')
@@ -3873,8 +3900,8 @@ function EditorView({
    * Build ONE STL for the given objects (BambuStudio's "Export as one STL"): model
    * parts merged with world placement baked (a multi-object selection keeps its
    * relative layout), re-centred on the origin. Helper volumes (negative parts,
-   * modifiers, support blockers/enforcers) are dropped — there is no client-side mesh
-   * boolean — so `droppedVolumes` lets the caller tell the user. Returns null (with an
+   * modifiers, support blockers/enforcers) are dropped, there is no client-side mesh
+   * boolean, so `droppedVolumes` lets the caller tell the user. Returns null (with an
    * error toast) when nothing solid remains, e.g. every part is a modifier.
    */
   const buildSelectionStl = useCallback((keys: ReadonlyArray<string>): { stl: ArrayBuffer; name: string; droppedVolumes: boolean } | null => {
@@ -3920,7 +3947,7 @@ function EditorView({
   }, [exportMembersFor])
 
   /**
-   * Build one STL for specific PARTS of one object (the part menu's export) — including
+   * Build one STL for specific PARTS of one object (the part menu's export), including
    * a selected helper volume, since picking it is the deliberate ask. `ownerId` is the
    * part selection's object key: the Bambu object id, or an import's synthetic
    * `replacedObjectId` (the same ownership rule as part type/material changes).
@@ -3943,7 +3970,7 @@ function EditorView({
     const fileName = stlExportFileName(built.name)
     downloadBlob(new Blob([built.stl], { type: 'application/octet-stream' }), fileName)
     if (built.droppedVolumes) {
-      toast.warn(`Exported ${fileName} — negative, modifier, and support volumes are not included.`)
+      toast.warn(`Exported ${fileName}: negative, modifier, and support volumes are not included.`)
     } else {
       toast.success(`Exported ${fileName}.`)
     }
@@ -3961,7 +3988,7 @@ function EditorView({
       downloadBlob(new Blob([file.stl], { type: 'application/octet-stream' }), file.fileName)
     }
     if (files.some((file) => file.droppedVolumes)) {
-      toast.warn(`Exported ${files.length} STLs — negative, modifier, and support volumes are not included.`)
+      toast.warn(`Exported ${files.length} STLs: negative, modifier, and support volumes are not included.`)
     } else {
       toast.success(`Exported ${files.length} STLs.`)
     }
@@ -4000,7 +4027,7 @@ function EditorView({
     const file = new File([built.stl], `${outputFileName}.stl`, { type: 'application/octet-stream' })
     enqueueLibraryUploads([{ file, folderSegments: [] }], destination)
     if (built.droppedVolumes) {
-      toast.warn(`Exporting ${file.name} — negative, modifier, and support volumes are not included.`)
+      toast.warn(`Exporting ${file.name}: negative, modifier, and support volumes are not included.`)
     }
   }, [exportRequest, buildSelectionStlFiles, buildPartsExport, buildSelectionStl, saveAsBridgeId])
 
@@ -4013,7 +4040,7 @@ function EditorView({
   /**
    * Mark the right-clicked object's mesh for repair on save. The repair itself runs server-side
    * while baking (`SceneEdit.repairedObjectIds`), where it can rewrite the mesh in place and keep
-   * the object's paint and part volumes — so there is nothing to apply to the local scene, and
+   * the object's paint and part volumes, so there is nothing to apply to the local scene, and
    * nothing to see: welding cracked vertices and dropping junk facets is visually a no-op. Marking
    * is the whole edit, which is why it just records history and reports what will happen.
    */
@@ -4034,13 +4061,13 @@ function EditorView({
   }, [activePlateIndex, recordHistoryRef])
 
   /**
-   * Add a new part volume inside a model — BambuStudio's "Add part / negative part / modifier /
+   * Add a new part volume inside a model: BambuStudio's "Add part / negative part / modifier /
    * support blocker / enforcer", from a generated primitive or a loaded mesh.
    *
    * Works on an unsaved import as well as an in-project object: both address the part's host by
    * {@link addedPartHostId}, and the bake resolves an import host through the same map that places
    * the import itself. A NORMAL part inherits its host's material, which is what BambuStudio does
-   * (`load_generic_subobject` seeds the volume's extruder from the object's) — otherwise the new
+   * (`load_generic_subobject` seeds the volume's extruder from the object's), otherwise the new
    * geometry would silently print in filament 1.
    */
   const handleAddPartVolume = useCallback(async (key: string, subtype: SceneEditPartSubtype, source: AddedPartSource) => {
@@ -4081,7 +4108,7 @@ function EditorView({
       setSelectedAddedPartKey(part.key)
       setGizmoMode('translate')
       regenerateActiveThumbnailRef.current?.()
-      toast.success(`Added a ${label.toLowerCase()} — drag it into position.`)
+      toast.success(`Added a ${label.toLowerCase()}: drag it into position.`)
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Unable to add the part.')
     } finally {
@@ -4109,7 +4136,7 @@ function EditorView({
     setState((current) => (current ? { ...current } : current))
   }, [refreshAddedPartMeshes, recordHistoryRef])
 
-  /** Reassign an added part's material (normal parts and modifiers only — see the type Select). */
+  /** Reassign an added part's material (normal parts and modifiers only: see the type Select). */
   const handleChangeAddedPartFilament = useCallback((key: string, filamentId: number) => {
     const state = stateRef.current
     const part = Object.values(state?.addedParts ?? {}).flat().find((entry) => entry.key === key)
@@ -4173,7 +4200,7 @@ function EditorView({
       const { offset } = rebaseTriangleSoup(combined)
       const stl = triangleSoupToBinaryStl(combined)
       const file = new File([stl], `${members[0]!.instance.name} (assembled).stl`, { type: 'application/octet-stream' })
-      const staged = await importStore.stageFile(file)
+      const staged = await importStore.stageFile(file, 'object')
       const next = instanceFromStagedImport(staged, importStore.meshUrl)
       next.position.set(offset.x, offset.y, 0)
       next.filamentId = members[0]!.instance.filamentId
@@ -4199,7 +4226,7 @@ function EditorView({
     setLibraryPickerOpen(false)
     setImporting(true)
     try {
-      const staged = await importStore.stageFromLibrary(libraryFileId, undefined)
+      const staged = await importStore.stageFromLibrary(libraryFileId, 'object', undefined)
       addStagedImport(staged)
       toast.success(`Imported ${staged.name}`)
     } catch (error) {
@@ -4212,7 +4239,7 @@ function EditorView({
   const handleImportFile = useCallback(async (file: File) => {
     setImporting(true)
     try {
-      const staged = await importStore.stageFile(file)
+      const staged = await importStore.stageFile(file, 'object')
       addStagedImport(staged)
       toast.success(`Imported ${staged.name}`)
     } catch (error) {
@@ -4258,7 +4285,11 @@ function EditorView({
       ...plate,
       instances: plate.instances.map((instance) => {
         if (!isMember(instance)) return instance
-        const replacement = replaceInstanceGeometry(instance, staged, replacedObjectId, importStore.meshUrl)
+        // Per instance, not per selection: each copy sits somewhere different, and each replacement
+        // has to land on its own predecessor.
+        const replacement = replaceInstanceGeometry(
+          instance, staged, replacedObjectId, importStore.meshUrl, worldFootprintCenterForRef.current?.(instance.key) ?? null
+        )
         if (instance.key === key) selectedReplacementKey = replacement.key
         return replacement
       })
@@ -4274,7 +4305,7 @@ function EditorView({
   const handleReplaceFromFile = useCallback(async (key: string, file: File) => {
     setImporting(true)
     try {
-      const staged = await importStore.stageFile(file)
+      const staged = await importStore.stageFile(file, 'object')
       handleReplaceWithStaged(key, staged)
       toast.success(`Replaced with ${staged.name}`)
     } catch (error) {
@@ -4290,7 +4321,7 @@ function EditorView({
     setModelRequest(null)
     setImporting(true)
     try {
-      const staged = await importStore.stageFromLibrary(libraryFileId, undefined)
+      const staged = await importStore.stageFromLibrary(libraryFileId, 'object', undefined)
       handleReplaceWithStaged(key, staged)
       toast.success(`Replaced with ${staged.name}`)
     } catch (error) {
@@ -4308,7 +4339,7 @@ function EditorView({
     try {
       const stl = triangleSoupToBinaryStl(primitiveTriangleSoup(kind))
       const file = new File([stl], `${PRIMITIVE_LABELS[kind]}.stl`, { type: 'application/octet-stream' })
-      const staged = await importStore.stageFile(file)
+      const staged = await importStore.stageFile(file, 'object')
       // Centre on the drop spot via the mesh's XY midpoint (addInstanceToActivePlate places it).
       addInstanceToActivePlate(instanceFromStagedImport(staged, importStore.meshUrl), stagedFootprint(staged))
       toast.success(`Added a ${PRIMITIVE_LABELS[kind].toLowerCase()}.`)
@@ -4329,7 +4360,7 @@ function EditorView({
    * Give a new independent copy the source object's per-object PROCESS overrides.
    *
    * These live on the borrowed slice controller rather than in `EditorState`, so
-   * `makeInstanceIndependent` cannot copy them itself — but leaving them behind would make a copy
+   * `makeInstanceIndependent` cannot copy them itself, but leaving them behind would make a copy
    * silently lose settings its source had, and re-adding them after a save is exactly the
    * "save first" wart this editor does not have anywhere else.
    */
@@ -4342,9 +4373,9 @@ function EditorView({
 
   /**
    * Duplicate the selection. `independent` picks BambuStudio's two copy semantics: linked (the
-   * default, BS's toolbar "+" / `increase_instances` — another instance of the SAME object, so
+   * default, BS's toolbar "+" / `increase_instances`, another instance of the SAME object, so
    * parts, materials, paint and per-object settings stay shared) or independent (BS's Ctrl+C/V /
-   * `Model::add_object` — a whole new object that diverges from here on).
+   * `Model::add_object`, a whole new object that diverges from here on).
    */
   const handleDuplicate = useCallback((key: string, independent = false) => {
     const keys = selectionFor(key)
@@ -4376,7 +4407,7 @@ function EditorView({
   }, [activePlateIndex, updatePlates, selectionFor, selectExclusive, copyObjectProcessOverrides])
 
   /**
-   * How many placed instances share this instance's object — i.e. how many LINKED copies it has.
+   * How many placed instances share this instance's object: i.e. how many LINKED copies it has.
    * 1 means it is already independent. Drives both the "Make independent" item and the sidebar
    * badge, so the linkage is visible rather than something users discover by editing one copy and
    * watching another change.
@@ -4390,7 +4421,7 @@ function EditorView({
 
   /**
    * Unlink an already-placed copy: it stops sharing its object with the other instances and keeps
-   * whatever it looks like right now. The inverse is deliberately absent — re-linking would have to
+   * whatever it looks like right now. The inverse is deliberately absent: re-linking would have to
    * pick which copy's divergent edits survive, and BambuStudio offers no such operation either.
    */
   const handleMakeIndependent = useCallback((key: string) => {
@@ -4410,7 +4441,7 @@ function EditorView({
     refreshAddedPartMeshes()
     regenerateActiveThumbnailRef.current?.()
     setState((current) => (current ? { ...current } : current))
-    toast.success('This copy is now independent — edits to it no longer affect the others.')
+    toast.success('This copy is now independent: edits to it no longer affect the others.')
   }, [refreshAddedPartMeshes, recordHistoryRef, copyObjectProcessOverrides])
 
   const handleDelete = useCallback((key: string) => {
@@ -4427,7 +4458,7 @@ function EditorView({
     setExtraSelectedKeys((current) => current.filter((entry) => !keySet.has(entry)))
   }, [activePlateIndex, updatePlates, selectionFor])
 
-  /** Select every object on the active plate (Ctrl/Cmd+A) — object mode, so part selection clears. */
+  /** Select every object on the active plate (Ctrl/Cmd+A): object mode, so part selection clears. */
   const handleSelectAllObjects = useCallback(() => {
     const keys = activePlateRef.current?.instances.map((instance) => instance.key) ?? []
     if (keys.length === 0) return
@@ -4438,7 +4469,7 @@ function EditorView({
     objectAnchorKeyRef.current = keys[0]!
   }, [])
 
-  /** Paste cloned instances onto the active plate at free spots, selecting them — one undoable step. */
+  /** Paste cloned instances onto the active plate at free spots, selecting them, one undoable step. */
   const handlePasteInstances = useCallback((instances: EditorInstance[]) => {
     if (instances.length === 0) return
     let lastKey: string | null = null
@@ -4492,7 +4523,7 @@ function EditorView({
   })
 
   /**
-   * Move an instance — or, when it belongs to the multi-selection, the whole selection —
+   * Move an instance, or, when it belongs to the multi-selection, the whole selection,
    * from the active plate to another plate, each placed at a free spot.
    */
   const handleMoveToPlate = useCallback((key: string, targetIndex: number) => {
@@ -4520,7 +4551,7 @@ function EditorView({
     setExtraSelectedKeys((current) => current.filter((entry) => !keySet.has(entry)))
   }, [activePlateIndex, updatePlates, selectionFor])
 
-  /** Set (not toggle) the Printable flag on a set of instances — the bulk context-menu action. */
+  /** Set (not toggle) the Printable flag on a set of instances: the bulk context-menu action. */
   const handleSetPrintableSelection = useCallback((keys: ReadonlyArray<string>, printable: boolean) => {
     const keySet = new Set(keys)
     updatePlates((plates) => plates.map((plate) => ({
@@ -4531,7 +4562,7 @@ function EditorView({
   }, [updatePlates])
 
   /**
-   * Assign one material to EVERY part of the clicked object — or of the whole selection
+   * Assign one material to EVERY part of the clicked object, or of the whole selection
    * when it belongs to one (the context menu's bulk "Change material").
    */
   const reassignSelectionFilament = useCallback((key: string, filamentId: number) => {
@@ -4541,7 +4572,7 @@ function EditorView({
       if (!keySet.has(instance.key)) continue
       const ownerId = instance.source.kind === 'object' ? instance.objectId : instance.source.replacedObjectId
       if (ownerId == null) continue
-      // Printed parts only — an object-level material change must not retarget a helper volume
+      // Printed parts only, an object-level material change must not retarget a helper volume
       // (a blocker has no material at all, and a modifier's region is deliberately its own).
       for (const part of printedParts(instance)) targets.push({ objectId: ownerId, partIndex: part.partIndex })
     }
@@ -4549,7 +4580,7 @@ function EditorView({
   }, [selectionFor, reassignFilament])
 
   /**
-   * Open per-object process settings for the clicked object — or the whole selection when it
+   * Open per-object process settings for the clicked object, or the whole selection when it
    * belongs to one (bulk: the dialog seeds from every member's overrides, showing "Mixed" where
    * they disagree, and merges edits back onto each member).
    */
@@ -4638,7 +4669,7 @@ function EditorView({
       const required = zoneRequiredNozzle(zone.label)
       if (required === 0) leftMaxX = Math.min(leftMaxX, zx0)
       else if (required === 1) rightMinX = Math.max(rightMinX, zx1)
-      // Truly unprintable zones are blocked cell-by-cell below — no rect shrinking,
+      // Truly unprintable zones are blocked cell-by-cell below, no rect shrinking,
       // so a corner cutout doesn't cost the whole edge strip.
     }
     for (const instance of plate.instances) {
@@ -4762,7 +4793,7 @@ function EditorView({
   }, [recordHistory, bakeExactMatrix, writeBackGroupTransform, syncSelectedTransform, regenerateActivePlateThumbnail])
 
   /**
-   * Centre the selection on the active plate — BambuStudio's "Center" (`Selection::center`), which
+   * Centre the selection on the active plate: BambuStudio's "Center" (`Selection::center`), which
    * moves the WHOLE selection by one delta computed from its combined bounding box, so the objects
    * keep their relative layout. Centring each object on its own would stack them all on one spot,
    * which is why this is a selection-level action rather than a per-object one repeated N times.
@@ -4770,7 +4801,7 @@ function EditorView({
    * The delta is measured from the rendered FOOTPRINT, never by assigning the plate centre to
    * `position`: that field is the transform's translation (the object's local origin) and a Bambu
    * mesh routinely carries plate coordinates in its vertices, so assigning there displaces the
-   * model by its whole origin-to-centroid offset — the same trap the single-object 3MF export hit.
+   * model by its whole origin-to-centroid offset, the same trap the single-object 3MF export hit.
    * Z is untouched: centring is a bed-plane operation, and resting is `Drop to bed`'s job.
    */
   const centerSelectionOnPlate = useCallback(() => {
@@ -4815,7 +4846,7 @@ function EditorView({
   /**
    * Apply a manual-input edit to the selected PART's object-local placement (BambuStudio's
    * "Volume Operations" panel semantics): decompose the effective placement, let the
-   * mutator adjust it, then persist — an added part carries TRS directly, a baked part
+   * mutator adjust it, then persist, an added part carries TRS directly, a baked part
    * gets the recomposed delta on its part group (which writeBackBakedPart then bakes into
    * state and mirrors onto the other instances). Returns false when no part is selected.
    */
@@ -4875,7 +4906,7 @@ function EditorView({
   // Arrow keys nudge X/Y on the bed (Shift = coarse, Ctrl/Cmd = fine) and [ / ] rotate about Z.
   // ONLY the transform keys: undo/redo, delete, copy/paste and the rest belong to
   // `useEditorKeyboardShortcuts`, which owns the editor's one shortcut listener. Handling a key
-  // here as well does not shadow that one — both listeners run — so a duplicate silently performs
+  // here as well does not shadow that one, both listeners run, so a duplicate silently performs
   // the action TWICE (Ctrl+Z used to undo two steps). Add new shortcuts to the hook, not here.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -4893,7 +4924,7 @@ function EditorView({
       // selected volume); otherwise on the object selection.
       const nudge = (dx: number, dy: number) => {
         // Arrow keys move along the PLATE axes. A part's position is OBJECT-LOCAL, so the world
-        // delta has to be rotated (and unscaled) into the object's frame first — otherwise a
+        // delta has to be rotated (and unscaled) into the object's frame first, otherwise a
         // rotated object sends its part the opposite way (press right, the part goes left) and a
         // scaled one moves it by the wrong distance. Objects below take the delta as-is.
         const part = selectedPartObject()
@@ -4935,7 +4966,7 @@ function EditorView({
 
   const handleAddPlate = useCallback(() => {
     // Compute the new (contiguous) index and mint the identity from current state, NOT inside the
-    // setState updater — React runs the updater later (and may run it twice), so reading a var it
+    // setState updater: React runs the updater later (and may run it twice), so reading a var it
     // mutates would select the wrong plate, and minting inside would burn ids per invocation.
     const newIndex = (stateRef.current?.plates.length ?? 0) + 1
     const plateId = mintPlateId()
@@ -4969,7 +5000,7 @@ function EditorView({
   const handleRenamePlate = useCallback(async (index: number) => {
     const plate = stateRef.current?.plates.find((entry) => entry.index === index)
     if (!plate) return
-    // Start from the label the strip shows — an unnamed plate reads as "Plate N", so that is the
+    // Start from the label the strip shows, an unnamed plate reads as "Plate N", so that is the
     // name the user is editing, and the prompt pre-selects it for overtyping.
     const name = await promptText({
       title: `Rename plate ${index}`,
@@ -4986,12 +5017,12 @@ function EditorView({
   }, [promptText, updatePlates])
 
   /**
-   * Move a plate into an insertion gap (0-based, 0 = before the first plate) — the strip's
+   * Move a plate into an insertion gap (0-based, 0 = before the first plate): the strip's
    * between-tile drop zones. Thumbnail caches need no remapping here: they key on the plates'
    * session identity (`plateId`), so any renumbering path is covered by construction.
    */
   const handleReorderPlate = useCallback((fromIndex: number, insertAt: number) => {
-    // Compute the landing position from current state (not inside the updater — see
+    // Compute the landing position from current state (not inside the updater: see
     // handleAddPlate) so a no-op drop skips the history checkpoint and scene rebuild entirely.
     const plates = stateRef.current?.plates ?? []
     const from = plates.findIndex((plate) => plate.index === fromIndex)
@@ -5017,7 +5048,7 @@ function EditorView({
       : base
     let withFilaments = sliceConfig?.desiredFilaments ? { ...withPlateType, filaments: sliceConfig.desiredFilaments } : withPlateType
     // The desired list bakes as slots 1..N, so a session that removed/reordered materials
-    // renumbers every filament id — translate the edit's SESSION ids to match, or the bake writes
+    // renumbers every filament id: translate the edit's SESSION ids to match, or the bake writes
     // stale ids into the file (a part `extruder="2"` in a 1-filament project). No-op (null remap)
     // while the session ids already equal their positions, the common case.
     if (sliceConfig?.desiredFilaments && sliceConfig.projectFilaments.length > 0) {
@@ -5025,7 +5056,7 @@ function EditorView({
       if (remap) withFilaments = rebaseSceneEditFilamentIds(withFilaments, remap)
     }
     // Attach freshly-captured plate previews (when provided) so the saved 3MF / sliced output's
-    // thumbnail reflects the edited layout — the slicer CLI and the 3MF rewriter both reuse the
+    // thumbnail reflects the edited layout: the slicer CLI and the 3MF rewriter both reuse the
     // embedded PNG rather than regenerating it. Callers capture via captureAllPlateThumbnails().
     const thumbnails = options?.thumbnails
     return thumbnails && thumbnails.length > 0 ? { ...withFilaments, plateThumbnails: thumbnails } : withFilaments
@@ -5033,7 +5064,7 @@ function EditorView({
 
   /**
    * The rendered XY footprint centre of an instance in PLATE coordinates, helper volumes excluded
-   * (`printableMeshBox`'s rule, and BambuStudio's — `instance_bounding_box` is "without
+   * (`printableMeshBox`'s rule, and BambuStudio's: `instance_bounding_box` is "without
    * modifiers"). Null when the instance has no group in the live scene, e.g. it sits on a
    * non-active plate. Only this component can answer it, so the save hook takes it as a callback.
    */
@@ -5045,27 +5076,28 @@ function EditorView({
     const center = box.getCenter(new THREE.Vector3())
     return { x: center.x, y: center.y }
   }, [])
+  worldFootprintCenterForRef.current = worldFootprintCenterFor
 
   // The save baked the session's filament ids renumbered to 1..N; move the live state onto the
   // saved ids so mesh colours keep resolving and the next save starts from a consistent space.
-  // Plain setState on purpose: an id-space migration is a representation change, not a user edit —
+  // Plain setState on purpose: an id-space migration is a representation change, not a user edit:
   // updatePlates would record it as an undoable history step. The sync-token bump recolours the
   // already-rendered meshes from their translated ids.
   const handleFilamentsRenumbered = useCallback((remap: Map<number, number>) => {
     setState((current) => (current ? rebaseEditorStateFilamentIds(current, remap) : current))
     // Deliberately NOT recolouring yet. The state moves into the SAVED id space here, but
     // `materials.options` still describes the pre-save SESSION space until the controller finishes
-    // its own rebase — and `resolveColorFilamentId` reads a part whose id is absent from those
+    // its own rebase, and `resolveColorFilamentId` reads a part whose id is absent from those
     // options as a reference to a DELETED material, resolving it to material 1. That rule is right;
     // it just cannot tell "deleted" from "renumbered a moment ago", so recolouring in this gap
     // repainted the whole model in material 1's colour. Which is the "model reverts to its original
-    // colour on Save" report — display-only, since the saved file and the state are both correct.
+    // colour on Save" report: display-only, since the saved file and the state are both correct.
     // Record what to wait for instead; the effect below recolours once the options catch up.
     pendingRenumberIdsRef.current = [...new Set(remap.values())]
   }, [])
 
   // Second half of the renumber: recolour only once `materials.options` actually contains the saved
-  // ids, so the resolve above agrees with the state. Waiting risks nothing — until it fires the
+  // ids, so the resolve above agrees with the state. Waiting risks nothing, until it fires the
   // meshes keep their pre-save colours, which are the RIGHT colours; the bug was painting early.
   useEffect(() => {
     const pending = pendingRenumberIdsRef.current
@@ -5076,17 +5108,17 @@ function EditorView({
     setMaterialSyncToken((token) => token + 1)
   }, [materials])
 
-  // Resolve each slot's preset in the BROWSER and attach it to the edit — the editor authors what
+  // Resolve each slot's preset in the BROWSER and attach it to the edit: the editor authors what
   // it emits. A slot the "missing material settings" repair already resolved this session wins:
   // that repair is an undoable edit whose whole content is those configs, so re-resolving here
   // could quietly emit something other than what the user accepted (and repeats work already done).
   // Shared by the SAVE and SLICE paths on purpose: a slice's bake takes the same material-change
   // drop path as a save's (`applyFilamentList`), so a slice that omitted the configs handed the
-  // slicer a project stripped of its filament physics and leaned on the settings-repair export —
+  // slicer a project stripped of its filament physics and leaned on the settings-repair export,
   // which cannot run when the slice loads a machine preset without a process preset (exit 239).
   const authorFilamentConfigs = useCallback(async (edit: SceneEdit) => {
     // The edit's filaments are the session slots in list order, so slot i+1 of the bake is
-    // projectFilaments[i] — but the controller and the physics repair key their records by SESSION
+    // projectFilaments[i], but the controller and the physics repair key their records by SESSION
     // id, which drifts from position after a mid-session remove or reorder. Re-key both records
     // into the baked slot space here, at the one boundary that knows the current order; passing
     // them through raw is what once resolved one slot's preset from another slot's pick.
@@ -5180,7 +5212,7 @@ function EditorView({
   }, [onSlice, captureAllPlateThumbnails, buildSceneEditOut, authorFilamentConfigs, stateRef])
 
   // Once an editor-born project has been saved it is a real library file, so it stops presenting
-  // as "New Project" and gains the ordinary Save-version path — without the editor re-mounting.
+  // as "New Project" and gains the ordinary Save-version path, without the editor re-mounting.
   const savedAsProject = savedFile !== null
   const showAsNewProject = isNewProject && !savedAsProject
   /** In-flight / failed state for the "missing material settings" repair below. */
@@ -5188,11 +5220,11 @@ function EditorView({
   const [physicsRepairError, setPhysicsRepairError] = useState<string | null>(null)
   /**
    * The repair error describes the LAST attempt against the state it ran on. Any later change to
-   * the session — an edit, an undo, a redo — invalidates that context, and a lingering
+   * the session, an edit, an undo, a redo, invalidates that context, and a lingering
    * "couldn't repair" over a state it no longer describes reads as a fresh failure (observed: an
    * undo of a mixed repair left the error title up over a state whose staged half was gone). The
    * ordering keeps the message alive through its own attempt: a mixed attempt's staging setState
-   * commits (this clears nothing — the error isn't set yet) before the async physics miss sets it.
+   * commits (this clears nothing: the error isn't set yet) before the async physics miss sets it.
    */
   useEffect(() => {
     setPhysicsRepairError(null)
@@ -5200,7 +5232,7 @@ function EditorView({
   /**
    * A repair belongs to the PROJECT it was run against. This editor is not remounted when the host
    * opens a different file (the public editor's close-and-choose flow reuses it), so without this the
-   * pin — and the banner suppression that reads it — carried into the next project: a still-defective
+   * pin, and the banner suppression that reads it, carried into the next project: a still-defective
    * file opened showing no warning, which read as "the repair worked". It is also how a save that
    * silently restored nothing looked like a success.
    */
@@ -5219,7 +5251,7 @@ function EditorView({
    * that lights up Save is what every other change in this editor does.
    *
    * ALL SLOTS OR NONE. The arrays this feeds are positional, so a partial resolve cannot be written
-   * without inventing values for the rest — which is what produced a 3-material project that
+   * without inventing values for the rest, which is what produced a 3-material project that
    * reopened with 6 (see `repairs/restore-filament-physics.ts`). An unresolvable slot is reported
    * instead, naming the slots, because the user can fix that by picking those materials explicitly.
    */
@@ -5240,13 +5272,13 @@ function EditorView({
 
   // Machine + stored purge values for the flushing dialog. Null while the settings are still
   // loading, for a project that carries none (a from-scratch scaffold), or for a host whose source
-  // cannot read them — in each case the Materials section simply shows no button.
+  // cannot read them, in each case the Materials section simply shows no button.
   const projectFlushContext = useMemo(
     () => readProjectFlushContext(projectSettingsQuery.data ?? null),
     [projectSettingsQuery.data]
   )
   const flushDatasets = useFlushDatasets(sliceConfig?.selectedSlicerTargetId, flushDataPath)
-  // Does the engine agree with our port? A diagnostic, cached per target — it only decides how
+  // Does the engine agree with our port? A diagnostic, cached per target, it only decides how
   // confidently the dialog's footnote can speak. See `flushDatasets.ts`.
   const flushCalibration = useFlushCalibration(sliceConfig?.selectedSlicerTargetId, flushDatasets, flushCalibrationPath)
 
@@ -5293,7 +5325,7 @@ function EditorView({
             projectFilamentId: slot.projectFilamentId
           })
           // A config OBJECT is not the same as a config with VALUES. A slot whose preset resolves to
-          // the project's own (physics-dropped) slot comes back as `{}` — truthy, so it used to count
+          // the project's own (physics-dropped) slot comes back as `{}`: truthy, so it used to count
           // as resolved: the repair reported success, the banner cleared, and the save then wrote
           // nothing because no slot defined any key. The user got a "repaired" file that was
           // untouched. Require at least one real filament setting before believing the slot.
@@ -5318,18 +5350,22 @@ function EditorView({
         }
       }
       if (unresolved.length > 0 || Object.keys(resolved).length === 0) {
-        const slots = unresolved.length === 1 ? `material ${unresolved[0]}` : `materials ${unresolved.join(', ')}`
+        // The MATERIAL is the subject, not the app. "We couldn't match ..." casts the software as
+        // someone acting on the user's behalf, which it is not, and it puts the apology before the
+        // fact. Naming the material first also puts the thing they have to go and fix at the front.
+        const one = unresolved.length === 1
+        const slots = one ? `Material ${unresolved[0]}` : `Materials ${unresolved.join(', ')}`
         // When the byte-level settings repairs staged in the same click, "nothing was changed"
-        // would be a lie — say which half missed and that the staged half survives a save.
-        const stagedNote = otherRepairsStaged ? ' The other repairs were staged and save will keep them.' : ''
+        // would be a lie: say which half missed and that the staged half survives a save.
+        const stagedNote = otherRepairsStaged ? ' The other repairs are staged; save to keep them.' : ''
         setPhysicsRepairError(
           unresolved.length > 0
-            ? `We couldn’t match ${slots} to a known preset, so the material settings weren’t restored.${stagedNote} Pick those materials again, then repair.`
-            : `No materials could be matched to a preset, so the material settings weren’t restored.${stagedNote}`
+            ? `${slots} didn’t match a known preset, so ${one ? 'its' : 'their'} settings weren’t restored. Pick ${one ? 'it' : 'them'} again, then repair.${stagedNote}`
+            : `No materials matched a known preset, so their settings weren’t restored.${stagedNote}`
         )
         return
       }
-      // Checkpoint BEFORE the change, like every other scene edit — this is also what marks the
+      // Checkpoint BEFORE the change, like every other scene edit, this is also what marks the
       // project dirty, so Save lights up.
       recordHistoryRef.current?.()
       setState((prev) => (prev ? { ...prev, repairedFilamentConfigs: resolved } : prev))
@@ -5340,7 +5376,7 @@ function EditorView({
 
   /**
    * Stage the byte-level settings repairs (flush matrix, variant index, filament ids,
-   * inherits_group, object extruders) as an UNDOABLE EDIT — the in-editor twin of the API repair
+   * inherits_group, object extruders) as an UNDOABLE EDIT: the in-editor twin of the API repair
    * route, for hosts with no stored file to POST to (the public editor). Marking is the whole
    * client-side action: the pin rides the edit as `SceneEdit.repairSettings` and the bake applies
    * the shared repair implementations while saving, so a repaired file cannot differ by which
@@ -5353,9 +5389,19 @@ function EditorView({
 
   /**
    * The one in-editor Repair action the notice offers: stages whichever repairs the flagged
-   * reasons call for. Byte-level repairs stage synchronously and cannot fail; the physics restore
-   * resolves presets and reports its own miss (staging the byte repairs first keeps a physics
-   * failure from discarding them — the error then honestly describes the HALF that failed).
+   * reasons call for. The physics restore resolves presets and reports its own miss (staging the
+   * byte repairs first keeps a physics failure from discarding them: the error then honestly
+   * describes the HALF that failed).
+   *
+   * Byte-level repairs stage synchronously, but "cannot fail" would overstate it. Each one DECLINES
+   * where it cannot derive the value with certainty, which is the contract in `repairs/index.ts`,
+   * and a declined repair is indistinguishable from a successful one here: the reasons come from the
+   * cached index and carry no repairability, so the button is offered either way and the banner
+   * returns after the save. One shape is known to reach it, an `inherits_group` of fewer than two
+   * entries, where the process and machine slots cannot be told apart. It needs a hand-edited or
+   * foreign file, so this is tracked rather than fixed: surfacing repairability means widening the
+   * wire contract and bumping `THREE_MF_INDEX_PARSER_VERSION`, which invalidates every cached index
+   * on every bridge. Tracked as issue #101.
    */
   const handleRepairInEditor = useCallback(async () => {
     // "Try again" after a physics miss must not re-stage (and burn another undo step) when the
@@ -5366,7 +5412,7 @@ function EditorView({
     if (settingsRepairReasons.includes('filamentPhysics')) await handleRepairFilamentPhysics(stagedSettings)
   }, [settingsRepairReasons, handleStageSettingsRepair, handleRepairFilamentPhysics, stateRef])
   /**
-   * Whether "Save" has somewhere to land WITHOUT asking the user for a destination — an opened
+   * Whether "Save" has somewhere to land WITHOUT asking the user for a destination, an opened
    * library file, an opened local file, or a scaffold already saved once this session. Shared by the
    * footer's Save button and the repair notice's Repair, so the notice cannot offer a save the
    * footer would have refused.
@@ -5377,17 +5423,17 @@ function EditorView({
   const loading = !hasNoBaseFile && (
     platesQuery.isLoading || initialSceneQuery.isLoading || (!state && plateIndices.length > 0)
   )
-  // Disable scene-manipulation controls until the plate has finished (re)building — acting on a
+  // Disable scene-manipulation controls until the plate has finished (re)building: acting on a
   // half-loaded scene (e.g. auto-arrange before the models are in) is undefined.
   const controlsBusy = loading || viewportBuilding || !sceneReady
   // The in-viewport loading overlay shows while models build AND during the brief pre-build window
-  // after the viewport mounts but before the scene/canvas is ready — otherwise the first open shows
+  // after the viewport mounts but before the scene/canvas is ready, otherwise the first open shows
   // an empty bed with no sign of loading until the models suddenly appear. Pre-build is treated as
   // incremental (the plate starts empty), so it gets the top bar + centred message rather than the
   // same-plate dimming rebuild.
   const showBuildOverlay = viewportBuilding || !sceneReady
   const buildOverlayIncremental = buildIncremental || !sceneReady
-  // Null — not 0 — while the part count is unknown or a single part: the bar and spinner are then
+  // Null, not 0, while the part count is unknown or a single part: the bar and spinner are then
   // indeterminate, and a 0 would size their moving segment to nothing (see `ProgressBar`).
   const buildProgressPercent = buildProgress && buildProgress.total > 1
     ? Math.round((buildProgress.done / buildProgress.total) * 100)
@@ -5424,7 +5470,7 @@ function EditorView({
         // Size comes from the shared dialog modes: maximized over a page (a thin gutter, so the page
         // behind still reads as present) and edge-to-edge once the user asks for full screen or the
         // host IS the page. Both have to escape the theme's app-wide viewport clamp, which is
-        // exactly what `dialogPresentationProps` carries — see `lib/dialogPresentation.ts`.
+        // exactly what `dialogPresentationProps` carries: see `lib/dialogPresentation.ts`.
         {...dialogMode}
         sx={[
           dialogMode.sx,
@@ -5440,7 +5486,7 @@ function EditorView({
         ]}
       >
         {/* Both are chrome, and the close X sits exactly where the viewport toolbar moves to once
-            the dialog padding goes — leaving it would put an editor-closing button under the
+            the dialog padding goes, leaving it would put an editor-closing button under the
             cursor aiming for "exit full view". */}
         {showEditorChrome && <ModalClose onClick={handleCloseRequest} sx={{ top: 12, right: 12 }} />}
         {showEditorChrome && (
@@ -5462,25 +5508,25 @@ function EditorView({
         {showEditorChrome && settingsRepairReasons.length > 0 && (
           <RepairProjectSettingsAlert
             reasons={settingsRepairReasons}
-            // Repairing an archived version means restoring it first — a knowing decision — so it
+            // Repairing an archived version means restoring it first, a knowing decision, so it
             // gets the advisory with restore-first wording instead of a Repair button that would
             // mint a new head from old bytes.
             archivedVersion={openedArchivedVersion}
-            // `filamentPhysics` is repaired by the save path, not the route — and Save is greyed out
+            // `filamentPhysics` is repaired by the save path, not the route, and Save is greyed out
             // on a project with no unsaved edits, so without this the notice named a remedy the user
             // could not reach.
             //
             // Available on EVERY host, including a project opened from disk: this no longer saves
             // anything, it stages an undoable edit, so there is no file write to be surprised by.
             // Offered wherever a resolver exists AND the preset catalogue has settled. Whether every
-            // slot CAN resolve is not knowable without asking — a slot can hold a preset id whose kind
-            // this host's resolver does not implement — so the attempt reports the miss rather than a
+            // slot CAN resolve is not knowable without asking, a slot can hold a preset id whose kind
+            // this host's resolver does not implement, so the attempt reports the miss rather than a
             // pre-flight predicting it. The catalogue, though, IS knowable: pressed before it loads,
             // every slot resolves to no preset id and the repair fails with "couldn't match materials
             // 1, 2" on a project whose materials are perfectly fine. Reproduced by clicking the moment
             // the button appears, which is exactly what an eager user does.
             // The resolver/catalogue gate applies only when the PHYSICS restore is among the
-            // flagged reasons — the byte-level repairs stage synchronously from the shared
+            // flagged reasons: the byte-level repairs stage synchronously from the shared
             // implementations and need neither.
             onRepairInEditor={settingsRepairReasons.includes('filamentPhysics')
               ? (resolveFilamentConfig && sliceConfig?.slicerStatus.slicerDataReady ? handleRepairInEditor : undefined)
@@ -5513,7 +5559,7 @@ function EditorView({
         ) : !state || !activePlate ? (
           // Only the genuine first load (no plates/scene yet) shows the full overlay. Once the
           // editor has content, plate switches and background refetches keep the viewport mounted
-          // and lean on the in-viewport "Loading models…" overlay — flipping the whole content out
+          // and lean on the in-viewport "Loading models…" overlay: flipping the whole content out
           // here would unmount the WebGL canvas and reinitialize the entire scene (a visible
           // "reload" of the dialog on every plate switch).
           <Box sx={{ flex: 1, display: 'grid', placeItems: 'center' }}>
@@ -5556,10 +5602,10 @@ function EditorView({
                   Pin the WebGL canvas to `touch-action: none` so the browser never hijacks a
                   one-finger drag as a page scroll. TransformControls (active while an object is
                   selected) sets the canvas's inline `touch-action` to "none" on pointerdown but
-                  resets it to "" (auto) on pointerup, and has no pointercancel handler — so a
+                  resets it to "" (auto) on pointerup, and has no pointercancel handler, so a
                   scroll-hijacked touch leaves it "none", the next touch starts "none" (works), its
                   clean pointerup resets to "" again, and the touch after that gets scroll-hijacked
-                  (pointercancel) — interrupting every other drag/rotate on mobile. A CSS rule wins
+                  (pointercancel), interrupting every other drag/rotate on mobile. A CSS rule wins
                   whenever the inline value is cleared, keeping the canvas non-scrolling every time.
                 */}
                 <Box ref={setViewerContainer} sx={{ position: 'absolute', inset: 0, touchAction: 'none', '& canvas': { touchAction: 'none' } }} />
@@ -5786,7 +5832,7 @@ function EditorView({
                       initial={selectedTransform}
                       setterRef={transformReadoutSetterRef}
                       // With a part on the gizmo the values are the PART's placement inside
-                      // its object (and edits apply to every copy) — say so.
+                      // its object (and edits apply to every copy): say so.
                       heading={selectedAddedPartKey || selectedBakedPart ? 'Part placement (within the object)' : undefined}
                       uniformScale={uniformScale}
                       onToggleUniformScale={setUniformScale}
@@ -5965,7 +6011,7 @@ function EditorView({
                     initial={selectedTransform}
                     setterRef={transformReadoutSetterRef}
                     // With a part on the gizmo the values are the PART's placement inside
-                    // its object (and edits apply to every copy) — say so.
+                    // its object (and edits apply to every copy): say so.
                     heading={selectedAddedPartKey || selectedBakedPart ? 'Part placement (within the object)' : undefined}
                     uniformScale={uniformScale}
                     onToggleUniformScale={setUniformScale}
@@ -6089,14 +6135,14 @@ function EditorView({
             // The sidebar's contents, shared by the desktop panel column and the mobile tab, so the
             // object list cannot go missing from one of them: slicer/printer/process/materials,
             // then the object list directly below, then the per-plate filament-change/pause rows.
-            // One scroller for the lot — the object list takes its natural height and the column
+            // One scroller for the lot: the object list takes its natural height and the column
             // scrolls as a whole, rather than each section scrolling inside its own box.
             const sidebarContent = sliceConfig ? (
               <Sheet
                 variant="outlined"
                 sx={{ flex: 1, minHeight: 0, borderRadius: 'sm', overflow: 'auto', bgcolor: 'background.level1' }}
               >
-                {/* This scroller paints level1, unlike the prepare-print dialog's surface —
+                {/* This scroller paints level1, unlike the prepare-print dialog's surface,
                     the sticky headers must match it or they show as bars when unpinned. */}
                 <StickySectionScope background="background.level1">
                   <Stack spacing={1.25} sx={{ p: 1.25 }}>
@@ -6150,7 +6196,7 @@ function EditorView({
                   display: 'grid',
                   gap: showEditorChrome ? `${EDITOR_GRID_GAP_PX}px` : 0,
                   // The panel column flips side with the preference and disappears with the toggles;
-                  // the viewport column stays flexible either way. See `buildEditorGridLayout` —
+                  // the viewport column stays flexible either way. See `buildEditorGridLayout`:
                   // hiding a region has to change the TEMPLATE, or its track stays as a gap.
                   ...buildEditorGridLayout({ sidebarSide, sidebarWidth, showPlates: showEditorChrome, showPanel: showSidebar, stripOrientation: plateStripOrientation })
                 }}
@@ -6159,7 +6205,7 @@ function EditorView({
                 {viewport}
                 {showSidebar && (
                 <Box sx={{ gridArea: 'panel', minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', position: 'relative' }}>
-                  {/* Desktop-only grab strip straddling the grid gap on the panel's INNER edge —
+                  {/* Desktop-only grab strip straddling the grid gap on the panel's INNER edge,
                       the one facing the viewport, so it flips with the panel's side; drag to
                       resize the sidebar, double-click to reset (useSidebarResize). */}
                   <Box
@@ -6192,7 +6238,7 @@ function EditorView({
           <DialogActions sx={{ pt: 1 }}>
             <Button type="button" variant="plain" onClick={handleCloseRequest} disabled={saving}>Close</Button>
             {/* Save and Slice stay separate split-buttons on every width (matching desktop). */}
-            {/* Save/Slice gate on loaded state only — not the 3D viewport's ready/build state, which
+            {/* Save/Slice gate on loaded state only, not the 3D viewport's ready/build state, which
                 can be false while a settings tab is shown and would wrongly disable slicing. */}
             {/* Save is the primary action and sits rightmost (solid); Slice/Apply pair to its left. */}
             {onSlice ? (
@@ -6289,6 +6335,10 @@ function EditorView({
             filamentOptions={filamentOptions}
             onChangeMaterial={(filamentId) => reassignSelectionFilament(contextMenu.key, filamentId)}
             onSetPrintable={(printable) => handleSetPrintableSelection(selectionFor(contextMenu.key), printable)}
+            // The clicked instance's own state, so the single-object menu offers the one action
+            // that applies. Undefined for an instance the active plate no longer holds, which hides
+            // the item rather than labelling it from a guess.
+            printable={activePlate?.instances.find((instance) => instance.key === contextMenu.key)?.printable ?? null}
             onEditObjectSettings={perObject ? () => openObjectSettingsFor(contextMenu.key) : undefined}
             onCenterOnPlate={centerSelectionOnPlate}
             onDropToBed={handleDropToBed}
@@ -6400,7 +6450,7 @@ function EditorView({
           description={exportRequest.kind === 'project'
             ? "Choose where to save the new project, then confirm the file name. The object keeps its parts, materials, and paint. Saving with an existing file's name replaces it."
             : exportRequest.kind === 'separate'
-              ? 'Choose where to save the exported STLs — each selected object becomes its own file, named after the object. Existing files with the same names are replaced.'
+              ? 'Choose where to save the exported STLs, each selected object becomes its own file, named after the object. Existing files with the same names are replaced.'
               : "Choose where to save the exported STL, then confirm the file name. Saving with an existing file's name replaces it."}
           showFiles
           fileNameField={suggestedName === null ? undefined : {
@@ -6508,7 +6558,7 @@ function EditorView({
             // A cleared object keeps an EXPLICIT empty entry rather than being deleted. Absence
             // must never mean "delete this object's saved overrides": the map only ever holds the
             // objects currently in scope, so a deleted entry is indistinguishable from one the
-            // user never opened — and the save used to strip both. See collectObjectProcessOverrides.
+            // user never opened, and the save used to strip both. See collectObjectProcessOverrides.
             next[String(id)] = applyBulkOverridesToMember(perObject.value[String(id)], overrides, clearedKeys)
           }
           perObject.onChange(next)
@@ -6520,7 +6570,7 @@ function EditorView({
       // Per-PART process overrides: same restricted catalog as the per-object dialog, baselined on
       // the inherited global + object overrides; the result is stored per part and baked into that
       // part's model_settings block (separate from the object's overall overrides). With several
-      // parts selected (bulk), the dialog seeds from ALL of them — disagreements render as "Mixed"
+      // parts selected (bulk), the dialog seeds from ALL of them: disagreements render as "Mixed"
       // and, untouched, each part keeps its own value on apply.
       const partKeys = editingPart.partIndexes.map((partIndex) => partSlotKey(editingPart.objectId, partIndex))
       const objectOverrides = perObject.value[String(editingPart.objectId)] ?? {}
@@ -6550,7 +6600,7 @@ function EditorView({
               const map = { ...(current.partProcessOverrides ?? {}) }
               // Merge per part (uniform values + cleared keys; untouched "Mixed" keys survive).
               // Unlike objects, an empty part entry is dropped: part overrides live in session
-              // state keyed by slot, so absence simply means "no overrides" — there is no
+              // state keyed by slot, so absence simply means "no overrides", there is no
               // scope-pruning ambiguity to guard against.
               for (const partKey of partKeys) {
                 const merged = applyBulkOverridesToMember(map[partKey], serialized, clearedKeys)
@@ -6573,10 +6623,10 @@ function EditorView({
 export type { FilamentOption } from '../../components/library/PlateGcodeSections'
 
 /**
- * Re-render the editor ONLY when its own data changes — never on a parent re-render driven by live
+ * Re-render the editor ONLY when its own data changes, never on a parent re-render driven by live
  * printer-status WS pushes. The host (LibraryView/SliceFileModal) re-renders ~once a second while a
  * printer is connected (status updates); it rebuilds the borrowed `sliceConfig` and the editor
- * callbacks by identity each time, which — without this gate — re-rendered the whole editor and
+ * callbacks by identity each time, which, without this gate, re-rendered the whole editor and
  * interrupted camera orbit / object drags every second. Once the editor is open it doesn't care about
  * printer status; the only host-driven thing that legitimately changes is the loaded-materials list,
  * which lives in `sliceConfig` and is caught by the content compare below.
@@ -6584,7 +6634,7 @@ export type { FilamentOption } from '../../components/library/PlateGcodeSections
  * Callback identity (onApply/onClose/onSlice/onSaved) is intentionally ignored:
  * they're rebuilt every parent render, but the editor invokes them only on real user interactions,
  * which always follow a data change (so a fresh closure has already been delivered). Internal editor
- * state changes still re-render normally — React.memo only gates parent-prop-driven re-renders.
+ * state changes still re-render normally: React.memo only gates parent-prop-driven re-renders.
  */
 const EDITOR_DATA_PROP_KEYS = [
   'baseFileId', 'isNewProject', 'baseVersionId', 'currentEdit', 'initialPlateIndex', 'targetPrinterModel',

@@ -104,7 +104,7 @@ test('renders nothing once the crash summary is cleared', () => {
   assert.equal(view.queryByRole('button', { name: 'Clear crash history' }), null)
 })
 
-test('renders nothing for a single crash — that is the settings chip, not an app-wide banner', () => {
+test('renders nothing for a single crash, that is the settings chip, not an app-wide banner', () => {
   const view = renderWithBridges([
     makeBridge({ lastCrashAt: new Date().toISOString(), recentCrashCount: 1, lastReason: null })
   ])

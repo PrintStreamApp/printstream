@@ -6,13 +6,13 @@
  * Both self-hosted builds are enforced, and the copy differs only in what
  * satisfies them: Docker/OSS takes a **free community key** for personal,
  * non-commercial use, while the native (paid) app requires a commercial one.
- * Docker/OSS gets the longer window because the requirement is new there — an
+ * Docker/OSS gets the longer window because the requirement is new there, an
  * install that has been running for a year first sees this on upgrade, so the
  * banner has to read as "here is what to do", not "you did something wrong".
  *
  * Deliberately **not dismissible**: it reflects a countdown to real loss of
  * function. (It used to be a dismissible nudge, back when Docker/OSS was pure
- * honour system — do not restore that; a dismissed banner would let an install
+ * honour system: do not restore that; a dismissed banner would let an install
  * hit the lock with no warning.)
  *
  * Renders nothing in the cloud (the query only runs when self-hosted) or on a
@@ -66,7 +66,7 @@ export function LicenseBanner() {
           ' The native app requires a commercial license (community keys cover the Docker build only).'
         ) : (
           <>
-            {' '}Personal, non-commercial use is free — grab a{' '}
+            {' '}Personal, non-commercial use is free: grab a{' '}
             <Typography
               component="a"
               href={COMMUNITY_LICENSE_URL}

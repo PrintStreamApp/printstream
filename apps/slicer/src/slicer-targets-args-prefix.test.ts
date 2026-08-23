@@ -3,7 +3,7 @@ process.env.NODE_ENV = 'test'
 /**
  * `cliArgsPrefix` on a manifest target.
  *
- * The native Linux app cannot spawn the engine binary directly — it runs it
+ * The native Linux app cannot spawn the engine binary directly, it runs it
  * through its own sysroot's dynamic loader so GTK/WebKit resolve inside the
  * install rather than against a host that may have neither. The prefix carries
  * `--library-path … <binary>`, so it must survive the manifest parse and default

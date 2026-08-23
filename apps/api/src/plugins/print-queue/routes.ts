@@ -221,7 +221,7 @@ export function registerQueueRoutes(context: ApiPluginContext): void {
     if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message ?? 'Invalid reorder payload')
 
     // updateMany is workspace-scoped (foreign/unknown ids no-op), so a fractional rank
-    // is unnecessary — small backlogs renumber cheaply and unambiguously.
+    // is unnecessary: small backlogs renumber cheaply and unambiguously.
     await Promise.all(parsed.data.orderedIds.map((id, index) => (
       prisma.queueItem.updateMany({ where: { id }, data: { sortKey: index } })
     )))
@@ -250,7 +250,7 @@ export function registerQueueRoutes(context: ApiPluginContext): void {
       parsed.data.amsMapping
     )
 
-    // Dry run ("Check"): report what a real Start would do — without uploading or starting.
+    // Dry run ("Check"): report what a real Start would do, without uploading or starting.
     if (parsed.data.dryRun) {
       response.json(await buildQueueDryRunResult(
         item,
@@ -374,7 +374,7 @@ export function registerQueueRoutes(context: ApiPluginContext): void {
       metadata: { queueItemId: existing.id }
     })
     // Removing a still-queued order item releases its order print back to pending.
-    // (A dispatched/printing/done item has already advanced the order — leave it.)
+    // (A dispatched/printing/done item has already advanced the order: leave it.)
     if (existing.orderPrintId && (existing.status === 'queued' || existing.status === 'held')) {
       printerEvents.emit('order-print.unqueued', {
         workspaceId: requireRequestWorkspaceId(request),
@@ -484,7 +484,7 @@ async function applyDispatch(
 
 /**
  * Build a dry-run ("Check") result: report whether a real Start would succeed and, if not, the first
- * failure — placement (no idle/eligible printer) or, via {@link validateLibraryPrint}, a resolved-but-
+ * failure: placement (no idle/eligible printer) or, via {@link validateLibraryPrint}, a resolved-but-
  * broken file ("File not found" / "File missing on bridge"), an offline printer, a print guard, or a
  * plate/filament incompatibility. Nothing is uploaded, started, or claimed.
  */
@@ -521,7 +521,7 @@ async function buildQueueDryRunResult(
 
 /**
  * Build the `PrintFromLibrary` input for a queued dispatch. The queue resolves the printer at dispatch
- * time, so the **printer-specific** plate type + nozzle diameters come from the resolved printer — not the
+ * time, so the **printer-specific** plate type + nozzle diameters come from the resolved printer, not the
  * create-time options, which had no printer (a null plate type made the compatibility check throw a false
  * "choose the printer's current plate type" mismatch). Nozzle already falls back to the live status; we
  * still pass the configured value for parity with the print dialog.

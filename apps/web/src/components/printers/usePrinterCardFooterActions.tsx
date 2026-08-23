@@ -1,5 +1,5 @@
 /**
- * Builds the printer-card footer action list — the recovery/control buttons (pause, resume, load
+ * Builds the printer-card footer action list: the recovery/control buttons (pause, resume, load
  * filament, retry, continue, check assistant, skip object, stop) plus any plugin-contributed
  * `printer.card.actions`. Each action carries both an inline button and an overflow menu item so
  * {@link useFooterActionOverflow} can move it between the row and the "more" menu. Pure transform

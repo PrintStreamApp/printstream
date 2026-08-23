@@ -3,7 +3,7 @@
  *
  * The API queues and scopes work while a separate slicer runtime owns
  * BambuStudio CLI execution. Completed artifacts are persisted back into the
- * library — {@link persistLibraryFileFromLocalPath} for the sliced file and
+ * library: {@link persistLibraryFileFromLocalPath} for the sliced file and
  * {@link persistHistoryThumbnailFromLibrary} for its history thumbnail.
  */
 import { randomUUID } from 'node:crypto'
@@ -53,7 +53,7 @@ import { prisma } from './prisma.js'
 import { resolveLibraryFileToLocalPath } from './bridge-library-files.js'
 
 const DEFAULT_SLICING_PROGRESS_POLL_INTERVAL_MS = 750
-/** How long a finished job stays in `listActive` — see its doc for who relies on this. */
+/** How long a finished job stays in `listActive`: see its doc for who relies on this. */
 const ACTIVE_LIST_RECENT_WINDOW_MS = 5 * 60_000
 const DEFAULT_SLICING_PROGRESS_HEARTBEAT_INTERVAL_MS = 10_000
 const DEFAULT_SLICING_STATE_FILE = path.resolve(path.dirname(env.LIBRARY_DIR), 'slicing-jobs-state.json')
@@ -88,7 +88,7 @@ interface SlicingJobState {
   /**
    * Set by the live-progress watchdog when it aborts the slice because the slicer stopped
    * acknowledging the job. Distinguishes that abort from a user Cancel, which shares the
-   * controller. In-memory only — a lost slice is never resumed, so it need not survive a restart.
+   * controller. In-memory only, a lost slice is never resumed, so it need not survive a restart.
    */
   lostReason: string | null
 }
@@ -130,7 +130,7 @@ export type ResolveSlicingSource = (input: { sourceFileId: string; sourcePath: s
 
 /**
  * Resolve the local path to slice from. Prefers the persisted local/_bridge-cache
- * copy while it still exists (the common case — no behavior change); otherwise
+ * copy while it still exists (the common case, no behavior change); otherwise
  * re-resolves and re-fetches from the current library file, so a job that
  * outlived an API restart (fresh volume) or a source delete/replace doesn't fail
  * with an opaque ENOENT. Throws a clear, requeue-able message when the source can
@@ -205,11 +205,11 @@ export class SlicingJobs {
   /**
    * The workspace's jobs, newest first.
    *
-   * A FINISHED job comes back without the engine's raw stdout/stderr — only the `system` lines
+   * A FINISHED job comes back without the engine's raw stdout/stderr, only the `system` lines
    * that are its user-facing status. This response is polled by every open tab and grows with
    * history, and the engine log dwarfs everything else on a job: 185 jobs made it 1.3 MB, 1.07 MB
    * of which was log no surface renders (the web reads a finished job's outcome from its last
-   * system line). The complete log stays on `GET /jobs/:id`. Active jobs keep everything — their
+   * system line). The complete log stays on `GET /jobs/:id`. Active jobs keep everything, their
    * progress frames ARE stdout.
    */
   list(workspaceId: string): SlicingJob[] {
@@ -222,11 +222,11 @@ export class SlicingJobs {
 
   /**
    * The workspace's ACTIVE jobs plus anything that finished within the recency window, newest
-   * first. This is what the polled `GET /jobs` list serves (its consumers — the slicing toast
-   * stack and the Jobs view's in-progress section — only ever look at running/just-finished
+   * first. This is what the polled `GET /jobs` list serves (its consumers, the slicing toast
+   * stack and the Jobs view's in-progress section, only ever look at running/just-finished
    * work), so the polled payload stays bounded while history grows; the full history is paged
    * by `GET /api/jobs/history` through {@link list}. The window exists for the toast stack,
-   * which keeps a finished job's toast up for a beat after it settles — comfortably inside
+   * which keeps a finished job's toast up for a beat after it settles: comfortably inside
    * five minutes.
    */
   listActive(workspaceId: string): SlicingJob[] {
@@ -245,7 +245,7 @@ export class SlicingJobs {
 
   /**
    * Repoint a job's saved output. Used when saving the output over an existing
-   * library file folds it into that row — follow-up actions (e.g. "Print"
+   * library file folds it into that row: follow-up actions (e.g. "Print"
    * after saving) must dispatch the surviving file id.
    */
   setOutputFile(workspaceId: string, jobId: string, output: { id: string; name: string }): void {
@@ -338,7 +338,7 @@ export class SlicingJobs {
   /**
    * Cancel every still-running job started by a browser tab that has closed for good.
    *
-   * Called by the `client-sessions.ts` departure signal, which is already grace-delayed — a reload
+   * Called by the `client-sessions.ts` departure signal, which is already grace-delayed, a reload
    * or a flaky socket never reaches here. Deliberately NOT workspace-scoped: the caller is a socket
    * lifecycle, not a request, and the owner id was minted by the tab that also created the job, so
    * it selects exactly that tab's own work and nothing else. Terminal jobs are left alone: the
@@ -448,7 +448,7 @@ export class SlicingJobs {
       // `slicing` is NOT set here: everything runSlicerJob does before it hands the file over
       // (baking the editor's scene, authoring the machine, welding meshes) is preparation, and on
       // a big project it is the slow part. Announcing "slicing" over it reported the wrong phase
-      // for the whole prep — runSlicerJob flips the status itself once the engine has the file.
+      // for the whole prep: runSlicerJob flips the status itself once the engine has the file.
       this.setStatus(job, 'preparing', 'Preparing the project')
       // Declared outside the try so the artifact temp dir is cleaned on EVERY exit path
       // (persist failure, cancel during saving, ...), not only on success.
@@ -462,7 +462,7 @@ export class SlicingJobs {
         job.outputFileName = normalizeOutputFileName(result.outputFileName ?? job.outputFileName ?? buildDefaultOutputFileName(job.sourceFileName))
         this.setStatus(job, 'saving', slicedArtifactSavingMessage(job.request))
         // Bake the editor's rendered plate previews into the sliced output so its library
-        // thumbnail reflects the edited layout — BambuStudio's CLI won't regenerate thumbnails
+        // thumbnail reflects the edited layout: BambuStudio's CLI won't regenerate thumbnails
         // for a project with explicit (editor-set) positions. Best-effort: a failure here must
         // not fail an otherwise-successful slice.
         // Editor renders take precedence; otherwise a caller with no sceneEdit (e.g. calibration)
@@ -532,7 +532,7 @@ export class SlicingJobs {
         if (result?.artifactPath) {
           await rm(pathDirname(result.artifactPath), { recursive: true, force: true }).catch(() => undefined)
         }
-        // Same for the staged project copy — preserved by now on the success path, and
+        // Same for the staged project copy: preserved by now on the success path, and
         // deliberately discarded on every other, where no output points at it.
         if (result?.preparedProjectPath) {
           await rm(pathDirname(result.preparedProjectPath), { recursive: true, force: true }).catch(() => undefined)
@@ -621,11 +621,11 @@ export class SlicingJobs {
       }
 
       // We author the 3MF; the CLI only slices it. Write the SELECTED machine's complete settings
-      // into whatever project we are about to hand over, so it leaves here fully self-defined —
+      // into whatever project we are about to hand over, so it leaves here fully self-defined,
       // including an H2-family printer's extruder-indexed dual-nozzle topology. A project can name
       // `printer_model: H2D` while carrying none of that topology (a new editor project, and any
       // 3MF we build from scratch such as the calibration plates), and the CLI then refuses it
-      // ("missing its dual-nozzle machine data") or slices with no print volume — "no object fully
+      // ("missing its dual-nozzle machine data") or slices with no print volume: "no object fully
       // inside the print volume", exit 206. Deliberately applied to EVERY slice path, not just
       // editor (sceneEdit) slices: calibration and plain library slices bake no scene but hand over
       // the same under-defined projects. Never rely on the slicer to retarget or on built-in profile
@@ -646,7 +646,7 @@ export class SlicingJobs {
             rewrittenSourcePaths.push(authoredPath)
             sourcePath = authoredPath
           } else {
-            this.logJobEvent(job, 'warn', `Slicing without an authored machine — could not resolve ${machineProfile.name}`)
+            this.logJobEvent(job, 'warn', `Slicing without an authored machine: could not resolve ${machineProfile.name}`)
           }
         }
       }
@@ -654,11 +654,11 @@ export class SlicingJobs {
       // Now the machine is in, author the REST of this slice's settings into the project: the
       // chosen process preset, each slot's filament preset, the dialog's per-slice and
       // per-material overrides, and the plate type. All of those otherwise reach the CLI only as
-      // command-line profile files, leaving the project ignorant of what it was sliced with — which
+      // command-line profile files, leaving the project ignorant of what it was sliced with, which
       // is what made a preserved project reopen with its old presets, and what let a project's own
       // settings outrank the chosen preset on the compatibility-fallback retry. Must run AFTER the
       // machine step: the process and filament writes index the topology maps it rebuilds.
-      // Best-effort — a slice that worked before must still work.
+      // Best-effort, a slice that worked before must still work.
       {
         const authoredPath = await this.authorSliceSettings({
           workspaceId: job.workspaceId,
@@ -681,7 +681,7 @@ export class SlicingJobs {
       // BambuStudio chains layer contours by vertex index, so unwelded meshes fall into
       // its 2mm gap-closing heuristic and small features (inlaid text) slice mangled.
       // No-op (no copy) for projects whose meshes are already welded, and best-effort
-      // overall — a heal failure must never fail a slice that would previously have run.
+      // overall, a heal failure must never fail a slice that would previously have run.
       {
         const weldedDir = await mkdtemp(path.join(tmpdir(), 'printstream-slice-weld-'))
         const weldedPath = path.join(weldedDir, path.basename(job.sourceFileName) || 'source.3mf')
@@ -710,7 +710,7 @@ export class SlicingJobs {
       // `default_print_profile` / `inherits_group[0]`, and every `filament_settings_id` slot) so the
       // CLI falls back to its own presets. That is right for the engine and wrong for an archive a
       // user opens: BambuStudio treats "" as a preset NAME, mints a project-embedded preset from its
-      // bare config defaults, names it `(<project>.3mf)`, and re-embeds it on every later save — so
+      // bare config defaults, names it `(<project>.3mf)`, and re-embeds it on every later save, so
       // the kept project would misreport its own materials forever, and a re-slice would use default
       // physics instead of the chosen material. Holds the last version whose identities were still
       // intact; null while nothing has blanked them.
@@ -728,12 +728,12 @@ export class SlicingJobs {
             signal
           })
           // Staged from INSIDE the try: these paths point into a temp dir the finally below
-          // deletes, and this is the last moment they still exist. Which attempt won matters —
+          // deletes, and this is the last moment they still exist. Which attempt won matters,
           // a profile-compatibility retry slices a REWRITTEN project, so archiving a pre-retry
           // version means archiving a project the engine never sliced. That is the deliberate
           // trade for the one field it differs in: `projectToArchive` (above) is the same
           // project minus the blanked preset identities, so the archive names its materials
-          // honestly. Everything else — geometry, arrangement, authored settings — is identical,
+          // honestly. Everything else, geometry, arrangement, authored settings, is identical,
           // since the fallback rewrite only touches `project_settings.config` identity fields.
           return {
             ...result,
@@ -922,7 +922,7 @@ export class SlicingJobs {
    *
    * Staged rather than preserved directly because the two have different lifetimes: a slice
    * that is cancelled or fails during saving must leave no snapshot behind (snapshots are
-   * never swept), and that is only known after the artifact is stored. Best-effort — a
+   * never swept), and that is only known after the artifact is stored. Best-effort, a
    * staging failure costs the re-slice affordance, never the slice.
    */
   private async stagePreparedProject(job: SlicingJobState, preparedPath: string): Promise<string | null> {
@@ -1071,9 +1071,9 @@ function shouldHideSlicedArtifact(request: CreateSlicingJob): boolean {
 /**
  * Narrow a slice request down to what re-slicing the PRESERVED project needs.
  *
- * Everything the request expressed about the project — the arranged scene, object selection,
+ * Everything the request expressed about the project: the arranged scene, object selection,
  * per-object overrides, layer G-code edits, and (authored in by `slice-settings-authoring.ts`)
- * the process and filament presets with their overrides — is already baked into the project we
+ * the process and filament presets with their overrides: is already baked into the project we
  * kept, so carrying it here would re-apply it to a project that already has it. What survives is
  * only what stays outside the file: the engine target, the plate scope, and the newer-project
  * acknowledgement. The preset target rides along because the dialog seeds its pickers from it,
@@ -1089,7 +1089,7 @@ function toPreservedSliceSettings(request: CreateSlicingJob): PreservedSliceSett
 }
 
 // These strings are the job's user-facing status line, not a log: the web renders the newest
-// `system` output line verbatim (`formatSlicingProgress`). Keep them plain — no "artifact",
+// `system` output line verbatim (`formatSlicingProgress`). Keep them plain, no "artifact",
 // no "slicer service", nothing about how the pipeline is wired.
 function slicedArtifactSavingMessage(request: CreateSlicingJob): string {
   return shouldHideSlicedArtifact(request)
@@ -1270,7 +1270,7 @@ function isActiveSlicingJobState(job: SlicingJobState): boolean {
  *
  * The list is every job this workspace has ever sliced, and `output` was its single largest field
  * (208 KB of 471 KB, measured over 194 jobs). A finished job's own progress frames are dead weight
- * there — the web renders a terminal job from `getLatestSystemOutputLine`, its outcome, never from
+ * there: the web renders a terminal job from `getLatestSystemOutputLine`, its outcome, never from
  * the frames (rendering those is what left a ready slice reading "Exporting 3mf (97%)"). The full
  * record, CLI output included, is still one `GET /jobs/:id` away.
  */
@@ -1289,7 +1289,7 @@ function normalizeOutputFileName(fileName: string): string {
   // (BambuStudio itself exports names like "Mount (landscape).gcode.3mf") and are
   // passed to the slicer CLI as a single argv token (no shell word-splitting). Only
   // strip what genuinely breaks downstream: path separators, FAT/firmware-reserved
-  // punctuation, and control/non-ASCII characters — matching sanitizeRemoteName.
+  // punctuation, and control/non-ASCII characters: matching sanitizeRemoteName.
   const safe = fileName.replace(/[\\/<>:"|?*]/g, '_').replace(/[^\x20-\x7e]+/g, '_')
   return isDirectPrintableFileName(safe) ? safe : `${safe.replace(/\.3mf$/i, '')}.gcode.3mf`
 }
@@ -1453,11 +1453,11 @@ function sanitizeProjectSettingsConfig(
     // count (`nozzle_temperature`, `filament_flow_ratio`, `filament_is_support`,
     // `filament_map`, `flush_volumes_matrix` at N², …), so emptying one to `[]`
     // left ~100 siblings at length N and made BambuStudio read its per-filament
-    // vectors out of bounds — the fallback RETRY then crashed and masked the
+    // vectors out of bounds: the fallback RETRY then crashed and masked the
     // original compatibility error it was meant to recover from (issue #66).
     record.filament_settings_id = blankEachEntry(record.filament_settings_id)
     // `filament_type`/`filament_colour`/`filament_vendor` are the project's own
-    // per-slot DATA, not a reference to the dropped preset — clearing them threw
+    // per-slot DATA, not a reference to the dropped preset: clearing them threw
     // away the materials themselves. `default_filament_profile` is EXTRUDER-indexed
     // machine domain (see MACHINE_DOMAIN_ARRAY_KEYS in three-mf-scene-builder.ts,
     // "must never be remapped or dropped by the filament rewrite"), so a filament
@@ -1535,13 +1535,13 @@ function isLikelyBuiltinProfileCompatibilityExit(error: unknown): boolean {
 }
 
 /**
- * A slicer CLI death by signal — exit 128+N (134 SIGABRT … 139 SIGSEGV) — that is worth ONE retry
+ * A slicer CLI death by signal, exit 128+N (134 SIGABRT … 139 SIGSEGV), that is worth ONE retry
  * because it is likely transient. BambuStudio under qemu emulation (arm64 dev/self-host machines)
  * segfaults intermittently during project load/teardown on runs that slice clean when retried, so
  * one bounded retry absorbs the flake.
  *
- * A crash that happened *after the per-plate slice started* is NOT transient — it re-crashes
- * identically every time — and the slicer already reclassifies those into a "The slicing engine
+ * A crash that happened *after the per-plate slice started* is NOT transient, it re-crashes
+ * identically every time, and the slicer already reclassifies those into a "The slicing engine
  * crashed …" message (`formatSliceEngineCrashError`) that deliberately does NOT contain the
  * "exited with code 13x" text this predicate matches, so a deterministic engine crash falls through
  * to the failure path (with actionable guidance) instead of burning a futile second full slice.

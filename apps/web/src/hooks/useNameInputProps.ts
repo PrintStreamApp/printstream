@@ -1,5 +1,5 @@
 /**
- * Props for a dialog's name field — the one input a naming dialog exists to collect.
+ * Props for a dialog's name field: the one input a naming dialog exists to collect.
  *
  * Owns the two behaviours such a field must have, which were hand-rolled per dialog and so kept
  * being half-implemented: the existing text is FOCUSED AND SELECTED on open, so a rename or a
@@ -7,7 +7,7 @@
  * without reaching for the button.
  *
  * Enter is always swallowed (`preventDefault`) even when the field cannot be accepted yet. In a
- * `<form>` dialog the browser would otherwise ALSO fire an implicit submit — the caller's accept
+ * `<form>` dialog the browser would otherwise ALSO fire an implicit submit: the caller's accept
  * would run twice, or run when its own guard said no.
  *
  * The selection fires once per mount, so clicking back into a half-typed name does not re-select
@@ -24,7 +24,7 @@ export interface NameInputProps {
 }
 
 export function useNameInputProps({ onAccept, canAccept = true }: {
-  /** Commit the value — the same handler the dialog's confirm button runs. */
+  /** Commit the value, the same handler the dialog's confirm button runs. */
   onAccept?: () => void
   /** False while the value is invalid or a save is in flight; Enter is swallowed but does nothing. */
   canAccept?: boolean

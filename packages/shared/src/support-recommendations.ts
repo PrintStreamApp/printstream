@@ -5,19 +5,19 @@
  * `support_interface_filament` at a material that calls for a different support geometry
  * (soluble interface, a dedicated support material, or PLA interfacing a TPU print), Studio
  * offers to apply a small fixed set of process settings. This module is the pure decision
- * half of that — it classifies the chosen interface material and returns the settings that
+ * half of that, it classifies the chosen interface material and returns the settings that
  * should change, or null when there is nothing worth asking about.
  *
  * Contract for callers: pass the *pending* interface filament id (the value the user just
  * picked, not the one still in `config`) together with the config those changes would land
  * on. The returned `changes` are already filtered against `config`, so a non-null result
- * always means at least one value would really move — callers can prompt unconditionally.
+ * always means at least one value would really move: callers can prompt unconditionally.
  *
  * Ported from `Tab.cpp`'s `opt_key == "support_interface_filament"` branch in BambuStudio
  * (the vendored source under `tmp/bambustudio-src`). Like Studio, the per-combination table
  * (`support-recommended-combinations.ts`, vendored from `support_recommended_params.json`) is
- * consulted FIRST — a table hit decides the outcome outright, even when every table value is
- * already configured and a fallback case would still move keys — and the three hard-coded
+ * consulted FIRST, a table hit decides the outcome outright, even when every table value is
+ * already configured and a fallback case would still move keys, and the three hard-coded
  * cases run only when it misses. The table needs to know which materials the plate's model
  * objects print with (`modelFilamentIds`), and only fires when they are homogeneous (all one
  * type or all one preset name), mirroring Studio's current-plate volume scan; a host that
@@ -26,7 +26,7 @@
  * One deliberate omission remains: Studio has a parallel prompt on the support BASE filament
  * (`support_filament`), including a "non-soluble material as support base" warning. Not
  * ported; this module is scoped to the interface change the UI asks about. And one deliberate
- * divergence: Studio gates the table on the X2D printer model — we offer it everywhere (see
+ * divergence: Studio gates the table on the X2D printer model, we offer it everywhere (see
  * the combinations module header).
  *
  * Counterpart: `ProcessSettingsDialog` (apps/web) calls this from its scalar-change handler
@@ -39,7 +39,7 @@ import { normalizeMaterialNameKey, querySupportRecommendedCombination, stripPres
 
 /** One project material, as much of it as the classification needs. */
 export interface SupportRecommendationFilament {
-  /** 1-based slot index — the value `support_interface_filament` stores. */
+  /** 1-based slot index: the value `support_interface_filament` stores. */
   id: number
   /** `filament_type` (e.g. `PLA`, `TPU`, `PLA-S`). */
   filamentType: string | null
@@ -56,10 +56,10 @@ export interface SupportRecommendationInput {
   interfaceFilamentId: number
   /** 1-based support BASE filament slot currently configured; 0 is "Default". */
   supportFilamentId: number
-  /** Every material the plate/project carries — the TPU check scans these. */
+  /** Every material the plate/project carries: the TPU check scans these. */
   filaments: readonly SupportRecommendationFilament[]
   /**
-   * Ids (into `filaments`) of the materials the target plate's MODEL OBJECTS print with — the
+   * Ids (into `filaments`) of the materials the target plate's MODEL OBJECTS print with: the
    * model-material side of the combination-table lookup, mirroring Studio's scan of the current
    * plate's volumes. Dedicated support materials do not belong here (they are not model
    * geometry). Omit when the host has no plate context: the table path is skipped and only the
@@ -135,17 +135,17 @@ export function isSolubleFilament(filament: SupportRecommendationFilament): bool
 
 /**
  * Propose the support settings BambuStudio would recommend for a newly-chosen support
- * interface material, or null when it would recommend nothing — no case matched, no
+ * interface material, or null when it would recommend nothing, no case matched, no
  * interface material is selected, or the config already holds every recommended value.
  *
  * The combination table is consulted first and a hit is DECISIVE (see the module header).
  * On a miss, the fallback cases are evaluated in BambuStudio's order, and only the first
  * match applies:
  *
- * 1. `supportTpu` — a PLA interface on a plate that prints TPU.
- * 2. `solubleInterface` — a soluble interface over a non-soluble support base. (A soluble
+ * 1. `supportTpu`, a PLA interface on a plate that prints TPU.
+ * 2. `solubleInterface`, a soluble interface over a non-soluble support base. (A soluble
  *    base needs no special geometry, which is why the base is excluded.)
- * 3. `supportMaterial` — a dedicated support material as the interface. This case
+ * 3. `supportMaterial`, a dedicated support material as the interface. This case
  *    deliberately leaves `support_object_xy_distance` alone: support material releases
  *    cleanly from the side walls, so Studio only closes the vertical gap.
  */
@@ -162,7 +162,7 @@ export function recommendSupportSettingsForInterfaceFilament(
   const combination = matchCombinationRecommendation(interfaceFilament, input.modelFilamentIds, filaments)
   if (combination) {
     // A table hit decides the outcome outright, matching Tab.cpp: `found_recommendation` is
-    // set before the config filter runs, so the fallback cases are never consulted — even
+    // set before the config filter runs, so the fallback cases are never consulted, even
     // when every table value is already in place and a fallback set would still move keys.
     const changes = filterAgainstConfig(combination.changes, config)
     if (Object.keys(changes).length === 0) return null
@@ -187,7 +187,7 @@ export function recommendSupportSettingsForInterfaceFilament(
   } else if (isSupportMaterialFilament(interfaceFilament)) {
     matched = {
       case: 'supportMaterial',
-      // Case 3 omits support_object_xy_distance on purpose — see the doc comment above.
+      // Case 3 omits support_object_xy_distance on purpose: see the doc comment above.
       reason: 'The support interface uses a dedicated support material.',
       changes: { ...SHARED_RECOMMENDED_CHANGES }
     }
@@ -210,7 +210,7 @@ function filterAgainstConfig(recommended: Readonly<Record<string, string>>, conf
 
 /**
  * The combination-table half of the decision: resolve the plate's model materials, require
- * them to be homogeneous (all one type, or all one preset name — Studio's precondition for
+ * them to be homogeneous (all one type, or all one preset name: Studio's precondition for
  * "the" model material being well-defined), and query the vendored table. Returns the
  * unfiltered recommended set plus the prompt sentence naming both materials.
  */
@@ -270,7 +270,7 @@ function homogeneousValue(values: ReadonlyArray<string | null>, keyOf: (value: s
 /**
  * Merge an accepted recommendation into a config the way the settings dialog would. A vector
  * value (e.g. `support_interface_speed`, per-extruder `coFloats`) gets the scalar written to
- * EVERY element — Studio's table expresses these uniformly, and keeping a stale second element
+ * EVERY element: Studio's table expresses these uniformly, and keeping a stale second element
  * would leave one extruder on the old speed. Scalars replace as-is.
  */
 export function applySupportRecommendationChanges(

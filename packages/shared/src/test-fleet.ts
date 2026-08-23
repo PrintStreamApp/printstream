@@ -83,32 +83,32 @@ function seed(
   }
 }
 
-/** The roster — order here is the on-screen order. */
+/** The roster, order here is the on-screen order. */
 export const TEST_FLEET_SEEDS: TestFleetSeed[] = [
   seed('idle', 'Idle', 'P1S'),
   seed('heating', 'Heating', 'X1C'),
   seed('preparing', 'Preparing', 'P1S'),
-  seed('printing-early', 'Printing — early', 'X1C', { live: true }),
-  seed('printing-mid', 'Printing — mid', 'P1S', { live: true }),
-  seed('printing-near-done', 'Printing — near done', 'P1S'),
-  seed('printing-dual-nozzle', 'Printing — dual nozzle', 'H2D'),
-  seed('skip-object', 'Printing — skip object', 'X1C'),
-  seed('paused-manual', 'Paused — manual', 'X1C'),
-  seed('paused-runout', 'Paused — filament runout', 'P1S'),
-  seed('paused-device-error', 'Paused — device error', 'H2D'),
+  seed('printing-early', 'Printing: early', 'X1C', { live: true }),
+  seed('printing-mid', 'Printing: mid', 'P1S', { live: true }),
+  seed('printing-near-done', 'Printing: near done', 'P1S'),
+  seed('printing-dual-nozzle', 'Printing: dual nozzle', 'H2D'),
+  seed('skip-object', 'Printing: skip object', 'X1C'),
+  seed('paused-manual', 'Paused: manual', 'X1C'),
+  seed('paused-runout', 'Paused: filament runout', 'P1S'),
+  seed('paused-device-error', 'Paused: device error', 'H2D'),
   seed('finished', 'Finished', 'P1S'),
   seed('failed', 'Failed', 'X1C'),
-  seed('hms-single', 'HMS — single', 'P1S'),
-  seed('hms-multi', 'HMS — multiple', 'X1C'),
-  seed('check-assistant', 'Needs attention — check assistant', 'H2D'),
+  seed('hms-single', 'HMS: single', 'P1S'),
+  seed('hms-multi', 'HMS: multiple', 'X1C'),
+  seed('check-assistant', 'Needs attention: check assistant', 'H2D'),
   seed('offline', 'Offline', 'P1S'),
   seed('lan-mode', 'LAN mode', 'X1C'),
   seed('external-spool', 'External spool', 'P1S'),
-  seed('ams-mixed-slots', 'AMS — mixed slots', 'X1C'),
-  seed('ams-dual-units', 'AMS — dual units', 'P1S'),
-  seed('ams-drying', 'AMS — drying', 'X1C'),
+  seed('ams-mixed-slots', 'AMS: mixed slots', 'X1C'),
+  seed('ams-dual-units', 'AMS: dual units', 'P1S'),
+  seed('ams-drying', 'AMS: drying', 'X1C'),
   seed('chamber-duct', 'Chamber + duct', 'H2D'),
-  seed('a1-work-light', 'A1 — work light', 'A1')
+  seed('a1-work-light', 'A1: work light', 'A1')
 ]
 
 const SCENARIO_BY_SERIAL = new Map(TEST_FLEET_SEEDS.map((entry) => [entry.serial, entry]))

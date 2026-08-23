@@ -1,17 +1,18 @@
 /**
- * One value control for a Bambu settings option (process OR filament) — the catalog-agnostic leaf
+ * One value control for a Bambu settings option (process OR filament): the catalog-agnostic leaf
  * shared by ProcessSettingsDialog and FilamentSettingsDialog. Renders the right input for the
  * option type (bool Switch / enum Select / code Textarea / numeric or text Input) against a plain
  * serialized-string value, emitting the new scalar. It knows nothing about which catalog the option
  * came from, so both dialogs render identical controls.
  */
-import type React from 'react'
+import React, { useRef } from 'react'
 import { Box, Input, Option, Select, Stack, Switch, Textarea, Tooltip, Typography } from '@mui/joy'
 import { FILAMENT_INDEX_PROCESS_KEYS, serializeProcessBool, type ProcessSettingOption, isNilSettingValue } from '@printstream/shared'
+import { settingFieldBlurRestore } from './settingFieldBlur'
 
 /**
  * One fixed width for every scalar value control (numeric inputs, percent fields, and enum
- * selects) so the value column lines up — content-sized controls otherwise vary (a bare number
+ * selects) so the value column lines up: content-sized controls otherwise vary (a bare number
  * shrinks; a `%`/`°` decorator or a long enum label grows).
  */
 export const SCALAR_CONTROL_WIDTH = 200
@@ -24,7 +25,7 @@ export interface SettingFilamentChoice {
   color: string | null
   /**
    * Material character, used only to classify a newly-chosen support interface material for the
-   * recommendation prompt (`recommendSupportSettingsForInterfaceFilament`) — never for rendering.
+   * recommendation prompt (`recommendSupportSettingsForInterfaceFilament`), never for rendering.
    * Optional so hosts that only need the picker can omit them; `isSupport`/`isSoluble` are null
    * when the project carried no `filament_is_support`/`filament_soluble` flag for the slot.
    */
@@ -33,14 +34,14 @@ export interface SettingFilamentChoice {
   isSoluble?: boolean | null
   /**
    * The material's FULL preset name ("Bambu Support For PLA/PETG @BBL X1C"), for the
-   * recommendation table's name-matched entries — `label` may be vendor-stripped for picker
+   * recommendation table's name-matched entries: `label` may be vendor-stripped for picker
    * grouping. Classification-only, like `filamentType`; falls back to `label` when absent.
    */
   materialName?: string | null
   /**
    * Whether the target plate's MODEL OBJECTS print with this material (the combination table's
    * model-material side). Dedicated support materials are false. Leave undefined when the host
-   * has no plate context — the table lookup is then skipped entirely.
+   * has no plate context: the table lookup is then skipped entirely.
    */
   usedByPlateModels?: boolean | null
 }
@@ -58,15 +59,15 @@ export interface SettingValueFieldProps {
   /**
    * What that own label says, when the option's name is not the answer. A line carrying one control
    * per extruder repeats a single option, so naming each control after the option would print the
-   * same word three times — the column ("Extruder 2", "Silent") is what tells them apart. Defaults
+   * same word three times: the column ("Extruder 2", "Silent") is what tells them apart. Defaults
    * to `option.label`.
    */
   ownLabel?: string
   isCode?: boolean
-  /** Differs from the preset's PARENT — i.e. an override this preset carries. Bold, plain colour. */
+  /** Differs from the preset's PARENT: i.e. an override this preset carries. Bold, plain colour. */
   modified?: boolean
   /**
-   * Differs from what is currently SAVED — an edit made in this session. Takes precedence over
+   * Differs from what is currently SAVED, an edit made in this session. Takes precedence over
    * `modified` and colours the label, mirroring BambuStudio: it paints a value that differs from
    * the last saved one with `m_modified_label_clr` and leaves a saved override in the default text
    * colour (Tab.cpp `update_changed_ui`).
@@ -74,19 +75,19 @@ export interface SettingValueFieldProps {
   unsaved?: boolean
   /**
    * Bulk (multi-target) editing: the selection's members hold DIFFERENT values for this key, so
-   * no single value is true. Renders an explicit "Mixed" state — an empty control with a "Mixed"
-   * placeholder (bools show a hint beside the switch) — instead of any one member's value. Any
+   * no single value is true. Renders an explicit "Mixed" state, an empty control with a "Mixed"
+   * placeholder (bools show a hint beside the switch), instead of any one member's value. Any
    * interaction sets one value for the whole selection, which clears this flag upstream.
    */
   mixed?: boolean
   /**
    * The project's materials, for filament-index settings (BambuStudio's `i_enum_open` int
    * options: support/raft base+interface, walls/infill filament). When provided those render
-   * as a material picker — 0 is "Default" — instead of a bare number input.
+   * as a material picker, 0 is "Default", instead of a bare number input.
    */
   filamentChoices?: SettingFilamentChoice[]
   /**
-   * The value this one replaced, shown on hover — the preset's value for a project change, the
+   * The value this one replaced, shown on hover: the preset's value for a project change, the
    * parent preset's for an override the preset carries. Without it a bold row says something
    * changed but not what it changed FROM, which is the question it prompts.
    */
@@ -114,10 +115,20 @@ function FilamentSwatch({ color }: { color: string | null }) {
 function SettingControl(props: SettingValueFieldProps): JSX.Element {
   const { settingKey, option, value: scalar, enabled = true, enumRestriction, showOwnLabel, ownLabel, isCode, modified, unsaved, mixed, filamentChoices, onScalarChange } = props
   // A nil is BambuStudio's "not overridden", not a value: show an empty field, never the word.
-  // A mixed key likewise has no single value to show — empty control, "Mixed" placeholder.
+  // A mixed key likewise has no single value to show: empty control, "Mixed" placeholder.
   const value = mixed ? '' : isNilSettingValue(scalar) ? '' : scalar
+  // The value as it stood when the user STARTED editing, for the blur revert on the numeric input
+  // far below. Captured on focus, not tracked per keystroke: every keystroke round-trips through
+  // the parent, so a "last non-empty value" ref advances to each intermediate and would restore
+  // whatever was typed and abandoned. Typing 3 over 0.2 and then clearing the box would have
+  // committed 3. A `type="number"` input makes that worse, since the browser reports an
+  // in-progress "0." or "1e" as "", so a revert could commit a half-typed number.
+  //
+  // Declared HERE because several controls return early between this point and the input, and a
+  // hook after an early return runs in a different order per render.
+  const editStartValueRef = useRef<string | null>(null)
   // Two channels per state, because weight alone at this size was unreadable. Colour is reserved
-  // for the PROJECT change — the one the user acted on and can reset. A preset's own override gets
+  // for the PROJECT change: the one the user acted on and can reset. A preset's own override gets
   // italic+bold instead: noticeable, but it does not read as an alert about something wrong, which
   // a second colour did (nothing on screen explains why it would be highlighted).
   const changeSx = unsaved
@@ -127,7 +138,7 @@ function SettingControl(props: SettingValueFieldProps): JSX.Element {
   // Filament-index settings pick a project material by its 1-based index; render them as a
   // material select when the host supplied the material list. "0" is BambuStudio's "Default"
   // (use the object's own filament). Keyed off the explicit list, NOT the catalog's
-  // `i_enum_open` gui type — BambuStudio shares that widget with numeric settings that ship
+  // `i_enum_open` gui type: BambuStudio shares that widget with numeric settings that ship
   // preset choices, so matching on it turned "Top interface layers" into a material picker.
   if (option.type === 'int' && FILAMENT_INDEX_PROCESS_KEYS.includes(settingKey) && filamentChoices && filamentChoices.length > 0) {
     const current = Number.parseInt(value, 10)
@@ -148,7 +159,7 @@ function SettingControl(props: SettingValueFieldProps): JSX.Element {
           <Option key={choice.id} value={String(choice.id)}>
             <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }}>
               <FilamentSwatch color={choice.color} />
-              <Typography level="body-sm" noWrap>{choice.id} — {choice.label}</Typography>
+              <Typography level="body-sm" noWrap>{choice.id}: {choice.label}</Typography>
             </Stack>
           </Option>
         ))}
@@ -158,7 +169,7 @@ function SettingControl(props: SettingValueFieldProps): JSX.Element {
   }
 
   // BambuStudio renders this one as a colour button (`ConfigOptionDef::GUIType::color`), and the
-  // generator already captured that — we were just dropping it on the floor and rendering the hex
+  // generator already captured that, we were just dropping it on the floor and rendering the hex
   // as an anonymous text box. Empty is a real value here (the default is ""), meaning "no default
   // colour", so the swatch falls back to black for the native control while the text stays the
   // source of truth and can still be cleared.
@@ -257,7 +268,7 @@ function SettingControl(props: SettingValueFieldProps): JSX.Element {
   const isInteger = option.type === 'int'
   const isFloat = option.type === 'float'
   // A pure percent value is serialized with a `%` suffix ("15%"), but since it is ALWAYS a
-  // percentage the suffix is redundant with the `%` sidetext decorator — show just the number
+  // percentage the suffix is redundant with the `%` sidetext decorator: show just the number
   // in a native number input and re-append the suffix on change. floatOrPercent stays text:
   // there the typed `%` is meaningful (it distinguishes "40%" from "0.4" mm).
   const isPurePercent = option.type === 'percent' && !option.vector
@@ -281,6 +292,17 @@ function SettingControl(props: SettingValueFieldProps): JSX.Element {
           onScalarChange(settingKey, isPercentish && !option.vector ? raw.replace(/[^\d.%-]/g, '') : raw)
         }
       }}
+      // A cleared NUMERIC field reverts when focus leaves, rather than standing as a pending change
+      // the save will not honour. An empty numeric is refused at the write boundary
+      // (`settings-value-guard.ts`, because BambuStudio's deserialiser throws on it and then
+      // abandons every later key), so leaving the box blank showed a modified-value badge for an
+      // edit that was going to be dropped. Clearing mid-edit still works: this only fires on blur.
+      onFocus={() => { editStartValueRef.current = value }}
+      onBlur={() => {
+        const restored = settingFieldBlurRestore(value, editStartValueRef.current, isNumeric)
+        editStartValueRef.current = null
+        if (restored != null) onScalarChange(settingKey, restored)
+      }}
       endDecorator={option.sidetext ? <Typography level="body-xs">{option.sidetext}</Typography> : undefined}
       slotProps={isNumeric ? {
         input: {
@@ -300,7 +322,7 @@ function SettingControl(props: SettingValueFieldProps): JSX.Element {
 }
 
 /**
- * A line carrying more than one setting needs to say which value is which — BambuStudio labels each
+ * A line carrying more than one setting needs to say which value is which: BambuStudio labels each
  * field with the option's own name beside the line's ("Nozzle" -> "Initial layer" / "Other layers",
  * "Ramming volumetric speed" -> "Extruder change" / "Hotend change"; see `TabFilament::build()`,
  * where each `line.append_option` carries a `ConfigOptionDef::label`). We passed `showOwnLabel`

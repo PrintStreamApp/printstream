@@ -5,12 +5,12 @@
  * (`plugins/print-queue/QueueStartDialog`).
  *
  * Which slots are short is `findLowFilamentSlots`' call and each sentence is
- * `lowFilamentIssueSentence`'s — the same two the API's `assertSufficientFilament` refuses from, so
+ * `lowFilamentIssueSentence`'s, the same two the API's `assertSufficientFilament` refuses from, so
  * a dispatch can never be blocked by a check this alert did not show. A slot the printer's
  * auto-refill chains to a mate is judged on the pool's combined remaining, so a backed-up slot
  * appears here only when the whole pool falls short: that is the "and no backup" half of it.
  *
- * Its confirm is bound to `allowInsufficientFilament`, NOT to `allowIncompatibleFilament` — "these
+ * Its confirm is bound to `allowInsufficientFilament`, NOT to `allowIncompatibleFilament`: "these
  * are the right materials" and "enough of them is left" are different judgements, and one checkbox
  * must not grant both.
  *

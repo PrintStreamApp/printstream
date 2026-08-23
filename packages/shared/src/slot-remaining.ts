@@ -10,7 +10,7 @@
  * warning state (`apps/web/src/lib/slotRemaining.ts`, this module's web
  * counterpart), the dialog-level confirmation and its API guard
  * (`print-filament-sufficiency.ts`). A slot one of them calls sufficient must
- * never be one another skipped as insufficient — they used to re-derive the pool
+ * never be one another skipped as insufficient, they used to re-derive the pool
  * sum separately and already disagreed about it.
  */
 import { hasBambuRfidTag } from './filament-identity.js'
@@ -45,7 +45,7 @@ export interface AutoRefillTrayIdentity {
 /**
  * Whether two AMS trays hold interchangeable filament for the printer's own
  * auto-refill (backup) chaining: same filament type, same colour palette, and
- * the same declared identity — Bambu preset id (`trayInfoIdx`) when either tray
+ * the same declared identity: Bambu preset id (`trayInfoIdx`) when either tray
  * has one, else tray name. Two trays with no declared identity at all never
  * pool, because "same type and colour" alone is how a third-party spool gets
  * silently continued with a different material.
@@ -90,7 +90,7 @@ export interface RemainingFilamentTray extends AutoRefillTrayIdentity {
  * (filament-manager covers non-RFID custom spools); otherwise the percent
  * estimate, trusted only for RFID (Bambu-tagged) trays.
  *
- * Untracked third-party filament returns null — **ungradeable, not zero**. The
+ * Untracked third-party filament returns null: **ungradeable, not zero**. The
  * distinction is the whole point: firmware reports `remain: -1` for a spool it
  * cannot measure, and treating that as an empty spool marks every manually-set
  * slot as insufficient.
@@ -117,11 +117,11 @@ export interface SlotSufficiencyInput {
   /**
    * Whether `tray` is itself a slot the printer's auto-refill could chain FROM: a
    * loaded physical AMS slot this print can reach. False for an external spool, an
-   * empty slot, or one behind the wrong nozzle — the printer refills from none of them.
+   * empty slot, or one behind the wrong nozzle: the printer refills from none of them.
    */
   trayIsRefillable: boolean
   /**
-   * Every refillable slot for this requirement, the anchor included — that is why a
+   * Every refillable slot for this requirement, the anchor included, that is why a
    * real pool is `length > 1`. Callers own the reachability filter because only they
    * know their own tray shape; this module owns only the identity test between them.
    */

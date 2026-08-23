@@ -1,5 +1,5 @@
 /**
- * Mesh geometry repair for a single object's mesh inside a 3MF — a numeric, admesh-equivalent pass
+ * Mesh geometry repair for a single object's mesh inside a 3MF, a numeric, admesh-equivalent pass
  * that goes beyond the exact-duplicate weld in `three-mf-mesh-weld.ts`.
  *
  * What it owns: turning a structurally-imperfect mesh into one the slicer can chew on, mirroring the
@@ -12,28 +12,28 @@
  * marked via the model studio's right-click "Repair mesh" (`SceneEdit.repairedObjectIds`). It is
  * deliberately applied IN PLACE on the object's mesh XML rather than by staging a replacement import:
  * rewriting in place is what keeps every per-triangle paint attribute and the object's part volumes,
- * which rebuilding the geometry would destroy. Nothing repairs automatically — slicing never silently
+ * which rebuilding the geometry would destroy. Nothing repairs automatically: slicing never silently
  * alters geometry; repair only happens when the user asks for it and saves.
  *
- * Contract: this is a **safe** repair — it only *merges coincident geometry and drops junk*, never
+ * Contract: this is a **safe** repair, it only *merges coincident geometry and drops junk*, never
  * invents or deletes surface:
- *   1. Nearby-vertex weld — merge vertices within a small tolerance into one. This is the step the
+ *   1. Nearby-vertex weld: merge vertices within a small tolerance into one. This is the step the
  *      exact-string weld can't do: sub-tolerance cracks (two corners that should be one vertex but
  *      differ in the last float digit) leave BambuStudio chaining layer contours across a gap, which
  *      mangles small features and, on some geometry, crashes the engine. Exact duplicates are a
  *      subset, so this also subsumes the exact weld.
- *   2. Drop degenerate triangles — corners that collapsed onto a shared vertex after welding (zero
+ *   2. Drop degenerate triangles: corners that collapsed onto a shared vertex after welding (zero
  *      area), which the slicer would otherwise trip over.
- *   3. Drop duplicate facets — the same unordered vertex triple appearing twice (coincident faces).
+ *   3. Drop duplicate facets, the same unordered vertex triple appearing twice (coincident faces).
  *
  * Deliberately NOT attempted: normal-direction / winding repair and hole filling. BambuStudio itself
  * disables admesh hole-filling ("does more harm than good … let the slicing algorithm close gaps in
  * 2D"), and its slicer tolerates winding on a watertight mesh; a mis-orientation "fix" on an already
- * fine mesh is a net risk. Note that this is why repair does NOT fix every unsliceable model — a clean
+ * fine mesh is a net risk. Note that this is why repair does NOT fix every unsliceable model, a clean
  * manifold mesh that crashes the engine on its 2D geometry has nothing here to repair (see the
  * engine-crash path in the slicer's `slice-error.ts`).
  *
- * Every non-index triangle attribute (paint codes) rides along unchanged — the load-bearing property
+ * Every non-index triangle attribute (paint codes) rides along unchanged: the load-bearing property
  * that lets repair run in place on a painted object. A mesh that doesn't match the serialization we
  * understand is left untouched (null) rather than risking corrupting geometry.
  */
@@ -76,7 +76,7 @@ interface ParsedVertex {
  * The nearby-weld tolerance for a mesh, in model units (mm). Derived from the mesh's bounding box so a
  * huge model gets a proportionally larger snap distance, with an absolute floor for tiny models. The
  * ceiling keeps it well below any real feature so distinct vertices are never merged: 2e-4 of the
- * bbox diagonal is ~0.04mm on a 200mm model — larger than float round-trip noise, far smaller than a
+ * bbox diagonal is ~0.04mm on a 200mm model: larger than float round-trip noise, far smaller than a
  * printable wall. Mirrors the spirit of admesh seeding its tolerance from the mesh's shortest edge.
  */
 function weldToleranceFor(vertices: readonly ParsedVertex[]): number {
@@ -179,6 +179,7 @@ export function repairSingleMeshXml(meshXml: string): { xml: string; stats: Mesh
 
   let degenerateTrianglesRemoved = 0
   let duplicateTrianglesRemoved = 0
+  let keptTriangles = 0
   let malformed = false
   const seenTriangles = new Set<string>()
   const trianglesXml = (trianglesMatch[1] ?? '').replace(TRIANGLE_TAG_PATTERN, (full, attrs: string) => {
@@ -209,6 +210,7 @@ export function repairSingleMeshXml(meshXml: string): { xml: string; stats: Mesh
       return ''
     }
     seenTriangles.add(key)
+    keptTriangles += 1
     const updated = attrs
       .replace(/\bv1="\d+"/, `v1="${a}"`)
       .replace(/\bv2="\d+"/, `v2="${b}"`)
@@ -217,7 +219,17 @@ export function repairSingleMeshXml(meshXml: string): { xml: string; stats: Mesh
   })
   if (malformed) return null
 
+  // Refuse a repair that would leave nothing behind. BambuStudio does not report an emptied mesh:
+  // `_generate_current_object_list` skips any object whose `Geometry::empty()` is true
+  // (`bbs_3mf.cpp:5010`, `:791`), and the one error that would have caught the resulting volume-less
+  // object is commented out at `:2123-2127`. So the object simply disappears from the plate, and a
+  // repair the user asked for is the last place that should silently delete their model. Declining
+  // leaves the mesh exactly as it was, which is the same answer as "nothing to repair".
+  if (keptTriangles === 0) return null
+
   const stats: MeshRepairStats = { weldedVertices, degenerateTrianglesRemoved, duplicateTrianglesRemoved }
+  // NOTE: this asks whether anything CHANGED, not whether anything is LEFT. The two read alike and
+  // are not the same question; the emptiness check above is the one that protects the geometry.
   if (isEmpty(stats)) return null
 
   const verticesXml = `\n${canonical.map((v) => `     ${v.tag}`).join('\n')}\n    `
@@ -228,7 +240,7 @@ export function repairSingleMeshXml(meshXml: string): { xml: string; stats: Mesh
 }
 
 /**
- * Repair a STAGED IMPORT's mesh numerically — the same weld + prune {@link repairSingleMeshXml}
+ * Repair a STAGED IMPORT's mesh numerically, the same weld + prune {@link repairSingleMeshXml}
  * does to a baked object, applied to the geometry before it is written into the 3MF.
  *
  * The XML path cannot serve an import: an unsaved import has no mesh in the document yet. Repairing
@@ -276,7 +288,7 @@ export function repairImportedMeshGeometry(
 
 /**
  * Repair the meshes of SPECIFIC objects inside one 3MF model entry, leaving every other object in
- * that entry untouched. `objectIds` are the mesh-carrying object ids within THIS entry — a root
+ * that entry untouched. `objectIds` are the mesh-carrying object ids within THIS entry, a root
  * object's resolved components, which the caller maps via the root model's `<components>` (a Bambu
  * project keeps each object's mesh in its own `3D/Objects/*.model`, so the id the user selected in
  * the editor is rarely the id that carries the mesh). Returns the rewritten XML + combined stats, or

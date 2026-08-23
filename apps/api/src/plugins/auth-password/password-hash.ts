@@ -2,7 +2,7 @@
  * Password hashing for the `auth-password` provider.
  *
  * Hashes are algorithm-tagged so multiple backends coexist and upgrade in place:
- * - **argon2id** (preferred) via `@node-rs/argon2` — OWASP-recommended params.
+ * - **argon2id** (preferred) via `@node-rs/argon2`: OWASP-recommended params.
  *   Produces the standard `$argon2id$v=19$m=...` PHC string.
  * - **scrypt** (`node:crypto`) fallback for environments where the native argon2
  *   addon can't load (notably the single-file SEA build, where a `.node` binary
@@ -10,7 +10,7 @@
  *
  * On sign-in, `needsRehash` lets the caller transparently re-hash a credential
  * with the preferred backend. Verification is always constant-time and never
- * throws — any parse/format error returns `false`.
+ * throws: any parse/format error returns `false`.
  */
 import crypto from 'node:crypto'
 import { promisify } from 'node:util'

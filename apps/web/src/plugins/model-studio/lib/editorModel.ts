@@ -93,7 +93,7 @@ export interface EditorInstance {
   scale: THREE.Vector3
   /**
    * Exact plate-local 12-element transform, kept ONLY when the source matrix can't be reproduced
-   * by the editor's T·S·R (translate·scale·rotate) decomposition — i.e. a foreign object that is
+   * by the editor's T·S·R (translate·scale·rotate) decomposition: i.e. a foreign object that is
    * both rotated and non-uniformly scaled (its linear part shears relative to T·S·R). While set,
    * the object renders and re-emits this matrix verbatim (no shear), so an unedited round-trip is
    * exact; the first transform edit bakes it down to the editor's T·S·R and clears this. Absent
@@ -102,7 +102,7 @@ export interface EditorInstance {
   exactMatrix?: number[]
   /**
    * The object-level filament: what a part with no assignment of its own inherits, and what the
-   * material swatch shows. A CACHE over {@link parts} — invalidated by every edit that changes a
+   * material swatch shows. A CACHE over {@link parts}, invalidated by every edit that changes a
    * part's filament, which must recompute it through {@link deriveObjectFilamentId} in the same
    * updater (see the retarget in `EditorView`). Never assign it from one part: consensus is the
    * whole point, and `parts[0]` is the "everything became material 1" regression.
@@ -112,7 +112,7 @@ export interface EditorInstance {
    * Whether this instance prints (BambuStudio's per-object "Printable" toggle). A
    * non-printable instance is greyed out in the viewport and excluded from the slice,
    * but kept in the saved 3MF so it can be re-enabled. This is the editor's source of
-   * truth for printability — independent of the slice dialog's per-plate selection —
+   * truth for printability, independent of the slice dialog's per-plate selection,
    * so it follows the object across plate moves and duplicates and is emitted as
    * `printable` in {@link buildSceneEdit}. Defaults to true.
    */
@@ -137,14 +137,14 @@ export interface EditorInstance {
  * Two of these fields are MIRRORS of the session maps on {@link EditorState}, not independent
  * state: `transform` mirrors `partTransforms` and `subtype` mirrors `partTypeChanges`. The map is
  * what the save emits; the mirror is what the viewport and the sidebar render from, so both are
- * written in the SAME updater — a change that touches only the map renders stale, and one that
+ * written in the SAME updater, a change that touches only the map renders stale, and one that
  * touches only the mirror is silently dropped at bake time. `filamentId` is not a mirror: it has no
  * session map and is read straight off the instances by `collectPartFilaments`.
  */
 export interface EditorInstancePart {
   entryPath: string
   /**
-   * The MESH this part draws — a `<component objectid>` / `<part id>` reference. NOT an identity:
+   * The MESH this part draws, a `<component objectid>` / `<part id>` reference. NOT an identity:
    * BambuStudio writes the same id for every volume sharing a mesh, so an object can hold several
    * parts with the same `componentObjectId`. Use {@link EditorInstancePart.partIndex} to address a
    * part; use this only to find its geometry (and for MESH-scoped state like paint, which such
@@ -152,7 +152,7 @@ export interface EditorInstancePart {
    */
   componentObjectId: number
   /**
-   * The part's 0-based ordinal within its object — BambuStudio's own part identity (it keys a
+   * The part's 0-based ordinal within its object: BambuStudio's own part identity (it keys a
    * volume by its position as it parses `model_settings.config`). Stable for a given file because
    * `<part>`/`<component>` are written and read in volume order.
    */
@@ -174,7 +174,7 @@ export interface EditorPlate {
   index: number
   /**
    * Session-stable identity, minted by {@link mintPlateId}. `index` is the plate's POSITION and
-   * every {@link reindexPlates} rewrites it, so anything keyed on it drifts when plates move —
+   * every {@link reindexPlates} rewrites it, so anything keyed on it drifts when plates move,
    * that is exactly how a reorder left the dragged plate's thumbnail on two strip tiles. Caches
    * that outlive renumbering (live plate-strip thumbnails, the stale-thumbnail set, the
    * pending-scene set) key on this instead. Never persisted.
@@ -182,8 +182,8 @@ export interface EditorPlate {
   plateId: number
   /**
    * The plate index this plate holds in the OPENED archive, or null for a plate created this
-   * session. Addresses per-plate reads from the project source — the embedded thumbnail PNG and
-   * the plate's scene — which stay keyed by the source's numbering however the session reorders.
+   * session. Addresses per-plate reads from the project source, the embedded thumbnail PNG and
+   * the plate's scene, which stay keyed by the source's numbering however the session reorders.
    * Stays valid across saves because the project source answers from its open-time snapshot.
    */
   sourcePlateIndex: number | null
@@ -249,16 +249,16 @@ export interface EditorState {
    * checkpoint covers it), and it never touches the stored file until the user saves. Each entry is
    * a whole resolved preset config plus the preset's BINDING (its parent's name and its own
    * deltas); the bake consumes them as `SceneEditFilament.config` / `presetInherits` /
-   * `presetChangedKeys`. The binding is not optional garnish — without it BambuStudio reopens a
+   * `presetChangedKeys`. The binding is not optional garnish, without it BambuStudio reopens a
    * slot backed by a USER preset as a `(<project>.3mf)` copy however correct its values are (see
    * `filament-preset-binding.ts`).
    *
-   * ALL SLOTS OR NONE — the repair only populates this once every slot's preset resolved, because
+   * ALL SLOTS OR NONE: the repair only populates this once every slot's preset resolved, because
    * the arrays it feeds are positional (see `repairs/restore-filament-physics.ts`).
    */
   repairedFilamentConfigs?: Record<number, RepairedFilamentPreset>
   /**
-   * The user pressed the staged settings Repair this session — the in-editor twin of the API's
+   * The user pressed the staged settings Repair this session: the in-editor twin of the API's
    * repair route, for hosts with no stored file behind the project (the public editor). Emitted
    * as `SceneEdit.repairSettings`; the bake applies the shared repairs while saving. Lives in the
    * undo-cloned state so undo takes the repair back and the banner returns.
@@ -278,7 +278,7 @@ export interface EditorState {
   brimEars?: Record<number, EditorBrimEar[]>
   /**
    * New part volumes added inside models this session (normal parts, negative parts, modifiers,
-   * support blockers/enforcers), keyed by {@link addedPartHostId} — an in-project object's Bambu
+   * support blockers/enforcers), keyed by {@link addedPartHostId}, an in-project object's Bambu
    * id, or an unsaved import's synthetic object id, so a part can be added before the project has
    * ever been saved. Parts are object-level (shared by every instance). Cloned by
    * {@link cloneEditorState}; emitted by {@link buildSceneEdit} as `SceneEdit.addedParts`.
@@ -298,7 +298,7 @@ export interface EditorState {
    * "Repair mesh"), by objectId. The repair itself runs SERVER-SIDE while baking the save
    * (`SceneEdit.repairedObjectIds` → the shared `three-mf/mesh-repair`), so there is nothing to apply
    * to the local scene: repair only merges coincident vertices and drops degenerate/duplicate
-   * facets, which is visually a no-op. Marking is therefore the whole client-side edit — it
+   * facets, which is visually a no-op. Marking is therefore the whole client-side edit, it
    * participates in undo/redo via {@link cloneEditorState} and is emitted by
    * {@link buildSceneEdit}. Object-level (shared by every instance), like {@link EditorState.addedParts}.
    */
@@ -316,8 +316,8 @@ export interface EditorState {
    * own values stand.
    *
    * Session state like every other edit: undoable, applied only on save. Held here rather than in
-   * the slice controller because it is project-FILE content — it is written into
-   * `project_settings.config` — not a per-slice choice, so it must survive alongside the scene and
+   * the slice controller because it is project-FILE content, it is written into
+   * `project_settings.config`, not a per-slice choice, so it must survive alongside the scene and
    * ride the same save. Sized for the material list that was on screen when it was made; the bake
    * checks it against the list it actually writes (see `applyFlushVolumes`).
    */
@@ -359,7 +359,7 @@ export interface EditorAddedPart {
   name: string
   /**
    * Filament for a part that carries one (normal parts and modifiers, per
-   * `threeMfPartSubtypeCarriesFilament`). Null means "not chosen" — the bake writes no
+   * `threeMfPartSubtypeCarriesFilament`). Null means "not chosen": the bake writes no
    * `extruder`, which is also the only correct state for the subtypes that carry none.
    */
   filamentId?: number | null
@@ -378,7 +378,7 @@ export interface EditorAddedPart {
  * Bambu `object_id` for an in-project object, else the import's synthetic object id (see
  * {@link EditorInstanceSource}). Null for an import with no identity yet, which cannot host parts.
  *
- * One key for both cases is what lets a part be added to a model the user has not saved — the
+ * One key for both cases is what lets a part be added to a model the user has not saved: the
  * emit step ({@link buildSceneEdit}) is where the two diverge again into `objectId` vs `importId`.
  */
 export function addedPartHostId(instance: EditorInstance): number | null {
@@ -403,7 +403,7 @@ export interface EditorBrimEar {
 /** Effective ears for an instance's object: this session's override, else the seed. */
 export function effectiveBrimEars(state: EditorState | null, instance: EditorInstance): EditorBrimEar[] {
   // Keyed by the model's editor identity, so an unsaved import can carry ears too (they emit as
-  // `importBrimEars`). Only an in-project object has SEEDED ears — an import has none in the file.
+  // `importBrimEars`). Only an in-project object has SEEDED ears, an import has none in the file.
   const hostId = addedPartHostId(instance)
   if (hostId == null) return []
   const override = state?.brimEars?.[hostId]
@@ -416,7 +416,7 @@ export function supportPaintKey(objectId: number, componentObjectId: number): st
 }
 
 /**
- * Key for the ORDINAL-scoped per-part session maps — `partTransforms`, `partTypeChanges`,
+ * Key for the ORDINAL-scoped per-part session maps: `partTransforms`, `partTypeChanges`,
  * `partProcessOverrides`. Deliberately separate from {@link supportPaintKey} despite the identical
  * string shape: paint is a property of the MESH (parts sharing a mesh share their paint, which is
  * BambuStudio's behaviour), while placement/type/process belong to the individual volume and must
@@ -465,7 +465,7 @@ export function nextSyntheticObjectId(): number {
 
 /**
  * Decompose a 3MF transform into the editor's T·S·R convention (scale applied OUTSIDE the
- * rotation — `world = translate · scale · rotate`), which is how the editor renders (outer
+ * rotation: `world = translate · scale · rotate`), which is how the editor renders (outer
  * group carries scale, inner rotor carries rotation) AND how it re-emits the matrix
  * ({@link instanceTransformMatrix}). three.js' `Matrix4.decompose` assumes T·R·S (scale inside
  * rotation) and pulls scale from the matrix's COLUMN lengths; for a rotated, non-uniformly
@@ -601,7 +601,7 @@ export function fillPlateFromScene(plate: EditorPlate, scene: LibraryThreeMfScen
     }
     // The same mesh component can back several placed objects, each with its OWN
     // filament (scene.parts rows are per-placement). Conflicting rows mean the
-    // filament isn't a property of the shared mesh — neutralize it so each editor
+    // filament isn't a property of the shared mesh: neutralize it so each editor
     // part falls back to its instance's filament/color instead of whichever row
     // happened to come last (which painted every copy the same colour AND would
     // have rewritten every object's extruder to that filament on save).
@@ -626,7 +626,7 @@ export function fillPlateFromScene(plate: EditorPlate, scene: LibraryThreeMfScen
  * Seed the editable state from the plate index and the per-plate scene responses.
  * Plates are taken from the index (so empty plates survive); instances come from
  * each plate's scene `instances` array. Plates whose scene is missing from the map
- * seed empty and can be filled later via {@link fillPlateFromScene} — but they borrow
+ * seed empty and can be filled later via {@link fillPlateFromScene}, but they borrow
  * the BED from any already-loaded scene (every plate in a project shares one printer
  * bed), so camera framing and unprintable zones never snap from a generic placeholder
  * when a late-loading plate is first selected.
@@ -675,7 +675,7 @@ export function seedEditorState(
  * The two spaces differ: `preferredSourceIndex` is the archive's own numbering (what the baked
  * index and the host's plate pre-selection speak), while seeded plates are POSITIONAL after
  * {@link reindexPlates}. They coincide for the usual 1..n-contiguous archive, which is what let
- * the seed effect assign the source index directly for so long — until a file whose plate list
+ * the seed effect assign the source index directly for so long, until a file whose plate list
  * does not start at 1 (Bambu's per-plate "export sliced file" writes only the exported plate,
  * keeping its number) selected a live index that no seeded plate has, and the editor sat on
  * "Loading plates…" forever with the state fully seeded behind it.
@@ -736,7 +736,7 @@ export function instanceFromStagedImport(
         color: null,
         // A 3MF source carries its volume types in (BambuStudio's Import Object keeps them), so an
         // imported support blocker renders and lists as an aid rather than printed geometry. The
-        // BAKE reads the subtype from the staged record, not from here — this is the client's copy.
+        // BAKE reads the subtype from the staged record, not from here, this is the client's copy.
         subtype: part.subtype ?? null
       }))
     : []
@@ -761,7 +761,7 @@ export function instanceFromStagedImport(
 /**
  * The XY footprint of a staged import: where its centre sits in MESH coordinates, and how big it
  * is. An import keeps its file coordinates (origin is often a corner, not the centre), so placement
- * needs both — the centre to drop the model centred on a free spot, and the size to pick a spot
+ * needs both: the centre to drop the model centred on a free spot, and the size to pick a spot
  * that actually fits it clear of what's already on the plate.
  */
 export function stagedFootprint(staged: StagedImport): {
@@ -779,6 +779,54 @@ export function stagedFootprint(staged: StagedImport): {
 const IDENTITY_PART_TRANSFORM = [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0]
 
 /**
+ * Seat a replacement so its RENDERED centre lands on the old object's footprint centre, resting on
+ * the bed — BambuStudio's `center_around_origin()` + `ensure_on_bed()` outcome for a replace.
+ *
+ * The subtlety is the rotation, and it is what a naive `position = oldCentre` gets wrong.
+ * `position` places the object's local ORIGIN, and a staged import's origin is its XY centre with
+ * its lowest point at z = 0 — so the origin is the centre in X and Y but the FLOOR in Z. Inherit a
+ * rotation from the old object and that un-centred axis turns into the plane: a -90 degrees X
+ * rotation maps local z onto world y, so the origin ends up at the EDGE of the rotated footprint
+ * and the model lands half a body-length away, its edge on the old centre.
+ *
+ * So the centre offset is measured in the object's own frame and rotated with it, which is exactly
+ * what Studio does: `new_volume->translate(get_transformation().get_matrix(true) * (new mesh_offset
+ * - old mesh_offset))`, where `get_matrix(true)` is the matrix WITHOUT translation, i.e. R * S.
+ *
+ * Z is solved from the same transformed box rather than inherited: after an inherited rotation the
+ * mesh's floor is no longer at z = 0, so keeping the source's z would sink or float the model until
+ * the user happened to drag it (`restObjectOnBed` runs on drag end, not on replace).
+ *
+ * Mutates `instance.position`. Its rotation and scale must already be set.
+ */
+function placeReplacementOnOldFootprint(
+  instance: EditorInstance,
+  staged: StagedImport,
+  centerOn: { x: number; y: number }
+): void {
+  const { min, max } = staged.bounds
+  const basis = new THREE.Matrix4()
+    .makeRotationFromEuler(instance.rotation)
+    .scale(instance.scale)
+  const rotated = new THREE.Box3()
+  // Every corner, not just min/max: rotating an AABB's two extreme corners does not bound the
+  // rotated box (the other six can stick out further), which is the same trap `printableMeshBox`
+  // documents for its cheap path.
+  for (const x of [min.x, max.x]) {
+    for (const y of [min.y, max.y]) {
+      for (const z of [min.z, max.z]) {
+        rotated.expandByPoint(new THREE.Vector3(x, y, z).applyMatrix4(basis))
+      }
+    }
+  }
+  const centre = rotated.getCenter(new THREE.Vector3())
+  // `-0` when the box already sits on the bed: harmless arithmetically, but it reaches the saved
+  // transform and the readout panel, so normalise it away.
+  const restOnBed = rotated.min.z === 0 ? 0 : -rotated.min.z
+  instance.position.set(centerOn.x - centre.x, centerOn.y - centre.y, restOnBed)
+}
+
+/**
  * Replace an instance's geometry with a freshly staged foreign model while keeping the
  * object in place, like BambuStudio's "Replace with…": the new mesh inherits the old
  * instance's placement (position/rotation/scale), material (`filamentId`), printability,
@@ -787,14 +835,25 @@ const IDENTITY_PART_TRANSFORM = [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0]
  * When `replacedObjectId` is given (replacing an in-project object), the object's identity
  * is retained for the slicer: the import carries `replacedObjectId` so {@link buildSceneEdit}
  * emits a `meshReplacements` entry and the object's per-object PROCESS overrides + name
- * follow onto the baked replacement. Attributes tied to the OLD geometry — in-project parts,
- * brim ears, and paint — do not carry over, since the new mesh is unrelated to the old shape.
+ * follow onto the baked replacement. Attributes tied to the OLD geometry, in-project parts,
+ * brim ears, and paint, do not carry over, since the new mesh is unrelated to the old shape.
  */
 export function replaceInstanceGeometry(
   source: EditorInstance,
   staged: StagedImport,
   replacedObjectId?: number,
-  meshUrl: ImportMeshUrlResolver = importMeshUrl
+  meshUrl: ImportMeshUrlResolver = importMeshUrl,
+  /**
+   * Where the object being replaced actually SITS: the world XY centre of its printable mesh.
+   *
+   * Needed because `position` places an object's local ORIGIN, and the two coincide for a staged
+   * import (normalised to its own centre, see `ImportNormalization`) but not for an in-project
+   * Bambu object, whose mesh routinely carries plate coordinates. Copying `source.position` across
+   * therefore drops the replacement's CENTRE onto the original's ORIGIN and the model jumps by the
+   * difference. Null (an instance with no live group, e.g. on a non-active plate) keeps the
+   * source's own placement, which is the best available answer rather than a guessed one.
+   */
+  centerOn?: { x: number; y: number } | null
 ): EditorInstance {
   const next = instanceFromStagedImport(staged, meshUrl)
   next.source = {
@@ -808,6 +867,7 @@ export function replaceInstanceGeometry(
   next.position.copy(source.position)
   next.rotation.copy(source.rotation)
   next.scale.copy(source.scale)
+  if (centerOn) placeReplacementOnOldFootprint(next, staged, centerOn)
   next.filamentId = source.filamentId
   next.printable = source.printable
   // Keep the object's name as part of its retained identity. Mark it overridden so it is
@@ -821,7 +881,7 @@ export function replaceInstanceGeometry(
  * Forget the added part volumes of a model whose geometry is being replaced.
  *
  * A replacement RETAINS the object identity ({@link EditorInstanceSource.replacedObjectId}), which
- * is the same key {@link EditorState.addedParts} uses — so without this the old shape's blockers
+ * is the same key {@link EditorState.addedParts} uses, so without this the old shape's blockers
  * and modifiers would silently reattach to an unrelated mesh at their old coordinates. Paint and
  * brim ears fall away on their own (they key on parts the replacement doesn't have); this is the
  * explicit counterpart for parts, and the reason {@link replaceInstanceGeometry}'s contract can
@@ -863,11 +923,11 @@ export function duplicateInstance(instance: EditorInstance): EditorInstance {
 /**
  * The OBJECT-level filament for an instance after a per-part material reassignment.
  *
- * `EditorInstance.filamentId` is the object's fallback material — the value the bake writes for
+ * `EditorInstance.filamentId` is the object's fallback material: the value the bake writes for
  * any part of a multi-solid import (STEP assembly) that carries no explicit assignment
  * (`objectExtruder` in `three-mf-scene-builder.ts`). Derive it from CONSENSUS: adopt a new value
  * only when every part agrees, and otherwise keep the prior object default. Deriving it from a
- * single part (e.g. `parts[0]`) is the trap it replaces — retargeting the first part would drop
+ * single part (e.g. `parts[0]`) is the trap it replaces: retargeting the first part would drop
  * the object fallback onto that part's new material, collapsing every still-unassigned part onto
  * it on save (the "everything became material 1" regression on a fresh assembly's first save).
  *
@@ -901,7 +961,7 @@ const NOMINAL_FOOTPRINT_MM = 60
  * placement; without them each instance falls back to a nominal square at its origin (the old
  * behaviour) so callers that can't measure geometry still spread models out.
  *
- * Returns the plate centre when nothing fits — the caller still places the model (overlapping),
+ * Returns the plate centre when nothing fits: the caller still places the model (overlapping),
  * matching the previous "always return somewhere" contract; the placement warnings then flag it.
  */
 export function findFreePlatePosition(
@@ -967,7 +1027,7 @@ export function reindexPlates(plates: EditorPlate[]): EditorPlate[] {
 }
 
 /**
- * Move the plate at live index `fromIndex` into insertion gap `insertAt` — a 0-based gap in the
+ * Move the plate at live index `fromIndex` into insertion gap `insertAt`, a 0-based gap in the
  * CURRENT list (0 = before the first plate, `plates.length` = after the last). Gap semantics are
  * what the strip's between-tile drop zones produce; unlike a "target tile" splice they mean the
  * same thing whichever direction the drag came from. Returns the input array unchanged for a
@@ -992,7 +1052,7 @@ export function movePlate(plates: EditorPlate[], fromIndex: number, insertAt: nu
  * Whether an instance needs its full matrix emitted. World-space scale only diverges
  * from the decomposed translate*rotate*scale form (and can shear) when the object is
  * BOTH rotated AND non-uniformly scaled. Otherwise T*R*S is exact, so we omit the
- * matrix to keep the slice request small — it travels in an HTTP header with a tight
+ * matrix to keep the slice request small, it travels in an HTTP header with a tight
  * size limit, so emitting 12 extra numbers per instance unconditionally can overflow it.
  */
 function instanceNeedsMatrix(instance: EditorInstance): boolean {
@@ -1022,6 +1082,10 @@ export function buildSceneEdit(state: EditorState): SceneEdit {
   return {
     plates: state.plates.map((plate) => ({
       index: plate.index,
+      // `index` is a POSITION and is renumbered on every add, delete and reorder, so the bake needs
+      // to be told which SOURCE plate this was or it cannot keep the plate-keyed records in step.
+      // Null for a session-added plate, which has no source record to carry.
+      sourceIndex: plate.sourcePlateIndex,
       name: plate.name ?? undefined,
       plateType: plate.plateType ?? undefined,
       primeTower: plate.primeTower ? { x: plate.primeTower.x, y: plate.primeTower.y } : null
@@ -1085,15 +1149,15 @@ export function buildSceneEdit(state: EditorState): SceneEdit {
 
 /**
  * SESSION -> SAVED filament-id renumbering. A save bakes the controller's desired filament list as
- * slots 1..N, so a save that REMOVED or REORDERED materials renumbers every filament id — but the
+ * slots 1..N, so a save that REMOVED or REORDERED materials renumbers every filament id, but the
  * editor state (and the SceneEdit it emits) speaks the SESSION id space. The map is positional:
  * session id `sessionIds[i]` becomes saved id `i + 1` (the desired list is built from the
  * controller's `projectFilaments` in order). Null when the mapping is identity, so callers can
- * skip the rewrite entirely — the overwhelmingly common case.
+ * skip the rewrite entirely: the overwhelmingly common case.
  *
  * Both halves of the invariant hang off this map:
  * - {@link rebaseSceneEditFilamentIds} translates the EMITTED edit, so the bake never writes a
- *   session id into the file (a part `extruder="2"` in a 1-filament project — stale data that
+ *   session id into the file (a part `extruder="2"` in a 1-filament project: stale data that
  *   fabricates phantom plate filaments downstream).
  * - {@link rebaseEditorStateFilamentIds} moves the LIVE session onto the saved ids after the save
  *   succeeds, so mesh colours keep resolving (the post-save "model reverted to its original
@@ -1113,7 +1177,7 @@ export function buildSessionFilamentIdRemap(sessionIds: number[]): Map<number, n
  * Translate every filament id the SceneEdit carries from session space to the saved (1..N) space.
  * An id the map cannot translate references a REMOVED material: the assignment is dropped rather
  * than guessed (the bake then inherits the object/base value, which `remapModelSettingsFilamentRefs` keeps
- * correct). Colour paint is included — its codes are filament ids encoded inside the triangle
+ * correct). Colour paint is included, its codes are filament ids encoded inside the triangle
  * strings, so they go through `remapPaintTriangles`; the support/seam channels encode
  * enforcer/blocker CONSTANTS instead and must never be remapped.
  */
@@ -1165,7 +1229,7 @@ function remapPaintTriangles(
 }
 
 /**
- * Move the live editor session onto the saved filament ids — the state-side half of
+ * Move the live editor session onto the saved filament ids: the state-side half of
  * {@link buildSessionFilamentIdRemap}'s invariant, applied once a project save succeeds. Ids the
  * map cannot translate (removed materials) become null (inherit), mirroring the emit-side drop.
  */
@@ -1198,14 +1262,14 @@ export function rebaseEditorStateFilamentIds(state: EditorState, remap: Map<numb
     })),
     ...(addedParts ? { addedParts } : {}),
     // Colour paint stores the filament id IN the triangle code, so it has to move with everything
-    // else — otherwise the painted regions survive the renumber pointing at whatever material now
+    // else, otherwise the painted regions survive the renumber pointing at whatever material now
     // holds the old number, and the model prints those areas in the wrong colour.
     ...(state.colorPaint ? { colorPaint: remapColorPaintMap(state.colorPaint, remap) } : {})
   }
 }
 
 /**
- * Emit the objects marked for mesh repair, dropped to those that still have a placed instance —
+ * Emit the objects marked for mesh repair, dropped to those that still have a placed instance:
  * marking an object and then deleting it must not ship a dangling repair. An object replaced this
  * session is skipped too: its geometry is now import-backed, so the original mesh the mark referred
  * to is not what gets baked.
@@ -1223,7 +1287,7 @@ function collectRepairedObjectIds(state: EditorState): SceneEdit['repairedObject
 /**
  * Repair marks that landed on an IMPORT's synthetic identity, mapped back to its importId. The
  * bake has no mesh XML to rewrite for an unsaved import, so it repairs the staged geometry instead
- * (`repairImportedMeshGeometry`) — which is what lets "Repair mesh" work with no save first.
+ * (`repairImportedMeshGeometry`), which is what lets "Repair mesh" work with no save first.
  */
 function collectRepairedImportIds(state: EditorState): SceneEdit['repairedImportIds'] {
   if (!state.repairedObjectIds || state.repairedObjectIds.length === 0) return undefined
@@ -1256,7 +1320,7 @@ function collectImportBrimEars(state: EditorState): SceneEdit['importBrimEars'] 
  * Triangle paint authored on an IMPORT's synthetic identity, mapped to import + solid index.
  *
  * Indices are positions in the staged mesh's triangle order, which the editor rendered from and the
- * bake writes back to — see the contract note on `SceneEdit.importPaint`. A single-solid import
+ * bake writes back to: see the contract note on `SceneEdit.importPaint`. A single-solid import
  * keys its only mesh as solid 0, matching `instanceFromStagedImport`'s part indexing.
  */
 function collectImportPaint(state: EditorState): SceneEdit['importPaint'] {
@@ -1296,7 +1360,7 @@ export function isObjectMarkedForRepair(state: EditorState, objectId: number): b
 /**
  * Emit one `meshReplacements` entry per in-project object that was replaced this session
  * (its instances are now import-backed with a `replacedObjectId`). Deduped by the replaced
- * objectId — every copy of the object points at the same import — so the slicer can carry
+ * objectId, every copy of the object points at the same import, so the slicer can carry
  * the original object's per-object process overrides onto the baked replacement.
  */
 function collectMeshReplacements(state: EditorState): SceneEdit['meshReplacements'] {
@@ -1314,8 +1378,8 @@ function collectMeshReplacements(state: EditorState): SceneEdit['meshReplacement
 /**
  * Emit added part volumes for models that still have at least one placed instance (adding a part
  * and then deleting the model must not ship a dangling part). The host is emitted as the
- * `objectId` of an in-project object, or the `importId` of an import that has not been saved yet
- * — the contract takes exactly one, and the builder resolves an import host through the same
+ * `objectId` of an in-project object, or the `importId` of an import that has not been saved yet,
+ * the contract takes exactly one, and the builder resolves an import host through the same
  * `importIdToObjectId` map it uses to place the import itself.
  */
 function collectAddedParts(state: EditorState): SceneEdit['addedParts'] {
@@ -1503,7 +1567,7 @@ function collectImportPartTypes(state: EditorState): SceneEdit['importPartTypes'
 }
 
 /**
- * Placement changes for a multi-solid IMPORT's solids, keyed by import + 0-based solid index —
+ * Placement changes for a multi-solid IMPORT's solids, keyed by import + 0-based solid index:
  * the import counterpart of {@link collectPartTransforms}, which can only address parts that
  * already have baked 3MF ids. Without this an import sub-part could be dragged with the gizmo and
  * the move would be silently lost on save.
@@ -1632,7 +1696,7 @@ function collectImportPartFilaments(state: EditorState): SceneEdit['importPartFi
  * Single-object project state for "Export object as 3MF": the chosen instance alone on
  * one plate (re-indexed to 1, centred on its bed), deep-copied together with every
  * session map so the bake keeps the object's parts, per-part filaments/types/transforms,
- * paint, added part volumes, name override, and repair mark — `buildSceneEdit`'s
+ * paint, added part volumes, name override, and repair mark: `buildSceneEdit`'s
  * collectors already prune each map to placed instances, so entries for the objects left
  * behind simply drop out. Plate-scoped choreography (plate name, layer filament changes,
  * pauses, prime tower) is deliberately NOT carried over: it belongs to the source plate's
@@ -1643,7 +1707,7 @@ export function buildSingleObjectExportState(
   key: string,
   /**
    * The object's rendered XY footprint centre in PLATE coordinates (helper volumes excluded, as
-   * `printableMeshBox` gives it). Required to centre the export correctly — see below. When the
+   * `printableMeshBox` gives it). Required to centre the export correctly: see below. When the
    * caller has no rendered group for the object, the placement is left untouched rather than
    * guessed, because guessing is what produced the half-off-the-bed export.
    */
@@ -1659,8 +1723,8 @@ export function buildSingleObjectExportState(
     const centerX = (plate.bed.minX + plate.bed.maxX) / 2
     const centerY = (plate.bed.minY + plate.bed.maxY) / 2
     // Centre by SHIFTING the placement, never by assigning the bed centre to `position`.
-    // `position` is the instance transform's translation — the object's local ORIGIN, not its
-    // bounding-box centre — and a Bambu object's mesh routinely carries plate coordinates with a
+    // `position` is the instance transform's translation, the object's local ORIGIN, not its
+    // bounding-box centre, and a Bambu object's mesh routinely carries plate coordinates with a
     // near-identity transform. Assigning there moved the object by the whole origin-to-centroid
     // offset, which is what exported models half off the bed. Same rule as placing an added
     // model (`addInstanceToActivePlate` takes a mesh centroid for exactly this reason).
@@ -1668,7 +1732,7 @@ export function buildSingleObjectExportState(
     const dy = centerY - footprintCenter.y
     instance.position.set(instance.position.x + dx, instance.position.y + dy, instance.position.z)
     // A shearing instance saves its exact matrix VERBATIM (position is just the decomposed
-    // mirror), so shift the matrix translation in place — dropping the matrix like a gizmo edit
+    // mirror), so shift the matrix translation in place: dropping the matrix like a gizmo edit
     // would deform the shear.
     if (instance.exactMatrix) {
       instance.exactMatrix[9] = (instance.exactMatrix[9] ?? 0) + dx
@@ -1696,7 +1760,7 @@ export function buildSingleObjectExportState(
 }
 
 /**
- * Emit the independent copies that still have a placed instance — copying an object and then
+ * Emit the independent copies that still have a placed instance: copying an object and then
  * deleting the copy must not ship a dangling clone (which the bake would reject).
  */
 function collectObjectClones(state: EditorState): SceneEdit['objectClones'] {
@@ -1718,7 +1782,7 @@ function collectObjectClones(state: EditorState): SceneEdit['objectClones'] {
 
 /**
  * The in-project object an id ultimately copies FROM. A copy of a copy still has to name a real
- * object, because the bake duplicates the source's baked XML — chaining placeholders would name
+ * object, because the bake duplicates the source's baked XML: chaining placeholders would name
  * an object that does not exist in the base file.
  */
 export function objectCloneSource(state: EditorState, objectId: number): number {
@@ -1728,7 +1792,7 @@ export function objectCloneSource(state: EditorState, objectId: number): number 
 /**
  * Give `objectId`'s session edits to `cloneObjectId` as well, so an independent copy starts
  * IDENTICAL to its source and then diverges. The copy inherits the source's BAKED state through
- * the server-side object copy; this is the other half — everything edited in this session but not
+ * the server-side object copy; this is the other half, everything edited in this session but not
  * yet saved. Keys that address a part (`objectId:componentObjectId`) are re-keyed onto the copy;
  * the component ids stay the SOURCE's, which is what the bake's clone pre-pass expects.
  */
@@ -1794,7 +1858,7 @@ export function cloneEditorState(state: EditorState): EditorState {
     plates: state.plates.map((plate) => ({
       index: plate.index,
       // Identity fields must survive the snapshot: undo restores the cloned plate list, and the
-      // strip's thumbnail caches key on plateId — dropping it would resurrect the index-keyed drift.
+      // strip's thumbnail caches key on plateId: dropping it would resurrect the index-keyed drift.
       plateId: plate.plateId,
       sourcePlateIndex: plate.sourcePlateIndex,
       name: plate.name,

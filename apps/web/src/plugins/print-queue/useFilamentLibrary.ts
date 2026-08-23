@@ -1,6 +1,6 @@
 /**
  * Loads the workspace's filament materials from the Filament Manager library over plain HTTP and
- * dedupes spools into distinct (type + colour) materials for the queue material pickers — carrying
+ * dedupes spools into distinct (type + colour) materials for the queue material pickers: carrying
  * each material's aggregate remaining quantity. Never imports the filament-manager plugin
  * (cross-plugin rule); degrades to an empty list when that plugin is disabled/forbidden, so the
  * file-default + Custom paths still work.
@@ -63,7 +63,7 @@ export function rankMaterialsForFilament(
 
 /**
  * The nearest materials to suggest inline in the dropdown. Type is the primary concern (compatible
- * materials rank first), but colour is weighted heavily within — so the closest-colour matches lead,
+ * materials rank first), but colour is weighted heavily within, so the closest-colour matches lead,
  * and a colour-close material still surfaces even when the library has no exact-type match (it just
  * carries the type-mismatch warning when picked).
  */
@@ -104,7 +104,7 @@ export function useFilamentLibrary() {
       for (const spool of data.spools) {
         if (spool.status === 'archived') continue
         const key = materialKey(spool.filamentType, spool.colorHex)
-        // A spool physically in a printer's AMS/external slot — relevant when the user wants to see
+        // A spool physically in a printer's AMS/external slot: relevant when the user wants to see
         // (or exclude) what's already loaded in their machines.
         const loaded = spool.loadedPrinterId != null
         const existing = byKey.get(key)

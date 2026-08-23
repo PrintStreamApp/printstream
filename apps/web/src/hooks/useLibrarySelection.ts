@@ -12,7 +12,7 @@
  * navigation, and `canManageLibrary` which clears selection when the permission
  * is lost.
  *
- * Invariant: behavior-preserving — the bodies below are moved unchanged from
+ * Invariant: behavior-preserving: the bodies below are moved unchanged from
  * LibraryView. Bulk-action handlers (recycle, move) stay in the view and read
  * this hook's return; the context-menu reset effect also stays in the view and
  * reads `selectionMode` from here.

@@ -33,7 +33,7 @@ function renderBar(value?: number | null) {
  * Joy sizes an indeterminate bar's MOVING SEGMENT from `--LinearProgress-percent`
  * (`progressMinWidth: percent * 1% / 2`, `progressMaxWidth: percent * 1%`), which it
  * takes from the `value` prop. At `0` the segment is zero-width for the whole
- * keyframe cycle, so the animation runs but nothing is drawn — the bar reads as
+ * keyframe cycle, so the animation runs but nothing is drawn: the bar reads as
  * stuck precisely when it is meant to read as busy. Every call site used to write
  * `determinate={x != null} value={x ?? 0}` and hit exactly that.
  */
@@ -66,7 +66,7 @@ test('zero is a real value, not a missing one', () => {
   const bar = renderBar(0)
 
   assert.equal(bar.style.getPropertyValue('--LinearProgress-percent'), '0')
-  assert.equal(bar.getAttribute('aria-valuenow'), '0', 'a genuine 0% is determinate — it has started and reported')
+  assert.equal(bar.getAttribute('aria-valuenow'), '0', 'a genuine 0% is determinate, it has started and reported')
 })
 
 test('out-of-range values are clamped so the fill cannot overflow its track', () => {

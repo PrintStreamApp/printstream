@@ -6,7 +6,7 @@
  * Brand / Material / Variant / Vendor are chevron-style free-text autocompletes:
  * the workspace's own previously-used values are grouped under "Used before"
  * above curated suggestions, so past entries are one click away. The colour uses
- * the same preset swatch grid as the AMS slot editor and is combination-aware —
+ * the same preset swatch grid as the AMS slot editor and is combination-aware,
  * a known brand + material (e.g. Bambu PLA Basic) shows that family's palette,
  * otherwise the common colours.
  */
@@ -138,7 +138,7 @@ export function SpoolFormDialog({ open, spool, onClose }: { open: boolean; spool
   const vendorOptions = useMemo(() => buildOptions(spools.map((s) => s.vendor ?? ''), []), [spools])
 
   // Slicing-preset picker options: filament profiles from the slicer catalogue,
-  // deduped by display name (machine variants collapse to one entry — the pin is
+  // deduped by display name (machine variants collapse to one entry: the pin is
   // matched by display name at slice time, so it stays portable across printers)
   // and narrowed to the spool's material family once one is typed.
   const capabilitiesQuery = useQuery({
@@ -271,7 +271,7 @@ export function SpoolFormDialog({ open, spool, onClose }: { open: boolean; spool
                 placeholder="Automatic (match at slice time)"
               />
               <Typography level="body-xs" textColor="text.tertiary" sx={{ mt: 0.5 }}>
-                The existing filament profile this spool slices with — like picking a preset for
+                The existing filament profile this spool slices with: like picking a preset for
                 third-party filament in Bambu Studio, but remembered on the spool. Leave empty to
                 auto-match by material type.
               </Typography>

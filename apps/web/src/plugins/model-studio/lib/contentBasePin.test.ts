@@ -20,12 +20,12 @@ test('an editor-born project has no content base to pin', () => {
   assert.equal(initialContentBasePin(null, null), null)
 })
 
-test('the first save adopts the version it archived — those are the bytes we opened', () => {
+test('the first save adopts the version it archived, those are the bytes we opened', () => {
   const pin = initialContentBasePin('file-1', null)
   assert.deepEqual(nextContentBasePin(pin, 'file-1', 'ver-9'), { fileId: 'file-1', versionId: 'ver-9' })
 })
 
-test('later saves do NOT move the pin — they archive our own output', () => {
+test('later saves do NOT move the pin, they archive our own output', () => {
   const afterFirst = { fileId: 'file-1', versionId: 'ver-9' }
   assert.deepEqual(nextContentBasePin(afterFirst, 'file-1', 'ver-10'), afterFirst)
   assert.deepEqual(nextContentBasePin(afterFirst, 'file-1', 'ver-11'), afterFirst)

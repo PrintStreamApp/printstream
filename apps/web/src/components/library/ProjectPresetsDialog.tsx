@@ -1,15 +1,15 @@
 /**
- * View and remove the filament presets a project carries INSIDE itself — BambuStudio's "project
+ * View and remove the filament presets a project carries INSIDE itself: BambuStudio's "project
  * presets", the ones it shows in the material list suffixed `(<project>.3mf)`.
  *
  * These are ordinary project content, not a defect report: BambuStudio writes them whenever a slot
  * uses a preset the file needs to carry with it, and re-embeds every sidecar it finds on every save.
  * That means one can outlive whatever put it there, so a project accumulates presets nobody can see
- * or reach — hence a place to look at them and clear the ones nothing uses.
+ * or reach, hence a place to look at them and clear the ones nothing uses.
  *
  * A USED preset is listed but never removable: the slot naming it would be left pointing at a preset
  * that exists nowhere, which is the condition that makes BambuStudio fabricate a replacement. And
- * removal is explicit, never automatic — an embedded preset can be the only surviving record of
+ * removal is explicit, never automatic, an embedded preset can be the only surviving record of
  * settings someone tuned, so an unreferenced one is still not ours to delete unasked
  * (`three-mf/embedded-presets.ts`).
  *
@@ -79,7 +79,7 @@ export function ProjectPresetsDialog({ open, onClose, presets, onRemove }: Proje
                       {preset.used ? 'In use' : 'Unused'}
                     </Chip>
                     <Tooltip title={preset.used
-                      ? 'A material in this project uses this preset — point that material at another preset first'
+                      ? 'A material in this project uses this preset: point that material at another preset first'
                       : 'Remove this preset from the project file'}>
                       <span>
                         <IconButton

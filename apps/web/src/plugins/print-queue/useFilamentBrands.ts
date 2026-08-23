@@ -1,5 +1,5 @@
 /**
- * Real filament **brands** (vendors) for the queue's custom-material picker — derived from the slicer's
+ * Real filament **brands** (vendors) for the queue's custom-material picker: derived from the slicer's
  * filament profiles (`/api/slicing/profiles`, `kind: 'filament'`). Used as suggestions for the freeSolo
  * Brand field: a convenient starting point (e.g. "Bambu Lab"), with the user free to type any brand and
  * pick the type separately. Deduped to unique vendors (a self-made copy of a system preset keeps its
@@ -25,7 +25,7 @@ const FILAMENT_BRANDS_QUERY_KEY = ['slicing-profiles', 'filament-brands'] as con
 
 /**
  * Filament brand suggestions for the custom-material picker. Returns `[]` when the slicer isn't
- * configured or the profiles can't be read (no retry, no surfaced error) — manual entry works without them.
+ * configured or the profiles can't be read (no retry, no surfaced error): manual entry works without them.
  */
 export function useFilamentBrands(enabled = true): string[] {
   const query = useQuery({

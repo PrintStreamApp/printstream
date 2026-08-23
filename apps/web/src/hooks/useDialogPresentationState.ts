@@ -4,7 +4,7 @@
  * Owns the two toggles and the rule that separates them:
  *
  *  - MAXIMIZED is a size preference and is remembered per device.
- *  - FULL SCREEN hides the dialog's chrome — in an editor that includes Save — so it is deliberately
+ *  - FULL SCREEN hides the dialog's chrome, in an editor that includes Save, so it is deliberately
  *    NEVER persisted: a mode that hides the way to keep your work must not be what greets you on
  *    open. It implies maximized, being the same intent taken all the way.
  *
@@ -21,7 +21,7 @@ import {
 export interface DialogPresentationStateOptions extends Pick<DialogPresentationInputs, 'base' | 'locked'> {
   /**
    * localStorage key for the maximized preference. Pass `null` for a dialog with no maximize toggle
-   * (one whose `base` is already `maximized`) — nothing is read or written.
+   * (one whose `base` is already `maximized`), nothing is read or written.
    */
   maximizedStorageKey: string | null
 }

@@ -3,8 +3,8 @@
  *
  * A 3MF is a ZIP with a fixed internal layout, and every surface that touches one needs the same
  * handful of paths: the api reader and bake, the bridge's index parse, `save-retarget`, and the
- * browser's client-side archive reader. Each of those had been spelling the strings itself —
- * `Metadata/slice_info.config` alone was declared in three places — so a typo or a Bambu layout
+ * browser's client-side archive reader. Each of those had been spelling the strings itself,
+ * `Metadata/slice_info.config` alone was declared in three places, so a typo or a Bambu layout
  * change would have to be chased across the tree.
  *
  * Two siblings live with the parser that owns their format rather than here, because their content
@@ -30,7 +30,7 @@ export const THREE_MF_PROJECT_SETTINGS_ENTRY = 'Metadata/project_settings.config
 
 /**
  * Record of a PREVIOUS slice (one `<filament>` per filament that slice used), not project state.
- * The writer drops it whenever it no longer describes the filament set being saved — carrying a
+ * The writer drops it whenever it no longer describes the filament set being saved: carrying a
  * mismatched record forward makes BambuStudio read its per-plate nozzle grouping out of bounds.
  */
 export const THREE_MF_SLICE_INFO_ENTRY = 'Metadata/slice_info.config'

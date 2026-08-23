@@ -8,7 +8,7 @@ import { test } from 'node:test'
 import { emptyThreeMfBakeSource, planEditedThreeMf } from './bake.js'
 import type { SceneEdit } from '../slicing.js'
 
-/** A minimal base source — enough for the plan to take the `copy` branch. */
+/** A minimal base source: enough for the plan to take the `copy` branch. */
 function baseSource() {
   return { ...emptyThreeMfBakeSource(), hasBase: true }
 }
@@ -46,7 +46,7 @@ test('only embedded-preset entries can be removed this way', () => {
   ]))
 
   // Both of these carry their OWN transforms (the bake rewrites them), so the property to check is
-  // that neither returns null — i.e. neither is dropped from the archive.
+  // that neither returns null: i.e. neither is dropped from the archive.
   assert.notEqual(plan.copy?.transforms.get('3D/3dmodel.model')?.('<model/>'), null, 'geometry must survive')
   const projectSettings = plan.copy?.transforms.get('Metadata/project_settings.config')
   if (projectSettings) assert.notEqual(projectSettings('{}'), null, 'the project config must survive')

@@ -2,7 +2,7 @@
  * This installation's durable identity.
  *
  * A self-hosted licence covers ONE install, and enforcement counts that
- * install's printers — so without a stable way to say "which install", the same
+ * install's printers, so without a stable way to say "which install", the same
  * key on two machines gives each the full entitlement. This is the id the
  * licence binds to on first refresh.
  *
@@ -10,7 +10,7 @@
  * id): those change under a container rebuild, a move between hosts, or a
  * restore from backup, and a licence that unbinds itself every time the customer
  * redeploys is worse than no binding at all. Persisted instead, so it survives
- * exactly as long as the database does — the same reasoning as the bridge's own
+ * exactly as long as the database does, the same reasoning as the bridge's own
  * `installationId` in `apps/bridge/src/state-store.ts`.
  *
  * **Treat it as a secret.** It is half of what claims a licence, so it is never

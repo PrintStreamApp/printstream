@@ -1,12 +1,12 @@
 /**
  * Per-user library "favorites" (stars).
  *
- * Favorites are personal — each user stars their own files; they are not shared
+ * Favorites are personal, each user stars their own files; they are not shared
  * across the workspace. A favorite is a `LibraryFileFavorite` row keyed by
  * `(userId, libraryFileId)`. The "user key" is the authenticated user id, or a
  * fixed sentinel for no-auth/self-host installs where the actor is anonymous, so
  * that single local user gets a stable favorites set (and the unique constraint
- * stays sound — Postgres would otherwise allow duplicate NULL-user rows).
+ * stays sound: Postgres would otherwise allow duplicate NULL-user rows).
  */
 import type { Request } from 'express'
 import { prisma } from './prisma.js'

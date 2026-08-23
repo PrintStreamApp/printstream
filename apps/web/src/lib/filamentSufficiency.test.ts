@@ -27,7 +27,7 @@ test('filamentRemainingStatus just states the amount when nothing is required', 
 })
 
 test('filamentRemainingStatus reads "enough" with comfortable headroom', () => {
-  // 200 needed, 480 on hand — well above the 25g headroom.
+  // 200 needed, 480 on hand, well above the 25g headroom.
   assert.deepEqual(filamentRemainingStatus(480, 200), { text: '~480g left', tone: 'text.tertiary' })
   // Exactly at the headroom boundary (required + 25) still reads as enough.
   assert.deepEqual(filamentRemainingStatus(125, 100), { text: '~125g left', tone: 'text.tertiary' })
@@ -49,7 +49,7 @@ test('filamentRemainingStatus flags "short" with the deficit when below required
 test('filamentRemainingStatus adds a "total" suffix for a multi-spool aggregate', () => {
   // Aggregated, no percent: "total" replaces the "left" word.
   assert.deepEqual(filamentRemainingStatus(690, null, null, true), { text: '~690g total', tone: 'text.tertiary' })
-  // Aggregated with percent — the "total" rides inside the estimate brackets.
+  // Aggregated with percent: the "total" rides inside the estimate brackets.
   assert.deepEqual(filamentRemainingStatus(690, 200, 69, true), { text: '69% (~690g total)', tone: 'text.tertiary' })
   // Aggregated keeps the sufficiency qualifier after the brackets.
   assert.deepEqual(filamentRemainingStatus(70, 100, 7, true), { text: '7% (~70g total) · 30g short', tone: 'danger.plainColor' })

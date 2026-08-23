@@ -6,7 +6,7 @@
  * React logged a validateDOMNesting error on every page with a non-zero section
  * count, and the HTML parser is entitled to close the paragraph early and
  * reparent the chip. Asserting on the rendered TAGS rather than on the absence of
- * a console warning keeps this honest — the warning is dev-only and deduped, so a
+ * a console warning keeps this honest: the warning is dev-only and deduped, so a
  * console spy would pass for the wrong reason once another test tripped it first.
  *
  * The `icon` prop takes a plain span here on purpose: under the node runner's CJS
@@ -44,7 +44,7 @@ function renderHeading(props: { count?: number | null; description?: string }) {
   )
 }
 
-/** Every `<p>` that contains a block-level descendant — the invalid-nesting set. */
+/** Every `<p>` that contains a block-level descendant: the invalid-nesting set. */
 function paragraphsContainingDivs(container: HTMLElement): string[] {
   return [...container.querySelectorAll('p')]
     .filter((paragraph) => paragraph.querySelector('div') != null)

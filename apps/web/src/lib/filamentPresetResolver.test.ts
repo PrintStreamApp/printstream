@@ -23,7 +23,7 @@ function filamentPreset(overrides: Partial<SlicingPresetSummary> & { id: string;
   return { source: 'builtin', kind: 'filament', ...overrides }
 }
 
-// Every variant of a product shares its filament id, so the printer axis is what separates them —
+// Every variant of a product shares its filament id, so the printer axis is what separates them,
 // and it does so by FILTER. Both fixtures declare their target because every real preset does: a
 // preset with an `inherits` parent is served with the parent's `compatiblePrinters` merged in (the
 // API's `resolveProfileMetadata`), our equivalent of BambuStudio inheriting from an `@base` preset.
@@ -82,7 +82,7 @@ test('never resolves a preset whose filament family conflicts with the tray type
   assert.equal(resolution.reason, 'noMatch')
 })
 
-test('machine compatibility alone never selects a preset — an unidentified tray stays unresolved', () => {
+test('machine compatibility alone never selects a preset, an unidentified tray stays unresolved', () => {
   const profiles = [
     filamentPreset({
       id: 'custom:mystery',
@@ -116,7 +116,7 @@ test('a bare typed tray resolves to a machine-compatible preset of the same type
 })
 
 // Issue #68: the family table folds every PLA variant into "PLA", so an exact
-// derived-type match must outrank it — otherwise a plain PLA tray could take a
+// derived-type match must outrank it, otherwise a plain PLA tray could take a
 // composite preset (and its hardened-nozzle requirement) purely by list order.
 test('an exact derived type outranks a family match, and the family match still catches a variant', () => {
   const profiles = [
@@ -199,7 +199,7 @@ test('an empty catalogue reports noCatalogue so callers retry instead of blaming
 
 // The profile NAME must never act as a printer-model declaration. Asserted through the filter,
 // which is the stronger form: a preset NAMED "@BBL H2D" while DECLARING X1C is rejected for an H2D
-// machine. If the name were read as a declaration it would survive, and — being first — win.
+// machine. If the name were read as a declaration it would survive, and, being first, win.
 test('the preset name is not a printer declaration', () => {
   const profiles = [
     filamentPreset({
@@ -263,7 +263,7 @@ test('a preset carrying no support flag is not vetoed either way', () => {
 })
 
 // Issue #68: a 3MF project filament slot used to pick its preset by matching the
-// baked name — and, failing that, by substring-matching its TYPE into preset names.
+// baked name, and, failing that, by substring-matching its TYPE into preset names.
 const projectQuery = {
   presetName: null as string | null,
   filamentType: null as string | null,
@@ -375,7 +375,7 @@ test('a support slot resolves to a support preset typed by its base polymer', ()
 
 // A workspace preset derived from "Bambu PLA Basic" inherits its `filament_id`, so an AMS tray
 // reporting GFA00 matched the derivative and the built-in equally and the winner fell to catalogue
-// order — which lists customs first. Choosing "Bambu PLA Basic - Cryogrip Pro Glacier" applies
+// order, which lists customs first. Choosing "Bambu PLA Basic - Cryogrip Pro Glacier" applies
 // settings the user tuned for another situation to a slice they only said "this is what's in my
 // AMS" about. BambuStudio's AMSMaterialsSetting::get_filament_by_id skips any preset that is not its
 // own base before comparing filament_id, which is the rule mirrored here.
@@ -405,7 +405,7 @@ test('a tray never resolves to a preset DERIVED from the product it names', () =
   assert.equal(resolution.status === 'resolved' && resolution.matchedBy, 'filamentId')
 })
 
-test('a workspace filament with its OWN filament id still resolves — only derivatives are excluded', () => {
+test('a workspace filament with its OWN filament id still resolves, only derivatives are excluded', () => {
   const ownProduct = filamentPreset({
     id: 'custom:520dea35',
     source: 'custom',
@@ -422,7 +422,7 @@ test('a workspace filament with its OWN filament id still resolves — only deri
   assert.equal(resolution.status === 'resolved' && resolution.profileId, 'custom:520dea35')
 })
 
-test('an explicit spool pin still selects a derivative — the excluded path is only the derived one', () => {
+test('an explicit spool pin still selects a derivative: the excluded path is only the derived one', () => {
   const derived = filamentPreset({
     id: 'custom:b176997e',
     source: 'custom',
@@ -445,7 +445,7 @@ test('an explicit spool pin still selects a derivative — the excluded path is 
 })
 
 // Compatibility is a FILTER now, not a score. A preset declaring a different printer is rejected
-// outright, so it cannot win on catalogue order when the identity signals tie — which is what
+// outright, so it cannot win on catalogue order when the identity signals tie, which is what
 // happened while the machine axis merely outranked it. BambuStudio never offers an incompatible
 // preset at all; it evaluates `compatible_printers` when loading the bundle.
 test('a preset declaring a different printer is rejected, not outranked', () => {
@@ -465,8 +465,8 @@ test('a preset declaring a different printer is rejected, not outranked', () => 
   assert.equal(resolution.status === 'resolved' && resolution.profileId, 'builtin:filament:h2d')
 })
 
-// A vendor may reuse another's filament id — the live catalogue has QIDI presets carrying Bambu's
-// GFA00 — so the id alone cannot be trusted without the compatibility filter behind it.
+// A vendor may reuse another's filament id, the live catalogue has QIDI presets carrying Bambu's
+// GFA00, so the id alone cannot be trusted without the compatibility filter behind it.
 test('another vendor reusing the same filament id is rejected for a Bambu machine', () => {
   const h2dMachine: SlicingPresetSummary = {
     id: 'builtin:machine:h2d-0.4', source: 'builtin', kind: 'machine', name: 'Bambu Lab H2D 0.4 nozzle'
@@ -485,7 +485,7 @@ test('another vendor reusing the same filament id is rejected for a Bambu machin
 
 // Regression: switching printer model made every Bambu material lose its brand. Compatibility
 // became a filter, and `matchesCompatiblePrinters` answers false when there is no machine to judge
-// against — so every preset declaring a printer (all of them) was vetoed and nothing resolved. The
+// against, so every preset declaring a printer (all of them) was vetoed and nothing resolved. The
 // session seeds picks before a machine is known, and a model switch re-renders before the new
 // machine profile arrives, so this path is hit in normal use.
 test('resolves without a machine profile rather than rejecting everything', () => {
@@ -512,7 +512,7 @@ test('resolves without a machine profile rather than rejecting everything', () =
 
 // A 3MF's `filament_settings_id` is the ALIAS BambuStudio displays ("Bambu PETG HF"); the installed
 // preset carries its machine suffix ("Bambu PETG HF @BBL H2D 0.4 nozzle"). Comparing names only, a
-// project filament never matched the catalogue and fell through to the machine default — turning a
+// project filament never matched the catalogue and fell through to the machine default: turning a
 // PETG project's material into Bambu PLA Basic.
 test('a project filament matches an installed preset by alias, not just by exact name', () => {
   const petg = filamentPreset({
@@ -537,13 +537,42 @@ test('a project filament matches an installed preset by alias, not just by exact
   assert.equal(resolution.status === 'resolved' && resolution.matchedBy, 'presetName')
 })
 
-// The file NAMES its preset (`filament_settings_id`), so this is a lookup, not a guess —
+// The same alias match, for a vendor whose brand is not the first word of the preset name. The
+// branded form used here PREPENDS `filament_vendor`, which the installed preset declares and the
+// 3MF's `filament_settings_id` never carries, so "Polymaker PolyLite PLA" could not match the
+// project's "PolyLite PLA" and the slot fell through to a family guess: a Polymaker material
+// resolving to whichever PLA the catalogue happened to offer. Bambu hid it because "Bambu PETG HF"
+// is already its own branded form, which is exactly what the test above asserts.
+test('a project filament matches by alias when its vendor is not the first word of the name', () => {
+  const polylite = filamentPreset({
+    id: 'builtin:filament:polylite-pla-h2d',
+    name: 'PolyLite PLA @BBL H2D',
+    filamentType: 'PLA',
+    filamentVendor: 'Polymaker'
+  })
+  const plaDefault = filamentPreset({
+    id: 'builtin:filament:pla-basic-h2d', name: 'Bambu PLA Basic @BBL H2D', filamentType: 'PLA', filamentVendor: 'Bambu Lab'
+  })
+
+  const resolution = resolveProjectFilamentPreset([plaDefault, polylite], {
+    presetName: 'PolyLite PLA',
+    filamentType: 'PLA',
+    isSupport: false,
+    selectedMachineProfile: null,
+    selectedPrinterModel: ''
+  })
+
+  assert.equal(resolution.status === 'resolved' && resolution.profileId, 'builtin:filament:polylite-pla-h2d')
+  assert.equal(resolution.status === 'resolved' && resolution.matchedBy, 'presetName')
+})
+
+// The file NAMES its preset (`filament_settings_id`), so this is a lookup, not a guess:
 // BambuStudio's own load path is `find_preset_internal(original_name)` with no scoring at all
 // (`PresetCollection::load_external_preset`). Pinning it here because the danger is structural
 // rather than hypothetical: the name falls through to the ranked matcher, where `filamentId`
 // outranks `presetName`, and a workspace preset that INHERITS the built-in carries the SAME
 // filament id. If the exact-name step ever stops firing first, these two tie and catalogue order
-// decides — and the project then diffs against the wrong basis and reports settings the user never
+// decides, and the project then diffs against the wrong basis and reports settings the user never
 // changed.
 test('a project slot binds to the installed preset it names, not an inheriting variant', () => {
   const profiles = [
@@ -578,9 +607,9 @@ test('a project slot binds to the installed preset it names, not an inheriting v
 
 // The shipped failure, reduced: the app fed the resolver the DISPLAY name, whose `@BBL…` suffix
 // the index parser strips. No installed preset is literally called "Bambu PLA Basic", so the exact
-// lookup could never fire and the ranked path chose between two presets that tie on filament id —
+// lookup could never fire and the ranked path chose between two presets that tie on filament id:
 // catalogue order handing it the workspace variant, which the settings dialog then diffed against.
-test('the display name cannot identify a preset — the raw filament_settings_id can', () => {
+test('the display name cannot identify a preset: the raw filament_settings_id can', () => {
   const profiles = [
     filamentPreset({
       id: 'custom:c1e90d62-b5bd-46eb-9766-ef5b066985d5',
@@ -605,6 +634,6 @@ test('the display name cannot identify a preset — the raw filament_settings_id
   assert.equal(raw.profileId, 'builtin:filament:h2d-pla-basic')
   assert.equal(raw.matchedBy, 'presetName')
 
-  // The catalogue order the API serves — customs first — is what decided it before.
+  // The catalogue order the API serves, customs first, is what decided it before.
   assert.equal(profiles[0]!.source, 'custom')
 })

@@ -5,7 +5,7 @@ import { buildFilamentMapArgs } from './filament-map-args.js'
 // The separator is load-bearing, not cosmetic: BambuStudio parses `--filament-map` as a
 // ConfigOptionInts, which splits on COMMAS only. Passing the space- or semicolon-joined form
 // (the shape the 3MF's per-plate `filament_maps` metadata uses) parses to a ONE-entry vector,
-// and the manual-mode check then reads `filament_maps[i]` out of bounds — the slice aborts with
+// and the manual-mode check then reads `filament_maps[i]` out of bounds: the slice aborts with
 // "filament Sup.PLA can not be printed on extruder 21840". Verified against 2.7.1.62.
 test('buildFilamentMapArgs joins the assignment with commas, one entry per filament', () => {
   assert.deepEqual(buildFilamentMapArgs(['1', '2']), ['--filament-map', '1,2'])

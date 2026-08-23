@@ -76,7 +76,7 @@ bridgeRuntimeRouter.get('/release-assets/:fileName', async (request, response) =
     fileName: request.params.fileName
   })
   response.type(asset.contentType)
-  // By name under the releases dir — an absolute path 404s when the install
+  // By name under the releases dir, an absolute path 404s when the install
   // lives under a dot-directory. `resolveBridgeReleaseAsset` has already
   // validated the name and confined it to that directory.
   sendFileFromDir(response, env.BRIDGE_RELEASES_DIR, path.basename(asset.filePath))
@@ -116,7 +116,7 @@ function buildRegistrationResponse(bridge: RegisteredBridgeRow, runtimeToken: st
       id: bridge.id,
       name: bridge.name,
       // A managed auto-pair attaches the bridge already, so the connect code is
-      // moot — withhold it so the bridge skips the pairing lifecycle.
+      // moot, withhold it so the bridge skips the pairing lifecycle.
       connectCode: autoPaired ? null : bridge.connectCode,
       printerCount: bridge._count.printers,
       lastSeenAt: bridge.lastSeenAt?.toISOString() ?? null,
@@ -150,6 +150,10 @@ function buildBridgeMetadataRefresh(parsed: BridgeRuntimeRegistrationRequest, no
     sourceFingerprint: parsed.sourceFingerprint ?? null,
     ...(parsed.protocolVersion != null ? { protocolVersion: parsed.protocolVersion } : {}),
     ...(parsed.runnerAbiVersion ? { runnerAbiVersion: parsed.runnerAbiVersion } : {}),
+    // Spread like the fields above: absent means the bridge predates the field, which must stay
+    // NULL ("unknown") rather than overwrite a known value with a guess.
+    ...(parsed.platform ? { platform: parsed.platform } : {}),
+    ...(parsed.arch ? { arch: parsed.arch } : {}),
     updateChannel: parsed.updateChannel,
     updateStatus: null,
     latestAvailableVersion: null,
@@ -197,7 +201,7 @@ bridgeRuntimeRouter.post('/register', async (request, response) => {
   }
 
   // No valid credentials were presented. Before minting a new bridge, see whether
-  // this physical install is already known by its durable installationId — if so,
+  // this physical install is already known by its durable installationId: if so,
   // re-bind it to that existing record (re-issuing a runtime token) so it keeps its
   // printers and library instead of stranding them under a duplicate. This is what
   // lets a bridge whose credentials were reset (e.g. pointed at a different
@@ -239,6 +243,8 @@ bridgeRuntimeRouter.post('/register', async (request, response) => {
       sourceFingerprint: parsed.sourceFingerprint,
       protocolVersion: parsed.protocolVersion,
       runnerAbiVersion: parsed.runnerAbiVersion,
+      ...(parsed.platform ? { platform: parsed.platform } : {}),
+      ...(parsed.arch ? { arch: parsed.arch } : {}),
       updateChannel: parsed.updateChannel,
       lastUpdateCheckAt: now,
       lastSeenAt: now

@@ -2,12 +2,12 @@
  * Core reader for the private marketing route-path manifest.
  *
  * Discovers the leaf `marketingRoutes.ts` from any private module via `import.meta.glob`
- * (eager — but leaf-only, so it pulls in NO view/Joy/chart code), letting the app entry
+ * (eager, but leaf-only, so it pulls in NO view/Joy/chart code), letting the app entry
  * (`src/Root.tsx`) decide marketing-vs-app on a cold load without importing the app shell,
  * the plugin graph, or `@mui/x-charts`.
  *
  * In the open-source build there is no `src/private`, so the glob is empty and
- * `marketingRoutePaths` is `[]` — `Root` then always loads the app (today's behavior).
+ * `marketingRoutePaths` is `[]`: `Root` then always loads the app (today's behavior).
  */
 const manifestModules = import.meta.glob('../private/*/marketingRoutes.ts', { eager: true }) as Record<
   string,

@@ -4,12 +4,12 @@
  * The Docker stack applies migrations with the Prisma **CLI** (see
  * `scripts/bootstrap-prisma-migrations.mjs`: `migrate deploy`, with `db push` +
  * baseline recovery for messy/pre-history databases). The native single-file
- * (SEA) self-hosted build has no CLI in the bundle — only the embedded query
- * engine and the tracked migration SQL — so it needs an applier that talks to
+ * (SEA) self-hosted build has no CLI in the bundle, only the embedded query
+ * engine and the tracked migration SQL, so it needs an applier that talks to
  * Postgres directly. This module is that applier.
  *
  * The checked-in history **replays from empty**: `00000000000000_init` is the
- * whole schema, so provisioning is not a special case — a fresh database simply
+ * whole schema, so provisioning is not a special case, a fresh database simply
  * applies every migration in order, like any other. That leaves two branches:
  *
  * - **Fresh or existing database**: forward-apply only migrations not yet
@@ -23,18 +23,18 @@
  * name migrations that no longer exist on disk, which would otherwise leave the
  * history permanently disagreeing with the directory (and blocks the Prisma CLI
  * outright when one of them is a FAILED row). It rewrites such a history to the
- * single init row, running no SQL — the schema those migrations produced is by
+ * single init row, running no SQL: the schema those migrations produced is by
  * construction what init produces.
  *
  * Each step records a Prisma-compatible row (same table shape, same sha256
  * checksum) so the embedded database stays compatible with the Docker stack's
  * later `prisma migrate deploy`. It has **no** destructive `db push` /
- * failed-state recovery branches — it expects a clean or already-migrated
+ * failed-state recovery branches, it expects a clean or already-migrated
  * cluster; messy-database recovery stays a Docker-only concern.
  *
  * SQL is executed via node-postgres' simple query protocol (a single string with
  * no bind params), which runs multi-statement files and handles the dollar-quoted
- * PL/pgSQL function bodies several of our stats migrations use — both of which the
+ * PL/pgSQL function bodies several of our stats migrations use, both of which the
  * Prisma client's extended-protocol `$executeRaw` cannot do.
  */
 import { createHash, randomUUID } from 'node:crypto'
@@ -107,7 +107,7 @@ export function migrationChecksum(sql: Buffer | string): string {
 
 /**
  * Reads every migration directory (those containing a `migration.sql`) sorted by
- * name — the same lexical order Prisma applies them in. Uses
+ * name, the same lexical order Prisma applies them in. Uses
  * `listCheckedInMigrationNames`-style sorting so the two appliers can't diverge.
  */
 export function listMigrationFiles(migrationsDir = defaultMigrationsDir()): MigrationFile[] {
@@ -214,7 +214,7 @@ async function baselineExistingSchema(client: Client, all: MigrationFile[]): Pro
  * contains, so the history is rewritten rather than replayed.
  *
  * Deliberately reads rows regardless of `finished_at`, so a FAILED row for a
- * retired migration is cleared too — a failed row blocks `prisma migrate deploy`
+ * retired migration is cleared too, a failed row blocks `prisma migrate deploy`
  * permanently (P3009), and leaving one behind would strand the Docker stack on
  * a database this applier had otherwise brought up to date.
  *
@@ -259,7 +259,7 @@ export async function reconcileMigrationHistory(
 
 /**
  * Brings the database at `databaseUrl` up to the checked-in schema by
- * forward-applying migrations it has not recorded — on a fresh database that is
+ * forward-applying migrations it has not recorded, on a fresh database that is
  * the whole history, starting with init. A schema present without any history is
  * baseline-marked instead of replayed. Idempotent: a second call with no new
  * migrations is a no-op. Throws on the first failing migration (its transaction
@@ -277,7 +277,7 @@ export async function applyPendingMigrations(options: ApplyMigrationsOptions): P
     const collapsedLegacyRows = await reconcileMigrationHistory(client, all, log)
     const appliedNames = await readAppliedMigrationNames(client)
 
-    // Schema but no history — restored from a dump, or provisioned with
+    // Schema but no history: restored from a dump, or provisioned with
     // `db push`. Replaying init would fail on tables that already exist, so
     // record the history instead of running it.
     if (appliedNames.size === 0 && await hasAppSchema(client)) {

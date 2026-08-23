@@ -6,8 +6,8 @@
  * volumes between Bambu's filament colours and prefers a table hit. The gap is large (a mean 80 mm3
  * and up to +286 mm3 on the standard table, always over-purging), so a calculator without them
  * would quietly tell users to waste filament while disagreeing with the numbers Bambu Studio shows
- * for the same project. Serving them from the slicer image — where they already sit under the
- * engine's AGPL attribution and corresponding-source offer (`THIRD-PARTY-SLICERS.md`) — keeps them
+ * for the same project. Serving them from the slicer image, where they already sit under the
+ * engine's AGPL attribution and corresponding-source offer (`THIRD-PARTY-SLICERS.md`), keeps them
  * out of our source tree AND means they track whichever BambuStudio actually slices, instead of
  * going stale at whatever version someone copied. Same reasoning as `bed-model.ts`.
  *
@@ -35,7 +35,7 @@ const SAFE_DATASET_PATH = /^flush\/[A-Za-z0-9._-]+\.txt$/
 /**
  * Read every measured table this slicer image ships.
  *
- * Returns an empty record when the engine has no resources directory or ships no tables — a
+ * Returns an empty record when the engine has no resources directory or ships no tables, a
  * supported state, not an error: the calculator falls back to Studio's colour formula, exactly as
  * Studio does when its own data file is missing.
  */
@@ -47,7 +47,7 @@ export async function readFlushDatasets(appDir: string | null | undefined): Prom
     try {
       out[code] = await readFile(path.join(appDir, 'resources', relativePath), 'utf8')
     } catch {
-      // A missing table is normal — older engines ship fewer of them.
+      // A missing table is normal: older engines ship fewer of them.
     }
   }))
   return out

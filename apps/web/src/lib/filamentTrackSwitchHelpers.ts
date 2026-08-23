@@ -3,7 +3,7 @@
  * card chip and the controls-dialog section. Pure formatting only.
  *
  * The SEMANTICS (readiness, reachability, which extruder an input feeds) live in
- * `@printstream/shared`'s `filament-track-switch.ts` — this module only turns
+ * `@printstream/shared`'s `filament-track-switch.ts`, this module only turns
  * them into words, so a rule cannot drift between the UI and the API. The data
  * comes from `PrinterStatus.filamentTrackSwitch`, which is `null` on every
  * machine without the module, so callers must null-check first.
@@ -19,7 +19,7 @@ import { amsUnitLetter } from './printerTrayMapping'
 
 /**
  * Where an input's filament comes from, e.g. `AMS B · Slot 3`. `null` when
- * nothing is docked to that input — rendered as "Not connected" rather than
+ * nothing is docked to that input: rendered as "Not connected" rather than
  * omitted, because an empty input is a real state the user may need to fix.
  */
 export function formatSwitchInputSource(slot: { amsId: number; slotId: number } | null): string | null {
@@ -74,7 +74,7 @@ export interface FilamentTrackSwitchInputRow {
 
 /**
  * Build both input rows in a fixed A-then-B order. Deliberately NOT the wire
- * order — `fila_switch.in`/`out` are B-first (see the parser), and surfacing
+ * order: `fila_switch.in`/`out` are B-first (see the parser), and surfacing
  * that ordering quirk to the user would be meaningless.
  */
 export function buildFilamentTrackSwitchRows(

@@ -196,7 +196,7 @@ export async function reserveTrackedPrintJobStart(input: {
 /**
  * Reserve a tracked row, then run `publish()` (the actual start-command send).
  * On success returns the jobId; if `publish()` returns false the reserved row
- * is immediately failed and `null` is returned — so a start that never left the
+ * is immediately failed and `null` is returned, so a start that never left the
  * building leaves a `failed` row rather than a phantom `unknown` one.
  */
 export async function startTrackedPrintJob(input: {
@@ -1111,7 +1111,7 @@ async function activateExternalPrintJob(input: {
       }
       if (matchedLibraryFile && matchedLibraryFile.id !== existing.fileId) {
         // An external print (started off PrintStream) was just attributed to a library
-        // file for the first time — count it toward that file's print history.
+        // file for the first time: count it toward that file's print history.
         await bumpLibraryFilePrintStats(matchedLibraryFile.id, new Date())
       }
       if (matchedLibraryFile && (!existing.thumbnailPath || matchedLibraryFile.id !== existing.fileId)) {
