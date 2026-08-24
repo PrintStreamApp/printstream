@@ -19,6 +19,7 @@ import { choosePlateStripOrientation, EDITOR_GRID_GAP_PX } from './lib/editorChr
 import { useQuery } from '@tanstack/react-query'
 import type { LibraryFile, LibraryThreeMfScene, ThreeMfIndex } from '@printstream/shared'
 import * as THREE from 'three'
+import { createWebglRenderer } from './lib/webglRenderer'
 import { OrbitControls } from 'three-stdlib'
 import { apiFetch } from '../../lib/apiClient'
 import { buildApiUrl } from '../../lib/apiUrl'
@@ -312,7 +313,7 @@ export function PreviewView(props: Record<string, unknown>) {
     // per-fragment cost when the toolpath mesh runs to millions of double-sided triangles.
     let renderer: THREE.WebGLRenderer
     try {
-      renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: isThreeMfScene })
+      renderer = createWebglRenderer({ antialias: true, logarithmicDepthBuffer: isThreeMfScene })
     } catch {
       // The browser refused a context (blocked after repeated loss, GPU process still recovering,
       // or out of contexts). Distinct from a mid-session loss: retrying cannot help.

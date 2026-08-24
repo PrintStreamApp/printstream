@@ -11,6 +11,7 @@
  * group's geometry/materials: the caller keeps and disposes those.
  */
 import * as THREE from 'three'
+import { createWebglRenderer } from './webglRenderer'
 import { BAMBU_THREE_MF_ISO_UP, BAMBU_THREE_MF_ISO_VIEW } from './viewCube'
 
 const THUMBNAIL_SIZE = 256
@@ -30,7 +31,7 @@ export interface PlateThumbnailRenderer {
 export function createPlateThumbnailRenderer(): PlateThumbnailRenderer {
   // Transparent background + model-only framing, to match BambuStudio's clean plate thumbnails
   // (no bed, no background) rather than a screenshot of the editor scene.
-  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true })
+  const renderer = createWebglRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true })
   renderer.setPixelRatio(1)
   renderer.setSize(THUMBNAIL_SIZE, THUMBNAIL_SIZE)
   renderer.setClearColor(0x000000, 0)

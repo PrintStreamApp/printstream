@@ -12,6 +12,7 @@
  * Keep this free of React/plugin coupling so it stays a pure rendering toolkit.
  */
 import * as THREE from 'three'
+import { createWebglRenderer } from './webglRenderer'
 
 export const BAMBU_THREE_MF_ISO_VIEW = { x: -0.5, y: -0.5, z: Math.SQRT1_2 } as const
 export const BAMBU_THREE_MF_ISO_UP = { x: 0, y: 0, z: 1 } as const
@@ -169,7 +170,7 @@ export function createViewCube(
   container: HTMLElement,
   onSelectPreset: (preset: Exclude<ViewPreset, 'iso'>) => void
 ): ViewCubeHandle {
-  const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true })
+  const renderer = createWebglRenderer({ alpha: true, antialias: true })
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
   renderer.setSize(VIEW_CUBE_SIZE, VIEW_CUBE_SIZE)
   renderer.setClearColor(0x000000, 0)

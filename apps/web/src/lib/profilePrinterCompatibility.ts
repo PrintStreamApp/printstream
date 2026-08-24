@@ -13,16 +13,55 @@
  *
  * Depends only on `@printstream/shared` and the printer-model alias table, and must stay that way:
  * anything it imports becomes importable by the resolver.
+ *
+ * EVERYTHING HERE IS MEMOIZED, because this runs over the WHOLE filament catalogue on a hot path.
+ * `SliceFileModal`'s `compatibleFilamentProfiles` filters ~2,100 installed presets, and a CPU
+ * profile of the editor sitting idle put ~43% of all non-idle samples in this file's three string
+ * helpers -- one evaluation of that filter measured 32 ms, of which 31 ms was
+ * `extractProfilePrinterTargets`. The work was almost entirely re-derivation: the alias candidates
+ * for the 14 known models were rebuilt for every (profile x target) pair, and the same preset names
+ * were re-normalized thousands of times per pass. Nothing here depends on anything but its
+ * arguments, so all of it caches.
+ *
+ * THE CACHES ASSUME PRESET DTOs ARE IMMUTABLE. They come from the React Query cache, which treats
+ * its data as immutable, so a `SlicingPresetSummary` is never edited in place -- a re-fetch produces
+ * a new object. Mutating one after it has been asked about would return stale targets. Revisit if
+ * presets ever become editable in place rather than replaced.
+ *
+ * The cached arrays are shared with every caller and MUST BE TREATED AS READ-ONLY.
  */
 import type { SlicingPresetSummary } from '@printstream/shared'
 import { KNOWN_BAMBU_PRINTER_MODEL_KEYS, bambuModelKeysAreCompatible, canonicalBambuModelKey, resolveBambuPrinterModelAliases } from './bambuPrinterModels'
 
+/**
+ * Cap for the string-keyed caches below.
+ *
+ * The real input set is bounded (preset and machine names, a few thousand at most), but these are
+ * exported helpers and nothing stops a caller passing free text, so the caches drop everything
+ * rather than grow without limit. A clear costs one repopulating pass, which is the same work the
+ * cache existed to save -- acceptable at a ceiling an ordinary catalogue never reaches.
+ */
+const MAX_TEXT_CACHE_ENTRIES = 20_000
+
+const normalizedTextCache = new Map<string, string>()
+const compactTextCache = new Map<string, string>()
+
 export function normalizedProfileText(value: string): string {
-  return value.toLowerCase().replace(/bambu\s+lab/g, '').replace(/[^a-z0-9.]+/g, ' ').trim()
+  const cached = normalizedTextCache.get(value)
+  if (cached !== undefined) return cached
+  const normalized = value.toLowerCase().replace(/bambu\s+lab/g, '').replace(/[^a-z0-9.]+/g, ' ').trim()
+  if (normalizedTextCache.size >= MAX_TEXT_CACHE_ENTRIES) normalizedTextCache.clear()
+  normalizedTextCache.set(value, normalized)
+  return normalized
 }
 
 export function compactProfileText(value: string): string {
-  return normalizedProfileText(value).replace(/\s+/g, '')
+  const cached = compactTextCache.get(value)
+  if (cached !== undefined) return cached
+  const compacted = normalizedProfileText(value).replace(/\s+/g, '')
+  if (compactTextCache.size >= MAX_TEXT_CACHE_ENTRIES) compactTextCache.clear()
+  compactTextCache.set(value, compacted)
+  return compacted
 }
 
 export function profileTextCandidates(value: string): string[] {
@@ -58,9 +97,18 @@ export function textCandidatesMatch(a: string, b: string): boolean {
   return tokenBoundaryIncludes(a, b) || tokenBoundaryIncludes(b, a)
 }
 
+const NO_TEXT_CANDIDATES: string[] = []
+const modelTextCandidateCache = new Map<string, string[]>()
+
+/** Read-only: the returned array is shared with every other caller for the same model. */
 export function printerModelTextCandidates(model: string): string[] {
-  if (model === 'unknown') return []
-  return Array.from(new Set(resolveBambuPrinterModelAliases(model).flatMap(profileTextCandidates)))
+  if (model === 'unknown') return NO_TEXT_CANDIDATES
+  const cached = modelTextCandidateCache.get(model)
+  if (cached !== undefined) return cached
+  const candidates = Array.from(new Set(resolveBambuPrinterModelAliases(model).flatMap(profileTextCandidates)))
+  if (modelTextCandidateCache.size >= MAX_TEXT_CACHE_ENTRIES) modelTextCandidateCache.clear()
+  modelTextCandidateCache.set(model, candidates)
+  return candidates
 }
 
 export function printerModelCompatibleTextCandidates(model: string): string[] {
@@ -73,11 +121,24 @@ export function printerModelCompatibleTextCandidates(model: string): string[] {
   return Array.from(new Set([...baseCandidates, ...familyModels.flatMap(profileTextCandidates)]))
 }
 
+/**
+ * One-entry memo. The selected machine and model are FIXED across a catalogue filter, so this was
+ * being rebuilt identically once per preset -- 2,100 times per pass, twice each (once for
+ * `matchesCompatiblePrinters` and once for `matchesProfilePrinterTarget`).
+ */
+let lastSelectedTargets: { profile: SlicingPresetSummary | null; model: string; targets: string[] } | null = null
+
+/** Read-only: the returned array is shared with every caller for the same (machine, model) pair. */
 export function selectedPrinterCompatibilityTargets(selectedMachineProfile: SlicingPresetSummary | null, model: string): string[] {
-  return Array.from(new Set([
+  if (lastSelectedTargets && lastSelectedTargets.profile === selectedMachineProfile && lastSelectedTargets.model === model) {
+    return lastSelectedTargets.targets
+  }
+  const targets = Array.from(new Set([
     ...(selectedMachineProfile ? [selectedMachineProfile.name, ...(selectedMachineProfile.printerModels ?? [])].flatMap(profileTextCandidates) : []),
     ...printerModelCompatibleTextCandidates(model)
   ]))
+  lastSelectedTargets = { profile: selectedMachineProfile, model, targets }
+  return targets
 }
 
 export function profileTargetMatchesSelectedPrinter(target: string, selectedTargets: string[]): boolean {
@@ -129,7 +190,35 @@ export function extractQuotedCompatibilityTargets(value: string | null | undefin
   return Array.from(value.matchAll(/["']([^"']+)["']/g), (match) => match[1]?.trim() ?? '').filter(Boolean)
 }
 
+/**
+ * Alias candidates for every known model, derived once.
+ *
+ * Was `KNOWN_BAMBU_PRINTER_MODEL_KEYS.flatMap(...)` INSIDE the per-target loop below, so the whole
+ * 14-model table was rebuilt for every declared target of every preset in the catalogue.
+ */
+let knownModelAliasCandidates: string[][] | null = null
+
+function knownModelAliases(): string[][] {
+  knownModelAliasCandidates ??= KNOWN_BAMBU_PRINTER_MODEL_KEYS.map((model) => printerModelTextCandidates(model))
+  return knownModelAliasCandidates
+}
+
+/**
+ * Keyed on the preset OBJECT, which is safe only because preset DTOs are immutable (see the module
+ * header). Weak so a stale catalogue is collectable rather than pinned for the session.
+ */
+const profileTargetCache = new WeakMap<SlicingPresetSummary, string[]>()
+
+/** Read-only: the returned array is shared with every caller asking about this preset. */
 export function extractProfilePrinterTargets(profile: SlicingPresetSummary): string[] {
+  const cached = profileTargetCache.get(profile)
+  if (cached !== undefined) return cached
+  const targets = computeProfilePrinterTargets(profile)
+  profileTargetCache.set(profile, targets)
+  return targets
+}
+
+function computeProfilePrinterTargets(profile: SlicingPresetSummary): string[] {
   const explicitTargets = [
     profile.name,
     ...(profile.printerModels ?? []),
@@ -143,10 +232,9 @@ export function extractProfilePrinterTargets(profile: SlicingPresetSummary): str
 
   const matches = explicitTargets.flatMap((target) => {
     const normalized = normalizedProfileText(target)
-    return KNOWN_BAMBU_PRINTER_MODEL_KEYS.flatMap((model) => {
-      const aliases = printerModelTextCandidates(model)
-      return aliases.some((candidate) => hasProfileToken(normalized, candidate)) ? aliases : []
-    })
+    return knownModelAliases().flatMap((aliases) => (
+      aliases.some((candidate) => hasProfileToken(normalized, candidate)) ? aliases : []
+    ))
   })
   return Array.from(new Set(matches))
 }

@@ -58,39 +58,110 @@ export * from './restore-filament-physics.js'
 export * from './inherits-group.js'
 export * from './object-extruder.js'
 
+/** One flagged defect, and whether the Repair action can actually fix it. */
+export interface SettingsRepair {
+  reason: ThreeMfSettingsRepairReason
+  /**
+   * False when the inspector flagged the defect but its repair DECLINES the shape: the value
+   * cannot be derived with certainty, so the never-guess rule leaves it alone. Reporting it is
+   * still right (the file is broken), but offering a Repair button is not, because pressing it
+   * writes a new library version, changes nothing, and brings the banner straight back.
+   */
+  repairable: boolean
+}
+
 /**
- * Every repairable defect this project carries, in no particular order. Empty means nothing to
- * repair, which is also the answer for a project with no readable settings, since those are
- * unaffected rather than broken.
+ * Every defect this project carries, with whether each one can be repaired.
+ *
+ * OWNS the repairability signal, which each inspector already computes and this seam used to
+ * discard: only the reason names reached the wire, so the UI could not tell a fixable defect from
+ * one it should send the user to fix by hand (issue #101).
+ *
+ * PER REASON, not per file, and that is the load-bearing part: a project can carry a repairable
+ * and an unrepairable defect at once, and collapsing them to one flag would either strand the
+ * fixable one or promise a fix for the other.
+ *
+ * Empty means nothing to repair, which is also the answer for a project with no readable settings,
+ * since those are unaffected rather than broken.
  *
  * `modelSettingsXml` is optional because not every caller holds the raw document (printer-SD
  * indexes pass none): omitting it merely skips the model_settings-based invariants rather than
  * failing the settings-based ones.
  */
-export function collectSettingsRepairReasons(
+export function collectSettingsRepairs(
   projectSettingsJson: string | null | undefined,
   modelSettingsXml?: string | null
-): ThreeMfSettingsRepairReason[] {
-  const reasons: ThreeMfSettingsRepairReason[] = []
+): SettingsRepair[] {
+  const repairs: SettingsRepair[] = []
   // Flush sizing vs machine topology, two engine failures under one reason: an undersized
   // `flush_volumes_matrix` (BambuStudio reads the missing block out of bounds and segfaults
   // mid-slice, exit 139), and a `flush_multiplier` whose length the engine's g-code-time size
   // check rejects (exit 156, "Flush volumes matrix do not match to the correct size!").
-  if (inspectProjectFlushVolumesMatrix(projectSettingsJson)?.inconsistent === true) reasons.push('flushMatrix')
+  // Repairable whenever flagged: both sizes are derived from the machine topology, which the
+  // project always states.
+  if (inspectProjectFlushVolumesMatrix(projectSettingsJson)?.inconsistent === true) {
+    repairs.push({ reason: 'flushMatrix', repairable: true })
+  }
   // `filament_self_index` not matching the variant layout it is decoded against.
-  if (inspectProjectFilamentSelfIndex(projectSettingsJson)?.inconsistent === true) reasons.push('variantIndex')
+  const variantIndex = inspectProjectFilamentSelfIndex(projectSettingsJson)
+  if (variantIndex?.inconsistent === true) {
+    repairs.push({ reason: 'variantIndex', repairable: variantIndex.repairable })
+  }
   // A slot's `filament_ids` entry naming a different material from its preset: BambuStudio binds on
   // the id, so it fabricates a defaults-only project preset for the slot instead of opening it.
-  if (inspectProjectFilamentIds(projectSettingsJson)?.inconsistent === true) reasons.push('filamentIds')
+  // `inconsistent` already requires a slot whose correct id is KNOWN, so a flagged file always has
+  // something to fix; slots whose preset the catalogue cannot match ride in `unresolved` and are
+  // reported by the repair itself as a partial result.
+  if (inspectProjectFilamentIds(projectSettingsJson)?.inconsistent === true) {
+    repairs.push({ reason: 'filamentIds', repairable: true })
+  }
   // Named presets missing or malforming their values. Unlike the byte-level invariants this one is
   // repaired from RESOLVED PRESETS, not from the file alone: the editor's Repair resolves each
   // slot's preset and the bake writes the values back (`restore-filament-physics.ts`).
-  if (inspectProjectFilamentPhysics(projectSettingsJson)?.inconsistent === true) reasons.push('filamentPhysics')
+  if (inspectProjectFilamentPhysics(projectSettingsJson)?.inconsistent === true) {
+    repairs.push({ reason: 'filamentPhysics', repairable: true })
+  }
   // `inherits_group` not `filaments + 2` long, left by a save that changed the filament count. The
-  // CLI reads the filament names past their end and SIGSEGVs while LOADING (exit 139).
-  if (inspectProjectInheritsGroup(projectSettingsJson)?.inconsistent === true) reasons.push('inheritsGroup')
+  // CLI reads the filament names past their end and SIGSEGVs while LOADING (exit 139). NOT always
+  // repairable: an array too short to tell the process entry from the machine entry is left alone,
+  // because guessing would move a preset name into the wrong role.
+  const inheritsGroup = inspectProjectInheritsGroup(projectSettingsJson)
+  if (inheritsGroup?.inconsistent === true) {
+    repairs.push({ reason: 'inheritsGroup', repairable: inheritsGroup.repairable })
+  }
   // An object carrying only part-level `extruder` metadata: the CLI slices by the OBJECT-level
-  // entry, so the object silently prints with filament 1 instead of its assigned material.
-  if (inspectModelSettingsObjectExtruders(modelSettingsXml)?.inconsistent === true) reasons.push('objectExtruder')
-  return reasons
+  // entry, so the object silently prints with filament 1 instead of its assigned material. Every
+  // shape this flags has a derivable slot (see `object-extruder.ts`), so a flagged file is always
+  // clearable.
+  if (inspectModelSettingsObjectExtruders(modelSettingsXml)?.inconsistent === true) {
+    repairs.push({ reason: 'objectExtruder', repairable: true })
+  }
+  return repairs
+}
+
+/**
+ * Every defect this project carries, in no particular order.
+ *
+ * The reason-only view of {@link collectSettingsRepairs}, kept because it is what the cached wire
+ * field and every existing caller speak.
+ */
+export function collectSettingsRepairReasons(
+  projectSettingsJson: string | null | undefined,
+  modelSettingsXml?: string | null
+): ThreeMfSettingsRepairReason[] {
+  return collectSettingsRepairs(projectSettingsJson, modelSettingsXml).map((repair) => repair.reason)
+}
+
+/**
+ * The flagged defects whose repair would decline, so a surface can withhold an action that cannot
+ * work and name the manual remedy instead. Empty is the common case and also the honest answer for
+ * a project with nothing wrong.
+ */
+export function unrepairableSettingsRepairReasons(
+  projectSettingsJson: string | null | undefined,
+  modelSettingsXml?: string | null
+): ThreeMfSettingsRepairReason[] {
+  return collectSettingsRepairs(projectSettingsJson, modelSettingsXml)
+    .filter((repair) => !repair.repairable)
+    .map((repair) => repair.reason)
 }

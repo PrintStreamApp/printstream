@@ -847,6 +847,14 @@ export const bridgeLibraryThreeMfIndexSchema = z.object({
   /** Which invariants failed, so the repair prompt can name the user's actual problem. */
   settingsRepairReasons: z.array(threeMfSettingsRepairReasonSchema).default([]),
   /**
+   * The subset of {@link settingsRepairReasons} whose repair would DECLINE: the value cannot be
+   * derived with certainty, so the never-guess rule leaves it alone. A surface offering a Repair
+   * action withholds it for these and names the manual remedy, instead of writing a new version
+   * that changes nothing and brings the banner straight back. Absent from an older parser or
+   * bridge, which must read as "unknown", i.e. behave as before and assume repairable.
+   */
+  unrepairableSettingsRepairReasons: z.array(threeMfSettingsRepairReasonSchema).optional(),
+  /**
    * The Bambu Studio version that saved the project (zero-padded, e.g. `"02.08.00.50"`), or null
    * when unknown. BambuStudio refuses to open a project saved by a newer version than the engine
    * slicing it, so the slice dialog compares this against the chosen slicer target.

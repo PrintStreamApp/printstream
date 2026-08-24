@@ -30,6 +30,7 @@ function makeInput(overrides: Record<string, unknown> = {}) {
     activePlateRef: ref(plate),
     selectionKeysRef: ref([object.key]),
     onDuplicate: spy('duplicate'),
+    onCloneWithCount: spy('cloneWithCount'),
     onDelete: spy('delete'),
     onSelectAll: spy('selectAll'),
     onClearSelection: spy('clear'),
@@ -103,4 +104,26 @@ test('M/R/S switch the gizmo only with a selection', () => {
   input.selectedKeyRef.current = null
   press('s')
   assert.equal(calls.gizmo?.length, 1, 'no gizmo switch without a selection')
+})
+
+test('Ctrl+K clones with a count, and only with a selection', () => {
+  // BambuStudio's own binding (`KBShortcutsDialog.cpp`: ctrl + "K"). Distinct from Ctrl+D, which
+  // makes exactly one LINKED copy: Studio's clone prompts for a number and makes independent ones.
+  const { input, calls } = makeInput()
+  renderHook(() => useEditorKeyboardShortcuts(input))
+  const event = press('k', { ctrlKey: true })
+  assert.equal(calls.cloneWithCount?.length, 1)
+  assert.equal(calls.duplicate, undefined, 'Ctrl+K must not also fire the plain duplicate')
+  assert.equal(event.defaultPrevented, true, 'the browser default was left to fire')
+
+  input.selectedKeyRef.current = null
+  press('k', { ctrlKey: true })
+  assert.equal(calls.cloneWithCount?.length, 1, 'cloned with nothing selected')
+})
+
+test('a bare K is left to the viewport rather than cloning', () => {
+  const { input, calls } = makeInput()
+  renderHook(() => useEditorKeyboardShortcuts(input))
+  press('k')
+  assert.equal(calls.cloneWithCount, undefined)
 })

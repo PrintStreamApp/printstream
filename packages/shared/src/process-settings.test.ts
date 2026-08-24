@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
   FILAMENT_INDEX_PROCESS_KEYS,
+  PER_OBJECT_PROCESS_KEYS,
   applyProcessConfigDefaults,
   computeProcessFieldStates,
   defaultProcessVisibilityContext,
@@ -342,4 +343,26 @@ test('a process preset with no parent attributes nothing to the preset', async (
   const response = { config: { wall_loops: '3' }, baseConfig: { wall_loops: '3' }, overriddenKeys: [] }
   assert.deepEqual(resolvedProcessPresetOverrideKeys(response), [])
   assert.deepEqual(resolvedProcessModifiedKeys(response), [], 'a preset cannot differ from itself')
+})
+
+// A key here that the catalog does not carry renders NOTHING in the per-object panel: no control,
+// no error, no typecheck failure, because the list is plain strings. So the list and the catalog
+// have to be checked against each other rather than trusted.
+test('every per-object key resolves to a real catalog option', () => {
+  assert.ok(PER_OBJECT_PROCESS_KEYS.length > 0)
+  for (const key of PER_OBJECT_PROCESS_KEYS) {
+    assert.ok(processSettingsCatalog.options[key], `PER_OBJECT_PROCESS_KEYS names ${key}, which the catalog has no option for`)
+  }
+  assert.equal(new Set(PER_OBJECT_PROCESS_KEYS).size, PER_OBJECT_PROCESS_KEYS.length, 'duplicate key')
+})
+
+// BambuStudio offers these three on an OBJECT (its "Flush options" bundle writes them through
+// `select_object_config`), and the engine backs that up: they live in PrintObjectConfig, not the
+// global PrintConfig. Ours were global-only, so a user could not say "do not flush into THIS
+// object" the way Studio can.
+test('the flush-into options are available per object, as BambuStudio has them', () => {
+  for (const key of ['flush_into_infill', 'flush_into_objects', 'flush_into_support']) {
+    assert.ok(PER_OBJECT_PROCESS_KEYS.includes(key), `${key} should be overridable per object`)
+    assert.equal(processSettingsCatalog.options[key]?.type, 'bool')
+  }
 })

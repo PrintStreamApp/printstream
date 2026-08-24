@@ -35,6 +35,7 @@ import {
 } from './lib/supportPaint'
 import {
   PAINT_CHANNEL_SPECS,
+  TRIANGLE_PAINT_CHANNELS,
   effectivePaintTool,
   paintChannelForGizmoMode,
   type GizmoMode,
@@ -251,7 +252,7 @@ export function useEditorPaint(params: EditorPaintParams): EditorPaint {
         if (mesh.isMesh && mesh.userData.supportPaintPart) meshes.push(mesh)
       })
       for (const mesh of meshes) {
-        for (const channel of ['supports', 'seam', 'color'] as const) {
+        for (const channel of TRIANGLE_PAINT_CHANNELS) {
           setMeshPaintOverlay(mesh, channel, effectivePaintCodes(mesh, channel))
         }
       }

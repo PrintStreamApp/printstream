@@ -1,10 +1,11 @@
 /**
- * Right-click context menu for editor objects. Single object: duplicate / split /
+ * Right-click context menu for editor objects. Single object: duplicate / clone-with-a-count /
+ * split /
  * assemble, rename, replace from library or file, export (STL download / STL to library /
  * single-object 3MF project download or to library; items appear per granted library
  * permission), repair mesh, add part volumes
  * (negative/modifier/blocker), change material, object settings, centre / drop / reset /
- * mirror transforms, move to another plate, and delete. Multi-selection (the clicked
+ * mirror transforms, convert from inch or meter, move to another plate, and delete. Multi-selection (the clicked
  * object is a member): a reduced bulk menu (BambuStudio-style), duplicate, assemble,
  * export as STL (merged into one, or one file per object), change material, set
  * printable / skip, object settings, move to plate, delete, each applied to the
@@ -14,9 +15,10 @@
  * and the mutations. The menu closes itself after each action. The "Change material"
  * submenu swaps the menu content in place (see {@link ContextMenuBackItem}).
  */
-import { useState, type MutableRefObject } from 'react'
+import { Fragment, useState, type MutableRefObject } from 'react'
 import { ListDivider, ListItemDecorator, Menu, MenuItem } from '@mui/joy'
 import type { SceneEditPartSubtype } from '@printstream/shared'
+import { CONVERTIBLE_MODEL_UNITS, type ConvertibleModelUnit } from '@printstream/shared/three-mf'
 import AspectRatioRoundedIcon from '@mui/icons-material/AspectRatioRounded'
 import CallSplitRoundedIcon from '@mui/icons-material/CallSplitRounded'
 import CategoryRoundedIcon from '@mui/icons-material/CategoryRounded'
@@ -30,15 +32,19 @@ import FlipRoundedIcon from '@mui/icons-material/FlipRounded'
 import IosShareRoundedIcon from '@mui/icons-material/IosShareRounded'
 import LibraryAddRoundedIcon from '@mui/icons-material/LibraryAddRounded'
 import MergeTypeRoundedIcon from '@mui/icons-material/MergeTypeRounded'
+import OpenInFullRoundedIcon from '@mui/icons-material/OpenInFullRounded'
 import PaletteRoundedIcon from '@mui/icons-material/PaletteRounded'
 import PrintRoundedIcon from '@mui/icons-material/PrintRounded'
 import PrintDisabledRoundedIcon from '@mui/icons-material/PrintDisabledRounded'
+import AlignHorizontalLeftRoundedIcon from '@mui/icons-material/AlignHorizontalLeftRounded'
 import AutoFixHighRoundedIcon from '@mui/icons-material/AutoFixHighRounded'
+import StraightenRoundedIcon from '@mui/icons-material/StraightenRounded'
 import SwapHorizRoundedIcon from '@mui/icons-material/SwapHorizRounded'
 import ThreeSixtyRoundedIcon from '@mui/icons-material/ThreeSixtyRounded'
 import TuneRoundedIcon from '@mui/icons-material/TuneRounded'
 import VerticalAlignBottomRoundedIcon from '@mui/icons-material/VerticalAlignBottomRounded'
 import { ADDED_PART_SUBTYPES, addedPartLabel } from './lib/addedParts'
+import { ALIGN_DISTRIBUTE_OPERATIONS, minimumMembersFor, type AlignDistributeOperation } from './lib/alignDistribute'
 import type { PrimitiveKind } from './lib/primitives'
 import { CONTEXT_MENU_POPPER_MODIFIERS, CONTEXT_MENU_SX } from './contextMenuChrome'
 import { AddPartSourceMenuItems, ContextMenuBackItem, FilamentMenuItems } from './contextMenuItems'
@@ -56,6 +62,8 @@ type MenuView =
   | { kind: 'material' }
   | { kind: 'export' }
   | { kind: 'addPart'; subtype: SceneEditPartSubtype }
+  | { kind: 'align' }
+  | { kind: 'split' }
 
 export interface EditorContextMenuProps {
   /** Open position + the right-clicked object's instance key. */
@@ -72,11 +80,26 @@ export interface EditorContextMenuProps {
   onDuplicate: (key: string) => void
   /** Independent copy (BambuStudio's Ctrl+C/V): a new object that diverges from the source. */
   onDuplicateIndependent: (key: string) => void
+  /**
+   * BambuStudio's "Clone" (Ctrl+K): prompt for a count and make that many independent copies.
+   * Independent, not linked, because Studio's clone is copy-then-paste-N-times.
+   */
+  onCloneWithCount: (key: string) => void
+  /**
+   * Align or distribute the selection (BambuStudio's Align/Distribute submenu). Multi-selection
+   * only: aligning one object to itself is a no-op, which is why the row does not appear for one.
+   */
+  onAlignDistribute: (operation: AlignDistributeOperation) => void
   /** Unlink this copy from the others. Absent when the model has no other copies. */
   onMakeIndependent?: (key: string) => void
   /** Rename the object (single selection only): the object list rows have no rename shortcut. */
   onRename: (key: string) => void
   onSplitToObjects: (key: string) => void
+  /**
+   * BambuStudio's "Split -> To parts": the same connected-shell split, but the shells stay inside
+   * ONE object as its parts instead of becoming objects of their own.
+   */
+  onSplitToParts: (key: string) => void
   /** Whether the "Assemble N objects" item shows (a multi-selection includes this object). */
   canAssemble: boolean
   assembleCount: number
@@ -139,6 +162,17 @@ export interface EditorContextMenuProps {
   onResetRotation: () => void
   onResetScale: () => void
   onMirror: (axis: Axis) => void
+  /**
+   * BambuStudio's "Convert from inch" / "Convert from meter": rescale a model whose author worked
+   * in another unit. Applies to the whole selection, as Studio's does, which is why it takes no key.
+   */
+  onConvertUnits: (unit: ConvertibleModelUnit) => void
+  /**
+   * BambuStudio's "Scale to print volume": one uniform factor so the selection fits the machine,
+   * height included. Omitted when the project states no printable height, which hides the row
+   * rather than offering a fit that could only be checked in X and Y.
+   */
+  onScaleToPrintVolume?: () => void
   /** Plates other than the active one (for the move-to-plate items). */
   otherPlates: Array<{ index: number }>
   onMoveToPlate: (key: string, plateIndex: number) => void
@@ -146,13 +180,13 @@ export interface EditorContextMenuProps {
 }
 
 export function EditorContextMenu({
-  contextMenu, listboxRef, onClose, selectionCount, onDuplicate, onDuplicateIndependent, onMakeIndependent, onRename, onSplitToObjects, canAssemble,
-  assembleCount, onAssemble, onReplaceFromLibrary, onReplaceFromFile, onExportDownload, onExportToLibrary,
+  contextMenu, listboxRef, onClose, selectionCount, onDuplicate, onDuplicateIndependent, onCloneWithCount, onAlignDistribute, onMakeIndependent, onRename, onSplitToObjects, canAssemble,
+  assembleCount, onAssemble, onSplitToParts, onReplaceFromLibrary, onReplaceFromFile, onExportDownload, onExportToLibrary,
   onExportProjectDownload, onExportProjectToLibrary, onExportMergedDownload, onExportMergedToLibrary, onExportSeparateDownload,
   onExportSeparateToLibrary, canRepair, onRepairMesh,
   isRepairMarked, onAddPartVolume, onAddPartFromFile, onAddPartFromLibrary,
   filamentOptions, onChangeMaterial, onSetPrintable, printable, onEditObjectSettings, onCenterOnPlate,
-  onDropToBed, onResetRotation, onResetScale, onMirror, otherPlates, onMoveToPlate, onDelete
+  onDropToBed, onResetRotation, onResetScale, onMirror, onConvertUnits, onScaleToPrintVolume, otherPlates, onMoveToPlate, onDelete
 }: EditorContextMenuProps) {
   const { key } = contextMenu
   const [view, setView] = useState<MenuView>({ kind: 'root' })
@@ -179,6 +213,29 @@ export function EditorContextMenu({
     <MenuItem onClick={() => { onSetPrintable(!printable); onClose() }}>
       <ListItemDecorator>{printable ? <PrintDisabledRoundedIcon /> : <PrintRoundedIcon />}</ListItemDecorator>
       {printable ? 'Skip printing' : 'Set printable'}
+    </MenuItem>
+  )
+  /**
+   * BambuStudio carries these in the object, part AND multi-selection menus, so they sit outside
+   * the single/multi branch here too. The suffix names the whole selection for the same reason
+   * every other bulk row does: a 25.4x rescale of five objects should not read as one.
+   */
+  const scaleToPrintVolumeItem = onScaleToPrintVolume && (
+    <MenuItem onClick={() => { onScaleToPrintVolume(); onClose() }}>
+      <ListItemDecorator><OpenInFullRoundedIcon /></ListItemDecorator>
+      Scale to print volume{suffix}
+    </MenuItem>
+  )
+  const convertUnitItems = CONVERTIBLE_MODEL_UNITS.map((unit) => (
+    <MenuItem key={`convert-${unit}`} onClick={() => { onConvertUnits(unit); onClose() }}>
+      <ListItemDecorator><StraightenRoundedIcon /></ListItemDecorator>
+      Convert from {unit}{suffix}
+    </MenuItem>
+  ))
+  const cloneItem = (
+    <MenuItem onClick={() => { onClose(); onCloneWithCount(key) }}>
+      <ListItemDecorator><ContentCopyRoundedIcon /></ListItemDecorator>
+      Clone{suffix}…
     </MenuItem>
   )
   const objectSettingsItem = onEditObjectSettings && (
@@ -229,6 +286,38 @@ export function EditorContextMenu({
             onPickFile={() => { onClose(); onAddPartFromFile(key, view.subtype) }}
             onPickLibrary={onAddPartFromLibrary ? () => { onClose(); onAddPartFromLibrary(key, view.subtype) } : undefined}
           />
+        </>
+      ) : view.kind === 'split' ? (
+        <>
+          <ContextMenuBackItem label="Split" onBack={() => setView({ kind: 'root' })} />
+          <ListDivider />
+          <MenuItem onClick={() => { onSplitToObjects(key); onClose() }}>
+            <ListItemDecorator><CallSplitRoundedIcon /></ListItemDecorator>
+            To objects
+          </MenuItem>
+          <MenuItem onClick={() => { onSplitToParts(key); onClose() }}>
+            <ListItemDecorator><CallSplitRoundedIcon /></ListItemDecorator>
+            To parts
+          </MenuItem>
+        </>
+      ) : view.kind === 'align' ? (
+        <>
+          <ContextMenuBackItem label={`Align/Distribute${suffix}`} onBack={() => setView({ kind: 'root' })} />
+          <ListDivider />
+          {ALIGN_DISTRIBUTE_OPERATIONS.map((operation, index) => (
+            <Fragment key={operation.id}>
+              {/* Studio's own grouping: the three distribute rows, then one block per axis. A
+                  Fragment, not a wrapper element: Joy's Menu walks its children for keyboard
+                  navigation and a div between it and the MenuItems breaks arrow-key focus. */}
+              {index > 0 && index % 3 === 0 && <ListDivider />}
+              <MenuItem
+                disabled={selectionCount < minimumMembersFor(operation)}
+                onClick={() => { onAlignDistribute(operation); onClose() }}
+              >
+                {operation.label}
+              </MenuItem>
+            </Fragment>
+          ))}
         </>
       ) : view.kind === 'export' ? (
         multi ? (
@@ -302,6 +391,7 @@ export function EditorContextMenu({
             <ListItemDecorator><ContentCopyRoundedIcon /></ListItemDecorator>
             Duplicate as independent copies{suffix}
           </MenuItem>
+          {cloneItem}
           {canAssemble && (
             <MenuItem onClick={() => { onAssemble(); onClose() }}>
               <ListItemDecorator><MergeTypeRoundedIcon /></ListItemDecorator>
@@ -333,6 +423,12 @@ export function EditorContextMenu({
             <ListItemDecorator><CenterFocusStrongRoundedIcon /></ListItemDecorator>
             Center on plate{suffix}
           </MenuItem>
+          <MenuItem onClick={(event) => { event.stopPropagation(); setView({ kind: 'align' }) }}>
+            <ListItemDecorator><AlignHorizontalLeftRoundedIcon /></ListItemDecorator>
+            Align/Distribute…
+          </MenuItem>
+          {scaleToPrintVolumeItem}
+          {convertUnitItems}
           {moveToPlateItems}
           <ListDivider />
           {deleteItem}
@@ -347,6 +443,7 @@ export function EditorContextMenu({
             <ListItemDecorator><ContentCopyRoundedIcon /></ListItemDecorator>
             Duplicate as independent copy
           </MenuItem>
+          {cloneItem}
           {onMakeIndependent && (
             <MenuItem onClick={() => { onMakeIndependent(key); onClose() }}>
               <ListItemDecorator><CallSplitRoundedIcon /></ListItemDecorator>
@@ -357,9 +454,9 @@ export function EditorContextMenu({
             <ListItemDecorator><DriveFileRenameOutlineRoundedIcon /></ListItemDecorator>
             Rename…
           </MenuItem>
-          <MenuItem onClick={() => { onSplitToObjects(key); onClose() }}>
+          <MenuItem onClick={(event) => { event.stopPropagation(); setView({ kind: 'split' }) }}>
             <ListItemDecorator><CallSplitRoundedIcon /></ListItemDecorator>
-            Split to objects
+            Split…
           </MenuItem>
           {canAssemble && (
             <MenuItem onClick={() => { onAssemble(); onClose() }}>
@@ -422,6 +519,8 @@ export function EditorContextMenu({
             <ListItemDecorator><AspectRatioRoundedIcon /></ListItemDecorator>
             Reset scale
           </MenuItem>
+          {scaleToPrintVolumeItem}
+          {convertUnitItems}
           <ListDivider />
           {(['x', 'y', 'z'] as const).map((axis) => (
             <MenuItem key={`mirror-${axis}`} onClick={() => { onMirror(axis); onClose() }}>

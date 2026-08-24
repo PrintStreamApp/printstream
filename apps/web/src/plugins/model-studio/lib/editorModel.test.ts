@@ -756,7 +756,7 @@ test('the single-object export centres by the rendered footprint, not by the ins
   // the placement reads (10, 10) while the geometry actually sits around (40, 30).
   object.position.set(10, 10, 0)
   const plate = state.plates[0]!
-  plate.bed = { minX: 0, maxX: 200, minY: 0, maxY: 200, excludeAreas: [] }
+  plate.bed = { minX: 0, maxX: 200, minY: 0, maxY: 200, maxZ: null, excludeAreas: [] }
   plate.instances.push(object)
 
   const exported = buildSingleObjectExportState(state, object.key, { x: 40, y: 30 })
@@ -915,7 +915,7 @@ test('buildSingleObjectExportState isolates one object on a fresh single plate',
     sourcePlateIndex: 2,
     name: 'Plate two',
     plateType: null,
-    bed: { minX: 0, maxX: 200, minY: 0, maxY: 180, excludeAreas: [] },
+    bed: { minX: 0, maxX: 200, minY: 0, maxY: 180, maxZ: null, excludeAreas: [] },
     instances: [exportedSource],
     primeTower: null,
     filamentChanges: [{ z: 5, filamentId: 2 }],
@@ -955,7 +955,7 @@ test('buildSingleObjectExportState recentres a shearing instance through its exa
   sheared.objectId = 5
   sheared.position.set(7, 8, 0)
   sheared.exactMatrix = [1, 0, 0, 0.5, 1, 0, 0, 0, 1, 7, 8, 0]
-  state.plates[0]!.bed = { minX: -100, maxX: 100, minY: -90, maxY: 90, excludeAreas: [] }
+  state.plates[0]!.bed = { minX: -100, maxX: 100, minY: -90, maxY: 90, maxZ: null, excludeAreas: [] }
   state.plates[0]!.instances.push(sheared)
 
   const out = buildSingleObjectExportState(state, sheared.key, { x: 7, y: 8 })
@@ -1025,7 +1025,7 @@ test('stagedFootprint reports an import\'s XY centre and size from its file-coor
 
 test('findFreePlatePosition keeps a large model on the bed and clear of what is already placed', () => {
   const plate = seedEmptyEditorState().plates[0]!
-  plate.bed = { minX: 0, maxX: 200, minY: 0, maxY: 200, excludeAreas: [] }
+  plate.bed = { minX: 0, maxX: 200, minY: 0, maxY: 200, maxZ: null, excludeAreas: [] }
   // A 60x60 model already occupies the plate centre.
   const occupied = [{ minX: 70, maxX: 130, minY: 70, maxY: 130 }]
   const size = { width: 60, depth: 60 }
@@ -1041,7 +1041,7 @@ test('findFreePlatePosition keeps a large model on the bed and clear of what is 
 
 test('findFreePlatePosition centres the first model on an empty plate', () => {
   const plate = seedEmptyEditorState().plates[0]!
-  plate.bed = { minX: 0, maxX: 200, minY: 0, maxY: 200, excludeAreas: [] }
+  plate.bed = { minX: 0, maxX: 200, minY: 0, maxY: 200, maxZ: null, excludeAreas: [] }
   assert.deepEqual(findFreePlatePosition(plate, { size: { width: 40, depth: 40 }, occupied: [] }), { x: 100, y: 100 })
 })
 

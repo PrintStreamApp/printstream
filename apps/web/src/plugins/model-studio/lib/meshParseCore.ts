@@ -29,6 +29,7 @@ export interface ThreeMfMeshArrays {
   supportPaint: MeshPaintCodes
   seamPaint: MeshPaintCodes
   colorPaint: MeshPaintCodes
+  fuzzyPaint: MeshPaintCodes
 }
 
 const VERTEX_RE = /<vertex\s+x="([^"]*)"\s+y="([^"]*)"\s+z="([^"]*)"/g
@@ -36,6 +37,7 @@ const TRIANGLE_RE = /<triangle\s+v1="([^"]*)"\s+v2="([^"]*)"\s+v3="([^"]*)"([^>]
 const PAINT_SUPPORTS_RE = /paint_supports="([^"]*)"/
 const PAINT_SEAM_RE = /paint_seam="([^"]*)"/
 const PAINT_COLOR_RE = /paint_color="([^"]*)"/
+const PAINT_FUZZY_RE = /paint_fuzzy_skin="([^"]*)"/
 
 /**
  * Parse a 3MF model entry's `<object>` meshes into raw vertex/index/paint arrays: DOM-free, so it
@@ -74,6 +76,7 @@ export function parseThreeMfMeshArrays(xmlText: string): ThreeMfMeshArrays[] {
     const supportPaint: MeshPaintCodes = {}
     const seamPaint: MeshPaintCodes = {}
     const colorPaint: MeshPaintCodes = {}
+    const fuzzyPaint: MeshPaintCodes = {}
     TRIANGLE_RE.lastIndex = 0
     let triangleIndex = 0
     let triangleMatch: RegExpExecArray | null
@@ -92,6 +95,8 @@ export function parseThreeMfMeshArrays(xmlText: string): ThreeMfMeshArrays[] {
         if (seam) seamPaint[triangleIndex] = seam
         const color = PAINT_COLOR_RE.exec(rest)?.[1]
         if (color) colorPaint[triangleIndex] = color
+        const fuzzy = PAINT_FUZZY_RE.exec(rest)?.[1]
+        if (fuzzy) fuzzyPaint[triangleIndex] = fuzzy
       }
       triangleIndex += 1
     }
@@ -99,7 +104,7 @@ export function parseThreeMfMeshArrays(xmlText: string): ThreeMfMeshArrays[] {
 
     const positions = new Float32Array(positionsList)
     const index = vertexCount > 65535 ? new Uint32Array(indexList) : new Uint16Array(indexList)
-    results.push({ objectId, positions, index, supportPaint, seamPaint, colorPaint })
+    results.push({ objectId, positions, index, supportPaint, seamPaint, colorPaint, fuzzyPaint })
   }
   return results
 }
@@ -117,6 +122,7 @@ export function buildGeometryFromArrays(data: ThreeMfMeshArrays): THREE.BufferGe
   if (Object.keys(data.supportPaint).length > 0) correctedGeometry.userData.supportPaint = data.supportPaint
   if (Object.keys(data.seamPaint).length > 0) correctedGeometry.userData.seamPaint = data.seamPaint
   if (Object.keys(data.colorPaint).length > 0) correctedGeometry.userData.colorPaint = data.colorPaint
+  if (Object.keys(data.fuzzyPaint).length > 0) correctedGeometry.userData.fuzzyPaint = data.fuzzyPaint
   return correctedGeometry
 }
 

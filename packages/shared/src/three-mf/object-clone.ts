@@ -298,6 +298,7 @@ export function applyObjectClones(
       ...(edit.supportPaint ? { supportPaint: edit.supportPaint.map((entry) => resolvePartMesh(entry, clones)) } : {}),
       ...(edit.seamPaint ? { seamPaint: edit.seamPaint.map((entry) => resolvePartMesh(entry, clones)) } : {}),
       ...(edit.colorPaint ? { colorPaint: edit.colorPaint.map((entry) => resolvePartMesh(entry, clones)) } : {}),
+      ...(edit.fuzzyPaint ? { fuzzyPaint: edit.fuzzyPaint.map((entry) => resolvePartMesh(entry, clones)) } : {}),
       ...(edit.brimEars
         ? { brimEars: edit.brimEars.map((entry) => ({ ...entry, objectId: resolveObjectId(entry.objectId, clones) })) }
         : {}),

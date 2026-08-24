@@ -19,6 +19,7 @@
  * `model-studio` plugin directory.
  */
 import * as THREE from 'three'
+import { disposeMeshBvh } from './meshBvh'
 import { STLLoader, mergeVertices, toCreasedNormals } from 'three-stdlib'
 import type { LibraryThreeMfScene } from '@printstream/shared'
 import { buildApiUrl } from '../../../lib/apiUrl'
@@ -75,12 +76,13 @@ export type SupportPaintCodes = Record<number, string>
  * (`paint_supports`), seam (`paint_seam`), and Bambu's multi-material colour painting
  * (`paint_color`, whole-triangle states mapping to 1-based filament ids).
  */
-export type TrianglePaintChannel = 'supports' | 'seam' | 'color'
+export type TrianglePaintChannel = 'supports' | 'seam' | 'color' | 'fuzzy'
 
-const PAINT_USER_DATA_KEYS: Record<TrianglePaintChannel, 'supportPaint' | 'seamPaint' | 'colorPaint'> = {
+const PAINT_USER_DATA_KEYS: Record<TrianglePaintChannel, 'supportPaint' | 'seamPaint' | 'colorPaint' | 'fuzzyPaint'> = {
   supports: 'supportPaint',
   seam: 'seamPaint',
-  color: 'colorPaint'
+  color: 'colorPaint',
+  fuzzy: 'fuzzyPaint'
 }
 
 /** Read a channel's parsed paint from `geometry.userData`, if present. */
@@ -686,8 +688,14 @@ export function createThreeMfPartObject(
   group.add(mesh)
 
   if (!hasBedClearance) {
+    // No clone: `EdgesGeometry` only READS `getIndex()` / `getAttribute('position')` and never
+    // mutates its input (three's constructor computes the whole edge list eagerly). Cloning cost a
+    // full copy of every vertex buffer per part on the scene-build hot path, and it did not end
+    // there -- `EdgesGeometry` keeps its input in `parameters.geometry`, so each part also RETAINED
+    // that second copy for as long as the scene lived. The two sibling call sites in
+    // `editorGeometry.ts` already pass their geometry directly; this one was the outlier.
     const edgeLines = new THREE.LineSegments(
-      new THREE.EdgesGeometry(baseGeometry.clone(), 28),
+      new THREE.EdgesGeometry(baseGeometry, 28),
       new THREE.LineBasicMaterial({ color: 0x09111d, transparent: true, opacity: 0.16, depthWrite: false })
     )
     edgeLines.scale.multiplyScalar(1.0004)
@@ -714,6 +722,9 @@ export function disposeObject3D(object: THREE.Object3D): void {
       geometry?: THREE.BufferGeometry
       material?: THREE.Material | THREE.Material[]
     }
+    // Release the paint brush's BVH with the geometry that owns it: the tree is stored ON the
+    // geometry, so it would otherwise outlive the mesh and leak for the session.
+    if (disposable.geometry) disposeMeshBvh(disposable.geometry)
     disposable.geometry?.dispose()
     if (Array.isArray(disposable.material)) {
       disposable.material.forEach(disposeMaterial)

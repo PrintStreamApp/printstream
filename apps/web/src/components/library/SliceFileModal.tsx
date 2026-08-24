@@ -37,6 +37,7 @@ import type {
   SlicingManualProfileTarget,
   ThreeMfIndex
 } from '@printstream/shared'
+import { bakedObjectProcessOverrides, changedObjectProcessOverrides } from './objectProcessOverrideSubmission'
 import { PER_OBJECT_PROCESS_KEYS,
   isProjectNewerThanSlicer,
   isProjectSlicingPresetId
@@ -597,24 +598,20 @@ export function SliceFileModal({
   // loads the scene). Seeding from them is not cosmetic: the slice-time transform is authoritative
   // per object, so editing one setting against an empty seed used to tell the server the object had
   // only that setting -- silently dropping its other baked values from the slice.
-  const bakedObjectOverrides = useMemo(() => {
-    const out: Record<string, Record<string, string | string[]>> = {}
-    for (const object of plateObjects) {
-      if (object.processOverrides && Object.keys(object.processOverrides).length > 0) {
-        out[String(object.id)] = { ...object.processOverrides }
-      }
-    }
-    return out
-  }, [plateObjects])
+  // EVERY plate, not just the selected one. The session map below accumulates an entry for each
+  // plate the user visits, so a baseline scoped to the selected plate made every other plate's
+  // object read as "changed" and ride along on slices nobody had customised.
+  const bakedObjectOverrides = useMemo(() => bakedObjectProcessOverrides(slicePlateOptions), [slicePlateOptions])
   const bakedObjectOverridesKey = useMemo(() => JSON.stringify(bakedObjectOverrides), [bakedObjectOverrides])
   // Keyed on the CONTENT, so a refetch that returns the same overrides does not wipe an edit in
   // progress (the array identity changes on every refetch).
   useEffect(() => {
     const baked = JSON.parse(bakedObjectOverridesKey) as Record<string, Record<string, string | string[]>>
-    // MERGE UNDER, never replace. `bakedObjectOverrides` covers the SELECTED PLATE only, so
-    // replacing dropped every other plate's entry on each plate switch, and the editor host, which
-    // seeds all plates from the scene, then had them silently erased. Existing entries win so a
-    // refetch (or a session edit) is never clobbered.
+    // MERGE UNDER, never replace: an existing entry wins, so a refetch never clobbers a session
+    // edit, and an object the user CLEARED keeps its explicit empty entry instead of having the
+    // file's values seeded back over it (which is what made a clear reappear on a plate switch).
+    // Replacing outright is separately wrong because the baked set is a snapshot of the FILE, not
+    // of the session.
     setObjectProcessOverrides((current) => ({ ...baked, ...current }))
   }, [bakedObjectOverridesKey])
   // Per-object print selection + overrides are managed in the per-object dialog (a single plate's
@@ -630,17 +627,15 @@ export function SliceFileModal({
   const submitSelectedObjectIds = hasPlateObjects && selectedSliceObjectIds.size < plateObjects.length
     ? plateObjects.filter((object) => selectedSliceObjectIds.has(object.id)).map((object) => object.id)
     : undefined
-  // Send only the objects whose overrides DIFFER from what the file already carries. An object left
-  // alone is omitted, so the slice-time transform never touches it (it rewrites only the objects it
-  // is given) -- which keeps an ordinary slice byte-for-byte the same as before this seeding. An
-  // object the user CLEARED must still be sent, as an empty map, or the clear would not apply;
-  // that is why this compares against the baked set rather than filtering out empties.
-  const submitObjectProcessOverrides = useMemo(() => {
-    const baked = JSON.parse(bakedObjectOverridesKey) as Record<string, Record<string, string | string[]>>
-    const entries = Object.entries(objectProcessOverrides)
-      .filter(([objectId, overrides]) => JSON.stringify(overrides) !== JSON.stringify(baked[objectId] ?? {}))
-    return entries.length > 0 ? Object.fromEntries(entries) : undefined
-  }, [objectProcessOverrides, bakedObjectOverridesKey])
+  // Send only the objects whose overrides DIFFER from what the file already carries; the rules and
+  // the reasons live in `objectProcessOverrideSubmission.ts`, where they are tested.
+  const submitObjectProcessOverrides = useMemo(
+    () => changedObjectProcessOverrides(
+      objectProcessOverrides,
+      JSON.parse(bakedObjectOverridesKey) as Record<string, Record<string, string | string[]>>
+    ),
+    [objectProcessOverrides, bakedObjectOverridesKey]
+  )
   // Material choices for filament-index process settings + the support-interface recommendation
   // prompt: the shared builder, so this host and the public editor's controller cannot drift
   // (see `buildProcessFilamentChoices` for the field semantics).
@@ -1063,7 +1058,7 @@ export function SliceFileModal({
                   </Typography>
                 )}
               {/* Above the slice settings because it describes the project itself, not a setting. */}
-              {needsSettingsRepair && <RepairProjectSettingsAlert reasons={file.settingsRepairReasons} />}
+              {needsSettingsRepair && <RepairProjectSettingsAlert reasons={file.settingsRepairReasons} unrepairableReasons={file.unrepairableSettingsRepairReasons} />}
               {sliceController.projectVersionWarning && <ProjectVersionWarningAlert {...sliceController.projectVersionWarning} />}
               {/* The panel renders its own slicer availability/loading notices. */}
               {/* Same manager the editor offers. This dialog is inside a workspace, so its
@@ -1149,12 +1144,12 @@ export function SliceFileModal({
             titlePrefix="Object settings"
             applyScope={editorOnly ? 'project' : 'slice'}
             onApply={(overrides) => {
-              setObjectProcessOverrides((current) => {
-                const next = { ...current }
-                if (Object.keys(overrides).length === 0) delete next[String(editingSliceObject.id)]
-                else next[String(editingSliceObject.id)] = overrides
-                return next
-              })
+              // A cleared object keeps an EXPLICIT empty entry rather than being deleted, matching
+              // the editor's own per-object dialog. Only that empty entry strips the file's values:
+              // the slice-time transform rewrites the objects it is GIVEN, so deleting the key meant
+              // nothing was sent and "clear" silently did nothing (and came back on a plate switch,
+              // when the baked seed merged underneath again).
+              setObjectProcessOverrides((current) => ({ ...current, [String(editingSliceObject.id)]: overrides }))
               setEditingSliceObject(null)
             }}
           />

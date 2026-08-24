@@ -23,6 +23,7 @@ after(() => {
 
 function renderAlert(props: {
   reasons: ThreeMfSettingsRepairReason[]
+  unrepairableReasons?: ThreeMfSettingsRepairReason[]
   onRepairInEditor?: () => void
   repairInEditorError?: string | null
 }) {
@@ -134,4 +135,43 @@ test('a failed in-editor repair is visually distinct, not just different text', 
   assert.ok(screen.getByText(/Couldn’t repair this project/i), 'the title must change')
   assert.ok(screen.getByRole('button', { name: /try again/i }), 'the action must re-label')
   assert.ok(container.querySelector('.MuiAlert-colorDanger'), 'the alert must switch to danger')
+})
+
+// Issue #101. Every inspector computes whether a defect can actually be repaired, and that signal
+// used to be discarded before it reached the wire, so an unfixable defect arrived as a Repair
+// button that wrote a new library version, changed nothing, and left the banner up on reopen.
+test('withholds Repair when every flagged defect declines, and names the manual remedy', () => {
+  const onRepairInEditor = () => assert.fail('the button must not be offered at all')
+  renderAlert({ reasons: ['inheritsGroup'], unrepairableReasons: ['inheritsGroup'], onRepairInEditor })
+
+  assert.equal(screen.queryByRole('button', { name: /repair/i }), null)
+  // Point somewhere real instead: the value cannot be derived from the file with certainty, which
+  // is exactly when a person holding the original project has to make the call.
+  assert.match(document.body.textContent ?? '', /can’t be repaired automatically/i)
+  assert.match(document.body.textContent ?? '', /Bambu Studio/i)
+})
+
+// Per REASON, not per file: collapsing to one flag would strand the fixable defect behind the
+// unfixable one.
+test('keeps Repair when only SOME defects decline, and says what it will not fix', () => {
+  let clicked = 0
+  renderAlert({
+    reasons: ['flushMatrix', 'inheritsGroup'],
+    unrepairableReasons: ['inheritsGroup'],
+    onRepairInEditor: () => { clicked += 1 }
+  })
+
+  const button = screen.getByRole('button', { name: /repair/i })
+  fireEvent.click(button)
+  assert.equal(clicked, 1)
+  assert.match(document.body.textContent ?? '', /can’t be repaired automatically and needs Bambu Studio/i)
+})
+
+// Absent means UNKNOWN, not "none": an older bridge, or an index cached before parser v30, sends
+// nothing, and the honest fallback is the behaviour that shipped before this field existed.
+test('offers Repair as before when repairability is unknown', () => {
+  renderAlert({ reasons: ['inheritsGroup'], onRepairInEditor: () => {} })
+
+  assert.ok(screen.getByRole('button', { name: /repair/i }))
+  assert.doesNotMatch(document.body.textContent ?? '', /can’t be repaired automatically/i)
 })

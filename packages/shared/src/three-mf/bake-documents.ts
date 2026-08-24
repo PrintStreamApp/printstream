@@ -894,9 +894,7 @@ export function buildEditedThreeMfDocuments(
   // Triangle paint authored on a not-yet-saved import: importId -> solid index -> attribute -> codes.
   const importPaint = new Map<string, Map<number, Map<TrianglePaintAttribute, Record<string, string>>>>()
   for (const entry of edit.importPaint ?? []) {
-    const attribute: TrianglePaintAttribute = entry.channel === 'seam'
-      ? 'paint_seam'
-      : entry.channel === 'color' ? 'paint_color' : 'paint_supports'
+    const attribute: TrianglePaintAttribute = PAINT_ATTRIBUTE_BY_CHANNEL[entry.channel] ?? 'paint_supports'
     let byPart = importPaint.get(entry.importId)
     if (!byPart) { byPart = new Map(); importPaint.set(entry.importId, byPart) }
     let byAttribute = byPart.get(entry.partIndex)
@@ -2270,7 +2268,20 @@ function remapModelSettingsFilamentRefs(modelSettingsXml: string, remap: Readonl
 }
 
 /** Triangle paint channels: the brush they come from and the 3MF attribute they write. */
-export type TrianglePaintAttribute = 'paint_supports' | 'paint_seam' | 'paint_color'
+export type TrianglePaintAttribute = 'paint_supports' | 'paint_seam' | 'paint_color' | 'paint_fuzzy_skin'
+
+/**
+ * The ONE channel-name to 3MF-attribute map. Both the import-paint collector here and the
+ * saved-part channels in `bake.ts` resolve through it, because this pair drifted the moment a
+ * fourth channel arrived: the collector's inline ternary defaulted anything unrecognised to
+ * `paint_supports`, so a new channel silently painted supports instead of failing.
+ */
+export const PAINT_ATTRIBUTE_BY_CHANNEL: Readonly<Record<'support' | 'seam' | 'color' | 'fuzzy', TrianglePaintAttribute>> = {
+  support: 'paint_supports',
+  seam: 'paint_seam',
+  color: 'paint_color',
+  fuzzy: 'paint_fuzzy_skin'
+}
 
 /**
  * Rewrite one mesh object's `<triangle>` paint attribute inside a model entry's XML.

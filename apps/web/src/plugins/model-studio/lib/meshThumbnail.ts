@@ -19,6 +19,7 @@
  * `FileThumbnail`'s `<img>`, with no mesh fetch, STEP tessellation, or WebGL render.
  */
 import * as THREE from 'three'
+import { createWebglRenderer } from './webglRenderer'
 import type { LibraryFile } from '@printstream/shared'
 import { buildApiUrl } from '../../../lib/apiUrl'
 import { readWorkspaceContextHeader } from '../../../lib/workspaceContext'
@@ -96,7 +97,7 @@ function scheduleRendererIdleDispose(): void {
 function getRenderer(): StlRenderer {
   if (renderer) return renderer
 
-  const gl = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true })
+  const gl = createWebglRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true })
   gl.setPixelRatio(1)
   gl.setSize(THUMBNAIL_SIZE, THUMBNAIL_SIZE)
   gl.setClearColor(0x000000, 0)

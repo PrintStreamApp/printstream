@@ -19,7 +19,7 @@
  * caches re-derive instead of serving stale indexes.
  */
 import type { PrinterModel } from '../printer.js'
-import { collectSettingsRepairReasons } from '../repairs/index.js'
+import { collectSettingsRepairs } from '../repairs/index.js'
 import type {
   BridgeLibraryThreeMfFilament,
   BridgeLibraryThreeMfIndex,
@@ -39,6 +39,8 @@ export { decodeXmlAttributeValue }
  * v14: per-filament `isSupport`/`isSoluble` from `filament_is_support`/`filament_soluble`.
  * v15: filament slot count also counts the support/soluble flag arrays (a project whose flags
  *      outran its colours/types/names used to lose its trailing filament slots).
+ * v30: `unrepairableSettingsRepairReasons`: which flagged defects the Repair action would
+ *      DECLINE, so a surface stops offering a button that writes a version and changes nothing.
  * v20: `needsSettingsRepair` also covers a `filament_self_index` that does not match the
  *      variant rows: Bambu Studio refuses to OPEN such a project (`filament-variant-index.ts`).
  * v16: `needsSettingsRepair`: flush matrix vs machine topology mismatch (see
@@ -68,7 +70,7 @@ export { decodeXmlAttributeValue }
  *      (exit 156, "Flush volumes matrix do not match to the correct size!"): see
  *      `isFlushMultiplierInconsistent`. Same VALUE-change reasoning as v23.
  */
-export const THREE_MF_INDEX_PARSER_VERSION = 29
+export const THREE_MF_INDEX_PARSER_VERSION = 30
 
 /** Per-plate metadata recovered from `model_settings.config` (labels + object/filament backfill). */
 export interface ModelSettingsPlateMetadata {
@@ -248,7 +250,12 @@ export function buildThreeMfIndex(
   // the project at all. `needsSettingsRepair` stays as the gate so existing callers are unaffected.
   // Which defects exist is owned by `repairs/`, this path only reports what it is told, so a new
   // repairable defect never edits the parser.
-  const settingsRepairReasons = collectSettingsRepairReasons(projectSettingsJson, modelSettingsXml)
+  const settingsRepairs = collectSettingsRepairs(projectSettingsJson, modelSettingsXml)
+  const settingsRepairReasons = settingsRepairs.map((repair) => repair.reason)
+  // The subset the Repair action would DECLINE, so a surface can withhold a button that cannot
+  // work rather than writing a new version that changes nothing (issue #101). Carried alongside
+  // the full list rather than replacing it: the reasons are what every existing caller reads.
+  const unrepairableSettingsRepairReasons = settingsRepairs.filter((repair) => !repair.repairable).map((repair) => repair.reason)
   const needsSettingsRepair = settingsRepairReasons.length > 0
   // The Bambu Studio build that saved this project. BambuStudio REFUSES to open a project from a
   // newer version than the engine slicing it (major.minor only: see bambu-file-version.ts), so
@@ -259,7 +266,7 @@ export function buildThreeMfIndex(
   // outright, so the print dialogs need this to say why before the printer does.
   const slicedWithFilamentTrackSwitch = extractSlicedWithFilamentTrackSwitch(projectSettingsJson)
 
-  return { plates, projectFilaments, compatiblePrinterModels, supportFilamentIds, geometryOnly, objectExport, needsSettingsRepair, settingsRepairReasons, projectVersion, slicedWithFilamentTrackSwitch, ...bakedProfiles }
+  return { plates, projectFilaments, compatiblePrinterModels, supportFilamentIds, geometryOnly, objectExport, needsSettingsRepair, settingsRepairReasons, unrepairableSettingsRepairReasons, projectVersion, slicedWithFilamentTrackSwitch, ...bakedProfiles }
 }
 
 /**
@@ -632,6 +639,20 @@ function extractBakedProfileNames(projectSettingsJson: string | null): { printer
 export function firstStringValue(value: unknown): string | null {
   const raw = Array.isArray(value) ? value[0] : value
   return typeof raw === 'string' && raw.trim() ? raw.trim() : null
+}
+
+/**
+ * The first finite number in a config value, or null.
+ *
+ * Sibling of {@link firstStringValue} and needed for the same reason: Bambu writes a scalar option
+ * as a bare value in one place and a one-element array in another, and a project that has been
+ * through the cloud preset API carries it as a STRING ("325"). A reader that accepts only one of
+ * those shapes reports "unknown" for a value the file plainly states.
+ */
+export function firstFiniteNumber(value: unknown): number | null {
+  const raw = Array.isArray(value) ? value[0] : value
+  const parsed = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw.trim()) : Number.NaN
+  return Number.isFinite(parsed) ? parsed : null
 }
 
 function collectPlateNozzleSizes(metaValue: string | undefined, filaments: BridgeLibraryThreeMfFilament[]): string[] {

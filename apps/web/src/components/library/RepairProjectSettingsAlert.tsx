@@ -68,13 +68,23 @@ const REPAIR_COPY_BOTH = {
   body: 'Several settings disagree with each other, which can make slicing fail or show the wrong materials.'
 }
 
-export function RepairProjectSettingsAlert({ reasons, archivedVersion, onRepairInEditor, repairingInEditor, repairInEditorError, sx }: {
+export function RepairProjectSettingsAlert({ reasons, unrepairableReasons, archivedVersion, onRepairInEditor, repairingInEditor, repairInEditorError, sx }: {
   /**
    * Which invariants the project breaks (`settingsRepairReasons` on the library DTO / 3MF index).
    * Empty or omitted falls back to the flush-matrix wording: the only cause that existed before
    * this was surfaced, so an older cached DTO still reads sensibly.
    */
   reasons?: readonly ThreeMfSettingsRepairReason[]
+  /**
+   * The subset of {@link reasons} whose repair would DECLINE (`unrepairableSettingsRepairReasons`
+   * on the library DTO / 3MF index). Every inspector computes this; it used to be discarded before
+   * the wire, so a defect that cannot be fixed reached the user as a Repair button that wrote a new
+   * library version, changed nothing, and brought the banner straight back (issue #101).
+   *
+   * Absent means UNKNOWN, not "none": an older bridge or a cached index from before parser v30
+   * sends nothing, and the honest fallback is the previous behaviour, offer the button.
+   */
+  unrepairableReasons?: readonly ThreeMfSettingsRepairReason[]
   /**
    * The project on screen is an ARCHIVED version, not the file's head. Repairing it means
    * restoring it first, a decision the user should make knowingly, so no Repair button is
@@ -107,11 +117,24 @@ export function RepairProjectSettingsAlert({ reasons, archivedVersion, onRepairI
     ? REPAIR_COPY_BOTH
     : REPAIR_COPY[reasons?.[0] ?? 'flushMatrix']
 
+  // Is there anything left for the button to DO? Only when a flagged defect is not in the
+  // declined set. An empty/absent `unrepairableReasons` keeps the old behaviour, which is the
+  // right reading of "unknown" (see the prop's doc).
+  const declined = new Set(unrepairableReasons ?? [])
+  const nothingToRepair = Boolean(reasons?.length) && reasons!.every((reason) => declined.has(reason))
+  // A PARTIAL decline still gets the button: the fixable defects are worth fixing, and the
+  // remaining one is named so the result is not mistaken for the button failing.
+  const partiallyDeclined = !nothingToRepair && reasons?.some((reason) => declined.has(reason))
+  const declinedNote = partiallyDeclined
+    ? ` One of them can’t be repaired automatically and needs Bambu Studio: ${
+        reasons!.filter((reason) => declined.has(reason)).map((reason) => REPAIR_COPY[reason].title.toLowerCase()).join(', ')}.`
+    : ''
+
   // THE repair model: stage as an undoable edit, persist on save: identical for every defect and
   // every host. An archived version is the one deliberate exception: staging + save would mint a
   // new HEAD from old bytes, which is a restore decision the user should make knowingly, so it
   // stays advisory below.
-  if (onRepairInEditor && !archivedVersion) {
+  if (onRepairInEditor && !archivedVersion && !nothingToRepair) {
     // A FAILED attempt changes colour and title, not just the body text. Reported from a real
     // session: a swapped paragraph inside an identically-styled warning is nearly invisible,
     // especially right after a spinner. Danger + its own title makes the outcome legible at a
@@ -144,7 +167,7 @@ export function RepairProjectSettingsAlert({ reasons, archivedVersion, onRepairI
               partial repair that now reports itself directly (`repairInEditorError`). Long notices
               get skipped, which is the one outcome this alert cannot afford. */}
           <Typography level="body-sm">
-            {repairInEditorError ?? `${copy.body} Repair, then save the project.`}
+            {repairInEditorError ?? `${copy.body} Repair, then save the project.${declinedNote}`}
           </Typography>
         </div>
       </Alert>
@@ -155,9 +178,14 @@ export function RepairProjectSettingsAlert({ reasons, archivedVersion, onRepairI
   // actually happens, the editor, rather than offering an action this surface cannot honour.
   const remedy = archivedVersion
     ? 'This is an older version. Restore it first if you want to repair and use it.'
-    : reasons?.length && reasons.every((reason) => reason === 'filamentPhysics')
-      ? 'Open it in the editor and save to restore them.'
-      : 'Open it in the editor and press Repair, then save.'
+    // Nothing here can be fixed automatically, so do not send the user to a button that would
+    // decline. The value cannot be derived with certainty from the file, which is precisely the
+    // case where a person with the original project has to make the call.
+    : nothingToRepair
+      ? 'This one can’t be repaired automatically: open it in Bambu Studio and re-save it, or rebuild it from the original.'
+      : reasons?.length && reasons.every((reason) => reason === 'filamentPhysics')
+        ? 'Open it in the editor and save to restore them.'
+        : 'Open it in the editor and press Repair, then save.'
   return (
     <Alert variant="soft" color="warning" startDecorator={<WarningAmberIcon />} sx={[{ alignItems: 'flex-start' }, ...(Array.isArray(sx) ? sx : [sx])]}>
       <div>

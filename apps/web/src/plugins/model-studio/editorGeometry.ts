@@ -19,6 +19,8 @@ import { FOOTPRINT_CELL_MM, footprintCellKey } from './lib/arrange'
 import { estimateWipeTowerFootprint } from './lib/primeTower'
 import { primeTowerReachIssue } from './lib/primeTowerReach'
 import {
+  FUZZY_PAINT_COLORS,
+  FUZZY_PAINT_OVERLAY_NAME,
   SEAM_PAINT_COLORS,
   SEAM_PAINT_OVERLAY_NAME,
   SUPPORT_PAINT_COLORS,
@@ -28,7 +30,7 @@ import {
 import type { CutAxis } from './lib/meshCut'
 import type { EditorInstance, EditorPlate, EditorState } from './lib/editorModel'
 
-export type GizmoMode = 'translate' | 'rotate' | 'scale' | 'layFace' | 'cut' | 'paintSupports' | 'paintSeam' | 'paintColor' | 'brimEars' | 'measure'
+export type GizmoMode = 'translate' | 'rotate' | 'scale' | 'layFace' | 'cut' | 'paintSupports' | 'paintSeam' | 'paintColor' | 'paintFuzzy' | 'brimEars' | 'measure'
 
 /** Scene-object name for the brim-ear disc markers (children of an instance's rotor). */
 export const BRIM_EAR_MARKER_NAME = 'brimEarMarker'
@@ -87,7 +89,7 @@ export const PART_SUBTYPE_OPTIONS: ReadonlyArray<{ subtype: SceneEditPartSubtype
  * triangles.
  */
 export const PAINT_CHANNEL_SPECS: Record<TrianglePaintChannel, {
-  stateKey: 'supportPaint' | 'seamPaint' | 'colorPaint'
+  stateKey: 'supportPaint' | 'seamPaint' | 'colorPaint' | 'fuzzyPaint'
   overlayName: string
   palette: PaintPalette
   offsetFactor: number
@@ -96,8 +98,23 @@ export const PAINT_CHANNEL_SPECS: Record<TrianglePaintChannel, {
   seam: { stateKey: 'seamPaint', overlayName: SEAM_PAINT_OVERLAY_NAME, palette: SEAM_PAINT_COLORS, offsetFactor: -3 },
   // Colour painting tints with the LIVE filament colours via colorForCode; the palette
   // only covers undecodable split codes. Strongest offset so colour wins visually.
-  color: { stateKey: 'colorPaint', overlayName: 'colorPaintOverlay', palette: SUPPORT_PAINT_COLORS, offsetFactor: -4 }
+  color: { stateKey: 'colorPaint', overlayName: 'colorPaintOverlay', palette: SUPPORT_PAINT_COLORS, offsetFactor: -4 },
+  // Fuzzy skin is a single-state channel like seam: painted or not. Its own attribute even though
+  // BambuStudio gives it the same VALUE as a support enforcer (`FUZZY_SKIN = ENFORCER`), so a
+  // triangle can be both and painting one must not erase the other.
+  fuzzy: { stateKey: 'fuzzyPaint', overlayName: FUZZY_PAINT_OVERLAY_NAME, palette: FUZZY_PAINT_COLORS, offsetFactor: -5 }
 }
+
+/**
+ * EVERY paint channel, derived from {@link PAINT_CHANNEL_SPECS} rather than written out.
+ *
+ * Two loops used to hardcode `['supports', 'seam', 'color']`: the overlay refresh that undo/redo
+ * runs, and the seeding a freshly built part mesh gets. Adding fuzzy skin to the spec map left both
+ * behind, so an undo mid-paint rebuilt three channels and dropped the fourth, and the next dab
+ * (which rebuilds the whole channel from state) made it reappear. Nothing failed; the paint just
+ * blinked out. Deriving the list means a fifth channel cannot repeat that.
+ */
+export const TRIANGLE_PAINT_CHANNELS = Object.keys(PAINT_CHANNEL_SPECS) as TrianglePaintChannel[]
 
 /**
  * Modes that put the move/rotate/scale gizmo on the selection: i.e. the ones where a
@@ -114,7 +131,11 @@ export function isTransformGizmoMode(mode: GizmoMode): mode is TransformGizmoMod
 }
 
 export function paintChannelForGizmoMode(mode: GizmoMode): TrianglePaintChannel | null {
-  return mode === 'paintSupports' ? 'supports' : mode === 'paintSeam' ? 'seam' : mode === 'paintColor' ? 'color' : null
+  return mode === 'paintSupports' ? 'supports'
+    : mode === 'paintSeam' ? 'seam'
+    : mode === 'paintColor' ? 'color'
+    : mode === 'paintFuzzy' ? 'fuzzy'
+    : null
 }
 
 /**
@@ -127,7 +148,10 @@ export type PaintToolType = 'circle' | 'sphere' | 'fill' | 'bucket' | 'triangle'
 export const PAINT_TOOLS_BY_CHANNEL: Record<TrianglePaintChannel, PaintToolType[]> = {
   supports: ['circle', 'sphere', 'fill'],
   seam: ['circle', 'sphere'],
-  color: ['circle', 'sphere', 'triangle', 'fill', 'bucket', 'height']
+  color: ['circle', 'sphere', 'triangle', 'fill', 'bucket', 'height'],
+  // Studio's fuzzy-skin gizmo offers circle, sphere, triangle and smart fill (`GLGizmoFuzzySkin`),
+  // the same row as supports plus the single-triangle tool.
+  fuzzy: ['circle', 'sphere', 'triangle', 'fill']
 }
 
 export const PAINT_TOOL_LABELS: Record<PaintToolType, string> = {
@@ -362,6 +386,35 @@ export function printableMeshBox(object: THREE.Object3D, precise = true): THREE.
 export function restObjectOnBed(object: THREE.Object3D): void {
   const box = printableMeshBox(object)
   if (!box.isEmpty()) object.position.z -= box.min.z
+}
+
+/**
+ * Multiply a group's scale and correct its position so the model grows about a fixed world
+ * point instead of about its own local origin, then rest it on the bed.
+ *
+ * WHY THE CORRECTION IS NOT OPTIONAL. `position` places the object's local ORIGIN, and scaling
+ * multiplies the mesh's own coordinates about that origin — so an object whose vertices sit far
+ * from it (a Bambu mesh routinely carries plate coordinates) travels by `(factor - 1)` times its
+ * whole origin-to-centroid offset. At the 25.4x of an inch conversion that is metres, and the
+ * model leaves the bed entirely. This is the same trap the single-object 3MF export hit.
+ *
+ * `pivot` is a WORLD XY point the footprint centre is pinned to; omit it to grow in place. Z is
+ * never pinned, because a printed body belongs on the bed and `restObjectOnBed` decides that.
+ */
+export function scaleGroupAboutPoint(
+  group: THREE.Object3D,
+  factor: number,
+  pivot?: { x: number; y: number }
+): void {
+  const before = printableMeshBox(group)
+  if (before.isEmpty()) return
+  const anchor = pivot ?? { x: (before.min.x + before.max.x) / 2, y: (before.min.y + before.max.y) / 2 }
+  group.scale.multiplyScalar(factor)
+  const after = printableMeshBox(group)
+  if (after.isEmpty()) return
+  group.position.x += anchor.x - (after.min.x + after.max.x) / 2
+  group.position.y += anchor.y - (after.min.y + after.max.y) / 2
+  restObjectOnBed(group)
 }
 
 /** Do two boxes overlap in the XY (bed) plane, beyond a small tolerance? */

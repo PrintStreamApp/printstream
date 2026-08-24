@@ -189,8 +189,13 @@ export interface EditorPlate {
   sourcePlateIndex: number | null
   name: string | null
   plateType: string | null
-  /** Bed bounds in mm; used to size the bed surface and clamp adds. */
-  bed: { minX: number; maxX: number; minY: number; maxY: number; excludeAreas: Array<{ polygon: Array<{ x: number; y: number }>; label: string | null }> }
+  /**
+   * Bed bounds in mm; used to size the bed surface and clamp adds. `maxZ` is the machine's usable
+   * height, NULL when nothing states one -- which every consumer must read as "unknown" rather
+   * than as unlimited, because a fit check that silently passes on a missing height is exactly the
+   * wrong answer.
+   */
+  bed: { minX: number; maxX: number; minY: number; maxY: number; maxZ: number | null; excludeAreas: Array<{ polygon: Array<{ x: number; y: number }>; label: string | null }> }
   instances: EditorInstance[]
   /** Prime/wipe tower footprint (plate-local), or null when the plate has no tower. */
   primeTower: LibraryThreeMfPrimeTower | null
@@ -268,6 +273,14 @@ export interface EditorState {
   seamPaint?: Record<string, Record<number, string>>
   /** Colour-brush counterpart of {@link EditorState.supportPaint} (`paint_color` codes). */
   colorPaint?: Record<string, Record<number, string>>
+  /**
+   * Fuzzy-skin counterpart of {@link EditorState.supportPaint} (`paint_fuzzy_skin` codes).
+   *
+   * Its own map even though BambuStudio gives fuzzy skin the same VALUE as a support enforcer
+   * (`FUZZY_SKIN = ENFORCER`): the 3MF attribute is separate, so one triangle can be both, and
+   * sharing a map would make painting either channel erase the other.
+   */
+  fuzzyPaint?: Record<string, Record<number, string>>
   /**
    * Per-object manual brim-ear overrides made this session, keyed by objectId. Each
    * value is the COMPLETE desired ear set for the object (object-local mm + radius);
@@ -435,7 +448,7 @@ export function parsePartSlotKey(key: string): { objectId: number; partIndex: nu
   return { objectId, partIndex }
 }
 
-const DEFAULT_BED = { minX: -128, maxX: 128, minY: -128, maxY: 128, excludeAreas: [] as Array<{ polygon: Array<{ x: number; y: number }>; label: string | null }> }
+const DEFAULT_BED = { minX: -128, maxX: 128, minY: -128, maxY: 128, maxZ: null as number | null, excludeAreas: [] as Array<{ polygon: Array<{ x: number; y: number }>; label: string | null }> }
 
 /** Generate a unique, stable key for an editor instance. */
 export function nextInstanceKey(): string {
@@ -610,7 +623,7 @@ export function fillPlateFromScene(plate: EditorPlate, scene: LibraryThreeMfScen
   }
   return {
     ...plate,
-    bed: { minX: scene.bed.minX, maxX: scene.bed.maxX, minY: scene.bed.minY, maxY: scene.bed.maxY, excludeAreas: scene.bed.excludeAreas },
+    bed: { minX: scene.bed.minX, maxX: scene.bed.maxX, minY: scene.bed.minY, maxY: scene.bed.maxY, maxZ: scene.bed.maxZ, excludeAreas: scene.bed.excludeAreas },
     instances: scene.instances.map((instance) => instanceFromScene(instance, partInfo)),
     primeTower: scene.primeTower ?? null,
     ...(scene.filamentChanges && scene.filamentChanges.length > 0
@@ -640,6 +653,7 @@ export function seedEditorState(
     ? {
         minX: loadedScene.bed.minX, maxX: loadedScene.bed.maxX,
         minY: loadedScene.bed.minY, maxY: loadedScene.bed.maxY,
+        maxZ: loadedScene.bed.maxZ,
         excludeAreas: loadedScene.bed.excludeAreas
       }
     : DEFAULT_BED
@@ -1122,6 +1136,7 @@ export function buildSceneEdit(state: EditorState): SceneEdit {
     supportPaint: collectPartPaint(state, state.supportPaint),
     seamPaint: collectPartPaint(state, state.seamPaint),
     colorPaint: collectPartPaint(state, state.colorPaint),
+    fuzzyPaint: collectPartPaint(state, state.fuzzyPaint),
     importPaint: collectImportPaint(state),
     brimEars: collectBrimEars(state),
     importBrimEars: collectImportBrimEars(state),
@@ -1327,7 +1342,8 @@ function collectImportPaint(state: EditorState): SceneEdit['importPaint'] {
   const channels = [
     { channel: 'support' as const, paint: state.supportPaint },
     { channel: 'seam' as const, paint: state.seamPaint },
-    { channel: 'color' as const, paint: state.colorPaint }
+    { channel: 'color' as const, paint: state.colorPaint },
+    { channel: 'fuzzy' as const, paint: state.fuzzyPaint }
   ].filter((entry) => entry.paint && Object.keys(entry.paint).length > 0)
   if (channels.length === 0) return undefined
   const importByObjectId = importIdByReplacedObjectId(state)
@@ -1811,6 +1827,7 @@ function copySessionEditsOntoClone(state: EditorState, objectId: number, cloneOb
   rekeyParts(state.supportPaint)
   rekeyParts(state.seamPaint)
   rekeyParts(state.colorPaint)
+  rekeyParts(state.fuzzyPaint)
   rekeyParts(state.partProcessOverrides)
   rekeyParts(state.partTypeChanges)
   rekeyParts(state.partTransforms)
@@ -1923,6 +1940,13 @@ export function cloneEditorState(state: EditorState): EditorState {
       ? {
         colorPaint: Object.fromEntries(
           Object.entries(state.colorPaint).map(([key, codes]) => [key, { ...codes }])
+        )
+      }
+      : {}),
+    ...(state.fuzzyPaint
+      ? {
+        fuzzyPaint: Object.fromEntries(
+          Object.entries(state.fuzzyPaint).map(([key, codes]) => [key, { ...codes }])
         )
       }
       : {}),

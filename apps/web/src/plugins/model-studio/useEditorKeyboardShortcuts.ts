@@ -39,6 +39,8 @@ export interface EditorKeyboardShortcutsInput {
   activePlateRef: MutableRefObject<EditorPlate | null>
   /** Duplicate the selection (whole multi-selection when the key is a member). */
   onDuplicate: (key: string) => void
+  /** BambuStudio's Clone (Ctrl+K): prompt for a copy count. Async; the hook does not await it. */
+  onCloneWithCount: (key: string) => void
   /** Delete the selection (whole multi-selection when the key is a member). */
   onDelete: (key: string) => void
   /** Select every instance on the active plate. */
@@ -97,6 +99,12 @@ export function useEditorKeyboardShortcuts(input: EditorKeyboardShortcutsInput):
             if (!hasSelection) return
             event.preventDefault()
             api.onDuplicate(selectedKey)
+            return
+          case 'k':
+            // BambuStudio's own binding for Clone (`KBShortcutsDialog.cpp`: ctrl + "K").
+            if (!hasSelection) return
+            event.preventDefault()
+            api.onCloneWithCount(selectedKey)
             return
           case 'a':
             event.preventDefault()

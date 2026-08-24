@@ -30,6 +30,7 @@ import {
   collectNormalizedModels,
   decodeXmlAttributeValue,
   extractPlateType,
+  firstFiniteNumber,
   firstStringValue,
   normalizePrinterModelName,
   nullableNumberArray,
@@ -73,6 +74,12 @@ export interface ThreeMfSceneBed {
   printerModel: PrinterModel | null
   /** Unprintable zones (bed coords), as closed polygons, from `bed_exclude_area`. */
   excludeAreas: ThreeMfExcludeZone[]
+  /**
+   * Usable Z, in mm: the machine's `printable_height`. NULL when nothing states it, which callers
+   * must treat as "unknown" rather than as unlimited -- a height-aware check that silently passes
+   * on a missing value is the failure it exists to prevent.
+   */
+  maxZ: number | null
 }
 
 /** An unprintable / single-nozzle zone with an optional Bambu-style label. */
@@ -206,24 +213,28 @@ interface ThreeMfModelSettingsPlateScene {
 
 const IDENTITY_THREE_MF_TRANSFORM = [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0] as const
 export const LOGICAL_PART_PLATE_GAP = 1 / 5
-const RAW_SCENE_BED_DIMENSIONS_BY_PRINTER_MODEL: Partial<Record<PrinterModel, { width: number; depth: number }>> = {
-  X1: { width: 256, depth: 256 },
-  X1C: { width: 256, depth: 256 },
-  X1E: { width: 256, depth: 256 },
-  P1S: { width: 256, depth: 256 },
-  P2S: { width: 256, depth: 256 },
-  P1P: { width: 256, depth: 256 },
-  A1: { width: 256, depth: 256 },
-  A1mini: { width: 180, depth: 180 },
-  A2L: { width: 330, depth: 320 },
+const RAW_SCENE_BED_DIMENSIONS_BY_PRINTER_MODEL: Partial<Record<PrinterModel, { width: number; depth: number; height: number }>> = {
+  // `height` is each model's `printable_height`, resolved through BambuStudio's profile
+  // inheritance (most models never state it themselves and take 250 from `fdm_machine_common`;
+  // the H2 family takes 325 from `fdm_bbl_3dp_002_common`). It is the Z half of the print volume,
+  // and without it a "does this fit the printer?" question can only be answered about the bed.
+  X1: { width: 256, depth: 256, height: 250 },
+  X1C: { width: 256, depth: 256, height: 250 },
+  X1E: { width: 256, depth: 256, height: 250 },
+  P1S: { width: 256, depth: 256, height: 250 },
+  P2S: { width: 256, depth: 256, height: 256 },
+  P1P: { width: 256, depth: 256, height: 250 },
+  A1: { width: 256, depth: 256, height: 256 },
+  A1mini: { width: 180, depth: 180, height: 180 },
+  A2L: { width: 330, depth: 320, height: 325 },
   // Bed sizes from BambuStudio's per-model `printable_area`. The dual-nozzle models also
   // have per-extruder reach below: the bed width MUST match the extruder union or a
   // phantom unreachable strip appears past the last nozzle-only zone.
-  X2D: { width: 256, depth: 256 },
-  H2D: { width: 350, depth: 320 },
-  H2DPRO: { width: 350, depth: 320 },
-  H2C: { width: 330, depth: 320 },
-  H2S: { width: 340, depth: 320 }
+  X2D: { width: 256, depth: 256, height: 261 },
+  H2D: { width: 350, depth: 320, height: 325 },
+  H2DPRO: { width: 350, depth: 320, height: 325 },
+  H2C: { width: 330, depth: 320, height: 325 },
+  H2S: { width: 340, depth: 320, height: 340 }
 }
 
 /**
@@ -747,6 +758,11 @@ export function extractSceneBed(
 
   const record = parsed as Record<string, unknown>
   const fallbackModel = extractSceneFallbackPrinterModel(record)
+  // The PROJECT's own `printable_height` wins over the per-model table: a project retargeted or
+  // hand-edited states the machine it was actually built for, and the table is only a stand-in for
+  // a file that references a machine profile instead of embedding one.
+  const maxZ = firstFiniteNumber(record.printable_height)
+    ?? (fallbackModel ? RAW_SCENE_BED_DIMENSIONS_BY_PRINTER_MODEL[fallbackModel]?.height ?? null : null)
 
   // Unprintable corner zone (bed_exclude_area), with the per-model fallback.
   const excludeAreas: ThreeMfExcludeZone[] = parseBedExcludeAreas(record.bed_exclude_area)
@@ -780,12 +796,12 @@ export function extractSceneBed(
   if (!Number.isFinite(minX) || !Number.isFinite(maxX) || !Number.isFinite(minY) || !Number.isFinite(maxY)) {
     const rawDimensions = fallbackModel ? RAW_SCENE_BED_DIMENSIONS_BY_PRINTER_MODEL[fallbackModel] : null
     if (rawDimensions) {
-      return createSceneBedPlacement(0, rawDimensions.width, 0, rawDimensions.depth, plateType, excludeAreas, fallbackModel)
+      return createSceneBedPlacement(0, rawDimensions.width, 0, rawDimensions.depth, plateType, excludeAreas, fallbackModel, maxZ)
     }
-    return createSceneBedPlacement(-128, 128, -128, 128, plateType, excludeAreas, fallbackModel)
+    return createSceneBedPlacement(-128, 128, -128, 128, plateType, excludeAreas, fallbackModel, maxZ)
   }
 
-  return createSceneBedPlacement(minX, maxX, minY, maxY, plateType, excludeAreas, fallbackModel)
+  return createSceneBedPlacement(minX, maxX, minY, maxY, plateType, excludeAreas, fallbackModel, maxZ)
 }
 
 /**
@@ -886,7 +902,7 @@ function bedPlacementForPrinterModel(model: PrinterModel, plateType: string | nu
   if (corner) excludeAreas.push({ polygon: corner.map((point) => ({ ...point })), label: null })
   const extruders = BBL_FALLBACK_EXTRUDER_PRINTABLE_AREA_BY_MODEL[model]
   if (extruders) excludeAreas.push(...computeNozzleOnlyZones(extruders.map((polygon) => polygon.map((point) => ({ ...point })))))
-  return createSceneBedPlacement(0, dimensions.width, 0, dimensions.depth, plateType, excludeAreas, model)
+  return createSceneBedPlacement(0, dimensions.width, 0, dimensions.depth, plateType, excludeAreas, model, dimensions.height)
 }
 
 function createSceneBedPlacement(
@@ -898,7 +914,9 @@ function createSceneBedPlacement(
   excludeAreas: ThreeMfExcludeZone[] = [],
   /** The printer this bed belongs to; null for the generic fallback. Carried to viewers so they
       can request its 3D plate mesh. */
-  printerModel: PrinterModel | null = null
+  printerModel: PrinterModel | null = null,
+  /** Usable Z; null when neither the project nor the model table states one. */
+  maxZ: number | null = null
 ): ThreeMfSceneBedPlacement {
   return {
     bed: {
@@ -908,7 +926,8 @@ function createSceneBedPlacement(
       maxY,
       plateType,
       printerModel,
-      excludeAreas
+      excludeAreas,
+      maxZ
     },
     centerX: (minX + maxX) / 2,
     centerY: (minY + maxY) / 2,

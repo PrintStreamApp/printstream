@@ -33,6 +33,12 @@ export interface DerivedChips {
   needsSettingsRepair?: boolean
   /** Which invariants failed, so the repair prompt names the user's actual problem. */
   settingsRepairReasons?: ThreeMfSettingsRepairReason[]
+  /**
+   * The subset of {@link settingsRepairReasons} the Repair action would DECLINE, so the prompt can
+   * withhold a button that cannot work. Absent means "unknown" (older parser/bridge), which reads
+   * as before: assume repairable.
+   */
+  unrepairableSettingsRepairReasons?: ThreeMfSettingsRepairReason[]
   /** Bambu Studio version that saved the project, for the newer-than-the-engine check. */
   projectVersion?: string | null
   /** Sliced for a Filament Track Switch machine; must not print on one without it. */

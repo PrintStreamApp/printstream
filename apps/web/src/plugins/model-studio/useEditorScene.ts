@@ -12,7 +12,9 @@
  * other code reads them, and are threaded in here as params.
  */
 import { useEffect, useRef, useState, type Dispatch, type MutableRefObject, type SetStateAction } from 'react'
+import { ensureMeshBvh } from './lib/meshBvh'
 import * as THREE from 'three'
+import { createWebglRenderer } from './lib/webglRenderer'
 import { OrbitControls, TransformControls } from 'three-stdlib'
 import { hasActiveOverlayViewer } from './lib/overlayViewerHold'
 import { disposeObject3D, type TrianglePaintChannel } from './lib/threeMfScene'
@@ -323,7 +325,7 @@ export function useEditorScene(params: EditorSceneParams): void {
     // wide 0.1..5000 depth range the bed + gizmos need.
     let renderer: THREE.WebGLRenderer
     try {
-      renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: true })
+      renderer = createWebglRenderer({ antialias: true, logarithmicDepthBuffer: true })
     } catch {
       onContextRefused?.('The browser has blocked new 3D views on this page. Reload the page to restore the editor view.')
       return
@@ -993,6 +995,10 @@ export function useEditorScene(params: EditorSceneParams): void {
         const mesh = node as THREE.Mesh
         if (mesh.isMesh && mesh.userData.supportPaintPart) meshes.push(mesh)
       })
+      // Index on first use: the stock raycast walks every triangle, which a CPU profile put at
+      // ~14% of paint-time samples. Built here rather than at scene-build so a plate full of
+      // objects only pays for the one being painted.
+      for (const mesh of meshes) ensureMeshBvh(mesh)
       const hit = raycaster.intersectObjects(meshes, false).find((entry) => entry.face)
       if (!hit?.face) return null
       const normal = hit.face.normal.clone().transformDirection(hit.object.matrixWorld).normalize()

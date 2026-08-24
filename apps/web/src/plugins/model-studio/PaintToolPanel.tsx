@@ -44,7 +44,13 @@ export function PaintToolPanel({ paint, paintTargetIsObject, filamentOptions, on
       }}
     >
       <Typography level="title-sm">
-        {activePaintChannel === 'seam' ? 'Paint seam' : activePaintChannel === 'color' ? 'Paint color' : 'Paint supports'}
+        {activePaintChannel === 'seam'
+          ? 'Paint seam'
+          : activePaintChannel === 'color'
+            ? 'Paint color'
+            : activePaintChannel === 'fuzzy'
+              ? 'Paint fuzzy skin'
+              : 'Paint supports'}
       </Typography>
       {!paintTargetIsObject ? (
         <Typography level="body-xs" textColor="text.tertiary">
@@ -53,7 +59,7 @@ export function PaintToolPanel({ paint, paintTargetIsObject, filamentOptions, on
       ) : (
         <>
           <ButtonGroup size="sm" variant="soft" aria-label="Paint brush mode" buttonFlex={1} sx={{ width: '100%' }}>
-            {activePaintChannel !== 'color' ? (
+            {activePaintChannel !== 'color' && activePaintChannel !== 'fuzzy' ? (
               <Button
                 variant={paintBrushMode === 'enforcer' ? 'solid' : 'soft'}
                 color={paintBrushMode === 'enforcer' ? 'primary' : 'neutral'}
@@ -70,7 +76,7 @@ export function PaintToolPanel({ paint, paintTargetIsObject, filamentOptions, on
                 Paint
               </Button>
             )}
-            {activePaintChannel !== 'color' && (
+            {activePaintChannel !== 'color' && activePaintChannel !== 'fuzzy' && (
               <Button
                 variant={paintBrushMode === 'blocker' ? 'solid' : 'soft'}
                 color={paintBrushMode === 'blocker' ? 'danger' : 'neutral'}
@@ -213,7 +219,9 @@ export function PaintToolPanel({ paint, paintTargetIsObject, filamentOptions, on
                       ? 'Drag on the model: green forces the seam here, orange keeps it away.'
                       : activePaintChannel === 'color'
                         ? 'Drag on the model to paint it with the selected material.'
-                        : 'Drag on the model: blue areas force supports, red areas block them.'}
+                        : activePaintChannel === 'fuzzy'
+                          ? 'Drag on the model to give those faces a fuzzy surface. Needs a fuzzy skin mode set in the process settings.'
+                          : 'Drag on the model: blue areas force supports, red areas block them.'}
           </Typography>
           <Stack direction="row" spacing={0.75} justifyContent="space-between">
             <Button size="sm" variant="plain" color="danger" onClick={clearSelectedPaint}>

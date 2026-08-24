@@ -846,7 +846,7 @@ export const sceneEditSchema = z.object({
   /**
    * Optional triangle paint on a not-yet-saved import, keyed by import + 0-based solid index
    * (`partIndex` 0 is a single-solid import's only mesh). The import counterpart of
-   * `supportPaint`/`seamPaint`/`colorPaint`, which address a baked part by object + component id.
+   * `supportPaint`/`seamPaint`/`colorPaint`/`fuzzyPaint`, which address a baked part by object + component id.
    *
    * Triangle indices are positions in the STAGED mesh's `indices`, the same order the editor
    * renders (`meshToBinaryStl`) and the bake writes (`renderImportedMeshObjectXml`), a contract
@@ -856,7 +856,7 @@ export const sceneEditSchema = z.object({
   importPaint: z.array(z.object({
     importId: z.string().trim().min(1),
     partIndex: z.number().int().nonnegative(),
-    channel: z.enum(['support', 'seam', 'color']),
+    channel: z.enum(['support', 'seam', 'color', 'fuzzy']),
     triangles: z.record(z.string(), z.string().max(MAX_PAINT_CODE_LENGTH))
   })).max(400).optional(),
   /**
@@ -871,6 +871,14 @@ export const sceneEditSchema = z.object({
   seamPaint: z.array(sceneEditPartPaintSchema).optional(),
   /** Optional per-part colour-paint maps (`paint_color`, Bambu's colour painting). */
   colorPaint: z.array(sceneEditPartPaintSchema).optional(),
+  /**
+   * Per-triangle FUZZY SKIN enforcers, written as `paint_fuzzy_skin`.
+   *
+   * A separate channel from supports even though BambuStudio gives them the same underlying value
+   * (`FUZZY_SKIN = ENFORCER`, `Model.hpp:719`): the ATTRIBUTE is its own, so a triangle can be both
+   * a support enforcer and fuzzy, and folding them together would make painting one erase the other.
+   */
+  fuzzyPaint: z.array(sceneEditPartPaintSchema).optional(),
   /** Optional per-object manual brim ears (complete replacement sets). */
   brimEars: z.array(sceneEditObjectBrimEarsSchema).optional(),
   /** Optional per-plate layer-based filament changes (replaces listed plates' entries). */

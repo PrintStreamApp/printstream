@@ -2044,6 +2044,7 @@ async function toDto(row: {
     ...(chips.objectExport ? { objectExport: true } : {}),
     ...(chips.needsSettingsRepair ? { needsSettingsRepair: true } : {}),
     ...(chips.settingsRepairReasons?.length ? { settingsRepairReasons: chips.settingsRepairReasons } : {}),
+    ...(chips.unrepairableSettingsRepairReasons?.length ? { unrepairableSettingsRepairReasons: chips.unrepairableSettingsRepairReasons } : {}),
     ...(chips.projectVersion ? { projectVersion: chips.projectVersion } : {}),
     ...(chips.slicedWithFilamentTrackSwitch ? { slicedWithFilamentTrackSwitch: true } : {}),
     ...(row.currentVersionNumber ? { currentVersionNumber: row.currentVersionNumber } : {}),
@@ -2479,6 +2480,7 @@ function deriveChips(index: ParsedThreeMfIndex): DerivedChips {
     ...(index.objectExport ? { objectExport: true } : {}),
     ...(index.needsSettingsRepair ? { needsSettingsRepair: true } : {}),
     ...(index.settingsRepairReasons?.length ? { settingsRepairReasons: index.settingsRepairReasons } : {}),
+    ...(index.unrepairableSettingsRepairReasons?.length ? { unrepairableSettingsRepairReasons: index.unrepairableSettingsRepairReasons } : {}),
     ...(index.projectVersion ? { projectVersion: index.projectVersion } : {}),
     ...(index.slicedWithFilamentTrackSwitch ? { slicedWithFilamentTrackSwitch: true } : {})
   }

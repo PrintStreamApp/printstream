@@ -33,7 +33,7 @@ function plate(index: number, identity: Partial<Pick<StripProps['plates'][number
     sourcePlateIndex: identity.sourcePlateIndex !== undefined ? identity.sourcePlateIndex : index,
     name: null,
     plateType: null,
-    bed: { minX: 0, maxX: 256, minY: 0, maxY: 256, excludeAreas: [] },
+    bed: { minX: 0, maxX: 256, minY: 0, maxY: 256, maxZ: null, excludeAreas: [] },
     instances: [],
     primeTower: null
   }

@@ -70,7 +70,16 @@ import {
   readProjectFlushContext,
   type ThreeMfSettingsRepairReason
 } from '@printstream/shared'
+import { MODEL_UNIT_MILLIMETRES, buildVanillaThreeMfEntries, type ConvertibleModelUnit } from '@printstream/shared/three-mf'
+import {
+  alignOffsets,
+  distributeOffsets,
+  minimumMembersFor,
+  type AlignDistributeOperation,
+  type AlignMember
+} from './lib/alignDistribute'
 import { useFlushCalibration, useFlushDatasets } from './lib/flushDatasets'
+import { zipArchiveEntries } from './lib/zipArchiveClient'
 import { afterNextPaint } from '../../lib/afterNextPaint'
 import { apiFetch } from '../../lib/apiClient'
 import { useAuthBootstrapQuery } from '../../lib/authQuery'
@@ -226,10 +235,12 @@ import {
   largestHullFaceNormal,
   nextPaint,
   PAINT_CHANNEL_SPECS,
+  TRIANGLE_PAINT_CHANNELS,
   isTransformGizmoMode,
   printableMeshBox,
   rasterizePolygonCells,
   restObjectOnBed,
+  scaleGroupAboutPoint,
   ROTATE_SNAP_COARSE,
   ROTATE_SNAP_FINE,
   rotorOf,
@@ -305,6 +316,12 @@ import type { ProcessConfigResolver } from '../../components/ProcessSettingsDial
 import { ProgressBar } from '../../components/ProgressBar'
 import { ProgressSpinner } from '../../components/ProgressSpinner'
 const ProcessSettingsDialogImpl = lazy(() => import('../../components/ProcessSettingsDialog'))
+
+/** BambuStudio's own ceiling for "Number of copies" (`wxGetNumberFromUser(..., 1, 0, 1000, this)`). */
+const MAX_CLONE_COPIES = 1000
+
+/** Shell cap for both split actions: past this the result is debris, not parts. */
+const MAX_SPLIT_SHELLS = 50
 function ProcessSettingsDialog(props: ComponentProps<typeof ProcessSettingsDialogImpl>) {
   return (
     <Suspense fallback={<LazyDialogFallback label="Opening settings…" />}>
@@ -370,6 +387,12 @@ interface EditorViewProps {
    * describe perfectly well.
    */
   repairReasons?: readonly ThreeMfSettingsRepairReason[]
+  /**
+   * The subset of {@link repairReasons} whose repair would decline, for the same host. Derived from
+   * the same parse (`unrepairableSettingsRepairReasons`); without it the public editor would offer
+   * a Repair button for a defect it cannot fix, which is what issue #101 was about.
+   */
+  unrepairableRepairReasons?: readonly ThreeMfSettingsRepairReason[]
   /**
    * The host's slicing-preset manager, opened by the sidebar's "Manage" action.
    *
@@ -499,6 +522,7 @@ function EditorView({
   resolveProcessConfig,
   resolveFilamentConfig,
   repairReasons,
+  unrepairableRepairReasons,
   presetManager,
   presetSourceStatus,
   onApply,
@@ -631,7 +655,7 @@ function EditorView({
    * identity, and emitted as `importPaint` at bake time.
    */
   const seedPartPaintOverlays = useCallback((mesh: THREE.Mesh, objectId: number, componentObjectId: number) => {
-    for (const channel of ['supports', 'seam', 'color'] as const) {
+    for (const channel of TRIANGLE_PAINT_CHANNELS) {
       const spec = PAINT_CHANNEL_SPECS[channel]
       const sessionCodes = stateRef.current?.[spec.stateKey]?.[supportPaintKey(objectId, componentObjectId)]
       const codes = sessionCodes ?? getGeometryTrianglePaint(mesh.geometry, channel)
@@ -1159,6 +1183,14 @@ function EditorView({
   // is authoritative once the project is open, and leaving a warning up after the action that fixes
   // it reads as the action having failed. Both come back on undo for free, because the pins they
   // read live in the undo-cloned editor state.
+  // Resolved from the SAME source as the reasons above, or the two disagree about one file: the
+  // DTO describes the head while an archived version reads its own parsed index.
+  const unrepairableRepairReasonsResolved: readonly ThreeMfSettingsRepairReason[] =
+    (needsSettingsRepairFileId
+      ? baseFileQuery.data?.file.unrepairableSettingsRepairReasons
+      : openedArchivedVersion
+        ? platesQuery.data?.unrepairableSettingsRepairReasons
+        : unrepairableRepairReasons) ?? []
   const settingsRepairReasons = rawSettingsRepairReasons.filter((reason) => {
     if (reason === 'filamentPhysics') return !state?.repairedFilamentConfigs
     return !state?.settingsRepairStaged
@@ -1353,6 +1385,7 @@ function EditorView({
       }
       const nextBed = {
         minX: scene.bed.minX, maxX: scene.bed.maxX, minY: scene.bed.minY, maxY: scene.bed.maxY,
+        maxZ: scene.bed.maxZ,
         excludeAreas: scene.bed.excludeAreas
       }
       if (!bedsEqual(plate.bed, nextBed)) {
@@ -4331,6 +4364,67 @@ function EditorView({
     }
   }, [handleReplaceWithStaged, importStore])
 
+  /**
+   * BambuStudio's "Split -> To parts" (`ObjectList::split` -> `ModelVolume::split`): the same
+   * connected-shell split as Split to objects, but the shells stay inside ONE object as its parts
+   * rather than becoming objects of their own.
+   *
+   * The difference that matters is where they land, and our answer is a multi-solid import: the
+   * shells are written into one plain 3MF (`@printstream/shared/three-mf` `mesh-archive.ts`) and
+   * staged together, so they arrive as one import with a part per shell and the bake writes them as
+   * `<component>` parts of a single object. That is the STEP-assembly path, already carrying
+   * per-solid selection, transforms, materials and subtypes.
+   *
+   * Staging them TOGETHER is the whole point, not an optimisation. The shells were one mesh a
+   * moment ago and only mean something in a shared coordinate space; staged one at a time, each
+   * would be normalised against its own bounds and the assembly would reassemble with every shell
+   * stacked on the origin. One import is normalised once, as a group.
+   *
+   * Studio renames the pieces `<name>_1..n` and keeps the object's config, name and instances,
+   * which falls out here: the object keeps its identity through `replacedObjectId`, so its
+   * per-object settings follow, and only the geometry is replaced.
+   */
+  const handleSplitToParts = useCallback(async (key: string) => {
+    const plate = stateRef.current?.plates.find((entry) => entry.index === activePlateIndex)
+    const instance = plate?.instances.find((entry) => entry.key === key)
+    const group = groupByKeyRef.current.get(key)
+    if (!plate || !instance || !group) return
+    const discardedHelpers = collectHelperVolumesFor(instance, group).length
+    const shells = splitTriangleSoup(collectWorldTriangles(group))
+    if (shells.length < 2) {
+      toast.error(`${instance.name} is already a single connected part.`)
+      return
+    }
+    if (shells.length > MAX_SPLIT_SHELLS) {
+      toast.error(`${instance.name} has ${shells.length} shells, too many to split into parts.`)
+      return
+    }
+    setImporting(true)
+    try {
+      const entries = buildVanillaThreeMfEntries(shells.map((triangles, index) => ({
+        name: `${instance.name}_${index + 1}`,
+        triangles
+      })))
+      // Level 0: this archive exists for one hop into the staging endpoint and is thrown away,
+      // so compressing XML we just generated only adds latency to the split.
+      const encoder = new TextEncoder()
+      const zipEntries: Record<string, Uint8Array> = {}
+      for (const [name, text] of Object.entries(entries)) zipEntries[name] = encoder.encode(text)
+      const bytes = await zipArchiveEntries(zipEntries, 0)
+      const file = new File([bytes.slice().buffer as ArrayBuffer], `${instance.name}.3mf`, { type: 'application/octet-stream' })
+      const staged = await importStore.stageFile(file, 'object')
+      handleReplaceWithStaged(key, staged)
+      toast.success(`Split ${instance.name} into ${shells.length} parts.`
+        + (discardedHelpers > 0
+          ? ` ${discardedHelpers} helper volume${discardedHelpers === 1 ? '' : 's'} could not be carried over: undo to get ${discardedHelpers === 1 ? 'it' : 'them'} back.`
+          : ''))
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Unable to split the model into parts.')
+    } finally {
+      setImporting(false)
+    }
+  }, [activePlateIndex, collectHelperVolumesFor, importStore, handleReplaceWithStaged])
+
   /** Add a built-in primitive (cube/cylinder/sphere/cone) at a free spot on the plate. */
   const handleAddPrimitive = useCallback(async (kind: PrimitiveKind) => {
     const plate = stateRef.current?.plates.find((entry) => entry.index === activePlateIndex)
@@ -4377,7 +4471,7 @@ function EditorView({
    * parts, materials, paint and per-object settings stay shared) or independent (BS's Ctrl+C/V /
    * `Model::add_object`, a whole new object that diverges from here on).
    */
-  const handleDuplicate = useCallback((key: string, independent = false) => {
+  const handleDuplicate = useCallback((key: string, independent = false, copies = 1) => {
     const keys = selectionFor(key)
     let cloneKey: string | null = null
     updatePlates((plates) =>
@@ -4387,6 +4481,7 @@ function EditorView({
         for (const target of keys) {
           const source = next.instances.find((entry) => entry.key === target)
           if (!source) continue
+          for (let copy = 0; copy < copies; copy += 1) {
           const clone = duplicateInstance(source)
           // The copy is registered against the LIVE state (the plate map below is rebuilt from it),
           // so the clone registry and the copied session edits land on the same object identity.
@@ -4395,16 +4490,53 @@ function EditorView({
             makeInstanceIndependent(stateRef.current, clone)
             copyObjectProcessOverrides(sourceObjectId, clone.objectId)
           }
+          // Placed against `next`, which already holds the copies made so far this pass, so a run
+          // of copies spreads out instead of stacking on one spot.
           const spot = findFreePlatePosition(next)
           clone.position.set(spot.x, spot.y, clone.position.z)
           cloneKey = clone.key
           next = { ...next, instances: [...next.instances, clone] }
+          }
         }
         return next
       })
     )
     if (cloneKey) selectExclusive(cloneKey)
   }, [activePlateIndex, updatePlates, selectionFor, selectExclusive, copyObjectProcessOverrides])
+
+  /**
+   * BambuStudio's "Clone" (Ctrl+K, `Plater::clone_selection`): asks for a copy count and makes that
+   * many, rather than making the user repeat Duplicate. Studio's copies are INDEPENDENT objects --
+   * `Selection::clone` is literally copy-to-clipboard then paste N times, and its paste calls
+   * `Model::add_object`, minting a new ModelObject each round -- so this maps onto our independent
+   * duplicate, not the linked one. (Studio has no working linked-copy path at all here: both
+   * `Plater::increase_instances` and `decrease_instances` have their bodies wrapped in `#if 0`,
+   * and `set_number_of_copies` is dead code with no caller. Our linked Duplicate is the one place
+   * we go beyond it, and it stays reachable for a single copy or by repeating Ctrl+D.)
+   *
+   * The 1..1000 range is Studio's own (`wxGetNumberFromUser(..., 1, 0, 1000, this)`), minus its
+   * zero, which is a no-op it accepts and then does nothing with. Placement is the same
+   * free-spot search a single duplicate uses, so a big count spreads across the plate and falls
+   * back to the plate centre once nothing fits, exactly as Studio's `get_nearest_empty_cell` does.
+   */
+  const handleCloneWithCount = useCallback(async (key: string) => {
+    const answer = await promptText({
+      title: 'Clone',
+      label: 'Number of copies',
+      initialValue: '1',
+      confirmLabel: 'Clone',
+      validateValue: (value) => {
+        const count = Number(value.trim())
+        if (!Number.isInteger(count) || count < 1) return 'Enter a whole number of copies, 1 or more.'
+        if (count > MAX_CLONE_COPIES) return `That is more than ${MAX_CLONE_COPIES} copies.`
+        return null
+      }
+    })
+    if (answer === null) return
+    const count = Number(answer.trim())
+    if (!Number.isInteger(count) || count < 1 || count > MAX_CLONE_COPIES) return
+    handleDuplicate(key, true, count)
+  }, [promptText, handleDuplicate])
 
   /**
    * How many placed instances share this instance's object: i.e. how many LINKED copies it has.
@@ -4513,6 +4645,7 @@ function EditorView({
     activePlateRef,
     selectionKeysRef,
     onDuplicate: handleDuplicate,
+    onCloneWithCount: (key: string) => { void handleCloneWithCount(key) },
     onDelete: handleDeleteShortcut,
     onSelectAll: handleSelectAllObjects,
     onClearSelection: () => selectExclusive(null),
@@ -4774,6 +4907,158 @@ function EditorView({
     })
   }, [selectedKey, mutateSelectedGroup])
 
+  /**
+   * Apply a mutation to EVERY selected object as ONE undo step.
+   *
+   * The multi-selection sibling of {@link mutateSelectedGroup}, which reads `selectedKeyRef` alone
+   * and so silently ignores the rest of a multi-selection. Resting on the bed is the CALLER's
+   * choice here rather than automatic: an action that moves a body in Z deliberately (Align top,
+   * Align front-back centre) would be undone on the spot by a re-floor, which is exactly what
+   * routing such an action through `mutateSelectedGroup` does.
+   *
+   * `mutate` receives each group already baked to an exact matrix, and runs in selection order with
+   * the primary first. It must not add or remove instances: structural edits belong in
+   * `updatePlates`, which records its own history.
+   */
+  const mutateSelection = useCallback((
+    mutate: (group: THREE.Group, key: string) => void,
+    options: { restOnBed?: boolean } = {}
+  ) => {
+    const keys = allSelectedKeysRef.current()
+    if (keys.length === 0) return
+    recordHistory()
+    for (const key of keys) {
+      const group = groupByKeyRef.current.get(key)
+      if (!group) continue
+      bakeExactMatrix(group)
+      mutate(group, key)
+      if (options.restOnBed) restObjectOnBed(group)
+      writeBackGroupTransform(group)
+    }
+    const primary = selectedKeyRef.current ? groupByKeyRef.current.get(selectedKeyRef.current) : null
+    if (primary) syncSelectedTransform(primary)
+    regenerateActivePlateThumbnail()
+  }, [recordHistory, bakeExactMatrix, writeBackGroupTransform, syncSelectedTransform, regenerateActivePlateThumbnail])
+
+  /**
+   * BambuStudio's "Convert from inch" / "Convert from meter" (`ModelObject::convert_units`,
+   * `Model.cpp:1868`): a CAD export whose author worked in another unit arrives 25.4x or 1000x too
+   * small, which is not an error anywhere, just a model the user has to notice. Applied to every
+   * selected object, as Studio's does (it iterates the whole selection's object indexes).
+   *
+   * TWO DELIBERATE DIVERGENCES.
+   *
+   * We scale the instance's TRANSFORM where Studio rewrites the mesh's vertices
+   * (`scale_geometry_after_creation`). The rendered result and the baked file agree either way, and
+   * a transform edit is undoable and keeps paint on the facets it was painted on; rewriting the
+   * geometry would have to stage a replacement import and lose them.
+   *
+   * We also grow each object IN PLACE rather than multiplying its offset by the same factor as
+   * Studio does. Studio can afford to fling the object away because `convert_unit` immediately
+   * removes and re-loads it through `load_model_objects`, which places it again; we have no such
+   * reload, so the equivalent behaviour is to keep it where the user can see it.
+   *
+   * Studio's inverse items ("Restore to inch"/"Restore to meter") are deliberately not offered: it
+   * gates them on each volume's `source.is_converted_from_inches`, a provenance flag we do not
+   * carry, and an always-available inverse would let a user shrink an unconverted model 25.4x with
+   * nothing to warn them. Undo is our exact inverse.
+   */
+  const handleConvertUnits = useCallback((unit: ConvertibleModelUnit) => {
+    const factor = MODEL_UNIT_MILLIMETRES[unit]
+    if (!factor || factor === 1) return
+    mutateSelection((group) => { scaleGroupAboutPoint(group, factor) })
+  }, [mutateSelection])
+
+  /**
+   * BambuStudio's Align/Distribute (`GLGizmoAlignment.cpp`), applied to the object selection.
+   *
+   * The arithmetic lives in `lib/alignDistribute.ts`; this only measures each member and applies
+   * what comes back. Measurement is the world PRINTABLE box, the same one resting and the
+   * placement warnings use, so an object lines up by the geometry that actually prints rather than
+   * by its local origin (which is wherever the file's exporter left it) or by a helper volume
+   * hanging off its side.
+   *
+   * Deliberately NOT routed through `mutateSelectedGroup`: that one is single-selection and
+   * re-rests every object on the bed, which would silently undo Align top and Align top-bottom
+   * centre the instant they ran. Z alignment lifts bodies off the plate on purpose here, exactly
+   * as Studio's does; `Drop to bed` is how a user puts them back.
+   */
+  const applyAlignDistribute = useCallback((operation: AlignDistributeOperation) => {
+    const keys = allSelectedKeysRef.current()
+    const members: AlignMember[] = []
+    for (const key of keys) {
+      const group = groupByKeyRef.current.get(key)
+      if (!group) continue
+      const box = printableMeshBox(group)
+      if (box.isEmpty()) continue
+      members.push({ key, min: box.min[operation.axis], max: box.max[operation.axis] })
+    }
+    if (members.length < minimumMembersFor(operation)) return
+    const offsets = operation.mode ? alignOffsets(members, operation.mode) : distributeOffsets(members)
+    if (offsets.size === 0) return
+    mutateSelection((group, key) => {
+      const delta = offsets.get(key)
+      if (delta) group.position[operation.axis] += delta
+    })
+  }, [mutateSelection])
+
+  /**
+   * BambuStudio's "Scale to print volume" (`Selection::scale_to_fit_print_volume`,
+   * `Selection.cpp:1576`): grow or shrink the selection by ONE uniform factor so it fits the
+   * machine, then land it on the plate.
+   *
+   * The factor is Studio's: `min(sx, sy, sz)` over the print volume divided by the selection's
+   * combined box, with its 0.02mm pad on X and Y only (`:1659-1667`). HEIGHT IS PART OF IT --
+   * dropping `sz` is what makes a "scale to print volume" that produces a model taller than the
+   * printer, which is why the bed's `maxZ` had to be plumbed through the scene before this could
+   * be written honestly. A bed that states no height REFUSES rather than fitting XY and calling it
+   * done: the answer would be wrong in exactly the direction the user cannot see.
+   *
+   * Applied about the plate centre, matching Studio's re-centre after the scale, and every member
+   * moves by the same factor about that one point so a multi-selection keeps its relative layout.
+   */
+  const handleScaleToPrintVolume = useCallback(() => {
+    const plate = stateRef.current?.plates.find((entry) => entry.index === activePlateIndex)
+    if (!plate) return
+    if (plate.bed.maxZ == null) {
+      toast.error('This project does not say how tall the printer is, so it cannot be scaled to the print volume.')
+      return
+    }
+    const keys = allSelectedKeysRef.current()
+    const box = new THREE.Box3()
+    for (const key of keys) {
+      const group = groupByKeyRef.current.get(key)
+      if (!group) continue
+      const groupBox = printableMeshBox(group)
+      if (!groupBox.isEmpty()) box.union(groupBox)
+    }
+    if (box.isEmpty()) return
+
+    const size = box.getSize(new THREE.Vector3())
+    // Studio's pad, and its axes: 1/100th of a mm on both XY sides, nothing on Z.
+    const factor = Math.min(
+      (plate.bed.maxX - plate.bed.minX) / (size.x + 0.02),
+      (plate.bed.maxY - plate.bed.minY) / (size.y + 0.02),
+      plate.bed.maxZ / size.z
+    )
+    // Studio aborts on `s <= 0.0 || s == 1.0` rather than writing a no-op transform.
+    if (!Number.isFinite(factor) || factor <= 0 || factor === 1) return
+
+    // Studio scales the selection JOINTLY about its own centre and then translates the whole thing
+    // onto the print volume's centre. So each member's new centre is the plate centre plus its own
+    // offset from the selection centre, scaled: pinning every member to one point instead would
+    // stack a multi-selection into a single pile.
+    const selectionCentre = box.getCenter(new THREE.Vector3())
+    const plateCentre = { x: (plate.bed.minX + plate.bed.maxX) / 2, y: (plate.bed.minY + plate.bed.maxY) / 2 }
+    mutateSelection((group) => {
+      const centre = printableMeshBox(group).getCenter(new THREE.Vector3())
+      scaleGroupAboutPoint(group, factor, {
+        x: plateCentre.x + (centre.x - selectionCentre.x) * factor,
+        y: plateCentre.y + (centre.y - selectionCentre.y) * factor
+      })
+    })
+  }, [activePlateIndex, mutateSelection])
+
   /** Nudge every selected instance together on the bed (multi-select aware). */
   const nudgeSelection = useCallback((dx: number, dy: number) => {
     const keys = allSelectedKeysRef.current()
@@ -4972,7 +5257,7 @@ function EditorView({
     const plateId = mintPlateId()
     updatePlates((plates) => {
       const template = plates[plates.length - 1]
-      const bed = template ? { ...template.bed } : { minX: -128, maxX: 128, minY: -128, maxY: 128, excludeAreas: [] }
+      const bed = template ? { ...template.bed } : { minX: -128, maxX: 128, minY: -128, maxY: 128, maxZ: null, excludeAreas: [] }
       const plateType = template?.plateType ?? null
       return reindexPlates([
         ...plates,
@@ -5508,6 +5793,7 @@ function EditorView({
         {showEditorChrome && settingsRepairReasons.length > 0 && (
           <RepairProjectSettingsAlert
             reasons={settingsRepairReasons}
+            unrepairableReasons={unrepairableRepairReasonsResolved}
             // Repairing an archived version means restoring it first, a knowing decision, so it
             // gets the advisory with restore-first wording instead of a Repair button that would
             // mint a new head from old bytes.
@@ -6298,9 +6584,12 @@ function EditorView({
             selectionCount={selectedKey === contextMenu.key || extraSelectedKeys.includes(contextMenu.key) ? extraSelectedKeys.length + 1 : 1}
             onDuplicate={handleDuplicate}
             onDuplicateIndependent={(key) => handleDuplicate(key, true)}
+            onCloneWithCount={(key) => { void handleCloneWithCount(key) }}
+            onAlignDistribute={applyAlignDistribute}
             onMakeIndependent={linkedCopyCountFor(contextMenu.key) > 1 ? handleMakeIndependent : undefined}
             onRename={(key) => { void handleRenameObject(key) }}
             onSplitToObjects={(key) => { void handleSplitToObjects(key) }}
+            onSplitToParts={(key) => { void handleSplitToParts(key) }}
             canAssemble={extraSelectedKeys.length > 0 && (selectedKey === contextMenu.key || extraSelectedKeys.includes(contextMenu.key))}
             assembleCount={extraSelectedKeys.length + 1}
             onAssemble={() => { void handleAssembleSelection() }}
@@ -6345,6 +6634,8 @@ function EditorView({
             onResetRotation={() => mutateSelectedGroup((group) => { rotorOf(group).rotation.set(0, 0, 0) })}
             onResetScale={() => mutateSelectedGroup((group) => { group.scale.set(1, 1, 1) })}
             onMirror={(axis) => mutateSelectedGroup((group) => { group.scale[axis] *= -1 })}
+            onConvertUnits={handleConvertUnits}
+            onScaleToPrintVolume={activePlate?.bed.maxZ != null ? handleScaleToPrintVolume : undefined}
             otherPlates={(state?.plates ?? []).filter((plate) => plate.index !== activePlateIndex)}
             onMoveToPlate={handleMoveToPlate}
             onDelete={handleDelete}

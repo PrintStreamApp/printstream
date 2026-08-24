@@ -1137,6 +1137,14 @@ export const libraryFileSchema = z.object({
    */
   settingsRepairReasons: z.array(threeMfSettingsRepairReasonSchema).optional(),
   /**
+   * The subset of {@link settingsRepairReasons} whose repair would DECLINE: the value cannot be
+   * derived with certainty, so the never-guess rule leaves it alone. A surface offering a Repair
+   * action withholds it for these and names the manual remedy, instead of writing a new version
+   * that changes nothing and brings the banner straight back. Absent from an older parser or
+   * bridge, which must read as "unknown", i.e. behave as before and assume repairable.
+   */
+  unrepairableSettingsRepairReasons: z.array(threeMfSettingsRepairReasonSchema).optional(),
+  /**
    * The Bambu Studio version that saved this project (e.g. `"02.08.00.50"`). Absent for non-3MFs
    * and for projects that carry no version. BambuStudio REFUSES a project newer than the engine
    * slicing it (major.minor only), so the slice dialog warns before the job is queued.
@@ -1218,6 +1226,14 @@ export const libraryThreeMfSceneBedSchema = z.object({
   maxX: z.number(),
   minY: z.number(),
   maxY: z.number(),
+  /**
+   * The machine's usable height in mm (`printable_height`), or null when nothing states one.
+   *
+   * Null means UNKNOWN, never unlimited: a consumer asking "does this fit the printer?" must
+   * decline to answer rather than pass. Defaulted so a scene from an older server still parses --
+   * Zod strips what the schema omits, so a field absent here never reaches the browser at all.
+   */
+  maxZ: z.number().nullable().default(null),
   plateType: z.string().nullable(),
   /**
    * The printer whose bed this placement describes: the slice dialog's target when one is
@@ -1688,6 +1704,14 @@ export const threeMfIndexSchema = z.object({
    */
   needsSettingsRepair: z.boolean().optional(),
   settingsRepairReasons: z.array(threeMfSettingsRepairReasonSchema).optional(),
+  /**
+   * The subset of {@link settingsRepairReasons} whose repair would DECLINE: the value cannot be
+   * derived with certainty, so the never-guess rule leaves it alone. A surface offering a Repair
+   * action withholds it for these and names the manual remedy, instead of writing a new version
+   * that changes nothing and brings the banner straight back. Absent from an older parser or
+   * bridge, which must read as "unknown", i.e. behave as before and assume repairable.
+   */
+  unrepairableSettingsRepairReasons: z.array(threeMfSettingsRepairReasonSchema).optional(),
   /**
    * Sliced for a machine with a Filament Track Switch. Optional for the same reason as the repair
    * flags above: absent from an older server, where it must read as "unknown" rather than `false`,

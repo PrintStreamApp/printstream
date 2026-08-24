@@ -132,7 +132,16 @@ export const PER_OBJECT_PROCESS_KEYS: readonly string[] = [
   'enable_support', 'support_type', 'support_style', 'support_threshold_angle', 'support_on_build_plate_only',
   'brim_type', 'brim_width',
   'seam_position',
-  'ironing_type', 'ironing_flow', 'ironing_spacing'
+  'ironing_type', 'ironing_flow', 'ironing_spacing',
+  // BambuStudio's "Flush options" bundle, which it offers on an OBJECT rather than only globally
+  // (`FREQ_SETTINGS_BUNDLE_FFF` in `GUI_Factories.cpp`, written through `select_object_config`).
+  // The engine agrees: these live in `PrintObjectConfig`, not the global `PrintConfig`, so a
+  // per-object value is honoured rather than silently ignored. Ours were global-only, so there was
+  // no way to say "do not purge into THIS object" for the one part whose infill would show it.
+  // Studio greys the menu out unless `enable_prime_tower` is on, and the catalog's own tooltip
+  // already carries that caveat ("It will not take effect, unless the prime tower is enabled"),
+  // which is the same sentence Studio shows.
+  'flush_into_infill', 'flush_into_objects', 'flush_into_support'
 ]
 
 /** Request body for resolving a process profile's base config for the editor. */

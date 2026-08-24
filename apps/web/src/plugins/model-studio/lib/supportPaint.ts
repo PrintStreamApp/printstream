@@ -53,6 +53,17 @@ export const SUPPORT_PAINT_COLORS: PaintPalette = {
   mixed: 0x8a63d6
 }
 
+/**
+ * Fuzzy-skin colours. Single-state in practice: BambuStudio's gizmo only ENFORCES fuzzy skin
+ * (`FUZZY_SKIN = ENFORCER`), so `blocker` exists to satisfy the palette shape and to keep a file
+ * carrying a blocker code renderable rather than invisible.
+ */
+export const FUZZY_PAINT_COLORS: PaintPalette = {
+  enforcer: 0xc86bd8,
+  blocker: 0x6b7a8f,
+  mixed: 0x8a63d6
+}
+
 /** Seam-paint colours: green forces the seam here, orange blocks it. */
 export const SEAM_PAINT_COLORS: PaintPalette = {
   enforcer: 0x2fae6a,
@@ -468,6 +479,7 @@ const PAINT_OVERLAY_LIFT = 0.05
 
 export const SUPPORT_PAINT_OVERLAY_NAME = 'supportPaintOverlay'
 export const SEAM_PAINT_OVERLAY_NAME = 'seamPaintOverlay'
+export const FUZZY_PAINT_OVERLAY_NAME = 'fuzzyPaintOverlay'
 
 /**
  * Build the painted-triangle overlay for a mesh: a vertex-coloured copy of just the

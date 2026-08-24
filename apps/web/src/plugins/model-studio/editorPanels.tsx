@@ -60,6 +60,7 @@ import GridViewRoundedIcon from '@mui/icons-material/GridViewRounded'
 import UnfoldLessRoundedIcon from '@mui/icons-material/UnfoldLessRounded'
 import UnfoldMoreRoundedIcon from '@mui/icons-material/UnfoldMoreRounded'
 import AdjustRoundedIcon from '@mui/icons-material/AdjustRounded'
+import BlurOnRoundedIcon from '@mui/icons-material/BlurOnRounded'
 import BrushRoundedIcon from '@mui/icons-material/BrushRounded'
 import FormatPaintRoundedIcon from '@mui/icons-material/FormatPaintRounded'
 import PaletteRoundedIcon from '@mui/icons-material/PaletteRounded'
@@ -551,6 +552,7 @@ export function GizmoToolbar({
       { value: 'paintSupports', label: 'Paint supports', short: 'Supports', icon: <BrushRoundedIcon /> },
       { value: 'paintSeam', label: 'Paint seam', short: 'Seam', icon: <FormatPaintRoundedIcon /> },
       { value: 'paintColor', label: 'Paint color', short: 'Color', icon: <PaletteRoundedIcon /> },
+      { value: 'paintFuzzy', label: 'Paint fuzzy skin', short: 'Fuzzy', icon: <BlurOnRoundedIcon /> },
       { value: 'brimEars', label: 'Brim ears', icon: <AdjustRoundedIcon /> }
     ] as Array<{ value: GizmoMode; label: string; short?: string; icon: JSX.Element }>).map((tool) => ({
       key: tool.value,

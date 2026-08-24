@@ -53,7 +53,7 @@ import {
 import { isEmbeddedFilamentPresetEntry } from './embedded-presets.js'
 import { CUSTOM_GCODE_PER_LAYER_ENTRY, sliceRecordFilamentIds, stringArray } from './index-parser.js'
 import { repairObjectMeshesInModelEntry } from './mesh-repair.js'
-import { applyObjectProcessOverridesXml, rekeyObjectProcessOverrides, type ObjectProcessOverrides } from './object-overrides.js'
+import { applyObjectProcessOverridesXml, objectHeadOf, readObjectProcessOverridesFromHead, rekeyObjectProcessOverrides, type ObjectProcessOverrides } from './object-overrides.js'
 import { BRIM_EAR_POINTS_ENTRY, parseRootModelObjectIdOrder } from './scene-parser.js'
 import { OBJECT_ORDINAL_SIDECAR_ENTRIES, remapObjectOrdinalSidecar } from './object-ordinal-sidecars.js'
 import { remapSliceInfoPlates, sourcePlateMapping } from './plate-metadata.js'
@@ -276,9 +276,43 @@ export function planEditedThreeMf(
   // known, rather than leaving it to each caller: the API did it in a later pass and the browser's
   // local save did not, so saving to disk silently dropped the settings on any replaced or copied
   // object. Callers that still re-key afterwards are unaffected, this is idempotent.
-  const objectProcessOverrides = options.objectProcessOverrides
+  const requestObjectProcessOverrides = options.objectProcessOverrides
     ? rekeyObjectProcessOverrides(options.objectProcessOverrides, [...replacedObjectIds, ...documents.clonedObjectIds])
     : undefined
+
+  // "Replace with…" keeps the object's IDENTITY, so it must keep the object's per-object PROCESS
+  // overrides, and NOTHING ELSE CARRIES THEM: the source object's block is gone from the baked
+  // document and the replacement is a freshly rendered object with a head of its own. Seed them
+  // from the source here so that invariant belongs to the BAKE.
+  //
+  // Re-keying the request alone was not enough, and the gap was invisible because the two callers
+  // differ. A SAVE sends the whole override set unconditionally, so a saved file kept the settings
+  // and every surface went on showing them. A SLICE sends only what the user CHANGED against the
+  // file, so an override nobody touched was absent from the request, the re-key had nothing to
+  // move, and the file handed to the engine lost it. Reported as: an object with `enable_support`
+  // on, under a preset with supports off, stopped generating support the moment its mesh was
+  // replaced, with no error and with the project still saying supports were on.
+  const inheritedReplacementOverrides: ObjectProcessOverrides = {}
+  if (replacedObjectIds.length > 0) {
+    const sourceOverridesByObjectId = new Map<number, Record<string, string>>()
+    for (const match of baseModelSettingsXml.matchAll(/<object\b([^>]*)>[\s\S]*?<\/object>/g)) {
+      const objectId = Number.parseInt(/(?:^|\s)id="(\d+)"/.exec(match[1] ?? '')?.[1] ?? '', 10)
+      if (!Number.isInteger(objectId)) continue
+      const overrides = readObjectProcessOverridesFromHead(objectHeadOf(match[0]))
+      if (Object.keys(overrides).length > 0) sourceOverridesByObjectId.set(objectId, overrides)
+    }
+    for (const { originalObjectId, bakedObjectId } of replacedObjectIds) {
+      const inherited = sourceOverridesByObjectId.get(originalObjectId)
+      if (inherited) inheritedReplacementOverrides[String(bakedObjectId)] = inherited
+    }
+  }
+
+  // Spread per OBJECT, not per key: a caller's entry is a COMPLETE set by the same contract
+  // `applyObjectProcessOverridesXml` writes under, so a key it omits was deliberately cleared and
+  // must not be resurrected from the inherited set.
+  const objectProcessOverrides = Object.keys(inheritedReplacementOverrides).length > 0
+    ? { ...inheritedReplacementOverrides, ...requestObjectProcessOverrides }
+    : requestObjectProcessOverrides
 
   // Triangle paint (support + seam brushes): rewrite painted parts' triangle attributes.
   // Root-entry meshes are rewritten on the already-built model XML; meshes in per-object
@@ -293,6 +327,9 @@ export function planEditedThreeMf(
     }
     if (edit.colorPaint && edit.colorPaint.length > 0) {
       paintChannels.push({ attribute: 'paint_color', byEntry: resolvePartPaintByEntry(baseModelXml, edit.colorPaint) })
+    }
+    if (edit.fuzzyPaint && edit.fuzzyPaint.length > 0) {
+      paintChannels.push({ attribute: 'paint_fuzzy_skin', byEntry: resolvePartPaintByEntry(baseModelXml, edit.fuzzyPaint) })
     }
   }
   for (const channel of paintChannels) {
