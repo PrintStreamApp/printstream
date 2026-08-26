@@ -5,7 +5,7 @@
  * from the slicer catalogue for the printer's model and can be overridden.
  */
 import { memo, useMemo, useState } from 'react'
-import { Alert, Button, FormControl, FormLabel, Modal, ModalClose, Option, Select, Stack, Typography } from '@mui/joy'
+import { Alert, Button, FormControl, FormLabel, ModalClose, Option, Select, Stack, Typography } from '@mui/joy'
 import ScienceRoundedIcon from '@mui/icons-material/ScienceRounded'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { PrinterPickerDialog } from '../../components/PrinterPickerDialog'
@@ -31,6 +31,7 @@ import {
   isProcessProfileCompatible,
   slicingPresetsResponseIsUsable
 } from '../../lib/slicingPresetMatching'
+import { BackAwareModal } from '../../components/BackAwareModal'
 import { ScrollableDialogBody, ScrollableModalDialog } from '../../components/ScrollableDialog'
 import { DialogSection } from '../../components/DialogSection'
 import { NumberField } from './NumberField'
@@ -232,7 +233,7 @@ export const NewCalibrationDialog = memo(function NewCalibrationDialog({ printer
   if (startedRun) return <CalibrationSlicePrintModal run={startedRun} onClose={onClose} />
 
   return (
-    <Modal open onClose={onClose}>
+    <BackAwareModal open onClose={onClose}>
       <ScrollableModalDialog aria-labelledby="new-calibration-title" sx={{ maxWidth: 520 }}>
         <Typography id="new-calibration-title" level="h4" startDecorator={<ScienceRoundedIcon />}>
           {lockedTest === 'pressureAdvance' ? 'Pressure advance calibration' : 'New calibration'}
@@ -356,6 +357,6 @@ export const NewCalibrationDialog = memo(function NewCalibrationDialog({ printer
           <Button onClick={() => start.mutate()} loading={start.isPending} disabled={!selectedSlot || !profilesUsable}>Start calibration</Button>
         </Stack>
       </ScrollableModalDialog>
-    </Modal>
+    </BackAwareModal>
   )
 })

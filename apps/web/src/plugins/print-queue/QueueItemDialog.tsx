@@ -15,10 +15,10 @@ import {
   FormControl,
   FormLabel,
   Input,
-  Modal,
   Stack,
   Typography
 } from '@mui/joy'
+import { BackAwareModal } from '../../components/BackAwareModal'
 import { useQuery } from '@tanstack/react-query'
 import {
   evaluateQueueMatch,
@@ -338,7 +338,7 @@ export function QueueItemDialog({ open, onClose, onBack, fixedFile, defaultPlate
   const busy = addItem.isPending || updateItem.isPending
 
   return (
-    <Modal open={open} onClose={onClose}>
+    <BackAwareModal open={open} onClose={onClose}>
       <ScrollableModalDialog sx={{ maxWidth: 560, width: '100%' }}>
         <DialogTitle>{isEdit ? 'Edit queued print' : 'Add to queue'}</DialogTitle>
         <ScrollableDialogBody>
@@ -451,7 +451,7 @@ export function QueueItemDialog({ open, onClose, onBack, fixedFile, defaultPlate
           </Stack>
         </DialogActions>
       </ScrollableModalDialog>
-    </Modal>
+    </BackAwareModal>
   )
 }
 

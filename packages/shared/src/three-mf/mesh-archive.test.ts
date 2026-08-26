@@ -10,8 +10,8 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { buildVanillaThreeMfEntries, type ThreeMfArchiveSolid } from './mesh-archive'
-import { extractThreeMfImportMesh, type ThreeMfImportSource } from './mesh-extract'
+import { buildVanillaThreeMfEntries, type ThreeMfArchiveSolid } from './mesh-archive.js'
+import { extractThreeMfImportMesh, type ThreeMfImportSource } from './mesh-extract.js'
 
 /** A unit tetrahedron translated to `offset`, as flat triangle coordinates. */
 function tetrahedron(offset: { x: number; y: number; z: number }, size = 10): number[] {

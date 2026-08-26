@@ -14,7 +14,8 @@ function cubeObjectXml(id: number): string {
     [0, 0, 10], [10, 0, 10], [10, 10, 10], [0, 10, 10]
   ]
   const tris: Array<[number, number, number, string]> = [
-    [0, 2, 1, ' paint_supports="4"'], [0, 3, 2, ' paint_seam="8"'], [4, 5, 6, ' paint_color="4"'], [4, 6, 7, ''],
+    [0, 2, 1, ' paint_supports="4"'], [0, 3, 2, ' paint_seam="8"'], [4, 5, 6, ' paint_color="4"'],
+    [4, 6, 7, ' paint_fuzzy_skin="4"'],
     [0, 1, 5, ''], [0, 5, 4, ''], [2, 3, 7, ''], [2, 7, 6, ''],
     [0, 4, 7, ''], [0, 7, 3, ''], [1, 2, 6, ''], [1, 6, 5, '']
   ]
@@ -51,14 +52,20 @@ test('meshParseCore produces the same geometry as the DOM parser', async () => {
   assert.deepEqual([...fromWorkerCore.keys()].sort(), [1, 2], 'parses both objects by id')
   assert.deepEqual([...fromDom.keys()].sort(), [1, 2])
 
+  const { TRIANGLE_PAINT_SOURCES } = await import('./meshParseCore')
   for (const objectId of [1, 2]) {
     const core = fromWorkerCore.get(objectId)!
     const dom = fromDom.get(objectId)!
     assertArraysClose(core.getAttribute('position')?.array, dom.getAttribute('position')?.array, `obj ${objectId} position`)
     assertArraysClose(core.getAttribute('normal')?.array, dom.getAttribute('normal')?.array, `obj ${objectId} normal`)
-    assert.deepEqual(core.userData.supportPaint, dom.userData.supportPaint, `obj ${objectId} supportPaint`)
-    assert.deepEqual(core.userData.seamPaint, dom.userData.seamPaint, `obj ${objectId} seamPaint`)
-    assert.deepEqual(core.userData.colorPaint, dom.userData.colorPaint, `obj ${objectId} colorPaint`)
+    for (const source of TRIANGLE_PAINT_SOURCES) {
+      assert.deepEqual(
+        core.userData[source.userDataKey],
+        dom.userData[source.userDataKey],
+        `obj ${objectId} ${source.userDataKey}`
+      )
+      assert.ok(core.userData[source.userDataKey], `obj ${objectId} ${source.userDataKey} is populated by both parsers`)
+    }
   }
 })
 
@@ -69,7 +76,37 @@ test('meshParseCore parses paint codes onto the right triangles', async () => {
   assert.equal(first!.objectId, 1)
   assert.equal(first!.positions.length, 8 * 3, '8 cube vertices')
   assert.equal(first!.index.length, 12 * 3, '12 cube triangles')
-  assert.deepEqual(first!.supportPaint, { 0: '4' })
-  assert.deepEqual(first!.seamPaint, { 1: '8' })
-  assert.deepEqual(first!.colorPaint, { 2: '4' })
+  assert.deepEqual(first!.paint.supportPaint, { 0: '4' })
+  assert.deepEqual(first!.paint.seamPaint, { 1: '8' })
+  assert.deepEqual(first!.paint.colorPaint, { 2: '4' })
+  assert.deepEqual(first!.paint.fuzzyPaint, { 3: '4' })
+})
+
+/**
+ * The worker cannot post a `BufferGeometry`, so it projects paint out of `userData` and the client
+ * puts it back. Both hops are hand-maintained lists in the wire contract's shape, and a channel
+ * missing from either drops that channel's paint on EVERY load — silently, because the worker is
+ * the normal path and the geometry still renders. Worse than invisible: the editor seeds a first
+ * brush stroke from the loaded paint, and a save writes the complete desired map, so painting a
+ * channel that failed to load ERASES whatever the file already had. Round-trip every channel in
+ * the table rather than the three someone remembered.
+ */
+test('every paint channel survives the worker projection and the client restore', async () => {
+  const { buildThreeMfGeometries, collectMeshPaint, applyMeshPaint, TRIANGLE_PAINT_SOURCES } =
+    await import('./meshParseCore')
+  const THREE = await import('three')
+
+  const geometry = buildThreeMfGeometries(SAMPLE_XML).get(1)!
+  const posted = collectMeshPaint(geometry.userData)
+  const restored = new THREE.BufferGeometry()
+  applyMeshPaint(restored.userData, posted)
+
+  for (const source of TRIANGLE_PAINT_SOURCES) {
+    assert.deepEqual(
+      restored.userData[source.userDataKey],
+      geometry.userData[source.userDataKey],
+      `${source.channel} (${source.attribute}) survives the worker round trip`
+    )
+    assert.ok(restored.userData[source.userDataKey], `${source.channel} is populated at all`)
+  }
 })

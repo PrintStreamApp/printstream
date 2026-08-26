@@ -9,8 +9,8 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { PAINT_ATTRIBUTE_BY_CHANNEL } from './bake-documents'
-import { sceneEditSchema } from '../slicing'
+import { PAINT_ATTRIBUTE_BY_CHANNEL } from './bake-documents.js'
+import { sceneEditSchema } from '../slicing.js'
 
 test('every paint channel maps to its own distinct 3MF attribute', () => {
   assert.deepEqual(PAINT_ATTRIBUTE_BY_CHANNEL, {

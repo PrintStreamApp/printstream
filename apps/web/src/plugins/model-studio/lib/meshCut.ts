@@ -11,12 +11,108 @@
  * a broken source mesh) is skipped rather than failing the cut.
  */
 import * as THREE from 'three'
+import { isViewportAidMesh } from '../editorGeometry'
 
 export interface CutHalves {
   /** Triangle soup (9 floats per triangle) at or above the plane. Empty when nothing is above. */
   upper: Float32Array
   /** Triangle soup at or below the plane. Empty when nothing is below. */
   lower: Float32Array
+}
+
+/**
+ * What to do with a kept half's orientation after the cut, mirroring BambuStudio's per-half
+ * "Keep orientation / Place on cut / Flip" radio (`GLGizmoAdvancedCut`'s
+ * `m_keep_*` / `m_place_on_cut_*` / `m_rotate_*`).
+ */
+export type CutHalfOrientation = 'keep' | 'placeOnCut' | 'flip'
+
+/**
+ * Rotate a cut half's world-space soup so the requested face ends up on the bed.
+ *
+ * `placeOnCut` turns the piece so its CUT FACE points down, which is what makes a cut half
+ * printable without supports; `flip` turns it upside down (Studio's `rotation_transform(PI *
+ * UnitX())`). Studio composes this into the instance transform; we bake it into the soup instead,
+ * because our halves are re-staged as fresh imports whose vertices already carry every world
+ * transform, so there is no instance frame left to rotate (the same reason the cut itself works in
+ * world space). The caller must apply the SAME rotation to any helper volume it carries onto the
+ * half, or the volume detaches from the geometry it was drawn on.
+ *
+ * Which way is "down" follows from the cut: the upper half (the side above the plane) meets the
+ * plane on its LOW side, so its cut face's outward normal is -axis, while the lower half's is
+ * +axis. Every rotation here is a 90-degree multiple, so it is expressed as an exact coordinate
+ * swap rather than trig: no floating-point dirt on a mesh that is about to be welded, and each one
+ * is a proper rotation, so triangle winding (and therefore the outward normals) survives.
+ */
+export function orientCutHalfSoup(
+  soup: Float32Array,
+  axis: CutAxis,
+  side: 'lower' | 'upper',
+  orientation: CutHalfOrientation
+): Float32Array {
+  const rotate = cutHalfRotation(axis, side, orientation)
+  if (!rotate) return soup
+  for (let i = 0; i < soup.length; i += 3) {
+    const [x, y, z] = rotate(soup[i]!, soup[i + 1]!, soup[i + 2]!)
+    soup[i] = x
+    soup[i + 1] = y
+    soup[i + 2] = z
+  }
+  return soup
+}
+
+type SoupRotation = (x: number, y: number, z: number) => [number, number, number]
+
+/** Exact 90-degree-multiple rotations; null means "already facing the right way". */
+function cutHalfRotation(axis: CutAxis, side: 'lower' | 'upper', orientation: CutHalfOrientation): SoupRotation | null {
+  // Upside down about X, whatever the cut axis was.
+  if (orientation === 'flip') return (x, y, z) => [x, -y, -z]
+  if (orientation === 'keep') return null
+  if (axis === 'z') {
+    // The upper half's cut face is already its underside, so placing it on the cut is a no-op.
+    return side === 'upper' ? null : (x, y, z) => [x, -y, -z]
+  }
+  if (axis === 'x') {
+    return side === 'upper'
+      ? (x, y, z) => [-z, y, x] // -90 about Y: +X -> +Z, so the -X cut face turns down
+      : (x, y, z) => [z, y, -x] // +90 about Y: +X -> -Z
+  }
+  return side === 'upper'
+    ? (x, y, z) => [x, -z, y] // +90 about X: +Y -> +Z, so the -Y cut face turns down
+    : (x, y, z) => [x, z, -y] // -90 about X: +Y -> -Z
+}
+
+/**
+ * XY centre of a soup's bounding box: where a piece rebased from it should be placed.
+ *
+ * Read-only counterpart to {@link rebaseTriangleSoup}'s offset, for the caller that must decide a
+ * ROTATED piece's placement. Once a half is reoriented, its rebased centre is expressed in the
+ * rotated frame and is no longer a world position, so a piece placed there lands wherever the
+ * rotation happened to send it (a tall model cut along X went off the plate entirely).
+ */
+export function triangleSoupXYCenter(soup: Float32Array): { x: number; y: number } {
+  if (soup.length === 0) return { x: 0, y: 0 }
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+  for (let i = 0; i < soup.length; i += 3) {
+    minX = Math.min(minX, soup[i]!); maxX = Math.max(maxX, soup[i]!)
+    minY = Math.min(minY, soup[i + 1]!); maxY = Math.max(maxY, soup[i + 1]!)
+  }
+  return { x: (minX + maxX) / 2, y: (minY + maxY) / 2 }
+}
+
+/**
+ * Whether two soups hold identical geometry, vertex for vertex in the same order.
+ *
+ * EXACT, deliberately: the callers use it to decide whether a rebuild produced the same mesh as the
+ * last one, and both were produced by the same builder from the same inputs, so equal means bitwise
+ * equal. A tolerance would be answering a different question (are these shapes alike?) and could
+ * skip work after a real change. `NaN` never appears in a built soup, so `!==` is safe here.
+ */
+export function triangleSoupsEqual(a: Float32Array, b: Float32Array): boolean {
+  if (a === b) return true
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i += 1) if (a[i] !== b[i]) return false
+  return true
 }
 
 /** Distance (mm) within which a vertex counts as lying on the cut plane. */
@@ -43,8 +139,10 @@ export function collectWorldTriangles(
   const vertex = new THREE.Vector3()
   root.traverse((node) => {
     const mesh = node as THREE.Mesh
-    if (!mesh.isMesh || mesh.userData.isFaceHull || mesh.userData.isPaintOverlay || mesh.userData.isPrimeTower) return
-    if (mesh.userData.isHelperVolume && !options?.includeModifierVolumes) return
+    if (!mesh.isMesh) return
+    // Helper volumes are the one aid a caller can ask to KEEP (an explicit part export), so they
+    // are tested separately from the rest.
+    if (mesh.userData.isHelperVolume ? !options?.includeModifierVolumes : isViewportAidMesh(mesh)) return
     const geometry = mesh.geometry
     const position = geometry.getAttribute('position')
     if (!position) return

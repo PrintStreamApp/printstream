@@ -1,6 +1,7 @@
 /**
  * Floating control panel for the editor's plane-cut tool: axis (X/Y/Z), plane position (numeric +
- * slider, clamped to the object's range), which halves to keep, and Cut/Cancel.
+ * slider, clamped to the object's range), which halves to keep, what each kept half's orientation
+ * becomes, and Cut/Cancel.
  *
  * Pure presentational surface: the cut state, the live cut-plane preview mesh, and the actual
  * mesh-cut execution all live in EditorView; this only renders the controls and calls back.
@@ -9,7 +10,14 @@ import { Button, ButtonGroup, Checkbox, Input, Sheet, Slider, Stack, Typography 
 import ContentCutRoundedIcon from '@mui/icons-material/ContentCutRounded'
 import { CUT_AXIS_SIDES } from './editorGeometry'
 import { TOOL_PANEL_ANCHOR } from './editorPanels'
-import type { CutAxis } from './lib/meshCut'
+import type { CutAxis, CutHalfOrientation } from './lib/meshCut'
+
+/** BambuStudio's per-half after-cut choices, in its own order. */
+const ORIENTATION_CHOICES: ReadonlyArray<{ value: CutHalfOrientation; label: string; hint: string }> = [
+  { value: 'keep', label: 'Keep', hint: 'Keep orientation' },
+  { value: 'placeOnCut', label: 'On cut', hint: 'Place on cut: rest the piece on its cut face' },
+  { value: 'flip', label: 'Flip', hint: 'Flip upside down' }
+]
 
 export interface CutToolPanelProps {
   cutAxis: CutAxis
@@ -24,6 +32,11 @@ export interface CutToolPanelProps {
   setCutKeepLower: (value: boolean) => void
   cutKeepUpper: boolean
   setCutKeepUpper: (value: boolean) => void
+  /** What each kept half's orientation becomes after the cut. */
+  cutOrientLower: CutHalfOrientation
+  setCutOrientLower: (value: CutHalfOrientation) => void
+  cutOrientUpper: CutHalfOrientation
+  setCutOrientUpper: (value: CutHalfOrientation) => void
   /** A cut is running (disables inputs, shows the spinner). */
   cutting: boolean
   onCut: () => void
@@ -32,8 +45,41 @@ export interface CutToolPanelProps {
 
 export function CutToolPanel({
   cutAxis, setCutAxis, cutOffset, setCutOffset, cutRange, clampedCutOffset,
-  cutKeepLower, setCutKeepLower, cutKeepUpper, setCutKeepUpper, cutting, onCut, onCancel
+  cutKeepLower, setCutKeepLower, cutKeepUpper, setCutKeepUpper,
+  cutOrientLower, setCutOrientLower, cutOrientUpper, setCutOrientUpper,
+  cutting, onCut, onCancel
 }: CutToolPanelProps) {
+  const sides = CUT_AXIS_SIDES[cutAxis]
+  /** One kept half's orientation row; hidden entirely when that half is being discarded. */
+  const orientationRow = (
+    kept: boolean,
+    sideLabel: string,
+    value: CutHalfOrientation,
+    onChange: (next: CutHalfOrientation) => void
+  ) => kept && (
+    <Stack key={sideLabel} direction="row" spacing={0.75} alignItems="center">
+      <Typography level="body-xs" textColor="text.tertiary" sx={{ width: 40, flexShrink: 0, textTransform: 'capitalize' }}>
+        {sideLabel}
+      </Typography>
+      <ButtonGroup size="sm" variant="soft" aria-label={`${sideLabel} half orientation`} sx={{ flex: 1, minWidth: 0 }}>
+        {ORIENTATION_CHOICES.map((choice) => (
+          <Button
+            key={choice.value}
+            title={choice.hint}
+            aria-label={`${sideLabel}: ${choice.hint}`}
+            aria-pressed={value === choice.value}
+            variant={value === choice.value ? 'solid' : 'soft'}
+            color={value === choice.value ? 'primary' : 'neutral'}
+            onClick={() => onChange(choice.value)}
+            sx={{ flex: 1, minWidth: 0, px: 0.5 }}
+          >
+            {choice.label}
+          </Button>
+        ))}
+      </ButtonGroup>
+    </Stack>
+  )
+
   return (
     <Sheet
       variant="soft"
@@ -83,17 +129,24 @@ export function CutToolPanel({
       <Stack direction="row" spacing={1.5}>
         <Checkbox
           size="sm"
-          label={`Keep ${CUT_AXIS_SIDES[cutAxis].lower}`}
+          label={`Keep ${sides.lower}`}
           checked={cutKeepLower}
           onChange={(event) => setCutKeepLower(event.target.checked)}
         />
         <Checkbox
           size="sm"
-          label={`Keep ${CUT_AXIS_SIDES[cutAxis].upper}`}
+          label={`Keep ${sides.upper}`}
           checked={cutKeepUpper}
           onChange={(event) => setCutKeepUpper(event.target.checked)}
         />
       </Stack>
+      {(cutKeepLower || cutKeepUpper) && (
+        <>
+          <Typography level="body-xs" textColor="text.tertiary">After cut</Typography>
+          {orientationRow(cutKeepLower, sides.lower, cutOrientLower, setCutOrientLower)}
+          {orientationRow(cutKeepUpper, sides.upper, cutOrientUpper, setCutOrientUpper)}
+        </>
+      )}
       <Stack direction="row" spacing={0.75} justifyContent="flex-end">
         <Button size="sm" variant="plain" color="neutral" disabled={cutting} onClick={onCancel}>
           Cancel

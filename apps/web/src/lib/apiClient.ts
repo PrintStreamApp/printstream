@@ -3,8 +3,9 @@
  * error message, builds full URLs through `buildApiUrl`, and JSON-encodes
  * payloads. Hooks call this instead of using `fetch` directly.
  */
-import { extractErrorMessage } from '@printstream/shared'
+import { extractErrorMessage, WEB_BUILD_ID_HEADER } from '@printstream/shared'
 import { buildApiUrl } from './apiUrl'
+import { observeServedWebBuildId } from './appStaleness'
 import { readWorkspaceContextHeader } from './workspaceContext'
 
 export interface ApiClientOptions {
@@ -119,6 +120,11 @@ export async function apiFetch<T>(path: string, options: ApiClientOptions = {}):
     })
 
     options.onResponseHeaders?.(response.headers)
+    // Every API call doubles as a staleness check. This is the channel that covers the
+    // surfaces holding no WebSocket, including the PWA's own `start_url` (`/workspaces`)
+    // and the public tools, where a home-screen app can otherwise sit on an old build
+    // indefinitely. Success or error alike: a stale client's calls may well be failing.
+    observeServedWebBuildId(response.headers.get(WEB_BUILD_ID_HEADER))
 
     if (response.status === 204) return undefined as T
 

@@ -4,7 +4,7 @@ import {
   canonicalThreeMfPartSubtype,
   isNonRenderableThreeMfPartSubtype,
   threeMfPartSubtypeCarriesFilament
-} from './three-mf-part-subtype'
+} from './three-mf-part-subtype.js'
 
 test('canonicalThreeMfPartSubtype accepts both 3MF spellings and defaults to a normal part', () => {
   assert.equal(canonicalThreeMfPartSubtype('support_blocker'), 'support_blocker')

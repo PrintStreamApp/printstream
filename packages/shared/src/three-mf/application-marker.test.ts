@@ -5,7 +5,7 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { ensureApplicationMarker, hasApplicationMarker, THREE_MF_APPLICATION_MARKER } from './application-marker'
+import { ensureApplicationMarker, hasApplicationMarker, THREE_MF_APPLICATION_MARKER } from './application-marker.js'
 
 const model = (inner = '') => `<?xml version="1.0" encoding="UTF-8"?>\n<model unit="millimeter">\n${inner}  <resources/>\n  <build/>\n</model>`
 

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { arrangePlateItems, decodeFootprintCellKey, FOOTPRINT_CELL_MM, footprintCellKey, shiftFootprintCells } from './arrange'
+import { arrangePlateItems, decodeFootprintCellKey, FOOTPRINT_CELL_MM, footprintCellKey, planFillBedCopies, shiftFootprintCells } from './arrange'
 
 /** Rasterize an axis-aligned rect (mm) into footprint cell keys. */
 function rectCells(minX: number, minY: number, maxX: number, maxY: number): number[] {
@@ -112,4 +112,99 @@ test('shiftFootprintCells translates cells by whole cells, matching a re-rasteri
   assert.deepEqual([...shifted].sort((a, b) => a - b), [...expected].sort((a, b) => a - b))
   // A zero delta returns the same set instance (no allocation on an idle poll tick).
   assert.equal(shiftFootprintCells(shape, 0, 0), shape)
+})
+
+// --- Fill bed with copies -------------------------------------------------------------------
+
+/** Absolute mm bounds of a copy placed at `offset` from the template's current cells. */
+function copyBounds(templateCells: number[], offset: { dx: number; dy: number }) {
+  return movedBounds(templateCells, offset)
+}
+
+test('fill bed packs copies into the free space without touching what is already placed', () => {
+  // A 20mm square parked in the bottom-left corner, filling the rest of a 100mm plate.
+  const template = rectCells(0, 0, 20, 20)
+  const offsets = planFillBedCopies({
+    bed: BED,
+    spacingMm: 6,
+    templateFootprint: template,
+    occupiedFootprints: [template]
+  })
+
+  assert.ok(offsets.length >= 4, `expected several copies, got ${offsets.length}`)
+  const placed = offsets.map((offset) => copyBounds(template, offset))
+  const original = copyBounds(template, { dx: 0, dy: 0 })
+
+  for (const bounds of placed) {
+    assert.ok(bounds.minX >= BED.minX && bounds.maxX <= BED.maxX, `copy off plate in x: ${JSON.stringify(bounds)}`)
+    assert.ok(bounds.minY >= BED.minY && bounds.maxY <= BED.maxY, `copy off plate in y: ${JSON.stringify(bounds)}`)
+    // The template instance holds its ground, so no copy may land on it.
+    assert.ok(!rectsOverlap(bounds, original), `copy lands on the template: ${JSON.stringify(bounds)}`)
+  }
+  for (let i = 0; i < placed.length; i += 1) {
+    for (let j = i + 1; j < placed.length; j += 1) {
+      assert.ok(!rectsOverlap(placed[i]!, placed[j]!), `copies ${i}/${j} overlap`)
+    }
+  }
+})
+
+test('fill bed keeps clear of other objects and blocked cells', () => {
+  // Another object occupies the top strip and the left half is blocked outright, so every copy
+  // must land in the bottom-right quadrant.
+  const template = rectCells(0, 0, 20, 20)
+  const neighbour = rectCells(0, 70, 100, 100)
+  const blocked = new Set(rectCells(0, 0, 50, 100))
+  const offsets = planFillBedCopies({
+    bed: BED,
+    spacingMm: 6,
+    templateFootprint: template,
+    occupiedFootprints: [template, neighbour],
+    blockedCells: blocked
+  })
+
+  assert.ok(offsets.length > 0, 'expected at least one copy to fit')
+  const neighbourBounds = copyBounds(neighbour, { dx: 0, dy: 0 })
+  for (const offset of offsets) {
+    const bounds = copyBounds(template, offset)
+    assert.ok(bounds.minX >= 50, `copy entered the blocked half: ${JSON.stringify(bounds)}`)
+    assert.ok(!rectsOverlap(bounds, neighbourBounds), `copy lands on the neighbour: ${JSON.stringify(bounds)}`)
+  }
+})
+
+test('fill bed reports nothing when the plate is already full', () => {
+  const template = rectCells(0, 0, 90, 90)
+  const offsets = planFillBedCopies({
+    bed: BED,
+    spacingMm: 6,
+    templateFootprint: template,
+    occupiedFootprints: [template]
+  })
+  assert.deepEqual(offsets, [], 'a plate with no room left must yield no copies')
+})
+
+test('fill bed offsets are relative to wherever the template currently stands', () => {
+  // Same geometry, two different starting positions: the ABSOLUTE placements must match, which is
+  // what lets the caller apply an offset to the template's position without knowing the grid.
+  const atOrigin = rectCells(0, 0, 20, 20)
+  const shifted = rectCells(40, 60, 60, 80)
+  const fromOrigin = planFillBedCopies({
+    bed: BED, spacingMm: 6, templateFootprint: atOrigin, occupiedFootprints: []
+  })
+  const fromShifted = planFillBedCopies({
+    bed: BED, spacingMm: 6, templateFootprint: shifted, occupiedFootprints: []
+  })
+  assert.equal(fromOrigin.length, fromShifted.length)
+  for (let i = 0; i < fromOrigin.length; i += 1) {
+    const a = copyBounds(atOrigin, fromOrigin[i]!)
+    const b = copyBounds(shifted, fromShifted[i]!)
+    assert.deepEqual(a, b, `copy ${i} landed in a different absolute spot`)
+  }
+})
+
+test('fill bed honours the copy cap', () => {
+  const template = rectCells(0, 0, 10, 10)
+  const offsets = planFillBedCopies({
+    bed: BED, spacingMm: 2, templateFootprint: template, occupiedFootprints: [], maxCopies: 3
+  })
+  assert.equal(offsets.length, 3)
 })

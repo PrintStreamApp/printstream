@@ -9,7 +9,7 @@
  * only). Entries are keyed by print height in mm, not layer index, so they survive
  * layer-height changes (BambuStudio semantics; the slicer snaps to the nearest layer).
  */
-import { type ReactNode } from 'react'
+import { memo, type ReactNode } from 'react'
 import {
   Box,
   Button,
@@ -103,8 +103,8 @@ function SectionHelpPopup({ ariaLabel, title, children }: {
  * scrolls, and a wrapper would become its containing block and evict it (see
  * `StickySectionHeader`). Callers must render it into a column that supplies the row spacing.
  */
-export function PlatePausesSection({ pauses, onChange }: {
-  pauses: PlatePause[]
+export const PlatePausesSection = memo(function PlatePausesSection({ pauses, onChange }: {
+  pauses: readonly PlatePause[]
   onChange: (pauses: PlatePause[]) => void
 }) {
   return (
@@ -177,7 +177,7 @@ export function PlatePausesSection({ pauses, onChange }: {
       </Sheet>
     </>
   )
-}
+})
 
 /**
  * The per-plate "Filament changes" section: layer-based whole-plate material swaps
@@ -188,8 +188,8 @@ export function PlatePausesSection({ pauses, onChange }: {
  *
  * Header and body are siblings for the same sticky reason as {@link PlatePausesSection}.
  */
-export function PlateFilamentChangesSection({ changes, filamentOptions, onChange }: {
-  changes: PlateFilamentChange[]
+export const PlateFilamentChangesSection = memo(function PlateFilamentChangesSection({ changes, filamentOptions, onChange }: {
+  changes: readonly PlateFilamentChange[]
   filamentOptions: FilamentOption[]
   onChange: (changes: PlateFilamentChange[]) => void
 }) {
@@ -286,4 +286,4 @@ export function PlateFilamentChangesSection({ changes, filamentOptions, onChange
       </Sheet>
     </>
   )
-}
+})

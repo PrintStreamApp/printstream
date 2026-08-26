@@ -7,7 +7,7 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { inspectProjectFilamentPhysics } from './filament-physics'
+import { inspectProjectFilamentPhysics } from './filament-physics.js'
 
 const NAMES = ['Bambu PETG HF @BBL H2D 0.4 nozzle', 'Bambu PETG HF @BBL H2D 0.4 nozzle', 'Bambu PLA Basic @BBL H2D']
 

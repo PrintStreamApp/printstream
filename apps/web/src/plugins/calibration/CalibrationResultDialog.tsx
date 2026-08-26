@@ -13,7 +13,7 @@
  * the inputs from the recorded measurement for the same reason.
  */
 import { memo, useMemo, useState } from 'react'
-import { Alert, Button, Checkbox, FormControl, FormLabel, IconButton, Modal, ModalClose, Option, Radio, RadioGroup, Select, Stack, Tooltip, Typography } from '@mui/joy'
+import { Alert, Button, Checkbox, FormControl, FormLabel, IconButton, ModalClose, Option, Radio, RadioGroup, Select, Stack, Tooltip, Typography } from '@mui/joy'
 import HelpOutlineRoundedIcon from '@mui/icons-material/HelpOutlineRounded'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
@@ -23,6 +23,7 @@ import {
   type SaveCalibrationResult
 } from '@printstream/shared'
 import { toast } from '../../lib/toast'
+import { BackAwareModal } from '../../components/BackAwareModal'
 import { ScrollableDialogBody, ScrollableModalDialog } from '../../components/ScrollableDialog'
 import { DialogSection } from '../../components/DialogSection'
 import { NumberField } from './NumberField'
@@ -80,7 +81,7 @@ export const CalibrationResultDialog = memo(function CalibrationResultDialog({ r
   const [applyToPrinter, setApplyToPrinter] = useState(!isFlow)
 
   return (
-    <Modal open onClose={onClose}>
+    <BackAwareModal open onClose={onClose}>
       <ScrollableModalDialog aria-labelledby="calibration-result-title" sx={{ maxWidth: 520 }}>
         <Typography id="calibration-result-title" level="h4">Enter calibration result</Typography>
         <ModalClose />
@@ -155,6 +156,6 @@ export const CalibrationResultDialog = memo(function CalibrationResultDialog({ r
           <Button onClick={() => save.mutate()} loading={save.isPending}>Save result</Button>
         </Stack>
       </ScrollableModalDialog>
-    </Modal>
+    </BackAwareModal>
   )
 })

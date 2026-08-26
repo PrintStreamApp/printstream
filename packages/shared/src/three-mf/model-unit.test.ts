@@ -6,7 +6,7 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { threeMfModelUnitFactor } from './model-unit'
+import { threeMfModelUnitFactor } from './model-unit.js'
 
 const model = (attrs: string) => `<?xml version="1.0"?>\n<model ${attrs}>\n <resources/>\n</model>`
 

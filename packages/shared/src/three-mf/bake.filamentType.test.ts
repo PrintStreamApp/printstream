@@ -8,7 +8,7 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { applyFilamentList } from './bake-documents'
+import { applyFilamentList } from './bake-documents.js'
 
 test('the support flag survives a material change and follows the slot', () => {
   // Found by adversarially reviewing the raw-type change above. `filament_type` no longer spells

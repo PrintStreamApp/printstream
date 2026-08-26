@@ -6,8 +6,8 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { inspectProjectFilamentIds, repairFilamentIds, filamentIdForPresetName } from './filament-ids'
-import { collectSettingsRepairReasons } from './index'
+import { inspectProjectFilamentIds, repairFilamentIds, filamentIdForPresetName } from './filament-ids.js'
+import { collectSettingsRepairReasons } from './index.js'
 
 // EVERY physics sentinel, so the ids stay this project's ONLY defect (see filament-physics.ts:
 // detection there is blunt, and any missing sentinel would add `filamentPhysics` to the reasons).

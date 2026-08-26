@@ -70,7 +70,16 @@ import {
   readProjectFlushContext,
   type ThreeMfSettingsRepairReason
 } from '@printstream/shared'
-import { MODEL_UNIT_MILLIMETRES, buildVanillaThreeMfEntries, type ConvertibleModelUnit } from '@printstream/shared/three-mf'
+import { MODEL_UNIT_MILLIMETRES, buildVanillaThreeMfEntries, type ConvertibleModelUnit,
+  adaptiveLayerHeightProfile,
+  flatLayerHeightProfile,
+  paintLayerHeightProfile,
+  smoothLayerHeightProfile,
+  TEXT_INFO_DEFAULTS,
+  TEXT_INFO_DEFAULT_SURFACE_TYPE,
+  defaultTextInfo,
+  type TextInfo
+} from '@printstream/shared/three-mf'
 import {
   alignOffsets,
   distributeOffsets,
@@ -112,7 +121,25 @@ import {
   getGeometryTrianglePaint,
   threeMfTransformFromMatrix
 } from './lib/threeMfScene'
-import { arrangePlateItems, FOOTPRINT_CELL_MM, footprintCellKey } from './lib/arrange'
+import { arrangePlateItems, planFillBedCopies } from './lib/arrange'
+import { computePlateObstacles } from './lib/plateObstacles'
+import { removeLayerHeightVisuals, syncLayerHeightVisuals } from './lib/layerHeightOverlay'
+import { TextToolPanel } from './TextToolPanel'
+import { DEFAULT_TEXT, textToolValuesEqual, type TextToolValue } from './lib/textToolValue'
+import { buildSurfaceTextSoup, buildTextSoup, glyphAdvances } from './lib/textGeometry'
+import {
+  arcOffsetNearest, loopLength, loopNearest, nearestFrame, reverseLoop, seatGlyphs, sliceSegments,
+  suggestUp
+} from './lib/textSurfaceProjection'
+import {
+  BUNDLED_FAMILIES,
+  BUNDLED_FONTS,
+  bundledFace,
+  loadBundledFont,
+  loadUserFont,
+  parsedFont,
+  type TextFontFace
+} from './lib/textFonts'
 import { clampPrimeTowerIntoReach } from './lib/primeTowerReach'
 import { PRIMITIVE_LABELS, primitiveTriangleSoup, type PrimitiveKind } from './lib/primitives'
 import {
@@ -147,14 +174,17 @@ import {
   mintPlateId,
   movePlate,
   addedPartHostId,
+  assignInstanceFilament,
   dropAddedPartsForReplacedHost,
   makeInstanceIndependent,
   effectiveAddedParts,
+  effectiveHeightRanges,
+  effectiveLayerHeightProfile,
+  type EditorHeightRange,
   effectiveBrimEars,
   effectiveFilamentChanges,
   effectivePauses,
   nextInstanceKey,
-  printedParts,
   seedEditorState,
   seedEmptyEditorState,
   seededActivePlateIndex,
@@ -183,6 +213,7 @@ import { useEffectiveSidebarSide } from '../../lib/editorViewportSettings'
 import { useSidebarResize } from './lib/useSidebarResize'
 import { buildEditorGridLayout, choosePlateStripOrientation, EDITOR_GRID_GAP_PX } from './lib/editorChromeLayout'
 import { useLocalStorageState } from '../../hooks/useLocalStorageState'
+import { useMirroredRef } from '../../hooks/useMirroredRef'
 import {
   createApiImportStore
 } from './lib/editorImports'
@@ -194,11 +225,15 @@ import {
   collectWorldTriangles,
   cutTriangleSoup,
   helperVolumeCutSides,
+  orientCutHalfSoup,
   rebaseTriangleSoup,
   shiftTriangleSoup,
   splitTriangleSoup,
   triangleSoupToBinaryStl,
-  type CutAxis
+  triangleSoupXYCenter,
+  triangleSoupsEqual,
+  type CutAxis,
+  type CutHalfOrientation
 } from './lib/meshCut'
 import {
   buildObjectStl,
@@ -211,6 +246,8 @@ import {
 } from './lib/objectExport'
 import {
   ADDED_PART_MESH_NAME,
+  TEXT_HIGHLIGHT_COLORS,
+  type TextInteraction,
   partGroupRef,
   plateDeltaToPartLocal,
   applyLayerBandOverlays,
@@ -236,6 +273,8 @@ import {
   nextPaint,
   PAINT_CHANNEL_SPECS,
   TRIANGLE_PAINT_CHANNELS,
+  isSelectionOnlyGizmoMode,
+  isViewportAidMesh,
   isTransformGizmoMode,
   printableMeshBox,
   rasterizePolygonCells,
@@ -262,6 +301,7 @@ import {
   isImportableLibraryFile,
   KeyboardHelpButton,
   ObjectList,
+  type ObjectListPerObject,
   PlateThumbnailStrip,
   SaveSplitButton,
   SliceSplitButton,
@@ -273,6 +313,8 @@ import { PlateFilamentChangesSection, PlatePausesSection } from '../../component
 import { editorMaterialsFromSliceConfig, type EditorMaterials } from './lib/editorMaterials'
 import { BrimEarsPanel } from './BrimEarsPanel'
 import { CutToolPanel } from './CutToolPanel'
+import { HeightRangesDialog } from './HeightRangesDialog'
+import { LayerHeightPanel } from './LayerHeightPanel'
 import { EditorContextMenu } from './EditorContextMenu'
 import { EditorPartContextMenu } from './EditorPartContextMenu'
 import { selectionPivot } from './lib/multiSelectionTransform'
@@ -319,6 +361,146 @@ const ProcessSettingsDialogImpl = lazy(() => import('../../components/ProcessSet
 
 /** BambuStudio's own ceiling for "Number of copies" (`wxGetNumberFromUser(..., 1, 0, 1000, this)`). */
 const MAX_CLONE_COPIES = 1000
+
+/**
+ * Nudge a piece's centre so its footprint sits inside the bed on one axis. A piece WIDER than the
+ * bed is centred rather than jammed against an edge, so the placement warning it raises points at
+ * the real problem (it does not fit) instead of at an arbitrary corner.
+ */
+function clampOntoBed(center: number, halfExtent: number, min: number, max: number): number {
+  if (halfExtent * 2 > max - min) return (min + max) / 2
+  return Math.min(Math.max(center, min + halfExtent), max - halfExtent)
+}
+
+/**
+ * Re-open a saved text part in the panel, from the `<text_info>` it carries.
+ *
+ * The font FAMILY is the one field that can fail to resolve: a file may name a font this install
+ * does not bundle and the user never loaded. Falling back to the current family keeps the text
+ * editable rather than refusing to open it, at the cost of re-rendering it in a different face --
+ * which the user can see and change, unlike a dialog that will not open.
+ */
+function textToolValueFromInfo(
+  info: TextInfo,
+  subtype: SceneEditPartSubtype,
+  fallback: TextToolValue
+): TextToolValue {
+  const known = BUNDLED_FONTS.some((face) => face.family === info.fontName)
+  return {
+    text: info.text,
+    family: known ? info.fontName : fallback.family,
+    bold: info.bold,
+    italic: info.italic,
+    fontSize: info.fontSize,
+    thickness: info.thickness,
+    textGap: info.textGap,
+    rotateAngle: info.rotateAngle,
+    embeddedDepth: info.embeddedDepth,
+    // `surfaceChar` is not offered (see the tool'the s development notes), but a file -- ours from before it was
+    // withdrawn, or one Studio wrote -- can name it. Coerced to the mode it now behaves as, so the
+    // picker shows what the text will actually do rather than blanking on a value it has no option
+    // for. The record itself keeps whatever it said; only the panel is coerced.
+    surfaceMode: info.surfaceType === 'surfaceChar' ? 'surface' : info.surfaceType,
+    operation: subtype
+  }
+}
+
+/**
+ * World-space triangles of specific meshes.
+ *
+ * Unlike `collectWorldTriangles`, which walks a whole group, this takes exactly the meshes the
+ * caller vetted -- which for text means the host without the text's own part, since a Join part is
+ * printed geometry and every group walk keeps it.
+ */
+function worldTrianglesOf(meshes: readonly THREE.Mesh[]): Float32Array {
+  const chunks: Float32Array[] = []
+  let total = 0
+  const vertex = new THREE.Vector3()
+  for (const mesh of meshes) {
+    const position = mesh.geometry.getAttribute('position')
+    if (!position) continue
+    mesh.updateWorldMatrix(true, false)
+    const out = new Float32Array(position.count * 3)
+    for (let i = 0; i < position.count; i += 1) {
+      vertex.fromBufferAttribute(position as THREE.BufferAttribute, i).applyMatrix4(mesh.matrixWorld)
+      out[i * 3] = vertex.x
+      out[i * 3 + 1] = vertex.y
+      out[i * 3 + 2] = vertex.z
+    }
+    chunks.push(out)
+    total += out.length
+  }
+  const soup = new Float32Array(total)
+  let offset = 0
+  for (const chunk of chunks) { soup.set(chunk, offset); offset += chunk.length }
+  return soup
+}
+
+/** Dot product of a projection-module vector against a three.js one. */
+function dotVec(a: { x: number; y: number; z: number }, b: THREE.Vector3): number {
+  return a.x * b.x + a.y * b.y + a.z * b.z
+}
+
+/**
+ * The surface nearest a free point in space, with the normal it faces there.
+ *
+ * Used to re-seat DRAGGED text: the gizmo yields a position, and the placement needs the surface
+ * under it. Six axis rays rather than a true closest-point query, because the answer only has to be
+ * good enough to pick a face and its normal, and this needs no acceleration structure to stay
+ * responsive during a drag.
+ *
+ * Rays are cast from OUTSIDE the model inward, not outward from the anchor: a point that has drifted
+ * off the model sees nothing along an outward ray, and a point inside a wall sees the wall's back.
+ * Casting inward finds the near face from either side, which is what makes text keep its grip while
+ * the pointer wanders off the geometry and back on.
+ */
+function nearestSurfaceAt(anchor: THREE.Vector3, targets: readonly THREE.Mesh[], box: THREE.Box3):
+{ point: THREE.Vector3; normal: THREE.Vector3 } | null {
+  if (targets.length === 0 || box.isEmpty()) return null
+  const reach = box.getSize(new THREE.Vector3()).length()
+  if (reach <= 0) return null
+  const directions = [
+    new THREE.Vector3(1, 0, 0), new THREE.Vector3(-1, 0, 0),
+    new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, -1, 0),
+    new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 0, -1)
+  ]
+  let best: { hit: THREE.Intersection; distance: number } | null = null
+  const raycaster = new THREE.Raycaster()
+  for (const direction of directions) {
+    raycaster.set(anchor.clone().addScaledVector(direction, -reach), direction)
+    raycaster.far = reach * 2
+    for (const hit of raycaster.intersectObjects(targets as THREE.Mesh[], false)) {
+      const distance = hit.point.distanceTo(anchor)
+      if (!best || distance < best.distance) best = { hit, distance }
+    }
+  }
+  if (!best?.hit.face) return null
+  return {
+    point: best.hit.point.clone(),
+    normal: best.hit.face.normal.clone().transformDirection(best.hit.object.matrixWorld).normalize()
+  }
+}
+
+/**
+ * What a height range may override beyond its own layer height.
+ *
+ * The per-object set minus `layer_height`, which the ranges dialog edits inline because every band
+ * MUST carry one (BambuStudio reads it without a `has()` check and null-derefs otherwise), and
+ * minus the flush-into trio, which is a whole-object wipe decision rather than a per-band one.
+ * BambuStudio allows all ~93 `PrintRegionConfig` keys here; we deliberately keep the same curated
+ * subset the per-object gear uses, so one model does not have two different ideas of what is
+ * overridable.
+ */
+const HEIGHT_RANGE_TUNABLE_KEYS = PER_OBJECT_PROCESS_KEYS.filter(
+  (key) => key !== 'layer_height' && !key.startsWith('flush_into_')
+)
+
+/**
+ * Clearance kept between objects by both plate packers (Auto-arrange and Fill bed with copies).
+ * One constant so filling a plate cannot pack tighter than arranging it would, which would make
+ * the two operations disagree about whether the same layout fits.
+ */
+const PLATE_PACKING_GAP_MM = 6
 
 /** Shell cap for both split actions: past this the result is debris, not parts. */
 const MAX_SPLIT_SHELLS = 50
@@ -477,6 +659,15 @@ type PlateEditKind = 'structure' | 'transform' | 'material' | 'visibility' | 'in
 
 /** Stable empty per-object overrides so the override editor doesn't re-fetch each render. */
 const EMPTY_OBJECT_OVERRIDES: ProcessSettingOverrides = {}
+
+/**
+ * Shared empty list for the repair reasons.
+ *
+ * A `?? []` fallback mints a new array on every render, and the no-defect case is the common one,
+ * so the reasons -- and everything memoised on them, up to the settings panel's whole controller
+ * object -- would have been unstable exactly when there was nothing to report.
+ */
+const NO_REPAIR_REASONS: readonly ThreeMfSettingsRepairReason[] = []
 
 /**
  * Trailing delay before a filament-swatch edit is mirrored into the plate-strip thumbnail. The
@@ -810,6 +1001,12 @@ function EditorView({
   const [cutRange, setCutRange] = useState<{ min: number; max: number } | null>(null)
   const [cutKeepUpper, setCutKeepUpper] = useState(true)
   const [cutKeepLower, setCutKeepLower] = useState(true)
+  // Per-half orientation after the cut (BambuStudio's Keep orientation / Place on cut / Flip).
+  // Both default to `keep`, which is what the tool did before the choice existed. Studio instead
+  // defaults its upper half to Place on cut; matching that would silently change what an existing
+  // cut produces, so it stays an explicit choice rather than a new default.
+  const [cutOrientUpper, setCutOrientUpper] = useState<CutHalfOrientation>('keep')
+  const [cutOrientLower, setCutOrientLower] = useState<CutHalfOrientation>('keep')
   const [cutting, setCutting] = useState(false)
   const clampedCutOffset = cutRange ? Math.min(Math.max(cutOffset, cutRange.min), cutRange.max) : cutOffset
   // Measure tool: up to two picked points (world mm). Clicks snap to nearby mesh
@@ -984,6 +1181,44 @@ function EditorView({
   const [editingPart, setEditingPart] = useState<{ objectId: number; partIndexes: ReadonlyArray<number>; name: string } | null>(null)
   // Modifier part whose per-volume process overrides are being edited (dialog open).
   const [editingPartKey, setEditingPartKey] = useState<string | null>(null)
+  /**
+   * Layer height a NEW height range starts at: the project's own, else Bambu's 0.2 default. A band
+   * must always name one, so this is a seed rather than an inherited blank.
+   */
+  const defaultLayerHeightMm = useMemo(() => {
+    const raw = perObject?.globalOverrides?.layer_height
+    const value = Number.parseFloat(Array.isArray(raw) ? raw[0] ?? '' : raw ?? '')
+    return Number.isFinite(value) && value > 0 ? value : 0.2
+  }, [perObject])
+  /**
+   * The machine's first-layer height. Every layer-height profile must START with exactly this or
+   * BambuStudio discards the whole curve and silently reverts the object to uniform layers
+   * (`PrintObject.cpp:3341` compares it with `!=`), so it is threaded into every generator.
+   */
+  const firstLayerHeightMm = useMemo(() => {
+    const raw = perObject?.globalOverrides?.initial_layer_print_height
+    const value = Number.parseFloat(Array.isArray(raw) ? raw[0] ?? '' : raw ?? '')
+    return Number.isFinite(value) && value > 0 ? value : defaultLayerHeightMm
+  }, [perObject, defaultLayerHeightMm])
+  /** The object whose height ranges are open, and (when set) the band whose settings are open. */
+  const [editingHeightRanges, setEditingHeightRanges] = useState<{ key: string; objectId: number; name: string } | null>(null)
+  const [editingHeightRangeIndex, setEditingHeightRangeIndex] = useState<number | null>(null)
+  /** The object whose variable layer height is open. */
+  const [editingLayerHeight, setEditingLayerHeight] = useState<{ key: string; objectId: number; name: string } | null>(null)
+  /** Text tool form state, and the part being edited when reopening existing text. */
+  const [textTool, setTextTool] = useState<TextToolValue>({
+    text: DEFAULT_TEXT, family: BUNDLED_FAMILIES[0] ?? 'DejaVu Sans', bold: false, italic: false,
+    fontSize: TEXT_INFO_DEFAULTS.fontSize, thickness: TEXT_INFO_DEFAULTS.thickness,
+    textGap: TEXT_INFO_DEFAULTS.textGap, rotateAngle: TEXT_INFO_DEFAULTS.rotateAngle,
+    embeddedDepth: TEXT_INFO_DEFAULTS.embeddedDepth,
+    surfaceMode: TEXT_INFO_DEFAULT_SURFACE_TYPE, operation: 'normal_part'
+  })
+  const [textUserFaces, setTextUserFaces] = useState<TextFontFace[]>([])
+  const [editingTextPartKey, setEditingTextPartKey] = useState<string | null>(null)
+  const editingTextPartKeyRef = useRef<string | null>(null)
+  editingTextPartKeyRef.current = editingTextPartKey
+  /** Where the thickness bar's brush is pointing, in OBJECT space, so the viewport can mark it. */
+  const [layerHeightBrush, setLayerHeightBrush] = useState<{ z: number; bandWidth: number } | null>(null)
   // One override map per selected object, in selection order: the bulk dialog seeds from ALL of
   // them (disagreements render as "Mixed") rather than only the first member's map.
   const editingObjectMemberOverrides = useMemo(
@@ -1178,7 +1413,7 @@ function EditorView({
       ? baseFileQuery.data?.file.settingsRepairReasons
       : openedArchivedVersion
         ? platesQuery.data?.settingsRepairReasons
-        : repairReasons) ?? []
+        : repairReasons) ?? NO_REPAIR_REASONS
   // A repair the user ran THIS SESSION drops its reasons immediately, before any save: the session
   // is authoritative once the project is open, and leaving a warning up after the action that fixes
   // it reads as the action having failed. Both come back on undo for free, because the pins they
@@ -1190,11 +1425,16 @@ function EditorView({
       ? baseFileQuery.data?.file.unrepairableSettingsRepairReasons
       : openedArchivedVersion
         ? platesQuery.data?.unrepairableSettingsRepairReasons
-        : unrepairableRepairReasons) ?? []
-  const settingsRepairReasons = rawSettingsRepairReasons.filter((reason) => {
-    if (reason === 'filamentPhysics') return !state?.repairedFilamentConfigs
-    return !state?.settingsRepairStaged
-  })
+        : unrepairableRepairReasons) ?? NO_REPAIR_REASONS
+  // Memoised because it is a DEPENDENCY, not just a value: `handleRepairInEditor` closes over it,
+  // and that handler rides the settings panel's controller object. Rebuilt inline every render it
+  // made the whole panel's props unstable, so the panel could never be skipped.
+  const settingsRepairReasons = useMemo(
+    () => rawSettingsRepairReasons.filter((reason) => (reason === 'filamentPhysics'
+      ? !state?.repairedFilamentConfigs
+      : !state?.settingsRepairStaged)),
+    [rawSettingsRepairReasons, state?.repairedFilamentConfigs, state?.settingsRepairStaged]
+  )
   const editorFoldersQuery = useQuery({
     queryKey: ['library-folders', saveAsBridgeId ?? 'none'],
     enabled: saveAsBridgeId !== null,
@@ -2099,15 +2339,111 @@ function EditorView({
    * import-backed instances too: `effectiveAddedParts` returns nothing for a model that has no
    * parts, and an unsaved import can host them (see {@link addedPartHostId}).
    */
+  /**
+   * Bumped whenever anything about the session's added parts changes.
+   *
+   * The ONE signal that `state.addedParts` moved. It has two consumers and they need it for
+   * different reasons, so it must be bumped by EVERY mutation rather than by the ones a given
+   * consumer happens to care about:
+   *
+   * - the gizmo attaches to a specific mesh object and a rebuild disposes it. The Text tool rewrites
+   *   its part on every keystroke, so without a signal the gizmo kept an object that was no longer
+   *   in the scene; three.js then logged "The attached 3D object must be a part of the scene graph"
+   *   once a frame and drew the gizmo at the world origin, which read as a gizmo off the plate that
+   *   dragged the wrong way.
+   * - the sidebar reads added parts through a memoised `addedPartsFor`, whose identity is keyed on
+   *   this. `addedParts` is mutated IN PLACE on a ref, so no prop changes when a volume is added,
+   *   retyped, recoloured or removed -- this version is the only thing that can tell the memoised
+   *   `ObjectList` to look again.
+   *
+   * Do not narrow it to "the meshes were rebuilt", which is what it used to say: a caller that
+   * mutates `addedParts` and skips it leaves a stale sidebar, and nothing throws.
+   */
+  const [addedPartMeshVersion, setAddedPartMeshVersion] = useState(0)
+
   const refreshAddedPartMeshes = useCallback(() => {
     for (const [key, group] of groupByKeyRef.current) {
       const instance = activePlateRef.current?.instances.find((entry) => entry.key === key)
       if (!instance) continue
       setGroupAddedPartMeshes(group, instance)
     }
+    // The meshes the gizmo may be holding have just been replaced; see the version's own comment.
+    setAddedPartMeshVersion((version) => version + 1)
   }, [setGroupAddedPartMeshes])
   const refreshAddedPartMeshesRef = useRef(refreshAddedPartMeshes)
   refreshAddedPartMeshesRef.current = refreshAddedPartMeshes
+
+  /**
+   * Re-seat surface text onto whatever it has just been dragged over. Assigned further down, once
+   * the text placement it needs exists; a ref because the drag write-back above is defined first.
+   */
+  const reseatDraggedTextRef = useRef<((mesh: THREE.Object3D) => void) | null>(null)
+  /** Pointer-driven text placement; assigned once the placement it needs exists. */
+  const placeTextAtRef = useRef<
+    (worldPoint: THREE.Vector3, worldNormal: THREE.Vector3, phase: 'start' | 'move') => void
+  >(() => {})
+  /**
+   * Where the text sat relative to the point the user grabbed, in world space.
+   *
+   * BambuStudio's `SurfaceDrag::mouse_offset`. Without it a drag can only put the text's CENTRE at
+   * the cursor, so it jumps the moment you press -- you grab a letter and the whole run leaps to
+   * centre itself under the pointer. Held in world space rather than screen space because the drag
+   * already works there: the hit point is on the surface, so the offset rides the surface with it.
+   */
+  const textGrabOffsetRef = useRef<THREE.Vector3 | null>(null)
+  /**
+   * The face the text was last POINTED at, for the life of the editing session.
+   *
+   * The pointer is the only thing that knows which surface the user meant, so every later rebuild
+   * -- the debounced settle after a drag, and every keystroke in the panel -- has to reuse it.
+   * Without this the settle re-ran the old inference 300ms after each drag and quietly replaced the
+   * correct placement with a guessed one, which is the geometry that then got staged and saved.
+   */
+  const editingTextSurfaceRef = useRef<{ point: THREE.Vector3; normal: THREE.Vector3 } | null>(null)
+  /**
+   * The exact panel value written by adopting an existing text, so its own load can be ignored.
+   *
+   * Adopting sets the panel from the saved record, which the live-rebuild effect sees as an edit and
+   * would answer by re-placing the text -- with no pointed face yet, so through the nearest-face
+   * inference. Merely OPENING text to retype it would move it.
+   *
+   * Stored as the VALUE, not a "skip the next one" flag. A blanket flag swallowed the user's first
+   * real change after reopening: selecting text, opening the tool and then switching Placement did
+   * nothing at all, because the flag armed by the load consumed the mode change instead.
+   */
+  const textApplyLoadedRef = useRef<TextToolValue | null>(null)
+  /** Last render's selection, so the text tool can tell a DESELECT from "nothing was selected". */
+  const previousSelectedKeyRef = useRef<string | null>(null)
+  /**
+   * The text session's two pinned identities: the standalone text OBJECT it created (so later edits
+   * replace it instead of adding another), and its HOST.
+   *
+   * Both are mirrored because both are needed on either side of a render: the debounced rebuild and
+   * the pointer drag read the refs between renders, while the panel's memo decides from the state
+   * which controls apply. `useMirroredRef` owns keeping the halves in step -- writing `.current`
+   * here by hand is what lets them drift.
+   */
+  const editingTextObjectKeyRef = useRef<string | null>(null)
+  const [editingTextObjectKey, setEditingTextObject] = useMirroredRef(editingTextObjectKeyRef, null)
+  const editingTextHostKeyRef = useRef<string | null>(null)
+  const [editingTextHostKey, setEditingTextHost] = useMirroredRef(editingTextHostKeyRef, null)
+  /** How the text is being interacted with; drives its highlight. Written by the scene's hit tests. */
+  const [textInteraction, setTextInteraction] = useState<TextInteraction>('idle')
+  const setTextInteractionRef = useRef(setTextInteraction)
+  setTextInteractionRef.current = setTextInteraction
+  /** The text part's mesh, so the scene can hit-test IT rather than the whole model. */
+  const textMeshRef = useRef<THREE.Mesh | null>(null)
+  /**
+   * The most recent placement asked for while one was still building.
+   *
+   * COALESCED, not dropped. A rebuild takes longer than a pointer-move, so dropping requests while
+   * busy discarded every frame of a continuous drag and only the one after the pointer STOPPED ever
+   * landed -- the text appeared to move only when you let go. Keeping just the latest is right
+   * rather than queueing them: intermediate positions of a drag are worthless once passed.
+   */
+  const pendingTextPlacementRef = useRef<{ point: THREE.Vector3; normal: THREE.Vector3 } | null>(null)
+  const reseatSettleRef = useRef<number | undefined>(undefined)
+  const applyTextPartRef = useRef<(() => Promise<void>) | null>(null)
 
   /** Persist a gizmo-dragged ADDED part mesh's transform into the editor state. */
   const writeBackAddedPart = useCallback((mesh: THREE.Object3D) => {
@@ -2120,6 +2456,10 @@ function EditorView({
         part.position.copy(mesh.position)
         part.rotation.copy(mesh.rotation)
         part.scale.copy(mesh.scale)
+        // Text in a surface mode is not merely MOVED by a drag, it is rebuilt around where it now
+        // sits, so it re-wraps as the pointer carries it across a curve. Fired from here because
+        // this is the one place a drag lands for an added part, whatever moved it.
+        reseatDraggedTextRef.current?.(mesh)
         return
       }
     }
@@ -2359,6 +2699,9 @@ function EditorView({
     paintColorFilamentIdRef,
     paintToolRef,
     applyPaintStrokeRef,
+    placeTextAtRef,
+    textMeshRef,
+    setTextInteractionRef,
     brimEarDiameterRef,
     editSelectedBrimEarsRef,
     filamentColorsRef,
@@ -2722,6 +3065,11 @@ function EditorView({
     // The manual-input panel mirrors whatever the gizmo holds: the object, or a selected
     // part's object-local placement (BambuStudio's "Volume Operations").
     let panelTarget: THREE.Object3D = group
+    // The Text tool has NO transform gizmo, matching BambuStudio, which renders a grab cube and a
+    // rotation ring instead (`GLGizmoText.cpp:1932`) and moves text by dragging it over the surface
+    // (`SurfaceDrag.hpp`). A translate gizmo is world-space and so offers X/Y only on an added part,
+    // which makes a side wall unreachable: you cannot slide text UP a wall with it. Text is moved by
+    // pointing at the model, which follows whatever surface is under the cursor, walls included.
     if (!isTransformGizmoMode(gizmoMode)) {
       transform.detach()
     } else if (selectedAddedPartKey) {
@@ -2732,7 +3080,8 @@ function EditorView({
       })
       if (partMesh) {
         transform.attach(partMesh)
-        transform.setMode(gizmoMode)
+        // `text` is not a TransformControls mode; while it holds the gizmo it moves.
+        transform.setMode(isTransformGizmoMode(gizmoMode) ? gizmoMode : 'translate')
         panelTarget = partMesh
       } else {
         transform.attach(gizmoMode === 'rotate' ? rotorOf(group) : group)
@@ -2785,7 +3134,9 @@ function EditorView({
         const memberGroup = groupByKeyRef.current.get(key)
         if (memberGroup) boxes.push(printableMeshBox(memberGroup, false))
       }
-      const pivot = selectionPivot(boxes, gizmoMode)
+      // Text holds the gizmo in translate; the multi-selection pivot only knows the three
+      // transform modes.
+      const pivot = selectionPivot(boxes, isTransformGizmoMode(gizmoMode) ? gizmoMode : 'translate')
       if (proxy && pivot) {
         proxy.position.copy(pivot)
         proxy.quaternion.identity()
@@ -2807,7 +3158,8 @@ function EditorView({
     // to be re-seated whenever the selection gains or loses a member. Dropping it as the rule
     // suggests would freeze the pivot at whatever the selection was when the mode last changed.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedKey, gizmoMode, selectedAddedPartKey, selectedBakedPart, extraSelectedKeys, computeSelectedTransform])
+  }, [selectedKey, gizmoMode, selectedAddedPartKey, selectedBakedPart, extraSelectedKeys,
+    computeSelectedTransform, addedPartMeshVersion])
 
   const reattachGizmoRef = useRef(reattachGizmo)
   reattachGizmoRef.current = reattachGizmo
@@ -3544,6 +3896,56 @@ function EditorView({
   }, [updatePlates])
 
   /**
+   * Set the material of whole INSTANCES, whichever shape they are.
+   *
+   * The object-level counterpart to {@link reassignFilament}, which addresses PARTS. A model with
+   * no parts list -- a primitive, a single-solid STL or 3MF import, a single-shell Cut output, and
+   * any single-mesh object in a saved project -- carries its material on the instance itself, and
+   * the bake emits that (`filamentId` rides every `SceneEditInstance`). Expressing a material
+   * change only as `{objectId, partIndex}` targets therefore made it a silent no-op for all of
+   * them: `reassignFilament` maps over `instance.parts`, so an empty list changes nothing and
+   * returns the instance untouched, while the sidebar's own `materialParts.length > 0` gate
+   * dropped the picker and left a swatch that looked informational rather than broken.
+   *
+   * Parts still win where they exist, so a multi-part object keeps behaving exactly as before:
+   * every printed part is retargeted and the object's own id is re-derived from their consensus.
+   * Helper volumes are skipped here for the same reason `reassignFilament` skips them -- a blocker
+   * has no material and a modifier's region is deliberately its own.
+   *
+   * It reaches LINKED COPIES too, which is why it resolves the named keys to object identities
+   * first rather than just matching them. Material is a property of the OBJECT, and the sidebar
+   * says so ("Linked copy: N instances share this object's parts, materials, paint and settings");
+   * the part-addressed path got that for free by keying on the object id, so matching instance keys
+   * alone would have quietly recoloured one copy and left its siblings behind.
+   */
+  const reassignInstanceFilament = useCallback((keys: readonly string[], filamentId: number) => {
+    const keySet = new Set(keys)
+    if (keySet.size === 0) return
+    // The object identities behind those keys. An import-backed instance uses its synthetic id,
+    // which is unique per import, so a fresh import matches only itself -- correct, since nothing
+    // else shares its geometry.
+    const ownerIds = new Set<number>()
+    for (const plate of stateRef.current?.plates ?? []) {
+      for (const instance of plate.instances) {
+        if (!keySet.has(instance.key)) continue
+        const ownerId = instance.source.kind === 'object' ? instance.objectId : instance.source.replacedObjectId
+        if (ownerId != null) ownerIds.add(ownerId)
+      }
+    }
+    const targeted = (instance: EditorInstance) => {
+      if (keySet.has(instance.key)) return true
+      const ownerId = instance.source.kind === 'object' ? instance.objectId : instance.source.replacedObjectId
+      return ownerId != null && ownerIds.has(ownerId)
+    }
+    updatePlates((plates) => plates.map((plate) => ({
+      ...plate,
+      instances: plate.instances.map((instance) => (targeted(instance)
+        ? assignInstanceFilament(instance, filamentId)
+        : instance))
+    })), 'material')
+  }, [updatePlates])
+
+  /**
    * Whether a material change means anything for these parts: true as soon as ONE of them can
    * hold a filament. A selection of only support blockers/enforcers and negative volumes has no
    * material to change, so the part context menu drops the item instead of offering a no-op
@@ -3596,6 +3998,62 @@ function EditorView({
     })
     setRebuildToken((token) => token + 1)
   }, [recordHistory])
+
+  /**
+   * The sidebar's single-part case, and the ONE added-parts reader it is given.
+   *
+   * Both exist only to be stable. `ObjectList` is memoised, and it is by far the most expensive
+   * thing the editor renders (measured: with a 166-row sidebar it is ~82% of the render cost of a
+   * keystroke in the Text tool), so a prop rebuilt inline in JSX defeats the memo and re-renders
+   * every row for an edit that touched none of them.
+   *
+   * `addedPartsFor` reads the IN-PLACE-mutated session map off a ref, so nothing about its result is
+   * visible to React. `addedPartMeshVersion` is the signal that the map moved; see its declaration.
+   */
+  const handleChangeOnePartType = useCallback(
+    (objectId: number, partIndex: number, subtype: SceneEditPartSubtype) =>
+      handleChangePartTypes([{ objectId, partIndex }], subtype),
+    [handleChangePartTypes]
+  )
+  const addedPartsFor = useCallback(
+    (instance: EditorInstance) => effectiveAddedParts(stateRef.current, instance),
+    // The version IS the dependency, though the body never names it: the map this reads is mutated
+    // IN PLACE behind a ref, so its contents changing is invisible to React and to the rule, which
+    // therefore calls the only thing keeping the sidebar correct "unnecessary".
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [addedPartMeshVersion]
+  )
+
+  /**
+   * The sidebar's slice-config controls, as one stable object.
+   *
+   * Hoisted out of the JSX for the memo above: it was an object literal rebuilding a `Set` from
+   * three sources on every render, so `ObjectList` re-rendered for every keystroke anywhere in the
+   * editor. The membership it computes is unchanged -- see the notes on each source.
+   */
+  const objectListPerObject = useMemo<ObjectListPerObject | undefined>(() => {
+    if (!perObject) return undefined
+    return {
+      // Baked objects from the slice index PLUS each not-yet-saved import's synthetic object id, so
+      // per-object process is editable before any save.
+      sliceObjectIds: new Set<number>([
+        ...(sliceConfig?.plateObjects ?? []).map((object) => object.id),
+        ...(activePlate?.instances ?? []).flatMap((instance) =>
+          instance.source.kind === 'import' && instance.source.replacedObjectId != null
+            ? [instance.source.replacedObjectId]
+            : []),
+        // An independent COPY has no baked slice-index id yet either; its placeholder is re-keyed
+        // onto the copy's real object at save/slice time (`clonedObjectIds`), so its process
+        // settings need no save first.
+        ...Object.keys(state?.objectClones ?? {}).map(Number)
+      ]),
+      overrideCountFor: (objectId) => Object.keys(perObject.value[String(objectId)] ?? {}).length,
+      onEditObject: (objectId, name) => setEditingObject({ ids: [objectId], name }),
+      onEditPart: (objectId, partIndex, name) => setEditingPart({ objectId, partIndexes: [partIndex], name }),
+      partOverrideCountFor: (objectId, partIndex) =>
+        Object.keys(stateRef.current?.partProcessOverrides?.[partSlotKey(objectId, partIndex)] ?? {}).length
+    }
+  }, [perObject, sliceConfig?.plateObjects, activePlate?.instances, state?.objectClones])
 
   // Rename an object (Bambu groups by object, so the new label applies to every
   // instance of it). Marks the object as renamed so buildSceneEdit emits an override.
@@ -3762,10 +4220,14 @@ function EditorView({
     if (!key || !plate || !instance || !group) return
     const { upper, lower } = cutTriangleSoup(collectWorldTriangles(group), cutAxis, clampedCutOffset)
     const sides = CUT_AXIS_SIDES[cutAxis]
-    type CutHalf = { soup: Float32Array; suffix: string; side: 'lower' | 'upper' }
+    type CutHalf = { soup: Float32Array; suffix: string; side: 'lower' | 'upper'; orientation: CutHalfOrientation }
     const halves = [
-      cutKeepLower && lower.length > 0 ? { soup: lower, suffix: sides.lower, side: 'lower' as const } : null,
-      cutKeepUpper && upper.length > 0 ? { soup: upper, suffix: sides.upper, side: 'upper' as const } : null
+      cutKeepLower && lower.length > 0
+        ? { soup: lower, suffix: sides.lower, side: 'lower' as const, orientation: cutOrientLower }
+        : null,
+      cutKeepUpper && upper.length > 0
+        ? { soup: upper, suffix: sides.upper, side: 'upper' as const, orientation: cutOrientUpper }
+        : null
     ].filter((half): half is CutHalf => half !== null)
     if (halves.length === 0) {
       toast.error('Nothing to keep: move the cut plane or keep at least one side.')
@@ -3777,6 +4239,14 @@ function EditorView({
       // addressed through the original instance is gone once it leaves the plate.
       const helperVolumes = collectHelperVolumesFor(instance, group)
       const staged = await Promise.all(halves.map(async (half) => {
+        // Where the piece BELONGS on the plate, measured before any rotation: a reoriented half's
+        // rebased centre is expressed in the rotated frame, so using it as a world position drops
+        // the piece wherever the rotation sent it (a tall model cut along X landed off the plate).
+        const placement = triangleSoupXYCenter(half.soup)
+        // Orient BEFORE rebasing, so the rebase floors the piece on the face it now rests on.
+        // Which side of the cut a helper volume belongs to was decided above, off the un-rotated
+        // soups, because `helperVolumeCutSides` reasons in the cut's own axis frame.
+        orientCutHalfSoup(half.soup, cutAxis, half.side, half.orientation)
         const { offset } = rebaseTriangleSoup(half.soup)
         const stl = triangleSoupToBinaryStl(half.soup)
         const file = new File([stl], `${instance.name} (${half.suffix}).stl`, { type: 'application/octet-stream' })
@@ -3787,7 +4257,12 @@ function EditorView({
         const carried = await Promise.all(helperVolumes
           .filter((volume) => helperVolumeCutSides(volume.soup, cutAxis, clampedCutOffset)[half.side])
           .map(async (volume) => {
-            const soup = shiftTriangleSoup(volume.soup.slice(), offset)
+            // The SAME rotation as its half, applied before the same rebase shift: a volume that
+            // skipped it would stay in the un-rotated frame and detach from the geometry it marks.
+            const soup = shiftTriangleSoup(
+              orientCutHalfSoup(volume.soup.slice(), cutAxis, half.side, half.orientation),
+              offset
+            )
             // `part`, NOT `object`: this volume is carried at IDENTITY (its world triangles are
             // already baked into `soup`, shifted by the half's own rebase) and is placed below with
             // a zero position. Normalising it would re-centre those triangles and move the blocker
@@ -3799,11 +4274,25 @@ function EditorView({
             ), 'part')
             return { volume, importId: stagedVolume.importId, soup }
           }))
-        return { import: mainImport, offset, carried }
+        // Half-extents of the piece as it now lies, for the bed clamp below.
+        let halfWidth = 0
+        let halfDepth = 0
+        for (let i = 0; i < half.soup.length; i += 3) {
+          halfWidth = Math.max(halfWidth, Math.abs(half.soup[i]!))
+          halfDepth = Math.max(halfDepth, Math.abs(half.soup[i + 1]!))
+        }
+        return { import: mainImport, placement, halfWidth, halfDepth, carried }
       }))
-      const replacements = staged.map(({ import: stagedImport, offset }, index) => {
+      const replacements = staged.map(({ import: stagedImport, placement, halfWidth, halfDepth }, index) => {
         const next = instanceFromStagedImport(stagedImport, importStore.meshUrl)
-        next.position.set(offset.x, offset.y, 0)
+        // Keep the piece where it was cut, but not off the bed: laying a half on its cut face
+        // swaps its height into its footprint, so a tall model's original centre no longer fits.
+        // A no-op for an un-reoriented half, which came from a model that was already on the bed.
+        next.position.set(
+          clampOntoBed(placement.x, halfWidth, plate.bed.minX, plate.bed.maxX),
+          clampOntoBed(placement.y, halfDepth, plate.bed.minY, plate.bed.maxY),
+          0
+        )
         next.filamentId = instance.filamentId
         next.printable = instance.printable
         if (index > 0) {
@@ -3850,6 +4339,11 @@ function EditorView({
             : entry)
         }
       })
+      // Carried volumes moved between hosts, so every reader of `addedParts` is stale. The instance
+      // list changes here too, which would invalidate the sidebar by itself -- bumped anyway,
+      // because "some other prop happens to change as well" is the reasoning that makes the next
+      // caller's omission invisible.
+      setAddedPartMeshVersion((version) => version + 1)
       setRebuildToken((token) => token + 1)
       setSelectedKey(replacements[0]!.key)
       setGizmoMode('translate')
@@ -3861,7 +4355,7 @@ function EditorView({
     } finally {
       setCutting(false)
     }
-  }, [selectedKey, activePlateIndex, cutAxis, clampedCutOffset, cutKeepLower, cutKeepUpper, collectHelperVolumesFor, recordHistoryRef, importStore])
+  }, [selectedKey, activePlateIndex, cutAxis, clampedCutOffset, cutKeepLower, cutKeepUpper, cutOrientLower, cutOrientUpper, collectHelperVolumesFor, recordHistoryRef, importStore])
 
   /**
    * Split the selected object into its connected mesh components (Bambu's "split to
@@ -4698,19 +5192,30 @@ function EditorView({
    * Assign one material to EVERY part of the clicked object, or of the whole selection
    * when it belongs to one (the context menu's bulk "Change material").
    */
+  /**
+   * The context menu's "Change material" on an object selection.
+   *
+   * Goes through {@link reassignInstanceFilament} rather than assembling `{objectId, partIndex}`
+   * targets itself: built that way it dropped any member with no printed parts (a primitive, a
+   * single-solid import, a single-mesh saved object) and, for a selection made only of those, sent
+   * an EMPTY target list, which `reassignFilament` returns from immediately. The menu item was
+   * enabled and did nothing.
+   */
   const reassignSelectionFilament = useCallback((key: string, filamentId: number) => {
-    const keySet = new Set(selectionFor(key))
-    const targets: Array<{ objectId: number; partIndex: number }> = []
-    for (const instance of activePlateRef.current?.instances ?? []) {
-      if (!keySet.has(instance.key)) continue
-      const ownerId = instance.source.kind === 'object' ? instance.objectId : instance.source.replacedObjectId
-      if (ownerId == null) continue
-      // Printed parts only, an object-level material change must not retarget a helper volume
-      // (a blocker has no material at all, and a modifier's region is deliberately its own).
-      for (const part of printedParts(instance)) targets.push({ objectId: ownerId, partIndex: part.partIndex })
-    }
-    reassignFilament(targets, filamentId)
-  }, [selectionFor, reassignFilament])
+    reassignInstanceFilament(selectionFor(key), filamentId)
+  }, [selectionFor, reassignInstanceFilament])
+
+  /**
+   * The sidebar row's badge: this object only, never the wider selection.
+   *
+   * Deliberately not `reassignSelectionFilament` -- clicking one row's swatch means that row, the
+   * same as it did when the badge addressed parts directly. The context menu is where a bulk
+   * change lives, because there the selection is what was right-clicked.
+   */
+  const reassignOneInstanceFilament = useCallback(
+    (key: string, filamentId: number) => { reassignInstanceFilament([key], filamentId) },
+    [reassignInstanceFilament]
+  )
 
   /**
    * Open per-object process settings for the clicked object, or the whole selection when it
@@ -4762,6 +5267,1032 @@ function EditorView({
   }, [updatePlates])
 
   /**
+   * Replace one object's COMPLETE height-range set. Bands are object-level, so this is keyed by the
+   * model's editor identity (`addedPartHostId`) and applies to every copy of the object, exactly
+   * like brim ears. An `inert` edit: bands change no geometry, so the viewport needs no rebuild.
+   */
+  const setObjectHeightRanges = useCallback((hostId: number, ranges: EditorHeightRange[]) => {
+    recordHistoryRef.current?.()
+    setState((current) => {
+      if (!current) return current
+      return { ...current, heightRanges: { ...(current.heightRanges ?? {}), [hostId]: ranges } }
+    })
+  }, [recordHistoryRef])
+
+  /**
+   * Replace one object's COMPLETE layer height profile. Geometry is untouched, so `inert`.
+   *
+   * `checkpoint` is what keeps a brush STROKE to one undo step: a drag fires a sample per pointer
+   * event, so recording on each would bury every earlier action under hundreds of entries. Only the
+   * pointer-down sample checkpoints, matching how a body drag records on its first move.
+   */
+  const setObjectLayerHeightProfile = useCallback((hostId: number, profile: number[], checkpoint = true) => {
+    if (checkpoint) recordHistoryRef.current?.()
+    setState((current) => {
+      if (!current) return current
+      return { ...current, layerHeightProfiles: { ...(current.layerHeightProfiles ?? {}), [hostId]: profile } }
+    })
+  }, [recordHistoryRef])
+
+  /**
+   * The extruder's layer-height band. BambuStudio DISCARDS a whole profile with any height outside
+   * it rather than clamping, so this is what every generator and edit clamps into.
+   */
+  const layerHeightBounds = useMemo(() => {
+    // The project's own machine band first. These are PRINTER settings, not process overrides, so
+    // they arrive on the scene rather than through `perObject`; reading them from the wrong place
+    // is how this silently allowed a 0.30mm layer on a machine capped at 0.28, which makes the
+    // engine discard the entire profile instead of clamping it.
+    const stated = state?.plates.find((entry) => entry.index === activePlateIndex)?.layerHeightLimits
+    if (stated && stated.min > 0 && stated.max > stated.min) return stated
+    // BambuStudio's own defaults when a project states none: 0.07 floor, 0.75 x nozzle ceiling.
+    const nozzle = Number.parseFloat(String(sliceConfig?.nozzleDiameter ?? '')) || 0.4
+    const min = 0.07
+    return { min, max: Math.max(min, 0.75 * nozzle) }
+  }, [state, activePlateIndex, sliceConfig?.nozzleDiameter])
+
+  /**
+   * Shade the edited object by layer thickness and mark the brush's band on it, for as long as the
+   * layer-height panel is open.
+   *
+   * This is what makes the thickness bar mean anything: on its own it is a strip with no visible
+   * relationship to the model, so a drag lands somewhere the user cannot see. The bar and the model
+   * are shaded from the same normalized position in the extruder band, so they read as one control.
+   *
+   * Deliberately re-synced on every relevant commit rather than only on open: a scene rebuild
+   * (material change, undo, plate switch) drops the overlay meshes with the groups they hang off,
+   * and `syncLayerHeightVisuals` is idempotent, so a plain effect self-heals instead of needing an
+   * invalidation signal that would have to know about every such rebuild.
+   */
+  useEffect(() => {
+    const group = editingLayerHeight ? groupByKeyRef.current.get(editingLayerHeight.key) : null
+    if (!group || !editingLayerHeight) return
+    const instance = state?.plates.flatMap((plate) => plate.instances)
+      .find((entry) => entry.key === editingLayerHeight.key)
+    if (!instance) return
+    const box = printableMeshBox(group)
+    if (!(box.max.z - box.min.z > 0)) return
+    syncLayerHeightVisuals(group, {
+      box,
+      profile: effectiveLayerHeightProfile(state, instance),
+      bounds: layerHeightBounds,
+      nominalHeight: defaultLayerHeightMm,
+      brush: layerHeightBrush
+    })
+  }, [editingLayerHeight, state, layerHeightBounds, defaultLayerHeightMm, layerHeightBrush])
+
+  /**
+   * Enter layers editing for `key`. Shared by the tool rail and the object context menu, because
+   * both must set the MODE as well as the target: the mode is what detaches the move gizmo.
+   * Silently does nothing for an instance with no host object id, so the rail cannot strand the
+   * editor in a mode with no panel.
+   */
+  const openLayerHeightFor = useCallback((key: string) => {
+    const instance = stateRef.current?.plates
+      .flatMap((plate) => plate.instances).find((entry) => entry.key === key)
+    const hostId = instance ? addedPartHostId(instance) : null
+    if (!instance || hostId == null) return
+    setEditingLayerHeight({ key, objectId: hostId, name: instance.name })
+    setGizmoMode('layerHeight')
+  }, [])
+
+  /**
+   * The tool rail's mode changes. `layerHeight` needs a target as well as a mode, so it is routed
+   * through {@link openLayerHeightFor} rather than setting the mode directly; every other tool is
+   * the mode itself.
+   */
+  /**
+   * Find an added part that is TEXT, by key, with the instance that hosts it.
+   *
+   * Returns null for a part with no `textInfo`: a primitive or an imported volume is not text and
+   * must not be adopted by the text tool, which would rewrite it as letterforms.
+   */
+  const findAddedTextPart = useCallback((partKey: string) => {
+    const state = stateRef.current
+    for (const [hostId, parts] of Object.entries(state?.addedParts ?? {})) {
+      const part = parts.find((entry) => entry.key === partKey)
+      if (!part?.textInfo) continue
+      // The host is addressed by INSTANCE key, which is what every other text path uses; the
+      // addedParts map is keyed by object id, so it has to be translated back.
+      const instance = activePlateRef.current?.instances.find(
+        (entry) => `${addedPartHostId(entry)}` === hostId
+      )
+      if (instance) return { part, hostInstanceKey: instance.key }
+    }
+    return null
+  }, [])
+
+  /**
+   * Does the text being edited actually have a host?
+   *
+   * NOT "is something selected": a selection key can outlive the instance it named (a reload, a
+   * deleted object, another plate), and `applyTextPart` then falls through to the standalone path
+   * while the panel still offered Placement and Operation -- controls describing a relationship to a
+   * host that does not exist. Resolve the instance, and answer on that.
+   */
+  const textHasHost = useMemo(() => {
+    // A standalone session has no host BY DECISION, whatever is selected. Creating the object
+    // selects it, and it reports a synthetic host id like any staged import -- so asking the
+    // instance would say yes and offer Placement and Operation, which `applyTextPart` ignores
+    // because the standalone path is pinned. `editingTextObjectKey` is the state this depends on,
+    // held in a ref for the paths that must not re-render; the counter makes the memo see it.
+    if (editingTextObjectKey != null) return false
+    const key = editingTextHostKey ?? selectedKey
+    if (!key) return false
+    const instance = activePlate?.instances.find((entry) => entry.key === key)
+    return instance != null && addedPartHostId(instance) != null
+  }, [selectedKey, activePlate, editingTextObjectKey, editingTextHostKey])
+
+  const handleGizmoModeChange = useCallback((mode: GizmoMode) => {
+    if (mode === 'layerHeight') {
+      if (selectedKey) openLayerHeightFor(selectedKey)
+      return
+    }
+    if (mode === 'text') {
+      // One checkpoint per session, so the whole edit is a single undo rather than one per keystroke
+      // of the live rebuild.
+      recordHistoryRef.current?.()
+      // RE-EDIT an existing text part rather than starting a second one on top of it. Text carries
+      // everything it was made from in its `textInfo`, which is exactly why that record is written,
+      // and BambuStudio reopens its own gizmo the same way (`load_init_text`, `m_reedit_text`).
+      // Without this, opening the tool on a text part you had selected silently created a NEW part
+      // over the old one and left the original uneditable.
+      // A standalone text OBJECT reopens the same way a text part does.
+      const selectedInstance = selectedKey
+        ? activePlateRef.current?.instances.find((entry) => entry.key === selectedKey)
+        : null
+      if (selectedInstance?.textInfo) {
+        const loaded = textToolValueFromInfo(selectedInstance.textInfo, 'normal_part', textTool)
+        setTextTool(loaded)
+        setEditingTextPartKey(null)
+        setEditingTextHost(null)
+        editingTextSurfaceRef.current = null
+        setEditingTextObject(selectedInstance.key)
+        textApplyLoadedRef.current = loaded
+        setGizmoMode(mode)
+        return
+      }
+      const existing = selectedAddedPartKey ? findAddedTextPart(selectedAddedPartKey) : null
+      if (existing) {
+        const loaded = textToolValueFromInfo(existing.part.textInfo!, existing.part.subtype, textTool)
+        setTextTool(loaded)
+        textApplyLoadedRef.current = loaded
+        setEditingTextPartKey(selectedAddedPartKey)
+        setEditingTextHost(existing.hostInstanceKey)
+        // The face is unknown until the user points again: `textInfo` records the ORIGINAL hit, and
+        // the part may have been moved, the host rotated, or the file round-tripped through Studio
+        // since. Re-deriving it from a stale hit would move text the user only meant to retype.
+        editingTextSurfaceRef.current = null
+      } else {
+        setEditingTextPartKey(null)
+        // A NEW session starts from the default word, not whatever the last one said: the tool is
+        // create-then-edit, so it needs something on the model to look at, and inheriting the
+        // previous text silently re-adds it. Everything else (font, size, mode) stays remembered,
+        // which is a setting rather than content.
+        setTextTool((current) => ({ ...current, text: DEFAULT_TEXT }))
+        // Cleared so this session picks up whatever is selected NOW; pinned again once created.
+        setEditingTextHost(null)
+        editingTextSurfaceRef.current = null
+      }
+      setEditingTextObject(null)
+    }
+    setGizmoMode(mode)
+  }, [selectedKey, openLayerHeightFor, selectedAddedPartKey, findAddedTextPart, textTool])
+
+  /**
+   * Highlight the text being edited, so it reads as the thing you can grab.
+   *
+   * The tool has no gizmo, so without this nothing on screen says the text is draggable. Done as a
+   * MATERIAL SWAP on the part's own mesh rather than an overlay object: adding and destroying a
+   * scene object on every hover and press is the mesh churn that has broken this tool twice, once by
+   * detaching the gizmo mid-drag and once by orphaning the mesh a drag was updating.
+   */
+  useEffect(() => {
+    // Read the map ONCE into a local: the cleanup below runs later, and reaching through the ref
+    // then would consult a map that has since been rebuilt.
+    const groups = groupByKeyRef.current
+    const hostKey = editingTextHostKeyRef.current ?? selectedKey
+    const group = hostKey ? groups.get(hostKey) : null
+    const active = gizmoMode === 'text' && editingTextPartKey != null
+    const found: THREE.Mesh[] = []
+    if (group) {
+      rotorOf(group).traverse((node) => {
+        if (node.userData.addedPartKey === editingTextPartKey) found.push(node as THREE.Mesh)
+      })
+    }
+    // Standalone text is deliberately NOT highlighted: it is an ordinary object and behaves like
+    // one, with the usual selection box and Move gizmo. The highlight belongs to text that is a PART
+    // of a host, where it is dragged over a surface and needs to read as the grabbable thing.
+    const meshes = active ? found : []
+    textMeshRef.current = meshes[0] ?? null
+    if (meshes.length === 0) return
+    // Dragging shows the text as it will PRINT: see the type's own note.
+    const tint = textInteraction === 'drag' ? 0x000000 : TEXT_HIGHLIGHT_COLORS[textInteraction]
+    const materials = meshes.map((entry) => entry.material as THREE.MeshStandardMaterial)
+    for (const material of materials) {
+      material.emissive.setHex(tint)
+      material.needsUpdate = true
+    }
+    return () => {
+      // Leaving the tool must not leave the text glowing: the mesh keeps this material afterwards.
+      for (const material of materials) {
+        material.emissive.setHex(0x000000)
+        material.needsUpdate = true
+      }
+    }
+  }, [gizmoMode, editingTextPartKey, selectedKey, textInteraction, addedPartMeshVersion])
+
+  /**
+   * Delete whatever this session created, for the panel's Remove button.
+   *
+   * Two shapes, because text is two things: a PART of a host, or its own OBJECT when nothing was
+   * selected. Handling only the part meant Remove silently did nothing on standalone text.
+   */
+  const removeTextPart = useCallback(() => {
+    // A pending settle would re-run `applyTextPart` after the part is gone and, finding no
+    // `editingTextPartKey`, CREATE a fresh one -- the text the user just deleted coming back.
+    window.clearTimeout(reseatSettleRef.current)
+    const objectKey = editingTextObjectKeyRef.current
+    if (objectKey) {
+      recordHistoryRef.current?.()
+      updatePlates((plates) => plates.map((entry) => entry.index !== activePlateIndex ? entry : {
+        ...entry,
+        instances: entry.instances.filter((item) => item.key !== objectKey)
+      }))
+      setEditingTextObject(null)
+      setSelectedKey(null)
+      regenerateActiveThumbnailRef.current?.()
+      return
+    }
+    const state = stateRef.current
+    if (!state?.addedParts || !editingTextPartKey) return
+    for (const [hostId, parts] of Object.entries(state.addedParts)) {
+      const next = parts.filter((part) => part.key !== editingTextPartKey)
+      if (next.length !== parts.length) state.addedParts[Number(hostId)] = next
+    }
+    setEditingTextPartKey(null)
+    setSelectedAddedPartKey(null)
+    refreshAddedPartMeshes()
+    regenerateActiveThumbnailRef.current?.()
+  }, [editingTextPartKey, refreshAddedPartMeshes, updatePlates, activePlateIndex, recordHistoryRef,
+    setEditingTextObject])
+
+
+
+  /**
+   * The face the current form names, with its font parsed, or null when there is nothing to build.
+   *
+   * The ONE place the tool resolves a face, so hosted text and standalone text cannot end up in
+   * different typefaces from identical settings: both paths need it, and when each resolved its own
+   * the bold/italic fallback and the user-face lookup were four statements duplicated verbatim.
+   */
+  const resolveTextFace = useCallback(async () => {
+    const userFace = textUserFaces.find((face) => face.family === textTool.family)
+    const face = userFace ?? bundledFace(textTool.family, textTool.bold, textTool.italic)
+    if (!face || textTool.text.trim().length === 0) return null
+    return { face, font: parsedFont(face.id) ?? await loadBundledFont(face) }
+  }, [textTool, textUserFaces])
+
+  /**
+   * Build the text and decide where it sits, optionally around a caller-supplied anchor.
+   *
+   * With no anchor this lands the text on the host by itself, which is what creating it does. With
+   * one -- what DRAGGING supplies, the part's own world position -- the text is rebuilt around that
+   * point instead, so it re-seats on whatever surface the user has pulled it onto. That is the whole
+   * mechanism behind text reshaping as it moves: the anchor is the only input that changes.
+   */
+  const buildTextPlacement = useCallback(async (
+    group: THREE.Object3D,
+    anchorWorld?: THREE.Vector3 | null,
+    pointedNormal?: THREE.Vector3 | null
+  ) => {
+    const resolved = await resolveTextFace()
+    if (!resolved) return null
+    const { face, font } = resolved
+    const geometryOptions = {
+      text: textTool.text,
+      fontSize: textTool.fontSize,
+      thickness: textTool.thickness,
+      textGap: textTool.textGap,
+      rotateAngle: textTool.rotateAngle
+    }
+    const soup = buildTextSoup(font, geometryOptions)
+    if (soup.length === 0) return null
+    const rotor = rotorOf(group)
+    rotor.updateWorldMatrix(true, false)
+    // Land on real geometry. The bounding box's top is only a surface if the model HAS one at its
+    // XY centre; an open box or any concave shape has nothing there, and text placed on the box
+    // alone floats in mid air. So drop a ray from above the centre and take the first face it hits,
+    // falling back to the box only when the ray misses everything (which a closed model cannot do).
+    const box = printableMeshBox(group)
+    const centre = box.isEmpty()
+      ? new THREE.Vector3()
+      : new THREE.Vector3((box.min.x + box.max.x) / 2, (box.min.y + box.max.y) / 2, box.max.z)
+    const targets: THREE.Mesh[] = []
+    group.traverse((node) => {
+      const mesh = node as THREE.Mesh
+      if (!mesh.isMesh || isViewportAidMesh(mesh)) return
+      // ADDED parts are not landing surfaces, and the text's OWN mesh is the one that matters: a
+      // rebuild would otherwise drop the ray onto the text placed by the previous rebuild and stack
+      // the new one on top of it, climbing by a thickness per keystroke until it floated clear of
+      // the model. That is what "floating over the middle of a bowl" was.
+      if (mesh.name === ADDED_PART_MESH_NAME || mesh.parent?.name === ADDED_PART_MESH_NAME) return
+      targets.push(mesh)
+    })
+    // SAMPLE the footprint rather than betting on one ray. A single ray down the exact centre is
+    // what left text floating: measured on a divided storage box it returned NO hit at all, because
+    // the centre line passes through a gap between dividers, so the code fell back to the bounding
+    // box top -- which on any open or concave model is thin air above the rim.
+    //
+    // The highest hit wins, so the text lands on the uppermost real surface near the middle rather
+    // than dropping into a well beside it.
+    const spanX = (box.max.x - box.min.x) / 4
+    const spanY = (box.max.y - box.min.y) / 4
+    const above = box.max.z + Math.max(box.max.z - box.min.z, 1)
+    let landing: THREE.Intersection | undefined
+    const offsets: ReadonlyArray<readonly [number, number]> = [
+      [0, 0], [-1, 0], [1, 0], [0, -1], [0, 1], [-1, -1], [1, 1], [-1, 1], [1, -1]
+    ]
+    if (!anchorWorld) {
+      for (const [dx, dy] of offsets) {
+        const ray = new THREE.Raycaster(
+          new THREE.Vector3(centre.x + dx * spanX, centre.y + dy * spanY, above),
+          new THREE.Vector3(0, 0, -1)
+        )
+        const hit = ray.intersectObjects(targets, false)[0]
+        if (hit && (!landing || hit.point.z > landing.point.z)) landing = hit
+      }
+    }
+    // TEXT LIVES ON A SURFACE. Both of these end at a point the model actually has geometry at,
+    // because everything downstream -- the normal, the flat-versus-wrap decision, the cut contour --
+    // is meaningless for a point floating in space. Measured on this project's hole insert, the
+    // earlier "centre XY at the landing's height" gave a point 47mm from ANY surface, because the
+    // centre column passes through a slot: the ray that found the height landed somewhere else
+    // entirely, and combining one ray's XY with another's Z lands on nothing.
+    //
+    // Creating uses where the sampling ray actually hit. Dragging snaps to the nearest surface, so
+    // pulling the text off the edge of the model keeps it on the model rather than stranding it.
+    // The anchor is ALWAYS resolved onto the surface, even when the pointer named the face.
+    //
+    // A drag adds the grab offset in world space, which is exact on a plane and drifts on anything
+    // curved -- the seat walks off the surface a little further with every move. Once it is off, the
+    // cut there is degenerate and the whole run collapses onto a single point: text that behaved for
+    // the first few moves and then tangled into a knot. Snapping the point back costs one lookup and
+    // makes the drift unaccumulatable.
+    //
+    // The NORMAL still comes from the pointer when there is one: the cursor named the face, and that
+    // is more trustworthy than re-deriving it from a snapped point near an edge.
+    const snapped = anchorWorld ? nearestSurfaceAt(anchorWorld, targets, box) : null
+    const dragged = pointedNormal && anchorWorld
+      ? { point: snapped?.point.clone() ?? anchorWorld.clone(), normal: pointedNormal.clone() }
+      : snapped
+    const worldPoint = anchorWorld
+      ? (dragged?.point.clone() ?? anchorWorld.clone())
+      : (landing?.point.clone() ?? new THREE.Vector3(centre.x, centre.y, centre.z))
+    const nearby = dragged
+
+    // Everything below is decided in WORLD space and converted ONCE, by inverting the host's world
+    // matrix. That matrix carries rotation, scale and any reflection, so a flipped or laid-flat host
+    // is handled by construction. Patching a rotation onto a position computed some other way was
+    // tried and could not work: the pieces were in different frames.
+    //
+    // Two things this buys. The text stays upright on the PLATE however the model is oriented, which
+    // is what Studio does and what the identity rotation could not give. And the depth offset -- the
+    // soup is extruded symmetrically about its own centre, so a Cut left on the surface would remove
+    // only half its depth -- is applied along world UP rather than the host's local Z, which on a
+    // flipped part pointed into the model instead of out of it.
+    const depth = textTool.operation === 'negative_part'
+      ? -(textTool.thickness / 2)
+      : textTool.thickness / 2 - textTool.embeddedDepth
+    /** One flat block on the surface: the mode's own answer, and every surface path's fallback. */
+    const flatPlacement = () => {
+      const desiredWorld = new THREE.Matrix4().makeTranslation(
+        worldPoint.x, worldPoint.y, worldPoint.z + depth
+      )
+      const local = new THREE.Matrix4().copy(rotor.matrixWorld).invert().multiply(desiredWorld)
+      const position = new THREE.Vector3()
+      const quaternion = new THREE.Quaternion()
+      const scale = new THREE.Vector3()
+      local.decompose(position, quaternion, scale)
+      return {
+        face,
+        soup,
+        position,
+        rotation: new THREE.Euler().setFromQuaternion(quaternion),
+        scale,
+        rotor
+      }
+    }
+    // SURFACE modes do not place a flat block at all: the text is built already lying on the
+    // surface, so the geometry carries the placement and the part sits at the host's own origin.
+    // This is BambuStudio's model -- a position and normal per character along a cut contour --
+    // and it is why text in a bore wraps around it instead of hovering above the rim.
+    // A surface mode only means something on a surface that CURVES away from the text. On a flat
+    // top face the baseline plane cuts the object's whole silhouette at that height, so the run
+    // would wrap around the entire perimeter instead of sitting where the user is looking.
+    // BambuStudio's surface text likewise reads as flat on a flat face, so the flat path IS the
+    // right answer here rather than a fallback.
+    const landedNormal = nearby?.normal
+      ?? (landing?.face
+        ? landing.face.normal.clone().transformDirection(landing.object.matrixWorld).normalize()
+        : new THREE.Vector3(0, 0, 1))
+    // No flat-face gate: with the cut plane taken from the surface's own up direction, a flat face
+    // yields a straight contour by construction, exactly as it does in Studio. The gate that used to
+    // sit here was papering over the world-Z plane below it.
+    if (textTool.surfaceMode !== 'horizontal') {
+      // Built from the raycast TARGETS, not the whole group: `collectWorldTriangles` keeps a Join
+      // text mesh (it is printed geometry, not a viewport aid), so slicing the group would cut the
+      // previous rebuild's letterforms along with the host and `loopNearest` could pick a letter's
+      // own contour -- the text wrapping around itself. `targets` already excludes added parts.
+      //
+      // Deliberately NOT cached across the editing session. It looks like the obvious candidate --
+      // it walks every triangle of the host, on every keystroke -- and a session cache was built and
+      // then removed, because the measurement did not support it: mean main-thread blocking per
+      // rebuild went 1368ms -> 1297ms, inside the noise. A CPU profile of the same keystrokes says
+      // why. The top twenty self-time entries are ALL React and Joy/emotion (`useSlot`,
+      // `useThemeProps`, `handleInterpolation`, `jsxDEV`); not one text-geometry function appears.
+      // The per-keystroke cost is the editor's tree re-rendering, not this walk. Cache it only with
+      // a profile that actually names it.
+      const hostSoup = worldTrianglesOf(targets)
+      // The baseline plane sits at the anchor's own height. `depth` does NOT belong here: it is a
+      // distance INTO the surface, and on a vertical wall shifting the plane by it just slides the
+      // ring up and down the wall. It is applied along each glyph's own normal below instead.
+      // BambuStudio's frame (`generate_text_tran_in_world`): z is the surface normal, y is
+      // `suggest_up` of it, x is y x z -- and the CUT PLANE's normal is y, the text's own up
+      // (`GLGizmoText.cpp:3180`). Slicing with a fixed world-Z plane, as this did, is right only by
+      // coincidence on a vertical wall: on a flat face a horizontal cut returns that face's
+      // OUTLINE, so the text could only fan around a circle. Studio carries no flat-face special
+      // case because its plane is vertical there, and a vertical cut of a flat face is a line.
+      const seat = { x: worldPoint.x, y: worldPoint.y, z: worldPoint.z }
+      const surfaceZ = { x: landedNormal.x, y: landedNormal.y, z: landedNormal.z }
+      // `surfaceHorizontal` forces up to WORLD up (Studio's SURFACE_HORIZONAL, `GLGizmoText.cpp:1429`),
+      // which makes the cut plane horizontal whatever the surface is doing. That is the whole
+      // difference between the two modes: plain `surface` takes its plane from the surface, so on a
+      // tilted or domed face the contour rises and falls and the letters ride it -- correct, but it
+      // reads as a ragged baseline. Horizontal cuts at constant height, so the baseline is level.
+      const baseUp = textTool.surfaceMode === 'surfaceHorizontal' && Math.abs(surfaceZ.z) < 0.999
+        ? { x: 0, y: 0, z: 1 }
+        : suggestUp(surfaceZ)
+      // Angle rotates the FRAME about the surface normal, as Studio's `generate_text_tran_in_world`
+      // composes `rotate_trans` into the text transform. Rotating the frame turns the cut plane with
+      // it, so the contour, the reading direction and every glyph follow -- rotating the glyphs
+      // alone would tilt the letters off a baseline that had not moved.
+      const surfaceUp = textTool.rotateAngle === 0
+        ? baseUp
+        : (() => {
+          const rotated = new THREE.Vector3(baseUp.x, baseUp.y, baseUp.z)
+            .applyAxisAngle(landedNormal.clone().normalize(), THREE.MathUtils.degToRad(textTool.rotateAngle))
+          return { x: rotated.x, y: rotated.y, z: rotated.z }
+        })()
+      // The contour the POINTED point sits on, not the longest in the cut: a cut through a real part
+      // yields several (outer silhouette, recess wall, every bore) and the longest is almost always
+      // the silhouette, which is what made the text wrap "something invisible".
+      const loop = loopNearest(sliceSegments(hostSoup, seat, surfaceUp), seat)
+      // Orient the loop before anything is measured along it. Which way `chainLongestLoop` walked is
+      // an accident of its seed triangle, and that direction becomes the text's reading direction --
+      // walked the wrong way the glyph basis inverts (`yAxis = zAxis x xAxis`), so the letters come
+      // out mirrored AND laid down back to front. Both symptoms, one sign.
+      //
+      // `landedNormal` is the reference for which way is OUT, because it comes from the raycast's
+      // own face normal -- the value three.js RENDERS with -- rather than from a cross product,
+      // which is winding dependent and silently inverts on a mesh wound inconsistently.
+      const reference = nearestFrame(loop, worldPoint)
+      let reading = loop
+      if (reference) {
+        const facing = dotVec(reference.normal, landedNormal) < 0 ? -1 : 1
+        const outward = new THREE.Vector3(reference.normal.x, reference.normal.y, reference.normal.z)
+          .multiplyScalar(facing)
+        // Upright text reads along up x out. Degenerate on a floor or ceiling, where "upright" means
+        // nothing and the loop's own direction is as good an answer as any.
+        const desired = new THREE.Vector3(surfaceUp.x, surfaceUp.y, surfaceUp.z).cross(outward)
+        if (desired.lengthSq() > 0.01) {
+          desired.normalize()
+          const tangent = new THREE.Vector3(
+            reference.tangent.x, reference.tangent.y, reference.tangent.z
+          )
+          if (tangent.dot(desired) < 0) reading = reverseLoop(loop)
+        }
+      }
+      const advances = glyphAdvances(font, geometryOptions)
+      // Centred on the point the text was placed at, NOT on the loop's start. The loop begins at
+      // whichever triangle the chainer seeded from, so seating from zero wrapped the text properly
+      // and then put it on the far side of the model from the pointer.
+      const runLength = advances.reduce((sum, advance) => sum + advance, 0)
+      // Keep the WHOLE run on the contour by sliding it, rather than letting the ends fall off:
+      // `seatGlyphs` drops any glyph running past the end of an OPEN contour, which loses letters
+      // from text placed near one. A closed contour is exempt -- a bore wraps, so there is no end to
+      // slide from, and clamping would drag the text off the point the user placed it at.
+      let start = arcOffsetNearest(reading, worldPoint) - runLength / 2
+      const first = reading[0]
+      const last = reading[reading.length - 1]
+      const closed = first != null && last != null
+        && Math.hypot(last.b.x - first.a.x, last.b.y - first.a.y, last.b.z - first.a.z) < 1e-3
+      const spanLength = loopLength(reading)
+      if (!closed && spanLength > runLength) {
+        start = Math.min(Math.max(start, 0), spanLength - runLength)
+      }
+      // A contour SHORTER than the run cannot hold it: a closed one wraps the text over itself and
+      // a knot of overlapping letters is what reaches the user. Falling through to flat placement is
+      // the honest answer -- text that is visibly not wrapped beats text tangled into a ball.
+      if (spanLength < runLength) return flatPlacement()
+      const frames = seatGlyphs(reading, advances, start)
+      if (frames.some(Boolean)) {
+        // Same outward reference as the loop orientation above, for the same reason.
+        const facing = reference && dotVec(reference.normal, landedNormal) < 0 ? -1 : 1
+        // Stand each glyph off along the surface it sits on. The soup is extruded symmetrically
+        // about its own centre, so a glyph left exactly on the contour is half inside the wall --
+        // which on a Cut removes only half the depth asked for, and on a Join buries half the
+        // letterform. Along the NORMAL, not world up, because that is the only direction that means
+        // "out of the surface" for a wall as well as a floor.
+        const seated = frames.map((frame) => {
+          if (!frame) return null
+          const normal = {
+            x: frame.normal.x * facing, y: frame.normal.y * facing, z: frame.normal.z * facing
+          }
+          return {
+            ...frame,
+            normal,
+            position: {
+              x: frame.position.x + normal.x * depth,
+              y: frame.position.y + normal.y * depth,
+              z: frame.position.z + normal.z * depth
+            }
+          }
+        })
+        const worldSoup = buildSurfaceTextSoup(font, geometryOptions, seated)
+        if (worldSoup.length > 0) {
+          // Into the host's frame, since a part's geometry is stored object-local.
+          const toLocal = new THREE.Matrix4().copy(rotor.matrixWorld).invert()
+          // Wrapped geometry is built in place, so it would naturally sit at the host's origin with
+          // the placement baked into the vertices. It is re-centred on the anchor instead, and the
+          // anchor handed back as the part's position, so the part's TRANSFORM still says where the
+          // text is. Dragging depends on that: the gizmo reports the mesh's world position, and if
+          // every wrap sat at the origin, that reading would be the host's origin no matter where
+          // the letters actually were, and the next re-projection would snap them back to it.
+          const localAnchor = worldPoint.clone().applyMatrix4(toLocal)
+          const point = new THREE.Vector3()
+          for (let i = 0; i < worldSoup.length; i += 3) {
+            point.set(worldSoup[i]!, worldSoup[i + 1]!, worldSoup[i + 2]!).applyMatrix4(toLocal)
+            worldSoup[i] = point.x - localAnchor.x
+            worldSoup[i + 1] = point.y - localAnchor.y
+            worldSoup[i + 2] = point.z - localAnchor.z
+          }
+          return {
+            face,
+            soup: worldSoup,
+            position: localAnchor,
+            rotation: new THREE.Euler(),
+            scale: new THREE.Vector3(1, 1, 1),
+            rotor
+          }
+        }
+      }
+      // No contour at that height (the plane missed, or the text is longer than an open arc):
+      // fall through to flat placement rather than silently adding nothing.
+    }
+
+    return flatPlacement()
+
+  }, [resolveTextFace, textTool])
+
+  /**
+   * Rebuild the dragged text around its new position, live.
+   *
+   * BambuStudio's text re-shapes to the model as it is dragged, and this is that: every drag frame
+   * re-runs the placement with the part's own world position as the anchor, so pulling the text into
+   * a bore wraps it around the bore and pulling it back out flattens it again.
+   *
+   * **The MESH is kept and only its geometry replaced.** Rebuilding the part's mesh mid-drag is what
+   * `refreshAddedPartMeshes` would do, and it detaches the gizmo the drag is running on -- three.js
+   * `TransformControls` requires its attached object to stay in the scene graph, and losing it
+   * stranded the gizmo at the plate origin, moving opposite the pointer. So state and geometry are
+   * updated in place here, and the staging that a save needs waits for the drag to finish.
+   *
+   * Drops frames rather than queueing them: a stale rebuild landing after a newer one would wrap the
+   * text around a position the user has already left.
+   */
+  const reseatBusyRef = useRef(false)
+  const reseatDraggedText = useCallback((mesh: THREE.Object3D) => {
+    if (gizmoModeRef.current !== 'text' || textTool.surfaceMode === 'horizontal') return
+    if (mesh.userData.addedPartKey !== editingTextPartKeyRef.current) return
+    if (reseatBusyRef.current) return
+    const key = editingTextHostKeyRef.current ?? selectedKeyRef.current
+    const group = key ? groupByKeyRef.current.get(key) : null
+    const partMesh = mesh as THREE.Mesh
+    if (!group || !partMesh.isMesh) return
+    reseatBusyRef.current = true
+    const anchor = mesh.getWorldPosition(new THREE.Vector3())
+    void buildTextPlacement(group, anchor)
+      .then((placement) => {
+        if (!placement || mesh.userData.addedPartKey !== editingTextPartKeyRef.current) return
+        const state = stateRef.current
+        for (const parts of Object.values(state?.addedParts ?? {})) {
+          const part = parts.find((entry) => entry.key === mesh.userData.addedPartKey)
+          if (!part) continue
+          part.soup = placement.soup
+          // The placement's own position IS the anchor it was handed, so the mesh is already
+          // there; copying it back would be a no-op that risks fighting the in-flight drag.
+          break
+        }
+        const geometry = new THREE.BufferGeometry()
+        geometry.setAttribute('position', new THREE.BufferAttribute(placement.soup.slice(), 3))
+        geometry.computeVertexNormals()
+        partMesh.geometry.dispose()
+        partMesh.geometry = geometry
+      })
+      .catch((error) => { console.warn('[editor] text re-seat failed', error) })
+      .finally(() => {
+        reseatBusyRef.current = false
+        // Settle after the drag stops. The live pass above updates state and the visible mesh but
+        // stages no mesh, and it is the staged import a SAVE writes -- so without this the file
+        // would keep the geometry the text had before it was ever dragged.
+        window.clearTimeout(reseatSettleRef.current)
+        reseatSettleRef.current = window.setTimeout(() => { void applyTextPartRef.current?.() }, 300)
+      })
+  }, [buildTextPlacement, textTool.surfaceMode])
+  reseatDraggedTextRef.current = reseatDraggedText
+
+  /**
+   * Place the text where the pointer is on the model, live.
+   *
+   * The counterpart of `useEditorScene`'s text pointer drag: it supplies a point on a face and that
+   * face's normal, and this rebuilds the text there. Same in-place geometry swap as
+   * {@link reseatDraggedText}, and for the same reason -- a rebuilt mesh detaches the gizmo -- and
+   * the same trailing settle so a save gets a staged mesh.
+   */
+  const placeTextAt = useCallback((
+    worldPoint: THREE.Vector3,
+    worldNormal: THREE.Vector3,
+    phase: 'start' | 'move'
+  ) => {
+    if (gizmoModeRef.current !== 'text') return
+    const partKey = editingTextPartKeyRef.current
+    if (!partKey) return
+    // Any new placement invalidates a pending settle. Left armed, it fires MID-DRAG and runs
+    // `applyTextPart`, whose `refreshAddedPartMeshes` replaces the part's mesh -- after which every
+    // geometry swap below lands on an orphaned mesh that is no longer in the scene, and the drag
+    // looks frozen while the work goes on happening somewhere invisible.
+    window.clearTimeout(reseatSettleRef.current)
+    if (reseatBusyRef.current) {
+      pendingTextPlacementRef.current = { point: worldPoint.clone(), normal: worldNormal.clone() }
+      return
+    }
+    const key = editingTextHostKeyRef.current ?? selectedKeyRef.current
+    const group = key ? groupByKeyRef.current.get(key) : null
+    if (!group) return
+    // Collected rather than assigned in the callback: TypeScript does not track writes made inside
+    // a traverse, and narrows the variable to `never` at every use below.
+    const found: THREE.Mesh[] = []
+    rotorOf(group).traverse((node) => {
+      if (node.userData.addedPartKey === partKey) found.push(node as THREE.Mesh)
+    })
+    const mesh = found[0]
+    if (!mesh?.isMesh) return
+    // Pressing only GRABS: it records where the text sits relative to the grab point and moves
+    // nothing. Placing on press is what made the text jump to centre itself under the cursor.
+    if (phase === 'start') {
+      textGrabOffsetRef.current = mesh.getWorldPosition(new THREE.Vector3()).sub(worldPoint)
+      return
+    }
+    const grab = textGrabOffsetRef.current
+    const seatPoint = grab ? worldPoint.clone().add(grab) : worldPoint
+    reseatBusyRef.current = true
+    editingTextSurfaceRef.current = { point: seatPoint.clone(), normal: worldNormal.clone() }
+    void buildTextPlacement(group, seatPoint, worldNormal)
+      .then((placement) => {
+        if (!placement || editingTextPartKeyRef.current !== partKey) return
+        for (const parts of Object.values(stateRef.current?.addedParts ?? {})) {
+          const part = parts.find((entry) => entry.key === partKey)
+          if (!part) continue
+          part.soup = placement.soup
+          part.position.copy(placement.position)
+          part.rotation.copy(placement.rotation)
+          part.scale.copy(placement.scale)
+          break
+        }
+        // The transform moves too, unlike a gizmo drag, because the POINTER decides where the text
+        // goes: the mesh has to follow the cursor rather than the other way round.
+        mesh.position.copy(placement.position)
+        mesh.rotation.copy(placement.rotation)
+        mesh.scale.copy(placement.scale)
+        const geometry = new THREE.BufferGeometry()
+        geometry.setAttribute('position', new THREE.BufferAttribute(placement.soup.slice(), 3))
+        geometry.computeVertexNormals()
+        mesh.geometry.dispose()
+        mesh.geometry = geometry
+      })
+      .catch((error) => { console.warn('[editor] text placement failed', error) })
+      .finally(() => {
+        reseatBusyRef.current = false
+        const pending = pendingTextPlacementRef.current
+        if (pending) {
+          pendingTextPlacementRef.current = null
+          placeTextAtRef.current(pending.point, pending.normal, 'move')
+          return
+        }
+        window.clearTimeout(reseatSettleRef.current)
+        reseatSettleRef.current = window.setTimeout(() => { void applyTextPartRef.current?.() }, 300)
+      })
+  }, [buildTextPlacement])
+  placeTextAtRef.current = placeTextAt
+
+  /**
+   * Write the current form into the text part, creating it on first call.
+   *
+   * One function for create and update, because BambuStudio's tool has no separate "add" step: the
+   * text exists from the moment the tool opens and every edit rewrites it. Editing REPLACES the
+   * geometry rather than transforming it, since every parameter changes the letterforms; the part's
+   * placement survives because only its mesh and text record are swapped.
+   */
+  const applyTextPart = useCallback(async () => {
+    const state = stateRef.current
+    // The HOST is fixed when the text is created, not re-read from the selection on every pass.
+    // Whether this text belongs to a model or stands on its own is decided once, and the two are
+    // different things -- a part of a model versus a separate object. Re-deciding it per keystroke
+    // let a stray click on empty space drop the selection and quietly spawn a second, standalone
+    // copy of the text on the plate while the first was still being edited.
+    const key = editingTextHostKeyRef.current ?? selectedKeyRef.current
+    const plate = state?.plates.find((entry) => entry.index === activePlateIndex)
+    const instance = plate?.instances.find((entry) => entry.key === key)
+    const group = key ? groupByKeyRef.current.get(key) : null
+
+    // Nothing selected: the text is its own model, not a part of something. BambuStudio does the
+    // same, and it is the only way to letter a plate that has no host to attach to.
+    //
+    // Standalone-vs-hosted is decided ONCE per session and pinned, like the host key. Re-deciding it
+    // per pass is what made typing another letter add the text as a CHILD of the object it had just
+    // created: creating a standalone object selects it, so the next pass saw a valid host -- itself.
+    if (!state || editingTextObjectKeyRef.current != null || !instance || !group) {
+      if (!state || !plate) return
+      const resolved = await resolveTextFace()
+      if (!resolved) return
+      const soup = buildTextSoup(resolved.font, {
+        text: textTool.text,
+        fontSize: textTool.fontSize,
+        thickness: textTool.thickness,
+        textGap: textTool.textGap,
+        rotateAngle: textTool.rotateAngle
+      })
+      if (soup.length === 0) return
+      // The same record a text PART carries, so the tool can reopen this object and edit it. It
+      // names the face that was RESOLVED, not the one the form asked for, exactly as the hosted
+      // path does: those differ whenever the family has no matching cut and `bundledFace` falls
+      // back, and recording the request would reopen the text in a typeface it was never built in.
+      const standaloneTextInfo: TextInfo = {
+        ...defaultTextInfo(textTool.text, resolved.face.family),
+        fontSize: textTool.fontSize,
+        thickness: textTool.thickness,
+        textGap: textTool.textGap,
+        rotateAngle: textTool.rotateAngle,
+        embeddedDepth: textTool.embeddedDepth,
+        surfaceType: 'horizontal',
+        bold: textTool.bold,
+        italic: textTool.italic,
+        fontIndex: Math.max(0, BUNDLED_FONTS.findIndex((entry) => entry.id === resolved.face.id))
+      }
+      // Stood UP on the bed: a standalone object rests on the plate, unlike a part, which is placed
+      // by its centre inside a host.
+      const standing = soup.slice()
+      let minZ = Infinity
+      for (let i = 2; i < standing.length; i += 3) minZ = Math.min(minZ, standing[i]!)
+      for (let i = 2; i < standing.length; i += 3) standing[i] = standing[i]! - minZ
+      const staged = await importStore.stageFile(
+        new File([triangleSoupToBinaryStl(standing)], `${textTool.text.slice(0, 40) || 'Text'}.stl`,
+          { type: 'application/octet-stream' }),
+        'object'
+      )
+      // Created ONCE, then edited in place, exactly like text on a host. Adding an object and
+      // closing the tool on the first debounce meant a standalone text could never be edited at all:
+      // the tool shut itself the moment you typed, having committed whatever you had got to.
+      const existingKey = editingTextObjectKeyRef.current
+      const existing = existingKey ? plate.instances.find((entry) => entry.key === existingKey) : null
+      if (existing) {
+        const replacement = replaceInstanceGeometry(
+          existing, staged, undefined, importStore.meshUrl,
+          worldFootprintCenterForRef.current?.(existing.key) ?? null
+        )
+        replacement.textInfo = standaloneTextInfo
+        // Keep the name in step with the text, unless the user has renamed it themselves: the
+        // object is created named after its text, so leaving it behind makes "tests" sit in the
+        // list next to text that now reads "testsa".
+        if (!existing.nameOverridden) replacement.name = textTool.text.slice(0, 40) || 'Text'
+        replacement.nameOverridden = existing.nameOverridden
+        setEditingTextObject(replacement.key)
+        // NOT deselected: clearing the selection here is indistinguishable from the user clicking
+        // empty space, and the deselect rule would close the tool on the second keystroke.
+        setSelectedKey(replacement.key)
+        previousSelectedKeyRef.current = replacement.key
+        updatePlates((plates) => plates.map((entry) => entry.index !== activePlateIndex ? entry : {
+          ...entry,
+          instances: entry.instances.map((item) => item.key === existing.key ? replacement : item)
+        }))
+        return
+      }
+      recordHistoryRef.current?.()
+      const created = instanceFromStagedImport(staged, importStore.meshUrl)
+      created.textInfo = standaloneTextInfo
+      setEditingTextObject(created.key)
+      addInstanceToActivePlate(created, stagedFootprint(staged))
+      return
+    }
+    const hostId = addedPartHostId(instance)
+    if (hostId == null) { toast.error('This model cannot take text yet.'); return }
+
+    // An edit re-seats the text where it currently IS, not where it first landed. Rebuilding from
+    // the host's centre every keystroke would drag the text back off whatever surface the user had
+    // moved it onto, one character at a time.
+    // Rebuild against the POINTED face, never a fresh inference: this runs on every keystroke and
+    // after every drag, so re-deriving the surface here would undo what the pointer chose.
+    const pointed = editingTextSurfaceRef.current
+    let anchor: THREE.Vector3 | null = pointed?.point.clone() ?? null
+    if (!pointed && editingTextPartKey) {
+      rotorOf(group).traverse((node) => {
+        if (node.userData.addedPartKey === editingTextPartKey) {
+          anchor = node.getWorldPosition(new THREE.Vector3())
+        }
+      })
+    }
+    const placement = await buildTextPlacement(group, anchor, pointed?.normal ?? null)
+    if (!placement) return
+    const parts = ((state.addedParts ??= {})[hostId] ??= [])
+    const existing = editingTextPartKey ? parts.find((part) => part.key === editingTextPartKey) : null
+    // Staging serializes the soup to a binary STL and round-trips it through the import worker for
+    // the sole purpose of getting an `importId` back -- the soup it returns is the one handed in. So
+    // skip it outright when the geometry is unchanged and reuse the id already on the part. That is
+    // the whole of a flat-mode drag, where the letterforms never change and only the transform
+    // moves; without this, every pointer move staged a byte-identical mesh and orphaned the last one.
+    const unchanged = existing?.importId != null && existing.soup != null
+      && triangleSoupsEqual(existing.soup, placement.soup)
+    const staged = unchanged
+      ? { importId: existing.importId }
+      : await stageAddedPartGeometry(
+        importStore, { kind: 'soup', soup: placement.soup, name: textTool.text.slice(0, 40) }, 0
+      )
+    const textInfo: TextInfo = {
+      ...defaultTextInfo(textTool.text, placement.face.family),
+      fontSize: textTool.fontSize,
+      thickness: textTool.thickness,
+      textGap: textTool.textGap,
+      rotateAngle: textTool.rotateAngle,
+      embeddedDepth: textTool.embeddedDepth,
+      surfaceType: textTool.surfaceMode,
+      bold: textTool.bold,
+      italic: textTool.italic,
+      fontIndex: Math.max(0, BUNDLED_FONTS.findIndex((entry) => entry.id === placement.face.id)),
+      // The raycast that placed this text. BambuStudio reads these into `TextInfo::m_rr`
+      // (`bbs_3mf.cpp:4914`) and its gizmo re-derives placement from them, so leaving them at the
+      // defaults makes our file reopen in Studio pointing at the origin instead of at the surface
+      // the user chose. Absent only until the text has been pointed at something.
+      ...(pointed ? {
+        hitPosition: [pointed.point.x, pointed.point.y, pointed.point.z] as [number, number, number],
+        hitNormal: [pointed.normal.x, pointed.normal.y, pointed.normal.z] as [number, number, number]
+      } : {})
+    }
+    if (existing) {
+      existing.importId = staged.importId
+      existing.soup = placement.soup
+      existing.subtype = textTool.operation
+      existing.name = textTool.text.slice(0, 40)
+      existing.textInfo = textInfo
+      // The transform is taken from the SAME placement as the soup whenever a pointed face is in
+      // play. They are two halves of one answer, and letting the soup update while the transform
+      // kept an older value is how the text jumped the moment a drag was released.
+      if (pointed) {
+        existing.position.copy(placement.position)
+        existing.rotation.copy(placement.rotation)
+        existing.scale.copy(placement.scale)
+      }
+    } else {
+      const partKey = nextInstanceKey()
+      parts.push({
+        key: partKey,
+        importId: staged.importId,
+        subtype: textTool.operation,
+        name: textTool.text.slice(0, 40),
+        ...(threeMfPartSubtypeCarriesFilament(textTool.operation) ? { filamentId: instance.filamentId } : {}),
+        position: placement.position,
+        rotation: placement.rotation,
+        // Counters the host's scale, so 10mm text is 10mm on the plate rather than 10mm times
+        // whatever the model was scaled to.
+        scale: placement.scale,
+        soup: placement.soup,
+        textInfo
+      })
+      setEditingTextPartKey(partKey)
+      setEditingTextHost(instance.key)
+      // Selected immediately: the text IS the selection while the tool is open, which is what makes
+      // it draggable without leaving the panel.
+      setSelectedAddedPartKey(partKey)
+    }
+    refreshAddedPartMeshes()
+    regenerateActiveThumbnailRef.current?.()
+  }, [activePlateIndex, addInstanceToActivePlate, buildTextPlacement, editingTextPartKey,
+    importStore, resolveTextFace, textTool, updatePlates])
+  applyTextPartRef.current = applyTextPart
+
+  /**
+   * Keep the live part in step with the form, debounced because each pass rebuilds the letterforms
+   * and stages a mesh.
+   */
+  useEffect(() => {
+    if (gizmoMode !== 'text') return
+    let cancelled = false
+    const timer = window.setTimeout(() => {
+      if (cancelled) return
+      // Loading a saved part into the panel is not an edit; anything the user then changes is.
+      const loaded = textApplyLoadedRef.current
+      textApplyLoadedRef.current = null
+      if (loaded && textToolValuesEqual(loaded, textTool)) return
+      void applyTextPart().catch((error: unknown) => {
+        toast.error(error instanceof Error ? error.message : 'Unable to update the text.')
+      })
+    }, 200)
+    return () => { cancelled = true; window.clearTimeout(timer) }
+  }, [gizmoMode, applyTextPart, textTool])
+
+  /** Register a font the user picked from disk and select it. */
+  const loadTextFontFile = useCallback(async (file: File) => {
+    try {
+      const face = await loadUserFont(file)
+      setTextUserFaces((current) => [...current.filter((entry) => entry.id !== face.id), face])
+      setTextTool((current) => ({ ...current, family: face.family, bold: false, italic: false }))
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'That file could not be read as a font.')
+    }
+  }, [])
+
+  // Clearing the selection drops any mode that cannot function without one. An empty-viewport click,
+  // Escape, or a plate switch would otherwise leave the editor in (say) Cut or Paint with no panel
+  // and no gizmo: the rail shows the tool lit but disabled, and the only way out is to click an
+  // object. Deliberately keyed on the selection rather than folded into the deselect handlers, of
+  // which there are several (viewport click, Escape, plate select, add/remove plate) and which would
+  // each have had to remember.
+  useEffect(() => {
+    if (!selectedKey && isSelectionOnlyGizmoMode(gizmoMode)) setGizmoMode('translate')
+    // Text is exempt from the check above because it works with nothing selected, so it needs its
+    // own rule: a DESELECT closes it, but merely having nothing selected does not. Only the
+    // transition tells those apart -- opening the tool on an empty plate looks identical to
+    // deselecting while it is open if you only look at the current selection.
+    if (gizmoMode === 'text' && previousSelectedKeyRef.current != null && selectedKey == null) {
+      setGizmoMode('translate')
+    }
+    previousSelectedKeyRef.current = selectedKey
+  }, [selectedKey, gizmoMode])
+
+  // The panel IS the `layerHeight` mode, so leaving the mode by any route (a toolbar tool, the M/R/S
+  // shortcuts, Escape) closes it. Without this the panel outlives its mode and the move gizmo comes
+  // back underneath it, which is the conflict the mode exists to prevent.
+  useEffect(() => {
+    if (gizmoMode !== 'layerHeight' && editingLayerHeight) {
+      setEditingLayerHeight(null)
+      setLayerHeightBrush(null)
+    }
+  }, [gizmoMode, editingLayerHeight])
+
+  // Teardown is its OWN effect, keyed only on which object is being edited. Folding it into the
+  // sync above would tear every overlay down and rebuild it on each brush sample and each profile
+  // edit, which is the per-vertex cost the cached-height design exists to avoid.
+  useEffect(() => {
+    const key = editingLayerHeight?.key
+    if (!key) return
+    return () => {
+      const group = groupByKeyRef.current.get(key)
+      if (group) removeLayerHeightVisuals(group)
+    }
+  }, [editingLayerHeight?.key])
+
+  /**
+   * Read the plate's packing constraints out of the LIVE scene: which zones bar which nozzle, and
+   * where the prime tower currently stands (its size depends on the plate's filament count and
+   * tallest object, so it is measured off the rendered object rather than the plate record).
+   *
+   * `demandingInstances` are the objects whose nozzle reach must be honoured — every instance for
+   * Auto-arrange, which moves them all, but only the copied object for Fill bed, since nothing
+   * already placed moves and a neighbour's reach is therefore not this operation's problem.
+   */
+  const plateObstaclesFor = useCallback((plate: EditorPlate, demandingInstances: ReadonlyArray<EditorInstance>) => {
+    const tower = primeTowerObjRef.current
+    const towerCenter = tower ? tower.getWorldPosition(new THREE.Vector3()) : null
+    return computePlateObstacles({
+      bed: plate.bed,
+      zones: plate.bed.excludeAreas.map((zone) => ({
+        polygon: zone.polygon,
+        requiredNozzle: zoneRequiredNozzle(zone.label)
+      })),
+      nozzleDemands: demandingInstances.map((instance) => instanceNozzlesRef.current(instance)),
+      primeTower: tower && towerCenter
+        ? {
+            centerX: towerCenter.x,
+            centerY: towerCenter.y,
+            width: typeof tower.userData.towerWidth === 'number' ? tower.userData.towerWidth : 0,
+            depth: typeof tower.userData.towerDepth === 'number' ? tower.userData.towerDepth : 0
+          }
+        : null,
+      rasterizePolygon: rasterizePolygonCells
+    })
+  }, [])
+
+  /**
    * Auto-arrange: pack the active plate's models centre-out by their TRUE rasterized
    * footprints (the placement-warning grid), so concave parts nest instead of
    * reserving their whole bounding box. The usable area shrinks to what every
@@ -4780,62 +6311,13 @@ function EditorView({
       items.push({ key: instance.key, cells: [...cells] })
     }
     if (items.length === 0) return
-    const gap = 6
 
-    // Shrink the usable area to the region every object's nozzle can reach and that
-    // is actually printable, so auto-arrange never parks a part where it can't print.
-    // Nozzle reach is derived from the labeled nozzle-only zones: a left nozzle (1)
-    // can't enter the right-only zone and vice versa.
-    let leftMaxX = plate.bed.maxX
-    let rightMinX = plate.bed.minX
-    let safeMinX = plate.bed.minX
-    let safeMaxX = plate.bed.maxX
-    const safeMinY = plate.bed.minY
-    const safeMaxY = plate.bed.maxY
-    for (const zone of plate.bed.excludeAreas) {
-      let zx0 = Infinity, zx1 = -Infinity
-      for (const point of zone.polygon) {
-        zx0 = Math.min(zx0, point.x); zx1 = Math.max(zx1, point.x)
-      }
-      // Runtime nozzle ids: 0 = right, 1 = left. A RIGHT-only zone bounds how far right the LEFT
-      // nozzle may reach, and vice versa.
-      const required = zoneRequiredNozzle(zone.label)
-      if (required === 0) leftMaxX = Math.min(leftMaxX, zx0)
-      else if (required === 1) rightMinX = Math.max(rightMinX, zx1)
-      // Truly unprintable zones are blocked cell-by-cell below, no rect shrinking,
-      // so a corner cutout doesn't cost the whole edge strip.
-    }
-    for (const instance of plate.instances) {
-      const nozzles = instanceNozzlesRef.current(instance)
-      if (nozzles.has(1)) safeMaxX = Math.min(safeMaxX, leftMaxX)
-      if (nozzles.has(0)) safeMinX = Math.max(safeMinX, rightMinX)
-    }
-
-    // Block truly unprintable zones cell-by-cell (any shape, anywhere on the plate)
-    // and the prime tower's current footprint.
-    const blockedCells = new Set<number>()
-    for (const zone of plate.bed.excludeAreas) {
-      if (zoneRequiredNozzle(zone.label) != null) continue // handled via the safe rect
-      for (const cell of rasterizePolygonCells(zone.polygon)) blockedCells.add(cell)
-    }
-    const tower = primeTowerObjRef.current
-    if (tower) {
-      const halfW = (typeof tower.userData.towerWidth === 'number' ? tower.userData.towerWidth : 0) / 2
-      const halfD = (typeof tower.userData.towerDepth === 'number' ? tower.userData.towerDepth : 0) / 2
-      if (halfW > 0 && halfD > 0) {
-        const center = tower.getWorldPosition(new THREE.Vector3())
-        for (let cx = Math.floor((center.x - halfW) / FOOTPRINT_CELL_MM); cx <= Math.floor((center.x + halfW) / FOOTPRINT_CELL_MM); cx += 1) {
-          for (let cy = Math.floor((center.y - halfD) / FOOTPRINT_CELL_MM); cy <= Math.floor((center.y + halfD) / FOOTPRINT_CELL_MM); cy += 1) {
-            blockedCells.add(footprintCellKey(cx, cy))
-          }
-        }
-      }
-    }
-
+    // Every object on the plate moves, so every object's nozzle reach constrains the usable area.
+    const obstacles = plateObstaclesFor(plate, plate.instances)
     const result = arrangePlateItems(items, {
-      bed: { minX: safeMinX, maxX: safeMaxX, minY: safeMinY, maxY: safeMaxY },
-      blockedCells,
-      spacingMm: gap
+      bed: obstacles.safeArea,
+      blockedCells: obstacles.blockedCells,
+      spacingMm: PLATE_PACKING_GAP_MM
     })
     if (result.moves.size === 0) {
       toast.error('No room to arrange the objects on this plate.')
@@ -4857,7 +6339,79 @@ function EditorView({
     if (result.unplaced.length > 0) {
       toast.error(`${result.unplaced.length} model${result.unplaced.length === 1 ? '' : 's'} did not fit and stayed in place.`)
     }
-  }, [activePlateIndex, updatePlates])
+  }, [activePlateIndex, updatePlates, plateObstaclesFor])
+
+  /**
+   * BambuStudio's "Fill bed with copies" (`FillBedJob`): fill the plate's remaining space with
+   * copies of the selected object, packing centre-out around whatever is already there. Nothing
+   * already placed moves — this ADDS to a layout rather than redoing it, which is what separates
+   * it from Auto-arrange.
+   *
+   * We deliberately diverge from Studio on ONE point: its `ap.setter` calls `Model::add_object`,
+   * so every copy is a whole new object and each one carries its own duplicate of the source's
+   * per-object process overrides — edit the original afterwards and the copies do not follow.
+   * Ours adds linked INSTANCES against the same `objectId` (the `Duplicate` path), so all copies
+   * share one object's parts, materials, paint and overrides, and the sidebar's `xN` badge makes
+   * the linkage visible. That is issue #89's "add instances" note, and it is also why the copies
+   * cost nothing extra in the saved 3MF: they are extra build items, not extra meshes.
+   */
+  const handleFillBedWithCopies = useCallback((key: string) => {
+    const plate = stateRef.current?.plates.find((entry) => entry.index === activePlateIndex)
+    const template = plate?.instances.find((entry) => entry.key === key)
+    if (!plate || !template) return
+    const templateGroup = groupByKeyRef.current.get(template.key)
+    const templateFootprint = templateGroup ? computeFootprintCells(templateGroup) : null
+    if (!templateFootprint || templateFootprint.size === 0) {
+      toast.error('That model has no printable footprint to copy.')
+      return
+    }
+
+    // Everything on the plate holds its ground, so every footprint is an obstacle — the template's
+    // own instance included, or the first copy would be planned on top of it.
+    const occupiedFootprints: number[][] = []
+    for (const instance of plate.instances) {
+      const group = groupByKeyRef.current.get(instance.key)
+      if (!group) continue
+      const cells = computeFootprintCells(group)
+      if (cells.size > 0) occupiedFootprints.push([...cells])
+    }
+
+    // Only the copied object's reach constrains the area: the objects already down are staying put
+    // whatever their materials need.
+    const obstacles = plateObstaclesFor(plate, [template])
+    const offsets = planFillBedCopies({
+      bed: obstacles.safeArea,
+      blockedCells: obstacles.blockedCells,
+      spacingMm: PLATE_PACKING_GAP_MM,
+      templateFootprint: [...templateFootprint],
+      occupiedFootprints
+    })
+    if (offsets.length === 0) {
+      toast.error('No room on this plate for another copy.')
+      return
+    }
+
+    updatePlates((plates) => plates.map((entry) => {
+      if (entry.index !== activePlateIndex) return entry
+      const source = entry.instances.find((instance) => instance.key === template.key)
+      if (!source) return entry
+      const copies = offsets.map((offset) => {
+        const clone = duplicateInstance(source)
+        // `duplicateInstance` nudges its copy clear of the source; the planner already decided
+        // where this one goes, so place it outright rather than composing with that nudge.
+        // It also drops `exactMatrix`, which this relies on: that matrix carries a sheared
+        // object's own translation, so a copy that kept it would ignore `position` and every
+        // copy would render stacked on the original.
+        clone.position.set(source.position.x + offset.dx, source.position.y + offset.dy, source.position.z)
+        return clone
+      })
+      return { ...entry, instances: [...entry.instances, ...copies] }
+      // A 'structure' edit (the default): the copies are NEW instances with no live group yet, so
+      // they need the full rebuild. The cheaper 'transform' sync only writes placements onto groups
+      // that already exist, which would leave every copy invisible until some later rebuild.
+    }))
+    toast.success(`Added ${offsets.length} cop${offsets.length === 1 ? 'y' : 'ies'} to fill the plate.`)
+  }, [activePlateIndex, updatePlates, plateObstaclesFor])
 
   const handleDropToBed = useCallback(() => {
     if (!selectedKey) return
@@ -5696,6 +7250,38 @@ function EditorView({
     if (stagedSettings) handleStageSettingsRepair()
     if (settingsRepairReasons.includes('filamentPhysics')) await handleRepairFilamentPhysics(stagedSettings)
   }, [settingsRepairReasons, handleStageSettingsRepair, handleRepairFilamentPhysics, stateRef])
+
+  /**
+   * The settings panel's controller, as ONE stable object.
+   *
+   * `SliceSettingsPanel` is memoised and is the largest thing in the sidebar after the object list,
+   * so this must not be rebuilt per render. It was a spread literal wrapping a second literal in
+   * JSX, which threw away the memoisation `sliceConfigForPanel` already had and re-rendered the
+   * whole panel for every unrelated edit.
+   */
+  const sliceSettingsFlushVolumes = useMemo(() => (projectFlushContext
+    ? {
+        context: projectFlushContext,
+        datasets: flushDatasets,
+        calibration: flushCalibration,
+        value: state?.flushVolumes ?? null,
+        onChange: handleFlushVolumesChange,
+        // Same staged repair the banner offers, reachable from where the defect is actually visible.
+        onRepair: settingsRepairReasons.includes('flushMatrix') ? handleRepairInEditor : undefined
+      }
+    : null),
+  [projectFlushContext, flushDatasets, flushCalibration, state?.flushVolumes,
+    handleFlushVolumesChange, settingsRepairReasons, handleRepairInEditor])
+
+  const sliceSettingsController = useMemo(() => (sliceConfigForPanel
+    // Flush volumes are injected HERE rather than by either host's controller: the purge volumes
+    // are project-file content read from the archive the editor holds and edited as session state
+    // it owns, so this is the one place both hosts already share. The edit records its own history
+    // checkpoint, so it does not go through the controller wrapper the slice-config setters use.
+    ? { ...sliceConfigForPanel, flushVolumes: sliceSettingsFlushVolumes }
+    : null),
+  [sliceConfigForPanel, sliceSettingsFlushVolumes])
+
   /**
    * Whether "Save" has somewhere to land WITHOUT asking the user for a destination, an opened
    * library file, an opened local file, or a scaffold already saved once this session. Shared by the
@@ -6016,7 +7602,7 @@ function EditorView({
                       disabled={!selectedKey || controlsBusy}
                       busy={controlsBusy}
                       arrangeDisabled={controlsBusy || (activePlate?.instances.length ?? 0) === 0}
-                      onChange={setGizmoMode}
+                      onChange={handleGizmoModeChange}
                       onDropToBed={handleDropToBed}
                       onAutoOrient={handleAutoOrient}
                       onArrangeAll={handleArrangeAll}
@@ -6089,7 +7675,7 @@ function EditorView({
                       disabled={!selectedKey || controlsBusy}
                       busy={controlsBusy}
                       arrangeDisabled={controlsBusy || (activePlate?.instances.length ?? 0) === 0}
-                      onChange={setGizmoMode}
+                      onChange={handleGizmoModeChange}
                       onDropToBed={handleDropToBed}
                       onAutoOrient={handleAutoOrient}
                       onArrangeAll={handleArrangeAll}
@@ -6140,6 +7726,10 @@ function EditorView({
                     setCutKeepLower={setCutKeepLower}
                     cutKeepUpper={cutKeepUpper}
                     setCutKeepUpper={setCutKeepUpper}
+                    cutOrientLower={cutOrientLower}
+                    setCutOrientLower={setCutOrientLower}
+                    cutOrientUpper={cutOrientUpper}
+                    setCutOrientUpper={setCutOrientUpper}
                     cutting={cutting}
                     onCut={handlePerformCut}
                     onCancel={() => setGizmoMode('translate')}
@@ -6170,6 +7760,81 @@ function EditorView({
                     onDone={() => setGizmoMode('translate')}
                   />
                 )}
+            {gizmoMode === 'text' && (
+              <TextToolPanel
+                value={textTool}
+                hasHost={textHasHost}
+                families={BUNDLED_FAMILIES}
+                userFaces={textUserFaces}
+                busy={importing}
+                onChange={setTextTool}
+                onLoadFontFile={(file) => { void loadTextFontFile(file) }}
+                onRemove={() => {
+                  removeTextPart()
+                  setEditingTextHost(null)
+                  setGizmoMode('translate')
+                }}
+                onClose={() => {
+                  window.clearTimeout(reseatSettleRef.current)
+                  setEditingTextPartKey(null)
+                  setEditingTextHost(null)
+                  setGizmoMode('translate')
+                }}
+              />
+            )}
+            {editingLayerHeight && (() => {
+              const instance = stateRef.current?.plates
+                .flatMap((plate) => plate.instances).find((entry) => entry.key === editingLayerHeight.key)
+              const group = groupByKeyRef.current.get(editingLayerHeight.key)
+              if (!instance || !group) return null
+              const box = printableMeshBox(group)
+              const objectHeight = box ? box.max.z - box.min.z : 0
+              if (!(objectHeight > 0)) return null
+              const profile = effectiveLayerHeightProfile(stateRef.current, instance)
+              // `checkpoint` false = mid-stroke: no undo entry, so one drag is one undo step.
+              const commit = (next: number[] | null, checkpoint = true) => {
+                if (next) setObjectLayerHeightProfile(editingLayerHeight.objectId, next, checkpoint)
+              }
+              // OBJECT-space triangles: the profile's own frame, so the soup is rebased off the model's
+              // underside rather than handed over in world coordinates.
+              const objectSoup = () => {
+                const soup = collectWorldTriangles(group)
+                const minZ = box ? box.min.z : 0
+                for (let i = 2; i < soup.length; i += 3) soup[i] = soup[i]! - minZ
+                return soup
+              }
+              return (
+                <LayerHeightPanel
+                  objectName={instance.name}
+                  objectHeight={objectHeight}
+                  profile={profile}
+                  bounds={layerHeightBounds}
+                  nominalHeight={defaultLayerHeightMm}
+                  hasHeightRanges={effectiveHeightRanges(stateRef.current, instance).length > 0}
+                  onHover={(z, bandWidth) => setLayerHeightBrush(z == null ? null : { z, bandWidth })}
+                  onPaint={(z, action, bandWidth, firstOfStroke) => commit(paintLayerHeightProfile(
+                    profile.length > 0 ? profile : flatLayerHeightProfile(objectHeight, defaultLayerHeightMm, firstLayerHeightMm),
+                    z, action,
+                    { objectHeight, bounds: layerHeightBounds, nominalHeight: defaultLayerHeightMm, bandWidth, strength: 0.02, firstLayerHeight: firstLayerHeightMm }
+                  ), firstOfStroke)}
+                  onAdaptive={(quality) => {
+                    const next = adaptiveLayerHeightProfile(objectSoup(), {
+                      objectHeight, bounds: layerHeightBounds, nominalHeight: defaultLayerHeightMm, quality,
+                      firstLayerHeight: firstLayerHeightMm
+                    })
+                    if (!next) { toast.error('That model has no surface to derive layer heights from.'); return }
+                    commit(next)
+                  }}
+                  onSmooth={(radius, keepMin) => {
+                    if (profile.length === 0) { toast.error('Nothing to smooth yet: run Adaptive or paint first.'); return }
+                    commit(smoothLayerHeightProfile(profile, objectHeight,
+                      { bounds: layerHeightBounds, radius, keepMin, firstLayerHeight: firstLayerHeightMm }))
+                  }}
+                  onReset={() => setObjectLayerHeightProfile(editingLayerHeight.objectId, [])}
+                  onClose={() => { setEditingLayerHeight(null); setLayerHeightBrush(null); setGizmoMode('translate') }}
+                />
+              )
+            })()}
                 {selectedAddedPart && selectedKey && (gizmoMode === 'translate' || gizmoMode === 'rotate' || gizmoMode === 'scale') && (
                   <AddedPartPanel
                     part={selectedAddedPart}
@@ -6188,7 +7853,15 @@ function EditorView({
                     variant="solid"
                     color="primary"
                     size="sm"
-                    sx={{ position: 'absolute', top: 8, right: 8, zIndex: (theme) => theme.zIndex.tooltip }}
+                    // Bottom CENTRE, not the top-right corner it used to share with the undo/redo
+                    // strip at the same z-index (on a phone that strip carries the whole tool row,
+                    // so the degrees landed on the buttons). The bottom centre is the one edge no
+                    // other viewport surface claims: the cube owns bottom-left, placement warnings
+                    // bottom-right, and the transform readout the top centre.
+                    sx={{
+                      position: 'absolute', bottom: 8, left: '50%', transform: 'translateX(-50%)',
+                      zIndex: (theme) => theme.zIndex.tooltip
+                    }}
                   >
                     {`${Math.round(rotationReadout)}°`}
                   </Chip>
@@ -6328,37 +8001,18 @@ function EditorView({
                       filamentColors={filamentColors}
                       filamentOptions={filamentOptions}
                       onReassignFilament={filamentOptions.length > 0 ? reassignFilament : undefined}
+                      onReassignInstanceFilament={filamentOptions.length > 0 ? reassignOneInstanceFilament : undefined}
                       resolveFilamentId={resolveColorFilamentId}
                       onTogglePrintable={handleTogglePrintable}
-                      onChangePartType={(objectId, partIndex, subtype) =>
-                        handleChangePartTypes([{ objectId, partIndex }], subtype)}
-                      addedPartsFor={(instance) => effectiveAddedParts(stateRef.current, instance)}
+                      onChangePartType={handleChangeOnePartType}
+                      addedPartsFor={addedPartsFor}
                       selectedAddedPartKey={selectedAddedPartKey}
                       onSelectAddedPart={handleSelectAddedPartRow}
                       onChangeAddedPartType={handleChangeAddedPartType}
                       onChangeAddedPartFilament={handleChangeAddedPartFilament}
                       onRemoveAddedPart={handleRemoveAddedPart}
                       onEditAddedPartSettings={perObject ? setEditingPartKey : undefined}
-                      perObject={perObject ? {
-                        // Baked objects from the slice index PLUS each not-yet-saved import's
-                        // synthetic object id, so per-object process is editable before any save.
-                        sliceObjectIds: new Set<number>([
-                          ...(sliceConfig?.plateObjects ?? []).map((object) => object.id),
-                          ...activePlate.instances.flatMap((instance) =>
-                            instance.source.kind === 'import' && instance.source.replacedObjectId != null
-                              ? [instance.source.replacedObjectId]
-                              : []),
-                          // An independent COPY has no baked slice-index id yet either; its
-                          // placeholder is re-keyed onto the copy's real object at save/slice time
-                          // (`clonedObjectIds`), so its process settings need no save first.
-                          ...Object.keys(state?.objectClones ?? {}).map(Number)
-                        ]),
-                        overrideCountFor: (objectId) => Object.keys(perObject.value[String(objectId)] ?? {}).length,
-                        onEditObject: (objectId, name) => setEditingObject({ ids: [objectId], name }),
-                        onEditPart: (objectId, partIndex, name) => setEditingPart({ objectId, partIndexes: [partIndex], name }),
-                        partOverrideCountFor: (objectId, partIndex) =>
-                          Object.keys(stateRef.current?.partProcessOverrides?.[partSlotKey(objectId, partIndex)] ?? {}).length
-                      } : undefined}
+                      perObject={objectListPerObject}
                     />
                   )}
                 </Sheet>
@@ -6384,28 +8038,9 @@ function EditorView({
                 />
               </>
             ) : null
-            const settingsPanel = sliceConfigForPanel
+            const settingsPanel = sliceSettingsController
               ? <SliceSettingsPanel
-                  controller={{
-                    ...sliceConfigForPanel,
-                    // Injected HERE rather than by either host's controller: the purge volumes are
-                    // project-file content read from the archive the editor holds and edited as
-                    // session state it owns, so this is the one place both hosts already share.
-                    // The edit records its own history checkpoint, so it does not go through the
-                    // controller wrapper the way the slice-config setters do.
-                    flushVolumes: projectFlushContext
-                      ? {
-                          context: projectFlushContext,
-                          datasets: flushDatasets,
-                          calibration: flushCalibration,
-                          value: state?.flushVolumes ?? null,
-                          onChange: handleFlushVolumesChange,
-                          // Same staged repair the banner offers, reachable from where the defect
-                          // is actually visible.
-                          onRepair: settingsRepairReasons.includes('flushMatrix') ? handleRepairInEditor : undefined
-                        }
-                      : null
-                  }}
+                  controller={sliceSettingsController}
                   mode="editor"
                   activePlateIndex={activePlateIndex}
                   onManagePresets={presetManager ? openSlicingPresets : undefined}
@@ -6585,6 +8220,7 @@ function EditorView({
             onDuplicate={handleDuplicate}
             onDuplicateIndependent={(key) => handleDuplicate(key, true)}
             onCloneWithCount={(key) => { void handleCloneWithCount(key) }}
+            onFillBedWithCopies={handleFillBedWithCopies}
             onAlignDistribute={applyAlignDistribute}
             onMakeIndependent={linkedCopyCountFor(contextMenu.key) > 1 ? handleMakeIndependent : undefined}
             onRename={(key) => { void handleRenameObject(key) }}
@@ -6629,6 +8265,14 @@ function EditorView({
             // the item rather than labelling it from a guess.
             printable={activePlate?.instances.find((instance) => instance.key === contextMenu.key)?.printable ?? null}
             onEditObjectSettings={perObject ? () => openObjectSettingsFor(contextMenu.key) : undefined}
+            onEditLayerHeight={openLayerHeightFor}
+            onEditHeightRanges={(key) => {
+              const instance = stateRef.current?.plates
+                .flatMap((plate) => plate.instances).find((entry) => entry.key === key)
+              const hostId = instance ? addedPartHostId(instance) : null
+              if (!instance || hostId == null) return
+              setEditingHeightRanges({ key, objectId: hostId, name: instance.name })
+            }}
             onCenterOnPlate={centerSelectionOnPlate}
             onDropToBed={handleDropToBed}
             onResetRotation={() => mutateSelectedGroup((group) => { rotorOf(group).rotation.set(0, 0, 0) })}
@@ -6817,6 +8461,79 @@ function EditorView({
             if (Object.keys(serialized).length === 0) delete part.settings
             else part.settings = serialized
             setEditingPartKey(null)
+          }}
+        />
+      )
+    })()}
+    {editingHeightRanges && (() => {
+      const instance = stateRef.current?.plates
+        .flatMap((plate) => plate.instances).find((entry) => entry.key === editingHeightRanges.key)
+      if (!instance) return null
+      const ranges = effectiveHeightRanges(stateRef.current, instance)
+      // Bands are measured from the object's underside, so the bound is the model's own height,
+      // not the plate's. Null when the group is not built yet: the dialog then leaves the top open.
+      const group = groupByKeyRef.current.get(editingHeightRanges.key)
+      const box = group ? printableMeshBox(group) : null
+      const objectHeightMm = box ? box.max.z - box.min.z : null
+      return (
+        <HeightRangesDialog
+          objectName={instance.name}
+          ranges={ranges}
+          objectHeightMm={objectHeightMm}
+          defaultLayerHeightMm={defaultLayerHeightMm}
+          hasLayerHeightProfile={effectiveLayerHeightProfile(stateRef.current, instance).length > 0}
+          extraSettingCount={(range) => Object.keys(range.settings)
+            .filter((key) => key !== 'layer_height' && key !== 'extruder').length}
+          onChange={(next) => setObjectHeightRanges(editingHeightRanges.objectId, next)}
+          onEditSettings={setEditingHeightRangeIndex}
+          onClose={() => { setEditingHeightRanges(null); setEditingHeightRangeIndex(null) }}
+        />
+      )
+    })()}
+    {editingHeightRanges && editingHeightRangeIndex != null && perObject && (() => {
+      const instance = stateRef.current?.plates
+        .flatMap((plate) => plate.instances).find((entry) => entry.key === editingHeightRanges.key)
+      if (!instance) return null
+      const ranges = effectiveHeightRanges(stateRef.current, instance)
+      const band = ranges[editingHeightRangeIndex]
+      if (!band) return null
+      const objectOverrides = perObject.value[String(editingHeightRanges.objectId)] ?? {}
+      // `layer_height` is edited inline in the ranges dialog (every band must carry one), so it is
+      // kept out of this catalog rather than offered twice with two sources of truth.
+      const { layer_height: _inline, extruder: _material, ...tunable } = band.settings
+      return (
+        <ProcessSettingsDialog
+          open
+          applyScope="project"
+          onClose={() => setEditingHeightRangeIndex(null)}
+          slicerTargetId={perObject.slicerTargetId}
+          processProfileId={perObject.processProfileId}
+          processProfileName={`${instance.name} · ${band.minZ.toFixed(1)}-${band.maxZ.toFixed(1)} mm`}
+          sourceFileId={perObject.sourceFileId}
+          initialOverrides={tunable}
+          visibilityContext={{ ...perObject.visibilityContext, isGlobalConfig: false }}
+          allowedKeys={HEIGHT_RANGE_TUNABLE_KEYS}
+          baseOverlay={{ ...perObject.globalOverrides, ...objectOverrides }}
+          resolveConfig={resolveProcessConfig}
+          titlePrefix="Range settings"
+          onApply={(overrides) => {
+            const serialized: Record<string, string> = {}
+            for (const [key, value] of Object.entries(overrides)) {
+              serialized[key] = Array.isArray(value) ? value.join(';') : value
+            }
+            const next = ranges.map((range, index) => index === editingHeightRangeIndex
+              ? {
+                  ...range,
+                  // The inline pair is authoritative and survives whatever the catalog returns.
+                  settings: {
+                    ...serialized,
+                    layer_height: range.settings.layer_height ?? String(defaultLayerHeightMm),
+                    extruder: range.settings.extruder ?? '0'
+                  }
+                }
+              : range)
+            setObjectHeightRanges(editingHeightRanges.objectId, next)
+            setEditingHeightRangeIndex(null)
           }}
         />
       )

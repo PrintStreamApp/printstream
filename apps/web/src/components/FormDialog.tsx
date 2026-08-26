@@ -24,12 +24,12 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
-  Modal,
   ModalClose,
   ModalDialog,
   Stack,
   Typography
 } from '@mui/joy'
+import { BackAwareModal } from './BackAwareModal'
 import type { ReactNode } from 'react'
 
 export function FormDialog({
@@ -59,7 +59,7 @@ export function FormDialog({
   children: ReactNode
 }) {
   return (
-    <Modal open={open} onClose={() => { if (!busy) onClose() }}>
+    <BackAwareModal open={open} onClose={() => { if (!busy) onClose() }}>
       <ModalDialog variant="outlined" sx={{ width }}>
         <ModalClose disabled={busy} />
         <DialogTitle>{title}</DialogTitle>
@@ -81,6 +81,6 @@ export function FormDialog({
           <Button loading={busy} disabled={submitDisabled} onClick={onSubmit}>{submitLabel}</Button>
         </DialogActions>
       </ModalDialog>
-    </Modal>
+    </BackAwareModal>
   )
 }

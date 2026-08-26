@@ -24,7 +24,7 @@ through the `SceneEdit` contract and the baked 3MF on disk.
 
 | Concern | Layer | Key modules |
 | --- | --- | --- |
-| **Editor** | web | `apps/web/src/plugins/model-studio/` — `EditorView.tsx` (3D editor), `lib/editorModel.ts` (the editable scene model + `buildSceneEdit`), `lib/editorProjectSource.ts` (where the project is READ from — see below), `lib/threeMfScene.ts` (scene→Three.js), `lib/editorImports.ts`, `lib/meshCut.ts` (Cut tool: plane cut + capped halves staged as imports) |
+| **Editor** | web | `apps/web/src/plugins/model-studio/` — `EditorView.tsx` (3D editor), `lib/editorModel.ts` (the editable scene model + `buildSceneEdit`), `lib/editorProjectSource.ts` (where the project is READ from — see below), `lib/threeMfScene.ts` (scene→Three.js), `lib/editorImports.ts`, `lib/meshCut.ts` (Cut tool: plane cut + capped halves, oriented per half, staged as imports) |
 | **Editor** | api | `routes/editor.ts` (save, staged imports, and the no-persist `POST /export-3mf` download bake), `lib/import-store.ts`, `lib/mesh-import.ts` (STL parse + STEP tessellation), `lib/three-mf-mesh-extract.ts` (3MF geometry import: first non-empty plate → one part per placed part, helper volumes CARRIED with their subtype but excluded from the merged mesh + re-centring, group re-centred on origin); `lib/three-mf-scene-builder.ts` (`buildEditedThreeMf`) |
 | **Slicing** | web | the slice UI in `components/library/` — `SliceFileModal.tsx`, `SliceSettingsPanel.tsx` (`SliceSettingsController`; materials render as compact one-line swatch rows), `MaterialEditDialog.tsx` (the expanded per-material type/preset/color inputs, reached from a swatch row via `MaterialSwatchButton.tsx`, whose menu also assigns the printer's loaded materials directly), `FilamentSettingsDialog.tsx` (material settings) — plus `components/ProcessSettingsDialog.tsx`, `components/settings/MachineSettingsDialog.tsx` (printer presets, from the slicing-preset manager) and the per-object settings surfaces inside `SliceSettingsPanel.tsx` and the editor's `editorPanels.tsx`. All three settings dialogs share `components/settings/SettingsCatalogDialog.tsx` + `SettingValueField.tsx` |
 | **Slicing** | api | `routes/slicing.ts`, `lib/slicing-jobs.ts`, `lib/slicer-client.ts`, `lib/slicing-presets.ts` |
@@ -151,11 +151,16 @@ region can change the printed filament. A support blocker/enforcer or negative v
 never carries one, is never given the object's, and never gets an `extruder` written back;
 this mirrors BambuStudio, which draws the extruder swatch for `MODEL_PART` and
 `PARAMETER_MODIFIER` only. `threeMfPartSubtypeCarriesFilament` in `@printstream/shared` is
-the single predicate for it), `objectNames` (renames), and the three paint channels `supportPaint` /
-`seamPaint` / `colorPaint` — the support, seam, and colour brushes' complete per-part
-triangle paint maps (`paint_supports` / `paint_seam` codes: `'4'` enforcer, `'8'`
+the single predicate for it), `objectNames` (renames), and the four paint channels `supportPaint` /
+`seamPaint` / `colorPaint` / `fuzzyPaint` — the support, seam, colour, and fuzzy-skin brushes'
+complete per-part triangle paint maps (`paint_supports` / `paint_seam` codes: `'4'` enforcer, `'8'`
 blocker; `paint_color` whole-triangle states map to 1-based filament ids, '4'/'8'/'0C'/
-'1C'...; longer split codes from the source file are preserved verbatim). The api rewrites a painted
+'1C'...; `paint_fuzzy_skin` is its own attribute even though BambuStudio gives fuzzy skin the same
+VALUE as a support enforcer, because a triangle can be both; longer split codes from the source file
+are preserved verbatim). A channel is only as good as its READ path: the attribute must be picked up
+by every parser and both worker-wire hops (`TRIANGLE_PAINT_SOURCES` in the editor's
+`meshParseCore.ts` is the one table they all derive from), because these maps are complete state, so
+a channel that fails to load saves back as empty and erases what the file had. The api rewrites a painted
 part's `<triangle>` attributes inside the mesh's model entry (root or
 `3D/Objects/*.model`); parts never painted in the session are copied byte-for-byte —
 unless the save PERMUTES the filament slots (a material reorder or mid-list removal), in which
@@ -181,7 +186,16 @@ painting (world-normal gate that also blocks propagation). `brimEars` carries pe
 ears (object-local points + radius), written wholesale to Bambu's
 `Metadata/brim_ear_points.txt` (objects referenced by 1-based root-resource ordinal);
 `readSceneManifest` parses the sidecar back onto scene instances so reopened
-projects keep their ears. `filamentChanges` and `pauses` carry per-plate layer-based
+projects keep their ears. `heightRanges` is the same shape one level along: per-object Z bands
+(object space, z=0 at the model's underside, `[minZ, maxZ)`) with the process settings each band
+overrides, written wholesale to `Metadata/layer_config_ranges.xml` by the same 1-based ordinal and
+parsed back the same way. An authored ranges file SKIPS the ordinal remap that carries an untouched
+one through, since it already speaks the saved ordinals. Every band must name a `layer_height`:
+BambuStudio reads that key without checking it exists. `layerHeightProfiles` is the free-form
+sibling: a per-object curve of alternating z/height pairs written to
+`Metadata/layer_heights_profile.txt`, generated by the adaptive pass, smoothing, or the thickness-bar
+brush (`three-mf/layer-height-adaptive.ts`). It TAKES PRECEDENCE over `heightRanges`' layer heights,
+so both editor surfaces warn when an object carries both. `filamentChanges` and `pauses` carry per-plate layer-based
 filament changes and layer pauses (ToolChange / PausePrint entries in
 `Metadata/custom_gcode_per_layer.xml`, both keyed by the target layer's `top_z` in mm
 — the slicer re-snaps to the nearest layer at slice time, BambuStudio semantics); the
@@ -213,8 +227,8 @@ persists ModelVolume config, so the slicer applies them inside the volume. Hosts
 carrying an inline mesh are first wrapped (mesh moves to its own object behind an
 identity component) so 3MF's mesh-XOR-components rule holds — the normal path for a
 freshly baked import host. Painting and brim ears work on unsaved imports too — they
-ride their own seams (`importPaint`, `importBrimEars`, and `repairedImportIds` for mesh
-repair) keyed by import id rather than by a baked `object_id`, so a staged import, a
+ride their own seams (`importPaint`, `importBrimEars`, `importHeightRanges`,
+`importLayerHeightProfiles`, and `repairedImportIds` for mesh repair) keyed by import id rather than by a baked `object_id`, so a staged import, a
 Cut/Split half, or an independent copy can be painted before the project has ever been
 saved. The rule that forces this shape: no editor feature may require a save first, so a
 per-object or per-part seam addresses the model by its editor-side identity and resolves

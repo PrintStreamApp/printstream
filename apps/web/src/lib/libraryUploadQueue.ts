@@ -14,6 +14,7 @@
  * version) with a toast. Successfully-finished entries auto-dismiss after a short
  * delay so completed rows don't pile up; failed/cancelled entries stay for retry.
  */
+import { setAppBusy } from './appBusy'
 import { isUploadAbortError, uploadLibraryFileInChunks, type ChunkedLibraryUploadPhase, type ChunkedLibraryUploadProgress } from './chunkedLibraryUpload'
 import { formatUploadTreeItemPath, type LibraryUploadTreeItem } from './libraryUploadTree'
 import { toast } from './toast'
@@ -92,6 +93,10 @@ function toPublic(entry: InternalEntry): LibraryUploadEntry {
 
 function emitChange(): void {
   snapshot = Array.from(entries.values(), toPublic)
+  // An upload in flight is work a reload would lose, so it holds off an app update
+  // (`lib/appStaleness.ts`). Only the unfinished states count: a finished-but-undismissed
+  // toast must not pin the app on an old build indefinitely.
+  setAppBusy('library-uploads', snapshot.some((entry) => entry.status === 'queued' || entry.status === 'uploading'))
   for (const listener of listeners) {
     try {
       listener()

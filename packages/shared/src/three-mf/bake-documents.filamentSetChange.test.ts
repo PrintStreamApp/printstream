@@ -17,9 +17,9 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { applyFilamentList } from './bake-documents'
+import { applyFilamentList } from './bake-documents.js'
 import { collectSettingsRepairReasons } from '../repairs/index.js'
-import type { SceneEditFilament } from '../slicing'
+import type { SceneEditFilament } from '../slicing.js'
 
 /** A dual-nozzle H2D project with two filaments and every invariant satisfied. */
 const HEALTHY: Record<string, unknown> = {

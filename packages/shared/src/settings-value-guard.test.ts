@@ -7,8 +7,8 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { dropEngineHostileOverrides, isEngineHostileValue } from './settings-value-guard'
-import { processSettingsCatalog } from './process-settings'
+import { dropEngineHostileOverrides, isEngineHostileValue } from './settings-value-guard.js'
+import { processSettingsCatalog } from './process-settings.js'
 
 /** A real key of each shape, so the test breaks if the catalog stops carrying them. */
 function keyOfType(type: string): string {

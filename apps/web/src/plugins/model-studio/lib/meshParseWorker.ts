@@ -11,7 +11,7 @@
  * redeclaring them, so a change to a message shape cannot land on one side only.
  */
 /// <reference lib="webworker" />
-import { buildThreeMfGeometries, buildStlGeometry, type MeshPaintCodes } from './meshParseCore'
+import { buildThreeMfGeometries, buildStlGeometry, collectMeshPaint, type MeshPaintByChannel } from './meshParseCore'
 
 /** Client -> worker: one parse task. `buffer` is transferred, so the client sends a copy. */
 export interface MeshParseRequest {
@@ -20,14 +20,18 @@ export interface MeshParseRequest {
   buffer: ArrayBuffer
 }
 
-/** One parsed object's finished geometry, as arrays that transfer back without a copy. */
+/**
+ * One parsed object's finished geometry, as arrays that transfer back without a copy.
+ *
+ * Paint travels as ONE map keyed by `userData` key rather than a field per channel: a field per
+ * channel is a list to keep in step with the parser, and the fourth channel (fuzzy skin) was
+ * parsed but never posted for exactly that reason. See `TRIANGLE_PAINT_SOURCES`.
+ */
 export interface ParsedMeshEntry {
   objectId: number
   position: Float32Array
   normal?: Float32Array
-  supportPaint?: MeshPaintCodes
-  seamPaint?: MeshPaintCodes
-  colorPaint?: MeshPaintCodes
+  paint?: MeshPaintByChannel
 }
 
 /**
@@ -57,9 +61,7 @@ ctx.onmessage = (event: MessageEvent<MeshParseRequest>) => {
         objectId,
         position,
         normal,
-        supportPaint: geometry.userData.supportPaint as MeshPaintCodes | undefined,
-        seamPaint: geometry.userData.seamPaint as MeshPaintCodes | undefined,
-        colorPaint: geometry.userData.colorPaint as MeshPaintCodes | undefined
+        paint: collectMeshPaint(geometry.userData)
       }
       entries.push(entry)
       transfer.push(position.buffer as ArrayBuffer)

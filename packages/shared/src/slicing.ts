@@ -5,6 +5,7 @@
 import { z } from 'zod'
 import { processSettingOverridesSchema } from './process-settings.js'
 import { degenerateTransformMessage, findDegenerateTransformColumn } from './three-mf/transform-validity.js'
+import { TEXT_SURFACE_TYPES, type TextInfo } from './three-mf/text-info.js'
 
 export const slicingPresetKindSchema = z.enum(['machine', 'process', 'filament'])
 export type SlicingPresetKind = z.infer<typeof slicingPresetKindSchema>
@@ -441,6 +442,55 @@ export type SceneEditBrimEar = z.infer<typeof sceneEditBrimEarSchema>
  * ears removed. Objects without an entry keep the source file's ears. Ears only take
  * effect when the process `brim_type` is `brim_ears`.
  */
+/** Cap on bands per object: past this the plate is a gradient, not a set of deliberate zones. */
+export const MAX_HEIGHT_RANGES_PER_OBJECT = 64
+
+/**
+ * One height range modifier: a Z band in OBJECT space (z=0 at the object's underside, raft
+ * excluded) whose process-setting overrides apply to the layers inside it. The band is
+ * `[minZ, maxZ)` — closed at the bottom, open at the top, matching BambuStudio's slicer.
+ *
+ * `settings` must include `layer_height`: BambuStudio reads it without checking the key exists
+ * and null-derefs otherwise (see `three-mf/layer-config-ranges.ts`).
+ */
+export const sceneEditHeightRangeSchema = z.object({
+  minZ: z.number().min(0).max(10_000),
+  maxZ: z.number().min(0).max(10_000),
+  settings: processSettingOverridesSchema
+}).refine((range) => range.maxZ > range.minZ, 'maxZ must be above minZ')
+export type SceneEditHeightRange = z.infer<typeof sceneEditHeightRangeSchema>
+
+/**
+ * Per-object height range modifiers (BambuStudio's `layer_config_ranges`), written to
+ * `Metadata/layer_config_ranges.xml`. Ranges are an object-level property shared by every
+ * instance. The array is the COMPLETE desired set for the object; an object with an entry and
+ * zero ranges has its bands removed, and objects without an entry keep the source file's.
+ */
+export const sceneEditObjectHeightRangesSchema = z.object({
+  /** In-project object id, or a NEGATIVE clone placeholder (see `sceneEditObjectCloneSchema`). */
+  objectId: z.number().int().refine((value) => value !== 0, 'objectId must not be 0'),
+  ranges: z.array(sceneEditHeightRangeSchema).max(MAX_HEIGHT_RANGES_PER_OBJECT)
+})
+export type SceneEditObjectHeightRanges = z.infer<typeof sceneEditObjectHeightRangesSchema>
+
+/**
+ * Per-object variable layer height (BambuStudio's `layer_height_profile`), written to
+ * `Metadata/layer_heights_profile.txt`. A flat array of alternating z/height pairs in OBJECT space,
+ * linearly interpolated between control points. The array is the COMPLETE desired profile; an
+ * object with an entry and an empty profile has its curve removed.
+ *
+ * NOTE the precedence: a profile OVERRIDES the `layer_height` of any height range on the same
+ * object (`PrintObject.cpp:3340` only falls back to the ranges when the profile is absent or fails
+ * validation). Surfaces that offer both must say so.
+ */
+export const sceneEditObjectLayerHeightProfileSchema = z.object({
+  /** In-project object id, or a NEGATIVE clone placeholder (see `sceneEditObjectCloneSchema`). */
+  objectId: z.number().int().refine((value) => value !== 0, 'objectId must not be 0'),
+  /** Alternating z, height values (mm). Even length; empty clears the object's profile. */
+  profile: z.array(z.number()).max(4096)
+})
+export type SceneEditObjectLayerHeightProfile = z.infer<typeof sceneEditObjectLayerHeightProfileSchema>
+
 export const sceneEditObjectBrimEarsSchema = z.object({
   /** In-project object id, or a NEGATIVE clone placeholder (see `sceneEditObjectCloneSchema`). */
   objectId: z.number().int().refine((value) => value !== 0, 'objectId must not be 0'),
@@ -683,6 +733,33 @@ export type SceneEditImportPartTransform = z.infer<typeof sceneEditImportPartTra
  * object by its Bambu `object_id`, or a staged import by the id the builder baked it under
  * (`importIdToObjectId`), which is what lets a part be added before the project is ever saved.
  */
+/**
+ * BambuStudio's `<text_info>` payload, as it rides a save request. The shape is
+ * {@link TextInfo} from `three-mf/text-info.ts`, which owns the serializer, the parser and the
+ * version rules; this is only its wire validation.
+ */
+export const sceneEditTextInfoSchema = z.object({
+  text: z.string().max(2000),
+  fontName: z.string().max(200),
+  styleName: z.string().max(200),
+  fontIndex: z.number().int().nonnegative(),
+  fontSize: z.number().positive(),
+  thickness: z.number().positive(),
+  embeddedDepth: z.number().min(0),
+  rotateAngle: z.number(),
+  textGap: z.number(),
+  bold: z.boolean(),
+  italic: z.boolean(),
+  boldness: z.number(),
+  skew: z.number(),
+  surfaceType: z.enum(TEXT_SURFACE_TYPES),
+  hitMeshId: z.number().int(),
+  // Readonly to match {@link TextInfo}: these are a record of where a surface hit landed, never
+  // something a consumer edits in place.
+  hitPosition: z.tuple([z.number(), z.number(), z.number()]).readonly(),
+  hitNormal: z.tuple([z.number(), z.number(), z.number()]).readonly()
+}) satisfies z.ZodType<TextInfo>
+
 export const sceneEditAddedPartSchema = z.object({
   /** Host: an in-project object's Bambu `object_id`. Mutually exclusive with `importId`. */
   /** In-project object id, or a NEGATIVE clone placeholder (see `sceneEditObjectCloneSchema`). */
@@ -707,7 +784,14 @@ export const sceneEditAddedPartSchema = z.object({
    * BambuStudio persists ModelVolume config: the slicer applies them inside the
    * volume. Values are the serialized config strings.
    */
-  settings: z.record(z.string().min(1).max(64), z.string().max(512)).optional()
+  settings: z.record(z.string().min(1).max(64), z.string().max(512)).optional(),
+  /**
+   * What a TEXT part was made from, so it stays editable after the geometry is baked. Written as a
+   * `<text_info/>` inside the part's `model_settings.config` block, which is where BambuStudio keeps
+   * it and how a saved project round-trips still editable in either editor. Absent for every part
+   * that is not text.
+   */
+  textInfo: sceneEditTextInfoSchema.optional()
 }).refine(
   (part) => (part.objectId == null) !== (part.importId == null),
   { message: 'An added part must name exactly one host: objectId or importId' }
@@ -844,6 +928,23 @@ export const sceneEditSchema = z.object({
     points: z.array(sceneEditBrimEarSchema).max(512)
   })).max(200).optional(),
   /**
+   * Optional height range modifiers on a not-yet-saved import, keyed by importId: the import
+   * counterpart of `heightRanges`. Resolved through `importIdToObjectId` when the sidecar is
+   * written, so a range can be authored before the object has a baked id.
+   */
+  importHeightRanges: z.array(z.object({
+    importId: z.string().trim().min(1),
+    ranges: z.array(sceneEditHeightRangeSchema).max(MAX_HEIGHT_RANGES_PER_OBJECT)
+  })).max(200).optional(),
+  /**
+   * Optional variable layer height on a not-yet-saved import, keyed by importId: the import
+   * counterpart of `layerHeightProfiles`, resolved through `importIdToObjectId` at bake time.
+   */
+  importLayerHeightProfiles: z.array(z.object({
+    importId: z.string().trim().min(1),
+    profile: z.array(z.number()).max(4096)
+  })).max(200).optional(),
+  /**
    * Optional triangle paint on a not-yet-saved import, keyed by import + 0-based solid index
    * (`partIndex` 0 is a single-solid import's only mesh). The import counterpart of
    * `supportPaint`/`seamPaint`/`colorPaint`/`fuzzyPaint`, which address a baked part by object + component id.
@@ -881,6 +982,10 @@ export const sceneEditSchema = z.object({
   fuzzyPaint: z.array(sceneEditPartPaintSchema).optional(),
   /** Optional per-object manual brim ears (complete replacement sets). */
   brimEars: z.array(sceneEditObjectBrimEarsSchema).optional(),
+  /** Optional per-object height range modifiers (complete replacement sets). */
+  heightRanges: z.array(sceneEditObjectHeightRangesSchema).optional(),
+  /** Optional per-object variable layer height profiles (complete replacement). */
+  layerHeightProfiles: z.array(sceneEditObjectLayerHeightProfileSchema).optional(),
   /** Optional per-plate layer-based filament changes (replaces listed plates' entries). */
   filamentChanges: z.array(sceneEditPlateFilamentChangesSchema).optional(),
   /** Optional per-plate layer pauses (replaces listed plates' pause entries). */

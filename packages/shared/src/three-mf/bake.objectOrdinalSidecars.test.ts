@@ -92,3 +92,46 @@ test('deleting the object a cut belongs to drops its record', () => {
 test('deleting nothing leaves the sidecar byte for byte', () => {
   assert.equal(cutInformationAfter([1, 2, 3]), CUT_INFORMATION_XML)
 })
+
+// --- Authored height ranges vs the ordinal remap ------------------------------------------------
+
+const LAYER_RANGES_XML = [
+  '<?xml version="1.0" encoding="utf-8"?>',
+  '<objects>',
+  ' <object id="3">',
+  '  <range min_z="0" max_z="2"><option opt_key="extruder">0</option><option opt_key="layer_height">0.2</option></range>',
+  ' </object>',
+  '</objects>'
+].join('\n')
+
+/** An edit that keeps all three objects AND authors height ranges on object 1. */
+function editAuthoringRanges(): SceneEdit {
+  return {
+    ...editKeeping([1, 2, 3]),
+    heightRanges: [{ objectId: 1, ranges: [{ minZ: 0, maxZ: 4, settings: { layer_height: '0.08' } }] }]
+  } as unknown as SceneEdit
+}
+
+test('an AUTHORED height-range file wins over the ordinal remap', () => {
+  // Regression: the remap loop runs after the authored transforms and writes into the same map, so
+  // without the skip it silently overwrote the file we just authored — and would have remapped
+  // ordinals that were already correct for the saved model.
+  const plan = planEditedThreeMf(source(), editAuthoringRanges())
+  const transform = plan.copy?.transforms.get('Metadata/layer_config_ranges.xml')
+  assert.ok(transform, 'no transform installed for layer_config_ranges.xml')
+  const out = transform(LAYER_RANGES_XML) ?? ''
+  assert.match(out, /max_z="4"/, 'the authored range is missing: the remap clobbered it')
+  assert.match(out, /layer_height">0\.08</, 'the authored layer height is missing')
+  assert.doesNotMatch(out, /max_z="2"/, "the source file's range should have been replaced wholesale")
+  assert.match(out, /<object id="1">/, 'the authored file addresses object 1 by its saved ordinal')
+})
+
+test('an UNTOUCHED height-range file is still ordinal-remapped', () => {
+  // The skip must be conditional: a file nobody edited still has to follow its objects.
+  const plan = planEditedThreeMf(source(), editKeeping([1, 3]))
+  const transform = plan.copy?.transforms.get('Metadata/layer_config_ranges.xml')
+  assert.ok(transform)
+  const out = transform(LAYER_RANGES_XML) ?? ''
+  assert.match(out, /<object id="2">/, 'object 3 moved to position 2 and its ranges should follow')
+  assert.match(out, /max_z="2"/, 'the source range was lost')
+})

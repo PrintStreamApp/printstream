@@ -15,7 +15,8 @@ import type { IncomingMessage, Server as HttpServer } from 'node:http'
 import type { Duplex } from 'node:stream'
 import { WebSocketServer, WebSocket } from 'ws'
 import type { Request } from 'express'
-import { CAMERA_VIEW_PERMISSION, printerModelSchema, printerStatusSchema, resolvePermissionScope, type PrinterStatus, type WsEvent } from '@printstream/shared'
+import { CAMERA_VIEW_PERMISSION, printerModelSchema, printerStatusSchema, resolvePermissionScope, type PrinterStatus, type WsEvent, type WsHelloEvent } from '@printstream/shared'
+import { getServedWebBuildId } from './web-build-id.js'
 import { env } from './env.js'
 import { recordWsEventBroadcast } from './metrics.js'
 import { authUsesExplicitPermissions, createAnonymousAuthContext, type RequestAuthContext } from './auth-context.js'
@@ -222,7 +223,17 @@ export function attachWebSocketServer(server: HttpServer): AttachedWebSocketServ
     const liveSocket = socket as WebSocket & { isAlive?: boolean }
     liveSocket.isAlive = true
     socket.on('pong', () => { liveSocket.isAlive = true })
-    socket.send(JSON.stringify({ type: 'hello', serverTime: new Date().toISOString() }))
+    // `webBuildId` is omitted, never blank, when this server does not know what bundle it
+    // serves: the client reads an absent id as "unknown" and stays put, so an unknowing
+    // server can never talk a current client into reloading. Typed rather than an inline
+    // literal so the shape cannot drift from `wsHelloEventSchema`.
+    const servedWebBuildId = getServedWebBuildId()
+    const hello: WsHelloEvent = {
+      type: 'hello',
+      serverTime: new Date().toISOString(),
+      ...(servedWebBuildId ? { webBuildId: servedWebBuildId } : {})
+    }
+    socket.send(JSON.stringify(hello))
     // Replay current cached snapshots so the new client doesn't have to
     // wait for the next MQTT delta to render anything.
     void replayStatusesForWorkspace(socket, context.workspace)

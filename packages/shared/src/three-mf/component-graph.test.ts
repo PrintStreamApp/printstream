@@ -5,7 +5,7 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { assertAcyclicComponentGraph, findComponentCycle } from './component-graph'
+import { assertAcyclicComponentGraph, findComponentCycle } from './component-graph.js'
 
 const wrap = (objects: string) =>
   ['<?xml version="1.0" encoding="UTF-8"?>', '<model unit="millimeter">', ' <resources>', objects, ' </resources>', '</model>'].join('\n')

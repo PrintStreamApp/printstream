@@ -69,8 +69,21 @@ export { decodeXmlAttributeValue }
  * v27: `flushMatrix` also flags a `flush_multiplier` the engine's g-code-time size check rejects
  *      (exit 156, "Flush volumes matrix do not match to the correct size!"): see
  *      `isFlushMultiplierInconsistent`. Same VALUE-change reasoning as v23.
+ * v31: the SCENE carries per-object `heightRanges` parsed from `Metadata/layer_config_ranges.xml`
+ *      (BambuStudio's height range modifiers), so the editor can show and edit bands a file
+ *      already has. The scene cache in `three-mf-reader.ts` is keyed on this constant, so a
+ *      cached scene would otherwise keep reporting a project as having no ranges.
+ * v32: the SCENE also carries per-object `layerHeightProfile` from
+ *      `Metadata/layer_heights_profile.txt` (variable layer height). Same cache reasoning as v31.
+ * v33: the SCENE carries `layerHeightLimits` (the machine's min/max layer height from
+ *      `project_settings.config`). Without it the editor fell back to BambuStudio's DEFAULT band
+ *      and could author a layer outside the machine's real one, which makes the engine discard the
+ *      whole profile. Same cache reasoning as v31.
+ * v34: each PART carries its `textInfo`, the `<text_info/>` record that makes text re-editable.
+ *      A cached scene from v33 has none, so text saved by this version would reopen as anonymous
+ *      solids until something else invalidated the entry.
  */
-export const THREE_MF_INDEX_PARSER_VERSION = 30
+export const THREE_MF_INDEX_PARSER_VERSION = 34
 
 /** Per-plate metadata recovered from `model_settings.config` (labels + object/filament backfill). */
 export interface ModelSettingsPlateMetadata {

@@ -11,8 +11,8 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { applyFilamentList } from './bake-documents'
-import type { SceneEditFilament } from '../slicing'
+import { applyFilamentList } from './bake-documents.js'
+import type { SceneEditFilament } from '../slicing.js'
 
 const filament = (overrides: Partial<SceneEditFilament>): SceneEditFilament =>
   ({ color: '#FFFFFF', sourceIndex: 0, ...overrides }) as SceneEditFilament

@@ -48,8 +48,15 @@ import {
   type GizmoMode,
   type ImportGeometryCache,
   type PaintToolType,
-  type PlacementWarning
+  type PlacementWarning,
+  type TextInteraction
 } from './editorGeometry'
+import {
+  EXTRA_SELECTION_STYLE,
+  PRIMARY_SELECTION_STYLE,
+  createSelectionBox,
+  fitSelectionBox
+} from './lib/selectionBox'
 import { FOOTPRINT_CELL_MM, shiftFootprintCells } from './lib/arrange'
 import { type EditorInstance, type EditorPlate } from './lib/editorModel'
 import {
@@ -167,6 +174,21 @@ export interface EditorSceneParams {
     faceIndex: number | null,
     phase: 'down' | 'move'
   ) => void>
+  /**
+   * Put the text being edited where the pointer is on the model, with that face's own normal.
+   *
+   * Text is placed by POINTING at a surface, as BambuStudio does. A gizmo only yields a position,
+   * and the surface then has to be inferred from it -- which resolves to whatever is nearest, so
+   * text resting on a floor a few mm from a wall picks the WALL's normal and stands its glyphs on
+   * end. Pointing names the face outright, so there is nothing to infer.
+   */
+  placeTextAtRef: MutableRefObject<
+    (worldPoint: THREE.Vector3, worldNormal: THREE.Vector3, phase: 'start' | 'move') => void
+  >
+  /** The text being edited, hit-tested for hover and grab. Null when the tool is closed. */
+  textMeshRef: MutableRefObject<THREE.Mesh | null>
+  /** Reports how the text is being interacted with, which drives its highlight and the cursor. */
+  setTextInteractionRef: MutableRefObject<(state: TextInteraction) => void>
   brimEarDiameterRef: MutableRefObject<number>
   editSelectedBrimEarsRef: MutableRefObject<(edit:
     | { kind: 'add'; group: THREE.Group; worldPoint: THREE.Vector3 }
@@ -264,6 +286,9 @@ export function useEditorScene(params: EditorSceneParams): void {
     paintColorFilamentIdRef,
     paintToolRef,
     applyPaintStrokeRef,
+    placeTextAtRef,
+    textMeshRef,
+    setTextInteractionRef,
     brimEarDiameterRef,
     editSelectedBrimEarsRef,
     filamentColorsRef,
@@ -358,6 +383,10 @@ export function useEditorScene(params: EditorSceneParams): void {
     // See the same line in PreviewView: dollying toward `target` decelerates as you approach and
     // never quite arrives, and rotation orbits the plate centre rather than the detail under the
     // cursor. Zooming to the pointer fixes both, and matches what every CAD viewer does.
+    // Middle-drag PANS. Three.js defaults the middle button to dolly, which duplicates the wheel
+    // and leaves panning on the right button, where this editor's context menu already lives.
+    // Middle-to-pan is also what BambuStudio and every CAD viewer do.
+    orbit.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.PAN, RIGHT: THREE.MOUSE.PAN }
     orbit.zoomToCursor = true
     orbit.target.set(0, 0, 20)
     orbit.update()
@@ -438,13 +467,9 @@ export function useEditorScene(params: EditorSceneParams): void {
         // many-part high-poly object for a beat: the hitch when you drag an object that wasn't
         // already selected (the pointer-down selects it first). It is exact for an axis-aligned
         // object and only loosens slightly around a reoriented one, and the box is visual-only.
-        selectionBoxValue.copy(printableMeshBox(group, false))
+        fitSelectionBox(selectionBoxValue, printableMeshBox(group, false))
         selectionBoxSig = selectionBoxSignature(group)
-        selectionBox = new THREE.Box3Helper(selectionBoxValue, new THREE.Color(0x35e07f))
-        const material = selectionBox.material as THREE.LineBasicMaterial
-        material.depthTest = false
-        material.transparent = true
-        selectionBox.renderOrder = 4
+        selectionBox = createSelectionBox(selectionBoxValue, PRIMARY_SELECTION_STYLE)
         scene.add(selectionBox)
       }
     }
@@ -469,16 +494,11 @@ export function useEditorScene(params: EditorSceneParams): void {
         if (!group) continue
         let helper = extraSelectionBoxes.get(key)
         if (!helper) {
-          helper = new THREE.Box3Helper(new THREE.Box3(), new THREE.Color(0x2c9e63))
-          const material = helper.material as THREE.LineBasicMaterial
-          material.depthTest = false
-          material.transparent = true
-          material.opacity = 0.7
-          helper.renderOrder = 4
+          helper = createSelectionBox(new THREE.Box3(), EXTRA_SELECTION_STYLE)
           extraSelectionBoxes.set(key, helper)
           scene.add(helper)
         }
-        helper.box.copy(printableMeshBox(group, false))
+        fitSelectionBox(helper.box, printableMeshBox(group, false))
       }
     }
 
@@ -520,15 +540,11 @@ export function useEditorScene(params: EditorSceneParams): void {
       for (const [key, partGroup] of wanted) {
         let helper = partSelectionBoxes.get(key)
         if (!helper) {
-          helper = new THREE.Box3Helper(new THREE.Box3(), new THREE.Color(0x35e07f))
-          const material = helper.material as THREE.LineBasicMaterial
-          material.depthTest = false
-          material.transparent = true
-          helper.renderOrder = 4
+          helper = createSelectionBox(new THREE.Box3(), PRIMARY_SELECTION_STYLE)
           partSelectionBoxes.set(key, helper)
           scene.add(helper)
         }
-        helper.box.setFromObject(partGroup)
+        fitSelectionBox(helper.box, new THREE.Box3().setFromObject(partGroup))
       }
     }
 
@@ -981,6 +997,7 @@ export function useEditorScene(params: EditorSceneParams): void {
     brushSphereCursor.renderOrder = 6
     scene.add(brushSphereCursor)
     let paintingStroke = false
+    let textDragging = false
 
     /** Raycast the selected instance's paintable (printed-part) meshes. */
     const paintHitOnSelected = (event: PointerEvent): { mesh: THREE.Mesh; point: THREE.Vector3; normal: THREE.Vector3; faceIndex: number | null } | null => {
@@ -1003,6 +1020,23 @@ export function useEditorScene(params: EditorSceneParams): void {
       if (!hit?.face) return null
       const normal = hit.face.normal.clone().transformDirection(hit.object.matrixWorld).normalize()
       return { mesh: hit.object as THREE.Mesh, point: hit.point, normal, faceIndex: hit.faceIndex ?? null }
+    }
+
+    /**
+     * Is the pointer over the text being edited?
+     *
+     * Tested against the TEXT, not the model, because that is what can be grabbed. Dragging from
+     * anywhere on the model (which is what this replaced) also meant the model could not be orbited
+     * while the tool was open, since every press started a text drag.
+     */
+    const overText = (event: PointerEvent): boolean => {
+      const mesh = textMeshRef.current
+      if (!mesh) return false
+      const rect = renderer.domElement.getBoundingClientRect()
+      pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
+      pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
+      raycaster.setFromCamera(pointer, camera)
+      return raycaster.intersectObject(mesh, false).length > 0
     }
 
     const updateBrushCursor = (hit: { point: THREE.Vector3; normal: THREE.Vector3 } | null) => {
@@ -1114,6 +1148,23 @@ export function useEditorScene(params: EditorSceneParams): void {
           renderer.domElement.setPointerCapture(event.pointerId)
           applyPaintStrokeRef.current?.(hit.mesh, hit.point, raycaster.ray.direction, hit.faceIndex, 'down')
           updateBrushCursor(hit)
+          return
+        }
+      }
+
+      // Text: point at the surface to place it, and keep placing while the pointer is held, so the
+      // text slides across the model and re-shapes to whatever face is under the cursor.
+      if (gizmoModeRef.current === 'text' && overText(event)) {
+        const hit = paintHitOnSelected(event)
+        if (hit) {
+          recordHistoryRef.current?.()
+          textDragging = true
+          interactionActiveRef.current = true
+          orbit.enabled = false
+          renderer.domElement.setPointerCapture(event.pointerId)
+          setTextInteractionRef.current('drag')
+          renderer.domElement.style.cursor = 'grabbing'
+          placeTextAtRef.current?.(hit.point.clone(), hit.normal.clone(), 'start')
           return
         }
       }
@@ -1291,6 +1342,17 @@ export function useEditorScene(params: EditorSceneParams): void {
     }
 
     const onPointerMove = (event: PointerEvent) => {
+      if (gizmoModeRef.current === 'text' && !textDragging) {
+        const over = overText(event)
+        setTextInteractionRef.current(over ? 'hover' : 'idle')
+        renderer.domElement.style.cursor = over ? 'grab' : ''
+      }
+      if (textDragging) {
+        const hit = paintHitOnSelected(event)
+        // Off the model, the text stays where it was: sliding past an edge must not fling it.
+        if (hit) placeTextAtRef.current?.(hit.point.clone(), hit.normal.clone(), 'move')
+        return
+      }
       if (paintChannelForGizmoMode(gizmoModeRef.current) !== null || gizmoModeRef.current === 'brimEars') {
         const hit = paintHitOnSelected(event)
         updateBrushCursor(hit)
@@ -1376,6 +1438,18 @@ export function useEditorScene(params: EditorSceneParams): void {
           const point = pickMeasurePoint(event)
           if (point) addMeasurePointRef.current?.({ x: point.x, y: point.y, z: point.z })
         }
+        return
+      }
+      if (textDragging) {
+        textDragging = false
+        interactionActiveRef.current = false
+        orbit.enabled = true
+        setTextInteractionRef.current(overText(event) ? 'hover' : 'idle')
+        renderer.domElement.style.cursor = overText(event) ? 'grab' : ''
+        if (renderer.domElement.hasPointerCapture(event.pointerId)) {
+          renderer.domElement.releasePointerCapture(event.pointerId)
+        }
+        regenerateActiveThumbnailRef.current?.()
         return
       }
       if (paintingStroke) {
@@ -1475,6 +1549,10 @@ export function useEditorScene(params: EditorSceneParams): void {
     // Last-applied inputs to applyPaintOverlayVisibility, so it only re-traverses on a real change.
     let lastPaintChannel: TrianglePaintChannel | null | undefined
     let lastPaintSelectedKey: string | null | undefined
+    // Tracked separately from the paint channel because layers editing has NO channel: entering it
+    // from Move leaves `activePaintChannel` null both before and after, so keying the re-apply on
+    // the channel alone would never notice the mode that hides colour paint.
+    let lastLayersEditing: boolean | undefined
     // Painted-triangle overlay visibility (BambuStudio parity + perf). Support/seam paint show ONLY
     // for the SELECTED object while their own tool is active, they're annotations, and a painted
     // part's overlay is a very dense mesh (100k+ leaf sub-triangles at the 0.2mm split limit) that
@@ -1489,12 +1567,17 @@ export function useEditorScene(params: EditorSceneParams): void {
     const applyPaintOverlayVisibility = (interacting: boolean) => {
       const active = activePaintChannelRef.current
       const selectedKey = selectedKeyRef.current
+      // Colour paint is normally shown in every mode, because it IS the print's colour rather than
+      // an annotation. Layers editing is the exception: its thickness shading is the whole point of
+      // that mode, and a paint overlay is lifted 0.05mm PROUD of the surface, so it would sit on top
+      // of the very feedback the user switched modes to read.
+      const layersEditing = gizmoModeRef.current === 'layerHeight'
       for (const [key, group] of groupByKeyRef.current) {
         const isSelected = key === selectedKey
         group.traverse((node) => {
           if (!(node as THREE.Mesh).isMesh || !node.userData.isPaintOverlay) return
           const channel = overlayChannelByName.get(node.name)
-          node.visible = interacting ? false : channel === 'color' || (channel === active && isSelected)
+          node.visible = interacting || layersEditing ? false : channel === 'color' || (channel === active && isSelected)
         })
       }
     }
@@ -1574,10 +1657,13 @@ export function useEditorScene(params: EditorSceneParams): void {
         // or the manipulation state changes, not every frame.
         const activePaintChannel = activePaintChannelRef.current
         const paintSelectedKey = selectedKeyRef.current
-        if (interactingChanged || activePaintChannel !== lastPaintChannel || paintSelectedKey !== lastPaintSelectedKey) {
+        const layersEditing = gizmoModeRef.current === 'layerHeight'
+        if (interactingChanged || activePaintChannel !== lastPaintChannel || paintSelectedKey !== lastPaintSelectedKey
+          || layersEditing !== lastLayersEditing) {
           applyPaintOverlayVisibility(interacting)
           lastPaintChannel = activePaintChannel
           lastPaintSelectedKey = paintSelectedKey
+          lastLayersEditing = layersEditing
         }
         // Track the selected object's mesh bounds (Box3Helper fits itself to the box value in its
         // own updateMatrixWorld during render). The PRECISE walk (per-vertex) is the priciest
@@ -1592,7 +1678,7 @@ export function useEditorScene(params: EditorSceneParams): void {
             // move-drop stays cheap too (translation keeps the box exact); only a rotate/scale drop,
             // or a non-drag change (undo, manual rotate), pays the precise walk.
             const precise = interacting ? false : (dragJustEnded ? lastDragChangedOrientation : true)
-            selectionBoxValue.copy(printableMeshBox(selectionTarget, precise))
+            fitSelectionBox(selectionBoxValue, printableMeshBox(selectionTarget, precise))
           }
         }
         // Keep ear markers flat on the bed through rotations/scales (their matrices bake

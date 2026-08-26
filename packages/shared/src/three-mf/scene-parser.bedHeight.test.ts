@@ -7,7 +7,7 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { extractSceneBed } from './scene-parser'
+import { extractSceneBed } from './scene-parser.js'
 
 test('the project\'s own printable_height wins over the per-model table', () => {
   // A retargeted or hand-edited project states the machine it was actually built for; the table is

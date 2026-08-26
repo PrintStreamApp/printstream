@@ -15,7 +15,10 @@
  * uncompressed project, hence {@link MAX_CLIENT_THREE_MF_BYTES}.
  */
 import { unzipArchiveBytes } from './zipArchiveClient'
-import { CUSTOM_GCODE_PER_LAYER_ENTRY, THREE_MF_SLICE_INFO_ENTRY as SLICE_INFO_ENTRY, type ThreeMfSceneEntries } from '@printstream/shared/three-mf'
+import { CUSTOM_GCODE_PER_LAYER_ENTRY, THREE_MF_SLICE_INFO_ENTRY as SLICE_INFO_ENTRY, type ThreeMfSceneEntries,
+  LAYER_CONFIG_RANGES_ENTRY,
+  LAYER_HEIGHTS_PROFILE_ENTRY
+} from '@printstream/shared/three-mf'
 
 const ROOT_MODEL_ENTRY = '3D/3dmodel.model'
 const MODEL_SETTINGS_ENTRY = 'Metadata/model_settings.config'
@@ -145,6 +148,8 @@ function createArchive(entries: Record<string, Uint8Array>): ThreeMfArchive {
         modelSettingsXml,
         projectSettingsJson: entryText(PROJECT_SETTINGS_ENTRY),
         brimEarPointsText: entryText(BRIM_EAR_POINTS_ENTRY),
+        layerConfigRangesXml: entryText(LAYER_CONFIG_RANGES_ENTRY),
+        layerHeightsProfileText: entryText(LAYER_HEIGHTS_PROFILE_ENTRY),
         customGcodeText: entryText(CUSTOM_GCODE_PER_LAYER_ENTRY)
       }
     },

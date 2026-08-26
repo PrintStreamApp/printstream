@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, type ComponentProps } from 'react'
 import { Modal } from '@mui/joy'
 import React from 'react'
+import { setAppBusy } from '../lib/appBusy'
 
 type BackAwareModalProps = ComponentProps<typeof Modal>
 type BackAwareModalOnClose = NonNullable<BackAwareModalProps['onClose']>
@@ -75,6 +76,20 @@ function replaceCurrentDialogHistoryWithActiveStack() {
 }
 
 
+/**
+ * Mirror "is any dialog open" into the app-busy registry.
+ *
+ * An open dialog is treated as work in progress: it is almost always a half-filled form
+ * or a decision the user is partway through, none of which survives a reload. So it holds
+ * off an automatic update the same way an upload does (`lib/appStaleness.ts`).
+ *
+ * Hung off this stack rather than off each dialog because this is where every dialog
+ * already announces itself, so a new one is covered without remembering to opt in.
+ */
+function syncDialogBusyState() {
+  setAppBusy('dialog-open', activeDialogEntries.length > 0)
+}
+
 function registerActiveDialog(token: string, requestClose: () => void) {
   const existingEntry = activeDialogEntries.find((entry) => entry.token === token)
   if (existingEntry) {
@@ -82,6 +97,7 @@ function registerActiveDialog(token: string, requestClose: () => void) {
     return false
   }
   activeDialogEntries.push({ token, requestClose })
+  syncDialogBusyState()
   return true
 }
 
@@ -90,6 +106,7 @@ function unregisterActiveDialog(token: string) {
   if (entryIndex === -1) return false
   activeDialogEntries.splice(entryIndex, 1)
   disableDialogManualScrollRestoration()
+  syncDialogBusyState()
   return true
 }
 

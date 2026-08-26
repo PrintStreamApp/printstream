@@ -12,6 +12,7 @@
  * `MaterialEditDialog`. State stays owned by the caller; only values/setters flow
  * through the controller.
  */
+import { memo } from 'react'
 import type React from 'react'
 import type { ReactNode } from 'react'
 import { lazy, Suspense, useMemo, useState } from 'react'
@@ -418,7 +419,14 @@ export interface SliceConfigSnapshot {
  * its own object list and G-code sections after this panel. Both modes share one
  * `controller` instance, so edits in either surface update the same state.
  */
-export function SliceSettingsPanel({ controller, mode, onManagePresets, canEditPrinterPreset, presetSourceStatus, embeddedPresets, onRemoveEmbeddedPreset }: {
+/**
+ * **Memoised.** The 3MF editor rebuilds nothing else this large per render, and it sits beside the
+ * object list in the same scroller, so an unrelated edit re-rendering it is a visible cost. The
+ * memo only holds while callers pass a stable `controller` -- build it with `useMemo`, never as a
+ * spread literal in JSX (which is what the editor used to do, defeating the memoisation
+ * `sliceConfigForPanel` already had).
+ */
+export const SliceSettingsPanel = memo(function SliceSettingsPanel({ controller, mode, onManagePresets, canEditPrinterPreset, presetSourceStatus, embeddedPresets, onRemoveEmbeddedPreset }: {
   controller: SliceSettingsController
   mode: 'simple' | 'editor'
   activePlateIndex?: number
@@ -1317,7 +1325,7 @@ export function SliceSettingsPanel({ controller, mode, onManagePresets, canEditP
       </>)}
     </>
   )
-}
+})
 
 /**
  * Material "tune" button + pre-open changed-values badge. Its own component (rather than inline in

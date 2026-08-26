@@ -13,6 +13,7 @@ import { PromptDialogProvider } from './components/PromptDialogProvider'
 import { shouldRetryQuery } from './lib/queryRetry'
 import { getBrowserEnv } from './lib/browserEnv'
 import { registerAppServiceWorker } from './lib/appUpdate'
+import { trackMutationsAsAppBusy } from './lib/appBusyMutations'
 import { shouldSuppressGlobalErrorToast, shouldSuppressPassiveAuthQueryError } from './lib/queryErrorToast'
 import { extractDisabledPluginNameFromErrorMessage } from './lib/pluginSettings'
 import { PLUGIN_CATALOG_QUERY_KEY } from './lib/pluginCatalogQuery'
@@ -117,6 +118,9 @@ const queryClient = new QueryClient({
   queryCache: new QueryCache({ onError: reportQueryError }),
   mutationCache: new MutationCache({ onError: reportMutationError })
 })
+
+// An in-flight write holds off an automatic reload onto a new build. See `lib/appBusy.ts`.
+trackMutationsAsAppBusy(queryClient)
 
 bootProgress(78, 'Preparing client state')
 bootProgress(90, 'Rendering interface')

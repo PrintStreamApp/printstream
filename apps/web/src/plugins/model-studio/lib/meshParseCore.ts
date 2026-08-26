@@ -21,23 +21,71 @@ export const THREE_MF_SMOOTH_NORMAL_ANGLE = THREE.MathUtils.degToRad(45)
 /** Per-triangle paint codes keyed by triangle index (matches threeMfScene's SupportPaintCodes). */
 export type MeshPaintCodes = Record<number, string>
 
+/**
+ * The ONE table of triangle paint channels: the 3MF attribute each reads and the
+ * `geometry.userData` key it lands on. Everything that moves paint between a 3MF and a geometry
+ * derives from this — this regex parser, the `DOMParser` fallback in `threeMfScene.ts`, and both
+ * hops of the worker wire (`meshParseWorker.ts` projects out of `userData`, `meshParseClient.ts`
+ * puts it back). It lives HERE, in the DOM-free core, because the worker cannot import
+ * `threeMfScene.ts`; that module re-exports the derived channel list for its own callers.
+ *
+ * A channel absent from any one hop drops silently: the geometry still renders, so the only
+ * symptom is paint that vanishes on reload — and then a save WRITES that emptiness back, because
+ * the editor seeds a first stroke from the loaded paint and emits the complete desired map. Adding
+ * a channel is a row here plus its brush/state/bake registrations, never a fifth hand-written list.
+ */
+export const TRIANGLE_PAINT_SOURCES = [
+  { channel: 'supports', attribute: 'paint_supports', userDataKey: 'supportPaint' },
+  { channel: 'seam', attribute: 'paint_seam', userDataKey: 'seamPaint' },
+  { channel: 'color', attribute: 'paint_color', userDataKey: 'colorPaint' },
+  { channel: 'fuzzy', attribute: 'paint_fuzzy_skin', userDataKey: 'fuzzyPaint' }
+] as const
+
+/** Brush channel names, derived from {@link TRIANGLE_PAINT_SOURCES} so the two cannot drift. */
+export type TrianglePaintChannel = (typeof TRIANGLE_PAINT_SOURCES)[number]['channel']
+
+/** The `geometry.userData` keys paint lands on, derived from {@link TRIANGLE_PAINT_SOURCES}. */
+export type TrianglePaintUserDataKey = (typeof TRIANGLE_PAINT_SOURCES)[number]['userDataKey']
+
+/** Every channel's codes for one mesh: the shape paint travels in across the worker boundary. */
+export type MeshPaintByChannel = Partial<Record<TrianglePaintUserDataKey, MeshPaintCodes>>
+
 /** Raw arrays parsed from one 3MF `<object>`'s mesh, before geometry processing. */
 export interface ThreeMfMeshArrays {
   objectId: number
   positions: Float32Array
   index: Uint16Array | Uint32Array
-  supportPaint: MeshPaintCodes
-  seamPaint: MeshPaintCodes
-  colorPaint: MeshPaintCodes
-  fuzzyPaint: MeshPaintCodes
+  paint: MeshPaintByChannel
+}
+
+/**
+ * Read every channel's paint off a geometry's `userData` (empty channels omitted), for posting
+ * across a `postMessage` boundary that cannot carry the geometry itself.
+ */
+export function collectMeshPaint(userData: Record<string, unknown>): MeshPaintByChannel {
+  const paint: MeshPaintByChannel = {}
+  for (const source of TRIANGLE_PAINT_SOURCES) {
+    const codes = userData[source.userDataKey] as MeshPaintCodes | undefined
+    if (codes && Object.keys(codes).length > 0) paint[source.userDataKey] = codes
+  }
+  return paint
+}
+
+/** Put {@link collectMeshPaint}'s output back onto a reconstructed geometry's `userData`. */
+export function applyMeshPaint(userData: Record<string, unknown>, paint: MeshPaintByChannel | undefined): void {
+  if (!paint) return
+  for (const source of TRIANGLE_PAINT_SOURCES) {
+    const codes = paint[source.userDataKey]
+    if (codes && Object.keys(codes).length > 0) userData[source.userDataKey] = codes
+  }
 }
 
 const VERTEX_RE = /<vertex\s+x="([^"]*)"\s+y="([^"]*)"\s+z="([^"]*)"/g
 const TRIANGLE_RE = /<triangle\s+v1="([^"]*)"\s+v2="([^"]*)"\s+v3="([^"]*)"([^>]*)>/g
-const PAINT_SUPPORTS_RE = /paint_supports="([^"]*)"/
-const PAINT_SEAM_RE = /paint_seam="([^"]*)"/
-const PAINT_COLOR_RE = /paint_color="([^"]*)"/
-const PAINT_FUZZY_RE = /paint_fuzzy_skin="([^"]*)"/
+const PAINT_ATTRIBUTE_RES = TRIANGLE_PAINT_SOURCES.map((source) => ({
+  userDataKey: source.userDataKey,
+  regex: new RegExp(`${source.attribute}="([^"]*)"`)
+}))
 
 /**
  * Parse a 3MF model entry's `<object>` meshes into raw vertex/index/paint arrays: DOM-free, so it
@@ -73,10 +121,7 @@ export function parseThreeMfMeshArrays(xmlText: string): ThreeMfMeshArrays[] {
     if (vertexCount === 0) continue
 
     const indexList: number[] = []
-    const supportPaint: MeshPaintCodes = {}
-    const seamPaint: MeshPaintCodes = {}
-    const colorPaint: MeshPaintCodes = {}
-    const fuzzyPaint: MeshPaintCodes = {}
+    const paint: MeshPaintByChannel = {}
     TRIANGLE_RE.lastIndex = 0
     let triangleIndex = 0
     let triangleMatch: RegExpExecArray | null
@@ -89,14 +134,12 @@ export function parseThreeMfMeshArrays(xmlText: string): ThreeMfMeshArrays[] {
       const rest = triangleMatch[4] ?? ''
       // `paint` is rare relative to triangle count, only run the attribute regexes when present.
       if (rest.includes('paint_')) {
-        const support = PAINT_SUPPORTS_RE.exec(rest)?.[1]
-        if (support) supportPaint[triangleIndex] = support
-        const seam = PAINT_SEAM_RE.exec(rest)?.[1]
-        if (seam) seamPaint[triangleIndex] = seam
-        const color = PAINT_COLOR_RE.exec(rest)?.[1]
-        if (color) colorPaint[triangleIndex] = color
-        const fuzzy = PAINT_FUZZY_RE.exec(rest)?.[1]
-        if (fuzzy) fuzzyPaint[triangleIndex] = fuzzy
+        for (const source of PAINT_ATTRIBUTE_RES) {
+          const code = source.regex.exec(rest)?.[1]
+          if (!code) continue
+          const codes = paint[source.userDataKey] ?? (paint[source.userDataKey] = {})
+          codes[triangleIndex] = code
+        }
       }
       triangleIndex += 1
     }
@@ -104,7 +147,7 @@ export function parseThreeMfMeshArrays(xmlText: string): ThreeMfMeshArrays[] {
 
     const positions = new Float32Array(positionsList)
     const index = vertexCount > 65535 ? new Uint32Array(indexList) : new Uint16Array(indexList)
-    results.push({ objectId, positions, index, supportPaint, seamPaint, colorPaint, fuzzyPaint })
+    results.push({ objectId, positions, index, paint })
   }
   return results
 }
@@ -119,10 +162,7 @@ export function buildGeometryFromArrays(data: ThreeMfMeshArrays): THREE.BufferGe
   const smoothedGeometry = toCreasedNormals(weldedGeometry, THREE_MF_SMOOTH_NORMAL_ANGLE)
   const correctedGeometry = flattenPlanarPatchNormals(smoothedGeometry)
   correctedGeometry.computeBoundingSphere()
-  if (Object.keys(data.supportPaint).length > 0) correctedGeometry.userData.supportPaint = data.supportPaint
-  if (Object.keys(data.seamPaint).length > 0) correctedGeometry.userData.seamPaint = data.seamPaint
-  if (Object.keys(data.colorPaint).length > 0) correctedGeometry.userData.colorPaint = data.colorPaint
-  if (Object.keys(data.fuzzyPaint).length > 0) correctedGeometry.userData.fuzzyPaint = data.fuzzyPaint
+  applyMeshPaint(correctedGeometry.userData, data.paint)
   return correctedGeometry
 }
 

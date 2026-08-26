@@ -6,7 +6,7 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { parseSourcePlateMetadata, preservedPlateMetadata, remapSliceInfoPlates, sourcePlateMapping } from './plate-metadata'
+import { parseSourcePlateMetadata, preservedPlateMetadata, remapSliceInfoPlates, sourcePlateMapping } from './plate-metadata.js'
 
 const MODEL_SETTINGS = [
   '<config>',

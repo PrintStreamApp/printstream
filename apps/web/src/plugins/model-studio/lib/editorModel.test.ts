@@ -27,6 +27,7 @@ import {
   findFreePlatePosition,
   seedEditorState,
   seededActivePlateIndex,
+  assignInstanceFilament,
   seedEmptyEditorState,
   stagedFootprint,
   summarizeInstanceMaterial,
@@ -1216,4 +1217,38 @@ test('both rebase halves carry COLOUR PAINT onto the saved filament ids', () => 
   const nextState = rebaseEditorStateFilamentIds(state, remap)
   assert.deepEqual(Object.keys(nextState.colorPaint!['2:1']!), ['0'])
   assert.equal((decodePaintTree(nextState.colorPaint!['2:1']![0]!) as { state: number }).state, 1)
+})
+
+test('assignInstanceFilament sets the material of a model that has NO parts', () => {
+  // The regression. A primitive, a single-solid STL/3MF import, a single-shell Cut output and any
+  // single-mesh saved object all arrive with `parts: []`, so a material change expressed over
+  // PARTS had nothing to write to and silently did nothing. Their material lives here, and
+  // buildSceneEdit emits it as the instance's own filamentId.
+  const instance = instanceFromStagedImport(STAGED)
+  assert.equal(instance.parts.length, 0, 'a single-solid import keeps the one-mesh render path')
+
+  const next = assignInstanceFilament(instance, 3)
+  assert.equal(next.filamentId, 3)
+  assert.notEqual(next, instance, 'a real change returns a new instance')
+
+  const state: EditorState = seedEmptyEditorState()
+  state.plates[0]!.instances.push(next)
+  const emitted = buildSceneEdit(state).instances[0]
+  assert.equal(emitted?.filamentId, 3, 'and the bake carries it')
+})
+
+test('assignInstanceFilament retargets every printed part of a multi-part model, sparing helpers', () => {
+  const instance = instanceFromStagedImport(MULTI)
+  assert.ok(instance.parts.length > 1)
+  instance.parts[1]!.subtype = 'support_blocker'
+
+  const next = assignInstanceFilament(instance, 2)
+  assert.equal(next.parts[0]!.filamentId, 2, 'printed part retargeted')
+  assert.equal(next.parts[1]!.filamentId, null, 'a helper volume has no material to set')
+  assert.equal(next.filamentId, 2, "and the object's own id follows the printed consensus")
+})
+
+test('assignInstanceFilament returns the SAME instance when nothing changes', () => {
+  const instance = assignInstanceFilament(instanceFromStagedImport(STAGED), 4)
+  assert.equal(assignInstanceFilament(instance, 4), instance, 'so callers can skip a state write')
 })

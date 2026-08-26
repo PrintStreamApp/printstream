@@ -43,6 +43,8 @@ export function addedPartLabel(subtype: SceneEditPartSubtype): string {
  * (extended with the library, since our models usually live there rather than on the PC).
  */
 export type AddedPartSource =
+  /** Geometry the caller already built (the Text tool), staged as-is rather than generated here. */
+  | { kind: 'soup'; soup: Float32Array; name: string }
   | { kind: 'primitive'; shape: PrimitiveKind }
   | { kind: 'file'; file: File }
   | { kind: 'library'; libraryFileId: string }
@@ -101,6 +103,16 @@ export async function stageAddedPartGeometry(
   size: number,
   signal?: AbortSignal
 ): Promise<StagedAddedPartGeometry> {
+  if (source.kind === 'soup') {
+    // Already centred by its builder, and `size` is meaningless for it: text is sized in mm by the
+    // user, not scaled to a fraction of its host the way a dropped primitive is.
+    const staged = await store.stageFile(
+      new File([triangleSoupToBinaryStl(source.soup)], `${source.name}.stl`, { type: 'application/octet-stream' }),
+      'part',
+      signal
+    )
+    return { importId: staged.importId, soup: source.soup, name: source.name }
+  }
   if (source.kind === 'primitive') {
     const soup = primitivePartSoup(source.shape, size)
     const stl = triangleSoupToBinaryStl(soup)

@@ -15,8 +15,8 @@ import {
   NEW_PROJECT_MODEL_SETTINGS_XML,
   NEW_PROJECT_MODEL_XML,
   type ImportedObjectInput
-} from './bake-documents'
-import type { SceneEdit } from '../slicing'
+} from './bake-documents.js'
+import type { SceneEdit } from '../slicing.js'
 
 const TRIANGLE = {
   positions: [0, 0, 0, 10, 0, 0, 0, 10, 0],

@@ -16,7 +16,7 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { OBJECT_ORDINAL_SIDECAR_ENTRIES, remapObjectOrdinalSidecar } from './object-ordinal-sidecars'
+import { OBJECT_ORDINAL_SIDECAR_ENTRIES, remapObjectOrdinalSidecar } from './object-ordinal-sidecars.js'
 
 const CUT_INFO = [
   '<?xml version="1.0" encoding="utf-8"?>',

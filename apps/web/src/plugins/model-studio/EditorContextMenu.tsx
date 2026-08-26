@@ -29,6 +29,9 @@ import DriveFileRenameOutlineRoundedIcon from '@mui/icons-material/DriveFileRena
 import DriveFileMoveRoundedIcon from '@mui/icons-material/DriveFileMoveRounded'
 import FileDownloadRoundedIcon from '@mui/icons-material/FileDownloadRounded'
 import FlipRoundedIcon from '@mui/icons-material/FlipRounded'
+import GridOnRoundedIcon from '@mui/icons-material/GridOnRounded'
+import LayersRoundedIcon from '@mui/icons-material/LayersRounded'
+import LineWeightRoundedIcon from '@mui/icons-material/LineWeightRounded'
 import IosShareRoundedIcon from '@mui/icons-material/IosShareRounded'
 import LibraryAddRoundedIcon from '@mui/icons-material/LibraryAddRounded'
 import MergeTypeRoundedIcon from '@mui/icons-material/MergeTypeRounded'
@@ -85,6 +88,8 @@ export interface EditorContextMenuProps {
    * Independent, not linked, because Studio's clone is copy-then-paste-N-times.
    */
   onCloneWithCount: (key: string) => void
+  /** BambuStudio's "Fill bed with copies": linked copies packed into the plate's free space. */
+  onFillBedWithCopies: (key: string) => void
   /**
    * Align or distribute the selection (BambuStudio's Align/Distribute submenu). Multi-selection
    * only: aligning one object to itself is a no-op, which is why the row does not appear for one.
@@ -156,6 +161,10 @@ export interface EditorContextMenuProps {
   printable?: boolean | null
   /** Open per-object process settings for the selection; absent without slice settings. */
   onEditObjectSettings?: () => void
+  /** BambuStudio's height range modifiers: per-object Z bands with their own settings. */
+  onEditHeightRanges?: (key: string) => void
+  /** BambuStudio's variable layer height: the per-object thickness profile. */
+  onEditLayerHeight?: (key: string) => void
   /** Centre/reset/mirror act on the SELECTED object (parity with the old inline menu). */
   onCenterOnPlate: () => void
   onDropToBed: () => void
@@ -180,12 +189,12 @@ export interface EditorContextMenuProps {
 }
 
 export function EditorContextMenu({
-  contextMenu, listboxRef, onClose, selectionCount, onDuplicate, onDuplicateIndependent, onCloneWithCount, onAlignDistribute, onMakeIndependent, onRename, onSplitToObjects, canAssemble,
+  contextMenu, listboxRef, onClose, selectionCount, onDuplicate, onDuplicateIndependent, onCloneWithCount, onFillBedWithCopies, onAlignDistribute, onMakeIndependent, onRename, onSplitToObjects, canAssemble,
   assembleCount, onAssemble, onSplitToParts, onReplaceFromLibrary, onReplaceFromFile, onExportDownload, onExportToLibrary,
   onExportProjectDownload, onExportProjectToLibrary, onExportMergedDownload, onExportMergedToLibrary, onExportSeparateDownload,
   onExportSeparateToLibrary, canRepair, onRepairMesh,
   isRepairMarked, onAddPartVolume, onAddPartFromFile, onAddPartFromLibrary,
-  filamentOptions, onChangeMaterial, onSetPrintable, printable, onEditObjectSettings, onCenterOnPlate,
+  filamentOptions, onChangeMaterial, onSetPrintable, printable, onEditObjectSettings, onEditHeightRanges, onEditLayerHeight, onCenterOnPlate,
   onDropToBed, onResetRotation, onResetScale, onMirror, onConvertUnits, onScaleToPrintVolume, otherPlates, onMoveToPlate, onDelete
 }: EditorContextMenuProps) {
   const { key } = contextMenu
@@ -242,6 +251,19 @@ export function EditorContextMenu({
     <MenuItem onClick={() => { onClose(); onEditObjectSettings() }}>
       <ListItemDecorator><TuneRoundedIcon /></ListItemDecorator>
       Object settings{suffix}…
+    </MenuItem>
+  )
+  // Single-object only: bands are per object, so an N-object selection has no shared answer.
+  const heightRangesItem = onEditHeightRanges && !multi && (
+    <MenuItem onClick={() => { onClose(); onEditHeightRanges(key) }}>
+      <ListItemDecorator><LayersRoundedIcon /></ListItemDecorator>
+      Height ranges…
+    </MenuItem>
+  )
+  const layerHeightItem = onEditLayerHeight && !multi && (
+    <MenuItem onClick={() => { onClose(); onEditLayerHeight(key) }}>
+      <ListItemDecorator><LineWeightRoundedIcon /></ListItemDecorator>
+      Variable layer height…
     </MenuItem>
   )
   const moveToPlateItems = otherPlates.length > 0 && (
@@ -444,6 +466,10 @@ export function EditorContextMenu({
             Duplicate as independent copy
           </MenuItem>
           {cloneItem}
+          <MenuItem onClick={() => { onClose(); onFillBedWithCopies(key) }}>
+            <ListItemDecorator><GridOnRoundedIcon /></ListItemDecorator>
+            Fill bed with copies
+          </MenuItem>
           {onMakeIndependent && (
             <MenuItem onClick={() => { onMakeIndependent(key); onClose() }}>
               <ListItemDecorator><CallSplitRoundedIcon /></ListItemDecorator>
@@ -494,11 +520,13 @@ export function EditorContextMenu({
               Add {addedPartLabel(subtype).toLowerCase()}…
             </MenuItem>
           ))}
-          {(changeMaterialItem || objectSettingsItem || printableItem) && (
+          {(changeMaterialItem || objectSettingsItem || heightRangesItem || layerHeightItem || printableItem) && (
             <>
               <ListDivider />
               {changeMaterialItem}
               {objectSettingsItem}
+              {heightRangesItem}
+              {layerHeightItem}
               {printableItem}
             </>
           )}

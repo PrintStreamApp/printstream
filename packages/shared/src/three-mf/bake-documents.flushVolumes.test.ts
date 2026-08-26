@@ -10,9 +10,9 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { buildProjectSettingsTransforms } from './bake-documents'
-import { expectedFlushVolumesMatrixLength } from '../flush-volumes-matrix'
-import type { SceneEdit } from '../slicing'
+import { buildProjectSettingsTransforms } from './bake-documents.js'
+import { expectedFlushVolumesMatrixLength } from '../flush-volumes-matrix.js'
+import type { SceneEdit } from '../slicing.js'
 
 const singleNozzleProject = {
   filament_colour: ['#000000', '#F4EE2A'],

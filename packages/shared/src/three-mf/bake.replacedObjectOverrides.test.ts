@@ -17,8 +17,8 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { planEditedThreeMf, type ThreeMfBakeSource } from './bake'
-import type { ImportedObjectInput } from './bake-documents'
+import { planEditedThreeMf, type ThreeMfBakeSource } from './bake.js'
+import type { ImportedObjectInput } from './bake-documents.js'
 
 const REPLACED_OBJECT_ID = 281
 

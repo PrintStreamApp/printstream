@@ -25,6 +25,7 @@ import type {
   StagedImport,
   ThreeMfIndex
 } from '@printstream/shared'
+import type { TextInfo } from '@printstream/shared/three-mf'
 import { isNonRenderableThreeMfPartSubtype, threeMfPartSubtypeCarriesFilament } from '@printstream/shared'
 import type { RepairedFilamentPreset } from './filamentConfigAuthoring'
 import { randomUUID } from '../../../lib/randomId'
@@ -85,6 +86,14 @@ export interface EditorInstance {
    * the source 3MF's names (and generated `Object N` fallbacks aren't written out).
    */
   nameOverridden?: boolean
+  /**
+   * Set when this object IS text, created by the Text tool with nothing selected.
+   *
+   * The same record an added text part carries, so the tool can reopen it. Session-scoped for now:
+   * a part's `textInfo` rides `SceneEdit.addedParts` to the bake, and an OBJECT has no equivalent
+   * channel, so standalone text is re-editable until saved and plain geometry afterwards.
+   */
+  textInfo?: TextInfo
   /** Plate-local placement in mm from the plate centre. */
   position: THREE.Vector3
   /** Euler rotation in radians, order 'XYZ'. */
@@ -122,6 +131,16 @@ export interface EditorInstance {
    * copies). Session edits live in {@link EditorState.brimEars}; this is the baseline.
    */
   brimEars?: EditorBrimEar[]
+  /**
+   * Height range modifiers seeded from the source 3MF (object-level, so identical across copies).
+   * Session edits live in {@link EditorState.heightRanges}; this is the baseline.
+   */
+  heightRanges?: EditorHeightRange[]
+  /**
+   * Variable layer height profile seeded from the source 3MF (alternating z/height, object space).
+   * Session edits live in {@link EditorState.layerHeightProfiles}; this is the baseline.
+   */
+  layerHeightProfile?: number[]
   /**
    * The geometry parts that make up this instance. Each part references a 3MF
    * model entry plus a component-local transform applied under the placement.
@@ -199,6 +218,11 @@ export interface EditorPlate {
   instances: EditorInstance[]
   /** Prime/wipe tower footprint (plate-local), or null when the plate has no tower. */
   primeTower: LibraryThreeMfPrimeTower | null
+  /**
+   * The machine's layer-height band from the project, or null when it states none (apply
+   * BambuStudio's default rule then, never "unlimited").
+   */
+  layerHeightLimits?: { min: number; max: number } | null
   /** Layer-based filament changes seeded from the source 3MF (baseline). */
   filamentChanges?: EditorFilamentChange[]
   /**
@@ -224,14 +248,24 @@ export interface EditorPause {
   z: number
 }
 
+/**
+ * Shared empties for the per-plate G-code sidecars.
+ *
+ * A `?? []` fallback returns a NEW array each call, and "this plate has none" is the common case,
+ * so the sections that render them re-rendered on every unrelated edit -- the one state where they
+ * have nothing to draw. Frozen so a caller cannot mutate the shared instance.
+ */
+const NO_FILAMENT_CHANGES: readonly EditorFilamentChange[] = Object.freeze([])
+const NO_PAUSES: readonly EditorPause[] = Object.freeze([])
+
 /** Effective filament changes for a plate: this session's override, else the seed. */
-export function effectiveFilamentChanges(plate: EditorPlate): EditorFilamentChange[] {
-  return plate.filamentChangesOverride ?? plate.filamentChanges ?? []
+export function effectiveFilamentChanges(plate: EditorPlate): readonly EditorFilamentChange[] {
+  return plate.filamentChangesOverride ?? plate.filamentChanges ?? NO_FILAMENT_CHANGES
 }
 
 /** Effective layer pauses for a plate: this session's override, else the seed. */
-export function effectivePauses(plate: EditorPlate): EditorPause[] {
-  return plate.pausesOverride ?? plate.pauses ?? []
+export function effectivePauses(plate: EditorPlate): readonly EditorPause[] {
+  return plate.pausesOverride ?? plate.pauses ?? NO_PAUSES
 }
 
 export interface EditorState {
@@ -289,6 +323,17 @@ export interface EditorState {
    * and merged with the seeded baseline by {@link buildSceneEdit}.
    */
   brimEars?: Record<number, EditorBrimEar[]>
+  /**
+   * Per-object height range overrides made this session, keyed by {@link addedPartHostId}. Each
+   * value is the COMPLETE desired band set; an empty array clears the object's ranges. Objects
+   * without an entry keep their seeded bands ({@link EditorInstance.heightRanges}).
+   */
+  heightRanges?: Record<number, EditorHeightRange[]>
+  /**
+   * Per-object variable layer height set this session, keyed by {@link addedPartHostId}. The value
+   * is the COMPLETE desired profile; an empty array clears the object's curve.
+   */
+  layerHeightProfiles?: Record<number, number[]>
   /**
    * New part volumes added inside models this session (normal parts, negative parts, modifiers,
    * support blockers/enforcers), keyed by {@link addedPartHostId}, an in-project object's Bambu
@@ -384,6 +429,11 @@ export interface EditorAddedPart {
   soup: Float32Array
   /** Per-volume process overrides (modifier parts), serialized config strings. */
   settings?: Record<string, string>
+  /**
+   * What a TEXT part was typed from. Its presence is also what marks a part as text, which is how
+   * the tool knows to reopen it for editing instead of treating it as anonymous geometry.
+   */
+  textInfo?: TextInfo
 }
 
 /**
@@ -413,6 +463,21 @@ export interface EditorBrimEar {
   radius: number
 }
 
+/**
+ * One height range modifier: a Z band in OBJECT space (z=0 at the object's underside) whose
+ * process-setting overrides apply to the layers inside it, `[minZ, maxZ)`.
+ */
+export interface EditorHeightRange {
+  minZ: number
+  maxZ: number
+  settings: Record<string, string>
+}
+
+/** Deep-copy a band, so an undo snapshot never shares its settings map with live state. */
+export function cloneHeightRange(range: EditorHeightRange): EditorHeightRange {
+  return { minZ: range.minZ, maxZ: range.maxZ, settings: { ...range.settings } }
+}
+
 /** Effective ears for an instance's object: this session's override, else the seed. */
 export function effectiveBrimEars(state: EditorState | null, instance: EditorInstance): EditorBrimEar[] {
   // Keyed by the model's editor identity, so an unsaved import can carry ears too (they emit as
@@ -421,6 +486,24 @@ export function effectiveBrimEars(state: EditorState | null, instance: EditorIns
   if (hostId == null) return []
   const override = state?.brimEars?.[hostId]
   return override ?? instance.brimEars ?? []
+}
+
+/** Effective height ranges for an instance's object: this session's override, else the seed. */
+export function effectiveHeightRanges(state: EditorState | null, instance: EditorInstance): EditorHeightRange[] {
+  // Same identity rule as brim ears: an unsaved import can carry bands too (they emit as
+  // `importHeightRanges`), and only an in-project object has seeded ones.
+  const hostId = addedPartHostId(instance)
+  if (hostId == null) return []
+  const override = state?.heightRanges?.[hostId]
+  return override ?? instance.heightRanges ?? []
+}
+
+/** Effective layer height profile for an instance's object: this session's override, else the seed. */
+export function effectiveLayerHeightProfile(state: EditorState | null, instance: EditorInstance): number[] {
+  const hostId = addedPartHostId(instance)
+  if (hostId == null) return []
+  const override = state?.layerHeightProfiles?.[hostId]
+  return override ?? instance.layerHeightProfile ?? []
 }
 
 /** Key for {@link EditorState.supportPaint}: paint is shared per object part. */
@@ -567,6 +650,12 @@ function instanceFromScene(instance: LibraryThreeMfSceneInstance, partInfo: Part
     ...(instance.brimEars && instance.brimEars.length > 0
       ? { brimEars: instance.brimEars.map((ear) => ({ ...ear })) }
       : {}),
+    ...(instance.heightRanges && instance.heightRanges.length > 0
+      ? { heightRanges: instance.heightRanges.map((range) => ({ ...range, settings: { ...range.settings } })) }
+      : {}),
+    ...(instance.layerHeightProfile && instance.layerHeightProfile.length > 0
+      ? { layerHeightProfile: [...instance.layerHeightProfile] }
+      : {}),
     parts: instance.parts.map((part, partIndex) => {
       const info = partInfo.get(partInfoKey(part.entryPath, part.componentObjectId))
       // Object-material inheritance is for PRINTED parts only. A support blocker/enforcer or
@@ -626,6 +715,7 @@ export function fillPlateFromScene(plate: EditorPlate, scene: LibraryThreeMfScen
     bed: { minX: scene.bed.minX, maxX: scene.bed.maxX, minY: scene.bed.minY, maxY: scene.bed.maxY, maxZ: scene.bed.maxZ, excludeAreas: scene.bed.excludeAreas },
     instances: scene.instances.map((instance) => instanceFromScene(instance, partInfo)),
     primeTower: scene.primeTower ?? null,
+    layerHeightLimits: scene.layerHeightLimits ?? null,
     ...(scene.filamentChanges && scene.filamentChanges.length > 0
       ? { filamentChanges: scene.filamentChanges.map((change) => ({ z: change.z, filamentId: change.filamentId })) }
       : {}),
@@ -958,6 +1048,35 @@ export function deriveObjectFilamentId(
   return uniform ? first : previous
 }
 
+/**
+ * Set a whole instance's material, whichever shape the instance is.
+ *
+ * An object's material lives in one of two places and the caller cannot assume which. A model WITH
+ * printed parts carries it per part, and the object's own `filamentId` is a derived consensus. A
+ * model with NO parts list -- a primitive, a single-solid STL/3MF import, a single-shell Cut
+ * output, and any single-mesh object in a saved project -- carries it on the instance directly,
+ * which is what `buildSceneEdit` emits as each `SceneEditInstance.filamentId`.
+ *
+ * Expressing a material change purely as `{objectId, partIndex}` targets is what made this a silent
+ * no-op for the second shape: there is no part to name, so the target list came out empty and the
+ * instance was returned untouched, with the UI showing an ordinary swatch throughout.
+ *
+ * Helper volumes keep their own material rules and are never retargeted here, matching the
+ * part-scoped path: a blocker/enforcer or negative volume has no filament at all.
+ *
+ * @returns the same instance object when nothing changed, so callers can skip a state write.
+ */
+export function assignInstanceFilament(instance: EditorInstance, filamentId: number): EditorInstance {
+  const printed = printedParts(instance)
+  if (printed.length === 0) {
+    return instance.filamentId === filamentId ? instance : { ...instance, filamentId }
+  }
+  const parts = instance.parts.map((part) => (threeMfPartSubtypeCarriesFilament(part.subtype)
+    ? { ...part, filamentId }
+    : part))
+  return { ...instance, parts, filamentId: deriveObjectFilamentId(parts, instance.filamentId) }
+}
+
 /** An axis-aligned bed footprint in plate coordinates (mm), for placement collision tests. */
 export interface PlateFootprintRect { minX: number; maxX: number; minY: number; maxY: number }
 
@@ -1139,6 +1258,10 @@ export function buildSceneEdit(state: EditorState): SceneEdit {
     fuzzyPaint: collectPartPaint(state, state.fuzzyPaint),
     importPaint: collectImportPaint(state),
     brimEars: collectBrimEars(state),
+    heightRanges: collectHeightRanges(state),
+    importHeightRanges: collectImportHeightRanges(state),
+    layerHeightProfiles: collectLayerHeightProfiles(state),
+    importLayerHeightProfiles: collectImportLayerHeightProfiles(state),
     importBrimEars: collectImportBrimEars(state),
     filamentChanges: collectFilamentChanges(state),
     pauses: collectPauses(state),
@@ -1331,6 +1454,36 @@ function collectImportBrimEars(state: EditorState): SceneEdit['importBrimEars'] 
   return out.length > 0 ? out : undefined
 }
 
+/** Variable layer height authored on an IMPORT's synthetic identity, mapped back to its importId. */
+function collectImportLayerHeightProfiles(state: EditorState): SceneEdit['importLayerHeightProfiles'] {
+  if (!state.layerHeightProfiles || Object.keys(state.layerHeightProfiles).length === 0) return undefined
+  const importByObjectId = importIdByReplacedObjectId(state)
+  const out: NonNullable<SceneEdit['importLayerHeightProfiles']> = []
+  for (const [objectIdRaw, profile] of Object.entries(state.layerHeightProfiles)) {
+    const importId = importByObjectId.get(Number.parseInt(objectIdRaw, 10))
+    if (!importId || profile.length === 0) continue
+    out.push({ importId, profile: [...profile] })
+  }
+  return out.length > 0 ? out : undefined
+}
+
+/**
+ * Height ranges authored on an IMPORT's synthetic identity, mapped back to its importId, for the
+ * same reason as `collectImportBrimEars`: the sidecar addresses objects by baked ordinal, which an
+ * unsaved import does not have until the bake assigns one.
+ */
+function collectImportHeightRanges(state: EditorState): SceneEdit['importHeightRanges'] {
+  if (!state.heightRanges || Object.keys(state.heightRanges).length === 0) return undefined
+  const importByObjectId = importIdByReplacedObjectId(state)
+  const out: NonNullable<SceneEdit['importHeightRanges']> = []
+  for (const [objectIdRaw, ranges] of Object.entries(state.heightRanges)) {
+    const importId = importByObjectId.get(Number.parseInt(objectIdRaw, 10))
+    if (!importId || ranges.length === 0) continue
+    out.push({ importId, ranges: ranges.map(cloneHeightRange) })
+  }
+  return out.length > 0 ? out : undefined
+}
+
 /**
  * Triangle paint authored on an IMPORT's synthetic identity, mapped to import + solid index.
  *
@@ -1435,7 +1588,8 @@ function collectAddedParts(state: EditorState): SceneEdit['addedParts'] {
         ...(part.filamentId != null && threeMfPartSubtypeCarriesFilament(part.subtype)
           ? { filamentId: part.filamentId }
           : {}),
-        ...(part.settings && Object.keys(part.settings).length > 0 ? { settings: { ...part.settings } } : {})
+        ...(part.settings && Object.keys(part.settings).length > 0 ? { settings: { ...part.settings } } : {}),
+        ...(part.textInfo ? { textInfo: part.textInfo } : {})
       })
     }
   }
@@ -1500,6 +1654,51 @@ function collectBrimEars(state: EditorState): SceneEdit['brimEars'] {
     out.push({ objectId, points: ears.map((ear) => ({ ...ear })) })
   }
   // A defined-but-empty array still clears the file (all ears removed).
+  return out
+}
+
+/**
+ * Emit every placed in-project object's COMPLETE layer height profile once the session has touched
+ * any of them, carrying seeded curves through for objects the user did not edit (the bake authors
+ * the sidecar wholesale). No session edits -> undefined, file kept as-is.
+ */
+function collectLayerHeightProfiles(state: EditorState): SceneEdit['layerHeightProfiles'] {
+  if (!state.layerHeightProfiles || Object.keys(state.layerHeightProfiles).length === 0) return undefined
+  const byObject = new Map<number, number[]>()
+  for (const plate of state.plates) {
+    for (const instance of plate.instances) {
+      if (instance.source.kind !== 'object' || byObject.has(instance.objectId)) continue
+      byObject.set(instance.objectId, effectiveLayerHeightProfile(state, instance))
+    }
+  }
+  const out: NonNullable<SceneEdit['layerHeightProfiles']> = []
+  for (const [objectId, profile] of byObject) {
+    if (profile.length === 0) continue
+    out.push({ objectId, profile: [...profile] })
+  }
+  return out
+}
+
+/**
+ * Emit every placed in-project object's COMPLETE height-range set once the session has touched any
+ * of them, carrying seeded bands through for objects the user did not edit or they would be lost
+ * (the bake authors the sidecar wholesale). No session edits -> undefined, file kept as-is.
+ */
+function collectHeightRanges(state: EditorState): SceneEdit['heightRanges'] {
+  if (!state.heightRanges || Object.keys(state.heightRanges).length === 0) return undefined
+  const byObject = new Map<number, EditorHeightRange[]>()
+  for (const plate of state.plates) {
+    for (const instance of plate.instances) {
+      if (instance.source.kind !== 'object' || byObject.has(instance.objectId)) continue
+      byObject.set(instance.objectId, effectiveHeightRanges(state, instance))
+    }
+  }
+  const out: NonNullable<SceneEdit['heightRanges']> = []
+  for (const [objectId, ranges] of byObject) {
+    if (ranges.length === 0) continue
+    out.push({ objectId, ranges: ranges.map(cloneHeightRange) })
+  }
+  // A defined-but-empty array still clears the file (all bands removed).
   return out
 }
 
@@ -1831,6 +2030,12 @@ function copySessionEditsOntoClone(state: EditorState, objectId: number, cloneOb
   rekeyParts(state.partProcessOverrides)
   rekeyParts(state.partTypeChanges)
   rekeyParts(state.partTransforms)
+  if (state.heightRanges?.[objectId]) {
+    state.heightRanges[cloneObjectId] = state.heightRanges[objectId]!.map(cloneHeightRange)
+  }
+  if (state.layerHeightProfiles?.[objectId]) {
+    state.layerHeightProfiles[cloneObjectId] = [...state.layerHeightProfiles[objectId]!]
+  }
   if (state.brimEars?.[objectId]) {
     state.brimEars[cloneObjectId] = state.brimEars[objectId]!.map((ear) => ({ ...ear }))
   }
@@ -1904,6 +2109,8 @@ export function cloneEditorState(state: EditorState): EditorState {
         filamentId: instance.filamentId,
         printable: instance.printable,
         ...(instance.brimEars ? { brimEars: instance.brimEars.map((ear) => ({ ...ear })) } : {}),
+        ...(instance.heightRanges ? { heightRanges: instance.heightRanges.map(cloneHeightRange) } : {}),
+        ...(instance.layerHeightProfile ? { layerHeightProfile: [...instance.layerHeightProfile] } : {}),
         parts: instance.parts.map((part) => ({
           entryPath: part.entryPath,
           partIndex: part.partIndex,
@@ -1962,6 +2169,20 @@ export function cloneEditorState(state: EditorState): EditorState {
       ? {
         partTransforms: Object.fromEntries(
           Object.entries(state.partTransforms).map(([key, matrix]) => [key, [...matrix]])
+        )
+      }
+      : {}),
+    ...(state.layerHeightProfiles
+      ? {
+        layerHeightProfiles: Object.fromEntries(
+          Object.entries(state.layerHeightProfiles).map(([key, profile]) => [key, [...profile]])
+        )
+      }
+      : {}),
+    ...(state.heightRanges
+      ? {
+        heightRanges: Object.fromEntries(
+          Object.entries(state.heightRanges).map(([key, ranges]) => [key, ranges.map(cloneHeightRange)])
         )
       }
       : {}),

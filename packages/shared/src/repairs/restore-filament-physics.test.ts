@@ -6,8 +6,8 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { restoreFilamentPhysics } from './restore-filament-physics'
-import { inspectProjectFilamentPhysics } from './filament-physics'
+import { restoreFilamentPhysics } from './restore-filament-physics.js'
+import { inspectProjectFilamentPhysics } from './filament-physics.js'
 import type { ProcessConfig } from '../process-settings.js'
 
 /** Per-slot presets as a resolver returns them: each key at the preset's own width. */

@@ -12,13 +12,13 @@ import {
   FormControl,
   FormLabel,
   Input,
-  Modal,
   ModalDialog,
   Option,
   Select,
   Stack,
   Typography
 } from '@mui/joy'
+import { BackAwareModal } from './BackAwareModal'
 import { apiFetch } from '../lib/apiClient'
 import { toast } from '../lib/toast'
 import {
@@ -113,7 +113,7 @@ export function AmsSpoolSetupDialog({ target, onClose }: { target: AmsSpoolSetup
   }
 
   return (
-    <Modal open onClose={onClose}>
+    <BackAwareModal open onClose={onClose}>
       <ModalDialog sx={{ maxWidth: 400, width: '100%' }}>
         <Typography level="h4">Set up {target.label}</Typography>
         <Typography level="body-sm" textColor="text.tertiary">
@@ -195,6 +195,6 @@ export function AmsSpoolSetupDialog({ target, onClose }: { target: AmsSpoolSetup
           </Stack>
         </Stack>
       </ModalDialog>
-    </Modal>
+    </BackAwareModal>
   )
 }

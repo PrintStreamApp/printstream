@@ -13,6 +13,8 @@ import { buildContentSecurityPolicy } from './lib/content-security-policy.js'
 import { installAuthContext } from './lib/auth-context.js'
 import { installWorkspaceContext } from './lib/workspace-context.js'
 import { installRequestContext, getCorrelationId } from './lib/request-context.js'
+import { WEB_BUILD_ID_HEADER } from '@printstream/shared'
+import { getServedWebBuildId } from './lib/web-build-id.js'
 import { isMetricsEnabled, recordHttpRequest } from './lib/metrics.js'
 import { HttpError } from './lib/http-error.js'
 import { authRouter } from './routes/auth.js'
@@ -107,10 +109,29 @@ app.use(
       callback(null, false)
     },
     credentials: true,
-    // Let the browser read rate-budget headers so uploads can self-pace.
-    exposedHeaders: ['Retry-After', 'RateLimit-Limit', 'RateLimit-Remaining', 'RateLimit-Reset']
+    // Let the browser read rate-budget headers so uploads can self-pace, and the
+    // served-bundle id so a stale client can notice itself (see below).
+    exposedHeaders: [
+      'Retry-After',
+      'RateLimit-Limit',
+      'RateLimit-Remaining',
+      'RateLimit-Reset',
+      WEB_BUILD_ID_HEADER
+    ]
   })
 )
+// Advertise which web bundle this server is serving, so a browser running an older one
+// finds out on its next API call. The WS `hello` frame carries the same value and is the
+// primary channel, but it only reaches routes that hold a socket: the PWA's own
+// `start_url` (`/workspaces`) and the public tools open none, so without this header a
+// home-screen app could sit on its landing route indefinitely without ever asking.
+// Scoped to `/api` on purpose, so it stays off the year-immutable asset responses.
+// Counterpart: `apps/web/src/lib/appStaleness.ts`.
+app.use('/api', (_request: Request, response: Response, next: NextFunction) => {
+  const webBuildId = getServedWebBuildId()
+  if (webBuildId) response.setHeader(WEB_BUILD_ID_HEADER, webBuildId)
+  next()
+})
 // Helmet's other protections stay on; we set our own CSP below (helmet's strict
 // default would block the proxied MJPEG / blob: camera frames). HSTS is production-only:
 // see `lib/security-headers.ts` for why sending it over plain-HTTP dev is actively harmful.

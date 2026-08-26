@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { cutTriangleSoup, cutTriangleSoupAtZ, helperVolumeCutSides, rebaseTriangleSoup, shiftTriangleSoup, splitTriangleSoup, triangleSoupToBinaryStl } from './meshCut'
+import { cutTriangleSoup, cutTriangleSoupAtZ, helperVolumeCutSides, orientCutHalfSoup, rebaseTriangleSoup, shiftTriangleSoup, splitTriangleSoup, triangleSoupToBinaryStl, triangleSoupXYCenter, triangleSoupsEqual } from './meshCut'
 
 /** Append a quad (two triangles) a->b->c->d with the given winding. */
 function quad(out: number[], a: number[], b: number[], c: number[], d: number[]): void {
@@ -219,4 +219,124 @@ test('a carried volume keeps its placement RELATIVE to the half it rides on', ()
   assert.deepEqual(relativeAfter, relativeBefore)
   // And the shift really was the half's own rebase, not a no-op.
   assert.notDeepEqual([carried[0], carried[1], carried[2]], [volume[0], volume[1], volume[2]])
+})
+
+// --- Place on cut / Flip -----------------------------------------------------------------------
+
+/** Z of the cut face's vertices: the ones that lay exactly on the cut plane before rotating. */
+function cutFaceZRange(original: Float32Array, rotated: Float32Array, axisIndex: number, value: number) {
+  let min = Infinity, max = -Infinity, found = 0
+  for (let i = 0; i < original.length; i += 3) {
+    if (Math.abs(original[i + axisIndex]! - value) > 1e-6) continue
+    found += 1
+    min = Math.min(min, rotated[i + 2]!)
+    max = Math.max(max, rotated[i + 2]!)
+  }
+  return { min, max, found }
+}
+
+function soupZRange(soup: Float32Array) {
+  let min = Infinity, max = -Infinity
+  for (let i = 2; i < soup.length; i += 3) { min = Math.min(min, soup[i]!); max = Math.max(max, soup[i]!) }
+  return { min, max }
+}
+
+const AXIS_INDEX = { x: 0, y: 1, z: 2 } as const
+
+for (const axis of ['x', 'y', 'z'] as const) {
+  for (const side of ['lower', 'upper'] as const) {
+    test(`place on cut turns the ${side} ${axis}-cut half's cut face down onto the bed`, () => {
+      // A cube spanning 0..10 on every axis, cut at 4 along `axis`.
+      const cube = boxSoup(0, 0, 0, 10, 10, 10)
+      const halves = cutTriangleSoup(cube.slice(), axis, 4)
+      const half = halves[side]
+      assert.ok(half.length > 0, 'the half exists')
+      const before = half.slice()
+      const after = orientCutHalfSoup(half.slice(), axis, side, 'placeOnCut')
+
+      const face = cutFaceZRange(before, after, AXIS_INDEX[axis], 4)
+      assert.ok(face.found > 0, 'found the cut-face vertices')
+      const body = soupZRange(after)
+      // The whole cut face must sit at the piece's LOWEST Z: that is what "on the bed" means.
+      assert.ok(Math.abs(face.min - body.min) < 1e-6 && Math.abs(face.max - body.min) < 1e-6,
+        `cut face should be flat on the bottom: face=${face.min}..${face.max} body min=${body.min}`)
+      assert.ok(body.max > body.min, 'the piece still has height')
+    })
+  }
+}
+
+test('keep orientation leaves the soup untouched', () => {
+  const cube = boxSoup(0, 0, 0, 10, 10, 10)
+  const { upper } = cutTriangleSoup(cube.slice(), 'x', 4)
+  const before = upper.slice()
+  const after = orientCutHalfSoup(upper, 'x', 'upper', 'keep')
+  assert.deepEqual([...after], [...before])
+})
+
+test('flip turns a half upside down regardless of the cut axis', () => {
+  for (const axis of ['x', 'y', 'z'] as const) {
+    const cube = boxSoup(0, 0, 0, 10, 10, 10)
+    const { lower } = cutTriangleSoup(cube.slice(), axis, 4)
+    const before = soupZRange(lower.slice())
+    const after = soupZRange(orientCutHalfSoup(lower, axis, 'lower', 'flip'))
+    // Upside down about X: the Z extent mirrors through zero.
+    assert.ok(Math.abs(after.min + before.max) < 1e-6, `${axis}: min`)
+    assert.ok(Math.abs(after.max + before.min) < 1e-6, `${axis}: max`)
+  }
+})
+
+test('orienting a half keeps it watertight and keeps its volume', () => {
+  // A rotation must not invert winding: a flipped normal would make the piece unsliceable.
+  for (const axis of ['x', 'y', 'z'] as const) {
+    for (const orientation of ['placeOnCut', 'flip'] as const) {
+      const cube = boxSoup(0, 0, 0, 10, 10, 10)
+      const { upper } = cutTriangleSoup(cube.slice(), axis, 4)
+      const volumeBefore = signedVolume(upper.slice())
+      const rotated = orientCutHalfSoup(upper, axis, 'upper', orientation)
+      assertWatertight(rotated, `${axis}/${orientation}`)
+      assert.ok(Math.abs(signedVolume(rotated) - volumeBefore) < 1e-3,
+        `${axis}/${orientation}: volume changed sign or magnitude (winding inverted?)`)
+    }
+  }
+})
+
+test('a reoriented half is placed by its PRE-rotation footprint, not its rebased centre', () => {
+  // Regression: the cut places each half at its rebased XY centre to keep it where it was. Once a
+  // half is rotated that centre is in the ROTATED frame, so using it as a world position threw the
+  // piece off the plate — a tall model cut along X had its 230mm height become a negative X.
+  const tall = boxSoup(100, 100, 0, 140, 140, 230) // a tall box standing at x,y ~100..140
+  const { upper } = cutTriangleSoup(tall.slice(), 'x', 120)
+
+  const placement = triangleSoupXYCenter(upper.slice())
+  // The placement must sit inside the source model's own footprint.
+  assert.ok(placement.x >= 100 && placement.x <= 140, `placement x in footprint: ${placement.x}`)
+  assert.ok(placement.y >= 100 && placement.y <= 140, `placement y in footprint: ${placement.y}`)
+
+  // Whereas the rebased centre AFTER a place-on-cut rotation is not a world position at all.
+  const rotated = orientCutHalfSoup(upper.slice(), 'x', 'upper', 'placeOnCut')
+  const { offset } = rebaseTriangleSoup(rotated)
+  assert.ok(Math.abs(offset.x - placement.x) > 100,
+    'the rotated frame centre is far from the real footprint (which is why it must not be used)')
+})
+
+test('triangleSoupXYCenter ignores Z and handles an empty soup', () => {
+  assert.deepEqual(triangleSoupXYCenter(new Float32Array()), { x: 0, y: 0 })
+  const box = boxSoup(-10, 20, 500, 30, 40, 900)
+  assert.deepEqual(triangleSoupXYCenter(box), { x: 10, y: 30 })
+})
+
+test('triangleSoupsEqual is exact, so a real geometry change is never skipped', () => {
+  const box = boxSoup(0, 0, 0, 10, 10, 10)
+  assert.equal(triangleSoupsEqual(box, box), true, 'the same array')
+  assert.equal(triangleSoupsEqual(box, box.slice()), true, 'an identical copy')
+  assert.equal(triangleSoupsEqual(box, boxSoup(0, 0, 0, 10, 10, 11)), false, 'a different box')
+  assert.equal(triangleSoupsEqual(box, box.slice(0, box.length - 3)), false, 'a different length')
+  assert.equal(triangleSoupsEqual(new Float32Array(), new Float32Array()), true, 'both empty')
+
+  // The margin the text tool leans on: a shift smaller than any tolerance a fuzzy comparison would
+  // use still reads as changed, because the callers skip staging on a `true` and a near-miss would
+  // leave the saved mesh one drag behind what the viewport shows.
+  const nudged = box.slice()
+  nudged[0] = nudged[0]! + 1e-6
+  assert.equal(triangleSoupsEqual(box, nudged), false, 'a sub-micron move is still a change')
 })

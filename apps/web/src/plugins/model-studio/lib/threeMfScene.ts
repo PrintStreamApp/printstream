@@ -20,6 +20,13 @@
  */
 import * as THREE from 'three'
 import { disposeMeshBvh } from './meshBvh'
+import {
+  TRIANGLE_PAINT_SOURCES,
+  applyMeshPaint,
+  type MeshPaintByChannel,
+  type TrianglePaintChannel,
+  type TrianglePaintUserDataKey
+} from './meshParseCore'
 import { STLLoader, mergeVertices, toCreasedNormals } from 'three-stdlib'
 import type { LibraryThreeMfScene } from '@printstream/shared'
 import { buildApiUrl } from '../../../lib/apiUrl'
@@ -73,17 +80,16 @@ export type SupportPaintCodes = Record<number, string>
 
 /**
  * Brush channels sharing the triangle-paint encoding: support enforcers/blockers
- * (`paint_supports`), seam (`paint_seam`), and Bambu's multi-material colour painting
- * (`paint_color`, whole-triangle states mapping to 1-based filament ids).
+ * (`paint_supports`), seam (`paint_seam`), Bambu's multi-material colour painting
+ * (`paint_color`, whole-triangle states mapping to 1-based filament ids), and fuzzy skin
+ * (`paint_fuzzy_skin`). Defined by `meshParseCore`'s `TRIANGLE_PAINT_SOURCES`, which is the one
+ * table every parser and the worker wire derive from; re-exported here for this module's callers.
  */
-export type TrianglePaintChannel = 'supports' | 'seam' | 'color' | 'fuzzy'
+export type { TrianglePaintChannel } from './meshParseCore'
 
-const PAINT_USER_DATA_KEYS: Record<TrianglePaintChannel, 'supportPaint' | 'seamPaint' | 'colorPaint' | 'fuzzyPaint'> = {
-  supports: 'supportPaint',
-  seam: 'seamPaint',
-  color: 'colorPaint',
-  fuzzy: 'fuzzyPaint'
-}
+const PAINT_USER_DATA_KEYS = Object.fromEntries(
+  TRIANGLE_PAINT_SOURCES.map((source) => [source.channel, source.userDataKey])
+) as Record<TrianglePaintChannel, TrianglePaintUserDataKey>
 
 /** Read a channel's parsed paint from `geometry.userData`, if present. */
 export function getGeometryTrianglePaint(
@@ -129,20 +135,18 @@ export function parseThreeMfModelEntry(xmlText: string): Map<number, THREE.Buffe
     const indexArray = vertexNodes.length > 65535
       ? new Uint32Array(triangleNodes.length * 3)
       : new Uint16Array(triangleNodes.length * 3)
-    const supportPaint: SupportPaintCodes = {}
-    const seamPaint: SupportPaintCodes = {}
-    const colorPaint: SupportPaintCodes = {}
+    const paint: MeshPaintByChannel = {}
     for (let index = 0; index < triangleNodes.length; index += 1) {
       const node = triangleNodes[index]
       indexArray[index * 3] = Number.parseInt(node?.getAttribute('v1') ?? '0', 10)
       indexArray[index * 3 + 1] = Number.parseInt(node?.getAttribute('v2') ?? '0', 10)
       indexArray[index * 3 + 2] = Number.parseInt(node?.getAttribute('v3') ?? '0', 10)
-      const supportCode = node?.getAttribute('paint_supports')
-      if (supportCode) supportPaint[index] = supportCode
-      const seamCode = node?.getAttribute('paint_seam')
-      if (seamCode) seamPaint[index] = seamCode
-      const colorCode = node?.getAttribute('paint_color')
-      if (colorCode) colorPaint[index] = colorCode
+      for (const source of TRIANGLE_PAINT_SOURCES) {
+        const code = node?.getAttribute(source.attribute)
+        if (!code) continue
+        const codes = paint[source.userDataKey] ?? (paint[source.userDataKey] = {})
+        codes[index] = code
+      }
     }
 
     const geometry = new THREE.BufferGeometry()
@@ -153,9 +157,7 @@ export function parseThreeMfModelEntry(xmlText: string): Map<number, THREE.Buffe
     const smoothedGeometry = toCreasedNormals(weldedGeometry, THREE_MF_SMOOTH_NORMAL_ANGLE)
     const correctedGeometry = flattenPlanarPatchNormals(smoothedGeometry)
     correctedGeometry.computeBoundingSphere()
-    if (Object.keys(supportPaint).length > 0) correctedGeometry.userData.supportPaint = supportPaint
-    if (Object.keys(seamPaint).length > 0) correctedGeometry.userData.seamPaint = seamPaint
-    if (Object.keys(colorPaint).length > 0) correctedGeometry.userData.colorPaint = colorPaint
+    applyMeshPaint(correctedGeometry.userData, paint)
     geometries.set(objectId, correctedGeometry)
   }
 

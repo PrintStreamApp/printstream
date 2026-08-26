@@ -16,10 +16,10 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { planEditedThreeMf, type ThreeMfBakePlan, type ThreeMfBakeSource } from './bake'
-import { NEW_PROJECT_MODEL_SETTINGS_XML, NEW_PROJECT_MODEL_XML } from './bake-documents'
+import { planEditedThreeMf, type ThreeMfBakePlan, type ThreeMfBakeSource } from './bake.js'
+import { NEW_PROJECT_MODEL_SETTINGS_XML, NEW_PROJECT_MODEL_XML } from './bake-documents.js'
 import { collectSettingsRepairReasons } from '../repairs/index.js'
-import type { SceneEdit, SceneEditFilament } from '../slicing'
+import type { SceneEdit, SceneEditFilament } from '../slicing.js'
 
 /**
  * A root model that DECLARES the object being placed. The bake refuses a build item naming an object

@@ -39,7 +39,9 @@ import {
   buildThreeMfIndex,
   parseModelSettingsPlates,
   type ModelSettingsPlateMetadata,
-  type ThreeMfScene
+  type ThreeMfScene,
+  LAYER_CONFIG_RANGES_ENTRY,
+  LAYER_HEIGHTS_PROFILE_ENTRY
 } from '@printstream/shared/three-mf'
 import yauzl, { type Entry } from 'yauzl'
 import { env } from './env.js'
@@ -226,7 +228,7 @@ export async function readSceneManifest(
     return cachedScene.scene
   }
 
-  const [rootModelXml, modelSettingsXml, projectSettingsJson, brimEarPointsText, customGcodeText] = await Promise.all([
+  const [rootModelXml, modelSettingsXml, projectSettingsJson, brimEarPointsText, layerConfigRangesXml, layerHeightsProfileText, customGcodeText] = await Promise.all([
     readEntry(filePath, '3D/3dmodel.model', signal, 64 * 1024 * 1024).then((buffer) => buffer.toString('utf8')),
     // Default 8 MiB cap: matches the bridge's bound for the same entry; only the
     // mesh XML above legitimately outgrows it.
@@ -237,13 +239,19 @@ export async function readSceneManifest(
     readEntry(filePath, BRIM_EAR_POINTS_ENTRY, signal, 4 * 1024 * 1024)
       .then((buffer) => buffer.toString('utf8'))
       .catch(() => null),
+    readEntry(filePath, LAYER_CONFIG_RANGES_ENTRY, signal, 4 * 1024 * 1024)
+      .then((buffer) => buffer.toString('utf8'))
+      .catch(() => null),
+    readEntry(filePath, LAYER_HEIGHTS_PROFILE_ENTRY, signal, 4 * 1024 * 1024)
+      .then((buffer) => buffer.toString('utf8'))
+      .catch(() => null),
     readEntry(filePath, CUSTOM_GCODE_PER_LAYER_ENTRY, signal, 4 * 1024 * 1024)
       .then((buffer) => buffer.toString('utf8'))
       .catch(() => null)
   ])
 
   const scene = buildSceneManifest(
-    { rootModelXml, modelSettingsXml, projectSettingsJson, brimEarPointsText, customGcodeText },
+    { rootModelXml, modelSettingsXml, projectSettingsJson, brimEarPointsText, layerConfigRangesXml, layerHeightsProfileText, customGcodeText },
     plateIndex,
     overrideModel
   )

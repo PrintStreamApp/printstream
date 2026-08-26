@@ -329,6 +329,9 @@ export function PreviewView(props: Record<string, unknown>) {
     container.appendChild(renderer.domElement)
 
     const controls = new OrbitControls(camera, renderer.domElement)
+    // Middle-drag PANS, matching the editor viewport and every CAD viewer; three.js defaults
+    // the middle button to dolly, which just duplicates the wheel.
+    controls.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.PAN, RIGHT: THREE.MOUSE.PAN }
     controls.enableDamping = true
     controls.dampingFactor = 0.28
     controls.enablePan = true

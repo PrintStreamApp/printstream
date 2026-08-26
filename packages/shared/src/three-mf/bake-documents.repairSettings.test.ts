@@ -18,8 +18,8 @@ import {
   buildEditedThreeMfDocuments,
   buildProjectSettingsTransforms,
   repairProjectSettingsDocument
-} from './bake-documents'
-import type { SceneEdit } from '../slicing'
+} from './bake-documents.js'
+import type { SceneEdit } from '../slicing.js'
 
 const at = { x: 0, y: 0, z: 0 }
 

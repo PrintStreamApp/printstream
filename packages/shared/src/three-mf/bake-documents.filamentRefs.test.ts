@@ -13,8 +13,8 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { buildEditedThreeMfDocuments, NEW_PROJECT_MODEL_XML } from './bake-documents'
-import type { SceneEdit } from '../slicing'
+import { buildEditedThreeMfDocuments, NEW_PROJECT_MODEL_XML } from './bake-documents.js'
+import type { SceneEdit } from '../slicing.js'
 
 /**
  * A root model that DECLARES the object being placed. The bake refuses a build item naming an object

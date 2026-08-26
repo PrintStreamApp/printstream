@@ -9,7 +9,7 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { THREE_MF_RELS_XML } from './bake-documents'
+import { THREE_MF_RELS_XML } from './bake-documents.js'
 
 test('the root relationships name the model and all three thumbnail roles', () => {
   const types = [...THREE_MF_RELS_XML.matchAll(/Type="([^"]+)"/g)].map((match) => match[1])

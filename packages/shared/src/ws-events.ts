@@ -9,7 +9,23 @@ import { discoveredPrinterSchema, printerStatusSchema, printerSchema } from './p
 
 export const wsHelloEventSchema = z.object({
   type: z.literal('hello'),
-  serverTime: z.string()
+  serverTime: z.string(),
+  /**
+   * Identity of the web bundle the server is currently SERVING (see
+   * `apps/api/src/lib/web-build-id.ts`). The browser compares it against the id
+   * baked into the bundle it is actually running (`apps/web/src/lib/webBuildId.ts`)
+   * and reloads when they differ.
+   *
+   * Rides the hello frame, not a change event, because the question it answers is
+   * "am I stale right now": a suspended phone that resumes days later dials a new
+   * socket and gets the answer in one round trip, with no timer or visibility event
+   * involved. That is the failure mode this exists for.
+   *
+   * Optional in both directions and forever: a split-topology API serves no bundle
+   * and has nothing to report, and a server predating this field must still parse
+   * as a valid hello in a newer client.
+   */
+  webBuildId: z.string().optional()
 })
 export type WsHelloEvent = z.infer<typeof wsHelloEventSchema>
 

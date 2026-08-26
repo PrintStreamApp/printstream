@@ -30,7 +30,44 @@ import {
 import type { CutAxis } from './lib/meshCut'
 import type { EditorInstance, EditorPlate, EditorState } from './lib/editorModel'
 
-export type GizmoMode = 'translate' | 'rotate' | 'scale' | 'layFace' | 'cut' | 'paintSupports' | 'paintSeam' | 'paintColor' | 'paintFuzzy' | 'brimEars' | 'measure'
+/**
+ * `layerHeight` is BambuStudio's layers-editing MODE, not a gizmo: Studio's `enable_layers_editing`
+ * runs alongside `reset_all_gizmos()`, so entering it leaves the object selected but detaches every
+ * manipulation handle. Ours has to be a mode for the same reason -- the move gizmo's arrows and
+ * bounding box sit exactly where the thickness shading needs to be read.
+ */
+export type GizmoMode = 'translate' | 'rotate' | 'scale' | 'layFace' | 'cut' | 'paintSupports' | 'paintSeam' | 'paintColor' | 'paintFuzzy' | 'brimEars' | 'measure' | 'layerHeight' | 'text'
+
+/**
+ * Meshes that exist only to be LOOKED at: they are never printed, never part of the object's
+ * bounds, and never input to a tool that reads geometry.
+ *
+ * One predicate rather than a flag list repeated at each call site, because the list is now long
+ * enough that adding an aid means remembering three separate filters, and forgetting one is silent:
+ * an aid in `collectWorldTriangles` corrupts the Adaptive layer-height input, and an aid in
+ * `printableMeshBox` moves the object on the bed.
+ */
+export function isViewportAidMesh(mesh: THREE.Mesh): boolean {
+  return Boolean(
+    mesh.userData.isHelperVolume || mesh.userData.isFaceHull || mesh.userData.isPrimeTower
+    || mesh.userData.isPaintOverlay || mesh.userData.isLayerHeightVisual
+  )
+}
+
+/**
+ * How the text being edited is currently being interacted with, which is what its highlight shows.
+ *
+ * `drag` renders it in its REAL material deliberately: the highlight exists to say "this can be
+ * grabbed", and once it has been grabbed that message is delivered. Anything left on screen then
+ * competes with the only thing the user is judging, which is how the text sits on the surface.
+ */
+export type TextInteraction = 'idle' | 'hover' | 'drag'
+
+/** Emissive tints for {@link TextInteraction}. `drag` has none: the text renders as it will print. */
+export const TEXT_HIGHLIGHT_COLORS: Record<Exclude<TextInteraction, 'drag'>, number> = {
+  idle: 0x2f7d63,
+  hover: 0x4fd1a5
+}
 
 /** Scene-object name for the brim-ear disc markers (children of an instance's rotor). */
 export const BRIM_EAR_MARKER_NAME = 'brimEarMarker'
@@ -128,6 +165,22 @@ export type TransformGizmoMode = Extract<GizmoMode, 'translate' | 'rotate' | 'sc
 /** Narrows to {@link TransformGizmoMode} so callers can hand the mode straight to the readout. */
 export function isTransformGizmoMode(mode: GizmoMode): mode is TransformGizmoMode {
   return mode === 'translate' || mode === 'rotate' || mode === 'scale'
+}
+
+/**
+ * Modes that are INERT without a selection, and so must fall back when one is cleared.
+ *
+ * Each of these drives a floating panel bound to the selected object and attaches no gizmo. With
+ * nothing selected they render nothing at all, leaving the editor in a mode with no panel, no gizmo
+ * and no way out except clicking an object: the rail still shows the tool lit, but disabled. The
+ * transform modes are excluded because `translate` is the resting state and is harmless with an
+ * empty selection; `measure` and `text` are excluded because they genuinely work without one --
+ * measure picks points on any object, and text with nothing selected adds its OWN model, which is
+ * the only way to letter a plate that has no host. Text was not exempt, so opening the tool with an
+ * empty selection bounced straight back to Move and the tool appeared to close itself.
+ */
+export function isSelectionOnlyGizmoMode(mode: GizmoMode): boolean {
+  return !isTransformGizmoMode(mode) && mode !== 'measure' && mode !== 'text'
 }
 
 export function paintChannelForGizmoMode(mode: GizmoMode): TrianglePaintChannel | null {
@@ -366,10 +419,9 @@ export function printableMeshBox(object: THREE.Object3D, precise = true): THREE.
     // (`isFaceHull`), the prime tower, and brim-ear markers. Including the face hull was the
     // "lay flat leaves the part floating" bug: the hull's z=0 box made restObjectOnBed think the
     // object already touched the bed, so it never dropped the freshly rotated geometry.
-    if (mesh.userData.isHelperVolume || mesh.userData.isFaceHull || mesh.userData.isPrimeTower) return
+    if (isViewportAidMesh(mesh)) return
     // Paint overlays are a lifted visual aid (and can be 100k+ triangles), never part of the
     // printable bounds, and walking them per-vertex here is what made dragging a painted part hitch.
-    if (mesh.userData.isPaintOverlay) return
     if (mesh.name === BRIM_EAR_MARKER_NAME) return
     // `precise: true` walks actual vertices. Required for rotated meshes: the cheap path
     // transforms the mesh's LOCAL AABB, whose corners rotate BELOW the real geometry, so the
@@ -472,7 +524,7 @@ export function computeFootprintCells(group: THREE.Object3D): Set<number> {
   const c = new THREE.Vector3()
   group.traverse((child) => {
     const mesh = child as THREE.Mesh
-    if (!mesh.isMesh || mesh.userData.isFaceHull || mesh.userData.isPrimeTower || mesh.userData.isHelperVolume || mesh.userData.isPaintOverlay) return
+    if (!mesh.isMesh || isViewportAidMesh(mesh)) return
     const position = mesh.geometry.getAttribute('position')
     if (!position) return
     const index = mesh.geometry.getIndex()
@@ -491,7 +543,7 @@ export function computeFootprintCells(group: THREE.Object3D): Set<number> {
 }
 
 /** Rasterize a (possibly concave) polygon's cells via fan triangulation. */
-export function rasterizePolygonCells(polygon: Array<{ x: number; y: number }>): Set<number> {
+export function rasterizePolygonCells(polygon: ReadonlyArray<{ x: number; y: number }>): Set<number> {
   const cells = new Set<number>()
   const p0 = polygon[0]
   if (!p0) return cells

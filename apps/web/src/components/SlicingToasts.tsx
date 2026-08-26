@@ -12,6 +12,7 @@ import { Typography } from '@mui/joy'
 import type { SlicingJob, SlicingJobResponse } from '@printstream/shared'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '../lib/apiClient'
+import { setAppBusy } from '../lib/appBusy'
 import { formatLibraryFileName } from '../lib/libraryDisplay'
 import {
   formatSlicingMetadataDisplay,
@@ -56,6 +57,24 @@ export function SlicingToasts() {
   }, [])
 
   const jobs = useMemo(() => jobsQuery.data?.jobs ?? [], [jobsQuery.data])
+
+  // Leaving the page beacons `jobs/leaving`, which reaps this client's slices server-side,
+  // so a reload really does destroy an active slice: it holds off an app update
+  // (`lib/appStaleness.ts`). Ownership matters — an unowned job was started by a script or
+  // an integration and survives this tab going away. Tracked from `jobs`, not
+  // `visibleJobs`: dismissing the toast hides the slice, it does not stop it.
+  useEffect(() => {
+    const tabSessionId = readTabSessionId()
+    setAppBusy('slicing', jobs.some((job) => isActiveSlicingJob(job) && job.ownerClientId === tabSessionId))
+  }, [jobs])
+  // ACCEPTED GAP, decided rather than overlooked: this component unmounts on a workspace
+  // switch, which releases the hold while the slice is still running, so a pending update
+  // can land ~1.5s later and reap it. Fixing it means moving slice ownership out of a view
+  // component and into module state. Not worth that: switching workspaces is a deliberate
+  // act, and the loss is one "Slice again" away. Revisit only if the hold is ever load
+  // bearing for something unrecoverable.
+  useEffect(() => () => setAppBusy('slicing', false), [])
+
   const suppressedJobIds = useSuppressedJobToastIds('slicing')
   const visibleJobs = useMemo(() => {
     const now = Date.now()

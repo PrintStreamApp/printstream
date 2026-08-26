@@ -18,6 +18,7 @@
  * module's surface so existing api call sites are unaffected.
  */
 import { canonicalCurrBedType } from '../plate-types.js'
+import { serializeTextInfo, type TextInfo } from './text-info.js'
 import { FILAMENT_SETTING_KEYS } from '../filament-settings.js'
 import { FILAMENT_INDEX_PROCESS_KEYS, isProcessSettingKey, type ProcessConfig } from '../process-settings.js'
 import { rebindProjectFilamentPhysics } from '../filament-rebind.js'
@@ -1214,7 +1215,8 @@ function applyAddedParts(
       ? filamentToExtruder.get(part.filamentId) ?? part.filamentId
       : undefined
     modelSettingsXml = addModelSettingsPartEntry(
-      modelSettingsXml, hostObjectId, partObjectId, part.subtype, part.name, part.settings, extruder
+      modelSettingsXml, hostObjectId, partObjectId, part.subtype, part.name, part.settings, extruder,
+      part.textInfo
     )
   }
   return { modelXml, modelSettingsXml }
@@ -1231,7 +1233,8 @@ function addModelSettingsPartEntry(
   subtype: string,
   name: string,
   settings?: Record<string, string>,
-  extruder?: number
+  extruder?: number,
+  textInfo?: TextInfo
 ): string {
   // Process-setting keys only: the name/extruder/matrix entries are authored explicitly, so a
   // structural key smuggled through the settings map must not duplicate or clobber them.
@@ -1242,6 +1245,10 @@ function addModelSettingsPartEntry(
     `      <metadata key="name" value="${escapeXmlAttribute(name)}"/>`,
     ...(extruder != null ? [`      <metadata key="extruder" value="${extruder}"/>`] : []),
     ...settingsXml,
+    // A text part records what it was typed from, so a typo is a re-edit rather than a rebuild.
+    // BambuStudio keeps this inside the <part> and keys it to the volume, which is why it is
+    // authored here rather than alongside the object's own metadata.
+    ...(textInfo ? [`      ${serializeTextInfo(textInfo)}`] : []),
     '    </part>'
   ].join('\n')
   const objectPattern = new RegExp(`(<object\\b[^>]*\\bid="${parentObjectId}"[^>]*>)([\\s\\S]*?)(</object>)`)

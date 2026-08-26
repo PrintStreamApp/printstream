@@ -6,7 +6,7 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { inspectModelSettingsObjectExtruders, repairModelSettingsObjectExtruders } from './object-extruder'
+import { inspectModelSettingsObjectExtruders, repairModelSettingsObjectExtruders } from './object-extruder.js'
 
 /** The import-format shape our bake used to write for a replaced object (part-only extruder). */
 const PART_ONLY = [

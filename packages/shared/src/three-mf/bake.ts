@@ -15,7 +15,7 @@
  * mesh bodies are the bulk of the file, and they are rewritten as they stream past. Materialising
  * them all to save one file would turn a large assembly into an out-of-memory failure.
  */
-import type { SceneEdit, SceneEditObjectBrimEars } from '../slicing.js'
+import type { SceneEdit, SceneEditObjectBrimEars, SceneEditObjectHeightRanges, SceneEditObjectLayerHeightProfile } from '../slicing.js'
 import type { ThreeMfSettingsRepairReason } from '../printer-contracts.js'
 import { collectSettingsRepairReasons } from '../repairs/index.js'
 import {
@@ -55,6 +55,8 @@ import { CUSTOM_GCODE_PER_LAYER_ENTRY, sliceRecordFilamentIds, stringArray } fro
 import { repairObjectMeshesInModelEntry } from './mesh-repair.js'
 import { applyObjectProcessOverridesXml, objectHeadOf, readObjectProcessOverridesFromHead, rekeyObjectProcessOverrides, type ObjectProcessOverrides } from './object-overrides.js'
 import { BRIM_EAR_POINTS_ENTRY, parseRootModelObjectIdOrder } from './scene-parser.js'
+import { LAYER_CONFIG_RANGES_ENTRY, serializeLayerConfigRanges } from './layer-config-ranges.js'
+import { LAYER_HEIGHTS_PROFILE_ENTRY, serializeLayerHeightProfiles } from './layer-height-profile.js'
 import { OBJECT_ORDINAL_SIDECAR_ENTRIES, remapObjectOrdinalSidecar } from './object-ordinal-sidecars.js'
 import { remapSliceInfoPlates, sourcePlateMapping } from './plate-metadata.js'
 
@@ -350,6 +352,27 @@ export function planEditedThreeMf(
   const brimEarPointsContent = edit.brimEars !== undefined || importEars.length > 0
     ? serializeBrimEarPoints([...(edit.brimEars ?? []), ...importEars], modelXml)
     : null
+
+  // Height range modifiers: same shape as brim ears above (complete replacement set, authored
+  // wholesale or left alone), and the same ordinal space, so ranges on a not-yet-saved import
+  // resolve onto the object id it baked as.
+  const importRanges: SceneEditObjectHeightRanges[] = (edit.importHeightRanges ?? []).flatMap((entry) => {
+    const objectId = documents.importIdToObjectId.get(entry.importId)
+    return objectId != null ? [{ objectId, ranges: entry.ranges }] : []
+  })
+  const layerConfigRangesContent = edit.heightRanges !== undefined || importRanges.length > 0
+    ? serializeLayerConfigRanges([...(edit.heightRanges ?? []), ...importRanges], modelXml)
+    : null
+
+  // Variable layer height: same authored-sidecar shape again. Note the PRECEDENCE this creates in
+  // the saved file -- a profile overrides the layer_height of any range on the same object.
+  const importProfiles: SceneEditObjectLayerHeightProfile[] = (edit.importLayerHeightProfiles ?? []).flatMap((entry) => {
+    const objectId = documents.importIdToObjectId.get(entry.importId)
+    return objectId != null ? [{ objectId, profile: entry.profile }] : []
+  })
+  const layerHeightProfileContent = edit.layerHeightProfiles !== undefined || importProfiles.length > 0
+    ? serializeLayerHeightProfiles([...(edit.layerHeightProfiles ?? []), ...importProfiles], modelXml)
+    : null
   // The old-slot → new-slot permutation this save's filament list implies, or null when slots keep
   // their numbers. Non-null gates every base-content re-key below (untouched plates' tool changes,
   // untouched mesh entries' colour paint, the stale slice_info drop): base bytes stream through
@@ -421,6 +444,12 @@ export function planEditedThreeMf(
     if (customGcodeContent !== null) {
       extraEntries.push({ name: CUSTOM_GCODE_PER_LAYER_ENTRY, content: customGcodeContent })
     }
+    if (layerConfigRangesContent !== null) {
+      extraEntries.push({ name: LAYER_CONFIG_RANGES_ENTRY, content: layerConfigRangesContent })
+    }
+    if (layerHeightProfileContent !== null) {
+      extraEntries.push({ name: LAYER_HEIGHTS_PROFILE_ENTRY, content: layerHeightProfileContent })
+    }
     // A transform may return null to DROP the entry from the saved 3MF (see rewriteThreeMfEntries).
     const transforms = new Map<string, (xml: string) => string | null>([
       ['3D/3dmodel.model', () => modelXml],
@@ -432,6 +461,12 @@ export function planEditedThreeMf(
     if (customGcodeContent !== null) {
       transforms.set(CUSTOM_GCODE_PER_LAYER_ENTRY, () => customGcodeContent)
     }
+    if (layerConfigRangesContent !== null) {
+      transforms.set(LAYER_CONFIG_RANGES_ENTRY, () => layerConfigRangesContent)
+    }
+    if (layerHeightProfileContent !== null) {
+      transforms.set(LAYER_HEIGHTS_PROFILE_ENTRY, () => layerHeightProfileContent)
+    }
     // Sidecars addressed by an object's POSITION rather than its id have to follow the objects when
     // the object set changes, or they describe whichever object slid into that slot. We copied them
     // through verbatim, so an ordinary "delete an object" left them pointing at the wrong models on
@@ -440,6 +475,11 @@ export function planEditedThreeMf(
     const baseObjectOrder = parseRootModelObjectIdOrder(baseModelXml)
     const savedObjectOrder = parseRootModelObjectIdOrder(modelXml)
     for (const sidecar of OBJECT_ORDINAL_SIDECAR_ENTRIES) {
+      // A sidecar this save AUTHORS is never remapped: it already speaks the SAVED ordinals, so
+      // chasing them again would renumber correct content — and because both write into one map,
+      // whichever ran last would silently win. The skip makes that independent of statement order.
+      if (sidecar.path === LAYER_CONFIG_RANGES_ENTRY && layerConfigRangesContent !== null) continue
+      if (sidecar.path === LAYER_HEIGHTS_PROFILE_ENTRY && layerHeightProfileContent !== null) continue
       transforms.set(sidecar.path, (content) =>
         remapObjectOrdinalSidecar(content, baseObjectOrder, savedObjectOrder, sidecar.format)
       )
@@ -584,6 +624,8 @@ export function planEditedThreeMf(
       .filter((content): content is string => content !== null)
       .map((content) => ({ name: 'Metadata/project_settings.config', content }))),
     ...(brimEarPointsContent ? [{ name: BRIM_EAR_POINTS_ENTRY, content: brimEarPointsContent }] : []),
+    ...(layerConfigRangesContent ? [{ name: LAYER_CONFIG_RANGES_ENTRY, content: layerConfigRangesContent }] : []),
+    ...(layerHeightProfileContent ? [{ name: LAYER_HEIGHTS_PROFILE_ENTRY, content: layerHeightProfileContent }] : []),
     ...(customGcodeContent ? [{ name: CUSTOM_GCODE_PER_LAYER_ENTRY, content: customGcodeContent }] : []),
     ...(options.extraEntries ?? [])
     ]

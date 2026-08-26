@@ -11,7 +11,7 @@
  * ./editorGeometry; the filament-option shape is a type-only import from
  * ./EditorView (erased, no runtime cycle).
  */
-import { Fragment, useEffect, useMemo, useState, type MutableRefObject } from 'react'
+import { Fragment, memo, useEffect, useMemo, useState, type MutableRefObject } from 'react'
 import {
   Box,
   Button,
@@ -44,6 +44,7 @@ import MoreVertRoundedIcon from '@mui/icons-material/MoreVertRounded'
 import DriveFileRenameOutlineRoundedIcon from '@mui/icons-material/DriveFileRenameOutlineRounded'
 import InventoryRoundedIcon from '@mui/icons-material/Inventory2Rounded'
 import LayersRoundedIcon from '@mui/icons-material/LayersRounded'
+import TextFieldsRoundedIcon from '@mui/icons-material/TextFieldsRounded'
 import SaveRoundedIcon from '@mui/icons-material/SaveRounded'
 import TuneRoundedIcon from '@mui/icons-material/TuneRounded'
 import UploadFileRoundedIcon from '@mui/icons-material/UploadFileRounded'
@@ -553,7 +554,11 @@ export function GizmoToolbar({
       { value: 'paintSeam', label: 'Paint seam', short: 'Seam', icon: <FormatPaintRoundedIcon /> },
       { value: 'paintColor', label: 'Paint color', short: 'Color', icon: <PaletteRoundedIcon /> },
       { value: 'paintFuzzy', label: 'Paint fuzzy skin', short: 'Fuzzy', icon: <BlurOnRoundedIcon /> },
-      { value: 'brimEars', label: 'Brim ears', icon: <AdjustRoundedIcon /> }
+      { value: 'brimEars', label: 'Brim ears', icon: <AdjustRoundedIcon /> },
+      // BambuStudio carries layers editing in this same toolbar (`layersediting`), and it belongs
+      // here for the same reason the others do: it is an exclusive mode, so the rail is where a user
+      // looks to see that they are IN it. Reached from the object context menu too.
+      { value: 'layerHeight', label: 'Variable layer height', short: 'Layers', icon: <LayersRoundedIcon /> },
     ] as Array<{ value: GizmoMode; label: string; short?: string; icon: JSX.Element }>).map((tool) => ({
       key: tool.value,
       label: tool.label,
@@ -570,7 +575,10 @@ export function GizmoToolbar({
   // (still a mode, it highlights while active, but it never edits the scene).
   const utilities: ToolbarEntry[] = [
     { key: 'arrange', label: 'Auto-arrange all objects on this plate', short: 'Arrange', icon: <GridViewRoundedIcon />, disabled: arrangeDisabled, onClick: onArrangeAll },
-    { key: 'measure', label: 'Measure', icon: <StraightenRoundedIcon />, active: mode === 'measure', disabled: busy, onClick: () => onChange('measure') }
+    { key: 'measure', label: 'Measure', icon: <StraightenRoundedIcon />, active: mode === 'measure', disabled: busy, onClick: () => onChange('measure') },
+    // Text needs no selection: with nothing selected it makes a model of its own, so it belongs
+    // with the utilities rather than the selection tools.
+    { key: 'text', label: 'Add text', short: 'Text', icon: <TextFieldsRoundedIcon />, active: mode === 'text', disabled: busy, onClick: () => onChange('text') }
   ]
   // The two groups are returned as siblings (no wrapper) so the toolbar's
   // flex-wrap container can break them onto separate rows on phones instead of
@@ -1264,12 +1272,33 @@ function PartTypeMenu({
 }
 
 /**
+ * The slice-config half of a row's controls.
+ *
+ * Named and exported because it is passed as ONE object and `ObjectList` is memoised: the caller has
+ * to build it in a `useMemo`, and an anonymous inline type cannot be annotated there.
+ */
+export interface ObjectListPerObject {
+  sliceObjectIds: Set<number>
+  overrideCountFor: (objectId: number) => number
+  onEditObject: (objectId: number, name: string) => void
+  /** Open per-PART process settings for one part of an object (separate from the object's). */
+  onEditPart?: (objectId: number, partIndex: number, name: string) => void
+  partOverrideCountFor?: (objectId: number, partIndex: number) => number
+}
+
+/**
  * The Objects sidebar list. Each row selects/duplicates/deletes the object. When
  * `perObject` is supplied (slice settings present), the row also carries the
  * per-object controls that used to live in a separate dialog: a print on/off
  * toggle and an override editor (with a badge for the override count).
+ *
+ * **Memoised, and by far the most expensive thing the editor renders.** Measured with a 166-row
+ * sidebar, it is ~82% of the render cost of a single keystroke in the Text tool: every row carries
+ * Joy `Tooltip`/`IconButton`/`Dropdown` furniture, so an unrelated edit re-rendering the list costs
+ * ~430ms of the ~525ms commit. The memo only works while every prop is stable -- build object and
+ * callback props with `useMemo`/`useCallback` at the call site, never inline in JSX.
  */
-export function ObjectList({
+export const ObjectList = memo(function ObjectList({
   instances,
   selectedKey,
   extraSelectedKeys,
@@ -1283,6 +1312,7 @@ export function ObjectList({
   filamentColors,
   filamentOptions,
   onReassignFilament,
+  onReassignInstanceFilament,
   resolveFilamentId,
   onTogglePrintable,
   onChangePartType,
@@ -1321,6 +1351,12 @@ export function ObjectList({
   filamentColors?: Record<number, string>
   filamentOptions?: FilamentOption[]
   onReassignFilament?: (targets: Array<{ objectId: number; partIndex: number }>, filamentId: number) => void
+  /**
+   * Set a whole object's material, addressed by INSTANCE key rather than by object id + part.
+   * Separate from `onReassignFilament` because a model with no parts list has no part to name, and
+   * its material lives on the instance -- see the note at the object row's badge.
+   */
+  onReassignInstanceFilament?: (key: string, filamentId: number) => void
   /** Map a (possibly-removed) material id to the one shown (removed -> material 1). */
   resolveFilamentId?: (id: number | null) => number | null
   /** Toggle an instance's Bambu "Printable" flag (per-instance, editor-owned). */
@@ -1340,14 +1376,7 @@ export function ObjectList({
   /** Open per-volume process settings for a modifier part (needs slice settings). */
   onEditAddedPartSettings?: (partKey: string) => void
   /** Slice-config per-object process overrides (keyed by Bambu objectId). Null without a profile. */
-  perObject?: {
-    sliceObjectIds: Set<number>
-    overrideCountFor: (objectId: number) => number
-    onEditObject: (objectId: number, name: string) => void
-    /** Open per-PART process settings for one part of an object (separate from the object's). */
-    onEditPart?: (objectId: number, partIndex: number, name: string) => void
-    partOverrideCountFor?: (objectId: number, partIndex: number) => number
-  }
+  perObject?: ObjectListPerObject
 }) {
   const resolveId = resolveFilamentId ?? ((id: number | null) => id)
   const liveColor = (filamentId: number | null, fallback: string | null): string | null =>
@@ -1414,16 +1443,33 @@ export function ObjectList({
                     </Chip>
                   </Tooltip>
                 )}
-                {perObjectId != null && onReassignFilament && materialParts.length > 0 ? (
+                {/*
+                  * An object row's material is changeable whenever the row HAS one, which is not the
+                  * same as having parts. A model with no parts list -- a primitive, a single-solid
+                  * import, a single-mesh object in a saved project -- keeps its material on the
+                  * instance, so gating this on `materialParts.length > 0` (as it did) dropped the
+                  * picker for exactly those and left a swatch that read as informational rather than
+                  * broken. `onReassignInstanceFilament` handles both shapes; see its own doc.
+                  */}
+                {onReassignInstanceFilament && !showParts ? (
+                  <FilamentBadge
+                    filamentId={materialParts.length > 0 ? partMaterial.uniformId : resolveId(instance.filamentId)}
+                    color={materialParts.length > 0
+                      ? (partMaterial.uniformId != null ? liveColor(partMaterial.uniformId, partMaterial.uniformColor) : null)
+                      : liveColor(resolveId(instance.filamentId), instance.color)}
+                    mixedColors={partMaterial.mixedColors}
+                    options={filamentOptions}
+                    title="Change material"
+                    onReassign={(fid) => onReassignInstanceFilament(instance.key, fid)}
+                  />
+                ) : onReassignInstanceFilament && materialParts.length > 0 ? (
                   <FilamentBadge
                     filamentId={partMaterial.uniformId}
                     color={partMaterial.uniformId != null ? liveColor(partMaterial.uniformId, partMaterial.uniformColor) : null}
                     mixedColors={partMaterial.mixedColors}
                     options={filamentOptions}
-                    title={materialParts.length > 1
-                      ? (partMaterial.mixedColors ? "Mixed materials: set all parts' material" : "Set all parts' material")
-                      : 'Change material'}
-                    onReassign={(fid) => onReassignFilament(materialParts.map((p) => ({ objectId: perObjectId, partIndex: p.partIndex })), fid)}
+                    title={partMaterial.mixedColors ? "Mixed materials: set all parts' material" : "Set all parts' material"}
+                    onReassign={(fid) => onReassignInstanceFilament(instance.key, fid)}
                   />
                 ) : (!showParts && <FilamentBadge filamentId={resolveId(instance.filamentId)} color={liveColor(resolveId(instance.filamentId), instance.color)} options={filamentOptions} />)}
                 {perObject && sliceObject != null && (
@@ -1573,5 +1619,5 @@ export function ObjectList({
       })}
     </List>
   )
-}
+})
 

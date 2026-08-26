@@ -12,7 +12,7 @@
  */
 import { z } from 'zod'
 import { auditLogEntrySchema } from './logs.js'
-import { preservedSliceSettingsSchema } from './slicing.js'
+import { preservedSliceSettingsSchema, sceneEditTextInfoSchema } from './slicing.js'
 import { AMS_TRAY_UNMAPPED, AMS_UNIT_TYPES, isPhysicalAmsTrayIndex, type AmsUnitType } from './ams-tray-index.js'
 
 /**
@@ -1277,7 +1277,13 @@ export const libraryThreeMfSceneInstancePartSchema = z.object({
   /** Raw `subtype` (support_blocker/support_enforcer/modifier_part/...) or null for a normal part. */
   subtype: z.string().nullable().default(null),
   /** Per-part PROCESS overrides saved in the 3MF; the editor re-seeds its per-part gear from these. */
-  processOverrides: z.record(z.string(), z.string()).optional()
+  processOverrides: z.record(z.string(), z.string()).optional(),
+  /**
+   * What a TEXT part was typed from. Declared HERE and not only on the parser's own type: Zod
+   * strips fields a schema does not name, so a scene field missing from this DTO reaches the
+   * server and silently never reaches the browser, and the text would reopen as plain geometry.
+   */
+  textInfo: sceneEditTextInfoSchema.optional()
 })
 export type LibraryThreeMfSceneInstancePart = z.infer<typeof libraryThreeMfSceneInstancePartSchema>
 
@@ -1311,6 +1317,22 @@ export const libraryThreeMfSceneInstanceSchema = z.object({
     z: z.number(),
     radius: z.number()
   })).optional(),
+  /**
+   * Height range modifiers parsed from `Metadata/layer_config_ranges.xml` (object-level, so
+   * identical across copies). Z bands in OBJECT space, `[minZ, maxZ)`, plus the process settings
+   * each band overrides. The editor re-seeds its bands from these on reopen; omitted when none.
+   */
+  heightRanges: z.array(z.object({
+    minZ: z.number(),
+    maxZ: z.number(),
+    settings: z.record(z.string(), z.string())
+  })).optional(),
+  /**
+   * Variable layer height profile (alternating z/height, mm, object space) parsed from
+   * `Metadata/layer_heights_profile.txt`. OVERRIDES `heightRanges`' layer heights at slice time,
+   * which is why every surface offering both has to say so.
+   */
+  layerHeightProfile: z.array(z.number()).optional(),
   /**
    * Per-object PROCESS overrides saved in the 3MF (object-level `<metadata>` in
    * model_settings.config), keyed by setting key. The editor re-seeds its per-object gear
@@ -1367,6 +1389,12 @@ export const libraryThreeMfSceneSchema = z.object({
   parts: z.array(libraryThreeMfScenePartSchema),
   /** Per-instance grouping with editable plate-local placements (used by the 3D editor). */
   instances: z.array(libraryThreeMfSceneInstanceSchema).default([]),
+  /**
+   * The machine's layer-height band (mm) from the project. Null = not stated, which the editor
+   * must treat as "use BambuStudio's default rule", never as unlimited: a layer outside the real
+   * band makes the engine DISCARD an entire variable-layer-height profile rather than clamp it.
+   */
+  layerHeightLimits: z.object({ min: z.number(), max: z.number() }).nullable().default(null),
   /** Prime tower for this plate, or null when disabled. */
   primeTower: libraryThreeMfPrimeTowerSchema.nullable().default(null),
   /** Project filament palette (1-based ids), for rendering colour paint in previews. */

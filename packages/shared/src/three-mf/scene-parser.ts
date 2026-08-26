@@ -25,7 +25,10 @@ import {
   isNonRenderableThreeMfPartSubtype,
   threeMfPartSubtypeCarriesFilament
 } from '../three-mf-part-subtype.js'
+import { parseTextInfo, type TextInfo } from './text-info.js'
 import type { PrinterModel } from '../printer.js'
+import { parseLayerConfigRanges, type ThreeMfHeightRange } from './layer-config-ranges.js'
+import { parseLayerHeightProfiles } from './layer-height-profile.js'
 import {
   collectNormalizedModels,
   decodeXmlAttributeValue,
@@ -57,6 +60,10 @@ export interface ThreeMfSceneEntries {
   projectSettingsJson?: string | null
   /** `Metadata/brim_ear_points.txt`: manual brim ears. */
   brimEarPointsText?: string | null
+  /** `Metadata/layer_config_ranges.xml`: per-object height range modifiers. */
+  layerConfigRangesXml?: string | null
+  /** `Metadata/layer_heights_profile.txt`: per-object variable layer height. */
+  layerHeightsProfileText?: string | null
   /** `Metadata/custom_gcode_per_layer.xml`: layer filament changes and pauses. */
   customGcodeText?: string | null
 }
@@ -108,6 +115,8 @@ export interface ThreeMfSceneInstancePart {
   subtype: string | null
   /** Per-part PROCESS overrides saved in the 3MF, so the editor can re-seed its per-part gear. */
   processOverrides?: Record<string, string>
+  /** What a TEXT part was typed from, so the editor reopens it editable instead of as geometry. */
+  textInfo?: TextInfo
 }
 
 export interface ThreeMfSceneInstance {
@@ -123,6 +132,16 @@ export interface ThreeMfSceneInstance {
   printable?: boolean
   /** Manual brim ears (object-local mm + radius), parsed from brim_ear_points.txt. */
   brimEars?: Array<{ x: number; y: number; z: number; radius: number }>
+  /**
+   * Height range modifiers (object-space Z bands + their setting overrides), parsed from
+   * layer_config_ranges.xml. Object-level, so every instance of the object reports the same set.
+   */
+  heightRanges?: ThreeMfHeightRange[]
+  /**
+   * Variable layer height profile (alternating z/height, object space), from
+   * layer_heights_profile.txt. OVERRIDES `heightRanges`' layer heights at slice time.
+   */
+  layerHeightProfile?: number[]
   /** Per-object PROCESS overrides (object-level model_settings metadata), keyed by setting key. */
   processOverrides?: Record<string, string>
   parts: ThreeMfSceneInstancePart[]
@@ -173,6 +192,14 @@ export interface ThreeMfScene {
   pauses?: Array<{ z: number }>
   /** Project filament palette (1-based ids), for rendering colour paint in previews. */
   projectFilaments?: Array<{ id: number; color: string | null }>
+  /**
+   * The machine's per-extruder layer-height band, mm, from `project_settings.config`. Null when the
+   * project does not state one, which callers must treat as "use BambuStudio's default rule"
+   * (0.07 min, 0.75 x nozzle max) rather than as unlimited: authoring a layer OUTSIDE the real band
+   * makes the engine discard an entire layer-height profile rather than clamp it
+   * (`PrintObject.cpp:3327-3338`).
+   */
+  layerHeightLimits: { min: number; max: number } | null
 }
 
 interface ThreeMfSceneBedPlacement {
@@ -202,6 +229,8 @@ interface ThreeMfModelSettingsPartMetadata {
   subtype: string | null
   /** Per-part PROCESS overrides (part-level `<metadata>` minus structural keys), for re-hydration. */
   processOverrides?: Record<string, string>
+  /** What a TEXT part was typed from, so the editor can reopen it for editing rather than rebuild. */
+  textInfo?: TextInfo
 }
 
 interface ThreeMfModelSettingsPlateScene {
@@ -301,10 +330,14 @@ export function buildSceneManifest(
   const { rootModelXml, modelSettingsXml } = entries
   const projectSettingsJson = entries.projectSettingsJson ?? null
   const brimEarPointsText = entries.brimEarPointsText ?? null
+  const layerConfigRangesXml = entries.layerConfigRangesXml ?? null
+  const layerHeightsProfileText = entries.layerHeightsProfileText ?? null
   const customGcodeText = entries.customGcodeText ?? null
 
   const rootComponentsByObjectId = parseRootModelComponents(rootModelXml)
   const brimEarsByObjectId = parseBrimEarPoints(brimEarPointsText, rootModelXml)
+  const heightRangesByObjectId = parseLayerConfigRanges(layerConfigRangesXml, rootModelXml)
+  const layerProfilesByObjectId = parseLayerHeightProfiles(layerHeightsProfileText, rootModelXml)
   const rootBuildTransformsByObjectId = parseRootBuildItemTransforms(rootModelXml)
   const rootBuildPrintableByObjectId = parseRootBuildItemPrintable(rootModelXml)
   const modelSettingsScene = parseModelSettingsScene(modelSettingsXml)
@@ -371,7 +404,8 @@ export function buildSceneManifest(
         componentObjectId: component.objectId,
         transform: [...component.transform],
         subtype,
-        ...(metadata?.processOverrides ? { processOverrides: metadata.processOverrides } : {})
+        ...(metadata?.processOverrides ? { processOverrides: metadata.processOverrides } : {}),
+        ...(metadata?.textInfo ? { textInfo: metadata.textInfo } : {})
       })
       if (isHelper) continue
       if (instanceName == null) instanceName = metadata?.name ?? null
@@ -410,6 +444,15 @@ export function buildSceneManifest(
         ...(brimEarsByObjectId.has(platedInstance.objectId)
           ? { brimEars: brimEarsByObjectId.get(platedInstance.objectId)!.map((ear) => ({ ...ear })) }
           : {}),
+        ...(heightRangesByObjectId.has(platedInstance.objectId)
+          ? {
+              heightRanges: heightRangesByObjectId.get(platedInstance.objectId)!
+                .map((range) => ({ ...range, settings: { ...range.settings } }))
+            }
+          : {}),
+        ...(layerProfilesByObjectId.has(platedInstance.objectId)
+          ? { layerHeightProfile: [...layerProfilesByObjectId.get(platedInstance.objectId)!] }
+          : {}),
         parts: instanceParts
       })
     }
@@ -428,7 +471,8 @@ export function buildSceneManifest(
     ...(pauses.length > 0 ? { pauses } : {}),
     ...(projectFilaments.length > 0
       ? { projectFilaments: projectFilaments.map((filament) => ({ id: filament.id, color: filament.color ?? null })) }
-      : {})
+      : {}),
+    layerHeightLimits: parseLayerHeightLimits(projectSettingsJson)
   }
 
   return scene
@@ -573,6 +617,30 @@ export function parseRootModelObjectIdOrder(xml: string): number[] {
  * Parse `Metadata/brim_ear_points.txt` ("object_id=<1-based ordinal>|x y z r ..." per
  * line, optional version header) into a map keyed by the ROOT 3MF object id.
  */
+/**
+ * The machine's layer-height band from `project_settings.config`. Both keys are per-extruder
+ * arrays; the first entry is taken, matching how the engine narrows the band across extruders.
+ * Null when the project states neither, so the caller applies BambuStudio's default rule instead
+ * of assuming a band the machine does not have.
+ */
+export function parseLayerHeightLimits(projectSettingsJson: string | null | undefined): { min: number; max: number } | null {
+  if (!projectSettingsJson) return null
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(projectSettingsJson)
+  } catch {
+    return null
+  }
+  if (!parsed || typeof parsed !== 'object') return null
+  const record = parsed as Record<string, unknown>
+  const min = firstFiniteNumber(record.min_layer_height)
+  const max = firstFiniteNumber(record.max_layer_height)
+  // A zero or missing max is BambuStudio's "derive it from the nozzle" sentinel, not a real limit,
+  // so the whole band is reported as unknown and the caller applies the default rule.
+  if (min == null || max == null || min <= 0 || max <= min) return null
+  return { min, max }
+}
+
 export function parseBrimEarPoints(
   text: string | null,
   rootModelXml: string
@@ -691,13 +759,16 @@ export function parseModelSettingsScene(xml: string): {
       // assigned to that region.
       const subtype = readThreeMfPartSubtype(partBlock, partAttrs)
       const ownExtruderId = readModelSettingsMetadataInt(partBlock, 'extruder')
+      const textInfoMatch = /<text_info\b[^>]*\/>/.exec(partBlock)
+      const textInfo = textInfoMatch ? parseTextInfo(textInfoMatch[0]) : null
       partMap.set(partId, {
         id: partId,
         name: readModelSettingsMetadataString(partBlock, 'name') ?? objectName,
         sourceFile: readModelSettingsMetadataString(partBlock, 'source_file'),
         extruderId: ownExtruderId ?? (isNonRenderableThreeMfPartSubtype(subtype) ? null : objectExtruderId),
         subtype,
-        ...(Object.keys(partOverrides).length > 0 ? { processOverrides: partOverrides } : {})
+        ...(Object.keys(partOverrides).length > 0 ? { processOverrides: partOverrides } : {}),
+        ...(textInfo ? { textInfo } : {})
       })
     }
     if (partMap.size > 0) partsByObjectId.set(objectId, partMap)

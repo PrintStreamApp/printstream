@@ -4,6 +4,8 @@ import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 import { devApiProxy } from './devApiProxy'
+import { webBuildIdPlugin } from './webBuildIdPlugin'
+import { workboxConfig } from './serviceWorkerConfig'
 
 const pwaIconVersion = '20260519a'
 const workspaceRoot = fileURLToPath(new URL('../..', import.meta.url))
@@ -45,23 +47,10 @@ export default defineConfig(({ command, mode }) => {
     plugins: [
       devApiProxy(apiPort),
       react(),
+      webBuildIdPlugin(),
       VitePWA({
         registerType: 'autoUpdate',
-        workbox: {
-          cleanupOutdatedCaches: true,
-          clientsClaim: true,
-          maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
-          // The OpenCASCADE build is ~7.6 MB and is only reached when someone imports a STEP file in
-          // the 3MF editor. Precaching it would make every install pay that download up front (and
-          // trip the size limit above, which fails the build); it is fetched on demand instead.
-          globIgnores: ['**/occt-import-js*.wasm'],
-          navigateFallbackDenylist: [/^\/api(?:\/|$)/, /^\/ws(?:\/|$)/],
-          skipWaiting: true,
-          // Pulled in verbatim by the generated service worker. Adds the
-          // `push` and `notificationclick` listeners used by the
-          // notifications-browser plugin.
-          importScripts: ['/push-handler.js']
-        },
+        workbox: workboxConfig,
         manifest: {
           name: 'PrintStream',
           short_name: 'PrintStream',

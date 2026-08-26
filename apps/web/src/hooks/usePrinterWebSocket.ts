@@ -6,6 +6,7 @@
 import { useEffect } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { wsEventSchema, type DiscoveredPrinter, type PrinterStatus } from '@printstream/shared'
+import { observeServedWebBuildId } from '../lib/appStaleness'
 import { applyBridgeBackupStatus, applyBridgeDebugCaptureStatus, invalidateBridgeQueries } from '../lib/bridgeQueryInvalidation'
 import { clearPrinterFtpActivity, markPrinterFtpActivity } from './usePrinterFtpActivity'
 import { markSnapshotUpdated } from './useSnapshotInterest'
@@ -49,6 +50,12 @@ export function usePrinterWebSocket(enabled = true, scopeKey = 'default'): void 
       }
 
       const event = parsed.data
+      if (event.type === 'hello') {
+        // Every reconnect re-runs the hello, which is what makes this the load-bearing
+        // channel for a phone waking up: the socket died while the app was suspended, so
+        // coming back always re-asks whether this build is still the current one.
+        observeServedWebBuildId(event.webBuildId)
+      }
       if (event.type === 'printer.status') {
         queryClient.setQueryData<Record<string, PrinterStatus>>(
           workspaceQueryKeys.printerStatus(scopeKey),

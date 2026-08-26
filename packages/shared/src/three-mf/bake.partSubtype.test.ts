@@ -10,7 +10,7 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { applyPartTypeChanges, renderImportedMultiPartModelSettingsXml } from './bake-documents'
+import { applyPartTypeChanges, renderImportedMultiPartModelSettingsXml } from './bake-documents.js'
 
 test('an imported part subtype is canonicalised on the way out', () => {
   // `ParameterModifier` is what older and foreign writers use; the engine matches only

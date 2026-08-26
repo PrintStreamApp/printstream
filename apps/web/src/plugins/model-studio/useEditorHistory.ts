@@ -20,6 +20,7 @@
  * calls `markSaved()` once a save succeeds.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type MutableRefObject, type SetStateAction } from 'react'
+import { setAppBusy } from '../../lib/appBusy'
 import { toast } from '../../lib/toast'
 import { type SliceSettingsController } from '../../components/library/SliceSettingsPanel'
 import { cloneEditorState, type EditorState } from './lib/editorModel'
@@ -115,7 +116,15 @@ export function useEditorHistory({
     setDirty(model.isDirty)
     setCanUndo(model.canUndo)
     setCanRedo(model.canRedo)
+    // Unsaved edits block an automatic reload onto a new build (`lib/appStaleness.ts`).
+    // The `beforeunload` guard below cannot cover that: a scripted reload never triggers
+    // it, and mobile Safari ignores it outright.
+    setAppBusy('editor-edits', model.isDirty)
   }, [])
+
+  // Closing the editor with unsaved edits must release the hold, or a discarded project
+  // would pin the whole app on an old build for the rest of the session.
+  useEffect(() => () => setAppBusy('editor-edits', false), [])
 
   // Warn on page refresh / navigation away while there are unsaved edits (the in-app
   // close already warns via handleCloseRequest; this covers the browser-level exit).

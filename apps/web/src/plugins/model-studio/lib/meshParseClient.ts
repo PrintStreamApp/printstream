@@ -36,6 +36,7 @@
  */
 import * as THREE from 'three'
 import type { MeshParseRequest, MeshParseResponse, ParsedMeshEntry } from './meshParseWorker'
+import { applyMeshPaint } from './meshParseCore'
 import { parseStlGeometry, parseThreeMfModelEntry } from './threeMfScene'
 
 /** The FILE could not be parsed. Retried on the main thread only where that runs different code. */
@@ -292,9 +293,7 @@ function reconstruct(entry: ParsedMeshEntry): THREE.BufferGeometry {
   const geometry = new THREE.BufferGeometry()
   geometry.setAttribute('position', new THREE.BufferAttribute(entry.position, 3))
   if (entry.normal) geometry.setAttribute('normal', new THREE.BufferAttribute(entry.normal, 3))
-  if (entry.supportPaint) geometry.userData.supportPaint = entry.supportPaint
-  if (entry.seamPaint) geometry.userData.seamPaint = entry.seamPaint
-  if (entry.colorPaint) geometry.userData.colorPaint = entry.colorPaint
+  applyMeshPaint(geometry.userData, entry.paint)
   geometry.computeBoundingSphere()
   return geometry
 }
