@@ -46,6 +46,7 @@ import {
   isProcessProfileCompatible,
   matchesPrinterModel,
   matchPlateTypeByLabel,
+  namesADifferentPrinterModel,
   pickMachineProfileByName,
   pickMachineProfileForPrinter,
   resolveCompatiblePlateTypes,
@@ -68,6 +69,12 @@ export interface MachineTargetIntent {
   nozzleDiameter?: string
   nozzleFlow?: PrinterNozzleFlow
   plateType?: string
+  /**
+   * A machine preset chosen by hand. Honoured only while the current model and nozzle can still
+   * offer it, so switching printer does not silently slice with a preset for the old one; the
+   * pick is KEPT either way, so switching back restores it (invariant I5).
+   */
+  printerProfileId?: string
 }
 
 export const EMPTY_MACHINE_TARGET_INTENT: MachineTargetIntent = {}
@@ -101,7 +108,7 @@ export type MachineTargetOrigin = 'unseeded' | 'user' | 'project' | 'printer' | 
 
 /** A user pick the current inputs cannot represent. The intent keeps it; this reports the swap. */
 export interface MachineTargetConflict {
-  field: 'printerModel' | 'nozzleDiameter' | 'plateType'
+  field: 'printerModel' | 'nozzleDiameter' | 'plateType' | 'printerProfileId'
   /** What the user asked for. */
   requested: string
   /** What is in force instead. */
@@ -246,23 +253,52 @@ export function resolveMachineTarget(inputs: MachineTargetInputs, intent: Machin
   const parsedNozzle = Number.parseFloat(nozzleDiameter)
   const selectedNozzleDiameters = Number.isFinite(parsedNozzle) && parsedNozzle > 0 ? [parsedNozzle] : []
 
-  // 4. Machine profile: derived only; there is no user picker for it, and adding one would need an
-  //    intent field rather than another writer.
+  // 4. Machine profile. Derived unless the user picked one, which they do through
+  //    `intent.printerProfileId` rather than a second writer.
   const compatibleMachineProfiles = machineProfiles.filter((profile) => isMachineProfileCompatible(profile, selectedPrinterModel, selectedNozzleDiameters))
-  const selectableMachineProfiles = compatibleMachineProfiles.filter(isSelectableSlicingPreset)
+  // Exact model for the PICKER. `isMachineProfileCompatible` matches on token boundaries, so an
+  // "H2D Pro" preset passes for an "H2D" project (the model is a token of the variant's name) and
+  // the picker offered a machine the project is not for. `namesADifferentPrinterModel` compares
+  // CANONICAL keys (H2DPRO vs H2D) and answers false when a preset names no model at all, so
+  // custom and hand-named presets are never hidden by it.
+  //
+  // Falls back to the unfiltered list rather than emptying: with no selectable machine there is no
+  // target at all, and a catalogue holding only a neighbouring variant should still slice rather
+  // than strand the user with an empty picker.
+  const selectableForModel = compatibleMachineProfiles.filter(isSelectableSlicingPreset)
+  const exactModelMachineProfiles = selectableForModel.filter((profile) => !namesADifferentPrinterModel(profile, selectedPrinterModel))
+  const selectableMachineProfiles = exactModelMachineProfiles.length > 0 ? exactModelMachineProfiles : selectableForModel
   const bakedProfileName = bakedIndex?.printerProfileName ?? null
   const printerMatchedProfile = targetMode === 'realPrinter' ? pickMachineProfileForPrinter(selectableMachineProfiles, selectedPrinter) : null
   const bakedMatchedProfile = pickSelectableSlicingPresetByName(selectableMachineProfiles, bakedProfileName)
     ?? pickMachineProfileByName(selectableMachineProfiles, bakedProfileName, projectModel ?? 'unknown')
-  const pickedMachineProfile = printerMatchedProfile ?? bakedMatchedProfile ?? selectableMachineProfiles[0] ?? null
+  // A hand-picked preset outranks every derived source, but only while it is still on offer: the
+  // list is filtered by the selected model and nozzle, so a pick made for one printer must not
+  // survive onto another. Honouring it here rather than writing it back is what keeps this a
+  // derivation (invariant I1).
+  const intentMachineProfile = intent.printerProfileId
+    ? selectableMachineProfiles.find((profile) => profile.id === intent.printerProfileId) ?? null
+    : null
+  const pickedMachineProfile = intentMachineProfile ?? printerMatchedProfile ?? bakedMatchedProfile ?? selectableMachineProfiles[0] ?? null
   const printerProfileId = pickedMachineProfile?.id ?? ''
-  const machineProfileOrigin: MachineTargetOrigin = printerMatchedProfile
-    ? 'printer'
-    : bakedMatchedProfile
-      ? 'project'
-      : pickedMachineProfile
-        ? 'catalogue'
-        : 'unseeded'
+  const machineProfileOrigin: MachineTargetOrigin = intentMachineProfile
+    ? 'user'
+    : printerMatchedProfile
+      ? 'printer'
+      : bakedMatchedProfile
+        ? 'project'
+        : pickedMachineProfile
+          ? 'catalogue'
+          : 'unseeded'
+  if (intent.printerProfileId && machineProfileOrigin !== 'user') {
+    // Named, not id'd: both sides of this conflict are preset ids, which tell the reader nothing.
+    const requestedName = machineProfiles.find((profile) => profile.id === intent.printerProfileId)?.name
+    conflicts.push({
+      field: 'printerProfileId',
+      requested: requestedName ?? intent.printerProfileId,
+      applied: pickedMachineProfile?.name ?? ''
+    })
+  }
   const selectedMachineProfile = pickedMachineProfile
   const targetPrinterModel = resolveSliceDialogTargetPrinterModel(selectedPrinterModel, selectedMachineProfile)
 

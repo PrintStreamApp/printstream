@@ -126,6 +126,7 @@ export async function buildLocalMachineRetargetPlan(input: LocalMachineRetargetI
     printerModel,
     processConfig: await resolveTargetProcessConfig(target, input.slicerTargetId, resolvers),
     processSettingOverrides: target.processSettingOverrides ?? {},
+    machineSettingOverrides: target.machineSettingOverrides ?? {},
     filamentRebinds: null
   }
   return {

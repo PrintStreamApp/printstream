@@ -31,7 +31,7 @@ import { filamentIdForPresetName } from './repairs/filament-ids.js'
 import { filamentSettingsCatalog, FILAMENT_SETTING_KEYS, isFilamentIdentitySettingKey } from './filament-settings.js'
 import { FILAMENT_PRESET_DEFAULTS } from './generated/preset-options.generated.js'
 import type { ProcessConfig } from './process-settings.js'
-import { extractFilamentOverriddenKeys } from './three-mf-project-config.js'
+import { extractChangedFromSystemKeys, extractFilamentOverriddenKeys, filamentSlotCount, withChangedFromSystemSlot } from './three-mf-project-config.js'
 
 /** How one filament slot rebinds on the new machine. */
 export interface FilamentSlotRebind {
@@ -93,11 +93,7 @@ export function applyFilamentSlotOverrides(
   overridesByPosition: Record<number, ProcessConfig>,
   slotConfigs: Array<ProcessConfig | null>
 ): Record<string, unknown> {
-  const identityCount = Math.max(
-    Array.isArray(record.filament_settings_id) ? record.filament_settings_id.length : 0,
-    Array.isArray(record.filament_colour) ? record.filament_colour.length : 0,
-    Array.isArray(record.filament_type) ? record.filament_type.length : 0
-  )
+  const identityCount = filamentSlotCount(record)
   if (identityCount === 0) return record
   const positions = Object.keys(overridesByPosition).map(Number).filter((position) => Number.isInteger(position) && position >= 1 && position <= identityCount)
   if (positions.length === 0) return record
@@ -169,16 +165,15 @@ export function applyFilamentSlotOverrides(
 
   // Append the written keys to each slot's changed-from-system record: layout
   // `[process, ...filament slots 1..N, machine]`. A short/absent record is padded to shape first.
-  const existingRecord = Array.isArray(record.different_settings_to_system)
-    ? record.different_settings_to_system.map((entry) => (typeof entry === 'string' ? entry : ''))
-    : []
-  while (existingRecord.length < identityCount + 2) existingRecord.push('')
+  let updatedRecord = record.different_settings_to_system
   for (const [position, keys] of recordedBySlot) {
-    const current = new Set((existingRecord[position] ?? '').split(';').map((key) => key.trim()).filter(Boolean))
+    // MERGED here, unlike the machine slot: a rebind adds the keys it wrote and knows nothing about
+    // the rest of that slot's history, so it must not replace what it did not compute.
+    const current = new Set(extractChangedFromSystemKeys(updatedRecord, position, () => true))
     for (const key of keys) current.add(key)
-    existingRecord[position] = [...current].join(';')
+    updatedRecord = withChangedFromSystemSlot(updatedRecord, position, [...current], identityCount)
   }
-  next.different_settings_to_system = existingRecord
+  next.different_settings_to_system = updatedRecord
   return next
 }
 
@@ -261,11 +256,7 @@ export function rebindProjectFilamentPhysics(
   record: Record<string, unknown>,
   slots: FilamentSlotRebind[]
 ): Record<string, unknown> {
-  const identityCount = Math.max(
-    Array.isArray(record.filament_settings_id) ? record.filament_settings_id.length : 0,
-    Array.isArray(record.filament_colour) ? record.filament_colour.length : 0,
-    Array.isArray(record.filament_type) ? record.filament_type.length : 0
-  )
+  const identityCount = filamentSlotCount(record)
   // Defensive: the caller derives `slots` from the same record, so a mismatch means the record
   // changed underneath: leave it alone rather than mis-column it.
   if (identityCount === 0 || slots.length !== identityCount) return record

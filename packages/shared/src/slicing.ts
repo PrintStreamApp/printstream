@@ -159,6 +159,13 @@ const slicingBaseTargetSchema = z.object({
    */
   processSettingOverrides: processSettingOverridesSchema.optional(),
   /**
+   * Project-local MACHINE (printer) setting overrides: the printer's answer to
+   * `processSettingOverrides`, applied on top of the resolved machine preset. Lets a project carry
+   * a modified printer without minting a global preset, exactly as a modified process does.
+   * Applied AFTER the machine step, since they are the same keys the preset writes.
+   */
+  machineSettingOverrides: processSettingOverridesSchema.optional(),
+  /**
    * Per-slice filament setting overrides (e.g. `filament_flow_ratio`). Sparse map
    * of changed keys applied on top of every resolved filament profile before
    * slicing: used to apply a saved flow-ratio calibration at slice time.
@@ -175,7 +182,19 @@ export type SlicingRealPrinterTarget = z.infer<typeof slicingRealPrinterTargetSc
 export const slicingManualProfileTargetSchema = slicingBaseTargetSchema.extend({
   mode: z.literal('manualProfile'),
   printerModel: z.string().trim().min(1).default('unknown'),
-  printerProfileId: z.string().trim().min(1)
+  printerProfileId: z.string().trim().min(1),
+  /**
+   * The user PICKED this machine preset, as opposed to the client's cascade deriving it.
+   *
+   * Load-bearing for saves, not slices. `printerProfileId` is always populated: the editor
+   * resolves one whether or not anyone chose it, and for a project naming a preset this workspace
+   * does not hold, that resolution falls back to the first catalogue profile matching the model.
+   * Without this flag the server cannot tell a pick from a fallback, so an ordinary save of a
+   * project carrying a hand-tuned BambuStudio printer preset re-authored it onto a stock one and
+   * threw away its start G-code, accelerations and limits. Absent means "not stated": treated as
+   * NOT chosen, which is the preserving direction.
+   */
+  printerProfileChosen: z.boolean().optional()
 })
 export type SlicingManualProfileTarget = z.infer<typeof slicingManualProfileTargetSchema>
 
@@ -667,6 +686,47 @@ export const sceneEditPartTransformSchema = z.object({
 export type SceneEditPartTransform = z.infer<typeof sceneEditPartTransformSchema>
 
 /**
+ * REMOVAL of one part (volume) from an in-project object: BambuStudio's per-volume Delete.
+ *
+ * This is the one part seam that is subtractive, and it needs to exist because the others cannot
+ * express it. `SceneEdit.instances` is a COMPLETE list, so omitting an instance deletes the object
+ * and `removeUnreferencedObjects` sweeps its geometry; parts have no such enumeration: they live
+ * only in the base file's object XML and are addressed by ordinal, so a part's absence from an edit
+ * means "leave it alone", never "remove it". Modelled on `removedEmbeddedPresets`, the other
+ * explicit removal list.
+ *
+ * Keyed like {@link sceneEditPartTypeChangeSchema}, by objectId + the part's BASE-FILE ORDINAL, and
+ * that is load-bearing for the bake ORDER: every other part-scoped seam addresses the same base
+ * ordinals, so removals are applied AFTER all of them. Applying them first would shift the ordinals
+ * out from under `partFilaments` / `partTypeChanges` / `partTransforms` / `partProcessOverrides`,
+ * which is the failure mode that does not throw: it silently retargets an edit onto the wrong
+ * volume. For the same reason the client keeps each surviving part's stored `partIndex` rather than
+ * renumbering: a removal changes which parts exist, never what the remaining ones are called.
+ */
+export const sceneEditRemovedPartSchema = z.object({
+  /** In-project object id, or a NEGATIVE clone placeholder (see `sceneEditObjectCloneSchema`). */
+  objectId: z.number().int().refine((value) => value !== 0, 'objectId must not be 0'),
+  /** The part's 0-based ordinal in the BASE file, unaffected by other removals in the same edit. */
+  partIndex: z.number().int().nonnegative()
+})
+export type SceneEditRemovedPart = z.infer<typeof sceneEditRemovedPartSchema>
+
+/**
+ * The import counterpart of {@link sceneEditRemovedPartSchema}: dropping one solid of a multi-solid
+ * import that has never been saved (a STEP assembly, a Split-to-parts result, an imported 3MF).
+ *
+ * Exists because no feature here may require a save first, and because the staged record is the
+ * bake's only source for an import's solids: the client cannot drop one on its own. `partIndex` is
+ * the solid's index in that staged record, so it keeps addressing the same solid however many
+ * others are removed alongside it, exactly as the baked ordinals do.
+ */
+export const sceneEditImportRemovedPartSchema = z.object({
+  importId: z.string().trim().min(1),
+  partIndex: z.number().int().nonnegative()
+})
+export type SceneEditImportRemovedPart = z.infer<typeof sceneEditImportRemovedPartSchema>
+
+/**
  * A part-type change for one solid of a multi-solid import, keyed by import + 0-based solid
  * index, an unsaved import has no baked 3MF part ids yet, so its parts can't use
  * {@link sceneEditPartTypeChangeSchema}. Applied while the import's solids are baked into one
@@ -903,6 +963,14 @@ export const sceneEditSchema = z.object({
   partTypeChanges: z.array(sceneEditPartTypeChangeSchema).max(400).optional(),
   /** Optional part-placement changes (move/rotate/scale a part inside its object). */
   partTransforms: z.array(sceneEditPartTransformSchema).max(400).optional(),
+  /**
+   * Optional part REMOVALS on in-project objects. Complete state, like every other domain the
+   * editor owns: the whole set of parts this session removed, not a diff. Applied after every
+   * other part-scoped seam so their base ordinals stay valid; see the schema.
+   */
+  removedParts: z.array(sceneEditRemovedPartSchema).max(400).optional(),
+  /** Optional solid removals on multi-solid imports, keyed by import + solid index. */
+  importRemovedParts: z.array(sceneEditImportRemovedPartSchema).max(400).optional(),
   /** Optional per-part filament for multi-solid imports, keyed by import + solid index. */
   importPartFilaments: z.array(sceneEditImportPartFilamentSchema).max(400).optional(),
   /** Optional per-part process overrides for multi-solid imports, keyed by import + solid index. */
@@ -1197,6 +1265,12 @@ const arrangedThreeMfBakeSchema = z.object({
    * (`apps/slicer/src/index.ts`). Absent/empty ⇒ the base project settings are preserved as-is.
    */
   processSettingOverrides: processSettingOverridesSchema.optional(),
+  /**
+   * Project-local machine (printer) setting overrides, merged into the saved 3MF's
+   * `project_settings.config` after the machine step so an edited printer persists into the
+   * project rather than only into one slice. Absent/empty leaves the machine block as authored.
+   */
+  machineSettingOverrides: processSettingOverridesSchema.optional(),
   /**
    * Per-MATERIAL filament-setting overrides from the material tune dialog ("Save in this 3MF"),
    * keyed by the material's 1-based SAVED slot position (post-renumber, never a session id) and

@@ -73,6 +73,12 @@ export interface MachineTarget {
   selectPrinterModel: (model: string) => void
   printerModelOptions: string[]
   printerProfileId: string
+  /**
+   * Pick the machine preset directly, rather than accepting the one the cascade resolved to.
+   * Recorded as intent, so a pick survives the re-resolution that follows it; a pick the current
+   * model/nozzle cannot offer is reported as a conflict and kept, not applied.
+   */
+  selectPrinterProfile: (profileId: string) => void
   selectedMachineProfile: SlicingPresetSummary | null
   targetPrinterModel: string | null
   nozzleDiameter: string
@@ -136,6 +142,9 @@ export function useMachineTarget(params: MachineTargetParams): MachineTarget {
   const selectPrinterModel = useCallback((model: string) => {
     setIntent((previous) => ({ ...previous, printerModel: model }))
   }, [])
+  const selectPrinterProfile = useCallback((profileId: string) => {
+    setIntent((previous) => ({ ...previous, printerProfileId: profileId }))
+  }, [])
   const setNozzleDiameter = useCallback((value: React.SetStateAction<string>) => {
     const next = typeof value === 'function' ? value(resolutionRef.current.nozzleDiameter) : value
     setIntent((previous) => ({ ...previous, nozzleDiameter: next }))
@@ -164,6 +173,7 @@ export function useMachineTarget(params: MachineTargetParams): MachineTarget {
     selectPrinterModel,
     printerModelOptions: resolution.printerModelOptions,
     printerProfileId: resolution.printerProfileId,
+    selectPrinterProfile,
     selectedMachineProfile: resolution.selectedMachineProfile,
     targetPrinterModel: resolution.targetPrinterModel,
     nozzleDiameter: resolution.nozzleDiameter,

@@ -346,6 +346,26 @@ export function useEditorSave({
     return overrides && Object.keys(overrides).length > 0 ? overrides : undefined
   }, [sliceConfigRef])
 
+  /**
+   * The project's own machine settings. Sent even when EMPTY, unlike its process sibling: an empty
+   * map is how "I reset every printer override" is expressed, and omitting it made that save a
+   * no-op that the next open then undid. The server no-ops on its own when the project records
+   * nothing either, so an untouched printer still writes nothing.
+   *
+   * OMITTED, though, until the file's own overrides are KNOWN. Empty means "reset them all", so
+   * sending it while the re-hydration lookup has not answered would erase overrides the user still
+   * has and never saw: the API answers "unknown" for a bridge that was briefly offline or a history
+   * version it cannot find, and the map is legitimately empty until an answer arrives. Omitting
+   * leaves the project's record untouched, which is the only safe reading of "I do not know".
+   */
+  const collectMachineSettingOverrides = useCallback((): Record<string, string | string[]> | undefined => {
+    const config = sliceConfigRef.current
+    if (!config) return undefined
+    const overrides = config.machineSettingOverrides
+    if (overrides && Object.keys(overrides).length > 0) return overrides
+    return config.machineSettingOverridesKnown ? overrides : undefined
+  }, [sliceConfigRef])
+
   // Per-MATERIAL tune overrides ("Save in this 3MF"), keyed by the material's 1-based SAVED slot
   // position, the position in the desired list the save bakes as slots 1..N, never its session
   // id, which a material add/remove renumbers (audit invariant I4). Empty ⇒ omit.
@@ -383,6 +403,7 @@ export function useEditorSave({
             sceneEdit: await authorEdit(buildSceneEditOut(current, { thumbnails })),
             objectProcessOverrides: collectObjectProcessOverrides(),
             processSettingOverrides: collectProcessSettingOverrides(),
+            machineSettingOverrides: collectMachineSettingOverrides(),
             filamentSettingOverrides: collectFilamentSettingOverrides(),
             retarget,
             slicerTargetId: retarget ? sliceConfigRef.current?.selectedSlicerTargetId : undefined
@@ -393,7 +414,7 @@ export function useEditorSave({
         setSaving(false)
       }
     })()
-  }, [effectiveBaseFileId, effectiveBaseVersionId, editorBorn, runSave, buildSceneEditOut, authorEdit, captureAllPlateThumbnails, collectObjectProcessOverrides, collectProcessSettingOverrides, collectFilamentSettingOverrides, stateRef, sliceConfigRef, saveTarget, confirmOverwritingConcurrentSave, contentBase])
+  }, [effectiveBaseFileId, effectiveBaseVersionId, editorBorn, runSave, buildSceneEditOut, authorEdit, captureAllPlateThumbnails, collectObjectProcessOverrides, collectProcessSettingOverrides, collectMachineSettingOverrides, collectFilamentSettingOverrides, stateRef, sliceConfigRef, saveTarget, confirmOverwritingConcurrentSave, contentBase])
 
   const handleSaveAs = useCallback((name: string, destinationFolderId: string | null) => {
     const current = stateRef.current
@@ -419,6 +440,7 @@ export function useEditorSave({
             sceneEdit: await authorEdit(buildSceneEditOut(current, { thumbnails })),
             objectProcessOverrides: collectObjectProcessOverrides(),
             processSettingOverrides: collectProcessSettingOverrides(),
+            machineSettingOverrides: collectMachineSettingOverrides(),
             filamentSettingOverrides: collectFilamentSettingOverrides(),
             retarget,
             slicerTargetId: retarget ? sliceConfigRef.current?.selectedSlicerTargetId : undefined
@@ -442,7 +464,7 @@ export function useEditorSave({
         setSaving(false)
       }
     })()
-  }, [effectiveBaseFileId, effectiveBaseVersionId, editorBorn, savedFile, saveAsBridgeId, runSave, buildSceneEditOut, authorEdit, captureAllPlateThumbnails, collectObjectProcessOverrides, collectProcessSettingOverrides, collectFilamentSettingOverrides, stateRef, sliceConfigRef, onSavedAs, contentBase])
+  }, [effectiveBaseFileId, effectiveBaseVersionId, editorBorn, savedFile, saveAsBridgeId, runSave, buildSceneEditOut, authorEdit, captureAllPlateThumbnails, collectObjectProcessOverrides, collectProcessSettingOverrides, collectMachineSettingOverrides, collectFilamentSettingOverrides, stateRef, sliceConfigRef, onSavedAs, contentBase])
 
   /**
    * "Export object as 3MF": bake ONLY the given object into a new single-plate 3MF library
@@ -470,6 +492,7 @@ export function useEditorSave({
             sceneEdit: buildSceneEditOut(exportState, { thumbnails }),
             objectProcessOverrides: collectObjectProcessOverrides(exportState),
             processSettingOverrides: collectProcessSettingOverrides(),
+            machineSettingOverrides: collectMachineSettingOverrides(),
             filamentSettingOverrides: collectFilamentSettingOverrides(),
             retarget,
             slicerTargetId: retarget ? sliceConfigRef.current?.selectedSlicerTargetId : undefined,
@@ -484,7 +507,7 @@ export function useEditorSave({
         setSaving(false)
       }
     })()
-  }, [baseFileId, baseVersionId, saveAsBridgeId, runSave, buildSceneEditOut, captureAllPlateThumbnails, worldFootprintCenterFor, collectObjectProcessOverrides, collectProcessSettingOverrides, collectFilamentSettingOverrides, stateRef, sliceConfigRef])
+  }, [baseFileId, baseVersionId, saveAsBridgeId, runSave, buildSceneEditOut, captureAllPlateThumbnails, worldFootprintCenterFor, collectObjectProcessOverrides, collectProcessSettingOverrides, collectMachineSettingOverrides, collectFilamentSettingOverrides, stateRef, sliceConfigRef])
 
   /**
    * "Download 3MF project": the same single-object bake as {@link handleExportObjectAs3mf}
@@ -515,6 +538,7 @@ export function useEditorSave({
             sceneEdit: buildSceneEditOut(exportState, { thumbnails }),
             objectProcessOverrides: collectObjectProcessOverrides(exportState),
             processSettingOverrides: collectProcessSettingOverrides(),
+            machineSettingOverrides: collectMachineSettingOverrides(),
             filamentSettingOverrides: collectFilamentSettingOverrides(),
             retarget,
             slicerTargetId: retarget ? sliceConfigRef.current?.selectedSlicerTargetId : undefined,
@@ -530,7 +554,7 @@ export function useEditorSave({
         setSaving(false)
       }
     })()
-  }, [baseFileId, baseVersionId, buildSceneEditOut, captureAllPlateThumbnails, worldFootprintCenterFor, collectObjectProcessOverrides, collectProcessSettingOverrides, collectFilamentSettingOverrides, stateRef, sliceConfigRef, saveTarget])
+  }, [baseFileId, baseVersionId, buildSceneEditOut, captureAllPlateThumbnails, worldFootprintCenterFor, collectObjectProcessOverrides, collectProcessSettingOverrides, collectMachineSettingOverrides, collectFilamentSettingOverrides, stateRef, sliceConfigRef, saveTarget])
 
   return {
     savedFile,

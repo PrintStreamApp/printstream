@@ -1,7 +1,7 @@
 /**
  * BambuStudio's per-material-combination support recommendations: the vendored table from
- * `resources/profiles/BBL/filament/support_recommended_params.json` (v3.0) plus the lookup that
- * mirrors `query_support_recommended_params_for_combination` (ConfigManipulation.cpp) and
+ * `resources/profiles/BBL/filament/support_recommended_params.json` (v3.0, as vendored at
+ * BambuStudio 02.08.02.61) plus the lookup that mirrors `query_support_recommended_params_for_combination` (ConfigManipulation.cpp) and
  * `PresetBundle::load_support_recommended_params`.
  *
  * This module owns only the DATA and the raw pairing lookup. Deciding whether a lookup should
@@ -67,7 +67,7 @@ const TREE_HYBRID_FULL_CHANGES: Readonly<Record<string, string>> = {
   support_interface_speed: '50'
 }
 
-/** Tree support with every gap zeroed, including the side walls (soluble-like interfaces). */
+/** Tree support with the top gap and the side walls zeroed (TPU printed against PLA). */
 const TREE_ZERO_GAP_CHANGES: Readonly<Record<string, string>> = {
   enable_support: serializeProcessBool(true),
   support_type: 'tree(auto)',
@@ -76,6 +76,18 @@ const TREE_ZERO_GAP_CHANGES: Readonly<Record<string, string>> = {
   support_interface_pattern: 'rectilinear_interlaced',
   support_interface_spacing: '0',
   support_object_xy_distance: '0'
+}
+
+/**
+ * {@link TREE_ZERO_GAP_CHANGES} plus the UNDERSIDE gap, for a genuinely soluble interface (PVA).
+ *
+ * The two were one constant until BambuStudio 02.08.02.61 added `support_bottom_z_distance` to the
+ * PVA entry alone, so they are kept apart deliberately: a soluble interface dissolves away and can
+ * sit flush on the model, while TPU-on-PLA still needs its release gap underneath.
+ */
+const TREE_ZERO_GAP_SOLUBLE_CHANGES: Readonly<Record<string, string>> = {
+  ...TREE_ZERO_GAP_CHANGES,
+  support_bottom_z_distance: '0'
 }
 
 /** Tree support with the vertical interface gaps zeroed (dedicated support materials). */
@@ -115,7 +127,7 @@ export const SUPPORT_RECOMMENDED_COMBINATIONS: readonly SupportRecommendedCombin
     changes: TREE_HYBRID_FULL_CHANGES
   },
   { modelMaterial: 'PLA', modelMatch: 'type', supportMaterials: ['PETG'], supportMatch: 'type', changes: TREE_HYBRID_FULL_CHANGES },
-  { modelMaterial: 'PLA', modelMatch: 'type', supportMaterials: ['PVA'], supportMatch: 'type', changes: TREE_ZERO_GAP_CHANGES },
+  { modelMaterial: 'PLA', modelMatch: 'type', supportMaterials: ['PVA'], supportMatch: 'type', changes: TREE_ZERO_GAP_SOLUBLE_CHANGES },
   {
     modelMaterial: 'PETG',
     modelMatch: 'type',

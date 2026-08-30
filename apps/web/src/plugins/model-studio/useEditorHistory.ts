@@ -261,12 +261,13 @@ export function useEditorHistory({
     return () => { ref.current = null }
   }, [sliceConfig, recordMaterialEdit])
 
-  // Global process-setting edits (profile switch + the process-settings dialog, both rendered by
-  // the host slice modal) call this BEFORE mutating the controller. Snapshot the current material
-  // state, which now carries processProfileId/processSettingOverrides, so the edit is undoable
-  // and lights Save. Mirrors the material-picker listener (markSettingsDirty) above.
+  // Global settings edits (the process profile switch, the process-settings dialog, and the
+  // printer-settings dialog's "Apply to this project", all rendered by the host slice modal) call
+  // this BEFORE mutating the controller. Snapshot the current material state, which now carries
+  // processProfileId/processSettingOverrides/machineSettingOverrides, so the edit is undoable and
+  // lights Save. Mirrors the material-picker listener (markSettingsDirty) above.
   useEffect(() => {
-    const ref = sliceConfig?.processEditListenerRef
+    const ref = sliceConfig?.settingsEditListenerRef
     if (!ref) return
     ref.current = recordSliceConfigHistory
     return () => { ref.current = null }
@@ -337,6 +338,7 @@ export function useEditorHistory({
       // snapshot these record deliberately spans the whole slice config, not just the target.
       selectPrinter: (printer) => { recordSliceConfigHistory(); sliceConfig.selectPrinter(printer) },
       selectPrinterModel: (model) => { recordSliceConfigHistory(); sliceConfig.selectPrinterModel(model) },
+      selectPrinterProfile: (profileId) => { recordSliceConfigHistory(); sliceConfig.selectPrinterProfile(profileId) },
       setSelectedSlicerTargetId: (value) => { recordSliceConfigHistory(); sliceConfig.setSelectedSlicerTargetId(value) },
       setNozzleDiameter: (value) => { recordSliceConfigHistory(); sliceConfig.setNozzleDiameter(value) },
       setNozzleFlow: (value) => { recordSliceConfigHistory(); sliceConfig.setNozzleFlow(value) },

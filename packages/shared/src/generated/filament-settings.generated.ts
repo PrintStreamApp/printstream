@@ -674,6 +674,7 @@ export const filamentSettingsCatalog: ProcessSettingsCatalog = {
       ],
       "enumLabels": [],
       "mode": "simple",
+      "default": "PLA",
       "guiType": "f_enum_open"
     },
     "filament_vendor": {
@@ -681,8 +682,7 @@ export const filamentSettingsCatalog: ProcessSettingsCatalog = {
       "vector": true,
       "label": "Vendor",
       "tooltip": "Vendor of filament. For show only",
-      "mode": "advanced",
-      "default": "(Undefined)"
+      "mode": "advanced"
     },
     "filament_soluble": {
       "type": "bool",
@@ -724,6 +724,7 @@ export const filamentSettingsCatalog: ProcessSettingsCatalog = {
       "label": "Default color",
       "tooltip": "Default filament color",
       "mode": "advanced",
+      "default": "",
       "guiType": "color"
     },
     "filament_diameter": {
@@ -778,7 +779,7 @@ export const filamentSettingsCatalog: ProcessSettingsCatalog = {
       "type": "bool",
       "vector": true,
       "label": "Enable pressure advance",
-      "tooltip": "Enable pressure advance, auto calibration result will be overwriten once enabled. Useless for Bambu Printer",
+      "tooltip": "Enable pressure advance, auto calibration result will be overwritten once enabled. Useless for Bambu Printer",
       "mode": "simple",
       "default": "0"
     },
@@ -1243,7 +1244,7 @@ export const filamentSettingsCatalog: ProcessSettingsCatalog = {
       "sidetext": "layers",
       "mode": "simple",
       "min": 0,
-      "max": 1000,
+      "max": 100000,
       "default": "1"
     },
     "first_x_layer_part_fan_speed": {
@@ -1264,7 +1265,7 @@ export const filamentSettingsCatalog: ProcessSettingsCatalog = {
       "tooltip": "",
       "mode": "simple",
       "min": 0,
-      "max": 1000,
+      "max": 100000,
       "default": "0"
     },
     "fan_min_speed": {
@@ -1469,7 +1470,7 @@ export const filamentSettingsCatalog: ProcessSettingsCatalog = {
       "sidetext": "layers",
       "mode": "simple",
       "min": 0,
-      "max": 1000,
+      "max": 100000,
       "default": "1"
     },
     "first_x_layer_fan_speed": {
@@ -1490,7 +1491,7 @@ export const filamentSettingsCatalog: ProcessSettingsCatalog = {
       "tooltip": "Auxiliary fan speed will be ramped up linearly from layer \"For the first\" to maximum at layer \"Full fan speed at layer\". \"Full fan speed at layer\" will be ignored if lower than \"For the first\", in which case the fan will be running at maximum allowed speed at layer \"For the first\" + 1.",
       "mode": "simple",
       "min": 0,
-      "max": 1000,
+      "max": 100000,
       "default": "0"
     },
     "additional_cooling_fan_speed": {
@@ -1764,6 +1765,7 @@ export const filamentSettingsCatalog: ProcessSettingsCatalog = {
       "mode": "advanced",
       "fullWidth": true,
       "height": 15,
+      "default": " ",
       "isCode": true
     },
     "filament_end_gcode": {
@@ -1774,6 +1776,7 @@ export const filamentSettingsCatalog: ProcessSettingsCatalog = {
       "mode": "advanced",
       "fullWidth": true,
       "height": 15,
+      "default": " ",
       "isCode": true
     },
     "filament_notes": {

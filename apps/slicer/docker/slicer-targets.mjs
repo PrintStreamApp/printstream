@@ -37,13 +37,32 @@ export const slicerTargets = [
     family: 'bambustudio',
     version: '2.7.1.62',
     slicerName: 'Bambu Studio',
-    isDefault: true,
     downloadUrl: 'https://github.com/bambulab/BambuStudio/releases/download/v02.07.01.62/BambuStudio_ubuntu24.04-v02.07.01.62-20260616195227.AppImage'
+  },
+  {
+    id: 'bambustudio-2-8-2-60',
+    label: 'Bambu Studio 2.8.2.60',
+    family: 'bambustudio',
+    version: '2.8.2.60',
+    slicerName: 'Bambu Studio',
+    downloadUrl: 'https://github.com/bambulab/BambuStudio/releases/download/v02.08.02.60/BambuStudio_ubuntu24.04-v02.08.02.60-20260814171356.AppImage'
+  },
+  {
+    id: 'bambustudio-2-8-2-61',
+    label: 'Bambu Studio 2.8.2.61',
+    family: 'bambustudio',
+    version: '2.8.2.61',
+    slicerName: 'Bambu Studio',
+    isDefault: true,
+    downloadUrl: 'https://github.com/bambulab/BambuStudio/releases/download/v02.08.02.61/BambuStudio_ubuntu24.04-v02.08.02.61-20260820225108.AppImage'
   },
   // BETAS. Bambu ships these as GitHub PRE-releases, and BambuStudio's own file-version refusal
   // tells users a 3MF should come from "the official version ... not a beta version". They exist
   // only so a project saved by a beta desktop build can be sliced at all: `prerelease: true` keeps
   // them out of the default selection, and nothing may set `isDefault` on them.
+  //
+  // 2.8.0 and 2.8.1 are kept even though the public 2.8.2 supersedes them: a project saved by one
+  // of those beta desktop builds still has to be sliceable by the engine that wrote it.
   {
     id: 'bambustudio-2-8-0-50',
     label: 'Bambu Studio 2.8.0.50 (beta)',

@@ -82,8 +82,13 @@ export { decodeXmlAttributeValue }
  * v34: each PART carries its `textInfo`, the `<text_info/>` record that makes text re-editable.
  *      A cached scene from v33 has none, so text saved by this version would reopen as anonymous
  *      solids until something else invalidated the entry.
+ * v35: NO slice_info `<object>`/`<filament>` attribute run excludes `/` any more, so an entry whose
+ *      NAME or other value contains one ("Bracket 1/2") is parsed instead of silently dropped. A
+ *      v34 cache is missing those entries entirely, which hid objects from the print picker and
+ *      from skip resolution, and hid filaments from the nozzle map and the stale-slice_info check,
+ *      so it has to be re-parsed rather than trusted.
  */
-export const THREE_MF_INDEX_PARSER_VERSION = 34
+export const THREE_MF_INDEX_PARSER_VERSION = 35
 
 /** Per-plate metadata recovered from `model_settings.config` (labels + object/filament backfill). */
 export interface ModelSettingsPlateMetadata {
@@ -403,7 +408,10 @@ function parseSliceInfo(xml: string): BridgeLibraryThreeMfPlate[] {
       if (key != null && value != null) meta.set(key, decodeXmlAttributeValue(value))
     }
     const filaments: BridgeLibraryThreeMfFilament[] = []
-    for (const match of block.matchAll(/<filament\b([^/>]*)\/?>(?:<\/filament>)?/g)) {
+    // `[^>]*?` rather than `[^/>]*`: an attribute VALUE may legitimately contain a slash, and
+    // excluding it from the attribute run makes the whole entry fail to match and vanish. Lazy so
+    // the optional self-closing slash is still consumed by `\/?>` rather than by the run.
+    for (const match of block.matchAll(/<filament\b([^>]*?)\/?>(?:<\/filament>)?/g)) {
       const attrs = parseAttrs(match[1] ?? '')
       filaments.push({
         id: parseInt(attrs.id ?? '0', 10) || filaments.length + 1,
@@ -418,7 +426,10 @@ function parseSliceInfo(xml: string): BridgeLibraryThreeMfPlate[] {
       })
     }
     const objects: BridgeLibraryThreeMfObject[] = []
-    for (const match of block.matchAll(/<object\b([^/>]*)\/?>(?:<\/object>)?/g)) {
+    // Same slash rule as the filaments above, and it BITES here: object names routinely contain
+    // one ("Bracket 1/2", "CHM 1/2"), and `[^/>]*` made every such entry fail to match, so the
+    // object silently disappeared from the print picker and from skip resolution.
+    for (const match of block.matchAll(/<object\b([^>]*?)\/?>(?:<\/object>)?/g)) {
       const attrs = parseAttrs(match[1] ?? '')
       const identifyIdValue = parseInt(attrs.identify_id ?? '', 10)
       const idValue = Number.isFinite(identifyIdValue) ? identifyIdValue : parseInt(attrs.id ?? '', 10)
@@ -753,7 +764,7 @@ function extractNozzleMapping(
   }
 
   if (sliceInfoXml) {
-    for (const match of sliceInfoXml.matchAll(/<filament\b([^/>]*)\/?>(?:<\/filament>)?/g)) {
+    for (const match of sliceInfoXml.matchAll(/<filament\b([^>]*?)\/?>(?:<\/filament>)?/g)) {
       const attrs = parseAttrs(match[1] ?? '')
       const filamentId = parseInt(attrs.id ?? '', 10)
       const groupId = parseInt(attrs.group_id ?? '', 10)
@@ -856,7 +867,7 @@ function hasNonIdentityPhysicalExtruderMap(physicalExtruderMap: string[]): boole
 
 function sliceInfoHasConcreteFilamentUsage(sliceInfoXml: string | null): boolean {
   if (!sliceInfoXml) return false
-  for (const match of sliceInfoXml.matchAll(/<filament\b([^/>]*)\/?>(?:<\/filament>)?/g)) {
+  for (const match of sliceInfoXml.matchAll(/<filament\b([^>]*?)\/?>(?:<\/filament>)?/g)) {
     const attrs = parseAttrs(match[1] ?? '')
     if (
       attrs.used_g != null
@@ -886,7 +897,7 @@ export function sliceRecordFilamentIds(xml: string): number[] {
 
 function extractSliceFilamentIds(xml: string): number[] {
   const ids = new Set<number>()
-  for (const match of xml.matchAll(/<filament\b([^/>]*)\/?>(?:<\/filament>)?/g)) {
+  for (const match of xml.matchAll(/<filament\b([^>]*?)\/?>(?:<\/filament>)?/g)) {
     const attrs = parseAttrs(match[1] ?? '')
     const filamentId = parseInt(attrs.id ?? '', 10)
     if (Number.isFinite(filamentId) && filamentId > 0) ids.add(filamentId)

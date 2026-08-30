@@ -20,7 +20,32 @@ Entry point: the editor's save (`apps/api/src/routes/editor.ts`) calls
 **always for a project with no source machine** — a new-project scaffold embeds no
 `project_settings.config`, so its first save must persist the chosen machine this way; such a
 project retargets from an empty settings object, the machine/process profiles supplying every field).
-Steps:
+
+### Three machine paths, not one
+
+The full retarget above runs only when the project's embedded machine does not already describe the
+target MODEL. Two narrower paths cover the rest, both in `apps/api/src/routes/editor.ts`:
+
+- **A machine PRESET change on the same model** (an H2D variant, a nozzle size, a user's own tuned
+  machine) goes through `applyMachinePresetChange`, which authors the machine ONLY: no process
+  re-resolve, no filament rebind. That is deliberate, and it is why this path exists separately -
+  re-running the full retarget for a same-model switch would overwrite the user's process settings,
+  which is why the branch used to do nothing at all and silently dropped the user's pick.
+
+  It fires when the user actually PICKED the preset (`SlicingManualProfileTarget.printerProfileChosen`,
+  set from the resolver's `origins.printerProfileId === 'user'`) or when the embedded machine no
+  longer carries the target's nozzle diameters. Provenance is load-bearing: the client always sends a
+  resolved `printerProfileId`, and for a project naming a preset this workspace does not hold that
+  resolution FALLS BACK to the first catalogue profile matching the model. Treating "the name
+  differs" as "the user switched" re-authored every such project onto a stock preset on an ordinary
+  save, discarding its start G-code, accelerations and limits.
+
+- **The project's OWN machine overrides** (`machineSettingOverrides`) are applied LAST, after
+  whichever branch above authored the machine, by `applyMachineOverridesToProject`. They and the
+  preset write the same keys, so any earlier position would let the preset overwrite the user's
+  values. See the machine-override section of `docs/slicer-architecture.md`.
+
+Steps for the full retarget:
 
 1. **Resolve the target machine profile.** `slicerClient.resolveMachineConfig` → the slicer's
    `POST /profiles/resolve` with `kind: 'machine'`, which merges the preset's `inherits`/`include`

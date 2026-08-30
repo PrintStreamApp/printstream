@@ -273,3 +273,81 @@ test('resolution is deterministic: the same snapshot answers the same way every 
     [second.manualPrinterModel, second.printerProfileId, second.nozzleDiameter, second.plateType]
   )
 })
+
+// ---- machine preset (the Preset picker) ------------------------------------------------------
+
+/** A user's saved variant for the SAME model + nozzle: the case the cascade cannot guess. */
+const H2D_04_RYAN = machine('H2D 0.4 - Ryan', { id: 'custom:ryan', source: 'custom', printerModels: ['H2D'], nozzleDiameters: [0.4] })
+
+test('a picked machine preset beats the cascade, and only the compatible ones are offered', () => {
+  // H2D_04 leads the list, so it is what the cascade lands on unaided; the pick must override it.
+  const withBoth = { machineProfiles: [H2D_04, H2D_04_RYAN, A1_04], bakedIndex: index({ compatiblePrinterModels: ['H2D'] }), ...settled() }
+
+  const unaided = resolveWith(withBoth)
+  assert.equal(unaided.printerProfileId, H2D_04.id, 'the cascade still answers when nothing was picked')
+  // 'project' rather than 'catalogue': the file names H2D, so the match runs against the model the
+  // project declared, which is exactly the guess the picker exists to let the user overrule.
+  assert.equal(unaided.origins.printerProfileId, 'project')
+
+  const picked = resolveWith(withBoth, { printerProfileId: H2D_04_RYAN.id })
+  assert.equal(picked.printerProfileId, H2D_04_RYAN.id, 'the pick is honoured over the cascade')
+  assert.equal(picked.selectedMachineProfile?.name, 'H2D 0.4 - Ryan')
+  assert.equal(picked.origins.printerProfileId, 'user')
+  assert.deepEqual(picked.conflicts, [])
+
+  assert.deepEqual(
+    picked.selectableMachineProfiles.map((profile) => profile.id),
+    [H2D_04.id, H2D_04_RYAN.id],
+    'the picker offers exactly the presets this model + nozzle can use, never the A1'
+  )
+})
+
+test('a machine preset the target cannot offer is reported by NAME and kept, not swapped', () => {
+  const withBoth = { machineProfiles: [H2D_04, H2D_04_RYAN, A1_04], bakedIndex: index({ compatiblePrinterModels: ['H2D'] }), ...settled() }
+  // Same pick, but now the nozzle moves under it: 0.6 leaves no H2D 0.4 preset selectable.
+  const stranded = resolveWith(
+    { ...withBoth, machineProfiles: [H2D_06, H2D_04_RYAN] },
+    { printerProfileId: H2D_04_RYAN.id, nozzleDiameter: '0.6' }
+  )
+  assert.equal(stranded.printerProfileId, H2D_06.id, 'the target stays valid rather than naming an unusable preset')
+  assert.deepEqual(
+    stranded.conflicts.map((conflict) => [conflict.field, conflict.requested, conflict.applied]),
+    [['printerProfileId', 'H2D 0.4 - Ryan', 'Bambu Lab H2D 0.6 nozzle']],
+    'reported as names, because an id says nothing to the person reading it'
+  )
+
+  // The pick is KEPT, so returning to a target that can offer it restores it without re-picking.
+  const restored = resolveWith(withBoth, { printerProfileId: H2D_04_RYAN.id, nozzleDiameter: '0.4' })
+  assert.equal(restored.printerProfileId, H2D_04_RYAN.id)
+  assert.deepEqual(restored.conflicts, [])
+})
+
+test('the picker offers the exact model, not a neighbouring variant that merely matches on tokens', () => {
+  // "H2D" is a token of "H2D Pro", so the compatibility match passes and the Pro preset used to be
+  // offered for an H2D project (canonically H2DPRO vs H2D, i.e. a different machine).
+  const H2D_PRO = machine('Bambu Lab H2D Pro 0.4 nozzle', { printerModels: ['H2D'], nozzleDiameters: [0.4] })
+  const CUSTOM = machine('Ryan tuned', { id: 'custom:tuned', source: 'custom', printerModels: ['H2D'], nozzleDiameters: [0.4] })
+  const result = resolveWith({
+    machineProfiles: [H2D_04, H2D_PRO, CUSTOM],
+    bakedIndex: index({ compatiblePrinterModels: ['H2D'] }),
+    ...settled()
+  })
+  assert.deepEqual(
+    result.selectableMachineProfiles.map((profile) => profile.name),
+    ['Bambu Lab H2D 0.4 nozzle', 'Ryan tuned'],
+    'the Pro variant is dropped; a preset naming NO model (a custom one) is never hidden'
+  )
+})
+
+test('an exact-model filter that would empty the picker falls back rather than stranding the target', () => {
+  const H2D_PRO = machine('Bambu Lab H2D Pro 0.4 nozzle', { printerModels: ['H2D'], nozzleDiameters: [0.4] })
+  const result = resolveWith({
+    machineProfiles: [H2D_PRO],
+    bakedIndex: index({ compatiblePrinterModels: ['H2D'] }),
+    ...settled()
+  })
+  // With no selectable machine there is no target at all, so a catalogue holding only the
+  // neighbouring variant still slices instead of leaving the picker empty.
+  assert.deepEqual(result.selectableMachineProfiles.map((profile) => profile.name), ['Bambu Lab H2D Pro 0.4 nozzle'])
+  assert.equal(result.printerProfileId, H2D_PRO.id)
+})

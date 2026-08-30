@@ -7,7 +7,7 @@
  * through `physical_extruder_map` (see the slicer development notes nozzle-mapping invariant).
  * `slice_info.config` carries the Bambu `model_id` code, not the friendly name.
  */
-import type { CreateSlicingJob, SlicingPresetKind } from '@printstream/shared'
+import { clearInheritsGroupSlot, type CreateSlicingJob, type SlicingPresetKind } from '@printstream/shared'
 import { stringArray } from '@printstream/shared/three-mf'
 
 type SlicingPresetFile = {
@@ -88,13 +88,16 @@ export function rewriteProjectSettingsMetadata(
     next.printer_settings_id = [metadata.printerProfileName]
     next.compatible_printers = [metadata.printerProfileName]
     next.print_compatible_printers = [metadata.printerProfileName]
-    // The CLI resolves the project's SYSTEM printer from inherits_group's LAST slot,
+    // The CLI resolves the project's SYSTEM printer from inherits_group's MACHINE slot,
     // not from printer_settings_id (BambuStudio.cpp: current_printer_system_name).
     // A project saved with an inherited/custom machine preset keeps its old parent
     // there (e.g. "Bambu Lab P1P 0.4 nozzle"), and since 2.7.1 the CLI validates every
     // loaded filament preset against that name, so a stale slot fails the slice with
     // "filament preset ... is not compatible with printer <old machine>". Blank it so
     // the CLI treats the rewritten printer_settings_id as the system identity.
+    // Shared with the save path rather than copied: this was a duplicate of the same
+    // function, carrying the same wrong slot (the array's last entry, which is the
+    // machine slot only while the array is correctly sized).
     clearInheritsGroupSlot(next, 'machine')
   } else if (metadata.printerModel) {
     next.printer_model = [metadata.printerModel]
@@ -289,20 +292,6 @@ function escapeXmlAttribute(value: string): string {
     .replaceAll('"', '&quot;')
     .replaceAll('<', '&lt;')
     .replaceAll('>', '&gt;')
-}
-
-/**
- * Blanks one slot of Bambu's `different-settings` inheritance record:
- * `inherits_group[0]` names the process preset's parent and the LAST entry the
- * machine preset's parent (the filament slots sit in between). An empty slot
- * means "this preset IS a system preset", making the CLI derive the system
- * identity from the corresponding `*_settings_id` we just rewrote.
- */
-function clearInheritsGroupSlot(record: Record<string, unknown>, slot: 'process' | 'machine'): void {
-  if (!Array.isArray(record.inherits_group) || record.inherits_group.length === 0) return
-  const inheritsGroup = [...record.inherits_group as string[]]
-  inheritsGroup[slot === 'process' ? 0 : inheritsGroup.length - 1] = ''
-  record.inherits_group = inheritsGroup
 }
 
 function setArrayValue(record: Record<string, unknown>, key: string, index: number, value: string): void {

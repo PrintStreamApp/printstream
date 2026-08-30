@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { extractFilamentOverriddenKeys, extractProcessOverriddenKeys, extractProjectFilamentConfig, extractProjectProcessConfig } from './three-mf-project-config.js'
+import {
+  extractFilamentOverriddenKeys,
+  extractProcessOverriddenKeys,
+  extractProjectFilamentConfig,
+  extractProjectProcessConfig,
+  filamentSlotCount,
+  machinePresetSlotIndexFor
+} from './three-mf-project-config.js'
 
 test('a non-object project_settings yields null (unresolvable)', () => {
   assert.equal(extractProjectProcessConfig(null), null)
@@ -154,4 +161,38 @@ test('an empty changed-from-system entry is a declaration; a missing one is not'
   assert.equal(extractProjectFilamentConfig(withRecord, 2)?.declaresOverrides, true)
   const shortRecord = { ...withRecord, different_settings_to_system: ['wall_loops'] }
   assert.equal(extractProjectFilamentConfig(shortRecord, 1)?.declaresOverrides, false)
+})
+
+test('the machine slot follows filament_colour, not the widest identity array', () => {
+  // BambuStudio's own comment says `filament_settings_id` "sometimes is not generated", so the
+  // identity arrays genuinely disagree in the wild, and the engine counts `filament_colour` alone:
+  //   size_t num_filaments = filament_colour_option ? filament_colour_option->size() : 0;
+  //   std::string printer_different_settings = different_values[num_filaments + 1];
+  //                                             -- PresetBundle.cpp:3751, 3885
+  // Taking the MAX lands to the RIGHT of that, writing an override where nothing will look for it,
+  // which is the vanished-on-reopen failure this record exists to prevent.
+  const disagreeing = {
+    filament_colour: ['#FFFFFF'],
+    filament_settings_id: ['A', 'B', 'C'],
+    filament_type: ['PLA', 'PLA', 'PLA']
+  }
+  assert.equal(machinePresetSlotIndexFor(disagreeing), 2, 'one colour means the machine sits at index 2')
+  assert.equal(filamentSlotCount(disagreeing), 3, 'the VALUE-array count is still the widest, and is a different question')
+})
+
+test('a record that states no filament colours cannot locate its machine slot', () => {
+  // Unknown, not zero. Answering "index 1" here files machine keys into filament slot 1's record,
+  // which is what `rebindProjectFilamentPhysics` reads to decide what survives a machine switch.
+  assert.equal(machinePresetSlotIndexFor({ filament_settings_id: ['A'] }), null)
+  assert.equal(machinePresetSlotIndexFor({}), null)
+  // Declared but empty IS a real answer: a project with no filaments puts the machine at index 1.
+  assert.equal(machinePresetSlotIndexFor({ filament_colour: [] }), 1)
+})
+
+test('both separators are read, because the writer replaces the slot it read', () => {
+  // The reader this replaced split on `[;,]` deliberately. Losing that is not merely a display
+  // regression now: the writer REPLACES the slot with what it read, so an entry it cannot parse is
+  // erased from the file by the next save.
+  const record = { different_settings_to_system: ['wall_loops,top_shell_layers'] }
+  assert.deepEqual(extractProcessOverriddenKeys(record.different_settings_to_system), ['wall_loops', 'top_shell_layers'])
 })

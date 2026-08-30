@@ -7,6 +7,7 @@ import { apiFetch } from '../../lib/apiClient'
 import { buildApiUrl } from '../../lib/apiUrl'
 import { usePluginCatalogQuery } from '../../lib/pluginCatalogQuery'
 import { isActiveDispatchJob } from '../../lib/dispatchToastVisibility'
+import { shouldShowSkipObjectsAction } from '../../lib/printerCardFooterActions'
 import { type LinkedDispatchJob } from '../../lib/trackedPrintJobs'
 import { toast } from '../../lib/toast'
 import { formatPrinterJobDisplayName } from '../../lib/printerJobName'
@@ -351,18 +352,31 @@ function PrinterCardComponent({
     onOpenAssistant: openAssistant
   })
   const pausedOnDeviceError = stage === 'paused' && status?.deviceError != null
-  const canSkipObjects = isOnline && (stage === 'printing' || stage === 'paused') && !pausedOnDeviceError && !isCalibrationJob
+  const printerCanSkipObjects = isOnline && (stage === 'printing' || stage === 'paused') && !pausedOnDeviceError && !isCalibrationJob
   const activePrintObjectsQuery = useQuery({
     queryKey: ['printer-active-print-objects', printer.id, status?.jobName, status?.gcodeFile, status?.taskId],
     queryFn: ({ signal }) => apiFetch<PrinterActivePrintObjects>(`/api/printers/${printer.id}/active-print-objects`, { signal }),
-    enabled: skipObjectDialogOpen && canSkipObjects,
+    // Fetched as soon as the printer COULD skip, not just once the dialog opens, because the
+    // button's own visibility now depends on how many objects the plate has. The server pre-warms
+    // this list 10s after a job starts and serves it from an in-memory cache keyed by the same
+    // job identity as this query, so the extra call is one cached round trip per job.
+    enabled: printerCanSkipObjects,
     staleTime: 30_000,
-    refetchInterval: (query) => query.state.data?.loading ? 2_000 : false
+    // Poll the server's background load ONLY while the dialog is open. The card needs the count
+    // once, to decide whether to offer the action; re-asking every 2s for every printing printer
+    // on the page would turn a lazy read into steady FTPS traffic across the fleet.
+    refetchInterval: (query) => (skipObjectDialogOpen && query.state.data?.loading ? 2_000 : false)
   })
   const activePrintObjects = activePrintObjectsQuery.data?.objects ?? []
   const activePrintObjectsLoading = activePrintObjectsQuery.data?.loading ?? activePrintObjectsQuery.isLoading
   const activePrintObjectsUnavailableReason = activePrintObjectsQuery.data?.unavailableReason ?? null
   const activePrintObjectsUnavailableMessage = activePrintObjectsQuery.data?.unavailableMessage ?? null
+  // Null while the count is not yet a fact (still loading, errored, or unreportable); see
+  // shouldShowSkipObjectsAction for why that is not the same as zero.
+  const skippableObjectCount = activePrintObjectsQuery.data && !activePrintObjectsLoading
+    ? activePrintObjects.length
+    : null
+  const canSkipObjects = shouldShowSkipObjectsAction({ printerCanSkipObjects, objectCount: skippableObjectCount })
   const { cleared: plateCleared } = usePlateClearingState(printer.id)
   // Keep the Print affordance visible for online idle-like printers,
   // even when plate clearing is blocking the next job, so the footer
@@ -456,11 +470,15 @@ function PrinterCardComponent({
     }
   }, [coverFailed, coverLoaded, coverRequestUrl, coverVisible, printer.id, showJobSummary])
 
+  // Keyed on the PRINTER's state, not on the object count: the count arrives asynchronously, so
+  // closing on `canSkipObjects` would tear the dialog down under a user who opened it while the
+  // list was still loading and it then resolved to a single-object plate. The count decides
+  // whether the action is OFFERED; only the printer leaving a skippable state closes what is open.
   useEffect(() => {
-    if (!canSkipObjects && skipObjectDialogOpen) {
+    if (!printerCanSkipObjects && skipObjectDialogOpen) {
       setSkipObjectDialogOpen(false)
     }
-  }, [canSkipObjects, skipObjectDialogOpen])
+  }, [printerCanSkipObjects, skipObjectDialogOpen])
 
   const showDeterminateCoverProgress = !coverFailed && !coverLoaded && coverLoadStatus === 'downloading' && coverProgress != null
   const showIndeterminateCoverProgress = !coverFailed && !coverLoaded && !showDeterminateCoverProgress

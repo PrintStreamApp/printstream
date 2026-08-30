@@ -295,12 +295,24 @@ export function applyObjectClones(
       ...(edit.partProcessOverrides ? { partProcessOverrides: edit.partProcessOverrides.map((entry) => resolvePartSlot(entry, clones)) } : {}),
       ...(edit.partTypeChanges ? { partTypeChanges: edit.partTypeChanges.map((entry) => resolvePartSlot(entry, clones)) } : {}),
       ...(edit.partTransforms ? { partTransforms: edit.partTransforms.map((entry) => resolvePartSlot(entry, clones)) } : {}),
+      ...(edit.removedParts ? { removedParts: edit.removedParts.map((entry) => resolvePartSlot(entry, clones)) } : {}),
       ...(edit.supportPaint ? { supportPaint: edit.supportPaint.map((entry) => resolvePartMesh(entry, clones)) } : {}),
       ...(edit.seamPaint ? { seamPaint: edit.seamPaint.map((entry) => resolvePartMesh(entry, clones)) } : {}),
       ...(edit.colorPaint ? { colorPaint: edit.colorPaint.map((entry) => resolvePartMesh(entry, clones)) } : {}),
       ...(edit.fuzzyPaint ? { fuzzyPaint: edit.fuzzyPaint.map((entry) => resolvePartMesh(entry, clones)) } : {}),
       ...(edit.brimEars
         ? { brimEars: edit.brimEars.map((entry) => ({ ...entry, objectId: resolveObjectId(entry.objectId, clones) })) }
+        : {}),
+      // Height ranges and variable layer height are object-scoped sidecars, and their serializers
+      // resolve an object id to its ORDINAL in the root model, skipping anything they cannot find
+      // (`serializeLayerConfigRanges`). So an unresolved placeholder is not an error, it is a
+      // silently dropped band or curve: the user sets one on an independent copy, saves, and it is
+      // simply not there. Same failure signature as every other seam in this list.
+      ...(edit.heightRanges
+        ? { heightRanges: edit.heightRanges.map((entry) => ({ ...entry, objectId: resolveObjectId(entry.objectId, clones) })) }
+        : {}),
+      ...(edit.layerHeightProfiles
+        ? { layerHeightProfiles: edit.layerHeightProfiles.map((entry) => ({ ...entry, objectId: resolveObjectId(entry.objectId, clones) })) }
         : {}),
       ...(edit.objectNames
         ? {

@@ -4,10 +4,10 @@
  * The options each preset KIND carries, mirrored from BambuStudio's `Preset.cpp`. A saved project's
  * corresponding block must contain these and nothing else: a key BambuStudio does not recognise as
  * belonging to the preset is drift it never wrote, and a key we omit reads as a deviation from the
- * preset: either way it declines to bind the slot and mints a `(<project>.3mf)` copy instead.
+ * preset; either way it declines to bind the slot and mints a `(<project>.3mf)` copy instead.
  *
  * `FILAMENT_PRESET_DEFAULTS` is the PrintConfig default per filament option, needed because a key
- * that no resolved preset mentions still has to be written with a real value, an empty string is as
+ * that no resolved preset mentions still has to be written with a real value: an empty string is as
  * much a deviation as an absence.
  *
  * Re-run the generator after vendoring a newer BambuStudio; `variant-options.test.ts` fails if this
@@ -299,6 +299,7 @@ export const PRINTER_PRESET_OPTIONS: ReadonlySet<string> = new Set([
   "printable_area",
   "extruder_printable_area",
   "bed_exclude_area",
+  "bed_heat_soak_area",
   "bed_custom_texture",
   "bed_custom_model",
   "gcode_flavor",
@@ -332,6 +333,13 @@ export const PRINTER_PRESET_OPTIONS: ReadonlySet<string> = new Set([
   "wrapping_exclude_area",
   "machine_load_filament_time",
   "machine_unload_filament_time",
+  "ams_filament_load_time_ams",
+  "ams_filament_load_time_ams_lite",
+  "ams_filament_load_time_n3f_s",
+  "ams_filament_unload_time_ams",
+  "ams_filament_unload_time_ams_lite",
+  "ams_filament_unload_time_n3f_s",
+  "default_ams_type",
   "machine_pause_gcode",
   "template_custom_gcode",
   "machine_hotend_change_time",
@@ -346,6 +354,7 @@ export const PRINTER_PRESET_OPTIONS: ReadonlySet<string> = new Set([
   "support_cooling_filter",
   "cooling_filter_enabled",
   "printer_structure",
+  "farthest_point_timelapse",
   "thumbnail_size",
   "best_object_pos",
   "head_wrap_detect_zone",
@@ -589,6 +598,7 @@ export const PRINT_PRESET_OPTIONS: ReadonlySet<string> = new Set([
   "support_line_width",
   "infill_wall_overlap",
   "bridge_flow",
+  "counterbore_hole_bridging",
   "elefant_foot_compensation",
   "xy_contour_compensation",
   "xy_hole_compensation",

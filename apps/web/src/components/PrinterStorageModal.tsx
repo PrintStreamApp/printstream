@@ -192,8 +192,10 @@ export function PrinterStorageModal({
       allowIncompatibleFilament: boolean
       allowFilamentTrackSwitchMismatch: boolean
       allowInsufficientFilament: boolean
-      /** Plate objects (`objects[].id`) to exclude from the print, when any were deselected. */
+      /** Whole plate objects (`objects[].id`) to exclude, when any were deselected. */
       skipObjects?: number[]
+      /** Individual placements to exclude, by instance `identify_id`. */
+      skipInstances?: number[]
     }) =>
       apiFetch<{ path: string }>(`/api/printers/${printerId}/storage/print`, {
         method: 'POST',
@@ -211,7 +213,8 @@ export function PrinterStorageModal({
           allowIncompatibleFilament: args.allowIncompatibleFilament,
           allowFilamentTrackSwitchMismatch: args.allowFilamentTrackSwitchMismatch,
           allowInsufficientFilament: args.allowInsufficientFilament,
-          ...(args.skipObjects && args.skipObjects.length > 0 ? { skipObjects: args.skipObjects } : {})
+          ...(args.skipObjects && args.skipObjects.length > 0 ? { skipObjects: args.skipObjects } : {}),
+          ...(args.skipInstances && args.skipInstances.length > 0 ? { skipInstances: args.skipInstances } : {})
         }
       }),
     onSuccess: () => {

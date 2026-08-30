@@ -10,6 +10,7 @@
  */
 import { useState, type MutableRefObject } from 'react'
 import { ListDivider, ListItemDecorator, Menu, MenuItem } from '@mui/joy'
+import DeleteRoundedIcon from '@mui/icons-material/DeleteRounded'
 import type { SceneEditPartSubtype } from '@printstream/shared'
 import CategoryRoundedIcon from '@mui/icons-material/CategoryRounded'
 import FileDownloadRoundedIcon from '@mui/icons-material/FileDownloadRounded'
@@ -48,11 +49,17 @@ export interface EditorPartContextMenuProps {
   onExportToLibrary?: () => void
   /** Opens the per-part process settings dialog for the selection; absent without slice settings. */
   onEditSettings?: () => void
+  /**
+   * Delete the selected parts from their object (BambuStudio's per-volume Delete). Absent when the
+   * selection is every printed part the object has: an object with no printed geometry is not a
+   * thing to leave behind, and removing the object outright is a different action.
+   */
+  onDelete?: () => void
 }
 
 export function EditorPartContextMenu({
   contextMenu, count, listboxRef, onClose, onChangeType, filamentOptions, materialAssignable,
-  onChangeMaterial, onExportDownload, onExportToLibrary, onEditSettings
+  onChangeMaterial, onExportDownload, onExportToLibrary, onEditSettings, onDelete
 }: EditorPartContextMenuProps) {
   const [view, setView] = useState<'root' | 'type' | 'material' | 'export'>('root')
   const suffix = count > 1 ? ` (${count} parts)` : ''
@@ -119,6 +126,15 @@ export function EditorPartContextMenu({
               <MenuItem onClick={() => { onClose(); onEditSettings() }}>
                 <ListItemDecorator><TuneRoundedIcon /></ListItemDecorator>
                 Part settings{suffix}…
+              </MenuItem>
+            </>
+          )}
+          {onDelete && (
+            <>
+              <ListDivider />
+              <MenuItem color="danger" onClick={() => { onClose(); onDelete() }}>
+                <ListItemDecorator><DeleteRoundedIcon /></ListItemDecorator>
+                Delete{suffix}
               </MenuItem>
             </>
           )}

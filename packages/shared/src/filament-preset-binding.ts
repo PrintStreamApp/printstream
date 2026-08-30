@@ -34,6 +34,7 @@
 import { FILAMENT_PRESET_OPTIONS } from './generated/preset-options.generated.js'
 import { filamentConfigValuesEqual, filamentSettingsCatalog } from './filament-settings.js'
 import type { ProcessConfig } from './process-settings.js'
+import { resizeParallelPresetRecord } from './three-mf-project-config.js'
 
 /**
  * Identity, not physics. These describe WHICH filament a slot holds, so a difference in them is not
@@ -101,16 +102,30 @@ export function applyFilamentPresetBindings(
   bindings: ReadonlyArray<FilamentPresetBinding | null>
 ): void {
   if (bindings.every((binding) => binding == null)) return
-  const width = bindings.length + 2
 
-  // Rebuild at the current filament count, keeping the process entry and the printer entry (which
-  // sits at the END, so it moves when the material count changes).
+  // Rebuild both arrays at the binding count, keeping each slot's own entry. The printer entry sits
+  // at the END, so it moves when the material count changes; `resizeParallelPresetRecord` owns that
+  // move.
+  //
+  // Its old count comes from the ARRAY's own width here, not from `filamentSlotCount(record)`, and
+  // deliberately: this runs inside the bake AFTER `applyFilamentList` has rewritten the identity
+  // arrays to the NEW count, so the record no longer remembers what these two were written for.
+  // Their own width is the only evidence left. That is fine because it is the SAME array answering
+  // about itself -- unlike deriving one array's machine slot from its twin's length, which is what
+  // put machine keys into a filament slot.
   const resize = (key: string): string[] => {
-    const previous = Array.isArray(record[key]) ? (record[key] as unknown[]).map((entry) => (typeof entry === 'string' ? entry : '')) : []
-    const next = Array.from({ length: width }, (_unused, index) => previous[index] ?? '')
-    next[0] = previous[0] ?? ''
-    next[width - 1] = previous.length >= 2 ? previous[previous.length - 1]! : ''
-    return next
+    const previous = Array.isArray(record[key]) ? record[key] as unknown[] : []
+    const oldFilamentCount = Math.max(previous.length - 2, 0)
+    return resizeParallelPresetRecord(previous, {
+      oldFilamentCount,
+      newFilamentCount: bindings.length,
+      // BOUNDED. A slot past the old count has no source entry, and mapping it anyway reads the old
+      // MACHINE entry (which sits immediately after the last filament) into a filament slot: growing
+      // a 1-filament project to 2 gave slot 2 the printer preset's name as its parent, telling the
+      // CLI a filament inherits from a printer. Blank is the honest value for a slot that did not
+      // exist, and the binding below fills in the real parent when one resolved.
+      sourceSlotFor: (slot) => (slot < oldFilamentCount ? slot : null)
+    }) ?? []
   }
 
   const inherits = resize('inherits_group')

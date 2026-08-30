@@ -15,6 +15,9 @@
  * the viewer the same way it does for `GCodeLoader` output.
  */
 import * as THREE from 'three'
+// The header time line is a BambuStudio contract shared with the slicer service, which reads the
+// same line to report a slice's prepare phase. One parser, so the two cannot drift.
+import { parseGcodeDuration } from '@printstream/shared'
 
 /**
  * Feature-type palette mirroring BambuStudio's `Extrusion_Role_Colors`
@@ -137,24 +140,6 @@ export interface ParsedGcodeLayers {
   travelLayerEnd: number[]
   /** Time/usage breakdown accumulated during the parse. */
   stats: GcodeStats
-}
-
-/** Parse BambuStudio header durations like `1d 2h 3m 4s` / `35m 21s` into seconds. */
-function parseGcodeDuration(value: string): number | null {
-  let seconds = 0
-  let matched = false
-  for (const match of value.matchAll(/(\d+)\s*([dhms])/gi)) {
-    const amount = Number.parseInt(match[1]!, 10)
-    if (!Number.isFinite(amount)) continue
-    matched = true
-    switch (match[2]!.toLowerCase()) {
-      case 'd': seconds += amount * 86400; break
-      case 'h': seconds += amount * 3600; break
-      case 'm': seconds += amount * 60; break
-      case 's': seconds += amount; break
-    }
-  }
-  return matched ? seconds : null
 }
 
 const Z_EPSILON = 1e-3

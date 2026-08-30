@@ -168,16 +168,25 @@ export function getPrinterRecoveryActions(
 ): PrinterRecoveryAction[] {
   const actions: PrinterRecoveryAction[] = []
 
-  if (getRetryAmsFilamentChangeAvailability(status).allowed) {
+  const waitingForFilamentExtrusion = getRetryAmsFilamentChangeAvailability(status).allowed
+  if (waitingForFilamentExtrusion) {
     actions.push(
       { id: 'retryAmsFilamentChange', label: 'Retry' },
       { id: 'confirmAmsFilamentExtruded', label: 'Continue' }
     )
-  } else {
-    if (getResumeAvailability(status).allowed) {
-      actions.push({ id: 'resume', label: 'Resume' })
-    }
+  }
 
+  // Resume is offered for EVERY paused printer, including one waiting on the filament-change
+  // confirmation above. It used to sit in that branch's `else`, so the confirmation prompt
+  // REPLACED it: a printer stuck reporting a filament-change step offered Retry and Continue and
+  // no way to simply carry on. BambuStudio has no such exclusion (`MachineObject::can_resume()`
+  // is `print_status == "PAUSE"` and nothing else), so a state we cannot interpret must not cost
+  // the user the vendor's own escape hatch.
+  if (getResumeAvailability(status).allowed) {
+    actions.push({ id: 'resume', label: 'Resume' })
+  }
+
+  if (!waitingForFilamentExtrusion) {
     if (getLoadFilamentAvailability(status).allowed) {
       actions.push({ id: 'loadFilament', label: 'Load filament' })
     }
@@ -206,13 +215,28 @@ export function getPauseAvailability(
   return allowPrinterAction()
 }
 
+/**
+ * Whether Resume can be sent, mirroring BambuStudio's `MachineObject::can_resume()`
+ * (`DeviceManager.cpp`), which is `print_status == "PAUSE"` and NOTHING else.
+ *
+ * Deliberately does NOT gate on a filament change being in progress, on `deviceError`, or on HMS
+ * alerts. It used to gate on the first of those, via `filamentActionBusyReason`, and that is what
+ * left an H2D paused on an AMS error with no Resume at all: the step comes from
+ * `device.extruder.info[].stat` (dual-nozzle machines only), the parser latches the last step it
+ * saw, and the loop reads the FIRST extruder reporting one, so a stale code on the idle nozzle
+ * pins the "busy" state indefinitely. The block then hid the button outright rather than
+ * disabling it, so there was no button and no explanation.
+ *
+ * Studio uses its own busy-loading notion only to block AMS load/unload and the nozzle rack, never
+ * Resume, and that split is kept here: `getLoadFilamentAvailability` still refuses while busy.
+ * Being stricter than the vendor about a state we infer from a sticky field costs the user the
+ * only control that clears it.
+ */
 export function getResumeAvailability(
-  status: (Pick<PrinterStatus, 'online' | 'stage' | 'deviceError' | 'filamentChange' | 'jobId'> & Partial<Pick<PrinterStatus, 'subStage' | 'hmsErrors'>>) | null | undefined
+  status: Pick<PrinterStatus, 'online' | 'stage'> | null | undefined
 ): PrinterActionAvailability {
   if (status?.online !== true) return blockPrinterAction('Resume is only available while the printer is connected')
   if (status.stage !== 'paused') return blockPrinterAction('Resume is only available while the printer is paused')
-  const busyReason = filamentActionBusyReason(status)
-  if (busyReason) return blockPrinterAction(busyReason)
   return allowPrinterAction()
 }
 

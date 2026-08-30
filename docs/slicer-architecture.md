@@ -272,6 +272,23 @@ mirrors the `matrix` metadata (row-major 4x4) when present so a later BambuStudi
 re-save doesn't compound a stale source record. Placement is geometry-level, shared by
 every placed instance of the object.
 
+`removedParts` / `importRemovedParts` carry per-volume DELETE: the first keys by
+objectId+partIndex (dropping the Nth `<component>` from the model and the Nth `<part>`
+from `model_settings.config`), the second by importId+solid index (filtering a
+multi-solid import's staged solids before they are baked). It is the only SUBTRACTIVE
+part seam, and it has to exist because none of the others can express a removal:
+`SceneEdit.instances` is a COMPLETE list, so omitting an instance deletes the object and
+the unreferenced-object sweep takes its geometry, but parts live only in the base file's
+object XML and are addressed by ordinal, so a part's absence from an edit means "leave it
+alone". Three rules, all of which fail silently rather than loudly. Removals are applied
+LAST, after every other part-scoped seam, because they all address BASE-file ordinals and
+removing first would shift each edit onto a neighbouring volume. The client never
+renumbers the survivors either, which is what keeps those ordinals meaningful. And an
+import's surviving solids are filtered by SOURCE index, with the multi-part path chosen
+on the ORIGINAL solid count, since the single-mesh fallback is the MERGED mesh and would
+reinstate the geometry just deleted. An object's last printed part cannot be removed;
+deleting the object is the action for that.
+
 `meshReplacements` carries BambuStudio "Replace with…" swaps: each `{objectId, importId}`
 records that an in-project object's mesh was replaced by a staged import. The replaced
 object's placed instances reference the import (so the original object drops out of the
@@ -398,7 +415,7 @@ the editable keys alone would drop them and quietly rebuild the preset around a 
 Global (project-wide) process edits made in the editor persist into the saved 3MF,
 not just a one-off slice. The dialog is owned by the host `SliceFileModal` and writes
 the shared slice controller, so — like the filament-settings dialog's `materialEditListenerRef` —
-the controller exposes a `processEditListenerRef` the editor points at
+the controller exposes a `settingsEditListenerRef` the editor points at
 `recordMaterialsHistory`; the modal fires it **before** a profile switch / overrides
 apply, so the edit lands in undo history and lights Save. On save, `useEditorSave` sends
 the controller's `processSettingOverrides` as `SaveArrangedThreeMf.processSettingOverrides`;
@@ -408,6 +425,64 @@ the controller's `processSettingOverrides` as `SaveArrangedThreeMf.processSettin
 option rather than the `SceneEdit` contract so the slice path — which applies these via
 the slice request instead — is untouched. On reopen the baked config becomes the
 baseline, so the override map resets to empty (no phantom "modified" marker).
+
+### The project's own machine settings (a modified printer, scoped to one project)
+
+The machine twin of the section above, and it exists because a 3MF genuinely embeds its machine
+VALUES: `project_settings.config` carries the full machine block `retargetProjectSettingsToMachine`
+writes (bed, nozzle, extruder topology, machine gcode, limits), not merely the printer's NAME. So
+"modified versus the preset, saved in this project" is representable for a printer exactly as it is
+for a process, with no new file format. `MachineSettingsDialog` runs at `applyScope: 'project'` in
+the editor (`'slice'` in prepare-print, `'preset'` on the settings page) and emits the diff against
+the resolved preset as `machineSettingOverrides`.
+
+Six rules, five of which fail silently when broken:
+
+- **Applied AFTER the machine step, always.** Overrides and the resolved preset write the SAME keys,
+  so any earlier position lets the preset overwrite the user's values. The api applies them as the
+  last machine-domain pass of the save (`applyMachineOverridesToProject`) and inside
+  `authorSliceSettingsIntoProject` for a slice, which `slicing-jobs.ts` runs after the machine step;
+  the browser host carries them on `MachineRetargetPlan.machineSettingOverrides`.
+- **`--load-settings` presets WIN over the project's embedded values**, so the override is also baked
+  into the machine preset file the CLI loads (`apps/slicer/src/index.ts`), not just into the 3MF.
+  Without it an edited printer is reverted to stock at slice time.
+- **A topology change re-derives the flush sizing.** An override may legitimately change
+  `nozzle_diameter`, and with it the extruder count, so `applyMachineSettingOverrides` re-runs
+  `repairFlushVolumesMatrix` / `repairFlushMultiplier` (an undersized matrix segfaults the engine at
+  exit 139; a stale `flush_multiplier` fails its size check at exit 156).
+- **Written into BambuStudio's OWN record, at `filament_count + 1`.** `applyMachineSettingOverrides`
+  records the keys it wrote in `different_settings_to_system`'s MACHINE slot, which is what makes
+  the file reopen as the user's own edit rather than as drift. That slot is found from the FILAMENT
+  COUNT and never from the array's length: the engine resizes `different_settings_to_system` and its
+  twin `inherits_group` to `filament_count + 2` INDEPENDENTLY and reads the printer slot at
+  `filament_count + 1` (`BambuStudio.cpp:3200-3215`, `PresetBundle.cpp:1383,3885`), so on a project
+  whose two arrays disagree (which the Repair stage routinely leaves, since it fixes one and not the
+  other) `length - 1` lands in a FILAMENT slot. Both arrays are owned by
+  `packages/shared/src/three-mf-project-config.ts` and `parallel-preset-record.guard.test.ts` fails
+  the build on a new hand-rolled writer; it found one the day it was added.
+- **An EMPTY override map means "reset them all", not "nothing to do".** The three gates between the
+  dialog and the file (`useEditorSave`'s collector, the save route, the applier) each dropped an
+  empty map as a no-op, so clearing an override saved successfully and the next open brought it
+  back. A key the user reset is also put back to the preset's VALUE, not merely un-recorded (the
+  engine reads the value), and stays recorded when there is no preset to restore it from, rather
+  than leaving the file claiming one thing while slicing another.
+- **Read back from BambuStudio's OWN record, never from a value diff.** On reopen the overrides are
+  re-hydrated by `POST /api/slicing/profiles/resolve-machine` with a `sourceFileId`. The reading
+  itself is `readMachineSettingOverrides`, which lives beside the writer in
+  `packages/shared/src/machine-retarget.ts`: the two were a page apart in different workspaces and
+  disagreed about the slot for a release, which is invisible from either side (the save succeeds,
+  the file is well-formed, the override is simply gone). `machine-override-roundtrip.test.ts` drives
+  the pair against each other across filament counts rather than asserting either alone. A value
+  diff against the resolved preset is unusable and was measured as such on a real project: 44
+  "overrides" of which essentially none were user edits, because `best_object_pos` serializes
+  `0.3,0.5` in the project and `0.3x0.5` in the preset, every per-extruder and per-print-mode vector
+  differs only in LENGTH while every value matches, and keys the preset does not define read as
+  changes. Badging that count is a confident lie, and applying it writes 44 values into the project
+  as though the user chose them. An ABSENT record means `{}`: unknown is not modified.
+
+They are kept, not cleared, when the printer changes, and the panel says so
+(`machineOverridesCarriedWarning`) because an override authored against one machine can express
+something another cannot; the dialog's per-key reset is the escape hatch.
 
 ### An editor-born project bakes from the editor state, not from its own last save
 

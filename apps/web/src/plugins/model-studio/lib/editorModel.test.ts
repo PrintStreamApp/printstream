@@ -31,6 +31,8 @@ import {
   seedEmptyEditorState,
   stagedFootprint,
   summarizeInstanceMaterial,
+  carriedPartSubtypes,
+  withRemovedParts,
   type EditorState
 } from './editorModel'
 
@@ -298,6 +300,41 @@ test('replaceInstanceGeometry retains placement, material, printability, name an
   assert.equal(next.nameOverridden, true)
   // The source instance is left untouched (replacement returns a fresh instance).
   assert.equal(source.source.kind, 'object')
+})
+
+test('replaceInstanceGeometry keeps a MIXED-material object off the project default', () => {
+  // The object's own filamentId is a consensus over its printed parts, so a body on material 5
+  // with labels on material 3 reports null. Left null, the bake binds the replacement to filament
+  // 1 and a multi-material object silently returns on the project's first material. The leading
+  // printed part is the fallback.
+  const source = instanceFromStagedImport(STAGED)
+  source.source = { kind: 'object' }
+  source.objectId = 4
+  source.filamentId = null
+  const part = (partIndex: number, filamentId: number | null, subtype: string | null) => ({
+    entryPath: '/x.model', componentObjectId: partIndex + 2, partIndex, transform: [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0],
+    filamentId, name: `p${partIndex}`, color: null, subtype
+  })
+  source.parts = [part(0, 5, null), part(1, 3, null), part(2, 3, null)]
+
+  const next = replaceInstanceGeometry(source, { ...STAGED, importId: 'imp-9' }, 4)
+  assert.equal(next.filamentId, 5)
+})
+
+test('replaceInstanceGeometry ignores helper volumes when falling back to a leading material', () => {
+  // A support blocker carries no material, so it must not be the part the fallback reads.
+  const source = instanceFromStagedImport(STAGED)
+  source.source = { kind: 'object' }
+  source.objectId = 4
+  source.filamentId = null
+  const part = (partIndex: number, filamentId: number | null, subtype: string | null) => ({
+    entryPath: '/x.model', componentObjectId: partIndex + 2, partIndex, transform: [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0],
+    filamentId, name: `p${partIndex}`, color: null, subtype
+  })
+  source.parts = [part(0, null, 'support_blocker'), part(1, 2, null), part(2, 4, null)]
+
+  const next = replaceInstanceGeometry(source, { ...STAGED, importId: 'imp-9' }, 4)
+  assert.equal(next.filamentId, 2)
 })
 
 // A staged import's origin IS its centre (`ImportNormalization` normalises whole objects that way),
@@ -1251,4 +1288,138 @@ test('assignInstanceFilament retargets every printed part of a multi-part model,
 test('assignInstanceFilament returns the SAME instance when nothing changes', () => {
   const instance = assignInstanceFilament(instanceFromStagedImport(STAGED), 4)
   assert.equal(assignInstanceFilament(instance, 4), instance, 'so callers can skip a state write')
+})
+
+test('withRemovedParts drops the part from every copy and records its BASE ordinal', () => {
+  // Parts are object-level, so a deletion reaches every linked copy, and the survivors keep their
+  // own partIndex: nothing is renumbered, which is what keeps the other part-scoped seams pointing
+  // at the volumes they were made against.
+  const part = (partIndex: number, subtype: string | null) => ({
+    entryPath: '/x.model', componentObjectId: partIndex + 2, partIndex,
+    transform: [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0], filamentId: null, name: `p${partIndex}`, color: null, subtype
+  })
+  const instance = (key: string) => {
+    const next = instanceFromStagedImport(STAGED)
+    next.source = { kind: 'object' }
+    next.objectId = 12
+    next.key = key
+    next.parts = [part(0, null), part(1, 'modifier_part'), part(2, null)]
+    return next
+  }
+  const state = {
+    plates: [
+      { index: 1, instances: [instance('a'), instance('b')] },
+      { index: 2, instances: [instance('c')] }
+    ]
+  } as unknown as EditorState
+
+  const next = withRemovedParts(state, 12, new Set([1]))
+  assert.ok(next)
+  const everyInstance = next!.plates.flatMap((plate) => plate.instances)
+  assert.equal(everyInstance.length, 3)
+  for (const entry of everyInstance) {
+    assert.deepEqual(entry.parts.map((entryPart) => entryPart.partIndex), [0, 2], 'survivors keep their base ordinals')
+  }
+  assert.deepEqual(next!.removedParts, { 12: [1] })
+})
+
+test('withRemovedParts refuses to take an object\'s last printed part', () => {
+  // Helper volumes are not printed geometry, so an object left holding only a modifier has nothing
+  // to print. Deleting the OBJECT is the action for that.
+  const part = (partIndex: number, subtype: string | null) => ({
+    entryPath: '/x.model', componentObjectId: partIndex + 2, partIndex,
+    transform: [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0], filamentId: null, name: `p${partIndex}`, color: null, subtype
+  })
+  const only = instanceFromStagedImport(STAGED)
+  only.source = { kind: 'object' }
+  only.objectId = 3
+  only.parts = [part(0, null), part(1, 'modifier_part'), part(2, 'support_blocker')]
+  const state = { plates: [{ index: 1, instances: [only] }] } as unknown as EditorState
+
+  assert.equal(withRemovedParts(state, 3, new Set([0])), null)
+  // The helper volumes on their own are removable, because printed geometry survives.
+  assert.ok(withRemovedParts(state, 3, new Set([1, 2])))
+})
+
+test('buildSceneEdit emits removals against the right id space for objects and imports', () => {
+  const part = (partIndex: number) => ({
+    entryPath: '/x.model', componentObjectId: partIndex + 2, partIndex,
+    transform: [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0], filamentId: null, name: `p${partIndex}`, color: null, subtype: null
+  })
+  const saved = instanceFromStagedImport(STAGED)
+  saved.source = { kind: 'object' }
+  saved.objectId = 21
+  saved.parts = [part(0), part(1)]
+
+  const imported = instanceFromStagedImport({ ...STAGED, importId: 'imp-7' })
+  imported.parts = [part(0), part(1)]
+  const importHostId = imported.source.kind === 'import' ? imported.source.replacedObjectId! : 0
+
+  const state = {
+    plates: [{ index: 1, instances: [saved, imported] }],
+    removedParts: { 21: [1], [importHostId]: [0] }
+  } as unknown as EditorState
+
+  const edit = buildSceneEdit(state)
+  assert.deepEqual(edit.removedParts, [{ objectId: 21, partIndex: 1 }])
+  assert.deepEqual(edit.importRemovedParts, [{ importId: 'imp-7', partIndex: 0 }])
+})
+
+test('replacing an object forgets its part DELETIONS as well as its added parts', () => {
+  // Both key on the retained identity, and a stale removal is the more dangerous of the two: it
+  // resolves against the REPLACEMENT once the host is import-backed, so "delete part 1, then
+  // replace" would silently drop solid 1 of the new mesh.
+  const instance = instanceFromStagedImport(STAGED)
+  instance.source = { kind: 'object' }
+  instance.objectId = 12
+  const state = {
+    plates: [{ index: 1, instances: [instance] }],
+    addedParts: { 12: [{ key: 'p1' }] },
+    removedParts: { 12: [1] }
+  } as unknown as EditorState
+
+  dropAddedPartsForReplacedHost(state, instance)
+  assert.equal(state.addedParts?.[12], undefined)
+  assert.equal(state.removedParts?.[12], undefined)
+})
+
+test('carriedPartSubtypes re-applies helper volume types to a revised export, matched by name', () => {
+  // The reported case: a model re-exported with the same named solids came back with its five
+  // "Hole modifier" volumes as printed geometry. A STEP has no volume types at all, so the only
+  // evidence of intent is the object being replaced.
+  const previous = [
+    { name: 'Cylinder', subtype: 'normal_part' },
+    { name: 'Hole modifier 1', subtype: 'modifier_part' },
+    { name: 'Cylinder size label 2', subtype: 'modifier_part' },
+    { name: 'Cylinder size label 2', subtype: 'support_blocker' }
+  ]
+  const staged = [
+    { name: 'Cylinder' },
+    { name: 'Hole modifier 1' },
+    { name: 'Cylinder size label 2' },
+    { name: 'Cylinder size label 2' }
+  ]
+  const carried = carriedPartSubtypes(previous, staged)
+  // A printed part carries nothing (normal_part is already the default), and duplicate names pair
+  // up in order rather than both taking the first match.
+  assert.deepEqual([...carried.entries()], [[1, 'modifier_part'], [2, 'modifier_part'], [3, 'support_blocker']])
+})
+
+test('carriedPartSubtypes never overrides a type the imported file states itself', () => {
+  // A 3MF carries its volume types, and the file being imported is better evidence than the file
+  // being replaced.
+  const carried = carriedPartSubtypes(
+    [{ name: 'Connector', subtype: 'modifier_part' }],
+    [{ name: 'Connector', subtype: 'negative_part' }]
+  )
+  assert.equal(carried.size, 0)
+})
+
+test('carriedPartSubtypes carries nothing when no name corresponds', () => {
+  // Replacing with a genuinely different model must not invent helper volumes.
+  const carried = carriedPartSubtypes(
+    [{ name: 'Hole modifier 1', subtype: 'modifier_part' }],
+    [{ name: 'Bracket' }, { name: 'Pin' }]
+  )
+  assert.equal(carried.size, 0)
 })

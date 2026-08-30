@@ -17,7 +17,7 @@ import { formatPlateTypeLabel, formatPrinterModelLabel } from './slicingPresetMa
 
 export interface MachineSwitchWarning {
   /** Stable key so a host can dedupe/dismiss. */
-  key: 'offBed' | 'layerHeight' | 'printerModelUnavailable' | 'nozzleUnavailable' | 'plateUnavailable'
+  key: 'offBed' | 'layerHeight' | 'printerModelUnavailable' | 'printerProfileUnavailable' | 'nozzleUnavailable' | 'plateUnavailable' | 'machineOverridesCarried'
   message: string
 }
 
@@ -99,9 +99,48 @@ export function machineTargetConflictWarnings(conflicts: readonly MachineTargetC
         message: `This printer doesn't offer a ${requested} nozzle, so ${applied} is selected instead.`
       }
     }
+    if (conflict.field === 'printerProfileId') {
+      // Both sides arrive as NAMES (the resolver resolves them), because a preset id on screen
+      // tells the reader nothing about which printer preset they lost.
+      return {
+        key: 'printerProfileUnavailable' as const,
+        message: conflict.applied
+          ? `The ${conflict.requested} preset isn't available for this printer and nozzle, so ${conflict.applied} is selected instead.`
+          : `The ${conflict.requested} preset isn't available for this printer and nozzle.`
+      }
+    }
     return {
       key: 'printerModelUnavailable' as const,
       message: `No installed profile targets the ${formatPrinterModelLabel(conflict.requested)}, so ${formatPrinterModelLabel(conflict.applied)} is selected instead.`
     }
   })
+}
+
+/**
+ * The project's own machine settings are still applied after a printer change, and they were
+ * authored against a DIFFERENT machine.
+ *
+ * Kept rather than cleared, deliberately: they are the user's work, and silently discarding them on
+ * a printer switch is the failure this project's conventions call worse than an unwanted value.
+ * But an override is a diff against one specific preset's baseline, so carrying it can express
+ * something the new machine cannot do -- a `printable_height` from a taller printer, or an
+ * extruder-indexed vector from a dual-nozzle one. So it is carried AND said out loud, and the
+ * settings dialog offers a per-key reset for anything the user does not want.
+ *
+ * Returns null when there is nothing to say: no overrides, or the machine did not change.
+ */
+export function machineOverridesCarriedWarning(input: {
+  overriddenKeyCount: number
+  previousPrinterModel: string | null
+  printerModel: string
+}): MachineSwitchWarning | null {
+  if (input.overriddenKeyCount === 0) return null
+  if (!input.previousPrinterModel || input.previousPrinterModel === input.printerModel) return null
+  const count = input.overriddenKeyCount
+  return {
+    key: 'machineOverridesCarried',
+    message: `${count} printer setting${count === 1 ? '' : 's'} you changed for `
+      + `${formatPrinterModelLabel(input.previousPrinterModel)} ${count === 1 ? 'is' : 'are'} still applied to `
+      + `${formatPrinterModelLabel(input.printerModel)}. Check them in the printer settings, or reset the ones you do not want.`
+  }
 }

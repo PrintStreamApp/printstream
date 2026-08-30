@@ -24,8 +24,12 @@ import {
   evaluateQueueMatch,
   getPrinterPrintStartOptions,
   isPrinterModelCompatible,
+  platePrintDeselectedKeys,
+  platePrintSkipSelection,
+  platePrintUnits,
   queuePrintOptionsSchema,
   queueRequiredFilamentFromPlate,
+  type PlatePrintSkipSelection,
   type PrinterModel,
   type PrinterPrintStartOptions,
   type PrinterStatus,
@@ -133,12 +137,20 @@ export function QueueItemDialog({ open, onClose, onBack, fixedFile, defaultPlate
   const [mappingOverride, setMappingOverride] = useState<number[] | null>(item?.amsMapping ?? null)
   const [materialsOverride, setMaterialsOverride] = useState<QueueRequiredFilament[] | null>(item?.requiredFilaments ?? null)
   /**
-   * Per-object deselection (sliced plates with a real object list only). Persisted on
-   * the queued item as `options.skipObjects` and passed through to dispatch, where the
-   * server maps it to instance identify_ids for the start command (plus the mid-print
-   * fallback). Plate-specific, so a plate change resets it.
+   * Per-COPY deselection (sliced plates with a real object list only). Held in the WIRE shape
+   * rather than as row keys, because it is persisted on the queued item (`options.skipObjects` +
+   * `options.skipInstances`) and has to seed itself before the plate's objects have loaded. The
+   * row keys are derived from it once the units are known. Passed through to dispatch, where the
+   * server maps both id spaces to instance identify_ids for the start command (plus the mid-print
+   * fallback). Plate-specific, so a selection stored against another plate resolves to no rows.
    */
-  const [deselectedObjectIds, setDeselectedObjectIds] = useState<number[]>(item?.options.skipObjects ?? [])
+  const [skipSelection, setSkipSelection] = useState<PlatePrintSkipSelection>({
+    skipInstances: item?.options.skipInstances ?? []
+  })
+  // Read separately from `skipSelection` because it is only ever RESTORED, never produced: items
+  // queued before instance granularity named whole models, and reopening one must still show
+  // every copy of those checked.
+  const storedSkipObjects = useMemo(() => item?.options.skipObjects ?? [], [item])
 
   const addItem = useAddQueueItem()
   const updateItem = useUpdateQueueItem()
@@ -209,13 +221,17 @@ export function QueueItemDialog({ open, onClose, onBack, fixedFile, defaultPlate
   const effectiveMaterials = materialsOverride ?? fileFilaments
 
   const plateObjects = useMemo(() => activePlate?.objects ?? [], [activePlate])
-  const showObjectSelection = plateHasSliceData(activePlate) && plateObjects.length >= 2
-  const deselectedObjectIdSet = useMemo(() => new Set(deselectedObjectIds), [deselectedObjectIds])
-  const toggleObjectSelected = (objectId: number, selected: boolean) => {
-    setDeselectedObjectIds((current) => {
-      if (selected) return current.filter((id) => id !== objectId)
-      return current.includes(objectId) ? current : [...current, objectId]
-    })
+  const plateUnits = useMemo(() => platePrintUnits(plateObjects), [plateObjects])
+  const showObjectSelection = plateHasSliceData(activePlate) && plateUnits.length >= 2
+  const deselectedUnitKeySet = useMemo(
+    () => platePrintDeselectedKeys(plateUnits, { ...skipSelection, skipObjects: storedSkipObjects }),
+    [plateUnits, skipSelection, storedSkipObjects]
+  )
+  const toggleObjectSelected = (key: string, selected: boolean) => {
+    const next = new Set(deselectedUnitKeySet)
+    if (selected) next.delete(key)
+    else next.add(key)
+    setSkipSelection(platePrintSkipSelection(plateUnits, next))
   }
 
   // Default AMS mapping for a specific-printer target (overridden once the user edits a slot).
@@ -247,7 +263,7 @@ export function QueueItemDialog({ open, onClose, onBack, fixedFile, defaultPlate
     // The new plate has its own filaments and objects; drop overrides so they re-seed from it.
     setMappingOverride(null)
     setMaterialsOverride(null)
-    setDeselectedObjectIds([])
+    setSkipSelection({ skipInstances: [] })
   }
   const changeTarget = (next: string) => {
     setTargetValue(next)
@@ -292,13 +308,18 @@ export function QueueItemDialog({ open, onClose, onBack, fixedFile, defaultPlate
     // Submit the actually-selected plate's index (the picker can resolve to a plate whose
     // number differs from the 1-based default, e.g. a single-plate sliced "Plate 2" output).
     const plate = activePlate?.index ?? plateIndex
-    // Filter to the active plate's objects so a stale id can never be persisted.
-    const skipObjects = showObjectSelection
-      ? deselectedObjectIds.filter((id) => plateObjects.some((object) => object.id === id))
-      : []
+    // Re-resolved through the active plate's units so a selection stored against another plate
+    // can never be persisted.
+    const { skipInstances } = showObjectSelection
+      ? platePrintSkipSelection(plateUnits, deselectedUnitKeySet)
+      : { skipInstances: [] }
     const submittedOptions: QueuePrintOptions = {
       ...options,
-      skipObjects: skipObjects.length > 0 ? skipObjects : undefined
+      // A legacy whole-object selection is REWRITTEN as instances on the first save, since the
+      // picker resolved it to concrete copies above; keeping both would double-describe the same
+      // exclusion in two id spaces.
+      skipObjects: undefined,
+      skipInstances: skipInstances.length > 0 ? skipInstances : undefined
     }
     try {
       if (isEdit && item) {
@@ -408,8 +429,8 @@ export function QueueItemDialog({ open, onClose, onBack, fixedFile, defaultPlate
 
               {showObjectSelection && (
                 <PrintObjectsSection
-                  objects={plateObjects}
-                  deselectedIds={deselectedObjectIdSet}
+                  units={plateUnits}
+                  deselectedKeys={deselectedUnitKeySet}
                   onToggle={toggleObjectSelected}
                 />
               )}

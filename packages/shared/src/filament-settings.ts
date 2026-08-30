@@ -361,13 +361,25 @@ export function resolvedFilamentModifiedKeys(state: ResolvedFilamentState, overr
 /**
  * Request body for resolving a MACHINE (printer) profile's config for the printer-settings dialog.
  *
- * Simpler than its filament/process siblings on purpose: a machine preset is never embedded in a
- * 3MF the way a filament or process preset is, so there is no project slot to read from and no
- * baseline-vs-embedded distinction: the resolved preset IS the baseline.
+ * Simpler than its filament/process siblings in one way: a machine PRESET is never embedded in a
+ * 3MF, so there is no project preset to resolve and the installed preset IS the baseline.
+ *
+ * But a 3MF does embed the machine's VALUES (`project_settings.config` carries the full machine
+ * block a retarget writes), so with `sourceFileId` the route also answers what that project changed
+ * relative to the preset. That is what makes a project-local machine override readable again after
+ * a reload instead of write-only.
  */
 export const resolveMachineConfigRequestSchema = z.object({
   machineProfileId: z.string().trim().min(1),
-  targetId: z.string().trim().min(1).nullable().optional()
+  targetId: z.string().trim().min(1).nullable().optional(),
+  /** Library file to read the project's own machine values from; omit for the bare preset. */
+  sourceFileId: z.string().trim().min(1).nullable().optional(),
+  /**
+   * Which VERSION of that file. A history version keeps the head file's id and carries its own
+   * `uploadedAt`, so without this the editor opened on an old version and was answered with the
+   * CURRENT version's overrides.
+   */
+  sourceFileUploadedAt: z.string().trim().min(1).nullable().optional()
 })
 export type ResolveMachineConfigRequest = z.infer<typeof resolveMachineConfigRequestSchema>
 

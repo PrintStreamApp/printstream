@@ -3,6 +3,34 @@ export interface PrinterCardFooterActionDescriptor {
 	optional?: boolean
 }
 
+interface SkipObjectsActionVisibilityOptions {
+	/** Whether the printer's own state allows skipping at all (online, printing or paused, ...). */
+	printerCanSkipObjects: boolean
+	/**
+	 * How many objects the active plate has, or **null when that is not yet known**: the list is
+	 * still loading, the request failed, or the printer cannot report one (internal-storage models).
+	 * Null and 0 are deliberately different: 0 means "we read the plate and found nothing", which is
+	 * a failure the dialog explains, not a single-object plate.
+	 */
+	objectCount: number | null
+}
+
+/**
+ * Whether the mid-print "Skip object" action belongs on the card.
+ *
+ * Hidden on a single-object plate, because skipping the only object is stopping the print with a
+ * button that does not say so: the same `>= 2` rule the prepare-print pickers apply. It is hidden
+ * ONLY on a definitive count: an unknown one keeps the action, so a slow or unsupported list
+ * surfaces its own message instead of silently removing the control.
+ */
+export function shouldShowSkipObjectsAction({
+	printerCanSkipObjects,
+	objectCount
+}: SkipObjectsActionVisibilityOptions): boolean {
+	if (!printerCanSkipObjects) return false
+	return objectCount !== 1
+}
+
 interface ResolveFooterOverflowKeysOptions {
 	actions: readonly PrinterCardFooterActionDescriptor[]
 	actionWidths: Readonly<Record<string, number>>

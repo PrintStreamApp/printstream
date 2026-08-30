@@ -12,6 +12,15 @@
  *     emulation. Slower than native but real, local slicing — no remote dependency.
  *   - **`PRINTSTREAM_DEV_SLICER=remote` (any arch):** don't run a local slicer. The API uses
  *     `SLICER_SERVICE_URL` as-is — point it at a reachable x86 slicer (e.g. staging) in `.env`.
+ *
+ * Staleness: `concurrently` is deliberately given no `--kill-others` flag (a transient crash must
+ * not take down the qemu slicer), so a service that dies here is tolerated silently. Two things
+ * cover the consequence rather than the noise, since the damaging outcome is not a service being
+ * DOWN but one still UP and serving code that no longer matches the repo:
+ *   - `scripts/dev/exit-with-parent.cjs`, a preload wired into the watched workspaces' `dev`
+ *     scripts, so a server whose watcher dies exits instead of orphaning onto its port;
+ *   - `apps/api/src/lib/dev-source-staleness.ts`, which reports the cases that prevents
+ *     (a wedged watcher, an unrebuilt package `dist`) on `GET /api/health` and in the log.
  */
 import { spawnSync, spawn } from 'node:child_process'
 import path from 'node:path'

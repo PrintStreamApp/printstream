@@ -474,6 +474,7 @@ export type SliceFileSubmitInput = {
     toolheads?: Array<{ id: string; label: string; nozzleDiameter?: number | null; nozzleFlow?: PrinterNozzleFlow | null; position?: 'left' | 'right' | 'single' | null }>
     processProfileId?: string | null
     processSettingOverrides?: Record<string, string | string[]>
+    machineSettingOverrides?: Record<string, string | string[]>
     filamentMappings?: Array<{ projectFilamentId: number; profileId?: string | null; material?: string | null; color?: string | null; source?: 'ams' | 'externalSpool' | 'manual'; trayId?: number | null }>
   }
   outputFileName: string
@@ -538,6 +539,7 @@ export function buildCreateSlicingJobBody(
           toolheads: input.target.toolheads,
           processProfileId: input.target.processProfileId,
           processSettingOverrides: input.target.processSettingOverrides,
+          machineSettingOverrides: input.target.machineSettingOverrides,
           filamentMappings: input.target.filamentMappings
         }
       : {
@@ -549,6 +551,7 @@ export function buildCreateSlicingJobBody(
           toolheads: input.target.toolheads,
           processProfileId: input.target.processProfileId,
           processSettingOverrides: input.target.processSettingOverrides,
+          machineSettingOverrides: input.target.machineSettingOverrides,
           filamentMappings: input.target.filamentMappings
         },
     outputFileName: input.outputFileName,

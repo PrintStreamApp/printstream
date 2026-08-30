@@ -8,6 +8,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import { Router } from 'express'
+import { devSourceStaleness } from '../lib/dev-source-staleness.js'
 import { env } from '../lib/env.js'
 import { rootPrisma } from '../lib/prisma.js'
 
@@ -28,7 +29,11 @@ healthRouter.get('/', (_request, response) => {
             nodeEnv: env.NODE_ENV,
             bootId: processBootId,
             startedAt: processStartedAt,
-            uptimeSeconds: Math.floor(process.uptime())
+            uptimeSeconds: Math.floor(process.uptime()),
+            // Whether this process is still running the code that is on disk. `bootId` alone cannot
+            // answer that: it changes on every restart, so it tells you the process is new without
+            // telling you the SOURCE is not newer still. See `dev-source-staleness.ts`.
+            source: devSourceStaleness()
           }
         }
       : {})

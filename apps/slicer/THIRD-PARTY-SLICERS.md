@@ -27,6 +27,8 @@ official Bambu Lab GitHub releases:
 | 2.7.0.55   | https://github.com/bambulab/BambuStudio/releases/tag/v02.07.00.55               | https://github.com/bambulab/BambuStudio/tree/v02.07.00.55      |
 | 2.7.1.57   | https://github.com/bambulab/BambuStudio/releases/tag/v02.07.01.57               | https://github.com/bambulab/BambuStudio/tree/v02.07.01.57      |
 | 2.7.1.62   | https://github.com/bambulab/BambuStudio/releases/tag/v02.07.01.62               | https://github.com/bambulab/BambuStudio/tree/v02.07.01.62      |
+| 2.8.2.60   | https://github.com/bambulab/BambuStudio/releases/tag/v02.08.02.60               | https://github.com/bambulab/BambuStudio/tree/v02.08.02.60      |
+| 2.8.2.61   | https://github.com/bambulab/BambuStudio/releases/tag/v02.08.02.61               | https://github.com/bambulab/BambuStudio/tree/v02.08.02.61      |
 | 2.8.0.50 (beta) | https://github.com/bambulab/BambuStudio/releases/tag/v02.08.00.50           | https://github.com/bambulab/BambuStudio/tree/v02.08.00.50      |
 | 2.8.1.55 (beta) | https://github.com/bambulab/BambuStudio/releases/tag/v02.08.01.55           | https://github.com/bambulab/BambuStudio/tree/v02.08.01.55      |
 

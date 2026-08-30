@@ -9,6 +9,7 @@ import { PNG } from 'pngjs'
 import yazl from 'yazl'
 import { applyObjectProcessOverridesXml, buildPlateObjectsWithPreview, buildThreeMfIndex, createObjectCustomizedThreeMf, createObjectFilteredThreeMf, createSinglePlateThreeMf, plateObjectIdsFromModelSettingsXml, readEntry, readPlateIndex, readSceneManifest, rekeyReplacedObjectOverrides, setBuildItemsUnprintableXml, threeMfTransformFromTRS, writeArrangedThreeMf } from './three-mf.js'
 import { plateSkipIdentifyIdsFromIndex } from './three-mf-output.js'
+import { parseModelSettingsPlates } from '@printstream/shared/three-mf'
 import { applyFilamentList, applyGlobalProcessOverrides, applyModelKindMarker, applyNozzleAssignmentToProjectSettings, applyPartProcessOverrides, applyPartTypeChanges, applyTrianglePaintToModelEntry, mergeCustomGcodePerLayer, rewriteSliceInfoNozzleGroups, serializeBrimEarPoints } from '@printstream/shared/three-mf'
 import { rewriteThreeMfEntries } from './three-mf-internal.js'
 import { parseBrimEarPoints, parseCustomGcodePauses, parseCustomGcodeToolChanges, parseModelSettingsScene } from './three-mf-reader.js'
@@ -721,6 +722,58 @@ test('buildPlateObjectsWithPreview derives previews when first layer starts at Z
   assert.match(objects[0]?.previewPath ?? '', /Z$/)
 })
 
+test('buildPlateObjectsWithPreview reports FIRMWARE handles for a model_settings-derived index', () => {
+  // Every other test here builds from slice_info, where an object's id already IS its
+  // identify_id: which is why this went unnoticed. A job dispatched from the LIBRARY resolves
+  // through model_settings instead, where `object_id` (5) and `identify_id` (7, 9) are different
+  // id spaces. The list is sent straight to the printer as `skip_objects`' `obj_list` and the
+  // previews are keyed by the G-code's "unique label id", so emitting object ids here meant the
+  // mid-print skip targeted ids the firmware does not know and no preview ever matched.
+  const modelSettingsXml = [
+    '<config>',
+    '  <plate>',
+    '    <metadata key="plater_id" value="2"/>',
+    '    <model_instance>',
+    '      <metadata key="object_id" value="5"/>',
+    '      <metadata key="instance_id" value="0"/>',
+    '      <metadata key="identify_id" value="7"/>',
+    '    </model_instance>',
+    '    <model_instance>',
+    '      <metadata key="object_id" value="5"/>',
+    '      <metadata key="instance_id" value="1"/>',
+    '      <metadata key="identify_id" value="9"/>',
+    '    </model_instance>',
+    '  </plate>',
+    '  <object id="5">',
+    '    <metadata key="name" value="Bracket"/>',
+    '  </object>',
+    '</config>'
+  ].join('\n')
+  const index = buildThreeMfIndex(sliceInfoXml, projectSettingsJson, parseModelSettingsPlates(modelSettingsXml))
+  const gcode = Buffer.from([
+    '; object ids of layer 1 start:',
+    '; start printing object, unique label id: 9',
+    '; FEATURE: Outer wall',
+    'G90',
+    'M82',
+    'G1 X0 Y0 Z0.2 E0',
+    'G1 X10 Y0 E1',
+    'G1 X10 Y10 E2',
+    'G1 X0 Y10 E3',
+    'G1 X0 Y0 E4',
+    '; Z_HEIGHT: 0.4'
+  ].join('\n'), 'utf8')
+
+  const objects = buildPlateObjectsWithPreview(index, 2, gcode)
+
+  // One row per COPY, each carrying its own firmware handle, numbered like the print picker.
+  assert.deepEqual(objects.map((object) => object.id), [7, 9])
+  assert.deepEqual(objects.map((object) => object.name), ['Bracket #1', 'Bracket #2'])
+  // The preview attaches to the copy the G-code actually labelled.
+  assert.equal(objects[0]?.previewPath, null)
+  assert.match(objects[1]?.previewPath ?? '', /^M 0 0 L 10 0/)
+})
+
 test('buildPlateObjectsWithPreview prefers embedded pick masks over G-code-derived previews', () => {
   const index = buildThreeMfIndex(sliceInfoXml, projectSettingsJson)
   const gcode = Buffer.from([
@@ -1026,6 +1079,60 @@ test('skip resolution handles gcode-only 3MFs whose objects exist only in slice_
   } finally {
     await rm(tempDir, { recursive: true, force: true })
   }
+})
+
+test('a slice_info object whose NAME contains a slash is not dropped', async () => {
+  // The attribute run used to be matched with `[^/>]*`, which cannot span a value containing a
+  // slash: so "CHM 1/2" made the whole `<object>` fail to match and the object vanished from the
+  // plate's object list, from the print picker, and from skip resolution, with nothing logged.
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-slash-name-'))
+  const sourcePath = path.join(tempDir, 'source.gcode.3mf')
+  try {
+    await writeZipFixture(sourcePath, [
+      ['Metadata/slice_info.config', Buffer.from([
+        '<config>',
+        '  <plate>',
+        '    <metadata key="index" value="1"/>',
+        '    <object identify_id="11018" name="CHM 1/2" skipped="false" />',
+        '    <object identify_id="11051" name="Plain" skipped="false" />',
+        '  </plate>',
+        '</config>'
+      ].join('\n'), 'utf8')]
+    ])
+
+    const index = await readPlateIndex(sourcePath)
+    assert.deepEqual(index.plates[0]?.objects.map((object) => object.name), ['CHM 1/2', 'Plain'])
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
+})
+
+test('plateSkipIdentifyIdsFromIndex skips individual COPIES via skipInstances', () => {
+  // Instance granularity: deselecting one of an object's copies must skip exactly that placement
+  // and leave its siblings printing. The whole-object field still means every copy.
+  const index = {
+    plates: [{
+      index: 1,
+      objects: [
+        { id: 3, identifyIds: [101, 102, 103] },
+        { id: 4, identifyIds: [201] }
+      ]
+    }]
+  }
+  const oneCopy = plateSkipIdentifyIdsFromIndex(index, 1, new Set<number>(), new Set([102]))
+  assert.deepEqual(oneCopy.identifyIds, [102])
+  assert.deepEqual(oneCopy.unmatchedInstanceIds, [])
+  assert.equal(oneCopy.plateInstanceCount, 4)
+
+  // Both fields at once, deduped and in plate order.
+  const mixed = plateSkipIdentifyIdsFromIndex(index, 1, new Set([4]), new Set([101, 102]))
+  assert.deepEqual(mixed.identifyIds, [101, 102, 201])
+
+  // A handle from another plate is reported unmatched rather than forwarded: the firmware would
+  // ignore it and the user would watch the copy print anyway.
+  const foreign = plateSkipIdentifyIdsFromIndex(index, 1, new Set<number>(), new Set([999]))
+  assert.deepEqual(foreign.identifyIds, [])
+  assert.deepEqual(foreign.unmatchedInstanceIds, [999])
 })
 
 test('plateSkipIdentifyIdsFromIndex maps deselected plate objects through the parsed index', () => {
@@ -2701,6 +2808,195 @@ test('re-saving an editor-born project onto its own output is stable (no duplica
   }
 })
 
+test('a replaced object\'s unassigned solids inherit its material, not filament 1', async () => {
+  // Replace object keeps the replaced object's material on the INSTANCE and stages the new mesh
+  // with every solid unassigned (`instanceFromStagedImport` sets `filamentId: null`), so the
+  // object-level binding is the only thing carrying the material the object printed in. Pins the
+  // inheritance the editor's sidebar and viewport mirror via `effectivePartFilamentId`: an object
+  // that printed in material 5 must not come back as material 1 anywhere.
+  const { buildEditedThreeMf } = await import('./three-mf.js')
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-replace-material-'))
+  try {
+    const quad = (z: number) => ({
+      positions: [0, 0, z, 10, 0, z, 10, 10, z, 0, 10, z],
+      indices: [0, 1, 2, 0, 2, 3],
+      bounds: { min: { x: 0, y: 0, z }, max: { x: 10, y: 10, z } }
+    })
+    const parts = [{ name: 'Shell', mesh: quad(0) }, { name: 'Rib', mesh: quad(5) }, { name: 'Boss', mesh: quad(9) }]
+    const imports = [{ importId: 'imp-1', name: 'C', mesh: { ...quad(0), parts }, parts }]
+    const edit: SceneEdit = {
+      plates: [{ index: 1 }],
+      instances: [
+        {
+          importId: 'imp-1',
+          plateIndex: 1,
+          position: { x: 10, y: 20, z: 0 },
+          rotation: { x: 0, y: 0, z: 0 },
+          scale: { x: 1, y: 1, z: 1 },
+          // The material the replaced object carried; no importPartFilaments, exactly as Replace emits.
+          filamentId: 5
+        }
+      ],
+      filaments: [1, 2, 3, 4, 5].map((slot) => ({ color: '#00AE42', type: 'PLA', settingsId: `Slot ${slot}` }))
+    }
+
+    const outputPath = path.join(tempDir, 'replaced.3mf')
+    await buildEditedThreeMf(null, outputPath, edit, imports)
+    const settingsXml = (await readEntry(outputPath, 'Metadata/model_settings.config')).toString('utf8')
+    const extruders = [...settingsXml.matchAll(/key="extruder" value="(\d+)"/g)].map((match) => match[1]!)
+    // The object binding plus one entry per solid, all on the object's material.
+    assert.deepEqual(extruders, ['5', '5', '5', '5'])
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
+})
+
+test('removedParts drops the right solids and leaves every other part-scoped edit on target', async () => {
+  // The sharp edge of part deletion: every other part seam addresses BASE ordinals, so removals
+  // must be applied after them. If they ran first, the surviving parts would shift and the
+  // material/type edits below would land on their neighbours: silently, since nothing throws.
+  const { buildEditedThreeMf } = await import('./three-mf.js')
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-removed-parts-'))
+  try {
+    const quad = (z: number) => ({
+      positions: [0, 0, z, 10, 0, z, 10, 10, z, 0, 10, z],
+      indices: [0, 1, 2, 0, 2, 3],
+      bounds: { min: { x: 0, y: 0, z }, max: { x: 10, y: 10, z } }
+    })
+    // Four solids so a middle one can be removed with neighbours on both sides.
+    const parts = [0, 1, 2, 3].map((index) => ({ name: `Solid ${index}`, mesh: quad(index * 5) }))
+    const imports = [{ importId: 'imp-1', name: 'Assembly', mesh: { ...quad(0), parts }, parts }]
+    const filaments = [1, 2, 3].map((slot) => ({ color: '#00AE42', type: 'PLA', settingsId: `Slot ${slot}` }))
+    const base: SceneEdit = {
+      plates: [{ index: 1 }],
+      instances: [
+        { importId: 'imp-1', plateIndex: 1, position: { x: 10, y: 20, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 }, filamentId: 1 }
+      ],
+      filaments,
+      // Keyed by STAGED solid index, exactly as the editor emits them.
+      importPartFilaments: [{ importId: 'imp-1', partIndex: 3, filamentId: 3 }],
+      importPartTypes: [{ importId: 'imp-1', partIndex: 2, subtype: 'modifier_part' }]
+    }
+
+    const readParts = async (filePath: string) => {
+      const settingsXml = (await readEntry(filePath, 'Metadata/model_settings.config')).toString('utf8')
+      return [...settingsXml.matchAll(/<part\b[^>]*>[\s\S]*?<\/part>/g)].map((match) => {
+        const block = match[0]
+        return {
+          name: /key="name" value="([^"]*)"/.exec(block)?.[1] ?? null,
+          extruder: /key="extruder" value="(\d+)"/.exec(block)?.[1] ?? null,
+          subtype: /subtype="([^"]*)"/.exec(block)?.[1] ?? null
+        }
+      })
+    }
+
+    // Baseline: all four solids, solid 3 on material 3, solid 2 a modifier.
+    const beforePath = path.join(tempDir, 'before.3mf')
+    await buildEditedThreeMf(null, beforePath, base, imports)
+    const before = await readParts(beforePath)
+    assert.deepEqual(before.map((part) => part.name), ['Solid 0', 'Solid 1', 'Solid 2', 'Solid 3'])
+    assert.equal(before[3]?.extruder, '3')
+    assert.equal(before[2]?.subtype, 'modifier_part')
+
+    // Remove solid 1. Everything else must keep the material and type it was given, addressed by
+    // its ORIGINAL index: the bug this pins would slide them one place down.
+    const afterPath = path.join(tempDir, 'after.3mf')
+    await buildEditedThreeMf(null, afterPath, { ...base, importRemovedParts: [{ importId: 'imp-1', partIndex: 1 }] }, imports)
+    const after = await readParts(afterPath)
+    assert.deepEqual(after.map((part) => part.name), ['Solid 0', 'Solid 2', 'Solid 3'])
+    assert.equal(after[2]?.extruder, '3', 'solid 3 keeps its own material')
+    assert.equal(after[1]?.subtype, 'modifier_part', 'solid 2 keeps its own type')
+
+    // The removed solid's mesh must not ride along as an orphan.
+    const modelXml = (await readEntry(afterPath, '3D/3dmodel.model')).toString('utf8')
+    assert.equal((modelXml.match(/<component\b/g) ?? []).length, 3)
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
+})
+
+test('removedParts strips a baked part from an existing project', async () => {
+  // The in-project half: the part exists in the base file, so the removal has to edit both
+  // documents: the `<component>` in the model and the `<part>` in model_settings.
+  const { buildEditedThreeMf } = await import('./three-mf.js')
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-removed-baked-'))
+  try {
+    const quad = (z: number) => ({
+      positions: [0, 0, z, 10, 0, z, 10, 10, z, 0, 10, z],
+      indices: [0, 1, 2, 0, 2, 3],
+      bounds: { min: { x: 0, y: 0, z }, max: { x: 10, y: 10, z } }
+    })
+    const parts = [0, 1, 2].map((index) => ({ name: `Solid ${index}`, mesh: quad(index * 5) }))
+    const imports = [{ importId: 'imp-1', name: 'Assembly', mesh: { ...quad(0), parts }, parts }]
+    const filaments = [{ color: '#00AE42', type: 'PLA', settingsId: 'Slot 1' }]
+
+    // Save once so the parts become real baked `<component>`s with base ordinals 0..2.
+    const savedPath = path.join(tempDir, 'saved.3mf')
+    await buildEditedThreeMf(null, savedPath, {
+      plates: [{ index: 1 }],
+      instances: [{ importId: 'imp-1', plateIndex: 1, position: { x: 10, y: 20, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 }, filamentId: 1 }],
+      filaments
+    }, imports)
+
+    const objectId = Number.parseInt(
+      /<object id="(\d+)"[^>]*>\s*<components>/.exec((await readEntry(savedPath, '3D/3dmodel.model')).toString('utf8'))?.[1] ?? '',
+      10
+    )
+    assert.ok(Number.isInteger(objectId))
+
+    const trimmedPath = path.join(tempDir, 'trimmed.3mf')
+    await buildEditedThreeMf(savedPath, trimmedPath, {
+      plates: [{ index: 1 }],
+      instances: [{ objectId, plateIndex: 1, position: { x: 10, y: 20, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } }],
+      filaments,
+      removedParts: [{ objectId, partIndex: 1 }]
+    }, [])
+
+    const settingsXml = (await readEntry(trimmedPath, 'Metadata/model_settings.config')).toString('utf8')
+    const names = [...settingsXml.matchAll(/<part\b[^>]*>[\s\S]*?<\/part>/g)]
+      .map((match) => /key="name" value="([^"]*)"/.exec(match[0])?.[1] ?? null)
+    assert.deepEqual(names, ['Solid 0', 'Solid 2'])
+
+    const modelXml = (await readEntry(trimmedPath, '3D/3dmodel.model')).toString('utf8')
+    assert.equal((modelXml.match(/<component\b/g) ?? []).length, 2)
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
+})
+
+test('importPartTypes makes a carried modifier bake as a modifier, not printed geometry', async () => {
+  // The editor records a replacement's carried volume types as importPartTypes, because the STAGED
+  // record has none for a STEP (or a plain 3MF). Pins that the bake honours them: without it a
+  // modifier bakes as normal_part, i.e. it PRINTS, which is silent and destructive.
+  const { buildEditedThreeMf } = await import('./three-mf.js')
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-carried-subtype-'))
+  try {
+    const quad = (z: number) => ({
+      positions: [0, 0, z, 10, 0, z, 10, 10, z, 0, 10, z],
+      indices: [0, 1, 2, 0, 2, 3],
+      bounds: { min: { x: 0, y: 0, z }, max: { x: 10, y: 10, z } }
+    })
+    // Two solids, NEITHER typed by the staged record: exactly what a STEP import produces.
+    const parts = [{ name: 'Cylinder', mesh: quad(0) }, { name: 'Hole modifier 1', mesh: quad(5) }]
+    const imports = [{ importId: 'imp-1', name: 'C', mesh: { ...quad(0), parts }, parts }]
+    const outputPath = path.join(tempDir, 'carried.3mf')
+    await buildEditedThreeMf(null, outputPath, {
+      plates: [{ index: 1 }],
+      instances: [
+        { importId: 'imp-1', plateIndex: 1, position: { x: 10, y: 20, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 }, filamentId: 1 }
+      ],
+      filaments: [{ color: '#00AE42', type: 'PLA', settingsId: 'Slot 1' }],
+      importPartTypes: [{ importId: 'imp-1', partIndex: 1, subtype: 'modifier_part' }]
+    }, imports)
+
+    const settingsXml = (await readEntry(outputPath, 'Metadata/model_settings.config')).toString('utf8')
+    const subtypes = [...settingsXml.matchAll(/<part\b[^>]*subtype="([^"]*)"/g)].map((match) => match[1])
+    assert.deepEqual(subtypes, ['normal_part', 'modifier_part'])
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
+})
+
 test('a from-scratch build with filaments embeds project_settings.config directly', async () => {
   const { buildEditedThreeMf } = await import('./three-mf.js')
   const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-freshsettings-'))
@@ -4255,4 +4551,52 @@ test('extractSceneBed reports the printer the bed was placed for', async () => {
 
   // Null when neither is known: the generic fallback bed, which has no plate mesh to fetch.
   assert.equal(extractSceneBed(null, null).bed.printerModel, null)
+})
+
+test('a part deleted on an independent COPY is removed from the copy, not ignored', async () => {
+  // `removedParts` is the one SUBTRACTIVE part seam, and the clone pre-pass has to resolve its
+  // negative placeholder like every other one. Missing it fails silently: `applyRemovedParts`
+  // looks for `<object id="-1">`, finds nothing, removes nothing, and the part the user deleted
+  // on the copy is simply back on the next open.
+  const { buildEditedThreeMf } = await import('./three-mf.js')
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-clone-removed-part-'))
+  const sourcePath = path.join(tempDir, 'source.3mf')
+  const outputPath = path.join(tempDir, 'edited.3mf')
+  try {
+    await writeZipFixture(sourcePath, [
+      ['3D/3dmodel.model', Buffer.from(ARRANGE_MODEL_XML, 'utf8')],
+      ['Metadata/model_settings.config', Buffer.from(ARRANGE_MODEL_SETTINGS_XML, 'utf8')]
+    ])
+    const partCount = (xml: string, objectId: number) =>
+      ((xml.match(new RegExp(`<object\\b[^>]*\\bid="${objectId}"[\\s\\S]*?</object>`))?.[0] ?? '')
+        .match(/<part\b/g) ?? []).length
+
+    const baseSettings = (await readEntry(sourcePath, 'Metadata/model_settings.config')).toString('utf8')
+    const sourceParts = partCount(baseSettings, 3)
+
+    const edit: SceneEdit = {
+      plates: [{ index: 1 }],
+      instances: [
+        { objectId: 3, plateIndex: 1, position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } },
+        { objectId: -1, plateIndex: 1, position: { x: 40, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } }
+      ],
+      objectClones: [{ objectId: -1, sourceObjectId: 3 }],
+      // Addressed at the COPY's placeholder, exactly as the editor emits it.
+      removedParts: [{ objectId: -1, partIndex: 0 }]
+    }
+    await buildEditedThreeMf(sourcePath, outputPath, edit)
+
+    const modelXml = (await readEntry(outputPath, '3D/3dmodel.model')).toString('utf8')
+    const cloneId = [...modelXml.matchAll(/<object\b[^>]*\bid="(\d+)"/g)]
+      .map((match) => Number(match[1]))
+      .find((id) => id !== 3)
+    assert.ok(cloneId != null, 'a new object was allocated for the copy')
+
+    const settingsXml = (await readEntry(outputPath, 'Metadata/model_settings.config')).toString('utf8')
+    // The copy lost exactly one part; the SOURCE kept all of its own.
+    assert.equal(partCount(settingsXml, cloneId), sourceParts - 1, 'the copy lost the deleted part')
+    assert.equal(partCount(settingsXml, 3), sourceParts, 'the source object is untouched')
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
 })

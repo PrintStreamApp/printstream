@@ -1652,7 +1652,8 @@ printersRouter.post('/:id/storage/print', requireRequestPermission(PRINTS_DISPAT
     sourceKind,
     storageThreeMfIndex,
     parsed.data.plate,
-    parsed.data.skipObjects
+    parsed.data.skipObjects,
+    parsed.data.skipInstances
   )
 
   const remoteName = filePath.replace(/^\//, '')
@@ -1769,28 +1770,31 @@ printersRouter.post('/:id/storage/print', requireRequestPermission(PRINTS_DISPAT
 })
 
 /**
- * Map a storage-print request's deselected plate objects (`skipObjects`, the storage
- * plates index's `objects[].id` values) to instance `identify_id`s via the same index the
- * route already derived. NOT fail-safe-passthrough: an unresolvable selection (non-3MF
- * source, unreadable index, unknown object id, no identify_ids, or a selection that would
- * skip every object) rejects the print with a clear message instead of printing objects
- * the user deselected. Returns null when nothing was deselected.
+ * Map a storage-print request's deselection to instance `identify_id`s via the same index the
+ * route already derived. Both id spaces are honoured: `skipObjects` names whole models by the
+ * storage plates index's `objects[].id` values, `skipInstances` names individual placements by
+ * `identify_id` (what the picker sends, so one of eight copies can be skipped). NOT
+ * fail-safe-passthrough: an unresolvable selection (non-3MF source, unreadable index, unknown
+ * object id, an identify_id not on this plate, or a selection that would skip every object)
+ * rejects the print with a clear message instead of printing objects the user deselected.
+ * Returns null when nothing was deselected.
  */
 function resolveStorageSkipIdentifyIds(
   sourceKind: '3mf' | 'gcode',
   index: Awaited<ReturnType<typeof readPrinterStorageThreeMfIndex>> | null,
   plate: number,
-  skipObjects: number[] | undefined
+  skipObjects: number[] | undefined,
+  skipInstances: number[] | undefined
 ): number[] | null {
-  if (!skipObjects || skipObjects.length === 0) return null
+  if ((!skipObjects || skipObjects.length === 0) && (!skipInstances || skipInstances.length === 0)) return null
   if (sourceKind !== '3mf') {
     throw badRequest('Object skipping is only available for sliced 3MF files')
   }
   if (!index) {
     throw badRequest('Could not read the file to resolve the deselected objects. Try again, or print without deselecting objects.')
   }
-  const mapped = plateSkipIdentifyIdsFromIndex(index, plate, new Set(skipObjects))
-  if (mapped.unmatchedObjectIds.length > 0 || mapped.identifyIds.length === 0) {
+  const mapped = plateSkipIdentifyIdsFromIndex(index, plate, new Set(skipObjects), new Set(skipInstances))
+  if (mapped.unmatchedObjectIds.length > 0 || mapped.unmatchedInstanceIds.length > 0 || mapped.identifyIds.length === 0) {
     throw badRequest('Some deselected objects could not be matched on the selected plate. Re-open the print dialog and try again.')
   }
   if (mapped.identifyIds.length >= mapped.plateInstanceCount) {

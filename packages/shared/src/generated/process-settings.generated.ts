@@ -4242,7 +4242,7 @@ export const processSettingsCatalog: ProcessSettingsCatalog = {
       "label": "Sparse infill filament",
       "tooltip": "Filament to print internal sparse infill.",
       "category": "Extruders",
-      "mode": "develop",
+      "mode": "advanced",
       "min": 0,
       "default": "0",
       "guiType": "i_enum_open"
@@ -4252,7 +4252,7 @@ export const processSettingsCatalog: ProcessSettingsCatalog = {
       "label": "Solid infill filament",
       "tooltip": "Filament to print solid infill",
       "category": "Extruders",
-      "mode": "develop",
+      "mode": "advanced",
       "min": 0,
       "default": "0",
       "guiType": "i_enum_open"
@@ -4262,7 +4262,7 @@ export const processSettingsCatalog: ProcessSettingsCatalog = {
       "label": "Walls filament",
       "tooltip": "Filament to print walls",
       "category": "Extruders",
-      "mode": "develop",
+      "mode": "advanced",
       "min": 0,
       "default": "0",
       "guiType": "i_enum_open"

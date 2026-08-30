@@ -211,6 +211,10 @@ test('the combination table outranks the soluble-interface fallback', () => {
     support_type: 'tree(auto)',
     support_on_build_plate_only: '0',
     support_top_z_distance: '0',
+    // The UNDERSIDE gap joined the vendored PVA entry in BambuStudio 02.08.02.61: a soluble
+    // interface dissolves away, so it can sit flush under the model too. The TPU entry, which
+    // shares every other value, deliberately did not gain it.
+    support_bottom_z_distance: '0',
     support_interface_pattern: 'rectilinear_interlaced',
     support_interface_spacing: '0',
     support_object_xy_distance: '0'
@@ -231,6 +235,7 @@ test('a table hit whose values are already configured suppresses the fallback pr
       support_type: 'tree(auto)',
       support_on_build_plate_only: '0',
       support_top_z_distance: '0',
+      support_bottom_z_distance: '0',
       support_interface_pattern: 'rectilinear_interlaced',
       support_interface_spacing: '0',
       support_object_xy_distance: '0'

@@ -138,8 +138,12 @@ export const PlatePausesSection = memo(function PlatePausesSection({ pauses, onC
             onChange([...pauses, { z: Math.round((lastZ + 1) * 10) / 10 }])
           }}
           sx={{ ml: 'auto' }}
+          // The section heading beside it already says "Pauses", so the label is just the verb, as
+          // on the Materials section. The aria-label keeps what it adds, or the panel reads out
+          // several identically-named "Add" buttons.
+          aria-label="Add pause"
         >
-          Add pause
+          Add
         </Button>
       </StickySectionHeader>
       <Sheet variant="outlined" sx={{ p: 1, borderRadius: 'sm', minWidth: 0 }}>
@@ -221,8 +225,9 @@ export const PlateFilamentChangesSection = memo(function PlateFilamentChangesSec
             ])
           }}
           sx={{ ml: 'auto' }}
+          aria-label="Add filament change"
         >
-          Add change
+          Add
         </Button>
       </StickySectionHeader>
       <Sheet variant="outlined" sx={{ p: 1, borderRadius: 'sm', minWidth: 0 }}>

@@ -75,7 +75,7 @@ import { SettingsTuneButton } from '../../components/SettingsTuneButton'
 import { SplitButton } from '../../components/SplitButton'
 import { PART_SUBTYPE_OPTIONS, type GizmoMode, type SelectedTransform, type TransformGizmoMode } from './editorGeometry'
 import { HELPER_VOLUME_SPECS, helperVolumeCssColor } from './lib/helperVolumes'
-import { printedParts, summarizeInstanceMaterial } from './lib/editorModel'
+import { effectivePartFilamentId, printedParts, summarizeInstanceMaterial } from './lib/editorModel'
 import type { EditorAddedPart, EditorInstance, EditorPlate } from './lib/editorModel'
 import { PRIMITIVE_LABELS, type PrimitiveKind } from './lib/primitives'
 import { plateDisplayName } from './lib/plateName'
@@ -1494,6 +1494,10 @@ export const ObjectList = memo(function ObjectList({
               const partSubtype = canonicalThreeMfPartSubtype(part.subtype)
               const helperSubtype = partSubtype === 'normal_part' ? null : partSubtype
               const partCarriesFilament = threeMfPartSubtypeCarriesFilament(part.subtype)
+              // An unassigned part prints in the OBJECT's material, so resolve through the same
+              // inheritance the bake applies rather than letting the null fall through
+              // `resolveId`'s dangling-id fallback to the project's first material.
+              const partFilamentId = resolveId(effectivePartFilamentId(part, instance.filamentId))
               return (
               <ListItem
                 key={`${instance.key}:${index}`}
@@ -1521,8 +1525,8 @@ export const ObjectList = memo(function ObjectList({
                   </Typography>
                   {partCarriesFilament && (
                     <FilamentBadge
-                      filamentId={resolveId(part.filamentId)}
-                      color={liveColor(resolveId(part.filamentId), part.color)}
+                      filamentId={partFilamentId}
+                      color={liveColor(partFilamentId, part.color)}
                       options={filamentOptions}
                       title={helperSubtype ? 'Material printed inside this modifier' : undefined}
                       onReassign={onReassignFilament && perObjectId != null ? (fid) => onReassignFilament([{ objectId: perObjectId, partIndex: part.partIndex }], fid) : undefined}
@@ -1571,8 +1575,8 @@ export const ObjectList = memo(function ObjectList({
                   </Typography>
                   {threeMfPartSubtypeCarriesFilament(part.subtype) && (
                     <FilamentBadge
-                      filamentId={resolveId(part.filamentId ?? null)}
-                      color={liveColor(resolveId(part.filamentId ?? null), null)}
+                      filamentId={resolveId(effectivePartFilamentId(part, instance.filamentId))}
+                      color={liveColor(resolveId(effectivePartFilamentId(part, instance.filamentId)), null)}
                       options={filamentOptions}
                       title={part.subtype === 'modifier_part' ? 'Material printed inside this modifier' : undefined}
                       onReassign={onChangeAddedPartFilament ? (fid) => onChangeAddedPartFilament(part.key, fid) : undefined}

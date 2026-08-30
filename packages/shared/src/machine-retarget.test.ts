@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
   applyMachineRetargetToProjectSettings,
+  applyMachineSettingOverrides,
   applyProcessProfileToProjectSettings,
   retargetProjectSettingsToMachine,
   stripSliceInfoPrinterModelId
@@ -16,6 +17,10 @@ const a1Project = {
   physical_extruder_map: ['0'],
   extruder_variant_list: ['Direct Drive Standard'],
   filament_type: ['PLA', 'PLA'],
+  // The array BambuStudio counts to locate the machine slot in `inherits_group` /
+  // `different_settings_to_system` (`PresetBundle.cpp:3751`), so a fixture without it states no
+  // filament count at all and every slot assertion below would be vacuous.
+  filament_colour: ['#F2754E', '#FFFFFF'],
   filament_settings_id: ['Bambu PLA Basic @BBL A1M', 'Bambu PLA Basic @BBL A1M'],
   nozzle_temperature: ['220', '220'],
   filament_nozzle_map: ['0', '0']
@@ -115,25 +120,47 @@ test('retarget blanks the inherited machine parent so the CLI derives the system
   // stale "Bambu Lab P1P 0.4 nozzle" fails the slice after the retarget.
   const out = retargetProjectSettingsToMachine({
     ...a1Project,
-    inherits_group: ['0.20mm Standard @BBL A1M', 'Bambu PLA Basic @BBL A1M', 'Bambu Lab P1P 0.4 nozzle']
+    // Four entries because `a1Project` declares TWO filaments: `[process, f1, f2, machine]`. The
+    // machine slot is found at `filamentCount + 1`, so a fixture whose width disagrees with its own
+    // filament arrays would assert against a slot the engine never reads.
+    inherits_group: ['0.20mm Standard @BBL A1M', 'Bambu PLA Basic @BBL A1M', 'Bambu PLA Basic @BBL A1M', 'Bambu Lab P1P 0.4 nozzle']
   }, h2dMachine, {
     printerSettingsId: 'Bambu Lab H2D 0.4 nozzle',
     printerModel: 'Bambu Lab H2D'
   })
-  assert.deepEqual(out.inherits_group, ['0.20mm Standard @BBL A1M', 'Bambu PLA Basic @BBL A1M', ''])
+  assert.deepEqual(out.inherits_group, ['0.20mm Standard @BBL A1M', 'Bambu PLA Basic @BBL A1M', 'Bambu PLA Basic @BBL A1M', ''])
+})
+
+test('the machine parent is cleared at the filament-count index, not at the array end', () => {
+  // Regression: derived from `inherits_group.length - 1`, this blanked whatever entry happened to
+  // sit last. On a project carrying a LONG record (a stale slot left by an earlier save) that is
+  // junk the engine never reads, so the stale machine parent survived the retarget and the CLI's
+  // compatibility check overrode the `printer_settings_id` just written.
+  const out = retargetProjectSettingsToMachine({
+    ...a1Project,
+    inherits_group: ['0.20mm Standard @BBL A1M', 'Bambu PLA Basic @BBL A1M', 'Bambu PLA Basic @BBL A1M', 'Bambu Lab P1P 0.4 nozzle', 'left over']
+  }, h2dMachine, {
+    printerSettingsId: 'Bambu Lab H2D 0.4 nozzle',
+    printerModel: 'Bambu Lab H2D'
+  })
+  assert.deepEqual(
+    out.inherits_group,
+    ['0.20mm Standard @BBL A1M', 'Bambu PLA Basic @BBL A1M', 'Bambu PLA Basic @BBL A1M', '', 'left over'],
+    'slot 3 is the machine slot for a 2-filament project; the trailing junk is left for the repair stage'
+  )
 })
 
 test('applyProcessProfileToProjectSettings blanks the inherited process parent alongside print_settings_id', () => {
   const out = applyProcessProfileToProjectSettings({
     ...a1Project,
-    inherits_group: ['0.20mm Custom Standard', 'Bambu PLA Basic @BBL A1M', '']
+    inherits_group: ['0.20mm Custom Standard', 'Bambu PLA Basic @BBL A1M', 'Bambu PLA Basic @BBL A1M', '']
   }, {
     name: '0.20mm Standard @BBL H2D',
     type: 'process',
     layer_height: '0.2'
   })
   assert.equal(out.print_settings_id, '0.20mm Standard @BBL H2D')
-  assert.deepEqual(out.inherits_group, ['', 'Bambu PLA Basic @BBL A1M', ''])
+  assert.deepEqual(out.inherits_group, ['', 'Bambu PLA Basic @BBL A1M', 'Bambu PLA Basic @BBL A1M', ''])
 })
 
 test('retarget to a dual-nozzle machine resizes flush_volumes_matrix for the new extruder count', () => {
@@ -531,4 +558,127 @@ test('an unknown machine topology leaves the pair alone rather than half-writing
   assert.deepEqual(variants, ['Direct Drive Standard'], 'a variant list was written with no ids to match it')
   assert.deepEqual(ids, ['1'])
   assert.equal(variants?.length, ids?.length, 'the pair disagrees on length')
+})
+
+// ---- project-local machine overrides ---------------------------------------------------------
+
+test('machine overrides win over the resolved preset, because they are the same keys', () => {
+  const base = { ...a1Project, filament_colour: ['#fff', '#000'] }
+  const retargeted = retargetProjectSettingsToMachine(base, h2dMachine, {
+    printerSettingsId: 'Bambu Lab H2D 0.4 nozzle',
+    printerModel: 'Bambu Lab H2D'
+  })
+  // Applied AFTER the machine step: the preset has just written its own printable_area, and the
+  // project's modified printer must sit on top of it rather than under it.
+  const overridden = applyMachineSettingOverrides(retargeted, { printable_area: ['0x0', '300x0', '300x300', '0x300'] })
+  assert.deepEqual(overridden.printable_area, ['0x0', '300x0', '300x300', '0x300'])
+  assert.equal(overridden.printer_settings_id, 'Bambu Lab H2D 0.4 nozzle', 'the preset identity is untouched')
+})
+
+test('an override that changes extruder count re-derives the flush sizing (exit 139 / exit 156)', () => {
+  // Two filaments on a two-extruder machine: matrix is filaments^2 * extruders = 8 entries.
+  const twoExtruder = {
+    ...a1Project,
+    filament_colour: ['#fff', '#000'],
+    nozzle_diameter: ['0.4', '0.4'],
+    flush_volumes_matrix: ['0', '280', '280', '0', '0', '280', '280', '0'],
+    flush_multiplier: ['1', '1']
+  }
+  // The user edits the printer down to a single extruder. Left alone, the matrix would keep two
+  // blocks and flush_multiplier two entries, which is the shape the engine indexes out of bounds.
+  const collapsed = applyMachineSettingOverrides(twoExtruder, { nozzle_diameter: ['0.4'] })
+  assert.deepEqual(collapsed.nozzle_diameter, ['0.4'])
+  assert.equal((collapsed.flush_volumes_matrix as string[]).length, 4, 'filaments^2 * 1 extruder')
+  assert.equal((collapsed.flush_multiplier as string[]).length, 1, 'one entry per extruder')
+
+  // And the widening direction, which is the one that segfaulted in the field.
+  const widened = applyMachineSettingOverrides(
+    { ...twoExtruder, nozzle_diameter: ['0.4'], flush_volumes_matrix: ['0', '280', '280', '0'], flush_multiplier: ['1'] },
+    { nozzle_diameter: ['0.4', '0.4'] }
+  )
+  assert.equal((widened.flush_volumes_matrix as string[]).length, 8, 'a second extruder needs a second block')
+  assert.equal((widened.flush_multiplier as string[]).length, 2)
+})
+
+test('machine overrides drop engine-hostile values and no-op when empty', () => {
+  const base = { ...a1Project, filament_colour: ['#fff'] }
+  assert.equal(applyMachineSettingOverrides(base, {}), base, 'empty is identity, not a rewrite')
+  // An empty numeric makes the engine silently abandon every key after it, so it is dropped here
+  // exactly as the process path drops it.
+  const guarded = applyMachineSettingOverrides(base, { machine_max_acceleration_x: '' })
+  assert.equal(guarded.machine_max_acceleration_x, undefined)
+})
+
+test('machine overrides are recorded at the slot the ENGINE reads, and never truncate the record', () => {
+  // BambuStudio resizes `different_settings_to_system` and `inherits_group` to filament_count + 2
+  // INDEPENDENTLY and reads the printer slot at filament_count + 1 (BambuStudio.cpp:3200-3215,
+  // PresetBundle.cpp:3885). Deriving the slot from `inherits_group.length - 1` instead filed machine
+  // keys into a FILAMENT slot and truncated the record, destroying the other slots' entries -- and a
+  // filament slot's record is what a machine switch uses to keep the user's own values.
+  const project = {
+    ...a1Project,
+    filament_colour: ['#fff', '#000'],
+    filament_settings_id: ['A', 'B'],
+    filament_type: ['PLA', 'PLA'],
+    // Deliberately SHORT, which is what the Repair stage routinely leaves behind: it fixes
+    // inherits_group and leaves this record alone.
+    inherits_group: ['0.20mm Standard', 'Bambu PLA Basic'],
+    different_settings_to_system: ['wall_loops', 'nozzle_temperature', 'filament_flow_ratio', 'printable_height']
+  }
+
+  const applied = applyMachineSettingOverrides(project, { support_air_filtration: '1' })
+  const record = applied.different_settings_to_system as string[]
+  assert.deepEqual(
+    record.slice(0, 3),
+    ['wall_loops', 'nozzle_temperature', 'filament_flow_ratio'],
+    'every other slot survives untouched: truncating them destroys the records a machine switch reads'
+  )
+  assert.deepEqual(
+    record[3]!.split(';').sort(),
+    ['printable_height', 'support_air_filtration'],
+    'slot 3 = filamentCount + 1, and the already-recorded printable_height is KEPT: no preset was '
+      + 'passed, so its value cannot be restored and un-recording it would leave the file lying'
+  )
+  assert.equal(record.length, 4)
+})
+
+test('resetting an override un-records it AND puts the preset value back', () => {
+  // The map is a COMPLETE diff, so a key missing from it was reset. Merging into the record could
+  // not express that, and leaving the value behind kept the engine slicing with an override the UI
+  // no longer showed.
+  const project = {
+    ...a1Project,
+    filament_colour: ['#fff'],
+    filament_settings_id: ['A'],
+    filament_type: ['PLA'],
+    printable_height: '300',
+    support_air_filtration: '1',
+    different_settings_to_system: ['', '', 'printable_height;support_air_filtration']
+  }
+  const preset = { printable_height: '250', support_air_filtration: '0' }
+
+  const applied = applyMachineSettingOverrides(project, { printable_height: '300' }, preset)
+  assert.deepEqual(applied.different_settings_to_system, ['', '', 'printable_height'], 'the reset key stops being recorded')
+  assert.equal(applied.support_air_filtration, '0', 'and its value returns to the preset')
+  assert.equal(applied.printable_height, '300', 'the kept override is untouched')
+})
+
+test('clearing every override is a real edit, not a no-op', () => {
+  const project = {
+    ...a1Project,
+    filament_colour: ['#fff'],
+    filament_settings_id: ['A'],
+    filament_type: ['PLA'],
+    support_air_filtration: '1',
+    different_settings_to_system: ['', '', 'support_air_filtration']
+  }
+  const applied = applyMachineSettingOverrides(project, {}, { support_air_filtration: '0' })
+  assert.notEqual(applied, project, 'an empty map on a project that RECORDS overrides must still rewrite')
+  assert.deepEqual(applied.different_settings_to_system, ['', '', ''])
+  assert.equal(applied.support_air_filtration, '0')
+})
+
+test('a project recording nothing and overriding nothing is left exactly alone', () => {
+  const project = { ...a1Project, filament_colour: ['#fff'], filament_settings_id: ['A'], filament_type: ['PLA'] }
+  assert.equal(applyMachineSettingOverrides(project, {}), project)
 })

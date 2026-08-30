@@ -27,15 +27,7 @@
  * invariants. Detection and repair share one implementation here so a file cannot be flagged by
  * one and left untouched by the other.
  */
-
-/** The slot count a project's filament arrays agree on, or 0 when it declares none. */
-function filamentSlotCount(record: Record<string, unknown>): number {
-  return Math.max(
-    Array.isArray(record.filament_settings_id) ? record.filament_settings_id.length : 0,
-    Array.isArray(record.filament_colour) ? record.filament_colour.length : 0,
-    Array.isArray(record.filament_type) ? record.filament_type.length : 0
-  )
-}
+import { filamentSlotCount } from '../three-mf-project-config.js'
 
 /** What a project's stored `inherits_group` looks like next to the width its filament set requires. */
 export interface InheritsGroupInspection {
@@ -79,6 +71,13 @@ export function repairInheritsGroup(record: Record<string, unknown>): string[] |
   next[0] = current[0] ?? ''
   // The machine lives at the END of both arrays, so it is carried across by position from the end,
   // never by index, that is precisely what a naive truncate gets wrong.
+  //
+  // This is the ONE place `length - 1` is right, and only because of what this function is. Every
+  // reader and ordinary writer must locate the machine slot at `filament_count + 1`
+  // (`machinePresetSlotIndexFor`), because that is where the engine reads it. Here the array is
+  // known to be the WRONG width, so that index is meaningless by definition; the array's own end is
+  // the only evidence left of where its author put the machine entry. Deliberate, and exempted by
+  // name in `parallel-preset-record.guard.test.ts` rather than slipping past its scan.
   next[expected - 1] = current[current.length - 1] ?? ''
   // A slot beyond what the old array described has no recorded parent; empty is the honest value.
   for (let slot = 1; slot < expected - 1; slot++) {

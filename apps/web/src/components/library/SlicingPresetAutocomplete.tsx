@@ -71,7 +71,14 @@ export function SlicingPresetAutocomplete({
           inputValue={inputValue}
           onChange={(_event, profile) => onChange(profile ?? null)}
           onInputChange={(_event, nextValue, reason) => {
-            if (reason === 'reset') return
+            // Joy asks for a 'reset' whenever the popup closes without a pick (Escape, blur,
+            // clickaway) and whenever the value changes. Its proposed text is
+            // `getOptionLabel(value)`, which DROPS the '* ' modified marker, so the reset is
+            // honoured with `valueDisplayName` rather than refused. Refusing it outright is what
+            // left an abandoned search sitting in the box: type "Pro", press Escape, and the
+            // control read "Pro" while the selection was still the preset it started on, i.e. it
+            // named a preset that was never chosen and that a slice would not use.
+            if (reason === 'reset') { setInputValue(valueDisplayName); return }
             setInputValue(nextValue)
           }}
           getOptionLabel={labelFor}
@@ -97,6 +104,11 @@ export function SlicingPresetAutocomplete({
           selectOnFocus
           handleHomeEndKeys
           openOnFocus
+          // Escape abandons the search, and Joy emits no 'reset' for it, so the half-typed text
+          // would sit there naming a preset that was never selected until focus happened to move
+          // away (blur DOES emit one). Handled through `onClose` rather than a `slotProps.input`
+          // key handler, which Autocomplete's own internal `onKeyDown` shadows.
+          onClose={(_event, reason) => { if (reason === 'escape') setInputValue(valueDisplayName) }}
           slotProps={{
             input: ariaLabel ? { 'aria-label': ariaLabel } : undefined,
             listbox: { sx: { maxHeight: 360 } }

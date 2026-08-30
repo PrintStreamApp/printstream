@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "dev": "tsx watch src/main.ts",
+    "dev": "NODE_OPTIONS=\"--require ../../scripts/dev/exit-with-parent.cjs\" tsx watch src/main.ts",
     "start": "node dist/main.js",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },

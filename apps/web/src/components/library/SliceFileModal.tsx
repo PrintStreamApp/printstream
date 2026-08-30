@@ -86,6 +86,7 @@ import {
 } from '../../lib/libraryViewHelpers'
 import { resolveSlicerTargetId } from '../../lib/machineTargetResolution'
 import { useUnchangedProjectFilamentPresetIds } from './useBakedPresetChanges'
+import { useProjectMachineOverrides } from './useProjectMachineOverrides'
 import { useMachineTarget } from './useMachineTarget'
 import { useMaterialSlots } from './useMaterialSlots'
 import { useProcessProfileSelection } from './useProcessProfileSelection'
@@ -381,12 +382,13 @@ export function SliceFileModal({
   const {
     targetMode, printerId, selectedPrinter, selectPrinter,
     selectedPrinterModel, manualPrinterModel, selectPrinterModel,
-    printerModelOptions, printerProfileId, selectedMachineProfile, targetPrinterModel,
+    printerModelOptions, printerProfileId, selectedMachineProfile, selectPrinterProfile, targetPrinterModel,
     nozzleDiameter, setNozzleDiameter, nozzleDiameterOptions, selectedNozzleDiameters,
     nozzleFlow, setNozzleFlow,
     plateType, handlePlateTypeChange, plateTypeOptions,
-    compatibleMachineProfiles, printerCompatibleProcessProfiles,
+    compatibleMachineProfiles, selectableMachineProfiles, printerCompatibleProcessProfiles,
     conflicts: targetConflicts,
+    origins: targetOrigins,
     machineSnapshot, restoreMachineSnapshot
   } = machineTarget
   const [processSettingsDialogOpen, setProcessSettingsDialogOpen] = useState(false)
@@ -397,10 +399,11 @@ export function SliceFileModal({
   const [editingSliceObject, setEditingSliceObject] = useState<{ id: number; name: string } | null>(null)
   const [plateMode, setPlateMode] = useState<'all' | 'single'>(() => requiresSinglePlate || defaultPlateNumber != null ? 'single' : 'all')
   const [plateNumber, setPlateNumber] = useState(() => String(defaultPlateNumber ?? 1))
-  // Sibling of useMaterialSlots' materialEditListenerRef for global process-setting edits (profile switch + the
-  // process-settings dialog's overrides). The editor registers a snapshot-then-dirty handler so
-  // those edits light Save and land in undo history. Null in the simple slice path.
-  const processEditListenerRef = useRef<(() => void) | null>(null)
+  // Sibling of useMaterialSlots' materialEditListenerRef for global SETTINGS edits: the process
+  // profile switch, the process-settings dialog's overrides, and the printer-settings dialog's
+  // project machine overrides. The editor registers a snapshot-then-dirty handler so those edits
+  // light Save and land in undo history. Null in the simple slice path.
+  const settingsEditListenerRef = useRef<(() => void) | null>(null)
   const [saveDestinationOpen, setSaveDestinationOpen] = useState(false)
   const [slicingPresetsOpen, setSlicingPresetsOpen] = useState(false)
   // Slice-time object selection (single-plate only). Tracks the kept objects; defaults to all.
@@ -690,6 +693,32 @@ export function SliceFileModal({
   // target contributes only the user's PICKS: the rest of it re-derives from them, so a restore
   // cannot land on an inconsistent combination the way it could when values and their "touched"
   // flags were restored separately.
+  /**
+   * The project's OWN machine settings, as a diff against the resolved printer preset. Held here
+   * beside the process overrides because it travels with them everywhere: the slice request, the
+   * save request, the undo snapshot. Cleared by nothing implicitly -- a machine override survives a
+   * preset switch, and the server re-resolves the new preset and lays these back over it.
+   */
+  const [machineSettingOverrides, setMachineSettingOverrides] = useState<Record<string, string | string[]>>({})
+  /** Which printer the overrides above were authored against; drives the carried-overrides warning. */
+  const [machineOverridesModel, setMachineOverridesModel] = useState<string | null>(null)
+
+  // Re-hydrate the project's own machine deltas, or the feature is write-only: see the hook.
+  // Its return says whether the file's own deltas are KNOWN for the version open. A save clears the
+  // project's machine record when it is handed an empty map, so it must never be handed one that is
+  // empty merely because this lookup has not answered.
+  const machineSettingOverridesKnown = useProjectMachineOverrides({
+    sourceFileId: file.id,
+    fileVersion: file.uploadedAt,
+    machineProfileId: printerProfileId,
+    slicerTargetId: selectedSlicerTargetId,
+    current: machineSettingOverrides,
+    onSeed: useCallback((overrides: Record<string, string | string[]>) => {
+      setMachineSettingOverrides(overrides)
+      setMachineOverridesModel(selectedPrinterModel)
+    }, [selectedPrinterModel])
+  })
+
   const configSnapshot = useMemo<SliceConfigSnapshot>(() => ({
     selectedSlicerTargetId,
     ...machineSnapshot,
@@ -697,8 +726,10 @@ export function SliceFileModal({
     objectProcessOverrides,
     processProfileId,
     processProfileSelectionTouched: processProfileSelectionTouchedRef.current,
-    processSettingOverrides
-  }), [selectedSlicerTargetId, machineSnapshot, materialSnapshot, objectProcessOverrides, processProfileId, processSettingOverrides, processProfileSelectionTouchedRef])
+    processSettingOverrides,
+    machineSettingOverrides,
+    machineOverridesModel
+  }), [selectedSlicerTargetId, machineSnapshot, materialSnapshot, objectProcessOverrides, processProfileId, processSettingOverrides, machineSettingOverrides, machineOverridesModel, processProfileSelectionTouchedRef])
   const restoreConfig = useCallback((snapshot: SliceConfigSnapshot) => {
     setSelectedSlicerTargetId(snapshot.selectedSlicerTargetId)
     restoreMachineSnapshot(snapshot)
@@ -708,6 +739,8 @@ export function SliceFileModal({
     if (snapshot.processProfileId != null) setProcessProfileId(snapshot.processProfileId)
     processProfileSelectionTouchedRef.current = snapshot.processProfileSelectionTouched
     setProcessSettingOverrides(snapshot.processSettingOverrides ?? {})
+    setMachineSettingOverrides(snapshot.machineSettingOverrides ?? {})
+    setMachineOverridesModel(snapshot.machineOverridesModel ?? null)
   }, [processProfileSelectionTouchedRef, restoreMachineSnapshot, restoreMaterialSnapshot, setProcessProfileId, setProcessSettingOverrides, setSelectedSlicerTargetId])
   const suggestedOutputFileName = useMemo(() => {
     if (!requiresSinglePlate && plateMode !== 'single') return buildSlicedOutputFileName(file.name)
@@ -807,6 +840,7 @@ export function SliceFileModal({
           toolheads: sliceToolheads,
           processProfileId,
           processSettingOverrides: Object.keys(processSettingOverrides).length > 0 ? processSettingOverrides : undefined,
+          machineSettingOverrides: Object.keys(machineSettingOverrides).length > 0 ? machineSettingOverrides : undefined,
           filamentMappings: filamentMappingResult.mappings
         }
       : {
@@ -818,6 +852,7 @@ export function SliceFileModal({
           toolheads: sliceToolheads,
           processProfileId,
           processSettingOverrides: Object.keys(processSettingOverrides).length > 0 ? processSettingOverrides : undefined,
+          machineSettingOverrides: Object.keys(machineSettingOverrides).length > 0 ? machineSettingOverrides : undefined,
           filamentMappings: filamentMappingResult.mappings
         }
   })
@@ -857,12 +892,17 @@ export function SliceFileModal({
     ? {
         mode: 'manualProfile',
         printerProfileId,
+        // Whether the user PICKED this preset or the cascade derived it. The server cannot tell
+        // from the id alone, and rewriting a project's machine on a derived id threw away
+        // hand-tuned printers on ordinary saves.
+        printerProfileChosen: targetOrigins.printerProfileId === 'user',
         printerModel: selectedPrinterModel,
         plateType,
         nozzleDiameters: selectedNozzleDiameters,
         toolheads: sliceToolheads,
         processProfileId,
         processSettingOverrides: Object.keys(processSettingOverrides).length > 0 ? processSettingOverrides : undefined,
+        machineSettingOverrides: Object.keys(machineSettingOverrides).length > 0 ? machineSettingOverrides : undefined,
         filamentMappings: filamentMappingResult.mappings
       }
     : null
@@ -904,11 +944,13 @@ export function SliceFileModal({
     refreshProjectIndex,
     printers, selectedPrinter, lockedPreferredPrinter, targetMode, selectPrinter,
     selectedPrinterModel, selectPrinterModel, printerModelOptions, targetConflicts,
-    selectedMachineProfile,
+    selectedMachineProfile, selectableMachineProfiles, selectPrinterProfile,
     nozzleDiameter, setNozzleDiameter, nozzleDiameterOptions, nozzleFlow, setNozzleFlow,
     plateType, setPlateType: handlePlateTypeChange, plateTypeOptions,
     plateMode, setPlateMode, sceneEdit, setSceneEdit, plateNumber, setPlateNumber, slicePlateOptions, setPreviewFileId,
     compatibleProcessProfiles, selectedProcessProfile, processProfileModified, setProcessProfileId, setProcessSettingOverrides,
+    machineSettingOverrides, setMachineSettingOverrides, machineSettingOverridesKnown,
+    machineOverridesModel, setMachineOverridesModel,
     processProfileSelectionTouchedRef, selectedSlicerTargetIdForGuards: selectedSlicerTargetId, processSettingOverrides, setProcessSettingsDialogOpen,
     hasPlateObjects, selectedSliceObjectIds, plateObjects,
     onToggleSliceObject: toggleSliceObject,
@@ -939,7 +981,7 @@ export function SliceFileModal({
     filamentSettingOverridesById, openFilamentSettings: setFilamentSettingsFilamentId,
     handleMaterialOptionChange,
     desiredFilaments, retargetTarget, onAddFilament: handleAddFilament, onRemoveFilament: handleRemoveFilament, onReorderFilament: handleReorderFilament,
-    configSnapshot, restoreConfig, materialEditListenerRef, onProjectSaved: handleProjectSaved, processEditListenerRef,
+    configSnapshot, restoreConfig, materialEditListenerRef, onProjectSaved: handleProjectSaved, settingsEditListenerRef,
     // The editor resolves each slot's preset at SAVE time from this, so the saved project carries the
     // material's physics and not just its name. Omitting it is not a smaller feature, it silently
     // reverts the save to dropping those values (see `workspaceFilamentResolver.ts`).
@@ -1174,13 +1216,13 @@ export function SliceFileModal({
             canEditOriginal={!selectedProcessProfile.id.startsWith('builtin:') && !selectedProcessProfile.id.startsWith('project:')}
             onProfileChange={(profileId, carryOverrides) => {
               // Snapshot pre-edit state for the editor's undo/dirty (no-op in the simple slice path).
-              processEditListenerRef.current?.()
+              settingsEditListenerRef.current?.()
               processProfileSelectionTouchedRef.current = true
               setProcessProfileId(profileId)
               setProcessSettingOverrides(carryOverrides)
             }}
             onApply={(overrides) => {
-              processEditListenerRef.current?.()
+              settingsEditListenerRef.current?.()
               setProcessSettingOverrides(overrides)
             }}
           />

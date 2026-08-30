@@ -42,6 +42,8 @@ import {
   isPlateTypeCompatible,
   isPrinterModelCompatible,
   mergeAmsMapping,
+  platePrintSkipSelection,
+  platePrintUnits,
   resolvePrinterNozzleDiameters
 } from '@printstream/shared'
 import { autoSelectedFilamentIds, computeAutoTrayMapping } from '../../lib/autoTrayMatch'
@@ -345,25 +347,26 @@ export function PrintModal({
    */
   const activePlateIsSliced = useMemo(() => plateHasSliceData(activePlate), [activePlate])
   /**
-   * Per-object deselection (pre-sliced plates only). Deselected objects ride the
-   * dispatch as `skipObjects`; the server maps them to instance identify_ids,
-   * sends them in the start command, and keeps a mid-print skip fallback armed
-   * for firmware that ignores the start-command field. Unsliced files are
-   * excluded: they go through the slice flow, which already has per-object
-   * selection.
+   * Per-COPY deselection (pre-sliced plates only). A unit is one placement on the plate, so a
+   * duplicated object offers one row per copy (`platePrintUnits`). The selection rides the
+   * dispatch as `skipObjects` + `skipInstances`; the server maps both to instance identify_ids,
+   * sends them in the start command, and keeps a mid-print skip fallback armed for firmware that
+   * ignores the start-command field. Unsliced files are excluded: they go through the slice flow,
+   * which already has per-object selection.
    */
   const plateObjects = useMemo(() => activePlate?.objects ?? [], [activePlate])
-  const showObjectSelection = activePlateIsSliced && plateObjects.length >= 2
-  const [deselectedObjectIds, setDeselectedObjectIds] = useState<number[]>([])
-  const deselectedObjectIdSet = useMemo(() => new Set(deselectedObjectIds), [deselectedObjectIds])
+  const plateUnits = useMemo(() => platePrintUnits(plateObjects), [plateObjects])
+  const showObjectSelection = activePlateIsSliced && plateUnits.length >= 2
+  const [deselectedUnitKeys, setDeselectedUnitKeys] = useState<string[]>([])
+  const deselectedUnitKeySet = useMemo(() => new Set(deselectedUnitKeys), [deselectedUnitKeys])
   const activePlateIndex = activePlate?.index ?? null
   useEffect(() => {
-    setDeselectedObjectIds([])
+    setDeselectedUnitKeys([])
   }, [file.id, versionId, activePlateIndex])
-  const toggleObjectSelected = (objectId: number, selected: boolean) => {
-    setDeselectedObjectIds((current) => {
-      if (selected) return current.filter((id) => id !== objectId)
-      return current.includes(objectId) ? current : [...current, objectId]
+  const toggleObjectSelected = (key: string, selected: boolean) => {
+    setDeselectedUnitKeys((current) => {
+      if (selected) return current.filter((entry) => entry !== key)
+      return current.includes(key) ? current : [...current, key]
     })
   }
   /**
@@ -908,9 +911,11 @@ export function PrintModal({
     setErrors({})
 
     try {
-      const skipObjects = showObjectSelection
-        ? deselectedObjectIds.filter((id) => plateObjects.some((object) => object.id === id))
-        : []
+      // Resolved against the units currently on screen, so a key left over from another plate
+      // can never reach the dispatch.
+      const { skipInstances } = showObjectSelection
+        ? platePrintSkipSelection(plateUnits, deselectedUnitKeySet)
+        : { skipInstances: [] }
       const next: Record<string, string> = {}
       const submittedPrinterIds: string[] = []
       await Promise.all(
@@ -966,9 +971,8 @@ export function PrintModal({
               ),
               plate: activePlate?.index ?? 1,
               amsMapping: sanitizeTrayMapping(effectiveMappings[printerId]),
-              // The same deselection applies to every selected printer. Filter to the
-              // active plate's objects so a stale id can never reach the dispatch.
-              ...(skipObjects.length > 0 ? { skipObjects } : {})
+              // The same deselection applies to every selected printer.
+              ...(skipInstances.length > 0 ? { skipInstances } : {})
             } satisfies Omit<StartOrderPrintInput, 'printerId'>
 
             if (submitPrint) {
@@ -1264,8 +1268,8 @@ export function PrintModal({
 
           {showObjectSelection && (
             <PrintObjectsSection
-              objects={plateObjects}
-              deselectedIds={deselectedObjectIdSet}
+              units={plateUnits}
+              deselectedKeys={deselectedUnitKeySet}
               onToggle={toggleObjectSelected}
             />
           )}

@@ -170,6 +170,9 @@ import {
   findFreePlatePosition,
   instanceFromStagedImport,
   replaceInstanceGeometry,
+  carriedPartSubtypes,
+  withRemovedParts,
+  canRemoveParts,
   reindexPlates,
   mintPlateId,
   movePlate,
@@ -178,6 +181,7 @@ import {
   dropAddedPartsForReplacedHost,
   makeInstanceIndependent,
   effectiveAddedParts,
+  effectivePartFilamentId,
   effectiveHeightRanges,
   effectiveLayerHeightProfile,
   type EditorHeightRange,
@@ -2092,15 +2096,29 @@ function EditorView({
 
       if (instance.source.kind === 'import') {
         const importId = instance.source.importId
-        if (instance.parts.length > 1) {
-          // Multi-solid import (STEP assembly): each solid is fetched by index and added at its
-          // own coordinates (the per-part STL is already in assembly space), coloured by its
-          // own filament so a multi-material assembly renders correctly.
+        const importHostId = addedPartHostId(instance)
+        // Chosen on the import's ORIGINAL solid count (survivors + the ones deleted this session),
+        // not on how many are left: the single-mesh branch below fetches the import's MERGED mesh,
+        // so an import whittled down to one solid would put the deleted geometry back on screen.
+        // The bake makes the same call on the same reasoning (`bake-documents.ts`).
+        const removedSolidCount = importHostId != null
+          ? stateRef.current?.removedParts?.[importHostId]?.length ?? 0
+          : 0
+        if (instance.parts.length + removedSolidCount > 1) {
+          // Multi-solid import (STEP assembly): each solid is fetched by its OWN staged index and
+          // added at its own coordinates (the per-part STL is already in assembly space), coloured
+          // by its own filament so a multi-material assembly renders correctly.
+          //
+          // `part.partIndex`, never the array position: a deleted solid leaves the survivors with
+          // their original indexes, so position `i` and solid `i` stop agreeing the moment one is
+          // removed, and every later solid would render its neighbour's mesh.
           const partGeometries = await Promise.all(
-            instance.parts.map(async (part, index) => ({ part, geometry: await fetchImportGeometry(importId, index) }))
+            instance.parts.map(async (part) => ({ part, geometry: await fetchImportGeometry(importId, part.partIndex) }))
           )
           for (const { part, geometry } of partGeometries) {
-            const partFilamentId = resolveColorFilamentIdRef.current(part.filamentId)
+            // A solid with no explicit material prints in the object's, so colour it that way
+            // (see effectivePartFilamentId) instead of falling through to the first material.
+            const partFilamentId = resolveColorFilamentIdRef.current(effectivePartFilamentId(part, instance.filamentId))
             const partColor = (partFilamentId != null && filamentColorsRef.current?.[partFilamentId]) || part.color || meshColor
             // subtype: an import solid retyped via "Change type" (e.g. to a modifier volume)
             // renders translucent like a baked part of that type.
@@ -2163,8 +2181,9 @@ function EditorView({
           if (!geometry) continue
           const partTransform = createThreeMfMatrix(part.transform)
           // Each part can use a different filament than the object; colour it by its
-          // own filament so multi-material objects render correctly.
-          const partFilamentId = resolveColorFilamentIdRef.current(part.filamentId)
+          // own filament so multi-material objects render correctly, falling back to the
+          // object's for a part that names none (see effectivePartFilamentId).
+          const partFilamentId = resolveColorFilamentIdRef.current(effectivePartFilamentId(part, instance.filamentId))
           const partColor = (partFilamentId != null && filamentColorsRef.current?.[partFilamentId]) || part.color || meshColor
           const partGroup = createThreeMfPartObject(geometry, {
             color: partColor,
@@ -3625,7 +3644,16 @@ function EditorView({
           ref = (node2.userData.partRef ?? node2.userData.importPartRef) as { partIndex: number } | undefined
         }
         const part = ref ? instance.parts.find((entry) => entry.partIndex === ref!.partIndex) : undefined
-        const filamentId = resolveColorFilamentIdRef.current(part ? part.filamentId : instance.filamentId)
+        // Through `effectivePartFilamentId`, exactly as the build does: a part's null filament means
+        // "inherit the object's", and resolving the bare value sends it to `resolveColorFilamentId`'s
+        // dangling-id fallback, i.e. the project's FIRST material. This effect runs at the end of
+        // every plate build (`materialSyncToken` is bumped there), so getting it wrong here does not
+        // merely mis-colour a reassignment, it overwrites the colour the build just computed
+        // correctly: a replaced object showed its real material in the sidebar and material 1 in the
+        // viewport.
+        const filamentId = resolveColorFilamentIdRef.current(
+          part ? effectivePartFilamentId(part, instance.filamentId) : instance.filamentId
+        )
         recolor.filamentId = filamentId
         const live = filamentId != null ? filamentColorsRef.current?.[filamentId] : undefined
         const hex = live || recolor.fallbackColor || '#D3DDE7'
@@ -3959,6 +3987,18 @@ function EditorView({
       if (instance.parts.some((part) => ids.has(part.partIndex) && threeMfPartSubtypeCarriesFilament(part.subtype))) return true
     }
     return false
+  }, [])
+
+  /**
+   * Whether the part CONTEXT MENU should offer Delete for this selection: the same last-printed-part
+   * rule the sidebar's trash button applies, asked of the whole selection at once so selecting every
+   * part of an object hides the item rather than offering a refused action.
+   */
+  const partSelectionRemovable = useCallback((objectId: number, partIndexes: ReadonlyArray<number>) => {
+    const instance = stateRef.current?.plates
+      .flatMap((plate) => plate.instances)
+      .find((entry) => addedPartHostId(entry) === objectId)
+    return instance != null && canRemoveParts(instance, new Set(partIndexes))
   }, [])
 
   // Change parts' Bambu volume type (BambuStudio's "Change type": normal / negative /
@@ -4692,6 +4732,27 @@ function EditorView({
     setState((current) => (current ? { ...current } : current))
   }, [refreshAddedPartMeshes, recordHistoryRef])
 
+  /**
+   * Delete BAKED parts from a model (BambuStudio's per-volume Delete).
+   *
+   * Geometry-level, like every other part edit: it applies to every copy of the object. Refused
+   * when it would take the object's last printed part, because an object with nothing to print is
+   * not a state to leave a user in: deleting the OBJECT is the action for that, and it is right
+   * there in the object menu. `withRemovedParts` owns both rules; this only feeds it the host id
+   * the row/menu was opened against and rebuilds the scene.
+   */
+  const handleRemoveParts = useCallback((hostId: number, partIndexes: ReadonlyArray<number>) => {
+    if (partIndexes.length === 0) return
+    const targets = new Set(partIndexes)
+    recordHistory()
+    setState((current) => (current ? withRemovedParts(current, hostId, targets) ?? current : current))
+    // A deleted part leaves the selection pointing at geometry that no longer exists.
+    setPartSelection(null)
+    setSelectedBakedPart(null)
+    setRebuildToken((token) => token + 1)
+    regenerateActiveThumbnailRef.current?.()
+  }, [recordHistory, setPartSelection, setSelectedBakedPart])
+
   /** Select an added part from its list row: select its instance and hand it the gizmo. */
   const handleSelectAddedPartRow = useCallback((instanceKey: string, partKey: string) => {
     selectExclusive(instanceKey)
@@ -4807,6 +4868,12 @@ function EditorView({
     // how paint and brim ears fall away (see `dropAddedPartsForReplacedHost`).
     const state = stateRef.current
     if (state) dropAddedPartsForReplacedHost(state, target)
+    // A modifier or blocker is a slicing decision about a NAMED piece of the model, so it survives
+    // a swap for a revised export of that model. Recorded as explicit type changes rather than
+    // only set on the instance: the bake reads an unsaved import's subtypes from
+    // `partTypeChanges` (`collectImportPartTypes`), so a client-only carry would look right on
+    // screen and bake five modifiers back as printed geometry.
+    const carriedSubtypes = carriedPartSubtypes(target.parts, staged.parts)
     let selectedReplacementKey: string | null = null
     updatePlates((plates) => plates.map((plate) => ({
       ...plate,
@@ -4815,12 +4882,26 @@ function EditorView({
         // Per instance, not per selection: each copy sits somewhere different, and each replacement
         // has to land on its own predecessor.
         const replacement = replaceInstanceGeometry(
-          instance, staged, replacedObjectId, importStore.meshUrl, worldFootprintCenterForRef.current?.(instance.key) ?? null
+          instance, staged, replacedObjectId, importStore.meshUrl,
+          worldFootprintCenterForRef.current?.(instance.key) ?? null, carriedSubtypes
         )
         if (instance.key === key) selectedReplacementKey = replacement.key
         return replacement
       })
     })))
+    // The replacement's host id is what `collectImportPartTypes` keys the emitted
+    // `importPartTypes` on, so record the carry there too. Without it the bake reads the STAGED
+    // record's subtypes (which a STEP or a plain 3MF does not have) and the volumes print.
+    if (carriedSubtypes.size > 0 && replacedObjectId != null) {
+      setState((current) => {
+        if (!current) return current
+        const partTypeChanges = { ...(current.partTypeChanges ?? {}) }
+        for (const [partIndex, subtype] of carriedSubtypes) {
+          partTypeChanges[partSlotKey(replacedObjectId, partIndex)] = subtype
+        }
+        return { ...current, partTypeChanges }
+      })
+    }
     if (selectedReplacementKey) {
       setExtraSelectedKeys([])
       setSelectedKey(selectedReplacementKey)
@@ -5122,16 +5203,29 @@ function EditorView({
   // out of form fields; the gcode preview is a separate component, so there is no preview mode here).
   const shortcutsEnabledRef = useRef(false)
   shortcutsEnabledRef.current = sceneReady
-  // Delete via the KEYBOARD steps back from a baked part instead of deleting its whole object:
-  // baked parts cannot be removed on their own, so taking the object would be a surprise. The
-  // context menus call `handleDelete` directly, where the selection is explicit.
+  // Delete via the KEYBOARD acts on what is SELECTED, which may be a part rather than an object.
+  // A session-added volume is un-staged, a baked part is deleted from its object, and only with no
+  // part selected does the key take the whole object: pressing Delete with a part highlighted and
+  // watching its entire object disappear would be a surprise. Falls through to deselecting the part
+  // when the object would be left with no printed geometry, since that is the one case where the
+  // deletion is refused and taking the object instead is exactly the surprise being avoided.
   const handleDeleteShortcut = useCallback((key: string) => {
-    if (selectedBakedPartRef.current) {
-      setSelectedBakedPart(null)
+    const addedPartKey = selectedAddedPartKeyRef.current
+    if (addedPartKey) {
+      handleRemoveAddedPart(addedPartKey)
+      return
+    }
+    const bakedPart = selectedBakedPartRef.current
+    if (bakedPart) {
+      if (partSelectionRemovable(bakedPart.objectId, [bakedPart.partIndex])) {
+        handleRemoveParts(bakedPart.objectId, [bakedPart.partIndex])
+      } else {
+        setSelectedBakedPart(null)
+      }
       return
     }
     handleDelete(key)
-  }, [handleDelete, setSelectedBakedPart])
+  }, [handleDelete, handleRemoveAddedPart, handleRemoveParts, partSelectionRemovable, setSelectedBakedPart])
 
   useEditorKeyboardShortcuts({
     enabledRef: shortcutsEnabledRef,
@@ -8304,6 +8398,9 @@ function EditorView({
             onExportDownload={canExportDownload ? () => handleExportPartsDownload(contextMenu.objectId, contextMenu.partIndexes) : undefined}
             onExportToLibrary={canExportToLibrary ? () => setExportRequest({ kind: 'parts', ownerId: contextMenu.objectId, partIndexes: contextMenu.partIndexes }) : undefined}
             onEditSettings={perObject ? openPartSettingsForSelection : undefined}
+            onDelete={partSelectionRemovable(contextMenu.objectId, contextMenu.partIndexes)
+              ? () => handleRemoveParts(contextMenu.objectId, contextMenu.partIndexes)
+              : undefined}
           />
         )}
       </ModalDialog>

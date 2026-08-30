@@ -112,7 +112,7 @@ interface DispatchJobState {
    */
   selectedPrintOptions: PrintStartOptionSelection
   /**
-   * Instance `identify_id`s to skip (resolved from the request's `skipObjects` object
+   * Instance `identify_id`s to skip (resolved from the request's `skipObjects` / `skipInstances`
    * ids at enqueue time), or null when the user deselected nothing. Sent as the start
    * command's `skip_objects` field (the primary mechanism: what Bambu Handy sends);
    * because older firmware ignores that field, runJob also arms a one-shot post-start
@@ -274,7 +274,7 @@ class PrintDispatcher {
     // nozzle the plate never uses (H2D error 0300-4010). Prune to the plate's actual
     // filaments; no-op for multi-filament plates and fail-safe if the plate can't be read.
     const amsMapping = await resolvePlateAmsMapping(sourceKind, localPath, input.plate, input.amsMapping)
-    const postStartSkipObjectIds = await resolvePostStartSkipObjectIds(sourceKind, localPath, input.plate, input.skipObjects)
+    const postStartSkipObjectIds = await resolvePostStartSkipObjectIds(sourceKind, localPath, input.plate, input.skipObjects, input.skipInstances)
 
     const now = new Date()
     const target = getRemotePrintTarget(fileName, sourceKind, input.plate, plateName, { isMultiPlate })
@@ -988,9 +988,11 @@ async function resolvePlateAmsMapping(
 }
 
 /**
- * Resolve the request's deselected plate objects (`skipObjects`, ids from the plates index the
- * print dialog displayed) into the instance `identify_id`s the firmware keys object skipping on
- * (both the start command's `skip_objects` field and the mid-print command).
+ * Resolve the request's deselection into the instance `identify_id`s the firmware keys object
+ * skipping on (both the start command's `skip_objects` field and the mid-print command). The
+ * selection arrives in two id spaces over the same file and both are honoured: `skipObjects`
+ * names whole models by the plates index's `objects[].id`, and `skipInstances` names individual
+ * placements by `identify_id` (what lets a user skip one of eight copies).
  *
  * Resolution MUST go through the same shared index parse that produced the dialog's object list
  * ({@link readPlateIndex}), never a direct `model_settings.config` lookup: gcode-only exports
@@ -1009,9 +1011,10 @@ async function resolvePostStartSkipObjectIds(
   sourceKind: '3mf' | 'gcode',
   localPath: string | null,
   plate: number,
-  skipObjects: number[] | undefined
+  skipObjects: number[] | undefined,
+  skipInstances: number[] | undefined
 ): Promise<number[] | null> {
-  if (!skipObjects || skipObjects.length === 0) return null
+  if ((!skipObjects || skipObjects.length === 0) && (!skipInstances || skipInstances.length === 0)) return null
   if (sourceKind !== '3mf') {
     throw new Error('Object skipping is only available for sliced 3MF files')
   }
@@ -1026,8 +1029,8 @@ async function resolvePostStartSkipObjectIds(
   if (!index) {
     throw new Error('Could not read the file to resolve the deselected objects. Try again, or print without deselecting objects.')
   }
-  const mapped = plateSkipIdentifyIdsFromIndex(index, plate, new Set(skipObjects))
-  if (mapped.unmatchedObjectIds.length > 0 || mapped.identifyIds.length === 0) {
+  const mapped = plateSkipIdentifyIdsFromIndex(index, plate, new Set(skipObjects), new Set(skipInstances))
+  if (mapped.unmatchedObjectIds.length > 0 || mapped.unmatchedInstanceIds.length > 0 || mapped.identifyIds.length === 0) {
     throw new Error('Some deselected objects could not be matched on the selected plate. Re-open the print dialog and try again.')
   }
   if (mapped.identifyIds.length >= mapped.plateInstanceCount) {

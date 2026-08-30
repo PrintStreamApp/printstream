@@ -149,12 +149,48 @@ test('rewriteProjectSettingsMetadata blanks the inherited machine/process parent
   const rewritten = rewriteProjectSettingsMetadata({
     printer_settings_id: ['My P1S'],
     print_settings_id: ['My 0.20mm Standard'],
+    // `filament_colour` is what places the machine slot: `inherits_group` is
+    // `[process, ...one per filament, machine]` and the engine finds the machine at
+    // `filament_colour.length + 1` (`PresetBundle.cpp:3751`, which says explicitly that
+    // `filament_settings_id` "sometimes is not generated"). A fixture without it states no filament
+    // count, and the shared helper then declines to guess rather than blanking a filament's parent.
+    filament_colour: ['#C12E1F'],
+    filament_settings_id: ['Bambu PLA Basic @BBL P1S 0.4 nozzle'],
     inherits_group: ['0.20mm Standard @BBL P1S', 'Bambu PLA Basic @BBL P1S 0.4 nozzle', 'Bambu Lab P1P 0.4 nozzle']
   }, metadata)
 
   assert.deepEqual(rewritten.printer_settings_id, ['Bambu Lab X2D 0.4 nozzle'])
   assert.deepEqual(rewritten.print_settings_id, ['0.20mm Standard @BBL X2D'])
   assert.deepEqual(rewritten.inherits_group, ['', 'Bambu PLA Basic @BBL P1S 0.4 nozzle', ''])
+})
+
+test('rewriteProjectSettingsMetadata leaves the machine parent alone when the project states no filament count', () => {
+  // Regression: this used to blank `inherits_group`'s LAST entry, so a record whose width did not
+  // match the project's filament count had a FILAMENT slot blanked instead of the machine one --
+  // telling the CLI that filament IS a system preset while the stale machine parent survived.
+  // Without the identity arrays the machine slot cannot be located at all, and saying nothing is
+  // the only answer that cannot corrupt a slot.
+  const metadata = buildSlicedArtifactMetadata({
+    sourceFileId: 'source-file',
+    target: {
+      mode: 'manualProfile',
+      printerModel: 'X2D',
+      printerProfileId: 'machine-profile',
+      processProfileId: 'process-profile',
+      filamentMappings: []
+    },
+    outputFileName: 'example.gcode.3mf',
+    plate: 0
+  }, [{ id: 'machine-profile', kind: 'machine', name: 'Bambu Lab X2D 0.4 nozzle' }])
+
+  assert.ok(metadata)
+
+  const rewritten = rewriteProjectSettingsMetadata({
+    printer_settings_id: ['My P1S'],
+    inherits_group: ['0.20mm Standard @BBL P1S', 'Bambu PLA Basic @BBL P1S 0.4 nozzle', 'Bambu Lab P1P 0.4 nozzle']
+  }, metadata)
+
+  assert.deepEqual(rewritten.inherits_group, ['0.20mm Standard @BBL P1S', 'Bambu PLA Basic @BBL P1S 0.4 nozzle', 'Bambu Lab P1P 0.4 nozzle'])
 })
 
 test('rewriteProjectSettingsMetadata leaves filament_settings_id alone when no filament profile id is provided', () => {

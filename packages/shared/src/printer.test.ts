@@ -198,8 +198,13 @@ test('shared printer action availability exposes command precondition reasons', 
     hmsErrors: [],
     filamentChange: { currentStepIndex: 1, currentStepLabel: 'Heat the nozzle', steps: ['Heat the nozzle'] }
   }), {
-    allowed: false,
-    reason: 'Current extruder is busy changing filament'
+    // A filament change in progress does NOT block Resume: BambuStudio's `can_resume()` is
+    // `print_status == "PAUSE"` alone. This used to be blocked, and because the card only rendered
+    // Resume when it was allowed, an H2D paused on an AMS error offered no Resume and no reason.
+    // The step is latched from a possibly-stale `device.extruder.info[].stat`, so the block could
+    // outlive the change it described.
+    allowed: true,
+    reason: null
   })
   assert.deepEqual(getResumeAvailability({
     online: true,
@@ -321,8 +326,11 @@ test('shared printer action availability exposes command precondition reasons', 
       steps: ['Wait for AMS cooling', 'Switch track at Filament Track Switch', 'Confirm extruded']
     }
   }), [
+    // Retry and Continue answer the extrusion prompt, and Resume is offered ALONGSIDE them rather
+    // than replaced by them: the prompt must never be the only way out of a paused print.
     { id: 'retryAmsFilamentChange', label: 'Retry' },
-    { id: 'confirmAmsFilamentExtruded', label: 'Continue' }
+    { id: 'confirmAmsFilamentExtruded', label: 'Continue' },
+    { id: 'resume', label: 'Resume' }
   ])
   assert.deepEqual(getLoadFilamentAvailability({
     online: true,
@@ -443,6 +451,30 @@ test('shared printer action availability exposes command precondition reasons', 
     deviceError: { code: '07008011', message: 'AMS filament ran out. Please insert a new filament into the same AMS slot.' },
     hmsErrors: [{ code: '0700220000020001', message: 'AMS A Slot 3 filament has run out. Please insert a new filament.' }]
   }), true)
+})
+
+test('an H2D paused on an AMS error mid filament change still offers Resume', () => {
+  // The reported failure: a dual-nozzle machine pauses on an AMS/HMS error while
+  // `device.extruder.info[].stat` still reports a filament-change step. The step is latched by the
+  // parser and read from the first extruder that reports one, so it can describe a change that is
+  // over, or one on the idle nozzle. Resume used to be blocked on exactly that and, because the
+  // card only rendered an ALLOWED resume, the user was left with Check assistant and Live view.
+  const actions = getPrinterRecoveryActions({
+    online: true,
+    stage: 'paused',
+    subStage: '32',
+    jobId: 'job-7',
+    deviceError: { code: '0C008043', message: 'Nozzle clumping detected' },
+    hmsErrors: [{ code: '0700220000020001', message: 'AMS A Slot 3 filament has run out.' }],
+    filamentChange: {
+      currentStepIndex: 1,
+      currentStepLabel: 'Heat the nozzle',
+      steps: ['Heat the nozzle', 'Cut the filament']
+    },
+    ams: [],
+    externalSpools: []
+  })
+  assert.ok(actions.some((action) => action.id === 'resume'), 'Resume must be offered')
 })
 
 test('shared filament action availability validates AMS and external spool actions', () => {

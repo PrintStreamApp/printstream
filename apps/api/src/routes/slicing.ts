@@ -23,6 +23,7 @@ import {
   printFromLibrarySchema,
   resolveFilamentConfigRequestSchema,
   resolveMachineConfigRequestSchema,
+  readMachineSettingOverrides,
   resolveProcessConfigRequestSchema,
   SETTINGS_MANAGE_PERMISSION,
   uploadSlicingPresetSchema,
@@ -470,8 +471,10 @@ slicingRouter.post('/profiles/resolve-machine', requireRequestPermission(LIBRARY
   const parsed = resolveMachineConfigRequestSchema.safeParse(request.body)
   if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message ?? 'Invalid resolve request')
   const workspaceId = requireRequestWorkspaceId(request)
-  // No project branch, unlike resolve-filament/-process: a 3MF embeds its filament and process
-  // settings but names its printer, so a machine preset is always an installed one.
+  // No project branch, unlike resolve-filament/-process: a machine preset is always an INSTALLED
+  // one, because a 3MF names its printer preset rather than embedding a preset of its own. (It does
+  // embed the machine's VALUES in project_settings.config -- that is what a project-local machine
+  // override diffs against -- but there is no project-scoped preset here to resolve.)
   const [profileFile] = await resolveSlicingPresetFiles(workspaceId, [{ id: parsed.data.machineProfileId, kind: 'machine' }])
   if (!profileFile) throw notFound('Printer profile not found')
   const config = await slicerClient.resolveMachineConfig(parsed.data.targetId ?? null, {
@@ -482,7 +485,21 @@ slicingRouter.post('/profiles/resolve-machine', requireRequestPermission(LIBRARY
   if (!config) throw notFound('Printer profile could not be resolved')
   const parentName = parentPresetNameOf(profileFile)
   const parentConfig = parentName ? await slicerClient.resolveMachineConfig(parsed.data.targetId ?? null, { source: 'builtin', name: parentName }) : null
-  response.json({ config, baseConfig: parentConfig ?? config, overriddenKeys: [] })
+  // What THIS project changed relative to the preset, so the dialog opens on the values the file
+  // actually carries and the next Apply does not silently drop them. Best-effort: a project we
+  // cannot read is answered as "no project deltas" rather than failing the dialog.
+  const projectOverrides = parsed.data.sourceFileId
+    ? await resolveProjectMachineOverrides(parsed.data.sourceFileId, config, parsed.data.sourceFileUploadedAt ?? null).catch((error: unknown) => {
+      // NULL, not `{}`. The dialog stays usable either way, but the two answers mean different
+      // things downstream: `{}` states that the project overrides nothing, which licenses the next
+      // save to CLEAR the record, while null says we never found out. Answering `{}` for a bridge
+      // that was briefly offline made an ordinary save erase the user's printer overrides.
+      console.warn(`[slicing] could not read project machine overrides for ${parsed.data.sourceFileId}`,
+        error instanceof Error ? error.message : error)
+      return null
+    })
+    : {}
+  response.json({ config, baseConfig: parentConfig ?? config, overriddenKeys: [], projectOverrides })
 })
 
 slicingRouter.post('/profiles', requireRequestPermission(SETTINGS_MANAGE_PERMISSION), async (request, response) => {
@@ -632,6 +649,49 @@ async function resolveProjectProcessConfig(sourceFileId: string | null): Promise
   const project = extractProjectProcessConfig(raw)
   if (!project) throw notFound('Process profile could not be resolved')
   return project
+}
+
+
+/**
+ * The machine settings a project records as CHANGED from its printer preset.
+ *
+ * The machine half of {@link resolveProjectProcessConfig}, and the reason a project-local machine
+ * override survives a reload: without it the editor's override map starts empty on every open, the
+ * "changed vs preset" badge reads zero for a file that carries deltas, and the settings dialog
+ * opens on the bare preset so the next Apply emits a diff that DROPS them.
+ *
+ * This is the I/O around it: which VERSION's bytes to read. The reading itself is
+ * `readMachineSettingOverrides`, which lives beside the writer that produced the record, because
+ * the two disagreeing is invisible from either side.
+ */
+async function resolveProjectMachineOverrides(
+  sourceFileId: string,
+  presetConfig: Record<string, string | string[]>,
+  uploadedAt: string | null
+): Promise<Record<string, string | string[]> | null> {
+  const sourceFile = await prisma.libraryFile.findUnique({
+    where: { id: sourceFileId },
+    select: { id: true, name: true, ownerBridgeId: true, storedPath: true, uploadedAt: true }
+  })
+  // Unknown, not "none": a caller that cannot find the row has learned nothing about the file, and
+  // answering `{}` would license the next save to clear the record.
+  if (!sourceFile) return null
+  // A HISTORY version carries the head file's id and its own `uploadedAt`, so answering from the
+  // head's bytes would show one version's overrides while the user is looking at another.
+  let readFrom = sourceFile
+  if (uploadedAt && sourceFile.uploadedAt.toISOString() !== uploadedAt) {
+    const version = await prisma.libraryFileVersion.findFirst({
+      where: { libraryFileId: sourceFileId, uploadedAt: new Date(uploadedAt) },
+      select: { name: true, ownerBridgeId: true, storedPath: true }
+    })
+    // Unknown version: say so rather than answer from the wrong bytes, and rather than say "none".
+    if (!version) return null
+    readFrom = { ...sourceFile, ...version }
+  }
+  const localPath = await resolveLibraryFileToLocalPath(readFrom)
+  const buffer = await readEntry(localPath, PROJECT_SETTINGS_ENTRY_PATH)
+  const raw = JSON.parse(buffer.toString('utf8')) as Record<string, unknown>
+  return readMachineSettingOverrides(raw, presetConfig)
 }
 
 /**

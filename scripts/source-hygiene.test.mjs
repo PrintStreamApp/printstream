@@ -116,3 +116,105 @@ test('no tracked source copies a single file with cpSync + dereference', () => {
       + `Use copyFileSync for a single file:\n  ${offenders.join('\n  ')}`
   )
 })
+
+/**
+ * Rule 3 - no em dash on a line this branch ADDED.
+ *
+ * The house style bans `—` from everything that gets committed or published: commit messages,
+ * PR bodies, code comments, docs, and UI strings. It is a rule no reviewer should have to spend
+ * attention on, and one that is broken in bulk when it is broken at all: a single change added 24
+ * in one sitting, while the same change was removing them from three generator headers.
+ *
+ * DIFF-based, not tree-based, for two reasons. The tree already carries ~2400 of them, nearly all
+ * in markdown (the backlog tracked by issue #100), so a whole-tree rule could not pass today. And a
+ * committed baseline would have to name every offending file, 20 of which live under `private/`,
+ * which would publish that structure into the OSS snapshot: this test is a shipped file.
+ *
+ * A missing base ref is a SKIP, never a failure. A shallow CI clone or a fresh checkout with no
+ * remote cannot tell what is new, and refusing to build on that is worse than the defect.
+ *
+ * A line that genuinely needs the character (a test asserting how one is handled, vendored text)
+ * opts out with an `em-dash-ok` marker on the same line.
+ */
+const EM_DASH = '—'
+
+/** The branch point to diff against, or null when the repo cannot tell us. */
+function resolveDiffBase() {
+  for (const ref of ['origin/dev', 'origin/main', 'dev', 'main']) {
+    try {
+      const base = execFileSync('git', ['merge-base', 'HEAD', ref], {
+        cwd: repoRoot,
+        stdio: ['ignore', 'pipe', 'ignore']
+      }).toString('utf8').trim()
+      if (base) return base
+    } catch {
+      // Ref not present in this clone; try the next.
+    }
+  }
+  return null
+}
+
+test('no em dash is introduced on a changed line', (t) => {
+  const base = resolveDiffBase()
+  if (!base) {
+    t.skip('no base ref to diff against (shallow clone or no remote)')
+    return
+  }
+
+  // Working tree against the branch point, so it covers commits on the branch AND uncommitted
+  // edits: the point is to catch them before they are committed, not after.
+  const diff = execFileSync('git', ['diff', '--unified=0', '--no-color', base, '--'], {
+    cwd: repoRoot,
+    maxBuffer: 256 * 1024 * 1024
+  }).toString('utf8')
+
+  const offenders = []
+  let file = null
+  let lineNumber = 0
+  for (const line of diff.split('\n')) {
+    if (line.startsWith('+++ b/')) { file = line.slice(6); continue }
+    if (line.startsWith('@@')) {
+      // `@@ -a,b +c,d @@` - `c` is the first line number of the added run.
+      const match = /^@@ -\d+(?:,\d+)? \+(\d+)/.exec(line)
+      lineNumber = match ? Number(match[1]) : 0
+      continue
+    }
+    if (!line.startsWith('+') || line.startsWith('+++')) continue
+    const text = line.slice(1)
+    if (file && text.includes(EM_DASH) && !text.includes('em-dash-ok')) {
+      // Generated files are the generator's output; fix the generator, not the artifact.
+      if (!file.includes('.generated.') && file !== 'scripts/source-hygiene.test.mjs') {
+        offenders.push(`${file}:${lineNumber}`)
+      }
+    }
+    lineNumber += 1
+  }
+
+  // A file that is NEW and not yet committed shows up in no diff, so every one of its lines counts
+  // as added. Missing this made the rule blind to exactly the case that motivated it: the change
+  // that added 24 em dashes added several new files.
+  const untracked = execFileSync('git', ['ls-files', '-z', '--others', '--exclude-standard'], {
+    cwd: repoRoot,
+    maxBuffer: 64 * 1024 * 1024
+  }).toString('utf8').split('\0').filter(Boolean)
+  for (const name of untracked) {
+    if (BINARY_EXTENSIONS.has(path.extname(name).toLowerCase())) continue
+    if (name.includes('.generated.')) continue
+    let contents
+    try {
+      if (!statSync(path.join(repoRoot, name)).isFile()) continue
+      contents = readFileSync(path.join(repoRoot, name), 'utf8')
+    } catch {
+      continue
+    }
+    contents.split('\n').forEach((text, index) => {
+      if (text.includes(EM_DASH) && !text.includes('em-dash-ok')) offenders.push(`${name}:${index + 1}`)
+    })
+  }
+
+  assert.deepEqual(
+    offenders,
+    [],
+    `em dashes are not used in committed text; use a comma, colon, parentheses or a separate sentence:\n  ${offenders.join('\n  ')}`
+  )
+})

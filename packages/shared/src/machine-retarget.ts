@@ -16,12 +16,17 @@
  * the runtime maps that depend on BOTH the machine topology and the project's filaments
  * (`filament_nozzle_map`, extruder variants, …). See docs/project-printer-retarget.md.
  */
-import { processSettingsCatalog } from './process-settings.js'
+import { processConfigValuesEqual, processSettingsCatalog } from './process-settings.js'
 import { PRINTER_PRESET_OPTIONS, PRINT_PRESET_OPTIONS } from './generated/preset-options.generated.js'
 import { repairFlushMultiplier, repairFlushVolumesMatrix } from './flush-volumes-matrix.js'
 import { buildFilamentVariantRows } from './filament-variant-index.js'
 import { rebindProjectFilamentPhysics, type FilamentSlotRebind } from './filament-rebind.js'
 import { machineSettingsCatalog } from './machine-settings.js'
+import {
+  extractChangedFromSystemKeys,
+  machinePresetSlotIndexFor,
+  withChangedFromSystemSlot
+} from './three-mf-project-config.js'
 import { isPrintVariantOption } from './variant-options.js'
 import { dropEngineHostileOverrides } from './settings-value-guard.js'
 
@@ -138,6 +143,25 @@ export function retargetProjectSettingsToMachine(
   // that count. Retargeting a single-nozzle project onto a dual-nozzle printer therefore left one
   // block where two are required, and BambuStudio read the missing block out of bounds and
   // segfaulted mid-slice (see flush-volumes-matrix.ts). Re-derive it for the new topology.
+  repairFlushSizingForTopology(next)
+  return repairEstimateModeProjectSettings(next, machineProfile)
+}
+
+/**
+ * Re-derive `flush_volumes_matrix` and `flush_multiplier` for the record's CURRENT extruder count,
+ * in place. Call after anything that can change `nozzle_diameter`'s length or the filament count.
+ *
+ * Extracted because two writers now change machine topology: the machine retarget above, and a
+ * project's own machine overrides ({@link applyMachineSettingOverrides}). Neither failure is soft.
+ * `flush_volumes_matrix` is a PROJECT key rather than a machine-profile one, so a topology change
+ * leaves it sized for the OLD extruder count: BambuStudio then reads the missing block out of
+ * bounds and segfaults mid-slice (exit 139, see flush-volumes-matrix.ts). And `flush_multiplier` is
+ * the length the ENGINE validates the matrix against (`GCode.cpp` uses `flush_multiplier.size()` as
+ * the heads count, not `nozzle_diameter`), so a stale one fails at "Generating G-code" with "Flush
+ * volumes matrix do not match to the correct size!" (exit 156). `flush_multiplier_fast` is resized
+ * only when the file carries it: genuine Bambu saves routinely omit it, and absence is safe.
+ */
+function repairFlushSizingForTopology(next: ProfileRecord): void {
   const filamentCount = Array.isArray(next.filament_colour) ? next.filament_colour.length : 0
   const extruderCount = Array.isArray(next.nozzle_diameter) ? Math.max(next.nozzle_diameter.length, 1) : 1
   const repairedMatrix = repairFlushVolumesMatrix(
@@ -146,32 +170,177 @@ export function retargetProjectSettingsToMachine(
     extruderCount
   )
   if (repairedMatrix) next.flush_volumes_matrix = repairedMatrix
-  // `flush_multiplier` is the matrix's per-extruder companion and the length the ENGINE actually
-  // validates the matrix against (`GCode.cpp` uses `flush_multiplier.size()` as the heads count,
-  // not `nozzle_diameter`). Leaving it at the source machine's length made every multi-filament
-  // slice of a 1 -> 2 extruder retarget fail at "Generating G-code" with "Flush volumes matrix do
-  // not match to the correct size!" (exit 156). `flush_multiplier_fast` is only resized when the
-  // file carries it: genuine Bambu saves routinely omit it, and absence is safe.
   const repairedMultiplier = repairFlushMultiplier(next.flush_multiplier, extruderCount)
   if (repairedMultiplier) next.flush_multiplier = repairedMultiplier
   if (next.flush_multiplier_fast !== undefined) {
     const repairedFast = repairFlushMultiplier(next.flush_multiplier_fast, extruderCount, '1.2')
     if (repairedFast) next.flush_multiplier_fast = repairedFast
   }
-  return repairEstimateModeProjectSettings(next, machineProfile)
 }
 
 /**
- * Blanks one slot of Bambu's `different-settings` inheritance record:
- * `inherits_group[0]` names the process preset's parent and the LAST entry the machine
- * preset's parent (the filament slots sit in between). An empty slot means "this preset
- * IS a system preset", making the CLI derive the system identity from the corresponding
- * `*_settings_id` the retarget just wrote.
+ * Apply a project's OWN machine settings on top of its resolved machine preset: BambuStudio's
+ * "modified printer preset", scoped to one project instead of the global preset bundle.
+ *
+ * The counterpart to {@link applyProcessProfileToProjectSettings} for the machine domain, and it
+ * exists because a 3MF genuinely embeds its machine settings -- `project_settings.config` carries
+ * the full machine block that {@link retargetProjectSettingsToMachine} writes, not merely the
+ * printer's NAME. So "modified vs the preset, saved in the project" is representable for a printer
+ * exactly as it is for a process, with no new file format.
+ *
+ * ORDER: must run AFTER the machine step, or the resolved preset overwrites the user's values --
+ * they are the same keys, which is the whole point of an override.
+ *
+ * Engine-hostile values are dropped exactly as the process path drops them (an empty numeric makes
+ * the engine silently abandon every key after it), and the flush sizing is re-derived because an
+ * override may legitimately change `nozzle_diameter` and with it the extruder count.
  */
-function clearInheritsGroupSlot(record: ProfileRecord, slot: 'process' | 'machine'): void {
+export function applyMachineSettingOverrides(
+  projectSettings: ProfileRecord,
+  overrides: Record<string, string | string[]>,
+  presetConfig?: ProfileRecord
+): ProfileRecord {
+  // The MACHINE catalog, not the default process one: the guard looks the key up to decide whether
+  // it is numeric, so with the wrong catalog every machine key is unknown, reads as non-numeric,
+  // and an empty value sails through. That is the exact shape the guard exists to stop -- the
+  // engine accepts it and then either silently zeroes the setting or builds a ZERO-LENGTH
+  // per-extruder vector whose `get_at` reads out of bounds in release builds.
+  const kept = dropEngineHostileOverrides(overrides, machineSettingsCatalog)
+  // Where the ENGINE reads the machine slot. Null means the project states no filament count, so the
+  // slot cannot be located: writing anyway would file machine keys into filament slot 1's record.
+  const machineIndex = machinePresetSlotIndexFor(projectSettings)
+  if (machineIndex == null) return projectSettings
+  // PERMISSIVE on the way in, deliberately. The slot is REPLACED below with the set assembled here,
+  // so any key this fails to read is not merely invisible in the UI, it is deleted from
+  // BambuStudio's own record by our save. Our machine catalog is scoped to what the settings dialog
+  // exposes and omits real machine keys (`hotend_cooling_rate`, `nozzle_flush_dataset`,
+  // `physical_extruder_map`, ...), so filtering by it here would quietly strip a Studio-authored
+  // record down to the subset we happen to render. The catalog filter belongs on the DISPLAY side
+  // (`readMachineSettingOverrides`), not on retention.
+  const previouslyRecorded = extractChangedFromSystemKeys(
+    projectSettings.different_settings_to_system,
+    machineIndex,
+    () => true
+  )
+  // Nothing to do only when the project ALSO records nothing. An empty map on a project that
+  // carries overrides is a deliberate "reset them all", and returning early there is what made
+  // clearing an override a silent no-op that the next open then undid.
+  if (Object.keys(kept).length === 0 && previouslyRecorded.length === 0) return projectSettings
+
+  const next: ProfileRecord = { ...projectSettings }
+  for (const [key, value] of Object.entries(kept)) next[key] = cloneValue(value)
+  // A key the user RESET goes back to the preset's value, not merely out of the record: the engine
+  // reads the VALUE, so leaving it would keep slicing with an override the UI no longer shows.
+  // Without a preset to restore from it is left alone rather than guessed at.
+  // A key stays RECORDED unless its value can actually be put back. Un-recording one we cannot
+  // restore would leave the file self-inconsistent: the UI would read it as no longer overridden
+  // while the engine kept slicing with the overridden value.
+  //
+  // A key we cannot even DISPLAY is also kept recorded: the dialog never offered it, so the user
+  // cannot have reset it, and dropping it would delete a Studio-authored entry nobody touched.
+  const stillRecorded = new Set(Object.keys(kept))
+  for (const key of previouslyRecorded) {
+    if (key in kept) continue
+    const option = machineSettingsCatalog.options[key]
+    const presetValue = option === undefined ? undefined : presetConfig?.[key]
+    if (presetValue === undefined) {
+      stillRecorded.add(key)
+      continue
+    }
+    // Through the project's own spelling, not the preset's. The two serialize the same value
+    // differently (a point is `0.3x0.5` in a preset and `0.3,0.5` in a project, and a scalar can
+    // arrive as a one-element vector), so assigning verbatim would leave the file carrying a form
+    // BambuStudio never writes -- and would make our own reader report the key as changed again.
+    next[key] = normalizeProfileValueForProject(key, presetValue, projectSettings[key])
+  }
+  next.different_settings_to_system = withChangedFromSystemSlot(
+    next.different_settings_to_system,
+    machineIndex,
+    [...stillRecorded],
+    machineIndex - 1
+  )
+  repairFlushSizingForTopology(next)
+  return next
+}
+
+/**
+ * Read back what {@link applyMachineSettingOverrides} wrote: the machine settings a project records
+ * as CHANGED from its printer preset.
+ *
+ * Lives next to the writer deliberately. The two were a page apart in different workspaces, and a
+ * disagreement between them is invisible in both: the save succeeds, the file is well-formed, and
+ * the override is simply not there on the next open. They disagreed about the slot index for a
+ * whole release. `machine-override-roundtrip.test.ts` drives this pair against each other rather
+ * than asserting either alone.
+ *
+ * Reads BambuStudio's OWN record rather than diffing the embedded machine block against the
+ * resolved preset. A value diff is unusable here, measured on a real project: it reported 44
+ * "overrides" of which essentially none were user edits. `best_object_pos` is serialized `0.3,0.5`
+ * in the project and `0.3x0.5` in the preset; every per-extruder and per-print-mode vector
+ * (`machine_max_speed_*`, `retraction_*`, ...) differs only in LENGTH while every value matches;
+ * and keys the preset simply does not define (`thumbnail_size`) read as changes. Badging that count
+ * would be a confident lie, and applying it would write 44 values into the project as though the
+ * user had chosen them.
+ *
+ * An ABSENT record answers `{}`: unknown is not the same as modified, and the quiet direction is
+ * the one that cannot invent an override nobody made. A key the record NAMES but whose value the
+ * preset has since caught up to is dropped for the same reason -- the record is BambuStudio's, and
+ * it is not re-checked when a preset changes underneath it.
+ */
+export function readMachineSettingOverrides(
+  projectSettings: ProfileRecord,
+  presetConfig: Record<string, string | string[]>
+): Record<string, string | string[]> {
+  const machineIndex = machinePresetSlotIndexFor(projectSettings)
+  if (machineIndex == null) return {}
+  // Catalog-filtered HERE and not in the writer: this answer drives a dialog, so a key the dialog
+  // cannot render has nothing to show. The writer must stay permissive, or saving would delete the
+  // very entries this hides.
+  const recordedKeys = extractChangedFromSystemKeys(
+    projectSettings.different_settings_to_system,
+    machineIndex,
+    (key) => machineSettingsCatalog.options[key] !== undefined
+  )
+  const overrides: Record<string, string | string[]> = {}
+  for (const key of recordedKeys) {
+    const projectValue = projectSettings[key]
+    if (typeof projectValue !== 'string' && !Array.isArray(projectValue)) continue
+    const value = projectValue as string | string[]
+    if (processConfigValuesEqual(presetConfig[key], value, machineSettingsCatalog.options[key])) continue
+    overrides[key] = value
+  }
+  return overrides
+}
+
+
+/**
+ * Blanks one slot of Bambu's `inherits_group`: slot 0 names the process preset's parent and the
+ * MACHINE slot the printer preset's (the filament slots sit in between). An empty slot means "this
+ * preset IS a system preset", making the CLI derive the system identity from the corresponding
+ * `*_settings_id` the retarget just wrote.
+ *
+ * The machine slot comes from the project's FILAMENT COUNT, never from the array's own length,
+ * because here the record carries that count independently and it is what the engine indexes by.
+ * The two answers differ only on a mis-sized array, and there `length - 1` is wrong both ways: on a
+ * LONG one it blanked junk past the slot the engine reads, leaving the stale parent this exists to
+ * clear; on a SHORT one it blanked a FILAMENT slot, telling the CLI that filament was a system
+ * preset.
+ *
+ * Two cases write nothing, both because a wrong slot is worse than a stale one. A record that does
+ * not DECLARE its filament arrays cannot place the machine slot at all -- a count of zero there
+ * means "unknown", not "no filaments" -- and a slot past the end of the array is a parent the engine
+ * cannot see either, so there is nothing to clear; resizing is the Repair stage's job, not something
+ * an ordinary retarget does behind the user's back. The process slot is index 0 in every case, which
+ * no count arithmetic can get wrong.
+ */
+export function clearInheritsGroupSlot(record: ProfileRecord, slot: 'process' | 'machine'): void {
   if (!Array.isArray(record.inherits_group) || record.inherits_group.length === 0) return
+  const machineIndex = machinePresetSlotIndexFor(record)
+  if (slot === 'machine' && machineIndex == null) return
+  const index = slot === 'process' ? 0 : machineIndex!
+  if (index >= record.inherits_group.length) return
   const inheritsGroup = [...record.inherits_group as string[]]
-  inheritsGroup[slot === 'process' ? 0 : inheritsGroup.length - 1] = ''
+  inheritsGroup[index] = ''
   record.inherits_group = inheritsGroup
 }
 
@@ -231,6 +400,8 @@ export interface MachineRetargetPlan {
   processConfig?: ProfileRecord | null
   /** The session's process overrides, applied on top of `processConfig`. */
   processSettingOverrides?: Record<string, string | string[]>
+  /** The project's own machine settings, applied over the resolved machine preset. */
+  machineSettingOverrides?: Record<string, string | string[]>
   /**
    * Per-slot filament rebinds, index-aligned with the project's filament list. Absent/null keeps
    * every slot's current values: the rebind is an improvement pass, never a requirement.
@@ -294,6 +465,18 @@ export function applyMachineRetargetToProjectSettings(
   }
   if (plan.filamentRebinds && plan.filamentRebinds.length > 0) {
     next = rebindProjectFilamentPhysics(next, plan.filamentRebinds)
+  }
+  // The project's own machine values go on LAST in the machine domain, over the preset that just
+  // wrote the same keys. The api applies these as its own post-bake pass instead; this carries them
+  // for the browser host, whose only hook into a save is the retarget plan.
+  //
+  // NOT gated on the map being non-empty. An empty map means "reset every override", and the whole
+  // point of the reset fix is that `{}` has to reach the applier, which owns the only correct
+  // no-op test (nothing to write AND nothing recorded). A `length > 0` guard here reinstated the
+  // original bug for the public editor, where resetting an override saved a file that still
+  // carried it.
+  if (plan.machineSettingOverrides) {
+    next = applyMachineSettingOverrides(next, plan.machineSettingOverrides, plan.machineConfig)
   }
   return next
 }

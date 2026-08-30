@@ -13,12 +13,12 @@
  */
 import { createWriteStream } from 'node:fs'
 import { rename } from 'node:fs/promises'
-import { type PrinterActivePrintObject, type PrinterActivePrintObjectPreviewBounds, type SceneEditPlateFilamentChanges, type SceneEditPlatePauses } from '@printstream/shared'
+import { platePrintUnits, type PrinterActivePrintObject, type PrinterActivePrintObjectPreviewBounds, type SceneEditPlateFilamentChanges, type SceneEditPlatePauses } from '@printstream/shared'
 import { PNG } from 'pngjs'
 import yauzl, { type Entry } from 'yauzl'
 import yazl from 'yazl'
 import { readEntry, readZipEntryBuffer, rewriteThreeMfEntries } from './three-mf-internal.js'
-import { CUSTOM_GCODE_PER_LAYER_ENTRY, buildDefaultPickFilePath, readPlateIndex, type ThreeMfIndex, type ThreeMfPlateObject } from './three-mf-reader.js'
+import { CUSTOM_GCODE_PER_LAYER_ENTRY, buildDefaultPickFilePath, readPlateIndex, type ThreeMfIndex } from './three-mf-reader.js'
 import { applyObjectProcessOverridesXml, mergeCustomGcodePerLayer, rekeyObjectProcessOverrides, type ObjectProcessOverrides } from '@printstream/shared/three-mf'
 
 const ACTIVE_PRINT_PREVIEW_MAX_GCODE_BYTES = 128 * 1024 * 1024
@@ -74,9 +74,19 @@ export function buildPlateObjectsWithPreview(
     : null) ?? index.plates[0]
   if (!plate) return []
 
-  const objects = plate.objects.map<PrinterActivePrintObject>((object) => ({
-    id: object.id,
-    name: object.name,
+  // One entry per PLACEMENT, identified by its firmware handle. Both matter, and both used to be
+  // wrong here. `PrinterActivePrintObject.id` is sent straight to the printer as the `skip_objects`
+  // `obj_list`, and the previews below are keyed by the G-code's "unique label id": BOTH of which
+  // are the `identify_id` space, while `object.id` is the model `object_id`. Those coincide only
+  // for a slice_info-derived index (printer storage), so for a job dispatched from the library the
+  // mid-print skip targeted ids the firmware does not know AND no preview ever matched, silently.
+  // Sharing `platePrintUnits` with the prepare-print picker also keeps the copy numbering
+  // identical between the two surfaces.
+  const objects = platePrintUnits(plate.objects).map<PrinterActivePrintObject>((unit) => ({
+    // An object the file records no handle for cannot be skipped by instance; fall back to its
+    // object id, which is what this surface has always sent, rather than dropping the row.
+    id: unit.identifyId ?? unit.objectId,
+    name: unit.label,
     previewPath: null,
     previewBounds: null
   }))
@@ -84,7 +94,7 @@ export function buildPlateObjectsWithPreview(
 
   if (pickBuffer) {
     try {
-      const previews = parsePickMaskObjectPreviews(pickBuffer, plate.objects)
+      const previews = parsePickMaskObjectPreviews(pickBuffer, objects)
       if (previews.size > 0) {
         return objects.map((object) => {
           const preview = previews.get(object.id)
@@ -101,7 +111,7 @@ export function buildPlateObjectsWithPreview(
   if (!plate.gcodeFile || !gcodeBuffer) return objects
 
   try {
-    const previews = parseFirstLayerObjectPreviews(gcodeBuffer.toString('utf8'), plate.objects)
+    const previews = parseFirstLayerObjectPreviews(gcodeBuffer.toString('utf8'), objects)
     return objects.map((object) => {
       const preview = previews.get(object.id)
       return preview
@@ -407,10 +417,12 @@ export function plateObjectIdsFromModelSettingsXml(xml: string, plate: number): 
 
 /** Result of mapping a plate's deselected plates-index object ids to instance `identify_id`s. */
 export interface PlateSkipIdentifyIds {
-  /** `identify_id`s of every instance (on the plate) of the requested objects. */
+  /** `identify_id`s of every instance (on the plate) of the requested objects and instances. */
   identifyIds: number[]
   /** Requested object ids with no matching instance on the plate (or no usable identify_id). */
   unmatchedObjectIds: number[]
+  /** Requested instance identify_ids that are not placed on this plate. */
+  unmatchedInstanceIds: number[]
   /** Total instances placed on the plate: lets callers refuse a skip-everything selection. */
   plateInstanceCount: number
 }
@@ -434,24 +446,36 @@ export function plateSkipIdentifyIdsFromIndex(
   // Structural subset of ThreeMfIndex so callers can pass any parsed index shape.
   index: { plates: ReadonlyArray<{ index: number; objects: ReadonlyArray<{ id: number; identifyIds: ReadonlyArray<number> }> }> },
   plate: number,
-  objectIds: ReadonlySet<number>
+  objectIds: ReadonlySet<number>,
+  /**
+   * Individual placements to skip, by `identify_id` (the request's `skipInstances`). Unioned with
+   * the whole-object selection above, and validated against THIS plate: an identify_id belonging
+   * to another plate is reported unmatched rather than forwarded, because the firmware would
+   * silently ignore it and the user would watch the copy print anyway.
+   */
+  instanceIds: ReadonlySet<number> = new Set()
 ): PlateSkipIdentifyIds {
   const plateEntry = index.plates.find((entry) => entry.index === plate)
   const identifyIds: number[] = []
   const matchedObjectIds = new Set<number>()
+  const matchedInstanceIds = new Set<number>()
   let plateInstanceCount = 0
   for (const object of plateEntry?.objects ?? []) {
     // An object with no recorded instances still occupies the plate; count at least one
     // so a "skip everything" selection cannot slip past the guard on identify-id count.
     plateInstanceCount += Math.max(1, object.identifyIds.length)
-    if (!objectIds.has(object.id) || object.identifyIds.length === 0) continue
-    matchedObjectIds.add(object.id)
+    const wholeObject = objectIds.has(object.id) && object.identifyIds.length > 0
+    if (wholeObject) matchedObjectIds.add(object.id)
     for (const identifyId of object.identifyIds) {
+      const instanceRequested = instanceIds.has(identifyId)
+      if (instanceRequested) matchedInstanceIds.add(identifyId)
+      if (!wholeObject && !instanceRequested) continue
       if (!identifyIds.includes(identifyId)) identifyIds.push(identifyId)
     }
   }
   const unmatchedObjectIds = [...objectIds].filter((id) => !matchedObjectIds.has(id))
-  return { identifyIds, unmatchedObjectIds, plateInstanceCount }
+  const unmatchedInstanceIds = [...instanceIds].filter((id) => !matchedInstanceIds.has(id))
+  return { identifyIds, unmatchedObjectIds, unmatchedInstanceIds, plateInstanceCount }
 }
 
 /**
@@ -569,7 +593,9 @@ type FirstLayerStartMode = 'marker' | 'zHeight'
 
 function parsePickMaskObjectPreviews(
   pickBuffer: Buffer,
-  objects: ThreeMfPlateObject[]
+  // Keyed by the pick mask's own id space, which is the G-code's "unique label id"
+  // (`identify_id`): pass the entries whose `id` already speaks it, never raw plate objects.
+  objects: ReadonlyArray<{ id: number }>
 ): Map<number, ParsedObjectPreview> {
   const image = PNG.sync.read(pickBuffer)
   if (image.width <= 0 || image.height <= 0) return new Map()
@@ -735,7 +761,8 @@ function buildRasterPreviewPaths(rowPixels: ReadonlyMap<number, number[]>, image
 
 function parseFirstLayerObjectPreviews(
   gcode: string,
-  objects: ThreeMfPlateObject[]
+  // Keyed by the `; start printing object, unique label id:` marker, i.e. `identify_id`.
+  objects: ReadonlyArray<{ id: number }>
 ): Map<number, ParsedObjectPreview> {
   const byObjectId = new Map<number, ObjectPreviewAccumulator>(
     objects.map((object) => [object.id, { outerPaths: [], fallbackPaths: [] }])

@@ -17,8 +17,17 @@
  * WHY STAMPING IS NOT GUESSING. This is not a repair of someone else's data, it is a writer naming
  * the format it just wrote. We author Bambu-shaped documents (`model_settings.config`,
  * `project_settings.config`, plates) whether the base had them or not, so declaring the file as
- * BambuStudio-generated is the accurate statement; omitting it is the inaccurate one. The version
- * matches the scaffold's for the same reason a single value is used everywhere else here.
+ * BambuStudio-generated is the accurate statement; omitting it is the inaccurate one.
+ *
+ * WHY THE VERSION DOES NOT TRACK THE VENDORED SOURCE. Only the `BambuStudio-` prefix and a parseable
+ * Semver matter to the importer: the load path's version comparison is commented out
+ * (`bbs_3mf.cpp`, the `file_version.maj() > app_version.maj()` block). What the number DOES drive is
+ * desktop BambuStudio's "newer 3mf version" dialog, which fires whenever the file's version exceeds
+ * the app's and their minors differ (`Plater.cpp`): so raising this to match a freshly vendored
+ * engine would nag every user who has not yet updated, on every project we save, to no benefit.
+ * Below 2.0.0 there are legacy fixups (prime-tower params, plate translation) we equally do not
+ * want, so the value sits deliberately in between: high enough to skip the fixups, low enough to
+ * stay quiet. Revisit it when the FILE FORMAT we author changes, not when the engine pin moves.
  */
 
 /** The generator token. Must start with `BambuStudio-`, and the rest must parse as a Semver. */

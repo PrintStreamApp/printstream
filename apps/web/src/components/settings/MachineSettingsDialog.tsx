@@ -4,11 +4,17 @@
  * The third caller of `SettingsCatalogDialog`, and the simplest in one respect and the fussiest in
  * another.
  *
- * SIMPLER: there is no project branch. A 3MF embeds its filament and process settings but only
- * NAMES its printer, so a machine preset is always an installed one, no `sourceFileId`, no baked
- * overrides, no "the file changed this" bookkeeping. The resolved preset IS the baseline, and the
- * only diff that matters is against the preset's parent. There is likewise nothing to apply to, so
- * the dialog runs at `applyScope: 'preset'`: Save as preset / Update preset / Cancel, no Apply.
+ * SIMPLER: the resolved preset IS the baseline. Unlike the process dialog there is no third config
+ * between the preset and the editor, so the only diffs that matter are against the preset (changed)
+ * and against the preset's parent (emphasis only).
+ *
+ * It DOES have a project branch, though. This header used to claim a 3MF "only NAMES its printer",
+ * which is false and is why Apply did not exist here for so long: `project_settings.config` carries
+ * the full machine block that `retargetProjectSettingsToMachine` writes (bed, nozzle, extruder
+ * topology, machine gcode, limits). So a printer modified for ONE project, without minting a global
+ * preset, is representable exactly as a modified process is. At `applyScope: 'project'` the footer
+ * gains "Apply to this project" and `onApply` emits the diff against the preset; at `'preset'`
+ * (the settings-page host, which edits a stored preset and has no project) it does not.
  *
  * FUSSIER: over half the machine catalog's options are vectors, and their elements are indexed by
  * different things per page: extruders on the Extruder page, Normal/Silent mode on Motion ability,
@@ -28,6 +34,7 @@ import { useEffect, useState } from 'react'
 import {
   applyProcessConfigDefaults,
   buildMachinePresetConfig,
+  diffProcessConfig,
   machineColumnsForPage,
   machineColumnValue,
   machineSettingsCatalog,
@@ -54,6 +61,17 @@ export interface MachineSettingsDialogProps {
    * user preset. Matches the same prop on the process and filament dialogs.
    */
   canEditOriginal?: boolean
+  /**
+   * Where an edit lands, mirroring the process dialog. `'preset'` (default) is the stored-preset
+   * editor: no Apply button, and {@link onApply} is never called. `'project'` (the 3MF editor) and
+   * `'slice'` (the prepare-print dialog) both emit the override map instead of writing a preset;
+   * they differ only in the promise the button makes, because only the editor's save persists it.
+   */
+  applyScope?: 'preset' | 'project' | 'slice'
+  /** The project's existing machine overrides, laid over the resolved preset when the dialog opens. */
+  initialOverrides?: Record<string, string | string[]>
+  /** The diff against the resolved preset: what the project should carry on top of it. */
+  onApply?: (overrides: Record<string, string | string[]>) => void
 }
 
 /** What `/profiles/resolve-machine` returns; `baseConfig` is the parent preset when one is declared. */
@@ -69,7 +87,10 @@ const PAGE_ID_BY_KEY: ReadonlyMap<string, string> = new Map(
 )
 
 export default function MachineSettingsDialog(props: MachineSettingsDialogProps): JSX.Element {
-  const { open, onClose, slicerTargetId, machineProfileId, machineProfileName, canEditOriginal } = props
+  const { open, onClose, slicerTargetId, machineProfileId, machineProfileName, canEditOriginal, applyScope = 'preset', initialOverrides, onApply } = props
+  // Content-keyed, not identity-keyed: hosts build this map inline, so keying the load effect on
+  // the object itself would refetch and reset the form on every parent render (see apps/web/the development notes).
+  const initialOverridesKey = JSON.stringify(initialOverrides ?? null)
   // The shell applies the develop-tier gate itself; this only tells it which mode it is in.
   const showDeveloperOptions = useEffectiveSlicerDeveloperMode()
   const { promptText } = usePromptDialog()
@@ -111,7 +132,9 @@ export default function MachineSettingsDialog(props: MachineSettingsDialogProps)
         setParentBaseline(response.baseConfig
           ? applyProcessConfigDefaults(response.baseConfig as ProcessConfig, machineSettingsCatalog)
           : null)
-        setConfig(effective)
+        // The project's own values sit ON TOP of the preset, which is what makes them read as
+        // "changed" against it and what `handleApply` diffs back out.
+        setConfig(initialOverrides ? { ...effective, ...initialOverrides } : effective)
       })
       .catch((err: unknown) => {
         if (cancelled) return
@@ -119,7 +142,8 @@ export default function MachineSettingsDialog(props: MachineSettingsDialogProps)
       })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [open, machineProfileId, slicerTargetId])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- initialOverrides is content-keyed above
+  }, [open, machineProfileId, slicerTargetId, initialOverridesKey])
 
   /**
    * How many columns each key has, and what they are called.
@@ -178,6 +202,17 @@ export default function MachineSettingsDialog(props: MachineSettingsDialogProps)
       return value === null ? null : { value, label: 'Inherited value' }
     }
     return null
+  }
+
+  /**
+   * The project's machine settings as a diff against the RESOLVED PRESET, which is the baseline the
+   * server re-resolves and lays these back over. Emitting the whole config instead would freeze
+   * every machine value into the project and make a later preset fix invisible to it.
+   */
+  const handleApply = (): void => {
+    if (!baseConfig) return
+    onApply?.(diffProcessConfig(baseConfig, config, machineSettingsCatalog))
+    onClose()
   }
 
   // Built fresh each render like its process and filament siblings: the shell reads the adapter
@@ -273,8 +308,12 @@ export default function MachineSettingsDialog(props: MachineSettingsDialogProps)
         onCancel: onClose,
         saving,
         onUpdatePreset: canEditOriginal ? () => void savePreset(machineProfileName, true) : undefined,
-        onSaveAsPreset: () => void handleSaveAsPreset()
-        // No `apply`: there is no slice or project to apply a printer preset to.
+        onSaveAsPreset: () => void handleSaveAsPreset(),
+        // Omitted at 'preset' scope (the settings page edits a stored preset and has nothing to
+        // apply to); present in a project, where it saves the edit INTO the project instead.
+        apply: applyScope === 'preset'
+          ? undefined
+          : { label: applyScope === 'project' ? 'Apply to this project' : 'Apply to this slice', onApply: handleApply }
       }}
     />
   )

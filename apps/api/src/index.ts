@@ -35,6 +35,7 @@ import { ensureBuiltInPlatformAuthGroups } from './lib/default-auth-groups.js'
 import { ensureDefaultWorkspace } from './lib/default-workspace.js'
 import { rootPrisma } from './lib/prisma.js'
 import { ensureManagedBridgeToken, isManagedBridgeMode } from './lib/managed-bridge.js'
+import { startDevSourceStalenessWatch } from './lib/dev-source-staleness.js'
 
 const httpServer = createServer(app)
 attachWebSocketServer(httpServer)
@@ -77,6 +78,9 @@ void finalizeApp()
     })
     httpServer.listen(env.API_PORT, () => {
       console.log(`printstream API listening on http://localhost:${env.API_PORT}`)
+      // Dev only, and deliberately first: it reports that this process is serving code older than
+      // the repo, which is a condition that makes every observation after it untrustworthy.
+      startDevSourceStalenessWatch()
       void (async () => {
     try {
       // Opt-in (METRICS_ENABLED); a no-op otherwise. Gauges read live counts

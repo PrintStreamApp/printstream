@@ -36,7 +36,7 @@ import { annotateRequestAuditLog, skipRequestAuditLog } from '../lib/audit-logs.
 import { requireRequestPermission } from '../lib/authorization.js'
 import { resolveLibraryFileToLocalPath } from '../lib/bridge-library-files.js'
 import { persistFilamentSettingOverrides } from '../lib/save-filament-overrides.js'
-import { healSavedProjectMachineTopology, projectHasCompleteMachine, retargetSavedProjectMachine } from '../lib/save-retarget.js'
+import { applyMachineOverridesToProject, applyMachinePresetChange, healSavedProjectMachineTopology, projectHasCompleteMachine, retargetSavedProjectMachine } from '../lib/save-retarget.js'
 import { badRequest, HttpError, notFound } from '../lib/http-error.js'
 import { getStagedImport, resolveSceneEditImports, stageImport } from '../lib/import-store.js'
 import { discardHiddenSlicedOutput, persistLibraryFileFromLocalPath } from '../lib/library-files.js'
@@ -212,7 +212,7 @@ async function resolvePinnedContentBase(
 /**
  * Bake an edited arrangement into a ready-to-persist/stream 3MF inside `workDir`:
  * base bytes + staged imports + per-object/global process overrides + plate thumbnails,
- * then an optional cross-machine retarget. Shared by `/save` (persists the result) and
+ * then an optional cross-machine retarget, the chosen machine preset, and last the project's own machine overrides. Shared by `/save` (persists the result) and
  * `/export-3mf` (streams it back without persisting). The caller owns `workDir` cleanup;
  * the retarget artifact's directory is returned via `extraCleanupDirs` for the same rm.
  */
@@ -221,8 +221,8 @@ async function bakeArrangedThreeMf(
   input: ExportArrangedThreeMf,
   workDir: string,
   fileName: string
-): Promise<{ bakedPath: string; importCount: number; extraCleanupDirs: string[]; baseFile: { id: string; name: string; ownerBridgeId: string | null; folderId: string | null } | null; machineTopologyHealed: boolean }> {
-  const { baseFileId, baseVersionId, sceneEdit, retarget, slicerTargetId, objectProcessOverrides, processSettingOverrides, filamentSettingOverrides, objectExport } = input
+): Promise<{ bakedPath: string; importCount: number; extraCleanupDirs: string[]; baseFile: { id: string; name: string; ownerBridgeId: string | null; folderId: string | null } | null; machineTopologyHealed: boolean; machinePresetReauthored: boolean; machineOverridesPersisted: boolean }> {
+  const { baseFileId, baseVersionId, sceneEdit, retarget, slicerTargetId, objectProcessOverrides, processSettingOverrides, machineSettingOverrides, filamentSettingOverrides, objectExport } = input
 
   const baseFile = baseFileId
     ? await prisma.libraryFile.findFirst({
@@ -316,6 +316,10 @@ async function bakeArrangedThreeMf(
   // silently keeping the source machine. buildEditedThreeMf alone never switches the machine.
   let bakedPath = workingPath
   let machineTopologyHealed = false
+  // Both are recorded in the save's audit entry: each rewrites the project's machine block, and
+  // `retargetedTo` cannot distinguish them because the MODEL is unchanged in exactly these cases.
+  let machinePresetReauthored = false
+  let machineOverridesPersisted = false
   if (retarget && !(await projectHasCompleteMachine(workingPath, retarget.printerModel))) {
     // Either a genuine printer CHANGE, or the same printer on a project that never carried that
     // machine's full definition (e.g. one naming `printer_model: H2D` without H2D's dual-nozzle
@@ -330,8 +334,23 @@ async function bakeArrangedThreeMf(
     })
     extraCleanupDirs.push(path.dirname(bakedPath))
   } else if (retarget) {
-    // Already complete for this machine, nothing to author, and re-running the retarget would
-    // overwrite the user's process settings for no gain.
+    // Right MODEL and fully defined, but the chosen machine PRESET can still differ (an H2D
+    // variant, a nozzle size, a user's own tuned machine). Authoring the machine only is what lets
+    // this run at all: re-running the full retarget here would overwrite the user's process
+    // settings, which is why this branch used to do nothing whatsoever, and why the user's preset
+    // pick was accepted by the editor and then silently dropped by the save.
+    const presetAppliedPath = await applyMachinePresetChange({
+      workspaceId,
+      arrangedPath: workingPath,
+      fileName,
+      slicerTargetId,
+      retarget
+    })
+    if (presetAppliedPath) {
+      bakedPath = presetAppliedPath
+      extraCleanupDirs.push(path.dirname(presetAppliedPath))
+      machinePresetReauthored = true
+    }
   } else {
     // Same-model save: if the base project LOST its dual-nozzle machine block (a filament
     // rewrite once stripped the extruder-indexed machine arrays), re-author it from the
@@ -359,7 +378,28 @@ async function bakeArrangedThreeMf(
       machineTopologyHealed = true
     }
   }
-  return { bakedPath, importCount: imports.length, extraCleanupDirs, baseFile, machineTopologyHealed }
+  // The project's OWN machine settings, last in the machine domain: overrides and the resolved
+  // preset write the SAME keys, so any earlier position would let whichever branch above authored
+  // the machine overwrite the user's values.
+  // Runs for an EMPTY map too: that is how a reset-them-all reaches the file. The pass itself
+  // returns null when the project records no overrides either, so an untouched printer is untouched.
+  if (machineSettingOverrides) {
+    const overriddenPath = await applyMachineOverridesToProject({
+      workspaceId,
+      arrangedPath: bakedPath,
+      fileName,
+      slicerTargetId,
+      retarget,
+      machineSettingOverrides
+    })
+    if (overriddenPath) {
+      bakedPath = overriddenPath
+      extraCleanupDirs.push(path.dirname(overriddenPath))
+      machineOverridesPersisted = true
+    }
+  }
+
+  return { bakedPath, importCount: imports.length, extraCleanupDirs, baseFile, machineTopologyHealed, machinePresetReauthored, machineOverridesPersisted }
 }
 
 editorRouter.post(
@@ -410,7 +450,7 @@ editorRouter.post(
         // Counts only, never the edit's contents. `objectCopyCount` and `repairedMeshCount` are
         // here because both MATERIALISE new or altered geometry in the saved file, so a support
         // question about an unexpected object or a changed mesh can be answered from the trail.
-        metadata: { fileId: created.id, mode, baseFileId: baseFileId ?? null, bakedFromEditorStateOnly: parsed.ignoreBaseContent === true, importCount: baked.importCount, objectCopyCount: parsed.sceneEdit?.objectClones?.length ?? 0, repairedMeshCount: (parsed.sceneEdit?.repairedObjectIds?.length ?? 0) + (parsed.sceneEdit?.repairedImportIds?.length ?? 0), retargetedTo: parsed.retarget?.printerModel ?? null, machineTopologyHealed: baked.machineTopologyHealed, globalProcessOverridesPersisted: parsed.processSettingOverrides != null && Object.keys(parsed.processSettingOverrides).length > 0 }
+        metadata: { fileId: created.id, mode, baseFileId: baseFileId ?? null, bakedFromEditorStateOnly: parsed.ignoreBaseContent === true, importCount: baked.importCount, objectCopyCount: parsed.sceneEdit?.objectClones?.length ?? 0, repairedMeshCount: (parsed.sceneEdit?.repairedObjectIds?.length ?? 0) + (parsed.sceneEdit?.repairedImportIds?.length ?? 0), retargetedTo: parsed.retarget?.printerModel ?? null, machineTopologyHealed: baked.machineTopologyHealed, machinePresetReauthored: baked.machinePresetReauthored, machineOverridesPersisted: baked.machineOverridesPersisted, globalProcessOverridesPersisted: parsed.processSettingOverrides != null && Object.keys(parsed.processSettingOverrides).length > 0 }
       })
       // `archivedVersionId` is the content that was current until this save: i.e. the bytes this
       // save authored FROM. The editor pins it so its next save authors from the same original

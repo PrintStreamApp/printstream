@@ -35,6 +35,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import {
   applyFilamentSlotOverrides,
+  applyMachineSettingOverrides,
   applyProcessProfileToProjectSettings,
   canonicalCurrBedType,
   dropEngineHostileOverrides,
@@ -123,6 +124,11 @@ export async function authorSliceSettingsIntoProject(input: AuthorSliceSettingsI
     // a cleared field written as "" makes the engine abandon every key after it, silently.
     for (const [key, value] of Object.entries(dropEngineHostileOverrides(input.target.processSettingOverrides))) settings[key] = value
   }
+
+  // The project's OWN machine settings, on top of the machine authored in by the step before this
+  // one (`slicing-jobs.ts` authors the machine first, which is why this module must run after it).
+  // Same keys, so any earlier position would let the resolved preset overwrite the user's values.
+  settings = applyMachineSettingOverrides(settings, input.target.machineSettingOverrides ?? {})
 
   settings = await applyFilamentSelection(settings, input)
 

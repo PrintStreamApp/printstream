@@ -38,6 +38,7 @@ import { ensureEnginesInstalled } from './engines/ensure-engines.js'
 import { installEngine, removeEngine } from './engines/install.js'
 import { readManifest as readEngineManifest } from './engines/manifest.js'
 import { terminateSlicerChild } from './terminate-child.js'
+import { readPrepareTimeSeconds } from './gcode-header.js'
 import { outputSignalsSliceComplete } from './slice-progress.js'
 import { appendCappedTail, appendOutput, appendStructuredOutput } from './slice-output.js'
 import { openZip, readZipEntryBuffer, readZipEntryText } from './zip-io.js'
@@ -448,6 +449,7 @@ app.post('/slice', async (request, response) => {
       plate: parsed.data.request.plate,
       profileFiles: parsed.data.profileFiles ?? [],
       processSettingOverrides: parsed.data.request.target.processSettingOverrides ?? {},
+      machineSettingOverrides: parsed.data.request.target.machineSettingOverrides ?? {},
       filamentSettingOverrides: parsed.data.request.target.filamentSettingOverrides ?? {},
       perMaterialFilamentOverrides: buildPerMaterialFilamentOverrides(parsed.data.request.target.filamentMappings ?? []),
       filamentSlots: parsed.data.request.target.filamentMappings ?? [],
@@ -488,6 +490,13 @@ app.post('/slice', async (request, response) => {
 
     // Try to read metadata from JSON export
     const metadata = await tryReadSlicingMetadata(workDir, outputFileName)
+    // Prepare time comes from the finished G-code's own header, not from result.json, whose
+    // same-named field is the CLI's wall clock in milliseconds. Applied here rather than inside the
+    // JSON reader because it is the OUTPUT that carries the answer.
+    const prepareSeconds = await readPrepareTimeSeconds(outputPath)
+    if (metadata && prepareSeconds != null && prepareSeconds >= 1) {
+      metadata.estimatedPrepareTimeSeconds = Math.round(prepareSeconds)
+    }
 
     response.setHeader('Content-Type', 'application/octet-stream')
     response.setHeader('Content-Length', String(info.size))
@@ -544,6 +553,8 @@ async function runCli(input: {
   plate: number
   profileFiles: SlicingPresetFile[]
   processSettingOverrides: Record<string, string | string[]>
+  /** Project-local machine overrides, applied onto the MACHINE preset file for the same reason. */
+  machineSettingOverrides: Record<string, string | string[]>
   filamentSettingOverrides: Record<string, string | string[]>
   /** Per-material "tune" overrides keyed by 1-based project filament SLOT (from the material dialog). */
   perMaterialFilamentOverrides: Record<number, Record<string, string | string[]>>
@@ -574,6 +585,7 @@ async function runCli(input: {
     inputPath: input.inputPath,
     filamentSlots: input.filamentSlots,
     processSettingOverrides: input.processSettingOverrides,
+    machineSettingOverrides: input.machineSettingOverrides,
     filamentSettingOverrides: input.filamentSettingOverrides,
     perMaterialFilamentOverrides: input.perMaterialFilamentOverrides,
     log: (message) => appendStructuredOutput(input.outputLines, 'system', message)
@@ -598,6 +610,7 @@ async function runCli(input: {
       inputPath: input.inputPath,
       filamentSlots: input.filamentSlots,
       processSettingOverrides: input.processSettingOverrides,
+      machineSettingOverrides: input.machineSettingOverrides,
       filamentSettingOverrides: input.filamentSettingOverrides,
       perMaterialFilamentOverrides: input.perMaterialFilamentOverrides
     })
@@ -1270,6 +1283,7 @@ async function prepareProfileArgs(input: {
   /** The request's filament mappings, one per project filament slot. */
   filamentSlots: readonly FilamentSlotRequest[]
   processSettingOverrides?: Record<string, string | string[]>
+  machineSettingOverrides?: Record<string, string | string[]>
   filamentSettingOverrides?: Record<string, string | string[]>
   /** Per-material "tune" overrides keyed by 1-based project filament slot. */
   perMaterialFilamentOverrides?: Record<number, Record<string, string | string[]>>
@@ -1279,6 +1293,7 @@ async function prepareProfileArgs(input: {
   const settingsPaths: string[] = []
   const customDir = path.join(input.workDir, 'profiles')
   const processSettingOverrides = input.processSettingOverrides ?? {}
+  const machineSettingOverrides = input.machineSettingOverrides ?? {}
   const filamentSettingOverrides = input.filamentSettingOverrides ?? {}
   const perMaterialFilamentOverrides = input.perMaterialFilamentOverrides ?? {}
 
@@ -1290,7 +1305,14 @@ async function prepareProfileArgs(input: {
       filamentFilesById.set(profile.id, profile)
       continue
     }
-    settingsPaths.push(await materializeProfileFile(profile, customDir, input.profileDir, profile.kind === 'process' ? processSettingOverrides : undefined))
+    // `--load-settings` presets WIN over the project's embedded values, so a project-local
+    // override has to be baked into the preset file the CLI loads, not just into the 3MF. That is
+    // already why the process preset is materialized with its overrides; the machine preset needs
+    // it for the same reason, or an edited printer is silently reverted to stock at slice time.
+    const presetOverrides = profile.kind === 'process'
+      ? processSettingOverrides
+      : profile.kind === 'machine' ? machineSettingOverrides : undefined
+    settingsPaths.push(await materializeProfileFile(profile, customDir, input.profileDir, presetOverrides))
   }
 
   // `--load-filaments` is POSITIONAL: one entry per project slot, or none at all.
@@ -1362,7 +1384,7 @@ async function materializeProfileFile(
     )
     const sanitized = sanitizeBuiltinSlicerProfileJson(builtinContent)
     if (overrides && Object.keys(overrides).length > 0) {
-      await writeFile(profilePath, applyProcessSettingOverrides(sanitized, overrides))
+      await writeFile(profilePath, applyProfileSettingOverrides(sanitized, overrides))
       return profilePath
     }
     await writeFile(profilePath, sanitized)
@@ -1386,11 +1408,11 @@ async function materializeProfileFile(
 }
 
 /**
- * Applies process-setting overrides onto a serialized process profile JSON
- * string, preserving the rest of the document. Override values are written
- * verbatim (BambuStudio serialized strings / string arrays).
+ * Applies setting overrides onto a serialized profile JSON string, preserving the rest of the
+ * document. Override values are written verbatim (BambuStudio serialized strings / string arrays).
+ * Kind-agnostic: used for the process preset and the machine preset alike.
  */
-function applyProcessSettingOverrides(profileJson: string, overrides: Record<string, string | string[]>): string {
+function applyProfileSettingOverrides(profileJson: string, overrides: Record<string, string | string[]>): string {
   const parsed = JSON.parse(profileJson) as Record<string, unknown>
   for (const [key, value] of Object.entries(overrides)) parsed[key] = value
   return `${JSON.stringify(parsed, null, 2)}\n`
@@ -1942,6 +1964,7 @@ async function isRegularFile(filePath: string): Promise<boolean> {
   }
 }
 
+
 function buildOutputLinesHeader(outputLines: SlicingOutputLine[]): string {
   const latestSystemLines = outputLines.filter((line) => line.stream === 'system').slice(-20)
   const fallbackLines = outputLines.slice(-8)
@@ -2046,7 +2069,6 @@ async function readSlicingMetadataFile(jsonPath: string): Promise<SlicingMetadat
     // across sliced plates so a single-plate or all-plate slice both report totals.
     if (Array.isArray(data.sliced_plates) && data.sliced_plates.length > 0) {
       let timeSeconds = 0
-      let prepareSeconds = 0
       let weightGrams = 0
       // Aggregate per-material usage across plates, keyed by filament id so the same
       // material on multiple plates sums into one row. Length is reported in metres in
@@ -2054,7 +2076,6 @@ async function readSlicingMetadataFile(jsonPath: string): Promise<SlicingMetadat
       const byMaterial = new Map<number, SlicingMaterialUsage>()
       for (const plate of data.sliced_plates) {
         if (plate && typeof plate.total_predication === 'number') timeSeconds += plate.total_predication
-        if (plate && typeof plate.prepare_time === 'number') prepareSeconds += plate.prepare_time
         if (plate && Array.isArray(plate.filaments)) {
           for (const filament of plate.filaments) {
             if (!filament || typeof filament !== 'object') continue
@@ -2075,10 +2096,10 @@ async function readSlicingMetadataFile(jsonPath: string): Promise<SlicingMetadat
         }
       }
       if (timeSeconds > 0) metadata.estimatedPrintTimeSeconds = Math.round(timeSeconds)
-      // Per-plate prepare_time, falling back to the top-level field (result.json reports
-      // both shapes depending on slice mode).
-      if (prepareSeconds <= 0 && typeof data.prepare_time === 'number') prepareSeconds = data.prepare_time
-      if (prepareSeconds > 0) metadata.estimatedPrepareTimeSeconds = Math.round(prepareSeconds)
+      // NOTE: prepare time deliberately does NOT come from result.json. Its `prepare_time` is the
+      // CLI's own wall clock in MILLISECONDS (`BambuStudio.cpp:6201`), not a print estimate, so it
+      // measured this container rather than the printer and inflated by 1000x on the way. It is
+      // read from the finished G-code header instead; see `readPrepareTimeSeconds`.
       if (weightGrams > 0) metadata.estimatedFilamentWeightGrams = weightGrams
       if (byMaterial.size > 0) {
         metadata.materials = [...byMaterial.values()].sort((a, b) => (a.id ?? 0) - (b.id ?? 0))

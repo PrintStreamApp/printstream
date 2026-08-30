@@ -29,6 +29,7 @@ import { restoreFilamentPhysics } from '../repairs/restore-filament-physics.js'
 import { repairModelSettingsObjectExtruders, setObjectLevelExtruderMetadata, sharedCarryingPartExtruderOfBlock } from '../repairs/object-extruder.js'
 import { inspectProjectFilamentIds, repairFilamentIds } from '../repairs/filament-ids.js'
 import { inspectProjectInheritsGroup, repairInheritsGroup } from '../repairs/inherits-group.js'
+import { resizeParallelPresetRecord } from '../three-mf-project-config.js'
 import {
   defaultFlushMultiplierFor,
   flushMultiplierKeyForPrimeVolumeMode,
@@ -54,6 +55,7 @@ import type {
   SceneEditPartPaint,
   SceneEditPartProcessOverride,
   SceneEditPartTransform,
+  SceneEditRemovedPart,
   SceneEditPartTypeChange,
   SceneEditPlateFilamentChanges,
   SceneEditPlatePauses
@@ -908,6 +910,12 @@ export function buildEditedThreeMfDocuments(
     if (!byPart) { byPart = new Map(); importPartTypes.set(entry.importId, byPart) }
     byPart.set(entry.partIndex, entry.subtype)
   }
+  const importRemovedParts = new Map<string, Set<number>>()
+  for (const entry of edit.importRemovedParts ?? []) {
+    let byPart = importRemovedParts.get(entry.importId)
+    if (!byPart) { byPart = new Set(); importRemovedParts.set(entry.importId, byPart) }
+    byPart.add(entry.partIndex)
+  }
   const toExtruder = (filamentId: number | null): number | null =>
     filamentId != null ? filamentToExtruder.get(filamentId) ?? filamentId : null
   for (const imported of imports) {
@@ -917,7 +925,19 @@ export function buildEditedThreeMfDocuments(
     const isPartImport = partImportIds.has(imported.importId)
     // A multi-solid import (STEP assembly) bakes as one object whose solids are component parts;
     // imports consumed as an added part volume stay single-mesh (applyAddedParts wraps them).
-    const multiParts = !isPartImport && imported.parts && imported.parts.length > 1 ? imported.parts : null
+    //
+    // Solids the user deleted are filtered out here, but each survivor carries its ORIGINAL index:
+    // every other import-part seam (`importPartFilaments`, `importPartTypes`, `importPartTransforms`,
+    // `importPaint`, ...) is keyed by the staged record's solid index, so looking those up by the
+    // post-filter position would shift every one of them onto the wrong solid. The multi-part path
+    // is also chosen on the ORIGINAL count, so an import whittled down to a single solid still bakes
+    // as a one-component object rather than falling back to `imported.mesh`: that fallback is the
+    // MERGED mesh and would silently reintroduce the removed geometry.
+    const removedSolids = importRemovedParts.get(imported.importId)
+    const allSolids = !isPartImport && imported.parts && imported.parts.length > 1
+      ? imported.parts.map((part, sourceIndex) => ({ part, sourceIndex }))
+      : null
+    const multiParts = allSolids?.filter((entry) => !removedSolids?.has(entry.sourceIndex)) ?? null
     // An imported object is ALWAYS bound, never left implicit. An import starts at
     // `filamentId: null`, and writing nothing made the object's material a property of the ENGINE
     // rather than of the file: BambuStudio materialises extruder 1 for an object whose entry is
@@ -941,38 +961,50 @@ export function buildEditedThreeMfDocuments(
       const partTypes = importPartTypes.get(imported.importId)
       const partTransforms = importPartTransforms.get(imported.importId)
       const solidPaint = importPaint.get(imported.importId)
-      const solidMeshXmls = multiParts.map((part, i) => renderImportedMeshObjectXml(componentIds[i]!, part.mesh, genUuid, solidPaint?.get(i)))
+      // The renderer indexes transforms by COMPONENT position, while the edit keys them by staged
+      // solid index; those diverge as soon as a solid is removed, so rebase the map here rather
+      // than letting each surviving solid inherit its neighbour's placement.
+      const componentTransforms = partTransforms
+        ? new Map(multiParts.flatMap((entry, i) => {
+          const matrix = partTransforms.get(entry.sourceIndex)
+          return matrix ? [[i, matrix] as const] : []
+        }))
+        : undefined
+      const solidMeshXmls = multiParts.map((entry, i) => renderImportedMeshObjectXml(componentIds[i]!, entry.part.mesh, genUuid, solidPaint?.get(entry.sourceIndex)))
       if (genUuid) {
         // Production extension: emit the solids as a separate /3D/Objects sub-model and reference
         // them by p:path, so a plate fetches/parses only this import's part file, not the whole
         // root model, and the layout matches BambuStudio's. The root keeps just the small assembly.
         const partFilePath = `3D/Objects/printstream_object_${objectId}.model`
         partFileEntries.push({ name: partFilePath, content: renderImportedPartFileModel(solidMeshXmls) })
-        meshObjects.push(renderImportedComponentsObjectXml(objectId, componentIds, genUuid, `/${partFilePath}`, partTransforms))
+        meshObjects.push(renderImportedComponentsObjectXml(objectId, componentIds, genUuid, `/${partFilePath}`, componentTransforms))
       } else {
         // Non-production project: keep the solids inline in the root model (same-file components).
         meshObjects.push(...solidMeshXmls)
-        meshObjects.push(renderImportedComponentsObjectXml(objectId, componentIds, genUuid, null, partTransforms))
+        meshObjects.push(renderImportedComponentsObjectXml(objectId, componentIds, genUuid, null, componentTransforms))
       }
       settingsObjects.push(renderImportedMultiPartModelSettingsXml(
         objectId,
         imported.name,
         objectExtruder,
         // Each solid keeps its own filament when assigned; otherwise it inherits the object's.
-        multiParts.map((part, i) => ({
+        // Every per-solid lookup is by `sourceIndex`, the staged record's own index, because that
+        // is what all the import-part seams are keyed by. Using the post-filter position `i` here
+        // would hand each survivor its removed neighbour's material, type and overrides.
+        multiParts.map((entry, i) => ({
           componentObjectId: componentIds[i]!,
-          name: part.name,
+          name: entry.part.name,
           // A helper volume carries no material (BambuStudio writes extruder 0), so it must
           // never inherit the object's: see threeMfPartSubtypeCarriesFilament.
-          extruder: threeMfPartSubtypeCarriesFilament(partTypes?.get(i) ?? part.subtype ?? null)
-            ? toExtruder(partFilaments?.get(i) ?? null) ?? objectExtruder
+          extruder: threeMfPartSubtypeCarriesFilament(partTypes?.get(entry.sourceIndex) ?? entry.part.subtype ?? null)
+            ? toExtruder(partFilaments?.get(entry.sourceIndex) ?? null) ?? objectExtruder
             : null,
           // Per-part process overrides set on the unsaved import (keyed by solid index).
-          processOverrides: partProcess?.get(i),
+          processOverrides: partProcess?.get(entry.sourceIndex),
           // The type the user chose on the unsaved import ("Change type") wins; otherwise the
           // solid keeps the type it was imported WITH, a 3MF's support blocker stays a blocker
           // instead of silently baking as printed geometry.
-          subtype: partTypes?.get(i) ?? part.subtype ?? undefined
+          subtype: partTypes?.get(entry.sourceIndex) ?? entry.part.subtype ?? undefined
         }))
       ))
     } else {
@@ -1095,6 +1127,21 @@ export function buildEditedThreeMfDocuments(
     const applied = applyPartTransforms(modelXml, modelSettingsXml, edit.partTransforms)
     modelXml = applied.modelXml
     modelSettingsXml = applied.modelSettingsXml
+  }
+
+  // LAST of the part-scoped appliers, deliberately: every one above addresses base-file ordinals,
+  // so removing a part before them would shift the ordinals under their feet and silently retarget
+  // each edit onto the neighbouring volume. See `sceneEditRemovedPartSchema`.
+  if (edit.removedParts && edit.removedParts.length > 0) {
+    const applied = applyRemovedParts(modelXml, modelSettingsXml, edit.removedParts)
+    modelXml = applied.modelXml
+    modelSettingsXml = applied.modelSettingsXml
+    // A removed `<component>` was the only reference keeping its mesh object alive, so sweep again
+    // rather than shipping the orphaned geometry. The sweep is idempotent and seeded from the same
+    // placed-object set as the pass above.
+    const swept = removeUnreferencedObjects(modelXml, modelSettingsXml, new Set(arranged.map((instance) => instance.objectId)))
+    modelXml = swept.modelXml
+    modelSettingsXml = swept.modelSettingsXml
   }
 
   if (edit.objectNames && edit.objectNames.length > 0) {
@@ -1480,6 +1527,56 @@ export function applyPartTransforms(
 }
 
 /**
+ * Remove parts (volumes) from in-project objects: drop the Nth `<component>` from the model and the
+ * Nth `<part>` from `model_settings.config`, for each requested BASE ordinal.
+ *
+ * Two rules. **Ordinals are counted over the BASE document, never renumbered as removals are
+ * applied**: one pass per object walks components in order and drops the ones whose index is in
+ * the set, so removing parts 1 and 2 removes those two and not part 1 and then the part that slid
+ * into slot 2. And this must run AFTER every other part-scoped applier, which address those same
+ * base ordinals; the caller enforces that ordering, and getting it wrong retargets edits silently
+ * rather than failing.
+ *
+ * The component is the only thing keeping its mesh object referenced, so the caller re-runs the
+ * unreferenced-object sweep afterwards to drop the orphan. Removing an object's LAST printed part
+ * is refused client-side (an object with no geometry is not a thing BambuStudio can open); nothing
+ * here depends on that, so a malformed edit degrades to an empty object rather than a corrupt file.
+ */
+export function applyRemovedParts(
+  modelXml: string,
+  modelSettingsXml: string,
+  removedParts: SceneEditRemovedPart[]
+): { modelXml: string; modelSettingsXml: string } {
+  const byObject = new Map<number, Set<number>>()
+  for (const removal of removedParts) {
+    let parts = byObject.get(removal.objectId)
+    if (!parts) { parts = new Set(); byObject.set(removal.objectId, parts) }
+    parts.add(removal.partIndex)
+  }
+  const nextModelXml = modelXml.replace(/<object\b([^>]*)>[\s\S]*?<\/object>/g, (objectBlock, attrs: string) => {
+    const objectId = Number.parseInt(parseAttrs(attrs).id ?? '', 10)
+    const parts = byObject.get(objectId)
+    if (!parts) return objectBlock
+    let componentIndex = -1
+    return objectBlock.replace(/[^\S\r\n]*<component\b[^>]*\/>\n?/g, (componentTag) => {
+      componentIndex += 1
+      return parts.has(componentIndex) ? '' : componentTag
+    })
+  })
+  const nextModelSettingsXml = modelSettingsXml.replace(/<object\b([^>]*)>[\s\S]*?<\/object>/g, (objectBlock, attrs: string) => {
+    const objectId = Number.parseInt(parseAttrs(attrs).id ?? '', 10)
+    const parts = byObject.get(objectId)
+    if (!parts) return objectBlock
+    let settingsPartIndex = -1
+    return objectBlock.replace(/[^\S\r\n]*<part\b[^>]*>[\s\S]*?<\/part>\n?/g, (partBlock) => {
+      settingsPartIndex += 1
+      return parts.has(settingsPartIndex) ? '' : partBlock
+    })
+  })
+  return { modelXml: nextModelXml, modelSettingsXml: nextModelSettingsXml }
+}
+
+/**
  * Set (or insert) an `<object>`'s object-level `name` metadata. The object's name sits
  * between the `<object ...>` opening tag and its first `<part>`; part-level names (mesh
  * components) are left untouched, matching how Bambu Studio renames an object.
@@ -1853,40 +1950,38 @@ export function applyFilamentList(projectSettingsJson: string, filaments: SceneE
       }
       record[key] = Array.from({ length: newCount }, (_unused, i) => value[sourceFor(i)])
     }
-    // `different_settings_to_system` is `[process, ...filament slots, machine]` (length oldCount+2),
-    // so the generic remap above skips it. Rebuild it by hand: each new slot follows its source
-    // slot's record, but a slot whose MATERIAL changed gets a BLANK record, its in-project changes
-    // belonged to the old material, and the material dialog treats this record as the authoritative
-    // "changed within this 3MF" signal, so a stale entry would flag keys the new material never
-    // touched.
-    const differentSettings = record.different_settings_to_system
-    if (Array.isArray(differentSettings) && differentSettings.length === oldCount + 2) {
-      record.different_settings_to_system = [
-        differentSettings[0],
-        ...Array.from({ length: newCount }, (_unused, i) => (slotMaterialChanged(i) ? '' : differentSettings[sourceFor(i) + 1])),
-        differentSettings[oldCount + 1]
-      ]
-    }
-    // `inherits_group` has the SAME `[process, ...filament slots, machine]` layout and must be
-    // rebuilt with it. Leaving it at the OLD width is FATAL, not untidy: the CLI sizes its
+    // `different_settings_to_system` and `inherits_group` are PARALLEL PRESET RECORDS,
+    // `[process, ...filament slots, machine]` (length oldCount+2), so the generic remap above skips
+    // both. `resizeParallelPresetRecord` rebuilds them: each new slot follows its source slot, and a
+    // slot whose MATERIAL changed is blanked.
+    //
+    // Blanking is right for both, for two different reasons. The changed-from-system record is the
+    // authoritative "changed within this 3MF" signal the material dialog reads, so a stale entry
+    // would flag keys the new material never touched. And a slot that no longer inherits the old
+    // material's parent gets the honest empty value, which the CLI reads as "this slot IS a system
+    // preset"; the binding pass fills in the real parent when it could resolve one.
+    //
+    // Leaving `inherits_group` at the OLD width is FATAL, not untidy: the CLI sizes its
     // filament-system-name vector from THIS array (`current_filaments_system_name.resize(size - 2)`)
     // and then indexes `filament_settings_id` with it, unguarded, so an entry left behind by a
     // removed slot makes BambuStudio read past the end of the filament names and SIGSEGV while
     // loading the project, before slicing starts (opaque exit 139). Seen in production: a project
     // taken from 5 filaments to 1 kept 7 entries here and killed every slice of that file.
-    //
-    // `applyFilamentPresetBindings` also rebuilds this array, but only when at least one slot
-    // resolved a preset: the SIZE invariant has to hold regardless of whether it did.
-    const inheritsGroup = record.inherits_group
-    if (Array.isArray(inheritsGroup) && inheritsGroup.length === oldCount + 2) {
-      record.inherits_group = [
-        inheritsGroup[0],
-        // A slot whose material changed no longer inherits the old material's parent. Empty is the
-        // honest value and the CLI reads it as "this slot IS a system preset"; the binding pass
-        // fills in the real parent when it could resolve one.
-        ...Array.from({ length: newCount }, (_unused, i) => (slotMaterialChanged(i) ? '' : inheritsGroup[sourceFor(i) + 1])),
-        inheritsGroup[oldCount + 1]
-      ]
+    // `applyFilamentPresetBindings` also rebuilds it, but only when at least one slot resolved a
+    // preset: the SIZE invariant has to hold regardless of whether it did.
+    const resizeOptions = {
+      oldFilamentCount: oldCount,
+      newFilamentCount: newCount,
+      sourceSlotFor: (slot: number) => (slotMaterialChanged(slot) ? null : sourceFor(slot))
+    }
+    for (const key of ['different_settings_to_system', 'inherits_group'] as const) {
+      // Only a record already at the expected width is rebuilt: a mis-sized one is a defect the
+      // Repair stage owns, and quietly reshaping it during an ordinary save is the behind-the-scenes
+      // healing this project deliberately does not do.
+      const previous = record[key]
+      if (!Array.isArray(previous) || previous.length !== oldCount + 2) continue
+      const resized = resizeParallelPresetRecord(previous, resizeOptions)
+      if (resized) record[key] = resized
     }
   }
 

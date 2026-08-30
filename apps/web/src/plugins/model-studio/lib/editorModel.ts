@@ -26,7 +26,7 @@ import type {
   ThreeMfIndex
 } from '@printstream/shared'
 import type { TextInfo } from '@printstream/shared/three-mf'
-import { isNonRenderableThreeMfPartSubtype, threeMfPartSubtypeCarriesFilament } from '@printstream/shared'
+import { canonicalThreeMfPartSubtype, isNonRenderableThreeMfPartSubtype, threeMfPartSubtypeCarriesFilament } from '@printstream/shared'
 import type { RepairedFilamentPreset } from './filamentConfigAuthoring'
 import { randomUUID } from '../../../lib/randomId'
 import { createThreeMfMatrix } from './threeMfScene'
@@ -342,6 +342,19 @@ export interface EditorState {
    * {@link cloneEditorState}; emitted by {@link buildSceneEdit} as `SceneEdit.addedParts`.
    */
   addedParts?: Record<number, EditorAddedPart[]>
+  /**
+   * Parts DELETED from models this session, keyed by {@link addedPartHostId} exactly like
+   * {@link EditorState.addedParts}, holding each removed part's BASE-FILE ordinal (`partIndex`).
+   *
+   * Recorded rather than derived, because a removal is invisible in the emitted state: the parts
+   * that remain say nothing about the ones the base file still contains, and the bake reads that
+   * base. The surviving parts KEEP their stored `partIndex`: the editor never renumbers them -
+   * which is what lets every other part-scoped seam go on addressing the same volumes after a
+   * deletion, and is why {@link EditorInstancePart} carries `partIndex` rather than relying on its
+   * array position. Emitted by {@link buildSceneEdit} as `SceneEdit.removedParts` (in-project) or
+   * `SceneEdit.importRemovedParts` (a solid of an unsaved multi-solid import).
+   */
+  removedParts?: Record<number, number[]>
   /**
    * Independent object COPIES made this session (BambuStudio's copy/paste, as opposed to placing
    * another instance against the same objectId, which stays LINKED). Maps the copy's negative
@@ -936,6 +949,12 @@ function placeReplacementOnOldFootprint(
  * instance's placement (position/rotation/scale), material (`filamentId`), printability,
  * and NAME. The result is import-backed (like Cut/Split outputs) with a NEW key.
  *
+ * MATERIAL is object-level only, and deliberately so: the replacement's solids are unrelated to the
+ * old object's parts, so per-part assignments cannot be carried and every new solid starts
+ * unassigned, INHERITING this one value at bake time (see `effectivePartFilamentId`). The value
+ * itself falls back past the consensus for a mixed-material source; both halves matter, because
+ * between them they are the whole of "the material was kept".
+ *
  * When `replacedObjectId` is given (replacing an in-project object), the object's identity
  * is retained for the slicer: the import carries `replacedObjectId` so {@link buildSceneEdit}
  * emits a `meshReplacements` entry and the object's per-object PROCESS overrides + name
@@ -957,9 +976,21 @@ export function replaceInstanceGeometry(
    * difference. Null (an instance with no live group, e.g. on a non-active plate) keeps the
    * source's own placement, which is the best available answer rather than a guessed one.
    */
-  centerOn?: { x: number; y: number } | null
+  centerOn?: { x: number; y: number } | null,
+  /**
+   * Volume types to re-apply to the replacement's solids by index ({@link carriedPartSubtypes}).
+   * Opt-in rather than derived here, because the other callers of this function (Cut/Split, the
+   * text tool) produce genuinely NEW geometry whose names carry no such correspondence.
+   */
+  carriedSubtypes?: ReadonlyMap<number, SceneEditPartSubtype>
 ): EditorInstance {
   const next = instanceFromStagedImport(staged, meshUrl)
+  if (carriedSubtypes?.size) {
+    next.parts = next.parts.map((part, index) => {
+      const subtype = carriedSubtypes.get(index)
+      return subtype ? { ...part, subtype } : part
+    })
+  }
   next.source = {
     kind: 'import',
     importId: staged.importId,
@@ -972,7 +1003,15 @@ export function replaceInstanceGeometry(
   next.rotation.copy(source.rotation)
   next.scale.copy(source.scale)
   if (centerOn) placeReplacementOnOldFootprint(next, staged, centerOn)
-  next.filamentId = source.filamentId
+  // The replacement's own solids all start unassigned, so this object-level value is the ONLY thing
+  // carrying the material forward, and `source.filamentId` alone is not enough to do it: it is a
+  // CONSENSUS over the printed parts (`scene-parser.ts`), so an object whose parts disagree - a body
+  // on one material with labels on another - reports null. Leaving it null hands the decision to the
+  // bake, which binds an unassigned import to filament 1, i.e. a multi-material object silently
+  // comes back on the project's first material. Fall back to the leading printed part instead: the
+  // parts cannot be mapped onto unrelated geometry, but the object's own first material is a far
+  // better answer than the engine's default, and it is the one the user sees on the object row.
+  next.filamentId = source.filamentId ?? printedParts(source)[0]?.filamentId ?? null
   next.printable = source.printable
   // Keep the object's name as part of its retained identity. Mark it overridden so it is
   // emitted (and applied to the baked import) rather than falling back to the new file name.
@@ -993,8 +1032,123 @@ export function replaceInstanceGeometry(
  */
 export function dropAddedPartsForReplacedHost(state: EditorState, instance: EditorInstance): void {
   const hostId = addedPartHostId(instance)
-  if (hostId == null || !state.addedParts?.[hostId]) return
-  delete state.addedParts[hostId]
+  if (hostId == null) return
+  if (state.addedParts?.[hostId]) delete state.addedParts[hostId]
+  // Part DELETIONS are keyed by the same retained identity and are just as dangerous, in the
+  // opposite direction: a removal recorded against the old shape's ordinals resolves to the
+  // REPLACEMENT once the host is import-backed, so "delete part 1, then replace the object" would
+  // silently drop solid 1 of the new mesh. The old object's parts are gone with its geometry, so
+  // there is nothing left for those ordinals to mean.
+  if (state.removedParts?.[hostId]) delete state.removedParts[hostId]
+}
+
+/**
+ * The volume TYPES a replacement should inherit from the object it replaces, by solid index.
+ *
+ * Replace exists mainly to swap in a revised export of the SAME model, and a modifier or support
+ * blocker is a slicing decision about a named piece of that model, not a property of its triangles.
+ * Losing them turns five "Hole modifier" volumes into printed geometry, silently and destructively.
+ * BambuStudio does not have this problem because its "Replace with…" swaps ONE volume's mesh and
+ * keeps that volume's config; our whole-object replace rebuilds the parts, so the types have to be
+ * carried deliberately.
+ *
+ * Matched by NAME, in occurrence order, which is the only correspondence that is actually evidence:
+ * position alone would silently mis-assign a reordered export, and matching nothing at all is what
+ * this fixes. Duplicate names (a model really can carry two "Cylinder size label 2") pair up first
+ * to first, second to second.
+ *
+ * A solid the import ALREADY typed wins: a 3MF carries its volume types, and the file being
+ * imported is better evidence than the file being replaced. Only helper types are carried, since
+ * `normal_part` is the default a new solid already has.
+ */
+export function carriedPartSubtypes(
+  previousParts: ReadonlyArray<{ name?: string | null; subtype?: string | null }>,
+  stagedParts: ReadonlyArray<{ name?: string | null; subtype?: string | null }>
+): Map<number, SceneEditPartSubtype> {
+  const byName = new Map<string, SceneEditPartSubtype[]>()
+  for (const part of previousParts) {
+    const name = part.name?.trim()
+    if (!name) continue
+    const subtype = canonicalThreeMfPartSubtype(part.subtype ?? null)
+    if (subtype === 'normal_part') continue
+    const queue = byName.get(name) ?? []
+    queue.push(subtype)
+    byName.set(name, queue)
+  }
+  if (byName.size === 0) return new Map()
+
+  const carried = new Map<number, SceneEditPartSubtype>()
+  const consumed = new Map<string, number>()
+  stagedParts.forEach((part, index) => {
+    if (canonicalThreeMfPartSubtype(part.subtype ?? null) !== 'normal_part') return
+    const name = part.name?.trim()
+    if (!name) return
+    const queue = byName.get(name)
+    if (!queue) return
+    const taken = consumed.get(name) ?? 0
+    const subtype = queue[taken]
+    if (!subtype) return
+    consumed.set(name, taken + 1)
+    carried.set(index, subtype)
+  })
+  return carried
+}
+
+/**
+ * Whether an object still has printed geometry after removing `partIndexes`.
+ *
+ * An object whose every printed part is gone is not something BambuStudio can open: helper volumes
+ * alone describe nothing to print: so the last one cannot be deleted. The user's route to that
+ * outcome is deleting the OBJECT, which is a different action with different consequences (its
+ * instances, overrides and paint go too) and should not be reachable by accident from a part row.
+ */
+export function canRemoveParts(instance: EditorInstance, partIndexes: ReadonlySet<number>): boolean {
+  const printed = printedParts(instance)
+  if (printed.length === 0) return false
+  return printed.some((part) => !partIndexes.has(part.partIndex))
+}
+
+/**
+ * Delete parts from a model, on EVERY instance of it and on every plate.
+ *
+ * Parts are object-level, like their materials and types, so a deletion is geometry-level too: it
+ * applies to every copy of the object, matching what the sidebar promises about linked copies.
+ *
+ * Two things happen, and both are needed. The parts are dropped from the live instances so the
+ * viewport and sidebar stop showing them, and their BASE ordinals are recorded in
+ * {@link EditorState.removedParts} so the bake removes them from the file. Survivors keep their own
+ * `partIndex` untouched: nothing is renumbered: which is what keeps every other part-scoped edit
+ * pointing at the volume it was made against.
+ *
+ * Returns a NEW state, or null (changing nothing) when the host owns no such parts or the removal
+ * would leave the object with no printed geometry.
+ */
+export function withRemovedParts(
+  state: EditorState,
+  hostId: number,
+  partIndexes: ReadonlySet<number>
+): EditorState | null {
+  if (partIndexes.size === 0) return null
+  const host = state.plates
+    .flatMap((plate) => plate.instances)
+    .find((instance) => addedPartHostId(instance) === hostId)
+  if (!host || !canRemoveParts(host, partIndexes)) return null
+
+  const plates = state.plates.map((plate) => ({
+    ...plate,
+    instances: plate.instances.map((instance) => (addedPartHostId(instance) === hostId
+      ? { ...instance, parts: instance.parts.filter((part) => !partIndexes.has(part.partIndex)) }
+      : instance))
+  }))
+  const existing = state.removedParts?.[hostId] ?? []
+  return {
+    ...state,
+    plates,
+    removedParts: {
+      ...(state.removedParts ?? {}),
+      [hostId]: [...existing, ...[...partIndexes].filter((index) => !existing.includes(index))]
+    }
+  }
 }
 
 /** Deep-clone an instance (for duplicate), offsetting it slightly so it is visible. */
@@ -1267,6 +1421,7 @@ export function buildSceneEdit(state: EditorState): SceneEdit {
     pauses: collectPauses(state),
     objectNames: collectObjectNames(state),
     addedParts: collectAddedParts(state),
+    ...collectRemovedParts(state),
     meshReplacements: collectMeshReplacements(state),
     repairedObjectIds: collectRepairedObjectIds(state),
     repairSettings: state.settingsRepairStaged ? true : undefined,
@@ -1542,6 +1697,43 @@ function collectMeshReplacements(state: EditorState): SceneEdit['meshReplacement
   }
   if (byObject.size === 0) return undefined
   return [...byObject].map(([objectId, importId]) => ({ objectId, importId }))
+}
+
+/**
+ * Emit this session's part deletions, split by how their host is addressed. Mirrors
+ * {@link collectAddedParts}, including the host resolution: a deletion must work on a model that
+ * has never been saved, so an import-backed host emits `importRemovedParts` keyed by its importId
+ * while an in-project object emits `removedParts` keyed by its Bambu object id.
+ *
+ * A host with no placed instance left contributes nothing: deleting a part and then deleting the
+ * whole object must not ship a removal against an object the edit no longer places.
+ */
+function collectRemovedParts(state: EditorState): Pick<SceneEdit, 'removedParts' | 'importRemovedParts'> {
+  if (!state.removedParts) return {}
+  const hostById = new Map<number, { objectId: number } | { importId: string }>()
+  for (const plate of state.plates) {
+    for (const instance of plate.instances) {
+      const hostId = addedPartHostId(instance)
+      if (hostId == null || hostById.has(hostId)) continue
+      hostById.set(hostId, instance.source.kind === 'object'
+        ? { objectId: instance.objectId }
+        : { importId: instance.source.importId })
+    }
+  }
+  const removedParts: NonNullable<SceneEdit['removedParts']> = []
+  const importRemovedParts: NonNullable<SceneEdit['importRemovedParts']> = []
+  for (const [hostIdRaw, partIndexes] of Object.entries(state.removedParts)) {
+    const host = hostById.get(Number.parseInt(hostIdRaw, 10))
+    if (!host) continue
+    for (const partIndex of partIndexes) {
+      if ('objectId' in host) removedParts.push({ objectId: host.objectId, partIndex })
+      else importRemovedParts.push({ importId: host.importId, partIndex })
+    }
+  }
+  return {
+    ...(removedParts.length > 0 ? { removedParts } : {}),
+    ...(importRemovedParts.length > 0 ? { importRemovedParts } : {})
+  }
 }
 
 /**
@@ -2229,6 +2421,11 @@ export function cloneEditorState(state: EditorState): EditorState {
           }))])
         )
       }
+      : {}),
+    // Undo has to restore deleted parts, so the removal set is part of the snapshot like every
+    // other session-owned map. Copied per host, not shared, or an undo frame would keep mutating.
+    ...(state.removedParts
+      ? { removedParts: Object.fromEntries(Object.entries(state.removedParts).map(([key, indexes]) => [key, [...indexes]])) }
       : {})
   }
 }
@@ -2241,6 +2438,34 @@ export function cloneEditorState(state: EditorState): EditorState {
  */
 export function printedParts(instance: EditorInstance): EditorInstancePart[] {
   return instance.parts.filter((part) => !isNonRenderableThreeMfPartSubtype(part.subtype))
+}
+
+/**
+ * The filament a part actually PRINTS in, which is not the same as the filament it names.
+ *
+ * A part's own `filamentId` is tri-state: a number is an explicit choice, and null means "not
+ * chosen", which the bake resolves to the OBJECT's material
+ * (`toExtruder(partFilaments?.get(i) ?? null) ?? objectExtruder` in `bake-documents.ts`). Every
+ * surface that shows or renders a part's material must resolve it the same way, or it reports a
+ * different material from the one that will be sliced.
+ *
+ * Resolving the bare part id is what made **Replace object** read as a material change: a
+ * replacement's solids all start unassigned, and the id then falls through `resolveColorFilamentId`,
+ * whose fallback exists to recolour a DANGLING id (a material the user removed) and so answers with
+ * the project's first material. An object that prints in material 5 displayed as material 1 in the
+ * sidebar and rendered in material 1's colour in the viewport, on every one of its parts.
+ *
+ * A helper volume carries no material at all and never inherits one (BambuStudio writes extruder 0
+ * and the bake mirrors that), so it resolves to null however its object is assigned.
+ */
+export function effectivePartFilamentId(
+  // `undefined` as well as null, so a session-ADDED volume (whose filamentId is optional) resolves
+  // through the same rule as a baked part rather than needing its own.
+  part: { filamentId?: number | null; subtype?: string | null },
+  instanceFilamentId: number | null
+): number | null {
+  if (!threeMfPartSubtypeCarriesFilament(part.subtype ?? null)) return null
+  return part.filamentId ?? instanceFilamentId
 }
 
 /**
@@ -2258,7 +2483,10 @@ export function summarizeInstanceMaterial(
   if (parts.length <= 1) {
     return { uniformId: resolveId(parts[0]?.filamentId ?? instance.filamentId), uniformColor: parts[0]?.color ?? instance.color }
   }
-  const ids = parts.map((part) => resolveId(part.filamentId))
+  // Unassigned parts inherit the object's material at bake time, so they must not each resolve to
+  // the project's first material here: that turned one uniform object into a "mixed" swatch, or
+  // into the wrong single material. See effectivePartFilamentId.
+  const ids = parts.map((part) => resolveId(effectivePartFilamentId(part, instance.filamentId)))
   const distinct = [...new Set(ids)]
   if (distinct.length === 1) {
     const only = parts[0]

@@ -1565,7 +1565,17 @@ export const printFromLibrarySchema = z.object({
    * `skip_objects` fallback that fires once the job is confirmed running unless
    * the status already reports the ids skipped (`s_obj`).
    */
-  skipObjects: z.array(z.number().int().positive()).max(64).optional()
+  skipObjects: z.array(z.number().int().positive()).max(64).optional(),
+  /**
+   * Individual PLACEMENTS on the selected plate to exclude, as instance `identify_id`s. Kept as
+   * its own field rather than widening `skipObjects`, because `object_id` and `identify_id` are
+   * different id spaces over the same file and a merged list could not say which one a number
+   * came from. `skipObjects` still means "every copy of these objects"; this means "these copies",
+   * which is what lets a user skip one of eight identical parts. Resolved against the same plates
+   * index the picker rendered (`plateSkipIdentifyIdsFromIndex`), and unioned with `skipObjects`.
+   * Larger cap than `skipObjects` because it counts copies, not models.
+   */
+  skipInstances: z.array(z.number().int().positive()).max(256).optional()
 })
 export type PrintFromLibrary = z.infer<typeof printFromLibrarySchema>
 
@@ -1802,6 +1812,8 @@ export const printerStoragePrintSchema = z.object({
    * `identify_id`s through that same index and sends them in the start command, with the
    * mid-print fallback for firmware that ignores the start-command field.
    */
-  skipObjects: z.array(z.number().int().positive()).max(64).optional()
+  skipObjects: z.array(z.number().int().positive()).max(64).optional(),
+  /** See {@link printFromLibrarySchema}.skipInstances. */
+  skipInstances: z.array(z.number().int().positive()).max(256).optional()
 })
 export type PrinterStoragePrintInput = z.infer<typeof printerStoragePrintSchema>

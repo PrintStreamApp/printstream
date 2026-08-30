@@ -45,7 +45,7 @@ import type {
   SlicingPresetSummary,
   ThreeMfIndex
 } from '@printstream/shared'
-import { formatNozzleDiameterLabel } from '@printstream/shared'
+import { formatNozzleDiameterLabel, isProcessOptionVisibleInMode, machineSettingsCatalog } from '@printstream/shared'
 import { useNavigate } from 'react-router-dom'
 import { prioritizeLoadedMaterialOptionsForFilament } from '../../lib/sliceLoadedMaterialOptions'
 import type { PrinterTrayOption } from '../../lib/libraryViewHelpers'
@@ -69,7 +69,7 @@ import { LazyDialogFallback } from '../LazyDialogFallback'
 // Code-split: the machine settings catalog is large and only loads when the gear is used.
 const MachineSettingsDialog = lazy(() => import('../settings/MachineSettingsDialog'))
 import type { AddedMaterialChoice, SessionFilamentSlot } from './useMaterialSlots'
-import { machineTargetConflictWarnings } from '../../lib/machineSwitchWarnings'
+import { machineOverridesCarriedWarning, machineTargetConflictWarnings } from '../../lib/machineSwitchWarnings'
 import { MaterialEditDialog } from './MaterialEditDialog'
 import { MaterialSwatchButton } from './MaterialSwatchButton'
 import { LoadedMaterialMenuItems } from './LoadedMaterialMenuItems'
@@ -170,6 +170,17 @@ export interface SliceSettingsController {
    * re-resolving the catalogue themselves.
    */
   selectedMachineProfile: SlicingPresetSummary | null
+  /**
+   * The machine presets the current model + nozzle can actually use, i.e. what the Preset picker
+   * offers. Already filtered and already the set the resolver chooses from, so a pick made here
+   * can never name a machine the rest of the target contradicts.
+   */
+  selectableMachineProfiles: SlicingPresetSummary[]
+  /**
+   * Override the machine preset the cascade resolved to. One gesture, for the same undo reason as
+   * {@link selectPrinterModel}.
+   */
+  selectPrinterProfile: (profileId: string) => void
   nozzleDiameter: string
   setNozzleDiameter: React.Dispatch<React.SetStateAction<string>>
   nozzleDiameterOptions: string[]
@@ -208,6 +219,30 @@ export interface SliceSettingsController {
   selectedSlicerTargetIdForGuards: string
   processSettingOverrides: Record<string, string | string[]>
   setProcessSettingsDialogOpen: React.Dispatch<React.SetStateAction<boolean>>
+  /**
+   * The project's OWN machine settings, as a diff against the resolved printer preset: a printer
+   * modified for this project only, without minting a global preset. The machine counterpart to
+   * {@link processSettingOverrides}, and applied the same way, after the machine step so it lands
+   * on top of the preset rather than under it.
+   */
+  machineSettingOverrides: Record<string, string | string[]>
+  setMachineSettingOverrides: React.Dispatch<React.SetStateAction<Record<string, string | string[]>>>
+  /**
+   * Whether {@link machineSettingOverrides} reflects what the OPEN FILE records, as opposed to
+   * simply not having been loaded yet.
+   *
+   * The save reads an empty map as "reset every printer override", so it must be able to tell that
+   * apart from "the re-hydration lookup has not answered". False while it is in flight, when it
+   * failed, and on a host with no file to read.
+   */
+  machineSettingOverridesKnown: boolean
+  /**
+   * The printer model the machine overrides were authored against, so a later machine switch can
+   * SAY that they are still applied. Advisory only: it never rides the save or slice request, and a
+   * stale value costs a slightly-off warning, never a wrong setting.
+   */
+  machineOverridesModel: string | null
+  setMachineOverridesModel: React.Dispatch<React.SetStateAction<string | null>>
   hasPlateObjects: boolean
   selectedSliceObjectIds: Set<number>
   plateObjects: Array<{ id: number; name: string }>
@@ -346,13 +381,15 @@ export interface SliceSettingsController {
    */
   onProjectSaved: () => Map<number, number> | null
   /**
-   * Sibling of {@link materialEditListenerRef} for GLOBAL process-setting edits (the process
-   * profile selection and the overrides applied by the process-settings dialog). The full editor
-   * sets it to a snapshot-then-dirty handler; call it BEFORE mutating `processProfileId` /
-   * `processSettingOverrides` so the pre-edit values are captured for undo. Null (no-op) outside
-   * the editor. Global process edits otherwise bypass the editor's dirty/undo like material picks do.
+   * Sibling of {@link materialEditListenerRef} for GLOBAL settings edits: the process profile
+   * selection, the overrides applied by the process-settings dialog, and the project's machine
+   * overrides applied by the printer-settings dialog. The full editor sets it to a
+   * snapshot-then-dirty handler; call it BEFORE mutating `processProfileId` /
+   * `processSettingOverrides` / `machineSettingOverrides` so the pre-edit values are captured for
+   * undo. Null (no-op) outside the editor. These edits otherwise bypass the editor's dirty/undo
+   * exactly as material picks would.
    */
-  processEditListenerRef: React.MutableRefObject<(() => void) | null>
+  settingsEditListenerRef: React.MutableRefObject<(() => void) | null>
   /**
    * Anonymous process-config resolver (public 3MF editor only). When set, the process tune dialog
    * and the "changed vs preset" badge resolve baselines through it instead of the workspace route, so
@@ -408,6 +445,9 @@ export interface SliceConfigSnapshot {
   processProfileSelectionTouched: boolean
   /** Global process-setting overrides, so the editor's undo/redo can revert a global process edit. */
   processSettingOverrides: Record<string, string | string[]>
+  /** The project's machine overrides, so undo can revert an "Apply to this project" printer edit. */
+  machineSettingOverrides: Record<string, string | string[]>
+  machineOverridesModel: string | null
 }
 
 /**
@@ -473,13 +513,14 @@ export const SliceSettingsPanel = memo(function SliceSettingsPanel({ controller,
     file, resourceBasePath, flow, requiresSinglePlate, canOpenThreeDimensionalPreview,
     slicerTargets, selectedSlicerTargetId, setSelectedSlicerTargetId, slicerStatus,
     printers, selectedPrinter, lockedPreferredPrinter, targetMode, selectPrinter,
-    selectedMachineProfile,
+    selectedMachineProfile, selectableMachineProfiles, selectPrinterProfile,
     selectedPrinterModel, selectPrinterModel, printerModelOptions, targetConflicts,
     nozzleDiameter, setNozzleDiameter, nozzleDiameterOptions, nozzleFlow, setNozzleFlow,
     plateType, setPlateType, plateTypeOptions,
     plateMode, setPlateMode, sceneEdit, setSceneEdit, plateNumber, setPlateNumber, slicePlateOptions, setPreviewFileId,
     compatibleProcessProfiles, selectedProcessProfile, processProfileModified, setProcessProfileId, setProcessSettingOverrides,
-    processProfileSelectionTouchedRef, selectedSlicerTargetIdForGuards, processSettingOverrides, setProcessSettingsDialogOpen, processEditListenerRef, resolveConfig, resolveFilamentConfig,
+    processProfileSelectionTouchedRef, selectedSlicerTargetIdForGuards, processSettingOverrides, setProcessSettingsDialogOpen, settingsEditListenerRef, resolveConfig, resolveFilamentConfig,
+    machineSettingOverrides, setMachineSettingOverrides, machineOverridesModel, setMachineOverridesModel,
     hasPlateObjects, selectedSliceObjectIds, plateObjects, onToggleSliceObject, openSliceObjectSettings, plateGcode, perObjectSettings,
     projectFilaments, materialOptions, loadedMaterialOptions, printerTrayMap, materialToolheadOptions,
     filamentMaterialOptionIds, filamentMaterialTypeFilters, setFilamentMaterialTypeFilters,
@@ -547,6 +588,27 @@ export const SliceSettingsPanel = memo(function SliceSettingsPanel({ controller,
   const showDeveloperOptions = useEffectiveSlicerDeveloperMode()
   // The visibility inputs mirror what this panel hands the dialog, so the badge counts exactly the
   // rows the dialog will show (a conditionally-hidden modified setting inflated the badge before).
+  // No baked-preset resolution to wait on, unlike the process count: a machine override is always a
+  // diff against the resolved INSTALLED preset, so the map itself is the answer. It is still
+  // VISIBILITY-gated, exactly as the dialog gates its own modified count -- a develop-tier setting
+  // the user cannot see must not badge a control they then open to find nothing to reset.
+  const machineChangedCount = useMemo(
+    () => Object.keys(machineSettingOverrides).filter((key) => {
+      const option = machineSettingsCatalog.options[key]
+      return option ? isProcessOptionVisibleInMode(option, showDeveloperOptions) : true
+    }).length,
+    [machineSettingOverrides, showDeveloperOptions]
+  )
+  // Kept, not cleared, on a machine switch -- and therefore said out loud. See the helper's header.
+  const machineOverridesCarried = useMemo(
+    () => machineOverridesCarriedWarning({
+      overriddenKeyCount: machineChangedCount,
+      previousPrinterModel: machineOverridesModel,
+      printerModel: selectedPrinterModel
+    }),
+    [machineChangedCount, machineOverridesModel, selectedPrinterModel]
+  )
+
   const processChangedCount = useProcessChangedCount({
     slicerTargetId: selectedSlicerTargetIdForGuards,
     processProfileId: selectedProcessProfile?.id ?? null,
@@ -601,11 +663,23 @@ export const SliceSettingsPanel = memo(function SliceSettingsPanel({ controller,
             in the Process header, which read as "manage process presets" and left the printer and
             material kinds with no route to the same dialog. The Slicer section is the only heading
             whose scope is the whole panel, so it is the one this belongs under. */}
-        {onManagePresets && (
-          <Button type="button" size="sm" variant="soft" startDecorator={<TuneRoundedIcon />} sx={{ ml: 'auto' }} onClick={onManagePresets}>
-            Manage presets
-          </Button>
-        )}
+        {/* Beside `Manage presets`, because they are the same subject: a preset SOURCE covers all
+            three preset kinds, and under Process its updates read as "process presets have
+            updates" while the printer and material kinds looked untouched.
+
+            This only works because the slot renders a COMPACT control. An earlier revision put a
+            full labelled row here and it wrapped its own buttons onto two lines, clipped `Manage`
+            and gave the panel a horizontal scrollbar at sidebar width. The header is one
+            uniform-height row that cannot wrap (see StickySectionHeader), so anything living here
+            has to be icon-sized. */}
+        <Stack direction="row" spacing={0.5} alignItems="center" sx={{ ml: 'auto' }}>
+          {presetSourceStatus}
+          {onManagePresets && (
+            <Button type="button" size="sm" variant="soft" startDecorator={<TuneRoundedIcon />} onClick={onManagePresets}>
+              Manage presets
+            </Button>
+          )}
+        </Stack>
       </StickySectionHeader>
       <Sheet variant="outlined" sx={{ p: 1, borderRadius: 'sm' }}>
         <Stack spacing={1}>
@@ -653,7 +727,7 @@ export const SliceSettingsPanel = memo(function SliceSettingsPanel({ controller,
             display: 'grid',
             gap: 1,
             gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
-            gridTemplateAreas: '"model plateType" "nozzleDiameter nozzleFlow"'
+            gridTemplateAreas: '"model plateType" "nozzleDiameter nozzleFlow" "printerPreset printerPreset"'
           }}
         >
             <FormControl sx={{ gridArea: 'model', minWidth: 0 }}>
@@ -698,48 +772,82 @@ export const SliceSettingsPanel = memo(function SliceSettingsPanel({ controller,
                 ))}
               </Select>
             </FormControl>
-        </Box>
-        {/*
-          Which machine preset the selects above actually resolved to, and the way into its
-          settings. Named rather than left implicit: Model + Nozzle + Flow pick a preset by
-          cascade (`lib/machineTargetResolution.ts`), and until now nothing on screen said which
-          one won, so "edit the printer's settings" had no subject. Mirrors the Process and
-          Materials sections, where the gear always sits beside the preset it edits.
+            {/*
+              Which machine preset the four controls above resolved to, the way into its settings,
+              and the way to overrule it. Named rather than left implicit: Model + Nozzle + Flow
+              pick a preset by cascade (`lib/machineTargetResolution.ts`), and nothing on screen
+              used to say which one won, so "edit the printer's settings" had no subject.
 
-          The NAME shows in every host; the gear only where stored presets can be written, so the
-          public editor (no workspace, nothing to save to) states the preset without offering an
-          edit that would 401.
-        */}
-        {selectedMachineProfile && (
-          <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 1, minWidth: 0 }}>
-            <Typography level="body-xs" textColor="text.tertiary" sx={{ flexShrink: 0 }}>Preset</Typography>
-            <Typography level="body-sm" noWrap sx={{ flex: 1, minWidth: 0 }} title={selectedMachineProfile.name}>
-              {selectedMachineProfile.name}
-            </Typography>
-            {canEditPrinterPreset && (
-              <Tooltip title={`Edit printer settings: ${selectedMachineProfile.name}`}>
-                <span>
-                  <IconButton
-                    size="sm"
-                    variant="plain"
-                    color="neutral"
-                    disabled={!selectedSlicerTargetIdForGuards}
-                    onClick={() => setPrinterPresetDialogOpen(true)}
-                    aria-label="Edit printer settings"
-                  >
-                    <TuneRoundedIcon fontSize="small" />
-                  </IconButton>
-                </span>
-              </Tooltip>
+              It is a PICKER because the cascade's answer is a default, not the only valid one: a
+              model + nozzle routinely has several presets (the vendor's, its Pro variant, the
+              user's saved ones) and the cascade cannot know which is wanted. The pick is recorded
+              as intent, so the next re-resolution does not steer it back.
+
+              Shaped like its siblings deliberately: label above in a FormControl like the four
+              selects, and the shared `SlicingPresetAutocomplete` like the Process and filament
+              preset pickers, because a preset list is long and collision-prone enough to need
+              type-ahead and the disambiguating labels that component owns. A bare Select here
+              made one row of this section read as a different kind of control from every other.
+
+              The picker shows in every host; the gear only where stored presets can be written,
+              so the public editor (no workspace, nothing to save to) names the preset without
+              offering an edit that would 401.
+            */}
+            {selectedMachineProfile && (
+              <FormControl sx={{ gridArea: 'printerPreset', minWidth: 0 }}>
+                <FormLabel>Preset</FormLabel>
+                <Stack direction="row" spacing={1} alignItems="center">
+                  <Box sx={{ flex: 1, minWidth: 0 }}>
+                    <SlicingPresetAutocomplete
+                      profiles={selectableMachineProfiles}
+                      value={selectedMachineProfile}
+                      placeholder="Choose a printer preset"
+                      ariaLabel="Printer preset"
+                      // A printer modified for THIS project reads the same way a modified process
+                      // does; without it the only way to know is to open the dialog.
+                      modified={machineChangedCount > 0}
+                      // Clearing is not a state this target can hold: something must be selected
+                      // for the slice to have a machine, so a null is ignored rather than applied.
+                      onChange={(profile) => { if (profile) selectPrinterProfile(profile.id) }}
+                    />
+                  </Box>
+                  {canEditPrinterPreset && (
+                    <Tooltip title={machineChangedCount > 0
+                      ? `Edit printer settings: ${machineChangedCount} changed vs preset`
+                      : `Edit printer settings: ${selectedMachineProfile.name}`}
+                    >
+                      <span>
+                        <IconButton
+                          size="sm"
+                          variant="plain"
+                          color="neutral"
+                          disabled={!selectedSlicerTargetIdForGuards}
+                          onClick={() => setPrinterPresetDialogOpen(true)}
+                          aria-label="Edit printer settings"
+                        >
+                          <TuneRoundedIcon fontSize="small" />
+                          {machineChangedCount > 0 && (
+                            <Chip size="sm" variant="solid" color="primary" sx={{ ml: 0.5 }}>{machineChangedCount}</Chip>
+                          )}
+                        </IconButton>
+                      </span>
+                    </Tooltip>
+                  )}
+                </Stack>
+              </FormControl>
             )}
-          </Stack>
-        )}
+        </Box>
         {/* A pick this target cannot represent. Sits with the controls it is about, and stays
             visible while the conflict lasts, a toast would vanish while the wrong value remains
             on screen. The pick itself is kept, so switching back restores it. */}
-        {targetConflicts && targetConflicts.length > 0 && (
+        {(machineOverridesCarried || (targetConflicts && targetConflicts.length > 0)) && (
           <Stack spacing={0.5} sx={{ mt: 1 }}>
-            {machineTargetConflictWarnings(targetConflicts).map((warning) => (
+            {machineOverridesCarried && (
+              <Alert key={machineOverridesCarried.key} size="sm" color="warning" variant="soft" startDecorator={<WarningAmberRoundedIcon />}>
+                {machineOverridesCarried.message}
+              </Alert>
+            )}
+            {machineTargetConflictWarnings(targetConflicts ?? []).map((warning) => (
               <Alert key={warning.key} size="sm" color="warning" variant="soft" startDecorator={<WarningAmberRoundedIcon />}>
                 {warning.message}
               </Alert>
@@ -838,13 +946,6 @@ export const SliceSettingsPanel = memo(function SliceSettingsPanel({ controller,
       <StickySectionHeader spacing={1}>
         <Typography level="title-sm">Process</Typography>
       </StickySectionHeader>
-      {/*
-        Its OWN row, never inside the header. A preset SOURCE's status is a notice, not a
-        header action: put beside `Manage` it competed with it for a ~540px sidebar (and a
-        narrower print-prep dialog), wrapping its buttons onto two lines, clipping `Manage`
-        and giving the whole panel a horizontal scrollbar.
-      */}
-      {presetSourceStatus}
       <Sheet variant="outlined" sx={{ p: 1, borderRadius: 'sm' }}>
         <Stack spacing={1}>
           <FormControl sx={{ flex: 1 }}>
@@ -859,7 +960,7 @@ export const SliceSettingsPanel = memo(function SliceSettingsPanel({ controller,
                   modified={processProfileModified || processChangedCount > 0}
                   onChange={(profile) => {
                     // Snapshot the pre-switch profile+overrides for undo/dirty (no-op outside the editor).
-                    processEditListenerRef.current?.()
+                    settingsEditListenerRef.current?.()
                     processProfileSelectionTouchedRef.current = true
                     setProcessProfileId(profile?.id ?? '')
                     setProcessSettingOverrides({})
@@ -898,15 +999,19 @@ export const SliceSettingsPanel = memo(function SliceSettingsPanel({ controller,
                 trip into the project file, not something to keep on screen while choosing materials.
                 Hidden when the project carries none (most do), so it is never a dead affordance,
                 and the count makes its presence the information. */}
+            {/* One right-aligned group, so each control does not have to work out whether it is
+                the first of them. Labels are deliberately terse (`Add`, `Flushing`): the header is
+                a single uniform-height row in a ~540px sidebar, and every header is the same
+                height so pinned ones cover each other exactly (see StickySectionHeader), which
+                means it cannot wrap. The section title supplies the noun `Add` omits. */}
+            <Stack direction="row" spacing={0.5} alignItems="center" sx={{ ml: 'auto' }}>
             {embeddedPresets && onRemoveEmbeddedPreset && embeddedPresets.length > 0 && (
               // Icon + count rather than a labelled button: spelled out it took ~160px of a
-              // ~540px sidebar (narrower again in the prepare-print dialog) and pushed itself
-              // and `Add material` into wrapping onto two lines each. The header cannot simply
-              // wrap, every header is a uniform height so pinned ones cover each other exactly
-              // (see StickySectionHeader), so the SECONDARY control gets smaller. The count is
-              // still the information, now as a badge, with the label in the tooltip.
+              // ~540px sidebar (narrower again in the prepare-print dialog) and pushed the other
+              // controls into wrapping. The count is still the information, now as a badge, with
+              // the label in the tooltip.
               <Tooltip title={`Project presets (${embeddedPresets.length})`}>
-                <Badge badgeContent={embeddedPresets.length} size="sm" color="neutral" sx={{ ml: 'auto' }}>
+                <Badge badgeContent={embeddedPresets.length} size="sm" color="neutral">
                   <IconButton
                     type="button"
                     size="sm"
@@ -920,14 +1025,30 @@ export const SliceSettingsPanel = memo(function SliceSettingsPanel({ controller,
                 </Badge>
               </Tooltip>
             )}
+            {/* Beside Add, not below the list. It is a materials-level action like the others, and
+                at one word it costs the header ~90px rather than the ~150px `Flushing volumes`
+                did. Still gated on there being a PAIR: one material has nothing to purge into,
+                which is how BambuStudio gates it too. */}
+            {flushVolumes && projectFilaments.length > 1 && (
+              <Button
+                type="button"
+                size="sm"
+                variant="plain"
+                color="neutral"
+                startDecorator={<OpacityRoundedIcon />}
+                onClick={() => setFlushVolumesOpen(true)}
+              >
+                Flushing
+              </Button>
+            )}
             {showMaterialEditing && (loadedMaterialsForAdd.length > 0 ? (
               // Same two choices the row swatch offers, for the same reason: a material the printer
               // is already holding should not have to be named by hand.
               <Dropdown>
                 {/* `color` is explicit: Joy's Button defaults to primary but MenuButton to neutral,
                     so without it the same button changed tone the moment a printer was selected. */}
-                <MenuButton size="sm" variant="soft" color="primary" startDecorator={<AddRoundedIcon />} sx={{ ml: hasProjectPresets ? 0 : 'auto' }}>
-                  Add material
+                <MenuButton size="sm" variant="soft" color="primary" startDecorator={<AddRoundedIcon />}>
+                  Add
                 </MenuButton>
                 <Menu
                   placement="bottom-end"
@@ -945,10 +1066,11 @@ export const SliceSettingsPanel = memo(function SliceSettingsPanel({ controller,
                 </Menu>
               </Dropdown>
             ) : (
-              <Button type="button" size="sm" variant="soft" startDecorator={<AddRoundedIcon />} sx={{ ml: hasProjectPresets ? 0 : 'auto' }} onClick={() => setAddingMaterial(true)}>
-                Add material
+              <Button type="button" size="sm" variant="soft" startDecorator={<AddRoundedIcon />} onClick={() => setAddingMaterial(true)}>
+                Add
               </Button>
             ))}
+            </Stack>
           </StickySectionHeader>
           <Sheet variant="outlined" sx={{ p: 1, borderRadius: 'sm' }}>
             <Stack spacing={0.75} ref={materialDrag.setContainerElement} sx={{ position: 'relative' }}>
@@ -1156,24 +1278,6 @@ export const SliceSettingsPanel = memo(function SliceSettingsPanel({ controller,
               )}
             </Stack>
           </Sheet>
-          {/* Below the list, not in the header: the header already carries Add material (and
-              sometimes Project presets), and this is a per-PAIR setting that only means anything
-              once you can see which materials the project has. BambuStudio places it the same way,
-              and gates it the same way, one material has nothing to purge into. */}
-          {flushVolumes && projectFilaments.length > 1 && (
-            <Box>
-              <Button
-                type="button"
-                size="sm"
-                variant="plain"
-                color="neutral"
-                startDecorator={<OpacityRoundedIcon />}
-                onClick={() => setFlushVolumesOpen(true)}
-              >
-                Flushing volumes
-              </Button>
-            </Box>
-          )}
       </>)}
       {showInlineObjects && hasPlateObjects && (<>
           <StickySectionHeader><Typography level="title-sm">Objects</Typography></StickySectionHeader>
@@ -1277,6 +1381,18 @@ export const SliceSettingsPanel = memo(function SliceSettingsPanel({ controller,
             machineProfileId={selectedMachineProfile.id}
             machineProfileName={selectedMachineProfile.name}
             canEditOriginal={selectedMachineProfile.source === 'custom'}
+            // Mirrors the process and filament dialogs: only the EDITOR saves into the project.
+            // The prepare-print dialog's edit rides that one slice, so promising "this project"
+            // there would be a lie.
+            applyScope={mode === 'editor' ? 'project' : 'slice'}
+            initialOverrides={machineSettingOverrides}
+            onApply={(overrides) => {
+              // Snapshot the pre-edit machine state for undo/dirty (no-op outside the editor),
+              // exactly as the process dialog and the material pickers do.
+              settingsEditListenerRef.current?.()
+              setMachineSettingOverrides(overrides)
+              setMachineOverridesModel(selectedPrinterModel)
+            }}
           />
         </Suspense>
       )}

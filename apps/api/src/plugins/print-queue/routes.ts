@@ -564,10 +564,10 @@ function normalizeLabel(value: string | null | undefined): string | null {
 }
 
 /**
- * Stored print options for an item update. A per-object skip selection (`skipObjects`) is
- * plate-specific, so a plate change without a fresh options payload strips the stored
- * selection rather than silently carrying it over to a plate it was never chosen for.
- * `undefined` = leave the column untouched.
+ * Stored print options for an item update. A skip selection (`skipObjects` for whole models,
+ * `skipInstances` for individual copies) is plate-specific, so a plate change without a fresh
+ * options payload strips BOTH rather than silently carrying them over to a plate they were never
+ * chosen for. `undefined` = leave the column untouched.
  */
 function resolveUpdatedPrintOptionsJson(
   existing: Pick<QueueItemRow, 'printOptionsJson'>,
@@ -577,7 +577,12 @@ function resolveUpdatedPrintOptionsJson(
   if (options !== undefined) return JSON.stringify(options)
   if (changedPlateIndex === undefined) return undefined
   const stored = parsePrintOptions(existing.printOptionsJson)
-  if (!stored.skipObjects || stored.skipObjects.length === 0) return undefined
-  const { skipObjects: _dropped, ...rest } = stored
+  // BOTH skip fields are plate-specific and both must go: `skipInstances` holds `identify_id`s,
+  // which belong to one plate even more strictly than object ids do, so a stale one does not merely
+  // skip the wrong model, it fails the dispatch outright as an unmatched handle.
+  const hasSkipObjects = stored.skipObjects != null && stored.skipObjects.length > 0
+  const hasSkipInstances = stored.skipInstances != null && stored.skipInstances.length > 0
+  if (!hasSkipObjects && !hasSkipInstances) return undefined
+  const { skipObjects: _droppedObjects, skipInstances: _droppedInstances, ...rest } = stored
   return JSON.stringify(rest)
 }

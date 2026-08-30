@@ -95,7 +95,7 @@ function makeController(initial: FakeConfig) {
     },
     retargetTarget,
     materialEditListenerRef: { current: null },
-    processEditListenerRef: { current: null }
+    settingsEditListenerRef: { current: null }
   } as unknown as SliceSettingsController)
   const setSessionSlots = (slots: SessionFilamentSlot[] | null) => { config = { ...config, sessionSlots: slots } }
   return { build, restores, read: () => config, setRetargetTarget, setSessionSlots }

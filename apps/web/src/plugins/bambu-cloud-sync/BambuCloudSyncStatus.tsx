@@ -22,7 +22,7 @@
  * Counterpart: `apps/api/src/plugins/bambu-cloud-sync/index.ts` (`/check`, `/sync`).
  */
 import { useState, type ReactNode } from 'react'
-import { Box, Button, IconButton, Sheet, Stack, Tooltip, Typography } from '@mui/joy'
+import { Badge, CircularProgress, Dropdown, IconButton, ListItemDecorator, Menu, MenuButton, MenuItem, Tooltip } from '@mui/joy'
 import CloseRoundedIcon from '@mui/icons-material/CloseRounded'
 import CloudSyncRoundedIcon from '@mui/icons-material/CloudSyncRounded'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -85,11 +85,13 @@ export function BambuCloudSyncStatus(): JSX.Element | null {
   // offering a Sync that is guaranteed to fail.
   if (check.status === 'expired') {
     return (
-      <StatusRow tone="warning" label="Bambu Lab sign-in expired">
-        <Typography level="body-xs" textColor="text.tertiary">
-          Reconnect in Settings, then Slicing.
-        </Typography>
-      </StatusRow>
+      <StatusControl
+        tone="warning"
+        count={importable + uploadable + pending}
+        tooltip="Bambu Lab sign-in expired. Reconnect in Settings, then Slicing."
+      >
+        <MenuItem disabled>Reconnect in Settings, then Slicing</MenuItem>
+      </StatusControl>
     )
   }
 
@@ -98,75 +100,95 @@ export function BambuCloudSyncStatus(): JSX.Element | null {
   // sidebar is the wrong place to be answering that. Point at the manager instead.
   if (pending > 0 && importable + uploadable === 0) {
     return (
-      <StatusRow tone="warning" label={`${pending} deleted preset${pending === 1 ? '' : 's'} to review`}>
-        <Typography level="body-xs" textColor="text.tertiary">
-          Decide in Settings, then Slicing.
-        </Typography>
-      </StatusRow>
+      <StatusControl
+        tone="warning"
+        count={pending}
+        tooltip={`${pending} deleted preset${pending === 1 ? '' : 's'} to review. Decide in Settings, then Slicing.`}
+      >
+        <MenuItem disabled>Review in Settings, then Slicing</MenuItem>
+      </StatusControl>
     )
   }
 
   return (
-    <StatusRow
+    <StatusControl
       tone="primary"
-      label={describeOutstandingLabel(importable, uploadable)}
-      tooltip={describeOutstanding(importable, uploadable, pending, check.checkedAt)}
+      count={importable + uploadable}
+      busy={syncMutation.isPending}
+      tooltip={`${describeOutstandingLabel(importable, uploadable)}. ${describeOutstanding(importable, uploadable, pending, check.checkedAt)}`}
       onDismiss={() => setDismissed(true)}
     >
-      <Button
-        type="button"
-        size="sm"
-        variant="solid"
-        loading={syncMutation.isPending}
-        disabled={syncMutation.isPending}
-        onClick={() => syncMutation.mutate()}
-      >
-        Sync
-      </Button>
-    </StatusRow>
+      {/* Disabled while in flight rather than disabling the trigger: this is the action that must
+          not run twice, and the trigger is also the only way to reach Hide. */}
+      <MenuItem disabled={syncMutation.isPending} onClick={() => syncMutation.mutate()}>
+        <ListItemDecorator><CloudSyncRoundedIcon /></ListItemDecorator>
+        {syncMutation.isPending ? 'Syncing…' : `Sync ${describeOutstandingLabel(importable, uploadable)}`}
+      </MenuItem>
+    </StatusControl>
   )
 }
 
 /**
- * One row: what is outstanding on the left, what you can do about it on the right.
+ * One compact control, sitting beside `Manage presets` in the Slicer header.
  *
- * Full width and allowed to WRAP, because both hosts are narrow, the editor sidebar is
- * ~540px and the print-prep dialog is narrower, and this has to survive a 375px phone.
- * An earlier revision sat inside the Process header next to `Manage`, which at sidebar
- * width wrapped its own buttons onto two lines, clipped `Manage`, and gave the panel a
- * horizontal scrollbar.
+ * It USED to be a full-width row of its own, and before that a labelled row next to `Manage` that
+ * wrapped its buttons onto two lines, clipped `Manage`, and gave the whole panel a horizontal
+ * scrollbar at sidebar width. That failure was about the SHAPE, not the position: an icon carrying
+ * its count as a badge costs ~32px where the row cost the full width, so it sits next to the button
+ * it belongs with (both are about presets, and the manager it opens covers all three preset kinds)
+ * without competing for room. The header is a single uniform-height row that cannot wrap (see
+ * StickySectionHeader), which is exactly why the control has to be this small.
+ *
+ * Everything the row said is still reachable: the count is the badge, the detail is the tooltip,
+ * and the actions moved into the menu rather than being dropped.
  */
-function StatusRow({ tone, label, tooltip, onDismiss, children }: {
+function StatusControl({ tone, count, tooltip, busy, onDismiss, children }: {
   tone: 'primary' | 'warning'
-  label: string
-  tooltip?: string
+  count: number
+  tooltip: string
+  /** A sync is in flight: the TRIGGER has to say so, because the menu it was started from is gone. */
+  busy?: boolean
   onDismiss?: () => void
   children?: ReactNode
 }): JSX.Element {
-  const row = (
-    <Sheet
-      variant="soft"
-      color={tone}
-      sx={{ px: 1, py: 0.75, borderRadius: 'sm' }}
-    >
-      <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
-        <CloudSyncRoundedIcon fontSize="small" />
-        {/* Takes the slack so the actions sit at the far end, and shrinks before they do. */}
-        <Typography level="body-sm" sx={{ flex: 1, minWidth: '8rem' }}>{label}</Typography>
-        <Stack direction="row" spacing={0.5} alignItems="center">
-          {children}
-          {onDismiss ? (
-            <Tooltip title="Hide until next time">
-              <IconButton type="button" size="sm" variant="plain" color="neutral" onClick={onDismiss} aria-label="Hide">
-                <CloseRoundedIcon fontSize="small" />
-              </IconButton>
-            </Tooltip>
-          ) : null}
-        </Stack>
-      </Stack>
-    </Sheet>
+  // Choosing a menu item closes the menu, so a "Syncing…" label in there is invisible the instant
+  // it becomes true. A cloud sync is not instant and only reports at the END (a toast), so without
+  // this the control sat unchanged and the work looked like it had not started. The spinner
+  // replaces the icon in place, keeping the badge and the row height.
+  const label = busy ? 'Syncing presets with Bambu Cloud…' : tooltip
+  return (
+    // Dropdown gives the clickaway, Escape and keyboard nav a bare anchored Menu has none of.
+    // The Tooltip goes INSIDE it, on the button: Dropdown is a context provider rather than a
+    // DOM component, so wrapping it hands the tooltip's ref and aria-label to something that
+    // can hold neither ("Function components cannot be given refs", and every DOM prop listed
+    // as unsupported). The trigger is where the label belongs anyway.
+    <Dropdown>
+      <Badge badgeContent={count} size="sm" color={tone} max={99}>
+        <Tooltip title={label}>
+          <MenuButton
+            // NOT disabled while busy. It is the only route into the menu, so disabling it took
+            // "Hide until next time" away exactly when a sync had stalled and the user most wanted
+            // it, with no timeout to recover. A disabled button also swallows the pointer events
+            // Joy's Tooltip listens on, so the "Syncing…" label could never appear either. The
+            // Sync ITEM is disabled instead, which is the action that must not run twice.
+            slots={{ root: IconButton }}
+            slotProps={{ root: { size: 'sm', variant: 'plain', color: tone, 'aria-label': label } }}
+          >
+            {busy ? <CircularProgress size="sm" color={tone} /> : <CloudSyncRoundedIcon />}
+          </MenuButton>
+        </Tooltip>
+      </Badge>
+      <Menu placement="bottom-end" sx={{ zIndex: (theme) => theme.zIndex.tooltip, maxWidth: 'calc(100vw - 32px)' }}>
+        {children}
+        {onDismiss ? (
+          <MenuItem onClick={onDismiss}>
+            <ListItemDecorator><CloseRoundedIcon /></ListItemDecorator>
+            Hide until next time
+          </MenuItem>
+        ) : null}
+      </Menu>
+    </Dropdown>
   )
-  return tooltip ? <Tooltip title={tooltip}><Box>{row}</Box></Tooltip> : row
 }
 
 function describeOutstandingLabel(importable: number, uploadable: number): string {

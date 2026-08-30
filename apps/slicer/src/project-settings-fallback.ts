@@ -44,6 +44,7 @@ import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import yazl from 'yazl'
 import { type Entry } from 'yauzl'
+import { machinePresetSlotIndexFor } from '@printstream/shared'
 import { sanitizeProfileFileName } from './profile-file-name.js'
 import { openZip, readZipEntryBuffer, readZipEntryText } from './zip-io.js'
 
@@ -184,15 +185,26 @@ async function buildFilamentCoverageFromEmbedded(
 }
 
 /** `inherits_group` is positional: `[process, filament1..N, machine]` (what the API's sanitize and
- * BambuStudio's own writer both assume). The PROCESS lineage is entry 0; the MACHINE lineage is the
- * last entry, and only when the array is long enough that they are distinct entries. */
+ * BambuStudio's own writer both assume). The PROCESS lineage is entry 0; the MACHINE lineage sits at
+ * `filament_count + 1`, which is where the ENGINE reads it (`PresetBundle.cpp:3885`).
+ *
+ * Not the array's LAST entry, which is the same answer only while the array is correctly sized. A
+ * mis-sized `inherits_group` is a defect the repair stage exists for and therefore a shape this
+ * meets in the wild, and there the last entry is a stale leftover: deriving the machine preset name
+ * from it hands the settings export a printer the project does not use, which fails every process
+ * as incompatible (exit 239) and silently completes the slice on the wrong presets. */
 function processInheritsFromGroup(embedded: Record<string, unknown> | null): string | null {
   const group = embedded && Array.isArray(embedded.inherits_group) ? embedded.inherits_group : []
   return group.length >= 2 ? firstStringValue(group[0]) : null
 }
 function machineInheritsFromGroup(embedded: Record<string, unknown> | null): string | null {
-  const group = embedded && Array.isArray(embedded.inherits_group) ? embedded.inherits_group : []
-  return group.length >= 2 ? firstStringValue(group[group.length - 1]) : null
+  if (!embedded || !Array.isArray(embedded.inherits_group)) return null
+  const group = embedded.inherits_group
+  const machineIndex = machinePresetSlotIndexFor(embedded)
+  // Past the end, or not locatable at all: no machine lineage is stated. Say nothing rather than
+  // reach for whatever entry happens to be there.
+  if (machineIndex == null || machineIndex < 1 || machineIndex >= group.length) return null
+  return firstStringValue(group[machineIndex])
 }
 
 /** Trimmed string entries of a `compatible_printers`-style value; [] for anything else. */

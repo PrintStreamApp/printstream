@@ -94,7 +94,11 @@ export function usePrinterRecoveryActions({
   const stopAvailability = getStopAvailability(status)
   const recoveryActionIds = getPrinterRecoveryActions(status).map((action) => action.id)
   const showPauseAction = stage === 'printing' || stage === 'preparing' || stage === 'heating'
-  const showResumeAction = recoveryActionIds.includes('resume')
+  // Symmetric with Pause: a paused printer always RENDERS Resume, and `resumeAvailability` decides
+  // whether it is enabled and what the tooltip says. Deriving visibility from the action list
+  // instead meant a blocked Resume disappeared with no explanation, which is the shape that made
+  // "could not resume, there was no option" impossible to diagnose from the UI.
+  const showResumeAction = stage === 'paused'
   const showLoadFilamentAction = recoveryActionIds.includes('loadFilament')
     && canManagePrinter
     && loadFilamentAvailability.allowed

@@ -19,6 +19,8 @@ import path from 'node:path'
 import {
   applyMachineRetargetToProjectSettings,
   canonicalBambuModelKey,
+  extractChangedFromSystemKeys,
+  machinePresetSlotIndexFor,
   H2_DUAL_NOZZLE_MODEL_KEYS,
   hasDualNozzleMachineShape,
   retargetProjectSettingsToMachine,
@@ -27,6 +29,7 @@ import {
   stripSliceInfoPrinterModelId,
   type FilamentSlotRebind,
   type SceneEditFilament,
+  applyMachineSettingOverrides,
   type SlicingManualProfileTarget,
   type SlicingPresetSummary
 } from '@printstream/shared'
@@ -123,6 +126,239 @@ export async function projectHasCompleteMachine(arrangedPath: string, targetMode
   if (target && model !== target) return false
   // Only the H2 family carries a topology beyond the plain machine fields.
   return H2_DUAL_NOZZLE_MODEL_KEYS.has(model) ? hasDualNozzleMachineShape(settings) : true
+}
+
+/**
+ * The machine preset a saved project currently names (`printer_settings_id`), or null when it
+ * names none or its settings are unreadable.
+ *
+ * A preset NAME, not an id: that is what a 3MF records, and what
+ * {@link retargetProjectSettingsToMachine} writes back.
+ */
+export async function readProjectMachinePresetName(arrangedPath: string): Promise<string | null> {
+  const raw = await readEntry(arrangedPath, PROJECT_SETTINGS_ENTRY).catch(() => null)
+  if (!raw || raw.length === 0) return null
+  try {
+    const settings = JSON.parse(raw.toString('utf8')) as Record<string, unknown>
+    return firstString(settings.printer_settings_id) ?? null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Author the chosen machine preset into a project that already names the right MODEL but a
+ * DIFFERENT preset. Returns the new path, or null when there is nothing to do.
+ *
+ * The gap this closes: {@link projectHasCompleteMachine} answers a question about the MODEL, so a
+ * save that changed only the preset (an H2D variant, a nozzle size, a user's own tuned machine)
+ * looked "already complete" and the retarget was skipped. The editor still marked the project
+ * dirty and Save still lit up, so the user's pick was accepted by the UI and silently dropped by
+ * the save: the file kept its old `printer_settings_id`.
+ *
+ * Deliberately the MACHINE-ONLY authoring, not {@link retargetSavedProjectMachine}: the full
+ * retarget also re-resolves the process preset and rebinds every filament slot, which is exactly
+ * what the skip was protecting against ("re-running the retarget would overwrite the user's
+ * process settings"). Both concerns are satisfied by authoring the machine and leaving process and
+ * filaments untouched, which is all a same-model preset switch means.
+ *
+ * Best-effort like its delegate: a machine that cannot be resolved returns null and the save
+ * proceeds unchanged, rather than failing a save the user would otherwise get.
+ */
+export async function applyMachinePresetChange(input: {
+  workspaceId: string
+  arrangedPath: string
+  fileName: string
+  slicerTargetId: string | null | undefined
+  retarget: SlicingManualProfileTarget
+}): Promise<string | null> {
+  // `resolveSlicingPresetFiles` THROWS (404) for an id the workspace no longer holds -- a custom
+  // preset deleted in another tab, say. This branch used to be an unconditional no-op, so letting
+  // that escape would turn a stale id into a failed save and lose the user's arrangement. A machine
+  // we cannot resolve means "author nothing", exactly as a missing file does.
+  let machineFile: Awaited<ReturnType<typeof resolveSlicingPresetFiles>>[number] | undefined
+  try {
+    ;[machineFile] = await resolveSlicingPresetFiles(input.workspaceId, [
+      { id: input.retarget.printerProfileId, kind: 'machine' }
+    ])
+  } catch (error) {
+    console.warn(`[save-retarget] ${input.fileName}: chosen printer preset could not be resolved; keeping the project's machine`,
+      error instanceof Error ? error.message : error)
+    return null
+  }
+  if (!machineFile) return null
+  return applyResolvedMachinePreset({
+    arrangedPath: input.arrangedPath,
+    fileName: input.fileName,
+    slicerTargetId: input.slicerTargetId,
+    machineFile,
+    chosenByUser: input.retarget.printerProfileChosen === true,
+    targetNozzleDiameters: input.retarget.nozzleDiameters ?? []
+  })
+}
+
+/**
+ * Write a project's OWN machine overrides into its `project_settings.config`; returns the new path,
+ * or null when there is nothing to apply.
+ *
+ * Runs as the LAST machine-domain pass of a save, after whichever branch authored the machine
+ * (a cross-model retarget, a same-model preset change, or the topology heal). That ordering is the
+ * point: overrides and the resolved preset write the SAME keys, so applying them earlier would let
+ * the preset overwrite the user's values, which is the failure that looks like the feature simply
+ * not working.
+ *
+ * Best-effort on unreadable settings (returns null) for the same reason as its neighbours: a save
+ * the user would otherwise get should not fail on an unexpected project.
+ */
+export async function applyMachineOverridesToProject(input: {
+  workspaceId: string
+  arrangedPath: string
+  fileName: string
+  slicerTargetId: string | null | undefined
+  /** The save's machine target, used only to resolve the preset a RESET restores values from. */
+  retarget: SlicingManualProfileTarget | undefined
+  machineSettingOverrides: Record<string, string | string[]>
+}): Promise<string | null> {
+  const raw = await readEntry(input.arrangedPath, PROJECT_SETTINGS_ENTRY).catch(() => null)
+  if (!raw || raw.length === 0) {
+    // Only worth saying when the user actually asked for something; an empty map here is the
+    // ordinary "no printer overrides on a project that has none" case.
+    if (Object.keys(input.machineSettingOverrides).length > 0) {
+      console.warn(`[save-retarget] ${input.fileName}: no embedded project settings; machine overrides were not applied`)
+    }
+    return null
+  }
+  let projectSettings: Record<string, unknown>
+  try {
+    projectSettings = JSON.parse(raw.toString('utf8')) as Record<string, unknown>
+  } catch (error) {
+    console.warn(`[save-retarget] ${input.fileName}: embedded project settings are unreadable; machine overrides were not applied`,
+      error instanceof Error ? error.message : error)
+    return null
+  }
+
+  // Nothing asked for and nothing recorded means nothing to do, and answering that FIRST is what
+  // keeps an ordinary save cheap: the web sends this map on every save now (empty included, since
+  // empty is how a reset is expressed), and resolving the preset is a DB read plus a slicer HTTP
+  // round-trip that the machine branch above has usually just performed with the same arguments.
+  // Resolved lazily below, only once there is real work.
+  const machineIndex = machinePresetSlotIndexFor(projectSettings)
+  const recordsNothing = machineIndex == null || extractChangedFromSystemKeys(
+    projectSettings.different_settings_to_system, machineIndex, () => true
+  ).length === 0
+  if (Object.keys(input.machineSettingOverrides).length === 0 && recordsNothing) return null
+
+  // The preset is what a RESET restores to: dropping a key from the record without putting its
+  // value back would leave the engine slicing with an override the UI no longer shows.
+  const presetConfig = await resolveMachinePresetConfigForOverrides(input).catch((error: unknown) => {
+    console.warn(`[save-retarget] ${input.fileName}: could not resolve the machine preset; reset overrides stay recorded`,
+      error instanceof Error ? error.message : error)
+    return null
+  })
+
+  const overridden = applyMachineSettingOverrides(projectSettings, input.machineSettingOverrides, presetConfig ?? undefined)
+  // Unchanged means nothing to write: the project records no overrides and none were asked for.
+  if (overridden === projectSettings) return null
+
+  const outDir = await mkdtemp(path.join(tmpdir(), 'printstream-machine-overrides-'))
+  const outPath = path.join(outDir, path.basename(input.fileName) || 'machine-overridden.3mf')
+  const overriddenJson = JSON.stringify(overridden)
+  await rewriteThreeMfEntries(
+    input.arrangedPath,
+    outPath,
+    { [PROJECT_SETTINGS_ENTRY]: () => overriddenJson },
+    [{ name: PROJECT_SETTINGS_ENTRY, content: overriddenJson }]
+  )
+  return outPath
+}
+
+/** The resolved machine preset behind a save's target, or null when it cannot be resolved. */
+async function resolveMachinePresetConfigForOverrides(input: {
+  workspaceId: string
+  slicerTargetId: string | null | undefined
+  retarget: SlicingManualProfileTarget | undefined
+}): Promise<Record<string, string | string[]> | null> {
+  if (!input.retarget) return null
+  const [machineFile] = await resolveSlicingPresetFiles(input.workspaceId, [
+    { id: input.retarget.printerProfileId, kind: 'machine' }
+  ])
+  if (!machineFile) return null
+  return await slicerClient.resolveMachineConfig(input.slicerTargetId, {
+    source: machineFile.source,
+    name: machineFile.name,
+    content: machineFile.content
+  })
+}
+
+/**
+ * {@link applyMachinePresetChange} once the preset has been resolved to a file. Split out so the
+ * decision and the authoring can be exercised without a workspace preset store behind them.
+ */
+export async function applyResolvedMachinePreset(input: {
+  arrangedPath: string
+  fileName: string
+  slicerTargetId: string | null | undefined
+  machineFile: { source: 'builtin' | 'custom'; name: string; content?: string }
+  /** The user PICKED this preset (`SlicingManualProfileTarget.printerProfileChosen`). */
+  chosenByUser: boolean
+  /** The nozzle diameters the save targets, so a nozzle switch still re-authors the machine. */
+  targetNozzleDiameters: readonly number[]
+}): Promise<string | null> {
+  // Compared by NAME because that is the identity a 3MF carries; the request names the preset by
+  // id. Equal means the project already IS on this preset, so there is nothing to author.
+  const current = await readProjectMachinePresetName(input.arrangedPath)
+  if (current && current === input.machineFile.name) return null
+
+  // A DIFFERENT name is not by itself a reason to rewrite. The client always sends a resolved
+  // `printerProfileId`, and for a project whose preset this workspace does not hold that resolution
+  // is a FALLBACK to the first catalogue profile matching the model -- so treating "differs" as
+  // "the user switched" re-authored every such project onto a stock preset on an ordinary save,
+  // discarding its start G-code, accelerations and limits. Rewrite only when the user actually
+  // picked, or when the embedded machine genuinely no longer describes the target.
+  if (!input.chosenByUser && await projectMatchesTargetNozzles(input.arrangedPath, input.targetNozzleDiameters)) {
+    return null
+  }
+
+  const authored = await authorProjectMachineFromProfile({
+    arrangedPath: input.arrangedPath,
+    fileName: input.fileName,
+    slicerTargetId: input.slicerTargetId,
+    machineFile: input.machineFile
+  })
+  if (!authored) {
+    // Its own doc says callers log the miss, and every sibling does. Silence here would discard the
+    // user's deliberate preset switch while reporting a successful save -- the very bug this
+    // branch exists to fix.
+    console.warn(`[save-retarget] ${input.fileName}: could not resolve ${input.machineFile.name}; the project keeps its previous machine`)
+  }
+  return authored
+}
+
+/**
+ * Does the project's embedded machine already carry the nozzle diameters this save targets?
+ *
+ * The companion question to {@link projectHasCompleteMachine}, which only compares the MODEL. A
+ * nozzle switch (0.4 -> 0.6) keeps the model and changes the machine preset, so without this a
+ * derived-target save could never re-author the machine and the saved project kept the old nozzle.
+ * Unreadable settings answer false: author rather than assume.
+ */
+async function projectMatchesTargetNozzles(arrangedPath: string, targetNozzleDiameters: readonly number[]): Promise<boolean> {
+  if (targetNozzleDiameters.length === 0) return true
+  const raw = await readEntry(arrangedPath, PROJECT_SETTINGS_ENTRY).catch(() => null)
+  if (!raw || raw.length === 0) return false
+  try {
+    const settings = JSON.parse(raw.toString('utf8')) as Record<string, unknown>
+    const embedded = Array.isArray(settings.nozzle_diameter)
+      ? (settings.nozzle_diameter as unknown[]).map((entry) => Number.parseFloat(String(entry))).filter((value) => Number.isFinite(value))
+      : []
+    if (embedded.length === 0) return false
+    // Compared as SETS: the target lists the diameters in play, the project lists them per extruder,
+    // so an H2D's [0.4, 0.4] must still match a target of [0.4].
+    const wanted = new Set(targetNozzleDiameters)
+    return embedded.every((value) => wanted.has(value)) && [...wanted].every((value) => embedded.includes(value))
+  } catch {
+    return false
+  }
 }
 
 export interface RetargetSavedProjectInput {

@@ -11,7 +11,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "predev": "npm run build --workspace @printstream/shared",
-    "dev": "tsx watch --include \"../../packages/shared/dist/**\" --include \"../../packages/bridge-runtime/dist/**\" src/server.ts",
+    "dev": "NODE_OPTIONS=\"--require ../../scripts/dev/exit-with-parent.cjs\" tsx watch --include \"../../packages/shared/dist/**\" --include \"../../packages/bridge-runtime/dist/**\" src/server.ts",
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "prisma:db:push": "prisma db push",

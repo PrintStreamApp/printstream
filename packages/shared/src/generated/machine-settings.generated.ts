@@ -826,13 +826,15 @@ export const machineSettingsCatalog: ProcessSettingsCatalog = {
         "Standard",
         "High Flow",
         "Hybrid",
-        "TPU High Flow"
+        "TPU High Flow",
+        "E3D High Flow"
       ],
       "enumLabels": [
         "Standard",
         "High Flow",
         "Hybrid",
-        "TPU High Flow"
+        "TPU High Flow",
+        "E3D High Flow"
       ],
       "mode": "develop",
       "default": "Standard"

@@ -186,12 +186,13 @@ export function useLocalSliceSettingsController(params: LocalSliceSettingsContro
   // simply true here, where the workspace host waits on a request.
   const {
     selectedPrinterModel, selectPrinterModel,
-    printerModelOptions, printerProfileId, selectedMachineProfile, targetPrinterModel,
+    printerModelOptions, printerProfileId, selectedMachineProfile, selectPrinterProfile, targetPrinterModel,
     nozzleDiameter, setNozzleDiameter, nozzleDiameterOptions, selectedNozzleDiameters,
     nozzleFlow, setNozzleFlow,
     plateType, handlePlateTypeChange, plateTypeOptions,
-    printerCompatibleProcessProfiles,
+    selectableMachineProfiles, printerCompatibleProcessProfiles,
     conflicts: targetConflicts,
+    origins: targetOrigins,
     machineSnapshot, restoreMachineSnapshot
   } = useMachineTarget({
     file,
@@ -302,7 +303,7 @@ export function useLocalSliceSettingsController(params: LocalSliceSettingsContro
   // controller, but RENDERED by the host, a server-less host has no still-mounted slice dialog to
   // render it from, which is the same split the global process dialog uses.
   const [filamentSettingsFilamentId, setFilamentSettingsFilamentId] = useState<number | null>(null)
-  const processEditListenerRef = useRef<(() => void) | null>(null)
+  const settingsEditListenerRef = useRef<(() => void) | null>(null)
 
   const baseProjectFilaments = useMemo(() => buildSliceDialogProjectFilaments(file, bakedIndex, selectedPlate), [bakedIndex, file, selectedPlate])
   // Removing a slot must remap the filament-INDEX references living with the process state:
@@ -357,10 +358,30 @@ export function useLocalSliceSettingsController(params: LocalSliceSettingsContro
     [projectFilaments, materialOptions, filamentMaterialOptionIds, filamentColors, bakedIndex]
   )
 
+  /**
+   * The project's OWN machine settings, as a diff against the resolved printer preset. Held here
+   * beside the process overrides because it travels with them everywhere: the slice request, the
+   * save request, the undo snapshot. Cleared by nothing implicitly -- a machine override survives a
+   * preset switch, and the server re-resolves the new preset and lays these back over it.
+   */
+  const [machineSettingOverrides, setMachineSettingOverrides] = useState<Record<string, string | string[]>>({})
+  /** Which printer the overrides above were authored against; drives the carried-overrides warning. */
+  const [machineOverridesModel, setMachineOverridesModel] = useState<string | null>(null)
+
   const retargetTarget: SlicingManualProfileTarget | null = (printerProfileId.length > 0 && processProfileId.length > 0 && Boolean(targetPrinterModel))
     ? {
         mode: 'manualProfile',
         printerProfileId,
+        // Whether the user PICKED this preset or the cascade derived it. The server cannot tell
+        // from the id alone, and rewriting a project's machine on a derived id threw away
+        // hand-tuned printers on ordinary saves.
+        printerProfileChosen: targetOrigins.printerProfileId === 'user',
+        // Always sent, empty included: an empty map is how "reset every printer override" is
+        // expressed, and omitting it made a reset in this editor save a file that still carried the
+        // override. Safe to send unconditionally here in a way it is not for the library host: this
+        // controller reads the project the tab already parsed, so the map is never empty merely
+        // because a lookup has not answered.
+        machineSettingOverrides,
         printerModel: selectedPrinterModel,
         plateType,
         nozzleDiameters: selectedNozzleDiameters,
@@ -379,8 +400,10 @@ export function useLocalSliceSettingsController(params: LocalSliceSettingsContro
     objectProcessOverrides,
     processProfileId,
     processProfileSelectionTouched: processProfileSelectionTouchedRef.current,
-    processSettingOverrides
-  }), [selectedSlicerTargetId, machineSnapshot, materialSnapshot, objectProcessOverrides, processProfileId, processSettingOverrides, processProfileSelectionTouchedRef])
+    processSettingOverrides,
+    machineSettingOverrides,
+    machineOverridesModel
+  }), [selectedSlicerTargetId, machineSnapshot, materialSnapshot, objectProcessOverrides, processProfileId, processSettingOverrides, machineSettingOverrides, machineOverridesModel, processProfileSelectionTouchedRef])
   const restoreConfig = useCallback((snapshot: SliceConfigSnapshot) => {
     setSelectedSlicerTargetId(snapshot.selectedSlicerTargetId)
     restoreMachineSnapshot(snapshot)
@@ -389,6 +412,8 @@ export function useLocalSliceSettingsController(params: LocalSliceSettingsContro
     if (snapshot.processProfileId != null) setProcessProfileId(snapshot.processProfileId)
     processProfileSelectionTouchedRef.current = snapshot.processProfileSelectionTouched
     setProcessSettingOverrides(snapshot.processSettingOverrides ?? {})
+    setMachineSettingOverrides(snapshot.machineSettingOverrides ?? {})
+    setMachineOverridesModel(snapshot.machineOverridesModel ?? null)
   }, [processProfileSelectionTouchedRef, restoreMachineSnapshot, restoreMaterialSnapshot, setProcessProfileId, setProcessSettingOverrides, setSelectedSlicerTargetId])
 
   const selectedSlicerTarget = slicerTargets.find((target) => target.id === selectedSlicerTargetId) ?? null
@@ -440,6 +465,8 @@ export function useLocalSliceSettingsController(params: LocalSliceSettingsContro
     printerModelOptions,
     targetConflicts,
     selectedMachineProfile,
+    selectableMachineProfiles,
+    selectPrinterProfile,
     nozzleDiameter,
     setNozzleDiameter,
     nozzleDiameterOptions,
@@ -465,6 +492,13 @@ export function useLocalSliceSettingsController(params: LocalSliceSettingsContro
     processProfileSelectionTouchedRef,
     selectedSlicerTargetIdForGuards: selectedSlicerTargetId,
     processSettingOverrides,
+    machineSettingOverrides,
+    setMachineSettingOverrides,
+    // Always known here: this host reads the project the tab already parsed, so there is no lookup
+    // that could leave the map empty for want of an answer.
+    machineSettingOverridesKnown: true,
+    machineOverridesModel,
+    setMachineOverridesModel,
     setProcessSettingsDialogOpen,
     hasPlateObjects: plateObjects.length > 0,
     selectedSliceObjectIds: new Set(),
@@ -508,7 +542,7 @@ export function useLocalSliceSettingsController(params: LocalSliceSettingsContro
     materialEditListenerRef,
     // The shared core's post-save rebase (a local save renumbers slots exactly like an api one).
     onProjectSaved: handleProjectSaved,
-    processEditListenerRef,
+    settingsEditListenerRef,
     // Anonymous baseline resolver for the panel's "changed vs preset" badge (no workspace).
     // Gated on `slicerDataReady`: the resolver reads the LIVE built-in catalogue to find a project
     // preset's standard parent, so firing the badge's resolve query before the catalogue loads

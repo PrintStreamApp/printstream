@@ -26,6 +26,8 @@ import {
   getPrinterPrintOptionCapabilities,
   loadedSlotsFromStatus,
   mergeAmsMapping,
+  platePrintSkipSelection,
+  platePrintUnits,
   trayCanSatisfyRequirement,
   filamentTrackSwitchMismatch,
   type FilamentCompatibilityIssue,
@@ -87,8 +89,8 @@ export function StoragePrintModal({
     allowIncompatibleFilament: boolean
     allowFilamentTrackSwitchMismatch: boolean
     allowInsufficientFilament: boolean
-    /** Plate objects (`objects[].id`) to exclude from the print, when any were deselected. */
-    skipObjects?: number[]
+    /** Individual placements to exclude, by instance `identify_id`. */
+    skipInstances?: number[]
   }) => void
   onCancel: () => void
 }) {
@@ -175,25 +177,27 @@ export function StoragePrintModal({
     [plates, plate]
   )
   /**
-   * Per-object deselection (sliced plates with a real object list only). Deselected
-   * objects ride the request as `skipObjects`; the server maps them to instance
-   * identify_ids, sends them in the start command, and keeps a mid-print skip
-   * fallback armed for firmware that ignores the start-command field.
+   * Per-COPY deselection (sliced plates with a real object list only). A unit is one placement,
+   * so a duplicated object offers one row per copy. The selection rides the request as
+   * `skipObjects` + `skipInstances`; the server maps both to instance identify_ids, sends them in
+   * the start command, and keeps a mid-print skip fallback armed for firmware that ignores the
+   * start-command field.
    */
   const plateObjects = useMemo(() => activePlate?.objects ?? [], [activePlate])
-  const showObjectSelection = plateHasSliceData(activePlate) && plateObjects.length >= 2
-  const [deselectedObjectIds, setDeselectedObjectIds] = useState<number[]>([])
-  const deselectedObjectIdSet = useMemo(() => new Set(deselectedObjectIds), [deselectedObjectIds])
+  const plateUnits = useMemo(() => platePrintUnits(plateObjects), [plateObjects])
+  const showObjectSelection = plateHasSliceData(activePlate) && plateUnits.length >= 2
+  const [deselectedUnitKeys, setDeselectedUnitKeys] = useState<string[]>([])
+  const deselectedUnitKeySet = useMemo(() => new Set(deselectedUnitKeys), [deselectedUnitKeys])
   const activePlateIndex = activePlate?.index ?? null
   useEffect(() => {
-    setDeselectedObjectIds([])
+    setDeselectedUnitKeys([])
     // The explicit tray picks are per-plate too; the auto layer re-derives on its own.
     setExplicitMapping([])
   }, [filePath, activePlateIndex])
-  const toggleObjectSelected = (objectId: number, selected: boolean) => {
-    setDeselectedObjectIds((current) => {
-      if (selected) return current.filter((id) => id !== objectId)
-      return current.includes(objectId) ? current : [...current, objectId]
+  const toggleObjectSelected = (key: string, selected: boolean) => {
+    setDeselectedUnitKeys((current) => {
+      if (selected) return current.filter((entry) => entry !== key)
+      return current.includes(key) ? current : [...current, key]
     })
   }
   const filamentEntries = useMemo<ThreeMfProjectFilament[]>(() => {
@@ -420,8 +424,8 @@ export function StoragePrintModal({
           )}
           {showObjectSelection && (
             <PrintObjectsSection
-              objects={plateObjects}
-              deselectedIds={deselectedObjectIdSet}
+              units={plateUnits}
+              deselectedKeys={deselectedUnitKeySet}
               onToggle={toggleObjectSelected}
             />
           )}
@@ -579,14 +583,15 @@ export function StoragePrintModal({
           <Button variant="plain" onClick={onCancel} disabled={submitting}>Cancel</Button>
           <Button
             onClick={() => {
-              // Filter to the active plate's objects so a stale id can never reach the request.
-              const skipObjects = showObjectSelection
-                ? deselectedObjectIds.filter((id) => plateObjects.some((object) => object.id === id))
-                : []
+              // Resolved against the units on screen so a key left over from another plate can
+              // never reach the request.
+              const { skipInstances } = showObjectSelection
+                ? platePrintSkipSelection(plateUnits, deselectedUnitKeySet)
+                : { skipInstances: [] }
               onSubmit({
                 // Submit the actually-selected plate's index: the picker can resolve to a
                 // plate whose number differs from the 1-based default (e.g. a single-plate
-                // sliced "Plate 2" output), and skipObjects are mapped against this plate.
+                // sliced "Plate 2" output), and the skip selection is mapped against this plate.
                 plate: activePlate?.index ?? plate,
                 bedLevel,
                 vibrationCompensation,
@@ -597,7 +602,7 @@ export function StoragePrintModal({
                 allowIncompatibleFilament,
                 allowFilamentTrackSwitchMismatch,
                 allowInsufficientFilament,
-                ...(skipObjects.length > 0 ? { skipObjects } : {})
+                ...(skipInstances.length > 0 ? { skipInstances } : {})
               })
             }}
             loading={submitting}

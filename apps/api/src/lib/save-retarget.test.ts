@@ -10,8 +10,8 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import yazl from 'yazl'
-import { hasDualNozzleMachineShape, type SceneEditFilament } from '@printstream/shared'
-import { authorProjectMachineFromProfile, healSavedProjectMachineTopology, projectHasCompleteMachine } from './save-retarget.js'
+import { buildBuiltinSlicingPresetId, hasDualNozzleMachineShape, type SceneEditFilament } from '@printstream/shared'
+import { applyMachineOverridesToProject, applyResolvedMachinePreset, authorProjectMachineFromProfile, healSavedProjectMachineTopology, projectHasCompleteMachine, readProjectMachinePresetName } from './save-retarget.js'
 import { slicerClient } from './slicer-client.js'
 import { readEntry } from './three-mf-internal.js'
 
@@ -196,4 +196,192 @@ test('projectHasCompleteMachine separates "same printer" from "fully defined"', 
   // A settings-less scaffold is incomplete: the safe direction (author rather than assume).
   const scaffoldPath = await writeThreeMf({ '3D/3dmodel.model': '<model/>' })
   assert.equal(await projectHasCompleteMachine(scaffoldPath, 'Bambu Lab H2D'), false, 'no settings at all')
+})
+
+// ---- machine PRESET changes (as opposed to model changes) ------------------------------------
+
+/**
+ * A complete, undamaged H2D project sitting on the 0.4 nozzle preset: the shape a real retarget
+ * leaves behind (`extruder_nozzle_stats` is rebuilt there, not carried by the preset fixture).
+ */
+const COMPLETE_H2D_SETTINGS = {
+  ...DAMAGED_H2D_SETTINGS,
+  ...H2D_MACHINE_CONFIG,
+  extruder_nozzle_stats: ['Standard#1', 'Standard#1']
+}
+
+test('a model-only gate cannot see a machine PRESET change, which is why the save used to drop it', async () => {
+  const arrangedPath = await writeThreeMf({
+    '3D/3dmodel.model': '<model/>',
+    'Metadata/project_settings.config': JSON.stringify(COMPLETE_H2D_SETTINGS)
+  })
+  // The project is complete FOR ITS MODEL, so the old gate answered "nothing to do" and the
+  // else-branch did literally nothing, even though the user had picked a different preset.
+  assert.equal(await projectHasCompleteMachine(arrangedPath, 'Bambu Lab H2D'), true)
+  // What the model check cannot see: the preset the project actually names.
+  assert.equal(await readProjectMachinePresetName(arrangedPath), 'Bambu Lab H2D 0.4 nozzle')
+})
+
+test('choosing a different machine preset on the same model authors it into the saved project', async () => {
+  slicerClient.resolveMachineConfig = (async (_targetId, profile) => {
+    assert.equal(profile.name, 'Bambu Lab H2D 0.6 nozzle')
+    return { ...H2D_MACHINE_CONFIG, nozzle_diameter: ['0.6', '0.6'] }
+  }) as typeof slicerClient.resolveMachineConfig
+  const arrangedPath = await writeThreeMf({
+    '3D/3dmodel.model': '<model/>',
+    'Metadata/project_settings.config': JSON.stringify(COMPLETE_H2D_SETTINGS)
+  })
+
+  const appliedPath = await applyResolvedMachinePreset({
+    arrangedPath,
+    fileName: 'project.3mf',
+    slicerTargetId: null,
+    machineFile: { source: 'builtin', name: 'Bambu Lab H2D 0.6 nozzle' },
+    chosenByUser: true,
+    targetNozzleDiameters: [0.6]
+  })
+  assert.ok(appliedPath, 'a preset change must produce a rewritten project, not a silent no-op')
+  cleanupDirs.push(path.dirname(appliedPath))
+  const saved = JSON.parse((await readEntry(appliedPath, 'Metadata/project_settings.config')).toString('utf8')) as Record<string, unknown>
+
+  assert.equal(saved.printer_settings_id, 'Bambu Lab H2D 0.6 nozzle', 'the saved file names the chosen preset')
+  assert.deepEqual(saved.nozzle_diameter, ['0.6', '0.6'], "and carries that preset's machine values")
+  // The process is deliberately untouched: this path exists precisely so a same-model preset
+  // switch cannot overwrite the user's process settings (what the old no-op was protecting).
+  assert.deepEqual(saved.filament_settings_id, COMPLETE_H2D_SETTINGS.filament_settings_id)
+  assert.ok(hasDualNozzleMachineShape(saved), 'and stays a complete dual-nozzle machine')
+})
+
+test('re-saving on the SAME preset is still a no-op, so an untouched printer never rewrites the project', async () => {
+  let resolved = false
+  slicerClient.resolveMachineConfig = (async () => { resolved = true; return H2D_MACHINE_CONFIG }) as typeof slicerClient.resolveMachineConfig
+  const arrangedPath = await writeThreeMf({
+    '3D/3dmodel.model': '<model/>',
+    'Metadata/project_settings.config': JSON.stringify(COMPLETE_H2D_SETTINGS)
+  })
+  const applied = await applyResolvedMachinePreset({
+    arrangedPath,
+    fileName: 'project.3mf',
+    slicerTargetId: null,
+    machineFile: { source: 'builtin', name: 'Bambu Lab H2D 0.4 nozzle' },
+    chosenByUser: true,
+    targetNozzleDiameters: [0.4]
+  })
+  assert.equal(applied, null)
+  assert.equal(resolved, false, 'and it does not even pay for a machine resolve')
+})
+
+test('an ordinary save never re-authors a project whose printer preset this workspace does not hold', async () => {
+  let resolved = false
+  slicerClient.resolveMachineConfig = (async () => { resolved = true; return H2D_MACHINE_CONFIG }) as typeof slicerClient.resolveMachineConfig
+  // A 3MF exported from BambuStudio with a hand-tuned printer preset. Nothing in the workspace
+  // catalogue is named this, so the editor's cascade FALLS BACK to a stock H2D preset and sends
+  // that id on every save. Treating "the name differs" as "the user switched" threw the user's
+  // machine away: stock start G-code and stock limits, on a save that only moved an object.
+  const arrangedPath = await writeThreeMf({
+    '3D/3dmodel.model': '<model/>',
+    'Metadata/project_settings.config': JSON.stringify({
+      ...COMPLETE_H2D_SETTINGS,
+      printer_settings_id: 'My tuned H2D',
+      machine_start_gcode: 'MY CUSTOM START GCODE'
+    })
+  })
+
+  const derived = await applyResolvedMachinePreset({
+    arrangedPath,
+    fileName: 'project.3mf',
+    slicerTargetId: null,
+    machineFile: { source: 'builtin', name: 'Bambu Lab H2D 0.4 nozzle' },
+    chosenByUser: false,
+    targetNozzleDiameters: [0.4]
+  })
+  assert.equal(derived, null, 'a DERIVED preset id must not rewrite a machine the user never touched')
+  assert.equal(resolved, false, 'and must not even resolve the preset')
+
+  // The same request with a genuine pick still authors: that is the feature.
+  const picked = await applyResolvedMachinePreset({
+    arrangedPath,
+    fileName: 'project.3mf',
+    slicerTargetId: null,
+    machineFile: { source: 'builtin', name: 'Bambu Lab H2D 0.4 nozzle' },
+    chosenByUser: true,
+    targetNozzleDiameters: [0.4]
+  })
+  assert.ok(picked, 'an explicit pick still switches the machine')
+  cleanupDirs.push(path.dirname(picked))
+})
+
+test('a NOZZLE switch still re-authors the machine even though nobody picked a preset', async () => {
+  slicerClient.resolveMachineConfig = (async () => ({ ...H2D_MACHINE_CONFIG, nozzle_diameter: ['0.6', '0.6'] })) as typeof slicerClient.resolveMachineConfig
+  const arrangedPath = await writeThreeMf({
+    '3D/3dmodel.model': '<model/>',
+    'Metadata/project_settings.config': JSON.stringify(COMPLETE_H2D_SETTINGS)
+  })
+  // The user changed the NOZZLE, not the preset, so the preset id is derived. The embedded machine
+  // no longer describes the target, which is the other half of the original bug.
+  const applied = await applyResolvedMachinePreset({
+    arrangedPath,
+    fileName: 'project.3mf',
+    slicerTargetId: null,
+    machineFile: { source: 'builtin', name: 'Bambu Lab H2D 0.6 nozzle' },
+    chosenByUser: false,
+    targetNozzleDiameters: [0.6]
+  })
+  assert.ok(applied, 'the embedded 0.4 machine must be re-authored for a 0.6 target')
+  cleanupDirs.push(path.dirname(applied))
+  const saved = JSON.parse((await readEntry(applied, 'Metadata/project_settings.config')).toString('utf8')) as Record<string, unknown>
+  assert.deepEqual(saved.nozzle_diameter, ['0.6', '0.6'])
+})
+
+test('resetting every machine override rewrites the project instead of doing nothing', async () => {
+  // The reset path had THREE gates that each dropped an empty map -- the web omitted it, the route
+  // skipped the pass, and the applier returned early -- so "reset and save" wrote nothing at all
+  // and the next open restored the override. This pins the server half of that.
+  slicerClient.resolveMachineConfig = (async () => ({ ...H2D_MACHINE_CONFIG, support_air_filtration: '0' })) as typeof slicerClient.resolveMachineConfig
+  const arrangedPath = await writeThreeMf({
+    '3D/3dmodel.model': '<model/>',
+    'Metadata/project_settings.config': JSON.stringify({
+      ...COMPLETE_H2D_SETTINGS,
+      filament_settings_id: ['A', 'B'],
+      filament_colour: ['#fff', '#000'],
+      filament_type: ['PETG', 'ABS-S'],
+      support_air_filtration: '1',
+      // Machine slot is filamentCount + 1 = 3.
+      different_settings_to_system: ['wall_loops', '', '', 'support_air_filtration']
+    })
+  })
+
+  const applied = await applyMachineOverridesToProject({
+    workspaceId: 'workspace-1',
+    arrangedPath,
+    fileName: 'project.3mf',
+    slicerTargetId: null,
+    retarget: { mode: 'manualProfile', printerProfileId: buildBuiltinSlicingPresetId('machine', 'Bambu Lab H2D 0.4 nozzle'), printerModel: 'H2D' } as never,
+    machineSettingOverrides: {}
+  })
+  assert.ok(applied, 'an empty map on a project that RECORDS an override must still rewrite')
+  cleanupDirs.push(path.dirname(applied))
+
+  const saved = JSON.parse((await readEntry(applied, 'Metadata/project_settings.config')).toString('utf8')) as Record<string, unknown>
+  assert.equal(saved.support_air_filtration, '0', 'the value goes back to the preset')
+  assert.deepEqual(saved.different_settings_to_system, ['wall_loops', '', '', ''], 'and it stops being recorded')
+})
+
+test('a save with no overrides on a project that has none rewrites nothing', async () => {
+  let resolved = false
+  slicerClient.resolveMachineConfig = (async () => { resolved = true; return H2D_MACHINE_CONFIG }) as typeof slicerClient.resolveMachineConfig
+  const arrangedPath = await writeThreeMf({
+    '3D/3dmodel.model': '<model/>',
+    'Metadata/project_settings.config': JSON.stringify(COMPLETE_H2D_SETTINGS)
+  })
+  const applied = await applyMachineOverridesToProject({
+    workspaceId: 'workspace-1',
+    arrangedPath,
+    fileName: 'project.3mf',
+    slicerTargetId: null,
+    retarget: undefined,
+    machineSettingOverrides: {}
+  })
+  assert.equal(applied, null, 'no record, no request: the ordinary save must not rewrite project settings')
+  assert.equal(resolved, false)
 })
