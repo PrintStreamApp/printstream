@@ -87,7 +87,8 @@ import type { ProcessConfigResolver } from '../ProcessSettingsDialog'
 import type { FilamentConfigResolver } from './FilamentSettingsDialog'
 import { LibraryPlateCardPicker } from '../LibraryPlateSelect'
 import { useEffectiveSlicerDeveloperMode } from '../../lib/slicerDeveloperMode'
-import { useListReorderDrag } from '../../hooks/useListReorderDrag'
+import { useSingleListReorderDrag } from '../../hooks/useListReorderDrag'
+import { ListReorderCaret } from '../ListReorderCaret'
 
 /**
  * Stateful bridge from `SliceFileModal` to the shared `SliceSettingsPanel`.
@@ -543,7 +544,7 @@ export const SliceSettingsPanel = memo(function SliceSettingsPanel({ controller,
   // controller a (fromIndex, insertion gap) pair and the save renumbers the slots. Same pointer
   // state machine as the editor's plate strip, so touch gets hold-to-drag here too.
   const materialRowIndices = useMemo(() => projectFilaments.map((_unused, index) => index), [projectFilaments])
-  const materialDrag = useListReorderDrag({ vertical: true, itemIndices: materialRowIndices, onDrop: onReorderFilament })
+  const materialDrag = useSingleListReorderDrag({ vertical: true, itemIndices: materialRowIndices, onDrop: onReorderFilament })
   const showMaterialReorder = showMaterialEditing && projectFilaments.length > 1
   // What the printer has loaded, for the Add button's menu. Unlike a material ROW there is no slot
   // to prioritize by nozzle yet, so the list is the plain grouped one; empty for a manual-profile
@@ -1260,22 +1261,7 @@ export const SliceSettingsPanel = memo(function SliceSettingsPanel({ controller,
               {/* Insertion caret: drawn in the gap the drop would land in (plate-strip pattern).
                   Rendered last with zeroed margins so the Stack's sibling spacing never shifts a
                   row; positioned in the Stack's content coordinates. */}
-              {materialDrag.drag && materialDrag.drag.caretOffset !== null && (
-                <Box
-                  sx={{
-                    position: 'absolute',
-                    m: '0 !important',
-                    pointerEvents: 'none',
-                    zIndex: 1,
-                    borderRadius: '2px',
-                    bgcolor: 'primary.400',
-                    left: 4,
-                    right: 4,
-                    height: 3,
-                    top: materialDrag.drag.caretOffset - 1.5
-                  }}
-                />
-              )}
+              <ListReorderCaret setCaretElement={materialDrag.setCaretElement} />
             </Stack>
           </Sheet>
       </>)}

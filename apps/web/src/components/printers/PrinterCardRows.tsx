@@ -20,8 +20,10 @@ import {
   filamentBackground,
   filamentTextColor,
   hasLoadedFilament,
+  EMPTY_FILAMENT_SLOT_LABEL,
   resolveCompactFilamentTypeLabel,
-  resolveFilamentDisplay
+  resolveFilamentDisplay,
+  UNKNOWN_FILAMENT_TYPE_LABEL
 } from '../../lib/filamentColor'
 import { amsUnitLetter } from '../../lib/printerTrayMapping'
 import { withDisabledActionReason } from './printerActionHelpers'
@@ -243,7 +245,7 @@ export function AmsUnitRow({
           const slotColorName = filament.name
           const hasColorName = Boolean(slotColorName)
           const centerFilamentType = !hasColorName
-          const filamentTypeLabel = compactFilamentType ?? '?'
+          const filamentTypeLabel = compactFilamentType ?? UNKNOWN_FILAMENT_TYPE_LABEL
           const filamentTypeLabelColor = compactFilamentType ? textColor : 'var(--joy-palette-warning-300)'
           const hasFilament = hasLoadedFilament(slot.filamentType, slot.color, slot.colors, {
             trayInfoIdx: slot.trayInfoIdx,
@@ -421,11 +423,18 @@ export function AmsUnitRow({
                     ) : null}
                   </Stack>
                 ) : (
+                  // The WORD, not a dash: this used to be an em dash as a placeholder glyph, and a
+                  // sweep that removed em dashes from prose turned it into a bare comma on screen.
+                  // A word cannot be mangled that way, says the same thing the slot's tooltip and
+                  // its edit dialog already say, and reads as "A1 Empty" rather than "A1 comma" to
+                  // a screen reader. Distinct from UNKNOWN_FILAMENT_TYPE_LABEL, which is the OTHER
+                  // state: a tray that holds something we could not name.
                   <Typography
                     level="body-xs"
-                    sx={{ color: textColor, fontWeight: 'md' }}
+                    noWrap
+                    sx={{ color: textColor, fontWeight: 'md', opacity: 0.6, px: 0.75, maxWidth: '100%' }}
                   >
-,
+                    {EMPTY_FILAMENT_SLOT_LABEL}
                   </Typography>
                 )}
                 {/* Thin rounded remaining bar across the bottom; the fill
@@ -577,7 +586,7 @@ export function ExternalSpoolRow({
     ?? filament.material
   )
   const textColor = filamentTextColor(filament.colors, spool.color, 'var(--joy-palette-neutral-400)')
-  const filamentTypeLabel = compactFilamentType ?? '?'
+  const filamentTypeLabel = compactFilamentType ?? UNKNOWN_FILAMENT_TYPE_LABEL
   const filamentTypeLabelColor = compactFilamentType ? textColor : 'var(--joy-palette-warning-300)'
   const hasFilament = hasLoadedFilament(spool.filamentType, spool.color, spool.colors, {
     trayInfoIdx: spool.trayInfoIdx,
@@ -658,14 +667,20 @@ export function ExternalSpoolRow({
             boxShadow: isActive ? '0 0 0 1px rgba(122, 162, 255, 0.35), 0 0 18px rgba(122, 162, 255, 0.18)' : 'none'
           }}
         >
+          {/*
+            The same two states the AMS tile distinguishes, and for the same reason: an external
+            spool with nothing on it is EMPTY, not filament we failed to identify. Rendering the
+            type label unconditionally made the empty spool claim "Unknown", which is a definite and
+            wrong statement where the `?` it replaced was merely vague.
+          */}
           <Typography
             level="body-xs"
-            sx={{
-              color: filamentTypeLabelColor,
-              fontWeight: compactFilamentType ? 'md' : 'lg'
-            }}
+            noWrap
+            sx={hasFilament
+              ? { color: filamentTypeLabelColor, fontWeight: compactFilamentType ? 'md' : 'lg', maxWidth: '100%' }
+              : { color: textColor, fontWeight: 'md', opacity: 0.6, px: 0.75, maxWidth: '100%' }}
           >
-            {filamentTypeLabel}
+            {hasFilament ? filamentTypeLabel : EMPTY_FILAMENT_SLOT_LABEL}
           </Typography>
           {remaining != null && remainingFill != null && (
             <Box

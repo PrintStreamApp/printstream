@@ -36,7 +36,7 @@ import type { EditorInstance, EditorPlate, EditorState } from './lib/editorModel
  * manipulation handle. Ours has to be a mode for the same reason -- the move gizmo's arrows and
  * bounding box sit exactly where the thickness shading needs to be read.
  */
-export type GizmoMode = 'translate' | 'rotate' | 'scale' | 'layFace' | 'cut' | 'paintSupports' | 'paintSeam' | 'paintColor' | 'paintFuzzy' | 'brimEars' | 'measure' | 'layerHeight' | 'text'
+export type GizmoMode = 'select' | 'translate' | 'rotate' | 'scale' | 'layFace' | 'cut' | 'meshBoolean' | 'paintSupports' | 'paintSeam' | 'paintColor' | 'paintFuzzy' | 'brimEars' | 'measure' | 'layerHeight' | 'text' | 'svg'
 
 /**
  * Meshes that exist only to be LOOKED at: they are never printed, never part of the object's
@@ -51,6 +51,14 @@ export function isViewportAidMesh(mesh: THREE.Mesh): boolean {
   return Boolean(
     mesh.userData.isHelperVolume || mesh.userData.isFaceHull || mesh.userData.isPrimeTower
     || mesh.userData.isPaintOverlay || mesh.userData.isLayerHeightVisual
+    // Brim ear markers are the one aid tagged by NAME rather than a `userData` flag (they are
+    // plain discs the ear editor raycasts against), so they were invisible to this predicate and
+    // reached every geometry reader that trusts it: `printableMeshBox` had to exclude them a second
+    // time by name, and `collectWorldTriangles` did not exclude them at all -- an object with three
+    // manual ears exported, cut, assembled and booleaned with three 1mm discs welded to its base.
+    // The boolean is what made that fatal rather than merely wrong: the discs are open at the seam
+    // where they meet the model, so the closed-solid gate refused the whole object.
+    || mesh.name === BRIM_EAR_MARKER_NAME
   )
 }
 
@@ -75,6 +83,20 @@ export const BRIM_EAR_MARKER_COLOR = 0xeec25a
 
 /** Viewport meshes for added part volumes (negative parts, modifiers, blockers). */
 export const ADDED_PART_MESH_NAME = 'addedPartVolume'
+
+/**
+ * Whether a mesh belongs to a volume ADDED to an object this session, as opposed to the object's
+ * own geometry.
+ *
+ * Both levels are tested because the volume is a named mesh that may carry children of its own
+ * (a paint overlay), and a walk that only checks the mesh lets those through. Distinct from
+ * {@link isViewportAidMesh}: an added part is real geometry that prints, so callers skip it only
+ * when they specifically mean "the object's own body" -- where the text tool lands a glyph, and
+ * which surface a boolean's body operand contributes.
+ */
+export function isAddedPartMesh(mesh: THREE.Object3D): boolean {
+  return mesh.name === ADDED_PART_MESH_NAME || mesh.parent?.name === ADDED_PART_MESH_NAME
+}
 
 /**
  * The part identity tag on a render group, whichever kind it is: `partRef` for a part baked into
@@ -143,6 +165,31 @@ export const PAINT_CHANNEL_SPECS: Record<TrianglePaintChannel, {
 }
 
 /**
+ * Whether a painted-triangle overlay should be drawn, given the tool and selection.
+ *
+ * Colour paint always shows: it IS the print's colour, not an annotation. The other channels are
+ * annotations over a very dense overlay mesh (100k+ leaf sub-triangles at the 0.2mm split limit), so
+ * they show only for the SELECTED object while their own tool is active, matching BambuStudio.
+ *
+ * ONE rule, because it is applied from three places that must agree: the scene's per-frame sync, the
+ * paint hook's overlay rebuild, and the plate build's initial seed. The seed was the one that did
+ * not apply it -- a freshly built overlay simply inherited three's default `visible = true` -- so
+ * every scene rebuild flashed the painted channels over the model until the sync next ran, which it
+ * only does when the tool, selection or drag state CHANGES. On a project with fuzzy-skin paint that
+ * is a full-model purple flash on every delete, undo, or part edit.
+ *
+ * Callers with extra reasons to hide everything (a live drag, layer-height editing) apply those on
+ * top; this is the base rule, not the whole answer.
+ */
+export function paintOverlayVisible(
+  channel: TrianglePaintChannel,
+  activeChannel: TrianglePaintChannel | null,
+  isSelectedGroup: boolean
+): boolean {
+  return channel === 'color' || (channel === activeChannel && isSelectedGroup)
+}
+
+/**
  * EVERY paint channel, derived from {@link PAINT_CHANNEL_SPECS} rather than written out.
  *
  * Two loops used to hardcode `['supports', 'seam', 'color']`: the overlay refresh that undo/redo
@@ -159,6 +206,24 @@ export const TRIANGLE_PAINT_CHANNELS = Object.keys(PAINT_CHANNEL_SPECS) as Trian
  * measure) detaches the gizmo and drives its own floating panel instead. Single source of
  * truth for both the detach decision and whether the readout renders, so the two can't drift.
  */
+/**
+ * The mode the editor rests in: pick things, move nothing.
+ *
+ * Ports BambuStudio's `GLGizmosManager::Undefined`, which is what its manager initialises to
+ * (`GLGizmosManager.cpp:139`) and what clicking the active tool toggles back to (`:366`) -- so
+ * Studio also opens a project with NO gizmo attached, and groups that state with Move/Rotate/Scale
+ * for everything about selection (`is_allow_select_all`, `is_allow_multi_select_parts_or_objects`,
+ * `:709-726`). We diverge on ONE point, deliberately: Studio still lets you drag an object's body
+ * with no gizmo active (its drag test is `!any_gizmo_active || !evt.CmdDown()`,
+ * `GLCanvas3D.cpp:5807`), so its no-gizmo state means "no handles drawn" rather than "nothing
+ * moves". Here a drag orbits the camera instead, because the point of the mode is to click around
+ * a dense plate without nudging anything -- Move is one click away when you want it.
+ *
+ * `translate` used to be the resting state, which meant every selected object always wore the move
+ * arrows and any stray drag displaced it.
+ */
+export const RESTING_GIZMO_MODE = 'select' as const
+
 /** The three modes that put the move/rotate/scale gizmo on the selection and show its readout. */
 export type TransformGizmoMode = Extract<GizmoMode, 'translate' | 'rotate' | 'scale'>
 
@@ -168,19 +233,65 @@ export function isTransformGizmoMode(mode: GizmoMode): mode is TransformGizmoMod
 }
 
 /**
+ * Modes in which pointing at something still SELECTS it: the resting mode plus the three transform
+ * gizmos.
+ *
+ * BambuStudio spells this exact set out three separate times over `Undefined | Move | Rotate |
+ * Scale` (`is_allow_select_all`, `is_allow_multi_select_parts_or_objects`,
+ * `is_allow_x_ray_in_assembly`, `GLGizmosManager.cpp:709-726`). Every other mode ACTS on whatever it
+ * is pointed at -- paint, cut, place-on-face -- so a click there is the tool firing, not a pick.
+ *
+ * A predicate rather than the condition written out per site: it WAS written out, and adding the
+ * resting mode to the multi-selection site while missing the part drill-down is exactly how
+ * clicking a part inside a selected object silently stopped working.
+ */
+export function allowsSelectionPicking(mode: GizmoMode): boolean {
+  return mode === RESTING_GIZMO_MODE || isTransformGizmoMode(mode)
+}
+
+/** What a press of Escape should do, given the editor's current state. */
+export type EditorEscapeAction = 'reset-tool' | 'clear-selection' | 'close'
+
+/**
+ * Decide Escape's effect: back out of the tool, then out of the selection, then out of the editor.
+ *
+ * Split out as a pure function because its ONE caller is not where you would look for it. Escape
+ * never reaches the editor's window-level shortcut handler: `EditorView` renders inside a Joy
+ * `Modal`, and MUI's modal hook calls `stopPropagation()` on Escape ("Swallow the event, in case
+ * someone is listening for the escape key on the body" -- `@mui/base/unstable_useModal`), so the
+ * only place it arrives is the Modal's own `onClose`. Handling it there is not a workaround but the
+ * better position: MUI fires `onClose` only for the TOP modal, so a settings dialog stacked over the
+ * editor keeps its own Escape and this never runs, which a capture-phase listener would have had to
+ * re-derive by hand.
+ *
+ * Mirrors BambuStudio's two stages, where the gizmo manager gets first refusal and closes the open
+ * gizmo while KEEPING the selection (`GLGizmosManager.cpp:1132-1142`), and only then does
+ * `GLCanvas3D`'s `case WXK_ESCAPE: deselect_all()` run (`GLCanvas3D.cpp:4607`). The third stage is
+ * ours: Studio's canvas is a window, ours is a dialog, and a dialog that ignores Escape is worse
+ * than one that closes.
+ */
+export function editorEscapeAction(mode: GizmoMode, hasSelection: boolean): EditorEscapeAction {
+  if (mode !== RESTING_GIZMO_MODE) return 'reset-tool'
+  if (hasSelection) return 'clear-selection'
+  return 'close'
+}
+
+/**
  * Modes that are INERT without a selection, and so must fall back when one is cleared.
  *
  * Each of these drives a floating panel bound to the selected object and attaches no gizmo. With
  * nothing selected they render nothing at all, leaving the editor in a mode with no panel, no gizmo
  * and no way out except clicking an object: the rail still shows the tool lit, but disabled. The
- * transform modes are excluded because `translate` is the resting state and is harmless with an
- * empty selection; `measure` and `text` are excluded because they genuinely work without one --
- * measure picks points on any object, and text with nothing selected adds its OWN model, which is
- * the only way to letter a plate that has no host. Text was not exempt, so opening the tool with an
- * empty selection bounced straight back to Move and the tool appeared to close itself.
+ * resting mode and the transform modes are excluded because they are harmless with an empty
+ * selection; `measure`, `text` and `svg` are excluded because they genuinely work without one --
+ * measure picks points on any object, and text or artwork with nothing selected adds its OWN model,
+ * which is the only way to letter or badge a plate that has no host. Text was not exempt, so opening
+ * the tool with an empty selection bounced straight back to Move and the tool appeared to close
+ * itself.
  */
 export function isSelectionOnlyGizmoMode(mode: GizmoMode): boolean {
-  return !isTransformGizmoMode(mode) && mode !== 'measure' && mode !== 'text'
+  return mode !== RESTING_GIZMO_MODE && !isTransformGizmoMode(mode)
+    && mode !== 'measure' && mode !== 'text' && mode !== 'svg'
 }
 
 export function paintChannelForGizmoMode(mode: GizmoMode): TrianglePaintChannel | null {
@@ -419,10 +530,11 @@ export function printableMeshBox(object: THREE.Object3D, precise = true): THREE.
     // (`isFaceHull`), the prime tower, and brim-ear markers. Including the face hull was the
     // "lay flat leaves the part floating" bug: the hull's z=0 box made restObjectOnBed think the
     // object already touched the bed, so it never dropped the freshly rotated geometry.
+    // Brim ear markers included: `isViewportAidMesh` now knows them, so the second by-name check
+    // that used to live here is gone. Paint overlays are covered by the same predicate, which
+    // matters for more than correctness here: they can be 100k+ triangles, and walking them
+    // per-vertex is what made dragging a painted part hitch.
     if (isViewportAidMesh(mesh)) return
-    // Paint overlays are a lifted visual aid (and can be 100k+ triangles), never part of the
-    // printable bounds, and walking them per-vertex here is what made dragging a painted part hitch.
-    if (mesh.name === BRIM_EAR_MARKER_NAME) return
     // `precise: true` walks actual vertices. Required for rotated meshes: the cheap path
     // transforms the mesh's LOCAL AABB, whose corners rotate BELOW the real geometry, so the
     // box dipped under the mesh and rested the object floating (the "handle" bug). Callers
@@ -900,7 +1012,15 @@ export function setObjectPrintedStyle(object: THREE.Object3D, printed: boolean):
  * a cup, which BambuStudio also exposes. Returns null if the object has too few
  * points. Tag it with `isFaceHull` so picking can target it.
  */
-/** Convex hull of all the group's mesh vertices, in the group's local frame. */
+/**
+ * Convex hull of the group's PRINTED mesh vertices, in the group's local frame.
+ *
+ * Viewport aids are excluded on the same rule as {@link printableMeshBox}: this hull decides where
+ * auto-orient rests the object and which faces lay-flat offers, so a helper volume, a brim-ear
+ * marker or a paint overlay reaching it changes the resulting ORIENTATION. It filtered only its own
+ * previous overlay (`isFaceHull`), which meant adding a support blocker silently moved where the
+ * object came to rest and made the blocker's own faces clickable as "lay this face down".
+ */
 export function buildHullGeometry(group: THREE.Object3D): THREE.BufferGeometry | null {
   group.updateMatrixWorld(true)
   const toLocal = new THREE.Matrix4().copy(group.matrixWorld).invert()
@@ -908,7 +1028,7 @@ export function buildHullGeometry(group: THREE.Object3D): THREE.BufferGeometry |
   const vertex = new THREE.Vector3()
   group.traverse((child) => {
     const mesh = child as THREE.Mesh
-    if (!mesh.isMesh || mesh.userData.isFaceHull) return
+    if (!mesh.isMesh || isViewportAidMesh(mesh)) return
     const position = mesh.geometry.getAttribute('position')
     if (!position) return
     for (let i = 0; i < position.count; i += 1) {

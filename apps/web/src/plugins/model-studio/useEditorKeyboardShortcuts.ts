@@ -20,7 +20,7 @@
  */
 import { useEffect, useRef, type MutableRefObject } from 'react'
 import { duplicateInstance, type EditorInstance, type EditorPlate } from './lib/editorModel'
-import type { GizmoMode } from './editorGeometry'
+import { RESTING_GIZMO_MODE, type GizmoMode } from './editorGeometry'
 
 /** True when the keystroke is being typed into a field and must not trigger a shortcut. */
 function isTypingTarget(target: EventTarget | null): boolean {
@@ -35,6 +35,15 @@ export interface EditorKeyboardShortcutsInput {
   enabledRef: MutableRefObject<boolean>
   /** The primary selected instance key, or null. */
   selectedKeyRef: MutableRefObject<string | null>
+  /**
+   * Whether a PART (of either kind) is selected, which `selectedKeyRef` cannot answer.
+   *
+   * The bulk part path nulls `selectedKey` on purpose -- an object selection and a part selection
+   * are different modes and never coexist -- so gating Delete on the object key alone made the key
+   * do nothing over a visible multi-part selection. Only Delete consults this: copy, cut and
+   * duplicate act on OBJECTS, and there is no part clipboard for them to act on.
+   */
+  partSelectedRef: MutableRefObject<boolean>
   /** The active plate (for select-all / paste target / clipboard reads). */
   activePlateRef: MutableRefObject<EditorPlate | null>
   /** Duplicate the selection (whole multi-selection when the key is a member). */
@@ -42,11 +51,13 @@ export interface EditorKeyboardShortcutsInput {
   /** BambuStudio's Clone (Ctrl+K): prompt for a copy count. Async; the hook does not await it. */
   onCloneWithCount: (key: string) => void
   /** Delete the selection (whole multi-selection when the key is a member). */
-  onDelete: (key: string) => void
+  /**
+   * Delete what is selected. The key is null when a PART selection is what is live, because that
+   * path deliberately clears the object selection: see {@link EditorKeyboardShortcutsInput.partSelectedRef}.
+   */
+  onDelete: (key: string | null) => void
   /** Select every instance on the active plate. */
   onSelectAll: () => void
-  /** Clear the selection. */
-  onClearSelection: () => void
   /** Add instances (already positioned at free spots) to the active plate, as one undoable step. */
   onPasteInstances: (instances: EditorInstance[]) => void
   /** All instance keys currently in the selection (primary + extras), for copy/cut. */
@@ -54,6 +65,8 @@ export interface EditorKeyboardShortcutsInput {
   undoRef: MutableRefObject<() => void>
   redoRef: MutableRefObject<() => void>
   setGizmoModeRef: MutableRefObject<(mode: GizmoMode) => void>
+  /** The live tool mode, so the shortcuts can TOGGLE rather than only set (see the M/R/S case). */
+  gizmoModeRef: MutableRefObject<GizmoMode>
 }
 
 export function useEditorKeyboardShortcuts(input: EditorKeyboardShortcutsInput): void {
@@ -68,6 +81,10 @@ export function useEditorKeyboardShortcuts(input: EditorKeyboardShortcutsInput):
     const onKeyDown = (event: KeyboardEvent) => {
       const api = ref.current
       if (!api.enabledRef.current) return
+      /** Press the key for the tool you are already in and you get back to resting, as in Studio. */
+      const toggleGizmoMode = (mode: GizmoMode) => {
+        api.setGizmoModeRef.current(api.gizmoModeRef.current === mode ? RESTING_GIZMO_MODE : mode)
+      }
       if (isTypingTarget(event.target)) return
 
       const ctrl = event.ctrlKey || event.metaKey
@@ -127,27 +144,29 @@ export function useEditorKeyboardShortcuts(input: EditorKeyboardShortcutsInput):
       switch (event.key) {
         case 'Delete':
         case 'Backspace':
-          if (!hasSelection) return
+          if (!hasSelection && !api.partSelectedRef.current) return
           event.preventDefault()
           api.onDelete(selectedKey)
           return
-        case 'Escape':
-          if (!hasSelection) return
-          // Do not preventDefault: a dialog/menu may also want Escape to close.
-          api.onClearSelection()
-          return
-        // BambuStudio gizmo shortcuts (only meaningful with a selection).
+        // Escape is deliberately NOT here. It never reaches this listener: the editor renders inside
+        // a Joy `Modal`, which calls `stopPropagation()` on Escape before it can bubble to `window`.
+        // It is handled in `EditorView`'s `Modal.onClose` instead -- see `editorEscapeAction`.
+        // BambuStudio gizmo shortcuts (only meaningful with a selection). They TOGGLE, like the
+        // rail and like Studio: `handle_shortcut` ends in `open_gizmo` (`GLGizmosManager.cpp:494`),
+        // the same call the toolbar makes, and `open_gizmo` flips to `Undefined` when the requested
+        // gizmo is already current (`:366`). Written as plain sets, the keyboard was the one
+        // affordance that could never reach the resting mode.
         case 'm':
         case 'M':
-          if (hasSelection) api.setGizmoModeRef.current('translate')
+          if (hasSelection) toggleGizmoMode('translate')
           return
         case 'r':
         case 'R':
-          if (hasSelection) api.setGizmoModeRef.current('rotate')
+          if (hasSelection) toggleGizmoMode('rotate')
           return
         case 's':
         case 'S':
-          if (hasSelection) api.setGizmoModeRef.current('scale')
+          if (hasSelection) toggleGizmoMode('scale')
           return
         default:
           return

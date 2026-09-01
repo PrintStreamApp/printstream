@@ -296,6 +296,9 @@ export function applyObjectClones(
       ...(edit.partTypeChanges ? { partTypeChanges: edit.partTypeChanges.map((entry) => resolvePartSlot(entry, clones)) } : {}),
       ...(edit.partTransforms ? { partTransforms: edit.partTransforms.map((entry) => resolvePartSlot(entry, clones)) } : {}),
       ...(edit.removedParts ? { removedParts: edit.removedParts.map((entry) => resolvePartSlot(entry, clones)) } : {}),
+      // The ORDER is a sequence of the SOURCE's base ordinals, and the copy's volumes are a
+      // deep copy carrying those same ordinals, so only the object id moves here.
+      ...(edit.partOrder ? { partOrder: edit.partOrder.map((entry) => resolvePartSlot(entry, clones)) } : {}),
       ...(edit.supportPaint ? { supportPaint: edit.supportPaint.map((entry) => resolvePartMesh(entry, clones)) } : {}),
       ...(edit.seamPaint ? { seamPaint: edit.seamPaint.map((entry) => resolvePartMesh(entry, clones)) } : {}),
       ...(edit.colorPaint ? { colorPaint: edit.colorPaint.map((entry) => resolvePartMesh(entry, clones)) } : {}),

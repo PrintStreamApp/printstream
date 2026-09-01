@@ -80,6 +80,56 @@ test('applySupportPaintBrush paints large triangles it touches, splitting to the
   assert.ok(codes[0]!.length > 1, 'expected a split-tree code, not a whole-triangle nibble')
 })
 
+// A strip of five small triangles 1mm apart along X, plus one parked 3mm off to the side.
+// Small enough that a 0.4mm brush sitting on one reaches no other, which is what makes the
+// difference between a dab and a sweep visible at all.
+const STRIP_POSITIONS = new Float32Array([
+  ...[0, 1, 2, 3, 4].flatMap((i) => [i, 0, 0, i + 0.2, 0, 0, i, 0.2, 0]),
+  2, 3, 0, 2.2, 3, 0, 2, 3.2, 0
+])
+const STRIP_ASIDE = 5
+const stripDab = (i: number) => ({ x: i + 0.2 / 3, y: 0.2 / 3, z: 0 })
+
+test('a stroke SWEEPS between its samples, so a fast drag paints an unbroken band', () => {
+  // A pointermove reports where the pointer IS, not the path it took: at any real drag speed
+  // consecutive events land far apart, and dabbing at each leaves the event rate showing through
+  // the stroke as gaps. BambuStudio paints the volume swept between consecutive positions
+  // (`DoublePointCursor`) rather than a cursor at each, which is what this pins.
+  const scan = buildTriangleScanData(STRIP_POSITIONS)
+  const brush = { scan, direction: { x: 0, y: 0, z: -1 }, radius: 0.4, mode: 'enforcer' as const }
+
+  // The gap: two dabs 4mm apart reach only the triangles they sit on.
+  const dabbed: Record<number, string> = {}
+  applySupportPaintBrush({ ...brush, codes: dabbed, point: stripDab(0) })
+  applySupportPaintBrush({ ...brush, codes: dabbed, point: stripDab(4) })
+  assert.deepEqual(Object.keys(dabbed).sort(), ['0', '4'], 'the fixture must leave a gap to close')
+
+  for (const shape of ['sphere', 'circle'] as const) {
+    const codes: Record<number, string> = {}
+    applySupportPaintBrush({ ...brush, codes, shape, point: stripDab(0) })
+    applySupportPaintBrush({ ...brush, codes, shape, point: stripDab(4), previousPoint: stripDab(0) })
+    assert.deepEqual(Object.keys(codes).map(Number).sort((a, b) => a - b), [0, 1, 2, 3, 4],
+      `the ${shape} brush left gaps between the stroke's samples`)
+    // The inverse, and the whole reason it is a capsule and not a wider brush: the sweep must not
+    // reach geometry that is merely somewhere near the stroke.
+    assert.equal(codes[STRIP_ASIDE], undefined, `the ${shape} sweep painted a triangle off the stroke`)
+  }
+})
+
+test('a stroke sample that has not moved dabs exactly as it would with no predecessor', () => {
+  // The first sample of a stroke, one whose predecessor missed the model, and one whose pointer
+  // simply has not moved all arrive here; a zero-length capsule has no axis direction, so the
+  // guard has to fall back to the plain cursor rather than divide by it.
+  const scan = buildTriangleScanData(STRIP_POSITIONS)
+  const brush = { scan, direction: { x: 0, y: 0, z: -1 }, radius: 0.4, mode: 'enforcer' as const }
+  const plain: Record<number, string> = {}
+  const degenerate: Record<number, string> = {}
+  applySupportPaintBrush({ ...brush, codes: plain, point: stripDab(2) })
+  applySupportPaintBrush({ ...brush, codes: degenerate, point: stripDab(2), previousPoint: stripDab(2) })
+  assert.deepEqual(degenerate, plain)
+  assert.deepEqual(Object.keys(plain), ['2'])
+})
+
 test('applySupportPaintBrush overwrites other paint and the eraser removes it', () => {
   const scan = buildTriangleScanData(POSITIONS)
   const codes: Record<number, string> = { 0: SUPPORT_PAINT_ENFORCER_CODE, 1: SUPPORT_PAINT_BLOCKER_CODE }

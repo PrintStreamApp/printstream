@@ -84,3 +84,102 @@ test('every listed sidecar names a format the remapper implements', () => {
     assert.ok(['xml', 'profileText'].includes(sidecar.format), `${sidecar.path} has no rewriter`)
   }
 })
+
+/**
+ * `cut_information.xml` names a VOLUME as well as an object, and a part removal or reorder permutes
+ * that index without necessarily moving any object.
+ */
+const CUT_INFO_CONNECTORS = [
+  '<?xml version="1.0" encoding="utf-8"?>',
+  '<objects>',
+  ' <object id="1">',
+  '  <cut_id id="7" check_sum="1" connectors_cnt="3"/>',
+  '  <connectors>',
+  '   <connector volume_id="0" type="0" radius="2" height="3" r_tolerance="0" h_tolerance="0"/>',
+  '   <connector volume_id="1" type="0" radius="2" height="3" r_tolerance="0" h_tolerance="0"/>',
+  '   <connector volume_id="2" type="0" radius="2" height="3" r_tolerance="0" h_tolerance="0"/>',
+  '  </connectors>',
+  ' </object>',
+  '</objects>'
+].join('\n')
+
+const connectorVolumes = (xml: string): number[] =>
+  [...xml.matchAll(/<connector\b[^>]*\bvolume_id="(\d+)"/g)].map((match) => Number(match[1]))
+
+test('a part REORDER remaps the connector volume ids even though no object moved', () => {
+  // The object order is identical, so the old early-return left every connector on the volume that
+  // slid into its slot. Layout [2, 0, 1] means old volume 2 is now first.
+  const remapped = remapObjectOrdinalSidecar(CUT_INFO_CONNECTORS, [5], [5], 'xml', new Map([[5, [2, 0, 1]]]))
+  assert.deepEqual(connectorVolumes(remapped), [1, 2, 0])
+})
+
+test('a connector whose volume was removed is dropped, and the count is left alone', () => {
+  // Volume 1 is gone: dropping is the same rule a stale OBJECT entry follows, because renumbering
+  // would hand this connector to whichever volume took the slot.
+  //
+  // `connectors_cnt` does NOT follow, though it reads like a count of the list above it. See the
+  // identity test below.
+  const remapped = remapObjectOrdinalSidecar(CUT_INFO_CONNECTORS, [5], [5], 'xml', new Map([[5, [0, 2]]]))
+  assert.deepEqual(connectorVolumes(remapped), [0, 1])
+  assert.match(remapped, /connectors_cnt="3"/)
+})
+
+test('connectors_cnt is cut-group IDENTITY, so nothing here may rewrite it', () => {
+  // The one that made this worth pinning. `connectors_cnt` is not a count of the block's
+  // `<connector>` elements: it is written from `object->cut_id.connectors_cnt()`, a CUMULATIVE
+  // counter incremented once per cut and shared by every half of a cut group, and it is compared
+  // field-for-field by `CutObjectBase::is_equal` (id + check_sum + connectors_cnt) -- which is how
+  // BambuStudio finds an object's cut siblings for "delete all connectors".
+  //
+  // So the two numbers legitimately diverge: a twice-cut half can list 2 connectors and carry 4.
+  // Rewriting it to what we counted desynchronises this half from its sibling, and a PURE REORDER
+  // (nothing removed, nothing that could justify a new count) is enough to do it.
+  const twiceCut = CUT_INFO_CONNECTORS
+    .replace('connectors_cnt="3"', 'connectors_cnt="4"')
+    .replace(/[ \t]*<connector volume_id="2"[^>]*\/>\n/, '')
+  const remapped = remapObjectOrdinalSidecar(twiceCut, [5], [5], 'xml', new Map([[5, [1, 0]]]))
+  assert.deepEqual(connectorVolumes(remapped), [1, 0], 'the volume ids themselves must still remap')
+  assert.match(remapped, /connectors_cnt="4"/)
+})
+
+test('an object move and a volume move in one save both land', () => {
+  // Object 5 goes from ordinal 1 to ordinal 2 AND its volumes are reordered.
+  const remapped = remapObjectOrdinalSidecar(CUT_INFO_CONNECTORS, [5, 9], [9, 5], 'xml', new Map([[5, [2, 0, 1]]]))
+  assert.match(remapped, /<object id="2">/)
+  assert.deepEqual(connectorVolumes(remapped), [1, 2, 0])
+})
+
+test('no layout for an object leaves its connectors alone', () => {
+  assert.equal(remapObjectOrdinalSidecar(CUT_INFO_CONNECTORS, [5], [5], 'xml', new Map([[9, [1, 0]]])), CUT_INFO_CONNECTORS)
+  assert.equal(remapObjectOrdinalSidecar(CUT_INFO_CONNECTORS, [5], [5], 'xml', new Map()), CUT_INFO_CONNECTORS)
+  assert.equal(remapObjectOrdinalSidecar(CUT_INFO_CONNECTORS, [5], [5], 'xml'), CUT_INFO_CONNECTORS)
+})
+
+test('a cut_id with no connectors list keeps its count', () => {
+  // `connectors_cnt` on a bare `<cut_id>` counts records that are not in this block; rewriting it
+  // to the zero we matched would unregister every one of them. CUT_INFO (the file's own fixture)
+  // is exactly that shape.
+  // CUT_INFO's blocks are ordinals 1 and 3, so the order needs three objects to keep both.
+  const remapped = remapObjectOrdinalSidecar(CUT_INFO, [5, 9, 11], [5, 9, 11], 'xml', new Map([[5, [1, 0]]]))
+  assert.match(remapped, /connectors_cnt="4"/)
+  assert.match(remapped, /connectors_cnt="2"/)
+})
+
+test('a connector written with an explicit close tag is remapped, not just self-closing ones', () => {
+  const explicit = CUT_INFO_CONNECTORS
+    .replace('<connector volume_id="0" type="0" radius="2" height="3" r_tolerance="0" h_tolerance="0"/>',
+      '<connector volume_id="0" type="0" radius="2" height="3" r_tolerance="0" h_tolerance="0"></connector>')
+  const remapped = remapObjectOrdinalSidecar(explicit, [5], [5], 'xml', new Map([[5, [2, 0, 1]]]))
+  assert.deepEqual(connectorVolumes(remapped), [1, 2, 0])
+  assert.match(remapped, /connectors_cnt="3"/)
+})
+
+test('brim ears follow their object, like every other positional sidecar', () => {
+  // Authored only when the session touched an ear, so an ordinary reorder streams the file through
+  // and the ordinals underneath it move. That is what put an object's ears on a different model.
+  const brim = 'brim_points_format_version=1\nobject_id=1|1 2 3 4\nobject_id=2|5 6 7 8'
+  const remapped = remapObjectOrdinalSidecar(brim, [5, 9], [9, 5], 'profileText')
+  assert.match(remapped, /^brim_points_format_version=1$/m)
+  assert.match(remapped, /^object_id=2\|1 2 3 4$/m)
+  assert.match(remapped, /^object_id=1\|5 6 7 8$/m)
+})

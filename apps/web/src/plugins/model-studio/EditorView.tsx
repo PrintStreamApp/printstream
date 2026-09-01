@@ -62,6 +62,7 @@ import {
   LIBRARY_DOWNLOAD_PERMISSION,
   LIBRARY_UPLOAD_PERMISSION,
   PER_OBJECT_PROCESS_KEYS,
+  canonicalThreeMfPartSubtype,
   extractErrorMessage,
   isNonRenderableThreeMfPartSubtype,
   threeMfPartSubtypeCarriesFilament,
@@ -175,13 +176,21 @@ import {
   canRemoveParts,
   reindexPlates,
   mintPlateId,
+  normalizePlateObjectOrder,
+  moveObjectBefore,
+  movePartBefore,
   movePlate,
   addedPartHostId,
   assignInstanceFilament,
   dropAddedPartsForReplacedHost,
   makeInstanceIndependent,
+  BODY_PART_INDEX,
+  addedPartPaintKey,
+  bodyPaintHostId,
+  bodyPartSubtype,
   effectiveAddedParts,
   effectivePartFilamentId,
+  instanceVolumeRows,
   effectiveHeightRanges,
   effectiveLayerHeightProfile,
   type EditorHeightRange,
@@ -207,7 +216,6 @@ import {
 } from './lib/editorModel'
 import { helperVolumeSpec } from './lib/helperVolumes'
 import { defaultPlateName, plateDisplayName, resolvePlateRename } from './lib/plateName'
-import { AddedPartPanel } from './AddedPartPanel'
 import { LazyDialogFallback } from '../../components/LazyDialogFallback'
 import { FullScreenDialogButton } from '../../components/DialogPresentationToggles'
 import { dialogPresentationProps } from '../../lib/dialogPresentation'
@@ -242,7 +250,7 @@ import {
 import {
   buildObjectStl,
   buildObjectsStl,
-  buildPartsStl,
+  buildSelectedPartsStl,
   groupHasExcludedVolumes,
   partsExportName,
   stlExportBaseName,
@@ -250,6 +258,7 @@ import {
 } from './lib/objectExport'
 import {
   ADDED_PART_MESH_NAME,
+  isAddedPartMesh,
   TEXT_HIGHLIGHT_COLORS,
   type TextInteraction,
   partGroupRef,
@@ -276,8 +285,11 @@ import {
   largestHullFaceNormal,
   nextPaint,
   PAINT_CHANNEL_SPECS,
+  paintOverlayVisible,
   TRIANGLE_PAINT_CHANNELS,
+  allowsSelectionPicking,
   isSelectionOnlyGizmoMode,
+  RESTING_GIZMO_MODE,
   isViewportAidMesh,
   isTransformGizmoMode,
   printableMeshBox,
@@ -288,6 +300,7 @@ import {
   ROTATE_SNAP_FINE,
   rotorOf,
   setObjectPrintedStyle,
+  editorEscapeAction,
   syncBrimEarMarkerMatrices,
   touchCacheEntry,
   zoneRequiredNozzle,
@@ -307,10 +320,9 @@ import {
   ObjectList,
   type ObjectListPerObject,
   PlateThumbnailStrip,
-  SaveSplitButton,
-  SliceSplitButton,
+  SaveMenuButton,
+  SliceMenuButton,
   RAIL_HOVER_LABEL_SX,
-  TOOL_PANEL_ANCHOR,
   LiveTransformPanel
 } from './editorPanels'
 import { PlateFilamentChangesSection, PlatePausesSection } from '../../components/library/PlateGcodeSections'
@@ -319,17 +331,30 @@ import { BrimEarsPanel } from './BrimEarsPanel'
 import { CutToolPanel } from './CutToolPanel'
 import { HeightRangesDialog } from './HeightRangesDialog'
 import { LayerHeightPanel } from './LayerHeightPanel'
+import { SvgToolPanel, type SvgToolValue } from './SvgToolPanel'
+import { buildSvgPieceSoups, detectSvgBackgroundPiece, parseSvgShapes, svgHeightMm, svgObjectFrameShift, type ParsedSvg } from './lib/svgGeometry'
 import { EditorContextMenu } from './EditorContextMenu'
 import { EditorPartContextMenu } from './EditorPartContextMenu'
+import { isInsideContextMenu, type ContextMenuAnchor } from './contextMenuChrome'
+import { EDITOR_CHROME_Z_INDEX, TOOL_PANEL_Z_INDEX, VIEWPORT_AID_Z_INDEX } from './editorLayers'
 import { selectionPivot } from './lib/multiSelectionTransform'
 import {
+  hasEditorSelection,
   prunePartSelection,
+  partRowMenuSelection,
   rangePartSelection,
   rangeSlice,
+  samePartMember,
+  samePartRef,
+  selectionHasMember,
   togglePartInSelection,
+  type PartMember,
+  type PartRef,
   type PartSelection
 } from './lib/selectionModel'
 import { MeasurePanel } from './MeasurePanel'
+import { MeshBooleanPanel } from './MeshBooleanPanel'
+import { useEditorMeshBoolean } from './useEditorMeshBoolean'
 import { PaintToolPanel } from './PaintToolPanel'
 import { useEditorHistory } from './useEditorHistory'
 import { useEditorPaint } from './useEditorPaint'
@@ -685,6 +710,43 @@ const THUMBNAIL_RECOLOUR_DEBOUNCE_MS = 250
  * by three flows (add a model to the plate, replace a model's geometry, add a part inside a model),
  * so the pending request decides where the staged import lands. Absent = add to the plate.
  */
+/**
+ * Above this many drawn shapes an SVG comes in as ONE part.
+ *
+ * Splitting is for logos, where a handful of shapes each want their own material; an illustration
+ * with hundreds of paths would bury the object list and make the editor unusable rather than more
+ * controllable.
+ */
+const SVG_MAX_PARTS = 24
+
+/** Concatenate triangle soups that already share a coordinate frame. */
+/**
+ * Every part of an object as selection members, both kinds, in the order the sidebar lists them:
+ * the parts baked into the project's 3MF, then the volumes added this session.
+ *
+ * The ORDER is load-bearing. A shift-range slices this list, so listing the volumes anywhere other
+ * than where the rows actually appear would select a different set than the one dragged across.
+ */
+function ownerPartMembers(instance: EditorInstance, state: EditorState | null): PartMember[] {
+  const added = effectiveAddedParts(state, instance)
+  return [
+    ...(instanceVolumeRows(instance, added.length).showBodyRow ? [{ kind: 'body' } as PartMember] : []),
+    ...instance.parts.map((part): PartMember => ({ kind: 'baked', partIndex: part.partIndex })),
+    ...added.map((part): PartMember => ({ kind: 'added', key: part.key }))
+  ]
+}
+
+function mergeSoups(soups: Float32Array[]): Float32Array {
+  if (soups.length === 1) return soups[0]!
+  const merged = new Float32Array(soups.reduce((total, soup) => total + soup.length, 0))
+  let at = 0
+  for (const soup of soups) {
+    merged.set(soup, at)
+    at += soup.length
+  }
+  return merged
+}
+
 type ModelSourceRequest =
   | { kind: 'replace'; key: string }
   | { kind: 'addPart'; key: string; subtype: SceneEditPartSubtype }
@@ -771,9 +833,21 @@ function EditorView({
   // Materials come through the EditorMaterials seam, not off the slice controller directly, so a
   // host that has no slice dialog (the public editor, which opens a file from disk) can supply them
   // from the project's own filament list. See `lib/editorMaterials.ts`.
+  // Keyed on the CONTENT this reads, not on `sliceConfig`'s identity. The controller is built as a
+  // fresh literal on every render of the host dialog, so an identity dep re-derives `materials` on
+  // every one of those renders -- a new object and a new colour map each time, which is an unstable
+  // prop straight into the memoised `ObjectList` and defeats it exactly when the host is busiest.
+  // The live object is still read inside the body; only the signature decides when to recompute.
+  const materialsSignature = JSON.stringify([
+    sliceConfig?.projectFilaments ?? null,
+    sliceConfig?.filamentColors ?? null,
+    sliceConfig?.filamentMaterialOptionIds ?? null,
+    sliceConfig?.materialOptions ?? null
+  ])
   const materials = useMemo(
     () => materialsProp ?? editorMaterialsFromSliceConfig(sliceConfig),
-    [materialsProp, sliceConfig]
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [materialsProp, materialsSignature]
   )
   // The api store is stateless and shared; a host-supplied one owns its own lifetime (the caller
   // disposes it), so this must not create or dispose anything itself.
@@ -845,14 +919,15 @@ function EditorView({
   /**
    * Attach this session's (or the source mesh's) paint overlays to a freshly built part mesh.
    *
-   * Shared by the in-project and IMPORT render paths so an import's solids show paint exactly like
-   * a baked part's, they are painted through the same state map, keyed by the model's editor
-   * identity, and emitted as `importPaint` at bake time.
+   * Shared by the in-project, IMPORT and session-added render paths so every printed mesh shows
+   * paint the same way: they are painted through the same state map and emitted at bake time, and
+   * the only thing that differs is which KEY names the mesh, which is why the caller supplies it
+   * rather than the three identities being pulled apart in here.
    */
-  const seedPartPaintOverlays = useCallback((mesh: THREE.Mesh, objectId: number, componentObjectId: number) => {
+  const seedPaintOverlays = useCallback((mesh: THREE.Mesh, paintKey: string, instanceKey: string) => {
     for (const channel of TRIANGLE_PAINT_CHANNELS) {
       const spec = PAINT_CHANNEL_SPECS[channel]
-      const sessionCodes = stateRef.current?.[spec.stateKey]?.[supportPaintKey(objectId, componentObjectId)]
+      const sessionCodes = stateRef.current?.[spec.stateKey]?.[paintKey]
       const codes = sessionCodes ?? getGeometryTrianglePaint(mesh.geometry, channel)
       if (!codes || Object.keys(codes).length === 0) continue
       const overlay = buildTrianglePaintOverlay(mesh.geometry, codes, {
@@ -861,8 +936,18 @@ function EditorView({
         offsetFactor: spec.offsetFactor,
         ...(channel === 'color' ? { colorForState: colorPaintStateColor } : {})
       })
-      if (overlay) mesh.add(overlay)
+      if (!overlay) continue
+      // Seeded with the SAME rule the per-frame sync applies. Without this the overlay inherited
+      // three's default `visible = true` and every rebuild flashed the painted channels over the
+      // model, because the sync only re-runs when the tool, selection or drag state changes and a
+      // rebuild changes none of them.
+      overlay.visible = paintOverlayVisible(channel, activePaintChannelRef.current, instanceKey === selectedKeyRef.current)
+      mesh.add(overlay)
     }
+    // The two refs are declared LATER in this component (they come out of the paint hook), so they
+    // cannot be listed here even though the body reads them. That is sound: a ref's identity never
+    // changes, and this body only runs during an async plate build, long after both exist.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [colorPaintStateColor])
 
   const filamentOptions = materials.options
@@ -981,7 +1066,7 @@ function EditorView({
   // first build attempt would otherwise have bailed).
   const [sceneReady, setSceneReady] = useState(false)
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
-  const [gizmoMode, setGizmoMode] = useState<GizmoMode>('translate')
+  const [gizmoMode, setGizmoMode] = useState<GizmoMode>(RESTING_GIZMO_MODE)
   // 3D build plate (BambuStudio's modelled bed): shared with the read-only previews, so the
   // preference and its default live in the hook. Printers with no bundled bed mesh fall back to
   // the plain grid on their own.
@@ -1072,21 +1157,50 @@ function EditorView({
   const [brimEarDiameter, setBrimEarDiameter] = useState(8)
   const brimEarDiameterRef = useRef(brimEarDiameter)
   brimEarDiameterRef.current = brimEarDiameter
-  // Added part volume (negative part/modifier/blocker) currently selected for
-  // transform; the move/rotate/scale gizmo attaches to the part mesh instead of the
-  // object while set.
-  const [selectedAddedPartKey, setSelectedAddedPartKey] = useState<string | null>(null)
-  const selectedAddedPartKeyRef = useRef(selectedAddedPartKey)
-  selectedAddedPartKeyRef.current = selectedAddedPartKey
-  // Existing baked part (objectId + the part's ORDINAL within the object) currently holding
-  // the transform gizmo: the counterpart of selectedAddedPartKey for parts already in the
-  // 3MF. Never keyed by `componentObjectId`: that is the MESH the part references, and one
-  // mesh may back several parts of the same object, so it does not identify a part.
-  // Placement edits are geometry-level: they apply to every instance of the object and
-  // are emitted as SceneEdit.partTransforms.
-  const [selectedBakedPart, setSelectedBakedPart] = useState<{ objectId: number; partIndex: number } | null>(null)
-  const selectedBakedPartRef = useRef(selectedBakedPart)
-  selectedBakedPartRef.current = selectedBakedPart
+  // The single part currently holding the transform gizmo, of EITHER kind: a part baked into the
+  // project's 3MF (addressed by its ORDINAL within the object) or a volume added this session
+  // (addressed by its own key). The move/rotate/scale gizmo attaches to that part's mesh instead
+  // of the object while set.
+  //
+  // ONE state rather than the two this used to be. Everything that asks "is a part selected" wants
+  // the union, and while the added kind had a state of its own every clearing site had to remember
+  // it separately -- which several did not, so Ctrl+A and a range-click could leave a volume
+  // highlighted with nothing else selected (see `hasEditorSelection`).
+  //
+  // A baked member is never keyed by `componentObjectId`: that is the MESH the part references, and
+  // one mesh may back several parts of the same object, so it does not identify a part. Placement
+  // edits are geometry-level: they apply to every instance of the object and are emitted as
+  // SceneEdit.partTransforms.
+  const [gizmoPart, setGizmoPart] = useState<PartRef | null>(null)
+  const gizmoPartRef = useRef(gizmoPart)
+  gizmoPartRef.current = gizmoPart
+  /**
+   * Whether a PART of either kind is selected, for the keyboard shortcuts.
+   *
+   * They cannot ask `selectedKeyRef`, because the bulk part path nulls the object key on purpose, so
+   * Delete over a visible multi-part selection reached the handler with nothing to act on and
+   * silently did nothing. Assigned below the part-selection state, which is declared later.
+   */
+  const partSelectedRef = useRef(false)
+  /**
+   * The gizmo'd part as a session-added volume key, or null when it is a baked part.
+   *
+   * A narrow VIEW, not a second state. A few features are genuinely about one kind -- re-editing a
+   * text volume, routing a drag write-back to the right seam -- and reading the union there would
+   * claim a generality they do not have. Anything that merely asks "is some part selected" must use
+   * `gizmoPart` itself.
+   */
+  const selectedAddedPartKey = gizmoPart?.member.kind === 'added' ? gizmoPart.member.key : null
+  /**
+   * What the placement panel calls itself.
+   *
+   * The BODY has no placement "within the object" -- the instance's placement IS where its geometry
+   * sits, and these inputs write straight through to the object -- so it keeps the object's own
+   * unlabelled panel rather than claiming an object-local frame it does not have.
+   */
+  const placementPanelHeading = gizmoPart && gizmoPart.member.kind !== 'body'
+    ? 'Part placement (within the object)'
+    : undefined
   const [viewerError, setViewerError] = useState<string | null>(null)
   // True while the active plate's models are still being built into the 3D scene.
   const [viewportBuilding, setViewportBuilding] = useState(false)
@@ -1155,6 +1269,7 @@ function EditorView({
   // hidden file input are shared by three flows, so the pending request, not a boolean each,
   // decides where the staged import lands. Null means "add it to the plate as a new model".
   const [modelRequest, setModelRequest] = useState<ModelSourceRequest | null>(null)
+  const svgInputRef = useRef<HTMLInputElement | null>(null)
   // Pending export-to-library request (destination dialog open). 'object'/'merged'/'parts'
   // save one named STL; 'separate' saves one STL per selected object (no name field,
   // each file is named after its object). Downloads never set this; they run immediately.
@@ -1163,7 +1278,9 @@ function EditorView({
     | { kind: 'project'; key: string }
     | { kind: 'merged'; keys: ReadonlyArray<string> }
     | { kind: 'separate'; keys: ReadonlyArray<string> }
-    | { kind: 'parts'; ownerId: number; partIndexes: ReadonlyArray<number> }
+    // One kind for parts of either address space: a mixed set world-bakes through the same
+    // traversal and exports as a single STL.
+    | { kind: 'parts'; ownerId: number; members: ReadonlyArray<PartMember> }
     | null
   >(null)
   // Per-object process overrides now live inline in the sidebar object list (no
@@ -1182,9 +1299,7 @@ function EditorView({
   const [editingObject, setEditingObject] = useState<{ ids: ReadonlyArray<number>; name: string } | null>(null)
   // Normal part(s) of one multi-part object whose per-part process overrides are being
   // edited. Multiple ids = the part-selection bulk action (same mixed-value bulk semantics).
-  const [editingPart, setEditingPart] = useState<{ objectId: number; partIndexes: ReadonlyArray<number>; name: string } | null>(null)
-  // Modifier part whose per-volume process overrides are being edited (dialog open).
-  const [editingPartKey, setEditingPartKey] = useState<string | null>(null)
+  const [editingPart, setEditingPart] = useState<{ objectId: number; members: ReadonlyArray<PartMember>; name: string } | null>(null)
   /**
    * Layer height a NEW height range starts at: the project's own, else Bambu's 0.2 default. A band
    * must always name one, so this is a seed rather than an inherited blank.
@@ -1708,7 +1823,7 @@ function EditorView({
 
   // Re-seed the per-PART PROCESS gear from overrides saved in the 3MF (parity with the
   // per-object re-seed above, but for part-scoped settings, which live on editor state
-  // rather than the borrowed slice controller). One-shot per `objectId:componentObjectId`;
+  // rather than the borrowed slice controller). One-shot per `objectId:partIndex`;
   // never clobber a session edit; seeds without marking the project dirty.
   const seededPartProcessKeysRef = useRef<Set<string>>(new Set())
   useEffect(() => {
@@ -1769,6 +1884,33 @@ function EditorView({
   // Read through refs so the async scene-build isn't re-fired by identity churn. The height
   // helper is declared further down (it needs the paint/plate readers), so the build reads it
   // through this ref rather than closing over a value that changes every render.
+  /**
+   * Publish the top chrome strip's real height as `--editor-chrome-height`, which the floating tool
+   * panels anchor beneath (`TOOL_PANEL_ANCHOR`).
+   *
+   * Measured rather than assumed because the strip WRAPS: on a phone it carries the whole tool rail,
+   * so its height moves with the button count and the viewport width. It was a hardcoded one-row 52,
+   * and the moment the tools group needed a second row every panel opened underneath it.
+   */
+  const [chromeStripElement, setChromeStripElement] = useState<HTMLElement | null>(null)
+  useEffect(() => {
+    if (!chromeStripElement) return
+    // The variable goes on the positioned ancestor the panels resolve against, so one write serves
+    // every panel without threading a measurement through their props.
+    const host = chromeStripElement.parentElement
+    if (!host) return
+    const publish = () => {
+      host.style.setProperty('--editor-chrome-height', `${Math.ceil(chromeStripElement.getBoundingClientRect().height)}px`)
+    }
+    publish()
+    const observer = new ResizeObserver(publish)
+    observer.observe(chromeStripElement)
+    return () => {
+      observer.disconnect()
+      host.style.removeProperty('--editor-chrome-height')
+    }
+  }, [chromeStripElement])
+
   const computePrimeTowerHeightRef = useRef<(groups: Map<string, THREE.Group>, plateIndex: number) => number>(() => 0)
   const towerRequiredRef = useRef(false)
   const projectFilamentCountRef = useRef(0)
@@ -1861,15 +2003,18 @@ function EditorView({
   const [partSelection, setPartSelection] = useState<PartSelection | null>(null)
   const partSelectionRef = useRef(partSelection)
   partSelectionRef.current = partSelection
+  partSelectedRef.current = partSelection != null || gizmoPart != null
   // Shift-range anchors: the last plainly/Ctrl-clicked object row and part row.
   const objectAnchorKeyRef = useRef<string | null>(null)
-  const partAnchorRef = useRef<{ objectId: number; partIndex: number } | null>(null)
+  const partAnchorRef = useRef<PartRef | null>(null)
   /** Replace the whole selection with one key (plain click semantics). */
   const selectExclusive = useCallback((key: string | null) => {
     setSelectedKey(key)
     setExtraSelectedKeys((current) => (current.length > 0 ? [] : current))
     setPartSelection((current) => (current ? null : current))
-    setSelectedBakedPart((current) => (current ? null : current))
+    // Clears the gizmo'd part whichever KIND it is. While a session-added volume had a state of its
+    // own this call left it set, so every caller had to clear it by hand and several forgot.
+    setGizmoPart((current) => (current ? null : current))
     if (key) objectAnchorKeyRef.current = key
   }, [])
   const selectExclusiveRef = useRef(selectExclusive)
@@ -1879,7 +2024,7 @@ function EditorView({
     const primary = selectedKeyRef.current
     const extras = extraSelectedKeysRef.current
     setPartSelection((current) => (current ? null : current))
-    setSelectedBakedPart((current) => (current ? null : current))
+    setGizmoPart((current) => (current ? null : current))
     objectAnchorKeyRef.current = key
     if (primary === key) {
       const [next, ...rest] = extras
@@ -1922,13 +2067,17 @@ function EditorView({
         const ownerId = instance.source.kind === 'object' ? instance.objectId : instance.source.replacedObjectId
         return ownerId === current.objectId
       })
-      return prunePartSelection(current, owner ? owner.parts.map((part) => part.partIndex) : null)
+      return prunePartSelection(current, owner ? ownerPartMembers(owner, state ?? null) : null)
     })
-    setSelectedBakedPart((current) => {
+    setGizmoPart((current) => {
       if (!current) return current
+      // Resolved through `addedPartHostId`, the same owner identity the bulk prune above uses. The
+      // baked half of this used to require an in-project object, so it never pruned a part of an
+      // unsaved import -- and there was no prune at all for a session-added volume, which could
+      // outlive its own deletion and leave the gizmo attached to geometry no longer on the plate.
       const stillExists = state?.plates.some((plate) => plate.instances.some((instance) =>
-        instance.source.kind === 'object' && instance.objectId === current.objectId
-        && instance.parts.some((part) => part.partIndex === current.partIndex)))
+        addedPartHostId(instance) === current.objectId
+        && selectionHasMember(ownerPartMembers(instance, state ?? null), current.member)))
       return stillExists ? current : null
     })
   }, [state])
@@ -1950,13 +2099,15 @@ function EditorView({
   // Right-click context menu, anchored at the cursor: on an object (viewport or object
   // row) or on the selected part(s) of one object (part rows in the list).
   const [contextMenu, setContextMenu] = useState<
-    | ({ x: number; y: number } & (
+    | (ContextMenuAnchor & (
       | { kind: 'object'; key: string }
-      | { kind: 'parts'; objectId: number; partIndexes: ReadonlyArray<number> }
+      | { kind: 'parts'; objectId: number; members: ReadonlyArray<PartMember> }
+      // A session-added volume addresses itself by its own key rather than a baked ordinal, but it
+      // offers the SAME actions, so it reuses the parts menu and its click-away wiring.
     ))
     | null
   >(null)
-  const openContextMenuRef = useRef<(menu: { x: number; y: number; key: string } | null) => void>(() => {})
+  const openContextMenuRef = useRef<(menu: (ContextMenuAnchor & { key: string }) | null) => void>(() => {})
   openContextMenuRef.current = (menu) => {
     if (!menu) {
       setContextMenu(null)
@@ -1965,7 +2116,7 @@ function EditorView({
     // Right-clicking a member keeps the multi-selection (the menu offers bulk actions);
     // any other object becomes the sole selection first (BambuStudio behaviour).
     if (!allSelectedKeysRef.current().includes(menu.key)) selectExclusiveRef.current(menu.key)
-    setContextMenu({ x: menu.x, y: menu.y, kind: 'object', key: menu.key })
+    setContextMenu({ x: menu.x, y: menu.y, align: menu.align, kind: 'object', key: menu.key })
   }
   // The context menu is a bare anchored Menu (no Dropdown), so it lacks Joy's built-in
   // click-away/Escape handling: wire it up below. `contextMenuListboxRef` is the menu's
@@ -1979,9 +2130,14 @@ function EditorView({
   useEffect(() => {
     if (!contextMenu) return
     const close = () => setContextMenu(null)
+    // The menu's OWN scrolling is not an outside interaction. It is capped at the viewport height
+    // and scrolls itself (`CONTEXT_MENU_SX`), and the long single-object menu regularly needs it, so
+    // a guard that ignores where the event came from dismisses the menu the moment someone reaches
+    // for the item they opened it to press. `contains` covers the listbox itself, which IS the
+    // scrolling element.
+    const insideMenu = (target: EventTarget | null) => isInsideContextMenu(contextMenuListboxRef.current, target)
     const onPointerDown = (event: PointerEvent) => {
-      const listbox = contextMenuListboxRef.current
-      if (listbox && event.target instanceof Node && listbox.contains(event.target)) return
+      if (insideMenu(event.target)) return
       close()
     }
     const onKeyDown = (event: KeyboardEvent) => { if (event.key === 'Escape') close() }
@@ -1990,10 +2146,21 @@ function EditorView({
     window.addEventListener('pointerdown', onPointerDown, true)
     window.addEventListener('keydown', onKeyDown)
     window.addEventListener('blur', close)
+    // A scroll of anything ELSE leaves the menu behind: it is anchored to a rect captured when it
+    // opened, so it ends up beside a DIFFERENT row while still acting on the original one. Touch
+    // scrolling starts with a pointerdown and was already covered; a wheel is not, and a wheel over
+    // the object list is the ordinary way to reach a row whose kebab you just opened. Capture, since
+    // scroll does not bubble.
+    const onScroll = (event: Event) => {
+      if (insideMenu(event.target)) return
+      close()
+    }
+    window.addEventListener('scroll', onScroll, true)
     return () => {
       window.removeEventListener('pointerdown', onPointerDown, true)
       window.removeEventListener('keydown', onKeyDown)
       window.removeEventListener('blur', close)
+      window.removeEventListener('scroll', onScroll, true)
     }
   }, [contextMenu])
   // Offscreen renderer used to snapshot plate thumbnails.
@@ -2141,16 +2308,30 @@ function EditorView({
                     objectId: paintHostId,
                     componentObjectId: part.componentObjectId
                   }
-                  seedPartPaintOverlays(partMesh, paintHostId, part.componentObjectId)
+                  seedPaintOverlays(partMesh, supportPaintKey(paintHostId, part.componentObjectId), instance.key)
                 }
               }
             }
             rotor.add(partGroup)
           }
-        } else {
+        } else if (!instance.bodyRemoved) {
+          // A DELETED body contributes no mesh at all: the object's added volumes are its whole
+          // geometry, which is exactly what the save writes. Not building it is also what gives
+          // every geometry reader the right answer for free -- bounds, footprint, thumbnail, export
+          // and the boolean all walk this group, so there is nothing for them to exclude.
+          //
           // Single mesh from the staged binary STL, no per-part transform.
           const geometry = await fetchImportGeometry(importId)
-          const importGroup = createThreeMfPartObject(geometry, { color: meshColor, clearanceTransform: placement })
+          // The BODY's own subtype, which a user can change before any save (it rides
+          // `partTypeChanges` at `BODY_PART_INDEX`, the ordinal the bake promotes it into). Passed
+          // here so retyping it to a helper renders translucent and tags `isHelperVolume`
+          // immediately, rather than looking like an ordinary part until the file is reopened.
+          const bodySubtype = bodyPartSubtype(stateRef.current, instance)
+          const importGroup = createThreeMfPartObject(geometry, {
+            color: meshColor,
+            clearanceTransform: placement,
+            subtype: bodySubtype === 'normal_part' ? null : bodySubtype
+          })
           const importMesh = importGroup.children.find((child): child is THREE.Mesh => (child as THREE.Mesh).isMesh === true)
           if (importMesh) {
             applyLayerBandOverlays(importMesh.material as THREE.Material, layerBandUniformsRef.current)
@@ -2159,10 +2340,13 @@ function EditorView({
             // EMPTY `parts` array, so its one mesh is solid 0: the index `collectImportPaint`
             // emits and the bake reads back. Without this tag the brush finds no target and paint
             // silently does nothing (an added cube in a new project is the common case).
-            const paintHostId = addedPartHostId(instance)
+            //
+            // Gated on the subtype for the same reason the other three mesh-build sites are: see
+            // `bodyPaintHostId`, which owns that rule.
+            const paintHostId = bodyPaintHostId(stateRef.current, instance)
             if (paintHostId != null) {
               importMesh.userData.supportPaintPart = { objectId: paintHostId, componentObjectId: 0 }
-              seedPartPaintOverlays(importMesh, paintHostId, 0)
+              seedPaintOverlays(importMesh, supportPaintKey(paintHostId, 0), instance.key)
             }
           }
           rotor.add(importGroup)
@@ -2212,13 +2396,21 @@ function EditorView({
                 objectId: instance.objectId,
                 componentObjectId: part.componentObjectId
               }
-              seedPartPaintOverlays(paintableMesh, instance.objectId, part.componentObjectId)
+              seedPaintOverlays(paintableMesh, supportPaintKey(instance.objectId, part.componentObjectId), instance.key)
             }
           }
           rotor.add(partGroup)
           placedParts += 1
         }
-        if (placedParts === 0) {
+        // "Has this object anything to draw?" counts its SESSION-ADDED volumes too, which are
+        // attached below. Counting only the baked parts is the part-is-a-part rule broken at the
+        // root: an object whose geometry is entirely added -- every part booleaned into a new one,
+        // or a body built from primitives -- was disposed here and vanished from the viewport and
+        // the sidebar, while its state said it was still on the plate. Note this asks whether there
+        // is GEOMETRY, not whether there is printed geometry; `canRemoveParts` owns the second
+        // question, and an object left holding only a helper volume must still be visible to be
+        // fixed rather than silently disappear.
+        if (placedParts === 0 && effectiveAddedParts(stateRef.current, instance).length === 0) {
           disposeObject3D(group)
           return null
         }
@@ -2244,10 +2436,10 @@ function EditorView({
     // resolveColorFilamentId is read via its ref (not a dep) so a late filament/slice-config
     // settle on open doesn't recreate this builder and trigger a redundant second plate rebuild,
     // colours are applied/refreshed by the dedicated recolor effect, not by rebuilding geometry.
-    // seedPartPaintOverlays is stable (its only dep, colorPaintStateColor, has empty deps), so
+    // seedPaintOverlays is stable (its only dep, colorPaintStateColor, has empty deps), so
     // listing it cannot retrigger a plate rebuild, it now owns the colour-paint tint lookup the
     // builder used to reference directly.
-    [seedPartPaintOverlays, fetchGeometry, fetchImportGeometry]
+    [seedPaintOverlays, fetchGeometry, fetchImportGeometry]
   )
 
   // ---- Triangle painting (support + seam brushes) -------------------------------
@@ -2280,24 +2472,6 @@ function EditorView({
     refreshPaintOverlaysRef,
     applyPaintStrokeRef
   } = paint
-
-  // The selected added part volume, for the floating part panel. The state object is
-  // mutated in place (paint idiom), but every selection change re-renders, so reading
-  // through the current key stays fresh.
-  const selectedAddedPart = useMemo(() => {
-    if (!selectedAddedPartKey || !state?.addedParts) return null
-    for (const parts of Object.values(state.addedParts)) {
-      const part = parts.find((entry) => entry.key === selectedAddedPartKey)
-      if (part) return part
-    }
-    return null
-  }, [selectedAddedPartKey, state])
-
-  /** Live swatch colour for the selected added part; null for a type that carries no material. */
-  const selectedAddedPartColor = useMemo(() => {
-    if (!selectedAddedPart || !threeMfPartSubtypeCarriesFilament(selectedAddedPart.subtype)) return null
-    return filamentOptions.find((option) => option.id === selectedAddedPart.filamentId)?.color ?? null
-  }, [selectedAddedPart, filamentOptions])
 
   // ---- Added part volumes ----------------------------------------------------------
 
@@ -2346,10 +2520,21 @@ function EditorView({
         // for a part that inherited it, and `refreshAddedPartMeshes` rebuilds on an explicit
         // per-part reassignment anyway.
         mesh.userData.recolor = { filamentId: partFilamentId, fallbackColor: instance.color ?? undefined }
+        // A normal added volume IS printed geometry, so it takes the plate's layer-change colour
+        // bands and pause stripes like the body and the baked parts do (the three other mesh-build
+        // sites all call this). Without it a filament change at height H recoloured everything on
+        // the plate except the volume, which reports the print as doing something it will not.
+        applyLayerBandOverlays(mesh.material as THREE.Material, layerBandUniformsRef.current)
+        // PAINTABLE, like every other printed mesh. This one tag is what the brush needs: the hit
+        // test builds its raycast set from it, so an untagged volume was not even a candidate and
+        // the brush painted straight THROUGH it onto the body behind (brim ears landed there too).
+        // Keyed by the volume's own mesh import, which is what its `importPaint` entry names.
+        mesh.userData.supportPaintPart = { addedPartImportId: part.importId }
+        seedPaintOverlays(mesh, addedPartPaintKey(part.importId), instance.key)
       }
       rotor.add(mesh)
     }
-  }, [])
+  }, [seedPaintOverlays])
   const setGroupAddedPartMeshesRef = useRef(setGroupAddedPartMeshes)
   setGroupAddedPartMeshesRef.current = setGroupAddedPartMeshes
 
@@ -2462,6 +2647,17 @@ function EditorView({
    */
   const pendingTextPlacementRef = useRef<{ point: THREE.Vector3; normal: THREE.Vector3 } | null>(null)
   const reseatSettleRef = useRef<number | undefined>(undefined)
+  /**
+   * The SVG tool's form and the artwork it has read.
+   *
+   * The parsed artwork is state rather than a ref because the panel renders off it (the height
+   * readout, whether Add is enabled). It is cleared when the tool closes, so reopening starts from a
+   * fresh file rather than silently re-adding the last one.
+   */
+  const [svgTool, setSvgTool] = useState<SvgToolValue>({ widthMm: 40, thickness: 2, operation: 'normal_part', includeBackground: false })
+  const [svgArtwork, setSvgArtwork] = useState<ParsedSvg | null>(null)
+  const [svgFileName, setSvgFileName] = useState<string | null>(null)
+  const [svgEmptyReason, setSvgEmptyReason] = useState<string | null>(null)
   const applyTextPartRef = useRef<(() => Promise<void>) | null>(null)
 
   /** Persist a gizmo-dragged ADDED part mesh's transform into the editor state. */
@@ -2492,7 +2688,13 @@ function EditorView({
    * (for rebuilds/thumbnails), and mirrored live onto the other instances' part groups.
    */
   const writeBackBakedPart = useCallback((partGroup: THREE.Object3D) => {
-    const selected = selectedBakedPartRef.current
+    // Genuinely baked-only: a session-added volume is written back by `writeBackAddedPart`, which
+    // the drag dispatcher picks off the mesh's own tag. So this narrows the gizmo'd part to its
+    // baked kind rather than asking the union a question it cannot answer.
+    const gizmo = gizmoPartRef.current
+    const selected = gizmo?.member.kind === 'baked'
+      ? { objectId: gizmo.objectId, partIndex: gizmo.member.partIndex }
+      : null
     const state = stateRef.current
     const ref = partGroupRef(partGroup)
     if (!selected || !state || !ref || ref.partIndex !== selected.partIndex) return
@@ -2701,9 +2903,8 @@ function EditorView({
     allSelectedKeysRef,
     selectExclusiveRef,
     toggleAdditiveSelectionRef,
-    selectedAddedPartKeyRef,
-    selectedBakedPartRef,
-    setSelectedBakedPart,
+    gizmoPartRef,
+    setGizmoPart,
     setSelectionHighlightRef,
     gizmoModeRef,
     setGizmoModeRef,
@@ -2740,7 +2941,6 @@ function EditorView({
     openContextMenuRef,
     suppressEditorEscapeRef,
     setSceneReady,
-    setSelectedAddedPartKey,
     writeBackGroupTransform
   })
 
@@ -2792,8 +2992,13 @@ function EditorView({
   // Rebuild the viewport whenever the active plate changes or its instance set
   // changes (add/remove/duplicate). Gizmo drags mutate Three.js groups directly,
   // so they do NOT trigger a rebuild.
+  //
+  // SORTED, so this is a signature of the instance SET and not of its order. The built scene is a
+  // key-addressed map (`groupByKeyRef`), so instance order decides only the sequence groups are
+  // built in, nothing about the result -- while an order-sensitive signature made a sidebar
+  // reorder, which moves no geometry at all, tear down and rebuild every group on the plate.
   const activeInstanceKeys = useMemo(
-    () => activePlate?.instances.map((instance) => instance.key).join(',') ?? '',
+    () => (activePlate?.instances.map((instance) => instance.key) ?? []).sort().join(','),
     [activePlate]
   )
 
@@ -2844,7 +3049,10 @@ function EditorView({
       // Don't latch the key while this plate's scene is still loading: it is framed on the
       // borrowed/placeholder bed, and if the real bed differs the post-fill rebuild must still
       // see a key change and reframe.
-      if (!pendingScenePlatesRef.current.has(activePlateIndex)) framedViewKeyRef.current = viewKey
+      // Keyed on the plate's session IDENTITY, like every other read of this set: `index` is a
+      // position that a reorder or delete rewrites, so asking with it either misses the pending
+      // plate (latching a key framed on the placeholder bed) or hits an unrelated one.
+      if (!pendingScenePlatesRef.current.has(activePlate.plateId)) framedViewKeyRef.current = viewKey
       frameDefaultViewRef.current?.()
     }
 
@@ -3069,7 +3277,7 @@ function EditorView({
     // With a part on the gizmo, drop the object-level selection box (BambuStudio's
     // volume selection): only the part's own highlight shows, so the whole object,
     // and especially the main part, no longer reads as selected.
-    setSelectionHighlightRef.current?.(selectedAddedPartKey || selectedBakedPart ? null : group ?? null)
+    setSelectionHighlightRef.current?.(gizmoPart ? null : group ?? null)
     if (!group) {
       transform.detach()
       setSelectedTransform(null)
@@ -3084,6 +3292,28 @@ function EditorView({
     // The manual-input panel mirrors whatever the gizmo holds: the object, or a selected
     // part's object-local placement (BambuStudio's "Volume Operations").
     let panelTarget: THREE.Object3D = group
+    /**
+     * Attach the gizmo to the pivot proxy centred on `boxes`, as BambuStudio centres every gizmo on
+     * its selection, falling back to the group only when there is no proxy or nothing to measure.
+     *
+     * Shared by the object path and the BODY row, because moving a body moves its object: both are
+     * object transforms and both must pivot on the object's geometric centre. The group and the
+     * rotor sit at the object's local ORIGIN, which is wherever the file's exporter left it.
+     */
+    const attachToSelectionPivot = (boxes: THREE.Box3[]): void => {
+      const proxy = multiPivotRef.current
+      const pivot = selectionPivot(boxes, isTransformGizmoMode(gizmoMode) ? gizmoMode : 'translate')
+      if (proxy && pivot) {
+        proxy.position.copy(pivot)
+        proxy.quaternion.identity()
+        proxy.scale.set(1, 1, 1)
+        transform.attach(proxy)
+      } else {
+        // No proxy yet (viewport still mounting) or an empty box: the origin-attached gizmo is the
+        // honest fallback rather than a pivot guessed from nothing.
+        transform.attach(gizmoMode === 'rotate' ? rotorOf(group) : group)
+      }
+    }
     // The Text tool has NO transform gizmo, matching BambuStudio, which renders a grab cube and a
     // rotation ring instead (`GLGizmoText.cpp:1932`) and moves text by dragging it over the surface
     // (`SurfaceDrag.hpp`). A translate gizmo is world-space and so offers X/Y only on an added part,
@@ -3091,35 +3321,44 @@ function EditorView({
     // pointing at the model, which follows whatever surface is under the cursor, walls included.
     if (!isTransformGizmoMode(gizmoMode)) {
       transform.detach()
-    } else if (selectedAddedPartKey) {
-      // A selected added part volume takes the gizmo (object-local transform).
-      let partMesh: THREE.Object3D | null = null
-      group.traverse((node) => {
-        if (!partMesh && node.userData.addedPartKey === selectedAddedPartKey) partMesh = node
-      })
-      if (partMesh) {
-        transform.attach(partMesh)
-        // `text` is not a TransformControls mode; while it holds the gizmo it moves.
-        transform.setMode(isTransformGizmoMode(gizmoMode) ? gizmoMode : 'translate')
-        panelTarget = partMesh
+    } else if (gizmoPart) {
+      // The selected part takes the gizmo (object-local transform), whichever kind it is. Only the
+      // LOOKUP differs, because the two are tagged differently in the scene: a volume added this
+      // session by its own key on the mesh, a baked part by the ref on its part GROUP. That group
+      // starts at identity (its children carry the baked matrix), so the gizmo drags a delta and the
+      // edge outlines and paint overlays follow; `writeBackBakedPart` composes the delta with the
+      // child matrix into the part's new object-local placement.
+      const member = gizmoPart.member
+      let partNode: THREE.Object3D | null = null
+      if (member.kind === 'body') {
+        // The body has no transform of its own -- the instance's placement IS where its geometry
+        // sits -- so moving the body moves the OBJECT, and it therefore takes the object's own
+        // pivot rather than the group. Attaching to the group/rotor here pivoted on the file's
+        // local origin, so rotating with the body row selected span the model about a corner while
+        // rotating the very same model from the OBJECT row span it about its centre: the
+        // single-object special case this plugin's guide says must not exist. The row exists so
+        // the body can be SELECTED (named, typed, exported, booleaned) alongside the volumes added
+        // beside it, which it could not be while it had no row at all.
+        attachToSelectionPivot([printableMeshBox(group, false)])
+        transform.setMode(gizmoMode)
+        const seededBody = computeSelectedTransform(group)
+        if (seededBody) setSelectedTransform(seededBody)
+        return
       } else {
-        transform.attach(gizmoMode === 'rotate' ? rotorOf(group) : group)
-        transform.setMode(gizmoMode)
+        group.traverse((node) => {
+          if (partNode) return
+          if (member.kind === 'added') {
+            if (node.userData.addedPartKey === member.key) partNode = node
+            return
+          }
+          const ref = partGroupRef(node)
+          if (ref && ref.partIndex === member.partIndex) partNode = node
+        })
       }
-    } else if (selectedBakedPart) {
-      // A selected baked part takes the gizmo via its part GROUP: the group starts at
-      // identity (its children carry the baked matrix), so the gizmo drags a delta and
-      // the edge outlines/paint overlays follow. writeBackBakedPart composes the delta
-      // with the child matrix into the part's new object-local placement.
-      let partGroup: THREE.Object3D | null = null
-      group.traverse((node) => {
-        const ref = partGroupRef(node)
-        if (!partGroup && ref && ref.partIndex === selectedBakedPart.partIndex) partGroup = node
-      })
-      if (partGroup) {
-        transform.attach(partGroup)
+      if (partNode) {
+        transform.attach(partNode)
         transform.setMode(gizmoMode)
-        panelTarget = partGroup
+        panelTarget = partNode
       } else {
         transform.attach(gizmoMode === 'rotate' ? rotorOf(group) : group)
         transform.setMode(gizmoMode)
@@ -3147,25 +3386,12 @@ function EditorView({
       // Cheap boxes on purpose: this runs on every selection change, where a precise per-vertex walk
       // is the select-hitch the cheap selection box already removed. The readout panel keeps showing
       // the PRIMARY object's values (panelTarget stays `group`).
-      const proxy = multiPivotRef.current
       const boxes: THREE.Box3[] = []
       for (const key of allSelectedKeysRef.current()) {
         const memberGroup = groupByKeyRef.current.get(key)
         if (memberGroup) boxes.push(printableMeshBox(memberGroup, false))
       }
-      // Text holds the gizmo in translate; the multi-selection pivot only knows the three
-      // transform modes.
-      const pivot = selectionPivot(boxes, isTransformGizmoMode(gizmoMode) ? gizmoMode : 'translate')
-      if (proxy && pivot) {
-        proxy.position.copy(pivot)
-        proxy.quaternion.identity()
-        proxy.scale.set(1, 1, 1)
-        transform.attach(proxy)
-      } else {
-        // No proxy yet (viewport still mounting) or an empty box: the origin-attached gizmo is the
-        // honest fallback rather than a pivot guessed from nothing.
-        transform.attach(gizmoMode === 'rotate' ? rotorOf(group) : group)
-      }
+      attachToSelectionPivot(boxes)
       transform.setMode(gizmoMode)
     }
     // Selection/gizmo change is low-frequency: seed the readout through state, which both mounts the
@@ -3177,7 +3403,7 @@ function EditorView({
     // to be re-seated whenever the selection gains or loses a member. Dropping it as the rule
     // suggests would freeze the pivot at whatever the selection was when the mode last changed.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedKey, gizmoMode, selectedAddedPartKey, selectedBakedPart, extraSelectedKeys,
+  }, [selectedKey, gizmoMode, gizmoPart, extraSelectedKeys,
     computeSelectedTransform, addedPartMeshVersion])
 
   const reattachGizmoRef = useRef(reattachGizmo)
@@ -3195,18 +3421,15 @@ function EditorView({
     // Both checks resolve the host through `addedPartHostId` rather than testing for an in-project
     // object: an unsaved import hosts added volumes and selectable sub-parts too, and gating on
     // `source.kind` here would clear the selection the moment it was made.
-    setSelectedAddedPartKey((current) => {
+    setGizmoPart((current) => {
       if (!current) return current
       const instance = activePlateRef.current?.instances.find((entry) => entry.key === selectedKey)
-      const hostId = instance ? addedPartHostId(instance) : null
-      const belongs = hostId != null
-        && (stateRef.current?.addedParts?.[hostId] ?? []).some((part) => part.key === current)
-      return belongs ? current : null
-    })
-    setSelectedBakedPart((current) => {
-      if (!current) return current
-      const instance = activePlateRef.current?.instances.find((entry) => entry.key === selectedKey)
-      return instance && addedPartHostId(instance) === current.objectId ? current : null
+      if (!instance || addedPartHostId(instance) !== current.objectId) return null
+      // The part must still be one of the host's, whichever kind it is: the two kinds used to be
+      // pruned by separate updaters that disagreed about how strict to be.
+      return selectionHasMember(ownerPartMembers(instance, stateRef.current ?? null), current.member)
+        ? current
+        : null
     })
   }, [selectedKey])
 
@@ -3582,7 +3805,13 @@ function EditorView({
       // Spread `...current` so the session-only fields kept on the state object, support/seam/
       // colour paint, brim ears, and added part volumes (all mutated in place via stateRef),
       // survive a plate-structure edit instead of being silently dropped.
-      return { ...current, plates: updater(current.plates) }
+      const plates = updater(current.plates)
+      // A STRUCTURE edit can add an instance (duplicate, paste, fill bed, move to plate) and those
+      // append, which would leave an object's copies split around another object. The saved file
+      // groups build items by object regardless, so an ungrouped list is a sidebar that disagrees
+      // with what BambuStudio will show, and a drag in it lands somewhere the user did not point
+      // at. Idempotent and order-preserving, so an edit that added nothing changes nothing.
+      return { ...current, plates: kind === 'structure' ? normalizePlateObjectOrder(plates) : plates }
     })
     // Route to the cheapest sync that covers `kind`. `visibility`/`inert` need no viewport work
     // beyond effects that already react to the state change.
@@ -3638,6 +3867,32 @@ function EditorView({
         if (!mesh.isMesh) return
         const recolor = mesh.userData.recolor as { filamentId: number | null; fallbackColor?: string } | undefined
         if (!recolor) return
+        // A volume ADDED this session is not in `instance.parts` at all -- it lives in
+        // `state.addedParts` and its meshes carry `addedPartKey` rather than a `partRef`. Looked up
+        // FIRST, because falling through to the object's filament is exactly what went wrong: on
+        // every full rebuild (an undo, most visibly) this effect repainted each added volume with
+        // its OBJECT's material, so a two-colour logo flashed its real colours and then settled on
+        // material 1. The sidebar kept showing the part's own material, which is what made the two
+        // disagree.
+        let addedKey: string | undefined
+        for (let node2: THREE.Object3D | null = mesh; node2 && !addedKey; node2 = node2.parent) {
+          addedKey = node2.userData.addedPartKey as string | undefined
+        }
+        if (addedKey) {
+          const added = Object.values(current.addedParts ?? {}).flat().find((entry) => entry.key === addedKey)
+          // A helper volume (blocker, enforcer, modifier, negative) prints no filament and is drawn
+          // in its subtype's colour by the build. Recolouring it here would repaint an aid as a
+          // material, which is the same class of overwrite this branch exists to stop.
+          if (!added || !threeMfPartSubtypeCarriesFilament(added.subtype)) return
+          const addedFilamentId = resolveColorFilamentIdRef.current(added.filamentId ?? instance.filamentId)
+          recolor.filamentId = addedFilamentId
+          const addedLive = addedFilamentId != null ? filamentColorsRef.current?.[addedFilamentId] : undefined
+          const addedHex = addedLive || recolor.fallbackColor || '#D3DDE7'
+          const addedMaterial = mesh.material as THREE.MeshStandardMaterial
+          addedMaterial.color.set(addedHex)
+          if (addedMaterial.emissive) addedMaterial.emissive.set(addedHex).multiplyScalar(0.12)
+          return
+        }
         // Find this mesh's part via the nearest ancestor carrying a part ref.
         let ref: { partIndex: number } | undefined
         for (let node2: THREE.Object3D | null = mesh; node2 && !ref; node2 = node2.parent) {
@@ -3816,79 +4071,104 @@ function EditorView({
   // selection (rules in lib/selectionModel.ts): Ctrl toggles siblings, Shift ranges
   // between siblings, a part of a different object CONVERTS the selection, and bulk mode
   // always leaves object mode.
-  const handleSelectPart = useCallback((objectId: number, partIndex: number, modifiers: { additive: boolean; range: boolean }, instanceKey: string) => {
+  const handleSelectPart = useCallback((objectId: number, member: PartMember, modifiers: { additive: boolean; range: boolean }, instanceKey: string, options?: { keepTool?: boolean }) => {
     if (!modifiers.additive && !modifiers.range) {
       const instance = stateRef.current?.plates.flatMap((plate) => plate.instances)
         .find((entry) => entry.key === instanceKey)
-      // A multi-solid import renders per-solid groups too (tagged `importPartRef`), so its parts
-      // take the gizmo like an in-project object's: the placement emits as
-      // `importPartTransforms` instead of `partTransforms`. Single-mesh instances have no part
-      // group to attach to, so they fall through to the bulk selection.
-      if (instance && (instance.source.kind === 'object' || instance.parts.length > 1)) {
+      // Which rows can take the gizmo. A volume added this session always has a mesh of its own, so
+      // it always can. A BAKED part only can where the object renders per-part groups: an in-project
+      // object always does, and a multi-solid import does too (tagged `importPartRef`, and its
+      // placement emits as `importPartTransforms` instead of `partTransforms`); a single-mesh
+      // instance has no part group to attach to and falls through to the bulk selection.
+      // The BODY always can: its gizmo is the OBJECT's, which every instance has by definition (see
+      // `selectedPartObject`, which hands back the instance group for it). Without this it fell to
+      // the bulk path on every IMPORT-backed object -- so on every primitive, cut half, boolean
+      // result and single-solid STL -- and the bulk path nulls `selectedKey`, which leaves the whole
+      // tool rail inert and shows no placement panel. Selecting the body was then the one row click
+      // that took tools AWAY.
+      const canTakeGizmo = member.kind === 'added'
+        || member.kind === 'body'
+        || (instance != null && (instance.source.kind === 'object' || instance.parts.length > 1))
+      if (instance && canTakeGizmo) {
         // Clicking the already-gizmo'd part steps back up to the whole object.
-        const current = selectedBakedPartRef.current
-        if (current && current.objectId === objectId && current.partIndex === partIndex
+        if (samePartRef(gizmoPartRef.current, { objectId, member })
           && selectedKeyRef.current === instanceKey) {
-          setSelectedBakedPart(null)
+          setGizmoPart(null)
           return
         }
         selectExclusive(instanceKey)
-        setSelectedAddedPartKey(null)
-        setSelectedBakedPart({ objectId, partIndex })
-        partAnchorRef.current = { objectId, partIndex }
-        if (!['translate', 'rotate', 'scale'].includes(gizmoModeRef.current)) setGizmoMode('translate')
+        setGizmoPart({ objectId, member })
+        partAnchorRef.current = { objectId, member }
+        // Drop a tool that ACTS on what it is pointed at; leave a selection-capable mode alone. Spelled
+    // out as translate/rotate/scale this forced Move on every part click once Select became the
+    // resting mode, so merely picking a part switched tools. `keepTool` is for callers that are not
+    // pointing the tool at anything -- opening a row's menu selects the row the way Studio does, but
+    // ending a paint session to look at a part's options is not something anyone asked for.
+    if (!options?.keepTool && !allowsSelectionPicking(gizmoModeRef.current)) setGizmoMode(RESTING_GIZMO_MODE)
         return
       }
       // No per-part group to hand the gizmo to (a single-mesh import); fall through to
       // the bulk selection so the row still highlights and bulk actions work.
     }
+    // A part already holding the gizmo seeds the bulk set, so gizmo-select then Ctrl-click builds a
+    // two-part selection instead of dropping the first part.
+    //
+    // Read HERE, before the state calls, never from inside the updater below. React resolves each
+    // `useState` queue at that hook's own position in the component body, and `gizmoPart` is
+    // declared long before `partSelection` -- so by the time the updater runs, the clearing call at
+    // the end of this function has already been applied and `gizmoPartRef` reassigned to null. The
+    // seed then read the very value this click was about to clear, and silently dropped the first
+    // part. Same trap this file documents at `booleanLists`, one hook apart instead of one render.
+    const gizmoSeed = gizmoPartRef.current
     setSelectedKey(null)
     setExtraSelectedKeys((current) => (current.length > 0 ? [] : current))
-    setSelectedAddedPartKey(null)
     setPartSelection((current) => {
-      // A part already holding the gizmo seeds the bulk set, so gizmo-select then
-      // Ctrl-click builds a two-part selection instead of dropping the first part.
-      const baked = selectedBakedPartRef.current
-      const seeded = current ?? (baked && baked.objectId === objectId
-        ? { objectId, partIndexes: [baked.partIndex] }
+      const seeded = current ?? (gizmoSeed && gizmoSeed.objectId === objectId
+        ? { objectId, members: [gizmoSeed.member] }
         : current)
       if (modifiers.range) {
         const owner = stateRef.current?.plates.flatMap((plate) => plate.instances).find((instance) => {
           const ownerId = instance.source.kind === 'object' ? instance.objectId : instance.source.replacedObjectId
           return ownerId === objectId
         })
-        const ordered = owner?.parts.map((part) => part.partIndex) ?? [partIndex]
-        return rangePartSelection(objectId, ordered, partAnchorRef.current, partIndex)
+        // Both kinds, in sidebar order, so a shift-range can span a run of baked parts and the
+        // volumes listed after them rather than skipping whichever kind it did not start on.
+        const ordered = owner ? ownerPartMembers(owner, stateRef.current ?? null) : [member]
+        return rangePartSelection(objectId, ordered, partAnchorRef.current, member)
       }
-      partAnchorRef.current = { objectId, partIndex }
-      if (modifiers.additive) return togglePartInSelection(seeded, objectId, partIndex)
+      partAnchorRef.current = { objectId, member }
+      if (modifiers.additive) return togglePartInSelection(seeded, objectId, member)
       // Plain click on the sole selected part deselects it (parity with object rows).
-      if (seeded && seeded.objectId === objectId
-        && seeded.partIndexes.length === 1 && seeded.partIndexes[0] === partIndex) {
+      if (seeded && seeded.objectId === objectId && seeded.members.length === 1
+        && samePartMember(seeded.members[0]!, member)) {
         return null
       }
-      return { objectId, partIndexes: [partIndex] }
+      return { objectId, members: [member] }
     })
-    setSelectedBakedPart((current) => (current ? null : current))
+    setGizmoPart((current) => (current ? null : current))
   }, [selectExclusive])
 
   // Right-click on list rows: keep the selection when clicking a member (bulk menu),
   // otherwise select just the clicked row first: same rule as the viewport.
-  const handleObjectRowContextMenu = useCallback((key: string, position: { x: number; y: number }) => {
+  const handleObjectRowContextMenu = useCallback((key: string, position: ContextMenuAnchor) => {
+    // Select what the menu is about to act on, as BambuStudio does, but never deselect: a row that
+    // is already part of the selection keeps it, so the menu can offer the bulk actions.
     if (!allSelectedKeysRef.current().includes(key)) selectExclusive(key)
     setContextMenu({ ...position, kind: 'object', key })
   }, [selectExclusive])
-  const handlePartRowContextMenu = useCallback((objectId: number, partIndex: number, position: { x: number; y: number }) => {
-    let selection = partSelectionRef.current
-    if (!selection || selection.objectId !== objectId || !selection.partIndexes.includes(partIndex)) {
-      selection = { objectId, partIndexes: [partIndex] }
-      setSelectedKey(null)
-      setExtraSelectedKeys((current) => (current.length > 0 ? [] : current))
-      setPartSelection(selection)
-      partAnchorRef.current = { objectId, partIndex }
-    }
-    setContextMenu({ ...position, kind: 'parts', objectId, partIndexes: selection.partIndexes })
-  }, [])
+  const handlePartRowContextMenu = useCallback((objectId: number, member: PartMember, position: ContextMenuAnchor, instanceKey: string) => {
+    const { selectFirst, members } = partRowMenuSelection(
+      { objectId, member },
+      partSelectionRef.current,
+      gizmoPartRef.current,
+      selectedKeyRef.current,
+      instanceKey
+    )
+    // Select exactly as a plain CLICK would, minus the tool drop: see `partRowMenuSelection`. The
+    // targets are read synchronously, since this selection only lands on a later render.
+    if (selectFirst) handleSelectPart(objectId, member, { additive: false, range: false }, instanceKey, { keepTool: true })
+    setContextMenu({ ...position, kind: 'parts', objectId, members: [...members] })
+  }, [handleSelectPart])
 
   // Reassign the filament of a set of object parts (keyed by objectId+componentObjectId).
   // Filament is a property of the object's part, shared across instances/plates, so we
@@ -3946,7 +4226,18 @@ function EditorView({
    * the part-addressed path got that for free by keying on the object id, so matching instance keys
    * alone would have quietly recoloured one copy and left its siblings behind.
    */
-  const reassignInstanceFilament = useCallback((keys: readonly string[], filamentId: number) => {
+  const reassignInstanceFilament = useCallback((
+    keys: readonly string[],
+    filamentId: number,
+    /**
+     * Whether the object's session-added volumes go with it. TRUE for "set all parts' material",
+     * which is what this action is; FALSE when the caller is changing only the BODY, whose material
+     * is the instance's own. Sweeping the volumes up there retargeted materials the user had set on
+     * volumes they had not selected, under a control labelled "Change material" for the body row.
+     */
+    options?: { includeVolumes?: boolean }
+  ) => {
+    const includeVolumes = options?.includeVolumes ?? true
     const keySet = new Set(keys)
     if (keySet.size === 0) return
     // The object identities behind those keys. An import-backed instance uses its synthetic id,
@@ -3965,12 +4256,27 @@ function EditorView({
       const ownerId = instance.source.kind === 'object' ? instance.objectId : instance.source.replacedObjectId
       return ownerId != null && ownerIds.has(ownerId)
     }
+    // The object's SESSION-ADDED volumes are parts of it too, and this is the "set all parts'
+    // material" action, so they are retargeted in the same gesture. Left out, the badge summarising
+    // them showed a mixed swatch that the action could not resolve, and the volume changed material
+    // by itself on the next save, when it became a baked part and started following this path.
+    // Keys, not ids, because that is what the added-part seam addresses.
+    const volumeKeys = (includeVolumes ? Object.entries(stateRef.current?.addedParts ?? {}) : [])
+      .filter(([hostId]) => ownerIds.has(Number(hostId)))
+      .flatMap(([, parts]) => parts)
+      .filter((part) => threeMfPartSubtypeCarriesFilament(part.subtype))
+      .map((part) => part.key)
     updatePlates((plates) => plates.map((plate) => ({
       ...plate,
       instances: plate.instances.map((instance) => (targeted(instance)
         ? assignInstanceFilament(instance, filamentId)
         : instance))
     })), 'material')
+    // `updatePlates` already checkpointed this gesture, so the volume half must not checkpoint
+    // again: two entries would make one material change take two Ctrl+Z.
+    if (volumeKeys.length > 0) {
+      handleChangeAddedPartFilamentsRef.current(volumeKeys, filamentId, { recordHistory: false })
+    }
   }, [updatePlates])
 
   /**
@@ -3979,12 +4285,20 @@ function EditorView({
    * material to change, so the part context menu drops the item instead of offering a no-op
    * (`reassignFilament` would skip them anyway).
    */
-  const partsAcceptFilament = useCallback((objectId: number, partIndexes: ReadonlyArray<number>) => {
-    const ids = new Set(partIndexes)
+  const partsAcceptFilament = useCallback((objectId: number, members: ReadonlyArray<PartMember>) => {
+    // The BODY carries the OBJECT's material, which is a real, changeable material -- the second of
+    // the two places one can live. Excluded, the body row was the only volume row with no material
+    // control at all, and it grew one on the next save when the body became a baked part.
+    if (members.some((member) => member.kind === 'body')) return true
+    const ids = new Set(members.flatMap((member) => (member.kind === 'baked' ? [member.partIndex] : [])))
+    const keys = new Set(members.flatMap((member) => (member.kind === 'added' ? [member.key] : [])))
     for (const instance of activePlateRef.current?.instances ?? []) {
-      const ownerId = instance.source.kind === 'object' ? instance.objectId : instance.source.replacedObjectId
-      if (ownerId !== objectId) continue
+      if (addedPartHostId(instance) !== objectId) continue
       if (instance.parts.some((part) => ids.has(part.partIndex) && threeMfPartSubtypeCarriesFilament(part.subtype))) return true
+      // A volume carries a material on exactly the same rule (`threeMfPartSubtypeCarriesFilament`),
+      // so a mixed selection offers the picker when ANY member can take one, as it does for parts.
+      if (effectiveAddedParts(stateRef.current, instance)
+        .some((part) => keys.has(part.key) && threeMfPartSubtypeCarriesFilament(part.subtype))) return true
     }
     return false
   }, [])
@@ -3994,11 +4308,31 @@ function EditorView({
    * rule the sidebar's trash button applies, asked of the whole selection at once so selecting every
    * part of an object hides the item rather than offering a refused action.
    */
-  const partSelectionRemovable = useCallback((objectId: number, partIndexes: ReadonlyArray<number>) => {
+  const partSelectionRemovable = useCallback((objectId: number, members: ReadonlyArray<PartMember>) => {
     const instance = stateRef.current?.plates
       .flatMap((plate) => plate.instances)
       .find((entry) => addedPartHostId(entry) === objectId)
-    return instance != null && canRemoveParts(instance, new Set(partIndexes))
+    if (!instance) return false
+    // ONE question, asked of every kind at once: does this object still print something afterwards?
+    // Splitting it per kind is what let it be answered wrong -- an added-only selection used to
+    // return true outright, on the reasoning that a volume is never the last printed thing. It is,
+    // on an object whose body has already gone: the last volume then left an object with no
+    // geometry, invisible in the viewport, and the save wrote the DELETED BODY back, because
+    // `removedObjectBodies` is only honoured for a host that still has added parts to write.
+    const goingKeys = new Set(members.flatMap((member) => (member.kind === 'added' ? [member.key] : [])))
+    const bakedIndexes = new Set(members.flatMap((member) => (member.kind === 'baked' ? [member.partIndex] : [])))
+    const survivingVolumes = effectiveAddedParts(stateRef.current, instance)
+      .filter((part) => !goingKeys.has(part.key)
+        && !isNonRenderableThreeMfPartSubtype(canonicalThreeMfPartSubtype(part.subtype)))
+      .length
+    // The body is printed geometry too, for exactly the objects whose part list does not describe
+    // them -- `canRemoveParts` counts baked parts and cannot see it, so it is passed in alongside
+    // the volumes rather than special-cased ahead of it.
+    const bodySurvives = instance.parts.length === 0
+      && !instance.bodyRemoved
+      && !members.some((member) => member.kind === 'body')
+      && !isNonRenderableThreeMfPartSubtype(bodyPartSubtype(stateRef.current, instance))
+    return canRemoveParts(instance, bakedIndexes, survivingVolumes + (bodySurvives ? 1 : 0))
   }, [])
 
   // Change parts' Bambu volume type (BambuStudio's "Change type": normal / negative /
@@ -4055,6 +4389,32 @@ function EditorView({
       handleChangePartTypes([{ objectId, partIndex }], subtype),
     [handleChangePartTypes]
   )
+  /**
+   * Right-click a session-added volume.
+   *
+   * Now the SAME handler as every other part row, which is the point of the merge: it was a separate
+   * path only because the volume's selection lived in a state of its own, and that path had drifted
+   * (it replaced the selection outright rather than keeping a set the row already belonged to, so
+   * right-clicking one member of a multi-selection narrowed the menu to that row).
+   */
+  const handleAddedPartContextMenu = useCallback((objectId: number, partKey: string, position: ContextMenuAnchor, instanceKey: string) => {
+    // Spread the whole anchor: naming x and y by hand silently dropped `align`, so the kebab on a
+    // session-added volume -- the row the kebab exists for, since a touch user has no right-click --
+    // was the one that still opened diagonally off its own button.
+    handlePartRowContextMenu(objectId, { kind: 'added', key: partKey }, position, instanceKey)
+  }, [handlePartRowContextMenu])
+
+  /**
+   * The body row's subtype, stable for the memoised list.
+   *
+   * Keyed on the map it reads rather than a version counter: `partTypeChanges` is REPLACED on every
+   * change (unlike `addedParts`, which is mutated in place), so its identity is the honest signal.
+   */
+  const bodySubtypeFor = useCallback(
+    (instance: EditorInstance) => bodyPartSubtype(stateRef.current, instance),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [state?.partTypeChanges]
+  )
   const addedPartsFor = useCallback(
     (instance: EditorInstance) => effectiveAddedParts(stateRef.current, instance),
     // The version IS the dependency, though the body never names it: the map this reads is mutated
@@ -4089,11 +4449,18 @@ function EditorView({
       ]),
       overrideCountFor: (objectId) => Object.keys(perObject.value[String(objectId)] ?? {}).length,
       onEditObject: (objectId, name) => setEditingObject({ ids: [objectId], name }),
-      onEditPart: (objectId, partIndex, name) => setEditingPart({ objectId, partIndexes: [partIndex], name }),
+      onEditPart: (objectId, partIndex, name) => setEditingPart({ objectId, members: [{ kind: 'baked', partIndex }], name }),
       partOverrideCountFor: (objectId, partIndex) =>
         Object.keys(stateRef.current?.partProcessOverrides?.[partSlotKey(objectId, partIndex)] ?? {}).length
     }
-  }, [perObject, sliceConfig?.plateObjects, activePlate?.instances, state?.objectClones])
+    // `partProcessOverrides` IS a dependency, though the body never names it: the count above is
+    // read from a live REF, so this object's identity is the only thing telling the memoised rows
+    // that a badge changed. Without it the badge did not appear until some other prop moved the row
+    // -- deselecting it, in practice, which made a saved change look unsaved. Applying settings
+    // replaces the map, so the whole-list re-render lands on that deliberate action, not a keystroke.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [perObject, sliceConfig?.plateObjects, activePlate?.instances, state?.objectClones,
+    state?.partProcessOverrides])
 
   // Rename an object (Bambu groups by object, so the new label applies to every
   // instance of it). Marks the object as renamed so buildSceneEdit emits an override.
@@ -4231,7 +4598,12 @@ function EditorView({
         return
       }
       const ref = partGroupRef(node)
-      const bakedPart = ref ? instance.parts[ref.partIndex] : undefined
+      // Resolved by ORDINAL, not by array position: `partIndex` is a base-file identity that the
+      // list does not renumber, so a removed part (which filters the array) or a reordered one
+      // makes the two disagree. Indexing here carried a support ENFORCER onto a cut half as the
+      // BLOCKER that had slid into its slot, suppressing supports exactly where they were asked
+      // for -- or dropped the volume silently when the slot held a normal part.
+      const bakedPart = ref ? instance.parts.find((entry) => entry.partIndex === ref.partIndex) : undefined
       const subtype = bakedPart?.subtype ?? null
       // `helperVolumeSpec` is the same predicate the renderer used to decide this IS a helper
       // volume, so a subtype it does not recognise cannot have been tagged in the first place.
@@ -4519,18 +4891,18 @@ function EditorView({
    * part selection's object key: the Bambu object id, or an import's synthetic
    * `replacedObjectId` (the same ownership rule as part type/material changes).
    */
-  const buildPartsExport = useCallback((ownerId: number, partIndexes: ReadonlyArray<number>): { stl: ArrayBuffer; name: string; droppedVolumes: boolean } | null => {
+  const buildPartsExport = useCallback((ownerId: number, members: ReadonlyArray<PartMember>): { stl: ArrayBuffer; name: string; droppedVolumes: boolean } | null => {
     const plate = stateRef.current?.plates.find((entry) => entry.index === activePlateIndex)
-    const instance = plate?.instances.find((entry) =>
-      (entry.source.kind === 'object' ? entry.objectId : entry.source.replacedObjectId) === ownerId)
+    const instance = plate?.instances.find((entry) => addedPartHostId(entry) === ownerId)
     const group = instance ? groupByKeyRef.current.get(instance.key) : undefined
     if (!instance || !group) return null
-    const stl = buildPartsStl(group, partIndexes)
+    const stl = buildSelectedPartsStl(group, members)
     if (!stl) {
       toast.error('The selected parts have no geometry to export.')
       return null
     }
-    return { stl, name: partsExportName(instance, partIndexes), droppedVolumes: false }
+    const name = partsExportName(instance, members, effectiveAddedParts(stateRef.current, instance))
+    return { stl, name, droppedVolumes: false }
   }, [activePlateIndex])
 
   const downloadExportedStl = useCallback((built: { stl: ArrayBuffer; name: string; droppedVolumes: boolean }) => {
@@ -4561,8 +4933,8 @@ function EditorView({
     }
   }, [buildSelectionStlFiles])
 
-  const handleExportPartsDownload = useCallback((ownerId: number, partIndexes: ReadonlyArray<number>) => {
-    const built = buildPartsExport(ownerId, partIndexes)
+  const handleExportPartsDownload = useCallback((ownerId: number, members: ReadonlyArray<PartMember>) => {
+    const built = buildPartsExport(ownerId, members)
     if (built) downloadExportedStl(built)
   }, [buildPartsExport, downloadExportedStl])
 
@@ -4588,7 +4960,7 @@ function EditorView({
     // 'project' never lands here (the dialog dispatches it straight to the save hook),
     // but the narrowing treats both single-key kinds the same.
     const built = request.kind === 'parts'
-      ? buildPartsExport(request.ownerId, request.partIndexes)
+      ? buildPartsExport(request.ownerId, request.members)
       : buildSelectionStl(request.kind === 'object' || request.kind === 'project' ? [request.key] : request.keys)
     if (!built) return
     const file = new File([built.stl], `${outputFileName}.stl`, { type: 'application/octet-stream' })
@@ -4672,7 +5044,7 @@ function EditorView({
       if (!state.addedParts) state.addedParts = {}
       ;(state.addedParts[hostId] ??= []).push(part)
       refreshAddedPartMeshes()
-      setSelectedAddedPartKey(part.key)
+      setGizmoPart({ objectId: hostId, member: { kind: 'added', key: part.key } })
       setGizmoMode('translate')
       regenerateActiveThumbnailRef.current?.()
       toast.success(`Added a ${label.toLowerCase()}: drag it into position.`)
@@ -4684,48 +5056,275 @@ function EditorView({
   }, [activePlateIndex, refreshAddedPartMeshes, recordHistoryRef, importStore])
 
   /**
+   * Read an SVG the user picks and keep its outlines for the tool to extrude.
+   *
+   * Read in the tab and never uploaded, like every other model the editor opens. A file whose paths
+   * paint NOTHING (neither fill nor stroke) parses fine and yields no shapes, which is reported here
+   * rather than being added as a part with no geometry.
+   */
+  const handleChooseSvgFile = useCallback(() => svgInputRef.current?.click(), [])
+
+  /** Parse a chosen SVG. Split from the click so the hidden input can call it directly. */
+  const handleSvgFileChosen = useCallback(async (file: File) => {
+    setImporting(true)
+    try {
+      const parsed = parseSvgShapes(await file.text())
+      setSvgFileName(file.name)
+      if (parsed.pieces.length === 0) {
+        setSvgArtwork(null)
+        setSvgEmptyReason('Nothing in this file is painted, so there is no shape to extrude. Paths need a fill or a stroke.')
+        return
+      }
+      setSvgArtwork(parsed)
+      setSvgEmptyReason(null)
+    } catch (error) {
+      setSvgArtwork(null)
+      setSvgEmptyReason(extractErrorMessage(error) || 'That file could not be read as SVG.')
+    } finally {
+      setImporting(false)
+    }
+  }, [])
+
+  /**
+   * Commit the artwork: a part of the selected model, or its own object when nothing is selected.
+   *
+   * Both routes hand a soup to the SAME pipeline the text tool and the primitives use, so placement,
+   * material seeding and the bake are shared rather than re-implemented for artwork.
+   */
+  const handleAddSvg = useCallback(async () => {
+    if (!svgArtwork) return
+    const backgroundIndex = detectSvgBackgroundPiece(svgArtwork)
+    const dropped = svgTool.includeBackground ? null : backgroundIndex
+    // Filtered by the piece's 1-based index, which `buildSvgPieceSoups` carries, so the numbering in
+    // the part names still matches the file's paint order after one is left out.
+    const pieces = buildSvgPieceSoups(svgArtwork, { widthMm: svgTool.widthMm, thickness: svgTool.thickness })
+      .filter((piece) => dropped == null || piece.index !== dropped + 1)
+    if (pieces.length === 0) return
+    const base = (svgFileName ?? 'Artwork').replace(/\.svg$/i, '').slice(0, 32) || 'Artwork'
+    // One part per drawn shape, so a logo's background can be deleted and each mark can take its own
+    // filament. Above the cap the pieces are merged into one: an illustration with hundreds of paths
+    // would otherwise bury the object list, and the user is told rather than left to count rows.
+    const split = pieces.length > 1 && pieces.length <= SVG_MAX_PARTS
+    // Merged from the pieces that SURVIVED the background filter, not rebuilt from the whole file:
+    // going back to the artwork here would quietly reinstate the background above the cap.
+    const soups = split ? pieces : [{ soup: mergeSoups(pieces.map((piece) => piece.soup)), index: 1, coverage: 1 }]
+    const partName = (index: number) => (split ? `${base} ${index}` : base)
+
+    const state = stateRef.current
+    const plate = state?.plates.find((entry) => entry.index === activePlateIndex)
+    const hostKey = selectedKeyRef.current
+    const instance = hostKey ? plate?.instances.find((entry) => entry.key === hostKey) : null
+    const group = hostKey ? groupByKeyRef.current.get(hostKey) : null
+    const hostId = instance ? addedPartHostId(instance) : null
+
+    setImporting(true)
+    try {
+      if (state && instance && group && hostId != null) {
+        // Every piece lands at the SAME point: the soups already carry each shape's offset from the
+        // artwork's centre, so a per-part drop position (which offsets by each part's own size)
+        // would scatter the logo across the model.
+        const box = printableMeshBox(group)
+        const rotor = rotorOf(group)
+        rotor.updateWorldMatrix(true, false)
+        const position = addedPartDropPosition(svgTool.operation, box, soupSize(soups[0]!.soup), (point) => rotor.worldToLocal(point))
+        const staged = await Promise.all(soups.map((piece) =>
+          stageAddedPartGeometry(importStore, { kind: 'soup', soup: piece.soup, name: partName(piece.index) }, 0)))
+        recordHistoryRef.current?.()
+        if (!state.addedParts) state.addedParts = {}
+        const parts = (state.addedParts[hostId] ??= [])
+        staged.forEach((entry, at) => {
+          parts.push({
+            key: nextInstanceKey(),
+            importId: entry.importId,
+            subtype: svgTool.operation,
+            name: partName(soups[at]!.index),
+            ...(threeMfPartSubtypeCarriesFilament(svgTool.operation) ? { filamentId: instance.filamentId } : {}),
+            position: position.clone(),
+            rotation: new THREE.Euler(),
+            scale: new THREE.Vector3(1, 1, 1),
+            soup: entry.soup
+          })
+        })
+        refreshAddedPartMeshes()
+        regenerateActiveThumbnailRef.current?.()
+        setGizmoMode(RESTING_GIZMO_MODE)
+        toast.success(split ? `Added ${soups.length} parts from the artwork.` : 'Added the artwork as a part.')
+        return
+      }
+
+      // Standalone. The object needs a body, so the LARGEST piece becomes it and the rest are parts
+      // of it: for a logo that is the background, with the marks sitting on it, which is also the
+      // order that makes the marks individually deletable and individually colourable.
+      const ordered = [...soups].sort((a, b) => b.coverage - a.coverage)
+      const body = ordered[0]!
+      // Staged RAW: `object` normalisation re-centres XY and floors Z itself, and the parts below
+      // need to know exactly what it did, which `svgObjectFrameShift` states rather than guesses.
+      const frame = svgObjectFrameShift(body.soup)
+      const stagedBody = await importStore.stageFile(
+        new File([triangleSoupToBinaryStl(body.soup)], `${partName(body.index)}.stl`, { type: 'application/octet-stream' }),
+        'object'
+      )
+      recordHistoryRef.current?.()
+      const created = instanceFromStagedImport(stagedBody, importStore.meshUrl)
+      addInstanceToActivePlate(created, stagedFootprint(stagedBody))
+      setGizmoMode(RESTING_GIZMO_MODE)
+      toast.success(ordered.length > 1
+        ? `Added the artwork. Its ${ordered.length - 1} other shapes are parts of it.`
+        : 'Added the artwork.')
+      // The remaining pieces attach to the object just created, in the same frame, so the artwork
+      // reassembles exactly as drawn.
+      const restHostId = addedPartHostId(created)
+      if (ordered.length > 1 && restHostId != null) {
+        const stagedRest = await Promise.all(ordered.slice(1).map((piece) =>
+          stageAddedPartGeometry(importStore, { kind: 'soup', soup: piece.soup, name: partName(piece.index) }, 0)))
+        const live = stateRef.current
+        if (live) {
+          if (!live.addedParts) live.addedParts = {}
+          const parts = (live.addedParts[restHostId] ??= [])
+          stagedRest.forEach((entry, at) => {
+            parts.push({
+              key: nextInstanceKey(),
+              importId: entry.importId,
+              subtype: 'normal_part',
+              name: partName(ordered[at + 1]!.index),
+              filamentId: created.filamentId,
+              // The pieces are all in ARTWORK coordinates; the body was moved out of them by the
+              // object normalisation, so this puts them back beside it.
+              position: new THREE.Vector3(frame.x, frame.y, frame.z),
+              rotation: new THREE.Euler(),
+              scale: new THREE.Vector3(1, 1, 1),
+              soup: entry.soup
+            })
+          })
+          refreshAddedPartMeshes()
+          regenerateActiveThumbnailRef.current?.()
+        }
+      }
+    } catch (error) {
+      toast.error(extractErrorMessage(error) || 'That artwork could not be added.')
+    } finally {
+      setImporting(false)
+    }
+  }, [activePlateIndex, addInstanceToActivePlate, importStore, recordHistoryRef, refreshAddedPartMeshes, svgArtwork, svgFileName, svgTool])
+
+
+  /**
    * Change an added part volume's subtype (negative part / modifier / support blocker /
    * enforcer). Added parts live in the in-place-mutated `addedParts` session map, so after
    * the mutation the state identity is refreshed to re-render the panel, and the viewport
    * meshes are rebuilt to pick up the subtype's colour.
    */
-  const handleChangeAddedPartType = useCallback((key: string, subtype: SceneEditPartSubtype) => {
+  const handleChangeAddedPartTypes = useCallback((keys: ReadonlyArray<string>, subtype: SceneEditPartSubtype) => {
     const state = stateRef.current
-    const part = Object.values(state?.addedParts ?? {}).flat().find((entry) => entry.key === key)
-    if (!state || !part || part.subtype === subtype) return
+    const wanted = new Set(keys)
+    const parts = Object.values(state?.addedParts ?? {}).flat()
+      .filter((entry) => wanted.has(entry.key) && entry.subtype !== subtype)
+    if (!state || parts.length === 0) return
+    // ONE history entry for the whole set: a per-volume record would make a multi-select retype take
+    // as many undos as it had members, which is not what the user did.
     recordHistoryRef.current?.()
-    part.subtype = subtype
-    // Retyping to a subtype that carries no material must drop the material, not hide it: a
-    // support blocker with a lingering filament would reappear the moment it was retyped back.
-    if (!threeMfPartSubtypeCarriesFilament(subtype)) part.filamentId = null
+    for (const part of parts) {
+      part.subtype = subtype
+      // Retyping to a subtype that carries no material must drop the material, not hide it: a
+      // support blocker with a lingering filament would reappear the moment it was retyped back.
+      if (!threeMfPartSubtypeCarriesFilament(subtype)) part.filamentId = null
+    }
     refreshAddedPartMeshes()
     regenerateActiveThumbnailRef.current?.()
     setState((current) => (current ? { ...current } : current))
   }, [refreshAddedPartMeshes, recordHistoryRef])
 
   /** Reassign an added part's material (normal parts and modifiers only: see the type Select). */
-  const handleChangeAddedPartFilament = useCallback((key: string, filamentId: number) => {
+  const handleChangeAddedPartFilaments = useCallback((
+    keys: ReadonlyArray<string>,
+    filamentId: number,
+    // A gesture that changes an object's material reaches both seams (the instance/its baked parts,
+    // and its volumes) and must still be ONE undo, so the caller can say it has already recorded.
+    // Same shape as `handleRemoveAddedParts`, for the same reason.
+    options?: { recordHistory?: boolean }
+  ) => {
     const state = stateRef.current
-    const part = Object.values(state?.addedParts ?? {}).flat().find((entry) => entry.key === key)
-    if (!state || !part || part.filamentId === filamentId) return
-    recordHistoryRef.current?.()
-    part.filamentId = filamentId
+    const wanted = new Set(keys)
+    const parts = Object.values(state?.addedParts ?? {}).flat()
+      .filter((entry) => wanted.has(entry.key) && entry.filamentId !== filamentId)
+    if (!state || parts.length === 0) return
+    if (options?.recordHistory !== false) recordHistoryRef.current?.()
+    for (const part of parts) part.filamentId = filamentId
     refreshAddedPartMeshes()
     regenerateActiveThumbnailRef.current?.()
     setState((current) => (current ? { ...current } : current))
   }, [refreshAddedPartMeshes, recordHistoryRef])
+  const handleChangeAddedPartFilamentsRef = useRef(handleChangeAddedPartFilaments)
+  handleChangeAddedPartFilamentsRef.current = handleChangeAddedPartFilaments
+
+  /**
+   * Change the volume TYPE / the material of a whole part selection, of either kind, in one gesture.
+   *
+   * Each half goes to the seam that owns it -- a baked part's type is recorded in `partTypeChanges`
+   * for the bake, a volume's lives on the volume -- but the user made ONE choice, so each seam
+   * records at most one history entry and a mixed set undoes in a single step.
+   */
+  const handleChangeMemberTypes = useCallback(
+    (objectId: number, members: ReadonlyArray<PartMember>, subtype: SceneEditPartSubtype) => {
+      // A body retypes through the SAME seam as a baked part, at the ordinal the bake promotes it
+      // into (`BODY_PART_INDEX`). It has no entry in `instance.parts` to reflect onto, so the
+      // sidebar and the viewport read the stored change back instead -- which is what makes the
+      // control work before a save rather than appearing after one.
+      const baked = members.flatMap((member) => (member.kind === 'baked'
+        ? [{ objectId, partIndex: member.partIndex }]
+        : member.kind === 'body'
+          ? [{ objectId, partIndex: BODY_PART_INDEX }]
+          : []))
+      if (baked.length > 0) handleChangePartTypes(baked, subtype)
+      const added = members.flatMap((member) => (member.kind === 'added' ? [member.key] : []))
+      if (added.length > 0) handleChangeAddedPartTypes(added, subtype)
+    },
+    [handleChangePartTypes, handleChangeAddedPartTypes]
+  )
+  const handleChangeMemberFilament = useCallback(
+    (objectId: number, members: ReadonlyArray<PartMember>, filamentId: number) => {
+      // The BODY's material is the OBJECT's, which is the second of the two places one can live, so
+      // it routes to the instance-level change. Each kind in the selection then goes through its own
+      // seam below. That does mean a MIXED selection can record more than one history entry, which
+      // is the lesser of the two evils: the alternative, letting the instance-level call sweep up
+      // the object's volumes, changed materials on volumes the user had not selected.
+      const bodySelected = members.some((member) => member.kind === 'body')
+      if (bodySelected) {
+        const owner = stateRef.current?.plates.flatMap((plate) => plate.instances)
+          .find((instance) => addedPartHostId(instance) === objectId)
+        // The volumes are excluded because they are not part of this SELECTION. "Set all parts'
+        // material" is the object row's badge and passes them; a member selection changes the
+        // members it names, and the added ones below are handled on their own terms.
+        if (owner) reassignInstanceFilament([owner.key], filamentId, { includeVolumes: false })
+      }
+
+      const baked = members.flatMap((member) => (member.kind === 'baked' ? [{ objectId, partIndex: member.partIndex }] : []))
+      if (baked.length > 0) reassignFilament(baked, filamentId)
+      const added = members.flatMap((member) => (member.kind === 'added' ? [member.key] : []))
+      if (added.length > 0) handleChangeAddedPartFilaments(added, filamentId)
+    },
+    [reassignFilament, handleChangeAddedPartFilaments, reassignInstanceFilament]
+  )
 
   /** Remove an added part volume by key (default: the currently selected one). */
-  const handleRemoveAddedPart = useCallback((key?: string) => {
+  const handleRemoveAddedParts = useCallback((keys: ReadonlyArray<string>, options?: { recordHistory?: boolean }) => {
     const state = stateRef.current
-    const target = key ?? selectedAddedPartKeyRef.current
-    if (!state?.addedParts || !target) return
-    recordHistoryRef.current?.()
+    if (!state?.addedParts || keys.length === 0) return
+    const targets = new Set(keys)
+    // A mixed delete removes through both seams and must still be ONE undo, so the caller can say
+    // it has already recorded.
+    if (options?.recordHistory !== false) recordHistoryRef.current?.()
     for (const [objectId, parts] of Object.entries(state.addedParts)) {
-      const next = parts.filter((part) => part.key !== target)
+      const next = parts.filter((part) => !targets.has(part.key))
       if (next.length !== parts.length) state.addedParts[Number(objectId)] = next
     }
-    if (selectedAddedPartKeyRef.current === target) setSelectedAddedPartKey(null)
+    // The selection cannot outlive the geometry it names. Both shapes are cleared, since either may
+    // hold a volume that has just gone.
+    setGizmoPart((current) => (current && current.member.kind === 'added' && targets.has(current.member.key)
+      ? null
+      : current))
+    setPartSelection((current) => (current && current.members.some(
+      (entry) => entry.kind === 'added' && targets.has(entry.key)) ? null : current))
     refreshAddedPartMeshes()
     regenerateActiveThumbnailRef.current?.()
     // addedParts is mutated in place; refresh the state identity so the list rows re-render.
@@ -4741,25 +5340,79 @@ function EditorView({
    * there in the object menu. `withRemovedParts` owns both rules; this only feeds it the host id
    * the row/menu was opened against and rebuilds the scene.
    */
-  const handleRemoveParts = useCallback((hostId: number, partIndexes: ReadonlyArray<number>) => {
-    if (partIndexes.length === 0) return
-    const targets = new Set(partIndexes)
+  /**
+   * Delete an object's BODY: the object keeps no geometry of its own and its added volumes become
+   * the whole of it, which is exactly the state a save-then-delete reaches.
+   *
+   * A flag rather than a promotion. Promoting a volume into the body worked and read correctly
+   * until the next SAVE, which names a promoted body after the OBJECT -- so the same delete showed
+   * `["Cube","Part"]` before a save and `["Part","Part"]` after one. The flag instead rides
+   * `SceneEdit.removedObjectBodies`, and the bake simply never creates that component, so the
+   * surviving parts keep their OWN names and the file matches what the editor showed.
+   *
+   * Nothing else has to honour it: the body mesh is never added to the render group, and bounds,
+   * footprint, the thumbnail, export and the boolean all walk that group.
+   */
+  const removeInstanceBody = useCallback((hostId: number) => {
+    setState((state) => {
+      if (!state) return state
+      return {
+        ...state,
+        plates: state.plates.map((plate) => ({
+          ...plate,
+          instances: plate.instances.map((item) => (addedPartHostId(item) === hostId
+            ? { ...item, bodyRemoved: true }
+            : item))
+        }))
+      }
+    })
+  }, [])
+
+  const handleRemoveParts = useCallback((hostId: number, members: ReadonlyArray<PartMember>) => {
+    if (members.length === 0) return
+    // A mixed set deletes through BOTH seams in one gesture, because that is what the user selected.
+    // The order matters: `withRemovedParts` counts the printed parts that survive, and the volumes
+    // going away in the same breath must already be gone from that count or it can refuse a delete
+    // that leaves the object with geometry.
+    // ONE history entry for the whole gesture, recorded here rather than inside each seam: a mixed
+    // delete that recorded twice would take two undos to put back what one click removed.
     recordHistory()
-    setState((current) => (current ? withRemovedParts(current, hostId, targets) ?? current : current))
+    const addedKeys = members.flatMap((member) => (member.kind === 'added' ? [member.key] : []))
+    if (addedKeys.length > 0) handleRemoveAddedParts(addedKeys, { recordHistory: false })
+    const bakedIndexes = new Set(members.flatMap((member) => (member.kind === 'baked' ? [member.partIndex] : [])))
+    if (bakedIndexes.size > 0) {
+      setState((current) => (current ? withRemovedParts(current, hostId, bakedIndexes) ?? current : current))
+    }
     // A deleted part leaves the selection pointing at geometry that no longer exists.
     setPartSelection(null)
-    setSelectedBakedPart(null)
+    setGizmoPart(null)
+    if (members.some((member) => member.kind === 'body')) removeInstanceBody(hostId)
     setRebuildToken((token) => token + 1)
     regenerateActiveThumbnailRef.current?.()
-  }, [recordHistory, setPartSelection, setSelectedBakedPart])
+  }, [handleRemoveAddedParts, recordHistory, setPartSelection, removeInstanceBody])
 
-  /** Select an added part from its list row: select its instance and hand it the gizmo. */
-  const handleSelectAddedPartRow = useCallback((instanceKey: string, partKey: string) => {
-    selectExclusive(instanceKey)
-    setSelectedAddedPartKey(partKey)
-    // The added-part gizmo/panel only exist in the transform modes.
-    if (!['translate', 'rotate', 'scale'].includes(gizmoModeRef.current)) setGizmoMode('translate')
-  }, [selectExclusive])
+  /**
+   * Select an added volume from its list row.
+   *
+   * Delegates to the SAME handler a baked part row uses, which is what gives volume rows Ctrl and
+   * Shift for the first time: they used to call a handler of their own that took no modifiers and
+   * always replaced the selection, so a volume could not join a multi-part set at all.
+   */
+  /** Open per-volume settings from a volume row's own button, through the shared part dialog. */
+  const handleEditAddedPartSettings = useCallback((objectId: number, partKey: string) => {
+    const owner = stateRef.current?.plates.flatMap((plate) => plate.instances)
+      .find((instance) => addedPartHostId(instance) === objectId)
+    const name = owner
+      ? effectiveAddedParts(stateRef.current, owner).find((part) => part.key === partKey)?.name
+      : null
+    setEditingPart({ objectId, members: [{ kind: 'added', key: partKey }], name: name ?? 'Part' })
+  }, [])
+
+  const handleSelectAddedPartRow = useCallback(
+    (objectId: number, partKey: string, modifiers: { additive: boolean; range: boolean }, instanceKey: string) =>
+      handleSelectPart(objectId, { kind: 'added', key: partKey }, modifiers, instanceKey),
+    [handleSelectPart]
+  )
 
   /**
    * Assemble (the inverse of "Split to objects"): merge every selected object into ONE
@@ -4767,6 +5420,35 @@ function EditorView({
    * as a disconnected shell inside the merged mesh, so "Split to objects" recovers the
    * pieces exactly.
    */
+  // Mesh boolean (both of Studio's target modes). Its state, rules and the two apply paths live in
+  // `useEditorMeshBoolean`; everything below just renders them.
+  const meshBoolean = useEditorMeshBoolean({
+    gizmoMode,
+    setGizmoMode,
+    selectedKey,
+    extraSelectedKeys,
+    allSelectedKeys,
+    activePlateIndex,
+    stateRef,
+    groupByKeyRef,
+    setState,
+    importStore,
+    recordHistoryRef,
+    collectHelperVolumesFor,
+    rotorOf,
+    nextInstanceKey,
+    setSelectedKey,
+    setExtraSelectedKeys,
+    setPartSelection,
+    setGizmoPart,
+    setAddedPartMeshVersion,
+    setRebuildToken,
+    regenerateActiveThumbnailRef,
+    addedPartMeshVersion,
+    rebuildToken
+  })
+
+
   const handleAssembleSelection = useCallback(async () => {
     const keys = allSelectedKeysRef.current()
     if (keys.length < 2) return
@@ -4776,6 +5458,11 @@ function EditorView({
       .map((key) => ({ instance: plate.instances.find((entry) => entry.key === key), group: groupByKeyRef.current.get(key) }))
       .filter((entry): entry is { instance: EditorInstance; group: THREE.Group } => Boolean(entry.instance && entry.group))
     if (members.length < 2) return
+    // Assemble merges PRINTED geometry only -- `collectWorldTriangles` drops every helper volume --
+    // so say how many went, as the cut and both splits do. Silently, the user's blockers and
+    // modifiers simply stopped existing with nothing on screen to say so.
+    const discardedHelpers = members
+      .reduce((total, member) => total + collectHelperVolumesFor(member.instance, member.group).length, 0)
     setImporting(true)
     try {
       const soups = members.map((member) => collectWorldTriangles(member.group))
@@ -4802,13 +5489,16 @@ function EditorView({
       setExtraSelectedKeys([])
       setSelectedKey(next.key)
       setGizmoMode('translate')
-      toast.success(`Assembled ${members.length} objects into one.`)
+      toast.success(`Assembled ${members.length} objects into one.`
+        + (discardedHelpers > 0
+          ? ` ${discardedHelpers} helper volume${discardedHelpers === 1 ? '' : 's'} could not be carried over: undo to get ${discardedHelpers === 1 ? 'it' : 'them'} back.`
+          : ''))
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Unable to assemble the selected objects.')
     } finally {
       setImporting(false)
     }
-  }, [activePlateIndex, updatePlates, importStore])
+  }, [activePlateIndex, updatePlates, importStore, collectHelperVolumesFor])
 
   const handleImportFromLibrary = useCallback(async (libraryFileId: string) => {
     setLibraryPickerOpen(false)
@@ -5041,6 +5731,48 @@ function EditorView({
   }, [])
 
   /**
+   * Give an independent copy's added volumes their OWN staged meshes.
+   *
+   * `makeInstanceIndependent` mints each copied volume a fresh `key` but spreads the rest of the
+   * record, so the copy's volumes kept pointing at the SOURCE's `importId` -- and a volume's paint
+   * is keyed by that import, because the import is the mesh its `importPaint` entry names. Two
+   * volumes on one import therefore share their paint in the session AND in the file, where the
+   * bake maps an import to exactly one mesh object and hangs both `<component>`s off it. Painting
+   * the copy repainted the original, which is the same failure the clone pre-pass already avoids
+   * for baked meshes by deep-copying the mesh entry ("never let a copy share its source's mesh
+   * entry"); this is that rule for the volumes.
+   *
+   * Deliberately fire-and-forget: the clone itself is synchronous and must stay that way (it runs
+   * inside the plate updater), so the volumes are re-homed a beat later. A stage that fails is
+   * logged and leaves the volume on the shared mesh rather than dropping its geometry.
+   */
+  const restageIndependentCopyVolumes = useCallback(async (cloneObjectId: number) => {
+    const parts = stateRef.current?.addedParts?.[cloneObjectId]
+    if (!parts || parts.length === 0) return
+    const restaged = await Promise.all(parts.map(async (part) => {
+      try {
+        const staged = await stageAddedPartGeometry(importStore, { kind: 'soup', soup: part.soup, name: part.name }, 0)
+        return { key: part.key, importId: staged.importId }
+      } catch (error) {
+        console.warn('[editor] could not re-stage an independent copy\'s volume', error)
+        return null
+      }
+    }))
+    const byKey = new Map(restaged.filter((entry): entry is { key: string; importId: string } => entry != null)
+      .map((entry) => [entry.key, entry.importId]))
+    if (byKey.size === 0) return
+    const live = stateRef.current?.addedParts?.[cloneObjectId]
+    if (!live) return
+    // Mutated in place like every other `addedParts` write, then announced through the version
+    // signal the memoised sidebar and the mesh builder read.
+    stateRef.current!.addedParts![cloneObjectId] = live.map((part) => {
+      const importId = byKey.get(part.key)
+      return importId ? { ...part, importId } : part
+    })
+    setAddedPartMeshVersion((version) => version + 1)
+  }, [importStore])
+
+  /**
    * Duplicate the selection. `independent` picks BambuStudio's two copy semantics: linked (the
    * default, BS's toolbar "+" / `increase_instances`, another instance of the SAME object, so
    * parts, materials, paint and per-object settings stay shared) or independent (BS's Ctrl+C/V /
@@ -5064,6 +5796,7 @@ function EditorView({
             const sourceObjectId = clone.objectId
             makeInstanceIndependent(stateRef.current, clone)
             copyObjectProcessOverrides(sourceObjectId, clone.objectId)
+            void restageIndependentCopyVolumes(clone.objectId)
           }
           // Placed against `next`, which already holds the copies made so far this pass, so a run
           // of copies spreads out instead of stacking on one spot.
@@ -5077,7 +5810,7 @@ function EditorView({
       })
     )
     if (cloneKey) selectExclusive(cloneKey)
-  }, [activePlateIndex, updatePlates, selectionFor, selectExclusive, copyObjectProcessOverrides])
+  }, [activePlateIndex, updatePlates, selectionFor, selectExclusive, copyObjectProcessOverrides, restageIndependentCopyVolumes])
 
   /**
    * BambuStudio's "Clone" (Ctrl+K, `Plater::clone_selection`): asks for a copy count and makes that
@@ -5145,11 +5878,12 @@ function EditorView({
     const sourceObjectId = instance.objectId
     makeInstanceIndependent(state, instance)
     copyObjectProcessOverrides(sourceObjectId, instance.objectId)
+    void restageIndependentCopyVolumes(instance.objectId)
     refreshAddedPartMeshes()
     regenerateActiveThumbnailRef.current?.()
     setState((current) => (current ? { ...current } : current))
     toast.success('This copy is now independent: edits to it no longer affect the others.')
-  }, [refreshAddedPartMeshes, recordHistoryRef, copyObjectProcessOverrides])
+  }, [refreshAddedPartMeshes, recordHistoryRef, copyObjectProcessOverrides, restageIndependentCopyVolumes])
 
   const handleDelete = useCallback((key: string) => {
     // Deleting any member of a multi-selection deletes the whole selection.
@@ -5172,7 +5906,7 @@ function EditorView({
     setSelectedKey(keys[0]!)
     setExtraSelectedKeys(keys.slice(1))
     setPartSelection((current) => (current ? null : current))
-    setSelectedBakedPart((current) => (current ? null : current))
+    setGizmoPart((current) => (current ? null : current))
     objectAnchorKeyRef.current = keys[0]!
   }, [])
 
@@ -5209,38 +5943,44 @@ function EditorView({
   // watching its entire object disappear would be a surprise. Falls through to deselecting the part
   // when the object would be left with no printed geometry, since that is the one case where the
   // deletion is refused and taking the object instead is exactly the surprise being avoided.
-  const handleDeleteShortcut = useCallback((key: string) => {
-    const addedPartKey = selectedAddedPartKeyRef.current
-    if (addedPartKey) {
-      handleRemoveAddedPart(addedPartKey)
+  const handleDeleteShortcut = useCallback((key: string | null) => {
+    // The BULK selection first, which this never consulted: a bulk selection nulls `selectedKey`, so
+    // Delete over several selected parts used to reach here with nothing to act on and silently do
+    // nothing. Both shapes now delete what is actually highlighted, of either kind.
+    const bulk = partSelectionRef.current
+    if (bulk) {
+      if (partSelectionRemovable(bulk.objectId, bulk.members)) handleRemoveParts(bulk.objectId, bulk.members)
+      else setPartSelection(null)
       return
     }
-    const bakedPart = selectedBakedPartRef.current
-    if (bakedPart) {
-      if (partSelectionRemovable(bakedPart.objectId, [bakedPart.partIndex])) {
-        handleRemoveParts(bakedPart.objectId, [bakedPart.partIndex])
+    const gizmo = gizmoPartRef.current
+    if (gizmo) {
+      if (partSelectionRemovable(gizmo.objectId, [gizmo.member])) {
+        handleRemoveParts(gizmo.objectId, [gizmo.member])
       } else {
-        setSelectedBakedPart(null)
+        setGizmoPart(null)
       }
       return
     }
-    handleDelete(key)
-  }, [handleDelete, handleRemoveAddedPart, handleRemoveParts, partSelectionRemovable, setSelectedBakedPart])
+    // Only reachable with an OBJECT selected: the shortcut does not fire otherwise.
+    if (key != null) handleDelete(key)
+  }, [handleDelete, handleRemoveParts, partSelectionRemovable, setPartSelection])
 
   useEditorKeyboardShortcuts({
     enabledRef: shortcutsEnabledRef,
     selectedKeyRef,
+    partSelectedRef,
     activePlateRef,
     selectionKeysRef,
     onDuplicate: handleDuplicate,
     onCloneWithCount: (key: string) => { void handleCloneWithCount(key) },
     onDelete: handleDeleteShortcut,
     onSelectAll: handleSelectAllObjects,
-    onClearSelection: () => selectExclusive(null),
     onPasteInstances: handlePasteInstances,
     undoRef,
     redoRef,
-    setGizmoModeRef
+    setGizmoModeRef,
+    gizmoModeRef
   })
 
   /**
@@ -5333,17 +6073,24 @@ function EditorView({
 
   /** Open per-part process settings for the current part selection (bulk when several). */
   const openPartSettingsForSelection = useCallback(() => {
+    // Either shape: the menu offers this over a bulk set and over the single gizmo'd part alike.
     const selection = partSelectionRef.current
-    if (!selection || selection.partIndexes.length === 0) return
-    const owner = stateRef.current?.plates.flatMap((plate) => plate.instances).find((instance) => {
-      const ownerId = instance.source.kind === 'object' ? instance.objectId : instance.source.replacedObjectId
-      return ownerId === selection.objectId
-    })
-    const first = owner?.parts.find((part) => part.partIndex === selection.partIndexes[0])
-    const name = selection.partIndexes.length > 1
-      ? `${selection.partIndexes.length} parts`
-      : (first?.name ?? 'Part')
-    setEditingPart({ objectId: selection.objectId, partIndexes: [...selection.partIndexes], name })
+      ?? (gizmoPartRef.current
+        ? { objectId: gizmoPartRef.current.objectId, members: [gizmoPartRef.current.member] }
+        : null)
+    if (!selection || selection.members.length === 0) return
+    const owner = stateRef.current?.plates.flatMap((plate) => plate.instances)
+      .find((instance) => addedPartHostId(instance) === selection.objectId)
+    const only = selection.members.length === 1 ? selection.members[0]! : null
+    const name = only == null
+      ? `${selection.members.length} parts`
+      : (only.kind === 'baked'
+        ? owner?.parts.find((part) => part.partIndex === only.partIndex)?.name
+        : only.kind === 'added'
+          ? owner && effectiveAddedParts(stateRef.current, owner).find((part) => part.key === only.key)?.name
+          : owner?.name)
+        ?? 'Part'
+    setEditingPart({ objectId: selection.objectId, members: [...selection.members], name })
   }, [])
 
   /**
@@ -5551,7 +6298,10 @@ function EditorView({
       setEditingTextObject(null)
     }
     setGizmoMode(mode)
-  }, [selectedKey, openLayerHeightFor, selectedAddedPartKey, findAddedTextPart, textTool])
+    // The refs and setters are stable, but listing them is free and stops the rule from hiding a
+    // genuinely missing dependency behind noise it has been trained to ignore.
+  }, [selectedKey, openLayerHeightFor, selectedAddedPartKey, findAddedTextPart, textTool,
+    recordHistoryRef, setEditingTextHost, setEditingTextObject])
 
   /**
    * Highlight the text being edited, so it reads as the thing you can grab.
@@ -5625,7 +6375,7 @@ function EditorView({
       if (next.length !== parts.length) state.addedParts[Number(hostId)] = next
     }
     setEditingTextPartKey(null)
-    setSelectedAddedPartKey(null)
+    setGizmoPart(null)
     refreshAddedPartMeshes()
     regenerateActiveThumbnailRef.current?.()
   }, [editingTextPartKey, refreshAddedPartMeshes, updatePlates, activePlateIndex, recordHistoryRef,
@@ -5690,7 +6440,7 @@ function EditorView({
       // rebuild would otherwise drop the ray onto the text placed by the previous rebuild and stack
       // the new one on top of it, climbing by a thickness per keystroke until it floated clear of
       // the model. That is what "floating over the middle of a bowl" was.
-      if (mesh.name === ADDED_PART_MESH_NAME || mesh.parent?.name === ADDED_PART_MESH_NAME) return
+      if (isAddedPartMesh(mesh)) return
       targets.push(mesh)
     })
     // SAMPLE the footprint rather than betting on one ray. A single ray down the exact centre is
@@ -6276,12 +7026,14 @@ function EditorView({
       setEditingTextHost(instance.key)
       // Selected immediately: the text IS the selection while the tool is open, which is what makes
       // it draggable without leaving the panel.
-      setSelectedAddedPartKey(partKey)
+      const textHostId = addedPartHostId(instance)
+      if (textHostId != null) setGizmoPart({ objectId: textHostId, member: { kind: 'added', key: partKey } })
     }
     refreshAddedPartMeshes()
     regenerateActiveThumbnailRef.current?.()
   }, [activePlateIndex, addInstanceToActivePlate, buildTextPlacement, editingTextPartKey,
-    importStore, resolveTextFace, textTool, updatePlates])
+    importStore, resolveTextFace, textTool, updatePlates,
+    recordHistoryRef, refreshAddedPartMeshes, setEditingTextHost, setEditingTextObject])
   applyTextPartRef.current = applyTextPart
 
   /**
@@ -6322,13 +7074,13 @@ function EditorView({
   // which there are several (viewport click, Escape, plate select, add/remove plate) and which would
   // each have had to remember.
   useEffect(() => {
-    if (!selectedKey && isSelectionOnlyGizmoMode(gizmoMode)) setGizmoMode('translate')
+    if (!selectedKey && isSelectionOnlyGizmoMode(gizmoMode)) setGizmoMode(RESTING_GIZMO_MODE)
     // Text is exempt from the check above because it works with nothing selected, so it needs its
     // own rule: a DESELECT closes it, but merely having nothing selected does not. Only the
     // transition tells those apart -- opening the tool on an empty plate looks identical to
     // deselecting while it is open if you only look at the current selection.
     if (gizmoMode === 'text' && previousSelectedKeyRef.current != null && selectedKey == null) {
-      setGizmoMode('translate')
+      setGizmoMode(RESTING_GIZMO_MODE)
     }
     previousSelectedKeyRef.current = selectedKey
   }, [selectedKey, gizmoMode])
@@ -6343,14 +7095,44 @@ function EditorView({
     }
   }, [gizmoMode, editingLayerHeight])
 
+  // Text gets the same treatment, for the same reason. Its teardown used to live ONLY on the
+  // panel's Done button, so every other way out of the mode (a toolbar tool, the M/R/S shortcuts,
+  // Escape, clicking while a tool that acts on what it is pointed at is active) left the session
+  // half-open: `editingTextPartKey` and `editingTextHostKey` still set, and a reseat timer still
+  // pending. That timer then fired `applyTextPart` after the user had already left the tool, editing
+  // text nobody was editing any more. It self-healed on re-entry, which is why it read as a rare
+  // glitch rather than a missing teardown.
+  // Leaving the SVG tool forgets the artwork, so reopening starts from a fresh file rather than
+  // offering to re-add whatever was loaded last session.
+  useEffect(() => {
+    if (gizmoMode === 'svg' || (svgArtwork == null && svgFileName == null && svgEmptyReason == null)) return
+    setSvgArtwork(null)
+    setSvgFileName(null)
+    setSvgEmptyReason(null)
+  }, [gizmoMode, svgArtwork, svgFileName, svgEmptyReason])
+
+  useEffect(() => {
+    if (gizmoMode === 'text') return
+    if (editingTextPartKey == null && editingTextHostKey == null) return
+    window.clearTimeout(reseatSettleRef.current)
+    setEditingTextPartKey(null)
+    setEditingTextHost(null)
+  }, [gizmoMode, editingTextPartKey, editingTextHostKey, setEditingTextHost])
+
   // Teardown is its OWN effect, keyed only on which object is being edited. Folding it into the
   // sync above would tear every overlay down and rebuild it on each brush sample and each profile
   // edit, which is the per-vertex cost the cached-height design exists to avoid.
   useEffect(() => {
     const key = editingLayerHeight?.key
     if (!key) return
+    // The REF is captured, never `.current`: teardown wants the group as it stands THEN, because a
+    // plate rebuild replaces the map and disposes the old group, and stripping visuals off a
+    // disposed group would leave the live one still wearing them. Capturing the ref object rather
+    // than its value keeps that and satisfies the exhaustive-deps rule, which cannot tell the two
+    // apart on its own.
+    const groups = groupByKeyRef
     return () => {
-      const group = groupByKeyRef.current.get(key)
+      const group = groups.current.get(key)
       if (group) removeLayerHeightVisuals(group)
     }
   }, [editingLayerHeight?.key])
@@ -6511,11 +7293,15 @@ function EditorView({
     if (!selectedKey) return
     const group = groupByKeyRef.current.get(selectedKey)
     if (!group) return
-    const box = new THREE.Box3().setFromObject(group)
-    if (box.isEmpty()) return
+    // Measured with `printableMeshBox`, like every other resting path (the gizmo drop, lay-flat,
+    // align, `mutateSelectedGroup`), NOT a raw `Box3.setFromObject`: that counted the viewport aids.
+    // A brim-ear marker sits at world z=0, so its box floor was already 0 and Drop to bed did
+    // nothing at all on any object carrying an ear; a helper volume hanging below the body made it
+    // LIFT the object off the plate instead.
+    if (printableMeshBox(group).isEmpty()) return
     recordHistory()
     bakeExactMatrix(group)
-    group.position.z -= box.min.z
+    restObjectOnBed(group)
     writeBackGroupTransform(group)
     syncSelectedTransform(group)
     regenerateActivePlateThumbnail()
@@ -6760,18 +7546,20 @@ function EditorView({
     const key = selectedKeyRef.current
     const group = key ? groupByKeyRef.current.get(key) : null
     if (!group) return null
-    const addedKey = selectedAddedPartKeyRef.current
-    const baked = selectedBakedPartRef.current
-    if (!addedKey && !baked) return null
+    const gizmo = gizmoPartRef.current
+    if (!gizmo) return null
+    const member = gizmo.member
+    // The body is the object's own geometry, so its "part placement" IS the object's.
+    if (member.kind === 'body') return group
     let found: THREE.Object3D | null = null
     group.traverse((node) => {
       if (found) return
-      if (addedKey) {
-        if (node.userData.addedPartKey === addedKey) found = node
-      } else if (baked) {
-        const ref = partGroupRef(node)
-        if (ref && ref.partIndex === baked.partIndex) found = node
+      if (member.kind === 'added') {
+        if (node.userData.addedPartKey === member.key) found = node
+        return
       }
+      const ref = partGroupRef(node)
+      if (ref && ref.partIndex === member.partIndex) found = node
     })
     return found
   }, [])
@@ -6784,6 +7572,13 @@ function EditorView({
    * state and mirrors onto the other instances). Returns false when no part is selected.
    */
   const mutateSelectedPart = useCallback((mutate: (trs: { position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 }) => void): boolean => {
+    // The BODY has no placement of its own -- the instance's placement IS where its geometry sits --
+    // so it is not handled here, and saying so lets the caller fall through to the OBJECT path,
+    // which is the correct write-back for it and is what the gizmo already does. Reporting "handled"
+    // instead (which is what the missing-mesh guard below did, since an instance group's only child
+    // is the rotor) blocked that fallback: the manual position/rotation/scale inputs, the arrow-key
+    // nudge and `[`/`]` all did nothing on a selected body, each attempt still burning an undo entry.
+    if (gizmoPartRef.current?.member.kind === 'body') return false
     const part = selectedPartObject()
     if (!part) return false
     recordHistory()
@@ -6967,6 +7762,48 @@ function EditorView({
     // Keep viewing the plate that was dragged (it now sits at the drop position).
     setActivePlateIndex(target + 1)
   }, [updatePlates])
+
+  /**
+   * Drag-reorder an OBJECT in the sidebar (BambuStudio's ObjectList drag).
+   *
+   * A real edit, not a view preference: the bake writes build items in this order and BambuStudio
+   * builds its object list by walking them, so the order set here is the order the file shows
+   * everywhere. It records undo history and marks the project dirty like any other change.
+   *
+   * It moves an OBJECT, carrying every linked copy on every plate, and it goes through the whole
+   * STATE rather than the active plate, because the file has ONE object order: the bake flattens
+   * every plate into one build section. Addressed by object identity, not position, since the
+   * sidebar lists only the instances that have finished rendering (see `listedInstances`).
+   *
+   * Like {@link handleReorderPart} it sets state directly instead of going through `updatePlates`:
+   * no geometry moves, so there is no rebuild to schedule, and `activeInstanceKeys` is a signature
+   * of the instance SET so the build effect does not fire either.
+   */
+  const handleReorderObject = useCallback((hostId: number, beforeHostId: number | null) => {
+    const current = stateRef.current
+    if (!current) return
+    const next = moveObjectBefore(current, hostId, beforeHostId)
+    if (next === current) return
+    recordHistory()
+    setState(next)
+  }, [recordHistory, stateRef])
+
+  /**
+   * Drag-reorder a PART inside its object (BambuStudio's volume drag).
+   *
+   * Applies to every copy of the object on every plate, because part order is geometry-level like
+   * every other part seam, so this goes through the whole state rather than the active plate. It
+   * needs no rebuild token: the parts keep their transforms, so nothing in the viewport moves and
+   * only the sidebar's order changes.
+   */
+  const handleReorderPart = useCallback((hostId: number, partIndex: number, beforePartIndex: number | null) => {
+    const current = stateRef.current
+    if (!current) return
+    const next = movePartBefore(current, hostId, partIndex, beforePartIndex)
+    if (next === current) return
+    recordHistory()
+    setState(next)
+  }, [recordHistory, stateRef])
 
   // Bake the controller's desired filament list (Bambu-style add/remove of materials) and its
   // chosen plate type into every SceneEdit the editor emits, so both save and slice carry them.
@@ -7424,9 +8261,44 @@ function EditorView({
     <Modal
       open
       onClose={(_event, reason) => {
-        // Escape while the right-click menu is open (or the synthetic Escape we dispatch to
-        // dismiss other Joy menus on right-click) should only close that menu, not the editor.
-        if (reason === 'escapeKeyDown' && (contextMenuOpenRef.current || suppressEditorEscapeRef.current)) return
+        if (reason !== 'escapeKeyDown') {
+          void handleCloseRequest()
+          return
+        }
+        // This is the ONLY place Escape is observable in the editor -- the Modal swallows it before
+        // any window listener sees it (see `editorEscapeAction`), so the whole key is handled here
+        // rather than in `useEditorKeyboardShortcuts` with the other shortcuts.
+        // The synthetic Escape we dispatch to dismiss other Joy menus on right-click is not a user
+        // press at all, so it backs out of nothing.
+        if (suppressEditorEscapeRef.current) return
+        // An open right-click/kebab menu is the innermost thing on screen and goes first. It used to
+        // be closed by a window listener that, for the same reason, never ran: with a menu open
+        // Escape did nothing whatsoever, which the kebab made easy to reach without a mouse.
+        if (contextMenuOpenRef.current) {
+          setContextMenu(null)
+          return
+        }
+        // Every selection shape, not just the object one: the bulk part path nulls `selectedKey`
+        // deliberately, so asking it alone reported "nothing selected" while a part was highlighted,
+        // and Escape closed the editor instead of clearing it.
+        const action = editorEscapeAction(gizmoMode, hasEditorSelection({
+          objectKey: selectedKey,
+          partSelection,
+          gizmoPart,
+        }))
+        if (action === 'reset-tool') {
+          // Through the rail's own handler, not a bare setState: leaving a tool has bookkeeping
+          // (the text tool's pending edit, most of all) that only this path runs.
+          handleGizmoModeChange(RESTING_GIZMO_MODE)
+          return
+        }
+        if (action === 'clear-selection') {
+          // One call clears all of it. While a session-added volume was a shape of its own it
+          // survived this and had to be cleared by hand alongside, which is exactly the kind of
+          // omission that made Escape a key that did nothing.
+          selectExclusive(null)
+          return
+        }
         void handleCloseRequest()
       }}
     >
@@ -7670,6 +8542,7 @@ function EditorView({
                   </Box>
                 )}
                 <Box
+                  ref={setChromeStripElement}
                   sx={{
                     position: 'absolute',
                     // Phones keep the wrapping strip across the top; from sm up the tools move
@@ -7678,7 +8551,7 @@ function EditorView({
                     top: 8,
                     left: { xs: 8, sm: 'auto' },
                     right: 8,
-                    zIndex: (theme) => theme.zIndex.tooltip,
+                    zIndex: EDITOR_CHROME_Z_INDEX,
                     display: 'flex',
                     gap: 1,
                     flexWrap: 'wrap',
@@ -7759,7 +8632,7 @@ function EditorView({
                       position: 'absolute',
                       top: 8,
                       left: 8,
-                      zIndex: (theme) => theme.zIndex.tooltip,
+                      zIndex: EDITOR_CHROME_Z_INDEX,
                       // Hovering (or tabbing into) the rail expands every button's label at once.
                       ...RAIL_HOVER_LABEL_SX
                     }}
@@ -7786,7 +8659,7 @@ function EditorView({
                       top: 8,
                       left: '50%',
                       transform: 'translateX(-50%)',
-                      zIndex: (theme) => theme.zIndex.tooltip,
+                      zIndex: TOOL_PANEL_Z_INDEX,
                       // Sized for the ONE axis group the active tool shows (three fields), and
                       // always clearing the tool rail (left) and undo/redo + help (right).
                       width: 'min(320px, calc(100% - 260px))'
@@ -7799,7 +8672,7 @@ function EditorView({
                       setterRef={transformReadoutSetterRef}
                       // With a part on the gizmo the values are the PART's placement inside
                       // its object (and edits apply to every copy): say so.
-                      heading={selectedAddedPartKey || selectedBakedPart ? 'Part placement (within the object)' : undefined}
+                      heading={placementPanelHeading}
                       uniformScale={uniformScale}
                       onToggleUniformScale={setUniformScale}
                       onPosition={applyManualPosition}
@@ -7826,7 +8699,26 @@ function EditorView({
                     setCutOrientUpper={setCutOrientUpper}
                     cutting={cutting}
                     onCut={handlePerformCut}
-                    onCancel={() => setGizmoMode('translate')}
+                    onCancel={() => setGizmoMode(RESTING_GIZMO_MODE)}
+                  />
+                )}
+                {gizmoMode === 'meshBoolean' && (
+                  <MeshBooleanPanel
+                    operation={meshBoolean.operation}
+                    onOperationChange={meshBoolean.setOperation}
+                    targetMode={meshBoolean.targetMode}
+                    lists={meshBoolean.lists}
+                    nameFor={meshBoolean.nameFor}
+                    onAssign={meshBoolean.assignList}
+                    keepOriginals={meshBoolean.keepOriginals}
+                    onKeepOriginalsChange={meshBoolean.setKeepOriginals}
+                    helperVolumeCount={meshBoolean.helperVolumeCount}
+                    solidPartsOnly={meshBoolean.solidPartsOnly}
+                    onSolidPartsOnlyChange={meshBoolean.setSolidPartsOnly}
+                    warning={meshBoolean.warning}
+                    busy={meshBoolean.busy}
+                    onApply={meshBoolean.apply}
+                    onClose={() => setGizmoMode(RESTING_GIZMO_MODE)}
                   />
                 )}
                 {gizmoMode === 'measure' && (
@@ -7834,7 +8726,7 @@ function EditorView({
                     measureDelta={measureDelta}
                     pointCount={measurePoints.length}
                     onClear={() => setMeasurePoints([])}
-                    onDone={() => setGizmoMode('translate')}
+                    onDone={() => setGizmoMode(RESTING_GIZMO_MODE)}
                   />
                 )}
                 {activePaintChannel !== null && selectedKey && (
@@ -7842,7 +8734,7 @@ function EditorView({
                     paint={paint}
                     paintTargetIsObject={paintTargetIsObject}
                     filamentOptions={filamentOptions}
-                    onDone={() => setGizmoMode('translate')}
+                    onDone={() => setGizmoMode(RESTING_GIZMO_MODE)}
                   />
                 )}
                 {gizmoMode === 'brimEars' && selectedKey && (
@@ -7851,9 +8743,25 @@ function EditorView({
                     brimEarDiameter={brimEarDiameter}
                     setBrimEarDiameter={setBrimEarDiameter}
                     onClear={() => editSelectedBrimEars({ kind: 'clear' })}
-                    onDone={() => setGizmoMode('translate')}
+                    onDone={() => setGizmoMode(RESTING_GIZMO_MODE)}
                   />
                 )}
+            {gizmoMode === 'svg' && (
+              <SvgToolPanel
+                value={svgTool}
+                onChange={setSvgTool}
+                fileName={svgFileName}
+                heightMm={svgArtwork ? svgHeightMm(svgArtwork, svgTool.widthMm) : 0}
+                hasArtwork={svgArtwork != null}
+                emptyReason={svgEmptyReason}
+                busy={importing}
+                hasHost={selectedKey != null}
+                hasBackground={svgArtwork != null && detectSvgBackgroundPiece(svgArtwork) != null}
+                onChooseFile={handleChooseSvgFile}
+                onAdd={() => { void handleAddSvg() }}
+                onClose={() => setGizmoMode(RESTING_GIZMO_MODE)}
+              />
+            )}
             {gizmoMode === 'text' && (
               <TextToolPanel
                 value={textTool}
@@ -7865,15 +8773,11 @@ function EditorView({
                 onLoadFontFile={(file) => { void loadTextFontFile(file) }}
                 onRemove={() => {
                   removeTextPart()
-                  setEditingTextHost(null)
-                  setGizmoMode('translate')
+                  setGizmoMode(RESTING_GIZMO_MODE)
                 }}
-                onClose={() => {
-                  window.clearTimeout(reseatSettleRef.current)
-                  setEditingTextPartKey(null)
-                  setEditingTextHost(null)
-                  setGizmoMode('translate')
-                }}
+                // Just leave the mode: the teardown is keyed on the mode now, so Done runs exactly
+                // the same path as the rail, the shortcuts and Escape rather than its own copy.
+                onClose={() => setGizmoMode(RESTING_GIZMO_MODE)}
               />
             )}
             {editingLayerHeight && (() => {
@@ -7925,23 +8829,10 @@ function EditorView({
                       { bounds: layerHeightBounds, radius, keepMin, firstLayerHeight: firstLayerHeightMm }))
                   }}
                   onReset={() => setObjectLayerHeightProfile(editingLayerHeight.objectId, [])}
-                  onClose={() => { setEditingLayerHeight(null); setLayerHeightBrush(null); setGizmoMode('translate') }}
+                  onClose={() => { setEditingLayerHeight(null); setLayerHeightBrush(null); setGizmoMode(RESTING_GIZMO_MODE) }}
                 />
               )
             })()}
-                {selectedAddedPart && selectedKey && (gizmoMode === 'translate' || gizmoMode === 'rotate' || gizmoMode === 'scale') && (
-                  <AddedPartPanel
-                    part={selectedAddedPart}
-                    filamentColor={selectedAddedPartColor}
-                    filamentOptions={filamentOptions}
-                    onChangeType={handleChangeAddedPartType}
-                    onChangeFilament={handleChangeAddedPartFilament}
-                    onEditSettings={perObject ? setEditingPartKey : undefined}
-                    onRemove={() => handleRemoveAddedPart()}
-                    onDone={() => setSelectedAddedPartKey(null)}
-                    anchorSx={TOOL_PANEL_ANCHOR}
-                  />
-                )}
                 {rotationReadout !== null && (
                   <Chip
                     variant="solid"
@@ -7954,7 +8845,7 @@ function EditorView({
                     // bottom-right, and the transform readout the top centre.
                     sx={{
                       position: 'absolute', bottom: 8, left: '50%', transform: 'translateX(-50%)',
-                      zIndex: (theme) => theme.zIndex.tooltip
+                      zIndex: VIEWPORT_AID_Z_INDEX
                     }}
                   >
                     {`${Math.round(rotationReadout)}°`}
@@ -7965,7 +8856,7 @@ function EditorView({
                     position: 'absolute',
                     left: VIEW_CUBE_EDGE_INSET,
                     bottom: VIEW_CUBE_EDGE_INSET,
-                    zIndex: (theme) => theme.zIndex.tooltip
+                    zIndex: VIEWPORT_AID_Z_INDEX
                   }}
                 >
                   <Box
@@ -8065,7 +8956,7 @@ function EditorView({
                     setterRef={transformReadoutSetterRef}
                     // With a part on the gizmo the values are the PART's placement inside
                     // its object (and edits apply to every copy): say so.
-                    heading={selectedAddedPartKey || selectedBakedPart ? 'Part placement (within the object)' : undefined}
+                    heading={placementPanelHeading}
                     uniformScale={uniformScale}
                     onToggleUniformScale={setUniformScale}
                     onPosition={applyManualPosition}
@@ -8086,7 +8977,7 @@ function EditorView({
                       selectedKey={selectedKey}
                       extraSelectedKeys={extraSelectedKeys}
                       partSelection={partSelection}
-                      selectedBakedPart={selectedBakedPart}
+                      gizmoPart={gizmoPart}
                       onSelect={handleSelect}
                       onSelectPart={handleSelectPart}
                       linkedCopyCountFor={linkedCopyCountFor}
@@ -8100,13 +8991,15 @@ function EditorView({
                       onTogglePrintable={handleTogglePrintable}
                       onChangePartType={handleChangeOnePartType}
                       addedPartsFor={addedPartsFor}
-                      selectedAddedPartKey={selectedAddedPartKey}
+                      bodySubtypeFor={bodySubtypeFor}
                       onSelectAddedPart={handleSelectAddedPartRow}
-                      onChangeAddedPartType={handleChangeAddedPartType}
-                      onChangeAddedPartFilament={handleChangeAddedPartFilament}
-                      onRemoveAddedPart={handleRemoveAddedPart}
-                      onEditAddedPartSettings={perObject ? setEditingPartKey : undefined}
+                      onChangeAddedPartType={handleChangeAddedPartTypes}
+                      onChangeAddedPartFilament={handleChangeAddedPartFilaments}
+                      onEditAddedPartSettings={perObject ? handleEditAddedPartSettings : undefined}
+                      onAddedPartContextMenu={handleAddedPartContextMenu}
                       perObject={objectListPerObject}
+                      onReorderObject={handleReorderObject}
+                      onReorderPart={handleReorderPart}
                     />
                   )}
                 </Sheet>
@@ -8252,23 +9145,26 @@ function EditorView({
         {showEditorChrome && (
           <DialogActions sx={{ pt: 1 }}>
             <Button type="button" variant="plain" onClick={handleCloseRequest} disabled={saving}>Close</Button>
-            {/* Save and Slice stay separate split-buttons on every width (matching desktop). */}
+            {/* Save and Slice stay separate buttons on every width (matching desktop). Each is an
+                `ActionMenuButton`, not a split button: neither label is one action on its own, and
+                as split buttons each had a wide half that quietly picked a route for the user. */}
             {/* Save/Slice gate on loaded state only, not the 3D viewport's ready/build state, which
                 can be false while a settings tab is shown and would wrongly disable slicing. */}
             {/* Save is the primary action and sits rightmost (solid); Slice/Apply pair to its left. */}
             {onSlice ? (
-              <SliceSplitButton
+              <SliceMenuButton
                 slicing={slicing}
                 disabled={!state || !canSlice || slicing || saving}
                 disabledReason={!state ? 'Preparing the model…' : (slicing || saving) ? undefined : sliceDisabledReason}
                 activePlateIndex={activePlateIndex}
+                plateCount={state?.plates.length ?? 1}
                 onSliceAll={() => startSlice(0)}
                 onSlicePlate={() => startSlice(activePlateIndex)}
               />
             ) : onApply ? (
               <Button type="button" variant="soft" color="primary" loading={saving} disabled={!state || saving} onClick={handleApply}>Use this layout</Button>
             ) : null}
-            <SaveSplitButton
+            <SaveMenuButton
               saving={saving}
               disabled={!state || (sliceConfig != null && !hasMaterials)}
               dirty={hasUnsavedChanges}
@@ -8289,6 +9185,20 @@ function EditorView({
 
         {/* Hidden picker for "Import file…". Narrowed to what THIS host's store can stage, so the
             picker never offers a format the import then refuses. */}
+        {/* Artwork gets its OWN picker rather than joining `modelRequest`: every kind there can also
+            be answered from the library, and the library holds models, not SVGs. Sharing the input
+            would mean offering a library browse that can never return anything. */}
+        <input
+          ref={svgInputRef}
+          type="file"
+          accept=".svg,image/svg+xml"
+          hidden
+          onChange={(event) => {
+            const file = event.target.files?.[0]
+            event.target.value = ''
+            if (file) void handleSvgFileChosen(file)
+          }}
+        />
         <input
           ref={fileInputRef}
           type="file"
@@ -8379,27 +9289,26 @@ function EditorView({
             onDelete={handleDelete}
           />
         )}
+        {/* ONE menu for every part of an object, whichever kind: a part is a part, whether it came
+            out of the file or was added this session. Volumes used to have a menu of their own that
+            had already drifted (it acted on one row even when several were selected), and export
+            works for both because it world-bakes triangles out of the render group and needs no
+            baked mesh entry. */}
         {contextMenu?.kind === 'parts' && (
           <EditorPartContextMenu
             contextMenu={contextMenu}
-            count={contextMenu.partIndexes.length}
+            count={contextMenu.members.length}
             listboxRef={contextMenuListboxRef}
             onClose={() => setContextMenu(null)}
-            onChangeType={(subtype) => handleChangePartTypes(
-              contextMenu.partIndexes.map((partIndex) => ({ objectId: contextMenu.objectId, partIndex })),
-              subtype
-            )}
+            onChangeType={(subtype) => handleChangeMemberTypes(contextMenu.objectId, contextMenu.members, subtype)}
             filamentOptions={filamentOptions}
-            materialAssignable={partsAcceptFilament(contextMenu.objectId, contextMenu.partIndexes)}
-            onChangeMaterial={(filamentId) => reassignFilament(
-              contextMenu.partIndexes.map((partIndex) => ({ objectId: contextMenu.objectId, partIndex })),
-              filamentId
-            )}
-            onExportDownload={canExportDownload ? () => handleExportPartsDownload(contextMenu.objectId, contextMenu.partIndexes) : undefined}
-            onExportToLibrary={canExportToLibrary ? () => setExportRequest({ kind: 'parts', ownerId: contextMenu.objectId, partIndexes: contextMenu.partIndexes }) : undefined}
+            materialAssignable={partsAcceptFilament(contextMenu.objectId, contextMenu.members)}
+            onChangeMaterial={(filamentId) => handleChangeMemberFilament(contextMenu.objectId, contextMenu.members, filamentId)}
+            onExportDownload={canExportDownload ? () => handleExportPartsDownload(contextMenu.objectId, contextMenu.members) : undefined}
+            onExportToLibrary={canExportToLibrary ? () => setExportRequest({ kind: 'parts', ownerId: contextMenu.objectId, members: contextMenu.members }) : undefined}
             onEditSettings={perObject ? openPartSettingsForSelection : undefined}
-            onDelete={partSelectionRemovable(contextMenu.objectId, contextMenu.partIndexes)
-              ? () => handleRemoveParts(contextMenu.objectId, contextMenu.partIndexes)
+            onDelete={partSelectionRemovable(contextMenu.objectId, contextMenu.members)
+              ? () => handleRemoveParts(contextMenu.objectId, contextMenu.members)
               : undefined}
           />
         )}
@@ -8465,9 +9374,12 @@ function EditorView({
       const suggestedName = (() => {
         if (exportRequest.kind === 'separate') return null
         if (exportRequest.kind === 'parts') {
-          const instance = activePlate?.instances.find((entry) =>
-            (entry.source.kind === 'object' ? entry.objectId : entry.source.replacedObjectId) === exportRequest.ownerId)
-          return instance ? partsExportName(instance, exportRequest.partIndexes) : ''
+          const instance = activePlate?.instances.find((entry) => addedPartHostId(entry) === exportRequest.ownerId)
+          // A session-added volume carries its own name (the text's string, "Cube", the solid's
+          // label), which `partsExportName` uses in place of the ordinal a baked part is named by.
+          return instance
+            ? partsExportName(instance, exportRequest.members, effectiveAddedParts(state, instance))
+            : ''
         }
         const key = exportRequest.kind === 'object' || exportRequest.kind === 'project' ? exportRequest.key : exportRequest.keys[0]
         return activePlate?.instances.find((entry) => entry.key === key)?.name ?? ''
@@ -8515,53 +9427,6 @@ function EditorView({
       )
     })()}
 
-    {editingPartKey && perObject && (() => {
-      // Per-volume overrides for a modifier part: same restricted catalog as the
-      // per-object dialog, baselined on the inherited global + object overrides; the
-      // result is stored on the part and baked into its model_settings `<part>` block.
-      const part = (() => {
-        for (const parts of Object.values(stateRef.current?.addedParts ?? {})) {
-          const found = parts.find((entry) => entry.key === editingPartKey)
-          if (found) return found
-        }
-        return null
-      })()
-      const parentObjectId = (() => {
-        for (const [objectId, parts] of Object.entries(stateRef.current?.addedParts ?? {})) {
-          if (parts.some((entry) => entry.key === editingPartKey)) return objectId
-        }
-        return null
-      })()
-      if (!part) return null
-      const objectOverrides = parentObjectId ? perObject.value[parentObjectId] ?? {} : {}
-      return (
-        <ProcessSettingsDialog
-          open
-          applyScope="project"
-          onClose={() => setEditingPartKey(null)}
-          slicerTargetId={perObject.slicerTargetId}
-          processProfileId={perObject.processProfileId}
-          processProfileName={part.name}
-          sourceFileId={perObject.sourceFileId}
-          initialOverrides={part.settings ?? {}}
-          visibilityContext={{ ...perObject.visibilityContext, isGlobalConfig: false }}
-          allowedKeys={PER_OBJECT_PROCESS_KEYS}
-          baseOverlay={{ ...perObject.globalOverrides, ...objectOverrides }}
-          resolveConfig={resolveProcessConfig}
-          titlePrefix="Modifier settings"
-          onApply={(overrides) => {
-            recordHistoryRef.current?.()
-            const serialized: Record<string, string> = {}
-            for (const [key, value] of Object.entries(overrides)) {
-              serialized[key] = Array.isArray(value) ? value.join(',') : value
-            }
-            if (Object.keys(serialized).length === 0) delete part.settings
-            else part.settings = serialized
-            setEditingPartKey(null)
-          }}
-        />
-      )
-    })()}
     {editingHeightRanges && (() => {
       const instance = stateRef.current?.plates
         .flatMap((plate) => plate.instances).find((entry) => entry.key === editingHeightRanges.key)
@@ -8677,9 +9542,25 @@ function EditorView({
       // part's model_settings block (separate from the object's overall overrides). With several
       // parts selected (bulk), the dialog seeds from ALL of them: disagreements render as "Mixed"
       // and, untouched, each part keeps its own value on apply.
-      const partKeys = editingPart.partIndexes.map((partIndex) => partSlotKey(editingPart.objectId, partIndex))
+      // The two kinds keep their overrides in DIFFERENT homes, and that is the only thing this
+      // dialog has to know about them: a baked part's live in `state.partProcessOverrides` keyed by
+      // slot, a session-added volume's on the volume itself. Both are read here and written back
+      // there, so a mixed selection edits in one pass and each member keeps its own values.
+      const owner = stateRef.current?.plates.flatMap((plate) => plate.instances)
+        .find((instance) => addedPartHostId(instance) === editingPart.objectId)
+      const volumesByKey = new Map(
+        (owner ? effectiveAddedParts(stateRef.current, owner) : []).map((part) => [part.key, part])
+      )
+      const overridesFor = (member: PartMember): Record<string, string | string[]> => (member.kind === 'baked'
+        ? stateRef.current?.partProcessOverrides?.[partSlotKey(editingPart.objectId, member.partIndex)]
+        : member.kind === 'added'
+          ? volumesByKey.get(member.key)?.settings
+          // The BODY's slot, which is the ordinal the bake promotes it into: the same map, the same
+          // key shape, so its settings survive a save without being re-homed.
+          : stateRef.current?.partProcessOverrides?.[partSlotKey(editingPart.objectId, BODY_PART_INDEX)]
+        ) ?? EMPTY_OBJECT_OVERRIDES
       const objectOverrides = perObject.value[String(editingPart.objectId)] ?? {}
-      const memberOverrides = partKeys.map((partKey) => stateRef.current?.partProcessOverrides?.[partKey] ?? EMPTY_OBJECT_OVERRIDES)
+      const memberOverrides = editingPart.members.map(overridesFor)
       return (
         <ProcessSettingsDialog
           open
@@ -8699,18 +9580,40 @@ function EditorView({
           onApply={(overrides, { clearedKeys }) => {
             recordHistory()
             const serialized: Record<string, string> = {}
+            // `;` for both kinds. The volume-only dialog this replaced joined on `,`, which was a
+            // straightforward inconsistency rather than a rule about volumes: the two write the same
+            // catalog into the same per-part `model_settings` block, so they cannot disagree about
+            // how a vector is spelled.
             for (const [key, value] of Object.entries(overrides)) serialized[key] = Array.isArray(value) ? value.join(';') : value
             setState((current) => {
               if (!current) return current
               const map = { ...(current.partProcessOverrides ?? {}) }
-              // Merge per part (uniform values + cleared keys; untouched "Mixed" keys survive).
-              // Unlike objects, an empty part entry is dropped: part overrides live in session
-              // state keyed by slot, so absence simply means "no overrides", there is no
-              // scope-pruning ambiguity to guard against.
-              for (const partKey of partKeys) {
-                const merged = applyBulkOverridesToMember(map[partKey], serialized, clearedKeys)
-                if (Object.keys(merged).length === 0) delete map[partKey]
-                else map[partKey] = merged
+              // Merge per member (uniform values + cleared keys; untouched "Mixed" keys survive).
+              // Unlike objects, an empty entry is dropped: part overrides live in session state
+              // keyed by slot, so absence simply means "no overrides", there is no scope-pruning
+              // ambiguity to guard against.
+              for (const member of editingPart.members) {
+                if (member.kind === 'baked') {
+                  const slot = partSlotKey(editingPart.objectId, member.partIndex)
+                  const merged = applyBulkOverridesToMember(map[slot], serialized, clearedKeys)
+                  if (Object.keys(merged).length === 0) delete map[slot]
+                  else map[slot] = merged
+                  continue
+                }
+                if (member.kind === 'body') {
+                  const slot = partSlotKey(editingPart.objectId, BODY_PART_INDEX)
+                  const merged = applyBulkOverridesToMember(map[slot], serialized, clearedKeys)
+                  if (Object.keys(merged).length === 0) delete map[slot]
+                  else map[slot] = merged
+                  continue
+                }
+                // A volume owns its settings, so this writes through the same in-place mutation the
+                // rest of the added-part seams use; the state identity below is what re-renders it.
+                const volume = volumesByKey.get(member.key)
+                if (!volume) continue
+                const merged = applyBulkOverridesToMember(volume.settings, serialized, clearedKeys)
+                if (Object.keys(merged).length === 0) delete volume.settings
+                else volume.settings = merged
               }
               return { ...current, partProcessOverrides: map }
             })

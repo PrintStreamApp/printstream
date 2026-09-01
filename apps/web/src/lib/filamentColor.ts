@@ -210,6 +210,28 @@ export function resolveFilamentColorSwatches(
   return { swatches: COMMON_FILAMENT_COLOR_SWATCHES, usesCommonFallback: true }
 }
 
+/**
+ * What a slot tile says when it holds filament nobody could name.
+ *
+ * A WORD, not a `?`: the glyph reads as a question rather than a state, and a screen reader
+ * announces "A3 question mark". This is a real condition, not a missing value: the tray is loaded
+ * (`hasLoadedFilament`) but no preset, type or material resolved, which is why the tile draws it in
+ * the warning colour rather than the filament's. Shared so the tile agrees with the tooltip and the
+ * edit dialog behind it, which say "Unknown filament" for the same slot.
+ */
+export const UNKNOWN_FILAMENT_TYPE_LABEL = 'Unknown'
+
+/**
+ * What a slot tile says when nothing is loaded at all.
+ *
+ * Paired with {@link UNKNOWN_FILAMENT_TYPE_LABEL} because the two are easy to conflate and mean
+ * opposite things to someone deciding whether they can print: EMPTY is a tray to put a spool in,
+ * UNKNOWN is a tray with a spool whose material did not resolve. Shared so the AMS slot and the
+ * external spool, which render the same state from different data, cannot drift apart -- they did,
+ * and the empty external spool claimed "Unknown".
+ */
+export const EMPTY_FILAMENT_SLOT_LABEL = 'Empty'
+
 export function resolveCompactFilamentTypeLabel(value: string | null | undefined): string | null {
   const trimmed = value?.trim() ?? ''
   if (!trimmed) return null

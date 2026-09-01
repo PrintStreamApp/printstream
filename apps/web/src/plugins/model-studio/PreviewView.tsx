@@ -325,7 +325,9 @@ export function PreviewView(props: Record<string, unknown>) {
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
     renderer.setSize(Math.max(container.clientWidth, 1), Math.max(container.clientHeight, 1))
     renderer.shadowMap.enabled = isThreeMfScene
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap
+    // See `useEditorScene`: the soft variant was removed in r185 and is rewritten to this one at
+    // render time, so the preview names the type it actually gets and stays matched to the editor.
+    renderer.shadowMap.type = THREE.PCFShadowMap
     container.appendChild(renderer.domElement)
 
     const controls = new OrbitControls(camera, renderer.domElement)

@@ -3800,6 +3800,104 @@ test('buildEditedThreeMf wraps an inline-mesh object to add a part volume to it'
   }
 })
 
+test('buildEditedThreeMf omits a REMOVED body so the surviving parts keep their own names', async () => {
+  // Deleting an object's body must produce the same file whether it happens before or after a save.
+  // The editor used to promote a volume into the body instead, and a promoted body is named after
+  // the OBJECT -- so the same delete wrote parts ["Widget","Modifier"] from an unsaved project and
+  // ["Modifier"] from a saved one. `removedObjectBodies` makes the bake never create the component.
+  const { buildEditedThreeMf } = await import('./three-mf.js')
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-removed-body-'))
+  const basePath = path.join(tempDir, 'base.3mf')
+  const outputPath = path.join(tempDir, 'edited.3mf')
+  try {
+    const quad = {
+      positions: [0, 0, 0, 10, 0, 0, 10, 10, 0, 0, 10, 0],
+      indices: [0, 1, 2, 0, 2, 3],
+      bounds: { min: { x: 0, y: 0, z: 0 }, max: { x: 10, y: 10, z: 0 } }
+    }
+    await buildEditedThreeMf(null, basePath, {
+      plates: [{ index: 1 }],
+      instances: [
+        { importId: 'imp-1', plateIndex: 1, position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } }
+      ]
+    }, [{ importId: 'imp-1', name: 'Widget', mesh: quad }])
+
+    const edit: SceneEdit = {
+      plates: [{ index: 1 }],
+      instances: [
+        { objectId: 1, plateIndex: 1, position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } }
+      ],
+      addedParts: [
+        { objectId: 1, meshImportId: 'part-1', subtype: 'normal_part', name: 'Keeper', matrix: [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 2] }
+      ],
+      removedObjectBodies: [{ objectId: 1 }]
+    }
+    await buildEditedThreeMf(basePath, outputPath, edit, [{ importId: 'part-1', name: 'Keeper', mesh: quad }])
+
+    const modelXml = (await readEntry(outputPath, '3D/3dmodel.model')).toString('utf8')
+    const objectOne = modelXml.match(/<object id="1"[^>]*>[\s\S]*?<\/object>/)?.[0] ?? ''
+    // The added part is the object's WHOLE component list; the body was never referenced.
+    assert.match(objectOne, /<component objectid="2" transform="1 0 0 0 1 0 0 0 1 0 0 2"\/>/)
+    assert.equal((objectOne.match(/<component /g) ?? []).length, 1, 'the deleted body must not be a component')
+    assert.doesNotMatch(objectOne, /<mesh\b/)
+
+    const settingsXml = (await readEntry(outputPath, 'Metadata/model_settings.config')).toString('utf8')
+    const settingsObject = settingsXml.match(/<object id="1">[\s\S]*?<\/object>/)?.[0] ?? ''
+    // Exactly one part, carrying the VOLUME's own name -- the whole point of not promoting it.
+    assert.equal((settingsObject.match(/<part /g) ?? []).length, 1)
+    assert.match(settingsObject, /<part id="2" subtype="normal_part">/)
+    // The PART carries the volume's name. The object is still called Widget (its own metadata),
+    // which is right: deleting the body removes geometry, it does not rename the object.
+    const partBlock = settingsObject.match(/<part [\s\S]*?<\/part>/)?.[0] ?? ''
+    assert.match(partBlock, /value="Keeper"/)
+    assert.doesNotMatch(partBlock, /value="Widget"/, 'the object name must not become the part name')
+    assert.match(settingsObject, /<metadata key="name" value="Widget"\/>/, 'the object keeps its own name')
+
+    const scene = await readSceneManifest(outputPath, 1)
+    assert.equal(scene.instances.find((entry) => entry.objectId === 1)?.parts.length, 1)
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
+})
+
+test('buildEditedThreeMf keeps the body when it is NOT flagged removed', async () => {
+  // The inverse, so the flag cannot quietly start dropping geometry: the same edit without
+  // `removedObjectBodies` still wraps the inline mesh as component 0.
+  const { buildEditedThreeMf } = await import('./three-mf.js')
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-kept-body-'))
+  const basePath = path.join(tempDir, 'base.3mf')
+  const outputPath = path.join(tempDir, 'edited.3mf')
+  try {
+    const quad = {
+      positions: [0, 0, 0, 10, 0, 0, 10, 10, 0, 0, 10, 0],
+      indices: [0, 1, 2, 0, 2, 3],
+      bounds: { min: { x: 0, y: 0, z: 0 }, max: { x: 10, y: 10, z: 0 } }
+    }
+    await buildEditedThreeMf(null, basePath, {
+      plates: [{ index: 1 }],
+      instances: [
+        { importId: 'imp-1', plateIndex: 1, position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } }
+      ]
+    }, [{ importId: 'imp-1', name: 'Widget', mesh: quad }])
+
+    await buildEditedThreeMf(basePath, outputPath, {
+      plates: [{ index: 1 }],
+      instances: [
+        { objectId: 1, plateIndex: 1, position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } }
+      ],
+      addedParts: [
+        { objectId: 1, meshImportId: 'part-1', subtype: 'normal_part', name: 'Keeper', matrix: [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 2] }
+      ]
+    } as SceneEdit, [{ importId: 'part-1', name: 'Keeper', mesh: quad }])
+
+    const scene = await readSceneManifest(outputPath, 1)
+    assert.equal(scene.instances.find((entry) => entry.objectId === 1)?.parts.length, 2,
+      'an unflagged object keeps its body alongside the added part')
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
+})
+
 test('buildEditedThreeMf adds a part to an UNSAVED import host and writes a normal part\'s extruder', async () => {
   const { buildEditedThreeMf } = await import('./three-mf.js')
   const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-import-host-part-'))
@@ -4555,7 +4653,7 @@ test('extractSceneBed reports the printer the bed was placed for', async () => {
 
 test('a part deleted on an independent COPY is removed from the copy, not ignored', async () => {
   // `removedParts` is the one SUBTRACTIVE part seam, and the clone pre-pass has to resolve its
-  // negative placeholder like every other one. Missing it fails silently: `applyRemovedParts`
+  // negative placeholder like every other one. Missing it fails silently: `applyPartLayout`
   // looks for `<object id="-1">`, finds nothing, removes nothing, and the part the user deleted
   // on the copy is simply back on the next open.
   const { buildEditedThreeMf } = await import('./three-mf.js')

@@ -712,6 +712,33 @@ export const sceneEditRemovedPartSchema = z.object({
 export type SceneEditRemovedPart = z.infer<typeof sceneEditRemovedPartSchema>
 
 /**
+ * A new PART order inside one in-project object: BambuStudio's drag-to-reorder within an object.
+ *
+ * Portable as-is, unlike object order: `<component>` sequence IS the volume list the importer reads
+ * (`_handle_start_config_volume` keys a volume by its position), so the order carries real slicing
+ * meaning. BambuStudio requires the FIRST volume to be a normal part, which is why this is
+ * persisted rather than kept as a UI preference.
+ *
+ * `order` names parts by their BASE-FILE ORDINAL, like every other part-scoped seam, and NOT by
+ * `componentObjectId`: that is the MESH id, and BambuStudio deliberately writes one id for every
+ * volume sharing a mesh (`m_share_mesh`), so an object can hold four parts that a mesh-id order
+ * cannot tell apart. A partial list moves only the ordinals it names, through the slots they
+ * already occupy, leaving the rest where they are, so a stale entry cannot drop a part.
+ *
+ * Applied together with {@link sceneEditRemovedPartSchema} in ONE final layout pass, because both
+ * address base ordinals and neither can run after the other: reordering first moves the ordinals a
+ * removal names, removing first moves the ordinals an order names. One pass resolves both against
+ * the base list, so there is no "which of these two goes last" to get wrong.
+ */
+export const sceneEditPartOrderSchema = z.object({
+  /** In-project object id, or a NEGATIVE clone placeholder (see `sceneEditObjectCloneSchema`). */
+  objectId: z.number().int().refine((value) => value !== 0, 'objectId must not be 0'),
+  /** Base-file ordinals in the desired sequence. Unlisted parts keep their positions. */
+  order: z.array(z.number().int().nonnegative()).max(400)
+})
+export type SceneEditPartOrder = z.infer<typeof sceneEditPartOrderSchema>
+
+/**
  * The import counterpart of {@link sceneEditRemovedPartSchema}: dropping one solid of a multi-solid
  * import that has never been saved (a STEP assembly, a Split-to-parts result, an imported 3MF).
  *
@@ -725,6 +752,52 @@ export const sceneEditImportRemovedPartSchema = z.object({
   partIndex: z.number().int().nonnegative()
 })
 export type SceneEditImportRemovedPart = z.infer<typeof sceneEditImportRemovedPartSchema>
+
+/**
+ * An object that keeps NO geometry of its own: everything it prints is an added part.
+ *
+ * The state BambuStudio reaches by deleting an object's first volume, and the one thing the two
+ * removal seams above cannot express. An object whose geometry sits on an inline `<mesh>` has no
+ * `<part>` entry to omit -- the bake CREATES one for it while attaching the added parts
+ * (`applyAddedParts` moves the mesh into its own object as component 0 and re-keys the host's own
+ * entry onto it) -- so "remove ordinal 0" names something that does not exist until mid-bake.
+ * `importRemovedParts` cannot stand in either: it filters an import's SOURCE SOLIDS and no-ops
+ * entirely for the single-solid imports (a primitive, an STL, a cut half) that this is mostly about.
+ *
+ * Flagged here instead, so the bake simply never creates that component: the object is written with
+ * its added parts as its whole component list, and they keep their OWN names. Without it the editor
+ * had to promote a volume into the body, which saved as a part named after the OBJECT -- so the same
+ * delete produced `["Cube","Part"]` before a save and `["Part","Part"]` after one, which is a save
+ * changing what the user sees.
+ *
+ * `objectId` XOR `importId`, the same shape {@link sceneEditAddedPartSchema} uses, because the host
+ * may be an in-project object or an import that has never been saved. Ignored for a host that has
+ * no added parts to stand in for its geometry: an object with nothing to print is not a thing to
+ * write, and the editor refuses the delete on that same rule.
+ */
+export const sceneEditRemovedObjectBodySchema = z.object({
+  objectId: z.number().int().refine((value) => value !== 0, 'objectId must not be 0').optional(),
+  importId: z.string().trim().min(1).optional()
+}).refine(
+  (value) => (value.objectId == null) !== (value.importId == null),
+  'Provide exactly one of objectId or importId'
+)
+export type SceneEditRemovedObjectBody = z.infer<typeof sceneEditRemovedObjectBodySchema>
+
+/**
+ * The import counterpart of {@link sceneEditPartOrderSchema}: reordering the solids of a
+ * multi-solid import that has never been saved.
+ *
+ * Exists because no feature here may require a save first. `order` names solids by their index in
+ * the STAGED record, the same space `importPartTypes` / `importPartFilaments` /
+ * `importPartTransforms` / `importRemovedParts` use, so each solid keeps its address however the
+ * others move.
+ */
+export const sceneEditImportPartOrderSchema = z.object({
+  importId: z.string().trim().min(1),
+  order: z.array(z.number().int().nonnegative()).max(400)
+})
+export type SceneEditImportPartOrder = z.infer<typeof sceneEditImportPartOrderSchema>
 
 /**
  * A part-type change for one solid of a multi-solid import, keyed by import + 0-based solid
@@ -969,8 +1042,17 @@ export const sceneEditSchema = z.object({
    * other part-scoped seam so their base ordinals stay valid; see the schema.
    */
   removedParts: z.array(sceneEditRemovedPartSchema).max(400).optional(),
+  /**
+   * Optional per-object part ORDER changes (the sidebar drag inside an object). Each entry is that
+   * object's complete desired sequence of base ordinals; applied in the same final layout pass as
+   * `removedParts`, which is the only place either of them can run without invalidating the other.
+   */
+  partOrder: z.array(sceneEditPartOrderSchema).max(400).optional(),
+  /** Optional solid ORDER changes on multi-solid imports, keyed by import. */
+  importPartOrder: z.array(sceneEditImportPartOrderSchema).max(400).optional(),
   /** Optional solid removals on multi-solid imports, keyed by import + solid index. */
   importRemovedParts: z.array(sceneEditImportRemovedPartSchema).max(400).optional(),
+  removedObjectBodies: z.array(sceneEditRemovedObjectBodySchema).max(400).optional(),
   /** Optional per-part filament for multi-solid imports, keyed by import + solid index. */
   importPartFilaments: z.array(sceneEditImportPartFilamentSchema).max(400).optional(),
   /** Optional per-part process overrides for multi-solid imports, keyed by import + solid index. */

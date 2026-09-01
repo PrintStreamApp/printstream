@@ -44,6 +44,7 @@
     "multer": "^2.1.1"
   },
   "overrides": {
-    "esbuild": "^0.25.0"
+    "esbuild": "^0.25.0",
+    "three": "^0.185.1"
   }
 }

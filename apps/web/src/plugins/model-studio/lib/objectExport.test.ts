@@ -2,9 +2,9 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import * as THREE from 'three'
 import {
+  buildSelectedPartsStl,
   buildObjectStl,
   buildObjectsStl,
-  buildPartsStl,
   groupHasExcludedVolumes,
   stlExportBaseName,
   stlExportFileName
@@ -14,7 +14,7 @@ const STL_HEADER_BYTES = 84
 const STL_TRIANGLE_BYTES = 50
 
 /** A unit-cube mesh (12 triangles) at the given position, optionally tagged. */
-function cubeMesh(position: [number, number, number], userData: Record<string, boolean> = {}): THREE.Mesh {
+function cubeMesh(position: [number, number, number], userData: Record<string, unknown> = {}): THREE.Mesh {
   const mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1))
   mesh.position.set(...position)
   Object.assign(mesh.userData, userData)
@@ -108,26 +108,26 @@ function partGroup(tag: 'partRef' | 'importPartRef', componentObjectId: number, 
   return group
 }
 
-test('buildPartsStl exports only the matched parts, including selected helper volumes', () => {
+test('buildSelectedPartsStl exports only the matched parts, including selected helper volumes', () => {
   const group = new THREE.Group()
   group.add(partGroup('partRef', 1, [0, 0, 0]))
   group.add(partGroup('partRef', 2, [3, 0, 0]))
   group.add(partGroup('partRef', 3, [6, 0, 0], true))
-  const one = buildPartsStl(group, [1])
+  const one = buildSelectedPartsStl(group, [{ kind: 'baked', partIndex: 1 }])
   assert.ok(one)
   assert.equal(stlTriangleCount(one), 12)
   // A selected modifier/negative part IS exported (picking it is the deliberate ask).
-  const withHelper = buildPartsStl(group, [2, 3])
+  const withHelper = buildSelectedPartsStl(group, [{ kind: 'baked', partIndex: 2 }, { kind: 'baked', partIndex: 3 }])
   assert.ok(withHelper)
   assert.equal(stlTriangleCount(withHelper), 24)
-  assert.equal(buildPartsStl(group, [99]), null)
+  assert.equal(buildSelectedPartsStl(group, [{ kind: 'baked', partIndex: 99 }]), null)
 })
 
-test('buildPartsStl matches importPartRef tags (multi-solid STEP imports)', () => {
+test('buildSelectedPartsStl matches importPartRef tags (multi-solid STEP imports)', () => {
   const group = new THREE.Group()
   group.add(partGroup('importPartRef', 0, [0, 0, 0]))
   group.add(partGroup('importPartRef', 1, [3, 0, 0]))
-  const stl = buildPartsStl(group, [1])
+  const stl = buildSelectedPartsStl(group, [{ kind: 'baked', partIndex: 1 }])
   assert.ok(stl)
   assert.equal(stlTriangleCount(stl), 12)
 })
@@ -150,4 +150,27 @@ test('stlExportBaseName sanitizes unsafe characters and falls back', () => {
 test('stlExportFileName appends a single .stl extension', () => {
   assert.equal(stlExportFileName('gear'), 'gear.stl')
   assert.equal(stlExportFileName('gear.stl'), 'gear.stl')
+})
+
+test('buildAddedPartStl matches a session-added volume by its own key', () => {
+  // Added volumes carry `addedPartKey` instead of a baked ordinal; text is the one users notice,
+  // but this is the same path a primitive or an imported solid takes.
+  const group = new THREE.Group()
+  group.add(partGroup('partRef', 1, [0, 0, 0]))
+  group.add(cubeMesh([3, 0, 0], { addedPartKey: 'text-1' }))
+  group.add(cubeMesh([6, 0, 0], { addedPartKey: 'cube-2' }))
+
+  const one = buildSelectedPartsStl(group, [{ kind: 'added', key: 'text-1' }])
+  assert.ok(one, 'the added volume exports')
+  assert.equal(stlTriangleCount(one), 12, 'only the volume whose key matched')
+
+  // A key that is not on this group exports NOTHING rather than everything: an empty match must not
+  // fall through to "serialize the whole object".
+  assert.equal(buildSelectedPartsStl(group, [{ kind: 'added', key: 'not-here' }]), null)
+
+  // The two matchers stay disjoint -- the baked one must not pick up added volumes, or a part
+  // export would silently gain geometry the user did not select.
+  const baked = buildSelectedPartsStl(group, [{ kind: 'baked', partIndex: 1 }])
+  assert.ok(baked)
+  assert.equal(stlTriangleCount(baked), 12)
 })

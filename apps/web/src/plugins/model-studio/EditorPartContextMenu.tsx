@@ -18,13 +18,13 @@ import IosShareRoundedIcon from '@mui/icons-material/IosShareRounded'
 import LibraryAddRoundedIcon from '@mui/icons-material/LibraryAddRounded'
 import PaletteRoundedIcon from '@mui/icons-material/PaletteRounded'
 import TuneRoundedIcon from '@mui/icons-material/TuneRounded'
-import { CONTEXT_MENU_POPPER_MODIFIERS, CONTEXT_MENU_SX } from './contextMenuChrome'
+import { CONTEXT_MENU_POPPER_MODIFIERS, CONTEXT_MENU_SX, type ContextMenuAnchor } from './contextMenuChrome'
 import { ContextMenuBackItem, FilamentMenuItems, PartTypeMenuItems } from './contextMenuItems'
 import type { FilamentOption } from './EditorView'
 
 export interface EditorPartContextMenuProps {
   /** Open position (viewport coordinates). */
-  contextMenu: { x: number; y: number }
+  contextMenu: ContextMenuAnchor
   /** How many parts the actions apply to (labels pluralize). */
   count: number
   /** The menu's listbox element, for the parent's click-away/Escape wiring. */
@@ -58,8 +58,8 @@ export interface EditorPartContextMenuProps {
 }
 
 export function EditorPartContextMenu({
-  contextMenu, count, listboxRef, onClose, onChangeType, filamentOptions, materialAssignable,
-  onChangeMaterial, onExportDownload, onExportToLibrary, onEditSettings, onDelete
+  contextMenu, count, listboxRef, onClose, onChangeType, filamentOptions,
+  materialAssignable, onChangeMaterial, onExportDownload, onExportToLibrary, onEditSettings, onDelete
 }: EditorPartContextMenuProps) {
   const [view, setView] = useState<'root' | 'type' | 'material' | 'export'>('root')
   const suffix = count > 1 ? ` (${count} parts)` : ''
@@ -69,7 +69,7 @@ export function EditorPartContextMenu({
       ref={listboxRef}
       onClose={onClose}
       anchorEl={{ getBoundingClientRect: () => new DOMRect(contextMenu.x, contextMenu.y, 0, 0) }}
-      placement="bottom-start"
+      placement={contextMenu.align === 'end' ? 'bottom-end' : 'bottom-start'}
       modifiers={CONTEXT_MENU_POPPER_MODIFIERS}
       sx={CONTEXT_MENU_SX}
     >

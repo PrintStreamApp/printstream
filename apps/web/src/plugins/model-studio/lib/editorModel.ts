@@ -12,6 +12,7 @@
  * position in mm plate-local (from plate centre), rotation in radians XYZ, and
  * per-axis scale. We never bake the plate origin here.
  */
+import { listGapToIndex } from '../../../lib/listReorder'
 import * as THREE from 'three'
 import type {
   LibraryThreeMfPrimeTower,
@@ -146,6 +147,21 @@ export interface EditorInstance {
    * model entry plus a component-local transform applied under the placement.
    */
   parts: EditorInstancePart[]
+  /**
+   * This object keeps no geometry of its own: its added volumes ARE the object.
+   *
+   * Set by deleting the BODY row, which post-save is an ordinary part and must therefore be
+   * deletable before one. Only meaningful for an object with an empty `parts` list (the only kind
+   * with a body row), and only ever set while a printed volume survives to carry the print -- the
+   * same rule `canRemoveParts` applies to a baked part.
+   *
+   * Everything that reads geometry gets this for free, because the body mesh is simply never added
+   * to the render group: bounds, footprint, the thumbnail, export and the boolean all walk the
+   * group. The two places that must honour it explicitly are the scene build (which would otherwise
+   * fetch and add the import's mesh) and {@link instanceVolumeRows} (which would otherwise offer a
+   * row for geometry that is gone). It emits as `SceneEdit.removedObjectBodies`.
+   */
+  bodyRemoved?: boolean
   /** Display color hint from the source scene (falls back to a neutral grey). */
   color: string | null
 }
@@ -395,15 +411,15 @@ export interface EditorState {
   flushVolumes?: SceneEditFlushVolumes
   /**
    * Per-PART process overrides made this session (process settings on one part of an object,
-   * separate from the object's overall overrides), keyed by {@link supportPaintKey}
-   * (`objectId:componentObjectId`). Each value is the desired override map for that part; an empty
+   * separate from the object's overall overrides), keyed by {@link partSlotKey}
+   * (`objectId:partIndex`). Each value is the desired override map for that part; an empty
    * map clears it. Cloned by {@link cloneEditorState}; emitted as `SceneEdit.partProcessOverrides`.
    */
   partProcessOverrides?: Record<string, Record<string, string>>
   /**
    * Part-type changes made this session (BambuStudio's "Change type": normal/negative/
-   * modifier/support blocker/enforcer), keyed by {@link supportPaintKey}
-   * (`objectId:componentObjectId`; an unsaved import keys on its synthetic object id).
+   * modifier/support blocker/enforcer), keyed by {@link partSlotKey}
+   * (`objectId:partIndex`; an unsaved import keys on its synthetic object id).
    * The change is also reflected onto every instance's `part.subtype` so the list and
    * viewport re-render from one source. Cloned by {@link cloneEditorState}; emitted as
    * `SceneEdit.partTypeChanges` / `SceneEdit.importPartTypes`.
@@ -411,13 +427,25 @@ export interface EditorState {
   partTypeChanges?: Record<string, SceneEditPartSubtype>
   /**
    * Part-placement changes made this session (moving/rotating/scaling a part inside its
-   * object with the gizmo), keyed by {@link supportPaintKey} (`objectId:componentObjectId`).
+   * object with the gizmo), keyed by {@link partSlotKey} (`objectId:partIndex`).
    * Each value is the part's new OBJECT-LOCAL 3MF matrix (12 numbers, column-major 3x3 +
    * translation). The change is also reflected onto every instance's `part.transform` so
    * rebuilds and thumbnails render from one source. Cloned by {@link cloneEditorState};
    * emitted as `SceneEdit.partTransforms`.
    */
   partTransforms?: Record<string, number[]>
+  /**
+   * Part ORDER changed this session (the sidebar drag inside an object), keyed by
+   * {@link addedPartHostId}. The value is the object's COMPLETE desired sequence of BASE ordinals
+   * (`EditorInstancePart.partIndex`), not of array positions.
+   *
+   * Geometry-level, like {@link EditorState.partTransforms}: every copy of an object shares one
+   * part list, so a reorder on one copy applies to all of them, and the instances' `parts` arrays
+   * are re-laid to match so the sidebar and the viewport read one source. An object with no entry
+   * keeps the base file's `<component>` order. Cloned by {@link cloneEditorState}; emitted as
+   * `SceneEdit.partOrder` (in-project) or `SceneEdit.importPartOrder` (an unsaved import).
+   */
+  partOrder?: Record<number, number[]>
 }
 
 /** A new volume added inside a model this session (Bambu "Add part / negative part/..."). */
@@ -462,10 +490,103 @@ export function addedPartHostId(instance: EditorInstance): number | null {
   return instance.source.replacedObjectId ?? null
 }
 
+/**
+ * The shared "no added parts" result.
+ *
+ * One frozen array rather than a fresh `[]` per call, because the object list's rows are memoised on
+ * their props: a new empty array for every part-less instance on every render would fail the shallow
+ * compare and re-render the whole list, which is exactly the cost the memo exists to remove.
+ */
+const NO_ADDED_PARTS: readonly EditorAddedPart[] = Object.freeze([])
+
 /** An instance's model's added parts (object-level, shared across instances). */
-export function effectiveAddedParts(state: EditorState | null, instance: EditorInstance): EditorAddedPart[] {
+export function effectiveAddedParts(state: EditorState | null, instance: EditorInstance): readonly EditorAddedPart[] {
   const hostId = addedPartHostId(instance)
-  return hostId == null ? [] : state?.addedParts?.[hostId] ?? []
+  return hostId == null ? NO_ADDED_PARTS : state?.addedParts?.[hostId] ?? NO_ADDED_PARTS
+}
+
+/**
+ * The ordinal an object's BODY occupies once a save promotes it to a real `<part>`.
+ *
+ * Zero, and not by convention: the bake's `applyAddedParts` moves an inline-mesh object's geometry
+ * into its own object and makes it the FIRST `<component>`, re-keying the host's own `<part>` entry
+ * onto it, and every added volume is appended after. `applyPartProcessOverrides` and
+ * `applyPartTypeChanges` then count `<part>` entries positionally, and both run AFTER that
+ * promotion -- so an edit the editor records against ordinal 0 today lands on the body tomorrow.
+ *
+ * That is what lets the body carry per-part settings and a subtype BEFORE any save, which it must:
+ * a save persists bytes and changes nothing else, so a row cannot grow controls by being written to
+ * disk. Only an object whose `parts` list is empty has a body row, so this can never collide with a
+ * real baked part 0.
+ */
+export const BODY_PART_INDEX = 0
+
+/**
+ * The subtype an object's body currently carries, which lives in the same map a baked part's does.
+ *
+ * Read rather than stored on the instance because the body is not IN `instance.parts` until a save
+ * puts it there; `partTypeChanges` is the seam that already survives to the bake.
+ */
+export function bodyPartSubtype(
+  state: EditorState | null | undefined,
+  instance: EditorInstance
+): SceneEditPartSubtype {
+  if (instance.bodyRemoved) return 'normal_part'
+  const hostId = addedPartHostId(instance)
+  if (hostId == null) return 'normal_part'
+  const stored = state?.partTypeChanges?.[partSlotKey(hostId, BODY_PART_INDEX)]
+  return canonicalThreeMfPartSubtype(stored ?? null)
+}
+
+/**
+ * The identity an object's BODY mesh paints under, or null when the body must not be paintable.
+ *
+ * Null for a body the user has retyped to a HELPER VOLUME, matching the three other mesh-build
+ * sites, which all gate their paint tag on `isNonRenderableThreeMfPartSubtype`. That tag is the
+ * single thing that puts a mesh in the brush's raycast set, so a tagged aid CATCHES strokes aimed at
+ * the geometry behind it -- and records paint the bake will never write, since a blocker or a
+ * negative volume carries none.
+ *
+ * The body is the only one of the four that could miss the guard, because its subtype lives in
+ * `partTypeChanges` rather than on a part entry that does not exist until a save.
+ */
+export function bodyPaintHostId(
+  state: EditorState | null | undefined,
+  instance: EditorInstance
+): number | null {
+  if (isNonRenderableThreeMfPartSubtype(bodyPartSubtype(state, instance))) return null
+  return addedPartHostId(instance)
+}
+
+/**
+ * Which volume rows an object lists, which is BambuStudio's rule: a row per volume as soon as the
+ * object has TWO, and none at one (`ObjectList` rebuilds the children over every volume on a
+ * split/add and folds them away again on delete).
+ *
+ * ONE definition, because the count is not `instance.parts.length`. An object's volumes are its
+ * baked parts PLUS the volumes added this session, and where the part list is empty its body is a
+ * volume too. Three sites used to derive this from `parts.length` alone, which is what made an
+ * object with one baked part and one added volume list only the added one: the baked part lost its
+ * name, material, type menu, settings and menu, and the same object grew all of them back on the
+ * next save, when the added volume became a second baked part. That is a SAVE BOUNDARY showing
+ * through, and the part-is-a-part rule in this plugin'the s development notes says it must not.
+ *
+ * `showBodyRow` is separate rather than derived by the caller because the body earns a row only
+ * where the part list does not already describe it: an object WITH parts lists its body among them
+ * (which is why `cat-hs` shows a `cat-hs.stl` row), so adding one there would double-count the
+ * geometry.
+ */
+export function instanceVolumeRows(
+  instance: EditorInstance,
+  addedPartCount: number
+): { showRows: boolean; showBodyRow: boolean } {
+  // A DELETED body is not a volume: the object's added parts are its whole geometry, exactly as
+  // they are in the file the save writes.
+  const showBodyRow = instance.parts.length === 0 && !instance.bodyRemoved && addedPartCount > 0
+  return {
+    showRows: instance.parts.length + addedPartCount + (showBodyRow ? 1 : 0) > 1,
+    showBodyRow
+  }
 }
 
 /** One manual brim ear in object-local coordinates. */
@@ -522,6 +643,31 @@ export function effectiveLayerHeightProfile(state: EditorState | null, instance:
 /** Key for {@link EditorState.supportPaint}: paint is shared per object part. */
 export function supportPaintKey(objectId: number, componentObjectId: number): string {
   return `${objectId}:${componentObjectId}`
+}
+
+/**
+ * Paint key for a SESSION-ADDED volume, whose mesh is a staged import rather than an entry in the
+ * base file.
+ *
+ * Keyed by the volume's own `meshImportId` and not by an object/component pair, because it has
+ * neither until a save: the bake allocates the mesh an object id itself. That importId is also
+ * exactly what the emitted `importPaint` entry names, so the client key and the wire key are the
+ * same fact and cannot drift.
+ *
+ * The `import:` prefix cannot collide with {@link supportPaintKey}, whose halves are both numbers.
+ * Unlike an added part's `key`, an importId is minted by the import store rather than being user
+ * data, so the prefix is not forgeable.
+ *
+ * A volume's mesh is its own -- nothing else references it -- so unlike baked parts there is no
+ * mesh-sharing to model here; one volume, one key.
+ */
+export function addedPartPaintKey(meshImportId: string): string {
+  return `import:${meshImportId}`
+}
+
+/** The importId a paint key names, or null when it keys a baked part instead. */
+export function addedPartPaintImportId(key: string): string | null {
+  return key.startsWith('import:') ? key.slice('import:'.length) : null
 }
 
 /**
@@ -781,7 +927,8 @@ export function seedEditorState(
 
   const partProcessOverrides = collectPartProcessOverridesFromScenes(scenesByPlate)
   return {
-    plates: reindexPlates(plates),
+    // Normalised across the whole list, not per plate: see `normalizePlateObjectOrder`.
+    plates: normalizePlateObjectOrder(reindexPlates(plates)),
     ...(Object.keys(partProcessOverrides).length > 0 ? { partProcessOverrides } : {})
   }
 }
@@ -805,10 +952,17 @@ export function seededActivePlateIndex(plates: EditorPlate[], preferredSourceInd
 }
 
 /**
- * Re-hydrate per-part PROCESS overrides from saved scenes, keyed by
- * {@link supportPaintKey} (`objectId:componentObjectId`). Mirrors the object-level
- * re-hydration: the editor's per-part gear shows what the 3MF already carries so a
- * reopened project keeps its part-scoped settings instead of starting blank.
+ * Re-hydrate per-part PROCESS overrides from saved scenes, keyed by {@link partSlotKey}
+ * (`objectId:partIndex`). Mirrors the object-level re-hydration: the editor's per-part gear shows
+ * what the 3MF already carries so a reopened project keeps its part-scoped settings instead of
+ * starting blank.
+ *
+ * The ordinal is the part's POSITION in the scene's list, which is the same number
+ * {@link instanceFromScene} stamps as `partIndex` -- so the seed and the live edits address one
+ * space. It used to key on `componentObjectId`, the MESH id, which reads as an ordinal only on an
+ * object whose volumes happen to be numbered from zero: everywhere else a reopened project put its
+ * saved per-part settings on the wrong volume, silently, and the gear's count agreed with the
+ * misplacement.
  */
 export function collectPartProcessOverridesFromScenes(
   scenesByPlate: Map<number, LibraryThreeMfScene>
@@ -816,12 +970,12 @@ export function collectPartProcessOverridesFromScenes(
   const out: Record<string, Record<string, string>> = {}
   for (const scene of scenesByPlate.values()) {
     for (const instance of scene.instances) {
-      for (const part of instance.parts) {
-        if (!part.processOverrides || Object.keys(part.processOverrides).length === 0) continue
-        const key = supportPaintKey(instance.objectId, part.componentObjectId)
-        if (out[key]) continue
+      instance.parts.forEach((part, partIndex) => {
+        if (!part.processOverrides || Object.keys(part.processOverrides).length === 0) return
+        const key = partSlotKey(instance.objectId, partIndex)
+        if (out[key]) return
         out[key] = { ...part.processOverrides }
-      }
+      })
     }
   }
   return out
@@ -1102,10 +1256,22 @@ export function carriedPartSubtypes(
  * outcome is deleting the OBJECT, which is a different action with different consequences (its
  * instances, overrides and paint go too) and should not be reachable by accident from a part row.
  */
-export function canRemoveParts(instance: EditorInstance, partIndexes: ReadonlySet<number>): boolean {
+export function canRemoveParts(
+  instance: EditorInstance,
+  partIndexes: ReadonlySet<number>,
+  /**
+   * Printed geometry the object will still hold that is NOT one of its baked parts: session-added
+   * volumes, plus anything the caller is adding in the same commit (a boolean's result replacing the
+   * parts it consumed). Both count, because "does this object still print something" is a question
+   * about the object as the user sees it, not about which volumes happen to exist in the base file.
+   * Omitting it is what made a boolean over an object's only printed part refuse, and what stopped
+   * an object whose printed geometry is a session-added primitive from dropping its baked part.
+   */
+  otherPrintedParts = 0
+): boolean {
   const printed = printedParts(instance)
-  if (printed.length === 0) return false
-  return printed.some((part) => !partIndexes.has(part.partIndex))
+  if (printed.length === 0) return otherPrintedParts > 0
+  return printed.some((part) => !partIndexes.has(part.partIndex)) || otherPrintedParts > 0
 }
 
 /**
@@ -1126,13 +1292,23 @@ export function canRemoveParts(instance: EditorInstance, partIndexes: ReadonlySe
 export function withRemovedParts(
   state: EditorState,
   hostId: number,
-  partIndexes: ReadonlySet<number>
+  partIndexes: ReadonlySet<number>,
+  /**
+   * Printed volumes the object will hold after this call that are not baked parts: added volumes it
+   * already has, MINUS any the caller is removing alongside, PLUS any it is adding in the same
+   * commit. Defaults to counting what is already there, which is the answer for every caller that
+   * only deletes.
+   */
+  otherPrintedParts?: number
 ): EditorState | null {
   if (partIndexes.size === 0) return null
   const host = state.plates
     .flatMap((plate) => plate.instances)
     .find((instance) => addedPartHostId(instance) === hostId)
-  if (!host || !canRemoveParts(host, partIndexes)) return null
+  if (!host) return null
+  const survivingAdded = otherPrintedParts ?? effectiveAddedParts(state, host)
+    .filter((part) => !isNonRenderableThreeMfPartSubtype(part.subtype)).length
+  if (!canRemoveParts(host, partIndexes, survivingAdded)) return null
 
   const plates = state.plates.map((plate) => ({
     ...plate,
@@ -1141,13 +1317,28 @@ export function withRemovedParts(
       : instance))
   }))
   const existing = state.removedParts?.[hostId] ?? []
+  // Drop the removed ordinals from any recorded ORDER too, so the two records describe the same
+  // set of volumes. BambuStudio has no separate order to go stale -- `ModelObject::volumes` IS the
+  // order, and a delete is an erase from it -- and this is the closest we get: without the prune,
+  // "reorder then delete" emits an order naming a volume that no longer exists while "delete then
+  // reorder" emits one that omits it, two payloads for one end state that the bake then has to be
+  // correct for twice.
+  const recordedOrder = state.partOrder?.[hostId]
+  const prunedOrder = recordedOrder?.filter((index) => !partIndexes.has(index))
   return {
     ...state,
     plates,
     removedParts: {
       ...(state.removedParts ?? {}),
       [hostId]: [...existing, ...[...partIndexes].filter((index) => !existing.includes(index))]
-    }
+    },
+    // An order of fewer than two volumes says nothing, so it is dropped rather than kept as an
+    // entry every collector then has to skip.
+    ...(prunedOrder
+      ? { partOrder: prunedOrder.length > 1
+        ? { ...state.partOrder, [hostId]: prunedOrder }
+        : Object.fromEntries(Object.entries(state.partOrder ?? {}).filter(([key]) => Number(key) !== hostId)) }
+      : {})
   }
 }
 
@@ -1173,6 +1364,8 @@ export function duplicateInstance(instance: EditorInstance): EditorInstance {
     scale: instance.scale.clone(),
     filamentId: instance.filamentId,
     printable: instance.printable,
+    // A copy of an object whose body was deleted is still that object: its volumes are its geometry.
+    ...(instance.bodyRemoved ? { bodyRemoved: true } : {}),
     color: instance.color,
     parts: instance.parts.map((part) => ({ ...part, transform: [...part.transform] }))
   }
@@ -1324,14 +1517,225 @@ export function reindexPlates(plates: EditorPlate[]): EditorPlate[] {
 export function movePlate(plates: EditorPlate[], fromIndex: number, insertAt: number): EditorPlate[] {
   const from = plates.findIndex((plate) => plate.index === fromIndex)
   if (from < 0) return plates
-  const gap = Math.max(0, Math.min(plates.length, insertAt))
-  const target = gap > from ? gap - 1 : gap
+  const target = listGapToIndex(from, Math.max(0, Math.min(plates.length, insertAt)))
   if (target === from) return plates
   const reordered = [...plates]
   const [moved] = reordered.splice(from, 1)
   if (!moved) return plates
   reordered.splice(target, 0, moved)
   return reindexPlates(reordered)
+}
+
+/**
+ * Move `items[from]` to sit immediately before the first item `isAnchor` accepts; last when the
+ * anchor is null or matches nothing.
+ *
+ * An unknown anchor APPENDS rather than aborting: a stale drop is still a move the user asked for,
+ * and last is the one position an anchor that is not there cannot contradict. Shared by the object
+ * and part movers so that rule has one implementation.
+ */
+function moveBefore<T>(items: readonly T[], from: number, isAnchor: ((item: T) => boolean) | null): T[] {
+  const next = [...items]
+  const [moved] = next.splice(from, 1)
+  if (moved === undefined) return next
+  const at = isAnchor ? next.findIndex(isAnchor) : -1
+  if (at < 0) next.push(moved)
+  else next.splice(at, 0, moved)
+  return next
+}
+
+/**
+ * Instances grouped by the OBJECT each places, objects in first-appearance order.
+ *
+ * Display order is a property of the object, because that is the only thing the file can express:
+ * BambuStudio builds its list by walking `<build><item>` and creating one `ModelObject` the first
+ * time an id appears (`bbs_3mf.cpp` `_create_object_instance`), so two linked copies are one entry
+ * in its list however their items are spread through the build section.
+ *
+ * The key is {@link addedPartHostId}, the SAME numeric identity every per-object and per-part seam
+ * uses. An instance with none (an import that has not been given one, which nothing constructs
+ * today) collects under a single trailing bucket and is not orderable, rather than being handed a
+ * private identity: two instances of ONE unsaved import must not read as two objects here, because
+ * the bake resolves them to one.
+ */
+function instancesByObject(instances: readonly EditorInstance[]): Map<number | null, EditorInstance[]> {
+  const byObject = new Map<number | null, EditorInstance[]>()
+  for (const instance of instances) {
+    const hostId = addedPartHostId(instance)
+    let list = byObject.get(hostId)
+    if (!list) { list = []; byObject.set(hostId, list) }
+    list.push(instance)
+  }
+  return byObject
+}
+
+/**
+ * The PROJECT's objects in display order: each object once, at its first instance anywhere.
+ *
+ * Project-wide, not per plate, because the file has exactly one object order: the bake flattens
+ * every plate's instances into one build section and BambuStudio's list is that one vector, bucketed
+ * under plate nodes for display. An object placed on two plates therefore cannot sit third on one
+ * and first on the other, and treating the order as per-plate silently lost a drag on the second
+ * plate the next time the project was opened.
+ */
+export function projectObjectOrder(state: EditorState): number[] {
+  return plateSetObjectOrder(state.plates)
+}
+
+/** {@link projectObjectOrder} over a bare plate list, for callers mid-update that have no state. */
+function plateSetObjectOrder(plates: readonly EditorPlate[]): number[] {
+  const order: number[] = []
+  const seen = new Set<number>()
+  for (const plate of plates) {
+    for (const hostId of instancesByObject(plate.instances).keys()) {
+      if (hostId == null || seen.has(hostId)) continue
+      seen.add(hostId)
+      order.push(hostId)
+    }
+  }
+  return order
+}
+
+/**
+ * Re-lay one plate's instances so every object's instances sit together, following `objectOrder`
+ * where it names them.
+ *
+ * Grouping is not cosmetic tidying: the saved file groups build items by object no matter what this
+ * list looks like, so an interleaved list is a sidebar that disagrees with both the file and
+ * BambuStudio, and a drag in it would land the dragged object somewhere the user did not point at.
+ * Each object's own instances keep their relative order, so a copy never swaps with its original.
+ */
+function layOutInstancesByObject(instances: EditorInstance[], objectOrder?: readonly number[]): EditorInstance[] {
+  // Map iteration is insertion order, so this is already "grouped, objects in first-appearance
+  // order" before any caller order is applied.
+  const byObject = instancesByObject(instances)
+  if (!objectOrder) return [...byObject.values()].flat()
+  const out: EditorInstance[] = []
+  const placed = new Set<number | null>()
+  for (const hostId of objectOrder) {
+    const list = byObject.get(hostId)
+    if (!list || placed.has(hostId)) continue
+    placed.add(hostId)
+    out.push(...list)
+  }
+  // An object the order failed to name still ships, after the ones it did: a project-wide order
+  // names objects on other plates too, and dropping one because it went unnamed would be a
+  // deletion, not a reorder, with the unreferenced-object sweep taking its geometry on the save.
+  for (const [hostId, list] of byObject) {
+    if (!placed.has(hostId)) out.push(...list)
+  }
+  return out
+}
+
+/** True when the two lists hold the same items in the same positions. */
+function sameOrder<T>(left: readonly T[], right: readonly T[]): boolean {
+  return left.length === right.length && left.every((item, index) => item === right[index])
+}
+
+/** `plate` with `instances`, or the SAME plate when nothing moved, so no caller rebuilds for a no-op. */
+function withInstances(plate: EditorPlate, instances: EditorInstance[]): EditorPlate {
+  return sameOrder(instances, plate.instances) ? plate : { ...plate, instances }
+}
+
+/**
+ * Lay every plate out to ONE object order: the project's, grouped so each object's instances sit
+ * together.
+ *
+ * Whole-list, not per plate, and that is the point. The saved file has a single object sequence
+ * (the bake flattens every plate into one build section), so laying each plate out in its OWN
+ * first-appearance order lets plate 2 display an order the save will not write: move a copy of A
+ * and then a copy of B onto plate 2 and it shows `B, A` while the file says `A, B`, which is the
+ * sidebar-disagrees-with-the-file bug this whole seam exists to remove. It also made a NO-OP drag
+ * on plate 1 re-lay plate 2 and push an undo step for a change nobody could see.
+ *
+ * Run at seed time and after every structural edit. A file BambuStudio wrote is already grouped
+ * (its `<model_instance>` list is a `std::set<std::pair<int,int>>`, so it is sorted by object), but
+ * one of OUR saves need not be: duplicating an object appends the copy, which leaves the original's
+ * other instances behind it. Idempotent and identity-stable, so an already-normal list is returned
+ * as-is and nothing downstream rebuilds.
+ */
+export function normalizePlateObjectOrder(plates: EditorPlate[]): EditorPlate[] {
+  const order = plateSetObjectOrder(plates)
+  const next = plates.map((plate) => withInstances(plate, layOutInstancesByObject(plate.instances, order)))
+  return sameOrder(next, plates) ? plates : next
+}
+
+/**
+ * Move an object to sit immediately before `beforeHostId` in the PROJECT's object order, carrying
+ * every instance of it on every plate. A null `beforeHostId` moves it last.
+ *
+ * Addressed by identity rather than by position on purpose. The sidebar lists only the instances
+ * whose geometry has finished rendering, so its positions are a subset of the plate's during a
+ * load, and a position handed over from there would name a different object than the one dragged.
+ *
+ * Whole-STATE, mirroring {@link movePartBefore}, because the order is project-wide (see
+ * {@link projectObjectOrder}). The no-op contract mirrors {@link movePlate}: the same state back
+ * when nothing moved, so the caller can skip the history checkpoint.
+ */
+export function moveObjectBefore(
+  state: EditorState,
+  hostId: number,
+  beforeHostId: number | null
+): EditorState {
+  const order = projectObjectOrder(state)
+  const from = order.indexOf(hostId)
+  if (from < 0 || hostId === beforeHostId) return state
+  const reordered = moveBefore(order, from, beforeHostId === null ? null : (entry) => entry === beforeHostId)
+  if (sameOrder(reordered, order)) return state
+  const plates = state.plates.map((plate) => withInstances(plate, layOutInstancesByObject(plate.instances, reordered)))
+  return sameOrder(plates, state.plates) ? state : { ...state, plates }
+}
+
+/**
+ * Move a part to sit immediately before `beforePartIndex` within its object, or last when that is
+ * null. Both are BASE ordinals ({@link EditorInstancePart.partIndex}), never array positions.
+ *
+ * Applies to EVERY instance of the object, on every plate: part order is geometry-level, exactly
+ * like {@link EditorState.partTransforms}. Reordering on one copy and not the others would make the
+ * sidebar disagree with itself depending on which copy was expanded, and only one of the two orders
+ * could survive the save.
+ *
+ * Returns the same state for a no-op, so the caller can skip the history checkpoint.
+ */
+export function movePartBefore(
+  state: EditorState,
+  hostId: number,
+  partIndex: number,
+  beforePartIndex: number | null
+): EditorState {
+  if (partIndex === beforePartIndex) return state
+  let reordered: number[] | null = null
+  const plates = state.plates.map((plate) => {
+    let changed = false
+    const instances = plate.instances.map((instance) => {
+      if (addedPartHostId(instance) !== hostId) return instance
+      const from = instance.parts.findIndex((part) => part.partIndex === partIndex)
+      if (from < 0) return instance
+      const parts = moveBefore(
+        instance.parts,
+        from,
+        beforePartIndex === null ? null : (part) => part.partIndex === beforePartIndex
+      )
+      if (sameOrder(parts, instance.parts)) return instance
+      // A HELPER VOLUME MAY NOT LEAD. BambuStudio requires the first volume to be a printed part,
+      // refuses this drop in its own object list, and sorts the volumes on load if a file arrives
+      // otherwise -- so allowing it here does not corrupt anything, it just means the order we save
+      // is not the order the project reopens with, in Studio or in us. Refusing the move is what
+      // Studio does, and it keeps the persisted order honest.
+      const leading = parts[0]
+      if (leading && isNonRenderableThreeMfPartSubtype(canonicalThreeMfPartSubtype(leading.subtype ?? null))) {
+        return instance
+      }
+      changed = true
+      // Recorded from the FIRST instance that moved; every other instance of the object is laid out
+      // from the same list, so they cannot disagree.
+      reordered ??= parts.map((part) => part.partIndex)
+      return { ...instance, parts }
+    })
+    return changed ? { ...plate, instances } : plate
+  })
+  if (!reordered) return state
+  return { ...state, plates, partOrder: { ...state.partOrder, [hostId]: reordered } }
 }
 
 /** Flatten the editable state into the locked `SceneEdit` contract. */
@@ -1410,7 +1814,7 @@ export function buildSceneEdit(state: EditorState): SceneEdit {
     seamPaint: collectPartPaint(state, state.seamPaint),
     colorPaint: collectPartPaint(state, state.colorPaint),
     fuzzyPaint: collectPartPaint(state, state.fuzzyPaint),
-    importPaint: collectImportPaint(state),
+    importPaint: mergeImportPaint(collectImportPaint(state), collectAddedPartPaint(state)),
     brimEars: collectBrimEars(state),
     heightRanges: collectHeightRanges(state),
     importHeightRanges: collectImportHeightRanges(state),
@@ -1422,6 +1826,8 @@ export function buildSceneEdit(state: EditorState): SceneEdit {
     objectNames: collectObjectNames(state),
     addedParts: collectAddedParts(state),
     ...collectRemovedParts(state),
+    removedObjectBodies: collectRemovedObjectBodies(state),
+    ...collectPartOrder(state),
     meshReplacements: collectMeshReplacements(state),
     repairedObjectIds: collectRepairedObjectIds(state),
     repairSettings: state.settingsRepairStaged ? true : undefined,
@@ -1676,6 +2082,60 @@ function collectImportPaint(state: EditorState): SceneEdit['importPaint'] {
   return out.length > 0 ? out : undefined
 }
 
+/** Both sources of `importPaint` as one list, or undefined when neither had anything to say. */
+function mergeImportPaint(
+  fromImports: SceneEdit['importPaint'],
+  fromAddedParts: NonNullable<SceneEdit['importPaint']>
+): SceneEdit['importPaint'] {
+  const merged = [...(fromImports ?? []), ...fromAddedParts]
+  return merged.length > 0 ? merged : undefined
+}
+
+/**
+ * Paint the user applied to SESSION-ADDED volumes.
+ *
+ * Emitted as `importPaint` like an unsaved import's, because that is exactly what a volume's mesh
+ * is: a single-solid `part` import, which the bake writes through the same
+ * `renderImportedMeshObjectXml` call and whose paint it already reads from
+ * `importPaint.get(importId).get(0)`. So this needed no bake-side seam of its own -- solid 0 is the
+ * volume's only mesh.
+ *
+ * Split from {@link collectImportPaint} rather than folded into it because the two resolve their
+ * importId from different places (that one maps a replaced object's synthetic id, this one reads
+ * the volume's own record) and a single loop doing both reads as if the key space were shared.
+ */
+function collectAddedPartPaint(state: EditorState): NonNullable<SceneEdit['importPaint']> {
+  const channels = [
+    { channel: 'support' as const, paint: state.supportPaint },
+    { channel: 'seam' as const, paint: state.seamPaint },
+    { channel: 'color' as const, paint: state.colorPaint },
+    { channel: 'fuzzy' as const, paint: state.fuzzyPaint }
+  ].filter((entry) => entry.paint && Object.keys(entry.paint).length > 0)
+  // Only volumes still attached to a placed host: deleting the volume (or its object) must not ship
+  // paint for geometry the save does not write, exactly as the other per-part collectors drop theirs.
+  const liveImportIds = new Set<string>()
+  for (const plate of state.plates) {
+    for (const instance of plate.instances) {
+      for (const part of effectiveAddedParts(state, instance)) liveImportIds.add(part.importId)
+    }
+  }
+  const out: NonNullable<SceneEdit['importPaint']> = []
+  for (const { channel, paint } of channels) {
+    for (const [key, triangles] of Object.entries(paint ?? {})) {
+      const importId = addedPartPaintImportId(key)
+      if (!importId || !liveImportIds.has(importId)) continue
+      out.push({
+        importId,
+        // A volume's mesh is a single-solid import, so its only solid is 0.
+        partIndex: 0,
+        channel,
+        triangles: Object.fromEntries(Object.entries(triangles).map(([index, code]) => [String(index), code]))
+      })
+    }
+  }
+  return out
+}
+
 /** Whether an object is already marked for mesh repair on save. */
 export function isObjectMarkedForRepair(state: EditorState, objectId: number): boolean {
   return (state.repairedObjectIds ?? []).includes(objectId)
@@ -1700,16 +2160,15 @@ function collectMeshReplacements(state: EditorState): SceneEdit['meshReplacement
 }
 
 /**
- * Emit this session's part deletions, split by how their host is addressed. Mirrors
- * {@link collectAddedParts}, including the host resolution: a deletion must work on a model that
- * has never been saved, so an import-backed host emits `importRemovedParts` keyed by its importId
- * while an in-project object emits `removedParts` keyed by its Bambu object id.
+ * How each part host is ADDRESSED in the emitted edit: an in-project object by its Bambu object id,
+ * an import that has never been saved by its importId.
  *
- * A host with no placed instance left contributes nothing: deleting a part and then deleting the
- * whole object must not ship a removal against an object the edit no longer places.
+ * One map for every per-part collector, because they all have to answer the same question and a
+ * host resolved two ways is a seam that emits against an object one save and an import the next. A
+ * host with no placed instance is absent, which is what stops a removal or an order shipping
+ * against a model the edit no longer places.
  */
-function collectRemovedParts(state: EditorState): Pick<SceneEdit, 'removedParts' | 'importRemovedParts'> {
-  if (!state.removedParts) return {}
+function partHostAddresses(state: EditorState): Map<number, { objectId: number } | { importId: string }> {
   const hostById = new Map<number, { objectId: number } | { importId: string }>()
   for (const plate of state.plates) {
     for (const instance of plate.instances) {
@@ -1720,6 +2179,67 @@ function collectRemovedParts(state: EditorState): Pick<SceneEdit, 'removedParts'
         : { importId: instance.source.importId })
     }
   }
+  return hostById
+}
+
+/**
+ * Emit the objects whose BODY was deleted: their added parts are the object's whole geometry.
+ *
+ * Addressed exactly like {@link collectAddedParts}, `objectId` XOR `importId`, because a body can be
+ * deleted from a model that has never been saved (a primitive is the common case) and the bake
+ * resolves the import to a real object id itself. Read off the instances rather than a session map
+ * because the flag lives ON the instance, so an object deleted afterwards takes it with it.
+ */
+/**
+ * Hosts whose BODY this session deleted, by the id the ordinal-keyed maps use.
+ *
+ * The body occupies {@link BODY_PART_INDEX} only while it exists. Once it is gone the bake writes
+ * no component for it, so `<part>` position 0 is the object's FIRST ADDED VOLUME -- and any type or
+ * per-part settings the user had given the body would land on that volume instead, silently, in the
+ * saved file. The ordinal collectors drop ordinal 0 for these hosts rather than the delete clearing
+ * the entries, so undoing the deletion brings the body's own type back with it.
+ */
+function bodyRemovedHostIds(state: EditorState): Set<number> {
+  const hosts = new Set<number>()
+  for (const plate of state.plates) {
+    for (const instance of plate.instances) {
+      if (!instance.bodyRemoved) continue
+      const hostId = addedPartHostId(instance)
+      if (hostId != null) hosts.add(hostId)
+    }
+  }
+  return hosts
+}
+
+function collectRemovedObjectBodies(state: EditorState): SceneEdit['removedObjectBodies'] {
+  const seen = new Set<number>()
+  const out: NonNullable<SceneEdit['removedObjectBodies']> = []
+  for (const plate of state.plates) {
+    for (const instance of plate.instances) {
+      if (!instance.bodyRemoved) continue
+      const hostId = addedPartHostId(instance)
+      if (hostId == null || seen.has(hostId)) continue
+      seen.add(hostId)
+      out.push(instance.source.kind === 'object'
+        ? { objectId: instance.objectId }
+        : { importId: instance.source.importId })
+    }
+  }
+  return out.length > 0 ? out : undefined
+}
+
+/**
+ * Emit this session's part deletions, split by how their host is addressed. Mirrors
+ * {@link collectAddedParts}, including the host resolution: a deletion must work on a model that
+ * has never been saved, so an import-backed host emits `importRemovedParts` keyed by its importId
+ * while an in-project object emits `removedParts` keyed by its Bambu object id.
+ *
+ * A host with no placed instance left contributes nothing: deleting a part and then deleting the
+ * whole object must not ship a removal against an object the edit no longer places.
+ */
+function collectRemovedParts(state: EditorState): Pick<SceneEdit, 'removedParts' | 'importRemovedParts'> {
+  if (!state.removedParts) return {}
+  const hostById = partHostAddresses(state)
   const removedParts: NonNullable<SceneEdit['removedParts']> = []
   const importRemovedParts: NonNullable<SceneEdit['importRemovedParts']> = []
   for (const [hostIdRaw, partIndexes] of Object.entries(state.removedParts)) {
@@ -1733,6 +2253,29 @@ function collectRemovedParts(state: EditorState): Pick<SceneEdit, 'removedParts'
   return {
     ...(removedParts.length > 0 ? { removedParts } : {}),
     ...(importRemovedParts.length > 0 ? { importRemovedParts } : {})
+  }
+}
+
+/**
+ * Emit this session's part reorders, split by host exactly like {@link collectRemovedParts}.
+ *
+ * An order of fewer than two parts is dropped rather than emitted: it says nothing, and the payload
+ * rides an HTTP header on the slice path.
+ */
+function collectPartOrder(state: EditorState): Pick<SceneEdit, 'partOrder' | 'importPartOrder'> {
+  if (!state.partOrder) return {}
+  const hostById = partHostAddresses(state)
+  const partOrder: NonNullable<SceneEdit['partOrder']> = []
+  const importPartOrder: NonNullable<SceneEdit['importPartOrder']> = []
+  for (const [hostIdRaw, order] of Object.entries(state.partOrder)) {
+    const host = hostById.get(Number.parseInt(hostIdRaw, 10))
+    if (!host || order.length < 2) continue
+    if ('objectId' in host) partOrder.push({ objectId: host.objectId, order: [...order] })
+    else importPartOrder.push({ importId: host.importId, order: [...order] })
+  }
+  return {
+    ...(partOrder.length > 0 ? { partOrder } : {}),
+    ...(importPartOrder.length > 0 ? { importPartOrder } : {})
   }
 }
 
@@ -1920,22 +2463,24 @@ function collectPartPaint(
   return out.length > 0 ? out : undefined
 }
 
-/** Part-type changes for parts whose in-project object is still placed (keyed objectId:componentId). */
+/** Part-type changes for parts whose in-project object is still placed (keyed objectId:partIndex). */
 function collectPartTypeChanges(state: EditorState): SceneEdit['partTypeChanges'] {
   if (!state.partTypeChanges) return undefined
   const placed = placedObjectIds(state)
+  const bodyRemoved = bodyRemovedHostIds(state)
   const out: NonNullable<SceneEdit['partTypeChanges']> = []
   for (const [key, subtype] of Object.entries(state.partTypeChanges)) {
     const parsedKey = parsePartSlotKey(key)
     if (!parsedKey) continue
     const { objectId, partIndex } = parsedKey
     if (!placed.has(objectId)) continue
+    if (partIndex === BODY_PART_INDEX && bodyRemoved.has(objectId)) continue
     out.push({ objectId, partIndex, subtype })
   }
   return out.length > 0 ? out : undefined
 }
 
-/** Part-placement changes for parts whose in-project object is still placed (keyed objectId:componentId). */
+/** Part-placement changes for parts whose in-project object is still placed (keyed objectId:partIndex). */
 function collectPartTransforms(state: EditorState): SceneEdit['partTransforms'] {
   if (!state.partTransforms) return undefined
   const placed = placedObjectIds(state)
@@ -2000,12 +2545,14 @@ function collectImportPartTransforms(state: EditorState): SceneEdit['importPartT
 function collectPartProcessOverrides(state: EditorState): SceneEdit['partProcessOverrides'] {
   if (!state.partProcessOverrides) return undefined
   const placed = placedObjectIds(state)
+  const bodyRemoved = bodyRemovedHostIds(state)
   const out: NonNullable<SceneEdit['partProcessOverrides']> = []
   for (const [key, overrides] of Object.entries(state.partProcessOverrides)) {
     const parsedKey = parsePartSlotKey(key)
     if (!parsedKey) continue
     const { objectId, partIndex } = parsedKey
     if (!placed.has(objectId) || Object.keys(overrides).length === 0) continue
+    if (partIndex === BODY_PART_INDEX && bodyRemoved.has(objectId)) continue
     out.push({ objectId, partIndex, overrides })
   }
   return out.length > 0 ? out : undefined
@@ -2200,11 +2747,22 @@ export function objectCloneSource(state: EditorState, objectId: number): number 
  * Give `objectId`'s session edits to `cloneObjectId` as well, so an independent copy starts
  * IDENTICAL to its source and then diverges. The copy inherits the source's BAKED state through
  * the server-side object copy; this is the other half, everything edited in this session but not
- * yet saved. Keys that address a part (`objectId:componentObjectId`) are re-keyed onto the copy;
- * the component ids stay the SOURCE's, which is what the bake's clone pre-pass expects.
+ * yet saved. Keys that address a part are re-keyed onto the copy, keeping the SOURCE's part
+ * address (mesh id for paint, ordinal for the rest), which is what the bake's clone pre-pass
+ * expects.
+ *
+ * **Every object-keyed map in {@link EditorState} belongs here.** A map left out does not fail
+ * loudly, it makes the copy quietly differ from the thing it was copied from: omitting
+ * `removedParts` resurrected volumes the user had deleted from the source, and omitting
+ * `repairedObjectIds` left the copy unrepaired while its source repaired.
  */
 function copySessionEditsOntoClone(state: EditorState, objectId: number, cloneObjectId: number): void {
-  const rekeyParts = (map: Record<string, unknown> | undefined): void => {
+  // Two key spaces with one string shape. They are passed their own builder rather than sharing
+  // one, because reading a mesh id as an ordinal type-checks and lands on the wrong volume.
+  const rekeyParts = (
+    map: Record<string, unknown> | undefined,
+    keyFor: (owner: number, part: number) => string
+  ): void => {
     if (!map) return
     for (const [key, value] of Object.entries(map)) {
       const [ownerRaw, partRaw] = key.split(':')
@@ -2212,16 +2770,32 @@ function copySessionEditsOntoClone(state: EditorState, objectId: number, cloneOb
       const cloned = typeof value === 'object' && value !== null
         ? JSON.parse(JSON.stringify(value)) as unknown
         : value
-      ;(map as Record<string, unknown>)[supportPaintKey(cloneObjectId, Number.parseInt(partRaw, 10))] = cloned
+      ;(map as Record<string, unknown>)[keyFor(cloneObjectId, Number.parseInt(partRaw, 10))] = cloned
     }
   }
-  rekeyParts(state.supportPaint)
-  rekeyParts(state.seamPaint)
-  rekeyParts(state.colorPaint)
-  rekeyParts(state.fuzzyPaint)
-  rekeyParts(state.partProcessOverrides)
-  rekeyParts(state.partTypeChanges)
-  rekeyParts(state.partTransforms)
+  rekeyParts(state.supportPaint, supportPaintKey)
+  rekeyParts(state.seamPaint, supportPaintKey)
+  rekeyParts(state.colorPaint, supportPaintKey)
+  rekeyParts(state.fuzzyPaint, supportPaintKey)
+  rekeyParts(state.partProcessOverrides, partSlotKey)
+  rekeyParts(state.partTypeChanges, partSlotKey)
+  rekeyParts(state.partTransforms, partSlotKey)
+  if (state.removedParts?.[objectId]) {
+    // Base-file ordinals, so they address the copy's volumes exactly as they address the source's:
+    // the clone pre-pass duplicates that same object's XML.
+    state.removedParts[cloneObjectId] = [...state.removedParts[objectId]!]
+  }
+  if (state.partOrder?.[objectId]) {
+    // Same reasoning: an order is a sequence of base ordinals, and the copy's volumes carry the
+    // source's ordinals. Without this the copy's parts came back in the base file's order while
+    // the sidebar showed the source's, which is one object rendering two ways.
+    state.partOrder[cloneObjectId] = [...state.partOrder[objectId]!]
+  }
+  if (state.repairedObjectIds?.includes(objectId) && !state.repairedObjectIds.includes(cloneObjectId)) {
+    // The copy gets its OWN mesh entry, so a pending repair has to name it too or the save
+    // repairs one of the two identical bodies.
+    state.repairedObjectIds = [...state.repairedObjectIds, cloneObjectId]
+  }
   if (state.heightRanges?.[objectId]) {
     state.heightRanges[cloneObjectId] = state.heightRanges[objectId]!.map(cloneHeightRange)
   }
@@ -2303,6 +2877,10 @@ export function cloneEditorState(state: EditorState): EditorState {
         ...(instance.brimEars ? { brimEars: instance.brimEars.map((ear) => ({ ...ear })) } : {}),
         ...(instance.heightRanges ? { heightRanges: instance.heightRanges.map(cloneHeightRange) } : {}),
         ...(instance.layerHeightProfile ? { layerHeightProfile: [...instance.layerHeightProfile] } : {}),
+        // A deleted BODY must survive the snapshot, exactly like the rename flag above: this list is
+        // rebuilt field by field, so a new instance field that is not named here is silently dropped
+        // by every undo/redo -- which would resurrect the geometry the user deleted and then save it.
+        ...(instance.bodyRemoved ? { bodyRemoved: true } : {}),
         parts: instance.parts.map((part) => ({
           entryPath: part.entryPath,
           partIndex: part.partIndex,
@@ -2361,6 +2939,13 @@ export function cloneEditorState(state: EditorState): EditorState {
       ? {
         partTransforms: Object.fromEntries(
           Object.entries(state.partTransforms).map(([key, matrix]) => [key, [...matrix]])
+        )
+      }
+      : {}),
+    ...(state.partOrder
+      ? {
+        partOrder: Object.fromEntries(
+          Object.entries(state.partOrder).map(([key, order]) => [key, [...order]])
         )
       }
       : {}),
@@ -2468,18 +3053,52 @@ export function effectivePartFilamentId(
   return part.filamentId ?? instanceFilamentId
 }
 
+/** What a material summary is taken over: enough of a volume to name its filament and its colour. */
+interface MaterialVolume { filamentId?: number | null; subtype?: string | null; color?: string | null }
+
 /**
- * The material a multi-part object should advertise: `uniformId` when every printed part resolves
- * to the same filament (or the object has a single one), otherwise `mixedColors` with the distinct
- * part colours for the indeterminate swatch. Exactly one of the two is set.
+ * Every volume of an object that has a material, in sidebar order.
+ *
+ * The BODY is one of them where the part list does not describe it (a single-solid import, a
+ * primitive, a single-mesh object in a saved project): it carries the object's own `filamentId`,
+ * which is the second of the two places a material can live. Written out here rather than at each
+ * caller because the two homes are exactly what surfaces keep getting wrong -- see the
+ * material-lives-in-one-of-TWO-places rule in this plugin'the s development notes.
+ */
+function instanceMaterialVolumes(
+  instance: EditorInstance,
+  addedParts: readonly EditorAddedPart[]
+): MaterialVolume[] {
+  const baked = printedParts(instance)
+  const added = addedParts.filter(
+    (part) => !isNonRenderableThreeMfPartSubtype(canonicalThreeMfPartSubtype(part.subtype))
+  )
+  if (baked.length > 0) return [...baked, ...added]
+  return [{ filamentId: instance.filamentId, color: instance.color }, ...added]
+}
+
+/**
+ * The material a multi-volume object should advertise: `uniformId` when every printed volume
+ * resolves to the same filament (or the object has a single one), otherwise `mixedColors` with the
+ * distinct volume colours for the indeterminate swatch. Exactly one of the two is set.
  */
 export function summarizeInstanceMaterial(
   instance: EditorInstance,
   resolveId: (id: number | null) => number | null,
   /** Same live-colour resolver the single-material badges use, so a recolour updates the bands. */
-  liveColor: (filamentId: number | null, fallback: string | null) => string | null
+  liveColor: (filamentId: number | null, fallback: string | null) => string | null,
+  /**
+   * The object's session-added volumes, which count exactly like baked parts.
+   *
+   * Omitting them made the badge LIE: a normal added part inherits an explicit filament on add, so
+   * an object whose baked parts are on material 1 and whose added volume is on material 3 summarised
+   * as a uniform material 1 -- and it changed on the next save, when the volume became a baked part
+   * and joined the summary. Defaulted so callers with no session state (tests, read-only previews)
+   * keep the baked-only answer.
+   */
+  addedParts: readonly EditorAddedPart[] = NO_ADDED_PARTS
 ): { uniformId: number | null; uniformColor: string | null; mixedColors?: string[] } {
-  const parts = printedParts(instance)
+  const parts = instanceMaterialVolumes(instance, addedParts)
   if (parts.length <= 1) {
     return { uniformId: resolveId(parts[0]?.filamentId ?? instance.filamentId), uniformColor: parts[0]?.color ?? instance.color }
   }
@@ -2499,7 +3118,7 @@ export function summarizeInstanceMaterial(
     const id = ids[index] ?? null
     if (seen.has(id)) return
     seen.add(id)
-    mixedColors.push(liveColor(id, part.color) || 'rgba(255,255,255,0.25)')
+    mixedColors.push(liveColor(id, part.color ?? null) || 'rgba(255,255,255,0.25)')
   })
   return { uniformId: null, uniformColor: null, mixedColors }
 }

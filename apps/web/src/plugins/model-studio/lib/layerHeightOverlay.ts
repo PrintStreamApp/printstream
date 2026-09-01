@@ -138,6 +138,12 @@ export function buildLayerHeightTable(options: LayerHeightTableOptions): Uint8Ar
 interface LayerHeightShading {
   material: THREE.MeshLambertMaterial
   texture: THREE.DataTexture
+  /**
+   * The texture's own backing store, held directly rather than reached through
+   * `texture.image.data` -- a `DataTexture`'s image is typed to allow a null buffer (it can be
+   * backed by a canvas or a video), which this one never is, since we allocate it right here.
+   */
+  texels: Uint8Array
   uniforms: { uLayerMinZ: THREE.IUniform<number>; uLayerHeight: THREE.IUniform<number> }
 }
 
@@ -148,7 +154,8 @@ interface LayerHeightShading {
  * inherits the scene's real lighting for free and keeps matching the parts around it.
  */
 function createShading(): LayerHeightShading {
-  const texture = new THREE.DataTexture(new Uint8Array(PROFILE_SAMPLES * 4), PROFILE_SAMPLES, 1)
+  const texels = new Uint8Array(PROFILE_SAMPLES * 4)
+  const texture = new THREE.DataTexture(texels, PROFILE_SAMPLES, 1)
   // NEAREST is what makes a zone boundary an edge; linear filtering would smooth the very steps
   // that are the point of bucketing at all.
   texture.magFilter = THREE.NearestFilter
@@ -192,7 +199,7 @@ function createShading(): LayerHeightShading {
       .replace('vec3 totalEmissiveRadiance = emissive;',
         'vec3 totalEmissiveRadiance = emissive + uLayerGlow * layerTexel.a;')
   }
-  return { material, texture, uniforms }
+  return { material, texture, texels, uniforms }
 }
 
 /**
@@ -219,7 +226,7 @@ export function syncLayerHeightVisuals(
   group.userData.layerHeightShading = shading
   shading.uniforms.uLayerMinZ.value = objectMinWorldZ
   shading.uniforms.uLayerHeight.value = objectHeight
-  shading.texture.image.data.set(buildLayerHeightTable({ ...options, objectHeight }))
+  shading.texels.set(buildLayerHeightTable({ ...options, objectHeight }))
   shading.texture.needsUpdate = true
 
   const sources: THREE.Mesh[] = []

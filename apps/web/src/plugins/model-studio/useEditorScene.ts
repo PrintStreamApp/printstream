@@ -27,6 +27,8 @@ import {
 import {
   BRIM_EAR_MARKER_COLOR,
   BRIM_EAR_MARKER_NAME,
+  isAddedPartMesh,
+  isViewportAidMesh,
   computeFootprintCells,
   computePlacementWarnings,
   createRotationSnapGuides,
@@ -36,6 +38,7 @@ import {
   groupShapeSignature,
   ISO_UP,
   PAINT_CHANNEL_SPECS,
+  paintOverlayVisible,
   paintChannelForGizmoMode,
   partGroupRef,
   printableMeshBox,
@@ -44,6 +47,8 @@ import {
   selectionBoxSignature,
   syncBrimEarMarkerMatrices,
   updateHullFaceHighlight,
+  allowsSelectionPicking,
+  RESTING_GIZMO_MODE,
   type GeometryCache,
   type GizmoMode,
   type ImportGeometryCache,
@@ -55,7 +60,9 @@ import {
   EXTRA_SELECTION_STYLE,
   PRIMARY_SELECTION_STYLE,
   createSelectionBox,
-  fitSelectionBox
+  createSelectionOwnerTracker,
+  fitSelectionBox,
+  renderSelectionOverlay
 } from './lib/selectionBox'
 import { FOOTPRINT_CELL_MM, shiftFootprintCells } from './lib/arrange'
 import { type EditorInstance, type EditorPlate } from './lib/editorModel'
@@ -66,7 +73,7 @@ import {
   type MultiTransformMode,
   type SelectionMemberPose
 } from './lib/multiSelectionTransform'
-import { type PartSelection } from './lib/selectionModel'
+import { type PartRef, type PartSelection } from './lib/selectionModel'
 import { type SupportPaintBrushMode } from './lib/supportPaint'
 
 /**
@@ -83,6 +90,23 @@ type TransformControlsEvents = {
 
 /** Screen-space radius (px) within which a measure click snaps to a mesh corner. */
 const MEASURE_SNAP_PX = 14
+
+/**
+ * Viewport distance (px) between the points a paint stroke is sampled at, and the ceiling on how
+ * many one pointermove may produce.
+ *
+ * The sampling exists so a stroke FOLLOWS THE SURFACE: each sample is its own raycast, so a drag
+ * across a curved face, over an edge, or from one volume onto another lands on the geometry that
+ * is really under that part of the path instead of being interpolated through the air between two
+ * far-apart hits. Coverage between samples is the swept cursor's job, not the sample rate's, which
+ * is why exceeding the cap widens the spacing rather than dropping the tail: a flick still paints
+ * an unbroken band, just tracked more coarsely. That is also why the spacing is looser than
+ * BambuStudio's `resolution` of 1.0 -- at 1px a fast flick costs hundreds of raycasts and hundreds
+ * of brush applications per event, and every one past the first few re-tests triangles the
+ * capsule between them already covered.
+ */
+const PAINT_STROKE_SAMPLE_SPACING_PX = 3
+const PAINT_STROKE_MAX_SAMPLES = 48
 
 /**
  * Editor default camera direction (offset from the bed centre to the camera): mostly
@@ -137,14 +161,14 @@ export interface EditorSceneParams {
   allSelectedKeysRef: MutableRefObject<() => string[]>
   selectExclusiveRef: MutableRefObject<(key: string | null) => void>
   toggleAdditiveSelectionRef: MutableRefObject<(key: string) => void>
-  selectedAddedPartKeyRef: MutableRefObject<string | null>
   /**
-   * Existing baked part currently holding the gizmo (counterpart of selectedAddedPartKey),
-   * identified by its ORDINAL within the object: see the note on `selectedBakedPart` in
-   * `EditorView`; `componentObjectId` is a mesh reference and does not identify a part.
+   * The single part currently holding the gizmo, of EITHER kind: a part baked into the project's
+   * 3MF (by its ORDINAL within the object, never `componentObjectId`, which is a mesh reference and
+   * does not identify a part) or a volume added this session (by its own key). See the note on
+   * `gizmoPart` in `EditorView`.
    */
-  selectedBakedPartRef: MutableRefObject<{ objectId: number; partIndex: number } | null>
-  setSelectedBakedPart: Dispatch<SetStateAction<{ objectId: number; partIndex: number } | null>>
+  gizmoPartRef: MutableRefObject<PartRef | null>
+  setGizmoPart: Dispatch<SetStateAction<PartRef | null>>
   setSelectionHighlightRef: MutableRefObject<((group: THREE.Object3D | null) => void) | null>
   // Gizmo + transform write-back.
   gizmoModeRef: MutableRefObject<GizmoMode>
@@ -172,7 +196,9 @@ export interface EditorSceneParams {
     worldPoint: THREE.Vector3,
     worldDirection: THREE.Vector3,
     faceIndex: number | null,
-    phase: 'down' | 'move'
+    phase: 'down' | 'move',
+    /** The stroke's previous world hit ON THIS MESH, which makes the dab a swept capsule. */
+    previousWorldPoint?: THREE.Vector3 | null
   ) => void>
   /**
    * Put the text being edited where the pointer is on the model, with that face's own normal.
@@ -223,7 +249,6 @@ export interface EditorSceneParams {
   suppressEditorEscapeRef: MutableRefObject<boolean>
   // Plain React values/setters/callbacks read by the effect.
   setSceneReady: Dispatch<SetStateAction<boolean>>
-  setSelectedAddedPartKey: Dispatch<SetStateAction<string | null>>
   writeBackGroupTransform: (object: THREE.Object3D) => void
 }
 
@@ -269,9 +294,8 @@ export function useEditorScene(params: EditorSceneParams): void {
     allSelectedKeysRef,
     selectExclusiveRef,
     toggleAdditiveSelectionRef,
-    selectedAddedPartKeyRef,
-    selectedBakedPartRef,
-    setSelectedBakedPart,
+    gizmoPartRef,
+    setGizmoPart,
     setSelectionHighlightRef,
     gizmoModeRef,
     setGizmoModeRef,
@@ -308,7 +332,6 @@ export function useEditorScene(params: EditorSceneParams): void {
     openContextMenuRef,
     suppressEditorEscapeRef,
     setSceneReady,
-    setSelectedAddedPartKey,
     writeBackGroupTransform
   } = params
 
@@ -361,7 +384,12 @@ export function useEditorScene(params: EditorSceneParams): void {
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
     renderer.setSize(Math.max(container.clientWidth, 1), Math.max(container.clientHeight, 1))
     renderer.shadowMap.enabled = true
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap
+    // PCF, not PCF_SOFT: three removed the soft variant in r185 and now rewrites the type to this
+    // one on the first shadow render, warning as it goes. Naming it here is what we actually get,
+    // rather than a setting that looks like soft shadows and is silently overridden. VSM is the
+    // remaining soft option and is deliberately not taken -- it trades the hard edge for light
+    // bleeding through thin walls, which this viewport is full of.
+    renderer.shadowMap.type = THREE.PCFShadowMap
     container.appendChild(renderer.domElement)
 
     // A reclaimed WebGL context (GPU pressure, driver reset) leaves the canvas permanently
@@ -453,6 +481,11 @@ export function useEditorScene(params: EditorSceneParams): void {
     // Last transform the selection box was fitted to; lets animate() skip the precise
     // bounds recompute on frames where the selected object hasn't moved (see animate).
     let selectionBoxSig = ''
+    // Frames to wait before replacing a CHEAP selection box with the precise fit. Counted down
+    // rather than done immediately: landing the per-vertex walk on the selecting frame is the exact
+    // hitch the cheap path exists to avoid. A drag in progress cancels it outright, and a drop that
+    // re-fitted cheaply re-arms it, since that fresh cheap fit is loose all over again.
+    let selectionBoxPreciseFitDelay = 0
     const selectionBoxValue = new THREE.Box3()
     const setSelectionHighlight = (group: THREE.Object3D | null) => {
       selectionTarget = group
@@ -461,6 +494,7 @@ export function useEditorScene(params: EditorSceneParams): void {
         selectionBox.geometry.dispose()
         ;(selectionBox.material as THREE.Material).dispose()
         selectionBox = null
+        selectionBoxPreciseFitDelay = 0
       }
       if (group) {
         // Cheap (transformed-AABB) box on selection: the precise per-vertex walk froze selecting a
@@ -469,6 +503,12 @@ export function useEditorScene(params: EditorSceneParams): void {
         // object and only loosens slightly around a reoriented one, and the box is visual-only.
         fitSelectionBox(selectionBoxValue, printableMeshBox(group, false))
         selectionBoxSig = selectionBoxSignature(group)
+        // ...and then upgrade it. The cheap box is a TRANSFORMED LOCAL AABB, so on a reoriented
+        // object it is the AABB of a rotated AABB -- not "slightly loose" as this once claimed, but
+        // visibly larger than the model. It used to self-correct because the box was only really
+        // looked at around a drag, and a drop re-fits precisely; resting in Select there is no drag
+        // and no gizmo, so the loose box is the only selection affordance and it never got fixed.
+        selectionBoxPreciseFitDelay = 2
         selectionBox = createSelectionBox(selectionBoxValue, PRIMARY_SELECTION_STYLE)
         scene.add(selectionBox)
       }
@@ -478,6 +518,23 @@ export function useEditorScene(params: EditorSceneParams): void {
     // Dimmer outline boxes for the EXTRA selected instances (multi-select). Synced
     // every frame in animate(): membership from the ref, bounds via the cheap
     // transformed-AABB path so co-drags track without per-vertex walks.
+    // What each outline is allowed to be hidden BY. Re-declared every frame from the three box
+    // collections below and diffed inside, so the layer walk costs nothing while a selection holds.
+    const selectionOwners = createSelectionOwnerTracker()
+    const syncSelectionOwners = () => {
+      const owners = new Set<THREE.Object3D>()
+      if (selectionBox && selectionTarget) owners.add(selectionTarget)
+      for (const helper of extraSelectionBoxes.values()) {
+        const owner = helper.userData.selectionOwner as THREE.Object3D | undefined
+        if (owner) owners.add(owner)
+      }
+      for (const helper of partSelectionBoxes.values()) {
+        const owner = helper.userData.selectionOwner as THREE.Object3D | undefined
+        if (owner) owners.add(owner)
+      }
+      selectionOwners.sync(owners)
+    }
+
     const extraSelectionBoxes = new Map<string, THREE.Box3Helper>()
     const syncExtraSelectionBoxes = () => {
       const extras = extraSelectedKeysRef.current
@@ -498,6 +555,7 @@ export function useEditorScene(params: EditorSceneParams): void {
           extraSelectionBoxes.set(key, helper)
           scene.add(helper)
         }
+        helper.userData.selectionOwner = group
         fitSelectionBox(helper.box, printableMeshBox(group, false))
       }
     }
@@ -508,29 +566,62 @@ export function useEditorScene(params: EditorSceneParams): void {
     // build stamps on them, and bounds use the group's transformed AABB (cheap path).
     const partSelectionBoxes = new Map<string, THREE.Box3Helper>()
     const syncPartSelectionBoxes = () => {
-      // The bulk part selection, or the single baked part currently holding the gizmo.
-      const baked = selectedBakedPartRef.current
+      // The bulk part selection, or the single part currently holding the gizmo, of either kind.
+      const gizmo = gizmoPartRef.current
       const selection = partSelectionRef.current
-        ?? (baked ? { objectId: baked.objectId, partIndexes: [baked.partIndex] } : null)
+        ?? (gizmo ? { objectId: gizmo.objectId, members: [gizmo.member] } : null)
       const wanted = new Map<string, THREE.Object3D>()
+      // Keyed separately because a body's bounds are COMPUTED, not read off one node (see below).
+      const bodyBoxOwners = new Map<string, THREE.Object3D>()
       if (selection) {
+        // Split once, outside the per-instance loop: the two kinds are found by DIFFERENT scans of
+        // the scene graph, and which scan runs is a property of the selection, not of the instance.
+        const bakedIndexes = selection.members.flatMap((m) => (m.kind === 'baked' ? [m.partIndex] : []))
+        const addedKeys = new Set(selection.members.flatMap((m) => (m.kind === 'added' ? [m.key] : [])))
+        const wantsBody = selection.members.some((m) => m.kind === 'body')
         for (const instance of activePlateRef.current?.instances ?? []) {
           const ownerId = instance.source.kind === 'object' ? instance.objectId : instance.source.replacedObjectId
           if (ownerId !== selection.objectId) continue
           const group = groupByKeyRef.current.get(instance.key)
           if (!group) continue
-          group.traverse((node) => {
-            const ref = partGroupRef(node)
-            if (ref && selection.partIndexes.includes(ref.partIndex)) {
-              // Keyed by the part's ORDINAL: several parts of one object can share a mesh id, and
-              // keying on that collapsed their four selection boxes into one.
-              wanted.set(`${instance.key}:${ref.partIndex}`, node)
+          if (bakedIndexes.length > 0) {
+            group.traverse((node) => {
+              const ref = partGroupRef(node)
+              if (ref && bakedIndexes.includes(ref.partIndex)) {
+                // Keyed by the part's ORDINAL: several parts of one object can share a mesh id, and
+                // keying on that collapsed their four selection boxes into one.
+                wanted.set(`${instance.key}:${ref.partIndex}`, node)
+              }
+            })
+          }
+          // Session-added volumes -- primitives, imported solids and TEXT -- are tagged with their
+          // own key rather than a baked ordinal, so the traverse above never matches them. They need
+          // a box for the same reason the baked parts do: before the editor rested in Select, the
+          // selected one was visible only because it carried the transform gizmo, so with no gizmo
+          // attached there was nothing at all to show that a text part was selected.
+          //
+          // Scoped to the ROTOR's own children, not a traverse: this runs on every rendered frame,
+          // so walking each object's part groups, edge outlines and paint overlays would be
+          // thousands of node visits per frame while orbiting. An added volume is always a direct
+          // child of an instance's rotor, so its children are the only place it can be.
+          if (addedKeys.size > 0) {
+            for (const node of rotorOf(group).children) {
+              const addedKey = node.userData.addedPartKey
+              if (typeof addedKey === 'string' && addedKeys.has(addedKey)) {
+                wanted.set(`${instance.key}:added:${addedKey}`, node)
+              }
             }
-          })
+          }
+          // The BODY is the one member with no node of its own: it is whatever the object owns
+          // BESIDE its added volumes, so its box is unioned from those meshes rather than fitted to
+          // a single group. Fitting the group instead would swallow the added parts and draw a box
+          // around the whole object, which is exactly what a body selection must not look like.
+          if (wantsBody) bodyBoxOwners.set(`${instance.key}:body`, group)
         }
       }
+
       for (const [key, helper] of partSelectionBoxes) {
-        if (!wanted.has(key)) {
+        if (!wanted.has(key) && !bodyBoxOwners.has(key)) {
           scene.remove(helper)
           helper.geometry.dispose()
           ;(helper.material as THREE.Material).dispose()
@@ -544,7 +635,42 @@ export function useEditorScene(params: EditorSceneParams): void {
           partSelectionBoxes.set(key, helper)
           scene.add(helper)
         }
+        // The part this box belongs to, and so the only geometry allowed to hide it. Recorded here
+        // because it is where the box and its part are known together; the overlay pass reads it back.
+        helper.userData.selectionOwner = partGroup
+        // With SEVERAL parts selected the outlines stop being depth-tested, because the overlay's
+        // depth pre-pass cannot keep them apart: every owner writes into ONE shared buffer, so each
+        // member's geometry hides every other member's outline, and the module header's "hidden by
+        // its own geometry, never its siblings" silently stops holding the moment there is more than
+        // one owner. Parts are routinely inside each other -- a connector sunk into the body it
+        // belongs to is the normal case, not a corner one -- so the sibling that wins is usually the
+        // biggest, and selecting a part alongside the main body showed only the body's box.
+        //
+        // Drawing the set on top costs the depth cue the header argues for (back edges show, so a
+        // box reads as a cage), which is the right trade here: with a set selected, seeing WHICH
+        // parts are in it is the whole question, and a box you cannot see answers nothing. A single
+        // part keeps the depth test, so the common case is unchanged.
+        ;(helper.material as THREE.LineBasicMaterial).depthTest = wanted.size + bodyBoxOwners.size <= 1
         fitSelectionBox(helper.box, new THREE.Box3().setFromObject(partGroup))
+      }
+      for (const [key, group] of bodyBoxOwners) {
+        let helper = partSelectionBoxes.get(key)
+        if (!helper) {
+          helper = createSelectionBox(new THREE.Box3(), PRIMARY_SELECTION_STYLE)
+          partSelectionBoxes.set(key, helper)
+          scene.add(helper)
+        }
+        // Its own geometry only: the added volumes sit beside it under the same rotor and are what
+        // the body is being distinguished FROM.
+        const box = new THREE.Box3()
+        group.traverse((node) => {
+          const mesh = node as THREE.Mesh
+          if (!mesh.isMesh || isViewportAidMesh(mesh) || isAddedPartMesh(mesh)) return
+          box.expandByObject(mesh)
+        })
+        helper.userData.selectionOwner = group
+        ;(helper.material as THREE.LineBasicMaterial).depthTest = wanted.size + bodyBoxOwners.size <= 1
+        if (!box.isEmpty()) fitSelectionBox(helper.box, box)
       }
     }
 
@@ -613,6 +739,61 @@ export function useEditorScene(params: EditorSceneParams): void {
         }
       }
     }
+    // Pin the translate arrows to +X / +Y, the way BambuStudio draws them.
+    //
+    // TransformControls flips an axis arrow to whichever side faces the camera, keyed on its `eye`
+    // vector -- which is `cameraPosition - objectPosition`, so it depends on where the OBJECT sits,
+    // not just on the camera. The arrows therefore swap sides as a model crosses an invisible
+    // boundary that itself moves with the camera angle, which reads as the gizmo glitching rather
+    // than as a feature. Studio has no such thing: `GLGizmoMove3D` builds one fixed rotation per
+    // axis and always draws the arrow the same way.
+    //
+    // Only the flip is undone. An EDGE-ON handle (its axis pointing at the camera, so the arrow
+    // would be a dot, or a plane seen exactly edge-on) is still hidden by the library, which marks
+    // that case with a 1e-10 scale -- a legitimate hide, and the one thing that distinguishes it
+    // from a flip.
+    //
+    // EVERY handle of the translate gizmo, not just the arrowheads: an axis's shaft line carries the
+    // same name as its arrow and flips with it, and the XY plane's square and its two edge lines
+    // flip on both axes at once. Pinning only the arrowheads left the rest swapping sides around
+    // them, which looks more broken than the original flip did.
+    const pinTranslateHandles = () => {
+      for (const group of [gizmoInternals?.gizmo?.translate, gizmoInternals?.picker?.translate]) {
+        if (!group) continue
+        for (const handle of group.children) {
+          if (Math.abs(handle.scale.x) < 1e-9 || Math.abs(handle.scale.y) < 1e-9
+            || Math.abs(handle.scale.z) < 1e-9) continue
+          // The flip is a NEGATED scale component, plus hiding whichever of the forward/backward
+          // arrow pair points the wrong way. Undo both: always the forward one, always positive.
+          const flipped = handle.scale.x < 0 || handle.scale.y < 0 || handle.scale.z < 0
+          if (flipped) {
+            handle.scale.set(Math.abs(handle.scale.x), Math.abs(handle.scale.y), Math.abs(handle.scale.z))
+            // Re-bake the matrix. This runs AFTER the library's own `super.updateMatrixWorld()`, so
+            // the flipped scale is already composed into `matrixWorld` -- which is what the renderer
+            // draws from. Writing `.scale` alone changed nothing visible, which is why the ARROWHEADS
+            // looked pinned (their half of the flip is a `visible` flag, read at draw time) while the
+            // shaft lines and the plane square, whose half is this scale, went on flipping.
+            handle.updateMatrixWorld(true)
+          }
+          const tag = (handle as unknown as { tag?: string }).tag
+          if (tag === 'fwd') handle.visible = true
+          else if (tag === 'bwd') handle.visible = false
+        }
+      }
+    }
+    // Wrapped rather than called from the render loop: the flip happens inside the gizmo's own
+    // `updateMatrixWorld`, which the renderer runs as part of `scene.updateMatrixWorld()`, so
+    // anything done before `render` would simply be overwritten. A no-op if a future three-stdlib
+    // stops exposing this, which loses the pinning but breaks nothing.
+    const gizmoNode = gizmoInternals as unknown as { updateMatrixWorld?: (force?: boolean) => void } | undefined
+    if (typeof gizmoNode?.updateMatrixWorld === 'function') {
+      const libraryUpdate = gizmoNode.updateMatrixWorld
+      gizmoNode.updateMatrixWorld = (force?: boolean) => {
+        libraryUpdate(force)
+        pinTranslateHandles()
+      }
+    }
+
     const transformEvents = transform as unknown as TransformControlsEvents
     // The multi-selection pivot proxy (see EditorSceneParams.multiPivotRef): parented at the
     // scene root so its transform IS the world delta, with no member's own transform involved.
@@ -639,10 +820,12 @@ export function useEditorScene(params: EditorSceneParams): void {
     // body- and tower-drag state below, it lets the validation loop skip its expensive
     // placement-warning recompute mid-drag and run it once when the drag finishes.
     let gizmoDragging = false
-    // Did the drag that just ended change the object's ORIENTATION (rotate/scale)? A pure move keeps
-    // the object axis-aligned, so its cheap transformed-AABB selection box is already exact, only a
-    // rotate/scale needs the expensive per-vertex precise walk on the drop frame. Without this, every
-    // drop of a high-poly / many-part object re-walked all vertices and froze for a beat.
+    // Did the drag that just ended change the object's ORIENTATION (rotate/scale)? It decides which
+    // way the drop frame pays: a rotate/scale takes the per-vertex walk there and then, while a pure
+    // move takes the cheap transformed-AABB and lets the delayed upgrade tighten it. Not because a
+    // move leaves the box exact (it does not -- a cheap fit of an already-rotated object is the AABB
+    // of a rotated AABB), but because deferring keeps the walk out of the gesture, which is what
+    // stopped every drop of a high-poly / many-part object freezing for a beat.
     let lastDragChangedOrientation = false
     const throttledPanelSync = (group: THREE.Object3D) => {
       panelSyncTick += 1
@@ -861,6 +1044,14 @@ export function useEditorScene(params: EditorSceneParams): void {
     const bedPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0)
     const dragOffset = new THREE.Vector3()
     const dragPoint = new THREE.Vector3()
+    // A session-added part being dragged by its own mesh, the part-level twin of the object body
+    // drag below. Studio allows this (`is_allow_drag_volume` is true in every mode but Cut); this
+    // editor used to return early on a part click with "movement happens via the gizmo only", so a
+    // part was the one thing on the plate you could see, select and not push around.
+    let partDragMesh: THREE.Object3D | null = null
+    let partDragRotor: THREE.Object3D | null = null
+    let partDragRecorded = false
+    const partDragOffset = new THREE.Vector3()
     let bodyDragGroup: THREE.Group | null = null
     // True once the active body-drag has recorded its undo checkpoint. The checkpoint is taken on
     // the FIRST real move (see onPointerMove), not on pointer-down, so a click that only selects an
@@ -874,7 +1065,7 @@ export function useEditorScene(params: EditorSceneParams): void {
     let collapseClickCandidate: { key: string; x: number; y: number } | null = null
     // BambuStudio drill-down: a motionless click on an already-selected multi-part object
     // selects the baked PART under the cursor on release; a drag moves the whole object.
-    let bakedPartClickCandidate: { part: { objectId: number; partIndex: number }; x: number; y: number } | null = null
+    let bakedPartClickCandidate: { part: PartRef; x: number; y: number } | null = null
     /** Capture co-drag offsets for every selected group except the grabbed one. */
     const beginSelectionCoDrag = (grabbedKey: string) => {
       bodyDragExtras = allSelectedKeysRef.current()
@@ -898,8 +1089,8 @@ export function useEditorScene(params: EditorSceneParams): void {
       dragOffset.set(group.position.x - dragPoint.x, group.position.y - dragPoint.y, 0)
       bodyDragGroup = group
       bodyDragRecorded = false
-      // A body drag only translates, so the drop frame can keep the cheap (exact-for-translation)
-      // selection box instead of re-walking every vertex.
+      // A body drag only translates, so its drop frame takes the cheap fit rather than re-walking
+      // every vertex; the upgrade two frames later is what tightens the result.
       lastDragChangedOrientation = false
     }
     let towerDragObject: THREE.Object3D | null = null
@@ -998,15 +1189,35 @@ export function useEditorScene(params: EditorSceneParams): void {
     scene.add(brushSphereCursor)
     let paintingStroke = false
     let textDragging = false
+    /**
+     * Where the stroke was last sampled, in viewport coordinates, and what it hit there.
+     *
+     * A pointermove reports where the pointer IS, not the path it took, so at any real drag speed
+     * consecutive events are tens of pixels apart and dabbing at each leaves the event rate visible
+     * as gaps in the stroke. BambuStudio interpolates between the two and projects each step onto
+     * the model (`GLGizmoPainterBase::get_projected_mouse_positions`, "so there are no gaps in the
+     * painted region"); this pair is that anchor.
+     *
+     * The HIT is kept separately from the screen position because it is also the swept dab's far
+     * end, and it is dropped whenever the chain of contact breaks -- a sample that misses the model,
+     * or one that lands on a different volume -- so a capsule can never span a gap the pointer
+     * actually travelled OFF the model, nor two meshes' coordinate frames. Studio drops the same
+     * anchor for the same reason (`m_last_mouse_click = Vec2d::Zero()` on a miss) and groups its
+     * projected positions by `mesh_idx` before pairing them.
+     */
+    let paintStrokeAnchor: { x: number; y: number } | null = null
+    let paintStrokeLastHit: { mesh: THREE.Mesh; point: THREE.Vector3 } | null = null
 
-    /** Raycast the selected instance's paintable (printed-part) meshes. */
-    const paintHitOnSelected = (event: PointerEvent): { mesh: THREE.Mesh; point: THREE.Vector3; normal: THREE.Vector3; faceIndex: number | null } | null => {
+    /**
+     * The selected instance's paintable (printed-part) meshes, indexed and ready to raycast.
+     *
+     * Collected once per pointer event rather than per interpolated stroke sample: a stroke can
+     * cast dozens of rays for one event (see `paintStrokeSamples`) and the traversal is the same
+     * answer every time within it.
+     */
+    const paintTargets = (): THREE.Mesh[] => {
       const selectedGroup = selectedKeyRef.current ? groupByKeyRef.current.get(selectedKeyRef.current) : null
-      if (!selectedGroup) return null
-      const rect = renderer.domElement.getBoundingClientRect()
-      pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
-      pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
-      raycaster.setFromCamera(pointer, camera)
+      if (!selectedGroup) return []
       const meshes: THREE.Mesh[] = []
       selectedGroup.traverse((node) => {
         const mesh = node as THREE.Mesh
@@ -1016,10 +1227,86 @@ export function useEditorScene(params: EditorSceneParams): void {
       // ~14% of paint-time samples. Built here rather than at scene-build so a plate full of
       // objects only pays for the one being painted.
       for (const mesh of meshes) ensureMeshBvh(mesh)
+      return meshes
+    }
+
+    /** Raycast `meshes` at a viewport position, leaving `raycaster` holding that sample's ray. */
+    const paintHitAt = (
+      clientX: number,
+      clientY: number,
+      meshes: THREE.Mesh[]
+    ): { mesh: THREE.Mesh; point: THREE.Vector3; normal: THREE.Vector3; faceIndex: number | null } | null => {
+      if (meshes.length === 0) return null
+      const rect = renderer.domElement.getBoundingClientRect()
+      pointer.x = ((clientX - rect.left) / rect.width) * 2 - 1
+      pointer.y = -((clientY - rect.top) / rect.height) * 2 + 1
+      raycaster.setFromCamera(pointer, camera)
       const hit = raycaster.intersectObjects(meshes, false).find((entry) => entry.face)
       if (!hit?.face) return null
       const normal = hit.face.normal.clone().transformDirection(hit.object.matrixWorld).normalize()
       return { mesh: hit.object as THREE.Mesh, point: hit.point, normal, faceIndex: hit.faceIndex ?? null }
+    }
+
+    /** Raycast the selected instance's paintable (printed-part) meshes. */
+    const paintHitOnSelected = (event: PointerEvent): { mesh: THREE.Mesh; point: THREE.Vector3; normal: THREE.Vector3; faceIndex: number | null } | null =>
+      paintHitAt(event.clientX, event.clientY, paintTargets())
+
+    /**
+     * The viewport positions to sample this move at: the interpolated path from the stroke's anchor
+     * to where the pointer now is, ending on the current position.
+     *
+     * The current position is always the LAST entry, so the anchor and the brush cursor end up
+     * where the pointer actually is. The anchor itself is excluded because the previous move
+     * already painted it.
+     */
+    const paintStrokeSamples = (toX: number, toY: number): Array<{ x: number; y: number }> => {
+      const from = paintStrokeAnchor
+      if (!from) return [{ x: toX, y: toY }]
+      const travel = Math.hypot(toX - from.x, toY - from.y)
+      const steps = Math.min(Math.ceil(travel / PAINT_STROKE_SAMPLE_SPACING_PX), PAINT_STROKE_MAX_SAMPLES)
+      if (steps <= 1) return [{ x: toX, y: toY }]
+      const samples: Array<{ x: number; y: number }> = []
+      for (let step = 1; step <= steps; step += 1) {
+        const t = step / steps
+        samples.push({ x: from.x + (toX - from.x) * t, y: from.y + (toY - from.y) * t })
+      }
+      return samples
+    }
+
+    /**
+     * Paint one pointer position, sampling the path from the last one so a fast drag paints a
+     * continuous band rather than a row of dabs. Returns the final sample's hit, for the cursor.
+     *
+     * Only the BRUSH shapes sample and sweep. The fills and the single-triangle tool are seeded
+     * from one triangle and are idempotent over the region they flood, so extra samples add no
+     * coverage while multiplying a whole-mesh traversal per event; the height band is placed by the
+     * click alone. Bambu's own capsule factory asserts the cursor is a circle or a sphere.
+     */
+    const paintStrokeTo = (
+      clientX: number,
+      clientY: number
+    ): { mesh: THREE.Mesh; point: THREE.Vector3; normal: THREE.Vector3; faceIndex: number | null } | null => {
+      const meshes = paintTargets()
+      const channel = activePaintChannelRef.current
+      const tool = channel ? effectivePaintTool(channel, paintToolRef.current) : 'circle'
+      const sweeps = tool === 'circle' || tool === 'sphere'
+      const samples = sweeps ? paintStrokeSamples(clientX, clientY) : [{ x: clientX, y: clientY }]
+      let lastHit: { mesh: THREE.Mesh; point: THREE.Vector3; normal: THREE.Vector3; faceIndex: number | null } | null = null
+      for (const sample of samples) {
+        const hit = paintHitAt(sample.x, sample.y, meshes)
+        if (!hit) {
+          // The pointer left the model here, so the next dab starts a fresh contact rather than
+          // sweeping across the gap it just crossed.
+          paintStrokeLastHit = null
+          continue
+        }
+        const previous = sweeps && paintStrokeLastHit?.mesh === hit.mesh ? paintStrokeLastHit.point : null
+        applyPaintStrokeRef.current?.(hit.mesh, hit.point, raycaster.ray.direction, hit.faceIndex, 'move', previous)
+        paintStrokeLastHit = { mesh: hit.mesh, point: hit.point.clone() }
+        lastHit = hit
+      }
+      paintStrokeAnchor = { x: clientX, y: clientY }
+      return lastHit
     }
 
     /**
@@ -1147,6 +1434,10 @@ export function useEditorScene(params: EditorSceneParams): void {
           orbit.enabled = false
           renderer.domElement.setPointerCapture(event.pointerId)
           applyPaintStrokeRef.current?.(hit.mesh, hit.point, raycaster.ray.direction, hit.faceIndex, 'down')
+          // Anchor the stroke here so the first move sweeps from the press rather than dabbing at
+          // wherever the pointer had reached by the time the first move arrived.
+          paintStrokeAnchor = { x: event.clientX, y: event.clientY }
+          paintStrokeLastHit = { mesh: hit.mesh, point: hit.point.clone() }
           updateBrushCursor(hit)
           return
         }
@@ -1169,8 +1460,13 @@ export function useEditorScene(params: EditorSceneParams): void {
         }
       }
 
-      // Drag the prime tower if it was clicked (it isn't a selectable instance).
-      const tower = primeTowerObjRef.current
+      // Drag the prime tower if it was clicked (it isn't a selectable instance, so direct drag is
+      // its ONLY affordance -- there is no mode in which a gizmo attaches to it). That is why this
+      // is not gated on Move like the body drags below: gating it there would leave the tower
+      // immovable in the resting mode with nothing on screen to explain why. It is gated on the
+      // picking modes only, so that a tool which ACTS on what it is pointed at (paint, cut,
+      // lay-flat, measure) cannot slide the tower out from under its own stroke.
+      const tower = allowsSelectionPicking(gizmoModeRef.current) ? primeTowerObjRef.current : null
       if (tower) {
         const rect = renderer.domElement.getBoundingClientRect()
         pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
@@ -1203,16 +1499,25 @@ export function useEditorScene(params: EditorSceneParams): void {
         return
       }
 
-      // Plain click on a multi-selection MEMBER keeps the selection (so the drag below
-      // moves the whole set); a motionless release collapses to just that object. Tools
-      // other than Move collapse immediately, they operate on a single primary.
+      // Plain click on a multi-selection MEMBER keeps the selection; a motionless release collapses
+      // to just that object. In Move the press also starts dragging the whole set. The modes that
+      // cannot pick at all (paint, cut, lay-flat) collapse on the press instead, because they act on
+      // a single primary and must not carry a set into the tool.
       if (typeof key === 'string' && wasExtra) {
-        if (gizmoModeRef.current !== 'translate') {
+        // Selection semantics follow BambuStudio, which groups its no-gizmo `Undefined` state with
+        // Move/Rotate/Scale for `is_allow_multi_select_parts_or_objects` -- so EVERY picking mode
+        // keeps the set. Spelled out as `!== 'translate'` this also collapsed a multi-selection the
+        // moment you clicked a member in Rotate or Scale, losing a multi-rotate just set up.
+        if (!allowsSelectionPicking(gizmoModeRef.current)) {
           selectExclusiveRef.current(key)
           return
         }
         collapseClickCandidate = { key, x: event.clientX, y: event.clientY }
-        if (raycaster.ray.intersectPlane(bedPlane, dragPoint)) {
+        // Keeping the set is not the same as dragging it: the body drag is Move's alone. This
+        // branch RETURNS below, so it never reaches the guard on the not-yet-selected path -- which
+        // is how a press on a non-primary member slid the whole selection across the bed while
+        // resting, the exact thing the mode exists to prevent.
+        if (gizmoModeRef.current === 'translate' && raycaster.ray.intersectPlane(bedPlane, dragPoint)) {
           panelSyncTick = 0
           beginBodyDrag(group)
           beginSelectionCoDrag(key)
@@ -1229,10 +1534,17 @@ export function useEditorScene(params: EditorSceneParams): void {
         }
       }
 
-      // Clicking a not-yet-selected object only selects it and falls back to Move,
-      // so an active Rotate/Scale/Place-on-face tool is never applied by accident.
+      // Clicking a not-yet-selected object selects it.
       if (!wasSelected) {
-        setGizmoModeRef.current('translate')
+        // Drop a tool that ACTS on whatever it is pointed at (place-on-face, paint, cut) rather
+        // than carrying it onto the object just clicked. The transform gizmos are exempt because
+        // they need their handle grabbed, so selecting cannot trigger them -- this used to force
+        // Move unconditionally, which knocked you out of Rotate for merely picking another object.
+        if (!allowsSelectionPicking(gizmoModeRef.current)) setGizmoModeRef.current(RESTING_GIZMO_MODE)
+        // Resting NEVER drags a body: that is the whole point of the mode, and it is our one
+        // deliberate divergence from Studio, whose drag test (`GLCanvas3D.cpp:5807`) does not
+        // require a gizmo. A drag here falls through to the orbit control instead.
+        if (gizmoModeRef.current !== 'translate') return
         if (raycaster.ray.intersectPlane(bedPlane, dragPoint)) {
           panelSyncTick = 0
           beginBodyDrag(group)
@@ -1242,20 +1554,56 @@ export function useEditorScene(params: EditorSceneParams): void {
         return
       }
 
-      // Clicking an added part volume of the selected object hands it the gizmo;
-      // clicking the object's body while a part is selected returns to the object.
-      if (gizmoModeRef.current === 'translate' || gizmoModeRef.current === 'rotate' || gizmoModeRef.current === 'scale') {
+      // Clicking an added part volume of the selected object selects it (and hands it the gizmo in
+      // the transform modes); clicking the object's body while a part is selected returns to the
+      // object. Drilling in is SELECTION, so it works in the resting mode too -- Studio groups its
+      // no-gizmo state with the transform gizmos for exactly this (`allowsSelectionPicking`).
+      if (allowsSelectionPicking(gizmoModeRef.current)) {
         const hits = raycaster.intersectObject(group, true)
         const firstMesh = hits.find((hit) => (hit.object as THREE.Mesh).isMesh && hit.object.name !== BRIM_EAR_MARKER_NAME)
         const partKey = firstMesh?.object.userData.addedPartKey
         if (typeof partKey === 'string') {
           // Select (or keep) the part; its movement happens via the gizmo only, so
-          // never fall through to the object body-drag.
-          setSelectedBakedPart(null)
-          setSelectedAddedPartKey(partKey)
+          // never fall through to the object body-drag. The host id comes from the instance under
+          // the cursor: a volume's own key does not name its owner, and the selection now addresses
+          // every part as (object, member) so that the two kinds prune and clear by one rule.
+          const hit = activePlateRef.current?.instances.find((entry) => entry.key === key)
+          const hostId = hit
+            ? (hit.source.kind === 'object' ? hit.objectId : hit.source.replacedObjectId ?? null)
+            : null
+          if (hostId != null) setGizmoPart({ objectId: hostId, member: { kind: 'added', key: partKey } })
+          // ...and it can be dragged by its mesh, like the object it sits in. The part's transform
+          // is expressed in its ROTOR's frame while the drag point is a world position on the bed
+          // plane, so the grab offset is captured after converting into that frame; the move handler
+          // converts each new drag point the same way. Only x/y are written, so a part keeps the
+          // height it was given.
+          const rotor = rotorOf(group)
+          // The tagged node is the part's own mesh; a paint overlay hit lands on its CHILD, so walk
+          // up one to the node whose transform is the part's.
+          const picked = firstMesh?.object ?? null
+          const grabbed = picked && isAddedPartMesh(picked)
+            ? (typeof picked.userData.addedPartKey === 'string' ? picked : picked.parent)
+            : null
+          // Gated on Move for the same reason the object body drag is: resting NEVER drags, which is
+          // the whole point of that mode. And `dragPoint` has to be COMPUTED here -- it is the bed
+          // plane hit for this press, and the object path raycasts it before capturing its own grab
+          // offset. Reading it without that left the offset built from a stale point, so the part
+          // either jumped on the first move or refused to move at all.
+          if (grabbed && gizmoModeRef.current === 'translate'
+            && raycaster.ray.intersectPlane(bedPlane, dragPoint)) {
+            partDragMesh = grabbed
+            partDragRotor = rotor
+            partDragRecorded = false
+            partDragOffset.copy(grabbed.position).sub(rotor.worldToLocal(dragPoint.clone()))
+            orbit.enabled = false
+            renderer.domElement.setPointerCapture(event.pointerId)
+          }
           return
         }
-        if (selectedAddedPartKeyRef.current) setSelectedAddedPartKey(null)
+        // Clicking the object body steps back up to the object from a VOLUME only. A baked part
+        // stays put here, exactly as before: the drill-down below re-picks it on pointer-up, and
+        // clearing it on the way through made a motionless click flicker the selection off and on.
+        if (gizmoPartRef.current?.member.kind === 'added') setGizmoPart(null)
         // BambuStudio drill-down: a MOTIONLESS click on an already-selected multi-part
         // object selects the baked part under the cursor (resolved on pointer-up, so a
         // drag still moves the whole object). Single-part objects stay object-level.
@@ -1269,7 +1617,7 @@ export function useEditorScene(params: EditorSceneParams): void {
             : null
           if (instance && ownerId != null && instance.parts.length > 1) {
             bakedPartClickCandidate = {
-              part: { objectId: ownerId, partIndex: partRef.partIndex },
+              part: { objectId: ownerId, member: { kind: 'baked', partIndex: partRef.partIndex } },
               x: event.clientX,
               y: event.clientY
             }
@@ -1354,12 +1702,14 @@ export function useEditorScene(params: EditorSceneParams): void {
         return
       }
       if (paintChannelForGizmoMode(gizmoModeRef.current) !== null || gizmoModeRef.current === 'brimEars') {
-        const hit = paintHitOnSelected(event)
-        updateBrushCursor(hit)
         if (paintingStroke) {
-          if (hit) applyPaintStrokeRef.current?.(hit.mesh, hit.point, raycaster.ray.direction, hit.faceIndex, 'move')
+          // Painting owns the raycasts here: `paintStrokeTo` casts one per interpolated sample and
+          // returns the last, so hit-testing the raw pointer position first would only duplicate
+          // the final one. Hovering (not stroking) still needs its own, for the cursor.
+          updateBrushCursor(paintStrokeTo(event.clientX, event.clientY))
           return
         }
+        updateBrushCursor(paintHitOnSelected(event))
       } else if (brushCursor.visible || brushSphereCursor.visible) {
         brushCursor.visible = false
         brushSphereCursor.visible = false
@@ -1377,7 +1727,10 @@ export function useEditorScene(params: EditorSceneParams): void {
           updateHullFaceHighlight(hull, hit && hit.faceIndex != null ? hit.faceIndex : null)
         }
       }
-      if (!bodyDragGroup && !towerDragObject) return
+      // `partDragMesh` belongs in this gate: a part drag moves a mesh INSIDE an object, so it never
+      // sets `bodyDragGroup`, and the handler used to return here before reaching it. That is why
+      // dragging a part by its mesh did nothing at all.
+      if (!bodyDragGroup && !towerDragObject && !partDragMesh) return
       const rect = renderer.domElement.getBoundingClientRect()
       pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
       pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
@@ -1406,6 +1759,22 @@ export function useEditorScene(params: EditorSceneParams): void {
         towerDragObject.position.y = centerY
         return
       }
+      if (partDragMesh && partDragRotor) {
+        // Same undo rule as the object drag: the checkpoint lands on the first real move, so a
+        // click that only selects the part leaves no phantom history entry.
+        if (!partDragRecorded) {
+          recordHistoryRef.current?.()
+          partDragRecorded = true
+        }
+        const local = partDragRotor.worldToLocal(dragPoint.clone())
+        partDragMesh.position.x = local.x + partDragOffset.x
+        partDragMesh.position.y = local.y + partDragOffset.y
+        writeBackPartMeshRef.current?.(partDragMesh)
+        // The gizmo hangs off the pivot proxy, so it needs re-seating for the same reason the object
+        // drag does, or it stays where the part was when the drag began.
+        reseatMultiPivot()
+        return
+      }
       if (!bodyDragGroup) return
       // Snapshot for undo on the first real move (not on pointer-down): taken before the move is
       // applied, so undo restores the pre-drag layout. A select-only click never reaches here, so
@@ -1422,6 +1791,17 @@ export function useEditorScene(params: EditorSceneParams): void {
         extra.group.position.y = dragPoint.y + extra.offsetY
         writeBackGroupTransform(extra.group)
       }
+      // Bring the gizmo along. It hangs off the PIVOT PROXY, never off the dragged group -- one
+      // selected object composes exactly as many do, so the proxy is used at any count -- and a body
+      // drag moves the groups directly, leaving the proxy (and so the gizmo) at the position the
+      // selection had when the drag started. A gizmo drag has the opposite shape: the proxy IS what
+      // moves, and `reseatMultiPivot` only ran at the end of one, so the body-drag path never
+      // re-seated at all and the gizmo simply stayed behind.
+      //
+      // Every frame rather than on release, because the gizmo trailing the model for the length of a
+      // drag is the visible half of the bug. It is the cheap transformed-AABB fit, the same one the
+      // drop-frame optimisation left in place, so this costs a box per selected object per frame.
+      reseatMultiPivot()
       // A real drag is no longer a collapse-to-single click.
       if (collapseClickCandidate) {
         const moved = Math.hypot(event.clientX - collapseClickCandidate.x, event.clientY - collapseClickCandidate.y)
@@ -1454,6 +1834,10 @@ export function useEditorScene(params: EditorSceneParams): void {
       }
       if (paintingStroke) {
         paintingStroke = false
+        // The next stroke starts its own contact chain; a stale anchor would make its first dab
+        // sweep all the way from wherever the last one ended.
+        paintStrokeAnchor = null
+        paintStrokeLastHit = null
         interactionActiveRef.current = false
         orbit.enabled = true
         if (renderer.domElement.hasPointerCapture(event.pointerId)) {
@@ -1480,10 +1864,7 @@ export function useEditorScene(params: EditorSceneParams): void {
       // A motionless click on a selected multi-part object drills into the baked part.
       if (bakedPartClickCandidate) {
         const moved = Math.hypot(event.clientX - bakedPartClickCandidate.x, event.clientY - bakedPartClickCandidate.y)
-        if (moved < 5) {
-          setSelectedAddedPartKey(null)
-          setSelectedBakedPart(bakedPartClickCandidate.part)
-        }
+        if (moved < 5) setGizmoPart(bakedPartClickCandidate.part)
         bakedPartClickCandidate = null
       }
       bodyDragExtras = []
@@ -1496,6 +1877,19 @@ export function useEditorScene(params: EditorSceneParams): void {
         if (renderer.domElement.hasPointerCapture(event.pointerId)) {
           renderer.domElement.releasePointerCapture(event.pointerId)
         }
+        return
+      }
+      if (partDragMesh) {
+        // The panel reads the PART's placement while a part holds the gizmo, so it is synced from
+        // the part, not from the object it sits in.
+        syncSelectedTransformRef.current?.(partDragMesh)
+        partDragMesh = null
+        partDragRotor = null
+        orbit.enabled = true
+        if (renderer.domElement.hasPointerCapture(event.pointerId)) {
+          renderer.domElement.releasePointerCapture(event.pointerId)
+        }
+        regenerateActiveThumbnailRef.current?.()
         return
       }
       if (!bodyDragGroup) return
@@ -1577,7 +1971,9 @@ export function useEditorScene(params: EditorSceneParams): void {
         group.traverse((node) => {
           if (!(node as THREE.Mesh).isMesh || !node.userData.isPaintOverlay) return
           const channel = overlayChannelByName.get(node.name)
-          node.visible = interacting || layersEditing ? false : channel === 'color' || (channel === active && isSelected)
+          node.visible = interacting || layersEditing
+            ? false
+            : channel != null && paintOverlayVisible(channel, active, isSelected)
         })
       }
     }
@@ -1652,6 +2048,7 @@ export function useEditorScene(params: EditorSceneParams): void {
       // Paint them only when needed (see the on-demand note above): a pending request, a live drag,
       // its end edge, or the safety tick. Everything below feeds the frame, so it is gated too.
       const shouldRender = needsRender || interacting || dragJustEnded || (now - lastRenderStamp) >= IDLE_RENDER_INTERVAL_MS
+      let wantAnotherFrame = false
       if (shouldRender) {
         // Re-apply paint-overlay visibility (see helper above) whenever the active tool, the selection,
         // or the manipulation state changes, not every frame.
@@ -1672,12 +2069,39 @@ export function useEditorScene(params: EditorSceneParams): void {
         // AABB path so high-poly drags stay smooth, then restore the precise box on the drop frame.
         if (selectionBox && selectionTarget) {
           const sig = selectionBoxSignature(selectionTarget)
-          if (sig !== selectionBoxSig || dragJustEnded) {
+          // A drop re-fits immediately -- cheap for a translation, precise for a reorientation --
+          // and a CHEAP one then re-arms the upgrade to correct itself. The cheap fit is a fresh
+          // transformed-AABB, not a translated copy of the box that was there, so on a reoriented
+          // object it re-inflates: rotate an object (tight box), nudge it 5mm in Move, and the box
+          // balloons again with nothing pending to correct it. "Translation keeps the box exact"
+          // only holds if the box being carried was already precise, and after a cheap fit it is
+          // not. A rotate/scale drop is exempt because it already walked the vertices below: arming
+          // it there bought an identical box for a second full walk two frames later, on the very
+          // gesture over the very geometry (high-poly, many-part) the cheap path exists to protect.
+          if (dragJustEnded && !lastDragChangedOrientation) selectionBoxPreciseFitDelay = 2
+          // A live drag cancels a pending upgrade rather than paying for it mid-gesture; otherwise
+          // count down and take the precise walk on a settled frame.
+          let upgrade = false
+          if (selectionBoxPreciseFitDelay > 0) {
+            if (interacting) {
+              selectionBoxPreciseFitDelay = 0
+            } else {
+              selectionBoxPreciseFitDelay -= 1
+              upgrade = selectionBoxPreciseFitDelay === 0
+              // Keep the loop awake so the upgrade lands next frame rather than at the idle tick.
+              // Applied AFTER the reset below, which would otherwise clear it in the same frame.
+              if (!upgrade) wantAnotherFrame = true
+            }
+          }
+          if (sig !== selectionBoxSig || dragJustEnded || upgrade) {
             selectionBoxSig = sig
-            // Precise (per-vertex) is only needed to hug a REORIENTED object. Mid-drag stays cheap; a
-            // move-drop stays cheap too (translation keeps the box exact); only a rotate/scale drop,
-            // or a non-drag change (undo, manual rotate), pays the precise walk.
-            const precise = interacting ? false : (dragJustEnded ? lastDragChangedOrientation : true)
+            // Precise (per-vertex) is only needed to hug a REORIENTED object. Mid-drag stays cheap,
+            // and so does the drop frame of a pure move -- that one is corrected by the upgrade the
+            // re-arm above scheduled, rather than by paying for the walk inside the gesture.
+            // An upgrade frame is ALWAYS precise -- it exists for nothing else, and letting the
+            // drag answer win here would consume the countdown on a cheap fit and leave the loose
+            // box with nothing pending.
+            const precise = interacting ? false : (dragJustEnded && !upgrade ? lastDragChangedOrientation : true)
             fitSelectionBox(selectionBoxValue, printableMeshBox(selectionTarget, precise))
           }
         }
@@ -1687,9 +2111,13 @@ export function useEditorScene(params: EditorSceneParams): void {
         for (const group of groupByKeyRef.current.values()) syncBrimEarMarkerMatrices(group)
         syncExtraSelectionBoxes()
         syncPartSelectionBoxes()
+        syncSelectionOwners()
         renderer.render(scene, camera)
+        // Outlines are on their own layer, so the pass above drew none of them. Skipped outright
+        // with nothing selected, which is when its two extra scene walks would buy nothing.
+        if (selectionOwners.active) renderSelectionOverlay(renderer, scene, camera)
         viewCube.sync(camera)
-        needsRender = false
+        needsRender = wantAnotherFrame
         lastRenderStamp = now
       }
       // Re-check placement (~4x/sec) so collision/off-plate/floating/unprintable/tower
@@ -1752,6 +2180,9 @@ export function useEditorScene(params: EditorSceneParams): void {
       window.removeEventListener('resize', onResize)
       window.removeEventListener('contextmenu', onGlobalContextMenu, true)
       resizeObserver.disconnect()
+      // Take the owner layer back off the meshes: the scene outlives this effect across a rebuild,
+      // so a stale owner would keep writing depth for an outline that no longer exists.
+      selectionOwners.dispose()
       requestRenderRef.current = null
       orbit.removeEventListener('change', requestRender)
       renderer.domElement.removeEventListener('pointermove', onPointerMoveRender)

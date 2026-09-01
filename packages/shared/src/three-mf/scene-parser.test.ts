@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { buildSceneManifest } from './scene-parser.js'
+import { buildSceneManifest, parseBrimEarPoints, parseRootModelObjectIdOrder } from './scene-parser.js'
 
 /**
  * These lock the contract the parser gained when it moved out of `apps/api` so the browser could
@@ -165,4 +165,68 @@ test('vase mode is parsed onto the tower sizing, so the tower gate can match Bam
   const forced = sizingFor({ spiral_mode: '1', timelapse_type: 'smooth' })
   assert.equal(forced?.spiralMode, true)
   assert.equal(forced?.needWipeTower, true)
+})
+
+/**
+ * The object ordinal space every positional sidecar uses (`brim_ear_points.txt`,
+ * `layer_config_ranges.xml`, `layer_heights_profile.txt`, `cut_information.xml`).
+ *
+ * The fixture deliberately writes its `<object>` resources in ASCENDING ID order while its build
+ * items name them in a different order, because that is the shape of every real project that has
+ * been edited: BambuStudio's exporter correlates the two, so a file it just wrote cannot tell the
+ * readings apart, and a fixture that keeps them aligned passes against the bug.
+ */
+const DIVERGENT_ORDER_MODEL_XML = [
+  '<?xml version="1.0" encoding="UTF-8"?>',
+  '<model unit="millimeter">',
+  '  <resources>',
+  '    <object id="4" type="model"><mesh/></object>',
+  '    <object id="7" type="model"><mesh/></object>',
+  '    <object id="9" type="model"><mesh/></object>',
+  // Not build-placed: a multi-solid import's component mesh. It must consume no ordinal.
+  '    <object id="12" type="model"><mesh/></object>',
+  '  </resources>',
+  '  <build>',
+  '    <item objectid="9" transform="1 0 0 0 1 0 0 0 1 0 0 0" printable="1"/>',
+  '    <item objectid="4" transform="1 0 0 0 1 0 0 0 1 0 0 0" printable="1"/>',
+  // A second instance of an object already placed: it adds a ModelInstance, not a ModelObject,
+  // so it must not take an ordinal of its own.
+  '    <item objectid="9" transform="1 0 0 0 1 0 0 0 1 40 0 0" printable="1"/>',
+  '    <item objectid="7" transform="1 0 0 0 1 0 0 0 1 80 0 0" printable="1"/>',
+  '  </build>',
+  '</model>'
+].join('\n')
+
+test('the object ordinal space is build-item order, not <object> resource order', () => {
+  // Measured against the real thing: a 137-object customer project whose two orders diverge was
+  // round-tripped through the BambuStudio 2.7.1 CLI, and all 137 objects came back in the input's
+  // BUILD-ITEM order. Its brim ear at ordinal 17 resolved to "Cam 1" (build order), not to
+  // "Side gear peg" (resource order), and was re-exported still attached to "Cam 1".
+  assert.deepEqual(parseRootModelObjectIdOrder(DIVERGENT_ORDER_MODEL_XML), [9, 4, 7])
+})
+
+test('an unplaced object takes no ordinal, and a second instance does not take another', () => {
+  const order = parseRootModelObjectIdOrder(DIVERGENT_ORDER_MODEL_XML)
+  // `<object id="12">` has no build item: BambuStudio never creates a ModelObject for it.
+  assert.equal(order.includes(12), false, 'an object with no build item is not in the list')
+  // Object 9 is placed twice; the importer's second visit takes the `else` branch and only calls
+  // `add_instance`, so it must appear once.
+  assert.deepEqual(order.filter((id) => id === 9), [9], 'a linked copy does not shift later ordinals')
+})
+
+test('a build item naming an object with no resource is skipped rather than shifting the rest', () => {
+  const xml = DIVERGENT_ORDER_MODEL_XML.replace(
+    '<item objectid="4"',
+    '<item objectid="99" transform="1 0 0 0 1 0 0 0 1 0 0 0" printable="1"/>\n    <item objectid="4"'
+  )
+  // The importer fails that lookup (`m_current_objects.find`) and refuses the file outright, so it
+  // never allocates an index for it. Counting it would move every later object up one.
+  assert.deepEqual(parseRootModelObjectIdOrder(xml), [9, 4, 7])
+})
+
+test('brim ears resolve through the build-item ordinal', () => {
+  const ears = parseBrimEarPoints('brim_points_format_version=1\nobject_id=2|1 2 3 4', DIVERGENT_ORDER_MODEL_XML)
+  // Ordinal 2 is object 4 in build order; it is object 7 in resource order.
+  assert.deepEqual([...ears.keys()], [4])
+  assert.deepEqual(ears.get(4), [{ x: 1, y: 2, z: 3, radius: 4 }])
 })

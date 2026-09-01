@@ -15,20 +15,29 @@
  *    being MOVED, not painted under. Callers therefore render the header and its body as
  *    SIBLINGS (which is why `PlatePausesSection` and friends return fragments, not a wrapper).
  *
- * 2. The background must be the SCROLL CONTAINER's own colour. Sticky headers need an opaque
- *    background or the content scrolling beneath reads through the text, but any colour that is
- *    not exactly the scroller's paints a visible bar across every header while it is unpinned.
+ * 2. The background must be the SCROLL CONTAINER's own colour, painted OPAQUE. Sticky headers need
+ *    an opaque background or the content scrolling beneath reads through the text, but any colour
+ *    that is not the scroller's paints a visible bar across every header while it is unpinned.
  *    The sections do not all scroll in the same container, the editor sidebar scrolls inside a
  *    `background.level1` Sheet, the prepare-print dialog inside the `background.surface`
  *    ModalDialog, so one shared token is provably wrong for one of them. Each scroll container
  *    names its own colour with {@link StickySectionScope}; the default suits a plain dialog
  *    surface, which is what an unpainted scroller inside a modal shows through to.
  *
+ *    Naming the right token is not enough on its own, because on the glass themes those tokens are
+ *    themselves translucent (`background.level1` is `rgba(19, 27, 42, 0.6)`, `background.surface`
+ *    0.55) -- they are meant to be layered over the page. A header that simply repeats the token is
+ *    therefore BOTH see-through and, sitting on a scroller already painting that same colour, a
+ *    shade darker than its surroundings. As one header slid under another, both titles and both
+ *    action buttons rendered on top of each other. So the token is stripped to full opacity with
+ *    relative colour syntax. The flat themes, whose tokens are already opaque hex, are unaffected.
+ *
  * Counterparts: `SliceSettingsPanel` (slicer/printer/plate/process/materials/objects),
  * `PlateGcodeSections` (filament changes/pauses), and `EditorView` (models on plate).
  */
 import { createContext, useContext, type ReactNode } from 'react'
 import { Stack, type StackProps } from '@mui/joy'
+import { opaqueScrollerBackground } from './stickySectionBackground'
 
 /**
  * Every header is at least this tall so covering is exact. Pinned headers all stack at the same
@@ -78,7 +87,7 @@ export function StickySectionHeader({ children, sx, ...props }: StackProps) {
           zIndex: STICKY_SECTION_HEADER_Z_INDEX,
           minWidth: 0,
           minHeight: STICKY_SECTION_HEADER_MIN_HEIGHT,
-          bgcolor: background
+          ...opaqueScrollerBackground(background)
         },
         ...(Array.isArray(sx) ? sx : sx ? [sx] : [])
       ]}

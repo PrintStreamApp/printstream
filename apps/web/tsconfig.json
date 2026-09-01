@@ -6,7 +6,26 @@
     "moduleResolution": "Bundler",
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "noEmit": true,
-    "types": ["vite/client", "node"]
+    // Vite's `configLoader: 'native'` (the default from Vite 9) resolves the config's relative
+    // imports as real ESM, so they must carry their extension. `webBuildIdPlugin.ts` is in this
+    // program because `src/lib/webBuildId.test.ts` imports it, so tsc sees that `.ts` specifier and
+    // needs to be told it is intentional. Safe here precisely because this config only ever
+    // typechecks: `noEmit` above means no `.ts` specifier is ever written into output.
+    "allowImportingTsExtensions": true,
+    "types": ["vite/client", "node"],
+    // `three` ships no types of its own, so every `from 'three'` resolves through `@types/three`.
+    // npm installs that into THIS workspace's node_modules, while `three-stdlib`, `three-mesh-bvh`
+    // and `three-bvh-csg` live in the root one -- and TypeScript looks for `@types` by walking up
+    // from the IMPORTING file, which never reaches a sibling workspace. Their declarations
+    // therefore resolved `three` to nothing, and every class they export that extends a three type
+    // (`ConvexGeometry`, `SVGResultPaths`, `Brush`) silently degraded to an empty object, so using
+    // one as the three type it genuinely is failed to compile. Mapping the name here fixes the
+    // resolution wherever npm decides to put the package; both candidate locations are listed
+    // because the placement has moved between installs. tsc-only -- Vite resolves the real
+    // module from disk, and there is no `vite-tsconfig-paths` to mirror this.
+    "paths": {
+      "three": ["./node_modules/@types/three", "../../node_modules/@types/three"]
+    }
   },
   "include": ["src/**/*"]
 }

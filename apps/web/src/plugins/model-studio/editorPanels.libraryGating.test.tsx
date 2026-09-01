@@ -7,8 +7,8 @@
  * guard passed against an inverted ternary, which is precisely the mistake worth catching.
  *
  * The menus take the callback as OPTIONAL and hide the row when it is absent, so what is asserted
- * here is the row's presence, and, for the split button, whose primary click is the library on the
- * workspace host, which handler the primary action falls through to.
+ * here is the row's presence. Every one of these is an `ActionMenuButton` now, where each route is
+ * a peer row, so there is no primary half whose fall-through needs asserting separately.
  */
 import assert from 'node:assert/strict'
 import { after, afterEach, test } from 'node:test'
@@ -68,9 +68,9 @@ function renderAddObjectMenu(props: Record<string, unknown>) {
   )
 }
 
-/** Opens the split button's caret so its rows are in the DOM. */
+/** Opens the Add menu so its rows are in the DOM. One click, whatever the host offers. */
 function openMenu() {
-  fireEvent.click(screen.getByLabelText('More add options'))
+  fireEvent.click(screen.getByRole('button', { name: 'add object' }))
 }
 
 test('the Add menu offers the library when the host has one', () => {
@@ -87,24 +87,31 @@ test('the Add menu hides the library row on a host with none', () => {
   assert.ok(screen.queryByText('Upload local file…'))
 })
 
-test("the Add button's primary action opens the library only where a library exists", () => {
+test('the Add button performs no action of its own: one click opens the menu', () => {
+  // It used to be a split button whose wide half opened the library picker, and silently uploaded
+  // instead on a host without one, so the same control did two different things depending on where
+  // it was mounted. Adding is a choice between alternatives, so every path is a row.
   const calls: string[] = []
   renderAddObjectMenu({
     onAddFromLibrary: () => calls.push('library'),
     onImportFile: () => calls.push('file')
   })
-  // The group carries the aria-label; the primary half is the button labelled "Add".
-  fireEvent.click(screen.getByRole('button', { name: 'Add' }))
-  assert.deepEqual(calls, ['library'])
+  fireEvent.click(screen.getByRole('button', { name: 'add object' }))
+  assert.deepEqual(calls, [], 'the click itself adds nothing')
+  assert.ok(screen.queryByText('From library…'), 'it opened the menu')
 })
 
-test("the Add button's primary action falls through to the file picker with no library", () => {
+test('each Add menu row runs its own action', () => {
   const calls: string[] = []
-  renderAddObjectMenu({ onImportFile: () => calls.push('file') })
-  // Without this fallback the control's MAIN click would do nothing at all on the public editor.
-  // The group carries the aria-label; the primary half is the button labelled "Add".
-  fireEvent.click(screen.getByRole('button', { name: 'Add' }))
-  assert.deepEqual(calls, ['file'])
+  renderAddObjectMenu({
+    onAddFromLibrary: () => calls.push('library'),
+    onImportFile: () => calls.push('file')
+  })
+  openMenu()
+  fireEvent.click(screen.getByText('From library…'))
+  openMenu()
+  fireEvent.click(screen.getByText('Upload local file…'))
+  assert.deepEqual(calls, ['library', 'file'])
 })
 
 /**

@@ -11,7 +11,7 @@
  * ./editorGeometry; the filament-option shape is a type-only import from
  * ./EditorView (erased, no runtime cycle).
  */
-import { Fragment, memo, useEffect, useMemo, useState, type MutableRefObject } from 'react'
+import { Fragment, memo, useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent, type MutableRefObject } from 'react'
 import {
   Box,
   Button,
@@ -37,6 +37,7 @@ import {
   Typography
 } from '@mui/joy'
 import { listItemDecoratorClasses } from '@mui/joy/ListItemDecorator'
+import { partMemberKey, type PartMember, type PartRef, type PartSelection } from './lib/selectionModel'
 import AddRoundedIcon from '@mui/icons-material/AddRounded'
 import CategoryRoundedIcon from '@mui/icons-material/CategoryRounded'
 import DeleteRoundedIcon from '@mui/icons-material/DeleteRounded'
@@ -45,9 +46,10 @@ import DriveFileRenameOutlineRoundedIcon from '@mui/icons-material/DriveFileRena
 import InventoryRoundedIcon from '@mui/icons-material/Inventory2Rounded'
 import LayersRoundedIcon from '@mui/icons-material/LayersRounded'
 import TextFieldsRoundedIcon from '@mui/icons-material/TextFieldsRounded'
+import ImageRoundedIcon from '@mui/icons-material/ImageRounded'
 import SaveRoundedIcon from '@mui/icons-material/SaveRounded'
-import TuneRoundedIcon from '@mui/icons-material/TuneRounded'
 import UploadFileRoundedIcon from '@mui/icons-material/UploadFileRounded'
+import NearMeRoundedIcon from '@mui/icons-material/NearMeRounded'
 import OpenWithRoundedIcon from '@mui/icons-material/OpenWith'
 import ThreeSixtyRoundedIcon from '@mui/icons-material/ThreeSixtyRounded'
 import AspectRatioRoundedIcon from '@mui/icons-material/AspectRatioRounded'
@@ -55,6 +57,7 @@ import VerticalAlignBottomRoundedIcon from '@mui/icons-material/VerticalAlignBot
 import AutoFixHighRoundedIcon from '@mui/icons-material/AutoFixHighRounded'
 import HelpOutlineRoundedIcon from '@mui/icons-material/HelpOutlineRounded'
 import FlipRoundedIcon from '@mui/icons-material/FlipRounded'
+import JoinInnerRoundedIcon from '@mui/icons-material/JoinInnerRounded'
 import LockRoundedIcon from '@mui/icons-material/LockRounded'
 import LockOpenRoundedIcon from '@mui/icons-material/LockOpenRounded'
 import GridViewRoundedIcon from '@mui/icons-material/GridViewRounded'
@@ -72,14 +75,17 @@ import { canonicalThreeMfPartSubtype, threeMfPartSubtypeCarriesFilament } from '
 import { useLocalStorageState } from '../../hooks/useLocalStorageState'
 import { useMobileViewport } from '../../components/useMobileViewport'
 import { SettingsTuneButton } from '../../components/SettingsTuneButton'
-import { SplitButton } from '../../components/SplitButton'
-import { PART_SUBTYPE_OPTIONS, type GizmoMode, type SelectedTransform, type TransformGizmoMode } from './editorGeometry'
+import { ActionMenuButton } from '../../components/ActionMenuButton'
+import { type ContextMenuAnchor } from './contextMenuChrome'
+import { EDITOR_POPUP_Z_INDEX } from './editorLayers'
+import { PART_SUBTYPE_OPTIONS, RESTING_GIZMO_MODE, type GizmoMode, type SelectedTransform, type TransformGizmoMode } from './editorGeometry'
 import { HELPER_VOLUME_SPECS, helperVolumeCssColor } from './lib/helperVolumes'
-import { effectivePartFilamentId, printedParts, summarizeInstanceMaterial } from './lib/editorModel'
+import { BODY_PART_INDEX, addedPartHostId, effectivePartFilamentId, instanceVolumeRows, summarizeInstanceMaterial } from './lib/editorModel'
 import type { EditorAddedPart, EditorInstance, EditorPlate } from './lib/editorModel'
 import { PRIMITIVE_LABELS, type PrimitiveKind } from './lib/primitives'
 import { plateDisplayName } from './lib/plateName'
-import { useListReorderDrag } from '../../hooks/useListReorderDrag'
+import { useListReorderDrag, useSingleListReorderDrag, type ListReorderGroup } from '../../hooks/useListReorderDrag'
+import { ListReorderCaret } from '../../components/ListReorderCaret'
 import type { FilamentOption } from './EditorView'
 
 /**
@@ -109,15 +115,29 @@ const AXIS_FIELD_MIN_WIDTH = 74
 export const TOOL_RAIL_WIDTH = 40
 
 /**
+ * The object sidebar's drag groups: one for the OBJECT rows, and one per multi-part ROW for its
+ * PART rows. A drag can only ever reorder within its own group, which is how BambuStudio's rule
+ * that a volume never leaves its object (`ObjectList::can_drop`) is enforced.
+ */
+const OBJECT_LIST_GROUP = 'objects'
+const partListGroup = (instanceKey: string): string => `parts:${instanceKey}`
+
+/**
  * Anchor for the floating tool panels (cut / measure / paint / brim ears / added part) so they
  * always clear the tools, whichever way the tools are laid out: on phones the tools stay a
  * horizontal strip across the top, so the panels sit BELOW it; from `sm` up the tools live in the
  * vertical left rail (photo-editor style), so the panels sit BESIDE it and reclaim the top edge.
  */
 export const TOOL_PANEL_ANCHOR = {
-  top: { xs: 52, sm: 8 },
+  // The phone strip WRAPS, so its height is not a constant: it grows with the button count and
+  // shrinks with the viewport, and a hardcoded 52 (one row) put every panel under the toolbar's
+  // second row the moment the tools group needed two. `EditorView` measures the strip and publishes
+  // `--editor-chrome-height` on the viewport; the fallback is one row, for the frame before the
+  // first measurement lands.
+  top: { xs: 'calc(var(--editor-chrome-height, 44px) + 12px)', sm: 8 },
   left: { xs: 8, sm: TOOL_RAIL_WIDTH + 12 }
 } as const
+
 
 /**
  * Plate selector strip: a live thumbnail per plate (rendered offscreen from the
@@ -158,8 +178,8 @@ export function PlateThumbnailStrip({
 }) {
   const vertical = orientation === 'vertical'
   const plateIndices = useMemo(() => plates.map((plate) => plate.index), [plates])
-  const { drag, setContainerElement, setTileElement, handleTilePointerDown, shouldSuppressClick } =
-    useListReorderDrag({ vertical, itemIndices: plateIndices, onDrop: onReorderPlate })
+  const { drag, setContainerElement, setCaretElement, setTileElement, handleTilePointerDown, shouldSuppressClick } =
+    useSingleListReorderDrag({ vertical, itemIndices: plateIndices, onDrop: onReorderPlate })
   // Which tile's options menu is open. Held here (rather than letting each Dropdown own its
   // state) so a right-click anywhere on a tile can open that tile's menu, the same menu the
   // kebab opens, so the two entry points can never drift apart.
@@ -326,7 +346,7 @@ export function PlateThumbnailStrip({
               >
                 <MoreVertRoundedIcon fontSize="small" />
               </MenuButton>
-              <Menu placement="bottom-end" sx={{ zIndex: (theme) => theme.zIndex.tooltip, minWidth: 160 }} onClick={(event) => event.stopPropagation()}>
+              <Menu placement="bottom-end" sx={{ zIndex: EDITOR_POPUP_Z_INDEX, minWidth: 160 }} onClick={(event) => event.stopPropagation()}>
                 {/* Lay out icon + label directly with a fixed gap so every row aligns
                     (ListItemDecorator sizes differently on the danger/selected row). */}
                 <MenuItem onClick={(event) => { event.stopPropagation(); onRenamePlate(plate.index) }} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -374,24 +394,7 @@ export function PlateThumbnailStrip({
           {collapsed ? <UnfoldMoreRoundedIcon fontSize="small" /> : <UnfoldLessRoundedIcon fontSize="small" />}
         </IconButton>
       </Tooltip>
-      {/* Insertion caret: drawn in the gap the drop would land in, so the target is unambiguous
-          in both drag directions. Positioned in content coordinates (it scrolls with the tiles);
-          rendered last with zeroed margins so the Stack's sibling spacing never shifts a tile. */}
-      {drag && drag.caretOffset !== null && (
-        <Box
-          sx={{
-            position: 'absolute',
-            m: '0 !important',
-            pointerEvents: 'none',
-            zIndex: 1,
-            borderRadius: '2px',
-            bgcolor: 'primary.400',
-            ...(vertical
-              ? { left: 4, right: 4, height: 3, top: drag.caretOffset - 1.5 }
-              : { top: 4, bottom: 4, width: 3, left: drag.caretOffset - 1.5 })
-          }}
-        />
-      )}
+      <ListReorderCaret setCaretElement={setCaretElement} vertical={vertical} />
     </Stack>
     </Sheet>
   )
@@ -539,9 +542,22 @@ export function GizmoToolbar({
   const isMobile = useMobileViewport()
   // Captions would make the rail far too wide, so the vertical form is icon-only like phones.
   const layout = orientation === 'vertical' ? ('rail' as const) : isMobile ? ('icon' as const) : ('stacked' as const)
-  // Selection tools: everything here needs a selected object: the modal editing
-  // tools (the active one highlights) plus the one-shot Drop/Orient actions.
+  // Selection tools. All but the first need a selected object: the modal editing tools (the active
+  // one highlights) plus the one-shot Drop/Orient actions.
   const tools: ToolbarEntry[] = [
+    // The resting tool, and the only one here that works with nothing selected -- picking things is
+    // exactly what you do before there IS a selection. BambuStudio has no button for this (its
+    // `Undefined` state is reached by toggling the active gizmo off, which the entries below also
+    // do); we show one because our rail is a toggle group where something is always lit, so "no
+    // tool" would render as nothing lit, which reads as broken rather than as a mode.
+    {
+      key: RESTING_GIZMO_MODE,
+      label: 'Select',
+      icon: <NearMeRoundedIcon />,
+      active: mode === RESTING_GIZMO_MODE,
+      disabled: busy,
+      onClick: () => onChange(RESTING_GIZMO_MODE)
+    },
     ...([
       { value: 'translate', label: 'Move', icon: <OpenWithRoundedIcon /> },
       { value: 'rotate', label: 'Rotate', icon: <ThreeSixtyRoundedIcon /> },
@@ -550,6 +566,9 @@ export function GizmoToolbar({
       // through-a-shape icon (Flip) reads as slicing, so it marks the Cut tool.
       { value: 'layFace', label: 'Place on face', short: 'Lay flat', icon: <TouchAppRoundedIcon /> },
       { value: 'cut', label: 'Cut', icon: <FlipRoundedIcon /> },
+      // Beside Cut: both reshape the geometry itself rather than painting or placing it, and
+      // BambuStudio carries its own `GLGizmoMeshBoolean` in the same toolbar.
+      { value: 'meshBoolean', label: 'Boolean', icon: <JoinInnerRoundedIcon /> },
       { value: 'paintSupports', label: 'Paint supports', short: 'Supports', icon: <BrushRoundedIcon /> },
       { value: 'paintSeam', label: 'Paint seam', short: 'Seam', icon: <FormatPaintRoundedIcon /> },
       { value: 'paintColor', label: 'Paint color', short: 'Color', icon: <PaletteRoundedIcon /> },
@@ -566,7 +585,8 @@ export function GizmoToolbar({
       icon: tool.icon,
       active: mode === tool.value,
       disabled,
-      onClick: () => onChange(tool.value)
+      // Clicking the lit tool toggles back to resting, as `open_gizmo` does.
+      onClick: () => onChange(mode === tool.value ? RESTING_GIZMO_MODE : tool.value)
     })),
     { key: 'drop', label: 'Drop to bed', short: 'Drop', icon: <VerticalAlignBottomRoundedIcon />, disabled, onClick: onDropToBed },
     { key: 'orient', label: 'Auto-orient (rest on the largest flat face)', short: 'Orient', icon: <AutoFixHighRoundedIcon />, disabled, onClick: onAutoOrient }
@@ -575,10 +595,13 @@ export function GizmoToolbar({
   // (still a mode, it highlights while active, but it never edits the scene).
   const utilities: ToolbarEntry[] = [
     { key: 'arrange', label: 'Auto-arrange all objects on this plate', short: 'Arrange', icon: <GridViewRoundedIcon />, disabled: arrangeDisabled, onClick: onArrangeAll },
-    { key: 'measure', label: 'Measure', icon: <StraightenRoundedIcon />, active: mode === 'measure', disabled: busy, onClick: () => onChange('measure') },
+    { key: 'measure', label: 'Measure', icon: <StraightenRoundedIcon />, active: mode === 'measure', disabled: busy, onClick: () => onChange(mode === 'measure' ? RESTING_GIZMO_MODE : 'measure') },
     // Text needs no selection: with nothing selected it makes a model of its own, so it belongs
     // with the utilities rather than the selection tools.
-    { key: 'text', label: 'Add text', short: 'Text', icon: <TextFieldsRoundedIcon />, active: mode === 'text', disabled: busy, onClick: () => onChange('text') }
+    { key: 'text', label: 'Add text', short: 'Text', icon: <TextFieldsRoundedIcon />, active: mode === 'text', disabled: busy, onClick: () => onChange(mode === 'text' ? RESTING_GIZMO_MODE : 'text') },
+    // Beside Text for the same reason, and because they are the same gesture: extrude a 2D source
+    // onto the model, or onto the plate when nothing is selected.
+    { key: 'svg', label: 'Add SVG', short: 'SVG', icon: <ImageRoundedIcon />, active: mode === 'svg', disabled: busy, onClick: () => onChange(mode === 'svg' ? RESTING_GIZMO_MODE : 'svg') }
   ]
   // The two groups are returned as siblings (no wrapper) so the toolbar's
   // flex-wrap container can break them onto separate rows on phones instead of
@@ -657,7 +680,7 @@ export function KeyboardHelpButton() {
       >
         <HelpOutlineRoundedIcon />
       </MenuButton>
-      <Menu placement="bottom-start" sx={{ zIndex: (theme) => theme.zIndex.tooltip, p: 1.25, maxWidth: 280 }}>
+      <Menu placement="bottom-start" sx={{ zIndex: EDITOR_POPUP_Z_INDEX, p: 1.25, maxWidth: 280 }}>
         <Typography level="title-sm" sx={{ mb: 0.75 }}>Keyboard shortcuts</Typography>
         <Stack spacing={0.5}>
           {shortcuts.map((shortcut) => (
@@ -911,9 +934,12 @@ function roundForDisplay(value: number): string {
 }
 
 /**
- * "Add" split button: the default click opens the library file picker (the common case); the
- * dropdown offers uploading a local file or a primitive solid. On a host with no library the
- * library row is hidden and the default click uploads instead: see {@link onAddFromLibrary}.
+ * "Add" menu button: every add path is a menu row, so one click always opens the menu.
+ *
+ * `ActionMenuButton`, not `SplitButton`, for the reason that component documents: there is no
+ * action "Add" names on its own. It WAS a split button whose wide half opened the library picker
+ * and silently fell through to the file picker on a host without one, so the same control did two
+ * different things depending on where it was mounted, with nothing on screen saying which.
  */
 export function AddObjectMenu({
   importing,
@@ -928,37 +954,33 @@ export function AddObjectMenu({
   disabled?: boolean
   disabledReason?: string
   /**
-   * Omitted on a host with no library (`EditorImportStore.supportsLibrarySource`), which hides the
-   * row AND hands the split button's primary action to {@link onImportFile}, otherwise the
-   * control's main click does nothing on the public editor.
+   * Omitted on a host with no library (`EditorImportStore.supportsLibrarySource`), which hides that
+   * row. Nothing else changes: the remaining rows are the whole control either way, which is why
+   * it no longer needs a fallback for a primary action that does not exist.
    */
   onAddFromLibrary?: () => void
   onImportFile: () => void
   onAddPrimitive: (kind: PrimitiveKind) => void
 }) {
   return (
-    // Soft: the panel's Add is not the editor's primary action. Both halves gate together,
-    // every add path needs the same import machinery.
-    <SplitButton
+    // Soft: the panel's Add is not the editor's primary action.
+    <ActionMenuButton
       ariaLabel="add object"
-      menuAriaLabel="More add options"
+      label="Add"
       size="sm"
       variant="soft"
-      label="Add"
-      // Keep the label visible while importing (Joy's `loading` centres the spinner over it),
-      // so the button still says what it is mid-import.
-      startDecorator={importing ? <CircularProgress size="sm" /> : <AddRoundedIcon />}
+      startDecorator={<AddRoundedIcon />}
+      loading={importing}
+      // An import already has the editor busy staging geometry, so starting a second one is not a
+      // useful thing to reach mid-flight.
       disabled={importing || disabled}
       disabledReason={disabled ? disabledReason : undefined}
-      onClick={onAddFromLibrary ?? onImportFile}
-      // The editor is a Modal (zIndex 1300); the menu popper defaults to the lower `popup`
-      // layer, so lift it above the dialog or it renders behind it.
-      // In a vertical menu Joy's ListItemDecorator only reserves height, not width, so icons of
-      // differing glyph widths leave the labels ragged. Pin a fixed icon column and a uniform
-      // icon size so every label starts at the same x.
+      // The editor is a Modal (zIndex 1300); the menu popper defaults to the lower `popup` layer,
+      // so lift it above the dialog or it renders behind it. The icon column is pinned because
+      // Joy's ListItemDecorator reserves height but not width, which leaves labels ragged.
       menuSx={{
         minWidth: 220,
-        zIndex: (theme) => theme.zIndex.tooltip,
+        zIndex: EDITOR_POPUP_Z_INDEX,
         [`& .${listItemDecoratorClasses.root}`]: { minInlineSize: '1.75rem' },
         '& svg': { fontSize: '1.25rem' }
       }}
@@ -980,12 +1002,19 @@ export function AddObjectMenu({
           Add {PRIMITIVE_LABELS[kind].toLowerCase()}
         </MenuItem>
       ))}
-    </SplitButton>
+    </ActionMenuButton>
   )
 }
 
-/** Split "Save" button: primary action saves, the caret opens Save-as. */
-export function SaveSplitButton({
+/**
+ * "Save" menu button: both ways of saving are rows, so one click always opens the menu.
+ *
+ * Not a split button, and not because of consistency with its neighbours: "Save" names a category
+ * here, not one action. Overwriting the open file and writing a new one are peers, and the split
+ * form had to pick between them for the wide half based on whether a version could be saved, so the
+ * same button did two different things depending on project state.
+ */
+export function SaveMenuButton({
   saving,
   disabled,
   dirty,
@@ -1002,38 +1031,41 @@ export function SaveSplitButton({
   onSaveAs: () => void
 }) {
   // Solid primary: Save is the footer's primary action (Slice sits soft to its left).
-  // "Save (version)" overwrites the open file, so it greys out until there are unsaved
-  // edits (matching Bambu Studio's Ctrl+S). "Save as new…" always stays available, both
-  // as the new-project path (no version to save) and as a safety valve if a change ever
-  // slips past dirty tracking. That is the one split-button state where the caret outlives
-  // its primary half, so the group de-emphasises with it (see `SplitButton`).
+  // "Save" overwrites the open file, so it greys out until there are unsaved edits (matching
+  // BambuStudio's Ctrl+S) while "Save as new…" always stays available, both as the new-project
+  // path and as a safety valve if a change ever slips past dirty tracking. As ONE greyed row in a
+  // menu that need not say why: the user opened the list and can see the live alternative next to
+  // it, where the split form had to grey the whole control and explain itself in a tooltip.
   const saveVersionDisabled = disabled || saving || !dirty
-  const nothingToSave = canSaveVersion && !dirty
   return (
-    <SplitButton
+    <ActionMenuButton
       ariaLabel="save"
-      menuAriaLabel="More save options"
       label="Save"
       startDecorator={<SaveRoundedIcon />}
       loading={saving}
       disabled={disabled || saving}
-      primaryDisabled={nothingToSave}
-      disabledReason={nothingToSave ? 'No unsaved changes' : undefined}
-      onClick={() => (canSaveVersion ? onSaveVersion() : onSaveAs())}
-      menuSx={{ zIndex: (theme) => theme.zIndex.tooltip }}
+      menuSx={{ zIndex: EDITOR_POPUP_Z_INDEX }}
     >
       {canSaveVersion && <MenuItem disabled={saveVersionDisabled} onClick={onSaveVersion}>Save</MenuItem>}
       <MenuItem onClick={onSaveAs}>Save as new…</MenuItem>
-    </SplitButton>
+    </ActionMenuButton>
   )
 }
 
-/** Split "Slice" button: primary slices the active plate, the caret offers all plates. */
-export function SliceSplitButton({
+/**
+ * "Slice": a menu of this-plate / all-plates, or a plain button when there is only one plate.
+ *
+ * The menu exists because "Slice" then names a CATEGORY rather than an action, which is the rule
+ * `ActionMenuButton` encodes. With a single plate that stops being true: both rows do the identical
+ * thing, so the menu asks the user to pick between a choice and itself, and puts a click in front of
+ * the editor's most common action. One plate is also the common case.
+ */
+export function SliceMenuButton({
   slicing,
   disabled,
   disabledReason,
   activePlateIndex,
+  plateCount,
   onSliceAll,
   onSlicePlate
 }: {
@@ -1041,30 +1073,56 @@ export function SliceSplitButton({
   disabled: boolean
   disabledReason?: string
   activePlateIndex: number
+  /** How many plates the project has; 1 collapses the menu to a plain button. */
+  plateCount: number
   onSliceAll: () => void
   onSlicePlate: () => void
 }) {
-  // Phones are tight on footer width; "Slice plate" wraps to two lines there.
-  const isMobile = useMobileViewport()
+  if (plateCount <= 1) {
+    // Same variant, decorator and loading/disabled behaviour as the menu form, so the footer does
+    // not change shape with the plate count. The disabled tooltip needs its own wrapper for the
+    // reason `ActionMenuButton` documents: a disabled button swallows the hover.
+    const button = (
+      <Button
+        type="button"
+        variant="soft"
+        color="primary"
+        aria-label="slice"
+        startDecorator={<LayersRoundedIcon />}
+        loading={slicing}
+        disabled={disabled}
+        onClick={onSlicePlate}
+      >
+        Slice
+      </Button>
+    )
+    return disabled && disabledReason
+      ? (
+        <Tooltip title={disabledReason} variant="soft" sx={{ maxWidth: 280 }}>
+          <Box sx={{ display: 'inline-flex' }}>{button}</Box>
+        </Tooltip>
+      )
+      : button
+  }
   return (
-    // Soft: Save (solid, rightmost) is the footer's primary action. Both halves gate together:
-    // slicing one plate and slicing all of them are unavailable for the same reasons.
-    <SplitButton
+    // Soft: Save (solid, rightmost) is the footer's primary action. Both rows gate together:
+    // slicing one plate and slicing all of them are unavailable for the same reasons. Deliberately
+    // NOT disabled while a slice runs -- queueing another plate mid-slice is legitimate, which is
+    // why `loading` and `disabled` are separate.
+    <ActionMenuButton
       ariaLabel="slice"
-      menuAriaLabel="More slice options"
       variant="soft"
-      label={isMobile ? 'Slice' : 'Slice plate'}
+      label="Slice"
       startDecorator={<LayersRoundedIcon />}
       loading={slicing}
       disabled={disabled}
       disabledReason={disabledReason}
-      onClick={onSlicePlate}
       menuPlacement="top-end"
-      menuSx={{ zIndex: (theme) => theme.zIndex.tooltip }}
+      menuSx={{ zIndex: EDITOR_POPUP_Z_INDEX }}
     >
       <MenuItem onClick={onSlicePlate}>Slice plate {activePlateIndex}</MenuItem>
       <MenuItem onClick={onSliceAll}>Slice all plates</MenuItem>
-    </SplitButton>
+    </ActionMenuButton>
   )
 }
 
@@ -1162,7 +1220,7 @@ function FilamentBadge({
           {swatch}
         </MenuButton>
       </Tooltip>
-      <Menu placement="bottom-end" sx={{ zIndex: (theme) => theme.zIndex.tooltip, minWidth: 180 }}>
+      <Menu placement="bottom-end" sx={{ zIndex: EDITOR_POPUP_Z_INDEX, minWidth: 180 }}>
         {options!.map((option) => (
           <MenuItem
             key={option.id}
@@ -1256,7 +1314,7 @@ function PartTypeMenu({
           <CategoryRoundedIcon fontSize="small" />
         </MenuButton>
       </Tooltip>
-      <Menu placement="bottom-end" sx={{ zIndex: (theme) => theme.zIndex.tooltip }}>
+      <Menu placement="bottom-end" sx={{ zIndex: EDITOR_POPUP_Z_INDEX }}>
         {options.map((option) => (
           <MenuItem
             key={option.subtype}
@@ -1268,6 +1326,53 @@ function PartTypeMenu({
         ))}
       </Menu>
     </Dropdown>
+  )
+}
+
+/**
+ * The row's "more actions" button: opens the SAME context menu the right-click does, anchored on
+ * itself.
+ *
+ * Every row carries one because right-click is not reachable on touch, and these rows are reorder
+ * handles -- a long press starts a drag (`useListReorderDrag`, hold-to-drag), and the tile even
+ * suppresses the iOS callout so the two cannot both work. Without a button, every action behind
+ * the menu (change type, change material, part settings, delete, export) was mouse-only. Deleting
+ * a session-added volume was the visible case: it briefly had a trash icon no other row had, which
+ * is the divergence this replaces.
+ */
+function RowMenuButton({ label, onOpen }: {
+  label: string
+  onOpen: (position: ContextMenuAnchor) => void
+}) {
+  return (
+    <Tooltip title="More actions">
+      <IconButton
+        size="sm"
+        variant="plain"
+        color="neutral"
+        aria-label={label}
+        // The menu it opens is the shared cursor-anchored one (a bare `Menu`, not a Joy
+        // `Dropdown`), so the popup semantics Dropdown would supply are not here to inherit.
+        // Announce at least that this button opens a menu; the plate strip's kebab gets this from
+        // its `MenuButton` and these rows cannot without restructuring the shared menu.
+        aria-haspopup="menu"
+        // Stop pointerdown as well as click, matching the plate strip's kebab and the contract
+        // stated in `hooks/useListReorderDrag.ts`. Today the reorder drag is armed from the row's
+        // NAME, a sibling, so nothing here could reach it; the guard is for the obvious future
+        // change of moving that handler up to the row, which would silently arm a drag from this
+        // button and leave the menu opening mid-gesture.
+        onPointerDown={(event) => event.stopPropagation()}
+        onClick={(event) => {
+          // The row itself selects on click; opening the menu must not also re-select or, on a
+          // part row, drill the selection somewhere else under the user.
+          event.stopPropagation()
+          const rect = event.currentTarget.getBoundingClientRect()
+          onOpen({ x: rect.right, y: rect.bottom, align: 'end' })
+        }}
+      >
+        <MoreVertRoundedIcon fontSize="small" />
+      </IconButton>
+    </Tooltip>
   )
 }
 
@@ -1298,12 +1403,572 @@ export interface ObjectListPerObject {
  * ~430ms of the ~525ms commit. The memo only works while every prop is stable -- build object and
  * callback props with `useMemo`/`useCallback` at the call site, never inline in JSX.
  */
+/**
+ * A comparable summary of what an instance's added parts render as.
+ *
+ * Cheap per row and recomputed on every list render, which is the point: it is the only thing that
+ * changes when a part is edited in place, so it is what lets a memoised row notice.
+ */
+function addedPartsSignature(parts: readonly EditorAddedPart[]): string {
+  if (parts.length === 0) return ''
+  // The SETTINGS COUNT is in here because the row shows it. Overrides are written by mutating the
+  // volume in place (`part.settings = ...`), so without it the memo saw identical props and the
+  // badge only appeared once some unrelated prop moved -- deselecting the row, in practice, which
+  // made a saved change look like it had not been saved.
+  return parts.map((part) => `${part.key}:${part.subtype}:${part.filamentId ?? ''}:${part.name}`
+    + `:${Object.keys(part.settings ?? {}).length}`).join('|')
+}
+
+/** The shared empty list, so a part-less row's props stay referentially stable. */
+const NO_ADDED_PART_ROWS: readonly EditorAddedPart[] = Object.freeze([])
+
+/**
+ * One object's rows: the object itself, its parts, and any volumes added this session.
+ *
+ * Selection and drag arrive ALREADY RESOLVED to this row (booleans and indexes, never the editor's
+ * global selection), which is what lets the memo below do anything: selecting something changes
+ * props on the one or two rows whose appearance differs, and every other row bails out.
+ *
+ * Every prop must therefore be a primitive or a STABLE reference. That is a contract on the caller,
+ * not a detail: `effectiveAddedParts` returning one frozen empty array rather than a fresh `[]` is
+ * part of it, and so is `EditorView` handing over memoised callbacks.
+ */
+interface ObjectListRowProps {
+  instance: EditorInstance
+  /** This row is the primary selection; `extraSelected` is a Ctrl/Cmd-click member. */
+  primarySelected: boolean
+  extraSelected: boolean
+  /**
+   * The selected parts' member KEYS, ONLY when the selection belongs to this object.
+   *
+   * Keys rather than the members themselves, and pre-resolved to this row by the list, because this
+   * component is memoised on a shallow prop compare: a fresh array of member objects per render
+   * would fail that compare for every row on the plate. One string per selected part is comparable
+   * by the row's own `arePropsEqual`, and it covers both kinds, so a volume highlights by exactly
+   * the rule a baked part does.
+   */
+  selectedPartKeys: ReadonlyArray<string> | null
+  addedParts: readonly EditorAddedPart[]
+  /**
+   * Whether the object's own geometry gets a row (BambuStudio's "a row per volume once there are
+   * two" rule). Resolved by the list, so the row stays a pure prop the memo can compare.
+   */
+  bodyRow: boolean
+  /** The body row's current subtype, so its type menu reads back what was picked. */
+  bodySubtype: SceneEditPartSubtype | null
+  /**
+   * What this row's added parts LOOK like, as a value the memo can compare.
+   *
+   * Added parts are mutated IN PLACE behind a ref (`handleChangeAddedPartFilament` assigns
+   * `part.filamentId` directly), so the array reference is unchanged by an edit and a shallow prop
+   * compare sees nothing. Without this the 3D view updated -- it rebuilds meshes directly -- while
+   * the row kept showing the old material, which is the exact failure this signature exists to stop.
+   */
+  addedPartsSignature: string
+  /** Drag state, pre-resolved: passing the raw drag would re-render every row on every frame. */
+  objectDragging: boolean
+  draggingPartIndex: number | null
+  perObject?: ObjectListPerObject
+  /**
+   * The colour table and id resolver, NOT the two closures the list derives from them: those are
+   * rebuilt on every list render, so passing them would fail the memo for every row.
+   */
+  filamentColors?: Record<number, string>
+  resolveFilamentId?: (id: number | null) => number | null
+  filamentOptions?: FilamentOption[]
+  linkedCopyCountFor?: (instanceKey: string) => number
+  onSelect: (key: string, modifiers?: { additive?: boolean; range?: boolean }) => void
+  onSelectPart?: (objectId: number, member: PartMember, modifiers: { additive: boolean; range: boolean }, instanceKey: string) => void
+  onObjectContextMenu?: (key: string, position: ContextMenuAnchor) => void
+  onPartContextMenu?: (objectId: number, member: PartMember, position: ContextMenuAnchor, instanceKey: string) => void
+  onReassignFilament?: (targets: Array<{ objectId: number; partIndex: number }>, filamentId: number) => void
+  onReassignInstanceFilament?: (key: string, filamentId: number) => void
+  onTogglePrintable: (key: string) => void
+  onChangePartType?: (objectId: number, partIndex: number, subtype: SceneEditPartSubtype) => void
+  onSelectAddedPart?: (objectId: number, partKey: string, modifiers: { additive: boolean; range: boolean }, instanceKey: string) => void
+  onChangeAddedPartType?: (partKeys: ReadonlyArray<string>, subtype: SceneEditPartSubtype) => void
+  onChangeAddedPartFilament?: (partKeys: ReadonlyArray<string>, filamentId: number) => void
+  onEditAddedPartSettings?: (objectId: number, partKey: string) => void
+  onAddedPartContextMenu?: (objectId: number, partKey: string, position: ContextMenuAnchor, instanceKey: string) => void
+  onReorderObject?: (hostId: number, beforeHostId: number | null) => void
+  onReorderPart?: (hostId: number, partIndex: number, beforePartIndex: number | null) => void
+  setTileElement: (group: string, itemIndex: number, element: HTMLElement | null) => void
+  handleTilePointerDown: (group: string, itemIndex: number, event: React.PointerEvent) => void
+  /** Suppresses the click that ends a reorder drag, so dropping a row does not also select it. */
+  shouldSuppressClick: () => boolean
+}
+
+const ObjectListRow = memo(function ObjectListRow({
+  instance,
+  primarySelected,
+  extraSelected,
+  selectedPartKeys,
+  addedParts,
+  bodyRow,
+  bodySubtype,
+  objectDragging,
+  draggingPartIndex,
+  perObject,
+  filamentColors,
+  resolveFilamentId,
+  filamentOptions,
+  linkedCopyCountFor,
+  onSelect,
+  onSelectPart,
+  onObjectContextMenu,
+  onPartContextMenu,
+  onReassignFilament,
+  onReassignInstanceFilament,
+  onTogglePrintable,
+  onChangePartType,
+  onSelectAddedPart,
+  onChangeAddedPartType,
+  onChangeAddedPartFilament,
+  onEditAddedPartSettings,
+  onAddedPartContextMenu,
+  onReorderObject,
+  onReorderPart,
+  setTileElement,
+  handleTilePointerDown,
+  shouldSuppressClick
+}: ObjectListRowProps) {
+  const resolveId = resolveFilamentId ?? ((id: number | null) => id)
+  const liveColor = (filamentId: number | null, fallback: string | null): string | null =>
+    (filamentId != null && filamentColors?.[filamentId]) || fallback || null
+        // The object this row places. Every row of an object registers under it, and the hook
+        // measures their union, so an object spanning several rows gets one extent.
+        const objectHostId = addedPartHostId(instance)
+        // The object identity used for per-object settings AND per-part filament reassignment:
+        // an in-project object's Bambu id, or an import's stable identity (synthetic for a fresh
+        // import, the replaced object's id for "Replace with…"), so a not-yet-saved import's
+        // parts are reassignable and its process is editable without a save first.
+        const perObjectId = instance.source.kind === 'object'
+          ? instance.objectId
+          : (instance.source.replacedObjectId ?? null)
+        const sliceObject = perObjectId != null && perObject?.sliceObjectIds.has(perObjectId) ? perObjectId : null
+        // Printability is an editor-owned per-instance flag (BambuStudio's "Printable"),
+        // so the toggle shows for every object on the plate, including just-moved ones,
+        // independent of the slice dialog's per-plate object selection.
+        const printing = instance.printable
+        const overrideCount = sliceObject != null ? perObject!.overrideCountFor(sliceObject) : 0
+        // Objects can hold multiple volumes, each on its own filament: list them nested. Counted
+        // over EVERY volume (baked parts, session-added ones, and the body where the part list does
+        // not describe it), never over `instance.parts` alone: see `instanceVolumeRows`.
+        const { showRows: showParts } = instanceVolumeRows(instance, addedParts.length)
+        // The group this row's part rows drag in, or null when this row has no reorderable parts.
+        // Gated on the BAKED count on purpose, unlike the row rule above: `SceneEdit.partOrder` is a
+        // list of base ordinals, which a session-added volume has no member of, so only baked parts
+        // can currently reorder. Registering a one-part group would give a row a drag handle that
+        // can only drop where it already is.
+        const partDragHost = onReorderPart && instance.parts.length > 1 && addedPartHostId(instance) != null ? instance.key : null
+        // The object-level badge summarises every PRINTED volume it owns -- baked parts, the volumes
+        // added this session, and its own body where the part list does not describe it: one
+        // material when they agree (shown like any single-material row), otherwise the
+        // indeterminate mixed swatch. Helper volumes are excluded from both the summary and the
+        // reassignment behind it: see instanceMaterialVolumes().
+        const partMaterial = summarizeInstanceMaterial(instance, resolveId, liveColor, addedParts)
+        // Null while the volumes disagree, which is what makes the badge render its mixed bands.
+        const materialColor = partMaterial.mixedColors
+          ? null
+          : liveColor(partMaterial.uniformId, partMaterial.uniformColor)
+        return (
+          <Fragment>
+            <ListItem
+              ref={onReorderObject && objectHostId != null
+                ? (element: HTMLElement | null) => setTileElement(OBJECT_LIST_GROUP, objectHostId, element)
+                : undefined}
+              onContextMenu={onObjectContextMenu ? (event) => {
+                event.preventDefault()
+                onObjectContextMenu(instance.key, { x: event.clientX, y: event.clientY })
+              } : undefined}
+              sx={{
+                borderRadius: 'sm',
+                bgcolor: primarySelected ? 'neutral.softBg' : extraSelected ? 'neutral.plainActiveBg' : undefined,
+                // Every row of the dragged OBJECT dims, not just the one under the pointer, so a
+                // linked copy shows that it travels with its original.
+                ...(objectDragging ? { opacity: 0.4 } : {})
+              }}
+            >
+              <Stack direction="row" spacing={0.5} alignItems="center" sx={{ width: '100%', minWidth: 0 }}>
+                <Tooltip title={printing ? 'Printable, toggle to skip' : 'Skipped, toggle to print'} variant="soft">
+                  <Switch
+                    size="sm"
+                    checked={printing}
+                    onChange={() => onTogglePrintable(instance.key)}
+                    slotProps={{ input: { 'aria-label': `Print ${instance.name}` } }}
+                    sx={{ flexShrink: 0 }}
+                  />
+                </Tooltip>
+                <Typography
+                  level="body-sm"
+                  noWrap
+                  // The NAME is the drag handle, not the whole row: a row carries a printable
+                  // switch, a material swatch, a settings button and a kebab, each with its own
+                  // pointer behaviour, and arming a drag from the row would fight all four.
+                  onPointerDown={onReorderObject && objectHostId != null
+                    ? (event) => handleTilePointerDown(OBJECT_LIST_GROUP, objectHostId, event)
+                    : undefined}
+                  onClick={(event) => {
+                    // A completed drop synthesizes a click here; selecting on it would change the
+                    // selection as a side effect of reordering.
+                    if (shouldSuppressClick()) return
+                    onSelect(instance.key, { additive: event.ctrlKey || event.metaKey, range: event.shiftKey })
+                  }}
+                  // userSelect off so a Shift-range click extends the selection instead of
+                  // highlighting the row names as text.
+                  sx={{
+                    flex: 1,
+                    minWidth: 0,
+                    cursor: 'pointer',
+                    userSelect: 'none',
+                    opacity: printing ? 1 : 0.5,
+                    // Without this a touch drag scrolls the sidebar instead of moving the row.
+                    ...(onReorderObject ? { touchAction: 'none' } : {})
+                  }}
+                >
+                  {instance.name}
+                </Typography>
+                {linkedCopyCountFor && linkedCopyCountFor(instance.key) > 1 && (
+                  // Linkage is otherwise invisible: users discover it by editing one copy and
+                  // watching another change. BambuStudio has the same ambiguity; we name it.
+                  <Tooltip title={`Linked copy: ${linkedCopyCountFor(instance.key)} instances share this object's parts, materials, paint and settings. Right-click to make one independent.`}>
+                    <Chip size="sm" variant="soft" color="neutral" sx={{ flexShrink: 0 }}>
+                      x{linkedCopyCountFor(instance.key)}
+                    </Chip>
+                  </Tooltip>
+                )}
+                {/*
+                  * ONE badge, whatever shape the object is. An object row's material is changeable
+                  * whenever the row HAS one, which is not the same as having parts: a model with no
+                  * parts list -- a primitive, a single-solid import, a single-mesh object in a saved
+                  * project -- keeps its material on the instance. This used to be three branches
+                  * keyed off `parts.length`, and the middle one rendered NOTHING for an object whose
+                  * volumes are all session-added, which is every primitive the moment a part is
+                  * dropped on it. `summarizeInstanceMaterial` now answers for every shape and
+                  * `onReassignInstanceFilament` writes back to whichever home the material lives in.
+                  */}
+                {onReassignInstanceFilament ? (
+                  <FilamentBadge
+                    filamentId={partMaterial.uniformId}
+                    color={materialColor}
+                    mixedColors={partMaterial.mixedColors}
+                    options={filamentOptions}
+                    title={showParts
+                      ? (partMaterial.mixedColors ? "Mixed materials: set all parts' material" : "Set all parts' material")
+                      : 'Change material'}
+                    onReassign={(fid) => onReassignInstanceFilament(instance.key, fid)}
+                  />
+                ) : (
+                  <FilamentBadge
+                    filamentId={partMaterial.uniformId}
+                    color={materialColor}
+                    mixedColors={partMaterial.mixedColors}
+                    options={filamentOptions}
+                  />
+                )}
+                {perObject && sliceObject != null && (
+                  <SettingsTuneButton
+                    changedCount={overrideCount}
+                    title="Per-object settings"
+                    ariaLabel={`Per-object settings for ${instance.name}`}
+                    onClick={() => perObject.onEditObject(sliceObject, instance.name)}
+                  />
+                )}
+                {onObjectContextMenu && (
+                  <RowMenuButton
+                    label={`More actions for ${instance.name}`}
+                    onOpen={(position) => onObjectContextMenu(instance.key, position)}
+                  />
+                )}
+              </Stack>
+            </ListItem>
+            {/* The object's OWN geometry, as a row, for an object whose part list does not
+                describe it. BambuStudio's rule: a row per volume once there are two, none at one --
+                so this appears exactly when a part has been added beside the body. Without it the
+                body has nothing to click, and the object row was the only thing standing in for it.
+                It carries the object's name because that is the only name the body has. */}
+            {bodyRow && perObjectId != null && (
+              <ListItem
+                sx={{
+                  pl: 3,
+                  borderRadius: 'sm',
+                  bgcolor: selectedPartKeys?.includes(partMemberKey({ kind: 'body' })) ? 'neutral.softBg' : undefined,
+                  ...(objectDragging ? { opacity: 0.4 } : {})
+                }}
+              >
+                <Stack direction="row" spacing={0.75} alignItems="center" sx={{ width: '100%', minWidth: 0, opacity: printing ? 0.85 : 0.4 }}>
+                  {/* The subtype chip a baked part row leads with, on the same rule: a retyped body
+                      is a helper volume and must read as one here too, exactly as it will once a
+                      save has promoted it to a real `<part>`. */}
+                  {bodySubtype && bodySubtype !== 'normal_part' && <HelperVolumeSwatch subtype={bodySubtype} />}
+                  <Typography
+                    level="body-xs"
+                    noWrap
+                    onClick={onSelectPart ? (event: ReactMouseEvent) => {
+                      if (shouldSuppressClick()) return
+                      onSelectPart(perObjectId, { kind: 'body' },
+                        { additive: event.ctrlKey || event.metaKey, range: event.shiftKey }, instance.key)
+                    } : undefined}
+                    sx={{ flex: 1, minWidth: 0, ...(onSelectPart ? { cursor: 'pointer', userSelect: 'none' } : {}) }}
+                  >
+                    {/* The object's OWN name, with no suffix. A save promotes this body to a real
+                        `<part>` carrying exactly that name, so anything added here (it read
+                        "<name> (body)") existed pre-save and vanished post-save -- the save boundary
+                        showing through in the one place the user reads first. The duplicate text one
+                        indent apart is what BambuStudio shows too, and is what the file will say. */}
+                    {instance.name}
+                  </Typography>
+                  {/* The body's material IS the object's -- the second of the two homes a material
+                      lives in -- so this row carries the same badge every other volume row does,
+                      writing through the instance. Without it the body was the one volume row with
+                      no material control, and it grew one on the next save. */}
+                  {onReassignInstanceFilament && (
+                    <FilamentBadge
+                      filamentId={resolveId(instance.filamentId)}
+                      color={liveColor(resolveId(instance.filamentId), instance.color)}
+                      options={filamentOptions}
+                      title="Change material"
+                      onReassign={(fid) => onReassignInstanceFilament(instance.key, fid)}
+                    />
+                  )}
+                  {/* The SAME controls a baked part row carries, because a save turns this row into
+                      one: its type and its per-part settings both address ordinal 0 of the object,
+                      which is where the bake's promotion puts the body (`applyAddedParts` moves the
+                      inline mesh into component 0 and re-keys the host's own `<part>` entry onto it,
+                      BEFORE every part-scoped applier runs). Missing, they appeared out of nowhere
+                      on the next save. */}
+                  {onChangePartType && (
+                    <PartTypeMenu
+                      subtype={bodySubtype ?? 'normal_part'}
+                      partName={instance.name}
+                      onChange={(subtype) => onChangePartType(perObjectId, BODY_PART_INDEX, subtype)}
+                    />
+                  )}
+                  {perObject?.onEditPart && (() => {
+                    const bodyOverrides = perObject.partOverrideCountFor?.(perObjectId, BODY_PART_INDEX) ?? 0
+                    return (
+                      <SettingsTuneButton
+                        changedCount={bodyOverrides}
+                        title="Part settings"
+                        ariaLabel={`Part settings for ${instance.name}`}
+                        onClick={() => perObject.onEditPart!(perObjectId, BODY_PART_INDEX, instance.name)}
+                      />
+                    )
+                  })()}
+                  {onPartContextMenu && (
+                    <RowMenuButton
+                      label={`More actions for ${instance.name}`}
+                      onOpen={(position) => onPartContextMenu(perObjectId, { kind: 'body' }, position, instance.key)}
+                    />
+                  )}
+                </Stack>
+              </ListItem>
+            )}
+            {showParts && instance.parts.map((part) => {
+              // Both halves already resolved to THIS object by the list, so a selection landing on
+              // another object leaves this row's props untouched and the row does not re-render.
+              const partSelected = selectedPartKeys?.includes(partMemberKey({ kind: 'baked', partIndex: part.partIndex })) ?? false
+              // BambuStudio draws the extruder swatch for normal parts and modifiers only: a
+              // blocker/enforcer/negative volume has no material to show, so its row leads with
+              // the subtype chip instead, the same marker the session-added rows below use.
+              const partSubtype = canonicalThreeMfPartSubtype(part.subtype)
+              const helperSubtype = partSubtype === 'normal_part' ? null : partSubtype
+              const partCarriesFilament = threeMfPartSubtypeCarriesFilament(partSubtype)
+              // An unassigned part prints in the OBJECT's material, so resolve through the same
+              // inheritance the bake applies rather than letting the null fall through
+              // `resolveId`'s dangling-id fallback to the project's first material.
+              const partFilamentId = resolveId(effectivePartFilamentId(part, instance.filamentId))
+              return (
+              <ListItem
+                // Keyed by the part's own ORDINAL, not its position: an index key remounts every
+                // row of a reordered object, which makes the list flicker mid-drag.
+                key={`${instance.key}:part:${part.partIndex}`}
+                ref={(element: HTMLElement | null) => {
+                  // Registered in BOTH groups: under its own ordinal for the part drag, and under
+                  // its object for the object drag, so the object's extent covers its part rows and
+                  // the caret lands on the object's boundary rather than inside its body.
+                  if (partDragHost != null) setTileElement(partListGroup(partDragHost), part.partIndex, element)
+                  if (onReorderObject && objectHostId != null) setTileElement(OBJECT_LIST_GROUP, objectHostId, element)
+                }}
+                onContextMenu={onPartContextMenu && perObjectId != null ? (event) => {
+                  event.preventDefault()
+                  onPartContextMenu(perObjectId, { kind: 'baked', partIndex: part.partIndex }, { x: event.clientX, y: event.clientY }, instance.key)
+                } : undefined}
+                sx={{
+                  pl: 3,
+                  borderRadius: 'sm',
+                  bgcolor: partSelected ? 'neutral.softBg' : undefined,
+                  // Dimmed while its OWN row is being dragged, and while its OBJECT is: every row of
+                  // the dragged object dims (see the object row), and leaving the baked part rows
+                  // lit split the object in half visually mid-drag.
+                  ...(draggingPartIndex === part.partIndex || objectDragging
+                    ? { opacity: 0.4 }
+                    : {})
+                }}
+              >
+                <Stack direction="row" spacing={0.75} alignItems="center" sx={{ width: '100%', minWidth: 0, opacity: printing ? 0.85 : 0.4 }}>
+                  {helperSubtype && <HelperVolumeSwatch subtype={helperSubtype} />}
+                  <Typography
+                    level="body-xs"
+                    noWrap
+                    // The name is the drag handle here too; the row's swatch, type menu, settings
+                    // button and kebab keep their own pointer behaviour.
+                    onPointerDown={partDragHost != null
+                      ? (event) => handleTilePointerDown(partListGroup(partDragHost), part.partIndex, event)
+                      : undefined}
+                    onClick={onSelectPart && perObjectId != null ? (event) => {
+                      if (shouldSuppressClick()) return
+                      onSelectPart(perObjectId, { kind: 'baked', partIndex: part.partIndex },
+                        { additive: event.ctrlKey || event.metaKey, range: event.shiftKey }, instance.key)
+                    } : undefined}
+                    sx={{
+                      flex: 1,
+                      minWidth: 0,
+                      ...(onSelectPart && perObjectId != null ? { cursor: 'pointer', userSelect: 'none' } : {}),
+                      ...(partDragHost != null ? { touchAction: 'none' } : {})
+                    }}
+                  >
+                    {part.name ?? `Part ${part.partIndex + 1}`}
+                  </Typography>
+                  {partCarriesFilament && (
+                    <FilamentBadge
+                      filamentId={partFilamentId}
+                      color={liveColor(partFilamentId, part.color)}
+                      options={filamentOptions}
+                      title={helperSubtype ? 'Material printed inside this modifier' : undefined}
+                      onReassign={onReassignFilament && perObjectId != null ? (fid) => onReassignFilament([{ objectId: perObjectId, partIndex: part.partIndex }], fid) : undefined}
+                    />
+                  )}
+                  {onChangePartType && perObjectId != null && (
+                    <PartTypeMenu
+                      subtype={partSubtype}
+                      partName={part.name ?? `Part ${part.partIndex + 1}`}
+                      onChange={(subtype) => onChangePartType(perObjectId, part.partIndex, subtype)}
+                    />
+                  )}
+                  {perObject?.onEditPart && perObjectId != null && (() => {
+                    const partOverrides = perObject!.partOverrideCountFor?.(perObjectId, part.partIndex) ?? 0
+                    return (
+                      // Addressed by the object's own editor-side id, NOT by `sliceObject`: that is
+                      // membership of the BAKED slice index, which is trap #3 of the no-save rule in
+                      // this plugin'the s development notes, and the session-added row beside it never consulted
+                      // it -- so an object outside that set lost its baked parts' settings buttons
+                      // while keeping them on its volumes. The dialog resolves the owner by host id
+                      // either way, so the set was never load-bearing here.
+                      <SettingsTuneButton
+                        changedCount={partOverrides}
+                        title="Part settings"
+                        ariaLabel={`Part settings for ${part.name ?? `Part ${part.partIndex + 1}`}`}
+                        onClick={() => perObject!.onEditPart!(perObjectId, part.partIndex, part.name ?? `Part ${part.partIndex + 1}`)}
+                      />
+                    )
+                  })()}
+                  {onPartContextMenu && perObjectId != null && (
+                    <RowMenuButton
+                      label={`More actions for ${part.name ?? `Part ${part.partIndex + 1}`}`}
+                      onOpen={(position) => onPartContextMenu(perObjectId, { kind: 'baked', partIndex: part.partIndex }, position, instance.key)}
+                    />
+                  )}
+                </Stack>
+              </ListItem>
+              )
+            })}
+            {addedParts.map((part) => {
+              // Canonicalised first, exactly as the baked row does: the raw subtype spelling varies
+              // between writers, so comparing a raw one to the enum is what the shared codec exists
+              // to stop. Volumes are minted with canonical subtypes today, so this is latent -- but
+              // it is the same row in the same list and must not read its type by a different rule.
+              const addedSubtype = canonicalThreeMfPartSubtype(part.subtype)
+              const addedHelperSubtype = addedSubtype === 'normal_part' ? null : addedSubtype
+              return (
+              // Part volumes added THIS session (support blocker/enforcer, modifier, negative):
+              // they only become real `<component>` parts at save time, so list them from the
+              // session state, otherwise a freshly added blocker is invisible here until a
+              // save + reopen. Clicking hands the part the transform gizmo.
+              <ListItem
+                key={part.key}
+                onContextMenu={onAddedPartContextMenu && perObjectId != null ? (event) => {
+                  event.preventDefault()
+                  onAddedPartContextMenu(perObjectId, part.key, { x: event.clientX, y: event.clientY }, instance.key)
+                } : undefined}
+                // Part of the OBJECT's extent, like the base part rows above: an object's rows must
+                // be one contiguous run or the drop caret is drawn inside its own body.
+                ref={onReorderObject && objectHostId != null
+                  ? (element: HTMLElement | null) => setTileElement(OBJECT_LIST_GROUP, objectHostId, element)
+                  : undefined}
+                sx={{
+                  pl: 3,
+                  borderRadius: 'sm',
+                  bgcolor: selectedPartKeys?.includes(partMemberKey({ kind: 'added', key: part.key }))
+                    ? 'neutral.softBg'
+                    : undefined,
+                  ...(objectDragging ? { opacity: 0.4 } : {})
+                }}
+              >
+                <Stack direction="row" spacing={0.75} alignItems="center" sx={{ width: '100%', minWidth: 0, opacity: printing ? 0.85 : 0.4 }}>
+                  {addedHelperSubtype && <HelperVolumeSwatch subtype={addedHelperSubtype} />}
+                  <Typography
+                    level="body-xs"
+                    noWrap
+                    // Ctrl and Shift read here for the first time: this row used to call a handler
+                    // that took no modifiers, so a volume could not join a multi-part selection at
+                    // all. It is the same handler the baked part rows above call.
+                    onClick={onSelectAddedPart && perObjectId != null ? (event: ReactMouseEvent) => {
+                      if (shouldSuppressClick()) return
+                      onSelectAddedPart(perObjectId, part.key,
+                        { additive: event.ctrlKey || event.metaKey, range: event.shiftKey }, instance.key)
+                    } : undefined}
+                    sx={{ flex: 1, minWidth: 0, ...(onSelectAddedPart && perObjectId != null ? { cursor: 'pointer', userSelect: 'none' } : {}) }}
+                  >
+                    {part.name}
+                  </Typography>
+                  {threeMfPartSubtypeCarriesFilament(addedSubtype) && (
+                    <FilamentBadge
+                      filamentId={resolveId(effectivePartFilamentId(part, instance.filamentId))}
+                      color={liveColor(resolveId(effectivePartFilamentId(part, instance.filamentId)), null)}
+                      options={filamentOptions}
+                      title={addedSubtype === 'modifier_part' ? 'Material printed inside this modifier' : undefined}
+                      onReassign={onChangeAddedPartFilament ? (fid) => onChangeAddedPartFilament([part.key], fid) : undefined}
+                    />
+                  )}
+                  {onChangeAddedPartType && (
+                    <PartTypeMenu
+                      subtype={addedSubtype}
+                      partName={part.name}
+                      onChange={(subtype) => onChangeAddedPartType([part.key], subtype)}
+                    />
+                  )}
+                  {onEditAddedPartSettings && perObjectId != null && (
+                    // The SAME control the baked part rows use. This row used to swap the button's
+                    // variant and colour instead of showing the count, so one list had two visual
+                    // languages for "this has overrides" and a volume never said how many.
+                    <SettingsTuneButton
+                      changedCount={Object.keys(part.settings ?? {}).length}
+                      title="Part settings"
+                      ariaLabel={`Part settings for ${part.name}`}
+                      onClick={() => onEditAddedPartSettings(perObjectId, part.key)}
+                    />
+                  )}
+                  {onAddedPartContextMenu && perObjectId != null && (
+                    <RowMenuButton
+                      label={`More actions for ${part.name}`}
+                      onOpen={(position) => onAddedPartContextMenu(perObjectId, part.key, position, instance.key)}
+                    />
+                  )}
+                </Stack>
+              </ListItem>
+              )
+            })}
+          </Fragment>
+        )
+})
+
 export const ObjectList = memo(function ObjectList({
   instances,
   selectedKey,
   extraSelectedKeys,
   partSelection,
-  selectedBakedPart,
+  gizmoPart,
   onSelect,
   onSelectPart,
   linkedCopyCountFor,
@@ -1317,37 +1982,39 @@ export const ObjectList = memo(function ObjectList({
   onTogglePrintable,
   onChangePartType,
   addedPartsFor,
-  selectedAddedPartKey,
+  bodySubtypeFor,
   onSelectAddedPart,
   onChangeAddedPartType,
   onChangeAddedPartFilament,
-  onRemoveAddedPart,
   onEditAddedPartSettings,
-  perObject
+  onAddedPartContextMenu,
+  perObject,
+  onReorderObject,
+  onReorderPart
 }: {
   instances: EditorInstance[]
   selectedKey: string | null
   /** Additional multi-selected instance keys (Ctrl/Cmd-click). */
   extraSelectedKeys?: ReadonlyArray<string>
   /** Selected PARTS of one object (mutually exclusive with the object selection). */
-  partSelection?: { objectId: number; partIndexes: ReadonlyArray<number> } | null
+  partSelection?: PartSelection | null
   /** The baked part currently holding the transform gizmo (row highlight). */
-  selectedBakedPart?: { objectId: number; partIndex: number } | null
+  gizmoPart?: PartRef | null
   onSelect: (key: string, modifiers?: { additive?: boolean; range?: boolean }) => void
   /**
    * Select a part row: plain click hands the part the gizmo (move/rotate/scale);
    * Ctrl-toggle / Shift-range build the bulk selection (BambuStudio volume-mode rules).
    */
-  onSelectPart?: (objectId: number, partIndex: number, modifiers: { additive: boolean; range: boolean }, instanceKey: string) => void
+  onSelectPart?: (objectId: number, member: PartMember, modifiers: { additive: boolean; range: boolean }, instanceKey: string) => void
   /**
    * How many placed instances share this one's object. >1 shows the linked-copy badge, which is
    * the only place the editor tells the user that editing this object also edits its copies.
    */
   linkedCopyCountFor?: (instanceKey: string) => number
   /** Right-click on an object row: open the object context menu at the pointer. */
-  onObjectContextMenu?: (key: string, position: { x: number; y: number }) => void
+  onObjectContextMenu?: (key: string, position: ContextMenuAnchor) => void
   /** Right-click on a part row: open the part context menu at the pointer. */
-  onPartContextMenu?: (objectId: number, partIndex: number, position: { x: number; y: number }) => void
+  onPartContextMenu?: (objectId: number, member: PartMember, position: ContextMenuAnchor, instanceKey: string) => void
   filamentColors?: Record<number, string>
   filamentOptions?: FilamentOption[]
   onReassignFilament?: (targets: Array<{ objectId: number; partIndex: number }>, filamentId: number) => void
@@ -1364,263 +2031,160 @@ export const ObjectList = memo(function ObjectList({
   /** Change a part's Bambu volume type (BambuStudio's "Change type"), keyed like part filament. */
   onChangePartType?: (objectId: number, partIndex: number, subtype: SceneEditPartSubtype) => void
   /** Part volumes ADDED this session (blockers/enforcers/modifiers/negatives) for an instance's object. */
-  addedPartsFor?: (instance: EditorInstance) => EditorAddedPart[]
+  addedPartsFor?: (instance: EditorInstance) => readonly EditorAddedPart[]
+  /**
+   * The subtype an object's BODY row shows. Read through a callback like `addedPartsFor` because it
+   * lives in session state rather than on the instance, and must stay a STABLE reference: this list
+   * is memoised and an inline arrow re-renders every row.
+   */
+  bodySubtypeFor?: (instance: EditorInstance) => SceneEditPartSubtype
   /** The added part currently holding the transform gizmo (row highlight). */
-  selectedAddedPartKey?: string | null
   /** Select an added part row: selects the instance and hands the part the gizmo. */
-  onSelectAddedPart?: (instanceKey: string, partKey: string) => void
-  onChangeAddedPartType?: (partKey: string, subtype: SceneEditPartSubtype) => void
+  onSelectAddedPart?: (objectId: number, partKey: string, modifiers: { additive: boolean; range: boolean }, instanceKey: string) => void
+  onChangeAddedPartType?: (partKeys: ReadonlyArray<string>, subtype: SceneEditPartSubtype) => void
   /** Reassign an added part's material. Only offered for subtypes that carry one. */
-  onChangeAddedPartFilament?: (partKey: string, filamentId: number) => void
-  onRemoveAddedPart?: (partKey: string) => void
+  onChangeAddedPartFilament?: (partKeys: ReadonlyArray<string>, filamentId: number) => void
   /** Open per-volume process settings for a modifier part (needs slice settings). */
-  onEditAddedPartSettings?: (partKey: string) => void
+  onEditAddedPartSettings?: (objectId: number, partKey: string) => void
+  /** Right-click a session-added volume: same actions as a baked part, keyed by the part's key. */
+  onAddedPartContextMenu?: (objectId: number, partKey: string, position: ContextMenuAnchor, instanceKey: string) => void
   /** Slice-config per-object process overrides (keyed by Bambu objectId). Null without a profile. */
   perObject?: ObjectListPerObject
+  /**
+   * Move `hostId`'s object to sit immediately before `beforeHostId`, or last when that is null.
+   *
+   * Reported as a pair of `addedPartHostId`s, the same identity every per-object and per-part
+   * callback here uses, rather than as positions: this list renders only the instances whose
+   * geometry is ready, so its positions are a subset of the plate's while a project loads. Absent
+   * on a host that does not support reordering.
+   */
+  onReorderObject?: (hostId: number, beforeHostId: number | null) => void
+  /**
+   * Move the part at BASE ordinal `partIndex` inside `hostId`'s object to sit immediately before
+   * `beforePartIndex`, or last when that is null. Ordinals, never row positions, matching every
+   * other part-scoped callback here. Absent on a host that does not support reordering.
+   */
+  onReorderPart?: (hostId: number, partIndex: number, beforePartIndex: number | null) => void
 }) {
-  const resolveId = resolveFilamentId ?? ((id: number | null) => id)
-  const liveColor = (filamentId: number | null, fallback: string | null): string | null =>
-    (filamentId != null && filamentColors?.[filamentId]) || fallback || null
+  /**
+   * The drag groups, plus what each part group hosts.
+   *
+   * The object group's item indices are HOST IDS, not positions: they are what the drop reports, so
+   * `insertAt` reads the anchor straight out of `itemIndices` with no second list to keep in step.
+   * A part group is scoped to the ROW its parts render under, not to the object, because a linked
+   * copy renders the same object's parts a second time; the drop reaches the object either way,
+   * since part order is geometry-level.
+   */
+  const { dragGroups, partGroupHosts } = useMemo(() => {
+    const objectIds: number[] = []
+    const seen = new Set<number>()
+    for (const instance of instances) {
+      const hostId = addedPartHostId(instance)
+      if (hostId == null || seen.has(hostId)) continue
+      seen.add(hostId)
+      objectIds.push(hostId)
+    }
+    const groups: ListReorderGroup[] = [{ key: OBJECT_LIST_GROUP, itemIndices: objectIds }]
+    const hosts = new Map<string, number>()
+    if (onReorderPart) {
+      for (const instance of instances) {
+        const hostId = addedPartHostId(instance)
+        if (hostId == null || instance.parts.length < 2) continue
+        const key = partListGroup(instance.key)
+        hosts.set(key, hostId)
+        groups.push({ key, itemIndices: instance.parts.map((part) => part.partIndex) })
+      }
+    }
+    return { dragGroups: groups, partGroupHosts: hosts }
+  }, [instances, onReorderPart])
+  const { drag, setContainerElement, setCaretElement, setTileElement, handleTilePointerDown, shouldSuppressClick } = useListReorderDrag({
+    vertical: true,
+    groups: dragGroups,
+    onDrop: (group, from, insertAt, before) => {
+      // The hook resolves the insertion GAP to the item currently at it (null past the end), so
+      // both movers get "put this one before that one". Naming the anchor rather than counting to
+      // it is what makes the drag direction irrelevant: the moved entry vacating its own slot
+      // cannot shift an anchor identified by id.
+      if (group === OBJECT_LIST_GROUP) {
+        onReorderObject?.(from, before)
+        return
+      }
+      const hostId = partGroupHosts.get(group)
+      if (hostId != null) onReorderPart?.(hostId, from, before)
+    }
+  })
+  // The selected parts as member keys, computed ONCE for the whole list rather than per row: the
+  // rows are memoised on a shallow prop compare, so a fresh array per row would fail that compare
+  // for every object on the plate. Falls back to the single gizmo'd part, which highlights its row
+  // exactly as a member of a bulk set does.
+  const selectedPartsObjectId = partSelection?.objectId ?? gizmoPart?.objectId ?? null
+  const selectedPartKeys = useMemo(
+    () => (partSelection?.members ?? (gizmoPart ? [gizmoPart.member] : [])).map(partMemberKey),
+    [partSelection, gizmoPart]
+  )
   return (
-    <List size="sm" sx={{ '--ListItem-minHeight': '2.5rem' }}>
+    <List
+      size="sm"
+      // Either drag needs the container: `measure` returns null without it, which would leave a
+      // host that supplies only one of the two callbacks with a silently dead drag.
+      ref={onReorderObject || onReorderPart ? setContainerElement : undefined}
+      sx={{ '--ListItem-minHeight': '2.5rem', position: 'relative' }}
+    >
       {instances.map((instance) => {
-        // The object identity used for per-object settings AND per-part filament reassignment:
-        // an in-project object's Bambu id, or an import's stable identity (synthetic for a fresh
-        // import, the replaced object's id for "Replace with…"), so a not-yet-saved import's
-        // parts are reassignable and its process is editable without a save first.
+        const objectHostId = addedPartHostId(instance)
         const perObjectId = instance.source.kind === 'object'
           ? instance.objectId
           : (instance.source.replacedObjectId ?? null)
-        const sliceObject = perObjectId != null && perObject?.sliceObjectIds.has(perObjectId) ? perObjectId : null
-        // Printability is an editor-owned per-instance flag (BambuStudio's "Printable"),
-        // so the toggle shows for every object on the plate, including just-moved ones,
-        // independent of the slice dialog's per-plate object selection.
-        const printing = instance.printable
-        const overrideCount = sliceObject != null ? perObject!.overrideCountFor(sliceObject) : 0
-        // Objects can hold multiple parts, each on its own filament: list them nested.
-        const showParts = instance.parts.length > 1
-        // The object-level badge summarises its PRINTED parts: one material when they agree (show
-        // it like any single-material row), otherwise the indeterminate mixed swatch. Single-part
-        // objects fall back to the instance's own filament. Helper volumes are excluded from both
-        // the summary and the reassignment behind it: see printedParts().
-        const materialParts = printedParts(instance)
-        const partMaterial = summarizeInstanceMaterial(instance, resolveId, liveColor)
+        const addedParts = addedPartsFor?.(instance) ?? NO_ADDED_PART_ROWS
+        const partDragHost = onReorderPart && instance.parts.length > 1 && objectHostId != null ? instance.key : null
+        // Resolve selection and drag to THIS row here, so the memo sees stable props for every row
+        // the change does not touch. Passing the editor's own selection down instead re-renders all
+        // of them, which is the cost this exists to remove.
         return (
-          <Fragment key={instance.key}>
-            <ListItem
-              onContextMenu={onObjectContextMenu ? (event) => {
-                event.preventDefault()
-                onObjectContextMenu(instance.key, { x: event.clientX, y: event.clientY })
-              } : undefined}
-              sx={{ borderRadius: 'sm', bgcolor: instance.key === selectedKey ? 'neutral.softBg' : extraSelectedKeys?.includes(instance.key) ? 'neutral.plainActiveBg' : undefined }}
-            >
-              <Stack direction="row" spacing={0.5} alignItems="center" sx={{ width: '100%', minWidth: 0 }}>
-                <Tooltip title={printing ? 'Printable, toggle to skip' : 'Skipped, toggle to print'} variant="soft">
-                  <Switch
-                    size="sm"
-                    checked={printing}
-                    onChange={() => onTogglePrintable(instance.key)}
-                    slotProps={{ input: { 'aria-label': `Print ${instance.name}` } }}
-                    sx={{ flexShrink: 0 }}
-                  />
-                </Tooltip>
-                <Typography
-                  level="body-sm"
-                  noWrap
-                  onClick={(event) => onSelect(instance.key, { additive: event.ctrlKey || event.metaKey, range: event.shiftKey })}
-                  // userSelect off so a Shift-range click extends the selection instead of
-                  // highlighting the row names as text.
-                  sx={{ flex: 1, minWidth: 0, cursor: 'pointer', userSelect: 'none', opacity: printing ? 1 : 0.5 }}
-                >
-                  {instance.name}
-                </Typography>
-                {linkedCopyCountFor && linkedCopyCountFor(instance.key) > 1 && (
-                  // Linkage is otherwise invisible: users discover it by editing one copy and
-                  // watching another change. BambuStudio has the same ambiguity; we name it.
-                  <Tooltip title={`Linked copy: ${linkedCopyCountFor(instance.key)} instances share this object's parts, materials, paint and settings. Right-click to make one independent.`}>
-                    <Chip size="sm" variant="soft" color="neutral" sx={{ flexShrink: 0 }}>
-                      x{linkedCopyCountFor(instance.key)}
-                    </Chip>
-                  </Tooltip>
-                )}
-                {/*
-                  * An object row's material is changeable whenever the row HAS one, which is not the
-                  * same as having parts. A model with no parts list -- a primitive, a single-solid
-                  * import, a single-mesh object in a saved project -- keeps its material on the
-                  * instance, so gating this on `materialParts.length > 0` (as it did) dropped the
-                  * picker for exactly those and left a swatch that read as informational rather than
-                  * broken. `onReassignInstanceFilament` handles both shapes; see its own doc.
-                  */}
-                {onReassignInstanceFilament && !showParts ? (
-                  <FilamentBadge
-                    filamentId={materialParts.length > 0 ? partMaterial.uniformId : resolveId(instance.filamentId)}
-                    color={materialParts.length > 0
-                      ? (partMaterial.uniformId != null ? liveColor(partMaterial.uniformId, partMaterial.uniformColor) : null)
-                      : liveColor(resolveId(instance.filamentId), instance.color)}
-                    mixedColors={partMaterial.mixedColors}
-                    options={filamentOptions}
-                    title="Change material"
-                    onReassign={(fid) => onReassignInstanceFilament(instance.key, fid)}
-                  />
-                ) : onReassignInstanceFilament && materialParts.length > 0 ? (
-                  <FilamentBadge
-                    filamentId={partMaterial.uniformId}
-                    color={partMaterial.uniformId != null ? liveColor(partMaterial.uniformId, partMaterial.uniformColor) : null}
-                    mixedColors={partMaterial.mixedColors}
-                    options={filamentOptions}
-                    title={partMaterial.mixedColors ? "Mixed materials: set all parts' material" : "Set all parts' material"}
-                    onReassign={(fid) => onReassignInstanceFilament(instance.key, fid)}
-                  />
-                ) : (!showParts && <FilamentBadge filamentId={resolveId(instance.filamentId)} color={liveColor(resolveId(instance.filamentId), instance.color)} options={filamentOptions} />)}
-                {perObject && sliceObject != null && (
-                  <SettingsTuneButton
-                    changedCount={overrideCount}
-                    title="Per-object settings"
-                    ariaLabel={`Per-object settings for ${instance.name}`}
-                    onClick={() => perObject.onEditObject(sliceObject, instance.name)}
-                  />
-                )}
-              </Stack>
-            </ListItem>
-            {showParts && instance.parts.map((part, index) => {
-              const partSelected = perObjectId != null
-                && ((partSelection?.objectId === perObjectId
-                  && partSelection.partIndexes.includes(part.partIndex))
-                  || (selectedBakedPart?.objectId === perObjectId
-                    && selectedBakedPart.partIndex === part.partIndex))
-              // BambuStudio draws the extruder swatch for normal parts and modifiers only: a
-              // blocker/enforcer/negative volume has no material to show, so its row leads with
-              // the subtype chip instead, the same marker the session-added rows below use.
-              const partSubtype = canonicalThreeMfPartSubtype(part.subtype)
-              const helperSubtype = partSubtype === 'normal_part' ? null : partSubtype
-              const partCarriesFilament = threeMfPartSubtypeCarriesFilament(part.subtype)
-              // An unassigned part prints in the OBJECT's material, so resolve through the same
-              // inheritance the bake applies rather than letting the null fall through
-              // `resolveId`'s dangling-id fallback to the project's first material.
-              const partFilamentId = resolveId(effectivePartFilamentId(part, instance.filamentId))
-              return (
-              <ListItem
-                key={`${instance.key}:${index}`}
-                onContextMenu={onPartContextMenu && perObjectId != null ? (event) => {
-                  event.preventDefault()
-                  onPartContextMenu(perObjectId, part.partIndex, { x: event.clientX, y: event.clientY })
-                } : undefined}
-                sx={{ pl: 3, borderRadius: 'sm', bgcolor: partSelected ? 'neutral.softBg' : undefined }}
-              >
-                <Stack direction="row" spacing={0.75} alignItems="center" sx={{ width: '100%', minWidth: 0, opacity: printing ? 0.85 : 0.4 }}>
-                  {helperSubtype && <HelperVolumeSwatch subtype={helperSubtype} />}
-                  <Typography
-                    level="body-xs"
-                    noWrap
-                    onClick={onSelectPart && perObjectId != null ? (event) => {
-                      onSelectPart(perObjectId, part.partIndex, { additive: event.ctrlKey || event.metaKey, range: event.shiftKey }, instance.key)
-                    } : undefined}
-                    sx={{
-                      flex: 1,
-                      minWidth: 0,
-                      ...(onSelectPart && perObjectId != null ? { cursor: 'pointer', userSelect: 'none' } : {})
-                    }}
-                  >
-                    {part.name ?? `Part ${index + 1}`}
-                  </Typography>
-                  {partCarriesFilament && (
-                    <FilamentBadge
-                      filamentId={partFilamentId}
-                      color={liveColor(partFilamentId, part.color)}
-                      options={filamentOptions}
-                      title={helperSubtype ? 'Material printed inside this modifier' : undefined}
-                      onReassign={onReassignFilament && perObjectId != null ? (fid) => onReassignFilament([{ objectId: perObjectId, partIndex: part.partIndex }], fid) : undefined}
-                    />
-                  )}
-                  {onChangePartType && perObjectId != null && (
-                    <PartTypeMenu
-                      subtype={part.subtype}
-                      partName={part.name ?? `Part ${index + 1}`}
-                      onChange={(subtype) => onChangePartType(perObjectId, part.partIndex, subtype)}
-                    />
-                  )}
-                  {perObject?.onEditPart && sliceObject != null && (() => {
-                    const partOverrides = perObject!.partOverrideCountFor?.(sliceObject, part.partIndex) ?? 0
-                    return (
-                      <SettingsTuneButton
-                        changedCount={partOverrides}
-                        title="Per-part settings"
-                        ariaLabel={`Per-part settings for ${part.name ?? `Part ${index + 1}`}`}
-                        onClick={() => perObject!.onEditPart!(sliceObject, part.partIndex, part.name ?? `Part ${index + 1}`)}
-                      />
-                    )
-                  })()}
-                </Stack>
-              </ListItem>
-              )
-            })}
-            {(addedPartsFor?.(instance) ?? []).map((part) => (
-              // Part volumes added THIS session (support blocker/enforcer, modifier, negative):
-              // they only become real `<component>` parts at save time, so list them from the
-              // session state, otherwise a freshly added blocker is invisible here until a
-              // save + reopen. Clicking hands the part the transform gizmo.
-              <ListItem
-                key={part.key}
-                sx={{ pl: 3, borderRadius: 'sm', bgcolor: part.key === selectedAddedPartKey ? 'neutral.softBg' : undefined }}
-              >
-                <Stack direction="row" spacing={0.75} alignItems="center" sx={{ width: '100%', minWidth: 0, opacity: printing ? 0.85 : 0.4 }}>
-                  {part.subtype !== 'normal_part' && <HelperVolumeSwatch subtype={part.subtype} />}
-                  <Typography
-                    level="body-xs"
-                    noWrap
-                    onClick={onSelectAddedPart ? () => onSelectAddedPart(instance.key, part.key) : undefined}
-                    sx={{ flex: 1, minWidth: 0, ...(onSelectAddedPart ? { cursor: 'pointer', userSelect: 'none' } : {}) }}
-                  >
-                    {part.name}
-                  </Typography>
-                  {threeMfPartSubtypeCarriesFilament(part.subtype) && (
-                    <FilamentBadge
-                      filamentId={resolveId(effectivePartFilamentId(part, instance.filamentId))}
-                      color={liveColor(resolveId(effectivePartFilamentId(part, instance.filamentId)), null)}
-                      options={filamentOptions}
-                      title={part.subtype === 'modifier_part' ? 'Material printed inside this modifier' : undefined}
-                      onReassign={onChangeAddedPartFilament ? (fid) => onChangeAddedPartFilament(part.key, fid) : undefined}
-                    />
-                  )}
-                  {onChangeAddedPartType && (
-                    <PartTypeMenu
-                      subtype={part.subtype}
-                      partName={part.name}
-                      onChange={(subtype) => onChangeAddedPartType(part.key, subtype)}
-                    />
-                  )}
-                  {part.subtype === 'modifier_part' && onEditAddedPartSettings && (
-                    <Tooltip title="Modifier settings">
-                      <IconButton
-                        size="sm"
-                        variant={Object.keys(part.settings ?? {}).length > 0 ? 'soft' : 'plain'}
-                        color={Object.keys(part.settings ?? {}).length > 0 ? 'primary' : 'neutral'}
-                        onClick={() => onEditAddedPartSettings(part.key)}
-                        aria-label={`Modifier settings for ${part.name}`}
-                      >
-                        <TuneRoundedIcon fontSize="small" />
-                      </IconButton>
-                    </Tooltip>
-                  )}
-                  {onRemoveAddedPart && (
-                    <Tooltip title="Remove part">
-                      <IconButton
-                        size="sm"
-                        variant="plain"
-                        color="danger"
-                        onClick={() => onRemoveAddedPart(part.key)}
-                        aria-label={`Remove ${part.name}`}
-                      >
-                        <DeleteRoundedIcon fontSize="small" />
-                      </IconButton>
-                    </Tooltip>
-                  )}
-                </Stack>
-              </ListItem>
-            ))}
-          </Fragment>
+          <ObjectListRow
+            key={instance.key}
+            instance={instance}
+            // A part of this object holding the gizmo does NOT make the object row look selected.
+            // The object genuinely stays selected underneath -- the tool rail goes inert without it,
+            // which is why the part path keeps `selectedKey` -- but showing both highlighted read as
+            // "the parent is always selected" and made a part impossible to pick out on its own.
+            primarySelected={instance.key === selectedKey
+              && !(perObjectId != null && perObjectId === selectedPartsObjectId && selectedPartKeys.length > 0)}
+            extraSelected={extraSelectedKeys?.includes(instance.key) ?? false}
+            selectedPartKeys={perObjectId != null && perObjectId === selectedPartsObjectId ? selectedPartKeys : null}
+            bodyRow={instanceVolumeRows(instance, addedParts.length).showBodyRow}
+            bodySubtype={bodySubtypeFor?.(instance) ?? null}
+            addedParts={addedParts}
+            addedPartsSignature={addedPartsSignature(addedParts)}
+            objectDragging={drag?.group === OBJECT_LIST_GROUP && drag.itemIndex === objectHostId}
+            draggingPartIndex={partDragHost != null && drag?.group === partListGroup(partDragHost) ? drag.itemIndex : null}
+            perObject={perObject}
+            filamentColors={filamentColors}
+            resolveFilamentId={resolveFilamentId}
+            filamentOptions={filamentOptions}
+            linkedCopyCountFor={linkedCopyCountFor}
+            onSelect={onSelect}
+            onSelectPart={onSelectPart}
+            onObjectContextMenu={onObjectContextMenu}
+            onPartContextMenu={onPartContextMenu}
+            onReassignFilament={onReassignFilament}
+            onReassignInstanceFilament={onReassignInstanceFilament}
+            onTogglePrintable={onTogglePrintable}
+            onChangePartType={onChangePartType}
+            onSelectAddedPart={onSelectAddedPart}
+            onChangeAddedPartType={onChangeAddedPartType}
+            onChangeAddedPartFilament={onChangeAddedPartFilament}
+            onEditAddedPartSettings={onEditAddedPartSettings}
+            onAddedPartContextMenu={onAddedPartContextMenu}
+            onReorderObject={onReorderObject}
+            onReorderPart={onReorderPart}
+            setTileElement={setTileElement}
+            handleTilePointerDown={handleTilePointerDown}
+            shouldSuppressClick={shouldSuppressClick}
+          />
         )
       })}
+      <ListReorderCaret setCaretElement={setCaretElement} />
     </List>
   )
 })

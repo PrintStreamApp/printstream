@@ -591,24 +591,41 @@ export function parseRootModelComponents(xml: string): Map<number, ThreeMfRootCo
 export const BRIM_EAR_POINTS_ENTRY = 'Metadata/brim_ear_points.txt'
 
 /**
- * Root model object ids in document order. BambuStudio's importer creates one
- * ModelObject per root `<object>` resource in this order, and several sidecar files
- * (brim ears, layer-height profiles) reference objects by that 1-based ordinal.
+ * The placed root objects in BambuStudio's own list order: the order each object is FIRST
+ * referenced by a `<build><item>`, which is the 1-based ordinal space every object-positional
+ * sidecar uses (`brim_ear_points.txt`, `layer_config_ranges.xml`, `layer_heights_profile.txt`,
+ * `cut_information.xml`) and the order its object list displays.
+ *
+ * **It is build order, NOT `<object>` resource order.** The importer parks every `<object>`
+ * resource in a MAP (`m_current_objects`) and creates the `ModelObject` only when a build item
+ * names it -- `_create_object_instance` takes `object_index = m_model->objects.size()` before
+ * `add_object()` (`bbs_3mf.cpp:4361`), and a later item for the same id only adds an instance.
+ * The sidecars are then resolved by `object.second + 1`, i.e. that index (`bbs_3mf.cpp:2206-2215`),
+ * and `ObjectList::reload_all_plates` walks the same vector. Resource order reaches none of it.
+ *
+ * The two coincide in a file BambuStudio just wrote, because its exporter emits resources, ids and
+ * build items in one walk over `model.objects` -- which is why reading resource order looked right
+ * for so long. They diverge as soon as a session reorders, and real projects carry the divergence:
+ * measured on a 137-object customer project, resource order put the brim ear on "Side gear peg"
+ * while BambuStudio put it on "Cam 1", confirmed by round-tripping the file through the 2.7.1 CLI.
+ *
+ * An item naming an id with no root `<object>` resource is skipped, mirroring the importer, which
+ * fails that lookup and refuses the file rather than creating an object.
  */
 export function parseRootModelObjectIdOrder(xml: string): number[] {
-  // Brim-ear ordinals are over the PLACED root objects (those with a build <item>), in document
-  // order, NOT every <object>. A multi-solid import injects component mesh objects that aren't
-  // build-placed; counting them would shift the ordinal and map ears to the wrong object.
-  const buildItemIds = new Set<number>()
+  const resourceIds = new Set<number>()
+  for (const match of xml.matchAll(/<object\b([^>]*)>/g)) {
+    const id = Number.parseInt(parseAttrs(match[1] ?? '').id ?? '', 10)
+    if (Number.isInteger(id) && id > 0) resourceIds.add(id)
+  }
+  const ids: number[] = []
+  const seen = new Set<number>()
   const buildBlock = xml.match(/<build\b[^>]*>[\s\S]*?<\/build>/)?.[0] ?? ''
   for (const item of buildBlock.matchAll(/<item\b([^>]*?)\/?>/g)) {
     const id = Number.parseInt(parseAttrs(item[1] ?? '').objectid ?? '', 10)
-    if (Number.isInteger(id) && id > 0) buildItemIds.add(id)
-  }
-  const ids: number[] = []
-  for (const match of xml.matchAll(/<object\b([^>]*)>/g)) {
-    const id = Number.parseInt(parseAttrs(match[1] ?? '').id ?? '', 10)
-    if (Number.isInteger(id) && id > 0 && buildItemIds.has(id)) ids.push(id)
+    if (!Number.isInteger(id) || id <= 0 || seen.has(id) || !resourceIds.has(id)) continue
+    seen.add(id)
+    ids.push(id)
   }
   return ids
 }

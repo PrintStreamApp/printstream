@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { installJsdomGlobals } from '../../test-utils/jsdom'
+import type { GizmoMode } from './editorGeometry'
 
 installJsdomGlobals()
 
@@ -27,17 +28,18 @@ function makeInput(overrides: Record<string, unknown> = {}) {
   const input = {
     enabledRef: ref(true),
     selectedKeyRef: ref<string | null>(object.key),
+    partSelectedRef: ref(false),
     activePlateRef: ref(plate),
     selectionKeysRef: ref([object.key]),
     onDuplicate: spy('duplicate'),
     onCloneWithCount: spy('cloneWithCount'),
     onDelete: spy('delete'),
     onSelectAll: spy('selectAll'),
-    onClearSelection: spy('clear'),
     onPasteInstances: spy('paste'),
     undoRef: ref(spy('undo')),
     redoRef: ref(spy('redo')),
     setGizmoModeRef: ref(spy('gizmo')),
+    gizmoModeRef: ref<GizmoMode>('select'),
     ...overrides
   }
   return { input, calls }
@@ -59,6 +61,31 @@ test('Delete deletes the selection; Ctrl+Z/Shift undo and redo', () => {
   press('z', { ctrlKey: true, shiftKey: true })
   assert.equal(calls.undo?.length, 1)
   assert.equal(calls.redo?.length, 1)
+})
+
+test('Delete fires over a PART selection, which nulls the object key', () => {
+  // The bulk part path clears `selectedKey` on purpose (object and part selection are different
+  // modes and never coexist), so gating Delete on the object key alone made the key do nothing over
+  // a visible multi-part selection: the handler was reached only when an object was also selected.
+  const { input, calls } = makeInput({
+    selectedKeyRef: ref<string | null>(null),
+    partSelectedRef: ref(true)
+  })
+  renderHook(() => useEditorKeyboardShortcuts(input))
+  press('Delete')
+  assert.equal(calls.delete?.length, 1, 'Delete did nothing over a part selection')
+  // The key is null: only the caller knows which parts are selected, and it reads them itself.
+  assert.deepEqual(calls.delete?.[0], [null])
+})
+
+test('with nothing selected at all, Delete stays inert', () => {
+  const { input, calls } = makeInput({
+    selectedKeyRef: ref<string | null>(null),
+    partSelectedRef: ref(false)
+  })
+  renderHook(() => useEditorKeyboardShortcuts(input))
+  press('Delete')
+  assert.equal(calls.delete, undefined)
 })
 
 test('cut then paste works even after the selection is gone (in-memory clipboard)', () => {
@@ -126,4 +153,40 @@ test('a bare K is left to the viewport rather than cloning', () => {
   renderHook(() => useEditorKeyboardShortcuts(input))
   press('k')
   assert.equal(calls.cloneWithCount, undefined)
+})
+
+test('M/R/S toggle back to resting, matching the rail and Studio', () => {
+  // Studio's `handle_shortcut` ends in `open_gizmo` (`GLGizmosManager.cpp:494`) -- the same call
+  // the toolbar makes -- and `open_gizmo` flips to `Undefined` when the requested gizmo is already
+  // current (`:366`). Written as plain sets, the keyboard was the one affordance that could never
+  // reach the resting mode.
+  const { input, calls } = makeInput()
+  renderHook(() => useEditorKeyboardShortcuts(input))
+
+  press('m')
+  assert.deepEqual(calls.gizmo?.[0], ['translate'], 'from resting, M picks Move')
+
+  input.gizmoModeRef.current = 'translate'
+  press('m')
+  assert.deepEqual(calls.gizmo?.[1], ['select'], 'M again returns to resting')
+
+  // A DIFFERENT tool key still switches rather than toggling.
+  press('r')
+  assert.deepEqual(calls.gizmo?.[2], ['rotate'])
+})
+
+test('Escape is NOT handled here, because it never gets here', () => {
+  // The editor renders inside a Joy `Modal`, whose keydown handler calls `stopPropagation()` on
+  // Escape ("Swallow the event, in case someone is listening for the escape key on the body" --
+  // `@mui/base/unstable_useModal`), so it never bubbles to this window listener. A two-stage Escape
+  // WAS written here and shipped green, because a test that mounts this hook with no Modal around it
+  // proves only that the code runs, not that the key arrives. Confirmed in a real browser: pressing
+  // Escape in the editor fired a window CAPTURE probe and never the bubble one, left the tool on
+  // Move, and raised the editor's own close prompt.
+  // The behaviour now lives in `EditorView`'s `Modal.onClose`, over `editorEscapeAction`.
+  const { input, calls } = makeInput({ gizmoModeRef: ref<GizmoMode>('translate') })
+  renderHook(() => useEditorKeyboardShortcuts(input))
+
+  press('Escape')
+  assert.equal(calls.gizmo, undefined, 'Escape must not be claimed here; the Modal owns it')
 })

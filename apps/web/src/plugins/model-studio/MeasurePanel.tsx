@@ -5,6 +5,7 @@
  */
 import { Button, Sheet, Stack, Typography } from '@mui/joy'
 import { TOOL_PANEL_ANCHOR } from './editorPanels'
+import { TOOL_PANEL_Z_INDEX } from './editorLayers'
 
 export interface MeasurePanelProps {
   /** Distance + axis deltas between the two picked points, or null until both are placed. */
@@ -20,7 +21,7 @@ export function MeasurePanel({ measureDelta, pointCount, onClear, onDone }: Meas
     <Sheet
       variant="soft"
       sx={{
-        position: 'absolute', ...TOOL_PANEL_ANCHOR, zIndex: (theme) => theme.zIndex.tooltip,
+        position: 'absolute', ...TOOL_PANEL_ANCHOR, zIndex: TOOL_PANEL_Z_INDEX,
         p: 1.25, borderRadius: 'sm', boxShadow: 'sm',
         width: 'min(240px, calc(100% - 16px))',
         display: 'flex', flexDirection: 'column', gap: 0.75

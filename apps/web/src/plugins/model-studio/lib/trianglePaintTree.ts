@@ -253,6 +253,156 @@ export function createHeightRangeCursor(
   }
 }
 
+/** Squared distance from `point` to the segment `[a, b]`. */
+function distanceSqToSegment(point: PaintVec3, a: PaintVec3, b: PaintVec3): number {
+  const abx = b.x - a.x, aby = b.y - a.y, abz = b.z - a.z
+  const lengthSq = abx * abx + aby * aby + abz * abz
+  if (lengthSq < 1e-24) return distanceSq(point, a)
+  const raw = ((point.x - a.x) * abx + (point.y - a.y) * aby + (point.z - a.z) * abz) / lengthSq
+  const t = raw < 0 ? 0 : raw > 1 ? 1 : raw
+  const dx = point.x - (a.x + abx * t)
+  const dy = point.y - (a.y + aby * t)
+  const dz = point.z - (a.z + abz * t)
+  return dx * dx + dy * dy + dz * dz
+}
+
+/** Squared distance between the segments `[p1,q1]` and `[p2,q2]` (Ericson, 5.1.9). */
+function segmentDistanceSq(p1: PaintVec3, q1: PaintVec3, p2: PaintVec3, q2: PaintVec3): number {
+  const d1 = { x: q1.x - p1.x, y: q1.y - p1.y, z: q1.z - p1.z }
+  const d2 = { x: q2.x - p2.x, y: q2.y - p2.y, z: q2.z - p2.z }
+  const r = { x: p1.x - p2.x, y: p1.y - p2.y, z: p1.z - p2.z }
+  const a = d1.x * d1.x + d1.y * d1.y + d1.z * d1.z
+  const e = d2.x * d2.x + d2.y * d2.y + d2.z * d2.z
+  const f = d2.x * r.x + d2.y * r.y + d2.z * r.z
+  const clamp01 = (v: number): number => (v < 0 ? 0 : v > 1 ? 1 : v)
+  const EPS = 1e-24
+  let s: number
+  let t: number
+  if (a <= EPS && e <= EPS) return distanceSq(p1, p2)
+  if (a <= EPS) { s = 0; t = clamp01(f / e) }
+  else {
+    const c = d1.x * r.x + d1.y * r.y + d1.z * r.z
+    if (e <= EPS) { t = 0; s = clamp01(-c / a) }
+    else {
+      const b = d1.x * d2.x + d1.y * d2.y + d1.z * d2.z
+      const denom = a * e - b * b
+      s = denom > EPS ? clamp01((b * f - c * e) / denom) : 0
+      t = (b * s + f) / e
+      if (t < 0) { t = 0; s = clamp01(-c / a) }
+      else if (t > 1) { t = 1; s = clamp01((b - c) / a) }
+    }
+  }
+  const cx = p1.x + d1.x * s - (p2.x + d2.x * t)
+  const cy = p1.y + d1.y * s - (p2.y + d2.y * t)
+  const cz = p1.z + d1.z * s - (p2.z + d2.z * t)
+  return cx * cx + cy * cy + cz * cz
+}
+
+/** Does the segment `[p, q]` pierce the triangle? (Moller-Trumbore, bounded to the segment.) */
+function segmentCrossesTriangle(
+  p: PaintVec3, q: PaintVec3, a: PaintVec3, b: PaintVec3, c: PaintVec3
+): boolean {
+  const dx = q.x - p.x, dy = q.y - p.y, dz = q.z - p.z
+  const e1x = b.x - a.x, e1y = b.y - a.y, e1z = b.z - a.z
+  const e2x = c.x - a.x, e2y = c.y - a.y, e2z = c.z - a.z
+  const hx = dy * e2z - dz * e2y, hy = dz * e2x - dx * e2z, hz = dx * e2y - dy * e2x
+  const det = e1x * hx + e1y * hy + e1z * hz
+  if (Math.abs(det) < 1e-18) return false
+  const invDet = 1 / det
+  const sx = p.x - a.x, sy = p.y - a.y, sz = p.z - a.z
+  const u = (sx * hx + sy * hy + sz * hz) * invDet
+  if (u < 0 || u > 1) return false
+  const qx = sy * e1z - sz * e1y, qy = sz * e1x - sx * e1z, qz = sx * e1y - sy * e1x
+  const v = (dx * qx + dy * qy + dz * qz) * invDet
+  if (v < 0 || u + v > 1) return false
+  const t = (e2x * qx + e2y * qy + e2z * qz) * invDet
+  return t >= 0 && t <= 1
+}
+
+/**
+ * Swept SPHERE cursor (TriangleSelector::Capsule3D): the volume the sphere brush covers moving
+ * from `first` to `second`.
+ *
+ * BambuStudio paints a capsule between each consecutive pair of interpolated pointer positions
+ * rather than a sphere at each (`DoublePointCursor::cursor_factory`), which is what makes a stroke
+ * a continuous band instead of a row of dabs -- a fast drag outruns the pointer-event rate, and
+ * dabs alone leave visible gaps in it.
+ *
+ * The predicates are stated as SEGMENT distances where Studio writes the end-caps and the tube out
+ * separately ({@link https://github.com/bambulab/BambuStudio} `TriangleSelector.cpp:2387`). Same
+ * shape, same answers, and it collapses into the one `touchesTriangle` this interface has where
+ * Studio splits it across two virtuals.
+ */
+export function createCapsule3DCursor(
+  first: PaintVec3,
+  second: PaintVec3,
+  radius: number,
+  edgeLimit: number
+): PaintCursor {
+  const radiusSq = radius * radius
+  return {
+    edgeLimitSq: edgeLimit * edgeLimit,
+    containsPoint: (point) => distanceSqToSegment(point, first, second) < radiusSq,
+    touchesTriangle: (vertices) => {
+      // A triangle the capsule pierces has no vertex or edge near the axis, so the crossing test
+      // is not redundant: without it a stroke skips any facet larger than the brush.
+      if (segmentCrossesTriangle(first, second, vertices[0], vertices[1], vertices[2])) return true
+      if (distanceSqToTriangle(first, vertices[0], vertices[1], vertices[2]) <= radiusSq) return true
+      if (distanceSqToTriangle(second, vertices[0], vertices[1], vertices[2]) <= radiusSq) return true
+      for (let side = 0; side < 3; side += 1) {
+        const edgeA = vertices[side]!
+        const edgeB = vertices[side < 2 ? side + 1 : 0]!
+        if (segmentDistanceSq(first, second, edgeA, edgeB) <= radiusSq) return true
+      }
+      return false
+    }
+  }
+}
+
+/**
+ * Swept CIRCLE cursor (TriangleSelector::Capsule2D): the circle brush's infinite view-aligned
+ * cylinder, swept from `first` to `second`.
+ *
+ * Every test is the Capsule3D one measured in the plane PERPENDICULAR to `dir`, which is exactly
+ * what the circle cursor is to the sphere cursor. Studio spells the same shape out as two end
+ * cylinders plus the rectangle between them (`TriangleSelector.cpp:2405`); flattening first says it
+ * once. The pointer test stays Studio's own, run at BOTH centres as
+ * `DoublePointCursor::is_pointer_in_triangle` does, because "does the view ray cross this triangle"
+ * is not a distance question.
+ */
+export function createCapsule2DCursor(
+  first: PaintVec3,
+  second: PaintVec3,
+  dir: PaintVec3,
+  radius: number,
+  edgeLimit: number
+): PaintCursor {
+  const radiusSq = radius * radius
+  const flatten = (point: PaintVec3): PaintVec3 => {
+    const along = point.x * dir.x + point.y * dir.y + point.z * dir.z
+    return { x: point.x - along * dir.x, y: point.y - along * dir.y, z: point.z - along * dir.z }
+  }
+  const flatFirst = flatten(first)
+  const flatSecond = flatten(second)
+  const circleAt = (center: PaintVec3): PaintCursor => createCircleCursor(center, dir, radius, edgeLimit)
+  const firstCircle = circleAt(first)
+  const secondCircle = circleAt(second)
+  return {
+    edgeLimitSq: edgeLimit * edgeLimit,
+    containsPoint: (point) => distanceSqToSegment(flatten(point), flatFirst, flatSecond) < radiusSq,
+    touchesTriangle: (vertices) => {
+      if (firstCircle.touchesTriangle(vertices) || secondCircle.touchesTriangle(vertices)) return true
+      const flat: [PaintVec3, PaintVec3, PaintVec3] = [flatten(vertices[0]), flatten(vertices[1]), flatten(vertices[2])]
+      for (let side = 0; side < 3; side += 1) {
+        const edgeA = flat[side]!
+        const edgeB = flat[side < 2 ? side + 1 : 0]!
+        if (segmentDistanceSq(flatFirst, flatSecond, edgeA, edgeB) <= radiusSq) return true
+      }
+      return false
+    }
+  }
+}
+
 /**
  * Paint a cursor dab onto one source triangle's tree, following
  * TriangleSelector::select_patch/split_triangle:

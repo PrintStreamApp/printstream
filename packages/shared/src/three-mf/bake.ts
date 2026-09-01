@@ -480,8 +480,20 @@ export function planEditedThreeMf(
       // whichever ran last would silently win. The skip makes that independent of statement order.
       if (sidecar.path === LAYER_CONFIG_RANGES_ENTRY && layerConfigRangesContent !== null) continue
       if (sidecar.path === LAYER_HEIGHTS_PROFILE_ENTRY && layerHeightProfileContent !== null) continue
+      if (sidecar.path === BRIM_EAR_POINTS_ENTRY && brimEarPointsContent !== null) continue
       transforms.set(sidecar.path, (content) =>
-        remapObjectOrdinalSidecar(content, baseObjectOrder, savedObjectOrder, sidecar.format)
+        remapObjectOrdinalSidecar(
+          content,
+          baseObjectOrder,
+          savedObjectOrder,
+          sidecar.format,
+          // `cut_information.xml` names a VOLUME as well as an object, and a part removal or
+          // reorder permutes that index without moving any object. BambuStudio reads it as
+          // `model_object->volumes[connector.volume_id]`, its only bounds check being an assert
+          // that release builds compile out, so a stale entry is a connector on the wrong volume
+          // at best and an out-of-bounds read at worst.
+          sidecar.volumeScoped ? documents.volumeLayouts : undefined
+        )
       )
     }
     // Caller-supplied sidecars replace a same-named source entry (transform) and are added

@@ -23,8 +23,26 @@
  * Counterpart: `applyFilamentList` in `@printstream/shared/three-mf` consumes
  * `SceneEditFilament.config`.
  */
-import type { ProcessConfig, SceneEdit } from '@printstream/shared'
+import { FILAMENT_SETTING_KEYS, isFilamentIdentitySettingKey, type ProcessConfig, type SceneEdit } from '@printstream/shared'
 import type { FilamentConfigResolver } from '../../../components/library/FilamentSettingsDialog'
+
+/**
+ * Whether a resolved config actually carries a material's PHYSICS, as opposed to merely existing.
+ *
+ * A config OBJECT is not a config with VALUES, and the difference is the whole bug this guards. A
+ * slot whose preset resolves to the PROJECT's own embedded preset comes back describing the
+ * project's slot -- so for a project that never had physics (a new project's scaffold, or one an
+ * older save stripped) it is truthy and empty, and authoring it writes nothing while reporting
+ * success. Identity keys are excluded because a slot always has those; they say nothing about
+ * whether the material's temperatures, flow, cooling and retraction are present.
+ *
+ * The same test already guards the in-session "missing material settings" repair
+ * (`handleRepairFilamentPhysics`); this is the SAVE path finally applying it too.
+ */
+function carriesFilamentPhysics(config: ProcessConfig | undefined): boolean {
+  if (!config) return false
+  return Object.keys(config).some((key) => FILAMENT_SETTING_KEYS.has(key) && !isFilamentIdentitySettingKey(key))
+}
 
 export interface FilamentConfigAuthoringContext {
   /** The slice target the presets are resolved against; null on a host with no printer selected. */
@@ -142,10 +160,24 @@ export async function attachResolvedFilamentConfigs(
       // `config` is the slot's EFFECTIVE config (preset plus whatever the project declared), which
       // is what the file should carry, not `baseConfig`, which is the untouched preset and would
       // discard the user's own in-project tweaks.
-      if (!response.config) return filament
+      //
+      // ...UNLESS the effective config carries no physics at all, which happens whenever the slot
+      // resolves to the PROJECT's own preset and the project has none. A NEW project is exactly
+      // that case: its scaffold seeds `filament_settings_id` but no values, the resolver matches
+      // that name to a project-scoped preset before any installed one, and the answer describes the
+      // empty slot back to us. Authoring it wrote nothing, so every project born in the editor
+      // saved with no material physics and reopened flagged for repair -- measured end to end on an
+      // A1 0.2 nozzle: the save asked for `project:filament:Generic PLA` and got ONE key back,
+      // while the same slot's builtin preset answers with 141.
+      // There are no in-project tweaks to lose in that case (that is what "no physics" means), so
+      // the preset the slot names is the right thing to write, and the route already returns it.
+      const effective = carriesFilamentPhysics(response.config)
+        ? response.config
+        : (carriesFilamentPhysics(response.baseConfig) ? response.baseConfig : undefined)
+      if (!effective) return filament
       return {
         ...filament,
-        config: response.config,
+        config: effective,
         // Same pair as the repair path: values alone do not bind a slot to a USER preset.
         ...(response.presetInherits === undefined
           ? {}

@@ -36,6 +36,53 @@ test('a slot with no picked preset or no resolved name is left alone', async () 
   assert.deepEqual(out.filaments?.map((f) => f.config ?? null), [{ nozzle_temperature: ['245'] }, null, null])
 })
 
+test('a slot whose EFFECTIVE config carries no physics falls back to the preset it names', async () => {
+  // The live failure this exists to stop, measured end to end on a new project: the slot's preset
+  // resolves to the PROJECT's own embedded preset (a scaffold seeds `filament_settings_id` and no
+  // values), so `config` comes back truthy but describing the empty slot -- ONE key, against 141 for
+  // the same slot's installed preset. Authoring that wrote nothing, so every editor-born project
+  // saved with no material physics and reopened flagged "missing its material settings".
+  const out = await attachResolvedFilamentConfigs(
+    edit([{ color: '#FFFFFF', settingsId: 'Generic PLA @BBL A1 0.2 nozzle' }]),
+    (async () => ({
+      // What the route returns for a `project:` preset over a project that declares no physics:
+      // identity only, which is not a material.
+      config: { filament_settings_id: ['Generic PLA'] },
+      baseConfig: { filament_settings_id: ['Generic PLA'], nozzle_temperature: ['220'], filament_flow_ratio: ['0.98'] }
+    })) as never,
+    { targetId: 't1', sourceFileId: 'f1', profileIdByFilamentId: { 1: 'project:filament:Generic PLA' } }
+  )
+  assert.deepEqual(out.filaments?.[0]?.config, {
+    filament_settings_id: ['Generic PLA'],
+    nozzle_temperature: ['220'],
+    filament_flow_ratio: ['0.98']
+  }, 'the named preset\'s values should stand in when the project declares none')
+})
+
+test('a slot whose effective config HAS physics keeps it, tweaks and all', async () => {
+  // The inverse, which is the rule the fallback must not break: an effective config is the preset
+  // PLUS whatever the project changed, so a project that really did raise its temperature keeps
+  // that value rather than having the stock preset written back over it.
+  const out = await attachResolvedFilamentConfigs(
+    edit([{ color: '#FFFFFF', settingsId: 'Generic PLA @BBL A1 0.2 nozzle' }]),
+    (async () => ({
+      config: { nozzle_temperature: ['250'] },
+      baseConfig: { nozzle_temperature: ['220'] }
+    })) as never,
+    { targetId: null, sourceFileId: null, profileIdByFilamentId: { 1: 'p-pla' } }
+  )
+  assert.deepEqual(out.filaments?.[0]?.config, { nozzle_temperature: ['250'] })
+})
+
+test('a slot with no physics anywhere is left unauthored rather than given identity keys', async () => {
+  const out = await attachResolvedFilamentConfigs(
+    edit([{ color: '#FFFFFF', settingsId: 'Generic PLA @BBL A1 0.2 nozzle' }]),
+    (async () => ({ config: { filament_settings_id: ['Generic PLA'] }, baseConfig: undefined })) as never,
+    { targetId: null, sourceFileId: null, profileIdByFilamentId: { 1: 'project:filament:Generic PLA' } }
+  )
+  assert.equal(out.filaments?.[0]?.config ?? null, null)
+})
+
 test('a resolver failure never fails the save', async () => {
   // Best-effort by contract: the slot goes unauthored and the bake falls back to its drop, which is
   // no worse than before this existed.

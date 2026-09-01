@@ -24,6 +24,7 @@ import { useRef, useState, type PointerEvent as ReactPointerEvent, type WheelEve
 import { layerHeightAt, type LayerHeightBounds } from '@printstream/shared/three-mf'
 import type { LayerHeightPaintAction } from '@printstream/shared/three-mf'
 import { TOOL_PANEL_ANCHOR } from './editorPanels'
+import { TOOL_PANEL_Z_INDEX } from './editorLayers'
 import { VIEW_CUBE_EDGE_INSET, VIEW_CUBE_SIZE } from './lib/viewCube'
 import { layerHeightZoneCss } from './lib/layerHeightOverlay'
 
@@ -105,7 +106,7 @@ export function LayerHeightPanel({
         // number drifts the moment either changes. The previous 88 was 12px short and clipped the
         // cube's top-left corner while claiming in a comment to clear it.
         bottom: VIEW_CUBE_EDGE_INSET * 2 + VIEW_CUBE_SIZE,
-        zIndex: (theme) => theme.zIndex.tooltip,
+        zIndex: TOOL_PANEL_Z_INDEX,
         alignItems: 'stretch', pointerEvents: 'none',
         maxWidth: 'calc(100% - 16px)'
       }}

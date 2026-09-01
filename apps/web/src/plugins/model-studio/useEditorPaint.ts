@@ -35,13 +35,14 @@ import {
 } from './lib/supportPaint'
 import {
   PAINT_CHANNEL_SPECS,
+  paintOverlayVisible,
   TRIANGLE_PAINT_CHANNELS,
   effectivePaintTool,
   paintChannelForGizmoMode,
   type GizmoMode,
   type PaintToolType
 } from './editorGeometry'
-import { addedPartHostId, supportPaintKey, type EditorPlate, type EditorState } from './lib/editorModel'
+import { addedPartHostId, addedPartPaintKey, effectiveAddedParts, supportPaintKey, type EditorPlate, type EditorState } from './lib/editorModel'
 
 /**
  * Every EditorView-local value the paint logic reads. Refs/callbacks stay declared in
@@ -102,9 +103,36 @@ export interface EditorPaint {
     worldPoint: THREE.Vector3,
     worldDirection: THREE.Vector3,
     faceIndex: number | null,
-    phase: 'down' | 'move'
+    phase: 'down' | 'move',
+    /** The stroke's previous world hit ON THIS MESH; see `applySupportPaintBrush`'s `previousPoint`. */
+    previousWorldPoint?: THREE.Vector3 | null
   ) => void>
   clearSelectedPaint: () => void
+}
+
+/**
+ * Which paint state a tagged mesh reads and writes, whichever KIND of geometry it is.
+ *
+ * The tag is the single thing that makes a mesh paintable: the hit test builds its raycast set from
+ * it, so an untagged mesh is not even a candidate. Its two shapes are the two identity spaces the
+ * editor already has -- a baked part is an object plus the MESH it draws (parts sharing a mesh share
+ * their paint, which is BambuStudio's behaviour), a session-added volume owns its mesh outright and
+ * is named by the import that carries it.
+ *
+ * Resolved in one place because three call sites need the answer and each getting it from the tag
+ * itself is how the volume case was missed: `paintMesh` and `effectivePaintCodes` both read the
+ * baked shape directly and returned early on anything else, so painting a volume ran, updated
+ * nothing, and drew nothing.
+ */
+function meshPaintKey(mesh: THREE.Mesh): string | null {
+  const ref = mesh.userData.supportPaintPart as
+    | { objectId: number; componentObjectId: number }
+    | { addedPartImportId: string }
+    | undefined
+  if (!ref) return null
+  return 'addedPartImportId' in ref
+    ? addedPartPaintKey(ref.addedPartImportId)
+    : supportPaintKey(ref.objectId, ref.componentObjectId)
 }
 
 export function useEditorPaint(params: EditorPaintParams): EditorPaint {
@@ -174,9 +202,9 @@ export function useEditorPaint(params: EditorPaintParams): EditorPaint {
 
   /** Effective paint for a tagged mesh: this session's override, else the source mesh's. */
   const effectivePaintCodes = useCallback((mesh: THREE.Mesh, channel: TrianglePaintChannel): SupportPaintCodes | null => {
-    const partRef = mesh.userData.supportPaintPart as { objectId: number; componentObjectId: number } | undefined
-    if (!partRef) return null
-    const override = stateRef.current?.[PAINT_CHANNEL_SPECS[channel].stateKey]?.[supportPaintKey(partRef.objectId, partRef.componentObjectId)]
+    const key = meshPaintKey(mesh)
+    if (!key) return null
+    const override = stateRef.current?.[PAINT_CHANNEL_SPECS[channel].stateKey]?.[key]
     if (override) return Object.keys(override).length > 0 ? override : null
     return getGeometryTrianglePaint(mesh.geometry as THREE.BufferGeometry, channel)
   }, [stateRef])
@@ -211,7 +239,7 @@ export function useEditorPaint(params: EditorPaintParams): EditorPaint {
       for (let node: THREE.Object3D | null = mesh; node; node = node.parent) {
         if (typeof node.userData.instanceKey === 'string') { groupKey = node.userData.instanceKey; break }
       }
-      overlay.visible = channel === 'color' || (channel === activePaintChannelRef.current && groupKey === selectedKeyRef.current)
+      overlay.visible = paintOverlayVisible(channel, activePaintChannelRef.current, groupKey === selectedKeyRef.current)
       mesh.add(overlay)
     }
   }, [colorPaintStateColor, activePaintChannelRef, selectedKeyRef])
@@ -297,13 +325,20 @@ export function useEditorPaint(params: EditorPaintParams): EditorPaint {
    * refreshes only the touched meshes' overlays. `faceIndex` is the hit triangle
    * (the brush growth/fill seed); `phase` distinguishes the initial click from drag
    * continuation (the height band is placed by the click only).
+   *
+   * `previousWorldPoint` makes the dab a SWEEP from there to `worldPoint` rather than a lone
+   * cursor at it, which is how a drag paints a continuous band instead of a row of dabs spaced by
+   * the pointer's event rate. Only the brush shapes can sweep: the fills and the height band are
+   * seeded from one triangle and have no swept form, and Bambu's own capsule factory asserts on
+   * exactly that (`DoublePointCursor::cursor_factory`).
    */
   const applyPaintStroke = useCallback((
     mesh: THREE.Mesh,
     worldPoint: THREE.Vector3,
     worldDirection: THREE.Vector3,
     faceIndex: number | null,
-    phase: 'down' | 'move'
+    phase: 'down' | 'move',
+    previousWorldPoint?: THREE.Vector3 | null
   ) => {
     const state = stateRef.current
     const channel = activePaintChannelRef.current
@@ -321,13 +356,12 @@ export function useEditorPaint(params: EditorPaintParams): EditorPaint {
     } else paintState = mode === 'enforcer' ? 1 : 2
 
     const paintMesh = (target: THREE.Mesh, targetFaceIndex: number | null): void => {
-      const partRef = target.userData.supportPaintPart as { objectId: number; componentObjectId: number } | undefined
-      if (!partRef) return
+      const key = meshPaintKey(target)
+      if (!key) return
       const geometry = target.geometry as THREE.BufferGeometry
       const scan = getTriangleScanData(geometry)
       if (!scan) return
       const stateKey = PAINT_CHANNEL_SPECS[channel].stateKey
-      const key = supportPaintKey(partRef.objectId, partRef.componentObjectId)
       let channelPaint = state[stateKey]
       if (!channelPaint) {
         channelPaint = {}
@@ -343,6 +377,7 @@ export function useEditorPaint(params: EditorPaintParams): EditorPaint {
       target.updateWorldMatrix(true, false)
       const inverse = new THREE.Matrix4().copy(target.matrixWorld).invert()
       const localPoint = worldPoint.clone().applyMatrix4(inverse)
+      const localPrevious = previousWorldPoint ? previousWorldPoint.clone().applyMatrix4(inverse) : null
       const localDirection = worldDirection.clone().transformDirection(inverse).normalize()
       // Brush radius is in world mm; approximate the local radius with the mesh's
       // average world axis scale (per-axis scale would need an ellipsoid test).
@@ -399,6 +434,7 @@ export function useEditorPaint(params: EditorPaintParams): EditorPaint {
           codes,
           scan,
           point: localPoint,
+          ...(localPrevious ? { previousPoint: localPrevious } : {}),
           direction: localDirection,
           radius: paintBrushRadiusRef.current / averageScale,
           mode,
@@ -451,6 +487,12 @@ export function useEditorPaint(params: EditorPaintParams): EditorPaint {
     for (const componentObjectId of partIds) {
       // An empty map means "no paint": emitted so existing source paint is stripped.
       channelPaint[supportPaintKey(hostId, componentObjectId)] = {}
+    }
+    // The object's SESSION-ADDED volumes are painted geometry too, so "clear paint on this object"
+    // has to reach them or it clears what the user can see and leaves what they painted last.
+    for (const part of effectiveAddedParts(state, instance)) {
+      if (isNonRenderableThreeMfPartSubtype(part.subtype)) continue
+      channelPaint[addedPartPaintKey(part.importId)] = {}
     }
     const group = selectedKeyRef.current ? groupByKeyRef.current.get(selectedKeyRef.current) : null
     if (group) refreshPaintOverlays(group)

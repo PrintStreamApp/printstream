@@ -31,7 +31,8 @@
     "react-markdown": "^10.1.0",
     "react-router-dom": "^7.14.0",
     "remark-gfm": "^4.0.1",
-    "three": "^0.169.0",
+    "three": "^0.185.1",
+    "three-bvh-csg": "^0.0.18",
     "three-mesh-bvh": "^0.9.14",
     "three-stdlib": "^2.34.0",
     "zod": "^3.24.2"
@@ -44,7 +45,7 @@
     "@types/node": "^22.13.14",
     "@types/react": "^18.3.20",
     "@types/react-dom": "^18.3.6",
-    "@types/three": "^0.169.0",
+    "@types/three": "^0.185.4",
     "@vitejs/plugin-react": "^6.0.3",
     "jsdom": "^29.1.1",
     "vite": "^8.2.1",

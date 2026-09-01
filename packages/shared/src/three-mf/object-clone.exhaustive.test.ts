@@ -61,6 +61,7 @@ const PLACEHOLDER_SEAM_ENTRIES: Record<string, unknown[]> = {
   partTypeChanges: [{ objectId: PLACEHOLDER, partIndex: 0, subtype: 'modifier_part' }],
   partTransforms: [{ objectId: PLACEHOLDER, partIndex: 0, matrix: [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0] }],
   removedParts: [{ objectId: PLACEHOLDER, partIndex: 0 }],
+  partOrder: [{ objectId: PLACEHOLDER, order: [1, 0] }],
   supportPaint: [{ objectId: PLACEHOLDER, componentObjectId: 1, triangles: { '0': '8' } }],
   seamPaint: [{ objectId: PLACEHOLDER, componentObjectId: 1, triangles: { '0': '8' } }],
   colorPaint: [{ objectId: PLACEHOLDER, componentObjectId: 1, triangles: { '0': '8' } }],

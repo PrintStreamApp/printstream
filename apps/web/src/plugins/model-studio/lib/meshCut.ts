@@ -11,7 +11,7 @@
  * a broken source mesh) is skipped rather than failing the cut.
  */
 import * as THREE from 'three'
-import { isViewportAidMesh } from '../editorGeometry'
+import { isAddedPartMesh, isViewportAidMesh } from '../editorGeometry'
 
 export interface CutHalves {
   /** Triangle soup (9 floats per triangle) at or above the plane. Empty when nothing is above. */
@@ -128,10 +128,14 @@ const CHAIN_QUANTUM = 1e-4
  * `includeModifierVolumes` keeps helper volumes (negative/modifier/blocker/enforcer meshes)
  * in the soup: used when a specific part is exported deliberately, never for the solid
  * geometry walks (cut/split/assemble/whole-object export).
+ * `skipAddedParts` walks the object's OWN body only, leaving out every volume added to it this
+ * session. A boolean's body operand needs that distinction, because on an object whose `parts` list
+ * is empty the body and the added volumes are siblings under one rotor, and a plain walk would put
+ * an operand into its own opposing side.
  */
 export function collectWorldTriangles(
   root: THREE.Object3D,
-  options?: { includeModifierVolumes?: boolean }
+  options?: { includeModifierVolumes?: boolean; skipAddedParts?: boolean }
 ): Float32Array {
   root.updateWorldMatrix(true, true)
   const chunks: Float32Array[] = []
@@ -143,6 +147,7 @@ export function collectWorldTriangles(
     // Helper volumes are the one aid a caller can ask to KEEP (an explicit part export), so they
     // are tested separately from the rest.
     if (mesh.userData.isHelperVolume ? !options?.includeModifierVolumes : isViewportAidMesh(mesh)) return
+    if (options?.skipAddedParts && isAddedPartMesh(mesh)) return
     const geometry = mesh.geometry
     const position = geometry.getAttribute('position')
     if (!position) return

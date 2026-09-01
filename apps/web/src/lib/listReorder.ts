@@ -40,3 +40,18 @@ export function listInsertionCaretCenter(tiles: readonly ListTileExtent[], gap: 
   if (clamped === tiles.length) return tiles[tiles.length - 1]!.end + 2
   return (tiles[clamped - 1]!.end + tiles[clamped]!.start) / 2
 }
+
+/**
+ * The array index `items[fromIndex]` must be spliced back in at, to land in insertion gap
+ * `insertAt`.
+ *
+ * A gap is a position in the list AS IT STANDS; splicing the moved item out first shifts every
+ * position after it down by one, so a FORWARD move has to come back one and a backward move must
+ * not. The two cases differing is what makes this the classic off-by-one here: a backward drag
+ * looks correct while a forward drag quietly lands one slot too far, which reads as the drag being
+ * imprecise rather than as a bug. Returning `fromIndex` for the two gaps either side of the item
+ * is how "dropped where it already was" becomes a no-op.
+ */
+export function listGapToIndex(fromIndex: number, insertAt: number): number {
+  return insertAt > fromIndex ? insertAt - 1 : insertAt
+}

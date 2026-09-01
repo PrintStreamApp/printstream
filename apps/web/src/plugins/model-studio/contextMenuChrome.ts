@@ -6,6 +6,7 @@
  */
 import { listItemDecoratorClasses } from '@mui/joy/ListItemDecorator'
 import type { SxProps } from '@mui/joy/styles/types'
+import { EDITOR_POPUP_Z_INDEX } from './editorLayers'
 
 /**
  * Popper wiring for a cursor-anchored context menu (zero-size virtual anchor at the
@@ -16,14 +17,43 @@ import type { SxProps } from '@mui/joy/styles/types'
  * `altAxis: true` adds the vertical constraint and `tether: false` lets the shift move
  * the menu past (over) the anchor point instead of stopping beside it.
  */
+/**
+ * Where a context menu is anchored, and which corner it hangs from.
+ *
+ * A right-click anchors at the CURSOR and hangs `start` (top-left at the point), which is what a
+ * pointer expects. A row's kebab anchors at the BUTTON and hangs `end`, so the menu's right edge
+ * lines up with the button's: these rows sit at the right of the sidebar, and a `start` menu there
+ * overflows and gets shoved left by `preventOverflow` until its right edge meets the button's LEFT
+ * edge -- it reads as opening diagonally away from the icon that spawned it.
+ */
+export interface ContextMenuAnchor {
+  x: number
+  y: number
+  align?: 'start' | 'end'
+}
+
 export const CONTEXT_MENU_POPPER_MODIFIERS = [
   { name: 'flip', options: { padding: 8 } },
   { name: 'preventOverflow', options: { padding: 8, altAxis: true, tether: false } }
 ]
 
+/**
+ * Whether an event came from within the open context menu.
+ *
+ * Used to tell an outside interaction (which dismisses the menu) from the menu's OWN. That
+ * distinction is easy to forget for scrolling, because the menu is capped at the viewport height
+ * and scrolls itself (see `maxHeight`/`overflowY` below): a dismiss-on-scroll guard that ignores
+ * where the event came from closes the menu the instant someone wheels toward the item they opened
+ * it for. `contains` reports true for the node itself, which is what covers scrolling, since the
+ * listbox IS the scrolling element rather than an ancestor of it.
+ */
+export function isInsideContextMenu(listbox: Node | null | undefined, target: EventTarget | null): boolean {
+  return listbox != null && target instanceof Node && listbox.contains(target)
+}
+
 /** Shared context-menu listbox styling; pairs with {@link CONTEXT_MENU_POPPER_MODIFIERS}. */
 export const CONTEXT_MENU_SX: SxProps = {
-  zIndex: (theme) => theme.zIndex.tooltip,
+  zIndex: EDITOR_POPUP_Z_INDEX,
   // A menu taller than the whole viewport (the full single-object menu with
   // move-to-plate rows) scrolls rather than running items off both edges.
   maxHeight: 'calc(100dvh - 16px)',

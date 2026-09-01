@@ -16,6 +16,8 @@
 import * as THREE from 'three'
 import type { SupportPaintCodes } from './threeMfScene'
 import {
+  createCapsule2DCursor,
+  createCapsule3DCursor,
   createCircleCursor,
   createHeightRangeCursor,
   createSphereCursor,
@@ -232,7 +234,8 @@ function setWholeTriangleState(codes: SupportPaintCodes, i: number, state: numbe
 /**
  * Apply one brush dab to a paint-code map (mutated in place), mirroring
  * TriangleSelector::select_patch. The cursor is a sphere around the hit point or
- * Bambu's circle (an infinite cylinder around the pointer ray); partially covered
+ * Bambu's circle (an infinite cylinder around the pointer ray) -- or, given
+ * {@link previousPoint}, the volume either shape SWEEPS between the two; partially covered
  * triangles split to `min(radius/5, 0.2mm)` edges so the result follows the brush.
  * Returns whether anything changed. All inputs are geometry-local; the caller converts
  * the world-space hit point/ray and brush radius.
@@ -247,6 +250,17 @@ export function applySupportPaintBrush(options: {
   codes: SupportPaintCodes
   scan: TriangleScanData
   point: { x: number; y: number; z: number }
+  /**
+   * Where this stroke sample's PREVIOUS position landed, when it landed on this same mesh.
+   *
+   * Present, the dab is the volume swept from there to `point` (Bambu's `DoublePointCursor`)
+   * instead of a lone sphere/circle, so a stroke is a continuous band rather than a row of dabs
+   * with the pointer's event rate showing through it. Absent for the first sample of a stroke,
+   * for a sample whose predecessor missed the model, and for one whose predecessor hit a
+   * DIFFERENT volume -- a capsule spans one mesh's own coordinate frame only, which is why Studio
+   * groups its projected positions by `mesh_idx` before pairing them up.
+   */
+  previousPoint?: { x: number; y: number; z: number } | null
   direction: { x: number; y: number; z: number }
   radius: number
   mode: SupportPaintBrushMode
@@ -271,9 +285,57 @@ export function applySupportPaintBrush(options: {
   // Bambu's split refinement: edges longer than min(radius/5, 0.2mm) keep splitting,
   // so stroke boundaries follow the brush instead of stair-stepping.
   const edgeLimit = Math.min(radius / 5, 0.2)
+  // A predecessor closer than this contributes nothing a single dab does not already cover, and a
+  // degenerate segment would make the capsule's axis direction meaningless. Scaled to the brush so
+  // it means the same thing at every radius and zoom.
+  const previous = options.previousPoint
+  const swept = previous != null
+    && (previous.x - point.x) ** 2 + (previous.y - point.y) ** 2 + (previous.z - point.z) ** 2 > (radius * 1e-3) ** 2
+    ? previous
+    : null
   const cursor = options.shape === 'circle'
-    ? createCircleCursor(point, direction, radius, edgeLimit)
-    : createSphereCursor(point, radius, edgeLimit)
+    ? (swept
+      ? createCapsule2DCursor(swept, point, direction, radius, edgeLimit)
+      : createCircleCursor(point, direction, radius, edgeLimit))
+    : (swept
+      ? createCapsule3DCursor(swept, point, radius, edgeLimit)
+      : createSphereCursor(point, radius, edgeLimit))
+
+  // Broad-phase distance from a triangle's centroid to whatever the dab covers: the hit point, or
+  // the stroke segment when swept -- and, for the circle brush, both measured with the view
+  // direction projected out, since its cursor is a cylinder rather than a ball.
+  const flattenForCircle = (v: { x: number; y: number; z: number }): void => {
+    if (options.shape !== 'circle') return
+    const along = v.x * direction.x + v.y * direction.y + v.z * direction.z
+    v.x -= along * direction.x
+    v.y -= along * direction.y
+    v.z -= along * direction.z
+  }
+  // The stroke segment, already flattened for the circle brush so the clamp below finds the
+  // closest point in the SAME space the distance is measured in. Flattening after the clamp
+  // instead overstates the distance, which in a broad phase means silently skipping triangles the
+  // exact test would have painted.
+  const sweptAxis = swept ? { x: swept.x - point.x, y: swept.y - point.y, z: swept.z - point.z } : null
+  if (sweptAxis) flattenForCircle(sweptAxis)
+  const sweptAxisLengthSq = sweptAxis
+    ? sweptAxis.x * sweptAxis.x + sweptAxis.y * sweptAxis.y + sweptAxis.z * sweptAxis.z
+    : 0
+  const centroidReachSq = (i: number): number => {
+    const d = {
+      x: scan.centroids[i * 3]! - point.x,
+      y: scan.centroids[i * 3 + 1]! - point.y,
+      z: scan.centroids[i * 3 + 2]! - point.z
+    }
+    flattenForCircle(d)
+    if (sweptAxis && sweptAxisLengthSq > 1e-24) {
+      const raw = (d.x * sweptAxis.x + d.y * sweptAxis.y + d.z * sweptAxis.z) / sweptAxisLengthSq
+      const t = raw < 0 ? 0 : raw > 1 ? 1 : raw
+      d.x -= sweptAxis.x * t
+      d.y -= sweptAxis.y * t
+      d.z -= sweptAxis.z * t
+    }
+    return d.x * d.x + d.y * d.y + d.z * d.z
+  }
 
   const intersectsCursor = (i: number): boolean => {
     const vertices = scanTriangleVertices(scan, i)
@@ -323,17 +385,10 @@ export function applySupportPaintBrush(options: {
     if (!isFacing(i)) continue
     if (allowed && !allowed(i)) continue
     // Broad phase: the cursor cannot touch a triangle whose centroid is farther from
-    // the brush centre/axis than the radius plus the triangle's own bounding radius.
-    const dx = scan.centroids[i * 3]! - point.x
-    const dy = scan.centroids[i * 3 + 1]! - point.y
-    const dz = scan.centroids[i * 3 + 2]! - point.z
+    // the brush centre/axis -- or, for a swept dab, from the whole stroke segment -- than the
+    // radius plus the triangle's own bounding radius.
     const reach = radius + scan.boundRadii[i]!
-    let centroidDistSq = dx * dx + dy * dy + dz * dz
-    if (options.shape === 'circle') {
-      const along = dx * direction.x + dy * direction.y + dz * direction.z
-      centroidDistSq -= along * along
-    }
-    if (centroidDistSq > reach * reach) continue
+    if (centroidReachSq(i) > reach * reach) continue
     if (!intersectsCursor(i)) continue
     if (paintTriangleWithCursor(codes, scan, i, cursor, paintState)) changed = true
   }

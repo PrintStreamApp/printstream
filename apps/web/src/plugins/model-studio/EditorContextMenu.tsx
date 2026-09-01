@@ -49,7 +49,7 @@ import VerticalAlignBottomRoundedIcon from '@mui/icons-material/VerticalAlignBot
 import { ADDED_PART_SUBTYPES, addedPartLabel } from './lib/addedParts'
 import { ALIGN_DISTRIBUTE_OPERATIONS, minimumMembersFor, type AlignDistributeOperation } from './lib/alignDistribute'
 import type { PrimitiveKind } from './lib/primitives'
-import { CONTEXT_MENU_POPPER_MODIFIERS, CONTEXT_MENU_SX } from './contextMenuChrome'
+import { CONTEXT_MENU_POPPER_MODIFIERS, CONTEXT_MENU_SX, type ContextMenuAnchor } from './contextMenuChrome'
 import { AddPartSourceMenuItems, ContextMenuBackItem, FilamentMenuItems } from './contextMenuItems'
 import type { FilamentOption } from './EditorView'
 
@@ -70,7 +70,7 @@ type MenuView =
 
 export interface EditorContextMenuProps {
   /** Open position + the right-clicked object's instance key. */
-  contextMenu: { x: number; y: number; key: string }
+  contextMenu: ContextMenuAnchor & { key: string }
   /** The menu's listbox element, for the parent's click-away/Escape wiring. */
   listboxRef: MutableRefObject<HTMLDivElement | null>
   onClose: () => void
@@ -289,7 +289,7 @@ export function EditorContextMenu({
       ref={listboxRef}
       onClose={onClose}
       anchorEl={{ getBoundingClientRect: () => new DOMRect(contextMenu.x, contextMenu.y, 0, 0) }}
-      placement="bottom-start"
+      placement={contextMenu.align === 'end' ? 'bottom-end' : 'bottom-start'}
       modifiers={CONTEXT_MENU_POPPER_MODIFIERS}
       sx={CONTEXT_MENU_SX}
     >

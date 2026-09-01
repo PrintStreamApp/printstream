@@ -10,6 +10,7 @@ import { Button, ButtonGroup, Checkbox, Input, Sheet, Slider, Stack, Typography 
 import ContentCutRoundedIcon from '@mui/icons-material/ContentCutRounded'
 import { CUT_AXIS_SIDES } from './editorGeometry'
 import { TOOL_PANEL_ANCHOR } from './editorPanels'
+import { TOOL_PANEL_Z_INDEX } from './editorLayers'
 import type { CutAxis, CutHalfOrientation } from './lib/meshCut'
 
 /** BambuStudio's per-half after-cut choices, in its own order. */
@@ -84,7 +85,7 @@ export function CutToolPanel({
     <Sheet
       variant="soft"
       sx={{
-        position: 'absolute', ...TOOL_PANEL_ANCHOR, zIndex: (theme) => theme.zIndex.tooltip,
+        position: 'absolute', ...TOOL_PANEL_ANCHOR, zIndex: TOOL_PANEL_Z_INDEX,
         p: 1.25, borderRadius: 'sm', boxShadow: 'sm',
         width: 'min(260px, calc(100% - 16px))',
         display: 'flex', flexDirection: 'column', gap: 0.75

@@ -5,6 +5,9 @@ import * as THREE from 'three'
 import { decodePaintTree, encodePaintTree } from './trianglePaintTree'
 import {
   addedPartHostId,
+  bodyPaintHostId,
+  BODY_PART_INDEX,
+  partSlotKey,
   buildSceneEdit,
   buildSessionFilamentIdRemap,
   rebaseEditorStateFilamentIds,
@@ -12,15 +15,22 @@ import {
   makeInstanceIndependent,
   buildSingleObjectExportState,
   cloneEditorState,
+  collectPartProcessOverridesFromScenes,
+  normalizePlateObjectOrder,
+  moveObjectBefore,
+  projectObjectOrder,
   dropAddedPartsForReplacedHost,
   deriveObjectFilamentId,
   decomposeInstanceTransform,
   exactTransformIfShearing,
   duplicateInstance,
   fillPlateFromScene,
+  addedPartPaintKey,
   instanceFromStagedImport,
+  instanceVolumeRows,
   isObjectMarkedForRepair,
   mintPlateId,
+  movePartBefore,
   movePlate,
   printedParts,
   replaceInstanceGeometry,
@@ -33,6 +43,7 @@ import {
   summarizeInstanceMaterial,
   carriedPartSubtypes,
   withRemovedParts,
+  type EditorInstance,
   type EditorState
 } from './editorModel'
 
@@ -1219,6 +1230,156 @@ test('summarizeInstanceMaterial and printedParts ignore helper volumes', () => {
   assert.equal(summary.mixedColors, undefined)
 })
 
+test('paint on a SESSION-ADDED volume emits as that volume\'s own importPaint', () => {
+  // A volume is paintable from the moment it exists, like every other part-scoped feature. Its mesh
+  // is a single-solid `part` import, so the paint rides `importPaint` at solid 0 -- the same entry
+  // the bake already reads for an unsaved import, which is why this needed no bake seam.
+  const state = seedEditorState(
+    threeMfIndexSchema.parse({
+      plates: [{ index: 1, name: null, hasThumbnail: false, plateType: null, nozzleSizes: [], filaments: [], objects: [] }],
+      projectFilaments: [],
+      compatiblePrinterModels: []
+    }),
+    new Map([[1, sceneWithHelperParts()]])
+  )
+  const instance = state.plates[0]!.instances[0]!
+  const hostId = addedPartHostId(instance)!
+  const volume = {
+    key: 'vol-1',
+    importId: 'imp-vol-1',
+    subtype: 'normal_part',
+    name: 'Cube',
+    filamentId: null,
+    position: new THREE.Vector3(),
+    rotation: new THREE.Euler(),
+    scale: new THREE.Vector3(1, 1, 1),
+    soup: new Float32Array(9)
+  } as never
+  const painted: EditorState = {
+    ...state,
+    addedParts: { [hostId]: [volume] },
+    supportPaint: { [addedPartPaintKey('imp-vol-1')]: { 0: '8', 3: '4' } }
+  }
+
+  const entries = buildSceneEdit(painted).importPaint ?? []
+  const entry = entries.find((item) => item.importId === 'imp-vol-1')
+  assert.ok(entry, 'the volume\'s paint never reached the edit')
+  assert.equal(entry?.partIndex, 0, 'a volume\'s mesh is its import\'s only solid')
+  assert.equal(entry?.channel, 'support')
+  assert.deepEqual(entry?.triangles, { '0': '8', '3': '4' })
+
+  // The inverse: paint for a volume the user has since deleted must not ship, or the save writes
+  // paint for geometry it does not write.
+  const orphaned = buildSceneEdit({ ...painted, addedParts: {} }).importPaint ?? []
+  assert.equal(orphaned.find((item) => item.importId === 'imp-vol-1'), undefined,
+    'paint for a removed volume must not be emitted')
+})
+
+test('a DELETED body survives an undo snapshot and a duplicate', () => {
+  // `cloneEditorState` and `duplicateInstance` rebuild an instance FIELD BY FIELD, so a new field
+  // that is not named in them is dropped in silence. For this one that means undo/redo resurrecting
+  // geometry the user deleted -- and then saving it, because the flag is what tells the bake not to
+  // write that component. The same trap the `nameOverridden` flag carries a comment about.
+  const state = seedEditorState(
+    threeMfIndexSchema.parse({
+      plates: [{ index: 1, name: null, hasThumbnail: false, plateType: null, nozzleSizes: [], filaments: [], objects: [] }],
+      projectFilaments: [],
+      compatiblePrinterModels: []
+    }),
+    new Map([[1, sceneWithHelperParts()]])
+  )
+  const instance = { ...state.plates[0]!.instances[0]!, parts: [], bodyRemoved: true }
+  const withFlag: EditorState = {
+    ...state,
+    plates: [{ ...state.plates[0]!, instances: [instance] }]
+  }
+
+  assert.equal(cloneEditorState(withFlag).plates[0]!.instances[0]!.bodyRemoved, true,
+    'an undo snapshot dropped the deleted body')
+  assert.equal(duplicateInstance(instance).bodyRemoved, true,
+    'a copy of the object grew its body back')
+
+  // The inverse: an ordinary object must not gain the flag, or every object would save without
+  // its own geometry.
+  const plain = { ...instance, bodyRemoved: undefined }
+  assert.equal(cloneEditorState({ ...withFlag, plates: [{ ...withFlag.plates[0]!, instances: [plain] }] })
+    .plates[0]!.instances[0]!.bodyRemoved, undefined)
+  assert.equal(duplicateInstance(plain).bodyRemoved, undefined)
+})
+
+test('a deleted body removes the body ROW and emits the removal', () => {
+  const instance = { parts: [], bodyRemoved: true } as never
+  // No body row, and its volumes are the object's whole geometry: one volume means no rows at all,
+  // exactly as a saved object with one part shows none.
+  assert.deepEqual(instanceVolumeRows(instance, 1), { showRows: false, showBodyRow: false })
+  assert.deepEqual(instanceVolumeRows(instance, 2), { showRows: true, showBodyRow: false })
+  // The inverse: without the flag the body is a volume again and earns its row.
+  assert.deepEqual(instanceVolumeRows({ parts: [] } as never, 1), { showRows: true, showBodyRow: true })
+})
+
+test('a body retyped to a HELPER VOLUME is not paintable', () => {
+  // The paint tag is what puts a mesh in the brush's raycast set, so a tagged aid catches strokes
+  // aimed at whatever is behind it -- and stores paint the bake will never write, because a blocker
+  // or a negative volume carries none. The three other mesh-build sites gate on the part's own
+  // `subtype`; the body has no part entry until a save, so its subtype has to be read back out of
+  // `partTypeChanges`, and that is the reason this one site could miss the guard.
+  const instance = { parts: [], source: { kind: 'import', importId: 'imp-1', replacedObjectId: -7 } } as never
+  const helperBody = (subtype: string): EditorState =>
+    ({ partTypeChanges: { [partSlotKey(-7, BODY_PART_INDEX)]: subtype } }) as never
+
+  assert.equal(bodyPaintHostId(null, instance), -7,
+    'an ordinary body must stay paintable, before any save')
+  assert.equal(bodyPaintHostId(helperBody('normal_part'), instance), -7)
+  for (const subtype of ['negative_part', 'modifier_part', 'support_blocker', 'support_enforcer']) {
+    assert.equal(bodyPaintHostId(helperBody(subtype), instance), null, `a ${subtype} body was paintable`)
+  }
+  // The raw spelling BambuStudio writes into `model_settings.config` canonicalizes to the same
+  // thing, so a project loaded from disk is judged identically to one retyped this session.
+  assert.equal(bodyPaintHostId(helperBody('support_blocker'), instance), null)
+})
+
+test('summarizeInstanceMaterial counts SESSION-ADDED volumes, and the body when there are no parts', () => {
+  // The badge summarises what the object PRINTS, and a normal added volume is printed geometry that
+  // carries its own filament (it inherits the host's on add, explicitly). Counting only
+  // `instance.parts` made the badge lie in both directions: an object whose baked parts are on
+  // material 2 with a volume on material 5 summarised as a UNIFORM 2, and an object with no part
+  // list at all summarised nothing once a volume joined it. Both then changed on the next save,
+  // when the volume became a baked part and started counting.
+  const state = seedEditorState(
+    threeMfIndexSchema.parse({
+      plates: [{ index: 1, name: null, hasThumbnail: false, plateType: null, nozzleSizes: [], filaments: [], objects: [] }],
+      projectFilaments: [],
+      compatiblePrinterModels: []
+    }),
+    new Map([[1, sceneWithHelperParts()]])
+  )
+  const instance = state.plates[0]!.instances[0]!
+  const identity = (id: number | null) => id
+  const asColour = (_id: number | null, fallback: string | null) => fallback
+  const volume = (filamentId: number | null, subtype = 'normal_part') =>
+    ({ key: `v-${filamentId}-${subtype}`, importId: 'imp', subtype, name: 'V', filamentId } as never)
+
+  // A volume on a DIFFERENT material makes the object mixed.
+  const mixed = summarizeInstanceMaterial(instance, identity, asColour, [volume(5)])
+  assert.equal(mixed.uniformId, null, 'a volume on another material must break the uniform answer')
+  assert.equal(mixed.mixedColors?.length, 2)
+
+  // A volume on the SAME material leaves it uniform, so the badge does not cry mixed over nothing.
+  assert.equal(summarizeInstanceMaterial(instance, identity, asColour, [volume(2)]).uniformId, 2)
+
+  // A helper volume has no material and must not count, exactly as a helper PART does not.
+  const withBlocker = summarizeInstanceMaterial(instance, identity, asColour, [volume(null, 'support_blocker')])
+  assert.equal(withBlocker.uniformId, 2)
+  assert.equal(withBlocker.mixedColors, undefined)
+
+  // An object with NO part list keeps its material on the instance, and that body is a volume too.
+  const bodyOnly = { ...instance, parts: [], filamentId: 3, color: '#FF0000' }
+  assert.equal(summarizeInstanceMaterial(bodyOnly, identity, asColour, []).uniformId, 3)
+  const bodyMixed = summarizeInstanceMaterial(bodyOnly, identity, asColour, [volume(5)])
+  assert.equal(bodyMixed.uniformId, null, 'the body must be weighed against the volume beside it')
+  assert.equal(bodyMixed.mixedColors?.length, 2)
+})
+
 test('both rebase halves carry COLOUR PAINT onto the saved filament ids', () => {
   // The pure remap is covered in trianglePaintTree.test.ts; this pins that the two rebase paths
   // actually REACH it. Without the wiring the codes survive the renumber addressing the old
@@ -1341,6 +1502,40 @@ test('withRemovedParts refuses to take an object\'s last printed part', () => {
   assert.ok(withRemovedParts(state, 3, new Set([1, 2])))
 })
 
+test('a session-added part counts as printed geometry when the last baked one goes', () => {
+  // The part-is-a-part rule: an added volume is geometry the browser is holding, so an object whose
+  // printed geometry is one of THOSE is not an object with nothing to print. Counting only baked
+  // parts is what refused a part boolean over an object's single printed part -- which is the common
+  // case, since replacing that part is usually the whole point.
+  const part = (partIndex: number, subtype: string | null) => ({
+    entryPath: '/x.model', componentObjectId: partIndex + 2, partIndex,
+    transform: [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0], filamentId: null, name: `p${partIndex}`, color: null, subtype
+  })
+  const host = instanceFromStagedImport(STAGED)
+  host.source = { kind: 'object' }
+  host.objectId = 5
+  host.parts = [part(0, null)]
+  const added = (subtype: string) => ({
+    key: `k-${subtype}`, importId: 'imp', subtype, name: subtype,
+    position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 },
+    soup: new Float32Array(0)
+  })
+
+  const withHelperOnly = { plates: [{ index: 1, instances: [host] }], addedParts: { 5: [added('support_blocker')] } } as unknown as EditorState
+  assert.equal(withRemovedParts(withHelperOnly, 5, new Set([0])), null,
+    'a blocker is not printed geometry, so the last printed part still cannot go')
+
+  const withPrintedAdded = { plates: [{ index: 1, instances: [host] }], addedParts: { 5: [added('normal_part')] } } as unknown as EditorState
+  assert.ok(withRemovedParts(withPrintedAdded, 5, new Set([0])),
+    'an added normal part is printed geometry and keeps the object printable')
+
+  // And a caller adding a replacement in the same commit says so explicitly, which is how the
+  // boolean consumes every printed part of an object and puts its result there instead.
+  const bare = { plates: [{ index: 1, instances: [host] }] } as unknown as EditorState
+  assert.equal(withRemovedParts(bare, 5, new Set([0])), null)
+  assert.ok(withRemovedParts(bare, 5, new Set([0]), 1), 'the incoming replacement counts')
+})
+
 test('buildSceneEdit emits removals against the right id space for objects and imports', () => {
   const part = (partIndex: number) => ({
     entryPath: '/x.model', componentObjectId: partIndex + 2, partIndex,
@@ -1422,4 +1617,351 @@ test('carriedPartSubtypes carries nothing when no name corresponds', () => {
     [{ name: 'Bracket' }, { name: 'Pin' }]
   )
   assert.equal(carried.size, 0)
+})
+
+test('per-part process overrides re-hydrate by ORDINAL, not by the mesh id', () => {
+  // The fixture gives NO part a `componentObjectId` equal to its ordinal, which is the shape of
+  // nearly every real object: the seed used to key on the mesh id, so a reopened project put its
+  // saved per-part settings on a neighbouring volume with nothing thrown.
+  const scene = libraryThreeMfSceneSchema.parse({
+    plateIndex: 1,
+    plateName: null,
+    bed: { minX: 0, maxX: 256, minY: 0, maxY: 256, plateType: null },
+    parts: [],
+    instances: [{
+      objectId: 7, instanceId: 0, name: 'Assembly', transform: IDENTITY_3MF,
+      filamentId: 1, filamentName: null, color: null,
+      parts: [
+        { entryPath: '3D/3dmodel.model', componentObjectId: 20, transform: IDENTITY_3MF },
+        { entryPath: '3D/3dmodel.model', componentObjectId: 21, transform: IDENTITY_3MF, processOverrides: { wall_loops: '4' } }
+      ]
+    }]
+  })
+
+  const seeded = collectPartProcessOverridesFromScenes(new Map([[1, scene]]))
+  // Ordinal 1, not mesh id 21.
+  assert.deepEqual(seeded, { '7:1': { wall_loops: '4' } })
+})
+
+test('an independent copy carries the source deletions and its pending mesh repair', () => {
+  const state: EditorState = seedEmptyEditorState()
+  const source = instanceFromStagedImport(STAGED)
+  source.source = { kind: 'object' }
+  source.objectId = 3
+  const copy = duplicateInstance(source)
+  state.plates[0]!.instances.push(source, copy)
+  // Two object-keyed maps the copy used to be given none of. Both fail silently: the copy came
+  // back with volumes the user had deleted, and unrepaired while its source repaired.
+  state.removedParts = { 3: [1, 2] }
+  state.repairedObjectIds = [3]
+
+  makeInstanceIndependent(state, copy)
+
+  assert.deepEqual(state.removedParts[copy.objectId], [1, 2])
+  assert.ok(state.repairedObjectIds.includes(copy.objectId), 'the copy is marked for repair too')
+  // Its own array, so removing a part from the copy cannot remove it from the source.
+  assert.notEqual(state.removedParts[copy.objectId], state.removedParts[3])
+  assert.deepEqual(state.removedParts[3], [1, 2], 'the source is untouched')
+
+  const edit = buildSceneEdit(state)
+  assert.ok(edit.removedParts?.some((entry) => entry.objectId === copy.objectId && entry.partIndex === 1))
+  assert.ok(edit.repairedObjectIds?.includes(copy.objectId))
+})
+
+/**
+ * Object display order. It is portable through the BUILD ITEMS, which BambuStudio walks to build
+ * its object list, so the unit an order can address is the OBJECT, not the row: a linked copy is
+ * another instance of one entry in that list, and the file cannot put another object between them.
+ */
+const objectInstance = (objectId: number, name: string): EditorInstance => {
+  const instance = instanceFromStagedImport(STAGED)
+  instance.source = { kind: 'object' }
+  instance.objectId = objectId
+  instance.name = name
+  return instance
+}
+
+const stateWith = (instances: EditorInstance[]) => {
+  const state = seedEmptyEditorState()
+  state.plates[0]!.instances = instances
+  return state
+}
+
+const names = (state: EditorState, plateIndex = 0) =>
+  state.plates[plateIndex]!.instances.map((instance) => instance.name)
+
+test('projectObjectOrder lists each object once, at its first instance', () => {
+  const a = objectInstance(3, 'A')
+  const state = stateWith([a, duplicateInstance(a), objectInstance(9, 'B')])
+  // A linked copy is the same object, so it must not take a position of its own.
+  assert.deepEqual(projectObjectOrder(state), [3, 9])
+})
+
+test('a reorder carries every linked copy of the object it moves', () => {
+  const a = objectInstance(3, 'A')
+  const state = stateWith([a, duplicateInstance(a), objectInstance(9, 'B')])
+  // B before A: both copies of A travel, because the file has one list entry for the two of them.
+  assert.deepEqual(names(moveObjectBefore(state, 9, 3)), ['B', 'A', 'A'])
+  // A last.
+  assert.deepEqual(names(moveObjectBefore(state, 3, null)), ['B', 'A', 'A'])
+})
+
+test('a reorder that changes nothing returns the same state, so no checkpoint is recorded', () => {
+  const state = stateWith([objectInstance(3, 'A'), objectInstance(9, 'B'), objectInstance(11, 'C')])
+  assert.equal(moveObjectBefore(state, 3, 9), state, 'already there')
+  assert.equal(moveObjectBefore(state, 9, 9), state, 'dropped on itself')
+  assert.equal(moveObjectBefore(state, 11, null), state, 'already last')
+  assert.equal(moveObjectBefore(state, 404, 3), state, 'an object that is not placed')
+})
+
+test('an unknown anchor appends rather than dropping the object off the plate', () => {
+  const state = stateWith([objectInstance(3, 'A'), objectInstance(9, 'B')])
+  // Losing the object here would not be a reorder: the unreferenced-object sweep would take its
+  // geometry on the next save.
+  assert.deepEqual(names(moveObjectBefore(state, 3, 404)), ['B', 'A'])
+})
+
+test('object order is PROJECT-wide, so a drag on one plate reaches the object on every plate', () => {
+  // An object placed on two plates. The file has ONE object order (the bake flattens every plate
+  // into one build section), so a per-plate order would silently lose this drag on reopen.
+  const shared = objectInstance(3, 'A')
+  const state = seedEmptyEditorState()
+  state.plates[0]!.instances = [shared, objectInstance(9, 'B')]
+  state.plates.push({ ...state.plates[0]!, index: 2, plateId: mintPlateId(), instances: [duplicateInstance(shared), objectInstance(11, 'C')] })
+  const moved = moveObjectBefore(state, 9, 3)
+  assert.deepEqual(projectObjectOrder(moved), [9, 3, 11])
+  assert.deepEqual(names(moved, 0), ['B', 'A'])
+  // Plate 2 holds no B, so its own rows keep their relative order under the new project order.
+  assert.deepEqual(names(moved, 1), ['A', 'C'])
+})
+
+test('normalizing puts an object copies back together without reordering the objects', () => {
+  const a = objectInstance(3, 'A')
+  // The shape a duplicate produces: the copy is appended, so it lands after an unrelated object.
+  const state = stateWith([a, objectInstance(9, 'B'), duplicateInstance(a)])
+  const plates = normalizePlateObjectOrder(state.plates)
+  assert.deepEqual(names({ ...state, plates }), ['A', 'A', 'B'])
+  // A stays first: normalizing tidies the rows, it does not decide the order.
+  assert.deepEqual(projectObjectOrder({ ...state, plates }), [3, 9])
+  // Idempotent, and identity-stable so nothing downstream rebuilds for a no-op.
+  assert.equal(normalizePlateObjectOrder(plates), plates)
+})
+
+test('every plate is laid out to the ONE project order, not to its own', () => {
+  // A copy of A and a copy of B moved to plate 2, in the opposite order. The file has one object
+  // sequence, so plate 2 showing `B, A` while the save writes `A, B` is the sidebar disagreeing
+  // with the file, which is the whole thing this seam exists to prevent.
+  const a = objectInstance(3, 'A')
+  const b = objectInstance(9, 'B')
+  const state = seedEmptyEditorState()
+  state.plates[0]!.instances = [a, b]
+  state.plates.push({ ...state.plates[0]!, index: 2, plateId: mintPlateId(), instances: [duplicateInstance(b), duplicateInstance(a)] })
+  const normalized = { ...state, plates: normalizePlateObjectOrder(state.plates) }
+  assert.deepEqual(names(normalized, 1), ['A', 'B'], 'plate 2 follows the project order')
+  assert.deepEqual(buildSceneEdit(normalized).instances.map((instance) => instance.objectId), [3, 9, 3, 9])
+})
+
+test('a no-op drag returns the same state, so it records no undo step', () => {
+  // It used to re-lay other plates and hand back a new state for a gesture with no visible effect.
+  const a = objectInstance(3, 'A')
+  const b = objectInstance(9, 'B')
+  const state = seedEmptyEditorState()
+  state.plates[0]!.instances = [a, b]
+  state.plates.push({ ...state.plates[0]!, index: 2, plateId: mintPlateId(), instances: [duplicateInstance(b), duplicateInstance(a)] })
+  const normalized = { ...state, plates: normalizePlateObjectOrder(state.plates) }
+  assert.equal(moveObjectBefore(normalized, 3, 9), normalized, 'A is already before B')
+})
+
+test('buildSceneEdit emits instances in the sidebar order, which is what the bake writes items in', () => {
+  const state = stateWith([objectInstance(3, 'A'), objectInstance(9, 'B')])
+  assert.deepEqual(buildSceneEdit(state).instances.map((instance) => instance.objectId), [3, 9])
+  const moved = moveObjectBefore(state, 9, 3)
+  assert.deepEqual(buildSceneEdit(moved).instances.map((instance) => instance.objectId), [9, 3])
+})
+
+/**
+ * Part order within an object. Portable as-is through the `<component>` sequence, and addressed by
+ * BASE ordinal because `componentObjectId` is the mesh id and BambuStudio writes one id for every
+ * volume sharing a mesh.
+ */
+const partedObject = (objectId: number, partIndexes: number[]): EditorInstance => {
+  const instance = objectInstance(objectId, `Object ${objectId}`)
+  instance.parts = partIndexes.map((partIndex) => ({
+    entryPath: '3D/3dmodel.model',
+    // Deliberately NOT equal to the ordinal: a mesh id that happened to match would let an
+    // implementation confusing the two pass.
+    componentObjectId: 20 + partIndex,
+    partIndex,
+    transform: [...IDENTITY_3MF],
+    filamentId: 1,
+    name: `P${partIndex}`,
+    color: null,
+    subtype: null
+  }))
+  return instance
+}
+
+const partOrderOf = (state: EditorState, instanceIndex = 0) =>
+  state.plates[0]!.instances[instanceIndex]!.parts.map((part) => part.partIndex)
+
+test('a part reorder moves the part and records the object complete ordinal sequence', () => {
+  const state = seedEmptyEditorState()
+  state.plates[0]!.instances = [partedObject(3, [0, 1, 2])]
+  const moved = movePartBefore(state, 3, 2, 0)
+  assert.deepEqual(partOrderOf(moved), [2, 0, 1])
+  assert.deepEqual(moved.partOrder?.[3], [2, 0, 1])
+  // Ordinals are stable identities: the surviving parts are NOT renumbered, so every other
+  // part-scoped seam goes on addressing the volume it was made against.
+  assert.deepEqual(moved.plates[0]!.instances[0]!.parts.map((part) => part.componentObjectId), [22, 20, 21])
+})
+
+test('a helper volume cannot be dragged into the leading slot', () => {
+  // BambuStudio requires the first volume to be a printed part: its own object list refuses this
+  // drop, and it sorts the volumes on load when a file arrives otherwise. So allowing it corrupts
+  // nothing -- it just means the order we persist is not the order the project reopens with, here
+  // or in Studio, which makes the drag look like it silently undid itself later.
+  const state = seedEmptyEditorState()
+  const object = partedObject(3, [0, 1, 2])
+  object.parts[2]!.subtype = 'modifier_part'
+  state.plates[0]!.instances = [object]
+
+  const moved = movePartBefore(state, 3, 2, 0)
+  assert.deepEqual(partOrderOf(moved), [0, 1, 2], 'a modifier was allowed to lead the volume list')
+  assert.equal(moved.partOrder?.[3], undefined, 'a refused move still recorded an order')
+
+  // The same drag anywhere else is still fine: only the leading slot is reserved.
+  const legal = movePartBefore(state, 3, 2, 1)
+  assert.deepEqual(partOrderOf(legal), [0, 2, 1])
+})
+
+test('a part reorder applies to every linked copy of the object', () => {
+  const state = seedEmptyEditorState()
+  const source = partedObject(3, [0, 1, 2])
+  state.plates[0]!.instances = [source, duplicateInstance(source)]
+  const moved = movePartBefore(state, 3, 0, null)
+  // Both copies, because an object has ONE part list; only one of two orders could survive a save.
+  assert.deepEqual(partOrderOf(moved, 0), [1, 2, 0])
+  assert.deepEqual(partOrderOf(moved, 1), [1, 2, 0])
+})
+
+test('a part reorder that changes nothing returns the same state', () => {
+  const state = seedEmptyEditorState()
+  state.plates[0]!.instances = [partedObject(3, [0, 1, 2])]
+  assert.equal(movePartBefore(state, 3, 0, 1), state, 'already there')
+  assert.equal(movePartBefore(state, 3, 1, 1), state, 'dropped on itself')
+  assert.equal(movePartBefore(state, 3, 2, null), state, 'already last')
+  assert.equal(movePartBefore(state, 9, 0, null), state, 'an object that is not placed')
+  assert.equal(movePartBefore(state, 3, 7, null), state, 'a part the object does not have')
+})
+
+test('part order emits against the object, and against the IMPORT when there is no save yet', () => {
+  const state = seedEmptyEditorState()
+  state.plates[0]!.instances = [partedObject(3, [0, 1, 2])]
+  const moved = movePartBefore(state, 3, 2, 0)
+  assert.deepEqual(buildSceneEdit(moved).partOrder, [{ objectId: 3, order: [2, 0, 1] }])
+  assert.equal(buildSceneEdit(moved).importPartOrder, undefined)
+
+  // The same edit on a staged multi-solid import, which has no baked object id to address.
+  const importState = seedEmptyEditorState()
+  const staged = instanceFromStagedImport(MULTI)
+  importState.plates[0]!.instances = [staged]
+  const hostId = addedPartHostId(staged)
+  assert.ok(hostId != null)
+  const movedImport = movePartBefore(importState, hostId, 1, 0)
+  const edit = buildSceneEdit(movedImport)
+  assert.equal(edit.partOrder, undefined, 'an unsaved import has no object id to key an order by')
+  assert.deepEqual(edit.importPartOrder, [{ importId: 'imp-3', order: [1, 0] }])
+})
+
+test('an order for an object that is no longer placed is not shipped', () => {
+  const state = seedEmptyEditorState()
+  state.plates[0]!.instances = [partedObject(3, [0, 1, 2])]
+  const moved = movePartBefore(state, 3, 2, 0)
+  moved.plates[0]!.instances = []
+  assert.equal(buildSceneEdit(moved).partOrder, undefined)
+})
+
+test('cloneEditorState deep-copies partOrder so an undo frame cannot share the array', () => {
+  const state = seedEmptyEditorState()
+  state.plates[0]!.instances = [partedObject(3, [0, 1, 2])]
+  const moved = movePartBefore(state, 3, 2, 0)
+  const snapshot = cloneEditorState(moved)
+  assert.deepEqual(snapshot.partOrder?.[3], [2, 0, 1])
+  assert.notEqual(snapshot.partOrder![3], moved.partOrder![3])
+})
+
+test('deleting a part prunes it out of any recorded order, so both records agree', () => {
+  // BambuStudio has no separate order to go stale: `ModelObject::volumes` IS the order and a delete
+  // erases from it. Without the prune the same end state emits two different payloads depending on
+  // which the user did first, and the bake has to be correct for both.
+  const state = seedEmptyEditorState()
+  state.plates[0]!.instances = [partedObject(3, [0, 1, 2])]
+
+  const reorderedThenDeleted = withRemovedParts(movePartBefore(state, 3, 2, 0), 3, new Set([1]))
+  assert.ok(reorderedThenDeleted)
+  assert.deepEqual(reorderedThenDeleted.partOrder?.[3], [2, 0], 'the removed ordinal is gone')
+
+  const deletedThenReordered = movePartBefore(withRemovedParts(state, 3, new Set([1]))!, 3, 2, 0)
+  assert.deepEqual(deletedThenReordered.partOrder?.[3], [2, 0], 'the other order produces the same')
+  assert.deepEqual(
+    buildSceneEdit(reorderedThenDeleted).partOrder,
+    buildSceneEdit(deletedThenReordered).partOrder,
+    'one end state, one payload'
+  )
+})
+
+test('deleting down to one part drops the order entirely rather than keeping a stub', () => {
+  const state = seedEmptyEditorState()
+  // A helper volume alongside two printed parts, so removing two still leaves something printable.
+  const object = partedObject(3, [0, 1, 2])
+  object.parts[2]!.subtype = 'support_blocker'
+  state.plates[0]!.instances = [object]
+  const reordered = movePartBefore(state, 3, 2, 0)
+  const pruned = withRemovedParts(reordered, 3, new Set([0, 2]))
+  assert.ok(pruned)
+  assert.equal(pruned.partOrder?.[3], undefined, 'an order of one volume says nothing')
+  assert.equal(buildSceneEdit(pruned).partOrder, undefined)
+})
+
+test('a body deleted this session stops claiming ordinal 0 in the emitted edit', () => {
+  // The body occupies BODY_PART_INDEX only while it EXISTS. Once it is gone the bake writes no
+  // component for it, so `<part>` position 0 is the object's first added volume -- and the type or
+  // per-part settings the user had given the body would land on that volume in the saved file,
+  // silently. Dropped at the EMIT rather than by the delete, so an undo brings the body's own type
+  // back with it.
+  const base = seedEmptyEditorState()
+  const instance = {
+    ...base.plates[0]!.instances[0],
+    key: 'inst-body-ordinal',
+    objectId: 41,
+    parts: [],
+    printable: true,
+    bodyRemoved: true,
+    source: { kind: 'object' as const },
+    position: new THREE.Vector3(), rotation: new THREE.Euler(), scale: new THREE.Vector3(1, 1, 1)
+  } as never as EditorInstance
+  const state: EditorState = {
+    ...base,
+    plates: [{ ...base.plates[0]!, instances: [instance] }],
+    partTypeChanges: {
+      [partSlotKey(41, BODY_PART_INDEX)]: 'modifier_part',
+      [partSlotKey(41, 1)]: 'support_blocker'
+    },
+    partProcessOverrides: {
+      [partSlotKey(41, BODY_PART_INDEX)]: { wall_loops: '5' },
+      [partSlotKey(41, 1)]: { wall_loops: '9' }
+    }
+  }
+
+  const edit = buildSceneEdit(state)
+  assert.deepEqual(edit.partTypeChanges, [{ objectId: 41, partIndex: 1, subtype: 'support_blocker' }],
+    "the deleted body's type retargeted the volume that took ordinal 0")
+  assert.deepEqual(edit.partProcessOverrides, [{ objectId: 41, partIndex: 1, overrides: { wall_loops: '9' } }],
+    "the deleted body's settings retargeted the volume that took ordinal 0")
+
+  // The inverse: with the body still there, ordinal 0 is its own and must be emitted.
+  const kept = { ...state, plates: [{ ...state.plates[0]!, instances: [{ ...instance, bodyRemoved: undefined }] }] }
+  const keptEdit = buildSceneEdit(kept)
+  assert.equal(keptEdit.partTypeChanges?.length, 2)
+  assert.equal(keptEdit.partProcessOverrides?.length, 2)
 })

@@ -20,12 +20,14 @@
 import { Alert, Button, Checkbox, FormControl, FormLabel, Input, Option, Select, Slider, Stack, Typography } from '@mui/joy'
 import TextFieldsRoundedIcon from '@mui/icons-material/TextFieldsRounded'
 import UploadFileRoundedIcon from '@mui/icons-material/UploadFileRounded'
-import { useRef, useState } from 'react'
+import { useRef } from 'react'
 import { TEXT_INFO_LIMITS, type TextSurfaceType } from '@printstream/shared/three-mf'
 import type { SceneEditPartSubtype } from '@printstream/shared'
 import type { TextToolValue } from './lib/textToolValue'
 import { TOOL_PANEL_ANCHOR } from './editorPanels'
+import { TOOL_PANEL_Z_INDEX } from './editorLayers'
 import { hasBundledCut, type TextFontFace } from './lib/textFonts'
+import { NumberField } from './NumberField'
 
 /** Studio's Join / Cut / Modifier, as the part subtypes they already are here. */
 const OPERATIONS: ReadonlyArray<{ value: SceneEditPartSubtype; label: string; hint: string }> = [
@@ -80,7 +82,7 @@ export function TextToolPanel({
     <Stack
       spacing={1}
       sx={{
-        position: 'absolute', ...TOOL_PANEL_ANCHOR, zIndex: (theme) => theme.zIndex.tooltip,
+        position: 'absolute', ...TOOL_PANEL_ANCHOR, zIndex: TOOL_PANEL_Z_INDEX,
         p: 1.25, borderRadius: 'sm', boxShadow: 'sm', bgcolor: 'background.level1',
         width: 'min(300px, calc(100% - 16px))', maxHeight: 'calc(100% - 16px)', overflowY: 'auto'
       }}
@@ -233,50 +235,3 @@ export function TextToolPanel({
   )
 }
 
-/**
- * A clamped numeric field.
- *
- * Clamps on COMMIT rather than on every keystroke: clamping as you type makes an empty field jump to
- * the minimum and a "10" typed toward "100" impossible to enter.
- *
- * The displayed text is LOCAL state rather than a `key` remount, because a remount only happens when
- * the committed value changes -- so any entry that clamps back to the current value (typing 1 into a
- * field already at its 3mm minimum, or typing letters) left the invalid text on screen disagreeing
- * with the geometry, with no way to resync short of entering a different number.
- */
-function NumberField({ label, value, limits, onChange }: {
-  label: string
-  value: number
-  limits: { min: number; max: number }
-  onChange: (value: number) => void
-}) {
-  const [draft, setDraft] = useState(`${value}`)
-  // Follows the committed value while the user is not typing: the panel can change it from
-  // elsewhere, notably reopening the tool on saved text.
-  const [lastValue, setLastValue] = useState(value)
-  if (lastValue !== value) {
-    setLastValue(value)
-    setDraft(`${value}`)
-  }
-
-  return (
-    <FormControl size="sm">
-      <FormLabel>{label}</FormLabel>
-      <Input
-        size="sm"
-        type="number"
-        value={draft}
-        slotProps={{ input: { min: limits.min, max: limits.max, step: 0.1, 'aria-label': label } }}
-        onChange={(event) => setDraft(event.target.value)}
-        onBlur={() => {
-          const parsed = Number.parseFloat(draft)
-          const next = Number.isFinite(parsed)
-            ? Math.min(Math.max(parsed, limits.min), limits.max)
-            : value
-          setDraft(`${next}`)
-          if (next !== value) onChange(next)
-        }}
-      />
-    </FormControl>
-  )
-}

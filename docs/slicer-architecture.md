@@ -177,7 +177,10 @@ The editor parses existing paint from the scene-entry XML (`lib/threeMfScene.ts`
 vertex-coloured overlay (blue/red supports, green/orange seam), and authors paint with
 Bambu-faithful tools (`lib/supportPaint.ts` + `lib/trianglePaintTree.ts`): sphere and
 circle (view-ray cylinder) brushes that grow from the hit triangle over shared edges
-and split partially covered triangles to `min(radius/5, 0.2mm)` edges, smart fill
+and split partially covered triangles to `min(radius/5, 0.2mm)` edges, swept along the
+stroke between pointer samples so a fast drag paints a continuous band rather than a row
+of dabs (BambuStudio's interpolated positions plus its `DoublePointCursor` capsules; see
+the plugin guide for the rules that come with it), smart fill
 (flood across edges while neighbouring normals stay within an angle limit), and on the
 colour channel single-triangle painting, same-state bucket fill, and a height-range
 band (split crisply at the world-z planes). Brush options mirror Bambu's: edge
@@ -233,6 +236,12 @@ Cut/Split half, or an independent copy can be painted before the project has eve
 saved. The rule that forces this shape: no editor feature may require a save first, so a
 per-object or per-part seam addresses the model by its editor-side identity and resolves
 that to a real object id server-side at bake time.
+A SESSION-ADDED volume paints through that same `importPaint` seam and needed no seam of
+its own: its mesh IS a single-solid `part` import, so its paint is solid 0 of that import
+and the bake already writes it through `renderImportedMeshObjectXml`. Only the client had
+to learn: the `supportPaintPart` tag is what makes a mesh a raycast candidate at all, so
+an untagged volume was not merely unpaintable, the brush passed through it onto the body
+behind.
 A 3MF **import** carries its volume types in: `three-mf-mesh-extract.ts` keeps helper volumes as
 parts with their raw `subtype` (BambuStudio's "Import Object" is `LoadStrategy::LoadModel`, which
 loads a 3MF's ModelVolumes whole and applies each type unconditionally — only the CONFIG is
@@ -288,6 +297,76 @@ import's surviving solids are filtered by SOURCE index, with the multi-part path
 on the ORIGINAL solid count, since the single-mesh fallback is the MERGED mesh and would
 reinstate the geometry just deleted. An object's last printed part cannot be removed;
 deleting the object is the action for that.
+
+`removedObjectBodies` is the third removal, and it exists because the two above cannot
+express it: an object whose geometry sits on an inline `<mesh>` has no `<part>` entry to
+omit. The bake CREATES one while attaching added parts (`applyAddedParts` moves the mesh
+into its own object as component 0 and re-keys the host's own entry onto it), so "remove
+ordinal 0" names something that does not exist until mid-bake, and `importRemovedParts`
+cannot stand in because it filters SOURCE SOLIDS and no-ops for the single-solid imports
+(a primitive, an STL, a cut half) this is mostly about. Flagged instead, so the component
+is never created: the object is written with its added parts as its whole component list
+and they keep their OWN names. Keyed `objectId` XOR `importId`, like `addedParts`, because
+the host may never have been saved. Without it the editor had to promote a volume into the
+body, and a promoted body is named after the OBJECT, so the same delete produced
+`["Cube","Part"]` before a save and `["Part","Part"]` after one. That is the general lesson
+rather than a detail of this seam: a difference that only appears one save later is still a
+save changing what the user sees, so the fix belongs in what gets WRITTEN.
+
+## Sidebar order is data, and both halves are portable
+
+Objects and parts drag to reorder in the sidebar (BambuStudio's `ObjectList` drag), through the
+shared `hooks/useListReorderDrag.ts` + `lib/listReorder.ts` that the plate strip and the materials
+list already use. Rows are GROUPED and a drag cannot cross groups, which is what enforces "a volume
+never leaves its object". Neither order is a view preference: both are written into the file in the
+form other software already reads.
+
+**Object order rides the BUILD ITEMS, and needs no dedicated field.** BambuStudio builds its object
+list by walking `<build><item>` and creating one `ModelObject` the first time an id appears
+(`bbs_3mf.cpp` `_create_object_instance`); a later item for the same id only adds an instance. So the
+item order IS the displayed order, and since `renderArrangedBuildItems` emits items grouped by object
+in `SceneEdit.instances` order, the sidebar order lands in the file directly. **Object ids are never
+renumbered.** An earlier attempt at this permuted object ids to make them ascend in sidebar order and
+was reverted (issue #73), on the belief that BambuStudio rebuilt its list from an id-ordered map.
+That was a misreading: `IdToModelObjectMap` maps id to an INDEX into `m_model->objects`, and it is
+that vector, built in build-item order, which the list walks. Verified against the real thing, since
+Studio's own exporter correlates the two and its files therefore cannot tell the readings apart: a
+137-object customer project whose item, resource and id orders all differ came back from the
+BambuStudio 2.7.1 CLI in the input's ITEM order, all 137. Not renumbering is what makes this cheap:
+every id-keyed structure in the live session stays valid, so none of the re-keying the revert warned
+about is needed.
+
+Three consequences that are easy to miss. The unit an order can address is the OBJECT, not the row:
+a linked copy is one entry in BambuStudio's list, so a drag carries every instance of its object,
+and the editor lays instances out grouped by object (`groupPlateInstancesByObject`) so the sidebar
+shows what the file will contain. The order is PROJECT-wide, not per plate (`projectObjectOrder`,
+`moveObjectBefore` takes the whole `EditorState`): the bake flattens every plate into one build
+section, so an object placed on two plates cannot sit third on one and first on the other, and a
+per-plate order silently lost the drag on the second plate the next time the project was opened.
+And `<model_instance>` is written through the SAME grouping as the build items, because BambuStudio
+ignores that order (it reads the blocks into a map keyed by object id) while OUR scene parser seeds
+the sidebar from it: writing it ungrouped reopened a saved project with an object's copies split
+around another object.
+
+**Part order rides `partOrder` / `importPartOrder`**, each entry the object's complete desired
+sequence of BASE ordinals. Ordinals, not `componentObjectId`: that is the MESH id, and BambuStudio
+writes one id for every volume sharing a mesh, so an object can hold four parts a mesh-id order
+cannot tell apart. The order carries slicing meaning (the engine requires the first volume to be a
+normal part), which is why it is persisted rather than kept as a UI preference. It is applied in the
+SAME pass as `removedParts` (`applyPartLayout`, resolving both through `resolvePartLayout`) because
+neither can run after the other: both address base ordinals, so reordering first moves the ordinals a
+removal names and removing first moves the ordinals an order names. **The model's `<component>` list
+is the volume list and `model_settings` follows it**, so the two documents share ONE layout:
+BambuStudio's `_generate_volumes_new` loops over an object's components and looks each one's `<part>`
+metadata up positionally, guarded by an id check, falling back to an id search and then to defaults.
+A `<part>` list of a different length is therefore not a positional mirror and is left alone -- one
+that matches no component is never read, while a permuted one puts a name, subtype and extruder on
+the wrong volume. The client prunes a removed ordinal out of the recorded order for the same reason
+Studio never has the problem: `ModelObject::volumes` IS the order, so a delete erases from it, and
+"reorder then delete" and "delete then reorder" have to reach one payload rather than two. A PARTIAL order shuffles only the
+ordinals it names, through the slots they already occupy, so it can never drop a volume; that is the
+normal shape whenever a removal is also pending, not just a stale-edit defence, because a removed
+part is already gone from the client's part list and so is absent from the order it records.
 
 `meshReplacements` carries BambuStudio "Replace with…" swaps: each `{objectId, importId}`
 records that an in-project object's mesh was replaced by a staged import. The replaced

@@ -45,7 +45,7 @@ import { writeFile } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import path from 'node:path'
 import type { Plugin } from 'vite'
-import { WEB_BUILD_ID_META_NAME } from './src/lib/webBuildId'
+import { WEB_BUILD_ID_META_NAME } from './src/lib/webBuildId.ts'
 
 /** Written next to the bundle for the API to read. Do not rename without updating `web-build-id.ts`. */
 export const WEB_BUILD_ID_FILE = 'build-id.json'

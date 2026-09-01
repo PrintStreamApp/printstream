@@ -56,6 +56,7 @@ import type {
   SceneEditPartProcessOverride,
   SceneEditPartTransform,
   SceneEditRemovedPart,
+  SceneEditPartOrder,
   SceneEditPartTypeChange,
   SceneEditPlateFilamentChanges,
   SceneEditPlatePauses
@@ -247,24 +248,39 @@ function formatThreeMfTransformValue(value: number): string {
   return Object.is(rounded, -0) ? '0' : String(rounded)
 }
 
-function renderArrangedBuildItems(arranged: ArrangedInstance[], genUuid: (() => string) | null): string {
-  // Emit items grouped by object so each object's items appear in instance-id order, which is how
-  // {@link parseRootBuildItemTransforms} indexes them back to instances.
+/**
+ * Instances grouped by object, objects in first-appearance order, each object's instances by
+ * instance id.
+ *
+ * THE ORDER OF THE OBJECTS HERE IS THE ORDER BAMBUSTUDIO DISPLAYS. Its importer creates one
+ * `ModelObject` the first time a build `<item>` names an id and only adds instances afterwards
+ * (`bbs_3mf.cpp` `_create_object_instance`), and its object list, its plate tree and every
+ * position-keyed sidecar walk that same vector. So this is how the editor's sidebar order becomes
+ * portable: `arranged` follows `SceneEdit.instances`, which is the sidebar.
+ *
+ * Grouping is also what `parseRootBuildItemTransforms` relies on to index items back to instances,
+ * and it is applied to `<model_instance>` through the SAME function so the two documents cannot
+ * drift into disagreeing about which object comes first.
+ */
+function groupArrangedByObject(arranged: readonly ArrangedInstance[]): ArrangedInstance[] {
   const byObject = new Map<number, ArrangedInstance[]>()
   for (const instance of arranged) {
     const list = byObject.get(instance.objectId) ?? []
     list.push(instance)
     byObject.set(instance.objectId, list)
   }
+  // Sorted in place: the arrays are this function's own, and nothing else holds a reference.
+  return [...byObject.values()].flatMap((list) => list.sort((left, right) => left.instanceId - right.instanceId))
+}
+
+function renderArrangedBuildItems(arranged: ArrangedInstance[], genUuid: (() => string) | null): string {
   const lines: string[] = []
-  for (const list of byObject.values()) {
-    for (const instance of [...list].sort((left, right) => left.instanceId - right.instanceId)) {
-      const transform = instance.transform.map(formatThreeMfTransformValue).join(' ')
-      // BambuStudio's per-object "Printable" toggle: a skipped instance is kept in the 3MF
-      // (re-enableable) but marked printable="0", which greys it and excludes it from the slice.
-      const printable = instance.printable === false ? '0' : '1'
-      lines.push(`    <item objectid="${instance.objectId}"${productionUuidAttr(genUuid)} transform="${transform}" printable="${printable}"/>`)
-    }
+  for (const instance of groupArrangedByObject(arranged)) {
+    const transform = instance.transform.map(formatThreeMfTransformValue).join(' ')
+    // BambuStudio's per-object "Printable" toggle: a skipped instance is kept in the 3MF
+    // (re-enableable) but marked printable="0", which greys it and excludes it from the slice.
+    const printable = instance.printable === false ? '0' : '1'
+    lines.push(`    <item objectid="${instance.objectId}"${productionUuidAttr(genUuid)} transform="${transform}" printable="${printable}"/>`)
   }
   return lines.join('\n')
 }
@@ -318,7 +334,13 @@ function renderArrangedModelSettingsPlates(
   filamentSetStable: boolean
 ): string {
   const instancesByPlate = new Map<number, ArrangedInstance[]>()
-  for (const instance of arranged) {
+  // Grouped by object through the SAME function the build items use. BambuStudio ignores this
+  // order (it reads `<model_instance>` into a map keyed by object id, and writes its own from a
+  // `std::set<std::pair<int,int>>`, which is sorted by object) but OUR scene parser seeds the
+  // editor's sidebar from it, so writing it ungrouped is how a saved project reopened with an
+  // object's copies split around another object, disagreeing with both the build items and
+  // BambuStudio about which object comes first.
+  for (const instance of groupArrangedByObject(arranged)) {
     const list = instancesByPlate.get(instance.plateIndex) ?? []
     list.push(instance)
     instancesByPlate.set(instance.plateIndex, list)
@@ -797,6 +819,14 @@ export function buildEditedThreeMfDocuments(
   importIdToObjectId: ReadonlyMap<string, number>
   partFileEntries: ImportedPartFileEntry[]
   clonedObjectIds: Array<{ originalObjectId: number; bakedObjectId: number }>
+  /**
+   * Per-object volume permutations this bake applied, base ordinals in their new order, for the
+   * objects whose part layout actually changed.
+   *
+   * Surfaced because `cut_information.xml` addresses a connector by VOLUME ordinal, which a part
+   * removal or reorder permutes; the caller remaps it. Empty for the overwhelmingly common save.
+   */
+  volumeLayouts: ReadonlyMap<number, number[]>
 } {
   // When the source is a Production-Extension project, BambuStudio's GUI requires a p:UUID on every
   // injected object/component/build-item (see modelUsesProductionExtension); a fresh/core 3MF needs
@@ -916,6 +946,8 @@ export function buildEditedThreeMfDocuments(
     if (!byPart) { byPart = new Set(); importRemovedParts.set(entry.importId, byPart) }
     byPart.add(entry.partIndex)
   }
+  const importPartOrder = new Map<string, readonly number[]>()
+  for (const entry of edit.importPartOrder ?? []) importPartOrder.set(entry.importId, entry.order)
   const toExtruder = (filamentId: number | null): number | null =>
     filamentId != null ? filamentToExtruder.get(filamentId) ?? filamentId : null
   for (const imported of imports) {
@@ -937,7 +969,13 @@ export function buildEditedThreeMfDocuments(
     const allSolids = !isPartImport && imported.parts && imported.parts.length > 1
       ? imported.parts.map((part, sourceIndex) => ({ part, sourceIndex }))
       : null
-    const multiParts = allSolids?.filter((entry) => !removedSolids?.has(entry.sourceIndex)) ?? null
+    // Reordered and filtered together, through the same resolver the in-project layout uses, so
+    // the two paths cannot disagree about what a partial or stale order means. Each survivor still
+    // carries its ORIGINAL `sourceIndex` for the per-solid seams above.
+    const multiParts = allSolids
+      ? resolvePartLayout(allSolids.length, importPartOrder.get(imported.importId), removedSolids)
+        .map((sourceIndex) => allSolids[sourceIndex]!)
+      : null
     // An imported object is ALWAYS bound, never left implicit. An import starts at
     // `filamentId: null`, and writing nothing made the object's material a property of the ENGINE
     // rather than of the file: BambuStudio materialises extruder 1 for an object whose entry is
@@ -1081,11 +1119,18 @@ export function buildEditedThreeMfDocuments(
   // Attach added part volumes BEFORE the unreferenced-object sweep: a part mesh is
   // only kept alive by the <component> reference inserted here.
   if (edit.addedParts && edit.addedParts.length > 0) {
+    // Resolved HERE because an entry may name an IMPORT, whose object id only exists once the
+    // imports above have been baked; the flag then travels as a plain baked-id set.
+    const removedBodies = new Set<number>()
+    for (const entry of edit.removedObjectBodies ?? []) {
+      const objectId = entry.objectId ?? (entry.importId != null ? importIdToObjectId.get(entry.importId) : undefined)
+      if (objectId != null) removedBodies.add(objectId)
+    }
     const applied = applyAddedParts(modelXml, modelSettingsXml, edit.addedParts, importIdToObjectId, () => {
       const id = nextObjectId
       nextObjectId += 1
       return id
-    }, genUuid, filamentToExtruder)
+    }, genUuid, filamentToExtruder, removedBodies)
     modelXml = applied.modelXml
     modelSettingsXml = applied.modelSettingsXml
   }
@@ -1130,15 +1175,23 @@ export function buildEditedThreeMfDocuments(
   }
 
   // LAST of the part-scoped appliers, deliberately: every one above addresses base-file ordinals,
-  // so removing a part before them would shift the ordinals under their feet and silently retarget
-  // each edit onto the neighbouring volume. See `sceneEditRemovedPartSchema`.
-  if (edit.removedParts && edit.removedParts.length > 0) {
-    const applied = applyRemovedParts(modelXml, modelSettingsXml, edit.removedParts)
+  // so moving or removing a part before them would shift the ordinals under their feet and silently
+  // retarget each edit onto the neighbouring volume. Removals and the reorder go together in ONE
+  // pass for the same reason applied to each other. See `sceneEditRemovedPartSchema`.
+  const removedParts = edit.removedParts ?? []
+  const partOrder = edit.partOrder ?? []
+  let volumeLayouts: ReadonlyMap<number, number[]> = new Map()
+  if (removedParts.length > 0 || partOrder.length > 0) {
+    const applied = applyPartLayout(modelXml, modelSettingsXml, removedParts, partOrder)
     modelXml = applied.modelXml
     modelSettingsXml = applied.modelSettingsXml
+    volumeLayouts = applied.volumeLayouts
+  }
+  if (removedParts.length > 0) {
     // A removed `<component>` was the only reference keeping its mesh object alive, so sweep again
     // rather than shipping the orphaned geometry. The sweep is idempotent and seeded from the same
-    // placed-object set as the pass above.
+    // placed-object set as the pass above. A pure REORDER references every mesh it started with, so
+    // it needs no sweep.
     const swept = removeUnreferencedObjects(modelXml, modelSettingsXml, new Set(arranged.map((instance) => instance.objectId)))
     modelXml = swept.modelXml
     modelSettingsXml = swept.modelSettingsXml
@@ -1181,7 +1234,7 @@ export function buildEditedThreeMfDocuments(
     modelSettingsXml = repairModelSettingsObjectExtruders(modelSettingsXml).xml
   }
 
-  return { modelXml, modelSettingsXml, importIdToObjectId, partFileEntries, clonedObjectIds: cloned.resolvedIds }
+  return { modelXml, modelSettingsXml, importIdToObjectId, partFileEntries, clonedObjectIds: cloned.resolvedIds, volumeLayouts }
 }
 
 const IDENTITY_THREE_MF_TRANSFORM = '1 0 0 0 1 0 0 0 1 0 0 0'
@@ -1201,14 +1254,26 @@ const IDENTITY_THREE_MF_TRANSFORM = '1 0 0 0 1 0 0 0 1 0 0 0'
  * `importIdToObjectId`. The inline-mesh wrapping branch below is the normal path for such a host,
  * since a freshly baked import always carries its mesh inline.
  */
-function applyAddedParts(
+/**
+ * Exported for `bake-documents.addedParts.test.ts`: the `<part>` rewrites here are regex work over
+ * XML whose exact shape varies between writers, which is a unit test's job rather than a full
+ * archive round trip's.
+ */
+export function applyAddedParts(
   modelXml: string,
   modelSettingsXml: string,
   addedParts: NonNullable<SceneEdit['addedParts']>,
   importIdToObjectId: ReadonlyMap<string, number>,
   allocateObjectId: () => number,
   genUuid: (() => string) | null,
-  filamentToExtruder: ReadonlyMap<number, number>
+  filamentToExtruder: ReadonlyMap<number, number>,
+  /**
+   * Hosts that keep NO geometry of their own: their added parts ARE the object.
+   *
+   * Resolved to baked object ids by the caller, because an entry may name an import that only gets
+   * an id here. See {@link sceneEditRemovedObjectBodySchema} for why this cannot be a removal.
+   */
+  removedBodies: ReadonlySet<number> = new Set()
 ): { modelXml: string; modelSettingsXml: string } {
   for (const part of addedParts) {
     const partObjectId = importIdToObjectId.get(part.meshImportId)
@@ -1240,20 +1305,42 @@ function applyAddedParts(
         `   ${meshMatch[0]}`,
         '  </object>'
       ].join('\n')
+      // The object's OWN geometry becomes component 0 -- UNLESS the user deleted it, in which case
+      // it is simply never referenced and the added parts are the whole component list. Dropping it
+      // here rather than removing it afterwards is what lets the surviving parts keep their own
+      // names: a promoted body is named after the OBJECT, so a delete that went through a promotion
+      // renamed the survivor and made the same edit read differently before and after a save.
+      const keepsBody = !removedBodies.has(hostObjectId)
       const nextBody = body.replace(/<mesh\b[\s\S]*?<\/mesh>/, [
         '<components>',
-        `    <component objectid="${meshObjectId}"${productionUuidAttr(genUuid)} transform="${IDENTITY_THREE_MF_TRANSFORM}"/>`,
+        ...(keepsBody
+          ? [`    <component objectid="${meshObjectId}"${productionUuidAttr(genUuid)} transform="${IDENTITY_THREE_MF_TRANSFORM}"/>`]
+          : []),
         componentXml,
         '   </components>'
       ].join('\n'))
       modelXml = modelXml.replace(parentPattern, (_match, open: string, _body: string, close: string) => `${open}${nextBody}${close}`)
-      modelXml = injectResourcesObjects(modelXml, meshObjectXml)
+      // The moved mesh is only worth keeping as an object while something references it; the
+      // unreferenced-object sweep would take it anyway, but not writing it keeps the file honest.
+      if (keepsBody) modelXml = injectResourcesObjects(modelXml, meshObjectXml)
       // The parent's existing settings <part> keyed by the parent id now describes the
-      // moved mesh component.
-      modelSettingsXml = modelSettingsXml.replace(
-        new RegExp(`(<object\\b[^>]*\\bid="${hostObjectId}"[^>]*>[\\s\\S]*?)<part id="${hostObjectId}"`),
-        `$1<part id="${meshObjectId}"`
-      )
+      // moved mesh component -- or, where the body is gone, describes nothing and is dropped, so
+      // the object's part list is exactly its added parts.
+      modelSettingsXml = keepsBody
+        ? modelSettingsXml.replace(
+          new RegExp(`(<object\\b[^>]*\\bid="${hostObjectId}"[^>]*>[\\s\\S]*?)<part id="${hostObjectId}"`),
+          `$1<part id="${meshObjectId}"`
+        )
+        // A `<part>` may be SELF-CLOSING: nothing in the format forbids `<part id="1" .../>`, and
+        // only our own writers always emit a closing tag. Matching `...>[\s\S]*?</part>` on one
+        // then ran past it to the NEXT part's closing tag and deleted that part's name, extruder
+        // and settings with it. The alternation takes the self-closing form first, so the greedy
+        // form is only reached for an entry that genuinely has a body.
+        : modelSettingsXml.replace(
+          new RegExp(`(<object\\b[^>]*\\bid="${hostObjectId}"[^>]*>[\\s\\S]*?)`
+            + `<part id="${hostObjectId}"(?:[^>]*\\/>|[^>]*>[\\s\\S]*?<\\/part>)\\s*`),
+          '$1'
+        )
     } else {
       throw new Error(`Object ${hostObjectId} has neither mesh nor components`)
     }
@@ -1527,53 +1614,162 @@ export function applyPartTransforms(
 }
 
 /**
- * Remove parts (volumes) from in-project objects: drop the Nth `<component>` from the model and the
- * Nth `<part>` from `model_settings.config`, for each requested BASE ordinal.
+ * The final sequence of BASE ordinals for one object's volumes: the requested order applied, then
+ * the requested removals dropped.
  *
- * Two rules. **Ordinals are counted over the BASE document, never renumbered as removals are
- * applied**: one pass per object walks components in order and drops the ones whose index is in
- * the set, so removing parts 1 and 2 removes those two and not part 1 and then the part that slid
- * into slot 2. And this must run AFTER every other part-scoped applier, which address those same
- * base ordinals; the caller enforces that ordering, and getting it wrong retargets edits silently
- * rather than failing.
+ * Exported for its test; the two inputs are resolved together because neither can be applied after
+ * the other. A reorder moves the ordinals a removal names, and a removal moves the ordinals an
+ * order names, so running them as two passes silently retargets whichever went second.
  *
- * The component is the only thing keeping its mesh object referenced, so the caller re-runs the
- * unreferenced-object sweep afterwards to drop the orphan. Removing an object's LAST printed part
- * is refused client-side (an object with no geometry is not a thing BambuStudio can open); nothing
- * here depends on that, so a malformed edit degrades to an empty object rather than a corrupt file.
+ * A partial `order` shuffles only the ordinals it names, through the SLOTS those ordinals already
+ * occupy, and leaves everything else where it is. That is what makes a stale order (a part deleted
+ * since it was composed, an ordinal the object never had) a no-op for the parts it does not name
+ * instead of a reshuffle or a dropped volume.
  */
-export function applyRemovedParts(
+export function resolvePartLayout(
+  count: number,
+  order: readonly number[] | undefined,
+  removed?: ReadonlySet<number>
+): number[] {
+  const layout = Array.from({ length: count }, (_unused, index) => index)
+  // Only ordinals this object actually has, each at most once: a duplicate would place one volume
+  // twice and silently drop another. `new Set` keeps the first occurrence, which is the one meant.
+  const moving = [...new Set(order ?? [])].filter((ordinal) => ordinal >= 0 && ordinal < count)
+  const moved = new Set(moving)
+  // The slots those ordinals occupy today, filled back in the requested sequence. Everything else
+  // stays where it is, which is what makes a partial order (the normal shape once a removal is
+  // also pending) move only what it names.
+  const slots = layout.filter((ordinal) => moved.has(ordinal))
+  moving.forEach((ordinal, position) => { layout[slots[position]!] = ordinal })
+  return removed ? layout.filter((ordinal) => !removed.has(ordinal)) : layout
+}
+
+/**
+ * Lay out each in-project object's volumes: apply the session's part ORDER and its part REMOVALS in
+ * one pass, rewriting the `<component>` sequence in the model and the matching `<part>` sequence in
+ * `model_settings.config` so the two documents agree.
+ *
+ * Both are rewritten because BambuStudio pairs them by position first and only falls back to a
+ * linear id search, and because the `<part>` order is what its importer reads a volume's identity
+ * from (`_handle_start_config_volume` uses `volumes.size()`, not the `id` attribute).
+ *
+ * Three rules. **Ordinals are counted over the BASE document and never renumbered mid-pass**, so
+ * removing parts 1 and 2 removes those two rather than part 1 and then whatever slid into slot 2.
+ * **This runs AFTER every other part-scoped applier**, all of which address the same base ordinals;
+ * the caller enforces that, and getting it wrong retargets edits silently rather than failing.
+ *
+ * And **the MODEL's `<component>` list is the volume list; `model_settings` follows it**, because
+ * that is how BambuStudio reads them. `_generate_volumes_new` loops over the object's COMPONENTS and
+ * looks each one's metadata up in the `<part>` list positionally, guarded by an id check
+ * (`index < volumes.size() && volumes[index].subobject_id == sub_object->id`), falling back to a
+ * linear id search and then to defaults. So the two lists get ONE layout, computed from the
+ * components. When their lengths disagree the object is not a positional mirror at all, and the
+ * `<part>` list is left ALONE rather than permuted onto a different length: a `<part>` that matches
+ * no component is simply never read by that loop, while a wrongly-permuted one is metadata landing
+ * on the wrong volume. An object whose mesh is INLINE has no components, so its single
+ * self-referencing `<part>` is the volume list and the settings count leads instead.
+ *
+ * A removed component was the only thing keeping its mesh object referenced, so the caller re-runs
+ * the unreferenced-object sweep afterwards. Removing an object's LAST printed part is refused
+ * client-side (an object with no geometry is not a thing BambuStudio can open); nothing here depends
+ * on that, so a malformed edit degrades to an empty object rather than a corrupt file.
+ */
+export function applyPartLayout(
   modelXml: string,
   modelSettingsXml: string,
-  removedParts: SceneEditRemovedPart[]
-): { modelXml: string; modelSettingsXml: string } {
-  const byObject = new Map<number, Set<number>>()
+  removedParts: readonly SceneEditRemovedPart[],
+  partOrder: readonly SceneEditPartOrder[]
+): { modelXml: string; modelSettingsXml: string; volumeLayouts: ReadonlyMap<number, number[]> } {
+  const removedByObject = new Map<number, Set<number>>()
   for (const removal of removedParts) {
-    let parts = byObject.get(removal.objectId)
-    if (!parts) { parts = new Set(); byObject.set(removal.objectId, parts) }
+    let parts = removedByObject.get(removal.objectId)
+    if (!parts) { parts = new Set(); removedByObject.set(removal.objectId, parts) }
     parts.add(removal.partIndex)
   }
-  const nextModelXml = modelXml.replace(/<object\b([^>]*)>[\s\S]*?<\/object>/g, (objectBlock, attrs: string) => {
-    const objectId = Number.parseInt(parseAttrs(attrs).id ?? '', 10)
-    const parts = byObject.get(objectId)
-    if (!parts) return objectBlock
-    let componentIndex = -1
-    return objectBlock.replace(/[^\S\r\n]*<component\b[^>]*\/>\n?/g, (componentTag) => {
-      componentIndex += 1
-      return parts.has(componentIndex) ? '' : componentTag
+  const orderByObject = new Map<number, readonly number[]>()
+  for (const entry of partOrder) orderByObject.set(entry.objectId, entry.order)
+  const volumeLayouts = new Map<number, number[]>()
+  if (removedByObject.size === 0 && orderByObject.size === 0) {
+    return { modelXml, modelSettingsXml, volumeLayouts }
+  }
+
+  const COMPONENT_PATTERN = /[^\S\r\n]*<component\b[^>]*\/>\n?/g
+  const PART_PATTERN = /[^\S\r\n]*<part\b[^>]*>[\s\S]*?<\/part>\n?/g
+
+  /** How many `<component>`s each object declares: the length of its volume list. */
+  const componentCounts = new Map<number, number>()
+  for (const match of modelXml.matchAll(/<object\b([^>]*)>[\s\S]*?<\/object>/g)) {
+    const objectId = Number.parseInt(parseAttrs(match[1] ?? '').id ?? '', 10)
+    if (Number.isInteger(objectId)) componentCounts.set(objectId, [...match[0].matchAll(COMPONENT_PATTERN)].length)
+  }
+
+  /** Rewrite one document's per-object volume blocks into the object's single resolved layout. */
+  const relayout = (xml: string, blockPattern: RegExp): string =>
+    xml.replace(/<object\b([^>]*)>[\s\S]*?<\/object>/g, (objectBlock, attrs: string) => {
+      const objectId = Number.parseInt(parseAttrs(attrs).id ?? '', 10)
+      const removed = removedByObject.get(objectId)
+      const order = orderByObject.get(objectId)
+      if (!removed && !order) return objectBlock
+      const blocks = [...objectBlock.matchAll(blockPattern)].map((match) => match[0])
+      // The components lead; an inline-mesh object has none, so its own `<part>` list does.
+      const volumeCount = componentCounts.get(objectId) || blocks.length
+      if (blocks.length !== volumeCount) return objectBlock
+      const layout = resolvePartLayout(volumeCount, order, removed)
+      // Same order and nothing dropped: return the block untouched so an ordinary save churns no
+      // bytes, which is also what keeps the ordinal-sidecar remap a no-op.
+      if (layout.length === blocks.length && layout.every((ordinal, index) => ordinal === index)) return objectBlock
+      volumeLayouts.set(objectId, layout)
+      const rewritten = layout.map((ordinal) => blocks[ordinal]!)
+      // Past the end of the new layout are the removed volumes' slots, which emit nothing.
+      let emitted = 0
+      return objectBlock.replace(blockPattern, () => rewritten[emitted++] ?? '')
     })
-  })
-  const nextModelSettingsXml = modelSettingsXml.replace(/<object\b([^>]*)>[\s\S]*?<\/object>/g, (objectBlock, attrs: string) => {
-    const objectId = Number.parseInt(parseAttrs(attrs).id ?? '', 10)
-    const parts = byObject.get(objectId)
-    if (!parts) return objectBlock
-    let settingsPartIndex = -1
-    return objectBlock.replace(/[^\S\r\n]*<part\b[^>]*>[\s\S]*?<\/part>\n?/g, (partBlock) => {
-      settingsPartIndex += 1
-      return parts.has(settingsPartIndex) ? '' : partBlock
-    })
-  })
-  return { modelXml: nextModelXml, modelSettingsXml: nextModelSettingsXml }
+
+  const relaidModel = relayout(modelXml, COMPONENT_PATTERN)
+  const relaidSettings = relayout(modelSettingsXml, PART_PATTERN)
+  return {
+    modelXml: relaidModel,
+    // After the object pass, which populates the layouts this needs and cannot reach `<assemble>`.
+    modelSettingsXml: remapAssembleItems(relaidSettings, volumeLayouts),
+    volumeLayouts
+  }
+}
+
+/**
+ * Rewrite the root `<assemble>` block's `<assemble_item volume_id>`s for the new volume order.
+ *
+ * The SECOND place a volume ordinal appears in `model_settings.config`, and the one the per-object
+ * pass above cannot reach: `<assemble>` is a SIBLING of the `<object>` blocks, not a child, so the
+ * relayout's own `<object>…</object>` scope steps straight over it.
+ *
+ * Each item carries the assembly-view transform for one volume, which BambuStudio replays as
+ * `mo->volumes[entry.volume_id]->set_assemble_from_transform(...)`, a bare index, so a stale
+ * ordinal silently lands the transform on whichever volume slid into that slot. An item whose
+ * volume was REMOVED is dropped rather than renumbered onto a survivor, the same rule its
+ * `<connector>` counterpart follows and for the same reason: renumbering hands unrelated geometry
+ * a transform nobody authored for it.
+ */
+function remapAssembleItems(
+  settingsXml: string,
+  volumeLayouts: ReadonlyMap<number, readonly number[]>
+): string {
+  if (volumeLayouts.size === 0) return settingsXml
+  // Both spellings, as in `remapConnectorVolumes`: BambuStudio writes the self-closing form, but a
+  // hand-edited or foreign file may use an explicit close, and those must not be left stale.
+  return settingsXml.replace(
+    /[ \t]*<assemble_item\b([^>]*?)(?:\/>|>[\s\S]*?<\/assemble_item>)\n?/g,
+    (item, attrs: string) => {
+      const parsed = parseAttrs(attrs ?? '')
+      const layout = volumeLayouts.get(Number.parseInt(parsed.object_id ?? '', 10))
+      if (!layout) return item
+      const volumeId = Number.parseInt(parsed.volume_id ?? '', 10)
+      if (!Number.isInteger(volumeId)) return item
+      // `layout[newIndex] = oldOrdinal`, so the new home of an old volume is its position in it.
+      const next = layout.indexOf(volumeId)
+      if (next < 0) return ''
+      return next === volumeId ? item : item.replace(/(\bvolume_id=")\d+(")/, `$1${next}$2`)
+    }
+  )
 }
 
 /**
@@ -2003,26 +2199,6 @@ export function applyFilamentList(projectSettingsJson: string, filaments: SceneE
     Object.assign(record, rebound)
   }
 
-  // A project whose physics was DROPPED by an older save has no arrays left for
-  // `rebindProjectFilamentPhysics` to rewrite (it only touches keys still present), so the values are
-  // written from scratch instead: see `repairs/restore-filament-physics.ts` for why the column width
-  // has to come from the preset rather than be guessed. This is what makes SAVING the repair for the
-  // `filamentPhysics` defect: reopening an affected project and saving restores its materials.
-  //
-  // Judged on the RECORD THIS PASS HAS BUILT, not on the document that came in. Reading the input
-  // meant a physics defect introduced by this same pass could never be restored by it, and one was:
-  // the variant-scoped drop wrote a project missing three of the five completeness sentinels while
-  // the input was healthy, so this gate saw nothing to do. That specific cause is fixed, but the
-  // gate that hid it was the more general fault, and it is the same rule the bake's output check
-  // follows: judge what was produced.
-  //
-  // Not a widening of what gets repaired. An unchanged pass produces the input, so an already-broken
-  // project behaves exactly as before, and the restore still writes nothing without resolved presets
-  // to write from, which is what keeps the deliberate no-preset drop above intact.
-  if (inspectProjectFilamentPhysics(JSON.stringify(record))?.inconsistent === true) {
-    restoreFilamentPhysics(record, filaments.map((filament) => (filament.config as ProcessConfig | null) ?? null))
-  }
-
   // Name each slot's parent preset and declare what it changed. Writing the VALUES above is only
   // half of binding a slot: BambuStudio normalizes a slot against its parent before comparing it to
   // the installed preset, and for a USER preset that step is reached only through `inherits_group`.
@@ -2202,6 +2378,35 @@ export function applyFilamentList(projectSettingsJson: string, filaments: SceneE
   if (oldCount > 0 && newCount !== oldCount) {
     const conformedSelfIndex = repairFilamentSelfIndex(record)
     if (conformedSelfIndex) record.filament_self_index = conformedSelfIndex
+  }
+
+  // A project whose physics was DROPPED by an older save has no arrays left for
+  // `rebindProjectFilamentPhysics` to rewrite (it only touches keys still present), so the values are
+  // written from scratch instead: see `repairs/restore-filament-physics.ts` for why the column width
+  // has to come from the preset rather than be guessed. This is what makes SAVING the repair for the
+  // `filamentPhysics` defect: reopening an affected project and saving restores its materials.
+  //
+  // Judged on the RECORD THIS PASS HAS BUILT, and therefore LAST -- after the identity arrays above
+  // exist. Two things depend on that placement, and the second is why this sits at the end of the
+  // function rather than beside the rebind it complements.
+  //
+  // It cannot read the INPUT: a physics defect introduced by this same pass could then never be
+  // restored by it, and one was (the variant-scoped drop wrote a project missing three of the five
+  // completeness sentinels while the input was healthy, so the gate saw nothing to do).
+  //
+  // And it cannot run before the identity is written: `inspectProjectFilamentPhysics` counts SLOTS,
+  // and a from-scratch bake (`applyProjectSettings('{}')`, which is every editor-born project's
+  // first save) has none until the arrays below are assigned. Judging the empty record returned
+  // null -- "nothing to judge" -- so a new project saved every material's physics into the void
+  // however completely the editor had resolved it, and reopened flagged `filamentPhysics` on a file
+  // the bake had just been handed the values for. The bake's own output check said so at the time,
+  // in a log line nobody was reading: "wrote ... with repairable settings defects: filamentPhysics".
+  //
+  // Not a widening of what gets repaired. An unchanged pass produces the input, so an already-broken
+  // project behaves exactly as before, and the restore still writes nothing without resolved presets
+  // to write from, which is what keeps the deliberate no-preset drop above intact.
+  if (inspectProjectFilamentPhysics(JSON.stringify(record))?.inconsistent === true) {
+    restoreFilamentPhysics(record, filaments.map((filament) => (filament.config as ProcessConfig | null) ?? null))
   }
 
   return JSON.stringify(record)

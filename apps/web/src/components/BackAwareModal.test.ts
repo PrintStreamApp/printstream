@@ -51,6 +51,75 @@ test('an open dialog marks the app busy until it closes', () => {
   assert.equal(appBusy.isAppBusy(), false, 'closing it must release the hold')
 })
 
+/**
+ * WHY a dialog can trust `reason`: the history hop must not launder it.
+ *
+ * Closing the top dialog is routed through `history.back()` so the Back button and the dialog's own
+ * dismissal agree on one stack. That hop used to drop the reason on the floor and re-enter with a
+ * flat `backdropClick`, so every history-routed close looked identical: Escape, a scrim click and a
+ * Back gesture were indistinguishable. The 3MF editor needs to tell them apart, because Escape backs
+ * out of the active tool while Back closes the editor outright. It shipped a `reason ===
+ * 'escapeKeyDown'` branch that could never once be taken, and nothing failed.
+ */
+test('the close reason survives the history hop', async () => {
+  const reasons: string[] = []
+  render(createElement(BackAwareModal, {
+    open: true,
+    onClose: (_event: unknown, reason: string) => { reasons.push(reason) },
+    children: createElement('div', null, 'dialog body')
+  }))
+
+  // The Modal ROOT carries the keydown handler, and the event has to originate inside it; a
+  // `[role="dialog"]` lookup finds nothing here, because that role comes from `ModalDialog`.
+  const modalRoot = dom.window.document.querySelector('.MuiModal-root')
+  assert.ok(modalRoot, 'the modal must mount for this to mean anything')
+  modalRoot.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+  // The hop is a real `history.back()`, so `onClose` lands on a later task via `popstate`.
+  await new Promise((resolve) => setTimeout(resolve, 50))
+
+  cleanup()
+  assert.deepEqual(reasons, ['escapeKeyDown'], 'Escape must not arrive disguised as a backdrop click')
+})
+
+/**
+ * A DECLINED Escape must cost the dialog nothing.
+ *
+ * The editor treats Escape as a non-closing gesture most of the time: it backs out of the active
+ * tool, or clears the selection, and stays open. The wrapper used to route every reason through
+ * `history.back()` before the consumer had any say, so a declined Escape popped the dialog's own
+ * history entry while the dialog stayed on screen. The dialog was then open with nothing behind it:
+ * browser Back navigated the route away instead of closing it, and closing any dialog opened on top
+ * of it popped to a stack that prefixed the editor's, firing the editor's `onClose` a second time
+ * and tearing it down (or raising "Discard unsaved changes?") over a gesture nobody made.
+ *
+ * The entry is now spent when the dialog actually CLOSES, which is the only moment that knows.
+ */
+test('an Escape the dialog declines leaves its history entry alone', async () => {
+  const reasons: string[] = []
+  render(createElement(BackAwareModal, {
+    open: true,
+    // Declines: records the reason and stays open, exactly as the editor does while a tool is live.
+    onClose: (_event: unknown, reason: string) => { reasons.push(reason) },
+    children: createElement('div', null, 'dialog body')
+  }))
+
+  const modalRoot = dom.window.document.querySelector('.MuiModal-root')
+  assert.ok(modalRoot, 'the modal must mount for this to mean anything')
+  modalRoot.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+  await new Promise((resolve) => setTimeout(resolve, 50))
+
+  assert.deepEqual(reasons, ['escapeKeyDown'], 'the reason must still arrive')
+
+  // The entry must still be there, which is observable as Back still closing THIS dialog. With the
+  // entry already spent, Back belongs to whatever is underneath and the route navigates away.
+  dom.window.history.back()
+  await new Promise((resolve) => setTimeout(resolve, 50))
+
+  cleanup()
+  assert.deepEqual(reasons, ['escapeKeyDown', 'backdropClick'],
+    'Back did not reach the dialog: its history entry was spent by the declined Escape')
+})
+
 /** The wrapper itself: the one module that may mount Joy's `Modal`. */
 const OWNER = path.join('components', 'BackAwareModal.tsx')
 
