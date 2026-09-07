@@ -1326,9 +1326,20 @@ async function prepareProfileArgs(input: {
     return null
   })
   const embeddedPresetNames = stringArrayValue(embeddedSettings?.filament_settings_id)
+  // Supplied filament files indexed by their preset NAME, so a slot that stayed on the project's
+  // own preset can still be covered by it: the API sends the workspace presets a project names, and
+  // those are reachable here only by name, never by a profile id the request did not carry.
+  const suppliedProfileIdsByName = new Map<string, string>()
+  for (const [profileId, profile] of filamentFilesById) {
+    const name = profile.name?.trim()
+    // First writer wins: two files of one name is a catalogue problem, and picking the later one
+    // would make coverage depend on map order rather than on anything the user can see.
+    if (name && !suppliedProfileIdsByName.has(name)) suppliedProfileIdsByName.set(name, profileId)
+  }
   const slotSources = await buildFilamentSlotCoverage({
     slots: input.filamentSlots,
     requestedProfileIds: new Set(filamentFilesById.keys()),
+    suppliedProfileIdsByName,
     embeddedPresetNames,
     hasBuiltinPreset: (name) => builtinFilamentPresetExists(input.profileDir, name)
   })

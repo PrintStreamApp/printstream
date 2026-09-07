@@ -11,7 +11,6 @@ import yazl from 'yazl'
 import { readPrintJobThumbnail, savePrintJobThumbnail } from './print-job-thumbnails.js'
 import { SlicerServiceError, slicerClient } from './slicer-client.js'
 import { SlicingJobs, resolveSlicingSourcePath, type AuthorSliceSettings, type PersistSlicedArtifact, type ResolveSlicingSource } from './slicing-jobs.js'
-import { readEntry } from './three-mf.js'
 
 // These suites slice from fixture paths that don't exist on disk and mock the
 // slicer, so use the persisted path as-is rather than re-resolving from the DB.
@@ -47,7 +46,7 @@ test('resolveSlicingSourcePath returns the persisted path when it still exists',
   try {
     const sourcePath = path.join(dir, 'source.3mf')
     await writeFile(sourcePath, Buffer.from('3mf bytes'))
-    const resolved = await resolveSlicingSourcePath({ sourceFileId: 'file-1', sourcePath })
+    const resolved = await resolveSlicingSourcePath({ sourceFileId: 'file-1', sourcePath, workspaceId: 'ws-1' })
     // The cached copy exists, so it is used as-is without any library re-fetch.
     assert.equal(resolved, sourcePath)
   } finally {
@@ -753,143 +752,8 @@ test('slicing jobs persist durable history thumbnails and clean them up on delet
   }
 })
 
-test('slicing jobs retry without incompatible builtin profiles after compatibility failures', async () => {
-  const jobs = new SlicingJobs({ progressPollIntervalMs: 10, progressHeartbeatIntervalMs: 10_000, resolveSource: passthroughResolveSource, authorSliceSettings: noAuthoring })
-  const runProfileCounts: number[] = []
-  const runProfileKinds: string[][] = []
-  const runJobIds: string[] = []
 
-  slicerClient.isConfigured = (() => true) as typeof slicerClient.isConfigured
-  slicerClient.progress = (async () => ({ kind: 'unclaimed' })) as typeof slicerClient.progress
-  slicerClient.run = (async (input) => {
-    runJobIds.push(input.jobId)
-    runProfileCounts.push(input.profileFiles?.length ?? 0)
-    runProfileKinds.push((input.profileFiles ?? []).map((profile) => `${profile.source}:${profile.kind}`))
-    if (runProfileCounts.length === 1) {
-      throw new SlicerServiceError('Slicer CLI exited with code 251', [
-        makeOutput('stderr', ":file /opt/bambustudio/squashfs-root/resources/profiles/BBL/machine_full/Bambu Lab P1S.json's from unsupported")
-      ])
-    }
-    throw new SlicerServiceError('Still failed after retry', [])
-  }) as typeof slicerClient.run
 
-  const job = jobs.enqueue({
-    workspaceId: 'workspace-1',
-    workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
-    sourceFileId: 'file-1',
-    sourceFileName: 'part.3mf',
-    sourcePath: '/tmp/part.3mf',
-    targetBridgeId: null,
-    profileFiles: [
-      { id: 'builtin-machine', source: 'builtin', kind: 'machine', name: 'Bambu Lab P1S' },
-      { id: 'custom-process', source: 'custom', kind: 'process', name: 'Project Quality', content: '{"type":"process","name":"Project Quality"}' }
-    ],
-    request: makeRequest()
-  })
-
-  await waitFor(async () => {
-    const current = jobs.get('workspace-1', job.id)
-    assert.equal(current.status, 'failed')
-    assert.equal(runProfileCounts.length, 2)
-    assert.equal(runJobIds.length, 2)
-    assert.notEqual(runJobIds[0], runJobIds[1])
-    assert.deepEqual(runProfileKinds, [
-      ['builtin:machine', 'custom:process'],
-      ['custom:process']
-    ])
-    assert.equal(current.output.some((entry) => entry.text.includes('Retrying without the incompatible built-in machine profile')), true)
-  })
-})
-
-test('slicing jobs retry when compatibility fallback matches generated builtin:machine profile file names', async () => {
-  const jobs = new SlicingJobs({ progressPollIntervalMs: 10, progressHeartbeatIntervalMs: 10_000, resolveSource: passthroughResolveSource, authorSliceSettings: noAuthoring })
-  const runProfileKinds: string[][] = []
-  const runJobIds: string[] = []
-
-  slicerClient.isConfigured = (() => true) as typeof slicerClient.isConfigured
-  slicerClient.progress = (async () => ({ kind: 'unclaimed' })) as typeof slicerClient.progress
-  slicerClient.run = (async (input) => {
-    runJobIds.push(input.jobId)
-    runProfileKinds.push((input.profileFiles ?? []).map((profile) => `${profile.source}:${profile.kind}`))
-    if (runProfileKinds.length === 1) {
-      throw new SlicerServiceError('Slicer CLI exited with code 251', [
-        makeOutput('stderr', "operator():file /work/job/profiles/builtin:machine:QmFtYnUgTGFiIFAxUyAwLjQgbm96emxl.json's from  unsupported")
-      ])
-    }
-    throw new SlicerServiceError('Still failed after retry', [])
-  }) as typeof slicerClient.run
-
-  const job = jobs.enqueue({
-    workspaceId: 'workspace-1',
-    workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
-    sourceFileId: 'file-1',
-    sourceFileName: 'part.3mf',
-    sourcePath: '/tmp/part.3mf',
-    targetBridgeId: null,
-    profileFiles: [
-      { id: 'builtin-machine', source: 'builtin', kind: 'machine', name: 'Bambu Lab P1S 0.4 nozzle' },
-      { id: 'custom-process', source: 'custom', kind: 'process', name: 'Project Quality', content: '{"type":"process","name":"Project Quality"}' }
-    ],
-    request: makeRequest()
-  })
-
-  await waitFor(async () => {
-    const current = jobs.get('workspace-1', job.id)
-    assert.equal(current.status, 'failed')
-    assert.equal(runJobIds.length, 2)
-    assert.notEqual(runJobIds[0], runJobIds[1])
-    assert.deepEqual(runProfileKinds, [
-      ['builtin:machine', 'custom:process'],
-      ['custom:process']
-    ])
-    assert.equal(current.output.some((entry) => entry.text.includes('Retrying without the incompatible built-in machine profile')), true)
-  })
-})
-
-test('slicing jobs retry without builtin machine/process after a settings-merge compatibility failure', async () => {
-  // Regression: the slicer now fails fast (instead of segfaulting) when its project-settings
-  // repair export hits CLI_PROCESS_NOT_COMPATIBLE (exit 239): e.g. a stale slice dialog pairing
-  // an X1C process with an H2D machine. That message must keep flowing into the existing
-  // exit-239 compatibility fallback so the slice recovers onto the project's own presets.
-  const jobs = new SlicingJobs({ progressPollIntervalMs: 10, progressHeartbeatIntervalMs: 10_000, resolveSource: passthroughResolveSource, authorSliceSettings: noAuthoring })
-  const runProfileKinds: string[][] = []
-
-  slicerClient.isConfigured = (() => true) as typeof slicerClient.isConfigured
-  slicerClient.progress = (async () => ({ kind: 'unclaimed' })) as typeof slicerClient.progress
-  slicerClient.run = (async (input) => {
-    runProfileKinds.push((input.profileFiles ?? []).map((profile) => `${profile.source}:${profile.kind}`))
-    if (runProfileKinds.length === 1) {
-      throw new SlicerServiceError('Slicer CLI exited with code 239 while merging project settings for slicing (process not compatible with printer)', [])
-    }
-    throw new SlicerServiceError('Still failed after retry', [])
-  }) as typeof slicerClient.run
-
-  const job = jobs.enqueue({
-    workspaceId: 'workspace-1',
-    workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
-    sourceFileId: 'file-1',
-    sourceFileName: 'part.3mf',
-    sourcePath: '/tmp/part.3mf',
-    targetBridgeId: null,
-    profileFiles: [
-      { id: 'builtin-machine', source: 'builtin', kind: 'machine', name: 'Bambu Lab H2D 0.4 nozzle' },
-      { id: 'builtin-process', source: 'builtin', kind: 'process', name: '0.20mm Standard @BBL X1C' },
-      { id: 'builtin-filament', source: 'builtin', kind: 'filament', name: 'Bambu PETG Basic @BBL H2D 0.4 nozzle' }
-    ],
-    request: makeRequest()
-  })
-
-  await waitFor(async () => {
-    const current = jobs.get('workspace-1', job.id)
-    assert.equal(current.status, 'failed')
-    // The retry dropped the builtin machine + process (the incompatible pair) but kept the filament.
-    assert.deepEqual(runProfileKinds, [
-      ['builtin:machine', 'builtin:process', 'builtin:filament'],
-      ['builtin:filament']
-    ])
-    assert.equal(current.output.some((entry) => entry.text.includes('Retrying without the incompatible built-in')), true)
-  })
-})
 
 test('slicing jobs retry a signal-death slicer exit once with unchanged inputs, then fail', async () => {
   // Exit 139 (SIGSEGV) et al. happen intermittently under qemu emulation on inputs that slice
@@ -959,28 +823,26 @@ test('slicing jobs do not crash-retry ordinary non-signal slicer failures', asyn
   })
 })
 
-test('slicing jobs preserve manual machine/profile selections on retry after builtin machine removal', async () => {
+/**
+ * The counterpart to the crash retry above: a slice the engine rejects for a REAL reason fails.
+ *
+ * There used to be a second retry that dropped the built-in preset files the engine complained
+ * about, blanked the project's matching preset identities, and reported success. It changed the
+ * print without telling anyone. It is also unnecessary: BambuStudio's CLI slices from the project's
+ * embedded config when no preset flags are passed (`BambuStudio.cpp:3516`), and the slice authors
+ * the chosen presets into that config first, so the files carry nothing the project lacks.
+ */
+test('a builtin-profile compatibility failure fails the slice instead of retrying without the profile', async () => {
   const jobs = new SlicingJobs({ progressPollIntervalMs: 10, progressHeartbeatIntervalMs: 10_000, resolveSource: passthroughResolveSource, authorSliceSettings: noAuthoring })
-  const runJobIds: string[] = []
-  const runMachineProfileIds: string[] = []
-  const runProcessProfileIds: Array<string | null | undefined> = []
-  const runFilamentMappingCounts: number[] = []
   const runProfileKinds: string[][] = []
 
   slicerClient.isConfigured = (() => true) as typeof slicerClient.isConfigured
   slicerClient.progress = (async () => ({ kind: 'unclaimed' })) as typeof slicerClient.progress
   slicerClient.run = (async (input) => {
-    runJobIds.push(input.jobId)
-    runMachineProfileIds.push(input.request.target.printerProfileId ?? '<null>')
-    runProcessProfileIds.push(input.request.target.processProfileId)
-    runFilamentMappingCounts.push(input.request.target.filamentMappings?.length ?? 0)
     runProfileKinds.push((input.profileFiles ?? []).map((profile) => `${profile.source}:${profile.kind}`))
-    if (runJobIds.length <= 2) {
-      throw new SlicerServiceError('Slicer CLI exited with code 251', [
-        makeOutput('stderr', ":file /opt/bambustudio/squashfs-root/resources/profiles/BBL/machine_full/Bambu Lab P1S 0.4 nozzle.json's from  unsupported")
-      ])
-    }
-    throw new SlicerServiceError('Still failed after fallback retry', [])
+    throw new SlicerServiceError('Slicer CLI exited with code 251', [
+      makeOutput('stderr', ":file /opt/bambustudio/squashfs-root/resources/profiles/BBL/machine_full/Bambu Lab P1S.json's from unsupported")
+    ])
   }) as typeof slicerClient.run
 
   const job = jobs.enqueue({
@@ -991,7 +853,8 @@ test('slicing jobs preserve manual machine/profile selections on retry after bui
     sourcePath: '/tmp/part.3mf',
     targetBridgeId: null,
     profileFiles: [
-      { id: 'builtin-machine', source: 'builtin', kind: 'machine', name: 'Bambu Lab P1S 0.4 nozzle' }
+      { id: 'builtin-machine', source: 'builtin', kind: 'machine', name: 'Bambu Lab P1S' },
+      { id: 'custom-process', source: 'custom', kind: 'process', name: 'Project Quality', content: '{"type":"process","name":"Project Quality"}' }
     ],
     request: makeRequest()
   })
@@ -999,223 +862,15 @@ test('slicing jobs preserve manual machine/profile selections on retry after bui
   await waitFor(async () => {
     const current = jobs.get('workspace-1', job.id)
     assert.equal(current.status, 'failed')
-    assert.equal(runJobIds.length, 2)
-    assert.equal(runMachineProfileIds.length, 2)
-    assert.deepEqual(runProfileKinds, [
-      ['builtin:machine'],
-      []
-    ])
-    assert.equal(runMachineProfileIds[0], 'printer-profile')
-    assert.equal(runMachineProfileIds[1], 'printer-profile')
-    assert.equal(runProcessProfileIds[0], 'process-profile')
-    assert.equal(runProcessProfileIds[1], 'process-profile')
-    assert.equal(runFilamentMappingCounts[0], 0)
-    assert.equal(runFilamentMappingCounts[1], 0)
-    assert.equal(current.output.some((entry) => entry.text.includes('Retrying without the incompatible built-in machine profile')), true)
+    // ONE attempt, with the profiles the caller chose still intact.
+    assert.deepEqual(runProfileKinds, [['builtin:machine', 'custom:process']])
+    assert.equal(
+      current.output.some((entry) => entry.text.includes('Retrying without the incompatible')),
+      false,
+      'the silent profile-dropping retry is gone'
+    )
   })
 })
-
-test('slicing jobs rewrite project settings and retry when compatibility fallback matches process_full profiles', async () => {
-  const jobs = new SlicingJobs({ progressPollIntervalMs: 10, progressHeartbeatIntervalMs: 10_000, resolveSource: passthroughResolveSource, authorSliceSettings: noAuthoring })
-  const runSourcePaths: string[] = []
-  const runJobIds: string[] = []
-  const tempDir = await mkdtemp(path.join(tmpdir(), 'slicing-jobs-test-'))
-  const sourcePath = path.join(tempDir, 'source.3mf')
-  await createTestThreeMf(sourcePath, {
-    printer_settings_id: 'Bambu Lab X1C 0.4 nozzle',
-    print_settings_id: '0.20mm Ryan @BBL X1C',
-    default_print_profile: '0.20mm Standard @BBL X1C',
-    inherits_group: ['0.20mm Standard @BBL X1C', 'Bambu PLA Basic @BBL X1C 0.4 nozzle'],
-    print_compatible_printers: ['Bambu Lab X1C'],
-    filament_settings_id: ['Bambu PLA Basic @BBL X1C'],
-    filament_type: ['PLA'],
-    filament_colour: ['#FFFFFF'],
-    filament_vendor: ['Bambu']
-  })
-
-  slicerClient.isConfigured = (() => true) as typeof slicerClient.isConfigured
-  slicerClient.progress = (async () => ({ kind: 'unclaimed' })) as typeof slicerClient.progress
-  slicerClient.run = (async (input) => {
-    runSourcePaths.push(input.sourcePath)
-    runJobIds.push(input.jobId)
-    if (runSourcePaths.length === 1) {
-      throw new SlicerServiceError('Slicer CLI exited with code 251', [
-        makeOutput('stderr', "operator():file /opt/bambustudio/squashfs-root/resources/profiles/BBL/process_full/0.20mm Standard @BBL X1C.json's from unsupported")
-      ])
-    }
-    const rewrittenRaw = await readEntry(input.sourcePath, 'Metadata/project_settings.config')
-    const rewrittenJson = JSON.parse(rewrittenRaw.toString('utf8'))
-    assert.equal(rewrittenJson.print_settings_id, '')
-    assert.equal(rewrittenJson.default_print_profile, '')
-    assert.deepEqual(rewrittenJson.inherits_group, ['', 'Bambu PLA Basic @BBL X1C 0.4 nozzle'])
-    throw new SlicerServiceError('Still failed after retry', [])
-  }) as typeof slicerClient.run
-
-  const job = jobs.enqueue({
-    workspaceId: 'workspace-1',
-    workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
-    sourceFileId: 'file-1',
-    sourceFileName: 'part.3mf',
-    sourcePath,
-    targetBridgeId: null,
-    request: makeRequest()
-  })
-
-  try {
-    await waitFor(async () => {
-      const current = jobs.get('workspace-1', job.id)
-      assert.equal(current.status, 'failed')
-      assert.equal(runJobIds.length, 2)
-      assert.notEqual(runSourcePaths[0], runSourcePaths[1])
-      assert.equal(current.output.some((entry) => entry.text.includes('Retrying without the incompatible built-in process profile')), true)
-    })
-  } finally {
-    await rm(tempDir, { recursive: true, force: true })
-  }
-})
-
-test('slicing jobs retry incompatible built-in machine profiles per job without caching across subsequent jobs', async () => {
-  const jobs = new SlicingJobs({ progressPollIntervalMs: 10, progressHeartbeatIntervalMs: 10_000, resolveSource: passthroughResolveSource, authorSliceSettings: noAuthoring })
-  const runProfileKinds: string[][] = []
-  const runJobIds: string[] = []
-
-  slicerClient.isConfigured = (() => true) as typeof slicerClient.isConfigured
-  slicerClient.progress = (async () => ({ kind: 'unclaimed' })) as typeof slicerClient.progress
-  slicerClient.run = (async (input) => {
-    runJobIds.push(input.jobId)
-    runProfileKinds.push((input.profileFiles ?? []).map((profile) => `${profile.source}:${profile.kind}`))
-    if (runJobIds.length === 1 || runJobIds.length === 3) {
-      throw new SlicerServiceError('Slicer CLI exited with code 251', [
-        makeOutput('stderr', "operator():file /work/job/profiles/builtin:machine:QmFtYnUgTGFiIFAxUyAwLjQgbm96emxl.json's from  unsupported")
-      ])
-    }
-    throw new SlicerServiceError('Still failed after cache preflight', [])
-  }) as typeof slicerClient.run
-
-  const firstJob = jobs.enqueue({
-    workspaceId: 'workspace-1',
-    workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
-    sourceFileId: 'file-1',
-    sourceFileName: 'part.3mf',
-    sourcePath: '/tmp/part.3mf',
-    targetBridgeId: null,
-    profileFiles: [
-      { id: 'builtin-machine', source: 'builtin', kind: 'machine', name: 'Bambu Lab P1S 0.4 nozzle' }
-    ],
-    request: makeRequest()
-  })
-
-  await waitFor(async () => {
-    const current = jobs.get('workspace-1', firstJob.id)
-    assert.equal(current.status, 'failed')
-    assert.equal(runJobIds.length, 2)
-  })
-
-  const secondJob = jobs.enqueue({
-    workspaceId: 'workspace-1',
-    workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
-    sourceFileId: 'file-2',
-    sourceFileName: 'part-2.3mf',
-    sourcePath: '/tmp/part-2.3mf',
-    targetBridgeId: null,
-    profileFiles: [
-      { id: 'builtin-machine-2', source: 'builtin', kind: 'machine', name: 'Bambu Lab P1S 0.4 nozzle' }
-    ],
-    request: makeRequest()
-  })
-
-  await waitFor(async () => {
-    const current = jobs.get('workspace-1', secondJob.id)
-    assert.equal(current.status, 'failed')
-    assert.equal(runJobIds.length, 4)
-    assert.deepEqual(runProfileKinds, [
-      ['builtin:machine'],
-      [],
-      ['builtin:machine'],
-      []
-    ])
-    assert.equal(current.output.some((entry) => entry.text.includes('Applying cached builtin-profile compatibility fallback for machine profile')), false)
-    assert.equal(current.output.some((entry) => entry.text.includes('Retrying without the incompatible built-in machine profile')), true)
-  })
-})
-
-test('slicing jobs do not proactively rewrite process profiles on subsequent jobs', async () => {
-  const jobs = new SlicingJobs({ progressPollIntervalMs: 10, progressHeartbeatIntervalMs: 10_000, resolveSource: passthroughResolveSource, authorSliceSettings: noAuthoring })
-  const runSourcePaths: string[] = []
-  const tempDir = await mkdtemp(path.join(tmpdir(), 'slicing-jobs-test-'))
-  const firstSourcePath = path.join(tempDir, 'first.3mf')
-  const secondSourcePath = path.join(tempDir, 'second.3mf')
-  await createTestThreeMf(firstSourcePath, {
-    printer_settings_id: 'Bambu Lab X1C 0.4 nozzle',
-    print_settings_id: '0.20mm Ryan @BBL X1C',
-    default_print_profile: '0.20mm Standard @BBL X1C',
-    inherits_group: ['0.20mm Standard @BBL X1C', 'Bambu PLA Basic @BBL X1C 0.4 nozzle']
-  })
-  await createTestThreeMf(secondSourcePath, {
-    printer_settings_id: 'Bambu Lab X1C 0.4 nozzle',
-    print_settings_id: '0.20mm Ryan @BBL X1C',
-    default_print_profile: '0.20mm Standard @BBL X1C',
-    inherits_group: ['0.20mm Standard @BBL X1C', 'Bambu PLA Basic @BBL X1C 0.4 nozzle']
-  })
-
-  slicerClient.isConfigured = (() => true) as typeof slicerClient.isConfigured
-  slicerClient.progress = (async () => ({ kind: 'unclaimed' })) as typeof slicerClient.progress
-  slicerClient.run = (async (input) => {
-    runSourcePaths.push(input.sourcePath)
-    if (runSourcePaths.length === 1 || runSourcePaths.length === 3) {
-      throw new SlicerServiceError('Slicer CLI exited with code 251', [
-        makeOutput('stderr', "operator():file /opt/bambustudio/squashfs-root/resources/profiles/BBL/process_full/0.20mm Standard @BBL X1C.json's from unsupported")
-      ])
-    }
-    const rewrittenRaw = await readEntry(input.sourcePath, 'Metadata/project_settings.config')
-    const rewrittenJson = JSON.parse(rewrittenRaw.toString('utf8'))
-    assert.equal(rewrittenJson.print_settings_id, '')
-    assert.equal(rewrittenJson.default_print_profile, '')
-    assert.deepEqual(rewrittenJson.inherits_group, ['', 'Bambu PLA Basic @BBL X1C 0.4 nozzle'])
-    throw new SlicerServiceError('Still failed after cache preflight', [])
-  }) as typeof slicerClient.run
-
-  const firstJob = jobs.enqueue({
-    workspaceId: 'workspace-1',
-    workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
-    sourceFileId: 'file-1',
-    sourceFileName: 'first.3mf',
-    sourcePath: firstSourcePath,
-    targetBridgeId: null,
-    request: makeRequest()
-  })
-
-  try {
-    await waitFor(async () => {
-      const current = jobs.get('workspace-1', firstJob.id)
-      assert.equal(current.status, 'failed')
-      assert.equal(runSourcePaths.length, 2)
-    })
-
-    const secondJob = jobs.enqueue({
-      workspaceId: 'workspace-1',
-      workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
-      sourceFileId: 'file-2',
-      sourceFileName: 'second.3mf',
-      sourcePath: secondSourcePath,
-      targetBridgeId: null,
-      request: makeRequest()
-    })
-
-    await waitFor(async () => {
-      const current = jobs.get('workspace-1', secondJob.id)
-      assert.equal(current.status, 'failed')
-      assert.equal(runSourcePaths.length, 4)
-      assert.equal(runSourcePaths[2], secondSourcePath)
-      assert.notEqual(runSourcePaths[3], secondSourcePath)
-      assert.equal(current.output.some((entry) => entry.text.includes('Applying cached builtin-profile compatibility fallback for process profile')), false)
-      assert.equal(current.output.some((entry) => entry.text.includes('Retrying without the incompatible built-in process profile')), true)
-    })
-  } finally {
-    await rm(tempDir, { recursive: true, force: true })
-  }
-})
-
 function makeRequest(): CreateSlicingJob {
   return {
     sourceFileId: 'file-1',

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { buildReprintOptions, type ReprintJobRow } from './print-reprint.js'
+import { buildReprintOptions, toPrintJobKind, type ReprintJobRow } from './print-reprint.js'
 
 function makeRow(overrides: Partial<ReprintJobRow> = {}): ReprintJobRow {
   return {
@@ -159,4 +159,18 @@ test('a job that recorded no AMS mapping re-prints instead of failing to parse',
 
   assert.equal(options.amsMapping, undefined)
   assert.equal(options.bedLevel, 'auto')
+})
+
+// A library job reaches history with no `fileId` when its retained snapshot was reclaimed. That is
+// a file job whose file is MISSING, not a foreign one: collapsing it to 'external' made the card
+// claim "Started outside PrintStream" for a print PrintStream dispatched, and made the re-print
+// route refuse it as externally started rather than as unavailable.
+test('a library job whose stored file was reclaimed stays a file job', () => {
+  assert.equal(toPrintJobKind('library'), 'file')
+})
+
+test('source type alone decides the kind', () => {
+  assert.equal(toPrintJobKind('external'), 'external')
+  assert.equal(toPrintJobKind('calibration'), 'calibration')
+  assert.equal(toPrintJobKind(null), 'file')
 })

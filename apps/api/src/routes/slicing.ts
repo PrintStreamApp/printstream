@@ -41,6 +41,7 @@ import { persistHistoryThumbnailFromLibrary } from '../lib/job-history-thumbnail
 import { readPrintJobThumbnail } from '../lib/print-job-thumbnails.js'
 import { slicerEngineListResponseSchema, type SlicerEngineListResponse } from '@printstream/shared'
 import { badRequest, notFound } from '../lib/http-error.js'
+import { resolvePinnedContentBase } from '../lib/library-content-base.js'
 import { isSelfHostedDeployment } from '../lib/deployment-mode.js'
 import { prisma } from '../lib/prisma.js'
 import { requireRequestPermission } from '../lib/authorization.js'
@@ -499,7 +500,10 @@ slicingRouter.post('/profiles/resolve-machine', requireRequestPermission(LIBRARY
       return null
     })
     : {}
-  response.json({ config, baseConfig: parentConfig ?? config, overriddenKeys: [], projectOverrides })
+  // `name` matches the public twin's shape. It is the preset's own name, which a retarget persists
+  // as `printer_settings_id`, and the browser cannot derive it for a CUSTOM preset from the id
+  // alone. Answering it here is what lets one browser-side retarget serve both hosts.
+  response.json({ config, name: profileFile.name, baseConfig: parentConfig ?? config, overriddenKeys: [], projectOverrides })
 })
 
 slicingRouter.post('/profiles', requireRequestPermission(SETTINGS_MANAGE_PERMISSION), async (request, response) => {
@@ -568,6 +572,14 @@ slicingRouter.post('/jobs', requireRequestPermission(LIBRARY_UPLOAD_PERMISSION),
     throw badRequest('Only unsliced .3mf files can be sliced')
   }
 
+  // Which BYTES to bake from, as opposed to which file this job is ABOUT. An editor slice pins the
+  // version its `sceneEdit` was composed against and keeps sending it, exactly as an editor save
+  // does; resolving the file's current content instead re-applies an edit an earlier save already
+  // baked in. See `contentBase` in the shared schema for what that corrupted.
+  const contentEntry = parsed.data.contentBase
+    ? await resolvePinnedContentBase(workspaceId, parsed.data.contentBase)
+    : sourceEntry
+
   if (parsed.data.target.mode === 'realPrinter') {
     const printer = await prisma.printer.findUnique({
       where: { id: parsed.data.target.printerId },
@@ -576,14 +588,19 @@ slicingRouter.post('/jobs', requireRequestPermission(LIBRARY_UPLOAD_PERMISSION),
     if (!printer) throw notFound('Target printer not found')
   }
 
-  const profileFiles = await resolveSlicingPresetFiles(workspaceId, collectRequestedProfileIds(parsed.data))
+  const sourcePath = await resolveLibraryFileToLocalPath(contentEntry)
+  const requestedFiles = await resolveSlicingPresetFiles(workspaceId, collectRequestedProfileIds(parsed.data))
+  const profileFiles = [
+    ...requestedFiles,
+    ...await resolveProjectFilamentPresetFiles(workspaceId, sourcePath, requestedFiles)
+  ]
 
   const job = slicingJobs.enqueue({
     workspaceId,
     workspace: request.workspace ?? { id: workspaceId, slug: workspaceId, name: workspaceId },
     sourceFileId: sourceFile.id,
     sourceFileName: sourceEntry.name,
-    sourcePath: await resolveLibraryFileToLocalPath(sourceEntry),
+    sourcePath,
     targetBridgeId: sourceEntry.ownerBridgeId,
     request: parsed.data,
     profileFiles
@@ -597,6 +614,12 @@ slicingRouter.post('/jobs', requireRequestPermission(LIBRARY_UPLOAD_PERMISSION),
       fileId: sourceFile.id,
       fileName: sourceEntry.name,
       sourceVersionId: parsed.data.sourceVersionId ?? null,
+      // WHICH BYTES were sliced, as opposed to which file the job is about. Worth a durable record
+      // for the same reason `allowNewerProjectFile` is: when a slice produces wrong G-code, the
+      // base the edit was applied to is the first thing to check, and it is otherwise unrecoverable
+      // once the editor session is gone.
+      contentBaseFileId: parsed.data.contentBase?.fileId ?? null,
+      contentBaseVersionId: parsed.data.contentBase?.versionId ?? null,
       slicerTargetId: parsed.data.slicerTargetId ?? null,
       targetMode: parsed.data.target.mode,
       printerId: parsed.data.target.mode === 'realPrinter' ? parsed.data.target.printerId : null,
@@ -619,6 +642,58 @@ function collectRequestedProfileIds(input: CreateSlicingJob): Array<{ id: string
 }
 
 const PROJECT_SETTINGS_ENTRY_PATH = 'Metadata/project_settings.config'
+
+/**
+ * The workspace filament presets a project NAMES, resolved to files so the slicer can bind each
+ * slot to the preset it actually uses.
+ *
+ * A slice request only names the presets the USER picked, so a slot left on the project's own
+ * material sent no file at all. The slicer can find a BUILTIN of that name in its bundled
+ * catalogue, but a workspace preset exists only here, and what it did instead was substitute a
+ * stand-in: every project built on a custom filament preset sliced with Generic PLA's physics and
+ * came back stamped Generic PLA. BambuStudio has no such gap because user and system presets share
+ * one collection and a project's slot is looked up across both by name
+ * (`PresetCollection::load_external_preset` -> `find_preset_internal`), so this sends the workspace
+ * half of that collection and `buildFilamentSlotCoverage` does the lookup.
+ *
+ * Best-effort by design: an unreadable project, or a name matching nothing, simply contributes no
+ * file, exactly as before. It must never fail a slice that would otherwise have run.
+ */
+async function resolveProjectFilamentPresetFiles(
+  workspaceId: string,
+  sourcePath: string,
+  alreadyResolved: Awaited<ReturnType<typeof resolveSlicingPresetFiles>>
+): Promise<Awaited<ReturnType<typeof resolveSlicingPresetFiles>>> {
+  try {
+    const buffer = await readEntry(sourcePath, PROJECT_SETTINGS_ENTRY_PATH)
+    const parsed: unknown = JSON.parse(buffer.toString('utf8'))
+    const record = parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : null
+    const names = Array.isArray(record?.filament_settings_id) ? record.filament_settings_id : []
+    // The names the request already covers, so a preset the user explicitly picked is not sent
+    // twice under two ids (the slicer indexes supplied files by name, and a duplicate would make
+    // which one wins depend on map order).
+    const covered = new Set(
+      alreadyResolved.filter((file) => file.kind === 'filament').map((file) => file.name)
+    )
+    const wanted = new Set<string>()
+    for (const name of names) {
+      if (typeof name === 'string' && name.trim() && !covered.has(name.trim())) wanted.add(name.trim())
+    }
+    if (wanted.size === 0) return []
+
+    const custom = await listCustomSlicingPresets(workspaceId)
+    const ids = custom
+      .filter((preset) => preset.kind === 'filament' && wanted.has(preset.name))
+      .map((preset) => ({ id: preset.id, kind: 'filament' as const }))
+    if (ids.length === 0) return []
+    return await resolveSlicingPresetFiles(workspaceId, ids)
+  } catch (error) {
+    // Worth a line: the symptom otherwise is a slice that quietly used different filament values
+    // than the project asked for, which is exactly the failure this function exists to end.
+    console.warn('[slicing] could not resolve the workspace presets this project names', (error as Error).message)
+    return []
+  }
+}
 
 /**
  * Resolves the editor base config for a project-embedded process profile by reading the source 3MF's

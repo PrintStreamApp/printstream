@@ -33,6 +33,7 @@ import {
 } from '@printstream/shared'
 import {
   BRIM_EAR_POINTS_ENTRY,
+  CUT_INFORMATION_ENTRY,
   CUSTOM_GCODE_PER_LAYER_ENTRY,
   THREE_MF_INDEX_PARSER_VERSION,
   buildSceneManifest,
@@ -51,6 +52,7 @@ import { readEntry } from './three-mf-internal.js'
 // so moving those parses into `@printstream/shared/three-mf` did not churn every call site.
 export {
   BRIM_EAR_POINTS_ENTRY,
+  CUT_INFORMATION_ENTRY,
   CUSTOM_GCODE_PER_LAYER_ENTRY,
   LOGICAL_PART_PLATE_GAP,
   buildDefaultPickFilePath,
@@ -228,7 +230,7 @@ export async function readSceneManifest(
     return cachedScene.scene
   }
 
-  const [rootModelXml, modelSettingsXml, projectSettingsJson, brimEarPointsText, layerConfigRangesXml, layerHeightsProfileText, customGcodeText] = await Promise.all([
+  const [rootModelXml, modelSettingsXml, projectSettingsJson, brimEarPointsText, layerConfigRangesXml, layerHeightsProfileText, customGcodeText, cutInformationXml] = await Promise.all([
     readEntry(filePath, '3D/3dmodel.model', signal, 64 * 1024 * 1024).then((buffer) => buffer.toString('utf8')),
     // Default 8 MiB cap: matches the bridge's bound for the same entry; only the
     // mesh XML above legitimately outgrows it.
@@ -247,11 +249,14 @@ export async function readSceneManifest(
       .catch(() => null),
     readEntry(filePath, CUSTOM_GCODE_PER_LAYER_ENTRY, signal, 4 * 1024 * 1024)
       .then((buffer) => buffer.toString('utf8'))
+      .catch(() => null),
+    readEntry(filePath, CUT_INFORMATION_ENTRY, signal, 4 * 1024 * 1024)
+      .then((buffer) => buffer.toString('utf8'))
       .catch(() => null)
   ])
 
   const scene = buildSceneManifest(
-    { rootModelXml, modelSettingsXml, projectSettingsJson, brimEarPointsText, layerConfigRangesXml, layerHeightsProfileText, customGcodeText },
+    { rootModelXml, modelSettingsXml, projectSettingsJson, brimEarPointsText, layerConfigRangesXml, layerHeightsProfileText, customGcodeText, cutInformationXml },
     plateIndex,
     overrideModel
   )

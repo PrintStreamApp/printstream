@@ -19,6 +19,12 @@
  */
 import { canonicalCurrBedType } from '../plate-types.js'
 import { serializeTextInfo, type TextInfo } from './text-info.js'
+import {
+  serializeBambuStudioShape,
+  serializeSvgPartRecord,
+  type BambuStudioShape,
+  type SvgPartRecord
+} from './svg-shape.js'
 import { FILAMENT_SETTING_KEYS } from '../filament-settings.js'
 import { FILAMENT_INDEX_PROCESS_KEYS, isProcessSettingKey, type ProcessConfig } from '../process-settings.js'
 import { rebindProjectFilamentPhysics } from '../filament-rebind.js'
@@ -1157,15 +1163,15 @@ export function buildEditedThreeMfDocuments(
   modelSettingsXml = cleaned.modelSettingsXml
 
   if (edit.partFilaments && edit.partFilaments.length > 0) {
-    modelSettingsXml = applyPartFilamentOverrides(modelSettingsXml, baseModelSettingsXml, edit.partFilaments)
+    modelSettingsXml = applyPartFilamentOverrides(modelSettingsXml, baseModelSettingsXml, edit.partFilaments, modelXml)
   }
 
   if (edit.partProcessOverrides && edit.partProcessOverrides.length > 0) {
-    modelSettingsXml = applyPartProcessOverrides(modelSettingsXml, edit.partProcessOverrides)
+    modelSettingsXml = applyPartProcessOverrides(modelSettingsXml, edit.partProcessOverrides, modelXml)
   }
 
   if (edit.partTypeChanges && edit.partTypeChanges.length > 0) {
-    modelSettingsXml = applyPartTypeChanges(modelSettingsXml, edit.partTypeChanges)
+    modelSettingsXml = applyPartTypeChanges(modelSettingsXml, edit.partTypeChanges, modelXml)
   }
 
   if (edit.partTransforms && edit.partTransforms.length > 0) {
@@ -1350,10 +1356,27 @@ export function applyAddedParts(
       : undefined
     modelSettingsXml = addModelSettingsPartEntry(
       modelSettingsXml, hostObjectId, partObjectId, part.subtype, part.name, part.settings, extruder,
-      part.textInfo
+      { ...(part.textInfo ? { textInfo: part.textInfo } : {}),
+        ...(part.svgPart ? { svgPart: part.svgPart } : {}),
+        ...(part.bambuShape ? { bambuShape: part.bambuShape } : {}) }
     )
   }
   return { modelXml, modelSettingsXml }
+}
+
+/**
+ * The per-volume records that say what a part was MADE FROM, so it reopens editable rather than as
+ * anonymous solids. Grouped rather than passed one-by-one because there are now three of them and
+ * they all answer the same question about the same `<part>`.
+ *
+ * A part carries AT MOST ONE authoring record: `textInfo` for the text tool, `svgPart` for the SVG
+ * tool. `bambuShape` is not a third author: it is BambuStudio's interop view of the same SVG part,
+ * and rides alongside `svgPart` only when the import produced ONE part (see `svg-shape.ts`).
+ */
+interface ModelSettingsPartSidecars {
+  textInfo?: TextInfo
+  svgPart?: SvgPartRecord
+  bambuShape?: BambuStudioShape
 }
 
 /**
@@ -1368,7 +1391,7 @@ function addModelSettingsPartEntry(
   name: string,
   settings?: Record<string, string>,
   extruder?: number,
-  textInfo?: TextInfo
+  sidecars?: ModelSettingsPartSidecars
 ): string {
   // Process-setting keys only: the name/extruder/matrix entries are authored explicitly, so a
   // structural key smuggled through the settings map must not duplicate or clobber them.
@@ -1379,10 +1402,15 @@ function addModelSettingsPartEntry(
     `      <metadata key="name" value="${escapeXmlAttribute(name)}"/>`,
     ...(extruder != null ? [`      <metadata key="extruder" value="${extruder}"/>`] : []),
     ...settingsXml,
+    // Each authoring record lives inside the <part> and is keyed to the VOLUME, which is why these
+    // are authored here rather than alongside the object's own metadata. Studio's own writer emits
+    // <BambuStudioShape> before <text_info> (bbs_3mf.cpp:8295 then :8299); ours goes last because
+    // Studio does not know it and an unrecognised element is simply skipped there.
+    ...(sidecars?.bambuShape ? [`      ${serializeBambuStudioShape(sidecars.bambuShape)}`] : []),
     // A text part records what it was typed from, so a typo is a re-edit rather than a rebuild.
-    // BambuStudio keeps this inside the <part> and keys it to the volume, which is why it is
-    // authored here rather than alongside the object's own metadata.
-    ...(textInfo ? [`      ${serializeTextInfo(textInfo)}`] : []),
+    ...(sidecars?.textInfo ? [`      ${serializeTextInfo(sidecars.textInfo)}`] : []),
+    // An SVG part records the artwork and which shape of it this part is, for the same reason.
+    ...(sidecars?.svgPart ? [`      ${serializeSvgPartRecord(sidecars.svgPart)}`] : []),
     '    </part>'
   ].join('\n')
   const objectPattern = new RegExp(`(<object\\b[^>]*\\bid="${parentObjectId}"[^>]*>)([\\s\\S]*?)(</object>)`)
@@ -1435,10 +1463,96 @@ function setPartExtruderMetadata(partBlock: string, extruder: number): string {
  * own default is not derivable from a per-part divergence, exactly like BambuStudio changing one
  * volume's filament without touching the object's.
  */
+/**
+ * Each object's `<component objectid>` sequence, which IS its volume list: the ordinal every
+ * part-scoped edit addresses is a position in THIS list, because that is the list the scene parser
+ * walks when it mints them (`scene-parser.ts` pairs each component with its `<part>` metadata by
+ * mesh id, not by position).
+ */
+export function parseObjectComponentIds(modelXml: string): Map<number, number[]> {
+  const byObject = new Map<number, number[]>()
+  for (const match of modelXml.matchAll(/<object\b([^>]*)>([\s\S]*?)<\/object>/g)) {
+    const objectId = Number.parseInt(parseAttrs(match[1] ?? '').id ?? '', 10)
+    if (!Number.isInteger(objectId)) continue
+    const ids: number[] = []
+    for (const component of (match[2] ?? '').matchAll(/<component\b[^>]*\bobjectid="(\d+)"/gi)) {
+      const id = Number.parseInt(component[1] ?? '', 10)
+      if (Number.isInteger(id)) ids.push(id)
+    }
+    byObject.set(objectId, ids)
+  }
+  return byObject
+}
+
+/**
+ * The index of the `<part>` block describing the volume at `ordinal`, or null when none does.
+ *
+ * Ports BambuStudio's own read rule (`_generate_volumes_new`): it loops an object's COMPONENTS and
+ * looks each one's metadata up in the `<part>` list POSITIONALLY, guarded by an id check
+ * (`index < volumes.size() && volumes[index].subobject_id == sub_object->id`), falling back to a
+ * linear id search and then to defaults. Our writers only had the positional half, so they assumed
+ * the two lists are a mirror. They usually are, and nothing anywhere asserted it: a file whose
+ * `<part>` order differs (a foreign export, or an object `applyPartLayout` deliberately left
+ * un-permuted because the lists were different lengths) silently landed every per-part material,
+ * subtype, override and matrix on the WRONG volume, and each later save re-applied the same skew.
+ *
+ * Positional must win WHERE IT AGREES, which is why the id check comes before the search:
+ * BambuStudio writes one id for every volume sharing a mesh (`m_share_mesh`), so an object can hold
+ * four parts with the same id, and an id-first lookup would collapse all four onto the first.
+ *
+ * Null means no `<part>` describes that volume: the caller SKIPS it rather than writing onto an
+ * unrelated block, which is the whole point. BambuStudio reads such a volume with default settings,
+ * so skipping matches what the engine already does with the file.
+ */
+export function resolvePartBlockIndex(
+  ordinal: number,
+  componentObjectIds: readonly number[] | undefined,
+  partIds: ReadonlyArray<number | null>
+): number | null {
+  // An object whose mesh is INLINE declares no components, so its `<part>` list is the volume list.
+  if (!componentObjectIds || componentObjectIds.length === 0) return ordinal
+  const wanted = componentObjectIds[ordinal]
+  if (wanted == null) return null
+  if (partIds[ordinal] === wanted) return ordinal
+  const found = partIds.indexOf(wanted)
+  return found >= 0 ? found : null
+}
+
+/** The `id` of each `<part>` in one object block, in document order; null where unreadable. */
+function parsePartIds(objectBlock: string): Array<number | null> {
+  return [...objectBlock.matchAll(/<part\b([^>]*)>/g)].map((match) => {
+    const id = Number.parseInt(parseAttrs(match[1] ?? '').id ?? '', 10)
+    return Number.isInteger(id) ? id : null
+  })
+}
+
+/**
+ * Re-key one object's ordinal-addressed edits onto the `<part>` BLOCK INDEX each one describes.
+ *
+ * Every part-scoped applier below walks the object's `<part>` blocks with a running counter, so
+ * handing it this map (instead of the raw ordinals) is the whole fix: on the overwhelmingly common
+ * mirrored object the two are identical and nothing changes, and where they are not, the edit lands
+ * on the volume it names instead of the one that happens to sit at that position.
+ */
+function resolvePartTargets<T>(
+  objectBlock: string,
+  componentObjectIds: readonly number[] | undefined,
+  byOrdinal: ReadonlyMap<number, T>
+): Map<number, T> {
+  const partIds = parsePartIds(objectBlock)
+  const resolved = new Map<number, T>()
+  for (const [ordinal, value] of byOrdinal) {
+    const index = resolvePartBlockIndex(ordinal, componentObjectIds, partIds)
+    if (index != null) resolved.set(index, value)
+  }
+  return resolved
+}
+
 function applyPartFilamentOverrides(
   modelSettingsXml: string,
   baseModelSettingsXml: string,
-  partFilaments: SceneEditPartFilament[]
+  partFilaments: SceneEditPartFilament[],
+  modelXml: string
 ): string {
   const inverse = buildFilamentToExtruderMap(baseModelSettingsXml)
   const extruderByObjectPart = new Map<number, Map<number, number>>()
@@ -1448,10 +1562,12 @@ function applyPartFilamentOverrides(
     if (!parts) { parts = new Map(); extruderByObjectPart.set(override.objectId, parts) }
     parts.set(override.partIndex, extruder)
   }
+  const componentIdsByObject = parseObjectComponentIds(modelXml)
   return modelSettingsXml.replace(/<object\b([^>]*)>[\s\S]*?<\/object>/g, (objectBlock, attrs: string) => {
     const objectId = Number.parseInt(parseAttrs(attrs).id ?? '', 10)
-    const parts = extruderByObjectPart.get(objectId)
-    if (!parts) return objectBlock
+    const byOrdinal = extruderByObjectPart.get(objectId)
+    if (!byOrdinal) return objectBlock
+    const parts = resolvePartTargets(objectBlock, componentIdsByObject.get(objectId), byOrdinal)
     let partIndex = -1
     const rewritten = objectBlock.replace(/<part\b([^>]*)>[\s\S]*?<\/part>/g, (partBlock) => {
       partIndex += 1
@@ -1469,17 +1585,23 @@ function applyPartFilamentOverrides(
  * cleared key is removed), keyed by objectId + the part's ORDINAL. Mirrors
  * {@link applyObjectProcessOverridesXml} but scoped to one part rather than the object head.
  */
-export function applyPartProcessOverrides(modelSettingsXml: string, overrides: SceneEditPartProcessOverride[]): string {
+export function applyPartProcessOverrides(
+  modelSettingsXml: string,
+  overrides: SceneEditPartProcessOverride[],
+  modelXml: string
+): string {
   const byObjectPart = new Map<number, Map<number, Record<string, string | string[]>>>()
   for (const override of overrides) {
     let parts = byObjectPart.get(override.objectId)
     if (!parts) { parts = new Map(); byObjectPart.set(override.objectId, parts) }
     parts.set(override.partIndex, override.overrides)
   }
+  const componentIdsByObject = parseObjectComponentIds(modelXml)
   return modelSettingsXml.replace(/<object\b([^>]*)>[\s\S]*?<\/object>/g, (objectBlock, attrs: string) => {
     const objectId = Number.parseInt(parseAttrs(attrs).id ?? '', 10)
-    const parts = byObjectPart.get(objectId)
-    if (!parts) return objectBlock
+    const byOrdinal = byObjectPart.get(objectId)
+    if (!byOrdinal) return objectBlock
+    const parts = resolvePartTargets(objectBlock, componentIdsByObject.get(objectId), byOrdinal)
     let partIndex = -1
     return objectBlock.replace(/<part\b([^>]*)>([\s\S]*?)<\/part>/g, (partBlock, partAttrs: string, partBody: string) => {
       partIndex += 1
@@ -1525,17 +1647,23 @@ function stripLegacyVolumeTypeMetadata(partBlock: string): string {
   return partBlock.replace(/[ \t]*<metadata\s+key="(?:volume_type|part_type)"[^>]*\/>\n?/g, '')
 }
 
-export function applyPartTypeChanges(modelSettingsXml: string, changes: SceneEditPartTypeChange[]): string {
+export function applyPartTypeChanges(
+  modelSettingsXml: string,
+  changes: SceneEditPartTypeChange[],
+  modelXml: string
+): string {
   const byObjectPart = new Map<number, Map<number, string>>()
   for (const change of changes) {
     let parts = byObjectPart.get(change.objectId)
     if (!parts) { parts = new Map(); byObjectPart.set(change.objectId, parts) }
     parts.set(change.partIndex, change.subtype)
   }
+  const componentIdsByObject = parseObjectComponentIds(modelXml)
   return modelSettingsXml.replace(/<object\b([^>]*)>[\s\S]*?<\/object>/g, (objectBlock, attrs: string) => {
     const objectId = Number.parseInt(parseAttrs(attrs).id ?? '', 10)
-    const parts = byObjectPart.get(objectId)
-    if (!parts) return objectBlock
+    const byOrdinal = byObjectPart.get(objectId)
+    if (!byOrdinal) return objectBlock
+    const parts = resolvePartTargets(objectBlock, componentIdsByObject.get(objectId), byOrdinal)
     let partIndex = -1
     return objectBlock.replace(/<part\b([^>]*)>/g, (partTag, partAttrs: string) => {
       partIndex += 1
@@ -1590,10 +1718,12 @@ export function applyPartTransforms(
       return `<component${componentAttrs} transform="${transform}"/>`
     })
   })
+  const componentIdsByObject = parseObjectComponentIds(modelXml)
   const nextModelSettingsXml = modelSettingsXml.replace(/<object\b([^>]*)>[\s\S]*?<\/object>/g, (objectBlock, attrs: string) => {
     const objectId = Number.parseInt(parseAttrs(attrs).id ?? '', 10)
-    const parts = byObjectPart.get(objectId)
-    if (!parts) return objectBlock
+    const byOrdinal = byObjectPart.get(objectId)
+    if (!byOrdinal) return objectBlock
+    const parts = resolvePartTargets(objectBlock, componentIdsByObject.get(objectId), byOrdinal)
     let settingsPartIndex = -1
     return objectBlock.replace(/<part\b[^>]*>[\s\S]*?<\/part>/g, (partBlock) => {
       settingsPartIndex += 1

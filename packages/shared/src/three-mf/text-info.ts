@@ -17,7 +17,12 @@
  * reason — do not lower it.
  */
 
-import { decodeXmlAttributeValue, escapeXmlAttribute } from './xml-write.js'
+import {
+  decodeXmlAttributeValue,
+  escapeXmlAttribute,
+  xmlAttribute as attribute,
+  xmlNumberAttribute as numberAttribute
+} from './xml-write.js'
 
 /** Studio's `TextInfo::TextType` (`Model.hpp:857`). */
 export const TEXT_SURFACE_TYPES = ['horizontal', 'surface', 'surfaceHorizontal', 'surfaceChar'] as const
@@ -129,18 +134,6 @@ export function serializeTextInfo(info: TextInfo): string {
     ['hit_normal', vec(info.hitNormal)]
   ]
   return `<text_info ${attributes.map(([key, value]) => `${key}="${value}"`).join(' ')}/>`
-}
-
-function attribute(source: string, name: string): string | null {
-  const match = new RegExp(`\\b${name}="([^"]*)"`).exec(source)
-  return match ? match[1]! : null
-}
-
-function numberAttribute(source: string, name: string, fallback: number): number {
-  const raw = attribute(source, name)
-  if (raw == null) return fallback
-  const value = Number.parseFloat(raw)
-  return Number.isFinite(value) ? value : fallback
 }
 
 function vectorAttribute(source: string, name: string, fallback: readonly [number, number, number]):

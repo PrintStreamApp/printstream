@@ -18,9 +18,11 @@
  * and confusing in PrintStream, and copying them verbatim would lift AGPL text into this file.
  *
  * CONTRACT: the returned message always KEEPS the `Slicer CLI exited with code <exit>` prefix.
- * The API's retry classifier (`isLikelyBuiltinProfileCompatibilityExit` in
- * `apps/api/src/lib/slicing-jobs.ts`) matches that exact shape to decide whether to drop
- * incompatible builtin profiles and retry: changing the prefix silently disables that recovery.
+ * The API's crash classifier (`isTransientSlicerCrashExit` in `apps/api/src/lib/slicing-jobs.ts`)
+ * matches that exact shape to decide whether a signal death is worth one retry with UNCHANGED
+ * inputs: changing the prefix silently disables that recovery. (There was also a compatibility
+ * retry keyed on this prefix, which dropped the built-in profiles the engine rejected and sliced
+ * on without them; it was removed because it changed the print and reported success.)
  *
  * Source of the code list: BambuStudio `src/libslic3r/Utils.hpp` (the `CLI_*` defines) cross-checked
  * against the `cli_errors` message map in `src/BambuStudio.cpp`. New codes in a future engine simply

@@ -117,3 +117,41 @@ test('a save that NEEDS its content base still fails loudly when the base is gon
   assert.equal(result.status, 404)
   assert.match(result.text, /no longer available/)
 })
+
+test('a bake naming a file, with no version and no pin, is refused rather than read from the head', async () => {
+  stubOnlyTargetFileExists()
+  // The third way to name base bytes, and the only one that can MOVE. After this session's first
+  // save the target's head holds this session's own output, so serving it re-applies the edit over
+  // itself: `partOrder` and `removedParts` are not idempotent, and a re-applied reorder permutes an
+  // object's volumes while the positional per-part extruder writes stay put, so parts trade
+  // materials silently. Both single-object exports shipped in exactly this state.
+  const result = await postExport({
+    baseFileId: 'target-file',
+    sceneEdit: BAKEABLE_EDIT,
+    name: 'unpinned.3mf'
+  })
+  assert.equal(result.status, 400, `expected a refusal, got ${result.status} ${result.text}`)
+  assert.match(result.text, /did not say which version/)
+})
+
+test('a bake carrying an explicit base VERSION needs no pin, because a version cannot move', async () => {
+  stubOnlyTargetFileExists()
+  // The refusal is scoped to the one source that can move under the session. An archived version is
+  // a snapshot, so the history dialog's Edit flow keeps working without a pin.
+  libraryFileVersion.findFirst = (async (args: { where?: { id?: string } }) => (
+    args?.where?.id === 'target-version'
+      ? { id: 'target-version', ownerBridgeId: null, storedPath: 'target.3mf' }
+      : null
+  )) as unknown as typeof prisma.libraryFileVersion.findFirst
+  const result = await postExport({
+    baseFileId: 'target-file',
+    baseVersionId: 'target-version',
+    sceneEdit: BAKEABLE_EDIT,
+    name: 'versioned.3mf'
+  })
+  // Asserted as "not refused for want of a pin" rather than 200: this harness stubs the database
+  // but not the filesystem, so the bake goes on to fail reading bytes that were never written. The
+  // guard is what is under test, and it must not fire here.
+  assert.notEqual(result.status, 400, `the pin guard fired on a versioned bake: ${result.text}`)
+  assert.doesNotMatch(result.text, /did not say which version/)
+})

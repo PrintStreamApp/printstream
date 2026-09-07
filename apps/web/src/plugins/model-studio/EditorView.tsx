@@ -69,7 +69,8 @@ import {
   FILAMENT_SETTING_KEYS,
   isFilamentIdentitySettingKey,
   readProjectFlushContext,
-  type ThreeMfSettingsRepairReason
+  type ThreeMfSettingsRepairReason,
+  MAX_SVG_SOURCE_BYTES
 } from '@printstream/shared'
 import { MODEL_UNIT_MILLIMETRES, buildVanillaThreeMfEntries, type ConvertibleModelUnit,
   adaptiveLayerHeightProfile,
@@ -79,6 +80,10 @@ import { MODEL_UNIT_MILLIMETRES, buildVanillaThreeMfEntries, type ConvertibleMod
   TEXT_INFO_DEFAULTS,
   TEXT_INFO_DEFAULT_SURFACE_TYPE,
   defaultTextInfo,
+  studioShapeFixTransform,
+  studioShapeScale,
+  type BambuStudioShape,
+  type SvgPartRecord,
   type TextInfo
 } from '@printstream/shared/three-mf'
 import {
@@ -102,6 +107,7 @@ import { BackAwareModal as Modal } from '../../components/BackAwareModal'
 import { usePromptDialog } from '../../components/PromptDialogProvider'
 import { DialogFileTitle } from '../../components/DialogFileTitle'
 import { EmptyState } from '../../components/EmptyState'
+import { HorizontalOverflowScroller } from '../../components/HorizontalOverflowScroller'
 import { RepairProjectSettingsAlert } from '../../components/library/RepairProjectSettingsAlert'
 import { ProjectVersionWarningAlert } from '../../components/library/ProjectVersionWarningAlert'
 import { LibraryFilePickerDialog } from '../../components/LibraryFilePickerDialog'
@@ -156,6 +162,7 @@ import {
 } from './lib/supportPaint'
 import {
   VIEW_CUBE_EDGE_INSET,
+  VIEW_CUBE_HINT,
   VIEW_CUBE_SIZE,
   type ViewPreset
 } from './lib/viewCube'
@@ -183,6 +190,7 @@ import {
   addedPartHostId,
   assignInstanceFilament,
   dropAddedPartsForReplacedHost,
+  instanceLinkageKey,
   makeInstanceIndependent,
   BODY_PART_INDEX,
   addedPartPaintKey,
@@ -205,6 +213,7 @@ import {
   partSlotKey,
   supportPaintKey,
   type EditorAddedPart,
+  type EditorCutGroup,
   type EditorBrimEar,
   type EditorFilamentChange,
   type EditorPause,
@@ -212,7 +221,10 @@ import {
   type EditorPlate,
   type EditorState,
   type PlateFootprintRect,
-  isObjectMarkedForRepair
+  isObjectMarkedForRepair,
+  resolveSvgArchiveEntry,
+  planSvgReextrude,
+  svgArtworkParts
 } from './lib/editorModel'
 import { helperVolumeSpec } from './lib/helperVolumes'
 import { defaultPlateName, plateDisplayName, resolvePlateRename } from './lib/plateName'
@@ -231,11 +243,17 @@ import {
 } from './lib/editorImports'
 import { importFileAccept, type EditorImportStore } from './lib/editorImportStore'
 import { createArchiveProjectSource, type EditorProjectSource } from './lib/editorProjectSource'
-import type { EditorSaveTarget } from './lib/editorSaveTarget'
+import { createApiSaveTarget, type EditorSaveTarget } from './lib/editorSaveTarget'
 import { parseStlGeometryAsync, parseThreeMfModelEntryAsync } from './lib/meshParseClient'
 import {
+  capSoupForHalf,
   collectWorldTriangles,
+  cutHalfForSide,
   cutTriangleSoup,
+  cutTriangleSoupWithGroove,
+  drillBoresIntoHalf,
+  grooveDefaultsForSize,
+  grooveSizeLimitsForSize,
   helperVolumeCutSides,
   orientCutHalfSoup,
   rebaseTriangleSoup,
@@ -244,9 +262,25 @@ import {
   triangleSoupToBinaryStl,
   triangleSoupXYCenter,
   triangleSoupsEqual,
+  GROOVE_CUT_DEFAULTS,
   type CutAxis,
-  type CutHalfOrientation
+  type CutHalfOrientation,
+  type CutMode,
+  type GrooveCut
 } from './lib/meshCut'
+import { isClosedSoup } from './lib/meshBooleanCore'
+import {
+  CONNECTOR_DEFAULTS,
+  connectorBoresForSide,
+  connectorProblemSummary,
+  connectorSoup,
+  connectorVolumes,
+  findConnectorProblems,
+  isPointInsideSoup,
+  type ConnectorSettings,
+  type CutConnector,
+  connectorSizeLimitsForSize
+} from './lib/cutConnectors'
 import {
   buildObjectStl,
   buildObjectsStl,
@@ -270,6 +304,13 @@ import {
   buildFaceHullOverlay,
   computeFootprintCells,
   createMeasureLabelSprite,
+  MEASURE_HOVER_COLOR,
+  MEASURE_ARROWHEAD_PX,
+  MEASURE_CENTRE_MARKER_NAME,
+  MEASURE_POINT_COLORS,
+  SCREEN_SPACE_PX_KEY,
+  createMeasureFeatureHighlight,
+  SCREEN_SPACE_OVERLAY_KEY,
   createPrimeTowerObject,
   removePrimeTowers,
   CUT_AXIS_SIDES,
@@ -359,7 +400,12 @@ import { PaintToolPanel } from './PaintToolPanel'
 import { useEditorHistory } from './useEditorHistory'
 import { useEditorPaint } from './useEditorPaint'
 import { useEditorSave } from './useEditorSave'
-import { useEditorScene } from './useEditorScene'
+import type { EditorContentBasePin } from './lib/contentBasePin'
+import { getMeasurement,
+  canSetXyzDistance
+} from './lib/measureBetween'
+import { isCircleCentrePick, sameMeasureFeature } from './lib/measureFeatures'
+import { useEditorScene, type MeasurePick } from './useEditorScene'
 
 /**
  * The 1-based filament ids referenced as support material by a process-override map
@@ -618,8 +664,14 @@ interface EditorViewProps {
    * workspace or plugin graph. See the prop's doc there.
    */
   presetSourceStatus?: ReactNode
-  /** Slice-time apply (only present when launched from the slice dialog). */
-  onApply?: (edit: SceneEdit) => void
+  /**
+   * Slice-time apply (only present when launched from the slice dialog).
+   *
+   * `contentBase` travels WITH the edit for the same reason it does on {@link onSlice}: the host
+   * holds this edit until the user submits a slice from the slim dialog, and by then the session
+   * may have saved, moving the file's head off the bytes the edit describes.
+   */
+  onApply?: (edit: SceneEdit, contentBase: EditorContentBasePin | null, stagedFileId: string | null) => void
   /** Library folder + bridge to save new files into (from the host context). */
   folderId?: string | null
   bridgeId?: string | null
@@ -668,8 +720,52 @@ interface EditorViewProps {
   sliceDisabledReason?: string
   /** A slice job is in flight (drives the Slice button's loading state). */
   slicing?: boolean
-  /** Slice a single 1-based plate without persisting a project; the host opens a results dialog that can save/print. */
-  onSlice?: (opts: { plate: number; sceneEdit: SceneEdit }) => void
+  /**
+   * Slice a single 1-based plate without persisting a project; the host opens a results dialog that
+   * can save/print.
+   *
+   * `contentBase` is the session's pinned base (`contentBasePin.ts`) and the host MUST forward it:
+   * the `sceneEdit` is a diff against those bytes, so a slice that resolved the file's CURRENT
+   * content would re-apply an edit an earlier save already baked in. See `EditorSave.contentBase`.
+   */
+  onSlice?: (opts: {
+    plate: number
+    sceneEdit: SceneEdit
+    contentBase: EditorContentBasePin | null
+    /**
+     * A hidden staged row holding the baked result of `sceneEdit`, to slice in the project's place.
+     *
+     * Null when this host cannot stage. The `sceneEdit` still travels, because the dialog reads it
+     * to know it is looking at an editor slice, but it is the STAGED bytes that get sliced.
+     */
+    stagedFileId: string | null
+  }) => void
+}
+
+/**
+ * A 12-number component transform as the position/rotation/scale an added part carries.
+ *
+ * The WHOLE matrix, not just its translation. Taking only the translation looked safe on the
+ * assumption that an SVG piece is authored axis-aligned, which is true of the pieces OUR tool makes
+ * and false of everything that happens to them afterwards: a volume the user rotated, or one
+ * embossed and turned in BambuStudio, snapped back to axis-aligned on a width change.
+ */
+function decomposeThreeMfTransform(transform: number[]): {
+  position: THREE.Vector3
+  rotation: THREE.Euler
+  scale: THREE.Vector3
+} {
+  const matrix = new THREE.Matrix4().fromArray([
+    transform[0] ?? 1, transform[1] ?? 0, transform[2] ?? 0, 0,
+    transform[3] ?? 0, transform[4] ?? 1, transform[5] ?? 0, 0,
+    transform[6] ?? 0, transform[7] ?? 0, transform[8] ?? 1, 0,
+    transform[9] ?? 0, transform[10] ?? 0, transform[11] ?? 0, 1
+  ])
+  const position = new THREE.Vector3()
+  const quaternion = new THREE.Quaternion()
+  const scale = new THREE.Vector3()
+  matrix.decompose(position, quaternion, scale)
+  return { position, rotation: new THREE.Euler().setFromQuaternion(quaternion), scale }
 }
 
 /**
@@ -860,13 +956,39 @@ function EditorView({
   // A save target that is not library-backed writes to the user's own file. There is no library
   // folder to choose and no "version" concept, so Save means "write it back" and Save-as means
   // "ask the OS where", never the library destination dialog.
-  const savesToLocalFile = saveTarget != null && !saveTarget.isLibraryBacked
   // Memoized on `resourceBase`: the source owns one downloaded archive, so an identity that
   // changed each render would re-download the project and re-key every query that depends on it.
   const projectSource = useMemo(
     () => projectSourceProp ?? createArchiveProjectSource(resourceBase),
     [projectSourceProp, resourceBase]
   )
+  // Read through a ref by the callbacks that must not re-create themselves when the source's
+  // identity changes (the SVG reopen, which reads an archive entry on demand).
+  const projectSourceRef = useRef(projectSource)
+  projectSourceRef.current = projectSource
+  // Only names the upload session: an addressed new version keeps the row's OWN name, precisely
+  // because this session's copy of it may be stale.
+  const projectNameRef = useRef('project.3mf')
+  /**
+   * The workspace save target, built here rather than defaulted inside `useEditorSave`, because it
+   * needs what only this component holds: the archive this session OPENED, which every bake authors
+   * from, and the import store the `SceneEdit` refers to.
+   *
+   * Read through the refs so one target survives a re-render. The archive accessor is deliberately
+   * not an async open: a bake must author from the bytes this session has been reading all along,
+   * and re-fetching would author from whatever the file holds now, which after an earlier save is
+   * this session's own output.
+   */
+  const workspaceSaveTarget = useMemo(
+    () => createApiSaveTarget({
+      archive: () => projectSourceRef.current.archive(),
+      importStore,
+      projectName: () => projectNameRef.current
+    }),
+    [importStore]
+  )
+  const effectiveSaveTarget = saveTarget ?? workspaceSaveTarget
+  const savesToLocalFile = !effectiveSaveTarget.isLibraryBacked
   // Only dispose a source this component created; a host that supplies one owns its lifetime
   // (same rule as `importStore`). Without this the archive and its plate-thumbnail object URLs
   // would outlive every editor open.
@@ -1098,13 +1220,135 @@ function EditorView({
   const [cutOrientLower, setCutOrientLower] = useState<CutHalfOrientation>('keep')
   const [cutting, setCutting] = useState(false)
   const clampedCutOffset = cutRange ? Math.min(Math.max(cutOffset, cutRange.min), cutRange.max) : cutOffset
+  // Dovetail (BambuStudio's tongue-and-groove) cut. The angles and tolerances are PREFERENCES and
+  // persist across objects, while depth and width are sized from whatever model the tool opens on
+  // (see the seeding effect) -- 4mm deep is a sturdy key in a 100mm box and an amputation in a 6mm
+  // one, which is why Studio derives them from the bounding box too.
+  const [cutMode, setCutMode] = useState<CutMode>('plane')
+  const [groove, setGroove] = useState<GrooveCut>(() => ({ depth: 4, width: 16, ...GROOVE_CUT_DEFAULTS }))
+  const [cutObjectSize, setCutObjectSize] = useState<{ x: number; y: number; z: number } | null>(null)
+  /** Which object the groove's depth/width were last sized for, so an AXIS change does not resize them. */
+  const grooveSizedForRef = useRef<string | null>(null)
+  const grooveSizeLimits = useMemo(
+    () => grooveSizeLimitsForSize(cutObjectSize ?? { x: 0, y: 0, z: 0 }),
+    [cutObjectSize]
+  )
+  // A connector is a peg through the cut face, not a channel across the part, so it has its own
+  // range. It also tolerates a null size, which the groove range cannot: before the cut-plane
+  // effect measures the object, `{x:0,y:0,z:0}` collapsed the groove range to `{min:1,max:1}` and
+  // clamped the connector defaults the moment anyone touched the field.
+  const connectorSizeLimits = useMemo(() => connectorSizeLimitsForSize(cutObjectSize ?? null), [cutObjectSize])
+  /**
+   * Cut connectors, and whether a click on the cut plane places one.
+   *
+   * The settings are shared by every connector rather than held per connector, which is a
+   * deliberate divergence from Studio: it edits whichever connectors are SELECTED, showing blank
+   * fields where a multi-selection disagrees. Uniform settings need no selection model, no
+   * mixed-value rendering, and match what a joint actually wants -- matching pegs. Placement stays
+   * per connector, which is the part that has to vary.
+   */
+  const [cutConnectors, setCutConnectors] = useState<CutConnector[]>([])
+  const [cutConnectorMode, setCutConnectorMode] = useState(false)
+  /** Which half stays visible while placing. Both faces are the same surface, seen from either side. */
+  const [cutConnectorFace, setCutConnectorFace] = useState<'lower' | 'upper'>('lower')
+  const [connectorSettings, setConnectorSettings] = useState<ConnectorSettings>({ ...CONNECTOR_DEFAULTS })
+  /**
+   * Whether clicking the cut face places connectors RIGHT NOW.
+   *
+   * Derived rather than stored, on the same rule as {@link activeConnectors} below: connectors are a
+   * PLANE-cut affordance, and the panel hides the whole section -- the "Done placing" toggle
+   * included -- in Dovetail. Read as raw state, switching mode mid-placement left the cross-section
+   * clipping half the model away with the ghost still tracking the pointer and no reachable control
+   * to turn either off. Switching back to Plane resumes placing, which is what the still-lit button
+   * in the panel promises.
+   */
+  const placingConnectors = cutConnectorMode && cutMode === 'plane'
+  const cutConnectorModeRef = useRef(false)
+  cutConnectorModeRef.current = placingConnectors && gizmoMode === 'cut'
+  const cutConnectorTargetsRef = useRef<{
+    plane: THREE.Object3D | null
+    /** The visible cut face. Hitting it is proof the point is on the cross-section. */
+    section: THREE.Object3D | null
+    markers: THREE.Object3D[]
+  }>({ plane: null, section: null, markers: [] })
+  /**
+   * The selected object's world triangles while the cut tool is open, which the connector rules are
+   * checked against. STATE rather than a ref even though it is large: it is captured once per tool
+   * open or axis change, both of which already re-render, and holding it as state is what lets the
+   * validity memo and the click handler say plainly what they depend on.
+   */
+  const [cutSoup, setCutSoup] = useState<Float32Array | null>(null)
+  /**
+   * Connectors apply to a PLANE cut only, mirroring Studio's `apply_connectors_in_model`, which
+   * returns early for tongue-and-groove. The panel hides the whole section in Dovetail mode, so
+   * anything still placed must stop counting there too -- otherwise the halves silently gain pegs
+   * against an interface that is not a flat plane, and an invalid one left the Cut button disabled
+   * with no visible cause and no reachable control to clear it.
+   */
+  const activeConnectors = useMemo(
+    () => (cutMode === 'plane' ? cutConnectors : []),
+    [cutMode, cutConnectors]
+  )
+  /**
+   * Containment answers, cached across recomputes. Keyed on the connector's POSITION rather than its
+   * id, and dropped whenever the geometry changes, so a cached answer can only ever describe the
+   * exact point and mesh it was measured on -- a stale "inside" would let an invalid connector cut.
+   */
+  const insideCacheRef = useRef(new Map<string, boolean>())
+  useEffect(() => { insideCacheRef.current.clear() }, [cutSoup])
+  const activeProblems = useMemo(() => {
+    if (!cutSoup) return new Map()
+    const cache = insideCacheRef.current
+    return findConnectorProblems(activeConnectors, cutSoup, (connector) => {
+      const key = `${connector.x},${connector.y},${connector.z}`
+      const cached = cache.get(key)
+      if (cached !== undefined) return cached
+      const inside = isPointInsideSoup(cutSoup, connector)
+      cache.set(key, inside)
+      return inside
+    })
+  }, [activeConnectors, cutSoup])
   // Measure tool: up to two picked points (world mm). Clicks snap to nearby mesh
   // corners (MEASURE_SNAP_PX); a third click starts a new measurement. The scene
   // overlay and the readout panel both derive from these points.
-  const [measurePoints, setMeasurePoints] = useState<Array<{ x: number; y: number; z: number }>>([])
-  const addMeasurePointRef = useRef<((point: { x: number; y: number; z: number }) => void) | null>(null)
-  addMeasurePointRef.current = (point) => {
-    setMeasurePoints((prev) => (prev.length >= 2 ? [point] : [...prev, point]))
+  const [measurePoints, setMeasurePoints] = useState<MeasurePick[]>([])
+  const addMeasurePointRef = useRef<((pick: MeasurePick) => void) | null>(null)
+  // Read by the Delete shortcut, which is a stable callback and cannot close over the live array.
+  const measurePointsRef = useRef<MeasurePick[]>([])
+  measurePointsRef.current = measurePoints
+  /**
+   * The centre marker of each selected circle, handed to the scene so a ray can reach it.
+   *
+   * The screen-space rule in `lib/circleScreenZone.ts` covers a POINTER, which arrives over a hole
+   * having crossed its rim. A tap does not: it has no hover path, so nothing tells the pick which
+   * circle it is inside. Raycasting the drawn marker needs no history and is what makes the centre
+   * selectable on touch at all.
+   */
+  const measureCentreTargetsRef = useRef<Array<{ object: THREE.Object3D; slot: number }>>([])
+  /**
+   * Take one pick into the two selection slots, BambuStudio's `detect_current_item` rules
+   * (`GLGizmoMeasure.cpp:281`).
+   *
+   * The important one is that a third click OVERWRITES the second slot rather than starting over,
+   * which is what lets a datum be pinned and the second pick swept around it -- "how far is
+   * everything from this hole" is one click per answer instead of two. Ours restarted from empty,
+   * so the datum had to be re-picked every time.
+   *
+   * Clicking a feature that is already selected is a DESELECT, and which slot it sits in decides
+   * what that means: the second simply goes, while the first is replaced by the second (Studio's
+   * `reset_feature1` shuffle) so the survivor becomes the new datum rather than leaving a hole in
+   * slot one that nothing could fill.
+   */
+  addMeasurePointRef.current = (pick) => {
+    setMeasurePoints((prev) => {
+      const matches = (existing: MeasurePick) => sameMeasureFeature(existing.feature, pick.feature)
+      const [firstPick, secondPick] = prev
+      if (!firstPick) return [pick]
+      if (!secondPick) return matches(firstPick) ? [] : [firstPick, pick]
+      if (matches(secondPick)) return [firstPick]
+      if (matches(firstPick)) return [secondPick]
+      return [firstPick, pick]
+    })
   }
   // Leaving the tool or switching plates discards the measurement.
   useEffect(() => {
@@ -1145,13 +1389,25 @@ function EditorView({
   useEffect(() => {
     setMeasurePoints([])
   }, [activePlateIndex])
-  const measureDelta = useMemo(() => {
+  /**
+   * What the two picked features measure.
+   *
+   * A CIRCLE measures from its RIM, and its centre is a selection of its own -- point at the ring and
+   * you measure the ring, click the dot at the middle and you measure the middle. DIVERGENCE from
+   * Studio, which hard-codes `deal_circle_result` true for every measurement its GUI takes
+   * (`GLGizmoMeasure.cpp:2589`) so that a circle always collapses to its centre.
+   *
+   * Studio's rule makes its own centre control useless, which is how this surfaced: against an edge
+   * both settings answered with the centre distance, so a toggle labelled "Center of circle" changed
+   * nothing, and the rim distance -- the wall thickness between a hole and an edge, the thing
+   * actually being asked -- could not be reached at all. Ours means what the labels say.
+   *
+   * Hole-to-hole centre spacing is still one click away: select each centre dot rather than each rim.
+   */
+  const measureResult = useMemo(() => {
     const [a, b] = measurePoints
     if (!a || !b) return null
-    const dx = b.x - a.x
-    const dy = b.y - a.y
-    const dz = b.z - a.z
-    return { dx, dy, dz, distance: Math.hypot(dx, dy, dz) }
+    return getMeasurement(a.feature, b.feature)
   }, [measurePoints])
   // Brim-ear tool: diameter (mm) of newly placed ears.
   const [brimEarDiameter, setBrimEarDiameter] = useState(8)
@@ -1191,6 +1447,24 @@ function EditorView({
    * `gizmoPart` itself.
    */
   const selectedAddedPartKey = gizmoPart?.member.kind === 'added' ? gizmoPart.member.key : null
+  /**
+   * The selected BAKED part, on the same narrow-view rule as {@link selectedAddedPartKey}.
+   *
+   * Its one consumer is re-editing a part a PREVIOUS session authored: a text or SVG part becomes a
+   * baked `<component>` the moment the project is saved, so without this the tools could only ever
+   * reopen what the current session made, which is what limited them to a session for so long.
+   */
+  // Memoised on its PRIMITIVES, not built inline: this feeds a `useCallback` dependency array, and a
+  // fresh object literal every render would change that callback's identity every render, which is
+  // what silently defeats the memo on `ObjectList` (the most expensive thing the editor renders).
+  const selectedBakedPartObjectId = gizmoPart?.member.kind === 'baked' ? gizmoPart.objectId : null
+  const selectedBakedPartIndex = gizmoPart?.member.kind === 'baked' ? gizmoPart.member.partIndex : null
+  const selectedBakedPart = useMemo(
+    () => (selectedBakedPartObjectId != null && selectedBakedPartIndex != null
+      ? { objectId: selectedBakedPartObjectId, partIndex: selectedBakedPartIndex }
+      : null),
+    [selectedBakedPartObjectId, selectedBakedPartIndex]
+  )
   /**
    * What the placement panel calls itself.
    *
@@ -1512,6 +1786,8 @@ function EditorView({
   const saveAsBridgeId = bridgeId
   const saveAsInitialFolderId = bridgeId ? folderId : null
   const saveAsSuggestedName = baseFileQuery.data ? splitLibraryFileNameForRename(baseFileQuery.data.file.name).baseName : ''
+  // Kept current for the upload session's name; see the ref's own note for why it is cosmetic.
+  projectNameRef.current = baseFileQuery.data?.file.name ?? 'project.3mf'
   // Non-null only while the OPENED project is the one flagged as needing repair, an editor
   // opened on a new-project scaffold or an archived version has no repairable stored file.
   const needsSettingsRepairFileId = baseFileId !== null
@@ -2470,7 +2746,8 @@ function EditorView({
     activePaintChannel,
     activePaintChannelRef,
     refreshPaintOverlaysRef,
-    applyPaintStrokeRef
+    applyPaintStrokeRef,
+    previewPaintRegionRef
   } = paint
 
   // ---- Added part volumes ----------------------------------------------------------
@@ -2655,8 +2932,35 @@ function EditorView({
    * fresh file rather than silently re-adding the last one.
    */
   const [svgTool, setSvgTool] = useState<SvgToolValue>({ widthMm: 40, thickness: 2, operation: 'normal_part', includeBackground: false })
+  /**
+   * The artwork the SVG tool is re-editing: which archive entry it came from and which object it is
+   * on. Set when the tool is opened on a part that carries a record, cleared on a fresh import.
+   */
+  const reeditSvgRef = useRef<
+    { entryPath: string; hostId: number; fileName: string; loadedMarkup: string } | null
+  >(null)
+  /** How many parts a commit will replace, mirrored into state so the panel can say so. */
+  const [reeditSvgCount, setReeditSvgCount] = useState(0)
+  /**
+   * The BAKED part the open tool is re-editing, and which its first apply must therefore replace.
+   *
+   * A baked part's geometry lives in the base file's object XML, so it cannot be rewritten the way
+   * a session volume's soup can: the edit is expressed as a removal plus a new added part, exactly
+   * as the mesh boolean expresses consuming a baked operand. Held until the first APPLY rather than
+   * acted on at open, so opening the tool on saved artwork to read its settings, and closing again,
+   * leaves the project untouched.
+   */
+  const reeditBakedPartRef = useRef<{ hostId: number; partIndex: number; transform: number[] } | null>(null)
   const [svgArtwork, setSvgArtwork] = useState<ParsedSvg | null>(null)
   const [svgFileName, setSvgFileName] = useState<string | null>(null)
+  /** The chosen file's raw bytes, held so the save can store them in the archive. */
+  const [svgMarkup, setSvgMarkup] = useState<string | null>(null)
+  /**
+   * Entry names the opened archive holds, cached so naming a new one can avoid ORPHANS as well as
+   * entries some record still points at. Refreshed whenever artwork is loaded rather than read at
+   * commit time, because the commit is synchronous and this is not.
+   */
+  const archiveEntriesRef = useRef<readonly string[]>([])
   const [svgEmptyReason, setSvgEmptyReason] = useState<string | null>(null)
   const applyTextPartRef = useRef<(() => Promise<void>) | null>(null)
 
@@ -2747,6 +3051,295 @@ function EditorView({
   writeBackPartMeshRef.current = writeBackPartMesh
 
   // ---- Brim ears -----------------------------------------------------------------
+
+  /**
+   * Add or remove a connector from a click on the cut plane.
+   *
+   * A placement outside the cross-section is REFUSED at the click rather than accepted and flagged,
+   * which is what Studio does (`unproject_on_cut_plane` simply returns false). The difference from
+   * Studio is that we say why: it drops the click silently, which reads as a dead tool.
+   */
+  const editCutConnectors = useCallback((edit:
+    | { kind: 'add'; worldPoint: THREE.Vector3 }
+    | { kind: 'remove'; id: string }
+  ) => {
+    if (edit.kind === 'remove') {
+      setCutConnectors((current) => current.filter((entry) => entry.id !== edit.id))
+      return
+    }
+    if (cutSoup && !isPointInsideSoup(cutSoup, edit.worldPoint)) {
+      toast.error('Place connectors inside the cut face.')
+      return
+    }
+    setCutConnectors((current) => [...current, {
+      ...connectorSettings,
+      id: nextInstanceKey(),
+      x: edit.worldPoint.x,
+      y: edit.worldPoint.y,
+      z: edit.worldPoint.z
+    }])
+  }, [connectorSettings, cutSoup])
+  /**
+   * Settings are SHARED, so changing one rewrites every connector already placed as well as the ones
+   * to come. Snapshotting them at placement instead made the controls silently apply to future
+   * connectors only, which contradicts what the panel says and leaves a joint with mismatched pegs
+   * from a control the user believes is global. The markers redraw from the same values, so the
+   * preview keeps meaning what it claims to.
+   */
+  const applyConnectorSettings = useCallback((next: ConnectorSettings) => {
+    setConnectorSettings(next)
+    setCutConnectors((current) => current.map((connector) => ({ ...connector, ...next })))
+  }, [])
+  /**
+   * The cut PLANE starts fresh; the rest of the setup persists.
+   *
+   * That split is BambuStudio's, and it is narrower than it looks. Opening the gizmo runs
+   * `reset_cut_plane()` (plane centre onto the bounding box, rotation to identity) and clears
+   * connector editing (`on_set_state`, `:563`); changing the selection runs `reset_rotation()` plus
+   * `update_bb()` (`data_changed`, `:552`). Neither touches `m_cut_mode`, `m_keep_upper`,
+   * `m_keep_lower`, `m_place_on_cut_*` or `m_rotate_*` -- those are plain members that only the
+   * panel's own "Reset all" button restores. So leaving the tool to check a dimension and coming
+   * back keeps the setup, and so does moving to another model.
+   *
+   * The AXIS is our analogue of that identity rotation, which is why it resets on both triggers
+   * rather than on the object alone. The offset resets with it, in the cut-plane effect below, which
+   * re-centres on the object's bounding box whenever either changes. Connectors are cleared here for
+   * a reason of their own: each holds an ABSOLUTE world point on the model it was placed on, so
+   * carrying them to another object puts pegs in mid air. The connector's type/style/shape/size does
+   * persist, being a preference about hardware rather than about a model.
+   */
+  useEffect(() => {
+    if (gizmoMode !== 'cut' || !selectedKey) return
+    setCutAxis('z')
+    setCutConnectors([])
+    setCutConnectorMode(false)
+    setCutConnectorFace('lower')
+  }, [gizmoMode, selectedKey])
+
+  /**
+   * A ghost of the connector under the pointer, moved directly rather than through React because it
+   * updates at pointer rate. Built alongside the cut face and cleared with it.
+   */
+  const connectorGhostRef = useRef<THREE.Mesh | null>(null)
+  const hoverCutConnector = useCallback((worldPoint: THREE.Vector3 | null) => {
+    const ghost = connectorGhostRef.current
+    if (!ghost) return
+    if (!worldPoint) {
+      ghost.visible = false
+      return
+    }
+    ghost.position.copy(worldPoint)
+    ghost.visible = true
+  }, [])
+  const hoverCutConnectorRef = useRef(hoverCutConnector)
+  hoverCutConnectorRef.current = hoverCutConnector
+
+  const clearCutConnectors = useCallback(() => setCutConnectors([]), [])
+  // A connector stores an absolute world point, so it goes stale the moment the plane it was placed
+  // on moves. Nothing in `findConnectorProblems` references the plane, so a stale one raises no
+  // warning and cuts a peg that never reaches the join. Dragging the position re-seats them onto the
+  // new plane; changing the AXIS discards them, because their in-plane coordinates describe a
+  // surface that no longer exists and there is nothing honest to map them onto.
+  useEffect(() => {
+    setCutConnectors((current) => (current.length === 0 ? current : []))
+  }, [cutAxis])
+  useEffect(() => {
+    setCutConnectors((current) => {
+      if (current.length === 0) return current
+      const seated = current.map((connector) => ({ ...connector, [cutAxis]: clampedCutOffset }))
+      return seated.every((c, i) => c[cutAxis] === current[i]![cutAxis]) ? current : seated
+    })
+  }, [clampedCutOffset, cutAxis])
+  const editCutConnectorsRef = useRef(editCutConnectors)
+  editCutConnectorsRef.current = editCutConnectors
+
+  /**
+   * While connectors are being placed, show the CUT FACE: clip the near half of the selected object
+   * away and draw the real cross-section in its place.
+   *
+   * Without this the tool is unusable rather than merely awkward. The cut plane preview is a
+   * translucent quad passing through a solid model, so the section it describes is hidden INSIDE the
+   * geometry -- a user aiming at it is guessing, and the only way to get a face worth clicking was
+   * to perform the cut first, which defeats the point. BambuStudio clips the object at the plane
+   * (`ObjectClipper`) for exactly this reason, and this is that.
+   *
+   * The cap is also what a connector click hits, so a click is EXACT: anything landing on it is
+   * inside the cross-section by construction, rather than being projected onto an unbounded plane
+   * and validated afterwards.
+   *
+   * The CUT itself is held across connector edits. It is a full cut of the whole object and depends
+   * only on the plane, while the effect below re-runs on every connector placed and every drag of a
+   * size slider -- so recomputing it there re-cut a dense model on each React commit and made the
+   * sliders unusable. Only the drill and the ghost belong on that path.
+   */
+  const cutPreviewHalf = useMemo(
+    () => (cutSoup && gizmoMode === 'cut' && placingConnectors
+      ? cutHalfForSide(cutSoup, cutAxis, clampedCutOffset, cutConnectorFace)
+      : null),
+    [cutSoup, gizmoMode, placingConnectors, cutAxis, clampedCutOffset, cutConnectorFace]
+  )
+  useEffect(() => {
+    const scene = sceneRef.current
+    const group = selectedKey ? groupByKeyRef.current.get(selectedKey) : null
+    if (!scene || !group || !cutPreviewHalf) return undefined
+
+    const targets = cutConnectorTargetsRef.current
+    // The face as the cut will leave it: the visible half, with its bores already taken out. Showing
+    // an undrilled face instead means the preview disagrees with the result, which is the whole
+    // reason to show a face at all. Same derivation the cut itself runs, so the two cannot drift.
+    const previewBores = connectorBoresForSide(cutConnectors, cutAxis, cutConnectorFace)
+      .map((bore) => bore.soup)
+    const cap = capSoupForHalf(cutPreviewHalf, cutAxis, clampedCutOffset, cutConnectorFace, previewBores)
+    // Clip away the half the user is NOT looking at, so the eye and the pointer both reach the face.
+    // Showing the lower half keeps material below the plane (normal -axis); showing the upper flips
+    // it. The cross-section itself is the same surface either way -- only the side it is seen from
+    // changes -- so nothing about placement depends on which is chosen.
+    const towards = cutConnectorFace === 'lower' ? -1 : 1
+    const normal = new THREE.Vector3(
+      cutAxis === 'x' ? towards : 0,
+      cutAxis === 'y' ? towards : 0,
+      cutAxis === 'z' ? towards : 0
+    )
+    const clip = new THREE.Plane(normal, -towards * clampedCutOffset)
+    const restore: Array<{ material: THREE.Material; planes: THREE.Plane[] | null }> = []
+    group.traverse((node) => {
+      const mesh = node as THREE.Mesh
+      if (!mesh.isMesh) return
+      for (const material of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
+        restore.push({ material, planes: material.clippingPlanes })
+        material.clippingPlanes = [clip]
+        material.needsUpdate = true
+      }
+    })
+
+    // The plane preview and this face occupy the SAME plane, which is what made the face shimmer:
+    // two coplanar surfaces with nothing to separate them in the depth buffer. The face replaces the
+    // quad while it is up, and the material's polygon offset keeps it clear of the model's own cut
+    // face where the clip leaves one.
+    const planeQuad = cutPlaneMeshRef.current
+    const planeWasVisible = planeQuad?.visible ?? false
+
+    // The ghost is built at the ORIGIN and moved by the hover callback, so its geometry is the
+    // connector's own shape in the cut's frame rather than a shape re-made on every pointer move.
+    const ghostSoup = connectorSoup(
+      { ...connectorSettings, id: 'ghost', x: 0, y: 0, z: 0 },
+      cutAxis,
+      { grown: false }
+    )
+    const ghostGeometry = new THREE.BufferGeometry()
+    ghostGeometry.setAttribute('position', new THREE.BufferAttribute(ghostSoup, 3))
+    ghostGeometry.computeVertexNormals()
+    ghostGeometry.computeBoundingSphere()
+    const ghost = new THREE.Mesh(ghostGeometry, new THREE.MeshStandardMaterial({
+      color: 0x9fd0ff,
+      emissive: 0x2a4c6e,
+      transparent: true,
+      opacity: 0.45,
+      depthWrite: false,
+      roughness: 0.5
+    }))
+    ghost.visible = false
+    ghost.renderOrder = 6
+    scene.add(ghost)
+    connectorGhostRef.current = ghost
+
+    let section: THREE.Mesh | null = null
+    if (cap.length > 0) {
+      if (planeQuad) planeQuad.visible = false
+      const geometry = new THREE.BufferGeometry()
+      geometry.setAttribute('position', new THREE.BufferAttribute(cap, 3))
+      geometry.computeVertexNormals()
+      geometry.computeBoundingSphere()
+      geometry.computeBoundingBox()
+      section = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({
+        color: 0x7fb8ff,
+        emissive: 0x14304a,
+        side: THREE.DoubleSide,
+        roughness: 0.6,
+        metalness: 0,
+        polygonOffset: true,
+        polygonOffsetFactor: -2,
+        polygonOffsetUnits: -2
+      }))
+      section.renderOrder = 3
+      scene.add(section)
+      targets.section = section
+    }
+    return () => {
+      for (const entry of restore) {
+        entry.material.clippingPlanes = entry.planes
+        entry.material.needsUpdate = true
+      }
+      if (section) {
+        scene.remove(section)
+        disposeObject3D(section)
+      }
+      if (planeQuad) planeQuad.visible = planeWasVisible
+      scene.remove(ghost)
+      disposeObject3D(ghost)
+      connectorGhostRef.current = null
+      targets.section = null
+    }
+  }, [cutPreviewHalf, cutConnectorFace, cutConnectors, connectorSettings, cutAxis, clampedCutOffset, selectedKey])
+
+  // Connector markers: one mesh per connector on the SCENE, beside the cut plane, drawn as the peg
+  // will actually be made so the size controls mean something before the cut runs. Invalid ones are
+  // tinted, matching Studio's own red (`CONNECTOR_ERR_COLOR`).
+  useEffect(() => {
+    const scene = sceneRef.current
+    if (!scene || gizmoMode !== 'cut') return undefined
+    const targets = cutConnectorTargetsRef.current
+    const markers: THREE.Object3D[] = []
+    for (const connector of cutConnectors) {
+      // A connector is a PEG on one half and a BORE on the other, and the marker has to say which:
+      // drawing a proud peg on the half that gets a hole describes the joint backwards. The bore is
+      // still drawn rather than left to the hole in the face alone, because the marker is also the
+      // thing a click removes -- an invisible connector could be placed and never taken off.
+      const volumes = connectorVolumes(connector, cutAxis)
+      const here = cutConnectorFace === 'upper' ? volumes.upper : volumes.lower
+      const isBore = here.subtype === 'negative_part'
+      const soup = isBore ? here.soup.slice() : connectorSoup(connector, cutAxis, { grown: false })
+      const geometry = new THREE.BufferGeometry()
+      geometry.setAttribute('position', new THREE.BufferAttribute(soup, 3))
+      geometry.computeVertexNormals()
+      // Bounds are precomputed rather than left to the lazy path, following this plugin's rule for
+      // hand-built geometry: `Mesh.raycast` rejects on the bounding sphere first, and a marker that
+      // is never hit is a connector that cannot be clicked back off.
+      geometry.computeBoundingSphere()
+      geometry.computeBoundingBox()
+      const invalid = activeProblems.has(connector.id)
+      const marker = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({
+        // A bore reads as a recess: darker, and drawn behind the surface rather than over it.
+        color: invalid ? 0xff4d4d : isBore ? 0x24405c : 0x7fb8ff,
+        transparent: true,
+        opacity: invalid ? 0.75 : isBore ? 0.85 : 0.55,
+        roughness: isBore ? 0.9 : 0.4,
+        metalness: 0,
+        depthWrite: false
+      }))
+      marker.userData.connectorId = connector.id
+      marker.renderOrder = 5
+      scene.add(marker)
+      markers.push(marker)
+    }
+    targets.markers = markers
+    // No explicit repaint request: `useEditorScene` already asks for one per React commit.
+    return () => {
+      targets.markers = []
+      for (const marker of markers) {
+        scene.remove(marker)
+        disposeObject3D(marker)
+      }
+    }
+  }, [cutConnectors, activeProblems, cutAxis, cutConnectorFace, gizmoMode])
+
+  // Leaving the cut tool forgets the connectors: they belong to a cut that never happened, and
+  // silently keeping them would apply them to whatever the NEXT cut turned out to be.
+  useEffect(() => {
+    if (gizmoMode === 'cut') return
+    setCutConnectors([])
+    setCutConnectorMode(false)
+  }, [gizmoMode])
 
   /** Replace an instance group's ear markers (translucent discs childed to the rotor). */
   const setGroupBrimEarMarkers = useCallback((group: THREE.Group, ears: EditorBrimEar[]) => {
@@ -2919,9 +3512,14 @@ function EditorView({
     paintColorFilamentIdRef,
     paintToolRef,
     applyPaintStrokeRef,
+    previewPaintRegionRef,
     placeTextAtRef,
     textMeshRef,
     setTextInteractionRef,
+    cutConnectorModeRef,
+    cutConnectorTargetsRef,
+    editCutConnectorsRef,
+    hoverCutConnectorRef,
     brimEarDiameterRef,
     editSelectedBrimEarsRef,
     filamentColorsRef,
@@ -2934,6 +3532,8 @@ function EditorView({
     recomputeWarningsRef,
     movePrimeTowerRef,
     addMeasurePointRef,
+    measureCentreTargetsRef,
+    measurePicksRef: measurePointsRef,
     recordHistoryRef,
     regenerateActiveThumbnailRef,
     paintCommittedRef,
@@ -3463,16 +4063,26 @@ function EditorView({
   // is active, oriented perpendicular to the chosen axis; the cut panel drives its offset.
   const cutPlaneMeshRef = useRef<THREE.Mesh | null>(null)
   useEffect(() => {
-    if (gizmoMode !== 'cut' || !selectedKey) { setCutRange(null); return undefined }
+    // Closing the tool forgets which object the groove was sized for, so reopening it on the same
+    // object sizes afresh rather than keeping a groove scaled for whatever was selected before.
+    if (gizmoMode !== 'cut' || !selectedKey) { setCutRange(null); grooveSizedForRef.current = null; return undefined }
     const scene = sceneRef.current
     const group = groupByKeyRef.current.get(selectedKey)
     if (!scene || !group) { setCutRange(null); return undefined }
     const box = printableMeshBox(group)
     if (box.isEmpty()) { setCutRange(null); return undefined }
+    const targets = cutConnectorTargetsRef.current
     setCutRange({ min: box.min[cutAxis], max: box.max[cutAxis] })
     setCutOffset((box.min[cutAxis] + box.max[cutAxis]) / 2)
     const margin = 6
     const size = new THREE.Vector3().subVectors(box.max, box.min)
+    setCutObjectSize({ x: size.x, y: size.y, z: size.z })
+    // Size the joint to the model, but only once per object: this effect also re-runs on an AXIS
+    // change, and resizing there would throw away a depth the user had just dialled in.
+    if (grooveSizedForRef.current !== selectedKey) {
+      grooveSizedForRef.current = selectedKey
+      setGroove((current) => ({ ...current, ...grooveDefaultsForSize(size) }))
+    }
     // PlaneGeometry lies in XY (normal +Z); rotate it so its normal matches the cut axis,
     // sizing each span to the object's extent along the in-plane world axes.
     const geometry = cutAxis === 'x'
@@ -3490,7 +4100,14 @@ function EditorView({
     plane.renderOrder = 4
     scene.add(plane)
     cutPlaneMeshRef.current = plane
+    // The connector tool clicks against this plane and validates against these triangles. Both are
+    // captured here rather than recomputed per click: the soup is the object's whole geometry, and
+    // a click is not the moment to walk it.
+    targets.plane = plane
+    setCutSoup(collectWorldTriangles(group))
     return () => {
+      targets.plane = null
+      setCutSoup(null)
       scene.remove(plane)
       plane.geometry.dispose()
       ;(plane.material as THREE.Material).dispose()
@@ -3509,38 +4126,194 @@ function EditorView({
     const scene = sceneRef.current
     if (!scene || gizmoMode !== 'measure' || measurePoints.length === 0) return undefined
     const group = new THREE.Group()
-    for (const point of measurePoints) {
-      const marker = new THREE.Mesh(
-        new THREE.SphereGeometry(1.1, 16, 12),
-        new THREE.MeshBasicMaterial({ color: 0x7fb8ff, depthTest: false })
+    // Flagged HERE rather than beside the arrowheads that first needed it. The sync walks the scene's
+    // top-level children plus one level inside a flagged group, and every highlight marker is sized
+    // in screen pixels, so setting it only where a dimension is drawn left a lone pick's markers at
+    // their raw 1mm world size for the whole time between the first click and the second.
+    group.userData[SCREEN_SPACE_OVERLAY_KEY] = true
+    const centreTargets: Array<{ object: THREE.Object3D; slot: number }> = []
+    measurePoints.forEach((pick, index) => {
+      // Each selection takes a colour of its own, distinct from the hover's -- see
+      // MEASURE_POINT_COLORS for why a click used to change nothing visible at all.
+      const color = MEASURE_POINT_COLORS[index] ?? MEASURE_POINT_COLORS[0]
+      // The SOURCE is drawn, not the measured feature: picking a hole's centre in point mode gives a
+      // bare point, and drawing only that loses the ring that says which hole it came from.
+      // FLATTENED into the overlay group rather than nested: the screen-space sync walks the scene's
+      // top-level children plus ONE level inside a flagged group, so a highlight kept as a group of
+      // its own hides its markers two levels down where nothing scales them. They then draw at their
+      // world size -- 1mm across, which happens to look about right at one zoom and grows with the
+      // model at every other.
+      //
+      // Which of a circle's two parts was picked decides which one is drawn LOUD. A centre selected
+      // out of a hole is the source circle's own centre marker promoted, not a second highlight over
+      // it: drawing the point separately would stack a marker on the dot already there and leave the
+      // ring at full strength, so the two selections would look alike.
+      const centreOfSource = isCircleCentrePick(pick.feature, pick.source)
+      const sourceHighlight = createMeasureFeatureHighlight(
+        pick.source,
+        color,
+        centreOfSource ? 'centre' : 'rim'
       )
-      marker.position.set(point.x, point.y, point.z)
-      marker.renderOrder = 7
-      group.add(marker)
-    }
-    const [a, b] = measurePoints
-    if (a && b) {
+      const centre = sourceHighlight.getObjectByName(MEASURE_CENTRE_MARKER_NAME)
+      group.add(...sourceHighlight.children)
+      if (pick.source !== pick.feature && !centreOfSource) {
+        group.add(...createMeasureFeatureHighlight(pick.feature, color).children)
+      }
+      // Collected HERE rather than by position afterwards: a pick with a derived point contributes a
+      // second highlight, and the dimension line, legs and arc are appended after every pick, so no
+      // index into the finished group maps back to a slot.
+      if (centre && pick.source.kind === 'circle') centreTargets.push({ object: centre, slot: index })
+    })
+    // The dimension itself spans whatever the measurement anchored to, which is not simply the two
+    // features' own positions: a point-to-edge distance lands on the edge's nearest point, and an
+    // oblique edge-to-plane one lands on a boundary edge of the face.
+    const measured = measureResult?.distanceInfinite ?? measureResult?.distanceStrict
+    // A ZERO-LENGTH dimension is not drawn. Two edges meeting at a corner are genuinely 0.00mm
+    // apart, and a dimension line of no length with a "0.00 mm" tag floating on the corner is
+    // clutter over a fact the panel already states. Studio's own guard, and both of its conditions:
+    // coincident anchors, or a distance under a micron (`GLGizmoMeasure.cpp:1508`).
+    const anchors = measured
+      && measured.from.distanceToSquared(measured.to) >= 1e-6
+      && Math.abs(measured.dist) >= 0.001
+      ? measured
+      : null
+    if (anchors) {
       const line = new THREE.Line(
-        new THREE.BufferGeometry().setFromPoints([
-          new THREE.Vector3(a.x, a.y, a.z),
-          new THREE.Vector3(b.x, b.y, b.z)
-        ]),
-        new THREE.LineBasicMaterial({ color: 0x7fb8ff, transparent: true, opacity: 0.9, depthTest: false })
+        new THREE.BufferGeometry().setFromPoints([anchors.from, anchors.to]),
+        new THREE.LineBasicMaterial({ color: MEASURE_HOVER_COLOR, transparent: true, opacity: 0.9, depthTest: false })
       )
       line.renderOrder = 7
+      line.frustumCulled = false
       group.add(line)
-      const label = createMeasureLabelSprite(`${Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z).toFixed(2)} mm`)
+      // ARROWHEADS at each end, which is what makes this read as a dimension rather than as a line
+      // that happens to join two things. Sized in SCREEN pixels like the markers, so they stay
+      // legible at any zoom; a cone scales uniformly, so one value does it.
+      const along = anchors.to.clone().sub(anchors.from).normalize()
+      // Each head's TIP sits on its anchor with the body lying back along the dimension, which is
+      // what a dimension arrow is. The cone's apex is at its origin and its body runs along -Y, and
+      // `setFromUnitVectors` maps +Y onto `facing`, so the body ends up along -facing: the arrow at
+      // `from` therefore takes -along, not +along. Given the two the other way round both heads
+      // stick out PAST the ends, away from the line they belong to.
+      for (const [at, facing] of [
+        [anchors.from, along.clone().negate()],
+        [anchors.to, along]
+      ] as const) {
+        const head = new THREE.Mesh(
+          // Height 1 with the tip at +Y after the shift below, so the screen-space scale IS its
+          // length rather than a factor on a cone that already has one.
+          new THREE.ConeGeometry(0.3, 1, 12),
+          new THREE.MeshBasicMaterial({ color: MEASURE_HOVER_COLOR, depthTest: false })
+        )
+        head.geometry.translate(0, -0.5, 0)
+        head.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), facing)
+        head.position.copy(at)
+        head.userData[SCREEN_SPACE_PX_KEY] = MEASURE_ARROWHEAD_PX
+        head.renderOrder = 7
+        group.add(head)
+      }
+      const label = createMeasureLabelSprite(`${anchors.dist.toFixed(2)} mm`)
       if (label) {
-        label.position.set((a.x + b.x) / 2, (a.y + b.y) / 2, (a.z + b.z) / 2 + 4)
+        const midpoint = anchors.from.clone().add(anchors.to).multiplyScalar(0.5)
+        label.position.set(midpoint.x, midpoint.y, midpoint.z + 4)
         group.add(label)
       }
     }
+    // EXTENSION LINES, where an anchor sits off the feature it belongs to. Measuring a point against
+    // an edge it does not overhang anchors on the edge's infinite LINE, so the dimension ends in
+    // mid air beside the model with nothing joining it to the edge it describes. Studio draws the
+    // same light-grey run (`GLGizmoMeasure.cpp:1717`).
+    for (const pick of measurePoints) {
+      if (pick.source.kind !== 'edge' || !anchors) continue
+      const { start, end } = pick.source
+      for (const anchor of [anchors.from, anchors.to]) {
+        const along = end.clone().sub(start)
+        const t = anchor.clone().sub(start).dot(along) / along.lengthSq()
+        // Only an anchor genuinely PAST an end needs one; between them it is already on the edge.
+        if (t >= 0 && t <= 1) continue
+        const nearest = t < 0 ? start : end
+        if (nearest.distanceToSquared(anchor) < 1e-6) continue
+        const extension = new THREE.Line(
+          new THREE.BufferGeometry().setFromPoints([nearest, anchor]),
+          new THREE.LineBasicMaterial({ color: 0x9aa4b2, transparent: true, opacity: 0.6, depthTest: false })
+        )
+        extension.renderOrder = 6
+        extension.frustumCulled = false
+        group.add(extension)
+      }
+    }
+    // The per-axis breakdown, drawn as Studio draws it (`GLGizmoMeasure.cpp:2014`): three
+    // axis-aligned legs stepping from one anchor to the other in X, then Y, then Z, in the axis
+    // colours. It is what turns "48.2mm apart" into "40 across and 27 up", which is the number a
+    // user actually needs when deciding whether a part fits.
+    // Gated on the SAME predicate the readout uses (`canSetXyzDistance`, via `measurementRows`), or
+    // the two disagree: an edge measured against a plane drew red/green/blue legs on the model while
+    // the panel showed no X/Y/Z rows, i.e. a per-axis decomposition with no numbers behind it. The
+    // panel side of this was fixed on its own once; this is the viewport half.
+    const xyzMeaningful = measurePoints.length === 2
+      && measurePoints[0] != null && measurePoints[1] != null
+      && canSetXyzDistance(measurePoints[0].feature, measurePoints[1].feature)
+    if (anchors && xyzMeaningful) {
+      const stepX = anchors.from.clone().setX(anchors.to.x)
+      const stepY = stepX.clone().setY(anchors.to.y)
+      const legs: Array<[THREE.Vector3, THREE.Vector3, number]> = [
+        [anchors.from, stepX, 0xff5252],
+        [stepX, stepY, 0x5cd65c],
+        [stepY, anchors.to, 0x5c8cff]
+      ]
+      for (const [start, end, color] of legs) {
+        // A zero-length leg is two coincident points: drawn, it is an invisible degenerate line that
+        // still costs a draw call and a geometry.
+        if (start.distanceToSquared(end) < 1e-6) continue
+        const leg = new THREE.Line(
+          new THREE.BufferGeometry().setFromPoints([start, end]),
+          new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.75, depthTest: false })
+        )
+        leg.renderOrder = 6
+        leg.frustumCulled = false
+        group.add(leg)
+      }
+    }
+    // The ANGLE's arc, swept from the first edge to the second about where they meet. Without it an
+    // angle is a number in a panel with nothing on the model saying which corner it belongs to --
+    // and on a part with several chamfers that is not a small ambiguity.
+    const angle = measureResult?.angle
+    if (angle && angle.angle > 1e-6) {
+      const first = angle.e1[1].clone().sub(angle.e1[0]).normalize()
+      const second = angle.e2[1].clone().sub(angle.e2[0]).normalize()
+      const axis = new THREE.Vector3().crossVectors(first, second)
+      if (axis.lengthSq() > 1e-12) {
+        axis.normalize()
+        // Studio's own sampling: one segment per ~3 degrees, never fewer than two.
+        const steps = Math.max(2, Math.round((64 * angle.angle) / Math.PI))
+        const points: THREE.Vector3[] = []
+        for (let i = 0; i <= steps; i++) {
+          const swept = first.clone().applyAxisAngle(axis, (i / steps) * angle.angle)
+          points.push(angle.center.clone().addScaledVector(swept, angle.radius))
+        }
+        const arc = new THREE.Line(
+          new THREE.BufferGeometry().setFromPoints(points),
+          new THREE.LineBasicMaterial({ color: MEASURE_HOVER_COLOR, transparent: true, opacity: 0.9, depthTest: false })
+        )
+        arc.renderOrder = 7
+        arc.frustumCulled = false
+        group.add(arc)
+        const label = createMeasureLabelSprite(`${((angle.angle * 180) / Math.PI).toFixed(1)}°`)
+        if (label) {
+          const midpoint = points[Math.floor(points.length / 2)]!
+          label.position.copy(midpoint)
+          group.add(label)
+        }
+      }
+    }
     scene.add(group)
+    // Published only once the group is in the scene, so the markers carry a world matrix.
+    measureCentreTargetsRef.current = centreTargets
     return () => {
+      measureCentreTargetsRef.current = []
       scene.remove(group)
       disposeObject3D(group)
     }
-  }, [measurePoints, gizmoMode, sceneReady, rebuildToken])
+  }, [measurePoints, measureResult, gizmoMode, sceneReady, rebuildToken])
 
   // Rotation snapping: coarse (45 deg) while a modifier is held, finer (15 deg)
   // otherwise. Translate/scale stay free. Re-applied whenever the mode changes.
@@ -4630,7 +5403,20 @@ function EditorView({
     const instance = plate?.instances.find((entry) => entry.key === key)
     const group = key ? groupByKeyRef.current.get(key) : undefined
     if (!key || !plate || !instance || !group) return
-    const { upper, lower } = cutTriangleSoup(collectWorldTriangles(group), cutAxis, clampedCutOffset)
+    const worldSoup = collectWorldTriangles(group)
+    const { upper, lower } = cutMode === 'dovetail'
+      ? cutTriangleSoupWithGroove(worldSoup, cutAxis, clampedCutOffset, groove)
+      : cutTriangleSoup(worldSoup, cutAxis, clampedCutOffset)
+    // A grooved half can come back with a boundary on some model sizes and placements, including at
+    // the tool's own defaults (see the KNOWN DEFECT note on `cutTriangleSoupWithGroove`). It is
+    // cheap to SEE -- the same predicate the mesh boolean gates on -- so the cut says so rather than
+    // handing over a piece that slices oddly and is later refused as a boolean operand with no hint
+    // of where it came from. Only the dovetail is checked: the plane cut has its own tests and this
+    // walk is not free.
+    if (cutMode === 'dovetail' && ((upper.length > 0 && !isClosedSoup(upper)) || (lower.length > 0 && !isClosedSoup(lower)))) {
+      toast.error('That groove leaves an open edge on this model. Try a different depth, width or axis.')
+      return
+    }
     const sides = CUT_AXIS_SIDES[cutAxis]
     type CutHalf = { soup: Float32Array; suffix: string; side: 'lower' | 'upper'; orientation: CutHalfOrientation }
     const halves = [
@@ -4645,12 +5431,49 @@ function EditorView({
       toast.error('Nothing to keep: move the cut plane or keep at least one side.')
       return
     }
+    // Studio disables Perform on any invalid connector (`can_perform_cut`). The button is disabled
+    // here too; this is the guard behind it, because the panel and the cut must never disagree
+    // about what is cuttable.
+    const problemText = connectorProblemSummary(activeProblems)
+    if (problemText) {
+      toast.error(`Invalid connectors: ${problemText}.`)
+      return
+    }
+    // Connectors need both halves: one carries the hole and the other the peg, so keeping a single
+    // half would silently drop half of every joint.
+    if (activeConnectors.length > 0 && halves.length < 2) {
+      toast.error('Connectors need both halves kept.')
+      return
+    }
     setCutting(true)
     try {
       // Collected BEFORE the geometry is replaced: the halves are fresh imports, so anything still
       // addressed through the original instance is gone once it leaves the plate.
       const helperVolumes = collectHelperVolumesFor(instance, group)
       const staged = await Promise.all(halves.map(async (half) => {
+        // Cut the connector HOLES into the half's own geometry, so the hole is real: it shows in the
+        // viewport, it is already in the staged STL, and the preview matches what prints. Studio
+        // leaves them as negative volumes for the slicer, and so did this, but a negative volume is
+        // invisible from outside -- it renders as a translucent aid seen THROUGH the surface, so a
+        // hole never looks like one and the joint cannot be judged before it is printed.
+        //
+        // No boolean is involved; see `drillBoresIntoHalf` for why our evaluator cannot do this and
+        // does not need to. It reports PER BORE, and a bore it declined to drill keeps its negative
+        // volume below, so a failure costs the hole rather than the part -- and only for the
+        // connector it failed on. One flag for the whole half dropped the volume of a hole that was
+        // never cut, which leaves the matching peg with nothing to mate with.
+        const bores = connectorBoresForSide(activeConnectors, cutAxis, half.side)
+        const { soup: drilledSoup, drilled } = drillBoresIntoHalf(
+          half.soup,
+          bores.map((bore) => bore.soup),
+          cutAxis,
+          clampedCutOffset,
+          half.side
+        )
+        const drilledConnectors = new Set(
+          bores.filter((_, index) => drilled[index]).map((bore) => bore.connectorIndex)
+        )
+        half.soup = drilledSoup
         // Where the piece BELONGS on the plate, measured before any rotation: a reoriented half's
         // rebased centre is expressed in the rotated frame, so using it as a world position drops
         // the piece wherever the rotation sent it (a tall model cut along X landed off the plate).
@@ -4686,6 +5509,27 @@ function EditorView({
             ), 'part')
             return { volume, importId: stagedVolume.importId, soup }
           }))
+        // Connectors ride the SAME orientation and rebase as the half they attach to, so a peg
+        // stays on the face it was placed on. Each is its own staged `part` at identity, exactly as
+        // a carried helper volume is -- which is the whole reason connectors needed no new seam.
+        const connectorParts = await Promise.all(activeConnectors.map(async (connector, index) => {
+          const volumes = connectorVolumes(connector, cutAxis)
+          const side = half.side === 'upper' ? volumes.upper : volumes.lower
+          // A hole already cut into the geometry needs no volume describing it. Asked per connector,
+          // so one the drill skipped still gets its negative volume and still becomes a hole.
+          if (drilledConnectors.has(index)) return null
+          const soup = shiftTriangleSoup(
+            orientCutHalfSoup(side.soup.slice(), cutAxis, half.side, half.orientation),
+            offset
+          )
+          const name = `Connector-${index + 1}`
+          const stagedPart = await importStore.stageFile(new File(
+            [triangleSoupToBinaryStl(soup)],
+            `${name}.stl`,
+            { type: 'application/octet-stream' }
+          ), 'part')
+          return { importId: stagedPart.importId, subtype: side.subtype, name, soup, connector }
+        })).then((parts) => parts.filter((part): part is NonNullable<typeof part> => part !== null))
         // Half-extents of the piece as it now lies, for the bed clamp below.
         let halfWidth = 0
         let halfDepth = 0
@@ -4693,8 +5537,25 @@ function EditorView({
           halfWidth = Math.max(halfWidth, Math.abs(half.soup[i]!))
           halfDepth = Math.max(halfDepth, Math.abs(half.soup[i + 1]!))
         }
-        return { import: mainImport, placement, halfWidth, halfDepth, carried }
+        return { import: mainImport, placement, halfWidth, halfDepth, carried, connectorParts }
       }))
+      // A DOWEL is also a loose pin, printed beside the halves and pushed into both holes
+      // (`CutUtils.cpp:198`). It is a whole object rather than a volume, because it is not part of
+      // either half -- which is the one place a connector adds something to the plate rather than
+      // to a piece. Staged as `object`, so it is normalised onto the bed like any other import.
+      const dowelPins = await Promise.all(activeConnectors
+        .filter((connector) => connector.type === 'dowel')
+        .map(async (connector, index) => {
+          const soup = connectorVolumes(connector, cutAxis).pin!
+          rebaseTriangleSoup(soup)
+          const name = `${instance.name} (dowel ${index + 1})`
+          const staged = await importStore.stageFile(new File(
+            [triangleSoupToBinaryStl(soup)],
+            `${name}.stl`,
+            { type: 'application/octet-stream' }
+          ), 'object')
+          return { staged, name }
+        }))
       const replacements = staged.map(({ import: stagedImport, placement, halfWidth, halfDepth }, index) => {
         const next = instanceFromStagedImport(stagedImport, importStore.meshUrl)
         // Keep the piece where it was cut, but not off the bed: laying a half on its cut face
@@ -4713,14 +5574,69 @@ function EditorView({
         }
         return next
       })
+      for (const { staged: stagedPin, name } of dowelPins) {
+        const pin = instanceFromStagedImport(stagedPin, importStore.meshUrl)
+        const spot = findFreePlatePosition(plate)
+        pin.position.set(spot.x, spot.y, 0)
+        pin.name = name
+        pin.filamentId = instance.filamentId
+        pin.printable = instance.printable
+        replacements.push(pin)
+      }
+      // What BambuStudio needs to reopen this as a CUT rather than as unrelated objects. Recorded
+      // HERE because this is the only moment the relationship exists: afterwards the halves are
+      // ordinary import-backed instances and a connector volume looks like any other added part.
+      //
+      // Only connectors that still EXIST as volumes are listed. Where the hole was drilled into the
+      // geometry there is nothing to point at -- for a dowel, on either half -- so `connectorCount`
+      // carries what the cut actually placed while the list carries what can honestly be named.
+      //
+      // ONE PIECE IS NOT A CUT, and recording it as one is not a cosmetic mistake: `cutGroups`
+      // requires at least two importIds (`sceneEditSchema`), so a group naming a single half fails
+      // validation at `/api/editor/save` and takes every later save, export and slice of that
+      // project down with it -- a 400 naming an array the user has never heard of, from a plain
+      // "chop the top off" with Keep upper unticked. Studio declines the same record for the same
+      // reason (`update_object_cut_id` returns early unless it kept both halves), and
+      // `serializeCutInformation` drops a sub-two group too, so nothing downstream loses anything.
+      const cutPieceImportIds = [
+        ...staged.map(({ import: stagedImport }) => stagedImport.importId),
+        ...dowelPins.map(({ staged: stagedPin }) => stagedPin.importId)
+      ]
+      const cutGroup: EditorCutGroup | null = cutPieceImportIds.length < 2 ? null : {
+        importIds: cutPieceImportIds,
+        connectorCount: activeConnectors.length,
+        connectors: staged.flatMap(({ import: stagedImport, connectorParts }) =>
+          connectorParts.map(({ importId, connector }) => ({
+            importId: stagedImport.importId,
+            meshImportId: importId,
+            type: connector.type,
+            radius: connector.radius,
+            height: connector.height,
+            radiusTolerance: connector.radiusTolerance,
+            heightTolerance: connector.heightTolerance
+          })))
+      }
+
       // Each half's carried volumes, keyed by that half's host identity (an import's synthetic
       // object id: see `addedPartHostId`), so they need no save first.
       const carriedByHost = new Map<number, EditorAddedPart[]>()
       replacements.forEach((replacement, index) => {
         const hostId = addedPartHostId(replacement)
         const carried = staged[index]?.carried ?? []
-        if (hostId == null || carried.length === 0) return
-        carriedByHost.set(hostId, carried.map(({ volume, importId, soup }) => ({
+        const connectorParts = staged[index]?.connectorParts ?? []
+        if (hostId == null || (carried.length === 0 && connectorParts.length === 0)) return
+        const connectorEntries: EditorAddedPart[] = connectorParts.map(({ importId, subtype, name, soup }) => ({
+          key: nextInstanceKey(),
+          importId,
+          subtype,
+          name,
+          // Identity placement: the soup already carries the world transform and the half's rebase.
+          position: new THREE.Vector3(),
+          rotation: new THREE.Euler(),
+          scale: new THREE.Vector3(1, 1, 1),
+          soup
+        }))
+        carriedByHost.set(hostId, [...connectorEntries, ...carried.map(({ volume, importId, soup }) => ({
           key: nextInstanceKey(),
           importId,
           subtype: volume.subtype,
@@ -4733,7 +5649,7 @@ function EditorView({
           rotation: new THREE.Euler(),
           scale: new THREE.Vector3(1, 1, 1),
           soup
-        })))
+        }))])
       })
       // One history entry for the whole cut, so a single undo restores the object AND its volumes.
       // Hand-rolled rather than `updatePlates` because the carried volumes and the plate swap must
@@ -4746,6 +5662,9 @@ function EditorView({
         return {
           ...current,
           addedParts,
+          // Appended, never replaced: a project can hold several cuts, and each is its own group.
+          // Rides the same commit as the pieces so one undo takes the cut and its record together.
+          ...(cutGroup ? { cutGroups: [...(current.cutGroups ?? []), cutGroup] } : {}),
           plates: current.plates.map((entry) => entry.index === activePlateIndex
             ? { ...entry, instances: [...entry.instances.filter((item) => item.key !== key), ...replacements] }
             : entry)
@@ -4759,15 +5678,21 @@ function EditorView({
       setRebuildToken((token) => token + 1)
       setSelectedKey(replacements[0]!.key)
       setGizmoMode('translate')
-      const carriedCount = [...carriedByHost.values()].reduce((total, parts) => total + parts.length, 0)
-      toast.success(`Cut ${instance.name} into ${replacements.length === 2 ? 'two parts' : 'one part'}.`
+      // Counted off the CARRIED volumes, not off `carriedByHost`, which now also holds the connector
+      // volumes: those are reported on their own line and would otherwise be announced twice, once
+      // as connectors and again as helper volumes the user never placed.
+      const carriedCount = staged.reduce((total, half) => total + half.carried.length, 0)
+      const pieceCount = replacements.length - dowelPins.length
+      toast.success(`Cut ${instance.name} into ${pieceCount === 2 ? 'two parts' : 'one part'}.`
+        + (activeConnectors.length > 0 ? ` Added ${activeConnectors.length} connector${activeConnectors.length === 1 ? '' : 's'}.` : '')
+        + (dowelPins.length > 0 ? ` Printed ${dowelPins.length} dowel pin${dowelPins.length === 1 ? '' : 's'} alongside.` : '')
         + (carriedCount > 0 ? ` Kept ${carriedCount} helper volume${carriedCount === 1 ? '' : 's'}.` : ''))
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Unable to cut the model.')
     } finally {
       setCutting(false)
     }
-  }, [selectedKey, activePlateIndex, cutAxis, clampedCutOffset, cutKeepLower, cutKeepUpper, cutOrientLower, cutOrientUpper, collectHelperVolumesFor, recordHistoryRef, importStore])
+  }, [selectedKey, activePlateIndex, cutMode, groove, activeConnectors, activeProblems, cutAxis, clampedCutOffset, cutKeepLower, cutKeepUpper, cutOrientLower, cutOrientUpper, collectHelperVolumesFor, recordHistoryRef, importStore])
 
   /**
    * Split the selected object into its connected mesh components (Bambu's "split to
@@ -5068,8 +5993,29 @@ function EditorView({
   const handleSvgFileChosen = useCallback(async (file: File) => {
     setImporting(true)
     try {
-      const parsed = parseSvgShapes(await file.text())
+      archiveEntriesRef.current = await projectSourceRef.current.listEntries?.() ?? []
+      const markup = await file.text()
+      // Refused HERE, naming the artwork, because the alternative is silent and much later: the
+      // markup rides every subsequent save of this project, so an oversized file makes each save AND
+      // each slice fail on the API's JSON body limit, before validation runs and with nothing in the
+      // message pointing at the SVG. The only recovery would be deleting every part it produced.
+      if (markup.length > MAX_SVG_SOURCE_BYTES) {
+        setSvgArtwork(null)
+        setSvgMarkup(null)
+        setSvgFileName(file.name)
+        setSvgEmptyReason(
+          `That file is ${Math.round(markup.length / 1024)}KB, over the ${Math.round(MAX_SVG_SOURCE_BYTES / 1024)}KB limit. `
+          + 'The artwork is stored in the project so it stays editable, so it has to fit in a save. '
+          + 'Simplify the drawing or flatten it in your vector editor first.'
+        )
+        return
+      }
+      const parsed = parseSvgShapes(markup)
       setSvgFileName(file.name)
+      // The MARKUP is kept, not just the parse: neither our record nor BambuStudio's stores the
+      // shapes, so these bytes are what makes a saved part re-editable, and by the time the save
+      // runs the File is long gone.
+      setSvgMarkup(markup)
       if (parsed.pieces.length === 0) {
         setSvgArtwork(null)
         setSvgEmptyReason('Nothing in this file is painted, so there is no shape to extrude. Paths need a fill or a stroke.')
@@ -5111,6 +6057,58 @@ function EditorView({
     const partName = (index: number) => (split ? `${base} ${index}` : base)
 
     const state = stateRef.current
+    // Resolved against every entry the PROJECT already names, including those in the opened archive,
+    // and reusing the entry outright when these exact bytes are already stored. See
+    // `resolveSvgArchiveEntry`.
+    // Re-editing the SAME artwork keeps the entry it already has, and stores nothing: those bytes are
+    // in the archive and the bake's copy pass carries them through untouched. Only a REPLACED file
+    // (different bytes) resolves a fresh entry.
+    const reeditUnchanged = reeditSvgRef.current != null && svgMarkup === reeditSvgRef.current.loadedMarkup
+    const svgEntry = svgMarkup == null
+      ? null
+      : reeditUnchanged
+        ? { entryPath: reeditSvgRef.current!.entryPath, reused: true }
+        : resolveSvgArchiveEntry(state, svgFileName ?? 'artwork.svg', svgMarkup, archiveEntriesRef.current)
+    const svgEntryPath = svgEntry?.entryPath ?? null
+    // Nothing to register when the bytes are already stored under this name.
+    const svgMarkupToStore = svgEntry && !svgEntry.reused ? svgMarkup : null
+    /**
+     * The record each part carries. `pieceIndex` 0 means "all of it", which is what a merged import
+     * is, and is why the merged and split cases cannot share a numbering.
+     */
+    const svgRecordFor = (pieceIndex: number): SvgPartRecord | null => (svgEntryPath == null ? null : {
+      entryPath: svgEntryPath,
+      fileName: svgFileName ?? 'artwork.svg',
+      pieceIndex: split ? pieceIndex : 0,
+      widthMm: svgTool.widthMm,
+      thickness: svgTool.thickness,
+      includeBackground: svgTool.includeBackground
+    })
+    /**
+     * BambuStudio's interop record, for a MERGED import only.
+     *
+     * A split import must not carry one on each part: the element describes a whole artwork, so N
+     * copies would each tell Studio they are the entire drawing and editing any single mark there
+     * would regenerate the logo over it. Absent is correct; see `three-mf/svg-shape.ts`.
+     */
+    /**
+     * True when the baked geometry is the WHOLE file, which is what Studio's record claims.
+     *
+     * A dropped backdrop makes that claim false just as surely as a split does: Studio re-parses the
+     * SVG and regenerates every shape in it, so a volume built from the artwork MINUS its background
+     * would come back WITH the background, replacing geometry the user explicitly excluded. Same
+     * class of destruction as stamping the record on a split part, so it gets the same answer.
+     */
+    const wholeArtwork = !split && dropped == null
+    const bambuShapeFor = (): BambuStudioShape | null => (svgEntryPath == null || !wholeArtwork ? null : {
+      filePath: svgFileName ?? 'artwork.svg',
+      filePathIn3mf: svgEntryPath,
+      scale: studioShapeScale(svgTool.widthMm / (svgArtwork?.width || 1)),
+      unhealed: false,
+      depth: svgTool.thickness,
+      useSurface: false,
+      fixTransform: studioShapeFixTransform(svgTool.thickness)
+    })
     const plate = state?.plates.find((entry) => entry.index === activePlateIndex)
     const hostKey = selectedKeyRef.current
     const instance = hostKey ? plate?.instances.find((entry) => entry.key === hostKey) : null
@@ -5119,6 +6117,152 @@ function EditorView({
 
     setImporting(true)
     try {
+      // RE-EXTRUDING artwork already in the project. This RECONCILES the piece set rather than
+      // simply replacing what is there, because the new extrusion may not have the same pieces at
+      // all: the background toggle adds or drops one, a replaced file can have more or fewer shapes,
+      // and crossing the split threshold in either direction renumbers every piece (a merged import
+      // is piece 0, a split one is 1..N). A replace-only pass silently did nothing in each of those
+      // cases -- the background checkbox was inert, extra shapes never appeared, and a dropped piece
+      // kept its OLD geometry while reporting success.
+      const reediting = reeditSvgRef.current
+      if (state && reediting) {
+        // Resolved from the ARTWORK's own host, never from the current selection: the reopen and the
+        // commit are separate gestures, and clicking another object between them used to make a new
+        // piece inherit an unrelated model's material and drop point.
+        const artworkHost = state.plates
+          .flatMap((entry) => entry.instances)
+          .find((entry) => addedPartHostId(entry) === reediting.hostId) ?? null
+        const artworkGroup = artworkHost ? groupByKeyRef.current.get(artworkHost.key) : null
+        // Where a piece with no predecessor lands. Only reached when the new artwork has shapes the
+        // old one did not, so there is no existing placement to inherit.
+        const artworkDropPosition = artworkHost && artworkGroup
+          ? addedPartDropPosition(
+            svgTool.operation,
+            printableMeshBox(artworkGroup),
+            soupSize(soups[0]!.soup),
+            (point) => rotorOf(artworkGroup).worldToLocal(point)
+          )
+          : new THREE.Vector3()
+        const survivors = svgArtworkParts(state, reediting.hostId, reediting.entryPath)
+        // The piece index a part records, on the SAME rule `svgRecordFor` writes it: 0 when this
+        // extrusion is merged, else the piece's own paint order. Both sides must agree or nothing
+        // matches, which is exactly what a split/merge flip used to break.
+        const pieceKey = (index: number) => (split ? index : 0)
+        // The decision itself is pure and lives in `planSvgReextrude`, where the awkward cases (a
+        // toggled background, a replaced file with a different shape count, a split/merge flip) are
+        // tested; this branch only carries it out.
+        const plan = planSvgReextrude(survivors, soups.map((piece) => piece.index), split)
+        const survivorByPiece = new Map(
+          plan.replace.map(({ pieceIndex, survivor }) => [pieceKey(pieceIndex), survivor])
+        )
+        // Stage every piece the new extrusion has, whether it is replacing a part or adding one.
+        const staged = await Promise.all(soups.map(async (piece) => ({
+          piece,
+          staged: await stageAddedPartGeometry(
+            importStore, { kind: 'soup', soup: piece.soup, name: partName(piece.index) }, 0
+          )
+        })))
+        // A survivor whose piece the new artwork no longer has. Removing it is the only honest
+        // answer: leaving it would keep geometry from a drawing that is no longer in the project.
+        const orphaned = plan.remove
+        recordHistoryRef.current?.()
+        if (svgEntryPath != null && svgMarkupToStore != null) {
+          state.svgSources = { ...state.svgSources, [svgEntryPath]: svgMarkupToStore }
+        }
+        const parts = ((state.addedParts ??= {})[reediting.hostId] ??= [])
+        const removedBaked = new Set<number>()
+        const droppedAdded = new Set<string>()
+        let replacedCount = 0
+        let addedCount = 0
+        for (const { piece, staged: geometry } of staged) {
+          const record = svgRecordFor(piece.index)
+          const survivor = survivorByPiece.get(pieceKey(piece.index))
+          // The panel's Operation applies to the whole artwork, so a re-edit retypes every piece.
+          // Reading it back off each part instead made the control inert on a re-edit: it was
+          // rendered, pre-filled and ignored.
+          const subtype = svgTool.operation
+          if (survivor?.kind === 'added') {
+            const existing = parts.find((entry) => entry.key === survivor.key)
+            if (!existing) continue
+            existing.importId = geometry.importId
+            existing.soup = geometry.soup
+            existing.subtype = subtype
+            existing.name = partName(piece.index)
+            if (!threeMfPartSubtypeCarriesFilament(subtype)) delete existing.filamentId
+            if (record) existing.svgPart = record
+            // The Studio record describes the WHOLE artwork, so a re-edit that changed the width or
+            // the thickness invalidates it. Rewriting it here (and clearing it when the new import no
+            // longer qualifies as whole-artwork) is what stops a stale `scale`/`depth` surviving:
+            // `three-mf/svg-shape.ts` puts it plainly, a record that lies is worse than one absent.
+            const reeditShape = bambuShapeFor()
+            if (reeditShape) existing.bambuShape = reeditShape
+            else delete existing.bambuShape
+            replacedCount += 1
+            continue
+          }
+          // A baked piece has no soup to swap, so it is replaced the way a re-edited text part is: a
+          // removal plus a new volume. It inherits the PART's own material and full placement, not
+          // the object's and not just a translation -- a width change must not repaint a mark the
+          // user coloured, nor un-rotate one that was turned in BambuStudio.
+          const placement = survivor ? decomposeThreeMfTransform(survivor.transform) : null
+          if (survivor?.kind === 'baked') removedBaked.add(survivor.partIndex)
+          if (survivor) replacedCount += 1
+          else addedCount += 1
+          const inheritedFilament = survivor?.kind === 'baked' ? survivor.filamentId : null
+          parts.push({
+            key: nextInstanceKey(),
+            importId: geometry.importId,
+            subtype,
+            name: partName(piece.index),
+            ...(threeMfPartSubtypeCarriesFilament(subtype)
+              ? { filamentId: inheritedFilament ?? artworkHost?.filamentId ?? 1 }
+              : {}),
+            position: placement?.position ?? artworkDropPosition.clone(),
+            rotation: placement?.rotation ?? new THREE.Euler(),
+            scale: placement?.scale ?? new THREE.Vector3(1, 1, 1),
+            soup: geometry.soup,
+            ...(record ? { svgPart: record } : {}),
+            ...(bambuShapeFor() ? { bambuShape: bambuShapeFor()! } : {})
+          })
+        }
+        for (const part of orphaned) {
+          if (part.kind === 'baked') removedBaked.add(part.partIndex)
+          else droppedAdded.add(part.key)
+        }
+        if (droppedAdded.size > 0) {
+          const kept = parts.filter((entry) => !droppedAdded.has(entry.key))
+          parts.length = 0
+          parts.push(...kept)
+        }
+        if (removedBaked.size > 0) {
+          // `withRemovedParts` refuses when nothing printed would survive, and absorbing that with
+          // `?? current` leaves the object holding BOTH the original artwork and its replacement
+          // while the toast reports success. The text tool's promotion decides this off the live
+          // state for the same reason; here the replacement parts are already in `parts`, so the
+          // honest answer is to say the old ones could not go rather than to imply they did.
+          let refused = false
+          setState((current) => {
+            if (!current) return current
+            const next = withRemovedParts(current, reediting.hostId, removedBaked)
+            if (next) return next
+            refused = true
+            return current
+          })
+          if (refused) {
+            toast.error('Kept the original artwork: removing it would leave the object with nothing to print.')
+          }
+        }
+        refreshAddedPartMeshes()
+        regenerateActiveThumbnailRef.current?.()
+        setGizmoMode(RESTING_GIZMO_MODE)
+        const removedCount = orphaned.length
+        toast.success([
+          replacedCount > 0 ? `Updated ${replacedCount} part${replacedCount === 1 ? '' : 's'}` : null,
+          addedCount > 0 ? `added ${addedCount}` : null,
+          removedCount > 0 ? `removed ${removedCount}` : null
+        ].filter(Boolean).join(', ') + ' of the artwork.')
+        return
+      }
       if (state && instance && group && hostId != null) {
         // Every piece lands at the SAME point: the soups already carry each shape's offset from the
         // artwork's centre, so a per-part drop position (which offsets by each part's own size)
@@ -5131,8 +6275,13 @@ function EditorView({
           stageAddedPartGeometry(importStore, { kind: 'soup', soup: piece.soup, name: partName(piece.index) }, 0)))
         recordHistoryRef.current?.()
         if (!state.addedParts) state.addedParts = {}
+        if (svgEntryPath != null && svgMarkupToStore != null) {
+          state.svgSources = { ...state.svgSources, [svgEntryPath]: svgMarkupToStore }
+        }
         const parts = (state.addedParts[hostId] ??= [])
         staged.forEach((entry, at) => {
+          const record = svgRecordFor(soups[at]!.index)
+          const shape = bambuShapeFor()
           parts.push({
             key: nextInstanceKey(),
             importId: entry.importId,
@@ -5142,7 +6291,9 @@ function EditorView({
             position: position.clone(),
             rotation: new THREE.Euler(),
             scale: new THREE.Vector3(1, 1, 1),
-            soup: entry.soup
+            soup: entry.soup,
+            ...(record ? { svgPart: record } : {}),
+            ...(shape ? { bambuShape: shape } : {})
           })
         })
         refreshAddedPartMeshes()
@@ -5166,6 +6317,20 @@ function EditorView({
       )
       recordHistoryRef.current?.()
       const created = instanceFromStagedImport(stagedBody, importStore.meshUrl)
+      // The BODY's record is session-scoped, exactly as a standalone text object's `textInfo` is and
+      // for the same reason: a part's record rides `SceneEdit.addedParts`, and an OBJECT has no
+      // equivalent channel. A merged standalone import is therefore re-editable until saved and
+      // plain geometry afterwards. Persisting it needs an object-level seam, which standalone text
+      // has always wanted too, so it belongs to both tools rather than being bolted onto this one.
+      const bodyRecord = svgRecordFor(body.index)
+      if (bodyRecord) created.svgPart = bodyRecord
+      // Registered unconditionally, not inside the "there are other pieces" branch below, or a
+      // standalone import whose pieces all fit in the body stored no artwork at all. Unreferenced
+      // bytes cost nothing: `collectSvgSources` emits only what a surviving part still names.
+      const liveForSources = stateRef.current
+      if (liveForSources && svgEntryPath != null && svgMarkupToStore != null) {
+        liveForSources.svgSources = { ...liveForSources.svgSources, [svgEntryPath]: svgMarkupToStore }
+      }
       addInstanceToActivePlate(created, stagedFootprint(stagedBody))
       setGizmoMode(RESTING_GIZMO_MODE)
       toast.success(ordered.length > 1
@@ -5182,6 +6347,7 @@ function EditorView({
           if (!live.addedParts) live.addedParts = {}
           const parts = (live.addedParts[restHostId] ??= [])
           stagedRest.forEach((entry, at) => {
+            const record = svgRecordFor(ordered[at + 1]!.index)
             parts.push({
               key: nextInstanceKey(),
               importId: entry.importId,
@@ -5193,7 +6359,8 @@ function EditorView({
               position: new THREE.Vector3(frame.x, frame.y, frame.z),
               rotation: new THREE.Euler(),
               scale: new THREE.Vector3(1, 1, 1),
-              soup: entry.soup
+              soup: entry.soup,
+              ...(record ? { svgPart: record } : {})
             })
           })
           refreshAddedPartMeshes()
@@ -5205,7 +6372,8 @@ function EditorView({
     } finally {
       setImporting(false)
     }
-  }, [activePlateIndex, addInstanceToActivePlate, importStore, recordHistoryRef, refreshAddedPartMeshes, svgArtwork, svgFileName, svgTool])
+  }, [activePlateIndex, addInstanceToActivePlate, importStore, recordHistoryRef, refreshAddedPartMeshes,
+    svgArtwork, svgFileName, svgMarkup, svgTool])
 
 
   /**
@@ -5746,6 +6914,44 @@ function EditorView({
    * inside the plate updater), so the volumes are re-homed a beat later. A stage that fails is
    * logged and leaves the volume on the shared mesh rather than dropping its geometry.
    */
+  /**
+   * Give an independent copy of a SESSION-ADDED model its own staged mesh.
+   *
+   * The volume version below re-homes an object's added parts; this is the same rule for the base
+   * import. Two instances sharing an `importId` share one mesh in the session and one mesh object in
+   * the file (the bake maps an import to exactly one), so their paint is the same paint: painting
+   * the "independent" copy repainted the original. That is the rule the clone pre-pass already keeps
+   * for baked meshes ("never let a copy share its source's mesh entry").
+   *
+   * Staged as `'part'`, never `'object'`: these bytes are already in the source's normalized frame,
+   * and re-normalizing would rebase the copy and move it off where the duplicate was placed.
+   *
+   * Fire-and-forget for the same reason as the volumes, and a failure leaves the copy on the shared
+   * import rather than dropping its geometry: worse than independent, but still a model on the plate.
+   */
+  const restageIndependentCopyMesh = useCallback(async (instanceKey: string) => {
+    const find = () => stateRef.current?.plates.flatMap((plate) => plate.instances).find((entry) => entry.key === instanceKey) ?? null
+    const instance = find()
+    if (!instance || instance.source.kind !== 'import') return
+    const sourceImportId = instance.source.importId
+    let staged: { importId: string }
+    try {
+      const bytes = await importStore.fetchMesh(sourceImportId)
+      staged = await importStore.stageFile(
+        new File([bytes], `${instance.name || 'copy'}.stl`, { type: 'application/octet-stream' }),
+        'part'
+      )
+    } catch (error) {
+      console.warn('[editor] could not re-stage an independent copy\'s mesh', error)
+      return
+    }
+    // Re-read: the copy may have been deleted or undone while the bytes were in flight.
+    const live = find()
+    if (!live || live.source.kind !== 'import' || live.source.importId !== sourceImportId) return
+    live.source = { ...live.source, importId: staged.importId, meshUrl: importStore.meshUrl(staged.importId) }
+    setAddedPartMeshVersion((version) => version + 1)
+  }, [importStore])
+
   const restageIndependentCopyVolumes = useCallback(async (cloneObjectId: number) => {
     const parts = stateRef.current?.addedParts?.[cloneObjectId]
     if (!parts || parts.length === 0) return
@@ -5793,10 +6999,17 @@ function EditorView({
           // The copy is registered against the LIVE state (the plate map below is rebuilt from it),
           // so the clone registry and the copied session edits land on the same object identity.
           if (independent && stateRef.current) {
-            const sourceObjectId = clone.objectId
+            // `addedPartHostId`, not `objectId`: a session-added model carries `objectId: 0` and
+            // hangs its per-object settings and added volumes off `source.replacedObjectId`, so
+            // keying on `objectId` here copied overrides from 0 to 0 and re-staged the volumes of
+            // object 0. Same identity `handleMakeIndependent` uses.
+            const sourceObjectId = addedPartHostId(clone)
             makeInstanceIndependent(stateRef.current, clone)
-            copyObjectProcessOverrides(sourceObjectId, clone.objectId)
-            void restageIndependentCopyVolumes(clone.objectId)
+            const cloneObjectId = addedPartHostId(clone)
+            if (sourceObjectId != null && cloneObjectId != null) copyObjectProcessOverrides(sourceObjectId, cloneObjectId)
+            if (cloneObjectId != null) void restageIndependentCopyVolumes(cloneObjectId)
+            // A session-added model's mesh is its staged import, which the clone still shares.
+            void restageIndependentCopyMesh(clone.key)
           }
           // Placed against `next`, which already holds the copies made so far this pass, so a run
           // of copies spreads out instead of stacking on one spot.
@@ -5810,7 +7023,7 @@ function EditorView({
       })
     )
     if (cloneKey) selectExclusive(cloneKey)
-  }, [activePlateIndex, updatePlates, selectionFor, selectExclusive, copyObjectProcessOverrides, restageIndependentCopyVolumes])
+  }, [activePlateIndex, updatePlates, selectionFor, selectExclusive, copyObjectProcessOverrides, restageIndependentCopyVolumes, restageIndependentCopyMesh])
 
   /**
    * BambuStudio's "Clone" (Ctrl+K, `Plater::clone_selection`): asks for a copy count and makes that
@@ -5855,8 +7068,13 @@ function EditorView({
   const linkedCopyCountFor = useCallback((key: string): number => {
     const instances = stateRef.current?.plates.flatMap((plate) => plate.instances) ?? []
     const instance = instances.find((entry) => entry.key === key)
-    if (!instance || instance.source.kind !== 'object') return 1
-    return instances.filter((entry) => entry.source.kind === 'object' && entry.objectId === instance.objectId).length
+    if (!instance) return 1
+    // Shared identity, not `objectId`: a session-added copy has no baked object yet, so it carries
+    // its linkage in `source` (see `instanceLinkageKey`). Comparing object ids counted every fresh
+    // import as unlinked until a save gave it a real id.
+    const identity = instanceLinkageKey(instance)
+    if (identity == null) return 1
+    return instances.filter((entry) => instanceLinkageKey(entry) === identity).length
   }, [])
 
   /**
@@ -5867,23 +7085,29 @@ function EditorView({
   const handleMakeIndependent = useCallback((key: string) => {
     const state = stateRef.current
     const instance = state?.plates.flatMap((plate) => plate.instances).find((entry) => entry.key === key)
-    if (!state || !instance || instance.source.kind !== 'object') return
+    if (!state || !instance) return
+    // Counted on the SHARED IDENTITY, not on `objectId`, so a session-added copy is unlinkable too.
+    // This used to bail on anything import-backed, which left the menu item (gated on the sidebar's
+    // linked count) offered but inert for exactly the copies that badge now flags.
+    const identity = instanceLinkageKey(instance)
     const shared = state.plates.flatMap((plate) => plate.instances)
-      .filter((entry) => entry.source.kind === 'object' && entry.objectId === instance.objectId)
-    if (shared.length < 2) {
+      .filter((entry) => instanceLinkageKey(entry) === identity)
+    if (identity == null || shared.length < 2) {
       toast.error('This model has no other copies, so it is already independent.')
       return
     }
     recordHistoryRef.current?.()
-    const sourceObjectId = instance.objectId
+    const sourceObjectId = addedPartHostId(instance)
     makeInstanceIndependent(state, instance)
-    copyObjectProcessOverrides(sourceObjectId, instance.objectId)
-    void restageIndependentCopyVolumes(instance.objectId)
+    const cloneObjectId = addedPartHostId(instance)
+    if (sourceObjectId != null && cloneObjectId != null) copyObjectProcessOverrides(sourceObjectId, cloneObjectId)
+    if (cloneObjectId != null) void restageIndependentCopyVolumes(cloneObjectId)
+    void restageIndependentCopyMesh(instance.key)
     refreshAddedPartMeshes()
     regenerateActiveThumbnailRef.current?.()
     setState((current) => (current ? { ...current } : current))
     toast.success('This copy is now independent: edits to it no longer affect the others.')
-  }, [refreshAddedPartMeshes, recordHistoryRef, copyObjectProcessOverrides, restageIndependentCopyVolumes])
+  }, [refreshAddedPartMeshes, recordHistoryRef, copyObjectProcessOverrides, restageIndependentCopyVolumes, restageIndependentCopyMesh])
 
   const handleDelete = useCallback((key: string) => {
     // Deleting any member of a multi-selection deletes the whole selection.
@@ -5944,6 +7168,15 @@ function EditorView({
   // when the object would be left with no printed geometry, since that is the one case where the
   // deletion is refused and taking the object instead is exactly the surprise being avoided.
   const handleDeleteShortcut = useCallback((key: string | null) => {
+    // While MEASURING, Delete restarts the measurement rather than deleting a model. Studio's
+    // measure gizmo owns the key for exactly this (its tooltip reads "Delete: Restart selection"),
+    // and the alternative is worse than merely surprising: the tool leaves an object selected
+    // underneath, so Delete would silently remove the part someone was measuring. With no picks it
+    // falls through, so deleting from within the tool still works when nothing is being measured.
+    if (gizmoModeRef.current === 'measure' && measurePointsRef.current.length > 0) {
+      setMeasurePoints([])
+      return
+    }
     // The BULK selection first, which this never consulted: a bulk selection nulls `selectedKey`, so
     // Delete over several selected parts used to reach here with nothing to act on and silently do
     // nothing. Both shapes now delete what is actually highlighted, of either kind.
@@ -6223,6 +7456,98 @@ function EditorView({
     return null
   }, [])
 
+  /** Find a session-added part that is SVG artwork, by key. The counterpart of `findAddedTextPart`. */
+  const findAddedSvgPart = useCallback((partKey: string) => {
+    const state = stateRef.current
+    for (const [hostId, parts] of Object.entries(state?.addedParts ?? {})) {
+      const part = parts.find((entry) => entry.key === partKey)
+      if (part?.svgPart) return { part, hostId: Number(hostId) }
+    }
+    return null
+  }, [])
+
+  /**
+   * Fill the SVG panel from a saved record, re-reading the artwork from the archive entry it names.
+   *
+   * The bytes are the artwork: neither record stores shapes, so without this the panel could show
+   * the settings a part was made with and still have nothing to re-extrude. A missing or unreadable
+   * entry is reported and leaves the tool in its fresh-import state rather than half-loaded, because
+   * a panel showing a width for artwork it cannot rebuild is worse than one asking for a file.
+   */
+  const reopenSvgArtwork = useCallback(async (
+    record: SvgPartRecord,
+    hostId: number,
+    operation: SceneEditPartSubtype
+  ) => {
+    setImporting(true)
+    try {
+      archiveEntriesRef.current = await projectSourceRef.current.listEntries?.() ?? []
+      const bytes = await projectSourceRef.current.loadEntry(record.entryPath).catch(() => {
+        // Reworded because `loadEntry` speaks for the MESH loader it was written for, and its
+        // "missing mesh entries" reads as a corrupt model rather than as absent artwork.
+        throw new Error(`The artwork ${record.entryPath} is not in this project any more.`)
+      })
+      const markup = new TextDecoder().decode(bytes)
+      const parsed = parseSvgShapes(markup)
+      if (parsed.pieces.length === 0) throw new Error('The stored artwork has nothing paintable in it.')
+      setSvgArtwork(parsed)
+      setSvgMarkup(markup)
+      setSvgFileName(record.fileName || record.entryPath)
+      setSvgEmptyReason(null)
+      setSvgTool((current) => ({
+        ...current,
+        widthMm: record.widthMm > 0 ? record.widthMm : current.widthMm,
+        thickness: record.thickness > 0 ? record.thickness : current.thickness,
+        includeBackground: record.includeBackground,
+        operation
+      }))
+      // `loadedMarkup` is what makes a re-edit reuse its archive entry instead of minting a second
+      // copy. On reopen `state.svgSources` is EMPTY -- the bytes live in the archive, not in session
+      // state -- so the content dedup in `resolveSvgArchiveEntry` cannot see them, and the entry name
+      // reads as taken by this artwork's own parts. Left to itself that stores the same drawing again
+      // under `_2` on every edit, and repoints the records at the copy.
+      reeditSvgRef.current = { entryPath: record.entryPath, hostId, fileName: record.fileName, loadedMarkup: markup }
+      setReeditSvgCount(svgArtworkParts(stateRef.current, hostId, record.entryPath).length)
+    } catch (error) {
+      // Logged as well as shown: the panel's message tells the user what to do about it, but an
+      // artwork entry that a record still names and the archive cannot produce means the saved file
+      // is inconsistent, which is worth seeing in the log buffer rather than only in one dialog. The
+      // entry path is a name inside the user's own project, never a secret.
+      console.warn('[editor] could not read stored SVG artwork', record.entryPath, extractErrorMessage(error))
+      reeditSvgRef.current = null
+      setReeditSvgCount(0)
+      setSvgArtwork(null)
+      setSvgMarkup(null)
+      setSvgFileName(record.fileName || null)
+      setSvgEmptyReason(
+        `${extractErrorMessage(error) || 'The stored artwork could not be read.'} Choose the file again to re-extrude it.`
+      )
+    } finally {
+      setImporting(false)
+    }
+  }, [])
+
+  /**
+   * Find a BAKED part that carries an authoring record, with the instance that hosts it.
+   *
+   * The counterpart of {@link findAddedTextPart} for parts a previous session saved. Both records
+   * ride the scene onto {@link EditorInstancePart}, so a part is re-editable across a close, not
+   * merely within the session that authored it.
+   *
+   * Returns the ORDINAL as well as the record, because promoting the part on the first edit has to
+   * address the base-file volume it replaces, and that is the only handle a baked part has.
+   */
+  const findBakedAuthoredPart = useCallback((objectId: number, partIndex: number) => {
+    for (const instance of activePlateRef.current?.instances ?? []) {
+      if (addedPartHostId(instance) !== objectId) continue
+      const part = instance.parts.find((entry) => entry.partIndex === partIndex)
+      if (!part) continue
+      if (!part.textInfo && !part.svgPart) return null
+      return { part, instance, hostId: objectId, partIndex }
+    }
+    return null
+  }, [])
+
   /**
    * Does the text being edited actually have a host?
    *
@@ -6245,9 +7570,38 @@ function EditorView({
   }, [selectedKey, activePlate, editingTextObjectKey, editingTextHostKey])
 
   const handleGizmoModeChange = useCallback((mode: GizmoMode) => {
+    // Cleared on EVERY mode change, before any branch can return early, and re-set below only when
+    // this change is opening the text tool on a baked part. Clearing it on one exit path was enough
+    // for the ref to outlive its session: opening the tool on a baked part, pressing Escape, then
+    // reopening it on a standalone text object returned before the old clear was reached, and the
+    // promotion later deleted a base-file volume in a session that never pointed at it.
+    reeditBakedPartRef.current = null
     if (mode === 'layerHeight') {
       if (selectedKey) openLayerHeightFor(selectedKey)
       return
+    }
+    if (mode === 'svg') {
+      // REOPEN artwork already in the project rather than starting a second import over it, the
+      // same rule the text tool follows. The record says what the tool was set to; the artwork
+      // itself is re-read from the archive entry it names, because neither record stores shapes.
+      const bakedSvg = selectedBakedPart
+        ? findBakedAuthoredPart(selectedBakedPart.objectId, selectedBakedPart.partIndex)
+        : null
+      const addedSvg = selectedAddedPartKey ? findAddedSvgPart(selectedAddedPartKey) : null
+      const record = bakedSvg?.part.svgPart ?? addedSvg?.part.svgPart ?? null
+      const hostId = bakedSvg?.hostId ?? addedSvg?.hostId ?? null
+      if (record && hostId != null) {
+        // NO history checkpoint here: opening the tool to look at a saved part's settings changes
+        // nothing, and taking one made every edit cost two undo steps, the first of which appeared
+        // to do nothing. The commit records its own, exactly as the text tool defers its promotion.
+        void reopenSvgArtwork(record, hostId, canonicalThreeMfPartSubtype(
+          bakedSvg?.part.subtype ?? addedSvg?.part.subtype ?? null
+        ))
+        setGizmoMode(mode)
+        return
+      }
+      reeditSvgRef.current = null
+      setReeditSvgCount(0)
     }
     if (mode === 'text') {
       // One checkpoint per session, so the whole edit is a single undo rather than one per keystroke
@@ -6270,6 +7624,37 @@ function EditorView({
         editingTextSurfaceRef.current = null
         setEditingTextObject(selectedInstance.key)
         textApplyLoadedRef.current = loaded
+        setGizmoMode(mode)
+        return
+      }
+      // A part a PREVIOUS session saved. Its record reopens the panel exactly as a session-added
+      // one does; what differs is that the geometry is a baked `<component>`, so the part is
+      // REPLACED rather than mutated -- deferred to the first apply (see `reeditBakedPartRef`) so
+      // merely opening the tool to look at a saved part does not dirty the project.
+      const baked = selectedBakedPart
+        ? findBakedAuthoredPart(selectedBakedPart.objectId, selectedBakedPart.partIndex)
+        : null
+      if (baked?.part.textInfo) {
+        // A baked part's subtype is the file's RAW string (and absent for a normal part), so it has
+        // to be canonicalized before it can name one of Studio's Join / Cut / Modifier operations.
+        const loaded = textToolValueFromInfo(
+          baked.part.textInfo, canonicalThreeMfPartSubtype(baked.part.subtype), textTool
+        )
+        setTextTool(loaded)
+        textApplyLoadedRef.current = loaded
+        setEditingTextPartKey(null)
+        setEditingTextHost(baked.instance.key)
+        editingTextSurfaceRef.current = null
+        reeditBakedPartRef.current = {
+          hostId: baked.hostId,
+          partIndex: baked.partIndex,
+          // Kept so the replacement can land EXACTLY where the original sat. Re-deriving it from the
+          // anchor is close but not equal: the anchor is the part's CENTRE, and the placement seats
+          // text ON a surface, so a retype lifted it by half its thickness -- 1mm at the default 2mm,
+          // every edit, compounding.
+          transform: [...baked.part.transform]
+        }
+        setEditingTextObject(null)
         setGizmoMode(mode)
         return
       }
@@ -6301,7 +7686,8 @@ function EditorView({
     // The refs and setters are stable, but listing them is free and stops the rule from hiding a
     // genuinely missing dependency behind noise it has been trained to ignore.
   }, [selectedKey, openLayerHeightFor, selectedAddedPartKey, findAddedTextPart, textTool,
-    recordHistoryRef, setEditingTextHost, setEditingTextObject])
+    recordHistoryRef, setEditingTextHost, setEditingTextObject,
+    selectedBakedPart, findBakedAuthoredPart, findAddedSvgPart, reopenSvgArtwork])
 
   /**
    * Highlight the text being edited, so it reads as the thing you can grab.
@@ -6956,6 +8342,22 @@ function EditorView({
         }
       })
     }
+    // Re-editing a part a previous session SAVED: it is a baked `<component>`, so it has no
+    // `addedPartKey` for the lookup above to match and the anchor would stay null. That is not a
+    // cosmetic miss: with no anchor and no pointed face, `buildTextPlacement` raycasts straight down
+    // the model's XY centre and returns its TOP surface, so text sitting on a side wall teleported
+    // to the top of the model on the first keystroke, and the baked original was removed in the same
+    // commit. Anchored on where the part actually sits, which is the one thing its own group knows.
+    const promotingFrom = reeditBakedPartRef.current
+    const promotingTransform = promotingFrom?.transform ?? null
+    if (!pointed && !anchor && promotingFrom) {
+      rotorOf(group).traverse((node) => {
+        const ref = node.userData.partRef as { partIndex: number } | undefined
+        if (ref?.partIndex === promotingFrom.partIndex) {
+          anchor = node.getWorldPosition(new THREE.Vector3())
+        }
+      })
+    }
     const placement = await buildTextPlacement(group, anchor, pointed?.normal ?? null)
     if (!placement) return
     const parts = ((state.addedParts ??= {})[hostId] ??= [])
@@ -7008,17 +8410,42 @@ function EditorView({
       }
     } else {
       const partKey = nextInstanceKey()
+      // Promoting a saved part with no pointed face: keep the placement it ALREADY had, rather than
+      // the one just computed. The two are close but not equal, and the difference is systematic --
+      // the anchor is the part's centre while the placement seats text ON a surface, so a plain
+      // retype lifted the text by half its thickness and did it again on every subsequent edit.
+      // Measured on a real save: z 6.25 -> 7.25 at the default 2mm thickness.
+      const keptPlacement = !pointed && promotingTransform
+        ? new THREE.Matrix4().fromArray([
+          promotingTransform[0]!, promotingTransform[1]!, promotingTransform[2]!, 0,
+          promotingTransform[3]!, promotingTransform[4]!, promotingTransform[5]!, 0,
+          promotingTransform[6]!, promotingTransform[7]!, promotingTransform[8]!, 0,
+          promotingTransform[9]!, promotingTransform[10]!, promotingTransform[11]!, 1
+        ])
+        : null
+      const kept = keptPlacement
+        ? {
+          position: new THREE.Vector3(),
+          rotation: new THREE.Euler(),
+          scale: new THREE.Vector3()
+        }
+        : null
+      if (keptPlacement && kept) {
+        const q = new THREE.Quaternion()
+        keptPlacement.decompose(kept.position, q, kept.scale)
+        kept.rotation.setFromQuaternion(q)
+      }
       parts.push({
         key: partKey,
         importId: staged.importId,
         subtype: textTool.operation,
         name: textTool.text.slice(0, 40),
         ...(threeMfPartSubtypeCarriesFilament(textTool.operation) ? { filamentId: instance.filamentId } : {}),
-        position: placement.position,
-        rotation: placement.rotation,
+        position: kept?.position ?? placement.position,
+        rotation: kept?.rotation ?? placement.rotation,
         // Counters the host's scale, so 10mm text is 10mm on the plate rather than 10mm times
         // whatever the model was scaled to.
-        scale: placement.scale,
+        scale: kept?.scale ?? placement.scale,
         soup: placement.soup,
         textInfo
       })
@@ -7028,6 +8455,40 @@ function EditorView({
       // it draggable without leaving the panel.
       const textHostId = addedPartHostId(instance)
       if (textHostId != null) setGizmoPart({ objectId: textHostId, member: { kind: 'added', key: partKey } })
+      // Re-editing a part a previous session SAVED: the new volume above replaces it, so the baked
+      // one goes in the same commit. Deferred to here rather than done at open, so a look at a saved
+      // part's settings costs nothing; cleared either way, since the promotion happens exactly once
+      // and every later keystroke edits the added part through the branch above.
+      const promoting = reeditBakedPartRef.current
+      reeditBakedPartRef.current = null
+      if (promoting && textHostId === promoting.hostId) {
+        // Decided HERE, off the live state, never from inside the updater: `withRemovedParts`
+        // refuses when nothing printed would survive, and a refusal has to change what happens next
+        // rather than being absorbed. `?? current` swallowed it, leaving the ORIGINAL text and its
+        // replacement both in the object with nothing said -- and when the replacement is a Cut, a
+        // negative volume carving into the very text it was meant to replace. The removal's own
+        // default counts the added parts (the new one included, it is already pushed), so no count
+        // is passed: duplicating a default reads as a rule and drifts from it.
+        const removed = withRemovedParts(
+          stateRef.current!, promoting.hostId, new Set([promoting.partIndex])
+        )
+        if (removed) {
+          setState((current) => (current
+            ? withRemovedParts(current, promoting.hostId, new Set([promoting.partIndex])) ?? current
+            : current))
+        } else {
+          // Roll the replacement back out rather than leaving two volumes for one part. The refusal
+          // is correct (an object must keep something printed), so the honest outcome is that the
+          // edit did not happen, said plainly.
+          const at = parts.findIndex((part) => part.key === partKey)
+          if (at >= 0) parts.splice(at, 1)
+          setEditingTextPartKey(null)
+          // The selection was pointed at the volume just spliced out, so it has to go with it: a
+          // gizmo attached to a key nothing owns any more leaves the panel acting on nothing.
+          setGizmoPart(null)
+          toast.error('This object would have nothing left to print. Change the operation back to Join, or add another part first.')
+        }
+      }
     }
     refreshAddedPartMeshes()
     regenerateActiveThumbnailRef.current?.()
@@ -7109,6 +8570,13 @@ function EditorView({
     setSvgArtwork(null)
     setSvgFileName(null)
     setSvgEmptyReason(null)
+    // The COMMITTED bytes are not dropped with the panel's copy: they live on `state.svgSources`,
+    // keyed by entry path, because the save needs them long after the tool has closed.
+    setSvgMarkup(null)
+    // A re-edit target must not outlive its session either, or the next fresh import would commit
+    // as a replacement of whatever was open last time.
+    reeditSvgRef.current = null
+    setReeditSvgCount(0)
   }, [gizmoMode, svgArtwork, svgFileName, svgEmptyReason])
 
   useEffect(() => {
@@ -7910,6 +9378,8 @@ function EditorView({
 
   const {
     savedFile,
+    contentBase,
+    stageSnapshotFor,
     saving,
     saveAsOpen,
     setSaveAsOpen,
@@ -7940,7 +9410,7 @@ function EditorView({
     onSavedAs,
     onClose,
     confirm,
-    saveTarget,
+    saveTarget: effectiveSaveTarget,
     // The material gate reads the slice controller by default, which a host without one does not
     // have; answer from the materials seam instead or every local save is rejected.
     hasMaterials: () => materials.options.length > 0,
@@ -7969,7 +9439,12 @@ function EditorView({
       try {
         await afterNextPaint()
         const thumbnails = await captureAllPlateThumbnails(current)
-        onSlice({ plate, sceneEdit: await authorFilamentConfigs(buildSceneEditOut(current, { thumbnails })) })
+        const sceneEdit = await authorFilamentConfigs(buildSceneEditOut(current, { thumbnails }))
+        // Baked and staged HERE rather than server-side from the edit: the browser holds the bytes
+        // this session opened, so the base cannot be resolved wrongly. Hidden and content-deduped,
+        // so the user's project gains no version and nothing appears in their library.
+        const stagedFileId = await stageSnapshotFor(sceneEdit)
+        onSlice({ plate, sceneEdit, contentBase, stagedFileId })
       } catch (error) {
         // Rethrowing here would only become an unhandled rejection: the console sees it but the
         // /api/logs buffer (which captures console.*) does not, and the user is left staring at a
@@ -7979,7 +9454,7 @@ function EditorView({
         toast.error(extractErrorMessage(error, 'Could not prepare the slice.'))
       }
     })()
-  }, [onSlice, captureAllPlateThumbnails, buildSceneEditOut, authorFilamentConfigs, stateRef])
+  }, [onSlice, captureAllPlateThumbnails, buildSceneEditOut, authorFilamentConfigs, stateRef, contentBase, stageSnapshotFor])
 
   // Once an editor-born project has been saved it is a real library file, so it stops presenting
   // as "New Project" and gains the ordinary Save-version path, without the editor re-mounting.
@@ -8262,7 +9737,7 @@ function EditorView({
       open
       onClose={(_event, reason) => {
         if (reason !== 'escapeKeyDown') {
-          void handleCloseRequest()
+          void handleCloseRequest(`dialog:${reason}`)
           return
         }
         // This is the ONLY place Escape is observable in the editor -- the Modal swallows it before
@@ -8276,6 +9751,14 @@ function EditorView({
         // Escape did nothing whatsoever, which the kebab made easy to reach without a mouse.
         if (contextMenuOpenRef.current) {
           setContextMenu(null)
+          return
+        }
+        // A measurement in progress is peeled one pick at a time before the tool itself closes,
+        // which is Studio's own staging (`GLGizmosManager.cpp:1135`: second selection, then first,
+        // then the gizmo). Measuring is the one tool where the work IS the selection, so dropping
+        // both picks to leave the tool would throw away the thing Escape was meant to correct.
+        if (gizmoMode === 'measure' && measurePoints.length > 0) {
+          setMeasurePoints((current) => current.slice(0, -1))
           return
         }
         // Every selection shape, not just the object one: the bulk part path nulls `selectedKey`
@@ -8299,7 +9782,7 @@ function EditorView({
           selectExclusive(null)
           return
         }
-        void handleCloseRequest()
+        void handleCloseRequest('escape')
       }}
     >
       <ModalDialog
@@ -8314,7 +9797,10 @@ function EditorView({
           {
             // Full screen drops the dialog's own padding too: with no chrome left to inset, that
             // padding is just a border of nothing around the model.
-            p: showEditorChrome ? { xs: 1.5, sm: 2 } : 0,
+            // Tight on a phone: the maximized mode now reaches the screen edges there, so this
+            // padding is the only inset left, and at 1.5 it was spending 24px of ~412 on a margin
+            // around a 3D viewport.
+            p: showEditorChrome ? { xs: 0.75, sm: 2 } : 0,
             display: 'flex',
             flexDirection: 'column',
             minHeight: 0,
@@ -8324,8 +9810,13 @@ function EditorView({
       >
         {/* Both are chrome, and the close X sits exactly where the viewport toolbar moves to once
             the dialog padding goes, leaving it would put an editor-closing button under the
-            cursor aiming for "exit full view". */}
-        {showEditorChrome && <ModalClose onClick={handleCloseRequest} sx={{ top: 12, right: 12 }} />}
+            cursor aiming for "exit full view".
+            NO `onClick`: Joy already routes this button through the Modal's own `onClose` (as
+            `'closeClick'`, which lands on `handleCloseRequest` above), and calls any `onClick`
+            AFTERWARDS. Wiring one here ran the close twice per click, and the second confirm was
+            queued rather than dropped -- so the X asked "Discard unsaved changes?" a second time
+            once the user had answered the first. Pinned by `BackAwareModal.test.ts`. */}
+        {showEditorChrome && <ModalClose sx={{ top: 12, right: 12 }} />}
         {showEditorChrome && (
           <DialogFileTitle
             title={showAsNewProject ? 'New Project' : 'Edit Project'}
@@ -8564,16 +10055,31 @@ function EditorView({
                   }}
                 >
                   {isMobile && (
-                    <GizmoToolbar
-                      mode={gizmoMode}
-                      disabled={!selectedKey || controlsBusy}
-                      busy={controlsBusy}
-                      arrangeDisabled={controlsBusy || (activePlate?.instances.length ?? 0) === 0}
-                      onChange={handleGizmoModeChange}
-                      onDropToBed={handleDropToBed}
-                      onAutoOrient={handleAutoOrient}
-                      onArrangeAll={handleArrangeAll}
-                    />
+                    // The tools SCROLL on a phone rather than wrapping. `flexWrap` can only break
+                    // BETWEEN the two groups, and the first is fifteen buttons -- about 450px of
+                    // unbreakable flex item against ~370px of dialog -- so the overflow used to be
+                    // clipped by the viewport's `overflow: hidden` and those tools were simply
+                    // unreachable. Horizontal scrolling is the app's existing answer to a row that
+                    // does not fit (the mobile tab bar, `SectionNav`), so it is the one used here.
+                    // The fade goes to the group's own soft fill because this strip floats over the
+                    // 3D canvas and has no backdrop of its own to blend into.
+                    <HorizontalOverflowScroller
+                      fadeColor="var(--joy-palette-neutral-softBg)"
+                      fadeWidth={16}
+                      sx={{ flex: 1, minWidth: 0 }}
+                      scrollerSx={{ display: 'flex', gap: 1, alignItems: 'center' }}
+                    >
+                      <GizmoToolbar
+                        mode={gizmoMode}
+                        disabled={!selectedKey || controlsBusy}
+                        busy={controlsBusy}
+                        arrangeDisabled={controlsBusy || (activePlate?.instances.length ?? 0) === 0}
+                        onChange={handleGizmoModeChange}
+                        onDropToBed={handleDropToBed}
+                        onAutoOrient={handleAutoOrient}
+                        onArrangeAll={handleArrangeAll}
+                      />
+                    </HorizontalOverflowScroller>
                   )}
                   <ButtonGroup size="sm" variant="outlined" aria-label="Undo and redo">
                     <Tooltip title="Undo (Ctrl/Cmd+Z)">
@@ -8683,6 +10189,21 @@ function EditorView({
                 )}
                 {gizmoMode === 'cut' && selectedKey && cutRange && (
                   <CutToolPanel
+                    cutMode={cutMode}
+                    setCutMode={setCutMode}
+                    groove={groove}
+                    setGroove={setGroove}
+                    grooveSizeLimits={grooveSizeLimits}
+                    connectorSettings={connectorSettings}
+                    setConnectorSettings={applyConnectorSettings}
+                    connectorCount={cutConnectors.length}
+                    connectorMode={placingConnectors}
+                    setConnectorMode={setCutConnectorMode}
+                    connectorFace={cutConnectorFace}
+                    setConnectorFace={setCutConnectorFace}
+                    clearConnectors={clearCutConnectors}
+                    connectorWarning={connectorProblemSummary(activeProblems)}
+                    connectorSizeLimits={connectorSizeLimits}
                     cutAxis={cutAxis}
                     setCutAxis={setCutAxis}
                     cutOffset={cutOffset}
@@ -8723,8 +10244,14 @@ function EditorView({
                 )}
                 {gizmoMode === 'measure' && (
                   <MeasurePanel
-                    measureDelta={measureDelta}
-                    pointCount={measurePoints.length}
+                    picks={measurePoints}
+                    result={measureResult}
+                    onResetSlot={(slot) => setMeasurePoints((current) => (
+                      // Dropping the FIRST promotes the second into it, matching what clicking that
+                      // feature again does -- a measurement with an empty first slot and a full
+                      // second is a state the click path can never produce.
+                      slot === 0 ? current.slice(1) : current.slice(0, 1)
+                    ))}
                     onClear={() => setMeasurePoints([])}
                     onDone={() => setGizmoMode(RESTING_GIZMO_MODE)}
                   />
@@ -8760,6 +10287,7 @@ function EditorView({
                 onChooseFile={handleChooseSvgFile}
                 onAdd={() => { void handleAddSvg() }}
                 onClose={() => setGizmoMode(RESTING_GIZMO_MODE)}
+                replacingParts={reeditSvgCount}
               />
             )}
             {gizmoMode === 'text' && (
@@ -8859,11 +10387,15 @@ function EditorView({
                     zIndex: VIEWPORT_AID_Z_INDEX
                   }}
                 >
-                  <Box
-                    ref={setViewCubeContainer}
-                    aria-label="Editor orientation cube"
-                    sx={{ width: VIEW_CUBE_SIZE, height: VIEW_CUBE_SIZE, '& canvas': { display: 'block' } }}
-                  />
+                  {/* The gestures are invisible on a cube, so the hint is the only thing that
+                      surfaces the edges, the double-click and the Shift modifier. */}
+                  <Tooltip title={VIEW_CUBE_HINT} placement="right" enterDelay={600}>
+                    <Box
+                      ref={setViewCubeContainer}
+                      aria-label="Editor orientation cube"
+                      sx={{ width: VIEW_CUBE_SIZE, height: VIEW_CUBE_SIZE, '& canvas': { display: 'block' } }}
+                    />
+                  </Tooltip>
                 </Box>
                 {viewerError && (
                   <Alert
@@ -9144,7 +10676,9 @@ function EditorView({
 
         {showEditorChrome && (
           <DialogActions sx={{ pt: 1 }}>
-            <Button type="button" variant="plain" onClick={handleCloseRequest} disabled={saving}>Close</Button>
+            {/* Wrapped rather than passed directly: the handler's first argument names the close
+                SOURCE, and passing it as a click handler would hand it the MouseEvent. */}
+            <Button type="button" variant="plain" onClick={() => { void handleCloseRequest('close-button') }} disabled={saving}>Close</Button>
             {/* Save and Slice stay separate buttons on every width (matching desktop). Each is an
                 `ActionMenuButton`, not a split button: neither label is one action on its own, and
                 as split buttons each had a wide half that quietly picked a route for the user. */}
@@ -9156,7 +10690,6 @@ function EditorView({
                 slicing={slicing}
                 disabled={!state || !canSlice || slicing || saving}
                 disabledReason={!state ? 'Preparing the model…' : (slicing || saving) ? undefined : sliceDisabledReason}
-                activePlateIndex={activePlateIndex}
                 plateCount={state?.plates.length ?? 1}
                 onSliceAll={() => startSlice(0)}
                 onSlicePlate={() => startSlice(activePlateIndex)}

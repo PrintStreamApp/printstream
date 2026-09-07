@@ -312,6 +312,26 @@ export function resolveMachineProfileNozzleDiameters(profile: SlicingPresetSumma
   return [...explicit, ...fromName].filter((entry) => Number.isFinite(entry) && entry > 0)
 }
 
+/**
+ * Does the preset positively identify a DIFFERENT nozzle from the one selected?
+ *
+ * The narrow half of {@link matchesProfileNozzleTarget}, for presets that carry no declared fields
+ * to judge: a `project:` preset is minted from a 3MF with nothing but a NAME, so every other axis
+ * has no evidence and passes by default. Its name usually still says which nozzle it was authored
+ * for ("0.10mm Standard @BBL A1 0.2 nozzle"), and a process tuned for 0.2 is not a process for 0.8.
+ *
+ * Positive identification only, matching the model rule beside it: a preset stating no nozzle is
+ * never dropped, so a hand-named or custom preset cannot be discarded for saying too little.
+ */
+export function statesADifferentNozzle(profile: SlicingPresetSummary, nozzleDiameters: number[]): boolean {
+  if (nozzleDiameters.length === 0) return false
+  const stated = extractNozzleDiameterTokens(normalizedProfileText(profile.name))
+    .filter((entry): entry is string => Boolean(entry))
+  if (stated.length === 0) return false
+  const selected = nozzleDiameters.map(nozzleDiameterToken)
+  return !stated.some((entry) => selected.includes(entry))
+}
+
 export function matchesProfileNozzleTarget(profile: SlicingPresetSummary, selectedMachineProfile: SlicingPresetSummary | null, nozzleDiameters: number[]): boolean {
   if (nozzleDiameters.length === 0) return true
   if (!matchesNozzleDiameters(profile, nozzleDiameters)) return false

@@ -20,12 +20,13 @@
     "dev": "node scripts/dev/run-dev.mjs",
     "dev:db": "npm run db:wait && node scripts/bootstrap-prisma-migrations.mjs",
     "export:web-icons": "node scripts/dev/export-web-icons.mjs",
-    "lint": "eslint .",
+    "lint": "eslint . --cache --cache-strategy content",
     "notices": "node scripts/dev/generate-third-party-notices.mjs",
     "test": "NODE_ENV=test node scripts/dev/run-tests.mjs",
     "test:source-hygiene": "node --test scripts/source-hygiene.test.mjs",
     "typecheck": "npm run typecheck --workspace @printstream/shared && npm run build --workspace @printstream/shared && npm run typecheck --workspace @printstream/bridge-runtime && npm run build --workspace @printstream/bridge-runtime && npm run typecheck --workspace @printstream/sea-runtime && npm run build --workspace @printstream/sea-runtime && npm run typecheck --workspace @printstream/api && npm run build --workspace @printstream/api && npm run typecheck --workspace @printstream/bridge && npm run typecheck --workspace @printstream/slicer && npm run typecheck --workspace @printstream/web",
     "validate": "node scripts/dev/run-low-priority.mjs npm run validate:stages",
+    "validate:changed": "node scripts/dev/run-low-priority.mjs node scripts/dev/run-changed.mjs",
     "validate:stages": "npm run lint && npm run test && npm run test:source-hygiene && npm run typecheck && npm run prisma:validate --workspace @printstream/api"
   },
   "devDependencies": {

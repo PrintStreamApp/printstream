@@ -1050,3 +1050,20 @@ test('a material in an AMS behind a Filament Track Switch is not pinned to one t
   // The group label must not advertise a nozzle the material is not limited to.
   assert.doesNotMatch(switched?.group ?? '', /Nozzle/)
 })
+
+test('a project process preset stops being compatible once the target NOZZLE differs', () => {
+  // The other half of the same idea as the model rule above. A project preset carries only a name,
+  // so every declared axis passes for want of evidence, but the name usually states the nozzle it
+  // was authored for, and a process tuned for 0.2 is not a process for 0.8.
+  const preset = projectProcess('0.10mm Standard @BBL A1 0.2 nozzle')
+  assert.equal(isProcessProfileCompatible(preset, null, 'A1', [0.2], 'Textured PEI Plate'), true)
+  assert.equal(isProcessProfileCompatible(preset, null, 'A1', [0.8], 'Textured PEI Plate'), false)
+})
+
+test('a project process preset stating no nozzle stays compatible at any nozzle', () => {
+  // Positive identification only, exactly as for the model: a preset that says nothing about the
+  // nozzle must not be dropped for saying too little.
+  const preset = projectProcess('0.20mm Standard @BBL A1')
+  assert.equal(isProcessProfileCompatible(preset, null, 'A1', [0.2], 'Textured PEI Plate'), true)
+  assert.equal(isProcessProfileCompatible(preset, null, 'A1', [0.8], 'Textured PEI Plate'), true)
+})

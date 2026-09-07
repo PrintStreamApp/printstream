@@ -117,9 +117,20 @@ export async function registerBuiltinPlugins(): Promise<void> {
     workspaceAccess: 'controlled'
   })
   await pluginRegistry.register(bambuCloudSyncPlugin, {
-    // OFF by default, unlike firmware awareness: this one holds a credential for the
-    // user's whole Bambu account and reaches an external service, so it should be an
-    // explicit choice rather than something an install discovers it is already doing.
+    // ON by default, on existing installs as well as new ones (nothing writes an `_enabled` row
+    // until someone toggles it, so a raised default reaches installs that never touched this;
+    // anyone who explicitly turned it off keeps that choice).
+    //
+    // It was off on the reasoning that it "holds a credential for the user's whole Bambu account
+    // and reaches an external service". Enabling is not connecting: with no account linked this
+    // plugin holds no credential, contacts nothing, and never polls (see its module header, and
+    // the one scheduled task it owns is token RENEWAL, which presupposes a connection). All being
+    // enabled does is offer the link, which is the choice the old default was trying to protect,
+    // made where the user can see it instead of hidden behind an unrelated plugin toggle. Most
+    // people slicing here have their tuned filament and process presets in a Bambu account, and
+    // an install that does not want it can turn it off or remove it and keep a working preset
+    // manager.
+    defaultEnabled: true,
     runtimeSurfaces: ['workspace'],
     managerSurfaces: ['platform', 'workspace'],
     workspaceAccess: 'controlled'

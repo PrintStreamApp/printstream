@@ -45,6 +45,7 @@ import {
   matchesCompatiblePrinters,
   matchesNozzleDiameters,
   matchesProfileNozzleTarget,
+  statesADifferentNozzle,
   nozzleDiameterToken,
   resolveMachineProfileNozzleDiameters,
   normalizedProfileText,
@@ -67,6 +68,7 @@ export {
   matchesCompatiblePrinters,
   matchesNozzleDiameters,
   matchesProfileNozzleTarget,
+  statesADifferentNozzle,
   nozzleDiameterToken,
   resolveMachineProfileNozzleDiameters,
   normalizedProfileText,
@@ -308,7 +310,13 @@ export function isProcessProfileCompatible(
   // Narrow on purpose: only positively identifying a DIFFERENT machine in the preset's name drops
   // it. A project preset that names no machine stays compatible, so a custom or hand-named preset
   // is never silently discarded.
-  if (isProjectSlicingPreset(profile)) return !namesADifferentPrinterModel(profile, model)
+  // A project preset carries only a NAME, so every declared axis below has no evidence and passes.
+  // The name is still evidence: it usually states both the machine and the nozzle it was authored
+  // for, and a process tuned for a 0.2 nozzle is not a process for 0.8. Both halves stay positive
+  // identification only, so a hand-named preset that states neither is never discarded.
+  if (isProjectSlicingPreset(profile)) {
+    return !namesADifferentPrinterModel(profile, model) && !statesADifferentNozzle(profile, nozzleDiameters)
+  }
   return matchesCompatiblePrinters(profile, selectedMachineProfile, model)
     && matchesProfilePrinterTarget(profile, selectedMachineProfile, model)
     && matchesProfileNozzleTarget(profile, selectedMachineProfile, nozzleDiameters)
@@ -1391,6 +1399,23 @@ export function printerModelSortRank(value: string): number {
   if (normalized.startsWith('x')) return 3
   if (normalized === 'unknown') return 100
   return 50
+}
+
+/**
+ * What {@link formatSlicingPresetMetadata} falls back to when a preset has no distinguishing
+ * metadata of its own: text naming the preset's SOURCE. Named here so the predicate below and the
+ * formatter cannot drift apart.
+ */
+const SOURCE_ONLY_PRESET_METADATA = ['System preset', 'User preset', '3MF project preset'] as const
+
+/**
+ * Whether a preset's metadata says only where the preset came from.
+ *
+ * A picker that GROUPS by source already states this in its group header, so repeating it under
+ * every row is noise. Callers that do not group should keep showing it.
+ */
+export function isSourceOnlyPresetMetadata(metadata: string): boolean {
+  return (SOURCE_ONLY_PRESET_METADATA as readonly string[]).includes(metadata)
 }
 
 export function formatSlicingPresetMetadata(profile: SlicingPresetSummary): string {

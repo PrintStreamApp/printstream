@@ -7,8 +7,18 @@
  * the file rather than from anything the user can set.
  *
  * Unlike the text tool this one commits on an explicit Add rather than live-editing what it has
- * already placed: artwork has no equivalent of typing another letter, and re-editing needs the
- * `<shape>` record and 3MF zip entry Studio writes, which we do not carry yet.
+ * already placed: artwork has no equivalent of typing another letter, so there is nothing to
+ * rebuild on each keystroke.
+ *
+ * A saved part CARRIES what it was made from (`@printstream/shared/three-mf` `svg-shape.ts`: a
+ * `<printstream_svg/>` naming a `3D/<name>.svg` archive entry, plus BambuStudio's own
+ * `<BambuStudioShape/>` when the import produced one part), and opening the tool on such a part
+ * REOPENS it: the record fills this panel and the artwork is re-read from that archive entry.
+ *
+ * Committing then replaces every piece of the artwork still in the project, not just the mark that
+ * happened to be selected, because width and thickness describe the whole drawing. That is why the
+ * commit button counts what it is about to change instead of saying "Update", and why the file
+ * button offers to REPLACE the artwork rather than to choose another one.
  *
  * The file never leaves the tab: it is read here and extruded in `lib/svgGeometry.ts`, like every
  * other model the editor opens.
@@ -57,12 +67,22 @@ export interface SvgToolPanelProps {
   onChooseFile: () => void
   onAdd: () => void
   onClose: () => void
+  /**
+   * How many parts a commit will REPLACE, when the tool was opened on artwork already in the
+   * project. Zero means this is a fresh import.
+   *
+   * The count is the honest part of the label: the panel's width and thickness describe the whole
+   * artwork, not the one mark that happened to be selected, so committing re-extrudes every piece
+   * still in the project. Saying "Update" alone would hide that a click changes several rows.
+   */
+  replacingParts?: number
 }
 
 export function SvgToolPanel({
   value, onChange, fileName, heightMm, hasArtwork, emptyReason, busy, hasHost, hasBackground,
-  onChooseFile, onAdd, onClose
+  onChooseFile, onAdd, onClose, replacingParts = 0
 }: SvgToolPanelProps) {
+  const reediting = replacingParts > 0
   const set = <K extends keyof SvgToolValue>(key: K, next: SvgToolValue[K]) => onChange({ ...value, [key]: next })
 
   return (
@@ -76,13 +96,15 @@ export function SvgToolPanel({
     >
       <Typography level="title-sm" startDecorator={<ImageRoundedIcon />}>SVG</Typography>
       <Typography level="body-xs" textColor="text.tertiary">
-        {hasHost
-          ? 'The artwork is added to the selected model as a part you can then move like any other.'
-          : 'The artwork is added as its own model on the plate.'}
+        {reediting
+          ? 'Re-extrudes the artwork already on this model. Every piece of it still in the project is replaced.'
+          : hasHost
+            ? 'The artwork is added to the selected model as a part you can then move like any other.'
+            : 'The artwork is added as its own model on the plate.'}
       </Typography>
 
       <Button size="sm" variant="outlined" color="neutral" onClick={onChooseFile} loading={busy}>
-        {fileName ? 'Choose a different file…' : 'Choose an SVG…'}
+        {fileName ? (reediting ? 'Replace the artwork…' : 'Choose a different file…') : 'Choose an SVG…'}
       </Button>
       {fileName && (
         <Typography level="body-xs" noWrap title={fileName}>{fileName}</Typography>
@@ -146,7 +168,9 @@ export function SvgToolPanel({
 
       <Stack direction="row" spacing={1} justifyContent="flex-end">
         <Button size="sm" variant="plain" color="neutral" onClick={onClose}>Cancel</Button>
-        <Button size="sm" onClick={onAdd} disabled={!hasArtwork} loading={busy}>Add</Button>
+        <Button size="sm" onClick={onAdd} disabled={!hasArtwork} loading={busy}>
+          {reediting ? (replacingParts === 1 ? 'Update part' : `Update ${replacingParts} parts`) : 'Add'}
+        </Button>
       </Stack>
     </Stack>
   )

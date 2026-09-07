@@ -9,7 +9,8 @@ function makeJob(overrides: Partial<PrintJob>): PrintJob {
     printerId: 'printer-1',
     printerName: 'Prototype X1C',
     jobName: 'Storage Box',
-    fileId: null,
+    // A normal library job still holds its retained copy; the reclaimed case overrides this.
+    fileId: 'file-1',
     fileName: null,
     fileSizeBytes: null,
     sourceProjectFileId: null,
@@ -60,5 +61,15 @@ test('formatJobDispatchDetails appends library file size when available', () => 
   assert.equal(
     formatJobDispatchDetails(makeJob({ fileSizeBytes: 1_536, plate: 2 })),
     'Plate 2 - 1.5 KB'
+  )
+})
+
+// The retained copy is reclaimed once nothing references it, which is why such a row keeps its
+// name, size and thumbnail but offers no Reprint. It must say so, and it must never read as
+// "Started outside PrintStream": PrintStream dispatched this print.
+test('formatJobDispatchDetails says so when the stored file has been reclaimed', () => {
+  assert.equal(
+    formatJobDispatchDetails(makeJob({ jobKind: 'file', fileId: null, fileSizeBytes: 1_536, plate: 2 })),
+    'Plate 2 - 1.5 KB - Stored file no longer available'
   )
 })

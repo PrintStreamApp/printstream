@@ -6,6 +6,33 @@ import { z } from 'zod'
 import { processSettingOverridesSchema } from './process-settings.js'
 import { degenerateTransformMessage, findDegenerateTransformColumn } from './three-mf/transform-validity.js'
 import { TEXT_SURFACE_TYPES, type TextInfo } from './three-mf/text-info.js'
+import { isSvgArchiveEntry } from './three-mf/svg-shape.js'
+import type { BambuStudioShape, SvgPartRecord } from './three-mf/svg-shape.js'
+
+/**
+ * Largest source SVG a save may carry, per artwork.
+ *
+ * Sized against the API's `express.json({ limit: '4mb' })` body cap rather than against anything
+ * about SVG: the transport rejects an oversized body before validation runs, so a limit above that
+ * could never be reported as a useful error. Left room for the rest of the edit, which on a busy
+ * project is far from empty.
+ */
+export const MAX_SVG_SOURCE_BYTES = 1_500_000
+
+/**
+ * Total artwork one save may carry, across every entry.
+ *
+ * The per-artwork cap alone bounds nothing useful: 64 entries at the single-file limit is far past
+ * the API's 4mb body cap, so three ordinary-sized drawings could brick save AND slice on a 413 that
+ * names nothing. The import guard only ever sees one file, so the ceiling has to be enforced here
+ * too, where the whole set is visible.
+ */
+export const MAX_SVG_SOURCES_TOTAL_BYTES = 2_500_000
+
+/** UTF-8 byte length, which is what the transport limit counts. `String.length` counts UTF-16 units. */
+export function svgSourceByteLength(markup: string): number {
+  return new TextEncoder().encode(markup).length
+}
 
 export const slicingPresetKindSchema = z.enum(['machine', 'process', 'filament'])
 export type SlicingPresetKind = z.infer<typeof slicingPresetKindSchema>
@@ -893,6 +920,41 @@ export const sceneEditTextInfoSchema = z.object({
   hitNormal: z.tuple([z.number(), z.number(), z.number()]).readonly()
 }) satisfies z.ZodType<TextInfo>
 
+/**
+ * Our `<printstream_svg>` payload, as it rides a save request. The shape is {@link SvgPartRecord}
+ * from `three-mf/svg-shape.ts`, which owns the serializer, the parser and the interop rules; this
+ * is only its wire validation.
+ */
+export const sceneEditSvgPartSchema = z.object({
+  entryPath: z.string().min(1).max(300),
+  fileName: z.string().max(300),
+  /** 0 for a merged import, else the 1-based paint order of the piece this part was extruded from. */
+  pieceIndex: z.number().int().nonnegative(),
+  /**
+   * NON-NEGATIVE, not positive: `svgPartRecordFromBambuShape` reports 0 for a BambuStudio-embossed
+   * part, meaning "not known yet" (Studio's `scale` is relative to nanosvg's own extents for the
+   * file, so a millimetre width cannot be recovered until the artwork is parsed). Requiring a
+   * positive value here would make a scene containing such a part fail to parse.
+   */
+  widthMm: z.number().nonnegative(),
+  thickness: z.number().positive(),
+  includeBackground: z.boolean()
+}) satisfies z.ZodType<SvgPartRecord>
+
+/**
+ * BambuStudio's `<BambuStudioShape>` payload, as it rides a save request. The shape is
+ * {@link BambuStudioShape} from `three-mf/svg-shape.ts`.
+ */
+export const sceneEditBambuShapeSchema = z.object({
+  filePath: z.string().max(300),
+  filePathIn3mf: z.string().max(300),
+  scale: z.number().positive(),
+  unhealed: z.boolean(),
+  depth: z.number().positive(),
+  useSurface: z.boolean(),
+  fixTransform: z.array(z.number()).length(12).readonly().nullable()
+}) satisfies z.ZodType<BambuStudioShape>
+
 export const sceneEditAddedPartSchema = z.object({
   /** Host: an in-project object's Bambu `object_id`. Mutually exclusive with `importId`. */
   /** In-project object id, or a NEGATIVE clone placeholder (see `sceneEditObjectCloneSchema`). */
@@ -924,7 +986,19 @@ export const sceneEditAddedPartSchema = z.object({
    * it and how a saved project round-trips still editable in either editor. Absent for every part
    * that is not text.
    */
-  textInfo: sceneEditTextInfoSchema.optional()
+  textInfo: sceneEditTextInfoSchema.optional(),
+  /**
+   * What an SVG part was extruded from, so it stays editable after the geometry is baked. Written
+   * as a `<printstream_svg/>` inside the part's `model_settings.config` block. Absent for every
+   * part that did not come from the SVG tool.
+   */
+  svgPart: sceneEditSvgPartSchema.optional(),
+  /**
+   * Studio's INTEROP record for the same part, written only when this import produced ONE part.
+   * A split import must not carry it: the element describes a whole artwork, so N copies would each
+   * tell BambuStudio they are the entire drawing (see `three-mf/svg-shape.ts`).
+   */
+  bambuShape: sceneEditBambuShapeSchema.optional()
 }).refine(
   (part) => (part.objectId == null) !== (part.importId == null),
   { message: 'An added part must name exactly one host: objectId or importId' }
@@ -1006,6 +1080,44 @@ export const sceneEditSchema = z.object({
   instances: z.array(sceneEditInstanceSchema),
   /** Optional new volumes added inside existing objects (negative parts, modifiers, ...). */
   addedParts: z.array(sceneEditAddedPartSchema).max(200).optional(),
+  /**
+   * Source SVGs to store in the archive, keyed by the entry path the parts' records name.
+   *
+   * These are the ARTWORK, not a convenience copy of it: neither our `<printstream_svg>` nor
+   * BambuStudio's `<BambuStudioShape>` stores the shapes themselves, so both reopen by re-parsing
+   * these bytes. An edit whose parts name an entry that is not written here, and was not already in
+   * the base archive, produces parts that reopen as anonymous solids, which is the whole defect
+   * the records exist to fix.
+   *
+   * Absent on every save that did not add SVG artwork; entries already in the base are not resent.
+   */
+  svgSources: z.array(z.object({
+    /**
+     * Constrained to `3D/<name>.svg`, and NOT merely as tidiness.
+     *
+     * The bake writes this verbatim as an archive entry name, and both writers key entries by name
+     * last-wins, so an unconstrained value lets a save name `3D/3dmodel.model` and replace the model
+     * document with arbitrary text, leaving an unopenable file. `isSvgArchiveEntry` is Studio's own
+     * case-sensitive test, which is also the rule its reader uses to FIND these entries, so anything
+     * failing it could not be re-read by either tool anyway. Traversal segments are rejected for the
+     * same reason: a name is a zip path, not a filesystem one, and `..` in it is never legitimate.
+     */
+    entryPath: z.string().min(1).max(300)
+      .refine(isSvgArchiveEntry, 'An SVG source entry must be 3D/<name>.svg')
+      .refine((value) => !value.split('/').includes('..'), 'An SVG source entry must not traverse'),
+    // Kept under the API's own 4mb JSON body limit with room for the rest of the edit, because the
+    // transport rejects an oversized body BEFORE Zod runs: a larger cap here would be unreachable
+    // and would surface as an opaque 413 on every save AND slice of the project. `handleAddSvg`
+    // refuses the import up front so the failure names the artwork instead.
+    markup: z.string().refine(
+      (value) => svgSourceByteLength(value) <= MAX_SVG_SOURCE_BYTES,
+      `An SVG source must be at most ${MAX_SVG_SOURCE_BYTES} bytes`
+    )
+  })).max(64).refine(
+    (sources) => sources.reduce((total, source) => total + svgSourceByteLength(source.markup), 0)
+      <= MAX_SVG_SOURCES_TOTAL_BYTES,
+    'The project carries more SVG artwork than a save can send'
+  ).optional(),
   /** Optional object→import geometry replacements (Replace-with); see {@link sceneEditMeshReplacementSchema}. */
   meshReplacements: z.array(sceneEditMeshReplacementSchema).max(200).optional(),
   /**
@@ -1094,6 +1206,37 @@ export const sceneEditSchema = z.object({
     importId: z.string().trim().min(1),
     profile: z.array(z.number()).max(4096)
   })).max(200).optional(),
+  /**
+   * What one plane cut produced, so BambuStudio reopens the halves as a CUT rather than as
+   * unrelated objects: the cut badge, "delete all connectors", and the lock that stops one half
+   * being scaled non-uniformly out of fitting the other.
+   *
+   * Keyed by importId throughout, because a cut's outputs are freshly staged imports that have no
+   * baked object id until this save writes them. Nothing about the print depends on it; see
+   * `three-mf/cut-information.ts` for what it can and cannot honestly record, in particular that a
+   * connector whose hole was drilled into the geometry has no volume to name.
+   */
+  cutGroups: z.array(z.object({
+    /** Both halves, plus one per dowel pin. Fewer than two is not a cut and is not recorded. */
+    importIds: z.array(z.string().trim().min(1)).min(2).max(64),
+    /**
+     * Connectors the cut PLACED, including any that left no volume behind. Not the length of
+     * `connectors`: BambuStudio compares this across a group to decide the halves belong together.
+     */
+    connectorCount: z.number().int().min(0).max(512),
+    connectors: z.array(z.object({
+      /** The half the connector volume was added to. */
+      importId: z.string().trim().min(1),
+      /** The staged mesh of the volume itself, which locates it among the object's components. */
+      meshImportId: z.string().trim().min(1),
+      type: z.enum(['plug', 'dowel', 'snap']),
+      /** Millimetres, not Studio's unit-mesh scale factor. */
+      radius: z.number().positive().max(1000),
+      height: z.number().positive().max(1000),
+      radiusTolerance: z.number().min(0).max(1000),
+      heightTolerance: z.number().min(0).max(1000)
+    })).max(512)
+  })).max(64).optional(),
   /**
    * Optional triangle paint on a not-yet-saved import, keyed by import + 0-based solid index
    * (`partIndex` 0 is a single-solid import's only mesh). The import counterpart of
@@ -1297,8 +1440,13 @@ const arrangedThreeMfBakeSchema = z.object({
    * against a NEW file while the content base must stay the ORIGINAL file's version, which a
    * target-scoped version lookup would reject.
    *
-   * Absent ⇒ the legacy behaviour (bake from `baseVersionId ?? baseFileId`'s current content).
-   * Ignored when `ignoreBaseContent` is set, which means "carry no base bytes at all".
+   * REQUIRED in practice whenever `baseFileId` names a file and `baseVersionId` does not name a
+   * version: the route refuses such a request rather than falling back to the target's current
+   * content, because after this session's first save that content IS this session's output and
+   * baking from it re-applies the edit over itself. Optional here only so a request that carries
+   * immutable bytes (an explicit `baseVersionId`) or none at all (`ignoreBaseContent`) need not
+   * repeat itself. Ignored when `ignoreBaseContent` is set, which means "carry no base bytes at
+   * all".
    */
   contentBase: z.object({
     fileId: z.string().trim().min(1),
@@ -1412,6 +1560,28 @@ export const createSlicingJobSchema = z.object({
    * parent file.
    */
   sourceVersionId: z.string().trim().min(1).optional(),
+  /**
+   * Which BYTES to bake `sceneEdit` from, when that is not the source file's current content.
+   *
+   * The exact field the editor SAVE sends (`contentBase` on {@link arrangedThreeMfBakeSchema}), and
+   * for the same reason: a `SceneEdit` is a diff against the file the session OPENED, so every bake
+   * of it must read those same bytes. A save advances the file's head, so a later slice that
+   * resolved `sourceFileId`'s current content re-applied an edit the save had already baked in. The
+   * idempotent members survived that; `partOrder` and `removedParts` did not, and applying a part
+   * reorder twice permuted an object's volumes while the per-part `extruder` values stayed on their
+   * old positions, so parts silently traded materials and a two-colour plate printed inverted.
+   *
+   * `fileId` is deliberately independent of `sourceFileId`, exactly as it is for a save: after a
+   * "save as" the session keeps authoring from the ORIGINAL file's bytes.
+   *
+   * Absent means the legacy behaviour (bake from `sourceVersionId ?? sourceFileId`'s current
+   * content), which is right for every non-editor slice: those carry no `sceneEdit` to re-apply.
+   */
+  contentBase: z.object({
+    fileId: z.string().trim().min(1),
+    /** Null/absent means that file's CURRENT content (a session that has not saved yet). */
+    versionId: z.string().trim().min(1).nullable().optional()
+  }).optional(),
   slicerTargetId: z.string().trim().min(1).optional(),
   /**
    * The user has been warned that this project was saved by a NEWER Bambu Studio than the chosen

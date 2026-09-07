@@ -26,7 +26,8 @@ import type {
   StagedImport,
   ThreeMfIndex
 } from '@printstream/shared'
-import type { TextInfo } from '@printstream/shared/three-mf'
+import { isSvgArchiveEntry, svgArchiveEntryPath } from '@printstream/shared/three-mf'
+import type { BambuStudioShape, SvgPartRecord, TextInfo } from '@printstream/shared/three-mf'
 import { canonicalThreeMfPartSubtype, isNonRenderableThreeMfPartSubtype, threeMfPartSubtypeCarriesFilament } from '@printstream/shared'
 import type { RepairedFilamentPreset } from './filamentConfigAuthoring'
 import { randomUUID } from '../../../lib/randomId'
@@ -95,6 +96,20 @@ export interface EditorInstance {
    * channel, so standalone text is re-editable until saved and plain geometry afterwards.
    */
   textInfo?: TextInfo
+  /**
+   * Set when this object IS extruded SVG artwork, created by the SVG tool with nothing selected.
+   *
+   * Session-scoped for the same reason {@link EditorInstance.textInfo} is: a part's record rides
+   * `SceneEdit.addedParts` and an OBJECT has no equivalent channel, so a merged standalone import
+   * is re-editable until saved and plain geometry afterwards. The non-body pieces of a SPLIT
+   * standalone import are ordinary added parts and do persist.
+   */
+  svgPart?: SvgPartRecord
+  /**
+   * The cut group this object belongs to, from `cut_information.xml`. Two instances sharing a value
+   * are the halves of one cut. Absent for anything that was never cut.
+   */
+  cutId?: number
   /** Plate-local placement in mm from the plate centre. */
   position: THREE.Vector3
   /** Euler rotation in radians, order 'XYZ'. */
@@ -202,6 +217,30 @@ export interface EditorInstancePart {
   color: string | null
   /** Raw subtype (support_blocker/support_enforcer/modifier_part/...) or null for a normal part. */
   subtype: string | null
+  /**
+   * What this part was AUTHORED from, when a tool made it: the text it was typed from, or the SVG
+   * artwork it was extruded from. Absent for imported or primitive geometry, which is not authored
+   * by anything we could reopen.
+   *
+   * Carried from the scene so a part stays re-editable ACROSS a close, not merely within the
+   * session that created it. Both records reach the browser on the scene DTO
+   * (`libraryThreeMfSceneInstancePartSchema`) and used to stop here: `textInfo` was written to the
+   * file, parsed back, carried over the wire, and then never copied onto this type, so reopening a
+   * saved project turned every text part into anonymous solids with nothing logged. Whatever is
+   * added to the scene's part shape has to be copied here too, or it dies at this hop.
+   */
+  textInfo?: TextInfo
+  svgPart?: SvgPartRecord
+  /**
+   * True when `cut_information.xml` names this volume a cut connector.
+   *
+   * BambuStudio leaves connectors out of an object's volume rows entirely and shows one
+   * "Cut connectors" row instead (`can_add_volumes_to_object`, `GUI_ObjectList.cpp:4485`), so a
+   * half with a body and one peg reads as a single row rather than as a multi-part object.
+   * Carried through the same hops `textInfo` is, and for the same reason: without the read-back a
+   * cut is only known to the session that made it.
+   */
+  cutConnector?: true
 }
 
 export interface EditorPlate {
@@ -284,6 +323,28 @@ export function effectivePauses(plate: EditorPlate): readonly EditorPause[] {
   return plate.pausesOverride ?? plate.pauses ?? NO_PAUSES
 }
 
+/**
+ * One plane cut's outputs, addressed the way the editor addresses everything before a save: by the
+ * import each piece was staged as. Resolved to baked object ids by `buildSceneEdit`'s consumer.
+ */
+export interface EditorCutGroup {
+  /** Both halves, plus one per dowel pin. */
+  importIds: string[]
+  /** Connectors PLACED, including any whose hole was drilled away and left no volume. */
+  connectorCount: number
+  connectors: Array<{
+    /** The half the volume was added to. */
+    importId: string
+    /** The volume's own staged mesh. */
+    meshImportId: string
+    type: 'plug' | 'dowel' | 'snap'
+    radius: number
+    height: number
+    radiusTolerance: number
+    heightTolerance: number
+  }>
+}
+
 export interface EditorState {
   plates: EditorPlate[]
   /**
@@ -358,6 +419,26 @@ export interface EditorState {
    * {@link cloneEditorState}; emitted by {@link buildSceneEdit} as `SceneEdit.addedParts`.
    */
   addedParts?: Record<number, EditorAddedPart[]>
+  /**
+   * Source SVGs added this session, keyed by the archive entry path their parts' records name.
+   *
+   * Held on the state rather than on each part because one artwork backs MANY parts (the tool makes
+   * one part per drawn shape), so storing the markup per part would put the same bytes in the
+   * archive once per mark. {@link buildSceneEdit} emits only the entries a surviving part still
+   * references, so deleting every part of an artwork takes its bytes out of the next save too
+   * rather than leaving an orphan entry behind for good.
+   */
+  svgSources?: Record<string, string>
+  /**
+   * Cuts made this session, so a save can tell BambuStudio the halves belong together.
+   *
+   * Held on the state rather than derived at save time because the CUT is the only moment the
+   * relationship exists: afterwards the halves are ordinary import-backed instances with nothing
+   * linking them, and a connector volume is indistinguishable from any other added part. Entries
+   * whose objects have since been deleted are dropped at emit, not here, so an undo of the deletion
+   * brings the cut record back with them.
+   */
+  cutGroups?: EditorCutGroup[]
   /**
    * Parts DELETED from models this session, keyed by {@link addedPartHostId} exactly like
    * {@link EditorState.addedParts}, holding each removed part's BASE-FILE ordinal (`partIndex`).
@@ -475,6 +556,17 @@ export interface EditorAddedPart {
    * the tool knows to reopen it for editing instead of treating it as anonymous geometry.
    */
   textInfo?: TextInfo
+  /**
+   * What an SVG part was extruded from, and which drawn shape of the artwork it is. Marks a part as
+   * SVG in exactly the way {@link EditorAddedPart.textInfo} marks one as text.
+   */
+  svgPart?: SvgPartRecord
+  /**
+   * BambuStudio's interop view of the same SVG part, present only when the import produced ONE
+   * part. Never set on a member of a split import: the element describes a whole artwork, so N of
+   * them would each tell Studio they are the entire drawing (see `three-mf/svg-shape.ts`).
+   */
+  bambuShape?: BambuStudioShape
 }
 
 /**
@@ -579,13 +671,21 @@ export function bodyPaintHostId(
 export function instanceVolumeRows(
   instance: EditorInstance,
   addedPartCount: number
-): { showRows: boolean; showBodyRow: boolean } {
+): { showRows: boolean; showBodyRow: boolean; cutConnectorCount: number } {
+  // Cut connectors are NOT volume rows. BambuStudio leaves them out of the count that decides
+  // whether an object gets rows at all and skips them in the row loop
+  // (`can_add_volumes_to_object` / `add_volumes_to_object_in_list`, `GUI_ObjectList.cpp:4485`),
+  // showing one "Cut connectors" row instead. Counting them made a cut half read as a two-volume
+  // object: an object row, a body row carrying the SAME name, and a row per peg.
+  const cutConnectorCount = instance.parts.filter((part) => part.cutConnector).length
+  const bakedVolumeCount = instance.parts.length - cutConnectorCount
   // A DELETED body is not a volume: the object's added parts are its whole geometry, exactly as
   // they are in the file the save writes.
-  const showBodyRow = instance.parts.length === 0 && !instance.bodyRemoved && addedPartCount > 0
+  const showBodyRow = bakedVolumeCount === 0 && !instance.bodyRemoved && addedPartCount > 0
   return {
-    showRows: instance.parts.length + addedPartCount + (showBodyRow ? 1 : 0) > 1,
-    showBodyRow
+    showRows: bakedVolumeCount + addedPartCount + (showBodyRow ? 1 : 0) > 1,
+    showBodyRow,
+    cutConnectorCount
   }
 }
 
@@ -809,6 +909,7 @@ function instanceFromScene(instance: LibraryThreeMfSceneInstance, partInfo: Part
     ...(instance.brimEars && instance.brimEars.length > 0
       ? { brimEars: instance.brimEars.map((ear) => ({ ...ear })) }
       : {}),
+    ...(instance.cutId != null ? { cutId: instance.cutId } : {}),
     ...(instance.heightRanges && instance.heightRanges.length > 0
       ? { heightRanges: instance.heightRanges.map((range) => ({ ...range, settings: { ...range.settings } })) }
       : {}),
@@ -833,7 +934,12 @@ function instanceFromScene(instance: LibraryThreeMfSceneInstance, partInfo: Part
         filamentId: carriesFilament ? info?.filamentId ?? inherited : null,
         name: info?.name ?? null,
         color: carriesFilament ? info?.color ?? (inherited != null ? instance.color : null) : null,
-        subtype
+        subtype,
+        ...(part.textInfo ? { textInfo: part.textInfo } : {}),
+        ...(part.svgPart ? { svgPart: part.svgPart } : {}),
+        // Carried from `cut_information.xml`, which is what lets a SAVED cut's connectors keep
+        // behaving like connectors instead of reading as ordinary volumes on reopen.
+        ...(part.cutConnector ? { cutConnector: true as const } : {})
       }
     })
   }
@@ -1825,6 +1931,8 @@ export function buildSceneEdit(state: EditorState): SceneEdit {
     pauses: collectPauses(state),
     objectNames: collectObjectNames(state),
     addedParts: collectAddedParts(state),
+    svgSources: collectSvgSources(state),
+    cutGroups: collectCutGroups(state),
     ...collectRemovedParts(state),
     removedObjectBodies: collectRemovedObjectBodies(state),
     ...collectPartOrder(state),
@@ -2324,10 +2432,225 @@ function collectAddedParts(state: EditorState): SceneEdit['addedParts'] {
           ? { filamentId: part.filamentId }
           : {}),
         ...(part.settings && Object.keys(part.settings).length > 0 ? { settings: { ...part.settings } } : {}),
-        ...(part.textInfo ? { textInfo: part.textInfo } : {})
+        ...(part.textInfo ? { textInfo: part.textInfo } : {}),
+        ...(part.svgPart ? { svgPart: part.svgPart } : {}),
+        ...(part.bambuShape ? { bambuShape: part.bambuShape } : {})
       })
     }
   }
+  return out.length > 0 ? out : undefined
+}
+
+/** One volume of an extruded artwork, in whichever of the two address spaces it lives. */
+export type SvgArtworkPart =
+  | {
+    kind: 'baked'
+    partIndex: number
+    pieceIndex: number
+    transform: number[]
+    subtype: string | null
+    /**
+     * The part's OWN material, not its object's. A re-extrude inherits this, because reading the
+     * instance's instead repainted every mark to the object's colour on a width change.
+     */
+    filamentId: number | null
+  }
+  | { kind: 'added'; key: string; pieceIndex: number }
+
+/**
+ * Every volume of ONE artwork on ONE object, baked and session-added alike.
+ *
+ * The SVG tool's width and thickness describe the whole drawing, so re-extruding it has to replace
+ * every piece of that drawing rather than the mark the user happened to click. Which pieces those
+ * are is the parts sharing the record's `entryPath`.
+ *
+ * SURVIVORS ONLY, deliberately: a piece the user has since deleted is simply not in this list, so a
+ * re-extrude does not resurrect it. Re-deriving the set from the artwork instead would bring back
+ * the background they excluded and every mark they removed, on an edit that only meant to change a
+ * width.
+ *
+ * Scoped to one host object. Adding the same file to two models produces two independent artworks
+ * that happen to share an archive entry, and editing one must not reach into the other.
+ */
+export function svgArtworkParts(
+  state: EditorState | null,
+  hostId: number,
+  entryPath: string
+): SvgArtworkPart[] {
+  const out: SvgArtworkPart[] = []
+  // Baked parts are OBJECT-level, so one matching instance describes them all. Walking every plate
+  // and every copy returned the same part once per instance -- on an object placed on two plates the
+  // re-extrude then pushed two replacements for one removal and doubled the geometry, while the
+  // panel offered to update twice as many parts as the drawing has.
+  const seen = new Set<number>()
+  for (const plate of state?.plates ?? []) {
+    for (const instance of plate.instances) {
+      if (addedPartHostId(instance) !== hostId) continue
+      for (const part of instance.parts) {
+        if (part.svgPart?.entryPath !== entryPath) continue
+        if (seen.has(part.partIndex)) continue
+        seen.add(part.partIndex)
+        out.push({
+          kind: 'baked',
+          partIndex: part.partIndex,
+          pieceIndex: part.svgPart.pieceIndex,
+          transform: [...part.transform],
+          subtype: part.subtype,
+          filamentId: part.filamentId
+        })
+      }
+    }
+  }
+  for (const part of state?.addedParts?.[hostId] ?? []) {
+    if (part.svgPart?.entryPath !== entryPath) continue
+    out.push({ kind: 'added', key: part.key, pieceIndex: part.svgPart.pieceIndex })
+  }
+  return out
+}
+
+/**
+ * What a re-extrude must do to each piece of an artwork already in the project.
+ *
+ * PURE, and extracted from the commit so the awkward cases can be tested: they are exactly the ones
+ * a replace-only pass got silently wrong, and none of them is reachable from the happy path of
+ * "same file, different width".
+ *
+ * The new extrusion need not have the same pieces at all. The background toggle adds or drops one, a
+ * replaced file can carry more or fewer shapes, and crossing the split threshold RENUMBERS
+ * everything, because a merged import is piece 0 while a split one is 1..N. So each new piece either
+ * replaces the survivor that shares its key or is added, and any survivor whose piece the artwork no
+ * longer has is removed. Both sides must derive the key identically or a split/merge flip matches
+ * nothing and the whole update reports "no pieces left" while changing not one thing.
+ */
+export function planSvgReextrude(
+  survivors: readonly SvgArtworkPart[],
+  /** Paint order of each piece the new extrusion produced, before keying. */
+  pieceIndexes: readonly number[],
+  /** Whether THIS extrusion splits; decides the key on both sides. */
+  split: boolean
+): {
+  replace: Array<{ pieceIndex: number; survivor: SvgArtworkPart }>
+  add: number[]
+  remove: SvgArtworkPart[]
+} {
+  const key = (index: number) => (split ? index : 0)
+  const survivorByPiece = new Map(survivors.map((part) => [part.pieceIndex, part]))
+  const producedKeys = new Set(pieceIndexes.map(key))
+  const replace: Array<{ pieceIndex: number; survivor: SvgArtworkPart }> = []
+  const add: number[] = []
+  for (const pieceIndex of pieceIndexes) {
+    const survivor = survivorByPiece.get(key(pieceIndex))
+    if (survivor) replace.push({ pieceIndex, survivor })
+    else add.push(pieceIndex)
+  }
+  return { replace, add, remove: survivors.filter((part) => !producedKeys.has(part.pieceIndex)) }
+}
+
+/**
+ * Decide which archive entry an artwork should be stored under, and whether it needs storing.
+ *
+ * Two rules, each of which was a bug first.
+ *
+ * **The taken set must include entries the OPENED FILE already carries**, not just this session's.
+ * Those bytes live in the archive rather than in `svgSources`, so their names are only visible
+ * through the records of the parts that reference them. Minting against the session alone let a
+ * newly imported `logo.svg` reuse the entry name of a DIFFERENT `logo.svg` already in the project:
+ * an appended entry never displaces one the copy pass already wrote, so the new markup was dropped
+ * and the new part silently reopened as the old drawing.
+ *
+ * **Identical bytes reuse their entry.** Adding one artwork to several objects is ordinary, and
+ * keying on the name alone wrote a byte-identical copy per repeat, into the save payload and the
+ * stored file both. `reused` tells the caller it has nothing new to register.
+ */
+export function resolveSvgArchiveEntry(
+  state: EditorState | null,
+  fileName: string,
+  markup: string,
+  /**
+   * Entry names the opened archive holds, from `EditorProjectSource.listEntries`. Without them the
+   * taken set sees only entries some record still NAMES, so an orphan (artwork whose parts were all
+   * deleted) reads as free and gets re-minted, which discards the new bytes.
+   */
+  archiveEntries: readonly string[] = []
+): { entryPath: string; reused: boolean } {
+  const sources = state?.svgSources ?? {}
+  const identical = Object.entries(sources).find(([, existing]) => existing === markup)
+  if (identical) return { entryPath: identical[0], reused: true }
+
+  const taken = new Set([...Object.keys(sources), ...archiveEntries.filter(isSvgArchiveEntry)])
+  for (const plate of state?.plates ?? []) {
+    for (const instance of plate.instances) {
+      if (instance.svgPart) taken.add(instance.svgPart.entryPath)
+      for (const part of instance.parts) {
+        if (part.svgPart) taken.add(part.svgPart.entryPath)
+      }
+    }
+  }
+  for (const parts of Object.values(state?.addedParts ?? {})) {
+    for (const part of parts) {
+      if (part.svgPart) taken.add(part.svgPart.entryPath)
+    }
+  }
+  return { entryPath: svgArchiveEntryPath(fileName, taken), reused: false }
+}
+
+/**
+ * The source SVGs this save must store, being exactly those a surviving part still names.
+ *
+ * REFERENCED, not "everything the session loaded". The tool can be opened on several files before
+ * one is committed, and a part can be deleted after its artwork was added, so emitting the whole
+ * map would write bytes for artwork the project does not contain and keep writing them on every
+ * subsequent save. Anything a part still points at is required, though: without those bytes the
+ * record names an entry nobody stored and the part reopens as anonymous solids, which is
+ * indistinguishable from having no record at all.
+ */
+/**
+ * The cuts this save can still describe: those whose pieces are all still on a plate.
+ *
+ * Filtered rather than trusted, because a cut record naming an object the user has since deleted
+ * would report a group larger than the file contains -- and BambuStudio reads `check_sum` as how
+ * many objects it should be able to select at once, so a group it can never fully select has
+ * non-uniform scaling permanently disabled. Dropping the whole group when a piece goes is the
+ * truthful answer: what remains is no longer the cut that was made.
+ *
+ * A group of fewer than two pieces is dropped for the same reason and is also a WIRE requirement:
+ * `sceneEditSchema` demands at least two importIds, so emitting one fails validation at the save
+ * route and blocks every save, export and slice of the project until the cut is undone. The cut
+ * itself declines to record one; this is the backstop, because the state can also be seeded from a
+ * reopened file.
+ */
+function collectCutGroups(state: EditorState): SceneEdit['cutGroups'] {
+  const groups = state.cutGroups
+  if (!groups || groups.length === 0) return undefined
+  const placed = new Set<string>()
+  for (const plate of state.plates) {
+    for (const instance of plate.instances) {
+      if (instance.source.kind === 'import') placed.add(instance.source.importId)
+    }
+  }
+  const surviving = groups
+    .filter((group) => group.importIds.length >= 2 && group.importIds.every((importId) => placed.has(importId)))
+    // A connector volume can be deleted on its own without touching the halves, so the volume list
+    // is filtered separately; `connectorCount` is left alone because it counts what the cut PLACED.
+    .map((group) => ({
+      ...group,
+      connectors: group.connectors.filter((connector) => placed.has(connector.importId))
+    }))
+  return surviving.length > 0 ? surviving : undefined
+}
+
+function collectSvgSources(state: EditorState): SceneEdit['svgSources'] {
+  const sources = state.svgSources
+  if (!sources) return undefined
+  const referenced = new Set<string>()
+  for (const parts of Object.values(state.addedParts ?? {})) {
+    for (const part of parts) {
+      if (part.svgPart) referenced.add(part.svgPart.entryPath)
+    }
+  }
+  const out = [...referenced]
+    .filter((entryPath) => sources[entryPath] != null)
+    .map((entryPath) => ({ entryPath, markup: sources[entryPath]! }))
   return out.length > 0 ? out : undefined
 }
 
@@ -2819,21 +3142,71 @@ function copySessionEditsOntoClone(state: EditorState, objectId: number, cloneOb
 }
 
 /**
+ * What makes two instances LINKED: the identity they share when they are copies of one object.
+ *
+ * Two identities, because an instance has two ways of being object-backed and only one of them
+ * survives a round trip. A file-backed instance is identified by its Bambu `objectId`, which
+ * {@link makeInstanceIndependent} reassigns to break a link. A SESSION-added one has no baked
+ * object yet (`objectId` is 0 for every import), and its linkage rides in `source`: a linked
+ * duplicate copies the `importId` and `replacedObjectId` verbatim, and the bake later hangs both
+ * build items off the one mesh object those name.
+ *
+ * Keying on `objectId` alone is what made the sidebar's `xN` badge appear only after a save and
+ * reopen: until the save minted real object ids, every session-added copy compared as `0 === 0`
+ * against unrelated imports, so the predicate had to reject them all.
+ *
+ * Returns null for an instance with no shareable identity, which is never linked to anything.
+ */
+export function instanceLinkageKey(instance: EditorInstance): string | null {
+  if (instance.source.kind === 'object') return `object:${instance.objectId}`
+  // `replacedObjectId` first: it is the stable per-object identity the editor already hangs
+  // per-object settings on, and "Replace with…" gives it the replaced object's real id, so two
+  // instances of a replacement agree on it even though their import is incidental.
+  const identity = instance.source.replacedObjectId ?? instance.source.importId
+  return identity != null ? `import:${identity}` : null
+}
+
+/**
  * Turn an instance into an INDEPENDENT copy of the object it currently places: it stops sharing
  * that object's parts, materials, paint and volumes, and gets its own. Registers the copy in
  * {@link EditorState.objectClones} and snapshots the source's session edits onto it.
  *
  * Mutates `state` and `instance` in place (both are already session-mutable, and the caller records
- * an undo checkpoint first). No-op for an import-backed instance, which is independent by nature.
+ * an undo checkpoint first).
+ *
+ * Both KINDS of instance are handled, and an import-backed one is not the no-op this used to claim.
+ * "Independent by nature" was true only while nothing could copy an import: a linked duplicate
+ * copies `importId` and `replacedObjectId` verbatim, so two session-added instances shared their
+ * object identity (per-object settings, the sidebar's linked badge) AND their mesh, and asking for
+ * an independent copy of one silently returned the linked pair it was meant to break.
+ *
+ * The identity split is all that happens HERE, because it is all that can happen synchronously (the
+ * caller runs inside a plate updater). Giving the copy its own MESH means re-staging its import,
+ * which is async, and is `restageIndependentCopy` in `EditorView`, exactly as the added volumes
+ * already work.
  */
 export function makeInstanceIndependent(state: EditorState, instance: EditorInstance): void {
-  if (instance.source.kind !== 'object') return
-  const sourceObjectId = objectCloneSource(state, instance.objectId)
+  if (instance.source.kind === 'object') {
+    const sourceObjectId = objectCloneSource(state, instance.objectId)
+    const cloneObjectId = nextSyntheticObjectId()
+    copySessionEditsOntoClone(state, instance.objectId, cloneObjectId)
+    if (!state.objectClones) state.objectClones = {}
+    state.objectClones[cloneObjectId] = sourceObjectId
+    instance.objectId = cloneObjectId
+    return
+  }
+
+  // An import-backed instance's object identity is `replacedObjectId`: the id per-object settings
+  // and added volumes hang off, synthetic for a fresh import and the replaced object's real id for
+  // a "Replace with...". Minting a new one is the same move as reassigning `objectId` above.
+  const sourceObjectId = instance.source.replacedObjectId
   const cloneObjectId = nextSyntheticObjectId()
-  copySessionEditsOntoClone(state, instance.objectId, cloneObjectId)
-  if (!state.objectClones) state.objectClones = {}
-  state.objectClones[cloneObjectId] = sourceObjectId
-  instance.objectId = cloneObjectId
+  if (sourceObjectId != null) copySessionEditsOntoClone(state, sourceObjectId, cloneObjectId)
+  // Deliberately NOT registered in `objectClones`. That registry drives the bake's clone pre-pass,
+  // which deep-copies a BAKED object's XML and mesh entry; an import-backed instance has no baked
+  // object to copy, the bake builds one from the staged import. Registering it would point the
+  // pre-pass at an id no source object exists for.
+  instance.source = { ...instance.source, replacedObjectId: cloneObjectId }
 }
 
 /**
@@ -2875,12 +3248,16 @@ export function cloneEditorState(state: EditorState): EditorState {
         filamentId: instance.filamentId,
         printable: instance.printable,
         ...(instance.brimEars ? { brimEars: instance.brimEars.map((ear) => ({ ...ear })) } : {}),
+        ...(instance.cutId != null ? { cutId: instance.cutId } : {}),
         ...(instance.heightRanges ? { heightRanges: instance.heightRanges.map(cloneHeightRange) } : {}),
         ...(instance.layerHeightProfile ? { layerHeightProfile: [...instance.layerHeightProfile] } : {}),
         // A deleted BODY must survive the snapshot, exactly like the rename flag above: this list is
         // rebuilt field by field, so a new instance field that is not named here is silently dropped
         // by every undo/redo -- which would resurrect the geometry the user deleted and then save it.
         ...(instance.bodyRemoved ? { bodyRemoved: true } : {}),
+        // Session-scoped authoring records, on the same field-by-field rule as the flags above.
+        ...(instance.textInfo ? { textInfo: instance.textInfo } : {}),
+        ...(instance.svgPart ? { svgPart: instance.svgPart } : {}),
         parts: instance.parts.map((part) => ({
           entryPath: part.entryPath,
           partIndex: part.partIndex,
@@ -2889,7 +3266,14 @@ export function cloneEditorState(state: EditorState): EditorState {
           filamentId: part.filamentId,
           name: part.name,
           color: part.color,
-          subtype: part.subtype
+          subtype: part.subtype,
+          // What a TOOL authored this part from, on exactly the rule the comment above states. These
+          // are read-only records describing the part's origin, so the snapshot shares them rather
+          // than copying: nothing mutates one in place, an edit REPLACES the part. Dropped here, a
+          // single undo would take a saved text or SVG part back to anonymous solids while it sat on
+          // screen looking unchanged, and the next save would write no record at all.
+          ...(part.textInfo ? { textInfo: part.textInfo } : {}),
+          ...(part.svgPart ? { svgPart: part.svgPart } : {})
         })),
         color: instance.color
       })),
@@ -3002,11 +3386,21 @@ export function cloneEditorState(state: EditorState): EditorState {
             scale: part.scale.clone(),
             // Geometry is immutable after staging; snapshots can share it.
             soup: part.soup,
-            ...(part.settings ? { settings: { ...part.settings } } : {})
+            ...(part.settings ? { settings: { ...part.settings } } : {}),
+            // Authoring records, shared for the same reason as the instance-part ones above.
+            ...(part.textInfo ? { textInfo: part.textInfo } : {}),
+            ...(part.svgPart ? { svgPart: part.svgPart } : {}),
+            ...(part.bambuShape ? { bambuShape: part.bambuShape } : {})
           }))])
         )
       }
       : {}),
+    // The artwork behind every SVG part. Snapshotted alongside the parts that NAME it, or an undo
+    // leaves records pointing at bytes the state no longer holds, which saves a file whose parts
+    // reopen as anonymous solids -- indistinguishable from carrying no record at all.
+    ...(state.svgSources ? { svgSources: { ...state.svgSources } } : {}),
+    // Cut records are plain data; a shallow copy per group is enough to keep snapshots independent.
+    ...(state.cutGroups ? { cutGroups: state.cutGroups.map((group) => ({ ...group })) } : {}),
     // Undo has to restore deleted parts, so the removal set is part of the snapshot like every
     // other session-owned map. Copied per host, not shared, or an undo frame would keep mutating.
     ...(state.removedParts

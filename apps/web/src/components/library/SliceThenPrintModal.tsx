@@ -315,6 +315,10 @@ export function SliceThenPrintModal({
  * toolpaths (via the model-studio plugin's `library.overlays` slot, which works on the
  * still-hidden output file), keep the gcode (un-hide it into the library) and/or print it.
  * Stays open after saving.
+ *
+ * Because it also stays open after PRINTING, the print setup it hands off to confirms the
+ * send in place (`showSentConfirmation`) instead of leaving the dispatch toast to say so
+ * beside a dialog the user is still looking at.
  */
 export function SliceResultModal({
   sourceFile,
@@ -420,6 +424,10 @@ export function SliceResultModal({
         defaultPrinterId={job.target.mode === 'realPrinter' ? job.target.printerId : undefined}
         defaultPlate={job.plate > 0 ? job.plate : 1}
         defaultAmsMapping={defaultAmsMapping}
+        // Printing here returns to THIS dialog rather than to the page, so the send confirms
+        // itself: the dispatch toast alone reads as nothing having happened when the results
+        // dialog (and, for an editor slice, the 3D editor behind it) reappears unchanged.
+        showSentConfirmation
         submitPrint={async ({ printerId, body }) => {
           await apiFetch(`/api/slicing/jobs/${job.id}/print`, { method: 'POST', body: { printerId, ...body } })
           setPrinted(true)

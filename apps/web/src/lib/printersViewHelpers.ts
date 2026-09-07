@@ -21,12 +21,14 @@ import {
   defaultPrinterViewSort,
   formatBytes,
   formatNozzleDiameterLabel,
+  isPrinterErrorState,
   normalizeFallbackPlateLabel,
   normalizeNozzleDiameter,
   normalizePlateType,
   printerCardContentSettingsSchema,
   printerViewModelFilterSchema,
   resolvePrinterNozzleDiameters,
+  wasPrintCancelled,
   type AmsSlot,
   type AmsUnit,
   type ExternalSpool,
@@ -666,13 +668,16 @@ export function matchesPrinterStateFilter(
 
   switch (filter) {
     case 'idle':
-      return status.stage === 'idle' || status.stage === 'finished'
+      // A cancelled print leaves the printer on the FAILED stage with nothing
+      // wrong with it, so it belongs here rather than falling through every
+      // bucket and matching no filter at all.
+      return status.stage === 'idle' || status.stage === 'finished' || wasPrintCancelled(status)
     case 'printing':
       return status.stage === 'printing' || status.stage === 'preparing' || status.stage === 'heating'
     case 'paused':
       return status.stage === 'paused'
     case 'error':
-      return status.stage === 'failed' || status.deviceError != null || status.hmsErrors.length > 0
+      return isPrinterErrorState(status)
     case 'offline':
       return false
     default:
@@ -765,7 +770,7 @@ export function sortPrintersForView(
 
 export function printerStateSortRank(status: PrinterStatus | undefined): number {
   if (!status || !status.online) return 4
-  if (status.stage === 'failed' || status.deviceError != null || status.hmsErrors.length > 0) return 3
+  if (isPrinterErrorState(status)) return 3
   if (status.stage === 'paused') return 2
   if (status.stage === 'printing' || status.stage === 'preparing' || status.stage === 'heating') return 0
   return 1
@@ -821,7 +826,7 @@ export function matchesPrinterSearch(printer: Printer, query: string): boolean {
 /** The discrete state bucket a printer falls in, used for "Group by → Status". */
 export function derivePrinterStateBucket(status: PrinterStatus | undefined): Exclude<PrinterStateFilter, 'all'> {
   if (!status || !status.online) return 'offline'
-  if (status.stage === 'failed' || status.deviceError != null || status.hmsErrors.length > 0) return 'error'
+  if (isPrinterErrorState(status)) return 'error'
   if (status.stage === 'paused') return 'paused'
   if (status.stage === 'printing' || status.stage === 'preparing' || status.stage === 'heating') return 'printing'
   return 'idle'

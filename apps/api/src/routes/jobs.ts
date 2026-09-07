@@ -82,6 +82,13 @@ interface JobRowBase {
 
 interface LegacyJobRow extends JobRowBase {
   printerName: string
+  /**
+   * Selected even though this row shape exists for databases missing the NEWER columns:
+   * `sourceType` ships in the init migration, so every database running this code has it. Leaving
+   * it out made the fallback default every legacy row to "library", i.e. a file job, which is the
+   * provenance question `toPrintJobKind` answers and must never be guessed.
+   */
+  sourceType: string | null
 }
 
 interface ModernJobRow extends JobRowBase {
@@ -397,7 +404,7 @@ function normalizePrintJobResult(result: string): PrintJob['result'] {
 }
 
 async function toPrintJobDto(row: PrintJobRow, activity: AuditLogEntry[]) {
-  const jobKind = toPrintJobKind('sourceType' in row ? row.sourceType : 'library', row.fileId)
+  const jobKind = toPrintJobKind(row.sourceType)
   const projectFilamentChips = await resolveJobProjectFilamentChips(row)
   return {
     id: row.id,
@@ -477,6 +484,7 @@ async function listJobsLegacy(workspaceId: string, printerId: string | undefined
       job."progressPercent" AS "progressPercent",
       job."durationSeconds" AS "durationSeconds",
       job."result" AS "result",
+      job."sourceType" AS "sourceType",
       job."fileId" AS "fileId",
       job."fileName" AS "fileName",
       COALESCE(job."fileSizeBytes", file."sizeBytes") AS "fileSizeBytes",

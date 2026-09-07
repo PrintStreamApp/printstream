@@ -75,6 +75,33 @@ test('buildCreateSlicingJobBody: forwards per-object selection, overrides, and s
 	assert.deepEqual(body.target.processSettingOverrides, { wall_loops: '3' })
 })
 
+test('buildCreateSlicingJobBody: carries the editor content base alongside the scene edit', () => {
+	// Regression (the inverted two-colour print): a `sceneEdit` is a diff against the bytes the
+	// editor session OPENED, but the slice body named only the source FILE, so the API baked it
+	// against that file's head. After a save the head IS the session's own output, so the edit
+	// applied twice -- `partOrder` is not idempotent, and the second application permuted the
+	// object's parts while the per-part `extruder` values stayed on their old positions. The body
+	// printed in the logo's material and the logo in the body's.
+	const sceneEdit = { plates: [] } as unknown as NonNullable<SliceFileSubmitInput['sceneEdit']>
+	const body = buildCreateSlicingJobBody(
+		printSubmitInput({ sceneEdit, contentBase: { fileId: 'file-1', versionId: 'version-opened' } }),
+		{ sourceFileId: 'file-1', outputFolderId: null }
+	)
+	assert.deepEqual(body.contentBase, { fileId: 'file-1', versionId: 'version-opened' })
+	assert.equal(body.sceneEdit, sceneEdit)
+})
+
+test('buildCreateSlicingJobBody: omits the content base when there is no scene edit to re-apply', () => {
+	// A plain library slice bakes nothing, so it must read the file exactly as it stands. Pinning it
+	// to some earlier version would slice stale bytes.
+	const body = buildCreateSlicingJobBody(
+		printSubmitInput(),
+		{ sourceFileId: 'file-1', outputFolderId: null }
+	)
+	assert.equal(body.contentBase, undefined)
+	assert.equal(body.sceneEdit, undefined)
+})
+
 test('buildCreateSlicingJobBody: passes through source version and unset object selection', () => {
 	const body = buildCreateSlicingJobBody(
 		printSubmitInput(),
@@ -175,4 +202,39 @@ test('an AMS behind a Filament Track Switch stays available to both nozzles', ()
   // The point of all of it: filtering for the OTHER nozzle keeps the switched unit.
   const forLeftNozzle = filterTrayGroupsForFilament(groups, 1)
   assert.deepEqual(forLeftNozzle.map((group) => group.key), ['ams-1'])
+})
+
+test('a staged source replaces the file AND suppresses the edit that produced it', () => {
+	// The bytes already contain the edit. Sending both would ask the server to apply it a second
+	// time over a file that has it, and `partOrder`/`removedParts` are not idempotent under that.
+	const sceneEdit = { plates: [] } as unknown as NonNullable<SliceFileSubmitInput['sceneEdit']>
+	const body = buildCreateSlicingJobBody(
+		printSubmitInput({
+			sceneEdit,
+			contentBase: { fileId: 'file-1', versionId: 'version-opened' },
+			stagedSourceFileId: 'snapshot-9'
+		}),
+		{ sourceFileId: 'file-1', sourceVersionId: 'version-3' }
+	)
+	assert.equal(body.sourceFileId, 'snapshot-9')
+	assert.equal(body.sceneEdit, undefined)
+	assert.equal(body.contentBase, undefined)
+	// Neither means anything against staged bytes: there is no diff left to resolve a base for.
+	assert.equal(body.sourceVersionId, undefined)
+})
+
+test('a staged source suppresses the per-object overrides it already contains', () => {
+	// Removing the edit flips the API's `!sceneEdit` guard, so its object-customization pass would
+	// re-apply the map WITHOUT the re-key an edit-backed slice performed: an override on an object
+	// created by "Replace with..." lands against a placeholder id the baked file never used.
+	const sceneEdit = { plates: [] } as unknown as NonNullable<SliceFileSubmitInput['sceneEdit']>
+	const body = buildCreateSlicingJobBody(
+		printSubmitInput({
+			sceneEdit,
+			objectProcessOverrides: { 'object-1': { layer_height: ['0.2'] } },
+			stagedSourceFileId: 'snapshot-9'
+		}),
+		{ sourceFileId: 'file-1' }
+	)
+	assert.equal(body.objectProcessOverrides, undefined)
 })

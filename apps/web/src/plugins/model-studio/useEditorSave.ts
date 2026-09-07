@@ -12,7 +12,7 @@
  * component because the slice flow shares them; they are passed in here. Marking the project
  * clean after a successful save goes through `markSaved` (from useEditorHistory).
  */
-import { useCallback, useRef, useState, type Dispatch, type MutableRefObject, type SetStateAction } from 'react'
+import { useCallback, useRef, useState, type Dispatch, type MutableRefObject, type SetStateAction, useMemo } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { type ExportArrangedThreeMf, type SaveArrangedThreeMf, type SceneEdit } from '@printstream/shared'
 import { afterNextPaint } from '../../lib/afterNextPaint'
@@ -24,7 +24,7 @@ import { type ConfirmDialogOptions } from '../../components/PromptDialogProvider
 import { type SliceSettingsController } from '../../components/library/SliceSettingsPanel'
 import { buildSessionFilamentIdRemap, buildSingleObjectExportState, type EditorState } from './lib/editorModel'
 import { objectIdsAcceptingOverrides, selectObjectProcessOverridesForSave } from './lib/sceneEditIdentity'
-import { createApiSaveTarget, type EditorSaveTarget } from './lib/editorSaveTarget'
+import type { EditorSaveTarget } from './lib/editorSaveTarget'
 import { initialContentBasePin, nextContentBasePin, type EditorContentBasePin } from './lib/contentBasePin'
 
 type PlateThumbnail = { plateIndex: number; png: string }
@@ -66,14 +66,14 @@ export interface EditorSaveParams {
    */
   editorBorn: boolean
   /** Slice-time apply (only present when launched from the slice dialog). */
-  onApply: ((edit: SceneEdit) => void) | undefined
+  onApply: ((edit: SceneEdit, contentBase: EditorContentBasePin | null, stagedFileId: string | null) => void) | undefined
   onSaved: ((file: { id: string; name: string }) => void) | undefined
   /** Called after a SAVE AS (a new file) so the host can re-open the editor on it. */
   onSavedAs: ((file: { id: string; name: string }) => void) | undefined
   onClose: () => void
   confirm: (options: ConfirmDialogOptions) => Promise<boolean>
   /** Where a save goes. Defaults to the library-backed api target. */
-  saveTarget?: EditorSaveTarget
+  saveTarget: EditorSaveTarget
   /**
    * Whether the project has a material yet: BambuStudio parity, a project must have one before it
    * can be saved. Defaults to reading the slice controller; a host without one (the public editor)
@@ -105,14 +105,41 @@ export interface EditorSave {
    * save (and always null for a project opened from a file, which already has its own base).
    */
   savedFile: { id: string; name: string } | null
+  /**
+   * The bytes this session authors from (`contentBasePin.ts`), for every consumer of its
+   * `SceneEdit`, not just the save. A SLICE must bake from these too: the edit is a diff against
+   * the file as OPENED, and a save advances the file's head, so slicing the head re-applies an edit
+   * the save already baked in. Its non-idempotent members (`partOrder`, `removedParts`) then land
+   * twice, which permutes an object's parts while the per-part `extruder` values stay on their old
+   * positions, so parts silently trade materials and a two-colour plate prints inverted.
+   *
+   * Null only for a host that opened with NO base file at all (the public editor passes
+   * `baseFileId={null}`), which has no bytes to author from. An editor-born project inside the
+   * library host still has one: its hidden scaffold.
+   */
+  contentBase: EditorContentBasePin | null
+  /**
+   * Bake an edit and stage the bytes for a slice, saving nothing. Null on a host that cannot stage.
+   *
+   * Exposed because the slice path lives in `EditorView` while the override collectors live here,
+   * and the two must not drift: an override the save bakes in and the slice does not is a plate
+   * that prints differently from the one the user is looking at.
+   */
+  stageSnapshotFor: (edit: SceneEdit) => Promise<string | null>
   /** A save is in flight (drives the disabled/loading state of Save/Slice/Close). */
   saving: boolean
   saveAsOpen: boolean
   setSaveAsOpen: Dispatch<SetStateAction<boolean>>
   /** Slice-time "Use this layout": hands the built SceneEdit to the host (no persistence). */
   handleApply: () => void
-  /** Close the editor, warning first if there are unsaved edits. */
-  handleCloseRequest: () => Promise<void>
+  /**
+   * Close the editor, warning first if there are unsaved edits.
+   *
+   * `source` names the gesture, and exists only so a duplicate can be REPORTED: the double
+   * "Discard unsaved changes?" this guards against is intermittent and event-driven, so which two
+   * paths raced is the one thing a bug report cannot say. Pass it at every call site.
+   */
+  handleCloseRequest: (source?: string) => Promise<void>
   /** Save a new version of the source file. */
   handleSaveVersion: () => void
   /** Save the arrangement as a new file at the given name/folder. */
@@ -142,7 +169,7 @@ export function useEditorSave({
   onSavedAs,
   onClose,
   confirm,
-  saveTarget = createApiSaveTarget(),
+  saveTarget,
   hasMaterials,
   onFilamentsRenumbered,
   onFilamentSourcesRemapped
@@ -167,6 +194,21 @@ export function useEditorSave({
     () => initialContentBasePin(baseFileId, baseVersionId)
   )
   const contentBase = pinnedContentBase ?? undefined
+  /**
+   * Which base every request out of this session names, as ONE value.
+   *
+   * The three fields are a set, not three independent choices: `baseFileId`/`baseVersionId` say
+   * which file is being written and `contentBase` says which BYTES to author from, and a request
+   * that carries the first pair without the pin silently bakes from the target's current content.
+   * After a save that is this session's own output, so the edit gets applied over itself. Spelled
+   * out per call site, two of the four (both single-object exports) omitted the pin and did exactly
+   * that; built here, a caller cannot express the broken combination.
+   */
+  const baseBakeFields = useMemo(() => ({
+    baseFileId: effectiveBaseFileId,
+    baseVersionId: effectiveBaseVersionId,
+    contentBase
+  }), [effectiveBaseFileId, effectiveBaseVersionId, contentBase])
   const adoptArchivedVersion = useCallback((savedFileId: string, archivedVersionId: string | null | undefined) => {
     setPinnedContentBase((current) => nextContentBasePin(current, savedFileId, archivedVersionId))
   }, [])
@@ -220,22 +262,6 @@ export function useEditorSave({
     })
   }, [confirm, saveTarget])
 
-  const handleApply = useCallback(() => {
-    const current = stateRef.current
-    if (!current || !onApply) return
-    // Busy BEFORE the thumbnail capture, not after: capture + scene build take seconds on a big
-    // project, and until this flips the button looks unclicked. See `afterNextPaint`.
-    setSaving(true)
-    void (async () => {
-      try {
-          await afterNextPaint()
-          const thumbnails = await captureAllPlateThumbnails(current)
-          onApply(buildSceneEditOut(current, { thumbnails }))
-      } finally {
-        setSaving(false)
-      }
-    })()
-  }, [onApply, buildSceneEditOut, captureAllPlateThumbnails, stateRef])
 
   // Persist the arrangement as a 3MF. Staged imports are already on the server,
   // so the SceneEdit's importId references are all the backend needs to bake them.
@@ -305,16 +331,42 @@ export function useEditorSave({
     [onSaved, queryClient, markSaved, sliceConfigRef, saveTarget, hasMaterials, onFilamentsRenumbered, onFilamentSourcesRemapped, adoptArchivedVersion]
   )
 
+  /**
+   * The gesture whose discard prompt is currently on screen, or null when none is.
+   *
+   * A close request arriving while that prompt is up is the SAME request, and must be dropped:
+   * `PromptDialogProvider` QUEUES a confirm raised over an open one rather than merging it into
+   * the one on screen, so a duplicate waits behind it and asks the identical question again the
+   * moment the user answers -- which reads as being asked twice for a single close.
+   *
+   * The duplicate is also REPORTED, because the reported instances are intermittent and none of
+   * the suspected triggers reproduces by hand: a second close arriving while the editor is open
+   * comes from somewhere, and only the pair of sources can say where. A warning here therefore
+   * means the guard did its job; two prompts with NO warning means they were sequential and
+   * something else raised the second one.
+   */
+  const closeConfirmSourceRef = useRef<string | null>(null)
+
   // Closing the editor warns first if there are unsaved edits (drags, imports, etc.).
-  const handleCloseRequest = useCallback(async () => {
+  const handleCloseRequest = useCallback(async (source = 'unknown') => {
     if (dirtyRef.current) {
-      const discard = await confirm({
-        title: 'Discard unsaved changes?',
-        description: 'This project has changes that have not been saved. Closing now will lose them.',
-        confirmLabel: 'Discard changes',
-        cancelLabel: 'Keep editing',
-        color: 'danger'
-      })
+      if (closeConfirmSourceRef.current) {
+        console.warn(`[model-studio] ignored a duplicate close request while the discard prompt was open (${closeConfirmSourceRef.current} then ${source})`)
+        return
+      }
+      closeConfirmSourceRef.current = source
+      let discard: boolean
+      try {
+        discard = await confirm({
+          title: 'Discard unsaved changes?',
+          description: 'This project has changes that have not been saved. Closing now will lose them.',
+          confirmLabel: 'Discard changes',
+          cancelLabel: 'Keep editing',
+          color: 'danger'
+        })
+      } finally {
+        closeConfirmSourceRef.current = null
+      }
       if (!discard) return
     }
     onClose()
@@ -380,6 +432,59 @@ export function useEditorSave({
     return Object.keys(out).length > 0 ? out : undefined
   }, [sliceConfigRef])
 
+  /**
+   * Bake an edit and stage the bytes for something server-side to read, saving nothing.
+   *
+   * Both routes out of the editor use it (Apply and Slice), because both hand work to the slice
+   * dialog. The OVERRIDES have to be carried in: the server applied them on its slice path, and
+   * only inside its `if (sceneEdit)` branch, so with the bytes baked here anything that branch did
+   * is dropped unless it is baked in instead. Per-object process overrides went missing exactly
+   * that way.
+   *
+   * Null on a host that cannot stage, which falls back to sending the edit.
+   */
+  const stageSnapshotFor = useCallback(async (edit: SceneEdit): Promise<string | null> => {
+    if (!saveTarget.stageSnapshot) return null
+    return await saveTarget.stageSnapshot({
+      sceneEdit: edit,
+      // Lends its bridge only; nothing is written to it.
+      bridgeSourceFileId: effectiveBaseFileId,
+      objectProcessOverrides: collectObjectProcessOverrides(),
+      processSettingOverrides: collectProcessSettingOverrides(),
+      filamentSettingOverrides: collectFilamentSettingOverrides(),
+      retarget: sliceConfigRef.current?.retargetTarget ?? undefined,
+      slicerTargetId: sliceConfigRef.current?.selectedSlicerTargetId
+    })
+  }, [saveTarget, effectiveBaseFileId, collectObjectProcessOverrides, collectProcessSettingOverrides, collectFilamentSettingOverrides, sliceConfigRef])
+
+  const handleApply = useCallback(() => {
+    const current = stateRef.current
+    if (!current || !onApply) return
+    // Busy BEFORE the thumbnail capture, not after: capture + scene build take seconds on a big
+    // project, and until this flips the button looks unclicked. See `afterNextPaint`.
+    setSaving(true)
+    void (async () => {
+      try {
+          await afterNextPaint()
+          const thumbnails = await captureAllPlateThumbnails(current)
+          const edit = buildSceneEditOut(current, { thumbnails })
+          // Staged for the same reason a slice stages: the host slices the BYTES this edit produced
+          // rather than posting the edit for the server to re-apply. Hidden and content-deduped, so
+          // applying an edit still saves nothing.
+          const stagedFileId = await stageSnapshotFor(edit)
+          onApply(edit, pinnedContentBase, stagedFileId)
+      } catch (error) {
+        // Apply reaches the NETWORK now (it stages the baked bytes), so it can fail where it used
+        // to be pure local work that only a bug could break. Without this the promise rejected
+        // unhandled, `finally` un-busied the button, and the editor sat there looking idle with the
+        // apply silently dropped. Same reporting as the save and export paths above.
+        toast.error(error instanceof Error ? error.message : 'Unable to apply the changes.')
+      } finally {
+        setSaving(false)
+      }
+    })()
+  }, [onApply, buildSceneEditOut, captureAllPlateThumbnails, stateRef, pinnedContentBase, stageSnapshotFor])
+
   const handleSaveVersion = useCallback(() => {
     const current = stateRef.current
     if (!current) return
@@ -398,7 +503,7 @@ export function useEditorSave({
         const retarget = sliceConfigRef.current?.retargetTarget ?? undefined
         await runSave(
           {
-            baseFileId: effectiveBaseFileId, baseVersionId: effectiveBaseVersionId, contentBase,
+            ...baseBakeFields,
             mode: 'newVersion', ignoreBaseContent: editorBorn,
             sceneEdit: await authorEdit(buildSceneEditOut(current, { thumbnails })),
             objectProcessOverrides: collectObjectProcessOverrides(),
@@ -414,7 +519,7 @@ export function useEditorSave({
         setSaving(false)
       }
     })()
-  }, [effectiveBaseFileId, effectiveBaseVersionId, editorBorn, runSave, buildSceneEditOut, authorEdit, captureAllPlateThumbnails, collectObjectProcessOverrides, collectProcessSettingOverrides, collectMachineSettingOverrides, collectFilamentSettingOverrides, stateRef, sliceConfigRef, saveTarget, confirmOverwritingConcurrentSave, contentBase])
+  }, [baseBakeFields, effectiveBaseFileId, editorBorn, runSave, buildSceneEditOut, authorEdit, captureAllPlateThumbnails, collectObjectProcessOverrides, collectProcessSettingOverrides, collectMachineSettingOverrides, collectFilamentSettingOverrides, stateRef, sliceConfigRef, saveTarget, confirmOverwritingConcurrentSave])
 
   const handleSaveAs = useCallback((name: string, destinationFolderId: string | null) => {
     const current = stateRef.current
@@ -434,7 +539,7 @@ export function useEditorSave({
         const firstSaveOfEditorBornProject = editorBorn && savedFile === null
         const saved = await runSave(
           {
-            baseFileId: effectiveBaseFileId, baseVersionId: effectiveBaseVersionId, contentBase,
+            ...baseBakeFields,
             mode: 'saveAs', name, folderId: destinationFolderId, bridgeId: saveAsBridgeId,
             ignoreBaseContent: firstSaveOfEditorBornProject,
             sceneEdit: await authorEdit(buildSceneEditOut(current, { thumbnails })),
@@ -464,7 +569,7 @@ export function useEditorSave({
         setSaving(false)
       }
     })()
-  }, [effectiveBaseFileId, effectiveBaseVersionId, editorBorn, savedFile, saveAsBridgeId, runSave, buildSceneEditOut, authorEdit, captureAllPlateThumbnails, collectObjectProcessOverrides, collectProcessSettingOverrides, collectMachineSettingOverrides, collectFilamentSettingOverrides, stateRef, sliceConfigRef, onSavedAs, contentBase])
+  }, [baseBakeFields, editorBorn, savedFile, saveAsBridgeId, runSave, buildSceneEditOut, authorEdit, captureAllPlateThumbnails, collectObjectProcessOverrides, collectProcessSettingOverrides, collectMachineSettingOverrides, collectFilamentSettingOverrides, stateRef, sliceConfigRef, onSavedAs])
 
   /**
    * "Export object as 3MF": bake ONLY the given object into a new single-plate 3MF library
@@ -488,7 +593,7 @@ export function useEditorSave({
         const retarget = sliceConfigRef.current?.retargetTarget ?? undefined
         await runSave(
           {
-            baseFileId, baseVersionId, mode: 'saveAs', name, folderId: destinationFolderId, bridgeId: saveAsBridgeId,
+            ...baseBakeFields, mode: 'saveAs', name, folderId: destinationFolderId, bridgeId: saveAsBridgeId,
             sceneEdit: buildSceneEditOut(exportState, { thumbnails }),
             objectProcessOverrides: collectObjectProcessOverrides(exportState),
             processSettingOverrides: collectProcessSettingOverrides(),
@@ -507,13 +612,17 @@ export function useEditorSave({
         setSaving(false)
       }
     })()
-  }, [baseFileId, baseVersionId, saveAsBridgeId, runSave, buildSceneEditOut, captureAllPlateThumbnails, worldFootprintCenterFor, collectObjectProcessOverrides, collectProcessSettingOverrides, collectMachineSettingOverrides, collectFilamentSettingOverrides, stateRef, sliceConfigRef])
+  }, [baseBakeFields, saveAsBridgeId, runSave, buildSceneEditOut, captureAllPlateThumbnails, worldFootprintCenterFor, collectObjectProcessOverrides, collectProcessSettingOverrides, collectMachineSettingOverrides, collectFilamentSettingOverrides, stateRef, sliceConfigRef])
 
   /**
-   * "Download 3MF project": the same single-object bake as {@link handleExportObjectAs3mf}
-   * but streamed straight back as a download (`POST /api/editor/export-3mf`: see the route's
-   * doc for the no-persist contract). Uses the stall-guarded model fetch because the baked
-   * 3MF is a large body on the same web→API path as model downloads.
+   * "Download 3MF project": the same single-object bake as {@link handleExportObjectAs3mf}, handed
+   * to the user as a file instead of persisted.
+   *
+   * The bake runs in the BROWSER, like every other save on both hosts, and the bytes come back from
+   * the save target's `exportBytes` rather than from a route. (This used to POST
+   * `/api/editor/export-3mf` and stream the result through the stall-guarded model fetch; nothing
+   * in the web app calls that route now.) Persisting nothing is therefore not a server contract any
+   * more, it is simply what this function does with the bytes.
    */
   const handleExportObjectAs3mfDownload = useCallback((key: string, fileName: string) => {
     const current = stateRef.current
@@ -532,8 +641,7 @@ export function useEditorSave({
           const thumbnails = await captureAllPlateThumbnails(exportState, { force: true, updateLive: false })
           const retarget = sliceConfigRef.current?.retargetTarget ?? undefined
           const payload: ExportArrangedThreeMf = {
-            baseFileId,
-            baseVersionId,
+            ...baseBakeFields,
             name: fileName,
             sceneEdit: buildSceneEditOut(exportState, { thumbnails }),
             objectProcessOverrides: collectObjectProcessOverrides(exportState),
@@ -554,10 +662,12 @@ export function useEditorSave({
         setSaving(false)
       }
     })()
-  }, [baseFileId, baseVersionId, buildSceneEditOut, captureAllPlateThumbnails, worldFootprintCenterFor, collectObjectProcessOverrides, collectProcessSettingOverrides, collectMachineSettingOverrides, collectFilamentSettingOverrides, stateRef, sliceConfigRef, saveTarget])
+  }, [baseBakeFields, buildSceneEditOut, captureAllPlateThumbnails, worldFootprintCenterFor, collectObjectProcessOverrides, collectProcessSettingOverrides, collectMachineSettingOverrides, collectFilamentSettingOverrides, stateRef, sliceConfigRef, saveTarget])
 
   return {
     savedFile,
+    contentBase: pinnedContentBase,
+    stageSnapshotFor,
     saving,
     saveAsOpen,
     setSaveAsOpen,

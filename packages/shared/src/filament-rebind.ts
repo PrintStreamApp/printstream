@@ -29,7 +29,7 @@ import { canonicalBambuModelKey } from './bambu-model-keys.js'
 import { filamentKeyWidth, filamentVariantsPerSlot } from './variant-options.js'
 import { filamentIdForPresetName } from './repairs/filament-ids.js'
 import { filamentSettingsCatalog, FILAMENT_SETTING_KEYS, isFilamentIdentitySettingKey } from './filament-settings.js'
-import { FILAMENT_PRESET_DEFAULTS } from './generated/preset-options.generated.js'
+import { FILAMENT_PRESET_DEFAULTS, FILAMENT_PRESET_OPTIONS } from './generated/preset-options.generated.js'
 import type { ProcessConfig } from './process-settings.js'
 import { extractChangedFromSystemKeys, extractFilamentOverriddenKeys, filamentSlotCount, withChangedFromSystemSlot } from './three-mf-project-config.js'
 
@@ -59,6 +59,17 @@ export interface FilamentSlotRebind {
 export function filamentPresetFamilyName(name: string): string {
   const at = name.indexOf(' @')
   return (at >= 0 ? name.slice(0, at) : name).trim()
+}
+
+/**
+ * Whether a project key is a filament option a rebind may rewrite.
+ *
+ * The generated set is every `this->add()` in the vendored BambuStudio source, which is the same
+ * authority `full_config` projects into a saved project; the catalogue is unioned in only so a key
+ * the generator has not caught up with is not silently dropped from a rebind.
+ */
+function isRebindableFilamentKey(key: string): boolean {
+  return FILAMENT_PRESET_OPTIONS.has(key) || FILAMENT_SETTING_KEYS.has(key)
 }
 
 /** First string of a scalar-or-array config value; null when neither. */
@@ -268,7 +279,14 @@ export function rebindProjectFilamentPhysics(
 
   const next: Record<string, unknown> = { ...record }
   for (const key of Object.keys(record)) {
-    if (!FILAMENT_SETTING_KEYS.has(key) || isFilamentIdentitySettingKey(key)) continue
+    // Gated on every filament option BambuStudio DECLARES, not on the tune dialog's catalogue.
+    // The catalogue is scoped to what that dialog exposes, and the keys it omits are exactly the
+    // ones this pass kept missing: a PLA project sliced as PETG rebound its name, id and
+    // temperatures but left `filament_dev_ams_drying_temperature` at PLA's 45 under a PETG name,
+    // because the drying block is not a dialog setting. Same trap the default lookup below already
+    // hit (`filament_extruder_compatibility`), and the same one `bambu-preset-codec.ts` documents.
+    // The union keeps any catalogue key the vendored generator has not caught up with.
+    if (!isRebindableFilamentKey(key) || isFilamentIdentitySettingKey(key)) continue
     const value = record[key]
     if (typeof value !== 'string' && !Array.isArray(value)) continue
     // How wide this option is ALLOWED to be here, from BambuStudio's per-option rule, never from
@@ -356,6 +374,31 @@ export function rebindProjectFilamentPhysics(
       continue
     }
     next[key] = columns.flat()
+  }
+
+  // The MATERIAL is the third part of the same fact as the name and the id below, so all three move
+  // together or none do. Left behind, it made a slice that changed material hand the engine a
+  // project naming `Generic PETG` while typed `PLA`: the physics rebound, the type did not, and only
+  // the command-line preset file kept the print honest, so a re-slice of the preserved project got
+  // PETG-as-PLA.
+  //
+  // Gated on the RENAME, not on the config. A caller may supply a config without a `settingsId`
+  // (the browser retarget flattens a workspace preset the slot already names, to rebind its physics
+  // for the new machine) and that slot is not changing material: writing its type from the config
+  // while the name and id stay put is precisely the disagreement this exists to prevent, and one
+  // BambuStudio answers by fabricating a defaults-only `(<project>.3mf)` preset.
+  const types = Array.isArray(record.filament_type) ? [...record.filament_type] : null
+  if (types && types.length === identityCount) {
+    let renamedAny = false
+    slots.forEach((slot, index) => {
+      if (!slot.settingsId) return
+      const presetType = scalarAt(slot.config?.filament_type, 0)
+      if (presetType) {
+        types[index] = presetType
+        renamedAny = true
+      }
+    })
+    if (renamedAny) next.filament_type = types
   }
 
   const settingsIds = Array.isArray(record.filament_settings_id) ? [...record.filament_settings_id] : null

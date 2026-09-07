@@ -148,3 +148,36 @@ test('shouldClearPendingDispatchedPrint keeps the starting-soon state for idle p
     subStage: '0'
   }), false)
 })
+test('getPrinterAttentionSummary surfaces a real device error', () => {
+  assert.deepEqual(getPrinterAttentionSummary({
+    deviceError: { code: '0C008043', message: 'Nozzle clumping detected' },
+    hmsErrors: []
+  }), {
+    kind: 'deviceError',
+    code: '0C008043',
+    message: 'Nozzle clumping detected',
+    count: 1
+  })
+})
+
+test('getPrinterAttentionSummary ignores a cancellation record', () => {
+  // "The task was canceled." is how the printer reports a cancellation, not a
+  // fault. Surfacing it put a warning row with a Clear button on the card of a
+  // printer the user had just deliberately stopped.
+  assert.equal(getPrinterAttentionSummary({
+    deviceError: { code: '0300400C', message: 'The task was canceled.' },
+    hmsErrors: []
+  }), null)
+})
+
+test('getPrinterAttentionSummary still reports HMS alerts alongside a cancellation', () => {
+  assert.deepEqual(getPrinterAttentionSummary({
+    deviceError: { code: '0300400C', message: 'The task was canceled.' },
+    hmsErrors: [{ code: '0700220000020001', message: 'AMS A Slot 3 filament has run out.' }]
+  }), {
+    kind: 'hmsError',
+    code: '0700220000020001',
+    message: 'AMS A Slot 3 filament has run out.',
+    count: 1
+  })
+})

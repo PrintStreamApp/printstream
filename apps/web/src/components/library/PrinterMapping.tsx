@@ -32,6 +32,7 @@ import {
 } from '../../lib/libraryViewHelpers'
 import { filterTrayGroupsForFilament } from '../../lib/printerTrayMapping'
 import { OverflowTooltipText } from '../OverflowTooltipText'
+import { PresetNameWithBrandMark } from '../BambuBrandMark'
 import { AmsSpoolSetupDialog, type AmsSpoolSetupTarget } from '../AmsSpoolSetupDialog'
 
 /**
@@ -160,11 +161,16 @@ export function PrinterMapping({
                   }}
                 />
                 <Stack spacing={0} sx={{ minWidth: 0, flex: '1 1 0' }}>
+                  {/* The FILE's required material, which names its brand exactly as the slot
+                      options on the right do, so the two sides of a mapping row must mark it the
+                      same way or the same material reads as two. The tooltip keeps the full
+                      wording, "Bambu" included. */}
                   <OverflowTooltipText
                     level="body-xs"
                     sx={{ minWidth: 0 }}
                     noWrap
                     text={filamentPrimaryLabel}
+                    formattedText={<PresetNameWithBrandMark name={filamentPrimaryLabel} />}
                   />
                   {filamentMetaLabel ? (
                     <OverflowTooltipText
@@ -410,8 +416,11 @@ function SlotOptionLabel({
           rowGap: 0.125
         }}
       >
+        {/* A genuine Bambu tray reads "Bambu PLA Basic · Jade White", so its brand becomes the mark
+            like everywhere else. "Unknown spool", "Empty", a tracked spool's own name and a custom
+            filament's bare type all lack the leading token and render untouched. */}
         <Typography level="body-xs" textColor={unknownSpool ? 'warning.300' : 'text.tertiary'} noWrap sx={{ minWidth: 0, gridColumn: '1 / 2' }}>
-          {filamentDetail}
+          <PresetNameWithBrandMark name={filamentDetail} />
         </Typography>
         {incompatibilityLabel && (
           <IncompatibilityWarningGlyph label={incompatibilityLabel} />

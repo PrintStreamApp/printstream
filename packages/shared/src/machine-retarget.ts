@@ -16,6 +16,7 @@
  * the runtime maps that depend on BOTH the machine topology and the project's filaments
  * (`filament_nozzle_map`, extruder variants, …). See docs/project-printer-retarget.md.
  */
+import { canonicalBambuModelKey } from './bambu-model-keys.js'
 import { processConfigValuesEqual, processSettingsCatalog } from './process-settings.js'
 import { PRINTER_PRESET_OPTIONS, PRINT_PRESET_OPTIONS } from './generated/preset-options.generated.js'
 import { repairFlushMultiplier, repairFlushVolumesMatrix } from './flush-volumes-matrix.js'
@@ -503,6 +504,108 @@ export const H2_DUAL_NOZZLE_MODEL_KEYS: ReadonlySet<string> = new Set(['H2D', 'H
  * slicer's machine-switch guard (heal-or-reject before slicing) and the API's save-side heal,
  * one definition so the two ends never disagree on what "intact" means.
  */
+/**
+ * Does a project already define `targetModel` COMPLETELY: the right machine, with the full topology
+ * that machine needs?
+ *
+ * "Same printer" is not "fully defined": a project can name `printer_model: H2D` while carrying
+ * none of H2D's extruder-indexed dual-nozzle arrays, which is the state that made the CLI refuse it
+ * or slice with no print volume. Callers use it to decide whether a same-model save still needs the
+ * machine authored in, so answering yes on an incomplete project silently skips the authoring.
+ *
+ * Unreadable or absent settings count as INCOMPLETE, which is the safe direction: that is what a
+ * from-scratch scaffold looks like, and it needs the machine written.
+ *
+ * Shared because both hosts bake now and a save that re-authors an unchanged machine is not a
+ * cosmetic difference: the full retarget rewrites the project's process values along with it.
+ */
+export function projectDefinesMachineCompletely(
+  projectSettings: ProfileRecord | null,
+  targetModel: string | null
+): boolean {
+  if (!projectSettings) return false
+  const model = canonicalBambuModelKey(
+    firstProfileString(projectSettings.printer_model) ?? firstProfileString(projectSettings.printer_settings_id)
+  )
+  if (!model) return false
+  const target = canonicalBambuModelKey(targetModel)
+  if (target && model !== target) return false
+  // Only the H2 family carries a topology beyond the plain machine fields.
+  return H2_DUAL_NOZZLE_MODEL_KEYS.has(model) ? hasDualNozzleMachineShape(projectSettings) : true
+}
+
+/**
+ * Does the project's embedded machine already carry the nozzle diameters a save targets?
+ *
+ * The companion question to {@link projectDefinesMachineCompletely}, which only compares the MODEL.
+ * A nozzle switch (0.4 to 0.6) keeps the model and changes the machine preset, so without this a
+ * save onto a derived target could never re-author the machine and the project kept the old nozzle.
+ *
+ * Compared as SETS: the target lists the diameters in play while the project lists them per
+ * extruder, so an H2D's [0.4, 0.4] must still match a target of [0.4]. An empty target answers TRUE
+ * (nothing was asked for), and unreadable settings answer FALSE: author rather than assume.
+ */
+export function projectMatchesNozzleDiameters(
+  projectSettings: ProfileRecord | null,
+  targetNozzleDiameters: readonly number[]
+): boolean {
+  if (targetNozzleDiameters.length === 0) return true
+  if (!projectSettings) return false
+  const embedded = Array.isArray(projectSettings.nozzle_diameter)
+    ? (projectSettings.nozzle_diameter as unknown[])
+      .map((entry) => Number.parseFloat(String(entry)))
+      .filter((value) => Number.isFinite(value))
+    : []
+  if (embedded.length === 0) return false
+  const wanted = new Set(targetNozzleDiameters)
+  return embedded.every((value) => wanted.has(value)) && [...wanted].every((value) => embedded.includes(value))
+}
+
+/**
+ * Does a resolved PROCESS preset declare that it fits the machine preset being authored?
+ *
+ * BambuStudio's own test, ported: compatibility is a literal `compatible_printers` NAME list, not a
+ * model comparison and not a nozzle comparison (`Preset.cpp:805-809`). Every bundled Bambu process
+ * preset carries the list, and it is nozzle-specific because the nozzle is part of a printer
+ * preset's identity there: `0.20mm Standard @BBL A1` lists exactly `Bambu Lab A1 0.4 nozzle`.
+ *
+ * A preset that declares NOTHING fits everything, which is the same "absence of evidence is not a
+ * mismatch" rule the rest of the compatibility code follows, and is what keeps a hand-written or
+ * project-embedded preset from being refused for saying too little.
+ *
+ * Used as a WRITE guard rather than a picker: authoring a process preset the machine does not accept
+ * bakes settings the engine will refuse or silently fall back from, into a file the user keeps.
+ */
+export function processPresetFitsMachine(
+  processConfig: ProfileRecord | null | undefined,
+  machinePresetName: string | null | undefined
+): boolean {
+  if (!processConfig || !machinePresetName) return true
+  const declared = processConfig.compatible_printers
+  const names = Array.isArray(declared)
+    ? declared.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+    : typeof declared === 'string' && declared.trim() ? [declared] : []
+  if (names.length === 0) return true
+  return names.some((name) => name.trim() === machinePresetName.trim())
+}
+
+/** First non-empty string of a config value, which may be a scalar or a vector. */
+/**
+ * The first non-empty string of a scalar-or-vector config value.
+ *
+ * Exported because a config value is a scalar in one preset and a per-slot vector in the next, so
+ * every reader of one needs this, and it had grown four byte-identical copies (here plus three in
+ * the editor's bake modules). Trimmed, and an all-blank vector reads as absent.
+ */
+export function firstProfileString(value: unknown): string | null {
+  if (typeof value === 'string' && value.trim()) return value.trim()
+  if (Array.isArray(value)) {
+    const first = value.find((entry) => typeof entry === 'string' && entry.trim())
+    return typeof first === 'string' ? first.trim() : null
+  }
+  return null
+}
+
 export function hasDualNozzleMachineShape(projectSettings: ProfileRecord): boolean {
   return stringArray(projectSettings.physical_extruder_map).length >= 2
     && stringArray(projectSettings.extruder_nozzle_stats).length >= 2

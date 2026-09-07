@@ -9,8 +9,10 @@
  *
  * The function returns a discriminated result describing the dispatch so the
  * route handler can write the audit-log annotation and HTTP response without
- * needing the orchestration internals. External-started jobs are rejected the
- * same way the route previously rejected them.
+ * needing the orchestration internals. Two rejections are deliberately distinct:
+ * a genuinely external job cannot be restarted at all, while a library job whose
+ * retained copy was reclaimed is refused as unavailable. They used to collapse
+ * into the first, which blamed the wrong thing.
  *
  * Print-start options come from `print-job-options.ts`, which the jobs DTO also
  * reads, so this path and the print dialog restore the same job identically. The
@@ -69,13 +71,19 @@ interface FileReprintResult {
 export type ReprintResult = CalibrationReprintResult | FileReprintResult
 
 /**
- * Maps a stored job's source type + file id to its re-print kind. Externally
- * started jobs and library jobs that lost their file id resolve to 'external'.
+ * Maps a stored job's source type to its re-print kind.
+ *
+ * PROVENANCE only. Whether the artifact is still on hand is a separate question, answered by
+ * `fileId`, and the two must not be folded together: a library job with no `fileId` used to
+ * resolve to 'external', which made history label a print we dispatched "Started outside
+ * PrintStream" and made the re-print route refuse it for a reason that was not true. A row
+ * arrives here without a `fileId` when its retained snapshot was reclaimed, so it is a file job
+ * with a MISSING file, never a foreign one. Callers that need the artifact check `fileId`.
  */
-export function toPrintJobKind(sourceType: string | null | undefined, fileId: string | null): ReprintJobKind {
+export function toPrintJobKind(sourceType: string | null | undefined): ReprintJobKind {
   if (sourceType === 'calibration') return 'calibration'
   if (sourceType === 'external') return 'external'
-  return fileId ? 'file' : 'external'
+  return 'file'
 }
 
 /** Parse the persisted JSON AMS mapping back into a tray-index array. */
@@ -151,7 +159,7 @@ export async function reprintJobFromRow(input: {
   assertPermission: (kind: ReprintJobKind) => void
 }): Promise<ReprintResult> {
   const { row, overrides, workspaceId, assertPermission } = input
-  const jobKind = toPrintJobKind(row.sourceType, row.fileId)
+  const jobKind = toPrintJobKind(row.sourceType)
 
   if (jobKind === 'calibration') {
     assertPermission(jobKind)
@@ -182,7 +190,9 @@ export async function reprintJobFromRow(input: {
 
   if (jobKind === 'file') {
     assertPermission(jobKind)
-    if (!row.fileId) throw badRequest('File details are missing for this job')
+    // Reached when the retained copy was reclaimed. Says what is actually wrong: this used to
+    // fall through to the external rejection, which blamed the wrong thing entirely.
+    if (!row.fileId) throw badRequest('The stored copy of this print is no longer available, so it cannot be reprinted')
 
     const restartOptions = buildReprintOptions(row, overrides)
 

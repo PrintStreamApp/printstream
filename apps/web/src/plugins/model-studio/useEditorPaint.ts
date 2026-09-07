@@ -107,6 +107,16 @@ export interface EditorPaint {
     /** The stroke's previous world hit ON THIS MESH; see `applySupportPaintBrush`'s `previousPoint`. */
     previousWorldPoint?: THREE.Vector3 | null
   ) => void>
+  /**
+   * What a region-based paint tool (smart fill, bucket, single triangle) would change if clicked
+   * at this face, so the viewport can preview it. Null when the active tool sweeps a radius
+   * instead, or when the click would change nothing. See the implementation for why it runs the
+   * real fill against a copy rather than reimplementing the flood.
+   */
+  previewPaintRegionRef: MutableRefObject<(
+    mesh: THREE.Mesh,
+    faceIndex: number | null
+  ) => { codes: SupportPaintCodes; state: number } | null>
   clearSelectedPaint: () => void
 }
 
@@ -467,6 +477,111 @@ export function useEditorPaint(params: EditorPaintParams): EditorPaint {
   const applyPaintStrokeRef = useRef(applyPaintStroke)
   applyPaintStrokeRef.current = applyPaintStroke
 
+  /**
+   * The triangles a FACE-PICKING paint tool would change if the pointer clicked where it is.
+   *
+   * These tools (smart fill, bucket, single triangle) pick a REGION rather than sweeping a radius,
+   * so the brush ring means nothing for them and the viewport drew nothing at all: the user aimed a
+   * fill with no idea what it would swallow until after the click. This answers "what would this
+   * click do?" without doing it.
+   *
+   * Computed by running the REAL fill against a throwaway copy of the slot's codes and diffing, so
+   * the preview can never disagree with the click that follows: no second implementation of the
+   * flood to drift out of step. The copy is why this is safe to call on every pointer move; the
+   * caller still caches on the seed triangle so the BFS does not re-run while the pointer sits on
+   * one face.
+   *
+   * Returns null when the tool is not region-based, when nothing would change (already painted that
+   * state), or when the mesh carries no paintable scan.
+   */
+  const previewPaintRegion = useCallback((
+    mesh: THREE.Mesh,
+    faceIndex: number | null
+  ): { codes: SupportPaintCodes; state: number } | null => {
+    const state = stateRef.current
+    const channel = activePaintChannelRef.current
+    if (!state || !channel || faceIndex == null) return null
+    const tool = effectivePaintTool(channel, paintToolRef.current)
+    if (tool !== 'fill' && tool !== 'bucket' && tool !== 'triangle') return null
+
+    const mode = paintBrushModeRef.current
+    let paintState: number
+    if (mode === 'eraser') paintState = 0
+    else if (channel === 'color') {
+      const filamentId = paintColorFilamentIdRef.current
+      if (filamentId == null || filamentId < 1 || filamentId > 15) return null
+      paintState = filamentId
+    } else paintState = mode === 'enforcer' ? 1 : 2
+
+    const key = meshPaintKey(mesh)
+    if (!key) return null
+    const geometry = mesh.geometry as THREE.BufferGeometry
+    const scan = getTriangleScanData(geometry)
+    if (!scan) return null
+    const stateKey = PAINT_CHANNEL_SPECS[channel].stateKey
+    const existing = state[stateKey]?.[key] ?? getGeometryTrianglePaint(geometry, channel) ?? {}
+    // The copy IS the isolation: every apply below mutates it, and the caller never sees it.
+    const before: SupportPaintCodes = { ...existing }
+    const codes: SupportPaintCodes = { ...existing }
+
+    // The overhang gate belongs to the preview too, or a fill on "overhangs only" would advertise
+    // faces it will refuse to paint.
+    let triangleAllowed: ((index: number) => boolean) | undefined
+    if (channel === 'supports' && paintOnOverhangsRef.current) {
+      mesh.updateWorldMatrix(true, false)
+      const e = new THREE.Matrix3().getNormalMatrix(mesh.matrixWorld).elements
+      const limit = -Math.cos((paintOverhangAngleRef.current * Math.PI) / 180)
+      triangleAllowed = (i) => {
+        const nx = scan.normals[i * 3]!
+        const ny = scan.normals[i * 3 + 1]!
+        const nz = scan.normals[i * 3 + 2]!
+        const wx = e[0]! * nx + e[3]! * ny + e[6]! * nz
+        const wy = e[1]! * nx + e[4]! * ny + e[7]! * nz
+        const wz = e[2]! * nx + e[5]! * ny + e[8]! * nz
+        const length = Math.sqrt(wx * wx + wy * wy + wz * wz) || 1
+        return wz / length < limit
+      }
+    }
+
+    if (tool === 'fill') {
+      applySmartFill({
+        codes,
+        scan,
+        seedTriangle: faceIndex,
+        angleDeg: paintSmartAngleRef.current,
+        state: paintState,
+        ...(triangleAllowed ? { triangleAllowed } : {})
+      })
+    } else if (tool === 'bucket') {
+      applyBucketFill({ codes, scan, seedTriangle: faceIndex, state: paintState })
+    } else {
+      applySingleTrianglePaint({ codes, seedTriangle: faceIndex, state: paintState })
+    }
+
+    // Only the DIFFERENCE: highlighting triangles that already carry this state would draw the
+    // whole object on a second pass over the same region and say nothing about the click.
+    const region: SupportPaintCodes = {}
+    let any = false
+    for (const triangle of Object.keys(codes)) {
+      const index = Number.parseInt(triangle, 10)
+      if (!Number.isInteger(index)) continue
+      if (codes[index] === before[index]) continue
+      region[index] = codes[index]!
+      any = true
+    }
+    // An ERASE preview has to show what it clears, and those triangles are absent from `codes`
+    // afterwards, so they are found by walking what was there before.
+    for (const triangle of Object.keys(before)) {
+      const index = Number.parseInt(triangle, 10)
+      if (!Number.isInteger(index) || codes[index] !== undefined) continue
+      region[index] = before[index]!
+      any = true
+    }
+    return any ? { codes: region, state: paintState } : null
+  }, [stateRef, activePaintChannelRef, paintToolRef, paintBrushModeRef, paintColorFilamentIdRef, paintOnOverhangsRef, paintOverhangAngleRef, paintSmartAngleRef])
+  const previewPaintRegionRef = useRef(previewPaintRegion)
+  previewPaintRegionRef.current = previewPaintRegion
+
   /** Remove the ACTIVE channel's paint from the selected object's printed parts. */
   const clearSelectedPaint = useCallback(() => {
     const state = stateRef.current
@@ -530,6 +645,7 @@ export function useEditorPaint(params: EditorPaintParams): EditorPaint {
     refreshPaintOverlays,
     refreshPaintOverlaysRef,
     applyPaintStrokeRef,
+    previewPaintRegionRef,
     clearSelectedPaint
   }
 }

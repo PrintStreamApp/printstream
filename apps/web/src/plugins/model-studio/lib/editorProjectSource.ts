@@ -22,6 +22,7 @@ import { toThreeMfIndexDto } from '@printstream/shared/three-mf'
 import { buildApiUrl } from '../../../lib/apiUrl'
 import { MODEL_FETCH_HEADERS_MS, fetchModelBytes } from './modelFetch'
 import { openClientThreeMfProjectFromBytes, type ClientThreeMfProject } from './clientThreeMfProject'
+import type { ThreeMfArchive } from './threeMfArchive'
 
 /**
  * Body-stall budget for the archive, deliberately far above the mesh-entry default, and no retry.
@@ -76,6 +77,28 @@ export interface EditorProjectSource {
    * Optional, and null when the project carries no settings entry (a from-scratch scaffold).
    */
   loadProjectSettings?(): Promise<string | null>
+  /**
+   * Every entry name the opened archive holds.
+   *
+   * Needed to name a NEW archive entry without colliding: the names already in use are only fully
+   * visible here. Deriving them from the records that reference them misses an ORPHAN (artwork whose
+   * parts were all deleted, whose entry the copy pass still carries), and an appended entry never
+   * displaces one the copy pass already wrote, so reusing an orphan's name silently discards the new
+   * bytes and leaves the new part reopening as the old drawing.
+   */
+  listEntries?(): Promise<readonly string[]>
+  /**
+   * The inflated archive itself, for the BAKE.
+   *
+   * A save diffs its `SceneEdit` against the bytes the session opened, and this source is the only
+   * thing holding them. Null before the project has finished opening, which a save cannot reach:
+   * there is nothing to save until it has.
+   *
+   * Deliberately not an async open. A bake must author from the archive this session has been
+   * reading all along; re-fetching here would silently author from whatever the file holds NOW,
+   * which after an earlier save is this session's own output.
+   */
+  archive(): ThreeMfArchive | null
   /**
    * Release what the source holds (object URLs, the inflated archive). Only the creator of a
    * source may call this, a host that supplies its own owns its lifetime.
@@ -149,9 +172,11 @@ export function createArchiveProjectSource(resourceBase: string, fileName = 'pro
     // the next render, which the index landing already triggers.
     plateThumbnailUrl: (plateIndex) => opened?.plateThumbnailUrl(plateIndex) ?? null,
 
+    archive: () => opened?.archive ?? null,
     loadEmbeddedPresets: async () => readEmbeddedProjectPresets((await open()).archive),
 
     loadProjectSettings: async () => (await open()).archive.indexEntries().projectSettingsJson,
+    listEntries: async () => (await open()).archive.entryNames(),
 
     // Releases the archive and revokes its object URLs, and leaves the source RE-OPENABLE on
     // purpose: see `generation`.
@@ -177,7 +202,9 @@ export function createLocalProjectSource(project: ClientThreeMfProject): EditorP
     loadScene: async (plateIndex, printerModel) => project.sceneForPlate(plateIndex, printerModel as PrinterModel | null),
     loadEntry: (entryPath) => project.loadEntryBytes(entryPath),
     plateThumbnailUrl: (plateIndex) => project.plateThumbnailUrl(plateIndex),
+    archive: () => project.archive,
     loadEmbeddedPresets: async () => readEmbeddedProjectPresets(project.archive),
-    loadProjectSettings: async () => project.archive.indexEntries().projectSettingsJson
+    loadProjectSettings: async () => project.archive.indexEntries().projectSettingsJson,
+    listEntries: async () => project.archive.entryNames()
   }
 }

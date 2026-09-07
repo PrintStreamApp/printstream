@@ -120,6 +120,81 @@ test('an Escape the dialog declines leaves its history entry alone', async () =>
     'Back did not reach the dialog: its history entry was spent by the declined Escape')
 })
 
+/**
+ * A DECLINED close must not be re-fired by the next dialog opened over it.
+ *
+ * This is the reported "asked twice to stay or discard". The wrapper used to pop the dialog's own
+ * history entry the moment a close was REQUESTED, before the consumer had answered. Decline it --
+ * the 3MF editor's "Keep editing" -- and the dialog was left open with no entry of its own, so the
+ * next dialog opened inside it pushed `[editor, inner]` over an entry that said `[]`. Closing that
+ * inner dialog popped to a stack prefixing the editor's, which reads as "close everything above
+ * it", and the editor was asked to close again over a gesture nobody made.
+ *
+ * Escape was exempted from the hop first, which fixed backing out of a TOOL and left this: the X
+ * and the scrim still spent the entry before the discard prompt had been answered.
+ */
+test('a dialog opened over a declined close does not re-fire it', async () => {
+  const reasons: string[] = []
+  const { ModalClose } = await import('@mui/joy')
+  render(createElement(BackAwareModal, {
+    open: true,
+    // Declines: records the reason and stays open, exactly as the editor does while its
+    // "Discard unsaved changes?" prompt is unanswered (and after "Keep editing").
+    onClose: (_event: unknown, reason: string) => { reasons.push(reason) },
+    children: createElement('div', null, createElement(ModalClose, null))
+  }))
+
+  const closeButton = dom.window.document.querySelector('.MuiModalClose-root')
+  assert.ok(closeButton, 'the close button must mount for this to mean anything')
+  closeButton.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  assert.deepEqual(reasons, ['closeClick'], 'the X must ask once')
+
+  // Anything the user opens inside it next and closes again: settings, save-as, a material picker.
+  const inner = render(createElement(BackAwareModal, {
+    open: true,
+    onClose: () => {},
+    children: createElement('div', null, 'inner dialog')
+  }))
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  inner.rerender(createElement(BackAwareModal, {
+    open: false,
+    onClose: () => {},
+    children: createElement('div', null, 'inner dialog')
+  }))
+  await new Promise((resolve) => setTimeout(resolve, 50))
+
+  cleanup()
+  assert.deepEqual(reasons, ['closeClick'], 'closing the inner dialog must not re-ask the outer one')
+})
+
+/**
+ * The close button closes the dialog BY ITSELF, with no `onClick` of its own.
+ *
+ * Joy's `ModalClose` reads the modal's `onClose` off `CloseModalContext` and calls it with
+ * `'closeClick'`, then calls any `onClick` the consumer passed. So a consumer that wires its own
+ * close handler onto the button runs the whole close path twice per click. This pins the half that
+ * makes passing one unnecessary: without an `onClick`, one click still produces exactly one close.
+ */
+test('the close button closes the dialog on its own, exactly once', async () => {
+  const reasons: string[] = []
+  const { ModalClose } = await import('@mui/joy')
+  render(createElement(BackAwareModal, {
+    open: true,
+    onClose: (_event: unknown, reason: string) => { reasons.push(reason) },
+    children: createElement('div', null, createElement(ModalClose, null))
+  }))
+
+  const closeButton = dom.window.document.querySelector('.MuiModalClose-root')
+  assert.ok(closeButton, 'the close button must mount for this to mean anything')
+  closeButton.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+  // The close is routed through a real `history.back()`, so `onClose` lands on a later task.
+  await new Promise((resolve) => setTimeout(resolve, 50))
+
+  cleanup()
+  assert.deepEqual(reasons, ['closeClick'], 'one click on the X must be one close')
+})
+
 /** The wrapper itself: the one module that may mount Joy's `Modal`. */
 const OWNER = path.join('components', 'BackAwareModal.tsx')
 
@@ -182,5 +257,41 @@ test('dialogs mount BackAwareModal, never Joy Modal directly', async () => {
     offenders,
     [],
     `Use <BackAwareModal> from components/BackAwareModal instead of Joy's Modal:\n  ${offenders.join('\n  ')}`
+  )
+})
+
+/**
+ * A REGRESSION guard: `ModalClose` never carries an `onClick`.
+ *
+ * The button is already wired to the dialog it sits in -- Joy reads the modal's `onClose` off
+ * `CloseModalContext` and calls it with `'closeClick'` BEFORE handing the event to any `onClick`
+ * the consumer passed. So `<ModalClose onClick={close} />` runs the close path twice per click,
+ * and it reads as the obvious way to wire the button up, which is why two surfaces did it.
+ *
+ * On an unconditional close the second run is an invisible no-op, which is exactly why this has to
+ * fail the build rather than be noticed: on a CONDITIONAL close it is not. Measured on the 3MF
+ * editor, one click on an X wired this way raised "Discard unsaved changes?" TWICE -- the second
+ * queued behind the first by `PromptDialogProvider`, so it arrived the moment the user answered,
+ * over a gesture they made once.
+ */
+test('ModalClose never carries its own onClick', async () => {
+  const offenders: string[] = []
+
+  for await (const file of walk(SRC_ROOT)) {
+    const relative = path.relative(SRC_ROOT, file)
+    if (relative.includes('.test.') || relative.includes('.testkit.')) continue
+
+    const source = await readFile(file, 'utf8')
+    // The element's whole prop list, which routinely wraps across lines.
+    for (const match of source.matchAll(/<ModalClose\b[^>]*\/?>/g)) {
+      if (!/\bonClick\s*=/.test(match[0]!)) continue
+      offenders.push(`${relative}:${source.slice(0, match.index).split('\n').length}`)
+    }
+  }
+
+  assert.deepEqual(
+    offenders,
+    [],
+    `<ModalClose> already calls the modal's onClose; drop the onClick or the dialog closes twice:\n  ${offenders.join('\n  ')}`
   )
 })

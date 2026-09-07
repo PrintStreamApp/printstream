@@ -1,20 +1,30 @@
 /**
  * Where a saved project goes.
  *
- * The editor produces a `SceneEdit`; what happens next differs entirely by host. The library host
- * POSTs it and the server bakes and persists a `LibraryFile` version. A host with only a local file
- * bakes in the tab and writes bytes back to the user's disk, nothing is persisted anywhere, and
- * there is no library to invalidate or slice controller to notify.
+ * BOTH hosts bake in the tab now. What differs is where the finished bytes land: the library host
+ * uploads them and the server writes a `LibraryFile` version, while a host with only a local file
+ * writes them back to the user's disk, persists nothing, and has no library to invalidate or slice
+ * controller to notify.
+ *
+ * The bake moved off the server because the server had to be TOLD which bytes a `SceneEdit` was a
+ * diff against, and that answer could be wrong: the file's head moves when the session saves, so a
+ * later bake re-applied the edit over its own output. `partOrder` and `removedParts` are not
+ * idempotent under that, and a re-applied reorder permutes an object's volumes while the positional
+ * per-part `extruder` writes stay put, so parts trade materials silently. The browser holds the
+ * bytes it opened, so the question has no way to be answered wrongly.
  *
  * That last part is why {@link EditorSaveTarget.isLibraryBacked} exists rather than the hook
  * sniffing for a controller: the post-save choreography around a library save is order-sensitive
  * (see `useEditorSave`) and must be skipped wholesale, not partially, when there is no library.
  */
-import type { ExportArrangedThreeMf, SaveArrangedThreeMf } from '@printstream/shared'
+import type { ExportArrangedThreeMf, SaveArrangedThreeMf, SceneEdit, SlicingPresetSummary } from '@printstream/shared'
 import { apiFetch } from '../../../lib/apiClient'
-import { buildApiUrl } from '../../../lib/apiUrl'
-import { readWorkspaceContextHeader } from '../../../lib/workspaceContext'
-import { fetchModelBytes } from './modelFetch'
+import { uploadLibraryFileInChunks } from '../../../lib/chunkedLibraryUpload'
+import { bakeClientThreeMf } from './clientThreeMfBake'
+import { WORKSPACE_RETARGET_RESOLVERS } from './browserMachineRetarget'
+import { bakeOptionsFor, bakePassesFor } from './editorBakePasses'
+import { importIdsReferencedBy, type EditorImportStore } from './editorImportStore'
+import type { ThreeMfArchive } from './threeMfArchive'
 
 /** What a completed save reports back. */
 export interface EditorSavedFile {
@@ -43,43 +53,156 @@ export interface EditorSaveTarget {
   /** Bake without persisting, for the "download a copy" paths. */
   exportBytes(payload: ExportArrangedThreeMf): Promise<Uint8Array>
   /**
+   * Bake and stage the bytes so something server-side can read them, WITHOUT saving the project.
+   *
+   * How a slice of unsaved editor work reaches the slicer. The row is hidden, content-deduped and
+   * reclaimed when nothing references it, so the user's project gains no version and nothing
+   * appears in their library. Absent on a host with no library to stage into, which is also a host
+   * that cannot slice.
+   *
+   * @returns the staged file's id.
+   */
+  stageSnapshot?(input: StageSnapshotInput): Promise<string>
+  /**
    * True when a save lands in the library, so the caller should invalidate library queries and tell
    * the slice controller to rebase its material overlay. False for a local file.
    */
   readonly isLibraryBacked: boolean
 }
 
-/** The library-backed target: the server bakes and persists, as it always has. */
-export const apiSaveTarget: EditorSaveTarget = {
-  isLibraryBacked: true,
+/**
+ * What to bake and stage for a slice.
+ *
+ * Deliberately NOT a save payload. `bridgeSourceFileId` is not a bake target and must not read like
+ * one: nothing is written to that file, it only lends its bridge, because library bytes are
+ * bridge-owned and the browser has no bridge of its own to name.
+ *
+ * The overrides are carried explicitly because the SERVER used to apply them on the slice path, and
+ * only inside its `if (sceneEdit)` branch. With the bytes baked here there is no edit left to send,
+ * so anything that branch did has to be baked in instead or it is silently dropped.
+ */
+export interface StageSnapshotInput {
+  sceneEdit: SceneEdit
+  bridgeSourceFileId: string | null
+  objectProcessOverrides?: Record<string, Record<string, string | string[]>> | undefined
+  processSettingOverrides?: Record<string, string | string[]> | undefined
+  filamentSettingOverrides?: Record<string, Record<string, string | string[]>> | undefined
+  retarget?: SaveArrangedThreeMf['retarget']
+  slicerTargetId?: string | null | undefined
+}
 
-  async persist(payload) {
-    const { file, archivedVersionId } = await apiFetch<{
-      file: { id: string; name: string }
-      archivedVersionId?: string | null
-    }>('/api/editor/save', {
-      method: 'POST',
-      body: payload
-    })
-    return { ...file, archivedVersionId: archivedVersionId ?? null }
-  },
+export interface ApiSaveTargetOptions {
+  /** The bytes this session opened, which every bake authors from. See `editorProjectSource.ts`. */
+  archive: () => ThreeMfArchive | null
+  /** Staged geometry the `SceneEdit` refers to. */
+  importStore: EditorImportStore
+  /** The open project's name, for the upload session. See `persist` for why it is cosmetic. */
+  projectName: () => string
+}
 
-  async exportBytes(payload) {
-    const workspaceContext = readWorkspaceContextHeader()
-    // Stall-guarded (see `modelFetch`): a baked 3MF is large enough that a wedged transport would
-    // otherwise hang the export with no error.
-    return fetchModelBytes(buildApiUrl('/api/editor/export-3mf'), {
-      method: 'POST',
-      credentials: 'include',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(workspaceContext ? { 'X-PrintStream-Workspace': workspaceContext } : {})
-      },
-      body: JSON.stringify(payload)
-    })
+/**
+ * The workspace's filament catalogue, fetched once per editor session and AWAITED before it is read.
+ *
+ * Only a machine retarget reads it, to pick each slot's rebind target, so it is fetched on the
+ * first save that needs one rather than on open, and the promise is cached so later saves reuse it.
+ *
+ * Awaited deliberately. Firing the request and reading a mutable array through a getter looks
+ * equivalent and is not: a save issued while the request is in flight sees an EMPTY catalogue, no
+ * slot finds a rebind target, and the retargeted project silently keeps the source machine's
+ * filament presets. That is a save the user made deliberately, answered wrongly, with nothing
+ * reported.
+ *
+ * An unreachable catalogue answers EMPTY rather than throwing: a rebind is an improvement pass, and
+ * the save it rides must not fail because the list could not be read.
+ */
+function createFilamentCatalogue(): () => Promise<readonly SlicingPresetSummary[]> {
+  let pending: Promise<readonly SlicingPresetSummary[]> | null = null
+  return () => {
+    pending ??= apiFetch<{ profiles: SlicingPresetSummary[] }>('/api/slicing/profiles')
+      .then((body) => body.profiles as readonly SlicingPresetSummary[])
+      .catch(() => [])
+    return pending
   }
 }
 
-export function createApiSaveTarget(): EditorSaveTarget {
-  return apiSaveTarget
+/**
+ * The library-backed target: bake in the tab, upload the bytes, let the server write the version.
+ */
+export function createApiSaveTarget(options: ApiSaveTargetOptions): EditorSaveTarget {
+  const filamentPresets = createFilamentCatalogue()
+  const bake = async (payload: SaveArrangedThreeMf | ExportArrangedThreeMf): Promise<Uint8Array> => {
+    const archive = options.archive()
+    // A null archive means `bakeClientThreeMf` writes a from-scratch project: correct for a brand-new
+    // one, and correct for an `ignoreBaseContent` save, which says outright that it carries none of
+    // the base. It is CATASTROPHIC for anything else, because the upload addresses an existing row
+    // by id, so the near-empty result lands as a new VERSION of the user's project. The source can
+    // legitimately be released while the editor is still open (its `dispose` nulls the handle, and
+    // React StrictMode fires effect cleanups spuriously), so this is reachable without a bug
+    // upstream. Refuse rather than bake: the save fails loudly and the project stays intact.
+    if (!archive && payload.baseFileId != null && !('ignoreBaseContent' in payload && payload.ignoreBaseContent)) {
+      throw new Error('The project this edit was opened from is no longer available; reopen it and save again.')
+    }
+    const { bytes } = await bakeClientThreeMf(
+      archive,
+      payload.sceneEdit,
+      await options.importStore.importsForBake(undefined, importIdsReferencedBy(payload.sceneEdit)),
+      bakeOptionsFor(payload),
+      // The WORKSPACE resolvers, which reach this workspace's own presets as well as the built-ins.
+      // That is the whole difference from the public host.
+      bakePassesFor(payload, { resolvers: WORKSPACE_RETARGET_RESOLVERS, filamentPresets })
+    )
+    return bytes
+  }
+
+  return {
+    isLibraryBacked: true,
+
+    async persist(payload) {
+      const bytes = await bake(payload)
+      // For a new VERSION the name is cosmetic: the addressed row keeps its own, precisely because
+      // this session's copy of it may be stale. It still has to be a `.3mf` for the upload to
+      // classify the kind correctly.
+      const name = ensureThreeMfName(payload.name ?? options.projectName())
+      const uploaded = await uploadLibraryFileInChunks(new File([bytes as BlobPart], name), {
+        // A new VERSION addresses the row by id, never by name: the project may have been renamed
+        // or moved since this session opened it, and a name match would then quietly write a second
+        // file instead of a version. A saveAs is a new file and names its destination instead.
+        ...(payload.mode === 'saveAs'
+          ? { folderId: payload.folderId ?? null, bridgeId: payload.bridgeId ?? null }
+          : { targetFileId: payload.baseFileId }),
+      })
+      return {
+        id: uploaded.file.id,
+        name: uploaded.file.name,
+        archivedVersionId: uploaded.archivedVersionId
+      }
+    },
+
+    async exportBytes(payload) {
+      return bake(payload)
+    },
+
+    async stageSnapshot(input) {
+      const bytes = await bake({
+        baseFileId: input.bridgeSourceFileId,
+        sceneEdit: input.sceneEdit,
+        ...(input.objectProcessOverrides ? { objectProcessOverrides: input.objectProcessOverrides } : {}),
+        ...(input.processSettingOverrides ? { processSettingOverrides: input.processSettingOverrides } : {}),
+        ...(input.filamentSettingOverrides ? { filamentSettingOverrides: input.filamentSettingOverrides } : {}),
+        ...(input.retarget ? { retarget: input.retarget } : {}),
+        ...(input.slicerTargetId ? { slicerTargetId: input.slicerTargetId } : {})
+      } as SaveArrangedThreeMf)
+      const uploaded = await uploadLibraryFileInChunks(
+        new File([bytes as BlobPart], ensureThreeMfName(options.projectName())),
+        { snapshot: true, targetFileId: input.bridgeSourceFileId }
+      )
+      return uploaded.file.id
+    }
+  }
+}
+
+/** A project must be named `.3mf`, whichever path produced the name. */
+function ensureThreeMfName(name: string | null | undefined): string {
+  const trimmed = (name ?? '').trim() || 'project.3mf'
+  return trimmed.toLowerCase().endsWith('.3mf') ? trimmed : `${trimmed}.3mf`
 }

@@ -55,6 +55,7 @@ import { CUSTOM_GCODE_PER_LAYER_ENTRY, sliceRecordFilamentIds, stringArray } fro
 import { repairObjectMeshesInModelEntry } from './mesh-repair.js'
 import { applyObjectProcessOverridesXml, objectHeadOf, readObjectProcessOverridesFromHead, rekeyObjectProcessOverrides, type ObjectProcessOverrides } from './object-overrides.js'
 import { BRIM_EAR_POINTS_ENTRY, parseRootModelObjectIdOrder } from './scene-parser.js'
+import { CUT_INFORMATION_ENTRY, serializeCutInformation, type CutInformationGroup } from './cut-information.js'
 import { LAYER_CONFIG_RANGES_ENTRY, serializeLayerConfigRanges } from './layer-config-ranges.js'
 import { LAYER_HEIGHTS_PROFILE_ENTRY, serializeLayerHeightProfiles } from './layer-height-profile.js'
 import { OBJECT_ORDINAL_SIDECAR_ENTRIES, remapObjectOrdinalSidecar } from './object-ordinal-sidecars.js'
@@ -364,6 +365,42 @@ export function planEditedThreeMf(
     ? serializeLayerConfigRanges([...(edit.heightRanges ?? []), ...importRanges], modelXml)
     : null
 
+  // Cut information. Unlike every other authored sidecar this one MERGES with the base rather than
+  // replacing it: height ranges and brim ears are wholly editor-owned, so the session's state is the
+  // truth, while a project can already carry cut groups made in BambuStudio for objects this session
+  // never touched. The base side is remapped first (see the sidecar loop below), because those
+  // inherited ordinals move when the object set does, and that remap is also what stops the merge
+  // describing one object twice: it drops the block of any base object this save does not write,
+  // while our groups only ever name imports, which take object ids no base object holds.
+  const cutGroups: CutInformationGroup[] = (edit.cutGroups ?? []).map((group) => ({
+    objectIds: group.importIds.flatMap((importId) => {
+      const objectId = documents.importIdToObjectId.get(importId)
+      return objectId != null ? [objectId] : []
+    }),
+    connectorCount: group.connectorCount,
+    connectors: group.connectors.flatMap((connector) => {
+      const objectId = documents.importIdToObjectId.get(connector.importId)
+      const componentObjectId = documents.importIdToObjectId.get(connector.meshImportId)
+      // A connector whose half or whose own mesh did not make it into this save describes nothing;
+      // dropping it is the same rule the serializer applies to a volume that no longer exists.
+      return objectId != null && componentObjectId != null
+        ? [{
+          objectId,
+          componentObjectId,
+          type: connector.type,
+          radius: connector.radius,
+          height: connector.height,
+          radiusTolerance: connector.radiusTolerance,
+          heightTolerance: connector.heightTolerance
+        }]
+        : []
+    })
+  }))
+  const authorCutInformation = cutGroups.length > 0
+    ? (baseXml: string) => serializeCutInformation(cutGroups, modelXml, baseXml)
+    : null
+  const cutInformationContent = authorCutInformation?.('') ?? null
+
   // Variable layer height: same authored-sidecar shape again. Note the PRECEDENCE this creates in
   // the saved file -- a profile overrides the layer_height of any range on the same object.
   const importProfiles: SceneEditObjectLayerHeightProfile[] = (edit.importLayerHeightProfiles ?? []).flatMap((entry) => {
@@ -444,11 +481,25 @@ export function planEditedThreeMf(
     if (customGcodeContent !== null) {
       extraEntries.push({ name: CUSTOM_GCODE_PER_LAYER_ENTRY, content: customGcodeContent })
     }
+    if (cutInformationContent !== null) {
+      extraEntries.push({ name: CUT_INFORMATION_ENTRY, content: cutInformationContent })
+    }
     if (layerConfigRangesContent !== null) {
       extraEntries.push({ name: LAYER_CONFIG_RANGES_ENTRY, content: layerConfigRangesContent })
     }
     if (layerHeightProfileContent !== null) {
       extraEntries.push({ name: LAYER_HEIGHTS_PROFILE_ENTRY, content: layerHeightProfileContent })
+    }
+    // The artwork behind every SVG part. Written as its own archive entry because that is the only
+    // place either reader looks: neither record stores the shapes, so these bytes ARE the
+    // re-editability. Entries the base already carries are not resent, so this appends rather than
+    // replaces in the common case of editing a project whose artwork is already stored.
+    // Named `svgSource`, not `source`: this loop sits inside `if (source.hasBase)`, so a bare
+    // `source` shadows the bake's own `ThreeMfBakeSource` parameter. No lint rule catches it, and
+    // both are objects, so a later line reaching for `source.subModelEntries` in here would
+    // type-check and read undefined.
+    for (const svgSource of edit.svgSources ?? []) {
+      extraEntries.push({ name: svgSource.entryPath, content: svgSource.markup })
     }
     // A transform may return null to DROP the entry from the saved 3MF (see rewriteThreeMfEntries).
     const transforms = new Map<string, (xml: string) => string | null>([
@@ -478,6 +529,21 @@ export function planEditedThreeMf(
       // A sidecar this save AUTHORS is never remapped: it already speaks the SAVED ordinals, so
       // chasing them again would renumber correct content — and because both write into one map,
       // whichever ran last would silently win. The skip makes that independent of statement order.
+      // Cut information is the one sidecar that is BOTH remapped and authored: the base's groups
+      // still need their ordinals chased, and ours are merged in on top. Skipping the remap here
+      // (what the three below do) would leave inherited groups pointing at the wrong objects.
+      if (sidecar.path === CUT_INFORMATION_ENTRY && authorCutInformation) {
+        // The serializer answers null when it can describe no group at all -- every inherited object
+        // deleted this save, and ours filtered out. That means DROP the entry: falling back to
+        // `content` would write the base's ORIGINAL, un-remapped ordinals back into the saved file,
+        // which is exactly the stale-ordinal corruption the remap on the line above exists to
+        // prevent, and BambuStudio would then read those groups against whichever objects slid into
+        // those positions.
+        transforms.set(sidecar.path, (content) => authorCutInformation(
+          remapObjectOrdinalSidecar(content, baseObjectOrder, savedObjectOrder, sidecar.format, documents.volumeLayouts)
+        ))
+        continue
+      }
       if (sidecar.path === LAYER_CONFIG_RANGES_ENTRY && layerConfigRangesContent !== null) continue
       if (sidecar.path === LAYER_HEIGHTS_PROFILE_ENTRY && layerHeightProfileContent !== null) continue
       if (sidecar.path === BRIM_EAR_POINTS_ENTRY && brimEarPointsContent !== null) continue
@@ -636,9 +702,12 @@ export function planEditedThreeMf(
       .filter((content): content is string => content !== null)
       .map((content) => ({ name: 'Metadata/project_settings.config', content }))),
     ...(brimEarPointsContent ? [{ name: BRIM_EAR_POINTS_ENTRY, content: brimEarPointsContent }] : []),
+    ...(cutInformationContent ? [{ name: CUT_INFORMATION_ENTRY, content: cutInformationContent }] : []),
     ...(layerConfigRangesContent ? [{ name: LAYER_CONFIG_RANGES_ENTRY, content: layerConfigRangesContent }] : []),
     ...(layerHeightProfileContent ? [{ name: LAYER_HEIGHTS_PROFILE_ENTRY, content: layerHeightProfileContent }] : []),
     ...(customGcodeContent ? [{ name: CUSTOM_GCODE_PER_LAYER_ENTRY, content: customGcodeContent }] : []),
+    // See the copy-path note above: these bytes are what makes an SVG part re-editable at all.
+    ...(edit.svgSources ?? []).map((source) => ({ name: source.entryPath, content: source.markup })),
     ...(options.extraEntries ?? [])
     ]
   }

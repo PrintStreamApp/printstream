@@ -19,9 +19,10 @@ import {
   ListItemContent, ModalDialog, Option, Select, Stack, Typography
 } from '@mui/joy'
 import { BackAwareModal } from '../BackAwareModal'
+import { PresetNameWithBrandMark } from '../BambuBrandMark'
 import { DeferredKeyboardAutocomplete } from '../DeferredKeyboardAutocomplete'
 import { FilamentColorPicker } from './FilamentColorPicker'
-import { filterSliceMaterialOptions, type SliceMaterialOption } from '../../lib/slicingPresetMatching'
+import { filterSliceMaterialOptions, isSourceOnlyPresetMetadata, type SliceMaterialOption } from '../../lib/slicingPresetMatching'
 
 export function MaterialEditDialog({
   mode = 'edit',
@@ -111,14 +112,8 @@ export function MaterialEditDialog({
               placeholder="Choose a material profile"
               onChange={onMaterialOptionChange}
             />
-            {/* The field shows the ALIAS, which is the same text for every variant of a product,
-                including a workspace preset derived from a built-in. Reading it as confirmation of
-                which preset is bound is therefore a mistake the field invites, so name the literal
-                preset underneath whenever it says more. The option rows already do this; the field
-                is what a user checks after the dialog closes. */}
-            {selectedOption?.profileId && selectedOption.material && selectedOption.material !== (selectedOption.presetLabel ?? selectedOption.label) && (
-              <FormHelperText sx={{ color: 'text.tertiary' }}>{selectedOption.material}</FormHelperText>
-            )}
+            {/* No literal-preset helper line here: the field itself now carries that name, so
+                repeating it underneath said the same thing twice. */}
             {/* Only flag the cases needing the user to act, and always say WHY Done is disabled
                 rather than leaving a dead button with no explanation. */}
             {!selectedOption && (
@@ -164,6 +159,21 @@ export function MaterialEditDialog({
   )
 }
 
+/**
+ * The literal preset name an option binds to ("Bambu PLA Basic @BBL P1S 0.4 nozzle"), or null when
+ * the option does not name one.
+ *
+ * Shared by the field and the option rows so the two cannot disagree about which text is the
+ * preset. A CATALOGUE option's `material` is always the preset's own name. A LOADED option (an AMS
+ * tray, a tracked spool) only has one when a preset actually resolved for it: otherwise `material`
+ * falls back to the bare filament type ("PLA"), and showing that would replace the spool's own name
+ * with something less specific than what the user is pointing at.
+ */
+function literalPresetName(option: SliceMaterialOption): string | null {
+  if (!option.material) return null
+  return option.source === 'manual' || option.profileId ? option.material : null
+}
+
 function SliceMaterialAutocomplete({
   options,
   value,
@@ -175,11 +185,14 @@ function SliceMaterialAutocomplete({
   placeholder: string
   onChange: (option: SliceMaterialOption | null) => void
 }) {
-  // The FIELD shows the slicing preset actually in effect: choosing a loaded
-  // filament ("Michael's PLA") sets type/preset/colour and the field reads the
-  // matched preset ("PLA Basic - Custom"), BambuStudio-style. The filament name
-  // still labels the option rows below, where the choice is made.
-  const displayValue = value ? value.presetLabel ?? value.label : ''
+  // The FIELD names the LITERAL preset in effect ("Bambu PLA Basic @BBL P1S 0.4 nozzle"), not its
+  // alias. Two reasons. Choosing a loaded filament ("Michael's PLA") sets type/preset/colour, and
+  // the field must read as the matched preset rather than the spool, BambuStudio-style. And the
+  // alias is the SAME text for every machine variant of a product (and for a workspace preset
+  // derived from a built-in), so it cannot answer "which preset am I actually bound to?" -- the
+  // question a user checks this field for once the dialog has closed. The alias still labels the
+  // option rows below, where the choice is made and the grouping supplies the vendor.
+  const displayValue = value ? literalPresetName(value) ?? value.presetLabel ?? value.label : ''
   const [inputValue, setInputValue] = useState(displayValue)
 
   useEffect(() => {
@@ -218,29 +231,50 @@ function SliceMaterialAutocomplete({
       handleHomeEndKeys
       openOnFocus
       slotProps={{ listbox: { sx: { maxHeight: 360 } } }}
-      renderOption={(props, option) => (
-        <AutocompleteOption {...props} key={option.id}>
-          <ListItemContent>
-            <Stack direction="row" spacing={1} alignItems="center" sx={{ minWidth: 0 }}>
-              <Box sx={{ width: 16, height: 16, borderRadius: '50%', bgcolor: option.color ?? 'neutral.500', border: '1px solid', borderColor: 'divider', flexShrink: 0 }} />
-              <Stack spacing={0.35} sx={{ minWidth: 0 }}>
-                <Typography level="body-sm" sx={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{option.label}</Typography>
-                <Typography level="body-xs" textColor="text.tertiary">
-                  {[option.brand, option.metadata].filter(Boolean).join(' · ')}
-                </Typography>
-                {/* The LITERAL preset name. The row above shows the alias, which is the same text
-                    for every machine variant of a product, so without this there is no way to see
-                    which variant a pick actually landed on. Only when it adds something. */}
-                {option.profileId && option.material && option.material !== option.label && (
-                  <Typography level="body-xs" textColor="text.tertiary" sx={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    {option.material}
+      renderOption={(props, option) => {
+        // A CATALOGUE row leads with the literal preset name. It used to lead with the alias and
+        // carry the real name on a third line, which spent the most prominent line on the text that
+        // identifies the preset LEAST: the alias is identical for every machine variant of a
+        // product and for a workspace preset derived from it, so the line that actually told the
+        // variants apart was the smallest and last.
+        //
+        // A LOADED row still leads with the filament: its `label` is the spool the user is pointing
+        // at ("Michael's PLA"), not a short form of anything, and its preset keeps the line below.
+        const preset = literalPresetName(option)
+        const primary = option.source === 'manual' ? preset ?? option.label : option.label
+        // The second line survives only where it says something the row does not already. On a
+        // CATALOGUE row the brand now leads the primary line ("Bambu PLA Tough+ @BBL X1C") and the
+        // source ("System preset") is what the GROUP HEADER above it says, so both were repetition;
+        // real metadata (nozzle sizes, plate types, conditional compatibility) still earns the line.
+        // A LOADED row keeps brand and metadata outright: that is its slot and colour.
+        const secondary = option.source === 'manual'
+          ? (isSourceOnlyPresetMetadata(option.metadata) ? '' : option.metadata)
+          : [option.brand, option.metadata].filter(Boolean).join(' · ')
+        return (
+          <AutocompleteOption {...props} key={option.id}>
+            <ListItemContent>
+              <Stack direction="row" spacing={1} alignItems="center" sx={{ minWidth: 0 }}>
+                <Box sx={{ width: 16, height: 16, borderRadius: '50%', bgcolor: option.color ?? 'neutral.500', border: '1px solid', borderColor: 'divider', flexShrink: 0 }} />
+                <Stack spacing={0.35} sx={{ minWidth: 0 }}>
+                  {/* The vendor prefix becomes Bambu's mark, as BambuStudio's filament picker does
+                      it. Rows only: the FIELD is a real text input, whose value cannot carry an
+                      element, and which has the whole dialog width to itself anyway. */}
+                  <Typography level="body-sm" sx={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    <PresetNameWithBrandMark name={primary} />
                   </Typography>
-                )}
+                  {secondary && <Typography level="body-xs" textColor="text.tertiary">{secondary}</Typography>}
+                  {/* Only where it still says something the first line does not: a loaded row. */}
+                  {preset && preset !== primary && (
+                    <Typography level="body-xs" textColor="text.tertiary" sx={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {preset}
+                    </Typography>
+                  )}
+                </Stack>
               </Stack>
-            </Stack>
-          </ListItemContent>
-        </AutocompleteOption>
-      )}
+            </ListItemContent>
+          </AutocompleteOption>
+        )
+      }}
     />
   )
 }

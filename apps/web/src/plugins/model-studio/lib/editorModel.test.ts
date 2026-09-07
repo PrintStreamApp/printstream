@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { libraryThreeMfSceneSchema, threeMfIndexSchema, type StagedImport } from '@printstream/shared'
+import { libraryThreeMfSceneSchema, sceneEditSchema, threeMfIndexSchema, type StagedImport } from '@printstream/shared'
 import * as THREE from 'three'
 import { decodePaintTree, encodePaintTree } from './trianglePaintTree'
 import {
@@ -12,6 +12,7 @@ import {
   buildSessionFilamentIdRemap,
   rebaseEditorStateFilamentIds,
   rebaseSceneEditFilamentIds,
+  instanceLinkageKey,
   makeInstanceIndependent,
   buildSingleObjectExportState,
   cloneEditorState,
@@ -169,6 +170,25 @@ test('buildSceneEdit emits partTransforms for placed objects only, and cloneEdit
   const clone = cloneEditorState(state)
   assert.deepEqual(clone.partTransforms?.['7:5'], matrix)
   assert.notEqual(clone.partTransforms?.['7:5'], matrix)
+})
+
+test('buildSceneEdit never emits a cut group of one piece, which no save would accept', () => {
+  // A cut that keeps only one half (Keep upper unticked -- "chop the top off") produces a single
+  // piece, and `sceneEditSchema` requires at least two importIds. Emitted anyway, the group failed
+  // validation at the save route and took every later save, export and slice of the project with
+  // it: a 400 naming an array the user has never heard of, escapable only by undoing the cut.
+  const state: EditorState = seedEmptyEditorState()
+  const kept = instanceFromStagedImport({ ...STAGED, importId: 'half-a' })
+  const other = instanceFromStagedImport({ ...STAGED, importId: 'half-b' })
+  state.plates[0]!.instances.push(kept, other)
+  state.cutGroups = [
+    { importIds: ['half-a'], connectorCount: 0, connectors: [] },
+    { importIds: ['half-a', 'half-b'], connectorCount: 0, connectors: [] }
+  ]
+
+  const edit = buildSceneEdit(state)
+  assert.deepEqual(edit.cutGroups?.map((group) => group.importIds), [['half-a', 'half-b']])
+  assert.ok(sceneEditSchema.safeParse(edit).success, 'the emitted edit must satisfy the wire contract')
 })
 
 test('buildSceneEdit emits importId for import-backed instances and objectId otherwise', () => {
@@ -1311,10 +1331,10 @@ test('a deleted body removes the body ROW and emits the removal', () => {
   const instance = { parts: [], bodyRemoved: true } as never
   // No body row, and its volumes are the object's whole geometry: one volume means no rows at all,
   // exactly as a saved object with one part shows none.
-  assert.deepEqual(instanceVolumeRows(instance, 1), { showRows: false, showBodyRow: false })
-  assert.deepEqual(instanceVolumeRows(instance, 2), { showRows: true, showBodyRow: false })
+  assert.deepEqual(instanceVolumeRows(instance, 1), { showRows: false, showBodyRow: false, cutConnectorCount: 0 })
+  assert.deepEqual(instanceVolumeRows(instance, 2), { showRows: true, showBodyRow: false, cutConnectorCount: 0 })
   // The inverse: without the flag the body is a volume again and earns its row.
-  assert.deepEqual(instanceVolumeRows({ parts: [] } as never, 1), { showRows: true, showBodyRow: true })
+  assert.deepEqual(instanceVolumeRows({ parts: [] } as never, 1), { showRows: true, showBodyRow: true, cutConnectorCount: 0 })
 })
 
 test('a body retyped to a HELPER VOLUME is not paintable', () => {
@@ -1964,4 +1984,129 @@ test('a body deleted this session stops claiming ordinal 0 in the emitted edit',
   const keptEdit = buildSceneEdit(kept)
   assert.equal(keptEdit.partTypeChanges?.length, 2)
   assert.equal(keptEdit.partProcessOverrides?.length, 2)
+})
+
+test('a cut connector is not a volume row, so a cut half reads as one object', () => {
+  // BambuStudio leaves connectors out of the count that decides whether an object gets rows at all
+  // (`can_add_volumes_to_object`). Counting them made a cut half list an object row, a body row
+  // carrying the SAME name, and a row per peg -- reported from the viewport as "cube left is not
+  // there twice" against Studio's single row.
+  const half = {
+    parts: [
+      { partIndex: 0, subtype: null },
+      { partIndex: 1, subtype: null, cutConnector: true }
+    ]
+  } as never
+  const rows = instanceVolumeRows(half, 0)
+  assert.equal(rows.showRows, false, 'a body plus one connector is a single-volume object')
+  assert.equal(rows.cutConnectorCount, 1)
+})
+
+test('two real volumes still list, connectors or not', () => {
+  const object = {
+    parts: [
+      { partIndex: 0, subtype: null },
+      { partIndex: 1, subtype: null },
+      { partIndex: 2, subtype: null, cutConnector: true }
+    ]
+  } as never
+  const rows = instanceVolumeRows(object, 0)
+  assert.equal(rows.showRows, true)
+  assert.equal(rows.cutConnectorCount, 1)
+})
+
+test('an object whose only baked volumes are connectors still gets a body row', () => {
+  // The body row exists when the part list does not describe the object. Connectors do not
+  // describe it either, so an added volume beside them must still surface the body.
+  const rows = instanceVolumeRows({ parts: [{ partIndex: 0, subtype: null, cutConnector: true }] } as never, 1)
+  assert.equal(rows.showBodyRow, true)
+  assert.equal(rows.showRows, true)
+  assert.equal(rows.cutConnectorCount, 1)
+})
+
+/**
+ * The sidebar's `xN` badge only appeared after a save and reopen, because linkage was keyed on the
+ * Bambu `objectId` and every session-added instance carries `objectId: 0` until a save mints one.
+ * A linked duplicate of an import shares its `importId`/`replacedObjectId` instead, and that IS the
+ * identity the bake later hangs both build items off.
+ */
+function instanceWith(source: EditorInstance['source'], objectId: number): EditorInstance {
+  return { key: `k${Math.round(objectId * 1000)}`, source, objectId } as EditorInstance
+}
+
+test('two instances of one file-backed object share a linkage identity', () => {
+  const a = instanceWith({ kind: 'object' }, 7)
+  const b = instanceWith({ kind: 'object' }, 7)
+  assert.equal(instanceLinkageKey(a), instanceLinkageKey(b))
+  assert.notEqual(instanceLinkageKey(a), instanceLinkageKey(instanceWith({ kind: 'object' }, 8)))
+})
+
+test('a linked duplicate of a SESSION import shares its identity before any save', () => {
+  // The reported bug: both carry `objectId: 0`, so an objectId comparison called them unrelated
+  // (or, worse, called every unrelated import a copy of every other).
+  const source = instanceWith({ kind: 'import', importId: 'imp-1', meshUrl: '/m/1', replacedObjectId: -3 }, 0)
+  const copy = instanceWith({ kind: 'import', importId: 'imp-1', meshUrl: '/m/1', replacedObjectId: -3 }, 0)
+  assert.equal(instanceLinkageKey(source), instanceLinkageKey(copy))
+})
+
+test('two DIFFERENT imports are not linked, though both carry objectId 0', () => {
+  const first = instanceWith({ kind: 'import', importId: 'imp-1', meshUrl: '/m/1' }, 0)
+  const second = instanceWith({ kind: 'import', importId: 'imp-2', meshUrl: '/m/2' }, 0)
+  assert.notEqual(instanceLinkageKey(first), instanceLinkageKey(second))
+})
+
+test('an import identifies by its replaced object, so a "Replace with..." pair agrees', () => {
+  // `replacedObjectId` is the stable per-object identity the editor hangs settings on; two
+  // instances of one replacement agree on it even though the import that fed them is incidental.
+  const first = instanceWith({ kind: 'import', importId: 'imp-a', meshUrl: '/m/a', replacedObjectId: 12 }, 0)
+  const second = instanceWith({ kind: 'import', importId: 'imp-b', meshUrl: '/m/b', replacedObjectId: 12 }, 0)
+  assert.equal(instanceLinkageKey(first), instanceLinkageKey(second))
+})
+
+test('unlinking a file-backed copy separates it, since it reassigns the object id', () => {
+  const state = { plates: [], objectClones: {} } as unknown as EditorState
+  const copy = instanceWith({ kind: 'object' }, 7)
+  const before = instanceLinkageKey(copy)
+  makeInstanceIndependent(state, copy)
+  assert.notEqual(instanceLinkageKey(copy), before)
+})
+
+/**
+ * "Duplicate as independent copy" on a SESSION-ADDED model used to return the linked pair it was
+ * asked to break: `makeInstanceIndependent` bailed on anything import-backed, on the reasoning that
+ * an import is "independent by nature". That held only while nothing could copy one; a linked
+ * duplicate copies `importId` and `replacedObjectId` verbatim, so both instances shared their object
+ * identity and their mesh.
+ */
+test('an independent copy of a session import stops sharing its object identity', () => {
+  const state = { plates: [], objectClones: {} } as unknown as EditorState
+  const copy = instanceWith({ kind: 'import', importId: 'imp-1', meshUrl: '/m/1', replacedObjectId: -3 }, 0)
+  const before = instanceLinkageKey(copy)
+
+  makeInstanceIndependent(state, copy)
+
+  assert.notEqual(instanceLinkageKey(copy), before, 'it no longer shares the source\'s identity')
+  assert.equal(copy.source.kind, 'import', 'it is still import-backed')
+  assert.notEqual((copy.source as { replacedObjectId?: number }).replacedObjectId, -3)
+})
+
+test('unlinking a session import does not register a bake clone, having no baked object to copy', () => {
+  // `objectClones` drives the bake's pre-pass, which deep-copies a BAKED object's XML and mesh.
+  // An import has neither; the bake builds its object from the staged import instead, so an entry
+  // here would point that pre-pass at an id no source object exists for.
+  const state = { plates: [], objectClones: {} } as unknown as EditorState
+  const copy = instanceWith({ kind: 'import', importId: 'imp-1', meshUrl: '/m/1', replacedObjectId: -3 }, 0)
+
+  makeInstanceIndependent(state, copy)
+
+  assert.deepEqual(state.objectClones, {})
+})
+
+test('a file-backed unlink still registers its clone against the source object', () => {
+  const state = { plates: [], objectClones: {} } as unknown as EditorState
+  const copy = instanceWith({ kind: 'object' }, 7)
+
+  makeInstanceIndependent(state, copy)
+
+  assert.equal(Object.values(state.objectClones ?? {})[0], 7, 'the clone still points back at object 7')
 })

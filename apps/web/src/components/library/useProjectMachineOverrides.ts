@@ -23,7 +23,7 @@
  */
 import { useEffect, useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { apiFetch } from '../../lib/apiClient'
+import { resolveWorkspaceMachineConfig } from '../workspaceMachineResolver'
 
 /**
  * What to do with an answer from the resolve route. Pure, and split out because the ordering here
@@ -49,19 +49,6 @@ export function machineOverrideSeedDecision(input: {
   if (input.hasCurrentEdits) return 'settle'
   if (Object.keys(input.overrides).length === 0) return 'wait'
   return 'seed'
-}
-
-interface ResolveMachineResponse {
-  config: Record<string, string | string[]>
-  /**
-   * The file's own machine deltas, or NULL when the server could not read the file.
-   *
-   * Null and `{}` must stay distinct all the way to the save. An empty map is a fact ("this project
-   * overrides nothing"), and the save treats it as a licence to clear the record; null is an
-   * absence of information, and a save that acted on it would erase overrides the user still has,
-   * because the API answers null for a bridge that was briefly offline or a version it cannot find.
-   */
-  projectOverrides?: Record<string, string | string[]> | null
 }
 
 export function useProjectMachineOverrides(input: {
@@ -91,16 +78,12 @@ export function useProjectMachineOverrides(input: {
     queryKey: ['project-machine-overrides', input.sourceFileId, input.fileVersion, input.machineProfileId, input.slicerTargetId],
     enabled,
     staleTime: 60_000,
-    queryFn: async ({ signal }) => await apiFetch<ResolveMachineResponse>('/api/slicing/profiles/resolve-machine', {
-      method: 'POST',
-      body: {
-        machineProfileId: input.machineProfileId,
-        targetId: input.slicerTargetId || null,
-        sourceFileId: input.sourceFileId,
-        sourceFileUploadedAt: input.fileVersion
-      },
-      signal
-    })
+    queryFn: async ({ signal }) => await resolveWorkspaceMachineConfig({
+      machineProfileId: input.machineProfileId,
+      targetId: input.slicerTargetId || null,
+      sourceFileId: input.sourceFileId,
+      sourceFileUploadedAt: input.fileVersion
+    }, { signal })
   })
 
   // Keyed on the same identity as the query, so one answer seeds at most once even across

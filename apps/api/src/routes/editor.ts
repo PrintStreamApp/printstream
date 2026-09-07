@@ -35,6 +35,7 @@ import { z } from 'zod'
 import { annotateRequestAuditLog, skipRequestAuditLog } from '../lib/audit-logs.js'
 import { requireRequestPermission } from '../lib/authorization.js'
 import { resolveLibraryFileToLocalPath } from '../lib/bridge-library-files.js'
+import { resolvePinnedContentBase } from '../lib/library-content-base.js'
 import { persistFilamentSettingOverrides } from '../lib/save-filament-overrides.js'
 import { applyMachineOverridesToProject, applyMachinePresetChange, healSavedProjectMachineTopology, projectHasCompleteMachine, retargetSavedProjectMachine } from '../lib/save-retarget.js'
 import { badRequest, HttpError, notFound } from '../lib/http-error.js'
@@ -180,36 +181,6 @@ function parseArrangedBody<T>(schema: { safeParse: (body: unknown) => z.SafePars
 }
 
 /**
- * Resolve an explicit content base, the bytes the editor pinned at open, to something
- * `resolveLibraryFileToLocalPath` can read.
- *
- * Workspace-scoped like every other lookup here, but deliberately NOT scoped to the save target: the
- * whole point of the field is that the two can diverge (see `contentBase` in the shared schema).
- * A pinned base that no longer exists is a hard error rather than a silent fall back to the
- * target's current bytes, because falling back would quietly resume the save-onto-last-save
- * chaining this exists to stop.
- */
-async function resolvePinnedContentBase(
-  workspaceId: string,
-  contentBase: { fileId: string; versionId?: string | null }
-): Promise<{ ownerBridgeId: string | null; storedPath: string }> {
-  if (contentBase.versionId) {
-    const version = await prisma.libraryFileVersion.findFirst({
-      where: { id: contentBase.versionId, workspaceId, libraryFileId: contentBase.fileId },
-      select: { ownerBridgeId: true, storedPath: true }
-    })
-    if (!version) throw notFound('The version this project was opened from is no longer available')
-    return version
-  }
-  const file = await prisma.libraryFile.findFirst({
-    where: { id: contentBase.fileId, workspaceId },
-    select: { ownerBridgeId: true, storedPath: true }
-  })
-  if (!file) throw notFound('The file this project was opened from is no longer available')
-  return file
-}
-
-/**
  * Bake an edited arrangement into a ready-to-persist/stream 3MF inside `workDir`:
  * base bytes + staged imports + per-object/global process overrides + plate thumbnails,
  * then an optional cross-machine retarget, the chosen machine preset, and last the project's own machine overrides. Shared by `/save` (persists the result) and
@@ -261,6 +232,25 @@ async function bakeArrangedThreeMf(
   // above) but bakes from the editor state alone: see the schema doc: re-reading the previous
   // save's bytes strands one orphaned mesh object per solid per save for an import-backed
   // project, which is what forced the editor to re-mount on the saved file after every save.
+  // A BAKE MAY NEVER FALL BACK TO THE TARGET'S CURRENT CONTENT. Everything else here names bytes
+  // that cannot move under it: a pin, or an immutable version row. The file's head can, and after
+  // this session's own first save it holds this session's own output, so baking from it re-applies
+  // the edit over itself. The idempotent members survive that; `partOrder` and `removedParts` do
+  // not, and a re-applied reorder permutes an object's volumes while the positional per-part
+  // `extruder` writes stay put, so parts trade materials and a two-colour plate prints inverted
+  // with nothing logged anywhere.
+  //
+  // So refuse, rather than serving a plausible file. The editor has pinned what it opened since the
+  // field existed, and the only requests that arrive without one are a caller that forgot (which is
+  // how both single-object exports shipped baking from the wrong bytes after a save) or a tab
+  // running a bundle old enough to predate the pin, which `appStaleness.ts` will reload. A clear
+  // failure is recoverable; a corrupted save is not, and it is not even visible.
+  if (!input.ignoreBaseContent && baseFile && !pinnedBase && !baseVersion) {
+    throw badRequest(
+      'This editor session did not say which version of the file it is editing.'
+      + ' Reload the page and try again.'
+    )
+  }
   const baseSource = input.ignoreBaseContent ? null : (pinnedBase ?? baseVersion ?? baseFile)
   const basePath = baseSource ? await resolveLibraryFileToLocalPath(baseSource) : null
   const imports = resolveSceneEditImports(workspaceId, sceneEdit)
@@ -402,6 +392,21 @@ async function bakeArrangedThreeMf(
   return { bakedPath, importCount: imports.length, extraCleanupDirs, baseFile, machineTopologyHealed, machinePresetReauthored, machineOverridesPersisted }
 }
 
+/**
+ * `POST /save` and `POST /export-3mf` have NO caller in this repo any more: both editor hosts bake
+ * in the browser and upload bytes (`editorSaveTarget.ts`), so the web app reaches
+ * `/api/library/uploads` instead.
+ *
+ * They are kept deliberately, for the length of a deploy rather than forever. A tab loaded before a
+ * deploy keeps running the old bundle and still posts here, and the staleness reload cannot rescue
+ * it: an open editor marks the app busy precisely so an update cannot reload a half-finished
+ * project out from under someone (`lib/appStaleness.ts` + `appBusy.ts`). Deleting these would turn
+ * that user's next Save into a 404 with their work only in the tab.
+ *
+ * Remove them (with `bakeArrangedThreeMf`'s pinned-base refusal, `resolveSceneEditImports`, and the
+ * server-side retarget/filament passes they alone keep alive) once no pre-browser-bake bundle can
+ * still be open, i.e. a release after the one that moved the bake.
+ */
 editorRouter.post(
   '/save',
   requireRequestPermission(LIBRARY_UPLOAD_PERMISSION),

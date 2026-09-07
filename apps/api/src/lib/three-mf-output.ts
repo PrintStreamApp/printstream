@@ -19,7 +19,7 @@ import yauzl, { type Entry } from 'yauzl'
 import yazl from 'yazl'
 import { readEntry, readZipEntryBuffer, rewriteThreeMfEntries } from './three-mf-internal.js'
 import { CUSTOM_GCODE_PER_LAYER_ENTRY, buildDefaultPickFilePath, readPlateIndex, type ThreeMfIndex } from './three-mf-reader.js'
-import { applyObjectProcessOverridesXml, mergeCustomGcodePerLayer, rekeyObjectProcessOverrides, type ObjectProcessOverrides } from '@printstream/shared/three-mf'
+import { applyObjectProcessOverridesXml, mergeCustomGcodePerLayer, plateThumbnailEntries, rekeyObjectProcessOverrides, type ObjectProcessOverrides } from '@printstream/shared/three-mf'
 
 const ACTIVE_PRINT_PREVIEW_MAX_GCODE_BYTES = 128 * 1024 * 1024
 const MINIMAL_THREE_MF_MODEL_XML = [
@@ -512,12 +512,12 @@ export async function embedPlateThumbnails(
   thumbnails: Array<{ plateIndex: number; png: Buffer }>
 ): Promise<void> {
   if (thumbnails.length === 0) return
-  const replacements = new Map<string, Buffer>()
-  for (const { plateIndex, png } of thumbnails) {
-    if (!Number.isInteger(plateIndex) || plateIndex <= 0 || png.length === 0) continue
-    replacements.set(`Metadata/plate_${plateIndex}.png`, png)
-    replacements.set(`Metadata/plate_${plateIndex}_small.png`, png)
-  }
+  // Naming and the validity rule come from the shared module, because the BROWSER embeds the same
+  // previews into the archive it deflates and the two must not drift about which entries a plate
+  // owns. Only the ZIP I/O is per-host, the same split the bake itself keeps.
+  const replacements = new Map<string, Buffer>(
+    plateThumbnailEntries(thumbnails).map((entry) => [entry.name, Buffer.from(entry.png)])
+  )
   if (replacements.size === 0) return
 
   const tempPath = `${threeMfPath}.thumbs`

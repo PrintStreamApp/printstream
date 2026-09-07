@@ -11,6 +11,7 @@
  */
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { slicingPresetProvenance } from '@printstream/shared'
 import {
   buildBuiltinSlicingPresetId,
   buildProjectSlicingPresetId,
@@ -19,7 +20,7 @@ import {
   type ResolveProcessConfigResponse,
   type SlicingManualProfileTarget
 } from '@printstream/shared'
-import { PUBLIC_RETARGET_RESOLVERS, buildLocalMachineRetargetPlan, type LocalRetargetResolvers } from './localMachineRetarget'
+import { PUBLIC_RETARGET_RESOLVERS, WORKSPACE_RETARGET_RESOLVERS, buildMachineRetargetPlan, type RetargetResolvers } from './browserMachineRetarget'
 
 /**
  * The resolve responses carry the settings-catalog value types, which are narrower than the plain
@@ -52,9 +53,11 @@ interface RecordedCall { kind: 'machine' | 'process' | 'filament'; id: string; t
  * just as importantly, that the one that was reached got the preset id rather than the target
  * id. Both params are `string`, so a swap at the call site type-checks and would otherwise pass.
  */
-function stubResolvers(overrides: Partial<LocalRetargetResolvers> = {}) {
+function stubResolvers(overrides: Partial<RetargetResolvers> = {}) {
   const calls: RecordedCall[] = []
-  const resolvers: LocalRetargetResolvers = {
+  const resolvers: RetargetResolvers = {
+    // The default under test is the public host's: built-ins only.
+    canResolve: (presetId) => slicingPresetProvenance(presetId) === 'builtin',
     machine: async (id, targetId) => {
       calls.push({ kind: 'machine', id, targetId })
       return { config: { printer_model: ['Bambu Lab H2D'] } as ProfileRecord, name: 'Bambu Lab H2D 0.4 nozzle' }
@@ -72,7 +75,7 @@ function stubResolvers(overrides: Partial<LocalRetargetResolvers> = {}) {
   return { calls, resolvers }
 }
 
-function input(overrides: Partial<Parameters<typeof buildLocalMachineRetargetPlan>[0]> = {}) {
+function input(overrides: Partial<Parameters<typeof buildMachineRetargetPlan>[0]> = {}) {
   return {
     target: target(),
     slicerTargetId: 'slicer-1',
@@ -84,7 +87,7 @@ function input(overrides: Partial<Parameters<typeof buildLocalMachineRetargetPla
 
 test('a project preset is never sent to the anonymous machine route', async () => {
   const { calls, resolvers } = stubResolvers()
-  const plan = await buildLocalMachineRetargetPlan(input({
+  const plan = await buildMachineRetargetPlan(input({
     target: target({ printerProfileId: buildProjectSlicingPresetId('machine', 'My Printer') }),
     resolvers
   }))
@@ -95,7 +98,7 @@ test('a project preset is never sent to the anonymous machine route', async () =
 
 test('no target at all is not a retarget', async () => {
   const { calls, resolvers } = stubResolvers()
-  assert.equal(await buildLocalMachineRetargetPlan(input({ target: null, resolvers })), null)
+  assert.equal(await buildMachineRetargetPlan(input({ target: null, resolvers })), null)
   assert.deepEqual(calls, [])
 })
 
@@ -104,12 +107,12 @@ test('an unresolvable machine leaves the project on its embedded printer rather 
     machine: async () => { throw new Error('offline') }
   })
   // The save still proceeds, this is the one hard requirement, so its absence means "do nothing".
-  assert.equal(await buildLocalMachineRetargetPlan(input({ resolvers })), null)
+  assert.equal(await buildMachineRetargetPlan(input({ resolvers })), null)
 })
 
 test('the plan carries the resolved machine, its name, and the model it reports', async () => {
   const { calls, resolvers } = stubResolvers()
-  const plan = await buildLocalMachineRetargetPlan(input({ resolvers }))
+  const plan = await buildMachineRetargetPlan(input({ resolvers }))
   assert.ok(plan)
   assert.equal(plan.printerSettingsId, 'Bambu Lab H2D 0.4 nozzle')
   assert.equal(plan.printerModel, 'Bambu Lab H2D')
@@ -122,13 +125,13 @@ test('a machine preset that names no model falls back to its own name, without t
   const { resolvers } = stubResolvers({
     machine: async () => ({ config: {} as ProfileRecord, name: 'Bambu Lab A1 mini 0.4 nozzle' })
   })
-  const plan = await buildLocalMachineRetargetPlan(input({ resolvers }))
+  const plan = await buildMachineRetargetPlan(input({ resolvers }))
   assert.equal(plan?.printerModel, 'Bambu Lab A1 mini')
 })
 
 test('a builtin process preset is resolved for the new machine', async () => {
   const { calls, resolvers } = stubResolvers()
-  const plan = await buildLocalMachineRetargetPlan(input({
+  const plan = await buildMachineRetargetPlan(input({
     target: target({ processProfileId: STANDARD_PROCESS }),
     resolvers
   }))
@@ -138,7 +141,7 @@ test('a builtin process preset is resolved for the new machine', async () => {
 
 test("a project process preset keeps the project's own values instead of being resolved", async () => {
   const { calls, resolvers } = stubResolvers()
-  const plan = await buildLocalMachineRetargetPlan(input({
+  const plan = await buildMachineRetargetPlan(input({
     target: target({ processProfileId: buildProjectSlicingPresetId('process', 'My Process') }),
     resolvers
   }))
@@ -151,7 +154,7 @@ test('an unresolvable process preset still lets the machine retarget through', a
   const { resolvers } = stubResolvers({
     process: async () => { throw new Error('offline') }
   })
-  const plan = await buildLocalMachineRetargetPlan(input({
+  const plan = await buildMachineRetargetPlan(input({
     target: target({ processProfileId: STANDARD_PROCESS }),
     resolvers
   }))
@@ -206,14 +209,14 @@ test('an unresolved slicer target is sent as null, not as an empty string', asyn
   // `resolveSlicerTargetId` returns '' until the targets query settles, and the resolve routes'
   // schema REJECTS '' while accepting null, so passing it through 400s the retarget and saves the
   // project on its old printer with nothing but a console warning.
-  const plan = await buildLocalMachineRetargetPlan(input({ slicerTargetId: null, resolvers }))
+  const plan = await buildMachineRetargetPlan(input({ slicerTargetId: null, resolvers }))
   assert.ok(plan)
   assert.deepEqual(calls, [{ kind: 'machine', id: H2D_MACHINE, targetId: null }])
 })
 
 test('unreadable project settings skip the filament rebind rather than guessing slots', async () => {
   const { calls, resolvers } = stubResolvers()
-  const plan = await buildLocalMachineRetargetPlan(input({ projectSettings: null, resolvers }))
+  const plan = await buildMachineRetargetPlan(input({ projectSettings: null, resolvers }))
   assert.equal(plan?.filamentRebinds, null)
   assert.ok(!calls.some((call) => call.kind === 'filament'))
 })
@@ -227,11 +230,11 @@ test('unreadable project settings skip the filament rebind rather than guessing 
 const H2D_PLA = buildBuiltinSlicingPresetId('filament', 'Bambu PLA Basic @BBL H2D')
 const h2dPlaPreset = {
   id: H2D_PLA, source: 'builtin', kind: 'filament', name: 'Bambu PLA Basic @BBL H2D', printerModels: ['Bambu Lab H2D']
-} as unknown as Parameters<typeof buildLocalMachineRetargetPlan>[0]['filamentPresets'][number]
+} as unknown as Parameters<typeof buildMachineRetargetPlan>[0]['filamentPresets'][number]
 
 test('each filament slot is rebound to a preset for the new machine, with its config resolved', async () => {
   const { calls, resolvers } = stubResolvers()
-  const plan = await buildLocalMachineRetargetPlan(input({
+  const plan = await buildMachineRetargetPlan(input({
     projectSettings: { filament_settings_id: ['Bambu PLA Basic @BBL X1C'] } as unknown as ProfileRecord,
     filamentPresets: [h2dPlaPreset],
     resolvers
@@ -249,7 +252,7 @@ test('a slot whose preset will not resolve keeps its own values instead of losin
   const { resolvers } = stubResolvers({
     filament: async () => { throw new Error('offline') }
   })
-  const plan = await buildLocalMachineRetargetPlan(input({
+  const plan = await buildMachineRetargetPlan(input({
     projectSettings: { filament_settings_id: ['Bambu PLA Basic @BBL X1C'] } as unknown as ProfileRecord,
     filamentPresets: [h2dPlaPreset],
     resolvers
@@ -259,4 +262,31 @@ test('a slot whose preset will not resolve keeps its own values instead of losin
   assert.equal(plan.printerSettingsId, 'Bambu Lab H2D 0.4 nozzle')
   const rebinds = plan.filamentRebinds
   assert.ok(rebinds == null || rebinds.every((rebind) => rebind.config == null))
+})
+
+test('which presets a host can retarget onto is the resolvers\' answer, not a rule in here', async () => {
+  // The public host reaches the anonymous endpoints, which serve BambuStudio's bundled presets and
+  // refuse everything else, so a retarget onto a workspace preset is declined rather than attempted:
+  // authoring a partial machine from a failed lookup is worse than leaving the project's own.
+  // The workspace host reaches endpoints that DO resolve its presets, so the same target proceeds.
+  const workspacePreset = target({ printerProfileId: 'custom:printer-abc' })
+
+  const publicHost = stubResolvers()
+  assert.equal(
+    await buildMachineRetargetPlan(input({ target: workspacePreset, resolvers: publicHost.resolvers })),
+    null
+  )
+  assert.deepEqual(publicHost.calls, [], 'declined before resolving anything')
+
+  const workspaceHost = stubResolvers({ canResolve: () => true })
+  const plan = await buildMachineRetargetPlan(input({ target: workspacePreset, resolvers: workspaceHost.resolvers }))
+  assert.ok(plan, 'the workspace host retargets onto its own preset')
+  assert.equal(workspaceHost.calls[0]?.id, 'custom:printer-abc', 'and resolves it by id')
+})
+
+test('a project preset is refused by BOTH hosts, since it lives in the file being saved', () => {
+  // Not a capability difference: "retarget onto the preset embedded in this project" is not a
+  // question with an answer, so neither set of resolvers claims it.
+  assert.equal(PUBLIC_RETARGET_RESOLVERS.canResolve('project:machine:Embedded'), false)
+  assert.equal(WORKSPACE_RETARGET_RESOLVERS.canResolve('project:machine:Embedded'), false)
 })

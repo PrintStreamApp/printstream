@@ -226,7 +226,26 @@ without it an added printed part would silently print in filament 1. Modifier
 parts may carry per-volume process overrides (`settings`, edited via the same
 restricted-catalog ProcessSettingsDialog as per-object overrides), written as
 `<metadata key value/>` entries inside the part block — exactly how BambuStudio
-persists ModelVolume config, so the slicer applies them inside the volume. Hosts
+persists ModelVolume config, so the slicer applies them inside the volume.
+
+A part authored by a TOOL also carries what it was MADE FROM, so it reopens editable
+rather than as anonymous solids: `textInfo` for the text tool (BambuStudio's
+`<text_info/>`), and `svgPart` for the SVG tool (our `<printstream_svg/>`), with
+`bambuShape` (Studio's `<BambuStudioShape/>`) alongside the latter only when the
+import produced a SINGLE part. That element describes a whole artwork, so one on each
+of N split parts would tell Studio every mark is the entire drawing. The codecs and the
+rules live in one place, `@printstream/shared/three-mf` `svg-shape.ts` and
+`text-info.ts`. Neither SVG record stores the shapes themselves: both name a
+`3D/<name>.svg` archive entry, whose bytes ride the edit as `SceneEdit.svgSources` and
+which both readers re-parse on open, so an edit naming an entry nobody wrote produces
+parts that are exactly as un-editable as ones with no record at all. `svgSources` emits
+only entries a surviving part still references, and each `entryPath` is constrained to
+`3D/<name>.svg` at the wire boundary: the bake writes it verbatim as an archive entry
+and both writers key entries last-wins, so an unconstrained value could replace the
+model document. Artwork is capped per file AND across the request, because the markup
+rides every subsequent save and the transport rejects an oversized body before
+validation runs, which would otherwise break save and slice alike with nothing naming
+the SVG. Hosts
 carrying an inline mesh are first wrapped (mesh moves to its own object behind an
 identity component) so 3MF's mesh-XOR-components rule holds — the normal path for a
 freshly baked import host. Painting and brim ears work on unsaved imports too — they
@@ -361,12 +380,40 @@ BambuStudio's `_generate_volumes_new` loops over an object's components and look
 metadata up positionally, guarded by an id check, falling back to an id search and then to defaults.
 A `<part>` list of a different length is therefore not a positional mirror and is left alone -- one
 that matches no component is never read, while a permuted one puts a name, subtype and extruder on
-the wrong volume. The client prunes a removed ordinal out of the recorded order for the same reason
+the wrong volume.
+
+**A part-scoped WRITE resolves its ordinal the way BambuStudio resolves a read**, through
+`resolvePartBlockIndex`: positional, guarded by an id check, then a linear id search, then nothing.
+The ordinal is a position in the `<component>` list (that is the list the scene parser walks when it
+mints them, pairing each component with its `<part>` metadata by mesh id), so a writer that indexed
+`<part>` positionally was assuming the two lists mirror each other. They usually do, and nothing
+asserted it: a file where they do not, a foreign export, or an object left un-permuted by the
+length guard above, silently landed every per-part material, subtype, override and matrix on the
+wrong volume, and each later save re-applied the same skew. Positional has to win where it AGREES,
+which is why the id check comes first: BambuStudio writes one id for every volume sharing a mesh
+(`m_share_mesh`), so an id-first lookup would collapse all of them onto the first. A volume no
+`<part>` describes is SKIPPED rather than written onto an unrelated block, which is what the engine
+already does with such a file (it reads that volume with default settings). The client prunes a removed ordinal out of the recorded order for the same reason
 Studio never has the problem: `ModelObject::volumes` IS the order, so a delete erases from it, and
 "reorder then delete" and "delete then reorder" have to reach one payload rather than two. A PARTIAL order shuffles only the
 ordinals it names, through the slots they already occupy, so it can never drop a volume; that is the
 normal shape whenever a removal is also pending, not just a stale-edit defence, because a removed
 part is already gone from the client's part list and so is absent from the order it records.
+
+**Which BASE those ordinals are counted over is PINNED, and a slice must send the pin exactly as a
+save does.** A `SceneEdit` is a diff against the bytes the editor session OPENED, and the session
+never renumbers its ordinals, so every bake of that edit has to read those same bytes. The pin is
+`contentBase` (`apps/web/src/plugins/model-studio/lib/contentBasePin.ts`, resolved server-side by
+`apps/api/src/lib/library-content-base.ts`), and it may move exactly ONCE, from "that file's head"
+to the durable version id the first save archives, which is the same bytes under a name that will
+not move again. The save has always sent it. The SLICE did not, and instead named only
+`sourceFileId`, whose head is the session's own latest save: so slicing after saving in one session
+re-applied an edit the save had already baked in. Most of the edit is idempotent and survived that,
+but `partOrder` and `removedParts` are not, and a re-applied reorder permuted an object's volumes
+while the per-part `extruder` values stayed on their old positions. Parts silently traded materials,
+and a two-colour plate printed with the colours swapped. Both paths now resolve their base through
+one function, so they cannot diverge again; a pin that no longer resolves is a hard error rather
+than a quiet fall back to the head, because falling back is the corruption.
 
 `meshReplacements` carries BambuStudio "Replace with…" swaps: each `{objectId, importId}`
 records that an in-project object's mesh was replaced by a staged import. The replaced
@@ -699,8 +746,8 @@ The mechanics, and why each piece is where it is:
 
 - `slicing-jobs.ts` **stages** a copy into its own temp dir before returning, because `sourcePath`
   lives in a dir the `finally` deletes. It **preserves** only after `persistArtifact` succeeds:
-  snapshots are never swept (`library-cleanup.ts` skips rows with a `snapshotKey`), so writing one
-  for a cancelled or unsaved slice would leak unreferenced bytes forever. Which attempt won matters
+  a `snapshotKey` exempts a row from every age-based sweep, leaving it reclaimable only once nothing
+  references it, so writing one for a cancelled or unsaved slice leaks bytes. Which attempt won matters
   too — a compatibility retry slices a rewritten project, and preserving the pre-retry one would
   keep a project that produced nothing.
 - Every entry in the chain's `rewrittenSourcePaths` owns its containing directory: the cleanup
@@ -729,8 +776,13 @@ The mechanics, and why each piece is where it is:
   `discardHiddenSlicedOutput` → `discardUnreferencedProjectSnapshot` deletes promptly when the user
   closes the dialog, and `pruneUnreferencedProjectSnapshots` is the backstop for the paths that never
   reach it (closed tab, crashed browser, or the output itself aged out). Both delete only when NOTHING
-  references the row — it is content-addressed, so it is shared between slices of identical bytes, and
-  a print's history row points at it too. Snapshot rows are exempt from every other cleanup pass, so
+  references the row, and "nothing" means EVERY relation, not just the project-side ones: a kept output
+  (`LibraryFile.sourceProjectFileId`), a job's project link (`PrintJob.sourceProjectFileId`), and a job's
+  dispatched artifact (`PrintJob.fileId`). The row is content-addressed, so it is shared between slices
+  of identical bytes. Omitting that last relation was not a leak but data loss: `origin`/`snapshotKey`
+  do not distinguish a preserved project from a dispatched print's snapshot, so the sweep matched print
+  artifacts, and `onDelete: SetNull` then blanked `PrintJob.fileId`, silently costing Reprint on every
+  print older than the retention window. Snapshot rows are exempt from every other cleanup pass, so
   without this the leak is permanent.
 
 The web offers it as "Slice again" beside Reprint on both history surfaces (`JobsView`,

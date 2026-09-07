@@ -66,6 +66,7 @@ import { FilamentTrackSwitchMismatchAlert } from '../FilamentTrackSwitchMismatch
 import { LowFilamentAlert } from '../LowFilamentAlert'
 import { LibraryPlateCardPicker } from '../LibraryPlateSelect'
 import { PrintObjectsSection } from './PrintObjectsSection'
+import { PrintSentDialog } from './PrintSentDialog'
 import { PrinterMapping } from './PrinterMapping'
 import { PrintStartOptionsFields } from './PrintStartOptionsFields'
 import { usePromptDialog } from '../PromptDialogProvider'
@@ -133,6 +134,15 @@ interface PrintModalProps {
     body: Omit<StartOrderPrintInput, 'printerId'>
   }) => Promise<void>
   onSubmitted?: (printerIds: string[]) => void
+  /**
+   * Confirm a successful send with `PrintSentDialog` instead of closing straight away.
+   *
+   * Pass this when dismissing this dialog returns to ANOTHER open dialog rather than to
+   * the page: the dispatch toast then sits beside a modal the user is still reading and
+   * goes unnoticed, so the send reads as having done nothing. A send that reveals the page
+   * leaves the toast as the only signal, which is what every other entry point does.
+   */
+  showSentConfirmation?: boolean
   /** Override the dialog heading (default "Send to printer"). */
   title?: string
   /** Override the submit-button label (default "Print on N printers"). */
@@ -175,6 +185,7 @@ export function PrintModal({
   selectionMode = 'multiple',
   submitPrint,
   onSubmitted,
+  showSentConfirmation = false,
   title,
   submitLabel
 }: PrintModalProps) {
@@ -294,6 +305,9 @@ export function PrintModal({
   })
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [submitting, setSubmitting] = useState(false)
+  // Set only under `showSentConfirmation`, and only once every selected printer accepted:
+  // a partial failure keeps the form up with its per-printer errors, as it always has.
+  const [sentPrinterIds, setSentPrinterIds] = useState<string[] | null>(null)
   const [allowIncompatibleFilament, setAllowIncompatibleFilament] = useState(false)
   const [allowPlateTypeMismatch, setAllowPlateTypeMismatch] = useState(false)
   const [allowFilamentTrackSwitchMismatch, setAllowFilamentTrackSwitchMismatch] = useState(false)
@@ -999,7 +1013,10 @@ export function PrintModal({
       }
       if (Object.keys(next).length === 0) {
         void queryClient.invalidateQueries({ queryKey: ['print-dispatch'] })
-        onClose()
+        // The confirmation IS this dialog's close: `onClose` runs when the user dismisses it,
+        // so the caller's teardown still happens exactly once, just one acknowledgement later.
+        if (showSentConfirmation) setSentPrinterIds(submittedPrinterIds)
+        else onClose()
       }
     } finally {
       submitInFlightRef.current = false
@@ -1008,6 +1025,20 @@ export function PrintModal({
   }
 
   const dismissCurrentStep = onBack ?? onClose
+
+  // Swapped in rather than stacked on top: the print form has served its purpose, and leaving
+  // it behind the confirmation would offer a Print button for a send already made.
+  if (sentPrinterIds) {
+    return (
+      <PrintSentDialog
+        fileName={formatLibraryFileName(file.name)}
+        printerNames={sentPrinterIds
+          .map((printerId) => printers.find((printer) => printer.id === printerId)?.name)
+          .filter((name): name is string => Boolean(name))}
+        onClose={onClose}
+      />
+    )
+  }
 
   return (
     <>

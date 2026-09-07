@@ -1,7 +1,7 @@
 /**
  * Text that only shows a tooltip when its rendered content is truncated.
  */
-import { useLayoutEffect, useRef, useState, type RefObject } from 'react'
+import { useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { Tooltip, Typography, type TypographyProps } from '@mui/joy'
 
 type OverflowTooltipTextMetrics = {
@@ -12,11 +12,25 @@ type OverflowTooltipTextMetrics = {
 
 export function OverflowTooltipText({
   text,
+  formattedText,
   observeRef,
   onMetricsChange,
   ...typographyProps
 }: Omit<TypographyProps, 'children'> & {
   text: string
+  /**
+   * What to RENDER in place of `text`, for callers whose visible form differs from the string the
+   * tooltip should say (e.g. a brand prefix drawn as a logo). Must be a presentation of `text` and
+   * nothing else: the tooltip still quotes `text`, which is then the ONLY place the full wording
+   * survives, so a form that omits something not in `text` puts it out of reach entirely.
+   *
+   * Truncation is unaffected: the measurement clones the rendered node, so it measures whatever
+   * this draws rather than the string.
+   *
+   * NOT named `display`: these props spread onto Joy's `Typography`, whose system props include the
+   * CSS `display`, so that name type-checks as a style and silently never renders.
+   */
+  formattedText?: ReactNode
   observeRef?: RefObject<HTMLElement | null>
   onMetricsChange?: (metrics: OverflowTooltipTextMetrics) => void
 }) {
@@ -123,7 +137,7 @@ export function OverflowTooltipText({
 
   const content = (
     <Typography ref={textRef} {...typographyProps}>
-      {text}
+      {formattedText ?? text}
     </Typography>
   )
 

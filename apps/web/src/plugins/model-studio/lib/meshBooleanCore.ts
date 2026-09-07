@@ -18,6 +18,8 @@
 import * as THREE from 'three'
 import type { Brush as BrushType } from 'three-bvh-csg'
 import type { MeshBooleanOperation } from './meshBoolean'
+import { healTriangleSoupTJunctions } from './meshTJunctions'
+import { analyzeSoupTopology } from './meshTopology'
 
 /**
  * The CSG engine, fetched on FIRST USE rather than with the editor.
@@ -51,6 +53,20 @@ function soupFrom(brush: BrushType): Float32Array {
   soup.set(position.array as Float32Array)
   if (nonIndexed !== geometry) nonIndexed.dispose()
   return soup
+}
+
+/**
+ * A brush's geometry as the operation's ANSWER: read out, then healed.
+ *
+ * The evaluator subdivides a face where the other solid crosses it without subdividing the
+ * neighbour sharing the crossed edge, so its output carries T-junctions and `isClosedSoup` refuses
+ * it -- which made a boolean over a boolean's own result fail as "not a closed solid" on geometry
+ * nothing was wrong with. Healing on the way OUT means every consumer gets the honest mesh: the
+ * staged STL, the next boolean, and the slice. See `meshTJunctions.ts` for why the mesh is repaired
+ * rather than the gate relaxed.
+ */
+function resultSoupFrom(brush: BrushType): Float32Array {
+  return healTriangleSoupTJunctions(soupFrom(brush))
 }
 
 /**
@@ -105,11 +121,11 @@ export async function evaluateMeshBooleanSoups(
     const a = fold(listA, 'union')
     const b = fold(listB, 'union')
     if (!a) return new Float32Array(0)
-    if (!b) return soupFrom(a)
-    return soupFrom(evaluator.evaluate(a, b, engine.SUBTRACTION))
+    if (!b) return resultSoupFrom(a)
+    return resultSoupFrom(evaluator.evaluate(a, b, engine.SUBTRACTION))
   }
   const folded = fold(listA, operation)
-  return folded ? soupFrom(folded) : new Float32Array(0)
+  return folded ? resultSoupFrom(folded) : new Float32Array(0)
 }
 
 /**
@@ -168,94 +184,14 @@ export function toObjectLocalSoup(soup: Float32Array, worldToObject: THREE.Matri
  * on a shell that is wide open.
  */
 export function isClosedSoup(soup: Float32Array): boolean {
-  if (soup.length === 0 || soup.length % 9 !== 0) return false
-  const bits = new Uint32Array(soup.buffer, soup.byteOffset, soup.length)
-
-  // Vertex identity by exact bit pattern. A numeric hash into buckets, rather than a string key per
-  // corner: the strings are the whole cost at this size (measured 3.1s on 663k triangles, against
-  // ~0.4s here), and the bucket scan still compares the raw bits, so identity stays exact.
-  const buckets = new Map<number, number[]>()
-  const ids = new Int32Array(soup.length / 3)
-  const canonicalBits: number[] = []
-  for (let v = 0; v < ids.length; v++) {
-    const b = v * 3
-    const x = bits[b]!, y = bits[b + 1]!, z = bits[b + 2]!
-    // Zero has two encodings in IEEE 754 and a transform can produce either, so -0 is folded onto 0
-    // here; nothing else is normalized.
-    const hx = x === 0x8000_0000 ? 0 : x
-    const hy = y === 0x8000_0000 ? 0 : y
-    const hz = z === 0x8000_0000 ? 0 : z
-    const hash = (Math.imul(hx, 0x9e37_79b1) ^ Math.imul(hy, 0x85eb_ca6b) ^ Math.imul(hz, 0xc2b2_ae35)) | 0
-    let bucket = buckets.get(hash)
-    if (!bucket) { bucket = []; buckets.set(hash, bucket) }
-    let id = -1
-    for (const candidate of bucket) {
-      const c = candidate * 3
-      if (canonicalBits[c] === hx && canonicalBits[c + 1] === hy && canonicalBits[c + 2] === hz) { id = candidate; break }
-    }
-    if (id < 0) {
-      id = canonicalBits.length / 3
-      canonicalBits.push(hx, hy, hz)
-      bucket.push(id)
-    }
-    ids[v] = id
-  }
-
-  // Facets are keyed NUMERICALLY off those ids (a corner pair packs into one double, the third
-  // corner resolves in a bucket), because at this size string keys were the whole cost of the
-  // check: 3.1s against 0.4s on the model measured below.
-  const facetIds = new Map<number, number[]>()
-  const facetCorners: number[] = []
-  const facetUses: number[] = []
-  const span = canonicalBits.length / 3
-  for (let t = 0; t < ids.length; t += 3) {
-    const a = ids[t]!, b = ids[t + 1]!, c = ids[t + 2]!
-    // A degenerate triangle has no surface, so it bounds nothing and owns no edges. The real model
-    // measured below carries 228 of them.
-    if (a === b || b === c || a === c) continue
-    const lo = Math.min(a, b, c), hi = Math.max(a, b, c), mid = a + b + c - lo - hi
-    let facet = -1
-    const bucket = facetIds.get(lo * span + mid)
-    if (bucket) for (const candidate of bucket) if (facetCorners[candidate * 3 + 2] === hi) { facet = candidate; break }
-    if (facet < 0) {
-      facet = facetUses.length
-      facetCorners.push(lo, mid, hi)
-      facetUses.push(0)
-      if (bucket) bucket.push(facet)
-      else facetIds.set(lo * span + mid, [facet])
-    }
-    facetUses[facet]!++
-  }
-  if (facetUses.length === 0) return false
-
-  // Edges are counted with the mesh's COVER MULTIPLICITY divided out: the smallest number of times
-  // any facet appears. That single number is what catches an export written twice over -- doubling
-  // puts every edge at four uses, so a wide-open shell sails through a "no edge used once" rule --
-  // and a mesh covered once (the overwhelmingly common case) divides by one and is counted exactly
-  // as it is.
-  //
-  // Dividing rather than collapsing to one copy is load-bearing, and a real model forced it. A
-  // coincident PAIR of triangles is a zero-thickness flap whose free rim is used exactly twice, by
-  // its own two copies, which is indistinguishable edge-for-edge from a doubled shell's boundary;
-  // only the scale tells them apart. The 663k-triangle model measured here has two such flaps and is
-  // watertight, so flattening every facet to one copy would open its rims and refuse a model that
-  // slices perfectly, while dividing leaves them at two and preserves the answer at any cover.
-  let cover = Infinity
-  for (const uses of facetUses) if (uses < cover) cover = uses
-  const edges = new Map<number, number>()
-  const edgeKey = (p: number, q: number) => (p < q ? p * span + q : q * span + p)
-  for (let facet = 0; facet < facetUses.length; facet++) {
-    const weight = Math.floor(facetUses[facet]! / cover)
-    const lo = facetCorners[facet * 3]!, mid = facetCorners[facet * 3 + 1]!, hi = facetCorners[facet * 3 + 2]!
-    for (const key of [edgeKey(lo, mid), edgeKey(mid, hi), edgeKey(lo, hi)]) {
-      edges.set(key, (edges.get(key) ?? 0) + weight)
-    }
-  }
-  if (edges.size === 0) return false
+  const topology = analyzeSoupTopology(soup)
+  // Nothing to analyse is NOT the same as nothing wrong: an empty soup and an all-degenerate one
+  // both bound no volume, so they are refused rather than passing vacuously.
+  if (topology === null) return false
   // A BOUNDARY edge (used once) is the failure. Over-sharing is not: two solids meeting along an
   // edge are non-manifold yet still bound a volume, which is all CSG needs. The measured model has
   // 220 such edges and slices perfectly.
-  for (const count of edges.values()) if (count < 2) return false
+  for (const count of topology.edgeUses.values()) if (count < 2) return false
   return true
 }
 

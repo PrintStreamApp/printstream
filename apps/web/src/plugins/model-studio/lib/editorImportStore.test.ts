@@ -14,7 +14,7 @@ import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { importFileAccept } from './editorImportStore'
-import { apiImportStore } from './editorImports'
+import { createApiImportStore } from './editorImports'
 import { createLocalImportStore, LocalImportError } from './localImportStore'
 
 const PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -41,8 +41,8 @@ function enclosingJsxProp(source: string, at: number): string | null {
 }
 
 test('the api store offers every format its server can convert', () => {
-  assert.equal(apiImportStore.supportsLibrarySource, true)
-  assert.equal(importFileAccept(apiImportStore), '.stl,.step,.stp,.3mf')
+  assert.equal(createApiImportStore().supportsLibrarySource, true)
+  assert.equal(importFileAccept(createApiImportStore()), '.stl,.step,.stp,.3mf')
 })
 
 test('a server-less store offers the same formats, having no library to import from', () => {
@@ -51,7 +51,7 @@ test('a server-less store offers the same formats, having no library to import f
   // extraction and the STEP fold are shared and the OCCT WASM loads in the tab, a file must not
   // import differently depending on which host opened it.
   assert.equal(store.supportsLibrarySource, false)
-  assert.deepEqual([...store.importableFormats].sort(), [...apiImportStore.importableFormats].sort())
+  assert.deepEqual([...store.importableFormats].sort(), [...createApiImportStore().importableFormats].sort())
   assert.equal(importFileAccept(store), '.stl,.step,.stp,.3mf')
   store.dispose()
 })

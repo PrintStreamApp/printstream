@@ -43,7 +43,7 @@ import {
   type PrinterStatus,
   type ThreeMfIndex as LibraryThreeMfIndexDto
 } from '@printstream/shared'
-import { toThreeMfIndexDto } from '@printstream/shared/three-mf'
+import { THREE_MF_INDEX_PARSER_VERSION, toThreeMfIndexDto } from '@printstream/shared/three-mf'
 import { annotateRequestAuditLog, printOverrideAuditMetadata } from '../lib/audit-logs.js'
 import {
   copyBridgeLibraryFile,
@@ -87,6 +87,7 @@ import { meshToBinaryStl, tessellateStepMesh } from '../lib/mesh-import.js'
 import { extractThreeMfImportMesh } from '../lib/three-mf-mesh-extract.js'
 import { libraryDir } from '../lib/library-paths.js'
 import { deleteLibraryFolderTree, ensureLibraryFolderPath, persistLibraryFileFromLocalPath } from '../lib/library-files.js'
+import { ensureLibrarySnapshotFromLocalPath } from '../lib/print-file-snapshots.js'
 import { resolveRequestActorAttribution } from '../lib/actor-attribution.js'
 import { visibleLibraryFilesWhere } from '../lib/library-visibility.js'
 import { getFavoritedFileIds, resolveFavoriteOwnerKey } from '../lib/library-favorites.js'
@@ -168,6 +169,26 @@ const chunkUploadInitSchema = z.object({
    * uploading a picked/dropped directory replicates its tree in the library.
    */
   relativeFolderPath: z.array(z.string().trim().min(1).max(120)).max(32).optional()
+})
+
+/**
+ * What the finished bytes BECOME. Sent with the completion step rather than the init step
+ * because it decides persistence, not transfer: the chunking, resume, pacing and bridge
+ * streaming above are identical for all three outcomes, and the editor is the one caller that
+ * knows, at the moment it finishes baking, whether it is saving the project or only staging it.
+ *
+ * The two fields are independent, and `snapshot` is what changes the meaning of the other:
+ * - neither: an ordinary upload, matched to an overwrite target by name (unchanged).
+ * - `targetFileId` alone: a new version OF that file. Its name and folder win over the
+ *   upload's, so the save cannot rename or move the project it is saving.
+ * - `snapshot`: the bytes land as a hidden, content-deduped row and NOTHING else happens.
+ *   `targetFileId` is then read-only: the snapshot borrows that file's bridge, because a
+ *   browser has no bridge id of its own (`LibraryFile` deliberately carries none) and
+ *   snapshots must be stored somewhere.
+ */
+const chunkUploadCompleteSchema = z.object({
+  targetFileId: z.string().trim().min(1).optional(),
+  snapshot: z.boolean().optional()
 })
 
 interface LibraryUploadSession {
@@ -327,6 +348,8 @@ async function createLibraryFileFromUpload(input: {
   folderId: string | null
   bridgeId: string | null
   hidden: boolean
+  /** Version this row rather than matching one by name (see `chunkUploadCompleteSchema`). */
+  targetFileId?: string | null
   onBridgeProgress?: (transferredBytes: number) => Promise<void> | void
   onBridgeComplete?: () => Promise<void> | void
 }) {
@@ -339,6 +362,7 @@ async function createLibraryFileFromUpload(input: {
     folderId: input.folderId,
     bridgeId: input.bridgeId,
     hidden: input.hidden,
+    targetFileId: input.targetFileId ?? null,
     request: input.request,
     auditAction: 'upload',
     missingBridgeMessage: 'Select a bridge before uploading to the library',
@@ -907,8 +931,19 @@ libraryRouter.delete('/uploads/:uploadId', requireRequestPermission(LIBRARY_UPLO
   response.status(204).end()
 })
 
+/**
+ * Finish a chunked upload and decide what the bytes become (see `chunkUploadCompleteSchema`).
+ *
+ * Responses share `file.id`/`file.name` so a caller that only needs the id does not branch:
+ * a persisted upload answers with the full `LibraryFile` DTO plus `unchanged` and
+ * `archivedVersionId` (matching `POST /api/editor/save`, whose `archivedVersionId` the editor
+ * pins as its next save's content base), while a staged snapshot answers with `snapshot: true`
+ * and the id alone, because a hidden row has no listing DTO worth deriving.
+ */
 libraryRouter.post('/uploads/:uploadId/complete', requireRequestPermission(LIBRARY_UPLOAD_PERMISSION), async (request, response) => {
   const uploadId = requireRouteParam(request.params.uploadId, 'Upload id')
+  const parsedBody = chunkUploadCompleteSchema.safeParse(request.body ?? {})
+  if (!parsedBody.success) throw badRequest(parsedBody.error.issues[0]?.message ?? 'Invalid upload completion payload')
   const session = await readUploadSession(uploadId)
   if (!session) throw notFound('Upload session not found')
   const workspaceId = requireRequestWorkspaceId(request)
@@ -916,11 +951,53 @@ libraryRouter.post('/uploads/:uploadId/complete', requireRequestPermission(LIBRA
   if (session.receivedBytes !== session.sizeBytes) {
     throw badRequest(`Upload is incomplete. Resume at byte ${session.receivedBytes}.`)
   }
+  const targetFileId = parsedBody.data.targetFileId ?? null
+  const staging = parsedBody.data.snapshot === true
+  // Read once, for the bridge and for the demo guard. A missing row is a 404 here rather than
+  // deeper in, so a stale editor tab hears "that file is gone" instead of silently getting a
+  // second copy of the project (the whole reason the target is addressed by id).
+  //
+  // The two intents need different SCOPES. Versioning may only address a row the user can see, so
+  // it keeps the visible filter. Staging only reads the row's bridge and never touches it, and the
+  // row it is handed is routinely HIDDEN: an editor-born project's base is the new-project
+  // scaffold, so the visible filter refused every slice of unsaved work in a new project. Hidden
+  // rows stay reachable by id on purpose (see `library-visibility.ts`); a deleted one does not.
+  const addressedFile = targetFileId
+    ? await prisma.libraryFile.findFirst({
+      where: staging
+        ? { id: targetFileId, workspaceId, deletedAt: null }
+        : visibleLibraryFilesWhere({ id: targetFileId, workspaceId }),
+      select: { id: true, name: true, hidden: true, ownerBridgeId: true }
+    })
+    : null
+  if (targetFileId && !addressedFile) throw notFound('File not found')
+  // Only the versioning path mutates the addressed file. Staging reads its bridge and leaves it
+  // alone, so the demo's read-only curated library does not block a demo user from slicing.
+  if (addressedFile && !staging) assertDemoLibraryFileMutationAllowed(request, addressedFile)
+
   const { dataPath } = sessionPaths(uploadId)
   try {
     session.phase = 'transferring'
     session.bridgeReceivedBytes = 0
     await writeUploadSession(session)
+    const reportBridgeProgress = async (transferredBytes: number): Promise<void> => {
+      session.bridgeReceivedBytes = transferredBytes
+      await writeUploadSession(session)
+    }
+
+    if (staging) {
+      const staged = await stageLibraryUploadSnapshot({
+        request,
+        workspaceId,
+        session,
+        sourcePath: dataPath,
+        addressedFile,
+        onBridgeProgress: reportBridgeProgress
+      })
+      response.status(201).json({ file: { id: staged.id, name: staged.name }, snapshot: true })
+      return
+    }
+
     // Folder-structure uploads: materialize the file's folder chain now (hidden
     // uploads never join a folder, so skip the tree there).
     const folderId = !session.hidden && session.relativeFolderPath?.length
@@ -939,21 +1016,87 @@ libraryRouter.post('/uploads/:uploadId/complete', requireRequestPermission(LIBRA
       folderId,
       bridgeId: session.bridgeId,
       hidden: session.hidden,
-      onBridgeProgress: async (transferredBytes) => {
-        session.bridgeReceivedBytes = transferredBytes
-        await writeUploadSession(session)
-      },
+      targetFileId,
+      onBridgeProgress: reportBridgeProgress,
       onBridgeComplete: async () => {
         session.phase = 'finalizing'
         session.bridgeReceivedBytes = session.sizeBytes
         await writeUploadSession(session)
       }
     })
-    response.status(201).json({ file: await toDto(created.file, { persistDerived: true }), unchanged: created.unchanged })
+    response.status(201).json({
+      file: await toDto(created.file, { persistDerived: true }),
+      unchanged: created.unchanged,
+      archivedVersionId: created.archivedVersionId
+    })
   } finally {
     await deleteUploadSession(uploadId)
   }
 })
+
+/**
+ * Store a completed upload as a hidden, content-deduped snapshot instead of as a library file.
+ *
+ * What the editor needs to slice unsaved work: the bytes must be addressable by id, must not
+ * become (or version) the user's project, and must not appear in any listing. That is exactly
+ * a preserved-project snapshot, so this reuses it rather than inventing a second hidden kind:
+ * identical bytes resolve to one row, and `pruneUnreferencedProjectSnapshots` reclaims a row
+ * that no job or sliced output ever came to reference.
+ */
+async function stageLibraryUploadSnapshot(input: {
+  request: Request
+  workspaceId: string
+  session: LibraryUploadSession
+  sourcePath: string
+  addressedFile: { id: string; name: string; ownerBridgeId?: string | null } | null
+  onBridgeProgress: (transferredBytes: number) => Promise<void>
+}): Promise<{ id: string; name: string }> {
+  const ownerBridgeId = await resolveSnapshotOwnerBridgeId(input.session, input.addressedFile)
+  const snapshot = await ensureLibrarySnapshotFromLocalPath({
+    workspaceId: input.workspaceId,
+    ownerBridgeId,
+    fileName: input.session.fileName,
+    sourcePath: input.sourcePath,
+    sizeBytes: input.session.sizeBytes,
+    onBridgeProgress: input.onBridgeProgress
+  })
+  annotateRequestAuditLog(input.request, {
+    action: 'stage-snapshot',
+    resource: 'library file',
+    summary: `Staged the hidden snapshot ${snapshot.name}.`,
+    metadata: {
+      fileId: snapshot.id,
+      fileName: snapshot.name,
+      sizeBytes: input.session.sizeBytes,
+      // The project the bytes were staged FROM, when the caller named one: a snapshot is
+      // content-addressed and shared, so the row itself records no such link.
+      sourceFileId: input.addressedFile?.id ?? null
+    }
+  })
+  return { id: snapshot.id, name: snapshot.name }
+}
+
+/**
+ * Which bridge a staged snapshot's bytes go to. The addressed project comes first: a snapshot
+ * of a project belongs on the bridge that holds the project, and it is the only hint a browser
+ * always has (it knows the file it opened, never a bridge id).
+ */
+async function resolveSnapshotOwnerBridgeId(
+  session: LibraryUploadSession,
+  addressedFile: { ownerBridgeId?: string | null } | null
+): Promise<string> {
+  if (addressedFile?.ownerBridgeId) return addressedFile.ownerBridgeId
+  if (session.bridgeId) return session.bridgeId
+  if (session.folderId) {
+    const folder = await prisma.libraryFolder.findUnique({
+      where: { id: session.folderId },
+      select: { ownerBridgeId: true }
+    })
+    if (folder?.ownerBridgeId) return folder.ownerBridgeId
+  }
+  // Library bytes are always bridge-owned, so there is no local fallback to stage into.
+  throw badRequest('Select a bridge before staging a snapshot')
+}
 
 libraryRouter.get('/:id/versions', requireRequestPermission(LIBRARY_VIEW_PERMISSION), async (request, response) => {
   const fileId = requireRouteParam(request.params.id, 'File id')
@@ -2244,12 +2387,18 @@ function sendNotModifiedIfLibraryFileFresh(
 }
 
 /**
- * Scene ETag version. The library-file ETag is keyed on the file's bytes, so when
- * the scene parser starts emitting new fields (e.g. exclude-zone labels, prime
- * tower) the ETag for an unchanged file would otherwise stay the same and clients
- * would keep a stale cached `/scene` body via 304. Bump this on scene-shape changes.
+ * Scene ETag version. The library-file ETag is keyed on the file's bytes, so when the scene parser
+ * starts emitting new fields (e.g. exclude-zone labels, prime tower) the ETag for an unchanged file
+ * would otherwise stay the same and clients would keep a stale cached `/scene` body via 304.
+ *
+ * DERIVED from `THREE_MF_INDEX_PARSER_VERSION` rather than hand-bumped, because it was hand-bumped
+ * and then forgotten: the parser gained per-part `textInfo` at v34 and this string sat at `scene-v9`
+ * (last moved in `1116d157`, for unrelated work), so a browser holding a pre-v34 body kept being
+ * handed a 304 and never saw the field the server had started producing. The scene cache on the
+ * READ side is already keyed on that constant, so tying the ETag to it makes both ends of the same
+ * pipe move together. The `scene-v` prefix stays so a value is still recognisable in a log.
  */
-const SCENE_ETAG_VERSION = 'scene-v9'
+const SCENE_ETAG_VERSION = `scene-v${THREE_MF_INDEX_PARSER_VERSION}`
 
 function buildLibraryFileEtag(
   row: { ownerBridgeId?: string | null; storedPath: string; sizeBytes: number; uploadedAt: Date },

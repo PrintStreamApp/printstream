@@ -20,12 +20,17 @@
  * made a failing project slice: it gave every slot a file.
  *
  * Precedence per slot: the request's own materialized preset (it carries the
- * user's per-material overrides) → the preset the 3MF names for that slot →
- * Generic PLA as a structural stand-in. Only if a slot can satisfy none of those
- * does the whole list collapse to null, leaving the project's embedded config to
+ * user's per-material overrides) → a SUPPLIED preset of the name the 3MF gives
+ * that slot (this is how a workspace preset is reached, and it outranks a builtin
+ * of the same name) → a BUILTIN of that name. If a slot can satisfy none of those
+ * the whole list collapses to null, leaving the project's embedded config to
  * drive every slot, which is what BambuStudio's own project loader does anyway
  * (`PresetBundle::load_config_model` scatters the project config column-wise onto
  * a complete default preset; it never needs per-slot preset files).
+ *
+ * There is deliberately NO stand-in preset. Substituting one (this used to fall back to Generic
+ * PLA) is not a structural nicety: a `--load-filaments` preset overrides the project's embedded
+ * values, so it silently slices the user's material with a different one's physics.
  *
  * Counterpart: `buildFilamentCoverageFromEmbedded` in `project-settings-fallback.ts`
  * enforces the same invariant for the settings-REPAIR export.
@@ -52,6 +57,17 @@ export interface FilamentSlotCoverageInput {
   /** Profile ids the request actually resolved to a preset file. */
   requestedProfileIds: ReadonlySet<string>
   /**
+   * Profile id by preset NAME for every filament file the caller supplied, so a slot can be
+   * covered by the preset it NAMES and not only by one the request picked for it.
+   *
+   * This is what makes a workspace preset as reachable as a bundled one. BambuStudio keeps user and
+   * system presets in a single `PresetCollection` and looks a project's slot up by name across both
+   * (`PresetCollection::load_external_preset` -> `find_preset_internal`), so a project naming
+   * "Bambu PLA Basic - Custom" must resolve to that preset here too. Supplied names beat builtins
+   * for the same reason they do there: a user preset of that exact name IS the match.
+   */
+  suppliedProfileIdsByName: ReadonlyMap<string, string>
+  /**
    * The input 3MF's per-slot `filament_settings_id`. Authoritative for the slot
    * COUNT and for the preset each slot names, by this point the pre-slice
    * metadata rewrite has already written the request's choices into it.
@@ -60,9 +76,6 @@ export interface FilamentSlotCoverageInput {
   /** Whether a builtin preset name exists in the bundled catalogue. */
   hasBuiltinPreset: (name: string) => Promise<boolean>
 }
-
-/** The stand-in used for a slot no preset can be found for; only ever a structural baseline. */
-export const FALLBACK_FILAMENT_PRESET_NAME = 'Generic PLA'
 
 /**
  * One preset source per project slot, or `null` when full coverage is impossible
@@ -80,7 +93,6 @@ export async function buildFilamentSlotCoverage(input: FilamentSlotCoverageInput
   const requestedBySlot = new Map<number, FilamentSlotRequest>()
   for (const slot of input.slots) requestedBySlot.set(slot.projectFilamentId, slot)
 
-  let fallbackExists: boolean | undefined
   const sources: FilamentSlotSource[] = []
 
   for (let index = 0; index < slotCount; index += 1) {
@@ -91,17 +103,31 @@ export async function buildFilamentSlotCoverage(input: FilamentSlotCoverageInput
     }
 
     // No file for this slot (a `project:` preset, or one that did not resolve):
-    // fall back to whatever preset the 3MF names for the slot.
+    // fall back to whatever preset the 3MF names for the slot, workspace presets first.
     const embeddedName = input.embeddedPresetNames[index]?.trim()
+    const suppliedProfileId = embeddedName ? input.suppliedProfileIdsByName.get(embeddedName) : undefined
+    if (suppliedProfileId) {
+      sources.push({ origin: 'requested', profileId: suppliedProfileId })
+      continue
+    }
     if (embeddedName && await input.hasBuiltinPreset(embeddedName)) {
       sources.push({ origin: 'builtin', name: embeddedName })
       continue
     }
 
-    if (fallbackExists === undefined) fallbackExists = await input.hasBuiltinPreset(FALLBACK_FILAMENT_PRESET_NAME)
-    // Nothing can cover this slot, so no list can be complete: see the invariant.
-    if (!fallbackExists) return null
-    sources.push({ origin: 'builtin', name: FALLBACK_FILAMENT_PRESET_NAME })
+    // Nothing NAMES a preset we hold for this slot, so no list can be complete: see the invariant.
+    //
+    // This used to substitute Generic PLA as a "structural stand-in", on the reasoning that any
+    // file beat a short list. It is not structural: `--load-filaments` presets WIN over the
+    // project's embedded values, so a stand-in slices the user's material with Generic PLA's
+    // temperatures, flow and plate temps, and stamps the output as Generic PLA so nothing
+    // downstream can even match it back to the real spool. Every workspace preset hit this, since
+    // none of them is a builtin. Loading NOTHING is both safe and what BambuStudio's own project
+    // loader does (`PresetBundle::load_config_model` scatters the project config column-wise onto a
+    // complete default preset; it never needs per-slot files), and the project reaching the engine
+    // is self-describing by then: `slice-settings-authoring.ts` has already written the chosen
+    // presets into it, so the user's choices survive the files being dropped.
+    return null
   }
 
   return sources

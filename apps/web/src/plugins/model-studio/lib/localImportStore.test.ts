@@ -12,7 +12,7 @@ function triangleStl(): Uint8Array {
   })
 }
 
-test('generated geometry stages without leaving the browser', () => {
+test('generated geometry stages without leaving the browser', async () => {
   const store = createLocalImportStore()
   try {
     const staged = store.stageStlBytes('Cut half.stl', triangleStl())
@@ -21,7 +21,7 @@ test('generated geometry stages without leaving the browser', () => {
 
     // The bake takes the mesh itself, not an id to resolve server-side, which is what removes
     // the upload/download round-trip the api store required.
-    const [imported] = store.importsForBake()
+    const [imported] = await store.importsForBake()
     assert.equal(imported?.importId, staged.importId)
     assert.equal(imported?.mesh.indices.length, 3)
   } finally {
@@ -73,7 +73,7 @@ test('an STL picked from disk is parsed and welded in the tab', async () => {
     assert.equal(staged.triangleCount, 1)
     // The weld is what makes the mesh indexed rather than triangle soup: three distinct corners,
     // not three unshared vertices per triangle. Skipping it mangles small features at slice time.
-    assert.equal(store.importsForBake()[0]?.mesh.positions.length, 9)
+    assert.equal((await store.importsForBake())[0]?.mesh.positions.length, 9)
   } finally {
     store.dispose()
   }
@@ -90,13 +90,13 @@ test('only the final extension is dropped from an import name', async () => {
   }
 })
 
-test('ids are unique per staged model so one cannot overwrite another', () => {
+test('ids are unique per staged model so one cannot overwrite another', async () => {
   const store = createLocalImportStore()
   try {
     const first = store.stageStlBytes('a.stl', triangleStl())
     const second = store.stageStlBytes('b.stl', triangleStl())
     assert.notEqual(first.importId, second.importId)
-    assert.equal(store.importsForBake().length, 2)
+    assert.equal((await store.importsForBake()).length, 2)
   } finally {
     store.dispose()
   }

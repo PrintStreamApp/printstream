@@ -17,6 +17,7 @@
 import { Box, Dropdown, Menu, MenuButton, Typography } from '@mui/joy'
 import type { SxProps } from '@mui/joy/styles/types'
 import WarningAmberRoundedIcon from '@mui/icons-material/WarningAmberRounded'
+import { PresetNameWithBrandMark } from '../BambuBrandMark'
 import { LoadedMaterialMenuItems, type LoadedMaterialMenuSource } from './LoadedMaterialMenuItems'
 import { filamentTextColor } from '../../lib/filamentColor'
 
@@ -93,8 +94,12 @@ export function MaterialSwatchButton({
       <Typography level="body-xs" sx={{ fontWeight: 700, lineHeight: 1, color: 'inherit', flexShrink: 0 }}>
         {filamentIndex + 1}
       </Typography>
+      {/* The vendor prefix renders as Bambu's mark, as it does in the preset picker and in
+          BambuStudio itself. It matters more here than there: this row is the narrowest surface
+          the preset name appears on, and it shares that width with the colour name. `aria-label`
+          above still spells "Bambu" out, so nothing is lost to a screen reader. */}
       <Typography level="body-xs" fontWeight="md" noWrap sx={{ color: 'inherit' }}>
-        {presetName} · {colorName}
+        <PresetNameWithBrandMark name={presetName} /> · {colorName}
       </Typography>
       {/* Positioned by a Joy wrapper: `sx` on a Material icon runs through the Material style
           engine, which this Joy-only app gives no theme, and throws at render. */}

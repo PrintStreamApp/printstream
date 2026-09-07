@@ -9,6 +9,7 @@
  */
 import type { PrinterStage, PrinterStatus } from './printer-contracts.js'
 import { isPrinterActiveJobStage } from './printer-capabilities.js'
+import { hasPrinterErrorReport } from './printer-error-state.js'
 import { isFilamentTrackSwitchInstalled, isFilamentTrackSwitchReady } from './filament-track-switch.js'
 
 export type PrinterActionAvailability = {
@@ -137,6 +138,12 @@ export function getLoadFilamentAvailability(
   return allowPrinterAction()
 }
 
+/**
+ * Both recovery entry points below run on {@link hasPrinterErrorReport} rather
+ * than "any error is set", so a print the user cancelled does not offer a
+ * recovery surface. A cancellation reaches us as a FAILED stage plus a
+ * `print_error`, which is indistinguishable from a fault without that check.
+ */
 export function getCheckAssistantAvailability(
   status: Pick<PrinterStatus, 'online' | 'stage' | 'deviceError' | 'hmsErrors'> | null | undefined
 ): PrinterActionAvailability {
@@ -144,7 +151,7 @@ export function getCheckAssistantAvailability(
   if (status.stage !== 'paused' && status.stage !== 'failed') {
     return blockPrinterAction('Check assistant is only available while the printer needs attention')
   }
-  if (status.deviceError == null && status.hmsErrors.length === 0) {
+  if (!hasPrinterErrorReport(status)) {
     return blockPrinterAction('Check assistant is only available while the printer reports a warning or HMS alert')
   }
   return allowPrinterAction()
@@ -157,7 +164,7 @@ export function getJumpToLiveViewAvailability(
   if (status.stage !== 'paused' && status.stage !== 'failed') {
     return blockPrinterAction('Live view is only available while the printer needs attention')
   }
-  if (status.deviceError == null && status.hmsErrors.length === 0) {
+  if (!hasPrinterErrorReport(status)) {
     return blockPrinterAction('Live view is only available while the printer reports a warning or HMS alert')
   }
   return allowPrinterAction()

@@ -494,12 +494,43 @@ function createAxisTickLabel(text: string, heightMm: number): THREE.Object3D | n
   return label
 }
 
-/**
- * Build a flat text label that lies on the bed and is scaled + rotated to fit inside
- * a zone's bounding box (running along its long axis), so labels read clearly within
- * thin nozzle-only strips rather than overflowing them.
- */
+/** A zone's label: the shared fitter, in the exclusion-zone palette. */
 function createZoneLabel(text: string, centerX: number, centerY: number, boxWidth: number, boxHeight: number): THREE.Object3D | null {
+  return createFlatBedLabel({ text, centerX, centerY, boxWidth, boxHeight, color: 'rgba(220, 150, 130, 0.9)' })
+}
+
+/**
+ * Build a flat text label that lies in the XY plane, scaled + rotated to fit inside a box
+ * (running along its long axis), so labels read clearly within thin strips rather than
+ * overflowing them.
+ *
+ * Shared by the exclusion-zone labels and the purge tower's, because a fixture label is the same
+ * problem every time: fit words into a footprint the user did not choose, without a second text
+ * stack. The caller owns placement and colour; everything about MEASURING and fitting is here.
+ *
+ * Returns null when the text cannot be measured (no 2D context) or the box is too small to hold a
+ * legible glyph, which callers treat as "no label" rather than as an error.
+ */
+export function createFlatBedLabel({
+  text,
+  centerX,
+  centerY,
+  boxWidth,
+  boxHeight,
+  color,
+  z = 0.05,
+  renderOrder = 4
+}: {
+  text: string
+  centerX: number
+  centerY: number
+  boxWidth: number
+  boxHeight: number
+  /** Canvas fill style; carries its own alpha so a label can sit lightly on its fixture. */
+  color: string
+  z?: number
+  renderOrder?: number
+}): THREE.Object3D | null {
   const fontSize = 48
   const padding = 10
   const canvas = document.createElement('canvas')
@@ -510,7 +541,7 @@ function createZoneLabel(text: string, centerX: number, centerY: number, boxWidt
   canvas.width = Math.ceil(textWidth + padding * 2)
   canvas.height = fontSize + padding * 2
   context.font = `600 ${fontSize}px sans-serif`
-  context.fillStyle = 'rgba(220, 150, 130, 0.9)'
+  context.fillStyle = color
   context.textAlign = 'center'
   context.textBaseline = 'middle'
   context.fillText(text, canvas.width / 2, canvas.height / 2)
@@ -541,8 +572,8 @@ function createZoneLabel(text: string, centerX: number, centerY: number, boxWidt
     new THREE.MeshBasicMaterial({ map: texture, transparent: true, depthWrite: false, side: THREE.DoubleSide })
   )
   if (vertical) mesh.rotation.z = Math.PI / 2
-  mesh.position.set(centerX, centerY, 0.05)
-  mesh.renderOrder = 4
+  mesh.position.set(centerX, centerY, z)
+  mesh.renderOrder = renderOrder
   return mesh
 }
 

@@ -15,6 +15,21 @@ import { rewriteThreeMfEntries } from './three-mf-internal.js'
 import { parseBrimEarPoints, parseCustomGcodePauses, parseCustomGcodeToolChanges, parseModelSettingsScene } from './three-mf-reader.js'
 import type { SceneEdit, SceneEditFilament } from '@printstream/shared'
 
+/**
+ * The model half of a settings fixture: an object whose `<component>` list mirrors its `<part>`
+ * ids, the ordinary shape BambuStudio writes. The part appliers resolve an ordinal through this
+ * list (`resolvePartBlockIndex`), so it travels with the settings document.
+ */
+const modelForParts = (objects: Array<{ objectId: number; partIds: number[] }>): string => [
+  '<model><resources>',
+  ...objects.flatMap(({ objectId, partIds }) => [
+    ` <object id="${objectId}" type="model"><components>`,
+    ...partIds.map((id) => `  <component objectid="${id}"/>`),
+    ' </components></object>'
+  ]),
+  '</resources></model>'
+].join('\n')
+
 const sliceInfoXml = `
 <config>
   <plate>
@@ -1309,7 +1324,7 @@ test('parseModelSettingsScene reads object process overrides but not structural 
 
 test('applyPartProcessOverrides sets a part\'s process metadata without touching the object or siblings', () => {
   const xml = '<config><object id="3"><metadata key="name" value="Asm"/><metadata key="wall_loops" value="2"/><part id="3"><metadata key="name" value="A"/></part><part id="4"><metadata key="name" value="B"/></part></object></config>'
-  const out = applyPartProcessOverrides(xml, [{ objectId: 3, partIndex: 1, overrides: { wall_loops: '6' } }])
+  const out = applyPartProcessOverrides(xml, [{ objectId: 3, partIndex: 1, overrides: { wall_loops: '6' } }], modelForParts([{ objectId: 3, partIds: [3, 4] }]))
   // Part 4 gains the override; its name (structural) stays; part 3 and the object head are untouched.
   const part4 = /<part id="4">[\s\S]*?<\/part>/.exec(out)?.[0] ?? ''
   assert.match(part4, /<metadata key="wall_loops" value="6"\/>/)
@@ -1328,7 +1343,7 @@ test('applyPartProcessOverrides refuses to inject structural keys smuggled into 
     objectId: 3,
     partIndex: 0,
     overrides: { wall_loops: '6', matrix: '9 9 9 9 9 9 9 9 9 9 9 9 9 9 9 9', source_offset_x: '42', name: 'evil' }
-  }])
+  }], modelForParts([{ objectId: 3, partIds: [4] }]))
   const part4 = /<part id="4">[\s\S]*?<\/part>/.exec(out)?.[0] ?? ''
   assert.match(part4, /<metadata key="wall_loops" value="6"\/>/)
   // The real structural entries survive untouched, and no duplicates/forgeries are injected.
@@ -1341,7 +1356,7 @@ test('applyPartProcessOverrides refuses to inject structural keys smuggled into 
 
 test('applyPartTypeChanges rewrites only the targeted part\'s subtype', () => {
   const xml = '<config><object id="3"><part id="3" subtype="normal_part"><metadata key="name" value="A"/></part><part id="4" subtype="normal_part"><metadata key="name" value="B"/></part></object><object id="7"><part id="8" subtype="normal_part"/></object></config>'
-  const out = applyPartTypeChanges(xml, [{ objectId: 3, partIndex: 1, subtype: 'modifier_part' }])
+  const out = applyPartTypeChanges(xml, [{ objectId: 3, partIndex: 1, subtype: 'modifier_part' }], modelForParts([{ objectId: 3, partIds: [3, 4] }, { objectId: 7, partIds: [8] }]))
   assert.match(out, /<part id="4" subtype="modifier_part">/)
   assert.match(out, /<part id="3" subtype="normal_part">/)
   assert.match(out, /<part id="8" subtype="normal_part"\/>/)
@@ -1349,7 +1364,7 @@ test('applyPartTypeChanges rewrites only the targeted part\'s subtype', () => {
 
 test('applyPartTypeChanges inserts a subtype attribute when the part has none', () => {
   const xml = '<config><object id="3"><part id="4"><metadata key="name" value="B"/></part></object></config>'
-  const out = applyPartTypeChanges(xml, [{ objectId: 3, partIndex: 0, subtype: 'support_blocker' }])
+  const out = applyPartTypeChanges(xml, [{ objectId: 3, partIndex: 0, subtype: 'support_blocker' }], modelForParts([{ objectId: 3, partIds: [4] }]))
   assert.match(out, /<part id="4" subtype="support_blocker">/)
 })
 

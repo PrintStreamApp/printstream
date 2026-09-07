@@ -5,7 +5,12 @@
  * device/HMS errors needing attention, and detects when a pending dispatched
  * print has actually started so the optimistic placeholder can be cleared.
  */
-import { isPrinterActiveJobStage, isPrinterIdleCompatibleStage, type PrinterStatus } from '@printstream/shared'
+import {
+  isPrintCancellationError,
+  isPrinterActiveJobStage,
+  isPrinterIdleCompatibleStage,
+  type PrinterStatus
+} from '@printstream/shared'
 
 type ProgressSummaryStatus = Pick<PrinterStatus, 'stage' | 'currentLayer' | 'remainingMinutes'>
 type SecondaryStageStatus = Pick<PrinterStatus, 'stage' | 'subStage'>
@@ -183,12 +188,16 @@ export function shouldShowLiveSecondaryStageSummary(
  * @param options.includeHmsErrors When false, HMS alerts are omitted from the
  *   summary (the active view's "HMS errors" card toggle is off); a more serious
  *   device error still surfaces. Defaults to true.
+ *
+ * A device error that only records a cancellation is not an attention item: the
+ * print ended because someone asked it to, and surfacing "The task was canceled."
+ * in the card's warning row reads as a fault the user has to clear.
  */
 export function getPrinterAttentionSummary(
   status: AttentionSummaryStatus | undefined,
   options: { includeHmsErrors?: boolean } = {}
 ): PrinterAttentionSummary | null {
-  if (status?.deviceError) {
+  if (status?.deviceError && !isPrintCancellationError(status.deviceError)) {
     return {
       kind: 'deviceError',
       code: status.deviceError.code,

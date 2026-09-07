@@ -204,9 +204,49 @@ export interface ChunkedLibraryUploadOptions {
    * folder-structure uploads; the API creates any missing folders on completion.
    */
   relativeFolderPath?: string[]
+  /**
+   * Version THIS file rather than whichever one the name happens to match.
+   *
+   * The editor knows the row it is saving a new version of. Name matching cannot express that: a
+   * project renamed or moved since it was opened would be saved as a SECOND file instead of a
+   * version. The addressed row keeps its own name and folder, since a save is neither a rename nor
+   * a move, and a target that no longer resolves is an error rather than a new file.
+   */
+  targetFileId?: string | null
+  /**
+   * Stage the bytes as a hidden, content-deduped snapshot instead of saving them.
+   *
+   * How a slice of UNSAVED editor work reaches the slicer: the bytes have to be addressable, but
+   * the user's project must not gain a version. Creates no version and touches no project;
+   * `pruneUnreferencedProjectSnapshots` reclaims the row if nothing ends up referencing it.
+   */
+  snapshot?: boolean
   onProgress?: (progress: ChunkedLibraryUploadProgress) => void
   /** Abort the upload (cancels in-flight requests and discards the session). */
   signal?: AbortSignal
+}
+
+/** What the complete step answers, before the caller's defaults are applied. */
+interface CompleteUploadResponse {
+  file: LibraryFile
+  unchanged?: boolean
+  archivedVersionId?: string | null
+  snapshot?: boolean
+}
+
+/** The result of a completed upload. */
+export interface UploadedLibraryFile {
+  file: LibraryFile
+  /** The server saw byte-identical content and created no version. */
+  unchanged: boolean
+  /**
+   * The version this write archived, i.e. the content that was current until now.
+   *
+   * Null when nothing was archived: a new file, a snapshot, or an unchanged upload.
+   */
+  archivedVersionId: string | null
+  /** This landed as a hidden staged snapshot rather than as a save. */
+  snapshot: boolean
 }
 
 /** True for an aborted-request error, which must propagate instead of retrying. */
@@ -217,7 +257,7 @@ export function isUploadAbortError(error: unknown): boolean {
 export async function uploadLibraryFileInChunks(
   file: File,
   options: ChunkedLibraryUploadOptions = {}
-): Promise<{ file: LibraryFile; unchanged: boolean }> {
+): Promise<UploadedLibraryFile> {
   options.signal?.throwIfAborted()
   const started = await pacedUploadWrite(
     () => apiFetch<BeginUploadResponse>('/api/library/uploads', {
@@ -259,15 +299,25 @@ export async function uploadLibraryFileInChunks(
     const poller = startUploadStatusPolling(started.uploadId, options)
     try {
       const result = await pacedUploadWrite(
-        () => apiFetch<{ file: LibraryFile; unchanged?: boolean }>(`/api/library/uploads/${encodeURIComponent(started.uploadId)}/complete`, {
+        () => apiFetch<CompleteUploadResponse>(`/api/library/uploads/${encodeURIComponent(started.uploadId)}/complete`, {
           method: 'POST',
           signal: options.signal,
-          body: {},
+          // Both ride the COMPLETE step rather than the begin: neither describes the bytes, and a
+          // caller that changes its mind mid-transfer must not have to restart the upload.
+          body: {
+            ...(options.targetFileId ? { targetFileId: options.targetFileId } : {}),
+            ...(options.snapshot ? { snapshot: true } : {})
+          },
           onResponseHeaders: recordUploadWriteBudget
         }),
         () => options.onProgress?.({ phase: 'waiting-for-server', uploadedBytes: file.size, totalBytes: file.size })
       )
-      return { file: result.file, unchanged: result.unchanged ?? false }
+      return {
+        file: result.file,
+        unchanged: result.unchanged ?? false,
+        archivedVersionId: result.archivedVersionId ?? null,
+        snapshot: result.snapshot ?? false
+      }
     } finally {
       poller.stop()
       await poller.done

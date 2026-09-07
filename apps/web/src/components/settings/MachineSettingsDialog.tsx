@@ -28,7 +28,7 @@
  * untouched. BambuStudio edits those through widgets this dialog does not have; dropping them would
  * silently rebuild the preset around a different bed.
  *
- * Counterpart: the API `POST /api/slicing/profiles/resolve-machine` route.
+ * Counterpart: `components/workspaceMachineResolver.ts`, the one module that fetches that route.
  */
 import { useEffect, useState } from 'react'
 import {
@@ -43,6 +43,7 @@ import {
   type ProcessConfig
 } from '@printstream/shared'
 import { apiFetch } from '../../lib/apiClient'
+import { resolveWorkspaceMachineConfig } from '../workspaceMachineResolver'
 import { useEffectiveSlicerDeveloperMode } from '../../lib/slicerDeveloperMode'
 import { usePromptDialog } from '../PromptDialogProvider'
 import { SettingsCatalogDialog } from './SettingsCatalogDialog'
@@ -72,12 +73,6 @@ export interface MachineSettingsDialogProps {
   initialOverrides?: Record<string, string | string[]>
   /** The diff against the resolved preset: what the project should carry on top of it. */
   onApply?: (overrides: Record<string, string | string[]>) => void
-}
-
-/** What `/profiles/resolve-machine` returns; `baseConfig` is the parent preset when one is declared. */
-interface ResolveMachineResponse {
-  config: Record<string, string | string[]>
-  baseConfig?: Record<string, string | string[]>
 }
 
 /** Which catalog page a key belongs to: the column rule is page-driven. */
@@ -118,10 +113,7 @@ export default function MachineSettingsDialog(props: MachineSettingsDialogProps)
     setLoading(true)
     setError(null)
     setBaseConfig(null)
-    apiFetch<ResolveMachineResponse>('/api/slicing/profiles/resolve-machine', {
-      method: 'POST',
-      body: { machineProfileId, targetId: slicerTargetId || null }
-    })
+    resolveWorkspaceMachineConfig({ machineProfileId, targetId: slicerTargetId || null })
       .then((response) => {
         if (cancelled) return
         const effective = applyProcessConfigDefaults(response.config as ProcessConfig, machineSettingsCatalog)

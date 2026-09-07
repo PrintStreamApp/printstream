@@ -5,7 +5,6 @@ import { setAppBusy } from '../lib/appBusy'
 
 type BackAwareModalProps = ComponentProps<typeof Modal>
 type BackAwareModalOnClose = NonNullable<BackAwareModalProps['onClose']>
-type BackAwareModalCloseReason = Parameters<BackAwareModalOnClose>[1]
 
 const dialogHistoryStackStateKey = '__printStreamDialogStack'
 
@@ -183,9 +182,11 @@ function restoreWindowScrollPosition(position: ScrollPosition | undefined) {
  *
  * This is adapted from game-is-up's `DashboardModal`: each open dialog
  * appends a token to a history-backed stack, and browser Back closes the
- * top dialog instead of navigating away. Normal close gestures pop the
- * dialog history entry first so the following Back action still performs
- * normal route navigation.
+ * top dialog instead of navigating away.
+ *
+ * The entry is spent when the dialog CLOSES (`syncClosedDialog`), never when one is
+ * requested: `onClose` is a question the consumer may answer with "no", and popping
+ * first desynchronised the stack from the dialogs actually open. See `handleClose`.
  */
 export function BackAwareModal({ open, onClose, ...props }: BackAwareModalProps) {
   const previousOpenRef = useRef(open)
@@ -194,18 +195,13 @@ export function BackAwareModal({ open, onClose, ...props }: BackAwareModalProps)
 
   onCloseRef.current = onClose
 
-  // Why the dialog is closing, carried ACROSS the `history.back()` below. Without it every
-  // history-routed close reports `backdropClick`, so a dialog cannot tell Escape from a Back
-  // gesture or a click on the scrim. The editor needs that distinction: Escape backs out of its
-  // tool, Back closes the whole thing.
-  const pendingCloseReasonRef = useRef<BackAwareModalCloseReason | null>(null)
-
+  /**
+   * A real Back press (or a Back that popped past this dialog). It reports `backdropClick`
+   * because that is the closest Joy reason for "dismissed from outside the dialog": no reason
+   * needs carrying across a history hop any more, since `handleClose` no longer performs one.
+   */
   const requestClose = useCallback(() => {
-    // Default to `backdropClick` for a real Back press, which is not routed through `handleClose`
-    // and so leaves nothing pending.
-    const reason = pendingCloseReasonRef.current ?? 'backdropClick'
-    pendingCloseReasonRef.current = null
-    onCloseRef.current?.({}, reason)
+    onCloseRef.current?.({}, 'backdropClick')
   }, [])
 
   const syncClosedDialog = useCallback((token: string, closeViaHistory: boolean) => {
@@ -267,35 +263,23 @@ export function BackAwareModal({ open, onClose, ...props }: BackAwareModalProps)
     }
   }, [])
 
+  /**
+   * A close REQUEST, never a close: `onClose` is the consumer's to answer.
+   *
+   * Every reason is handed straight over without touching history, and the entry is spent by
+   * `syncClosedDialog` if the dialog actually closes -- which is the only moment that knows.
+   * Hopping first spent the entry either way, which is wrong for any dialog that can DECLINE:
+   * the 3MF editor backs out of its active tool on Escape, and answers "Discard unsaved changes?"
+   * before it closes at all. A declined close then left the dialog open with nothing behind it,
+   * so Back navigated the route away instead of closing it, and the next dialog opened over it
+   * pushed a stack (`[editor, inner]`) that the entry underneath (`[]`) no longer matched -- so
+   * closing THAT dialog popped to a stack prefixing this one and fired this `onClose` again,
+   * raising "Discard unsaved changes?" a second time over a gesture nobody made.
+   *
+   * Escape alone was exempted first, which fixed the tool case and left the discard case: reaching
+   * the prompt through the X or the scrim still spent the entry before the user had answered it.
+   */
   const handleClose = useCallback<BackAwareModalOnClose>((event, reason) => {
-    const dialogToken = dialogTokenRef.current
-
-    if (!dialogToken || typeof window === 'undefined') {
-      onCloseRef.current?.(event, reason)
-      return
-    }
-
-    // Escape is the one reason a consumer routinely DECLINES: the 3MF editor backs out of its
-    // active tool, or clears its selection, and stays open. So it is handed straight over without
-    // touching history, and the entry is spent by `syncClosedDialog` if the dialog actually closes
-    // -- which is the only moment that knows. Hopping first spent the entry either way, leaving a
-    // declined Escape with an open dialog and nothing behind it: Back then navigated the route away
-    // instead of closing it, and closing a dialog stacked on top popped to a stack that prefixed
-    // this one, firing this `onClose` again over a gesture nobody made.
-    if (reason === 'escapeKeyDown') {
-      onCloseRef.current?.(event, reason)
-      return
-    }
-
-    dismissedDialogTokens.add(dialogToken)
-
-    if (isTopHistoryDialog(dialogToken) && window.history.length > 1) {
-      // Popping the entry re-enters through `requestClose`, which is where `onClose` finally fires.
-      pendingCloseReasonRef.current = reason
-      window.history.back()
-      return
-    }
-
     onCloseRef.current?.(event, reason)
   }, [])
 

@@ -12,14 +12,14 @@
  * The MACHINE RETARGET rides the request the same way (`payload.retarget`) and is applied here for
  * the same reason: the api runs it as a post-bake pass over the file it just wrote, so the browser
  * runs it as a post-bake pass over the file it just wrote. Both call the same shared rewrite: see
- * `lib/localMachineRetarget.ts`. Without it a printer switch was simply lost on save: the bake
+ * `lib/browserMachineRetarget.ts`. Without it a printer switch was simply lost on save: the bake
  * preserves the project's embedded machine, so reopening showed the original printer again.
  */
-import type { ExportArrangedThreeMf, ProfileRecord, SaveArrangedThreeMf, SlicingPresetSummary } from '@printstream/shared'
-import type { ThreeMfBakeOptions } from '@printstream/shared/three-mf'
+import type { ExportArrangedThreeMf, SaveArrangedThreeMf, SlicingPresetSummary } from '@printstream/shared'
 import { bakeClientThreeMf } from './clientThreeMfBake'
-import { buildLocalMachineRetargetPlan } from './localMachineRetarget'
-import type { EditorImportStore } from './editorImportStore'
+import { PUBLIC_RETARGET_RESOLVERS } from './browserMachineRetarget'
+import { bakeOptionsFor, bakePassesFor } from './editorBakePasses'
+import { importIdsReferencedBy, type EditorImportStore } from './editorImportStore'
 import type { EditorSaveTarget } from './editorSaveTarget'
 import type { ThreeMfArchive } from './threeMfArchive'
 import { saveLocalProjectAs, suggestedSaveName, type LocalProjectFile } from './localProjectFile'
@@ -42,33 +42,18 @@ export interface LocalSaveTargetOptions {
 
 export function createLocalSaveTarget(options: LocalSaveTargetOptions): EditorSaveTarget {
   const bake = async (payload: SaveArrangedThreeMf | ExportArrangedThreeMf): Promise<Uint8Array> => {
-    const objectOverrides = (payload as SaveArrangedThreeMf).objectProcessOverrides
-    const bakeOptions: ThreeMfBakeOptions = {
-      ...(payload.processSettingOverrides ? { globalProcessOverrides: payload.processSettingOverrides } : {}),
-      ...(payload.objectExport ? { objectExportMarker: true } : {}),
-      ...(objectOverrides ? { objectProcessOverrides: objectOverrides } : {})
-    }
-    // A single-object EXPORT is deliberately excluded: it is a copy of one object taken out of the
-    // project, not the project being saved for a different printer, and the api's export path does
-    // not retarget either.
-    const retarget = (payload as SaveArrangedThreeMf).retarget
-    const resolveRetargetPlan = retarget && !payload.objectExport
-      ? (projectSettings: ProfileRecord) => buildLocalMachineRetargetPlan({
-        target: retarget,
-        // `?? null`, never `?? ''`: an empty string is REJECTED by the resolve routes, so a save
-        // made before the slicer-targets query settles would 400 and drop the printer switch
-        // silently. Null means "the default build", which is what an unresolved target should mean.
-        slicerTargetId: (payload as SaveArrangedThreeMf).slicerTargetId || null,
-        projectSettings,
-        filamentPresets: options.filamentPresets()
-      })
-      : null
     const { bytes } = await bakeClientThreeMf(
       options.archive(),
       payload.sceneEdit,
-      options.importStore.importsForBake(),
-      bakeOptions,
-      resolveRetargetPlan
+      await options.importStore.importsForBake(undefined, importIdsReferencedBy(payload.sceneEdit)),
+      bakeOptionsFor(payload),
+      // The anonymous resolvers: this host reaches the built-in catalogue only, which is what makes
+      // it decline a retarget onto a preset it cannot see rather than author half a machine.
+      bakePassesFor(payload, {
+        resolvers: PUBLIC_RETARGET_RESOLVERS,
+        // Already in hand on this host: its catalogue is browser-stored plus the builtin list.
+        filamentPresets: async () => options.filamentPresets()
+      })
     )
     return bytes
   }

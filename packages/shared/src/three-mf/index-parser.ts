@@ -87,8 +87,12 @@ export { decodeXmlAttributeValue }
  *      v34 cache is missing those entries entirely, which hid objects from the print picker and
  *      from skip resolution, and hid filaments from the nozzle map and the stale-slice_info check,
  *      so it has to be re-parsed rather than trusted.
+ * v36: each PART carries its `svgPart`, the `<printstream_svg/>` record that makes an extruded SVG
+ *      re-editable, alongside the `textInfo` of v34. A cached scene from v35 has none, so artwork
+ *      saved by this version would reopen as anonymous solids until something else invalidated the
+ *      entry, the same failure v34 describes for text.
  */
-export const THREE_MF_INDEX_PARSER_VERSION = 35
+export const THREE_MF_INDEX_PARSER_VERSION = 36
 
 /** Per-plate metadata recovered from `model_settings.config` (labels + object/filament backfill). */
 export interface ModelSettingsPlateMetadata {

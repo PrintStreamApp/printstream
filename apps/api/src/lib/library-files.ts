@@ -3,6 +3,12 @@
  *
  * Bytes are stored through the bridge-backed library path, while metadata
  * and overwrite/version behavior stay centralized here.
+ *
+ * A write finds the row it versions in one of two ways, and they are not
+ * interchangeable: an ordinary upload matches on (workspace, bridge, folder,
+ * name), which is what makes re-uploading a file replace it, while a caller
+ * that already knows the row (the editor saving the project it opened) passes
+ * `targetFileId` and the row's own name/folder/bridge win over the upload's.
  */
 import { createHash, randomBytes } from 'node:crypto'
 import { createReadStream } from 'node:fs'
@@ -83,6 +89,16 @@ export async function persistLibraryFileFromLocalPath(input: {
   folderId: string | null
   bridgeId: string | null
   hidden: boolean
+  /**
+   * Version THIS row, instead of looking one up by (bridge, folder, name).
+   *
+   * The editor knows the id of the file it is saving a new version of, and name matching
+   * cannot express that: a project renamed or moved since the session opened matches
+   * nothing, so the save lands as a second file rather than as a version of the first. An
+   * id that does not resolve to a visible file in `workspaceId` is a hard 404, never a
+   * fall back to name matching, because falling back is precisely the silent duplicate.
+   */
+  targetFileId?: string | null
   request?: Request
   auditAction?: 'upload' | 'slice' | 'import'
   /** Lifecycle origin override; defaults from `auditAction` ('slice' or 'upload'). */
@@ -95,25 +111,41 @@ export async function persistLibraryFileFromLocalPath(input: {
   // Lifecycle origin drives cleanup windows (unsaved sliced outputs age out
   // faster than transient uploads).
   const origin = input.origin ?? (input.auditAction === 'slice' ? 'slice' : input.auditAction === 'import' ? 'import' : 'upload')
-  const parentFolder = input.folderId
+  const addressedTarget = input.targetFileId
+    ? await findLibraryOverwriteTargetById({ workspaceId: input.workspaceId, fileId: input.targetFileId })
+    : null
+  if (input.targetFileId && !addressedTarget) throw notFound('File not found')
+
+  // An addressed row decides its own placement, so its folder is not re-resolved: the caller's
+  // folder/bridge describe where a NEW file would have landed, and honouring them here would
+  // move the user's project as a side effect of saving it.
+  const parentFolder = !addressedTarget && input.folderId
     ? await prisma.libraryFolder.findUnique({ where: { id: input.folderId }, select: { ownerBridgeId: true } })
     : null
-  if (input.folderId && !parentFolder?.ownerBridgeId) {
+  if (!addressedTarget && input.folderId && !parentFolder?.ownerBridgeId) {
     throw notFound('Folder not found')
   }
-  const ownerBridgeId = parentFolder?.ownerBridgeId ?? input.bridgeId
+  // An overwrite never rewrites `ownerBridgeId`, so an addressed row's bytes MUST go to the
+  // bridge that row already names; storing them anywhere else leaves the row pointing at a
+  // path its own bridge does not have.
+  const ownerBridgeId = addressedTarget ? addressedTarget.ownerBridgeId : (parentFolder?.ownerBridgeId ?? input.bridgeId)
   if (!ownerBridgeId) {
     throw badRequest(input.missingBridgeMessage ?? 'Select a bridge before saving to the library')
   }
 
-  const overwriteTarget = !input.hidden
+  const overwriteTarget = addressedTarget ?? (!input.hidden
     ? await findLibraryOverwriteTarget({
       workspaceId: input.workspaceId,
       ownerBridgeId,
       folderId: input.folderId,
       name: input.fileName
     })
-    : null
+    : null)
+  // A save is neither a rename nor a move, and the upload's copies of both can be stale (that
+  // staleness is why the caller addressed the row by id at all), so the row keeps its name and
+  // folder. `kind` follows the name it keeps.
+  const targetName = addressedTarget?.name ?? input.fileName
+  const targetFolderId = addressedTarget ? addressedTarget.folderId : input.folderId
   // Skip creating a redundant version when the upload is byte-identical to the
   // current file. We have the new bytes locally (`sourcePath`) before sending
   // them to the bridge, so hash here and compare against the current version's
@@ -126,7 +158,7 @@ export async function persistLibraryFileFromLocalPath(input: {
     }
   }
 
-  const storedPath = buildLibraryStoredPath(input.fileName)
+  const storedPath = buildLibraryStoredPath(targetName)
   await storeBridgeLibraryFile(ownerBridgeId, storedPath, input.sourcePath, { onProgress: input.onBridgeProgress })
   await input.onBridgeComplete?.()
 
@@ -147,11 +179,11 @@ export async function persistLibraryFileFromLocalPath(input: {
         return await tx.libraryFile.update({
           where: { id: overwriteTarget.id },
           data: {
-            name: input.fileName,
+            name: targetName,
             storedPath,
             sizeBytes: input.sizeBytes,
-            kind: classifyLibraryFileKind(input.fileName),
-            folderId: input.folderId,
+            kind: classifyLibraryFileKind(targetName),
+            folderId: targetFolderId,
             uploadedAt,
             currentVersionNumber: overwriteTarget.currentVersionNumber + 1,
             thumbnailPath: null,
@@ -196,20 +228,25 @@ export async function persistLibraryFileFromLocalPath(input: {
     annotateRequestAuditLog(input.request, {
       action: overwriteTarget ? 'overwrite' : action,
       resource: 'library file',
-      summary: overwriteTarget
-        ? `Overwrote library file ${created.name}.`
-        : action === 'slice'
-          ? `Saved sliced library file ${created.name}.`
-          : action === 'import'
-            ? `Imported library file ${created.name} from a remote source.`
-            : `Uploaded library file ${created.name}.`,
+      summary: addressedTarget
+        ? `Saved a new version of library file ${created.name}.`
+        : overwriteTarget
+          ? `Overwrote library file ${created.name}.`
+          : action === 'slice'
+            ? `Saved sliced library file ${created.name}.`
+            : action === 'import'
+              ? `Imported library file ${created.name} from a remote source.`
+              : `Uploaded library file ${created.name}.`,
       metadata: {
         fileId: created.id,
         fileName: created.name,
         folderId: created.folderId,
         hidden: created.hidden,
         sizeBytes: created.sizeBytes,
-        overwrittenVersionNumber: overwriteTarget?.currentVersionNumber ?? null
+        overwrittenVersionNumber: overwriteTarget?.currentVersionNumber ?? null,
+        // Which row the write ADDRESSED. Without it the trail cannot tell an editor save
+        // (targeted by id) from a same-named upload that happened to overwrite a file.
+        targetFileId: input.targetFileId ?? null
       }
     })
   }
@@ -382,6 +419,23 @@ async function findLibraryOverwriteTarget(input: {
   }) as LibraryOverwriteTarget | null
 }
 
+/**
+ * Resolve an overwrite target the caller named by id, scoped to its workspace.
+ *
+ * Goes through {@link visibleLibraryFilesWhere} even though the lookup is by id: hidden rows
+ * (snapshots, new-project scaffolds, unsaved sliced outputs) and recycled rows are not versions
+ * of anything a user is editing, and quietly writing a new version over one would resurrect or
+ * corrupt a row nothing shows. Returns null when no such row exists; the caller reports 404.
+ */
+async function findLibraryOverwriteTargetById(input: {
+  workspaceId: string
+  fileId: string
+}): Promise<LibraryOverwriteTarget | null> {
+  return await prisma.libraryFile.findFirst({
+    where: visibleLibraryFilesWhere({ id: input.fileId, workspaceId: input.workspaceId })
+  }) as LibraryOverwriteTarget | null
+}
+
 function toLibraryFileVersionCreateInput(row: LibraryOverwriteTarget) {
   return {
     workspaceId: row.workspaceId,
@@ -505,11 +559,11 @@ export async function discardHiddenSlicedOutput(fileId: string): Promise<boolean
 /**
  * Drop the preserved project a discarded slice was the only reference to.
  *
- * Snapshot rows are exempt from every cleanup pass (`library-cleanup.ts` skips rows with a
- * `snapshotKey`), so without this a discarded "slice without saving" leaks its project bytes
- * permanently, one copy per discard, never reclaimed. Deliberately conservative: it only deletes
- * when NOTHING else points at the snapshot, because the same content-addressed row is shared by
- * every slice of identical bytes, and a print's history row references it too.
+ * A `snapshotKey` exempts a row from every AGE-based cleanup pass, so without this a discarded
+ * "slice without saving" leaks its project bytes, one copy per discard, until the periodic backstop
+ * (`pruneUnreferencedProjectSnapshots`) reclaims it on the same rule. Deliberately conservative:
+ * it only deletes when NOTHING else points at the snapshot, because the same content-addressed row
+ * is shared by every slice of identical bytes, and a print's history row references it too.
  *
  * Best-effort, a failure here leaks bytes, which must not fail the discard the user asked for.
  */

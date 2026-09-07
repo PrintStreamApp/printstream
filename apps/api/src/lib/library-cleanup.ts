@@ -205,9 +205,14 @@ export async function pruneUnreferencedSlicedOutputs(
  * itself being aged out by {@link pruneUnreferencedSlicedOutputs}. Run AFTER that pass so a single
  * maintenance cycle reclaims both.
  *
- * Only ever removes rows with BOTH a `snapshotKey` and `origin='snapshot'`: the print-file snapshots
- * share the first marker, so the pair is what identifies a preserved project, and a row referenced by
- * any library file or any print job is left alone (the row is content-addressed, so it can be shared).
+ * Eligibility is REFERENCE-based, never marker-based. `origin='snapshot'` plus a `snapshotKey` do
+ * NOT identify a preserved project: `ensureLibrarySnapshotRecord` stamps a dispatched print's
+ * artifact with the same pair, and that row is referenced only through `PrintJob.fileId` (`jobs`).
+ * So every inbound relation has to be checked, and the row is left alone if any one of them still
+ * points at it (the row is content-addressed, so it can be shared by unrelated prints and slices).
+ * Dropping the `jobs` clause is not a leak, it is data loss: it deleted the artifact behind every
+ * print older than the retention window, and `onDelete: SetNull` then blanked `PrintJob.fileId`, so
+ * history silently lost Reprint on all but the last day of prints.
  */
 export async function pruneUnreferencedProjectSnapshots(
   deps: { deleteLibraryFileBytes: typeof deleteLibraryFileBytes } = { deleteLibraryFileBytes }
@@ -218,6 +223,9 @@ export async function pruneUnreferencedProjectSnapshots(
       origin: 'snapshot',
       snapshotKey: { not: null },
       uploadedAt: { lt: cutoff },
+      // A print job references its dispatched artifact here and its preserved project through
+      // `sourceProjectJobs`; both keep the row. Checking only the latter deletes what Reprint needs.
+      jobs: { none: {} },
       slicedOutputs: { none: {} },
       sourceProjectJobs: { none: {} }
     },

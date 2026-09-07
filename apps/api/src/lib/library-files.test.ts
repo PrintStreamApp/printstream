@@ -1,9 +1,20 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 import { test } from 'node:test'
 import { Prisma } from '@prisma/client'
 import { prisma } from './prisma.js'
-import { deleteLibraryFolderTree, discardHiddenSlicedOutput, ensureLibraryFolderPath, unhideSlicedOutput } from './library-files.js'
-import { usePrismaStubs } from '../test-utils/prisma-stubs.js'
+import { bridgeSessionManager } from './bridge-session-manager.js'
+import {
+  deleteLibraryFolderTree,
+  discardHiddenSlicedOutput,
+  ensureLibraryFolderPath,
+  persistLibraryFileFromLocalPath,
+  unhideSlicedOutput
+} from './library-files.js'
+import { usePrismaStubs, type PrismaStubber } from '../test-utils/prisma-stubs.js'
 
 const stub = usePrismaStubs()
 
@@ -385,4 +396,227 @@ test('discarding a slice keeps a preserved project another slice still points at
 
   assert.equal(await discardHiddenSlicedOutput('output-1'), true)
   assert.deepEqual(deleted, ['output-1'], 'the shared project survives')
+})
+
+const UPLOAD_BYTES = Buffer.from('bytes the browser baked')
+const UPLOAD_HASH = createHash('sha256').update(UPLOAD_BYTES).digest('hex')
+const OTHER_HASH = 'f'.repeat(64)
+
+/** A visible, bridge-owned project the editor could have open. */
+function projectRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'file-1',
+    workspaceId: 'workspace-1',
+    ownerBridgeId: 'bridge-1',
+    name: 'project.3mf',
+    storedPath: 'stored-project.3mf',
+    sizeBytes: 12,
+    uploadedAt: new Date('2026-09-01T00:00:00.000Z'),
+    kind: '3mf',
+    thumbnailPath: null,
+    folderId: 'folder-1',
+    hidden: false,
+    deletedAt: null,
+    currentVersionNumber: 3,
+    createdById: null,
+    createdByName: null,
+    restoredFromVersionNumber: null,
+    ...overrides
+  }
+}
+
+/**
+ * Answer `findFirst` the way the database would: every clause must match, so a lookup by id and
+ * a lookup by name reach different verdicts about the same row. A stub that returns the row
+ * regardless would pass whether or not the target was addressed by id, which is the whole point.
+ */
+function stubLibraryFileLookup(row: Record<string, unknown>): void {
+  stub(prisma.libraryFile, 'findFirst', async (args: { where: Record<string, unknown> }) => (
+    Object.entries(args.where).every(([key, value]) => row[key] === value) ? row : null
+  ))
+}
+
+/**
+ * Stand in for the owning bridge: library writes are RPCs, and `library.stat` answers the
+ * identical-upload probe, so `statHash` decides whether the stored bytes count as unchanged.
+ */
+function stubBridgeLibraryRpc(stubber: PrismaStubber, statHash: string): { writtenToBridgeIds: string[] } {
+  const writtenToBridgeIds: string[] = []
+  stubber(bridgeSessionManager, 'isConnected', () => true)
+  stubber(bridgeSessionManager, 'requestRpc', async (bridgeId: string, method: string) => {
+    if (method === 'library.stat') return { sizeBytes: UPLOAD_BYTES.byteLength, contentSha256: statHash }
+    if (method === 'library.storeStart') writtenToBridgeIds.push(bridgeId)
+    return {}
+  })
+  return { writtenToBridgeIds }
+}
+
+/** Stage the upload's bytes on local disk, where `persistLibraryFileFromLocalPath` expects them. */
+async function withStagedBytes(run: (sourcePath: string) => Promise<void>): Promise<void> {
+  const dir = await mkdtemp(path.join(tmpdir(), 'printstream-library-files-'))
+  try {
+    const sourcePath = path.join(dir, 'upload.bin')
+    await writeFile(sourcePath, UPLOAD_BYTES)
+    await run(sourcePath)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+}
+
+test('targetFileId versions the file it names even after the project was renamed and moved', async () => {
+  // Name matching cannot express the editor's target: a project renamed or moved since the
+  // session opened matches no (bridge, folder, name) tuple, so the save used to land as a
+  // SECOND file and the version history of the real one silently stopped growing.
+  const target = projectRow()
+  const versionCreates: Array<{ versionNumber: number; libraryFileId: string }> = []
+  let created = 0
+  let updateArgs: { where: { id: string }; data: Record<string, unknown> } | null = null
+
+  stubLibraryFileLookup(target)
+  const bridge = stubBridgeLibraryRpc(stub, OTHER_HASH)
+  stub(prisma.libraryFileVersion, 'create', async (args: { data: { versionNumber: number; libraryFileId: string } }) => {
+    versionCreates.push(args.data)
+    return { id: 'version-3', ...args.data }
+  })
+  stub(prisma.libraryFile, 'update', async (args: { where: { id: string }; data: Record<string, unknown> }) => {
+    updateArgs = args
+    return { ...target, ...args.data }
+  })
+  stub(prisma.libraryFile, 'create', async () => {
+    created += 1
+    return projectRow({ id: 'file-2' })
+  })
+  stub(prisma, '$transaction', async (run: (tx: typeof prisma) => Promise<unknown>) => await run(prisma))
+
+  await withStagedBytes(async (sourcePath) => {
+    const result = await persistLibraryFileFromLocalPath({
+      workspaceId: 'workspace-1',
+      sourcePath,
+      // What the editor session still calls the file, and where it thinks it lives: all stale.
+      fileName: 'renamed-by-the-user.3mf',
+      sizeBytes: UPLOAD_BYTES.byteLength,
+      folderId: null,
+      bridgeId: 'bridge-2',
+      hidden: false,
+      targetFileId: 'file-1'
+    })
+
+    assert.equal(created, 0, 'no second file was created')
+    assert.equal(result.file.id, 'file-1')
+    assert.equal(result.unchanged, false)
+    assert.equal(result.archivedVersionId, 'version-3', 'the replaced content is reported for the editor to pin')
+    // An overwrite never rewrites `ownerBridgeId`, so the bytes must go to the row's own bridge.
+    assert.deepEqual(bridge.writtenToBridgeIds, ['bridge-1'])
+    assert.deepEqual(versionCreates.map((row) => [row.libraryFileId, row.versionNumber]), [['file-1', 3]])
+    const applied = updateArgs as { where: { id: string }; data: Record<string, unknown> } | null
+    assert.equal(applied?.where.id, 'file-1')
+    assert.equal(applied?.data.currentVersionNumber, 4)
+    // A save is neither a rename nor a move.
+    assert.equal(applied?.data.name, 'project.3mf')
+    assert.equal(applied?.data.folderId, 'folder-1')
+  })
+})
+
+test('targetFileId is not found when the row belongs to another workspace', async () => {
+  // A hard 404, never a fall back to name matching: falling back is exactly the silent
+  // duplicate the id was passed to prevent.
+  stubLibraryFileLookup(projectRow({ workspaceId: 'workspace-2' }))
+  stubBridgeLibraryRpc(stub, OTHER_HASH)
+  stub(prisma.libraryFile, 'create', async () => {
+    throw new Error('a missing target must not fall through to creating a file')
+  })
+
+  await withStagedBytes(async (sourcePath) => {
+    await assert.rejects(
+      persistLibraryFileFromLocalPath({
+        workspaceId: 'workspace-1',
+        sourcePath,
+        fileName: 'project.3mf',
+        sizeBytes: UPLOAD_BYTES.byteLength,
+        folderId: null,
+        bridgeId: 'bridge-1',
+        hidden: false,
+        targetFileId: 'file-1'
+      }),
+      /File not found/
+    )
+  })
+})
+
+test('a targeted save of byte-identical content creates no version', async () => {
+  // The editor re-bakes on every save, so an untouched project reaches this path unchanged;
+  // versioning it would fill the history with copies of one file.
+  const target = projectRow()
+  stubLibraryFileLookup(target)
+  stubBridgeLibraryRpc(stub, UPLOAD_HASH)
+  stub(prisma.libraryFile, 'findUniqueOrThrow', async () => target)
+  stub(prisma.libraryFileVersion, 'create', async () => {
+    throw new Error('identical bytes must not be versioned')
+  })
+  stub(prisma.libraryFile, 'create', async () => {
+    throw new Error('identical bytes must not create a file')
+  })
+
+  await withStagedBytes(async (sourcePath) => {
+    const result = await persistLibraryFileFromLocalPath({
+      workspaceId: 'workspace-1',
+      sourcePath,
+      fileName: 'renamed-by-the-user.3mf',
+      sizeBytes: UPLOAD_BYTES.byteLength,
+      folderId: null,
+      bridgeId: 'bridge-2',
+      hidden: false,
+      targetFileId: 'file-1'
+    })
+    assert.equal(result.unchanged, true)
+    assert.equal(result.file.id, 'file-1')
+    assert.equal(result.archivedVersionId, null)
+  })
+})
+
+test('without targetFileId an upload still resolves its overwrite target by name', async () => {
+  // The unchanged path: an ordinary upload replaces the same-named file in the same folder,
+  // and takes the uploaded name. Nothing may consult a row id it was never given.
+  const target = projectRow()
+  const lookups: Array<Record<string, unknown>> = []
+  let updateArgs: { where: { id: string }; data: Record<string, unknown> } | null = null
+
+  stub(prisma.libraryFolder, 'findUnique', async () => ({ ownerBridgeId: 'bridge-1' }))
+  stub(prisma.libraryFile, 'findFirst', async (args: { where: Record<string, unknown> }) => {
+    lookups.push(args.where)
+    return Object.entries(args.where).every(([key, value]) => target[key as keyof typeof target] === value) ? target : null
+  })
+  stubBridgeLibraryRpc(stub, OTHER_HASH)
+  stub(prisma.libraryFileVersion, 'create', async (args: { data: unknown }) => ({ id: 'version-3', ...(args.data as object) }))
+  stub(prisma.libraryFile, 'update', async (args: { where: { id: string }; data: Record<string, unknown> }) => {
+    updateArgs = args
+    return { ...target, ...args.data }
+  })
+  stub(prisma, '$transaction', async (run: (tx: typeof prisma) => Promise<unknown>) => await run(prisma))
+
+  await withStagedBytes(async (sourcePath) => {
+    const result = await persistLibraryFileFromLocalPath({
+      workspaceId: 'workspace-1',
+      sourcePath,
+      fileName: 'project.3mf',
+      sizeBytes: UPLOAD_BYTES.byteLength,
+      folderId: 'folder-1',
+      bridgeId: 'bridge-1',
+      hidden: false
+    })
+
+    assert.equal(result.file.id, 'file-1')
+    assert.equal(result.archivedVersionId, 'version-3')
+    assert.deepEqual(lookups, [{
+      workspaceId: 'workspace-1',
+      ownerBridgeId: 'bridge-1',
+      folderId: 'folder-1',
+      name: 'project.3mf',
+      hidden: false,
+      deletedAt: null
+    }])
+    const applied = updateArgs as { where: { id: string }; data: Record<string, unknown> } | null
+    assert.equal(applied?.data.name, 'project.3mf')
+    assert.equal(applied?.data.folderId, 'folder-1')
+  })
 })

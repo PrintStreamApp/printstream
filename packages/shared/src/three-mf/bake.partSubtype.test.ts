@@ -12,6 +12,20 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { applyPartTypeChanges, renderImportedMultiPartModelSettingsXml } from './bake-documents.js'
 
+/**
+ * The model half of a settings fixture: one object whose `<component>` list mirrors its `<part>`
+ * ids, which is the ordinary shape BambuStudio writes. The appliers resolve a part ordinal through
+ * this list (see `resolvePartBlockIndex`), so it has to be supplied alongside the settings.
+ */
+const modelFor = (objectId: number, partIds: number[]): string => [
+  '<model><resources>',
+  ` <object id="${objectId}" type="model"><components>`,
+  ...partIds.map((id) => `  <component objectid="${id}"/>`),
+  ' </components></object>',
+  '</resources></model>'
+].join('\n')
+
+
 test('an imported part subtype is canonicalised on the way out', () => {
   // `ParameterModifier` is what older and foreign writers use; the engine matches only
   // `modifier_part` and silently treats the rest as printed geometry.
@@ -48,7 +62,7 @@ test('a retype strips the legacy metadata that would override it', () => {
     '  </object>',
     '</config>'
   ].join('\n')
-  const out = applyPartTypeChanges(source, [{ objectId: 3, partIndex: 0, subtype: 'modifier_part' }] as never)
+  const out = applyPartTypeChanges(source, [{ objectId: 3, partIndex: 0, subtype: 'modifier_part' }] as never, modelFor(3, [1]))
   assert.match(out, /subtype="modifier_part"/)
   assert.doesNotMatch(out, /volume_type/, 'the legacy key survived and would override the retype')
   assert.match(out, /key="name" value="Body"/, 'unrelated part metadata was destroyed')
@@ -63,6 +77,6 @@ test('a part the retype did not touch keeps its metadata untouched', () => {
     '  </object>',
     '</config>'
   ].join('\n')
-  const out = applyPartTypeChanges(source, [{ objectId: 9, partIndex: 0, subtype: 'modifier_part' }] as never)
+  const out = applyPartTypeChanges(source, [{ objectId: 9, partIndex: 0, subtype: 'modifier_part' }] as never, modelFor(3, [1]))
   assert.match(out, /volume_type/)
 })

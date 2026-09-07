@@ -17,7 +17,7 @@
  * plate" -> "Bambu PLA Basic @BBL H2D"). A preset with neither resolves to itself: thin, but never
  * WRONG, and the repair's all-or-nothing rule then declines rather than writing half a material.
  *
- * Counterpart: `localFilamentResolver.ts` (the tune dialog / repair) and `localMachineRetarget.ts`
+ * Counterpart: `localFilamentResolver.ts` (the tune dialog / repair) and `browserMachineRetarget.ts`
  * (the rebind), which must agree, they feed the same bake.
  */
 import { buildBuiltinSlicingPresetId, filamentPresetChangedKeys, type ProcessConfig, type SlicingPresetSummary } from '@printstream/shared'

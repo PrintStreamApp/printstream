@@ -58,8 +58,19 @@ export const DIALOG_PRESENTATION_ATTRIBUTE = 'data-dialog-presentation'
  */
 export const MAXIMIZED_DIALOG_GUTTER = '0.75rem'
 
-const SAFE_TOP = `calc(var(--app-top-inset, 0px) + ${MAXIMIZED_DIALOG_GUTTER})`
-const SAFE_BOTTOM = `calc(var(--app-safe-bottom, 0px) + ${MAXIMIZED_DIALOG_GUTTER})`
+/**
+ * The gutter is dead space on a PHONE, so there it collapses.
+ *
+ * It exists to let the page behind show at the edges, which is what separates `maximized` from
+ * `fullscreen`. That reading only works where there is a page to show: on a 412px screen the dialog
+ * IS the app, nothing legible sits behind it, and 12px a side plus the dialog's own padding was
+ * spending about a tenth of the width on a margin around a 3D viewport. Only the safe-area insets
+ * survive, since a notch or a home indicator is a real obstruction rather than a stylistic one.
+ */
+const MAXIMIZED_DIALOG_GUTTER_PHONE = '0px'
+
+const safeTop = (gutter: string) => `calc(var(--app-top-inset, 0px) + ${gutter})`
+const safeBottom = (gutter: string) => `calc(var(--app-safe-bottom, 0px) + ${gutter})`
 
 export interface DialogPresentationInputs {
   /** The user's "make this bigger" preference. */
@@ -111,10 +122,16 @@ export function dialogPresentationProps(presentation: DialogPresentation): Dialo
       // Pinning all four edges is both exactly centred within the safe area and exactly sized.
       layout: 'center',
       sx: {
-        top: SAFE_TOP,
-        bottom: SAFE_BOTTOM,
-        left: MAXIMIZED_DIALOG_GUTTER,
-        right: MAXIMIZED_DIALOG_GUTTER,
+        top: { xs: safeTop(MAXIMIZED_DIALOG_GUTTER_PHONE), sm: safeTop(MAXIMIZED_DIALOG_GUTTER) },
+        bottom: { xs: safeBottom(MAXIMIZED_DIALOG_GUTTER_PHONE), sm: safeBottom(MAXIMIZED_DIALOG_GUTTER) },
+        left: { xs: MAXIMIZED_DIALOG_GUTTER_PHONE, sm: MAXIMIZED_DIALOG_GUTTER },
+        right: { xs: MAXIMIZED_DIALOG_GUTTER_PHONE, sm: MAXIMIZED_DIALOG_GUTTER },
+        // A radius with no gutter behind it just shows the backdrop through four notches, so the
+        // corners square off exactly where the gutter goes. `sm` MUST restate the real radius
+        // rather than say `undefined`: MUI emits an `xs` entry as `@media (min-width: 0px)`, and a
+        // sibling that resolves to nothing emits no rule at all, so the phone's 0 would win at
+        // every width and square off the corners on the desktop too. Measured, it did.
+        borderRadius: { xs: 0, sm: 'var(--Card-radius)' },
         width: 'auto',
         height: 'auto',
         transform: 'none',
@@ -190,9 +207,11 @@ export function scrollableDialogPresentation(presentation: DialogPresentation): 
       [DIALOG_PRESENTATION_ATTRIBUTE]: presentation,
       layout: 'center',
       overflowSx: {
-        px: MAXIMIZED_DIALOG_GUTTER,
-        pt: SAFE_TOP,
-        pb: SAFE_BOTTOM,
+        // Same phone collapse as the plain-`Modal` form above, for the same reason: with the dialog
+        // filling a small screen there is no page behind for a gutter to reveal.
+        px: { xs: MAXIMIZED_DIALOG_GUTTER_PHONE, sm: MAXIMIZED_DIALOG_GUTTER },
+        pt: { xs: safeTop(MAXIMIZED_DIALOG_GUTTER_PHONE), sm: safeTop(MAXIMIZED_DIALOG_GUTTER) },
+        pb: { xs: safeBottom(MAXIMIZED_DIALOG_GUTTER_PHONE), sm: safeBottom(MAXIMIZED_DIALOG_GUTTER) },
         alignItems: 'stretch',
         '& .MuiModalDialog-root': { maxHeight: 'none' }
       },
@@ -209,8 +228,8 @@ export function scrollableDialogPresentation(presentation: DialogPresentation): 
     // read as a card ON a page, and it grows with the screen.
     overflowSx: {
       px: { xs: 1, sm: 2 },
-      pt: { xs: SAFE_TOP, sm: 2 },
-      pb: { xs: SAFE_BOTTOM, sm: 2 }
+      pt: { xs: safeTop(MAXIMIZED_DIALOG_GUTTER), sm: 2 },
+      pb: { xs: safeBottom(MAXIMIZED_DIALOG_GUTTER), sm: 2 }
     },
     dialogSx: {}
   }

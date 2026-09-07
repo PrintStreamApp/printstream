@@ -61,6 +61,21 @@ import {
   pickSelectableSlicingPresetByName
 } from './slicingPresetSelection'
 
+/**
+ * Bambu's stock nozzle, and what a project with nothing to say should open on.
+ *
+ * The options are the union of every source SORTED ASCENDING, so taking the first gave 0.2 for any
+ * model that offers one, which is a specialist size nobody starts a project on. This is the last
+ * resort only: a project's own nozzle and a selected printer's both outrank it, so a 0.6 project
+ * still opens on 0.6.
+ */
+const STOCK_NOZZLE_DIAMETER = '0.4'
+
+/** The size a fresh target defaults to: the stock one when offered, else the smallest on offer. */
+function defaultNozzleDiameter(options: readonly string[]): string {
+  return options.includes(STOCK_NOZZLE_DIAMETER) ? STOCK_NOZZLE_DIAMETER : (options[0] ?? '')
+}
+
 /** Every explicit user pick in the machine-target domain. Absent = derive it. */
 export interface MachineTargetIntent {
   /** A real printer the user chose; `''` clears it back to a manual profile target. */
@@ -246,7 +261,10 @@ export function resolveMachineTarget(inputs: MachineTargetInputs, intent: Machin
   if (nozzleFromIntent) { nozzleDiameter = nozzleFromIntent; nozzleOrigin = 'user' }
   else if (nozzleFromProject) { nozzleDiameter = nozzleFromProject; nozzleOrigin = 'project' }
   else if (nozzleFromPrinter) { nozzleDiameter = nozzleFromPrinter; nozzleOrigin = 'printer' }
-  else if (nozzleDiameterOptions[0]) { nozzleDiameter = nozzleDiameterOptions[0]; nozzleOrigin = 'default' }
+  else if (nozzleDiameterOptions.length > 0) {
+    nozzleDiameter = defaultNozzleDiameter(nozzleDiameterOptions)
+    nozzleOrigin = 'default'
+  }
   if (intent.nozzleDiameter && nozzleOrigin !== 'user') {
     conflicts.push({ field: 'nozzleDiameter', requested: intent.nozzleDiameter, applied: nozzleDiameter })
   }

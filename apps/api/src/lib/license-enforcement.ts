@@ -52,7 +52,14 @@ export const NATIVE_EVALUATION_DAYS = 14
  */
 export const SELF_HOSTED_GRACE_DAYS = 30
 
-const FIRST_RUN_KEY = scopeSettingKeyForWorkspace(null, 'license.firstRunAt')
+/**
+ * Where the install's first-boot stamp lives. Exported so a test can PIN it: unstubbed,
+ * {@link getFirstRunAt} reads a real row from whatever database the run is pointed at and compares
+ * it to the real clock, which makes any test that adds a printer pass for exactly
+ * {@link SELF_HOSTED_GRACE_DAYS} days after that row was written and fail on every run afterwards.
+ */
+export const LICENSE_FIRST_RUN_SETTING_KEY = scopeSettingKeyForWorkspace(null, 'license.firstRunAt')
+const FIRST_RUN_KEY = LICENSE_FIRST_RUN_SETTING_KEY
 /**
  * The pre-1.0 key, written when enforcement was native-only. Read as a fallback
  * and adopted forward so a native install that has been running for months is

@@ -230,6 +230,19 @@ export function SliceFileModal({
   // Edited multi-plate arrangement from the interactive 3D editor. When set, it is
   // authoritative: the slice runs across every plate the edit defines (plate: 0).
   const [sceneEdit, setSceneEdit] = useState<SceneEdit | null>(null)
+  // The bytes the editor session that produced `sceneEdit` authors from. Held BESIDE the edit
+  // because the two are only meaningful together: the edit is a diff against these bytes, and by
+  // submit time the session may have saved, which moves the file's head off them. Baking the head
+  // instead re-applies an edit the save already baked in, which silently permuted an object's parts
+  // and traded their materials. Null when the edit came from a session with no base file.
+  const [sceneEditContentBase, setSceneEditContentBase] = useState<{ fileId: string; versionId?: string | null } | null>(null)
+  /**
+   * The hidden staged row holding the BAKED result of `sceneEdit`, sliced in the project's place.
+   *
+   * Set by both routes out of the editor (Apply and Slice), because both produce baked bytes. Null
+   * on a host that cannot stage, which falls back to sending the edit for the server to bake.
+   */
+  const [stagedSourceFileId, setStagedSourceFileId] = useState<string | null>(null)
   // When the full 3D editor hands back a layout it also chooses the plate scope to
   // act on: a 1-based plate index, or 0 for all plates. Drives `plate` in the submit
   // payload so the editor's "print this plate" targets just that plate.
@@ -823,6 +836,9 @@ export function SliceFileModal({
     // dialog's plate selection.
     plate: sceneEdit ? (editorPlatePreference ?? 0) : selectedPlate,
     sceneEdit: sceneEdit ?? undefined,
+    // Only meaningful alongside an edit; a plain slice bakes nothing and reads the file as it is.
+    contentBase: sceneEdit ? sceneEditContentBase : undefined,
+    stagedSourceFileId: sceneEdit ? stagedSourceFileId : undefined,
     selectedObjectIds: sceneEdit ? undefined : submitSelectedObjectIds,
     objectProcessOverrides: submitObjectProcessOverrides,
     // Slice-time layer G-code edits (per-plate replace semantics; only touched plates are
@@ -1030,9 +1046,19 @@ export function SliceFileModal({
 
   // Slice a single plate from the 3D editor without persisting a project: produces a
   // hidden gcode + slicing stats and opens the results dialog (which can save/print).
-  const handleEditorSlice = (opts: { plate: number; sceneEdit: SceneEdit }) => {
+  const handleEditorSlice = (opts: {
+    plate: number
+    sceneEdit: SceneEdit
+    contentBase: { fileId: string; versionId?: string | null } | null
+    stagedFileId: string | null
+  }) => {
     if (!canSliceFromEditor) return
     setSceneEdit(opts.sceneEdit)
+    setSceneEditContentBase(opts.contentBase)
+    // Also into state, not only into the input below: this submit keeps the dialog OPEN, so a
+    // second one reads it from here. Without it that submit would fall back to posting the edit
+    // for the server to bake, against a base it has to guess at.
+    setStagedSourceFileId(opts.stagedFileId)
     setEditorPlatePreference(opts.plate)
     // Name the output from the scope actually being sliced: `suggestedOutputFileName`
     // tracks the editor's per-object plate selection (always a single plate), so a
@@ -1048,6 +1074,13 @@ export function SliceFileModal({
       ...buildSubmitInput({ outputFileName }),
       plate: opts.plate,
       sceneEdit: opts.sceneEdit,
+      // Both overridden from `opts` rather than read back from state: the setState calls above have
+      // not committed yet, so `buildSubmitInput` still sees the previous edit (null on a first
+      // slice). They must stay in lockstep; an edit baked against the wrong bytes is the bug.
+      contentBase: opts.contentBase,
+      // The baked bytes, sliced in the project's place. `sceneEdit` still rides along for the
+      // dialog's own reading of "this is an editor slice"; the builder drops it from the wire.
+      stagedSourceFileId: opts.stagedFileId,
       selectedObjectIds: undefined,
       // Land the (initially hidden) gcode next to the source project, so "Save to
       // library" only has to reveal it.
@@ -1067,7 +1100,15 @@ export function SliceFileModal({
     bridgeId,
     folderId: currentFolderId,
     currentEdit: sceneEdit,
-    onApply: setSceneEdit,
+    onApply: (
+      edit: SceneEdit,
+      editContentBase: { fileId: string; versionId?: string | null } | null,
+      stagedFileId: string | null
+    ) => {
+      setSceneEdit(edit)
+      setSceneEditContentBase(editContentBase)
+      setStagedSourceFileId(stagedFileId)
+    },
     onSlice: handleEditorSlice,
     canSlice: canSliceFromEditor,
     sliceDisabledReason,

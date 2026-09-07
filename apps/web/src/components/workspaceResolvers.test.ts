@@ -22,7 +22,8 @@ const SRC_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'
 /** The module that is allowed to fetch each route. */
 const OWNERS = new Map([
   ['/api/slicing/profiles/resolve-process', 'components/workspaceProcessResolver.ts'],
-  ['/api/slicing/profiles/resolve-filament', 'components/library/workspaceFilamentResolver.ts']
+  ['/api/slicing/profiles/resolve-filament', 'components/library/workspaceFilamentResolver.ts'],
+  ['/api/slicing/profiles/resolve-machine', 'components/workspaceMachineResolver.ts']
 ])
 
 async function* walk(dir: string): AsyncGenerator<string> {

@@ -17,7 +17,7 @@
  * geometry by id on a server, the other carries it in memory, and `EditorView` should not know which.
  */
 import type { ImportedObjectInput } from '@printstream/shared/three-mf'
-import type { ImportNormalization, StagedImport, StagedImportFormat } from '@printstream/shared'
+import type { ImportNormalization, SceneEdit, StagedImport, StagedImportFormat } from '@printstream/shared'
 
 export type { ImportNormalization }
 
@@ -67,10 +67,41 @@ export interface EditorImportStore {
   /** The staged mesh as binary STL, for the geometry paths that read bytes rather than a URL. */
   fetchMesh(importId: string, partIndex?: number, signal?: AbortSignal): Promise<ArrayBuffer>
   /**
-   * Staged geometry to hand the bake directly. Empty for the api store, whose server resolves
-   * `importId`s from its own LRU; populated for a local store, where nothing else holds the meshes.
+   * Staged geometry to hand the bake directly, which every host must now answer: the bake runs in
+   * the BROWSER on both, so nobody else is left to resolve an `importId`.
+   *
+   * Async because a host need not already hold the meshes. The local store parsed them in the tab
+   * and returns what it kept; the api store staged them server-side and fetches them back, which is
+   * why this cannot be a getter.
+   *
+   * `referencedIds` narrows the answer to what the edit still refers to. A store accumulates imports
+   * the session has since discarded (every cut stages halves and connector volumes the next cut
+   * replaces), and a host that fetches its geometry pays a round trip for each one. Omitted means
+   * "everything staged", which is what a host holding its own meshes can afford.
    */
-  importsForBake(): ImportedObjectInput[]
+  importsForBake(signal?: AbortSignal, referencedIds?: ReadonlySet<string>): Promise<ImportedObjectInput[]>
   /** Release anything the store is holding (object URLs, cached meshes). */
   dispose(): void
+}
+
+/**
+ * The staged imports a `SceneEdit` still refers to.
+ *
+ * Mirrors the api's `resolveSceneEditImports`, which walked the same two places: an instance's own
+ * `importId`, and a part added onto an object (`meshImportId`). Anything else in a store is left
+ * over from an edit the session has since replaced.
+ */
+export function importIdsReferencedBy(edit: SceneEdit): Set<string> {
+  const ids = new Set<string>()
+  for (const instance of edit.instances ?? []) {
+    if (instance.importId) ids.add(instance.importId)
+  }
+  for (const added of Object.values(edit.addedParts ?? {})) {
+    for (const part of Array.isArray(added) ? added : [added]) {
+      if (part.meshImportId) ids.add(part.meshImportId)
+      // An added part may itself be hosted on an import rather than on a base object.
+      if (part.importId) ids.add(part.importId)
+    }
+  }
+  return ids
 }

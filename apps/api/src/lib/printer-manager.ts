@@ -19,6 +19,7 @@
  */
 import {
   isPrinterActiveJobStage,
+  wasPrintCancelled,
   deepEqual,
   type Printer,
   type PrinterPressureAdvanceProfile,
@@ -516,10 +517,16 @@ class PrinterManager {
         printerEvents.emit('job.started', { printer: entry.printer, jobName: merged.jobName ?? '' })
       }
       if (previousTrackedJob && !nextTrackedJob) {
+        // A cancellation and a failure both land on the FAILED stage, so the
+        // stage alone cannot tell them apart; the printer's own error code can
+        // (`wasPrintCancelled`). Without this every cancelled print was recorded
+        // as Failed and announced with the error-level "Print failed" template.
         printerEvents.emit('job.finished', {
           printer: entry.printer,
           jobName: entry.lastJobName ?? '',
-          result: merged.stage === 'failed' ? 'failed' : 'success'
+          result: wasPrintCancelled(merged)
+            ? 'cancelled'
+            : merged.stage === 'failed' ? 'failed' : 'success'
         })
       }
       entry.lastStage = merged.stage

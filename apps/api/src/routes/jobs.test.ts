@@ -68,8 +68,32 @@ test('jobs history falls back to the legacy query when calibration columns are m
         progressPercent: null,
         durationSeconds: 600,
         result: 'success',
+        sourceType: 'external',
         fileId: null,
         fileName: null,
+        fileSizeBytes: null,
+        plate: null,
+        useAms: null,
+        bedLevel: null,
+        amsMapping: null,
+        thumbnailPath: null
+      },
+      {
+        // A library job whose retained copy was reclaimed: no `fileId`, but still OURS. The
+        // legacy path used to infer provenance from `fileId` and called this "external", which
+        // is the mislabelling de265030 fixed on the modern path and missed here.
+        id: 'job-3',
+        printerId: 'printer-1',
+        printerName: 'Printer 1',
+        jobName: 'Reclaimed print',
+        startedAt: new Date('2026-05-01T09:00:00.000Z'),
+        finishedAt: new Date('2026-05-01T09:30:00.000Z'),
+        progressPercent: null,
+        durationSeconds: 1800,
+        result: 'success',
+        sourceType: 'library',
+        fileId: null,
+        fileName: 'Reclaimed print.3mf',
         fileSizeBytes: null,
         plate: null,
         useAms: null,
@@ -87,6 +111,7 @@ test('jobs history falls back to the legacy query when calibration columns are m
         progressPercent: 5,
         durationSeconds: null,
         result: 'unknown',
+        sourceType: 'library',
         fileId: 'file-1',
         fileName: 'Queued print.3mf',
         fileSizeBytes: 1024,
@@ -118,16 +143,25 @@ test('jobs history falls back to the legacy query when calibration columns are m
         jobKind: string
         calibrationOption: number | null
         jobName: string
+        fileId: string | null
         snapshotPath: string | null
       }>
     }
-    assert.equal(body.jobs.length, 2)
+    assert.equal(body.jobs.length, 3)
     assert.equal(body.jobs[0]?.jobName, 'Calibration')
+    // Provenance comes from the row's own `sourceType`, which the legacy query selects because the
+    // column ships in the init migration; only the newer columns are genuinely absent here.
     assert.equal(body.jobs[0]?.jobKind, 'external')
     assert.equal(body.jobs[0]?.calibrationOption, null)
     assert.equal(body.jobs[0]?.snapshotPath, null)
-    assert.equal(body.jobs[1]?.jobName, 'Queued print')
-    assert.equal(body.jobs[1]?.finishedAt, null)
+    // The regression this path missed: ours, with its file reclaimed. A missing `fileId` says the
+    // artifact is gone, never that someone else started the print.
+    assert.equal(body.jobs[1]?.jobName, 'Reclaimed print')
+    assert.equal(body.jobs[1]?.jobKind, 'file')
+    assert.equal(body.jobs[1]?.fileId, null)
+    assert.equal(body.jobs[2]?.jobName, 'Queued print')
+    assert.equal(body.jobs[2]?.jobKind, 'file')
+    assert.equal(body.jobs[2]?.finishedAt, null)
     assert.match(recordedQuery ?? '', /printer\."workspaceId"/)
   })
 })

@@ -39,6 +39,7 @@
  * sidecar costs the user their file. A range we cannot read is skipped instead.
  */
 import { parseRootModelObjectIdOrder } from './scene-parser.js'
+import { xmlAttribute as attribute } from './xml-write.js'
 
 /** The archive entry these ranges live in (`LAYER_CONFIG_RANGES_FILE`, `bbs_3mf.cpp:176`). */
 export const LAYER_CONFIG_RANGES_ENTRY = 'Metadata/layer_config_ranges.xml'
@@ -80,11 +81,6 @@ export const HEIGHT_RANGE_EXTRUDER_KEY = 'extruder'
 const OBJECT_BLOCK_RE = /<object\b([^>]*)>([\s\S]*?)<\/object>/g
 const RANGE_BLOCK_RE = /<range\b([^>]*?)(?:\/>|>([\s\S]*?)<\/range>)/g
 const OPTION_RE = /<option\b([^>]*?)(?:\/>|>([\s\S]*?)<\/option>)/g
-
-function attribute(attrs: string, name: string): string | null {
-  const match = new RegExp(`\\b${name}="([^"]*)"`).exec(attrs)
-  return match ? (match[1] ?? null) : null
-}
 
 function decodeXmlText(text: string): string {
   return text

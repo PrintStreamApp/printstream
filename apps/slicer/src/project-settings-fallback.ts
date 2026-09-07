@@ -475,9 +475,9 @@ export async function copyThreeMfWithProjectSettings(inputPath: string, outputPa
  * code and reason instead of letting the slice proceed, a partial/absent config reaching the
  * BBL-project loader is a deterministic segfault, so "slicing as-is" could only ever trade a
  * clear error (e.g. "process not compatible with printer") for an opaque exit 139. The thrown
- * message keeps the `Slicer CLI exited with code N` shape the API's compatibility/crash retry
- * classifiers key on (`isLikelyBuiltinProfileCompatibilityExit` / `isTransientSlicerCrashExit`
- * in the API's slicing-jobs), so recoverable failures still auto-retry.
+ * message keeps the `Slicer CLI exited with code N` shape the API's crash classifier keys on
+ * (`isTransientSlicerCrashExit` in the API's slicing-jobs), so a transient signal death still gets
+ * its one retry with unchanged inputs.
  */
 export async function ensureEmbeddedProjectSettings(input: {
   inputPath: string
@@ -517,9 +517,8 @@ export async function ensureEmbeddedProjectSettings(input: {
       // opaque exit 139 (and, because the crash classifier then retries, doing it three times).
       //
       // Deliberately NOT shaped like `Slicer CLI exited with code N`: this is not recoverable by
-      // dropping profiles or by retrying, so it must not match the API's compatibility/crash
-      // retry classifiers (`isLikelyBuiltinProfileCompatibilityExit` /
-      // `isTransientSlicerCrashExit` in slicing-jobs) the export-failure branch deliberately does.
+      // retrying, so it must not match the API's crash classifier (`isTransientSlicerCrashExit` in
+      // slicing-jobs) the way the export-failure branch deliberately does.
       if (embedded !== null) {
         const named = describeEmbeddedPresetNames(embedded)
         throw new Error(

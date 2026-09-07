@@ -26,9 +26,20 @@ import {
   threeMfPartSubtypeCarriesFilament
 } from '../three-mf-part-subtype.js'
 import { parseTextInfo, type TextInfo } from './text-info.js'
+import { escapeRegExp } from './xml-write.js'
+import {
+  BAMBU_SHAPE_ELEMENT,
+  LEGACY_SHAPE_ELEMENT,
+  PRINTSTREAM_SVG_ELEMENT,
+  parseBambuStudioShape,
+  parseSvgPartRecord,
+  svgPartRecordFromBambuShape,
+  type SvgPartRecord
+} from './svg-shape.js'
 import type { PrinterModel } from '../printer.js'
 import { parseLayerConfigRanges, type ThreeMfHeightRange } from './layer-config-ranges.js'
 import { parseLayerHeightProfiles } from './layer-height-profile.js'
+import { parseCutInformation, type ParsedCutObject } from './cut-information.js'
 import {
   collectNormalizedModels,
   decodeXmlAttributeValue,
@@ -51,6 +62,14 @@ import {
  * `modelSettingsXml` are required: the rest degrade to sensible defaults (generic bed, no brim
  * ears, no layer G-code), which is what lets a vanilla CAD-exported 3MF still render.
  */
+// Built ONCE: the `<part>` walk below runs per volume in a parse that already profiles in seconds on
+// a large project, and `new RegExp` inside it recompiles the same pattern for every volume in the
+// file. Neither pattern is stateful (no `g` flag), so one instance is safely shared.
+const PRINTSTREAM_SVG_RE = new RegExp(`<${PRINTSTREAM_SVG_ELEMENT}\\b[^>]*/>`)
+const BAMBU_SHAPE_RE = new RegExp(
+  `<(?:${BAMBU_SHAPE_ELEMENT}|${escapeRegExp(LEGACY_SHAPE_ELEMENT)})\\b[^>]*/>`
+)
+
 export interface ThreeMfSceneEntries {
   /** `3D/3dmodel.model`: object components, build items, and their transforms. */
   rootModelXml: string
@@ -60,6 +79,15 @@ export interface ThreeMfSceneEntries {
   projectSettingsJson?: string | null
   /** `Metadata/brim_ear_points.txt`: manual brim ears. */
   brimEarPointsText?: string | null
+  /**
+   * `Metadata/cut_information.xml`, so a cut REOPENS as a cut.
+   *
+   * Without it the editor knows which volumes are connectors only for the session that made them:
+   * a saved project comes back with its halves as ordinary objects and its connectors as ordinary
+   * solids, which is exactly the trap the text tool fell into -- a record written correctly and
+   * read by nobody, whose only symptom is a feature that works until you reopen the file.
+   */
+  cutInformationXml?: string | null
   /** `Metadata/layer_config_ranges.xml`: per-object height range modifiers. */
   layerConfigRangesXml?: string | null
   /** `Metadata/layer_heights_profile.txt`: per-object variable layer height. */
@@ -117,6 +145,16 @@ export interface ThreeMfSceneInstancePart {
   processOverrides?: Record<string, string>
   /** What a TEXT part was typed from, so the editor reopens it editable instead of as geometry. */
   textInfo?: TextInfo
+  /** What an SVG part was extruded from, so the editor reopens it editable instead of as geometry. */
+  svgPart?: SvgPartRecord
+  /**
+   * True when `cut_information.xml` names this volume as a cut connector.
+   *
+   * BambuStudio excludes these from an object's volume rows entirely and shows one "Cut connectors"
+   * row instead (`can_add_volumes_to_object`), so a half with a body and one peg reads as a single
+   * row rather than as a multi-part object.
+   */
+  cutConnector?: boolean
 }
 
 export interface ThreeMfSceneInstance {
@@ -132,6 +170,11 @@ export interface ThreeMfSceneInstance {
   printable?: boolean
   /** Manual brim ears (object-local mm + radius), parsed from brim_ear_points.txt. */
   brimEars?: Array<{ x: number; y: number; z: number; radius: number }>
+  /**
+   * The cut group this object belongs to, from `cut_information.xml`, or absent when it is not part
+   * of a cut. Two objects sharing a value are the two halves of one cut.
+   */
+  cutId?: number
   /**
    * Height range modifiers (object-space Z bands + their setting overrides), parsed from
    * layer_config_ranges.xml. Object-level, so every instance of the object reports the same set.
@@ -231,6 +274,8 @@ interface ThreeMfModelSettingsPartMetadata {
   processOverrides?: Record<string, string>
   /** What a TEXT part was typed from, so the editor can reopen it for editing rather than rebuild. */
   textInfo?: TextInfo
+  /** What an SVG part was extruded from, so the editor can reopen it rather than rebuild. */
+  svgPart?: SvgPartRecord
 }
 
 interface ThreeMfModelSettingsPlateScene {
@@ -333,11 +378,20 @@ export function buildSceneManifest(
   const layerConfigRangesXml = entries.layerConfigRangesXml ?? null
   const layerHeightsProfileText = entries.layerHeightsProfileText ?? null
   const customGcodeText = entries.customGcodeText ?? null
+  const cutInformationXml = entries.cutInformationXml ?? null
 
   const rootComponentsByObjectId = parseRootModelComponents(rootModelXml)
   const brimEarsByObjectId = parseBrimEarPoints(brimEarPointsText, rootModelXml)
   const heightRangesByObjectId = parseLayerConfigRanges(layerConfigRangesXml, rootModelXml)
   const layerProfilesByObjectId = parseLayerHeightProfiles(layerHeightsProfileText, rootModelXml)
+  // Keyed by BUILD ORDINAL, like every other ordinal sidecar, so it is resolved through the same
+  // order the writers use rather than through 3MF object ids.
+  const cutInfoByOrdinal = parseCutInformation(cutInformationXml)
+  const cutInfoByObjectId = new Map<number, ParsedCutObject>()
+  parseRootModelObjectIdOrder(rootModelXml).forEach((objectId, index) => {
+    const entry = cutInfoByOrdinal.get(index + 1)
+    if (entry && !cutInfoByObjectId.has(objectId)) cutInfoByObjectId.set(objectId, entry)
+  })
   const rootBuildTransformsByObjectId = parseRootBuildItemTransforms(rootModelXml)
   const rootBuildPrintableByObjectId = parseRootBuildItemPrintable(rootModelXml)
   const modelSettingsScene = parseModelSettingsScene(modelSettingsXml)
@@ -369,11 +423,16 @@ export function buildSceneManifest(
     placement[10] = (placement[10] ?? 0) - plateOrigin.y
 
     const instanceParts: ThreeMfSceneInstancePart[] = []
+    // Connector volumes are named by ORDINAL among this object's components, which is the position
+    // in this very loop -- so it is counted here rather than looked up afterwards.
+    const cutConnectorVolumeIds = cutInfoByObjectId.get(platedInstance.objectId)?.connectorVolumeIds
+    let volumeOrdinal = -1
     let instanceName: string | null = null
     // Filament of each printed (non-helper) part, in part order; null = the part carries
     // no extruder metadata of its own (it inherits the object default).
     const printedPartFilamentIds: Array<number | null> = []
     for (const component of components) {
+      volumeOrdinal++
       const metadata = partMetadata.get(component.objectId) ?? null
       const subtype = metadata?.subtype ?? null
       // Helper volumes are rendered (translucently) too, so keep them, but they never define
@@ -405,7 +464,9 @@ export function buildSceneManifest(
         transform: [...component.transform],
         subtype,
         ...(metadata?.processOverrides ? { processOverrides: metadata.processOverrides } : {}),
-        ...(metadata?.textInfo ? { textInfo: metadata.textInfo } : {})
+        ...(metadata?.textInfo ? { textInfo: metadata.textInfo } : {}),
+        ...(metadata?.svgPart ? { svgPart: metadata.svgPart } : {}),
+        ...(cutConnectorVolumeIds?.has(volumeOrdinal) ? { cutConnector: true } : {})
       })
       if (isHelper) continue
       if (instanceName == null) instanceName = metadata?.name ?? null
@@ -443,6 +504,9 @@ export function buildSceneManifest(
         ...(printable ? {} : { printable: false }),
         ...(brimEarsByObjectId.has(platedInstance.objectId)
           ? { brimEars: brimEarsByObjectId.get(platedInstance.objectId)!.map((ear) => ({ ...ear })) }
+          : {}),
+        ...(cutInfoByObjectId.has(platedInstance.objectId)
+          ? { cutId: cutInfoByObjectId.get(platedInstance.objectId)!.cutId }
           : {}),
         ...(heightRangesByObjectId.has(platedInstance.objectId)
           ? {
@@ -778,6 +842,23 @@ export function parseModelSettingsScene(xml: string): {
       const ownExtruderId = readModelSettingsMetadataInt(partBlock, 'extruder')
       const textInfoMatch = /<text_info\b[^>]*\/>/.exec(partBlock)
       const textInfo = textInfoMatch ? parseTextInfo(textInfoMatch[0]) : null
+      // Ours first, Studio's as a fallback. A part of a SPLIT svg import deliberately carries no
+      // `<BambuStudioShape/>` (that element describes a whole artwork, so N of them would each claim
+      // to be the entire logo), so our own record is the only one that can describe every part we
+      // write. But a file EMBOSSED IN BAMBUSTUDIO carries only Studio's, and reading just ours made
+      // those reopen here as anonymous solids, which is the same defect from the other direction.
+      //
+      // Studio's record is one volume per artwork, so it converts to a whole-artwork piece index.
+      // `depth` is its extrusion; the WIDTH is not recoverable from it (the shapes are re-derived
+      // from the svg bytes and scaled by `scale`, which is relative to nanosvg's own extents), so it
+      // is left at 0 for the reopen path to resolve once it has parsed the artwork.
+      const svgMatch = PRINTSTREAM_SVG_RE.exec(partBlock)
+      const bambuMatch = BAMBU_SHAPE_RE.exec(partBlock)
+      const svgPart = svgMatch
+        ? parseSvgPartRecord(svgMatch[0])
+        : bambuMatch
+          ? svgPartRecordFromBambuShape(parseBambuStudioShape(bambuMatch[0]))
+          : null
       partMap.set(partId, {
         id: partId,
         name: readModelSettingsMetadataString(partBlock, 'name') ?? objectName,
@@ -785,7 +866,8 @@ export function parseModelSettingsScene(xml: string): {
         extruderId: ownExtruderId ?? (isNonRenderableThreeMfPartSubtype(subtype) ? null : objectExtruderId),
         subtype,
         ...(Object.keys(partOverrides).length > 0 ? { processOverrides: partOverrides } : {}),
-        ...(textInfo ? { textInfo } : {})
+        ...(textInfo ? { textInfo } : {}),
+        ...(svgPart ? { svgPart } : {})
       })
     }
     if (partMap.size > 0) partsByObjectId.set(objectId, partMap)

@@ -244,11 +244,15 @@ test('pruneUnreferencedProjectSnapshots enforces "no job, no kept project"', asy
     assert.deepEqual(deletedIds, ['project-1'])
     assert.deepEqual(deletedBytes, ['abc-part.3mf'])
     const where = (queries[0] as { where: Record<string, unknown> }).where
-    // Both markers: print-file snapshots also carry a snapshotKey, so origin is what narrows this
-    // to a preserved project. Deleting a dispatched print's snapshot would break its reprint.
     assert.equal(where.origin, 'snapshot')
     assert.deepEqual(where.snapshotKey, { not: null })
-    // A started job or a kept output is exactly what "referenced" means.
+    // A started job or a kept output is exactly what "referenced" means, and it has to be checked
+    // through EVERY relation. The markers above do not narrow this to a preserved project: a
+    // dispatched print's snapshot carries the same origin and snapshotKey, and is referenced only
+    // through `PrintJob.fileId` (`jobs`). Without that clause this pass deleted the artifact behind
+    // every print older than the retention window, and `onDelete: SetNull` blanked the job's file
+    // link, so history offered "Slice again" with no Reprint.
+    assert.deepEqual(where.jobs, { none: {} })
     assert.deepEqual(where.slicedOutputs, { none: {} })
     assert.deepEqual(where.sourceProjectJobs, { none: {} })
   } finally {

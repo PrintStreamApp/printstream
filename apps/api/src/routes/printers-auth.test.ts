@@ -1,7 +1,7 @@
 process.env.NODE_ENV = 'test'
 
 import assert from 'node:assert/strict'
-import { afterEach, mock, test } from 'node:test'
+import { afterEach, beforeEach, mock, test } from 'node:test'
 import express from 'express'
 import type { AddressInfo } from 'node:net'
 import type { Server } from 'node:http'
@@ -19,6 +19,7 @@ import { printersRouter, resolvePrinterStorageJobName } from './printers.js'
 import type { RequestAuthContext } from '../lib/auth-context.js'
 import { HttpError } from '../lib/http-error.js'
 import { prisma, rootPrisma } from '../lib/prisma.js'
+import { LICENSE_FIRST_RUN_SETTING_KEY, SELF_HOSTED_GRACE_DAYS } from '../lib/license-enforcement.js'
 import { restorePrismaMethodsAfterEach } from '../test-utils/prisma-stubs.js'
 import { bridgeSessionManager } from '../lib/bridge-session-manager.js'
 import { printerDiscovery } from '../lib/printer-discovery.js'
@@ -41,8 +42,33 @@ restorePrismaMethodsAfterEach([
   [p.printer, 'create'],
   [p.bridge, 'findUnique'],
   [p.printerStats, 'findUnique'],
-  [p.printJob, 'groupBy']
+  [p.printJob, 'groupBy'],
+  [rp.setting, 'findUnique'],
+  [rp.setting, 'upsert']
 ])
+
+/**
+ * Keep the licence gate on `POST /api/printers` out of the way of tests about WHO may adopt a
+ * printer.
+ *
+ * `assertLicenseAllowsPrinterAdd` refuses with 409 once a self-hosted install is past its
+ * evaluation window, and the window is measured from a first-boot stamp that `getFirstRunAt`
+ * reads out of a real `Setting` row. Unstubbed, that is the developer's own database and the
+ * real clock: this suite passed for the 30 days after that row was written and then failed on
+ * every run, under `SELF_HOSTED=true`, for a reason that has nothing to do with printers. It
+ * also wrote a row into that database as a side effect of running the tests.
+ *
+ * Stamped as NOW so the install is inside its grace window whenever this runs. The refusal
+ * itself is not lost -- `license-enforcement.test.ts` owns expiry, with a fixed clock.
+ */
+beforeEach(() => {
+  rootPrisma.setting.findUnique = ((async ({ where }: { where: { key: string } }) => (
+    where.key === LICENSE_FIRST_RUN_SETTING_KEY
+      ? { key: where.key, value: new Date().toISOString() }
+      : null
+  )) as unknown) as typeof rootPrisma.setting.findUnique
+  rootPrisma.setting.upsert = ((async () => ({})) as unknown) as typeof rootPrisma.setting.upsert
+})
 const printerManagerPrototype = Object.getPrototypeOf(printerManager) as typeof printerManager
 const TEST_WORKSPACE: RequestWorkspaceSummary = { id: 'workspace-1', slug: 'workspace-1', name: 'Workspace 1' }
 
@@ -458,6 +484,50 @@ test('adopting a printer only dismisses the discovery entry for the active works
 
   assert.deepEqual(dismiss.mock.calls[0]?.arguments, [printer.serial, TEST_WORKSPACE.id])
   assert.equal(forget.mock.callCount(), 0)
+})
+
+test('an out-of-grace self-hosted install refuses to adopt a printer', async () => {
+  // The route half of the licence gate, pinned deliberately. It used to be covered only by accident
+  // -- and only from the day the developer's own first-run row aged past the grace window, which is
+  // what turned this whole file red under `SELF_HOSTED=true`. Here the stamp is the INPUT, so the
+  // refusal is asserted on purpose and cannot depend on how old the machine is.
+  if (!process.env.SELF_HOSTED) return // enforcement is off for the cloud build; nothing to refuse
+  rootPrisma.setting.findUnique = ((async ({ where }: { where: { key: string } }) => (
+    where.key === LICENSE_FIRST_RUN_SETTING_KEY
+      ? { key: where.key, value: new Date(Date.now() - (SELF_HOSTED_GRACE_DAYS + 1) * 86_400_000).toISOString() }
+      : null
+  )) as unknown) as typeof rootPrisma.setting.findUnique
+  prisma.printer.findFirst = ((async () => null as never) as unknown) as typeof prisma.printer.findFirst
+  prisma.bridge.findUnique = ((async () => ({ id: 'bridge-1' } as never)) as unknown) as typeof prisma.bridge.findUnique
+  const create = mock.method(printerManagerPrototype, 'add', () => undefined)
+
+  await withPrintersApp({
+    authEnabled: true,
+    actor: { type: 'user', userId: 'user-1' },
+    permissions: [PRINTERS_MANAGE_PERMISSION],
+    runtimePolicy: { demoMode: false }
+  }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/printers`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: printer.name,
+        host: printer.host,
+        serial: printer.serial,
+        accessCode: printer.accessCode,
+        model: printer.model,
+        bridgeId: 'bridge-1',
+        currentPlateType: printer.currentPlateType,
+        currentNozzleDiameters: printer.currentNozzleDiameters
+      })
+    })
+
+    assert.equal(response.status, 409)
+    // The message has to name the way OUT, not just the refusal: a community key is free.
+    assert.match((await response.json() as { error: string }).error, /license/i)
+  }, TEST_WORKSPACE)
+
+  assert.equal(create.mock.callCount(), 0, 'a refused adoption must not reach the printer manager')
 })
 
 test('adopting a printer can assign it to a connected bridge', async () => {

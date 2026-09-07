@@ -15,6 +15,7 @@ import { Suspense, lazy, useCallback, useState } from 'react'
 import { Button } from '@mui/joy'
 import ViewInArRoundedIcon from '@mui/icons-material/ViewInArRounded'
 import type { SceneEdit } from '@printstream/shared'
+import type { EditorContentBasePin } from './lib/contentBasePin'
 import type { SliceSettingsController } from '../../components/library/SliceSettingsPanel'
 import { LazyDialogFallback } from '../../components/LazyDialogFallback'
 import { PluginSlot } from '../../plugin/PluginSlot'
@@ -34,7 +35,7 @@ export function SlicingEditorAction(props: Record<string, unknown>) {
     ? (props.onSavedAs as (file: { id: string; name: string }) => void)
     : undefined
   const onApply = typeof props.onApply === 'function'
-    ? (props.onApply as (edit: SceneEdit) => void)
+    ? (props.onApply as (edit: SceneEdit, contentBase: EditorContentBasePin | null, stagedFileId: string | null) => void)
     : null
   const currentEdit = (props.currentEdit as SceneEdit | null | undefined) ?? null
   const initialPlateIndex = typeof props.initialPlateIndex === 'number' && Number.isInteger(props.initialPlateIndex) && props.initialPlateIndex > 0
@@ -47,7 +48,7 @@ export function SlicingEditorAction(props: Record<string, unknown>) {
   const sliceDisabledReason = typeof props.sliceDisabledReason === 'string' && props.sliceDisabledReason ? props.sliceDisabledReason : undefined
   const slicing = props.slicing === true
   const onSlice = typeof props.onSlice === 'function'
-    ? (props.onSlice as (opts: { plate: number; sceneEdit: SceneEdit }) => void)
+    ? (props.onSlice as (opts: { plate: number; sceneEdit: SceneEdit; contentBase: EditorContentBasePin | null }) => void)
     : undefined
   // When the editor IS the slice UI (simple mode removed), the host opens it
   // directly: no button, and closing the editor closes the host dialog.
@@ -98,7 +99,7 @@ export function SlicingEditorAction(props: Record<string, unknown>) {
             targetPrinterModel={targetPrinterModel}
             presetManager={presetManager}
             presetSourceStatus={<PluginSlot name="slicing.presets.syncStatus" />}
-            onApply={(edit) => { onApply(edit); closeEditor() }}
+            onApply={(edit, editContentBase, stagedFileId) => { onApply(edit, editContentBase, stagedFileId); closeEditor() }}
             onSavedAs={onSavedAs}
             onClose={closeEditor}
             sliceConfig={sliceConfig}

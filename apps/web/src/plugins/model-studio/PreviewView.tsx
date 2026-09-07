@@ -50,12 +50,14 @@ import {
   BAMBU_THREE_MF_ISO_UP,
   EDITOR_HOME_VIEW_DIRECTION,
   VIEW_CUBE_EDGE_INSET,
+  VIEW_CUBE_HINT,
   VIEW_CUBE_SIZE,
   VIEW_PRESET_CONFIG,
-  computePlatedOrthoFrameRadius,
+  computeOrthoFrameRadiusForDirection,
   createViewCube,
   type ViewPreset
 } from './lib/viewCube'
+import { createViewportCameraRig } from './lib/viewportCamera'
 import { ProgressBar } from '../../components/ProgressBar'
 
 const PLATED_PREVIEW_GRID_SIZE = 320
@@ -376,26 +378,37 @@ export function PreviewView(props: Record<string, unknown>) {
       camera.updateProjectionMatrix()
     }
 
-    rigState.applyViewPreset = (preset: ViewPreset) => {
-      const config = VIEW_PRESET_CONFIG[preset]
+    // The SAME swing and pivot the editor uses; see `viewportCamera.ts` for why they are one
+    // implementation rather than one each. `invalidate` marks the frame dirty, so an animating
+    // camera keeps drawing while an idle preview still costs nothing.
+    const cameraRig = createViewportCameraRig(camera, controls, rigState.invalidate)
+
+    const applyViewDirection = (from: { x: number; y: number; z: number }) => {
       if (camera instanceof THREE.OrthographicCamera && rigState.platedContentSize) {
         const aspect = Math.max(container.clientWidth, 1) / Math.max(container.clientHeight, 1)
-        rigState.platedFrameRadius = Math.max(computePlatedOrthoFrameRadius(rigState.platedContentSize, aspect, preset), 30)
+        rigState.platedFrameRadius = Math.max(
+          computeOrthoFrameRadiusForDirection(rigState.platedContentSize, aspect, from),
+          30
+        )
         applyPlatedOrthoProjection()
       }
-      camera.up.set(config.up.x, config.up.y, config.up.z)
-      camera.position.set(
-        rigState.viewDistance * config.direction.x,
-        rigState.viewDistance * config.direction.y,
-        rigState.viewDistance * config.direction.z
-      )
-      camera.lookAt(0, 0, 0)
-      controls.target.set(0, 0, 0)
-      controls.update()
+      // Always framed on the subject: this camera has no pan of its own to preserve, so unlike the
+      // editor's there is no keep-my-view variant to offer. `camera.up` is left to the rig, which
+      // pins it to world Z -- writing a preset's own up here re-based every later drag onto a
+      // different axis, and the straight-down presets carry a hair of lean in their DIRECTION
+      // instead (see `VIEW_PRESET_CONFIG`).
+      cameraRig.swingTo({
+        direction: from,
+        target: new THREE.Vector3(0, 0, 0),
+        distance: rigState.viewDistance
+      })
     }
+    rigState.applyViewPreset = (preset: ViewPreset) => applyViewDirection(VIEW_PRESET_CONFIG[preset].direction)
 
-    const viewCube = createViewCube(viewCubeContainer, (preset) => {
-      rigState.applyViewPreset(preset)
+    // Double-click, the edges and corners, the modifiers and the hint all arrive through the shared
+    // cube; `reframe` has nothing to opt out of here, since this camera always frames its subject.
+    const viewCube = createViewCube(viewCubeContainer, ({ region }) => {
+      applyViewDirection(region.direction)
       viewCube.sync(camera)
     })
     rigState.syncViewCubeOrientation = () => {
@@ -445,10 +458,13 @@ export function PreviewView(props: Record<string, unknown>) {
 
     let frame = 0
     const animate = () => {
+      // BEFORE update(), and update() is SKIPPED while a swing runs: it ends in lookAt(target),
+      // which would rebuild the roll from the direction every frame and undo the interpolation.
+      const swinging = cameraRig.advance(performance.now())
       // update() re-applies damping and detects external camera moves; it fires 'change'
       // (-> invalidate) only when the camera actually moved, so an idle preview skips the
       // render below entirely, no steady-state GPU cost.
-      controls.update()
+      if (!swinging) controls.update()
       if (needsRender) {
         needsRender = false
         // Refit the depth range to the content before every draw. The G-code preview renders with
@@ -517,6 +533,7 @@ export function PreviewView(props: Record<string, unknown>) {
       window.removeEventListener('resize', onResize)
       resizeObserver?.disconnect()
       controls.removeEventListener('change', rigState.invalidate)
+      cameraRig.dispose()
       controls.dispose()
       renderer.dispose()
       // Release the context immediately: contexts left to GC count against the browser's
@@ -868,7 +885,9 @@ export function PreviewView(props: Record<string, unknown>) {
             sx={{ position: 'absolute', top: 12, right: 52, zIndex: 2 }}
           />
         )}
-        <ModalClose onClick={onClose} sx={{ top: 12, right: 12, zIndex: 2 }} />
+        {/* No `onClick`: Joy closes the dialog through the Modal's own `onClose` before it would
+            reach one, so passing `onClose` here closed the preview twice per click. */}
+        <ModalClose sx={{ top: 12, right: 12, zIndex: 2 }} />
         {/* Extra right padding clears the header icons (maximize/shrink + close). */}
         {showPreviewChrome && (
           <DialogFileTitle title={heading} fileName={file ? formatLibraryFileName(file.name) : null} sx={{ pr: 12 }} />
@@ -1286,17 +1305,22 @@ function ViewCubeControl({
         pointerEvents: disabled ? 'none' : 'auto'
       }}
     >
-      <Box
-        ref={onSetContainer}
-        aria-label="Preview orientation cube"
-        sx={{
-          width: VIEW_CUBE_SIZE,
-          height: VIEW_CUBE_SIZE,
-          '& canvas': {
-            display: 'block'
-          }
-        }}
-      />
+      {/* Same hint as the editor's, from the same constant: the cube behaves identically in both,
+          and two wordings for one control is how they drift. Shift is mentioned even though this
+          preview always frames its subject, because the sentence describes the CUBE. */}
+      <Tooltip title={VIEW_CUBE_HINT} placement="right" enterDelay={600}>
+        <Box
+          ref={onSetContainer}
+          aria-label="Preview orientation cube"
+          sx={{
+            width: VIEW_CUBE_SIZE,
+            height: VIEW_CUBE_SIZE,
+            '& canvas': {
+              display: 'block'
+            }
+          }}
+        />
+      </Tooltip>
     </Box>
   )
 }

@@ -245,7 +245,8 @@ export function createLocalImportStore(): LocalImportStore {
 
     meshBytes: meshBytesOf,
 
-    importsForBake() {
+    // Already in hand: this host parsed every import in the tab, so there is nothing to await.
+    async importsForBake() {
       return [...entries.values()].map((entry) => ({
         importId: entry.descriptor.importId,
         name: entry.descriptor.name,

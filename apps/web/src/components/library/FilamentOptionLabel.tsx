@@ -16,6 +16,7 @@
  */
 import { Box, Stack, Tooltip, Typography } from '@mui/joy'
 import type { ReactNode } from 'react'
+import { PresetNameWithBrandMark } from '../BambuBrandMark'
 import { filamentBackground, filamentTextColor, resolveProjectFilamentColorName } from '../../lib/filamentColor'
 import { filamentRemainingStatus } from '../../lib/filamentSufficiency'
 import { normalizeHexColor } from '@printstream/shared'
@@ -96,7 +97,12 @@ export function FilamentOptionLabel({
         {swatchLabel || null}
       </Box>
       <Box sx={{ minWidth: 0, flex: 1, display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', columnGap: 1, rowGap: 0.125 }}>
-        <Typography level="body-xs" noWrap sx={{ minWidth: 0, gridColumn: '1 / 2' }}>{title}</Typography>
+        {/* The title leads with the brand, so a Bambu one becomes the mark, exactly as it does on
+            the sidebar row and in the preset picker. The colour that follows the separator is never
+            touched: the substitution is leading-token only. */}
+        <Typography level="body-xs" noWrap sx={{ minWidth: 0, gridColumn: '1 / 2' }}>
+          <PresetNameWithBrandMark name={title} />
+        </Typography>
         {warningLabel ? (
           <Tooltip title={warningLabel} variant="soft" size="sm">
             <Box

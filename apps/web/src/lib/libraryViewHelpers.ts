@@ -464,6 +464,15 @@ export type SliceFileSubmitAction = 'save' | 'print' | 'slice'
  */
 export type SliceFileSubmitInput = {
   slicerTargetId: string
+  /**
+   * Which BYTES to bake `sceneEdit` from, when the editor supplied one. It is the editor session's
+   * pinned base, the same field its SAVE sends, and it must ride along for the same reason: the
+   * edit is a diff against the file as OPENED, so baking the file's current content re-applies an
+   * edit an earlier save already baked in (see `contentBase` in the shared slicing schema).
+   *
+   * Absent for every non-editor slice, which carries no `sceneEdit` to re-apply.
+   */
+  contentBase?: { fileId: string; versionId?: string | null } | null
   target: {
     mode: 'realPrinter' | 'manualProfile'
     printerId?: string
@@ -495,6 +504,14 @@ export type SliceFileSubmitInput = {
    * to slice anyway. Without it BambuStudio refuses to open the project at all (exit 232).
    */
   allowNewerProjectFile?: boolean
+  /**
+   * A hidden staged row holding the ALREADY BAKED result of `sceneEdit`, sliced in its place.
+   *
+   * How an editor slice reaches the slicer without saving the user's project: the browser bakes,
+   * stages the bytes, and names the row here. When set it replaces `sourceFileId` and suppresses
+   * `sceneEdit`/`contentBase`, since the bytes already contain the edit.
+   */
+  stagedSourceFileId?: string | null
 }
 
 /**
@@ -524,9 +541,17 @@ export function buildCreateSlicingJobBody(
   input: SliceFileSubmitInput,
   extras: CreateSlicingJobBodyExtras
 ): z.input<typeof createSlicingJobSchema> {
+  // A STAGED source is already the baked result of the edit, so it replaces the source file AND
+  // makes the edit redundant: sending both would ask the server to apply the edit a second time,
+  // over bytes that already contain it. Neither `sourceVersionId` nor `contentBase` means anything
+  // against it either, since there is no diff left to resolve a base for.
+  const staged = input.stagedSourceFileId ?? null
   return {
-    sourceFileId: extras.sourceFileId,
-    sourceVersionId: extras.sourceVersionId ?? undefined,
+    sourceFileId: staged ?? extras.sourceFileId,
+    sourceVersionId: staged ? undefined : extras.sourceVersionId ?? undefined,
+    // Fixed here rather than per call site, exactly like `sceneEdit` above: the two travel
+    // together or the edit is baked against the wrong bytes, and only this builder sees both.
+    contentBase: staged ? undefined : input.contentBase ?? undefined,
     slicerTargetId: input.slicerTargetId,
     allowNewerProjectFile: input.allowNewerProjectFile,
     target: input.target.mode === 'realPrinter'
@@ -563,9 +588,19 @@ export function buildCreateSlicingJobBody(
     ownerClientId: readTabSessionId(),
     plate: input.plate,
     selectedObjectIds: input.selectedObjectIds,
-    objectProcessOverrides: input.objectProcessOverrides,
+    // Suppressed for a staged source for the same reason as `sceneEdit`: the browser baked them in,
+    // and sending them again would apply them TWICE. Worse than redundant, because removing the
+    // edit flips the api's `!sceneEdit` guard and its object-customization pass applies the map
+    // WITHOUT the re-key an edit-backed slice did, so an override on an object created by "Replace
+    // with..." or an independent copy is written against a placeholder id the baked file never used.
+    objectProcessOverrides: staged ? undefined : input.objectProcessOverrides,
+    // These two deliberately DO ride a staged slice, unlike the two above, and it is safe because
+    // `mergeCustomGcodePerLayer` REPLACES a plate's tool-change and pause tags when it is given
+    // edits for that plate (`editedChanges ? … : source.toolChanges`) rather than appending to
+    // them. So re-sending the set the bake already wrote reproduces the same XML. Sending them is
+    // what keeps a slice correct when the staged bytes are NOT edit-backed.
     filamentChanges: input.filamentChanges,
     pauses: input.pauses,
-    sceneEdit: input.sceneEdit
+    sceneEdit: staged ? undefined : input.sceneEdit
   }
 }

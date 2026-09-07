@@ -37,5 +37,9 @@ import { getBrowserEnv } from '../../../lib/browserEnv'
 export function createWebglRenderer(parameters?: THREE.WebGLRendererParameters): THREE.WebGLRenderer {
   const renderer = new THREE.WebGLRenderer(parameters)
   renderer.debug.checkShaderErrors = getBrowserEnv().devMode
+  // Per-material clipping, for the cut tool: while connectors are being placed it clips the near
+  // half away so the cross-section is visible to aim at. Enabling it costs nothing until a material
+  // actually carries `clippingPlanes`, and three ignores it entirely otherwise.
+  renderer.localClippingEnabled = true
   return renderer
 }

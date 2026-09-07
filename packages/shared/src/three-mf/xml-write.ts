@@ -19,6 +19,36 @@ export function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
+/**
+ * Read one double-quoted XML attribute out of an element (or an attribute run), RAW.
+ *
+ * The reading counterpart of {@link escapeXmlAttribute}, which is why it lives here. Extracted
+ * because it had reached three byte-identical copies (`text-info.ts`, `svg-shape.ts`,
+ * `layer-config-ranges.ts`), each parsing a different 3MF sidecar: a fix to one, say accepting
+ * single-quoted attributes, would silently have missed the other two.
+ *
+ * Returns the value UNDECODED. Callers decide, because they differ: most want
+ * {@link decodeXmlAttributeValue}, while numeric and enum readers parse the raw text and would only
+ * pay for a decode that cannot change their answer.
+ */
+export function xmlAttribute(source: string, name: string): string | null {
+  const match = new RegExp(`\\b${name}="([^"]*)"`).exec(source)
+  return match ? match[1]! : null
+}
+
+/**
+ * Read a numeric XML attribute, falling back when it is absent or not finite.
+ *
+ * Shared with {@link xmlAttribute} for the same reason: the "absent or unparseable means the
+ * caller's default" rule is one rule, and each sidecar parser had its own copy of it.
+ */
+export function xmlNumberAttribute(source: string, name: string, fallback: number): number {
+  const raw = xmlAttribute(source, name)
+  if (raw == null) return fallback
+  const value = Number.parseFloat(raw)
+  return Number.isFinite(value) ? value : fallback
+}
+
 /** Decode XML/HTML entity escapes in an attribute value. The inverse of escapeXmlAttribute, so the two live together. */
 export function decodeXmlAttributeValue(value: string): string {
   return value.replace(/&(#x[0-9a-fA-F]+|#\d+|apos|quot|amp|lt|gt);/g, (entity, body: string) => {

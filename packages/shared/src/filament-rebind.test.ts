@@ -344,3 +344,66 @@ test('a rebind that does not rename leaves the id alone', async () => {
   const out = rebindProjectFilamentPhysics(record, [{ config: { nozzle_temperature: ['250'] } as never }])
   assert.deepEqual(out.filament_ids, ['GFG02'], 'only a RENAME owns the id')
 })
+
+/**
+ * A slot rebound to a different MATERIAL must not keep the old one's type or its physics.
+ *
+ * Measured against the real slice path: slicing a PLA project while choosing
+ * `Generic PETG @BBL A1 0.2 nozzle` renamed the slot and wrote PETG's `filament_ids` entry, but left
+ * `filament_type: PLA` and PETG's drying block at PLA's numbers. Both gates were wrong for the same
+ * reason: `filament_type` is an identity key, which the physics loop skips, while the drying keys
+ * are absent from the tune DIALOG's catalogue, which the loop used as its key gate. BambuStudio
+ * projects every filament option of the selected preset into the saved config
+ * (`PresetBundle::full_config`, `PresetBundle.cpp:3434-3468`), and its CLI slices a project with no
+ * `--load-filaments` from that config alone (`BambuStudio.cpp:3516`) -- so a key we fail to rebind is
+ * a key the command-line preset file was silently covering for.
+ */
+test('a rebind to a different material carries the type and the non-catalogue keys with it', () => {
+  const record = {
+    filament_settings_id: ['Generic PLA @BBL A1 0.2 nozzle'],
+    filament_ids: ['GFL99'],
+    filament_colour: ['#00FF00'],
+    filament_type: ['PLA'],
+    different_settings_to_system: ['', ''],
+    nozzle_temperature: ['220'],
+    // Present in BambuStudio's filament options but NOT in the tune dialog's catalogue, so the
+    // old key gate skipped it and the slot kept PLA's drying profile under a PETG name.
+    filament_dev_ams_drying_temperature: ['45']
+  }
+  const next = rebindProjectFilamentPhysics(record, [{
+    config: {
+      filament_type: ['PETG'],
+      nozzle_temperature: ['255'],
+      filament_dev_ams_drying_temperature: ['65']
+    },
+    settingsId: 'Generic PETG @BBL A1 0.2 nozzle'
+  }])
+
+  assert.deepEqual(next.filament_settings_id, ['Generic PETG @BBL A1 0.2 nozzle'])
+  assert.deepEqual(next.filament_type, ['PETG'], 'the material itself follows the rebind')
+  assert.deepEqual(next.nozzle_temperature, ['255'])
+  assert.deepEqual(next.filament_dev_ams_drying_temperature, ['65'], 'a non-catalogue preset option rebinds too')
+  // The colour is the user's, not the preset's: a rebind must never repaint the slot.
+  assert.deepEqual(next.filament_colour, ['#00FF00'], 'colour is the user\'s choice, not the material\'s')
+  assert.deepEqual(record.filament_type, ['PLA'], 'the input record is never mutated')
+})
+
+test('a rebind that supplies a config but no rename leaves the material alone', () => {
+  // The trio must agree: writing `filament_type` from a config while `filament_settings_id` and
+  // `filament_ids` keep naming the old preset is the disagreement that makes BambuStudio fabricate
+  // a defaults-only `(<project>.3mf)` preset. The browser retarget takes this path when it
+  // re-flattens a workspace preset the slot ALREADY names, which is not a material change.
+  const record = {
+    filament_settings_id: ['Bambu PLA Basic - Custom'],
+    filament_ids: ['GFA00'],
+    filament_type: ['PLA'],
+    different_settings_to_system: ['', ''],
+    nozzle_temperature: ['220']
+  }
+  const next = rebindProjectFilamentPhysics(record, [{ config: { filament_type: ['PETG'], nozzle_temperature: ['255'] } }])
+
+  assert.deepEqual(next.filament_type, ['PLA'], 'the declared material follows the NAME, not a bare config')
+  assert.deepEqual(next.filament_settings_id, ['Bambu PLA Basic - Custom'])
+  assert.deepEqual(next.filament_ids, ['GFA00'])
+  assert.deepEqual(next.nozzle_temperature, ['255'], 'the physics still rebinds')
+})

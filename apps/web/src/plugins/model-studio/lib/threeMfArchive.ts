@@ -25,6 +25,7 @@ const MODEL_SETTINGS_ENTRY = 'Metadata/model_settings.config'
 const PROJECT_SETTINGS_ENTRY = 'Metadata/project_settings.config'
 
 const BRIM_EAR_POINTS_ENTRY = 'Metadata/brim_ear_points.txt'
+const CUT_INFORMATION_ENTRY = 'Metadata/cut_information.xml'
 
 /** `Metadata/plate_3.png` → plate 3. Bambu also writes `plate_3_small.png`, which this rejects. */
 const PLATE_THUMBNAIL_PATTERN = /^Metadata\/plate_(\d+)\.png$/
@@ -148,6 +149,7 @@ function createArchive(entries: Record<string, Uint8Array>): ThreeMfArchive {
         modelSettingsXml,
         projectSettingsJson: entryText(PROJECT_SETTINGS_ENTRY),
         brimEarPointsText: entryText(BRIM_EAR_POINTS_ENTRY),
+        cutInformationXml: entryText(CUT_INFORMATION_ENTRY),
         layerConfigRangesXml: entryText(LAYER_CONFIG_RANGES_ENTRY),
         layerHeightsProfileText: entryText(LAYER_HEIGHTS_PROFILE_ENTRY),
         customGcodeText: entryText(CUSTOM_GCODE_PER_LAYER_ENTRY)

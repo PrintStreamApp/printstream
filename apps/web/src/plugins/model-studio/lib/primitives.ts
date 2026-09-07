@@ -5,6 +5,7 @@
  * on the XY origin, ready for the staged-import pipeline (binary STL upload).
  */
 import * as THREE from 'three'
+import { mergeVertices } from 'three-stdlib'
 
 export type PrimitiveKind = 'cube' | 'cylinder' | 'sphere' | 'cone'
 
@@ -29,9 +30,31 @@ function buildPrimitiveGeometry(kind: PrimitiveKind): THREE.BufferGeometry {
   }
 }
 
+/**
+ * Weld the duplicate vertices three.js emits along a primitive's UV seam and at its poles.
+ *
+ * `CylinderGeometry` and friends write the seam column TWICE, once at `u = 0` and once at `u = 1`,
+ * so a texture wraps without smearing. Geometrically the pair is the same point, but it is computed
+ * from `angle = 0` and `angle = 2 * PI`, so the two land about 1e-15 apart -- and `toNonIndexed`
+ * keeps both. Nothing downstream welds them: `buildStlGeometry` (the staged-import path a primitive
+ * actually travels) deliberately does not, and the `mergeVertices` in `meshParseCore` is on the 3MF
+ * path only. So a cylinder, sphere or cone reached the mesh boolean with a seam of unpaired edges
+ * and was refused as "not a closed solid" -- geometry the editor generated itself, pointed at
+ * Repair mesh. Volume and rendering are both unaffected, which is why it went unnoticed.
+ *
+ * `uv` and `normal` go first because `mergeVertices` compares EVERY attribute: the seam pair differs
+ * in `uv` by construction (that is the whole reason it exists), so with uvs present it merges
+ * nothing at all. Only `position` is read out of here, so dropping them costs nothing.
+ */
+function weldPrimitiveSeams(geometry: THREE.BufferGeometry): THREE.BufferGeometry {
+  geometry.deleteAttribute('uv')
+  geometry.deleteAttribute('normal')
+  return mergeVertices(geometry)
+}
+
 /** Triangle soup for a primitive: Z-up, base resting at z = 0, centred on XY. */
 export function primitiveTriangleSoup(kind: PrimitiveKind): Float32Array {
-  const geometry = buildPrimitiveGeometry(kind).toNonIndexed()
+  const geometry = weldPrimitiveSeams(buildPrimitiveGeometry(kind)).toNonIndexed()
   // Three.js primitives are Y-up; the bed is Z-up.
   geometry.rotateX(Math.PI / 2)
   geometry.computeBoundingBox()
@@ -52,7 +75,7 @@ export function primitiveTriangleSoup(kind: PrimitiveKind): Float32Array {
  * the gizmo pivot the part's own centre rather than a corner.
  */
 export function primitivePartSoup(kind: PrimitiveKind, size: number): Float32Array {
-  const geometry = buildPrimitiveGeometry(kind).toNonIndexed()
+  const geometry = weldPrimitiveSeams(buildPrimitiveGeometry(kind)).toNonIndexed()
   // Three.js primitives are Y-up; parts live in the host's Z-up object space.
   geometry.rotateX(Math.PI / 2)
   geometry.computeBoundingBox()

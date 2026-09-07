@@ -17,23 +17,31 @@
  */
 import { zipArchiveEntries } from './zipArchiveClient'
 import {
+  decodePlateThumbnails,
   emptyThreeMfBakeSource,
   planEditedThreeMf,
+  plateThumbnailEntries,
   readThreeMfBakeSource,
-  THREE_MF_PROJECT_SETTINGS_ENTRY,
-  THREE_MF_SLICE_INFO_ENTRY,
   type ImportedObjectInput,
   type ThreeMfBakeOptions,
   type ThreeMfBakeResult
 } from '@printstream/shared/three-mf'
-import {
-  applyMachineRetargetToProjectSettings,
-  stripSliceInfoPrinterModelId,
-  type MachineRetargetPlan,
-  type ProfileRecord,
-  type SceneEdit
-} from '@printstream/shared'
+import type { SceneEdit } from '@printstream/shared'
+import { applyBakeSettingsPasses, type ClientBakeSettingsPasses } from './clientBakeSettingsPasses'
 import type { ThreeMfArchive } from './threeMfArchive'
+
+/**
+ * Base64 to bytes, through the platform decoder the browser already has.
+ *
+ * `atob` yields one character per byte, which is exactly the mapping `charCodeAt` reverses; it
+ * throws on a malformed string, which is what lets the caller drop an undecodable preview.
+ */
+function decodeBase64(value: string): Uint8Array {
+  const binary = atob(value)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i)
+  return bytes
+}
 
 export interface ClientBakeOutput {
   /** The finished 3MF, ready to hand to a download or the File System Access API. */
@@ -61,7 +69,7 @@ export async function bakeClientThreeMf(
   edit: SceneEdit,
   imports: ImportedObjectInput[] = [],
   options: ThreeMfBakeOptions = {},
-  machineRetarget: ((projectSettings: ProfileRecord) => Promise<MachineRetargetPlan | null>) | null = null
+  settingsPasses: ClientBakeSettingsPasses = {}
 ): Promise<ClientBakeOutput> {
   const source = archive
     ? await readThreeMfBakeSource(async (entryPath) => archive.entryText(entryPath), edit)
@@ -93,7 +101,16 @@ export async function bakeClientThreeMf(
     for (const entry of plan.freshEntries ?? []) output[entry.name] = encoder.encode(entry.content)
   }
 
-  if (machineRetarget) await applyMachineRetargetToEntries(output, machineRetarget)
+  // The editor's own plate renders, written LAST so they replace whatever the base archive carried.
+  // A save runs no slicer, so nothing else regenerates these: without this the file keeps the
+  // previews of the layout as it was BEFORE the edit, and every surface that reads them (the library
+  // card, the plate strip, BambuStudio's project view) shows the stale one saying nothing.
+  for (const entry of plateThumbnailEntries(decodePlateThumbnails(edit.plateThumbnails, decodeBase64))) {
+    output[entry.name] = entry.png
+  }
+
+  // Everything that rewrites the settings the bake just wrote, in the order that module owns.
+  await applyBakeSettingsPasses(output, edit, settingsPasses)
 
   // Judge the bake on what it WROTE, the same check the api runs after its own write
   // (`three-mf-scene-builder.ts`). This host needs it more, not less: the api can re-inspect a
@@ -108,44 +125,6 @@ export async function bakeClientThreeMf(
   }
 
   return { bytes: await deflateArchive(output), result: plan.result }
-}
-
-/**
- * Rewrite the baked archive's settings entries for the target machine, in place.
- *
- * A project with no `project_settings.config` (a from-scratch scaffold) is retargeted from an empty
- * object, exactly as the api does: the resolved machine supplies every field, the way BambuStudio
- * picking a printer for a fresh project does. Unreadable settings abort the retarget rather than
- * being replaced: losing the printer switch is recoverable, dropping settings the user's only copy
- * of the file still carries is not.
- */
-async function applyMachineRetargetToEntries(
-  output: Record<string, Uint8Array>,
-  resolvePlan: (projectSettings: ProfileRecord) => Promise<MachineRetargetPlan | null>
-): Promise<void> {
-  const decoder = new TextDecoder()
-  const encoder = new TextEncoder()
-  const existing = output[THREE_MF_PROJECT_SETTINGS_ENTRY]
-  let projectSettings: ProfileRecord = {}
-  if (existing && existing.length > 0) {
-    try {
-      projectSettings = JSON.parse(decoder.decode(existing)) as ProfileRecord
-    } catch (error) {
-      // Abort the retarget rather than replacing settings we could not read: see the doc above.
-      console.warn('[editor] project settings could not be parsed; saving without the machine retarget:',
-        error instanceof Error ? error.message : error)
-      return
-    }
-  }
-  const plan = await resolvePlan(projectSettings)
-  if (!plan) return
-  output[THREE_MF_PROJECT_SETTINGS_ENTRY] = encoder.encode(
-    JSON.stringify(applyMachineRetargetToProjectSettings(projectSettings, plan))
-  )
-  const sliceInfo = output[THREE_MF_SLICE_INFO_ENTRY]
-  if (sliceInfo && sliceInfo.length > 0) {
-    output[THREE_MF_SLICE_INFO_ENTRY] = encoder.encode(stripSliceInfoPrinterModelId(decoder.decode(sliceInfo)))
-  }
 }
 
 /**

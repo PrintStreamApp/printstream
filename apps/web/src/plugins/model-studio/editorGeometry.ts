@@ -11,10 +11,11 @@
  * pulling in the large view module.
  */
 import * as THREE from 'three'
+import type { MeasureFeature } from './lib/measureFeatures'
 import { ConvexGeometry } from 'three-stdlib'
 import type { LibraryThreeMfPrimeTower, SceneEditPartSubtype } from '@printstream/shared'
 import type { SliceConfigSnapshot } from '../../components/library/SliceSettingsPanel'
-import { disposeObject3D, type TrianglePaintChannel } from './lib/threeMfScene'
+import { createFlatBedLabel, disposeObject3D, type TrianglePaintChannel } from './lib/threeMfScene'
 import { FOOTPRINT_CELL_MM, footprintCellKey } from './lib/arrange'
 import { estimateWipeTowerFootprint } from './lib/primeTower'
 import { primeTowerReachIssue } from './lib/primeTowerReach'
@@ -335,7 +336,8 @@ export function effectivePaintTool(channel: TrianglePaintChannel, tool: PaintToo
 /** Bed-relative names for the two halves either side of each cut-plane axis. */
 export const CUT_AXIS_SIDES: Record<CutAxis, { lower: string; upper: string }> = {
   x: { lower: 'left', upper: 'right' },
-  y: { lower: 'front', upper: 'back' },
+  // 'rear', matching the view cube's face: one axis must not have two names for its far side.
+  y: { lower: 'front', upper: 'rear' },
   z: { lower: 'lower', upper: 'upper' }
 }
 
@@ -475,6 +477,29 @@ export function createPrimeTowerObject(
     new THREE.EdgesGeometry(geometry),
     new THREE.LineBasicMaterial({ color: 0xffd08a, transparent: true, opacity: 0.85, depthWrite: false })
   ))
+  // Name the thing. An unlabelled amber block appearing beside your model reads as an error to
+  // anyone who has not met a purge tower, and it is the one object on the plate the user did not
+  // put there. Sat on the TOP face rather than the bed, because the tower's own translucent box
+  // would otherwise occlude it, and fitted to the footprint by the same helper the exclusion zones
+  // use, so a narrow tower gets smaller text instead of overflow. "Purge tower" matches the
+  // placement warning's wording (`PRIME_TOWER_WARNING_KEY` below) rather than the config's
+  // "prime tower", since that is what the rest of the UI shows the user.
+  //
+  // A null label (no 2D context, or a footprint too small for a legible glyph) is simply no label:
+  // this is decoration on a functional fixture and must never fail the tower's own rendering.
+  const label = createFlatBedLabel({
+    text: 'Purge tower',
+    centerX: 0,
+    centerY: 0,
+    boxWidth: footprint.width,
+    boxHeight: footprint.depth,
+    color: 'rgba(70, 42, 12, 0.85)',
+    // Local space: the group is centred on the box, so its top face is half a height up.
+    z: height / 2 + 0.05,
+    // Above the tower's own transparent faces, which would otherwise sort over it.
+    renderOrder: 5
+  })
+  if (label) group.add(label)
   group.position.set(tower.x + footprint.width / 2, tower.y + footprint.depth / 2, height / 2)
   return group
 }
@@ -1233,30 +1258,260 @@ export function createRotationSnapGuides(): THREE.Group {
   return group
 }
 
-/** Floating "123.45 mm" sprite for the measure overlay (always faces the camera). */
+/**
+ * Diameter, in screen pixels, of a PLACED measurement endpoint.
+ *
+ * Read by {@link syncScreenSpaceOverlays}, which sizes every annotation this way. An annotation
+ * sized in MILLIMETRES looks right at exactly one zoom and wrong at every other: the measure label
+ * was 9mm tall, a modest tag over a whole plate and a banner across the screen once zoomed into the
+ * feature being measured -- and its texture magnifies with it, so it also went soft. Sizing in
+ * pixels keeps it legible at every distance and keeps the texture near 1:1, which is what makes it
+ * crisp.
+ */
+export const MEASURE_MARKER_PX = 9
+
+/**
+ * Largest mesh, in triangles, the measure tool will look for hole centres in.
+ *
+ * Building that index walks every face and every edge with string keys, which is the
+ * ~1s-per-663k-triangles cost `isClosedSoup` documents. Once, for a CAD part with holes in it, that
+ * is affordable; on a dense organic mesh it is a frozen tab spent looking for holes such a model
+ * does not have. Past this the tool keeps its corner snapping and simply never offers a centre --
+ * so raising it trades a hitch on first hover for reach, rather than trading correctness.
+ */
+export const MEASURE_CIRCLE_FACE_LIMIT = 200_000
+
+/**
+ * Colour of the measure tool's HOVER cursor, and of the two points it can place.
+ *
+ * A placed point must not look like the cursor. It did: both were this same blue at the same 9px,
+ * so the cursor sat exactly on top of the marker it had just created and clicking a hole changed
+ * nothing on screen at all -- reported as not being able to tell a selection had been made. Studio
+ * avoids it by giving each picked feature a colour of its own (`SELECTED_1ST_COLOR` teal and
+ * `SELECTED_2ND_COLOR` magenta, `GLGizmoMeasure.hpp:31`), distinct from its hover colour, and those
+ * are the values used here.
+ *
+ * Which point is which is worth seeing in its own right, since the readout's per-axis deltas are
+ * signed from the first to the second.
+ */
+export const MEASURE_HOVER_COLOR = 0x7fb8ff
+export const MEASURE_POINT_COLORS = [0x40bfbf, 0xbf40bf] as const
+
+/**
+ * Colour of the hovered feature while SHIFT is held, i.e. while a click takes a point rather than
+ * the whole feature. Studio's `HOVER_COLOR` (`GLGizmoMeasure.hpp:34`), and it is deliberately not
+ * one of the slot colours: point mode changes what a click MEANS, so it should not look like the
+ * same gesture in a different slot.
+ */
+export const MEASURE_POINT_MODE_COLOR = 0x00ff00
+
+/**
+ * Diameter of the dot marking a circle's centre while the RIM is what is being measured.
+ *
+ * Small on purpose: it is an affordance rather than a selection, saying only that the centre can be
+ * clicked. At the marker size it competes with the ring and the highlight stops reading as "you are
+ * measuring this ring".
+ */
+export const MEASURE_CENTRE_AFFORDANCE_PX = 5
+
+/**
+ * Name of the sphere drawn at a circle's centre, so the measure pick can raycast it.
+ *
+ * On a SELECTED circle this marker is the only route to the centre that needs no hover, which is
+ * what makes the gesture work on touch: a tap has no pointer path crossing the rim, so the
+ * screen-space rule in `lib/circleScreenZone.ts` never arms for it.
+ */
+export const MEASURE_CENTRE_MARKER_NAME = 'measure-centre-marker'
+
+/** On-screen LENGTH in pixels of a dimension line's arrowhead. */
+export const MEASURE_ARROWHEAD_PX = 11
+
+
+/**
+ * How the "123.45 mm" distance label is drawn, in CSS pixels: glyph height, then the tag's padding
+ * around it. {@link createMeasureLabelSprite} draws at exactly these sizes rather than drawing large
+ * and scaling down, so they are also what the label MEASURES on screen.
+ */
+const MEASURE_LABEL_FONT_PX = 11
+const MEASURE_LABEL_PAD_X_PX = 4
+const MEASURE_LABEL_PAD_Y_PX = 2.5
+/**
+ * On-screen HEIGHT in pixels of the distance label.
+ *
+ * DERIVED from the three above rather than stated, because the sprite is sized by this value and
+ * painted by those: written as its own number, a change to the font would silently letterbox the tag
+ * or crop its glyphs, and nothing renders in a test that could catch it.
+ */
+export const MEASURE_LABEL_PX = MEASURE_LABEL_FONT_PX + MEASURE_LABEL_PAD_Y_PX * 2
+
+export const SCREEN_SPACE_PX_KEY = 'screenSpacePx'
+/** Marks a GROUP whose children carry {@link SCREEN_SPACE_PX_KEY}, so the sync can find them cheaply. */
+export const SCREEN_SPACE_OVERLAY_KEY = 'screenSpaceOverlay'
+
+/**
+ * Re-scale every screen-space annotation for the current camera, once per rendered frame.
+ *
+ * Walks the scene's TOP-LEVEL children, and descends into a flagged overlay group to ANY depth. A
+ * full `traverse` here would visit every mesh of every object on the plate on every frame to find a
+ * handful of markers, which is why the flag exists; the depth limit inside a flagged group bought
+ * nothing, because such a group holds only annotations.
+ *
+ * It used to stop one level in, which made every caller flatten its own highlights by hand
+ * (`group.add(...highlight.children)`) with a paragraph each explaining that adding the group
+ * itself would leave its markers at their raw 1-unit size. That is a trap rather than a contract:
+ * a nested annotation was silently unscaled, with nothing failing.
+ *
+ * The tagged value is the annotation's FULL on-screen size, never a radius, so one key means one
+ * thing whatever geometry carries it. That obliges a sphere to be built at radius 0.5 and a sprite
+ * at scale 1, both of which are then one unit ACROSS. Built at radius 1 -- which is the obvious
+ * thing to write, and what shipped -- a sphere came out at twice its stated size while the label
+ * beside it was exact, so `MEASURE_MARKER_PX = 9` drew an 18px dot.
+ */
+export function syncScreenSpaceOverlays(
+  scene: THREE.Object3D,
+  camera: THREE.PerspectiveCamera,
+  viewportHeightPx: number
+): void {
+  if (viewportHeightPx <= 0) return
+  // World units per screen pixel at a given distance, for a perspective camera.
+  const perPixelAt = (distance: number) =>
+    (2 * distance * Math.tan((camera.fov * Math.PI) / 360)) / viewportHeightPx
+  const worldPosition = new THREE.Vector3()
+  const apply = (object: THREE.Object3D) => {
+    const pixels = object.userData[SCREEN_SPACE_PX_KEY]
+    if (typeof pixels !== 'number') return
+    object.getWorldPosition(worldPosition)
+    const size = pixels * perPixelAt(camera.position.distanceTo(worldPosition))
+    const aspect = typeof object.userData.screenSpaceAspect === 'number' ? object.userData.screenSpaceAspect : 1
+    object.scale.set(size * aspect, size, size)
+  }
+  const applyWithin = (object: THREE.Object3D) => {
+    apply(object)
+    for (const child of object.children) applyWithin(child)
+  }
+  for (const child of scene.children) {
+    apply(child)
+    if (child.userData[SCREEN_SPACE_OVERLAY_KEY]) applyWithin(child)
+  }
+}
+
+/**
+ * Floating "123.45 mm" sprite for the measure overlay (always faces the camera).
+ *
+ * Rendered at the device pixel ratio and sized in SCREEN pixels by
+ * {@link syncScreenSpaceOverlays}, so the texture stays near 1:1 with the display. It used to be a
+ * fixed 9mm tall drawn at CSS resolution, which zoomed into a blurry banner across the viewport.
+ *
+ * {@link MEASURE_LABEL_PX} is its on-screen height, and the glyphs and padding below are drawn to
+ * fill exactly that. Drawing them larger and letting the sprite scale down would still read, but it
+ * would spend texture on detail the display cannot resolve and give up the 1:1 that makes it crisp.
+ */
 export function createMeasureLabelSprite(text: string): THREE.Sprite | null {
-  const fontSize = 44
-  const paddingX = 16
-  const paddingY = 10
+  // Cap the ratio: past 2x the texture costs memory for detail no display resolves.
+  const ratio = Math.min(2, typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1)
+  const fontSize = MEASURE_LABEL_FONT_PX
+  const paddingX = MEASURE_LABEL_PAD_X_PX
   const canvas = document.createElement('canvas')
   const context = canvas.getContext('2d')
   if (!context) return null
   context.font = `600 ${fontSize}px sans-serif`
-  canvas.width = Math.ceil(context.measureText(text).width + paddingX * 2)
-  canvas.height = fontSize + paddingY * 2
+  const cssWidth = Math.ceil(context.measureText(text).width + paddingX * 2)
+  const cssHeight = MEASURE_LABEL_PX
+  canvas.width = Math.ceil(cssWidth * ratio)
+  canvas.height = Math.ceil(cssHeight * ratio)
+  // Re-set after resizing, which resets the 2D state, then work in CSS pixels.
+  context.scale(ratio, ratio)
   context.font = `600 ${fontSize}px sans-serif`
   // Solid-ish backdrop so the value stays readable over any model colour.
   context.fillStyle = 'rgba(13, 19, 34, 0.82)'
-  context.fillRect(0, 0, canvas.width, canvas.height)
+  context.fillRect(0, 0, cssWidth, cssHeight)
   context.fillStyle = 'rgba(208, 226, 255, 0.96)'
   context.textAlign = 'center'
   context.textBaseline = 'middle'
-  context.fillText(text, canvas.width / 2, canvas.height / 2)
+  context.fillText(text, cssWidth / 2, cssHeight / 2)
   const texture = new THREE.CanvasTexture(canvas)
   texture.anisotropy = 4
   const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, depthTest: false, transparent: true }))
-  const heightMm = 9
-  sprite.scale.set((canvas.width / canvas.height) * heightMm, heightMm, 1)
+  sprite.userData[SCREEN_SPACE_PX_KEY] = cssHeight
+  sprite.userData.screenSpaceAspect = cssWidth / cssHeight
   sprite.renderOrder = 8
   return sprite
+}
+
+/**
+ * Draw a measured feature: a vertex, an edge, a circle or a face.
+ *
+ * ONE definition, used for the hovered feature and for both selected ones, because they differ only
+ * in colour. Two surfaces drawing the same feature their own way is how a hover ends up looking like
+ * a different kind of thing from the selection it becomes on click.
+ *
+ * A vertex is sized in SCREEN pixels (the sphere carries {@link SCREEN_SPACE_PX_KEY} and the group
+ * is flagged for the sync); everything else is real geometry in millimetres and must stay that way,
+ * since an edge or a rim drawn at a constant screen size would slide off the model as the camera
+ * moves. Rendered with `depthTest: false` so a feature on the far side of a part is still visible,
+ * which is what makes measuring across a bore possible.
+ */
+export function createMeasureFeatureHighlight(
+  feature: MeasureFeature,
+  color: number,
+  /**
+   * Which part of a circle the user is acting on. `rim` keeps the ring loud and leaves the centre a
+   * small dot -- present because it is the only affordance saying the centre can be clicked at all,
+   * but quiet, because pointing at the ring measures the RING. `centre` reverses that.
+   */
+  emphasis: 'rim' | 'centre' = 'rim'
+): THREE.Group {
+  const group = new THREE.Group()
+  group.userData[SCREEN_SPACE_OVERLAY_KEY] = true
+  group.renderOrder = 7
+  const lineMaterial = (opacity = 0.95) => new THREE.LineBasicMaterial({ color, transparent: true, opacity, depthTest: false })
+  const addPoint = (at: THREE.Vector3, pixels: number) => {
+    const marker = new THREE.Mesh(
+      // Radius 0.5 so the screen-space scale is a diameter; see `syncScreenSpaceOverlays`.
+      new THREE.SphereGeometry(0.5, 16, 12),
+      new THREE.MeshBasicMaterial({ color, depthTest: false })
+    )
+    marker.position.copy(at)
+    marker.userData[SCREEN_SPACE_PX_KEY] = pixels
+    marker.renderOrder = 7
+    group.add(marker)
+  }
+  const addLoop = (points: ReadonlyArray<THREE.Vector3>, opacity = 0.95) => {
+    if (points.length < 2) return
+    const loop = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints([...points]), lineMaterial(opacity))
+    loop.renderOrder = 7
+    // The sync only touches children carrying the pixel key, so this is skipped rather than exempted.
+    loop.frustumCulled = false
+    group.add(loop)
+  }
+
+  switch (feature.kind) {
+    case 'point':
+      addPoint(feature.point, MEASURE_MARKER_PX)
+      break
+    case 'edge': {
+      const line = new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints([feature.start, feature.end]),
+        lineMaterial()
+      )
+      line.renderOrder = 7
+      line.frustumCulled = false
+      group.add(line)
+      break
+    }
+    case 'circle': {
+      // BOTH parts are always drawn, because both are selectable and each says the other is there --
+      // Studio draws the pair too (`GLGizmoMeasure.cpp:1227`). Only the emphasis moves: the part
+      // being measured is the loud one, and the other stays visible as the affordance for it.
+      addLoop(feature.rim, emphasis === 'rim' ? 0.95 : 0.35)
+      addPoint(feature.center, emphasis === 'rim' ? MEASURE_CENTRE_AFFORDANCE_PX : MEASURE_MARKER_PX)
+      const centre = group.children[group.children.length - 1]
+      if (centre) centre.name = MEASURE_CENTRE_MARKER_NAME
+      break
+    }
+    case 'plane':
+      for (const border of feature.borders) addLoop(border)
+      break
+  }
+  return group
 }

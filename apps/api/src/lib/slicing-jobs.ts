@@ -7,7 +7,7 @@
  * {@link persistHistoryThumbnailFromLibrary} for its history thumbnail.
  */
 import { randomUUID } from 'node:crypto'
-import { createWriteStream, readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { copyFile, mkdir, mkdtemp, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -20,8 +20,6 @@ import type {
   SlicingMetadata
 } from '@printstream/shared'
 import { isActiveSlicingJob, isDirectPrintableFileName, isFilamentTrackSwitchReady } from '@printstream/shared'
-import yauzl, { type Entry, type ZipFile } from 'yauzl'
-import yazl from 'yazl'
 import { env } from './env.js'
 import { conflict, HttpError, notFound } from './http-error.js'
 import { persistHistoryThumbnailFromLibrary } from './job-history-thumbnail-source.js'
@@ -51,6 +49,7 @@ import { clientSessions } from './client-sessions.js'
 import { recordSliceJob } from './metrics.js'
 import { prisma } from './prisma.js'
 import { resolveLibraryFileToLocalPath } from './bridge-library-files.js'
+import { resolvePinnedContentBase, type LibraryContentBase } from './library-content-base.js'
 
 const DEFAULT_SLICING_PROGRESS_POLL_INTERVAL_MS = 750
 /** How long a finished job stays in `listActive`: see its doc for who relies on this. */
@@ -126,7 +125,12 @@ export type PersistSlicedArtifact = typeof persistLibraryFileFromLocalPath
 export type PersistSlicingHistoryThumbnail = typeof persistHistoryThumbnailFromLibrary
 export type PreserveSlicedProject = typeof preserveSlicedProject
 export type AuthorSliceSettings = typeof authorSliceSettingsIntoProject
-export type ResolveSlicingSource = (input: { sourceFileId: string; sourcePath: string }) => Promise<string>
+export type ResolveSlicingSource = (input: {
+  sourceFileId: string
+  sourcePath: string
+  workspaceId: string
+  contentBase?: LibraryContentBase | null
+}) => Promise<string>
 
 /**
  * Resolve the local path to slice from. Prefers the persisted local/_bridge-cache
@@ -136,13 +140,33 @@ export type ResolveSlicingSource = (input: { sourceFileId: string; sourcePath: s
  * with an opaque ENOENT. Throws a clear, requeue-able message when the source can
  * no longer be resolved. Runs inside the job's workspace context (run() wraps it),
  * so the workspace-scoped client applies.
+ *
+ * A job carrying a `contentBase` re-resolves through THAT pin, never the file's current content:
+ * its `sceneEdit` is a diff against the pinned bytes, so re-fetching the head here would re-apply
+ * an edit an intervening save already baked in: the same corruption the pin exists to stop, only
+ * reached through the cache-eviction path instead of the enqueue path.
  */
-export async function resolveSlicingSourcePath(input: { sourceFileId: string; sourcePath: string }): Promise<string> {
+export async function resolveSlicingSourcePath(input: {
+  sourceFileId: string
+  sourcePath: string
+  workspaceId: string
+  contentBase?: LibraryContentBase | null
+}): Promise<string> {
   try {
     await stat(input.sourcePath)
     return input.sourcePath
   } catch {
-    // The cached copy is gone; re-resolve from the library file below.
+    // The cached copy is gone; re-resolve from the pinned base (or the library file) below.
+  }
+  if (input.contentBase) {
+    try {
+      return await resolveLibraryFileToLocalPath(await resolvePinnedContentBase(input.workspaceId, input.contentBase))
+    } catch (error) {
+      // Logged rather than swallowed: the pin names either a version that was swept or a bridge
+      // that is offline, and the requeue-able message below cannot say which.
+      console.warn('[slicing] pinned content base could not be resolved:', error instanceof Error ? error.message : error)
+      throw new Error('The project this slice was composed from is no longer available; re-open it and slice again.')
+    }
   }
   const row = await prisma.libraryFile.findUnique({
     where: { id: input.sourceFileId },
@@ -550,15 +574,19 @@ export class SlicingJobs {
   }
 
   private async runSlicerJob(job: SlicingJobState, signal: AbortSignal) {
-    let profileFiles = job.profileFiles
-    let request = job.request
+    const profileFiles = job.profileFiles
+    const request = job.request
     // Re-resolve the source instead of blindly trusting the persisted path: a
     // job re-driven after a restart (or a source delete/replace) may hold a
     // _bridge-cache path that no longer exists. resolveSource re-fetches on
     // demand and fails with a clear message if the source is truly gone.
-    let sourcePath = await this.resolveSource({ sourceFileId: job.sourceFileId, sourcePath: job.sourcePath })
+    let sourcePath = await this.resolveSource({
+      sourceFileId: job.sourceFileId,
+      sourcePath: job.sourcePath,
+      workspaceId: job.workspaceId,
+      contentBase: job.request.contentBase ?? null
+    })
     const rewrittenSourcePaths: string[] = []
-    const rewrittenKinds = new Set<ResolvedSlicingPresetFile['kind']>()
     let retryAttempt = 0
 
     try {
@@ -704,17 +732,6 @@ export class SlicingJobs {
       this.setStatus(job, 'slicing', 'Starting the slice')
 
       let crashRetryUsed = false
-      // The project to ARCHIVE for "Slice again", when it must differ from the one the engine
-      // consumed. A profile-compatibility retry BLANKS the project's preset identities
-      // (`sanitizeProjectSettingsConfig`: `printer_settings_id`, `print_settings_id` /
-      // `default_print_profile` / `inherits_group[0]`, and every `filament_settings_id` slot) so the
-      // CLI falls back to its own presets. That is right for the engine and wrong for an archive a
-      // user opens: BambuStudio treats "" as a preset NAME, mints a project-embedded preset from its
-      // bare config defaults, names it `(<project>.3mf)`, and re-embeds it on every later save, so
-      // the kept project would misreport its own materials forever, and a re-slice would use default
-      // physics instead of the chosen material. Holds the last version whose identities were still
-      // intact; null while nothing has blanked them.
-      let projectToArchive: string | null = null
       while (true) {
         const slicerJobId = buildSlicerAttemptJobId(job.id, retryAttempt)
         job.activeSlicerJobId = slicerJobId
@@ -728,16 +745,12 @@ export class SlicingJobs {
             signal
           })
           // Staged from INSIDE the try: these paths point into a temp dir the finally below
-          // deletes, and this is the last moment they still exist. Which attempt won matters,
-          // a profile-compatibility retry slices a REWRITTEN project, so archiving a pre-retry
-          // version means archiving a project the engine never sliced. That is the deliberate
-          // trade for the one field it differs in: `projectToArchive` (above) is the same
-          // project minus the blanked preset identities, so the archive names its materials
-          // honestly. Everything else, geometry, arrangement, authored settings, is identical,
-          // since the fallback rewrite only touches `project_settings.config` identity fields.
+          // deletes, and this is the last moment they still exist. This IS the project the engine
+          // consumed, with no caveat: the only path that ever handed the archive different bytes
+          // was the profile-compatibility retry, which is gone (see the catch below).
           return {
             ...result,
-            preparedProjectPath: await this.stagePreparedProject(job, projectToArchive ?? sourcePath)
+            preparedProjectPath: await this.stagePreparedProject(job, sourcePath)
           }
         } catch (error) {
           // A signal-death exit (segfault et al.) gets ONE retry with unchanged inputs: under
@@ -752,39 +765,19 @@ export class SlicingJobs {
             broadcastSlicingChanged(job.workspaceId)
             continue
           }
-          const fallbackKinds = collectUnsupportedBuiltinProfileKinds(error)
-          if (fallbackKinds.size === 0 && isLikelyBuiltinProfileCompatibilityExit(error)) {
-            fallbackKinds.add('machine')
-            fallbackKinds.add('process')
-          }
-          const fallback = await applyBuiltinProfileCompatibilityFallbacks({
-            request,
-            profileFiles,
-            sourcePath,
-            fallbackKinds,
-            rewrittenKinds
-          })
-          profileFiles = fallback.profileFiles
-          request = fallback.request
-          // Remember the version whose preset identities are still intact, BEFORE this rewrite
-          // replaces them with blanks. Only the first time: a second retry blanks a further kind,
-          // and the archive wants the version that predates ALL of them.
-          if (fallback.sourcePath !== sourcePath && projectToArchive == null) projectToArchive = sourcePath
-          sourcePath = fallback.sourcePath
-          rewrittenSourcePaths.push(...fallback.rewrittenSourcePaths)
-          const changed = fallback.changed
-
-          if (!changed) {
-            throw error
-          }
-
-          retryAttempt += 1
-          const retryKinds = Array.from(fallbackKinds.values())
-          const retryLabel = retryKinds.length === 1 ? retryKinds[0] : retryKinds.join(', ')
-          const retryMessage = `Retrying without the incompatible built-in ${retryLabel} profile${retryKinds.length === 1 ? '' : 's'}`
-          this.touch(job, retryMessage)
-          this.logJobEvent(job, 'warn', retryMessage)
-          broadcastSlicingChanged(job.workspaceId)
+          // A failed slice FAILS. There used to be a second retry here that dropped the built-in
+          // preset files the engine rejected and blanked the project's matching preset identities,
+          // then reported success. It could not be correct: the print it produced was not the one
+          // the user configured, and nothing said so.
+          //
+          // It is not needed either, which is the part worth keeping. BambuStudio's CLI slices a
+          // project with no preset flags from the embedded `project_settings.config` alone
+          // (`BambuStudio.cpp:3516` gates filament re-application on `--load-filaments`/`--uptodate`,
+          // and it never builds a `PresetBundle`), and our slice authors the chosen presets into
+          // that config before the engine sees it (`slice-settings-authoring.ts`). So the preset
+          // files carry no information the project lacks, and dropping them cannot rescue a slice
+          // that failed for a real reason.
+          throw error
         }
       }
     } finally {
@@ -1195,45 +1188,6 @@ function parseTimestamp(value: string | null | undefined): Date | null {
   return new Date(timestamp)
 }
 
-async function applyBuiltinProfileCompatibilityFallbacks(input: {
-  request: CreateSlicingJob
-  profileFiles: ResolvedSlicingPresetFile[]
-  sourcePath: string
-  fallbackKinds: Set<ResolvedSlicingPresetFile['kind']>
-  rewrittenKinds: Set<ResolvedSlicingPresetFile['kind']>
-}): Promise<{
-  request: CreateSlicingJob
-  profileFiles: ResolvedSlicingPresetFile[]
-  sourcePath: string
-  rewrittenSourcePaths: string[]
-  changed: boolean
-}> {
-  const request = input.request
-  let profileFiles = input.profileFiles
-  let sourcePath = input.sourcePath
-  const rewrittenSourcePaths: string[] = []
-  let changed = false
-
-  const nextProfileFiles = profileFiles.filter((profile) => !(profile.source === 'builtin' && input.fallbackKinds.has(profile.kind)))
-  if (nextProfileFiles.length !== profileFiles.length) {
-    profileFiles = nextProfileFiles
-    changed = true
-  }
-
-  const sourceRewriteKinds = collectSourceRewriteKinds(input.fallbackKinds, input.rewrittenKinds)
-  if (sourceRewriteKinds.size > 0) {
-    const rewritten = await rewriteSlicingSourceForFallback(sourcePath, sourceRewriteKinds)
-    if (rewritten) {
-      sourcePath = rewritten
-      rewrittenSourcePaths.push(rewritten)
-      for (const kind of sourceRewriteKinds) input.rewrittenKinds.add(kind)
-      changed = true
-    }
-  }
-
-  return { request, profileFiles, sourcePath, rewrittenSourcePaths, changed }
-}
-
 function toDto(job: SlicingJobState): SlicingJob {
   return {
     id: job.id,
@@ -1303,184 +1257,6 @@ function buildSlicerAttemptJobId(jobId: string, retryAttempt: number): string {
   return `${jobId}-retry-${retryAttempt}`
 }
 
-function collectSourceRewriteKinds(
-  fallbackKinds: Set<ResolvedSlicingPresetFile['kind']>,
-  rewrittenKinds: Set<ResolvedSlicingPresetFile['kind']>
-): Set<ResolvedSlicingPresetFile['kind']> {
-  const kinds = new Set<ResolvedSlicingPresetFile['kind']>()
-  if (fallbackKinds.has('process') && !rewrittenKinds.has('process')) {
-    kinds.add('process')
-  }
-  if (fallbackKinds.has('filament') && !rewrittenKinds.has('filament')) {
-    kinds.add('filament')
-  }
-  if (fallbackKinds.has('machine') && !rewrittenKinds.has('machine')) {
-    kinds.add('machine')
-  }
-  return kinds
-}
-
-async function rewriteSlicingSourceForFallback(
-  sourcePath: string,
-  kinds: Set<ResolvedSlicingPresetFile['kind']>
-): Promise<string | null> {
-  if (kinds.size === 0) return null
-  const rewritten = await rewriteThreeMfProjectSettings(sourcePath, kinds).catch(() => null)
-  return rewritten
-}
-
-async function rewriteThreeMfProjectSettings(
-  sourcePath: string,
-  kinds: Set<ResolvedSlicingPresetFile['kind']>
-): Promise<string | null> {
-  const outputDir = await mkdtemp(path.join(tmpdir(), 'printstream-slicing-source-'))
-  const outputPath = path.join(outputDir, 'input.3mf')
-
-  const wrote = await new Promise<boolean>((resolve, reject) => {
-    yauzl.open(sourcePath, { lazyEntries: true }, (openError, zipFile) => {
-      if (openError || !zipFile) {
-        reject(openError ?? new Error('Failed to open 3MF source'))
-        return
-      }
-
-      const outputZip = new yazl.ZipFile()
-      const output = createWriteStream(outputPath)
-      let settled = false
-      let replaced = false
-
-      const finish = (error?: Error) => {
-        if (settled) return
-        settled = true
-        zipFile.close()
-        if (error) {
-          output.destroy()
-          reject(error)
-          return
-        }
-        resolve(replaced)
-      }
-
-      outputZip.outputStream.pipe(output)
-      outputZip.outputStream.on('error', finish)
-      output.on('error', finish)
-      output.on('finish', () => finish())
-
-      zipFile.on('error', finish)
-      zipFile.on('end', () => outputZip.end())
-      zipFile.on('entry', (entry: Entry) => {
-        if (entry.fileName === 'Metadata/project_settings.config') {
-          readZipEntryBuffer(zipFile, entry).then(
-            (buffer) => {
-              outputZip.addBuffer(
-                Buffer.from(sanitizeProjectSettingsConfig(buffer.toString('utf8'), kinds), 'utf8'),
-                entry.fileName,
-                { mtime: entry.getLastModDate() }
-              )
-              replaced = true
-              zipFile.readEntry()
-            },
-            finish
-          )
-          return
-        }
-        if (entry.fileName.endsWith('/')) {
-          outputZip.addEmptyDirectory(entry.fileName, { mtime: entry.getLastModDate() })
-          zipFile.readEntry()
-          return
-        }
-        zipFile.openReadStream(entry, (streamError, stream) => {
-          if (streamError || !stream) {
-            finish(streamError ?? new Error(`Failed to read ${entry.fileName}`))
-            return
-          }
-          stream.on('error', finish)
-          stream.on('end', () => zipFile.readEntry())
-          outputZip.addReadStream(stream, entry.fileName, { mtime: entry.getLastModDate() })
-        })
-      })
-
-      zipFile.readEntry()
-    })
-  })
-
-  if (wrote) return outputPath
-  await rm(outputPath, { force: true }).catch(() => undefined)
-  await rm(outputDir, { recursive: true, force: true }).catch(() => undefined)
-  return null
-}
-
-/**
- * Replace every entry of a positional config array with `''`, keeping its LENGTH.
- * Used to drop a preset reference without changing the slot count its sibling
- * arrays are sized to. A non-array value is left alone.
- */
-function blankEachEntry(value: unknown): unknown {
-  return Array.isArray(value) ? value.map(() => '') : value
-}
-
-function sanitizeProjectSettingsConfig(
-  json: string,
-  kinds: Set<ResolvedSlicingPresetFile['kind']>
-): string {
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(json)
-  } catch {
-    return json
-  }
-
-  if (!parsed || typeof parsed !== 'object') {
-    return json
-  }
-
-  const record = parsed as Record<string, unknown>
-  if (kinds.has('machine')) {
-    record.printer_settings_id = ''
-    record.print_compatible_printers = []
-  }
-  if (kinds.has('process')) {
-    record.print_settings_id = ''
-    record.default_print_profile = ''
-    if (Array.isArray(record.inherits_group) && record.inherits_group.length > 0) {
-      const inheritsGroup = [...record.inherits_group]
-      inheritsGroup[0] = ''
-      record.inherits_group = inheritsGroup
-    }
-  }
-  if (kinds.has('filament')) {
-    // Clear the preset IDENTITY per slot while PRESERVING the slot count. Every
-    // `filament_*` array in this config is positional and sized to the filament
-    // count (`nozzle_temperature`, `filament_flow_ratio`, `filament_is_support`,
-    // `filament_map`, `flush_volumes_matrix` at N², …), so emptying one to `[]`
-    // left ~100 siblings at length N and made BambuStudio read its per-filament
-    // vectors out of bounds: the fallback RETRY then crashed and masked the
-    // original compatibility error it was meant to recover from (issue #66).
-    record.filament_settings_id = blankEachEntry(record.filament_settings_id)
-    // `filament_type`/`filament_colour`/`filament_vendor` are the project's own
-    // per-slot DATA, not a reference to the dropped preset: clearing them threw
-    // away the materials themselves. `default_filament_profile` is EXTRUDER-indexed
-    // machine domain (see MACHINE_DOMAIN_ARRAY_KEYS in three-mf-scene-builder.ts,
-    // "must never be remapped or dropped by the filament rewrite"), so a filament
-    // branch must not touch it at all.
-  }
-  return JSON.stringify(record, null, 2)
-}
-
-function readZipEntryBuffer(zipFile: ZipFile, entry: Entry): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    zipFile.openReadStream(entry, (error, stream) => {
-      if (error || !stream) {
-        reject(error ?? new Error('Failed to open entry stream'))
-        return
-      }
-      const chunks: Buffer[] = []
-      stream.on('data', (chunk: Buffer) => chunks.push(chunk))
-      stream.on('end', () => resolve(Buffer.concat(chunks)))
-      stream.on('error', reject)
-    })
-  })
-}
-
 function delay(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
     if (signal.aborted) {
@@ -1510,28 +1286,6 @@ function formatElapsedDuration(startedAt: Date): string {
   if (minutes <= 0) return `${elapsedSeconds}s`
   if (seconds === 0) return `${minutes}m`
   return `${minutes}m ${seconds}s`
-}
-
-function collectUnsupportedBuiltinProfileKinds(error: unknown): Set<ResolvedSlicingPresetFile['kind']> {
-  if (!(error instanceof SlicerServiceError)) return new Set()
-  const kinds = new Set<ResolvedSlicingPresetFile['kind']>()
-  for (const line of error.output) {
-    if (line.stream !== 'stderr') continue
-    const match =
-      line.text.match(/\/(machine|process|filament)_full\//) ??
-      line.text.match(/builtin:(machine|process|filament):/i) ??
-      line.text.match(/builtin%(?:3a|3A)(machine|process|filament)%(?:3a|3A)/) ??
-      line.text.match(/(?:unsupported|incompatible|cannot\s+load|failed\s+to\s+load)[^\n]*\b(machine|process|filament)\b/i)
-    if (match?.[1] === 'machine' || match?.[1] === 'process' || match?.[1] === 'filament') {
-      kinds.add(match[1])
-    }
-  }
-  return kinds
-}
-
-function isLikelyBuiltinProfileCompatibilityExit(error: unknown): boolean {
-  if (!(error instanceof SlicerServiceError)) return false
-  return /Slicer CLI exited with code 239/i.test(error.message)
 }
 
 /**

@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Box, Card, CardContent, Chip, Divider, Stack, Typography } from '@mui/joy'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Printer3dRoundedIcon } from '../../components/Printer3dRoundedIcon'
-import { formatPrinterNozzleSizesLabel, getAmsLoadFilamentAvailability, getAmsRescanAvailability, getAmsUnloadFilamentAvailability, getPrinterCalibrationCapabilities, getPrinterDisplayCapabilities, getPrinterControlCapabilities, isPrinterActiveJobStage, isPrinterIdleCompatibleStage, type AmsSlot, type AmsUnit, type ExternalSpool, type PrintJob, type PrinterActivePrintObjects, type PrinterCardContentSettings, type Printer, type PrinterCommand, type PrinterStatus } from '@printstream/shared'
+import { formatPrinterNozzleSizesLabel, getAmsLoadFilamentAvailability, getAmsRescanAvailability, getAmsUnloadFilamentAvailability, getPrinterCalibrationCapabilities, getPrinterDisplayCapabilities, getPrinterControlCapabilities, isPrinterActiveJobStage, isPrinterIdleCompatibleStage, wasPrintCancelled, type AmsSlot, type AmsUnit, type ExternalSpool, type PrintJob, type PrinterActivePrintObjects, type PrinterCardContentSettings, type Printer, type PrinterCommand, type PrinterStatus } from '@printstream/shared'
 import { apiFetch } from '../../lib/apiClient'
 import { buildApiUrl } from '../../lib/apiUrl'
 import { usePluginCatalogQuery } from '../../lib/pluginCatalogQuery'
@@ -262,6 +262,9 @@ function PrinterCardComponent({
   const printerAttentionSummary = getPrinterAttentionSummary(status, {
     includeHmsErrors: contentSettings.hmsErrors
   })
+  // A cancelled print also ends on the FAILED stage, so this block covers both
+  // and takes its wording and tone from which one it is.
+  const terminalJobWasCancelled = wasPrintCancelled(status)
   const terminalJobSummaryVisible = isOnline
     && !showJobSummary
     && !showDispatchSummary
@@ -933,7 +936,7 @@ function PrinterCardComponent({
                     />
                   )}
                   value={100}
-                  color="danger"
+                  color={terminalJobWasCancelled ? 'warning' : 'danger'}
                   afterProgress={(
                     <OverflowTooltipText
                       level="body-xs"
@@ -941,11 +944,13 @@ function PrinterCardComponent({
                       sx={{
                         minWidth: 0,
                         flex: 1,
-                        color: printerAttentionSummary?.kind === 'hmsError'
+                        color: terminalJobWasCancelled || printerAttentionSummary?.kind === 'hmsError'
                           ? 'var(--joy-palette-warning-300)'
                           : 'var(--joy-palette-danger-300)'
                       }}
-                      text={printerAttentionSummaryText ?? 'Printer reported this job as failed.'}
+                      text={terminalJobWasCancelled
+                        ? 'This print was cancelled.'
+                        : printerAttentionSummaryText ?? 'Printer reported this job as failed.'}
                       observeRef={cardRef}
                     />
                   )}

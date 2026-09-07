@@ -225,3 +225,40 @@ test('the snapshot round-trips the picks; everything else re-derives on restore'
   assert.equal(result.current.manualPrinterModel, 'A1')
   assert.equal(result.current.printerProfileId, A1_04.id, 'the derived machine profile follows the restored pick')
 })
+
+const A1_02 = machine('Bambu Lab A1 0.2 nozzle', { printerModels: ['A1'], nozzleDiameters: [0.2] })
+const A1_06 = machine('Bambu Lab A1 0.6 nozzle', { printerModels: ['A1'], nozzleDiameters: [0.6] })
+
+test('a fresh target defaults to the STOCK 0.4 nozzle, not the smallest one offered', () => {
+  // The options are the union of every source sorted ascending, so taking the first opened every
+  // new project on 0.2 for any model that offers one: a specialist size nobody starts on.
+  const params = baseParams({
+    machineProfiles: [A1_02, A1_04, A1_06],
+    bakedIndex: index({ compatiblePrinterModels: ['A1'] }),
+    ...SETTLED
+  })
+  const { result } = renderTarget(params)
+  assert.deepEqual(result.current.nozzleDiameterOptions, ['0.2', '0.4', '0.6'], 'all three are offered')
+  assert.equal(result.current.nozzleDiameter, '0.4')
+})
+
+test('a project that names its own nozzle still outranks the stock default', () => {
+  // The last-resort default must not undo the fix that stopped a 0.6 project opening on 0.4.
+  const params = baseParams({
+    machineProfiles: [A1_02, A1_04, A1_06],
+    bakedIndex: index({ compatiblePrinterModels: ['A1'], plates: [plate({ nozzleSizes: ['0.6'] })] }),
+    ...SETTLED
+  })
+  const { result } = renderTarget(params)
+  assert.equal(result.current.nozzleDiameter, '0.6')
+})
+
+test('a model with no 0.4 falls back to the smallest it does offer', () => {
+  const params = baseParams({
+    machineProfiles: [A1_02, A1_06],
+    bakedIndex: index({ compatiblePrinterModels: ['A1'] }),
+    ...SETTLED
+  })
+  const { result } = renderTarget(params)
+  assert.equal(result.current.nozzleDiameter, '0.2')
+})

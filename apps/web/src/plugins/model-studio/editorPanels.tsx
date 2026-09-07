@@ -40,6 +40,7 @@ import { listItemDecoratorClasses } from '@mui/joy/ListItemDecorator'
 import { partMemberKey, type PartMember, type PartRef, type PartSelection } from './lib/selectionModel'
 import AddRoundedIcon from '@mui/icons-material/AddRounded'
 import CategoryRoundedIcon from '@mui/icons-material/CategoryRounded'
+import ContentCutRoundedIcon from '@mui/icons-material/ContentCutRounded'
 import DeleteRoundedIcon from '@mui/icons-material/DeleteRounded'
 import MoreVertRoundedIcon from '@mui/icons-material/MoreVertRounded'
 import DriveFileRenameOutlineRoundedIcon from '@mui/icons-material/DriveFileRenameOutlineRounded'
@@ -1007,12 +1008,17 @@ export function AddObjectMenu({
 }
 
 /**
- * "Save" menu button: both ways of saving are rows, so one click always opens the menu.
+ * "Save": a menu of overwrite / save-as, or a plain button when only one of them is possible.
  *
  * Not a split button, and not because of consistency with its neighbours: "Save" names a category
  * here, not one action. Overwriting the open file and writing a new one are peers, and the split
  * form had to pick between them for the wide half based on whether a version could be saved, so the
  * same button did two different things depending on project state.
+ *
+ * A project with nothing to overwrite -- a new one, or any host that cannot write a version -- has
+ * no category to name: the menu holds one row, so the caret asks the user to choose between an
+ * option and itself and puts a click in front of the editor's most common action. Same collapse,
+ * and for the same reason, as `SliceMenuButton` with a single plate.
  */
 export function SaveMenuButton({
   saving,
@@ -1037,6 +1043,24 @@ export function SaveMenuButton({
   // menu that need not say why: the user opened the list and can see the live alternative next to
   // it, where the split form had to grey the whole control and explain itself in a tooltip.
   const saveVersionDisabled = disabled || saving || !dirty
+  if (!canSaveVersion) {
+    // Same variant, decorator and loading/disabled behaviour as the menu form, so the footer does
+    // not change shape with the project. It saves as new, which is the only thing it could do.
+    return (
+      <Button
+        type="button"
+        variant="solid"
+        color="primary"
+        aria-label="save"
+        startDecorator={<SaveRoundedIcon />}
+        loading={saving}
+        disabled={disabled || saving}
+        onClick={onSaveAs}
+      >
+        Save
+      </Button>
+    )
+  }
   return (
     <ActionMenuButton
       ariaLabel="save"
@@ -1046,7 +1070,7 @@ export function SaveMenuButton({
       disabled={disabled || saving}
       menuSx={{ zIndex: EDITOR_POPUP_Z_INDEX }}
     >
-      {canSaveVersion && <MenuItem disabled={saveVersionDisabled} onClick={onSaveVersion}>Save</MenuItem>}
+      <MenuItem disabled={saveVersionDisabled} onClick={onSaveVersion}>Save</MenuItem>
       <MenuItem onClick={onSaveAs}>Save as new…</MenuItem>
     </ActionMenuButton>
   )
@@ -1064,7 +1088,6 @@ export function SliceMenuButton({
   slicing,
   disabled,
   disabledReason,
-  activePlateIndex,
   plateCount,
   onSliceAll,
   onSlicePlate
@@ -1072,7 +1095,6 @@ export function SliceMenuButton({
   slicing: boolean
   disabled: boolean
   disabledReason?: string
-  activePlateIndex: number
   /** How many plates the project has; 1 collapses the menu to a plain button. */
   plateCount: number
   onSliceAll: () => void
@@ -1120,7 +1142,7 @@ export function SliceMenuButton({
       menuPlacement="top-end"
       menuSx={{ zIndex: EDITOR_POPUP_Z_INDEX }}
     >
-      <MenuItem onClick={onSlicePlate}>Slice plate {activePlateIndex}</MenuItem>
+      <MenuItem onClick={onSlicePlate}>Slice this plate</MenuItem>
       <MenuItem onClick={onSliceAll}>Slice all plates</MenuItem>
     </ActionMenuButton>
   )
@@ -1476,7 +1498,15 @@ interface ObjectListRowProps {
   filamentColors?: Record<number, string>
   resolveFilamentId?: (id: number | null) => number | null
   filamentOptions?: FilamentOption[]
-  linkedCopyCountFor?: (instanceKey: string) => number
+  /**
+   * How many instances share this one's object, RESOLVED by the list.
+   *
+   * A number, not the counter: `ObjectListRow` is memoised on shallow prop equality, and the
+   * counter is a stable `useCallback` reading a ref, so a row whose linkage changed compared equal
+   * and kept a stale badge (fill-bed left the template row unbadged; make-independent left the
+   * ex-partners reading `xN`). Same reason `addedPartsSignature` exists.
+   */
+  linkedCount?: number
   onSelect: (key: string, modifiers?: { additive?: boolean; range?: boolean }) => void
   onSelectPart?: (objectId: number, member: PartMember, modifiers: { additive: boolean; range: boolean }, instanceKey: string) => void
   onObjectContextMenu?: (key: string, position: ContextMenuAnchor) => void
@@ -1512,7 +1542,7 @@ const ObjectListRow = memo(function ObjectListRow({
   filamentColors,
   resolveFilamentId,
   filamentOptions,
-  linkedCopyCountFor,
+  linkedCount,
   onSelect,
   onSelectPart,
   onObjectContextMenu,
@@ -1554,7 +1584,7 @@ const ObjectListRow = memo(function ObjectListRow({
         // Objects can hold multiple volumes, each on its own filament: list them nested. Counted
         // over EVERY volume (baked parts, session-added ones, and the body where the part list does
         // not describe it), never over `instance.parts` alone: see `instanceVolumeRows`.
-        const { showRows: showParts } = instanceVolumeRows(instance, addedParts.length)
+        const { showRows: showParts, cutConnectorCount } = instanceVolumeRows(instance, addedParts.length)
         // The group this row's part rows drag in, or null when this row has no reorderable parts.
         // Gated on the BAKED count on purpose, unlike the row rule above: `SceneEdit.partOrder` is a
         // list of base ordinals, which a session-added volume has no member of, so only baked parts
@@ -1628,12 +1658,12 @@ const ObjectListRow = memo(function ObjectListRow({
                 >
                   {instance.name}
                 </Typography>
-                {linkedCopyCountFor && linkedCopyCountFor(instance.key) > 1 && (
+                {linkedCount != null && linkedCount > 1 && (
                   // Linkage is otherwise invisible: users discover it by editing one copy and
                   // watching another change. BambuStudio has the same ambiguity; we name it.
-                  <Tooltip title={`Linked copy: ${linkedCopyCountFor(instance.key)} instances share this object's parts, materials, paint and settings. Right-click to make one independent.`}>
+                  <Tooltip title={`Linked copy: ${linkedCount} instances share this object's parts, materials, paint and settings. Right-click to make one independent.`}>
                     <Chip size="sm" variant="soft" color="neutral" sx={{ flexShrink: 0 }}>
-                      x{linkedCopyCountFor(instance.key)}
+                      x{linkedCount}
                     </Chip>
                   </Tooltip>
                 )}
@@ -1764,7 +1794,22 @@ const ObjectListRow = memo(function ObjectListRow({
                 </Stack>
               </ListItem>
             )}
-            {showParts && instance.parts.map((part) => {
+            {/* One row for the whole set, never a row each, and shown whether or not the object
+                has volume rows -- BambuStudio adds its info item on `is_cut() && has_connectors()`
+                alone (`GUI_ObjectList.cpp:4235`), so a half whose only extra volume is a peg still
+                says so while listing no parts. */}
+            {cutConnectorCount > 0 && (
+              <ListItem sx={{ pl: 4 }}>
+                <Typography
+                  level="body-xs"
+                  startDecorator={<ContentCutRoundedIcon fontSize="small" />}
+                  sx={{ color: 'text.tertiary' }}
+                >
+                  {cutConnectorCount === 1 ? 'Cut connector' : `Cut connectors (${cutConnectorCount})`}
+                </Typography>
+              </ListItem>
+            )}
+            {showParts && instance.parts.filter((part) => !part.cutConnector).map((part) => {
               // Both halves already resolved to THIS object by the list, so a selection landing on
               // another object leaves this row's props untouched and the row does not re-render.
               const partSelected = selectedPartKeys?.includes(partMemberKey({ kind: 'baked', partIndex: part.partIndex })) ?? false
@@ -2162,7 +2207,7 @@ export const ObjectList = memo(function ObjectList({
             filamentColors={filamentColors}
             resolveFilamentId={resolveFilamentId}
             filamentOptions={filamentOptions}
-            linkedCopyCountFor={linkedCopyCountFor}
+            linkedCount={linkedCopyCountFor?.(instance.key) ?? 1}
             onSelect={onSelect}
             onSelectPart={onSelectPart}
             onObjectContextMenu={onObjectContextMenu}

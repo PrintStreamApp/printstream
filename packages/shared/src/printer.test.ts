@@ -477,6 +477,33 @@ test('an H2D paused on an AMS error mid filament change still offers Resume', ()
   assert.ok(actions.some((action) => action.id === 'resume'), 'Resume must be offered')
 })
 
+test('a cancelled print offers no recovery actions', () => {
+  // Cancelling reaches us as FAILED plus a `print_error`, which is the same shape
+  // as a fault. Read literally it offered a warning-coloured "Check assistant" for
+  // a print the user had just deliberately stopped.
+  const cancelled = {
+    online: true,
+    stage: 'failed' as const,
+    subStage: null,
+    jobId: null,
+    deviceError: { code: '0300400C', message: 'The task was canceled.' },
+    hmsErrors: [],
+    filamentChange: { currentStepIndex: null, currentStepLabel: null, steps: [] },
+    ams: [],
+    externalSpools: []
+  }
+  assert.deepEqual(getPrinterRecoveryActions(cancelled), [])
+  assert.equal(getCheckAssistantAvailability(cancelled).allowed, false)
+  assert.equal(getJumpToLiveViewAvailability(cancelled).allowed, false)
+
+  // The control: the same terminal stage with a real fault still assists.
+  const failed = { ...cancelled, deviceError: { code: '0C008043', message: 'Nozzle clumping detected' } }
+  assert.deepEqual(getPrinterRecoveryActions(failed), [
+    { id: 'checkAssistant', label: 'Check assistant' },
+    { id: 'jumpToLiveView', label: 'Live view' }
+  ])
+})
+
 test('shared filament action availability validates AMS and external spool actions', () => {
   const idleSlot = {
     slot: 1,

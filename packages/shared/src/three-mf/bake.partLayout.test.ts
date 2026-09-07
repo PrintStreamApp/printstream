@@ -202,3 +202,46 @@ test('an assemble_item for an untouched object is left byte for byte alone', () 
   const applied = applyPartLayout(MODEL_XML, ASSEMBLE_SETTINGS_XML, [], [{ objectId: 6, order: [1, 0] }])
   assert.match(applied.modelSettingsXml, /<assemble_item object_id="5" volume_id="2"/)
 })
+
+/**
+ * `extruder` is a part's MATERIAL, and it is the one piece of part metadata whose landing on the
+ * wrong volume is silently unprintable rather than merely odd: the parts still slice, in each
+ * other's filament. The existing fixtures carry only a `name`, so nothing pinned that it travels.
+ *
+ * This is the invariant behind a real inverted two-colour print: a body on filament 1 and its
+ * embedded logo on filament 2 came off the plate with the colours swapped, because the reorder and
+ * the per-part material write disagreed about which volume an ordinal named.
+ */
+const MATERIAL_SETTINGS_XML = [
+  '<config>',
+  ' <object id="5">',
+  '  <part id="20" subtype="normal_part"><metadata key="name" value="Body"/><metadata key="extruder" value="1"/></part>',
+  '  <part id="21" subtype="normal_part"><metadata key="name" value="Logo"/><metadata key="extruder" value="2"/></part>',
+  '  <part id="22" subtype="normal_part"><metadata key="name" value="Tab"/><metadata key="extruder" value="2"/></part>',
+  ' </object>',
+  '</config>'
+].join('\n')
+
+/** Each part's `id` paired with its `extruder`, in document order. */
+const partExtruders = (settingsXml: string, objectId: number): Array<[number, string]> => {
+  const block = new RegExp(`<object\\b[^>]*\\bid="${objectId}"[\\s\\S]*?</object>`).exec(settingsXml)?.[0] ?? ''
+  return [...block.matchAll(/<part\b[^>]*\bid="(\d+)"[\s\S]*?key="extruder" value="([^"]*)"/g)]
+    .map((match) => [Number(match[1]), match[2] ?? ''] as [number, string])
+}
+
+test('a reordered part keeps its own material', () => {
+  // Drag the body (ordinal 0) to the end: the sequence becomes Logo, Tab, Body. Each part must
+  // arrive carrying the extruder it had, so the body is still filament 1 in its new slot.
+  const applied = applyPartLayout(MODEL_XML, MATERIAL_SETTINGS_XML, [], [{ objectId: 5, order: [1, 2, 0] }])
+  assert.deepEqual(components(applied.modelXml, 5), [21, 22, 20])
+  assert.deepEqual(partExtruders(applied.modelSettingsXml, 5), [[21, '2'], [22, '2'], [20, '1']])
+})
+
+test('the component and part lists stay a positional mirror through a reorder', () => {
+  // The whole part-scoped bake addresses a volume by its ORDINAL, and it mints that ordinal from
+  // the `<component>` list while writing it onto the `<part>` list. The two must therefore agree
+  // position for position, or every per-part material, type and override lands one volume off.
+  const applied = applyPartLayout(MODEL_XML, MATERIAL_SETTINGS_XML, [], [{ objectId: 5, order: [2, 0, 1] }])
+  const partIds = partExtruders(applied.modelSettingsXml, 5).map(([id]) => id)
+  assert.deepEqual(components(applied.modelXml, 5), partIds)
+})

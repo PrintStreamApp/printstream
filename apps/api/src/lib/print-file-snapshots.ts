@@ -109,9 +109,11 @@ export async function ensureLibrarySnapshotRecord(file: SnapshotLibraryFile): Pr
  * Store a file that exists only on local disk as a hidden, content-deduped snapshot.
  *
  * The counterpart of {@link ensureLibrarySnapshotRecord} for bytes that were never a
- * library file, today the prepared project 3MF the slicer was handed, which lives in
- * a temp dir that is deleted the moment the slice returns. Hashing happens locally
- * (the bytes are already here) rather than by round-tripping through the bridge.
+ * library file: the prepared project 3MF the slicer was handed, which lives in a temp
+ * dir that is deleted the moment the slice returns, and the browser-baked project an
+ * editor session stages (`POST /api/library/uploads/:id/complete` with `snapshot`) to
+ * slice work the user has not saved. Hashing happens locally (the bytes are already
+ * here) rather than by round-tripping through the bridge.
  *
  * Idempotent: identical bytes under the same name resolve to the existing row without
  * re-uploading. Never overwrites or versions anything, a snapshot row is immutable.
@@ -122,6 +124,11 @@ export async function ensureLibrarySnapshotFromLocalPath(input: {
   fileName: string
   sourcePath: string
   sizeBytes: number
+  /**
+   * Bytes handed to the bridge so far. Never called on a dedupe hit, which transfers nothing:
+   * a caller reporting progress must treat "no callback at all" as done, not as stalled.
+   */
+  onBridgeProgress?: (transferredBytes: number) => Promise<void> | void
 }): Promise<SnapshotLibraryFile> {
   const contentHash = await hashLocalFile(input.sourcePath)
   const snapshotKey = buildSnapshotKey(input.fileName, contentHash)
@@ -133,7 +140,7 @@ export async function ensureLibrarySnapshotFromLocalPath(input: {
   if (existing) return existing
 
   const storedPath = buildSnapshotStoredPath(input.fileName, contentHash)
-  await storeBridgeLibraryFile(input.ownerBridgeId, storedPath, input.sourcePath)
+  await storeBridgeLibraryFile(input.ownerBridgeId, storedPath, input.sourcePath, { onProgress: input.onBridgeProgress })
 
   try {
     return await prisma.libraryFile.create({

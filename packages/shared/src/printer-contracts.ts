@@ -12,7 +12,7 @@
  */
 import { z } from 'zod'
 import { auditLogEntrySchema } from './logs.js'
-import { preservedSliceSettingsSchema, sceneEditTextInfoSchema } from './slicing.js'
+import { preservedSliceSettingsSchema, sceneEditSvgPartSchema, sceneEditTextInfoSchema } from './slicing.js'
 import { AMS_TRAY_UNMAPPED, AMS_UNIT_TYPES, isPhysicalAmsTrayIndex, type AmsUnitType } from './ams-tray-index.js'
 
 /**
@@ -1283,7 +1283,15 @@ export const libraryThreeMfSceneInstancePartSchema = z.object({
    * strips fields a schema does not name, so a scene field missing from this DTO reaches the
    * server and silently never reaches the browser, and the text would reopen as plain geometry.
    */
-  textInfo: sceneEditTextInfoSchema.optional()
+  textInfo: sceneEditTextInfoSchema.optional(),
+  /** What an SVG part was extruded from. Declared here for the same reason `textInfo` is. */
+  svgPart: sceneEditSvgPartSchema.optional(),
+  /**
+   * True when `cut_information.xml` names this volume a cut connector. Declared here for the same
+   * reason the two above are: without it a SAVED cut reopens with its connectors as ordinary
+   * volumes, which is the whole point of writing the record.
+   */
+  cutConnector: z.boolean().optional()
 })
 export type LibraryThreeMfSceneInstancePart = z.infer<typeof libraryThreeMfSceneInstancePartSchema>
 
@@ -1317,6 +1325,11 @@ export const libraryThreeMfSceneInstanceSchema = z.object({
     z: z.number(),
     radius: z.number()
   })).optional(),
+  /**
+   * The cut group this object belongs to, from `Metadata/cut_information.xml`, or absent when it is
+   * not part of a cut. Two objects sharing a value are halves of one cut.
+   */
+  cutId: z.number().int().positive().optional(),
   /**
    * Height range modifiers parsed from `Metadata/layer_config_ranges.xml` (object-level, so
    * identical across copies). Z bands in OBJECT space, `[minZ, maxZ)`, plus the process settings

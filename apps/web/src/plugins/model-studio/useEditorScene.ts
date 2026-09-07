@@ -13,11 +13,24 @@
  */
 import { useEffect, useRef, useState, type Dispatch, type MutableRefObject, type SetStateAction } from 'react'
 import { ensureMeshBvh } from './lib/meshBvh'
+import {
+  buildMeshCircleIndex,
+  featureAtFace,
+  isCircleCentrePick,
+  sameMeasureFeature,
+  transformMeasureFeature,
+  STUDIO_FEATURE_HOVER_LIMIT,
+  type MeasureFeature,
+  type MeshCircleIndex
+} from './lib/measureFeatures'
+import { circleScreenZone, raySeesThroughCircle } from './lib/circleScreenZone'
+import { createViewportCameraRig } from './lib/viewportCamera'
 import * as THREE from 'three'
 import { createWebglRenderer } from './lib/webglRenderer'
 import { OrbitControls, TransformControls } from 'three-stdlib'
 import { hasActiveOverlayViewer } from './lib/overlayViewerHold'
 import { disposeObject3D, type TrianglePaintChannel } from './lib/threeMfScene'
+import { buildTrianglePaintOverlay } from './lib/supportPaint'
 import {
   EDITOR_HOME_VIEW_DIRECTION as EDITOR_HOME_VIEW,
   VIEW_PRESET_CONFIG,
@@ -46,6 +59,12 @@ import {
   rotorOf,
   selectionBoxSignature,
   syncBrimEarMarkerMatrices,
+  syncScreenSpaceOverlays,
+  MEASURE_CIRCLE_FACE_LIMIT,
+  MEASURE_POINT_COLORS,
+  MEASURE_POINT_MODE_COLOR,
+  SCREEN_SPACE_OVERLAY_KEY,
+  createMeasureFeatureHighlight,
   updateHullFaceHighlight,
   allowsSelectionPicking,
   RESTING_GIZMO_MODE,
@@ -116,12 +135,39 @@ const PAINT_STROKE_MAX_SAMPLES = 48
 const EDITOR_HOME_VIEW_DIRECTION = new THREE.Vector3(EDITOR_HOME_VIEW.x, EDITOR_HOME_VIEW.y, EDITOR_HOME_VIEW.z).normalize()
 
 /**
+ * Height above the bed that the camera aims at, and the plane the orbit pivot is seated on.
+ *
+ * ONE constant for both on purpose. The framing looks slightly above the plate so models sit in the
+ * middle of the view rather than low in it, and the pivot has to agree: seat it on a different
+ * plane and the first rotate after a reframe slides the pivot along the view axis to reach that
+ * other height, which reads as the centre of rotation jumping away from the middle of the bed.
+ */
+const ORBIT_PIVOT_PLANE_Z = 20
+
+
+/**
  * Every EditorView-local value the scene effect reads. The scene-object refs and
  * callback-refs are declared in EditorView because other code there reads them too;
  * passing them as refs (not values) is what lets the render loop and event handlers
  * stay subscribed across EditorView re-renders while always seeing current state.
  * Module-level helpers/types the effect uses are imports above, not params.
  */
+/**
+ * One thing the measure tool has resolved, in WORLD space.
+ *
+ * `feature` is what gets measured; `source` is what the cursor was over. They differ only in point
+ * mode, where the feature is a point ON the source -- and the panel needs both, because the label
+ * reads "Point on circle" from the source while the arithmetic uses the point. Studio keeps the same
+ * pair for the same reason (`SelectedFeatures::Item`, `GLGizmoMeasure.hpp:89`).
+ *
+ * The whole feature is carried rather than a bare point because none of it can be re-derived later:
+ * once the click is over there is no mesh or face left to resolve it against.
+ */
+export interface MeasurePick {
+  feature: MeasureFeature
+  source: MeasureFeature
+}
+
 export interface EditorSceneParams {
   // Viewport DOM containers (also the effect's dependency array).
   viewerContainer: HTMLDivElement | null
@@ -201,6 +247,14 @@ export interface EditorSceneParams {
     previousWorldPoint?: THREE.Vector3 | null
   ) => void>
   /**
+   * What a region-based paint tool would change if clicked at this face, for the hover preview.
+   * Owned by `useEditorPaint` (it holds the codes); the scene only draws the answer.
+   */
+  previewPaintRegionRef: MutableRefObject<(
+    mesh: THREE.Mesh,
+    faceIndex: number | null
+  ) => { codes: Record<number, string>; state: number } | null>
+  /**
    * Put the text being edited where the pointer is on the model, with that face's own normal.
    *
    * Text is placed by POINTING at a surface, as BambuStudio does. A gizmo only yields a position,
@@ -215,6 +269,28 @@ export interface EditorSceneParams {
   textMeshRef: MutableRefObject<THREE.Mesh | null>
   /** Reports how the text is being interacted with, which drives its highlight and the cursor. */
   setTextInteractionRef: MutableRefObject<(state: TextInteraction) => void>
+  /** True while the cut tool is placing connectors, which re-purposes a click on the cut plane. */
+  cutConnectorModeRef: MutableRefObject<boolean>
+  /**
+   * What a connector click may hit: the cut plane itself, and the markers already on it. Supplied
+   * as objects rather than looked up by name because both live on the SCENE root beside the cut
+   * plane, not under an instance group, so there is no subtree to traverse for them.
+   */
+  cutConnectorTargetsRef: MutableRefObject<{
+    plane: THREE.Object3D | null
+    section: THREE.Object3D | null
+    markers: THREE.Object3D[]
+  }>
+  editCutConnectorsRef: MutableRefObject<(edit:
+    | { kind: 'add'; worldPoint: THREE.Vector3 }
+    | { kind: 'remove'; id: string }
+  ) => void>
+  /**
+   * Where a connector would land, reported on every hover so the tool can ghost one there. Null when
+   * the pointer is off the cut face. Called at pointer rate, so the consumer moves a mesh rather
+   * than setting React state.
+   */
+  hoverCutConnectorRef: MutableRefObject<(worldPoint: THREE.Vector3 | null) => void>
   brimEarDiameterRef: MutableRefObject<number>
   editSelectedBrimEarsRef: MutableRefObject<(edit:
     | { kind: 'add'; group: THREE.Group; worldPoint: THREE.Vector3 }
@@ -234,7 +310,16 @@ export interface EditorSceneParams {
   recomputeWarningsRef: MutableRefObject<() => void>
   // Tower + measure + history + thumbnails + context menu + escape.
   movePrimeTowerRef: MutableRefObject<((x: number, y: number) => void) | null>
-  addMeasurePointRef: MutableRefObject<((point: { x: number; y: number; z: number }) => void) | null>
+  addMeasurePointRef: MutableRefObject<((pick: MeasurePick) => void) | null>
+  /** The picks so far, so a hover can preview the colour the click would give it. */
+  measurePicksRef: MutableRefObject<MeasurePick[]>
+  /**
+   * The drawn centre marker of each selected circle, paired with the slot it belongs to.
+   *
+   * Raycast AHEAD of the model, because it is the only route to a hole's centre that needs no hover
+   * and so the only one a tap can take.
+   */
+  measureCentreTargetsRef: MutableRefObject<Array<{ object: THREE.Object3D; slot: number }>>
   recordHistoryRef: MutableRefObject<() => void>
   regenerateActiveThumbnailRef: MutableRefObject<(() => void) | null>
   /**
@@ -310,9 +395,14 @@ export function useEditorScene(params: EditorSceneParams): void {
     paintColorFilamentIdRef,
     paintToolRef,
     applyPaintStrokeRef,
+    previewPaintRegionRef,
     placeTextAtRef,
     textMeshRef,
     setTextInteractionRef,
+    cutConnectorModeRef,
+    cutConnectorTargetsRef,
+    editCutConnectorsRef,
+    hoverCutConnectorRef,
     brimEarDiameterRef,
     editSelectedBrimEarsRef,
     filamentColorsRef,
@@ -325,6 +415,8 @@ export function useEditorScene(params: EditorSceneParams): void {
     recomputeWarningsRef,
     movePrimeTowerRef,
     addMeasurePointRef,
+    measureCentreTargetsRef,
+    measurePicksRef,
     recordHistoryRef,
     regenerateActiveThumbnailRef,
     paintCommittedRef,
@@ -416,7 +508,7 @@ export function useEditorScene(params: EditorSceneParams): void {
     // Middle-to-pan is also what BambuStudio and every CAD viewer do.
     orbit.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.PAN, RIGHT: THREE.MOUSE.PAN }
     orbit.zoomToCursor = true
-    orbit.target.set(0, 0, 20)
+    orbit.target.set(0, 0, ORBIT_PIVOT_PLANE_Z)
     orbit.update()
     orbitRef.current = orbit
     // This camera is brand new at the generic home pose (target (0,0,20): the
@@ -674,27 +766,61 @@ export function useEditorScene(params: EditorSceneParams): void {
       }
     }
 
-    // Frame the camera on the bed centre using a Bambu-style view preset.
-    const applyViewPreset = (preset: ViewPreset) => {
-      const config = VIEW_PRESET_CONFIG[preset]
-      const distance = viewDistanceRef.current
-      const target = new THREE.Vector3(bedCenterRef.current.x, bedCenterRef.current.y, 20)
-      camera.up.set(config.up.x, config.up.y, config.up.z)
-      camera.position.set(
-        target.x + distance * config.direction.x,
-        target.y + distance * config.direction.y,
-        target.z + distance * config.direction.z
-      )
-      camera.lookAt(target)
-      orbit.target.copy(target)
-      orbit.update()
+    /**
+     * Swing the camera to a view preset WITHOUT changing anything else about it.
+     *
+     * Two things it deliberately does not do, both of which it used to. It no longer writes
+     * `camera.up` from the preset: `OrbitControls` measures its polar angle from `object.up`, so a
+     * Top view's `(0, 1, 0)` silently re-based every later drag onto a different axis -- clicking a
+     * face changed how the camera BEHAVED, not just where it was. World Z stays the up vector for
+     * every preset, and the straight-down cases get their screen orientation from a hair of tilt
+     * baked into the preset direction instead (see `VIEW_PRESET_CONFIG`), which `lookAt` resolves
+     * the same way while leaving the orbit frame alone.
+     *
+     * And it no longer re-frames on the bed centre at the stored view distance, which threw away
+     * the user's pan and zoom: a preset answers "look at this from the front", not "start over".
+     * The pivot is grounded first so the swing happens about what is actually on screen, and the
+     * current distance to it is preserved.
+     */
+    // The swing and the orbit pivot are SHARED with the read-only previews; see `viewportCamera.ts`
+    // for why they cannot be a copy each.
+    const cameraRig = createViewportCameraRig(camera, orbit, () => requestRenderRef.current?.())
+
+    const applyViewDirection = (
+      from: { x: number; y: number; z: number },
+      { reframe }: { reframe: boolean } = { reframe: true }
+    ) => {
+      // A plain click doubles as "reset the view": you land square on the plate at the standard
+      // zoom, which is what you want the great majority of the time. Shift keeps the current pivot
+      // and distance EXACTLY, so you can turn around whatever you had zoomed in on -- and exactly
+      // is the operative word, which is why nothing re-grounds the pivot here. Grounding is right
+      // for a rotate DRAG; doing it on a Shift-click moves the target onto the plane without moving
+      // the camera, so the hit distance silently becomes the new orbit radius and a run of clicks
+      // walks the camera in and out.
+      cameraRig.swingTo({
+        direction: from,
+        ...(reframe
+          ? {
+            target: new THREE.Vector3(bedCenterRef.current.x, bedCenterRef.current.y, ORBIT_PIVOT_PLANE_Z),
+            distance: viewDistanceRef.current
+          }
+          : {})
+      })
     }
+    const applyViewPreset = (preset: ViewPreset) => applyViewDirection(VIEW_PRESET_CONFIG[preset].direction)
     applyViewPresetRef.current = applyViewPreset
 
     // Default framing: bed-centred, mostly top-down but tilted to the front (Bambu-like).
     const frameDefaultView = () => {
+      // This writes the camera DIRECTLY rather than going through the rig, so an in-flight view-cube
+      // swing would overwrite it on its next `advance()` and the reframe would vanish with no sign
+      // it was asked for. Nothing else catches that: during a swing `orbit.update()` is skipped, so
+      // no 'change' event fires and the caller's own "did the user adjust the view?" guard stays
+      // false. Reframes arrive from a resize, a dialog transition and a plate switch, all of which
+      // can land mid-swing.
+      cameraRig.cancel()
       const distance = viewDistanceRef.current
-      const target = new THREE.Vector3(bedCenterRef.current.x, bedCenterRef.current.y, 20)
+      const target = new THREE.Vector3(bedCenterRef.current.x, bedCenterRef.current.y, ORBIT_PIVOT_PLANE_Z)
       camera.up.set(0, 0, 1)
       camera.position.set(
         target.x + distance * EDITOR_HOME_VIEW_DIRECTION.x,
@@ -707,8 +833,8 @@ export function useEditorScene(params: EditorSceneParams): void {
     }
     frameDefaultViewRef.current = frameDefaultView
 
-    const viewCube = createViewCube(viewCubeContainer, (preset) => {
-      applyViewPreset(preset)
+    const viewCube = createViewCube(viewCubeContainer, ({ region, reframe }) => {
+      applyViewDirection(region.direction, { reframe })
       viewCube.sync(camera)
     })
 
@@ -1100,44 +1226,232 @@ export function useEditorScene(params: EditorSceneParams): void {
     // Pointer-down position while the measure tool is active; a motionless release
     // places a measurement point, a drag orbits the camera as usual.
     let measureClickStart: { x: number; y: number } | null = null
+    // Whether the connector "drop one here" cursor is currently showing. Every other cursor this
+    // handler sets is written on each move by the branch that owns it; the connector branch is
+    // skipped entirely once its mode ends, so without this flag the canvas kept a `copy` cursor over
+    // models, the bed and every later tool until something else happened to write the style.
+    let connectorCursorShown = false
 
     /**
-     * Pick a measurement point under the cursor: the nearest mesh-surface hit
-     * (snapped to a triangle corner within MEASURE_SNAP_PX, Bambu-style), falling
-     * back to the bed plane near the plate.
+     * Instance groups whose meshes have been handed to {@link ensureMeshBvh}.
+     *
+     * `ensureMeshBvh` is itself a no-op after the first call, but the WALK to reach it is not: the
+     * measure hit test runs on every pointer MOVE now (it drives the cursor), and traversing every
+     * mesh of every object on the plate at pointer rate is thousands of node visits per move on a
+     * dense project, purely to reach an early-out. Keyed on the GROUP, which is replaced whenever
+     * its instance is rebuilt, so a rebuild re-indexes. A mesh added to a group already indexed
+     * simply falls back to the stock raycast, which `meshBvh.ts` documents as slow, not broken.
      */
-    const pickMeasurePoint = (event: PointerEvent): THREE.Vector3 | null => {
+    const measureIndexedGroups = new WeakSet<THREE.Object3D>()
+
+    /**
+     * The feature index of one mesh, built on first use and kept for the mesh's life.
+     *
+     * Held on the GEOMETRY rather than the mesh, and in the geometry's OWN space, so it survives
+     * every move, rotate and scale of the object -- which is also how Studio does it, keeping one
+     * `Measuring` per volume and re-applying only the world transform (`GLGizmoMeasure.cpp:2664`).
+     *
+     * CAPPED, and the cap is the honest part. Building it walks every face and every edge with
+     * string keys, which is the ~1s-per-663k-triangles cost `isClosedSoup` documents -- affordable
+     * once for a CAD part with holes in it, and a frozen tab for a dense organic mesh, which has no
+     * holes to find anyway. Past the cap the tool keeps its corner snapping and simply never offers
+     * a centre.
+     */
+    const measureFeatureIndexes = new WeakMap<THREE.BufferGeometry, MeshCircleIndex | null>()
+    const measureFeatureIndexFor = (geometry: THREE.BufferGeometry): MeshCircleIndex | null => {
+      const cached = measureFeatureIndexes.get(geometry)
+      if (cached !== undefined) return cached
+      const position = geometry.getAttribute('position')
+      // An INDEXED geometry addresses triangles differently, and every model mesh here is
+      // deliberately non-indexed (see `meshBvh.ts`), so this is a guard rather than a case to handle.
+      const usable = position instanceof THREE.BufferAttribute
+        && !geometry.index
+        && position.itemSize === 3
+        && position.count / 3 <= MEASURE_CIRCLE_FACE_LIMIT
+      const index = usable ? buildMeshCircleIndex(position.array as Float32Array) : null
+      measureFeatureIndexes.set(geometry, index)
+      return index
+    }
+
+    /**
+     * How far from a feature the cursor may be and still resolve to it, in the MESH'S own units.
+     *
+     * Studio uses a flat 0.5mm (`Measure.cpp:42`), which its own notes flag as not scale-aware: at
+     * any zoomed-out view that is sub-pixel and nothing can be hovered at all. A screen-pixel budget
+     * is converted instead, which is also what the rest of this tool's snapping already spends, so
+     * the two cannot disagree about what "near" means.
+     *
+     * The largest scale component is the divisor deliberately. On a non-uniformly scaled object the
+     * budget converts differently per axis, and taking the largest yields the SMALLEST local reach,
+     * which errs toward the cursor resolving to the face rather than grabbing a feature the user was
+     * not pointing at.
+     *
+     * The viewport rect is PASSED IN rather than read here: `getBoundingClientRect` forces a
+     * synchronous layout and the caller has already taken one on the same pointer move.
+     */
+    const measureHoverLimitFor = (mesh: THREE.Mesh, worldPoint: THREE.Vector3, rect: DOMRect): number => {
+      if (rect.height <= 0) return STUDIO_FEATURE_HOVER_LIMIT
+      const distance = camera.position.distanceTo(worldPoint)
+      const worldPerPixel = (2 * distance * Math.tan((camera.fov * Math.PI) / 360)) / rect.height
+      const scale = new THREE.Vector3().setFromMatrixScale(mesh.matrixWorld)
+      const largest = Math.max(scale.x, scale.y, scale.z) || 1
+      return (MEASURE_SNAP_PX * worldPerPixel) / largest
+    }
+
+    /**
+     * The point ON a feature nearest the cursor: Studio's point-selection mode
+     * (`GLGizmoMeasure.cpp:1117`), reached by holding Shift.
+     *
+     * This is also where our own "measure between two arbitrary points" behaviour lives now. Studio
+     * has no such mode -- everything it measures comes from a feature -- but a point on a PLANE is
+     * exactly a free point on that face, so the two turn out to be the same gesture.
+     */
+    const pointOnFeature = (feature: MeasureFeature, hit: THREE.Vector3): THREE.Vector3 => {
+      switch (feature.kind) {
+        case 'point':
+          return feature.point.clone()
+        case 'edge': {
+          // Along the edge, clamped to it: sliding off the end must not measure from thin air.
+          const along = feature.end.clone().sub(feature.start)
+          const t = THREE.MathUtils.clamp(hit.clone().sub(feature.start).dot(along) / along.lengthSq(), 0, 1)
+          return feature.start.clone().addScaledVector(along, t)
+        }
+        case 'circle': {
+          // Whichever the cursor is NEARER: the centre or the rim.
+          //
+          // Studio decides this with a separate clickable sphere drawn at the centre
+          // (`GLGizmoMeasure.cpp:1159`) -- hovering that gripper gives the centre, anywhere else on
+          // the torus gives the rim. A distance test is the same intent without a second raycast
+          // layer, and it has to exist in some form: a circle's centre as a POINT is a different
+          // measurement from the circle itself against a plane or an edge, so with rim-only snapping
+          // that measurement is simply unreachable. Returning the centre only for a hit landing
+          // exactly on it, which is what this did, is rim-only in practice -- a pointer never lands
+          // within a picometre of anything.
+          const flattened = hit.clone().sub(feature.center)
+          flattened.addScaledVector(feature.normal, -flattened.dot(feature.normal))
+          const fromCentre = flattened.length()
+          if (fromCentre < feature.radius / 2) return feature.center.clone()
+          return feature.center.clone().addScaledVector(flattened.normalize(), feature.radius)
+        }
+        case 'plane':
+          return hit.clone()
+      }
+    }
+
+    /**
+     * Resolve what the measure cursor is over.
+     *
+     * Returns a feature in WORLD space: a vertex, an edge, a circle or the face itself, whichever is
+     * nearest within reach. With `pointMode` the answer is instead a POINT on that feature, which is
+     * Studio's Shift behaviour and how a free point on a face is still reachable.
+     *
+     * The bed is our own addition and has no Studio equivalent -- it resolves to a bare point, since
+     * there is no mesh under the cursor to have features.
+     */
+    /**
+     * Where a world point lands on screen, in the same client coordinates a pointer event uses.
+     *
+     * Null BEHIND the camera, which `project` alone does not report: it divides by a negative w and
+     * hands back mirrored coordinates rather than nothing, so a feature orbited out of view would go
+     * on claiming a region of the screen it is no longer anywhere near.
+     */
+    const toScreen = (point: THREE.Vector3, rect: DOMRect): { x: number; y: number } | null => {
+      const inCamera = point.clone().applyMatrix4(camera.matrixWorldInverse)
+      if (-inCamera.z <= camera.near) return null
+      const projected = point.clone().project(camera)
+      return {
+        x: rect.left + ((projected.x + 1) / 2) * rect.width,
+        y: rect.top + ((1 - projected.y) / 2) * rect.height
+      }
+    }
+
+
+
+    const pickMeasureFeature = (event: PointerEvent, pointMode: boolean): MeasurePick | null => {
       const rect = renderer.domElement.getBoundingClientRect()
       pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
       pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
       raycaster.setFromCamera(pointer, camera)
       const targets = Array.from(groupByKeyRef.current.values())
+      // Index on first use, exactly as the paint hit test does and for the same reason: the stock
+      // raycast walks every triangle.
+      for (const group of targets) {
+        if (measureIndexedGroups.has(group)) continue
+        measureIndexedGroups.add(group)
+        group.traverse((node) => {
+          const mesh = node as THREE.Mesh
+          if (mesh.isMesh && mesh.name !== BRIM_EAR_MARKER_NAME) ensureMeshBvh(mesh)
+        })
+      }
+      // THE CENTRE MARKER OF A SELECTED CIRCLE IS RAYCAST FIRST, ahead of the model. It is drawn in
+      // empty space over the middle of a hole, so nothing else can be in front of it, and it is the
+      // only route to a centre that does not need a hover: a TAP has no pointer path crossing the
+      // rim, so on touch the screen-space rule below never arms and this is the whole gesture.
+      const centreHit = raycaster.intersectObjects(
+        measureCentreTargetsRef.current.map((entry) => entry.object),
+        false
+      )[0]
+      if (centreHit) {
+        const slot = measureCentreTargetsRef.current.find((entry) => entry.object === centreHit.object)
+        const circle = slot ? measurePicksRef.current[slot.slot]?.source : null
+        if (circle?.kind === 'circle') {
+          return { feature: { kind: 'point', point: circle.center.clone() }, source: circle }
+        }
+      }
+      // A HOVERED CIRCLE OWNS ITS RING, decided in screen space BEFORE anything is raycast -- see
+      // `circleScreenZone`. The source stays the circle, so the hover holds along the rim.
+      //
+      // Not in POINT MODE, which is the escape hatch. Shift means a free point on whatever is under
+      // the cursor, so claiming the ring would hand back the whole circle instead of the point asked
+      // for. Left to the raycast below, Shift still resolves the rim on its way to a point on it.
+      const hoveredCircle = !pointMode && measureHoverSource?.kind === 'circle' ? measureHoverSource : null
+      const zone = hoveredCircle
+        ? circleScreenZone(
+          hoveredCircle,
+          { x: event.clientX, y: event.clientY },
+          (world) => toScreen(world, rect),
+          MEASURE_SNAP_PX
+        )
+        : null
+      if (hoveredCircle && zone === 'ring') return { feature: hoveredCircle, source: hoveredCircle }
       const hit = raycaster.intersectObjects(targets, true)
         .find((entry) => entry.face && (entry.object as THREE.Mesh).isMesh && entry.object.name !== BRIM_EAR_MARKER_NAME)
-      if (hit?.face) {
+      // A CIRCLE'S INTERIOR IS ONLY ITS OWN WHERE THE RAY GOES THROUGH IT. Screen position alone is
+      // not enough, because an outer silhouette is a circle too (`circlesAroundFace`: "a round boss
+      // reads as a circle exactly as a bore does"), so a disc claimed on projection would swallow the
+      // whole top face of any cylinder and every feature on it. Comparing depths distinguishes the
+      // two exactly, including under an oblique view: inside a bore the ray reaches the far wall or
+      // nothing, which is BEHIND the circle's own plane, while on a solid round face it lands on that
+      // face, at the plane itself, and the face rightly wins. It also keeps anything drawn in FRONT
+      // of a hole pickable through it.
+      if (hoveredCircle && zone === 'interior' && raySeesThroughCircle(hoveredCircle, raycaster.ray, hit?.distance ?? Infinity)) {
+        return { feature: { kind: 'point', point: hoveredCircle.center.clone() }, source: hoveredCircle }
+      }
+      if (hit?.face && hit.faceIndex != null) {
         const mesh = hit.object as THREE.Mesh
-        const position = mesh.geometry.getAttribute('position')
-        let snapped: THREE.Vector3 | null = null
-        let snappedPx = MEASURE_SNAP_PX
-        for (const index of [hit.face.a, hit.face.b, hit.face.c]) {
-          const vertex = new THREE.Vector3().fromBufferAttribute(position, index).applyMatrix4(mesh.matrixWorld)
-          const projected = vertex.clone().project(camera)
-          const px = rect.left + ((projected.x + 1) / 2) * rect.width
-          const py = rect.top + ((1 - projected.y) / 2) * rect.height
-          const distancePx = Math.hypot(px - event.clientX, py - event.clientY)
-          if (distancePx < snappedPx) {
-            snappedPx = distancePx
-            snapped = vertex
+        const index = measureFeatureIndexFor(mesh.geometry)
+        if (index) {
+          const inverse = new THREE.Matrix4().copy(mesh.matrixWorld).invert()
+          const local = hit.point.clone().applyMatrix4(inverse)
+          const found = featureAtFace(index, hit.faceIndex, local, measureHoverLimitFor(mesh, hit.point, rect))
+          if (found) {
+            const source = transformMeasureFeature(found, mesh.matrixWorld)
+            return pointMode
+              ? { feature: { kind: 'point', point: pointOnFeature(source, hit.point) }, source }
+              : { feature: source, source }
           }
         }
-        return snapped ?? hit.point.clone()
+        // No index (an indexed or very dense mesh): the raw surface point is still measurable.
+        const point: MeasureFeature = { kind: 'point', point: hit.point.clone() }
+        return { feature: point, source: point }
       }
       const bedPoint = new THREE.Vector3()
       if (!raycaster.ray.intersectPlane(bedPlane, bedPoint)) return null
       const bed = activePlateRef.current?.bed
       if (bed && (bedPoint.x < bed.minX - 5 || bedPoint.x > bed.maxX + 5
         || bedPoint.y < bed.minY - 5 || bedPoint.y > bed.maxY + 5)) return null
-      return bedPoint
+      const onBed: MeasureFeature = { kind: 'point', point: bedPoint }
+      return { feature: onBed, source: onBed }
     }
 
     const pickInstanceGroup = (event: PointerEvent): THREE.Group | null => {
@@ -1159,9 +1473,80 @@ export function useEditorScene(params: EditorSceneParams): void {
       return null
     }
 
+
     // ---- Support-paint brush (pointer side) ----------------------------------
     // Ring cursor shown over the selected object's surface while the paint tool is
     // active; scaled to the brush radius and tinted by the brush mode.
+    /**
+     * What the measure cursor is over, drawn while the tool is active.
+     *
+     * The measure tool had no cursor at all once, which left two things invisible: that clicking does
+     * anything, and WHAT it would pick -- and the second matters more here than for any other tool,
+     * because the pick resolves to a whole FEATURE that may be nothing like the pixel under the
+     * pointer. A hovered hole highlights as a ring and a centre; a hovered face highlights as its
+     * whole border. Without that the user is guessing what a click will select.
+     *
+     * Rebuilt only when the resolved feature CHANGES, not per pointer move: the hover runs at pointer
+     * rate and the feature under it is the same for most of those events, so rebuilding each time
+     * would be scene churn for no visible difference.
+     */
+    const measureHoverGroup = new THREE.Group()
+    // FLAGGED, and its highlights are flattened into it below: the sync walks the scene's top-level
+    // children plus ONE level inside a flagged group, so a highlight added as a group of its own
+    // puts its markers two levels down where nothing scales them -- they then render at their world
+    // size, 1mm across, which passes for right at one zoom and grows with the model at every other.
+    measureHoverGroup.userData[SCREEN_SPACE_OVERLAY_KEY] = true
+    measureHoverGroup.renderOrder = 7
+    scene.add(measureHoverGroup)
+    let measureHoverFeature: MeasureFeature | null = null
+    let measureHoverSource: MeasureFeature | null = null
+
+    const clearMeasureHover = () => {
+      for (const child of [...measureHoverGroup.children]) {
+        measureHoverGroup.remove(child)
+        disposeObject3D(child)
+      }
+      measureHoverFeature = null
+      measureHoverSource = null
+    }
+
+    /**
+     * The colour a hovered feature takes: the one the click WOULD assign.
+     *
+     * Studio's `hover_selection_color` (`GLGizmoMeasure.cpp:1290`). Without it every hover is the
+     * same colour and nothing says which of the two slots is about to be filled -- which matters
+     * most in the case that looks identical otherwise, hovering a feature that is ALREADY the first
+     * selection, where the click deselects rather than adding a second.
+     */
+    const measureHoverColor = (feature: MeasureFeature, pointMode: boolean): number => {
+      if (pointMode) return MEASURE_POINT_MODE_COLOR
+      const picks = measurePicksRef.current
+      const first = picks[0]
+      const fillsFirstSlot = !first || sameMeasureFeature(first.feature, feature)
+      return MEASURE_POINT_COLORS[fillsFirstSlot ? 0 : 1]!
+    }
+
+    /** Show a hover pick, or clear it when the pointer is over nothing measurable. */
+    const updateMeasureHover = (picked: MeasurePick | null, pointMode = false) => {
+      if (!picked) {
+        if (measureHoverFeature) clearMeasureHover()
+        return
+      }
+      if (sameMeasureFeature(measureHoverFeature, picked.feature)
+        && sameMeasureFeature(measureHoverSource, picked.source)) return
+      clearMeasureHover()
+      measureHoverFeature = picked.feature
+      measureHoverSource = picked.source
+      // The SOURCE is drawn, so a hovered circle keeps its ring while its centre is being pointed at,
+      // with the emphasis following which of the two the cursor is actually claiming.
+      const highlight = createMeasureFeatureHighlight(
+        picked.source,
+        measureHoverColor(picked.feature, pointMode),
+        isCircleCentrePick(picked.feature, picked.source) ? 'centre' : 'rim'
+      )
+      measureHoverGroup.add(...highlight.children)
+    }
+
     const brushCursor = new THREE.Mesh(
       new THREE.RingGeometry(0.82, 1, 40),
       new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.85, depthTest: false, side: THREE.DoubleSide })
@@ -1326,27 +1711,110 @@ export function useEditorScene(params: EditorSceneParams): void {
       return raycaster.intersectObject(mesh, false).length > 0
     }
 
-    const updateBrushCursor = (hit: { point: THREE.Vector3; normal: THREE.Vector3 } | null) => {
+    /**
+     * The hovered region a fill-style tool would paint, drawn on the mesh under the pointer.
+     *
+     * Smart fill, bucket and single-triangle pick a REGION rather than sweeping a radius, so the
+     * brush ring says nothing about them and they used to show nothing at all: the user aimed a
+     * fill blind and found out what it swallowed only after the click. The region comes from
+     * `previewPaintRegionRef`, which runs the real fill against a copy, so this can never advertise
+     * a different result than the click produces.
+     *
+     * Rebuilt only when the SEED changes (mesh, face, tool, mode, colour), because a flood plus a
+     * re-mesh on every pointermove over one face is exactly the cost the measure and lay-flat hovers
+     * already guard against this way. A settings change that alters the region without moving the
+     * pointer (the smart-fill angle slider) shows on the next move rather than instantly, which is
+     * the same trade those two make.
+     */
+    let paintRegionPreview: { host: THREE.Mesh; mesh: THREE.Mesh; key: string } | null = null
+    const clearPaintRegionPreview = () => {
+      if (!paintRegionPreview) return
+      paintRegionPreview.host.remove(paintRegionPreview.mesh)
+      disposeObject3D(paintRegionPreview.mesh)
+      paintRegionPreview = null
+    }
+    const updatePaintRegionPreview = (
+      mesh: THREE.Mesh | null,
+      faceIndex: number | null,
+      channel: TrianglePaintChannel
+    ) => {
+      if (!mesh || faceIndex == null) {
+        clearPaintRegionPreview()
+        return
+      }
+      const key = [
+        mesh.uuid,
+        faceIndex,
+        paintToolRef.current,
+        paintBrushModeRef.current,
+        channel,
+        paintColorFilamentIdRef.current ?? ''
+      ].join(':')
+      if (paintRegionPreview?.key === key) return
+      clearPaintRegionPreview()
+      const region = previewPaintRegionRef.current?.(mesh, faceIndex)
+      if (!region) return
+      const palette = PAINT_CHANNEL_SPECS[channel].palette
+      // The colour the CLICK will produce, so the preview reads as "this is what you are about to
+      // lay down" rather than as a generic selection highlight. An erase previews in the eraser's
+      // own pale tone, since the state it is clearing is the one being removed.
+      const previewHex = paintBrushModeRef.current === 'eraser'
+        ? 0xe8edf4
+        : channel === 'color'
+          ? new THREE.Color(filamentColorsRef.current?.[paintColorFilamentIdRef.current ?? -1] ?? '#9aa4ad').getHex()
+          : paintBrushModeRef.current === 'blocker' ? palette.blocker : palette.enforcer
+      const overlay = buildTrianglePaintOverlay(
+        mesh.geometry as THREE.BufferGeometry,
+        region.codes,
+        {
+          palette,
+          name: 'paint-region-preview',
+          // `offsetFactor` is a polygon offset, and these run NEGATIVE (toward the camera): the
+          // channels use -2..-5. One step beyond the strongest so the preview reads on top of paint
+          // already there rather than z-fighting the thing it is previewing. A positive value puts
+          // it BEHIND the surface, which renders nothing at all.
+          offsetFactor: -6,
+          colorForState: () => previewHex
+        }
+      )
+      if (!overlay) return
+      const material = overlay.material as THREE.MeshBasicMaterial
+      // Semi-transparent: a preview must not be mistakable for paint that is already applied.
+      material.transparent = true
+      material.opacity = 0.55
+      material.depthWrite = false
+      overlay.renderOrder = 6
+      mesh.add(overlay)
+      paintRegionPreview = { host: mesh, mesh: overlay, key }
+    }
+
+    const updateBrushCursor = (
+      hit: { point: THREE.Vector3; normal: THREE.Vector3; mesh?: THREE.Mesh; faceIndex?: number | null } | null
+    ) => {
       if (!hit) {
         brushCursor.visible = false
         brushSphereCursor.visible = false
+        clearPaintRegionPreview()
         return
       }
       const earMode = gizmoModeRef.current === 'brimEars'
       const mode = paintBrushModeRef.current
       const channel = activePaintChannelRef.current
-      // Fill/triangle/height pick faces rather than sweep a radius: no brush cursor. The sphere tool
-      // gets a ball cursor; everything else with a radius (circle/cylinder, brim ears) gets the ring.
+      // A radius cursor is meaningless for the tools that pick a REGION, so they preview the region
+      // itself instead. The sphere tool gets a ball cursor; everything else with a radius
+      // (circle/cylinder, brim ears) gets the ring.
       let useSphere = false
       if (!earMode && channel) {
         const tool = effectivePaintTool(channel, paintToolRef.current)
         if (tool !== 'circle' && tool !== 'sphere') {
           brushCursor.visible = false
           brushSphereCursor.visible = false
+          updatePaintRegionPreview(hit.mesh ?? null, hit.faceIndex ?? null, channel)
           return
         }
         useSphere = tool === 'sphere'
       }
+      clearPaintRegionPreview()
       const palette = PAINT_CHANNEL_SPECS[channel ?? 'supports'].palette
       const colorModeHex = channel === 'color'
         ? new THREE.Color(filamentColorsRef.current?.[paintColorFilamentIdRef.current ?? -1] ?? '#9aa4ad').getHex()
@@ -1393,6 +1861,59 @@ export function useEditorScene(params: EditorSceneParams): void {
       // drags still orbit); nothing else: selection and drags are suspended.
       if (gizmoModeRef.current === 'measure') {
         measureClickStart = { x: event.clientX, y: event.clientY }
+        return
+      }
+
+      // Connector click: on a marker it removes that connector, on the cut plane it adds one.
+      // Markers are tested FIRST and unconditionally, so a connector sitting over the plane can
+      // always be taken back off -- the plane is behind every marker by construction, so a
+      // nearest-hit-wins rule would make a connector unremovable the moment it was placed.
+      if (gizmoModeRef.current === 'cut' && cutConnectorModeRef.current) {
+        const rect = renderer.domElement.getBoundingClientRect()
+        pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
+        pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
+        raycaster.setFromCamera(pointer, camera)
+        const { plane, section, markers } = cutConnectorTargetsRef.current
+        const markerHit = raycaster.intersectObjects(markers, true)[0]
+        if (markerHit) {
+          let node: THREE.Object3D | null = markerHit.object
+          while (node && typeof node.userData.connectorId !== 'string') node = node.parent
+          const id = node?.userData.connectorId
+          if (typeof id === 'string') {
+            editCutConnectorsRef.current?.({ kind: 'remove', id })
+            return
+          }
+        }
+        // The visible cut FACE first. A hit there is inside the cross-section by construction, so
+        // the placement is exact rather than projected onto an unbounded plane and checked after.
+        if (section) {
+          const sectionHit = raycaster.intersectObject(section, false)[0]
+          if (sectionHit) {
+            editCutConnectorsRef.current?.({ kind: 'add', worldPoint: sectionHit.point.clone() })
+            return
+          }
+        }
+        if (plane) {
+          // Against the INFINITE plane the preview quad lies in, not the quad itself. Studio does the
+          // same (`unproject_on_cut_plane` raycasts the clipping plane and then asks whether the hit
+          // is inside a cut contour), and the difference is the whole usability of the tool: the quad
+          // is a thin translucent sliver a few pixels tall on a model at normal zoom, so clicking the
+          // MODEL -- the obvious thing to do -- missed it entirely and the click was refused. Which
+          // reads as "connectors cannot be placed". Whether the point is actually ON the cross
+          // section is a separate question, and `editCutConnectors` already answers it.
+          plane.updateMatrixWorld()
+          const normal = new THREE.Vector3(0, 0, 1).transformDirection(plane.matrixWorld).normalize()
+          const origin = new THREE.Vector3().setFromMatrixPosition(plane.matrixWorld)
+          const mathPlane = new THREE.Plane().setFromNormalAndCoplanarPoint(normal, origin)
+          const hit = raycaster.ray.intersectPlane(mathPlane, new THREE.Vector3())
+          if (hit) {
+            editCutConnectorsRef.current?.({ kind: 'add', worldPoint: hit })
+            return
+          }
+        }
+        // Only a ray PARALLEL to the plane reaches here (an edge-on view). Still not a selection
+        // change: the tool stays put rather than swapping the object out from under a half-placed
+        // set of connectors.
         return
       }
 
@@ -1701,6 +2222,31 @@ export function useEditorScene(params: EditorSceneParams): void {
         if (hit) placeTextAtRef.current?.(hit.point.clone(), hit.normal.clone(), 'move')
         return
       }
+      // Connector hover: ghost the peg where it would land. Without it the cut face is a blank
+      // surface that gives no sign a click will do anything, which is most of why the tool read as
+      // unresponsive even once the face was visible.
+      if (gizmoModeRef.current === 'cut' && cutConnectorModeRef.current) {
+        const { section } = cutConnectorTargetsRef.current
+        if (section) {
+          const rect = renderer.domElement.getBoundingClientRect()
+          pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
+          pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
+          raycaster.setFromCamera(pointer, camera)
+          const hit = raycaster.intersectObject(section, false)[0]
+          hoverCutConnectorRef.current?.(hit ? hit.point.clone() : null)
+          renderer.domElement.style.cursor = hit ? 'copy' : ''
+          connectorCursorShown = hit != null
+        } else {
+          hoverCutConnectorRef.current?.(null)
+          if (connectorCursorShown) {
+            renderer.domElement.style.cursor = ''
+            connectorCursorShown = false
+          }
+        }
+      } else if (connectorCursorShown) {
+        renderer.domElement.style.cursor = ''
+        connectorCursorShown = false
+      }
       if (paintChannelForGizmoMode(gizmoModeRef.current) !== null || gizmoModeRef.current === 'brimEars') {
         if (paintingStroke) {
           // Painting owns the raycasts here: `paintStrokeTo` casts one per interpolated sample and
@@ -1713,6 +2259,12 @@ export function useEditorScene(params: EditorSceneParams): void {
       } else if (brushCursor.visible || brushSphereCursor.visible) {
         brushCursor.visible = false
         brushSphereCursor.visible = false
+      }
+      // Measure: preview where the click lands, including whether it will snap to a corner.
+      if (gizmoModeRef.current === 'measure') {
+        updateMeasureHover(pickMeasureFeature(event, event.shiftKey), event.shiftKey)
+      } else if (measureHoverFeature) {
+        clearMeasureHover()
       }
       // Place-on-face: highlight the hull face under the pointer so the user sees exactly which
       // face they'll lay flat before clicking. (Hover only: selection still happens on pointerdown.)
@@ -1815,8 +2367,11 @@ export function useEditorScene(params: EditorSceneParams): void {
         const start = measureClickStart
         measureClickStart = null
         if (Math.hypot(event.clientX - start.x, event.clientY - start.y) < 5) {
-          const point = pickMeasurePoint(event)
-          if (point) addMeasurePointRef.current?.({ x: point.x, y: point.y, z: point.z })
+          // The whole FEATURE travels with the click, not just a point: it is what the panel names,
+          // what the highlight draws, and what the measurement is taken between. None of it can be
+          // re-derived later, since by then there is no mesh or face to resolve it against.
+          const picked = pickMeasureFeature(event, event.shiftKey)
+          if (picked) addMeasurePointRef.current?.(picked)
         }
         return
       }
@@ -1910,8 +2465,40 @@ export function useEditorScene(params: EditorSceneParams): void {
       openContextMenuRef.current(key ? { x: event.clientX, y: event.clientY, key } : null)
     }
 
+    /**
+     * Re-seat the orbit pivot on whatever the drag is about to turn around.
+     *
+     * Registered AFTER `onPointerDown` on purpose, so it sees the `orbit.enabled = false` that
+     * handler writes for a gizmo drag, a paint stroke or a tool click, and leaves those alone.
+     * Studio resolves its pivot the same way, on the press rather than per move.
+     *
+     * Touch counts because `OrbitControls.touches.ONE` is a rotate; a second finger turns the
+     * gesture into a pan or a dolly, by which point the pivot is already seated and harmless.
+     */
+    const onPointerDownGroundPivot = (event: PointerEvent) => {
+      if (!orbit.enabled) return
+      if (event.pointerType !== 'touch' && event.button !== 0) return
+      cameraRig.groundPivot(ORBIT_PIVOT_PLANE_Z)
+    }
+
     renderer.domElement.addEventListener('pointerdown', onPointerDown)
+    renderer.domElement.addEventListener('pointerdown', onPointerDownGroundPivot)
     renderer.domElement.addEventListener('pointermove', onPointerMove)
+    // The pointer leaving the canvas fires no move, so anything drawn UNDER it has to be cleared
+    // here or it simply stays. Harmless for the brush ring; not for the fill preview, which is a
+    // coloured region and reads as paint that has already been applied.
+    const onPointerLeave = () => {
+      brushCursor.visible = false
+      brushSphereCursor.visible = false
+      clearPaintRegionPreview()
+      // Every hover visual, not just the paint ones: the measure highlight has no other clear path
+      // either, so a hole hovered on the way to the side panel stayed ringed over the model.
+      updateMeasureHover(null, false)
+      const hull = faceHullRef.current
+      if (hull) updateHullFaceHighlight(hull, null)
+      requestRenderRef.current?.()
+    }
+    renderer.domElement.addEventListener('pointerleave', onPointerLeave)
     renderer.domElement.addEventListener('pointerup', endBodyDrag)
     renderer.domElement.addEventListener('pointercancel', endBodyDrag)
     renderer.domElement.addEventListener('contextmenu', onContextMenu)
@@ -2037,8 +2624,15 @@ export function useEditorScene(params: EditorSceneParams): void {
         frame = requestAnimationFrame(animate)
         return
       }
+      // BEFORE `orbit.update()`, which re-derives its spherical state from wherever the camera now
+      // is, so the swing composes with the controls instead of fighting them.
+      const tweening = cameraRig.advance(now)
+      // Skipped WHILE a swing is in flight: `OrbitControls.update()` ends in `lookAt(target)`, which
+      // would recompute the roll from the direction every frame and undo the interpolation. There is
+      // no user input to damp meanwhile, and the swing lands on exactly the orientation `lookAt`
+      // would produce, so the controls pick up seamlessly on the first frame after it finishes.
       // Advances orbit damping and fires 'change' (-> requestRender) on any camera movement.
-      orbit.update()
+      if (!tweening) orbit.update()
       // Any active drag (gizmo, object body, or purge tower). Drives both the cheaper
       // selection-box bounds below and the deferred placement-warning recompute further down.
       const interacting = gizmoDragging || bodyDragGroup !== null || towerDragObject !== null
@@ -2047,7 +2641,7 @@ export function useEditorScene(params: EditorSceneParams): void {
       wasInteracting = interacting
       // Paint them only when needed (see the on-demand note above): a pending request, a live drag,
       // its end edge, or the safety tick. Everything below feeds the frame, so it is gated too.
-      const shouldRender = needsRender || interacting || dragJustEnded || (now - lastRenderStamp) >= IDLE_RENDER_INTERVAL_MS
+      const shouldRender = needsRender || interacting || tweening || dragJustEnded || (now - lastRenderStamp) >= IDLE_RENDER_INTERVAL_MS
       let wantAnotherFrame = false
       if (shouldRender) {
         // Re-apply paint-overlay visibility (see helper above) whenever the active tool, the selection,
@@ -2112,6 +2706,9 @@ export function useEditorScene(params: EditorSceneParams): void {
         syncExtraSelectionBoxes()
         syncPartSelectionBoxes()
         syncSelectionOwners()
+        // Annotations sized in screen pixels are re-scaled for THIS frame's camera, just before the
+        // draw that shows them, so a swing or a zoom cannot leave one a frame stale.
+        syncScreenSpaceOverlays(scene, camera, renderer.domElement.clientHeight)
         renderer.render(scene, camera)
         // Outlines are on their own layer, so the pass above drew none of them. Skipped outright
         // with nothing selected, which is when its two extra scene walks would buy nothing.
@@ -2185,8 +2782,11 @@ export function useEditorScene(params: EditorSceneParams): void {
       selectionOwners.dispose()
       requestRenderRef.current = null
       orbit.removeEventListener('change', requestRender)
+      cameraRig.dispose()
       renderer.domElement.removeEventListener('pointermove', onPointerMoveRender)
       renderer.domElement.removeEventListener('pointerdown', onPointerDown)
+      renderer.domElement.removeEventListener('pointerdown', onPointerDownGroundPivot)
+      renderer.domElement.removeEventListener('pointerleave', onPointerLeave)
       renderer.domElement.removeEventListener('pointermove', onPointerMove)
       renderer.domElement.removeEventListener('pointerup', endBodyDrag)
       renderer.domElement.removeEventListener('pointercancel', endBodyDrag)
@@ -2206,7 +2806,10 @@ export function useEditorScene(params: EditorSceneParams): void {
       if (setSelectionHighlightRef.current === setSelectionHighlight) setSelectionHighlightRef.current = null
       scene.remove(snapGuides)
       disposeObject3D(snapGuides)
+      clearMeasureHover()
+      scene.remove(measureHoverGroup)
       scene.remove(brushCursor)
+      clearPaintRegionPreview()
       disposeObject3D(brushCursor)
       scene.remove(brushSphereCursor)
       disposeObject3D(brushSphereCursor)

@@ -58,3 +58,8 @@ docs/current-work-status.md
 
 # TypeScript incremental build info (per-package, kept out of git/CI)
 *.tsbuildinfo
+
+# ESLint results cache (`npm run lint`). Developer-local and machine-specific: it keys results
+# on a content hash per file, so sharing it across machines or branches buys nothing and risks
+# masking a real finding. CI always runs it cold.
+.eslintcache

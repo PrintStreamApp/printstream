@@ -70,7 +70,13 @@ test('with a printer targeted, the swatch offers the loaded materials plus a man
   assert.ok(screen.getByText('AMS 1'), 'loaded materials stay grouped like the picker modal')
   assert.ok(screen.getByRole('menuitem', { name: /Choose manually/ }))
 
-  fireEvent.click(screen.getByText('Bambu PLA Basic · Black'))
+  // The row's VISIBLE brand is Bambu's mark, so the text it renders is the name minus that token
+  // (`PresetNameWithBrandMark`). The accessible name still spells the brand out, which is what a
+  // screen-reader user matches on, so assert both: the glyph replaced the word rather than the
+  // word simply going missing.
+  const row = screen.getByText('PLA Basic · Black')
+  assert.equal(row.querySelectorAll('svg').length, 1, 'the Bambu brand mark stands in for the word')
+  fireEvent.click(row)
   assert.deepEqual(picked.map((option) => option.id), ['tray:1'])
 })
 

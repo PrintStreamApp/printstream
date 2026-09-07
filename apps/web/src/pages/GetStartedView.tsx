@@ -2,7 +2,6 @@ import CelebrationRoundedIcon from '@mui/icons-material/CelebrationRounded'
 import ChecklistRoundedIcon from '@mui/icons-material/ChecklistRounded'
 import ExtensionRoundedIcon from '@mui/icons-material/ExtensionRounded'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
-import KeyboardArrowRightRoundedIcon from '@mui/icons-material/KeyboardArrowRightRounded'
 import PaletteRoundedIcon from '@mui/icons-material/PaletteRounded'
 import RouterRoundedIcon from '@mui/icons-material/RouterRounded'
 import SupportAgentRoundedIcon from '@mui/icons-material/SupportAgentRounded'
@@ -10,9 +9,10 @@ import TipsAndUpdatesRoundedIcon from '@mui/icons-material/TipsAndUpdatesRounded
 import VisibilityOffRoundedIcon from '@mui/icons-material/VisibilityOffRounded'
 import type { GeneralSettings, WorkspaceStatsResponse } from '@printstream/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import type { ReactNode } from 'react'
-import { Alert, Button, Card, CardContent, Stack, Typography } from '@mui/joy'
-import { Link as RouterLink, useLocation, useNavigate } from 'react-router-dom'
+import { Alert, Button, Stack, Typography } from '@mui/joy'
+import { useLocation, useNavigate } from 'react-router-dom'
+import { QuickStartCard } from '../components/QuickStartCard'
+import { PluginSlot } from '../plugin/PluginSlot'
 import { ConnectivityGuideButton } from '../components/ConnectivityGuideButton'
 import { Printer3dRoundedIcon } from '../components/Printer3dRoundedIcon'
 import { usePromptDialog } from '../components/PromptDialogProvider'
@@ -153,6 +153,11 @@ export function GetStartedView({
               actionTo={canOpenSettings ? workspacePath('/settings/authentication') : undefined}
             />
           )}
+          {/* Setup worth doing that only exists when a plugin provides it, so it cannot be a core
+              item: linking a Bambu account to sync slicing presets is the first. Append-only, and
+              renders nothing when no plugin contributes, so removing one never leaves a hole.
+              Contributors reuse `QuickStartCard`, so a plugin's card cannot drift from these. */}
+          <PluginSlot name="quickstart.tips" context={{ workspacePath, canOpenSettings }} />
           {canManageSettings && (
             <Stack direction="row" sx={{ pt: 1 }}>
               <Button
@@ -177,77 +182,4 @@ function resolveQuickStartHref(id: WorkspaceStatsResponse['quickStartItems'][num
   if (id === 'connect-bridge') return canOpenSettings ? workspacePath('/settings/bridges') : undefined
   if (id === 'add-printer') return workspacePath('/printers')
   return workspacePath('/library')
-}
-
-function QuickStartCard({
-  icon,
-  title,
-  description,
-  actionTo
-}: {
-  icon: ReactNode
-  title: string
-  description: string
-  actionTo?: string
-}) {
-  const content = (
-    <CardContent>
-      <Stack direction="row" spacing={1.5} justifyContent="space-between" alignItems="center">
-        <Stack spacing={1.25} sx={{ flex: 1, minWidth: 0 }}>
-          <Stack direction="row" spacing={1} alignItems="center">
-            <Typography level="title-lg" sx={{ display: 'inline-flex', alignItems: 'center' }}>
-              {icon}
-            </Typography>
-            <Typography level="title-lg">{title}</Typography>
-          </Stack>
-          <Typography level="body-sm" textColor="text.tertiary">{description}</Typography>
-        </Stack>
-        {actionTo ? (
-          <Typography
-            aria-hidden="true"
-            level="title-lg"
-            textColor="text.tertiary"
-            sx={{ display: 'inline-flex', alignItems: 'center', flexShrink: 0 }}
-          >
-            <KeyboardArrowRightRoundedIcon />
-          </Typography>
-        ) : null}
-      </Stack>
-    </CardContent>
-  )
-
-  const cardSx = {
-    textAlign: 'left',
-    ...(actionTo
-      ? {
-          cursor: 'pointer',
-          textDecoration: 'none',
-          color: 'inherit',
-          transition: 'background-color 0.2s ease, border-color 0.2s ease, transform 0.2s ease',
-          '&:hover': {
-            backgroundColor: 'background.level1',
-            borderColor: 'primary.softColor'
-          },
-          '&:focus-visible': {
-            outline: '2px solid',
-            outlineColor: 'focusVisible',
-            outlineOffset: '2px'
-          }
-        }
-      : {})
-  } as const
-
-  if (actionTo) {
-    return (
-      <Card component={RouterLink} to={actionTo} variant="outlined" sx={cardSx}>
-        {content}
-      </Card>
-    )
-  }
-
-  return (
-    <Card variant="outlined" sx={cardSx}>
-      {content}
-    </Card>
-  )
 }
