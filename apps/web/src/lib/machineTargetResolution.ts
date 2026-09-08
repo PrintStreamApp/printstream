@@ -324,7 +324,9 @@ export function resolveMachineTarget(inputs: MachineTargetInputs, intent: Machin
   //    step 6 can depend on this list without a cycle.
   const printerCompatibleProcessProfiles = processProfiles.filter((profile) =>
     isSelectableOrProjectFallbackSlicingPreset(profile, processProfiles, bakedIndex?.processProfileName ?? null)
-    && isProcessProfileCompatible(profile, selectedMachineProfile, selectedPrinterModel, selectedNozzleDiameters, ''))
+    // The catalogue goes in so a project preset is judged by its PARENT's real declarations rather
+    // than by what its name happens to say; see `isProcessProfileCompatible`.
+    && isProcessProfileCompatible(profile, selectedMachineProfile, selectedPrinterModel, selectedNozzleDiameters, '', processProfiles))
 
   // 6. Plate. Matched BY LABEL at every rung: the same plate arrives as a code (`high_temp_plate`)
   //    from the project and as a label ("High Temp Plate") from a profile, so comparing values

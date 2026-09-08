@@ -651,6 +651,58 @@ export function bodyPaintHostId(
 }
 
 /**
+ * Every instance placing a given object, across every plate, in plate order.
+ *
+ * The "walk all plates and match `addedPartHostId`" search had been open-coded four times (the
+ * part-settings dialog's host lookup, the parameter table's reveal action, and twice more with the
+ * host id expanded inline as `source.kind === 'object' ? objectId : replacedObjectId`). It belongs
+ * here rather than in the 4k-line view, and as ONE definition, because the identity rule is the
+ * subtle part: an object is addressed by {@link addedPartHostId}, never by a bare `objectId`, or
+ * the lookup silently misses every unsaved import and every independent copy.
+ *
+ * Returns several instances for a linked-copy object: they are placements of ONE object, so a
+ * caller wanting "the object" takes the first and a caller wanting "where it is" needs them all.
+ */
+export function instancesForObject(
+  state: EditorState | null | undefined,
+  objectId: number
+): EditorInstance[] {
+  const found: EditorInstance[] = []
+  for (const plate of state?.plates ?? []) {
+    for (const instance of plate.instances) {
+      if (addedPartHostId(instance) === objectId) found.push(instance)
+    }
+  }
+  return found
+}
+
+/**
+ * The plate an object should be revealed on, and the instance to select there.
+ *
+ * Prefers an instance on the plate ALREADY on screen, so revealing an object placed on several
+ * plates does not move the user off the one they were looking at to show them the same object
+ * somewhere else. Null when no instance places the object.
+ */
+export function locateObjectForReveal(
+  state: EditorState | null | undefined,
+  objectId: number,
+  preferredPlateIndex: number
+): { instance: EditorInstance; plateIndex: number } | null {
+  for (const plate of state?.plates ?? []) {
+    for (const instance of plate.instances) {
+      if (addedPartHostId(instance) !== objectId) continue
+      if (plate.index === preferredPlateIndex) return { instance, plateIndex: plate.index }
+    }
+  }
+  for (const plate of state?.plates ?? []) {
+    for (const instance of plate.instances) {
+      if (addedPartHostId(instance) === objectId) return { instance, plateIndex: plate.index }
+    }
+  }
+  return null
+}
+
+/**
  * Which volume rows an object lists, which is BambuStudio's rule: a row per volume as soon as the
  * object has TWO, and none at one (`ObjectList` rebuilds the children over every volume on a
  * split/add and folds them away again on delete).
@@ -1448,33 +1500,72 @@ export function withRemovedParts(
   }
 }
 
-/** Deep-clone an instance (for duplicate), offsetting it slightly so it is visible. */
+/**
+ * Put an instance's placement at (x, y) on the plate, keeping a SHEARING instance intact.
+ *
+ * `position` is only the decomposed mirror of such an instance's placement: while
+ * {@link EditorInstance.exactMatrix} is set, that matrix is what the viewport renders (EditorView's
+ * group build copies it verbatim) and what `buildSceneEdit` emits, so writing `position` alone
+ * moves nothing and leaves the two disagreeing about where the object is. Shift the matrix's
+ * translation by the same delta and both stay true.
+ *
+ * For placing geometry that is NEW to the plate: a duplicate, a paste, a fill-bed copy, the
+ * single-object export's re-centre. A user MOVE of an existing shearing object is deliberately the
+ * opposite rule -- the gizmo (`bakeExactMatrix`) and auto-arrange DROP the matrix and bake the
+ * object down to T-S-R, because an edit to the transform is exactly when the editor takes ownership
+ * of it. Nothing here is an edit, so nothing here may deform the shape it is placing.
+ */
+export function placeInstanceAt(instance: EditorInstance, x: number, y: number): void {
+  const dx = x - instance.position.x
+  const dy = y - instance.position.y
+  instance.position.set(x, y, instance.position.z)
+  if (!instance.exactMatrix) return
+  // 12-element column-major: 3x3 linear part, then the translation. Only the translation moves,
+  // so the shear the matrix exists to preserve survives the placement.
+  instance.exactMatrix[9] = (instance.exactMatrix[9] ?? 0) + dx
+  instance.exactMatrix[10] = (instance.exactMatrix[10] ?? 0) + dy
+}
+
+/**
+ * Deep-clone an instance (for duplicate), offsetting it clear of the source.
+ *
+ * Copied WHOLE, then overridden, on the same rule as {@link cloneEditorState}: a copy is the same
+ * OBJECT placed again, so the object-level fields seeded from the file (`brimEars`, `heightRanges`,
+ * `layerHeightProfile`, and the authoring records) are the copy's too, and a re-listing that forgot
+ * one silently produced a copy that had lost them. That is not merely a display difference: the
+ * seeds are the baseline every `collect*` emitter reads through {@link effectiveBrimEars} and
+ * friends, and those take the FIRST instance they find for an object -- so a stripped copy could
+ * make the next save write an empty ear/band/profile set over what the file already carried.
+ *
+ * That includes `exactMatrix`, which used to be dropped so the copy could be placed by writing
+ * `position` (three call sites relied on it). Dropping it is what MAKES the copy different from
+ * what was copied: the matrix is kept only when T-S-R provably cannot reproduce the source
+ * placement, so a copy without it renders and saves as the approximation, and Ctrl+D on a rotated,
+ * non-uniformly scaled foreign object returned a subtly reshaped object with nothing logged.
+ * Placement goes through {@link placeInstanceAt} instead, which moves both.
+ *
+ * The offset is a FALLBACK, not the placement: every caller (duplicate, paste, fill bed) picks a
+ * free spot and places the copy itself. It only decides where a copy lands for a caller that does
+ * not, and stops that case from stacking the copy invisibly on its source.
+ */
 export function duplicateInstance(instance: EditorInstance): EditorInstance {
-  return {
+  const copy: EditorInstance = {
+    ...instance,
     key: nextInstanceKey(),
-    source:
-      instance.source.kind === 'import'
-        ? {
-            kind: 'import',
-            importId: instance.source.importId,
-            meshUrl: instance.source.meshUrl,
-            ...(instance.source.replacedObjectId != null ? { replacedObjectId: instance.source.replacedObjectId } : {})
-          }
-        : { kind: 'object' },
-    objectId: instance.objectId,
-    instanceId: instance.instanceId,
-    name: instance.name,
-    nameOverridden: instance.nameOverridden,
-    position: instance.position.clone().add(new THREE.Vector3(10, 10, 0)),
+    source: instance.source.kind === 'import' ? { ...instance.source } : { kind: 'object' },
+    position: instance.position.clone(),
     rotation: instance.rotation.clone(),
     scale: instance.scale.clone(),
-    filamentId: instance.filamentId,
-    printable: instance.printable,
-    // A copy of an object whose body was deleted is still that object: its volumes are its geometry.
-    ...(instance.bodyRemoved ? { bodyRemoved: true } : {}),
-    color: instance.color,
+    // Copied, never shared: `placeInstanceAt` writes into this array in place, so a shared one
+    // would move the source every time the copy was placed.
+    ...(instance.exactMatrix ? { exactMatrix: [...instance.exactMatrix] } : {}),
+    ...(instance.brimEars ? { brimEars: instance.brimEars.map((ear) => ({ ...ear })) } : {}),
+    ...(instance.heightRanges ? { heightRanges: instance.heightRanges.map(cloneHeightRange) } : {}),
+    ...(instance.layerHeightProfile ? { layerHeightProfile: [...instance.layerHeightProfile] } : {}),
     parts: instance.parts.map((part) => ({ ...part, transform: [...part.transform] }))
   }
+  placeInstanceAt(copy, copy.position.x + 10, copy.position.y + 10)
+  return copy
 }
 
 /**
@@ -3005,16 +3096,13 @@ export function buildSingleObjectExportState(
     // near-identity transform. Assigning there moved the object by the whole origin-to-centroid
     // offset, which is what exported models half off the bed. Same rule as placing an added
     // model (`addInstanceToActivePlate` takes a mesh centroid for exactly this reason).
-    const dx = centerX - footprintCenter.x
-    const dy = centerY - footprintCenter.y
-    instance.position.set(instance.position.x + dx, instance.position.y + dy, instance.position.z)
-    // A shearing instance saves its exact matrix VERBATIM (position is just the decomposed
-    // mirror), so shift the matrix translation in place: dropping the matrix like a gizmo edit
-    // would deform the shear.
-    if (instance.exactMatrix) {
-      instance.exactMatrix[9] = (instance.exactMatrix[9] ?? 0) + dx
-      instance.exactMatrix[10] = (instance.exactMatrix[10] ?? 0) + dy
-    }
+    // A shearing instance is moved by BOTH its position and its exact matrix, or the two disagree
+    // about where the object is; {@link placeInstanceAt} is the one place that rule lives.
+    placeInstanceAt(
+      instance,
+      instance.position.x + (centerX - footprintCenter.x),
+      instance.position.y + (centerY - footprintCenter.y)
+    )
   }
   return {
     ...cloned,
@@ -3213,71 +3301,61 @@ export function makeInstanceIndependent(state: EditorState, instance: EditorInst
  * Deep-clone the editable state for the undo/redo history. Transform edits mutate
  * instance position/rotation/scale in place, so snapshots must clone those Three.js
  * objects (and the plate/instance/part structure) to stay independent of later edits.
+ *
+ * **Plates, instances and parts are COPIED WHOLE and then deep-copied where they are mutable**,
+ * never re-listed field by field. A snapshot is what undo restores, so a field a re-list forgets is
+ * user state the first Ctrl+Z destroys -- silently, with the model still on screen looking
+ * unchanged, and with nothing to fail a typecheck, because every field such a list can drop is
+ * optional. The list dropped two before this rule replaced it: `EditorInstancePart.cutConnector`
+ * (so one undo exploded a saved cut half into an object row, a body row of the same name and a row
+ * per peg, reported on `cat-hs` plate 2) and `EditorPlate.layerHeightLimits` (so one undo dropped
+ * the machine's layer band back to a generic default that permits heights the engine responds to by
+ * discarding the whole profile).
+ *
+ * **Copying whole is not free of judgement, and its failure is not loud.** A spread carries a new
+ * MUTABLE field by REFERENCE, so a handler that writes into it after `recordHistory()` reaches
+ * through into every retained frame, and the undo then restores everything except that field. That
+ * is the same silent class as the losses above: nothing throws, nothing renders differently at the
+ * moment of the write, and the user sees an undo that half-worked. So a new field that is written
+ * IN PLACE still has to be named below. What the rule buys is that forgetting one leaves the value
+ * present and wrong for one edit, instead of gone from every undo forever.
+ *
+ * The top-level {@link EditorState} maps are the deliberate exception, and stay enumerated: each is
+ * a nested structure (a map of maps, a map of arrays of objects) needing its own copy rule, so a
+ * spread there would carry every new one by reference and be pure false safety.
  */
 export function cloneEditorState(state: EditorState): EditorState {
   return {
     plates: state.plates.map((plate) => ({
-      index: plate.index,
-      // Identity fields must survive the snapshot: undo restores the cloned plate list, and the
-      // strip's thumbnail caches key on plateId: dropping it would resurrect the index-keyed drift.
-      plateId: plate.plateId,
-      sourcePlateIndex: plate.sourcePlateIndex,
-      name: plate.name,
-      plateType: plate.plateType,
-      bed: { ...plate.bed },
+      ...plate,
+      // The bed's exclude zones are polygons of points, so a one-level spread would share them:
+      // the retarget effect REPLACES a plate's bed wholesale today, but a snapshot cannot rest on
+      // a promise about how a future edit will be written.
+      bed: {
+        ...plate.bed,
+        excludeAreas: plate.bed.excludeAreas.map((area) => ({ ...area, polygon: area.polygon.map((point) => ({ ...point })) }))
+      },
+      ...(plate.layerHeightLimits ? { layerHeightLimits: { ...plate.layerHeightLimits } } : {}),
       instances: plate.instances.map((instance) => ({
-        key: instance.key,
-        source: instance.source.kind === 'import'
-          ? {
-              kind: 'import',
-              importId: instance.source.importId,
-              meshUrl: instance.source.meshUrl,
-              ...(instance.source.replacedObjectId != null ? { replacedObjectId: instance.source.replacedObjectId } : {})
-            }
-          : { kind: 'object' },
-        objectId: instance.objectId,
-        instanceId: instance.instanceId,
-        name: instance.name,
-        // Rename flag must survive the snapshot, or undo/redo (and the single-object
-        // export clone) silently drops a rename from the next save.
-        ...(instance.nameOverridden ? { nameOverridden: true } : {}),
+        ...instance,
+        // An import's source object carries the identity per-object settings and added volumes hang
+        // off (`replacedObjectId`), and `makeInstanceIndependent` REPLACES it rather than mutating
+        // it -- but copy it anyway, so no future in-place write can reach through a snapshot.
+        source: instance.source.kind === 'import' ? { ...instance.source } : { kind: 'object' },
         position: instance.position.clone(),
         rotation: instance.rotation.clone(),
         scale: instance.scale.clone(),
         ...(instance.exactMatrix ? { exactMatrix: [...instance.exactMatrix] } : {}),
-        filamentId: instance.filamentId,
-        printable: instance.printable,
         ...(instance.brimEars ? { brimEars: instance.brimEars.map((ear) => ({ ...ear })) } : {}),
-        ...(instance.cutId != null ? { cutId: instance.cutId } : {}),
         ...(instance.heightRanges ? { heightRanges: instance.heightRanges.map(cloneHeightRange) } : {}),
         ...(instance.layerHeightProfile ? { layerHeightProfile: [...instance.layerHeightProfile] } : {}),
-        // A deleted BODY must survive the snapshot, exactly like the rename flag above: this list is
-        // rebuilt field by field, so a new instance field that is not named here is silently dropped
-        // by every undo/redo -- which would resurrect the geometry the user deleted and then save it.
-        ...(instance.bodyRemoved ? { bodyRemoved: true } : {}),
-        // Session-scoped authoring records, on the same field-by-field rule as the flags above.
-        ...(instance.textInfo ? { textInfo: instance.textInfo } : {}),
-        ...(instance.svgPart ? { svgPart: instance.svgPart } : {}),
-        parts: instance.parts.map((part) => ({
-          entryPath: part.entryPath,
-          partIndex: part.partIndex,
-          componentObjectId: part.componentObjectId,
-          transform: [...part.transform],
-          filamentId: part.filamentId,
-          name: part.name,
-          color: part.color,
-          subtype: part.subtype,
-          // What a TOOL authored this part from, on exactly the rule the comment above states. These
-          // are read-only records describing the part's origin, so the snapshot shares them rather
-          // than copying: nothing mutates one in place, an edit REPLACES the part. Dropped here, a
-          // single undo would take a saved text or SVG part back to anonymous solids while it sat on
-          // screen looking unchanged, and the next save would write no record at all.
-          ...(part.textInfo ? { textInfo: part.textInfo } : {}),
-          ...(part.svgPart ? { svgPart: part.svgPart } : {})
-        })),
-        color: instance.color
+        // `transform` is written in place by the part gizmo; everything else on a part is either a
+        // scalar or a read-only authoring record (`textInfo` / `svgPart`), which an edit REPLACES
+        // rather than mutates, so the snapshot shares those. Same copy as `duplicateInstance`.
+        parts: instance.parts.map((part) => ({ ...part, transform: [...part.transform] }))
       })),
-      primeTower: plate.primeTower ? { ...plate.primeTower } : null,
+      // The tower drag writes x/y on this object; `sizing` is its own record underneath.
+      primeTower: plate.primeTower ? { ...plate.primeTower, sizing: { ...plate.primeTower.sizing } } : null,
       ...(plate.filamentChanges ? { filamentChanges: plate.filamentChanges.map((change) => ({ ...change })) } : {}),
       ...(plate.filamentChangesOverride ? { filamentChangesOverride: plate.filamentChangesOverride.map((change) => ({ ...change })) } : {}),
       ...(plate.pauses ? { pauses: plate.pauses.map((pause) => ({ ...pause })) } : {}),
@@ -3372,25 +3450,20 @@ export function cloneEditorState(state: EditorState): EditorState {
       ? { flushVolumes: { matrix: state.flushVolumes.matrix.map((block) => block.map((row) => [...row])), multiplier: [...state.flushVolumes.multiplier] } }
       : {}),
     ...(state.objectClones ? { objectClones: { ...state.objectClones } } : {}),
+    // A session-added volume is a PART (this plugin's part-is-a-part rule), so it is copied whole
+    // like one -- not re-listed. It is also the type that grows fields most often (`textInfo`,
+    // `svgPart`, `bambuShape` all arrived after it shipped), and `copySessionEditsOntoClone`
+    // already copies these whole, so a re-list here left the two copy paths for one type disagreeing
+    // about what an added volume is. Its `soup` is immutable after staging, so snapshots share it.
     ...(state.addedParts
       ? {
         addedParts: Object.fromEntries(
           Object.entries(state.addedParts).map(([key, parts]) => [key, parts.map((part) => ({
-            key: part.key,
-            importId: part.importId,
-            subtype: part.subtype,
-            name: part.name,
-            ...(part.filamentId != null ? { filamentId: part.filamentId } : {}),
+            ...part,
             position: part.position.clone(),
             rotation: part.rotation.clone(),
             scale: part.scale.clone(),
-            // Geometry is immutable after staging; snapshots can share it.
-            soup: part.soup,
-            ...(part.settings ? { settings: { ...part.settings } } : {}),
-            // Authoring records, shared for the same reason as the instance-part ones above.
-            ...(part.textInfo ? { textInfo: part.textInfo } : {}),
-            ...(part.svgPart ? { svgPart: part.svgPart } : {}),
-            ...(part.bambuShape ? { bambuShape: part.bambuShape } : {})
+            ...(part.settings ? { settings: { ...part.settings } } : {})
           }))])
         )
       }
@@ -3399,8 +3472,17 @@ export function cloneEditorState(state: EditorState): EditorState {
     // leaves records pointing at bytes the state no longer holds, which saves a file whose parts
     // reopen as anonymous solids -- indistinguishable from carrying no record at all.
     ...(state.svgSources ? { svgSources: { ...state.svgSources } } : {}),
-    // Cut records are plain data; a shallow copy per group is enough to keep snapshots independent.
-    ...(state.cutGroups ? { cutGroups: state.cutGroups.map((group) => ({ ...group })) } : {}),
+    // A cut group holds two collections of its own (the pieces, and a record per connector), so the
+    // copy has to reach them: a one-level spread shares both with live state.
+    ...(state.cutGroups
+      ? {
+        cutGroups: state.cutGroups.map((group) => ({
+          ...group,
+          importIds: [...group.importIds],
+          connectors: group.connectors.map((connector) => ({ ...connector }))
+        }))
+      }
+      : {}),
     // Undo has to restore deleted parts, so the removal set is part of the snapshot like every
     // other session-owned map. Copied per host, not shared, or an undo frame would keep mutating.
     ...(state.removedParts

@@ -113,8 +113,12 @@ function useToolbarDropdownClose(
  * "View:" select, and opens an anchored panel. `variant="list"` is a plain
  * options menu; `variant="panel"` is a wider padded surface (the filters form),
  * which is allowed to overflow so nested `Select` listboxes are not clipped.
+ *
+ * Exported beyond this module for the 3MF editor's parameter-table column picker, which needs the
+ * same control: a second implementation would drift on the z-index rule below, which is the
+ * non-obvious part (the panel has to surface above a modal dialog).
  */
-function ToolbarMenuButton({
+export function ToolbarMenuButton({
   icon,
   label,
   ariaLabel,

@@ -29,8 +29,10 @@ const SLICE_STAGE_PATTERN = /"message"\s*:\s*"([^"]+)"[^}]*?"total_percent"\s*:\
  * separate a deterministic engine crash (do not retry, name the stage) from a transient load/teardown
  * flake (still worth one retry under emulation). Kept as a percent (not the stage string) so a locale
  * or wording change upstream doesn't silently reclassify every crash as transient.
+ *
+ * Exported so `slice-error.ts` grades on this exact number rather than a hand-copied literal.
  */
-const SLICING_STARTED_PERCENT = 6
+export const SLICING_STARTED_PERCENT = 6
 
 /**
  * The last-reported stage name and the highest `total_percent` seen in a run's CLI output. `lastStage`
@@ -46,9 +48,4 @@ export function summarizeSliceProgress(text: string): { lastStage: string | null
     maxPercent = Math.max(maxPercent, Number(match[2]))
   }
   return { lastStage, maxPercent }
-}
-
-/** Whether the run got past project load into the actual per-plate slice (see {@link SLICING_STARTED_PERCENT}). */
-export function outputReachedSlicingStage(text: string): boolean {
-  return summarizeSliceProgress(text).maxPercent >= SLICING_STARTED_PERCENT
 }

@@ -4,6 +4,10 @@
     "declaration": true,
     "outDir": "./dist",
     "rootDir": "./src",
+    // Incremental: an unchanged-source rebuild replays diagnostics instead of re-checking, and
+    // emits nothing rather than rewriting dist/. Buildinfo sits outside the watched dist/.
+    "incremental": true,
+    "tsBuildInfoFile": "./.tsbuildinfo",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "verbatimModuleSyntax": false,

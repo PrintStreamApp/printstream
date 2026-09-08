@@ -115,6 +115,46 @@ test('a reorder and a removal in one edit both land on the volumes they named', 
   assert.deepEqual(partNames(applied.modelSettingsXml, 5), ['A2', 'A0'])
 })
 
+test('a removal beside modifier siblings leaves every surviving subtype alone', () => {
+  // The shape that corrupted a real project (CHM - H2.3mf v26, 2026-08-31): an object whose three
+  // "modifier" volumes came back as `normal_part` after a save that also lost one and reordered the
+  // rest, so the modifiers printed as solid geometry for the next week. A demoted helper volume is
+  // silent: BambuStudio's `type_from_string` defaults to MODEL_PART, nothing errors, and the file
+  // keeps no record of what the volume used to be, so it cannot be repaired afterwards.
+  const settings = [
+    '<config>',
+    ' <object id="5">',
+    '  <part id="20" subtype="normal_part"><metadata key="name" value="Mount"/></part>',
+    '  <part id="21" subtype="modifier_part"><metadata key="name" value="Mount modifier 1"/></part>',
+    '  <part id="22" subtype="modifier_part"><metadata key="name" value="Mount modifier 2"/></part>',
+    '  <part id="23" subtype="modifier_part"><metadata key="name" value="Mount modifier 3"/></part>',
+    ' </object>',
+    '</config>'
+  ].join('\n')
+  const model = [
+    '<model unit="millimeter">',
+    ' <resources>',
+    '  <object id="5" type="model"><components>',
+    '   <component objectid="20" transform="1 0 0 0 1 0 0 0 1 0 0 0"/>',
+    '   <component objectid="21" transform="1 0 0 0 1 0 0 0 1 1 0 0"/>',
+    '   <component objectid="22" transform="1 0 0 0 1 0 0 0 1 2 0 0"/>',
+    '   <component objectid="23" transform="1 0 0 0 1 0 0 0 1 3 0 0"/>',
+    '  </components></object>',
+    ' </resources>',
+    ' <build><item objectid="5"/></build>',
+    '</model>'
+  ].join('\n')
+
+  const applied = applyPartLayout(model, settings, [{ objectId: 5, partIndex: 2 }], [{ objectId: 5, order: [1, 0, 3] }])
+
+  assert.deepEqual(partNames(applied.modelSettingsXml, 5), ['Mount modifier 1', 'Mount', 'Mount modifier 3'])
+  // Every survivor keeps the type it had. A modifier that comes back as a normal part is printed.
+  assert.match(applied.modelSettingsXml, /<part id="21" subtype="modifier_part">/)
+  assert.match(applied.modelSettingsXml, /<part id="23" subtype="modifier_part">/)
+  assert.match(applied.modelSettingsXml, /<part id="20" subtype="normal_part">/)
+  assert.equal((applied.modelSettingsXml.match(/subtype="modifier_part"/g) ?? []).length, 2)
+})
+
 test('an unchanged layout returns the documents byte for byte', () => {
   // An ordinary save must churn nothing: the ordinal-sidecar remap keys off the object order, and
   // a rewritten-but-identical document is also a diff nobody asked for.

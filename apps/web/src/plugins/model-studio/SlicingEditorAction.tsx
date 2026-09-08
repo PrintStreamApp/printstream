@@ -11,13 +11,13 @@
  * (the host's `<PluginSlot>` already renders nothing in that case). Mounted by
  * `SliceFileModal` in `LibraryView.tsx`.
  */
-import { Suspense, lazy, useCallback, useState } from 'react'
+import { lazy, useCallback, useState } from 'react'
 import { Button } from '@mui/joy'
 import ViewInArRoundedIcon from '@mui/icons-material/ViewInArRounded'
 import type { SceneEdit } from '@printstream/shared'
 import type { EditorContentBasePin } from './lib/contentBasePin'
 import type { SliceSettingsController } from '../../components/library/SliceSettingsPanel'
-import { LazyDialogFallback } from '../../components/LazyDialogFallback'
+import { LazyDialogBoundary } from '../../components/LazyDialogBoundary'
 import { PluginSlot } from '../../plugin/PluginSlot'
 import { SlicingPresetsDialog } from '../../components/library/SlicingPresetsDialog'
 
@@ -84,7 +84,7 @@ export function SlicingEditorAction(props: Record<string, unknown>) {
         </Button>
       )}
       {open && (
-        <Suspense fallback={<LazyDialogFallback variant="maximized" label="Opening the editor…" />}>
+        <LazyDialogBoundary variant="maximized" label="the editor" onClose={closeEditor}>
           <EditorView
             // Re-mount on a different file/version so all per-file state and one-shot guards
             // (seeded scene, re-hydration set, frozen preferred plate) reset cleanly.
@@ -109,7 +109,7 @@ export function SlicingEditorAction(props: Record<string, unknown>) {
             slicing={slicing}
             onSlice={onSlice}
           />
-        </Suspense>
+        </LazyDialogBoundary>
       )}
     </>
   )

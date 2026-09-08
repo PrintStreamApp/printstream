@@ -76,6 +76,11 @@ export const slicingPresetSummarySchema = z.object({
    * from the preset it was derived from by identity alone. BambuStudio resolves an AMS tray to a
    * preset with `AMSMaterialsSetting::get_filament_by_id`, which skips any preset that is not its
    * own base (`filaments.get_preset_base(preset) != &preset`) before comparing `filament_id`.
+   *
+   * PROCESS presets need it for a second reason: a `project:` preset (the 3MF's own, minted in the
+   * browser) carries no declared compatibility at all, so its parent is the only record of which
+   * machine it was authored for, and it is the record the ENGINE judges the project by. See
+   * `derivedFromADifferentPrinterModel`.
    */
   derivedFromPresetName: z.string().trim().min(1).optional(),
   /** BambuStudio filament profile ids from `filament_id`; used to match printer AMS/tray ids exactly. */

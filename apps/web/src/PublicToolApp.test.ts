@@ -9,20 +9,19 @@
  */
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { readFile } from 'node:fs/promises'
-import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { readSourceFile } from './test-utils/sourceTree'
 
-const SRC_ROOT = path.dirname(fileURLToPath(import.meta.url))
+/** The shell all three tests read. `readSourceFile` caches it, so it is read once per process. */
+const SHELL = 'PublicToolApp.tsx'
 
 test('the public shell mounts a toast host', async () => {
-  const source = await readFile(path.join(SRC_ROOT, 'PublicToolApp.tsx'), 'utf8')
+  const { source } = await readSourceFile(SHELL)
   assert.match(source, /<Toaster\s*\/>/, 'public tools have no other way to report a failure')
   assert.match(source, /from '\.\/components\/Toaster'/)
 })
 
 test('the public shell positions its toasts through the shared stack', async () => {
-  const source = await readFile(path.join(SRC_ROOT, 'PublicToolApp.tsx'), 'utf8')
+  const { source } = await readSourceFile(SHELL)
   // A bare `Toaster` renders as an ordinary flex child of the full-height editor column, so every
   // toast steals height from the 3D viewport instead of floating over it, and none of the stack's
   // placement (portalled, fixed, above the modal layer, top-of-screen on a phone) applies.
@@ -30,7 +29,7 @@ test('the public shell positions its toasts through the shared stack', async () 
 })
 
 test('the public shell does not mount the workspace-only toast stacks', async () => {
-  const source = await readFile(path.join(SRC_ROOT, 'PublicToolApp.tsx'), 'utf8')
+  const { source } = await readSourceFile(SHELL)
   // These need a workspace, permissions, and the dispatch/slicing query providers. Mounting one
   // here would fire workspace-scoped queries on a page whose whole point is that it needs none.
   for (const workspaceOnly of ['DispatchToasts', 'SlicingToasts', 'EngineInstallToast', 'DeleteOperationToasts']) {

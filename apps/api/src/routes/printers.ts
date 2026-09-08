@@ -1470,14 +1470,14 @@ printersRouter.get('/:id/storage/plates', requireRequestPermission(PRINTER_STORA
   const filePath = normalizePrinterPath(request.query.path)
   const signal = requestAbortSignal(request, response)
   if (path.extname(filePath).toLowerCase() !== '.3mf') {
-    response.json({ plates: [], projectFilaments: [], compatiblePrinterModels: [], supportFilamentIds: [], printerProfileName: null, processProfileName: null } satisfies ThreeMfIndex)
+    response.json({ plates: [], projectFilaments: [], compatiblePrinterModels: [], supportFilamentIds: [], printerProfileName: null, processProfileName: null, processProfileInherits: null } satisfies ThreeMfIndex)
     return
   }
 
   try {
     const index = await readPrinterStorageThreeMfIndex(printer, filePath, signal)
     if (!index) {
-      response.json({ plates: [], projectFilaments: [], compatiblePrinterModels: [], supportFilamentIds: [], printerProfileName: null, processProfileName: null } satisfies ThreeMfIndex)
+      response.json({ plates: [], projectFilaments: [], compatiblePrinterModels: [], supportFilamentIds: [], printerProfileName: null, processProfileName: null, processProfileInherits: null } satisfies ThreeMfIndex)
       return
     }
     response.json({
@@ -1495,6 +1495,7 @@ printersRouter.get('/:id/storage/plates', requireRequestPermission(PRINTER_STORA
       supportFilamentIds: index.supportFilamentIds,
       printerProfileName: index.printerProfileName,
       processProfileName: index.processProfileName,
+      processProfileInherits: index.processProfileInherits,
       // The print dialog warns when this disagrees with the machine, so it has to survive the
       // narrowing above. Plate entries are reshaped here (`hasThumbnail` replaces the file name),
       // which is why this response is projected field by field rather than passed through: when

@@ -9,9 +9,12 @@
  * the click and only its contents arrive late.
  *
  * The shell deliberately mirrors the real dialog's footprint (`variant`), so the swap when the
- * chunk lands is a fill-in rather than a resize. Pair every `lazy()` dialog with this: the label
- * is the only per-call decision, and it should name what is opening ("Opening the editor…"), not
- * the mechanism.
+ * chunk lands is a fill-in rather than a resize.
+ *
+ * **Reached through `LazyDialogBoundary`, not mounted directly.** This covers only the chunk that
+ * has not arrived YET; a chunk that never arrives used to unmount the whole app, and pairing the
+ * two states in one wrapper is what stops a new lazy dialog taking one without the other. Its
+ * `label` is derived there, from the noun the boundary is given.
  *
  * Counterpart for the app SHELL (not a dialog) is `AppLoadingSplash` in `Root.tsx`; inline
  * content uses its own fallback (see `Markdown.tsx`, which shows the raw text meanwhile).

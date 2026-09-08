@@ -6,6 +6,7 @@ import LightbulbRoundedIcon from '@mui/icons-material/LightbulbRounded'
 import PauseRoundedIcon from '@mui/icons-material/PauseRounded'
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { BackAwareModal as Modal } from './BackAwareModal'
+import { ImageLightbox } from './ImageLightbox'
 import { useCameraStream } from '../hooks/useCameraStream'
 import { useElementVisibility } from '../hooks/useElementVisibility'
 import { usePrinterFtpActivityActive } from '../hooks/usePrinterFtpActivity'
@@ -239,25 +240,18 @@ function CoverTile({ cover, tileSize }: { cover: CoverMedia; tileSize: { xs: num
         </Box>
       </Tooltip>
 
+      {/* The shared viewer, not a hand-rolled one: this was a retyped `ImageLightbox` down to the
+          `sx`, and had already drifted from it (no `pr` to clear the X, so a long title ran under
+          the close button, and no `maxHeight`, so a tall cover overflowed the dialog). Sharing it
+          also means the decision to let a click outside dismiss an image viewer -- the exception to
+          the app-wide rule in `BackAwareModal` -- is made in exactly one place. */}
       {dialogOpen && canOpen && cover.src && (
-        <Modal open onClose={() => setDialogOpen(false)}>
-          <ModalDialog sx={{ p: 1.5, width: { xs: '95vw', sm: '90vw', md: '70vw' }, maxWidth: 720 }}>
-            <ModalClose />
-            <Typography level="title-md" sx={{ mb: 1 }} noWrap>{cover.title}</Typography>
-            <Box
-              component="img"
-              src={cover.src}
-              alt={`${cover.title} plate cover`}
-              sx={{
-                width: '100%',
-                height: 'auto',
-                display: 'block',
-                borderRadius: 'sm',
-                backgroundColor: 'var(--joy-palette-neutral-800)'
-              }}
-            />
-          </ModalDialog>
-        </Modal>
+        <ImageLightbox
+          src={cover.src}
+          alt={`${cover.title} plate cover`}
+          title={cover.title}
+          onClose={() => setDialogOpen(false)}
+        />
       )}
     </>
   )

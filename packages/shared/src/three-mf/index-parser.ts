@@ -91,8 +91,17 @@ export { decodeXmlAttributeValue }
  *      re-editable, alongside the `textInfo` of v34. A cached scene from v35 has none, so artwork
  *      saved by this version would reopen as anonymous solids until something else invalidated the
  *      entry, the same failure v34 describes for text.
+ * v37: each project filament carries `costPerKg` (the project's `filament_cost`, money per kg),
+ *      which the preview's all-plates statistics totals into a material cost. A v36 cache has the
+ *      field on no slot, so every plate would report a cost of nothing rather than the file's own
+ *      prices, and nothing else about the entry would invalidate it.
+ * v38: `processProfileInherits`, the project process preset's own parent (`inherits_group[0]`). It
+ *      is the name the ENGINE judges the project's process compatibility by, so without it a slice
+ *      dialog sees a project preset that declares nothing, calls it compatible with any printer,
+ *      and offers a P1P-lineage process on an X2D. A v37 cache has it on no file, and nothing else
+ *      about the entry would invalidate it.
  */
-export const THREE_MF_INDEX_PARSER_VERSION = 36
+export const THREE_MF_INDEX_PARSER_VERSION = 38
 
 /** Per-plate metadata recovered from `model_settings.config` (labels + object/filament backfill). */
 export interface ModelSettingsPlateMetadata {
@@ -502,10 +511,14 @@ export function parseProjectFilaments(json: string): BridgeLibraryThreeMfProject
   // Any comparison between the two then fails to match a preset against itself, and only for
   // third-party vendors, since every Bambu preset name already begins with its brand.
   const vendors = stringArray(record.filament_vendor)
+  // The slot's price per kilogram, BambuStudio's `filament_cost` ("Filament price. For statistics
+  // only", sidetext "money/kg"). It carries NO currency, in the 3MF or in Studio, so a consumer
+  // renders a bare number or supplies its own symbol; do not invent a currency field here.
+  const costs = nullableNumberArray(record.filament_cost)
   // Every parallel array counts toward the slot total, including the support/soluble
   // flags: omitting them truncated the filament list whenever they were the longest,
   // and those flags now drive preset filtering (`resolveDisplayFilamentType`).
-  const length = Math.max(colors.length, types.length, names.length, chamberTemperatures.length, supportFlags.length, solubleFlags.length, vendors.length)
+  const length = Math.max(colors.length, types.length, names.length, chamberTemperatures.length, supportFlags.length, solubleFlags.length, vendors.length, costs.length)
   const out: BridgeLibraryThreeMfProjectFilament[] = []
   for (let i = 0; i < length; i++) {
     out.push({
@@ -529,7 +542,8 @@ export function parseProjectFilaments(json: string): BridgeLibraryThreeMfProject
       nozzleId: null,
       chamberTemperature: chamberTemperatures[i] ?? null,
       isSupport: configFlag(supportFlags[i]),
-      isSoluble: configFlag(solubleFlags[i])
+      isSoluble: configFlag(solubleFlags[i]),
+      costPerKg: costs[i] ?? null
     })
   }
   return out
@@ -647,20 +661,39 @@ export function extractProjectNozzleSizes(projectSettingsJson: string | null): s
   return [...sizes]
 }
 
-function extractBakedProfileNames(projectSettingsJson: string | null): { printerProfileName: string | null; processProfileName: string | null } {
-  if (!projectSettingsJson) return { printerProfileName: null, processProfileName: null }
+/**
+ * The presets a project NAMES, plus the system preset its process was derived from.
+ *
+ * `processProfileInherits` is `inherits_group[0]`, Bambu's slot for the process preset's parent, and
+ * it is load-bearing rather than decorative: the ENGINE resolves the project's process compatibility
+ * from that slot, never from `print_settings_id` and never from the project's own
+ * `print_compatible_printers`. With no new process loaded it reads `process_full/<parent>.json` and
+ * OVERWRITES the project's declared compatibility with that preset's `compatible_printers`
+ * (`BambuStudio.cpp:2760-2776`, and again at `:2890-2906`), then refuses the slice when the target
+ * machine is absent from it (`:2937-3004`, exit 239). So a project retargeted to another printer
+ * while keeping its own process carries a parent for the OLD machine, and only this field makes that
+ * visible before the engine refuses it. Empty means "the process IS a system preset", exactly as the
+ * engine reads an empty slot, so it is reported as absent rather than as the leaf's own name.
+ */
+function extractBakedProfileNames(projectSettingsJson: string | null): { printerProfileName: string | null; processProfileName: string | null; processProfileInherits: string | null } {
+  const none = { printerProfileName: null, processProfileName: null, processProfileInherits: null }
+  if (!projectSettingsJson) return none
 
   let parsed: unknown
   try {
     parsed = JSON.parse(projectSettingsJson)
   } catch {
-    return { printerProfileName: null, processProfileName: null }
+    return none
   }
-  if (!parsed || typeof parsed !== 'object') return { printerProfileName: null, processProfileName: null }
+  if (!parsed || typeof parsed !== 'object') return none
   const record = parsed as Record<string, unknown>
+  const inheritsGroup = Array.isArray(record.inherits_group) ? record.inherits_group : []
   return {
     printerProfileName: firstStringValue(record.printer_settings_id),
-    processProfileName: firstStringValue(record.print_settings_id) ?? firstStringValue(record.default_print_profile)
+    processProfileName: firstStringValue(record.print_settings_id) ?? firstStringValue(record.default_print_profile),
+    // Slot 0 in every case, which no filament-count arithmetic can get wrong (the MACHINE slot is
+    // the one that moves with the filament count: see `machinePresetSlotIndexFor`).
+    processProfileInherits: firstStringValue(inheritsGroup[0])
   }
 }
 

@@ -33,6 +33,7 @@ export function toThreeMfIndexDto(index: BridgeLibraryThreeMfIndex): ThreeMfInde
     supportFilamentIds: index.supportFilamentIds,
     printerProfileName: index.printerProfileName,
     processProfileName: index.processProfileName,
+    processProfileInherits: index.processProfileInherits,
     // The repair flags belong to the VERSION whose bytes were parsed, this DTO is how an editor
     // opened on an archived version learns that version is defective (the library DTO's flags
     // describe the file's head, which may already be repaired).

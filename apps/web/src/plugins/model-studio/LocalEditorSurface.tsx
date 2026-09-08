@@ -18,11 +18,11 @@
  * manager is the BROWSER-STORAGE one: the workspace manager's every request needs a workspace, so
  * handing the editor that one is what made "Manage" report a permission error here.
  */
-import { Suspense, lazy, useCallback, useMemo, useRef } from 'react'
+import { lazy, useCallback, useMemo, useRef } from 'react'
 import { Box } from '@mui/joy'
 import EditorView from './EditorView'
 import { useMobileViewport } from '../../components/useMobileViewport'
-import { LazyDialogFallback } from '../../components/LazyDialogFallback'
+import { LazyDialogBoundary } from '../../components/LazyDialogBoundary'
 import { createLocalProjectSource } from './lib/editorProjectSource'
 import { createLocalSaveTarget } from './lib/localSaveTarget'
 import type { LocalImportStore } from './lib/localImportStore'
@@ -82,11 +82,21 @@ export function LocalEditorSurface({ project, projectFile, importStore, archiveR
   )
 
   const presetManager = useCallback(
-    (managerProps: { open: boolean; onClose: () => void }) => (
-      <Suspense fallback={<LazyDialogFallback label="Opening presets…" />}>
-        <LocalSlicingPresetsDialog {...managerProps} />
-      </Suspense>
-    ),
+    (managerProps: { open: boolean; onClose: () => void }) => {
+      // Only mount (and thus fetch the chunk) once the manager has been asked for. `EditorView`
+      // calls this render prop unconditionally, so without the gate `React.lazy` fetched the dialog
+      // on every editor open and painted its "Opening presets…" shell over a project nobody had
+      // asked to leave. Worse on failure: `LazyDialogFailureNotice` renders an OPEN modal whose only
+      // exit is `onClose`, and here that just re-clears a flag already false, so the boundary never
+      // unmounts and the notice cannot be dismissed at all. Every other boundary in this file, and
+      // `PreviewOverlay`, gate the same way.
+      if (!managerProps.open) return null
+      return (
+        <LazyDialogBoundary label="presets" onClose={managerProps.onClose}>
+          <LocalSlicingPresetsDialog {...managerProps} />
+        </LazyDialogBoundary>
+      )
+    },
     []
   )
 
@@ -116,7 +126,7 @@ export function LocalEditorSurface({ project, projectFile, importStore, archiveR
         onClose={onClose}
       />
       {processSettingsDialogOpen && controller.selectedProcessProfile && (
-        <Suspense fallback={<LazyDialogFallback label="Opening settings…" />}>
+        <LazyDialogBoundary label="settings" onClose={() => controller.setProcessSettingsDialogOpen(false)}>
           <ProcessSettingsDialog
             open
             onClose={() => controller.setProcessSettingsDialogOpen(false)}
@@ -138,7 +148,7 @@ export function LocalEditorSurface({ project, projectFile, importStore, archiveR
             }}
             onApply={(overrides) => controller.setProcessSettingOverrides(overrides)}
           />
-        </Suspense>
+        </LazyDialogBoundary>
       )}
       {filamentSettingsFilamentId != null && (() => {
         const option = controller.materialOptions.find(
@@ -150,7 +160,7 @@ export function LocalEditorSurface({ project, projectFile, importStore, archiveR
           ?? (option?.id.startsWith('profile:') ? option.id.slice('profile:'.length) : null)
         if (!profileId) return null
         return (
-          <Suspense fallback={<LazyDialogFallback label="Opening settings…" />}>
+          <LazyDialogBoundary label="settings" onClose={() => setFilamentSettingsFilamentId(null)}>
             <FilamentSettingsDialog
               open
               onClose={() => setFilamentSettingsFilamentId(null)}
@@ -176,7 +186,7 @@ export function LocalEditorSurface({ project, projectFile, importStore, archiveR
                 })
               }}
             />
-          </Suspense>
+          </LazyDialogBoundary>
         )
       })()}
     </Box>

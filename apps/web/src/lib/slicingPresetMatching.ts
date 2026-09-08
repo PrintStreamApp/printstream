@@ -118,7 +118,16 @@ export function sortSlicingPresets(profiles: SlicingPresetSummary[]): SlicingPre
 export function buildProjectSlicingPresets(bakedIndex: ThreeMfIndex | null, kind: SlicingPresetSummary['kind']): SlicingPresetSummary[] {
   if (!bakedIndex) return []
   if (kind === 'machine') return buildProjectSlicingPresetList(kind, bakedIndex.printerProfileName ? [bakedIndex.printerProfileName] : [])
-  if (kind === 'process') return buildProjectSlicingPresetList(kind, bakedIndex.processProfileName ? [bakedIndex.processProfileName] : [])
+  // The process preset carries its LINEAGE. A project preset declares no compatibility of its own,
+  // so without the parent the only evidence about which machine it was authored for is its own
+  // name, and a name like "0.20mm Speed - Tablet Mount" states nothing. The engine has no such
+  // blind spot: it judges the project's process by this parent (see `processProfileInherits`), so
+  // carrying it is what lets the picker below reach the same verdict before the slice does.
+  if (kind === 'process') {
+    return buildProjectSlicingPresetList(kind, bakedIndex.processProfileName
+      ? [{ name: bakedIndex.processProfileName, derivedFrom: bakedIndex.processProfileInherits }]
+      : [])
+  }
   const byName = new Map<string, SlicingPresetSummary>()
   for (const filament of bakedIndex.projectFilaments) {
     // The RAW `filament_settings_id`, not the display name beside it. That one is
@@ -152,12 +161,31 @@ export function buildProjectSlicingPresets(bakedIndex: ThreeMfIndex | null, kind
   return [...byName.values()]
 }
 
-export function buildProjectSlicingPresetList(kind: SlicingPresetSummary['kind'], names: string[]): SlicingPresetSummary[] {
-  return Array.from(new Set(names.map((name) => name.trim()).filter(Boolean))).map((name) => ({
+export function buildProjectSlicingPresetList(
+  kind: SlicingPresetSummary['kind'],
+  /**
+   * Each preset the project names, paired with the system preset IT was derived from. Per name
+   * rather than one parent for the list: a lineage is evidence about which printer a preset was
+   * authored for, and `isProcessProfileCompatible` treats it as authoritative, so stamping one
+   * entry's parent onto its neighbours would refuse (or admit) presets on somebody else's record.
+   * Today only the single-element process call carries one, but the machine call already passes a
+   * list through here.
+   */
+  entries: ReadonlyArray<string | { name: string; derivedFrom?: string | null }>
+): SlicingPresetSummary[] {
+  const byName = new Map<string, string | null>()
+  for (const entry of entries) {
+    const name = (typeof entry === 'string' ? entry : entry.name).trim()
+    if (!name || byName.has(name)) continue
+    const derivedFrom = typeof entry === 'string' ? null : entry.derivedFrom?.trim() ?? null
+    byName.set(name, derivedFrom && derivedFrom !== name ? derivedFrom : null)
+  }
+  return [...byName].map(([name, derivedFrom]) => ({
     id: buildProjectSlicingPresetId(kind, name),
     source: 'custom' as const,
     kind,
     name,
+    ...(derivedFrom ? { derivedFromPresetName: derivedFrom } : {}),
     updatedAt: null
   }))
 }
@@ -299,7 +327,13 @@ export function isProcessProfileCompatible(
   selectedMachineProfile: SlicingPresetSummary | null,
   model: string,
   nozzleDiameters: number[],
-  plateType: string
+  plateType: string,
+  /**
+   * The installed catalogue, used ONLY to resolve a project preset's parent. Optional because the
+   * name rules below are a complete answer without it; supplying it upgrades a project preset from
+   * name-guessing to the parent's real declarations, which is what the engine reads.
+   */
+  installedProfiles?: readonly SlicingPresetSummary[]
 ): boolean {
   // A project's own process preset is normally the basis for that project and stays available
   // whatever else is selected. The exception is a genuine MACHINE change: process values like
@@ -314,8 +348,43 @@ export function isProcessProfileCompatible(
   // The name is still evidence: it usually states both the machine and the nozzle it was authored
   // for, and a process tuned for a 0.2 nozzle is not a process for 0.8. Both halves stay positive
   // identification only, so a hand-named preset that states neither is never discarded.
+  //
+  // Its PARENT is the third piece of evidence, and the decisive one, because a preset the user
+  // renamed states nothing while its parent still names the machine it came from ("0.20mm Speed -
+  // Tablet Mount" inheriting "0.20mm Strength @BBL P1P"). The engine judges the project's process
+  // by exactly that parent, so a preset we call compatible here on a machine the parent excludes is
+  // one the slice will refuse (exit 239) after the user has picked everything else. Prod, 7 Sep
+  // 2026: a P1P project retargeted to an X2D kept its own process, this gate saw a name stating no
+  // machine, and eighteen consecutive slices failed on a preset the picker never offered to change.
   if (isProjectSlicingPreset(profile)) {
-    return !namesADifferentPrinterModel(profile, model) && !statesADifferentNozzle(profile, nozzleDiameters)
+    if (namesADifferentPrinterModel(profile, model) || statesADifferentNozzle(profile, nozzleDiameters)) return false
+    const parent = resolveProjectPresetParent(profile, installedProfiles)
+    // With the parent IN HAND, judge its real declarations rather than its name. This is the axis a
+    // name cannot cover: `compatible_printers` is nozzle-specific ("0.20mm Strength @BBL P1P" lists
+    // only `Bambu Lab P1P 0.4 nozzle`) while the name says nothing about a nozzle at all, so a
+    // 0.4 -> 0.6 switch on the same model passed every name rule and still failed the slice.
+    // Deliberately not `matchesPlateType`: the plate type is the PROJECT's, not something inherited,
+    // and it is not part of the engine's process-vs-printer decision either.
+    if (parent) {
+      // The ENGINE's rule, not the permissive one used for an ordinary preset: a literal
+      // `compatible_printers` containment of the machine PRESET name
+      // (`BambuStudio.cpp:2937-2941`). It has to be the engine's, because the save's own fallback
+      // (`processPresetFitsMachine`) tests exactly this, and a picker that answered more loosely
+      // would offer a preset the save then silently replaced -- discarding the project's tuned
+      // process values with no UI signal, which is the "refused by a check the dialog did not show"
+      // shape one level over. It is also the axis a name cannot reach: the list is nozzle-specific
+      // ("0.20mm Strength @BBL P1P" names only `Bambu Lab P1P 0.4 nozzle`) while the name says
+      // nothing about a nozzle, so a 0.4 -> 0.6 switch passed every name rule and still failed.
+      // Deliberately not `matchesPlateType`: the plate type is the PROJECT's, not something
+      // inherited, and it is not part of the engine's process-vs-printer decision either.
+      if (selectedMachineProfile) return declaredCompatiblePrintersAccept(parent, selectedMachineProfile.name)
+      // No machine preset resolved yet: nothing to compare against, so fall through to the
+      // permissive axes rather than refusing on absent evidence.
+      return matchesCompatiblePrinters(parent, selectedMachineProfile, model)
+        && matchesProfilePrinterTarget(parent, selectedMachineProfile, model)
+        && matchesProfileNozzleTarget(parent, selectedMachineProfile, nozzleDiameters)
+    }
+    return !derivedFromADifferentPrinterModel(profile, model)
   }
   return matchesCompatiblePrinters(profile, selectedMachineProfile, model)
     && matchesProfilePrinterTarget(profile, selectedMachineProfile, model)
@@ -351,6 +420,64 @@ export function namesADifferentPrinterModel(profile: SlicingPresetSummary, model
   const selected = normalizeSliceDialogPrinterModel(model)
   if (!selected) return false
   const authored = normalizeSliceDialogPrinterModel(profile.name)
+  return authored != null && authored !== selected
+}
+
+/**
+ * BambuStudio's own compatibility test, over a preset SUMMARY: does its declared
+ * `compatible_printers` literally name this machine preset?
+ *
+ * The web-side twin of `processPresetFitsMachine` (`@printstream/shared/machine-retarget`), which
+ * the SAVE applies, and deliberately the same string comparison the engine makes rather than the
+ * alias-expanded text matching {@link matchesCompatiblePrinters} does for an ordinary preset. The
+ * two must agree or a save silently undoes what the picker allowed. Declaring nothing fits
+ * everything, the same absence-is-not-a-mismatch carve-out both of those follow.
+ */
+export function declaredCompatiblePrintersAccept(
+  profile: SlicingPresetSummary,
+  machinePresetName: string | null | undefined
+): boolean {
+  const declared = (profile.compatiblePrinters ?? []).map((entry) => entry.trim()).filter(Boolean)
+  if (declared.length === 0 || !machinePresetName) return true
+  return declared.includes(machinePresetName.trim())
+}
+
+/**
+ * The INSTALLED preset a profile names as its parent, by exact name, or null.
+ *
+ * Exact-name, because that is how BambuStudio binds a preset to its base (`PresetCollection::
+ * find_preset`); a fuzzy match here would silently judge a project against a preset it does not
+ * inherit from. A parent that is not installed is unknown rather than wrong, and the caller falls
+ * back to reading its name.
+ */
+export function resolveProjectPresetParent(
+  profile: SlicingPresetSummary,
+  installedProfiles: readonly SlicingPresetSummary[] | undefined
+): SlicingPresetSummary | null {
+  const parentName = profile.derivedFromPresetName?.trim()
+  if (!parentName || !installedProfiles) return null
+  return installedProfiles.find((candidate) =>
+    candidate.kind === profile.kind
+    && !isProjectSlicingPreset(candidate)
+    && candidate.name.trim() === parentName) ?? null
+}
+
+/**
+ * Whether the preset the profile was DERIVED from positively identifies another printer model.
+ *
+ * The same positive-identification rule as {@link namesADifferentPrinterModel}, applied one link up
+ * the chain, and it exists because that is the link the engine reads: BambuStudio resolves a
+ * project's process compatibility from `inherits_group[0]`, never from the leaf's own name. A user
+ * who renames a derived preset therefore erases the only signal the leaf carries while leaving the
+ * authoritative one intact.
+ *
+ * A profile with no recorded parent, or a parent naming no model, answers false: absence of
+ * evidence is not a mismatch, exactly as the leaf-name rule treats a preset that names no machine.
+ */
+export function derivedFromADifferentPrinterModel(profile: SlicingPresetSummary, model: string): boolean {
+  const selected = normalizeSliceDialogPrinterModel(model)
+  if (!selected || !profile.derivedFromPresetName) return false
+  const authored = normalizeSliceDialogPrinterModel(profile.derivedFromPresetName)
   return authored != null && authored !== selected
 }
 

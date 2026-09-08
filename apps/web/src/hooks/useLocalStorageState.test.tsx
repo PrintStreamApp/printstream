@@ -106,3 +106,45 @@ test('an object-valued preference syncs without bouncing between instances', asy
   assert.equal(view.getByTestId('a').textContent, '1')
   assert.equal(window.localStorage.getItem('json-pref'), JSON.stringify({ n: 1 }))
 })
+
+/**
+ * Two instances of one key whose parsers disagree: the writer stores plain text, the reader parses
+ * it as JSON and THROWS on it. Not contrived: the parameter table's column preference parses with
+ * `JSON.parse`, and any value another surface (or an older build) left under that key reaches it.
+ */
+function PlainWriter() {
+  // A RAW serializer, so what lands in storage is not JSON at all. The default is `JSON.stringify`,
+  // which would have made the reader's `JSON.parse` succeed and prove nothing.
+  const [value, setValue] = useLocalStorageState<string>('mixed-parsers', 'a', (raw) => raw, (plain) => plain)
+  return <button type="button" data-testid="plain" onClick={() => setValue('not json')}>{value}</button>
+}
+
+function StrictJsonReader() {
+  // No try/catch here ON PURPOSE: the hook is what must survive a throwing parser.
+  const [value] = useLocalStorageState<{ n: number }>('mixed-parsers', { n: 7 }, (raw) => JSON.parse(raw) as { n: number })
+  return <span data-testid="strict">{String(value.n)}</span>
+}
+
+test('a parser that throws on another instance\'s value falls back without clobbering the writer', async () => {
+  // Two regressions in one gesture. The notification path used to call `parse` unguarded, and it
+  // runs SYNCHRONOUSLY inside the writing instance's effect, so one component's unparseable value
+  // threw out of an unrelated component's render. Guarding it was not enough: recording the
+  // unreadable string as this instance's SYNCED form then made its own write effect fire, push the
+  // fallback into storage and notify, so the reader's fallback silently replaced the writer's value
+  // and the WRITER's displayed state flipped to it.
+  //
+  // The stored value is pre-seeded so the reader mounts holding a parsed value rather than its
+  // fallback: the first version of this test asserted against a reader whose state never changed,
+  // so React bailed out of the re-render and the clobber it was supposed to catch never ran.
+  window.localStorage.setItem('mixed-parsers', JSON.stringify({ n: 1 }))
+  const view = render(<><PlainWriter /><StrictJsonReader /></>)
+  await waitFor(() => assert.equal(view.getByTestId('strict').textContent, '1'))
+
+  fireEvent.click(view.getByTestId('plain'))
+
+  // The writer completes AND keeps its own value: it used to throw, and then to be overwritten.
+  await waitFor(() => assert.equal(view.getByTestId('plain').textContent, 'not json'))
+  assert.equal(window.localStorage.getItem('mixed-parsers'), 'not json', 'the reader must not write over it')
+  // And the reader falls back rather than rendering a half-parsed value.
+  assert.equal(view.getByTestId('strict').textContent, '7')
+})

@@ -33,6 +33,7 @@ import {
   mintPlateId,
   movePartBefore,
   movePlate,
+  placeInstanceAt,
   printedParts,
   replaceInstanceGeometry,
   findFreePlatePosition,
@@ -1296,10 +1297,10 @@ test('paint on a SESSION-ADDED volume emits as that volume\'s own importPaint', 
 })
 
 test('a DELETED body survives an undo snapshot and a duplicate', () => {
-  // `cloneEditorState` and `duplicateInstance` rebuild an instance FIELD BY FIELD, so a new field
-  // that is not named in them is dropped in silence. For this one that means undo/redo resurrecting
-  // geometry the user deleted -- and then saving it, because the flag is what tells the bake not to
-  // write that component. The same trap the `nameOverridden` flag carries a comment about.
+  // `cloneEditorState` and `duplicateInstance` both copy an instance and then override what is
+  // mutable, and both used to re-list its fields instead, which dropped whatever the list forgot in
+  // silence. For this one that means undo/redo resurrecting geometry the user deleted -- and then
+  // saving it, because the flag is what tells the bake not to write that component.
   const state = seedEditorState(
     threeMfIndexSchema.parse({
       plates: [{ index: 1, name: null, hasThumbnail: false, plateType: null, nozzleSizes: [], filaments: [], objects: [] }],
@@ -2022,6 +2023,150 @@ test('an object whose only baked volumes are connectors still gets a body row', 
   assert.equal(rows.showBodyRow, true)
   assert.equal(rows.showRows, true)
   assert.equal(rows.cutConnectorCount, 1)
+})
+
+test('a cut connector survives an undo snapshot, so undo cannot explode a cut half into rows', () => {
+  // A snapshot copies each part, and a part field a copy does not carry is dropped in silence. For
+  // this one the flag IS the row rule above, so the first Ctrl+Z after any edit turned a saved cut
+  // half into an object row, a body row carrying the same name, and a row per peg -- reported on
+  // `cat-hs` plate 2 after Scale to print volume, but reachable from any undo of any edit.
+  const state = seedEmptyEditorState()
+  const instance = instanceFromStagedImport(STAGED)
+  instance.source = { kind: 'object' }
+  instance.objectId = 7
+  instance.parts = [
+    { entryPath: '3D/3dmodel.model', componentObjectId: 11, partIndex: 0, transform: [...IDENTITY_3MF], filamentId: 1, name: 'cat-hs.stl', color: null, subtype: null },
+    { entryPath: '3D/3dmodel.model', componentObjectId: 12, partIndex: 1, transform: [...IDENTITY_3MF], filamentId: 1, name: 'Connector', color: null, subtype: null, cutConnector: true }
+  ]
+  state.plates[0]!.instances.push(instance)
+
+  const restored = cloneEditorState(state).plates[0]!.instances[0]!
+  assert.equal(restored.parts[1]!.cutConnector, true, 'an undo snapshot dropped the cut-connector flag')
+  assert.deepEqual(instanceVolumeRows(restored, 0), { showRows: false, showBodyRow: false, cutConnectorCount: 1 })
+  // The inverse: an ordinary volume must not come back flagged, or a real part would lose its row.
+  assert.equal(restored.parts[0]!.cutConnector, undefined)
+})
+
+test('a COPY of an object keeps the object-level baselines the file seeded', () => {
+  // Ears, height ranges and layer profiles are object-level, so they are the copy's too -- and they
+  // are the BASELINE every emitter reads when the session has no override. `collect*` takes the
+  // first instance it finds for an object, so a copy that lost them could be the one it reads, and
+  // a save that touched any object's ears would then write an EMPTY set over the file's.
+  const instance = instanceFromStagedImport(STAGED)
+  instance.source = { kind: 'object' }
+  instance.objectId = 7
+  instance.brimEars = [{ x: 1, y: 2, z: 0, radius: 3 }]
+  instance.heightRanges = [{ minZ: 0, maxZ: 2, settings: { layer_height: '0.12' } }]
+  instance.layerHeightProfile = [0, 0.2, 5, 0.12]
+
+  const copy = duplicateInstance(instance)
+  assert.deepEqual(copy.brimEars, instance.brimEars)
+  assert.notEqual(copy.brimEars![0], instance.brimEars[0], 'the copy must not share the ear objects')
+  assert.deepEqual(copy.heightRanges, instance.heightRanges)
+  assert.notEqual(copy.heightRanges![0]!.settings, instance.heightRanges[0]!.settings)
+  assert.deepEqual(copy.layerHeightProfile, instance.layerHeightProfile)
+  assert.notEqual(copy.layerHeightProfile, instance.layerHeightProfile)
+})
+
+test('a copy of a SHEARING object is the same shape, placed somewhere else', () => {
+  // `exactMatrix` is kept only when T-S-R provably cannot reproduce the source placement, and it is
+  // what both the viewport and `buildSceneEdit` read -- so a copy without it is not the object that
+  // was copied, it is the approximation. It used to be dropped so `position` could place the copy;
+  // `placeInstanceAt` moves both instead, which is the rule the single-object export already used.
+  const instance = instanceFromStagedImport(STAGED)
+  instance.position.set(4, 5, 0)
+  // A shearing linear part (not a rotation composed with a uniform scale), so a drop is detectable.
+  instance.exactMatrix = [2, 0.5, 0, 0, 1, 0, 0, 0, 1, 4, 5, 0]
+
+  const copy = duplicateInstance(instance)
+  assert.deepEqual(copy.exactMatrix?.slice(0, 9), [2, 0.5, 0, 0, 1, 0, 0, 0, 1],
+    'the copy was reshaped into the T-S-R approximation')
+  assert.deepEqual(copy.exactMatrix?.slice(9), [14, 15, 0], 'the nudge moved position but not the matrix')
+  assert.notEqual(copy.exactMatrix, instance.exactMatrix, 'a shared matrix would move the source too')
+  assert.deepEqual([instance.exactMatrix[9], instance.exactMatrix[10]], [4, 5], 'the source must not have moved')
+
+  // Placing it again (what every caller does) keeps the shear and agrees with `position`.
+  placeInstanceAt(copy, 100, -20)
+  assert.deepEqual(copy.exactMatrix?.slice(9), [100, -20, 0])
+  assert.deepEqual([copy.position.x, copy.position.y], [100, -20])
+  assert.deepEqual(copy.exactMatrix?.slice(0, 9), [2, 0.5, 0, 0, 1, 0, 0, 0, 1])
+})
+
+test('placeInstanceAt is a no-op on the matrix for an ordinary instance', () => {
+  // The common case carries no matrix at all; the helper must not invent one.
+  const instance = instanceFromStagedImport(STAGED)
+  placeInstanceAt(instance, 7, 8)
+  assert.deepEqual([instance.position.x, instance.position.y], [7, 8])
+  assert.equal(instance.exactMatrix, undefined)
+})
+
+test('an undo snapshot reaches every nested collection it copies', () => {
+  // The rule is "copy whole, deep-copy what is mutable", and a one-level spread satisfies only the
+  // first half. Each of these is a collection UNDER a field the spread copies, so sharing it lets a
+  // future in-place write reach through into every retained frame and undo silently stops reverting
+  // it -- the same silent class as dropping the field outright.
+  const state = seedEmptyEditorState()
+  const plate = state.plates[0]!
+  plate.bed.excludeAreas = [{ polygon: [{ x: 1, y: 2 }], label: 'Left nozzle only' }]
+  plate.primeTower = { x: 1, y: 2, width: 60, sizing: { ribWall: false } as never }
+  state.cutGroups = [{ importIds: ['a', 'b'], connectorCount: 1, connectors: [{ importId: 'a', meshImportId: 'm', type: 'dowel', radius: 2, height: 4, radiusTolerance: 0.1, heightTolerance: 0.1 }] }]
+  state.addedParts = {
+    1: [{
+      key: 'k', importId: 'i', subtype: 'normal_part', name: 'Cube',
+      position: new THREE.Vector3(), rotation: new THREE.Euler(), scale: new THREE.Vector3(1, 1, 1),
+      soup: new Float32Array(9), settings: { wall_loops: '3' }
+    }]
+  }
+
+  const clone = cloneEditorState(state)
+  const clonedPlate = clone.plates[0]!
+  assert.notEqual(clonedPlate.bed.excludeAreas, plate.bed.excludeAreas)
+  assert.notEqual(clonedPlate.bed.excludeAreas[0]!.polygon[0], plate.bed.excludeAreas[0]!.polygon[0])
+  assert.deepEqual(clonedPlate.bed.excludeAreas, plate.bed.excludeAreas)
+  assert.notEqual(clonedPlate.primeTower!.sizing, plate.primeTower.sizing)
+  assert.notEqual(clone.cutGroups![0]!.importIds, state.cutGroups[0]!.importIds)
+  assert.notEqual(clone.cutGroups![0]!.connectors[0], state.cutGroups[0]!.connectors[0])
+  assert.deepEqual(clone.cutGroups, state.cutGroups)
+  // An added volume is a PART, so it is copied whole like one: its Three.js placement objects and
+  // its settings map are its own, and any field it grows rides along without being named.
+  const clonedVolume = clone.addedParts![1]![0]!
+  assert.notEqual(clonedVolume.position, state.addedParts[1]![0]!.position)
+  assert.notEqual(clonedVolume.settings, state.addedParts[1]![0]!.settings)
+  assert.deepEqual(clonedVolume.settings, { wall_loops: '3' })
+  // ...and its geometry is shared on purpose: a staged soup never changes, and copying one per
+  // undo step would put megabytes on the history stack.
+  assert.equal(clonedVolume.soup, state.addedParts[1]![0]!.soup)
+})
+
+test('an added volume keeps a field the snapshot was never told about', () => {
+  // The point of copying whole rather than re-listing: `EditorAddedPart` is the type that grows
+  // fields most often, and every one of them is optional, so a re-list that missed one dropped it
+  // from every undo/redo AND from the single-object export with nothing to fail a typecheck.
+  const state = seedEmptyEditorState()
+  state.addedParts = {
+    1: [{
+      key: 'k', importId: 'i', subtype: 'normal_part', name: 'Cube',
+      position: new THREE.Vector3(), rotation: new THREE.Euler(), scale: new THREE.Vector3(1, 1, 1),
+      soup: new Float32Array(9),
+      // Stands in for the NEXT field this type grows; nothing in the copy names it.
+      futureRecord: { anchor: 3 }
+    } as never]
+  }
+  assert.deepEqual((cloneEditorState(state).addedParts![1]![0] as never as { futureRecord: unknown }).futureRecord,
+    { anchor: 3 }, 'a re-listed copy drops whatever it was not told about')
+})
+
+test("an undo snapshot keeps the plate's stated layer-height band", () => {
+  // Same trap one level up, and it fails the same way -- silently. Without the band the layer-height
+  // panel falls back to BambuStudio's generic 0.07..0.75x nozzle, so an undo could re-permit a
+  // 0.30mm layer on a machine capped at 0.28, and the engine DISCARDS a profile with any height
+  // outside the band rather than clamping it.
+  const state = seedEmptyEditorState()
+  state.plates[0]!.layerHeightLimits = { min: 0.08, max: 0.28 }
+  const clone = cloneEditorState(state)
+  assert.deepEqual(clone.plates[0]!.layerHeightLimits, { min: 0.08, max: 0.28 })
+  assert.notEqual(clone.plates[0]!.layerHeightLimits, state.plates[0]!.layerHeightLimits,
+    'the snapshot must not share the live band object')
 })
 
 /**

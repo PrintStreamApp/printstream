@@ -1,10 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { readdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
-
-const SRC_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+import { readSourceTree } from '../test-utils/sourceTree'
 
 /**
  * The modules allowed to name determinacy, because each DERIVES it from `value`
@@ -15,14 +12,6 @@ const OWNERS = new Set([
   path.join('components', 'ProgressSpinner.tsx'),
   path.join('components', 'printerJobProgressStyles.ts')
 ])
-
-async function* walk(dir: string): AsyncGenerator<string> {
-  for (const entry of await readdir(dir, { withFileTypes: true })) {
-    const full = path.join(dir, entry.name)
-    if (entry.isDirectory()) yield* walk(full)
-    else if (entry.name.endsWith('.tsx') || entry.name.endsWith('.ts')) yield full
-  }
-}
 
 /**
  * A REGRESSION guard, not a style rule.
@@ -42,11 +31,9 @@ async function* walk(dir: string): AsyncGenerator<string> {
 test('progress determinacy is decided by ProgressBar/ProgressSpinner, not by call sites', async () => {
   const offenders: string[] = []
 
-  for await (const file of walk(SRC_ROOT)) {
-    const relative = path.relative(SRC_ROOT, file)
+  for (const { relativePath: relative, lines } of await readSourceTree()) {
     if (OWNERS.has(relative) || relative.includes('.test.')) continue
 
-    const lines = (await readFile(file, 'utf8')).split('\n')
     lines.forEach((line, index) => {
       // `indeterminate` is Checkbox's tri-state prop, not this.
       if (!/(?<![A-Za-z])determinate(?![A-Za-z])/.test(line)) return

@@ -30,6 +30,7 @@
  */
 import * as THREE from 'three'
 import { LAYER_HEIGHT_CHANGE_STEP, layerHeightAt, type LayerHeightBounds } from '@printstream/shared/three-mf'
+import { isViewportAidMesh } from '../editorGeometry'
 
 /** Marks the meshes this module adds, so the caller can find and dispose them. */
 export const LAYER_HEIGHT_OVERLAY_NAME = 'layerHeightOverlay'
@@ -234,9 +235,10 @@ export function syncLayerHeightVisuals(
     const mesh = node as THREE.Mesh
     if (!mesh.isMesh || mesh.name === LAYER_HEIGHT_OVERLAY_NAME) return
     // Same "printed geometry only" rule the bounds helpers use: an aid is not part of the model, so
-    // tinting one would show layer heights on something that never gets sliced.
-    if (mesh.userData.isHelperVolume || mesh.userData.isFaceHull || mesh.userData.isPrimeTower
-      || mesh.userData.isPaintOverlay) return
+    // tinting one would show layer heights on something that never gets sliced. Ask the shared
+    // predicate rather than restating its flags, which is how brim-ear markers (tagged by name, not
+    // by a flag) used to end up shaded here.
+    if (isViewportAidMesh(mesh)) return
     sources.push(mesh)
   })
 

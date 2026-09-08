@@ -84,6 +84,8 @@ export function useLocalStorageState<T>(
   // inline `parse` functions, which would otherwise resubscribe on every render.
   const parseRef = useRef(parse)
   parseRef.current = parse
+  const serializeRef = useRef(serialize)
+  serializeRef.current = serialize
   const fallbackRef = useRef(fallback)
   fallbackRef.current = fallback
 
@@ -115,8 +117,29 @@ export function useLocalStorageState<T>(
     return subscribeToKey(key, (serialized) => {
       // Skips the writer's own notification, and any that matches what this instance already holds.
       if (serialized === syncedRef.current) return
-      syncedRef.current = serialized
-      setValue(parseRef.current(serialized) ?? fallbackRef.current)
+      // Guarded exactly as the initial read is, and for the same reason: a stored value can be
+      // malformed and a `parse` built on `JSON.parse` throws on it. Unguarded, that throw happens
+      // synchronously inside `notifyKey`, which runs inside the WRITING instance's effect, so one
+      // component's bad value took down an unrelated component's render instead of falling back.
+      let next: T
+      let synced: string | null = serialized
+      try {
+        next = parseRef.current(serialized) ?? fallbackRef.current
+      } catch {
+        next = fallbackRef.current
+        // `syncedRef` records what this instance has SYNCED, and on a parse failure that is the
+        // fallback, not the value it could not read. Recording `serialized` here made the write
+        // effect see a disagreement between its state and its synced form, so it wrote the fallback
+        // straight back to storage and notified: one instance's unreadable value silently REPLACED
+        // the writer's, and the writer's own displayed state flipped to the reader's fallback.
+        try {
+          synced = serializeRef.current(next)
+        } catch {
+          synced = syncedRef.current
+        }
+      }
+      syncedRef.current = synced
+      setValue(next)
     })
   }, [key])
 

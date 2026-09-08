@@ -8,7 +8,14 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import * as THREE from 'three'
-import { printableMeshBox, scaleGroupAboutPoint } from './editorGeometry'
+import {
+  BRIM_EAR_MARKER_NAME,
+  buildFaceHullOverlay,
+  isHiddenInPlateThumbnail,
+  isViewportAidMesh,
+  printableMeshBox,
+  scaleGroupAboutPoint
+} from './editorGeometry'
 
 /**
  * A group holding a 10mm cube whose geometry sits `offset` away from the group's own origin,
@@ -86,4 +93,49 @@ test('an object with no printable geometry is left alone rather than thrown at t
     [7, 8, 9, 1],
     'a group with nothing printable was moved or scaled'
   )
+})
+
+/** An aid tagged the way its own builder tags it, so a renamed flag fails these rather than passing. */
+function taggedAid(userData: Record<string, unknown>, name = ''): THREE.Mesh {
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial())
+  Object.assign(mesh.userData, userData)
+  mesh.name = name
+  return mesh
+}
+
+// The regression: the lay-flat click regenerates the plate thumbnail while the place-on-face hull is
+// still parented to the instance group, so a thumbnail rule that does not know the hull bakes it
+// into the tile as blue patches over the model. Built through the real builder, not a hand-set flag.
+test('the place-on-face hull is kept out of a plate thumbnail', () => {
+  const hull = buildFaceHullOverlay(cubeGroup({ x: 0, y: 0, z: 5 }))
+  assert.ok(hull, 'expected a hull over a cube')
+  assert.equal(isHiddenInPlateThumbnail(hull), true)
+})
+
+test('a plate thumbnail hides the bed and every viewport aid', () => {
+  for (const aid of [
+    taggedAid({ isBedSurface: true }),
+    taggedAid({ isHelperVolume: true }),
+    taggedAid({ isPrimeTower: true }),
+    taggedAid({ isLayerHeightVisual: true }),
+    taggedAid({}, BRIM_EAR_MARKER_NAME)
+  ]) {
+    assert.equal(isHiddenInPlateThumbnail(aid), true, `${aid.name || JSON.stringify(aid.userData)} reached the thumbnail`)
+  }
+})
+
+// Deliberate exception, not an oversight: for the colour channel the paint overlay IS what the
+// object prints like, which is the whole point of the tile.
+test('a plate thumbnail keeps the paint overlay and the model itself', () => {
+  assert.equal(isHiddenInPlateThumbnail(taggedAid({ isPaintOverlay: true })), false)
+  assert.equal(isHiddenInPlateThumbnail(taggedAid({})), false)
+})
+
+test('an aid tagged on a group root is recognised, not just its meshes', () => {
+  // The prime tower and helper volumes tag the GROUP; `visible` is inherited, so hiding the root is
+  // what a caller wants, and the predicate has to accept one.
+  const tower = new THREE.Group()
+  tower.userData.isPrimeTower = true
+  assert.equal(isViewportAidMesh(tower), true)
+  assert.equal(isHiddenInPlateThumbnail(tower), true)
 })

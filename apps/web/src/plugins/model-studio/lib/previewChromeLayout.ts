@@ -49,6 +49,19 @@ export const DIALOG_CLOSE_FOOTPRINT_PX = VIEWPORT_INSET_PX + VIEWPORT_CONTROL_SI
 /** What a viewport control must skip to clear the close button, with a gap. */
 export const DIALOG_CLOSE_CLEARANCE_PX = DIALOG_CLOSE_FOOTPRINT_PX + 8
 
+/**
+ * How far the view cube reaches into the viewport's bottom-left corner.
+ *
+ * `VIEW_CUBE_EDGE_INSET` (8) + `VIEW_CUBE_SIZE` (92) from `lib/viewCube.ts`, restated here rather
+ * than imported because that module pulls in THREE and this one is pure (and unit-tested without
+ * a renderer). `previewChromeLayout.test.ts` pins the number so the two cannot drift silently.
+ *
+ * Note this is much larger than {@link VIEWPORT_CONTROL_RESERVE_PX}, which was measured against
+ * the scrubbers: reusing that for the cube put the conflict banner 24px INSIDE it, under a control
+ * whose z-index is `tooltip`, so the cube covered the banner's warning icon and took its clicks.
+ */
+export const VIEW_CUBE_FOOTPRINT_PX = 100
+
 /** A pixel inset, or one per breakpoint where the control's size changes with the viewport. */
 export type ResponsiveInset = number | { xs: number; sm: number }
 
@@ -68,6 +81,14 @@ export interface PreviewChromeLayout {
   gcodeLayerColumn: { top: number; right: number; bottom: number }
   /** The move scrubber's strip, running the top edge up to the layer column. */
   gcodeMovesStrip: { top: number; left: number; right: ResponsiveInset }
+  /**
+   * The toolpath-conflict warning, sitting ABOVE the view cube along the bottom edge.
+   *
+   * Above rather than beside: the cube is 92px square, so clearing it horizontally would leave the
+   * banner about 180px wide on a phone, and a wrapped four-line warning is then taller than what
+   * it saved. Stacking keeps the full width and makes the horizontal collision impossible.
+   */
+  gcodeConflictAlert: { bottom: number; left: number; right: ResponsiveInset }
 }
 
 /** The narrowest value a responsive inset takes, i.e. its worst case for clearance. */
@@ -119,6 +140,12 @@ export function previewChromeLayout({
       top: VIEWPORT_INSET_PX,
       left: VIEWPORT_INSET_PX,
       right: VIEWPORT_LAYER_COLUMN_RESERVE
+    },
+    gcodeConflictAlert: {
+      // Stacked above the view cube's whole footprint, with a gap.
+      bottom: VIEW_CUBE_FOOTPRINT_PX + 8,
+      left: VIEWPORT_INSET_PX,
+      right: showsGcodeLayerColumn ? VIEWPORT_LAYER_COLUMN_RESERVE : VIEWPORT_INSET_PX
     }
   }
 }

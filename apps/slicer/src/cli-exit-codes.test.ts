@@ -29,8 +29,9 @@ test('ignores exit codes outside the CLI’s own range', () => {
 
 test('keeps the classified message shape while adding the explanation', () => {
   const message = formatSliceCliExitError('run found error, return -17, exit...', 239)
-  // The API's isLikelyBuiltinProfileCompatibilityExit matches this exact prefix to trigger its
-  // drop-incompatible-builtin-profiles retry: losing it silently disables that recovery.
+  // The prefix is the API's retry signal (`isTransientSlicerCrashExit`), so it must survive the
+  // explanation being appended. 239 itself is not retried, the drop-incompatible-builtin-profiles
+  // retry that used to key on it is gone, but the shape is one contract for every code.
   assert.match(message, /Slicer CLI exited with code 239/)
   assert.match(message, /not compatible with the selected printer/i)
 })

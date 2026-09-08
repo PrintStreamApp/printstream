@@ -3,6 +3,10 @@
   "compilerOptions": {
     "outDir": "./dist",
     "rootDir": "./src",
+    // Incremental: an unchanged-source typecheck replays diagnostics from the buildinfo instead of
+    // re-checking the whole program. Buildinfo sits outside the watched dist/.
+    "incremental": true,
+    "tsBuildInfoFile": "./.tsbuildinfo",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "verbatimModuleSyntax": false,

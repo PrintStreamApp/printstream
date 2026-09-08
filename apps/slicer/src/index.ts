@@ -56,8 +56,7 @@ import { buildSkipObjectsArgs, deriveSkipObjectIdentifyIds } from './skip-object
 import { buildFilamentMapArgs } from './filament-map-args.js'
 import { ensurePositionalInputArgument, insertArgsBeforePositionalInput } from './cli-input-args.js'
 import { bedSizeFromPrintableArea, buildObjectPlateIndex, recenterBuildItemsXml } from './recenter-plates.js'
-import { formatSliceCliExitError } from './cli-exit-codes.js'
-import { formatSliceEngineCrashError, formatSliceFileVersionError, formatSlicePresetIncompatibilityError } from './slice-error.js'
+import { classifyCliFailure, formatRuntimeCompatibilityError } from './slice-error.js'
 import { ensureEmbeddedProjectSettings } from './project-settings-fallback.js'
 import { mergeInheritedMachineProfile, retargetProjectSettingsToMachine } from './machine-switch-repair.js'
 import { sliceInfoCarriesNozzleGroupIds, stripSliceInfoNozzleGroupIds } from './stale-slice-info.js'
@@ -905,8 +904,17 @@ async function executeCli(input: {
   // optional --pipe channel, and read by the stall/success guard in the Promise below.
   let lastOutputAt = Date.now()
   let sliceSucceeded = false
+  // The only buffer that sees every channel. BambuStudio writes its `total_percent` progress
+  // frames exclusively to the --pipe FIFO, so `stdoutCombined`/`stderrCombined` below cannot
+  // answer "how far did this run get?" and the crash grader must read this instead
+  // (see the `slice-error.ts` header). Scoped per executeCli call on purpose: in the all-plate
+  // fallback each plate must be graded on its own progress, not its predecessor's 100%. Tail-capped
+  // like the other two, which fails SAFE: losing the frames can only under-report progress, and an
+  // under-reported crash is retried once, exactly as it was before this buffer existed.
+  let allChannelsCombined = ''
   const noteOutput = (text: string): void => {
     lastOutputAt = Date.now()
+    allChannelsCombined = appendCappedTail(allChannelsCombined, text)
     if (!sliceSucceeded && outputSignalsSliceComplete(text)) sliceSucceeded = true
   }
   if (env.SLICER_ENABLE_PIPE_PROGRESS && input.supportedFlags.has('--pipe') && !args.includes('--pipe')) {
@@ -1038,39 +1046,15 @@ async function executeCli(input: {
           console.warn(
             `[slicer:executeCli] CLI exited with code ${code ?? 'unknown'}${stderrTail ? ` (${stderrTail})` : ''}`
           )
-          const compatibilityError = formatRuntimeCompatibilityError(stderrCombined)
-          if (compatibilityError) {
-            reject(new Error(compatibilityError))
-            return
-          }
-          // A project saved by a NEWER Bambu Studio than this engine is refused outright before
-          // anything loads (exit 232). Name that, or it reads as a broken model.
-          const fileVersionError = formatSliceFileVersionError(`${stdoutCombined}\n${stderrCombined}`)
-          if (fileVersionError) {
-            reject(new Error(fileVersionError))
-            return
-          }
-          // BambuStudio reports preset/printer incompatibility on stdout and exits
-          // non-zero (code 251); surface its reason instead of the opaque exit code.
-          const presetError = formatSlicePresetIncompatibilityError(`${stdoutCombined}\n${stderrCombined}`)
-          if (presetError) {
-            reject(new Error(presetError))
-            return
-          }
-          // A signal death (134-139, surfaced by the launcher shell) AFTER the slice started is a
-          // deterministic engine crash on this model's geometry. Name the stage and mark it
-          // non-transient so the API surfaces guidance and skips its (futile) crash retry. A signal
-          // death during load/teardown returns null here and stays retryable (emulation flake).
-          if (code !== null && code >= 134 && code <= 139) {
-            const engineCrash = formatSliceEngineCrashError(`${stdoutCombined}\n${stderrCombined}`, code)
-            if (engineCrash) {
-              reject(new Error(engineCrash))
-              return
-            }
-          }
-          // Everything else: keep the classified `exited with code N` shape, but name the CLI's
-          // own reason when we recognise the code instead of leaving the user a bare number.
-          reject(new Error(formatSliceCliExitError(`${stdoutCombined}\n${stderrCombined}`, code)))
+          // `slice-error.ts` owns which explanation wins and, critically, which text each one is
+          // graded on: the crash grader needs the --pipe progress frames, which live only in
+          // `allChannelsCombined`.
+          reject(new Error(classifyCliFailure({
+            allChannelsText: allChannelsCombined,
+            stdoutText: stdoutCombined,
+            stderrText: stderrCombined,
+            exitCode: code
+          })))
         }
       })
     })
@@ -1998,24 +1982,6 @@ function buildOutputLinesHeader(outputLines: SlicingOutputLine[]): string {
 
 function encodeOutputLines(lines: Array<Pick<SlicingOutputLine, 'stream' | 'text' | 'createdAt'>>): string {
   return Buffer.from(JSON.stringify(lines), 'utf8').toString('base64url')
-}
-
-function formatRuntimeCompatibilityError(stderrText: string): string | null {
-  if (!stderrText || !/GLIBCXX_|GLIBC_/i.test(stderrText) || !/version `[^']+' not found/i.test(stderrText)) {
-    return null
-  }
-  const missingVersions = Array.from(new Set(
-    stderrText
-      .split(/\r?\n/)
-      .flatMap((line) => {
-        const match = line.match(/version `([^']+)' not found/i)
-        return match?.[1] ? [match[1]] : []
-      })
-  ))
-  const missingSummary = missingVersions.length > 0
-    ? ` (${missingVersions.join(', ')})`
-    : ''
-  return `The selected slicer binary is incompatible with this host runtime${missingSummary}. Choose another slicer target or install a build compiled for this OS image.`
 }
 
 function splitArgsTemplate(value: string): string[] {

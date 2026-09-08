@@ -919,6 +919,35 @@ slicingRouter.post('/jobs/:id/cancel', requireRequestPermission(LIBRARY_UPLOAD_P
   response.json({ job })
 })
 
+/**
+ * Run a failed slice again, unchanged, keeping the job id so the surface that showed the failure
+ * follows the new attempt (see `slicingJobs.retry`).
+ *
+ * Gated on LIBRARY_UPLOAD like `POST /jobs`, because it costs the same slicer slot as a new slice
+ * and produces the same artifact. `ownerClientId` re-homes the job onto the tab that asked, and is
+ * optional so a non-browser caller leaves it unowned rather than inheriting the original tab's id.
+ */
+slicingRouter.post('/jobs/:id/retry', requireRequestPermission(LIBRARY_UPLOAD_PERMISSION), (request, response) => {
+  const parsed = z.object({ ownerClientId: z.string().trim().min(1).max(128).optional() }).safeParse(request.body ?? {})
+  if (!parsed.success) throw badRequest('Invalid retry request')
+  const job = slicingJobs.retry(
+    requireRequestWorkspaceId(request),
+    requireRouteParam(request.params.id, 'Slicing job id'),
+    parsed.data.ownerClientId ?? null
+  )
+  annotateRequestAuditLog(request, {
+    action: 'retry-slicing',
+    resource: 'slicing job',
+    summary: `Retried slicing for ${job.sourceFileName}.`,
+    metadata: {
+      slicingJobId: job.id,
+      fileId: job.sourceFileId,
+      fileName: job.sourceFileName
+    }
+  })
+  response.json({ job })
+})
+
 slicingRouter.delete('/jobs/:id', requireRequestPermission(JOBS_DELETE_PERMISSION), async (request, response) => {
   const job = await slicingJobs.delete(requireRequestWorkspaceId(request), requireRouteParam(request.params.id, 'Slicing job id'))
   annotateRequestAuditLog(request, {

@@ -566,10 +566,26 @@ export function createAppTheme(palette: PrintStreamThemePalette) {
       },
       JoyDialogActions: {
         styleOverrides: {
-          root: {
+          /**
+           * A LONE footer button must not stretch across the dialog.
+           *
+           * Joy's `CardActions` styled root, which `DialogActions` extends, ends in
+           * `& > .MuiButton-root:only-child { flex: auto }`. So a footer with one action fills
+           * the whole width while the Cancel/Save pair in the dialog next door does not, because
+           * two children fall outside `:only-child`. The result is that a plain "Done" reads as a
+           * banner, and one-action and two-action footers look like different products.
+           *
+           * Undone here rather than at each call site: twelve dialogs are in that shape today
+           * (the parameter table, all-plates stats, the preset managers, editor settings, print
+           * sent, file history, the material picker, the lazy-dialog failure notice), and the
+           * thirteenth would be written the same way. Mirrors Joy's own condition, so a surface
+           * that genuinely wants a full-width action still asks with `buttonFlex`.
+           */
+          root: ({ ownerState }: { ownerState: { buttonFlex?: number | string } }) => ({
             flexDirection: 'row',
-            justifyContent: 'flex-end'
-          }
+            justifyContent: 'flex-end',
+            ...(ownerState.buttonFlex ? {} : { '& > .MuiButton-root:only-child': { flex: 'initial' } })
+          })
         }
       },
       JoyTooltip: {

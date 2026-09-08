@@ -3,6 +3,12 @@
   "compilerOptions": {
     "outDir": "./dist",
     "rootDir": "./src",
+    // Incremental so a rebuild with unchanged sources re-reports its diagnostics from the buildinfo
+    // instead of re-checking the whole program, which is most of what the root `typecheck` chain
+    // costs. Buildinfo lives at the package root, NOT in dist/, so it can never trip the dev
+    // server's dist watcher.
+    "incremental": true,
+    "tsBuildInfoFile": "./.tsbuildinfo",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "verbatimModuleSyntax": false,

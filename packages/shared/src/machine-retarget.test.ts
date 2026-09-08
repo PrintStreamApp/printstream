@@ -4,8 +4,11 @@ import {
   applyMachineRetargetToProjectSettings,
   applyMachineSettingOverrides,
   applyProcessProfileToProjectSettings,
+  projectProcessSystemName,
+  resolveRetargetProcessFallback,
   retargetProjectSettingsToMachine,
-  stripSliceInfoPrinterModelId
+  stripSliceInfoPrinterModelId,
+  type ProfileRecord
 } from './machine-retarget.js'
 
 // A single-extruder A1-mini-ish project (only the fields that matter here).
@@ -681,4 +684,103 @@ test('clearing every override is a real edit, not a no-op', () => {
 test('a project recording nothing and overriding nothing is left exactly alone', () => {
   const project = { ...a1Project, filament_colour: ['#fff'], filament_settings_id: ['A'], filament_type: ['PLA'] }
   assert.equal(applyMachineSettingOverrides(project, {}), project)
+})
+
+test('projectProcessSystemName reads the parent slot, falling back to the leaf like the engine does', () => {
+  // `BambuStudio.cpp:2012-2017`: slot 0 when filled, else `print_settings_id`, because an empty slot
+  // means the process IS a system preset.
+  assert.equal(projectProcessSystemName({
+    print_settings_id: '0.20mm Speed - Tablet Mount',
+    inherits_group: ['0.20mm Strength @BBL P1P', '', '']
+  }), '0.20mm Strength @BBL P1P')
+  assert.equal(projectProcessSystemName({
+    print_settings_id: '0.20mm Standard @BBL X2D',
+    inherits_group: ['', '', '']
+  }), '0.20mm Standard @BBL X2D')
+  assert.equal(projectProcessSystemName({}), null)
+})
+
+test('the retarget switches process when the project\'s own parent refuses the target machine', async () => {
+  // Prod, 7 Sep 2026: a P1P project retargeted onto an X2D kept a process whose parent lists only
+  // the P1P, and the engine refused every slice of it (exit 239, CLI_PROCESS_NOT_COMPATIBLE). The
+  // retarget had re-declared `print_compatible_printers` for the X2D, which is the one field that
+  // decision does not read.
+  const asked: string[] = []
+  // `name` is not decoration on these fixtures: `applyProcessProfileToProjectSettings` writes
+  // `print_settings_id` and blanks `inherits_group[0]` only when the resolved preset carries one,
+  // and blanking that slot is what actually fixes exit 239. A catalogue without it would let this
+  // test pass while the retarget left the project naming the OLD printer's process.
+  const catalogue: Record<string, ProfileRecord> = {
+    '0.20mm Strength @BBL P1P': { name: '0.20mm Strength @BBL P1P', compatible_printers: ['Bambu Lab P1P 0.4 nozzle'] },
+    '0.20mm Standard @BBL X2D': { name: '0.20mm Standard @BBL X2D', compatible_printers: ['Bambu Lab X2D 0.4 nozzle'], layer_height: '0.2' }
+  }
+  const project = { print_settings_id: '0.20mm Speed - Tablet Mount', inherits_group: ['0.20mm Strength @BBL P1P', '', ''] }
+
+  const fallback = await resolveRetargetProcessFallback({
+    projectSettings: project,
+    machineConfig: { default_print_profile: '0.20mm Standard @BBL X2D' },
+    printerSettingsId: 'Bambu Lab X2D 0.4 nozzle',
+    resolveSystemProcess: async (name) => { asked.push(name); return catalogue[name] ?? null }
+  })
+
+  assert.deepEqual(asked, ['0.20mm Strength @BBL P1P', '0.20mm Standard @BBL X2D'],
+    'the machine default is only looked up once the project\'s own parent has refused')
+  assert.equal(fallback?.name, '0.20mm Standard @BBL X2D')
+
+  // Through the applier, because the plan field alone proves nothing about the file that results.
+  const out = applyProcessProfileToProjectSettings(project, fallback!)
+  assert.equal(out.print_settings_id, '0.20mm Standard @BBL X2D')
+  assert.deepEqual(out.inherits_group, ['', '', ''], 'the stale parent is gone, which is the fix')
+  assert.equal(out.layer_height, '0.2')
+})
+
+test('a replacement carrying no name is refused, since it cannot clear the stale parent', async () => {
+  // The hop this whole fallback exists for is `applyProcessProfileToProjectSettings` blanking
+  // `inherits_group[0]`, and that is gated on the preset's `name`. A nameless config would copy
+  // values over the project while leaving it pointing at the OLD printer's process, i.e. exit 239
+  // with the settings changed underneath the user: strictly worse than doing nothing.
+  const fallback = await resolveRetargetProcessFallback({
+    projectSettings: { inherits_group: ['0.20mm Strength @BBL P1P', '', ''] },
+    machineConfig: { default_print_profile: '0.20mm Standard @BBL X2D' },
+    printerSettingsId: 'Bambu Lab X2D 0.4 nozzle',
+    resolveSystemProcess: async (name) => name === '0.20mm Strength @BBL P1P'
+      ? { name, compatible_printers: ['Bambu Lab P1P 0.4 nozzle'] }
+      : { compatible_printers: ['Bambu Lab X2D 0.4 nozzle'] }
+  })
+  assert.equal(fallback, null)
+})
+
+test('a parent that accepts the target, or one nobody can resolve, changes nothing', async () => {
+  // The two ways this must stay out of the way. A fitting parent is not a mismatch, and an unknown
+  // one is not evidence of one -- a project can name a preset from the user's own BambuStudio.
+  const accepted = await resolveRetargetProcessFallback({
+    projectSettings: { inherits_group: ['0.20mm Strength @BBL P1P', '', ''] },
+    machineConfig: { default_print_profile: '0.20mm Standard @BBL P1P' },
+    printerSettingsId: 'Bambu Lab P1P 0.4 nozzle',
+    resolveSystemProcess: async (name) => ({ name, compatible_printers: ['Bambu Lab P1P 0.4 nozzle'] })
+  })
+  assert.equal(accepted, null)
+
+  const unknown = await resolveRetargetProcessFallback({
+    projectSettings: { inherits_group: ['a preset this catalogue never shipped', '', ''] },
+    machineConfig: { default_print_profile: '0.20mm Standard @BBL X2D' },
+    printerSettingsId: 'Bambu Lab X2D 0.4 nozzle',
+    resolveSystemProcess: async () => null
+  })
+  assert.equal(unknown, null)
+})
+
+test('a replacement that does not itself fit is refused, rather than authored because it was offered', async () => {
+  // The machine's `default_print_profile` is the seed, not an override of the same rule it enforces:
+  // a stale or wrong default must leave the project's process alone, which is the pre-existing
+  // behaviour and therefore never worse than before.
+  const fallback = await resolveRetargetProcessFallback({
+    projectSettings: { inherits_group: ['0.20mm Strength @BBL P1P', '', ''] },
+    machineConfig: { default_print_profile: 'Something For Another Printer' },
+    printerSettingsId: 'Bambu Lab X2D 0.4 nozzle',
+    resolveSystemProcess: async (name) => name === '0.20mm Strength @BBL P1P'
+      ? { name, compatible_printers: ['Bambu Lab P1P 0.4 nozzle'] }
+      : { name, compatible_printers: ['Bambu Lab H2D 0.4 nozzle'] }
+  })
+  assert.equal(fallback, null)
 })

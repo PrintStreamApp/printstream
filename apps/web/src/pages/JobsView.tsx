@@ -3,6 +3,7 @@ import ContentCutRoundedIcon from '@mui/icons-material/ContentCutRounded'
 import DeleteRoundedIcon from '@mui/icons-material/DeleteRounded'
 import HistoryRoundedIcon from '@mui/icons-material/HistoryRounded'
 import PrintRoundedIcon from '@mui/icons-material/PrintRounded'
+import RefreshRoundedIcon from '@mui/icons-material/RefreshRounded'
 import ReplayRoundedIcon from '@mui/icons-material/ReplayRounded'
 import { useCallback, useDeferredValue, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -80,6 +81,8 @@ import { readCurrentWorkspaceScopeKey, workspaceQueryKeys } from '../lib/workspa
 import { buildWorkspacePath } from '../lib/workspaceRoute'
 import { useBufferedCoverImage } from '../hooks/useBufferedCoverImage'
 import { usePrintDispatchJobs } from '../hooks/usePrintDispatchJobs'
+import { SlicingEngineLog } from '../components/SlicingEngineLog'
+import { useRetrySlicingJob } from '../hooks/useRetrySlicingJob'
 import { useSlicingJobs } from '../hooks/useSlicingJobs'
 import { PluginSlot } from '../plugin/PluginSlot'
 import { PrintModal } from '../components/library/PrintModal'
@@ -333,6 +336,15 @@ export function JobsView() {
     },
     onError: (error) => {
       toast.error(extractErrorMessage(error))
+    }
+  })
+  // Re-runs a failed slice in place (same job id), so the history card it is rendered on updates
+  // itself rather than being joined by a second entry. Shared with the toast stack and the slice
+  // dialogs so all three offer the same act (`hooks/useRetrySlicingJob.ts`).
+  const retrySlicingJob = useRetrySlicingJob({
+    onRetried: () => {
+      toast.success('Slicing again')
+      void queryClient.invalidateQueries({ queryKey: ['job-history'] })
     }
   })
   const deleteSlicingHistoryJob = useMutation({
@@ -787,12 +799,31 @@ export function JobsView() {
                         Delete
                       </Button>
                     ) : undefined
+                    // Where a failed slice ends up once its toast is gone, so it carries the same
+                    // retry. Ordered by consequence: re-run first, destructive last.
+                    const retryAction = canSliceFiles && job.status === 'failed' ? (
+                      <Button
+                        size="sm"
+                        variant="plain"
+                        color="primary"
+                        startDecorator={<RefreshRoundedIcon />}
+                        loading={retrySlicingJob.isPending && retrySlicingJob.variables === job.id}
+                        onClick={() => retrySlicingJob.mutate(job.id)}
+                      >
+                        Retry
+                      </Button>
+                    ) : undefined
                     return (
                       <SlicingJobHistoryCard
                         key={derived.id}
                         job={job}
                         printerName={derived.printerId ? (printerNames.get(derived.printerId) ?? derived.printerId) : null}
-                        action={deleteAction}
+                        action={retryAction || deleteAction ? (
+                          <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap' }}>
+                            {retryAction}
+                            {deleteAction}
+                          </Stack>
+                        ) : undefined}
                       />
                     )
                   }
@@ -1127,6 +1158,9 @@ function SlicingJobHistoryCard({ job, printerName, action }: { job: SlicingJob; 
                     {activityLine}
                   </Typography>
                 )}
+                {/* Where a failed slice lands once its dialog and toast are gone, so the engine's
+                    own output has to be reachable from here too. */}
+                {job.status === 'failed' && <SlicingEngineLog jobId={job.id} />}
               </Stack>
             </>
           </PrinterJobMediaStrip>

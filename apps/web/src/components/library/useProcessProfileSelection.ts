@@ -102,11 +102,11 @@ export function useProcessProfileSelection(input: ProcessProfileSelectionInput):
 
   const compatibleProcessProfiles = useMemo(
     () => dedupeVisibleProcessProfiles(
-      printerCompatibleProcessProfiles.filter((profile) => isProcessProfileCompatible(profile, selectedMachineProfile, selectedPrinterModel, selectedNozzleDiameters, plateType)),
+      printerCompatibleProcessProfiles.filter((profile) => isProcessProfileCompatible(profile, selectedMachineProfile, selectedPrinterModel, selectedNozzleDiameters, plateType, processProfiles)),
       selectedMachineProfile,
       selectedPrinterModel
     ),
-    [plateType, printerCompatibleProcessProfiles, selectedMachineProfile, selectedPrinterModel, selectedNozzleDiameters]
+    [plateType, printerCompatibleProcessProfiles, processProfiles, selectedMachineProfile, selectedPrinterModel, selectedNozzleDiameters]
   )
 
   const selectedAnyProcessProfile = processProfiles.find((profile) => profile.id === processProfileId) ?? null

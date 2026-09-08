@@ -1,21 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { readdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
-
-const SRC_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+import { readSourceTree } from '../test-utils/sourceTree'
 
 /** The one module allowed to mount Joy's provider, because it pins the mode. */
 const OWNER = path.join('theme', 'AppThemeProvider.tsx')
-
-async function* walk(dir: string): AsyncGenerator<string> {
-  for (const entry of await readdir(dir, { withFileTypes: true })) {
-    const full = path.join(dir, entry.name)
-    if (entry.isDirectory()) yield* walk(full)
-    else if (entry.name.endsWith('.tsx') || entry.name.endsWith('.ts')) yield full
-  }
-}
 
 /**
  * A REGRESSION guard: app code must mount `AppThemeProvider`, never Joy's
@@ -35,11 +24,9 @@ async function* walk(dir: string): AsyncGenerator<string> {
 test('app code mounts AppThemeProvider, never Joy CssVarsProvider directly', async () => {
   const offenders: string[] = []
 
-  for await (const file of walk(SRC_ROOT)) {
-    const relative = path.relative(SRC_ROOT, file)
+  for (const { relativePath: relative, lines } of await readSourceTree()) {
     if (relative === OWNER || relative.includes('.test.') || relative.includes('.testkit.')) continue
 
-    const lines = (await readFile(file, 'utf8')).split('\n')
     lines.forEach((line, index) => {
       if (!line.includes('CssVarsProvider')) return
       const trimmed = line.trimStart()

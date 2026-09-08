@@ -152,11 +152,13 @@ test('an SVG source entry must be an svg under 3D/, and must not traverse', () =
 })
 
 test('an undo snapshot keeps every authoring record and the artwork behind it', () => {
-  // `cloneEditorState` rebuilds parts field by field, so a record with no field named there is
-  // dropped by every undo/redo AND by the single-object export, which both go through it. That took
-  // a saved text part back to anonymous solids while it sat on screen looking unchanged, and made
-  // the next save write no record at all. The `svgSources` half is worse than a plain loss: the
-  // parts keep records NAMING bytes the state no longer holds, which saves a dangling reference.
+  // `cloneEditorState` used to rebuild both kinds of part field by field, so a record with no field
+  // named there was dropped by every undo/redo AND by the single-object export, which both go
+  // through it. That took a saved text part back to anonymous solids while it sat on screen looking
+  // unchanged, and made the next save write no record at all. The `svgSources` half is worse than a
+  // plain loss: the parts keep records NAMING bytes the state no longer holds, which saves a
+  // dangling reference. Both are copied whole now, so this guards the RULE rather than a list of
+  // field names -- keep it: it is the only test that walks a record all the way through a snapshot.
   const state = seedEditorState(index(), new Map([[1, scene()]]))
   state.svgSources = { '3D/logo.svg': '<svg>art</svg>' }
   state.addedParts = {

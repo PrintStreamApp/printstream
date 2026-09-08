@@ -168,7 +168,12 @@ async function sameModelPresetPlan(
   // real re-pick from an ordinary save, where both are the same and nothing is written, which is the
   // over-rewrite this branch exists to avoid.
   const processConfig = await resolveChangedProcessConfig(projectSettings, retarget, slicerTargetId, options, resolved.name)
-
+  // Deliberately NO process fallback on this branch, unlike the cross-model retarget. This branch's
+  // contract is "author the machine, leave the process alone", and reselecting here would overwrite
+  // every process key on an ordinary nozzle change, discarding values the user tuned by hand in an
+  // earlier session. It is also unnecessary: a machine-preset change re-picks the process IN THE
+  // DIALOG (`useProcessProfileSelection`), which judges the project's own preset by its lineage, so
+  // a process that no longer fits arrives here already replaced and `chosenProcess` is non-null.
   const plan: MachineRetargetPlan = {
     machineConfig: resolved.config,
     printerSettingsId: resolved.name,
@@ -243,6 +248,7 @@ async function resolveChangedProcessConfig(
     return null
   }
 }
+
 
 /**
  * What each filament slot's preset holds, aligned with `filament_settings_id`.

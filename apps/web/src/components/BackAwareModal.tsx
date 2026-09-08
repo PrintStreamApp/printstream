@@ -3,10 +3,48 @@ import { Modal } from '@mui/joy'
 import React from 'react'
 import { setAppBusy } from '../lib/appBusy'
 
-type BackAwareModalProps = ComponentProps<typeof Modal>
-type BackAwareModalOnClose = NonNullable<BackAwareModalProps['onClose']>
+type JoyModalProps = ComponentProps<typeof Modal>
+type BackAwareModalOnClose = NonNullable<JoyModalProps['onClose']>
+
+interface BackAwareModalProps extends JoyModalProps {
+  /**
+   * Let a click on the scrim dismiss this dialog. Off for every dialog by default.
+   *
+   * The app-wide rule is that a dialog closes only when the user aims at something that
+   * says it closes it -- the X, Cancel, Escape, or browser Back. A scrim click is none of
+   * those: it is the gesture a misjudged click at a dialog's edge produces, and the cost of
+   * getting it wrong is asymmetric, because the dialogs it is easiest to overshoot are the
+   * wide ones (print prep, the slot editor, the 3MF editor) that hold the most unsaved work.
+   *
+   * Opt in only where the surface holds nothing to lose AND the scrim reads as "the thing
+   * I am looking past", which in practice means an image viewer. Anything with a field in
+   * it does not qualify.
+   */
+  dismissOnBackdropClick?: boolean
+}
 
 const dialogHistoryStackStateKey = '__printStreamDialogStack'
+
+/**
+ * Marks the synthetic event a Back gesture closes a dialog with, so a consumer can tell it from
+ * the X. Both arrive as `closeClick` and mean the same thing to a dialog, so this is deliberately
+ * not part of the reason: it is for DIAGNOSTICS, where naming the actual gesture is the point.
+ */
+const backGestureCloseKey = '__printStreamBackGestureClose'
+
+/**
+ * Was this close request the browser Back gesture rather than the dialog's own close affordance?
+ *
+ * Both report `closeClick` (Joy's reason enum has three members and no room for a fourth), which is
+ * right for deciding what to DO. It is wrong for reporting what happened: `useEditorSave` logs the
+ * pair of sources behind a duplicate close request precisely so an intermittent one can be traced,
+ * and "the X" and "Back" are the two candidates a reader most needs to tell apart.
+ */
+export function isBackGestureClose(event: unknown): boolean {
+  return typeof event === 'object'
+    && event !== null
+    && (event as Record<string, unknown>)[backGestureCloseKey] === true
+}
 
 interface ActiveDialogEntry {
   token: string
@@ -187,8 +225,13 @@ function restoreWindowScrollPosition(position: ScrollPosition | undefined) {
  * The entry is spent when the dialog CLOSES (`syncClosedDialog`), never when one is
  * requested: `onClose` is a question the consumer may answer with "no", and popping
  * first desynchronised the stack from the dialogs actually open. See `handleClose`.
+ *
+ * It also owns the app's DISMISSAL SET, which is the deliberate gestures only: the X,
+ * a footer button, Escape, and browser Back. A click on the scrim is not one of them and
+ * never reaches the consumer's `onClose` -- see `dismissOnBackdropClick`, and note that
+ * this is why the reason a dialog receives for Back is `closeClick`.
  */
-export function BackAwareModal({ open, onClose, ...props }: BackAwareModalProps) {
+export function BackAwareModal({ open, onClose, dismissOnBackdropClick = false, ...props }: BackAwareModalProps) {
   const previousOpenRef = useRef(open)
   const onCloseRef = useRef(onClose)
   const dialogTokenRef = useRef<string | null>(null)
@@ -196,12 +239,18 @@ export function BackAwareModal({ open, onClose, ...props }: BackAwareModalProps)
   onCloseRef.current = onClose
 
   /**
-   * A real Back press (or a Back that popped past this dialog). It reports `backdropClick`
-   * because that is the closest Joy reason for "dismissed from outside the dialog": no reason
-   * needs carrying across a history hop any more, since `handleClose` no longer performs one.
+   * A real Back press (or a Back that popped past this dialog). It reports `closeClick`, the
+   * Joy reason for "the user aimed at something that dismisses this": Back is a deliberate
+   * dismissal gesture, and on a phone it is the primary one. It used to report `backdropClick`
+   * as the closest reason for "dismissed from outside the dialog", which stopped being usable
+   * once a scrim click became a NON-close -- `handleClose` would have swallowed Back with it.
+   *
+   * Back and the X are one reason on purpose, because they ask a dialog for the same thing. Where
+   * the two must be TOLD APART (a diagnostic naming the gesture, never a decision about what to
+   * do), the event carries the marker `isBackGestureClose` reads.
    */
   const requestClose = useCallback(() => {
-    onCloseRef.current?.({}, 'backdropClick')
+    onCloseRef.current?.({ [backGestureCloseKey]: true }, 'closeClick')
   }, [])
 
   const syncClosedDialog = useCallback((token: string, closeViaHistory: boolean) => {
@@ -278,10 +327,15 @@ export function BackAwareModal({ open, onClose, ...props }: BackAwareModalProps)
    *
    * Escape alone was exempted first, which fixed the tool case and left the discard case: reaching
    * the prompt through the X or the scrim still spent the entry before the user had answered it.
+   *
+   * A scrim click is dropped here rather than passed on, so no dialog has to remember to ignore
+   * it: MUI removed `disableBackdropClick` in v5 and documents exactly this check as the
+   * replacement. See `dismissOnBackdropClick` for the opt-out and why it is off by default.
    */
   const handleClose = useCallback<BackAwareModalOnClose>((event, reason) => {
+    if (reason === 'backdropClick' && !dismissOnBackdropClick) return
     onCloseRef.current?.(event, reason)
-  }, [])
+  }, [dismissOnBackdropClick])
 
   return <Modal open={open} onClose={handleClose} disableAutoFocus disableRestoreFocus {...props} />
 }

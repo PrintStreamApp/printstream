@@ -6,6 +6,11 @@
     "moduleResolution": "Bundler",
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "noEmit": true,
+    // Incremental: this is the largest program in the repo and the root `typecheck` chain re-checks
+    // it on every validate. With the buildinfo, an unchanged run replays diagnostics instead.
+    // `noEmit` means the file must be named explicitly (there is no outDir to infer it from).
+    "incremental": true,
+    "tsBuildInfoFile": "./.tsbuildinfo",
     // Vite's `configLoader: 'native'` (the default from Vite 9) resolves the config's relative
     // imports as real ESM, so they must carry their extension. `webBuildIdPlugin.ts` is in this
     // program because `src/lib/webBuildId.test.ts` imports it, so tsc sees that `.ts` specifier and

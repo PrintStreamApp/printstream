@@ -1,7 +1,7 @@
 /**
  * Read-only 3D preview modal for a library file. Renders one of three content
  * modes for the selected plate: a sliced-gcode toolpath (with the layer scrubber
- * and BS-style stats panel), a plated 3MF scene, or a single mesh (STL/STEP).
+ * and the BS-style toolpath legend), a plated 3MF scene, or a single mesh (STL/STEP).
  * The editor is the editable counterpart; this view never mutates a `SceneEdit`.
  *
  * It owns a Three.js renderer "rig" created ONCE per open and reused across plate
@@ -12,9 +12,7 @@
  * to rebuild after a lost WebGL context.
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Alert, Box, Button, Chip, CircularProgress, DialogContent, Divider, IconButton, ModalClose, Sheet, Slider, Stack, Switch, Typography, Tooltip } from '@mui/joy'
-import QueryStatsRoundedIcon from '@mui/icons-material/QueryStatsRounded'
-import ExpandLessRoundedIcon from '@mui/icons-material/ExpandLessRounded'
+import { Alert, Box, Button, Chip, CircularProgress, DialogContent, ModalClose, Sheet, Slider, Stack, Switch, Typography, Tooltip } from '@mui/joy'
 import { choosePlateStripOrientation, EDITOR_GRID_GAP_PX } from './lib/editorChromeLayout'
 import { useQuery } from '@tanstack/react-query'
 import type { LibraryFile, LibraryThreeMfScene, ThreeMfIndex } from '@printstream/shared'
@@ -25,9 +23,14 @@ import { apiFetch } from '../../lib/apiClient'
 import { buildApiUrl } from '../../lib/apiUrl'
 import { useLocalStorageState } from '../../hooks/useLocalStorageState'
 import { fitPerspectiveDepthRange } from './lib/previewDepthRange'
-import { previewChromeLayout } from './lib/previewChromeLayout'
-import { buildLayeredGcodePreview, GCODE_FEATURE_COLORS, GCODE_FEATURE_NAMES, parseGcodeLayers, type GcodeStats, type LayeredGcodePreview } from './lib/gcodePreview'
-import { formatSecondsDuration } from '../../lib/time'
+import { previewChromeLayout, VIEW_CUBE_FOOTPRINT_PX } from './lib/previewChromeLayout'
+import { buildLayeredGcodePreview, parseGcodeLayers, type GcodeMarkerVisibility, type GcodeStats, type GcodeValueRanges, type LayeredGcodePreview } from './lib/gcodePreview'
+import type { ParsedGcodeLayers } from './lib/gcodePreview'
+import { gcodeViewModeMetric, isGcodeViewMode, type GcodeViewMode } from './lib/gcodeViewModes'
+import { scanGcodeToolpathConflicts, type GcodeToolpathConflict } from './lib/gcodeConflicts'
+import WarningRoundedIcon from '@mui/icons-material/WarningRounded'
+import { GcodeToolpathPanel } from './GcodeToolpathPanel'
+import { AllPlatesStatsDialog } from './AllPlatesStatsDialog'
 import { BackAwareModal as Modal } from '../../components/BackAwareModal'
 import { DialogFileTitle } from '../../components/DialogFileTitle'
 import { FullScreenDialogButton, MaximizeDialogButton } from '../../components/DialogPresentationToggles'
@@ -61,6 +64,23 @@ import { createViewportCameraRig } from './lib/viewportCamera'
 import { ProgressBar } from '../../components/ProgressBar'
 
 const PLATED_PREVIEW_GRID_SIZE = 320
+/**
+ * Module constant, not an inline literal: it is the fallback for a `useLocalStorageState` whose
+ * value feeds an effect dependency, and a fresh object each render would re-run the marker effect
+ * (and so the layer scrub) on every unrelated state change in this ~1400-line component.
+ */
+const NO_GCODE_MARKERS: GcodeMarkerVisibility = Object.freeze({})
+/**
+ * Vertical space the toolpath legend gives up while the conflict banner is showing: the banner's
+ * own offset above the view cube, plus room for its wrapped text on a phone.
+ */
+const GCODE_CONFLICT_ALERT_RESERVE_PX = VIEW_CUBE_FOOTPRINT_PX + 96
+/**
+ * How long one slice of the toolpath-conflict scan may run before yielding to the browser.
+ *
+ * Comfortably inside a 60fps frame, so scrubbing stays smooth while the scan proceeds.
+ */
+const CONFLICT_SCAN_SLICE_MS = 8
 // Normalized editor "home" direction, so the G-code preview opens at the same angle the full
 // editor does (a slightly-elevated front view) instead of the iso corner.
 const PREVIEW_HOME_VIEW_DIRECTION = (() => {
@@ -158,13 +178,58 @@ export function PreviewView(props: Record<string, unknown>) {
   // Within-layer scrub (Bambu's horizontal move slider): null shows the whole top layer.
   const [gcodeMoveCount, setGcodeMoveCount] = useState(0)
   const [gcodeMoveEnd, setGcodeMoveEnd] = useState<number | null>(null)
-  // Time/usage breakdown parsed from the plate's G-code (BS-style stats panel).
+  // Time/usage breakdown parsed from the plate's G-code (drives the toolpath legend).
   const [gcodeStats, setGcodeStats] = useState<GcodeStats | null>(null)
+  // Whole-print extents for the range colour schemes, kept beside the stats they are parsed with.
+  const [gcodeRanges, setGcodeRanges] = useState<GcodeValueRanges | null>(null)
+  // Toolpath conflict, computed AFTER the preview is on screen (see the effect below).
+  const [gcodeConflict, setGcodeConflict] = useState<GcodeToolpathConflict | null>(null)
+  // The parse, held only until the conflict check has run over it. Nulled immediately afterwards,
+  // because it pins the multi-MB position arrays the preview itself deliberately frees.
+  const [gcodeConflictInput, setGcodeConflictInput] = useState<ParsedGcodeLayers | null>(null)
   const [gcodeStatsOpen, setGcodeStatsOpen] = useLocalStorageState(
     'bambu.preview.gcodeStatsOpen',
     true,
     (raw) => (raw === 'true' ? true : raw === 'false' ? false : null),
     String
+  )
+  // How the toolpath is coloured, and whether travel is drawn. Both are per-device preferences:
+  // they describe how this person likes to READ a preview, not anything about the file, so they
+  // follow `bambu.preview.*` like the panel's own collapsed state. An unknown stored mode (a build
+  // that dropped one) falls back rather than leaving the picker on a value it cannot render.
+  const [gcodeViewMode, setGcodeViewMode] = useLocalStorageState<GcodeViewMode>(
+    'bambu.preview.gcodeViewMode',
+    'feature',
+    (raw) => (isGcodeViewMode(raw) ? raw : null),
+    String
+  )
+  const [gcodeShowTravel, setGcodeShowTravel] = useLocalStorageState(
+    'bambu.preview.gcodeShowTravel',
+    false,
+    (raw) => (raw === 'true' ? true : raw === 'false' ? false : null),
+    String
+  )
+  // Retract / unretract / seam / wipe. Stored as one JSON object rather than four keys because
+  // they are read and written together; an unparseable value falls back to all-off.
+  const [gcodeMarkers, setGcodeMarkers] = useLocalStorageState<GcodeMarkerVisibility>(
+    'bambu.preview.gcodeMarkers',
+    NO_GCODE_MARKERS,
+    (raw) => {
+      try {
+        const parsed: unknown = JSON.parse(raw)
+        if (!parsed || typeof parsed !== 'object') return null
+        const record = parsed as Record<string, unknown>
+        return {
+          retract: record.retract === true,
+          unretract: record.unretract === true,
+          seam: record.seam === true,
+          wipe: record.wipe === true
+        }
+      } catch {
+        return null
+      }
+    },
+    (value) => JSON.stringify(value)
   )
   // Collapsed plate strip (name-only chips, no thumbnails) mirrors the editor's
   // bambu.editor.plateStripCollapsed preference but is tracked separately.
@@ -180,6 +245,7 @@ export function PreviewView(props: Record<string, unknown>) {
   const { presentation, maximized, setMaximized, fullScreen, setFullScreen } = useDialogPresentationState({
     maximizedStorageKey: 'bambu.preview.maximized'
   })
+  const [allPlatesStatsOpen, setAllPlatesStatsOpen] = useState(false)
   const [previewBodyNode, setPreviewBodyNode] = useState<HTMLDivElement | null>(null)
   const [previewBodySize, setPreviewBodySize] = useState({ width: 0, height: 0 })
   useEffect(() => {
@@ -661,6 +727,9 @@ export function PreviewView(props: Record<string, unknown>) {
     gcodePreviewRef.current = null
     setGcodeLayerCount(0)
     setGcodeStats(null)
+    setGcodeRanges(null)
+    setGcodeConflict(null)
+    setGcodeConflictInput(null)
     setSceneProgress(null)
     if (isMeshPreviewMode(previewMode)) {
       // Both STL and STEP load from /mesh: it returns STL bytes (STL verbatim, STEP
@@ -703,6 +772,8 @@ export function PreviewView(props: Record<string, unknown>) {
           setGcodeMoveEnd(null)
           setGcodeMoveCount(preview.moveCount(preview.layerCount - 1))
           setGcodeStats(parsed.stats)
+          setGcodeRanges(parsed.ranges)
+          setGcodeConflictInput(parsed)
           attachObject(buildPlateGcodePreviewObject(preview.object, sceneQuery.data?.bed ?? null, bedModel))
         })
         .catch(handleLoadError)
@@ -784,11 +855,59 @@ export function PreviewView(props: Record<string, unknown>) {
     if (gcodeLayerCount === 0) return
     gcodePreviewRef.current?.setVisibleLayers(gcodeTopLayer, {
       single: gcodeSingleLayer,
+      showTravel: gcodeShowTravel,
+      markers: gcodeMarkers,
       moveEnd: gcodeMoveEnd ?? undefined
     })
     // Draw ranges change what's on screen without a camera move; redraw.
     rig?.invalidate()
-  }, [gcodeTopLayer, gcodeSingleLayer, gcodeMoveEnd, gcodeLayerCount, rig])
+  }, [gcodeTopLayer, gcodeSingleLayer, gcodeShowTravel, gcodeMarkers, gcodeMoveEnd, gcodeLayerCount, rig])
+
+  // Look for toolpath conflicts, in TIME SLICES after the preview has painted.
+  //
+  // The whole scan is about a second on a real 460k-segment plate. A plain `setTimeout` would only
+  // move that off the opening frame, not break it up: the task itself is uninterruptible, so the
+  // tab would still freeze for that whole second while the user is trying to scrub. The scan
+  // yields per layer, and this drains it in short slices, so the preview stays interactive while
+  // it answers a question almost every plate answers "no" to.
+  //
+  // It reads the parse's position arrays, so the parse is released the moment it finishes, and a
+  // plate switch cancels a run in flight rather than letting a stale answer land on the new plate.
+  useEffect(() => {
+    if (!gcodeConflictInput) return
+    let cancelled = false
+    let handle: ReturnType<typeof setTimeout>
+    const scan = scanGcodeToolpathConflicts(gcodeConflictInput)
+    const pump = () => {
+      if (cancelled) return
+      const deadline = performance.now() + CONFLICT_SCAN_SLICE_MS
+      let step = scan.next()
+      while (!step.done && performance.now() < deadline) step = scan.next()
+      if (step.done) {
+        setGcodeConflict(step.value)
+        setGcodeConflictInput(null)
+        return
+      }
+      handle = setTimeout(pump, 0)
+    }
+    handle = setTimeout(pump, 0)
+    return () => { cancelled = true; clearTimeout(handle) }
+  }, [gcodeConflictInput])
+
+  // Apply the colour scheme. Separate from the scrub effect above because it is the expensive one
+  // (a pass over every segment, ~25ms on a 460k-segment plate, plus an ~11 MiB colour re-upload)
+  // and must not re-run on every drag of the layer slider.
+  //
+  // Travel visibility is folded into the dependency ONLY in the Speed view, because that is the
+  // one metric whose range depends on it (`gcodeMetricRange`). Depending on it unconditionally
+  // made every Travel toggle in the default Feature view rewrite all 460k segments with the
+  // colours they already had and re-upload the buffer, for no visible change at all.
+  const gcodeViewModeTravelKey = gcodeViewModeMetric(gcodeViewMode) === 'feedrate' ? gcodeShowTravel : false
+  useEffect(() => {
+    if (gcodeLayerCount === 0) return
+    gcodePreviewRef.current?.setViewMode(gcodeViewMode, { showTravel: gcodeViewModeTravelKey })
+    rig?.invalidate()
+  }, [gcodeViewMode, gcodeViewModeTravelKey, gcodeLayerCount, rig])
 
   // A stale failure overlay must not survive a close/reopen of the modal. Reopening genuinely is
   // a fresh attempt even for 'refused': the block is per document, and the browser may have
@@ -867,7 +986,8 @@ export function PreviewView(props: Record<string, unknown>) {
   const BodyContainer = expanded ? DialogContent : ScrollableDialogBody
 
   return (
-    <Modal open onClose={onClose}>
+    <>
+      <Modal open onClose={onClose}>
       <ScrollableModalDialog
         variant="outlined"
         presentation={presentation}
@@ -1113,14 +1233,39 @@ export function PreviewView(props: Record<string, unknown>) {
                   </Chip>
                 </Sheet>
               )}
-              {previewMode === 'plate-gcode' && gcodeStats && !viewerState.loading && !viewerState.error && (
-                <GcodeStatsPanel
+              {previewMode === 'plate-gcode' && gcodeStats && gcodeRanges && !viewerState.loading && !viewerState.error && (
+                <GcodeToolpathPanel
                   stats={gcodeStats}
+                  ranges={gcodeRanges}
                   plate={plates.find((plate) => plate.index === selectedPlate) ?? null}
                   layerCount={gcodeLayerCount}
                   open={gcodeStatsOpen}
                   onToggle={() => setGcodeStatsOpen(!gcodeStatsOpen)}
+                  viewMode={gcodeViewMode}
+                  onViewModeChange={setGcodeViewMode}
+                  showTravel={gcodeShowTravel}
+                  onShowTravelChange={setGcodeShowTravel}
+                  markers={gcodeMarkers}
+                  onMarkersChange={setGcodeMarkers}
+                  onShowAllPlates={plates.length > 1 ? () => setAllPlatesStatsOpen(true) : undefined}
+                  // Room for the conflict banner stacked above the view cube, when there is one.
+                  bottomReservePx={gcodeConflict ? GCODE_CONFLICT_ALERT_RESERVE_PX : 0}
                 />
+              )}
+              {gcodeConflict && (
+                <Alert
+                  color="warning"
+                  variant="soft"
+                  startDecorator={<WarningRoundedIcon />}
+                  sx={{ position: 'absolute', ...chrome.gcodeConflictAlert, zIndex: 1 }}
+                >
+                  <Typography level="body-xs">
+                    Toolpath conflict on layer {gcodeConflict.layer + 1} ({gcodeConflict.layerZ.toFixed(2)} mm).
+                    Two objects print through the same point at
+                    X{gcodeConflict.point.x.toFixed(1)} Y{gcodeConflict.point.y.toFixed(1)}.
+                    Move them further apart and slice again.
+                  </Typography>
+                </Alert>
               )}
               <Box
                 sx={{
@@ -1142,150 +1287,20 @@ export function PreviewView(props: Record<string, unknown>) {
           </Stack>
         </BodyContainer>
       </ScrollableModalDialog>
-    </Modal>
-  )
-}
-
-/**
- * BS-style slice stats overlay for the G-code preview: total time, layer count and
- * height, per-feature time breakdown (colour-keyed to the toolpath palette), and
- * filament usage. Feature times are the parser's feedrate estimate NORMALIZED so the
- * total matches the slicer's own prediction (slice_info `prediction`, else the gcode
- * header estimate): proportions from the moves, authority from the slicer.
- */
-function GcodeStatsPanel({
-  stats,
-  plate,
-  layerCount,
-  open,
-  onToggle
-}: {
-  stats: GcodeStats
-  plate: ThreeMfIndex['plates'][number] | null
-  layerCount: number
-  open: boolean
-  onToggle: () => void
-}) {
-  const authoritativeTotal = plate?.prediction ?? stats.headerTotalSeconds ?? stats.totalSeconds
-  const scale = stats.totalSeconds > 0 && authoritativeTotal > 0 ? authoritativeTotal / stats.totalSeconds : 1
-  const rows = stats.featureSeconds
-    .map((seconds, role) => ({ role, seconds: seconds * scale, extrusionMm: stats.featureExtrusionMm[role] ?? 0 }))
-    .filter((row) => row.seconds >= 0.5)
-    .sort((left, right) => right.seconds - left.seconds)
-  const travelSeconds = stats.travelSeconds * scale
-  const percentOf = (seconds: number) => authoritativeTotal > 0 ? `${Math.max(1, Math.round((seconds / authoritativeTotal) * 100))}%` : ''
-  const usedFilaments = (plate?.filaments ?? []).filter((filament) => filament.usedGrams != null && filament.usedGrams > 0)
-  if (!open) {
-    return (
-      <Tooltip title="Print statistics">
-        <IconButton
-          size="sm"
-          variant="soft"
-          onClick={onToggle}
-          aria-label="Show print statistics"
-          sx={{ position: 'absolute', left: 12, top: 72, zIndex: 1, bgcolor: 'rgba(13, 19, 34, 0.72)', backdropFilter: 'blur(2px)' }}
-        >
-          <QueryStatsRoundedIcon />
-        </IconButton>
-      </Tooltip>
-    )
-  }
-  return (
-    <Sheet
-      variant="soft"
-      sx={{
-        position: 'absolute',
-        left: 12,
-        // Below the Moves scrubber strip (top: 12 + its height), never over it.
-        top: 72,
-        zIndex: 1,
-        px: 1.25,
-        py: 1,
-        borderRadius: 'md',
-        bgcolor: 'rgba(13, 19, 34, 0.78)',
-        backdropFilter: 'blur(2px)',
-        width: 'min(248px, calc(100% - 110px))',
-        maxHeight: 'calc(100% - 140px)',
-        overflow: 'auto',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 0.5
-      }}
-    >
-      <Stack
-        direction="row"
-        justifyContent="space-between"
-        alignItems="center"
-        onClick={onToggle}
-        sx={{ cursor: 'pointer', userSelect: 'none' }}
-        aria-label="Collapse print statistics"
-      >
-        <Typography level="title-sm" textColor="neutral.100">Print statistics</Typography>
-        <Tooltip title="Collapse">
-          <IconButton size="sm" variant="plain" aria-label="Hide print statistics">
-            <ExpandLessRoundedIcon />
-          </IconButton>
-        </Tooltip>
-      </Stack>
-      <Stack direction="row" justifyContent="space-between" spacing={1}>
-        <Typography level="body-xs" textColor="neutral.300">Total time</Typography>
-        <Typography level="body-xs" fontWeight="lg" textColor="neutral.100">
-          {formatSecondsDuration(Math.round(authoritativeTotal))}
-        </Typography>
-      </Stack>
-      <Stack direction="row" justifyContent="space-between" spacing={1}>
-        <Typography level="body-xs" textColor="neutral.300">Layers</Typography>
-        <Typography level="body-xs" textColor="neutral.100">{layerCount} · {stats.maxZ.toFixed(1)} mm</Typography>
-      </Stack>
-      {(plate?.weight != null || stats.filamentMm > 0) && (
-        <Stack direction="row" justifyContent="space-between" spacing={1}>
-          <Typography level="body-xs" textColor="neutral.300">Filament</Typography>
-          <Typography level="body-xs" textColor="neutral.100">
-            {plate?.weight != null ? `${plate.weight.toFixed(1)} g` : ''}
-            {plate?.weight != null && stats.filamentMm > 0 ? ' · ' : ''}
-            {stats.filamentMm > 0 ? `${(stats.filamentMm / 1000).toFixed(2)} m` : ''}
-          </Typography>
-        </Stack>
-      )}
-      {usedFilaments.length > 1 && usedFilaments.map((filament) => (
-        <Stack key={filament.id} direction="row" justifyContent="space-between" alignItems="center" spacing={1}>
-          <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }}>
-            <Box sx={{ width: 10, height: 10, borderRadius: '2px', flexShrink: 0, bgcolor: filament.color || 'neutral.softBg', border: '1px solid rgba(255,255,255,0.18)' }} />
-            <Typography level="body-xs" textColor="neutral.300" noWrap>
-              {filament.filamentName ?? filament.filamentType ?? `Filament ${filament.id}`}
-            </Typography>
-          </Stack>
-          <Typography level="body-xs" textColor="neutral.100">{filament.usedGrams!.toFixed(1)} g</Typography>
-        </Stack>
-      ))}
-      {rows.length > 0 && (
-        <>
-          <Divider sx={{ my: 0.25 }} />
-          {rows.map((row) => (
-            <Stack key={row.role} direction="row" justifyContent="space-between" alignItems="center" spacing={1}>
-              <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }}>
-                <Box sx={{ width: 10, height: 10, borderRadius: '2px', flexShrink: 0, bgcolor: `#${(GCODE_FEATURE_COLORS[row.role] ?? 0x888888).toString(16).padStart(6, '0')}` }} />
-                <Typography level="body-xs" textColor="neutral.300" noWrap>{GCODE_FEATURE_NAMES[row.role] ?? 'Other'}</Typography>
-              </Stack>
-              <Typography level="body-xs" textColor="neutral.100" sx={{ whiteSpace: 'nowrap' }}>
-                {formatSecondsDuration(Math.max(1, Math.round(row.seconds)))} · {percentOf(row.seconds)}
-              </Typography>
-            </Stack>
-          ))}
-          {travelSeconds >= 0.5 && (
-            <Stack direction="row" justifyContent="space-between" alignItems="center" spacing={1}>
-              <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }}>
-                <Box sx={{ width: 10, height: 10, borderRadius: '2px', flexShrink: 0, bgcolor: 'neutral.600' }} />
-                <Typography level="body-xs" textColor="neutral.300">Travel</Typography>
-              </Stack>
-              <Typography level="body-xs" textColor="neutral.100" sx={{ whiteSpace: 'nowrap' }}>
-                {formatSecondsDuration(Math.max(1, Math.round(travelSeconds)))} · {percentOf(travelSeconds)}
-              </Typography>
-            </Stack>
-          )}
-        </>
-      )}
-    </Sheet>
+      </Modal>
+      {/*
+        A SIBLING of the preview modal, never a child of its dialog. Both are BackAwareModals, and
+        each owns one history entry; nesting the second inside the first (or closing the first to
+        open it) desynchronises that stack, and the inner dialog shuts the moment it appears.
+        See the note in `components/library/EditorSettingsDialog.tsx`.
+      */}
+      <AllPlatesStatsDialog
+        open={allPlatesStatsOpen}
+        onClose={() => setAllPlatesStatsOpen(false)}
+        plates={plates}
+        projectFilaments={platesQuery.data?.projectFilaments ?? []}
+      />
+    </>
   )
 }
 

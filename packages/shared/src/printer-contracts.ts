@@ -1735,7 +1735,14 @@ export const threeMfProjectFilamentSchema = z.object({
    * recommendation prompt classifies materials from these, falling back to naming when null.
    */
   isSupport: z.boolean().nullable().optional(),
-  isSoluble: z.boolean().nullable().optional()
+  isSoluble: z.boolean().nullable().optional(),
+  /**
+   * The slot's `filament_cost`: price per KILOGRAM, with no currency attached.
+   *
+   * BambuStudio labels it "money/kg" and stores no currency anywhere, so a consumer that shows it
+   * supplies its own symbol. Optional so an older server/bridge still validates.
+   */
+  costPerKg: z.number().nullable().optional()
 })
 export type ThreeMfProjectFilament = z.infer<typeof threeMfProjectFilamentSchema>
 
@@ -1747,6 +1754,13 @@ export const threeMfIndexSchema = z.object({
   supportFilamentIds: z.array(z.number().int().positive()).default([]),
   printerProfileName: z.string().nullable().default(null),
   processProfileName: z.string().nullable().default(null),
+  /**
+   * The system process preset the project's own process was derived from (`inherits_group[0]`), the
+   * name the engine judges process-vs-printer compatibility by. Counterpart of the bridge index's
+   * field of the same name; see it for why the leaf's name is not a substitute. Null when the
+   * project's process is itself a system preset, and on an index from an older server.
+   */
+  processProfileInherits: z.string().nullable().default(null),
   /**
    * Repair flags for the VERSION whose bytes this index was parsed from (same semantics as the
    * `LibraryFile` DTO's, which describe the file's HEAD). This is how an editor opened on an

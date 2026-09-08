@@ -34,9 +34,9 @@
  * Entries whose object references are 1-based ordinals over the placed root objects, and the shape
  * each one writes them in.
  *
- * All three are confirmed against the importer rather than inferred from their contents: it resolves
+ * All four are confirmed against the importer rather than inferred from their contents: it resolves
  * every one of them by `object.second + 1` over the same map, and says so at `bbs_3mf.cpp:2129`
- * ("indexed by a 1 based model object index"). Adding a fourth means confirming it there first, not
+ * ("indexed by a 1 based model object index"). Adding a fifth means confirming it there first, not
  * pattern-matching on an `id` attribute.
  */
 export const OBJECT_ORDINAL_SIDECAR_ENTRIES: ReadonlyArray<{

@@ -101,7 +101,7 @@ copy of the file to a failed save would be far worse than losing the printer swi
 | Aspect | Behavior on retarget |
 | --- | --- |
 | **Machine** (bed, nozzle, extruder topology, gcode, limits) | Replaced with the target machine's — step 2. |
-| **Process** (layer height, walls, speeds, `print_settings_id`) | Replaced with the target's process preset + user overrides — step 3. |
+| **Process** (layer height, walls, speeds, `print_settings_id`) | Replaced with the target's process preset + user overrides (step 3). With no preset chosen, a CROSS-MODEL retarget keeps the project's own **only while it still fits the target**: its parent (`inherits_group[0]`) is looked up and, if that preset does not list the target machine, the machine's `default_print_profile` is authored instead. A same-model preset change (a nozzle switch) never reselects. See "Why a process can be switched without being chosen" below. |
 | **Filaments** (selection, colours) | Preserved. The editor's save already embeds the user's assigned (target-compatible) filaments via `applyFilamentList`; the retarget leaves `filament_settings_id`/`filament_colour` untouched. The per-extruder *map* is re-derived for the new topology (step 2). |
 | **Layout** (object positions, plates, paint, parts, brim ears) | Preserved exactly — `model_settings.config` is copied verbatim, no re-arrange. |
 | **Printer-compatibility declarations** (`print_compatible_printers` / `compatible_printers`, slice_info `printer_model_id`) | Re-declared for the target so the project's compatibility chips read as the new printer only. The source printer's declarations aren't machine settings (so the field-set overwrite skips them) and the embedded slice was for the old printer — both would otherwise linger as stale chips (an A1/A1 mini chip on an H2D project). The save sets `print_compatible_printers`/`compatible_printers` to the target and strips the stale slice_info `printer_model_id` (matching a BambuStudio saved-not-sliced project). |
@@ -121,9 +121,12 @@ Consequences to be aware of:
 
 - **Same model, different nozzle** (e.g. X1C 0.4 → X1C 0.6): not currently retargeted — the saved
   project keeps the source nozzle's machine. Switching to a different *model* always retargets.
-- **Same-family cross-model with a project-embedded process** (e.g. X1C → P1S where the process is the
-  3MF's own preset): the embedded process can't be resolved to a separate file, so it is kept as-is
-  (these presets are cross-compatible within the family, so this is usually fine).
+- **Cross-model with a project-embedded process** (e.g. P1S → X2D where the process is the 3MF's
+  own preset): the embedded process has no separate file to resolve, so nothing is *chosen*. The
+  project's own is kept when its parent still accepts the target and replaced with the machine's
+  `default_print_profile` when it does not (below). It was previously kept unconditionally, on the
+  assumption that these presets are cross-compatible within a family; that is false across families
+  and produced files that opened correctly and could not be sliced at all.
 - **Smaller target bed**: positions are preserved, so objects authored for a larger bed may land
   out-of-bounds on a smaller machine — the user re-arranges, exactly as in BambuStudio.
 
@@ -133,6 +136,60 @@ Consequences to be aware of:
   (no corruption, source file untouched).
 - Process preset unresolvable → machine retarget still applied (the project is still openable/printable
   on the new machine); the process keeps the source preset.
+- Process **parent** unresolvable, or no compatible replacement → the project keeps its own process,
+  i.e. exactly the pre-existing behaviour. A lookup miss is "unknown", never "wrong", so the switch
+  below can never make a save worse than it was.
+
+### Why a process can be switched without being chosen
+
+The machine rewrite re-declares `print_compatible_printers` for the target, and the engine **does not
+read that field** when it decides whether a project may slice. It resolves the process preset's
+parent (`inherits_group[0]`, else `print_settings_id`), loads that system preset, and takes its
+`compatible_printers` as the project's compatibility, overwriting whatever the file declared
+(`BambuStudio.cpp:2760-2776`, and again at `:2890-2906`). If the target machine is absent from that
+list it exits 239, `CLI_PROCESS_NOT_COMPATIBLE`.
+
+A machine-only retarget leaves that parent naming the OLD model. The result opens fine, draws the
+right compatibility chips, and cannot be sliced by the printer it claims to be for. Found on prod on
+7 September 2026: a P1P-lineage project retargeted onto an X2D failed eighteen consecutive slices.
+
+`resolveRetargetProcessFallback` (`packages/shared/src/machine-retarget.ts`) is the fix, and it is
+BambuStudio's own behaviour rather than an invention. Studio never repoints a preset's lineage: on a
+printer change `PresetBundle::update_compatible(Always)` recomputes every process preset's
+compatibility, deselects the current one if it no longer fits (`Preset.cpp:2999-3003`), and selects
+another, seeded with the new printer's `default_print_profile` (`PresetBundle.cpp:5741`). The user's
+preset survives untouched and simply stops being offered.
+
+It runs on the CROSS-MODEL path only (`buildMachineRetargetPlan` and the API's
+`retargetSavedProjectMachine`), never on the same-model preset change. That branch's contract is
+"author the machine, leave the process alone", and reselecting there would overwrite every process
+key on an ordinary nozzle change, discarding values the user tuned by hand in an earlier session.
+It is also unnecessary: a machine-preset change re-picks the process in the dialog, so a process
+that no longer fits arrives at the save already replaced.
+
+Two deliberate narrowings versus Studio:
+
+- Studio scans the whole catalogue and prefers a matching **alias**, then a matching `layer_height`,
+  over the machine default. We take the machine's declared default only: the alias is not
+  recoverable (the generated `process_full/` profiles carry none), and a save is not the place to
+  change layer height by a catalogue scan. The **slice dialog's** re-pick does own the layer-height
+  preference (`useProcessProfileSelection`), and on any path through it the process is already
+  compatible, so the fallback never fires.
+- Nothing happens unless both lookups succeed and the replacement itself fits.
+
+The dialog is the other half of the same fix, and the load-bearing half. A `project:` process preset
+carries only a name, so a renamed one ("0.20mm Speed - Tablet Mount") declared nothing and read as
+compatible with every printer. The 3MF index now reports `processProfileInherits`, the browser
+carries it on the project preset as `derivedFromPresetName`, and `isProcessProfileCompatible`
+resolves that parent in the installed catalogue and judges its real `compatible_printers` rather
+than its name. Reading the name alone is not enough: `compatible_printers` is nozzle-specific
+("0.20mm Strength @BBL P1P" lists only `Bambu Lab P1P 0.4 nozzle`) while the name mentions no
+nozzle, so a 0.4 to 0.6 switch on the same model passed every name rule and still failed the slice.
+A parent that is not installed falls back to the name rules, because unknown is not a mismatch.
+
+So the picker drops such a preset on a machine switch and re-picks a compatible one, which makes the
+save choose a process and the retarget fallback never fire. Existing files stay as they are until
+they are re-saved; nothing heals at rest.
 
 ## Where machine profiles come from
 

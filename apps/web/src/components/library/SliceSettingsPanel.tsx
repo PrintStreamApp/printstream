@@ -15,7 +15,7 @@
 import { memo } from 'react'
 import type React from 'react'
 import type { ReactNode } from 'react'
-import { lazy, Suspense, useMemo, useState } from 'react'
+import { lazy, useMemo, useState } from 'react'
 import {
   Alert, Badge, Box, Button, ButtonGroup, Chip, CircularProgress, Dropdown, FormControl, FormLabel, IconButton, Input,
   List, ListItem, Menu, MenuButton, Option, Select, Sheet, Stack, Switch, Tooltip, Typography
@@ -64,7 +64,7 @@ import {
 import type { MachineTargetConflict, MachineTargetIntent } from '../../lib/machineTargetResolution'
 import { AddMaterialDialog } from './AddMaterialDialog'
 import { PrinterPickerDialog } from '../PrinterPickerDialog'
-import { LazyDialogFallback } from '../LazyDialogFallback'
+import { LazyDialogBoundary } from '../LazyDialogBoundary'
 
 // Code-split: the machine settings catalog is large and only loads when the gear is used.
 const MachineSettingsDialog = lazy(() => import('../settings/MachineSettingsDialog'))
@@ -1359,7 +1359,7 @@ export const SliceSettingsPanel = memo(function SliceSettingsPanel({ controller,
       {printerPresetDialogOpen && selectedMachineProfile && (
         // Code-split like every other host of the settings dialogs: it pulls in the whole machine
         // settings catalog.
-        <Suspense fallback={<LazyDialogFallback label="Opening printer settings…" />}>
+        <LazyDialogBoundary label="printer settings" onClose={() => setPrinterPresetDialogOpen(false)}>
           <MachineSettingsDialog
             open
             onClose={() => setPrinterPresetDialogOpen(false)}
@@ -1380,7 +1380,7 @@ export const SliceSettingsPanel = memo(function SliceSettingsPanel({ controller,
               setMachineOverridesModel(selectedPrinterModel)
             }}
           />
-        </Suspense>
+        </LazyDialogBoundary>
       )}
       {flushVolumes && flushVolumesOpen && (
         <FlushVolumesDialog

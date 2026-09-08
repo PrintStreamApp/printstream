@@ -48,6 +48,7 @@ function buildIndex(overrides: {
     supportFilamentIds: [],
     printerProfileName: null,
     processProfileName: null,
+    processProfileInherits: null,
     geometryOnly: false,
     objectExport: false, needsSettingsRepair: false, settingsRepairReasons: [], projectVersion: null,
     slicedWithFilamentTrackSwitch: overrides.slicedWithFilamentTrackSwitch ?? false

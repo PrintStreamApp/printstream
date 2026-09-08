@@ -159,7 +159,11 @@ export const NewCalibrationDialog = memo(function NewCalibrationDialog({ printer
     ?? (machineProfiles.find((profile) => /\b0\.4\b/.test(profile.name)) ?? machineProfiles[0])?.id
   const selectedMachineProfile = machineProfiles.find((profile) => profile.id === resolvedMachine) ?? null
   const processProfiles = useMemo(
-    () => profiles.filter((profile) => profile.kind === 'process' && isProcessProfileCompatible(profile, selectedMachineProfile, model, nozzleDiameters, '')),
+    // The catalogue is passed for the same reason the slice dialog passes it: a project preset is
+    // judged by its PARENT's declared compatibility rather than by its name. Inert here today (this
+    // list carries no `project:` presets), and passed anyway so the two surfaces cannot answer
+    // differently the moment one does.
+    () => profiles.filter((profile) => profile.kind === 'process' && isProcessProfileCompatible(profile, selectedMachineProfile, model, nozzleDiameters, '', profiles)),
     [profiles, selectedMachineProfile, model, nozzleDiameters]
   )
   const resolvedProcess = processId

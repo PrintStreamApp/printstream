@@ -7,7 +7,7 @@
  * order and page size are the deliberate exception: they persist and are shared across kinds,
  * because they are a display preference rather than a property of the list being shown.
  */
-import React, { lazy, Suspense } from 'react'
+import React, { lazy } from 'react'
 import DeleteRoundedIcon from '@mui/icons-material/DeleteRounded'
 import SearchRoundedIcon from '@mui/icons-material/SearchRounded'
 import { Alert, Button, Chip, FormControl, FormLabel, Select, Sheet, Stack, Typography } from '@mui/joy'
@@ -38,7 +38,7 @@ import {
 import { type DirectorySortDirection, type DirectorySortOption } from '../../DirectoryControls'
 import { DirectoryPrimaryToolbar, type ModalSafeStickyTop } from '../../DirectoryToolbar'
 import { EmptyState } from '../../EmptyState'
-import { LazyDialogFallback } from '../../LazyDialogFallback'
+import { LazyDialogBoundary } from '../../LazyDialogBoundary'
 
 // Code-split like every other host of these dialogs: they pull in the whole settings catalog.
 const ProcessSettingsDialog = lazy(() => import('../../ProcessSettingsDialog'))
@@ -265,7 +265,7 @@ export function SlicingPresetKindPanel({ kind, profiles, emptyDescription, stick
   }
 
   const editor = openProfile && (
-    <Suspense fallback={<LazyDialogFallback label="Opening preset…" />}>
+    <LazyDialogBoundary label="the preset" onClose={() => setOpenProfile(null)}>
       {openProfile.kind === 'filament' ? (
       <FilamentSettingsDialog
         open
@@ -308,7 +308,7 @@ export function SlicingPresetKindPanel({ kind, profiles, emptyDescription, stick
         canEditOriginal={openProfile.source === 'custom'}
       />
       )}
-    </Suspense>
+    </LazyDialogBoundary>
   )
 
   // The kind has no presets at all, not even built-ins, so the slicer has nothing installed.

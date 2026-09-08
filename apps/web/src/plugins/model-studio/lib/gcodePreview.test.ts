@@ -436,8 +436,6 @@ test('parseGcodeLayers accumulates per-feature time, filament usage, and the hea
   // Travel = the XY return (67.08mm at 100mm/s) plus the initial Z move (0.2mm at 10mm/s).
   assert.ok(Math.abs(stats.travelSeconds - (Math.hypot(60, 30) / 100 + 0.02)) < 1e-3, `travel ${stats.travelSeconds}`)
   assert.ok(Math.abs(stats.totalSeconds - (6 + stats.travelSeconds)) < 1e-9)
-  assert.equal(stats.featureExtrusionMm[2], 2)
-  assert.equal(stats.featureExtrusionMm[4], 1)
   assert.equal(stats.filamentMm, 3)
   assert.ok(Math.abs(stats.maxZ - 0.2) < 1e-9)
 })
@@ -594,4 +592,327 @@ test('scrubbing hides upper layers and truncates the top one, as the single mesh
   const truncated = drawnTriangles(preview)
   assert.ok(truncated.size > 0 && truncated.size < topOnly.size, 'the move scrub still truncates')
   for (const triangle of truncated) assert.ok(topOnly.has(triangle))
+})
+
+test('a retract is an E-only move; a retract fused with a Z-hop is not', () => {
+  // BambuStudio's classifier requires ZERO motion on X, Y and Z for a Retract/Unretract
+  // (GCodeProcessor.cpp:4047-4064). A combined `G1 Z0.6 E-0.8` is a Travel and earns no marker.
+  const gcode = [
+    'G90', 'M83', '; LAYER_HEIGHT: 0.2', '; LINE_WIDTH: 0.42', '; FEATURE: Outer wall',
+    'G1 X0 Y0 Z0.2 F1200',
+    'G1 X10 Y0 E1',
+    'G1 E-0.8 F1800',        // pure retract -> marker
+    'G1 X20 Y0 F30000',      // travel
+    'G1 E0.8 F1800',         // pure unretract -> marker
+    'G1 X30 Y0 E1',
+    'G1 Z0.6 E-0.8 F1800'    // retract fused with a Z-hop -> NOT a marker
+  ].join('\n')
+  const parsed = parseGcodeLayers(gcode)
+  const kinds = [...parsed.markerKinds]
+  assert.equal(kinds.filter((kind) => kind === 0).length, 1, 'one retract')
+  assert.equal(kinds.filter((kind) => kind === 1).length, 1, 'one unretract')
+})
+
+test('a wipe region is its own path, and leaves the travel bucket', () => {
+  // Wipe wins over the E sign in BambuStudio's classifier, so every move between the tags is a
+  // wipe. Before this they were drawn as travel and their time was reported as travel time.
+  const gcode = [
+    'G90', 'M83', '; LAYER_HEIGHT: 0.2', '; LINE_WIDTH: 0.42', '; FEATURE: Outer wall',
+    'G1 X0 Y0 Z0.2 F1200',
+    'G1 X10 Y0 E1',
+    ';WIPE_START',
+    'G1 X8 Y0 E-0.4 F600',
+    'G1 X6 Y0 E-0.4 F600',
+    ';WIPE_END',
+    'G1 X20 Y0 F30000'
+  ].join('\n')
+  const parsed = parseGcodeLayers(gcode)
+  assert.equal(parsed.wipePositions.length / 6, 2, 'both wipe moves are wipe segments')
+  assert.equal(parsed.travelKinds.length, 1, 'only the real travel remains a travel')
+  assert.ok(parsed.stats.wipeSeconds > 0, 'wipe time is tallied')
+  // The Travel legend row must describe the travel the Travel swatch draws, so wipe time is not
+  // folded into it.
+  const wipeTime = (2 * 2) / (600 / 60)
+  assert.ok(Math.abs(parsed.stats.wipeSeconds - wipeTime) < 1e-6)
+})
+
+test('a seam is emitted at the midpoint of an outer wall loop that closes on itself', () => {
+  // Ported from GCodeProcessor.cpp:4365-4407. The run's start vertex is the position BEFORE the
+  // first outer-wall extrusion, and the end is the position before the move that ends the run;
+  // within 0.25mm of each other, the seam is their midpoint.
+  const closed = [
+    'G90', 'M83', '; LAYER_HEIGHT: 0.2', '; LINE_WIDTH: 0.42',
+    'G1 X0 Y0 Z0.2 F1200',
+    '; FEATURE: Outer wall',
+    'G1 X10 Y0 E1',
+    'G1 X10 Y10 E1',
+    'G1 X0 Y10 E1',
+    'G1 X0 Y0 E1',          // back to the start: a closed loop
+    '; FEATURE: Sparse infill',
+    'G1 X5 Y5 E1'           // ends the outer-wall run
+  ].join('\n')
+  const seams = [...parseGcodeLayers(closed).markerKinds].filter((kind) => kind === 2)
+  assert.equal(seams.length, 1, 'one closed loop, one seam')
+  const parsed = parseGcodeLayers(closed)
+  const seamIndex = [...parsed.markerKinds].indexOf(2)
+  // Loop start (0,0) and loop end (0,0) -> midpoint (0,0).
+  assert.ok(Math.abs(parsed.markerPositions[seamIndex * 3]!) < 1e-6)
+  assert.ok(Math.abs(parsed.markerPositions[seamIndex * 3 + 1]!) < 1e-6)
+
+  // An outer-wall run that does NOT return near its start is not a seam.
+  const open = [
+    'G90', 'M83', '; LAYER_HEIGHT: 0.2', '; LINE_WIDTH: 0.42',
+    'G1 X0 Y0 Z0.2 F1200',
+    '; FEATURE: Outer wall',
+    'G1 X10 Y0 E1',
+    'G1 X20 Y0 E1',
+    '; FEATURE: Sparse infill',
+    'G1 X25 Y5 E1'
+  ].join('\n')
+  assert.equal([...parseGcodeLayers(open).markerKinds].filter((kind) => kind === 2).length, 0)
+})
+
+test('an overhang wall continues a seam run rather than ending it', () => {
+  // Studio's end test excludes BOTH erExternalPerimeter and erOverhangPerimeter, so a loop that
+  // dips into an overhang mid-way is still one loop with one seam.
+  const gcode = [
+    'G90', 'M83', '; LAYER_HEIGHT: 0.2', '; LINE_WIDTH: 0.42',
+    'G1 X0 Y0 Z0.2 F1200',
+    '; FEATURE: Outer wall',
+    'G1 X10 Y0 E1',
+    '; FEATURE: Overhang wall',
+    'G1 X10 Y10 E1',
+    '; FEATURE: Outer wall',
+    'G1 X0 Y10 E1',
+    'G1 X0 Y0 E1',
+    '; FEATURE: Sparse infill',
+    'G1 X5 Y5 E1'
+  ].join('\n')
+  const seams = [...parseGcodeLayers(gcode).markerKinds].filter((kind) => kind === 2)
+  assert.equal(seams.length, 1, 'the overhang did not split the loop into two runs')
+})
+
+test('markers and wipes are scrubbed by layer, and hidden unless switched on', () => {
+  // Each layer's wall run travels 10mm and never returns near its start, so no seam is detected
+  // and the retract markers are the only ones: the mesh under test is unambiguous.
+  const gcode = [
+    'G90', 'M83', '; LAYER_HEIGHT: 0.2', '; LINE_WIDTH: 0.42', '; FEATURE: Outer wall',
+    'G1 X0 Y0 Z0.2 F1200',
+    'G1 X10 Y0 E1', 'G1 E-0.8',                  // layer 0: one retract marker
+    'G1 X20 Y0 Z0.4 E1', 'G1 E-0.8',             // layer 1: one retract marker
+    'G1 X30 Y0 Z0.6 E1', 'G1 E-0.8'              // layer 2: one retract marker
+  ].join('\n')
+  const parsed = parseGcodeLayers(gcode)
+  assert.equal([...parsed.markerKinds].filter((kind) => kind === 0).length, 3)
+  assert.equal([...parsed.markerKinds].filter((kind) => kind === 2).length, 0, 'no loop closed')
+
+  const preview = buildLayeredGcodePreview(parsed)
+  const markerMeshes = preview.object.children.filter(
+    (child) => (child as THREE.Mesh).isMesh && (child as THREE.Mesh).userData.layer === undefined
+  ) as THREE.Mesh[]
+  assert.equal(markerMeshes.length, 1, 'only the retract kind has any markers, so only it is added')
+  const retracts = markerMeshes[0]!
+
+  preview.setVisibleLayers(2)
+  assert.equal(retracts.visible, false, 'markers are off unless the legend asks for them')
+
+  preview.setVisibleLayers(2, { markers: { retract: true } })
+  assert.equal(retracts.visible, true)
+  const allLayers = retracts.geometry.drawRange.count
+  assert.ok(allLayers > 0)
+
+  preview.setVisibleLayers(0, { markers: { retract: true } })
+  assert.equal(retracts.geometry.drawRange.start, 0)
+  assert.ok(retracts.geometry.drawRange.count < allLayers, 'scrubbing down draws fewer markers')
+
+  preview.setVisibleLayers(2, { markers: { retract: true }, single: true })
+  assert.ok(retracts.geometry.drawRange.start > 0, 'single layer starts partway in')
+  preview.dispose()
+})
+
+test('parseGcodeLayers records per-segment speed, flow, fan and temperature', () => {
+  // F1200 = 20 mm/s. Over 10mm the move extrudes 1mm of 1.75mm filament, so
+  // mm3_per_mm = (1/10) * pi*(1.75/2)^2 = 0.24053, and flow = 20 * 0.24053 = 4.8106 mm3/s
+  // (BambuStudio's `volumetric_rate() = feedrate * mm3_per_mm`).
+  const gcode = [
+    '; filament_diameter: 1.75,1.75',
+    'G90', 'M82',
+    'M104 S220',
+    'M106 S255',
+    '; LAYER_HEIGHT: 0.2',
+    '; LINE_WIDTH: 0.42',
+    '; FEATURE: Outer wall',
+    'G1 X0 Y0 Z0.2',
+    'G1 X10 Y0 E1 F1200'
+  ].join('\n')
+  const parsed = parseGcodeLayers(gcode)
+  assert.equal(parsed.extrusionFeedrates.length, 1)
+  assert.ok(Math.abs(parsed.extrusionFeedrates[0]! - 20) < 1e-6, 'mm/s, not the raw mm/min F word')
+  assert.ok(Math.abs(parsed.extrusionVolumetric[0]! - 4.8106) < 1e-3, `flow was ${parsed.extrusionVolumetric[0]}`)
+  assert.equal(parsed.extrusionFanSpeeds[0], 100, 'S255 is 100%, not 255')
+  assert.equal(parsed.extrusionTemperatures[0], 220)
+})
+
+test('only the part-cooling fan counts: M106 P2 is the auxiliary fan, not part cooling', () => {
+  // Bambu addresses the side fan as P2 and the chamber fan as P3. Reading every M106 into one
+  // number made a chamber fan read as part cooling, so the Fan speed view showed the wrong duty.
+  const gcode = [
+    'G90', 'M82', '; FEATURE: Outer wall', 'G1 X0 Y0 Z0.2 F1200',
+    'M106 S128',        // part cooling to ~50%
+    'G1 X10 Y0 E1',
+    'M106 P2 S255',     // auxiliary fan full: must not touch the part-cooling reading
+    'G1 X20 Y0 E2',
+    'M106 P1 S0',       // explicit part-cooling port off
+    'G1 X30 Y0 E3',
+    'M107',             // fan off
+    'G1 X40 Y0 E4'
+  ].join('\n')
+  const parsed = parseGcodeLayers(gcode)
+  assert.deepEqual([...parsed.extrusionFanSpeeds], [50, 50, 0, 0])
+})
+
+test('a travel move takes its colour kind from the SIGN of its E delta', () => {
+  // BambuStudio's Travel_Colors: 0 Move, 1 Extrude, 2 Retract (LegacyRenderer.cpp:1788-1792).
+  const gcode = [
+    'G90', 'M83', '; FEATURE: Outer wall',
+    'G1 X0 Y0 Z0.2 F1200',
+    'G1 X10 Y0 E1',      // extrusion, not travel
+    'G1 X20 Y0',         // plain travel -> Move
+    'G1 X30 Y0 E-0.8',   // wipe while retracting -> Retract
+    'G1 X40 Y0 E0.8'     // travel while extruding -> counts as an extrusion, not a travel
+  ].join('\n')
+  const parsed = parseGcodeLayers(gcode)
+  assert.deepEqual([...parsed.travelKinds], [0, 2], 'the de-retract move extrudes, so it is a bead')
+})
+
+test('ranges span the whole print and exclude what would skew the legend', () => {
+  const gcode = [
+    'G90', 'M82',
+    '; LAYER_HEIGHT: 0.2', '; LINE_WIDTH: 0.42', '; FEATURE: Outer wall',
+    'G1 X0 Y0 Z0.2 F1200',
+    'G1 X10 Y0 E1',
+    '; LINE_WIDTH: 0.6', '; FEATURE: Sparse infill',
+    'G1 X20 Y0 E2',
+    // Custom G-code (priming lines, purge) extrudes at wild widths; Studio excludes erCustom from
+    // the width/height ranges so real printing values are not squashed into one ramp stop.
+    '; LINE_WIDTH: 8.0', '; FEATURE: Custom',
+    'G1 X30 Y0 E9'
+  ].join('\n')
+  const { ranges } = parseGcodeLayers(gcode)
+  assert.equal(ranges.lineWidth.min, 0.42)
+  assert.equal(ranges.lineWidth.max, 0.6, 'the 8.0mm custom-G-code line must not define the maximum')
+  assert.ok(Math.abs(ranges.layerHeight.min - 0.2) < 1e-9)
+})
+
+test('the Speed range has a travel-excluded and a travel-included form', () => {
+  // BambuStudio folds travel feedrates into the Speed ramp only while travel is displayed
+  // (BaseRenderer.cpp:1311). Travels are far faster, so including them compresses every printing
+  // speed into the ramp's bottom; both are precomputed so the toggle re-picks rather than re-walks.
+  const gcode = [
+    'G90', 'M82', '; FEATURE: Outer wall',
+    'G1 X0 Y0 Z0.2 F1200',
+    'G1 X10 Y0 E1 F1200',   // 20 mm/s extruding
+    'G1 X20 Y0 F30000'      // 500 mm/s travelling
+  ].join('\n')
+  const { ranges } = parseGcodeLayers(gcode)
+  assert.equal(ranges.feedrate.max, 20)
+  assert.equal(ranges.feedrateWithTravel.max, 500)
+})
+
+test('setViewMode repaints the bead colours and back again', () => {
+  const gcode = [
+    'G90', 'M82', '; LAYER_HEIGHT: 0.2', '; LINE_WIDTH: 0.42',
+    '; FEATURE: Outer wall',
+    'G1 X0 Y0 Z0.2 F600',
+    'G1 X10 Y0 E1 F600',      // slow
+    '; FEATURE: Sparse infill',
+    'G1 X10 Y10 E2 F6000'     // ten times faster, and a different feature
+  ].join('\n')
+  const preview = buildLayeredGcodePreview(parseGcodeLayers(gcode))
+  const colors = extrusionGeometry(preview).getAttribute('color') as THREE.BufferAttribute
+  const snapshot = () => Array.from(colors.array as Uint8Array)
+
+  const feature = snapshot()
+  const versionBefore = colors.version
+  preview.setViewMode('speed', { showTravel: false })
+  const speed = snapshot()
+  assert.notDeepEqual(speed, feature, 'switching to a range view must repaint')
+  // `needsUpdate` is a write-only setter in three (it bumps `version`), so the re-upload signal
+  // has to be read off the version, not off the property that was assigned.
+  assert.ok(colors.version > versionBefore, 'the attribute must be flagged for re-upload')
+
+  // The two segments differ in speed, so they must differ in colour under the Speed view.
+  assert.notEqual(speed.slice(0, 3).join(','), speed.slice(-3).join(','))
+
+  preview.setViewMode('feature', { showTravel: false })
+  assert.deepEqual(snapshot(), feature, 'returning to the feature view restores the original colours')
+  preview.dispose()
+})
+
+test('the colour buffers survive the upload free that releases every other array', () => {
+  // The memory contract changed for #92: geometry arrays are still freed after upload, but the
+  // colour arrays are KEPT so a view-mode switch can rewrite them. Freeing one is not a slow
+  // path, it is a crash, because three would then upload from a null array on needsUpdate.
+  const gcode = [
+    'G90', 'M82', '; LAYER_HEIGHT: 0.2', '; LINE_WIDTH: 0.42', '; FEATURE: Outer wall',
+    'G1 X0 Y0 Z0.2 F1200', 'G1 X10 Y0 E1', 'G0 X0 Y0'
+  ].join('\n')
+  const preview = buildLayeredGcodePreview(parseGcodeLayers(gcode))
+  const geometry = extrusionGeometry(preview)
+  const travel = preview.object.children.find(
+    (child) => (child as unknown as { isLineSegments?: boolean }).isLineSegments
+  ) as THREE.LineSegments
+
+  const attributes: THREE.BufferAttribute[] = [
+    geometry.getAttribute('position') as THREE.BufferAttribute,
+    geometry.getAttribute('normal') as THREE.BufferAttribute,
+    geometry.getAttribute('color') as THREE.BufferAttribute,
+    travel.geometry.getAttribute('position') as THREE.BufferAttribute,
+    travel.geometry.getAttribute('color') as THREE.BufferAttribute
+  ]
+  // Run the callbacks exactly as the renderer does after uploading each buffer.
+  for (const attribute of attributes) attribute.onUploadCallback.call(attribute)
+
+  assert.equal(geometry.getAttribute('position').array, null, 'positions are still freed')
+  assert.equal(geometry.getAttribute('normal').array, null, 'normals are still freed')
+  assert.ok(geometry.getAttribute('color').array instanceof Uint8Array, 'bead colours are kept')
+  assert.equal(travel.geometry.getAttribute('position').array, null, 'travel positions are still freed')
+  assert.ok(travel.geometry.getAttribute('color').array instanceof Uint8Array, 'travel colours are kept')
+
+  // And the kept buffers are genuinely usable afterwards.
+  preview.setViewMode('flow', { showTravel: true })
+  preview.dispose()
+})
+
+test('travel spans every visible layer, not just the top one', () => {
+  // BambuStudio tests travel against the full visible layer range (LegacyRenderer.cpp:1866-1871).
+  // Showing only the top layer's travel hid what travel is looked at for: where the head goes
+  // between the parts of a print, which is a question about the print, not about one layer.
+  const gcode = [
+    'G90', 'M82', '; LAYER_HEIGHT: 0.2', '; LINE_WIDTH: 0.42', '; FEATURE: Outer wall',
+    'G1 X0 Y0 Z0.2 F1200',
+    'G1 X10 Y0 E1', 'G0 X20 Y0',            // layer 0: one bead, one travel
+    'G1 X20 Y0 Z0.4 E2', 'G0 X30 Y0',       // layer 1: one bead, one travel
+    'G1 X30 Y0 Z0.6 E3', 'G0 X40 Y0'        // layer 2: one bead, one travel
+  ].join('\n')
+  const preview = buildLayeredGcodePreview(parseGcodeLayers(gcode))
+  const travel = preview.object.children.find(
+    (child) => (child as unknown as { isLineSegments?: boolean }).isLineSegments
+  ) as THREE.LineSegments
+
+  preview.setVisibleLayers(2, { showTravel: true })
+  assert.equal(travel.visible, true)
+  assert.equal(travel.geometry.drawRange.start, 0, 'travel starts at the bottom visible layer')
+  assert.equal(travel.geometry.drawRange.count, 6, 'all three layers of travel (2 verts each)')
+
+  preview.setVisibleLayers(1, { showTravel: true })
+  assert.equal(travel.geometry.drawRange.count, 4, 'scrubbing down drops the hidden layer travel')
+
+  preview.setVisibleLayers(2, { showTravel: true, single: true })
+  assert.equal(travel.geometry.drawRange.start, 4, 'single layer isolates that layer travel')
+  assert.equal(travel.geometry.drawRange.count, 2)
+
+  preview.setVisibleLayers(2, { showTravel: false })
+  assert.equal(travel.visible, false)
+  preview.dispose()
 })

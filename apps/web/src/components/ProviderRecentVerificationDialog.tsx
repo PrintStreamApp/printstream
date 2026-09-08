@@ -1,5 +1,5 @@
 import WarningAmberRoundedIcon from '@mui/icons-material/WarningAmberRounded'
-import { Alert, DialogContent, DialogTitle, ModalDialog, Typography } from '@mui/joy'
+import { Alert, Button, DialogActions, DialogContent, DialogTitle, ModalDialog, Typography } from '@mui/joy'
 import type { AuthBootstrap } from '@printstream/shared'
 import React from 'react'
 import { BackAwareModal as Modal } from './BackAwareModal'
@@ -53,10 +53,22 @@ export function ProviderRecentVerificationDialog({
           }}
         />
 
+        {/* The dismiss belongs to this branch, not to the dialog: every other exit here is the
+            slot's own Cancel, and the slot renders NOTHING when no provider advertises a method,
+            leaving a warning and no buttons at all. That was survivable while a click outside closed
+            a dialog and is not now that only a deliberate gesture does (see `BackAwareModal`).
+            Deliberately not a `ModalClose`: the slot disables its Cancel while a verification is in
+            flight (a passkey ceremony, an emailed code), and an always-enabled X above it would tear
+            the dialog down mid-ceremony, which is the case the slot is careful about. */}
         {noProviderSupportsRecentVerification && (
-          <Alert color="warning" variant="soft" startDecorator={<WarningAmberRoundedIcon />}>
-            No enabled auth provider can re-verify this action yet.
-          </Alert>
+          <>
+            <Alert color="warning" variant="soft" startDecorator={<WarningAmberRoundedIcon />}>
+              No enabled auth provider can re-verify this action yet.
+            </Alert>
+            <DialogActions>
+              <Button variant="plain" color="neutral" onClick={onClose}>Close</Button>
+            </DialogActions>
+          </>
         )}
       </ModalDialog>
     </Modal>

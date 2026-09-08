@@ -9,10 +9,11 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
-  Alert, Button, Chip, CircularProgress, DialogActions, Sheet, Stack, Typography
+  Alert, Button, Chip, CircularProgress, DialogActions, ModalClose, Sheet, Stack, Typography
 } from '@mui/joy'
 import ErrorOutlineRoundedIcon from '@mui/icons-material/ErrorOutlineRounded'
 import PrintRoundedIcon from '@mui/icons-material/PrintRounded'
+import RefreshRoundedIcon from '@mui/icons-material/RefreshRounded'
 import VisibilityRoundedIcon from '@mui/icons-material/VisibilityRounded'
 import WarningAmberRoundedIcon from '@mui/icons-material/WarningAmberRounded'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -22,6 +23,7 @@ import { refreshSlicingJobs, seedSlicingJob } from '../../lib/slicingJobsCache'
 import { invalidateLibraryListQueries } from '../../lib/libraryQueryInvalidation'
 import { BackAwareModal as Modal } from '../BackAwareModal'
 import { ScrollableDialogBody, ScrollableModalDialog } from '../ScrollableDialog'
+import { SlicingEngineLog } from '../SlicingEngineLog'
 import { PluginSlot } from '../../plugin/PluginSlot'
 import { formatLibraryFileName, splitLibraryFileNameForRename } from '../../lib/libraryDisplay'
 import { LibraryDestinationDialog } from '../LibraryDestinationDialog'
@@ -35,6 +37,7 @@ import { buildDefaultAmsMappingFromSlicingTarget, resolveSlicingLeaveAction } fr
 import { SliceEstimates } from './SliceEstimates'
 import { toast } from '../../lib/toast'
 import { suppressJobToast } from '../../lib/dialogToastSuppression'
+import { useRetrySlicingJob } from '../../hooks/useRetrySlicingJob'
 import { useSlicingJob } from '../../hooks/useSlicingJob'
 import { PrintModal } from './PrintModal'
 import { ProgressBar } from '../ProgressBar'
@@ -128,6 +131,7 @@ export function SliceThenPrintModal({
   // The job's own record, not the list: the list carries only active/recent jobs now, and a
   // dialog left open after its slice settles must keep seeing the job (seeded by seedSlicingJob).
   const slicingJobQuery = useSlicingJob(jobId)
+  const retrySlicing = useRetrySlicingJob()
   // While this dialog tracks the job, suppress its redundant global toast.
   useEffect(() => suppressJobToast('slicing', jobId), [jobId])
   const job = slicingJobQuery.data?.job ?? null
@@ -288,6 +292,9 @@ export function SliceThenPrintModal({
                       {jobError}
                     </Alert>
                   )}
+                  {/* The summarised error is one sentence; when it is not enough, the engine's own
+                      output is the next place to look and used to be unreachable from the app. */}
+                  {job.status === 'failed' && <SlicingEngineLog jobId={job.id} />}
                 </Stack>
               </Sheet>
             )}
@@ -301,7 +308,23 @@ export function SliceThenPrintModal({
               Cancel slicing
             </Button>
           ) : (
-            <Button type="button" variant="plain" color="neutral" onClick={handleDismiss}>Close</Button>
+            <>
+              <Button type="button" variant="plain" color="neutral" onClick={handleDismiss}>Close</Button>
+              {/* An open slice dialog suppresses this job's toast (`dialogToastSuppression`), so
+                  while the user is here this is the ONLY place the retry exists. */}
+              {job?.status === 'failed' && (
+                <Button
+                  type="button"
+                  variant="solid"
+                  color="primary"
+                  startDecorator={<RefreshRoundedIcon />}
+                  loading={retrySlicing.isPending}
+                  onClick={() => retrySlicing.mutate(job.id)}
+                >
+                  Retry
+                </Button>
+              )}
+            </>
           )}
         </DialogActions>
       </ScrollableModalDialog>
@@ -344,6 +367,7 @@ export function SliceResultModal({
   const queryClient = useQueryClient()
   // The job's own record, not the list: see the sibling dialog above.
   const slicingJobQuery = useSlicingJob(jobId)
+  const retrySlicing = useRetrySlicingJob()
   useEffect(() => suppressJobToast('slicing', jobId), [jobId])
   const [printing, setPrinting] = useState(false)
   const [saved, setSaved] = useState(false)
@@ -447,6 +471,11 @@ export function SliceResultModal({
     <>
     <Modal open onClose={handleClose}>
       <ScrollableModalDialog sx={{ maxWidth: 480, width: '100%' }}>
+        {/* The only pointer exit while a slice runs: the footer's "Cancel slicing" cancels in place
+            and leaves the dialog up on the cancelled result, so without this the sole way out was a
+            click outside, which no longer closes a dialog (see `BackAwareModal`). Routed through
+            `handleClose` like Escape and Back, so leaving still cancels rather than orphaning. */}
+        <ModalClose />
         <Typography level="h4">Slice results</Typography>
         <ScrollableDialogBody sx={{ mt: 1 }}>
           <Stack spacing={1.25}>
@@ -497,6 +526,7 @@ export function SliceResultModal({
                       {jobError}
                     </Alert>
                   )}
+                  {job.status === 'failed' && <SlicingEngineLog jobId={job.id} />}
                 </Stack>
               </Sheet>
             )}
@@ -505,7 +535,8 @@ export function SliceResultModal({
         <DialogActions>
           {job && isSlicingInProgress(job.status) ? (
             // No plain "Close" while slicing runs, leaving would orphan the output, so the
-            // explicit exit cancels (backdrop/escape also cancel via handleClose).
+            // explicit exit cancels. Unlike the X, Escape and Back (all `handleClose`), this one
+            // cancels IN PLACE and leaves the dialog up on the cancelled result.
             <Button type="button" variant="plain" color="danger" loading={cancelSlicing.isPending} onClick={() => cancelSlicing.mutate()}>
               Cancel slicing
             </Button>
@@ -522,6 +553,18 @@ export function SliceResultModal({
               onClick={() => setSaveDestinationOpen(true)}
             >
               {saved ? 'Saved' : 'Save to library'}
+            </Button>
+          )}
+          {/* An open slice dialog suppresses this job's toast (`dialogToastSuppression`), so while
+              the user is here this is the ONLY place the retry exists. */}
+          {job?.status === 'failed' && (
+            <Button
+              type="button"
+              startDecorator={<RefreshRoundedIcon />}
+              loading={retrySlicing.isPending}
+              onClick={() => retrySlicing.mutate(job.id)}
+            >
+              Retry
             </Button>
           )}
           {ready && canPrint && (

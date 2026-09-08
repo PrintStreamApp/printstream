@@ -33,7 +33,6 @@ import {
   processSettingsCatalog,
   recommendSupportSettingsForInterfaceFilament,
   validateProcessConfig,
-  type ProcessSettingOption,
   type ProcessSettingOverrides,
   type ProcessVisibilityContext,
   describeSettingsBaseline,
@@ -49,6 +48,7 @@ import { SlicingPresetAutocomplete } from './library/SlicingPresetAutocomplete'
 import { usePromptDialog } from './PromptDialogProvider'
 import { SettingsCatalogDialog } from './settings/SettingsCatalogDialog'
 import { SettingsBaselineNote } from './settings/SettingsBaselineNote'
+import { formatSettingValueForDisplay } from './settings/settingValueDisplay'
 import { resolveWorkspaceProcessConfig } from './workspaceProcessResolver'
 import type { SettingsCatalogAdapter } from './settings/settingsCatalogAdapter'
 import type { SettingFilamentChoice } from './settings/SettingValueField'
@@ -151,21 +151,11 @@ export type ProcessConfigResolver = (request: {
  */
 const SUPPORT_INTERFACE_FILAMENT_KEY = 'support_interface_filament'
 
-/**
- * Display form of a recommended serialized scalar for the suggestion prompt: bools as on/off,
- * enum codes through the catalogue's labels, numbers with the option's unit. The combination
- * table changes up to a dozen settings, including turning support ON and switching its type,
- * so the prompt names what each setting becomes, not just which settings move.
+/*
+ * The suggestion prompt's value formatting lives in `settings/settingValueDisplay.ts`: the
+ * parameter table renders the same settings and has to say the same thing about them. It stays
+ * lower case here because the prompt reads the value inside a sentence.
  */
-function formatRecommendedSettingValue(option: ProcessSettingOption | undefined, value: string): string {
-  if (!option) return value
-  if (option.type === 'bool') return value === '1' ? 'on' : 'off'
-  if (option.type === 'enum') {
-    const index = option.enumValues?.indexOf(value) ?? -1
-    return option.enumLabels?.[index] ?? value
-  }
-  return option.sidetext ? `${value} ${option.sidetext}` : value
-}
 
 export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps): JSX.Element {
   const { open, onClose, slicerTargetId, processProfileId, processProfileName, sourceFileId, initialOverrides, initialOverridesByMember, profileOptions, onProfileChange, allowedKeys, baseOverlay, titlePrefix, filamentChoices, applyScope = 'slice', canEditOriginal, resolveConfig, onApply } = props
@@ -484,7 +474,7 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
 
     const changedEntries = Object.entries(recommendation.changes).map(([key, value]) => {
       const option = processSettingsCatalog.options[key]
-      return { key, label: option?.label ?? key, value: formatRecommendedSettingValue(option, value) }
+      return { key, label: option?.label ?? key, value: formatSettingValueForDisplay(option, value) }
     })
     const accepted = await confirm({
       title: 'Suggestion',

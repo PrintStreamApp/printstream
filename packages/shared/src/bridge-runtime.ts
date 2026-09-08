@@ -784,7 +784,14 @@ export const bridgeLibraryThreeMfProjectFilamentSchema = z.object({
    * "unknown" and not as false: see `support-recommendations.ts`.
    */
   isSupport: z.boolean().nullable().optional(),
-  isSoluble: z.boolean().nullable().optional()
+  isSoluble: z.boolean().nullable().optional(),
+  /**
+   * The slot's `filament_cost`: price per KILOGRAM, with no currency attached.
+   *
+   * BambuStudio labels it "money/kg" and stores no currency anywhere, so a consumer that shows it
+   * supplies its own symbol. Optional so a bridge running an older parser still validates.
+   */
+  costPerKg: z.number().nullable().optional()
 })
 
 export type BridgeLibraryThreeMfProjectFilament = z.infer<typeof bridgeLibraryThreeMfProjectFilamentSchema>
@@ -823,6 +830,14 @@ export const bridgeLibraryThreeMfIndexSchema = z.object({
   supportFilamentIds: z.array(z.number().int().positive()).default([]),
   printerProfileName: z.string().nullable().default(null),
   processProfileName: z.string().nullable().default(null),
+  /**
+   * The system process preset the project's own process was derived from (`inherits_group[0]`).
+   * This, not `processProfileName`, is what the engine judges process-vs-printer compatibility by,
+   * so it is the only evidence a slice dialog has that a project preset was authored for another
+   * machine. Null for a project whose process IS a system preset, and on an index from a bridge
+   * older than parser v38 (which reads as "unknown", i.e. behaves as before).
+   */
+  processProfileInherits: z.string().nullable().default(null),
   /**
    * No Bambu project metadata (a vanilla/CAD-exported mesh container: see the shared
    * index parser): consumers treat the file like STL/STEP, never as an openable project.

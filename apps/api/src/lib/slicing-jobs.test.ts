@@ -871,6 +871,215 @@ test('a builtin-profile compatibility failure fails the slice instead of retryin
     )
   })
 })
+
+test('retrying a failed slice re-runs it under the same job id, re-homed on the retrying tab', async () => {
+  const jobs = new SlicingJobs({ progressPollIntervalMs: 10, progressHeartbeatIntervalMs: 10_000, resolveSource: passthroughResolveSource, authorSliceSettings: noAuthoring })
+  let runs = 0
+
+  slicerClient.isConfigured = (() => true) as typeof slicerClient.isConfigured
+  slicerClient.progress = (async () => ({ kind: 'unclaimed' })) as typeof slicerClient.progress
+  slicerClient.run = (async () => {
+    runs += 1
+    throw new SlicerServiceError('Slicing failed', [])
+  }) as typeof slicerClient.run
+
+  const job = jobs.enqueue({
+    workspaceId: 'workspace-1',
+    workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
+    sourceFileId: 'file-1',
+    sourceFileName: 'part.3mf',
+    sourcePath: '/tmp/part.3mf',
+    targetBridgeId: null,
+    request: { ...makeRequest(), ownerClientId: 'tab-a' }
+  })
+  await waitFor(() => {
+    assert.equal(jobs.get('workspace-1', job.id).status, 'failed')
+    assert.equal(runs, 1)
+  })
+  assert.equal(
+    jobs.get('workspace-1', job.id).output.some((line) => line.text.includes('Slicing failed')),
+    true,
+    'the failed attempt logged its reason'
+  )
+
+  const retried = jobs.retry('workspace-1', job.id, 'tab-b')
+  // The id is the contract: every toast and slice dialog tracks a slice by it, so a retry that
+  // minted a new job would leave the surface showing the failure watching a corpse.
+  assert.equal(retried.id, job.id)
+  assert.equal(retried.error, null)
+  // Only the FAILED attempt's log has to be gone. The new run has already opened its own by the
+  // time this returns: `retry` pumps the queue synchronously, so `run` reaches its first status
+  // line before the caller sees the DTO.
+  assert.equal(
+    retried.output.some((line) => line.text.includes('Slicing failed')),
+    false,
+    'the failed attempt log must not bleed into the new run'
+  )
+  // The retrying tab owns it now: ownerClientId decides who is shown the toast and whose departure
+  // cancels the work, and both have to follow the retry rather than the tab that first failed.
+  assert.equal(retried.ownerClientId, 'tab-b')
+
+  await waitFor(() => {
+    assert.equal(runs, 2, 'the retry actually reached the slicer')
+    assert.equal(jobs.get('workspace-1', job.id).status, 'failed')
+  })
+})
+
+test('retrying clears the failed attempt thumbnail so a successful retry can derive its own', async () => {
+  // A failed slice has no output yet, so `ensureHistoryThumbnail` can only derive one from the
+  // SOURCE file, and it early-returns once a path is set. Leaving that path across a retry pins the
+  // pre-slice preview onto a job that went on to produce a real sliced plate cover.
+  const persistedThumbnailCalls: unknown[] = []
+  const jobs = new SlicingJobs({
+    progressPollIntervalMs: 10,
+    progressHeartbeatIntervalMs: 10_000,
+    resolveSource: passthroughResolveSource,
+    authorSliceSettings: noAuthoring,
+    persistThumbnail: async (input) => {
+      persistedThumbnailCalls.push(input)
+      return await savePrintJobThumbnail(input.jobId, Buffer.from('png'))
+    }
+  })
+
+  slicerClient.isConfigured = (() => true) as typeof slicerClient.isConfigured
+  slicerClient.progress = (async () => ({ kind: 'unclaimed' })) as typeof slicerClient.progress
+  slicerClient.run = (async () => { throw new SlicerServiceError('Slicing failed', []) }) as typeof slicerClient.run
+
+  const job = jobs.enqueue({
+    workspaceId: 'workspace-1',
+    workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
+    sourceFileId: 'file-1',
+    sourceFileName: 'part.3mf',
+    sourcePath: '/tmp/part.3mf',
+    targetBridgeId: null,
+    request: makeRequest()
+  })
+  await waitFor(() => assert.equal(jobs.get('workspace-1', job.id).status, 'failed'))
+
+  const failedThumbnail = jobs.getThumbnailInfo('workspace-1', job.id).thumbnailPath
+  assert.equal(typeof failedThumbnail, 'string', 'the failed attempt persisted a source-derived thumbnail')
+
+  jobs.retry('workspace-1', job.id, 'tab-a')
+  // Cleared, which is the whole fix: `ensureHistoryThumbnail` early-returns on a set path, so this
+  // is what lets the next attempt derive one from the sliced output it actually produces.
+  assert.equal(
+    jobs.getThumbnailInfo('workspace-1', job.id).thumbnailPath,
+    null,
+    'the retry must be able to derive a thumbnail from its own output'
+  )
+  assert.ok(persistedThumbnailCalls.length >= 1)
+  // Settle the re-queued attempt before finishing. These tests share the module-level
+  // `slicerClient`, so a run still in flight here lands its stub calls in whichever test replaces
+  // the singleton next (it did: it added a phantom run to the no-op test below).
+  jobs.cancel('workspace-1', job.id)
+  await waitFor(() => {
+    const status = jobs.get('workspace-1', job.id).status
+    assert.ok(status === 'failed' || status === 'cancelled' || status === 'ready', `still running: ${status}`)
+  })
+})
+
+test('retrying drops the failed attempt\'s output name, so the retry does not re-deduplicate it', async () => {
+  // `outputFileName` is assigned BEFORE the artifact is persisted, so a save that fails leaves it
+  // set on the failed job. `run()` then reads `result.outputFileName ?? job.outputFileName`, so a
+  // slicer answering with no name re-uses the previous attempt's already-deduplicated one and the
+  // save produces "part (2) (2).gcode.3mf". `outputFileId` is asserted alongside it to pin the
+  // reset: it cannot be set on a failed job today (every step after the persist swallows its own
+  // errors), and the retry must not start depending on that staying true.
+  const jobs = new SlicingJobs({
+    progressPollIntervalMs: 10,
+    progressHeartbeatIntervalMs: 10_000,
+    resolveSource: passthroughResolveSource,
+    authorSliceSettings: noAuthoring,
+    persistArtifact: async () => { throw new Error('bridge offline') }
+  })
+
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'slicing-jobs-save-failure-'))
+  const artifactPath = path.join(tempDir, 'result.gcode.3mf')
+  await createTestThreeMf(artifactPath, { printer_settings_id: 'Bambu Lab X1C 0.4 nozzle' })
+
+  slicerClient.isConfigured = (() => true) as typeof slicerClient.isConfigured
+  slicerClient.progress = (async () => ({ kind: 'unclaimed' })) as typeof slicerClient.progress
+  slicerClient.run = (async () => ({
+    outputFileName: 'chosen (2).gcode.3mf', output: [], metadata: undefined, artifactPath
+  })) as typeof slicerClient.run
+
+  try {
+    const job = jobs.enqueue({
+      workspaceId: 'workspace-1',
+      workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
+      sourceFileId: 'file-1',
+      sourceFileName: 'part.3mf',
+      sourcePath: '/tmp/part.3mf',
+      targetBridgeId: null,
+      request: { ...makeRequest(), outputFileName: 'chosen.gcode.3mf' }
+    })
+    await waitFor(() => assert.equal(jobs.get('workspace-1', job.id).status, 'failed'))
+    assert.equal(jobs.get('workspace-1', job.id).outputFileName, 'chosen (2).gcode.3mf',
+      'the name was chosen before the save that failed')
+
+    // Back to what the REQUEST asked for. Both wrong answers are excluded by this one assertion:
+    // the stale deduplicated name (which `run()` would have re-used), and a bare null (which makes
+    // a slicer answering without a name fall through to the source-derived default, where the
+    // first attempt used the requested one).
+    const retried = jobs.retry('workspace-1', job.id, 'tab-a')
+    assert.equal(retried.outputFileName, 'chosen.gcode.3mf')
+    assert.equal(retried.outputFileId, null)
+
+    jobs.cancel('workspace-1', job.id)
+    await waitFor(() => {
+      const status = jobs.get('workspace-1', job.id).status
+      assert.ok(status === 'failed' || status === 'cancelled' || status === 'ready', `still running: ${status}`)
+    })
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
+})
+
+test('retrying a slice that did not fail is a no-op rather than an error', async () => {
+  // Two tabs racing one toast, or a double-click, must not re-queue work or throw at the user.
+  const jobs = new SlicingJobs({ progressPollIntervalMs: 10, progressHeartbeatIntervalMs: 10_000, resolveSource: passthroughResolveSource, authorSliceSettings: noAuthoring })
+  let runs = 0
+  let releaseRun = () => {}
+  const runReleased = new Promise<void>((resolve) => { releaseRun = resolve })
+
+  slicerClient.isConfigured = (() => true) as typeof slicerClient.isConfigured
+  slicerClient.progress = (async () => ({ kind: 'unclaimed' })) as typeof slicerClient.progress
+  slicerClient.run = (async () => {
+    runs += 1
+    await runReleased
+    throw new SlicerServiceError('Slicing failed', [])
+  }) as typeof slicerClient.run
+
+  const job = jobs.enqueue({
+    workspaceId: 'workspace-1',
+    workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
+    sourceFileId: 'file-1',
+    sourceFileName: 'part.3mf',
+    sourcePath: '/tmp/part.3mf',
+    targetBridgeId: null,
+    request: { ...makeRequest(), ownerClientId: 'tab-a' }
+  })
+  try {
+    await waitFor(() => assert.equal(runs, 1))
+
+    const untouched = jobs.retry('workspace-1', job.id, 'tab-b')
+    assert.equal(untouched.ownerClientId, 'tab-a', 'a running slice keeps its owner')
+    assert.equal(runs, 1, 'a running slice is not re-queued')
+  } finally {
+    // Unconditional: these tests share the module-level `slicerClient`, so a run left awaiting
+    // this promise would outlive the test, keep the event loop alive, and land its stub calls in
+    // whichever test replaced the singleton next.
+    releaseRun()
+  }
+  await waitFor(() => assert.equal(jobs.get('workspace-1', job.id).status, 'failed'))
+})
+
+test('retrying an unknown slicing job is a 404, not a silent no-op', () => {
+  const jobs = new SlicingJobs({ progressPollIntervalMs: 10, progressHeartbeatIntervalMs: 10_000, resolveSource: passthroughResolveSource, authorSliceSettings: noAuthoring })
+  slicerClient.isConfigured = (() => true) as typeof slicerClient.isConfigured
+  assert.throws(() => jobs.retry('workspace-1', 'missing-job', 'tab-a'), /not found/i)
+})
+
 function makeRequest(): CreateSlicingJob {
   return {
     sourceFileId: 'file-1',

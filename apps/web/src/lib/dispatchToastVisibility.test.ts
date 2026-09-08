@@ -41,7 +41,7 @@ test('selectVisibleDispatchJobs hides a dismissed active dispatch toast', () => 
   const jobs = [makeJob({ id: 'job-active', status: 'uploading' })]
 
   assert.deepEqual(
-    selectVisibleDispatchJobs(jobs, new Set(['job-active']), Date.parse('2026-05-04T10:00:01.000Z')),
+    selectVisibleDispatchJobs(jobs, new Set(['job-active']), new Set(), Date.parse('2026-05-04T10:00:01.000Z')),
     []
   )
 })
@@ -50,7 +50,7 @@ test('selectVisibleDispatchJobs keeps recent undismissed jobs visible', () => {
   const jobs = [makeJob({ id: 'job-sent', status: 'sent' })]
 
   assert.deepEqual(
-    selectVisibleDispatchJobs(jobs, new Set(), Date.parse('2026-05-04T10:00:30.000Z')).map((job) => job.id),
+    selectVisibleDispatchJobs(jobs, new Set(), new Set(), Date.parse('2026-05-04T10:00:30.000Z')).map((job) => job.id),
     ['job-sent']
   )
 })

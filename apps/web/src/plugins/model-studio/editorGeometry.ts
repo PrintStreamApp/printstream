@@ -40,18 +40,22 @@ import type { EditorInstance, EditorPlate, EditorState } from './lib/editorModel
 export type GizmoMode = 'select' | 'translate' | 'rotate' | 'scale' | 'layFace' | 'cut' | 'meshBoolean' | 'paintSupports' | 'paintSeam' | 'paintColor' | 'paintFuzzy' | 'brimEars' | 'measure' | 'layerHeight' | 'text' | 'svg'
 
 /**
- * Meshes that exist only to be LOOKED at: they are never printed, never part of the object's
+ * Objects that exist only to be LOOKED at: they are never printed, never part of the object's
  * bounds, and never input to a tool that reads geometry.
  *
  * One predicate rather than a flag list repeated at each call site, because the list is now long
  * enough that adding an aid means remembering three separate filters, and forgetting one is silent:
  * an aid in `collectWorldTriangles` corrupts the Adaptive layer-height input, and an aid in
  * `printableMeshBox` moves the object on the bed.
+ *
+ * Takes an `Object3D`, not a `Mesh`: it reads only `userData` and `name`, and some aids are tagged
+ * on a GROUP root (the prime tower, a helper volume's group). `visible` is inherited, so a caller
+ * that hides rather than skips wants the root, not the meshes under it.
  */
-export function isViewportAidMesh(mesh: THREE.Mesh): boolean {
+export function isViewportAidMesh(object: THREE.Object3D): boolean {
   return Boolean(
-    mesh.userData.isHelperVolume || mesh.userData.isFaceHull || mesh.userData.isPrimeTower
-    || mesh.userData.isPaintOverlay || mesh.userData.isLayerHeightVisual
+    object.userData.isHelperVolume || object.userData.isFaceHull || object.userData.isPrimeTower
+    || object.userData.isPaintOverlay || object.userData.isLayerHeightVisual
     // Brim ear markers are the one aid tagged by NAME rather than a `userData` flag (they are
     // plain discs the ear editor raycasts against), so they were invisible to this predicate and
     // reached every geometry reader that trusts it: `printableMeshBox` had to exclude them a second
@@ -59,8 +63,32 @@ export function isViewportAidMesh(mesh: THREE.Mesh): boolean {
     // manual ears exported, cut, assembled and booleaned with three 1mm discs welded to its base.
     // The boolean is what made that fatal rather than merely wrong: the discs are open at the seam
     // where they meet the model, so the closed-solid gate refused the whole object.
-    || mesh.name === BRIM_EAR_MARKER_NAME
+    || object.name === BRIM_EAR_MARKER_NAME
   )
+}
+
+/**
+ * What a plate THUMBNAIL leaves out: BambuStudio-style, a plate tile shows the printed models and
+ * nothing else -- no bed, no tool chrome.
+ *
+ * Derived from {@link isViewportAidMesh} rather than restating it, so a new aid is excluded by
+ * default. The thumbnail renderer used to carry its own three-flag list and therefore captured
+ * every aid nobody had thought to add to it: laying an object on a face left the place-on-face
+ * convex hull (and its hovered-face highlight) baked into the plate tile as blue patches over the
+ * model, because the lay-flat click regenerates the thumbnail while the hull is still parented to
+ * the instance group.
+ *
+ * Two deliberate divergences from the aid list. The BED is dressing rather than an aid, so it is
+ * named here and only here. And the PAINT overlay is kept: for the colour channel it is what the
+ * object will actually print like, which is exactly what a thumbnail is for. (The support/seam/fuzzy
+ * channels ride the same overlay object and so show up too. That is pre-existing behaviour, not a
+ * decision this predicate makes; splitting them needs the channel, which lives on the overlay's
+ * name.)
+ */
+export function isHiddenInPlateThumbnail(object: THREE.Object3D): boolean {
+  if (object.userData.isBedSurface) return true
+  if (object.userData.isPaintOverlay) return false
+  return isViewportAidMesh(object)
 }
 
 /**

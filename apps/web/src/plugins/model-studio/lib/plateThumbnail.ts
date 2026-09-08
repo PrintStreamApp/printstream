@@ -12,6 +12,7 @@
  */
 import * as THREE from 'three'
 import { createWebglRenderer } from './webglRenderer'
+import { isHiddenInPlateThumbnail } from '../editorGeometry'
 import { BAMBU_THREE_MF_ISO_UP, BAMBU_THREE_MF_ISO_VIEW } from './viewCube'
 
 const THUMBNAIL_SIZE = 256
@@ -62,11 +63,15 @@ export function createPlateThumbnailRenderer(): PlateThumbnailRenderer {
       // renders off-centre.
       group.updateMatrixWorld(true)
 
-      // Hide non-model scene dressing (bed surface, prime tower) so the thumbnail shows just the
-      // printed models: like Bambu's. Restored after the snapshot.
+      // Hide the bed and every viewport aid so the thumbnail shows just the printed models, like
+      // Bambu's. The rule is `isHiddenInPlateThumbnail`, never a flag list retyped here: this used
+      // to name three tags and so captured whatever aid was on screen at the moment of capture --
+      // laying an object on a face regenerates the thumbnail while the place-on-face hull is still
+      // parented to the instance group, which put blue patches over the model in the plate tile.
+      // Restored after the snapshot.
       const hidden: THREE.Object3D[] = []
       group.traverse((child) => {
-        if ((child.userData?.isBedSurface || child.userData?.isPrimeTower || child.userData?.isHelperVolume) && child.visible) {
+        if (child.visible && isHiddenInPlateThumbnail(child)) {
           child.visible = false
           hidden.push(child)
         }

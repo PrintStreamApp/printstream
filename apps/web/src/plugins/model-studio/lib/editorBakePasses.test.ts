@@ -6,7 +6,7 @@
  */
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { buildBuiltinSlicingPresetId, processPresetFitsMachine } from '@printstream/shared'
+import { buildBuiltinSlicingPresetId, buildProjectSlicingPresetId, processPresetFitsMachine } from '@printstream/shared'
 import type { SaveArrangedThreeMf } from '@printstream/shared'
 import { bakeOptionsFor, bakePassesFor } from './editorBakePasses'
 import type { RetargetResolvers } from './browserMachineRetarget'
@@ -214,6 +214,51 @@ test('an unchanged process preset is never re-authored, so hand-tuned values sur
   assert.equal(plan?.processConfig, null, 'the project already names it')
   assert.equal(processResolved, 0, 'and it is not even resolved')
 })
+
+test('a same-model preset change never RESELECTS the process, however badly the lineage fits', async () => {
+  // The cross-model retarget switches a process the target machine refuses; this branch must not,
+  // and the difference is not cosmetic. Reselecting here would overwrite every process key on an
+  // ordinary nozzle change, discarding values the user tuned by hand in an earlier session, and it
+  // is unnecessary because the dialog has already re-picked by the time a save gets here.
+  const project = {
+    ...P1S_PROJECT,
+    print_settings_id: '0.20mm Speed - Tablet Mount',
+    inherits_group: ['0.20mm Strength @BBL P1P', '', '']
+  }
+  const passes = bakePassesFor(save({ retarget: keepingTheProjectsProcess() }), {
+    ...OPTIONS,
+    resolvers: {
+      ...BUILTIN_ONLY_RESOLVERS,
+      machine: async () => ({
+        config: { default_print_profile: '0.20mm Standard @BBL P1P 0.6 nozzle' },
+        name: 'Bambu Lab P1S 0.6 nozzle'
+      }),
+      process: async () => ({ config: { name: 'x', compatible_printers: ['nothing this machine is'] } }) as never
+    }
+  })
+
+  const plan = await passes.machineRetarget?.(project)
+  assert.equal(plan?.printerSettingsId, 'Bambu Lab P1S 0.6 nozzle', 'the machine still follows')
+  assert.equal(plan?.processConfig, null, 'and the process is left exactly as the project had it')
+})
+
+/**
+ * The real resolvers refuse anything but a builtin id, which is what makes a `project:` process
+ * resolve to nothing; `RESOLVERS` above says yes to everything, so the fallback below would never
+ * be reached through it.
+ */
+const BUILTIN_ONLY_RESOLVERS: RetargetResolvers = {
+  ...RESOLVERS,
+  canResolve: (presetId) => presetId.startsWith('builtin:')
+}
+
+/** A save whose process selection is the project's OWN preset: nothing to resolve, nothing chosen. */
+function keepingTheProjectsProcess() {
+  return retargetTo({
+    printerProfileChosen: true,
+    processProfileId: buildProjectSlicingPresetId('process', '0.20mm Speed - Tablet Mount')
+  })
+}
 
 test('a nozzle change rebinds the filament slots, as Studio does', async () => {
   // A filament preset declares the machine PRESETS it fits, and the nozzle is part of a preset's

@@ -18,28 +18,21 @@ process.env.NODE_ENV = 'test'
  * to be a source check, in the same spirit as `LazyDialogFallback.test.ts`.
  */
 import assert from 'node:assert/strict'
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import path from 'node:path'
 import test from 'node:test'
-import { fileURLToPath } from 'node:url'
+import { WEB_SRC_ROOT, readSourceTree, type SourceFile } from '../test-utils/sourceTree'
 
-const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-
-function sourceFiles(dir: string): string[] {
-  return readdirSync(dir).flatMap((entry) => {
-    const full = path.join(dir, entry)
-    if (statSync(full).isDirectory()) return sourceFiles(full)
-    return /\.(ts|tsx)$/.test(entry) && !/\.test\.tsx?$/.test(entry) ? [full] : []
-  })
+/** App code only: a test may quote a double-encoded body as the very thing it is asserting about. */
+async function appModules(): Promise<readonly SourceFile[]> {
+  return (await readSourceTree()).filter((file) => !/\.test\.tsx?$/.test(file.relativePath))
 }
 
-test('no apiFetch caller stringifies its own body', () => {
+test('no apiFetch caller stringifies its own body', async () => {
   const offenders: string[] = []
 
-  for (const file of sourceFiles(SRC)) {
-    const source = readFileSync(file, 'utf8')
+  for (const { relativePath, source, lines } of await appModules()) {
     if (!source.includes('apiFetch')) continue
-    const lines = source.split('\n')
 
     lines.forEach((line, index) => {
       if (!/body:\s*JSON\.stringify\(/.test(line)) return
@@ -50,7 +43,7 @@ test('no apiFetch caller stringifies its own body', () => {
       for (let cursor = index; cursor >= 0 && index - cursor < 20; cursor -= 1) {
         const candidate = lines[cursor] ?? ''
         if (/\bapiFetch\s*[<(]/.test(candidate)) {
-          offenders.push(`${path.relative(SRC, file)}:${index + 1}`)
+          offenders.push(`${relativePath}:${index + 1}`)
           return
         }
         if (/\bfetch\w*\s*\(/.test(candidate)) return
@@ -66,21 +59,21 @@ test('no apiFetch caller stringifies its own body', () => {
   )
 })
 
-test('the scan actually reaches the files it is meant to check', () => {
+test('the scan actually reaches the files it is meant to check', async () => {
   // The control. A broken walk would report zero offenders forever.
-  const files = sourceFiles(SRC)
+  const files = await appModules()
   assert.ok(files.length > 100, `expected to walk the web source, found ${files.length} files`)
   // Anchored on a CORE file: the public snapshot ships no `private/` at all, so
   // a control that names one fails there for a reason that has nothing to do
   // with the walk, which is not a control, it is a false alarm.
   assert.ok(
-    files.some((file) => file.endsWith(path.join('lib', 'apiClient.ts'))),
+    files.some((file) => file.relativePath === path.join('lib', 'apiClient.ts')),
     'the walk should reach the core lib modules'
   )
   // Where every offender actually lived, asserted only where that tree exists.
-  if (existsSync(path.join(SRC, 'private'))) {
+  if (existsSync(path.join(WEB_SRC_ROOT, 'private'))) {
     assert.ok(
-      files.some((file) => file.includes(path.join('private', 'cloud'))),
+      files.some((file) => file.relativePath.includes(path.join('private', 'cloud'))),
       'the walk should reach the private cloud modules, where every offender lived'
     )
   }

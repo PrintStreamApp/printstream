@@ -2430,7 +2430,7 @@ async function sendLibraryFilePlates(
 ): Promise<void> {
   if (sendNotModifiedIfLibraryFileFresh(request, response, row, 'plates')) return
   if (row.kind !== '3mf' && row.kind !== 'gcode') {
-    response.json({ plates: [], projectFilaments: [], compatiblePrinterModels: [], supportFilamentIds: [], printerProfileName: null, processProfileName: null } satisfies LibraryThreeMfIndexDto)
+    response.json({ plates: [], projectFilaments: [], compatiblePrinterModels: [], supportFilamentIds: [], printerProfileName: null, processProfileName: null, processProfileInherits: null } satisfies LibraryThreeMfIndexDto)
     return
   }
   const signal = requestAbortSignal(request, response)
@@ -2441,7 +2441,7 @@ async function sendLibraryFilePlates(
     response.json(toThreeMfIndexDto(index) satisfies LibraryThreeMfIndexDto)
   } catch (error) {
     if ((error as Error).name === 'AbortError') return
-    response.json({ plates: [], projectFilaments: [], compatiblePrinterModels: [], supportFilamentIds: [], printerProfileName: null, processProfileName: null } satisfies LibraryThreeMfIndexDto)
+    response.json({ plates: [], projectFilaments: [], compatiblePrinterModels: [], supportFilamentIds: [], printerProfileName: null, processProfileName: null, processProfileInherits: null } satisfies LibraryThreeMfIndexDto)
   }
 }
 

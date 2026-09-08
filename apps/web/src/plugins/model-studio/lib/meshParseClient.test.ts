@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict'
 import test, { afterEach } from 'node:test'
+// Type only: the client itself is imported dynamically below (cache-busted per scenario), so its
+// return types do not survive that import and the geometry assertions need a type from somewhere.
+import type * as THREE from 'three'
 
 /**
  * Behaviour a scenario's fake workers follow. `onConstruct` runs asynchronously, standing in for
@@ -63,6 +66,41 @@ async function loadClient(scenario: string, behaviour: FakeWorkerBehaviour) {
   return await import(`./meshParseClient.ts?scenario=${scenario}`)
 }
 
+/**
+ * Let every queued continuation run WITHOUT moving the clock.
+ *
+ * Only `setTimeout` and `Date` are faked below, so `setImmediate` is still a real macrotask:
+ * awaiting one drains the microtask queue and leaves anything genuinely parked on a TIMER
+ * unsettled, which is the distinction the readiness assertions turn on.
+ */
+async function settleMicrotasks(): Promise<void> {
+  await new Promise<void>((resolve) => { setImmediate(resolve) })
+}
+
+interface TimedParse<T> {
+  /** The parse's result, plus how far the fake clock moved before it settled. */
+  readonly settled: Promise<{ value: T; elapsedMs: number }>
+  /** Whether it has settled YET, so a test can prove it had not at a given tick. */
+  finished: () => boolean
+}
+
+/**
+ * Run a parse against the fake clock, stamping its duration AS it settles.
+ *
+ * Reading `Date.now()` after the await cannot work here: a later tick moves the clock under a parse
+ * that had already finished, so a re-probing regression would report the same elapsed time as
+ * correct behaviour does.
+ */
+function timedParse<T>(start: () => Promise<T>): TimedParse<T> {
+  const startedAt = Date.now()
+  let settledYet = false
+  const settled = start().then((value) => {
+    settledYet = true
+    return { value, elapsedMs: Date.now() - startedAt }
+  })
+  return { settled, finished: () => settledYet }
+}
+
 const warnings: string[] = []
 const realWarn = console.warn
 console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(' ')) }
@@ -90,13 +128,23 @@ test('a pool that never reports ready is retired once, not re-probed per parse',
   // freeze the tab N times over.
   const { parseStlGeometryAsync, POOL_READY_TIMEOUT_MS } = await loadClient('silent', {})
   const bytes = tinyBinaryStl()
+  // The clock is FAKED, not slept through: proving this timeout used to cost 5 real seconds, nearly
+  // all of the file's runtime. Only the clock changes, so the assertions still measure the wait the
+  // production module imposes, and the module keeps its real timeout with no test-only seam in it.
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 0 })
 
-  const firstStartedAt = Date.now()
-  const geometry = await parseStlGeometryAsync(bytes)
-  const firstElapsed = Date.now() - firstStartedAt
+  const first = timedParse<THREE.BufferGeometry>(() => parseStlGeometryAsync(bytes))
+  await settleMicrotasks()
+  assert.equal(first.finished(), false, 'no fallback before the readiness probe has had its time')
+  t.mock.timers.tick(POOL_READY_TIMEOUT_MS - 1)
+  await settleMicrotasks()
+  assert.equal(first.finished(), false, 'still waiting with a millisecond of the probe left')
+
+  t.mock.timers.tick(1)
+  const { value: geometry, elapsedMs: firstElapsed } = await first.settled
 
   assert.ok(geometry.getAttribute('position'), 'the main-thread fallback still produced geometry')
-  assert.ok(firstElapsed >= POOL_READY_TIMEOUT_MS - 250, `waited for the readiness probe (${firstElapsed}ms)`)
+  assert.ok(firstElapsed >= POOL_READY_TIMEOUT_MS, `waited for the readiness probe (${firstElapsed}ms)`)
   assert.ok(
     FakeWorker.instances.every((worker) => worker.posted.length === 0),
     'nothing is dispatched to a worker that has not proved it is running'
@@ -104,9 +152,13 @@ test('a pool that never reports ready is retired once, not re-probed per parse',
   assert.ok(FakeWorker.instances.every((worker) => worker.terminated), 'the dead pool is terminated, not leaked')
   const constructedForFirstParse = FakeWorker.instances.length
 
-  const secondStartedAt = Date.now()
-  await parseStlGeometryAsync(bytes)
-  const secondElapsed = Date.now() - secondStartedAt
+  const second = timedParse(() => parseStlGeometryAsync(bytes))
+  await settleMicrotasks()
+  // Advance a whole probe's worth anyway: a retired session has already settled and keeps its
+  // recorded 0ms, while one that re-probed settles HERE and reports the wait, so the regression
+  // fails this assertion instead of hanging the run on a timer nobody ticks.
+  t.mock.timers.tick(POOL_READY_TIMEOUT_MS)
+  const { elapsedMs: secondElapsed } = await second.settled
 
   assert.ok(secondElapsed < POOL_READY_TIMEOUT_MS / 2, `the second parse does not re-probe (${secondElapsed}ms)`)
   assert.equal(FakeWorker.instances.length, constructedForFirstParse, 'no replacement pool is built')
@@ -133,6 +185,43 @@ test('a worker result is used as-is, with no main-thread parse behind it', async
   const geometry = await parseStlGeometryAsync(new Uint8Array([1, 2, 3]))
   assert.equal(geometry.getAttribute('position')?.count, 3)
   assert.equal(warnings.length, 0)
+})
+
+test('only workers that proved they are running receive tasks, even once the pool is usable', async () => {
+  // The gap this closes: every other scenario either has the whole pool report ready or none of it,
+  // and in the none case `ensurePool()` never resolves, so nothing is dispatched no matter what
+  // `pump()` checks. Removing `pump()`'s readiness guard therefore passed the rest of this file.
+  // A MIXED pool is the only shape that can see it: one worker proves the module graph loads, which
+  // is enough to make the pool usable, while its siblings are still silent.
+  let constructed = 0
+  const { parseStlGeometryAsync } = await loadClient('partial-ready', {
+    onConstruct: (worker) => {
+      // Only the first worker ever answers the handshake; the rest stay silent for the run.
+      if (constructed++ === 0) worker.reply({ kind: 'ready' })
+    },
+    onTask: (worker, request) => worker.reply({
+      kind: 'result',
+      id: request.id,
+      entries: [{ objectId: 0, position: new Float32Array([0, 0, 0, 2, 0, 0, 0, 2, 0]) }]
+    })
+  })
+
+  // Two at once, so the pool has more work queued than its one proven worker can hold.
+  const [first, second] = await Promise.all([
+    parseStlGeometryAsync(new Uint8Array([1, 2, 3])),
+    parseStlGeometryAsync(new Uint8Array([1, 2, 3]))
+  ])
+
+  assert.equal(first.getAttribute('position')?.count, 3, 'the ready worker answered')
+  assert.equal(second.getAttribute('position')?.count, 3, 'and answered the queued task too')
+
+  const [readyWorker, ...silentWorkers] = FakeWorker.instances
+  assert.equal(readyWorker?.posted.length, 2, 'both tasks went to the one proven worker')
+  assert.ok(silentWorkers.length > 0, 'the pool really did build siblings to check')
+  for (const worker of silentWorkers) {
+    assert.equal(worker.posted.length, 0, 'a worker that never proved it is running is never dispatched to')
+  }
+  assert.equal(warnings.length, 0, 'a usable pool explains nothing')
 })
 
 test('a bad STL is not re-parsed on the main thread: the fallback is the same code', async () => {
@@ -183,10 +272,16 @@ test('a worker that dies before reporting ready falls back at once, not at the r
   const { parseStlGeometryAsync, POOL_READY_TIMEOUT_MS } = await loadClient('pre-ready-error', {
     onConstruct: (worker) => worker.onerror?.({ message: 'worker graph failed to load' })
   })
+  // Faked for the same reason as the test above, and it sharpens the claim: the fallback happens
+  // with the clock standing still, rather than merely sooner than a wall-clock half of the probe.
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 0 })
 
-  const startedAt = Date.now()
-  const geometry = await parseStlGeometryAsync(tinyBinaryStl())
-  const elapsed = Date.now() - startedAt
+  const parse = timedParse<THREE.BufferGeometry>(() => parseStlGeometryAsync(tinyBinaryStl()))
+  await settleMicrotasks()
+  // Fire whatever readiness timer is outstanding: a caller still parked on the readiness promise
+  // would settle only here, and its recorded elapsed time says so.
+  t.mock.timers.tick(POOL_READY_TIMEOUT_MS)
+  const { value: geometry, elapsedMs: elapsed } = await parse.settled
 
   assert.ok(geometry.getAttribute('position'), 'the main-thread fallback still produced geometry')
   assert.ok(elapsed < POOL_READY_TIMEOUT_MS / 2, `fell back without waiting out the probe (${elapsed}ms)`)

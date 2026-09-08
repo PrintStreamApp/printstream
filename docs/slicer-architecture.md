@@ -737,19 +737,21 @@ settings failure mode). The FILAMENT step is deliberately the other way round:
 `rebindProjectFilamentPhysics` preserves a slot's declared keys, which is right there because a
 filament preset binds per slot rather than being loaded wholesale over the project.
 
-Moving authoring ahead of the slice also closed a residual of "picked Extra Fine, silently got the
-project's 0.20mm": the compatibility-fallback retry blanks a preset's *identity*
-(`sanitizeProjectSettingsConfig`) but not its values, so the retry now re-slices with the chosen
-preset's settings instead of falling back to whatever the project happened to carry.
+Moving authoring ahead of the slice also closed "picked Extra Fine, silently got the project's
+0.20mm": the chosen preset's values are written into the project before the engine sees it, so no
+later step can fall back to whatever the project happened to carry. (That failure reached users
+through the compatibility-fallback retry, which blanked a preset's *identity* via
+`sanitizeProjectSettingsConfig` but not its values. The retry itself is gone, see below; authoring
+is what makes it unnecessary.)
 
 The mechanics, and why each piece is where it is:
 
 - `slicing-jobs.ts` **stages** a copy into its own temp dir before returning, because `sourcePath`
   lives in a dir the `finally` deletes. It **preserves** only after `persistArtifact` succeeds:
   a `snapshotKey` exempts a row from every age-based sweep, leaving it reclaimable only once nothing
-  references it, so writing one for a cancelled or unsaved slice leaks bytes. Which attempt won matters
-  too — a compatibility retry slices a rewritten project, and preserving the pre-retry one would
-  keep a project that produced nothing.
+  references it, so writing one for a cancelled or unsaved slice leaks bytes. Which attempt won still
+  matters even though the only retry left re-runs UNCHANGED inputs (the crash retry): the preserved
+  project must be the bytes the winning attempt handed the engine, never an earlier attempt's.
 - Every entry in the chain's `rewrittenSourcePaths` owns its containing directory: the cleanup
   removes the whole dir, so a rewrite step must `mkdtemp` rather than write beside its input.
 - `sliced-project-preservation.ts` stores it via `ensureLibrarySnapshotFromLocalPath` — hidden,
@@ -897,6 +899,26 @@ browser — so the one tier with a genuinely incomplete baseline was also the on
 
 ## Invariants
 
+- **A failed slice is graded on the `--pipe` channel, and retried in exactly two ways.** The engine
+  writes its `{"message":…,"total_percent":N}` progress frames ONLY to the `--pipe` FIFO
+  (`cli_callback_mgr_t::notify` returns early without one, and `total_percent` appears nowhere else
+  in BambuStudio's source); its diagnostics go to stdout/stderr. `classifyCliFailure`
+  (`apps/slicer/src/slice-error.ts`) therefore takes those as separate texts, and
+  `formatSliceEngineCrashError` must be handed the all-channel one: it decides whether a signal
+  death (exit 134-139) was a load/teardown flake worth one retry or a deterministic engine crash to
+  name and stop on, and fed console output alone it sees 0% and answers "flake" every time. That
+  shipped broken and cost an observed slice a second full run into an identical
+  SIGABRT at "Detect overhangs for auto-lift", 66%, with the actionable message never shown. The two
+  retries, and there are only two: the API's ONE automatic crash retry with **unchanged** inputs
+  (`isTransientSlicerCrashExit`), and the USER's, `POST /api/slicing/jobs/:id/retry`, which re-arms
+  the same job id in place. The old third one, which silently dropped the built-in presets the
+  engine rejected and reported success on a print nobody configured, is gone and must not come back.
+  Where the engine names a cause we report it in ITS terms, not in generic advice
+  (`classifyCliFailure`), and the raw log is reachable from the app through `SlicingEngineLog`
+  (`apps/web/src/components/`), which fetches `GET /slicing/jobs/:id` because the LIST response
+  strips engine output to the last system line. Both exist because a collision whose real cause was
+  one model's supports reaching into another reached the user as one wrong sentence, with the line
+  that named both models visible only in the container log.
 - **A from-scratch project's settings must survive the save.** A new-project scaffold
   (`buildEditedThreeMf(null, …)`) embeds no `Metadata/project_settings.config`, so the save path
   synthesizes one: `buildEditedThreeMf` composes the filament / plate-type (`curr_bed_type`) /
@@ -925,8 +947,8 @@ browser — so the one tier with a genuinely incomplete baseline was also the on
   When the export itself FAILS (e.g. the CLI's exit 239 "process not compatible with printer"
   from a cross-model machine/process pairing), the guard throws with that reason instead of
   slicing the incomplete config — proceeding is always the deterministic segfault — keeping the
-  `Slicer CLI exited with code N` message shape the API's slicing queue classifies for its
-  drop-incompatible-builtin-profiles retry (`isLikelyBuiltinProfileCompatibilityExit`). The web
+  `Slicer CLI exited with code N` message shape the API's slicing queue classifies (today only
+  `isTransientSlicerCrashExit`, for a signal death). The web
   dialog guards the same class at the source: a set-but-incompatible machine/process selection
   (state predating a printer switch) blocks submission with a named reason instead of reaching
   the slicer at all (`printerProfileIncompatible`/`processProfileIncompatible` in

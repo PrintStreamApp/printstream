@@ -1,19 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { readdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { readSourceTree } from '../test-utils/sourceTree'
 
-const SRC_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const PLUGINS_ROOT = path.join(SRC_ROOT, 'plugins')
-
-async function* walk(dir: string): AsyncGenerator<string> {
-  for (const entry of await readdir(dir, { withFileTypes: true })) {
-    const full = path.join(dir, entry.name)
-    if (entry.isDirectory()) yield* walk(full)
-    else if (entry.name.endsWith('.tsx') || entry.name.endsWith('.ts')) yield full
-  }
-}
+/** Where the toggleable built-in plugins live, as a prefix of a file's path within `src`. */
+const PLUGINS_PREFIX = `plugins${path.sep}`
 
 /**
  * Slots that may stay on `StaticPluginSlot`, each for a stated reason. Anything not
@@ -61,28 +52,28 @@ test('a built-in plugin slot is never rendered through StaticPluginSlot', async 
   // Slot names contributed by built-in (toggleable) web plugins, read from source
   // rather than imported: importing a plugin entry pulls in Joy and its icons, which
   // the node test runner cannot load.
+  const sourceTree = await readSourceTree()
   const pluginSlotNames = new Map<string, string>()
-  for await (const file of walk(PLUGINS_ROOT)) {
-    const source = await readFile(file, 'utf8')
+  for (const { relativePath, source } of sourceTree) {
+    if (!relativePath.startsWith(PLUGINS_PREFIX)) continue
     // Matches a `slots: [{ name: 'x', component: Y }]` entry in a WebPlugin definition.
     for (const match of source.matchAll(/\{\s*name:\s*'([^']+)',\s*component:/g)) {
       const slotName = match[1]
-      if (slotName) pluginSlotNames.set(slotName, path.relative(SRC_ROOT, file))
+      if (slotName) pluginSlotNames.set(slotName, relativePath)
     }
   }
   assert.ok(pluginSlotNames.size > 0, 'found no built-in plugin slots: the scan pattern went stale')
 
   const offenders: string[] = []
-  for await (const file of walk(SRC_ROOT)) {
-    if (file.endsWith(path.join('plugin', 'StaticPluginSlot.tsx'))) continue
-    if (file.endsWith('.test.ts') || file.endsWith('.test.tsx')) continue
-    const source = await readFile(file, 'utf8')
+  for (const { relativePath, source } of sourceTree) {
+    if (relativePath === path.join('plugin', 'StaticPluginSlot.tsx')) continue
+    if (relativePath.endsWith('.test.ts') || relativePath.endsWith('.test.tsx')) continue
     for (const match of source.matchAll(/<StaticPluginSlot[^>]*?\bname=(?:"([^"]+)"|\{'([^']+)'\})/gs)) {
       const slotName = match[1] ?? match[2]
       if (!slotName || EXEMPT_SLOTS.has(slotName)) continue
       const owner = pluginSlotNames.get(slotName)
       if (owner) {
-        offenders.push(`${path.relative(SRC_ROOT, file)} renders "${slotName}" (owned by ${owner})`)
+        offenders.push(`${relativePath} renders "${slotName}" (owned by ${owner})`)
       }
     }
   }

@@ -3,10 +3,15 @@
  *
  * Owns the "fast feedback while iterating" path. It is deliberately NOT a gate: `npm run validate`
  * stays the only thing that proves a change is good, and this script says so on every run. The
- * split exists because the full suite is dominated by process startup: 744 test files, each a cold
- * node process re-transpiling its import graph, which no concurrency setting improves (measured:
- * wall time is flat from 6 to 10 workers and worse at 14, because each worker already saturates
- * more than one core).
+ * split exists because the full suite cannot be made parallel: 760 test files, each a cold node
+ * process loading its own import graph, and wall time is flat from 6 to 12 workers (measured
+ * 110s / 114s / 109s) because each worker already saturates about two cores.
+ *
+ * Since the result cache landed (`lib/result-cache.mjs`), the full `npm run validate` is itself
+ * incremental, so the gap between the two has narrowed: prefer this script when you want the
+ * absolute fastest loop and accept the subset, and prefer `npm run validate` whenever you want
+ * the answer to be trustworthy. Unlike validate, this path deliberately takes no repo lock, so an
+ * inner loop is never blocked behind someone else's full gate.
  *
  * What it runs, and why each stage is scoped the way it is:
  * - lint, over the changed files only. Exact: a rule can only newly fire on a file that changed.

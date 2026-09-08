@@ -10,9 +10,9 @@ import type { DeleteOperationJob } from '@printstream/shared'
 import { useQuery } from '@tanstack/react-query'
 import { apiFetch } from '../lib/apiClient'
 import { readCurrentWorkspaceScopeKey, workspaceQueryKeys } from '../lib/workspaceScope'
+import { jobBelongsInToastStack, useWatchedRunningJobIds } from '../lib/toastJobVisibility'
 import { StatusToastGroup, type StatusToastGroupItem } from './StatusToastGroup'
 
-const RECENT_MS = 90_000
 const MAX_ITEMS = 8
 const FINISHED_AUTO_DISMISS_MS = 5_000
 const DELETE_WORDING = { activeVerb: 'Deleting', noun: 'item', doneWord: 'deleted' }
@@ -27,13 +27,21 @@ export function DeleteOperationToasts() {
   })
 
   const jobs = useMemo(() => jobsQuery.data?.jobs ?? [], [jobsQuery.data])
+  // The third stack on the same rule (`lib/toastJobVisibility.ts`): all three render into one
+  // `StatusToastStack`, so a failed sweep vanishing after 90s beside a failed slice that stays
+  // reads as one of them being broken.
+  const watchedRunning = useWatchedRunningJobIds(jobs, isActive)
   const visibleJobs = useMemo(() => {
     const now = Date.now()
     return jobs
-      .filter((job) => isActive(job) || now - Date.parse(job.updatedAt) <= RECENT_MS)
+      .filter((job) => jobBelongsInToastStack(job, {
+        isActive: isActive(job),
+        isFailed: isFailed(job),
+        watchedRunning: watchedRunning.has(job.id)
+      }, now))
       .filter((job) => !dismissed.has(job.id) || isActive(job))
       .slice(0, MAX_ITEMS)
-  }, [dismissed, jobs])
+  }, [dismissed, jobs, watchedRunning])
 
   useEffect(() => {
     setDismissed((current) => {
@@ -88,6 +96,10 @@ export function DeleteOperationToasts() {
       dismissAllLabel="Dismiss the delete notifications"
     />
   )
+}
+
+function isFailed(job: DeleteOperationJob): boolean {
+  return job.status === 'failed'
 }
 
 function isActive(job: DeleteOperationJob): boolean {

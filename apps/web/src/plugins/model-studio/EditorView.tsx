@@ -15,7 +15,7 @@
  * the `SceneEdit` instance: the backend recomposes M = T * R(eulerXYZ) * S. Values
  * stay plate-local (plate origin is never baked in).
  */
-import { type ComponentProps, type ReactNode, lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { type ComponentProps, type ReactNode, lazy, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Alert,
   Box,
@@ -42,6 +42,7 @@ import InventoryRoundedIcon from '@mui/icons-material/Inventory2Rounded'
 import UndoRoundedIcon from '@mui/icons-material/UndoRounded'
 import RedoRoundedIcon from '@mui/icons-material/RedoRounded'
 import TuneRoundedIcon from '@mui/icons-material/TuneRounded'
+import TableRowsRoundedIcon from '@mui/icons-material/TableRowsRounded'
 import ViewSidebarRoundedIcon from '@mui/icons-material/ViewSidebarRounded'
 import WarningRoundedIcon from '@mui/icons-material/WarningRounded'
 import CloseRoundedIcon from '@mui/icons-material/CloseRounded'
@@ -103,7 +104,7 @@ import { enqueueLibraryUploads } from '../../lib/libraryUploadQueue'
 import { toast } from '../../lib/toast'
 import { machineSwitchWarnings } from '../../lib/machineSwitchWarnings'
 import { applyBulkOverridesToMember } from '../../lib/processBulkOverrides'
-import { BackAwareModal as Modal } from '../../components/BackAwareModal'
+import { BackAwareModal as Modal, isBackGestureClose } from '../../components/BackAwareModal'
 import { usePromptDialog } from '../../components/PromptDialogProvider'
 import { DialogFileTitle } from '../../components/DialogFileTitle'
 import { EmptyState } from '../../components/EmptyState'
@@ -115,6 +116,7 @@ import { LibraryDestinationDialog } from '../../components/LibraryDestinationDia
 import { formatLibraryFileName, splitLibraryFileNameForRename } from '../../lib/libraryDisplay'
 import { useMobileViewport } from '../../components/useMobileViewport'
 import { createBedModelObject, loadBedModelGeometry } from './lib/bedModel'
+import { bedSurfaceSignature } from './lib/bedSurfaceSignature'
 import { EditorSettingsDialog } from '../../components/library/EditorSettingsDialog'
 import { SliceSettingsPanel, type SliceSettingsController } from '../../components/library/SliceSettingsPanel'
 import type { FilamentConfigResolver } from '../../components/library/FilamentSettingsDialog'
@@ -176,6 +178,7 @@ import {
   duplicateInstance,
   fillPlateFromScene,
   findFreePlatePosition,
+  placeInstanceAt,
   instanceFromStagedImport,
   replaceInstanceGeometry,
   carriedPartSubtypes,
@@ -224,11 +227,12 @@ import {
   isObjectMarkedForRepair,
   resolveSvgArchiveEntry,
   planSvgReextrude,
-  svgArtworkParts
+  svgArtworkParts,
+  locateObjectForReveal
 } from './lib/editorModel'
 import { helperVolumeSpec } from './lib/helperVolumes'
 import { defaultPlateName, plateDisplayName, resolvePlateRename } from './lib/plateName'
-import { LazyDialogFallback } from '../../components/LazyDialogFallback'
+import { LazyDialogBoundary } from '../../components/LazyDialogBoundary'
 import { FullScreenDialogButton } from '../../components/DialogPresentationToggles'
 import { dialogPresentationProps } from '../../lib/dialogPresentation'
 import { useDialogPresentationState } from '../../hooks/useDialogPresentationState'
@@ -426,13 +430,18 @@ function supportFilamentRefs(overrides: Record<string, string | string[]> | unde
 }
 
 // Code-split the heavy process-settings catalog (validation + full settings catalogue) out of the
-// editor chunk; it loads only when a settings dialog is first opened. A LOCAL Suspense wrapper means
-// that first open suspends just the dialog, not the whole editor (which sits under an ancestor
-// Suspense via the slot's lazy load). Matches LibraryView's treatment of the same component.
+// editor chunk; it loads only when a settings dialog is first opened. A LOCAL `LazyDialogBoundary`
+// means that first open suspends just the dialog, not the whole editor (which sits under an
+// ancestor boundary via the slot's lazy load) -- and that a chunk that never arrives leaves the
+// editor standing instead of unmounting the app. Matches LibraryView's treatment of the same
+// component.
 import type { ProcessConfigResolver } from '../../components/ProcessSettingsDialog'
 import { ProgressBar } from '../../components/ProgressBar'
 import { ProgressSpinner } from '../../components/ProgressSpinner'
 const ProcessSettingsDialogImpl = lazy(() => import('../../components/ProcessSettingsDialog'))
+// Same treatment: it pulls in the whole grid and is opened rarely, so it must not ride the
+// editor's own chunk.
+const ParameterTableDialogImpl = lazy(() => import('./ParameterTableDialog'))
 
 /** BambuStudio's own ceiling for "Number of copies" (`wxGetNumberFromUser(..., 1, 0, 1000, this)`). */
 const MAX_CLONE_COPIES = 1000
@@ -581,9 +590,21 @@ const PLATE_PACKING_GAP_MM = 6
 const MAX_SPLIT_SHELLS = 50
 function ProcessSettingsDialog(props: ComponentProps<typeof ProcessSettingsDialogImpl>) {
   return (
-    <Suspense fallback={<LazyDialogFallback label="Opening settings…" />}>
+    <LazyDialogBoundary label="settings" onClose={props.onClose}>
       <ProcessSettingsDialogImpl {...props} />
-    </Suspense>
+    </LazyDialogBoundary>
+  )
+}
+
+function ParameterTableDialog(props: ComponentProps<typeof ParameterTableDialogImpl>) {
+  // The default (standard) shell, NOT `maximized`: the dialog has no `base`, so it opens at the
+  // standard presentation unless this device's stored preference says otherwise. A maximized
+  // fallback painted a near-full-screen shell that snapped down to a 1200px dialog when the chunk
+  // landed -- the exact resize a matching fallback exists to avoid.
+  return (
+    <LazyDialogBoundary label="the parameter table" onClose={props.onClose}>
+      <ParameterTableDialogImpl {...props} />
+    </LazyDialogBoundary>
   )
 }
 
@@ -1570,6 +1591,7 @@ function EditorView({
   // Object(s) whose per-object process overrides are being edited. Multiple ids = the bulk
   // context-menu action: the dialog seeds from every member ("Mixed" where they disagree) and
   // merges edits back onto each one (see lib/processBulkOverrides.ts).
+  const [parameterTableOpen, setParameterTableOpen] = useState(false)
   const [editingObject, setEditingObject] = useState<{ ids: ReadonlyArray<number>; name: string } | null>(null)
   // Normal part(s) of one multi-part object whose per-part process overrides are being
   // edited. Multiple ids = the part-selection bulk action (same mixed-value bulk semantics).
@@ -2070,8 +2092,10 @@ function EditorView({
     // A bed change (printer-model switch) or late plate fill rebuilds the plate. Ideally a
     // bed-only change would replace just the bed surface and keep the models, but the 3D build
     // plate model (`bedModelGeometry`) is a dependency of the build effect and reloads on a
-    // printer switch, so the build effect rebuilds regardless: decoupling the bed surface from
-    // the model build is a separate change. See docs/slicer-architecture.md.
+    // printer switch, so the build effect re-runs regardless: decoupling the bed surface from
+    // the model build is a separate change. See docs/slicer-architecture.md. Re-running is not
+    // the same as rebuilding the BED, though -- the incremental path reuses whatever bed it finds
+    // unless `bedSurfaceSignature` says otherwise, which is what makes that rule load-bearing.
     setRebuildToken((token) => token + 1)
   }, [scenesByPlate])
 
@@ -3689,16 +3713,22 @@ function EditorView({
         : instance.parts.length
     ), 0)
     setBuildProgress(totalLoadUnits > 0 ? { done: 0, total: totalLoadUnits } : null)
-    // Identifies the bed geometry currently on the plate. On an incremental (empty-plate) rebuild
-    // the plate is not cleared, so a bed added on a previous pass persists, but the bed DIMENSIONS
-    // can change underneath it (a scene refetch once the target printer resolves: e.g. the pre-model
-    // 256 fallback -> the printer's real 350x320). Replace the bed when its signature changed rather
-    // than skipping because "a bed already exists", which stranded the stale bed until an Arrange /
-    // add-model forced the atomic-swap path. The atomic (staging) path always rebuilds the bed.
-    // The 3D plate rides on the bed surface group, so its presence belongs in the signature,
-    // otherwise toggling the option leaves the previously-built bed in place.
+    // Identifies the bed currently on the plate. On an incremental (empty-plate) rebuild the plate
+    // is not cleared, so a bed added on a previous pass persists while its DIMENSIONS and its 3D
+    // plate mesh both change underneath it (a printer switch refetches each, separately, so they
+    // land on different renders). Replace the bed when its signature changed rather than skipping
+    // because "a bed already exists", which stranded the stale bed until an Arrange / add-model
+    // forced the atomic-swap path. The rule itself lives in lib/bedSurfaceSignature.ts, which
+    // documents what it has already got wrong; the atomic (staging) path rebuilds unconditionally.
     const bedModel = showBedModel ? bedModelGeometry : null
-    const bedSignature = JSON.stringify([bedWidth, bedDepth, bedCenterX, bedCenterY, activePlate.bed.excludeAreas, Boolean(bedModel)])
+    const bedSignature = bedSurfaceSignature({
+      width: bedWidth,
+      depth: bedDepth,
+      centerX: bedCenterX,
+      centerY: bedCenterY,
+      excludeAreas: activePlate.bed.excludeAreas,
+      bedModel
+    })
     if (incremental) {
       const existingBed = plateRoot.children.find((child) => child.userData?.isBedSurface)
       if (!existingBed || existingBed.userData.bedSignature !== bedSignature) {
@@ -7014,7 +7044,7 @@ function EditorView({
           // Placed against `next`, which already holds the copies made so far this pass, so a run
           // of copies spreads out instead of stacking on one spot.
           const spot = findFreePlatePosition(next)
-          clone.position.set(spot.x, spot.y, clone.position.z)
+          placeInstanceAt(clone, spot.x, spot.y)
           cloneKey = clone.key
           next = { ...next, instances: [...next.instances, clone] }
           }
@@ -7144,7 +7174,7 @@ function EditorView({
         let next = plate
         for (const instance of instances) {
           const spot = findFreePlatePosition(next)
-          instance.position.set(spot.x, spot.y, instance.position.z)
+          placeInstanceAt(instance, spot.x, spot.y)
           lastKey = instance.key
           next = { ...next, instances: [...next.instances, instance] }
         }
@@ -7283,6 +7313,35 @@ function EditorView({
     (key: string, filamentId: number) => { reassignInstanceFilament([key], filamentId) },
     [reassignInstanceFilament]
   )
+
+  /**
+   * Reveal a parameter-table row's object in the viewport, following it to another plate if that is
+   * where it lives. BambuStudio's table does the same on row select (`OnSelectCell` ->
+   * `select_items`), and without it the table is a list you cannot act on: the settings it shows are
+   * per object, and finding the object is the next thing anyone wants.
+   *
+   * The plate preference and the identity rule both live in `locateObjectForReveal`, with the rest
+   * of the scene model.
+   */
+  const handleSelectObjectFromTable = useCallback((objectId: number) => {
+    const found = locateObjectForReveal(stateRef.current, objectId, activePlateIndex)
+    if (!found) return
+    if (found.plateIndex !== activePlateIndex) setActivePlateIndex(found.plateIndex)
+    selectExclusive(found.instance.key)
+  }, [activePlateIndex, selectExclusive])
+
+  // The parameter table's rows are memoised, and the dialog composes these three into the two
+  // callbacks it hands the grid, so an inline arrow here reaches every row: `EditorView` re-renders
+  // on each live printer-status event, which would rebuild all of a large project's rows (and their
+  // Joy tooltip/button furniture) every time. That is the cost the memo was added to remove, and it
+  // fails silently, since a defeated `React.memo` still renders correctly.
+  const handleCloseParameterTable = useCallback(() => { setParameterTableOpen(false) }, [])
+  const handleEditObjectFromTable = useCallback((objectId: number, name: string) => {
+    setEditingObject({ ids: [objectId], name })
+  }, [])
+  const handleEditPartFromTable = useCallback((objectId: number, member: PartMember, name: string) => {
+    setEditingPart({ objectId, members: [member], name })
+  }, [])
 
   /**
    * Open per-object process settings for the clicked object, or the whole selection when it
@@ -8743,10 +8802,10 @@ function EditorView({
         const clone = duplicateInstance(source)
         // `duplicateInstance` nudges its copy clear of the source; the planner already decided
         // where this one goes, so place it outright rather than composing with that nudge.
-        // It also drops `exactMatrix`, which this relies on: that matrix carries a sheared
-        // object's own translation, so a copy that kept it would ignore `position` and every
-        // copy would render stacked on the original.
-        clone.position.set(source.position.x + offset.dx, source.position.y + offset.dy, source.position.z)
+        // Through `placeInstanceAt`, because a copy KEEPS a sheared object's exact matrix (that
+        // matrix is what renders and saves, so dropping it would reshape the copy) and the matrix
+        // carries the translation `position` only mirrors.
+        placeInstanceAt(clone, source.position.x + offset.dx, source.position.y + offset.dy)
         return clone
       })
       return { ...entry, instances: [...entry.instances, ...copies] }
@@ -9735,9 +9794,13 @@ function EditorView({
     <>
     <Modal
       open
-      onClose={(_event, reason) => {
+      onClose={(event, reason) => {
         if (reason !== 'escapeKeyDown') {
-          void handleCloseRequest(`dialog:${reason}`)
+          // The X and browser Back both arrive as `closeClick`, which is right for deciding what to
+          // do and useless in the duplicate-close warning below, whose whole job is to name the two
+          // gestures that raced. `isBackGestureClose` reads the marker the wrapper puts on Back's
+          // synthetic event so the log can still tell them apart.
+          void handleCloseRequest(`dialog:${isBackGestureClose(event) ? 'back' : reason}`)
           return
         }
         // This is the ONLY place Escape is observable in the editor -- the Modal swallows it before
@@ -10115,6 +10178,19 @@ function EditorView({
                     contentLabel="3D only"
                     variant="soft"
                   />
+                  {showEditorChrome && perObject && (
+                    <Tooltip title="Parameter table">
+                      <IconButton
+                        size="sm"
+                        variant="soft"
+                        color="neutral"
+                        onClick={() => setParameterTableOpen(true)}
+                        aria-label="Parameter table"
+                      >
+                        <TableRowsRoundedIcon />
+                      </IconButton>
+                    </Tooltip>
+                  )}
                   {showEditorChrome && (
                     <Tooltip title="Editor settings">
                       <IconButton
@@ -11033,6 +11109,24 @@ function EditorView({
         />
       )
     })()}
+    {parameterTableOpen && perObject && state && (
+      <ParameterTableDialog
+        open
+        onClose={handleCloseParameterTable}
+        state={state}
+        objectOverrides={perObject.value}
+        globalOverrides={perObject.globalOverrides}
+        processContext={{
+          slicerTargetId: perObject.slicerTargetId,
+          processProfileId: perObject.processProfileId,
+          sourceFileId: perObject.sourceFileId,
+          resolveConfig: resolveProcessConfig
+        }}
+        onEditObject={handleEditObjectFromTable}
+        onEditPart={handleEditPartFromTable}
+        onSelectObject={handleSelectObjectFromTable}
+      />
+    )}
     {editingObject && perObject && (
       <ProcessSettingsDialog
         open

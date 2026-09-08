@@ -10,6 +10,7 @@
 import { Box, Stack, Typography } from '@mui/joy'
 import type { SlicingFilamentMapping, SlicingMetadata } from '@printstream/shared'
 import { formatSecondsDuration } from '../../lib/time'
+import { formatFilamentCost } from '../../lib/filamentCost'
 
 export function SliceEstimates({
   metadata,
@@ -33,7 +34,7 @@ export function SliceEstimates({
     stats.push({ label: 'Material length', value: `${(metadata.estimatedFilamentLengthMm / 1000).toFixed(2)} m` })
   }
   if (metadata?.estimatedFilamentCost != null) {
-    stats.push({ label: 'Estimated cost', value: `$${metadata.estimatedFilamentCost.toFixed(2)}` })
+    stats.push({ label: 'Estimated cost', value: formatFilamentCost(metadata.estimatedFilamentCost) })
   }
 
   if (stats.length === 0) {

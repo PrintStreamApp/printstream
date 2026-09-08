@@ -148,3 +148,32 @@ test('the vendor array counts toward the slot total', () => {
   }))
   assert.equal(slots.length, 3)
 })
+
+test('the index carries the process preset\'s PARENT, which is what the engine judges it by', () => {
+  // `inherits_group[0]` is the name BambuStudio resolves a project's process compatibility from, and
+  // it survives a machine retarget untouched. Without it the browser sees a preset called
+  // "0.20mm Speed - Tablet Mount", which names no printer, and calls it compatible with everything.
+  const index = buildThreeMfIndex(null, JSON.stringify({
+    print_settings_id: '0.20mm Speed - Tablet Mount',
+    printer_settings_id: 'Bambu Lab X2D 0.4 nozzle',
+    inherits_group: ['0.20mm Strength @BBL P1P', '', '']
+  }))
+
+  assert.equal(index.processProfileName, '0.20mm Speed - Tablet Mount')
+  assert.equal(index.processProfileInherits, '0.20mm Strength @BBL P1P')
+})
+
+test('an EMPTY parent slot reports no parent, because the process is then a system preset itself', () => {
+  // The engine reads an empty slot 0 as "this preset IS a system preset" and falls back to the
+  // leaf's own name. Reporting the leaf here instead would double-count it as a lineage and let a
+  // rename look like an inherited machine.
+  const index = buildThreeMfIndex(null, JSON.stringify({
+    print_settings_id: '0.20mm Standard @BBL X2D',
+    inherits_group: ['', '', '']
+  }))
+  assert.equal(index.processProfileInherits, null)
+
+  // Same answer for a project that states no lineage at all, and for one with no settings.
+  assert.equal(buildThreeMfIndex(null, JSON.stringify({ print_settings_id: 'x' })).processProfileInherits, null)
+  assert.equal(buildThreeMfIndex(null, null).processProfileInherits, null)
+})

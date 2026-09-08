@@ -111,6 +111,7 @@ function bakedIndex(overrides: Partial<ThreeMfIndex> = {}): ThreeMfIndex {
     supportFilamentIds: [],
     printerProfileName: null,
     processProfileName: null,
+    processProfileInherits: null,
     ...overrides
   }
 }
@@ -494,6 +495,96 @@ test('a project process preset naming no machine stays compatible everywhere', (
 test('a project process preset authored for the selected machine is kept', () => {
   const preset = projectProcess('0.20mm Standard @BBL H2D')
   assert.equal(isProcessProfileCompatible(preset, null, 'H2D', [0.4], 'Textured PEI Plate'), true)
+})
+
+test('a RENAMED project process preset is judged by its parent, which is what the engine reads', () => {
+  // Prod, 7 Sep 2026. "0.20mm Speed - Tablet Mount" names no machine, so the name rule alone called
+  // it compatible with an X2D and it stayed selected after the project was retargeted there. Its
+  // parent lists only the P1P, and that is the name BambuStudio resolves the project's process
+  // compatibility from, so every slice died on exit 239 with the picker offering no alternative.
+  const preset = { ...projectProcess('0.20mm Speed - Tablet Mount'), derivedFromPresetName: '0.20mm Strength @BBL P1P' }
+  assert.equal(isProcessProfileCompatible(preset, null, 'P1P', [0.4], 'Textured PEI Plate'), true)
+  assert.equal(isProcessProfileCompatible(preset, null, 'X2D', [0.4], 'Textured PEI Plate'), false)
+})
+
+test('a resolvable parent is judged by its DECLARATIONS, which is the only way to see the nozzle', () => {
+  // The axis a name cannot cover. "0.20mm Strength @BBL P1P" says nothing about a nozzle, but its
+  // `compatible_printers` lists only the 0.4 machine, and that list is what the engine reads. Before
+  // the catalogue was passed in, a 0.4 -> 0.6 switch on the SAME model passed every name rule and
+  // the slice still died on exit 239.
+  const parent: SlicingPresetSummary = {
+    id: 'builtin:process:strength-p1p', source: 'builtin', kind: 'process',
+    name: '0.20mm Strength @BBL P1P', compatiblePrinters: ['Bambu Lab P1P 0.4 nozzle']
+  }
+  const preset = { ...projectProcess('0.20mm Speed - Tablet Mount'), derivedFromPresetName: parent.name }
+  const p1p04 = machineProfile('Bambu Lab P1P 0.4 nozzle')
+  const p1p06 = machineProfile('Bambu Lab P1P 0.6 nozzle')
+
+  assert.equal(isProcessProfileCompatible(preset, p1p04, 'P1P', [0.4], '', [parent]), true)
+  assert.equal(isProcessProfileCompatible(preset, p1p06, 'P1P', [0.6], '', [parent]), false,
+    'same model, different nozzle: only the parent\'s declared list can tell')
+})
+
+test('the picker judges a parent by the ENGINE\'s rule, so a save can never quietly overrule it', () => {
+  // The picker's ordinary matcher is permissive (alias-expanded, text-based); the SAVE's fallback
+  // tests a literal `compatible_printers` containment, which is what the engine does. Judged
+  // loosely here, a P1P-lineage preset was offered for a P1P 0.6 machine and then silently replaced
+  // at save time, discarding the project's tuned process values with nothing shown to the user.
+  const parent: SlicingPresetSummary = {
+    id: 'builtin:process:strength-p1p', source: 'builtin', kind: 'process',
+    name: '0.20mm Strength @BBL P1P', compatiblePrinters: ['Bambu Lab P1P 0.4 nozzle']
+  }
+  const preset = { ...projectProcess('0.20mm Speed - Tablet Mount'), derivedFromPresetName: parent.name }
+
+  assert.equal(isProcessProfileCompatible(preset, machineProfile('Bambu Lab P1P 0.4 nozzle'), 'P1P', [0.4], '', [parent]), true)
+  assert.equal(isProcessProfileCompatible(preset, machineProfile('Bambu Lab P1P 0.6 nozzle'), 'P1P', [0.6], '', [parent]), false)
+
+  // A parent declaring nothing fits everything, the same carve-out the save makes.
+  const silent = { ...parent, id: 'builtin:process:silent', name: 'Silent Base', compatiblePrinters: undefined }
+  const fromSilent = { ...projectProcess('Mine'), derivedFromPresetName: silent.name }
+  assert.equal(isProcessProfileCompatible(fromSilent, machineProfile('Bambu Lab X2D 0.4 nozzle'), 'X2D', [0.4], '', [silent]), true)
+})
+
+test('with no machine preset resolved yet, a parent is never used to refuse', () => {
+  // The machine profile settles after the catalogue; refusing on an absent comparison would drop
+  // the project's own preset during that window, which is what once fed an incompatible builtin
+  // to the CLI.
+  const parent: SlicingPresetSummary = {
+    id: 'builtin:process:strength-p1p', source: 'builtin', kind: 'process',
+    name: '0.20mm Strength @BBL P1P', compatiblePrinters: ['Bambu Lab P1P 0.4 nozzle']
+  }
+  const preset = { ...projectProcess('My Process'), derivedFromPresetName: parent.name }
+  assert.equal(isProcessProfileCompatible(preset, null, 'unknown', [0.4], '', [parent]), true)
+})
+
+test('a parent that is not installed falls back to reading its name, rather than refusing', () => {
+  // Unknown is not wrong. A parent from the user's own BambuStudio is absent from this catalogue,
+  // and dropping the project's own preset for that would be the exact over-refusal the project
+  // branch exists to avoid.
+  const preset = { ...projectProcess('My Process'), derivedFromPresetName: '0.20mm Strength @BBL P1P' }
+  assert.equal(isProcessProfileCompatible(preset, null, 'P1P', [0.4], '', []), true)
+  assert.equal(isProcessProfileCompatible(preset, null, 'X2D', [0.4], '', []), false, 'the name still counts')
+})
+
+test('a parent naming no machine is not evidence either, so the preset survives', () => {
+  // The same absence-of-evidence rule as the leaf name: a preset derived from a user's own base
+  // must not be dropped for saying too little.
+  const preset = { ...projectProcess('My Custom Process'), derivedFromPresetName: 'My Own Base' }
+  assert.equal(isProcessProfileCompatible(preset, null, 'X2D', [0.4], 'Textured PEI Plate'), true)
+})
+
+test('the project process preset carries the lineage the index reports', () => {
+  // The hop that makes the rule above reachable: without it the summary is name-only and the parent
+  // is invisible to every compatibility test.
+  const [preset] = buildProjectSlicingPresets(
+    bakedIndex({ processProfileName: '0.20mm Speed - Tablet Mount', processProfileInherits: '0.20mm Strength @BBL P1P' }),
+    'process'
+  )
+  assert.equal(preset?.derivedFromPresetName, '0.20mm Strength @BBL P1P')
+
+  // A project stating no lineage records none, rather than repeating its own name as a parent.
+  const [plain] = buildProjectSlicingPresets(bakedIndex({ processProfileName: '0.20mm Standard @BBL X2D' }), 'process')
+  assert.equal(plain?.derivedFromPresetName, undefined)
 })
 
 test('a project process preset is never dropped while the target model is still unresolved', () => {

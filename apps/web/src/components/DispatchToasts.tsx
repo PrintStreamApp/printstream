@@ -17,6 +17,7 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import type { PrintDispatchJob } from '@printstream/shared'
 import { apiFetch } from '../lib/apiClient'
 import { isActiveDispatchJob, selectVisibleDispatchJobs } from '../lib/dispatchToastVisibility'
+import { useWatchedRunningJobIds } from '../lib/toastJobVisibility'
 import { usePrintDispatchJobs } from '../hooks/usePrintDispatchJobs'
 import { formatLibraryFileName } from '../lib/libraryDisplay'
 import { dispatchStatusColor, dispatchStatusLabel, formatDispatchProgress } from '../lib/printersViewHelpers'
@@ -61,9 +62,13 @@ export function DispatchToasts() {
   })
 
   const jobs = useMemo(() => dispatchQuery.data?.jobs ?? [], [dispatchQuery.data])
+  // A failure is pinned only when THIS stack watched it run: the dispatch list is capped by COUNT
+  // and not by time, so pinning one that arrived already-failed would re-toast week-old sends on
+  // every page load. See `lib/toastJobVisibility.ts`.
+  const watchedRunning = useWatchedRunningJobIds(jobs, isActiveDispatchJob)
   const visibleJobs = useMemo(() => {
-    return selectVisibleDispatchJobs(jobs, dismissed)
-  }, [dismissed, jobs])
+    return selectVisibleDispatchJobs(jobs, dismissed, watchedRunning)
+  }, [dismissed, jobs, watchedRunning])
 
   useEffect(() => {
     setDismissed((current) => {

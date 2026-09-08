@@ -1,21 +1,9 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { readdir, readFile } from 'node:fs/promises'
-import path from 'node:path'
-import { fileURLToPath } from 'node:url'
-
-const SRC_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+import { readSourceTree } from '../test-utils/sourceTree'
 
 /** Opt out on the line above a boundary that genuinely should render nothing while it loads. */
 const OPT_OUT = 'suspense-fallback-null-ok'
-
-async function* walk(dir: string): AsyncGenerator<string> {
-  for (const entry of await readdir(dir, { withFileTypes: true })) {
-    const full = path.join(dir, entry.name)
-    if (entry.isDirectory()) yield* walk(full)
-    else if (entry.name.endsWith('.tsx')) yield full
-  }
-}
 
 /**
  * Every lazily-loaded dialog must show something while its chunk downloads.
@@ -28,8 +16,8 @@ async function* walk(dir: string): AsyncGenerator<string> {
  */
 test('no Suspense boundary renders a null fallback', async () => {
   const offenders: string[] = []
-  for await (const file of walk(SRC_ROOT)) {
-    const lines = (await readFile(file, 'utf8')).split('\n')
+  for (const { relativePath, lines } of await readSourceTree()) {
+    if (!relativePath.endsWith('.tsx')) continue
     lines.forEach((line, index) => {
       if (!line.includes('fallback={null}')) return
       // Prose, not a prop: this very rule is quoted in comments (including LazyDialogFallback's).
@@ -38,7 +26,7 @@ test('no Suspense boundary renders a null fallback', async () => {
       // The opt-out sits on the line itself or the one above it (JSX prop comments read better
       // on their own line).
       if (line.includes(OPT_OUT) || (lines[index - 1]?.includes(OPT_OUT) ?? false)) return
-      offenders.push(`${path.relative(SRC_ROOT, file)}:${index + 1}`)
+      offenders.push(`${relativePath}:${index + 1}`)
     })
   }
   assert.deepEqual(

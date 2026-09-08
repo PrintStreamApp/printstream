@@ -10,12 +10,8 @@
  */
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { readFile } from 'node:fs/promises'
-import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { readSourceFile } from '../test-utils/sourceTree'
 import { PUBLIC_TOOL_ROUTE_PATHS, isPublicToolPath } from './publicToolManifest'
-
-const SRC_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
 /**
  * The attribute text of each `<Route … />`. Scanned rather than regexed because an element prop
@@ -41,7 +37,7 @@ function routeElements(source: string): string[] {
 }
 
 test('every manifest path is routed by the public shell, and vice versa', async () => {
-  const source = await readFile(path.join(SRC_ROOT, 'PublicToolApp.tsx'), 'utf8')
+  const { source } = await readSourceFile('PublicToolApp.tsx')
   // Attribute order is not fixed, so read both parts out of the whole element. A route whose
   // element is `null` is the blank page this test exists to prevent, so it does not count as
   // routed: matching on `path=` alone would have accepted exactly that.

@@ -27,8 +27,10 @@
  * bake was server-side.
  */
 import {
+  buildBuiltinSlicingPresetId,
   canonicalBambuModelKey,
   parseBuiltinSlicingPresetId,
+  resolveRetargetProcessFallback,
   selectFilamentRebindTargets,
   processPresetFitsMachine,
   slicingPresetProvenance,
@@ -132,9 +134,10 @@ export interface MachineRetargetInput {
    */
   slicerTargetId: string | null
   /**
-   * The project's settings as the bake will write them, used ONLY to pick filament rebind targets.
-   * Null skips the rebind pass (the slots keep their values), which is what an unreadable or absent
-   * `project_settings.config` means.
+   * The project's settings as the bake will write them. Two passes read it: the filament rebind
+   * picks its targets from the slot list, and the process fallback reads the process preset's
+   * lineage. Null skips both (the slots and the process keep their values), which is what an
+   * unreadable or absent `project_settings.config` means.
    */
   projectSettings: ProfileRecord | null
   /** The catalogue the rebind picks from: built-ins plus the user's browser-stored presets. */
@@ -167,11 +170,15 @@ export async function buildMachineRetargetPlan(input: MachineRetargetInput): Pro
   }
   const printerModel = firstProfileString(machine.config.printer_model) ?? deriveModelFromMachineName(machine.name)
 
+  const chosenProcess = await resolveTargetProcessConfig(target, input.slicerTargetId, resolvers, machine.name)
   const plan: MachineRetargetPlan = {
     machineConfig: machine.config,
     printerSettingsId: machine.name,
     printerModel,
-    processConfig: await resolveTargetProcessConfig(target, input.slicerTargetId, resolvers, machine.name),
+    // Nothing chosen leaves the project's OWN process, which is right only while that process still
+    // fits the machine being authored. When it does not, this is where BambuStudio would have
+    // reselected, so it is where we do.
+    processConfig: chosenProcess ?? await resolveProcessFallbackForMachine(input, resolvers, machine),
     processSettingOverrides: target.processSettingOverrides ?? {},
     machineSettingOverrides: target.machineSettingOverrides ?? {},
     filamentRebinds: null
@@ -211,6 +218,52 @@ async function resolveTargetProcessConfig(
     // machine retarget, which is the part that makes it openable on the new printer.
     console.warn('[editor] could not resolve the target process preset; keeping the project\'s own:',
       error instanceof Error ? error.message : error)
+    return null
+  }
+}
+
+/**
+ * The process preset to write when the save chose none and the project's own was authored for a
+ * different machine: BambuStudio's printer-switch reselect, whose rule lives in
+ * {@link resolveRetargetProcessFallback}.
+ *
+ * Only reached with no process chosen, which is exactly the case the retarget used to leave broken:
+ * a `project:` preset resolves to nothing here, so the machine was rewritten while the project kept
+ * a process the new printer refuses, and the file could not be sliced by the printer it named.
+ */
+async function resolveProcessFallbackForMachine(
+  input: MachineRetargetInput,
+  resolvers: RetargetResolvers,
+  machine: ResolveMachineConfigResponse
+): Promise<ProfileRecord | null> {
+  if (!input.projectSettings) return null
+  return resolveRetargetProcessFallback({
+    projectSettings: input.projectSettings,
+    machineConfig: machine.config,
+    printerSettingsId: machine.name,
+    resolveSystemProcess: (name) => resolveBuiltinProcessByName(name, input.slicerTargetId, resolvers),
+    log: (message) => console.warn(`[editor] ${message}`)
+  })
+}
+
+/**
+ * A BUILT-IN process preset by name, or null.
+ *
+ * Deliberately silent on a miss: `inherits_group[0]` can name a preset this catalogue has never
+ * heard of (a preset from the user's own BambuStudio install, or one from a newer engine), and that
+ * is an ordinary answer rather than a failure. The DECISION that consumes it logs both of its
+ * outcomes, so the retarget stays observable without a warning per lookup.
+ */
+async function resolveBuiltinProcessByName(
+  name: string,
+  slicerTargetId: string | null,
+  resolvers: RetargetResolvers
+): Promise<ProfileRecord | null> {
+  const presetId = buildBuiltinSlicingPresetId('process', name)
+  if (!resolvers.canResolve(presetId)) return null
+  try {
+    return (await resolvers.process(presetId, slicerTargetId)).config ?? null
+  } catch {
     return null
   }
 }

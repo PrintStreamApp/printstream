@@ -96,7 +96,7 @@ test('two close requests for one gesture raise ONE discard prompt, and name the 
 
   try {
     // Both arrive before anything is answered, which is what a doubled close path looks like.
-    await act(async () => { void requestClose('escape'); void requestClose('dialog:backdropClick') })
+    await act(async () => { void requestClose('escape'); void requestClose('dialog:closeClick') })
     assert.equal(prompt.asked.length, 1, 'the second request must not queue a second prompt')
 
     await prompt.respond(true)
@@ -108,7 +108,7 @@ test('two close requests for one gesture raise ONE discard prompt, and name the 
 
   // The report is the point: an intermittent duplicate is only diagnosable if it says what raced.
   assert.equal(warnings.length, 1, 'the suppressed duplicate must be reported')
-  assert.match(warnings[0]!, /escape then dialog:backdropClick/)
+  assert.match(warnings[0]!, /escape then dialog:closeClick/)
 })
 
 test('declining leaves the editor open and askable again', async () => {

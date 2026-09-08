@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { outputReachedSlicingStage, outputSignalsSliceComplete, summarizeSliceProgress } from './slice-progress.js'
+import { SLICING_STARTED_PERCENT, outputSignalsSliceComplete, summarizeSliceProgress } from './slice-progress.js'
 
 // The real crash sequence captured from a torus model that segfaults at "Detect overhangs for
 // auto-lift" (66%): the fixture the engine-crash classification is built around.
@@ -27,11 +27,15 @@ test('summarizeSliceProgress is empty when no progress line was printed', () => 
   assert.deepEqual(summarizeSliceProgress(loadCrash), { lastStage: null, maxPercent: 0 })
 })
 
-test('outputReachedSlicingStage separates post-load slicing from project load', () => {
-  assert.equal(outputReachedSlicingStage(OVERHANG_CRASH_OUTPUT), true)
-  // Only "Start to load files"/"Prepare slicing" (<=3%) means the crash was still in load.
-  assert.equal(outputReachedSlicingStage('{"message":"Prepare slicing","total_percent":3}'), false)
-  assert.equal(outputReachedSlicingStage(''), false)
+test('SLICING_STARTED_PERCENT falls between project load and the per-plate slice', () => {
+  // The boundary the crash grader in slice-error.ts depends on. "Prepare slicing" (3%) is still
+  // project load, where a signal death is a transient emulation flake; "Slicing begins" (6%) is the
+  // first frame of the actual slice, after which a crash re-happens identically on every retry.
+  const load = summarizeSliceProgress('{"message":"Prepare slicing","total_percent":3}')
+  const slicing = summarizeSliceProgress(OVERHANG_CRASH_OUTPUT)
+  assert.equal(load.maxPercent < SLICING_STARTED_PERCENT, true)
+  assert.equal(slicing.maxPercent >= SLICING_STARTED_PERCENT, true)
+  assert.equal(summarizeSliceProgress('').maxPercent < SLICING_STARTED_PERCENT, true)
 })
 
 test('outputSignalsSliceComplete matches the BambuStudio success line', () => {

@@ -8,6 +8,10 @@
  * {@link applyMachineRetargetToProjectSettings} is the whole operation in one call and is what the
  * two editor hosts share; the individual steps stay exported for the slicer's narrower repair.
  *
+ * One exception to "no I/O": {@link resolveRetargetProcessFallback} needs the catalogue to decide
+ * whether the project's process still fits the target, and it takes an injected resolver rather than
+ * living in a host, because the rule it encodes is the one both hosts must not drift on.
+ *
  * Update resilience: {@link retargetProjectSettingsToMachine} overwrites **every** key the
  * resolved machine profile defines (minus profile metadata), so when BambuStudio adds new
  * machine fields in a version bump they are carried over automatically, there is no
@@ -587,6 +591,100 @@ export function processPresetFitsMachine(
     : typeof declared === 'string' && declared.trim() ? [declared] : []
   if (names.length === 0) return true
   return names.some((name) => name.trim() === machinePresetName.trim())
+}
+
+/**
+ * The SYSTEM process preset a project's own process resolves to, i.e. the name whose
+ * `compatible_printers` decides whether the project may slice on a given machine.
+ *
+ * Ported from `BambuStudio.cpp:2012-2017`: slot 0 of `inherits_group` when it is filled, else the
+ * leaf's own `print_settings_id`, because an empty slot means "this preset IS a system preset".
+ * Slot 0 needs no filament-count arithmetic; only the MACHINE slot moves (`machinePresetSlotIndexFor`).
+ */
+export function projectProcessSystemName(projectSettings: ProfileRecord): string | null {
+  const group = Array.isArray(projectSettings.inherits_group) ? projectSettings.inherits_group : []
+  return firstProfileString(group[0]) ?? firstProfileString(projectSettings.print_settings_id)
+}
+
+/** The process preset a machine preset nominates for projects that arrive without a usable one. */
+export function machineDefaultProcessName(machineConfig: ProfileRecord): string | null {
+  return firstProfileString(machineConfig.default_print_profile)
+}
+
+/**
+ * The process preset a retarget must switch TO because the project's own was authored for another
+ * machine, or null to leave the project's process alone.
+ *
+ * This is BambuStudio's machine-switch behaviour, ported. Studio never repoints a preset's lineage:
+ * on a printer change `PresetBundle::update_compatible(Always)` recomputes every process preset's
+ * compatibility, DESELECTS the current one when it no longer fits (`Preset.cpp:2999-3003`), and
+ * selects another, seeded with the new printer's `default_print_profile`
+ * (`PresetBundle.cpp:5741`, `PreferedPrintProfileMatch`). The user's preset survives untouched and
+ * simply stops being offered. So this returns a REPLACEMENT, never an edited version of the old one.
+ *
+ * Why a retarget needs it at all: the machine rewrite re-declares `print_compatible_printers` for the
+ * target, but the engine does not read that field for this decision. It reads the process's parent
+ * (see {@link projectProcessSystemName}), which a machine-only retarget leaves naming the OLD model,
+ * and then refuses the slice with exit 239. Before this, that produced a file that opened fine, drew
+ * the right compatibility chips, and could not be sliced by the printer it claimed to be for.
+ *
+ * Three deliberate departures from Studio, all narrowing:
+ *  - It runs only on a genuine MODEL change. Studio reselects on any printer-preset switch; a save
+ *    is not a switch, and rewriting a project's process on an ordinary nozzle change would discard
+ *    hand-tuned values with no UI signal. The picker owns that case.
+ *  - Studio scans the whole catalogue and prefers a matching ALIAS, then a matching `layer_height`,
+ *    over the machine default. We take the machine's declared default only. The alias is not
+ *    recoverable (the generated `process_full/` profiles carry none), and a save is not the place to
+ *    silently change layer height by a scan; the DIALOG's re-pick does own the layer-height
+ *    preference (`useProcessProfileSelection`), and on any path through it the process is already
+ *    compatible and this never fires.
+ *  - Nothing happens unless BOTH lookups succeed and the replacement itself fits (and names itself:
+ *    see below). An unresolvable parent is "unknown", not "wrong", and leaving the project's process
+ *    is the pre-existing behaviour, so a lookup failure can never make a save worse than it was.
+ *
+ * The one function in this module that performs I/O, and it does it through an injected resolver for
+ * the reason the rest is pure: the RULE has to be single-sourced across the api and browser hosts,
+ * which reach the catalogue through completely different transports.
+ */
+export async function resolveRetargetProcessFallback(input: {
+  projectSettings: ProfileRecord
+  machineConfig: ProfileRecord
+  /** The machine preset name being authored, which `compatible_printers` is matched against. */
+  printerSettingsId: string
+  /** Resolve a system process preset by NAME, with its `inherits` chain merged; null if unknown. */
+  resolveSystemProcess: (name: string) => Promise<ProfileRecord | null>
+  log?: (message: string) => void
+}): Promise<ProfileRecord | null> {
+  // Same MODEL: the machine block is being authored, the process is not. This mirrors the browser's
+  // same-model branch (`sameModelPresetPlan`), which never reselects, and it matters because the api
+  // reaches this function for a same-model save too, whenever the project's machine was defined
+  // incompletely. Reselecting on a nozzle change would overwrite every process key the user tuned in
+  // an earlier session, and the dialog has already re-picked by then: its lineage check applies the
+  // ENGINE's exact `compatible_printers` rule, so a parent the target refuses is dropped from the
+  // picker rather than being silently swapped here.
+  const targetModel = canonicalBambuModelKey(firstProfileString(input.machineConfig.printer_model))
+  const currentModel = canonicalBambuModelKey(firstProfileString(input.projectSettings.printer_model))
+  if (targetModel && currentModel && targetModel === currentModel) return null
+
+  const currentName = projectProcessSystemName(input.projectSettings)
+  if (!currentName) return null
+  const current = await input.resolveSystemProcess(currentName)
+  // Unknown parent, or one that still accepts the target: nothing to switch away from.
+  if (!current || processPresetFitsMachine(current, input.printerSettingsId)) return null
+
+  const fallbackName = machineDefaultProcessName(input.machineConfig)
+  const fallback = fallbackName ? await input.resolveSystemProcess(fallbackName) : null
+  // The replacement must fit, and must NAME itself. `applyProcessProfileToProjectSettings` writes
+  // `print_settings_id` and blanks `inherits_group[0]` only when the preset carries a name, and
+  // blanking that slot is the whole point: a nameless config would copy its values over the project
+  // and leave it pointing at the OLD printer's process, which the engine still refuses (exit 239)
+  // while the user's settings have silently changed underneath them. Worse than doing nothing.
+  if (!fallback || !firstProfileString(fallback.name) || !processPresetFitsMachine(fallback, input.printerSettingsId)) {
+    input.log?.(`the project's process "${currentName}" does not fit ${input.printerSettingsId} and no compatible replacement resolved; keeping it`)
+    return null
+  }
+  input.log?.(`the project's process "${currentName}" was authored for another printer; switching to "${fallbackName}" for ${input.printerSettingsId}`)
+  return fallback
 }
 
 /** First non-empty string of a config value, which may be a scalar or a vector. */

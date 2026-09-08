@@ -13,8 +13,10 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { slicingPresetProvenance } from '@printstream/shared'
 import {
+  applyMachineRetargetToProjectSettings,
   buildBuiltinSlicingPresetId,
   buildProjectSlicingPresetId,
+  parseBuiltinSlicingPresetId,
   type ProfileRecord,
   type ResolveFilamentConfigResponse,
   type ResolveProcessConfigResponse,
@@ -289,4 +291,121 @@ test('a project preset is refused by BOTH hosts, since it lives in the file bein
   // question with an answer, so neither set of resolvers claims it.
   assert.equal(PUBLIC_RETARGET_RESOLVERS.canResolve('project:machine:Embedded'), false)
   assert.equal(WORKSPACE_RETARGET_RESOLVERS.canResolve('project:machine:Embedded'), false)
+})
+
+/**
+ * A project whose process is the 3MF's OWN preset, renamed, inheriting a P1P process. This is the
+ * prod shape from 7 September 2026: retargeted onto an X2D, it kept a process whose parent lists
+ * only the P1P, and the engine refused every slice of it (exit 239). The retarget had re-declared
+ * `print_compatible_printers` for the X2D, which is the one field that decision does not read.
+ */
+const P1P_LINEAGE_PROJECT: ProfileRecord = {
+  print_settings_id: '0.20mm Speed - Tablet Mount',
+  printer_settings_id: 'Bambu Lab P1S 0.4 nozzle',
+  inherits_group: ['0.20mm Strength @BBL P1P', '', '']
+}
+
+/** A target keeping the project's own process: a `project:` id resolves to nothing, so none is chosen. */
+function keepingTheProjectsProcess(): SlicingManualProfileTarget {
+  return target({
+    printerProfileId: buildBuiltinSlicingPresetId('machine', 'Bambu Lab X2D 0.4 nozzle'),
+    processProfileId: buildProjectSlicingPresetId('process', '0.20mm Speed - Tablet Mount')
+  })
+}
+
+/**
+ * Resolvers for an X2D target whose process lookups answer from `catalogue`, BY NAME.
+ *
+ * Recording is done here rather than by overriding `stubResolvers`'s `process`, because an override
+ * replaces the recording stub wholesale: the first version of these tests did exactly that and then
+ * asserted against a `calls` list nothing had ever pushed to, which passes for the wrong reason as
+ * easily as it fails.
+ */
+function x2dResolvers(catalogue: (name: string) => Record<string, string> | Error) {
+  const processNames: string[] = []
+  const { calls, resolvers } = stubResolvers({
+    machine: async () => ({
+      config: { printer_model: ['Bambu Lab X2D'], default_print_profile: '0.20mm Standard @BBL X2D' } as ProfileRecord,
+      name: 'Bambu Lab X2D 0.4 nozzle'
+    }),
+    process: async (id) => {
+      const name = parseBuiltinSlicingPresetId(id)?.name ?? ''
+      processNames.push(name)
+      const answer = catalogue(name)
+      if (answer instanceof Error) throw answer
+      return processResponse(answer)
+    }
+  })
+  return { calls, processNames, resolvers }
+}
+
+test('a retarget onto a machine the project\'s own process refuses switches to the machine default', async () => {
+  const { processNames, resolvers } = x2dResolvers((name) => name === '0.20mm Strength @BBL P1P'
+    ? { name, compatible_printers: 'Bambu Lab P1P 0.4 nozzle' }
+    : { name, compatible_printers: 'Bambu Lab X2D 0.4 nozzle' })
+
+  const plan = await buildMachineRetargetPlan(input({
+    target: keepingTheProjectsProcess(),
+    projectSettings: P1P_LINEAGE_PROJECT,
+    resolvers
+  }))
+
+  assert.deepEqual(processNames, ['0.20mm Strength @BBL P1P', '0.20mm Standard @BBL X2D'],
+    'the project\'s own parent is asked first, the machine default only once it has refused')
+
+  // Asserted through the REWRITE, not on the plan: `applyProcessProfileToProjectSettings` writes
+  // `print_settings_id` and blanks `inherits_group[0]` only when the resolved preset carries a
+  // `name`, and blanking that slot is the entire fix -- a project left naming the P1P parent is
+  // refused by the engine no matter which values were copied over it.
+  const retargeted = applyMachineRetargetToProjectSettings(P1P_LINEAGE_PROJECT, plan!)
+  assert.equal(retargeted.print_settings_id, '0.20mm Standard @BBL X2D')
+  assert.deepEqual(retargeted.inherits_group, ['', '', ''])
+  assert.deepEqual(retargeted.print_compatible_printers, ['Bambu Lab X2D 0.4 nozzle'])
+})
+
+test('a process the target machine still accepts is left exactly alone', async () => {
+  // The inverse, and what keeps the fallback from rewriting every retarget: a parent that lists the
+  // target is not a mismatch, so the project keeps its own tuned process.
+  const { resolvers } = x2dResolvers((name) => ({ name, compatible_printers: 'Bambu Lab X2D 0.4 nozzle' }))
+
+  const plan = await buildMachineRetargetPlan(input({
+    target: keepingTheProjectsProcess(),
+    projectSettings: P1P_LINEAGE_PROJECT,
+    resolvers
+  }))
+  assert.equal(plan?.processConfig, null)
+
+  // And the project keeps its own lineage, rather than having the slot blanked by a write that
+  // never happened.
+  assert.deepEqual(
+    applyMachineRetargetToProjectSettings(P1P_LINEAGE_PROJECT, plan!).inherits_group,
+    ['0.20mm Strength @BBL P1P', '', '']
+  )
+})
+
+test('an unresolvable lineage leaves the project\'s process alone rather than guessing', async () => {
+  // A parent from the user's own BambuStudio install is not in this catalogue. Unknown is not
+  // wrong: leaving the process is the pre-existing behaviour, so a lookup miss can never make a
+  // save worse than it was.
+  const { resolvers } = x2dResolvers(() => new Error('404'))
+
+  const plan = await buildMachineRetargetPlan(input({
+    target: keepingTheProjectsProcess(),
+    projectSettings: P1P_LINEAGE_PROJECT,
+    resolvers
+  }))
+  assert.equal(plan?.processConfig, null)
+})
+
+test('a project with no settings to read makes no lineage lookup at all', async () => {
+  // `projectSettings` is null when the bake could not read `project_settings.config`. There is no
+  // lineage to judge, so the pass must degrade to what it did before rather than resolve blindly.
+  const { processNames, resolvers } = x2dResolvers((name) => ({ name }))
+  const plan = await buildMachineRetargetPlan(input({
+    target: keepingTheProjectsProcess(),
+    projectSettings: null,
+    resolvers
+  }))
+  assert.equal(plan?.processConfig, null)
+  assert.deepEqual(processNames, [])
 })

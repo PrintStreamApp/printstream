@@ -1,6 +1,7 @@
 import { getSlicingJobStatusLabel, isActiveSlicingJob, type SlicingJob, type SlicingMetadata } from '@printstream/shared'
 import { formatLibraryFileName } from './libraryDisplay'
 import { formatSecondsDuration } from './time'
+import { formatFilamentCost } from './filamentCost'
 
 // Status classification/labels and the history-result mapping moved to @printstream/shared
 // (`slicing.ts` / `job-history.ts`) so the server-side job-history search filters on the same
@@ -63,7 +64,7 @@ export function formatSlicingMetadataDisplay(metadata: SlicingMetadata | undefin
   }
 
   if (metadata.estimatedFilamentCost != null) {
-    parts.push(`$${metadata.estimatedFilamentCost.toFixed(2)}`)
+    parts.push(formatFilamentCost(metadata.estimatedFilamentCost))
   }
 
   return parts.length > 0 ? parts.join(' • ') : ''

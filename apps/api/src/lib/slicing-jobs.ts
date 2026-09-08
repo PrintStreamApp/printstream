@@ -360,6 +360,97 @@ export class SlicingJobs {
   }
 
   /**
+   * Re-arm a FAILED job and queue it again, keeping its id.
+   *
+   * Same job, not a new one, mirroring `printDispatcher.retry`. The id is what the toast stack and
+   * every slice dialog (`SliceThenPrintModal`, `SliceResultModal`, `CalibrationSlicePrintModal`,
+   * `SliceToQueueFlow`) track a slice by, so minting a fresh one would leave whatever the user is
+   * looking at watching a job that will never move again.
+   *
+   * Re-running is safe because nothing about a slice is consumed by attempting it: `request` and
+   * `profileFiles` are the caller's original inputs, held verbatim and persisted, and `run()`
+   * re-resolves `sourcePath` from the pinned content base on every attempt, so a swept temp copy
+   * re-fetches rather than failing.
+   *
+   * Non-failed statuses are returned unchanged rather than rejected, so a double-click (or two tabs
+   * racing the same toast) is a no-op instead of an error. The guards `enqueue` applies are applied
+   * here too: a retry occupies a queue slot exactly like a new slice does.
+   *
+   * `ownerClientId` re-stamps the job onto the tab asking for the retry. It decides who sees the
+   * toast (`SlicingToasts` filters on it) and whose departure cancels the work
+   * (`cancelForOwner`), and both of those must follow the retry, not the tab that first failed.
+   * Pass null only for a caller that is not a browser tab, which leaves the job unowned and so
+   * visible to everyone, matching how a script-started slice behaves.
+   */
+  retry(workspaceId: string, jobId: string, ownerClientId: string | null): SlicingJob {
+    const job = this.jobs.get(jobId)
+    if (!job || job.workspaceId !== workspaceId) throw notFound('Slicing job not found')
+    if (job.status !== 'failed') return toDto(job)
+
+    if (!slicerClient.isConfigured()) {
+      throw new HttpError(503, 'Slicer service is not configured')
+    }
+    const queuedCount = Array.from(this.jobs.values()).filter((entry) => entry.status === 'queued').length
+    if (queuedCount >= env.SLICING_MAX_QUEUED_JOBS) {
+      throw conflict('Too many slicing jobs are already queued. Try again after one starts or finishes.')
+    }
+
+    job.status = 'queued'
+    job.queuePosition = null
+    job.error = null
+    // Drop the failed attempt's engine log: it is the reason the retry exists, and keeping it would
+    // leave the new run's output appended to a failure that did not happen this time.
+    job.output = []
+    job.metadata = undefined
+    job.slicerName = null
+    job.startedAt = null
+    job.finishedAt = null
+    job.cancelRequested = false
+    job.controller = null
+    job.activeSlicerJobId = null
+    job.lostReason = null
+    // `outputFileName` is set BEFORE the artifact is persisted, so a save that fails (a bridge
+    // offline, a full disk) leaves the failed job holding a name the next attempt would inherit:
+    // `run()` reads `result.outputFileName ?? job.outputFileName`, so a slicer that returns none
+    // re-uses the previous attempt's already-deduplicated name and the save produces
+    // "part (2) (2).gcode.3mf". `outputFileId` is cleared alongside it. That one is not reachable
+    // today (both steps after the persist swallow their own errors by contract, so a job cannot
+    // currently fail with an id set), and it is reset anyway so the retry's contract does not
+    // depend on two distant best-effort catches staying that way: an id here would make the queued
+    // job advertise the previous attempt's sliced file and point `ensureHistoryThumbnail` at it,
+    // which is the same staleness the `thumbnailPath` reset above exists to fix. The library row is
+    // untouched either way; only this job stops claiming it.
+    job.outputFileId = null
+    // Back to what `enqueue` seeded, NOT to null: the request may NAME the output, and `run()` reads
+    // `result.outputFileName ?? job.outputFileName ?? <source-derived default>`, so nulling it made a
+    // retry fall through to the default whenever the slicer answered without a name (an older
+    // slicer, a header that would not decode) where the first attempt used the requested one. It is
+    // also the toast's title (`job.outputFileName ?? job.sourceFileName`).
+    job.outputFileName = job.request.outputFileName ?? null
+    // The FAILED attempt already persisted a thumbnail, and with no output yet `ensureHistoryThumbnail`
+    // could only derive it from the SOURCE file. That function early-returns on a path being set, so
+    // leaving this would make a successful retry keep the pre-slice preview forever where an
+    // identical first-try slice shows the sliced plate cover. Dropped best-effort, like every other
+    // thumbnail operation: failing to unlink an image must never fail the retry.
+    const staleThumbnailPath = job.thumbnailPath
+    job.thumbnailPath = null
+    if (staleThumbnailPath) {
+      void deletePrintJobThumbnail(staleThumbnailPath).catch(() => undefined)
+    }
+    job.request = { ...job.request, ownerClientId: ownerClientId ?? undefined }
+    job.updatedAt = new Date()
+    // `createdAt` deliberately stands: it is when the user asked for this slice, and `pumpQueue`
+    // orders on it, so keeping it lets a retry resume its original place rather than queue behind
+    // work submitted while it was failing.
+    this.logJobEvent(job, 'info', `Retrying slicing job for ${job.sourceFileName}`)
+    this.recomputeQueuePositions()
+    this.pumpQueue()
+    this.schedulePersist()
+    broadcastSlicingChanged(job.workspaceId)
+    return toDto(job)
+  }
+
+  /**
    * Cancel every still-running job started by a browser tab that has closed for good.
    *
    * Called by the `client-sessions.ts` departure signal, which is already grace-delayed, a reload

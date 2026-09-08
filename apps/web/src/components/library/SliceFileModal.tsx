@@ -17,8 +17,8 @@
  * every one of those facts had several writers and no owner, which is what made
  * "who set this value?" unanswerable.
  */
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { LazyDialogFallback } from '../LazyDialogFallback'
+import { lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { LazyDialogBoundary } from '../LazyDialogBoundary'
 import {
   Box, Button, DialogActions, Stack, Typography
 } from '@mui/joy'
@@ -1212,7 +1212,7 @@ export function SliceFileModal({
         // panel's gear). Baselined on the global effective config (profile + global
         // overrides) so per-object edits read and reset relative to what the object would
         // otherwise inherit: matching Bambu Studio.
-        <Suspense fallback={<LazyDialogFallback label="Opening settings…" />}>
+        <LazyDialogBoundary label="object settings" onClose={() => setEditingSliceObject(null)}>
           <ProcessSettingsDialog
             open
             onClose={() => setEditingSliceObject(null)}
@@ -1236,10 +1236,10 @@ export function SliceFileModal({
               setEditingSliceObject(null)
             }}
           />
-        </Suspense>
+        </LazyDialogBoundary>
       )}
       {processSettingsDialogOpen && selectedProcessProfile && (
-        <Suspense fallback={<LazyDialogFallback label="Opening settings…" />}>
+        <LazyDialogBoundary label="settings" onClose={() => setProcessSettingsDialogOpen(false)}>
           <ProcessSettingsDialog
             open={processSettingsDialogOpen}
             onClose={() => setProcessSettingsDialogOpen(false)}
@@ -1267,7 +1267,7 @@ export function SliceFileModal({
               setProcessSettingOverrides(overrides)
             }}
           />
-        </Suspense>
+        </LazyDialogBoundary>
       )}
       {filamentSettingsFilamentId != null && (() => {
         const option = materialOptions.find((entry) => entry.id === filamentMaterialOptionIds[filamentSettingsFilamentId])
@@ -1278,7 +1278,7 @@ export function SliceFileModal({
         // Bambu system presets are read-only; only a workspace custom preset can be updated in place.
         const canEditOriginal = !profileId.startsWith('builtin:') && !profileId.startsWith('project:')
         return (
-          <Suspense fallback={<LazyDialogFallback label="Opening settings…" />}>
+          <LazyDialogBoundary label="settings" onClose={() => setFilamentSettingsFilamentId(null)}>
             <FilamentSettingsDialog
               open
               onClose={() => setFilamentSettingsFilamentId(null)}
@@ -1301,7 +1301,7 @@ export function SliceFileModal({
                 })
               }}
             />
-          </Suspense>
+          </LazyDialogBoundary>
         )
       })()}
       {saveActionVisible && saveDestinationOpen && (

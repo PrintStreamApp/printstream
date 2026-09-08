@@ -1,12 +1,32 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { formatSliceEngineCrashError, formatSliceFileVersionError, formatSlicePresetIncompatibilityError } from './slice-error.js'
+import {
+  classifyCliFailure,
+  formatSliceEngineCrashError,
+  formatSliceFileVersionError,
+  formatSlicePresetIncompatibilityError
+} from './slice-error.js'
 
+/**
+ * The run's ALL-CHANNEL text: the `total_percent` frames only ever arrive over `--pipe`, so this
+ * interleaving is what the crash grader must be handed, never the CLI's stdout/stderr.
+ */
 const OVERHANG_CRASH_OUTPUT = [
   '{"message":"Slicing begins","plate_count":1,"plate_index":1,"plate_percent":4,"total_percent":6}',
   '{"message":"Detect overhangs for auto-lift","plate_count":1,"plate_index":1,"plate_percent":71,"total_percent":66}',
   'Segmentation fault'
 ].join('\n')
+
+/**
+ * An observed production failure, verbatim channel split. Both of its attempts
+ * aborted here, 10s apart, because the second one was never supposed to happen.
+ */
+const ABORT_PIPE_FRAMES = [
+  '{"message":"Generating support","plate_count":1,"plate_index":2,"plate_percent":70,"total_percent":66}',
+  '{"message":"Detect overhangs for auto-lift","plate_count":1,"plate_index":2,"plate_percent":71,"total_percent":66}'
+].join('\n')
+const ABORT_STDOUT = '[2026-09-07 05:09:29.563050] [0x0000767b9b4fc6c0] [error]   ZFiller: encounter idx from clip: 20'
+const ABORT_STDERR = 'free(): invalid pointer\nAborted'
 
 test('formatSliceEngineCrashError names the crash stage for a post-load segfault', () => {
   const message = formatSliceEngineCrashError(OVERHANG_CRASH_OUTPUT, 139)
@@ -25,6 +45,119 @@ test('formatSliceEngineCrashError returns null for a load/teardown crash (stays 
   ].join('\n')
   assert.equal(formatSliceEngineCrashError(loadCrash, 139), null)
   assert.equal(formatSliceEngineCrashError('', 139), null)
+})
+
+test('classifyCliFailure grades a signal death on the pipe channel, not on stdout/stderr', () => {
+  // The regression this file exists for. BambuStudio's percent frames go ONLY to the --pipe FIFO,
+  // so a grader fed stdout/stderr sees 0%, calls a deterministic 66% abort transient, and the API
+  // burns a second full slice on a crash that cannot succeed.
+  const message = classifyCliFailure({
+    allChannelsText: `${ABORT_PIPE_FRAMES}\n${ABORT_STDOUT}\n${ABORT_STDERR}`,
+    stdoutText: ABORT_STDOUT,
+    stderrText: ABORT_STDERR,
+    exitCode: 134
+  })
+  assert.match(message, /Detect overhangs for auto-lift/)
+  assert.match(message, /engine exit 134/)
+  assert.doesNotMatch(message, /exited with code 13[4-9]/i, 'must not match the API crash-retry predicate')
+})
+
+test('classifyCliFailure keeps a load-stage signal death retryable', () => {
+  // The inverse: nothing reached 6%, so this stays a transient emulation flake and MUST keep the
+  // `exited with code N` shape the API retries on.
+  const message = classifyCliFailure({
+    allChannelsText: '{"message":"Prepare slicing","total_percent":3}\nSegmentation fault',
+    stdoutText: '',
+    stderrText: 'Segmentation fault',
+    exitCode: 139
+  })
+  assert.match(message, /Slicer CLI exited with code 139/)
+})
+
+test('classifyCliFailure prefers the CLI\'s own reason over the crash grader', () => {
+  // A preset incompatibility is reported by the CLI in words; it must win even though the run also
+  // carries post-load progress frames.
+  const message = classifyCliFailure({
+    allChannelsText: `${ABORT_PIPE_FRAMES}\nfilament preset Bambu PLA Basic @BBL A1 (slot 1) is not compatible with printer Bambu Lab A1 mini 0.4 nozzle.`,
+    stdoutText: '[error]   run 3008: filament preset Bambu PLA Basic @BBL A1 (slot 1) is not compatible with printer Bambu Lab A1 mini 0.4 nozzle.',
+    stderrText: '',
+    exitCode: 251
+  })
+  assert.match(message, /Bambu Lab A1 mini 0\.4 nozzle/)
+})
+
+test('classifyCliFailure names the two models whose toolpaths collide', () => {
+  // Verbatim from an observed production failure. The cause was supports on "Mount" reaching into
+  // "Mast Bottom"; the engine said so and we replaced it with generic prime-tower advice, which
+  // cost a trial-and-error hunt. The names are the whole value of this message.
+  const message = classifyCliFailure({
+    allChannelsText: '',
+    stdoutText: [
+      '[2026-09-07 05:12:37.319820] [0x0000727d890fa600] [error]   gcode path conflicts found between Mast Bottom and Mount',
+      '[2026-09-07 05:12:37.319845] [0x0000727d890fa600] [error]   plate 2: found slicing result conflict!'
+    ].join('\n'),
+    stderrText: '',
+    exitCode: 155
+  })
+  assert.match(message, /Mast Bottom/)
+  assert.match(message, /Mount/)
+  assert.match(message, /support/i, 'names the usual invisible cause')
+  assert.doesNotMatch(message, /prime tower/i, 'must not blame the tower when the engine named two models')
+})
+
+test('classifyCliFailure keeps the prime-tower advice when the tower IS the conflict', () => {
+  // The engine reports the tower as the literal name "WipeTower" (ConflictChecker.cpp), which is
+  // the ONLY case where moving the tower is the right advice.
+  const message = classifyCliFailure({
+    allChannelsText: '',
+    stdoutText: '[error]   gcode path conflicts found between WipeTower and Mount',
+    stderrText: '',
+    exitCode: 155
+  })
+  assert.match(message, /purge tower/i)
+  assert.match(message, /Mount/)
+  assert.doesNotMatch(message, /WipeTower/, 'the internal name is not shown to the user')
+})
+
+test('a run that logged a conflict but died of something else reports its own reason', () => {
+  // The conflict line is logged mid-run, so a later unrelated failure would otherwise be reported
+  // as a collision. Gated on the run's own CLI return code, not on the line being present.
+  // Exit 156 (return -100) is raised at g-code-export time, i.e. AFTER the conflict check has
+  // already logged, so this ordering is reachable rather than contrived.
+  const message = classifyCliFailure({
+    allChannelsText: '',
+    stdoutText: [
+      '[error]   gcode path conflicts found between Mast Bottom and Mount',
+      'run found error, return -100, exit...'
+    ].join('\n'),
+    stderrText: '',
+    exitCode: 156
+  })
+  assert.doesNotMatch(message, /Two models collide/, 'the stale conflict line must not become the verdict')
+  assert.match(message, /Slicer CLI exited with code 156/)
+})
+
+test('a toolpath conflict with no engine detail still explains itself', () => {
+  // The tail can lose the line; the fallback must not invent which models were involved.
+  const message = classifyCliFailure({
+    allChannelsText: '',
+    stdoutText: 'run found error, return -101, exit...',
+    stderrText: '',
+    exitCode: 155
+  })
+  assert.match(message, /Slicer CLI exited with code 155/)
+  assert.match(message, /support/i)
+})
+
+test('classifyCliFailure reports a host-runtime mismatch as a host problem', () => {
+  const message = classifyCliFailure({
+    allChannelsText: '',
+    stdoutText: '',
+    stderrText: "bambu-studio: /lib/x86_64-linux-gnu/libstdc++.so.6: version `GLIBCXX_3.4.32' not found",
+    exitCode: 127
+  })
+  assert.match(message, /incompatible with this host runtime/)
+  assert.match(message, /GLIBCXX_3\.4\.32/)
 })
 
 test('lifts a filament/printer incompatibility from BambuStudio stdout', () => {

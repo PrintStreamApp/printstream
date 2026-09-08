@@ -78,7 +78,9 @@ const CLI_RETURN_CODE_MESSAGES: Record<number, string> = {
   [-67]: 'Only one TPU filament can be printed at a time.',
   [-68]: 'A filament cannot be printed by the extruder it was mapped to. Check the per-material nozzle assignment.',
   [-100]: 'The slicing engine failed on this model. Open the project in Bambu Studio and confirm every plate slices.',
-  [-101]: 'The generated toolpaths collide. Try moving the prime tower further from the models.',
+  // Only the fallback: `formatSliceToolpathConflictError` normally lifts the two names the engine
+  // reports. Deliberately does NOT single out the prime tower, which is the rarer of the causes.
+  [-101]: 'Toolpaths on the plate collide. Supports, brim, or the purge tower is likely reaching into another model. Check supports first, since they do not show in the plate preview.',
   [-102]: 'Toolpaths ended up in an area this multi-extruder printer cannot reach.',
   [-103]: 'A filament cannot be printed on the first layer of this plate type.',
   [-104]: 'Toolpaths ended up outside the printable area. Support, the prime tower, brim, or skirt is likely reaching past the bed.',

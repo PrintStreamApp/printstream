@@ -6,6 +6,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, test } from 'node:test'
+import { closeEphemeralServer } from '../test-utils/http-test-server.js'
 import { SlicerClient, SlicerServiceError } from './slicer-client.js'
 
 const cleanupPaths = new Set<string>()
@@ -63,7 +64,7 @@ test('slicer client streams slice responses to disk with content length', async 
     assert.equal(await readFile(result.artifactPath, 'utf8'), artifactBytes.toString('utf8'))
     cleanupPaths.add(path.dirname(result.artifactPath))
   } finally {
-    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
+    await closeEphemeralServer(server)
   }
 })
 
@@ -106,7 +107,7 @@ test('slicer client surfaces structured worker errors', async () => {
       }
     )
   } finally {
-    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
+    await closeEphemeralServer(server)
   }
 })
 
@@ -257,8 +258,7 @@ test('progress classifies a real 404 as a disowned job, not as silence', async (
     controller.abort()
     await running
   } finally {
-    server.closeAllConnections()
-    await new Promise<void>((resolve) => server.close(() => resolve()))
+    await closeEphemeralServer(server)
   }
 })
 
@@ -296,7 +296,7 @@ async function createSlicerStub(name: string) {
     releaseSlices: () => {
       while (pendingSlices.length > 0) pendingSlices.shift()?.()
     },
-    close: () => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
+    close: () => closeEphemeralServer(server)
   }
 }
 
@@ -375,6 +375,6 @@ test('slicer client carries every schema field through, including the support fl
     assert.deepEqual(filament?.filamentIds, ['GFS02'])
     assert.equal(profiles.find((profile) => profile.kind === 'process')?.layerHeight, 0.2)
   } finally {
-    server.close()
+    await closeEphemeralServer(server)
   }
 })

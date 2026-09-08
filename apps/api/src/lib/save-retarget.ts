@@ -23,6 +23,7 @@ import {
   machinePresetSlotIndexFor,
   H2_DUAL_NOZZLE_MODEL_KEYS,
   hasDualNozzleMachineShape,
+  resolveRetargetProcessFallback,
   retargetProjectSettingsToMachine,
   selectFilamentRebindTargets,
   slicingPresetProvenance,
@@ -421,7 +422,19 @@ export async function retargetSavedProjectMachine(input: RetargetSavedProjectInp
   // saved project doesn't keep the source printer's process. Best-effort: a process that can't be
   // resolved (e.g. a project-embedded preset) must not block the machine retarget, which is what
   // makes the project openable/printable on the new machine.
-  const processConfig = await resolveTargetProcessConfig(input)
+  const chosenProcessConfig = await resolveTargetProcessConfig(input)
+  // With no process chosen, keeping the project's own is right only while that process still fits
+  // the machine being authored. When it does not, BambuStudio would have reselected on the printer
+  // switch, so reselect here (the rule, and why it is not a lineage rewrite, is in the shared
+  // module). Best-effort like everything else on this path: an unresolvable lineage or replacement
+  // leaves the project's process exactly as before.
+  const processConfig = chosenProcessConfig ?? await resolveRetargetProcessFallback({
+    projectSettings,
+    machineConfig,
+    printerSettingsId: machineFile.name,
+    resolveSystemProcess: (name) => resolveBuiltinProcessConfigByName(input.slicerTargetId, name),
+    log: (message) => console.warn(`[editor-save] ${message}`)
+  })
 
   // Rebind each filament slot's PHYSICS to its preset on the NEW machine: BambuStudio's
   // machine-switch semantics (`PresetBundle::update_compatible` re-selects filament presets by
@@ -614,6 +627,25 @@ async function resolveTargetProcessConfig(input: RetargetSavedProjectInput): Pro
     name: processFile.name,
     content: processFile.content
   })
+}
+
+/**
+ * A BUILT-IN process preset by name, for the retarget's reselect.
+ *
+ * Silent on a miss, matching the browser twin: `inherits_group[0]` can name a preset the slicer
+ * image has never carried (one from the user's own BambuStudio, or from a newer engine), and that
+ * is an ordinary answer. `resolveRetargetProcessFallback` logs both of ITS outcomes, so the
+ * decision stays observable without a warning per lookup.
+ */
+async function resolveBuiltinProcessConfigByName(
+  slicerTargetId: string | null | undefined,
+  name: string
+): Promise<Record<string, string | string[]> | null> {
+  try {
+    return await slicerClient.resolveProcessConfig(slicerTargetId, { source: 'builtin', name })
+  } catch {
+    return null
+  }
 }
 
 function firstString(value: unknown): string | null {
