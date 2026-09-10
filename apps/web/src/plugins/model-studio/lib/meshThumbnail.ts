@@ -21,8 +21,8 @@
 import * as THREE from 'three'
 import { createWebglRenderer } from './webglRenderer'
 import type { LibraryFile } from '@printstream/shared'
-import { buildApiUrl } from '../../../lib/apiUrl'
-import { readWorkspaceContextHeader } from '../../../lib/workspaceContext'
+import { isPreviewOnlyLibraryFile } from '../../../lib/libraryFileTags'
+import { apiFetchRaw } from '../../../lib/apiFetchRaw'
 import { parseStlGeometry } from './threeMfScene'
 
 const THUMBNAIL_SIZE = 256
@@ -153,16 +153,9 @@ function getRenderer(): StlRenderer {
   return renderer
 }
 
-function workspaceHeaders(): Record<string, string> {
-  const workspaceContext = readWorkspaceContextHeader()
-  return workspaceContext ? { 'X-PrintStream-Workspace': workspaceContext } : {}
-}
-
 async function fetchStlBytes(fileId: string, signal?: AbortSignal): Promise<ArrayBuffer> {
-  const response = await fetch(buildApiUrl(`/api/library/${encodeURIComponent(fileId)}/mesh`), {
+  const response = await apiFetchRaw(`/api/library/${encodeURIComponent(fileId)}/mesh`, {
     method: 'GET',
-    credentials: 'include',
-    headers: workspaceHeaders(),
     signal
   })
   if (!response.ok) {
@@ -196,14 +189,9 @@ function uploadRenderedThumbnail(file: LibraryFile, dataUrl: string): void {
       const comma = dataUrl.indexOf(',')
       const bytes = Uint8Array.from(atob(dataUrl.slice(comma + 1)), (char) => char.charCodeAt(0))
       const png = new Blob([bytes], { type: 'image/png' })
-      await fetch(
-        buildApiUrl(`/api/library/${encodeURIComponent(file.id)}/thumbnail?v=${encodeURIComponent(file.uploadedAt)}`),
-        {
-          method: 'PUT',
-          credentials: 'include',
-          headers: { 'Content-Type': 'image/png', ...workspaceHeaders() },
-          body: png
-        }
+      await apiFetchRaw(
+        `/api/library/${encodeURIComponent(file.id)}/thumbnail?v=${encodeURIComponent(file.uploadedAt)}`,
+        { method: 'PUT', headers: { 'Content-Type': 'image/png' }, body: png }
       )
     } catch {
       // Best-effort cache warming; ignore failures.
@@ -212,13 +200,18 @@ function uploadRenderedThumbnail(file: LibraryFile, dataUrl: string): void {
 }
 
 /**
- * Render (or return a cached) PNG data URL preview for a raw-mesh library file: STL,
- * STEP, or a geometry-only 3MF (all served as STL by `/mesh`). Resolves to `null` when
+ * Render (or return a cached) PNG data URL preview for a raw-mesh library file: STL, STEP, OBJ,
+ * glTF, AMF, or a geometry-only 3MF (all served as STL by `/mesh`). Resolves to `null` when
  * the preview can't be produced (aborted, fetch/parse failure) so callers fall back to
  * the kind label.
+ *
+ * The gate is `isPreviewOnlyLibraryFile`, the same predicate the library card uses to decide it
+ * should ASK for a mesh thumbnail. They were two hand-written lists and a format present in one but
+ * not the other is a card that requests a render this function then declines, leaving a permanently
+ * blank tile with nothing logged.
  */
 export async function renderMeshThumbnail(file: LibraryFile, signal?: AbortSignal): Promise<string | null> {
-  if (file.kind !== 'stl' && file.kind !== 'step' && !(file.kind === '3mf' && file.geometryOnly === true)) return null
+  if (!isPreviewOnlyLibraryFile(file)) return null
   const key = cacheKey(file)
   const cached = cache.get(key)
   if (cached) return cached

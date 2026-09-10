@@ -11,8 +11,8 @@
  *   1. An Ubuntu base rootfs supplies a coherent x86-64 glibc + loader + base /etc.
  *   2. The GTK / WebKit / GStreamer / Mesa runtime closure the CLI links is resolved and
  *      downloaded by apt (arch-agnostic: only install-time maintainer scripts would need
- *      execution, which we skip) and unpacked with `dpkg-deb -x` — no foreign-arch dpkg
- *      install, so this runs unchanged on an arm64 host.
+ *      execution, which we skip) and unpacked with `dpkg-deb -x` (no foreign-arch dpkg
+ *      install), so this runs unchanged on an arm64 host.
  *
  * The launcher (apps/slicer/docker/bambu-studio-cli.sh) then points `QEMU_LD_PREFIX` at
  * the produced sysroot. Keeping the package closure and the Ubuntu base in one place keeps
@@ -31,7 +31,7 @@ export const UBUNTU_BASE_URL =
   process.env.SLICER_QEMU_UBUNTU_BASE_URL ||
   'https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.4-base-amd64.tar.gz'
 
-// Ubuntu 24.04 (noble) — matches the default target's ubuntu-24.04 AppImage glibc.
+// Ubuntu 24.04 (noble): matches the default target's ubuntu-24.04 AppImage glibc.
 export const APT_SUITE = 'noble'
 
 // Top-level runtime packages the BambuStudio CLI links; apt pulls the full transitive closure.
@@ -40,11 +40,11 @@ export const APT_SUITE = 'noble'
 // - libgl1-mesa-dri (llvmpipe/gallium) backs the generic software GL the CLI's GTK side may touch.
 // - libosmesa6 backs the OFFSCREEN context the CLI's thumbnail renderer explicitly asks GLFW for
 //   (GLFW_OSMESA_CONTEXT_API on Linux). Together with a headless Wayland compositor and the
-//   gl-osmesa-shim preload — both provided by bambu-studio-cli.sh — this is what lets a headless
+//   gl-osmesa-shim preload, both provided by bambu-studio-cli.sh, this is what lets a headless
 //   slice render real plate thumbnails into its output. Each piece degrades gracefully when
 //   missing: the CLI skips thumbnail generation (slicing is unaffected) and the service backfills
 //   covers from the input 3MF (`backfillPlateThumbnails`; editor saves bake their own previews via
-//   `embedPlateThumbnails`). `trimSysrootForHeadlessSlicing` drops the whole GL stack on purpose —
+//   `embedPlateThumbnails`). `trimSysrootForHeadlessSlicing` drops the whole GL stack on purpose;
 //   see it for what goes and the trade.
 export const APT_PACKAGES = [
   'libgtk-3-0t64', 'libwebkit2gtk-4.1-0', 'libgstreamer1.0-0', 'libgstreamer-plugins-base1.0-0',
@@ -57,7 +57,7 @@ export const APT_PACKAGES = [
 
 // Bumped whenever the closure above (or the base rootfs) changes shape. Written into the ready
 // stamp so an already-populated sysroot from before the change is rebuilt instead of silently
-// reused — the stamp used to be existence-only, which pinned dev/native sysroots to whatever
+// reused: the stamp used to be existence-only, which pinned dev/native sysroots to whatever
 // closure they were first built with.
 export const SYSROOT_REVISION = 2
 
@@ -126,8 +126,8 @@ function sysrootStampIsCurrent(sysroot) {
  * here (the AppImage bundles only libavcodec/libavutil/libswscale). Every one of those is
  * DT_NEEDED and stays. What goes is everything the loader never opens:
  *
- * - The GL stack behind thumbnail rendering: Mesa's software rasteriser — `libLLVM.so` (137 MB)
- *   and `libgallium*.so` (41 MB) — plus `libOSMesa` (which needs libLLVM anyway). The native app
+ * - The GL stack behind thumbnail rendering: Mesa's software rasteriser, `libLLVM.so` (137 MB)
+ *   and `libgallium*.so` (41 MB), plus `libOSMesa` (which needs libLLVM anyway). The native app
  *   therefore ships without CLI thumbnail rendering, a deliberate trade against a ~180 MB
  *   customer download; its outputs keep covers via the input-backfill path instead. See the note
  *   on APT_PACKAGES.
@@ -194,7 +194,7 @@ export function sysrootStamp(sysroot) {
   return path.join(sysroot, '.printstream-sysroot-ready')
 }
 
-// Run as a CLI when invoked directly (not when imported) — this is how the arm64
+// Run as a CLI when invoked directly (not when imported). This is how the arm64
 // production image builds the sysroot: `node build-x86-sysroot.mjs <sysroot> <cacheDir>`.
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const sysroot = process.argv[2]

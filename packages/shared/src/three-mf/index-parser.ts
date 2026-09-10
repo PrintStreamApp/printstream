@@ -29,6 +29,7 @@ import type {
 } from '../bridge-runtime.js'
 import { objectHeadOf, readObjectProcessOverridesFromHead } from './object-overrides.js'
 import { decodeXmlAttributeValue } from './xml-write.js'
+import { canonicalCurrBedType } from '../plate-types.js'
 
 export { decodeXmlAttributeValue }
 
@@ -100,8 +101,31 @@ export { decodeXmlAttributeValue }
  *      dialog sees a project preset that declares nothing, calls it compatible with any printer,
  *      and offers a P1P-lineage process on an X2D. A v37 cache has it on no file, and nothing else
  *      about the entry would invalidate it.
+ * v39: per-plate `optimalAssignment` from `Metadata/filament_sequence.json`, the slicer's filament
+ *      grouping, for the Filament Track Switch arrangement hint. A bump rather than a lazy read
+ *      because the field is absent from every v38 index and its absence is MEANINGFUL to the hint
+ *      ("this plate was not sliced for a switch"), so a stale cache would read as a definite no.
+ * v40: per-plate settings (`bedTypeOverride`, `printSequence`, `spiralMode`, `locked`), and with
+ *      them a `plateType` that now resolves the plate's OWN `bed_type` ahead of the project-global
+ *      `curr_bed_type` instead of reporting the global on every plate. A v39 cache answers a
+ *      per-plate bed type with the project's, so a plate printed on a Textured PEI sheet reports
+ *      the project's Cool Plate to every chip and first-layer estimate, and nothing else about the
+ *      entry would invalidate it. Also adds `projectPlateType`, the project-global on its own:
+ *      once `plateType` resolves an override first, "the first plate that names one" is no longer
+ *      the project's value, and reading it as such re-saves one plate's override as the global.
  */
-export const THREE_MF_INDEX_PARSER_VERSION = 38
+export const THREE_MF_INDEX_PARSER_VERSION = 40
+
+/**
+ * Optional archive entries the index parser can use, passed by name rather than by position.
+ *
+ * Each is read by exactly one feature, so a caller that does not have (or want) one omits it
+ * instead of threading a `null` through a growing positional tail.
+ */
+export interface ThreeMfIndexExtras {
+  /** Raw `Metadata/filament_sequence.json`; only a sliced project has one. */
+  filamentSequenceJson?: string | null
+}
 
 /** Per-plate metadata recovered from `model_settings.config` (labels + object/filament backfill). */
 export interface ModelSettingsPlateMetadata {
@@ -115,6 +139,18 @@ export interface ModelSettingsPlateMetadata {
    * Each carries the `identify_id`s of its `model_instance`s on this plate (see
    * {@link BridgeLibraryThreeMfObject}). */
   objects: BridgeLibraryThreeMfObject[]
+  /**
+   * The plate's OWN `bed_type`, or null when it inherits the project-global `curr_bed_type`.
+   * Distinct from the plate's effective type, which the caller resolves by falling back to the
+   * global; keep the two apart or a save turns every inheriting plate into an override.
+   */
+  bedTypeOverride: string | null
+  /** The plate's own `print_sequence`, or null when it inherits the global. */
+  printSequence: 'by layer' | 'by object' | null
+  /** The plate's own `spiral_mode` (vase mode), or null when it inherits the global. */
+  spiralMode: boolean | null
+  /** Locked against arrange. Absent means unlocked; there is no global to inherit. */
+  locked: boolean
 }
 
 /**
@@ -136,6 +172,10 @@ interface ModelSettingsSupportConfig {
  * `modelSettingsXml` is the RAW `model_settings.config` document, wanted only by the repair
  * inspection (object-level extruder bindings live there, not in the pre-parsed plate metadata).
  * Callers without it (printer-SD indexes) omit it and merely skip those checks.
+ *
+ * Further archive entries arrive through `extras` rather than as more positional arguments: this
+ * signature is already at six, and the entries added from here on are read by ONE feature each,
+ * so most call sites would be passing `null` through a growing tail to reach the one they want.
  */
 export function buildThreeMfIndex(
   sliceInfoXml: string | null,
@@ -143,11 +183,24 @@ export function buildThreeMfIndex(
   modelSettings: Map<number, string> | ModelSettingsPlateMetadata[] = new Map(),
   thumbnailPlateFiles: Map<number, string> = new Map(),
   customGcodeXml: string | null = null,
-  modelSettingsXml: string | null = null
+  modelSettingsXml: string | null = null,
+  extras: ThreeMfIndexExtras = {}
 ): BridgeLibraryThreeMfIndex {
+  const { filamentSequenceJson = null } = extras
   const modelSettingsPlates = Array.isArray(modelSettings)
     ? modelSettings
-    : [...modelSettings.entries()].map(([index, name]) => ({ index, name, thumbnailFile: null, usedFilamentIds: [], objects: [] }))
+    : [...modelSettings.entries()].map(([index, name]) => ({
+      index,
+      name,
+      thumbnailFile: null,
+      usedFilamentIds: [],
+      objects: [],
+      // The name-only form predates per-plate settings and carries no metadata to read them from.
+      bedTypeOverride: null,
+      printSequence: null,
+      spiralMode: null,
+      locked: false
+    }))
   const projectFilaments = projectSettingsJson ? parseProjectFilaments(projectSettingsJson) : []
   const parsedPlates = sliceInfoXml ? parseSliceInfo(sliceInfoXml) : []
   const knownFilamentIds = new Set(projectFilaments.map((filament) => filament.id))
@@ -238,7 +291,15 @@ export function buildThreeMfIndex(
       }
       plate.filaments.sort((left, right) => left.id - right.id)
     }
-    plate.plateType = plateType
+    // The EFFECTIVE bed type: the plate's own `bed_type` where it states one, else the project's
+    // `curr_bed_type`. That is the order the engine resolves in (`BambuStudio.cpp:6897` applies the
+    // plate config over the project's), so it is what every chip and estimate should show. The
+    // override itself rides alongside, because only the editor can tell inherit from same-value.
+    plate.bedTypeOverride = metadata?.bedTypeOverride ?? null
+    plate.plateType = plate.bedTypeOverride ?? plateType
+    plate.printSequence = metadata?.printSequence ?? null
+    plate.spiralMode = metadata?.spiralMode ?? null
+    plate.locked = metadata?.locked ?? false
     // Unsliced plates have no slice_info nozzle metadata; show the project's configured
     // nozzle diameters instead so 3MFs get the same nozzle chips as sliced files.
     if (plate.nozzleSizes.length === 0 && projectNozzleSizes.length > 0) {
@@ -253,6 +314,11 @@ export function buildThreeMfIndex(
       const pauses = parseCustomGcodePauses(customGcodeXml, plate.index)
       if (pauses.length > 0) plate.pauses = pauses
     }
+    // The slicer's filament grouping, for the Filament Track Switch arrangement hint. Omitted
+    // rather than defaulted to []: absent means "this plate was not sliced for a switch", which
+    // the arrangement rule must be able to tell from "sliced, and everything is in one group".
+    const optimalAssignment = parseOptimalAssignment(filamentSequenceJson, plate.index)
+    if (optimalAssignment) plate.optimalAssignment = optimalAssignment
     for (const filament of plate.filaments) {
       if (!filament.filamentName) {
         filament.filamentName = projectFilamentMap.get(filament.id)?.filamentName ?? null
@@ -297,7 +363,7 @@ export function buildThreeMfIndex(
   // outright, so the print dialogs need this to say why before the printer does.
   const slicedWithFilamentTrackSwitch = extractSlicedWithFilamentTrackSwitch(projectSettingsJson)
 
-  return { plates, projectFilaments, compatiblePrinterModels, supportFilamentIds, geometryOnly, objectExport, needsSettingsRepair, settingsRepairReasons, unrepairableSettingsRepairReasons, projectVersion, slicedWithFilamentTrackSwitch, ...bakedProfiles }
+  return { plates, projectFilaments, projectPlateType: plateType, compatiblePrinterModels, supportFilamentIds, geometryOnly, objectExport, needsSettingsRepair, settingsRepairReasons, unrepairableSettingsRepairReasons, projectVersion, slicedWithFilamentTrackSwitch, ...bakedProfiles }
 }
 
 /**
@@ -375,7 +441,11 @@ export function buildModelSettingsOnlyPlates(
       nozzleDiameter: null,
       chamberTemperature: null
     })),
-    objects: plate.objects
+    objects: plate.objects,
+    bedTypeOverride: plate.bedTypeOverride,
+    printSequence: plate.printSequence,
+    spiralMode: plate.spiralMode,
+    locked: plate.locked
   }))
 }
 
@@ -1176,10 +1246,40 @@ export function parseModelSettingsPlates(xml: string, projectSettingsJson: strin
       name: name || null,
       thumbnailFile: meta.get('thumbnail_file') ?? null,
       usedFilamentIds: [...usedFilamentIds].sort((left, right) => left - right),
-      objects
+      objects,
+      bedTypeOverride: canonicalCurrBedType(meta.get('bed_type')),
+      printSequence: parsePlatePrintSequence(meta.get('print_sequence')),
+      spiralMode: parsePlateBoolean(meta.get('spiral_mode')),
+      locked: parsePlateBoolean(meta.get('locked')) === true
     })
   }
   return out.sort((left, right) => left.index - right.index)
+}
+
+/**
+ * A plate's boolean metadata, in EITHER spelling.
+ *
+ * BambuStudio writes both as `true`/`false`: `std::boolalpha` is inserted at the `locked` line
+ * (`bbs_3mf.cpp:8334`), it is a STICKY stream flag, `noboolalpha` appears nowhere in the file, and
+ * its reader extracts with boolalpha too (`:4621`, `:4652`), so its own files round-trip. We write
+ * the same spelling. `1`/`0` is accepted defensively rather than because Studio emits it: these are
+ * plain XML attributes that a script or a hand edit can easily leave in the other form, and reading
+ * one as "absent" would silently downgrade a plate to inheriting.
+ *
+ * Null for absent or unrecognised, which every caller must read as "inherits the global" rather
+ * than as false.
+ */
+function parsePlateBoolean(value: string | undefined): boolean | null {
+  const normalized = value?.trim().toLowerCase()
+  if (normalized === 'true' || normalized === '1') return true
+  if (normalized === 'false' || normalized === '0') return false
+  return null
+}
+
+/** A plate's own `print_sequence`, or null when absent or not one of the engine's two enum names. */
+function parsePlatePrintSequence(value: string | undefined): 'by layer' | 'by object' | null {
+  const normalized = value?.trim().toLowerCase()
+  return normalized === 'by layer' || normalized === 'by object' ? normalized : null
 }
 
 /**
@@ -1348,6 +1448,38 @@ function numberAt(values: string[], index: number): number | null {
 /** Parse an XML attribute string into a record. Exported for the scene reader. */
 /** Archive entry BambuStudio uses for layer-based custom gcode (filament changes etc.). */
 export const CUSTOM_GCODE_PER_LAYER_ENTRY = 'Metadata/custom_gcode_per_layer.xml'
+
+/**
+ * Archive entry holding the slicer's per-plate filament grouping, written only by a slice.
+ *
+ * Shape: `{ "plate_1": { "sequence": [...], "nozzle_sequence": [...], "optimal_assignment": [...] } }`.
+ */
+export const FILAMENT_SEQUENCE_ENTRY = 'Metadata/filament_sequence.json'
+
+/**
+ * One plate's `optimal_assignment`: the slicer's group id per filament, positionally.
+ *
+ * Returns null for anything that is not a usable array of integers, including a plate the file
+ * does not mention. Null and an empty array are different downstream ("not sliced for a switch"
+ * versus "sliced, and the grouping is empty"), so this must not default to `[]`.
+ */
+function parseOptimalAssignment(json: string | null, plateIndex: number): number[] | null {
+  if (!json) return null
+  try {
+    const parsed: unknown = JSON.parse(json)
+    if (!parsed || typeof parsed !== 'object') return null
+    const plate = (parsed as Record<string, unknown>)[`plate_${plateIndex}`]
+    if (!plate || typeof plate !== 'object') return null
+    const assignment = (plate as Record<string, unknown>).optimal_assignment
+    if (!Array.isArray(assignment)) return null
+    const groups = assignment.filter((value): value is number => Number.isInteger(value))
+    // A partial parse would silently shift every later filament's group by one, so an array that
+    // is not entirely integers is treated as unreadable rather than salvaged.
+    return groups.length === assignment.length ? groups : null
+  } catch {
+    return null
+  }
+}
 
 /**
  * Iterate one plate's `<layer .../>` attribute sets from `custom_gcode_per_layer.xml`,

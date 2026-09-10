@@ -126,8 +126,8 @@ export async function stageAddedPartGeometry(
   // Every source here stages as `part`: a part is placed by ONE point relative to its host
   // (`addedPartDropPosition`), which only works against a soup centred on every axis, as
   // `primitivePartSoup` produces. The whole-object normalisation floors Z instead, which would drop
-  // a helper volume half its own height above where the user put it — invisible, since an aid is
-  // translucent and does not print.
+  // a helper volume half its own height above where the user put it (invisible, since an aid is
+  // translucent and does not print).
   const staged = source.kind === 'file'
     ? await store.stageFile(source.file, 'part', signal)
     : await store.stageFromLibrary(source.libraryFileId, 'part', undefined, signal)

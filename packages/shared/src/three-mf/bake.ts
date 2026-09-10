@@ -30,6 +30,7 @@ import {
   applyTrianglePaintToModelEntry,
   buildEditedThreeMfDocuments,
   buildProjectSettingsTransforms,
+  customGcodePlateIds,
   filamentSlotIdRemap,
   isIdentityFilamentSlotRemap,
   mergeCustomGcodePerLayer,
@@ -416,6 +417,7 @@ export function planEditedThreeMf(
   // the save verbatim otherwise, still speaking the old slot order.
   const slotRemap = edit.filaments && edit.filaments.length > 0 ? filamentSlotIdRemap(edit.filaments) : null
   const basePaintRemap = slotRemap && !isIdentityFilamentSlotRemap(slotRemap) ? slotRemap : null
+  const plateMapping = sourcePlateMapping(edit.plates)
 
   // Layer-based filament changes + layer pauses: merged with the source sidecar
   // (preserving unedited entry types and plates); both absent keeps the source file untouched,
@@ -424,15 +426,17 @@ export function planEditedThreeMf(
   const baseCustomGcodeForMerge = basePaintRemap && baseCustomGcodeXml !== null
     ? remapCustomGcodeFilamentIds(baseCustomGcodeXml, basePaintRemap)
     : baseCustomGcodeXml
-  const customGcodeContent = edit.filamentChanges !== undefined || edit.pauses !== undefined
-    ? mergeCustomGcodePerLayer(baseCustomGcodeForMerge, edit.filamentChanges, edit.pauses)
+  const customGcodePlatesMoved = plateMapping !== null && baseCustomGcodeForMerge !== null
+    && customGcodePlateIds(baseCustomGcodeForMerge).some((id) => plateMapping.get(id) !== id)
+  const customGcodeContent = edit.filamentChanges !== undefined || edit.pauses !== undefined || customGcodePlatesMoved
+    ? mergeCustomGcodePerLayer(baseCustomGcodeForMerge, edit.filamentChanges, edit.pauses, plateMapping)
     : (baseCustomGcodeForMerge !== baseCustomGcodeXml ? baseCustomGcodeForMerge : null)
   // Compose project_settings.config rewrites: filament set first (add/remove materials), then the
   // per-slot dual-nozzle assignment, the plate type, and per-plate prime-tower corners. When the
   // base carries no project_settings.config (a new-project scaffold), the composed result is
   // synthesized from an empty settings object instead, otherwise the material / plate-type /
   // prime-tower choices would silently vanish on save (transforms only fire on existing entries).
-  const projectSettingsTransforms = buildProjectSettingsTransforms(edit)
+  const projectSettingsTransforms = buildProjectSettingsTransforms(edit, plateMapping)
   // Global process overrides ride in via options (not the SceneEdit) so only the save route
   // bakes them; append last so they win over any preset-derived process values.
   if (options.globalProcessOverrides && Object.keys(options.globalProcessOverrides).length > 0) {
@@ -527,7 +531,7 @@ export function planEditedThreeMf(
     const savedObjectOrder = parseRootModelObjectIdOrder(modelXml)
     for (const sidecar of OBJECT_ORDINAL_SIDECAR_ENTRIES) {
       // A sidecar this save AUTHORS is never remapped: it already speaks the SAVED ordinals, so
-      // chasing them again would renumber correct content — and because both write into one map,
+      // chasing them again would renumber correct content, and because both write into one map,
       // whichever ran last would silently win. The skip makes that independent of statement order.
       // Cut information is the one sidecar that is BOTH remapped and authored: the base's groups
       // still need their ordinals chased, and ours are merged in on top. Skipping the remap here
@@ -637,10 +641,6 @@ export function planEditedThreeMf(
     // garbage extruder id (issue #63). Only the entries can be rewritten here, the per-filament
     // usage a slice produced cannot be invented for a material that was never sliced, so the
     // honest result is no record until the project is sliced again.
-    // Which source plate became which saved plate. Null when the edit never says, which is an older
-    // client or a hand-built request: the plate records are then left exactly as they were, since
-    // the identity mapping we would otherwise assume is precisely the wrong answer for a reorder.
-    const plateMapping = sourcePlateMapping(edit.plates)
     if (edit.filaments && edit.filaments.length > 0 && baseSliceInfoXml !== null) {
       const filaments = edit.filaments
       const recordedIds = sliceRecordFilamentIds(baseSliceInfoXml)

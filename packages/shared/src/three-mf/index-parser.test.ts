@@ -177,3 +177,49 @@ test('an EMPTY parent slot reports no parent, because the process is then a syst
   assert.equal(buildThreeMfIndex(null, JSON.stringify({ print_settings_id: 'x' })).processProfileInherits, null)
   assert.equal(buildThreeMfIndex(null, null).processProfileInherits, null)
 })
+
+/** A minimal sliced project with two plates, so `optimalAssignment` has plates to attach to. */
+const TWO_PLATE_SLICE_INFO = `<config>
+  <plate><metadata key="index" value="1"/></plate>
+  <plate><metadata key="index" value="2"/></plate>
+</config>`
+
+test('the slicer filament grouping is read per plate, positionally', () => {
+  const index = buildThreeMfIndex(TWO_PLATE_SLICE_INFO, null, new Map(), new Map(), null, null, {
+    filamentSequenceJson: JSON.stringify({
+      plate_1: { sequence: [1, 2], nozzle_sequence: [], optimal_assignment: [0, 1, 0] },
+      plate_2: { optimal_assignment: [1, 1] }
+    })
+  })
+
+  assert.deepEqual(index.plates[0]?.optimalAssignment, [0, 1, 0])
+  assert.deepEqual(index.plates[1]?.optimalAssignment, [1, 1])
+})
+
+test('a plate the sequence file does not mention carries no grouping at all', () => {
+  // Absent must stay absent rather than becoming []: the arrangement hint reads absence as "not
+  // sliced for a Filament Track Switch", which an empty array would not say.
+  const index = buildThreeMfIndex(TWO_PLATE_SLICE_INFO, null, new Map(), new Map(), null, null, {
+    filamentSequenceJson: JSON.stringify({ plate_1: { optimal_assignment: [0, 1] } })
+  })
+
+  assert.deepEqual(index.plates[0]?.optimalAssignment, [0, 1])
+  assert.equal('optimalAssignment' in (index.plates[1] ?? {}), false)
+})
+
+test('an unreadable or partial grouping is dropped rather than salvaged', () => {
+  // Keeping only the integers out of a mixed array would shift every later filament's group by
+  // one, which silently proposes moving the wrong spools.
+  const partial = buildThreeMfIndex(TWO_PLATE_SLICE_INFO, null, new Map(), new Map(), null, null, {
+    filamentSequenceJson: JSON.stringify({ plate_1: { optimal_assignment: [0, 'x', 1] } })
+  })
+  assert.equal('optimalAssignment' in (partial.plates[0] ?? {}), false)
+
+  const malformed = buildThreeMfIndex(TWO_PLATE_SLICE_INFO, null, new Map(), new Map(), null, null, {
+    filamentSequenceJson: '{not json'
+  })
+  assert.equal('optimalAssignment' in (malformed.plates[0] ?? {}), false)
+
+  const absent = buildThreeMfIndex(TWO_PLATE_SLICE_INFO, null)
+  assert.equal('optimalAssignment' in (absent.plates[0] ?? {}), false)
+})

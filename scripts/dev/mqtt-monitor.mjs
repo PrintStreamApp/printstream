@@ -1,5 +1,5 @@
 /**
- * Temporary MQTT monitor — subscribes to both request and report topics
+ * Temporary MQTT monitor: subscribes to both request and report topics
  * for a printer and logs all messages with timestamps.
  *
  * Usage: node mqtt-monitor.mjs <host> <serial> <access_code>

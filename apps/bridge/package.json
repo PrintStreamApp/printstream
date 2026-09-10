@@ -15,9 +15,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "bundle:docker": "node scripts/bundle-docker.mjs",
     "dev": "NODE_OPTIONS=\"--require ../../scripts/dev/exit-with-parent.cjs\" node ../../scripts/dev/run-bridge-dev.mjs",
-    "start": "node dist/index.js",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
@@ -38,6 +36,6 @@
     "@types/yazl": "^3.3.1",
     "esbuild": "^0.25.5",
     "postject": "^1.0.0-alpha.6",
-    "tsx": "^4.19.3"
+    "tsx": "^4.23.13"
   }
 }

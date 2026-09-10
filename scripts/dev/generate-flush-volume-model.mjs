@@ -4,7 +4,7 @@
  *
  * Every constant here is a literal compiled into the slicer, so unlike the measured flush TABLES
  * (which we read from the slicer image at runtime, and which therefore track it for free) these
- * cannot be discovered at runtime — they can only be mirrored. Mirroring by hand is the risk: a
+ * cannot be discovered at runtime; they can only be mirrored. Mirroring by hand is the risk: a
  * vendor bump that retunes, say, the 560 brightness scale would leave us confidently showing users
  * the previous release's purge volumes with nothing failing. So they are generated, and
  * `flush-volume-calc.test.ts` re-derives them from the vendored source and fails on any difference.
@@ -44,8 +44,8 @@ function parseArgs(argv) {
  */
 export function extractOne(source, pattern, label) {
   const matches = [...source.matchAll(pattern)]
-  if (matches.length === 0) throw new Error(`Could not find ${label} — the vendored BambuStudio source changed shape`)
-  if (matches.length > 1) throw new Error(`Found ${matches.length} candidates for ${label} — tighten the pattern`)
+  if (matches.length === 0) throw new Error(`Could not find ${label}: the vendored BambuStudio source changed shape`)
+  if (matches.length > 1) throw new Error(`Found ${matches.length} candidates for ${label}; tighten the pattern`)
   return matches[0]
 }
 

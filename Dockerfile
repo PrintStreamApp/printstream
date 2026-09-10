@@ -1,6 +1,6 @@
 # Combined PrintStream app image. Builds the web SPA, the API, and the bridge in
 # one image; the entrypoint (docker/app-entrypoint.sh) runs whichever role you
-# point it at — `api` (default; serves web + /api + /ws on one port) or `bridge`.
+# point it at: `api` (default; serves web + /api + /ws on one port) or `bridge`.
 # Using one image for the whole app keeps the cloud build and the published
 # open-core image identical (no divergence). Runs as the unprivileged `node`
 # user. PostgreSQL lives in the compose `db` service; `/data` stores library
@@ -11,7 +11,7 @@
 # every distribution ships the same runtime; bump BOTH together, deliberately.
 # A floating `node:22` tag once let an image rebuild silently absorb a Node
 # patch (22.23.x) whose TLS regression broke H2D FTPS only on Docker installs
-# while SEA bridges kept working — never again.
+# while SEA bridges kept working. Never again.
 ARG NODE_VERSION=22.22.3
 FROM node:${NODE_VERSION}-bookworm-slim AS base
 WORKDIR /app
@@ -24,7 +24,7 @@ ARG BRIDGE_BUILD_REVISION=unknown
 ARG PRINTSTREAM_BRIDGE_SOURCE_FINGERPRINT=unknown
 # App image identity, surfaced in the web footer. REVISION is the git commit the
 # image was built from; PUBLISHED is "true" only for the open-core image pushed to
-# GHCR by the public docker-publish workflow (that image — and only that image —
+# GHCR by the public docker-publish workflow (that image, and only that image,
 # has a registry update channel). The cloud image and local/source runs leave
 # PUBLISHED at its default. See apps/api/src/lib/app-build-info.ts.
 ARG PRINTSTREAM_IMAGE_REVISION=unknown
@@ -40,7 +40,7 @@ COPY packages/shared/src packages/shared/src
 RUN npm ci
 COPY . .
 # Image-drift fingerprint: the dependency tree baked into node_modules and this
-# Dockerfile (base image, apt ffmpeg) — the part of a Docker bridge that only an
+# Dockerfile (base image, apt ffmpeg), the part of a Docker bridge that only an
 # image rebuild/pull can change. App sources are excluded (the bridge *release*
 # fingerprint, bridge-release-fingerprint.sh, covers those separately; hashing
 # sources here would re-flag every self-built image). Drift feeds the
@@ -67,8 +67,8 @@ RUN npm run build --workspace @printstream/shared \
 # Slim, bridge-only image, published as ghcr.io/printstreamapp/printstream-bridge
 # for running just a LAN bridge host. The bridge has a tiny dependency footprint
 # (no Prisma, web, or API deps), so we esbuild-bundle its runtime entry into a
-# single file (bundle-docker.mjs) and ship it on the base image — which already
-# carries the ffmpeg the camera relay needs — instead of copying the full
+# single file (bundle-docker.mjs) and ship it on the base image, which already
+# carries the ffmpeg the camera relay needs, instead of copying the full
 # workspace node_modules the combined `runtime` stage does. The entrypoint is the
 # LAUNCHER, which activates signed single-file app bundles from /data/releases
 # (in-place self-update, lockstep with the paired server) and falls back to the
@@ -94,7 +94,7 @@ WORKDIR /app
 # Library files, bridge state, and other bridge-owned assets live under /data.
 # /backups is the default BRIDGE_BACKUP_DIR mount point; pre-owned so a named
 # volume mounted there is writable by the unprivileged runtime user. (A host
-# bind mount keeps the host directory's ownership — see compose.bridge.example.yml.)
+# bind mount keeps the host directory's ownership; see compose.bridge.example.yml.)
 RUN mkdir -p /data /backups && chown -R node:node /data /backups
 COPY --chown=node:node --from=bridge-build /app/apps/bridge/dist/bridge-runner.cjs /app/bridge-runner.cjs
 COPY --chown=node:node --from=bridge-build /app/apps/bridge/dist/bridge-launcher.cjs /app/bridge-launcher.cjs
@@ -106,7 +106,7 @@ ENTRYPOINT ["node", "/app/bridge-launcher.cjs"]
 FROM base AS runtime
 ENV NODE_ENV=production
 # Postgres client tools for the built-in server backups (pg_dump/pg_restore),
-# from PGDG so the client major matches the compose `db` image (postgres:16 —
+# from PGDG so the client major matches the compose `db` image (postgres:16;
 # bookworm's own postgresql-client is 15, and a 15 pg_dump refuses a 16
 # server). Keep this major and the compose file's `db` image pinned together.
 RUN apt-get update \

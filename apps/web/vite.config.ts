@@ -14,8 +14,20 @@ const sharedThreeMfSourceEntry = fileURLToPath(new URL('../../packages/shared/sr
 const sharedPrivateSourceEntry = fileURLToPath(new URL('../../packages/shared/src/private/index.ts', import.meta.url))
 const sharedPrivateExists = existsSync(sharedPrivateSourceEntry)
 
+/** The `VITE_`-prefixed entries of a process environment, in `loadEnv`'s shape so they can layer. */
+function pickViteEnv(source: NodeJS.ProcessEnv): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(source).filter(([key, value]) => key.startsWith('VITE_') && value !== undefined)
+  ) as Record<string, string>
+}
+
 export default defineConfig(({ command, mode }) => {
-  const env = loadEnv(mode, fileURLToPath(new URL('../..', import.meta.url)), 'VITE_')
+  const fileEnv = loadEnv(mode, fileURLToPath(new URL('../..', import.meta.url)), 'VITE_')
+  // `loadEnv` reads .env FILES only, so a value exported by a parent process would be silently
+  // ignored. Multi-checkout dev mode (via @ryanewen/devkit) publishes the port and hostname for
+  // this checkout that way, so process.env has to win -- and it also lets a one-off
+  // `VITE_API_PORT=4001 npm run dev` work, which reads like it should and previously did not.
+  const env = { ...fileEnv, ...pickViteEnv(process.env) }
   // Where dev requests to /api and /ws go. Defaults to the API this repo's
   // `npm run dev` starts; overridable so a second web+API pair can run on spare
   // ports without disturbing the one already in use.
@@ -90,8 +102,16 @@ export default defineConfig(({ command, mode }) => {
       })
     ],
     server: {
-      port: 5173,
-      host: true,
+      // Multi-checkout dev mode derives a per-checkout port so several can run at once; everyone
+      // else gets 5173 exactly as before. `strictPort` stays off, so a collision walks to the next
+      // free port rather than failing the start.
+      port: Number(env.VITE_DEV_PORT ?? 5173),
+      // `true` binds the IPv6 wildcard, which Docker Desktop's WSL host forwarding does not relay:
+      // a container reaching `host.docker.internal` gets connection-refused, so multi-checkout dev
+      // mode's proxy answers 502 for a dev server that is plainly up on its direct port. Host mode
+      // therefore publishes an explicit IPv4 bind through devkit; everyone else
+      // keeps the dual-stack default.
+      host: env.VITE_DEV_HOST || true,
       // Enforce a CSP in dev so the resource directives (notably img/media/connect
       // for camera frames + proxied MJPEG) are exercised here, matching the policy
       // the API serves in production (apps/api/src/lib/content-security-policy.ts).

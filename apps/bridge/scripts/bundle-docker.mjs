@@ -3,14 +3,14 @@
  * Bundles the bridge for the slim, bridge-only Docker image (Dockerfile
  * `bridge` target, published as ghcr.io/printstreamapp/printstream-bridge):
  *
- *  - `dist/bridge-runner.cjs`  — the runtime entry (`src/index.ts`)
- *  - `dist/bridge-launcher.cjs` — the image entrypoint (`src/launcher-docker.ts`),
+ *  - `dist/bridge-runner.cjs`: the runtime entry (`src/index.ts`)
+ *  - `dist/bridge-launcher.cjs`: the image entrypoint (`src/launcher-docker.ts`),
  *    which starts an activated signed app bundle from the releases dir (in-place
  *    self-update) and falls back to the image-baked runner. The launcher is the
  *    fixed point of the update scheme: it ships only with the image and must
  *    stay dependency-free.
  *
- * The bridge has a tiny dependency footprint — no Prisma, web, or API deps — so
+ * The bridge has a tiny dependency footprint (no Prisma, web, or API deps), so
  * esbuild-bundling its runtime lets the image ship single files on the base
  * image (which already carries the ffmpeg the camera relay needs) instead of
  * the full ~800 MB workspace node_modules the combined image copies. Mirrors

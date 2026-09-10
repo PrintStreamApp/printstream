@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { STEP_TESSELLATION, detectImportFormat, meshToBinaryStl, parseStlMesh, weldImportedMeshVertices } from './mesh-import.js'
+import { STEP_TESSELLATION, describeImportFormats, detectImportFormat, meshToBinaryStl, parseStlMesh, weldImportedMeshVertices } from './mesh-import.js'
 
 /** Build a minimal binary STL containing the given triangles (each 3 xyz vertices). */
 function buildBinaryStl(triangles: number[][][]): Buffer {
@@ -26,7 +26,21 @@ test('detectImportFormat recognizes supported extensions', () => {
   assert.equal(detectImportFormat('assembly.step'), 'step')
   assert.equal(detectImportFormat('assembly.stp'), 'step')
   assert.equal(detectImportFormat('project.3mf'), '3mf')
+  assert.equal(detectImportFormat('scan.obj'), 'obj')
+  assert.equal(detectImportFormat('scene.gltf'), 'gltf')
+  assert.equal(detectImportFormat('scene.glb'), 'gltf')
+  assert.equal(detectImportFormat('part.amf'), 'amf')
   assert.equal(detectImportFormat('notes.txt'), null)
+})
+
+test('the refusal message names every format the server actually accepts', () => {
+  // The two import routes interpolate this. It used to be prose reading "Only STL, STEP, and 3MF",
+  // which is worse than no message once a fourth format lands: it tells a user their file is
+  // unsupported when it is merely misnamed.
+  const described = describeImportFormats()
+  for (const label of ['STL', 'STEP', '3MF', 'OBJ', 'glTF', 'AMF']) {
+    assert.ok(described.includes(label), `${label} must be named in the refusal message`)
+  }
 })
 
 test('STEP tessellation quality matches BambuStudio defaults', () => {

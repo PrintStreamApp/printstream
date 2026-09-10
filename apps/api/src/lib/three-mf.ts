@@ -21,7 +21,7 @@
  */
 export { readEntry } from './three-mf-internal.js'
 
-export { buildThreeMfIndex, readPlateIndex, readPreviewAssets, readSceneManifest } from './three-mf-reader.js'
+export { FILAMENT_SEQUENCE_ENTRY, buildThreeMfIndex, readPlateIndex, readPreviewAssets, readSceneManifest } from './three-mf-reader.js'
 export type {
   ThreeMfExcludeZone,
   ThreeMfFilament,

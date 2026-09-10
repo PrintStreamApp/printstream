@@ -59,3 +59,73 @@ test('canonicalBambuModelKey returns printerModelSchema enum keys (bed-override 
   assert.equal(canonicalBambuModelKey('Bambu Lab X1 Carbon 0.4 nozzle'), 'X1C')
   assert.equal(canonicalBambuModelKey('Bambu Lab A2L 0.4 nozzle'), 'A2L')
 })
+
+test('Bambu device codes map to the model that actually bears them', () => {
+  // Three of these were inverted for a long time, which is why they are pinned by name here as
+  // well as re-derived from the vendored source below: `C11` is the P1P (not the X1C), `N1` is the
+  // A1 mini and `N2S` the A1 (not the other way round). The consequence was quiet: these aliases
+  // feed preset-name matching, so an X1C was offered a preset named for a P1P.
+  assert.equal(normalizeBambuStudioPrinterModelOption('C11'), 'P1P')
+  assert.equal(normalizeBambuStudioPrinterModelOption('C12'), 'P1S')
+  assert.equal(normalizeBambuStudioPrinterModelOption('N1'), 'A1 mini')
+  assert.equal(normalizeBambuStudioPrinterModelOption('N2S'), 'A1')
+  assert.equal(normalizeBambuStudioPrinterModelOption('BL-P001'), 'X1C')
+  assert.equal(normalizeBambuStudioPrinterModelOption('BL-P002'), 'X1')
+  assert.equal(normalizeBambuStudioPrinterModelOption('N7'), 'P2S')
+  assert.equal(normalizeBambuStudioPrinterModelOption('O1E'), 'H2D Pro')
+  assert.equal(normalizeBambuStudioPrinterModelOption('O1S'), 'H2S')
+
+  // The alias lists must agree with the label map, since both are consulted for matching.
+  assert.ok(resolveBambuPrinterModelAliases('P1P').includes('C11'))
+  assert.ok(!resolveBambuPrinterModelAliases('X1C').includes('C11'))
+  assert.ok(resolveBambuPrinterModelAliases('A1mini').includes('N1'))
+  assert.ok(resolveBambuPrinterModelAliases('A1').includes('N2S'))
+})
+
+/**
+ * The ratchet for whoever bumps the vendored BambuStudio source: re-derive every device code from
+ * `resources/printers/<code>.json`'s own `display_name` and require both of our tables to agree.
+ *
+ * SKIPS when the source is absent, exactly as the flush-model and blacklist guards do. Only codes
+ * BambuStudio actually ships are checked, so the unverifiable `A04`/`A11`/`A12`/`A1M` entries are
+ * neither asserted nor disturbed.
+ */
+test('our device-code tables still match the vendored BambuStudio resources', async (t) => {
+  const { existsSync, readdirSync, readFileSync } = await import('node:fs')
+  const { dirname, join } = await import('node:path')
+  const { fileURLToPath } = await import('node:url')
+
+  let root: string | null = null
+  let dir = dirname(fileURLToPath(import.meta.url))
+  for (let depth = 0; depth < 8; depth += 1) {
+    if (existsSync(join(dir, 'packages')) && existsSync(join(dir, 'apps'))) { root = dir; break }
+    const parent = dirname(dir)
+    if (parent === dir) break
+    dir = parent
+  }
+  const printers = root ? join(root, 'tmp/bambustudio-src/resources/printers') : null
+  if (!printers || !existsSync(printers)) {
+    t.skip('vendored BambuStudio source not present')
+    return
+  }
+
+  for (const file of readdirSync(printers)) {
+    if (!file.endsWith('.json') || file === 'filaments_blacklist.json') continue
+    const code = file.slice(0, -'.json'.length)
+    const parsed = JSON.parse(readFileSync(join(printers, file), 'utf8')) as Record<string, { display_name?: string }>
+    const displayName = parsed['00.00.00.00']?.display_name
+    if (!displayName) continue
+    const expectedKey = canonicalBambuModelKey(displayName)
+    assert.ok(expectedKey, `${file}: display_name ${displayName} resolves to no model key`)
+
+    assert.equal(
+      canonicalBambuModelKey(normalizeBambuStudioPrinterModelOption(code)),
+      expectedKey,
+      `${code} should normalize to ${displayName}`
+    )
+    assert.ok(
+      resolveBambuPrinterModelAliases(expectedKey).includes(code),
+      `${expectedKey}'s aliases should include the device code ${code}`
+    )
+  }
+})

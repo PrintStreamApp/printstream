@@ -16,29 +16,29 @@
  * That difference is the whole reason this is an interface rather than a module: one host resolves
  * geometry by id on a server, the other carries it in memory, and `EditorView` should not know which.
  */
+import { importFormatExtensions } from '@printstream/shared'
 import type { ImportedObjectInput } from '@printstream/shared/three-mf'
 import type { ImportNormalization, SceneEdit, StagedImport, StagedImportFormat } from '@printstream/shared'
 
 export type { ImportNormalization }
 
-/** Extension(s) a file picker should offer for each staged-import format. */
-const FORMAT_EXTENSIONS: Record<StagedImportFormat, readonly string[]> = {
-  stl: ['.stl'],
-  step: ['.step', '.stp'],
-  '3mf': ['.3mf']
-}
-
 /**
  * The `accept` attribute for a file input staging into `store`.
  *
  * Derived from the store rather than hardcoded because a host's capabilities are its own to state:
- * both stores stage STL/STEP/3MF today, but the api converts server-side while the local one parses
+ * both stores stage every format today, but the api converts server-side while the local one parses
  * in the tab, and either could narrow. A fixed list once offered the public editor's users two
  * formats it then refused AFTER the picker closed, which reads as a broken import rather than an
  * unsupported one.
+ *
+ * The format-to-extensions map itself is `importFormatExtensions` in the shared catalogue, not a
+ * local one. It used to live here, which meant the picker's idea of which extensions name a format
+ * and `detectImportFormat`'s idea of the same thing were two lists maintained by hand -- and a
+ * picker that offers an extension the detector does not recognise refuses the file after the dialog
+ * closes, which is the exact failure this function's own doc comment already warned about.
  */
 export function importFileAccept(store: EditorImportStore): string {
-  return store.importableFormats.flatMap((format) => FORMAT_EXTENSIONS[format]).join(',')
+  return importFormatExtensions(store.importableFormats).join(',')
 }
 
 export interface EditorImportStore {

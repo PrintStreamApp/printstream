@@ -85,7 +85,7 @@ async function loadProfiles(sourceDirs) {
 
 /**
  * Structural directives that must never be copied OUT of an `include`d template
- * into the host profile — only the template's actual setting values are merged.
+ * into the host profile. Only the template's actual setting values are merged.
  */
 const INCLUDE_SKIP_KEYS = new Set([
   'name',
@@ -107,7 +107,7 @@ const INCLUDE_SKIP_KEYS = new Set([
  * Merging `include` is essential, not cosmetic: BambuStudio keeps each machine's
  * real `machine_start_gcode` / `machine_end_gcode` / `change_filament_gcode` /
  * `layer_change_gcode` / `time_lapse_gcode` / `wrapping_detection_gcode` in
- * per-machine `... template <key>` profiles pulled in via `include` — the inherits
+ * per-machine `... template <key>` profiles pulled in via `include`; the inherits
  * chain only carries a GENERIC single-nozzle fallback. Without merging includes, a
  * flattened machine profile (read by the editor/retarget resolve endpoint) reports
  * the generic prime-line start gcode for every printer, so e.g. an H2D project
@@ -193,7 +193,7 @@ async function listJsonFiles(directory) {
 // Must stay byte-identical to `sanitizeProfileFileName` in apps/slicer/src/profile-file-name.ts:
 // this is the WRITE side and that is the READ side. A preset written under a different filename
 // than every reader looks for silently resolves to nothing, and the slot then falls back to a
-// stand-in material — a wrong-material slice, not an error. (No bundled preset name contains
+// stand-in material: a wrong-material slice, not an error. (No bundled preset name contains
 // `:` or `;` today, so widening this is a no-op now and a trap removed later.)
 function sanitizeFileName(value) {
   return String(value).replace(/[\\/:;]/g, '-')

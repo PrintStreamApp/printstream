@@ -4,7 +4,7 @@
  *
  * Presentational: the bands are handed in and edited through callbacks; the editor owns the state
  * and the emit. Z values are OBJECT space, mm, with z=0 at the object's underside, which is the
- * frame the file stores and the slicer reads — so the inputs are bounded by the object's own
+ * frame the file stores and the slicer reads, so the inputs are bounded by the object's own
  * height, not the plate's.
  *
  * Layer height is edited inline rather than behind the settings gear because every band must carry
@@ -99,7 +99,7 @@ export function HeightRangesDialog({
           <Alert size="sm" color="warning" variant="soft" startDecorator={<WarningAmberRoundedIcon />}>
             <Typography level="body-xs">
               This model has a variable layer height profile, which <b>overrides</b> the layer
-              height of every range below — their other settings still apply. Reset the profile in
+              height of every range below; their other settings still apply. Reset the profile in
               Variable layer height to hand layer height back to these ranges.
             </Typography>
           </Alert>

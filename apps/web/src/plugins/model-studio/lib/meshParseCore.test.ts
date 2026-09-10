@@ -85,7 +85,7 @@ test('meshParseCore parses paint codes onto the right triangles', async () => {
 /**
  * The worker cannot post a `BufferGeometry`, so it projects paint out of `userData` and the client
  * puts it back. Both hops are hand-maintained lists in the wire contract's shape, and a channel
- * missing from either drops that channel's paint on EVERY load — silently, because the worker is
+ * missing from either drops that channel's paint on EVERY load, silently, because the worker is
  * the normal path and the geometry still renders. Worse than invisible: the editor seeds a first
  * brush stroke from the loaded paint, and a save writes the complete desired map, so painting a
  * channel that failed to load ERASES whatever the file already had. Round-trip every channel in

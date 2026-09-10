@@ -13,6 +13,7 @@ import ErrorOutlineRoundedIcon from '@mui/icons-material/ErrorOutlineRounded'
 import NotificationsActiveRoundedIcon from '@mui/icons-material/NotificationsActiveRounded'
 import NotificationsOffRoundedIcon from '@mui/icons-material/NotificationsOffRounded'
 import WarningAmberRoundedIcon from '@mui/icons-material/WarningAmberRounded'
+import { useAuthBootstrapQuery } from '../../lib/authQuery'
 import {
   detectBrowserNotificationsSupport,
   disableBrowserNotificationsInCurrentWorkspace,
@@ -22,6 +23,10 @@ import {
 } from './subscription'
 
 export function BrowserNotificationsPanel() {
+  // The panel renders on both surfaces. At the platform workspace there is no
+  // workspace to name, so the copy and the button say what is actually being
+  // enabled, matching how `EmailNotificationsPanel` handles the same split.
+  const isPlatformScope = useAuthBootstrapQuery().data?.workspace == null
   const support = detectBrowserNotificationsSupport()
   const fullySupported = support.notification && support.serviceWorker && support.pushManager
   const [permission, setPermission] = useState<NotificationPermission>(
@@ -95,9 +100,12 @@ export function BrowserNotificationsPanel() {
   return (
     <Stack spacing={1}>
       <Typography level="body-sm" textColor="text.tertiary">
-        Receive OS notifications on this device for this workspace's enabled events, even when the
-        app is closed. Enable notifications separately in each workspace you want them for; the
-        setting applies per browser/device.
+        {isPlatformScope
+          ? `Receive OS notifications on this device for platform events, even when the app is
+             closed. This setting applies per browser/device, separately from any workspace.`
+          : `Receive OS notifications on this device for this workspace's enabled events, even when
+             the app is closed. Enable notifications separately in each workspace you want them for;
+             the setting applies per browser/device.`}
       </Typography>
       {permission === 'denied' && (
         <Alert color="danger" variant="soft" size="sm" startDecorator={<ErrorOutlineRoundedIcon />}>
@@ -106,19 +114,19 @@ export function BrowserNotificationsPanel() {
       )}
       {enabledElsewhereOnly && (
         <Typography level="body-sm" textColor="text.tertiary">
-          This device already receives notifications for another workspace. Enabling here adds this
-          workspace without affecting the others.
+          This device already receives notifications for another workspace. Enabling here adds
+          {isPlatformScope ? ' platform events' : ' this workspace'} without affecting the others.
         </Typography>
       )}
       {error && <Alert color="danger" variant="soft" size="sm" startDecorator={<ErrorOutlineRoundedIcon />}>{error}</Alert>}
       <Stack direction="row" spacing={1}>
         {enabledHere ? (
           <Button size="sm" color="neutral" variant="outlined" startDecorator={<NotificationsOffRoundedIcon />} loading={busy} onClick={disable}>
-            Disable in this workspace
+            {isPlatformScope ? 'Disable for platform events' : 'Disable in this workspace'}
           </Button>
         ) : (
           <Button size="sm" loading={busy} startDecorator={<NotificationsActiveRoundedIcon />} onClick={enable} disabled={permission === 'denied'}>
-            Enable in this workspace
+            {isPlatformScope ? 'Enable for platform events' : 'Enable in this workspace'}
           </Button>
         )}
       </Stack>

@@ -1,8 +1,8 @@
-# Third-Party Slicer Engines — AGPL-3.0 Notice and Source Offer
+# Third-Party Slicer Engines: AGPL-3.0 Notice and Source Offer
 
 The PrintStream slicer sidecar (`apps/slicer`) invokes an external slicing
 engine to convert 3MF projects into G-code. That engine is **not** part of
-PrintStream and is **not** an npm dependency — it is a separate program
+PrintStream and is **not** an npm dependency: it is a separate program
 downloaded unmodified from its publisher and executed as an independent
 process (CLI), with data exchanged through files and standard I/O. See
 [`src/engines/install.ts`](src/engines/install.ts),
@@ -62,14 +62,14 @@ The slicer code can also drive **OrcaSlicer**, which is likewise licensed under
 **AGPL-3.0** (https://github.com/SoftFever/OrcaSlicer). No OrcaSlicer release is
 bundled in the image today. If an OrcaSlicer download target is added to
 `docker/slicer-targets.mjs`, add a row for it above with its pinned version,
-release URL, and corresponding-source tag — the same AGPL-3.0 obligations apply.
+release URL, and corresponding-source tag; the same AGPL-3.0 obligations apply.
 
 ## Relationship to PrintStream's own license
 
 PrintStream invokes these engines at arm's length as separate processes; it is
 not a derivative work of them, and bundling them alongside PrintStream does not
 place PrintStream's own source under the AGPL. PrintStream's own code is
-licensed separately — see [`LICENSE`](../../LICENSE).
+licensed separately; see [`LICENSE`](../../LICENSE).
 
 ## Trademarks
 

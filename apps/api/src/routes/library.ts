@@ -34,9 +34,12 @@ import {
   printFromLibrarySchema,
   printStartOptionSelectionSchema,
   startLibraryDeleteJobSchema,
+  isMeshLibraryFileKind,
   type LibraryDownloadLinkResponse,
   type LibraryFile,
   type LibraryFolder,
+  type MeshLibraryFileKind,
+  type StagedImportFormat,
   type LibraryFileVersion as LibraryFileVersionDto,
   type LibraryThreeMfPreviewAsset as LibraryThreeMfPreviewAssetDto,
   type LibraryThreeMfScene as LibraryThreeMfSceneDto,
@@ -83,7 +86,7 @@ import {
   printDispatcher
 } from '../lib/print-dispatcher.js'
 import { readEntry, readPlateIndex, readPreviewAssets, readSceneManifest, type ThreeMfIndex as ParsedThreeMfIndex } from '../lib/three-mf.js'
-import { meshToBinaryStl, tessellateStepMesh } from '../lib/mesh-import.js'
+import { meshToBinaryStl, parseImportedMesh } from '../lib/mesh-import.js'
 import { extractThreeMfImportMesh } from '../lib/three-mf-mesh-extract.js'
 import { libraryDir } from '../lib/library-paths.js'
 import { deleteLibraryFolderTree, ensureLibraryFolderPath, persistLibraryFileFromLocalPath } from '../lib/library-files.js'
@@ -1613,7 +1616,7 @@ libraryRouter.put(
     // 3MF is accepted for geometry-only files (the client only renders mesh thumbnails
     // for those); a render uploaded against a project 3MF just fills a cache that its
     // embedded plate PNGs shadow, so the looser gate cannot change what projects show.
-    if (row.kind !== 'stl' && row.kind !== 'step' && row.kind !== '3mf') throw badRequest('Thumbnails are only uploadable for mesh files')
+    if (!isMeshLibraryFileKind(row.kind) && row.kind !== '3mf') throw badRequest('Thumbnails are only uploadable for mesh files')
 
     const body = request.body
     if (!Buffer.isBuffer(body) || body.length === 0) throw badRequest('Expected a PNG body')
@@ -1635,16 +1638,19 @@ libraryRouter.put(
 /**
  * Binary STL bytes for a library model file, scoped to viewers (not downloaders) and
  * without an audit-log entry, so the web client can render a 3D preview/thumbnail for
- * files that carry no embedded image. STL is shipped verbatim; STEP is tessellated to
- * STL server-side (BambuStudio-matched quality: the bridge ships no 3D renderer and the
- * browser can't read STEP), then shipped for client-side rendering by the model-studio
- * plugin. 3MF/gcode keep using `/thumbnail`.
+ * files that carry no embedded image.
+ *
+ * ONE OUTPUT FORMAT, whatever went in: every consumer is the browser's STL loader. STL ships
+ * verbatim; STEP is tessellated through OpenCASCADE (BambuStudio-matched quality); OBJ, glTF and
+ * AMF are parsed and re-serialized. The conversion happens HERE rather than in the browser because
+ * the bridge ships no 3D renderer and the client should hold one loader, not six parsers.
+ * 3MF/gcode keep using `/thumbnail`, except for geometry-only 3MFs handled below.
  */
 libraryRouter.get('/:id/mesh', requireRequestPermission(LIBRARY_VIEW_PERMISSION), async (request, response) => {
   const fileId = requireRouteParam(request.params.id, 'File id')
   const row = await prisma.libraryFile.findUnique({ where: { id: fileId } }) as LibraryFileRow | null
   if (!row) throw notFound('File not found')
-  if (row.kind !== 'stl' && row.kind !== 'step' && row.kind !== '3mf') throw notFound('No mesh available')
+  if (!isMeshLibraryFileKind(row.kind) && row.kind !== '3mf') throw notFound('No mesh available')
   if (sendNotModifiedIfLibraryFileFresh(request, response, row, 'mesh')) return
   const signal = requestAbortSignal(request, response)
   let onDisk: string
@@ -1661,26 +1667,53 @@ libraryRouter.get('/:id/mesh', requireRequestPermission(LIBRARY_VIEW_PERMISSION)
       const index = await readPlateIndex(onDisk, signal)
       if (!index.geometryOnly) throw notFound('No mesh available')
       stl = Buffer.from(meshToBinaryStl(await extractThreeMfImportMesh(onDisk)))
-    } else {
+    } else if (isMeshLibraryFileKind(row.kind)) {
       const buffer = await readFile(onDisk)
       if (signal.aborted) return
-      // STEP carries no triangle mesh: tessellate it to STL once per cache window (the ETag
-      // 304 above short-circuits warm clients before this point). STL ships verbatim.
-      stl = row.kind === 'step' ? Buffer.from(meshToBinaryStl(await tessellateStepMesh(buffer))) : buffer
+      // STL ships verbatim; everything else is converted once per cache window (the ETag 304 above
+      // short-circuits warm clients before this point). STEP is the expensive one, having no
+      // triangle mesh at all to start from.
+      stl = row.kind === 'stl'
+        ? buffer
+        : Buffer.from(meshToBinaryStl(await parseImportedMesh(buffer, meshImportFormatForKind(row.kind))))
+    } else {
+      // Unreachable: the gate above admits only a mesh kind or a 3MF. Stated rather than assumed,
+      // so the narrowing that lets `meshImportFormatForKind` take a proven kind is enforced by the
+      // type checker instead of by a comment.
+      throw notFound('No mesh available')
     }
     if (signal.aborted) return
     response.setHeader('Cache-Control', 'private, max-age=300')
     await sendModelBuffer(request, response, stl, 'model/stl')
   } catch (error) {
     if ((error as Error).name === 'AbortError') return
-    // A malformed STEP fails here rather than (like STL) only on a missing file, so surface the
-    // cause: the client just sees a 404 and falls back to the kind label. id only, no secrets.
-    if (row.kind === 'step') {
-      console.warn(`Failed to tessellate STEP library file ${row.id} for preview:`, error instanceof Error ? error.message : error)
+    // Every converted format can fail on the CONTENT, not just (like a verbatim STL) on a missing
+    // file, so surface the cause: the client only sees a 404 and falls back to the kind label.
+    // id and kind only, no name and no path.
+    if (row.kind !== 'stl') {
+      console.warn(
+        `Failed to convert ${row.kind} library file ${row.id} for preview:`,
+        error instanceof Error ? error.message : error
+      )
     }
     throw notFound('Mesh missing')
   }
 })
+
+/**
+ * The import format that reads a given mesh library kind.
+ *
+ * A cast, not a mapping table: the two catalogues use the same spelling for every bare-mesh format,
+ * pinned by `library-file-kinds.test.ts`. It stays a named FUNCTION so the one place relying on that
+ * is findable, and it takes a NARROWED kind so the caller has to have proved the kind is a mesh
+ * before calling. It used to re-check and `throw notFound` on failure, which was dead code twice
+ * over: the route's own gate makes it unreachable, and had it ever fired, the throw sits inside the
+ * try below, so the catch would have logged "Failed to convert <kind> ... : No mesh available",
+ * blaming the file's content for a routing mistake.
+ */
+function meshImportFormatForKind(kind: MeshLibraryFileKind): Exclude<StagedImportFormat, '3mf'> {
+  return kind
+}
 
 /** Resolve a single library file's metadata by id. */
 libraryRouter.get('/:id', requireRequestPermission(LIBRARY_VIEW_PERMISSION), async (request, response) => {
@@ -1909,6 +1942,7 @@ libraryRouter.post('/:id/reprint', requireRequestPermission(PRINTS_DISPATCH_PERM
     allowPlateTypeMismatch: true,
     allowFilamentTrackSwitchMismatch: true,
     allowInsufficientFilament: true,
+    allowBlacklistedFilament: true,
     currentPlateType: true,
     currentNozzleDiameters: true,
     plate: true,
@@ -1950,6 +1984,7 @@ libraryRouter.post('/:id/reprint', requireRequestPermission(PRINTS_DISPATCH_PERM
       allowPlateTypeMismatch: parsed.data.allowPlateTypeMismatch,
       allowFilamentTrackSwitchMismatch: parsed.data.allowFilamentTrackSwitchMismatch,
       allowInsufficientFilament: parsed.data.allowInsufficientFilament,
+      allowBlacklistedFilament: parsed.data.allowBlacklistedFilament,
       currentPlateType: parsed.data.currentPlateType,
       currentNozzleDiameters: parsed.data.currentNozzleDiameters
     })
@@ -2453,7 +2488,7 @@ async function sendLibraryFileThumbnail(
   // STL/STEP have no embedded image. The web client renders one with Three.js and
   // uploads it via PUT /:id/thumbnail; here we serve that persisted render. A miss
   // (nothing rendered yet) returns 404 so the client falls back to a live render.
-  if (row.kind === 'stl' || row.kind === 'step') {
+  if (isMeshLibraryFileKind(row.kind)) {
     if (sendNotModifiedIfLibraryFileFresh(request, response, row, 'mesh-thumbnail')) return
     const cached = await readMeshThumbnailCache(row)
     if (!cached) throw notFound('Thumbnail not rendered yet')

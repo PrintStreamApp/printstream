@@ -20,6 +20,33 @@ const SUBSCRIPTIONS_KEY = 'subscriptions'
  */
 const DEFAULT_VAPID_SUBJECT = 'mailto:printstream@local'
 
+/**
+ * Per-send transport hints. Defaults match a printer notification: retained
+ * for a minute, normal priority. A RETRACTION wants the opposite trade
+ * (see `dismissalSendOptions` in `index.ts`), which is why these are
+ * per-call rather than baked into the class.
+ */
+export interface PushSendOptions {
+  /** Seconds the push service retains the message for an offline device. */
+  ttlSeconds?: number
+  /**
+   * Delivery priority. `low` lets the push service wait for the device to
+   * wake on its own rather than spending its radio, which is right for
+   * anything the user did not ask to be interrupted by.
+   */
+  urgency?: 'very-low' | 'low' | 'normal' | 'high'
+  /**
+   * Collapse key (max 32 URL-safe base64 chars). A later message with the
+   * same topic REPLACES an earlier one the push service has not delivered
+   * yet, so a burst that resolves to one outcome costs the offline device a
+   * single wake-up instead of one per message.
+   */
+  topic?: string
+}
+
+/** Retained for a minute at normal priority: a stale print alert is noise. */
+const DEFAULT_TTL_SECONDS = 60
+
 export interface StoredSubscription {
   endpoint: string
   keys: { p256dh: string; auth: string }
@@ -144,31 +171,22 @@ export class WebPushDelivery {
     return true
   }
 
-  size(): number {
-    return this.subscriptions.length
-  }
-
-  /** Whether an endpoint is currently registered in this scope's list. */
-  hasSubscription(endpoint: string): boolean {
-    return this.subscriptions.some((entry) => entry.endpoint === endpoint)
-  }
-
   /**
    * Fan out a JSON payload to every stored subscription. Subscriptions
    * the push service rejects as gone (HTTP 404/410) are dropped from
    * the list so dead browsers don't accumulate.
    */
-  async sendToAll(payload: unknown): Promise<void> {
-    await this.sendFiltered(payload, () => true)
-  }
-
-  async sendToActor(actorKey: string, payload: unknown): Promise<void> {
-    await this.sendFiltered(payload, (entry) => entry.actorKey === actorKey)
+  async sendToAll(payload: unknown, options: PushSendOptions = {}): Promise<void> {
+    await this.sendFiltered(payload, () => true, options)
   }
 
   /** Fan out only to subscriptions for which `predicate` returns true. */
-  async sendMatching(payload: unknown, predicate: (entry: StoredSubscription) => boolean): Promise<void> {
-    await this.sendFiltered(payload, predicate)
+  async sendMatching(
+    payload: unknown,
+    predicate: (entry: StoredSubscription) => boolean,
+    options: PushSendOptions = {}
+  ): Promise<void> {
+    await this.sendFiltered(payload, predicate, options)
   }
 
   /** Read-only snapshot of the stored subscriptions. */
@@ -176,7 +194,11 @@ export class WebPushDelivery {
     return this.subscriptions
   }
 
-  private async sendFiltered(payload: unknown, predicate: (entry: StoredSubscription) => boolean): Promise<void> {
+  private async sendFiltered(
+    payload: unknown,
+    predicate: (entry: StoredSubscription) => boolean,
+    sendOptions: PushSendOptions = {}
+  ): Promise<void> {
     const recipients = this.subscriptions.filter(predicate)
     if (recipients.length === 0) return
     if (this.subscriptions.length === 0) return
@@ -187,7 +209,9 @@ export class WebPushDelivery {
         publicKey: this.publicKey,
         privateKey: this.privateKey
       },
-      TTL: 60
+      TTL: sendOptions.ttlSeconds ?? DEFAULT_TTL_SECONDS,
+      ...(sendOptions.urgency ? { urgency: sendOptions.urgency } : {}),
+      ...(sendOptions.topic ? { topic: sendOptions.topic } : {})
     }
 
     const results = await Promise.allSettled(

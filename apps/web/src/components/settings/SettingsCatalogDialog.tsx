@@ -85,16 +85,23 @@ export interface SettingsCatalogDialogProps {
   /** Value clamps applied after an edit, surfaced as a warning above the settings. */
   corrections?: string[]
   filamentChoices?: SettingFilamentChoice[]
+  /**
+   * Search text to open with, used by the cross-catalog settings search to land the user on the
+   * setting they picked. It SEEDS the box rather than controlling it, so the user can clear or
+   * retype freely; a later change does not reach an already-open dialog, which is correct because
+   * every host mounts these lazily and unmounts them on close.
+   */
+  initialQuery?: string
   actions: SettingsCatalogDialogActions
 }
 
 export function SettingsCatalogDialog(props: SettingsCatalogDialogProps): JSX.Element {
   const {
     open, onClose, catalog, titlePrefix, presetName, subtitle, header, loading, loadingLabel, error,
-    ready, showDeveloperOptions, isKeyVisible, adapter, corrections, filamentChoices, actions
+    ready, showDeveloperOptions, isKeyVisible, adapter, corrections, filamentChoices, initialQuery, actions
   } = props
   const [activePage, setActivePage] = useState(0)
-  const [query, setQuery] = useState('')
+  const [query, setQuery] = useState(initialQuery ?? '')
   const [showChangedOnly, setShowChangedOnly] = useState(false)
   const normalizedQuery = query.trim().toLowerCase()
 

@@ -38,7 +38,7 @@ const OPERATIONS: ReadonlyArray<{ value: SceneEditPartSubtype; label: string; hi
 
 /**
  * The placement modes we OFFER. Studio's `TextInfo::TextType` has a fourth, `surfaceChar`, which is
- * deliberately absent: see the tool'the s development notes. The type keeps it, because `surface_type` is a
+ * deliberately absent: see the tool's development notes. The type keeps it, because `surface_type` is a
  * persisted index and files (ours and Studio's) carry it.
  */
 const SURFACE_MODES: ReadonlyArray<{ value: TextSurfaceType; label: string; hint: string }> = [

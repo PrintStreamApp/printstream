@@ -405,6 +405,8 @@ export function SliceFileModal({
     machineSnapshot, restoreMachineSnapshot
   } = machineTarget
   const [processSettingsDialogOpen, setProcessSettingsDialogOpen] = useState(false)
+  /** Set by the cross-catalog settings search; seeds the next catalog dialog's search box. */
+  const [settingsSearchKey, setSettingsSearchKey] = useState<string | null>(null)
   const [filamentSettingsFilamentId, setFilamentSettingsFilamentId] = useState<number | null>(null)
   const [objectProcessOverrides, setObjectProcessOverrides] = useState<Record<string, Record<string, string | string[]>>>({})
   // The plate object whose restricted per-object settings dialog is open (the inline
@@ -968,6 +970,7 @@ export function SliceFileModal({
     machineSettingOverrides, setMachineSettingOverrides, machineSettingOverridesKnown,
     machineOverridesModel, setMachineOverridesModel,
     processProfileSelectionTouchedRef, selectedSlicerTargetIdForGuards: selectedSlicerTargetId, processSettingOverrides, setProcessSettingsDialogOpen,
+    settingsSearchKey, setSettingsSearchKey,
     hasPlateObjects, selectedSliceObjectIds, plateObjects,
     onToggleSliceObject: toggleSliceObject,
     openSliceObjectSettings: (objectId, name) => setEditingSliceObject({ id: objectId, name }),
@@ -1239,10 +1242,11 @@ export function SliceFileModal({
         </LazyDialogBoundary>
       )}
       {processSettingsDialogOpen && selectedProcessProfile && (
-        <LazyDialogBoundary label="settings" onClose={() => setProcessSettingsDialogOpen(false)}>
+        <LazyDialogBoundary label="settings" onClose={() => { setProcessSettingsDialogOpen(false); setSettingsSearchKey(null) }}>
           <ProcessSettingsDialog
             open={processSettingsDialogOpen}
-            onClose={() => setProcessSettingsDialogOpen(false)}
+            initialQuery={settingsSearchKey ?? undefined}
+            onClose={() => { setProcessSettingsDialogOpen(false); setSettingsSearchKey(null) }}
             slicerTargetId={selectedSlicerTargetId}
             processProfileId={selectedProcessProfile.id}
             processProfileName={selectedProcessProfile.name}
@@ -1278,10 +1282,11 @@ export function SliceFileModal({
         // Bambu system presets are read-only; only a workspace custom preset can be updated in place.
         const canEditOriginal = !profileId.startsWith('builtin:') && !profileId.startsWith('project:')
         return (
-          <LazyDialogBoundary label="settings" onClose={() => setFilamentSettingsFilamentId(null)}>
+          <LazyDialogBoundary label="settings" onClose={() => { setFilamentSettingsFilamentId(null); setSettingsSearchKey(null) }}>
             <FilamentSettingsDialog
               open
-              onClose={() => setFilamentSettingsFilamentId(null)}
+              initialQuery={settingsSearchKey ?? undefined}
+              onClose={() => { setFilamentSettingsFilamentId(null); setSettingsSearchKey(null) }}
               slicerTargetId={selectedSlicerTargetId}
               filamentProfileId={profileId}
               filamentProfileName={option?.presetLabel ?? option?.material ?? option?.label ?? `Material ${filamentSettingsFilamentId}`}

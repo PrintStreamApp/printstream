@@ -11,7 +11,7 @@
  * band toward the process layer height, Shift+right smooths it, and the wheel resizes the brush.
  *
  * **It shouts about height ranges on purpose.** A layer-height profile OVERRIDES the `layer_height`
- * of any height range on the same object — the engine only falls back to the ranges when the
+ * of any height range on the same object: the engine only falls back to the ranges when the
  * profile is absent or fails validation (`PrintObject.cpp:3340`). Two features that quietly fight
  * is the worst outcome here, so when the object has both, this says which one is winning.
  */
@@ -182,7 +182,7 @@ export function LayerHeightPanel({
           <Alert size="sm" color="warning" variant="soft" startDecorator={<WarningAmberRoundedIcon />}>
             <Typography level="body-xs">
               This model also has height ranges. A layer height profile <b>overrides</b> their layer
-              heights when slicing — their other settings still apply. Reset the profile to hand
+              heights when slicing; their other settings still apply. Reset the profile to hand
               layer height back to the ranges.
             </Typography>
           </Alert>

@@ -19,6 +19,7 @@ import {
   sortParameterTableRows,
   type ParameterTableInput
 } from './parameterTable.js'
+import { INHERITED_PLATE_SETTINGS } from './editorModel.js'
 import type { EditorAddedPart, EditorInstance, EditorInstancePart, EditorPlate, EditorState } from './editorModel.js'
 
 const IDENTITY = [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0]
@@ -77,7 +78,7 @@ function plate(index: number, instances: EditorInstance[]): EditorPlate {
     plateId: index * 100,
     sourcePlateIndex: index,
     name: null,
-    plateType: null,
+    ...INHERITED_PLATE_SETTINGS,
     bed: { minX: 0, maxX: 256, minY: 0, maxY: 256, maxZ: null, excludeAreas: [] },
     instances,
     primeTower: null

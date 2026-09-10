@@ -91,7 +91,7 @@ let confirmingBuildId: string | null = null
  * After a build-id reload the worker still has its own update to apply, and activating it
  * would otherwise fire a second, visible refresh onto the bundle this tab is already
  * running. One-shot on purpose: a later activation in the same page load is a genuinely
- * new deploy. Do NOT widen this to "the ids currently agree" — the worker is the ONLY
+ * new deploy. Do NOT widen this to "the ids currently agree": the worker is the ONLY
  * detector for a deploy that changes `index.html` or a `public/` file, neither of which
  * moves the build id, and that test would silence it for exactly those.
  */

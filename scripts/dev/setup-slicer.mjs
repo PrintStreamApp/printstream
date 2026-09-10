@@ -7,7 +7,7 @@
  * BambuStudio AppImage + flattened profile caches persist across devcontainer rebuilds and
  * are only fetched once. Idempotent (skips when already populated) and **arch-gated**:
  * BambuStudio is x86-only, so on arm64 this no-ops. arm64 dev hosts instead bootstrap an
- * x86-64 qemu emulation environment via `scripts/dev/setup-slicer-qemu.mjs` — `run-dev.mjs`
+ * x86-64 qemu emulation environment via `scripts/dev/setup-slicer-qemu.mjs`; `run-dev.mjs`
  * picks the right one by arch. (Set `PRINTSTREAM_DEV_SLICER=remote` to use a remote x86 slicer.)
  *
  * Invoked by `scripts/dev/run-dev.mjs` on x86. The slicer service then reads
@@ -30,13 +30,13 @@ const cliPath = path.join(repoRoot, 'apps/slicer/docker/bambu-studio-cli.sh')
 // BambuStudio ships x86 binaries only; `process.arch` is 'x64' on amd64, 'arm64' otherwise.
 if (process.arch !== 'x64') {
   console.log(`[setup-slicer] arch=${process.arch}: skipping the native AppImage path (BambuStudio is x86-only).`)
-  console.log('[setup-slicer] arm64 dev uses scripts/dev/setup-slicer-qemu.mjs (x86-64 qemu emulation) — run-dev.mjs picks it automatically.')
+  console.log('[setup-slicer] arm64 dev uses scripts/dev/setup-slicer-qemu.mjs (x86-64 qemu emulation); run-dev.mjs picks it automatically.')
   process.exit(0)
 }
 
 // The launcher's offscreen-GL preload (CLI-rendered plate thumbnails; see gl-osmesa-shim.c).
 // Compiled BEFORE the populated-volume early exit so existing dev volumes self-heal on every
-// boot — the AppImage bootstrap below is the only once-only part. run-dev.mjs points
+// boot: the AppImage bootstrap below is the only once-only part. run-dev.mjs points
 // SLICER_GL_SHIM here. Missing tools degrade to thumbnail-less slicing, never a failed boot.
 installGlShim()
 
@@ -55,7 +55,7 @@ try {
 
 const result = spawnSync('node', [installScript, INSTALL_ROOT, cliPath], { stdio: 'inherit' })
 if (result.status !== 0) {
-  console.error('[setup-slicer] bootstrap failed — the in-workspace slicer will not start. See output above.')
+  console.error('[setup-slicer] bootstrap failed: the in-workspace slicer will not start. See output above.')
   process.exit(result.status ?? 1)
 }
 console.log(`[setup-slicer] done. SLICER_TARGETS_FILE=${TARGETS_FILE}`)

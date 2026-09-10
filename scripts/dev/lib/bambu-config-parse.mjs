@@ -6,7 +6,7 @@
  * enum key-map resolution, and per-block metadata parsing. The generators
  * (`generate-process-settings.mjs`, `generate-filament-settings.mjs`) own only their tab LAYOUT
  * (transcribed from `TabPrint::build()` / `TabFilament::build()`); everything language-level lives
- * here so the two stay faithful to the same slicer source. Build-time only — never imported by app
+ * here so the two stay faithful to the same slicer source. Build-time only, never imported by app
  * code.
  */
 
@@ -16,7 +16,7 @@ export const MODE_MAP = { comSimple: 'simple', comAdvanced: 'advanced', comDevel
 export function mapType(coType) {
   const vector = /s$|sNullable$/.test(coType) && coType !== 'coFloatOrPercent'
   // BambuStudio pluralizes EVERY component of a vector type, so `coFloatsOrPercents` needs both
-  // its plurals removed — stripping only the trailing one leaves `coFloatsOrPercent`, which matches
+  // its plurals removed: stripping only the trailing one leaves `coFloatsOrPercent`, which matches
   // no case below and silently fell through to `string`. That mistyping is expensive twice over:
   // the key gets no `default` (so `applyProcessConfigDefaults` cannot fill it, and a preset that
   // omits it reads as "changed" against a project that sets it), and the value comparator comes out
@@ -130,7 +130,7 @@ export function parseBlock(coType, block) {
     vector,
     label: '',
     // BambuStudio's standalone name for the option, used where a line carries ONE option and the
-    // short `label` would be meaningless on its own — the machine limits define only this
+    // short `label` would be meaningless on its own: the machine limits define only this
     // ("Maximum acceleration for extruding"), and `TabPrinter::append_option_line` builds its line
     // from `option.opt.full_label`. Captured separately rather than folded into `label` so the
     // process and filament generators, which want the short form, are unaffected.
@@ -162,7 +162,7 @@ export function parseBlock(coType, block) {
     else if (s.startsWith('def->enum_values.push_back') || s.startsWith('def->enum_values.emplace_back')) opt.enumValues.push(extractString(s))
     else if (s.startsWith('def->enum_labels.push_back') || s.startsWith('def->enum_labels.emplace_back')) opt.enumLabels.push(extractString(s))
     else if (/^def->enum_keys_map\s*=/.test(s)) {
-      // `&ConfigOptionEnum<Type>::get_enum_values()` — the ONLY place the enum's type appears for
+      // `&ConfigOptionEnum<Type>::get_enum_values()`: the ONLY place the enum's type appears for
       // options whose default uses the `ConfigOptionEnumsGeneric{...}` form below, which names no
       // type of its own.
       const km = /ConfigOptionEnum<(\w+)>/.exec(s)
@@ -190,7 +190,7 @@ export function parseBlock(coType, block) {
         const em = /ConfigOptionEnum<(\w+)>\s*\(\s*([\w:]+)\s*\)/.exec(s)
         if (em) { opt.enumDefaultType = em[1]; opt.enumDefaultSymbol = em[2] }
         else {
-          // VECTOR enums use a different spelling that carries no type —
+          // VECTOR enums use a different spelling that carries no type:
           // `ConfigOptionEnumsGeneric{ (int)Symbol }`, `{fmsNone}`, `{ Type::symbol }`, or a bare
           // index `{0}`. Nine options are declared this way and every one came out with NO default.
           // That is not cosmetic: the filament block is authored from these defaults, so a missing
@@ -209,7 +209,7 @@ export function parseBlock(coType, block) {
       }
     }
   }
-  // An option BambuStudio names ONLY with `full_label` is named by it — the machine limits define
+  // An option BambuStudio names ONLY with `full_label` is named by it: the machine limits define
   // no `def->label` at all, and `TabPrinter::append_option_line` builds their line from
   // `full_label`. Folded in here rather than in one generator so no catalog can render a nameless
   // control, and dropped afterwards because `fullLabel` is a parse artifact, not part of the
@@ -290,7 +290,7 @@ export function parseDefault(stmt, fieldType) {
   if (fieldType === 'floatOrPercent') {
     const n = parseNumber(inner)
     if (n === undefined) return undefined
-    // The SECOND constructor argument is the percent flag — `ConfigOptionFloatOrPercent(400, true)`
+    // The SECOND constructor argument is the percent flag: `ConfigOptionFloatOrPercent(400, true)`
     // and `ConfigOptionFloatsOrPercents{FloatOrPercent(10, true)}` both mean "400%"/"10%", not
     // 400 mm/10 mm. Dropping it made the catalog default a length, so a settings-dialog reset
     // silently converted an anchor length from 400% of the line width to 400 mm.
@@ -349,7 +349,7 @@ export function resolveEnums(options, varToKey, content) {
   for (const opt of Object.values(options)) {
     if (opt.enumDefaultSymbol) {
       // The type comes from `set_default_value` when it spells one out, else from the option's
-      // `enum_keys_map` — the vector form (`ConfigOptionEnumsGeneric{…}`) names no type at all.
+      // `enum_keys_map`: the vector form (`ConfigOptionEnumsGeneric{…}`) names no type at all.
       const map = enumMaps.get(opt.enumDefaultType ?? opt.enumKeysType)
       const str = map?.get(normalizeEnumSymbol(opt.enumDefaultSymbol))
       if (str !== undefined) opt.default = str

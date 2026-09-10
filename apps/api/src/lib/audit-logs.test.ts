@@ -405,10 +405,11 @@ test('every dispatch route feeds the audit helper the gates its own schema expos
     allowIncompatibleFilament: true,
     allowPlateTypeMismatch: true,
     allowFilamentTrackSwitchMismatch: true,
-    allowInsufficientFilament: true
+    allowInsufficientFilament: true,
+    allowBlacklistedFilament: true
   }
 
-  // Library print: carries all three.
+  // Library print: carries every gate.
   const libraryPrint = printFromLibrarySchema.parse({
     fileId: 'file-1', printerId: 'printer-1', ...allOverrides
   })
@@ -429,6 +430,7 @@ test('every dispatch route feeds the audit helper the gates its own schema expos
   assert.deepEqual(printOverrideAuditMetadata(storagePrint), {
     allowIncompatibleFilament: true,
     allowFilamentTrackSwitchMismatch: true,
-    allowInsufficientFilament: true
+    allowInsufficientFilament: true,
+    allowBlacklistedFilament: true
   })
 })

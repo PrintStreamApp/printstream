@@ -7,7 +7,7 @@
  *
  * Why the CLI cannot render thumbnails on its own (BambuStudio 2.x, Linux):
  *  - Its bundled GLFW 3.3.7 is built Wayland-only (deps/GLFW: GLFW_USE_WAYLAND=ON, a
- *    compile-time choice in 3.3.x), so glfwInit() needs a Wayland compositor — Xvfb can
+ *    compile-time choice in 3.3.x), so glfwInit() needs a Wayland compositor; Xvfb can
  *    never satisfy it. bambu-studio-cli.sh provides a headless Weston for this.
  *  - The CLI then forces an OSMesa (pure software) GL context: BambuStudio.cpp hints
  *    GLFW_CONTEXT_CREATION_API = GLFW_OSMESA_CONTEXT_API on __linux__, and GLFW dlopens
@@ -15,27 +15,27 @@
  *  - Its statically linked GLEW is a plain GLX build, so glewInit() -> glxewInit()
  *    demands a *current GLX context* (glXGetCurrentDisplay() != NULL). An OSMesa context
  *    never provides one, so GL init fails with "Unable to init glew library" and the CLI
- *    logs "init opengl failed! skip thumbnail generating". That combination — GLX-built
- *    GLEW + forced OSMesa context — can never work unshimmed; it is why thumbnails have
+ *    logs "init opengl failed! skip thumbnail generating". That combination, GLX-built
+ *    GLEW + forced OSMesa context, can never work unshimmed; it is why thumbnails have
  *    never rendered headless, not a missing package.
  *  - Separately, with a glvnd libGL (any modern distro) the binary's direct GL 1.1 calls
- *    would dispatch through glvnd's notion of the current context (none — glvnd only
+ *    would dispatch through glvnd's notion of the current context (none: glvnd only
  *    learns of contexts via glXMakeCurrent), not through the OSMesa context.
  *
  * What the shim does (contract):
  *  - Exports every GL 1.1 symbol the binary imports directly (the full list below was
  *    enumerated from `readelf --dyn-syms bin/bambu-studio`), forwarding each to the real
- *    OSMesa entry point via OSMesaGetProcAddress — pointers that dispatch to the OSMesa
+ *    OSMesa entry point via OSMesaGetProcAddress: pointers that dispatch to the OSMesa
  *    context regardless of glvnd.
  *  - Interposes glXGetProcAddress(ARB), GLEW's resolver, so every GLEW function pointer
  *    also comes from OSMesa; glX* names resolve through dlsym, finding the fakes below
  *    first and libGL's real exports otherwise.
  *  - Fakes the few GLX entry points glxewInit actually calls: a non-NULL "current
- *    display", GLX version 1.4, empty extension strings. Nothing real backs them — the
+ *    display", GLX version 1.4, empty extension strings. Nothing real backs them: the
  *    render path never touches GLX again once glewInit has passed.
  *
  * Failure semantics: if libOSMesa cannot be loaded, every forwarder degrades to a no-op
- * (NULL/0 returns) — the CLI then fails GL init and skips thumbnails exactly as it does
+ * (NULL/0 returns). The CLI then fails GL init and skips thumbnails exactly as it does
  * without the shim; a slice never fails because of this shim. The shim must never be
  * preloaded into anything but the BambuStudio CLI.
  */
@@ -104,7 +104,7 @@ glx_proc_t glXGetProcAddressARB(const GLubyte *name)
     if (n[0] == 'g' && n[1] == 'l' && n[2] == 'X') {
         /* Fakes above win (the shim precedes libGL in the lookup scope); other glX
          * names fall through to libGL's real exports. GLEW only ever CALLS the faked
-         * ones — the rest are resolved, stored, and left alone by the CLI path. */
+         * ones; the rest are resolved, stored, and left alone by the CLI path. */
         return (glx_proc_t)dlsym(RTLD_DEFAULT, n);
     }
     return (glx_proc_t)osmesa_proc(n);

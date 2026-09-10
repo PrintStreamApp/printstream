@@ -122,7 +122,7 @@ test('a profile round-trips through serialize and parse', () => {
 
 /**
  * A UV sphere resting on the bed: near-horizontal at both poles (shallow, wants fine layers) and
- * vertical at the equator (wants coarse ones). A CONE is the wrong fixture here — its slope is
+ * vertical at the equator (wants coarse ones). A CONE is the wrong fixture here: its slope is
  * uniform, so the correct adaptive answer for one is a constant height, which cannot distinguish a
  * working implementation from a broken one.
  */

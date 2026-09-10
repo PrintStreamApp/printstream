@@ -604,6 +604,51 @@ export function getProcessFieldState(states: Map<string, ProcessFieldState>, key
   return states.get(key) ?? { visible: true, enabled: true }
 }
 
+/**
+ * Whether a multi-layer skirt is configured, i.e. the part of BambuStudio's by-object collision
+ * test that is about the SKIRT rather than about the print sequence.
+ *
+ * Shared because the engine asks this in two places that resolve the SEQUENCE differently, and
+ * only the sequence differs. `ConfigManipulation.cpp:733` reads `print_sequence` straight out of
+ * the process config being edited and auto-resets `skirt_height` to 1; the plate-settings dialog
+ * (`Plater.cpp:26005`) asks `PartPlate::get_real_print_seq()`, which falls back to the GLOBAL
+ * sequence when the plate inherits, and only recommends the change. Callers therefore supply their
+ * own sequence and share this half, rather than one of them re-typing `> 1 && > 0` and drifting.
+ *
+ * Why the thresholds are what they are: a single-layer skirt (`skirt_height == 1`) is laid down
+ * before anything is tall enough to hit, and no loops means there is no skirt at all.
+ */
+export function skirtCanCollideWithByObjectPrinting(config: ProcessConfig): boolean {
+  const c = createProcessConfigAccessor(config)
+  return c.int('skirt_height') > 1 && c.int('skirt_loops') > 0
+}
+
+/**
+ * Whether printing THIS PLATE by object risks the extruder striking the skirt.
+ *
+ * Ports `Plater.cpp:26005-26013`, the check BambuStudio runs when its Plate Settings dialog is
+ * accepted. Deliberately one call rather than two, because the mistake it exists to prevent is
+ * combining them wrongly: the sequence it tests is the plate's EFFECTIVE one
+ * (`PartPlate::get_real_print_seq`, `PartPlate.cpp:274-286`), so a plate left on "same as global"
+ * while the PROJECT prints by object is at risk exactly as an explicitly by-object plate is.
+ * Reading only the plate's own value silently drops the commonest case, since most plates inherit.
+ *
+ * `plateSequence` is the plate's own override, null/undefined when it inherits. `globalConfig` is
+ * the project's effective process config (preset + the session's overrides), which supplies both
+ * the fallback sequence and the skirt values, since neither is per-plate.
+ *
+ * Advisory only, and that is faithful: this site RECOMMENDS resetting the skirt, where the process
+ * tab's own copy of the test auto-applies it (`ConfigManipulation.cpp:733`). A plate dialog that
+ * silently rewrote a project-wide process setting would be changing something the user did not open.
+ */
+export function plateSkirtCollisionRisk(
+  plateSequence: 'by layer' | 'by object' | null | undefined,
+  globalConfig: ProcessConfig
+): boolean {
+  const effective = plateSequence ?? createProcessConfigAccessor(globalConfig).enum('print_sequence')
+  return effective === 'by object' && skirtCanCollideWithByObjectPrinting(globalConfig)
+}
+
 /** A value correction Bambu applies after an out-of-range entry. */
 export interface ProcessValidationIssue {
   key: string
@@ -673,7 +718,7 @@ export function validateProcessConfig(config: ProcessConfig): ProcessValidationI
     issues.push({ key: 'infill_lock_depth', message: 'Lock depth should be smaller than skin depth. Reset to 50% of skin depth', fix: { infill_lock_depth: String(half) } })
   }
 
-  if (c.enum('print_sequence') === 'by object' && c.int('skirt_height') > 1 && c.int('skirt_loops') > 0) {
+  if (c.enum('print_sequence') === 'by object' && skirtCanCollideWithByObjectPrinting(config)) {
     issues.push({ key: 'skirt_height', message: 'While printing by object, reset skirt layers to 1 to avoid collision', fix: { skirt_height: '1' } })
   }
 

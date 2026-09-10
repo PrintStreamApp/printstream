@@ -103,7 +103,7 @@ export interface LayerHeightTableOptions {
 
 /**
  * The RGBA lookup the shader samples, one texel per evenly spaced height from the model's base to
- * its top. Pure, and the single source of truth for what any height looks like — the viewport reads
+ * its top. Pure, and the single source of truth for what any height looks like: the viewport reads
  * it through a texture and the tests read it directly.
  *
  * An empty profile fills with the uniform `nominalHeight`, so an object with no profile yet reads

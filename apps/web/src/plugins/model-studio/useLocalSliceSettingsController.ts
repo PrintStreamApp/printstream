@@ -94,6 +94,9 @@ export interface LocalSliceSettings {
   resolveFilamentConfig: FilamentConfigResolver
   /** Whether the global process settings dialog is open (the controller owns the toggle state). */
   processSettingsDialogOpen: boolean
+  /** The setting key the cross-catalog search picked; seeds the next catalog dialog's search box. */
+  settingsSearchKey: string | null
+  setSettingsSearchKey: React.Dispatch<React.SetStateAction<string | null>>
   /**
    * Material choices for the global process dialog's filament-index settings ("Support/raft
    * base" etc.) and its support-interface suggestion prompt, the same shared builder the
@@ -291,6 +294,8 @@ export function useLocalSliceSettingsController(params: LocalSliceSettingsContro
     resetToken: selectedSlicerTargetId
   })
   const [processSettingsDialogOpen, setProcessSettingsDialogOpen] = useState(false)
+  /** Set by the cross-catalog settings search; seeds the next catalog dialog's search box. */
+  const [settingsSearchKey, setSettingsSearchKey] = useState<string | null>(null)
   const [objectProcessOverrides, setObjectProcessOverrides] = useState<Record<string, Record<string, string | string[]>>>({})
 
   // ---- Materials (the shared slot core: see useMaterialSlots) ----
@@ -428,6 +433,8 @@ export function useLocalSliceSettingsController(params: LocalSliceSettingsContro
     file,
     resourceBasePath: '',
     flow: 'library',
+    settingsSearchKey,
+    setSettingsSearchKey,
     requiresSinglePlate: false,
     canOpenThreeDimensionalPreview: false,
     isMobileViewport,
@@ -565,6 +572,8 @@ export function useLocalSliceSettingsController(params: LocalSliceSettingsContro
     resolveFilamentConfig,
     installedFilamentPresets: installedFilamentProfiles,
     processSettingsDialogOpen,
+    settingsSearchKey,
+    setSettingsSearchKey,
     processFilamentChoices,
     filamentSettingsFilamentId,
     setFilamentSettingsFilamentId,

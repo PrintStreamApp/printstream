@@ -22,6 +22,19 @@
  * capability URLs (effectively secrets) and must never appear in audit
  * metadata or logs.
  *
+ * ## Who may use this
+ *
+ * Every route here is per-ACTOR, per-DEVICE state: which browser of mine
+ * receives this workspace's alerts. So the gate is scope MEMBERSHIP
+ * (`requesterBelongsToScope`), not `settings.manage`: a Manager, Operator or
+ * Viewer owns a phone too, and gating on the workspace-configuration
+ * permission made background notifications an admin-only feature by accident.
+ * Shared configuration that genuinely is workspace-wide (message templates,
+ * team webhook destinations) keeps its own admin gate elsewhere. The
+ * corollary is that a route may not expose anything scope-wide: `GET /`
+ * reports the CALLER's device count, and `DELETE /subscriptions` only removes
+ * a subscription the caller owns.
+ *
  * ## Workspace scoping
  *
  * VAPID keys are server-wide (one keypair shared by all workspaces).
@@ -46,19 +59,68 @@
  * subject was seen in the app) and retracts tag-matched notifications from
  * the targeted users' devices, or the whole originating scope when the
  * event carries no targets.
+ *
+ * ## Dismissals are cross-scope, on purpose
+ *
+ * A dismissal reported by a service worker carries no workspace hint: a
+ * service worker has no tab, so `X-PrintStream-Workspace` is absent and the
+ * request falls back to the shared workspace-context cookie, which for a
+ * platform user or a multi-workspace member reads `platform`, a scope whose
+ * subscription list a workspace device can never be in. Scoping the fan-out
+ * to the request's workspace therefore matched zero recipients and still
+ * answered `202`, which is why dismissal sync silently did nothing. So a
+ * dismissal fans out by ACTOR KEY across every scope holding subscriptions,
+ * exactly as a user-targeted message with no `workspaceId` does: the actor
+ * key is the authorization, and the device is that actor's wherever it
+ * registered. Do not reintroduce a request-workspace scope here.
  */
+import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import type { Request } from 'express'
-import { SETTINGS_MANAGE_PERMISSION } from '@printstream/shared'
-import type { RequestAuthContext } from '../../lib/auth-context.js'
+import { authUsesExplicitPermissions, type RequestAuthContext } from '../../lib/auth-context.js'
 import type { ApiPlugin, ApiPluginContext } from '../../plugin/types.js'
 import { annotateRequestAuditLog, skipRequestAuditLog } from '../../lib/audit-logs.js'
-import { requireRequestPermission } from '../../lib/authorization.js'
-import { badRequest } from '../../lib/http-error.js'
+import { AUTHENTICATION_REQUIRED_MESSAGE } from '../../lib/authorization.js'
+import { badRequest, forbidden, unauthorized, type HttpError } from '../../lib/http-error.js'
 import { subscribePrinterNotifications } from '../../lib/notification-format.js'
 import { listWorkspaceScopesWithPluginSetting } from '../../lib/notification-scope.js'
-import { WebPushDelivery, type StoredSubscription } from './push.js'
+import {
+  LOCAL_OPERATOR_ACTOR_KEY,
+  parseUserActorId,
+  serviceAccountActorKey,
+  userActorKey,
+  userActorKeys
+} from './actor-keys.js'
+import { WebPushDelivery, type PushSendOptions, type StoredSubscription } from './push.js'
 import { deliverTargetedPush } from './targeted-push.js'
+
+/**
+ * Transport hints for a retraction, deliberately the opposite trade from a
+ * notification. Retained ten minutes rather than one, because the device most
+ * likely to still be showing a stale notification is one that slept right
+ * after receiving it; `low` urgency so clearing it never spends a sleeping
+ * device's radio; and a per-tag collapse topic so swiping away a stack costs
+ * an offline device one wake-up instead of one per notification.
+ */
+const DISMISSAL_TTL_SECONDS = 600
+
+function dismissalSendOptions(key: string): PushSendOptions {
+  return {
+    ttlSeconds: DISMISSAL_TTL_SECONDS,
+    urgency: 'low',
+    // Push services cap `Topic` at 32 URL-safe base64 characters, which a
+    // notification tag ("printer:<id>:job") neither fits nor is limited to.
+    topic: createHash('sha256').update(`dismiss:${key}`).digest('base64url').slice(0, 32)
+  }
+}
+
+/**
+ * How long an enumerated scope list is reused. Swiping away a stack of
+ * notifications posts one dismissal each within a second or so, and each
+ * would otherwise re-run the cross-workspace `Setting` scan. Short enough
+ * that a scope registering its first device is picked up almost at once.
+ */
+const SUBSCRIPTION_SCOPE_CACHE_MS = 5_000
 
 const subscriptionSchema = z.object({
   endpoint: z.string().url(),
@@ -78,7 +140,14 @@ const endpointBodySchema = z.object({
 
 const dismissalBodySchema = z.object({
   notificationId: z.string().min(1).optional(),
-  tag: z.string().min(1).optional()
+  tag: z.string().min(1).optional(),
+  /**
+   * The reporting device's own push endpoint, so the fan-out can skip it.
+   * Optional: an older service worker does not send one, and the only cost of
+   * its absence is one wasted push to a device that has already closed the
+   * notification.
+   */
+  endpoint: z.string().url().optional()
 }).refine(
   (value) => value.notificationId !== undefined || value.tag !== undefined,
   'Notification id or tag is required.'
@@ -112,16 +181,51 @@ export const notificationsBrowserPlugin: ApiPlugin = {
       return d
     }
 
-    context.router.get('/', requireRequestPermission(SETTINGS_MANAGE_PERMISSION), async (request, response) => {
+    const listSubscriptionWorkspaceScopes = (): Promise<string[]> =>
+      listWorkspaceScopesWithPluginSetting(context.prisma, context.pluginName, 'subscriptions')
+
+    /**
+     * The same enumeration, briefly cached, for DISMISSALS ONLY.
+     *
+     * Clearing a stack of notifications posts one dismissal each within a
+     * second, and every one is a workspaceless fan-out that re-runs the
+     * cross-workspace `Setting` scan. Delivery of a NOTIFICATION must not
+     * share this: a scope that registered its first device seconds ago would
+     * be missing from a cached list, and the message would silently skip a
+     * device nobody can tell was skipped. A retraction can afford that window
+     * because the worst case is one notification staying up.
+     */
+    let cachedScopes: { at: number; scopes: string[] } | null = null
+    const listSubscriptionWorkspaceScopesForDismissal = async (): Promise<string[]> => {
+      const now = Date.now()
+      if (cachedScopes && now - cachedScopes.at < SUBSCRIPTION_SCOPE_CACHE_MS) return cachedScopes.scopes
+      const scopes = await listSubscriptionWorkspaceScopes()
+      cachedScopes = { at: now, scopes }
+      return scopes
+    }
+
+    /**
+     * Reject anyone who is not a member of the scope they are addressing.
+     * Membership is asked FIRST so the auth-disabled install (whose single
+     * operator is anonymous) is admitted before the signed-out check; after
+     * that, "you are not signed in" must not read as "you are not a member".
+     */
+    const assertScopeMember = async (request: Request, workspaceId: string | null): Promise<void> => {
+      if (await requesterBelongsToScope(context, request.auth, workspaceId)) return
+      throw scopeAccessError(request)
+    }
+
+    context.router.get('/', async (request, response) => {
       const workspaceId = request.workspace?.id ?? null
+      await assertScopeMember(request, workspaceId)
       const workspaceDelivery = await getOrCreateScopedDelivery(workspaceId)
       response.json({
         publicKey: delivery.getPublicKey(),
-        subscriptions: workspaceDelivery.size()
+        subscriptions: countOwnSubscriptions(workspaceDelivery, request.auth)
       })
     })
 
-    context.router.post('/subscriptions', requireRequestPermission(SETTINGS_MANAGE_PERMISSION), async (request, response) => {
+    context.router.post('/subscriptions', async (request, response) => {
       const workspaceId = request.workspace?.id ?? null
       // The push endpoint is a capability URL; deliberately no metadata here.
       annotateRequestAuditLog(request, {
@@ -134,77 +238,108 @@ export const notificationsBrowserPlugin: ApiPlugin = {
       if (!parsed.success) {
         throw badRequest('Invalid subscription payload')
       }
-      // Platform users browsing a workspace via support access hold
-      // `settings.manage` for that workspace but are not real members, so they
-      // must not receive its push notifications. Only genuine workspace members
-      // (and the workspace's own service accounts) may register a device. If a
-      // non-member's browser re-registers an endpoint stored before this
-      // guard existed, drop it so the stale subscription self-heals.
+      // Platform users browsing a workspace via support access are not real
+      // members, so they must not receive its push notifications. Only genuine
+      // workspace members (and the workspace's own service accounts) may
+      // register a device. This route cannot just call `assertScopeMember`:
+      // when a non-member's browser re-registers an endpoint stored before the
+      // guard existed, the stale subscription is dropped first so it
+      // self-heals. The refusal itself is the shared one, so a signed-out
+      // caller gets the same 401 here as from every sibling route.
       if (!(await requesterBelongsToScope(context, request.auth, workspaceId))) {
         await workspaceDelivery.removeSubscription(parsed.data.subscription.endpoint)
-        response.status(403).json({ error: 'Browser notifications are only available to workspace members.' })
-        return
+        throw scopeAccessError(request)
       }
       await workspaceDelivery.addSubscription({
         subscription: parsed.data.subscription,
         userAgent: extractUserAgent(request),
         actorKey: buildNotificationActorKey(request.auth)
       })
-      response.status(201).json({ subscriptions: workspaceDelivery.size() })
+      response.status(201).json({ subscriptions: countOwnSubscriptions(workspaceDelivery, request.auth) })
     })
 
-    context.router.post('/subscriptions/lookup', requireRequestPermission(SETTINGS_MANAGE_PERMISSION), async (request, response) => {
+    context.router.post('/subscriptions/lookup', async (request, response) => {
       // Read-only status probe (fired on every settings-panel mount); a POST
       // only because the endpoint is a capability URL that must stay out of
       // query strings, no state changes, so no audit row.
       skipRequestAuditLog(request)
       const workspaceId = request.workspace?.id ?? null
+      await assertScopeMember(request, workspaceId)
       const workspaceDelivery = await getOrCreateScopedDelivery(workspaceId)
       const parsed = endpointBodySchema.safeParse(request.body)
       if (!parsed.success) {
         throw badRequest('Invalid lookup payload')
       }
-      response.json({ registered: workspaceDelivery.hasSubscription(parsed.data.endpoint) })
+      // Registered TO THE CALLER, not to the scope. Two accounts share a
+      // browser profile and therefore one push endpoint: reporting the other
+      // account's registration made the panel offer "Disable", which the
+      // ownership check on DELETE then refused, stranding the user with no
+      // route back to the enrol path.
+      const actorKey = buildNotificationActorKey(request.auth)
+      const registered = workspaceDelivery.listSubscriptions().some((entry) =>
+        entry.endpoint === parsed.data.endpoint && isOwnSubscription(entry, actorKey))
+      response.json({ registered })
     })
 
-    context.router.delete('/subscriptions', requireRequestPermission(SETTINGS_MANAGE_PERMISSION), async (request, response) => {
+    context.router.delete('/subscriptions', async (request, response) => {
       const workspaceId = request.workspace?.id ?? null
       annotateRequestAuditLog(request, {
         action: 'unsubscribe-browser-push',
         resource: 'notifications',
         summary: 'Unregistered a browser push notification subscription.'
       })
+      await assertScopeMember(request, workspaceId)
       const workspaceDelivery = await getOrCreateScopedDelivery(workspaceId)
       const parsed = endpointBodySchema.safeParse(request.body)
       if (!parsed.success) {
         throw badRequest('Invalid unsubscribe payload')
       }
+      // Only a subscription the caller owns. A browser only ever unregisters
+      // its own endpoint, so this costs nothing in practice, and without it
+      // any member holding an endpoint could silence a colleague's device.
+      const actorKey = buildNotificationActorKey(request.auth)
+      const existing = workspaceDelivery.listSubscriptions()
+        .find((entry) => entry.endpoint === parsed.data.endpoint)
+      if (existing && !isOwnSubscription(existing, actorKey)) {
+        throw forbidden('That subscription belongs to another account.')
+      }
       const removed = await workspaceDelivery.removeSubscription(parsed.data.endpoint)
       annotateRequestAuditLog(request, { metadata: { removed } })
-      response.json({ removed, subscriptions: workspaceDelivery.size() })
+      response.json({ removed, subscriptions: countOwnSubscriptions(workspaceDelivery, request.auth) })
     })
 
-    context.router.post('/dismissals', requireRequestPermission(SETTINGS_MANAGE_PERMISSION), async (request, response) => {
+    context.router.post('/dismissals', async (request, response) => {
       // Fires once per dismissed notification just to sync the dismissal to
       // the actor's other devices, no durable state changes, so a row per
       // dismissal would only be audit noise.
       skipRequestAuditLog(request)
-      const workspaceId = request.workspace?.id ?? null
-      const workspaceDelivery = await getOrCreateScopedDelivery(workspaceId)
       const parsed = dismissalBodySchema.safeParse(request.body)
       if (!parsed.success) {
         throw badRequest('Invalid dismissal payload')
       }
 
+      // Retracting your own notification from your own devices needs no
+      // workspace permission; being the actor the subscriptions name IS the
+      // authorization, which is also why no scope membership is checked.
       const actorKey = buildNotificationActorKey(request.auth)
       if (!actorKey) {
-        throw badRequest('Notification dismissals require an authenticated actor.')
+        throw unauthorized(AUTHENTICATION_REQUIRED_MESSAGE)
       }
 
-      await workspaceDelivery.sendToActor(actorKey, {
-        type: 'dismiss',
-        notificationId: parsed.data.notificationId,
-        tag: parsed.data.tag
+      await deliverTargetedPush({
+        // Deliberately scope-less: see "Dismissals are cross-scope" above.
+        workspaceId: null,
+        payload: {
+          type: 'dismiss',
+          notificationId: parsed.data.notificationId,
+          tag: parsed.data.tag
+        },
+        targetActorKeys: [actorKey],
+        getScopedDelivery: getOrCreateScopedDelivery,
+        listSubscriptionWorkspaceScopes: listSubscriptionWorkspaceScopesForDismissal,
+        isEnabledForWorkspace: (scope) => context.isEnabledForWorkspace?.(scope) ?? true,
+        excludeEndpoints: parsed.data.endpoint ? new Set([parsed.data.endpoint]) : undefined,
+        sendOptions: dismissalSendOptions(parsed.data.tag ?? parsed.data.notificationId ?? '')
       })
       response.status(202).json({ ok: true })
     })
@@ -221,10 +356,9 @@ export const notificationsBrowserPlugin: ApiPlugin = {
           await deliverTargetedPush({
             workspaceId,
             payload: message,
-            targetUserIds: message.targetUserIds,
+            targetActorKeys: userActorKeys(message.targetUserIds),
             getScopedDelivery: getOrCreateScopedDelivery,
-            listSubscriptionWorkspaceScopes: () =>
-              listWorkspaceScopesWithPluginSetting(context.prisma, context.pluginName, 'subscriptions'),
+            listSubscriptionWorkspaceScopes,
             isEnabledForWorkspace: (scope) => context.isEnabledForWorkspace?.(scope) ?? true,
             isDeliverableInScope: deliverable ? (entry) => deliverable.has(entry.endpoint) : undefined
           })
@@ -251,21 +385,22 @@ export const notificationsBrowserPlugin: ApiPlugin = {
     // originating scope when the event carries no targets.
     const handleDismiss = async (event: { tag: string; workspaceId: string | null; targetUserIds?: string[] }) => {
       const dismissPayload = { type: 'dismiss', tag: event.tag }
+      const sendOptions = dismissalSendOptions(event.tag)
       if (event.targetUserIds && event.targetUserIds.length > 0) {
         await deliverTargetedPush({
           workspaceId: event.workspaceId,
           payload: dismissPayload,
-          targetUserIds: event.targetUserIds,
+          targetActorKeys: userActorKeys(event.targetUserIds),
           getScopedDelivery: getOrCreateScopedDelivery,
-          listSubscriptionWorkspaceScopes: () =>
-            listWorkspaceScopesWithPluginSetting(context.prisma, context.pluginName, 'subscriptions'),
-          isEnabledForWorkspace: (scope) => context.isEnabledForWorkspace?.(scope) ?? true
+          listSubscriptionWorkspaceScopes: listSubscriptionWorkspaceScopesForDismissal,
+          isEnabledForWorkspace: (scope) => context.isEnabledForWorkspace?.(scope) ?? true,
+          sendOptions
         })
         return
       }
       if (!(context.isEnabledForWorkspace?.(event.workspaceId) ?? true)) return
       const scopedDelivery = await getOrCreateScopedDelivery(event.workspaceId)
-      await scopedDelivery.sendToAll(dismissPayload)
+      await scopedDelivery.sendToAll(dismissPayload, sendOptions)
     }
     const onDismiss = (event: { tag: string; workspaceId: string | null; targetUserIds?: string[] }) => {
       handleDismiss(event).catch((error) => context.logger.warn('web-push dismissal fanout failed', error))
@@ -277,21 +412,50 @@ export const notificationsBrowserPlugin: ApiPlugin = {
   }
 }
 
-const USER_ACTOR_PREFIX = 'user:'
+/**
+ * The one refusal for "you may not touch this scope's devices": signed out is
+ * 401, a signed-in non-member is 403. Shared so two routes cannot answer the
+ * identical request with different status codes.
+ */
+function scopeAccessError(request: Request): HttpError {
+  if (request.auth.actor.type === 'anonymous') {
+    return unauthorized(AUTHENTICATION_REQUIRED_MESSAGE)
+  }
+  return forbidden('Browser notifications are only available to workspace members.')
+}
 
-/** Extract the user id from a `user:<id>` actor key, or null for other actors. */
-function parseUserActorId(actorKey: string | undefined): string | null {
-  if (!actorKey || !actorKey.startsWith(USER_ACTOR_PREFIX)) return null
-  const userId = actorKey.slice(USER_ACTOR_PREFIX.length)
-  return userId.length > 0 ? userId : null
+/**
+ * Whether a stored subscription belongs to the caller.
+ *
+ * ONE rule, shared by the count, the lookup and the delete, because they
+ * disagreeing is what strands a device: a panel told "registered" by a lookup
+ * it may not delete has no way back to the enrol path. Legacy actor-less entries intentionally
+ * answer false: their owner cannot be established safely, so the browser must re-enrol the
+ * endpoint and attach its current actor key.
+ */
+function isOwnSubscription(entry: StoredSubscription, actorKey: string | undefined): boolean {
+  return entry.actorKey !== undefined && entry.actorKey === actorKey
+}
+
+/**
+ * How many devices the CALLER has enrolled in this scope. Every route reports
+ * this rather than the scope total, which would tell an ordinary member how
+ * many devices their colleagues enrolled, for a number only ever used to show
+ * the caller their own state.
+ */
+function countOwnSubscriptions(delivery: WebPushDelivery, auth: RequestAuthContext): number {
+  const actorKey = buildNotificationActorKey(auth)
+  if (!actorKey) return 0
+  return delivery.listSubscriptions().filter((entry) => isOwnSubscription(entry, actorKey)).length
 }
 
 /**
  * Resolve the set of subscription endpoints eligible to receive a scope's
  * notifications. Subscriptions tied to a user actor are only deliverable when
  * that user currently belongs to the scope (workspace membership, or the
- * platform-user flag for the platform scope). Service-account and legacy
- * (actor-less) subscriptions are always deliverable.
+ * platform-user flag for the platform scope). Service-account subscriptions are always
+ * deliverable. Legacy actor-less subscriptions are quarantined until their browser re-enrols,
+ * because delivering them could disclose workspace events after their unknown owner was removed.
  */
 async function resolveDeliverableEndpoints(
   context: ApiPluginContext,
@@ -301,6 +465,7 @@ async function resolveDeliverableEndpoints(
   const userEndpoints = new Map<string, string[]>()
   const allowed = new Set<string>()
   for (const subscription of subscriptions) {
+    if (subscription.actorKey === undefined) continue
     const userId = parseUserActorId(subscription.actorKey)
     if (userId === null) {
       allowed.add(subscription.endpoint)
@@ -335,12 +500,22 @@ async function resolveDeliverableEndpoints(
  * Workspace scope: genuine workspace members and the workspace's own service accounts
  * qualify; platform users with support access (but no membership) do not.
  * Platform scope: platform users only.
+ *
+ * With no auth provider enabled there are no memberships to check and every
+ * request is the install's single implicit operator, so a workspace scope
+ * admits them. This mirrors `shouldBypassPermissionEnforcement`, including its
+ * requirement of a real workspace: that bypass never reached here (this is not
+ * a permission check), which is why browser notifications were unusable on an
+ * auth-disabled self-hosted install rather than merely admin-only.
  */
 async function requesterBelongsToScope(
   context: ApiPluginContext,
   auth: RequestAuthContext,
   workspaceId: string | null
 ): Promise<boolean> {
+  if (!authUsesExplicitPermissions(auth)) {
+    return workspaceId !== null
+  }
   if (!workspaceId) {
     return auth.actor.type === 'user' && Boolean(auth.actor.isPlatformUser)
   }
@@ -363,13 +538,21 @@ function extractUserAgent(request: Request): string | undefined {
   return undefined
 }
 
+/**
+ * The key a subscription is stored under and a dismissal fans out by.
+ * Encodings live in `actor-keys.ts`; this only decides which one applies.
+ */
 function buildNotificationActorKey(auth: RequestAuthContext): string | undefined {
   if (auth.actor.type === 'user') {
-    return `user:${auth.actor.userId}`
+    return userActorKey(auth.actor.userId)
   }
 
   if (auth.actor.type === 'service-account') {
-    return `service-account:${auth.actor.serviceAccountId}`
+    return serviceAccountActorKey(auth.actor.serviceAccountId)
+  }
+
+  if (!authUsesExplicitPermissions(auth)) {
+    return LOCAL_OPERATOR_ACTOR_KEY
   }
 
   return undefined

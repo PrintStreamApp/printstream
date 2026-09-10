@@ -72,6 +72,91 @@ export function readEntry(
 }
 
 /**
+ * Stream one entry's UTF-8 text through `onChunk` without ever holding the whole thing.
+ *
+ * The counterpart to {@link readEntry} for entries too big to buffer: a sliced plate's G-code is
+ * routinely hundreds of megabytes decompressed, so a consumer that only scans forward (the pause
+ * scan in `print-pause-schedule-scan.ts`) must not pay for a `Buffer.concat` of it.
+ *
+ * Resolves `false` when the archive has no such entry, rather than throwing, because "this file
+ * does not contain that plate" is an ordinary answer for callers probing a hint. Chunks are split
+ * on decoder boundaries, never on line boundaries; the consumer owns its own line buffering.
+ *
+ * `maxBytes` is checked BOTH against the entry's declared size and as a running total of what the
+ * inflate actually produces, exactly as {@link readZipEntryBuffer} does: the central directory is
+ * attacker-controlled and can under-declare `uncompressedSize`, so the declared check alone would
+ * let a zip bomb through. Streaming does not make that guard unnecessary; it only changes the
+ * resource being spent from memory to time.
+ */
+export function streamEntryText(
+  filePath: string,
+  entryPath: string,
+  onChunk: (text: string) => void,
+  options: { signal?: AbortSignal; maxBytes?: number } = {}
+): Promise<boolean> {
+  const { signal, maxBytes = Number.POSITIVE_INFINITY } = options
+  return new Promise((resolve, reject) => {
+    throwIfAborted(signal)
+    yauzl.open(filePath, { lazyEntries: true }, (openError, zipFile) => {
+      if (openError || !zipFile) {
+        reject(openError ?? new Error('Failed to open zip'))
+        return
+      }
+      let settled = false
+      const onAbort = () => finish(createAbortError('Aborted'), false)
+      const finish = (error: Error | null, found: boolean) => {
+        if (settled) return
+        settled = true
+        signal?.removeEventListener('abort', onAbort)
+        zipFile.close()
+        if (error) reject(error)
+        else resolve(found)
+      }
+      signal?.addEventListener('abort', onAbort, { once: true })
+      zipFile.on('error', (error) => finish(error, false))
+      zipFile.on('end', () => finish(null, false))
+      zipFile.on('entry', (entry: Entry) => {
+        if (entry.fileName !== entryPath) {
+          zipFile.readEntry()
+          return
+        }
+        if (entry.uncompressedSize > maxBytes) {
+          finish(new Error(`Entry too large: ${entryPath}`), false)
+          return
+        }
+        zipFile.openReadStream(entry, (streamError, stream) => {
+          if (streamError || !stream) {
+            finish(streamError ?? new Error('Failed to open entry stream'), false)
+            return
+          }
+          stream.setEncoding('utf8')
+          let received = 0
+          stream.on('data', (chunk: string) => {
+            // Byte length, not string length: the declared size this is defending against is in
+            // bytes, and a multi-byte character would otherwise undercount against the cap.
+            received += Buffer.byteLength(chunk, 'utf8')
+            if (received > maxBytes) {
+              stream.destroy()
+              finish(new Error('Entry exceeds the maximum decoded size'), false)
+              return
+            }
+            try {
+              onChunk(chunk)
+            } catch (error) {
+              stream.destroy()
+              finish(error as Error, false)
+            }
+          })
+          stream.on('end', () => finish(null, true))
+          stream.on('error', (error: Error) => finish(error, false))
+        })
+      })
+      zipFile.readEntry()
+    })
+  })
+}
+
+/**
  * Copies every archive entry verbatim except those named in `transforms`, each of which is read as
  * UTF-8 text and passed through its transform. Generalizes the single-entry rewrite so one copy pass
  * can edit several entries at once (e.g. `Metadata/model_settings.config` AND `3D/3dmodel.model` for

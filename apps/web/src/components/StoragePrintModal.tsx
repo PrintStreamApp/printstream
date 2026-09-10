@@ -29,6 +29,7 @@ import {
   platePrintSkipSelection,
   platePrintUnits,
   trayCanSatisfyRequirement,
+  filamentTrackSwitchArrangement,
   filamentTrackSwitchMismatch,
   type FilamentCompatibilityIssue,
   type PrintNozzleOffsetCalibrationMode,
@@ -51,10 +52,13 @@ import {
 } from '../lib/printStartOptions'
 import { BackAwareModal as Modal } from './BackAwareModal'
 import { DialogSection } from './DialogSection'
+import { FilamentBlacklistAlert } from './FilamentBlacklistAlert'
+import { FilamentTrackSwitchArrangementAlert } from './FilamentTrackSwitchArrangementAlert'
 import { FilamentTrackSwitchMismatchAlert } from './FilamentTrackSwitchMismatchAlert'
 import { LowFilamentAlert } from './LowFilamentAlert'
 import { ScrollableDialogBody, ScrollableModalDialog } from './ScrollableDialog'
 import { autoSelectedFilamentIds, computeAutoTrayMapping } from '../lib/autoTrayMatch'
+import { filamentBlacklistConsentSignature, findPrinterFilamentBlacklist, hasBlacklistProhibitions } from '../lib/filamentBlacklist'
 import { findPrinterLowFilamentSlots, printerSlotLabeller } from '../lib/lowFilament'
 import { useSlotFilamentIdentityLookup } from '../lib/slotFilamentIdentity'
 import {
@@ -89,6 +93,7 @@ export function StoragePrintModal({
     allowIncompatibleFilament: boolean
     allowFilamentTrackSwitchMismatch: boolean
     allowInsufficientFilament: boolean
+    allowBlacklistedFilament: boolean
     /** Individual placements to exclude, by instance `identify_id`. */
     skipInstances?: number[]
   }) => void
@@ -106,6 +111,7 @@ export function StoragePrintModal({
   const [allowIncompatibleFilament, setAllowIncompatibleFilament] = useState(false)
   const [allowFilamentTrackSwitchMismatch, setAllowFilamentTrackSwitchMismatch] = useState(false)
   const [allowInsufficientFilament, setAllowInsufficientFilament] = useState(false)
+  const [allowBlacklistedFilament, setAllowBlacklistedFilament] = useState(false)
   /**
    * Explicit user tray picks only; `-1`/absent rows fall back to the matcher's
    * suggestion. Merged with `mergeAmsMapping` (the same precedence the queue
@@ -280,6 +286,45 @@ export function StoragePrintModal({
     }].filter((entry) => entry.issues.length > 0),
     [effectiveMapping, printerId, resolveSlotFilament, status, usedGramsById, visibleFilaments]
   )
+  /**
+   * Spools that would be better off behind the other Filament Track Switch inlet. Advisory only,
+   * so it never gates Start; inert until FTS firmware ships.
+   */
+  const trackSwitchArrangements = useMemo(() => {
+    const arrangement = filamentTrackSwitchArrangement({
+      optimalAssignment: activePlate?.optimalAssignment,
+      status,
+      amsMapping: effectiveMapping
+    })
+    if (!arrangement || arrangement.moves.length === 0) return []
+    return [{
+      printerId,
+      printerName: null,
+      moves: arrangement.moves,
+      slotLabel: printerSlotLabeller(status)
+    }]
+  }, [activePlate?.optimalAssignment, effectiveMapping, printerId, status])
+  /** Materials Bambu forbids or cautions against on this machine, for the trays Start would send. */
+  const blacklistEntries = useMemo(() => {
+    const entry = findPrinterFilamentBlacklist(
+      printerId,
+      printer.model,
+      status,
+      effectiveMapping,
+      (activePlate?.filaments ?? []).map((filament) => filament.id)
+    )
+    return entry ? [entry] : []
+  }, [activePlate, effectiveMapping, printer.model, printerId, status])
+  const hasBlacklistedFilament = hasBlacklistProhibitions(blacklistEntries)
+  // Drop the consent when what it consents to changes; see the same effect in `library/PrintModal`.
+  const blacklistSignature = useMemo(
+    () => filamentBlacklistConsentSignature(blacklistEntries),
+    [blacklistEntries]
+  )
+
+  useEffect(() => {
+    setAllowBlacklistedFilament(false)
+  }, [blacklistSignature])
   const selectedTrayWarnings = useMemo(
     () => getStorageSelectedTrayWarnings({ mapping: effectiveMapping, trayByMappingValue, visibleFilaments, timelapse, status }),
     [effectiveMapping, status, timelapse, trayByMappingValue, visibleFilaments]
@@ -508,6 +553,12 @@ export function StoragePrintModal({
                   confirmed={allowFilamentTrackSwitchMismatch}
                   onConfirmedChange={setAllowFilamentTrackSwitchMismatch}
                 />
+                <FilamentBlacklistAlert
+                  entries={blacklistEntries}
+                  confirmed={allowBlacklistedFilament}
+                  onConfirmedChange={setAllowBlacklistedFilament}
+                />
+                <FilamentTrackSwitchArrangementAlert entries={trackSwitchArrangements} />
                 <LowFilamentAlert
                   entries={lowFilamentEntries}
                   confirmed={allowInsufficientFilament}
@@ -602,6 +653,7 @@ export function StoragePrintModal({
                 allowIncompatibleFilament,
                 allowFilamentTrackSwitchMismatch,
                 allowInsufficientFilament,
+                allowBlacklistedFilament,
                 ...(skipInstances.length > 0 ? { skipInstances } : {})
               })
             }}
@@ -613,6 +665,7 @@ export function StoragePrintModal({
               || (!mappingCapable && automaticCompatibilityIssues.length > 0 && !allowIncompatibleFilament)
               || (trackSwitchMismatches.length > 0 && !allowFilamentTrackSwitchMismatch)
               || (lowFilamentEntries.length > 0 && !allowInsufficientFilament)
+              || (hasBlacklistedFilament && !allowBlacklistedFilament)
             }
           >
             Start print

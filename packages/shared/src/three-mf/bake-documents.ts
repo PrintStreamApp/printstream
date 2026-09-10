@@ -47,7 +47,7 @@ import {
 import { inspectProjectFilamentSelfIndex, rebuildFilamentSelfIndex, repairFilamentSelfIndex } from '../filament-variant-index.js'
 import { assertAcyclicComponentGraph } from './component-graph.js'
 import { ensureApplicationMarker } from './application-marker.js'
-import { parseSourcePlateMetadata, preservedPlateMetadata, type PlateMetadataEntry } from './plate-metadata.js'
+import { authoredPlateMetadata, parseSourcePlateMetadata, preservedPlateMetadata, type PlateMetadataEntry } from './plate-metadata.js'
 import { dropEngineHostileOverrides } from '../settings-value-guard.js'
 import { degenerateTransformMessage, findDegenerateTransformColumn } from './transform-validity.js'
 import { remapColorPaintInModelXml } from './triangle-paint-codec.js'
@@ -337,7 +337,8 @@ function renderArrangedModelSettingsPlates(
   plates: SceneEdit['plates'],
   sourceIdentifyIds: ModelSettingsIdentifyIds,
   sourcePlates: ReadonlyMap<number, PlateMetadataEntry[]>,
-  filamentSetStable: boolean
+  filamentSetStable: boolean,
+  allowBedType: boolean
 ): string {
   const instancesByPlate = new Map<number, ArrangedInstance[]>()
   // Grouped by object through the SAME function the build items use. BambuStudio ignores this
@@ -367,18 +368,23 @@ function renderArrangedModelSettingsPlates(
   const blocks = ordered.map((plate) => {
     const lines = [`  <plate>`, `    <metadata key="plater_id" value="${plate.index}"/>`]
     if (plate.name) lines.push(`    <metadata key="plater_name" value="${escapeXmlAttribute(plate.name)}"/>`)
-    // Everything the SceneEdit cannot express, carried from the source block. Without this the
-    // re-render below silently discarded the plate's bed type, print sequence, vase mode and
-    // nozzle grouping on every save (`plate-metadata.ts` has the policy and the reasoning).
-    // `rawValue` is re-emitted unescaped because it is still the source's escaped text.
+    // What the edit itself says about this plate: bed type, print sequence, vase mode, lock.
+    const authored = authoredPlateMetadata(plate, { allowBedType })
+    // Everything else the SceneEdit cannot express, carried from the source block. Without this the
+    // re-render below silently discarded the plate's print sequence, vase mode and nozzle grouping
+    // on every save (`plate-metadata.ts` has the policy and the reasoning). `rawValue` is re-emitted
+    // unescaped because it is either the source's escaped text or escaped by the author step.
     // Keyed on the plate's SOURCE number, never its new one. `plate.index` is a position the
     // editor renumbers on every add, delete and reorder, so looking the source block up by it hands
     // a deleted plate's bed type and vase mode to whichever plate took its number, which is the
     // exact misattribution this carry exists to prevent. Falls back to the position only when the
     // edit does not say, which is an older client whose plates cannot have moved through it.
     const sourcePlateNumber = plate.sourceIndex ?? plate.index
-    for (const carried of preservedPlateMetadata(sourcePlates.get(sourcePlateNumber), filamentSetStable)) {
+    for (const carried of preservedPlateMetadata(sourcePlates.get(sourcePlateNumber), filamentSetStable, authored.keys)) {
       lines.push(`    <metadata key="${carried.key}" value="${carried.rawValue}"/>`)
+    }
+    for (const entry of authored.entries) {
+      lines.push(`    <metadata key="${entry.key}" value="${entry.rawValue}"/>`)
     }
     for (const instance of instancesByPlate.get(plate.index) ?? []) {
       lines.push(
@@ -1118,7 +1124,12 @@ export function buildEditedThreeMfDocuments(
       edit.filaments == null || (
         isIdentityFilamentSlotRemap(filamentSlotIdRemap(edit.filaments))
         && edit.filaments.length === sourceFilamentCount(projectSettingsJson)
-      )
+      ),
+      // Keyed on the KEY being PRESENT, not on it having a value. A client that authors per-plate
+      // bed types always sends it (null when the project states none), so a blank global still
+      // authors the plates; testing truthiness instead made an unseeded machine target silently
+      // DELETE every per-plate bed type in the file, since the carry no longer covers `bed_type`.
+      edit.plateType !== undefined
     )
   )
 
@@ -2823,6 +2834,16 @@ interface CustomGcodeLayerTag {
  */
 const PAUSE_PRINT_GCODE = 'M400 U1'
 
+/** The `plate_info id`s carried by a `custom_gcode_per_layer.xml` document. */
+export function customGcodePlateIds(xml: string): number[] {
+  const ids: number[] = []
+  for (const plateMatch of xml.matchAll(/<plate>([\s\S]*?)<\/plate>/g)) {
+    const id = Number.parseInt(parseAttrs(/<plate_info\b([^>]*)\/>/.exec(plateMatch[1] ?? '')?.[1] ?? '').id ?? '', 10)
+    if (Number.isInteger(id) && id > 0) ids.push(id)
+  }
+  return ids
+}
+
 /**
  * Merge layer-based filament changes and layer pauses into BambuStudio's
  * `custom_gcode_per_layer.xml`. Plates listed in `filamentEdits` get their ToolChange
@@ -2834,14 +2855,18 @@ const PAUSE_PRINT_GCODE = 'M400 U1'
 export function mergeCustomGcodePerLayer(
   sourceXml: string | null,
   filamentEdits: SceneEditPlateFilamentChanges[] | undefined,
-  pauseEdits?: SceneEditPlatePauses[]
+  pauseEdits?: SceneEditPlatePauses[],
+  /** Source plate number -> saved plate number. Unmapped source plates were deleted. */
+  sourcePlateMap?: ReadonlyMap<number, number> | null
 ): string {
   const sourcePlates = new Map<number, { toolChanges: CustomGcodeLayerTag[]; pauses: CustomGcodeLayerTag[]; others: CustomGcodeLayerTag[]; mode: string | null }>()
   if (sourceXml) {
     for (const plateMatch of sourceXml.matchAll(/<plate>([\s\S]*?)<\/plate>/g)) {
       const block = plateMatch[1] ?? ''
-      const id = Number.parseInt(parseAttrs(/<plate_info\b([^>]*)\/>/.exec(block)?.[1] ?? '').id ?? '', 10)
-      if (!Number.isInteger(id) || id <= 0) continue
+      const sourceId = Number.parseInt(parseAttrs(/<plate_info\b([^>]*)\/>/.exec(block)?.[1] ?? '').id ?? '', 10)
+      if (!Number.isInteger(sourceId) || sourceId <= 0) continue
+      const id = sourcePlateMap ? sourcePlateMap.get(sourceId) : sourceId
+      if (id == null) continue
       const toolChanges: CustomGcodeLayerTag[] = []
       const pauses: CustomGcodeLayerTag[] = []
       const others: CustomGcodeLayerTag[] = []
@@ -2951,19 +2976,31 @@ export function serializeBrimEarPoints(brimEars: SceneEditObjectBrimEars[], mode
  * prime-tower corners, and, last, so authoring always wins first, the staged settings repairs.
  * Empty when the edit touches none of them.
  */
-export function buildProjectSettingsTransforms(edit: SceneEdit): Array<(json: string) => string> {
+export function buildProjectSettingsTransforms(
+  edit: SceneEdit,
+  sourcePlateMap?: ReadonlyMap<number, number> | null
+): Array<(json: string) => string> {
   const transforms: Array<(json: string) => string> = []
   if (edit.filaments && edit.filaments.length > 0) {
     const filaments = edit.filaments
     transforms.push((json) => applyFilamentList(json, filaments))
     transforms.push((json) => applyNozzleAssignmentToProjectSettings(json, filaments))
   }
-  const plateType = edit.plates.find((plate) => plate.plateType)?.plateType
+  // The edit's own global. The fallback is ONLY for a client from before per-plate bed types, which
+  // stamped the global onto every plate: there the plates ARE the global, and reading it back out
+  // of them is the only way to keep it. It must not run for a current client that simply has no
+  // global to state, or the first plate's OVERRIDE gets promoted to the project-wide value.
+  const plateType = edit.plateType !== undefined
+    ? edit.plateType
+    : edit.plates.find((plate) => plate.plateType)?.plateType
   if (plateType) {
     transforms.push((json) => applyProjectPlateType(json, plateType))
   }
-  if (edit.plates.some((plate) => plate.primeTower)) {
-    transforms.push((json) => applyPrimeTowerSettings(json, edit))
+  if (edit.plates.some((plate) => plate.primeTower) || sourcePlateMap != null) {
+    // An identity map still carries information: plates absent from it were deleted or newly
+    // added. Remapping also conforms the positional arrays to the current plate count, preventing
+    // a new plate from inheriting a deleted plate's stale tower corner.
+    transforms.push((json) => applyPrimeTowerSettings(json, edit, sourcePlateMap))
   }
   // AFTER the filament list (which remaps the matrix for the new material set) so the user's own
   // numbers win, and BEFORE the repair pass so a stale edit is still caught by it rather than
@@ -3130,7 +3167,30 @@ function applyFlushVolumes(projectSettingsJson: string, flushVolumes: SceneEditF
  * Write each plate's edited prime-tower corner into the per-plate `wipe_tower_x`/
  * `wipe_tower_y` arrays of `project_settings.config` (string-valued, like Bambu).
  */
-function applyPrimeTowerSettings(projectSettingsJson: string, edit: SceneEdit): string {
+function remapPerPlateValues(
+  values: readonly string[],
+  plateMap: ReadonlyMap<number, number>,
+  plateCount: number,
+  fallback: string
+): string[] {
+  const moved = new Array<string | undefined>(plateCount)
+  for (const [source, saved] of plateMap) {
+    if (saved < 1 || saved > plateCount) continue
+    const value = values[source - 1]
+    if (value !== undefined) moved[saved - 1] = value
+  }
+  const out: string[] = []
+  for (let index = 0; index < plateCount; index += 1) {
+    out.push(moved[index] ?? out[out.length - 1] ?? fallback)
+  }
+  return out
+}
+
+function applyPrimeTowerSettings(
+  projectSettingsJson: string,
+  edit: SceneEdit,
+  plateMap?: ReadonlyMap<number, number> | null
+): string {
   let parsed: unknown
   try {
     parsed = JSON.parse(projectSettingsJson)
@@ -3139,8 +3199,12 @@ function applyPrimeTowerSettings(projectSettingsJson: string, edit: SceneEdit): 
   }
   if (!parsed || typeof parsed !== 'object') return projectSettingsJson
   const record = parsed as Record<string, unknown>
-  const xs = Array.isArray(record.wipe_tower_x) ? record.wipe_tower_x.map(String) : []
-  const ys = Array.isArray(record.wipe_tower_y) ? record.wipe_tower_y.map(String) : []
+  let xs = Array.isArray(record.wipe_tower_x) ? record.wipe_tower_x.map(String) : []
+  let ys = Array.isArray(record.wipe_tower_y) ? record.wipe_tower_y.map(String) : []
+  if (plateMap) {
+    if (xs.length > 0) xs = remapPerPlateValues(xs, plateMap, edit.plates.length, '15')
+    if (ys.length > 0) ys = remapPerPlateValues(ys, plateMap, edit.plates.length, '220')
+  }
   for (const plate of edit.plates) {
     if (!plate.primeTower) continue
     const index = plate.index - 1

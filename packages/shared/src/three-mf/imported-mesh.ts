@@ -9,6 +9,24 @@
  * Coordinates are millimetres in the source file's own space; the writer re-centres and places.
  */
 
+/**
+ * A refusal that describes the FILE rather than the runtime: unreadable, unsupported, or
+ * self-contradictory input that will fail identically however many times it is parsed.
+ *
+ * EXISTS TO BE CAUGHT BY TYPE. The web's staging worker has to tell a data failure from a mechanism
+ * failure, because a mechanism failure falls back to a main-thread re-parse and a data failure must
+ * NOT (the retry freezes the tab on its way to the identical message). That test used to match on
+ * message TEXT, which is a contract nobody can see: a parser throwing a message the pattern did not
+ * list was silently misclassified, and so were the errors the parsers did not raise themselves --
+ * `atob` on a malformed base64 buffer throws a `DOMException`, which in a browser is not even
+ * `instanceof Error`. Every refusal a mesh parser raises is one of these, so the worker can ask
+ * `instanceof` and be right by construction.
+ *
+ * The sibling for 3MF-specific refusals is `ThreeMfImportError` in `mesh-extract.ts`; the message
+ * pattern survives only for third-party failures we do not raise (the OpenCASCADE WASM).
+ */
+export class ModelImportError extends Error {}
+
 export interface ImportedMeshBounds {
   min: { x: number; y: number; z: number }
   max: { x: number; y: number; z: number }

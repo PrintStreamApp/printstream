@@ -1,20 +1,34 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import type { LibraryFile } from '@printstream/shared'
+import { MESH_LIBRARY_FILE_KINDS, type LibraryFile } from '@printstream/shared'
 import { buildCompactFileTags, buildFullFileTags, buildLibraryFileMetaTags, isPreviewFirstLibraryFile, isPreviewOnlyLibraryFile, isUnslicedThreeMfFile } from './libraryFileTags.js'
 
 function fileOfKind(kind: LibraryFile['kind'], name: string): LibraryFile {
   return { kind, name } as LibraryFile
 }
 
-test('isPreviewOnlyLibraryFile is true for STL and STEP, false for printable/editable kinds', () => {
+test('isPreviewOnlyLibraryFile is true for every bare mesh, false for printable/editable kinds', () => {
   assert.equal(isPreviewOnlyLibraryFile(fileOfKind('stl', 'part.stl')), true)
   assert.equal(isPreviewOnlyLibraryFile(fileOfKind('step', 'bracket.step')), true)
+  assert.equal(isPreviewOnlyLibraryFile(fileOfKind('obj', 'scan.obj')), true)
+  assert.equal(isPreviewOnlyLibraryFile(fileOfKind('gltf', 'scene.glb')), true)
+  assert.equal(isPreviewOnlyLibraryFile(fileOfKind('amf', 'part.amf')), true)
   // 3MF projects are editable and gcode is directly printable, they have their own
   // default action, so they are not "preview only".
   assert.equal(isPreviewOnlyLibraryFile(fileOfKind('3mf', 'project.3mf')), false)
   assert.equal(isPreviewOnlyLibraryFile(fileOfKind('gcode', 'sliced.gcode.3mf')), false)
   assert.equal(isPreviewOnlyLibraryFile(fileOfKind('other', 'notes.txt')), false)
+})
+
+test('every mesh kind is covered without this test naming them, so a new one cannot be missed', () => {
+  // The list above is exhaustive TODAY. This asserts the rule rather than the roster: a mesh format
+  // added to the catalogue and forgotten in `isPreviewOnlyLibraryFile` would leave its files with
+  // no default click and no thumbnail, which is silent.
+  for (const kind of MESH_LIBRARY_FILE_KINDS) {
+    assert.equal(isPreviewOnlyLibraryFile(fileOfKind(kind, `model.${kind}`)), true, `${kind} must be preview-only`)
+    assert.equal(isPreviewFirstLibraryFile(fileOfKind(kind, `model.${kind}`)), true, `${kind} must be preview-first`)
+    assert.equal(isUnslicedThreeMfFile(fileOfKind(kind, `model.${kind}`)), false, `${kind} is not a 3MF project`)
+  }
 })
 
 test('isUnslicedThreeMfFile only matches plain project 3MFs', () => {

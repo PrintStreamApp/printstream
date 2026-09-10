@@ -18,6 +18,7 @@
 import { unzipArchiveBytes } from './zipArchiveClient'
 import {
   extractUploadedProfiles,
+  isPresetArchivePresetEntry,
   parseProfileJson,
   type SlicingPresetKind,
   type UploadedProfileEntry
@@ -107,9 +108,11 @@ async function inflatePresetArchive(bytes: Uint8Array): Promise<UploadedProfileE
   const decoder = new TextDecoder()
   const entries: UploadedProfileEntry[] = []
   for (const [path, content] of Object.entries(files)) {
-    // Directory markers and anything that is not a preset document are not errors, a
-    // BambuStudio export carries other files alongside the presets.
-    if (path.endsWith('/') || !path.toLowerCase().endsWith('.json')) continue
+    // Directory markers, the bundle manifest, and anything that is not a preset document are not
+    // errors: a BambuStudio export carries other files alongside the presets. One shared rule with
+    // the api's reader, which is what this had drifted from -- keeping `bundle_structure.json`
+    // here made every genuine `.bbscfg` fail with "Profile must include a name".
+    if (!isPresetArchivePresetEntry(path)) continue
     entries.push({ content: decoder.decode(content) })
   }
   return entries

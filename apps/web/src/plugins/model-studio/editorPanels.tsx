@@ -13,6 +13,7 @@
  */
 import { Fragment, memo, useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent, type MutableRefObject } from 'react'
 import {
+  Badge,
   Box,
   Button,
   buttonClasses,
@@ -44,6 +45,8 @@ import ContentCutRoundedIcon from '@mui/icons-material/ContentCutRounded'
 import DeleteRoundedIcon from '@mui/icons-material/DeleteRounded'
 import MoreVertRoundedIcon from '@mui/icons-material/MoreVertRounded'
 import DriveFileRenameOutlineRoundedIcon from '@mui/icons-material/DriveFileRenameOutlineRounded'
+import TuneRoundedIcon from '@mui/icons-material/TuneRounded'
+import { formatPlateTypeLabel } from '../../lib/slicingPresetMatching'
 import InventoryRoundedIcon from '@mui/icons-material/Inventory2Rounded'
 import LayersRoundedIcon from '@mui/icons-material/LayersRounded'
 import TextFieldsRoundedIcon from '@mui/icons-material/TextFieldsRounded'
@@ -72,7 +75,7 @@ import PaletteRoundedIcon from '@mui/icons-material/PaletteRounded'
 import StraightenRoundedIcon from '@mui/icons-material/StraightenRounded'
 import TouchAppRoundedIcon from '@mui/icons-material/TouchAppRounded'
 import type { LibraryFile, SceneEditHelperVolumeSubtype, SceneEditPartSubtype } from '@printstream/shared'
-import { canonicalThreeMfPartSubtype, threeMfPartSubtypeCarriesFilament } from '@printstream/shared'
+import { canonicalThreeMfPartSubtype, detectImportFormat, isMeshLibraryFileKind, threeMfPartSubtypeCarriesFilament } from '@printstream/shared'
 import { useLocalStorageState } from '../../hooks/useLocalStorageState'
 import { useMobileViewport } from '../../components/useMobileViewport'
 import { SettingsTuneButton } from '../../components/SettingsTuneButton'
@@ -146,6 +149,38 @@ export const TOOL_PANEL_ANCHOR = {
  * highlighted. Reordering is pointer-based (mouse drag / touch hold-and-drag) and drops into
  * the gap BETWEEN tiles: see `useListReorderDrag`.
  */
+/**
+ * How many settings this plate overrides on the project, for the strip's badge.
+ *
+ * The LOCK is deliberately not counted: it refuses actions rather than changing what the plate
+ * prints, it has no project-level counterpart to diverge from, and it carries its own icon. Keeping
+ * them separate is also what lets a plate that is both locked and overriding show both, which one
+ * shared decorator slot could not.
+ */
+function plateOverrideCount(plate: EditorPlate): number {
+  return (plate.plateTypeOverride != null ? 1 : 0)
+    + (plate.printSequence != null ? 1 : 0)
+    + (plate.spiralMode != null ? 1 : 0)
+}
+
+/**
+ * The tile's tooltip, naming what makes this plate different from the project.
+ *
+ * Spelled out rather than left to the icon: an override changes what the plate PRINTS ON, and the
+ * slice panel's own plate-type selector still shows the project's value, so the user needs to be
+ * told which setting diverges and to what.
+ */
+function plateTileTooltip(plate: EditorPlate, label: string): string {
+  const notes: string[] = []
+  if (plate.locked) notes.push('locked')
+  // Formatted, like every other surface that shows a plate type: the stored value may be a
+  // code-form token (`textured_pei_plate`) rather than the serialized display form.
+  if (plate.plateTypeOverride) notes.push(`bed type: ${formatPlateTypeLabel(plate.plateTypeOverride)}`)
+  if (plate.printSequence) notes.push(`print sequence: ${plate.printSequence}`)
+  if (plate.spiralMode != null) notes.push(`spiral vase: ${plate.spiralMode ? 'on' : 'off'}`)
+  return notes.length > 0 ? `${label} (${notes.join(', ')})` : label
+}
+
 export function PlateThumbnailStrip({
   plates,
   activeIndex,
@@ -155,6 +190,7 @@ export function PlateThumbnailStrip({
   onAddPlate,
   onRemovePlate,
   onRenamePlate,
+  onEditPlateSettings,
   onReorderPlate,
   orientation = 'horizontal'
 }: {
@@ -168,6 +204,8 @@ export function PlateThumbnailStrip({
   onAddPlate: () => void
   onRemovePlate: (index: number) => void
   onRenamePlate: (index: number) => void
+  /** Open the per-plate settings dialog (bed type, print sequence, vase mode, arrange lock). */
+  onEditPlateSettings: (index: number) => void
   /** Drop a plate into insertion gap `insertAt` (0-based, 0 = before the first plate). */
   onReorderPlate: (fromIndex: number, insertAt: number) => void
   /**
@@ -231,6 +269,7 @@ export function PlateThumbnailStrip({
         // (e.g. a freshly added empty plate before it's opened): show a spinner.
         const loading = !thumbnail
         const label = plateDisplayName(plate.name, plate.index)
+        const overrideCount = plateOverrideCount(plate)
         return (
           <Sheet
             key={plate.plateId}
@@ -316,11 +355,17 @@ export function PlateThumbnailStrip({
               </Box>
             )}
             {collapsed && loading && <CircularProgress size="sm" sx={{ flexShrink: 0, '--CircularProgress-size': '16px' }} />}
-            <Tooltip title={label} variant="soft" size="sm">
+            <Tooltip title={plateTileTooltip(plate, label)} variant="soft" size="sm">
               <Typography
                 level="body-xs"
                 noWrap
                 textColor={active ? 'primary.50' : undefined}
+                // The lock keeps the label slot; the OVERRIDE signal is a badge on the kebab
+                // instead, because one decorator slot cannot show both and a plate is often both.
+                // `fontSize`, never `sx`: these are Material `SvgIcon`s and their `sx` runs through
+                // the Material style engine, which this Joy-only app gives no theme, so it
+                // typechecks and then crashes the route at render.
+                startDecorator={plate.locked ? <LockRoundedIcon fontSize="inherit" /> : undefined}
                 sx={{ textAlign: collapsed ? 'left' : 'center', width: '100%', minWidth: 0, maxWidth: '100%', px: collapsed ? 0.25 : 0 }}
               >
                 {label}
@@ -330,29 +375,64 @@ export function PlateThumbnailStrip({
               open={menuPlateIndex === plate.index}
               onOpenChange={(_event, isOpen) => setMenuPlateIndex(isOpen ? plate.index : null)}
             >
-              <MenuButton
-                slots={{ root: IconButton }}
-                slotProps={{ root: {
-                  size: 'sm',
-                  variant: 'plain',
-                  color: 'neutral',
-                  onClick: (event: React.MouseEvent) => event.stopPropagation(),
-                  // Pressing the kebab must not arm a reorder drag on the tile under it.
-                  onPointerDown: (event: React.PointerEvent) => event.stopPropagation(),
-                  'aria-label': `Plate ${plate.index} options`
-                } }}
+              {/* Badged with the number of settings this plate overrides, so a divergence is
+                  visible without opening anything and sits ON the control that resolves it. The
+                  same `Badge` shape as `SettingsTuneButton`, including the `pointerEvents: 'none'`
+                  that stops the badge swallowing presses aimed at the corner it covers.
+
+                  THE OFFSETS KEEP IT INSIDE THE TILE, and that is the whole reason they are not 2px.
+                  A badge hangs OUTSIDE its anchor by about half its own height (Joy `sm` is 12px
+                  plus a ring, so ~7-8px) less `badgeInset`, and the strip is a scroll container, so
+                  anything past the tile is clipped rather than merely overlapping: at 2px the count
+                  was visibly sliced off along the top and right. Nothing between here and the tile
+                  clips, so containment within the tile is enough. Keep `right`/`top` at least the
+                  badge's half-height less the inset if either value is ever retuned. */}
+              <Badge
+                badgeContent={overrideCount}
+                size="sm"
+                color="primary"
+                badgeInset="4px"
+                slotProps={{ badge: { sx: { pointerEvents: 'none' } } }}
                 sx={collapsed
-                  ? { flexShrink: 0, minHeight: 22, minWidth: 22, '--IconButton-size': '22px' }
-                  : { position: 'absolute', top: 2, right: 2, minHeight: 22, minWidth: 22, '--IconButton-size': '22px' }}
+                  // Collapsed the kebab is inline, so the tile's own 0.5 padding is the only
+                  // clearance on the right; the extra margin buys the same room the absolute
+                  // offsets buy above.
+                  ? { flexShrink: 0, mr: 0.5 }
+                  : { position: 'absolute', top: 7, right: 7 }}
               >
-                <MoreVertRoundedIcon fontSize="small" />
-              </MenuButton>
+                <MenuButton
+                  slots={{ root: IconButton }}
+                  slotProps={{ root: {
+                    size: 'sm',
+                    variant: 'plain',
+                    color: 'neutral',
+                    onClick: (event: React.MouseEvent) => event.stopPropagation(),
+                    // Pressing the kebab must not arm a reorder drag on the tile under it.
+                    onPointerDown: (event: React.PointerEvent) => event.stopPropagation(),
+                    'aria-label': overrideCount > 0
+                      ? `Plate ${plate.index} options (${overrideCount} overridden)`
+                      : `Plate ${plate.index} options`
+                  } }}
+                  sx={{ minHeight: 22, minWidth: 22, '--IconButton-size': '22px' }}
+                >
+                  <MoreVertRoundedIcon fontSize="small" />
+                </MenuButton>
+              </Badge>
               <Menu placement="bottom-end" sx={{ zIndex: EDITOR_POPUP_Z_INDEX, minWidth: 160 }} onClick={(event) => event.stopPropagation()}>
                 {/* Lay out icon + label directly with a fixed gap so every row aligns
                     (ListItemDecorator sizes differently on the danger/selected row). */}
                 <MenuItem onClick={(event) => { event.stopPropagation(); onRenamePlate(plate.index) }} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                   <DriveFileRenameOutlineRoundedIcon fontSize="small" />
                   Rename
+                </MenuItem>
+                <MenuItem onClick={(event) => { event.stopPropagation(); onEditPlateSettings(plate.index) }} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <TuneRoundedIcon fontSize="small" />
+                  Plate settings
+                  {/* Repeated on the row the badge points at, so the count still says how much is
+                      overridden once the menu covers the badge that raised the question. */}
+                  {overrideCount > 0 && (
+                    <Chip size="sm" variant="soft" color="primary" sx={{ ml: 'auto' }}>{overrideCount}</Chip>
+                  )}
                 </MenuItem>
                 {plates.length > 1 && (
                   <MenuItem color="danger" onClick={(event) => { event.stopPropagation(); onRemovePlate(plate.index) }} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -1148,13 +1228,18 @@ export function SliceMenuButton({
   )
 }
 
-/** STL, STEP, and 3MF library files can be imported as parts (STEP is tessellated server-side). */
+/**
+ * Which library files the editor's "add from library" pickers offer.
+ *
+ * Every bare mesh plus 3MF, i.e. exactly the staged-import catalogue. The `'other'` fallback
+ * catches files uploaded BEFORE their kind existed: nothing reclassifies rows at rest, so a STEP
+ * from before the `step` kind (and now an OBJ or glTF from before these) still carries
+ * `kind: 'other'`, and going by the NAME is what makes those importable rather than invisible.
+ */
 // eslint-disable-next-line react-refresh/only-export-components -- pure leaf helper colocated with the panels that use it.
 export function isImportableLibraryFile(file: LibraryFile): boolean {
-  if (file.kind === 'stl' || file.kind === 'step' || file.kind === '3mf') return true
-  // Fallback for STEP files uploaded before they became a first-class kind (kind === 'other').
-  const lower = file.name.toLowerCase()
-  return file.kind === 'other' && (lower.endsWith('.step') || lower.endsWith('.stp'))
+  if (isMeshLibraryFileKind(file.kind) || file.kind === '3mf') return true
+  return file.kind === 'other' && detectImportFormat(file.name) != null
 }
 
 /** Readable text color (black/white) for a filament swatch background. */
@@ -1896,7 +1981,7 @@ const ObjectListRow = memo(function ObjectListRow({
                     return (
                       // Addressed by the object's own editor-side id, NOT by `sliceObject`: that is
                       // membership of the BAKED slice index, which is trap #3 of the no-save rule in
-                      // this plugin'the s development notes, and the session-added row beside it never consulted
+                      // this plugin's development notes, and the session-added row beside it never consulted
                       // it -- so an object outside that set lost its baked parts' settings buttons
                       // while keeping them on its volumes. The dialog resolves the owner by host id
                       // either way, so the set was never load-bearing here.

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { NotificationMessage } from '@printstream/shared'
-import type { StoredSubscription } from './push.js'
+import type { PushSendOptions, StoredSubscription } from './push.js'
 import { deliverTargetedPush, type TargetedPushScopeDelivery } from './targeted-push.js'
 
 function subscription(endpoint: string, actorKey?: string): StoredSubscription {
@@ -49,7 +49,7 @@ test('workspace-scoped targeted push stays in scope and matches only target acto
   await deliverTargetedPush({
     workspaceId: 'workspace-a',
     payload: message(),
-    targetUserIds: ['user-1'],
+    targetActorKeys: ['user:user-1'],
     getScopedDelivery: async (workspaceId) => {
       assert.equal(workspaceId, 'workspace-a')
       return scoped.delivery
@@ -72,7 +72,7 @@ test('workspace-scoped targeted push applies the scope deliverability filter', a
   await deliverTargetedPush({
     workspaceId: 'workspace-a',
     payload: message(),
-    targetUserIds: ['user-1'],
+    targetActorKeys: ['user:user-1'],
     getScopedDelivery: async () => scoped.delivery,
     listSubscriptionWorkspaceScopes: async () => [],
     isEnabledForWorkspace: () => true,
@@ -100,7 +100,7 @@ test('platform-wide targeted push spans scopes and dedupes shared endpoints', as
   await deliverTargetedPush({
     workspaceId: null,
     payload: message(),
-    targetUserIds: ['user-1'],
+    targetActorKeys: ['user:user-1'],
     getScopedDelivery: async (workspaceId) => scopes.get(workspaceId)!,
     listSubscriptionWorkspaceScopes: async () => ['workspace-a', 'workspace-b'],
     isEnabledForWorkspace: () => true
@@ -109,6 +109,71 @@ test('platform-wide targeted push spans scopes and dedupes shared endpoints', as
   assert.deepEqual(platform.delivered, ['endpoint-shared'])
   assert.deepEqual(workspaceA.delivered, ['endpoint-workspace-a-only'])
   assert.deepEqual(workspaceB.delivered, [])
+})
+
+test('excluded endpoints are skipped in every scope, including a shared one', async () => {
+  const platform = fakeScope([subscription('endpoint-reporter', 'user:user-1')])
+  const workspaceA = fakeScope([
+    subscription('endpoint-reporter', 'user:user-1'),
+    subscription('endpoint-other-device', 'user:user-1')
+  ])
+  const scopes = new Map<string | null, TargetedPushScopeDelivery>([
+    [null, platform.delivery],
+    ['workspace-a', workspaceA.delivery]
+  ])
+
+  await deliverTargetedPush({
+    workspaceId: null,
+    payload: message(),
+    targetActorKeys: ['user:user-1'],
+    getScopedDelivery: async (workspaceId) => scopes.get(workspaceId)!,
+    listSubscriptionWorkspaceScopes: async () => ['workspace-a'],
+    isEnabledForWorkspace: () => true,
+    excludeEndpoints: new Set(['endpoint-reporter'])
+  })
+
+  assert.deepEqual(platform.delivered, [])
+  assert.deepEqual(workspaceA.delivered, ['endpoint-other-device'])
+})
+
+test('a service-account actor key matches its own subscriptions', async () => {
+  const scoped = fakeScope([
+    subscription('endpoint-service', 'service-account:sa-1'),
+    subscription('endpoint-user', 'user:user-1')
+  ])
+
+  await deliverTargetedPush({
+    workspaceId: 'workspace-a',
+    payload: message(),
+    targetActorKeys: ['service-account:sa-1'],
+    getScopedDelivery: async () => scoped.delivery,
+    listSubscriptionWorkspaceScopes: async () => [],
+    isEnabledForWorkspace: () => true
+  })
+
+  assert.deepEqual(scoped.delivered, ['endpoint-service'])
+})
+
+test('send options reach every scope delivery', async () => {
+  const seen: Array<PushSendOptions | undefined> = []
+  const delivery: TargetedPushScopeDelivery = {
+    async sendMatching(_payload, _predicate, options) { seen.push(options) }
+  }
+
+  await deliverTargetedPush({
+    workspaceId: null,
+    payload: message(),
+    targetActorKeys: ['user:user-1'],
+    getScopedDelivery: async () => delivery,
+    listSubscriptionWorkspaceScopes: async () => ['workspace-a'],
+    isEnabledForWorkspace: () => true,
+    sendOptions: { ttlSeconds: 600, urgency: 'low', topic: 'collapse-key' }
+  })
+
+  assert.deepEqual(seen, [
+    { ttlSeconds: 600, urgency: 'low', topic: 'collapse-key' },
+    { ttlSeconds: 600, urgency: 'low', topic: 'collapse-key' }
+  ])
 })
 
 test('platform-wide targeted push skips scopes where the plugin is disabled', async () => {
@@ -122,7 +187,7 @@ test('platform-wide targeted push skips scopes where the plugin is disabled', as
   await deliverTargetedPush({
     workspaceId: null,
     payload: message(),
-    targetUserIds: ['user-1'],
+    targetActorKeys: ['user:user-1'],
     getScopedDelivery: async (workspaceId) => scopes.get(workspaceId)!,
     listSubscriptionWorkspaceScopes: async () => ['workspace-a'],
     isEnabledForWorkspace: (workspaceId) => workspaceId !== 'workspace-a'

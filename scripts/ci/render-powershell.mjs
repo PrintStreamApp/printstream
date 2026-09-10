@@ -5,7 +5,7 @@
  * The installer window and the tray are PowerShell scripts built inside
  * TypeScript template literals. Nothing in the normal build looks at them: tsc
  * sees a string, the linter sees a string, and a syntax error surfaces only as a
- * window that never appears on a user's machine — with the reason buried in a
+ * window that never appears on a user's machine, with the reason buried in a
  * diagnostic log nobody has yet been told to look for.
  *
  * The escaping is the sharper edge. A template literal eats a lone backslash, so
@@ -49,7 +49,7 @@ const {
 } = await importFromRepo('packages/sea-runtime/dist/windows-elevation.js')
 
 /**
- * Inputs are only placeholders for the SHAPE of the script — the generators
+ * Inputs are only placeholders for the SHAPE of the script: the generators
  * interpolate them, so the values never change whether it parses. They do carry
  * a quote and a backslash on purpose, since those are what the escaping has to
  * survive.
@@ -78,7 +78,7 @@ const scripts = {
     exePath: AWKWARD
   }),
   // These four are built inline as `[...].join('; ')`, which is how a `try` and
-  // its `catch` ended up separated by a semicolon and rejected outright — found
+  // its `catch` ended up separated by a semicolon and rejected outright. Found
   // by parsing, not by review.
   'install-dir-cleanup.ps1': buildInstallDirCleanupScript("C:\\Program Files\\PrintStream's Bridge", 'printstream-bridge'),
   'user-session-tray.ps1': buildUserSessionTrayScript(AWKWARD, 'tray run', "PrintStream's TrayLaunch"),

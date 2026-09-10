@@ -10,8 +10,8 @@
  * Byte-level work here takes `Uint8Array` and a `DataView`, not `Buffer`: Node's Buffer IS a
  * Uint8Array, so the api passes one straight through, while the browser has no Buffer at all.
  */
+import { ModelImportError } from './imported-mesh.js'
 import type { ImportedMesh, ImportedMeshBounds } from './imported-mesh.js'
-import type { StagedImportFormat } from '../slicing.js'
 
 /** A DataView over exactly this view's bytes, a Uint8Array may be a window onto a larger buffer. */
 function viewOf(bytes: Uint8Array): DataView {
@@ -22,33 +22,12 @@ function viewOf(bytes: Uint8Array): DataView {
 export const MAX_IMPORT_TRIANGLES = 5_000_000
 
 /**
- * Weld exact-duplicate vertex positions into shared indexed vertices (dropping triangles
- * degenerate after the weld). STL is triangle soup by definition and OCCT tessellates each
- * BRep face independently, so without this every imported mesh reaches the 3MF as an
- * index-level soup, and BambuStudio's slicer chains layer contours by vertex/edge INDEX
- * (`chain_open_polylines_exact`), dumping a soup mesh entirely into its 2mm proximity
- * gap-closing heuristic. That mis-stitches small features: zero-clearance inlays (text
- * pockets) print fused/unfilled, looking like the wall generator is broken. Exact equality
- * is the right tolerance: duplicated corners are written from the same source floats.
- */
-
-/**
- * Weld exact-duplicate vertex positions into shared indexed vertices (dropping triangles
- * degenerate after the weld). STL is triangle soup by definition and OCCT tessellates each
- * BRep face independently, so without this every imported mesh reaches the 3MF as an
- * index-level soup, and BambuStudio's slicer chains layer contours by vertex/edge INDEX
- * (`chain_open_polylines_exact`), dumping a soup mesh entirely into its 2mm proximity
- * gap-closing heuristic. That mis-stitches small features: zero-clearance inlays (text
- * pockets) print fused/unfilled, looking like the wall generator is broken. Exact equality
- * is the right tolerance: duplicated corners are written from the same source floats.
- */
-/**
  * Translate a staged import so its XY bounding-box centre sits at the origin and its lowest point
  * at z = 0, returning the offset removed. Mutates `mesh` (and every part) in place.
  *
  * WHY. An editor instance's `position` places its LOCAL ORIGIN, and the rotate gizmo attaches to a
  * rotor at that origin, so rotation happens about the origin. A file's own coordinates put that
- * origin wherever the exporter did — commonly a corner, or centred in XY with z running 0..height —
+ * origin wherever the exporter did (commonly a corner, or centred in XY with z running 0..height),
  * and the object then rotates about a corner or an edge instead of about itself. Placement code
  * compensates by offsetting `position` by the mesh centroid (`stagedFootprint`), which lands the
  * model correctly but leaves the ORIGIN, and therefore the pivot, displaced by exactly that
@@ -56,7 +35,7 @@ export const MAX_IMPORT_TRIANGLES = 5_000_000
  *
  * ONLY FOR A WHOLE OBJECT. An added PART is centred on every axis instead
  * (`primitivePartSoup`), because `addedPartDropPosition` places it by a single point relative to
- * its host — drop a helper volume at the host's centre and flooring its Z would bury it half its
+ * its host: drop a helper volume at the host's centre and flooring its Z would bury it half its
  * height too high. So the caller states which it is staging (`ImportNormalization`); this is not a
  * blanket rule the store can apply on its own.
  *
@@ -86,6 +65,20 @@ export function rebaseImportedMesh(mesh: ImportedMesh): { offset: { x: number; y
   return { offset }
 }
 
+/**
+ * Weld exact-duplicate vertex positions into shared indexed vertices (dropping triangles
+ * degenerate after the weld). STL is triangle soup by definition and OCCT tessellates each
+ * BRep face independently, so without this every imported mesh reaches the 3MF as an
+ * index-level soup, and BambuStudio's slicer chains layer contours by vertex/edge INDEX
+ * (`chain_open_polylines_exact`), dumping a soup mesh entirely into its 2mm proximity
+ * gap-closing heuristic. That mis-stitches small features: zero-clearance inlays (text
+ * pockets) print fused/unfilled, looking like the wall generator is broken. Exact equality
+ * is the right tolerance: duplicated corners are written from the same source floats.
+ *
+ * Every format that arrives as soup gets this, not just STL: OBJ and glTF index their own
+ * vertices but routinely repeat a position per smoothing group or per UV seam, and an AMF's
+ * per-volume vertex lists are independent of each other.
+ */
 export function weldImportedMeshVertices(mesh: ImportedMesh): ImportedMesh {
   const vertexCount = Math.floor(mesh.positions.length / 3)
   const keyToIndex = new Map<string, number>()
@@ -123,38 +116,20 @@ export function weldImportedMeshVertices(mesh: ImportedMesh): ImportedMesh {
  * JS-side positions/indices amplification, otherwise a small STEP file can
  * tessellate into a multi-gigabyte mesh and exhaust the process (an authenticated
  * memory-exhaustion vector via /imports and /:id/mesh).
- */
-
-/**
- * Reject a mesh whose triangle count exceeds the import budget. The STL parsers
- * cap their input directly; STEP is tessellated by OCCT (WASM) with no inherent
- * output bound, so its produced triangle count must be checked here before the
- * JS-side positions/indices amplification, otherwise a small STEP file can
- * tessellate into a multi-gigabyte mesh and exhaust the process (an authenticated
- * memory-exhaustion vector via /imports and /:id/mesh).
+ *
+ * The same applies to every format whose triangle count is not stated in a header the
+ * parser can check up front: OBJ and AMF are counted as they are read, and a glTF's
+ * accessor counts are attacker-supplied, so each calls this before amplifying.
  */
 export function assertImportTriangleBudget(triangleCount: number): void {
   if (triangleCount > MAX_IMPORT_TRIANGLES) {
-    throw new Error('Model is too large to import')
+    throw new ModelImportError('Model is too large to import')
   }
 }
 
-/** Detect the import format from a file name extension. Returns null for unsupported types. */
-
-/** Detect the import format from a file name extension. Returns null for unsupported types. */
-export function detectImportFormat(fileName: string): StagedImportFormat | null {
-  const lower = fileName.toLowerCase()
-  if (lower.endsWith('.stl')) return 'stl'
-  if (lower.endsWith('.step') || lower.endsWith('.stp')) return 'step'
-  if (lower.endsWith('.3mf')) return '3mf'
-  return null
-}
-
-/** Parse the supported formats to a mesh. 3MF extraction is handled by the caller (object-aware). */
-
 export function parseStlMesh(bytes: Uint8Array): ImportedMesh {
   const mesh = isBinaryStl(bytes) ? parseBinaryStl(bytes) : parseAsciiStl(bytes)
-  if (mesh.indices.length === 0) throw new Error('STL contained no triangles')
+  if (mesh.indices.length === 0) throw new ModelImportError('STL contained no triangles')
   return weldImportedMeshVertices(mesh)
 }
 
@@ -171,7 +146,7 @@ function isBinaryStl(bytes: Uint8Array): boolean {
 function parseBinaryStl(bytes: Uint8Array): ImportedMesh {
   const view = viewOf(bytes)
   const triangles = view.getUint32(80, true)
-  if (triangles > MAX_IMPORT_TRIANGLES) throw new Error('STL is too large to import')
+  if (triangles > MAX_IMPORT_TRIANGLES) throw new ModelImportError('STL is too large to import')
   const positions: number[] = []
   const indices: number[] = []
   const accumulator = new BoundsAccumulator()
@@ -207,7 +182,7 @@ function parseAsciiStl(bytes: Uint8Array): ImportedMesh {
     indices.push(positions.length / 3)
     positions.push(x, y, z)
     accumulator.add(x, y, z)
-    if (indices.length > MAX_IMPORT_TRIANGLES * 3) throw new Error('STL is too large to import')
+    if (indices.length > MAX_IMPORT_TRIANGLES * 3) throw new ModelImportError('STL is too large to import')
   }
   if (positions.length % 9 !== 0) {
     // Drop a trailing partial triangle rather than emitting a malformed mesh.

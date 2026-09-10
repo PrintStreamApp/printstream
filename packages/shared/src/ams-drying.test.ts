@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
+  AMS_DRYING_FILAMENT_TYPES,
   amsDryingTemperatureRange,
   assessAmsDryingRisk,
   clampDryingTemperature,
@@ -9,6 +10,8 @@ import {
   formatAmsDryingRiskLabel,
   maxSafeAmsDryingTemperature,
   normalizeAmsDryingFilamentType,
+  recommendedAmsDryingDurationHours,
+  recommendedAmsDryingTemperature,
   validateAmsDryingStart
 } from './ams-drying.js'
 import type { AmsSlot, AmsUnit } from './printer-contracts.js'
@@ -70,8 +73,14 @@ test('maxSafeAmsDryingTemperature reflects the Bambu heat-distortion limits', ()
 })
 
 test('dryingPresetForFilament carries the official Bambu idle-cycle values', () => {
-  assert.deepEqual(dryingPresetForFilament('PLA'), { temperature: 45, durationHours: 12, coolingTemp: 45 })
-  assert.deepEqual(dryingPresetForFilament('TPU'), { temperature: 75, durationHours: 18, coolingTemp: 40 })
+  assert.deepEqual(dryingPresetForFilament('PLA'), {
+    temperature: 45, printingTemperature: 45, durationHours: 12, coolingTemp: 45
+  })
+  // TPU carries an AMS 2 Pro duration because Bambu's differs there (12h against the HT's 18h);
+  // PLA above carries none, because Bambu gives it one figure for both.
+  assert.deepEqual(dryingPresetForFilament('TPU'), {
+    temperature: 75, printingTemperature: 45, durationHours: 18, amsProDurationHours: 12, coolingTemp: 40
+  })
   assert.equal(dryingPresetForFilament('ABS').temperature, 80)
   // Family variants share the base material's cycle.
   assert.deepEqual(dryingPresetForFilament('PETG-CF'), dryingPresetForFilament('PETG'))
@@ -229,4 +238,125 @@ test('defaultAmsDryingProfile falls back to the last dried profile when the unit
   const profile = defaultAmsDryingProfile(unit)
   assert.equal(profile.filamentType, 'PETG')
   assert.equal(profile.temperature, 65)
+})
+
+test('drying mid-print suggests Bambu\'s lower printing temperature', () => {
+  // The eight materials whose printing column differs from their idle one. TPU is the extreme:
+  // 75C idle, 45C while printing, and its heat-distortion point is 45C.
+  assert.equal(recommendedAmsDryingTemperature('TPU', { printing: true }), 45)
+  assert.equal(recommendedAmsDryingTemperature('PETG', { printing: true }), 55)
+  assert.equal(recommendedAmsDryingTemperature('PVA', { printing: true }), 70)
+  assert.equal(recommendedAmsDryingTemperature('BVOH', { printing: true }), 45)
+  assert.equal(recommendedAmsDryingTemperature('PP', { printing: true }), 50)
+  assert.equal(recommendedAmsDryingTemperature('ABS', { printing: true }), 75)
+  assert.equal(recommendedAmsDryingTemperature('HIPS', { printing: true }), 75)
+  assert.equal(recommendedAmsDryingTemperature('SUPPORT', { printing: true }), 50)
+
+  // Materials Bambu does NOT lower must not be lowered here either.
+  for (const type of ['PLA', 'ASA', 'PA', 'PC', 'PE', 'PET-CF', 'PPS']) {
+    assert.equal(
+      recommendedAmsDryingTemperature(type, { printing: true }),
+      dryingPresetForFilament(type).temperature,
+      `${type} should keep its idle temperature while printing`
+    )
+  }
+})
+
+test('the idle suggestion is unchanged by the printing-state work', () => {
+  for (const type of ['PLA', 'PETG', 'TPU', 'PVA', 'ABS', 'BVOH', 'SUPPORT']) {
+    assert.equal(recommendedAmsDryingTemperature(type), dryingPresetForFilament(type).temperature)
+    assert.equal(recommendedAmsDryingTemperature(type, { printing: false }), dryingPresetForFilament(type).temperature)
+  }
+})
+
+test('a printing suggestion never exceeds the material heat-distortion point', () => {
+  // Studio clamps its printing value by softening and heat-distortion. On Bambu's current data the
+  // clamp never binds, so this asserts the invariant rather than a specific number: if a future
+  // vendored value rises above the limit, the suggestion must come down, not the limit go up.
+  for (const type of AMS_DRYING_FILAMENT_TYPES) {
+    assert.ok(
+      recommendedAmsDryingTemperature(type, { printing: true }) <= maxSafeAmsDryingTemperature(type),
+      `${type} printing suggestion exceeds its heat-distortion limit`
+    )
+  }
+})
+
+test('defaultAmsDryingProfile ranks the safest material by the printing figure while printing', () => {
+  // PETG (65 idle / 55 printing) and ABS (80 / 75) loaded together on an AMS HT. PETG is the
+  // safest either way, but the number offered has to be the printing one.
+  const unit = {
+    unitId: 0,
+    type: 'ams-ht',
+    supportDrying: true,
+    slots: [
+      { slot: 0, filamentType: 'PETG', occupied: true },
+      { slot: 1, filamentType: 'ABS', occupied: true }
+    ]
+  } as unknown as Parameters<typeof defaultAmsDryingProfile>[0]
+
+  assert.equal(defaultAmsDryingProfile(unit).temperature, 65)
+  assert.equal(defaultAmsDryingProfile(unit, { printing: true }).temperature, 55)
+  assert.equal(defaultAmsDryingProfile(unit, { printing: true }).filamentType, 'PETG')
+  // The duration is the same in both states; Bambu's time array does not vary by printer state.
+  assert.equal(
+    defaultAmsDryingProfile(unit, { printing: true }).durationHours,
+    defaultAmsDryingProfile(unit).durationHours
+  )
+})
+
+test('the printing suggestion is clamped into the AMS 2 Pro band like the idle one', () => {
+  const unit = {
+    unitId: 0,
+    type: 'ams-2-pro',
+    supportDrying: true,
+    slots: [{ slot: 0, filamentType: 'PA', occupied: true }]
+  } as unknown as Parameters<typeof defaultAmsDryingProfile>[0]
+
+  // PA is 85C in both columns; the AMS 2 Pro heater stops at 65, which is also Bambu's own
+  // N3F figure for it.
+  assert.equal(defaultAmsDryingProfile(unit).temperature, 65)
+  assert.equal(defaultAmsDryingProfile(unit, { printing: true }).temperature, 65)
+})
+
+test('the drying duration follows the hardware, in BOTH directions', () => {
+  // Not a monotonic rule, which is why the figures are stored rather than derived: the cooler AMS
+  // 2 Pro takes LONGER for ABS/ASA/PC and SHORTER for TPU/PVA.
+  assert.equal(recommendedAmsDryingDurationHours('ABS', 'ams-ht'), 8)
+  assert.equal(recommendedAmsDryingDurationHours('ABS', 'ams-2-pro'), 12)
+  assert.equal(recommendedAmsDryingDurationHours('PC', 'ams-2-pro'), 12)
+  assert.equal(recommendedAmsDryingDurationHours('TPU', 'ams-ht'), 18)
+  assert.equal(recommendedAmsDryingDurationHours('TPU', 'ams-2-pro'), 12)
+  assert.equal(recommendedAmsDryingDurationHours('PVA', 'ams-2-pro'), 12)
+
+  // A material Bambu gives one figure for reads the same on both.
+  for (const type of ['PLA', 'PETG', 'PA', 'BVOH', 'HIPS', 'PP']) {
+    assert.equal(
+      recommendedAmsDryingDurationHours(type, 'ams-2-pro'),
+      recommendedAmsDryingDurationHours(type, 'ams-ht'),
+      `${type} should not vary by hardware`
+    )
+  }
+
+  // An unknown unit type gets the conservative AMS 2 Pro answer, like the temperature band does.
+  assert.equal(recommendedAmsDryingDurationHours('ABS', 'ams'), 12)
+})
+
+test('defaultAmsDryingProfile pairs the hardware temperature with the hardware duration', () => {
+  const abs = (type: 'ams-ht' | 'ams-2-pro') => ({
+    unitId: 0,
+    type,
+    supportDrying: true,
+    slots: [{ slot: 0, filamentType: 'ABS', occupied: true }]
+  } as unknown as Parameters<typeof defaultAmsDryingProfile>[0])
+
+  // The pairing is the point: an AMS 2 Pro used to be offered Bambu's 65C with the 85C machine's
+  // 8h runtime, which is neither of Bambu's two recommendations.
+  assert.deepEqual(
+    { t: defaultAmsDryingProfile(abs('ams-ht')).temperature, h: defaultAmsDryingProfile(abs('ams-ht')).durationHours },
+    { t: 80, h: 8 }
+  )
+  assert.deepEqual(
+    { t: defaultAmsDryingProfile(abs('ams-2-pro')).temperature, h: defaultAmsDryingProfile(abs('ams-2-pro')).durationHours },
+    { t: 65, h: 12 }
+  )
 })

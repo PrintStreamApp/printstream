@@ -31,6 +31,9 @@ apps/bridge/data/
 apps/bridge/apps/bridge/data/
 # Bridge/demo runtime state written relative to CWD when a process is launched from `apps/`
 # rather than its own workspace. Holds an installationId + runtimeToken, which are secrets.
+# The known cause (a wrong hop count in the demo bootstrap's `repoRoot`) was fixed 2026-09-09 and
+# the stray directory deleted, but this stays: the two entries above are the same class of bug from
+# other paths, and the cost of being wrong here is committing a live credential.
 apps/data/
 apps/bridge/release/
 apps/bridge/.cache/
@@ -53,7 +56,7 @@ docs/current-work-status.md
 
 # Hand-made backups of the developer-local files above. Ignored by pattern so a
 # `cp x x.bak` before a local experiment can't be swept into a commit by
-# `git add -A` — the original is already ignored, but the copy was not.
+# `git add -A`: the original is already ignored, but the copy was not.
 *.bak
 
 # TypeScript incremental build info (per-package, kept out of git/CI)

@@ -23,7 +23,7 @@
     "PGPASSWORD": "postgres"
     // CLIENT_ORIGIN intentionally not set here: the devcontainer `${localEnv:VAR:default}`
     // syntax splits on ":" and truncates a colon-containing default, so
-    // "http://localhost:5173" collapsed to "http" — an invalid URL that broke
+    // "http://localhost:5173" collapsed to "http", an invalid URL that broke
     // `new URL()` in the passkey relying-party lookup (and any CLIENT_ORIGIN consumer).
     // CLIENT_ORIGIN now comes from .env (e.g. https://dev.printstream.example.com for the nginx
     // overlay), falling back to the env.ts default http://localhost:5173 when unset.

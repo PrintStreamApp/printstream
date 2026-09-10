@@ -100,8 +100,8 @@ async function synchronizeSchemaWithBaseline(message) {
 /**
  * Collapses a pre-squash migration history onto `00000000000000_init`.
  *
- * Mirrors `reconcileMigrationHistory` in `apps/api/src/lib/apply-migrations.ts`
- * — the native (SEA) build has no Prisma CLI and runs that one; the Docker/dev
+ * Mirrors `reconcileMigrationHistory` in `apps/api/src/lib/apply-migrations.ts`:
+ * the native (SEA) build has no Prisma CLI and runs that one; the Docker/dev
  * stack runs this. Must happen BEFORE `migrate deploy`, because a leftover row
  * for a retired migration makes the CLI refuse to do anything (P3009) rather
  * than report something this script could recover from.

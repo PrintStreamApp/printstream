@@ -16,7 +16,7 @@ PrintStream is a web app for monitoring and controlling Bambu Lab printers. Open
 
 - **Live dashboard**: every printer at a glance, with progress, temperatures, ETA, layer count, AMS contents, camera view, and error alerts.
 - **Full control**: pause, resume, stop, lights, calibration, skip objects mid-print, AMS and spool management.
-- **Shared print library**: upload 3MF / G-code / STL / STEP files into folders, browse plates and previews, keep version history, and restore from a recycle bin.
+- **Shared print library**: upload 3MF / G-code / STL / STEP / OBJ / glTF / AMF files into folders, browse plates and previews, keep version history, and restore from a recycle bin.
 - **Send prints anywhere**: pick a file, map filaments to AMS slots, and queue it to one or many printers, with automatic compatibility checks (printer model, plate type, nozzle).
 - **Slice in your browser** *(optional)*: a slicer service runs real Bambu Studio / OrcaSlicer versions server-side, so you can go from plain 3MF to printable file without leaving the app.
 - **3D editor** *(optional)*: arrange models, edit supports and materials, paint colors, and save multi-plate projects right in the browser.

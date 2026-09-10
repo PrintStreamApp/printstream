@@ -384,6 +384,24 @@ export function getPrinterChamberTemperatureMax(model: PrinterModel): number {
   return model === 'X1E' ? 60 : 65
 }
 
+/**
+ * Models whose AMS chain can be told to renumber itself ("Arrange AMS order").
+ *
+ * A STATIC table rather than a parsed wire flag, because BambuStudio's is static too: it reads
+ * `support_ams_settings_reorder` out of its bundled `resources/printers/<code>.json`, and the only
+ * file that sets it is `N9.json`, i.e. the A2L. Nothing in the MQTT report carries it, so there is
+ * no runtime signal to prefer over this the way `getPrinterPrintStartOptions` prefers one.
+ *
+ * Deliberately narrow: sending `ams_reset` to a machine that does not implement it disconnects
+ * every AMS and offers nothing in return, so an unknown model must not get the affordance.
+ */
+const AMS_SETTINGS_REORDER_MODELS: ReadonlySet<PrinterModel> = new Set(['A2L'])
+
+/** Whether this model offers "Arrange AMS order" (the `ams_reset` command). */
+export function supportsAmsSettingsReorder(model: PrinterModel): boolean {
+  return AMS_SETTINGS_REORDER_MODELS.has(model)
+}
+
 export const PRINTER_EXTRUDER_CONTROL_MIN_TEMP_C = 170
 
 export function isPrinterActiveJobStage(stage: PrinterStage | null | undefined): boolean {

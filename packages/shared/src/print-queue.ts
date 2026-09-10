@@ -673,7 +673,14 @@ export const queueDispatchSchema = z.object({
    * unattended sweep over idle printers allows the shortfall unconditionally, since there is
    * nobody there to answer and a stalled queue is worse than a print that pauses when dry.
    */
-  allowInsufficientFilament: z.boolean().optional()
+  allowInsufficientFilament: z.boolean().optional(),
+  /**
+   * Consent to start with a material Bambu forbids on this hardware (see `filament-blacklist.ts`).
+   * Carried for the same reason as the flag above, and NOT set by the unattended sweep: a
+   * shortfall makes a print pause, whereas an abrasive through the wrong nozzle damages the
+   * printer, so an unattended queue must refuse it rather than assume consent.
+   */
+  allowBlacklistedFilament: z.boolean().optional()
 }).refine((value) => !value.amsMapping || !!value.printerId, {
   message: 'Choose a printer when overriding the AMS slots'
 })

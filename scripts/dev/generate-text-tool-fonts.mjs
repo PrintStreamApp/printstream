@@ -36,7 +36,9 @@ const LICENSE_SOURCE = '/usr/share/doc/fonts-dejavu-core/copyright'
 const CHARSET = [
   ...Array.from({ length: 0x7e - 0x20 + 1 }, (_unused, i) => String.fromCodePoint(0x20 + i)),
   ...Array.from({ length: 0xff - 0xa0 + 1 }, (_unused, i) => String.fromCodePoint(0xa0 + i)),
-  '–', '—', '‘', '’', '“', '”', '•', '…',
+  // These are GLYPHS to bake into the face, not prose, so the house style's ban on the em dash
+  // does not reach them: dropping it here would stop the text tool engraving one at all.
+  '–', '—', '‘', '’', '“', '”', '•', '…', // em-dash-ok
   '€', '™', '°', '±', '×', '÷'
 ]
 

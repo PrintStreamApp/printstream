@@ -1,6 +1,7 @@
 /**
  * The plate-keyed records that must follow the plates: what survives on a re-rendered `<plate>`
- * block, and how `slice_info.config`'s plate numbers are kept in step.
+ * block, and how plate-number-keyed sidecars are kept in step. `sourcePlateMapping`
+ * also remaps `custom_gcode_per_layer.xml` and the positional prime-tower arrays.
  *
  * OWNS the per-plate key policy. `renderArrangedModelSettingsPlates` builds each plate block from
  * the `SceneEdit`, and `replaceModelSettingsPlates` deletes every source block before inserting
@@ -20,25 +21,36 @@
  * (`BambuStudio.cpp:6866` applies the plate config on top of the loaded settings). An unknown key
  * here is not inert data, it is a per-plate override that can silently beat the user's own choice.
  *
- *  - CARRIED: settings the user made that we never author and that no edit invalidates. `locked`,
- *    `print_sequence` (per-plate print-by-object) and `spiral_mode` (vase mode).
+ *  - CARRIED: settings the user made that THIS EDIT does not author and that no edit invalidates.
+ *    `locked`, `print_sequence` (per-plate print-by-object) and `spiral_mode` (vase mode). The
+ *    editor authors all three now, so the carry is the fallback for an edit that does not mention
+ *    the key at all (an older client, a hand-built request) rather than the only source. An edit
+ *    that says "same as global" says so with null, which is NOT the same as staying silent: the
+ *    carry would put the source's value straight back over the user's choice. `authoredPlateKeys`
+ *    is how the caller draws that line.
  *  - FILAMENT-SCOPED: carried only while the filament list is untouched, because their values are
  *    filament INDICES. `filament_maps` / `filament_volume_maps` are the nozzle grouping;
  *    `filament_map_mode` goes with them or a plate is pinned to Manual with no map, which makes the
  *    engine fall back to the project-global map rather than to auto (`PartPlate.cpp:266-289`); and
  *    the print-sequence lists hold filament ids as their VALUES, which is why the project-level copy
  *    of the same key is re-keyed value-wise rather than remapped positionally.
- *  - NEVER CARRIED: `bed_type`, because we author the plate type as the project-global
- *    `curr_bed_type` and the engine prefers a plate's own value over it (`PartPlate.cpp:619-625`),
- *    so carrying a stale one silently outlives the user's Settings-tab change. `plater_id` and
+ *  - NEVER CARRIED: `bed_type`. The engine prefers a plate's own value over the project-global
+ *    `curr_bed_type` we author (`PartPlate.cpp:619-625`), so carrying a stale one silently outlives
+ *    the user's change. It is now AUTHORED instead -- the editor models a per-plate bed type, so the
+ *    value is written from the edit or not at all, and there is nothing left to carry. `plater_id` and
  *    `plater_name` are ours to write. The slice-OUTPUT pointers (`gcode_file` and the thumbnails)
  *    name a slice we cannot tell we invalidated, so claiming a stale one is worse than claiming
  *    none, which is the same reasoning that drops `slice_info`.
  */
 
+import { canonicalCurrBedType } from '../plate-types.js'
+import type { SceneEditPlate } from '../slicing.js'
+import { escapeXmlAttribute } from './xml-write.js'
+
 /**
- * Settings the user chose that we never author and that an arrangement edit cannot invalidate.
- * An allow-list: see the module header for why an unknown key here is not safe to carry.
+ * Settings the user chose that an arrangement edit cannot invalidate, carried when the edit itself
+ * does not author them. An allow-list: see the module header for why an unknown key here is not
+ * safe to carry, and why an authored key must win over the carried one.
  */
 const CARRIED_PLATE_KEYS: ReadonlySet<string> = new Set(['locked', 'print_sequence', 'spiral_mode'])
 
@@ -55,6 +67,46 @@ const FILAMENT_SCOPED_PLATE_KEYS: ReadonlySet<string> = new Set([
   'other_layers_print_sequence',
   'other_layers_print_sequence_nums'
 ])
+
+/**
+ * What one plate of a {@link SceneEdit} authors, and which keys that suppresses from the carry.
+ *
+ * `allowBedType` is the edit's top-level `plateType` being present. Without it the plates' own
+ * `plateType` values are an older client's copy of the GLOBAL rather than overrides, so no
+ * `bed_type` is authored and none is carried either (the global is written to
+ * `project_settings.config` as before).
+ *
+ * The tri-state is the whole point, and it is easy to collapse by accident: `undefined` means the
+ * edit does not mention the key, so the source's value is carried; `null` means the user chose
+ * "same as global", so nothing is written AND the carry is suppressed. Treating null as undefined
+ * puts the source's value straight back over the user's choice.
+ */
+export function authoredPlateMetadata(
+  plate: Pick<SceneEditPlate, 'plateType' | 'printSequence' | 'spiralMode' | 'locked'>,
+  options: { allowBedType: boolean }
+): { entries: PlateMetadataEntry[]; keys: ReadonlySet<string> } {
+  const entries: PlateMetadataEntry[] = []
+  const keys = new Set<string>()
+  const author = (key: string, value: string | null): void => {
+    keys.add(key)
+    if (value != null) entries.push({ key, rawValue: escapeXmlAttribute(value) })
+  }
+
+  if (options.allowBedType && plate.plateType !== undefined) {
+    author('bed_type', canonicalCurrBedType(plate.plateType))
+  }
+  if (plate.printSequence !== undefined) author('print_sequence', plate.printSequence)
+  // `true`/`false`, matching what BambuStudio itself writes. Its `spiral_mode` line streams a bare
+  // `getBool()` (`bbs_3mf.cpp:8376`), which looks like it would emit `1`/`0` -- but `std::boolalpha`
+  // was inserted into the SAME stream by the `locked` line above it (`:8334`) and is sticky, and
+  // `noboolalpha` appears nowhere in the file, so it emits `true`/`false` and its boolalpha reader
+  // (`:4652`) takes it back. Read the stream's state, not the one expression.
+  if (plate.spiralMode !== undefined) author('spiral_mode', plate.spiralMode == null ? null : String(plate.spiralMode))
+  // Not a tri-state (no global lock exists), so only a true is worth writing; absence is unlocked.
+  if (plate.locked !== undefined) author('locked', plate.locked ? 'true' : null)
+
+  return { entries, keys }
+}
 
 /** One `<metadata key value/>` child of a `<plate>`, as it appeared in the source. */
 export interface PlateMetadataEntry {
@@ -95,13 +147,20 @@ export function parseSourcePlateMetadata(modelSettingsXml: string): Map<number, 
  *
  * `filamentSetStable` false drops the filament-scoped keys; see the module header for why they are
  * not re-keyed instead.
+ *
+ * `authoredKeys` names what the EDIT writes for this plate, and those entries are dropped so the
+ * renderer's value is the only one in the block. Passing an empty set is what an edit that mentions
+ * none of them wants: the source's own settings survive untouched, which is the pre-per-plate
+ * behaviour and what an older client still relies on.
  */
 export function preservedPlateMetadata(
   entries: readonly PlateMetadataEntry[] | undefined,
-  filamentSetStable: boolean
+  filamentSetStable: boolean,
+  authoredKeys: ReadonlySet<string> = new Set()
 ): PlateMetadataEntry[] {
   if (!entries) return []
   return entries.filter((entry) => {
+    if (authoredKeys.has(entry.key)) return false
     if (CARRIED_PLATE_KEYS.has(entry.key)) return true
     if (FILAMENT_SCOPED_PLATE_KEYS.has(entry.key)) return filamentSetStable
     return false

@@ -47,6 +47,8 @@ import {
   getPrinterChamberTemperatureMax,
   getPauseAvailability,
   getPrinterControlCapabilities,
+  isPrinterActiveJobStage,
+  supportsAmsSettingsReorder,
   printerModelHasDualNozzles,
   getRetryAmsFilamentChangeAvailability,
   isDirectPrintableFileName,
@@ -660,6 +662,8 @@ function getPrinterCommandPermission(
       return PRINTERS_MANAGE_SETTINGS_SCOPE
     case 'setAmsUserSettings':
     case 'setAmsFilamentBackup':
+    case 'switchAmsFirmware':
+    case 'resetAmsOrder':
     case 'startAmsDrying':
     case 'stopAmsDrying':
     case 'rescanAmsSlot':
@@ -738,6 +742,10 @@ function describePrinterCommandAudit(
       return { action: 'set-ams-settings', resource: 'ams', summary: 'Updated AMS user settings' }
     case 'setAmsFilamentBackup':
       return { action: 'set-ams-filament-backup', resource: 'ams', summary: `Turned AMS filament backup ${command.enabled ? 'on' : 'off'}` }
+    case 'switchAmsFirmware':
+      return { action: 'switch-ams-firmware', resource: 'ams', summary: `Switched the AMS chain to firmware ${command.firmwareId}` }
+    case 'resetAmsOrder':
+      return { action: 'reset-ams-order', resource: 'ams', summary: 'Reset the AMS id sequence' }
     case 'startAmsDrying':
       return { action: 'start-ams-drying', resource: 'ams', summary: 'Started AMS filament drying' }
     case 'stopAmsDrying':
@@ -803,6 +811,8 @@ function describePrinterCommandAuditMetadata(
       return { distanceMm: command.distanceMm, extruderId: command.extruderId }
     case 'setAmsFilamentBackup':
       return { enabled: command.enabled }
+    case 'switchAmsFirmware':
+      return { firmwareId: command.firmwareId }
     case 'startAmsDrying':
       return {
         amsId: command.amsId,
@@ -981,6 +991,19 @@ function validatePrinterControlCommand(
       return
     case 'unloadExternalSpool':
       requirePrinterActionAvailability(getExternalSpoolUnloadAvailability(status, command.amsId))
+      return
+    case 'switchAmsFirmware':
+      throw badRequest(
+        'AMS type switching is unavailable until PrintStream can verify that no filament is loaded in the extruder.'
+      )
+    case 'resetAmsOrder':
+      requireLiveControlConnection(status, 'Arranging AMS order')
+      if (!supportsAmsSettingsReorder(normalizedModel)) {
+        throw badRequest('This printer does not support arranging AMS order.')
+      }
+      if (isPrinterActiveJobStage(status?.stage)) {
+        throw badRequest('Finish or stop the print before resetting the AMS id sequence.')
+      }
       return
     default:
       return
@@ -1486,11 +1509,23 @@ printersRouter.get('/:id/storage/plates', requireRequestPermission(PRINTER_STORA
         name: plate.name,
         hasThumbnail: plate.thumbnailFile != null,
         plateType: plate.plateType,
+        // The plate's OWN settings, beside its resolved `plateType`. Repeated here for the same
+        // reason as the note below: this response is projected field by field, so a per-plate
+        // setting the editor writes is invisible when the same file is printed off the printer's
+        // own SD card unless it is named here too.
+        bedTypeOverride: plate.bedTypeOverride,
+        printSequence: plate.printSequence,
+        spiralMode: plate.spiralMode,
+        locked: plate.locked,
         nozzleSizes: plate.nozzleSizes,
         filaments: plate.filaments,
-        objects: plate.objects
+        objects: plate.objects,
+        // The Filament Track Switch arrangement hint reads this; see the note below on why every
+        // index field has to be repeated here.
+        optimalAssignment: plate.optimalAssignment
       })),
       projectFilaments: index.projectFilaments,
+      projectPlateType: index.projectPlateType,
       compatiblePrinterModels: index.compatiblePrinterModels,
       supportFilamentIds: index.supportFilamentIds,
       printerProfileName: index.printerProfileName,
@@ -1632,7 +1667,8 @@ printersRouter.post('/:id/storage/print', requireRequestPermission(PRINTS_DISPAT
         amsMapping: parsed.data.amsMapping,
         allowIncompatibleFilament: parsed.data.allowIncompatibleFilament,
         allowFilamentTrackSwitchMismatch: parsed.data.allowFilamentTrackSwitchMismatch,
-        allowInsufficientFilament: parsed.data.allowInsufficientFilament
+        allowInsufficientFilament: parsed.data.allowInsufficientFilament,
+        allowBlacklistedFilament: parsed.data.allowBlacklistedFilament
       })
     } catch (error) {
       // Mirror the library-print pre-flight logging: a rejection here starts no
@@ -1831,4 +1867,3 @@ export function resolvePrinterStorageJobName(
     ? getRemotePrintTarget(path.basename(fileName), sourceKind, plate, plateName, { isMultiPlate }).subtaskName
     : fallbackJobName
 }
-

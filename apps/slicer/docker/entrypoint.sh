@@ -11,14 +11,14 @@
 # - The engines directory (dirname of `$SLICER_TARGETS_FILE`, /data/engines) is a BIND
 #   mount in the shipped compose file, so the operator chooses which disk holds several
 #   hundred MB per engine. A bind mount HIDES the image's `chown`, and Compose creates a
-#   missing bind source as root:root — so on a fresh install the engine downloads fail
+#   missing bind source as root:root, so on a fresh install the engine downloads fail
 #   with EACCES. That failure is quiet by design (installing engines is best-effort and
 #   must never block boot), which means without this the container reports healthy and
 #   simply never gets an engine: slicing is unavailable with only a warning in the log.
 #
 # To self-heal both (instead of requiring an operator to fix ownership by hand), we start
 # as root, fix ownership, then drop to `node` via gosu. Each check is guarded so the
-# recursive chown only runs when the directory is actually mis-owned — the engines tree is
+# recursive chown only runs when the directory is actually mis-owned: the engines tree is
 # multiple GB once populated, and chowning it on every boot would be a real cost.
 set -e
 
@@ -41,5 +41,5 @@ if [ "$(id -u)" = "0" ]; then
   exec gosu node "$@"
 fi
 
-# Already unprivileged (e.g. an explicit `user:` override) — just run the command.
+# Already unprivileged (e.g. an explicit `user:` override); just run the command.
 exec "$@"

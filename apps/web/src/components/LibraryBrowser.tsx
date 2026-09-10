@@ -13,7 +13,7 @@ import React, { useEffect, useRef, useState, type DragEvent, type MouseEvent, ty
 import LinkOffRoundedIcon from '@mui/icons-material/LinkOffRounded'
 import StarRoundedIcon from '@mui/icons-material/StarRounded'
 import { AspectRatio, Box, Checkbox, Chip, CircularProgress, Stack, Tooltip, Typography } from '@mui/joy'
-import { formatBytes, type LibraryFile, type LibraryFolder } from '@printstream/shared'
+import { formatBytes, isMeshLibraryFileKind, type LibraryFile, type LibraryFolder } from '@printstream/shared'
 import { buildApiUrl } from '../lib/apiUrl'
 import { getMeshThumbnailProvider, getSceneThumbnailProvider } from '../lib/modelThumbnailRegistry'
 import { bambuMaterialFromPresetName, readableTextColor } from '../data/bambuColors'
@@ -24,6 +24,7 @@ import { formatLibraryFileKindLabel, formatLibraryFileName } from '../lib/librar
 import {
   buildCompactFileTags,
   buildFullFileTags,
+  isPreviewOnlyLibraryFile,
   type FileTagDescriptor,
   type FileTagColor,
   type FileTagKind
@@ -897,14 +898,21 @@ function FileTile({
   )
 }
 
+/**
+ * The short type chip overlaid on a file's thumbnail.
+ *
+ * Derived from `formatLibraryFileKindLabel`, not from its own extension chain. It used to
+ * re-implement `classifyLibraryFileKind` and then `.toUpperCase()` whatever fell through, so a
+ * `.glb` read "GLTF" here while the same file's kind chip and the type filter both read "glTF" --
+ * the casing `IMPORT_FORMAT_LABELS` exists to own. Deriving also means a new format cannot arrive
+ * with no chip at all.
+ *
+ * The ONE divergence kept: a sliced `.gcode.3mf` is "GCODE" here where the full label is
+ * "3MF GCODE", because this chip is a small overlay badge and the longer form does not fit.
+ */
 function fileTypeIndicatorLabel(file: LibraryFile): string {
-  const name = file.name.trim().toLowerCase()
-  if (name.endsWith('.gcode.3mf')) return 'GCODE'
-  if (name.endsWith('.3mf')) return '3MF'
-  if (name.endsWith('.gcode')) return 'GCODE'
-  if (name.endsWith('.stl')) return 'STL'
-  if (name.endsWith('.step') || name.endsWith('.stp')) return 'STEP'
-  return formatLibraryFileKindLabel(file.name, file.kind).toUpperCase()
+  if (file.kind === 'gcode') return 'GCODE'
+  return formatLibraryFileKindLabel(file.name, file.kind)
 }
 
 function FileTags({ file, mode = 'full', hideFilament = false }: { file: LibraryFile; mode?: 'full' | 'compact'; hideFilament?: boolean }) {
@@ -1304,19 +1312,22 @@ export function FileThumbnail({
   // Cache-bust on uploadedAt: saving a new version keeps the same file id (and thus URL),
   // so without this the browser keeps showing the previously-fetched <img> from memory even
   // though the server now returns a fresh thumbnail for the new content.
-  const hasServerThumbnail = file.kind === '3mf' || file.kind === 'gcode' || file.kind === 'stl' || file.kind === 'step'
+  const hasServerThumbnail = file.kind === '3mf' || file.kind === 'gcode' || isMeshLibraryFileKind(file.kind)
   const serverThumbnailUrl = hasServerThumbnail
     ? buildApiUrl(`/api/library/${file.id}/thumbnail?v=${encodeURIComponent(file.uploadedAt)}`)
     : null
 
   // Client-side fallback, rendered only after the server thumbnail 404s/errors so most
   // files never pay the cost (Three.js lives in the model-studio plugin, not in core):
-  //  - STL/STEP and geometry-only 3MFs: the first-ever view has nothing cached
-  //    server-side; the mesh provider renders the mesh AND uploads the PNG, so the
-  //    next view is served from the server.
+  //  - a bare mesh (STL/STEP/OBJ/glTF/AMF) and geometry-only 3MFs: the first-ever view has
+  //    nothing cached server-side; the mesh provider renders the mesh AND uploads the PNG, so
+  //    the next view is served from the server.
   //  - project 3MF/gcode: a sliced gcode.3mf may carry no embedded plate PNG; render from
   //    the scene. (A geometry-only 3MF has no plated scene, its fallback is the mesh.)
-  const isMeshFile = file.kind === 'stl' || file.kind === 'step' || (file.kind === '3mf' && file.geometryOnly === true)
+  // This is the same question `isPreviewOnlyLibraryFile` asks, and it is asked separately here
+  // only because that helper takes a whole `LibraryFile` while this branch also drives the
+  // SCENE provider's `else`.
+  const isMeshFile = isPreviewOnlyLibraryFile(file)
   const meshProvider = isMeshFile ? getMeshThumbnailProvider() : null
   const sceneProvider = !isMeshFile && (file.kind === '3mf' || file.kind === 'gcode') ? getSceneThumbnailProvider() : null
   const [fallbackUrl, setFallbackUrl] = useState<string | null>(null)

@@ -38,6 +38,30 @@ export interface UploadedProfileInput {
  */
 export type PresetArchiveReader = (bytes: Uint8Array) => Promise<UploadedProfileEntry[]>
 
+/**
+ * The manifest BambuStudio writes into a preset bundle (`PresetBundle.hpp`'s
+ * `BUNDLE_STRUCTURE_JSON_NAME`). It is metadata ABOUT the bundle, not a preset, and every reader
+ * must skip it: BambuStudio's own importer does (`PresetBundle.cpp:1080`), and one that does not
+ * tries to parse it as a preset and rejects the whole archive with "Profile must include a name".
+ *
+ * Shared because that is exactly how the two readers drifted: the api skipped it and the public
+ * editor's did not, so a genuine `.bbscfg` imported into a workspace and threw in the browser.
+ */
+export const PRESET_BUNDLE_MANIFEST_NAME = 'bundle_structure.json'
+
+/**
+ * Whether an archive entry is a preset document rather than the bundle manifest or a directory.
+ *
+ * Compares the BASE name, because BambuStudio's importer flattens paths before its own check and a
+ * bundle stores its manifest at the archive root while the presets sit under `printer/`,
+ * `filament/` and `process/`.
+ */
+export function isPresetArchivePresetEntry(path: string): boolean {
+  if (path.endsWith('/')) return false
+  const baseName = path.slice(path.lastIndexOf('/') + 1).toLowerCase()
+  return baseName !== PRESET_BUNDLE_MANIFEST_NAME && baseName.endsWith('.json')
+}
+
 /** BambuStudio preset exports are ZIPs; detect one by its local/central/spanned signature. */
 export function isZipArchiveBytes(bytes: Uint8Array): boolean {
   if (bytes.length < 4) return false

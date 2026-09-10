@@ -1,7 +1,7 @@
 # Copy this file to compose.yml for a real deployment and keep the
 # server-specific copy out of git.
 
-# Cap container log growth — json-file logs are unbounded by default, so a chatty
+# Cap container log growth: json-file logs are unbounded by default, so a chatty
 # or crash-looping container can fill the disk over time. Every service below
 # references this anchor via `logging: *default-logging` (50 MB max per container).
 x-logging: &default-logging
@@ -45,7 +45,7 @@ services:
         condition: service_healthy
     # Single web-facing port. The API serves the built web SPA (SERVE_WEB_DIR is
     # baked into the image) alongside /api and /ws, so one container fronts the
-    # whole app — no separate nginx. To run the API behind your own web tier
+    # whole app, no separate nginx. To run the API behind your own web tier
     # instead, set SERVE_WEB_DIR= (empty) below.
     ports:
       - "${PORT:-8080}:4000"
@@ -82,7 +82,7 @@ services:
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
       # Managed-bridge mode, ON by default for this single-host stack: the
       # bundled bridge auto-pairs on first start and the Bridges settings page
-      # is hidden — nothing to configure, no secret, no pairing step. The API
+      # is hidden: nothing to configure, no secret, no pairing step. The API
       # auto-generates a provisioning token at MANAGED_BRIDGE_TOKEN_FILE on the
       # shared `printstream-provision` volume and the bridge reads it from the
       # same path. Set MANAGED_BRIDGE=false only to manage bridges by hand
@@ -100,7 +100,7 @@ services:
       # (e.g. 1 for a single nginx) so `req.ip`/`req.protocol` reflect the real
       # client. This stack exposes the port directly, and trusting
       # X-Forwarded-* with no proxy lets clients spoof their address to the
-      # rate limiter — so it stays off by default.
+      # rate limiter, so it stays off by default.
       TRUST_PROXY: ${TRUST_PROXY:-}
     healthcheck:
       # Readiness (DB-aware): keeps dependents from starting against a DB-less API.
@@ -145,7 +145,7 @@ services:
       SLICER_BAMBUSTUDIO_DATA_DIR: /work/bambustudio-data
       # Engines to fetch on first start: a comma-separated list of ids, or
       # `all`. Unset means just the current default (~530 MB), which is what
-      # most installs want — add others in Settings, then Slicing.
+      # most installs want; add others in Settings, then Slicing.
       SLICER_PRELOAD_ENGINES: ${SLICER_PRELOAD_ENGINES:-}
     ports:
       - "${SLICER_BIND_HOST:-127.0.0.1}:${SLICER_BIND_PORT:-4010}:4010"

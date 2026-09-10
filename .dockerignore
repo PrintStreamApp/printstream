@@ -1,12 +1,19 @@
 # Match game-is-up: keep build context small and reproducible.
 # Never copy real env files into the build context (they hold secrets, and the
-# build is env-independent — db:generate uses a placeholder). Keep the templates.
+# build is env-independent; db:generate uses a placeholder). Keep the templates.
 .env
 .env.*
 !.env*.example
 node_modules
 **/node_modules
 **/dist
+# The incremental state must go wherever dist goes. Excluding the OUTPUT while shipping tsc's record
+# that it was already produced makes the in-image build a silent no-op: `tsc` reads .tsbuildinfo,
+# concludes everything is emitted, writes nothing, and the next workspace fails to resolve the types
+# it was supposed to emit ("Cannot find module '@printstream/shared'"). Only reproduces for someone
+# who has built locally, so CI's fresh checkout never sees it.
+**/*.tsbuildinfo
+**/.tsbuildinfo
 **/.vite
 **/.cache
 .git

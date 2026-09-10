@@ -24,20 +24,26 @@
  * `accept` is derived from it, so a store that loses a format cannot go on advertising it.
  */
 import {
+  MAX_AMF_SOURCE_BYTES,
+  ModelImportError,
   ThreeMfImportError,
   computeMeshBounds,
-  detectImportFormat,
+  isZippedAmf,
   meshToBinaryStl,
+  parseAmfMesh,
+  parseGltfMesh,
+  parseObjMesh,
   parseStlMesh,
   rebaseImportedMesh,
   type ImportedMesh
 } from '@printstream/shared/three-mf'
-import type { ImportNormalization, StagedImport, StagedImportFormat } from '@printstream/shared'
+import { IMPORT_FORMAT_LABELS, STAGED_IMPORT_FORMATS, detectImportFormat, type ImportNormalization, type StagedImport, type StagedImportFormat } from '@printstream/shared'
 import type { EditorImportStore } from './editorImportStore'
 import { ThreeMfArchiveError } from './threeMfArchive'
 import { ImportStagingDataError, disposeImportStagingWorker, stageImportGeometry } from './importStagingClient'
 import { extractThreeMfImportFromFile } from './localThreeMfImport'
 import { tessellateStepInBrowser } from './localStepImport'
+import { readZippedAmfDocument } from './localAmfImport'
 
 export class LocalImportError extends Error {}
 
@@ -53,22 +59,27 @@ function importDisplayName(fileName: string): string {
 }
 
 /**
- * What to tell the user when a 3MF or STEP import fails.
+ * What to tell the user when an import fails.
  *
- * A {@link ThreeMfImportError} is the shared extractor's considered refusal ("no importable
- * geometry", "too many triangles") and is already user-facing, so it passes through verbatim.
- * Anything else is a parse or WASM-load failure, where the raw message is noise, but the FORMAT is
- * worth naming, because a STEP failure is usually the ~7 MB tessellator failing to load rather than
- * anything wrong with the file.
+ * A considered refusal from one of the shared parsers ("no importable geometry", "too many
+ * triangles", "contains an invalid vertex index") is already user-facing, so it passes through
+ * verbatim; wrapping those buried the real reason mid-sentence.
+ *
+ * Anything else is a parse or WASM-load failure where the raw message is noise, but the FORMAT is
+ * still worth naming, and it is named from `IMPORT_FORMAT_LABELS` rather than from a branch. This
+ * used to read `format === 'step' ? 'This STEP file…' : "This 3MF's geometry…"`, which was fine
+ * while there were three formats and told a user their `.obj` was a broken 3MF once there were six.
+ * STEP keeps its own wording because its failure usually IS the ~7 MB tessellator failing to load
+ * rather than anything wrong with the file, which is worth saying differently.
  */
 function importFailureMessage(format: StagedImportFormat, error: unknown): string {
-  // Both of these are considered, user-facing refusals ("no importable geometry", "this file is
-  // 300 MB…"), so they pass through verbatim; wrapping them buried the real reason mid-sentence.
-  if (error instanceof ThreeMfImportError || error instanceof ThreeMfArchiveError) return error.message
+  if (error instanceof ModelImportError || error instanceof ThreeMfImportError || error instanceof ThreeMfArchiveError) {
+    return error.message
+  }
   const detail = error instanceof Error && error.message ? ` (${error.message})` : ''
   return format === 'step'
     ? `This STEP file could not be converted${detail}.`
-    : `This 3MF's geometry could not be read${detail}.`
+    : `This ${IMPORT_FORMAT_LABELS[format]} file's geometry could not be read${detail}.`
 }
 
 export interface LocalImportStore extends EditorImportStore {
@@ -114,16 +125,41 @@ async function stageGeometry(
     }
     // The fallback leaves `partStls` empty; `stage` then serializes each part inline, which is the
     // freeze this whole path exists to avoid: acceptable only because it is the last resort.
-    const mesh = format === 'stl'
-      ? parseStlMesh(bytes)
-      : format === '3mf'
-        ? await extractThreeMfImportFromFile(file)
-        : await tessellateStepInBrowser(bytes)
+    const mesh = await parseOnMainThread(format, file, bytes)
     // The same normalisation the worker applies, and the reason the STL branch can no longer hand
     // the picked bytes back untouched as its STL: rebasing the mesh but not the bytes would render
     // the model at its file coordinates while baking it at the origin.
     if (normalize === 'object') rebaseImportedMesh(mesh)
     return { mesh, stl: meshToBinaryStl(mesh), partStls: [] }
+  }
+}
+
+/**
+ * The last-resort inline parse, mirroring the worker's dispatch exactly.
+ *
+ * Exhaustive over `StagedImportFormat` with no `default`, so a new format cannot reach here as an
+ * unhandled case -- which would surface as an import that works with a worker and silently fails in
+ * a node test or a browser that could not start one.
+ *
+ * 3MF takes the `File` rather than the bytes because its extractor wants the in-tab archive.
+ */
+async function parseOnMainThread(format: StagedImportFormat, file: File, bytes: Uint8Array): Promise<ImportedMesh> {
+  switch (format) {
+    case 'stl':
+      return parseStlMesh(bytes)
+    case '3mf':
+      return await extractThreeMfImportFromFile(file)
+    case 'step':
+      return await tessellateStepInBrowser(bytes)
+    case 'obj':
+      return parseObjMesh(bytes)
+    case 'gltf':
+      return parseGltfMesh(bytes)
+    case 'amf':
+      if (!isZippedAmf(bytes) && bytes.byteLength > MAX_AMF_SOURCE_BYTES) {
+        throw new ModelImportError('AMF is too large to import')
+      }
+      return parseAmfMesh(isZippedAmf(bytes) ? readZippedAmfDocument(bytes) : new TextDecoder().decode(bytes))
   }
 }
 
@@ -187,9 +223,11 @@ export function createLocalImportStore(): LocalImportStore {
     // There is no library on a host that stages locally; the caller must not offer those entries.
     supportsLibrarySource: false,
 
-    // Every format the api stages, now that the 3MF extraction and the STEP fold are shared and the
-    // OCCT WASM loads in the tab. STEP costs a ~7 MB lazy chunk on FIRST use only.
-    importableFormats: ['stl', 'step', '3mf'],
+    // Every format the api stages, now that every parse is shared and the OCCT WASM loads in the
+    // tab. STEP costs a ~7 MB lazy chunk on FIRST use only; the rest are dependency-free.
+    // Derived from the catalogue for the same reason the api store derives it: two hand-copied
+    // lists are how one host comes to offer a format the other refuses.
+    importableFormats: STAGED_IMPORT_FORMATS,
 
     async stageFromLibrary(): Promise<StagedImport> {
       throw new LocalImportError('This editor has no library to import from. Choose a file instead.')

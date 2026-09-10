@@ -27,7 +27,7 @@ services:
     volumes:
       - postgres-dev-data:/var/lib/postgresql/data
 
-  # The slicer runs INSIDE the workspace container in dev (scripts/dev/run-dev.mjs, x86) — there is
+  # The slicer runs INSIDE the workspace container in dev (scripts/dev/run-dev.mjs, x86). There is
   # no sibling slicer service. On arm64 point SLICER_SERVICE_URL at a remote x86 slicer.
   workspace:
     build:

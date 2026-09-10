@@ -237,7 +237,7 @@ export interface FillBedOptions extends ArrangeOptions {
  * is already on the plate, and where. Returns mm offsets from the template's current position,
  * centre-out; an empty array means nothing more fits.
  *
- * Nothing already placed is moved — that is the whole difference from {@link arrangePlateItems},
+ * Nothing already placed is moved. That is the whole difference from {@link arrangePlateItems},
  * and it matches Studio, whose `FillBedJob` leaves existing instances alone (`priority > 0`) and
  * only positions the new copies.
  *

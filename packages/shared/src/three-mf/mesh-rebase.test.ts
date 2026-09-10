@@ -73,7 +73,7 @@ test('a multi-solid assembly shifts by ONE offset, so its solids keep their rela
 // The reason this is caller-driven rather than applied by the store. An added PART is centred on
 // EVERY axis by `primitivePartSoup` and then placed by that single point inside its host
 // (`addedPartDropPosition` drops a helper volume at the host's centre). Flooring its Z would lift it
-// half its own height above where the user put it — and a helper volume is translucent and does not
+// half its own height above where the user put it, and a helper volume is translucent and does not
 // print, so nothing on screen would say so.
 test('a part-shaped soup is unchanged by the object rule only because callers do not apply it', () => {
   const part = boxMesh([-5, -5, -5], [5, 5, 5])

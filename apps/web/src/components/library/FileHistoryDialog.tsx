@@ -13,7 +13,7 @@ import DownloadRoundedIcon from '@mui/icons-material/DownloadRounded'
 import PrintRoundedIcon from '@mui/icons-material/PrintRounded'
 import RestoreRoundedIcon from '@mui/icons-material/RestoreRounded'
 import VisibilityRoundedIcon from '@mui/icons-material/VisibilityRounded'
-import { formatBytes, isDirectPrintableFileName } from '@printstream/shared'
+import { formatBytes, isDirectPrintableFileName, isMeshLibraryFileKind } from '@printstream/shared'
 import type { LibraryFile, LibraryFileVersion, LibraryFileVersionsResponse } from '@printstream/shared'
 import { apiFetch } from '../../lib/apiClient'
 import { buildApiUrl } from '../../lib/apiUrl'
@@ -33,11 +33,11 @@ function buildLibraryHistoryDownloadHref(version: LibraryFileVersion): string {
 }
 
 /**
- * Mirror of the model-studio preview's supported modes: STL, STEP (tessellated server-side),
+ * Mirror of the model-studio preview's supported modes: every bare mesh (converted server-side),
  * plated 3MF projects, and plate-scoped sliced gcode 3MFs all render read-only from version bytes.
  */
 function isVersionPreviewable(version: LibraryFileVersion): boolean {
-  return version.kind === 'stl' || version.kind === 'step' || version.kind === '3mf' || version.name.toLowerCase().endsWith('.gcode.3mf')
+  return isMeshLibraryFileKind(version.kind) || version.kind === '3mf' || version.name.toLowerCase().endsWith('.gcode.3mf')
 }
 
 function formatVersionTimestamp(value: string): string {

@@ -76,7 +76,7 @@ export function SliceEstimates({
                   <Box sx={{ width: 14, height: 14, borderRadius: '3px', flexShrink: 0, bgcolor: color || 'neutral.softBg', border: '1px solid rgba(255,255,255,0.18)' }} />
                   <Typography level="body-sm" textColor="text.tertiary" noWrap>{name}</Typography>
                 </Stack>
-                <Typography level="body-sm" fontWeight="md">{material.weightGrams != null ? `${material.weightGrams.toFixed(1)} g` : '—'}</Typography>
+                <Typography level="body-sm" fontWeight="md">{material.weightGrams != null ? `${material.weightGrams.toFixed(1)} g` : '–'}</Typography>
               </Stack>
             )
           })}

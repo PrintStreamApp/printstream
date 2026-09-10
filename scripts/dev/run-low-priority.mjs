@@ -5,7 +5,7 @@
  * (lint + full test suite + seven tsc builds) shares the devcontainer with the dev API and Vite,
  * and an un-niced run starves them badly enough that multi-megabyte responses stall past the web
  * app's transfer watchdogs mid-smoke-test. Lowering priority costs validate wall-clock time only
- * when something else wants the CPU — which is exactly the intended trade.
+ * when something else wants the CPU, which is exactly the intended trade.
  *
  * Priority is set on THIS process before spawning, so every descendant inherits it: POSIX children
  * inherit the nice value, and Windows children inherit a lowered priority class (only NORMAL and

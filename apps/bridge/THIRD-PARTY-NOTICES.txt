@@ -188,7 +188,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-basic-ftp@5.3.0
+basic-ftp@5.3.1
 License: MIT
 Publisher: Patrick Juchli <patrickjuchli@gmail.com>
 Repository: https://github.com/patrickjuchli/basic-ftp
@@ -651,7 +651,7 @@ OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
 PERFORMANCE OF THIS SOFTWARE.
 
 ------------------------------------------------------------------------------
-ip-address@10.1.0
+ip-address@10.2.0
 License: MIT
 Publisher: Beau Gunderson <beau@beaugunderson.com> (https://beaugunderson.com/)
 Repository: git://github.com/beaugunderson/ip-address
@@ -1472,7 +1472,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-ws@8.20.0
+ws@8.21.0
 License: MIT
 Publisher: Einar Otto Stangvik <einaros@gmail.com> (http://2x.io)
 Repository: https://github.com/websockets/ws

@@ -18,6 +18,7 @@ import type { BridgeLibraryThreeMfIndex } from '@printstream/shared'
 import { MemoryLruCache } from '@printstream/shared'
 import {
   CUSTOM_GCODE_PER_LAYER_ENTRY,
+  FILAMENT_SEQUENCE_ENTRY,
   THREE_MF_INDEX_PARSER_VERSION,
   buildThreeMfIndex,
   parseModelSettingsPlates,
@@ -93,7 +94,22 @@ export async function readBridgeLibraryThreeMfIndex(filePath: string): Promise<B
   } catch {
     customGcodeXml = null
   }
-  const index = buildThreeMfIndex(xml, projectSettingsJson, modelSettingsPlates, thumbnailPlateFiles, customGcodeXml, modelSettingsXml)
+  // Slicer filament grouping (FTS arrangement hint): only a sliced project has one.
+  let filamentSequenceJson: string | null = null
+  try {
+    filamentSequenceJson = (await readEntry(filePath, FILAMENT_SEQUENCE_ENTRY)).toString('utf8')
+  } catch {
+    filamentSequenceJson = null
+  }
+  const index = buildThreeMfIndex(
+    xml,
+    projectSettingsJson,
+    modelSettingsPlates,
+    thumbnailPlateFiles,
+    customGcodeXml,
+    modelSettingsXml,
+    { filamentSequenceJson }
+  )
   cache.set(filePath, { mtimeMs: info.mtimeMs, size: info.size, parserVersion: THREE_MF_PARSER_CACHE_VERSION, index })
   return index
 }

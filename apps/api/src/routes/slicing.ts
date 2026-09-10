@@ -27,6 +27,8 @@ import {
   resolveProcessConfigRequestSchema,
   SETTINGS_MANAGE_PERMISSION,
   uploadSlicingPresetSchema,
+  exportSlicingPresetsSchema,
+  buildSlicingPresetBundle,
   type CreateSlicingJob,
   type ProcessConfig,
   type ProjectFilamentConfig,
@@ -56,7 +58,7 @@ import { readEntry } from '../lib/three-mf.js'
 import { enqueueLibraryPrint } from '../lib/library-printing.js'
 import { discardHiddenSlicedOutput, unhideSlicedOutput } from '../lib/library-files.js'
 import { broadcastLibraryChanged, broadcastPrintDispatchChanged, broadcastSlicingPresetsChanged } from '../lib/ws-resource-events.js'
-import { createCustomSlicingPresets, deleteCustomSlicingPreset, listCustomSlicingPresets, resolveSlicingPresetFiles } from '../lib/slicing-presets.js'
+import { createCustomSlicingPresets, deleteCustomSlicingPreset, listCustomSlicingPresetRecords, listCustomSlicingPresets, resolveSlicingPresetFiles, zipPresetBundle } from '../lib/slicing-presets.js'
 
 export const slicingRouter = Router()
 
@@ -526,6 +528,51 @@ slicingRouter.post('/profiles', requireRequestPermission(SETTINGS_MANAGE_PERMISS
   })
   broadcastSlicingPresetsChanged(workspaceId)
   response.status(201).json({ profile, replaced })
+})
+
+/**
+ * Download the named custom presets as a BambuStudio preset bundle.
+ *
+ * CUSTOM presets only, and that is a scope decision rather than a limitation: a builtin's content
+ * belongs to the slicer image and re-exporting it would hand the user a copy that silently stops
+ * tracking the engine they upgrade to. Anything the workspace does not own is refused by name so
+ * the caller can say which one, rather than being dropped from the archive silently.
+ *
+ * Gated on SETTINGS_MANAGE like the other preset-mutating routes even though it only reads: a
+ * bundle is the whole of a workspace's custom preset content in one file, which is a different
+ * thing to hand out than the summaries `GET /profiles` returns.
+ */
+slicingRouter.post('/profiles/export', requireRequestPermission(SETTINGS_MANAGE_PERMISSION), async (request, response) => {
+  const parsed = exportSlicingPresetsSchema.safeParse(request.body)
+  if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message ?? 'Invalid preset export payload')
+  const workspaceId = requireRequestWorkspaceId(request)
+  const records = await listCustomSlicingPresetRecords(workspaceId)
+  const byId = new Map(records.map((record) => [record.id, record]))
+
+  const missing = parsed.data.ids.filter((id) => !byId.has(id))
+  if (missing.length > 0) throw badRequest(`No custom preset with id ${missing.join(', ')}`)
+
+  // Deduped: a repeated id would otherwise pack the same preset twice, and the bundle's own
+  // name-collision handling would dutifully store the second as "<name> (2)".
+  const ids = [...new Set(parsed.data.ids)]
+  const bundle = buildSlicingPresetBundle(
+    ids.map((id) => {
+      const record = byId.get(id)!
+      return { kind: record.kind, name: record.name, content: record.content }
+    }),
+    { timestamp: new Date().toISOString().replace(/[-:]/g, '').replace(/\..+$/, '') }
+  )
+
+  annotateRequestAuditLog(request, {
+    action: 'export-slicing-profiles',
+    resource: 'slicing profile',
+    summary: `Exported ${ids.length} slicing preset${ids.length === 1 ? '' : 's'} as a bundle.`,
+    metadata: { profileCount: ids.length, fileName: bundle.fileName }
+  })
+
+  response.setHeader('Content-Type', 'application/zip')
+  response.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(bundle.fileName)}"`)
+  response.send(await zipPresetBundle(bundle))
 })
 
 slicingRouter.delete('/profiles/:id', requireRequestPermission(SETTINGS_MANAGE_PERMISSION), async (request, response) => {

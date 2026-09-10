@@ -23,7 +23,7 @@
  * A part baked into the project's 3MF is named by its ordinal; a volume added this session is named
  * by its own key, because it has no ordinal until a save gives it one. That difference is an
  * implementation detail of the SAVE and is invisible to the user, so it is confined to this type and
- * its codec -- see the part-is-a-part rule in this plugin'the s development notes. Everything downstream takes a
+ * its codec -- see the part-is-a-part rule in this plugin's development notes. Everything downstream takes a
  * member and only asks which kind it is where the two genuinely differ (where the settings are
  * stored, which write-back a drag routes to).
  */

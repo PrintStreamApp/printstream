@@ -306,7 +306,7 @@ test('orienting a half keeps it watertight and keeps its volume', () => {
 test('a reoriented half is placed by its PRE-rotation footprint, not its rebased centre', () => {
   // Regression: the cut places each half at its rebased XY centre to keep it where it was. Once a
   // half is rotated that centre is in the ROTATED frame, so using it as a world position threw the
-  // piece off the plate — a tall model cut along X had its 230mm height become a negative X.
+  // piece off the plate: a tall model cut along X had its 230mm height become a negative X.
   const tall = boxSoup(100, 100, 0, 140, 140, 230) // a tall box standing at x,y ~100..140
   const { upper } = cutTriangleSoup(tall.slice(), 'x', 120)
 

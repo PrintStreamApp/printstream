@@ -45,8 +45,10 @@ import {
   REMOTE_IMPORT_PROVIDER_CAPABILITIES,
   SETTINGS_MANAGE_PERMISSION,
   IMPORTED_MODELS_FOLDER_NAME,
+  MESH_LIBRARY_FILE_KINDS,
   classifyLibraryFileKind,
   detectRemoteImportUrl,
+  importFormatExtensions,
   isDirectPrintableFileName,
   parseMakerWorldModelUrl,
   remoteImportCapabilitiesResponseSchema,
@@ -103,10 +105,23 @@ const uploadDir = path.join(tmpdir(), 'printstream-remote-imports')
  * advertises, so those three cannot disagree, they did once, with STEP files
  * importing fine while both strings claimed they could not.
  */
-const IMPORTABLE_LIBRARY_FILE_KINDS = ['3mf', 'gcode', 'stl', 'step'] as const
+const IMPORTABLE_LIBRARY_FILE_KINDS = ['3mf', 'gcode', ...MESH_LIBRARY_FILE_KINDS] as const
 
-const IMPORTABLE_EXTENSIONS_MESSAGE =
-  'Only .3mf, .gcode, .gcode.3mf, .stl, .step, or .stp files can be imported'
+/**
+ * Derived from the same list, and from the shared extension catalogue, so the guard and the message
+ * cannot describe different sets -- which is the failure the comment above records. It happened with
+ * STEP and would have happened again here: a user can upload an OBJ from their device, so refusing
+ * to fetch one from a URL is a difference with no reason behind it.
+ *
+ * `.gcode.3mf` is spelled out because it is not an extension in the catalogue's sense: it is the
+ * compound name `isDirectPrintableFileName` claims ahead of `.3mf`, and a user looking for it in
+ * this message would not find it under either part.
+ */
+const IMPORTABLE_EXTENSIONS_MESSAGE = `Only ${
+  ['.3mf', '.gcode', '.gcode.3mf', ...importFormatExtensions(MESH_LIBRARY_FILE_KINDS)]
+    .join(', ')
+    .replace(/, ([^,]*)$/, ', or $1')
+} files can be imported`
 
 function isImportableLibraryFileKind(kind: string): boolean {
   return (IMPORTABLE_LIBRARY_FILE_KINDS as readonly string[]).includes(kind)

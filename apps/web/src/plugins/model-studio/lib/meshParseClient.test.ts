@@ -59,10 +59,27 @@ function tinyBinaryStl(): Uint8Array {
  * Load a fresh copy of the client so each scenario gets its own pool state. The module retires its
  * pool for the session by design, so scenarios cannot share one instance.
  */
-async function loadClient(scenario: string, behaviour: FakeWorkerBehaviour) {
+let restoreHardwareConcurrency: (() => void) | null = null
+
+async function loadClient(
+  scenario: string,
+  behaviour: FakeWorkerBehaviour,
+  hardwareConcurrency?: number
+) {
   FakeWorker.instances = []
   FakeWorker.behaviour = behaviour
   ;(globalThis as { Worker?: unknown }).Worker = FakeWorker
+  if (hardwareConcurrency !== undefined) {
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis.navigator, 'hardwareConcurrency')
+    Object.defineProperty(globalThis.navigator, 'hardwareConcurrency', {
+      configurable: true,
+      value: hardwareConcurrency
+    })
+    restoreHardwareConcurrency = () => {
+      if (descriptor) Object.defineProperty(globalThis.navigator, 'hardwareConcurrency', descriptor)
+      else delete (globalThis.navigator as { hardwareConcurrency?: number }).hardwareConcurrency
+    }
+  }
   return await import(`./meshParseClient.ts?scenario=${scenario}`)
 }
 
@@ -107,6 +124,8 @@ console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(' '
 
 afterEach(() => {
   delete (globalThis as { Worker?: unknown }).Worker
+  restoreHardwareConcurrency?.()
+  restoreHardwareConcurrency = null
   warnings.length = 0
 })
 
@@ -204,7 +223,7 @@ test('only workers that proved they are running receive tasks, even once the poo
       id: request.id,
       entries: [{ objectId: 0, position: new Float32Array([0, 0, 0, 2, 0, 0, 0, 2, 0]) }]
     })
-  })
+  }, 4)
 
   // Two at once, so the pool has more work queued than its one proven worker can hold.
   const [first, second] = await Promise.all([

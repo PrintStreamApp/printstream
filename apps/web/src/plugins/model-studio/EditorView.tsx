@@ -202,6 +202,7 @@ import {
   effectiveAddedParts,
   effectivePartFilamentId,
   instanceVolumeRows,
+  INHERITED_PLATE_SETTINGS,
   effectiveHeightRanges,
   effectiveLayerHeightProfile,
   type EditorHeightRange,
@@ -289,11 +290,13 @@ import {
   buildObjectStl,
   buildObjectsStl,
   buildSelectedPartsStl,
+  exportBaseName,
   groupHasExcludedVolumes,
   partsExportName,
   stlExportBaseName,
   stlExportFileName
 } from './lib/objectExport'
+import { buildGenericThreeMf, genericThreeMfExportFileName } from './lib/genericThreeMfExport'
 import {
   ADDED_PART_MESH_NAME,
   isAddedPartMesh,
@@ -375,6 +378,7 @@ import { editorMaterialsFromSliceConfig, type EditorMaterials } from './lib/edit
 import { BrimEarsPanel } from './BrimEarsPanel'
 import { CutToolPanel } from './CutToolPanel'
 import { HeightRangesDialog } from './HeightRangesDialog'
+import { PlateSettingsDialog, type PlateSettingsDraft } from './PlateSettingsDialog'
 import { LayerHeightPanel } from './LayerHeightPanel'
 import { SvgToolPanel, type SvgToolValue } from './SvgToolPanel'
 import { buildSvgPieceSoups, detectSvgBackgroundPiece, parseSvgShapes, svgHeightMm, svgObjectFrameShift, type ParsedSvg } from './lib/svgGeometry'
@@ -480,7 +484,7 @@ function textToolValueFromInfo(
     textGap: info.textGap,
     rotateAngle: info.rotateAngle,
     embeddedDepth: info.embeddedDepth,
-    // `surfaceChar` is not offered (see the tool'the s development notes), but a file -- ours from before it was
+    // `surfaceChar` is not offered (see the tool's development notes), but a file -- ours from before it was
     // withdrawn, or one Studio wrote -- can name it. Coerced to the mode it now behaves as, so the
     // picker shows what the text will actually do rather than blanking on a value it has no option
     // for. The record itself keeps whatever it said; only the panel is coerced.
@@ -933,6 +937,15 @@ function EditorView({
   const [viewCubeContainer, setViewCubeContainer] = useState<HTMLDivElement | null>(null)
   const [state, setState] = useState<EditorState | null>(null)
   const [activePlateIndex, setActivePlateIndex] = useState(1)
+  /**
+   * Which plate's settings dialog is open, by its session-stable `plateId`, or null for none.
+   *
+   * NOT the live index, per this plugin's rule that `index` is a POSITION: undo is armed while the
+   * dialog is open (a Joy Select button is not a typing target, so the shortcut hook does not skip
+   * it), so a Ctrl+Z that adds, removes or reorders a plate would otherwise leave Apply writing the
+   * draft onto whichever plate slid into that number.
+   */
+  const [plateSettingsId, setPlateSettingsId] = useState<number | null>(null)
   // Keep the shared slice controller's selected plate in sync with the editor's
   // active plate, so plate-scoped settings (per-object overrides, the "not on this
   // plate" material hints, the output filename) target the plate being viewed.
@@ -1573,6 +1586,10 @@ function EditorView({
     | { kind: 'project'; key: string }
     | { kind: 'merged'; keys: ReadonlyArray<string> }
     | { kind: 'separate'; keys: ReadonlyArray<string> }
+    // A vanilla 3MF for other slicers. ONE kind for any number of objects, unlike STL's
+    // merged/separate pair: the format holds several named solids in a single file, so the
+    // distinction those two exist to offer does not arise here.
+    | { kind: 'generic3mf'; keys: ReadonlyArray<string> }
     // One kind for parts of either address space: a mixed set world-bakes through the same
     // traversal and exports as a single STL.
     | { kind: 'parts'; ownerId: number; members: ReadonlyArray<PartMember> }
@@ -3999,11 +4016,11 @@ function EditorView({
       // every member.
       //
       // BambuStudio centres its gizmos on the selection unconditionally, with no single-vs-multi
-      // distinction — `GLGizmoMove` on `selection.get_bounding_box().center()` (:49), `GLGizmoScale`
+      // distinction: `GLGizmoMove` on `selection.get_bounding_box().center()` (:49), `GLGizmoScale`
       // on the box transform's translation (:246), `GLGizmoRotate` on the bounding SPHERE centre
       // (:549, `init_data_from_selection`, which runs for a selection of one). We used to attach a
       // single object to its group (move/scale) or rotor (rotate), both of which sit at the object's
-      // local ORIGIN — and an origin is wherever the file's exporter put it, so an object rotated
+      // local ORIGIN, and an origin is wherever the file's exporter put it, so an object rotated
       // about a corner, or about the middle of one end once a z-from-zero model was laid flat.
       // Normalising IMPORT geometry (`ImportNormalization`) makes origin and centre coincide for a
       // staged import, but an in-project Bambu object carries plate coordinates and can never be
@@ -5893,6 +5910,52 @@ function EditorView({
     if (built) downloadExportedStl(built)
   }, [buildPartsExport, downloadExportedStl])
 
+  /**
+   * Build a vanilla 3MF for the given objects (BambuStudio's "Export Generic 3MF"), each object a
+   * separately named solid in ONE file.
+   *
+   * Async where the STL builders are not, because the archive is deflated off the main thread
+   * (`zipArchiveEntries`); a plate's worth of geometry zipped inline is a visible freeze.
+   */
+  const buildSelectionGenericThreeMf = useCallback(async (
+    keys: ReadonlyArray<string>
+  ): Promise<{ bytes: Uint8Array; name: string; droppedVolumes: boolean } | null> => {
+    const members = exportMembersFor(keys)
+    if (members.length === 0) return null
+    const bytes = await buildGenericThreeMf(members.map((member) => ({ name: member.instance.name, group: member.group })))
+    if (!bytes) {
+      toast.error(members.length === 1
+        ? `${members[0]!.instance.name} has no solid geometry to export.`
+        : 'The selected objects have no solid geometry to export.')
+      return null
+    }
+    return { bytes, name: members[0]!.instance.name, droppedVolumes: members.some((member) => groupHasExcludedVolumes(member.group)) }
+  }, [exportMembersFor])
+
+  const handleExportGenericThreeMfDownload = useCallback((keys: ReadonlyArray<string>) => {
+    // Every sibling STL export is synchronous and cannot fail this way; this one deflates the
+    // archive off-thread, so it has two rejection paths (a worker zip failure that does not fall
+    // back, and the writer's own "no solid had usable geometry"). Unhandled, both leave the user
+    // with no file, no toast and no error, i.e. a menu item that silently does nothing.
+    void (async () => {
+      try {
+        const built = await buildSelectionGenericThreeMf(keys)
+        if (!built) return
+        const fileName = genericThreeMfExportFileName(built.name)
+        downloadBlob(new Blob([built.bytes as BlobPart], { type: 'application/vnd.ms-package.3dmanufacturing-3dmodel+xml' }), fileName)
+        // The same caveat the STL export reports, and for the same reason: no client-side mesh
+        // boolean, so a negative volume cannot be applied and is left out rather than written solid.
+        if (built.droppedVolumes) {
+          toast.warn(`Exported ${fileName}: negative, modifier, and support volumes are not included.`)
+        } else {
+          toast.success(`Exported ${fileName}.`)
+        }
+      } catch (error) {
+        toast.error(`Could not export the 3MF: ${extractErrorMessage(error, 'the file could not be written')}`)
+      }
+    })()
+  }, [buildSelectionGenericThreeMf])
+
   /** Destination-dialog submit for export-to-library: upload through the shared queue (its toast reports progress). */
   const handleExportToLibrarySubmit = useCallback((outputFileName: string | null, outputFolderId: string | null) => {
     const request = exportRequest
@@ -5912,6 +5975,28 @@ function EditorView({
       return
     }
     if (!outputFileName) return
+    if (request.kind === 'generic3mf') {
+      // Async, unlike every sibling: the archive is deflated off the main thread. Fire-and-forget
+      // because the upload queue owns the progress toast from here on -- but NOT unguarded: the
+      // dialog has already closed by this point, so an unhandled rejection would leave the user
+      // looking at a dismissed dialog and no file, with nothing said.
+      void (async () => {
+        try {
+          const built = await buildSelectionGenericThreeMf(request.keys)
+          if (!built) return
+          const file = new File([built.bytes as BlobPart], `${outputFileName}.3mf`, {
+            type: 'application/vnd.ms-package.3dmanufacturing-3dmodel+xml'
+          })
+          enqueueLibraryUploads([{ file, folderSegments: [] }], destination)
+          if (built.droppedVolumes) {
+            toast.warn(`Exporting ${file.name}: negative, modifier, and support volumes are not included.`)
+          }
+        } catch (error) {
+          toast.error(`Could not export the 3MF: ${extractErrorMessage(error, 'the file could not be written')}`)
+        }
+      })()
+      return
+    }
     // 'project' never lands here (the dialog dispatches it straight to the save hook),
     // but the narrowing treats both single-key kinds the same.
     const built = request.kind === 'parts'
@@ -5923,7 +6008,7 @@ function EditorView({
     if (built.droppedVolumes) {
       toast.warn(`Exporting ${file.name}: negative, modifier, and support volumes are not included.`)
     }
-  }, [exportRequest, buildSelectionStlFiles, buildPartsExport, buildSelectionStl, saveAsBridgeId])
+  }, [exportRequest, buildSelectionStlFiles, buildPartsExport, buildSelectionStl, buildSelectionGenericThreeMf, saveAsBridgeId])
 
   /**
    * Add a new part volume (negative part / modifier / support blocker / enforcer)
@@ -8669,7 +8754,7 @@ function EditorView({
    * where the prime tower currently stands (its size depends on the plate's filament count and
    * tallest object, so it is measured off the rendered object rather than the plate record).
    *
-   * `demandingInstances` are the objects whose nozzle reach must be honoured — every instance for
+   * `demandingInstances` are the objects whose nozzle reach must be honoured: every instance for
    * Auto-arrange, which moves them all, but only the copied object for Fill bed, since nothing
    * already placed moves and a neighbour's reach is therefore not this operation's problem.
    */
@@ -8705,6 +8790,11 @@ function EditorView({
   const handleArrangeAll = useCallback(() => {
     const plate = stateRef.current?.plates.find((entry) => entry.index === activePlateIndex)
     if (!plate || plate.instances.length === 0) return
+    // A locked plate keeps its layout. Mirrors BambuStudio, whose arrange skips every object on a
+    // locked plate (`PartPlate.cpp:6046`). The toolbar button is disabled too, so this guard is
+    // belt-and-braces rather than the only stop: it keeps the rule with the operation, where a
+    // future caller (a shortcut, a context-menu item, a batch action) will find it.
+    if (plate.locked) return
     const items: Array<{ key: string; cells: number[] }> = []
     for (const instance of plate.instances) {
       const group = groupByKeyRef.current.get(instance.key)
@@ -8747,12 +8837,12 @@ function EditorView({
   /**
    * BambuStudio's "Fill bed with copies" (`FillBedJob`): fill the plate's remaining space with
    * copies of the selected object, packing centre-out around whatever is already there. Nothing
-   * already placed moves — this ADDS to a layout rather than redoing it, which is what separates
+   * already placed moves: this ADDS to a layout rather than redoing it, which is what separates
    * it from Auto-arrange.
    *
    * We deliberately diverge from Studio on ONE point: its `ap.setter` calls `Model::add_object`,
    * so every copy is a whole new object and each one carries its own duplicate of the source's
-   * per-object process overrides — edit the original afterwards and the copies do not follow.
+   * per-object process overrides; edit the original afterwards and the copies do not follow.
    * Ours adds linked INSTANCES against the same `objectId` (the `Duplicate` path), so all copies
    * share one object's parts, materials, paint and overrides, and the sidebar's `xN` badge makes
    * the linkage visible. That is issue #89's "add instances" note, and it is also why the copies
@@ -8762,6 +8852,12 @@ function EditorView({
     const plate = stateRef.current?.plates.find((entry) => entry.index === activePlateIndex)
     const template = plate?.instances.find((entry) => entry.key === key)
     if (!plate || !template) return
+    // A locked plate keeps its layout, and that has to mean every AUTOMATIC placement, not just
+    // Auto-arrange: filling the bed drops new copies onto it, which is the same promise broken.
+    if (plate.locked) {
+      toast.error('This plate is locked. Unlock it in plate settings to fill it with copies.')
+      return
+    }
     const templateGroup = groupByKeyRef.current.get(template.key)
     const templateFootprint = templateGroup ? computeFootprintCells(templateGroup) : null
     if (!templateFootprint || templateFootprint.size === 0) {
@@ -8769,7 +8865,7 @@ function EditorView({
       return
     }
 
-    // Everything on the plate holds its ground, so every footprint is an obstacle — the template's
+    // Everything on the plate holds its ground, so every footprint is an obstacle: the template's
     // own instance included, or the first copy would be planned on top of it.
     const occupiedFootprints: number[][] = []
     for (const instance of plate.instances) {
@@ -8859,6 +8955,15 @@ function EditorView({
   /** Auto-orient: rest the selected object on its largest hull face (most stable base). */
   const handleAutoOrient = useCallback(() => {
     if (!selectedKey) return
+    // BambuStudio refuses this on a locked plate with a notification of its own
+    // (`OrientJob.cpp:113-117`), and so must we: the lock's copy promises the plate's models stay
+    // where they are, and a lock that stops one of three automatic placement tools is worse than
+    // none, because the user has been told otherwise.
+    const activePlate = stateRef.current?.plates.find((entry) => entry.index === activePlateIndex)
+    if (activePlate?.locked) {
+      toast.error('This plate is locked. Unlock it in plate settings to auto-orient.')
+      return
+    }
     const group = groupByKeyRef.current.get(selectedKey)
     if (!group) return
     const normal = largestHullFaceNormal(group)
@@ -8866,7 +8971,7 @@ function EditorView({
     mutateSelectedGroup((target) => {
       rotorOf(target).quaternion.premultiply(new THREE.Quaternion().setFromUnitVectors(normal, DOWN_VECTOR))
     })
-  }, [selectedKey, mutateSelectedGroup])
+  }, [activePlateIndex, selectedKey, mutateSelectedGroup])
 
   /**
    * Apply a mutation to EVERY selected object as ONE undo step.
@@ -9228,10 +9333,12 @@ function EditorView({
     updatePlates((plates) => {
       const template = plates[plates.length - 1]
       const bed = template ? { ...template.bed } : { minX: -128, maxX: 128, minY: -128, maxY: 128, maxZ: null, excludeAreas: [] }
-      const plateType = template?.plateType ?? null
+      // The BED is copied from the last plate (every plate in a project shares one printer bed), but
+      // its SETTINGS are not: a new plate inherits the project's, as BambuStudio's does. Copying the
+      // template's overrides would silently spread one plate's bed type across the project.
       return reindexPlates([
         ...plates,
-        { index: plates.length + 1, plateId, sourcePlateIndex: null, name: null, plateType, bed, instances: [], primeTower: null }
+        { index: plates.length + 1, plateId, sourcePlateIndex: null, name: null, ...INHERITED_PLATE_SETTINGS, bed, instances: [], primeTower: null }
       ])
     })
     setActivePlateIndex(newIndex)
@@ -9270,6 +9377,21 @@ function EditorView({
     // Plate name shows only in the plate strip (React), not the 3D viewport ('inert').
     updatePlates((plates) => plates.map((entry) => entry.index === index ? { ...entry, name: nextName } : entry), 'inert')
   }, [promptText, updatePlates])
+
+  /**
+   * Apply the per-plate settings dialog's draft.
+   *
+   * 'inert' like the rename: none of these move geometry, so the viewport has nothing to rebuild.
+   * The bed type does change what the plate PRINTS on rather than how it looks here, which is why
+   * it still takes a history checkpoint.
+   */
+  const handleApplyPlateSettings = useCallback((plateId: number, settings: PlateSettingsDraft) => {
+    updatePlates(
+      (plates) => plates.map((entry) => entry.plateId === plateId ? { ...entry, ...settings } : entry),
+      'inert'
+    )
+    setPlateSettingsId(null)
+  }, [updatePlates])
 
   /**
    * Move a plate into an insertion gap (0-based, 0 = before the first plate): the strip's
@@ -9334,16 +9456,21 @@ function EditorView({
 
   // Bake the controller's desired filament list (Bambu-style add/remove of materials) and its
   // chosen plate type into every SceneEdit the editor emits, so both save and slice carry them.
-  // The plate type is stamped onto every plate: the Settings tab's selector is project-global
-  // (like BambuStudio's `curr_bed_type`) and the per-plate values seeded from the source are all
-  // that same global value, so a stale seed must not outlive a Settings-tab change.
+  // The Settings tab's selector is the project-global plate type (BambuStudio's `curr_bed_type`),
+  // so it rides at the TOP LEVEL and each plate carries only its own override. It is also what
+  // tells the bake this client distinguishes the two at all; stamping it onto every plate, as this
+  // did before per-plate bed types, would save the global as N overrides that then outlive it.
   const buildSceneEditOut = useCallback((current: EditorState, options?: { thumbnails?: Array<{ plateIndex: number; png: string }> }): SceneEdit => {
     const base = buildSceneEdit(current)
     const plateType = sliceConfig?.plateType.trim()
-    const withPlateType = plateType
-      ? { ...base, plates: base.plates.map((plate) => ({ ...plate, plateType })) }
-      : base
-    let withFilaments = sliceConfig?.desiredFilaments ? { ...withPlateType, filaments: sliceConfig.desiredFilaments } : withPlateType
+    // ALWAYS carries the key, null when there is no global to state: its PRESENCE is what tells the
+    // bake this client authors per-plate bed types. Spreading it only when truthy meant an unseeded
+    // machine target produced an edit that read as pre-per-plate, which deletes every plate's own
+    // bed type and promotes the first plate's override to the project-wide value.
+    const withPlateType = { ...base, plateType: plateType || null }
+    // Annotated, not inferred: the literal above narrows `plateType` to `string | null`, and under
+    // `exactOptionalPropertyTypes` the rebase's `SceneEdit` return then will not assign back into it.
+    let withFilaments: SceneEdit = sliceConfig?.desiredFilaments ? { ...withPlateType, filaments: sliceConfig.desiredFilaments } : withPlateType
     // The desired list bakes as slots 1..N, so a session that removed/reordered materials
     // renumbers every filament id: translate the edit's SESSION ids to match, or the bake writes
     // stale ids into the file (a part `extruder="2"` in a 1-filament project). No-op (null remap)
@@ -9972,6 +10099,10 @@ function EditorView({
                 onAddPlate={handleAddPlate}
                 onRemovePlate={handleRemovePlate}
                 onRenamePlate={handleRenamePlate}
+                onEditPlateSettings={(index) => {
+                  const plate = stateRef.current?.plates.find((entry) => entry.index === index)
+                  if (plate) setPlateSettingsId(plate.plateId)
+                }}
                 onReorderPlate={handleReorderPlate}
                 // Phones stack, so the rail only ever applies to the desktop grid.
                 orientation={isMobile ? 'horizontal' : plateStripOrientation}
@@ -10136,7 +10267,7 @@ function EditorView({
                         mode={gizmoMode}
                         disabled={!selectedKey || controlsBusy}
                         busy={controlsBusy}
-                        arrangeDisabled={controlsBusy || (activePlate?.instances.length ?? 0) === 0}
+                        arrangeDisabled={controlsBusy || (activePlate?.instances.length ?? 0) === 0 || (activePlate?.locked ?? false)}
                         onChange={handleGizmoModeChange}
                         onDropToBed={handleDropToBed}
                         onAutoOrient={handleAutoOrient}
@@ -10223,7 +10354,7 @@ function EditorView({
                       mode={gizmoMode}
                       disabled={!selectedKey || controlsBusy}
                       busy={controlsBusy}
-                      arrangeDisabled={controlsBusy || (activePlate?.instances.length ?? 0) === 0}
+                      arrangeDisabled={controlsBusy || (activePlate?.instances.length ?? 0) === 0 || (activePlate?.locked ?? false)}
                       onChange={handleGizmoModeChange}
                       onDropToBed={handleDropToBed}
                       onAutoOrient={handleAutoOrient}
@@ -10856,6 +10987,10 @@ function EditorView({
             onExportMergedToLibrary={canExportToLibrary ? () => setExportRequest({ kind: 'merged', keys: selectionFor(contextMenu.key) }) : undefined}
             onExportSeparateDownload={canExportDownload ? () => handleExportSeparateDownload(selectionFor(contextMenu.key)) : undefined}
             onExportSeparateToLibrary={canExportToLibrary ? () => setExportRequest({ kind: 'separate', keys: selectionFor(contextMenu.key) }) : undefined}
+            // One handler for both the single and multi menus: a generic 3MF holds however many
+            // objects the selection has, so there is no merged/separate choice to make.
+            onExportGenericThreeMfDownload={canExportDownload ? () => handleExportGenericThreeMfDownload(selectionFor(contextMenu.key)) : undefined}
+            onExportGenericThreeMfToLibrary={canExportToLibrary ? () => setExportRequest({ kind: 'generic3mf', keys: selectionFor(contextMenu.key) }) : undefined}
             canRepair={(() => {
               const instance = activePlate?.instances.find((entry) => entry.key === contextMenu.key)
               return Boolean(instance && addedPartHostId(instance) != null)
@@ -10996,20 +11131,23 @@ function EditorView({
       return (
         <LibraryDestinationDialog
           title={exportRequest.kind === 'project' ? 'Export object as 3MF'
+            : exportRequest.kind === 'generic3mf' ? 'Export as generic 3MF'
             : exportRequest.kind === 'parts' ? 'Export parts as STL'
             : exportRequest.kind === 'separate' ? 'Export objects as STLs'
             : exportRequest.kind === 'merged' ? 'Export objects as one STL'
             : 'Export object as STL'}
           description={exportRequest.kind === 'project'
             ? "Choose where to save the new project, then confirm the file name. The object keeps its parts, materials, and paint. Saving with an existing file's name replaces it."
-            : exportRequest.kind === 'separate'
-              ? 'Choose where to save the exported STLs, each selected object becomes its own file, named after the object. Existing files with the same names are replaced.'
-              : "Choose where to save the exported STL, then confirm the file name. Saving with an existing file's name replaces it."}
+            : exportRequest.kind === 'generic3mf'
+              ? "Choose where to save the exported 3MF, then confirm the file name. It holds geometry only, for opening in other slicers: materials, painting, and per-object settings are not included. Saving with an existing file's name replaces it."
+              : exportRequest.kind === 'separate'
+                ? 'Choose where to save the exported STLs, each selected object becomes its own file, named after the object. Existing files with the same names are replaced.'
+                : "Choose where to save the exported STL, then confirm the file name. Saving with an existing file's name replaces it."}
           showFiles
           fileNameField={suggestedName === null ? undefined : {
             label: 'File name',
-            initialValue: stlExportBaseName(suggestedName),
-            extension: exportRequest.kind === 'project' ? '.3mf' : '.stl'
+            initialValue: exportBaseName(suggestedName, exportRequest.kind === 'object' || exportRequest.kind === 'merged' || exportRequest.kind === 'parts' ? '.stl' : '.3mf'),
+            extension: exportRequest.kind === 'project' || exportRequest.kind === 'generic3mf' ? '.3mf' : '.stl'
           }}
           initialFolderId={saveAsInitialFolderId}
           folders={editorFoldersQuery.data?.folders ?? []}
@@ -11058,6 +11196,36 @@ function EditorView({
           onChange={(next) => setObjectHeightRanges(editingHeightRanges.objectId, next)}
           onEditSettings={setEditingHeightRangeIndex}
           onClose={() => { setEditingHeightRanges(null); setEditingHeightRangeIndex(null) }}
+        />
+      )
+    })()}
+    {plateSettingsId != null && (() => {
+      const plate = stateRef.current?.plates.find((entry) => entry.plateId === plateSettingsId)
+      if (!plate) return null
+      return (
+        <PlateSettingsDialog
+          plateLabel={plateDisplayName(plate.name, plate.index)}
+          settings={{
+            plateTypeOverride: plate.plateTypeOverride,
+            printSequence: plate.printSequence,
+            spiralMode: plate.spiralMode,
+            locked: plate.locked
+          }}
+          // The same list the project-global selector offers: the TARGET PRINTER's supported bed
+          // types, so a plate cannot be pinned to a surface the machine does not have.
+          plateTypeOptions={sliceConfig?.plateTypeOptions ?? []}
+          globalPlateType={sliceConfig?.plateType.trim() || null}
+          // For the by-object skirt-collision warning. Null (no process context yet) means no
+          // warning rather than a guessed one; the same shape the parameter table takes.
+          processContext={perObject ? {
+            slicerTargetId: perObject.slicerTargetId,
+            processProfileId: perObject.processProfileId,
+            sourceFileId: perObject.sourceFileId,
+            resolveConfig: resolveProcessConfig
+          } : null}
+          globalProcessOverrides={perObject?.globalOverrides ?? EMPTY_OBJECT_OVERRIDES}
+          onApply={(settings) => handleApplyPlateSettings(plate.plateId, settings)}
+          onClose={() => setPlateSettingsId(null)}
         />
       )
     })()}
@@ -11216,22 +11384,21 @@ function EditorView({
               if (!current) return current
               const map = { ...(current.partProcessOverrides ?? {}) }
               // Merge per member (uniform values + cleared keys; untouched "Mixed" keys survive).
-              // Unlike objects, an empty entry is dropped: part overrides live in session state
-              // keyed by slot, so absence simply means "no overrides", there is no scope-pruning
-              // ambiguity to guard against.
+              // A cleared baked part keeps an EXPLICIT empty entry. Its source `<part>` still has
+              // the old metadata until save, so deleting the session entry makes the collector
+              // read "nothing changed" and the old value returns on reopen. Added volumes have no
+              // source metadata to clear and can continue to omit an empty settings object.
               for (const member of editingPart.members) {
                 if (member.kind === 'baked') {
                   const slot = partSlotKey(editingPart.objectId, member.partIndex)
                   const merged = applyBulkOverridesToMember(map[slot], serialized, clearedKeys)
-                  if (Object.keys(merged).length === 0) delete map[slot]
-                  else map[slot] = merged
+                  map[slot] = merged
                   continue
                 }
                 if (member.kind === 'body') {
                   const slot = partSlotKey(editingPart.objectId, BODY_PART_INDEX)
                   const merged = applyBulkOverridesToMember(map[slot], serialized, clearedKeys)
-                  if (Object.keys(merged).length === 0) delete map[slot]
-                  else map[slot] = merged
+                  map[slot] = merged
                   continue
                 }
                 // A volume owns its settings, so this writes through the same in-place mutation the

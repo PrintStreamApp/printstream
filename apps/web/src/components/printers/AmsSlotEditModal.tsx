@@ -15,6 +15,7 @@ import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown'
 import SaveRoundedIcon from '@mui/icons-material/SaveRounded'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
+  checkFilamentBlacklistForAssignment,
   getAmsLoadFilamentAvailability,
   getAmsRescanAvailability,
   getAmsUnloadFilamentAvailability,
@@ -31,6 +32,7 @@ import { DialogSection } from '../DialogSection'
 import { DeferredKeyboardAutocomplete } from '../DeferredKeyboardAutocomplete'
 import { BackAwareModal as Modal } from '../BackAwareModal'
 import { ColorSwatchPicker } from '../ColorSwatchPicker'
+import { AmsSlotBlacklistNotice } from './AmsSlotBlacklistNotice'
 import { FilamentChangeProgressPanel } from './FilamentChangeProgressPanel'
 import { useControlledMenuClickAway } from '../../hooks/useControlledMenuClickAway'
 import { bambuColorName, bambuMaterialFromPresetName, bambuMaterialFromType } from '../../data/bambuColors'
@@ -52,6 +54,7 @@ import { usePendingFilamentActionLabel, withDisabledActionReason } from './print
 
 export function AmsSlotEditModal({
   printerId,
+  printerModel,
   status,
   unit,
   slot,
@@ -60,6 +63,8 @@ export function AmsSlotEditModal({
   onClose
 }: {
   printerId: string
+  /** Stored model string; the blacklist rules key on it. */
+  printerModel: string
   status: PrinterStatus | undefined
   unit: AmsUnit
   slot: AmsSlot
@@ -441,6 +446,24 @@ export function AmsSlotEditModal({
 
   const selectedBambuPreset = BAMBU_FILAMENT_PRESETS.find((preset) => preset.id === trayInfoIdx)
   const selectedPresetBrand = selectedBambuPreset?.brand ?? null
+  /**
+   * What Bambu says about the material being assigned, for THIS slot's hardware. Graded against the
+   * pending selection rather than the loaded spool, so the warning appears while the choice is
+   * still being made. It never blocks Save; see `AmsSlotBlacklistNotice` for why.
+   */
+  const blacklistFindings = useMemo(
+    () => checkFilamentBlacklistForAssignment({
+      printerModel,
+      status,
+      amsId: unit.unitId,
+      slotId: slot.slot,
+      filamentType: type,
+      filamentId: trayInfoIdx,
+      filamentName: selectedBambuPreset?.name ?? null,
+      filamentVendor: selectedBambuPreset?.brand ?? null
+    }),
+    [printerModel, selectedBambuPreset, slot.slot, status, trayInfoIdx, type, unit.unitId]
+  )
   const swatchMaterial = selectedBambuPreset
     ? bambuMaterialFromPresetName(selectedBambuPreset.name)
     : bambuMaterialFromType(type)
@@ -519,7 +542,7 @@ export function AmsSlotEditModal({
                   )}
                   {(detectedFilament.colors.length > 1 || (!detectedColorName && slot.color)) && (
                     <Typography level="body-xs" textColor="text.tertiary">
-                      Color{detectedFilament.colors.length > 1 ? 's' : ''}: {detectedFilament.colors.length > 0 ? detectedFilament.colors.join(' · ') : slot.color ?? '—'}
+                      Color{detectedFilament.colors.length > 1 ? 's' : ''}: {detectedFilament.colors.length > 0 ? detectedFilament.colors.join(' · ') : slot.color ?? '–'}
                     </Typography>
                   )}
                   {hasFilament && slot.remainPercent != null && remainGrams != null && (
@@ -533,6 +556,7 @@ export function AmsSlotEditModal({
           ) : (
             <DialogSection title="Filament">
               <Stack spacing={1.25}>
+                <AmsSlotBlacklistNotice findings={blacklistFindings} />
                 <PluginSlot
                   name="ams.slotEditor"
                   context={{

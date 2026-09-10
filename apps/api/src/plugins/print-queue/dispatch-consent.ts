@@ -1,18 +1,18 @@
 /**
- * Who answers the low-filament question for a queued dispatch.
+ * Who answers a queued dispatch's safety questions.
  *
- * Owns one rule: `allowInsufficientFilament` is a CONSENT flag, so it must be
- * granted deliberately by a named origin and never fall out of an omitted
- * argument. It used to be a defaulted parameter on the dispatch helper, which
- * meant the unattended sweep's consent was what every caller got for free.
+ * Owns one rule: an `allow*` flag is a CONSENT, so it must be granted
+ * deliberately by a named origin and never fall out of an omitted argument. It
+ * used to be a defaulted parameter on the dispatch helper, which meant the
+ * unattended sweep's consent was what every caller got for free.
  *
  * Contract: every path that builds a queue dispatch states its origin here, and
  * only `person-start` can withhold. Getting it wrong is invisible until a print
  * runs dry or a queue stalls, which is why the three answers live together
  * instead of as three booleans at three call sites.
  *
- * Counterpart: `assertSufficientFilament` in
- * `apps/api/src/lib/print-filament-compatibility.ts` is what this consents to,
+ * Counterparts: `assertSufficientFilament` and `assertFilamentBlacklist` in
+ * `apps/api/src/lib/print-filament-compatibility.ts` are what these consent to,
  * and `QueueStartDialog` is where a person's answer comes from.
  */
 
@@ -48,4 +48,43 @@ export type QueueDispatchOrigin =
 export function allowsInsufficientFilament(origin: QueueDispatchOrigin, personConfirmed = false): boolean {
   if (origin === 'unattended-sweep') return true
   return origin === 'person-start' ? personConfirmed : false
+}
+
+/**
+ * Whether this dispatch may pass the filament-blacklist guard without a person answering.
+ *
+ * Deliberately NOT the same answer as {@link allowsInsufficientFilament}, and the difference is
+ * the point: `unattended-sweep` REFUSES here. A low-filament slot makes a print pause, which the
+ * printer already handles, whereas a material Bambu forbids on this hardware (TPU through an AMS,
+ * an abrasive through an E3D high-flow nozzle) damages the printer. Nobody is present to accept
+ * that, so an unattended queue must hold the item rather than assume consent.
+ *
+ * `dry-run` withholds for the same reason as above, so the Check surfaces the guard rather than
+ * silently passing it. Unlike the low-filament case the caller does NOT downgrade this to an
+ * advisory, because an unattended start really would refuse it.
+ */
+export function allowsBlacklistedFilament(origin: QueueDispatchOrigin, personConfirmed = false): boolean {
+  return origin === 'person-start' ? personConfirmed : false
+}
+
+/** Every consent a queued dispatch carries, resolved together so a caller cannot supply one and forget the other. */
+export interface QueueDispatchConsents {
+  allowInsufficientFilament: boolean
+  allowBlacklistedFilament: boolean
+}
+
+/**
+ * The consents for a dispatch from `origin`, with a person's own answers where there is a person.
+ *
+ * Bundled rather than threaded as two booleans: they travel together through four helpers, and two
+ * adjacent boolean parameters are a swap waiting to happen that the type checker cannot see.
+ */
+export function resolveQueueDispatchConsents(
+  origin: QueueDispatchOrigin,
+  personAnswers: Partial<QueueDispatchConsents> = {}
+): QueueDispatchConsents {
+  return {
+    allowInsufficientFilament: allowsInsufficientFilament(origin, personAnswers.allowInsufficientFilament === true),
+    allowBlacklistedFilament: allowsBlacklistedFilament(origin, personAnswers.allowBlacklistedFilament === true)
+  }
 }

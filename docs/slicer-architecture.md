@@ -3,16 +3,16 @@
 The "slicer" area is **two features that share one data model**, and keeping them
 separated is what stops this fast-growing area from turning into a patchwork:
 
-1. **3MF Project Editor** — a BambuStudio-compatible editor for *arranging* a project:
+1. **3MF Project Editor**: a BambuStudio-compatible editor for *arranging* a project:
    placing/transforming objects on plates, assigning materials, per-object process
    overrides, and printability. It mutates an in-memory scene and emits a `SceneEdit`.
-2. **CLI Slicing Pipeline** — takes a (baked) 3MF and *slices* it with the BambuStudio
+2. **CLI Slicing Pipeline**: takes a (baked) 3MF and *slices* it with the BambuStudio
    CLI: job queue, profile resolution, the standalone slicer service, and output
    packaging.
 
 They meet at the **shared 3MF model**: the `SceneEdit` contract plus the 3MF
 reader/writer. The editor produces a `SceneEdit`; the pipeline bakes it into a 3MF and
-slices it. Neither feature should reach into the other's internals — they communicate
+slices it. Neither feature should reach into the other's internals: they communicate
 through the `SceneEdit` contract and the baked 3MF on disk.
 
 ```
@@ -24,28 +24,28 @@ through the `SceneEdit` contract and the baked 3MF on disk.
 
 | Concern | Layer | Key modules |
 | --- | --- | --- |
-| **Editor** | web | `apps/web/src/plugins/model-studio/` — `EditorView.tsx` (3D editor), `lib/editorModel.ts` (the editable scene model + `buildSceneEdit`), `lib/editorProjectSource.ts` (where the project is READ from — see below), `lib/threeMfScene.ts` (scene→Three.js), `lib/editorImports.ts`, `lib/meshCut.ts` (Cut tool: plane cut + capped halves, oriented per half, staged as imports) |
-| **Editor** | api | `routes/editor.ts` (save, staged imports, and the no-persist `POST /export-3mf` download bake), `lib/import-store.ts`, `lib/mesh-import.ts` (STL parse + STEP tessellation), `lib/three-mf-mesh-extract.ts` (3MF geometry import: first non-empty plate → one part per placed part, helper volumes CARRIED with their subtype but excluded from the merged mesh + re-centring, group re-centred on origin); `lib/three-mf-scene-builder.ts` (`buildEditedThreeMf`) |
-| **Slicing** | web | the slice UI in `components/library/` — `SliceFileModal.tsx`, `SliceSettingsPanel.tsx` (`SliceSettingsController`; materials render as compact one-line swatch rows), `MaterialEditDialog.tsx` (the expanded per-material type/preset/color inputs, reached from a swatch row via `MaterialSwatchButton.tsx`, whose menu also assigns the printer's loaded materials directly), `FilamentSettingsDialog.tsx` (material settings) — plus `components/ProcessSettingsDialog.tsx`, `components/settings/MachineSettingsDialog.tsx` (printer presets, from the slicing-preset manager) and the per-object settings surfaces inside `SliceSettingsPanel.tsx` and the editor's `editorPanels.tsx`. All three settings dialogs share `components/settings/SettingsCatalogDialog.tsx` + `SettingValueField.tsx` |
+| **Editor** | web | `apps/web/src/plugins/model-studio/`: `EditorView.tsx` (3D editor), `lib/editorModel.ts` (the editable scene model + `buildSceneEdit`), `lib/editorProjectSource.ts` (where the project is READ from; see below), `lib/threeMfScene.ts` (scene→Three.js), `lib/editorImports.ts`, `lib/meshCut.ts` (Cut tool: plane cut + capped halves, oriented per half, staged as imports) |
+| **Editor** | api | `routes/editor.ts` (save, staged imports, and the no-persist `POST /export-3mf` download bake), `lib/import-store.ts`, `lib/mesh-import.ts` (the per-host parse dispatch: STEP's OpenCASCADE WASM and a zipped AMF's ZIP layer; every parse itself is shared), `lib/three-mf-mesh-extract.ts` (3MF geometry import: first non-empty plate → one part per placed part, helper volumes CARRIED with their subtype but excluded from the merged mesh + re-centring, group re-centred on origin); `lib/three-mf-scene-builder.ts` (`buildEditedThreeMf`) |
+| **Slicing** | web | the slice UI in `components/library/`: `SliceFileModal.tsx`, `SliceSettingsPanel.tsx` (`SliceSettingsController`; materials render as compact one-line swatch rows), `MaterialEditDialog.tsx` (the expanded per-material type/preset/color inputs, reached from a swatch row via `MaterialSwatchButton.tsx`, whose menu also assigns the printer's loaded materials directly), `FilamentSettingsDialog.tsx` (material settings), plus `components/ProcessSettingsDialog.tsx`, `components/settings/MachineSettingsDialog.tsx` (printer presets, from the slicing-preset manager) and the per-object settings surfaces inside `SliceSettingsPanel.tsx` and the editor's `editorPanels.tsx`. All three settings dialogs share `components/settings/SettingsCatalogDialog.tsx` + `SettingValueField.tsx` |
 | **Slicing** | api | `routes/slicing.ts`, `lib/slicing-jobs.ts`, `lib/slicer-client.ts`, `lib/slicing-presets.ts` |
-| **Slicing** | slicer | `apps/slicer/**` — the standalone BambuStudio CLI service (profile resolution, machine-switch, output metadata) |
+| **Slicing** | slicer | `apps/slicer/**`: the standalone BambuStudio CLI service (profile resolution, machine-switch, output metadata) |
 | **Shared 3MF model** | shared | `packages/shared/src/slicing.ts` (`SceneEdit`, slicing job contracts), the scene/index schemas in `printer.ts` |
-| **Shared 3MF model** | api/bridge/shared/web | the `apps/api/src/lib/three-mf-*.ts` modules own the Node ZIP I/O (read + write, re-exported via the `three-mf.ts` barrel); the pure transforms live in `@printstream/shared/three-mf` — the **index** and **scene** parses, and the whole bake (`bake-documents`, plus `object-clone`, `mesh-repair`, `xml-write`). Shared by `three-mf-reader.ts`, the bridge's `apps/bridge/src/library-3mf.ts`, and the web's client-side 3MF surfaces (no hand-kept mirror) |
-| **Printer retarget** | shared/api | "Save as a different printer" — rewrites a project's machine + process settings (no slicing). `packages/shared/src/machine-retarget.ts`, `apps/api/src/lib/save-retarget.ts`. See `docs/project-printer-retarget.md` |
+| **Shared 3MF model** | api/bridge/shared/web | the `apps/api/src/lib/three-mf-*.ts` modules own the Node ZIP I/O (read + write, re-exported via the `three-mf.ts` barrel); the pure transforms live in `@printstream/shared/three-mf`: the **index** and **scene** parses, and the whole bake (`bake-documents`, plus `object-clone`, `mesh-repair`, `xml-write`). Shared by `three-mf-reader.ts`, the bridge's `apps/bridge/src/library-3mf.ts`, and the web's client-side 3MF surfaces (no hand-kept mirror) |
+| **Printer retarget** | shared/api | "Save as a different printer": rewrites a project's machine + process settings (no slicing). `packages/shared/src/machine-retarget.ts`, `apps/api/src/lib/save-retarget.ts`. See `docs/project-printer-retarget.md` |
 | **Calibration** | api/web plugin | Builds disposable calibration prints (PA towers, flow plates) and runs them through the slicing pipeline + dispatcher. `apps/api/src/plugins/calibration/**`, `apps/web/src/plugins/calibration/**`. See "Calibration (plugin surface)" below |
-| **Public editor** (web host) | web | The server-less host of the SAME `EditorView`, at `/3mf-editor` — `apps/web/src/PublicToolApp.tsx` (shell), `LocalProjectEditor.tsx` (file picker + archive), `LocalEditorSurface.tsx` (mounts the editor + the dialogs no slice modal renders), `useLocalSliceSettingsController.ts`, `LocalSlicingPresetsDialog.tsx`, and the `lib/local*.ts` seams (project source, save target, import store, process/filament resolvers, machine retarget, browser preset storage). See "The public editor" below |
-| **Public editor** (anonymous api) | api | `routes/public-slicing.ts` — the anonymous catalogue (`/api/public/slicing/*`): profiles, targets, bed-model, flush-data/flush-calibration, and builtin-ONLY `resolve-process` / `resolve-filament` / `resolve-machine` |
+| **Public editor** (web host) | web | The server-less host of the SAME `EditorView`, at `/3mf-editor`: `apps/web/src/PublicToolApp.tsx` (shell), `LocalProjectEditor.tsx` (file picker + archive), `LocalEditorSurface.tsx` (mounts the editor + the dialogs no slice modal renders), `useLocalSliceSettingsController.ts`, `LocalSlicingPresetsDialog.tsx`, and the `lib/local*.ts` seams (project source, save target, import store, process/filament resolvers, machine retarget, browser preset storage). See "The public editor" below |
+| **Public editor** (anonymous api) | api | `routes/public-slicing.ts`, the anonymous catalogue (`/api/public/slicing/*`): profiles, targets, bed-model, flush-data/flush-calibration, and builtin-ONLY `resolve-process` / `resolve-filament` / `resolve-machine` |
 
 ## The no-save-first rule
 
-Every editor edit must work on a model with **no baked 3MF identity yet** — a staged import, a
+Every editor edit must work on a model with **no baked 3MF identity yet**: a staged import, a
 Cut/Split/Assemble output, or an independent copy. That is a hard contract, not a nicety: the
 editor is the only place a project is arranged, and "save, reopen, then you can do it" makes an
 edit that the UI already offered silently unavailable or silently lost.
 
 Concretely, a per-object or per-part seam must address the model by its **editor-side identity** and
 resolve it to a real `object_id` server-side at bake time. Three established patterns cover every
-case — use one, do not invent a fourth:
+case; use one, do not invent a fourth:
 
 | Editor-side identity | Carried as | Resolved by |
 | --- | --- | --- |
@@ -57,13 +57,56 @@ The failure has a quiet form worth watching for: a collector in `buildSceneEdit`
 `placedObjectIds` set is built only from `source.kind === 'object'` accepts the user's edit in the
 UI and then drops it at bake time, with no error anywhere.
 
+## Importable formats are one catalogue
+
+`packages/shared/src/import-formats.ts` is the single source of truth for which model formats the
+editor can stage as geometry: STL, STEP, 3MF, OBJ, glTF/GLB and AMF. It owns the extensions, the
+user-facing labels, `detectImportFormat`, and the `accept` string every file picker derives from.
+
+That table exists because the same fact used to be written out in six places -- an extension chain
+in `mesh-stl.ts`, a format-to-extensions map in the web's import store, a hand-written union on the
+staging worker's request, a capability list on each of the two import stores, and two prose strings
+in the api's refusals -- and they had already drifted about `.stp`.
+
+**Every parse is shared and dependency-free**, in `packages/shared/src/three-mf/`: `mesh-stl.ts`,
+`mesh-obj.ts`, `mesh-gltf.ts`, `mesh-amf.ts`, plus `mesh-extract.ts` (3MF) and `step-mesh.ts`
+(STEP's quality settings and per-solid fold). They must stay Node-free and DOM-free, and must not
+import `three`: `packages/shared` depends on `zod` alone and is consumed by the api and the bridge.
+Only the LOADING is per host -- the OpenCASCADE WASM for STEP, and a ZIP layer for a zipped AMF
+(yauzl in the api, fflate in the browser).
+
+**The parse dispatchers are exhaustive `switch`es with no `default`** (`parseImportedMesh` in the
+api, `parseImportMesh` in the staging worker, `parseOnMainThread` in the local store), so adding a
+format to the catalogue without teaching all three to parse it fails the typecheck instead of
+reaching a user as a file the picker offered and the import then refused.
+
+Three format-specific decisions are ported deliberately and are easy to get backwards:
+
+- **An OBJ is ONE mesh.** BambuStudio never splits on `o`/`g` (`Format/OBJ.cpp:94-99`) -- those are
+  material and draw grouping, so splitting would turn a two-colour model into two objects. Polygons
+  fan-triangulate and a face with fewer than three vertices is fatal, not skipped.
+- **An AMF's `<volume>`s are parts**, sharing their object's one vertex pool, which is exactly what
+  the multi-solid STEP machinery already means. We honour all five spec units where BambuStudio
+  honours only `inch` (`Format/AMF.cpp:280-281`), so a metre-declared file does not open a thousand
+  times too small. Both hosts cap the decoded XML at 64 MiB before the in-memory parse, and refuse
+  `<constellation>` instances rather than silently dropping their copies and placement transforms.
+- **glTF is defined in METRES**, so every coordinate and the node translation column are scaled by
+  1000. Draco-compressed primitives and a `.gltf` naming an external `.bin` are REFUSED with a
+  reason rather than partly imported, because a scene silently missing half its meshes is worse.
+
+The LIBRARY's `kind` axis (`classifyLibraryFileKind`) is deliberately a separate list: it also
+answers for G-code and for files nothing can import, and it calls a `.gcode.3mf` a `gcode` where the
+import catalogue calls it a `3mf`. `library-file-kinds.test.ts` pins the two against each other so a
+format can never be importable and unclassifiable at the same time -- which would show a file as
+"Other" with no thumbnail while the editor opened it perfectly well.
+
 ## The editor reads the whole archive, and nothing else
 
 Opening a project downloads the entire 3MF (`GET /api/library/:id/archive`, or the matching
 `/versions/:versionId/archive`) and parses it in the tab. `lib/editorProjectSource.ts` is the seam:
 `createArchiveProjectSource` for the library host, `createLocalProjectSource` for a host that
-already holds the file (the public editor). **Both serve every read — index, per-plate scene, mesh
-entries, plate thumbnails — from an inflated archive, through the same
+already holds the file (the public editor). **Both serve every read (index, per-plate scene, mesh
+entries, plate thumbnails) from an inflated archive, through the same
 `@printstream/shared/three-mf` parsers.** The editor no longer calls `/plates`, `/scene`, or
 `/scene-entry`; those routes remain for the read-only preview and the slim slice/print dialogs,
 which want the parsed index and nothing more.
@@ -89,7 +132,7 @@ Three notes in place because they bit:
 
 - **Serve the archive through `sendModelBuffer`, never a bare `createReadStream().pipe()`.** A raw
   pipe is fine for `/download` (the browser writes it to disk) but its body never completes when
-  read back through `fetch().arrayBuffer()` behind the Vite dev proxy — headers and most of the
+  read back through `fetch().arrayBuffer()` behind the Vite dev proxy: headers and most of the
   body arrive, the tail never does, and the editor hangs on open with no error. Verified directly:
   curl fetched the same URL in 37ms while the browser hung indefinitely.
 - The archive uses its own body-stall budget (`ARCHIVE_STALL_MS`) and does not retry: a
@@ -97,19 +140,19 @@ Three notes in place because they bit:
   time-to-first-byte scales with the whole project on a cold open.
 - **A short body must FAIL, not corrupt.** `sendModelBuffer` declares a `Content-Length`, so a body
   that ends early is rejected by the browser instead of being handed to the unzip as a truncated
-  buffer — which surfaces as "this file could not be opened as a 3MF archive" and blames the file
+  buffer, which surfaces as "this file could not be opened as a 3MF archive" and blames the file
   rather than the transport. This matters most because the route is conditional and the ETag is
   derived from METADATA, never from the bytes sent: a body that went out wrong still carries a
   valid-looking tag, gets stored, and every later open revalidates into it. One project stayed
   unopenable in one browser while the identical bytes opened everywhere else. When a bug could have
-  put a bad body in a cache, fixing the server is not enough — bump `ARCHIVE_ETAG_VARIANT` to
+  put a bad body in a cache, fixing the server is not enough; bump `ARCHIVE_ETAG_VARIANT` to
   orphan those entries.
 
-## Saves are delta-against-the-base — and what that constrains
+## Saves are delta-against-the-base, and what that constrains
 
 A `SceneEdit` is deliberately **not** a whole-file description. A 3MF carries far more than the
 editor models (the full process/machine config, slice_info, sub-model layout, vendor metadata), and
-the base file is the carrier for all of it — so the edit describes only the domains the editor
+the base file is the carrier for all of it, so the edit describes only the domains the editor
 owns, and everything else is copied through.
 
 That makes two rules load-bearing:
@@ -119,17 +162,17 @@ That makes two rules load-bearing:
    object; `filaments` is the whole desired filament list. This is why a cleared value can be
    expressed at all (an empty map/list means "remove", which a diff could not say).
 2. **An emit may be SKIPPED only when the base file already carries that value.** Skipping is how an
-   untouched project avoids a pointless rewrite — but it is only safe because the base still holds
+   untouched project avoids a pointless rewrite, but it is only safe because the base still holds
    the answer. The moment the editor synthesises state the base does NOT have, skipping is silent
    data loss.
 
 Rule 2 is the one that has actually bitten, and its subtlety is worth spelling out because the
 obvious reading of it is wrong. `desiredFilaments` was gated on "changed versus the base". A new
 project's scaffold DOES seed one filament (`POST /editor/new-project`), so "the base has none" is
-false — yet an editor-born save passes **`ignoreBaseContent`**, and the route then bakes with
+false, yet an editor-born save passes **`ignoreBaseContent`**, and the route then bakes with
 `baseSource = null`. The base file is a save TARGET only; none of its bytes are carried. So nothing
 could differ from the scaffold, the list was never emitted, the base contributed nothing, and a new
-project saved with its default material reopened with **no materials at all** — which in turn
+project saved with its default material reopened with **no materials at all**, which in turn
 stranded colour paint, whose codes are filament ids, rendering it in the fallback palette.
 
 The correct question for a gate is therefore not "did the user change it?" and not even "does the
@@ -146,13 +189,13 @@ instance it carries the geometry reference (`objectId` or staged `importId`), `p
 decomposed transform (or a full `matrix`), optional `filamentId`, and `printable`.
 
 Per-part extensions ride alongside the instances: `partFilaments` (material
-reassignment — only for parts that HAVE a material: normal parts and modifiers, whose
+reassignment, only for parts that HAVE a material: normal parts and modifiers, whose
 region can change the printed filament. A support blocker/enforcer or negative volume
 never carries one, is never given the object's, and never gets an `extruder` written back;
 this mirrors BambuStudio, which draws the extruder swatch for `MODEL_PART` and
 `PARAMETER_MODIFIER` only. `threeMfPartSubtypeCarriesFilament` in `@printstream/shared` is
 the single predicate for it), `objectNames` (renames), and the four paint channels `supportPaint` /
-`seamPaint` / `colorPaint` / `fuzzyPaint` — the support, seam, colour, and fuzzy-skin brushes'
+`seamPaint` / `colorPaint` / `fuzzyPaint`: the support, seam, colour, and fuzzy-skin brushes'
 complete per-part triangle paint maps (`paint_supports` / `paint_seam` codes: `'4'` enforcer, `'8'`
 blocker; `paint_color` whole-triangle states map to 1-based filament ids, '4'/'8'/'0C'/
 '1C'...; `paint_fuzzy_skin` is its own attribute even though BambuStudio gives fuzzy skin the same
@@ -162,7 +205,7 @@ by every parser and both worker-wire hops (`TRIANGLE_PAINT_SOURCES` in the edito
 `meshParseCore.ts` is the one table they all derive from), because these maps are complete state, so
 a channel that fails to load saves back as empty and erases what the file had. The api rewrites a painted
 part's `<triangle>` attributes inside the mesh's model entry (root or
-`3D/Objects/*.model`); parts never painted in the session are copied byte-for-byte —
+`3D/Objects/*.model`); parts never painted in the session are copied byte-for-byte,
 unless the save PERMUTES the filament slots (a material reorder or mid-list removal), in which
 case the bake re-keys every entry's `paint_color` codes through the old→new slot map
 (`remapColorPaintInModelXml` in the shared `three-mf/triangle-paint-codec.ts`), because colour
@@ -200,32 +243,36 @@ sibling: a per-object curve of alternating z/height pairs written to
 brush (`three-mf/layer-height-adaptive.ts`). It TAKES PRECEDENCE over `heightRanges`' layer heights,
 so both editor surfaces warn when an object carries both. `filamentChanges` and `pauses` carry per-plate layer-based
 filament changes and layer pauses (ToolChange / PausePrint entries in
-`Metadata/custom_gcode_per_layer.xml`, both keyed by the target layer's `top_z` in mm
-— the slicer re-snaps to the nearest layer at slice time, BambuStudio semantics); the
+`Metadata/custom_gcode_per_layer.xml`, both keyed by the target layer's `top_z` in mm:
+the slicer re-snaps to the nearest layer at slice time, BambuStudio semantics); the
 writer replaces only the listed plates' entries of the edited type while preserving
 the other entry types and untouched plates, and the scene response seeds the editor's
-per-plate lists. The prepare-print dialog edits the same entries WITHOUT a
+per-plate lists. Preserved entries are remapped from each plate's source index to its
+saved index during a reorder or delete; the positional `wipe_tower_x` and
+`wipe_tower_y` arrays follow the same mapping. Otherwise a pause or prime tower remains
+at the old index and silently attaches to whichever plate takes that number.
+The prepare-print dialog edits the same entries WITHOUT a
 `SceneEdit`: the shared 3MF index surfaces each plate's baked changes/pauses, the
 dialog's edits ride `createSlicingJob`'s top-level `filamentChanges`/`pauses`
 (same replace-per-plate schemas; ignored when a `sceneEdit` is present, which carries
 its own), and the API merges them into the slice input via the object-customization
-rewrite — a slice-only edit that never touches the library file.
+rewrite: a slice-only edit that never touches the library file.
 `addedParts` carries new volumes added INSIDE models (BambuStudio's "Add part" plus
-the helper volumes — negative parts, modifiers, support blockers/enforcers): each
+the helper volumes: negative parts, modifiers, support blockers/enforcers): each
 references its own mesh as `meshImportId` (a staged import, whether a generated
 primitive or a loaded model file) plus an object-local 12-number matrix; the writer
 injects the mesh as a new object resource, references it as a `<component>` of the
 host root object, and adds a `<part subtype="...">` to the host's
-`model_settings.config` entry. **The host is `objectId` XOR `importId`** — an
+`model_settings.config` entry. **The host is `objectId` XOR `importId`**: an
 in-project object, or a staged import for a part added to a model the user has not
 saved yet, resolved through the same `importIdToObjectId` map that places the import
 itself (so `applyAddedParts` must run after the imports are injected). A part whose
 subtype carries a filament (`threeMfPartSubtypeCarriesFilament`: normal parts and
-modifiers) also ships `filamentId`, written as the part's `extruder` metadata —
-without it an added printed part would silently print in filament 1. Modifier
+modifiers) also ships `filamentId`, written as the part's `extruder` metadata.
+Without it an added printed part would silently print in filament 1. Modifier
 parts may carry per-volume process overrides (`settings`, edited via the same
 restricted-catalog ProcessSettingsDialog as per-object overrides), written as
-`<metadata key value/>` entries inside the part block — exactly how BambuStudio
+`<metadata key value/>` entries inside the part block, exactly how BambuStudio
 persists ModelVolume config, so the slicer applies them inside the volume.
 
 A part authored by a TOOL also carries what it was MADE FROM, so it reopens editable
@@ -247,8 +294,8 @@ rides every subsequent save and the transport rejects an oversized body before
 validation runs, which would otherwise break save and slice alike with nothing naming
 the SVG. Hosts
 carrying an inline mesh are first wrapped (mesh moves to its own object behind an
-identity component) so 3MF's mesh-XOR-components rule holds — the normal path for a
-freshly baked import host. Painting and brim ears work on unsaved imports too — they
+identity component) so 3MF's mesh-XOR-components rule holds, the normal path for a
+freshly baked import host. Painting and brim ears work on unsaved imports too: they
 ride their own seams (`importPaint`, `importBrimEars`, `importHeightRanges`,
 `importLayerHeightProfiles`, and `repairedImportIds` for mesh repair) keyed by import id rather than by a baked `object_id`, so a staged import, a
 Cut/Split half, or an independent copy can be painted before the project has ever been
@@ -263,12 +310,12 @@ an untagged volume was not merely unpaintable, the brush passed through it onto 
 behind.
 A 3MF **import** carries its volume types in: `three-mf-mesh-extract.ts` keeps helper volumes as
 parts with their raw `subtype` (BambuStudio's "Import Object" is `LoadStrategy::LoadModel`, which
-loads a 3MF's ModelVolumes whole and applies each type unconditionally — only the CONFIG is
+loads a 3MF's ModelVolumes whole and applies each type unconditionally; only the CONFIG is
 dropped), the staged import records it per solid, and the bake writes it back unless
 `importPartTypes` overrides. Helper volumes are kept OUT of the import's merged mesh and out of
 its re-centring, since those drive bounds, the thumbnail, and where the import rests. A helper
 volume never receives an `extruder`, so it cannot inherit the object's material.
-`objectClones` carries INDEPENDENT object copies — BambuStudio's Ctrl+C/V
+`objectClones` carries INDEPENDENT object copies: BambuStudio's Ctrl+C/V
 (`Model::add_object(*src_object)`), as opposed to placing another instance against the same
 `objectId`, which is its toolbar "+" (`increase_instances`) and stays fully linked. A copy is
 addressed throughout the edit by a NEGATIVE placeholder object id; a pre-pass
@@ -291,11 +338,11 @@ translucent volumes and per-part process overrides apply inside them, exactly li
 added modifier volumes.
 
 `partTransforms` carries part-placement edits (moving / rotating / scaling a BAKED part
-inside its object — e.g. repositioning a support blocker after a save): keyed by
+inside its object, e.g. repositioning a support blocker after a save): keyed by
 objectId+partIndex with the part's new object-local 12-number matrix. The writer
-rewrites the part's `<component transform>` — the placement BambuStudio and the CLI
-slicer actually load into the volume (verified against the BambuStudio reader:
-`model_settings`'s `matrix` metadata only feeds `volume->source.transform`) — and
+rewrites the part's `<component transform>` (the placement BambuStudio and the CLI
+slicer actually load into the volume, verified against the BambuStudio reader:
+`model_settings`'s `matrix` metadata only feeds `volume->source.transform`) and
 mirrors the `matrix` metadata (row-major 4x4) when present so a later BambuStudio
 re-save doesn't compound a stale source record. Placement is geometry-level, shared by
 every placed instance of the object.
@@ -331,6 +378,38 @@ body, and a promoted body is named after the OBJECT, so the same delete produced
 `["Cube","Part"]` before a save and `["Part","Part"]` after one. That is the general lesson
 rather than a detail of this seam: a difference that only appears one save later is still a
 save changing what the user sees, so the fix belongs in what gets WRITTEN.
+
+**Per-plate settings ride the plate, and the global rides the edit.** `SceneEditPlate` carries the
+plate's OWN bed type (`plateType`), `printSequence`, `spiralMode` and `locked`, while the
+project-global bed type is `SceneEdit.plateType` at the top level, written as `curr_bed_type`. The
+engine applies a plate's config OVER the project's (`BambuStudio.cpp:6897` does
+`new_print_config.apply(*part_plate->config())`), so these genuinely change what a plate prints, not
+just what it looks like. Three rules. The overrides are TRI-STATE: `undefined` means the edit does
+not mention the key and the source file's own value is carried, `null` means the user chose "same as
+global" so nothing is written and the carry is suppressed, and collapsing the two puts the source's
+value straight back over the user's choice. The top-level `plateType` is also the DISCRIMINATOR that
+lets the bake author per-plate bed types at all: a client from before this stamped the global onto
+every plate, so without it those values are read as the global rather than as N overrides that would
+then outlive the user's next change to it. And `spiral_mode` is written `true`/`false`, which is
+what BambuStudio writes as well: its `spiral_mode` line streams a bare `getBool()`
+(`bbs_3mf.cpp:8376`), but `std::boolalpha` is set on that same stream by the `locked` line above it
+(`:8334`) and is sticky, so it emits `true` and its boolalpha reader (`:4652`) takes it back. Writing
+`1` would not round-trip; our parser accepts both spellings defensively. The policy lives in `three-mf/plate-metadata.ts`
+(`authoredPlateMetadata` writes, `preservedPlateMetadata` carries what the edit does not author);
+the UI is the plate strip's "Plate settings" menu item, badged with the plate's override count (on the kebab and on the row) so a divergence is visible without opening anything.
+
+That dialog also carries BambuStudio's by-object skirt-collision warning (`Plater.cpp:26005`), and
+the rule is `plateSkirtCollisionRisk` in `process-settings.ts` rather than inline because it is easy
+to get wrong in two ways. It tests the plate's EFFECTIVE sequence, so a plate left on "same as
+global" over a by-object project warns exactly as an explicitly by-object plate does; reading only
+the plate's own value drops the commonest case, since a plate inherits by default. And the config it
+tests is the resolved preset with the SESSION's project-wide overrides laid over it, because
+switching the project to by-object this session is the likeliest way to reach the warning at all.
+The skirt half of the condition is shared with the process tab's own copy of the test
+(`skirtCanCollideWithByObjectPrinting`), where only the sequence source genuinely differs. It is
+advisory here and auto-applied there (`ConfigManipulation.cpp:733` resets `skirt_height` to 1),
+faithfully: `skirt_height` is project-wide, so a dialog scoped to one plate must not rewrite it. An
+unresolved config warns about nothing rather than guessing.
 
 ## Sidebar order is data, and both halves are portable
 
@@ -422,27 +501,27 @@ bake via the same unreferenced-object sweep as Cut/Split), but its **identity is
 for the slicer. `buildEditedThreeMf` returns `replacedObjectIds` (each original objectId →
 the baked object_id its import landed on); the slicer uses that to re-key the object's
 **per-object process overrides** onto the replacement before slicing. Those overrides are
-NOT part of `SceneEdit` — they ride the slice request's `objectProcessOverrides` (keyed by
+NOT part of `SceneEdit`: they ride the slice request's `objectProcessOverrides` (keyed by
 Bambu object_id). The editor-arranged path now applies them via `createObjectCustomizedThreeMf`
 after the bake (previously skipped whenever a `sceneEdit` was present); the original object's
 name also travels onto the replacement via `objectNames` (importId-keyed).
 
 `repairedObjectIds` carries BambuStudio's per-object "fix model": each entry is an in-project
 object the user right-clicked → **Repair mesh** in the editor. Unlike `meshReplacements`, this is
-NOT a geometry swap — `buildEditedThreeMf` resolves each marked root object to the entries that
+NOT a geometry swap. `buildEditedThreeMf` resolves each marked root object to the entries that
 actually carry its meshes (a Bambu project keeps each object's mesh in its own
 `3D/Objects/*.model`) and runs the shared `three-mf/mesh-repair` **in place** on just those meshes: a
-nearby-vertex weld (closing sub-tolerance cracks) plus degenerate/duplicate facet pruning — the
+nearby-vertex weld (closing sub-tolerance cracks) plus degenerate/duplicate facet pruning, the
 admesh pass BambuStudio applies to STL imports but skips for a 3MF's triangles. In place is the
 whole point: it preserves the object's per-triangle paint and its part volumes, which rebuilding
 the geometry would destroy. For the same reason the bake applies **paint before repair** (repair
 carries each triangle's attributes through while welding/dropping, so painting first rides through
-it; painting after would index triangles repair removed). Marking is the entire client-side edit —
-repair is visually a no-op — and nothing repairs automatically: slicing never silently alters
+it; painting after would index triangles repair removed). Marking is the entire client-side edit,
+repair is visually a no-op, and nothing repairs automatically: slicing never silently alters
 geometry.
 
 **Imported-object 3MF structure (Production Extension).** When the base project uses the 3MF
-Production Extension (`requiredextensions="p"` — what BambuStudio writes), the bake emits every
+Production Extension (`requiredextensions="p"`, what BambuStudio writes), the bake emits every
 injected `<object>`/`<component>`/build `<item>` with a `p:UUID`, and a multi-solid import's solids
 are written to a **separate `3D/Objects/printstream_object_<id>.model` sub-model** referenced by
 `p:path` from a small root `<components>` assembly object (declared in `3D/_rels/3dmodel.model.rels`).
@@ -452,11 +531,11 @@ geometry data" (the CLI tolerates it, which is why it only shows up on GUI open)
 files let the editor fetch/parse only the objects a plate shows instead of the whole root model.
 `readSceneManifest` resolves `p:path` sub-models, so save→reopen re-hydrates the assembly's solids as
 its parts. Projects WITHOUT the production extension (fresh/core 3MFs) keep the simpler inline-mesh
-form (no UUIDs needed — the GUI accepts inline geometry in a non-production document).
+form (no UUIDs needed: the GUI accepts inline geometry in a non-production document).
 
 The process-settings catalog behind those dialogs
-(`packages/shared/src/generated/process-settings.generated.ts`) is generated —
-not hand-edited — by `scripts/dev/generate-process-settings.mjs`, which
+(`packages/shared/src/generated/process-settings.generated.ts`) is generated,
+not hand-edited, by `scripts/dev/generate-process-settings.mjs`, which
 transcribes the page/group layout and option metadata from a BambuStudio
 source checkout (`--src <bambustudio-src>`). Re-run it when bumping the
 BambuStudio pin.
@@ -471,8 +550,8 @@ per-device localStorage override, both edited from the **editor settings dialog*
 `components/library/EditorSettingsDialog.tsx`). It sits there rather than in Settings
 because it decides what the editor's own process-settings dialog shows; the Settings >
 Slicing page held nothing else and is gone. The card is not gated on `canManageSettings`
-— it carries that gate itself (shared default read-only without the capability, per-device
-override personal) — and the public editor omits it, having no workspace to read a shared
+(it carries that gate itself: shared default read-only without the capability, per-device
+override personal) and the public editor omits it, having no workspace to read a shared
 default from. The editor reads the effective
 value through `useEffectiveSlicerDeveloperMode` (`apps/web/src/lib/slicerDeveloperMode.ts`);
 the tier gate is `isProcessOptionVisibleInMode` in
@@ -481,7 +560,7 @@ conditional visibility rules.
 
 ### One dialog shell, three catalogs
 
-The process, filament and machine editors share their chrome — title, search, "Changed only",
+The process, filament and machine editors share their chrome: title, search, "Changed only",
 the page tabs with their modified emphasis and per-page counts, the grouped body, and the
 footer's Reset all / Cancel / Update preset / Save as preset / Apply. That lives in
 `components/settings/SettingsCatalogDialog.tsx` (with `SettingsCatalogLineRow.tsx` for a line
@@ -489,19 +568,46 @@ and `catalogDialogFilter.ts` for the pure "is this key on screen" rules). Each d
 `SettingsCatalogAdapter` (`components/settings/settingsCatalogAdapter.ts`) describing only what
 it alone knows: how to read and write a value, and what counts as changed.
 
-The split is deliberate. The three value spaces are genuinely different — the process dialog runs
+The split is deliberate. The three value spaces are genuinely different (the process dialog runs
 a conditional field-state engine and a per-object override mode, the filament dialog edits element
 0 of per-variant vectors and broadcasts back, the machine dialog edits one vector column per
-extruder — but the chrome around them is not, and while it was copied per dialog it drifted: one
+extruder), but the chrome around them is not, and while it was copied per dialog it drifted: one
 footer wrapped on a phone and one did not, one counted tab matches under "Changed only" and one
 only under the search box, and the same button was called a preset in one and a profile in the
 other. Add a fourth catalog by writing an adapter, never by copying the shell.
+
+Two surfaces sit ACROSS the three catalogs rather than inside one, and both are deliberately
+read-only finders that hand off to the dialogs above rather than editing anything themselves.
+`components/settings/settingsSearch.ts` + `SettingsSearchDialog.tsx` search all three catalogs from
+one box (label, key and BambuStudio's description, ranked so the option actually named after the
+query beats the descriptions mentioning it) and open the owning dialog with the key seeded as its
+search text via `SettingsCatalogDialog`'s `initialQuery`. `components/settings/presetDiff.ts` +
+`slicing-presets/ComparePresetsDialog.tsx` diff two presets of one kind side by side. Both exist
+because BambuStudio has them and both beat it on a structural point: its searcher indexes as a side
+effect of building widgets, so an option never rendered is unfindable and its `opt_key` matching is
+commented out entirely, and its diff silently DROPS keys its searcher does not know, which lets the
+surface imply two presets match when they do not (ours counts and reports them). The diff compares
+through `processConfigValuesEqual` WITH the catalog option, never `===` on the serialized strings,
+because BambuStudio writes one value several ways depending on where it landed and string equality
+invents differences that are not there.
+
+Custom presets also export as a BambuStudio bundle. `packages/shared/src/slicing-preset-bundle.ts`
+owns the layout and the `bundle_structure.json` manifest (the archive `.bbscfg` / `.bbsflmt` shape
+from `CreatePresetsDialog.cpp:4061-4150`); only the zipping is per-surface, mirroring how
+`PresetArchiveReader` splits the import side. A filament-only selection is a filament bundle and
+anything else is a printer bundle, because a filament bundle's manifest has no field that can name a
+machine or process preset. BUILTINS are refused: their content belongs to the slicer image, so a
+copy would silently stop tracking the engine it came from. Note the manifest is descriptive rather
+than load-bearing, since BambuStudio's own importer skips it and imports every other JSON by base
+name (`PresetBundle.cpp:1069-1090`), which is exactly how our two readers drifted, one skipping it
+and one parsing it as a preset, so a genuine `.bbscfg` imported into a workspace and threw in the
+public editor. `isPresetArchivePresetEntry` is now the one rule both use.
 
 ### Machine (printer) presets are edited by column, not by element 0
 
 `MachineSettingsDialog` is the printer editor, reached two ways: the slicing-preset manager's
 Printer tab, and the gear beside the **Preset** row in the slice sidebar's Printer section (which
-names the machine preset that Model + Nozzle + Flow resolved to — see
+names the machine preset that Model + Nozzle + Flow resolved to; see
 `lib/machineTargetResolution.ts`). The sidebar mounts it itself rather than delegating to its host
 the way the process and material dialogs do, because it edits a stored preset and returns nothing
 for a host to merge; the host only answers `canEditPrinterPreset`, which the public editor sets
@@ -509,22 +615,22 @@ false. The all-kinds **Manage presets** button sits in that sidebar's *Slicer* h
 heading whose scope is the whole panel.
 
 It has no project branch: a 3MF embeds its filament and process settings but only *names* its
-printer, so a machine preset is always an installed one — no `sourceFileId`, no baked overrides, and
+printer, so a machine preset is always an installed one: no `sourceFileId`, no baked overrides, and
 no Apply (it runs at `applyScope: 'preset'`). Its base config comes from
 `POST /api/slicing/profiles/resolve-machine`, which also returns the parent preset as `baseConfig`
 when the preset declares `inherits`.
 
 Over half the machine catalog's 77 options are vectors, and **their elements are indexed by
-different things per page** — which is why `machineColumnsForPage`
+different things per page**, which is why `machineColumnsForPage`
 (`packages/shared/src/machine-settings.ts`) is page-driven rather than a property of the option:
 
-- **Extruder page** — one element per extruder, counted from `nozzle_diameter`'s length exactly as
+- **Extruder page**: one element per extruder, counted from `nozzle_diameter`'s length exactly as
   `TabPrinter::build_unregular_pages` does. Labelled "Extruder 1"/"Extruder 2"; a single-extruder
   machine gets one unlabelled column, matching BambuStudio's unnumbered "Extruder" page.
-- **Motion ability page** — element 0 is Normal mode and element 1 is **Silent** mode, *not*
+- **Motion ability page**: element 0 is Normal mode and element 1 is **Silent** mode, *not*
   extruders (`build_kinematics_page` appends index 1 only behind `m_use_silent_mode`, i.e.
   `silent_mode`). Treating these as extruder columns is the easy mistake.
-- **Everywhere else** — element 0 only. `nozzle_type` is a vector but its Basic information line is
+- **Everywhere else**: element 0 only. `nozzle_type` is a vector but its Basic information line is
   an `append_single_option_line` with no index, so BambuStudio shows the first element alone.
 
 Collapsing a vector to element 0 (what `createProcessConfigAccessor` does, and therefore what the
@@ -532,15 +638,15 @@ process dialog does) would silently edit extruder 1 of an H2D and leave extruder
 
 A save writes the **full resolved config** through `buildMachinePresetConfig`, laying only the
 catalog keys the user could see over it. BambuStudio's printer tab edits the rest through bespoke
-widgets this dialog does not have — the printable area, bed shape and exclusion zones, the
-model/variant identity — and those are absent from the catalog by design; assembling a save from
+widgets this dialog does not have (the printable area, bed shape and exclusion zones, the
+model/variant identity), and those are absent from the catalog by design; assembling a save from
 the editable keys alone would drop them and quietly rebuild the preset around a different bed.
 
 ### Global process settings persist through the editor's save
 
 Global (project-wide) process edits made in the editor persist into the saved 3MF,
 not just a one-off slice. The dialog is owned by the host `SliceFileModal` and writes
-the shared slice controller, so — like the filament-settings dialog's `materialEditListenerRef` —
+the shared slice controller, so, like the filament-settings dialog's `materialEditListenerRef`,
 the controller exposes a `settingsEditListenerRef` the editor points at
 `recordMaterialsHistory`; the modal fires it **before** a profile switch / overrides
 apply, so the edit lands in undo history and lights Save. On save, `useEditorSave` sends
@@ -548,8 +654,8 @@ the controller's `processSettingOverrides` as `SaveArrangedThreeMf.processSettin
 `buildEditedThreeMf` merges them into `project_settings.config` via
 `applyGlobalProcessOverrides` (verbatim, mirroring the slicer's own
 `applyProcessSettingOverrides`). Deliberately routed through a `buildEditedThreeMf`
-option rather than the `SceneEdit` contract so the slice path — which applies these via
-the slice request instead — is untouched. On reopen the baked config becomes the
+option rather than the `SceneEdit` contract so the slice path, which applies these via
+the slice request instead, is untouched. On reopen the baked config becomes the
 baseline, so the override map resets to empty (no phantom "modified" marker).
 
 ### The project's own machine settings (a modified printer, scoped to one project)
@@ -613,43 +719,43 @@ something another cannot; the dialog's per-key reset is the escape hatch.
 ### An editor-born project bakes from the editor state, not from its own last save
 
 A project **created** in the editor (the "New 3MF" scaffold, or a fileless start) keeps its
-instances **import-backed for the whole session** — nothing re-reads the file to turn a staged
+instances **import-backed for the whole session**: nothing re-reads the file to turn a staged
 import into an in-project object. Its saves therefore set
 `SaveArrangedThreeMf.ignoreBaseContent`, which makes the API skip the base file's *bytes* while
 still using it as the save **target** (name/folder/bridge; a `newVersion` save still lands on it).
 
 Why it matters: without it, each save re-injects the staged imports on top of the previous save's
 output, and the base's now-unreferenced component objects are left behind. The *placed* instance
-stays correct — `SceneEdit.instances` is authoritative for what is on the plate — so this is
+stays correct (`SceneEdit.instances` is authoritative for what is on the plate), so this is
 invisible in the scene, but a multi-solid import strands **one dead mesh object per solid per
 save**, and a large STEP assembly bloats the file every time the user hits Save. Baking from the
 editor state alone reproduces the first save's output byte-for-byte, so repeated saves are stable.
 That stability is what lets the editor **adopt** the saved file in place (`savedFile` in
-`useEditorSave`) and stay open, instead of re-mounting on it — a plain Save used to look like the
+`useEditorSave`) and stay open, instead of re-mounting on it: a plain Save used to look like the
 project had reloaded, because a new project has no Save-version path and fell through to Save-As.
 
 The scaffold itself is a hidden throwaway: `LibraryCreateAction` hands the host an `onDiscard`,
 which `LibraryView` fires from `closeSliceDialog`. Cleanup is therefore tied to a **clean dialog
-close** — a killed tab or a refresh skips it, and `pruneHiddenLibraryFiles` sweeps the remainder
+close**: a killed tab or a refresh skips it, and `pruneHiddenLibraryFiles` sweeps the remainder
 after `LIBRARY_TRANSIENT_RETENTION_DAYS`. Note the historical trap: re-opening the editor on a
 saved file (`onSavedAs` → `openSliceForSavedFile` with no opts) **overwrites that cleanup ref with
 null**, so before the adopt-in-place change every save of a new project orphaned its scaffold.
 
 The flag is **only** for editor-born projects. A project opened from a real library file must keep
 reading its base: `rewriteThreeMfEntries` copies every entry it has no transform for through
-verbatim, and that passthrough is the only thing preserving what `SceneEdit` cannot express —
+verbatim, and that passthrough is the only thing preserving what `SceneEdit` cannot express:
 `Auxiliaries/` attachments, plate thumbnails, `_rels/`, `[Content_Types].xml`, and whatever a
 future BambuStudio adds. A new-project scaffold holds none of that: it is itself a from-null bake
 of one plate and one default filament (`POST /api/editor/new-project`), both already modelled by
 the editor state. A genuine **Save As** from an already-saved project still re-mounts on the new
-file, deliberately — an older file stays behind, and re-reading is also what converts that
+file, deliberately: an older file stays behind, and re-reading is also what converts that
 session's staged imports into in-project objects.
 
 ## Printability ("Printable" toggle)
 
 Mirrors BambuStudio: a non-printable object is **greyed out** and **excluded from the
 slice**, but **kept in the saved 3MF** so it can be re-enabled. It is an **editor-owned,
-per-instance** property — *not* the slice dialog's per-plate object selection (which is
+per-instance** property, *not* the slice dialog's per-plate object selection (which is
 derived from the static baked index and does not follow editor moves).
 
 Forward path:
@@ -657,19 +763,19 @@ Forward path:
   through moves/duplicates/undo. Drives the viewport dim (`setObjectPrintedStyle`) and the
   Objects-list toggle.
 - `buildSceneEdit` emits `printable: false` only for skipped instances.
-- `buildEditedThreeMf` (`three-mf-scene-builder.ts`) writes `printable="0"` on the build `<item>` —
+- `buildEditedThreeMf` (`three-mf-scene-builder.ts`) writes `printable="0"` on the build `<item>`:
   BambuStudio's native attribute, retained in the saved 3MF so the object can be re-enabled.
 
 Round-trip (reopen): `readSceneManifest` parses `<item printable="0">` back onto the scene
 instance (`parseRootBuildItemPrintable`), so the editor seeds `EditorInstance.printable`
-and a reopened project keeps its greyed objects. This read path is **API-only** — the bridge
+and a reopened project keeps its greyed objects. This read path is **API-only**: the bridge
 does not parse build items (the shared parser only builds the index); the scene is always
 assembled by `three-mf-reader.ts` from a locally-resolved file.
 
 ### How `printable="0"` actually excludes an object from the slice
 
 The BambuStudio **CLI ignores the build-item `printable` flag** when slicing (and ignores
-`<model_instance>` removal — it re-derives plate membership from build-item geometry; physically
+`<model_instance>` removal: it re-derives plate membership from build-item geometry; physically
 deleting objects corrupts the `<assemble>` cross-references). The only mechanism the engine honors
 is the `--skip-objects "<identify_id,…>"` command-line flag, keyed on each instance's `identify_id`
 (stored as `loaded_id` by the loader). So `printable="0"` is purely an **in-3MF marker of intent**;
@@ -682,11 +788,11 @@ Both exclusion surfaces ride this path. The **slice/print dialog's per-object se
 on the target plate. The **editor's per-instance Printable toggle**: the bake writes `printable="0"`
 on the skipped instances' build items. The `identify_id`s both need are guaranteed by the bake:
 `renderArrangedModelSettingsPlates` (`three-mf-scene-builder.ts`) writes one on **every**
-`model_instance` — preserving the source project's ids for returning instances and minting fresh
-unique ids for new/duplicated ones — so an editor-rewritten (or editor-saved) project stays
+`model_instance`, preserving the source project's ids for returning instances and minting fresh
+unique ids for new/duplicated ones, so an editor-rewritten (or editor-saved) project stays
 skippable. (Editor saves used to strip `identify_id`s, which silently broke per-object selection
 on any previously saved project; such a project regains ids on its next save.) The skip mapping is
-per **instance** — build items appear in instance-id order, so an object with a mix of printable
+per **instance**: build items appear in instance-id order, so an object with a mix of printable
 and skipped items skips only the toggled instances, while an object whose items are all
 unprintable skips every instance.
 
@@ -694,7 +800,7 @@ unprintable skips every instance.
 
 Print history is otherwise G-code-deep: `PrintJob.fileId` points at an immutable snapshot of the
 dispatched artifact, and "Reprint" re-sends exactly those bytes. That is right for "print that
-again", and useless for "print that again with one thing changed" — the project it came from was
+again", and useless for "print that again with one thing changed": the project it came from was
 never recorded, and for a slice started from the editor it may never have existed in the library
 at all.
 
@@ -710,10 +816,10 @@ That file alone would not be enough, because a slice carries settings that never
 process preset, the per-slot filament presets, the per-slice and per-material setting overrides,
 and the plate type all travelled beside the 3MF as resolved profile files and reached the CLI on the
 command line. A project preserved without them reopens showing whatever presets it was last SAVED
-with and silently drops every override set in the prepare-print dialog — the opposite of the point.
+with and silently drops every override set in the prepare-print dialog, the opposite of the point.
 
 So `slice-settings-authoring.ts` writes them into the project **as a step of the rewrite chain**,
-before the engine sees it — upholding the same rule the rest of this document rests on: PrintStream
+before the engine sees it, upholding the same rule the rest of this document rests on: PrintStream
 authors the 3MF, the CLI only slices it. The engine and the preserved copy therefore read one file,
 so "slice again" reopens the exact project that produced the print rather than a reconstruction of
 it. It reuses the shared pieces "save for a different printer" uses
@@ -725,13 +831,13 @@ AFTER the machine step, whose topology maps the process and filament writes inde
 the engine actually did, so authoring cannot change a slice's output. That is MEASURED, not reasoned:
 the same project (declaring `sparse_infill_pattern=3dhoneycomb`, `top_shell_layers=4`,
 `top_surface_pattern=monotonic` against a custom preset) was sliced twice against a builtin preset,
-once with this pass and once without, and both runs produced identical G-code —
+once with this pass and once without, and both runs produced identical G-code:
 `grid/5/monotonicline`, the PRESET's values.
 
 That A/B settled a question worth writing down: **a process preset loaded on the command line
 overrides the project's embedded process values outright, so a project's `different_settings_to_system`
 deltas are inert once a preset is loaded.** The process step therefore lets the preset win. An earlier
-cut of this code restored those deltas, on the theory that the CLI honoured them — it does not, and
+cut of this code restored those deltas, on the theory that the CLI honoured them. It does not, and
 restoring them left the kept project declaring changes the print never had (the phantom-changed-
 settings failure mode). The FILAMENT step is deliberately the other way round:
 `rebindProjectFilamentPhysics` preserves a slot's declared keys, which is right there because a
@@ -754,8 +860,8 @@ The mechanics, and why each piece is where it is:
   project must be the bytes the winning attempt handed the engine, never an earlier attempt's.
 - Every entry in the chain's `rewrittenSourcePaths` owns its containing directory: the cleanup
   removes the whole dir, so a rewrite step must `mkdtemp` rather than write beside its input.
-- `sliced-project-preservation.ts` stores it via `ensureLibrarySnapshotFromLocalPath` — hidden,
-  `origin: 'snapshot'`, content-addressed, so slicing the same project repeatedly stores one copy —
+- `sliced-project-preservation.ts` stores it via `ensureLibrarySnapshotFromLocalPath` (hidden,
+  `origin: 'snapshot'`, content-addressed, so slicing the same project repeatedly stores one copy)
   and records `sourceProjectFileId` + `sliceSettingsJson` on the sliced **output**. Not on the
   snapshot: snapshots are shared between any two files with identical bytes and cannot carry
   per-slice facts.
@@ -772,7 +878,7 @@ The mechanics, and why each piece is where it is:
   The asymmetry is pre-existing, not an oversight here: a saved global process override becomes the
   project's baseline, while a material tune stays marked as the user's edit so it keeps a reset.
 - **No job, no kept project.** A preserved project only earns its place if the user went on to START
-  A PRINT (or deliberately kept the sliced output) — a slice they abandoned must leave nothing behind.
+  A PRINT (or deliberately kept the sliced output): a slice they abandoned must leave nothing behind.
   The write still happens during the slice, because that is the only moment the prepared bytes exist;
   what enforces the rule is that survival is conditional on a reference. Two halves:
   `discardHiddenSlicedOutput` → `discardUnreferencedProjectSnapshot` deletes promptly when the user
@@ -789,7 +895,7 @@ The mechanics, and why each piece is where it is:
 
 The web offers it as "Slice again" beside Reprint on both history surfaces (`JobsView`,
 `PrinterSummaryCards`), which open `SliceThenPrintFlow` on the preserved project. Because the
-project now declares its own presets, the dialog derives the right ones with no seeding — which is
+project now declares its own presets, the dialog derives the right ones with no seeding, which is
 the same rule as everywhere else (see "project presets are the basis").
 
 ## Calibration (plugin surface)
@@ -798,15 +904,15 @@ Filament calibration (`calibration` plugin: `apps/api/src/plugins/calibration/`,
 `apps/web/src/plugins/calibration/`) is a **consumer of the slicing pipeline**, not a
 third feature. It generates disposable calibration prints, runs them through the *same*
 job queue and print dispatcher as any other slice, and saves the measured result per
-filament identity for reuse. It never reaches into the editor or the pipeline internals —
+filament identity for reuse. It never reaches into the editor or the pipeline internals:
 it builds a 3MF on disk and hands it to `POST /api/slicing/jobs` like everything else.
 
 Two calibration kinds, both built in `build-3mf.ts` from geometry in `geometry.ts`:
 
 | Kind | Geometry | How the swept variable is encoded | Slice-time process overrides |
 | --- | --- | --- | --- |
-| **Pressure advance** (`pressureAdvance`) | one `tower_with_seam` tower (`pressureAdvanceTower`) | a `Metadata/custom_gcode_per_layer.xml` sidecar injects `M400` + `M900 K…` at each height band, so K steps up the tower | `PA_TOWER_PROCESS_OVERRIDES` — rear seam, 2 walls, no top/infill, and a brim (see the brim invariant below) |
-| **Flow ratio** (`flowRatio`, pass 1/2) | a grid of patches (`flowRatioPlate`), one object per offset | each patch object carries its own `print_flow_ratio` metadata override (`currentFlowRatio * (100 + offset) / 100`) so one slice prints the whole ladder | `FLOW_PROCESS_OVERRIDES` — solid readable top surface at a neutral base flow |
+| **Pressure advance** (`pressureAdvance`) | one `tower_with_seam` tower (`pressureAdvanceTower`) | a `Metadata/custom_gcode_per_layer.xml` sidecar injects `M400` + `M900 K…` at each height band, so K steps up the tower | `PA_TOWER_PROCESS_OVERRIDES`: rear seam, 2 walls, no top/infill, and a brim (see the brim invariant below) |
+| **Flow ratio** (`flowRatio`, pass 1/2) | a grid of patches (`flowRatioPlate`), one object per offset | each patch object carries its own `print_flow_ratio` metadata override (`currentFlowRatio * (100 + offset) / 100`) so one slice prints the whole ladder | `FLOW_PROCESS_OVERRIDES`: solid readable top surface at a neutral base flow |
 
 **Run lifecycle.** A `CalibrationRun` row tracks state `slicing → readyToPrint →
 printing → awaitingResult → saved` (or `discarded`/`failed`), managed by `run-manager.ts`.
@@ -816,26 +922,26 @@ read to advance `slicing → readyToPrint` (recording the job's `outputFileId` o
 and dispatches through `print-dispatcher.ts` pinned to the chosen AMS tray via
 `ams_mapping` (`calibrationAmsMapping` + `trayIndexToAmsSlot`). The web wizard
 (`CalibrationSlicePrintModal`) tracks the slice inline and mirrors the library
-slice-result UI — shared `SliceEstimates` panel + a **Preview** button that opens the
-model-studio gcode overlay via the `library.overlays` `PluginSlot` on `run.outputFileId`
-— but has no save-to-library (the run *is* the tracked entity).
+slice-result UI (shared `SliceEstimates` panel + a **Preview** button that opens the
+model-studio gcode overlay via the `library.overlays` `PluginSlot` on `run.outputFileId`)
+but has no save-to-library (the run *is* the tracked entity).
 
 **Result application** (measured best band → reused on matching filament):
 
 - **Pressure advance K is printer-side, not slice-time.** `applyPrinterKValue` must
-  *create the K profile and then select it* on the tray — creating alone does not apply it
+  *create the K profile and then select it* on the tray: creating alone does not apply it
   (see the hardware-verified note in the plugin). `autoApplyOnLoad` (on the
   `ams-slot.filament-loaded` bus event) pushes a filament's saved K when it is loaded into
   a slot, so a calibrated spool self-applies.
 - **Flow ratio is a saved value keyed by filament identity.** `store.ts` persists a
   `CalibrationResult`; `resolution.ts` picks the best match by identity **specificity**
   (RFID/brand/preset over bare type). Tying a run to the loaded spool uses the pull-based
-  `slotFilamentResolvers` registry (filled by `filament-manager`) — see the plugin guide.
+  `slotFilamentResolvers` registry (filled by `filament-manager`); see the plugin guide.
 - **Not yet wired: the SliceFileModal "calibrated flow" chip.** A saved flow ratio is
   *not* currently injected into an ordinary user print, and the slice dialog does not
   surface that a calibrated value exists for the selected filament. Wiring it means baking
   the resolved `filament_flow_ratio` into a normal slice **and** showing a chip in
-  `SliceFileModal` — a core-dialog change that needs slice verification, so it is a known
+  `SliceFileModal`: a core-dialog change that needs slice verification, so it is a known
   follow-up. (Pressure advance already reaches real prints via the printer-side path
   above, so it needs no such chip.)
 
@@ -852,12 +958,12 @@ resolve come from `/api/public/slicing/*`, and the sidebar stays inert until the
 (`slicerDataReady`). "Nothing is uploaded" is the promise; "nothing is fetched" is not.
 
 **Slicing is deliberately not wired.** `LocalEditorSurface` omits `onSlice`, so the footer renders no
-slice control at all — a browser can reach neither the printers nor the slicer, and opening public
+slice control at all: a browser can reach neither the printers nor the slicer, and opening public
 slicing needs a capacity/abuse answer first (a lowest-priority public lane, per-IP limits, and
-fairness against paying workspaces' slices). Everything else — arrange, transform, materials,
-process/filament presets and their tune dialogs, per-object overrides, machine retarget on save —
+fairness against paying workspaces' slices). Everything else (arrange, transform, materials,
+process/filament presets and their tune dialogs, per-object overrides, machine retarget on save)
 works, as does importing geometry from an STL, a STEP, or another 3MF. Absent by design alongside
-slicing: every library affordance — import FROM the library (gated on
+slicing: every library affordance, import FROM the library (gated on
 `EditorImportStore.supportsLibrarySource`) and export TO it (gated separately, on the save target not
 being library-backed, since that is a question about where a save lands rather than what the store
 can read).
@@ -868,11 +974,11 @@ What the host must answer for itself, and where:
 | --- | --- | --- |
 | Project bytes | `GET /api/library/:id/archive` | the user's file, via File System Access where supported, else an `<input type=file>` |
 | Save | `POST /api/editor/save` (new library version) | bakes in the tab, writes back to the file (download fallback) |
-| Staged imports | uploaded, parsed server-side | parsed in the tab, off the main thread (`importStagingWorker.ts`: STL, the shared 3MF extractor, and the OCCT WASM for STEP) — same formats, no library source |
+| Staged imports | uploaded, parsed server-side | parsed in the tab, off the main thread (`importStagingWorker.ts`: STL, the shared 3MF extractor, and the OCCT WASM for STEP); same formats, no library source |
 | Presets | workspace catalogue + custom presets | `/api/public/slicing/*` + the user's browser-stored presets |
 | Preset resolution | `/api/slicing/profiles/resolve-*` | `/api/public/slicing/resolve-*`, **builtin ids only** |
 
-Two rules hold the boundary. **The anonymous routes resolve built-in presets and nothing else** — a
+Two rules hold the boundary. **The anonymous routes resolve built-in presets and nothing else**: a
 `custom:` id is workspace data and is refused at the route, while a `project:` preset is resolved in
 the BROWSER from the file's own `project_settings.config`, because the file lives only in that tab.
 And **a host advertises only what it can do**: `EditorImportStore.supportsLibrarySource` and
@@ -883,19 +989,19 @@ editor cannot offer an action that then fails. Both were unconsumed once, and th
 One accepted limitation: a project built on a workspace CUSTOM preset cannot be diffed against that
 preset here (it is unreachable), so the tune dialogs fall back to a weaker baseline. **Which
 baseline was used is reported by the RESOLVER** (`SettingsBaselineOrigin` on the
-resolve response) rather than re-derived by the host — the dialog renders the matching caveat
+resolve response) rather than re-derived by the host; the dialog renders the matching caveat
 through the shared `SettingsBaselineNote`:
 
 | Tier | Baseline | What a marker means |
 | --- | --- | --- |
 | exact | the preset the project names | what the user assumes; no caveat |
-| parent | the standard preset it derives from | a real comparison, against a different preset — an edit whose value equals that standard cannot be flagged |
+| parent | the standard preset it derives from | a real comparison, against a different preset: an edit whose value equals that standard cannot be flagged |
 | partial | a browser-stored preset whose own parent did not resolve | only the keys the preset defines itself are compared |
 | declared | nothing resolved | the file's own record of what it changed, not a comparison |
 
 Reporting it from the resolver is the point. Computing it host-side answered per PRESET while the
 resolver answers per SLOT, and knew nothing about presets the user had uploaded into their own
-browser — so the one tier with a genuinely incomplete baseline was also the one that said nothing.
+browser, so the one tier with a genuinely incomplete baseline was also the one that said nothing.
 
 ## Invariants
 
@@ -929,13 +1035,13 @@ browser — so the one tier with a genuinely incomplete baseline was also the on
   embedded config via a genuine `--export-settings` merge (overlaying the project's own values),
   because the CLI's BBL-project loader segfaults on structurally incomplete settings. Two
   hard-won specifics: a PROJECT-PRESET slice (`project:process:…`) loads no external profiles at
-  all — the export args are derived from the preset names the embedded settings carry, resolved
-  against the slicer's builtin catalog — and the export must always cover the FILAMENT domain
+  all (the export args are derived from the preset names the embedded settings carry, resolved
+  against the slicer's builtin catalog), and the export must always cover the FILAMENT domain
   (falling back to Generic PLA), because a filament-less export omits the per-filament override
   arrays (`filament_retraction_length`, …) and the bare loader segfaults on those alone.
-  A third specific: the export cannot run with HALF a machine/process pair — with no 3MF loaded,
+  A third specific: the export cannot run with HALF a machine/process pair. With no 3MF loaded,
   a machine preset and no process (the normal state of a project-preset slice that resolved a
-  machine file) exits 239 deterministically, as does the mirror case — so
+  machine file) exits 239 deterministically, as does the mirror case. So
   `ensureMachineProcessPairForExport` derives the missing half from the embedded settings'
   lineage (`print_settings_id` → `inherits_group` → the machine's `default_print_profile`,
   kept only when its `compatible_printers` accepts the loaded machine's SYSTEM name, mirroring
@@ -946,35 +1052,35 @@ browser — so the one tier with a genuinely incomplete baseline was also the on
   arrays that made the config partial.
   When the export itself FAILS (e.g. the CLI's exit 239 "process not compatible with printer"
   from a cross-model machine/process pairing), the guard throws with that reason instead of
-  slicing the incomplete config — proceeding is always the deterministic segfault — keeping the
+  slicing the incomplete config (proceeding is always the deterministic segfault), keeping the
   `Slicer CLI exited with code N` message shape the API's slicing queue classifies (today only
   `isTransientSlicerCrashExit`, for a signal death). The web
   dialog guards the same class at the source: a set-but-incompatible machine/process selection
   (state predating a printer switch) blocks submission with a named reason instead of reaching
   the slicer at all (`printerProfileIncompatible`/`processProfileIncompatible` in
   `SliceFileModal`).
-- **`flush_volumes_matrix` is `filaments^2 x extruders`, not `filaments^2` — and `flush_multiplier`
+- **`flush_volumes_matrix` is `filaments^2 x extruders`, not `filaments^2`, and `flush_multiplier`
   is one entry per extruder.** BambuStudio stores the matrix as
   one `filaments x filaments` block PER EXTRUDER (`PrintConfig.hpp` `get_flush_volumes_matrix`
   slices block `e`; `BambuStudio.cpp` sizes it `project_filament_count^2 * new_extruder_count`).
   A machine retarget changes the extruder count, so anything that rewrites project settings must
-  re-derive both for the NEW topology — `retargetProjectSettingsToMachine` and
+  re-derive both for the NEW topology: `retargetProjectSettingsToMachine` and
   `applyFilamentList` both do, via `repairFlushVolumesMatrix`/`repairFlushMultiplier`
   (`packages/shared/src/flush-volumes-matrix.ts`). Getting this wrong is not a soft failure:
   BambuStudio only repairs an undersized matrix inside its flush-volume recompute block, which it
   SKIPS unless `--filament-colour` was passed, the matrix is absent entirely, the extruder count
-  differs from the project's own, or `nozzle_volume_type` mismatches — a retarget satisfies none
+  differs from the project's own, or `nozzle_volume_type` mismatches. A retarget satisfies none
   of them, so the short matrix survives and the engine reads the missing block out of bounds:
   a deterministic SIGSEGV at ~71% ("Detect overhangs for auto-lift", CLI exit 139). The multiplier
   half fails later and louder: `GCode.cpp` validates the matrix against
-  `filament_colour.size()^2 * flush_multiplier.size()` — the heads count comes from
-  `flush_multiplier`, NOT `nozzle_diameter`, and an ABSENT multiplier defaults to ONE entry — so a
+  `filament_colour.size()^2 * flush_multiplier.size()` (the heads count comes from
+  `flush_multiplier`, NOT `nozzle_diameter`, and an ABSENT multiplier defaults to ONE entry), so a
   correct matrix beside a stale multiplier fails every multi-filament slice at "Generating G-code"
   with "Flush volumes matrix do not match to the correct size!" (exit 156; the check escapes only
   single-filament projects). The multiplier detection (`isFlushMultiplierInconsistent`) models the
   engine's escapes exactly so working files are never flagged. An ABSENT
   matrix is safe (absence is one of the recompute triggers), so it is deliberately not flagged.
-  Projects already saved with the defect are NOT healed at rest — the shared index parser flags
+  Projects already saved with the defect are NOT healed at rest: the shared index parser flags
   them (`needsSettingsRepair` on the 3MF index and the `LibraryFile` DTO), the editor shows the
   repair banner on open (staged repair + save), and the print-prep dialog BLOCKS its slice/print
   submit with the advisory pointing at the editor. An editor slice needs no gate: its bake
@@ -982,12 +1088,12 @@ browser — so the one tier with a genuinely incomplete baseline was also the on
 - **Purge volumes are editable, and the edit is checked against the material list it lands on.**
   The editor's Materials section opens a flushing-volumes dialog (BambuStudio's "Flushing volumes
   for filament change"): the per-pair grid, the per-extruder multiplier, and a re-calculation.
-  It rides `SceneEdit.flushVolumes` — a DEDICATED seam rather than the generic global process
+  It rides `SceneEdit.flushVolumes`: a DEDICATED seam rather than the generic global process
   overrides, because those are applied last, *after* the repair pass, so a mis-sized matrix
   arriving that way would be written verbatim with nothing left to catch it. The bake's
   `applyFlushVolumes` therefore runs AFTER `applyFilamentList` (the user's numbers beat the remap)
   and BEFORE `repairProjectSettingsDocument`, and DROPS a grid whose shape does not match the
-  filament set the bake is actually writing — a matrix authored for a different material list
+  filament set the bake is actually writing: a matrix authored for a different material list
   describes purges between filaments that no longer exist, and forcing it to fit would either
   scramble it or write the exit-139 shape. The multiplier is per-extruder and independent of the
   filament set, so a stale one is conformed instead; which KEY it lands in follows the project's
@@ -997,13 +1103,13 @@ browser — so the one tier with a genuinely incomplete baseline was also the on
   are read from the slicer at runtime.** `packages/shared/src/flush-volume-calc.ts` ports
   `FlushVolCalculator` + `WipingDialog::CalcFlushingVolumes`; it was diffed against BambuStudio's
   own compiled code over 69,696 cases (three dataset codes x three dead volumes x an 88-colour
-  palette) and matches exactly, including the 32-bit float rounding — computed in double, black to
+  palette) and matches exactly, including the 32-bit float rounding: computed in double, black to
   white truncates to 559 instead of 560, and that is the most common two-material pairing there is.
   Studio does not trust its own formula where it has measurements: it ships tables of real purge
   volumes (`resources/flush/flush_data_*.txt`) and prefers a table hit within DeltaE2000 5. The gap
   is large (a mean 80 mm3, up to +286, always over-purging), so those tables are served from the
   slicer image (`apps/slicer/src/flush-data.ts` -> `/api/slicing/flush-data` and its public twin)
-  rather than vendored — same reasoning as `bed-model.ts`, and it means they track whichever
+  rather than vendored: same reasoning as `bed-model.ts`, and it means they track whichever
   BambuStudio actually slices. Their ABSENCE is supported: no slicer, or an engine shipping none,
   falls back to the formula, exactly as Studio does with a missing data file.
   The compiled-in half (the formula's constants, the support floors, the dataset filenames) CANNOT
@@ -1011,29 +1117,29 @@ browser — so the one tier with a genuinely incomplete baseline was also the on
   vendored source into `generated/flush-volume-model.generated.ts`; `flush-volume-calc.test.ts`
   re-derives it and fails if BambuStudio retunes anything. Re-run the generator after a vendor bump.
 - **The engine is asked for its own answer, because the image and the vendored source drift apart.**
-  The generator's test compares against `tmp/bambustudio-src` — but the slicer IMAGE is bumped
+  The generator's test compares against `tmp/bambustudio-src`, but the slicer IMAGE is bumped
   independently of it, so an engine upgrade with no re-vendor moves the numbers with nothing
   failing. The CLI recomputes `flush_volumes_matrix` whenever `--filament-colour` is passed, and
   `--export-settings` runs that path with no model and no slice, so it is a fast probe rather than a
   slice: `apps/slicer/src/flush-calibration.ts` -> `/api/slicing/flush-calibration` (+ its public
-  twin) -> `evaluateFlushCalibration`, cached per target. It is a DIAGNOSTIC — it never gates the
-  editor, it only decides whether the dialog may claim parity — and a probe that cannot run reads as
+  twin) -> `evaluateFlushCalibration`, cached per target. It is a DIAGNOSTIC (it never gates the
+  editor, it only decides whether the dialog may claim parity), and a probe that cannot run reads as
   "unchecked", never as "agrees".
   It has already earned it: it caught `readProjectFlushContext` reading a variant-wide machine array
   POSITIONALLY. On a machine with extruder variants (H2D) `nozzle_flush_dataset` and `nozzle_volume`
-  are indexed by (extruder x variant) — five entries for two extruders — and BambuStudio resolves an
+  are indexed by (extruder x variant), five entries for two extruders. And BambuStudio resolves an
   extruder's row by matching `<extruder_type> <nozzle_volume_type>` against
   `printer_extruder_variant` with `printer_extruder_id` (`get_index_for_extruder`). Positional
   indexing is right for extruder 0 and wrong for extruder 1, so only the SECOND nozzle was
-  mis-priced — invisible to 69,696 calculator tests, because the calculator was never the problem.
+  mis-priced, invisible to 69,696 calculator tests, because the calculator was never the problem.
   The probe also settled two places the engine and its own GUI disagree, both resolved in the
   ENGINE's favour since it is what purges: the variant lookup above (its dialog indexes
   positionally), and `get_min_flush_volumes(config, 0)` being hoisted out of the CLI's per-extruder
   loop, so every extruder uses extruder 0's dead volume.
 - **An object's material must be written at OBJECT level in `model_settings.config`, not only on
-  its `<part>`.** For an INLINE-MESH object (one part reusing the object's own id — the shape the
+  its `<part>`.** For an INLINE-MESH object (one part reusing the object's own id, the shape the
   bake used to write for replaced/imported objects) the CLI does not honor the part-level
-  `extruder`, so the object silently prints with **filament 1** whatever its parts say — A/B-proven
+  `extruder`, so the object silently prints with **filament 1** whatever its parts say, A/B-proven
   on a real project (plate objects assigned material 2 sliced as PLA until the object entry was
   added, then as PETG). In the COMPONENTS layout the CLI binds part-level entries fine (measured:
   a mixed-material components object with no object entry sliced each part correctly). Desktop
@@ -1042,16 +1148,16 @@ browser — so the one tier with a genuinely incomplete baseline was also the on
   whenever a reassignment leaves every filament-carrying part on one slot). Files saved before
   this carry the part-only shape; `repairs/object-extruder.ts` detects them (`objectExtruder`
   reason) and the staged repair adds the missing entry at save time. Parts DISAGREEING is still derivable when
-  every carrying part has its own entry — more than one part means components layout (3MF objects
+  every carrying part has its own entry: more than one part means components layout (3MF objects
   are mesh XOR components), each volume overrides the object slot, so the first part's value is
   engine-inert and merely restores the BambuStudio shape. The one genuinely ambiguous case is
   MIXED coverage (a carrying part with no entry inherits the object slot): those objects are
-  reported by name, never written — giving their uncovered parts a material in the editor lets the
+  reported by name, never written: giving their uncovered parts a material in the editor lets the
   next repair derive cleanly.
 - **ONE repair model: repairs happen in the editor, staged and undoable.** Wherever an editor is
-  open — workspace or public — the notice's Repair pins `settingsRepairStaged` in the editor state
+  open, workspace or public, the notice's Repair pins `settingsRepairStaged` in the editor state
   as an undoable edit (`SceneEdit.repairSettings`), and the bake applies the shared `repairs/`
-  implementations as its LAST project_settings / model_settings step — authoring always wins
+  implementations as its LAST project_settings / model_settings step: authoring always wins
   first, every repair is inspect-gated, and a healthy document rides through untouched. Nothing is
   written until the user saves, and undo restores the banner. There is NO instant server-side
   repair: a surface with no editor session (the print-prep dialog) blocks its submit on
@@ -1080,11 +1186,11 @@ browser — so the one tier with a genuinely incomplete baseline was also the on
   consumed by `apps/api/src/lib/three-mf-reader.ts` and `apps/bridge/src/library-3mf.ts`; the
   scene parse by that same reader and by the web's public 3MF editor (`/3mf-editor`), which
   unzips the user's file in the browser and never uploads it. Changing the index shape means editing that parser
-  once, updating the shared schema, and bumping `THREE_MF_INDEX_PARSER_VERSION` — see
+  once, updating the shared schema, and bumping `THREE_MF_INDEX_PARSER_VERSION`; see
   the API development notes and the bridge development notes. Keep both parsers Node-free; each app
-  owns its own ZIP I/O and caching. (All 3MF *writing* — `three-mf-scene-builder.ts`,
-  `three-mf-output.ts` — still lives only in the api modules.)
-- **Nozzle-id mapping** in the slicer's `output-metadata.ts` must stay byte-for-byte —
+  owns its own ZIP I/O and caching. (All 3MF *writing* (`three-mf-scene-builder.ts`,
+  `three-mf-output.ts`) still lives only in the api modules.)
+- **Nozzle-id mapping** in the slicer's `output-metadata.ts` must stay byte-for-byte;
   see the slicer development notes.
 - **A `slice_info.config` record must describe the project's CURRENT filament set, or not exist.**
   It records one `<filament>` entry per filament a PREVIOUS slice used, and BambuStudio builds its
@@ -1123,11 +1229,11 @@ browser — so the one tier with a genuinely incomplete baseline was also the on
 ## Known god files / target decomposition (roadmap)
 
 These predate the two-feature framing; split them incrementally toward it (each split is its
-own verified change — do not big-bang):
+own verified change; do not big-bang):
 
 - **Done:** `apps/api/src/lib/three-mf.ts` (~3.7k lines) split into `three-mf-internal.ts`
   (shared ZIP I/O + abort/escape helpers + `rewriteModelSettingsThreeMf`), `three-mf-reader.ts`
-  (read/index/scene parse — both halves now delegate to the shared `@printstream/shared/three-mf`
+  (read/index/scene parse: both halves now delegate to the shared `@printstream/shared/three-mf`
   parsers, leaving ZIP I/O + caching here), `three-mf-scene-builder.ts` (editor:
   `buildEditedThreeMf`/`writeArrangedThreeMf`), and `three-mf-output.ts` (slicing: single-plate/
   thumbnail output + sliced-gcode object previews). Dependencies flow one way

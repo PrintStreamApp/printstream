@@ -20,7 +20,7 @@ datasource db {
 /// The CUSTOMER: one payment method, one Paddle customer, one invoice stream.
 ///
 /// Owns any number of cloud workspaces (`Workspace`) and any number of self-hosted
-/// licences (`License`), and those counts are independent — three workspaces and
+/// licences (`License`), and those counts are independent: three workspaces and
 /// no licence, or one licence and no workspace, are both ordinary. Billing was
 /// welded to a single workspace before this existed, so a customer with two
 /// workspaces had two payment methods, and a licence (which runs on hardware we
@@ -28,14 +28,14 @@ datasource db {
 ///
 /// Pricing stays PER WORKSPACE: each cloud workspace keeps its own
 /// `WorkspaceSubscription` at unchanged prices, and this only aggregates payment.
-/// It does not pool entitlements — printer allowances remain per workspace, and
+/// It does not pool entitlements: printer allowances remain per workspace, and
 /// changing that would be a repricing.
 ///
 /// Cloud-only: an OSS/self-hosted install has no billing relationship at all and
 /// leaves every workspace unattached.
 ///
 /// NAMES: one entity, two words, depending on who is looking. To us it is a
-/// CUSTOMER — that is what the platform lists — and the model follows the
+/// CUSTOMER (that is what the platform lists), and the model follows the
 /// surface it is administered from. To the customer it is their ORGANISATION
 /// (the People list) reached through a scope called "Billing and licensing",
 /// because nobody should be told they are a customer record. Neither
@@ -52,7 +52,7 @@ model Customer {
   /// ownership is reassigned instead.
   ownerUserId           String?
   /// THE Paddle customer for everything on this account. A workspace must never
-  /// carry its own — that is exactly what made two workspaces mean two payment
+  /// carry its own: that is exactly what made two workspaces mean two payment
   /// methods.
   paddleCustomerId      String?   @unique
   /// Whether a workspace admin may bring someone NEW into this organisation, or
@@ -60,7 +60,7 @@ model Customer {
   ///
   /// Lives here, above workspaces, because it has to bind the people it
   /// restricts. A workspace admin holds `auth.roles.edit`, so any permission an
-  /// owner strips from a workspace role that admin can grant straight back — a
+  /// owner strips from a workspace role that admin can grant straight back: a
   /// workspace-level control cannot restrain workspace admins. This one they
   /// cannot reach.
   ///
@@ -71,7 +71,7 @@ model Customer {
   /// When an operator retired this account, or null while it is live.
   ///
   /// Soft: nothing is deleted, and restoring clears this one field. A dormant
-  /// account's owner can still SIGN IN, deliberately — the point of keeping
+  /// account's owner can still SIGN IN, deliberately: the point of keeping
   /// them out of the product rather than out of the door is that their invoices
   /// and payment records stay reachable, which is what someone needs after they
   /// stop paying.
@@ -80,7 +80,7 @@ model Customer {
   /// disabled (derived in `workspace-availability.ts`, never copied onto the
   /// workspaces themselves, so restoring cannot un-disable one that was already
   /// disabled on its own), and licences stop being re-signed. A PERPETUAL key
-  /// already issued keeps verifying offline — see `license-refresh.ts`; that is
+  /// already issued keeps verifying offline (see `license-refresh.ts`); that is
   /// a property of offline verification, not something dormancy can revoke.
   dormantAt             DateTime?
   /// Who retired it, and why. A dormant account with no explanation is
@@ -88,7 +88,7 @@ model Customer {
   dormantByUserId       String?
   dormantReason         String?
   /// Whether the CUSTOMER may reactivate themselves from their own billing
-  /// scope. True for the ordinary case — they stopped paying and later want
+  /// scope. True for the ordinary case: they stopped paying and later want
   /// back, which should not need a support ticket. An operator retiring an
   /// account for abuse clears it, otherwise the account could undo the very
   /// decision that retired it.
@@ -116,7 +116,7 @@ model Customer {
 /// **The row IS the membership.** Its existence is what puts someone in the
 /// organisation; `billingRole` is an independent capability layered on top, not
 /// an alternative to belonging. Someone with billing is always a member, and a
-/// member may hold any number of workspaces — the two never trade off.
+/// member may hold any number of workspaces: the two never trade off.
 ///
 /// That separation is deliberate. Encoding both in one enum (`owner | billing |
 /// member`) made `member` read as the opposite of `billing`, as though holding
@@ -160,7 +160,7 @@ model Workspace {
   /// good after `WORKSPACE_DELETED_RETENTION_DAYS`.
   ///
   /// Deleting a workspace cascades printers, jobs, library rows and their
-  /// stored BYTES — none of which come back — so the delete a user performs is
+  /// stored BYTES (none of which come back), so the delete a user performs is
   /// deliberately not that delete. It is a window in which a mistake is still
   /// recoverable, and only the sweep is irreversible.
   ///
@@ -221,7 +221,7 @@ model Workspace {
 model WorkspaceSubscription {
   id                   String    @id @default(cuid())
   workspaceId          String    @unique
-  /// "free" | "pro" — the workspace's current plan.
+  /// "free" | "pro": the workspace's current plan.
   plan                 String    @default("free")
   /// Paddle subscription status: active | trialing | past_due | paused | canceled.
   status               String    @default("active")
@@ -246,7 +246,7 @@ model WorkspaceSubscription {
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 }
 
-/// Vendor-issued self-hosted license keys (cloud-only issuer state) — the
+/// Vendor-issued self-hosted license keys (cloud-only issuer state): the
 /// authoritative record behind every key in a customer's hands. Harmless/unused
 /// in self-hosted or OSS deployments, which only ever hold the signed token.
 ///
@@ -254,7 +254,7 @@ model WorkspaceSubscription {
 /// `source = "subscription"` keys (a workspace's Pro plan extended to its own
 /// self-hosted install) and is null for `purchase`/`community` keys, which are
 /// bought or granted by people who may have no workspace at all. It is
-/// therefore NOT workspace-scoped in `WORKSPACE_SCOPED_MODELS` — every access here is
+/// therefore NOT workspace-scoped in `WORKSPACE_SCOPED_MODELS`: every access here is
 /// a deliberate platform-wide issuer operation via `rootPrisma`.
 ///
 /// Lifecycle: rows are never deleted. Ending a subscription flips `status` to
@@ -263,7 +263,7 @@ model WorkspaceSubscription {
 /// retained because they are billing evidence.
 ///
 /// Snapshot-vs-live: `key` is the token as last *issued*, so `expiresAt` here
-/// tracks the newest signed key, not what the install currently holds — an
+/// tracks the newest signed key, not what the install currently holds: an
 /// install that has not refreshed carries an older, shorter-lived token.
 model License {
   id                  String    @id @default(cuid())
@@ -278,17 +278,17 @@ model License {
   ///
   /// Replaced `workspaceId`: a licence runs on hardware we do not host and has no
   /// relationship to any cloud workspace, so making it pick one to live in was
-  /// wrong. Nothing may infer a workspace from a licence or the reverse — they
+  /// wrong. Nothing may infer a workspace from a licence or the reverse: they
   /// are siblings under the account, not a hierarchy.
   customerId          String?
   licensee            String
-  /// What the holder calls this key, e.g. "Shop floor" — null for the keys that
+  /// What the holder calls this key, e.g. "Shop floor"; null for the keys that
   /// predate naming, and for any the buyer did not name.
   ///
   /// Display only, never identity: an account may hold several self-hosted
   /// subscriptions, and two "Self-hosted Pro license" cards showing the same
   /// allowance are indistinguishable when deciding which one to release from a
-  /// dead machine. Not unique — a duplicate name is the holder's business.
+  /// dead machine. Not unique: a duplicate name is the holder's business.
   name                String?
   email               String?
   /// The signed license token (PSL1.*) delivered to the customer.
@@ -305,7 +305,7 @@ model License {
   expiresAt           DateTime?
   /// Printer allowance signed into the key; null = unlimited.
   maxPrinters         Int?
-  /// Last time an install successfully refreshed this key — the only signal we
+  /// Last time an install successfully refreshed this key: the only signal we
   /// have that a self-hosted deployment is alive, and the support-side answer to
   /// "is their install actually picking up the new key?".
   lastRefreshedAt     DateTime?
@@ -336,7 +336,7 @@ model License {
 /// Self-hosted Pro is a separate product from cloud Pro at the same price, so it
 /// needs its own subscription: `WorkspaceSubscription` is keyed by workspace and
 /// a self-hosted install has none. One row per LICENCE, not per customer,
-/// because a licence is bound to a single installation — a customer running two
+/// because a licence is bound to a single installation: a customer running two
 /// sites buys two, each metered on its own fleet.
 ///
 /// **Lifecycle:** created when the self-hosted Pro checkout completes, updated by
@@ -344,8 +344,8 @@ model License {
 /// for (`onDelete: Cascade`). Cancelling leaves the row with a terminal status
 /// rather than removing it, so the licence can explain why it stopped renewing.
 ///
-/// **Tenancy:** account-scoped via the licence's customer, never workspace-scoped
-/// — it deliberately has no `workspaceId`, and must not be added to
+/// **Tenancy:** account-scoped via the licence's customer, never workspace-scoped;
+/// it deliberately has no `workspaceId`, and must not be added to
 /// `WORKSPACE_SCOPED_MODELS`.
 ///
 /// `printerQuantity` is the BILLED number of printers beyond the included
@@ -353,11 +353,11 @@ model License {
 /// and the answer is what gets signed into the key. The install never reports a
 /// count of its own, because on the Docker build that number is whatever the
 /// customer's copy chooses to send.
-/// Self-hosted Pro's metered subscription — a DIFFERENT product from cloud Pro
+/// Self-hosted Pro's metered subscription: a DIFFERENT product from cloud Pro
 /// at the same price, which is why it is not a `WorkspaceSubscription`.
 ///
 /// Tenancy: none. It hangs off a `License`, which belongs to a `Customer`, and
-/// deliberately has no `workspaceId` — a self-hosted install has no workspace,
+/// deliberately has no `workspaceId`: a self-hosted install has no workspace,
 /// and letting one be inferred is what previously gave a cloud plan a
 /// self-hosted key for free.
 ///
@@ -387,14 +387,14 @@ model SelfHostedSubscription {
 }
 
 /// A Bambu printer registered to a workspace. The central vendor-identity
-/// table; most other tables key off it. Serials are NOT globally unique — the
+/// table; most other tables key off it. Serials are NOT globally unique: the
 /// same physical printer can be registered in two workspaces, so identity is
 /// `(workspaceId, serial)` (see the `@@unique`), never `serial` alone. `bridgeId`
 /// is nullable and `SetNull`: it names the bridge that currently owns LAN
 /// access to this printer, and survives that bridge being removed. `model`
 /// defaults to "unknown" until discovery/status resolves the real model.
 /// `currentPlateType` / `currentNozzleDiameters` are the printer's last-reported
-/// hardware snapshot. `accessCode` is the LAN access code — a secret: never log
+/// hardware snapshot. `accessCode` is the LAN access code, a secret: never log
 /// it or surface it to the browser beyond where strictly required.
 model Printer {
   id                     String   @id @default(cuid())
@@ -490,7 +490,7 @@ model Bridge {
 /// "cancelled"; `sourceType` is "library" | "calibration" | "external".
 /// `taskId` is the printer-reported correlation key that ties a reserved row to
 /// the running job. Durable stats (WorkspaceStats/PrinterStats/PlatformStats) are
-/// rolled up at finish and are NOT reverted when a job row is later deleted —
+/// rolled up at finish and are NOT reverted when a job row is later deleted:
 /// deleting history does not rewrite the aggregates.
 model PrintJob {
   id                     String    @id @default(cuid())
@@ -524,6 +524,15 @@ model PrintJob {
   /// exactly as a fresh print would. Null for rows written before this column and for
   /// externally started prints, where the choices were never ours to see.
   printOptionsJson       String?
+  /// Serialized `PrintPauseSchedule` scanned out of the G-code this job DISPATCHED, so the live
+  /// progress bar can mark the pauses coming up. Snapshot, not live: it describes the bytes that
+  /// were sent, because the library file moves on afterwards (a slice's pause edits are never
+  /// persisted back to it) and its current head would describe pauses this print does not have.
+  /// Only the fallback: a printer that reports `print.p_list` outranks this on every surface.
+  /// Written best-effort after the start command, so null means "not scanned" and never "no
+  /// pauses" -- which is also why it is null for externally started prints and plain `.gcode`
+  /// dispatches, where we hold no bytes to read.
+  pauseScheduleJson      String?
   progressPercent        Int?
   startedAt              DateTime  @default(now())
   finishedAt             DateTime?
@@ -567,7 +576,7 @@ model DispatchJob {
   /// Printer-SD file name the upload targets; used to clean orphaned bytes on reconnect.
   remoteName              String
   error                   String?
-  /// Set immediately before the MQTT start command is published — the rob-1 boundary.
+  /// Set immediately before the MQTT start command is published: the rob-1 boundary.
   startCommandAttemptedAt DateTime?
   createdAt               DateTime  @default(now())
   updatedAt               DateTime  @updatedAt
@@ -615,7 +624,7 @@ model WorkspaceStats {
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 }
 
-/// Deployment-wide stats rollup — a single row (fixed `id`) aggregating every
+/// Deployment-wide stats rollup: a single row (fixed `id`) aggregating every
 /// workspace, incremented alongside the per-workspace rollup. Same counter split as
 /// WorkspaceStats ("wasted" = failed + cancelled). Read via `rootPrisma` for the
 /// platform overview.
@@ -694,12 +703,12 @@ model PrinterStats {
 
 /// Cloud-only feature-usage rollup: one counter per workspace x usage key x UTC
 /// day. Written exclusively by the private cloud telemetry recorder
-/// (`src/private/cloud/feature-usage/`) — batched increments, never one write
-/// per request — and read by the platform-admin usage surfaces. OSS/self-hosted
+/// (`src/private/cloud/feature-usage/`; batched increments, never one write
+/// per request) and read by the platform-admin usage surfaces. OSS/self-hosted
 /// installs never write or read it (the recorder ships only in the private
 /// tree), so the table simply stays empty there. Rows age out via the
 /// retention sweep (`FEATURE_USAGE_RETENTION_DAYS`); counts are best-effort
-/// telemetry, not an audit trail — `AuditLog` remains the durable record of who
+/// telemetry, not an audit trail: `AuditLog` remains the durable record of who
 /// did what.
 model WorkspaceFeatureUsage {
   workspaceId String
@@ -749,7 +758,7 @@ model LibraryFile {
   // Hidden files are persisted on disk so previously-printed jobs can
   // still be re-dispatched, but they don't appear in the user-facing
   // library listing. Some hidden files are transient one-off uploads,
-  // while others are immutable snapshots retained for future reprints —
+  // while others are immutable snapshots retained for future reprints:
   // both the dispatched artifact and the project 3MF it was sliced from
   // (`sourceProjectFileId`). `snapshotKey` is only populated for the
   // retained snapshot variant (and is its content-dedupe key); transient
@@ -785,8 +794,8 @@ model LibraryFile {
   printCount                Int       @default(0)
   lastPrintedAt             DateTime?
   // Re-slice provenance for a sliced output (origin='slice'): the preserved
-  // project 3MF exactly as it was handed to the slicer — a hidden, immutable,
-  // content-deduped snapshot row — and the settings that produced this output.
+  // project 3MF exactly as it was handed to the slicer (a hidden, immutable,
+  // content-deduped snapshot row) and the settings that produced this output.
   // Set on the output, never on the project snapshot itself. Null on uploads and
   // on outputs sliced before project preservation shipped; the UI treats null as
   // "re-slice unavailable" rather than re-deriving anything.
@@ -822,7 +831,7 @@ model LibraryFile {
 /// Per-user "favorite" star on a library file. Personal (not shared across the
 /// workspace), so the row is keyed by `(userId, libraryFileId)`. `userId` is the
 /// authenticated user id, or a fixed sentinel for no-auth/self-host installs where
-/// the actor is anonymous — a non-null value keeps the unique constraint sound
+/// the actor is anonymous: a non-null value keeps the unique constraint sound
 /// (Postgres would otherwise allow duplicate NULL-user rows). Intentionally no FK to
 /// AuthUser so favorites work in both auth-enabled (cloud) and no-auth installs;
 /// cleanup rides on the LibraryFile / Workspace cascades.
@@ -916,7 +925,7 @@ model LibraryFolder {
 
 /// A copy of a library file's bytes materialized onto a specific bridge (one row
 /// per file+bridge). Lets a bridge that does not own a file still serve/print it.
-/// `replicaKind` defaults to "cache" — an evictable copy that may carry
+/// `replicaKind` defaults to "cache": an evictable copy that may carry
 /// `expiresAt`/`lastAccessedAt`. `status` starts "pending" and reaches "ready"
 /// once the bytes are fetched and verified (`contentHash`/`lastVerifiedAt`);
 /// `errorMessage` records a failed materialization. Cascades away with the file,
@@ -947,13 +956,13 @@ model LibraryFileReplica {
   @@index([workspaceId, expiresAt])
 }
 
-/// Generic key/value store for all settings — there is no per-feature settings
+/// Generic key/value store for all settings: there is no per-feature settings
 /// table. The `key` carries the scope as a prefix (`lib/workspace-settings.ts`):
 /// `tenant:<workspaceId>:<name>` for a workspace setting, `platform:<name>` for a
 /// workspaceless platform-scope setting, and `plugin:<pluginName>:...` for a
 /// plugin's scoped store (the plugin `settings` API, per-workspace via a further
 /// `tenant:`/`platform:` segment). `value` is a string (JSON-encoded when the
-/// setting is structured). Not a workspace relation — scoping lives in the key.
+/// setting is structured). Not a workspace relation: scoping lives in the key.
 model Setting {
   key   String @id
   value String
@@ -961,7 +970,7 @@ model Setting {
 
 /// A saved printers-page view (workspace-scoped): a named filter/sort/grouping
 /// preset over the workspace's printers. The multi-value columns are JSON arrays
-/// serialized as strings, not relations — `printerIds`, `modelFilter`,
+/// serialized as strings, not relations: `printerIds`, `modelFilter`,
 /// `nozzleDiameterFilter`, and `plateTypeFilter` all hold a JSON string (the
 /// filters default to the empty array `"[]"`). `cardContentSettings` is a
 /// required JSON blob of per-card display toggles.
@@ -989,7 +998,7 @@ model PrinterView {
 }
 
 /// Externally installed plugins (uploaded archives or, eventually, store
-/// downloads). Built-in plugins are not tracked here — they live in code
+/// downloads). Built-in plugins are not tracked here: they live in code
 /// and use the `Setting` table for their install/enabled flags. An entry
 /// here means the registry should dynamic-import `entryPath` (relative
 /// to `installPath`) at startup and register the resulting `ApiPlugin`.
@@ -1007,7 +1016,7 @@ model Plugin {
   updatedAt   DateTime @updatedAt
 }
 
-/// A person's identity, GLOBAL to the deployment — an AuthUser is not owned by a
+/// A person's identity, GLOBAL to the deployment: an AuthUser is not owned by a
 /// workspace. Which workspaces they belong to lives in `AuthWorkspaceMembership`,
 /// their roles in `AuthUserGroupMembership`, and their credentials in the
 /// per-provider credential tables. `isPlatformUser` marks an operator account
@@ -1050,7 +1059,7 @@ model AuthWorkspaceMembership {
   @@index([workspaceId, loginDisabled])
 }
 
-/// A role: a named permission bundle. `workspaceId` is nullable ON PURPOSE — a null
+/// A role: a named permission bundle. `workspaceId` is nullable ON PURPOSE. A null
 /// workspace is a platform-wide / system group (e.g. the built-in platform roles),
 /// which is why AuthGroup is a hand-scoped `WORKSPACE_SCOPED_EXCEPTION_MODELS` entry
 /// rather than auto-scoped. `permissions` is the flat permission-string array;
@@ -1144,7 +1153,7 @@ model AuthPasskeyCredential {
 
 // One email/password credential per user, owned by the OSS `auth-password`
 // provider. `passwordHash` is an algorithm-tagged, salted hash (argon2id, or a
-// scrypt fallback) — never a reversible secret. `mustChangePassword` is set when
+// scrypt fallback), never a reversible secret. `mustChangePassword` is set when
 // an admin sets/resets the password and cleared on the user's next self-change.
 model AuthPasswordCredential {
   id                  String    @id @default(cuid())
@@ -1153,7 +1162,7 @@ model AuthPasswordCredential {
   mustChangePassword  Boolean   @default(false)
   // One-time email password-reset code (SHA-256 hash) + expiry. Only populated
   // while a reset is pending and when an email transport is configured; cleared
-  // on use. Reset-by-email is an optional capability — the provider works without it.
+  // on use. Reset-by-email is an optional capability: the provider works without it.
   resetTokenHash      String?
   resetTokenExpiresAt DateTime?
   lastChangedAt       DateTime  @default(now())
@@ -1206,11 +1215,11 @@ model AuthSession {
 
 /// Durable audit trail: one row per mutating/privileged request (baseline row
 /// auto-created, enriched via `annotateRequestAuditLog`). `workspaceId` is nullable
-/// for platform-scope events. The actor is polymorphic — `actorUserId` or
+/// for platform-scope events. The actor is polymorphic: `actorUserId` or
 /// `actorServiceAccountId` (both `SetNull` so the log outlives the actor), with
 /// `actorLabel` a display snapshot. `metadataJson` is free-form per-action detail
 /// and MUST NOT contain secrets (tokens, access/connect codes, webhook/push URLs,
-/// raw bodies) — only safe identifiers.
+/// raw bodies), only safe identifiers.
 model AuditLog {
   id                    String   @id @default(cuid())
   workspaceId           String?
@@ -1349,7 +1358,7 @@ model OrderVariantSelection {
   @@index([workspaceId, templateVariantId])
 }
 
-/// One print unit within an order — the row the workflow acts on. `libraryFileName`
+/// One print unit within an order: the row the workflow acts on. `libraryFileName`
 /// is snapshotted (the file id is a soft reference) so the unit survives file
 /// changes. `groupPosition` + `sequenceNumber`/`sequenceCount` order and label it
 /// ("print 2 of 5") within its variant group. `status` is
@@ -1429,7 +1438,7 @@ model FilamentSpool {
   trayInfoIdx       String? // Bambu filament preset id (e.g. "GFA00")
   bambuUuid         String? // RFID serial (tray_uuid); auto-add dedupe key
   // Slicing preset (filament profile NAME from the catalogue) this spool slices
-  // with — the BambuStudio "pick an existing preset for third-party filament"
+  // with: the BambuStudio "pick an existing preset for third-party filament"
   // step, done once on the spool. Null = auto-match at slice time.
   slicingPresetName String?
   serial            String? // manual serial for non-Bambu spools
@@ -1499,7 +1508,7 @@ model FilamentSpoolUsage {
 /// holds the typed test parameters (PA start/end/step, or flow current-ratio +
 /// pass); `measuredJson` holds what the user reported (best band height in mm, or
 /// selected patch offset). Cross-entity links (`printerId`, `spoolId`,
-/// `slicingJobId`, `outputFileId`) are soft references — the run survives a
+/// `slicingJobId`, `outputFileId`) are soft references: the run survives a
 /// printer/spool/file delete as history, mirroring `FilamentSpoolUsage.jobId`.
 model CalibrationRun {
   id              String   @id @default(cuid())
@@ -1543,7 +1552,7 @@ model CalibrationRun {
 /// (the `calibration` plugin). Keyed by `printerModel` + `nozzleDiameter` because
 /// a PA/flow value is portable across printers of the same model and nozzle.
 /// `scope` is 'spool' (one specific `spoolId`) or 'identity' (every spool whose
-/// brand/type/subtype/color match the non-null identity fields here — a null
+/// brand/type/subtype/color match the non-null identity fields here: a null
 /// field is a wildcard, so the save step's ticked "match criteria" chips decide
 /// generality). `spoolId`/`runId` are soft references. Dedupe (one result per
 /// target) is enforced in the store, not by a DB unique across nullable columns.
@@ -1579,7 +1588,7 @@ model CalibrationResult {
 /// A queued print waiting to be dispatched (the `print-queue` plugin). One shared,
 /// reorderable workspace backlog: each item targets any eligible printer by default
 /// but can be pinned to a specific printer or printer model ("Any X1C"). `quantity`/
-/// `completedCount` track first-class copies — the row counts down rather than being
+/// `completedCount` track first-class copies: the row counts down rather than being
 /// exploded into N rows. `requiredFilamentsJson` snapshots the plate's required
 /// filaments at add time so eligibility/AMS matching needs no per-list 3MF inspection.
 /// v1 is manual-dispatch only; auto-advance is a deliberate later phase. `status` is the
@@ -1623,10 +1632,10 @@ model QueueItem {
   // Optional link to the order print this item was queued for (the orders plugin).
   // Plain ids, no FK: a stale link (order/print deleted) is handled gracefully as a
   // no-op. When set, adding/removing/dispatching this item is mirrored onto the order
-  // print via the printerEvents bus (the orders plugin listens) — no cross-plugin import.
+  // print via the printerEvents bus (the orders plugin listens), no cross-plugin import.
   orderId               String?
   orderPrintId          String?
-  // Most recent dispatch attempt — printer + tracked PrintJob linkage for completion
+  // Most recent dispatch attempt: printer + tracked PrintJob linkage for completion
   // reconciliation and history (mirrors OrderPrint's last-print columns).
   lastPrinterId         String?
   lastDispatchJobId     String?
@@ -1659,8 +1668,8 @@ model QueueItem {
 /// `@printstream/shared` (`printer-maintenance.ts`) supplies every default, so
 /// an untouched printer has no rows here and picks up catalog changes for free.
 ///
-/// Tenancy: keyed by `printerSerial`, not `printerId`, matching `PrinterStats` —
-/// maintenance is a fact about the physical machine, so removing and re-adding a
+/// Tenancy: keyed by `printerSerial`, not `printerId`, matching `PrinterStats`.
+/// Maintenance is a fact about the physical machine, so removing and re-adding a
 /// printer must not lose which jobs are due. `taskKey` is a catalog key
 /// (`z-lead-screw`) or `custom:<cuid>` for a user-defined job; a custom row is
 /// the ONLY place a task's title lives, so deleting it deletes the task.
@@ -1698,13 +1707,13 @@ model PrinterMaintenanceTask {
 
 /// Append-only record of maintenance actually performed (the `maintenance`
 /// plugin). Each row snapshots the usage counters as they read at completion,
-/// because that is what the next due date is measured from — reading today's
+/// because that is what the next due date is measured from: reading today's
 /// `PrinterStats` and subtracting would silently shift every past interval
 /// whenever the stats are adjusted.
 ///
 /// Tenancy: keyed by `printerSerial` like `PrinterMaintenanceTask`, so history
 /// follows the physical printer. `performedByUserId` is a soft reference (no FK):
-/// the log outlives the account that wrote it. Rows are never edited or swept —
+/// the log outlives the account that wrote it. Rows are never edited or swept:
 /// the newest row per `taskKey` drives the due date, and the rest is history.
 model PrinterMaintenanceLog {
   id                String   @id @default(cuid())
@@ -1727,7 +1736,7 @@ model PrinterMaintenanceLog {
 }
 
 /// A two-way support conversation between a workspace user and the platform
-/// team (cloud-only messaging). Not workspace-owned — platform admins read these
+/// team (cloud-only messaging). Not workspace-owned: platform admins read these
 /// across workspaces via `rootPrisma`; the participant/workspace columns are
 /// point-in-time snapshots (no FKs) so a conversation outlives the account or
 /// workspace it came from. `workspaceId` is deliberately unscoped (see
@@ -1794,7 +1803,7 @@ model SupportMessage {
 /// sweeper sends the email after an escalation delay UNLESS the recipient
 /// side's last-read mark has passed the message by then (they already saw it
 /// in the app, so the email would be a duplicate). Content is rebuilt from the
-/// conversation at fire time — never snapshotted here — and due rows for the
+/// conversation at fire time (never snapshotted here), and due rows for the
 /// same conversation+side coalesce into a single email.
 model SupportPendingEmail {
   id             String   @id @default(cuid())
@@ -1819,7 +1828,7 @@ model SupportPendingEmail {
 /// Bytes live on disk (`storedPath`), not in the row: attachments are capped at
 /// a size where inlining them would put the whole payload through WAL, backups,
 /// and API memory on every read. The row is metadata only, so deleting it
-/// leaves the file behind — `attachment-storage.ts` owns the sweep that
+/// leaves the file behind; `attachment-storage.ts` owns the sweep that
 /// reclaims files with no surviving row.
 ///
 /// Uploaded ahead of the message (`messageId` is null until the send claims it,
@@ -1845,7 +1854,7 @@ model SupportAttachment {
   @@index([createdAt])
 }
 
-/// Product suggestion board post (cloud-only). Not workspace-owned — the board is
+/// Product suggestion board post (cloud-only). Not workspace-owned: the board is
 /// platform-wide and shared by every cloud workspace, accessed via `rootPrisma`.
 /// `authorName` is a display snapshot so posts survive account deletion.
 /// `status` is the platform team's triage state (a `suggestionStatusSchema`
@@ -1904,7 +1913,7 @@ model SuggestionComment {
 
 /// A single-use invite code that gates cloud self-registration during the
 /// beta (cloud-only; managed by platform admins, accessed via `rootPrisma`).
-/// The code itself is stored displayable (`XXXX-XXXX`) — it is a distribution
+/// The code itself is stored displayable (`XXXX-XXXX`): it is a distribution
 /// gate, not a credential; brute force is bounded by the register rate limit.
 /// `usedByWorkspaceId` is a plain snapshot (no FK) so the audit trail survives
 /// workspace deletion. Harmless/unused in self-hosted or OSS deployments.

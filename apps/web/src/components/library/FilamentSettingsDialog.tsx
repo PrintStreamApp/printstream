@@ -54,6 +54,8 @@ export interface FilamentSettingsDialogProps {
    * the user which machine variant they are actually tuning, which the alias hides.
    */
   filamentPresetFullName?: string | null
+  /** Search text to open the catalog with, from the cross-catalog settings search. */
+  initialQuery?: string
   /** Source 3MF id + slot, required to resolve a `project:filament:` material's embedded base. */
   sourceFileId?: string | null
   projectFilamentId?: number | null
@@ -98,7 +100,7 @@ export type FilamentConfigResolver = (request: {
 
 
 export default function FilamentSettingsDialog(props: FilamentSettingsDialogProps): JSX.Element {
-  const { open, onClose, slicerTargetId, filamentProfileId, filamentProfileName, filamentPresetFullName, sourceFileId, projectFilamentId, initialOverrides, canEditOriginal, applyScope = 'slice', resolveConfig, onApply } = props
+  const { open, onClose, slicerTargetId, filamentProfileId, filamentProfileName, filamentPresetFullName, sourceFileId, projectFilamentId, initialOverrides, canEditOriginal, applyScope = 'slice', initialQuery, resolveConfig, onApply } = props
   // The shell applies the develop-tier gate itself; this only tells it which mode it is in.
   const showDeveloperOptions = useEffectiveSlicerDeveloperMode()
   const { promptText } = usePromptDialog()
@@ -429,6 +431,7 @@ export default function FilamentSettingsDialog(props: FilamentSettingsDialogProp
       open={open}
       onClose={onClose}
       catalog={filamentSettingsCatalog}
+      initialQuery={initialQuery}
       titlePrefix="Filament settings"
       presetName={filamentProfileName}
       subtitle={filamentPresetFullName && filamentPresetFullName !== filamentProfileName ? (

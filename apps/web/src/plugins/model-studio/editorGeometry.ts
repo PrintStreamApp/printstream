@@ -610,7 +610,7 @@ export function restObjectOnBed(object: THREE.Object3D): void {
  * point instead of about its own local origin, then rest it on the bed.
  *
  * WHY THE CORRECTION IS NOT OPTIONAL. `position` places the object's local ORIGIN, and scaling
- * multiplies the mesh's own coordinates about that origin — so an object whose vertices sit far
+ * multiplies the mesh's own coordinates about that origin, so an object whose vertices sit far
  * from it (a Bambu mesh routinely carries plate coordinates) travels by `(factor - 1)` times its
  * whole origin-to-centroid offset. At the 25.4x of an inch conversion that is metres, and the
  * model leaves the bed entirely. This is the same trap the single-object 3MF export hit.

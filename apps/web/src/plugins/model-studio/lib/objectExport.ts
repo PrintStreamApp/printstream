@@ -25,17 +25,27 @@ import type { PartMember } from './selectionModel'
 /**
  * Sanitized file base name (no extension) for an exported object: path separators and
  * other characters that are unsafe in filenames collapse to spaces, and an empty
- * result falls back to `'object'`. A trailing `.stl` the object name already carries
- * is folded away so the final name never doubles the extension.
+ * result falls back to `'object'`. An `extension` the object name already carries
+ * is folded away so the final name never doubles it.
+ *
+ * `extension` is a parameter rather than a hardcoded `.stl` because the generic-3MF export
+ * (`genericThreeMfExport.ts`) needs this identical rule for `.3mf`: an object read in as
+ * `bracket.3mf` must not export as `bracket.3mf.3mf`, and a second copy of this sanitizer is how
+ * two exports of one object come to disagree about its filename.
  */
-export function stlExportBaseName(objectName: string): string {
+export function exportBaseName(objectName: string, extension: string): string {
   const base = objectName
-    .replace(/\.stl$/i, '')
+    .replace(new RegExp(`${extension.replace(/\./g, '\\.')}$`, 'i'), '')
     // eslint-disable-next-line no-control-regex
     .replace(/[\\/:*?"<>|\u0000-\u001f]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
   return base || 'object'
+}
+
+/** Sanitized base name for an STL export. See {@link exportBaseName}. */
+export function stlExportBaseName(objectName: string): string {
+  return exportBaseName(objectName, '.stl')
 }
 
 /** Full `<sanitized name>.stl` filename for an exported object. */

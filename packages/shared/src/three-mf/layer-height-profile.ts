@@ -1,7 +1,7 @@
 /**
  * BambuStudio variable layer height: `Metadata/layer_heights_profile.txt`.
  *
- * Owns the codec and the invariants for a per-object layer-height PROFILE — the free-form curve
+ * Owns the codec and the invariants for a per-object layer-height PROFILE: the free-form curve
  * that decides how thick each layer is up the model, as opposed to the discrete bands in
  * `layer-config-ranges.ts`.
  *
@@ -16,8 +16,8 @@
  *
  * That last one is the cruellest: `PrintObject.cpp:3341` compares `profile[1]` to
  * `first_object_layer_height` with `!=` on doubles and, on any difference, throws the whole profile
- * away and silently reverts the object to uniform layering. It cost a real slice here — an adaptive
- * curve starting at 0.28 against a 0.2 first layer produced 177 identical 0.200 mm layers — so
+ * away and silently reverts the object to uniform layering. It cost a real slice here (an adaptive
+ * curve starting at 0.28 against a 0.2 first layer produced 177 identical 0.200 mm layers), so
  * {@link normalizeLayerHeightProfile} pins it rather than trusting callers to remember.
  *
  * ## The one interop trap
@@ -98,7 +98,7 @@ export function flatLayerHeightProfile(
  * Force a profile into the shape the engine will accept, or return null when it cannot be saved.
  *
  * This is the ONE place the invariants are applied, because BambuStudio does not repair a profile
- * it dislikes — it DISCARDS it (`PrintObject.cpp:3327-3338` throws the whole thing away for a
+ * it dislikes: it DISCARDS it (`PrintObject.cpp:3327-3338` throws the whole thing away for a
  * single out-of-band height) and silently falls back to the ranges. Clamping here is what stops a
  * nozzle change quietly erasing a user's curve.
  */

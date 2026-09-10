@@ -66,53 +66,129 @@ export function normalizeAmsDryingFilamentType(filamentType: string): string {
 }
 
 export interface AmsDryingPreset {
+  /** Recommended temperature with the printer IDLE. */
   temperature: number
+  /**
+   * Recommended temperature while a print is RUNNING, which is lower for eight of these
+   * materials. See {@link recommendedAmsDryingTemperature} for why the two differ.
+   */
+  printingTemperature: number
+  /** Recommended hours on an AMS HT (N3S). */
   durationHours: number
+  /**
+   * Recommended hours on an AMS 2 Pro (N3F), when Bambu specifies a different figure. Absent means
+   * the two agree, which is true for all but five materials.
+   */
+  amsProDurationHours?: number
   coolingTemp: number
 }
 
-const PLA_DRYING_PRESET: AmsDryingPreset = { temperature: 45, durationHours: 12, coolingTemp: 45 }
+const PLA_DRYING_PRESET: AmsDryingPreset = {
+  temperature: 45, printingTemperature: 45, durationHours: 12, coolingTemp: 45
+}
 
 /**
- * Recommended drying cycle per filament type. Temperatures/durations are
- * Bambu's official idle-state AMS HT values (the higher-capability hardware;
- * {@link clampDryingTemperature} brings them into range on an AMS 2 Pro).
+ * Recommended drying cycle per filament type, from Bambu's official filament profiles.
+ *
+ * BambuStudio stores each of these as a FOUR-element array,
+ * `filament_dev_ams_drying_temperature: [N3F-idle, N3S-idle, N3F-print, N3S-print]`, i.e. one
+ * value per (hardware, printer-state) pair. We carry two of the four and derive the rest:
+ *
+ * - The AMS HT (N3S) value is stored and {@link clampDryingTemperature} brings it into the AMS 2
+ *   Pro band. That is not an approximation: Bambu's N3F value equals `min(N3S value, 65)` for
+ *   every one of the 18 base materials, in both the idle and the printing column, so the clamp
+ *   reproduces their table exactly. `ams-drying.test.ts` pins that.
+ * - Idle and printing are stored SEPARATELY because they genuinely differ and no rule derives one
+ *   from the other (TPU drops 75 -> 45, PVA 85 -> 70, BVOH 60 -> 45, PETG 65 -> 55, while ASA, PA
+ *   and PC do not move at all).
+ *
+ * `durationHours` is the AMS HT figure and `amsProDurationHours` the AMS 2 Pro one, stored rather
+ * than derived: the relationship is not monotonic. ABS, ASA and PC take LONGER on the cooler AMS 2
+ * Pro (8h -> 12h), while TPU and PVA take SHORTER (18h -> 12h), because Bambu appears to cap the
+ * cycle on the lower-capability hardware for the soft materials rather than extend it. Any rule
+ * inferring one from the other would be wrong in one direction or the other.
+ *
+ * Bambu's duration array is identical between the idle and printing columns, so drying mid-print
+ * changes the temperature only, never the time.
  */
 const DRYING_PRESETS: Record<string, AmsDryingPreset> = {
   PLA: PLA_DRYING_PRESET,
-  'PLA-CF': { temperature: 45, durationHours: 12, coolingTemp: 45 },
-  PETG: { temperature: 65, durationHours: 12, coolingTemp: 50 },
-  'PETG-ESD': { temperature: 65, durationHours: 12, coolingTemp: 50 },
-  'PETG-CF': { temperature: 65, durationHours: 12, coolingTemp: 50 },
-  ABS: { temperature: 80, durationHours: 8, coolingTemp: 60 },
-  'ABS-GF': { temperature: 80, durationHours: 8, coolingTemp: 60 },
-  ASA: { temperature: 80, durationHours: 8, coolingTemp: 60 },
-  'ASA-CF': { temperature: 80, durationHours: 8, coolingTemp: 60 },
-  TPU: { temperature: 75, durationHours: 18, coolingTemp: 40 },
-  PA: { temperature: 85, durationHours: 12, coolingTemp: 65 },
-  'PA-CF': { temperature: 85, durationHours: 12, coolingTemp: 65 },
-  'PAHT-CF': { temperature: 85, durationHours: 12, coolingTemp: 65 },
-  'PA6-CF': { temperature: 85, durationHours: 12, coolingTemp: 65 },
-  'PA6-GF': { temperature: 85, durationHours: 12, coolingTemp: 65 },
-  'PA12-CF': { temperature: 85, durationHours: 12, coolingTemp: 65 },
-  'PA612-CF': { temperature: 85, durationHours: 12, coolingTemp: 65 },
-  PPA: { temperature: 85, durationHours: 12, coolingTemp: 65 },
-  'PPA-CF': { temperature: 85, durationHours: 12, coolingTemp: 65 },
-  'PPA-GF': { temperature: 85, durationHours: 12, coolingTemp: 65 },
-  PC: { temperature: 80, durationHours: 8, coolingTemp: 60 },
-  PP: { temperature: 60, durationHours: 12, coolingTemp: 50 },
-  PE: { temperature: 45, durationHours: 12, coolingTemp: 45 },
-  'PET-CF': { temperature: 80, durationHours: 12, coolingTemp: 65 },
-  PPS: { temperature: 80, durationHours: 12, coolingTemp: 65 },
-  'PPS-CF': { temperature: 80, durationHours: 12, coolingTemp: 65 },
-  PVA: { temperature: 85, durationHours: 18, coolingTemp: 40 },
-  BVOH: { temperature: 60, durationHours: 12, coolingTemp: 40 },
-  HIPS: { temperature: 80, durationHours: 12, coolingTemp: 60 },
-  SUPPORT: { temperature: 60, durationHours: 12, coolingTemp: 45 }
+  'PLA-CF': { temperature: 45, printingTemperature: 45, durationHours: 12, coolingTemp: 45 },
+  PETG: { temperature: 65, printingTemperature: 55, durationHours: 12, coolingTemp: 50 },
+  'PETG-ESD': { temperature: 65, printingTemperature: 55, durationHours: 12, coolingTemp: 50 },
+  'PETG-CF': { temperature: 65, printingTemperature: 55, durationHours: 12, coolingTemp: 50 },
+  ABS: { temperature: 80, printingTemperature: 75, amsProDurationHours: 12, durationHours: 8, coolingTemp: 60 },
+  'ABS-GF': { temperature: 80, printingTemperature: 75, amsProDurationHours: 12, durationHours: 8, coolingTemp: 60 },
+  ASA: { temperature: 80, printingTemperature: 80, amsProDurationHours: 12, durationHours: 8, coolingTemp: 60 },
+  'ASA-CF': { temperature: 80, printingTemperature: 80, amsProDurationHours: 12, durationHours: 8, coolingTemp: 60 },
+  TPU: { temperature: 75, printingTemperature: 45, amsProDurationHours: 12, durationHours: 18, coolingTemp: 40 },
+  PA: { temperature: 85, printingTemperature: 85, durationHours: 12, coolingTemp: 65 },
+  'PA-CF': { temperature: 85, printingTemperature: 85, durationHours: 12, coolingTemp: 65 },
+  'PAHT-CF': { temperature: 85, printingTemperature: 85, durationHours: 12, coolingTemp: 65 },
+  'PA6-CF': { temperature: 85, printingTemperature: 85, durationHours: 12, coolingTemp: 65 },
+  'PA6-GF': { temperature: 85, printingTemperature: 85, durationHours: 12, coolingTemp: 65 },
+  'PA12-CF': { temperature: 85, printingTemperature: 85, durationHours: 12, coolingTemp: 65 },
+  'PA612-CF': { temperature: 85, printingTemperature: 85, durationHours: 12, coolingTemp: 65 },
+  PPA: { temperature: 85, printingTemperature: 85, durationHours: 12, coolingTemp: 65 },
+  'PPA-CF': { temperature: 85, printingTemperature: 85, durationHours: 12, coolingTemp: 65 },
+  'PPA-GF': { temperature: 85, printingTemperature: 85, durationHours: 12, coolingTemp: 65 },
+  PC: { temperature: 80, printingTemperature: 80, amsProDurationHours: 12, durationHours: 8, coolingTemp: 60 },
+  PP: { temperature: 60, printingTemperature: 50, durationHours: 12, coolingTemp: 50 },
+  PE: { temperature: 45, printingTemperature: 45, durationHours: 12, coolingTemp: 45 },
+  'PET-CF': { temperature: 80, printingTemperature: 80, durationHours: 12, coolingTemp: 65 },
+  PPS: { temperature: 80, printingTemperature: 80, durationHours: 12, coolingTemp: 65 },
+  'PPS-CF': { temperature: 80, printingTemperature: 80, durationHours: 12, coolingTemp: 65 },
+  PVA: { temperature: 85, printingTemperature: 70, amsProDurationHours: 12, durationHours: 18, coolingTemp: 40 },
+  BVOH: { temperature: 60, printingTemperature: 45, durationHours: 12, coolingTemp: 40 },
+  HIPS: { temperature: 80, printingTemperature: 75, durationHours: 12, coolingTemp: 60 },
+  SUPPORT: { temperature: 60, printingTemperature: 50, durationHours: 12, coolingTemp: 45 }
 }
 
 export function dryingPresetForFilament(filamentType: string): AmsDryingPreset {
   return DRYING_PRESETS[normalizeAmsDryingFilamentType(filamentType)] ?? PLA_DRYING_PRESET
+}
+
+/**
+ * The temperature to SUGGEST for this material, given whether a print is running.
+ *
+ * Mirrors BambuStudio's `AMSDryCtrWin` (`AMSDryControl.cpp`), which picks the idle value when the
+ * machine is idle and, while printing, takes the printing value clamped by the material's
+ * softening and heat-distortion points. The clamp is kept here as the heat-distortion term only:
+ * we hold that figure already ({@link maxSafeAmsDryingTemperature}) but carry no softening table,
+ * and on Bambu's current data neither term ever binds, because the printing value is already the
+ * lowest of the three for all 18 base materials. It is applied anyway so that a future data change
+ * errs downward rather than silently suggesting something that deforms threaded filament.
+ *
+ * WHY the printing value is lower: the filament is being fed through the AMS while it dries, so it
+ * spends the cycle threaded rather than sitting on a spool, and the chamber is already warm. Ours
+ * used to suggest the idle figure in both states, which is a silent 10-15C overshoot on PETG, PP,
+ * BVOH and support material -- all of them below their heat-distortion point, so the risk
+ * assessment had nothing to say about it either.
+ *
+ * Returns the UNCLAMPED-to-hardware figure; pass it through {@link clampDryingTemperature} for the
+ * unit it will run on.
+ */
+/**
+ * The duration to SUGGEST for this material on this hardware.
+ *
+ * Its own function rather than a field read, because the answer depends on the unit: temperature
+ * already varies by hardware here (through {@link clampDryingTemperature}) and leaving duration
+ * fixed meant an AMS 2 Pro was offered Bambu's 65C paired with the 85C machine's runtime, which is
+ * neither of Bambu's two recommendations.
+ */
+export function recommendedAmsDryingDurationHours(filamentType: string, unitType: AmsUnitType): number {
+  const preset = dryingPresetForFilament(filamentType)
+  if (unitType === 'ams-ht') return preset.durationHours
+  return preset.amsProDurationHours ?? preset.durationHours
+}
+
+export function recommendedAmsDryingTemperature(
+  filamentType: string,
+  options: { printing?: boolean } = {}
+): number {
+  const preset = dryingPresetForFilament(filamentType)
+  if (!options.printing) return preset.temperature
+  return Math.min(preset.printingTemperature, maxSafeAmsDryingTemperature(filamentType))
 }
 
 export function dryingCoolingTemperature(filamentType: string): number {
@@ -251,8 +327,15 @@ export function validateAmsDryingStart(
  * temperature, so the suggested cycle cannot harm anything else in the unit.
  * The unit's last reported cycle settings are carried over only when they
  * belong to that same profile and are still safe for what is loaded now.
+ *
+ * `printing` selects the printing-state temperatures, which are lower for eight materials (see
+ * {@link recommendedAmsDryingTemperature}). It has to reach the "safest loaded material" choice
+ * too, not just the final number: the ranking is by recommended temperature and the printing
+ * column reorders it, so grading with idle figures and then displaying a printing one could pick
+ * a different material than the one being protected. BambuStudio takes the same minimum over the
+ * same state-dependent value (`AMSDryControl.cpp`).
  */
-export function defaultAmsDryingProfile(unit: AmsUnit): {
+export function defaultAmsDryingProfile(unit: AmsUnit, options: { printing?: boolean } = {}): {
   filamentType: string
   temperature: number
   durationHours: number
@@ -261,11 +344,11 @@ export function defaultAmsDryingProfile(unit: AmsUnit): {
   const loadedTypes = unit.slots
     .filter((slot) => slot.occupied ?? Boolean(slot.filamentType?.trim()))
     .map((slot) => slot.filamentType?.trim() ? normalizeAmsDryingFilamentType(slot.filamentType) : 'PLA')
+  const recommendedFor = (type: string) => recommendedAmsDryingTemperature(type, options)
   const detectedType = loadedTypes.length > 0
     ? loadedTypes.reduce((safest, type) =>
-        dryingPresetForFilament(type).temperature < dryingPresetForFilament(safest).temperature ? type : safest)
+        recommendedFor(type) < recommendedFor(safest) ? type : safest)
     : normalizeAmsDryingFilamentType(unit.dryFilament ?? 'PLA')
-  const preset = dryingPresetForFilament(detectedType)
   const range = amsDryingTemperatureRange(unit.type)
 
   const reportedMatchesSelection =
@@ -285,8 +368,8 @@ export function defaultAmsDryingProfile(unit: AmsUnit): {
 
   return {
     filamentType: detectedType,
-    temperature: reportedTemperature ?? clampDryingTemperature(preset.temperature, range),
-    durationHours: reportedDuration ?? preset.durationHours,
+    temperature: reportedTemperature ?? clampDryingTemperature(recommendedFor(detectedType), range),
+    durationHours: reportedDuration ?? recommendedAmsDryingDurationHours(detectedType, unit.type),
     rotateTray: true
   }
 }

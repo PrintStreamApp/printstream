@@ -1,0 +1,25 @@
+-- Record where a running print's baked pauses fall on its progress bar (issue #102).
+--
+-- A tick has to sit on the scale the bar FILLS on, and that scale is time, not layers:
+-- `mc_percent` comes from the sliced file's `M73 P`, which BambuStudio computes as
+-- `100 * elapsed_time / machine.time`. Measured on real plates, placing a tick at
+-- `layer / totalLayers` instead lands up to 41 points out. So the percent cannot be derived at
+-- read time from anything we already store, and gets recorded per pause.
+--
+-- Scanned out of the G-code the job DISPATCHED, not out of the library file it came from. The
+-- prepare-print dialog adds and removes pauses per-slice without persisting them, so the file's
+-- current head describes pauses this print does not have. Same rule as the editor's base bytes:
+-- resolve from what was sent, never from the head.
+--
+-- This is the FALLBACK producer. Firmware that publishes `print.p_list` (BambuStudio 2.8.2 draws
+-- its own gauge markers from it) outranks this column everywhere, and needs no storage at all
+-- because it rides the live status. Null therefore means "not scanned", never "no pauses": the
+-- column stays null for externally started prints and plain `.gcode` dispatches, where we hold no
+-- bytes to read, and the UI renders that as silence rather than as a promise of an uninterrupted
+-- print.
+--
+-- GUARDED, like every migration after `init`: `reconcileMigrationHistory` collapses a pre-squash
+-- history into a satisfied `init` row and then applies everything recorded after it, against a
+-- database that may already have this column. See `apply-migrations.test.ts`.
+
+ALTER TABLE "PrintJob" ADD COLUMN IF NOT EXISTS "pauseScheduleJson" TEXT;

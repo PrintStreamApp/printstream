@@ -7,21 +7,33 @@
  * codes (`N6`, `O1D`, ...) and display names ("X1 Carbon").
  */
 
+/**
+ * Canonical key -> every spelling that means it.
+ *
+ * The device codes (`C11`, `N1`, `BL-P001`, ...) are Bambu's own, and the authority for them is
+ * BambuStudio's `resources/printers/<code>.json`, each of which states its `display_name`.
+ * `bambu-model-keys.test.ts` re-derives this mapping from those files when the vendored source is
+ * present, because three of them were inverted here for a long time (`C11` read as the X1C when it
+ * is the P1P, and `N1`/`N2S` were swapped), which offered a P1P-named preset on an X1C.
+ *
+ * `A04` / `A11` / `A12` / `A1M` appear in no BambuStudio resource and cannot be verified against
+ * it; they predate this note and are left alone rather than guessed at.
+ */
 const BAMBU_PRINTER_MODEL_ALIASES: Record<string, string[]> = {
-  X1: ['X1'],
-  X1C: ['X1C', 'X1 Carbon', 'C11'],
+  X1: ['X1', 'BL-P002'],
+  X1C: ['X1C', 'X1 Carbon', 'BL-P001'],
   X1E: ['X1E', 'X1E Enterprise', 'C13'],
   X2D: ['X2D', 'N6'],
-  P1S: ['P1S'],
-  P2S: ['P2S'],
-  P1P: ['P1P'],
-  A1: ['A1', 'A11', 'N1'],
-  A1mini: ['A1 mini', 'A1mini', 'A1M', 'A12', 'A04', 'N2S'],
+  P1S: ['P1S', 'C12'],
+  P2S: ['P2S', 'N7'],
+  P1P: ['P1P', 'C11'],
+  A1: ['A1', 'A11', 'N2S'],
+  A1mini: ['A1 mini', 'A1mini', 'A1M', 'A12', 'A04', 'N1'],
   A2L: ['A2L', 'N9'],
   H2D: ['H2D', 'O1D', 'BL-D001'],
-  H2DPRO: ['H2D Pro', 'H2DPRO'],
+  H2DPRO: ['H2D Pro', 'H2DPRO', 'O1E'],
   H2C: ['H2C', 'O1C', 'O1C2'],
-  H2S: ['H2S']
+  H2S: ['H2S', 'O1S']
 }
 
 export const KNOWN_BAMBU_PRINTER_MODEL_KEYS = Object.freeze(Object.keys(BAMBU_PRINTER_MODEL_ALIASES))
@@ -33,18 +45,25 @@ export function resolveBambuPrinterModelAliases(model: string): string[] {
 export function normalizeBambuStudioPrinterModelOption(value: string): string {
   const trimmed = value.trim()
   const key = trimmed.toUpperCase()
+  // Same authority as BAMBU_PRINTER_MODEL_ALIASES above; keep the two in step.
   const mapped: Record<string, string> = {
     A04: 'A1 mini',
     A1M: 'A1 mini',
     A11: 'A1',
     A12: 'A1 mini',
-    N1: 'A1',
-    N2S: 'A1 mini',
+    N1: 'A1 mini',
+    N2S: 'A1',
     N9: 'A2L',
-    C11: 'X1C',
+    C11: 'P1P',
+    C12: 'P1S',
     C13: 'X1E',
     N6: 'X2D',
+    N7: 'P2S',
+    'BL-P001': 'X1C',
+    'BL-P002': 'X1',
     O1D: 'H2D',
+    O1E: 'H2D Pro',
+    O1S: 'H2S',
     'BL-D001': 'H2D',
     O1C: 'H2C',
     O1C2: 'H2C'

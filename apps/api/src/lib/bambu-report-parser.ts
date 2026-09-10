@@ -18,6 +18,7 @@
 import {
   AMS_HT_TRAY_INDEX_MIN,
   AMS_LITE_MIXED_TRAY_INDEX_OFFSET,
+  MAX_PRINT_PAUSE_POINTS,
   amsUnitTypeFromCode,
   getPrinterDisplayCapabilities,
   getPrinterPrintStartOptions,
@@ -36,7 +37,9 @@ import {
   type PrinterLightMode,
   type PrinterPressureAdvanceProfile,
   type PrinterStage,
-  type PrinterStatus
+  type PrinterStatus,
+  type PrintPausePoint,
+  type PrintPauseSchedule
 } from '@printstream/shared'
 import {
   formatHmsCode,
@@ -63,6 +66,7 @@ export function makeOfflineStatus(printer: Printer): PrinterStatus {
     currentLayer: null,
     totalLayers: null,
     remainingMinutes: null,
+    pauseSchedule: null,
     jobId: null,
     taskId: null,
     jobName: null,
@@ -410,6 +414,13 @@ export function parseReport(value: unknown, printer: Printer, currentStatus?: Pr
     delta.gcodeFile = print.gcode_file || null
   }
 
+  const pauseSchedule = parsePrintPauseSchedule(print)
+  if (pauseSchedule !== undefined) {
+    delta.pauseSchedule = pauseSchedule
+  } else if (currentStatus?.pauseSchedule != null && startsDifferentPrint(delta, currentStatus)) {
+    delta.pauseSchedule = null
+  }
+
   assignNumber(delta, 'bedTemp', print.bed_temper)
   assignNumber(delta, 'bedTarget', print.bed_target_temper)
   assignNumber(delta, 'nozzleTemp', print.nozzle_temper)
@@ -428,6 +439,9 @@ export function parseReport(value: unknown, printer: Printer, currentStatus?: Pr
 
   const filamentTrackSwitch = parseFilamentTrackSwitch(print, currentStatus?.filamentTrackSwitch ?? null)
   if (filamentTrackSwitch !== undefined) delta.filamentTrackSwitch = filamentTrackSwitch
+
+  const amsFirmwareSwitch = parseAmsFirmwareSwitch(print)
+  if (amsFirmwareSwitch !== undefined) delta.amsFirmwareSwitch = amsFirmwareSwitch
   assignChamberTemperature(delta, print, printer.model)
   assignFanSpeed(delta, 'fanGearSpeed', print.fan_gear)
   assignFanSpeed(delta, 'partFanPercent', print.cooling_fan_speed)
@@ -551,6 +565,99 @@ function assignLayerProgress(target: Partial<PrinterStatus>, print: Record<strin
 
   if (currentLayer !== null) target.currentLayer = currentLayer
   if (totalLayers !== null) target.totalLayers = totalLayers
+}
+
+/**
+ * The pause schedule the printer publishes for the file it is running (`print.p_list`), which is
+ * the same field BambuStudio 2.8.2 draws its own gauge markers from
+ * (`DeviceCore/DevPrintTaskInfo.cpp`). Each entry is `{ p, t, i, l }`: progress percent, minutes
+ * remaining at that pause, 1-based pause index, and layer.
+ *
+ * Returns `undefined` for "the report said nothing about this", which is both the ordinary case
+ * for a delta report and the permanent case for firmware that predates the field. That is
+ * reserved for a payload with no usable SHAPE at all, mirroring Studio's "invalid updates leave
+ * the last valid schedule unchanged"; an individual entry that cannot be placed is dropped on its
+ * own. Rejecting a whole list over one odd entry would silently disable the preferred producer
+ * for a whole print, with nothing logged and no test able to notice.
+ *
+ * Three details this is deliberately careful about, because no firmware has been available to
+ * check any of them against and each fails silently:
+ *
+ * - **`i` is not copied, and the ordinal is derived from `total` instead.** Whether `i` is 0- or
+ *   1-based cannot be established from Studio's source, so requiring `i >= 1` would have
+ *   discarded every frame on firmware that counts from zero. But numbering purely by position in
+ *   the list is wrong too, because the list may hold only the pauses still PENDING: Studio's
+ *   `getPassedCount` returns the minimum `i` and is documented as "how many pause points precede
+ *   the next pending pause", which only means anything if consumed pauses drop out. So the first
+ *   listed pause is numbered `total - list.length + 1`, which is correct whether the list is
+ *   trimmed or complete, and needs no assumption about `i` at all.
+ * - **A negative `t` means "cannot say", not zero.** Studio filters on `>= 0` before drawing
+ *   (`StatusPanel.cpp:1809`), so firmware does emit it; clamping would make the UI quote a
+ *   duration nobody computed.
+ * - **`p` is trusted as-is** rather than recomputed: it is on the same time-linear scale as
+ *   `mc_percent`, which is the only scale a marker can be placed on.
+ */
+/**
+ * Whether this report is about a DIFFERENT print than the one the status currently describes.
+ *
+ * Exists for the pause schedule, which is job-scoped and whose end nothing reports: firmware that
+ * publishes `p_list` once at print start would otherwise leave one print's pauses on the bar of
+ * the next, which reads as a promise the printer will stop when it will not.
+ *
+ * Tests every identity the printer reports, not just `task_id`. A print started from the SD card
+ * or over LAN can carry an empty or constant task id, so keying on that alone left a stale
+ * schedule standing for exactly the prints most likely to have come from elsewhere. Only a field
+ * the report actually CHANGED counts: a delta that simply omits one says nothing about it.
+ */
+function startsDifferentPrint(delta: Partial<PrinterStatus>, currentStatus: PrinterStatus): boolean {
+  const changed = <K extends 'taskId' | 'jobId' | 'gcodeFile' | 'jobName'>(key: K): boolean =>
+    delta[key] !== undefined && delta[key] !== currentStatus[key]
+  return changed('taskId') || changed('jobId') || changed('gcodeFile') || changed('jobName')
+}
+
+function parsePrintPauseSchedule(print: Record<string, unknown>): PrintPauseSchedule | undefined {
+  const raw = print.p_list
+  if (!isObject(raw)) return undefined
+
+  const total = roundedNonNegativeInt(numberOrNull(raw.total))
+  const list = raw.list
+  if (total === null || !Array.isArray(list)) return undefined
+
+  const alreadyPassed = Math.max(0, total - list.length)
+  const placeable: Array<{
+    index: number
+    layer: number
+    progressPercent: number
+    remainingMinutes: number | null
+  }> = []
+  for (const [position, entry] of list.entries()) {
+    if (!isObject(entry)) continue
+    const rawPercent = numberOrNull(entry.p)
+    const rawLayer = numberOrNull(entry.l)
+    const rawRemaining = numberOrNull(entry.t)
+    // Both of these POSITION the pause, so an entry missing either cannot be drawn at all.
+    if (rawPercent === null || rawLayer === null || rawPercent < 0 || rawLayer <= 0) continue
+    placeable.push({
+      // Reserve the ordinal of an unplaceable entry. Compressing the filtered list would relabel
+      // every later pause, while `total - list.length` still accounts for entries firmware
+      // actually removed from the front after they passed.
+      index: alreadyPassed + position + 1,
+      layer: Math.round(rawLayer),
+      progressPercent: Math.max(0, Math.min(100, Math.round(rawPercent))),
+      remainingMinutes: rawRemaining === null || rawRemaining < 0 ? null : Math.round(rawRemaining)
+    })
+  }
+
+  placeable.sort((a, b) => a.layer - b.layer)
+  // The cap matches `printPauseScheduleSchema`'s own, because a schedule the wire schema then
+  // rejects would fail validation in the browser and take the WHOLE status frame down with it,
+  // freezing the card.
+  const points: PrintPausePoint[] = placeable
+    .slice(0, MAX_PRINT_PAUSE_POINTS)
+
+  // `totalLayers` stays null: it exists to vet a schedule scanned from a file we dispatched, and
+  // the printer's own list is by definition about the file it is running.
+  return { total, points, totalLayers: null, source: 'printer' }
 }
 
 /**
@@ -2140,6 +2247,54 @@ function parseFilamentTrackSwitch(
   const infoBits = numberOrNull(switchJson.info)
   if (infoBits !== null) next.filamentPresent = (infoBits & 1) === 1
   return next
+}
+
+/**
+ * AMS chain firmware selection, from `print.upgrade_state.mc_for_ams_firmware`.
+ *
+ * Mirrors BambuStudio's `DevAmsSystemFirmwareSwitch::ParseFirmwareSwitch`, which guards every key
+ * with `contains()` and simply returns when one is absent. So absence means NO NEWS here too, and
+ * this returns `undefined` (leave the previous value alone) rather than clearing.
+ *
+ * That is deliberately unlike `parseFilamentTrackSwitch`, which does clear: the FTS carries a
+ * separate presence bit (`print.aux` bit 29) that a report can positively deny, whereas nothing
+ * says "this machine no longer has switchable AMS firmware". Most frames are incremental
+ * `push_status` deltas that mention neither, so clearing on absence would wipe the capability on
+ * the next status tick and make the AMS Type row disappear moments after it appeared.
+ *
+ * The capability lives in the DATA, not in a model table: Studio's `SupportSwitchFirmware()` is
+ * "the firmware list is not empty", so a machine with fixed AMS Lite hardware (A1, A1 mini) reports
+ * an empty list and must not be offered the control.
+ *
+ * Counterpart: `commandToMqttPayloads`' `switchAmsFirmware`, which sends the `id` read here back
+ * verbatim, and the web's AMS settings dialog.
+ */
+function parseAmsFirmwareSwitch(
+  print: Record<string, unknown>
+): PrinterStatus['amsFirmwareSwitch'] | undefined {
+  const upgrade = isObject(print.upgrade_state) ? print.upgrade_state : null
+  const firmware = upgrade && isObject(upgrade.mc_for_ams_firmware) ? upgrade.mc_for_ams_firmware : null
+  if (!firmware) return undefined
+
+  const options: NonNullable<PrinterStatus['amsFirmwareSwitch']>['options'] = []
+  if (Array.isArray(firmware.firmware)) {
+    for (const entry of firmware.firmware) {
+      if (!isObject(entry)) continue
+      const id = numberOrNull(entry.id)
+      // An entry with no id cannot be selected (the id IS the command payload), so drop it rather
+      // than render a row that would send `undefined`.
+      if (id === null) continue
+      options.push({ id, name: stringOrNull(entry.name), version: stringOrNull(entry.version) })
+    }
+  }
+
+  const status = stringOrNull(firmware.status)
+  return {
+    options,
+    currentId: numberOrNull(firmware.current_firmware_id),
+    runningId: numberOrNull(firmware.current_run_firmware_id),
+    switching: status?.toUpperCase() === 'SWITCHING'
+  }
 }
 
 /** `fila_switch.in[]` entry: `(ams_id << 8) | slot_id`, `-1` when nothing is docked. */

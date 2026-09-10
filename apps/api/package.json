@@ -12,11 +12,8 @@
     "build": "tsc -p tsconfig.json",
     "predev": "npm run build --workspace @printstream/shared",
     "dev": "NODE_OPTIONS=\"--require ../../scripts/dev/exit-with-parent.cjs\" tsx watch --include \"../../packages/shared/dist/**\" --include \"../../packages/bridge-runtime/dist/**\" src/server.ts",
-    "start": "node dist/server.js",
-    "typecheck": "tsc --noEmit -p tsconfig.json",
     "prisma:db:push": "prisma db push",
     "prisma:migrate:dev": "prisma migrate dev",
-    "prisma:migrate:deploy": "prisma migrate deploy",
     "prisma:generate": "prisma generate",
     "prisma:validate": "prisma validate",
     "db:reset-auth": "tsx scripts/dev/reset-auth.ts",
@@ -67,6 +64,6 @@
     "@types/web-push": "^3.6.4",
     "@types/ws": "^8.5.13",
     "prisma": "^6.5.0",
-    "tsx": "^4.19.3"
+    "tsx": "^4.23.13"
   }
 }

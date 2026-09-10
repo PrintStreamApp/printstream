@@ -1,6 +1,7 @@
 import { Stack, type ColorPaletteProp } from '@mui/joy'
 import type { ReactNode } from 'react'
 import { ProgressBar } from './ProgressBar'
+import { ProgressBarMarkers, type ProgressBarMarker } from './ProgressBarMarkers'
 import { printerJobProgressSx } from './printerJobProgressStyles'
 
 export function PrinterJobProgressBlock({
@@ -9,6 +10,7 @@ export function PrinterJobProgressBlock({
   headerAction,
   showProgress = true,
   value,
+  markers,
   color,
   fillColor,
   trackColor,
@@ -21,6 +23,17 @@ export function PrinterJobProgressBlock({
   showProgress?: boolean
   /** Percentage 0-100, or `null` while the job is running with no reported extent. */
   value: number | null
+  /**
+   * Fixed points to mark on the track (baked pauses of a running print).
+   *
+   * Opt-in per call site, never derived here: this block is shared by seven states and only two
+   * of them are a print in progress. A dispatch upload, a slice, a queued job and a finished
+   * history row all render the same bar, where a pause mark would be meaningless.
+   *
+   * Ignored while indeterminate, because a mark is a position on a scale the bar is not
+   * currently showing.
+   */
+  markers?: readonly ProgressBarMarker[]
   color: ColorPaletteProp
   fillColor?: string
   trackColor?: string
@@ -54,7 +67,11 @@ export function PrinterJobProgressBlock({
           value={value}
           color={color}
           sx={printerJobProgressSx({ value, fillColor, trackColor })}
-        />
+        >
+          {value != null && markers && markers.length > 0
+            ? <ProgressBarMarkers markers={markers} />
+            : null}
+        </ProgressBar>
       )}
       {lowerContent && (
         <Stack spacing={{ xs: 0.375, sm: 0.5 }} sx={{ minWidth: 0, alignSelf: 'center' }}>

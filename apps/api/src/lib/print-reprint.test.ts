@@ -102,7 +102,8 @@ test('consent flags are never restored from the recorded options', () => {
         allowIncompatibleFilament: true,
         allowPlateTypeMismatch: true,
         allowFilamentTrackSwitchMismatch: true,
-        allowInsufficientFilament: true
+        allowInsufficientFilament: true,
+        allowBlacklistedFilament: true
       })
     }),
     {}
@@ -112,6 +113,7 @@ test('consent flags are never restored from the recorded options', () => {
   assert.equal(options.allowPlateTypeMismatch, false)
   assert.equal(options.allowFilamentTrackSwitchMismatch, false)
   assert.equal(options.allowInsufficientFilament, false)
+  assert.equal(options.allowBlacklistedFilament, false)
 })
 
 test('a legacy row with bedLevel off re-prints with bed leveling off', () => {

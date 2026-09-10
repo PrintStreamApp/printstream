@@ -188,6 +188,25 @@ export function commandToMqttPayloads(
           auto_switch_filament: command.enabled
         }
       }]
+    // The one payload here under a top-level key other than `print`. `stampSequenceId` walks every
+    // top-level object, so this is stamped like any other; do not "normalize" it under `print`,
+    // where the firmware does not look for it.
+    case 'switchAmsFirmware':
+      return [{
+        upgrade: {
+          command: 'mc_for_ams_firmware_upgrade',
+          // BambuStudio hardcodes 1 to mean "Studio asked for this"; the firmware uses it to tell
+          // an app-initiated switch from a screen-initiated one.
+          src_id: 1,
+          id: command.firmwareId
+        }
+      }]
+    case 'resetAmsOrder':
+      return [{
+        print: {
+          command: 'ams_reset'
+        }
+      }]
     case 'startAmsDrying':
       return [{
         print: {

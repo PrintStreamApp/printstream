@@ -49,6 +49,8 @@ import {
   LIBRARY_VIEW_PERMISSION,
   PRINTERS_VIEW_PERMISSION,
   PRINTS_DISPATCH_PERMISSION,
+  STAGED_IMPORT_FORMATS,
+  importFormatExtensions,
   isDirectPrintableFileName
 } from '@printstream/shared'
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
@@ -119,6 +121,17 @@ import { PrintModal } from '../components/library/PrintModal'
 import { SliceFileModal } from '../components/library/SliceFileModal'
 import { SliceResultModal, SliceThenPrintModal } from '../components/library/SliceThenPrintModal'
 import { ListSkeleton } from '../components/ListSkeleton'
+
+/**
+ * What the library's file picker offers: every staged-import format, plus G-code.
+ *
+ * G-code is the one addition, and it is not importable geometry -- it is a finished toolpath the
+ * library stores for direct printing, so it belongs to this axis and not to the import catalogue.
+ * Everything else derives, because a picker listing fewer extensions than the server accepts is a
+ * file the user cannot select and has no way to learn is supported. Note the DROP zone below has no
+ * filter at all, so before this the two routes into the library already disagreed.
+ */
+const LIBRARY_UPLOAD_ACCEPT = ['.gcode', ...importFormatExtensions(STAGED_IMPORT_FORMATS)].join(',')
 
 type LibraryContextMenuState =
   | { kind: 'file'; file: LibraryFile; x: number; y: number }
@@ -1166,7 +1179,7 @@ export function LibraryView() {
             <input
               ref={inputRef}
               type="file"
-              accept=".3mf,.gcode,.stl,.step,.stp"
+              accept={LIBRARY_UPLOAD_ACCEPT}
               multiple
               hidden
               disabled={bridgeResourceUnavailable}

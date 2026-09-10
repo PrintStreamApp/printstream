@@ -192,6 +192,7 @@ export function PrinterStorageModal({
       allowIncompatibleFilament: boolean
       allowFilamentTrackSwitchMismatch: boolean
       allowInsufficientFilament: boolean
+      allowBlacklistedFilament: boolean
       /** Whole plate objects (`objects[].id`) to exclude, when any were deselected. */
       skipObjects?: number[]
       /** Individual placements to exclude, by instance `identify_id`. */
@@ -213,6 +214,7 @@ export function PrinterStorageModal({
           allowIncompatibleFilament: args.allowIncompatibleFilament,
           allowFilamentTrackSwitchMismatch: args.allowFilamentTrackSwitchMismatch,
           allowInsufficientFilament: args.allowInsufficientFilament,
+          allowBlacklistedFilament: args.allowBlacklistedFilament,
           ...(args.skipObjects && args.skipObjects.length > 0 ? { skipObjects: args.skipObjects } : {}),
           ...(args.skipInstances && args.skipInstances.length > 0 ? { skipInstances: args.skipInstances } : {})
         }

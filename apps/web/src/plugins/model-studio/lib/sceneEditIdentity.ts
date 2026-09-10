@@ -9,7 +9,7 @@
  * WHY it matters beyond tidiness: these are the gates that decide whether an edit SURVIVES the
  * bake. A collector that builds the set slightly differently does not fail loudly, it accepts the
  * user's edit and then silently drops it, which is shape (2) of the "no feature may require a save
- * first" trap documented in this plugin'the s development notes. One definition means a fix reaches every
+ * first" trap documented in this plugin's development notes. One definition means a fix reaches every
  * collector at once, and a new collector inherits the right behaviour by construction.
  *
  * Every helper is pure and takes the whole `EditorState`, so callers cannot accidentally scope the

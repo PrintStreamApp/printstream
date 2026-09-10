@@ -11,6 +11,7 @@ import { shouldShowSkipObjectsAction } from '../../lib/printerCardFooterActions'
 import { type LinkedDispatchJob } from '../../lib/trackedPrintJobs'
 import { toast } from '../../lib/toast'
 import { formatPrinterJobDisplayName } from '../../lib/printerJobName'
+import { buildPrintPauseMarkerView } from '../../lib/printPauseMarkers'
 import { PrinterJobMediaStrip } from '../../components/PrinterJobMediaStrip'
 import { usePromptDialog } from '../../components/PromptDialogProvider'
 import { PrinterJobProgressBlock } from '../../components/PrinterJobProgressBlock'
@@ -212,6 +213,10 @@ function PrinterCardComponent({
         toast.success('AMS settings updated')
       } else if (command.type === 'setAmsFilamentBackup') {
         toast.success(command.enabled ? 'AMS filament backup enabled' : 'AMS filament backup disabled')
+      } else if (command.type === 'switchAmsFirmware') {
+        toast.success('AMS type switch requested')
+      } else if (command.type === 'resetAmsOrder') {
+        toast.success('AMS order reset requested')
       } else if (command.type === 'startAmsDrying') {
         setAmsDryingUnitId(null)
         toast.success('AMS drying started')
@@ -235,6 +240,8 @@ function PrinterCardComponent({
         command.type === 'setPrintOption' ||
         command.type === 'setAmsUserSettings' ||
         command.type === 'setAmsFilamentBackup' ||
+        command.type === 'switchAmsFirmware' ||
+        command.type === 'resetAmsOrder' ||
         command.type === 'startAmsDrying' ||
         command.type === 'stopAmsDrying' ||
         command.type === 'skipObjects' ||
@@ -302,6 +309,16 @@ function PrinterCardComponent({
     && displayCapabilities.chamberTemperature
   const nozzleSizeLabel = formatPrinterNozzleSizesLabel(status, printer.currentNozzleDiameters)
   const secondaryStageLabel = formatSecondaryStageLabel(status)
+  // Depends on the individual FIELDS, not on `status`, which is a fresh object several times a
+  // second: keying on it would rebuild the `markers` array every frame and re-render the marker
+  // subtree (and its tooltips) with it. React Query's structural sharing keeps `pauseSchedule`
+  // reference-stable while it is unchanged, and the other three only move once a layer or once a
+  // minute, which is exactly when the labels really do change.
+  const pausePreview = useMemo(
+    () => buildPrintPauseMarkerView(status, activeJob),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- see above: fields, not the object.
+    [status?.pauseSchedule, status?.currentLayer, status?.remainingMinutes, status?.totalLayers, status?.stage, activeJob?.pauseSchedule]
+  )
   const printerAttentionSummaryText = printerAttentionSummary
     ? formatPrinterAttentionSummaryText(printerAttentionSummary)
     : null
@@ -848,18 +865,33 @@ function PrinterCardComponent({
                     <Typography level="body-xs">{Math.round(status.progressPercent)}%</Typography>
                   ) : undefined}
                   value={status.progressPercent}
+                  markers={pausePreview.markers}
                   color={progressBarColor(status)}
                   fillColor={progressBarFill(status)}
                   trackColor={progressBarTrack(status)}
-                  afterProgress={secondaryStageLabel ? (
-                    <OverflowTooltipText
-                      level="body-xs"
-                      textColor={secondaryStageTextColor(status)}
-                      noWrap
-                      sx={{ minWidth: 0 }}
-                      text={secondaryStageLabel}
-                      observeRef={cardRef}
-                    />
+                  afterProgress={secondaryStageLabel || pausePreview.readout ? (
+                    <>
+                      {secondaryStageLabel ? (
+                        <OverflowTooltipText
+                          level="body-xs"
+                          textColor={secondaryStageTextColor(status)}
+                          noWrap
+                          sx={{ minWidth: 0 }}
+                          text={secondaryStageLabel}
+                          observeRef={cardRef}
+                        />
+                      ) : null}
+                      {pausePreview.readout ? (
+                        <OverflowTooltipText
+                          level="body-xs"
+                          textColor="text.tertiary"
+                          noWrap
+                          sx={{ minWidth: 0 }}
+                          text={pausePreview.readout}
+                          observeRef={cardRef}
+                        />
+                      ) : null}
+                    </>
                   ) : undefined}
                   footer={!secondaryStageLabel ? (
                     <Stack

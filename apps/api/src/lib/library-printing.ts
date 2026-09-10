@@ -194,6 +194,7 @@ async function assertLibraryPrintSourceReady(input: PrintFromLibrary, source: Li
       allowPlateTypeMismatch: input.allowPlateTypeMismatch,
       allowFilamentTrackSwitchMismatch: input.allowFilamentTrackSwitchMismatch,
       allowInsufficientFilament: input.allowInsufficientFilament,
+      allowBlacklistedFilament: input.allowBlacklistedFilament,
       currentPlateType: input.currentPlateType,
       currentNozzleDiameters: input.currentNozzleDiameters
     })

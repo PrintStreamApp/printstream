@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import type { Printer } from '@printstream/shared'
+import { printerStatusSchema, type Printer } from '@printstream/shared'
 import { makeOfflineStatus, parseReport } from './bambu-report-parser.js'
 
 const printer: Printer = {
@@ -611,4 +611,307 @@ test('a unit whose bit band is unknown is never emptied by the sweep', () => {
 
   assert.equal(swept?.ams?.[0]?.slots[0]?.trayUuid, 'DDDD0000000000000000000000000001')
   assert.equal(swept?.ams?.[0]?.slots[0]?.filamentType, 'PLA')
+})
+
+test('parseReport reads the AMS chain firmware options and which one is running', () => {
+  const delta = parseReport(
+    {
+      print: {
+        upgrade_state: {
+          mc_for_ams_firmware: {
+            firmware: [
+              { id: 0, name: 'AMS Lite', version: '00.00.06.15' },
+              { id: 1, name: 'AMS', version: '00.00.07.02' }
+            ],
+            current_firmware_id: 1,
+            current_run_firmware_id: 1,
+            status: 'IDLE'
+          }
+        }
+      }
+    },
+    printer
+  )
+
+  assert.deepEqual(delta?.amsFirmwareSwitch, {
+    options: [
+      { id: 0, name: 'AMS Lite', version: '00.00.06.15' },
+      { id: 1, name: 'AMS', version: '00.00.07.02' }
+    ],
+    currentId: 1,
+    runningId: 1,
+    switching: false
+  })
+})
+
+test('parseReport reports a mid-switch AMS chain, where selected and running differ', () => {
+  const delta = parseReport(
+    {
+      print: {
+        upgrade_state: {
+          mc_for_ams_firmware: {
+            firmware: [{ id: 0, name: 'AMS Lite', version: '1' }, { id: 1, name: 'AMS', version: '2' }],
+            current_firmware_id: 0,
+            current_run_firmware_id: 1,
+            status: 'SWITCHING'
+          }
+        }
+      }
+    },
+    printer
+  )
+
+  assert.equal(delta?.amsFirmwareSwitch?.switching, true)
+  assert.equal(delta?.amsFirmwareSwitch?.currentId, 0)
+  assert.equal(delta?.amsFirmwareSwitch?.runningId, 1)
+})
+
+test('parseReport drops a firmware entry with no id, because the id IS the command payload', () => {
+  const delta = parseReport(
+    {
+      print: {
+        upgrade_state: {
+          mc_for_ams_firmware: {
+            firmware: [{ name: 'Nameless' }, { id: 1, name: 'AMS', version: null }],
+            current_firmware_id: 1,
+            current_run_firmware_id: 1,
+            status: 'IDLE'
+          }
+        }
+      }
+    },
+    printer
+  )
+
+  assert.deepEqual(delta?.amsFirmwareSwitch?.options, [{ id: 1, name: 'AMS', version: null }])
+})
+
+test('an incremental frame leaves a known AMS firmware switch alone', () => {
+  // The fleet case: no machine reports `mc_for_ams_firmware` today, so no delta key at all.
+  const none = parseReport({ print: { aux: '0' } }, printer)
+  assert.equal('amsFirmwareSwitch' in (none ?? {}), false)
+
+  // And once one HAS been seen, a later delta that does not mention it must not wipe it. Most
+  // frames are `push_status` deltas mentioning neither, and nothing in the report can positively
+  // say the capability went away, so clearing here made the AMS Type row vanish on the next tick.
+  const current = {
+    ...makeOfflineStatus(printer),
+    amsFirmwareSwitch: { options: [{ id: 1, name: 'AMS', version: null }], currentId: 1, runningId: 1, switching: false }
+  }
+  const delta = parseReport({ print: { aux: '0' } }, printer, current)
+  assert.equal('amsFirmwareSwitch' in (delta ?? {}), false)
+})
+
+test('an empty firmware list parses as "cannot switch", not as absent', () => {
+  // BambuStudio's capability test IS the list being empty, so this must survive as an empty array
+  // rather than collapse to null: null means "no report", which is a different thing.
+  const delta = parseReport(
+    { print: { upgrade_state: { mc_for_ams_firmware: { firmware: [], status: 'IDLE' } } } },
+    printer
+  )
+  assert.deepEqual(delta?.amsFirmwareSwitch?.options, [])
+  assert.equal(delta?.amsFirmwareSwitch?.currentId, null)
+})
+
+test('parseReport reads the printer-reported pause schedule from print.p_list', () => {
+  const delta = parseReport(
+    {
+      print: {
+        p_list: {
+          total: 2,
+          list: [
+            { p: 18, t: 240, i: 1, l: 20 },
+            { p: 55, t: 120, i: 2, l: 60 }
+          ]
+        }
+      }
+    },
+    printer
+  )
+
+  assert.deepEqual(delta?.pauseSchedule, {
+    total: 2,
+    points: [
+      { index: 1, layer: 20, progressPercent: 18, remainingMinutes: 240 },
+      { index: 2, layer: 60, progressPercent: 55, remainingMinutes: 120 }
+    ],
+    totalLayers: null,
+    source: 'printer'
+  })
+})
+
+test('parseReport leaves the pause schedule alone when the report omits p_list', () => {
+  const delta = parseReport({ print: { mc_percent: 42 } }, printer)
+
+  assert.equal('pauseSchedule' in (delta ?? {}), false)
+})
+
+test('parseReport ignores a p_list with no usable shape rather than half-applying it', () => {
+  const malformed: unknown[] = [
+    { total: 2, list: 'nope' },
+    { list: [{ p: 18, t: 240, i: 1, l: 20 }] } // no total
+  ]
+  for (const p_list of malformed) {
+    const delta = parseReport({ print: { p_list } }, printer)
+    assert.equal('pauseSchedule' in (delta ?? {}), false)
+  }
+})
+
+test('parseReport numbers pauses itself, so a 0-based p_list index still works', () => {
+  // Whether the printer's `i` is 0- or 1-based cannot be established from BambuStudio's source.
+  // Requiring 1-based would discard every frame on firmware that counts from zero, silently
+  // disabling the preferred producer for the whole print.
+  const delta = parseReport(
+    {
+      print: {
+        p_list: {
+          total: 2,
+          list: [
+            { p: 18, t: 240, i: 0, l: 20 },
+            { p: 55, t: 120, i: 1, l: 60 }
+          ]
+        }
+      }
+    },
+    printer
+  )
+
+  assert.deepEqual(delta?.pauseSchedule?.points.map((point) => point.index), [1, 2])
+  assert.deepEqual(delta?.pauseSchedule?.points.map((point) => point.layer), [20, 60])
+})
+
+test('parseReport treats a negative pause time as unknown, not as due now', () => {
+  // Studio filters these out before drawing (`StatusPanel.cpp:1809` requires `>= 0`), so firmware
+  // does emit them. Clamping to 0 would make the UI quote a duration nobody computed.
+  const delta = parseReport(
+    { print: { p_list: { total: 1, list: [{ p: 40, t: -1, i: 1, l: 60 }] } } },
+    printer
+  )
+
+  assert.equal(delta?.pauseSchedule?.points[0]?.remainingMinutes, null)
+  assert.equal(delta?.pauseSchedule?.points[0]?.progressPercent, 40)
+})
+
+test('parseReport drops only the entries it cannot place, keeping the rest of the list', () => {
+  const delta = parseReport(
+    {
+      print: {
+        p_list: {
+          total: 3,
+          list: [
+            { p: 18, t: 240, i: 1, l: 20 },
+            { p: 55, t: 120, i: 2 }, // no layer: cannot be placed
+            { p: 88, t: 30, i: 3, l: 140 }
+          ]
+        }
+      }
+    },
+    printer
+  )
+
+  assert.deepEqual(delta?.pauseSchedule?.points.map((point) => point.layer), [20, 140])
+  assert.deepEqual(delta?.pauseSchedule?.points.map((point) => point.index), [1, 3])
+  // The printer's own count of the whole plate is preserved, so "of 3" stays honest.
+  assert.equal(delta?.pauseSchedule?.total, 3)
+})
+
+test('parseReport caps p_list at the wire limit so a status frame stays parseable', () => {
+  // An over-long schedule fails `wsEventSchema` in the browser and the WHOLE status frame is
+  // dropped, freezing temps, progress and AMS for as long as that print runs.
+  const list = Array.from({ length: 80 }, (_, index) => ({
+    p: Math.min(100, index),
+    t: 300 - index,
+    i: index + 1,
+    l: index + 1
+  }))
+  const delta = parseReport({ print: { p_list: { total: 80, list } } }, printer)
+
+  assert.equal(delta?.pauseSchedule?.points.length, 64)
+  assert.equal(printerStatusSchema.shape.pauseSchedule.safeParse(delta?.pauseSchedule).success, true)
+})
+
+test('parseReport drops a stale pause schedule when the printer moves to another task', () => {
+  const current = {
+    ...makeOfflineStatus(printer),
+    taskId: 'task-1',
+    pauseSchedule: {
+      total: 1,
+      points: [{ index: 1, layer: 20, progressPercent: 18, remainingMinutes: 240 }],
+      totalLayers: null,
+      source: 'printer' as const
+    }
+  }
+
+  // A new task with no p_list of its own: keeping the old one would promise a pause the new print
+  // does not have.
+  const changed = parseReport({ print: { task_id: 'task-2' } }, printer, current)
+  assert.equal(changed?.pauseSchedule, null)
+
+  // The same task reporting nothing new must not clear it.
+  const unchanged = parseReport({ print: { task_id: 'task-1', mc_percent: 30 } }, printer, current)
+  assert.equal('pauseSchedule' in (unchanged ?? {}), false)
+})
+
+test('parseReport numbers a trimmed p_list against the printer total, not its position', () => {
+  // BambuStudio's `getPassedCount` (minimum `i`, documented as "how many pause points precede the
+  // next pending pause") only means anything if consumed pauses drop out of the list. Numbering by
+  // position would then call the LAST pause of three "pause 1 of 3".
+  const delta = parseReport(
+    { print: { p_list: { total: 3, list: [{ p: 88, t: 30, i: 2, l: 140 }] } } },
+    printer
+  )
+
+  assert.equal(delta?.pauseSchedule?.points[0]?.index, 3)
+  assert.equal(delta?.pauseSchedule?.total, 3)
+})
+
+test('parseReport numbers a complete p_list from one', () => {
+  const delta = parseReport(
+    {
+      print: {
+        p_list: {
+          total: 2,
+          list: [{ p: 18, t: 240, i: 0, l: 20 }, { p: 55, t: 120, i: 1, l: 60 }]
+        }
+      }
+    },
+    printer
+  )
+
+  assert.deepEqual(delta?.pauseSchedule?.points.map((point) => point.index), [1, 2])
+})
+
+test('parseReport drops a stale pause schedule when any print identity changes', () => {
+  const base = {
+    ...makeOfflineStatus(printer),
+    taskId: 'task-1',
+    jobId: 'job-1',
+    gcodeFile: 'Metadata/plate_1.gcode',
+    jobName: 'Widget',
+    pauseSchedule: {
+      total: 1,
+      points: [{ index: 1, layer: 20, progressPercent: 18, remainingMinutes: 240 }],
+      totalLayers: null,
+      source: 'printer' as const
+    }
+  }
+
+  // An SD-card or LAN start can report a constant or empty task id, so the task alone is not
+  // enough to notice that a different file is running.
+  for (const print of [
+    { task_id: 'task-2' },
+    { job_id: 'job-2' },
+    { gcode_file: 'Metadata/plate_4.gcode' },
+    { subtask_name: 'Other thing' }
+  ]) {
+    assert.equal(parseReport({ print }, printer, base)?.pauseSchedule, null, JSON.stringify(print))
+  }
+
+  // Re-reporting the SAME identity must not clear it.
+  const unchanged = parseReport(
+    { print: { task_id: 'task-1', gcode_file: 'Metadata/plate_1.gcode', mc_percent: 30 } },
+    printer,
+    base
+  )
+  assert.equal('pauseSchedule' in (unchanged ?? {}), false)
 })

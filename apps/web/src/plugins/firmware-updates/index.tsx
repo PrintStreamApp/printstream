@@ -354,11 +354,11 @@ function FirmwareUpdateDetailsDialog({
                 <Stack direction="row" spacing={2}>
                   <Box sx={{ flex: 1, minWidth: 0 }}>
                     <Typography level="body-xs" textColor="text.tertiary">Installed</Typography>
-                    <Typography level="body-md">{update.currentVersion ?? '—'}</Typography>
+                    <Typography level="body-md">{update.currentVersion ?? '–'}</Typography>
                   </Box>
                   <Box sx={{ flex: 1, minWidth: 0 }}>
                     <Typography level="body-xs" textColor="text.tertiary">Latest</Typography>
-                    <Typography level="body-md">{update.latestVersion ?? '—'}</Typography>
+                    <Typography level="body-md">{update.latestVersion ?? '–'}</Typography>
                   </Box>
                 </Stack>
 

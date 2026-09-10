@@ -44,6 +44,7 @@ import { requireRequestWorkspaceId, requireRouteParam, sendModelBuffer } from '.
 import { slicingJobs } from '../lib/slicing-jobs.js'
 import { broadcastJobsChanged, broadcastPrintDispatchChanged } from '../lib/ws-resource-events.js'
 import { readRecordedPrintStartOptions } from '../lib/print-job-options.js'
+import { readRecordedPrintPauseSchedule } from '../lib/print-pause-schedule-scan.js'
 import { parseAmsMapping, reprintJobFromRow, toPrintJobKind } from '../lib/print-reprint.js'
 
 export const jobsRouter = Router()
@@ -349,6 +350,7 @@ async function listJobs(workspaceId: string, printerId: string | undefined): Pro
         bedLevel: true,
         amsMapping: true,
         printOptionsJson: true,
+        pauseScheduleJson: true,
         progressPercent: true,
         startedAt: true,
         finishedAt: true,
@@ -427,6 +429,9 @@ async function toPrintJobDto(row: PrintJobRow, activity: AuditLogEntry[]) {
     // Shared with `reprintJobFromRow`, so the print dialog and an override-less
     // `POST /jobs/:id/reprint` restore this job's options identically.
     printOptions: readRecordedPrintStartOptions(row),
+    // Only the FALLBACK set of pause markers: the printer's own `p_list` outranks it wherever the
+    // firmware reports one, so the browser resolves between the two rather than trusting this.
+    pauseSchedule: 'pauseScheduleJson' in row ? readRecordedPrintPauseSchedule(row) : null,
     jobKind,
     calibrationOption: 'calibrationOption' in row ? row.calibrationOption : null,
     ...toReslicePresentation(row),

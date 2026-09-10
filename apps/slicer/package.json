@@ -6,7 +6,6 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "NODE_OPTIONS=\"--require ../../scripts/dev/exit-with-parent.cjs\" tsx watch src/main.ts",
-    "start": "node dist/main.js",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
@@ -21,7 +20,7 @@
   "devDependencies": {
     "@types/express": "^5.0.1",
     "@types/node": "^22.13.14",
-    "tsx": "^4.19.3"
+    "tsx": "^4.23.13"
   },
   "exports": {
     ".": "./dist/index.js",

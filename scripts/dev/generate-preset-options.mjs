@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 /**
- * Generates the list of options each PRESET KIND carries — filament (with defaults), printer, print.
+ * Generates the list of options each PRESET KIND carries: filament (with defaults), printer, print.
  *
  * WHY THIS EXISTS SEPARATELY from `generate-filament-settings.mjs`: that one transcribes the tune
- * DIALOG (`TabFilament::build()`), which is what the user can edit — 112 options. A filament preset,
- * and therefore a saved project's filament block, carries BambuStudio's `s_Preset_filament_options`
- * — 143. Authoring a project from the dialog list is structurally incomplete, and BambuStudio reads
+ * DIALOG (`TabFilament::build()`), which is what the user can edit: 112 options. A filament preset,
+ * and therefore a saved project's filament block, carries BambuStudio's `s_Preset_filament_options`:
+ * 143. Authoring a project from the dialog list is structurally incomplete, and BambuStudio reads
  * every absent key as a deviation from the preset, so it declines to bind the slot and mints a
  * `(<project>.3mf)` copy instead. MEASURED on a real project: 24 keys short.
  *
@@ -55,26 +55,26 @@ function parseArgs(argv) {
  */
 export function extractCppIdentifierList(source, declaration) {
   const start = source.indexOf(declaration)
-  if (start === -1) throw new Error(`${declaration} not found — the vendored source changed shape`)
+  if (start === -1) throw new Error(`${declaration} not found: the vendored source changed shape`)
   const open = source.indexOf('{', start)
   const end = source.indexOf('};', open)
   if (open === -1 || end === -1) throw new Error(`${declaration} is not brace-delimited as expected`)
   // Commented-out entries (BambuStudio disables `filament_colour` with `/*…*/`) must not be picked
-  // up — a key it deliberately excludes is not one we should author. The identifier pattern is
+  // up: a key it deliberately excludes is not one we should author. The identifier pattern is
   // case-SENSITIVE on purpose: a lowercase-only match silently skipped `required_nozzle_HRC`.
   const body = source.slice(open + 1, end).replace(/\/\*[\s\S]*?\*\//g, '')
   return [...new Set([...body.matchAll(/"([A-Za-z_0-9]+)"/g)].map((m) => m[1]))]
 }
 
 /**
- * `filament_extruder_override_keys` — the filament-side overrides of the printer's extruder options.
+ * `filament_extruder_override_keys`: the filament-side overrides of the printer's extruder options.
  * BambuStudio declares them in a loop with `add_nullable`, so they never appear as individual option
  * blocks and carry no ordinary default; unset serializes as `nil`.
  */
 export function extractFilamentOverrideKeys(printConfigCpp) {
   const decl = 'filament_extruder_override_keys = {'
   const start = printConfigCpp.indexOf(decl)
-  if (start === -1) throw new Error('filament_extruder_override_keys not found — PrintConfig.cpp changed shape')
+  if (start === -1) throw new Error('filament_extruder_override_keys not found: PrintConfig.cpp changed shape')
   const end = printConfigCpp.indexOf('};', start)
   const body = printConfigCpp.slice(start + decl.length, end).replace(/\/\/[^\n]*/g, '')
   return new Set([...body.matchAll(/"([A-Za-z_0-9]+)"/g)].map((m) => m[1]))
@@ -91,7 +91,7 @@ resolveEnums(parsed, varToKey, printConfig)
 
 const overrideKeys = extractFilamentOverrideKeys(printConfig)
 const keys = extractCppIdentifierList(preset, 's_Preset_filament_options').filter((key) => !NON_SETTING_KEYS.has(key))
-// Mirrors `Preset::printer_options()`, which is a CONCATENATION — see the header.
+// Mirrors `Preset::printer_options()`, which is a CONCATENATION; see the header.
 const printerKeys = [...new Set([
   ...extractCppIdentifierList(preset, 's_Preset_printer_options'),
   ...extractCppIdentifierList(preset, 's_Preset_machine_limits_options'),
@@ -106,7 +106,7 @@ for (const key of keys) {
     defaults[key] = value
     continue
   }
-  // A NULLABLE override has no ordinary default — its unset state IS a value, serialized `nil`.
+  // A NULLABLE override has no ordinary default: its unset state IS a value, serialized `nil`.
   // BambuStudio's own saves carry `filament_z_hop: ["nil","nil",…]`, so an empty string there would
   // be a deviation from the preset rather than the absence of one.
   //

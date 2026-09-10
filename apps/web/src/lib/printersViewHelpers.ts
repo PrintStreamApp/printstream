@@ -975,11 +975,11 @@ export function parseIntegerInput(value: string, min: number, max: number): numb
 }
 
 export function formatTemperatureValue(value: number | null): string {
-  return value != null ? `${Math.round(value)}°` : '—'
+  return value != null ? `${Math.round(value)}°` : '–'
 }
 
 export function formatPercentValue(value: number | null): string {
-  return value != null ? `${Math.round(value)}%` : '—'
+  return value != null ? `${Math.round(value)}%` : '–'
 }
 
 export function fanControlLabel(fan: PrinterFanId): string {

@@ -590,11 +590,27 @@ export function bambuStudioPlateTypeRank(value: string): number {
 }
 
 export function resolveInitialPlateType(file: LibraryFile, bakedIndex: ThreeMfIndex | null): string {
-  return bakedIndex?.plates.find((plate) => plate.plateType)?.plateType ?? file.plateTypeChips[0] ?? 'textured_pei_plate'
+  return resolveProjectPlateType(file, bakedIndex) ?? 'textured_pei_plate'
 }
 
-/** The project's own plate type (baked plate metadata, then a file chip), or null when it carries none. */
+/**
+ * The project's own plate type (the project-global `curr_bed_type`, then a file chip), or null.
+ *
+ * Reads `projectPlateType`, NEVER the first plate that names one. A plate's `plateType` resolves
+ * that plate's own `bed_type` ahead of the global, so the old scan returned an OVERRIDE whenever
+ * plate 1 carried one, and this value is what the editor seeds its project-wide selector from and
+ * re-saves as `curr_bed_type`: one plate's choice would silently become every inheriting plate's.
+ * `projectPlateType` is absent on payloads from a server older than the per-plate work, where every
+ * plate carried the global anyway, so the scan is still the right fallback for those.
+ */
 export function resolveProjectPlateType(file: LibraryFile, bakedIndex: ThreeMfIndex | null): string | null {
+  // A parser that reports `projectPlateType` has answered definitively, INCLUDING when the answer is
+  // null: fall through to the chips there and the promotion comes back by another door, because
+  // `collectPlateTypeChips` is built from each plate's RESOLVED type, so `plateTypeChips[0]` is
+  // plate 1's override whenever it has one and the project itself states no `curr_bed_type`.
+  if (bakedIndex?.projectPlateType !== undefined) return bakedIndex.projectPlateType
+  // Legacy payloads only: before per-plate bed types every plate carried the global, so both the
+  // plate scan and the chips derived from it genuinely reported the project's own value.
   return bakedIndex?.plates.find((plate) => plate.plateType)?.plateType ?? file.plateTypeChips[0] ?? null
 }
 

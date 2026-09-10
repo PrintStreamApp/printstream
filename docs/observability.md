@@ -3,9 +3,9 @@
 PrintStream ships two complementary observability features. Both are safe to run
 on your own hardware and require no external SaaS.
 
-1. **Correlation (request) IDs** — always on. Group every log line emitted while
+1. **Correlation (request) IDs**: always on. Group every log line emitted while
    handling one request.
-2. **Metrics** — opt-in (`METRICS_ENABLED`). An OpenTelemetry meter exposes a
+2. **Metrics**: opt-in (`METRICS_ENABLED`). An OpenTelemetry meter exposes a
    Prometheus endpoint you can scrape with a self-hosted Prometheus + Grafana.
 
 Distributed **tracing** is not wired yet. OpenTelemetry is used as the
@@ -30,7 +30,7 @@ Non-HTTP entry points (bridge messages, scheduled jobs) can wrap their work in
 `withCorrelationId(...)` to participate.
 
 Lines emitted outside any request (startup, MQTT/event callbacks, background
-tasks) have a null correlation id — that is expected.
+tasks) have a null correlation id; that is expected.
 
 ## Metrics
 
@@ -52,9 +52,9 @@ build carries zero overhead unless you opt in.
 | `printstream_slice_job_duration` | histogram (ms) | `outcome` | Slice job time and outcome. |
 | `printstream_ws_events_broadcast` | counter | `type` | WebSocket events fanned out to clients. |
 | `printstream_bridge_messages_dropped` | counter | `reason` (`invalid-json`/`schema`) | Inbound bridge frames dropped as malformed (contract drift signal). |
-| `printstream_ws_clients` | gauge | — | Currently connected WebSocket clients. |
-| `printstream_bridges_connected` | gauge | — | Currently connected bridges. |
-| `printstream_process_event_loop_lag_seconds` | gauge | — | Mean event-loop delay since the last scrape. |
+| `printstream_ws_clients` | gauge | none | Currently connected WebSocket clients. |
+| `printstream_bridges_connected` | gauge | none | Currently connected bridges. |
+| `printstream_process_event_loop_lag_seconds` | gauge | none | Mean event-loop delay since the last scrape. |
 | `printstream_process_memory_bytes` | gauge | `type` (`rss`/`heap_used`/`heap_total`) | Process memory usage. |
 
 Histograms also expose `_count` and `_sum`, so request/dispatch/slice rates and
@@ -62,7 +62,7 @@ averages come for free.
 
 #### Bridge metrics (forwarded over the session)
 
-Bridges run next to the printers and, in the cloud topology, sit behind NAT —
+Bridges run next to the printers and, in the cloud topology, sit behind NAT:
 they cannot be scraped directly. Instead each bridge pushes a small snapshot
 over its existing, already-authenticated bridge→API WebSocket session (on the
 heartbeat cadence, ~15s), and the API re-exposes it here labelled by
@@ -76,7 +76,7 @@ session ends (or after ~90s without an update).
 | `printstream_bridge_printers_connected` | gauge | `bridge_id`, `workspace_id` | Monitored printers with a live MQTT connection (a signal the API cannot see on its own). |
 | `printstream_bridge_event_loop_lag_seconds` | gauge | `bridge_id`, `workspace_id` | Bridge process mean event-loop delay. |
 | `printstream_bridge_memory_rss_bytes` | gauge | `bridge_id`, `workspace_id` | Bridge process resident memory. |
-| `printstream_bridge_api_reconnects` | counter | `bridge_id`, `workspace_id` | Cumulative bridge→API reconnects (resets on bridge restart — a flapping-link signal). |
+| `printstream_bridge_api_reconnects` | counter | `bridge_id`, `workspace_id` | Cumulative bridge→API reconnects (resets on bridge restart, a flapping-link signal). |
 
 ### Running Prometheus + Grafana (example)
 

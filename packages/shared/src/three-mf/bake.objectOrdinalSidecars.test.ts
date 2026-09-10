@@ -116,7 +116,7 @@ function editAuthoringRanges(): SceneEdit {
 
 test('an AUTHORED height-range file wins over the ordinal remap', () => {
   // Regression: the remap loop runs after the authored transforms and writes into the same map, so
-  // without the skip it silently overwrote the file we just authored — and would have remapped
+  // without the skip it silently overwrote the file we just authored, and would have remapped
   // ordinals that were already correct for the saved model.
   const plan = planEditedThreeMf(source(), editAuthoringRanges())
   const transform = plan.copy?.transforms.get('Metadata/layer_config_ranges.xml')

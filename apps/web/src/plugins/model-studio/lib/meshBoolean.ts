@@ -239,7 +239,7 @@ export function planMeshBooleanConsumption(
 /**
  * One operand in PART mode, addressed the way the editor addresses that kind of part.
  *
- * A part is a part (see the the plugin development notes): both kinds are geometry the browser is already
+ * A part is a part (see the plugin development notes): both kinds are geometry the browser is already
  * holding, and the boolean reads triangles out of the render group either way. They differ only in
  * how they are NAMED -- a baked part by its base-file ordinal, a session-added volume by its own
  * key -- so the difference is confined to this codec and never reaches the lists, the panel, or the

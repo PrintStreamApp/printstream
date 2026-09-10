@@ -366,7 +366,7 @@ export function QueueItemDialog({ open, onClose, onBack, fixedFile, defaultPlate
           <Stack spacing={2} sx={{ pt: 1 }}>
               <FormControl>
                 <FormLabel>File</FormLabel>
-                <Typography level="body-sm" noWrap>{selectedFile?.name ?? '—'}</Typography>
+                <Typography level="body-sm" noWrap>{selectedFile?.name ?? '–'}</Typography>
               </FormControl>
 
               {isThreeMf && plates.length > 0 ? (

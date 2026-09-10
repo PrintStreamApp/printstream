@@ -181,12 +181,14 @@ export function printOverrideAuditMetadata(overrides: {
   allowPlateTypeMismatch?: boolean
   allowFilamentTrackSwitchMismatch?: boolean
   allowInsufficientFilament?: boolean
+  allowBlacklistedFilament?: boolean
 }): AuditLogMetadata {
   return {
     ...(overrides.allowIncompatibleFilament ? { allowIncompatibleFilament: true } : {}),
     ...(overrides.allowPlateTypeMismatch ? { allowPlateTypeMismatch: true } : {}),
     ...(overrides.allowFilamentTrackSwitchMismatch ? { allowFilamentTrackSwitchMismatch: true } : {}),
-    ...(overrides.allowInsufficientFilament ? { allowInsufficientFilament: true } : {})
+    ...(overrides.allowInsufficientFilament ? { allowInsufficientFilament: true } : {}),
+    ...(overrides.allowBlacklistedFilament ? { allowBlacklistedFilament: true } : {})
   }
 }
 

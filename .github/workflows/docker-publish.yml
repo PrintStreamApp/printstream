@@ -41,7 +41,7 @@ concurrency:
 
 jobs:
   # Build the combined app image once per architecture on a native runner and
-  # push each result by digest (no tag yet — the merge job assembles the tags).
+  # push each result by digest (no tag yet: the merge job assembles the tags).
   build-app:
     # Only the public open-core repo publishes; skipped in the private mirror.
     if: github.repository == 'PrintStreamApp/printstream'

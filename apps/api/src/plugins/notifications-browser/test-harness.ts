@@ -4,6 +4,13 @@
  * membership surface. Requests may pick their workspace scope per call via
  * the `x-test-workspace` header (`platform` selects the workspaceless scope);
  * without it every request runs in the default `test-workspace` workspace.
+ * `x-test-actor` likewise swaps the acting user id for one request.
+ *
+ * The Prisma stub also answers `setting.findMany`, projecting the in-memory
+ * settings map into the `plugin:<name>:workspace:<id>:<key>` row shape that
+ * `listWorkspaceScopesWithPluginSetting` reads, so cross-scope fan-out (a
+ * dismissal reaching the actor's devices in every workspace they registered
+ * in) exercises the real enumeration rather than a hand-fed scope list.
  */
 import express from 'express'
 import type { AddressInfo } from 'node:net'
@@ -19,7 +26,13 @@ export interface BrowserNotificationsAppOptions {
 
 export async function withBrowserNotificationsApp(
   auth: RequestAuthContext,
-  run: (context: { baseUrl: string }) => Promise<void>,
+  /**
+   * `settings` is the raw in-memory store, so a test can seed state the routes
+   * cannot create (a legacy subscription with no actor key, say). Scoped keys
+   * are `workspace:<id>:<key>`; the scope's delivery is built lazily on first
+   * request, so seed before the request that reads it.
+   */
+  run: (context: { baseUrl: string; settings: Map<string, string> }) => Promise<void>,
   options: BrowserNotificationsAppOptions = {}
 ): Promise<void> {
   const memberIds = new Set(
@@ -28,7 +41,13 @@ export async function withBrowserNotificationsApp(
   const app = express()
   app.use(express.json())
   app.use((request, _response, next) => {
-    request.auth = auth
+    // `x-test-actor` swaps the user id for one request, keeping every other
+    // field, so a test can act as a second member of the same workspace
+    // without standing up a second app.
+    const actorOverride = request.headers['x-test-actor']
+    request.auth = typeof actorOverride === 'string' && auth.actor.type === 'user'
+      ? { ...auth, actor: { ...auth.actor, userId: actorOverride } }
+      : auth
     const scope = typeof request.headers['x-test-workspace'] === 'string'
       ? request.headers['x-test-workspace']
       : 'test-workspace'
@@ -60,6 +79,16 @@ export async function withBrowserNotificationsApp(
         async findMany({ where }: { where: { userId: { in: string[] } } }) {
           return where.userId.in.filter((userId) => memberIds.has(userId)).map((userId) => ({ userId }))
         }
+      },
+      setting: {
+        async findMany({ where }: { where: { key: { startsWith: string; endsWith: string } } }) {
+          // `forWorkspace` below stores under `workspace:<id>:<key>`; real rows
+          // carry the plugin prefix the scope enumeration parses.
+          return [...settings.keys()]
+            .filter((key) => key.startsWith('workspace:'))
+            .map((key) => ({ key: `plugin:notifications-browser:${key}` }))
+            .filter(({ key }) => key.startsWith(where.key.startsWith) && key.endsWith(where.key.endsWith))
+        }
       }
     } as never,
     printerEvents: new PrinterEventBus(),
@@ -90,7 +119,7 @@ export async function withBrowserNotificationsApp(
   const address = server.address() as AddressInfo
   const baseUrl = `http://127.0.0.1:${address.port}`
   try {
-    await run({ baseUrl })
+    await run({ baseUrl, settings })
   } finally {
     await close(server)
   }

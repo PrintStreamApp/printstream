@@ -262,7 +262,20 @@ export interface EditorPlate {
    */
   sourcePlateIndex: number | null
   name: string | null
-  plateType: string | null
+  /**
+   * This plate's OWN bed type, or null when it takes the project-global one (the Settings tab's
+   * plate-type selector). Named for the override rather than the type because the two must not be
+   * confused: the plate prints on `plateTypeOverride ?? <global>`, and writing the resolved value
+   * back here would turn every inheriting plate into an override that outlives the next global
+   * change. `ThreeMfPlate.plateType` is the resolved one; `bedTypeOverride` is what seeds this.
+   */
+  plateTypeOverride: string | null
+  /** This plate's own print sequence, or null when it takes the global. */
+  printSequence: 'by layer' | 'by object' | null
+  /** This plate's own vase mode, or null when it takes the global. */
+  spiralMode: boolean | null
+  /** Locked against arrange. Not a tri-state: there is no global lock to inherit. */
+  locked: boolean
   /**
    * Bed bounds in mm; used to size the bed surface and clamp adds. `maxZ` is the machine's usable
    * height, NULL when nothing states one -- which every consumer must read as "unknown" rather
@@ -291,6 +304,18 @@ export interface EditorPlate {
   /** This session's edited pause set; undefined means untouched (same rules as filament changes). */
   pausesOverride?: EditorPause[]
 }
+
+/**
+ * What a plate with no settings of its own looks like: everything inherited, nothing locked.
+ *
+ * Spread wherever a plate is minted (the empty-project seed, the seeding fallback, the editor's
+ * add-plate) so a new per-plate setting cannot reach one of those sites and miss another, which is
+ * how a plate ends up with `undefined` where the contract promises a tri-state.
+ */
+export const INHERITED_PLATE_SETTINGS: Pick<
+  EditorPlate,
+  'plateTypeOverride' | 'printSequence' | 'spiralMode' | 'locked'
+> = { plateTypeOverride: null, printSequence: null, spiralMode: null, locked: false }
 
 /** One layer-based filament change: swap to `filamentId` at print height `z` (mm). */
 export interface EditorFilamentChange {
@@ -713,7 +738,7 @@ export function locateObjectForReveal(
  * object with one baked part and one added volume list only the added one: the baked part lost its
  * name, material, type menu, settings and menu, and the same object grew all of them back on the
  * next save, when the added volume became a second baked part. That is a SAVE BOUNDARY showing
- * through, and the part-is-a-part rule in this plugin'the s development notes says it must not.
+ * through, and the part-is-a-part rule in this plugin's development notes says it must not.
  *
  * `showBodyRow` is separate rather than derived by the caller because the body earns a row only
  * where the part list does not already describe it: an object WITH parts lists its body among them
@@ -1000,7 +1025,7 @@ function instanceFromScene(instance: LibraryThreeMfSceneInstance, partInfo: Part
 /** Seed an empty new-project state: a single empty plate, no instances. */
 export function seedEmptyEditorState(): EditorState {
   return {
-    plates: [{ index: 1, plateId: mintPlateId(), sourcePlateIndex: null, name: null, plateType: null, bed: { ...DEFAULT_BED }, instances: [], primeTower: null }]
+    plates: [{ index: 1, plateId: mintPlateId(), sourcePlateIndex: null, name: null, ...INHERITED_PLATE_SETTINGS, bed: { ...DEFAULT_BED }, instances: [], primeTower: null }]
   }
 }
 
@@ -1071,7 +1096,13 @@ export function seedEditorState(
       plateId: mintPlateId(),
       sourcePlateIndex: plate.index,
       name: plate.name ?? null,
-      plateType: plate.plateType ?? null,
+      // The plate's OWN settings, never its resolved ones: `plate.plateType` is the effective bed
+      // type (own, else the project-global), and seeding the session from it would re-save the
+      // global as N per-plate overrides the user never asked for.
+      plateTypeOverride: plate.bedTypeOverride ?? null,
+      printSequence: plate.printSequence ?? null,
+      spiralMode: plate.spiralMode ?? null,
+      locked: plate.locked ?? false,
       bed: { ...fallbackBed },
       instances: [],
       primeTower: null
@@ -1080,7 +1111,7 @@ export function seedEditorState(
   })
 
   if (plates.length === 0) {
-    plates.push({ index: 1, plateId: mintPlateId(), sourcePlateIndex: null, name: null, plateType: null, bed: { ...DEFAULT_BED }, instances: [], primeTower: null })
+    plates.push({ index: 1, plateId: mintPlateId(), sourcePlateIndex: null, name: null, ...INHERITED_PLATE_SETTINGS, bed: { ...DEFAULT_BED }, instances: [], primeTower: null })
   }
 
   const partProcessOverrides = collectPartProcessOverridesFromScenes(scenesByPlate)
@@ -1209,11 +1240,11 @@ const IDENTITY_PART_TRANSFORM = [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0]
 
 /**
  * Seat a replacement so its RENDERED centre lands on the old object's footprint centre, resting on
- * the bed — BambuStudio's `center_around_origin()` + `ensure_on_bed()` outcome for a replace.
+ * the bed: BambuStudio's `center_around_origin()` + `ensure_on_bed()` outcome for a replace.
  *
  * The subtlety is the rotation, and it is what a naive `position = oldCentre` gets wrong.
  * `position` places the object's local ORIGIN, and a staged import's origin is its XY centre with
- * its lowest point at z = 0 — so the origin is the centre in X and Y but the FLOOR in Z. Inherit a
+ * its lowest point at z = 0, so the origin is the centre in X and Y but the FLOOR in Z. Inherit a
  * rotation from the old object and that un-centred axis turns into the plane: a -90 degrees X
  * rotation maps local z onto world y, so the origin ends up at the EDGE of the rotated footprint
  * and the model lands half a body-length away, its edge on the old centre.
@@ -1975,7 +2006,13 @@ export function buildSceneEdit(state: EditorState): SceneEdit {
       // Null for a session-added plate, which has no source record to carry.
       sourceIndex: plate.sourcePlateIndex,
       name: plate.name ?? undefined,
-      plateType: plate.plateType ?? undefined,
+      // Null, not undefined: the session KNOWS whether this plate inherits, and the bake needs the
+      // difference. Undefined means "the edit does not say", which makes the bake keep the source
+      // file's value and quietly undo the user clearing an override.
+      plateType: plate.plateTypeOverride,
+      printSequence: plate.printSequence,
+      spiralMode: plate.spiralMode,
+      locked: plate.locked,
       primeTower: plate.primeTower ? { x: plate.primeTower.x, y: plate.primeTower.y } : null
     })),
     instances: state.plates.flatMap((plate) =>
@@ -2965,7 +3002,7 @@ function collectPartProcessOverrides(state: EditorState): SceneEdit['partProcess
     const parsedKey = parsePartSlotKey(key)
     if (!parsedKey) continue
     const { objectId, partIndex } = parsedKey
-    if (!placed.has(objectId) || Object.keys(overrides).length === 0) continue
+    if (!placed.has(objectId)) continue
     if (partIndex === BODY_PART_INDEX && bodyRemoved.has(objectId)) continue
     out.push({ objectId, partIndex, overrides })
   }
@@ -3114,6 +3151,11 @@ export function buildSingleObjectExportState(
       plateId: mintPlateId(),
       sourcePlateIndex: null,
       name: null,
+      // A synthetic plate inherits everything, exactly like a newly added one: the source plate's
+      // lock, bed type, print sequence and vase mode describe THAT plate, and spreading them here
+      // exports a project whose only plate silently refuses Auto-arrange, Fill bed and Auto-orient
+      // on a bed type nobody chose for it. This is the mint site the constant exists for.
+      ...INHERITED_PLATE_SETTINGS,
       instances: [instance],
       primeTower: null,
       filamentChanges: undefined,
@@ -3539,7 +3581,7 @@ interface MaterialVolume { filamentId?: number | null; subtype?: string | null; 
  * primitive, a single-mesh object in a saved project): it carries the object's own `filamentId`,
  * which is the second of the two places a material can live. Written out here rather than at each
  * caller because the two homes are exactly what surfaces keep getting wrong -- see the
- * material-lives-in-one-of-TWO-places rule in this plugin'the s development notes.
+ * material-lives-in-one-of-TWO-places rule in this plugin's development notes.
  */
 function instanceMaterialVolumes(
   instance: EditorInstance,

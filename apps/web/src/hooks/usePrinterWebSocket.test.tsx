@@ -3,30 +3,15 @@ import { after, afterEach, before, test } from 'node:test'
 import React from 'react'
 import { cleanup, render } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { JSDOM } from 'jsdom'
+import type { JSDOM } from 'jsdom'
+import { installJsdomGlobals } from '../test-utils/jsdom'
 import { usePrinterWebSocket } from './usePrinterWebSocket'
 import { wsClient } from '../lib/wsClient'
 
-const dom = new JSDOM('<!doctype html><html><body></body></html>', {
-  url: 'http://localhost/printers'
-})
+let dom: JSDOM
 
 before(() => {
-  const { window } = dom
-
-  Object.assign(globalThis, {
-    window,
-    document: window.document,
-    navigator: window.navigator,
-    HTMLElement: window.HTMLElement,
-    Element: window.Element,
-    Node: window.Node,
-    DocumentFragment: window.DocumentFragment,
-    MutationObserver: window.MutationObserver,
-    getComputedStyle: window.getComputedStyle.bind(window),
-    requestAnimationFrame: (callback: FrameRequestCallback) => setTimeout(() => callback(Date.now()), 0),
-    cancelAnimationFrame: (handle: number) => clearTimeout(handle)
-  })
+  dom = installJsdomGlobals({ url: 'http://localhost/printers' })
 })
 
 afterEach(() => {

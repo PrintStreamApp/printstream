@@ -12,7 +12,7 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { applyPartLayout, resolvePartLayout } from './bake-documents.js'
+import { applyPartLayout, applyPartProcessOverrides, resolvePartLayout } from './bake-documents.js'
 
 const MODEL_XML = [
   '<model unit="millimeter">',
@@ -284,4 +284,19 @@ test('the component and part lists stay a positional mirror through a reorder', 
   const applied = applyPartLayout(MODEL_XML, MATERIAL_SETTINGS_XML, [], [{ objectId: 5, order: [2, 0, 1] }])
   const partIds = partExtruders(applied.modelSettingsXml, 5).map(([id]) => id)
   assert.deepEqual(components(applied.modelXml, 5), partIds)
+})
+
+test('an empty part override set clears saved process metadata', () => {
+  const withOverride = SETTINGS_XML.replace(
+    '<metadata key="name" value="A0"/>',
+    '<metadata key="name" value="A0"/><metadata key="wall_loops" value="4"/>'
+  )
+  const applied = applyPartProcessOverrides(
+    withOverride,
+    [{ objectId: 5, partIndex: 0, overrides: {} }],
+    MODEL_XML
+  )
+
+  assert.doesNotMatch(applied, /key="wall_loops"/)
+  assert.match(applied, /key="name" value="A0"/, 'structural part metadata is preserved')
 })

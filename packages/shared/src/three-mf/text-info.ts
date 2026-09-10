@@ -2,7 +2,7 @@
  * BambuStudio's `<text_info>` sidecar: what a text part was MADE from, so it stays editable.
  *
  * A text part's geometry is baked triangles like any other, and without this record a typo means
- * deleting the part and rebuilding it — in our editor and in BambuStudio alike. Studio writes one
+ * deleting the part and rebuilding it, in our editor and in BambuStudio alike. Studio writes one
  * `<text_info/>` per part inside `Metadata/model_settings.config`, and this module is the only
  * place that speaks that format. Writer `bbs_3mf.cpp:7892`, reader `:4859`.
  *
@@ -14,7 +14,7 @@
  * legacy `surface_text` + `keep_horizontal` pair below that; but its READER only accepts
  * `boldness`/`skew` above 2.2. A file written at, say, 2.0 therefore round-trips its surface mode
  * and silently loses its boldness. {@link TEXT_INFO_FONT_VERSION} sits above both gates for that
- * reason — do not lower it.
+ * reason; do not lower it.
  */
 
 import {

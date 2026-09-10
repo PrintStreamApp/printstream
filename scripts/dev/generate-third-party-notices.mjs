@@ -117,7 +117,7 @@ function collectPackages(workspace) {
       continue
     }
     if (!pkg.name) continue
-    // Skip our own internal workspace packages — they are not third party.
+    // Skip our own internal workspace packages: they are not third party.
     if (pkg.name.startsWith('@printstream/') || pkg.name === 'printstream') continue
     const key = `${pkg.name}@${pkg.version}`
     if (byKey.has(key)) continue
@@ -142,7 +142,7 @@ function render(title, packages) {
 
   const header = [
     '='.repeat(78),
-    `THIRD-PARTY SOFTWARE NOTICES — ${title}`,
+    `THIRD-PARTY SOFTWARE NOTICES: ${title}`,
     '='.repeat(78),
     '',
     'This artifact bundles or depends on the open-source packages listed below.',

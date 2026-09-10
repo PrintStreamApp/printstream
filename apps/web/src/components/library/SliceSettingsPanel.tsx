@@ -15,7 +15,7 @@
 import { memo } from 'react'
 import type React from 'react'
 import type { ReactNode } from 'react'
-import { lazy, useMemo, useState } from 'react'
+import { lazy, useCallback, useMemo, useState } from 'react'
 import {
   Alert, Badge, Box, Button, ButtonGroup, Chip, CircularProgress, Dropdown, FormControl, FormLabel, IconButton, Input,
   List, ListItem, Menu, MenuButton, Option, Select, Sheet, Stack, Switch, Tooltip, Typography
@@ -27,6 +27,7 @@ import DeleteRoundedIcon from '@mui/icons-material/DeleteRounded'
 import OpacityRoundedIcon from '@mui/icons-material/OpacityRounded'
 import DragIndicatorRoundedIcon from '@mui/icons-material/DragIndicatorRounded'
 import TuneRoundedIcon from '@mui/icons-material/TuneRounded'
+import SearchRoundedIcon from '@mui/icons-material/SearchRounded'
 import ErrorOutlineRoundedIcon from '@mui/icons-material/ErrorOutlineRounded'
 import RestoreRoundedIcon from '@mui/icons-material/RestoreRounded'
 import VisibilityRoundedIcon from '@mui/icons-material/VisibilityRounded'
@@ -68,6 +69,12 @@ import { LazyDialogBoundary } from '../LazyDialogBoundary'
 
 // Code-split: the machine settings catalog is large and only loads when the gear is used.
 const MachineSettingsDialog = lazy(() => import('../settings/MachineSettingsDialog'))
+// Code-split for the same reason, and it is the heaviest of the four: `settingsSearch.ts` imports
+// ALL THREE generated catalogs at module scope and builds its 442-entry index at import time, so
+// a static import puts the whole catalogue in the eagerly loaded panel chunk (this panel mounts on
+// every slice dialog and in both editor hosts, including the public one) for a dialog most sessions
+// never open.
+const SettingsSearchDialog = lazy(() => import('../settings/SettingsSearchDialog'))
 import type { AddedMaterialChoice, SessionFilamentSlot } from './useMaterialSlots'
 import { machineOverridesCarriedWarning, machineTargetConflictWarnings } from '../../lib/machineSwitchWarnings'
 import { MaterialEditDialog } from './MaterialEditDialog'
@@ -75,6 +82,7 @@ import { MaterialSwatchButton } from './MaterialSwatchButton'
 import { LoadedMaterialMenuItems } from './LoadedMaterialMenuItems'
 import { SlicingPresetAutocomplete } from './SlicingPresetAutocomplete'
 import { SettingsTuneButton } from '../SettingsTuneButton'
+import type { SettingsCatalogKind } from '../settings/settingsSearch'
 import { PlateFilamentChangesSection, PlatePausesSection, type FilamentOption } from './PlateGcodeSections'
 import { StickySectionHeader } from './StickySectionHeader'
 import type { EmbeddedProjectPreset } from '@printstream/shared/three-mf'
@@ -220,6 +228,14 @@ export interface SliceSettingsController {
   selectedSlicerTargetIdForGuards: string
   processSettingOverrides: Record<string, string | string[]>
   setProcessSettingsDialogOpen: React.Dispatch<React.SetStateAction<boolean>>
+  /**
+   * The setting key the cross-catalog search picked, seeded into whichever catalog dialog opens
+   * next as its search text. Lives on the controller rather than in this panel because the process
+   * and filament dialogs are mounted by the HOST while the printer one is mounted here, so the
+   * panel cannot hand the key to two of the three itself. Null when the search is not driving.
+   */
+  settingsSearchKey: string | null
+  setSettingsSearchKey: React.Dispatch<React.SetStateAction<string | null>>
   /**
    * The project's OWN machine settings, as a diff against the resolved printer preset: a printer
    * modified for this project only, without minting a global preset. The machine counterpart to
@@ -521,6 +537,7 @@ export const SliceSettingsPanel = memo(function SliceSettingsPanel({ controller,
     plateMode, setPlateMode, sceneEdit, setSceneEdit, plateNumber, setPlateNumber, slicePlateOptions, setPreviewFileId,
     compatibleProcessProfiles, selectedProcessProfile, processProfileModified, setProcessProfileId, setProcessSettingOverrides,
     processProfileSelectionTouchedRef, selectedSlicerTargetIdForGuards, processSettingOverrides, setProcessSettingsDialogOpen, settingsEditListenerRef, resolveConfig, resolveFilamentConfig,
+    settingsSearchKey, setSettingsSearchKey,
     machineSettingOverrides, setMachineSettingOverrides, machineOverridesModel, setMachineOverridesModel,
     hasPlateObjects, selectedSliceObjectIds, plateObjects, onToggleSliceObject, openSliceObjectSettings, plateGcode, perObjectSettings,
     projectFilaments, materialOptions, loadedMaterialOptions, printerTrayMap, materialToolheadOptions,
@@ -533,6 +550,73 @@ export const SliceSettingsPanel = memo(function SliceSettingsPanel({ controller,
   // Local, unlike the process/material dialogs whose open-state rides the controller: this one
   // edits a stored preset and emits nothing, so no host or controller has a stake in it.
   const [printerPresetDialogOpen, setPrinterPresetDialogOpen] = useState(false)
+  const [settingsSearchOpen, setSettingsSearchOpen] = useState(false)
+  /**
+   * Route a search result to the dialog that owns its catalog, seeding the key as that dialog's
+   * search text so it opens on the page holding the setting.
+   *
+   * Filament settings are per-MATERIAL, so a filament result has to pick one; it opens the first
+   * project material, which is the only non-arbitrary choice available (BambuStudio's filament tab
+   * likewise always has one filament selected). The others are project-wide and need no target.
+   *
+   * The key is set ONLY on a branch that really opens something. Every target here is conditional
+   * (each dialog renders behind its own selected preset, and a project may have no materials at
+   * all), and a key set for a dialog that never mounted is never cleared by that dialog's close
+   * handler: it would sit there and silently pre-filter the NEXT settings dialog the user opened
+   * by hand, to a setting they searched for minutes ago. `settingsSearchUnavailable` disables those
+   * rows with a reason, so these guards should be unreachable; they stay because the alternative to
+   * an unreachable guard here is a silent dead click plus that stale key.
+   */
+  /**
+   * The first material whose settings dialog can actually open, or null.
+   *
+   * A filament result has to pick a material, and BOTH hosts refuse to render the dialog for one
+   * with no resolvable preset id (`if (!profileId) return null`), so "the project has materials" is
+   * not the question: it is "does any material resolve a preset". The id resolution is the same one
+   * `FilamentTuneButton` performs, deliberately, since a divergence would offer a row that opens a
+   * dialog that is not there.
+   */
+  const searchableFilamentId = useMemo(() => {
+    for (const filament of projectFilaments) {
+      const option = materialOptions.find((candidate) => candidate.id === filamentMaterialOptionIds[filament.projectFilamentId]) ?? null
+      const profileId = option?.profileId
+        ?? (option?.id.startsWith('profile:') ? option.id.slice('profile:'.length) : null)
+      if (profileId) return filament.projectFilamentId
+    }
+    return null
+  }, [filamentMaterialOptionIds, materialOptions, projectFilaments])
+
+  /**
+   * Why each catalog cannot be opened right now; the search dialog disables those rows.
+   *
+   * Each entry mirrors a condition the DIALOG ITSELF is mounted behind, so anything the search
+   * offers really opens. Getting one wrong is not a cosmetic miss: the row absorbs the click, the
+   * search key is set for a dialog that never mounts, and since only that dialog's `onClose` clears
+   * the key it then pre-filters the next settings dialog the user opens by hand.
+   */
+  const settingsSearchUnavailable = useMemo((): Partial<Record<SettingsCatalogKind, string>> => ({
+    ...(selectedProcessProfile && selectedSlicerTargetIdForGuards ? {} : { process: 'Choose a process preset first' }),
+    // `canEditPrinterPreset` as well as the preset itself: a host that hides the printer gear (the
+    // public editor, which has no workspace) has no resolver for the machine route either, so
+    // offering the row would open a dialog whose every request 403s. That is the exact trap the
+    // model-studio guide records against defaulting a workspace surface into that host.
+    ...(selectedMachineProfile && canEditPrinterPreset && selectedSlicerTargetIdForGuards
+      ? {}
+      : { machine: 'Printer settings are not available here' }),
+    ...(searchableFilamentId != null ? {} : { filament: 'No material with an editable preset yet' })
+  }), [canEditPrinterPreset, searchableFilamentId, selectedMachineProfile, selectedProcessProfile, selectedSlicerTargetIdForGuards])
+
+  const openSearchResult = useCallback((kind: SettingsCatalogKind, key: string) => {
+    const open = (show: () => void) => {
+      setSettingsSearchKey(key)
+      setSettingsSearchOpen(false)
+      show()
+    }
+    if (settingsSearchUnavailable[kind]) return
+    if (kind === 'machine') { open(() => setPrinterPresetDialogOpen(true)); return }
+    if (kind === 'process') { open(() => setProcessSettingsDialogOpen(true)); return }
+    if (searchableFilamentId != null) open(() => openFilamentSettings(searchableFilamentId))
+  }, [openFilamentSettings, searchableFilamentId, settingsSearchUnavailable, setProcessSettingsDialogOpen, setSettingsSearchKey])
   const showPlateSection = mode === 'simple'
   // The inline Objects + per-plate G-code sections are simple-mode only: the 3D editor
   // renders its own object list and G-code sections after this panel.
@@ -988,6 +1072,22 @@ export const SliceSettingsPanel = memo(function SliceSettingsPanel({ controller,
                   </IconButton>
                 </span>
               </Tooltip>
+              {/* Sits beside the process tune button because this is the panel that holds all
+                  three catalogs' presets, so it is the one place a result for any of them can be
+                  opened without guessing which preset the user meant. */}
+              <Tooltip title="Search process, filament and printer settings">
+                <span>
+                  <IconButton
+                    size="sm"
+                    variant="plain"
+                    color="neutral"
+                    onClick={() => setSettingsSearchOpen(true)}
+                    aria-label="Search all settings"
+                  >
+                    <SearchRoundedIcon fontSize="small" />
+                  </IconButton>
+                </span>
+              </Tooltip>
             </Stack>
           </FormControl>
         </Stack>
@@ -1356,13 +1456,25 @@ export const SliceSettingsPanel = memo(function SliceSettingsPanel({ controller,
           anyOption={{ label: 'Any printer', description: 'Slice for the selected model instead' }}
         />
       )}
+      {settingsSearchOpen && (
+        <LazyDialogBoundary label="the settings search" onClose={() => setSettingsSearchOpen(false)}>
+          <SettingsSearchDialog
+            showDeveloperOptions={showDeveloperOptions}
+            unavailableKinds={settingsSearchUnavailable}
+            onSelect={openSearchResult}
+            onClose={() => setSettingsSearchOpen(false)}
+          />
+        </LazyDialogBoundary>
+      )}
       {printerPresetDialogOpen && selectedMachineProfile && (
         // Code-split like every other host of the settings dialogs: it pulls in the whole machine
-        // settings catalog.
-        <LazyDialogBoundary label="printer settings" onClose={() => setPrinterPresetDialogOpen(false)}>
+        // settings catalog. The boundary's own dismiss clears the search key as well: when the chunk
+        // fails the dialog behind it never mounts, so its `onClose` never runs and a stale key would
+        // pre-filter the next settings dialog opened by hand.
+        <LazyDialogBoundary label="printer settings" onClose={() => { setPrinterPresetDialogOpen(false); setSettingsSearchKey(null) }}>
           <MachineSettingsDialog
             open
-            onClose={() => setPrinterPresetDialogOpen(false)}
+            onClose={() => { setPrinterPresetDialogOpen(false); setSettingsSearchKey(null) }}
             slicerTargetId={selectedSlicerTargetIdForGuards}
             machineProfileId={selectedMachineProfile.id}
             machineProfileName={selectedMachineProfile.name}
@@ -1372,6 +1484,7 @@ export const SliceSettingsPanel = memo(function SliceSettingsPanel({ controller,
             // there would be a lie.
             applyScope={mode === 'editor' ? 'project' : 'slice'}
             initialOverrides={machineSettingOverrides}
+            initialQuery={settingsSearchKey ?? undefined}
             onApply={(overrides) => {
               // Snapshot the pre-edit machine state for undo/dirty (no-op outside the editor),
               // exactly as the process dialog and the material pickers do.

@@ -65,6 +65,7 @@ import { registerPendingDispatchedPrintSource } from './dispatched-print-source-
 import type { PendingPrintJobSource } from './pending-print-job-source.js'
 import { normalizeExactPrinterFilePath } from './printer-file-path.js'
 import { cancelTrackedPrintJobRecord, startTrackedPrintJob } from './print-job-recorder.js'
+import { recordDispatchedPrintPauseSchedule } from './print-pause-schedule-scan.js'
 import { ensureLibraryFileReplica, resolveLibraryFileToLocalPath } from './bridge-library-files.js'
 import { recordPrintDispatch } from './metrics.js'
 import { markDispatchStartAttempted, recordDispatchEnqueued, recordDispatchStatus } from './dispatch-journal.js'
@@ -310,6 +311,7 @@ class PrintDispatcher {
         allowPlateTypeMismatch: input.allowPlateTypeMismatch,
         allowFilamentTrackSwitchMismatch: input.allowFilamentTrackSwitchMismatch,
         allowInsufficientFilament: input.allowInsufficientFilament,
+        allowBlacklistedFilament: input.allowBlacklistedFilament,
         currentPlateType: input.currentPlateType,
         currentNozzleDiameters: input.currentNozzleDiameters,
         plate: input.plate,
@@ -537,6 +539,15 @@ class PrintDispatcher {
         this.finish(job, 'failed', 'Printer disconnected before start command', 'Printer disconnected')
         return
       }
+      // Deliberately not awaited: this reads the whole plate G-code to find where its baked
+      // pauses land on the progress bar, and nothing needs the answer until the printer reports
+      // a layer. Awaiting it would put a multi-hundred-megabyte scan between the start command
+      // and the user's confirmation, for a decoration. Best-effort throughout: it never throws.
+      void recordDispatchedPrintPauseSchedule({
+        printJobId: startedJobId,
+        localPath: job.localPath,
+        plate: job.options.plate
+      })
       // Note: skipObjectIds are per-INSTANCE identify_ids, so their count can
       // exceed the number of deselected objects: keep the message countless.
       this.finish(

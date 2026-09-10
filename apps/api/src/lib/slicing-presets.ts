@@ -8,6 +8,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import yauzl, { type Entry } from 'yauzl'
+import yazl from 'yazl'
 import { z } from 'zod'
 import {
   extractProfileMetadata,
@@ -22,7 +23,9 @@ import {
 } from '@printstream/shared'
 import {
   extractUploadedProfiles as extractUploadedProfilesShared,
+  isPresetArchivePresetEntry,
   parseProfileJson as parseProfileJsonShared,
+  type SlicingPresetBundle,
   type UploadedProfileEntry
 } from '@printstream/shared'
 import { badRequest, notFound } from './http-error.js'
@@ -324,6 +327,29 @@ function buildProfileLookupKey(kind: SlicingPresetKind, name: string): string {
   return `${kind}:${name.toLowerCase().trim()}`
 }
 
+/**
+ * Zip a laid-out preset bundle into the bytes the download serves.
+ *
+ * The LAYOUT is decided in shared (`buildSlicingPresetBundle`) and only the ZIP writing happens
+ * here, mirroring how `readPresetArchive` is the api's half of the import: what a bundle contains
+ * must be identical wherever it is built, while yazl-vs-fflate is a per-surface detail.
+ *
+ * Buffered rather than streamed on purpose: a bundle is preset JSON, tens of kilobytes even for a
+ * large selection, and the schema caps the selection, so there is no size here worth the
+ * complexity of a streamed response that cannot report a mid-flight failure.
+ */
+export function zipPresetBundle(bundle: SlicingPresetBundle): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const zip = new yazl.ZipFile()
+    const chunks: Buffer[] = []
+    zip.outputStream.on('data', (chunk: Buffer) => chunks.push(chunk))
+    zip.outputStream.on('error', reject)
+    zip.outputStream.on('end', () => resolve(Buffer.concat(chunks)))
+    for (const file of bundle.files) zip.addBuffer(Buffer.from(file.content, 'utf8'), file.path)
+    zip.end()
+  })
+}
+
 function readPresetArchive(buffer: Buffer): Promise<UploadedProfileEntry[]> {
   return new Promise((resolve, reject) => {
     yauzl.fromBuffer(buffer, { lazyEntries: true }, (openError, zipFile) => {
@@ -344,8 +370,9 @@ function readPresetArchive(buffer: Buffer): Promise<UploadedProfileEntry[]> {
       zipFile.on('end', () => finish())
       zipFile.on('entry', (entry: Entry) => {
         const fileName = entry.fileName.replace(/\\/g, '/')
-        const baseName = fileName.split('/').at(-1)?.toLowerCase() ?? ''
-        if (fileName.endsWith('/') || baseName === 'bundle_structure.json' || !baseName.endsWith('.json')) {
+        // One shared rule with the browser reader: they disagreed about the bundle manifest, so a
+        // real `.bbscfg` imported here and threw in the public editor.
+        if (!isPresetArchivePresetEntry(fileName)) {
           zipFile.readEntry()
           return
         }

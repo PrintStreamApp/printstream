@@ -45,6 +45,7 @@ import {
   summarizeInstanceMaterial,
   carriedPartSubtypes,
   withRemovedParts,
+  INHERITED_PLATE_SETTINGS,
   type EditorInstance,
   type EditorState
 } from './editorModel'
@@ -984,7 +985,7 @@ test('buildSingleObjectExportState isolates one object on a fresh single plate',
     plateId: mintPlateId(),
     sourcePlateIndex: 2,
     name: 'Plate two',
-    plateType: null,
+    ...INHERITED_PLATE_SETTINGS,
     bed: { minX: 0, maxX: 200, minY: 0, maxY: 180, maxZ: null, excludeAreas: [] },
     instances: [exportedSource],
     primeTower: null,
@@ -1662,6 +1663,22 @@ test('per-part process overrides re-hydrate by ORDINAL, not by the mesh id', () 
   const seeded = collectPartProcessOverridesFromScenes(new Map([[1, scene]]))
   // Ordinal 1, not mesh id 21.
   assert.deepEqual(seeded, { '7:1': { wall_loops: '4' } })
+})
+
+test('an explicitly cleared baked part override is emitted so save removes its metadata', () => {
+  const state: EditorState = seedEmptyEditorState()
+  const instance = instanceFromStagedImport(STAGED)
+  instance.source = { kind: 'object' }
+  instance.objectId = 132
+  instance.parts = [
+    { key: 'part-0', partIndex: 0, componentObjectId: 20, name: 'Cylinder', subtype: null }
+  ] as never
+  state.plates[0]!.instances.push(instance)
+  state.partProcessOverrides = { [partSlotKey(132, 0)]: {} }
+
+  assert.deepEqual(buildSceneEdit(state).partProcessOverrides, [
+    { objectId: 132, partIndex: 0, overrides: {} }
+  ])
 })
 
 test('an independent copy carries the source deletions and its pending mesh repair', () => {

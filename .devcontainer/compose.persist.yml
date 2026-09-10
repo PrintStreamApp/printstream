@@ -12,9 +12,6 @@ services:
       - printstream-agent-sessions:/home/node/.vscode-server/data/agentSessionData
       - printstream-bash-history:/commandhistory
       - ${HOME}/.ssh:/home/node/.ssh:ro
-      # Writable so a session in this container can update the shared rules.
-      # managed-settings.json sits here too; these containers can already read
-      # its token, so write access here is not a new exposure.
 volumes:
   printstream-config-data:
     name: ${DEVCONTAINER_CONFIG_VOLUME:-printstream-config-data}

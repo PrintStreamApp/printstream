@@ -38,6 +38,7 @@ import {
   formatNozzleDiameterLabel,
   getPrinterPrintStartOptions,
   getPrinterPrintOptionCapabilities,
+  filamentTrackSwitchArrangement,
   filamentTrackSwitchMismatch,
   isPlateTypeCompatible,
   isPrinterModelCompatible,
@@ -47,6 +48,7 @@ import {
   resolvePrinterNozzleDiameters
 } from '@printstream/shared'
 import { autoSelectedFilamentIds, computeAutoTrayMapping } from '../../lib/autoTrayMatch'
+import { filamentBlacklistConsentSignature, findPrinterFilamentBlacklist, hasBlacklistProhibitions } from '../../lib/filamentBlacklist'
 import { findPrinterLowFilamentSlots, printerSlotLabeller } from '../../lib/lowFilament'
 import { useSlotFilamentIdentityLookup } from '../../lib/slotFilamentIdentity'
 import { apiFetch } from '../../lib/apiClient'
@@ -62,6 +64,8 @@ import {
 import { useLocalStorageState } from '../../hooks/useLocalStorageState'
 import { BackAwareModal as Modal } from '../BackAwareModal'
 import { DialogFileTitle } from '../DialogFileTitle'
+import { FilamentBlacklistAlert } from '../FilamentBlacklistAlert'
+import { FilamentTrackSwitchArrangementAlert } from '../FilamentTrackSwitchArrangementAlert'
 import { FilamentTrackSwitchMismatchAlert } from '../FilamentTrackSwitchMismatchAlert'
 import { LowFilamentAlert } from '../LowFilamentAlert'
 import { LibraryPlateCardPicker } from '../LibraryPlateSelect'
@@ -312,6 +316,7 @@ export function PrintModal({
   const [allowPlateTypeMismatch, setAllowPlateTypeMismatch] = useState(false)
   const [allowFilamentTrackSwitchMismatch, setAllowFilamentTrackSwitchMismatch] = useState(false)
   const [allowInsufficientFilament, setAllowInsufficientFilament] = useState(false)
+  const [allowBlacklistedFilament, setAllowBlacklistedFilament] = useState(false)
   const [showOtherPrinters, setShowOtherPrinters] = useState(false)
   const [previewFileId, setPreviewFileId] = useState<string | null>(null)
   const canOpenThreeDimensionalPreview = (file.kind === '3mf' || file.kind === 'gcode') && plates.length > 0
@@ -587,6 +592,56 @@ export function PrintModal({
     })).filter((entry) => entry.issues.length > 0),
     [effectiveMappings, printers, resolveSlotFilament, selectedIds, statuses, usedGramsById, visibleFilaments]
   )
+  /** The plate's own filament ids, so the alert grades exactly what the dispatch guard grades. */
+  const plateFilamentIds = useMemo(
+    () => (activePlate?.filaments ?? []).map((filament) => filament.id),
+    [activePlate]
+  )
+  /**
+   * Materials Bambu forbids or cautions against on the target hardware, per selected printer.
+   * Reads `effectiveMappings` for the same reason the low-filament check does: it must grade the
+   * trays submit will actually send, not the matcher's first suggestion.
+   */
+  const blacklistEntries = useMemo(
+    () => selectedIds.flatMap((printerId) => {
+      const printer = printers.find((entry) => entry.id === printerId)
+      const entry = findPrinterFilamentBlacklist(
+        printerId,
+        printer?.model ?? 'unknown',
+        statuses[printerId],
+        effectiveMappings[printerId],
+        plateFilamentIds,
+        undefined,
+        selectedIds.length > 1 ? printer?.name ?? printerId : null
+      )
+      return entry ? [entry] : []
+    }),
+    [effectiveMappings, plateFilamentIds, printers, selectedIds, statuses]
+  )
+  const hasBlacklistedFilament = hasBlacklistProhibitions(blacklistEntries)
+  /**
+   * Spools that would be better off behind the other Filament Track Switch inlet. Purely advisory,
+   * so it never gates submit; inert until FTS firmware ships, since no printer reports a switch.
+   */
+  const trackSwitchArrangements = useMemo(
+    () => selectedIds.flatMap((printerId) => {
+      const arrangement = filamentTrackSwitchArrangement({
+        optimalAssignment: activePlate?.optimalAssignment,
+        status: statuses[printerId],
+        amsMapping: effectiveMappings[printerId]
+      })
+      if (!arrangement || arrangement.moves.length === 0) return []
+      return [{
+        printerId,
+        printerName: selectedIds.length > 1
+          ? printers.find((entry) => entry.id === printerId)?.name ?? printerId
+          : null,
+        moves: arrangement.moves,
+        slotLabel: printerSlotLabeller(statuses[printerId])
+      }]
+    }),
+    [activePlate?.optimalAssignment, effectiveMappings, printers, selectedIds, statuses]
+  )
   const hasHardCompatibilityIssues = hardCompatibilityIssueEntries.length > 0
   const hasSoftCompatibilityIssues = softCompatibilityIssueEntries.length > 0
   const highTemperatureFilamentLabels = useMemo(() => {
@@ -609,6 +664,19 @@ export function PrintModal({
   useEffect(() => {
     setAllowIncompatibleFilament(false)
   }, [compatibilitySignature])
+
+  // Same rule for the blacklist consent: accepting "TPU through the AMS" must not silently carry
+  // over to a different slot or a different printer the user then picks. Keyed on the CONTENT of
+  // the prohibitions rather than their identity, because `blacklistEntries` is a fresh array on
+  // every render and an identity dependency would reset the checkbox as fast as it was ticked.
+  const blacklistSignature = useMemo(
+    () => filamentBlacklistConsentSignature(blacklistEntries),
+    [blacklistEntries]
+  )
+
+  useEffect(() => {
+    setAllowBlacklistedFilament(false)
+  }, [blacklistSignature])
 
   const printersById = useMemo(
     () => new Map(printers.map((printer) => [printer.id, printer] as const)),
@@ -978,6 +1046,7 @@ export function PrintModal({
               allowPlateTypeMismatch,
               allowFilamentTrackSwitchMismatch,
               allowInsufficientFilament,
+              allowBlacklistedFilament,
               currentPlateType: printer?.currentPlateType ?? null,
               currentNozzleDiameters: resolvePrinterNozzleDiameters(
                 statuses[printerId],
@@ -1396,6 +1465,14 @@ export function PrintModal({
             onConfirmedChange={setAllowInsufficientFilament}
           />
 
+          <FilamentBlacklistAlert
+            entries={blacklistEntries}
+            confirmed={allowBlacklistedFilament}
+            onConfirmedChange={setAllowBlacklistedFilament}
+          />
+
+          <FilamentTrackSwitchArrangementAlert entries={trackSwitchArrangements} />
+
           {(hasHardCompatibilityIssues || hasSoftCompatibilityIssues) && (
             <Alert
               color={hasHardCompatibilityIssues ? 'danger' : 'warning'}
@@ -1476,6 +1553,7 @@ export function PrintModal({
                 || (hasPlateTypeIssues && !allowPlateTypeMismatch)
                 || (trackSwitchMismatches.length > 0 && !allowFilamentTrackSwitchMismatch)
                 || (lowFilamentEntries.length > 0 && !allowInsufficientFilament)
+                || (hasBlacklistedFilament && !allowBlacklistedFilament)
                 || ((hasHardCompatibilityIssues || hasSoftCompatibilityIssues) && !allowIncompatibleFilament)
               }
               onClick={submit}

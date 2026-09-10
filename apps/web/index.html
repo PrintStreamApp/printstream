@@ -5,7 +5,7 @@
     <link rel="icon" type="image/png" href="/icon-192.png?v=20260519a" />
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=20260519a" />
     <!-- Brand fonts (IBM Plex Sans + Space Grotesk) are self-hosted via @fontsource,
-         imported in main.tsx — no Google Fonts CDN dependency. -->
+         imported in main.tsx: no Google Fonts CDN dependency. -->
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="theme-color" content="#0d1322" />
     <meta name="mobile-web-app-capable" content="yes" />
@@ -14,7 +14,7 @@
     <meta name="apple-mobile-web-app-title" content="PrintStream" />
     <title>PrintStream</title>
     <!-- Default description; the cloud build rewrites this (and the title) per marketing
-         route server-side — see apps/api/src/private/cloud/seo/. -->
+         route server-side. See apps/api/src/private/cloud/seo/. -->
     <meta name="description" content="PrintStream: monitor, slice, and send prints to your Bambu Lab printers, and manage your model library, from one focused app." />
     <style>
       :root {
@@ -22,7 +22,7 @@
         font-family: 'IBM Plex Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
         /* Neutral dark boot background: the theme is user-selectable, so before the app
            paints we show either the cached last-used theme background (pre-bundle script
-           below) or this neutral tone that sits between all themes — never a themed
+           below) or this neutral tone that sits between all themes, never a themed
            gradient that could clash with what loads next. */
         background-color: #121419;
         --printstream-body-background: #121419;

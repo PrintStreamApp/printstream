@@ -165,7 +165,7 @@ export function useEditorMeshBoolean({
    * Several objects boolean as OBJECTS; one object with two or more parts booleans its PARTS, which
    * is Studio's `update_cur_mode`. Part mode enumerates the object's parts rather than reading the
    * selection, and enumerates BOTH kinds uniformly: a baked part and a session-added volume are the
-   * same thing to everything downstream (see the part-is-a-part rule in this plugin'the s development notes),
+   * same thing to everything downstream (see the part-is-a-part rule in this plugin's development notes),
    * and reading the selection instead would have supported only baked ones, since an added volume
    * cannot join a multi-part selection today.
    */

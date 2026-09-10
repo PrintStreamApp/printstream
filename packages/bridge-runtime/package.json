@@ -17,9 +17,7 @@
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
-  },
+    "build": "tsc -p tsconfig.json"  },
   "dependencies": {
     "@printstream/shared": "0.1.0",
     "basic-ftp": "^5.3.0",

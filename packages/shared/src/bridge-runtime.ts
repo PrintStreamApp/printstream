@@ -802,7 +802,23 @@ export const bridgeLibraryThreeMfPlateSchema = z.object({
   gcodeFile: z.string().nullable(),
   pickFile: z.string().nullable(),
   thumbnailFile: z.string().nullable(),
+  /**
+   * The plate's EFFECTIVE bed type: its own `bed_type` where it states one, else the project-global
+   * `curr_bed_type`. Resolved in the order the engine resolves it, so chips and temperature
+   * estimates match what will be printed. Use {@link bedTypeOverride} to tell inherit from override.
+   */
   plateType: z.string().nullable(),
+  /**
+   * The plate's OWN `bed_type`, null when it inherits the global. Absent from indexes built by a
+   * parser older than the per-plate settings, which is why it is optional rather than nullable-only.
+   */
+  bedTypeOverride: z.string().nullable().optional(),
+  /** The plate's own `print_sequence`, null when it inherits the global. Absent from older parsers. */
+  printSequence: z.enum(['by layer', 'by object']).nullable().optional(),
+  /** The plate's own `spiral_mode` (vase mode), null when it inherits. Absent from older parsers. */
+  spiralMode: z.boolean().nullable().optional(),
+  /** Locked against arrange. No global to inherit, so absent means unlocked. */
+  locked: z.boolean().optional(),
   nozzleSizes: z.array(z.string()),
   filaments: z.array(bridgeLibraryThreeMfFilamentSchema),
   objects: z.array(bridgeLibraryThreeMfObjectSchema),
@@ -817,7 +833,17 @@ export const bridgeLibraryThreeMfPlateSchema = z.object({
    */
   filamentChanges: z.array(z.object({ z: z.number(), filamentId: z.number().int().positive() })).optional(),
   /** Layer pauses baked in `custom_gcode_per_layer.xml` (PausePrint entries), by print height (mm). */
-  pauses: z.array(z.object({ z: z.number() })).optional()
+  pauses: z.array(z.object({ z: z.number() })).optional(),
+  /**
+   * The slicer's two-group partition of this plate's filaments, from
+   * `Metadata/filament_sequence.json`. Positional over the plate's filaments (entry `i` is
+   * filament `i + 1`); the value is a group id, not an extruder or a tray.
+   *
+   * Only a Filament Track Switch machine's slice produces one, and only that feature reads it
+   * (`filamentTrackSwitchArrangement`). Absent on every other project, and on indexes built by an
+   * older parser, which the arrangement rule treats as "say nothing".
+   */
+  optimalAssignment: z.array(z.number().int()).optional()
 })
 
 export type BridgeLibraryThreeMfPlate = z.infer<typeof bridgeLibraryThreeMfPlateSchema>
@@ -826,6 +852,15 @@ export const bridgeLibraryThreeMfIndexSchema = z.object({
   plates: z.array(bridgeLibraryThreeMfPlateSchema),
   projectFilaments: z.array(bridgeLibraryThreeMfProjectFilamentSchema),
   compatiblePrinterModels: z.array(printerModelSchema),
+  /**
+   * The project-global `curr_bed_type` from `project_settings.config`, or null when it states none.
+   *
+   * Distinct from a plate's `plateType`, which RESOLVES the plate's own `bed_type` ahead of this.
+   * Anything asking "what is the project set to" must read this: taking the first plate's resolved
+   * type instead returns that plate's OVERRIDE whenever it has one, which then gets re-saved as the
+   * project-wide value and changes every inheriting plate.
+   */
+  projectPlateType: z.string().nullable().optional(),
   /** Project filaments designated as support material (`support_filament`/`support_interface_filament`/`filament_is_support`). */
   supportFilamentIds: z.array(z.number().int().positive()).default([]),
   printerProfileName: z.string().nullable().default(null),

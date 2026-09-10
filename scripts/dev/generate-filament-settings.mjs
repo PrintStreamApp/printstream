@@ -89,7 +89,7 @@ const LAYOUT = [
 
 /**
  * The "Setting Overrides" keys (`filament_retraction_length`, `filament_overhang_1_4_speed`, ...)
- * are NOT defined with their own `this->add(...)` — BambuStudio builds them in a loop that copies
+ * are NOT defined with their own `this->add(...)`: BambuStudio builds them in a loop that copies
  * the base printer/process option's metadata (label/tooltip/enum/min/max/type) under a `filament_`
  * prefix as a nullable per-filament override (PrintConfig.cpp `filament_extruder_override_keys` /
  * `filament_overhang_override_keys`). We mirror that: parse the BASE key's block, then set the mode

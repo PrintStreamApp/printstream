@@ -9,7 +9,7 @@
  * re-pick any slot. Starting dispatches the explicit printer + mapping, which the server honours verbatim
  * (skipping the strict material match).
  */
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Alert, Button, DialogActions, DialogContent, DialogTitle, FormControl, FormLabel, ModalDialog, Stack, Typography } from '@mui/joy'
 import {
   evaluateQueueMatch,
@@ -24,7 +24,9 @@ import { FilamentSpoolIcon } from '../../components/FilamentSpoolIcon'
 import { PrinterMapping } from '../../components/library/PrinterMapping'
 import { PrinterPickerDialog } from '../../components/PrinterPickerDialog'
 import { autoSelectedFilamentIds, buildAutoMatchSlots } from '../../lib/autoTrayMatch'
+import { filamentBlacklistConsentSignature, findPrinterFilamentBlacklist, hasBlacklistProhibitions } from '../../lib/filamentBlacklist'
 import { findPrinterLowFilamentSlots, printerSlotLabeller } from '../../lib/lowFilament'
+import { FilamentBlacklistAlert } from '../../components/FilamentBlacklistAlert'
 import { LowFilamentAlert } from '../../components/LowFilamentAlert'
 import { useSlotFilamentIdentityLookup } from '../../lib/slotFilamentIdentity'
 import { matchPrinterAspects, type PrinterAspectMatch } from './printerAspectMatch'
@@ -85,7 +87,11 @@ export function QueueStartDialog({
   statuses: Record<string, PrinterStatus>
   allowTypeOnlyMatch: boolean
   busy: boolean
-  onStart: (printerId: string, amsMapping: number[], allowInsufficientFilament: boolean) => void
+  onStart: (
+    printerId: string,
+    amsMapping: number[],
+    consents: { allowInsufficientFilament: boolean; allowBlacklistedFilament: boolean }
+  ) => void
   onClose: () => void
 }) {
   const filaments = useMemo(() => toMappingFilaments(item), [item])
@@ -139,6 +145,7 @@ export function QueueStartDialog({
   const [edits, setEdits] = useState<Record<string, number[]>>({})
   const [printerPickerOpen, setPrinterPickerOpen] = useState(false)
   const [allowInsufficientFilament, setAllowInsufficientFilament] = useState(false)
+  const [allowBlacklistedFilament, setAllowBlacklistedFilament] = useState(false)
   const selectedPrinterId = picked && ranked.some((entry) => entry.printer.id === picked) ? picked : defaultPrinterId
 
   const autoMapping = selectedPrinterId ? autoMappingFor(selectedPrinterId) : baseMapping(item)
@@ -175,6 +182,30 @@ export function QueueStartDialog({
       slotLabel: printerSlotLabeller(statuses[selectedPrinterId ?? ''])
     }]
     : []
+
+  /**
+   * Materials Bambu forbids on the selected printer. Without this the queue could only ever answer
+   * a prohibited material with a 409 telling the user to confirm in a dialog that had no such
+   * checkbox. Plain rather than memoised, for the same reason as `lowFilamentIssues` above.
+   */
+  const blacklistEntries = selectedPrinterId
+    ? [findPrinterFilamentBlacklist(
+      selectedPrinterId,
+      printers.find((entry) => entry.id === selectedPrinterId)?.model ?? 'unknown',
+      statuses[selectedPrinterId],
+      mapping,
+      filaments.map((filament) => filament.id)
+    )].filter((entry): entry is NonNullable<typeof entry> => entry != null)
+    : []
+
+  // Consent belongs to the exact hardware prohibition the user saw. A printer or tray change can
+  // produce a different prohibition, so it must require a fresh acknowledgement just as the
+  // library and printer-storage dialogs do.
+  const blacklistSignature = filamentBlacklistConsentSignature(blacklistEntries)
+
+  useEffect(() => {
+    setAllowBlacklistedFilament(false)
+  }, [blacklistSignature])
 
   const handleMappingChange = (filamentId: number, tray: number) => {
     if (!selectedPrinterId) return
@@ -273,6 +304,11 @@ export function QueueStartDialog({
                       confirmed={allowInsufficientFilament}
                       onConfirmedChange={setAllowInsufficientFilament}
                     />
+                    <FilamentBlacklistAlert
+                      entries={blacklistEntries}
+                      confirmed={allowBlacklistedFilament}
+                      onConfirmedChange={setAllowBlacklistedFilament}
+                    />
                   </>
                 ) : (
                   <Typography level="body-xs" textColor="text.tertiary">
@@ -293,9 +329,12 @@ export function QueueStartDialog({
               || !allMapped
               || busy
               || (lowFilamentEntries.length > 0 && !allowInsufficientFilament)
+              || (hasBlacklistProhibitions(blacklistEntries) && !allowBlacklistedFilament)
             }
             onClick={() => {
-              if (selectedPrinterId) onStart(selectedPrinterId, mapping, allowInsufficientFilament)
+              if (selectedPrinterId) {
+                onStart(selectedPrinterId, mapping, { allowInsufficientFilament, allowBlacklistedFilament })
+              }
             }}
           >
             Start print

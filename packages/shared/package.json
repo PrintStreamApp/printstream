@@ -22,8 +22,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "dev": "tsc -p tsconfig.json --watch --preserveWatchOutput",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "dev": "tsc -p tsconfig.json --watch --preserveWatchOutput"
   },
   "dependencies": {
     "zod": "^3.24.2"

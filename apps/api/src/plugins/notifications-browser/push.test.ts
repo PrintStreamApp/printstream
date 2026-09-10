@@ -31,7 +31,7 @@ test('workspace-scoped delivery loads subscriptions without overriding shared VA
   assert.equal(delivery.getPublicKey(), 'server-public')
   assert.equal(delivery.getPrivateKey(), 'server-private')
   assert.equal(delivery.getSubject(), 'mailto:server@example.test')
-  assert.equal(delivery.size(), 1)
+  assert.equal(delivery.listSubscriptions().length, 1)
   assert.equal(settingsStore.has('vapidPublicKey'), false)
   assert.equal(settingsStore.has('vapidPrivateKey'), false)
 })

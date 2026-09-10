@@ -347,7 +347,12 @@ export async function printRun(deps: CalibrationRunManagerDeps, db: AnyPrismaCli
     // mean the switch was fitted or removed mid-run, which is worth stopping for rather than printing
     // a calibration whose results would be meaningless.
     allowFilamentTrackSwitchMismatch: false,
-    allowInsufficientFilament: false
+    allowInsufficientFilament: false,
+    // Also NOT waived, and this one matters most of the three. BambuStudio runs the same blacklist
+    // on its own calibration wizard and refuses a prohibited material there, because a calibration
+    // is exactly when someone puts an unfamiliar filament in an unfamiliar slot. Waiving it would
+    // make the one flow that damages a nozzle the one flow with no guard.
+    allowBlacklistedFilament: false
   }, workspaceId)
   await updateRun(db, workspaceId, runId, { status: 'printing' })
 }

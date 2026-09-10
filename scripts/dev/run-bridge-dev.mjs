@@ -16,7 +16,7 @@
  *  - it runs the bridge under plain `tsx` (which EXITS on crash) and restarts it
  *    on any exit, cause-agnostic, with crash-loop backoff;
  *  - it polls the bridge source and the shared/bridge-runtime dist it imports
- *    for mtime changes and restarts on change — hot-reload that works regardless
+ *    for mtime changes and restarts on change: hot-reload that works regardless
  *    of inotify reliability (the same cross-package reload the old `--include`
  *    globs provided).
  *

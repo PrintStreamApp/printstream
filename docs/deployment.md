@@ -26,7 +26,7 @@ docker compose up -d
 
 This pulls the pre-built images from GHCR and starts the stack. To build from source instead, uncomment the `build:` blocks in your `compose.yml` and run `docker compose up -d --build`.
 
-The default stack runs `db` (PostgreSQL) plus the **combined app image** (`ghcr.io/printstreamapp/printstream`) run in two roles — `api` (default) and `bridge` (the bundled LAN agent, the same image with a `bridge` command) — and a `slicer` (`ghcr.io/printstreamapp/printstream-slicer`). The `api` service is the **single web-facing container**: its image embeds the built web SPA and, via `SERVE_WEB_DIR`, serves it together with `/api` and the `/ws` fan-out on one port (published as `:8080` by default). There is no separate nginx container. To run the API alone behind your own web tier instead — a CDN or an existing static host (the "split" topology) — set `SERVE_WEB_DIR=` (empty) on the `api` service; the same image then serves only `/api` + `/ws`. Persistent data lives in two named volumes: `printstream-postgres-data` for PostgreSQL and `printstream-data` for API-managed assets.
+The default stack runs `db` (PostgreSQL) plus the **combined app image** (`ghcr.io/printstreamapp/printstream`) run in two roles, `api` (default) and `bridge` (the bundled LAN agent, the same image with a `bridge` command); and a `slicer` (`ghcr.io/printstreamapp/printstream-slicer`). The `api` service is the **single web-facing container**: its image embeds the built web SPA and, via `SERVE_WEB_DIR`, serves it together with `/api` and the `/ws` fan-out on one port (published as `:8080` by default). There is no separate nginx container. To run the API alone behind your own web tier instead (a CDN or an existing static host, the "split" topology), set `SERVE_WEB_DIR=` (empty) on the `api` service; the same image then serves only `/api` + `/ws`. Persistent data lives in two named volumes: `printstream-postgres-data` for PostgreSQL and `printstream-data` for API-managed assets.
 
 On first start the API auto-creates a default workspace when the database has no workspaces yet.
 
@@ -35,7 +35,7 @@ On first start the API auto-creates a default workspace when the database has no
 A self-hosted install needs a license key. Personal, non-commercial use is free:
 request a [community key](https://printstream.app/self-host/community-license)
 and paste it under **Settings → License**. A community key is perpetual, covers
-unlimited printers, and never contacts our servers — nothing about a personal
+unlimited printers, and never contacts our servers: nothing about a personal
 install phones home.
 
 New installs get a 30-day grace period, counted from the first boot of a build
@@ -44,10 +44,10 @@ immediately. After the grace period, adding printers and starting prints pause
 until a key is entered. Nothing else changes: existing printers stay visible,
 the library and job history stay intact, and no data is locked away.
 
-Business use needs a commercial key — either a Pro subscription (which covers
+Business use needs a commercial key: either a Pro subscription (which covers
 self-hosting at no extra cost over the hosted service) or a one-time Lifetime
 license. A Pro-backed key carries an expiry and refreshes itself daily against
-whichever deployment issued it — the key says which, so there is nothing to
+whichever deployment issued it. The key says which, so there is nothing to
 configure; that refresh sends the key and nothing else.
 
 ### Updating
@@ -57,7 +57,7 @@ docker compose pull && docker compose up -d && docker image prune -f
 ```
 
 The `docker image prune -f` matters: each pull leaves the previous multi-GB image
-behind untagged ("dangling"), and nothing else removes those — without the prune
+behind untagged ("dangling"), and nothing else removes those. Without the prune
 the Docker disk grows by the full image set on every update, forever. The prune
 only removes dangling images, so other tagged images on the host are untouched.
 
@@ -65,9 +65,9 @@ only removes dangling images, so other tagged images on the host are untouched.
 
 The `slicer` service is part of the stack and binds to loopback by default (`127.0.0.1:4010` on the deployment host). Keep `SLICER_BIND_HOST=127.0.0.1` unless you intentionally need direct network access. Set `SLICER_SERVICE_URL` (and a `SLICER_SERVICE_TOKEN` secret) on the API to enable server-side slicing.
 
-**Parallel slicing:** to run more than one slice at a time, add a second slicer service (copy the `slicer` block, e.g. as `slicer-2`) and list both in `SLICER_SERVICE_URL`, comma-separated (`http://slicer:4010,http://slicer-2:4010`). Each instance **must get its own work volume** — two slicer containers sharing one `/work` volume would contend on the same BambuStudio home directory and corrupt each other's state. The API assigns each job to the least-busy instance and runs one concurrent slice per listed URL by default (`SLICING_MAX_CONCURRENT_JOBS`). Remember each concurrent slice is CPU-hungry (the CLI is multi-threaded), so size the instance count to the host's cores; the win of a second instance is that short slices stop queueing behind long ones.
+**Parallel slicing:** to run more than one slice at a time, add a second slicer service (copy the `slicer` block, e.g. as `slicer-2`) and list both in `SLICER_SERVICE_URL`, comma-separated (`http://slicer:4010,http://slicer-2:4010`). Each instance **must get its own work volume**: two slicer containers sharing one `/work` volume would contend on the same BambuStudio home directory and corrupt each other's state. The API assigns each job to the least-busy instance and runs one concurrent slice per listed URL by default (`SLICING_MAX_CONCURRENT_JOBS`). Remember each concurrent slice is CPU-hungry (the CLI is multi-threaded), so size the instance count to the host's cores; the win of a second instance is that short slices stop queueing behind long ones.
 
-**Architecture:** the combined app image (`printstream`, used by the `api` and `bridge` roles) and the `slicer` image are all published multi-arch for `linux/amd64` and `linux/arm64`, so the full stack runs natively on x86 servers and on arm64 boards like a Raspberry Pi. The slicer bundles the x86 Bambu Studio CLI; on arm64 that CLI runs under qemu-user emulation against an x86-64 sysroot baked into the image, so server-side slicing works on arm64 too — slower than native, but functional. If you prefer not to pay the emulation cost on a low-powered arm64 board, run the stack without the slicer (`docker compose up -d --scale slicer=0`) and either point `SLICER_SERVICE_URL` at a remote x86 slicer or leave it unset to disable server-side slicing; printing, the library, and live status all work regardless.
+**Architecture:** the combined app image (`printstream`, used by the `api` and `bridge` roles) and the `slicer` image are all published multi-arch for `linux/amd64` and `linux/arm64`, so the full stack runs natively on x86 servers and on arm64 boards like a Raspberry Pi. The slicer bundles the x86 Bambu Studio CLI; on arm64 that CLI runs under qemu-user emulation against an x86-64 sysroot baked into the image, so server-side slicing works on arm64 too (slower than native, but functional). If you prefer not to pay the emulation cost on a low-powered arm64 board, run the stack without the slicer (`docker compose up -d --scale slicer=0`) and either point `SLICER_SERVICE_URL` at a remote x86 slicer or leave it unset to disable server-side slicing; printing, the library, and live status all work regardless.
 
 ## How printers connect (the bridge)
 
@@ -75,15 +75,15 @@ PrintStream reaches your printers through a bridge: an outbound client that live
 
 ### Bundled bridge (default)
 
-A single-host install runs a bundled `bridge` service for you (with its own `printstream-bridge-data` volume for bridge state plus bridge-local library/dispatch files) in **managed-bridge mode** (`MANAGED_BRIDGE=true`): one workspace, one server-owned bridge that pairs itself on first start, and the Bridges settings page stays hidden because there is nothing for you to manage. There is no secret to set — the API generates a provisioning token at `MANAGED_BRIDGE_TOKEN_FILE` on the shared `printstream-provision` volume, and the bundled bridge reads it from the same path to authenticate its one-time pairing. Because that token lives in a private file rather than on the network, this is safe regardless of how the API is exposed.
+A single-host install runs a bundled `bridge` service for you (with its own `printstream-bridge-data` volume for bridge state plus bridge-local library/dispatch files) in **managed-bridge mode** (`MANAGED_BRIDGE=true`): one workspace, one server-owned bridge that pairs itself on first start, and the Bridges settings page stays hidden because there is nothing for you to manage. There is no secret to set: the API generates a provisioning token at `MANAGED_BRIDGE_TOKEN_FILE` on the shared `printstream-provision` volume, and the bundled bridge reads it from the same path to authenticate its one-time pairing. Because that token lives in a private file rather than on the network, this is safe regardless of how the API is exposed.
 
 Set `MANAGED_BRIDGE=false` to turn this off: the bundled bridge then waits to be paired by hand and the Bridges settings page reappears (the connect-code flow below). That's the mode to use when you want more than one bridge, or a bridge on another machine.
 
-> SSDP auto-discovery needs LAN multicast, which the default Docker bridge network does not forward. If the bundled bridge does not discover printers, switch the `bridge` service to `network_mode: host` and point `BRIDGE_SERVER_URL` at a host-reachable API address — or add printers by host/serial/access-code instead. The provisioning token is unaffected; it travels over the shared volume, not the network.
+> SSDP auto-discovery needs LAN multicast, which the default Docker bridge network does not forward. If the bundled bridge does not discover printers, switch the `bridge` service to `network_mode: host` and point `BRIDGE_SERVER_URL` at a host-reachable API address, or add printers by host/serial/access-code instead. The provisioning token is unaffected; it travels over the shared volume, not the network.
 
 ## Reverse proxy and HTTPS
 
-A reverse proxy is optional now that the `api` service serves the app directly — point your browser at the published port and you are done. For TLS, a custom domain, or fronting the stack at the edge, put a proxy in front; it has a single upstream (the `api` service) for `/`, `/api`, and `/ws`. The host-level config used in front of the app stack is intentionally kept server-local as `nginx.conf` and ignored by git; a tracked reference version lives at `nginx.conf.example` — copy or adapt that file. Library uploads use chunked requests so large 3MF/G-code files can pass through request-size-limited proxies such as Cloudflare; keep the proxy body-size limit aligned with the API's upload ceiling for non-library upload routes and any direct-to-origin use.
+A reverse proxy is optional now that the `api` service serves the app directly; point your browser at the published port and you are done. For TLS, a custom domain, or fronting the stack at the edge, put a proxy in front; it has a single upstream (the `api` service) for `/`, `/api`, and `/ws`. The host-level config used in front of the app stack is intentionally kept server-local as `nginx.conf` and ignored by git; a tracked reference version lives at `nginx.conf.example`. Copy or adapt that file. Library uploads use chunked requests so large 3MF/G-code files can pass through request-size-limited proxies such as Cloudflare; keep the proxy body-size limit aligned with the API's upload ceiling for non-library upload routes and any direct-to-origin use.
 
 If you front the stack with any reverse proxy (nginx, Caddy, Traefik, Cloudflare Tunnel, ...) set `TRUST_PROXY` on the api container so `req.ip` and `req.protocol` reflect the real client. `1` means "a single proxy hop"; you can also pass an integer or a comma-separated IP/CIDR list.
 

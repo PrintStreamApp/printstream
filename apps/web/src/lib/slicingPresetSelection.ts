@@ -22,7 +22,7 @@ export function isSelectableSlicingPreset(profile: SlicingPresetSummary): boolea
  * BambuStudio's `Preset::alias`: the preset name up to the first `@`, right-trimmed.
  *
  * IDENTITY, not display, and that distinction is the whole reason it exists separately. Both
- * formatters below consult `filamentVendor` — one PREPENDS the brand, the other STRIPS it — while
+ * formatters below consult `filamentVendor` (one PREPENDS the brand, the other STRIPS it) while
  * the same preset reaches us with that field populated (an installed profile) or absent (a project
  * preset minted from a 3MF, which records no vendor on the summary). So either formatter used as a
  * comparison key fails to match a preset against ITSELF, and in opposite directions: the branded

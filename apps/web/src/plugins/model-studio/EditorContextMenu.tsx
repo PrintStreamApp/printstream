@@ -113,13 +113,18 @@ export interface EditorContextMenuProps {
   onReplaceFromLibrary?: (key: string) => void
   onReplaceFromFile: (key: string) => void
   /**
-   * Export targets (BambuStudio's "Export as one STL" / "Export as STLs…", plus the
-   * beyond-parity single-object 3MF project export, download or save to library,
-   * which keeps parts/materials/paint). Single selection uses the per-key handlers;
-   * a multi-selection uses the merged pair (whole selection → one STL) plus the
-   * separate pair (one STL per object). Each is present only when the user holds the
-   * matching library permission (download / upload); when none is present the Export
-   * item is hidden.
+   * Export targets (BambuStudio's "Export as one STL" / "Export as STLs…" /
+   * "Export Generic 3MF", plus the beyond-parity single-object 3MF PROJECT export,
+   * download or save to library, which keeps parts/materials/paint). Single selection
+   * uses the per-key handlers; a multi-selection uses the merged pair (whole selection →
+   * one STL) plus the separate pair (one STL per object). Each is present only when the
+   * user holds the matching library permission (download / upload); when none is present
+   * the Export item is hidden.
+   *
+   * The generic-3MF pair has no merged/separate split: the format holds several named solids
+   * in one file, so both selections use the same handler and the whole distinction goes away.
+   * Do not confuse it with the `Project` pair above -- that writes a full Bambu project, this
+   * writes core-spec geometry for a different slicer.
    */
   onExportDownload?: (key: string) => void
   onExportToLibrary?: (key: string) => void
@@ -129,6 +134,8 @@ export interface EditorContextMenuProps {
   onExportMergedToLibrary?: () => void
   onExportSeparateDownload?: () => void
   onExportSeparateToLibrary?: () => void
+  onExportGenericThreeMfDownload?: () => void
+  onExportGenericThreeMfToLibrary?: () => void
   /** Whether "Repair mesh" applies: any model with an identity, including an unsaved import. */
   canRepair: boolean
   /** Mark this object's mesh for repair on save (welds cracked vertices, drops junk facets). */
@@ -192,7 +199,7 @@ export function EditorContextMenu({
   contextMenu, listboxRef, onClose, selectionCount, onDuplicate, onDuplicateIndependent, onCloneWithCount, onFillBedWithCopies, onAlignDistribute, onMakeIndependent, onRename, onSplitToObjects, canAssemble,
   assembleCount, onAssemble, onSplitToParts, onReplaceFromLibrary, onReplaceFromFile, onExportDownload, onExportToLibrary,
   onExportProjectDownload, onExportProjectToLibrary, onExportMergedDownload, onExportMergedToLibrary, onExportSeparateDownload,
-  onExportSeparateToLibrary, canRepair, onRepairMesh,
+  onExportSeparateToLibrary, onExportGenericThreeMfDownload, onExportGenericThreeMfToLibrary, canRepair, onRepairMesh,
   isRepairMarked, onAddPartVolume, onAddPartFromFile, onAddPartFromLibrary,
   filamentOptions, onChangeMaterial, onSetPrintable, printable, onEditObjectSettings, onEditHeightRanges, onEditLayerHeight, onCenterOnPlate,
   onDropToBed, onResetRotation, onResetScale, onMirror, onConvertUnits, onScaleToPrintVolume, otherPlates, onMoveToPlate, onDelete
@@ -344,7 +351,7 @@ export function EditorContextMenu({
       ) : view.kind === 'export' ? (
         multi ? (
           <>
-            <ContextMenuBackItem label={`Export as STL${suffix}`} onBack={() => setView({ kind: 'root' })} />
+            <ContextMenuBackItem label={`Export${suffix}`} onBack={() => setView({ kind: 'root' })} />
             <ListDivider />
             {onExportMergedDownload && (
               <MenuItem onClick={() => { onClose(); onExportMergedDownload() }}>
@@ -368,6 +375,19 @@ export function EditorContextMenu({
               <MenuItem onClick={() => { onClose(); onExportSeparateToLibrary() }}>
                 <ListItemDecorator><LibraryAddRoundedIcon /></ListItemDecorator>
                 Save separate STLs to library…
+              </MenuItem>
+            )}
+            {(onExportGenericThreeMfDownload || onExportGenericThreeMfToLibrary) && <ListDivider />}
+            {onExportGenericThreeMfDownload && (
+              <MenuItem onClick={() => { onClose(); onExportGenericThreeMfDownload() }}>
+                <ListItemDecorator><FileDownloadRoundedIcon /></ListItemDecorator>
+                Download as generic 3MF
+              </MenuItem>
+            )}
+            {onExportGenericThreeMfToLibrary && (
+              <MenuItem onClick={() => { onClose(); onExportGenericThreeMfToLibrary() }}>
+                <ListItemDecorator><LibraryAddRoundedIcon /></ListItemDecorator>
+                Save generic 3MF to library…
               </MenuItem>
             )}
           </>
@@ -399,6 +419,19 @@ export function EditorContextMenu({
                 Save 3MF project to library…
               </MenuItem>
             )}
+            {(onExportGenericThreeMfDownload || onExportGenericThreeMfToLibrary) && <ListDivider />}
+            {onExportGenericThreeMfDownload && (
+              <MenuItem onClick={() => { onClose(); onExportGenericThreeMfDownload() }}>
+                <ListItemDecorator><FileDownloadRoundedIcon /></ListItemDecorator>
+                Download as generic 3MF
+              </MenuItem>
+            )}
+            {onExportGenericThreeMfToLibrary && (
+              <MenuItem onClick={() => { onClose(); onExportGenericThreeMfToLibrary() }}>
+                <ListItemDecorator><LibraryAddRoundedIcon /></ListItemDecorator>
+                Save generic 3MF to library…
+              </MenuItem>
+            )}
           </>
         )
       ) : multi ? (
@@ -420,10 +453,11 @@ export function EditorContextMenu({
               Assemble {assembleCount} objects
             </MenuItem>
           )}
-          {(onExportMergedDownload || onExportMergedToLibrary || onExportSeparateDownload || onExportSeparateToLibrary) && (
+          {(onExportMergedDownload || onExportMergedToLibrary || onExportSeparateDownload || onExportSeparateToLibrary
+            || onExportGenericThreeMfDownload || onExportGenericThreeMfToLibrary) && (
             <MenuItem onClick={(event) => { event.stopPropagation(); setView({ kind: 'export' }) }}>
               <ListItemDecorator><IosShareRoundedIcon /></ListItemDecorator>
-              Export as STL{suffix}…
+              Export{suffix}…
             </MenuItem>
           )}
           <ListDivider />
@@ -501,7 +535,13 @@ export function EditorContextMenu({
             <ListItemDecorator><SwapHorizRoundedIcon /></ListItemDecorator>
             Replace from file…
           </MenuItem>
-          {(onExportDownload || onExportToLibrary || onExportProjectToLibrary) && (
+          {/* Every route the submenu can offer, or the entry hides while rows behind it are live.
+              It listed three of five (missing the project download and both generic-3MF handlers),
+              which is inert only while EditorView gates them all on the same two permissions --
+              the moment one is gated separately the single-object menu loses Export entirely and
+              the multi-object one keeps it, with nothing failing a build. */}
+          {(onExportDownload || onExportToLibrary || onExportProjectDownload || onExportProjectToLibrary
+            || onExportGenericThreeMfDownload || onExportGenericThreeMfToLibrary) && (
             <MenuItem onClick={(event) => { event.stopPropagation(); setView({ kind: 'export' }) }}>
               <ListItemDecorator><IosShareRoundedIcon /></ListItemDecorator>
               Export…

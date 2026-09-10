@@ -13,6 +13,7 @@ import test from 'node:test'
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { STAGED_IMPORT_FORMATS, detectImportFormat, importFormatExtensions } from '@printstream/shared'
 import { importFileAccept } from './editorImportStore'
 import { createApiImportStore } from './editorImports'
 import { createLocalImportStore, LocalImportError } from './localImportStore'
@@ -42,18 +43,43 @@ function enclosingJsxProp(source: string, at: number): string | null {
 
 test('the api store offers every format its server can convert', () => {
   assert.equal(createApiImportStore().supportsLibrarySource, true)
-  assert.equal(importFileAccept(createApiImportStore()), '.stl,.step,.stp,.3mf')
+  assert.equal(importFileAccept(createApiImportStore()), '.stl,.step,.stp,.3mf,.obj,.gltf,.glb,.amf')
 })
 
 test('a server-less store offers the same formats, having no library to import from', () => {
   const store = createLocalImportStore()
-  // The one genuine difference between the hosts: no library. FORMATS are equal now that the 3MF
-  // extraction and the STEP fold are shared and the OCCT WASM loads in the tab, a file must not
-  // import differently depending on which host opened it.
+  // The one genuine difference between the hosts: no library. FORMATS are equal now that every
+  // parse is shared and the OCCT WASM loads in the tab, a file must not import differently
+  // depending on which host opened it.
   assert.equal(store.supportsLibrarySource, false)
   assert.deepEqual([...store.importableFormats].sort(), [...createApiImportStore().importableFormats].sort())
-  assert.equal(importFileAccept(store), '.stl,.step,.stp,.3mf')
+  assert.equal(importFileAccept(store), '.stl,.step,.stp,.3mf,.obj,.gltf,.glb,.amf')
   store.dispose()
+})
+
+test('every extension a picker offers is one `detectImportFormat` recognises', () => {
+  // The failure this replaces the old two hand-kept lists to prevent: an extension in the picker
+  // that the detector does not know is a file the user chooses and the import then refuses, AFTER
+  // the dialog has closed. Both sides now derive from `IMPORT_FORMAT_EXTENSIONS`, and this asserts
+  // the derivation actually round-trips rather than merely that both call the same function.
+  const store = createApiImportStore()
+  for (const extension of importFileAccept(store).split(',')) {
+    const format = detectImportFormat(`model${extension}`)
+    assert.ok(format != null, `${extension} must resolve to a format`)
+    assert.ok(
+      store.importableFormats.includes(format),
+      `${extension} must resolve to a format this store declares`
+    )
+  }
+})
+
+test('an uppercase extension is recognised, since a picker matches case-insensitively', () => {
+  // The `accept` attribute is case-insensitive in every browser, so a file named `MODEL.OBJ` passes
+  // the picker; a case-sensitive detector would then refuse it with "not a model this editor can
+  // import", which reads as an unsupported format rather than as our own bug.
+  assert.equal(detectImportFormat('MODEL.OBJ'), 'obj')
+  assert.equal(detectImportFormat('Scene.GLB'), 'gltf')
+  assert.equal(detectImportFormat('Part.AMF'), 'amf')
 })
 
 test('an unsupported extension is still refused by name', async () => {
@@ -100,6 +126,11 @@ test('the import picker takes its accept list from the store', async () => {
   // Anchored on the closing paren of the memo body: an unanchored prefix match accepted
   // `importFileAccept(importStore) + ',.step,.stp,.3mf'`, which puts the whole bug back.
   assert.match(normalized, /const importAccept = useMemo\(\s*\(\) => importFileAccept\(importStore\),/)
-  const hardcoded = /accept=\{?['"][^'"]*\.(?:stl|step|stp|3mf)/.exec(normalized)
+  // The alternation is DERIVED from the catalogue, not a restatement of three of its members. Left
+  // as `(?:stl|step|stp|3mf)` it stopped covering the formats added since, so reintroducing
+  // `accept=".obj,.gltf,.glb,.amf"` -- the exact bug this test exists to prevent -- matched nothing
+  // and the assertion passed.
+  const extensions = importFormatExtensions(STAGED_IMPORT_FORMATS).map((extension) => extension.slice(1))
+  const hardcoded = new RegExp(`accept=\\{?['"][^'"]*\\.(?:${extensions.join('|')})`).exec(normalized)
   assert.equal(hardcoded, null, 'derive the accept list from the import store, not a literal')
 })

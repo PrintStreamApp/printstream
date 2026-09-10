@@ -12,7 +12,7 @@ set -euo pipefail
 #
 # This is a drop-in, project-agnostic safety net: it auto-discovers every
 # mount under the given roots and chowns any whose top-level owner is wrong.
-# Idempotent — once a volume is correctly owned it's skipped on every later
+# Idempotent: once a volume is correctly owned it's skipped on every later
 # run, so it's cheap to invoke from postCreateCommand on every (re)build.
 #
 # Usage: fix-volume-perms.sh [ROOT ...]
@@ -50,7 +50,7 @@ is_under_root() {
 }
 
 # Field 2 of /proc/mounts is the mountpoint; field 4 is the mount options.
-# Skip read-only mounts (e.g. ~/.ssh:ro) — we can't and shouldn't chown those.
+# Skip read-only mounts (e.g. ~/.ssh:ro). We can't and shouldn't chown those.
 while read -r _ mountpoint _ options _; do
     case ",$options," in *,ro,*) continue ;; esac
     is_under_root "$mountpoint" || continue

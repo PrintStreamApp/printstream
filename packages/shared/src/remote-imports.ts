@@ -1,5 +1,6 @@
 import { z } from 'zod'
-import { classifyLibraryFileKind, isDirectPrintableFileName, libraryFileSchema } from './printer.js'
+import { LIBRARY_FILE_KINDS, classifyLibraryFileKind, isDirectPrintableFileName, isMeshLibraryFileKind, libraryFileSchema } from './printer.js'
+import { IMPORT_FORMAT_LABELS } from './import-formats.js'
 import { workspaceSummarySchema } from './workspaces.js'
 
 export const remoteImportProviderSchema = z.enum([
@@ -27,14 +28,16 @@ export const remoteImportStrategySchema = z.enum([
 
 export type RemoteImportStrategy = z.infer<typeof remoteImportStrategySchema>
 
-export const remoteImportFileTypeSchema = z.enum([
-  'gcode',
-  '3mf',
-  'stl',
-  'step',
-  'archive',
-  'other'
-])
+/**
+ * What a remotely-discovered file is: every library kind, plus `archive`.
+ *
+ * DERIVED from `LIBRARY_FILE_KINDS` because `classifyRemoteImportFileType` returns
+ * `classifyLibraryFileKind`'s answer verbatim -- so a hand-written list here is a list that must be
+ * edited in lockstep with one it already depends on, and adding a library kind without it is a type
+ * error at best and an unclassifiable candidate at worst. `archive` is the one member this axis owns
+ * outright: a `.zip` is nothing to the library but a legitimate thing to import FROM.
+ */
+export const remoteImportFileTypeSchema = z.enum([...LIBRARY_FILE_KINDS, 'archive'])
 
 export type RemoteImportFileType = z.infer<typeof remoteImportFileTypeSchema>
 
@@ -366,7 +369,8 @@ export function classifyRemoteImportFileType(name: string): RemoteImportFileType
 export function classifyRemoteImportPrintableStatus(name: string): RemoteImportPrintableStatus {
   if (isDirectPrintableFileName(name)) return 'printer-ready'
   const fileType = classifyRemoteImportFileType(name)
-  if (fileType === 'stl' || fileType === 'step') return 'needs-slicing'
+  // Every bare mesh needs slicing, by definition: it carries geometry and no toolpaths.
+  if (isMeshLibraryFileKind(fileType)) return 'needs-slicing'
   return 'unknown'
 }
 
@@ -394,8 +398,10 @@ function candidatePriority(candidate: RemoteImportCandidate): number {
   if (lower.endsWith('.gcode')) return 500
   if (candidate.fileType === '3mf' && candidate.printableStatus === 'printer-ready') return 450
   if (candidate.fileType === '3mf') return 400
+  // Meshes rank below any 3MF (which may already be sliced) and above an archive (which may hold
+  // anything). STL keeps its own rung above the rest only because it is the one every tool writes.
   if (candidate.fileType === 'stl') return 300
-  if (candidate.fileType === 'step') return 250
+  if (isMeshLibraryFileKind(candidate.fileType)) return 250
   if (candidate.fileType === 'archive') return 100
   return 0
 }
@@ -411,7 +417,11 @@ function describeRemoteImportCandidate(
   if (fileType === '3mf' && printableStatus === 'printer-ready') return 'Verified printer-ready 3MF can be sent directly to a printer.'
   if (fileType === '3mf') return '3MF imports to the library; direct printing requires verification that it contains sliced G-code.'
   if (fileType === 'stl') return 'Mesh files import to the library and require slicing before printing.'
-  if (fileType === 'step') return 'STEP files import to the library and require slicing before printing.'
+  // Named per format rather than "Mesh files", because the reason a user is reading this line is to
+  // decide whether the candidate is the one they want, and the format is the distinguishing fact.
+  if (isMeshLibraryFileKind(fileType)) {
+    return `${IMPORT_FORMAT_LABELS[fileType]} files import to the library and require slicing before printing.`
+  }
   if (fileType === 'archive') return 'Archive files are fallback imports and may need manual extraction or slicing.'
   return 'Unsupported file type.'
 }

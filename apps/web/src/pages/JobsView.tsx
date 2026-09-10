@@ -64,6 +64,7 @@ import { useAuthBootstrapQuery } from '../lib/authQuery'
 import { buildApiUrl } from '../lib/apiUrl'
 import { formatLibraryFileName } from '../lib/libraryDisplay'
 import { formatPrinterJobDisplayName } from '../lib/printerJobName'
+import { buildPrintPauseMarkerView } from '../lib/printPauseMarkers'
 import { formatSecondaryStageLabel } from '../lib/printerProgressSummary'
 import { capitalize } from '../lib/printersViewHelpers'
 import {
@@ -97,6 +98,11 @@ interface LiveJob {
   printerModel: Printer['model'] | null
   jobName: string
   projectFilamentChips: PrintJob['projectFilamentChips']
+  /**
+   * Fallback pause markers from the tracked job's dispatched file, for printers that report
+   * none themselves. Null for a print nobody started from here, which has no tracked row.
+   */
+  pauseSchedule: PrintJob['pauseSchedule']
   startedAt: string | null
   stage: PrinterStatus['stage']
   progressPercent: number | null
@@ -417,6 +423,7 @@ export function JobsView() {
           printerModel: printersById.get(printerId)?.model ?? null,
           jobName: status?.jobName ?? persistedJob?.jobName ?? 'Active print',
           projectFilamentChips: persistedJob?.projectFilamentChips ?? [],
+          pauseSchedule: persistedJob?.pauseSchedule ?? null,
           startedAt: persistedJob?.startedAt ?? null,
           stage: isVisibleActiveStatus(status) ? status.stage : 'preparing',
           progressPercent: status?.progressPercent ?? persistedJob?.progressPercent ?? null,
@@ -1197,6 +1204,24 @@ function ActiveJobCard({ job, canViewCamera, workspaceSlug }: { job: LiveJob; ca
     waitingForPrinterStart,
     pendingStartWarning
   })
+  // A job still waiting for the printer to pick it up has no position on the bar yet, so there is
+  // nowhere honest to put a mark. Keyed on the individual FIELDS rather than on `job.status`,
+  // which is a fresh object several times a second; see the same note in `PrinterCard`.
+  const pausePreview = useMemo(
+    () => (waitingForPrinterStart
+      ? { markers: [], readout: null }
+      : buildPrintPauseMarkerView(job.status ?? undefined, job)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- see above: fields, not the object.
+    [
+      waitingForPrinterStart,
+      job.pauseSchedule,
+      job.status?.pauseSchedule,
+      job.status?.currentLayer,
+      job.status?.remainingMinutes,
+      job.status?.totalLayers,
+      job.status?.stage
+    ]
+  )
   const activeCoverTaskQuery = job.status?.taskId ? `&task=${encodeURIComponent(job.status.taskId)}` : ''
   const coverRequestUrl = job.status?.jobName
     ? buildApiUrl(`/api/printers/${job.printerId}/cover?job=${encodeURIComponent(job.status.jobName)}&gcode=${encodeURIComponent(job.status.gcodeFile ?? '')}${activeCoverTaskQuery}`)
@@ -1284,13 +1309,23 @@ function ActiveJobCard({ job, canViewCamera, workspaceSlug }: { job: LiveJob; ca
                   </Typography>
                 ) : undefined}
                 value={job.progressPercent}
+                markers={pausePreview.markers}
                 color={waitingForPrinterStart ? (pendingStartWarning ? 'warning' : 'success') : progressBarColor(livePrinterStatus)}
                 fillColor={waitingForPrinterStart ? undefined : progressBarFill(livePrinterStatus)}
                 trackColor={waitingForPrinterStart ? undefined : progressBarTrack(livePrinterStatus)}
-                afterProgress={secondaryStageLabel ? (
-                  <Typography level="body-xs" textColor={secondaryStageTextColor(livePrinterStatus)} sx={{ minWidth: 0, whiteSpace: { xs: 'normal', sm: 'nowrap' }, overflowWrap: 'anywhere' }}>
-                    {secondaryStageLabel}
-                  </Typography>
+                afterProgress={secondaryStageLabel || pausePreview.readout ? (
+                  <>
+                    {secondaryStageLabel ? (
+                      <Typography level="body-xs" textColor={secondaryStageTextColor(livePrinterStatus)} sx={{ minWidth: 0, whiteSpace: { xs: 'normal', sm: 'nowrap' }, overflowWrap: 'anywhere' }}>
+                        {secondaryStageLabel}
+                      </Typography>
+                    ) : null}
+                    {pausePreview.readout ? (
+                      <Typography level="body-xs" textColor="text.tertiary" sx={{ minWidth: 0, whiteSpace: { xs: 'normal', sm: 'nowrap' }, overflowWrap: 'anywhere' }}>
+                        {pausePreview.readout}
+                      </Typography>
+                    ) : null}
+                  </>
                 ) : undefined}
                 footer={secondaryStageLabel ? undefined : (
                   <Stack

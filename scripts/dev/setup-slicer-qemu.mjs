@@ -8,7 +8,7 @@
  * and runs the bundled BambuStudio CLI under qemu-user:
  *
  *   1. Build an x86-64 glibc sysroot (<data>/x86root) via the shared builder
- *      apps/slicer/docker/build-x86-sysroot.mjs — the same closure baked into the arm64
+ *      apps/slicer/docker/build-x86-sysroot.mjs: the same closure baked into the arm64
  *      production image, so dev and prod emulate against an identical sysroot.
  *   2. Download + extract the default BambuStudio AppImage and flatten its profiles (shared with
  *      the x86 path via generate-bambustudio-full-profiles.mjs).
@@ -21,7 +21,7 @@
  * everything heavy this script produces lands in the persistent slicer data volume, so it only
  * runs the downloads once. Every step is idempotent (skips populated outputs) and the wrapper +
  * targets manifest are rewritten on each run, so an existing data volume self-heals after a
- * launcher/target change. On x86 this is never invoked — scripts/dev/setup-slicer.mjs uses the
+ * launcher/target change. On x86 this is never invoked: scripts/dev/setup-slicer.mjs uses the
  * native AppImage path there.
  *
  * Invoked by scripts/dev/run-dev.mjs on arm64. The slicer service then reads
@@ -30,7 +30,7 @@
  * Installs EVERY engine in apps/slicer/docker/slicer-targets.mjs by default, so version-specific
  * behaviour is reproducible locally without re-provisioning (e.g. a project saved by a newer Bambu
  * Studio, which the default engine refuses outright). Each engine is a few hundred MB of download +
- * profile flattening, paid once — the step is idempotent and skips anything already extracted. Set
+ * profile flattening, paid once: the step is idempotent and skips anything already extracted. Set
  * PRINTSTREAM_DEV_SLICER_TARGETS=default for just the stable default, or a comma-separated list of
  * ids, when a faster first run matters.
  */
@@ -55,7 +55,7 @@ const TARGETS_FILE = path.join(INSTALL_ROOT, 'targets.json')
 // repo mount.
 const CLI_WRAPPER_SRC = path.join(repoRoot, 'apps/slicer/docker/bambu-studio-cli.sh')
 const CLI_WRAPPER = path.join(DATA_ROOT, 'bambu-studio-cli.sh')
-// The launcher's offscreen-GL preload (plate thumbnail rendering) lives NEXT TO the wrapper —
+// The launcher's offscreen-GL preload (plate thumbnail rendering) lives NEXT TO the wrapper:
 // that is its default lookup. The CLI is x86-64 even on this arm64 host, so the shim always
 // compiles with the cross toolchain.
 const GL_SHIM_SRC = path.join(repoRoot, 'apps/slicer/docker/gl-osmesa-shim.c')
@@ -79,8 +79,8 @@ if (!defaultTarget) {
 }
 
 // Dev installs EVERY bundled engine by default, so any version-specific behaviour is reproducible
-// locally without re-provisioning — notably a project saved by a newer Bambu Studio, which the
-// default engine refuses outright. The cost is paid once: each AppImage is a few hundred MB to
+// locally without re-provisioning (notably a project saved by a newer Bambu Studio, which the
+// default engine refuses outright). The cost is paid once: each AppImage is a few hundred MB to
 // download, extract and flatten profiles for. Narrow it with
 // PRINTSTREAM_DEV_SLICER_TARGETS=default (just the stable default) or a comma-separated list of
 // ids for a faster first run.

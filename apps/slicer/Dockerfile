@@ -1,5 +1,5 @@
 # NODE_VERSION mirrors the root Dockerfile / DEFAULT_NODE_VERSION in
-# packages/sea-runtime/scripts/build-harness.mjs — one Node across every
+# packages/sea-runtime/scripts/build-harness.mjs: one Node across every
 # distribution, bumped deliberately (see the root Dockerfile's note).
 # Trixie (not bookworm) because the bundled BambuStudio CLI needs glibc 2.38.
 ARG NODE_VERSION=22.22.3
@@ -23,7 +23,7 @@ RUN npm install --include-workspace-root --workspace @printstream/slicer --works
 RUN npm run build --workspace @printstream/shared && npm run build --workspace @printstream/slicer
 
 # Build an x86-64 sysroot for the arm64 image. BambuStudio is x86-only, so on arm64
-# the slicer runs the same x86-64 CLI under qemu-user (mirroring the dev arm64 path) —
+# the slicer runs the same x86-64 CLI under qemu-user (mirroring the dev arm64 path):
 # the sysroot supplies the x86-64 loader + GTK/WebKit/Mesa libs the AppImage does not
 # bundle. On amd64 this stage produces an empty dir (the runtime installs native libs),
 # so the `COPY --from` below is a harmless no-op there. TARGETARCH is set by buildx.
@@ -66,7 +66,7 @@ ARG TARGETARCH
 # amd64: install the native GTK/WebKit/Mesa closure BambuStudio links (the AppImage does
 # not bundle it). arm64: the x86-64 CLI runs under qemu-user against the baked sysroot, so
 # install the emulator + the native tools (gosu/weston) only; the x86-64 libs come from
-# the sysroot copied in below. `weston` (native on both arches — Wayland is a socket
+# the sysroot copied in below. `weston` (native on both arches: Wayland is a socket
 # protocol, so an arm64 compositor serves the emulated x86-64 client) and amd64's
 # `libosmesa6` are the launcher's offscreen-GL pieces for plate thumbnail rendering; see
 # bambu-studio-cli.sh. No X server: the CLI never initialises GTK in CLI mode, and the
@@ -127,7 +127,7 @@ COPY apps/slicer/docker/slicer-targets.mjs apps/slicer/docker/slicer-targets.mjs
 COPY apps/slicer/docker/engine-assets.mjs apps/slicer/docker/engine-assets.mjs
 COPY apps/slicer/docker/generate-bambustudio-full-profiles.mjs apps/slicer/docker/generate-bambustudio-full-profiles.mjs
 # Engines are NOT baked in. They are downloaded by the same installer the native
-# app uses, into SLICER_TARGETS_FILE's directory — a bind mount, so the operator
+# app uses, into SLICER_TARGETS_FILE's directory: a bind mount, so the operator
 # chooses which disk carries them and a removal survives a container recreate.
 # Baking them cost 4 GB of image for a set the operator could not change: install
 # was impossible (it demanded a runtime closure this image neither ships nor
@@ -138,7 +138,7 @@ RUN mkdir -p /data/engines && chown -R node:node /data/engines
 COPY apps/slicer/docker/bambu-studio-cli.sh /usr/local/bin/bambu-studio-cli
 COPY apps/slicer/docker/bambu-studio-cli.sh /usr/local/bin/slicer-cli
 RUN chmod +x /usr/local/bin/bambu-studio-cli /usr/local/bin/slicer-cli
-# Next to the launcher — its default shim lookup is "beside this script" (SLICER_GL_SHIM
+# Next to the launcher: its default shim lookup is "beside this script" (SLICER_GL_SHIM
 # overrides). Always x86-64, matching the CLI, on both image arches.
 COPY --from=glshim /tmp/gl-osmesa-shim.so /usr/local/bin/gl-osmesa-shim.so
 COPY apps/slicer/docker/entrypoint.sh /usr/local/bin/slicer-entrypoint.sh
@@ -157,12 +157,12 @@ RUN mkdir -p /work && chown node:node /work
 WORKDIR /app/apps/slicer
 EXPOSE 4010
 # Drop privileges: the slicer runs a large third-party native binary (BambuStudio)
-# over arbitrary user-supplied 3MF geometry — the highest-risk untrusted-input
+# over arbitrary user-supplied 3MF geometry, the highest-risk untrusted-input
 # surface in the stack. The AppImage is extracted at build time and run directly
 # (no FUSE needed at runtime), and work/home dirs live under /work (or /tmp), so
 # the CLI runs fine unprivileged. `node` (uid 1000) ships with the base image.
 # The container STARTS as root so the entrypoint can fix a stale root-owned work
-# volume, then drops to `node` via gosu before exec'ing the CMD — so the slicer
+# volume, then drops to `node` via gosu before exec'ing the CMD, so the slicer
 # itself never runs as root.
 ENTRYPOINT ["/usr/local/bin/slicer-entrypoint.sh"]
 CMD ["node", "dist/main.js"]

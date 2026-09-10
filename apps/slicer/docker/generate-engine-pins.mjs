@@ -10,7 +10,7 @@
  *
  * The asset FILENAMES carry a build timestamp that cannot be derived from the
  * version (`Bambu_Studio_win-v02.07.01.62-20260616174358.zip`), so they are read
- * from the GitHub release rather than constructed — the same trap the
+ * from the GitHub release rather than constructed, the same trap the
  * `slicer-targets.mjs` header warns about for `downloadUrl`.
  *
  * Prints a ready-to-paste `ENGINE_ASSETS` block. It does not edit the table
@@ -57,12 +57,12 @@ async function hashUrl(url) {
  *
  * **Linux keeps whatever `slicer-targets.mjs` already points at.** Releases ship
  * several AppImages differing only in Ubuntu base, and the base sets the glibc
- * floor — 2.6.0.51 is pinned to ubuntu-22.04, and silently "upgrading" it to
+ * floor: 2.6.0.51 is pinned to ubuntu-22.04, and silently "upgrading" it to
  * 24.04 while recording a checksum would change what every existing install runs
  * under cover of a pinning change. Recording a pin must not re-decide the
  * artifact.
  *
- * Windows has no existing pin to preserve, so it takes the portable zip — never
+ * Windows has no existing pin to preserve, so it takes the portable zip, never
  * the installer .exe. The zip needs no elevation and no registry, and unpacks
  * with the yauzl already in the tree.
  */

@@ -5,6 +5,7 @@ import DevicesRoundedIcon from '@mui/icons-material/DevicesRounded'
 import ErrorOutlineRoundedIcon from '@mui/icons-material/ErrorOutlineRounded'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import ManageAccountsRoundedIcon from '@mui/icons-material/ManageAccountsRounded'
+import NotificationsRoundedIcon from '@mui/icons-material/NotificationsRounded'
 import ShieldRoundedIcon from '@mui/icons-material/ShieldRounded'
 import WarningAmberRoundedIcon from '@mui/icons-material/WarningAmberRounded'
 import { Alert, Box, Button, Card, CardContent, FormControl, FormLabel, Input, Stack, Typography } from '@mui/joy'
@@ -25,7 +26,9 @@ import { isPlatformWorkspacePath } from '../lib/workspaceRoute'
 import { PageSectionHeading, pageSectionStackSpacing } from '../components/dashboard/PageSectionHeading'
 import { SectionNav, type SectionNavEntry } from '../components/dashboard/SectionNav'
 import { mobileSectionNavReserveSpace, sectionScrollMarginTop } from '../components/dashboard/SectionNav.constants'
+import { PluginSlot } from '../plugin/PluginSlot'
 import { StaticPluginSlot } from '../plugin/StaticPluginSlot'
+import { usePluginSlots } from '../plugin/usePluginSlots'
 import { AccountDestinationCard } from './AccountDestinationCard'
 import {
   accountSlotHasContent,
@@ -176,6 +179,19 @@ export function CurrentAccountPanel({
   const normalizedDisplayName = profileDisplayName.trim() ? profileDisplayName.trim() : null
   const hasProfileChanges = currentProfile != null && normalizedDisplayName !== currentProfile.displayName
   const showsAccountSecuritySection = isAuthenticatedUser && hasEnabledAuthProvider
+  // Personal notification delivery (this browser, my inbox) belongs to the
+  // account, not to workspace settings: it is per-actor, per-device state that
+  // every member owns, and Settings is admin-only. Ask the slot first so an
+  // install with no notification plugins gets no empty heading.
+  //
+  // Catalog-AWARE (`usePluginSlots`), unlike the `account.security` slot below
+  // it, and deliberately: security uses the static registry because auth
+  // surfaces have to render before plugin-catalog state exists, whereas a
+  // channel card for a DISABLED plugin would offer a control whose API is not
+  // mounted. The cost is that this section and its nav entry appear once the
+  // catalog resolves; showing a dead card sooner is the worse trade.
+  const accountNotificationSlots = usePluginSlots('account.notifications')
+  const showsAccountNotificationsSection = isAuthenticatedUser && accountNotificationSlots.length > 0
   const accountHeadingTitle = isAuthenticatedUser
     ? 'User account'
     : actorType === 'service-account'
@@ -196,13 +212,17 @@ export function CurrentAccountPanel({
       { id: 'profile', label: 'Profile' }
     ]
 
+    if (showsAccountNotificationsSection) {
+      nextSections.push({ id: 'notifications', label: 'Notifications' })
+    }
+
     if (showsAccountSecuritySection) {
       nextSections.push({ id: 'security', label: 'Security' })
     }
 
     nextSections.push({ id: 'sessions', label: 'Sessions' })
     return nextSections
-  }, [isAuthenticatedUser, showSectionNav, showsAccountSecuritySection])
+  }, [isAuthenticatedUser, showSectionNav, showsAccountNotificationsSection, showsAccountSecuritySection])
 
   async function handleProfileSave() {
     if (!currentProfile) {
@@ -403,6 +423,20 @@ export function CurrentAccountPanel({
               </Stack>
             </CardContent>
           </Card>
+          </Stack>
+        </Box>
+      )}
+
+      {showsAccountNotificationsSection && (
+        <Box id="notifications" sx={{ scrollMarginTop: sectionScrollMarginTop }}>
+          <Stack spacing={1.25}>
+            <PageSectionHeading
+              icon={<NotificationsRoundedIcon />}
+              title="Notifications"
+              description="Choose how alerts reach you personally. Shared destinations, such as a team chat channel, are configured per workspace by an admin."
+            />
+
+            <PluginSlot name="account.notifications" />
           </Stack>
         </Box>
       )}

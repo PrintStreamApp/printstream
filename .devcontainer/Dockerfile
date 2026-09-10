@@ -1,9 +1,13 @@
-# Debian Trixie (glibc 2.38), pinned — NOT the floating `1-20-bookworm` (glibc 2.36): the
+# Debian Trixie (glibc 2.38), pinned, NOT a floating bookworm tag (glibc 2.36): the
 # in-workspace slicer (PRINTSTREAM_DEV_SLICER=workspace) runs the bundled BambuStudio CLI, and the
 # pinned 2.7.x build needs glibc 2.38 / GLIBCXX_3.4.32. This matches the slicer image's own
 # `node:22-trixie` base, so the runtime libs installed below line up with that proven setup.
-# (MCR has no floating `1-20-trixie` alias yet, hence the explicit version pin.)
-FROM mcr.microsoft.com/devcontainers/typescript-node:4.0.6-20-trixie
+#
+# Node 22 to match what actually SHIPS: the production images and the SEA builds pin 22.22.3
+# (DEFAULT_NODE_VERSION in packages/sea-runtime/scripts/build-harness.mjs), and CI runs the whole
+# suite inside THIS image, so a 20 here meant every test the project has ever run ran two majors
+# behind production. The comment above already claimed it matched the slicer's node:22 base.
+FROM mcr.microsoft.com/devcontainers/typescript-node:4.0.6-22-trixie
 
 ARG DEBIAN_FRONTEND=noninteractive
 
@@ -23,7 +27,7 @@ RUN set -eux; \
       less \
       nsis \
       # PGDG 16 client, not the distro's: pg_dump's major must MATCH the
-      # devcontainer db service (postgres:16) — the server-backup system
+      # devcontainer db service (postgres:16). The server-backup system
       # refuses a mismatched dump because it cannot restore (a newer pg_dump
       # writes SET statements the older server rejects). Keep in lockstep
       # with .devcontainer/compose.yml's db image.
@@ -50,7 +54,7 @@ RUN set -eux; \
 
 # Runtime libraries for the in-workspace slicer (opt-in: PRINTSTREAM_DEV_SLICER=workspace).
 # Mirrors the runtime stage of apps/slicer/Dockerfile so the BambuStudio CLI can run here.
-# amd64-only: BambuStudio is x86, and the symlinks below are x86 paths — on arm64 we skip this
+# amd64-only: BambuStudio is x86, and the symlinks below are x86 paths. On arm64 we skip this
 # (those devs run dev against a remote x86 slicer). Keeping it gated avoids bloating arm64 images.
 RUN set -eux; \
     if [ "$(dpkg --print-architecture)" = "amd64" ]; then \
@@ -69,9 +73,9 @@ RUN set -eux; \
 # under qemu-user emulation (scripts/dev/setup-slicer-qemu.mjs builds the x86-64 sysroot into the
 # slicer data volume on first `npm run dev`). Bake the emulator here so it survives rebuilds;
 # the x86-64 GTK/WebKit/Mesa runtime is supplied by the sysroot, not this image.
-# The x86-64 cross compiler builds the launcher's offscreen-GL preload (gl-osmesa-shim.c) —
+# The x86-64 cross compiler builds the launcher's offscreen-GL preload (gl-osmesa-shim.c):
 # the CLI is x86-64 even here, so the shim must be too; weston comes from the common list above.
-# (No Xvfb: the CLI needs no X server — see bambu-studio-cli.sh.)
+# (No Xvfb: the CLI needs no X server; see bambu-studio-cli.sh.)
 RUN set -eux; \
     if [ "$(dpkg --print-architecture)" = "arm64" ]; then \
       apt-get update; \
@@ -85,7 +89,7 @@ RUN set -eux; \
 # mounts a named volume at the SUB-path .vscode-server/extensions, so Docker
 # auto-creates the parent .vscode-server as root. VS Code then installs its
 # server (mkdir .vscode-server/bin) *before* postCreate runs, so a postCreate
-# chown is too late — it fails with "permission denied". Creating the parent
+# chown is too late: it fails with "permission denied". Creating the parent
 # (and the extensions mountpoint) node-owned here makes the bin install work
 # and lets the fresh volume initialize with node ownership. Do not fold this
 # back into the generic volume-perms script.

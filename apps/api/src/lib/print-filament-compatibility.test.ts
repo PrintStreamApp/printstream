@@ -453,3 +453,93 @@ test('the low-filament refusal is distinguishable from a genuine blocker', async
     (error: unknown) => error instanceof Error && !(error instanceof InsufficientFilamentError)
   )
 })
+
+/**
+ * Filament blacklist (issue #94). BambuStudio refuses a prohibited material outright; we make it
+ * overridable because the rules key on a nozzle flow/diameter we decode rather than are told, and a
+ * misread nozzle must not make a correct setup un-printable. Warnings never block either way.
+ */
+/** A plate whose filament IS the TPU under test, so only the blacklist can object to it. */
+function tpuIndex(): ThreeMfIndex {
+  return buildIndex({ filaments: [{ id: 1, filamentType: 'TPU' }] })
+}
+
+test('a material Bambu prohibits on this hardware blocks dispatch', async () => {
+  // TPU through an AMS is BambuStudio's oldest prohibition, and keys on nothing we could misread.
+  await assert.rejects(
+    assertLibraryPrintCompatibilityForIndex(tpuIndex(), {
+      ...SCOPE,
+      plate: 1,
+      printerModel: 'P1S',
+      printerStatus: buildStatus({ amsFilamentType: 'TPU' }),
+      amsMapping: [0]
+    }),
+    /AMS A Slot 1: TPU is not supported by AMS/
+  )
+})
+
+test('allowBlacklistedFilament overrides the prohibition, and nothing else does', async () => {
+  const input = {
+    ...SCOPE,
+    plate: 1,
+    printerModel: 'P1S' as const,
+    printerStatus: buildStatus({ amsFilamentType: 'TPU' }),
+    amsMapping: [0]
+  }
+
+  await assert.doesNotReject(assertLibraryPrintCompatibilityForIndex(tpuIndex(), {
+    ...input,
+    allowBlacklistedFilament: true
+  }))
+
+  // The tray-assignment consent is a different judgement and must not wave this through: it says
+  // "these are the right materials for the file", not "I accept damaging the printer".
+  await assert.rejects(
+    assertLibraryPrintCompatibilityForIndex(tpuIndex(), { ...input, allowIncompatibleFilament: true }),
+    /TPU is not supported by AMS/
+  )
+})
+
+test('a blacklist WARNING never blocks dispatch', async () => {
+  // PVA in an AMS is a warning ("dry it before use"), not a prohibition. The dialog shows it; the
+  // guard must not refuse on it, or ordinary support-material prints would stop working.
+  await assert.doesNotReject(assertLibraryPrintCompatibilityForIndex(
+    buildIndex({ filaments: [{ id: 1, filamentType: 'PVA' }] }),
+    {
+      ...SCOPE,
+      plate: 1,
+      printerModel: 'P1S',
+      printerStatus: buildStatus({ amsFilamentType: 'PVA' }),
+      amsMapping: [0]
+    }
+  ))
+})
+
+test('an unmapped tray is not graded, however bad the material in it is', async () => {
+  // The guard checks the trays this print will USE. A TPU spool sitting in an unmapped slot is not
+  // this print's problem, and refusing over it would be a refusal the dialog never showed.
+  await assert.doesNotReject(assertLibraryPrintCompatibilityForIndex(tpuIndex(), {
+    ...SCOPE,
+    plate: 1,
+    printerModel: 'P1S',
+    printerStatus: buildStatus({ amsFilamentType: 'TPU' }),
+    amsMapping: []
+  }))
+})
+
+test('the printer-storage path enforces the blacklist too', async () => {
+  // Same rules, different source: printing a file already on the printer's SD card still puts the
+  // same material through the same hardware.
+  await assert.rejects(
+    assertAutomaticPrintCompatibility({
+      ...SCOPE,
+      index: null,
+      plate: 1,
+      printerModel: 'P1S',
+      printerStatus: buildStatus({ amsFilamentType: 'TPU' }),
+      useAms: true,
+      amsMapping: [0]
+    }),
+    /TPU is not supported by AMS/
+  )
+})

@@ -6,7 +6,7 @@ import { test } from 'node:test'
 import express from 'express'
 import type { AddressInfo } from 'node:net'
 import type { Server } from 'node:http'
-import { LIBRARY_UPLOAD_PERMISSION } from '@printstream/shared'
+import { LIBRARY_UPLOAD_PERMISSION, MESH_LIBRARY_FILE_KINDS } from '@printstream/shared'
 import type { RequestAuthContext } from '../../lib/auth-context.js'
 import { HttpError } from '../../lib/http-error.js'
 import type { persistLibraryFileFromLocalPath } from '../../lib/library-files.js'
@@ -329,8 +329,14 @@ test('remote imports expose provider capabilities', async () => {
     assert.deepEqual(body.providers.map((provider: { id: string }) => provider.id), ['printables', 'makerworld', 'generic'])
     assert.equal(body.libraryFolderName, 'Imported models')
     assert.equal(body.directPrintFileTypes.includes('gcode'), true)
-    // What the guard actually accepts, so the advertisement cannot drift from it.
-    assert.deepEqual(body.importFileTypes, ['3mf', 'gcode', 'stl', 'step'])
+    // What the guard actually accepts, so the advertisement cannot drift from it. Asserted as a
+    // RULE rather than a roster: the list is projects, G-code and every bare mesh, and spelling the
+    // members out here just means a format added to the catalogue fails this test for no reason
+    // while the genuine drift -- guard and advertisement disagreeing -- goes unchecked.
+    assert.deepEqual(body.importFileTypes, ['3mf', 'gcode', ...MESH_LIBRARY_FILE_KINDS])
+    for (const kind of MESH_LIBRARY_FILE_KINDS) {
+      assert.ok(body.importFileTypes.includes(kind), `${kind} must be advertised as importable`)
+    }
   })
 })
 

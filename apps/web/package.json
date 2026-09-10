@@ -7,7 +7,6 @@
     "build": "vite build",
     "predev": "npm run build --workspace @printstream/shared",
     "dev": "vite",
-    "preview": "vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
@@ -15,11 +14,11 @@
     "@emotion/styled": "^11.14.0",
     "@fontsource/ibm-plex-sans": "^5.2.8",
     "@fontsource/space-grotesk": "^5.2.10",
-    "@mui/icons-material": "^9.0.0",
+    "@mui/icons-material": "^9.4.0",
     "@mui/joy": "^5.0.0-beta.52",
-    "@mui/material": "^9.0.1",
-    "@mui/system": "^9.0.1",
-    "@mui/x-charts": "^9.2.0",
+    "@mui/material": "^9.4.0",
+    "@mui/system": "^9.4.0",
+    "@mui/x-charts": "^9.13.0",
     "@printstream/shared": "0.1.0",
     "@simplewebauthn/browser": "^13.3.0",
     "@tanstack/react-query": "^5.59.0",

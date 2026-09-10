@@ -252,6 +252,7 @@ function makePrintInput(): PrintFromLibrary {
     allowPlateTypeMismatch: false,
     allowFilamentTrackSwitchMismatch: false,
     allowInsufficientFilament: false,
+    allowBlacklistedFilament: false,
     currentPlateType: null,
     currentNozzleDiameters: [],
     plate: 1
@@ -290,3 +291,30 @@ function makeJob(): PrintDispatchJob {
     cancelRequested: false
   }
 }
+
+/**
+ * Every `allow*` consent the wire accepts must reach the compatibility guard.
+ *
+ * `assertLibraryPrintSourceReady` projects the input field by field, so a flag added to
+ * `printFromLibrarySchema` but not to that projection reaches the guard as `undefined` and the
+ * dialog's confirmation becomes inert: the user ticks the box and still gets a 409 they cannot get
+ * past. That happened to `allowBlacklistedFilament`, and it typechecked perfectly, because the
+ * target field is optional. This reads the source rather than exercising a dispatch because the
+ * omission is invisible at runtime unless the specific guard it feeds happens to fire.
+ */
+test('every consent flag on the wire is forwarded to the compatibility guard', async () => {
+  const { readFile } = await import('node:fs/promises')
+  const { fileURLToPath } = await import('node:url')
+  const { printFromLibrarySchema } = await import('@printstream/shared')
+
+  const source = await readFile(fileURLToPath(new URL('./library-printing.ts', import.meta.url)), 'utf8')
+  const consentFlags = Object.keys(printFromLibrarySchema.shape).filter((key) => key.startsWith('allow'))
+  assert.ok(consentFlags.length >= 5, 'expected the schema to carry the consent flags')
+
+  for (const flag of consentFlags) {
+    assert.ok(
+      source.includes(`${flag}: input.${flag}`),
+      `library-printing.ts must forward ${flag} to assertLibraryPrintCompatibilityForIndex`
+    )
+  }
+})

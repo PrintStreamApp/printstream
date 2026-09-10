@@ -23,22 +23,34 @@
 /// <reference lib="webworker" />
 import { unzipSync } from 'fflate'
 import {
+  MAX_AMF_SOURCE_BYTES,
+  ModelImportError,
   ThreeMfImportError,
   extractThreeMfImportMesh,
+  isZippedAmf,
   meshToBinaryStl,
+  parseAmfMesh,
+  parseGltfMesh,
+  parseObjMesh,
   parseStlMesh,
   rebaseImportedMesh,
   stepMeshFromOcctResult,
   type ImportedMesh
 } from '@printstream/shared/three-mf'
-import type { ImportNormalization } from '@printstream/shared'
+import type { ImportNormalization, StagedImportFormat } from '@printstream/shared'
 import { ThreeMfArchiveError, assertThreeMfSizeWithinLimit, threeMfArchiveFromEntries } from './threeMfArchive'
+import { readZippedAmfDocument } from './localAmfImport'
 import { threeMfArchiveImportSource } from './localThreeMfImport'
 import { loadOcctReader } from './occtLoader'
 
 export interface ImportStagingRequest {
   id: number
-  format: 'stl' | 'step' | '3mf'
+  /**
+   * `StagedImportFormat`, not a local union. It was written out by hand here, so the worker's idea
+   * of the format set and the catalogue's were two lists -- and a format missing from this one is
+   * accepted by the picker, posted to the worker, and falls off the end of the parse dispatch.
+   */
+  format: StagedImportFormat
   /** Whether the staged geometry is a whole OBJECT (normalised to the editor pivot) or a PART. */
   normalize: ImportNormalization
   buffer: ArrayBuffer
@@ -63,27 +75,56 @@ export type ImportStagingResponse =
 const ctx = self as unknown as DedicatedWorkerGlobalScope
 
 /**
- * Errors that describe the FILE rather than the runtime. `ThreeMfImportError` and
- * `ThreeMfArchiveError` are the vetted user-facing refusals; the rest are thrown by the shared
- * parsers for input they cannot use, and re-running any of them on the main thread would only
- * produce the same message a second time.
+ * Errors that describe the FILE rather than the runtime, so the client reports them instead of
+ * re-running the parse on the main thread (which would freeze the tab to reach an identical error).
+ *
+ * ASKED BY TYPE, not by message. Every refusal our own parsers raise is a `ModelImportError`,
+ * `ThreeMfImportError` or `ThreeMfArchiveError`, so this cannot fall behind them. It used to match
+ * a list of message substrings, which was a contract nobody could see and which was already wrong
+ * in both directions: a parser refusal whose wording was not listed got misclassified, and errors
+ * the parsers did NOT raise (`atob`'s `DOMException` on a malformed base64 buffer, which in a
+ * browser is not even `instanceof Error`) escaped entirely. Those now surface as `ModelImportError`
+ * at the point they are raised.
+ *
+ * The pattern survives for the one thing we do not throw ourselves: the OpenCASCADE WASM's own
+ * failures on a malformed STEP.
  */
 function isDataError(error: unknown): boolean {
-  if (error instanceof ThreeMfImportError || error instanceof ThreeMfArchiveError) return true
+  if (error instanceof ModelImportError || error instanceof ThreeMfImportError || error instanceof ThreeMfArchiveError) {
+    return true
+  }
   if (!(error instanceof Error)) return false
-  return /too large to import|contained no triangles|could not be tessellated|produced no geometry|invalid zip|not a zip/i
-    .test(error.message)
+  return /could not be tessellated|produced no geometry|too large to import/i.test(error.message)
 }
 
+/**
+ * Exhaustive over `StagedImportFormat` by construction: no `default` branch, so a format added to
+ * the shared catalogue without a parse here fails the typecheck rather than reaching a user as a
+ * file the picker offered and the worker then returned nothing for.
+ */
 async function parseImportMesh(format: ImportStagingRequest['format'], bytes: Uint8Array): Promise<ImportedMesh> {
-  if (format === 'stl') return parseStlMesh(bytes)
-  if (format === '3mf') {
-    assertThreeMfSizeWithinLimit(bytes.byteLength)
-    const archive = threeMfArchiveFromEntries(unzipSync(bytes))
-    return await extractThreeMfImportMesh(threeMfArchiveImportSource(archive))
+  switch (format) {
+    case 'stl':
+      return parseStlMesh(bytes)
+    case '3mf': {
+      assertThreeMfSizeWithinLimit(bytes.byteLength)
+      const archive = threeMfArchiveFromEntries(unzipSync(bytes))
+      return await extractThreeMfImportMesh(threeMfArchiveImportSource(archive))
+    }
+    case 'step': {
+      const read = await loadOcctReader()
+      return stepMeshFromOcctResult(read(bytes))
+    }
+    case 'obj':
+      return parseObjMesh(bytes)
+    case 'gltf':
+      return parseGltfMesh(bytes)
+    case 'amf':
+      if (!isZippedAmf(bytes) && bytes.byteLength > MAX_AMF_SOURCE_BYTES) {
+        throw new ModelImportError('AMF is too large to import')
+      }
+      return parseAmfMesh(isZippedAmf(bytes) ? readZippedAmfDocument(bytes) : new TextDecoder().decode(bytes))
   }
-  const read = await loadOcctReader()
-  return stepMeshFromOcctResult(read(bytes))
 }
 
 async function stage(

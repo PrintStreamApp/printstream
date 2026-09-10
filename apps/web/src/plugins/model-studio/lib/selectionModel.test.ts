@@ -58,7 +58,7 @@ test('togglePartInSelection adds and removes siblings of the same object', () =>
 
 test('a session-added volume joins the same selection as a baked part', () => {
   // THE gap this shape closes. A volume added this session and a part baked into the file are the
-  // same thing to the user (the part-is-a-part rule in this plugin'the s development notes); holding the added
+  // same thing to the user (the part-is-a-part rule in this plugin's development notes); holding the added
   // one in a separate single-value state meant it could not join a multi-part selection at all, so
   // the sidebar had rows that multi-select and rows that do not, with no visible reason why.
   let selection = togglePartInSelection(null, 7, baked(12))

@@ -35,6 +35,7 @@ import {
   BRIM_EAR_POINTS_ENTRY,
   CUT_INFORMATION_ENTRY,
   CUSTOM_GCODE_PER_LAYER_ENTRY,
+  FILAMENT_SEQUENCE_ENTRY,
   THREE_MF_INDEX_PARSER_VERSION,
   buildSceneManifest,
   buildThreeMfIndex,
@@ -54,6 +55,7 @@ export {
   BRIM_EAR_POINTS_ENTRY,
   CUT_INFORMATION_ENTRY,
   CUSTOM_GCODE_PER_LAYER_ENTRY,
+  FILAMENT_SEQUENCE_ENTRY,
   LOGICAL_PART_PLATE_GAP,
   buildDefaultPickFilePath,
   buildSceneManifest,
@@ -164,7 +166,19 @@ export async function readPlateIndex(filePath: string, signal?: AbortSignal): Pr
   const customGcodeXml = await readEntry(filePath, CUSTOM_GCODE_PER_LAYER_ENTRY, signal)
     .then((buffer) => buffer.toString('utf8'))
     .catch(() => null)
-  const index = buildThreeMfIndex(xml, projectSettingsJson, modelSettingsPlates, thumbnailPlateFiles, customGcodeXml, modelSettingsXml)
+  // Slicer filament grouping (FTS arrangement hint): only a sliced project has one.
+  const filamentSequenceJson = await readEntry(filePath, FILAMENT_SEQUENCE_ENTRY, signal)
+    .then((buffer) => buffer.toString('utf8'))
+    .catch(() => null)
+  const index = buildThreeMfIndex(
+    xml,
+    projectSettingsJson,
+    modelSettingsPlates,
+    thumbnailPlateFiles,
+    customGcodeXml,
+    modelSettingsXml,
+    { filamentSequenceJson }
+  )
   cache.set(filePath, { mtimeMs: info.mtimeMs, parserVersion: THREE_MF_PARSER_CACHE_VERSION, index })
   return index
 }

@@ -37,10 +37,21 @@ export function installJsdomGlobals(options: InstallJsdomOptions = {}): JSDOM {
     dispatchEvent() { return false }
   })
 
+  // `navigator` is defined rather than assigned because Node 21 added a built-in `globalThis.navigator`
+  // as a getter with NO setter, so `Object.assign` throws "Cannot set property navigator of #<Object>
+  // which has only a getter" and takes every jsdom-based test in the repo with it. The error names
+  // installJsdomGlobals and the component under test, never the runtime, so it reads as a broken
+  // component on any Node newer than the devcontainer's. It stays `configurable`, so this works on
+  // every version: on Node 20 there is no such property and this simply creates one.
+  Object.defineProperty(globalThis, 'navigator', {
+    value: window.navigator,
+    configurable: true,
+    writable: true
+  })
+
   Object.assign(globalThis, {
     window,
     document: window.document,
-    navigator: window.navigator,
     HTMLElement: window.HTMLElement,
     Element: window.Element,
     Node: window.Node,

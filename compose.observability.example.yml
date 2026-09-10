@@ -1,5 +1,5 @@
 # Optional observability overlay: Prometheus + Grafana scraping the API's
-# OpenTelemetry metrics endpoint. Entirely self-hosted — no SaaS, no data leaves
+# OpenTelemetry metrics endpoint. Entirely self-hosted: no SaaS, no data leaves
 # your hardware.
 #
 # Usage (layered on top of your real compose.yml):
@@ -10,7 +10,7 @@
 # Prometheus (scraping api:9464 over the internal network) and Grafana
 # (add Prometheus at http://prometheus:9090 as a data source on first login).
 #
-# Security: the metrics port (9464) is NEVER published to the host — only
+# Security: the metrics port (9464) is NEVER published to the host: only
 # Prometheus, on the internal Docker network, reaches it. Grafana's UI binds to
 # 127.0.0.1 by default; keep it behind your own auth/proxy or a private network,
 # and change the default admin password below.
@@ -37,7 +37,7 @@ services:
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - printstream-prometheus-data:/prometheus
-    # No host port by default — Grafana reaches Prometheus over the internal
+    # No host port by default: Grafana reaches Prometheus over the internal
     # network. Uncomment to inspect Prometheus directly (keep it private).
     # ports:
     #   - "127.0.0.1:9090:9090"

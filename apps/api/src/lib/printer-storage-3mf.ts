@@ -13,7 +13,7 @@ import type { ThreeMfIndex } from './three-mf.js'
 import { buildCoverThumbnailCandidates } from './cover-thumbnail.js'
 import * as printerFtp from './printer-ftp.js'
 import * as printerRemoteZip from './printer-remote-zip.js'
-import { buildPlateObjectsWithPreview, buildThreeMfIndex, readEntry, readPlateIndex, readPlateObjectsWithPreview } from './three-mf.js'
+import { FILAMENT_SEQUENCE_ENTRY, buildPlateObjectsWithPreview, buildThreeMfIndex, readEntry, readPlateIndex, readPlateObjectsWithPreview } from './three-mf.js'
 
 const PRINTER_STORAGE_3MF_CACHE_TTL_MS = 30_000
 const SLOW_PRINTER_STORAGE_3MF_LOG_THRESHOLD_MS = 250
@@ -334,6 +334,7 @@ async function inspectPrinterStorageThreeMfBySuffix(
     'Metadata/slice_info.config',
     'Metadata/project_settings.config',
     'Metadata/model_settings.config',
+    FILAMENT_SEQUENCE_ENTRY,
     'Metadata/plate_1.png',
     'Metadata/top_1.png',
     ...directThumbnailCandidates
@@ -390,7 +391,13 @@ function buildIndexFromSuffixEntries(entries: Map<string, Buffer>): ThreeMfIndex
   const projectSettingsJson = entries.get('Metadata/project_settings.config')?.toString('utf8') ?? null
   const modelSettingsXml = entries.get('Metadata/model_settings.config')?.toString('utf8') ?? null
   const plateNames = modelSettingsXml ? parsePlateNames(modelSettingsXml) : new Map<number, string>()
-  return buildThreeMfIndex(sliceInfoXml, projectSettingsJson, plateNames)
+  // Requested alongside the rest so the Filament Track Switch arrangement hint works on a file
+  // printed straight off the printer's storage. Without it `optimalAssignment` is always absent
+  // here and the hint is silently dead on this surface while working in the library dialog.
+  const filamentSequenceJson = entries.get(FILAMENT_SEQUENCE_ENTRY)?.toString('utf8') ?? null
+  return buildThreeMfIndex(sliceInfoXml, projectSettingsJson, plateNames, undefined, undefined, undefined, {
+    filamentSequenceJson
+  })
 }
 
 function parsePlateNames(xml: string): Map<number, string> {

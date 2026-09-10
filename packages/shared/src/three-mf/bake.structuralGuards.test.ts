@@ -194,9 +194,10 @@ test('a save preserves the plate settings the SceneEdit cannot express', () => {
   ].join('\n')
   const plan = planEditedThreeMf({ ...source(), modelSettingsXml: settingsWithPlate }, editPlacing([1]))
   const out = plan.copy?.transforms.get('Metadata/model_settings.config')?.('') ?? ''
-  // `bed_type` is deliberately NOT carried: we author the plate type as the project-global
-  // `curr_bed_type` and the engine prefers a plate's own value over it, so a stale one would
-  // outlive the user's Settings-tab change.
+  // `bed_type` is deliberately NOT carried. This edit names no global plate type, so it is one from
+  // before per-plate bed types: its plates describe the global rather than overriding it, and the
+  // global is authored into `project_settings.config` instead. Carrying the source's value here
+  // would outlive the user's next Settings-tab change.
   assert.doesNotMatch(out, /key="bed_type"/)
   assert.match(out, /key="print_sequence" value="by object"/)
   assert.match(out, /key="spiral_mode" value="1"/)

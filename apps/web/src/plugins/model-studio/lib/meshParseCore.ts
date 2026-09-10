@@ -24,13 +24,13 @@ export type MeshPaintCodes = Record<number, string>
 /**
  * The ONE table of triangle paint channels: the 3MF attribute each reads and the
  * `geometry.userData` key it lands on. Everything that moves paint between a 3MF and a geometry
- * derives from this — this regex parser, the `DOMParser` fallback in `threeMfScene.ts`, and both
+ * derives from this: this regex parser, the `DOMParser` fallback in `threeMfScene.ts`, and both
  * hops of the worker wire (`meshParseWorker.ts` projects out of `userData`, `meshParseClient.ts`
  * puts it back). It lives HERE, in the DOM-free core, because the worker cannot import
  * `threeMfScene.ts`; that module re-exports the derived channel list for its own callers.
  *
  * A channel absent from any one hop drops silently: the geometry still renders, so the only
- * symptom is paint that vanishes on reload — and then a save WRITES that emptiness back, because
+ * symptom is paint that vanishes on reload, and then a save WRITES that emptiness back, because
  * the editor seeds a first stroke from the loaded paint and emits the complete desired map. Adding
  * a channel is a row here plus its brush/state/bake registrations, never a fifth hand-written list.
  */

@@ -11,7 +11,7 @@
  *   default deliberately leaves headroom.
  * - We deliberately do NOT pass `--test-force-exit`. It would skip the post-completion event-loop
  *   drain (a few suites leak a ref'd handle that adds dead teardown time), but it also force-kills the
- *   process before node:test flushes its failure summary — you lose the failing test name, assertion
+ *   process before node:test flushes its failure summary: you lose the failing test name, assertion
  *   message, and stack. Correct diagnostics beat shaving a couple of seconds.
  * - node:test runs every file before reporting (no early abort). On failure we attribute the failing
  *   files from the output and re-run each one ALONE to separate real failures from load-induced
@@ -24,7 +24,7 @@
  *   what was skipped is always printed: a cached run must never read like a full run.
  *
  * Flags / env (flags win): `--list`, `--reporter=<r>` / NODE_TEST_REPORTER (default dot),
- * `--concurrency=<n>` / NODE_TEST_CONCURRENCY (default ~half the cores — also the memory lever),
+ * `--concurrency=<n>` / NODE_TEST_CONCURRENCY (default ~half the cores, also the memory lever),
  * `--test-timeout=<ms>` / NODE_TEST_TIMEOUT (default 60000, the per-test hang guard),
  * `--no-cache` / PRINTSTREAM_NO_TEST_CACHE=1, `--clear-cache`.
  * Remaining args are path-substring filters.
@@ -172,7 +172,7 @@ if (flakes.length > 0) {
 }
 
 if (realFailures.length === 0) {
-  console.error('\nNo reproducible failures — every failure was a load-induced flake.')
+  console.error('\nNo reproducible failures: every failure was a load-induced flake.')
   console.error('Treating the run as PASSING. If flakes recur, lower --concurrency or harden the tests above.')
   process.exit(0)
 }
@@ -198,7 +198,16 @@ function runTest(files, { quiet = false } = {}) {
       ['--import', 'tsx', '--test', `--test-concurrency=${concurrency}`, `--test-timeout=${testTimeoutMs}`, `--test-reporter=${reporter}`, ...files],
       {
         cwd: workspaceRoot,
-        env: { ...process.env, TSX_TSCONFIG_PATH: path.join(workspaceRoot, 'tsconfig.test.json') },
+        // TZ is pinned so a result cannot depend on where the developer is sitting. Tests that build
+        // a UTC instant and assert on LOCAL formatting (apps/web/src/lib/time.test.ts) silently
+        // assumed the devcontainer and CI, both of which run with TZ unset (UTC); on a host machine
+        // in any other zone they failed with no hint that the clock was the variable. Override it
+        // deliberately for a test that needs a specific zone, rather than relying on the ambient one.
+        env: {
+          ...process.env,
+          TZ: process.env.TZ ?? 'UTC',
+          TSX_TSCONFIG_PATH: path.join(workspaceRoot, 'tsconfig.test.json')
+        },
         stdio: ['ignore', 'pipe', 'pipe']
       }
     )

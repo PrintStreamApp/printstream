@@ -88,7 +88,7 @@ export function SpoolList({
                 </td>
                 <td>
                   <Typography level="body-sm" noWrap textColor={spool.brand ? undefined : 'text.tertiary'}>
-                    {spool.brand ?? '—'}
+                    {spool.brand ?? '–'}
                   </Typography>
                 </td>
                 <td>
@@ -100,7 +100,7 @@ export function SpoolList({
                 </td>
                 <td>
                   <Typography level="body-sm" textColor={loaded ? undefined : 'text.tertiary'} noWrap>
-                    {loaded ?? '—'}
+                    {loaded ?? '–'}
                   </Typography>
                 </td>
                 <td>

@@ -41,7 +41,7 @@ import { applyMachineOverridesToProject, applyMachinePresetChange, healSavedProj
 import { badRequest, HttpError, notFound } from '../lib/http-error.js'
 import { getStagedImport, resolveSceneEditImports, stageImport } from '../lib/import-store.js'
 import { discardHiddenSlicedOutput, persistLibraryFileFromLocalPath } from '../lib/library-files.js'
-import { detectImportFormat, meshToBinaryStl, parseImportedMesh, type ImportedMesh } from '../lib/mesh-import.js'
+import { describeImportFormats, detectImportFormat, meshToBinaryStl, parseImportedMesh, type ImportedMesh } from '../lib/mesh-import.js'
 import { extractThreeMfImportMesh } from '../lib/three-mf-mesh-extract.js'
 import { prisma } from '../lib/prisma.js'
 import { requireRequestWorkspaceId, requireRouteParam, sendModelBuffer, singleUploadWithLimit } from '../lib/request-helpers.js'
@@ -90,7 +90,7 @@ editorRouter.post(
     if (!file) throw badRequest('No file uploaded')
     const format = detectImportFormat(file.originalname)
     if (!format) {
-      throw badRequest('Only STL, STEP, and 3MF files can be imported from your device')
+      throw badRequest(`Only ${describeImportFormats()} files can be imported from your device`)
     }
     const mesh = format === '3mf'
       ? await extractThreeMfMeshFromBuffer(file.buffer)
@@ -126,7 +126,7 @@ editorRouter.post(
     if (!libraryFile) throw notFound('Library file not found')
     const format = detectImportFormat(libraryFile.name)
     if (!format) {
-      throw badRequest('Only STL, STEP, and 3MF library files can be added this way')
+      throw badRequest(`Only ${describeImportFormats()} library files can be added this way`)
     }
 
     const localPath = await resolveLibraryFileToLocalPath(libraryFile)

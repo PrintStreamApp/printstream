@@ -4,11 +4,29 @@
  * management-gated and fire {@link PrinterCommand}s through a single `onCommand`. Grouped out of
  * PrinterCard so its render tree isn't interleaved with four AMS modal configs.
  */
-import type { AmsSlot, AmsUnit, ExternalSpool, Printer, PrinterCommand, PrinterStatus } from '@printstream/shared'
+import {
+  isPrinterActiveJobStage,
+  printerModelSchema,
+  supportsAmsSettingsReorder,
+  type AmsSlot,
+  type AmsUnit,
+  type ExternalSpool,
+  type Printer,
+  type PrinterCommand,
+  type PrinterModel,
+  type PrinterStatus
+} from '@printstream/shared'
 import { AmsDryingModal, AmsSettingsModal } from './AmsModals'
 import { AmsSlotEditModal } from './AmsSlotEditModal'
 import { ExternalSpoolEditModal } from './ExternalSpoolEditModal'
+import { usePromptDialog } from '../PromptDialogProvider'
 import { resolveFilamentChangeTargetTemp } from '../../lib/printersViewHelpers'
+
+/** A stored model string as a `PrinterModel`; anything unrecognised is `unknown`, never a guess. */
+function printerModelOrUnknown(model: string): PrinterModel {
+  const parsed = printerModelSchema.safeParse(model)
+  return parsed.success ? parsed.data : 'unknown'
+}
 
 export interface PrinterAmsDialogsProps {
   printer: Printer
@@ -51,6 +69,7 @@ export function PrinterAmsDialogs({
   defaultExternalSpoolTemp,
   onCloseExternalSpool
 }: PrinterAmsDialogsProps) {
+  const { confirm } = usePromptDialog()
   if (!canManagePrinter) return null
 
   return (
@@ -59,15 +78,27 @@ export function PrinterAmsDialogs({
         <AmsSettingsModal
           printerName={printer.name}
           settings={status.amsSettings}
+          canReorderAmsUnits={supportsAmsSettingsReorder(printerModelOrUnknown(printer.model))}
           submitting={submitting}
           onClose={onCloseAmsSettings}
           onUpdateUserSettings={(settingsCommand) => onCommand(settingsCommand)}
           onUpdateFilamentBackup={(enabled) => onCommand({ type: 'setAmsFilamentBackup', enabled })}
+          onResetAmsOrder={async () => {
+            const confirmed = await confirm({
+              title: 'Reset AMS order?',
+              description:
+                'Every AMS unit disconnects at once. Reconnect them one at a time, in the order you want them numbered.',
+              confirmLabel: 'Reset',
+              color: 'warning'
+            })
+            if (confirmed) onCommand({ type: 'resetAmsOrder' })
+          }}
         />
       )}
       {dryingUnit && (
         <AmsDryingModal
           printerName={printer.name}
+          printing={isPrinterActiveJobStage(status?.stage)}
           unit={dryingUnit}
           submitting={submitting}
           onClose={onCloseDrying}
@@ -78,6 +109,7 @@ export function PrinterAmsDialogs({
       {editingSlot && (
         <AmsSlotEditModal
           printerId={printer.id}
+          printerModel={printer.model}
           status={status}
           unit={currentEditingUnit ?? editingSlot.unit}
           slot={currentEditingSlot ?? editingSlot.slot}

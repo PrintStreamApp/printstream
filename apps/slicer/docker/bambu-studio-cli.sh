@@ -4,24 +4,24 @@ set -eu
 # Unified BambuStudio CLI launcher.
 #
 # BambuStudio ships x86-64 binaries only. On an x86-64 host we run the extracted AppImage's
-# binary natively. On a non-x86 host (arm64 — Raspberry Pi / ARM NAS in production, Windows on
+# binary natively. On a non-x86 host (arm64: Raspberry Pi / ARM NAS in production, Windows on
 # ARM / WSL / Apple silicon in dev) there is no native slicer, so we run the bundled
 # bin/bambu-studio through qemu-user emulation against an x86-64 sysroot (built by
 # build-x86-sysroot.mjs; QEMU_LD_PREFIX points at it).
 #
-# No X server is involved: the CLI never initialises GTK in CLI mode (verified — full
+# No X server is involved: the CLI never initialises GTK in CLI mode (verified: full
 # slices and settings exports run with no DISPLAY at all, matching the native app's
 # launcher, engines/launcher.ts). The Xvfb this script used to run was based on a wrong
 # premise and leaked one unreaped Xvfb zombie per invocation via xvfb-run.
 #
-# What thumbnail rendering DOES need is an offscreen GL stack — when a headless Wayland
+# What thumbnail rendering DOES need is an offscreen GL stack. When a headless Wayland
 # compositor and the GL shim are available, the CLI renders real plate thumbnails into its
 # sliced output. Three pieces are required, one per layer the CLI's renderer fails on (see
 # gl-osmesa-shim.c for the full mechanism):
 #
 #   1. A Wayland display (private headless Weston, spawned per invocation below): the
 #      bundled GLFW 3.3.7 is compiled Wayland-only, so glfwInit can NEVER be satisfied by
-#      Xvfb/X11 — only by a Wayland socket.
+#      Xvfb/X11, only by a Wayland socket.
 #   2. libOSMesa (installed natively on amd64, in the sysroot on arm64): the CLI forces a
 #      software OSMesa GL context on Linux.
 #   3. gl-osmesa-shim.so (LD_PRELOAD, x86-64): gets the CLI's GLX-built GLEW past init and
@@ -64,7 +64,7 @@ fi
 # --- offscreen GL for plate thumbnails (see the header) -------------------------------
 # The shim ships next to this script by default (dev data dir, image /usr/local/bin);
 # SLICER_GL_SHIM overrides. Weston is spawned per invocation with a private runtime dir
-# and socket, so concurrent slices never race, and reaped by the EXIT trap — which is why
+# and socket, so concurrent slices never race, and reaped by the EXIT trap, which is why
 # the CLI below is launched as the script's last command rather than exec'd.
 gl_shim="${SLICER_GL_SHIM:-$(dirname "$0")/gl-osmesa-shim.so}"
 weston_pid=""
@@ -82,7 +82,7 @@ cleanup_weston() {
   fi
 }
 
-# Only the actions that render thumbnails get a compositor — the service also invokes this
+# Only the actions that render thumbnails get a compositor: the service also invokes this
 # wrapper for --help probes and --export-settings, and a weston per those would be pure
 # startup cost.
 wants_thumbnail_gl=false
@@ -101,7 +101,7 @@ if [ "$wants_thumbnail_gl" = true ] && [ -f "$gl_shim" ] && command -v weston >/
   # Weston's own output must not reach stdout/stderr: the slicer service parses the
   # CLI's output streams. kiosk-shell still provides the xdg-shell GLFW needs but spawns
   # none of desktop-shell's helper clients (weston-keyboard/weston-desktop-shell), which
-  # would outlive weston as unreapable zombies — only weston itself is our child, and the
+  # would outlive weston as unreapable zombies: only weston itself is our child, and the
   # container's PID 1 (node) never reaps orphans.
   XDG_RUNTIME_DIR="$weston_runtime_dir" weston --no-config --backend=headless \
     --shell=kiosk-shell.so --socket="$wayland_socket" --idle-time=0 >/dev/null 2>&1 &
@@ -119,7 +119,7 @@ if [ "$wants_thumbnail_gl" = true ] && [ -f "$gl_shim" ] && command -v weston >/
     export XDG_RUNTIME_DIR="$weston_runtime_dir"
     export WAYLAND_DISPLAY="$wayland_socket"
   else
-    # Compositor never came up — drop back to the no-thumbnail path. Surfaced on stderr so
+    # Compositor never came up; drop back to the no-thumbnail path. Surfaced on stderr so
     # the failure is visible in the captured slice output rather than silent degradation.
     echo "bambu-studio-cli: weston did not come up; skipping plate thumbnail rendering" >&2
     cleanup_weston

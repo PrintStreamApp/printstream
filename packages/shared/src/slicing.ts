@@ -3,6 +3,7 @@
  * standalone BambuStudio CLI worker runtime.
  */
 import { z } from 'zod'
+import { STAGED_IMPORT_FORMATS } from './import-formats.js'
 import { processSettingOverridesSchema } from './process-settings.js'
 import { degenerateTransformMessage, findDegenerateTransformColumn } from './three-mf/transform-validity.js'
 import { TEXT_SURFACE_TYPES, type TextInfo } from './three-mf/text-info.js'
@@ -140,6 +141,24 @@ export const uploadSlicingPresetSchema = z.object({
   overwrite: z.boolean().optional()
 })
 export type UploadSlicingPreset = z.infer<typeof uploadSlicingPresetSchema>
+
+/**
+ * Which presets to pack into a downloadable bundle.
+ *
+ * Ids only: the server reads each preset's content from the workspace's own store rather than
+ * trusting the client to send it, so an export can never contain something the caller supplied.
+ *
+ * The cap bounds what the route buffers in memory (the whole archive is built before it is sent).
+ * There is deliberately NO batching: splitting one selection across several downloads would hand
+ * the user N files whose names cannot say how they relate, so the manager DISABLES Export past the
+ * cap and says how many may go at once, which is a limit the user can act on. Keep the two in step
+ * via `MAX_EXPORTABLE_SLICING_PRESETS`.
+ */
+export const MAX_EXPORTABLE_SLICING_PRESETS = 200
+export const exportSlicingPresetsSchema = z.object({
+  ids: z.array(z.string().trim().min(1)).min(1).max(MAX_EXPORTABLE_SLICING_PRESETS)
+})
+export type ExportSlicingPresets = z.infer<typeof exportSlicingPresetsSchema>
 
 export const slicingPresetResponseSchema = z.object({
   profile: slicingPresetSummarySchema,
@@ -326,7 +345,31 @@ export const sceneEditPlateSchema = z.object({
    */
   sourceIndex: z.number().int().positive().nullable().optional(),
   name: z.string().trim().min(1).max(255).nullable().optional(),
+  /**
+   * This plate's OWN bed type, or null/absent for "same as global" ({@link sceneEditSchema}'s
+   * `plateType`). Written as the plate's `bed_type` metadata, which the engine applies over the
+   * project-global `curr_bed_type` (`BambuStudio.cpp:6897` applies the plate config on top).
+   *
+   * Read `plateType` on a plate ONLY together with the edit's top-level one. Before per-plate bed
+   * types this field carried the global value stamped onto every plate, so a plate naming a type
+   * means "override" only when the edit also names a global; without one it is an older client
+   * describing the global and the bake must not turn it into N per-plate overrides that would
+   * outlive the user's next global change.
+   */
   plateType: z.string().trim().min(1).nullable().optional(),
+  /**
+   * Per-plate print order, or null/absent for "same as global". `by object` prints each object to
+   * full height before starting the next; see `print_sequence` in the process catalog.
+   */
+  printSequence: z.enum(['by layer', 'by object']).nullable().optional(),
+  /** Per-plate vase mode, or null/absent for "same as global" (the `spiral_mode` process key). */
+  spiralMode: z.boolean().nullable().optional(),
+  /**
+   * Locked against arrange. Not a tri-state: BambuStudio has no global lock, so absent means
+   * unlocked rather than "inherit" (`PartPlate.cpp:6046` skips a locked plate's objects when
+   * building arrange polygons).
+   */
+  locked: z.boolean().optional(),
   /** Prime/wipe tower lower-left corner (plate-local) to write as wipe_tower_x/y. */
   primeTower: z.object({ x: z.number().finite(), y: z.number().finite() }).nullable().optional()
 })
@@ -499,7 +542,7 @@ export const MAX_HEIGHT_RANGES_PER_OBJECT = 64
 /**
  * One height range modifier: a Z band in OBJECT space (z=0 at the object's underside, raft
  * excluded) whose process-setting overrides apply to the layers inside it. The band is
- * `[minZ, maxZ)` — closed at the bottom, open at the top, matching BambuStudio's slicer.
+ * `[minZ, maxZ)`: closed at the bottom, open at the top, matching BambuStudio's slicer.
  *
  * `settings` must include `layer_height`: BambuStudio reads it without checking the key exists
  * and null-derefs otherwise (see `three-mf/layer-config-ranges.ts`).
@@ -1082,6 +1125,16 @@ export type SceneEditFlushVolumes = z.infer<typeof sceneEditFlushVolumesSchema>
 
 export const sceneEditSchema = z.object({
   plates: z.array(sceneEditPlateSchema).min(1),
+  /**
+   * The project-global bed type, written as `curr_bed_type` in `project_settings.config`. A plate
+   * overrides it with its own {@link sceneEditPlateSchema} `plateType`.
+   *
+   * Its PRESENCE is also the discriminator that lets the bake author per-plate bed types at all:
+   * a client old enough not to send it is one that stamped the global onto every plate, so the
+   * bake reads the plates' values as the global and writes no per-plate override. See the plate
+   * field's doc for why turning those into overrides would be wrong rather than merely redundant.
+   */
+  plateType: z.string().trim().min(1).nullable().optional(),
   instances: z.array(sceneEditInstanceSchema),
   /** Optional new volumes added inside existing objects (negative parts, modifiers, ...). */
   addedParts: z.array(sceneEditAddedPartSchema).max(200).optional(),
@@ -1349,8 +1402,13 @@ export const sceneEditSchema = z.object({
 })
 export type SceneEdit = z.infer<typeof sceneEditSchema>
 
-export const stagedImportFormatSchema = z.enum(['stl', 'step', '3mf'])
-export type StagedImportFormat = z.infer<typeof stagedImportFormatSchema>
+/**
+ * Derived from `STAGED_IMPORT_FORMATS` rather than written out, so the wire enum and the extension
+ * table cannot name different sets. A format the table knows and the schema rejects would be offered
+ * by every file picker and refused by the route it posts to.
+ */
+export const stagedImportFormatSchema = z.enum(STAGED_IMPORT_FORMATS)
+export type { StagedImportFormat } from './import-formats.js'
 
 /**
  * Metadata for a foreign model staged on the server (parsed/tessellated to a mesh) and referenced by
@@ -1392,12 +1450,12 @@ export type StagedImport = z.infer<typeof stagedImportSchema>
 /**
  * What a staged import is FOR, which decides how its geometry is normalised.
  *
- * `object` — a whole object on the plate (Add model, Replace with…, an import from the library).
+ * `object`: a whole object on the plate (Add model, Replace with…, an import from the library).
  * Normalised to the editor's pivot convention: XY bounding-box centre on the origin, lowest point
  * at z = 0 (`rebaseImportedMesh`). That is what makes `position` place the object's own centre, and
  * the rotate gizmo pivot there rather than at whatever point the file's exporter chose.
  *
- * `part` — a volume INSIDE a host object (an added part, a modifier, a support blocker). Left
+ * `part`: a volume INSIDE a host object (an added part, a modifier, a support blocker). Left
  * exactly as staged: `primitivePartSoup` centres a part on EVERY axis and `addedPartDropPosition`
  * places it by that single point relative to its host, so flooring its Z would bury a helper volume
  * half its own height above where it was dropped.

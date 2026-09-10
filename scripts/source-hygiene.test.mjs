@@ -23,9 +23,9 @@
  * Rule 2 - no `cpSync(..., { dereference: true })`.
  *
  * On Node 22 that option throws `ERR_FS_EISDIR` for a symlink pointing at an
- * ordinary file; on Node 20 it copies correctly. Local dev runs 20 and CI runs
- * 22, so the defect passes review, passes `npm run validate`, and then fails
- * every CI build. It did: `server-packages` was broken from 2026-08-11 to
+ * ordinary file; on Node 20 it copies correctly. Local dev once ran 20 while CI
+ * ran 22, so the defect passed review and local validation, then failed every CI
+ * build. It did: `server-packages` was broken from 2026-08-11 to
  * 2026-08-22 staging `libpq.so.5`. `copyFileSync` dereferences on every version
  * and preserves the mode, so it is the single-file answer; a genuine tree copy
  * wants `{ recursive: true }`, which is unaffected.
@@ -112,101 +112,78 @@ test('no tracked source copies a single file with cpSync + dereference', () => {
   assert.deepEqual(
     offenders,
     [],
-    'cpSync + dereference throws ERR_FS_EISDIR on a symlink under Node 22 (CI) while passing on Node 20 (local).\n'
+    'cpSync + dereference throws ERR_FS_EISDIR on a symlink under Node 22 while passing on Node 20.\n'
       + `Use copyFileSync for a single file:\n  ${offenders.join('\n  ')}`
   )
 })
 
 /**
- * Rule 3 - no em dash on a line this branch ADDED.
+ * Rule 3 - no em dash (U+2014) anywhere in the tree.
  *
- * The house style bans `—` from everything that gets committed or published: commit messages,
- * PR bodies, code comments, docs, and UI strings. It is a rule no reviewer should have to spend
- * attention on, and one that is broken in bulk when it is broken at all: a single change added 24
- * in one sitting, while the same change was removing them from three generator headers.
+ * The house style bans the character from everything that gets committed or published: commit
+ * messages, PR bodies, code comments, docs, and UI strings. It is a rule no reviewer should have
+ * to spend attention on, and one that is broken in bulk when it is broken at all: a single change
+ * added 24 in one sitting, while the same change was removing them from three generator headers.
  *
- * DIFF-based, not tree-based, for two reasons. The tree already carries ~2400 of them, nearly all
- * in markdown (the backlog tracked by issue #100), so a whole-tree rule could not pass today. And a
- * committed baseline would have to name every offending file, 20 of which live under `private/`,
- * which would publish that structure into the OSS snapshot: this test is a shipped file.
+ * WHOLE-TREE since issue #100 cleared the backlog. It was diff-based before that, because the
+ * tree carried ~2,400 of them (nearly all in markdown) and a whole-tree rule could not have
+ * passed. A diff rule has two holes this one does not: it cannot see a dash that arrives on an
+ * UNCHANGED line through a revert, a rename, or a cherry-pick, and it SKIPS outright when no base
+ * ref resolves, which is exactly the shallow-clone CI case it most needed to cover. Scanning the
+ * tree needs no committed baseline either, which matters because a baseline would have had to
+ * name every offending file, 20 of them under `private/`, publishing that structure into the OSS
+ * snapshot: this test is a shipped file.
  *
- * A missing base ref is a SKIP, never a failure. A shallow CI clone or a fresh checkout with no
- * remote cannot tell what is new, and refusing to build on that is worse than the defect.
+ * Untracked files are scanned too, because a file that is NEW and not yet committed is where the
+ * rule was previously blindest: the change that added 24 dashes added several new files. A nested
+ * git worktree is safe to leave in, and must be: `git ls-files --others` reports one whose
+ * directory holds a `.git` entry as a single directory name and never descends into it, so a
+ * sibling worktree mid-edit cannot fail validate in the main clone.
+ *
+ * The character is written below as an escape rather than a literal, so this file does not have
+ * to exempt itself from its own rule. Same convention as Rule 1.
  *
  * A line that genuinely needs the character (a test asserting how one is handled, vendored text)
  * opts out with an `em-dash-ok` marker on the same line.
  */
-const EM_DASH = '—'
+const EM_DASH = '\u2014'
 
-/** The branch point to diff against, or null when the repo cannot tell us. */
-function resolveDiffBase() {
-  for (const ref of ['origin/dev', 'origin/main', 'dev', 'main']) {
-    try {
-      const base = execFileSync('git', ['merge-base', 'HEAD', ref], {
-        cwd: repoRoot,
-        stdio: ['ignore', 'pipe', 'ignore']
-      }).toString('utf8').trim()
-      if (base) return base
-    } catch {
-      // Ref not present in this clone; try the next.
-    }
-  }
-  return null
+/**
+ * Paths whose em dashes are not ours to rewrite.
+ *
+ * A Prisma migration is checksummed into `_prisma_migrations` when it is applied, so editing the
+ * SQL, comments included, makes `prisma migrate` refuse to run against every database that
+ * already ran it. The notices files are vendored licence text reproduced verbatim by
+ * `scripts/dev/generate-third-party-notices.mjs`, and a generated artifact is the generator's
+ * output rather than something to edit in place.
+ */
+function isExemptFromEmDashRule(name) {
+  return name.startsWith('apps/api/prisma/migrations/')
+    || name.endsWith('THIRD-PARTY-NOTICES.txt')
+    || name.includes('.generated.')
 }
 
-test('no em dash is introduced on a changed line', (t) => {
-  const base = resolveDiffBase()
-  if (!base) {
-    t.skip('no base ref to diff against (shallow clone or no remote)')
-    return
-  }
-
-  // Working tree against the branch point, so it covers commits on the branch AND uncommitted
-  // edits: the point is to catch them before they are committed, not after.
-  const diff = execFileSync('git', ['diff', '--unified=0', '--no-color', base, '--'], {
-    cwd: repoRoot,
-    maxBuffer: 256 * 1024 * 1024
-  }).toString('utf8')
-
-  const offenders = []
-  let file = null
-  let lineNumber = 0
-  for (const line of diff.split('\n')) {
-    if (line.startsWith('+++ b/')) { file = line.slice(6); continue }
-    if (line.startsWith('@@')) {
-      // `@@ -a,b +c,d @@` - `c` is the first line number of the added run.
-      const match = /^@@ -\d+(?:,\d+)? \+(\d+)/.exec(line)
-      lineNumber = match ? Number(match[1]) : 0
-      continue
-    }
-    if (!line.startsWith('+') || line.startsWith('+++')) continue
-    const text = line.slice(1)
-    if (file && text.includes(EM_DASH) && !text.includes('em-dash-ok')) {
-      // Generated files are the generator's output; fix the generator, not the artifact.
-      if (!file.includes('.generated.') && file !== 'scripts/source-hygiene.test.mjs') {
-        offenders.push(`${file}:${lineNumber}`)
-      }
-    }
-    lineNumber += 1
-  }
-
-  // A file that is NEW and not yet committed shows up in no diff, so every one of its lines counts
-  // as added. Missing this made the rule blind to exactly the case that motivated it: the change
-  // that added 24 em dashes added several new files.
-  const untracked = execFileSync('git', ['ls-files', '-z', '--others', '--exclude-standard'], {
+test('no em dash appears anywhere in the tree', () => {
+  const list = (extra) => execFileSync('git', ['ls-files', '-z', ...extra], {
     cwd: repoRoot,
     maxBuffer: 64 * 1024 * 1024
   }).toString('utf8').split('\0').filter(Boolean)
-  for (const name of untracked) {
+
+  const offenders = []
+  for (const name of [...list([]), ...list(['--others', '--exclude-standard'])]) {
     if (BINARY_EXTENSIONS.has(path.extname(name).toLowerCase())) continue
-    if (name.includes('.generated.')) continue
+    if (isExemptFromEmDashRule(name)) continue
     let contents
     try {
-      if (!statSync(path.join(repoRoot, name)).isFile()) continue
-      contents = readFileSync(path.join(repoRoot, name), 'utf8')
+      const absolute = path.join(repoRoot, name)
+      if (!statSync(absolute).isFile()) continue
+      contents = readFileSync(absolute, 'utf8')
     } catch {
+      // Tracked but absent, or an untracked directory entry; neither is our business.
       continue
     }
+    // Cheap reject first: almost every file in the tree has none.
+    if (!contents.includes(EM_DASH)) continue
     contents.split('\n').forEach((text, index) => {
       if (text.includes(EM_DASH) && !text.includes('em-dash-ok')) offenders.push(`${name}:${index + 1}`)
     })
@@ -215,6 +192,7 @@ test('no em dash is introduced on a changed line', (t) => {
   assert.deepEqual(
     offenders,
     [],
-    `em dashes are not used in committed text; use a comma, colon, parentheses or a separate sentence:\n  ${offenders.join('\n  ')}`
+    'em dashes are not used in committed text; use a comma, colon, semicolon, parentheses or a '
+      + `separate sentence:\n  ${offenders.join('\n  ')}`
   )
 })

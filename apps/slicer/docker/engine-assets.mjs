@@ -13,7 +13,7 @@
  *
  * - The LINUX url matches whatever `slicer-targets.mjs` already points at.
  *   Releases ship several AppImages differing only in Ubuntu base, and the base
- *   sets the glibc floor — "upgrading" 2.6.0.51 from ubuntu-22.04 to 24.04 while
+ *   sets the glibc floor: "upgrading" 2.6.0.51 from ubuntu-22.04 to 24.04 while
  *   recording a checksum would change what existing installs run under cover of
  *   a pinning change.
  * - The WINDOWS url is the portable zip, never the installer .exe: no elevation,

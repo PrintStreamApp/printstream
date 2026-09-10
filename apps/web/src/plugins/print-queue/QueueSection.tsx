@@ -184,12 +184,16 @@ export function QueueSection(props: Record<string, unknown>) {
     await runMutation(itemId, () => reorderQueue.mutateAsync(next), 'Could not reorder the queue')
   }
 
-  const handleStart = async (printerId: string, amsMapping: number[], allowInsufficientFilament: boolean) => {
+  const handleStart = async (
+    printerId: string,
+    amsMapping: number[],
+    consents: { allowInsufficientFilament: boolean; allowBlacklistedFilament: boolean }
+  ) => {
     if (!startingItem) return
     const id = startingItem.id
     setPendingItemId(id)
     try {
-      await dispatchItem.mutateAsync({ id, printerId, amsMapping, allowInsufficientFilament })
+      await dispatchItem.mutateAsync({ id, printerId, amsMapping, ...consents })
       setStartingItem(null)
       toast.success('Print started')
     } catch (error) {

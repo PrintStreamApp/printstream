@@ -15,6 +15,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Alert, Box, Button, Chip, CircularProgress, DialogContent, ModalClose, Sheet, Slider, Stack, Switch, Typography, Tooltip } from '@mui/joy'
 import { choosePlateStripOrientation, EDITOR_GRID_GAP_PX } from './lib/editorChromeLayout'
 import { useQuery } from '@tanstack/react-query'
+import { isMeshLibraryFileKind } from '@printstream/shared'
 import type { LibraryFile, LibraryThreeMfScene, ThreeMfIndex } from '@printstream/shared'
 import * as THREE from 'three'
 import { createWebglRenderer } from './lib/webglRenderer'
@@ -1340,22 +1341,27 @@ function ViewCubeControl({
   )
 }
 
-type PreviewMode = 'stl' | 'step' | '3mf' | 'plate-gcode' | null
+/**
+ * `mesh` covers every format `/mesh` serves as a single un-plated mesh -- STL verbatim, and STEP,
+ * OBJ, glTF and AMF converted server-side. They were previously two modes (`stl` and `step`) that
+ * every consumer had to test for together via `isMeshPreviewMode`, which is a list that grows with
+ * each format for no benefit: nothing here ever needed to know WHICH one it was, because the bytes
+ * arriving are STL either way.
+ */
+type PreviewMode = 'mesh' | '3mf' | 'plate-gcode' | null
 
 function resolvePreviewMode(file: LibraryFile | null): PreviewMode {
   if (!file) return null
-  if (file.kind === 'stl') return 'stl'
-  if (file.kind === 'step') return 'step'
+  if (isMeshLibraryFileKind(file.kind)) return 'mesh'
   // A geometry-only 3MF has no plated scene to render, it previews as a single mesh,
   // exactly like STL (`/mesh` serves its extracted geometry as STL bytes).
-  if (file.kind === '3mf') return file.geometryOnly === true ? 'stl' : '3mf'
+  if (file.kind === '3mf') return file.geometryOnly === true ? 'mesh' : '3mf'
   if (file.kind === 'gcode') return 'plate-gcode'
   return null
 }
 
-/** STL and STEP both render as a single un-plated mesh (STEP is tessellated to STL server-side). */
 function isMeshPreviewMode(mode: PreviewMode): boolean {
-  return mode === 'stl' || mode === 'step'
+  return mode === 'mesh'
 }
 
 /** Build just the plate surface (bed + exclude zones) so it can be shown before any parts load. */

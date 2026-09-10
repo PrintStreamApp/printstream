@@ -72,7 +72,7 @@ export function SlicingToasts() {
 
   // Leaving the page beacons `jobs/leaving`, which reaps this client's slices server-side,
   // so a reload really does destroy an active slice: it holds off an app update
-  // (`lib/appStaleness.ts`). Ownership matters — an unowned job was started by a script or
+  // (`lib/appStaleness.ts`). Ownership matters: an unowned job was started by a script or
   // an integration and survives this tab going away. Tracked from `jobs`, not
   // `visibleJobs`: dismissing the toast hides the slice, it does not stop it.
   useEffect(() => {

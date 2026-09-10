@@ -2,7 +2,8 @@ import assert from 'node:assert/strict'
 import { after, afterEach, before, test } from 'node:test'
 import React from 'react'
 import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
-import { JSDOM } from 'jsdom'
+import type { JSDOM } from 'jsdom'
+import { installJsdomGlobals } from '../test-utils/jsdom'
 import { useDirectorySortState } from './useDirectorySortState'
 
 /**
@@ -17,22 +18,10 @@ import { useDirectorySortState } from './useDirectorySortState'
  * it.
  */
 
-const dom = new JSDOM('<!doctype html><html><body></body></html>', {
-  url: 'http://localhost/platform'
-})
+let dom: JSDOM
 
 before(() => {
-  const { window } = dom
-  Object.assign(globalThis, {
-    window,
-    document: window.document,
-    navigator: window.navigator,
-    HTMLElement: window.HTMLElement,
-    Element: window.Element,
-    Node: window.Node,
-    DocumentFragment: window.DocumentFragment,
-    MutationObserver: window.MutationObserver
-  })
+  dom = installJsdomGlobals({ url: 'http://localhost/platform' })
 })
 
 afterEach(() => {

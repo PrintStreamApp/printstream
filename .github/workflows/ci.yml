@@ -42,7 +42,7 @@ jobs:
   # The installer window and the tray are PowerShell programs written inside
   # TypeScript template literals, so nothing above can see them: tsc and the
   # linter both see a string. A syntax error there reaches a user as a window
-  # that never appears, and a lone backslash is eaten by the template literal —
+  # that never appears, and a lone backslash is eaten by the template literal:
   # `'\s+'` becomes `'s+'`, which shipped once and would have replaced the letter
   # "s" with a space in every message the installer printed.
   #

@@ -9,7 +9,10 @@
 import {
   amsTrayIndex,
   amsUnitLetter,
+  blacklistProhibitions,
   buildRequiredNozzleDiametersByExtruder,
+  checkPrinterFilamentBlacklist,
+  filamentBlacklistRefusalMessage,
   findFilamentCompatibilityIssues,
   filamentTrackSwitchMismatch,
   filamentTrackSwitchMismatchMessage,
@@ -63,6 +66,7 @@ interface LibraryPrintCompatibilityIndexInput {
   allowPlateTypeMismatch?: boolean
   allowFilamentTrackSwitchMismatch?: boolean
   allowInsufficientFilament?: boolean
+  allowBlacklistedFilament?: boolean
   currentPlateType?: string | null
   currentNozzleDiameters?: PrinterNozzleDiameterSelection[]
 }
@@ -80,6 +84,7 @@ interface AutomaticPrintCompatibilityInput {
   allowIncompatibleFilament?: boolean
   allowFilamentTrackSwitchMismatch?: boolean
   allowInsufficientFilament?: boolean
+  allowBlacklistedFilament?: boolean
 }
 
 interface AutomaticCompatibilityIssue {
@@ -99,6 +104,7 @@ export async function assertLibraryPrintCompatibilityForIndex(
   // check is: that flag consents to WHICH materials the trays hold, and "enough of it is left"
   // is a separate judgement the dialog asks separately.
   await assertSufficientFilament(index, input)
+  assertFilamentBlacklist(index, input)
   const issues = getLibraryPrintCompatibilityIssues(index, input)
   // Nozzle-mismatch issues are overridable too: the tray→nozzle binding comes
   // from status parsing that can be wrong (H2D AMS/nozzle parsing is unverified
@@ -121,6 +127,9 @@ export async function assertAutomaticPrintCompatibility(
   // make one checkbox grant two unrelated permissions.
   if (input.index) assertFilamentTrackSwitchMatch(input.index, input)
   if (input.index) await assertSufficientFilament(input.index, input)
+  // Runs with or without an index: the rules grade the MATERIAL IN THE TRAY against the machine,
+  // so they have something to say even when we cannot read what the file wants.
+  assertFilamentBlacklist(input.index, input)
   if (input.allowIncompatibleFilament) return
   const issues = getAutomaticPrintCompatibilityIssues(input)
   if (issues.length === 0) return
@@ -224,6 +233,57 @@ function assertFilamentTrackSwitchMatch(
   const mismatch = filamentTrackSwitchMismatch(index.slicedWithFilamentTrackSwitch, input.printerStatus)
   if (!mismatch) return
   throw conflict(filamentTrackSwitchMismatchMessage(mismatch.printerHasSwitch))
+}
+
+/**
+ * A material Bambu forbids on this hardware. OVERRIDABLE via `allowBlacklistedFilament`.
+ *
+ * These are the rules BambuStudio keeps in `filaments_blacklist.json` and runs both on AMS slot
+ * confirm and in its pre-print gauntlet: TPU through an AMS, abrasives through an E3D high-flow
+ * nozzle, Bambu PET-CF in an AMS, and so on. They protect the PRINTER rather than the print, which
+ * is why they are checked separately from everything above and consented to separately.
+ *
+ * Only PROHIBITIONS reach here. The rule set is two-severity and its warnings ("cold pull before
+ * printing TPU") are advice with nothing to refuse: the dialog shows them, dispatch ignores them.
+ * Refusing on a warning would ground a large fraction of ordinary TPU and CF prints.
+ *
+ * BambuStudio blocks a prohibition outright with no override. We diverge, deliberately, for the
+ * reason recorded on the flag: half the rules key on nozzle flow and diameter that we decode from
+ * a type code, and that decode is unverified against some live hardware. A misread nozzle would
+ * make a physically-correct setup un-printable with re-slicing no help at all. Same posture as the
+ * tray, plate and Track Switch checks above.
+ *
+ * What counts as prohibited comes from the shared `checkPrinterFilamentBlacklist`, and each
+ * sentence from the shared rule text, the same two the print dialogs warn from, so a dispatch can
+ * never be refused by a check the dialog never showed.
+ */
+function assertFilamentBlacklist(
+  index: ThreeMfIndex | null,
+  input: Pick<
+    LibraryPrintCompatibilityIndexInput,
+    'plate' | 'printerModel' | 'printerStatus' | 'amsMapping' | 'allowBlacklistedFilament'
+  >
+): void {
+  if (input.allowBlacklistedFilament || !input.printerStatus) return
+  // No mapping means nothing to grade. The dialogs grade the trays they mapped, so an unmapped
+  // dispatch (an override-less history re-print, a calibration pinned to the external spool) must
+  // not be refused over whatever else happens to be loaded.
+  if (!input.amsMapping || input.amsMapping.length === 0) return
+  const plate = index?.plates.find((entry) => entry.index === input.plate)
+  const entries = checkPrinterFilamentBlacklist({
+    printerModel: input.printerModel,
+    status: input.printerStatus,
+    amsMapping: input.amsMapping,
+    plateFilamentIds: plate?.filaments.map((filament) => filament.id),
+    supportFilamentIds: index?.supportFilamentIds
+  }).filter((entry) => blacklistProhibitions(entry.findings).length > 0)
+  if (entries.length === 0) return
+
+  const trays = buildTrayLookup(input.printerStatus)
+  throw conflict(filamentBlacklistRefusalMessage(entries.map((entry) => ({
+    slotLabel: trays.get(entry.trayIndex)?.label ?? entry.fallbackLabel,
+    findings: entry.findings
+  }))))
 }
 
 /**

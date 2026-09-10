@@ -5,7 +5,7 @@
  * Rendering stays with the components; this module only owns the descriptor
  * shapes, colors, and inclusion rules so every surface shows the same chips.
  */
-import { isDirectPrintableFileName, type LibraryFile } from '@printstream/shared'
+import { isDirectPrintableFileName, isMeshLibraryFileKind, type LibraryFile } from '@printstream/shared'
 
 export type FileTagColor = 'neutral' | 'primary' | 'success' | 'warning'
 export type FileTagKind = 'filament' | 'meta'
@@ -42,14 +42,16 @@ export function isUnslicedThreeMfFile(file: LibraryFile): boolean {
 }
 
 /**
- * Files whose only library action is the read-only 3D preview: STL, STEP, and
- * geometry-only 3MFs have no direct-print path (unlike gcode) and aren't editable
+ * Files whose only library action is the read-only 3D preview: every bare mesh (STL, STEP, OBJ,
+ * glTF, AMF) and geometry-only 3MFs have no direct-print path (unlike gcode) and aren't editable
  * projects (unlike project 3MFs), so a click on one should open the previewer rather
- * than do nothing. The server converts each to a mesh for the previewer (STEP is
- * tessellated; a geometry-only 3MF is extracted).
+ * than do nothing. The server converts each to a mesh for the previewer.
+ *
+ * The mesh half is `isMeshLibraryFileKind`, not a list: the geometry-only 3MF is the only part of
+ * this rule that cannot be decided from the kind alone, and it is the part that belongs here.
  */
 export function isPreviewOnlyLibraryFile(file: LibraryFile): boolean {
-  return file.kind === 'stl' || file.kind === 'step' || (file.kind === '3mf' && file.geometryOnly === true)
+  return isMeshLibraryFileKind(file.kind) || (file.kind === '3mf' && file.geometryOnly === true)
 }
 
 /**

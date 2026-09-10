@@ -23,7 +23,7 @@ import {
   type QueuePrintOptions,
   type QueueRequiredFilament
 } from '@printstream/shared'
-import { annotateRequestAuditLog } from '../../lib/audit-logs.js'
+import { annotateRequestAuditLog, printOverrideAuditMetadata } from '../../lib/audit-logs.js'
 import { requireRequestPermission } from '../../lib/authorization.js'
 import { badRequest, conflict, notFound } from '../../lib/http-error.js'
 import { enqueueLibraryPrint, validateLibraryPrint } from '../../lib/library-printing.js'
@@ -35,7 +35,7 @@ import type { AnyPrismaClient } from '../../lib/prisma.js'
 import { requireRequestWorkspaceId, requireRouteParam } from '../../lib/request-helpers.js'
 import { broadcastPluginSettingsChanged, broadcastPrintDispatchChanged, broadcastQueueChanged } from '../../lib/ws-resource-events.js'
 import type { ApiPluginContext } from '../../plugin/types.js'
-import { allowsInsufficientFilament } from './dispatch-consent.js'
+import { resolveQueueDispatchConsents, type QueueDispatchConsents } from './dispatch-consent.js'
 import {
   buildOrderedPrinterContexts,
   loadQueueSettings,
@@ -258,7 +258,7 @@ export function registerQueueRoutes(context: ApiPluginContext): void {
         contexts,
         parsed.data.amsMapping,
         workspaceId,
-        allowsInsufficientFilament('dry-run')
+        resolveQueueDispatchConsents('dry-run')
       ))
       return
     }
@@ -267,6 +267,10 @@ export function registerQueueRoutes(context: ApiPluginContext): void {
 
     // An explicit mapping is the user's per-start material choice and wins outright; the auto path still
     // merges the item's stored slot overrides with the matcher's result.
+    const consents = resolveQueueDispatchConsents('person-start', {
+      allowInsufficientFilament: parsed.data.allowInsufficientFilament === true,
+      allowBlacklistedFilament: parsed.data.allowBlacklistedFilament === true
+    })
     const job = await applyDispatch(
       prisma,
       item,
@@ -274,14 +278,22 @@ export function registerQueueRoutes(context: ApiPluginContext): void {
       target.amsMapping,
       workspaceId,
       parsed.data.amsMapping,
-      allowsInsufficientFilament('person-start', parsed.data.allowInsufficientFilament === true)
+      consents
     )
 
     annotateRequestAuditLog(request, {
       action: 'queue-item-dispatch',
       resource: 'queue item',
       summary: `Dispatched a queued print to ${job.printerName}.`,
-      metadata: { queueItemId: item.id, printerId: target.printerId, jobId: job.printJobId }
+      // The consents ride the metadata for the same reason the library paths record theirs: a
+      // person can waive the low-filament and blacklist guards from this dialog, and a bypass with
+      // no durable trace is the one thing the audit trail exists to prevent.
+      metadata: {
+        queueItemId: item.id,
+        printerId: target.printerId,
+        jobId: job.printJobId,
+        ...printOverrideAuditMetadata(consents)
+      }
     })
     broadcastQueueChanged(workspaceId)
     broadcastPrintDispatchChanged(workspaceId)
@@ -323,7 +335,7 @@ export function registerQueueRoutes(context: ApiPluginContext): void {
             evaluation.amsMapping,
             workspaceId,
             undefined,
-            allowsInsufficientFilament('unattended-sweep')
+            resolveQueueDispatchConsents('unattended-sweep')
           )
           dispatched.push({ itemId: item.id, printerId: printer.printerId, jobId: job.printJobId })
         } catch (error) {
@@ -438,10 +450,10 @@ async function applyDispatch(
   computedAmsMapping: number[] | null,
   workspaceId: string,
   explicitAmsMapping: number[] | undefined,
-  // Required, not defaulted: this is a consent flag, and a default hands every
-  // caller that forgets it the unattended sweep's override. See
-  // `allowsInsufficientFilament`.
-  allowInsufficientFilament: boolean
+  // Required, not defaulted: these are consent flags, and a default hands every
+  // caller that forgets them the unattended sweep's override. See
+  // `resolveQueueDispatchConsents`.
+  consents: QueueDispatchConsents
 ) {
   if (!item.libraryFileId) throw notFound('The library file for this queued item is no longer available')
 
@@ -451,7 +463,7 @@ async function applyDispatch(
   const amsMapping = explicitAmsMapping ?? mergeAmsMapping(parseAmsMapping(item.amsMappingJson), computedAmsMapping ?? undefined)
 
   const job = await enqueueLibraryPrint(
-    buildQueueDispatchInput(item, item.libraryFileId, printerId, amsMapping, allowInsufficientFilament),
+    buildQueueDispatchInput(item, item.libraryFileId, printerId, amsMapping, consents),
     workspaceId
   )
 
@@ -494,7 +506,7 @@ async function buildQueueDryRunResult(
   contexts: ServerPrinterContext[],
   explicitAmsMapping: number[] | undefined,
   workspaceId: string,
-  allowInsufficientFilament: boolean
+  consents: QueueDispatchConsents
 ): Promise<QueueDryRunResult> {
   if (!item.libraryFileId) {
     return { ok: false, reason: 'The library file for this queued item is no longer available', warning: null, printerId: null, printerName: null }
@@ -504,7 +516,7 @@ async function buildQueueDryRunResult(
   }
   const printerName = contexts.find((ctx) => ctx.printerId === target.printerId)?.name ?? null
   const amsMapping = explicitAmsMapping ?? mergeAmsMapping(parseAmsMapping(item.amsMappingJson), target.amsMapping ?? undefined)
-  const input = buildQueueDispatchInput(item, item.libraryFileId, target.printerId, amsMapping, allowInsufficientFilament)
+  const input = buildQueueDispatchInput(item, item.libraryFileId, target.printerId, amsMapping, consents)
   try {
     await validateLibraryPrint(input, workspaceId)
     return { ok: true, reason: null, warning: null, printerId: target.printerId, printerName }
@@ -531,7 +543,7 @@ function buildQueueDispatchInput(
   libraryFileId: string,
   printerId: string,
   amsMapping: number[] | undefined,
-  allowInsufficientFilament: boolean
+  consents: QueueDispatchConsents
 ): PrintFromLibrary {
   const printer = printerManager.getPrinter(printerId)
   return {
@@ -546,7 +558,7 @@ function buildQueueDispatchInput(
     // handles by pausing when a slot runs dry. A person pressing Start passes their own
     // answer through, so the start dialog's confirmation means the same as every other one
     // and the "Check" dry run reports exactly what that Start would do.
-    allowInsufficientFilament,
+    ...consents,
     currentPlateType: printer?.currentPlateType ?? null,
     currentNozzleDiameters: printer?.currentNozzleDiameters ?? []
   }

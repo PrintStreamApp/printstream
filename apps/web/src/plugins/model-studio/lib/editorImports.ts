@@ -12,10 +12,11 @@
  * itself is fetched as a binary STL (rendered with `STLLoader.parse`) rather than
  * shipped as JSON.
  */
-import { extractErrorMessage, type ImportNormalization, type StagedImport } from '@printstream/shared'
+import { STAGED_IMPORT_FORMATS, extractErrorMessage, type ImportNormalization, type StagedImport } from '@printstream/shared'
 import { parseStlMesh, type ImportedMesh, type ImportedObjectInput } from '@printstream/shared/three-mf'
 import type { EditorImportStore } from './editorImportStore'
 import { buildApiUrl } from '../../../lib/apiUrl'
+import { apiFetchRaw } from '../../../lib/apiFetchRaw'
 import { readWorkspaceContextHeader } from '../../../lib/workspaceContext'
 import { fetchModelBytes } from './modelFetch'
 
@@ -33,6 +34,11 @@ export function importMeshUrl(importId: string, partIndex?: number): string {
   return `${base}${separator}part=${encodeURIComponent(String(partIndex))}`
 }
 
+/**
+ * The workspace-context header on its own, for the ONE call that cannot use {@link apiFetchRaw}:
+ * `fetchImportMesh` reads through the stall-guarded `fetchModelBytes`, which owns its own transport
+ * and takes an init rather than returning a `Response`. Everything else here goes through the helper.
+ */
 function workspaceHeaders(): Record<string, string> {
   const workspaceContext = readWorkspaceContextHeader()
   return workspaceContext ? { 'X-PrintStream-Workspace': workspaceContext } : {}
@@ -60,10 +66,9 @@ export async function stageImportFromFile(
   // A multipart text field beside the file; the server rebases only an `object` (see
   // `ImportNormalization`), so an added part must reach it as `part` or its Z gets floored.
   form.append('normalize', normalize)
-  const response = await fetch(buildApiUrl('/api/editor/imports'), {
+  const response = await apiFetchRaw('/api/editor/imports', {
     method: 'POST',
-    credentials: 'include',
-    headers: { Accept: 'application/json', ...workspaceHeaders() },
+    headers: { Accept: 'application/json' },
     body: form,
     signal
   })
@@ -77,10 +82,9 @@ export async function stageImportFromLibrary(
   objectId: number | undefined,
   signal?: AbortSignal
 ): Promise<StagedImport> {
-  const response = await fetch(buildApiUrl('/api/editor/imports/from-library'), {
+  const response = await apiFetchRaw('/api/editor/imports/from-library', {
     method: 'POST',
-    credentials: 'include',
-    headers: { Accept: 'application/json', 'Content-Type': 'application/json', ...workspaceHeaders() },
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
     body: JSON.stringify(objectId == null ? { libraryFileId, normalize } : { libraryFileId, objectId, normalize }),
     signal
   })
@@ -151,8 +155,11 @@ function createStore(): EditorImportStore {
 
   return {
     supportsLibrarySource: true,
-    // The server converts STEP (OpenCASCADE) and extracts 3MF geometry, so all three reach the bake.
-    importableFormats: ['stl', 'step', '3mf'],
+    // Every catalogued format: the server parses STL/OBJ/glTF/AMF directly, converts STEP through
+    // OpenCASCADE and extracts 3MF geometry, so all of them reach the bake. Derived rather than
+    // listed because a hand-copied list on each of the two stores is precisely how one host comes to
+    // offer a format the other refuses. A host that genuinely CANNOT stage one still narrows here.
+    importableFormats: STAGED_IMPORT_FORMATS,
     async stageFile(file, normalize, signal) {
       return remember(await stageImportFromFile(file, normalize, signal))
     },

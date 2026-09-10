@@ -14,6 +14,7 @@ import { z } from 'zod'
 import { auditLogEntrySchema } from './logs.js'
 import { preservedSliceSettingsSchema, sceneEditSvgPartSchema, sceneEditTextInfoSchema } from './slicing.js'
 import { AMS_TRAY_UNMAPPED, AMS_UNIT_TYPES, isPhysicalAmsTrayIndex, type AmsUnitType } from './ams-tray-index.js'
+import { printPauseScheduleSchema } from './print-pause-schedule.js'
 
 /**
  * AMS generation for a unit. Derived by the status parser from the MQTT
@@ -532,6 +533,55 @@ export const filamentTrackSwitchSchema = z.object({
 })
 export type FilamentTrackSwitch = z.infer<typeof filamentTrackSwitchSchema>
 
+/**
+ * One firmware the AMS chain can be switched to, from
+ * `print.upgrade_state.mc_for_ams_firmware.firmware[]`.
+ *
+ * The `id` is BambuStudio's `DevAmsSystemIdx`: `0` is the AMS Lite chain, `1` the AMS / AMS 2 Pro /
+ * AMS HT chain. It is also what the switch COMMAND carries, so it is a wire value, not an index
+ * into our array: never renumber it or infer it from position.
+ */
+export const amsFirmwareOptionSchema = z.object({
+  id: z.number().int(),
+  /** Display name as the printer words it, e.g. "AMS Lite". Null when it reports none. */
+  name: z.string().nullable(),
+  version: z.string().nullable()
+})
+export type AmsFirmwareOption = z.infer<typeof amsFirmwareOptionSchema>
+
+/**
+ * Which firmware the AMS chain is running, and which others it could run.
+ *
+ * `null` on every printer that does not report `mc_for_ams_firmware`, which today is all of them
+ * except the A2L. Mirrors BambuStudio's `DevAmsSystemFirmwareSwitch`, including its capability
+ * rule: an EMPTY `options` list means the machine cannot switch (Studio's `SupportSwitchFirmware`
+ * is literally "the firmware list is not empty"), so this is a runtime capability and not a
+ * per-model table. A1 and A1 mini report none because their AMS Lite hardware is fixed.
+ *
+ * `currentId` is the selection and `runningId` what is actually loaded; they differ mid-switch,
+ * which is exactly when `switching` is true and the UI must not offer another change.
+ */
+export const amsFirmwareSwitchSchema = z.object({
+  options: z.array(amsFirmwareOptionSchema),
+  currentId: z.number().int().nullable(),
+  runningId: z.number().int().nullable(),
+  /** True while the chain is flashing (`status` reads `SWITCHING`). */
+  switching: z.boolean()
+})
+export type AmsFirmwareSwitch = z.infer<typeof amsFirmwareSwitchSchema>
+
+/**
+ * Whether this printer can switch its AMS chain firmware at all.
+ *
+ * BambuStudio's own capability test (`DevAmsSystemFirmwareSwitch::SupportSwitchFirmware`) is
+ * literally "the firmware list is not empty", so A1 and A1 mini, whose AMS Lite hardware is fixed,
+ * report none. Shared because the API validator refuses on it and the web hides the control on it,
+ * and a capability the two disagreed about would offer a control that always 400s.
+ */
+export function canSwitchAmsType(firmwareSwitch: AmsFirmwareSwitch | null | undefined): boolean {
+  return (firmwareSwitch?.options.length ?? 0) > 0
+}
+
 export const printerConnectionWarningCodeSchema = z.enum([
   'localConnectionFailed',
   'developerModeDisabled'
@@ -580,6 +630,14 @@ export const printerStatusSchema = z.object({
   currentLayer: z.number().int().nonnegative().nullable(),
   totalLayers: z.number().int().nonnegative().nullable(),
   remainingMinutes: z.number().int().nonnegative().nullable(),
+  /**
+   * The running print's baked pause points as the PRINTER reports them (`print.p_list`), or null
+   * when it reports none, which includes firmware too old to know the field, so null means
+   * "unknown", never "this print has no pauses". Job-scoped: cleared when the printer moves to a
+   * different task. See `@printstream/shared`'s `print-pause-schedule.ts`, and note the fallback
+   * for silent firmware rides `PrintJob.pauseSchedule` instead.
+   */
+  pauseSchedule: printPauseScheduleSchema.nullable().default(null),
   /** Active printer-reported job id (`print.job_id`) when available. */
   jobId: z.string().nullable(),
   /** Active printer-reported task id (`print.task_id`) when available. */
@@ -602,6 +660,8 @@ export const printerStatusSchema = z.object({
    */
   nozzleRack: nozzleRackSchema.nullable(),
   filamentTrackSwitch: filamentTrackSwitchSchema.nullable().optional(),
+  /** AMS chain firmware selection; null unless the printer reports `mc_for_ams_firmware`. */
+  amsFirmwareSwitch: amsFirmwareSwitchSchema.nullable().optional(),
   chamberTemp: z.number().nullable(),
   chamberTarget: z.number().nullable(),
   fanGearSpeed: z.number().nullable(),
@@ -736,6 +796,24 @@ export const printerCommandSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('setAmsFilamentBackup'),
     enabled: z.boolean()
+  }),
+  /**
+   * Flash the AMS chain onto a different firmware (AMS Lite vs AMS/AMS 2 Pro/AMS HT).
+   *
+   * `firmwareId` is the wire id from {@link amsFirmwareOptionSchema}, NOT an index into the
+   * reported options. Unbounded on purpose: today only 0 and 1 exist, but the value is Bambu's to
+   * extend and a `max()` here would reject a new chain type as malformed rather than pass it on.
+   */
+  z.object({
+    type: z.literal('switchAmsFirmware'),
+    firmwareId: z.number().int().min(0)
+  }),
+  /**
+   * Reset the AMS chain's id sequence ("Arrange AMS order"). Takes no parameters: it disconnects
+   * every unit at once, and the user reconnects them in the order they want.
+   */
+  z.object({
+    type: z.literal('resetAmsOrder')
   }),
   z.object({
     type: z.literal('startAmsDrying'),
@@ -990,7 +1068,7 @@ export type PrintNozzleOffsetCalibrationMode = z.infer<typeof printNozzleOffsetC
  * Recorded per print job (`PrintJob.printOptionsJson`) and replayed by re-print; see
  * `apps/api/src/lib/print-job-options.ts`, which owns both directions.
  *
- * Deliberately EXCLUDES the four `allow*` flags. Those are per-dispatch consent ("I accept
+ * Deliberately EXCLUDES the five `allow*` flags. Those are per-dispatch consent ("I accept
  * this risk right now"), not settings, so replaying one would re-grant a safety bypass the
  * dialog is not showing; they are recorded in the audit log instead, where a consent
  * belongs. Also excludes `plate`/`useAms`/`amsMapping` (their own `PrintJob` columns) and
@@ -1060,6 +1138,14 @@ export const printJobSchema = z.object({
    * nothing, since their options were never ours to see.
    */
   printOptions: printStartOptionSelectionSchema.partial().nullable().default(null),
+  /**
+   * Baked pauses scanned out of the G-code this job DISPATCHED, for marking them on the live
+   * progress bar. The FALLBACK producer only: a printer reporting `print.p_list` outranks this
+   * (see `PrinterStatus.pauseSchedule`), and the browser chooses between them with
+   * `resolvePrintPauseSchedule`. Null means nothing was scanned, never that the print has no
+   * pauses.
+   */
+  pauseSchedule: printPauseScheduleSchema.nullable().default(null),
   activity: z.array(auditLogEntrySchema),
   thumbnailPath: z.string().nullable(),
   snapshotPath: z.string().nullable()
@@ -1075,12 +1161,24 @@ export const threeMfSettingsRepairReasons = ['flushMatrix', 'variantIndex', 'fil
 export const threeMfSettingsRepairReasonSchema = z.enum(threeMfSettingsRepairReasons)
 export type ThreeMfSettingsRepairReason = z.infer<typeof threeMfSettingsRepairReasonSchema>
 
+/**
+ * What a stored library file IS. The MEMBERS live here as one list so every schema deriving from
+ * them (the file DTO, the remote-import candidate type) cannot name a different set.
+ *
+ * A PERSISTED value (`LibraryFile.kind`, a plain TEXT column with no DB constraint), so members may
+ * be ADDED but never renamed or removed: rows written by an older build keep whatever they were
+ * classified as. Files uploaded before a kind existed stay `'other'` and are NOT reclassified at
+ * rest -- surfaces that care fall back on the file's extension, as the editor's library picker
+ * already does for STEP files predating the `step` kind.
+ */
+export const LIBRARY_FILE_KINDS = ['3mf', 'gcode', 'stl', 'step', 'obj', 'gltf', 'amf', 'other'] as const
+
 export const libraryFileSchema = z.object({
   id: z.string(),
   name: z.string(),
   sizeBytes: z.number().int().nonnegative(),
   uploadedAt: z.string(),
-  kind: z.enum(['3mf', 'gcode', 'stl', 'step', 'other']),
+  kind: z.enum(LIBRARY_FILE_KINDS),
   thumbnailPath: z.string().nullable(),
   folderId: z.string().nullable(),
   compatiblePrinterModels: z.array(printerModelSchema),
@@ -1439,13 +1537,58 @@ export function isDirectPrintableFileName(name: string): boolean {
   return lower.endsWith('.gcode') || lower.endsWith('.gcode.3mf')
 }
 
+/**
+ * What a stored library file IS, from its name.
+ *
+ * Deliberately its own list rather than `detectImportFormat`'s: this axis includes G-code (which
+ * nothing imports) and answers for every file in the library, where the import catalogue answers
+ * only "can the editor stage this as geometry". They overlap on the mesh formats and are checked
+ * against each other by `library-file-kinds.test.ts`, so a format cannot be importable and
+ * unclassifiable at the same time -- which is what leaves a file showing as "Other" in the library
+ * while the editor happily opens it.
+ *
+ * Order matters: `.gcode.3mf` must be claimed by the direct-printable test before the `.3mf` one.
+ */
 export function classifyLibraryFileKind(name: string): LibraryFile['kind'] {
   const lower = name.toLowerCase()
   if (isDirectPrintableFileName(lower)) return 'gcode'
   if (lower.endsWith('.3mf')) return '3mf'
   if (lower.endsWith('.stl')) return 'stl'
   if (lower.endsWith('.step') || lower.endsWith('.stp')) return 'step'
+  if (lower.endsWith('.obj')) return 'obj'
+  if (lower.endsWith('.gltf') || lower.endsWith('.glb')) return 'gltf'
+  if (lower.endsWith('.amf')) return 'amf'
   return 'other'
+}
+
+/**
+ * Kinds that are a bare MESH: geometry with no project, no plates and no embedded preview image.
+ *
+ * THE ONE PREDICATE for that question. Every surface that asks it -- the `/mesh` route, the
+ * thumbnail upload gate, the thumbnail reader, the library card's preview-only treatment, the
+ * previewer's mode resolution -- used to spell it `kind === 'stl' || kind === 'step'` inline. Five
+ * copies of a list that had to grow by three, where forgetting one does not fail a build: it shows
+ * the user a file with no thumbnail, or a preview action that 404s.
+ *
+ * A geometry-only 3MF belongs to this set too but cannot be decided from the KIND alone (a `.3mf`
+ * is usually a project), so callers that can see the parsed index add it via `geometryOnly`; the
+ * web's `isPreviewOnlyLibraryFile` is where those two halves are combined.
+ */
+export const MESH_LIBRARY_FILE_KINDS = ['stl', 'step', 'obj', 'gltf', 'amf'] as const
+
+export type MeshLibraryFileKind = (typeof MESH_LIBRARY_FILE_KINDS)[number]
+
+const MESH_LIBRARY_FILE_KIND_SET: ReadonlySet<string> = new Set(MESH_LIBRARY_FILE_KINDS)
+
+/**
+ * Whether this kind is a bare mesh. See {@link MESH_LIBRARY_FILE_KINDS}.
+ *
+ * Takes a `string`, not `LibraryFile['kind']`, because the column is plain TEXT: every api caller
+ * holds a raw Prisma row, and making each one cast first is how a cast ends up somewhere it narrows
+ * a value that was never checked. Narrowing here instead means the check IS the cast.
+ */
+export function isMeshLibraryFileKind(kind: string): kind is MeshLibraryFileKind {
+  return MESH_LIBRARY_FILE_KIND_SET.has(kind)
 }
 
 export const libraryFolderSchema = z.object({
@@ -1558,6 +1701,21 @@ export const printFromLibrarySchema = z.object({
    * that pauses when it runs dry, which is what the printer does anyway.
    */
   allowInsufficientFilament: z.boolean().default(false),
+  /**
+   * Consent to print a material Bambu forbids on this hardware (see `filament-blacklist.ts`):
+   * TPU through an AMS, an abrasive through an E3D high-flow nozzle, and so on.
+   *
+   * Its own flag rather than `allowIncompatibleFilament` for the usual reason: that one means "the
+   * trays I picked hold the materials this file wants", which is a statement about the FILE, while
+   * this one accepts a risk to the PRINTER that holds however the file was sliced. One checkbox
+   * must not grant both.
+   *
+   * Overridable at all, where BambuStudio hard-blocks, because the rules key on nozzle flow and
+   * diameter that we PARSE (`parseNozzleTypeInfo`), and that parse is unverified against some live
+   * hardware. A misread nozzle would otherwise make a correct setup un-printable with no way out.
+   * Only prohibitions consult it; warnings never block and so never need consent.
+   */
+  allowBlacklistedFilament: z.boolean().default(false),
   currentPlateType: z.string().trim().min(1).nullable().optional(),
   currentNozzleDiameters: printerBaseSchema.shape.currentNozzleDiameters.optional(),
   /** 1-based plate index inside a multi-plate 3MF. Defaults to 1. */
@@ -1688,7 +1846,19 @@ export const threeMfPlateSchema = z.object({
   index: z.number().int().positive(),
   name: z.string().nullable(),
   hasThumbnail: z.boolean(),
+  /**
+   * The plate's EFFECTIVE bed type (its own where it states one, else the project-global). What a
+   * chip should show; {@link bedTypeOverride} is what an editor must seed from.
+   */
   plateType: z.string().nullable(),
+  /** The plate's OWN bed type, null when it inherits the global. Absent on payloads from older servers. */
+  bedTypeOverride: z.string().nullable().optional(),
+  /** The plate's own print sequence, null when it inherits the global. Absent from older servers. */
+  printSequence: z.enum(['by layer', 'by object']).nullable().optional(),
+  /** The plate's own vase mode, null when it inherits the global. Absent from older servers. */
+  spiralMode: z.boolean().nullable().optional(),
+  /** Locked against arrange; absent means unlocked (there is no global to inherit). */
+  locked: z.boolean().optional(),
   nozzleSizes: z.array(z.string()),
   filaments: z.array(threeMfFilamentSchema),
   objects: z.array(threeMfPlateObjectSchema),
@@ -1703,7 +1873,13 @@ export const threeMfPlateSchema = z.object({
    */
   filamentChanges: z.array(z.object({ z: z.number(), filamentId: z.number().int().positive() })).optional(),
   /** Layer pauses baked in `custom_gcode_per_layer.xml`, by print height (mm). */
-  pauses: z.array(z.object({ z: z.number() })).optional()
+  pauses: z.array(z.object({ z: z.number() })).optional(),
+  /**
+   * The slicer's two-group partition of this plate's filaments, positional over them. Only a
+   * Filament Track Switch machine's slice produces one; absent everywhere else, and on payloads
+   * from an older server. See `bridgeLibraryThreeMfPlateSchema`.
+   */
+  optimalAssignment: z.array(z.number().int()).optional()
 })
 export type ThreeMfPlate = z.infer<typeof threeMfPlateSchema>
 
@@ -1749,6 +1925,12 @@ export type ThreeMfProjectFilament = z.infer<typeof threeMfProjectFilamentSchema
 export const threeMfIndexSchema = z.object({
   plates: z.array(threeMfPlateSchema),
   projectFilaments: z.array(threeMfProjectFilamentSchema),
+  /**
+   * The project-global `curr_bed_type`, or null when the project states none. Read THIS for "what
+   * is the project set to"; a plate's `plateType` resolves its own override ahead of the global,
+   * so the first plate's value is not the project's whenever that plate overrides it.
+   */
+  projectPlateType: z.string().nullable().optional(),
   compatiblePrinterModels: z.array(printerModelSchema),
   /** Project filaments designated as support material; used as "in use" for the remove-guard even when no object references them directly. */
   supportFilamentIds: z.array(z.number().int().positive()).default([]),
@@ -1832,6 +2014,8 @@ export const printerStoragePrintSchema = z.object({
   allowFilamentTrackSwitchMismatch: z.boolean().default(false),
   /** See {@link printFromLibrarySchema}.allowInsufficientFilament. */
   allowInsufficientFilament: z.boolean().default(false),
+  /** See {@link printFromLibrarySchema}.allowBlacklistedFilament. */
+  allowBlacklistedFilament: z.boolean().default(false),
   /**
    * Objects on the selected pre-sliced plate to EXCLUDE from the print, as the storage
    * plates index's `objects[].id` values (same wire semantics as

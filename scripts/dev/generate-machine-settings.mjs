@@ -5,13 +5,13 @@
  *
  * The page/group/line LAYOUT is transcribed from BambuStudio's `TabPrinter::build_fff()` +
  * `build_unregular_pages()` (src/slic3r/GUI/Tab.cpp). The per-option METADATA comes from
- * `PrintConfig.cpp` via the shared parser in `scripts/dev/lib/bambu-config-parse.mjs` — the same
+ * `PrintConfig.cpp` via the shared parser in `scripts/dev/lib/bambu-config-parse.mjs`, the same
  * source of truth as the process and filament catalogs. Re-run to update.
  *
  * ONE DELIBERATE DIVERGENCE from BambuStudio's UI: it renders the per-extruder options as a page
  * PER extruder, built at runtime from the machine's extruder count. Those options are vector
  * config values indexed by extruder, so a preset editor shows them once, as a single "Extruder"
- * page — the dialog edits the stored preset, not a live machine, and duplicating identical pages
+ * page: the dialog edits the stored preset, not a live machine, and duplicating identical pages
  * would say nothing extra.
  *
  * Usage:
@@ -47,7 +47,7 @@ const LAYOUT = [
     ['Printable space', ['printable_height', 'best_object_pos']],
     // Transcribed from the LIVE lines of TabPrinter::build_fff's "Advanced" optgroup. BambuStudio
     // has commented several neighbours out (`silent_mode`, `spaghetti_detector`, and
-    // `single_extruder_multi_material`'s whole `#if 0` block) — and a commented-out option is not
+    // `single_extruder_multi_material`'s whole `#if 0` block), and a commented-out option is not
     // merely unused, it has no `def->label` either, so including one rendered a nameless switch
     // that changed a setting the slicer ignores. `silent_mode` is still READ (it decides whether
     // the motion limits get a Silent column, see `machineSupportsSilentMode`); BambuStudio just
@@ -109,7 +109,7 @@ const LAYOUT = [
 /**
  * The XYZE machine limits, which the shared parser cannot see: BambuStudio declares them in a loop
  * (`this->add("machine_max_speed_" + axis.name, coFloats)`), not as literal keys. Synthesized here
- * from that loop body so they carry their real NUMERIC type — a numeric option left to the parser's
+ * from that loop body so they carry their real NUMERIC type: a numeric option left to the parser's
  * `string` fallback loses its bounds and reads as changed against any preset that spells the value
  * differently, which is the phantom-changed bug this repo has already fixed once.
  */
@@ -180,7 +180,7 @@ function main() {
           options[key] = { type: 'string', label: key, tooltip: '', mode: 'simple' }
           continue
         }
-        // The `full_label` fallback that names the machine limits lives in `parseBlock` — see the
+        // The `full_label` fallback that names the machine limits lives in `parseBlock`. See the
         // note there; without it five acceleration/feedrate fields render as unnamed number boxes.
         options[key] = parseBlock(entry.coType, entry.block)
       }

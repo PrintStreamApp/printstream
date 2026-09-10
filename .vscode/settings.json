@@ -5,12 +5,12 @@
   // (ms-ossdata.vscode-pgsql) so a fresh clone needs almost no setup.
   //
   // Targets the devcontainer Postgres service (.devcontainer/compose.yml):
-  // host `db`, db `printstream`, user `postgres` — matching the DATABASE_URL in
-  // devcontainer.json's remoteEnv and .env.dev.example. If you run Postgres on
+  // host `db`, db `printstream`, user `postgres` (matching the DATABASE_URL in
+  // devcontainer.json's remoteEnv and .env.dev.example). If you run Postgres on
   // your host instead of the devcontainer, change "server" to "localhost".
   //
   // Zero-prompt auth: the extension refuses to persist an inline password (it
-  // strips it by design), so authenticationType is "None" — the extension then
+  // strips it by design), so authenticationType is "None": the extension then
   // sends no password and its libpq-based tools service falls back to the
   // PGPASSWORD env var, which devcontainer.json's remoteEnv sets to `postgres`.
   // No connect-time prompt, nothing stored in the OS keychain, portable to any

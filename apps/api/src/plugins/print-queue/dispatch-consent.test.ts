@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { allowsInsufficientFilament } from './dispatch-consent.js'
+import { allowsInsufficientFilament, resolveQueueDispatchConsents } from './dispatch-consent.js'
 
 test('a person starting a print consents only as far as they answered', () => {
   assert.equal(allowsInsufficientFilament('person-start', true), true)
@@ -25,4 +25,35 @@ test('the dry run withholds, so the check runs and it can report what was found'
   // "Check" the one surface silent about a slot that is about to run out.
   assert.equal(allowsInsufficientFilament('dry-run'), false)
   assert.equal(allowsInsufficientFilament('dry-run', true), false)
+})
+
+test('an unattended sweep consents to low filament but never to a blacklisted material', () => {
+  // The asymmetry is the whole point: a shortfall makes the printer pause, which it handles, while
+  // a material Bambu forbids on this hardware damages it and nobody is present to accept that.
+  const sweep = resolveQueueDispatchConsents('unattended-sweep')
+  assert.equal(sweep.allowInsufficientFilament, true)
+  assert.equal(sweep.allowBlacklistedFilament, false)
+})
+
+test('a person start carries their own answers, and only theirs', () => {
+  assert.deepEqual(
+    resolveQueueDispatchConsents('person-start', { allowInsufficientFilament: true, allowBlacklistedFilament: true }),
+    { allowInsufficientFilament: true, allowBlacklistedFilament: true }
+  )
+  assert.deepEqual(
+    resolveQueueDispatchConsents('person-start'),
+    { allowInsufficientFilament: false, allowBlacklistedFilament: false }
+  )
+  // One answer must never imply the other.
+  assert.deepEqual(
+    resolveQueueDispatchConsents('person-start', { allowInsufficientFilament: true }),
+    { allowInsufficientFilament: true, allowBlacklistedFilament: false }
+  )
+})
+
+test('a dry run withholds both, so each guard runs and can be reported', () => {
+  assert.deepEqual(
+    resolveQueueDispatchConsents('dry-run', { allowInsufficientFilament: true, allowBlacklistedFilament: true }),
+    { allowInsufficientFilament: false, allowBlacklistedFilament: false }
+  )
 })

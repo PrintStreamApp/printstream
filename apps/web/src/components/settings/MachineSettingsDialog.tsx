@@ -62,6 +62,8 @@ export interface MachineSettingsDialogProps {
    * user preset. Matches the same prop on the process and filament dialogs.
    */
   canEditOriginal?: boolean
+  /** Search text to open the catalog with, from the cross-catalog settings search. */
+  initialQuery?: string
   /**
    * Where an edit lands, mirroring the process dialog. `'preset'` (default) is the stored-preset
    * editor: no Apply button, and {@link onApply} is never called. `'project'` (the 3MF editor) and
@@ -82,7 +84,7 @@ const PAGE_ID_BY_KEY: ReadonlyMap<string, string> = new Map(
 )
 
 export default function MachineSettingsDialog(props: MachineSettingsDialogProps): JSX.Element {
-  const { open, onClose, slicerTargetId, machineProfileId, machineProfileName, canEditOriginal, applyScope = 'preset', initialOverrides, onApply } = props
+  const { open, onClose, slicerTargetId, machineProfileId, machineProfileName, canEditOriginal, applyScope = 'preset', initialOverrides, initialQuery, onApply } = props
   // Content-keyed, not identity-keyed: hosts build this map inline, so keying the load effect on
   // the object itself would refetch and reset the form on every parent render (see apps/web/the development notes).
   const initialOverridesKey = JSON.stringify(initialOverrides ?? null)
@@ -287,6 +289,7 @@ export default function MachineSettingsDialog(props: MachineSettingsDialogProps)
       open={open}
       onClose={onClose}
       catalog={machineSettingsCatalog}
+      initialQuery={initialQuery}
       titlePrefix="Printer settings"
       presetName={machineProfileName}
       loading={loading}

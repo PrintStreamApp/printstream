@@ -267,6 +267,7 @@ function makeStatus(overrides: Partial<PrinterStatus>): PrinterStatus {
     currentLayer: 1,
     totalLayers: 10,
     remainingMinutes: 10,
+    pauseSchedule: null,
     jobId: null,
     jobName: 'Calibration cube',
     lastJobName: 'Calibration cube',

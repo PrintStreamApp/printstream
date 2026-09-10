@@ -1,5 +1,5 @@
 /**
- * Guards the rule in this plugin'the s development notes: `useEditorKeyboardShortcuts` owns the editor's
+ * Guards the rule in this plugin's development notes: `useEditorKeyboardShortcuts` owns the editor's
  * shortcuts, and `EditorView` must not handle the same keys in a listener of its own.
  *
  * This is a source scan because the failure is invisible at runtime: both listeners are attached to

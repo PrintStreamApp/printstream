@@ -4,7 +4,7 @@
  *
  * Separate from `HeightRangesDialog` so the rules are unit-testable without rendering (and so the
  * dialog file exports only its component). Z values are OBJECT space mm, z=0 at the object's
- * underside — the frame `Metadata/layer_config_ranges.xml` stores and the slicer reads.
+ * underside: the frame `Metadata/layer_config_ranges.xml` stores and the slicer reads.
  *
  * The deliberate divergence from BambuStudio is that bands here can never overlap. Studio lets
  * overlaps exist and resolves them at slice time by trimming the lower band's top away
@@ -30,7 +30,7 @@ export function sortBands(ranges: ReadonlyArray<EditorHeightRange>): EditorHeigh
  * Where a new band fits: stacked on the highest existing one, else from the object's base.
  *
  * Returns null when the model has no room left, so the caller can DISABLE its add control rather
- * than silently doing nothing — which is what BambuStudio's always-enabled `+` does once
+ * than silently doing nothing, which is what BambuStudio's always-enabled `+` does once
  * `can_add_new_range_after_current` was gutted to always report "addable".
  */
 export function nextBandSlot(

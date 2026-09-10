@@ -1,8 +1,10 @@
 /**
- * AMS-level dialogs extracted from `pages/PrintersView.tsx`: the AMS user
- * settings modal (with its per-setting `AmsSettingsRow`) and the AMS drying
- * modal. Both are controlled modals that emit printer commands to their
- * caller.
+ * AMS-level dialogs extracted from `pages/PrintersView.tsx`: the AMS settings modal and the AMS
+ * drying modal. Both are controlled modals that emit printer commands to their caller.
+ *
+ * The settings modal's rows live in `AmsSettingsRows.tsx`, moved there once the sheet held three
+ * different row shapes (a toggle, a choice, and a one-shot action) that must still line up as one
+ * list.
  */
 import { useState } from 'react'
 import {
@@ -16,12 +18,14 @@ import {
   clampDryingTemperature,
   defaultAmsDryingProfile,
   dryingCoolingTemperature,
-  dryingPresetForFilament,
+  recommendedAmsDryingDurationHours,
+  recommendedAmsDryingTemperature,
   formatAmsDryingRiskLabel,
   type AmsUnit,
   type PrinterCommand,
   type PrinterStatus
 } from '@printstream/shared'
+import { AmsOrderResetRow, AmsSettingsRow } from './AmsSettingsRows'
 import { ScrollableDialogBody, ScrollableModalDialog } from '../ScrollableDialog'
 import { DialogSection } from '../DialogSection'
 import { BackAwareModal as Modal } from '../BackAwareModal'
@@ -32,17 +36,22 @@ import { formatRemaining } from '../../lib/printersViewHelpers'
 export function AmsSettingsModal({
   printerName,
   settings,
+  canReorderAmsUnits,
   submitting,
   onClose,
   onUpdateUserSettings,
-  onUpdateFilamentBackup
+  onUpdateFilamentBackup,
+  onResetAmsOrder
 }: {
   printerName: string
   settings: PrinterStatus['amsSettings']
+  /** From `supportsAmsSettingsReorder`: A2L only, so the row is absent everywhere else. */
+  canReorderAmsUnits: boolean
   submitting: boolean
   onClose: () => void
   onUpdateUserSettings: (command: Extract<PrinterCommand, { type: 'setAmsUserSettings' }>) => void
   onUpdateFilamentBackup: (enabled: boolean) => void
+  onResetAmsOrder: () => void
 }) {
   const userSettingsReady =
     settings.detectOnInsert != null &&
@@ -61,6 +70,12 @@ export function AmsSettingsModal({
           <Stack spacing={1.5}>
             <Sheet variant="outlined" sx={{ borderRadius: 'md', overflow: 'hidden' }}>
               <Stack divider={<ListDivider inset="gutter" />}>
+                {/* Hardware actions go first, where BambuStudio puts them: they describe the
+                    hardware that everything below is a setting for. AMS type switching remains
+                    hidden until status exposes the filament-in-extruder safety prerequisite. */}
+                {canReorderAmsUnits && (
+                  <AmsOrderResetRow disabled={submitting} onReset={onResetAmsOrder} />
+                )}
                 <AmsSettingsRow
                   title="Read on insert"
                   description="Automatically read filament details when a spool is inserted into the AMS."
@@ -126,51 +141,10 @@ export function AmsSettingsModal({
   )
 }
 
-export function AmsSettingsRow({
-  title,
-  description,
-  value,
-  disabled,
-  unsupported = false,
-  onToggle
-}: {
-  title: string
-  description: string
-  value: boolean | null
-  disabled: boolean
-  unsupported?: boolean
-  onToggle: (nextValue: boolean) => void
-}) {
-  const stateLabel = unsupported ? 'Unsupported' : value == null ? 'Unknown' : value ? 'On' : 'Off'
-  const color: 'neutral' | 'success' = !unsupported && value ? 'success' : 'neutral'
-
-  return (
-    <Stack
-      direction={{ xs: 'column', sm: 'row' }}
-      spacing={1.25}
-      justifyContent="space-between"
-      alignItems={{ xs: 'stretch', sm: 'center' }}
-      sx={{ p: 1.25 }}
-    >
-      <Stack spacing={0.5} sx={{ minWidth: 0, flex: 1 }}>
-        <Typography level="title-sm">{title}</Typography>
-        <Typography level="body-xs" textColor="text.tertiary">{description}</Typography>
-      </Stack>
-      <Stack direction="row" spacing={1} justifyContent="flex-end" alignItems="center">
-        <Chip size="sm" variant="soft" color={color}>{stateLabel}</Chip>
-        {!unsupported && (
-          <Button size="sm" variant="soft" disabled={disabled} onClick={() => onToggle(!(value ?? false))}>
-            {value ? 'Disable' : 'Enable'}
-          </Button>
-        )}
-      </Stack>
-    </Stack>
-  )
-}
-
 export function AmsDryingModal({
   printerName,
   unit,
+  printing,
   submitting,
   onClose,
   onStart,
@@ -178,12 +152,17 @@ export function AmsDryingModal({
 }: {
   printerName: string
   unit: AmsUnit
+  /**
+   * Whether a print is running. Bambu recommends a lower drying temperature while one is, for
+   * eight materials; the suggestion follows it, and the user can still override.
+   */
+  printing: boolean
   submitting: boolean
   onClose: () => void
   onStart: (command: Extract<PrinterCommand, { type: 'startAmsDrying' }>) => void
   onStop: (amsId: number) => void
 }) {
-  const defaultProfile = defaultAmsDryingProfile(unit)
+  const defaultProfile = defaultAmsDryingProfile(unit, { printing })
   const [filamentType, setFilamentType] = useState(defaultProfile.filamentType)
   const [temperature, setTemperature] = useState(String(defaultProfile.temperature))
   const [durationHours, setDurationHours] = useState(String(defaultProfile.durationHours))
@@ -208,10 +187,12 @@ export function AmsDryingModal({
 
   const handleFilamentTypeChange = (_event: unknown, nextValue: string | null) => {
     if (!nextValue) return
-    const preset = dryingPresetForFilament(nextValue)
     setFilamentType(nextValue)
-    setTemperature(String(clampDryingTemperature(preset.temperature, temperatureRange)))
-    setDurationHours(String(preset.durationHours))
+    setTemperature(String(clampDryingTemperature(
+      recommendedAmsDryingTemperature(nextValue, { printing }),
+      temperatureRange
+    )))
+    setDurationHours(String(recommendedAmsDryingDurationHours(nextValue, unit.type)))
   }
 
   return (

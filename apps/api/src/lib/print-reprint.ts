@@ -107,7 +107,7 @@ export function parseAmsMapping(value: string | null): number[] | null {
  * never recorded is absent rather than guessed, which is what lets `??` chain straight
  * through to the schema.
  *
- * The four `allow*` consent flags are deliberately NOT restored: each means "I accept this
+ * The five `allow*` consent flags are deliberately NOT restored: each means "I accept this
  * risk right now", so replaying one would re-grant a safety bypass nobody was shown. They
  * are not recorded on the row at all, so this cannot later regress into reading them.
  *
@@ -133,6 +133,7 @@ export function buildReprintOptions(
     allowPlateTypeMismatch: overrides.allowPlateTypeMismatch,
     allowFilamentTrackSwitchMismatch: overrides.allowFilamentTrackSwitchMismatch,
     allowInsufficientFilament: overrides.allowInsufficientFilament,
+    allowBlacklistedFilament: overrides.allowBlacklistedFilament,
     currentPlateType: overrides.currentPlateType,
     currentNozzleDiameters: overrides.currentNozzleDiameters,
     plate: overrides.plate ?? row.plate ?? 1,

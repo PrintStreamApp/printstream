@@ -2,22 +2,22 @@
 
 ## What this is
 
-Changing the **printer a 3MF project targets** — e.g. opening an A1 mini project, switching the
-printer to H2D, and saving — so the saved project opens and slices for the new machine. PrintStream
+Changing the **printer a 3MF project targets** (e.g. opening an A1 mini project, switching the
+printer to H2D, and saving), so the saved project opens and slices for the new machine. PrintStream
 does this **by rewriting the project's machine settings, not by re-slicing**, so the user's layout,
 arrangement, and filament selection are preserved exactly.
 
 The slicer's *cross-model machine switch* (`docs/slicer-cross-model-machine-switch.md`) is the
 **slice-time** twin of this operation: it applies the same `retargetProjectSettingsToMachine`
 rewrite to the slice input (plus a bed re-center for larger targets) before the CLI runs, so
-PrintStream — not the BambuStudio CLI — is the source of truth for machine changes in both flows.
+PrintStream, not the BambuStudio CLI, is the source of truth for machine changes in both flows.
 
 ## How it works
 
 Entry point: the editor's save (`apps/api/src/routes/editor.ts`) calls
 `retargetSavedProjectMachine` (`apps/api/src/lib/save-retarget.ts`) when the save request carries a
 `retarget` target (the web sends one when the selected machine is cross-model with the source, and
-**always for a project with no source machine** — a new-project scaffold embeds no
+**always for a project with no source machine**: a new-project scaffold embeds no
 `project_settings.config`, so its first save must persist the chosen machine this way; such a
 project retargets from an empty settings object, the machine/process profiles supplying every field).
 
@@ -50,16 +50,16 @@ Steps for the full retarget:
 1. **Resolve the target machine profile.** `slicerClient.resolveMachineConfig` → the slicer's
    `POST /profiles/resolve` with `kind: 'machine'`, which merges the preset's `inherits`/`include`
    chain into a flat config map. *This is a data lookup, not slicing.* If it can't be resolved the save
-   **fails with a clear error** — it never silently keeps the source machine.
+   **fails with a clear error**: it never silently keeps the source machine.
 2. **Rewrite the machine settings.** `retargetProjectSettingsToMachine`
    (`packages/shared/src/machine-retarget.ts`):
    - **Overwrites every key the resolved machine profile defines** (minus profile metadata such as
      `name`/`type`/`inherits` and compatibility declarations). The profile *is* the definition of
-     "machine-owned settings", so this is generic and complete — bed, nozzle, extruder topology,
+     "machine-owned settings", so this is generic and complete: bed, nozzle, extruder topology,
      machine gcode, accel/jerk limits, etc.
    - Sets `printer_settings_id` / `printer_model` to the target.
    - Re-derives the runtime maps that depend on **both** the new machine topology and the project's
-     filaments — `filament_nozzle_map`, `filament_volume_map`, `printer_extruder_variant`,
+     filaments: `filament_nozzle_map`, `filament_volume_map`, `printer_extruder_variant`,
      `filament_extruder_variant`, `extruder_nozzle_stats`, `extruder_ams_count`
      (`repairEstimateModeProjectSettings`, shared with the slicer's topology repair).
 3. **Bring the process over.** `applyProcessProfileToProjectSettings` resolves the selected target
@@ -67,59 +67,59 @@ Steps for the full retarget:
    then applies the user's per-slice process overrides on top. Process keys are disjoint from machine
    keys, so this composes cleanly after step 2. **Best-effort**: if the process can't be resolved (e.g.
    a project-embedded preset), the machine retarget still stands.
-4. **Write it back** into the 3MF (`rewriteThreeMfEntries` targeting `project_settings.config` —
+4. **Write it back** into the 3MF (`rewriteThreeMfEntries` targeting `project_settings.config`,
    an upsert: the entry is appended when the settings-less source has none to transform), copying
    every other entry verbatim.
 
 ### Two hosts, one rewrite
 
 The steps above describe the **workspace editor**, where the API bakes the save. The **public 3MF
-editor** (`/3mf-editor`) performs the same operation entirely in the browser — the user's file never
-leaves the tab — and it must produce the same file, so the DECISIONS are shared and only the I/O
+editor** (`/3mf-editor`) performs the same operation entirely in the browser (the user's file never
+leaves the tab), and it must produce the same file, so the DECISIONS are shared and only the I/O
 differs:
 
 | Piece | Shared | Workspace host | Public host |
 | --- | --- | --- | --- |
-| What a retarget rewrites, and in what order | `applyMachineRetargetToProjectSettings` (`packages/shared/src/machine-retarget.ts`) | — | — |
-| Which preset each filament slot rebinds to | `selectFilamentRebindTargets` (`packages/shared/src/filament-rebind.ts`) | — | — |
-| Dropping the stale slice identity | `stripSliceInfoPrinterModelId` | — | — |
-| Resolving the machine / process / filament presets | — | `slicerClient` + the workspace's preset files (`save-retarget.ts`) | `POST /api/public/slicing/resolve-{machine,process,filament}` (`lib/localMachineRetarget.ts`) |
-| Applying it to the 3MF | — | post-bake ZIP rewrite (`rewriteThreeMfEntries`) | post-bake entry rewrite in the tab (`lib/clientThreeMfBake.ts`) |
+| What a retarget rewrites, and in what order | `applyMachineRetargetToProjectSettings` (`packages/shared/src/machine-retarget.ts`) | n/a | n/a |
+| Which preset each filament slot rebinds to | `selectFilamentRebindTargets` (`packages/shared/src/filament-rebind.ts`) | n/a | n/a |
+| Dropping the stale slice identity | `stripSliceInfoPrinterModelId` | n/a | n/a |
+| Resolving the machine / process / filament presets | n/a | `slicerClient` + the workspace's preset files (`save-retarget.ts`) | `POST /api/public/slicing/resolve-{machine,process,filament}` (`lib/localMachineRetarget.ts`) |
+| Applying it to the 3MF | n/a | post-bake ZIP rewrite (`rewriteThreeMfEntries`) | post-bake entry rewrite in the tab (`lib/clientThreeMfBake.ts`) |
 
 Both run the rewrite in the **same position**: after the bake, before the archive is written. The one
-step that cannot move into the browser is resolving the target machine's preset — that data lives in
-the slicer image — hence the anonymous `resolve-machine` route, which is **built-in presets only**
+step that cannot move into the browser is resolving the target machine's preset: that data lives in
+the slicer image, hence the anonymous `resolve-machine` route, which is **built-in presets only**
 (a custom preset is workspace data by definition).
 
 Failure posture differs by host and deliberately so: the workspace save **fails loudly** if the
 machine cannot be resolved (see Failure modes), while the public editor **warns to the console and
-saves without the retarget** — it has no server-side transaction to abort, and losing the user's only
+saves without the retarget**: it has no server-side transaction to abort, and losing the user's only
 copy of the file to a failed save would be far worse than losing the printer switch.
 
 ### What carries over (and what doesn't)
 
 | Aspect | Behavior on retarget |
 | --- | --- |
-| **Machine** (bed, nozzle, extruder topology, gcode, limits) | Replaced with the target machine's — step 2. |
+| **Machine** (bed, nozzle, extruder topology, gcode, limits) | Replaced with the target machine's (step 2). |
 | **Process** (layer height, walls, speeds, `print_settings_id`) | Replaced with the target's process preset + user overrides (step 3). With no preset chosen, a CROSS-MODEL retarget keeps the project's own **only while it still fits the target**: its parent (`inherits_group[0]`) is looked up and, if that preset does not list the target machine, the machine's `default_print_profile` is authored instead. A same-model preset change (a nozzle switch) never reselects. See "Why a process can be switched without being chosen" below. |
 | **Filaments** (selection, colours) | Preserved. The editor's save already embeds the user's assigned (target-compatible) filaments via `applyFilamentList`; the retarget leaves `filament_settings_id`/`filament_colour` untouched. The per-extruder *map* is re-derived for the new topology (step 2). |
-| **Layout** (object positions, plates, paint, parts, brim ears) | Preserved exactly — `model_settings.config` is copied verbatim, no re-arrange. |
-| **Printer-compatibility declarations** (`print_compatible_printers` / `compatible_printers`, slice_info `printer_model_id`) | Re-declared for the target so the project's compatibility chips read as the new printer only. The source printer's declarations aren't machine settings (so the field-set overwrite skips them) and the embedded slice was for the old printer — both would otherwise linger as stale chips (an A1/A1 mini chip on an H2D project). The save sets `print_compatible_printers`/`compatible_printers` to the target and strips the stale slice_info `printer_model_id` (matching a BambuStudio saved-not-sliced project). |
+| **Layout** (object positions, plates, paint, parts, brim ears) | Preserved exactly: `model_settings.config` is copied verbatim, no re-arrange. |
+| **Printer-compatibility declarations** (`print_compatible_printers` / `compatible_printers`, slice_info `printer_model_id`) | Re-declared for the target so the project's compatibility chips read as the new printer only. The source printer's declarations aren't machine settings (so the field-set overwrite skips them) and the embedded slice was for the old printer: both would otherwise linger as stale chips (an A1/A1 mini chip on an H2D project). The save sets `print_compatible_printers`/`compatible_printers` to the target and strips the stale slice_info `printer_model_id` (matching a BambuStudio saved-not-sliced project). |
 
 ### Coverage
 
-Every Bambu machine the slicer has a profile for is supported automatically — there is **no
+Every Bambu machine the slicer has a profile for is supported automatically: there is **no
 per-model code**. The set of machines is whatever lives in the slicer image's `machine_full/`
 directory (see below).
 
 ### Triggers and known limitations
 
 The web (`LibraryView` `retargetTarget`) builds a retarget only when the selected machine's **canonical
-model** differs from the project's source model — or when the project has **no source model at all**
-(a new-project scaffold) — so a same-model save never round-trips the slicer.
+model** differs from the project's source model, or when the project has **no source model at all**
+(a new-project scaffold), so a same-model save never round-trips the slicer.
 Consequences to be aware of:
 
-- **Same model, different nozzle** (e.g. X1C 0.4 → X1C 0.6): not currently retargeted — the saved
+- **Same model, different nozzle** (e.g. X1C 0.4 → X1C 0.6): not currently retargeted. The saved
   project keeps the source nozzle's machine. Switching to a different *model* always retargets.
 - **Cross-model with a project-embedded process** (e.g. P1S → X2D where the process is the 3MF's
   own preset): the embedded process has no separate file to resolve, so nothing is *chosen*. The
@@ -128,7 +128,7 @@ Consequences to be aware of:
   assumption that these presets are cross-compatible within a family; that is false across families
   and produced files that opened correctly and could not be sliced at all.
 - **Smaller target bed**: positions are preserved, so objects authored for a larger bed may land
-  out-of-bounds on a smaller machine — the user re-arranges, exactly as in BambuStudio.
+  out-of-bounds on a smaller machine. The user re-arranges, exactly as in BambuStudio.
 
 ### Failure modes
 
@@ -200,7 +200,7 @@ The resolver reads the BambuStudio system presets bundled in the **slicer image*
 - At image build, `install-slicer-targets.mjs` downloads each AppImage and runs
   `generate-bambustudio-full-profiles.mjs`, which flattens BambuStudio's bundled presets into
   `machine_full/`, `process_full/`, `filament_full/` JSON under each target's `profileDir`. The
-  flattener merges **both** the `inherits` chain **and** each preset's `include` templates — the
+  flattener merges **both** the `inherits` chain **and** each preset's `include` templates. The
   latter is load-bearing for machines: BambuStudio keeps every machine's real
   `machine_start_gcode` / `machine_end_gcode` / `change_filament_gcode` / `layer_change_gcode` /
   `time_lapse_gcode` / `wrapping_detection_gcode` in per-machine `… template <key>` profiles pulled
@@ -222,7 +222,7 @@ When BambuStudio releases a new version we want to support:
 2. **Update licensing/version mirrors** (per the slicer development notes): the table in
    `apps/slicer/THIRD-PARTY-SLICERS.md` and the mirror list in
    `apps/web/src/private/cloud/OpenSourceLicensesPage.tsx`.
-3. **Regenerate the slicing presets** — in dev, re-bootstrap the in-workspace slicer (delete
+3. **Regenerate the slicing presets**: in dev, re-bootstrap the in-workspace slicer (delete
    `~/.printstream-slicer` and `npm run dev`, or re-run the generator per the slicer development notes);
    for staging/live, republish the ghcr image via the public repo's CI. This regenerates
    `machine_full/` from the new AppImage, so new machines and new machine fields appear automatically.
@@ -230,14 +230,14 @@ When BambuStudio releases a new version we want to support:
 
 ### What is and isn't resilient to BambuStudio changes
 
-- **Resilient (no maintenance):** the machine field-set overwrite is **profile-driven** — it copies
+- **Resilient (no maintenance):** the machine field-set overwrite is **profile-driven**. It copies
   whatever keys the resolved profile contains, so new/renamed machine settings are carried over with
   no code change.
 - **Coupled to BambuStudio (maintenance + verification):** the dependent-map derivation in
-  `machine-retarget.ts` (`repairEstimateModeProjectSettings` and its helpers — extruder variants,
+  `machine-retarget.ts` (`repairEstimateModeProjectSettings` and its helpers: extruder variants,
   `filament_nozzle_map`, nozzle-volume indices, AMS counts). If BambuStudio changes how multi-extruder
   topology or nozzle-volume types are encoded, this derivation must be updated. The verification below
-  is the safety net — it fails loudly (bad slice) when the derivation drifts.
+  is the safety net: it fails loudly (bad slice) when the derivation drifts.
 
 ## Verifying after a change
 
@@ -245,7 +245,7 @@ Against a source-built slicer (devcontainer):
 
 1. Retarget a single-extruder project to a multi-extruder machine (e.g. an A1 mini project → H2D) via
    the editor's "switch printer + Save", or by calling `retargetSavedProjectMachine` directly.
-2. Confirm the saved 3MF **opens** in the editor (the model renders — i.e. it is a project, not sliced
+2. Confirm the saved 3MF **opens** in the editor (the model renders, i.e. it is a project, not sliced
    output) and that its `project_settings.config` has the target's `printer_model`,
    `printer_settings_id`, **and `print_settings_id`** (process carried over).
 3. Confirm it **slices**: run a normal slice of the retargeted project and check for a non-zero, valid

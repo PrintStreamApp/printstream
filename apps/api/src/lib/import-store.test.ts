@@ -44,7 +44,7 @@ test('stageImport rebases an object import to the editor pivot', () => {
 
 // And must NOT touch a PART. An added part is centred on every axis by `primitivePartSoup` and then
 // placed by that single point inside its host (`addedPartDropPosition` drops a helper volume at the
-// host's centre), so flooring its Z would bury it half its own height above where the user put it —
+// host's centre), so flooring its Z would bury it half its own height above where the user put it,
 // invisibly, since a helper volume is translucent and never prints. Both shapes go through this one
 // entry point and nothing about the bytes tells them apart, which is why the caller states it.
 test('stageImport leaves a part import exactly as staged', () => {

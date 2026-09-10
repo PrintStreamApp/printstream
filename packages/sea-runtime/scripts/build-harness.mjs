@@ -1,5 +1,5 @@
 /**
- * Shared Node SEA (single-file executable) build harness — the app-agnostic
+ * Shared Node SEA (single-file executable) build harness, the app-agnostic
  * mechanics every PrintStream SEA build needs: the per-target Node download
  * table, checksum-verified Node acquisition, SEA blob generation + postject
  * injection, and the Windows signing step. The standalone SEA build scripts for
@@ -26,7 +26,7 @@ import { Data, NtExecutable, NtExecutableResource, Resource } from 'resedit'
 
 export const SEA_SENTINEL_FUSE = 'NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2'
 // The ONE Node version every distribution ships. The Docker image pins its
-// base to the same version (ARG NODE_VERSION in the root Dockerfile) — bump
+// base to the same version (ARG NODE_VERSION in the root Dockerfile); bump
 // both together, deliberately, and let the bump ride through staging. Keeping
 // these aligned is load-bearing: a floating Docker tag once picked up a Node
 // patch whose TLS regression broke H2D FTPS on Docker installs only.
@@ -79,7 +79,7 @@ export async function ensureNodeBinary(targetKey, nodeVersion, cacheDir, shasums
   const actual = createHash('sha256').update(await readFile(archivePath)).digest('hex')
   if (actual !== expected) {
     await rm(archivePath, { force: true })
-    fail(`Checksum mismatch for ${archiveName}; deleted the cached archive — please retry.`)
+    fail(`Checksum mismatch for ${archiveName}; deleted the cached archive. Please retry.`)
   }
 
   if (target.archive === 'zip') {
@@ -113,7 +113,7 @@ export async function injectSeaBlob({ artifactPath, blobPath }) {
 
 /**
  * Rewrites a Windows executable's icon and version resources so it presents as
- * the app — not "Node.js" with the Node logo — in Explorer and (the reason this
+ * the app, not "Node.js" with the Node logo, in Explorer and (the reason this
  * exists) the UAC elevation prompt, which reads `FileDescription`/`ProductName`
  * and the icon. Pure-JS via `resedit`, so it runs on the Linux build host.
  *
@@ -122,7 +122,7 @@ export async function injectSeaBlob({ artifactPath, blobPath }) {
  * resedit's PE round-trip can never disturb it. `version` is `[a,b,c,d]`.
  *
  * `guiSubsystem` flips the PE subsystem from console (CUI=3) to GUI (2). A
- * GUI-subsystem exe never gets a console window on double-click — the whole
+ * GUI-subsystem exe never gets a console window on double-click: the whole
  * point of a self-hosted app the user launches from Explorer and drives through
  * a window + tray. The trade-off is that the same exe run from a terminal prints
  * nothing (its stdout has no console to attach to); the service path is
@@ -130,7 +130,7 @@ export async function injectSeaBlob({ artifactPath, blobPath }) {
  */
 export async function brandWindowsExecutable({ artifactPath, icoBuffer, productName, fileDescription, companyName = productName, version = [1, 0, 0, 0], guiSubsystem = false }) {
   // `ignoreCert` lets resedit parse a still-signed Node binary (the signature is
-  // dropped on output — fine, since the strip ran first and CI re-signs after).
+  // dropped on output: fine, since the strip ran first and CI re-signs after).
   const exe = NtExecutable.from(await readFile(artifactPath), { ignoreCert: true })
   const res = NtExecutableResource.from(exe)
 
@@ -275,7 +275,7 @@ export async function ensurePinnedDownload(url, cachePath, expectedSha256, label
   const actual = createHash('sha256').update(await readFile(cachePath)).digest('hex')
   if (actual !== expectedSha256) {
     await rm(cachePath, { force: true })
-    fail(`Checksum mismatch for ${label}; deleted the cached file — please retry.`)
+    fail(`Checksum mismatch for ${label}; deleted the cached file. Please retry.`)
   }
   return cachePath
 }

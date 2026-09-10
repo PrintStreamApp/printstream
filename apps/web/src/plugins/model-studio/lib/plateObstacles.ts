@@ -4,7 +4,7 @@
  * Owns ONE answer to "where may an object stand on this plate", shared by Auto-arrange
  * (`arrangePlateItems`) and Fill bed with copies (`planFillBedCopies`). It was inline in the
  * arrange handler until fill bed needed the identical rules; two copies of this would drift into
- * two different ideas of the usable bed, and the symptom — a copy parked where it cannot print —
+ * two different ideas of the usable bed, and the symptom (a copy parked where it cannot print)
  * only shows up at slice time.
  *
  * Pure (no Three.js): the caller reads live nozzle assignments and the prime tower's rendered

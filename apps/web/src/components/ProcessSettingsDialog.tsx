@@ -91,6 +91,8 @@ export interface ProcessSettingsDialogProps {
   baseOverlay?: ProcessSettingOverrides
   /** Title prefix; defaults to "Process settings" (per-object uses "Object settings"). */
   titlePrefix?: string
+  /** Search text to open the catalog with, from the cross-catalog settings search. */
+  initialQuery?: string
   /**
    * The project's materials for filament-index settings (support/raft base+interface,
    * walls/infill filament): see {@link SettingValueField}. Omitted, those fall back to
@@ -158,7 +160,7 @@ const SUPPORT_INTERFACE_FILAMENT_KEY = 'support_interface_filament'
  */
 
 export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps): JSX.Element {
-  const { open, onClose, slicerTargetId, processProfileId, processProfileName, sourceFileId, initialOverrides, initialOverridesByMember, profileOptions, onProfileChange, allowedKeys, baseOverlay, titlePrefix, filamentChoices, applyScope = 'slice', canEditOriginal, resolveConfig, onApply } = props
+  const { open, onClose, slicerTargetId, processProfileId, processProfileName, sourceFileId, initialOverrides, initialOverridesByMember, profileOptions, onProfileChange, allowedKeys, baseOverlay, titlePrefix, filamentChoices, applyScope = 'slice', canEditOriginal, initialQuery, resolveConfig, onApply } = props
   const allowedKeySet = useMemo(() => (allowedKeys ? new Set(allowedKeys) : null), [allowedKeys])
   const isKeyAllowed = (key: string): boolean => allowedKeySet === null || allowedKeySet.has(key)
   // Reveal BambuStudio's develop-tier options only when developer mode is on (workspace
@@ -692,6 +694,7 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
       open={open}
       onClose={onClose}
       catalog={processSettingsCatalog}
+      initialQuery={initialQuery}
       titlePrefix={titlePrefix ?? 'Process settings'}
       presetName={processProfileName}
       header={header}

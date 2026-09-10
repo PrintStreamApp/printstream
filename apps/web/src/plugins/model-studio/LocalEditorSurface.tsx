@@ -126,10 +126,11 @@ export function LocalEditorSurface({ project, projectFile, importStore, archiveR
         onClose={onClose}
       />
       {processSettingsDialogOpen && controller.selectedProcessProfile && (
-        <LazyDialogBoundary label="settings" onClose={() => controller.setProcessSettingsDialogOpen(false)}>
+        <LazyDialogBoundary label="settings" onClose={() => { controller.setProcessSettingsDialogOpen(false); controller.setSettingsSearchKey(null) }}>
           <ProcessSettingsDialog
             open
-            onClose={() => controller.setProcessSettingsDialogOpen(false)}
+            initialQuery={controller.settingsSearchKey ?? undefined}
+            onClose={() => { controller.setProcessSettingsDialogOpen(false); controller.setSettingsSearchKey(null) }}
             slicerTargetId={controller.selectedSlicerTargetId}
             processProfileId={controller.selectedProcessProfile.id}
             processProfileName={controller.selectedProcessProfile.name}
@@ -160,10 +161,11 @@ export function LocalEditorSurface({ project, projectFile, importStore, archiveR
           ?? (option?.id.startsWith('profile:') ? option.id.slice('profile:'.length) : null)
         if (!profileId) return null
         return (
-          <LazyDialogBoundary label="settings" onClose={() => setFilamentSettingsFilamentId(null)}>
+          <LazyDialogBoundary label="settings" onClose={() => { setFilamentSettingsFilamentId(null); controller.setSettingsSearchKey(null) }}>
             <FilamentSettingsDialog
               open
-              onClose={() => setFilamentSettingsFilamentId(null)}
+              initialQuery={controller.settingsSearchKey ?? undefined}
+              onClose={() => { setFilamentSettingsFilamentId(null); controller.setSettingsSearchKey(null) }}
               slicerTargetId={controller.selectedSlicerTargetId}
               filamentProfileId={profileId}
               filamentProfileName={option?.presetLabel ?? option?.material ?? option?.label ?? `Material ${filamentSettingsFilamentId}`}

@@ -5,20 +5,20 @@
  *
  * WHY THIS EXISTS: `packages/shared/src/bambu-preset-codec.ts` converts between Bambu Cloud's
  * serialized `ConfigOption::serialize()` string form and a local preset's array form. Getting an
- * option's shape wrong mis-encodes it SILENTLY — a numeric vector treated as string-like gets
+ * option's shape wrong mis-encodes it SILENTLY: a numeric vector treated as string-like gets
  * c-style-quoted and semicolon-joined instead of comma-joined, corrupting the value on push (and
  * leaving it un-split on pull). The codec used to fall back to a hand-maintained exception list
- * (`UNCATALOGUED_OPTION_SHAPES`) for options the per-kind settings catalogs omit — filament/process/
+ * (`UNCATALOGUED_OPTION_SHAPES`) for options the per-kind settings catalogs omit (filament/process/
  * machine-settings.generated.ts are scoped to what their TUNE DIALOG exposes, not to round-trip
- * fidelity — and that list kept missing real options (`hotend_cooling_rate`, `nozzle_flush_dataset`,
+ * fidelity), and that list kept missing real options (`hotend_cooling_rate`, `nozzle_flush_dataset`,
  * `physical_extruder_map`, `grab_length`, `hotend_heating_rate`, none of them in any per-kind
  * catalog or the exception list). This generator scans literally every `this->add()` in the
  * vendored source instead, so a newly-vendored BambuStudio option is covered automatically on the
  * next regeneration rather than silently falling through to a guessed shape.
  *
  * A handful of keys the codec also needs (`name`, `version`, `from`, `filament_id`) are NOT
- * `PrintConfig` options — `filament_id` in particular is read via a runtime `dynamic_cast` rather
- * than declared with `this->add()` — so those stay a small manual list in the codec itself; this
+ * `PrintConfig` options (`filament_id` in particular is read via a runtime `dynamic_cast` rather
+ * than declared with `this->add()`), so those stay a small manual list in the codec itself; this
  * generator only ever emits what it can verify from the source.
  *
  * Usage:

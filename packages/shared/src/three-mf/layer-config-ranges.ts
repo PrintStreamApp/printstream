@@ -1,7 +1,7 @@
 /**
  * BambuStudio height range modifiers: `Metadata/layer_config_ranges.xml`.
  *
- * Owns both directions of that sidecar — parsing it into per-object Z bands with process-setting
+ * Owns both directions of that sidecar: parsing it into per-object Z bands with process-setting
  * overrides, and serializing the editor's complete set back out. The editor surfaces them as
  * per-object "height ranges"; the slicer applies each band's settings to the layers inside it.
  *
@@ -29,7 +29,7 @@
  * ## Semantics (ported, not invented)
  *
  * Z values are millimetres in OBJECT space with z=0 at the object's bottom, raft excluded
- * (`Slicing.cpp:162`). A band covers `[minZ, maxZ)` — closed at the bottom, open at the top
+ * (`Slicing.cpp:162`). A band covers `[minZ, maxZ)`: closed at the bottom, open at the top
  * (`PrintObjectSlice.cpp:71`). Overlaps are legal in the file and resolved by trimming the LOWER
  * range's top away from the higher one, so the lower range wins (`Slicing.cpp:181-182`); we keep
  * that reading for files that already contain overlaps rather than "repairing" them.
