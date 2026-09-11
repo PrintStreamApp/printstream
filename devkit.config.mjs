@@ -19,7 +19,7 @@ export default {
   ports: ['web', 'api', 'metrics', 'slicer'],
 
   /** Pin the server version this project expects while sharing Devkit's default PostgreSQL data. */
-  database: { engine: 'postgres', version: '16-bookworm' },
+  database: { engine: 'postgres', version: '16.13-bookworm' },
 
   /** Prisma, so `devkit doctor` can report how far this checkout's database has been migrated. */
   migrationsTable: '_prisma_migrations',
