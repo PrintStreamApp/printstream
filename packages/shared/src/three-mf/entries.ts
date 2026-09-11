@@ -17,8 +17,8 @@ export const THREE_MF_MODEL_ENTRY = '3D/3dmodel.model'
 
 /**
  * Relationships for the root model, listing the split-out `/3D/Objects/*.model` sub-models.
- * Production-Extension projects have one; a flat 3MF does not (the writer creates it when it
- * splits an import into its own part file).
+ * Production-Extension projects have one. The writer also creates an empty document for a flat
+ * project because its presence is a BambuStudio loader gate, independently of its relationships.
  */
 export const THREE_MF_MODEL_RELS_ENTRY = '3D/_rels/3dmodel.model.rels'
 

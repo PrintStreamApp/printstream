@@ -55,6 +55,8 @@ export interface FilamentConfigAuthoringContext {
    * mid-session remove or reorder: convert them with {@link rekeyByBakedSlot} before passing.
    */
   profileIdByFilamentId: Record<number, string | undefined>
+  /** Cancels in-flight preset lookups when the enclosing save or slice is dismissed. */
+  signal?: AbortSignal
 }
 
 /**
@@ -156,7 +158,7 @@ export async function attachResolvedFilamentConfigs(
         targetId: context.targetId,
         sourceFileId: context.sourceFileId,
         projectFilamentId: index + 1
-      })
+      }, context.signal ? { signal: context.signal } : undefined)
       // `config` is the slot's EFFECTIVE config (preset plus whatever the project declared), which
       // is what the file should carry, not `baseConfig`, which is the untouched preset and would
       // discard the user's own in-project tweaks.
@@ -184,6 +186,7 @@ export async function attachResolvedFilamentConfigs(
           : { presetInherits: response.presetInherits, presetChangedKeys: response.presetChangedKeys ?? [] })
       }
     } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') throw error
       // Best-effort: a save must not fail because a preset could not be resolved.
       console.warn(`[filamentConfigAuthoring] slot ${index + 1} preset ${profileId} did not resolve: ${(error as Error).message}`)
       return filament

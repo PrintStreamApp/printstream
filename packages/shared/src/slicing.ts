@@ -181,6 +181,9 @@ export type SlicingToolhead = z.infer<typeof slicingToolheadSchema>
 
 export const slicingFilamentMappingSchema = z.object({
   projectFilamentId: z.number().int().positive(),
+  /** Base material family written to `filament_type`, such as PLA or PETG. */
+  materialType: z.string().trim().min(1).nullable().optional(),
+  /** User-facing preset or spool name used to label slicing results. */
   material: z.string().trim().min(1).nullable().optional(),
   color: z.string().trim().min(1).nullable().optional(),
   source: z.enum(['ams', 'externalSpool', 'manual']).default('manual'),
@@ -1624,6 +1627,23 @@ export const createSlicingJobSchema = z.object({
    */
   sourceVersionId: z.string().trim().min(1).optional(),
   /**
+   * Browser-authored, already-baked project bytes to hand to the slicer while `sourceFileId`
+   * remains the library project this slice is ABOUT.
+   *
+   * Version 1 means the model studio has applied its complete SceneEdit and project-setting
+   * passes in the tab, then uploaded the result as an immutable hidden snapshot. The API may still
+   * apply server-owned runtime facts, but must not repeat the editor bake, machine/settings
+   * authoring, or legacy mesh-weld pass over these bytes.
+   *
+   * The version is explicit so a future browser bake can strengthen or change the guarantee
+   * without making an older server silently assume it received the newer contract.
+   */
+  preparedSource: z.object({
+    /** Opaque server-issued provenance record returned when the prepared snapshot is staged. */
+    id: z.string().trim().min(1),
+    contractVersion: z.literal(1)
+  }).optional(),
+  /**
    * Which BYTES to bake `sceneEdit` from, when that is not the source file's current content.
    *
    * The exact field the editor SAVE sends (`contentBase` on {@link arrangedThreeMfBakeSchema}), and
@@ -1706,6 +1726,24 @@ export const createSlicingJobSchema = z.object({
    * gives no useful preview). When `sceneEdit.plateThumbnails` is present it takes precedence.
    */
   plateThumbnails: z.array(sceneEditPlateThumbnailSchema).optional()
+}).superRefine((value, context) => {
+  if (!value.preparedSource) return
+  const alreadyBakedFields = [
+    'selectedObjectIds',
+    'objectProcessOverrides',
+    'filamentChanges',
+    'pauses',
+    'sceneEdit'
+  ] as const
+  for (const field of alreadyBakedFields) {
+    if (value[field] !== undefined) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [field],
+        message: `${field} cannot be combined with a browser-prepared slicing source`
+      })
+    }
+  }
 })
 export type CreateSlicingJob = z.infer<typeof createSlicingJobSchema>
 
@@ -1960,6 +1998,13 @@ export const sliceEnvelopeSchema = z.object({
   jobId: z.string().trim().min(1),
   sourceFileName: z.string().trim().min(1),
   request: createSlicingJobSchema,
-  profileFiles: z.array(slicingPresetFileSchema).optional()
+  profileFiles: z.array(slicingPresetFileSchema).optional(),
+  /**
+   * API-resolved facts used only to choose how the engine is executed. They never rewrite a
+   * browser-prepared project's metadata, which remains the authoritative slice input.
+   */
+  executionHints: z.object({
+    printerModel: z.string().trim().min(1).nullable().optional()
+  }).optional()
 })
 export type SliceEnvelope = z.infer<typeof sliceEnvelopeSchema>

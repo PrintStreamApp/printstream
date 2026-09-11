@@ -107,6 +107,37 @@ function retargetTo(overrides: Record<string, unknown> = {}) {
   } as never
 }
 
+test('threads cancellation through the catalogue and retarget resolvers', async () => {
+  const abort = new AbortController()
+  let catalogueSignal: AbortSignal | undefined
+  let resolverSignal: AbortSignal | undefined
+  const passes = bakePassesFor(save({ retarget: retargetTo({ printerModel: 'Bambu Lab H2D' }) }), {
+    resolvers: {
+      ...RESOLVERS,
+      machine: async (_id, _targetId, options) => {
+        resolverSignal = options?.signal
+        abort.abort()
+        options?.signal?.throwIfAborted()
+        return { config: {}, name: 'unreachable' }
+      }
+    },
+    filamentPresets: async (signal) => {
+      catalogueSignal = signal
+      return []
+    },
+    signal: abort.signal
+  })
+
+  const retarget = passes.machineRetarget
+  assert.ok(retarget)
+  await assert.rejects(
+    () => retarget({}),
+    (error: unknown) => error instanceof Error && error.name === 'AbortError'
+  )
+  assert.equal(catalogueSignal, abort.signal)
+  assert.equal(resolverSignal, abort.signal)
+})
+
 test('a save that changes no printer does not re-author the machine it already defines', async () => {
   // A retarget target is materialized on essentially every save, so running the retarget whenever
   // one is present rewrites the machine block and overwrites the project's process values on a save

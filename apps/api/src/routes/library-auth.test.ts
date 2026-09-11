@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { createWriteStream } from 'node:fs'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { afterEach, test } from 'node:test'
+import { afterEach, beforeEach, test } from 'node:test'
 import express from 'express'
 import type { AddressInfo } from 'node:net'
 import type { Server } from 'node:http'
@@ -34,9 +34,16 @@ restorePrismaMethodsAfterEach([
   [p.libraryFileVersion, 'findMany'],
   [p.libraryFolder, 'findMany'],
   [p.libraryFolder, 'findFirst'],
-  [p.bridge, 'findMany']
+  [p.bridge, 'findMany'],
+  [p.libraryUploadCompletion, 'deleteMany'],
+  [p.libraryUploadCompletion, 'findFirst']
 ])
 const tempDirs: string[] = []
+
+beforeEach(() => {
+  prisma.libraryUploadCompletion.deleteMany = ((async () => ({ count: 0 })) as unknown) as typeof prisma.libraryUploadCompletion.deleteMany
+  prisma.libraryUploadCompletion.findFirst = ((async () => null) as unknown) as typeof prisma.libraryUploadCompletion.findFirst
+})
 
 afterEach(async () => {
 
@@ -72,6 +79,30 @@ test('library list allows actors with library view permission', async () => {
 
     assert.equal(response.status, 200)
     assert.deepEqual(await response.json(), { files: [], truncated: false, fileLimit: null })
+  })
+})
+
+test('current-version check reads only the version counter', async () => {
+  let capturedArgs: unknown
+  prisma.libraryFile.findUnique = ((async (args: unknown) => {
+    capturedArgs = args
+    return { currentVersionNumber: 7 }
+  }) as unknown) as typeof prisma.libraryFile.findUnique
+
+  await withLibraryApp({
+    authEnabled: true,
+    actor: { type: 'user', userId: 'user-1' },
+    permissions: [LIBRARY_VIEW_PERMISSION],
+    runtimePolicy: { demoMode: false }
+  }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/library/file-1/current-version`)
+
+    assert.equal(response.status, 200)
+    assert.deepEqual(await response.json(), { currentVersionNumber: 7 })
+    assert.deepEqual(capturedArgs, {
+      where: { id: 'file-1' },
+      select: { currentVersionNumber: true }
+    })
   })
 })
 
@@ -365,7 +396,8 @@ test('chunked library upload assembles chunks before applying upload validation'
         sizeBytes: 18,
         receivedBytes: 18,
         phase: 'receiving',
-        bridgeReceivedBytes: 0
+        bridgeReceivedBytes: 0,
+        completion: null
       }
     })
 
@@ -1561,7 +1593,9 @@ test('library archive streams the whole 3MF to view-permitted actors, and revali
     // `createReadStream().pipe()` body never completes when read back through
     // `fetch().arrayBuffer()` behind the Vite dev proxy, which is exactly how the editor consumes
     // this: the open hangs with headers received and the tail never arriving.
-    assert.equal(response.headers.get('content-encoding'), 'gzip')
+    // A 3MF is already a ZIP. Recompressing it delays the first byte and forces the browser to
+    // allocate and decompress another representation before it can open the archive.
+    assert.equal(response.headers.get('content-encoding'), null)
     // Not a download: no attachment disposition, so this cannot be mistaken for the gated route.
     assert.equal(response.headers.get('content-disposition'), null)
     const bytes = new Uint8Array(await response.arrayBuffer())

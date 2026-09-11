@@ -5,8 +5,8 @@
  * ignored, and then the real one is ignored too.
  *
  * The roots test is the one that will actually catch a regression. The watch list is a MIRROR of
- * what `tsx watch` is told to watch, kept in two files that nothing links, so it goes out of step
- * the first time someone adds an `--include` to the dev script.
+ * what the service supervisor is told to watch, kept in two files that nothing links, so it goes
+ * out of step the first time someone adds a `--watch` to the dev script.
  */
 import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, readFile, rm, utimes, writeFile } from 'node:fs/promises'
@@ -71,7 +71,7 @@ test('a compiled package rebuilt after boot counts, not just this app\'s own sou
 })
 
 test('a colocated test file is ignored, so editing one cannot raise a false alarm', async (t) => {
-  // `apps/api/src` holds ~270 `*.test.ts`, none of them imported by `server.ts`, so `tsx watch`
+  // `apps/api/src` holds ~270 `*.test.ts`, none of them imported by `server.ts`, so the supervisor
   // never reloads for one. Counting them latched "RUNNING STALE CODE" true for the life of the
   // process the first time anyone edited a test -- which this repo asks for with every change. A
   // warning that is wrong most of the time is how a warning stops being read at all.
@@ -106,23 +106,22 @@ test('missing roots are skipped rather than failing the scan', async (t) => {
   assert.ok(result.lastCheckedAt)
 })
 
-test('WATCH_ROOTS covers everything the dev script tells tsx watch to watch', async () => {
+test('WATCH_ROOTS covers everything the dev script tells the service supervisor to watch', async () => {
   // The two lists live in different files with no link between them, so this is the regression that
-  // will actually happen: someone adds an `--include` and the detector silently stops seeing it.
+  // will actually happen: someone adds a `--watch` and the detector silently stops seeing it.
   const packageJson = JSON.parse(await readFile(path.join(repoRoot, 'apps/api/package.json'), 'utf8')) as {
     scripts: Record<string, string>
   }
   const dev = packageJson.scripts.dev ?? ''
 
-  const included = [...dev.matchAll(/--include\s+"?([^"\s]+)"?/g)]
+  const included = [...dev.matchAll(/--watch=(\S+)/g)]
     .map((match) => match[1]!)
-    // `../../packages/shared/dist/**` is stated relative to apps/api; the detector's roots are
+    // `../../packages/shared/dist` is stated relative to apps/api; the detector's roots are
     // stated relative to the repo, so compare on the repo-relative form.
-    .map((glob) => path.normalize(path.join('apps/api', glob)).replace(/[\\/]\*+$/, ''))
+    .map((root) => path.normalize(path.join('apps/api', root)))
 
   for (const root of included) {
     assert.ok(WATCH_ROOTS.includes(root), `the dev script watches ${root} but WATCH_ROOTS does not, so staleness there is invisible`)
   }
-  // The entry tree is watched implicitly by tsx (it is where the entry lives), never via --include.
   assert.ok(WATCH_ROOTS.includes('apps/api/src'), 'the API\'s own source tree must be watched')
 })

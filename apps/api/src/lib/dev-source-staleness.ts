@@ -3,20 +3,18 @@
  * is serving code that no longer matches the repo.
  *
  * Owns one question and answers it honestly: "is what I am running still what is written down?" It
- * never restarts anything and never reloads anything. A dev server that healed itself behind the
- * user's back would hide the very condition this exists to make visible.
+ * never restarts anything and never reloads anything. The service supervisor owns recovery; this
+ * module independently reports whether the process it started actually contains the latest files.
  *
- * WHY: the failure it reports is silent by construction. `tsx watch` runs the server as a separate
- * child, so a dead watcher leaves a healthy-looking process serving its boot-time code forever, and
- * a `packages/*` build watcher that stops emitting does the same thing one layer up. Nothing logs
- * either. The symptom reaching a human is "my edit had no effect", which reads as a bug in the edit,
- * so the reasonable next move is to go debugging code that is already correct. That happened on
- * 2026-08-30: the API served 9-minute-old code for 14 hours across four rounds of "still broken".
+ * WHY: the former `tsx watch` setup ran the server as a separate child, so a dead watcher could
+ * leave a healthy-looking process serving its boot-time code forever. A `packages/*` build watcher
+ * that stops emitting creates the same symptom one layer up: "my edit had no effect", which reads
+ * as a bug in the edit. That happened on 2026-08-30, when the API served 9-minute-old code for 14
+ * hours across four rounds of "still broken".
  *
- * Its counterpart `scripts/dev/exit-with-parent.cjs` PREVENTS the common cause (an orphaned server
- * now dies with its watcher). This covers what prevention cannot see: a watcher that is alive but
- * wedged, and a compiled package `dist` that was never rebuilt. Both leave a correctly-parented
- * process running stale code.
+ * Its counterpart `scripts/dev/run-service-dev.mjs` PREVENTS the common causes: it restarts a
+ * crashed child and polls these same source roots for changes. This remains an independent
+ * diagnostic backstop for a supervisor or filesystem watcher that is alive but no longer reloading.
  *
  * Surfaced two ways, because each catches a different reader: a loud `console.error` for anyone
  * tailing the dev log, and a field on `GET /api/health`'s dev-only `runtime` block for anyone (or
@@ -30,10 +28,9 @@ import { env } from './env.js'
 /**
  * The trees whose freshness decides the answer.
  *
- * MUST mirror what the API's `dev` script tells `tsx watch` to watch (`apps/api/package.json`: its
- * entry tree plus the two `--include` globs). A root watched there but missing here is a staleness
- * this cannot see; a root here but not there would report a change that was never going to reload
- * anything, which is a false alarm and worse than silence.
+ * MUST mirror the API `dev` script's `--watch` arguments in `apps/api/package.json`. A root watched
+ * there but missing here is a staleness this cannot see; a root here but not there would report a
+ * change that was never going to reload anything, which is a false alarm and worse than silence.
  */
 export const WATCH_ROOTS = ['apps/api/src', 'packages/shared/dist', 'packages/bridge-runtime/dist']
 

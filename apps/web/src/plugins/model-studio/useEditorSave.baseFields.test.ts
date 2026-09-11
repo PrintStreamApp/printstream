@@ -60,3 +60,13 @@ test('every bake request spreads the assembled fields', () => {
   const spreads = source.split('...baseBakeFields').length - 1
   assert.equal(spreads, 4, `expected 4 bake requests to spread the base fields, found ${spreads}`)
 })
+
+test('prepared slicing keeps source lineage separate from the pinned configuration base', () => {
+  // After Save As, effectiveBaseFileId is the newly adopted project while contentBase remains the
+  // original archive this session opened. Collapsing these identities makes that valid slice fail
+  // server proof validation or attributes it to the wrong library project.
+  assert.match(source, /const sourceFileId = effectiveBaseFileId/)
+  assert.match(source, /const configurationBaseFileId = contentBase\?\.fileId \?\? effectiveBaseFileId/)
+  assert.match(source, /stageSnapshot\(\{\s*sceneEdit: edit,\s*sourceFileId,/)
+  assert.match(source, /configurationBaseFileId,/)
+})

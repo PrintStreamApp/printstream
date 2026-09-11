@@ -12,13 +12,13 @@ import { inspectSlicerSource } from './scripts/dev/slicer-image.mjs'
 
 export default {
   /**
-   * Order matters: these are named host-listener offsets within this checkout's derived block, so
-   * reordering moves every listener to a different port. `web` first makes it the block's base,
-   * which is the one the proxy routes to and therefore the one worth being stable.
+   * Order matters: these are offsets within this checkout's derived block, so reordering moves
+   * every service to a different port. `web` first makes it the block's base, which is the one the
+   * proxy routes to and therefore the one worth being stable.
    */
   ports: ['web', 'api', 'metrics', 'slicer'],
 
-  /** Pin the server version this project expects while sharing Devkit's default PostgreSQL data. */
+  /** Pin the PostgreSQL server version this project expects. */
   database: { engine: 'postgres', version: '16.13-bookworm' },
 
   /** Prisma, so `devkit doctor` can report how far this checkout's database has been migrated. */

@@ -29,7 +29,15 @@ export interface EditorBakePassOptions {
    * sees an empty list: no slot finds a rebind target and the retargeted project silently keeps the
    * source machine's filament presets.
    */
-  filamentPresets: () => Promise<readonly SlicingPresetSummary[]>
+  filamentPresets: (signal?: AbortSignal) => Promise<readonly SlicingPresetSummary[]>
+  /** Cancels every browser-side lookup this pass starts. */
+  signal?: AbortSignal
+}
+
+/** Best-effort preset resolution may degrade ordinary failures, but never cancellation. */
+function rethrowCancellation(error: unknown, signal?: AbortSignal): void {
+  signal?.throwIfAborted()
+  if (error instanceof Error && error.name === 'AbortError') throw error
 }
 
 /** The bake options a save request implies. Pure: no resolution, no I/O. */
@@ -89,8 +97,9 @@ export function bakePassesFor(
         target: retarget,
         slicerTargetId,
         projectSettings,
-        filamentPresets: await options.filamentPresets(),
-        resolvers: options.resolvers
+        filamentPresets: await options.filamentPresets(options.signal),
+        resolvers: options.resolvers,
+        ...(options.signal ? { signal: options.signal } : {})
       })
     }
     return passes
@@ -108,7 +117,11 @@ export function bakePassesFor(
   passes.machineTopologyHeal = async (machineName) => {
     const presetId = buildBuiltinSlicingPresetId('machine', machineName)
     if (!options.resolvers.canResolve(presetId)) return null
-    const resolved = await options.resolvers.machine(presetId, slicerTargetId)
+    const resolved = await options.resolvers.machine(
+      presetId,
+      slicerTargetId,
+      options.signal ? { signal: options.signal } : undefined
+    )
     return resolved.config
   }
   return passes
@@ -144,8 +157,13 @@ async function sameModelPresetPlan(
   if (!options.resolvers.canResolve(retarget.printerProfileId)) return null
   let resolved: { config: ProfileRecord; name: string }
   try {
-    resolved = await options.resolvers.machine(retarget.printerProfileId, slicerTargetId)
+    resolved = await options.resolvers.machine(
+      retarget.printerProfileId,
+      slicerTargetId,
+      options.signal ? { signal: options.signal } : undefined
+    )
   } catch (error) {
+    rethrowCancellation(error, options.signal)
     console.warn('[editor] chosen printer preset could not be resolved; keeping the project\'s machine:',
       error instanceof Error ? error.message : error)
     return null
@@ -195,8 +213,9 @@ async function sameModelPresetPlan(
       target: retarget,
       slicerTargetId,
       projectSettings,
-      filamentPresets: await options.filamentPresets(),
-      resolvers: options.resolvers
+      filamentPresets: await options.filamentPresets(options.signal),
+      resolvers: options.resolvers,
+      ...(options.signal ? { signal: options.signal } : {})
     },
     plan,
     options.resolvers
@@ -227,7 +246,11 @@ async function resolveChangedProcessConfig(
   const chosenName = parseBuiltinSlicingPresetId(chosenId)?.name ?? null
   if (current && chosenName && current === chosenName) return null
   try {
-    const body = await options.resolvers.process(chosenId, slicerTargetId)
+    const body = await options.resolvers.process(
+      chosenId,
+      slicerTargetId,
+      options.signal ? { signal: options.signal } : undefined
+    )
     const resolvedName = firstProfileString(body.config?.print_settings_id)
     // Second chance at the same question, for a preset whose id does not carry its name.
     if (current && resolvedName && current === resolvedName) return null
@@ -241,6 +264,7 @@ async function resolveChangedProcessConfig(
     }
     return body.config ?? null
   } catch (error) {
+    rethrowCancellation(error, options.signal)
     // Best effort, as everywhere in this pass: a process preset that will not resolve leaves the
     // project's own values alone rather than failing the save.
     console.warn('[editor] could not resolve the chosen process preset; keeping the project\'s:',
@@ -264,7 +288,7 @@ async function resolveSlotConfigs(
   options: EditorBakePassOptions
 ): Promise<Array<ProcessConfig | null>> {
   const names = Array.isArray(projectSettings.filament_settings_id) ? projectSettings.filament_settings_id : []
-  const catalogue = await options.filamentPresets()
+  const catalogue = await options.filamentPresets(options.signal)
   const configs: Array<ProcessConfig | null> = []
   for (const name of names) {
     const preset = typeof name === 'string'
@@ -275,9 +299,14 @@ async function resolveSlotConfigs(
       continue
     }
     try {
-      const body = await options.resolvers.filament(preset.id, slicerTargetId)
+      const body = await options.resolvers.filament(
+        preset.id,
+        slicerTargetId,
+        options.signal ? { signal: options.signal } : undefined
+      )
       configs.push((body.config ?? null) as ProcessConfig | null)
-    } catch {
+    } catch (error) {
+      rethrowCancellation(error, options.signal)
       // Per-slot best effort, exactly as the retarget's rebind is: one slot that will not resolve
       // must not cost the others their columns.
       configs.push(null)

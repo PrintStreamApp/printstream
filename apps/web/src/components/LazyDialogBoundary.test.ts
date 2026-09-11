@@ -63,3 +63,13 @@ test('the boundary offers a way out of a failed dialog', async () => {
   // work the boundary exists to keep reachable.
   assert.doesNotMatch(source, /location\s*\.\s*reload/, 'the boundary must not reload the page')
 })
+
+test('the pending dialog can be dismissed without backdrop dismissal', async () => {
+  const [{ source: owner }, { source: shell }] = await Promise.all([
+    readSourceFile(OWNER),
+    readSourceFile(SHELL)
+  ])
+  assert.match(owner, /<LazyDialogFallback[\s\S]*onClose=\{onClose\}/)
+  assert.match(shell, /<BackAwareModal open onClose=\{onClose\}>/)
+  assert.match(shell, />Close<\/Button>/)
+})

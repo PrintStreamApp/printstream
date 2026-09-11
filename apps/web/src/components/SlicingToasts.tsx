@@ -19,6 +19,7 @@ import {
   formatSlicingMetadataDisplay,
   formatSlicingProgress,
   getLatestSlicingProgressFrame,
+  getSlicingProgressPercent,
   getSlicingJobStatusLabel,
   isActiveSlicingJob,
   slicingStatusColor
@@ -153,7 +154,7 @@ export function SlicingToasts() {
       statusLabel: getSlicingJobStatusLabel(job),
       color: slicingStatusColor(job.status),
       active,
-      progress: active ? progressFrame?.totalPercent ?? null : null,
+      progress: active ? getSlicingProgressPercent(job, progressFrame) : null,
       summary: formatSlicingProgress(job, progressFrame),
       error: job.error,
       onDismiss: () => setDismissed((current) => new Set(current).add(job.id)),

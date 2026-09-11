@@ -969,6 +969,8 @@ export interface ResolvedFilamentMapping {
   source: SliceMaterialOption['source']
   trayId: number | null
   toolheadId: string | undefined
+  /** Base polymer written to the 3MF's `filament_type`. */
+  materialType: string
   /** DISPLAY text for the slot. Never treated as a preset name: see `output-metadata.ts`. */
   material: string
   color: string
@@ -1034,6 +1036,7 @@ function buildFilamentMapping(
     source: option.source,
     trayId: option.trayId,
     toolheadId: toolheadIds[filament.projectFilamentId] || option.toolheadId || (filament.nozzleId != null ? buildSliceToolheadId(filament.nozzleId) : undefined),
+    materialType: option.materialType,
     material: option.material ?? option.label ?? filament.label,
     color: normalizeSliceFilamentColor(colors[filament.projectFilamentId] ?? filament.color),
     settingOverrides: overrides && Object.keys(overrides).length > 0 ? overrides : undefined

@@ -14,7 +14,14 @@
  */
 import { useCallback, useRef, useState, type Dispatch, type MutableRefObject, type SetStateAction, useMemo } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { type ExportArrangedThreeMf, type SaveArrangedThreeMf, type SceneEdit } from '@printstream/shared'
+import {
+  extractErrorMessage,
+  type ExportArrangedThreeMf,
+  type LibraryCurrentVersionResponse,
+  type SaveArrangedThreeMf,
+  type SceneEdit,
+  type SlicingTarget
+} from '@printstream/shared'
 import { afterNextPaint } from '../../lib/afterNextPaint'
 import { apiFetch } from '../../lib/apiClient'
 import { downloadBlob } from '../../lib/downloadBlob'
@@ -25,6 +32,8 @@ import { type SliceSettingsController } from '../../components/library/SliceSett
 import { buildSessionFilamentIdRemap, buildSingleObjectExportState, type EditorState } from './lib/editorModel'
 import { objectIdsAcceptingOverrides, selectObjectProcessOverridesForSave } from './lib/sceneEditIdentity'
 import type { EditorSaveTarget } from './lib/editorSaveTarget'
+import type { EditorPersistenceLifecycle } from './lib/editorSaveTarget'
+import type { ChunkedLibraryUploadProgress } from '../../lib/chunkedLibraryUpload'
 import { initialContentBasePin, nextContentBasePin, type EditorContentBasePin } from './lib/contentBasePin'
 
 type PlateThumbnail = { plateIndex: number; png: string }
@@ -42,8 +51,11 @@ export interface EditorSaveParams {
    * `lib/filamentConfigAuthoring.ts`). Async because resolving a preset is a request; best-effort, so
    * it must never reject. Omitted leaves the edit untouched.
    */
-  authorFilamentConfigs?: (edit: SceneEdit) => Promise<SceneEdit>
-  captureAllPlateThumbnails: (current: EditorState, options?: { force?: boolean; updateLive?: boolean }) => Promise<PlateThumbnail[]>
+  authorFilamentConfigs?: (edit: SceneEdit, options?: { signal?: AbortSignal }) => Promise<SceneEdit>
+  captureAllPlateThumbnails: (
+    current: EditorState,
+    options?: { force?: boolean; updateLive?: boolean; signal?: AbortSignal }
+  ) => Promise<PlateThumbnail[]>
   /**
    * The rendered XY footprint centre (plate coordinates, helper volumes excluded) of an instance,
    * or null when it has no group in the live scene. Only the scene owner can answer this, and the
@@ -125,7 +137,16 @@ export interface EditorSave {
    * and the two must not drift: an override the save bakes in and the slice does not is a plate
    * that prints differently from the one the user is looking at.
    */
-  stageSnapshotFor: (edit: SceneEdit) => Promise<string | null>
+  stageSnapshotFor: (
+    edit: SceneEdit,
+    target: SlicingTarget,
+    slicerTargetId: string | null,
+    signal?: AbortSignal,
+    onPhase?: (phase: 'applying' | 'uploading' | 'finalizing' | 'reconciling') => void,
+    onProgress?: (progress: ChunkedLibraryUploadProgress) => void,
+    onReconciliationStart?: (stopWaiting: () => void) => void,
+    onReconciliationRequired?: (retry: () => void, message: string, stopWaiting: () => void) => void
+  ) => Promise<string | null>
   /** A save is in flight (drives the disabled/loading state of Save/Slice/Close). */
   saving: boolean
   saveAsOpen: boolean
@@ -141,9 +162,9 @@ export interface EditorSave {
    */
   handleCloseRequest: (source?: string) => Promise<void>
   /** Save a new version of the source file. */
-  handleSaveVersion: () => void
+  handleSaveVersion: (lifecycle?: EditorPersistenceLifecycle) => void
   /** Save the arrangement as a new file at the given name/folder. */
-  handleSaveAs: (name: string, destinationFolderId: string | null) => void
+  handleSaveAs: (name: string, destinationFolderId: string | null, lifecycle?: EditorPersistenceLifecycle) => void
   /** Export ONE object as its own new 3MF project file (keeps the editor on the source project). */
   handleExportObjectAs3mf: (key: string, name: string, destinationFolderId: string | null) => void
   /** Same single-object 3MF bake, streamed back as a browser download, nothing lands in the library. */
@@ -177,7 +198,9 @@ export function useEditorSave({
   const queryClient = useQueryClient()
   /** Author the resolved filament configs onto an edit, or hand it back untouched. */
   const authorEdit = useCallback(
-    async (edit: SceneEdit): Promise<SceneEdit> => (authorFilamentConfigs ? await authorFilamentConfigs(edit) : edit),
+    async (edit: SceneEdit, signal?: AbortSignal): Promise<SceneEdit> => (
+      authorFilamentConfigs ? await authorFilamentConfigs(edit, signal ? { signal } : undefined) : edit
+    ),
     [authorFilamentConfigs]
   )
   const [saving, setSaving] = useState(false)
@@ -237,13 +260,24 @@ export function useEditorSave({
    * conflict, and turning a transient GET failure into a blocked save would be worse than the
    * race it guards.
    */
-  const confirmOverwritingConcurrentSave = useCallback(async (fileId: string | null): Promise<boolean> => {
+  const confirmOverwritingConcurrentSave = useCallback(async (
+    fileId: string | null,
+    signal?: AbortSignal
+  ): Promise<boolean> => {
     if (!saveTarget.isLibraryBacked || !fileId) return true
     let current: number | null = null
     try {
-      const { file } = await apiFetch<{ file: { currentVersionNumber?: number } }>(`/api/library/${fileId}`)
-      current = file.currentVersionNumber ?? null
-    } catch {
+      const result = await apiFetch<LibraryCurrentVersionResponse>(`/api/library/${fileId}/current-version`, {
+        signal,
+        timeoutMs: 5_000
+      })
+      current = result.currentVersionNumber
+    } catch (error) {
+      signal?.throwIfAborted()
+      console.warn(
+        `[model-studio] could not check the current version of project ${fileId}; continuing with the save:`,
+        error instanceof Error ? error.message : error
+      )
       return true
     }
     if (current === null) return true
@@ -273,20 +307,22 @@ export function useEditorSave({
     async (
       payload: SaveArrangedThreeMf,
       successMessage: string,
-      options?: { asProject?: boolean }
+      options?: EditorPersistenceLifecycle & { asProject?: boolean }
     ): Promise<{ id: string; name: string } | null> => {
       // BambuStudio parity: a project must have a material before it can be saved.
       const materialsPresent = hasMaterials
         ? hasMaterials()
         : (sliceConfigRef.current?.projectFilaments?.length ?? 0) > 0
       if (!materialsPresent) {
-        toast.error('Add a material to the project before saving.')
+        const message = 'Add a material to the project before saving.'
+        if (options?.onError) options.onError(message)
+        else toast.error(message)
         return null
       }
       const asProject = options?.asProject !== false
       setSaving(true)
       try {
-          const file = await saveTarget.persist(payload)
+          const file = await saveTarget.persist(payload, options)
           // Null means the user backed out (a dismissed destination picker), not a failure: leave the
           // project dirty and say nothing, rather than reporting a save that did not happen.
           if (!file) return null
@@ -316,13 +352,24 @@ export function useEditorSave({
             if (sourceRemap) onFilamentSourcesRemapped?.(sourceRemap)
           }
           // Library bookkeeping only: a local target has no cached listings to refresh.
-          if (saveTarget.isLibraryBacked) await invalidateLibraryQueries(queryClient)
+          // The save is complete once persistence returns. Active library queries can refetch
+          // slowly (or be temporarily unreachable), and waiting for them here leaves the blocking
+          // save dialog up after the new version already exists. Refresh them in the background;
+          // WebSocket invalidation provides the same eventual convergence for other tabs.
+          if (saveTarget.isLibraryBacked) {
+            void invalidateLibraryQueries(queryClient).catch((error) => {
+              console.warn('[model-studio] saved project but could not refresh the library cache', error)
+            })
+          }
           toast.success(successMessage)
           if (asProject) onSaved?.(file)
           // Keep the editor open after saving so the user can keep arranging/printing.
           return file
         } catch (error) {
-          toast.error(error instanceof Error ? error.message : 'Unable to save the project.')
+          if (error instanceof Error && error.name === 'AbortError') return null
+          const message = extractErrorMessage(error, 'Unable to save the project.')
+          if (options?.onError) options.onError(message)
+          else toast.error(message)
           return null
       } finally {
         setSaving(false)
@@ -433,29 +480,42 @@ export function useEditorSave({
   }, [sliceConfigRef])
 
   /**
-   * Bake an edit and stage the bytes for something server-side to read, saving nothing.
-   *
-   * Both routes out of the editor use it (Apply and Slice), because both hand work to the slice
-   * dialog. The OVERRIDES have to be carried in: the server applied them on its slice path, and
-   * only inside its `if (sceneEdit)` branch, so with the bytes baked here anything that branch did
-   * is dropped unless it is baked in instead. Per-object process overrides went missing exactly
-   * that way.
+   * Bake the final engine-ready project for the host's already-frozen slice target, then stage it
+   * for the slicer to read. Nothing is saved and no later server pass re-authors browser state.
    *
    * Null on a host that cannot stage, which falls back to sending the edit.
    */
-  const stageSnapshotFor = useCallback(async (edit: SceneEdit): Promise<string | null> => {
+  const stageSnapshotFor = useCallback(async (
+    edit: SceneEdit,
+    target: SlicingTarget,
+    slicerTargetId: string | null,
+    signal?: AbortSignal,
+    onPhase?: (phase: 'applying' | 'uploading' | 'finalizing' | 'reconciling') => void,
+    onProgress?: (progress: ChunkedLibraryUploadProgress) => void,
+    onReconciliationStart?: (stopWaiting: () => void) => void,
+    onReconciliationRequired?: (retry: () => void, message: string, stopWaiting: () => void) => void
+  ): Promise<string | null> => {
     if (!saveTarget.stageSnapshot) return null
+    const sourceFileId = effectiveBaseFileId
+    const configurationBaseFileId = contentBase?.fileId ?? effectiveBaseFileId
+    if (!sourceFileId || !configurationBaseFileId) {
+      throw new Error('The project source is no longer available; reopen it and slice again.')
+    }
     return await saveTarget.stageSnapshot({
       sceneEdit: edit,
-      // Lends its bridge only; nothing is written to it.
-      bridgeSourceFileId: effectiveBaseFileId,
+      sourceFileId,
+      // Lends its bridge and identifies the immutable base; nothing is written to it.
+      configurationBaseFileId,
+      configurationBaseVersionId: contentBase?.versionId ?? effectiveBaseVersionId ?? null,
       objectProcessOverrides: collectObjectProcessOverrides(),
-      processSettingOverrides: collectProcessSettingOverrides(),
-      filamentSettingOverrides: collectFilamentSettingOverrides(),
-      retarget: sliceConfigRef.current?.retargetTarget ?? undefined,
-      slicerTargetId: sliceConfigRef.current?.selectedSlicerTargetId
-    })
-  }, [saveTarget, effectiveBaseFileId, collectObjectProcessOverrides, collectProcessSettingOverrides, collectFilamentSettingOverrides, sliceConfigRef])
+      target,
+      slicerTargetId,
+      onPhase,
+      onProgress,
+      onReconciliationStart,
+      onReconciliationRequired
+    }, signal)
+  }, [saveTarget, contentBase, effectiveBaseFileId, effectiveBaseVersionId, collectObjectProcessOverrides])
 
   const handleApply = useCallback(() => {
     const current = stateRef.current
@@ -468,24 +528,22 @@ export function useEditorSave({
           await afterNextPaint()
           const thumbnails = await captureAllPlateThumbnails(current)
           const edit = buildSceneEditOut(current, { thumbnails })
-          // Staged for the same reason a slice stages: the host slices the BYTES this edit produced
-          // rather than posting the edit for the server to re-apply. Hidden and content-deduped, so
-          // applying an edit still saves nothing.
-          const stagedFileId = await stageSnapshotFor(edit)
-          onApply(edit, pinnedContentBase, stagedFileId)
+          // Apply only transfers the editor state back to the host. The exact slice target is not
+          // frozen until that host submits, so staging here would bake save semantics or a stale
+          // target into bytes later presented as engine-ready.
+          onApply(edit, pinnedContentBase, null)
       } catch (error) {
-        // Apply reaches the NETWORK now (it stages the baked bytes), so it can fail where it used
-        // to be pure local work that only a bug could break. Without this the promise rejected
-        // unhandled, `finally` un-busied the button, and the editor sat there looking idle with the
-        // apply silently dropped. Same reporting as the save and export paths above.
+        // Without this the promise rejects unhandled, `finally` un-busies the button, and the
+        // editor sits there looking idle with the apply silently dropped.
         toast.error(error instanceof Error ? error.message : 'Unable to apply the changes.')
       } finally {
         setSaving(false)
       }
     })()
-  }, [onApply, buildSceneEditOut, captureAllPlateThumbnails, stateRef, pinnedContentBase, stageSnapshotFor])
+  }, [onApply, buildSceneEditOut, captureAllPlateThumbnails, stateRef, pinnedContentBase])
 
-  const handleSaveVersion = useCallback(() => {
+  const handleSaveVersion = useCallback((lifecycle: EditorPersistenceLifecycle = {}) => {
+    const signal = lifecycle.signal
     const current = stateRef.current
     if (!current) return
     // A library save needs a file to version. A local one does not have (or need) an id at all:
@@ -498,14 +556,21 @@ export function useEditorSave({
     void (async () => {
       try {
         await afterNextPaint()
-        if (!await confirmOverwritingConcurrentSave(effectiveBaseFileId)) return
-        const thumbnails = await captureAllPlateThumbnails(current)
+        signal?.throwIfAborted()
+        lifecycle.onLocalPhase?.('checking')
+        if (!await confirmOverwritingConcurrentSave(effectiveBaseFileId, signal)) return
+        signal?.throwIfAborted()
+        lifecycle.onLocalPhase?.('creating')
+        const thumbnails = await captureAllPlateThumbnails(current, { signal })
+        signal?.throwIfAborted()
         const retarget = sliceConfigRef.current?.retargetTarget ?? undefined
+        const sceneEdit = await authorEdit(buildSceneEditOut(current, { thumbnails }), signal)
+        signal?.throwIfAborted()
         await runSave(
           {
             ...baseBakeFields,
             mode: 'newVersion', ignoreBaseContent: editorBorn,
-            sceneEdit: await authorEdit(buildSceneEditOut(current, { thumbnails })),
+            sceneEdit,
             objectProcessOverrides: collectObjectProcessOverrides(),
             processSettingOverrides: collectProcessSettingOverrides(),
             machineSettingOverrides: collectMachineSettingOverrides(),
@@ -513,15 +578,27 @@ export function useEditorSave({
             retarget,
             slicerTargetId: retarget ? sliceConfigRef.current?.selectedSlicerTargetId : undefined
           },
-          retarget ? `Saved a new version for ${retarget.printerModel}` : 'Saved a new version'
+          retarget ? `Saved a new version for ${retarget.printerModel}` : 'Saved a new version',
+          lifecycle
         )
+      } catch (error) {
+        if (!(error instanceof Error && error.name === 'AbortError')) {
+          const message = extractErrorMessage(error, 'Unable to save the project.')
+          if (lifecycle.onError) lifecycle.onError(message)
+          else toast.error(message)
+        }
       } finally {
         setSaving(false)
       }
     })()
   }, [baseBakeFields, effectiveBaseFileId, editorBorn, runSave, buildSceneEditOut, authorEdit, captureAllPlateThumbnails, collectObjectProcessOverrides, collectProcessSettingOverrides, collectMachineSettingOverrides, collectFilamentSettingOverrides, stateRef, sliceConfigRef, saveTarget, confirmOverwritingConcurrentSave])
 
-  const handleSaveAs = useCallback((name: string, destinationFolderId: string | null) => {
+  const handleSaveAs = useCallback((
+    name: string,
+    destinationFolderId: string | null,
+    lifecycle: EditorPersistenceLifecycle = {}
+  ) => {
+    const signal = lifecycle.signal
     const current = stateRef.current
     if (!current) return
     setSaveAsOpen(false)
@@ -530,8 +607,13 @@ export function useEditorSave({
     void (async () => {
       try {
         await afterNextPaint()
-        const thumbnails = await captureAllPlateThumbnails(current)
+        signal?.throwIfAborted()
+        lifecycle.onLocalPhase?.('creating')
+        const thumbnails = await captureAllPlateThumbnails(current, { signal })
+        signal?.throwIfAborted()
         const retarget = sliceConfigRef.current?.retargetTarget ?? undefined
+        const sceneEdit = await authorEdit(buildSceneEditOut(current, { thumbnails }), signal)
+        signal?.throwIfAborted()
         // A project born in the editor has never been persisted, so its first save is a "save as"
         // only mechanically, there is no earlier file to strand the user on, and its own scaffold
         // holds nothing the editor state doesn't model. Bake from the state so the editor can adopt
@@ -542,7 +624,7 @@ export function useEditorSave({
             ...baseBakeFields,
             mode: 'saveAs', name, folderId: destinationFolderId, bridgeId: saveAsBridgeId,
             ignoreBaseContent: firstSaveOfEditorBornProject,
-            sceneEdit: await authorEdit(buildSceneEditOut(current, { thumbnails })),
+            sceneEdit,
             objectProcessOverrides: collectObjectProcessOverrides(),
             processSettingOverrides: collectProcessSettingOverrides(),
             machineSettingOverrides: collectMachineSettingOverrides(),
@@ -550,7 +632,8 @@ export function useEditorSave({
             retarget,
             slicerTargetId: retarget ? sliceConfigRef.current?.selectedSlicerTargetId : undefined
           },
-          `Saved “${name}”`
+          `Saved “${name}”`,
+          lifecycle
         )
         if (!saved) return
         if (firstSaveOfEditorBornProject) {
@@ -565,6 +648,12 @@ export function useEditorSave({
         // on the new one, and re-reading it is also what turns this session's staged imports into
         // in-project objects, which an adopted project deliberately skips.
         onSavedAs?.(saved)
+      } catch (error) {
+        if (!(error instanceof Error && error.name === 'AbortError')) {
+          const message = extractErrorMessage(error, 'Unable to save the project.')
+          if (lifecycle.onError) lifecycle.onError(message)
+          else toast.error(message)
+        }
       } finally {
         setSaving(false)
       }

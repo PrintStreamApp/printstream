@@ -44,6 +44,7 @@ import { readPrintJobThumbnail } from '../lib/print-job-thumbnails.js'
 import { slicerEngineListResponseSchema, type SlicerEngineListResponse } from '@printstream/shared'
 import { badRequest, notFound } from '../lib/http-error.js'
 import { resolvePinnedContentBase } from '../lib/library-content-base.js'
+import { resolvePreparedSlicingSource } from '../lib/prepared-slicing-source.js'
 import { isSelfHostedDeployment } from '../lib/deployment-mode.js'
 import { prisma } from '../lib/prisma.js'
 import { requireRequestPermission } from '../lib/authorization.js'
@@ -618,29 +619,62 @@ slicingRouter.post('/jobs', requireRequestPermission(LIBRARY_UPLOAD_PERMISSION),
   if (isDirectPrintableFileName(sourceEntry.name) || !sourceEntry.name.toLowerCase().endsWith('.3mf')) {
     throw badRequest('Only unsliced .3mf files can be sliced')
   }
+  const configurationBaseEntry = parsed.data.contentBase
+    ? await resolvePinnedContentBase(workspaceId, parsed.data.contentBase)
+    : sourceFile
+  // A browser-prepared source is the immutable, already-baked INPUT while `sourceFile` remains
+  // the project this slice is ABOUT. Keep those identities separate: replacing sourceFileId with
+  // the snapshot loses output placement, history lineage, and the archived source version.
+  //
+  // A normal retained snapshot is not proof that the browser authored an engine-ready project.
+  // Only the server-issued preparation row can opt bytes out of the legacy rewrite path, and its
+  // digest must match the exact target/configuration now being queued.
+  const preparedEntry = await resolvePreparedSlicingSource({
+    workspaceId,
+    sourceFileId: sourceFile.id,
+    request: parsed.data
+  })
+  if (preparedEntry && (isDirectPrintableFileName(preparedEntry.name) || !preparedEntry.name.toLowerCase().endsWith('.3mf'))) {
+    throw badRequest('Prepared slicing source must be an unsliced .3mf file')
+  }
 
   // Which BYTES to bake from, as opposed to which file this job is ABOUT. An editor slice pins the
   // version its `sceneEdit` was composed against and keeps sending it, exactly as an editor save
   // does; resolving the file's current content instead re-applies an edit an earlier save already
   // baked in. See `contentBase` in the shared schema for what that corrupted.
-  const contentEntry = parsed.data.contentBase
-    ? await resolvePinnedContentBase(workspaceId, parsed.data.contentBase)
-    : sourceEntry
+  const contentEntry = preparedEntry ?? (parsed.data.contentBase
+    ? configurationBaseEntry
+    : sourceEntry)
 
+  let executionPrinterModel = parsed.data.target.mode === 'manualProfile'
+    ? parsed.data.target.printerModel
+    : null
   if (parsed.data.target.mode === 'realPrinter') {
     const printer = await prisma.printer.findUnique({
       where: { id: parsed.data.target.printerId },
-      select: { id: true }
+      select: { id: true, model: true }
     })
     if (!printer) throw notFound('Target printer not found')
+    executionPrinterModel = printer.model
   }
 
-  const sourcePath = await resolveLibraryFileToLocalPath(contentEntry)
-  const requestedFiles = await resolveSlicingPresetFiles(workspaceId, collectRequestedProfileIds(parsed.data))
-  const profileFiles = [
-    ...requestedFiles,
-    ...await resolveProjectFilamentPresetFiles(workspaceId, sourcePath, requestedFiles)
-  ]
+  const sourcePath = preparedEntry
+    ? await resolveLibraryFileToLocalPath(preparedEntry)
+    : parsed.data.contentBase
+      ? await resolveLibraryFileToLocalPath(contentEntry)
+      : await resolveLibraryFileToLocalPath(sourceEntry)
+  // A prepared project is self-describing and the slicer deliberately does not load request
+  // profiles over it. Resolving those files here would repeat browser work and add avoidable I/O
+  // before the job can even enter the queue. Legacy callers still need the sidecar profiles.
+  const profileFiles = parsed.data.preparedSource
+    ? []
+    : await (async () => {
+      const requestedFiles = await resolveSlicingPresetFiles(workspaceId, collectRequestedProfileIds(parsed.data))
+      return [
+        ...requestedFiles,
+        ...await resolveProjectFilamentPresetFiles(workspaceId, sourcePath, requestedFiles)
+      ]
+    })()
 
   const job = slicingJobs.enqueue({
     workspaceId,
@@ -649,6 +683,7 @@ slicingRouter.post('/jobs', requireRequestPermission(LIBRARY_UPLOAD_PERMISSION),
     sourceFileName: sourceEntry.name,
     sourcePath,
     targetBridgeId: sourceEntry.ownerBridgeId,
+    executionPrinterModel,
     request: parsed.data,
     profileFiles
   })
@@ -667,6 +702,8 @@ slicingRouter.post('/jobs', requireRequestPermission(LIBRARY_UPLOAD_PERMISSION),
       // once the editor session is gone.
       contentBaseFileId: parsed.data.contentBase?.fileId ?? null,
       contentBaseVersionId: parsed.data.contentBase?.versionId ?? null,
+      preparedSourceId: parsed.data.preparedSource?.id ?? null,
+      preparedSourceContractVersion: parsed.data.preparedSource?.contractVersion ?? null,
       slicerTargetId: parsed.data.slicerTargetId ?? null,
       targetMode: parsed.data.target.mode,
       printerId: parsed.data.target.mode === 'realPrinter' ? parsed.data.target.printerId : null,

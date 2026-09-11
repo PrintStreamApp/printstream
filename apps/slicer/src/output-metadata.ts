@@ -8,7 +8,12 @@
  * `slice_info.config` carries the Bambu `model_id` code, not the friendly name.
  */
 import { clearInheritsGroupSlot, type CreateSlicingJob, type SlicingPresetKind } from '@printstream/shared'
-import { stringArray } from '@printstream/shared/three-mf'
+import { buildManualNozzleAssignment, stringArray } from '@printstream/shared/three-mf'
+export {
+  applyManualFilamentMapToModelSettings,
+  buildManualNozzleAssignment,
+  readAuthoredManualFilamentMap
+} from '@printstream/shared/three-mf'
 
 type SlicingPresetFile = {
   id: string
@@ -136,102 +141,13 @@ export function rewriteProjectSettingsMetadata(
   // MODE from the per-plate `model_settings.config` metadata and the MAP from the
   // `--filament-map` command-line flag (see `filament-map-args.ts`). We still write it here so
   // the saved artifact's metadata matches the gcode.
-  const manualNozzle = buildManualNozzleAssignment(next, metadata)
+  const manualNozzle = buildManualNozzleAssignment(next, metadata.filamentByProjectId)
   if (manualNozzle) {
     next.filament_map = manualNozzle.filament_map
     next.filament_map_mode = manualNozzle.filament_map_mode
   }
 
   return next
-}
-
-/**
- * Compute a dual-nozzle manual filament->nozzle assignment: the 1-indexed slicer
- * extruder each filament should print on, derived by inverting each filament's runtime
- * nozzle id (0 = right, 1 = left) through `physical_extruder_map` (whose value at a
- * given slicer-extruder index is the runtime nozzle that extruder feeds). Returns the
- * `filament_map` / `filament_map_mode` pair, or null for single-nozzle machines or when
- * no mapped filament carries a nozzle id.
- *
- * The returned pair reaches the CLI through two DIFFERENT channels: the mode through the
- * per-plate `model_settings.config` metadata ({@link applyManualFilamentMapToModelSettings}), and
- * the map through the `--filament-map` command-line flag (`filament-map-args.ts`). The flag is
- * what the CLI treats as authoritative; a map baked only into the file can leave it falling back
- * to BambuStudio's one-entry default, reading that out of bounds and aborting the slice.
- */
-/** 1-based slicer extruder used for filaments the edit does not assign (BambuStudio's own default). */
-const DEFAULT_SLICER_EXTRUDER = '1'
-
-export function buildManualNozzleAssignment(
-  settings: Record<string, unknown>,
-  metadata: SlicedArtifactMetadata
-): { filament_map_mode: string; filament_map: string[] } | null {
-  const physicalExtruderMap = parseNozzleIdList(settings.physical_extruder_map)
-  if (physicalExtruderMap.length <= 1) return null
-  const filamentMap = Array.isArray(settings.filament_map) ? settings.filament_map.map((value) => String(value)) : []
-  let assignedAny = false
-  for (const [projectFilamentId, filament] of metadata.filamentByProjectId.entries()) {
-    const index = projectFilamentId - 1
-    if (index < 0 || filament.nozzleId == null) continue
-    const slicerExtruder = physicalExtruderMap.indexOf(filament.nozzleId)
-    if (slicerExtruder < 0) continue
-    while (filamentMap.length <= index) filamentMap.push(DEFAULT_SLICER_EXTRUDER)
-    filamentMap[index] = String(slicerExtruder + 1)
-    assignedAny = true
-  }
-  if (!assignedAny) return null
-  // Manual mode makes `filament_map` authoritative for EVERY filament, and BambuStudio reads it
-  // with an unchecked `filament_maps[plate_filaments[i] - 1]` (BambuStudio.cpp ~6822). A short
-  // array is therefore an out-of-bounds vector read, not a defaulted one: the CLI reports a
-  // garbage extruder ("filament Sup.PLA can not be printed on extruder 21840, under manual mode
-  // for multi extruder printer") and aborts. Slots we did not assign, a filament with no nozzle
-  // choice, such as a support material, must still carry a valid extruder.
-  const filamentCount = Math.max(
-    filamentMap.length,
-    ...[...metadata.filamentByProjectId.keys()],
-    stringArray(settings.filament_colour).length,
-    stringArray(settings.filament_type).length
-  )
-  while (filamentMap.length < filamentCount) filamentMap.push(DEFAULT_SLICER_EXTRUDER)
-  for (let index = 0; index < filamentMap.length; index++) {
-    const value = filamentMap[index]
-    if (value == null || value.trim() === '' || !Number.isFinite(Number.parseInt(value, 10))) {
-      filamentMap[index] = DEFAULT_SLICER_EXTRUDER
-    }
-  }
-  return { filament_map_mode: 'Manual', filament_map: filamentMap }
-}
-
-/**
- * Force per-plate manual filament mapping in a 3MF's `model_settings.config` (XML).
- * This is the authoritative source the slicer CLI reads for `filament_map_mode`, it
- * ignores the value in `project_settings.config` and in loaded presets, so without
- * this the slice stays "Auto For Flush" and the chosen nozzle is discarded. Sets every
- * plate's mode to "Manual" and writes `filament_maps` (the same 1-indexed
- * slicer-extruder-per-filament map as {@link buildManualNozzleAssignment}'s `filament_map`,
- * joined by spaces: BambuStudio's own whitespace form for this attribute).
- *
- * Do not rely on the map written here to take effect: `--filament-map` must carry the same
- * values (`filament-map-args.ts`), or the CLI can fall back to its one-entry default and abort
- * the slice. A no-op string-in/string-out when the document has no plate blocks.
- */
-export function applyManualFilamentMapToModelSettings(modelSettingsXml: string, filamentMaps: string): string {
-  // Insert (not just replace) the assignment into every <plate> block. Source 3MFs
-  // usually carry NO filament_map_mode at all, the CLI injects "Auto For Flush" as a
-  // default at slice time, so a replace-only pass is a no-op and the chosen nozzle is
-  // lost. Strip any pre-existing mode/maps in the plate, then inject a fresh Manual
-  // pair right after the opening tag (metadata order within a plate is not
-  // significant). Verified against BambuStudio 2.7.1.62: flipping this plate's mode here
-  // flips what the CLI reports, even under --load-settings. The map beside it is a weaker
-  // signal, on the issue #63 repro, changing these values changed nothing about the
-  // assignment the CLI used, which is why the map also goes on the command line.
-  const inject = `<metadata key="filament_map_mode" value="Manual"/>\n        <metadata key="filament_maps" value="${escapeXmlAttribute(filamentMaps)}"/>`
-  return modelSettingsXml.replace(/<plate>([\s\S]*?)<\/plate>/g, (_block, inner: string) => {
-    const cleaned = inner
-      .replace(/\s*<metadata key="filament_map_mode" value="[^"]*"\s*\/>/g, '')
-      .replace(/\s*<metadata key="filament_maps" value="[^"]*"\s*\/>/g, '')
-    return `<plate>\n        ${inject}${cleaned}</plate>`
-  })
 }
 
 export function rewriteSliceInfoMetadata(xml: string, metadata: SlicedArtifactMetadata): string {
@@ -446,7 +362,3 @@ function parseToolheadNozzleId(value: string | null | undefined): number | null 
  * `filament_nozzle_map`, ...), stored as stringified ints, into numbers. Invalid
  * entries become NaN, which never matches a real nozzle id in `indexOf` lookups.
  */
-function parseNozzleIdList(value: unknown): number[] {
-  if (!Array.isArray(value)) return []
-  return value.map((entry) => Number.parseInt(String(entry), 10))
-}

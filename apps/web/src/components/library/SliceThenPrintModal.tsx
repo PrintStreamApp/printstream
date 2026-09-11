@@ -30,6 +30,7 @@ import { LibraryDestinationDialog } from '../LibraryDestinationDialog'
 import {
   formatSlicingProgress,
   getLatestSlicingProgressFrame,
+  getSlicingProgressPercent,
   getSlicingJobStatusLabel,
   slicingStatusColor
 } from '../../lib/slicingJobPresentation'
@@ -237,7 +238,7 @@ export function SliceThenPrintModal({
   }
 
   const progressFrame = job ? getLatestSlicingProgressFrame(job) : null
-  const progressPercent = progressFrame?.totalPercent ?? null
+  const progressPercent = job ? getSlicingProgressPercent(job, progressFrame) : null
   const displayName = formatLibraryFileName(job?.outputFileName ?? sourceFile.name)
   const loadingOutputFile = job?.status === 'ready' && outputFileQuery.isLoading
   const jobError = outputFileQuery.error instanceof Error
@@ -250,11 +251,11 @@ export function SliceThenPrintModal({
         <Typography level="h4">{trackingCopy?.title ?? 'Print now'}</Typography>
         <ScrollableDialogBody sx={{ mt: 1 }}>
           <Stack spacing={1.25}>
-            <Typography level="body-sm" textColor="text.tertiary">
+            {job?.status !== 'cancelled' && <Typography level="body-sm" textColor="text.tertiary">
               {job && (job.status === 'ready'
                 ? (trackingCopy?.readyText ?? 'Slicing finished. Loading the print setup…')
-                : (trackingCopy?.pendingText ?? 'This stays here until slicing is ready, then it switches into the normal print setup.'))}
-            </Typography>
+                : (trackingCopy?.pendingText ?? 'Once slicing is complete, you will be taken to print setup.'))}
+            </Typography>}
 
             {slicingJobQuery.isLoading && !job && (
               <Stack direction="row" spacing={1} alignItems="center">
@@ -280,15 +281,20 @@ export function SliceThenPrintModal({
                       {getSlicingJobStatusLabel(job)}
                     </Chip>
                   </Stack>
-                  <ProgressBar
+                  {job.status !== 'cancelled' && <ProgressBar
                     value={progressPercent}
                     color={slicingStatusColor(job.status)}
-                  />
-                  <Typography level="body-sm" textColor="text.secondary" sx={{ overflowWrap: 'anywhere' }}>
+                  />}
+                  {job.status !== 'cancelled' && <Typography level="body-sm" textColor="text.secondary" sx={{ overflowWrap: 'anywhere' }}>
                     {loadingOutputFile ? 'Loading sliced file…' : formatSlicingProgress(job, progressFrame)}
-                  </Typography>
-                  {jobError && (
-                    <Alert color={job.status === 'cancelled' ? 'warning' : 'danger'} variant="soft" startDecorator={<ErrorOutlineRoundedIcon />}>
+                  </Typography>}
+                  {job.status === 'cancelled' && (
+                    <Alert color="warning" variant="soft" startDecorator={<ErrorOutlineRoundedIcon />}>
+                      Slicing was cancelled. No sliced file was saved.
+                    </Alert>
+                  )}
+                  {jobError && job.status !== 'cancelled' && (
+                    <Alert color="danger" variant="soft" startDecorator={<ErrorOutlineRoundedIcon />}>
                       {jobError}
                     </Alert>
                   )}
@@ -463,7 +469,7 @@ export function SliceResultModal({
 
   const ready = job?.status === 'ready'
   const progressFrame = job ? getLatestSlicingProgressFrame(job) : null
-  const progressPercent = progressFrame?.totalPercent ?? null
+  const progressPercent = job ? getSlicingProgressPercent(job, progressFrame) : null
   const displayName = formatLibraryFileName(job?.outputFileName ?? sourceFile.name)
   const jobError = job?.error ?? null
   const outputNameParts = splitLibraryFileNameForRename(job?.outputFileName ?? sourceFile.name)
@@ -521,8 +527,13 @@ export function SliceResultModal({
                       Preview
                     </Button>
                   )}
-                  {jobError && (
-                    <Alert color={job.status === 'cancelled' ? 'warning' : 'danger'} variant="soft" startDecorator={<ErrorOutlineRoundedIcon />}>
+                  {job.status === 'cancelled' && (
+                    <Alert color="warning" variant="soft" startDecorator={<ErrorOutlineRoundedIcon />}>
+                      Slicing was cancelled. No sliced file was saved.
+                    </Alert>
+                  )}
+                  {jobError && job.status !== 'cancelled' && (
+                    <Alert color="danger" variant="soft" startDecorator={<ErrorOutlineRoundedIcon />}>
                       {jobError}
                     </Alert>
                   )}

@@ -680,6 +680,11 @@ export function planEditedThreeMf(
 
     if (documents.partFileEntries.length > 0) {
       for (const partFile of documents.partFileEntries) extraEntries.push(partFile)
+    }
+    // This file is also a BambuStudio loader gate: without it the engine may sniff the archive as
+    // PrusaSlicer input before considering the Application marker. Preserve it when present and
+    // synthesize an empty document when absent, even when the project has no split-out models.
+    if (documents.partFileEntries.length > 0 || baseModelRelsXml === null) {
       const updatedModelRels = appendImportPartRelationships(baseModelRelsXml, documents.partFileEntries)
       if (baseModelRelsXml !== null) {
         transforms.set(THREE_MF_MODEL_RELS_ENTRY, () => updatedModelRels)
@@ -697,6 +702,7 @@ export function planEditedThreeMf(
     { name: '[Content_Types].xml', content: THREE_MF_CONTENT_TYPES_XML },
     { name: '_rels/.rels', content: THREE_MF_RELS_XML },
     { name: '3D/3dmodel.model', content: modelXml },
+    { name: THREE_MF_MODEL_RELS_ENTRY, content: appendImportPartRelationships(null, []) },
     { name: 'Metadata/model_settings.config', content: withObjectOverrides(modelSettingsXml, objectProcessOverrides) },
     ...((projectSettingsTransforms.length > 0 ? [freshProjectSettings(applyProjectSettings)] : [])
       .filter((content): content is string => content !== null)

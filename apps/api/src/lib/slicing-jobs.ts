@@ -66,6 +66,7 @@ interface SlicingJobState {
   sourceFileName: string
   sourcePath: string
   targetBridgeId: string | null
+  executionPrinterModel: string | null
   outputFileId: string | null
   outputFileName: string | null
   thumbnailPath: string | null
@@ -104,6 +105,7 @@ interface PersistedSlicingJobState {
   sourceFileName: string
   sourcePath: string
   targetBridgeId: string | null
+  executionPrinterModel: string | null
   outputFileId: string | null
   outputFileName: string | null
   thumbnailPath: string | null
@@ -130,6 +132,7 @@ export type ResolveSlicingSource = (input: {
   sourcePath: string
   workspaceId: string
   contentBase?: LibraryContentBase | null
+  preparedSource?: CreateSlicingJob['preparedSource'] | null
 }) => Promise<string>
 
 /**
@@ -141,6 +144,11 @@ export type ResolveSlicingSource = (input: {
  * no longer be resolved. Runs inside the job's workspace context (run() wraps it),
  * so the workspace-scoped client applies.
  *
+ * A job carrying a browser-prepared source re-resolves that immutable hidden snapshot first. It
+ * must never fall back to `sourceFileId`, which deliberately remains the ORIGINAL project's
+ * lineage and may have changed since the browser authored the staged bytes. The proof is rebound
+ * to both that lineage and the independent configuration-base pin before its snapshot is used.
+ *
  * A job carrying a `contentBase` re-resolves through THAT pin, never the file's current content:
  * its `sceneEdit` is a diff against the pinned bytes, so re-fetching the head here would re-apply
  * an edit an intervening save already baked in: the same corruption the pin exists to stop, only
@@ -151,12 +159,45 @@ export async function resolveSlicingSourcePath(input: {
   sourcePath: string
   workspaceId: string
   contentBase?: LibraryContentBase | null
+  preparedSource?: CreateSlicingJob['preparedSource'] | null
 }): Promise<string> {
   try {
     await stat(input.sourcePath)
     return input.sourcePath
   } catch {
     // The cached copy is gone; re-resolve from the pinned base (or the library file) below.
+  }
+  if (input.preparedSource) {
+    const prepared = await prisma.preparedSlicingSource.findFirst({
+      where: {
+        id: input.preparedSource.id,
+        workspaceId: input.workspaceId,
+        sourceFileId: input.sourceFileId,
+        configurationBaseFileId: input.contentBase?.fileId ?? input.sourceFileId,
+        configurationBaseVersionId: input.contentBase?.versionId ?? '',
+        contractVersion: input.preparedSource.contractVersion,
+        libraryFile: {
+          workspaceId: input.workspaceId,
+          deletedAt: null,
+          hidden: true,
+          origin: 'snapshot',
+          snapshotKey: { not: null }
+        }
+      },
+      select: { libraryFile: { select: { ownerBridgeId: true, storedPath: true } } }
+    })
+    if (!prepared) {
+      throw new Error('The browser-prepared project for this slice is no longer available; re-open it and slice again.')
+    }
+    try {
+      return await resolveLibraryFileToLocalPath(prepared.libraryFile)
+    } catch (error) {
+      console.warn(
+        `[slicing] browser-prepared source ${input.preparedSource.id} could not be retrieved:`,
+        error instanceof Error ? error.message : error
+      )
+      throw new Error('The browser-prepared project could not be retrieved from its bridge; try again once the bridge is online.')
+    }
   }
   if (input.contentBase) {
     try {
@@ -260,6 +301,19 @@ export class SlicingJobs {
     )
   }
 
+  /** Prepared proofs still needed by queued/running jobs or by a failed job the user can retry. */
+  preparedSourceIdsForRetention(): string[] {
+    return Array.from(this.jobs.values())
+      .filter((job) => job.request.preparedSource && (
+        job.status === 'queued'
+        || job.status === 'preparing'
+        || job.status === 'slicing'
+        || job.status === 'saving'
+        || job.status === 'failed'
+      ))
+      .map((job) => job.request.preparedSource!.id)
+  }
+
   get(workspaceId: string, jobId: string): SlicingJob {
     const job = this.jobs.get(jobId)
     if (!job || job.workspaceId !== workspaceId) throw notFound('Slicing job not found')
@@ -287,6 +341,7 @@ export class SlicingJobs {
     sourceFileName: string
     sourcePath: string
     targetBridgeId: string | null
+    executionPrinterModel?: string | null
     request: CreateSlicingJob
     profileFiles?: ResolvedSlicingPresetFile[]
   }): SlicingJob {
@@ -307,6 +362,7 @@ export class SlicingJobs {
       sourceFileName: input.sourceFileName,
       sourcePath: input.sourcePath,
       targetBridgeId: input.targetBridgeId,
+      executionPrinterModel: input.executionPrinterModel ?? null,
       outputFileId: null,
       outputFileName: input.request.outputFileName ?? null,
       thumbnailPath: null,
@@ -564,7 +620,11 @@ export class SlicingJobs {
       // (baking the editor's scene, authoring the machine, welding meshes) is preparation, and on
       // a big project it is the slow part. Announcing "slicing" over it reported the wrong phase
       // for the whole prep: runSlicerJob flips the status itself once the engine has the file.
-      this.setStatus(job, 'preparing', 'Preparing the project')
+      this.setStatus(
+        job,
+        'preparing',
+        job.request.preparedSource ? 'Sending project to the slicer' : 'Applying slice settings to the project'
+      )
       // Declared outside the try so the artifact temp dir is cleaned on EVERY exit path
       // (persist failure, cancel during saving, ...), not only on success.
       let result: Awaited<ReturnType<typeof this.runSlicerJob>> | null = null
@@ -675,7 +735,8 @@ export class SlicingJobs {
       sourceFileId: job.sourceFileId,
       sourcePath: job.sourcePath,
       workspaceId: job.workspaceId,
-      contentBase: job.request.contentBase ?? null
+      contentBase: job.request.contentBase ?? null,
+      preparedSource: job.request.preparedSource ?? null
     })
     const rewrittenSourcePaths: string[] = []
     let retryAttempt = 0
@@ -745,11 +806,13 @@ export class SlicingJobs {
       // `printer_model: H2D` while carrying none of that topology (a new editor project, and any
       // 3MF we build from scratch such as the calibration plates), and the CLI then refuses it
       // ("missing its dual-nozzle machine data") or slices with no print volume: "no object fully
-      // inside the print volume", exit 206. Deliberately applied to EVERY slice path, not just
-      // editor (sceneEdit) slices: calibration and plain library slices bake no scene but hand over
-      // the same under-defined projects. Never rely on the slicer to retarget or on built-in profile
-      // fallbacks surviving; best-effort, so an unresolvable machine degrades to the old behaviour.
-      {
+      // inside the print volume", exit 206. Deliberately applied to every LEGACY slice path, not
+      // just editor (sceneEdit) slices: calibration and plain library slices bake no scene but hand
+      // over the same under-defined projects. A browser-prepared source already carries this exact
+      // authoring and must not be rewritten here. Never rely on the slicer to retarget or on built-in
+      // profile fallbacks surviving; best-effort, so an unresolvable machine degrades to the old
+      // behaviour.
+      if (!job.request.preparedSource) {
         const machineProfile = job.profileFiles.find((profile) => profile.kind === 'machine')
         if (machineProfile) {
           const authoredPath = await authorProjectMachineFromProfile({
@@ -770,14 +833,16 @@ export class SlicingJobs {
         }
       }
 
-      // Now the machine is in, author the REST of this slice's settings into the project: the
+      // On a legacy source, now the machine is in, author the REST of this slice's settings: the
       // chosen process preset, each slot's filament preset, the dialog's per-slice and
       // per-material overrides, and the plate type. All of those otherwise reach the CLI only as
       // command-line profile files, leaving the project ignorant of what it was sliced with, which
       // is what made a preserved project reopen with its old presets, and what let a project's own
       // settings outrank the chosen preset on the compatibility-fallback retry. Must run AFTER the
-      // machine step: the process and filament writes index the topology maps it rebuilds.
-      // Best-effort, a slice that worked before must still work.
+      // machine step: the process and filament writes index the topology maps it rebuilds. A
+      // browser-prepared source skips those editor-owned writes but still receives live runtime
+      // facts that the tab cannot author safely. Best-effort, a slice that worked before must still
+      // work.
       {
         const authoredPath = await this.authorSliceSettings({
           workspaceId: job.workspaceId,
@@ -785,7 +850,10 @@ export class SlicingJobs {
           target: job.request.target,
           projectPath: sourcePath,
           fileName: path.basename(job.sourceFileName) || 'source.3mf',
-          hasFilamentTrackSwitch: this.targetHasFilamentTrackSwitch(job.request.target)
+          hasFilamentTrackSwitch: this.targetHasFilamentTrackSwitch(job.request.target),
+          // The browser-prepared-v1 contract makes every editor-owned setting in the snapshot
+          // authoritative. Only the live printer fact above may still be authored here.
+          runtimeOnly: job.request.preparedSource?.contractVersion === 1
         }).catch((error: unknown) => {
           this.logJobEvent(job, 'warn', `Could not author the slice settings into the project: ${(error as Error).message}`)
           return null
@@ -796,12 +864,13 @@ export class SlicingJobs {
         }
       }
 
-      // Heal index-level triangle-soup meshes (older editor imports) before slicing:
+      // Heal index-level triangle-soup meshes (older editor imports) on legacy inputs before slicing:
       // BambuStudio chains layer contours by vertex index, so unwelded meshes fall into
       // its 2mm gap-closing heuristic and small features (inlaid text) slice mangled.
       // No-op (no copy) for projects whose meshes are already welded, and best-effort
-      // overall, a heal failure must never fail a slice that would previously have run.
-      {
+      // overall, a heal failure must never fail a slice that would previously have run. Prepared
+      // browser inputs already satisfy this invariant and must pass through unchanged.
+      if (!job.request.preparedSource) {
         const weldedDir = await mkdtemp(path.join(tmpdir(), 'printstream-slice-weld-'))
         const weldedPath = path.join(weldedDir, path.basename(job.sourceFileName) || 'source.3mf')
         let healed = false
@@ -833,6 +902,7 @@ export class SlicingJobs {
             sourcePath,
             request,
             profileFiles,
+            executionHints: { printerModel: job.executionPrinterModel },
             signal
           })
           // Staged from INSIDE the try: these paths point into a temp dir the finally below
@@ -1177,13 +1247,13 @@ function toPreservedSliceSettings(request: CreateSlicingJob): PreservedSliceSett
 // no "slicer service", nothing about how the pipeline is wired.
 function slicedArtifactSavingMessage(request: CreateSlicingJob): string {
   return shouldHideSlicedArtifact(request)
-    ? 'Preparing the sliced file for printing'
+    ? 'Finishing the sliced file'
     : 'Saving the sliced file to the library'
 }
 
 function slicedArtifactReadyMessage(request: CreateSlicingJob): string {
   return shouldHideSlicedArtifact(request)
-    ? 'Ready to print'
+    ? 'Slicing complete'
     : 'Sliced file saved to the library'
 }
 
@@ -1196,6 +1266,7 @@ function serializeSlicingJobState(job: SlicingJobState): PersistedSlicingJobStat
     sourceFileName: job.sourceFileName,
     sourcePath: job.sourcePath,
     targetBridgeId: job.targetBridgeId,
+    executionPrinterModel: job.executionPrinterModel,
     outputFileId: job.outputFileId,
     outputFileName: job.outputFileName,
     thumbnailPath: job.thumbnailPath,
@@ -1250,6 +1321,7 @@ function hydratePersistedJob(persisted: PersistedSlicingJobState): SlicingJobSta
     sourceFileName: persisted.sourceFileName,
     sourcePath: persisted.sourcePath,
     targetBridgeId: persisted.targetBridgeId,
+    executionPrinterModel: typeof persisted.executionPrinterModel === 'string' ? persisted.executionPrinterModel : null,
     outputFileId: persisted.outputFileId,
     outputFileName: persisted.outputFileName,
     thumbnailPath: persisted.thumbnailPath,

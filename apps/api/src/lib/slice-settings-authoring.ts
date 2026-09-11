@@ -67,12 +67,19 @@ export interface AuthorSliceSettingsInput {
    * `false`/omitted for manual-profile targets and every machine without the module.
    */
   hasFilamentTrackSwitch?: boolean
+  /**
+   * Apply only server-owned runtime facts. Used for a browser-prepared source whose editor-owned
+   * machine, process, filament, override, and plate settings are already authoritative.
+   */
+  runtimeOnly?: boolean
 }
 
 /**
- * Write a slice's process preset, filament presets, setting overrides, and plate type into a copy of
- * the project. Returns the new path, or null when there was nothing to author (so the caller keeps
- * the file it had) or the project's settings could not be read.
+ * Write a slice's process preset, filament presets, setting overrides, plate type, and live runtime
+ * facts into a copy of the project. With `runtimeOnly`, preserve every browser-authored setting and
+ * update only facts that cannot safely be frozen in the browser. Returns the new path, or null when
+ * there was nothing to author (so the caller keeps the file it had) or the project's settings could
+ * not be read.
  *
  * Best-effort by design and never throws: every step is independently skippable, and a slice that
  * would have worked before must still work. An unresolvable preset, notably a `project:` preset,
@@ -108,32 +115,34 @@ export async function authorSliceSettingsIntoProject(input: AuthorSliceSettingsI
 
   const before = JSON.stringify(settings)
 
-  const processConfig = await resolveProcessConfig(input)
-  if (processConfig) {
-    // The preset WINS over whatever the project declared, because that is what the engine did:
-    // an A/B of the same project sliced with and without this pass produced identical G-code
-    // (`grid/5/monotonicline`) even though the project declared `3dhoneycomb/4/monotonic`, a
-    // loaded process preset overrides the project's embedded process values outright. Carrying
-    // the project's deltas forward here would leave the kept project describing a print that
-    // never happened, and they would be equally inert on a re-slice.
-    settings = applyProcessProfileToProjectSettings(settings, processConfig, input.target.processSettingOverrides ?? {})
-  } else if (input.target.processSettingOverrides) {
-    // No resolvable preset (a project preset), but the overrides still happened: write them over
-    // the project's own process values so they are not silently lost with the preset.
-    // Same empty-numeric guard the bake applies (`@printstream/shared` `settings-value-guard.ts`):
-    // a cleared field written as "" makes the engine abandon every key after it, silently.
-    for (const [key, value] of Object.entries(dropEngineHostileOverrides(input.target.processSettingOverrides))) settings[key] = value
+  if (!input.runtimeOnly) {
+    const processConfig = await resolveProcessConfig(input)
+    if (processConfig) {
+      // The preset WINS over whatever the project declared, because that is what the engine did:
+      // an A/B of the same project sliced with and without this pass produced identical G-code
+      // (`grid/5/monotonicline`) even though the project declared `3dhoneycomb/4/monotonic`, a
+      // loaded process preset overrides the project's embedded process values outright. Carrying
+      // the project's deltas forward here would leave the kept project describing a print that
+      // never happened, and they would be equally inert on a re-slice.
+      settings = applyProcessProfileToProjectSettings(settings, processConfig, input.target.processSettingOverrides ?? {})
+    } else if (input.target.processSettingOverrides) {
+      // No resolvable preset (a project preset), but the overrides still happened: write them over
+      // the project's own process values so they are not silently lost with the preset.
+      // Same empty-numeric guard the bake applies (`@printstream/shared` `settings-value-guard.ts`):
+      // a cleared field written as "" makes the engine abandon every key after it, silently.
+      for (const [key, value] of Object.entries(dropEngineHostileOverrides(input.target.processSettingOverrides))) settings[key] = value
+    }
+
+    // The project's OWN machine settings, on top of the machine authored in by the step before this
+    // one (`slicing-jobs.ts` authors the machine first, which is why this module must run after it).
+    // Same keys, so any earlier position would let the resolved preset overwrite the user's values.
+    settings = applyMachineSettingOverrides(settings, input.target.machineSettingOverrides ?? {})
+
+    settings = await applyFilamentSelection(settings, input)
+
+    const plateType = canonicalCurrBedType(input.target.plateType ?? null)
+    if (plateType) settings.curr_bed_type = plateType
   }
-
-  // The project's OWN machine settings, on top of the machine authored in by the step before this
-  // one (`slicing-jobs.ts` authors the machine first, which is why this module must run after it).
-  // Same keys, so any earlier position would let the resolved preset overwrite the user's values.
-  settings = applyMachineSettingOverrides(settings, input.target.machineSettingOverrides ?? {})
-
-  settings = await applyFilamentSelection(settings, input)
-
-  const plateType = canonicalCurrBedType(input.target.plateType ?? null)
-  if (plateType) settings.curr_bed_type = plateType
 
   // Record whether this slice was made for a Filament Track Switch machine. BambuStudio writes the
   // same key from the connected printer's readiness (`Plater.cpp`: `has_filament_switcher =

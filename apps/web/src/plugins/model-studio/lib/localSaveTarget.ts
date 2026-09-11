@@ -41,36 +41,49 @@ export interface LocalSaveTargetOptions {
 }
 
 export function createLocalSaveTarget(options: LocalSaveTargetOptions): EditorSaveTarget {
-  const bake = async (payload: SaveArrangedThreeMf | ExportArrangedThreeMf): Promise<Uint8Array> => {
+  const bake = async (
+    payload: SaveArrangedThreeMf | ExportArrangedThreeMf,
+    signal?: AbortSignal
+  ): Promise<Uint8Array> => {
+    signal?.throwIfAborted()
     const { bytes } = await bakeClientThreeMf(
       options.archive(),
       payload.sceneEdit,
-      await options.importStore.importsForBake(undefined, importIdsReferencedBy(payload.sceneEdit)),
+      await options.importStore.importsForBake(signal, importIdsReferencedBy(payload.sceneEdit)),
       bakeOptionsFor(payload),
       // The anonymous resolvers: this host reaches the built-in catalogue only, which is what makes
       // it decline a retarget onto a preset it cannot see rather than author half a machine.
       bakePassesFor(payload, {
         resolvers: PUBLIC_RETARGET_RESOLVERS,
         // Already in hand on this host: its catalogue is browser-stored plus the builtin list.
-        filamentPresets: async () => options.filamentPresets()
-      })
+        filamentPresets: async () => options.filamentPresets(),
+        signal
+      }),
+      signal
     )
+    signal?.throwIfAborted()
     return bytes
   }
 
   return {
     isLibraryBacked: false,
 
-    async persist(payload) {
-      const bytes = await bake(payload)
+    async persist(payload, lifecycle = {}) {
+      const signal = lifecycle.signal
+      const bytes = await bake(payload, signal)
       const current = options.projectFile()
       // Branch on the save MODE, not on whether a name came along: "Save" means write back to the
       // file the user opened, "Save as" always asks where to put it. Keying off the name instead
       // made a nameless Save-as silently overwrite the original.
       if (payload.mode !== 'saveAs' && current?.saveInPlace) {
+        signal?.throwIfAborted()
+        lifecycle.onCommitStart?.()
         await current.saveInPlace(bytes)
+        // Once the file write resolves, the save committed. A cancellation racing that boundary
+        // must report the real outcome so the editor does not stay dirty against updated bytes.
         return { id: current.name, name: current.name }
       }
+      signal?.throwIfAborted()
       const saved = await saveLocalProjectAs(suggestedSaveName(payload.name || current?.name || 'project.3mf'), bytes)
       // Null is a dismissed picker: the caller leaves the project dirty and stays quiet.
       if (!saved) return null

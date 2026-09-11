@@ -1278,6 +1278,12 @@ export const libraryFileSchema = z.object({
 })
 export type LibraryFile = z.infer<typeof libraryFileSchema>
 
+/** Lightweight concurrency check used before replacing a library file's current version. */
+export const libraryCurrentVersionResponseSchema = z.object({
+  currentVersionNumber: z.number().int().positive()
+})
+export type LibraryCurrentVersionResponse = z.infer<typeof libraryCurrentVersionResponseSchema>
+
 /**
  * Sort keys for the library file listing. `mostPrinted`/`lastPrinted` are backed by
  * the denormalized `printCount`/`lastPrintedAt` rollup so they order correctly on the

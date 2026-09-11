@@ -1,4 +1,4 @@
-import { MenuItem } from '@mui/joy'
+import { ListItemDecorator, MenuItem } from '@mui/joy'
 import ViewInArRoundedIcon from '@mui/icons-material/ViewInArRounded'
 import { isMeshLibraryFileKind } from '@printstream/shared'
 
@@ -27,7 +27,8 @@ export function LibraryPreviewAction(props: Record<string, unknown>) {
         onPreview()
       }}
     >
-      <ViewInArRoundedIcon /> {label}
+      <ListItemDecorator><ViewInArRoundedIcon /></ListItemDecorator>
+      {label}
     </MenuItem>
   )
 }

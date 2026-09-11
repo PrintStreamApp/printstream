@@ -53,6 +53,32 @@ test('parseGcodeLayers groups extrusion by Z height and ignores travel z-hops', 
   assertCloseArray(parsed.extrusionPositions, 0, [0, 0, 0.2, 10, 0, 0.2])
 })
 
+test('parseGcodeLayers places custom layer events from reserved tags in print order', () => {
+  const gcode = [
+    'G90', 'M82',
+    // These config values mention the tags but are not emitted events.
+    '; template_custom_gcode = ; PAUSE_PRINTING',
+    '; another_setting = ; COLOR_CHANGE',
+    'G1 X0 Y0 Z0.2 E0',
+    'G1 X10 Y0 E1',
+    'G1 Z0.4',
+    'G1 X20 Y0 E2',
+    // Sequential printing restarts Z for the next object. The event belongs to the later 0.2mm
+    // layer, not the first layer with that same height.
+    'G92 E0',
+    'G1 Z0.2',
+    '; PAUSE_PRINTING',
+    '; COLOR_CHANGE',
+    'G1 X30 Y0 E1'
+  ].join('\n')
+
+  const parsed = parseGcodeLayers(gcode)
+
+  assert.deepEqual(parsed.layerZ, [0.2, 0.4, 0.2])
+  assert.deepEqual(parsed.pauseLayers, [2])
+  assert.deepEqual(parsed.filamentChangeLayers, [2])
+})
+
 test('parseGcodeLayers honors relative positioning and relative extrusion', () => {
   const gcode = [
     'G90', 'M83',           // absolute XYZ, relative E

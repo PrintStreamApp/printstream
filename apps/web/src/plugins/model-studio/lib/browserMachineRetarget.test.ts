@@ -112,6 +112,25 @@ test('an unresolvable machine leaves the project on its embedded printer rather 
   assert.equal(await buildMachineRetargetPlan(input({ resolvers })), null)
 })
 
+test('passes cancellation to preset resolution and never degrades an abort into a partial save', async () => {
+  const abort = new AbortController()
+  let observedSignal: AbortSignal | undefined
+  const { resolvers } = stubResolvers({
+    machine: async (_id, _targetId, options) => {
+      observedSignal = options?.signal
+      abort.abort()
+      options?.signal?.throwIfAborted()
+      throw new Error('unreachable')
+    }
+  })
+
+  await assert.rejects(
+    () => buildMachineRetargetPlan(input({ resolvers, signal: abort.signal })),
+    (error: unknown) => error instanceof Error && error.name === 'AbortError'
+  )
+  assert.equal(observedSignal, abort.signal)
+})
+
 test('the plan carries the resolved machine, its name, and the model it reports', async () => {
   const { calls, resolvers } = stubResolvers()
   const plan = await buildMachineRetargetPlan(input({ resolvers }))

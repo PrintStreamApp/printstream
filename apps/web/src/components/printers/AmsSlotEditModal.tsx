@@ -7,7 +7,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  AutocompleteOption, Button, ButtonGroup, Divider, FormControl, FormLabel, IconButton, Input, ListItemContent, Menu, MenuItem, ModalDialog, Option, Select, Sheet, Stack, Typography
+  AutocompleteOption, Button, ButtonGroup, Divider, FormControl, FormLabel, IconButton, Input, ListItemContent, ListItemDecorator, Menu, MenuItem, ModalDialog, Option, Select, Sheet, Stack, Typography
 } from '@mui/joy'
 import RefreshRoundedIcon from '@mui/icons-material/RefreshRounded'
 import RestartAltRoundedIcon from '@mui/icons-material/RestartAltRounded'
@@ -893,7 +893,9 @@ export function AmsSlotEditModal({
                     color="danger"
                     onClick={requestResetSlot}
                   >
-                    <RestartAltRoundedIcon fontSize="small" />
+                    <ListItemDecorator>
+                      <RestartAltRoundedIcon fontSize="small" />
+                    </ListItemDecorator>
                     Reset slot
                   </MenuItem>
                 </Menu>

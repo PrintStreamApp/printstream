@@ -15,7 +15,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "dev": "NODE_OPTIONS=\"--require ../../scripts/dev/exit-with-parent.cjs\" node ../../scripts/dev/run-bridge-dev.mjs",
+    "dev": "NODE_OPTIONS=\"--require ../../scripts/dev/exit-with-parent.cjs\" node ../../scripts/dev/run-service-dev.mjs --name=bridge --entry=src/index.ts --env-file=../../.env --watch=src --watch=../../packages/shared/dist --watch=../../packages/bridge-runtime/dist",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {

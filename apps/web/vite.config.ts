@@ -102,10 +102,12 @@ export default defineConfig(({ command, mode }) => {
       })
     ],
     server: {
-      // Multi-checkout dev mode derives a per-checkout port so several can run at once; everyone
-      // else gets 5173 exactly as before. `strictPort` stays off, so a collision walks to the next
-      // free port rather than failing the start.
+      // Multi-checkout dev mode derives a per-checkout port and publishes that exact port through
+      // Devkit's proxy. It is an identity there, not a preference: falling through to the next port
+      // would start a web server the advertised hostname cannot reach. Outside host mode, retain
+      // Vite's ordinary fallback behavior for standalone/local use.
       port: Number(env.VITE_DEV_PORT ?? 5173),
+      strictPort: Boolean(env.VITE_DEV_PORT),
       // `true` binds the IPv6 wildcard, which Docker Desktop's WSL host forwarding does not relay:
       // a container reaching `host.docker.internal` gets connection-refused, so multi-checkout dev
       // mode's proxy answers 502 for a dev server that is plainly up on its direct port. Host mode

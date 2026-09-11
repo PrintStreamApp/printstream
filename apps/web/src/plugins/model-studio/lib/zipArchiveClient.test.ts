@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict'
-import test from 'node:test'
+import test, { afterEach } from 'node:test'
 import { strToU8 } from 'fflate'
 import { ZIP_ARCHIVE_BASE_DEADLINE_MS, unzipArchiveBytes, zipArchiveDeadlineMs, zipArchiveEntries } from './zipArchiveClient'
+
+const realWorker = globalThis.Worker
+afterEach(() => {
+  Object.defineProperty(globalThis, 'Worker', { configurable: true, writable: true, value: realWorker })
+})
 
 /**
  * The bounded zip codec behind every client-side archive open and save.
@@ -36,4 +41,29 @@ test('deadline scales with payload size from a fixed base', () => {
   assert.equal(zipArchiveDeadlineMs(1024), ZIP_ARCHIVE_BASE_DEADLINE_MS + 1)
   // The incident's 17MB project: bounded to well under a minute beyond the base, not forever.
   assert.equal(zipArchiveDeadlineMs(17 * 1024 * 1024), ZIP_ARCHIVE_BASE_DEADLINE_MS + 17 * 1024)
+})
+
+test('aborting compression terminates its worker without falling back to main-thread compression', async () => {
+  let terminated = false
+  class PendingWorker {
+    onmessage: ((event: MessageEvent) => void) | null = null
+    onerror: ((event: ErrorEvent) => void) | null = null
+    postMessage(): void {}
+    terminate(): void { terminated = true }
+  }
+  Object.defineProperty(globalThis, 'Worker', {
+    configurable: true,
+    writable: true,
+    value: PendingWorker as unknown as typeof Worker
+  })
+  const abort = new AbortController()
+  const compression = zipArchiveEntries({ 'large.model': new Uint8Array(1024) }, 6, abort.signal)
+
+  abort.abort()
+
+  await assert.rejects(
+    compression,
+    (error: unknown) => error instanceof Error && error.name === 'AbortError'
+  )
+  assert.equal(terminated, true)
 })

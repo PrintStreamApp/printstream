@@ -419,14 +419,12 @@ export function PlateThumbnailStrip({
                 </MenuButton>
               </Badge>
               <Menu placement="bottom-end" sx={{ zIndex: EDITOR_POPUP_Z_INDEX, minWidth: 160 }} onClick={(event) => event.stopPropagation()}>
-                {/* Lay out icon + label directly with a fixed gap so every row aligns
-                    (ListItemDecorator sizes differently on the danger/selected row). */}
-                <MenuItem onClick={(event) => { event.stopPropagation(); onRenamePlate(plate.index) }} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                  <DriveFileRenameOutlineRoundedIcon fontSize="small" />
+                <MenuItem onClick={(event) => { event.stopPropagation(); onRenamePlate(plate.index) }}>
+                  <ListItemDecorator><DriveFileRenameOutlineRoundedIcon fontSize="small" /></ListItemDecorator>
                   Rename
                 </MenuItem>
-                <MenuItem onClick={(event) => { event.stopPropagation(); onEditPlateSettings(plate.index) }} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                  <TuneRoundedIcon fontSize="small" />
+                <MenuItem onClick={(event) => { event.stopPropagation(); onEditPlateSettings(plate.index) }}>
+                  <ListItemDecorator><TuneRoundedIcon fontSize="small" /></ListItemDecorator>
                   Plate settings
                   {/* Repeated on the row the badge points at, so the count still says how much is
                       overridden once the menu covers the badge that raised the question. */}
@@ -435,8 +433,8 @@ export function PlateThumbnailStrip({
                   )}
                 </MenuItem>
                 {plates.length > 1 && (
-                  <MenuItem color="danger" onClick={(event) => { event.stopPropagation(); onRemovePlate(plate.index) }} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                    <DeleteRoundedIcon fontSize="small" />
+                  <MenuItem color="danger" onClick={(event) => { event.stopPropagation(); onRemovePlate(plate.index) }}>
+                    <ListItemDecorator><DeleteRoundedIcon fontSize="small" /></ListItemDecorator>
                     Delete plate
                   </MenuItem>
                 )}
@@ -2318,4 +2316,3 @@ export const ObjectList = memo(function ObjectList({
     </List>
   )
 })
-

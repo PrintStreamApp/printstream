@@ -12,7 +12,7 @@
  * to rebuild after a lost WebGL context.
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Alert, Box, Button, Chip, CircularProgress, DialogContent, ModalClose, Sheet, Slider, Stack, Switch, Typography, Tooltip } from '@mui/joy'
+import { Alert, Box, Button, CircularProgress, DialogContent, ModalClose, Sheet, Slider, Stack, Switch, Typography, Tooltip } from '@mui/joy'
 import { choosePlateStripOrientation, EDITOR_GRID_GAP_PX } from './lib/editorChromeLayout'
 import { useQuery } from '@tanstack/react-query'
 import { isMeshLibraryFileKind } from '@printstream/shared'
@@ -63,6 +63,9 @@ import {
 } from './lib/viewCube'
 import { createViewportCameraRig } from './lib/viewportCamera'
 import { ProgressBar } from '../../components/ProgressBar'
+import { GcodeLayerSlider } from './GcodeLayerSlider'
+import { GcodeScrubberValueChip } from './GcodeScrubberValueChip'
+import { buildGcodeLayerEventMarkers, maxGcodeLayerHeightReference, type GcodeLayerEventMarker } from './lib/gcodeLayerEvents'
 
 const PLATED_PREVIEW_GRID_SIZE = 320
 /**
@@ -175,7 +178,9 @@ export function PreviewView(props: Record<string, unknown>) {
   const gcodePreviewRef = useRef<LayeredGcodePreview | null>(null)
   const [gcodeLayerCount, setGcodeLayerCount] = useState(0)
   const [gcodeTopLayer, setGcodeTopLayer] = useState(0)
+  const [gcodeLayerHeightWidthReference, setGcodeLayerHeightWidthReference] = useState<string | null>(null)
   const [gcodeSingleLayer, setGcodeSingleLayer] = useState(false)
+  const [gcodeLayerEventMarkers, setGcodeLayerEventMarkers] = useState<GcodeLayerEventMarker[]>([])
   // Within-layer scrub (Bambu's horizontal move slider): null shows the whole top layer.
   const [gcodeMoveCount, setGcodeMoveCount] = useState(0)
   const [gcodeMoveEnd, setGcodeMoveEnd] = useState<number | null>(null)
@@ -727,6 +732,8 @@ export function PreviewView(props: Record<string, unknown>) {
     // Reset the layered-G-code slider; it's repopulated when a plate's G-code loads.
     gcodePreviewRef.current = null
     setGcodeLayerCount(0)
+    setGcodeLayerHeightWidthReference(null)
+    setGcodeLayerEventMarkers([])
     setGcodeStats(null)
     setGcodeRanges(null)
     setGcodeConflict(null)
@@ -768,6 +775,16 @@ export function PreviewView(props: Record<string, unknown>) {
           const preview = buildLayeredGcodePreview(parsed)
           gcodePreviewRef.current = preview
           setGcodeLayerCount(preview.layerCount)
+          setGcodeLayerHeightWidthReference(maxGcodeLayerHeightReference(parsed.layerZ))
+          const plate = plates.find((entry) => entry.index === selectedPlate) ?? plates[0]
+          setGcodeLayerEventMarkers(buildGcodeLayerEventMarkers(parsed.layerZ, {
+            pauses: plate?.pauses,
+            filamentChanges: plate?.filamentChanges,
+            projectFilaments: platesQuery.data?.projectFilaments
+          }, {
+            pauseLayers: parsed.pauseLayers,
+            filamentChangeLayers: parsed.filamentChangeLayers
+          }))
           setGcodeTopLayer(preview.layerCount - 1)
           setGcodeSingleLayer(false)
           setGcodeMoveEnd(null)
@@ -838,6 +855,8 @@ export function PreviewView(props: Record<string, unknown>) {
     sceneQuery.isLoading,
     previewMode,
     selectedPlate,
+    plates,
+    platesQuery.data?.projectFilaments,
     // The bed mesh resolves asynchronously (and flips with the preference), so the content has to
     // rebuild when it lands, otherwise the plate keeps whichever surface it was first built with.
     bedModel
@@ -963,6 +982,9 @@ export function PreviewView(props: Record<string, unknown>) {
   const gcodeOverlaysReady = previewMode === 'plate-gcode' && !viewerState.loading && !viewerState.error
   const showsGcodeLayerColumn = gcodeOverlaysReady && gcodeLayerCount > 1
   const showsGcodeMovesStrip = gcodeOverlaysReady && gcodeMoveCount > 1
+  const gcodeLayerCounterWidthReference = `${gcodeLayerCount}/${gcodeLayerCount}`
+  const gcodeMoveCounterWidthReference = `${gcodeMoveCount}/${gcodeMoveCount}`
+  const gcodeLayerHeight = gcodePreviewRef.current?.layerZ(gcodeTopLayer)
   const showPreviewChrome = !fullScreen
   // Where the viewport's floating controls sit. Extracted because four of them share two
   // corners and which are present changes with the mode: two absolutely-positioned boxes
@@ -1169,22 +1191,22 @@ export function PreviewView(props: Record<string, unknown>) {
                     gap: 1
                   }}
                 >
-                  <Chip size="sm" variant="soft" color="neutral">{gcodeTopLayer + 1}/{gcodeLayerCount}</Chip>
+                  <GcodeScrubberValueChip
+                    value={`${gcodeTopLayer + 1}/${gcodeLayerCount}`}
+                    widthReference={gcodeLayerCounterWidthReference}
+                  />
                   {/* The layer's print height: what a pause or filament change in the editor keys on. */}
-                  {gcodePreviewRef.current && (
-                    <Chip size="sm" variant="soft" color="neutral">
-                      {Number(gcodePreviewRef.current.layerZ(gcodeTopLayer).toFixed(2))} mm
-                    </Chip>
+                  {gcodeLayerHeight != null && gcodeLayerHeightWidthReference != null && (
+                    <GcodeScrubberValueChip
+                      value={`${gcodeLayerHeight.toFixed(2)} mm`}
+                      widthReference={gcodeLayerHeightWidthReference}
+                    />
                   )}
-                  <Slider
-                    orientation="vertical"
-                    size="sm"
-                    min={0}
-                    max={gcodeLayerCount - 1}
+                  <GcodeLayerSlider
+                    layerCount={gcodeLayerCount}
                     value={gcodeTopLayer}
-                    onChange={(_event, value) => setGcodeTopLayer(typeof value === 'number' ? value : value[0] ?? 0)}
-                    aria-label="G-code layer"
-                    sx={{ flex: 1, minHeight: 120 }}
+                    markers={gcodeLayerEventMarkers}
+                    onChange={setGcodeTopLayer}
                   />
                   <Switch
                     size="sm"
@@ -1229,9 +1251,10 @@ export function PreviewView(props: Record<string, unknown>) {
                     aria-label="G-code moves within the top layer"
                     sx={{ flex: 1, minWidth: 0 }}
                   />
-                  <Chip size="sm" variant="soft" color="neutral">
-                    {gcodeMoveEnd ?? gcodeMoveCount}/{gcodeMoveCount}
-                  </Chip>
+                  <GcodeScrubberValueChip
+                    value={`${gcodeMoveEnd ?? gcodeMoveCount}/${gcodeMoveCount}`}
+                    widthReference={gcodeMoveCounterWidthReference}
+                  />
                 </Sheet>
               )}
               {previewMode === 'plate-gcode' && gcodeStats && gcodeRanges && !viewerState.loading && !viewerState.error && (
@@ -1445,4 +1468,3 @@ function buildPlateGcodePreviewObject(
   plateGroup.add(object)
   return plateGroup
 }
-

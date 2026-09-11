@@ -20,7 +20,7 @@ import type { LibraryThreeMfScene, PrinterModel, ThreeMfIndex } from '@printstre
 import { readEmbeddedProjectPresets, type EmbeddedProjectPreset } from './embeddedProjectPresets'
 import { toThreeMfIndexDto } from '@printstream/shared/three-mf'
 import { buildApiUrl } from '../../../lib/apiUrl'
-import { MODEL_FETCH_HEADERS_MS, fetchModelBytes } from './modelFetch'
+import { MODEL_FETCH_HEADERS_MS, fetchModelBytes, type ModelFetchProgress } from './modelFetch'
 import { openClientThreeMfProjectFromBytes, type ClientThreeMfProject } from './clientThreeMfProject'
 import type { ThreeMfArchive } from './threeMfArchive'
 
@@ -106,15 +106,29 @@ export interface EditorProjectSource {
   dispose?(): void
 }
 
+export type ArchiveProjectOpenPhase = 'loading-file' | 'reading-project'
+
+export interface ArchiveProjectSourceOptions {
+  /** Reports the two potentially long parts of the first open without exposing ZIP internals. */
+  onOpenPhase?: (phase: ArchiveProjectOpenPhase) => void
+  /** Reports decoded project bytes received by the browser. */
+  onDownloadProgress?: (progress: ModelFetchProgress) => void
+}
+
 /**
  * The library source: downloads the whole 3MF once, then answers every read from it.
  *
  * @param resourceBase `/api/library/:id` or `/api/library/versions/:versionId`.
  * @param fileName internal only: see `openClientThreeMfProjectFromBytes`.
  */
-export function createArchiveProjectSource(resourceBase: string, fileName = 'project.3mf'): EditorProjectSource {
+export function createArchiveProjectSource(
+  resourceBase: string,
+  fileName = 'project.3mf',
+  options: ArchiveProjectSourceOptions = {}
+): EditorProjectSource {
   let opening: Promise<ClientThreeMfProject> | null = null
   let opened: ClientThreeMfProject | null = null
+  let openingAbort: AbortController | null = null
   /**
    * Bumped by `dispose`. Releasing must NOT latch a permanent "disposed" flag: the caller disposes
    * from an effect cleanup, and React runs that cleanup spuriously (StrictMode remounts every
@@ -126,21 +140,33 @@ export function createArchiveProjectSource(resourceBase: string, fileName = 'pro
   let generation = 0
 
   const open = (): Promise<ClientThreeMfProject> => {
+    if (opening) return opening
     const openedFor = generation
-    // One download shared by every read. Deliberately NOT given a caller's abort signal: the
-    // readers abort independently (a plate switch, a re-key), and the first one to give up would
-    // otherwise cancel the archive out from under all the others.
+    const controller = new AbortController()
+    openingAbort = controller
+    // One download shared by every read. Deliberately NOT given a reader's abort signal: readers
+    // abort independently (a plate switch, a re-key), and the first one to give up must not cancel
+    // the archive out from under all the others. The source owns this controller instead, so
+    // closing the editor through `dispose` still stops the otherwise orphaned large transfer.
     // One attempt: a stalled retry re-downloads the WHOLE project, which costs more than the
     // transient stall it recovers from (the mesh-entry default retries because an entry is small).
-    opening ??= fetchModelBytes(
+    options.onOpenPhase?.('loading-file')
+    const currentOpening = fetchModelBytes(
       buildApiUrl(`${resourceBase}/archive`),
-      { method: 'GET', credentials: 'include' },
+      { method: 'GET', credentials: 'include', signal: controller.signal },
       ARCHIVE_STALL_MS,
       MODEL_FETCH_HEADERS_MS,
-      1
+      1,
+      options.onDownloadProgress
     )
       .then(async (bytes) => {
+        controller.signal.throwIfAborted()
+        options.onOpenPhase?.('reading-project')
         const project = await openClientThreeMfProjectFromBytes(fileName, bytes)
+        if (controller.signal.aborted) {
+          project.dispose()
+          controller.signal.throwIfAborted()
+        }
         // Released while this download was in flight: hand the project back to the caller that
         // asked for it, but drop it rather than adopting it as the source's live archive.
         if (openedFor !== generation) project.dispose()
@@ -150,9 +176,13 @@ export function createArchiveProjectSource(resourceBase: string, fileName = 'pro
       .catch((error: unknown) => {
         // Clear the memo so a retry re-downloads; a cached rejection would make the editor
         // permanently unopenable after one transient failure.
-        opening = null
+        if (opening === currentOpening) opening = null
         throw error
       })
+      .finally(() => {
+        if (openingAbort === controller) openingAbort = null
+      })
+    opening = currentOpening
     return opening
   }
 
@@ -182,6 +212,8 @@ export function createArchiveProjectSource(resourceBase: string, fileName = 'pro
     // purpose: see `generation`.
     dispose: () => {
       generation += 1
+      openingAbort?.abort(new DOMException('The editor was closed.', 'AbortError'))
+      openingAbort = null
       opened?.dispose()
       opened = null
       opening = null

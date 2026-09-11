@@ -136,8 +136,12 @@ Three notes in place because they bit:
   body arrive, the tail never does, and the editor hangs on open with no error. Verified directly:
   curl fetched the same URL in 37ms while the browser hung indefinitely.
 - The archive uses its own body-stall budget (`ARCHIVE_STALL_MS`) and does not retry: a
-  bridge-owned file is pulled, read, and compressed in full before a byte reaches the browser, so
-  time-to-first-byte scales with the whole project on a cold open.
+  bridge-owned file is pulled and read in full before a byte reaches the browser, so time-to-first-
+  byte scales with the whole project on a cold open. It is sent without HTTP gzip because a 3MF is
+  already a ZIP; recompressing it delayed the first byte while saving little.
+- Download progress is rate-limited before it enters `EditorView` state. The response arrives in
+  64 KiB chunks, and publishing every chunk made a 30 MB open rerender the whole editor roughly
+  460 times. The limiter always preserves the exact start and finish.
 - **A short body must FAIL, not corrupt.** `sendModelBuffer` declares a `Content-Length`, so a body
   that ends early is rejected by the browser instead of being handed to the unzip as a truncated
   buffer, which surfaces as "this file could not be opened as a 3MF archive" and blames the file
@@ -149,6 +153,13 @@ Three notes in place because they bit:
   orphan those entries.
 
 ## Saves are delta-against-the-base, and what that constrains
+
+Before replacing an existing library file, the editor checks only its database version counter
+through `GET /api/library/:id/current-version`. This endpoint must stay metadata-only: using the
+normal library-file DTO path can ask the bridge to inspect and parse the full 3MF merely to detect
+a concurrent save. The progress dialog is delayed for this check because it should normally finish
+without becoming a visible step; the request is cancellable and bounded when the backing service
+is unhealthy.
 
 A `SceneEdit` is deliberately **not** a whole-file description. A 3MF carries far more than the
 editor models (the full process/machine config, slice_info, sub-model layout, vendor metadata), and
@@ -247,7 +258,9 @@ filament changes and layer pauses (ToolChange / PausePrint entries in
 the slicer re-snaps to the nearest layer at slice time, BambuStudio semantics); the
 writer replaces only the listed plates' entries of the edited type while preserving
 the other entry types and untouched plates, and the scene response seeds the editor's
-per-plate lists. Preserved entries are remapped from each plate's source index to its
+per-plate lists. The read-only G-code preview maps those baked heights onto the actual parsed
+layers and marks pauses and filament changes beside its layer slider, so adaptive layers do not
+need a second height-to-index rule. Preserved entries are remapped from each plate's source index to its
 saved index during a reorder or delete; the positional `wipe_tower_x` and
 `wipe_tower_y` arrays follow the same mapping. Otherwise a pause or prime tower remains
 at the old index and silently attaches to whichever plate takes that number.
@@ -804,37 +817,60 @@ again", and useless for "print that again with one thing changed": the project i
 never recorded, and for a slice started from the editor it may never have existed in the library
 at all.
 
-So every successful slice also preserves its **project**: `sourcePath` at the moment
-`runSlicerJob` hands the file to the engine, which is after our rewrites (arranged scene, object
-selection, per-object process overrides, layer G-code edits, authored machine, mesh weld) and
-before the slicer's own mechanical prep (`input.materials.3mf`: machine retarget, filament-map
-injection, `slice_info` stripping). That boundary is the point: everything above it is user
-intent, everything below it is a CLI workaround that must not be baked into a project the user
-will re-open.
+So every successful slice also preserves its **project**: the authoritative 3MF immediately before
+the slicer's mechanical compatibility copy. For a model-studio slice, the browser owns that
+boundary. After the user confirms the target, it freezes one `SlicingTarget`, bakes the edited
+scene, authors the selected machine and process, rebinds the selected filament profiles, applies
+every machine, process, global-filament and per-slot override, writes the plate and nozzle mapping,
+heals legacy triangle-soup meshes, and uploads the result as an immutable hidden snapshot. The
+request keeps the visible `sourceFileId` as lineage and names those bytes separately through the
+versioned `preparedSource` contract.
 
-That file alone would not be enough, because a slice carries settings that never entered it: the
-process preset, the per-slot filament presets, the per-slice and per-material setting overrides,
-and the plate type all travelled beside the 3MF as resolved profile files and reached the CLI on the
-command line. A project preserved without them reopens showing whatever presets it was last SAVED
-with and silently drops every override set in the prepare-print dialog, the opposite of the point.
+The upload completion records a server-issued preparation proof beside the content-addressed
+hidden snapshot. That proof binds the immutable bytes to two independent identities: `sourceFileId`
+is the project lineage used by slice placement and history, while `contentBase.fileId` plus its
+optional version is the exact current or archived file the editor opened. They differ after Save As.
+The proof also binds the contract version, slicer engine, frozen target, and current real-printer model. The server still applies ZIP
+safety limits, verifies the required package/settings shape and target identities, resolves named
+workspace presets to confirm they remain available, but does not apply those bodies to the archive
+or recompute the browser's output. The slice endpoint accepts the prepared path only when that proof matches the
+request exactly; an ordinary print-history snapshot cannot claim the contract, and changing a
+target after staging requires a fresh bake. A short proof lease covers the stage-to-enqueue gap;
+once queued, the persisted job reference keeps the prepared source retriable without depending on
+that lease. The API does not repeat the browser's scene, settings,
+machine, or mesh rewrites. The only project setting it may change is the live Filament Track Switch fact, which cannot safely be frozen
+in a browser while a job waits in the queue; that change is made only in the disposable input copy.
+The slicer service likewise treats the embedded project settings as authoritative: it does not load
+request profiles over them, synthesize missing settings, or restamp the sliced project from request
+metadata. The browser removes stale `slice_info` nozzle groups that crash the CLI and authors the
+per-plate manual map. The slicer only reads that map back for the `--filament-map` argument the
+engine requires; it does not rewrite the staged archive.
 
-So `slice-settings-authoring.ts` writes them into the project **as a step of the rewrite chain**,
-before the engine sees it, upholding the same rule the rest of this document rests on: PrintStream
-authors the 3MF, the CLI only slices it. The engine and the preserved copy therefore read one file,
-so "slice again" reopens the exact project that produced the print rather than a reconstruction of
-it. It reuses the shared pieces "save for a different printer" uses
-(`applyProcessProfileToProjectSettings`, `rebindProjectFilamentPhysics`,
-`applyFilamentSlotOverrides`) so the two cannot drift on what a setting kind means, and it must run
-AFTER the machine step, whose topology maps the process and filament writes index.
+Large editor saves and prepared slicing snapshots use the resumable library upload protocol. Chunk
+writes pace themselves against the API's advertised shared write budget, and that pacing remains
+cancellable. The upload reserves request headroom for other UI actions, but its final completion
+request may spend that reserve so fully uploaded bytes do not wait for the rate window to reset
+before the library or prepared-snapshot commit begins. Any wait before that request is reported as
+an upload pause, not as project preparation. A visible save locks cancellation when completion
+begins because the file or version mutation may already commit. A prepared-snapshot operation may
+still be abandoned throughout completion and reconciliation because the snapshot cannot print
+without the later job request and unreferenced-snapshot cleanup reclaims it.
 
-**The invariant that makes it safe to run before the engine:** the authored config must describe what
-the engine actually did, so authoring cannot change a slice's output. That is MEASURED, not reasoned:
+Non-editor callers do not hold an opened archive or the complete editor state, so they retain the
+legacy API preparation path. `slice-settings-authoring.ts` writes their process and filament
+profiles, overrides, plate type, and runtime switch fact into the project after the machine pass;
+the API then performs the legacy mesh heal before handing the result to the slicer. Both paths use
+the same shared setting and mesh transforms so their meaning cannot drift.
+
+**The invariant that makes legacy authoring safe to run before the engine:** the authored config
+must describe what the engine actually did, so authoring cannot change a slice's output. That is
+MEASURED, not reasoned:
 the same project (declaring `sparse_infill_pattern=3dhoneycomb`, `top_shell_layers=4`,
 `top_surface_pattern=monotonic` against a custom preset) was sliced twice against a builtin preset,
 once with this pass and once without, and both runs produced identical G-code:
 `grid/5/monotonicline`, the PRESET's values.
 
-That A/B settled a question worth writing down: **a process preset loaded on the command line
+That A/B settled a question worth writing down for the legacy path: **a process preset loaded on the command line
 overrides the project's embedded process values outright, so a project's `different_settings_to_system`
 deltas are inert once a preset is loaded.** The process step therefore lets the preset win. An earlier
 cut of this code restored those deltas, on the theory that the CLI honoured them. It does not, and
@@ -843,7 +879,8 @@ settings failure mode). The FILAMENT step is deliberately the other way round:
 `rebindProjectFilamentPhysics` preserves a slot's declared keys, which is right there because a
 filament preset binds per slot rather than being loaded wholesale over the project.
 
-Moving authoring ahead of the slice also closed "picked Extra Fine, silently got the project's
+Authoring the selected process into both the browser-prepared and legacy inputs also closed
+"picked Extra Fine, silently got the project's
 0.20mm": the chosen preset's values are written into the project before the engine sees it, so no
 later step can fall back to whatever the project happened to carry. (That failure reached users
 through the compatibility-fallback retry, which blanked a preset's *identity* via
@@ -973,7 +1010,7 @@ What the host must answer for itself, and where:
 | Capability | Workspace host | Public host |
 | --- | --- | --- |
 | Project bytes | `GET /api/library/:id/archive` | the user's file, via File System Access where supported, else an `<input type=file>` |
-| Save | `POST /api/editor/save` (new library version) | bakes in the tab, writes back to the file (download fallback) |
+| Save | bakes in the tab, then persists through the resumable library upload as a new library version | bakes in the tab, writes back to the file (download fallback) |
 | Staged imports | uploaded, parsed server-side | parsed in the tab, off the main thread (`importStagingWorker.ts`: STL, the shared 3MF extractor, and the OCCT WASM for STEP); same formats, no library source |
 | Presets | workspace catalogue + custom presets | `/api/public/slicing/*` + the user's browser-stored presets |
 | Preset resolution | `/api/slicing/profiles/resolve-*` | `/api/public/slicing/resolve-*`, **builtin ids only** |

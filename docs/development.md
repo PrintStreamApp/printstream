@@ -98,6 +98,15 @@ npm run dev              # in any checkout or worktree
 
 Everything a checkout is named by is derived on that first `npm run dev`, so a new worktree needs no setup beyond the install: it gets its hostname, its own database cloned from the baseline, its own ports, its proxy route, and a copy of the primary checkout's ignored `.env`. If the worktree already has an `.env`, devkit leaves it alone. Deleting the worktree stops producing its derived resources; `dev:host -- prune` drops the orphaned database.
 
+Only one dev stack may run for a checkout. A second `npm run dev` exits before starting watchers and
+names the occupied web/API ports. In host mode those ports are part of the proxy identity, so Vite
+also refuses a collision instead of silently moving to a URL the checkout hostname does not serve.
+
+The API and bridge run under a shared polling supervisor rather than `tsx watch`. If WSL or the host
+kills a service child under memory pressure, the supervisor logs the exit and restarts it with
+bounded backoff; edits to service source or compiled shared dependencies also trigger a reload. This
+keeps the proxy from remaining alive with a permanently missing API behind it.
+
 After that, `npm run dev` prints where the checkout is answering:
 
 ```
@@ -111,7 +120,7 @@ Hostnames nest as `<worktree>.<repo>.localhost`, which browsers resolve to loopb
 
 | Piece | Where | Shared by |
 | --- | --- | --- |
-| Traefik proxy on `127.0.0.1:80` | `~/.config/devkit/infra` | every project on the machine |
+| Traefik proxy on IPv4 and IPv6 loopback port 80 | `~/.config/devkit/infra` | every project on the machine |
 | One Postgres, one database per checkout | same stack | every project on the machine |
 | Baseline database + `data/` archive | `~/.config/devkit/baselines` | every worktree of one clone |
 
@@ -245,7 +254,7 @@ Concurrent full validates do not finish sooner in aggregate: the CPU is already 
 
 `npm run validate:changed` is the fastest feedback path: it lints only the changed files, typechecks in full (TypeScript is whole-program, so this is what catches a changed shared module breaking a consumer elsewhere), and runs tests scoped to each changed file's subtree. It prints the scopes it chose and names what it could not cover. It is a subset by construction, not a gate: behavioural breakage in a consumer outside those subtrees is not covered. Use it while iterating; use `npm run validate` before you commit.
 
-The aggregate test runner runs the whole suite in one `node --test` pass (each file is isolated in its own subprocess) and never stops at the first failure. It caps how many files run at once so a busy/shared CPU does not make timing-sensitive suites flake; the default is about half the cores. Tune it with `npm run test -- --concurrency=<n>` or `NODE_TEST_CONCURRENCY=<n> npm run test` (lower it if you see flakes; that knob also bounds peak memory). Pass a path substring to scope the run, e.g. `npm run test -- print-job-recorder`.
+The aggregate test runner runs the whole suite in sequential batches of 50 files, and Node isolates each file in its own subprocess. The batch boundary releases the aggregate process's native memory and test metadata instead of retaining them across the entire suite; failures are still collected across every batch before reporting. An unattributed failed batch is re-run file-by-file so aggregate pressure cannot hide the responsible test. Within a batch, concurrency is capped so a busy/shared CPU does not make timing-sensitive suites flake. The default is the lowest of half the available cores, four workers, and a memory budget that reserves 3 GiB for dev servers and the host before allowing about 1.5 GiB per worker. This matters in WSL and memory-capped containers, where CPU-only sizing can otherwise fill swap. Tune concurrency explicitly with `npm run test -- --concurrency=<n>` or `NODE_TEST_CONCURRENCY=<n> npm run test` when a dedicated machine can sustain more. The batch size can be overridden with `--batch-size=<n>` or `NODE_TEST_BATCH_SIZE=<n>` for diagnostics. Pass a path substring to scope the run, e.g. `npm run test -- print-job-recorder`.
 
 When a run fails, the runner re-runs only the failing files one at a time to pinpoint them and to separate genuine failures from load-induced flakes (a file that fails under the full run but passes alone). It exits non-zero only for reproducible failures.
 

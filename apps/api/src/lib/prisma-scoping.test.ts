@@ -74,7 +74,7 @@ test('scopeUpsertArgs constrains where, injects workspace into create, leaves up
     create: { id: 'row-1', name: 'Cube' },
     update: { name: 'Cube v2' }
   }, WORKSPACE)
-  assert.deepEqual(scoped.where, { AND: [{ id: 'row-1' }, { workspaceId: WORKSPACE }] })
+  assert.deepEqual(scoped.where, { id: 'row-1', workspaceId: WORKSPACE })
   assert.deepEqual(scoped.create, { id: 'row-1', name: 'Cube', workspaceId: WORKSPACE })
   assert.deepEqual(scoped.update, { name: 'Cube v2' })
 })

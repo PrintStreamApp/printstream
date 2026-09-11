@@ -72,6 +72,73 @@ export function readEntry(
 }
 
 /**
+ * Fully walk an untrusted ZIP under both structural and inflated-size limits.
+ *
+ * Central-directory sizes are attacker-controlled, so the aggregate is checked once from metadata
+ * and again against bytes actually emitted by every inflate stream. Prepared slicing calls this
+ * before it treats a browser archive as an engine-ready authority.
+ */
+export function validateZipArchiveLimits(
+  filePath: string,
+  options: { maxEntries: number; maxUncompressedBytes: number }
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    yauzl.open(filePath, { lazyEntries: true, validateEntrySizes: false }, (openError, zipFile) => {
+      if (openError || !zipFile) {
+        reject(openError ?? new Error('Failed to open zip'))
+        return
+      }
+      let settled = false
+      let entryCount = 0
+      let declaredBytes = 0
+      let inflatedBytes = 0
+      const finish = (error?: Error) => {
+        if (settled) return
+        settled = true
+        zipFile.close()
+        if (error) reject(error)
+        else resolve()
+      }
+      zipFile.on('error', finish)
+      zipFile.on('end', () => finish())
+      zipFile.on('entry', (entry: Entry) => {
+        entryCount += 1
+        declaredBytes += entry.uncompressedSize
+        if (entryCount > options.maxEntries) {
+          finish(new Error('Archive has too many entries'))
+          return
+        }
+        if (declaredBytes > options.maxUncompressedBytes) {
+          finish(new Error('Archive expands beyond the allowed size'))
+          return
+        }
+        if (entry.fileName.endsWith('/')) {
+          zipFile.readEntry()
+          return
+        }
+        zipFile.openReadStream(entry, (streamError, stream) => {
+          if (streamError || !stream) {
+            finish(streamError ?? new Error('Failed to open entry stream'))
+            return
+          }
+          stream.on('error', finish)
+          stream.on('data', (chunk: Buffer) => {
+            inflatedBytes += chunk.length
+            if (inflatedBytes > options.maxUncompressedBytes) {
+              stream.destroy(new Error('Archive expands beyond the allowed size'))
+            }
+          })
+          stream.on('end', () => {
+            if (!settled) zipFile.readEntry()
+          })
+        })
+      })
+      zipFile.readEntry()
+    })
+  })
+}
+
+/**
  * Stream one entry's UTF-8 text through `onChunk` without ever holding the whole thing.
  *
  * The counterpart to {@link readEntry} for entries too big to buffer: a sliced plate's G-code is

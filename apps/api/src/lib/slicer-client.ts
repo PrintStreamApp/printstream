@@ -45,6 +45,8 @@ export interface SlicerRunInput {
   sourcePath: string
   request: CreateSlicingJob
   profileFiles?: ResolvedSlicingPresetFile[]
+  /** API-resolved facts that choose engine execution without rewriting prepared project metadata. */
+  executionHints?: SliceEnvelope['executionHints']
   signal: AbortSignal
 }
 
@@ -377,7 +379,8 @@ export class SlicerClient {
       jobId: input.jobId,
       sourceFileName: input.sourceFileName,
       request: slicerRequest,
-      profileFiles: input.profileFiles ?? []
+      profileFiles: input.profileFiles ?? [],
+      executionHints: input.executionHints
     }
     const envelope = Buffer.from(JSON.stringify(sliceEnvelope), 'utf8').toString('base64url')
     const sourceInfo = await stat(input.sourcePath)

@@ -136,6 +136,24 @@ test('applyFilamentSlotOverrides writes the override column and records it for t
   assert.deepEqual(record.nozzle_temperature, ['245', '245', '220', '220'], 'input record is not mutated')
 })
 
+test('applyFilamentSlotOverrides addresses a slot after a non-uniform 2+3 variant block', () => {
+  const record = {
+    filament_settings_id: ['Bambu PLA Basic @BBL H2D', 'Bambu TPU 95A @BBL H2D'],
+    filament_colour: ['#FFFFFF', '#000000'],
+    filament_type: ['PLA', 'TPU'],
+    filament_extruder_variant: ['DDS', 'DDHF', 'DDS', 'DDHF', 'TPUHF'],
+    filament_self_index: ['1', '1', '2', '2', '2'],
+    different_settings_to_system: ['', '', '', ''],
+    filament_max_volumetric_speed: ['20', '30', '4', '6', '8']
+  }
+
+  const next = applyFilamentSlotOverrides(record, {
+    2: { filament_max_volumetric_speed: ['5', '7', '9'] }
+  }, [null, null])
+
+  assert.deepEqual(next.filament_max_volumetric_speed, ['20', '30', '5', '7', '9'])
+})
+
 test('applyFilamentSlotOverrides fills a missing key from the slot presets, or skips it whole', () => {
   const record = {
     filament_settings_id: ['Bambu PETG HF @BBL X1C', 'Bambu PLA Basic @BBL X1C'],

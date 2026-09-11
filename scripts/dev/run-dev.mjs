@@ -39,6 +39,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { inheritWorktreeFiles, preflight, refreshBaselineAfterMigrations, removeRoute } from '@ryanewen/devkit'
+import { assertHostDevPortsAvailable } from './dev-port-guard.mjs'
 import { inspectSlicerSource } from './slicer-image.mjs'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
@@ -63,6 +64,7 @@ if (existsSync(path.join(repoRoot, '.env'))) process.loadEnvFile(path.join(repoR
 let hostMode = null
 try {
   hostMode = await preflight({ repoRoot })
+  await assertHostDevPortsAvailable(hostMode)
 } catch (error) {
   console.error(`\n[dev] ${error.message}\n`)
   process.exit(1)

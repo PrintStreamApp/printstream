@@ -374,6 +374,7 @@ const SALT_FILES = [
   'tsconfig.base.json',
   'tsconfig.test.json',
   'scripts/dev/run-tests.mjs',
+  'scripts/dev/lib/test-concurrency.mjs',
   'apps/api/prisma/schema.prisma'
 ]
 

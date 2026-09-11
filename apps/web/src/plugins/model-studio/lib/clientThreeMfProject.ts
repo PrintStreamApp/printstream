@@ -2,11 +2,10 @@
  * A 3MF project opened entirely in the browser: the client-side counterpart of the API's
  * `readPlateIndex` / `readSceneManifest`.
  *
- * Everywhere else a 3MF is parsed on the server because the bytes live on a bridge. The public
- * 3MF editor has no server copy on purpose: the user picks a file from their disk and it never
- * leaves the machine. So this module pairs the browser ZIP reader (`threeMfArchive.ts`) with the
- * SAME shared parsers the API uses (`@printstream/shared/three-mf`): the parse is identical, only
- * the byte source differs, which is what keeps the two surfaces from drifting.
+ * Both editor hosts pair the browser ZIP reader (`threeMfArchive.ts`) with the SAME shared parsers
+ * (`@printstream/shared/three-mf`). The library editor downloads bridge-owned bytes through the
+ * API first; the public editor reads the file directly from disk. Neither asks the server to bake
+ * or parse the editor's working project.
  *
  * Contract: {@link openClientThreeMfProject} resolves once the archive is inflated and the index is
  * parsed (fast: metadata only); per-plate scenes and mesh bytes are pulled lazily from the already
@@ -16,7 +15,7 @@
 import { buildSceneManifest } from '@printstream/shared/three-mf'
 import { threeMfIndexFromArchive } from './threeMfArchiveIndex'
 import type { BridgeLibraryThreeMfIndex, LibraryThreeMfScene, PrinterModel } from '@printstream/shared'
-import { openThreeMfArchive, type ThreeMfArchive } from './threeMfArchive'
+import { openThreeMfArchive, openThreeMfArchiveBytes, type ThreeMfArchive } from './threeMfArchive'
 import type { ThreeMfEntryBytesLoader } from './threeMfSceneStream'
 
 export interface ClientThreeMfProject {
@@ -60,9 +59,8 @@ export async function openClientThreeMfProjectFromBytes(
   fileName: string,
   bytes: Uint8Array
 ): Promise<ClientThreeMfProject> {
-  const blob = new Blob([bytes as BlobPart])
-  const archive = await openThreeMfArchive(blob)
-  return createProject({ name: fileName, size: blob.size }, archive)
+  const archive = await openThreeMfArchiveBytes(bytes)
+  return createProject({ name: fileName, size: bytes.byteLength }, archive)
 }
 
 function createProject(file: { name: string; size: number }, archive: ThreeMfArchive): ClientThreeMfProject {

@@ -45,11 +45,11 @@ export function sendFileFromDir(
 const MODEL_BODY_CHUNK_BYTES = 64 * 1024
 
 /**
- * Send a model/mesh buffer, gzip-compressing it when the client advertises gzip support.
+ * Send a model/mesh buffer, normally gzip-compressing it when the client advertises gzip support.
  *
  * Library model entries are multi-megabyte XML, import/preview meshes are large binary STL, and
- * `/archive` serves a whole 3MF. Two properties matter, and the body is compressed up front rather
- * than through a `createGzip()` stream so it can have both:
+ * `/archive` serves a whole 3MF. Two properties matter, and the body is materialized up front
+ * (then compressed when useful) rather than passed through an open-ended stream so it can have both:
  *
  * - **Written in many small chunks.** A large single-buffer `res.send()` is truncated mid-stream by
  *   the Vite dev proxy (and other size-limited proxies): the browser receives most of the body,
@@ -64,19 +64,27 @@ const MODEL_BODY_CHUNK_BYTES = 64 * 1024
  *   which matters because these routes are conditional (see `ARCHIVE_ETAG_VARIANT` in
  *   `routes/library.ts`, where a cached broken body once outlived the bug that produced it).
  *
- * Peak memory is therefore the raw buffer plus its compressed copy; the caller has already
- * materialized the former, so this adds the latter. Tiny payloads skip compression (the gzip
- * framing isn't worth it), and clients that don't advertise gzip receive the raw bytes.
+ * When compression applies, peak memory is therefore the raw buffer plus its compressed copy; the
+ * caller has already materialized the former, so this adds the latter. Tiny payloads skip
+ * compression (the gzip framing isn't worth it), and clients that don't advertise gzip receive the raw bytes. Callers
+ * serving an already-compressed container such as a ZIP/3MF can disable compression: recompressing
+ * it delays the first byte and typically saves too little to repay the CPU and extra allocation.
  */
 export async function sendModelBuffer(
   request: Request,
   response: Response,
   buffer: Buffer,
-  contentType: string
+  contentType: string,
+  options: { compress?: boolean } = {}
 ): Promise<void> {
   response.setHeader('Content-Type', contentType)
-  response.vary('Accept-Encoding')
-  const acceptsGzip = /\bgzip\b/i.test(request.headers['accept-encoding'] ?? '')
+  // Fetch transparently decompresses gzip bodies, so Content-Length describes different bytes
+  // from the chunks the browser receives. Expose the raw size separately for truthful download
+  // progress in the editor.
+  response.setHeader('X-Uncompressed-Content-Length', String(buffer.length))
+  const compressionAllowed = options.compress !== false
+  if (compressionAllowed) response.vary('Accept-Encoding')
+  const acceptsGzip = compressionAllowed && /\bgzip\b/i.test(request.headers['accept-encoding'] ?? '')
   let body = buffer
   if (acceptsGzip && buffer.length >= 4096) {
     body = await gzipAsync(buffer)
@@ -87,8 +95,15 @@ export async function sendModelBuffer(
     await pipeline(Readable.from(chunkBody(body), { objectMode: false }), response)
   } catch (error) {
     // A client disconnect mid-stream (the editor superseded the load or navigated away) is
-    // expected once we've started writing; only surface a genuine error if nothing was sent.
+    // expected once we've started writing. Other failures cannot become an HTTP error once headers
+    // are out, but still need an operational trace or a truncated transfer is invisible.
     if (!response.headersSent && !response.writableEnded) throw error
+    if (!request.aborted) {
+      console.warn(
+        `[model-response] failed while streaming ${request.originalUrl || request.url || 'model bytes'}`,
+        error instanceof Error ? error.message : error
+      )
+    }
   }
 }
 

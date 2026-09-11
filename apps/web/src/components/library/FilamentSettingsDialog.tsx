@@ -96,7 +96,7 @@ export type FilamentConfigResolver = (request: {
   targetId: string | null
   sourceFileId: string | null
   projectFilamentId: number | null
-}) => Promise<ResolveFilamentConfigResponse>
+}, options?: { signal?: AbortSignal }) => Promise<ResolveFilamentConfigResponse>
 
 
 export default function FilamentSettingsDialog(props: FilamentSettingsDialogProps): JSX.Element {

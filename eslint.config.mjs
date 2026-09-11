@@ -55,6 +55,21 @@ export default tseslint.config(
       ...reactHooks.configs.recommended.rules,
       'react-refresh/only-export-components': ['warn', { allowConstantExport: true }],
       'no-alert': 'error',
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: 'JSXElement[openingElement.name.name="MenuItem"] > JSXElement > JSXOpeningElement[name.name=/Icon$/]',
+          message: 'Wrap MenuItem icons in ListItemDecorator.'
+        },
+        {
+          selector: 'JSXElement[openingElement.name.name="MenuItem"] > JSXExpressionContainer > ConditionalExpression > JSXElement > JSXOpeningElement[name.name=/Icon$/]',
+          message: 'Wrap MenuItem icons in ListItemDecorator.'
+        },
+        {
+          selector: 'JSXElement[openingElement.name.name="MenuItem"] > JSXExpressionContainer > LogicalExpression > JSXElement > JSXOpeningElement[name.name=/Icon$/]',
+          message: 'Wrap MenuItem icons in ListItemDecorator.'
+        }
+      ],
       'no-restricted-globals': [
         'error',
         {

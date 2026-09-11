@@ -6,7 +6,7 @@
  * by status data and optional action callbacks.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Box, IconButton, Menu, MenuItem, Stack, Tooltip, Typography } from '@mui/joy'
+import { Box, IconButton, ListItemDecorator, Menu, MenuItem, Stack, Tooltip, Typography } from '@mui/joy'
 import EditRoundedIcon from '@mui/icons-material/EditRounded'
 import RefreshRoundedIcon from '@mui/icons-material/RefreshRounded'
 import RestartAltRoundedIcon from '@mui/icons-material/RestartAltRounded'
@@ -490,7 +490,8 @@ export function AmsUnitRow({
                 onEditSlot(slot)
               }}
             >
-              <EditRoundedIcon /> Edit
+              <ListItemDecorator><EditRoundedIcon /></ListItemDecorator>
+              Edit
             </MenuItem>
           )}
           {onLoadSlot && withDisabledActionReason(
@@ -502,7 +503,8 @@ export function AmsUnitRow({
                 onLoadSlot(slot)
               }}
             >
-              <DownloadRoundedIcon /> Load filament
+              <ListItemDecorator><DownloadRoundedIcon /></ListItemDecorator>
+              Load filament
             </MenuItem>,
             slotActionsDisabled ? null : loadSlotDisabledReason?.(contextMenu.slot) ?? null
           )}
@@ -515,7 +517,8 @@ export function AmsUnitRow({
                 onUnloadSlot(slot)
               }}
             >
-              <EjectRoundedIcon /> Unload filament
+              <ListItemDecorator><EjectRoundedIcon /></ListItemDecorator>
+              Unload filament
             </MenuItem>,
             slotActionsDisabled ? null : unloadSlotDisabledReason?.(contextMenu.slot) ?? null
           )}
@@ -528,7 +531,8 @@ export function AmsUnitRow({
                 onRescanSlot(slot)
               }}
             >
-              <RefreshRoundedIcon /> Rescan
+              <ListItemDecorator><RefreshRoundedIcon /></ListItemDecorator>
+              Rescan
             </MenuItem>,
             slotActionsDisabled ? null : rescanSlotDisabledReason?.(contextMenu.slot) ?? null
           )}
@@ -541,7 +545,8 @@ export function AmsUnitRow({
                 onResetSlot(slot)
               }}
             >
-              <RestartAltRoundedIcon /> Reset
+              <ListItemDecorator><RestartAltRoundedIcon /></ListItemDecorator>
+              Reset
             </MenuItem>
           )}
           {printerId && (

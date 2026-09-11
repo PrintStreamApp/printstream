@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate'
-import type { SceneEdit } from '@printstream/shared'
+import type { SceneEdit, SlicingTarget } from '@printstream/shared'
+import type { RetargetResolvers } from './browserMachineRetarget'
 import { bakeClientThreeMf } from './clientThreeMfBake'
 import { openThreeMfArchive } from './threeMfArchive'
 
@@ -62,6 +63,47 @@ test('the copy pass carries through every entry the bake does not rewrite', asyn
   // The model itself is rewritten (the build section is regenerated), so it is present but need
   // not match byte-for-byte.
   assert.ok(entries['3D/3dmodel.model'])
+})
+
+test('a prepared slice snapshot exact-welds legacy triangle-soup object entries', async () => {
+  const soup = [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<model unit="millimeter"><resources><object id="1" type="model"><mesh><vertices>',
+    '<vertex x="0" y="0" z="0"/><vertex x="1" y="0" z="0"/><vertex x="0" y="1" z="0"/>',
+    '<vertex x="1" y="0" z="0"/><vertex x="1" y="1" z="0"/><vertex x="0" y="1" z="0"/>',
+    '</vertices><triangles>',
+    '<triangle v1="0" v2="1" v3="2"/>',
+    '<triangle v1="3" v2="4" v3="5" paint_supports="4"/>',
+    '</triangles></mesh></object></resources><build/></model>'
+  ].join('')
+  const archive = await openThreeMfArchive(sourceArchive({
+    '3D/Objects/object_1.model': soup,
+    'Metadata/project_settings.config': projectSettings()
+  }))
+  const target: SlicingTarget = {
+    mode: 'manualProfile',
+    printerProfileId: 'machine:test',
+    printerModel: 'Test Printer',
+    processProfileId: null,
+    filamentMappings: []
+  }
+  const resolvers: RetargetResolvers = {
+    canResolve: () => true,
+    machine: async () => ({
+      name: 'Test Machine',
+      config: { printer_model: 'Test Printer', printer_settings_id: 'Test Machine' }
+    }),
+    process: async () => ({ config: {}, baseConfig: {}, overriddenKeys: [] }),
+    filament: async () => ({ config: {}, baseConfig: {}, overriddenKeys: [] })
+  }
+
+  const { bytes } = await bakeClientThreeMf(archive, EMPTY_EDIT, [], {}, {
+    sliceTarget: { target, slicerTargetId: null, resolvers }
+  })
+
+  const written = strFromU8(unzipSync(bytes)['3D/Objects/object_1.model']!)
+  assert.equal((written.match(/<vertex\b/g) ?? []).length, 4)
+  assert.match(written, /<triangle v1="1" v2="3" v3="2" paint_supports="4"\/>/)
 })
 
 test('bakeClientThreeMf reports the baked ids the caller needs to re-key overrides', async () => {

@@ -33,6 +33,11 @@ const MAX_RATE_LIMIT_WAITS = 10
 
 /** Fallback pause when a 429 arrives without a usable Retry-After header. */
 const DEFAULT_RATE_LIMIT_WAIT_SECONDS = 5
+/** Bound a completion attempt; an uncertain outcome is reconciled through upload status. */
+const COMPLETE_REQUEST_TIMEOUT_MS = 20_000
+const RECONCILE_REQUEST_TIMEOUT_MS = 10_000
+const RECONCILE_POLL_MS = 1_000
+const RECONCILE_DEADLINE_MS = 2 * 60_000
 
 /**
  * Proactive pacing for upload write requests (begin/chunk/complete), shared by
@@ -90,8 +95,13 @@ function parsePositiveHeaderNumber(value: string | null): number | null {
 }
 
 /** Resolve when a write slot is free, recording the slot as taken. */
-async function acquireUploadWriteSlot(onWait?: () => void): Promise<void> {
+async function acquireUploadWriteSlot(
+  onWait?: () => void,
+  signal?: AbortSignal,
+  reserve = WRITE_BUDGET_RESERVE
+): Promise<void> {
   for (;;) {
+    signal?.throwIfAborted()
     const budget = serverWriteBudget
     if (budget) {
       if (Date.now() >= budget.resetAtMs) {
@@ -100,13 +110,13 @@ async function acquireUploadWriteSlot(onWait?: () => void): Promise<void> {
         budget.remaining = budget.limit
         budget.resetAtMs = Date.now() + 60_000
       }
-      if (budget.remaining > WRITE_BUDGET_RESERVE) {
+      if (budget.remaining > reserve) {
         // Optimistically consume a slot; responses overwrite with the truth.
         budget.remaining -= 1
         return
       }
       onWait?.()
-      await delay(Math.max(budget.resetAtMs - Date.now(), 0) + 250)
+      await abortableDelay(Math.max(budget.resetAtMs - Date.now(), 0) + 250, signal)
       continue
     }
 
@@ -115,12 +125,12 @@ async function acquireUploadWriteSlot(onWait?: () => void): Promise<void> {
     while (uploadWriteTimestamps.length > 0 && (uploadWriteTimestamps[0] ?? 0) <= now - UPLOAD_WRITE_WINDOW_MS) {
       uploadWriteTimestamps.shift()
     }
-    if (uploadWriteTimestamps.length < UPLOAD_WRITES_PER_MINUTE) {
+    if (uploadWriteTimestamps.length < Math.max(1, UPLOAD_WRITES_PER_MINUTE - reserve)) {
       uploadWriteTimestamps.push(now)
       return
     }
     onWait?.()
-    await delay((uploadWriteTimestamps[0] ?? now) + UPLOAD_WRITE_WINDOW_MS - now + 50)
+    await abortableDelay((uploadWriteTimestamps[0] ?? now) + UPLOAD_WRITE_WINDOW_MS - now + 50, signal)
   }
 }
 
@@ -153,16 +163,20 @@ function rateLimitWaitSeconds(error: unknown): number | null {
  * itself instead of brute-forcing the server), and any 429 that still slips
  * through waits out the server's Retry-After and retries instead of failing.
  */
-async function pacedUploadWrite<T>(run: () => Promise<T>, onWait?: () => void): Promise<T> {
+async function pacedUploadWrite<T>(
+  run: () => Promise<T>,
+  onWait?: () => void,
+  options: { signal?: AbortSignal; reserve?: number } = {}
+): Promise<T> {
   for (let waits = 0; ; waits += 1) {
-    await acquireUploadWriteSlot(onWait)
+    await acquireUploadWriteSlot(onWait, options.signal, options.reserve)
     try {
       return await run()
     } catch (error) {
       const waitSeconds = rateLimitWaitSeconds(error)
       if (waitSeconds === null || waits >= MAX_RATE_LIMIT_WAITS) throw error
       onWait?.()
-      await delay((waitSeconds + 1) * 1000)
+      await abortableDelay((waitSeconds + 1) * 1000, options.signal)
     }
   }
 }
@@ -180,10 +194,11 @@ interface ChunkUploadResponse {
 
 interface UploadStatusResponse {
   upload: {
-    phase: 'receiving' | 'transferring' | 'finalizing'
+    phase: 'receiving' | 'transferring' | 'finalizing' | 'completed'
     sizeBytes: number
     receivedBytes: number
     bridgeReceivedBytes: number
+    completion: StoredUploadCompletion | null
   }
 }
 
@@ -221,8 +236,35 @@ export interface ChunkedLibraryUploadOptions {
    * `pruneUnreferencedProjectSnapshots` reclaims the row if nothing ends up referencing it.
    */
   snapshot?: boolean
+  /** Server-recorded proof that this snapshot is a complete browser-authored slicing input. */
+  preparedSlicing?: {
+    contractVersion: 1
+    sourceFileId: string
+    slicerTargetId?: string | null
+    configurationBaseVersionId?: string | null
+    target: import('@printstream/shared').SlicingTarget
+  }
   onProgress?: (progress: ChunkedLibraryUploadProgress) => void
-  /** Abort the upload (cancels in-flight requests and discards the session). */
+  /**
+   * Called immediately before upload completion begins.
+   *
+   * Completion can transfer the bytes to a bridge and commit a library version. From this point
+   * onward cancellation is deliberately locked: aborting the HTTP request cannot prove that the
+   * server did not commit, and reporting a cancellation after it did would leave the caller's
+   * local state behind the saved file.
+   */
+  onCommitStart?: () => void
+  /**
+   * Called when the completion response is uncertain and authoritative polling takes over.
+   * `stopWaiting` leaves the possibly-completed server operation alone and only releases the UI.
+   */
+  onReconciliationStart?: (stopWaiting: () => void) => void
+  /**
+   * Called after bounded reconciliation could not establish an outcome. Invoking `retry` starts
+   * another bounded status check for this same upload id; it never uploads the bytes again.
+   */
+  onReconciliationRequired?: (retry: () => void, message: string, stopWaiting: () => void) => void
+  /** Abort the upload before completion begins (cancels requests and discards the session). */
   signal?: AbortSignal
 }
 
@@ -232,6 +274,12 @@ interface CompleteUploadResponse {
   unchanged?: boolean
   archivedVersionId?: string | null
   snapshot?: boolean
+  preparedSourceId?: string | null
+}
+
+interface StoredUploadCompletion {
+  statusCode: 201
+  body: CompleteUploadResponse
 }
 
 /** The result of a completed upload. */
@@ -247,6 +295,8 @@ export interface UploadedLibraryFile {
   archivedVersionId: string | null
   /** This landed as a hidden staged snapshot rather than as a save. */
   snapshot: boolean
+  /** Opaque server-issued preparation id, present only for a prepared slicing snapshot. */
+  preparedSourceId: string | null
 }
 
 /** True for an aborted-request error, which must propagate instead of retrying. */
@@ -273,9 +323,11 @@ export async function uploadLibraryFileInChunks(
       },
       onResponseHeaders: recordUploadWriteBudget
     }),
-    () => options.onProgress?.({ phase: 'waiting-for-server', uploadedBytes: 0, totalBytes: file.size })
+    () => options.onProgress?.({ phase: 'waiting-for-server', uploadedBytes: 0, totalBytes: file.size }),
+    { signal: options.signal }
   )
 
+  let completionStarted = false
   try {
     // Respect the server's advertised maximum but prefer the smaller client size.
     const chunkSize = Math.min(started.chunkSizeBytes, CLIENT_CHUNK_BYTES)
@@ -298,56 +350,193 @@ export async function uploadLibraryFileInChunks(
     options.onProgress?.({ phase: 'sending-to-bridge', uploadedBytes: 0, totalBytes: file.size })
     const poller = startUploadStatusPolling(started.uploadId, options)
     try {
-      const result = await pacedUploadWrite(
-        () => apiFetch<CompleteUploadResponse>(`/api/library/uploads/${encodeURIComponent(started.uploadId)}/complete`, {
+      const completionBody = {
+        ...(options.targetFileId ? { targetFileId: options.targetFileId } : {}),
+        ...(options.snapshot ? { snapshot: true } : {}),
+        ...(options.preparedSlicing ? { preparedSlicing: options.preparedSlicing } : {})
+      }
+      const runCompletion = () => {
+        // The rate-limit wait above is still cancellable. Lock only at the exact boundary where
+        // the POST starts, then omit the signal: a response can be aborted after the server has
+        // committed, which is not a cancellation the client is allowed to report.
+        if (!completionStarted) {
+          options.signal?.throwIfAborted()
+          options.onCommitStart?.()
+          completionStarted = true
+        }
+        return apiFetch<CompleteUploadResponse>(`/api/library/uploads/${encodeURIComponent(started.uploadId)}/complete`, {
           method: 'POST',
-          signal: options.signal,
+          timeoutMs: COMPLETE_REQUEST_TIMEOUT_MS,
           // Both ride the COMPLETE step rather than the begin: neither describes the bytes, and a
           // caller that changes its mind mid-transfer must not have to restart the upload.
-          body: {
-            ...(options.targetFileId ? { targetFileId: options.targetFileId } : {}),
-            ...(options.snapshot ? { snapshot: true } : {})
-          },
+          body: completionBody,
           onResponseHeaders: recordUploadWriteBudget
-        }),
-        () => options.onProgress?.({ phase: 'waiting-for-server', uploadedBytes: file.size, totalBytes: file.size })
-      )
+        })
+      }
+      let result: CompleteUploadResponse
+      try {
+        result = await pacedUploadWrite(
+          runCompletion,
+          () => options.onProgress?.({ phase: 'waiting-for-server', uploadedBytes: file.size, totalBytes: file.size }),
+          // The final request should use the headroom the upload deliberately reserved. Otherwise
+          // a completed transfer can sit idle until the write-rate window resets before saving.
+          { signal: options.signal, reserve: 0 }
+        )
+      } catch (error) {
+        if (!isUncertainCompletionError(error)) throw error
+        const reconciliationAbort = new AbortController()
+        const stopWaiting = () => reconciliationAbort.abort()
+        options.onReconciliationStart?.(stopWaiting)
+        result = await reconcileUploadCompletion(
+          started.uploadId,
+          runCompletion,
+          options,
+          reconciliationAbort.signal,
+          stopWaiting
+        )
+      }
       return {
         file: result.file,
         unchanged: result.unchanged ?? false,
         archivedVersionId: result.archivedVersionId ?? null,
-        snapshot: result.snapshot ?? false
+        snapshot: result.snapshot ?? false,
+        preparedSourceId: result.preparedSourceId ?? null
       }
     } finally {
       poller.stop()
       await poller.done
     }
   } catch (error) {
-    // Abandon the server-side session (use a fresh, un-aborted request so
-    // cleanup still runs even when the upload was cancelled).
-    await apiFetch(`/api/library/uploads/${encodeURIComponent(started.uploadId)}`, { method: 'DELETE' }).catch(() => undefined)
+    // Before completion, abandoning a cancelled/failed upload is safe. Once completion starts,
+    // DELETE would race a server operation that may already have committed, so retain the session
+    // for the server's normal cleanup unless a future reconciliation endpoint proves otherwise.
+    if (!completionStarted) {
+      await apiFetch(`/api/library/uploads/${encodeURIComponent(started.uploadId)}`, { method: 'DELETE' }).catch(() => undefined)
+    }
     throw error
   }
 }
 
+/** Resolve an uncertain completion from the server's retained authoritative result. */
+async function reconcileUploadCompletion(
+  uploadId: string,
+  retryCompletion: () => Promise<CompleteUploadResponse>,
+  options: ChunkedLibraryUploadOptions,
+  signal: AbortSignal,
+  stopWaiting: () => void
+): Promise<CompleteUploadResponse> {
+  let startedAt = Date.now()
+  for (;;) {
+    signal.throwIfAborted()
+    try {
+      const status = await apiFetch<UploadStatusResponse>(`/api/library/uploads/${encodeURIComponent(uploadId)}`, {
+        timeoutMs: RECONCILE_REQUEST_TIMEOUT_MS,
+        signal
+      })
+      options.onProgress?.(mapStatusToProgress(status))
+      if (status.upload.completion) return status.upload.completion.body
+      // Replay whenever no authoritative result exists. A process can restart after persisting the
+      // transferring/finalizing phase and pending receipt but before its in-memory completion work
+      // survives. The server serializes by upload id and verifies the durable intent digest, so the
+      // same request either waits for live work or resumes that orphaned operation safely.
+      if (status.upload.phase !== 'completed') {
+        try {
+          return await retryCompletion()
+        } catch (error) {
+          signal.throwIfAborted()
+          if (!isUncertainCompletionError(error)) throw error
+        }
+      }
+    } catch (error) {
+      signal.throwIfAborted()
+      if (error instanceof ApiError) {
+        if (error.status === 404) {
+          await waitForReconciliationRetry(
+            options,
+            'The server no longer has this upload result. Check the Library, or retry the status check.',
+            stopWaiting
+          )
+          startedAt = Date.now()
+          continue
+        }
+        if (!isUncertainCompletionError(error)) throw error
+      }
+      // A transient status failure says nothing about whether completion committed. Keep polling;
+      // the retained result is the only source allowed to decide the outcome.
+    }
+    if (uploadReconciliationDeadlineReached(startedAt, Date.now())) {
+      await waitForReconciliationRetry(
+        options,
+        'The server did not confirm the upload result in time. Check the Library, or retry the status check.',
+        stopWaiting
+      )
+      startedAt = Date.now()
+    }
+    await delay(RECONCILE_POLL_MS)
+    signal.throwIfAborted()
+  }
+}
+
+/** HTTP/network outcomes that cannot prove whether the completion request committed. */
+export function isUncertainCompletionError(error: unknown): boolean {
+  if (!(error instanceof ApiError)) return true
+  return error.status === 408 || error.status === 429 || error.status >= 500
+}
+
+async function waitForReconciliationRetry(
+  options: ChunkedLibraryUploadOptions,
+  message: string,
+  stopWaiting: () => void
+): Promise<void> {
+  if (!options.onReconciliationRequired) throw new Error(message)
+  await new Promise<void>((resolve, reject) => options.onReconciliationRequired?.(
+    resolve,
+    message,
+    () => reject(new DOMException('Stopped checking upload status.', 'AbortError'))
+  ))
+  options.onReconciliationStart?.(stopWaiting)
+}
+
+/** Pure deadline rule shared with regression coverage for orphaned server sessions. */
+export function uploadReconciliationDeadlineReached(startedAt: number, now: number): boolean {
+  return now - startedAt >= RECONCILE_DEADLINE_MS
+}
+
 function startUploadStatusPolling(uploadId: string, options: ChunkedLibraryUploadOptions): { stop: () => void; done: Promise<void> } {
   let stopped = false
-  return {
-    stop: () => {
-      stopped = true
-    },
-    done: (async () => {
+  const stopController = new AbortController()
+  const onCallerAbort = () => stopController.abort(options.signal?.reason)
+  if (options.signal?.aborted) onCallerAbort()
+  else options.signal?.addEventListener('abort', onCallerAbort, { once: true })
+  const done = (async () => {
+    try {
       while (!stopped && !options.signal?.aborted) {
         await delay(500)
         if (stopped || options.signal?.aborted) return
         try {
-          const status = await apiFetch<UploadStatusResponse>(`/api/library/uploads/${encodeURIComponent(uploadId)}`, { signal: options.signal })
+          const status = await apiFetch<UploadStatusResponse>(`/api/library/uploads/${encodeURIComponent(uploadId)}`, {
+            signal: stopController.signal,
+            timeoutMs: RECONCILE_REQUEST_TIMEOUT_MS
+          })
           options.onProgress?.(mapStatusToProgress(status))
         } catch {
-          return
+          if (stopped || stopController.signal.aborted) return
+          // Progress polling is advisory. A transient failure must neither fail the upload nor
+          // permanently freeze the last progress frame while completion continues.
         }
       }
-    })()
+    } finally {
+      options.signal?.removeEventListener('abort', onCallerAbort)
+    }
+  })()
+  return {
+    stop: () => {
+      stopped = true
+      // A proxy can wedge a status GET indefinitely. Stopping must abort that request so a
+      // successful completion is never held open while `finally` awaits the poller.
+      stopController.abort()
+    },
+    done
   }
 }
 
@@ -366,8 +555,17 @@ function mapStatusToProgress(status: UploadStatusResponse): ChunkedLibraryUpload
       totalBytes: status.upload.sizeBytes
     }
   }
+  if (status.upload.phase === 'completed') {
+    return {
+      phase: 'finalizing',
+      uploadedBytes: status.upload.sizeBytes,
+      totalBytes: status.upload.sizeBytes
+    }
+  }
   return {
-    phase: 'uploading-to-server',
+    // A complete browser upload that is still marked receiving means the completion request is
+    // waiting to begin. Never regress the UI to a frozen 100% browser-transfer bar.
+    phase: status.upload.receivedBytes >= status.upload.sizeBytes ? 'waiting-for-server' : 'uploading-to-server',
     uploadedBytes: status.upload.receivedBytes,
     totalBytes: status.upload.sizeBytes
   }
@@ -375,6 +573,27 @@ function mapStatusToProgress(status: UploadStatusResponse): ChunkedLibraryUpload
 
 async function delay(milliseconds: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, milliseconds))
+}
+
+/** A pacing wait is still pre-commit work, so Cancel must interrupt it immediately. */
+async function abortableDelay(milliseconds: number, signal?: AbortSignal): Promise<void> {
+  signal?.throwIfAborted()
+  if (!signal) {
+    await delay(milliseconds)
+    return
+  }
+  await new Promise<void>((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer)
+      reject(new DOMException('The operation was aborted.', 'AbortError'))
+    }
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort)
+      resolve()
+    }, milliseconds)
+    signal.addEventListener('abort', onAbort, { once: true })
+    if (signal.aborted) onAbort()
+  })
 }
 
 interface ChunkResumeParams {
@@ -407,7 +626,8 @@ async function uploadChunkWithResume(params: ChunkResumeParams): Promise<number>
       // the bounded failure retries below.
       const result = await pacedUploadWrite(
         () => uploadChunk(uploadId, currentOffset, chunk, params.signal),
-        params.onRateLimitWait
+        params.onRateLimitWait,
+        { signal: params.signal }
       )
       return result.uploadedBytes
     } catch (error) {
@@ -417,8 +637,8 @@ async function uploadChunkWithResume(params: ChunkResumeParams): Promise<number>
       const status = error instanceof ChunkUploadError ? error.status : null
       const retriable = status === null || status === 408 || status === 409 || status === 429 || status >= 500
       if (!retriable || attempt >= MAX_CHUNK_ATTEMPTS) break
-      await delay(retryDelayMs(attempt))
-      const serverOffset = await fetchReceivedBytes(uploadId)
+      await abortableDelay(retryDelayMs(attempt), params.signal)
+      const serverOffset = await fetchReceivedBytes(uploadId, params.signal)
       if (serverOffset !== null) {
         if (serverOffset >= file.size) return serverOffset
         currentOffset = serverOffset
@@ -429,11 +649,12 @@ async function uploadChunkWithResume(params: ChunkResumeParams): Promise<number>
 }
 
 /** Reads the server's authoritative received byte count for resume, or null if unreachable. */
-async function fetchReceivedBytes(uploadId: string): Promise<number | null> {
+async function fetchReceivedBytes(uploadId: string, signal?: AbortSignal): Promise<number | null> {
   try {
-    const status = await apiFetch<UploadStatusResponse>(`/api/library/uploads/${encodeURIComponent(uploadId)}`)
+    const status = await apiFetch<UploadStatusResponse>(`/api/library/uploads/${encodeURIComponent(uploadId)}`, { signal })
     return status.upload.receivedBytes
   } catch {
+    signal?.throwIfAborted()
     return null
   }
 }

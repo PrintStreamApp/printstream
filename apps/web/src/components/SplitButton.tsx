@@ -88,17 +88,10 @@ export function SplitButton({
           <ArrowDropDownIcon />
         </MenuButton>
       </ButtonGroup>
-      {/* The decorator rule pins the icon gutter for every item. Joy sizes a
-          `ListItemDecorator` per MenuItem, and in practice it does NOT come out the
-          same for all of them: measured in this menu, the first item's decorator
-          took `--ListItemDecorator-size` (40px) while its siblings collapsed to 0,
-          so identical markup rendered labels 20px apart. Declaring it once here
-          means an item cannot be misaligned by what it happens to sit next to,
-          which matters most for the plugin-contributed items a caller never sees. */}
       <Menu
         placement={menuPlacement}
         sx={[
-          { minWidth: 200, '& .MuiListItemDecorator-root': { minInlineSize: 'var(--ListItemDecorator-size)' } },
+          { minWidth: 200 },
           ...(Array.isArray(menuSx) ? menuSx : [menuSx])
         ]}
       >

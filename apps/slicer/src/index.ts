@@ -42,7 +42,7 @@ import { readPrepareTimeSeconds } from './gcode-header.js'
 import { outputSignalsSliceComplete } from './slice-progress.js'
 import { appendCappedTail, appendOutput, appendStructuredOutput } from './slice-output.js'
 import { openZip, readZipEntryBuffer, readZipEntryText } from './zip-io.js'
-import { backfillPlateThumbnails, mergeAllPlateOutputs, readPlateIdsFromModelSettings, shouldUseAllPlateMergeFallback } from './all-plate-fallback.js'
+import { backfillPlateThumbnails, mergeAllPlateOutputs, readPlateIdsFromModelSettings, resolveAllPlateExecutionModel, shouldUseAllPlateMergeFallback } from './all-plate-fallback.js'
 import {
   buildPerMaterialFilamentOverrides,
   selectCliProfileFiles,
@@ -60,13 +60,14 @@ import { classifyCliFailure, formatRuntimeCompatibilityError } from './slice-err
 import { ensureEmbeddedProjectSettings } from './project-settings-fallback.js'
 import { mergeInheritedMachineProfile, retargetProjectSettingsToMachine } from './machine-switch-repair.js'
 import { sliceInfoCarriesNozzleGroupIds, stripSliceInfoNozzleGroupIds } from './stale-slice-info.js'
-import { applyManualFilamentMapToModelSettings, buildManualNozzleAssignment, buildSlicedArtifactMetadata, isPlatePreviewEntry, metadataChangesFilamentColours, rewriteProjectSettingsMetadata, rewriteSliceInfoMetadata, type SlicedArtifactMetadata } from './output-metadata.js'
+import { applyManualFilamentMapToModelSettings, buildManualNozzleAssignment, buildSlicedArtifactMetadata, isPlatePreviewEntry, metadataChangesFilamentColours, readAuthoredManualFilamentMap, rewriteProjectSettingsMetadata, rewriteSliceInfoMetadata, type SlicedArtifactMetadata } from './output-metadata.js'
 import { resolveCustomProfileConfig } from './custom-profile-resolve.js'
 import { sanitizeProfileFileName } from './profile-file-name.js'
 import { buildFilamentSlotCoverage, type FilamentSlotRequest } from './filament-slot-coverage.js'
 import { sanitizeBuiltinSlicerProfileJson } from './profile-json.js'
 import { isVisibleBambuStudioProfile } from './profile-visibility.js'
 import { getPublicSlicerTargets, getSlicerTargetRegistry, resolveSlicerTarget, type RuntimeSlicerTarget } from './slicer-targets.js'
+import { slicerInputPolicy } from './prepared-input-policy.js'
 
 const FALLBACK_MANUAL_MACHINE_PROFILE_ID = '__printstream-fallback-manual-machine__'
 const MAX_OUTPUT_LINES_HEADER_BYTES = 8 * 1024
@@ -426,7 +427,12 @@ app.post('/slice', async (request, response) => {
       bambuDataDir
     })
     await pipeline(request, createWriteStream(inputPath))
-    appendStructuredOutput(outputLines, 'system', 'Preparing the project')
+    const inputPolicy = slicerInputPolicy(parsed.data.request)
+    appendStructuredOutput(
+      outputLines,
+      'system',
+      inputPolicy.projectSettingsAuthoritative ? 'Starting the slicing engine' : 'Applying slice settings to the project'
+    )
     const preparedInput = await prepareInputThreeMf({
       slicerTarget,
       inputPath,
@@ -437,7 +443,11 @@ app.post('/slice', async (request, response) => {
       processSettingOverrides: parsed.data.request.target.processSettingOverrides ?? {},
       outputLines
     })
-    const slicedArtifactMetadata = buildSlicedArtifactMetadata(parsed.data.request, parsed.data.profileFiles ?? [])
+    // A browser-prepared project is already the complete record of what this slice means. Do not
+    // restamp the packaged result from request metadata after the engine has consumed that record.
+    const slicedArtifactMetadata = inputPolicy.rewriteRequestMetadata
+      ? buildSlicedArtifactMetadata(parsed.data.request, parsed.data.profileFiles ?? [])
+      : null
     appendStructuredOutput(outputLines, 'system', 'Starting the slicer')
     await runCli({
       slicerTarget,
@@ -457,6 +467,8 @@ app.post('/slice', async (request, response) => {
       rewroteProjectSettings: preparedInput.rewroteProjectSettings,
       manualFilamentMap: preparedInput.manualFilamentMap,
       allowNewerProjectFile: parsed.data.request.allowNewerProjectFile === true,
+      inputPolicy,
+      executionPrinterModel: parsed.data.executionHints?.printerModel ?? null,
       bambuHomeDir,
       bambuConfigDir,
       bambuCacheDir,
@@ -566,6 +578,10 @@ async function runCli(input: {
   manualFilamentMap: string[] | null
   /** The request's explicit "slice it anyway" for a project newer than this engine. */
   allowNewerProjectFile: boolean
+  /** Whether the browser already authored the complete project handed to the engine. */
+  inputPolicy: ReturnType<typeof slicerInputPolicy>
+  /** API-resolved model used only for engine strategy, never project metadata authoring. */
+  executionPrinterModel: string | null
   bambuHomeDir: string
   bambuConfigDir: string
   bambuCacheDir: string
@@ -574,21 +590,23 @@ async function runCli(input: {
   signal?: AbortSignal
 }): Promise<void> {
   const supportedFlags = input.supportedFlags
-  const cliProfileFiles = selectCliProfileFiles(input.profileFiles, {
-    rewroteProjectSettings: input.rewroteProjectSettings
-  })
-  const profileArgs = await prepareProfileArgs({
-    profileFiles: cliProfileFiles,
-    workDir: path.dirname(input.outputPath),
-    profileDir: input.slicerTarget.profileDir,
-    inputPath: input.inputPath,
-    filamentSlots: input.filamentSlots,
-    processSettingOverrides: input.processSettingOverrides,
-    machineSettingOverrides: input.machineSettingOverrides,
-    filamentSettingOverrides: input.filamentSettingOverrides,
-    perMaterialFilamentOverrides: input.perMaterialFilamentOverrides,
-    log: (message) => appendStructuredOutput(input.outputLines, 'system', message)
-  })
+  const cliProfileFiles = input.inputPolicy.loadRequestProfiles
+    ? selectCliProfileFiles(input.profileFiles, { rewroteProjectSettings: input.rewroteProjectSettings })
+    : []
+  const profileArgs = input.inputPolicy.loadRequestProfiles
+    ? await prepareProfileArgs({
+        profileFiles: cliProfileFiles,
+        workDir: path.dirname(input.outputPath),
+        profileDir: input.slicerTarget.profileDir,
+        inputPath: input.inputPath,
+        filamentSlots: input.filamentSlots,
+        processSettingOverrides: input.processSettingOverrides,
+        machineSettingOverrides: input.machineSettingOverrides,
+        filamentSettingOverrides: input.filamentSettingOverrides,
+        perMaterialFilamentOverrides: input.perMaterialFilamentOverrides,
+        log: (message) => appendStructuredOutput(input.outputLines, 'system', message)
+      })
+    : []
   // A "from scratch" scaffold 3MF (calibration prints, new-project saves) carries the BBL marker
   // but no, or only a partial, embedded project_settings.config, which segfaults the CLI's
   // BBL-project loader. Synthesize/complete it from the slice's own profiles so it loads; a no-op
@@ -599,41 +617,48 @@ async function runCli(input: {
   // profile handed to it explicitly (see `selectSettingsExportProfileFiles`). Only re-materialized
   // when the slice's selection actually dropped something, and silently: the caller already
   // logged whatever `prepareProfileArgs` had to say about this same file set.
-  const exportProfileFiles = selectSettingsExportProfileFiles(input.profileFiles)
+  const exportProfileFiles = input.inputPolicy.loadRequestProfiles
+    ? selectSettingsExportProfileFiles(input.profileFiles)
+    : []
   const exportProfileArgs = exportProfileFiles.length === cliProfileFiles.length
     ? profileArgs
     : await prepareProfileArgs({
-      profileFiles: exportProfileFiles,
-      workDir: path.dirname(input.outputPath),
-      profileDir: input.slicerTarget.profileDir,
-      inputPath: input.inputPath,
-      filamentSlots: input.filamentSlots,
-      processSettingOverrides: input.processSettingOverrides,
-      machineSettingOverrides: input.machineSettingOverrides,
-      filamentSettingOverrides: input.filamentSettingOverrides,
-      perMaterialFilamentOverrides: input.perMaterialFilamentOverrides
-    })
-  const preparedInputPath = await ensureEmbeddedProjectSettings({
-    inputPath: input.inputPath,
-    cliPath: input.slicerTarget.cliPath,
-    appDir: input.slicerTarget.appDir ?? null,
-    profileArgs: exportProfileArgs,
-    profileDir: input.slicerTarget.profileDir,
-    workDir: path.dirname(input.outputPath),
-    env: {
-      ...process.env,
-      HOME: input.bambuHomeDir,
-      XDG_CONFIG_HOME: input.bambuConfigDir,
-      XDG_CACHE_HOME: input.bambuCacheDir,
-      XDG_DATA_HOME: input.bambuDataDir
-    },
-    log: (message) => appendStructuredOutput(input.outputLines, 'system', message),
-    signal: input.signal
-  })
+        profileFiles: exportProfileFiles,
+        workDir: path.dirname(input.outputPath),
+        profileDir: input.slicerTarget.profileDir,
+        inputPath: input.inputPath,
+        filamentSlots: input.filamentSlots,
+        processSettingOverrides: input.processSettingOverrides,
+        machineSettingOverrides: input.machineSettingOverrides,
+        filamentSettingOverrides: input.filamentSettingOverrides,
+        perMaterialFilamentOverrides: input.perMaterialFilamentOverrides
+      })
+  const preparedInputPath = input.inputPolicy.ensureEmbeddedProjectSettings
+    ? await ensureEmbeddedProjectSettings({
+        inputPath: input.inputPath,
+        cliPath: input.slicerTarget.cliPath,
+        appDir: input.slicerTarget.appDir ?? null,
+        profileArgs: exportProfileArgs,
+        profileDir: input.slicerTarget.profileDir,
+        workDir: path.dirname(input.outputPath),
+        env: {
+          ...process.env,
+          HOME: input.bambuHomeDir,
+          XDG_CONFIG_HOME: input.bambuConfigDir,
+          XDG_CACHE_HOME: input.bambuCacheDir,
+          XDG_DATA_HOME: input.bambuDataDir
+        },
+        log: (message) => appendStructuredOutput(input.outputLines, 'system', message),
+        signal: input.signal
+      })
+    : input.inputPath
   if (shouldUseAllPlateMergeFallback({
     plate: input.plate,
     outputFileName: input.outputFileName,
-    printerModel: input.metadata?.printerModel ?? null
+    printerModel: resolveAllPlateExecutionModel(
+      input.executionPrinterModel,
+      input.metadata?.printerModel ?? null
+    )
   })) {
     const plateIds = await readPlateIdsFromModelSettings(preparedInputPath)
     if (plateIds.length > 1) {
@@ -1413,7 +1438,7 @@ function applyProfileSettingOverrides(profileJson: string, overrides: Record<str
   return `${JSON.stringify(parsed, null, 2)}\n`
 }
 
-async function prepareInputThreeMf(input: {
+export async function prepareInputThreeMf(input: {
   slicerTarget: RuntimeSlicerTarget
   inputPath: string
   outputPath: string
@@ -1429,6 +1454,24 @@ async function prepareInputThreeMf(input: {
   manualFilamentMap: string[] | null
 }> {
   const projectSettings = await readThreeMfProjectSettings(input.inputPath)
+  const inputPolicy = slicerInputPolicy(input.request)
+
+  if (inputPolicy.projectSettingsAuthoritative) {
+    if (!projectSettings) {
+      throw new Error('The browser-prepared project has no readable embedded project settings.')
+    }
+
+    // BambuStudio takes a Manual-mode map from `--filament-map`, so carry the browser-authored map
+    // into the CLI arguments without changing the project. The browser already wrote the matching
+    // per-plate mode and removed previous-slice nozzle groups before staging these bytes.
+    const manualFilamentMap = readAuthoredManualFilamentMap(projectSettings)
+    return {
+      inputPath: input.inputPath,
+      rewroteProjectSettings: false,
+      manualFilamentMap
+    }
+  }
+
   const machineSwitchProfileName = input.profileFiles.find((profile) => profile.kind === 'machine')?.name ?? null
   assertSupportedEmbeddedMachineSwitch({
     request: input.request,
@@ -1494,7 +1537,9 @@ async function prepareInputThreeMf(input: {
   const nozzleAssignmentSettings = projectSettings && machineSwitchProfile
     ? { ...projectSettings, physical_extruder_map: machineSwitchProfile.physical_extruder_map }
     : projectSettings
-  const manualNozzle = metadata && nozzleAssignmentSettings ? buildManualNozzleAssignment(nozzleAssignmentSettings, metadata) : null
+  const manualNozzle = metadata && nozzleAssignmentSettings
+    ? buildManualNozzleAssignment(nozzleAssignmentSettings, metadata.filamentByProjectId)
+    : null
   const modelSettingsTransform = manualNozzle
     ? (xml: string) => applyManualFilamentMapToModelSettings(xml, manualNozzle.filament_map.join(' '))
     : undefined
@@ -1604,6 +1649,8 @@ async function rewriteThreeMfProjectSettings(
   outputPath: string,
   transform: (settings: Record<string, unknown>) => Record<string, unknown> | Promise<Record<string, unknown>>,
   options?: {
+    /** Copy project settings exactly while still requiring the entry to exist. */
+    preserveProjectSettingsBytes?: boolean
     modelSettingsTransform?: (modelSettingsXml: string) => string
     model3dTransform?: (modelXml: string) => string
     sliceInfoTransform?: (sliceInfoXml: string) => string
@@ -1611,7 +1658,7 @@ async function rewriteThreeMfProjectSettings(
     omitEntry?: (fileName: string) => boolean
   }
 ): Promise<boolean> {
-  const { modelSettingsTransform, model3dTransform, sliceInfoTransform, omitEntry } = options ?? {}
+  const { preserveProjectSettingsBytes, modelSettingsTransform, model3dTransform, sliceInfoTransform, omitEntry } = options ?? {}
   const sourceZip = await openZip(inputPath)
   const outputZip = new yazl.ZipFile()
   const output = createWriteStream(outputPath)
@@ -1652,7 +1699,9 @@ async function rewriteThreeMfProjectSettings(
         readZipEntryBuffer(sourceZip, entry).then(
           async (buffer) => {
             outputZip.addBuffer(
-              Buffer.from(JSON.stringify(await transform(parseProjectSettings(buffer)), null, 2), 'utf8'),
+              preserveProjectSettingsBytes
+                ? buffer
+                : Buffer.from(JSON.stringify(await transform(parseProjectSettings(buffer)), null, 2), 'utf8'),
               entry.fileName,
               { mtime: entry.getLastModDate() }
             )

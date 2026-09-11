@@ -42,6 +42,10 @@ export interface LazyDialogBoundaryProps {
    * so a label written as a status line reads wrong in one of the two.
    */
   label: string
+  /** Override the pending copy when the default `Opening ${label}...` hides useful work. */
+  pendingLabel?: string
+  /** One short explanation of what the pending step is doing. */
+  pendingDescription?: string
   /** Which shell to draw while loading. See {@link LazyDialogFallbackProps.variant}. */
   variant?: LazyDialogFallbackProps['variant']
   /**
@@ -69,10 +73,17 @@ export interface LazyDialogBoundaryProps {
  * rejection straight back into the boundary. Every call site gates with `{open && …}`, an early
  * `return null`, or an enclosing conditional.
  */
-export function LazyDialogBoundary({ label, variant, onClose, children }: LazyDialogBoundaryProps) {
+export function LazyDialogBoundary({ label, pendingLabel, pendingDescription, variant, onClose, children }: LazyDialogBoundaryProps) {
   return (
     <LazyDialogErrorBoundary label={label} fallback={<LazyDialogFailureNotice label={label} onClose={onClose} />}>
-      <Suspense fallback={<LazyDialogFallback label={`Opening ${label}…`} variant={variant} />}>
+      <Suspense fallback={(
+        <LazyDialogFallback
+          label={pendingLabel ?? `Opening ${label}…`}
+          description={pendingDescription}
+          variant={variant}
+          onClose={onClose}
+        />
+      )}>
         {children}
       </Suspense>
     </LazyDialogErrorBoundary>

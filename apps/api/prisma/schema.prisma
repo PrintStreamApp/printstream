@@ -185,6 +185,8 @@ model Workspace {
   libraryFolders         LibraryFolder[]
   libraryFileReplicas    LibraryFileReplica[]
   libraryFileFavorites   LibraryFileFavorite[]
+  preparedSlicingSources PreparedSlicingSource[]
+  libraryUploadCompletions LibraryUploadCompletion[]
   printerViews           PrinterView[]
   authMemberships        AuthWorkspaceMembership[]
   authGroups             AuthGroup[]
@@ -754,7 +756,7 @@ model LibraryFile {
   uploadedAt                DateTime  @default(now())
   currentVersionNumber      Int       @default(1)
   folderId                  String?
-  snapshotKey               String?   @unique
+  snapshotKey               String?
   // Hidden files are persisted on disk so previously-printed jobs can
   // still be re-dispatched, but they don't appear in the user-facing
   // library listing. Some hidden files are transient one-off uploads,
@@ -802,20 +804,21 @@ model LibraryFile {
   sourceProjectFileId       String?
   sliceSettingsJson         String?
 
-  workspace           Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  ownerBridge         Bridge?               @relation("LibraryFileOwnerBridge", fields: [ownerBridgeId], references: [id], onDelete: SetNull)
-  folder              LibraryFolder?        @relation(fields: [folderId], references: [id], onDelete: SetNull)
-  sourceProject       LibraryFile?          @relation("LibraryFileSourceProject", fields: [sourceProjectFileId], references: [id], onDelete: SetNull)
-  slicedOutputs       LibraryFile[]         @relation("LibraryFileSourceProject")
-  replicas            LibraryFileReplica[]
-  jobs                PrintJob[]            @relation("PrintJobFile")
-  sourceProjectJobs   PrintJob[]            @relation("PrintJobSourceProject")
-  versions            LibraryFileVersion[]
-  downloadLinks       LibraryDownloadLink[]
-  favorites           LibraryFileFavorite[]
-  orderTemplatePrints OrderTemplatePrint[]
-  orderPrints         OrderPrint[]
-  queueItems          QueueItem[]
+  workspace              Workspace               @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  ownerBridge            Bridge?                 @relation("LibraryFileOwnerBridge", fields: [ownerBridgeId], references: [id], onDelete: SetNull)
+  folder                 LibraryFolder?          @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  sourceProject          LibraryFile?            @relation("LibraryFileSourceProject", fields: [sourceProjectFileId], references: [id], onDelete: SetNull)
+  slicedOutputs          LibraryFile[]           @relation("LibraryFileSourceProject")
+  replicas               LibraryFileReplica[]
+  jobs                   PrintJob[]              @relation("PrintJobFile")
+  sourceProjectJobs      PrintJob[]              @relation("PrintJobSourceProject")
+  versions               LibraryFileVersion[]
+  downloadLinks          LibraryDownloadLink[]
+  favorites              LibraryFileFavorite[]
+  orderTemplatePrints    OrderTemplatePrint[]
+  orderPrints            OrderPrint[]
+  queueItems             QueueItem[]
+  preparedSlicingSources PreparedSlicingSource[]
 
   @@index([workspaceId, uploadedAt])
   @@index([workspaceId, folderId])
@@ -826,6 +829,73 @@ model LibraryFile {
   // Backs the most-printed / last-printed sorts within a bridge folder.
   @@index([workspaceId, ownerBridgeId, folderId, hidden, printCount], map: "LibraryFile_workspace_bridge_folder_printCount_idx")
   @@index([workspaceId, ownerBridgeId, folderId, hidden, lastPrintedAt], map: "LibraryFile_workspace_bridge_folder_lastPrintedAt_idx")
+  @@unique([workspaceId, snapshotKey], map: "LibraryFile_workspaceId_snapshotKey_key")
+}
+
+/// Server-issued proof that a hidden snapshot was staged specifically as a browser-authored,
+/// engine-ready slicing input. The digest binds that immutable snapshot to the frozen slicer
+/// target/configuration submitted during staging, so an ordinary retained snapshot cannot opt
+/// itself out of the server's legacy preparation safeguards.
+///
+/// Lifecycle: rows cascade with the content-addressed hidden snapshot and workspace. Unreferenced
+/// snapshots and their proofs are reclaimed together. `sourceFileId` preserves the visible
+/// project's lineage without owning it; the source must still resolve when a slice is queued.
+model PreparedSlicingSource {
+  id                  String   @id @default(cuid())
+  workspaceId         String
+  libraryFileId       String
+  sourceFileId        String
+  /// The file whose current or archived bytes the browser opened. This may differ from
+  /// `sourceFileId` after Save As, while the source remains the slice/history lineage.
+  configurationBaseFileId String
+  /// Empty string means the file head; otherwise pins the archived version whose embedded project
+  /// presets were used to validate and digest this prepared snapshot.
+  configurationBaseVersionId String @default("")
+  contractVersion     Int
+  configurationDigest String
+  /// Short lease covering the stage-to-enqueue gap. Live/retriable in-memory jobs are protected
+  /// independently by reference during cleanup, so a long queue or retry never depends on a timer.
+  expiresAt           DateTime
+  createdAt           DateTime @default(now())
+
+  workspace   Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  libraryFile LibraryFile @relation(fields: [libraryFileId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, libraryFileId, sourceFileId, configurationBaseFileId, configurationBaseVersionId, contractVersion, configurationDigest], map: "PreparedSlicingSource_provenance_key")
+  @@index([libraryFileId])
+  @@index([workspaceId, sourceFileId])
+}
+
+/// Durable idempotency receipt for the irreversible completion of one chunked
+/// library upload. The filesystem session is only transport state and can survive
+/// a process restart at any instruction boundary. For visible creates and version
+/// saves, this row is committed with the file/version mutation so a replay returns
+/// the original outcome without applying that mutation twice. For content-deduped
+/// prepared snapshots, snapshot creation/upsert is itself idempotent and the receipt
+/// is finalized afterward. Rows expire after the upload-recovery window and contain
+/// identifiers/metadata only, never uploaded bytes.
+model LibraryUploadCompletion {
+  id                String   @id
+  workspaceId       String
+  intentDigest      String
+  status            String   @default("pending")
+  libraryFileId     String?
+  fileName          String?
+  /// Snapshot of the committed LibraryFile row, used to reconstruct the result even if the live
+  /// row is changed again before a timed-out client reconciles this operation.
+  fileResultJson    String?
+  archivedVersionId String?
+  unchanged         Boolean?
+  snapshot          Boolean  @default(false)
+  preparedSourceId  String?
+  expiresAt         DateTime
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, expiresAt])
+  @@index([expiresAt])
 }
 
 /// Per-user "favorite" star on a library file. Personal (not shared across the

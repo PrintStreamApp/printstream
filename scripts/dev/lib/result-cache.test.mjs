@@ -34,9 +34,13 @@ before(() => {
   write('package-lock.json', '{}')
   write('tsconfig.base.json', '{}')
   write('tsconfig.test.json', '{}')
-  // The salt hashes the runner by repo-relative path; copy it so the sandbox can resolve it. (The
-  // cache module hashes itself by absolute path, so it needs no copy.)
+  // The salt hashes runner files by repo-relative path; copy them so the sandbox can resolve them.
+  // The cache module hashes itself by absolute path, so it needs no copy.
   write('scripts/dev/run-tests.mjs', readFileSync(path.join(repoRoot, 'scripts/dev/run-tests.mjs'), 'utf8'))
+  write(
+    'scripts/dev/lib/test-concurrency.mjs',
+    readFileSync(path.join(repoRoot, 'scripts/dev/lib/test-concurrency.mjs'), 'utf8')
+  )
   write('apps/api/prisma/schema.prisma', 'generator client { provider = "prisma-client-js" }\n')
 
   write('packages/lib/package.json', JSON.stringify({ name: '@printstream/lib' }))
@@ -221,6 +225,20 @@ test('a changed salt input invalidates everything', async () => {
   write('package-lock.json', '{"lockfileVersion":3}')
   const after = await plan()
   assert.deepEqual(relativeNames(after.run), relativeNames(ALL()))
+})
+
+test('the extracted runner helper is part of the salt', async () => {
+  const warm = await plan()
+  recordGreenRun(warm, warm.run)
+  assert.deepEqual((await plan()).run, [])
+
+  write('scripts/dev/lib/test-concurrency.mjs', '// changed runner policy\n')
+  assert.deepEqual(relativeNames((await plan()).run), relativeNames(ALL()))
+
+  write(
+    'scripts/dev/lib/test-concurrency.mjs',
+    readFileSync(path.join(repoRoot, 'scripts/dev/lib/test-concurrency.mjs'), 'utf8')
+  )
 })
 
 test('the Prisma schema is part of the salt, because the generated client is in no import graph', async () => {

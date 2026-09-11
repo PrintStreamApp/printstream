@@ -89,6 +89,20 @@ test('concurrent reads share ONE archive download', async () => {
   }
 })
 
+test('reports download and browser-reading phases for the first open', async () => {
+  stubArchiveFetch()
+  const phases: string[] = []
+  const source = createArchiveProjectSource('/api/library/file-1', 'project.3mf', {
+    onOpenPhase: (phase) => phases.push(phase)
+  })
+  try {
+    await source.loadIndex()
+    assert.deepEqual(phases, ['loading-file', 'reading-project'])
+  } finally {
+    source.dispose?.()
+  }
+})
+
 test('later reads reuse the archive rather than re-downloading it', async () => {
   const fetchState = stubArchiveFetch()
   const source = createArchiveProjectSource('/api/library/file-1')
@@ -147,4 +161,28 @@ test('a failed download does not poison the source', async () => {
   } finally {
     source.dispose?.()
   }
+})
+
+test('dispose aborts the shared archive download and a later read can reopen it', async () => {
+  let firstSignal: AbortSignal | null = null
+  let requests = 0
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    requests += 1
+    if (requests > 1) return new Response(archiveBytes() as unknown as BodyInit, { status: 200 })
+    firstSignal = init?.signal ?? null
+    return await new Promise<Response>((_resolve, reject) => {
+      firstSignal?.addEventListener('abort', () => reject(firstSignal?.reason), { once: true })
+    })
+  }) as typeof globalThis.fetch
+
+  const source = createArchiveProjectSource('/api/library/file-1')
+  const abandonedRead = source.loadIndex()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  source.dispose?.()
+
+  assert.equal((firstSignal as AbortSignal | null)?.aborted, true)
+  await assert.rejects(abandonedRead, { name: 'AbortError' })
+  assert.equal((await source.loadIndex()).plates.length, 1)
+  assert.equal(requests, 2)
+  source.dispose?.()
 })

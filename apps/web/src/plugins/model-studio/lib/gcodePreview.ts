@@ -143,6 +143,10 @@ export interface ParsedGcodeLayers {
    * pause or filament change is stored at (length = layerCount).
    */
   layerZ: number[]
+  /** Preview-layer indexes carrying the engine's `; PAUSE_PRINTING` reserved tag, in print order. */
+  pauseLayers: number[]
+  /** Preview-layer indexes carrying the engine's `; COLOR_CHANGE` reserved tag, in print order. */
+  filamentChangeLayers: number[]
   /** Flat extrusion vertex positions [x1,y1,z1,x2,y2,z2,...], ordered by layer. */
   extrusionPositions: Float32Array
   /** Cumulative extrusion vertex count at the END of each layer (length = layerCount). */
@@ -325,6 +329,9 @@ export function parseGcodeLayers(text: string): ParsedGcodeLayers {
 
   const extrusionLayers: number[][] = []
   const layerZ: number[] = []
+  const pauseLayers: number[] = []
+  const filamentChangeLayers: number[] = []
+  const pendingLayerEvents: Array<'pause' | 'filamentChange'> = []
   const widthLayers: number[][] = []
   const heightLayers: number[][] = []
   const roleLayers: number[][] = []
@@ -378,6 +385,16 @@ export function parseGcodeLayers(text: string): ParsedGcodeLayers {
   const emitExtrusion = (ax: number, ay: number, az: number, bx: number, by: number, bz: number) => {
     if (layer < 0) advanceLayerForZ(bz) // safety: first extrusion before any layer was opened
     ensureLayer(layer)
+    // Custom layer G-code is emitted before that layer's first extrusion. Resolve its reserved
+    // tag only now, after the extrusion-based parser has established the true preview-layer index.
+    // This keeps sequential prints correct when their Z heights restart for the next object.
+    if (pendingLayerEvents.length > 0) {
+      for (const event of pendingLayerEvents) {
+        if (event === 'pause') pauseLayers.push(layer)
+        else filamentChangeLayers.push(layer)
+      }
+      pendingLayerEvents.length = 0
+    }
     const width = curWidth > 0 ? curWidth : DEFAULT_EXTRUSION_WIDTH
     const height = curHeight > 0 ? curHeight : 0
     extrusionLayers[layer]!.push(ax, ay, az, bx, by, bz)
@@ -440,6 +457,11 @@ export function parseGcodeLayers(text: string): ParsedGcodeLayers {
     const semi = rawLine.indexOf(';')
     if (semi >= 0) {
       const comment = rawLine.slice(semi + 1)
+      const reservedTag = comment.trim().toUpperCase()
+      // Exact whole-comment matches avoid the config block, which quotes these strings inside
+      // values on every file whether or not the plate contains a custom layer event.
+      if (reservedTag === 'PAUSE_PRINTING' || reservedTag === 'PAUSE_PRINT') pendingLayerEvents.push('pause')
+      else if (reservedTag === 'COLOR_CHANGE') pendingLayerEvents.push('filamentChange')
       const feature = /^\s*FEATURE:\s*(.+?)\s*$/i.exec(comment)
       if (feature) curRole = featureRoleIndex(feature[1]!)
       // Bambu emits these unspaced (`;WIPE_START`), but the reserved tag it matches carries a
@@ -706,6 +728,8 @@ export function parseGcodeLayers(text: string): ParsedGcodeLayers {
   return {
     layerCount,
     layerZ: layerZ.slice(0, layerCount),
+    pauseLayers,
+    filamentChangeLayers,
     extrusionPositions: extrusion.positions,
     extrusionLayerEnd: extrusion.layerEnd,
     extrusionWidths: flattenScalar(widthLayers, Float32Array),

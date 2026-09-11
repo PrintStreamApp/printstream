@@ -2,12 +2,10 @@
  * Client-side 3MF archive reader: unzips a 3MF the browser already holds and exposes its entries
  * to the shared parsers.
  *
- * A 3MF is a ZIP. Everywhere else in the product a 3MF is unzipped server-side (the API's
- * `three-mf-internal.ts` / the bridge's `library-3mf.ts`) because the bytes live on a bridge. The
- * public 3MF editor has no server copy on purpose: the user's file is read straight from their
- * disk, so the unzip has to happen here. Counterpart of the API's `readSceneManifest` /
- * `readPlateIndex` ZIP I/O: the parsing itself is the SAME shared code
- * (`@printstream/shared/three-mf`), only the byte source differs.
+ * A 3MF is a ZIP. Both editor hosts unzip in the browser: the library editor first downloads the
+ * bridge-owned archive through the API, while the public editor reads it straight from disk. The
+ * parsing itself is the SAME shared code (`@printstream/shared/three-mf`) used by the API and
+ * bridge indexers; only the byte source differs.
  *
  * Contract: {@link openThreeMfArchive} decompresses the whole archive once, up front, and every
  * accessor after that is synchronous and allocation-cheap. That is the right trade for the editor
@@ -75,6 +73,12 @@ export async function openThreeMfArchive(file: Blob): Promise<ThreeMfArchive> {
   assertThreeMfSizeWithinLimit(file.size)
 
   const bytes = new Uint8Array(await file.arrayBuffer())
+  return await openThreeMfArchiveBytes(bytes)
+}
+
+/** Open bytes the caller already owns without copying them through a temporary Blob. */
+export async function openThreeMfArchiveBytes(bytes: Uint8Array): Promise<ThreeMfArchive> {
+  assertThreeMfSizeWithinLimit(bytes.byteLength)
   const entries = await inflateArchive(bytes)
   return threeMfArchiveFromEntries(entries)
 }

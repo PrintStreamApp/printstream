@@ -106,6 +106,11 @@ export async function persistLibraryFileFromLocalPath(input: {
   missingBridgeMessage?: string
   onBridgeProgress?: (transferredBytes: number) => Promise<void> | void
   onBridgeComplete?: () => Promise<void> | void
+  /**
+   * Chunked-upload receipt to complete in the same database transaction as the file mutation.
+   * This closes the process-crash gap between committing a version and recording its outcome.
+   */
+  completionReceiptId?: string | null
 }): Promise<{ file: PersistedLibraryFileRow; unchanged: boolean; archivedVersionId: string | null }> {
   const attribution = await resolveRequestActorAttribution(input.request)
   // Lifecycle origin drives cleanup windows (unsaved sliced outputs age out
@@ -154,6 +159,19 @@ export async function persistLibraryFileFromLocalPath(input: {
   if (overwriteTarget) {
     const unchangedFile = await resolveUnchangedOverwrite(ownerBridgeId, overwriteTarget, input.sourcePath)
     if (unchangedFile) {
+      if (input.completionReceiptId) {
+        await prisma.libraryUploadCompletion.update({
+          where: { id: input.completionReceiptId },
+          data: {
+            status: 'completed',
+            libraryFileId: unchangedFile.id,
+            fileName: unchangedFile.name,
+            fileResultJson: JSON.stringify(unchangedFile),
+            archivedVersionId: null,
+            unchanged: true
+          }
+        })
+      }
       return { file: unchangedFile, unchanged: true, archivedVersionId: null }
     }
   }
@@ -176,7 +194,7 @@ export async function persistLibraryFileFromLocalPath(input: {
           data: toLibraryFileVersionCreateInput(overwriteTarget)
         })
         archivedVersionId = archived.id
-        return await tx.libraryFile.update({
+        const updated = await tx.libraryFile.update({
           where: { id: overwriteTarget.id },
           data: {
             name: targetName,
@@ -199,24 +217,53 @@ export async function persistLibraryFileFromLocalPath(input: {
             restoredFromVersionNumber: null
           }
         })
+        if (input.completionReceiptId) {
+          await tx.libraryUploadCompletion.update({
+            where: { id: input.completionReceiptId },
+            data: {
+              status: 'completed',
+              libraryFileId: updated.id,
+              fileName: updated.name,
+              fileResultJson: JSON.stringify(updated),
+              archivedVersionId: archived.id,
+              unchanged: false
+            }
+          })
+        }
+        return updated
       })
     } else {
-      created = await prisma.libraryFile.create({
-        data: {
-          workspaceId: input.workspaceId,
-          ownerBridgeId,
-          name: input.fileName,
-          storedPath,
-          sizeBytes: input.sizeBytes,
-          kind: classifyLibraryFileKind(input.fileName),
-          folderId: input.hidden ? null : input.folderId,
-          hidden: input.hidden,
-          uploadedAt,
-          origin,
-          createdById: attribution.createdById,
-          createdByName: attribution.createdByName
-        }
-      })
+      const createData = {
+        workspaceId: input.workspaceId,
+        ownerBridgeId,
+        name: input.fileName,
+        storedPath,
+        sizeBytes: input.sizeBytes,
+        kind: classifyLibraryFileKind(input.fileName),
+        folderId: input.hidden ? null : input.folderId,
+        hidden: input.hidden,
+        uploadedAt,
+        origin,
+        createdById: attribution.createdById,
+        createdByName: attribution.createdByName
+      }
+      created = input.completionReceiptId
+        ? await prisma.$transaction(async (tx) => {
+            const inserted = await tx.libraryFile.create({ data: createData })
+            await tx.libraryUploadCompletion.update({
+              where: { id: input.completionReceiptId! },
+              data: {
+                status: 'completed',
+                libraryFileId: inserted.id,
+                fileName: inserted.name,
+                fileResultJson: JSON.stringify(inserted),
+                archivedVersionId: null,
+                unchanged: false
+              }
+            })
+            return inserted
+          })
+        : await prisma.libraryFile.create({ data: createData })
     }
   } catch (error) {
     await deleteBridgeLibraryFile(ownerBridgeId, storedPath).catch(() => undefined)

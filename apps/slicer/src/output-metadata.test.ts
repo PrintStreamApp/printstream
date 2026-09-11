@@ -1,6 +1,33 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { applyManualFilamentMapToModelSettings, buildManualNozzleAssignment, buildSlicedArtifactMetadata, isPlatePreviewEntry, metadataChangesFilamentColours, rewriteProjectSettingsMetadata, rewriteSliceInfoMetadata } from './output-metadata.js'
+import { applyManualFilamentMapToModelSettings, buildManualNozzleAssignment, buildSlicedArtifactMetadata, isPlatePreviewEntry, metadataChangesFilamentColours, readAuthoredManualFilamentMap, rewriteProjectSettingsMetadata, rewriteSliceInfoMetadata } from './output-metadata.js'
+
+test('a prepared project supplies the CLI manual map from its own settings', () => {
+  assert.deepEqual(readAuthoredManualFilamentMap({
+    filament_map_mode: 'Manual',
+    filament_map: ['2', '1', '2'],
+    filament_settings_id: ['PLA', 'PETG', 'Support']
+  }), ['2', '1', '2'])
+  assert.equal(readAuthoredManualFilamentMap({
+    filament_map_mode: 'Auto For Flush',
+    filament_map: ['2']
+  }), null)
+})
+
+test('a prepared project refuses a short or invalid manual map before the CLI reads it', () => {
+  assert.throws(
+    () => readAuthoredManualFilamentMap({
+      filament_map_mode: ['Manual'],
+      filament_map: ['1'],
+      filament_colour: ['#FFFFFF', '#000000']
+    }),
+    /manual filament map for 1 of 2 material slots/
+  )
+  assert.throws(
+    () => readAuthoredManualFilamentMap({ filament_map_mode: 'Manual', filament_map: ['right'] }),
+    /invalid manual filament map/
+  )
+})
 
 test('rewriteSliceInfoMetadata replaces stale printer model and filament metadata', () => {
   const metadata = buildSlicedArtifactMetadata({
@@ -555,7 +582,7 @@ test('buildManualNozzleAssignment covers every filament, including ones with no 
     physical_extruder_map: ['1', '0'],
     filament_colour: ['#001489', '#808080'],
     filament_type: ['PLA', 'PLA-S']
-  }, metadata)
+  }, metadata.filamentByProjectId)
 
   assert.ok(assignment)
   assert.equal(assignment.filament_map_mode, 'Manual')

@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { SlicingJob } from '@printstream/shared'
-import { formatSlicingMetadataDisplay, formatSlicingProgress, getLatestSlicingProgressFrame } from './slicingJobPresentation.js'
+import {
+  formatSlicingMetadataDisplay,
+  formatSlicingProgress,
+  getLatestSlicingProgressFrame,
+  getSlicingProgressPercent
+} from './slicingJobPresentation.js'
 
 function buildJob(overrides: Partial<SlicingJob> = {}): SlicingJob {
   return {
@@ -63,7 +68,7 @@ test('formatSlicingProgress names the phase when no structured or system output 
   // Preparation (baking the project, authoring the machine) is its own phase and is the slow
   // part of a large project, so it must not claim the slicer is already running.
   const preparing = buildJob({ status: 'preparing', output: noisyOutput })
-  assert.equal(formatSlicingProgress(preparing, getLatestSlicingProgressFrame(preparing)), 'Preparing the project...')
+  assert.equal(formatSlicingProgress(preparing, getLatestSlicingProgressFrame(preparing)), 'Starting the slice...')
 
   const slicing = buildJob({ status: 'slicing', output: noisyOutput })
   assert.equal(formatSlicingProgress(slicing, getLatestSlicingProgressFrame(slicing)), 'Slicing...')
@@ -74,11 +79,11 @@ test('a finished job reports its outcome, not the progress frame it stopped on',
   // slice reading "Exporting 3mf (97%)" beside a "Ready" chip.
   const output = [
     { stream: 'stdout' as const, text: '{"message":"Exporting 3mf","total_percent":97}', createdAt: '2026-05-24T00:00:02.000Z' },
-    { stream: 'system' as const, text: 'Ready to print', createdAt: '2026-05-24T00:00:03.000Z' }
+    { stream: 'system' as const, text: 'Slicing complete', createdAt: '2026-05-24T00:00:03.000Z' }
   ]
 
   const ready = buildJob({ status: 'ready', outputFileName: 'widget.gcode.3mf', output })
-  assert.equal(formatSlicingProgress(ready, getLatestSlicingProgressFrame(ready)), 'Ready to print')
+  assert.equal(formatSlicingProgress(ready, getLatestSlicingProgressFrame(ready)), 'Slicing complete')
 
   // With no status line to fall back on (a finished job the list trimmed), the outcome still wins.
   const cancelled = buildJob({ status: 'cancelled', output: output.slice(0, 1) })
@@ -100,6 +105,35 @@ test('getLatestSlicingProgressFrame reports the newest engine frame', () => {
 
   assert.equal(frame?.totalPercent, 100)
   assert.equal(formatSlicingProgress(job, frame), 'Finalizing (100%)')
+  assert.equal(getSlicingProgressPercent(job, frame), 100)
+})
+
+test('saving replaces the stale 100% engine frame with the real server phase', () => {
+  const job = buildJob({
+    status: 'saving',
+    output: [
+      { stream: 'stdout', text: '{"message":"Finalizing","total_percent":100}', createdAt: '2026-05-24T00:00:02.000Z' },
+      { stream: 'system', text: 'Finishing the sliced file', createdAt: '2026-05-24T00:00:03.000Z' }
+    ]
+  })
+  const frame = getLatestSlicingProgressFrame(job)
+
+  assert.equal(formatSlicingProgress(job, frame), 'Finishing the sliced file')
+  assert.equal(getSlicingProgressPercent(job, frame), null)
+})
+
+test('collection replaces the stale 100% frame before the job leaves slicing', () => {
+  const job = buildJob({
+    status: 'slicing',
+    output: [
+      { stream: 'stdout', text: '{"message":"Finalizing","total_percent":100}', createdAt: '2026-05-24T00:00:02.000Z' },
+      { stream: 'system', text: 'Collecting the sliced file', createdAt: '2026-05-24T00:00:03.000Z' }
+    ]
+  })
+  const frame = getLatestSlicingProgressFrame(job)
+
+  assert.equal(formatSlicingProgress(job, frame), 'Collecting the sliced file')
+  assert.equal(getSlicingProgressPercent(job, frame), null)
 })
 
 test('formatSlicingMetadataDisplay rolls multi-day print estimates into days', () => {

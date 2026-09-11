@@ -40,6 +40,14 @@ export function supportsDirectAllPlateExport(printerModel: string | null): boole
   return DIRECT_ALL_PLATE_MODELS.has(normalizePrinterModel(printerModel))
 }
 
+/** Prefer the API's execution-only model hint when prepared-input policy suppresses metadata. */
+export function resolveAllPlateExecutionModel(
+  executionHint: string | null,
+  authoredMetadataModel: string | null
+): string | null {
+  return executionHint ?? authoredMetadataModel
+}
+
 export function extractPlateIdsFromModelSettingsXml(xml: string): number[] {
   const plateIds = new Set<number>()
   for (const match of xml.matchAll(/<plate\b[^>]*>[\s\S]*?<metadata\s+key="plater_id"\s+value="(\d+)"\s*\/>[\s\S]*?<\/plate>/g)) {
@@ -414,4 +422,3 @@ async function writeZip(filePath: string, entries: Array<{ name: string; buffer:
     zip.end()
   })
 }
-

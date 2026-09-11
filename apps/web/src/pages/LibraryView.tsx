@@ -514,6 +514,7 @@ export function LibraryView() {
   }, [demoMode])
 
   const startSlicingJob = useMutation({
+    meta: { suppressGlobalErrorToast: true },
     mutationFn: async (input: {
       file: LibraryFile
       versionId?: string | null
@@ -878,11 +879,11 @@ export function LibraryView() {
         <MenuItem onClick={() => {
           onAction?.()
           setRenameFolderTarget(folder)
-        }}><EditRoundedIcon /> Rename</MenuItem>
+        }}><ListItemDecorator><EditRoundedIcon /></ListItemDecorator> Rename</MenuItem>
         <MenuItem onClick={() => {
           onAction?.()
           setMoveFolderTarget(folder)
-        }}><DriveFileMoveRoundedIcon /> Move</MenuItem>
+        }}><ListItemDecorator><DriveFileMoveRoundedIcon /></ListItemDecorator> Move</MenuItem>
         <MenuItem
           color="danger"
           onClick={async () => {
@@ -896,7 +897,7 @@ export function LibraryView() {
             if (!confirmed) return
             removeFolder.mutate(folder.id)
           }}
-        ><DeleteRoundedIcon /> Delete</MenuItem>
+        ><ListItemDecorator><DeleteRoundedIcon /></ListItemDecorator> Delete</MenuItem>
       </>
     )
   }
@@ -913,7 +914,7 @@ export function LibraryView() {
             }}
             disabled={bridgeResourceUnavailable}
           >
-            <PrintRoundedIcon /> Print
+            <ListItemDecorator><PrintRoundedIcon /></ListItemDecorator> Print
           </MenuItem>
         )}
         {canUploadLibrary && isUnslicedThreeMfFile(file) && (
@@ -923,7 +924,7 @@ export function LibraryView() {
             setSliceVersionId(null)
             setSliceFlow('library')
             setSliceTarget(file)
-          }} disabled={bridgeResourceUnavailable}><DesignServicesRoundedIcon /> Edit</MenuItem>
+          }} disabled={bridgeResourceUnavailable}><ListItemDecorator><DesignServicesRoundedIcon /></ListItemDecorator> Edit</MenuItem>
         )}
         {canDispatchPrints && canViewPrinters && canUploadLibrary && isUnslicedThreeMfFile(file) && (
           <MenuItem onClick={() => {
@@ -933,7 +934,7 @@ export function LibraryView() {
             // Same slice-then-print flow as picking a 3MF in the printers' Print dialog.
             setSliceFlow('print')
             setSliceTarget(file)
-          }} disabled={bridgeResourceUnavailable}><PrintRoundedIcon /> Print</MenuItem>
+          }} disabled={bridgeResourceUnavailable}><ListItemDecorator><PrintRoundedIcon /></ListItemDecorator> Print</MenuItem>
         )}
         {!bridgeResourceUnavailable && (
           <PluginSlot
@@ -951,7 +952,7 @@ export function LibraryView() {
         {canDownloadLibrary && (
           bridgeResourceUnavailable ? (
             <MenuItem disabled>
-              <DownloadRoundedIcon /> Download unavailable while bridge is offline
+              <ListItemDecorator><DownloadRoundedIcon /></ListItemDecorator> Download unavailable while bridge is offline
             </MenuItem>
           ) : (
             <MenuItem
@@ -960,30 +961,33 @@ export function LibraryView() {
               download={file.name}
               onClick={() => onAction?.()}
             >
-              <DownloadRoundedIcon /> Download
+              <ListItemDecorator><DownloadRoundedIcon /></ListItemDecorator> Download
             </MenuItem>
           )
         )}
         {canViewLibrary && <MenuItem onClick={() => {
           onAction?.()
           setHistoryTarget(file)
-        }}><HistoryRoundedIcon /> History</MenuItem>}
+        }}><ListItemDecorator><HistoryRoundedIcon /></ListItemDecorator> History</MenuItem>}
         {canViewLibrary && (
           <MenuItem onClick={() => {
             onAction?.()
             handleToggleFavorite(file)
           }}>
-            {file.favorite ? <StarRoundedIcon /> : <StarBorderRoundedIcon />} {file.favorite ? 'Unfavorite' : 'Favorite'}
+            <ListItemDecorator>
+              {file.favorite ? <StarRoundedIcon /> : <StarBorderRoundedIcon />}
+            </ListItemDecorator>
+            {file.favorite ? 'Unfavorite' : 'Favorite'}
           </MenuItem>
         )}
         {canManageLibrary && <MenuItem onClick={() => {
           onAction?.()
           setRenameTarget(file)
-        }}><EditRoundedIcon /> Rename</MenuItem>}
+        }}><ListItemDecorator><EditRoundedIcon /></ListItemDecorator> Rename</MenuItem>}
         {canManageLibrary && <MenuItem onClick={() => {
           onAction?.()
           setMoveTarget(file)
-        }}><DriveFileMoveRoundedIcon /> Move</MenuItem>}
+        }}><ListItemDecorator><DriveFileMoveRoundedIcon /></ListItemDecorator> Move</MenuItem>}
         {canManageLibrary && (
           <MenuItem
             color="danger"
@@ -998,7 +1002,7 @@ export function LibraryView() {
               if (!confirmed) return
               void moveFilesToRecycleBin([file])
             }}
-          ><DeleteRoundedIcon /> Move to recycle bin</MenuItem>
+          ><ListItemDecorator><DeleteRoundedIcon /></ListItemDecorator> Move to recycle bin</MenuItem>
         )}
       </>
     )
@@ -1570,7 +1574,13 @@ export function LibraryView() {
           // "Save as" in the editor makes a NEW file: re-target the dialog to it (the key includes
           // the file id, so this cleanly re-mounts the editor on the just-saved project).
           onSavedAs={(saved) => { void openSliceForSavedFile(saved) }}
-          onSubmit={(input, action, options) => startSlicingJob.mutate({ file: sliceTarget, versionId: sliceVersionId, action, keepDialogOpen: options?.keepDialogOpen, ...input })}
+          onSubmit={(input, action, options) => {
+            const variables = { file: sliceTarget, versionId: sliceVersionId, action, keepDialogOpen: options?.keepDialogOpen, ...input }
+            if (options?.keepDialogOpen) {
+              return startSlicingJob.mutateAsync(variables).then(() => undefined)
+            }
+            startSlicingJob.mutate(variables)
+          }}
         />
       )}
         </>

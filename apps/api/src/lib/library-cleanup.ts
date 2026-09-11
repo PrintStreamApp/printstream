@@ -33,10 +33,12 @@ import { pruneMeshThumbnailCache } from './mesh-thumbnail-cache.js'
 import { bridgeSessionManager } from './bridge-session-manager.js'
 import { libraryDir } from './library-paths.js'
 import { pruneCoverCache } from './cover-cache.js'
+import { slicingJobs } from './slicing-jobs.js'
 import { pruneAuditLogs } from './audit-logs.js'
 import { deletePrintJobThumbnail } from './print-job-thumbnails.js'
 import { deletePrintJobSnapshot } from './print-job-snapshots.js'
 import { rootPrisma } from './prisma.js'
+import { snapshotMutationKey, snapshotMutationMutex } from './print-file-snapshots.js'
 import { pruneDeletedWorkspaces } from './workspace-cleanup.js'
 
 const RETENTION_DAYS = env.LIBRARY_TRANSIENT_RETENTION_DAYS
@@ -215,29 +217,52 @@ export async function pruneUnreferencedSlicedOutputs(
  * history silently lost Reprint on all but the last day of prints.
  */
 export async function pruneUnreferencedProjectSnapshots(
-  deps: { deleteLibraryFileBytes: typeof deleteLibraryFileBytes } = { deleteLibraryFileBytes }
+  deps: {
+    deleteLibraryFileBytes: typeof deleteLibraryFileBytes
+    retainedPreparedSourceIds?: () => readonly string[]
+  } = { deleteLibraryFileBytes }
 ): Promise<{ removed: number }> {
   const cutoff = new Date(Date.now() - env.LIBRARY_UNREFERENCED_SLICE_RETENTION_HOURS * ONE_HOUR_MS)
+  const now = new Date()
+  const retainedPreparedSourceIds = deps.retainedPreparedSourceIds?.()
+    ?? slicingJobs.preparedSourceIdsForRetention()
+  const protectedProofs = [
+    { expiresAt: { gt: now } },
+    ...(retainedPreparedSourceIds.length > 0 ? [{ id: { in: [...retainedPreparedSourceIds] } }] : [])
+  ]
+  const eligibility = {
+    origin: 'snapshot' as const,
+    snapshotKey: { not: null },
+    uploadedAt: { lt: cutoff },
+    jobs: { none: {} },
+    slicedOutputs: { none: {} },
+    sourceProjectJobs: { none: {} },
+    preparedSlicingSources: { none: { OR: protectedProofs } }
+  }
   const stale = await rootPrisma.libraryFile.findMany({
-    where: {
-      origin: 'snapshot',
-      snapshotKey: { not: null },
-      uploadedAt: { lt: cutoff },
-      // A print job references its dispatched artifact here and its preserved project through
-      // `sourceProjectJobs`; both keep the row. Checking only the latter deletes what Reprint needs.
-      jobs: { none: {} },
-      slicedOutputs: { none: {} },
-      sourceProjectJobs: { none: {} }
-    },
-    select: { id: true, ownerBridgeId: true, storedPath: true }
+    where: eligibility,
+    select: { id: true, workspaceId: true, snapshotKey: true, ownerBridgeId: true, storedPath: true }
   })
   let removed = 0
   for (const row of stale) {
-    await deps.deleteLibraryFileBytes(row).catch((err) => {
-      console.warn(`[library-cleanup] failed to delete bytes for ${row.id}`, (err as Error).message)
+    // The candidate query is advisory. Reuse can touch the row or add a proof/job while this
+    // sweep is awaiting I/O, so make deletion itself conditional on the complete eligibility
+    // predicate. Only remove bytes after the database has committed ownership of the deletion.
+    if (!row.snapshotKey) continue
+    const didDelete = await snapshotMutationMutex.run(snapshotMutationKey(row.workspaceId, row.snapshotKey), async () => {
+      const deleted = await rootPrisma.libraryFile.deleteMany({
+        where: {
+          id: row.id,
+          ...eligibility
+        }
+      })
+      if (deleted.count === 0) return false
+      await deps.deleteLibraryFileBytes(row).catch((err) => {
+        console.warn(`[library-cleanup] failed to delete bytes for ${row.id}`, (err as Error).message)
+      })
+      return true
     })
-    await rootPrisma.libraryFile.delete({ where: { id: row.id } })
-    removed += 1
+    if (didDelete) removed += 1
   }
   if (removed > 0) {
     console.log(`[library-cleanup] pruned ${removed} unreferenced project snapshot${removed === 1 ? '' : 's'}`)
@@ -267,7 +292,9 @@ export async function pruneAbandonedUploadSessions(): Promise<{ removed: number 
   }
   let removed = 0
   for (const entry of entries) {
-    if (!entry.endsWith('.part') && !entry.endsWith('.json')) continue
+    if (!entry.endsWith('.part')
+      && !entry.endsWith('.json')
+      && !/\.json\.[a-zA-Z0-9-]+\.tmp$/.test(entry)) continue
     const fullPath = path.join(uploadDir, entry)
     let mtimeMs: number
     try {
@@ -283,6 +310,17 @@ export async function pruneAbandonedUploadSessions(): Promise<{ removed: number 
     console.log(`[library-cleanup] reaped ${removed} abandoned upload session${removed === 1 ? '' : 's'}`)
   }
   return { removed }
+}
+
+/** Delete expired upload-completion receipts across every workspace. */
+export async function pruneExpiredLibraryUploadCompletions(now = new Date()): Promise<{ removed: number }> {
+  const result = await rootPrisma.libraryUploadCompletion.deleteMany({
+    where: { expiresAt: { lt: now } }
+  })
+  if (result.count > 0) {
+    console.log(`[library-cleanup] pruned ${result.count} expired upload completion receipt${result.count === 1 ? '' : 's'}`)
+  }
+  return { removed: result.count }
 }
 
 export async function prunePrintJobThumbnails(): Promise<{ removed: number }> {
@@ -381,7 +419,8 @@ export async function runArtifactMaintenance(): Promise<void> {
     pruneAuditLogs(),
     pruneDormantBridges(),
     pruneBridgeLibraryLocalCache(),
-    pruneDispatchJournal()
+    pruneDispatchJournal(),
+    pruneExpiredLibraryUploadCompletions()
   ])
 
   if (meshThumbnails.removedFiles > 0) {

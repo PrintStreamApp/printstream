@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import type { ThreeMfProjectFilament } from '@printstream/shared'
+import { createSlicingJobSchema, type ThreeMfProjectFilament } from '@printstream/shared'
 import { buildCreateSlicingJobBody, buildPrinterTrayGroups, buildSlicedOutputFileName, buildSlicedPlateLabel, filamentsForMapping, visibleMappingFilaments, type SliceFileSubmitInput } from './libraryViewHelpers'
 import { filterTrayGroupsForFilament } from './printerTrayMapping'
 
@@ -204,7 +204,7 @@ test('an AMS behind a Filament Track Switch stays available to both nozzles', ()
   assert.deepEqual(forLeftNozzle.map((group) => group.key), ['ams-1'])
 })
 
-test('a staged source replaces the file AND suppresses the edit that produced it', () => {
+test('a post-save staged source keeps its archived content-base pin separate from history lineage', () => {
 	// The bytes already contain the edit. Sending both would ask the server to apply it a second
 	// time over a file that has it, and `partOrder`/`removedParts` are not idempotent under that.
 	const sceneEdit = { plates: [] } as unknown as NonNullable<SliceFileSubmitInput['sceneEdit']>
@@ -212,14 +212,16 @@ test('a staged source replaces the file AND suppresses the edit that produced it
 		printSubmitInput({
 			sceneEdit,
 			contentBase: { fileId: 'file-1', versionId: 'version-opened' },
-			stagedSourceFileId: 'snapshot-9'
+			preparedSourceId: 'prepared-9'
 		}),
-		{ sourceFileId: 'file-1', sourceVersionId: 'version-3' }
+		{ sourceFileId: 'file-1' }
 	)
-	assert.equal(body.sourceFileId, 'snapshot-9')
+	assert.equal(body.sourceFileId, 'file-1')
+	assert.deepEqual(body.preparedSource, { id: 'prepared-9', contractVersion: 1 })
 	assert.equal(body.sceneEdit, undefined)
-	assert.equal(body.contentBase, undefined)
-	// Neither means anything against staged bytes: there is no diff left to resolve a base for.
+	assert.deepEqual(body.contentBase, { fileId: 'file-1', versionId: 'version-opened' })
+	assert.equal(createSlicingJobSchema.safeParse(body).success, true, 'the emitted prepared request must pass its wire schema')
+	// The current head remains history lineage; the archived pin exists only to validate the proof.
 	assert.equal(body.sourceVersionId, undefined)
 })
 
@@ -231,10 +233,16 @@ test('a staged source suppresses the per-object overrides it already contains', 
 	const body = buildCreateSlicingJobBody(
 		printSubmitInput({
 			sceneEdit,
+			selectedObjectIds: [1],
 			objectProcessOverrides: { 'object-1': { layer_height: ['0.2'] } },
-			stagedSourceFileId: 'snapshot-9'
+			filamentChanges: [{ plateIndex: 1, changes: [] }],
+			pauses: [{ plateIndex: 1, pauses: [] }],
+			preparedSourceId: 'prepared-9'
 		}),
 		{ sourceFileId: 'file-1' }
 	)
+	assert.equal(body.selectedObjectIds, undefined)
 	assert.equal(body.objectProcessOverrides, undefined)
+	assert.equal(body.filamentChanges, undefined)
+	assert.equal(body.pauses, undefined)
 })

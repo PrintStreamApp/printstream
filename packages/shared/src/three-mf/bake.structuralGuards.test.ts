@@ -143,6 +143,15 @@ test('a save over a base with no generator marker adds one', () => {
   assert.match(modelXml, /<metadata name="Application">BambuStudio-/)
 })
 
+test('a save over a base with no model relationships adds the BambuStudio loader gate', () => {
+  const plan = planEditedThreeMf(source(), editPlacing([1]))
+  const relationships = plan.copy?.appendEntries.find(
+    (entry) => entry.name === '3D/_rels/3dmodel.model.rels'
+  )?.content
+
+  assert.match(relationships ?? '', /<Relationships\b/)
+})
+
 test('a base that already names BambuStudio keeps its own version', () => {
   const marked = MODEL_XML.replace('<model unit="millimeter">', '<model unit="millimeter">\n  <metadata name="Application">BambuStudio-01.09.00.00</metadata>')
   const plan = planEditedThreeMf({ ...source(), modelXml: marked }, editPlacing([1]))

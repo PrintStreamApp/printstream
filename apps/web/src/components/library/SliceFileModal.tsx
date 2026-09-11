@@ -35,12 +35,14 @@ import type {
   SceneEditPlatePauses,
   SlicingCapabilities,
   SlicingManualProfileTarget,
+  SlicingTarget,
   ThreeMfIndex
 } from '@printstream/shared'
 import { bakedObjectProcessOverrides, changedObjectProcessOverrides } from './objectProcessOverrideSubmission'
 import { PER_OBJECT_PROCESS_KEYS,
   isProjectNewerThanSlicer,
-  isProjectSlicingPresetId
+  isProjectSlicingPresetId,
+  slicingTargetSchema
 } from '@printstream/shared'
 import { useNavigate, useParams } from 'react-router-dom'
 import { apiFetch } from '../../lib/apiClient'
@@ -198,7 +200,7 @@ export function SliceFileModal({
   onClose: () => void
   /** After a "Save as" in the editor: re-open the editor on the newly-created file (`file.id` changes). */
   onSavedAs?: (file: { id: string; name: string }) => void
-  onSubmit: (input: SliceFileSubmitInput, action: SliceFileSubmitAction, options?: { keepDialogOpen?: boolean }) => void
+  onSubmit: (input: SliceFileSubmitInput, action: SliceFileSubmitAction, options?: { keepDialogOpen?: boolean }) => void | Promise<void>
 }) {
   const navigate = useNavigate()
   const { workspaceSlug } = useParams<{ workspaceSlug: string }>()
@@ -237,12 +239,10 @@ export function SliceFileModal({
   // and traded their materials. Null when the edit came from a session with no base file.
   const [sceneEditContentBase, setSceneEditContentBase] = useState<{ fileId: string; versionId?: string | null } | null>(null)
   /**
-   * The hidden staged row holding the BAKED result of `sceneEdit`, sliced in the project's place.
-   *
-   * Set by both routes out of the editor (Apply and Slice), because both produce baked bytes. Null
-   * on a host that cannot stage, which falls back to sending the edit for the server to bake.
+   * The hidden staged row holding the final browser-authored input for a direct editor slice.
+   * Apply transfers only the edit because its target is not frozen until a later submit.
    */
-  const [stagedSourceFileId, setStagedSourceFileId] = useState<string | null>(null)
+  const [preparedSourceId, setPreparedSourceId] = useState<string | null>(null)
   // When the full 3D editor hands back a layout it also chooses the plate scope to
   // act on: a 1-based plate index, or 0 for all plates. Drives `plate` in the submit
   // payload so the editor's "print this plate" targets just that plate.
@@ -840,7 +840,7 @@ export function SliceFileModal({
     sceneEdit: sceneEdit ?? undefined,
     // Only meaningful alongside an edit; a plain slice bakes nothing and reads the file as it is.
     contentBase: sceneEdit ? sceneEditContentBase : undefined,
-    stagedSourceFileId: sceneEdit ? stagedSourceFileId : undefined,
+    preparedSourceId: sceneEdit ? preparedSourceId : undefined,
     selectedObjectIds: sceneEdit ? undefined : submitSelectedObjectIds,
     objectProcessOverrides: submitObjectProcessOverrides,
     // Slice-time layer G-code edits (per-plate replace semantics; only touched plates are
@@ -1049,20 +1049,14 @@ export function SliceFileModal({
 
   // Slice a single plate from the 3D editor without persisting a project: produces a
   // hidden gcode + slicing stats and opens the results dialog (which can save/print).
-  const handleEditorSlice = (opts: {
+  const handleEditorSlice = async (opts: {
     plate: number
     sceneEdit: SceneEdit
     contentBase: { fileId: string; versionId?: string | null } | null
-    stagedFileId: string | null
+    stageSnapshot: (target: SlicingTarget, slicerTargetId: string | null, signal?: AbortSignal) => Promise<string | null>
+    signal: AbortSignal
   }) => {
     if (!canSliceFromEditor) return
-    setSceneEdit(opts.sceneEdit)
-    setSceneEditContentBase(opts.contentBase)
-    // Also into state, not only into the input below: this submit keeps the dialog OPEN, so a
-    // second one reads it from here. Without it that submit would fall back to posting the edit
-    // for the server to bake, against a base it has to guess at.
-    setStagedSourceFileId(opts.stagedFileId)
-    setEditorPlatePreference(opts.plate)
     // Name the output from the scope actually being sliced: `suggestedOutputFileName`
     // tracks the editor's per-object plate selection (always a single plate), so a
     // whole-project slice (plate 0) would otherwise wrongly get a "Plate 1" suffix.
@@ -1073,7 +1067,7 @@ export function SliceFileModal({
         ? { plateName: slicedPlate?.name ?? null, plateNumber: opts.plate, plateCount: opts.sceneEdit.plates.length }
         : undefined
     )
-    const input: SliceFileSubmitInput = {
+    const frozenInput: SliceFileSubmitInput = {
       ...buildSubmitInput({ outputFileName }),
       plate: opts.plate,
       sceneEdit: opts.sceneEdit,
@@ -1081,15 +1075,27 @@ export function SliceFileModal({
       // not committed yet, so `buildSubmitInput` still sees the previous edit (null on a first
       // slice). They must stay in lockstep; an edit baked against the wrong bytes is the bug.
       contentBase: opts.contentBase,
-      // The baked bytes, sliced in the project's place. `sceneEdit` still rides along for the
-      // dialog's own reading of "this is an editor slice"; the builder drops it from the wire.
-      stagedSourceFileId: opts.stagedFileId,
       selectedObjectIds: undefined,
       // Land the (initially hidden) gcode next to the source project, so "Save to
       // library" only has to reveal it.
       outputFolderId: file.folderId ?? null
     }
-    onSubmit(input, 'slice', { keepDialogOpen: true })
+    // Freeze the request target BEFORE the bake. The editor owns the open bytes, but this host owns
+    // the authoritative mapping/preset target; preparing from controller fragments earlier made a
+    // process-only change appear in the request while the staged project kept the old process.
+    const stagedFileId = await opts.stageSnapshot(
+      slicingTargetSchema.parse(frozenInput.target),
+      frozenInput.slicerTargetId || null,
+      opts.signal
+    )
+    opts.signal.throwIfAborted()
+    const input: SliceFileSubmitInput = { ...frozenInput, preparedSourceId: stagedFileId }
+
+    setSceneEdit(opts.sceneEdit)
+    setSceneEditContentBase(opts.contentBase)
+    setPreparedSourceId(stagedFileId)
+    setEditorPlatePreference(opts.plate)
+    await onSubmit(input, 'slice', { keepDialogOpen: true })
   }
 
   // Context handed to the 3D editor (the "full slicer"). Shared by the slim
@@ -1110,7 +1116,7 @@ export function SliceFileModal({
     ) => {
       setSceneEdit(edit)
       setSceneEditContentBase(editContentBase)
-      setStagedSourceFileId(stagedFileId)
+      setPreparedSourceId(stagedFileId)
     },
     onSlice: handleEditorSlice,
     canSlice: canSliceFromEditor,

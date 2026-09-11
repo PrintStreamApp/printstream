@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 import { Client } from 'pg'
@@ -192,7 +194,7 @@ async function canConnect(databaseUrl: string): Promise<boolean> {
  * 66 migrations `00000000000000_init` replaced, one of them left FAILED: the
  * state that blocks `prisma migrate deploy` outright (P3009).
  */
-test('applyPendingMigrations collapses a pre-squash history without re-running anything', async (t) => {
+test('applyPendingMigrations collapses a pre-squash history without re-running retired migrations', async (t) => {
   const adminUrl = process.env.TEST_ADMIN_DATABASE_URL ?? toMaintenanceUrl(process.env.DATABASE_URL)
   if (!adminUrl || !(await canConnect(adminUrl))) {
     t.skip('no reachable Postgres (set TEST_ADMIN_DATABASE_URL)')
@@ -206,8 +208,21 @@ test('applyPendingMigrations collapses a pre-squash history without re-running a
   const targetUrl = withDatabaseName(adminUrl, dbName)
 
   try {
-    // Provision the schema, then rewrite history to look pre-squash.
-    await applyPendingMigrations({ databaseUrl: targetUrl })
+    // Provision only the squashed init schema before rewriting history. Using
+    // the whole current history here would create objects from later migrations,
+    // then incorrectly expect the upgrade path to baseline those migrations
+    // instead of applying them.
+    const migrationsDir = defaultMigrationsDir()
+    const init = listMigrationFiles(migrationsDir)[0]!
+    const initOnlyDir = mkdtempSync(path.join(tmpdir(), 'printstream-init-migrations-'))
+    const initOnlyMigrationDir = path.join(initOnlyDir, init.name)
+    mkdirSync(initOnlyMigrationDir)
+    copyFileSync(
+      path.join(migrationsDir, init.name, 'migration.sql'),
+      path.join(initOnlyMigrationDir, 'migration.sql')
+    )
+    t.after(() => rmSync(initOnlyDir, { recursive: true, force: true }))
+    await applyPendingMigrations({ databaseUrl: targetUrl, migrationsDir: initOnlyDir })
     const seed = new Client({ connectionString: targetUrl })
     await seed.connect()
     try {
@@ -224,7 +239,7 @@ test('applyPendingMigrations collapses a pre-squash history without re-running a
       await seed.end().catch(() => undefined)
     }
 
-    const onDisk = listMigrationFiles(defaultMigrationsDir()).map((migration) => migration.name)
+    const onDisk = listMigrationFiles(migrationsDir).map((migration) => migration.name)
     const result = await applyPendingMigrations({ databaseUrl: targetUrl })
     assert.equal(result.collapsedLegacyRows, 3, 'all three pre-squash rows should be discarded')
     assert.ok(

@@ -17,9 +17,12 @@
  * sniffing for a controller: the post-save choreography around a library save is order-sensitive
  * (see `useEditorSave`) and must be skipped wholesale, not partially, when there is no library.
  */
-import type { ExportArrangedThreeMf, SaveArrangedThreeMf, SceneEdit, SlicingPresetSummary } from '@printstream/shared'
+import type { ExportArrangedThreeMf, SaveArrangedThreeMf, SceneEdit, SlicingPresetSummary, SlicingTarget } from '@printstream/shared'
 import { apiFetch } from '../../../lib/apiClient'
-import { uploadLibraryFileInChunks } from '../../../lib/chunkedLibraryUpload'
+import {
+  uploadLibraryFileInChunks,
+  type ChunkedLibraryUploadProgress
+} from '../../../lib/chunkedLibraryUpload'
 import { bakeClientThreeMf } from './clientThreeMfBake'
 import { WORKSPACE_RETARGET_RESOLVERS } from './browserMachineRetarget'
 import { bakeOptionsFor, bakePassesFor } from './editorBakePasses'
@@ -41,6 +44,19 @@ export interface EditorSavedFile {
   archivedVersionId?: string | null
 }
 
+/** Named lifecycle hooks shared by save and upload transports. */
+export interface EditorPersistenceLifecycle {
+  signal?: AbortSignal
+  /** Browser work before bytes exist and upload progress can be measured. */
+  onLocalPhase?: (phase: 'checking' | 'creating') => void
+  onProgress?: (progress: ChunkedLibraryUploadProgress) => void
+  onCommitStart?: () => void
+  onReconciliationStart?: (stopWaiting: () => void) => void
+  onReconciliationRequired?: (retry: () => void, message: string, stopWaiting: () => void) => void
+  /** Keeps an interactive save failure in the progress dialog instead of reducing it to a toast. */
+  onError?: (message: string) => void
+}
+
 export interface EditorSaveTarget {
   /**
    * Persist an edited project.
@@ -48,8 +64,9 @@ export interface EditorSaveTarget {
    * @returns the saved file's identity, or null when the save did not happen for a reason the user
    *   already knows about (they dismissed a destination picker). A FAILURE throws instead, so the
    *   caller can surface it, a silent null would look like a successful save that saved nothing.
+   *   An aborted signal stops browser work and the chunked upload at its next cancellation point.
    */
-  persist(payload: SaveArrangedThreeMf): Promise<EditorSavedFile | null>
+  persist(payload: SaveArrangedThreeMf, lifecycle?: EditorPersistenceLifecycle): Promise<EditorSavedFile | null>
   /** Bake without persisting, for the "download a copy" paths. */
   exportBytes(payload: ExportArrangedThreeMf): Promise<Uint8Array>
   /**
@@ -61,8 +78,9 @@ export interface EditorSaveTarget {
    * that cannot slice.
    *
    * @returns the staged file's id.
+   * @throws AbortError when the caller cancels before staging commits.
    */
-  stageSnapshot?(input: StageSnapshotInput): Promise<string>
+  stageSnapshot?(input: StageSnapshotInput, signal?: AbortSignal): Promise<string>
   /**
    * True when a save lands in the library, so the caller should invalidate library queries and tell
    * the slice controller to rebase its material overlay. False for a local file.
@@ -73,22 +91,27 @@ export interface EditorSaveTarget {
 /**
  * What to bake and stage for a slice.
  *
- * Deliberately NOT a save payload. `bridgeSourceFileId` is not a bake target and must not read like
- * one: nothing is written to that file, it only lends its bridge, because library bytes are
- * bridge-owned and the browser has no bridge of its own to name.
+ * Deliberately NOT a save payload. `configurationBaseFileId` is not a bake target and must not
+ * read like one: nothing is written to that file, it lends its bridge and identifies the bytes
+ * this editor session opened. `sourceFileId` independently preserves the project this slice is
+ * about after Save As changes its library lineage.
  *
- * The overrides are carried explicitly because the SERVER used to apply them on the slice path, and
- * only inside its `if (sceneEdit)` branch. With the bytes baked here there is no edit left to send,
- * so anything that branch did has to be baked in instead or it is silently dropped.
+ * The complete frozen target is carried because this snapshot is the final engine-ready project,
+ * not a save and not an intermediate for another authoring pass on the server.
  */
 export interface StageSnapshotInput {
   sceneEdit: SceneEdit
-  bridgeSourceFileId: string | null
+  sourceFileId: string
+  configurationBaseFileId: string
+  configurationBaseVersionId: string | null
   objectProcessOverrides?: Record<string, Record<string, string | string[]>> | undefined
-  processSettingOverrides?: Record<string, string | string[]> | undefined
-  filamentSettingOverrides?: Record<string, Record<string, string | string[]>> | undefined
-  retarget?: SaveArrangedThreeMf['retarget']
-  slicerTargetId?: string | null | undefined
+  /** The frozen target the host is about to submit with this prepared source. */
+  target: SlicingTarget
+  slicerTargetId: string | null
+  onPhase?: (phase: 'applying' | 'uploading' | 'finalizing' | 'reconciling') => void
+  onProgress?: (progress: ChunkedLibraryUploadProgress) => void
+  onReconciliationStart?: (stopWaiting: () => void) => void
+  onReconciliationRequired?: (retry: () => void, message: string, stopWaiting: () => void) => void
 }
 
 export interface ApiSaveTargetOptions {
@@ -113,14 +136,21 @@ export interface ApiSaveTargetOptions {
  * reported.
  *
  * An unreachable catalogue answers EMPTY rather than throwing: a rebind is an improvement pass, and
- * the save it rides must not fail because the list could not be read.
+ * the save it rides must not fail because the list could not be read. Cancellation is different: it
+ * rejects and is never cached, so Cancel stops this save and a later retry gets a fresh request.
  */
-function createFilamentCatalogue(): () => Promise<readonly SlicingPresetSummary[]> {
+function createFilamentCatalogue(): (signal?: AbortSignal) => Promise<readonly SlicingPresetSummary[]> {
   let pending: Promise<readonly SlicingPresetSummary[]> | null = null
-  return () => {
-    pending ??= apiFetch<{ profiles: SlicingPresetSummary[] }>('/api/slicing/profiles')
+  return (signal) => {
+    signal?.throwIfAborted()
+    pending ??= apiFetch<{ profiles: SlicingPresetSummary[] }>('/api/slicing/profiles', signal ? { signal } : undefined)
       .then((body) => body.profiles as readonly SlicingPresetSummary[])
-      .catch(() => [])
+      .catch((error) => {
+        pending = null
+        signal?.throwIfAborted()
+        if (error instanceof Error && error.name === 'AbortError') throw error
+        return []
+      })
     return pending
   }
 }
@@ -130,7 +160,11 @@ function createFilamentCatalogue(): () => Promise<readonly SlicingPresetSummary[
  */
 export function createApiSaveTarget(options: ApiSaveTargetOptions): EditorSaveTarget {
   const filamentPresets = createFilamentCatalogue()
-  const bake = async (payload: SaveArrangedThreeMf | ExportArrangedThreeMf): Promise<Uint8Array> => {
+  const bake = async (
+    payload: SaveArrangedThreeMf | ExportArrangedThreeMf,
+    signal?: AbortSignal
+  ): Promise<Uint8Array> => {
+    signal?.throwIfAborted()
     const archive = options.archive()
     // A null archive means `bakeClientThreeMf` writes a from-scratch project: correct for a brand-new
     // one, and correct for an `ignoreBaseContent` save, which says outright that it carries none of
@@ -145,25 +179,32 @@ export function createApiSaveTarget(options: ApiSaveTargetOptions): EditorSaveTa
     const { bytes } = await bakeClientThreeMf(
       archive,
       payload.sceneEdit,
-      await options.importStore.importsForBake(undefined, importIdsReferencedBy(payload.sceneEdit)),
+      await options.importStore.importsForBake(signal, importIdsReferencedBy(payload.sceneEdit)),
       bakeOptionsFor(payload),
       // The WORKSPACE resolvers, which reach this workspace's own presets as well as the built-ins.
       // That is the whole difference from the public host.
-      bakePassesFor(payload, { resolvers: WORKSPACE_RETARGET_RESOLVERS, filamentPresets })
+      bakePassesFor(payload, { resolvers: WORKSPACE_RETARGET_RESOLVERS, filamentPresets, signal }),
+      signal
     )
+    signal?.throwIfAborted()
     return bytes
   }
 
   return {
     isLibraryBacked: true,
 
-    async persist(payload) {
-      const bytes = await bake(payload)
+    async persist(payload, lifecycle = {}) {
+      const bytes = await bake(payload, lifecycle.signal)
       // For a new VERSION the name is cosmetic: the addressed row keeps its own, precisely because
       // this session's copy of it may be stale. It still has to be a `.3mf` for the upload to
       // classify the kind correctly.
       const name = ensureThreeMfName(payload.name ?? options.projectName())
       const uploaded = await uploadLibraryFileInChunks(new File([bytes as BlobPart], name), {
+        signal: lifecycle.signal,
+        onProgress: lifecycle.onProgress,
+        onCommitStart: lifecycle.onCommitStart,
+        onReconciliationStart: lifecycle.onReconciliationStart,
+        onReconciliationRequired: lifecycle.onReconciliationRequired,
         // A new VERSION addresses the row by id, never by name: the project may have been renamed
         // or moved since this session opened it, and a name match would then quietly write a second
         // file instead of a version. A saveAs is a new file and names its destination instead.
@@ -182,21 +223,56 @@ export function createApiSaveTarget(options: ApiSaveTargetOptions): EditorSaveTa
       return bake(payload)
     },
 
-    async stageSnapshot(input) {
-      const bytes = await bake({
-        baseFileId: input.bridgeSourceFileId,
-        sceneEdit: input.sceneEdit,
-        ...(input.objectProcessOverrides ? { objectProcessOverrides: input.objectProcessOverrides } : {}),
-        ...(input.processSettingOverrides ? { processSettingOverrides: input.processSettingOverrides } : {}),
-        ...(input.filamentSettingOverrides ? { filamentSettingOverrides: input.filamentSettingOverrides } : {}),
-        ...(input.retarget ? { retarget: input.retarget } : {}),
-        ...(input.slicerTargetId ? { slicerTargetId: input.slicerTargetId } : {})
-      } as SaveArrangedThreeMf)
+    async stageSnapshot(input, signal) {
+      signal?.throwIfAborted()
+      const archive = options.archive()
+      if (!archive) {
+        throw new Error('The project this edit was opened from is no longer available; reopen it and slice again.')
+      }
+      input.onPhase?.('applying')
+      const { bytes } = await bakeClientThreeMf(
+        archive,
+        input.sceneEdit,
+        await options.importStore.importsForBake(signal, importIdsReferencedBy(input.sceneEdit)),
+        input.objectProcessOverrides ? { objectProcessOverrides: input.objectProcessOverrides } : {},
+        {
+          sliceTarget: {
+            target: input.target,
+            slicerTargetId: input.slicerTargetId,
+            resolvers: WORKSPACE_RETARGET_RESOLVERS,
+            ...(signal ? { signal } : {})
+          }
+        },
+        signal
+      )
+      signal?.throwIfAborted()
+      input.onPhase?.('uploading')
       const uploaded = await uploadLibraryFileInChunks(
         new File([bytes as BlobPart], ensureThreeMfName(options.projectName())),
-        { snapshot: true, targetFileId: input.bridgeSourceFileId }
+        {
+          snapshot: true,
+          targetFileId: input.configurationBaseFileId,
+          preparedSlicing: {
+            contractVersion: 1,
+            sourceFileId: input.sourceFileId,
+            target: input.target,
+            slicerTargetId: input.slicerTargetId,
+            configurationBaseVersionId: input.configurationBaseVersionId
+          },
+          signal,
+          onProgress: input.onProgress,
+          onCommitStart: () => input.onPhase?.('finalizing'),
+          onReconciliationStart: (stopWaiting) => {
+            input.onPhase?.('reconciling')
+            input.onReconciliationStart?.(stopWaiting)
+          },
+          onReconciliationRequired: input.onReconciliationRequired
+        }
       )
-      return uploaded.file.id
+      if (!uploaded.preparedSourceId) {
+        throw new Error('The server did not confirm the prepared slicing project.')
+      }
+      return uploaded.preparedSourceId
     }
   }
 }

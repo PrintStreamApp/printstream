@@ -7,7 +7,7 @@ import { fetchModelBytes, fetchModelText, ModelFetchStallError } from './modelFe
  * stalling reader rejects when the request signal aborts: mirroring real fetch semantics, so
  * the stall-timeout path is exercised end to end.
  */
-function installFakeFetch(opts: { chunks?: Uint8Array[]; stallForever?: boolean; status?: number }) {
+function installFakeFetch(opts: { chunks?: Uint8Array[]; stallForever?: boolean; status?: number; totalBytes?: number }) {
   const original = globalThis.fetch
   globalThis.fetch = ((_url: string, init: RequestInit = {}) => {
     const signal = init.signal as AbortSignal | undefined
@@ -29,7 +29,12 @@ function installFakeFetch(opts: { chunks?: Uint8Array[]; stallForever?: boolean;
         }
       }
     }
-    return Promise.resolve({ ok: (opts.status ?? 200) < 400, status: opts.status ?? 200, body })
+    return Promise.resolve({
+      ok: (opts.status ?? 200) < 400,
+      status: opts.status ?? 200,
+      headers: new Headers(opts.totalBytes == null ? {} : { 'X-Uncompressed-Content-Length': String(opts.totalBytes) }),
+      body
+    })
   }) as unknown as typeof fetch
   return () => { globalThis.fetch = original }
 }
@@ -39,6 +44,24 @@ test('fetchModelBytes assembles streamed chunks into the full body', async () =>
   try {
     const bytes = await fetchModelBytes('https://example.test/mesh')
     assert.deepEqual([...bytes], [1, 2, 3, 4, 5])
+  } finally {
+    restore()
+  }
+})
+
+test('fetchModelBytes reports streamed decoded-byte progress against the declared raw size', async () => {
+  const restore = installFakeFetch({
+    chunks: [new Uint8Array([1, 2, 3]), new Uint8Array([4, 5])],
+    totalBytes: 5
+  })
+  const progress: Array<{ loadedBytes: number; totalBytes: number | null }> = []
+  try {
+    await fetchModelBytes('https://example.test/project', {}, undefined, undefined, undefined, (next) => progress.push(next))
+    assert.deepEqual(progress, [
+      { loadedBytes: 0, totalBytes: 5 },
+      { loadedBytes: 3, totalBytes: 5 },
+      { loadedBytes: 5, totalBytes: 5 }
+    ])
   } finally {
     restore()
   }
@@ -97,7 +120,7 @@ test('fetchModelBytes caps how many downloads run at once', async () => {
         }
       }
     }
-    return Promise.resolve({ ok: true, status: 200, body })
+    return Promise.resolve({ ok: true, status: 200, headers: new Headers(), body })
   }) as unknown as typeof fetch
   try {
     const all = Promise.all(Array.from({ length: 8 }, () => fetchModelBytes('https://example.test/mesh')))
@@ -158,7 +181,7 @@ test('fetchModelBytes retries once after a stall, then succeeds', async () => {
         }
       }
     }
-    return Promise.resolve({ ok: true, status: 200, body })
+    return Promise.resolve({ ok: true, status: 200, headers: new Headers(), body })
   }) as unknown as typeof fetch
   try {
     const bytes = await fetchModelBytes('https://example.test/mesh', {}, 30) // default attempts = 2

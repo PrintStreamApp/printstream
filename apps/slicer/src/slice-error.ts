@@ -180,7 +180,7 @@ export function formatSliceEngineCrashError(output: string, exitCode: number | n
   const stage = lastStage ? ` while processing "${lastStage}"` : ''
   return (
     `The slicing engine crashed${stage} on this model (engine exit ${exitCode ?? 'signal'}). ` +
-    `This is an engine limitation on the model's geometry, not a print-setting problem, it will fail the same way on a retry. ` +
+    `This is an engine limitation on the model's geometry, not a print-setting problem. It will fail the same way on a retry. ` +
     `Try repairing or simplifying the model, re-exporting it from your CAD tool, or slicing a different plate.`
   )
 }

@@ -12,7 +12,7 @@
  * Renders menu items only; each caller supplies its own `Menu`, since the trigger and placement
  * differ. Counterpart data builder: `buildLoadedPrinterMaterialOptions` in `lib/slicingPresetMatching`.
  */
-import { ListDivider, MenuItem, Typography } from '@mui/joy'
+import { ListDivider, ListItemDecorator, MenuItem, Typography } from '@mui/joy'
 import { Fragment } from 'react'
 import TuneRoundedIcon from '@mui/icons-material/TuneRounded'
 import { LoadedMaterialOptionLabel } from './LoadedMaterialOptionLabel'
@@ -38,7 +38,7 @@ export function LoadedMaterialMenuItems({ loaded, manualLabel, onChooseManually,
   return (
     <>
       <MenuItem onClick={onChooseManually}>
-        <TuneRoundedIcon fontSize="small" />
+        <ListItemDecorator><TuneRoundedIcon fontSize="small" /></ListItemDecorator>
         {manualLabel}
       </MenuItem>
       {loaded.groups.map((group) => (

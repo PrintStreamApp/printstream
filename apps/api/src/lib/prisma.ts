@@ -62,6 +62,8 @@ export const WORKSPACE_SCOPED_MODELS = new Set([
   'LibraryDownloadLink',
   'LibraryFolder',
   'LibraryFileFavorite',
+  'PreparedSlicingSource',
+  'LibraryUploadCompletion',
   'PrinterView',
   'AuditLog',
   'AuthServiceAccount',
@@ -222,7 +224,9 @@ export function scopeOwnedMutationArgs<T extends { where: Record<string, unknown
  * (the row is already known to be workspace-owned at that point).
  */
 export function scopeUpsertArgs<T extends { where: Record<string, unknown>; create: Record<string, unknown>; update: Record<string, unknown> }>(args: T, workspaceId: string): T {
-  return { ...args, where: mergeWorkspaceWhere(args.where, workspaceId), create: { ...args.create, workspaceId } }
+  // Prisma's WhereUniqueInput requires a unique selector at the top level. Wrapping the selector
+  // in `AND` makes an otherwise-valid upsert fail validation before it reaches the database.
+  return { ...args, where: { ...args.where, workspaceId }, create: { ...args.create, workspaceId } }
 }
 
 /**

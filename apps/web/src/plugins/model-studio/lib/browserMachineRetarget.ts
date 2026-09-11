@@ -64,9 +64,9 @@ interface ResolveMachineConfigResponse {
  * anything else.
  */
 export interface RetargetResolvers {
-  machine(profileId: string, targetId: string | null): Promise<ResolveMachineConfigResponse>
-  process(profileId: string, targetId: string | null): Promise<ResolveProcessConfigResponse>
-  filament(profileId: string, targetId: string | null): Promise<ResolveFilamentConfigResponse>
+  machine(profileId: string, targetId: string | null, options?: { signal?: AbortSignal }): Promise<ResolveMachineConfigResponse>
+  process(profileId: string, targetId: string | null, options?: { signal?: AbortSignal }): Promise<ResolveProcessConfigResponse>
+  filament(profileId: string, targetId: string | null, options?: { signal?: AbortSignal }): Promise<ResolveFilamentConfigResponse>
   /**
    * Whether these endpoints can resolve the named preset at all.
    *
@@ -79,20 +79,23 @@ export interface RetargetResolvers {
 /** The anonymous catalogue endpoints. Built-ins only: see the module header. */
 export const PUBLIC_RETARGET_RESOLVERS: RetargetResolvers = {
   canResolve: (presetId) => slicingPresetProvenance(presetId) === 'builtin',
-  machine: (machineProfileId, targetId) =>
+  machine: (machineProfileId, targetId, options) =>
     apiFetch<ResolveMachineConfigResponse>('/api/public/slicing/resolve-machine', {
       method: 'POST',
-      body: { machineProfileId, targetId }
+      body: { machineProfileId, targetId },
+      ...(options?.signal ? { signal: options.signal } : {})
     }),
-  process: (processProfileId, targetId) =>
+  process: (processProfileId, targetId, options) =>
     apiFetch<ResolveProcessConfigResponse>('/api/public/slicing/resolve-process', {
       method: 'POST',
-      body: { processProfileId, targetId }
+      body: { processProfileId, targetId },
+      ...(options?.signal ? { signal: options.signal } : {})
     }),
-  filament: (filamentProfileId, targetId) =>
+  filament: (filamentProfileId, targetId, options) =>
     apiFetch<ResolveFilamentConfigResponse>('/api/public/slicing/resolve-filament', {
       method: 'POST',
-      body: { filamentProfileId, targetId }
+      body: { filamentProfileId, targetId },
+      ...(options?.signal ? { signal: options.signal } : {})
     })
 }
 
@@ -113,14 +116,14 @@ export const WORKSPACE_RETARGET_RESOLVERS: RetargetResolvers = {
   // Through the OWNER module of each route rather than fetching here: three modules had each
   // declared their own response type, every one a valid supertype of the real one, so fields the
   // routes grew went missing with nothing to catch it (`workspaceResolvers.test.ts`).
-  machine: (machineProfileId, targetId) => resolveWorkspaceMachineConfig({ machineProfileId, targetId }),
+  machine: (machineProfileId, targetId, options) => resolveWorkspaceMachineConfig({ machineProfileId, targetId }, options),
   // No `sourceFileId`: a retarget resolves the preset as it stands in the catalogue. Passing the
   // project would fold the file's own deltas into the config being retargeted ONTO, which is the
   // thing being replaced.
-  process: (processProfileId, targetId) =>
-    resolveWorkspaceProcessConfig({ processProfileId, targetId, sourceFileId: null }),
-  filament: (filamentProfileId, targetId) =>
-    resolveWorkspaceFilamentConfig({ filamentProfileId, targetId, sourceFileId: null, projectFilamentId: null })
+  process: (processProfileId, targetId, options) =>
+    resolveWorkspaceProcessConfig({ processProfileId, targetId, sourceFileId: null }, options),
+  filament: (filamentProfileId, targetId, options) =>
+    resolveWorkspaceFilamentConfig({ filamentProfileId, targetId, sourceFileId: null, projectFilamentId: null }, options)
 }
 
 export interface MachineRetargetInput {
@@ -144,6 +147,14 @@ export interface MachineRetargetInput {
   filamentPresets: readonly SlicingPresetSummary[]
   /** Defaults to the anonymous endpoints; overridden only by tests. */
   resolvers?: RetargetResolvers
+  /** Cancels all preset resolution started for this retarget. */
+  signal?: AbortSignal
+}
+
+/** Best-effort retargeting degrades ordinary lookup failures, but never cancellation. */
+function rethrowCancellation(error: unknown, signal?: AbortSignal): void {
+  signal?.throwIfAborted()
+  if (error instanceof Error && error.name === 'AbortError') throw error
 }
 
 /**
@@ -154,14 +165,20 @@ export interface MachineRetargetInput {
  * leaving the project on its embedded one.
  */
 export async function buildMachineRetargetPlan(input: MachineRetargetInput): Promise<MachineRetargetPlan | null> {
+  input.signal?.throwIfAborted()
   const { target } = input
   const resolvers = input.resolvers ?? PUBLIC_RETARGET_RESOLVERS
   if (!target || !resolvers.canResolve(target.printerProfileId)) return null
 
   let machine: ResolveMachineConfigResponse
   try {
-    machine = await resolvers.machine(target.printerProfileId, input.slicerTargetId)
+    machine = await resolvers.machine(
+      target.printerProfileId,
+      input.slicerTargetId,
+      input.signal ? { signal: input.signal } : undefined
+    )
   } catch (error) {
+    rethrowCancellation(error, input.signal)
     // The one failure the user can SEE the consequence of: the save proceeds and silently keeps the
     // project's embedded printer, so leave a trace of why the switch did not stick.
     console.warn('[editor] could not resolve the target printer preset; saving without the machine retarget:',
@@ -170,7 +187,13 @@ export async function buildMachineRetargetPlan(input: MachineRetargetInput): Pro
   }
   const printerModel = firstProfileString(machine.config.printer_model) ?? deriveModelFromMachineName(machine.name)
 
-  const chosenProcess = await resolveTargetProcessConfig(target, input.slicerTargetId, resolvers, machine.name)
+  const chosenProcess = await resolveTargetProcessConfig(
+    target,
+    input.slicerTargetId,
+    resolvers,
+    machine.name,
+    input.signal
+  )
   const plan: MachineRetargetPlan = {
     machineConfig: machine.config,
     printerSettingsId: machine.name,
@@ -200,11 +223,16 @@ async function resolveTargetProcessConfig(
   target: SlicingManualProfileTarget,
   slicerTargetId: string | null,
   resolvers: RetargetResolvers,
-  machinePresetName: string
+  machinePresetName: string,
+  signal?: AbortSignal
 ): Promise<ProfileRecord | null> {
   if (!target.processProfileId || !resolvers.canResolve(target.processProfileId)) return null
   try {
-    const body = await resolvers.process(target.processProfileId, slicerTargetId)
+    const body = await resolvers.process(
+      target.processProfileId,
+      slicerTargetId,
+      signal ? { signal } : undefined
+    )
     // A process the target machine does not accept is not authored: the retarget's job is to make
     // the project openable on the new printer, and writing settings that machine refuses does the
     // opposite. Null leaves the project's embedded process, which is this function's own contract.
@@ -214,6 +242,7 @@ async function resolveTargetProcessConfig(
     }
     return body.config
   } catch (error) {
+    rethrowCancellation(error, signal)
     // Best-effort by contract: the project keeps its embedded process rather than blocking the
     // machine retarget, which is the part that makes it openable on the new printer.
     console.warn('[editor] could not resolve the target process preset; keeping the project\'s own:',
@@ -241,7 +270,7 @@ async function resolveProcessFallbackForMachine(
     projectSettings: input.projectSettings,
     machineConfig: machine.config,
     printerSettingsId: machine.name,
-    resolveSystemProcess: (name) => resolveBuiltinProcessByName(name, input.slicerTargetId, resolvers),
+    resolveSystemProcess: (name) => resolveBuiltinProcessByName(name, input.slicerTargetId, resolvers, input.signal),
     log: (message) => console.warn(`[editor] ${message}`)
   })
 }
@@ -257,13 +286,15 @@ async function resolveProcessFallbackForMachine(
 async function resolveBuiltinProcessByName(
   name: string,
   slicerTargetId: string | null,
-  resolvers: RetargetResolvers
+  resolvers: RetargetResolvers,
+  signal?: AbortSignal
 ): Promise<ProfileRecord | null> {
   const presetId = buildBuiltinSlicingPresetId('process', name)
   if (!resolvers.canResolve(presetId)) return null
   try {
-    return (await resolvers.process(presetId, slicerTargetId)).config ?? null
-  } catch {
+    return (await resolvers.process(presetId, slicerTargetId, signal ? { signal } : undefined)).config ?? null
+  } catch (error) {
+    rethrowCancellation(error, signal)
     return null
   }
 }
@@ -325,7 +356,11 @@ export async function resolveFilamentRebinds(
       // slot to a near-empty config, and `rebindProjectFilamentPhysics` drops every key no slot
       // defines, deleting the physics a repair had just restored.
       const flattened = await flattenLocalPreset(stored, [], async (builtinId) => {
-        const body = await resolvers.filament(builtinId, input.slicerTargetId)
+        const body = await resolvers.filament(
+          builtinId,
+          input.slicerTargetId,
+          input.signal ? { signal: input.signal } : undefined
+        )
         return body.config ?? null
       })
       rebinds.push({ config: flattened.config, settingsId: null })
@@ -337,9 +372,14 @@ export async function resolveFilamentRebinds(
     }
     let config: ResolveFilamentConfigResponse['config'] | null = null
     try {
-      const body = await resolvers.filament(target.id, input.slicerTargetId)
+      const body = await resolvers.filament(
+        target.id,
+        input.slicerTargetId,
+        input.signal ? { signal: input.signal } : undefined
+      )
       config = body.config
     } catch (error) {
+      rethrowCancellation(error, input.signal)
       // Per-slot best effort: an unresolvable slot keeps its current values. Warned rather than
       // silent because a slot that fails to rebind leaves the OLD machine's numbers behind.
       console.warn(`[editor] could not resolve the rebind preset for filament slot "${slotName}":`,

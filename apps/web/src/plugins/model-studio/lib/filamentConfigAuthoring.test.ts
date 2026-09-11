@@ -94,6 +94,28 @@ test('a resolver failure never fails the save', async () => {
   assert.equal(out.filaments?.[0]?.config ?? null, null)
 })
 
+test('passes cancellation to preset resolution and does not swallow an abort', async () => {
+  const abort = new AbortController()
+  let seenSignal: AbortSignal | undefined
+  await assert.rejects(
+    () => attachResolvedFilamentConfigs(
+      edit([{ color: '#1', settingsId: 'Bambu PETG HF @BBL H2D 0.4 nozzle' }]),
+      async (_request, options) => {
+        seenSignal = options?.signal
+        throw new DOMException('Cancelled', 'AbortError')
+      },
+      {
+        targetId: null,
+        sourceFileId: null,
+        profileIdByFilamentId: { 1: 'p-petg' },
+        signal: abort.signal
+      }
+    ),
+    (error: unknown) => error instanceof Error && error.name === 'AbortError'
+  )
+  assert.equal(seenSignal, abort.signal)
+})
+
 test('no resolver is a no-op that returns the same edit', async () => {
   const input = edit([{ color: '#1', settingsId: 'x' }])
   assert.equal(await attachResolvedFilamentConfigs(input, undefined, { targetId: null, sourceFileId: null, profileIdByFilamentId: {} }), input)

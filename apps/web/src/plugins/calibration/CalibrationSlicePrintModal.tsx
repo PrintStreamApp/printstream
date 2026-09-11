@@ -30,6 +30,7 @@ import { useSlicingJob } from '../../hooks/useSlicingJob'
 import {
   formatSlicingProgress,
   getLatestSlicingProgressFrame,
+  getSlicingProgressPercent,
   slicingStatusColor
 } from '../../lib/slicingJobPresentation'
 import { calibrationKeys, fetchCalibrationRuns, isCalibrationRunActive, printCalibrationRun } from './api'
@@ -89,7 +90,7 @@ export function CalibrationSlicePrintModal({ run: initialRun, onClose }: { run: 
   })
 
   const progressFrame = job ? getLatestSlicingProgressFrame(job) : null
-  const progressPercent = progressFrame?.totalPercent ?? null
+  const progressPercent = job ? getSlicingProgressPercent(job, progressFrame) : null
   const badge = STATUS_LABELS[run.status]
   const isSlicing = run.status === 'slicing'
   const isReady = run.status === 'readyToPrint'
@@ -107,7 +108,7 @@ export function CalibrationSlicePrintModal({ run: initialRun, onClose }: { run: 
                 ? 'Slicing finished. Clear the plate, then start the print.'
                 : isFailed
                   ? 'Slicing failed. You can close this and try again from the Calibration page.'
-                  : 'Preparing your calibration print. This stays here until it is ready to print.'}
+                  : 'Preparing your calibration print.'}
             </Typography>
 
             {slicingJobQuery.isLoading && !job && isSlicing && (

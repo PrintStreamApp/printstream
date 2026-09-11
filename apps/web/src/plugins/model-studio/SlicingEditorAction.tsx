@@ -14,7 +14,7 @@
 import { lazy, useCallback, useState } from 'react'
 import { Button } from '@mui/joy'
 import ViewInArRoundedIcon from '@mui/icons-material/ViewInArRounded'
-import type { SceneEdit } from '@printstream/shared'
+import type { SceneEdit, SlicingTarget } from '@printstream/shared'
 import type { EditorContentBasePin } from './lib/contentBasePin'
 import type { SliceSettingsController } from '../../components/library/SliceSettingsPanel'
 import { LazyDialogBoundary } from '../../components/LazyDialogBoundary'
@@ -48,7 +48,13 @@ export function SlicingEditorAction(props: Record<string, unknown>) {
   const sliceDisabledReason = typeof props.sliceDisabledReason === 'string' && props.sliceDisabledReason ? props.sliceDisabledReason : undefined
   const slicing = props.slicing === true
   const onSlice = typeof props.onSlice === 'function'
-    ? (props.onSlice as (opts: { plate: number; sceneEdit: SceneEdit; contentBase: EditorContentBasePin | null }) => void)
+    ? (props.onSlice as (opts: {
+        plate: number
+        sceneEdit: SceneEdit
+        contentBase: EditorContentBasePin | null
+        stageSnapshot: (target: SlicingTarget, slicerTargetId: string | null, signal?: AbortSignal) => Promise<string | null>
+        signal: AbortSignal
+      }) => void | Promise<void>)
     : undefined
   // When the editor IS the slice UI (simple mode removed), the host opens it
   // directly: no button, and closing the editor closes the host dialog.
@@ -84,7 +90,12 @@ export function SlicingEditorAction(props: Record<string, unknown>) {
         </Button>
       )}
       {open && (
-        <LazyDialogBoundary variant="maximized" label="the editor" onClose={closeEditor}>
+        <LazyDialogBoundary
+          variant="maximized"
+          label="the editor"
+          pendingLabel="Loading editor tools…"
+          onClose={closeEditor}
+        >
           <EditorView
             // Re-mount on a different file/version so all per-file state and one-shot guards
             // (seeded scene, re-hydration set, frozen preferred plate) reset cleanly.

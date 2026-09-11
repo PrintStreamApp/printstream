@@ -2,12 +2,14 @@
  * Plate-clearing plugin (web side).
  *
  * Mirrors the API plugin's per-printer state and contributes a
- * `printer.card.actions` slot that:
+ * `printer.card.actions` and `printers.overview.actions` slots that:
  *
  * - Renders nothing when the plate is in the `cleared` state (the
  *   default), so the printer card looks unchanged.
  * - Renders a prominent "Mark cleared" button
  *   when a finished print has set the printer into `needs-clear`.
+ * - Offers one confirmed bulk action above the printers directory when
+ *   one or more online, idle printers need their plates cleared.
  * - Contributes a settings panel that controls whether confirming a
  *   cleared plate also clears the cached last job shown on printer cards.
  *
@@ -37,6 +39,7 @@ import {
   usePlateClearingState,
   usePlateClearingSync
 } from '../../lib/plateClearing'
+import { PlateClearingOverviewAction } from './PlateClearingOverviewAction'
 
 function PlateClearingAction({
   printerId,
@@ -156,6 +159,12 @@ export const plateClearingPlugin: WebPlugin = {
   description: 'Block new prints until the build plate has been confirmed cleared.',
   settingsPanel: PlateClearingSettingsPanel,
   slots: [
+    {
+      name: 'printers.overview.actions',
+      component: ({ printers, statuses }) => (
+        <PlateClearingOverviewAction printers={printers} statuses={statuses} />
+      )
+    },
     {
       name: 'printer.card.actions',
       component: ({ printerId, presentation }) => {

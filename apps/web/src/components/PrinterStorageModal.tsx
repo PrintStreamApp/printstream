@@ -11,7 +11,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Box, Button, Checkbox, Dropdown, IconButton, Menu, MenuButton, MenuItem,
+  Box, Button, Checkbox, Dropdown, IconButton, ListItemDecorator, Menu, MenuButton, MenuItem,
   ModalClose, Stack, Typography
 } from '@mui/joy'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -717,17 +717,20 @@ function StorageRow({
           <Menu placement="left-start" sx={{ zIndex: (theme) => theme.zIndex.tooltip }}>
             {downloadUrl && (
               <MenuItem component="a" href={downloadUrl} download={name}>
-                <DownloadRoundedIcon /> Download
+                <ListItemDecorator><DownloadRoundedIcon /></ListItemDecorator>
+                Download
               </MenuItem>
             )}
             {onRename && (
               <MenuItem onClick={onRename}>
-                <EditRoundedIcon /> Rename
+                <ListItemDecorator><EditRoundedIcon /></ListItemDecorator>
+                Rename
               </MenuItem>
             )}
             {onDelete && (
               <MenuItem color="danger" onClick={onDelete}>
-                <DeleteRoundedIcon /> Delete
+                <ListItemDecorator><DeleteRoundedIcon /></ListItemDecorator>
+                Delete
               </MenuItem>
             )}
           </Menu>

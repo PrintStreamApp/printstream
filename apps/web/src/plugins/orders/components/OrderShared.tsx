@@ -19,6 +19,7 @@ import {
   Chip,
   Dropdown,
   IconButton,
+  ListItemDecorator,
   Menu,
   MenuButton,
   MenuItem,
@@ -203,16 +204,19 @@ export function OrderRowMenu({
         </MenuButton>
         <Menu placement="bottom-end">
           <MenuItem disabled={!canManageOrders || editing} onClick={() => onEditOrder(order)}>
-            <EditRoundedIcon /> {editing ? 'Opening editor…' : 'Edit'}
+            <ListItemDecorator><EditRoundedIcon /></ListItemDecorator>
+            {editing ? 'Saving…' : 'Edit'}
           </MenuItem>
           <MenuItem
             disabled={!canManageOrders || updating}
             onClick={() => onToggleOrderStatus(order.id, order.status === 'active' ? 'completed' : 'active')}
           >
-            <TaskAltRoundedIcon /> {updating ? 'Updating…' : order.status === 'active' ? 'Mark complete' : 'Reopen'}
+            <ListItemDecorator><TaskAltRoundedIcon /></ListItemDecorator>
+            {updating ? 'Updating…' : order.status === 'active' ? 'Mark complete' : 'Reopen'}
           </MenuItem>
           <MenuItem color="danger" disabled={!canManageOrders || deleting} onClick={() => onDeleteOrder(order.id)}>
-            <DeleteRoundedIcon /> {deleting ? 'Deleting…' : 'Delete'}
+            <ListItemDecorator><DeleteRoundedIcon /></ListItemDecorator>
+            {deleting ? 'Deleting…' : 'Delete'}
           </MenuItem>
         </Menu>
       </Dropdown>

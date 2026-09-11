@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
+  createSlicingJobSchema,
   exportArrangedThreeMfSchema,
   parsePreservedSliceSettings,
   saveArrangedThreeMfSchema,
+  sliceEnvelopeSchema,
   slicingTargetSchema,
   MAX_PAINT_CODE_LENGTH
 } from './slicing.js'
@@ -17,6 +19,52 @@ const retarget = {
   nozzleDiameters: [0.4],
   filamentMappings: [{ projectFilamentId: 1, profileId: 'builtin:filament:H2D' }]
 }
+
+test('a browser-prepared source keeps original lineage and cannot repeat baked edits', () => {
+  const base = {
+    sourceFileId: 'original-project',
+    sourceVersionId: 'opened-version',
+    preparedSource: { id: 'browser-preparation', contractVersion: 1 as const },
+    // Provenance only: the proof binds the prepared bytes to the immutable project version the
+    // browser authored from. It is not an instruction to apply the edit again.
+    contentBase: { fileId: 'original-project', versionId: 'opened-version' },
+    target: retarget,
+    plate: 2
+  }
+  const parsed = createSlicingJobSchema.parse(base)
+  assert.equal(parsed.sourceFileId, 'original-project')
+  assert.equal(parsed.sourceVersionId, 'opened-version')
+  assert.deepEqual(parsed.preparedSource, { id: 'browser-preparation', contractVersion: 1 })
+  assert.deepEqual(parsed.contentBase, { fileId: 'original-project', versionId: 'opened-version' })
+
+  for (const duplicate of [
+    { selectedObjectIds: [1] },
+    { objectProcessOverrides: { '1': { layer_height: '0.2' } } },
+    { filamentChanges: [] },
+    { pauses: [] },
+    { sceneEdit }
+  ]) {
+    assert.equal(
+      createSlicingJobSchema.safeParse({ ...base, ...duplicate }).success,
+      false,
+      `prepared source accepted already-baked field ${Object.keys(duplicate)[0]}`
+    )
+  }
+})
+
+test('slice envelope carries an execution-only printer model independently of project metadata', () => {
+  const parsed = sliceEnvelopeSchema.parse({
+    jobId: 'job-1',
+    sourceFileName: 'project.3mf',
+    request: {
+      sourceFileId: 'source-1',
+      target: retarget,
+      plate: 0
+    },
+    executionHints: { printerModel: 'P1S' }
+  })
+  assert.equal(parsed.executionHints?.printerModel, 'P1S')
+})
 
 test('saveArrangedThreeMf carries an optional retarget machine + slicer target', () => {
   const withRetarget = saveArrangedThreeMfSchema.parse({

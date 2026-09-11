@@ -22,8 +22,15 @@ import {
   statBridgeLibraryFile,
   storeBridgeLibraryFile
 } from './bridge-library-files.js'
-import { prisma } from './prisma.js'
+import { prisma, rootPrisma } from './prisma.js'
 import { getCurrentWorkspace } from './workspace-context.js'
+import { createKeyedMutex } from './keyed-mutex.js'
+
+/** Serializes row and byte mutations for one workspace-local content-addressed snapshot. */
+export const snapshotMutationMutex = createKeyedMutex()
+export function snapshotMutationKey(workspaceId: string, snapshotKey: string): string {
+  return `${workspaceId}:${snapshotKey}`
+}
 
 export interface SnapshotLibraryFile {
   id: string
@@ -57,52 +64,53 @@ export async function ensureLibraryFileSnapshot(fileId: string): Promise<Snapsho
 export async function ensureLibrarySnapshotRecord(file: SnapshotLibraryFile): Promise<SnapshotLibraryFile> {
   if (file.snapshotKey) return file
 
+  const workspaceId = requireWorkspaceId()
   const ownerBridgeId = requireOwnerBridgeId(file.ownerBridgeId)
   const sourceInfo = await statBridgeLibraryFile({ ownerBridgeId, storedPath: file.storedPath })
   const contentHash = sourceInfo.contentSha256
   const snapshotKey = buildSnapshotKey(file.name, contentHash)
   const storedPath = buildSnapshotStoredPath(file.name, contentHash)
 
-  const existing = await prisma.libraryFile.findUnique({ where: { snapshotKey }, select: SNAPSHOT_SELECT })
-  if (existing) {
+  return snapshotMutationMutex.run(snapshotMutationKey(workspaceId, snapshotKey), async () => {
+    const existing = await refreshSnapshotIfExists(workspaceId, snapshotKey)
+    if (existing) {
+      await ensureSnapshotStored({
+        sourceBridgeId: ownerBridgeId,
+        sourceStoredPath: file.storedPath,
+        targetBridgeId: requireOwnerBridgeId(existing.ownerBridgeId),
+        targetStoredPath: existing.storedPath
+      })
+      return existing
+    }
+
     await ensureSnapshotStored({
       sourceBridgeId: ownerBridgeId,
       sourceStoredPath: file.storedPath,
-      targetBridgeId: requireOwnerBridgeId(existing.ownerBridgeId),
-      targetStoredPath: existing.storedPath
+      targetBridgeId: ownerBridgeId,
+      targetStoredPath: storedPath
     })
-    return existing
-  }
-
-  await ensureSnapshotStored({
-    sourceBridgeId: ownerBridgeId,
-    sourceStoredPath: file.storedPath,
-    targetBridgeId: ownerBridgeId,
-    targetStoredPath: storedPath
+    try {
+      return await prisma.libraryFile.create({
+        data: {
+          workspaceId,
+          ownerBridgeId,
+          name: file.name,
+          storedPath,
+          sizeBytes: sourceInfo.sizeBytes,
+          kind: file.kind,
+          hidden: true,
+          snapshotKey,
+          origin: 'snapshot',
+          folderId: null
+        },
+        select: SNAPSHOT_SELECT
+      })
+    } catch (error) {
+      const raced = await refreshSnapshotIfExists(workspaceId, snapshotKey)
+      if (raced) return raced
+      throw error
+    }
   })
-  const workspaceId = requireWorkspaceId()
-
-  try {
-    return await prisma.libraryFile.create({
-      data: {
-        workspaceId,
-        ownerBridgeId,
-        name: file.name,
-        storedPath,
-        sizeBytes: sourceInfo.sizeBytes,
-        kind: file.kind,
-        hidden: true,
-        snapshotKey,
-        origin: 'snapshot',
-        folderId: null
-      },
-      select: SNAPSHOT_SELECT
-    })
-  } catch (error) {
-    const raced = await prisma.libraryFile.findUnique({ where: { snapshotKey }, select: SNAPSHOT_SELECT })
-    if (raced) return raced
-    throw error
-  }
 }
 
 /**
@@ -133,34 +141,52 @@ export async function ensureLibrarySnapshotFromLocalPath(input: {
   const contentHash = await hashLocalFile(input.sourcePath)
   const snapshotKey = buildSnapshotKey(input.fileName, contentHash)
 
-  const existing = await prisma.libraryFile.findUnique({
-    where: { snapshotKey },
-    select: SNAPSHOT_SELECT
+  return snapshotMutationMutex.run(snapshotMutationKey(input.workspaceId, snapshotKey), async () => {
+    const existing = await refreshSnapshotIfExists(input.workspaceId, snapshotKey)
+    if (existing) {
+      return existing
+    }
+
+    const storedPath = buildSnapshotStoredPath(input.fileName, contentHash)
+    await storeBridgeLibraryFile(input.ownerBridgeId, storedPath, input.sourcePath, { onProgress: input.onBridgeProgress })
+
+    try {
+      return await prisma.libraryFile.create({
+        data: {
+          workspaceId: input.workspaceId,
+          ownerBridgeId: input.ownerBridgeId,
+          name: path.basename(input.fileName),
+          storedPath,
+          sizeBytes: input.sizeBytes,
+          kind: classifyLibraryFileKind(input.fileName),
+          hidden: true,
+          snapshotKey,
+          origin: 'snapshot',
+          folderId: null
+        },
+        select: SNAPSHOT_SELECT
+      })
+    } catch (error) {
+      const raced = await refreshSnapshotIfExists(input.workspaceId, snapshotKey)
+      if (raced) return raced
+      throw error
+    }
   })
-  if (existing) return existing
+}
 
-  const storedPath = buildSnapshotStoredPath(input.fileName, contentHash)
-  await storeBridgeLibraryFile(input.ownerBridgeId, storedPath, input.sourcePath, { onProgress: input.onBridgeProgress })
-
+/** Atomically find and refresh a workspace-local dedupe hit, or return null when none exists. */
+async function refreshSnapshotIfExists(workspaceId: string, snapshotKey: string): Promise<SnapshotLibraryFile | null> {
   try {
-    return await prisma.libraryFile.create({
-      data: {
-        workspaceId: input.workspaceId,
-        ownerBridgeId: input.ownerBridgeId,
-        name: path.basename(input.fileName),
-        storedPath,
-        sizeBytes: input.sizeBytes,
-        kind: classifyLibraryFileKind(input.fileName),
-        hidden: true,
-        snapshotKey,
-        origin: 'snapshot',
-        folderId: null
-      },
+    // The scoped client's ownership pre-read intentionally turns an update miss into an
+    // HTTP 404. This compound selector already contains the workspace identity, so use the
+    // base client to preserve Prisma's P2025 dedupe-miss signal without weakening isolation.
+    return await rootPrisma.libraryFile.update({
+      where: { workspaceId_snapshotKey: { workspaceId, snapshotKey } },
+      data: { uploadedAt: new Date() },
       select: SNAPSHOT_SELECT
     })
   } catch (error) {
-    const raced = await prisma.libraryFile.findUnique({ where: { snapshotKey }, select: SNAPSHOT_SELECT })
-    if (raced) return raced
+    if ((error as { code?: unknown })?.code === 'P2025') return null
     throw error
   }
 }
@@ -220,4 +246,3 @@ function buildSnapshotStoredPath(fileName: string, contentHash: string): string 
   const safeBase = base.replace(/[^\w.-]+/g, '_')
   return `${contentHash.slice(0, 16)}-${safeBase}`
 }
-

@@ -905,12 +905,13 @@ export function PrintersView() {
               {canManagePrinters && (
                 <Button
                   size="sm"
+                  aria-label="Add printer"
                   startDecorator={<AddIcon />}
                   sx={{ flex: '0 0 auto', minWidth: 0 }}
                   disabled={(bridgesQuery.data?.bridges.length ?? 0) === 0}
                   onClick={() => setOpen(true)}
                 >
-                  Add printer
+                  Add
                 </Button>
               )}
               {canDispatchPrints && <Divider orientation="vertical" sx={{ alignSelf: 'stretch', mx: 0.25 }} />}
@@ -952,11 +953,12 @@ export function PrintersView() {
               {canManagePrinters && (
                 <Button
                   size="sm"
+                  aria-label="Add printer"
                   onClick={() => setOpen(true)}
                   startDecorator={<AddIcon />}
-                  sx={{ width: 119, flex: '0 0 auto' }}
+                  sx={{ flex: '0 0 auto' }}
                 >
-                  Add printer
+                  Add
                 </Button>
               )}
               {canDispatchPrints && (
@@ -968,7 +970,7 @@ export function PrintersView() {
                     menuAriaLabel="More print sources"
                     startDecorator={<PrintRoundedIcon />}
                     onClick={() => setPageLibraryPickerOpen(true)}
-                    groupSx={{ width: 119, flex: '0 0 auto', minWidth: 0 }}
+                    groupSx={{ flex: '0 0 auto', minWidth: 0 }}
                   >
                     <MenuItem onClick={() => setPageLibraryPickerOpen(true)}>
                       <ListItemDecorator><FolderCopyRoundedIcon /></ListItemDecorator>
@@ -981,7 +983,7 @@ export function PrintersView() {
                     size="sm"
                     onClick={() => setPageLibraryPickerOpen(true)}
                     startDecorator={<PrintRoundedIcon />}
-                    sx={{ width: 119, flex: '0 0 auto', minWidth: 0 }}
+                    sx={{ flex: '0 0 auto', minWidth: 0 }}
                   >
                     Print
                   </Button>
@@ -1278,6 +1280,11 @@ export function PrintersView() {
         />
       ) : (
         <Stack spacing={1.5}>
+          <PluginSlot
+            name="printers.overview.actions"
+            context={{ printers, statuses: status }}
+          />
+
           {printers.length > 0 && (
             <PrinterOverviewToolbar
               printers={printers}

@@ -3,12 +3,12 @@
  *
  * Responsibilities / invariants:
  * - Discovers every `*.test.ts(x)` under apps/ and packages/ (skipping dist/node_modules).
- * - Runs the whole suite in ONE `node --test` invocation. The CLI test runner already isolates each
- *   file in its own subprocess, so there is no shared-module-state leakage between files and peak
- *   memory is bounded by the concurrency cap (~8 subprocesses), not by the file count.
- * - Caps file concurrency (`--test-concurrency`) so we do not oversubscribe the CPU. Oversubscription
- *   (node's default concurrency = core count) is what makes the timing-sensitive suites flake, so the
- *   default deliberately leaves headroom.
+ * - Runs the suite in bounded sequential `node --test` batches. The CLI test runner isolates each
+ *   file in its own subprocess, while batching also releases the aggregate runner's native memory
+ *   and test metadata instead of retaining them across hundreds of files.
+ * - Caps file concurrency (`--test-concurrency`) from both CPU count and currently available memory.
+ *   CPU-only sizing overloaded memory-capped WSL while leaving six heavy test children resident, so
+ *   the default reserves memory for the host and dev servers as well as CPU headroom.
  * - We deliberately do NOT pass `--test-force-exit`. It would skip the post-completion event-loop
  *   drain (a few suites leak a ref'd handle that adds dead teardown time), but it also force-kills the
  *   process before node:test flushes its failure summary: you lose the failing test name, assertion
@@ -24,7 +24,8 @@
  *   what was skipped is always printed: a cached run must never read like a full run.
  *
  * Flags / env (flags win): `--list`, `--reporter=<r>` / NODE_TEST_REPORTER (default dot),
- * `--concurrency=<n>` / NODE_TEST_CONCURRENCY (default ~half the cores, also the memory lever),
+ * `--concurrency=<n>` / NODE_TEST_CONCURRENCY (explicit override of the safe default),
+ * `--batch-size=<n>` / NODE_TEST_BATCH_SIZE (default 50 files per aggregate process),
  * `--test-timeout=<ms>` / NODE_TEST_TIMEOUT (default 60000, the per-test hang guard),
  * `--no-cache` / PRINTSTREAM_NO_TEST_CACHE=1, `--clear-cache`.
  * Remaining args are path-substring filters.
@@ -35,6 +36,7 @@ import os from 'node:os'
 import path from 'node:path'
 
 import { clearTestCache, planCachedRun, recordGreenRun } from './lib/result-cache.mjs'
+import { batchTestFiles, defaultTestConcurrency, failedTestCandidates } from './lib/test-concurrency.mjs'
 
 const workspaceRoot = path.resolve(new URL('../..', import.meta.url).pathname)
 const searchRoots = ['apps', 'packages']
@@ -44,8 +46,12 @@ const listOnly = rawArgs.includes('--list')
 const noCache = rawArgs.includes('--no-cache')
 const clearCache = rawArgs.includes('--clear-cache')
 const reporter = readFlag('--reporter=') ?? process.env.NODE_TEST_REPORTER ?? 'dot'
-const defaultConcurrency = Math.max(2, Math.ceil(os.availableParallelism() / 2))
+const defaultConcurrency = defaultTestConcurrency({
+  cpuCount: os.availableParallelism(),
+  availableMemoryBytes: os.freemem()
+})
 const concurrency = resolvePositiveInt(readFlag('--concurrency=') ?? process.env.NODE_TEST_CONCURRENCY, defaultConcurrency)
+const batchSize = resolvePositiveInt(readFlag('--batch-size=') ?? process.env.NODE_TEST_BATCH_SIZE, 50)
 // Per-test timeout (ms). node:test defaults to Infinity, so a single hung test
 // (a never-resolving await, a wedged server handle) stalls the whole run/CI
 // forever. Bound it; a timeout fails that test with a normal node:test diagnostic
@@ -56,6 +62,7 @@ const filters = rawArgs.filter((arg) => arg !== '--list'
   && arg !== '--clear-cache'
   && !arg.startsWith('--reporter=')
   && !arg.startsWith('--concurrency=')
+  && !arg.startsWith('--batch-size=')
   && !arg.startsWith('--test-timeout='))
 
 // Cap on how many files we re-run individually to pinpoint failures. A broad failure (e.g. the DB is
@@ -115,11 +122,20 @@ if (plan.run.length === 0) {
   process.exit(0)
 }
 
-console.error(`Running ${plan.run.length} test file(s), ≤${concurrency} concurrent…`)
+const batches = batchTestFiles(plan.run, batchSize)
+console.error(`Running ${plan.run.length} test file(s) in ${batches.length} batch(es), ≤${concurrency} concurrent…`)
 
-const { status, output } = await runTest(plan.run)
+const failedBatches = []
+for (const [index, batch] of batches.entries()) {
+  if (batches.length > 1) console.error(`Batch ${index + 1}/${batches.length} (${batch.length} files)…`)
+  const result = await runTest(batch)
+  if (result.status !== 0) {
+    failedBatches.push({ files: batch, output: result.output })
+    console.error(`Batch ${index + 1}/${batches.length} exited nonzero.`)
+  }
+}
 
-if (status === 0) {
+if (failedBatches.length === 0) {
   // Only a fully green run teaches the cache anything: see the contract in lib/result-cache.mjs.
   const recorded = plan.enabled ? recordGreenRun(plan, plan.run) : 0
   const skipped = plan.skip.length > 0 ? ` (+${plan.skip.length} cached)` : ''
@@ -128,12 +144,9 @@ if (status === 0) {
   process.exit(0)
 }
 
-// Attribute failures to specific files. node:test only prints stack traces (which carry the file
-// path) for tests that actually fail, so a file whose path appears in the output is a failing file;
-// the files that merely passed alongside it never appear and are left untouched.
-const attributed = plan.run.filter(
-  (file) => output.includes(file) || output.includes(path.relative(workspaceRoot, file))
-)
+// Attribute each failed batch independently. A subprocess killed before it emits a file name keeps
+// its entire batch in the isolation set even when another batch produced an ordinary stack trace.
+const { candidates: attributed, unattributed } = failedTestCandidates(failedBatches, workspaceRoot)
 
 console.error('\n================ TEST SUMMARY ================')
 console.error(
@@ -141,9 +154,10 @@ console.error(
     + ` | Wall clock: ${formatElapsed(startedAt)}`
 )
 
-if (attributed.length === 0) {
-  console.error('\n✖ The run failed but no file could be attributed from the output (see the log above).')
-  process.exit(1)
+if (unattributed.length > 0) {
+  console.error(
+    `\n${unattributed.length} file(s) belonged to failed batches that named no file; retaining them for isolation.`
+  )
 }
 
 // Confirm each attributed failure in isolation: a file that now passes alone failed only under the

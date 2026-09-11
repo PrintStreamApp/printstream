@@ -9,6 +9,7 @@ import { afterEach, test } from 'node:test'
 import type { CreateSlicingJob, SlicingOutputLine } from '@printstream/shared'
 import yazl from 'yazl'
 import { readPrintJobThumbnail, savePrintJobThumbnail } from './print-job-thumbnails.js'
+import { prisma } from './prisma.js'
 import { SlicerServiceError, slicerClient } from './slicer-client.js'
 import { SlicingJobs, resolveSlicingSourcePath, type AuthorSliceSettings, type PersistSlicedArtifact, type ResolveSlicingSource } from './slicing-jobs.js'
 
@@ -26,6 +27,7 @@ const noAuthoring: AuthorSliceSettings = async () => null
 const originalIsConfigured = slicerClient.isConfigured
 const originalRun = slicerClient.run
 const originalProgress = slicerClient.progress
+const originalPreparedSlicingSourceFindFirst = prisma.preparedSlicingSource.findFirst
 const originalConsoleInfo = console.info
 const originalConsoleWarn = console.warn
 const originalConsoleError = console.error
@@ -35,6 +37,7 @@ afterEach(() => {
   slicerClient.isConfigured = originalIsConfigured
   slicerClient.run = originalRun
   slicerClient.progress = originalProgress
+  prisma.preparedSlicingSource.findFirst = originalPreparedSlicingSourceFindFirst
   console.info = originalConsoleInfo
   console.warn = originalConsoleWarn
   console.error = originalConsoleError
@@ -52,6 +55,40 @@ test('resolveSlicingSourcePath returns the persisted path when it still exists',
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
+})
+
+test('a missing browser-prepared cache re-resolves only a same-workspace hidden snapshot', async () => {
+  let where: Record<string, unknown> | undefined
+  prisma.preparedSlicingSource.findFirst = ((async (args: { where: Record<string, unknown> }) => {
+    where = args.where
+    return null
+  }) as unknown) as typeof prisma.preparedSlicingSource.findFirst
+
+  await assert.rejects(
+    resolveSlicingSourcePath({
+      sourceFileId: 'original-project',
+      sourcePath: path.join(tmpdir(), `missing-prepared-${Date.now()}.3mf`),
+      workspaceId: 'workspace-1',
+      contentBase: { fileId: 'configuration-base', versionId: 'version-opened' },
+      preparedSource: { id: 'prepared-proof', contractVersion: 1 }
+    }),
+    /browser-prepared project.*no longer available/
+  )
+  assert.deepEqual(where, {
+    id: 'prepared-proof',
+    workspaceId: 'workspace-1',
+    sourceFileId: 'original-project',
+    configurationBaseFileId: 'configuration-base',
+    configurationBaseVersionId: 'version-opened',
+    contractVersion: 1,
+    libraryFile: {
+      workspaceId: 'workspace-1',
+      deletedAt: null,
+      hidden: true,
+      origin: 'snapshot',
+      snapshotKey: { not: null }
+    }
+  })
 })
 
 test('slicing jobs surface live slicer output before the run finishes', async () => {
@@ -392,7 +429,7 @@ test('slicing jobs persist slice-to-print artifacts as hidden files', async () =
       const current = jobs.get('workspace-1', job.id)
       assert.equal(current.status, 'ready')
       assert.equal(current.outputFileId, 'hidden-output-file')
-      assert.equal(current.output.some((entry) => entry.text === 'Ready to print'), true)
+      assert.equal(current.output.some((entry) => entry.text === 'Slicing complete'), true)
     })
 
     assert.deepEqual(persistedInputs, [{ hidden: true, folderId: 'folder-1', fileName: 'result.gcode.3mf' }])
@@ -526,6 +563,79 @@ test('the project the engine slices is the project that gets kept', async () => 
   }
 })
 
+test('a browser-prepared source skips editor-owned server preparation but keeps live runtime authoring', async () => {
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'slicing-jobs-browser-prepared-'))
+  const sourcePath = path.join(tempDir, 'prepared.3mf')
+  await writeFile(sourcePath, 'browser-authored project bytes')
+  let runtimeOnlySeen: boolean | undefined
+  let slicedPath: string | null = null
+  const warnings: string[] = []
+  console.warn = ((...args: unknown[]) => { warnings.push(args.join(' ')) }) as typeof console.warn
+
+  const jobs = new SlicingJobs({
+    progressPollIntervalMs: 10,
+    progressHeartbeatIntervalMs: 10_000,
+    resolveSource: passthroughResolveSource,
+    authorSliceSettings: async (input) => {
+      runtimeOnlySeen = input.runtimeOnly
+      return null
+    }
+  })
+  slicerClient.isConfigured = (() => true) as typeof slicerClient.isConfigured
+  slicerClient.progress = (async () => ({ kind: 'unclaimed' })) as typeof slicerClient.progress
+  slicerClient.run = (async (input: { sourcePath: string }) => {
+    slicedPath = input.sourcePath
+    throw new SlicerServiceError('stop after inspecting the prepared input', [])
+  }) as unknown as typeof slicerClient.run
+
+  const request: CreateSlicingJob = {
+    ...makeRequest(),
+    preparedSource: { id: 'prepared-proof', contractVersion: 1 }
+  }
+  const job = jobs.enqueue({
+    workspaceId: 'workspace-1',
+    workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
+    sourceFileId: 'original-project',
+    sourceFileName: 'part.3mf',
+    sourcePath,
+    targetBridgeId: 'bridge-1',
+    request
+  })
+
+  try {
+    await waitFor(() => assert.equal(jobs.get('workspace-1', job.id).status, 'failed'))
+    assert.equal(slicedPath, sourcePath, 'the API must hand the browser-authored bytes through unchanged')
+    assert.equal(runtimeOnlySeen, true, 'only live server-owned facts may still be authored')
+    assert.equal(
+      warnings.some((line) => line.includes('Mesh weld pre-pass skipped')),
+      false,
+      'the legacy mesh scan must not run over a browser-prepared source'
+    )
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
+})
+
+test('prepared source retention covers live and retriable jobs but releases terminal jobs', async () => {
+  const jobs = new SlicingJobs({ resolveSource: passthroughResolveSource, authorSliceSettings: noAuthoring })
+  slicerClient.isConfigured = (() => true) as typeof slicerClient.isConfigured
+  const queued = jobs.enqueue({
+    workspaceId: 'workspace-1',
+    workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
+    sourceFileId: 'source-1',
+    sourceFileName: 'part.3mf',
+    sourcePath: '/missing/prepared.3mf',
+    targetBridgeId: 'bridge-1',
+    request: { ...makeRequest(), preparedSource: { id: 'prepared-live', contractVersion: 1 } }
+  })
+  assert.deepEqual(jobs.preparedSourceIdsForRetention(), ['prepared-live'])
+  await waitFor(() => assert.equal(jobs.get('workspace-1', queued.id).status, 'failed'))
+  assert.deepEqual(jobs.preparedSourceIdsForRetention(), ['prepared-live'], 'failed jobs remain retriable')
+  const internalJobs = (jobs as unknown as { jobs: Map<string, { status: string }> }).jobs
+  internalJobs.get(queued.id)!.status = 'cancelled'
+  assert.deepEqual(jobs.preparedSourceIdsForRetention(), [])
+})
+
 test('a slice whose output is not persisted keeps no project', async () => {
   // Preserving is only safe once the output is durable: a snapshot row is never swept, so
   // one written for a slice that produced nothing would be unreferenced bytes forever.
@@ -616,14 +726,14 @@ test('the job list carries a finished job as its outcome line alone', async () =
   assert.equal(listed?.output.length, 1, 'exactly its outcome, not every status line it passed through')
   assert.equal(listed?.output[0]?.text, 'Slicing failed', 'and that outcome is the last line, not the first')
   assert.equal(
-    listed?.output.some((line) => line.text === 'Preparing the project'),
+    listed?.output.some((line) => line.text === 'Applying slice settings to the project'),
     false,
     'the earlier status lines are dead weight once the job is over'
   )
   // The single-job route is still the full record, engine log included.
   const full = jobs.get('workspace-1', job.id)
   assert.equal(full.output.some((line) => line.stream === 'stdout'), true)
-  assert.equal(full.output.some((line) => line.text === 'Preparing the project'), true)
+  assert.equal(full.output.some((line) => line.text === 'Applying slice settings to the project'), true)
 })
 
 test('closing the tab that started a slice cancels it, and leaves other tabs and finished jobs alone', async () => {

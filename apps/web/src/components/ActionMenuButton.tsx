@@ -81,13 +81,10 @@ export function ActionMenuButton({
       >
         {label}
       </MenuButton>
-      {/* The decorator rule pins the icon gutter for every item, for the reason `SplitButton`
-          documents: Joy sizes a `ListItemDecorator` per MenuItem and does NOT come out the same
-          for all of them, so identical markup can render labels 20px apart. */}
       <Menu
         placement={menuPlacement}
         sx={[
-          { minWidth: 200, '& .MuiListItemDecorator-root': { minInlineSize: 'var(--ListItemDecorator-size)' } },
+          { minWidth: 200 },
           ...(Array.isArray(menuSx) ? menuSx : [menuSx])
         ]}
       >

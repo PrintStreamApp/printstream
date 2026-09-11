@@ -57,7 +57,8 @@ import type {
   SceneEdit,
   SceneEditFlushVolumes,
   SceneEditPartSubtype,
-  StagedImport
+  StagedImport,
+  SlicingTarget
 } from '@printstream/shared'
 import {
   LIBRARY_DOWNLOAD_PERMISSION,
@@ -69,6 +70,7 @@ import {
   threeMfPartSubtypeCarriesFilament,
   FILAMENT_SETTING_KEYS,
   isFilamentIdentitySettingKey,
+  formatBytes,
   readProjectFlushContext,
   type ThreeMfSettingsRepairReason,
   MAX_SVG_SOURCE_BYTES
@@ -119,6 +121,13 @@ import { createBedModelObject, loadBedModelGeometry } from './lib/bedModel'
 import { bedSurfaceSignature } from './lib/bedSurfaceSignature'
 import { EditorSettingsDialog } from '../../components/library/EditorSettingsDialog'
 import { SliceSettingsPanel, type SliceSettingsController } from '../../components/library/SliceSettingsPanel'
+import {
+  EditorPreparationDialog,
+  type SavePreparationPhase,
+  type SlicePreparationPhase
+} from './EditorPreparationDialog'
+import { createDownloadProgressReporter, observeSavePreparation } from './lib/editorPreparation'
+import { useStrictModeSafeResourceDisposal } from './useStrictModeSafeResourceDisposal'
 import type { FilamentConfigResolver } from '../../components/library/FilamentSettingsDialog'
 import { applyRepairedFilamentConfigs, attachResolvedFilamentConfigs, rekeyByBakedSlot, type RepairedFilamentPreset } from './lib/filamentConfigAuthoring'
 import { StickySectionHeader, StickySectionScope } from '../../components/library/StickySectionHeader'
@@ -247,7 +256,13 @@ import {
   createApiImportStore
 } from './lib/editorImports'
 import { importFileAccept, type EditorImportStore } from './lib/editorImportStore'
-import { createArchiveProjectSource, type EditorProjectSource } from './lib/editorProjectSource'
+import {
+  createArchiveProjectSource,
+  type ArchiveProjectOpenPhase,
+  type EditorProjectSource
+} from './lib/editorProjectSource'
+import type { ModelFetchProgress } from './lib/modelFetch'
+import type { ChunkedLibraryUploadProgress } from '../../lib/chunkedLibraryUpload'
 import { createApiSaveTarget, type EditorSaveTarget } from './lib/editorSaveTarget'
 import { parseStlGeometryAsync, parseThreeMfModelEntryAsync } from './lib/meshParseClient'
 import {
@@ -758,13 +773,12 @@ interface EditorViewProps {
     sceneEdit: SceneEdit
     contentBase: EditorContentBasePin | null
     /**
-     * A hidden staged row holding the baked result of `sceneEdit`, to slice in the project's place.
-     *
-     * Null when this host cannot stage. The `sceneEdit` still travels, because the dialog reads it
-     * to know it is looking at an editor slice, but it is the STAGED bytes that get sliced.
+     * Bake and stage against the exact target the host is about to submit. The host owns target
+     * construction, while this editor owns the open archive and import store needed for the bake.
      */
-    stagedFileId: string | null
-  }) => void
+    stageSnapshot: (target: SlicingTarget, slicerTargetId: string | null, signal?: AbortSignal) => Promise<string | null>
+    signal: AbortSignal
+  }) => void | Promise<void>
 }
 
 /**
@@ -987,14 +1001,28 @@ function EditorView({
   // the library (a server-less one has none); the formats they stage are the same.
   const canImportFromLibrary = importStore.supportsLibrarySource
   const importAccept = useMemo(() => importFileAccept(importStore), [importStore])
+  const [projectOpenPhase, setProjectOpenPhase] = useState<ArchiveProjectOpenPhase>(
+    projectSourceProp ? 'reading-project' : 'loading-file'
+  )
+  const [projectDownloadProgress, setProjectDownloadProgress] = useState<ModelFetchProgress | null>(null)
+  const reportProjectDownloadProgress = useMemo(
+    () => createDownloadProgressReporter(setProjectDownloadProgress),
+    []
+  )
+  const reportProjectOpenPhase = useCallback((phase: ArchiveProjectOpenPhase) => {
+    setProjectOpenPhase(phase)
+  }, [])
   // A save target that is not library-backed writes to the user's own file. There is no library
   // folder to choose and no "version" concept, so Save means "write it back" and Save-as means
   // "ask the OS where", never the library destination dialog.
   // Memoized on `resourceBase`: the source owns one downloaded archive, so an identity that
   // changed each render would re-download the project and re-key every query that depends on it.
   const projectSource = useMemo(
-    () => projectSourceProp ?? createArchiveProjectSource(resourceBase),
-    [projectSourceProp, resourceBase]
+    () => projectSourceProp ?? createArchiveProjectSource(resourceBase, 'project.3mf', {
+      onOpenPhase: reportProjectOpenPhase,
+      onDownloadProgress: reportProjectDownloadProgress
+    }),
+    [projectSourceProp, reportProjectDownloadProgress, reportProjectOpenPhase, resourceBase]
   )
   // Read through a ref by the callbacks that must not re-create themselves when the source's
   // identity changes (the SVG reopen, which reads an archive entry on demand).
@@ -1026,10 +1054,11 @@ function EditorView({
   // Only dispose a source this component created; a host that supplies one owns its lifetime
   // (same rule as `importStore`). Without this the archive and its plate-thumbnail object URLs
   // would outlive every editor open.
-  useEffect(() => {
-    if (projectSourceProp) return
-    return () => projectSource.dispose?.()
-  }, [projectSource, projectSourceProp])
+  useStrictModeSafeResourceDisposal(
+    projectSource,
+    projectSourceProp == null,
+    (source) => { source.dispose?.() }
+  )
 
   // Drop this session's cached view of the file when the editor closes.
   //
@@ -1957,10 +1986,9 @@ function EditorView({
     staleTime: 60_000,
     queryFn: async ({ signal }) => {
       const scenes = new Map<number, LibraryThreeMfScene>()
-      // Bound the fan-out: a naive Promise.all over all rest plates fires N simultaneous /scene
-      // requests on open, each forcing a full server-side root-model parse, an N-wide spike right
-      // when the editor is mounting. A small worker pool turns that burst into a throttled trickle
-      // (each plate's parse is cheap and now server-cached, so re-selecting one is free).
+      // Bound the fan-out: a naive Promise.all over all remaining plates parses every manifest in
+      // one burst right when the editor is mounting. A small worker pool turns that CPU spike into
+      // a throttled trickle. Each result is then cached, so re-selecting a plate is free.
       const REST_SCENE_CONCURRENCY = 3
       const queue = [...restPlateIndices]
       const worker = async () => {
@@ -4435,10 +4463,11 @@ function EditorView({
    * so it has no live thumbnail to key the default skip on).
    */
   const captureAllPlateThumbnails = useCallback(
-    async (current: EditorState, options?: { force?: boolean; updateLive?: boolean; only?: ReadonlySet<number> }): Promise<Array<{ plateIndex: number; png: string }>> => {
+    async (current: EditorState, options?: { force?: boolean; updateLive?: boolean; only?: ReadonlySet<number>; signal?: AbortSignal }): Promise<Array<{ plateIndex: number; png: string }>> => {
       const renderer = getThumbnailRenderer()
       const out: Array<{ plateIndex: number; png: string }> = []
       for (const plate of current.plates) {
+        options?.signal?.throwIfAborted()
         if (plate.index <= 0) continue
         // `only` (plateIds) narrows a FORCED capture to specific plates, so refreshing a stale
         // embedded thumbnail costs one plate's geometry rather than the whole project's.
@@ -4458,14 +4487,22 @@ function EditorView({
         const group = new THREE.Group()
         try {
           for (const instance of plate.instances) {
+            options?.signal?.throwIfAborted()
             const built = await buildInstanceGroup(instance)
+            options?.signal?.throwIfAborted()
             if (built) group.add(built)
           }
+          options?.signal?.throwIfAborted()
           const url = renderer.render(group, plate.bed)
+          options?.signal?.throwIfAborted()
           if (options?.updateLive !== false) setPlateThumbnails((existing) => ({ ...existing, [plate.plateId]: url }))
           const png = url.replace(/^data:image\/png;base64,/, '')
           if (png.length > 0) out.push({ plateIndex: plate.index, png })
         } catch {
+          // A deliberate save/slice cancellation stops the whole capture. Rendering failures stay
+          // best-effort per plate, but treating AbortError as one would leave the expensive loop
+          // running after the dialog had closed.
+          options?.signal?.throwIfAborted()
           // Best-effort per plate; a failed plate just keeps its previous thumbnail.
         } finally {
           disposeObject3D(group)
@@ -9540,7 +9577,7 @@ function EditorView({
   // drop path as a save's (`applyFilamentList`), so a slice that omitted the configs handed the
   // slicer a project stripped of its filament physics and leaned on the settings-repair export,
   // which cannot run when the slice loads a machine preset without a process preset (exit 239).
-  const authorFilamentConfigs = useCallback(async (edit: SceneEdit) => {
+  const authorFilamentConfigs = useCallback(async (edit: SceneEdit, options?: { signal?: AbortSignal }) => {
     // The edit's filaments are the session slots in list order, so slot i+1 of the bake is
     // projectFilaments[i], but the controller and the physics repair key their records by SESSION
     // id, which drifts from position after a mid-session remove or reorder. Re-key both records
@@ -9557,7 +9594,8 @@ function EditorView({
       {
         targetId: controller?.selectedSlicerTargetId ?? null,
         sourceFileId: baseFileId ?? null,
-        profileIdByFilamentId: rekeyByBakedSlot(profileIdBySessionId, orderedSessionIds)
+        profileIdByFilamentId: rekeyByBakedSlot(profileIdBySessionId, orderedSessionIds),
+        signal: options?.signal
       }
     )
   }, [resolveFilamentConfig, stateRef, sliceConfigRef, baseFileId])
@@ -9606,41 +9644,269 @@ function EditorView({
   /**
    * Slice the given plate (0 = all plates).
    *
-   * Owns the Slice button's busy state for the window the HOST cannot see: capturing every plate's
-   * thumbnail and building the SceneEdit are seconds of main-thread work that run BEFORE `onSlice`
-   * is called, and the host's `slicing` flag only turns on after that. Without this the button sat
-   * inert long enough that users clicked it again. Stays true until the host takes over (its
-   * `slicing` prop arrives), so there is no gap between the two spinners.
+   * Owns the blocking preparation dialog for the window the HOST cannot see: reading the current
+   * SceneEdit and resolving its material settings run BEFORE `onSlice` is called, and the host's
+   * `slicing` flag only turns on after that. Slice preparation deliberately keeps the archive's
+   * existing thumbnails: refreshing every plate preview is save work and can dominate this path
+   * without changing what the engine prints.
    */
   const [preparingSlice, setPreparingSlice] = useState(false)
+  const [slicePreparationError, setSlicePreparationError] = useState<string | null>(null)
+  const [slicePreparationPhase, setSlicePreparationPhase] = useState<SlicePreparationPhase>('collecting')
+  const [preparingSave, setPreparingSave] = useState(false)
+  const [savePreparationPhase, setSavePreparationPhase] = useState<SavePreparationPhase>('checking')
+  const [savePreparationError, setSavePreparationError] = useState<string | null>(null)
+  const [transferProgress, setTransferProgress] = useState<ChunkedLibraryUploadProgress | null>(null)
+  const [savePreparationFinalizing, setSavePreparationFinalizing] = useState(false)
+  const [savePreparationReconciling, setSavePreparationReconciling] = useState(false)
+  const [preparationRecoveryMessage, setPreparationRecoveryMessage] = useState<string | null>(null)
+  // State drives the dialog, refs close the one-event boundary before React can paint that state.
+  // A click already queued behind onCommitStart must not abort an operation that can now commit.
+  const savePreparationFinalizingRef = useRef(false)
+  const savePreparationErrorRef = useRef<string | null>(null)
+  const savePreparationRetryRef = useRef<
+    { kind: 'version' } | { kind: 'saveAs'; name: string; destinationFolderId: string | null } | null
+  >(null)
+  const savePreparationObservedBusyRef = useRef(false)
+  const slicePreparationAbortRef = useRef<AbortController | null>(null)
+  const lastSlicePlateRef = useRef(0)
+  const savePreparationAbortRef = useRef<AbortController | null>(null)
+  const preparationRecoveryRetryRef = useRef<(() => void) | null>(null)
+  const preparationRecoveryStopRef = useRef<(() => void) | null>(null)
+  useEffect(() => () => {
+    slicePreparationAbortRef.current?.abort()
+    savePreparationAbortRef.current?.abort()
+  }, [])
   const slicing = slicingProp || preparingSlice
   useEffect(() => {
-    if (slicingProp) setPreparingSlice(false)
+    if (slicingProp) {
+      setSlicePreparationError(null)
+      setTransferProgress(null)
+      preparationRecoveryRetryRef.current = null
+      preparationRecoveryStopRef.current = null
+      setPreparationRecoveryMessage(null)
+      setPreparingSlice(false)
+    }
   }, [slicingProp])
+  useEffect(() => {
+    // The wrapper state and useEditorSave's state are separate React updates. Do not interpret the
+    // initial `saving=false` render as completion: first observe the save start, then close only on
+    // its true -> false transition. Every accepted save path clears `saving` in `finally`, so
+    // failures release this blocking dialog too.
+    const next = observeSavePreparation(preparingSave, saving, savePreparationObservedBusyRef.current)
+    savePreparationObservedBusyRef.current = next.observedBusy
+    if (next.close) {
+      savePreparationAbortRef.current = null
+      savePreparationFinalizingRef.current = false
+      setTransferProgress(null)
+      preparationRecoveryRetryRef.current = null
+      preparationRecoveryStopRef.current = null
+      setPreparationRecoveryMessage(null)
+      if (!savePreparationErrorRef.current) {
+        savePreparationRetryRef.current = null
+        setPreparingSave(false)
+      }
+    }
+  }, [preparingSave, saving])
+  const startSaveVersion = useCallback(() => {
+    savePreparationAbortRef.current?.abort()
+    const abort = new AbortController()
+    savePreparationAbortRef.current = abort
+    setPreparingSave(true)
+    savePreparationRetryRef.current = { kind: 'version' }
+    savePreparationErrorRef.current = null
+    setSavePreparationError(null)
+    setSavePreparationPhase('checking')
+    savePreparationFinalizingRef.current = false
+    setSavePreparationFinalizing(false)
+    setSavePreparationReconciling(false)
+    preparationRecoveryRetryRef.current = null
+    preparationRecoveryStopRef.current = null
+    setPreparationRecoveryMessage(null)
+    setTransferProgress(null)
+    handleSaveVersion({
+      signal: abort.signal,
+      onLocalPhase: setSavePreparationPhase,
+      onProgress: setTransferProgress,
+      onCommitStart: () => {
+        savePreparationFinalizingRef.current = true
+        setSavePreparationFinalizing(true)
+      },
+      onReconciliationStart: (stopWaiting) => {
+        savePreparationFinalizingRef.current = true
+        preparationRecoveryStopRef.current = stopWaiting
+        setSavePreparationReconciling(true)
+      },
+      onReconciliationRequired: (retry, message, stopWaiting) => {
+        savePreparationFinalizingRef.current = true
+        preparationRecoveryRetryRef.current = retry
+        preparationRecoveryStopRef.current = stopWaiting
+        setPreparationRecoveryMessage(message)
+        setSavePreparationReconciling(false)
+      },
+      onError: (message) => {
+        savePreparationErrorRef.current = message
+        setSavePreparationError(message)
+      }
+    })
+  }, [handleSaveVersion])
+  const startSaveAs = useCallback((name: string, destinationFolderId: string | null) => {
+    savePreparationAbortRef.current?.abort()
+    const abort = new AbortController()
+    savePreparationAbortRef.current = abort
+    setPreparingSave(true)
+    savePreparationRetryRef.current = { kind: 'saveAs', name, destinationFolderId }
+    savePreparationErrorRef.current = null
+    setSavePreparationError(null)
+    setSavePreparationPhase('creating')
+    savePreparationFinalizingRef.current = false
+    setSavePreparationFinalizing(false)
+    setSavePreparationReconciling(false)
+    preparationRecoveryRetryRef.current = null
+    preparationRecoveryStopRef.current = null
+    setPreparationRecoveryMessage(null)
+    setTransferProgress(null)
+    handleSaveAs(name, destinationFolderId, {
+      signal: abort.signal,
+      onLocalPhase: setSavePreparationPhase,
+      onProgress: setTransferProgress,
+      onCommitStart: () => {
+        savePreparationFinalizingRef.current = true
+        setSavePreparationFinalizing(true)
+      },
+      onReconciliationStart: (stopWaiting) => {
+        savePreparationFinalizingRef.current = true
+        preparationRecoveryStopRef.current = stopWaiting
+        setSavePreparationReconciling(true)
+      },
+      onReconciliationRequired: (retry, message, stopWaiting) => {
+        savePreparationFinalizingRef.current = true
+        preparationRecoveryRetryRef.current = retry
+        preparationRecoveryStopRef.current = stopWaiting
+        setPreparationRecoveryMessage(message)
+        setSavePreparationReconciling(false)
+      },
+      onError: (message) => {
+        savePreparationErrorRef.current = message
+        setSavePreparationError(message)
+      }
+    })
+  }, [handleSaveAs])
   const startSlice = useCallback((plate: number) => {
     const current = stateRef.current
     if (!current || !onSlice) return
+    slicePreparationAbortRef.current?.abort()
+    const abort = new AbortController()
+    slicePreparationAbortRef.current = abort
+    lastSlicePlateRef.current = plate
+    setSlicePreparationError(null)
+    setSlicePreparationPhase('collecting')
+    preparationRecoveryRetryRef.current = null
+    preparationRecoveryStopRef.current = null
+    setPreparationRecoveryMessage(null)
+    setTransferProgress(null)
     setPreparingSlice(true)
     void (async () => {
       try {
         await afterNextPaint()
-        const thumbnails = await captureAllPlateThumbnails(current)
-        const sceneEdit = await authorFilamentConfigs(buildSceneEditOut(current, { thumbnails }))
-        // Baked and staged HERE rather than server-side from the edit: the browser holds the bytes
-        // this session opened, so the base cannot be resolved wrongly. Hidden and content-deduped,
-        // so the user's project gains no version and nothing appears in their library.
-        const stagedFileId = await stageSnapshotFor(sceneEdit)
-        onSlice({ plate, sceneEdit, contentBase, stagedFileId })
+        abort.signal.throwIfAborted()
+        const sceneEdit = await authorFilamentConfigs(buildSceneEditOut(current), { signal: abort.signal })
+        abort.signal.throwIfAborted()
+        // The host freezes the final target first, then invokes this staging closure. Keeping target
+        // construction there prevents the prepared bytes and submitted request from drifting.
+        await onSlice({
+          plate,
+          sceneEdit,
+          contentBase,
+          stageSnapshot: (target, slicerTargetId, signal) => stageSnapshotFor(
+            sceneEdit,
+            target,
+            slicerTargetId,
+            signal,
+            (phase) => {
+              setSlicePreparationPhase(phase)
+            },
+            setTransferProgress,
+            (stopWaiting) => {
+              preparationRecoveryStopRef.current = stopWaiting
+              setSlicePreparationPhase('reconciling')
+            },
+            (retry, message, stopWaiting) => {
+              preparationRecoveryRetryRef.current = retry
+              preparationRecoveryStopRef.current = stopWaiting
+              setPreparationRecoveryMessage(message)
+              setSlicePreparationPhase('recovery-required')
+            }
+          ),
+          signal: abort.signal
+        })
       } catch (error) {
         // Rethrowing here would only become an unhandled rejection: the console sees it but the
         // /api/logs buffer (which captures console.*) does not, and the user is left staring at a
         // spinner that never resolves because `onSlice` was never reached.
         setPreparingSlice(false)
+        setTransferProgress(null)
+        if (error instanceof Error && error.name === 'AbortError') return
         console.error('[editor] preparing the slice failed', error)
-        toast.error(extractErrorMessage(error, 'Could not prepare the slice.'))
+        setSlicePreparationError(extractErrorMessage(error, 'Could not prepare the slice.'))
+      } finally {
+        if (slicePreparationAbortRef.current === abort) slicePreparationAbortRef.current = null
       }
     })()
-  }, [onSlice, captureAllPlateThumbnails, buildSceneEditOut, authorFilamentConfigs, stateRef, contentBase, stageSnapshotFor])
+  }, [onSlice, buildSceneEditOut, authorFilamentConfigs, stateRef, contentBase, stageSnapshotFor])
+  const retryPreparationStatus = useCallback(() => {
+    const retry = preparationRecoveryRetryRef.current
+    if (!retry) return
+    preparationRecoveryRetryRef.current = null
+    preparationRecoveryStopRef.current = null
+    setPreparationRecoveryMessage(null)
+    if (preparingSave) setSavePreparationReconciling(true)
+    else setSlicePreparationPhase('reconciling')
+    retry()
+  }, [preparingSave])
+  const stopCheckingPreparation = useCallback(() => {
+    const stop = preparationRecoveryStopRef.current
+    if (!stop) return
+    preparationRecoveryRetryRef.current = null
+    preparationRecoveryStopRef.current = null
+    stop()
+  }, [])
+  const retrySavePreparation = useCallback(() => {
+    const retry = savePreparationRetryRef.current
+    if (!retry) return
+    if (retry.kind === 'version') startSaveVersion()
+    else startSaveAs(retry.name, retry.destinationFolderId)
+  }, [startSaveAs, startSaveVersion])
+  const cancelEditorPreparation = useCallback(() => {
+    if (slicePreparationError) {
+      setSlicePreparationError(null)
+      return
+    }
+    if (savePreparationError) {
+      savePreparationErrorRef.current = null
+      savePreparationRetryRef.current = null
+      setSavePreparationError(null)
+      setPreparingSave(false)
+      return
+    }
+    if (preparingSlice && !slicingProp) {
+      preparationRecoveryStopRef.current?.()
+      preparationRecoveryStopRef.current = null
+      preparationRecoveryRetryRef.current = null
+      slicePreparationAbortRef.current?.abort()
+      slicePreparationAbortRef.current = null
+      setPreparationRecoveryMessage(null)
+      setTransferProgress(null)
+      setPreparingSlice(false)
+      return
+    }
+    if (preparingSave && !savePreparationFinalizingRef.current) {
+      savePreparationAbortRef.current?.abort()
+      savePreparationAbortRef.current = null
+      savePreparationRetryRef.current = null
+      setPreparingSave(false)
+    }
+  }, [preparingSave, preparingSlice, savePreparationError, slicePreparationError, slicingProp])
 
   // Once an editor-born project has been saved it is a real library file, so it stops presenting
   // as "New Project" and gains the ordinary Save-version path, without the editor re-mounting.
@@ -9908,6 +10174,14 @@ function EditorView({
       : restScenesQuery.error instanceof Error
         ? restScenesQuery.error.message
         : null
+  const initialLoadLabel = platesQuery.isLoading
+    ? projectOpenPhase === 'reading-project'
+      ? 'Unpacking project and reading its plates and settings…'
+      : 'Downloading project…'
+    : 'Reading plate objects, positions, and settings…'
+  const projectDownloadPercent = projectOpenPhase === 'loading-file' && projectDownloadProgress?.totalBytes
+    ? Math.min(100, Math.round((projectDownloadProgress.loadedBytes / projectDownloadProgress.totalBytes) * 100))
+    : null
   // Re-run only the reads that actually failed: the project source's archive memo is cleared on
   // rejection, so an errored query's refetch re-downloads, while a healthy query's data stays put.
   const retryProjectLoad = () => {
@@ -10082,9 +10356,20 @@ function EditorView({
           // here would unmount the WebGL canvas and reinitialize the entire scene (a visible
           // "reload" of the dialog on every plate switch).
           <Box sx={{ flex: 1, display: 'grid', placeItems: 'center' }}>
-            <Stack spacing={1} alignItems="center">
+            <Stack spacing={1} alignItems="center" role="status" aria-live="polite">
               <CircularProgress size="sm" />
-              <Typography level="body-sm" textColor="text.tertiary">Loading plates…</Typography>
+              <Typography level="body-sm" textColor="text.tertiary">{initialLoadLabel}</Typography>
+              {projectOpenPhase === 'loading-file' && projectDownloadProgress && (
+                <Stack spacing={0.5} sx={{ width: { xs: 240, sm: 320 }, mt: 0.5 }}>
+                  <ProgressBar value={projectDownloadPercent} />
+                  <Typography level="body-xs" textColor="text.tertiary" textAlign="center">
+                    {formatBytes(projectDownloadProgress.loadedBytes)}
+                    {projectDownloadProgress.totalBytes != null
+                      ? ` of ${formatBytes(projectDownloadProgress.totalBytes)}`
+                      : ' downloaded'}
+                  </Typography>
+                </Stack>
+              )}
             </Stack>
           </Box>
         ) : (
@@ -10169,8 +10454,8 @@ function EditorView({
                       <ProgressSpinner size="md" value={buildProgressPercent} />
                       <Typography level="body-sm" textColor="common.white">
                         {buildProgress && buildProgress.total > 1
-                          ? `Loading models… ${buildProgress.done} of ${buildProgress.total}`
-                          : 'Loading models…'}
+                          ? `Building the 3D view… ${buildProgress.done} of ${buildProgress.total}`
+                          : 'Building the 3D view…'}
                       </Typography>
                     </Box>
                   </>
@@ -10196,13 +10481,13 @@ function EditorView({
                       <>
                         <ProgressSpinner size="md" value={buildProgressPercent} />
                         <Typography level="body-sm" textColor="common.white">
-                          Loading models… ({buildProgress.done}/{buildProgress.total})
+                          Building the 3D view… ({buildProgress.done}/{buildProgress.total})
                         </Typography>
                       </>
                     ) : (
                       <>
                         <CircularProgress size="md" />
-                        <Typography level="body-sm" textColor="common.white">Loading models…</Typography>
+                        <Typography level="body-sm" textColor="common.white">Building the 3D view…</Typography>
                       </>
                     )}
                   </Box>
@@ -10909,14 +11194,14 @@ function EditorView({
               disabled={!state || (sliceConfig != null && !hasMaterials)}
               dirty={hasUnsavedChanges}
               canSaveVersion={canSaveOverOpenProject}
-              onSaveVersion={handleSaveVersion}
+              onSaveVersion={startSaveVersion}
               onSaveAs={() => {
                 // Local: hand the name straight to the target, whose picker IS the destination
                 // prompt. Opening the library dialog here is what made a local project offer to save
                 // into a bridge it has nothing to do with.
                 // Empty name is fine: the local target falls back to the opened file's name as the
                 // picker's suggestion, which is a better default than anything derivable here.
-                if (savesToLocalFile) handleSaveAs(saveAsSuggestedName, null)
+                if (savesToLocalFile) startSaveAs(saveAsSuggestedName, null)
                 else setSaveAsOpen(true)
               }}
             />
@@ -11059,6 +11344,32 @@ function EditorView({
       </ModalDialog>
     </Modal>
 
+    <EditorPreparationDialog
+      action={slicePreparationError || (preparingSlice && !slicingProp)
+        ? 'slice'
+        : savePreparationError || preparingSave
+          ? 'save'
+          : null}
+      savePhase={savePreparationPhase}
+      slicePhase={preparationRecoveryMessage
+        ? 'recovery-required'
+        : preparingSave && savePreparationReconciling
+          ? 'reconciling'
+          : slicePreparationPhase}
+      finalizing={savePreparationFinalizing}
+      transferProgress={transferProgress}
+      recoveryMessage={preparationRecoveryMessage}
+      error={slicePreparationError ?? savePreparationError}
+      onCancel={cancelEditorPreparation}
+      onRetry={slicePreparationError
+        ? () => { startSlice(lastSlicePlateRef.current) }
+        : savePreparationError
+          ? retrySavePreparation
+          : undefined}
+      onRetryStatus={retryPreparationStatus}
+      onStopWaiting={stopCheckingPreparation}
+    />
+
     <EditorSettingsDialog
       open={editorSettingsOpen}
       onClose={() => setEditorSettingsOpen(false)}
@@ -11108,7 +11419,7 @@ function EditorView({
         error={null}
         confirmActionLabel={({ outputFolderId, rootDestinationLabel }) => outputFolderId ? 'Save here' : `Save to ${rootDestinationLabel}`}
         onClose={() => setSaveAsOpen(false)}
-        onSubmit={({ outputFileName, outputFolderId }) => { if (outputFileName) handleSaveAs(outputFileName, outputFolderId) }}
+        onSubmit={({ outputFileName, outputFolderId }) => { if (outputFileName) startSaveAs(outputFileName, outputFolderId) }}
       />
     )}
 

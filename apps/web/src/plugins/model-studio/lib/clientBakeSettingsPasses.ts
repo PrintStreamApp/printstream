@@ -36,6 +36,7 @@ import {
   type SceneEdit,
   firstProfileString
 } from '@printstream/shared'
+import { applyClientSliceSettings, type ClientSliceSettingsPass } from './clientSliceSettingsPass'
 
 /**
  * Run every requested pass over the baked archive, in the api's order.
@@ -56,6 +57,10 @@ export async function applyBakeSettingsPasses(
   edit: SceneEdit,
   passes: ClientBakeSettingsPasses
 ): Promise<void> {
+  if (passes.sliceTarget) {
+    await applyClientSliceSettings(output, edit, passes.sliceTarget)
+    return
+  }
   if (passes.filamentSettingOverrides) {
     await applyFilamentOverridesToEntries(output, passes.filamentSettingOverrides)
   }
@@ -71,6 +76,8 @@ export async function applyBakeSettingsPasses(
 }
 
 export interface ClientBakeSettingsPasses {
+  /** Exact engine input authoring. Mutually exclusive with the save-oriented passes below. */
+  sliceTarget?: ClientSliceSettingsPass
   /**
    * "Save this project for a different printer". Resolved against the settings the bake wrote,
    * because the plan's filament rebind targets are picked from the filament list it just authored.

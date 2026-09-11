@@ -8,7 +8,7 @@
  */
 import assert from 'node:assert/strict'
 import test, { afterEach } from 'node:test'
-import type { SaveArrangedThreeMf } from '@printstream/shared'
+import { buildBuiltinSlicingPresetId, type SaveArrangedThreeMf } from '@printstream/shared'
 import { createApiSaveTarget } from './editorSaveTarget'
 
 interface RecordedComplete {
@@ -121,6 +121,48 @@ test('a project name missing its extension still uploads as a 3MF', async () => 
   await target().persist(save({ mode: 'saveAs', name: 'Copy' }))
 
   assert.equal(completed[0]?.fileName, 'Copy.3mf')
+})
+
+test('a cancelled save stops before baking or uploading', async () => {
+  const abort = new AbortController()
+  abort.abort()
+
+  await assert.rejects(
+    () => target().persist(save(), { signal: abort.signal }),
+    (error: unknown) => error instanceof Error && error.name === 'AbortError'
+  )
+})
+
+test('cancelling save-time catalogue loading aborts the request and the save', async () => {
+  const abort = new AbortController()
+  let requestSignal: AbortSignal | null | undefined
+  let markRequested: (() => void) | undefined
+  const requested = new Promise<void>((resolve) => { markRequested = resolve })
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(typeof input === 'string' ? input : input.toString(), 'http://localhost')
+    if (url.pathname !== '/api/slicing/profiles') throw new Error(`unexpected request: ${url.pathname}`)
+    requestSignal = init?.signal
+    markRequested?.()
+    return await new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true })
+    })
+  }) as typeof fetch
+
+  const saving = target().persist(save({
+    retarget: {
+      mode: 'manualProfile',
+      printerModel: 'Bambu Lab H2D',
+      printerProfileId: buildBuiltinSlicingPresetId('machine', 'Bambu Lab H2D 0.4 nozzle')
+    }
+  }), { signal: abort.signal })
+  await requested
+  abort.abort()
+
+  await assert.rejects(
+    saving,
+    (error: unknown) => error instanceof Error && error.name === 'AbortError'
+  )
+  assert.equal(requestSignal, abort.signal)
 })
 
 test('a save against an existing project refuses to bake from a released archive', async () => {

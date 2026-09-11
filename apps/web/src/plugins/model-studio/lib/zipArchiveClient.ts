@@ -47,22 +47,40 @@ class WorkerUnavailableError extends Error {
  * (structured clone): zip entries can be views into a live open archive, and detaching those
  * buffers would corrupt the project they came from.
  */
-async function runViaWorker(request: ZipArchiveRequest, deadlineMs: number): Promise<ZipArchiveResponse & { ok: true }> {
+async function runViaWorker(
+  request: ZipArchiveRequest,
+  deadlineMs: number,
+  signal?: AbortSignal
+): Promise<ZipArchiveResponse & { ok: true }> {
+  signal?.throwIfAborted()
   if (typeof Worker === 'undefined') throw new WorkerUnavailableError()
   const worker = new Worker(new URL('./zipArchiveWorker.ts', import.meta.url), { type: 'module' })
   try {
     const response = await new Promise<ZipArchiveResponse>((resolve, reject) => {
-      const timer = setTimeout(
-        () => reject(new Error(`zip archive worker made no progress within ${deadlineMs}ms`)),
-        deadlineMs
-      )
-      worker.onmessage = (event: MessageEvent<ZipArchiveResponse>) => {
+      const cleanup = () => {
         clearTimeout(timer)
+        signal?.removeEventListener('abort', onAbort)
+      }
+      const onAbort = () => {
+        cleanup()
+        reject(signal?.reason ?? new DOMException('The operation was aborted.', 'AbortError'))
+      }
+      const timer = setTimeout(() => {
+        cleanup()
+        reject(new Error(`zip archive worker made no progress within ${deadlineMs}ms`))
+      }, deadlineMs)
+      worker.onmessage = (event: MessageEvent<ZipArchiveResponse>) => {
+        cleanup()
         resolve(event.data)
       }
       worker.onerror = (event) => {
-        clearTimeout(timer)
+        cleanup()
         reject(new Error(event.message || 'zip archive worker failed to load'))
+      }
+      signal?.addEventListener('abort', onAbort, { once: true })
+      if (signal?.aborted) {
+        onAbort()
+        return
       }
       worker.postMessage(request)
     })
@@ -98,14 +116,18 @@ export async function unzipArchiveBytes(bytes: Uint8Array): Promise<Record<strin
 /** Deflate entries to a zip archive, off the main thread when workers are available. */
 export async function zipArchiveEntries(
   entries: Record<string, Uint8Array>,
-  level: ZipCompressionLevel
+  level: ZipCompressionLevel,
+  signal?: AbortSignal
 ): Promise<Uint8Array> {
+  signal?.throwIfAborted()
   const totalBytes = Object.values(entries).reduce((sum, entry) => sum + entry.byteLength, 0)
   try {
-    const response = await runViaWorker({ op: 'zip', entries, level }, zipArchiveDeadlineMs(totalBytes))
+    const response = await runViaWorker({ op: 'zip', entries, level }, zipArchiveDeadlineMs(totalBytes), signal)
     if ('bytes' in response) return response.bytes
     throw new Error('zip archive worker returned the wrong response shape')
   } catch (error) {
+    signal?.throwIfAborted()
+    if (error instanceof Error && error.name === 'AbortError') throw error
     if (!shouldFallBack(error)) throw new Error(error instanceof Error ? error.message : String(error))
     return zipSync(entries, { level })
   }

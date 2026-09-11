@@ -13,6 +13,7 @@ import {
   mergeAllPlateOutputs,
   mergeModelSettingsXml,
   mergeSliceInfoXml,
+  resolveAllPlateExecutionModel,
   shouldUseAllPlateMergeFallback
 } from './all-plate-fallback.js'
 
@@ -21,6 +22,13 @@ test('shouldUseAllPlateMergeFallback only triggers for non-H2D all-plate package
   assert.equal(shouldUseAllPlateMergeFallback({ plate: 0, outputFileName: 'job.gcode.3mf', printerModel: 'H2D' }), false)
   assert.equal(shouldUseAllPlateMergeFallback({ plate: 1, outputFileName: 'job.gcode.3mf', printerModel: 'P1S' }), false)
   assert.equal(shouldUseAllPlateMergeFallback({ plate: 0, outputFileName: 'job.gcode', printerModel: 'P1S' }), false)
+})
+
+test('prepared slices keep the API printer model as an execution hint for all-plate fallback', () => {
+  const model = resolveAllPlateExecutionModel('P1S', null)
+  assert.equal(model, 'P1S')
+  assert.equal(shouldUseAllPlateMergeFallback({ plate: 0, outputFileName: 'job.gcode.3mf', printerModel: model }), true)
+  assert.equal(resolveAllPlateExecutionModel(null, 'H2D'), 'H2D')
 })
 
 test('extractPlateIdsFromModelSettingsXml returns ordered plate ids', () => {

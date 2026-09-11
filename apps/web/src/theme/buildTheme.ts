@@ -616,6 +616,11 @@ export function createAppTheme(palette: PrintStreamThemePalette) {
             maxWidth: 'calc(100vw - 24px)',
             backdropFilter: 'blur(10px)',
             WebkitBackdropFilter: 'blur(10px)',
+            // Joy sizes decorators independently per row, which can collapse later icon gutters.
+            // Pin every decorated menu row globally so hand-built and plugin menus cannot drift.
+            '& .MuiListItemDecorator-root': {
+              minInlineSize: 'var(--ListItemDecorator-size)'
+            },
             '& [role="menuitem"]': {
               minWidth: 0,
               maxWidth: '100%'

@@ -484,7 +484,17 @@ export type SliceFileSubmitInput = {
     processProfileId?: string | null
     processSettingOverrides?: Record<string, string | string[]>
     machineSettingOverrides?: Record<string, string | string[]>
-    filamentMappings?: Array<{ projectFilamentId: number; profileId?: string | null; material?: string | null; color?: string | null; source?: 'ams' | 'externalSpool' | 'manual'; trayId?: number | null }>
+    filamentSettingOverrides?: Record<string, string | string[]>
+    filamentMappings?: Array<{
+      projectFilamentId: number
+      profileId?: string | null
+      material?: string | null
+      color?: string | null
+      source?: 'ams' | 'externalSpool' | 'manual'
+      trayId?: number | null
+      toolheadId?: string | null
+      settingOverrides?: Record<string, string | string[]>
+    }>
   }
   outputFileName: string
   outputFolderId?: string | null
@@ -505,13 +515,13 @@ export type SliceFileSubmitInput = {
    */
   allowNewerProjectFile?: boolean
   /**
-   * A hidden staged row holding the ALREADY BAKED result of `sceneEdit`, sliced in its place.
+   * A hidden staged row holding the final browser-authored engine input.
    *
-   * How an editor slice reaches the slicer without saving the user's project: the browser bakes,
-   * stages the bytes, and names the row here. When set it replaces `sourceFileId` and suppresses
-   * `sceneEdit`/`contentBase`, since the bytes already contain the edit.
+   * How an editor slice reaches the slicer without saving the user's project. The request keeps
+   * the original source as lineage and names these bytes separately as `preparedSource`; every
+   * authoring input is suppressed because the prepared archive already contains it.
    */
-  stagedSourceFileId?: string | null
+  preparedSourceId?: string | null
 }
 
 /**
@@ -541,17 +551,19 @@ export function buildCreateSlicingJobBody(
   input: SliceFileSubmitInput,
   extras: CreateSlicingJobBodyExtras
 ): z.input<typeof createSlicingJobSchema> {
-  // A STAGED source is already the baked result of the edit, so it replaces the source file AND
-  // makes the edit redundant: sending both would ask the server to apply the edit a second time,
-  // over bytes that already contain it. Neither `sourceVersionId` nor `contentBase` means anything
-  // against it either, since there is no diff left to resolve a base for.
-  const staged = input.stagedSourceFileId ?? null
+  // A STAGED source is already the complete browser-authored engine input. Keep `sourceFileId` as
+  // lineage (the project this slice is ABOUT) and name the immutable bytes separately; replacing
+  // the source id made output placement, history, and project preservation point at the snapshot.
+  const staged = input.preparedSourceId ?? null
   return {
-    sourceFileId: staged ?? extras.sourceFileId,
-    sourceVersionId: staged ? undefined : extras.sourceVersionId ?? undefined,
+    sourceFileId: extras.sourceFileId,
+    sourceVersionId: extras.sourceVersionId ?? undefined,
+    preparedSource: staged ? { id: staged, contractVersion: 1 as const } : undefined,
     // Fixed here rather than per call site, exactly like `sceneEdit` above: the two travel
     // together or the edit is baked against the wrong bytes, and only this builder sees both.
-    contentBase: staged ? undefined : input.contentBase ?? undefined,
+    // A prepared snapshot already contains the edit, but the server still needs the pinned base
+    // identity to verify that the preparation proof belongs to the bytes this editor opened.
+    contentBase: input.contentBase ?? undefined,
     slicerTargetId: input.slicerTargetId,
     allowNewerProjectFile: input.allowNewerProjectFile,
     target: input.target.mode === 'realPrinter'
@@ -565,6 +577,7 @@ export function buildCreateSlicingJobBody(
           processProfileId: input.target.processProfileId,
           processSettingOverrides: input.target.processSettingOverrides,
           machineSettingOverrides: input.target.machineSettingOverrides,
+          filamentSettingOverrides: input.target.filamentSettingOverrides,
           filamentMappings: input.target.filamentMappings
         }
       : {
@@ -577,6 +590,7 @@ export function buildCreateSlicingJobBody(
           processProfileId: input.target.processProfileId,
           processSettingOverrides: input.target.processSettingOverrides,
           machineSettingOverrides: input.target.machineSettingOverrides,
+          filamentSettingOverrides: input.target.filamentSettingOverrides,
           filamentMappings: input.target.filamentMappings
         },
     outputFileName: input.outputFileName,
@@ -587,20 +601,18 @@ export function buildCreateSlicingJobBody(
     // no slice entry point can forget it (see tabSession.ts).
     ownerClientId: readTabSessionId(),
     plate: input.plate,
-    selectedObjectIds: input.selectedObjectIds,
-    // Suppressed for a staged source for the same reason as `sceneEdit`: the browser baked them in,
+    selectedObjectIds: staged ? undefined : input.selectedObjectIds,
+    // Suppressed for a prepared source for the same reason as `sceneEdit`: the browser baked them in,
     // and sending them again would apply them TWICE. Worse than redundant, because removing the
     // edit flips the api's `!sceneEdit` guard and its object-customization pass applies the map
     // WITHOUT the re-key an edit-backed slice did, so an override on an object created by "Replace
     // with..." or an independent copy is written against a placeholder id the baked file never used.
     objectProcessOverrides: staged ? undefined : input.objectProcessOverrides,
-    // These two deliberately DO ride a staged slice, unlike the two above, and it is safe because
-    // `mergeCustomGcodePerLayer` REPLACES a plate's tool-change and pause tags when it is given
-    // edits for that plate (`editedChanges ? … : source.toolChanges`) rather than appending to
-    // them. So re-sending the set the bake already wrote reproduces the same XML. Sending them is
-    // what keeps a slice correct when the staged bytes are NOT edit-backed.
-    filamentChanges: input.filamentChanges,
-    pauses: input.pauses,
-    sceneEdit: staged ? undefined : input.sceneEdit
+    filamentChanges: staged ? undefined : input.filamentChanges,
+    pauses: staged ? undefined : input.pauses,
+    sceneEdit: staged ? undefined : input.sceneEdit,
+    // Output preview embedding happens after the engine returns, so it remains server-owned even
+    // though the same PNGs are already present in the prepared input archive.
+    plateThumbnails: staged ? input.sceneEdit?.plateThumbnails : undefined
   }
 }

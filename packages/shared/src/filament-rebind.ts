@@ -26,7 +26,7 @@
  * `apps/api/src/lib/save-retarget.ts`; this module never fetches.
  */
 import { canonicalBambuModelKey } from './bambu-model-keys.js'
-import { filamentKeyWidth, filamentVariantsPerSlot } from './variant-options.js'
+import { filamentKeyWidth, filamentVariantRowsPerSlot, filamentVariantsPerSlot, isFilamentVariantOption } from './variant-options.js'
 import { filamentIdForPresetName } from './repairs/filament-ids.js'
 import { filamentSettingsCatalog, FILAMENT_SETTING_KEYS, isFilamentIdentitySettingKey } from './filament-settings.js'
 import { FILAMENT_PRESET_DEFAULTS, FILAMENT_PRESET_OPTIONS } from './generated/preset-options.generated.js'
@@ -109,9 +109,7 @@ export function applyFilamentSlotOverrides(
   const positions = Object.keys(overridesByPosition).map(Number).filter((position) => Number.isInteger(position) && position >= 1 && position <= identityCount)
   if (positions.length === 0) return record
 
-  // Variants the PROJECT declares. How many columns a given key actually gets is decided per option
-  // below, this is only the ceiling for the ones that are variant-scoped.
-  const variantCount = filamentVariantsPerSlot(record, identityCount)
+  const variantRows = filamentVariantRowsPerSlot(record, identityCount)
 
   const next: Record<string, unknown> = { ...record }
   const recordedBySlot = new Map<number, Set<string>>()
@@ -122,11 +120,12 @@ export function applyFilamentSlotOverrides(
     }
   }
   for (const key of overriddenKeys) {
+    if (!variantRows && isFilamentVariantOption(key)) continue
     const existing = next[key]
-    // Stride for READING the existing array. Derived from its own length (a file written before this
-    // rule may still be uniformly widened), but never wider than the option can legitimately be.
-    const storedWidth = Array.isArray(existing) && existing.length % identityCount === 0 ? existing.length / identityCount : 1
-    const oldWidth = Math.min(storedWidth, filamentKeyWidth(key, variantCount))
+    const widths = variantRows
+      ? variantRows.map((rows) => filamentKeyWidth(key, rows))
+      : Array.from({ length: identityCount }, () => 1)
+    const offsets = widths.map((_width, slot) => widths.slice(0, slot).reduce((sum, width) => sum + width, 0))
     const columns: string[][] = []
     let complete = true
     for (let slot = 0; slot < identityCount; slot++) {
@@ -135,7 +134,7 @@ export function applyFilamentSlotOverrides(
       // variant count widened per-slot keys like `filament_density` to `slots x variants`, and since
       // `parseProjectFilaments` sizes the material list from the longest filament array, the project
       // reopened with N times the materials it has. See `variant-options.ts`.
-      const width = filamentKeyWidth(key, variantCount)
+      const width = widths[slot]!
       // Read the slot's OWN COLUMN VECTOR, not a single scalar. Collapsing the slot to column 0 and
       // then repeating it across the variants destroyed every later column: BambuStudio stores
       // genuinely different values per variant (`filament_max_volumetric_speed` is ["25","40"]:
@@ -143,7 +142,7 @@ export function applyFilamentSlotOverrides(
       // BambuStudio reported it as the user's own change.
       const existingColumn = (variant: number): string | null =>
         (Array.isArray(existing) || typeof existing === 'string'
-          ? scalarAt(existing, slot * oldWidth + variant) ?? (variant === 0 ? scalarAt(existing, slot) : null)
+          ? scalarAt(existing, offsets[slot]! + variant) ?? (variant === 0 ? scalarAt(existing, slot) : null)
           : null)
       const presetValue = slotConfigs[slot]?.[key]
       const column = (variant: number): string | null =>

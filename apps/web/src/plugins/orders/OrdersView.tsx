@@ -69,6 +69,7 @@ import {
   OrderDialog,
   TemplateDialog
 } from './components/OrderDialogs'
+import { ORDERS_LIST_QUERY_KEY, useOrderPrintCompletionSync } from './useOrderPrintCompletionSync'
 
 type SliceFlowSubmitInput = Parameters<ComponentProps<typeof SliceFileModal>['onSubmit']>[0]
 type SliceFlowSubmitAction = Parameters<ComponentProps<typeof SliceFileModal>['onSubmit']>[1]
@@ -140,6 +141,7 @@ export function OrdersView() {
   const permissions = authBootstrapQuery.data?.permissions ?? []
   const hasPermission = (permission: Permission) => !authEnabled || permissions.includes(permission)
   const canViewOrders = hasPermission(JOBS_VIEW_PERMISSION)
+  useOrderPrintCompletionSync(authBootstrapQuery.isSuccess && canViewOrders)
   const canViewLibrary = hasPermission(LIBRARY_VIEW_PERMISSION)
   const canViewPrinters = hasPermission(PRINTERS_VIEW_PERMISSION)
   const canManageOrders = hasPermission(PRINTS_DISPATCH_PERMISSION)
@@ -155,7 +157,7 @@ export function OrdersView() {
     enabled: authBootstrapQuery.isSuccess ? canReadOrdersPage : false
   })
   const ordersQuery = useQuery<OrderList>({
-    queryKey: ['orders'],
+    queryKey: ORDERS_LIST_QUERY_KEY,
     queryFn: ({ signal }) => apiFetch<OrderList>('/api/plugins/orders/orders', { signal }),
     enabled: authBootstrapQuery.isSuccess ? canReadOrdersPage : false
   })

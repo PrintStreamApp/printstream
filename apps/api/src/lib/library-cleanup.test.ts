@@ -1,7 +1,7 @@
 process.env.NODE_ENV = 'test'
 
 import assert from 'node:assert/strict'
-import { mkdir, rm, stat, utimes, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises'
 import { mkdtempSync } from 'node:fs'
 import path from 'node:path'
 import { tmpdir } from 'node:os'
@@ -11,7 +11,13 @@ import { restorePrismaMethodsAfterEach } from '../test-utils/prisma-stubs.js'
 const testRoot = mkdtempSync(path.join(tmpdir(), 'bambu-library-cleanup-test-'))
 process.env.LIBRARY_DIR = path.join(testRoot, 'library')
 
-const { pruneAbandonedUploadSessions, pruneHiddenLibraryFiles, prunePrintJobSnapshots, prunePrintJobThumbnails } = await import('./library-cleanup.js')
+const {
+  pruneAbandonedUploadSessions,
+  pruneExpiredLibraryUploadCompletions,
+  pruneHiddenLibraryFiles,
+  prunePrintJobSnapshots,
+  prunePrintJobThumbnails
+} = await import('./library-cleanup.js')
 const { rootPrisma } = await import('./prisma.js')
 const { resolveLibraryPath } = await import('./library-paths.js')
 const { getPrintJobThumbnailDir } = await import('./print-job-thumbnails.js')
@@ -21,6 +27,7 @@ const { getPrintJobSnapshotDir } = await import('./print-job-snapshots.js')
 // delegate into its mock), replacing the per-test try/finally restore blocks.
 restorePrismaMethodsAfterEach([
   [rootPrisma, 'libraryFile'],
+  [rootPrisma, 'libraryUploadCompletion'],
   [rootPrisma, 'printJob'],
   [rootPrisma, 'bridge']
 ])
@@ -209,6 +216,80 @@ test('pruneUnreferencedSlicedOutputs removes only stale slice-origin hidden rows
   assert.deepEqual(where.queueItems, { none: {} })
 })
 
+test('pruneUnreferencedProjectSnapshots leaves bytes when a selected row is reused before deletion', async () => {
+  const { pruneUnreferencedProjectSnapshots } = await import('./library-cleanup.js')
+  const originalLibraryFile = rootPrisma.libraryFile
+  const deletedBytes: string[] = []
+  let deleteWhere: Record<string, unknown> | null = null
+  Object.defineProperty(rootPrisma, 'libraryFile', {
+    configurable: true,
+    value: {
+      ...originalLibraryFile,
+      findMany: async () => [{
+        id: 'reused-project', workspaceId: 'workspace-1', snapshotKey: 'hash:reused.3mf', ownerBridgeId: null, storedPath: 'reused.3mf'
+      }],
+      // Simulates a proof/job being attached after findMany. The full conditional no longer matches.
+      deleteMany: async (args: { where: Record<string, unknown> }) => {
+        deleteWhere = args.where
+        return { count: 0 }
+      }
+    }
+  })
+
+  const result = await pruneUnreferencedProjectSnapshots({
+    deleteLibraryFileBytes: async (row) => { deletedBytes.push(row.storedPath) },
+    retainedPreparedSourceIds: () => []
+  })
+
+  assert.equal(result.removed, 0)
+  assert.deepEqual(deletedBytes, [])
+  const capturedDeleteWhere = deleteWhere as Record<string, unknown> | null
+  assert.equal(capturedDeleteWhere?.id, 'reused-project')
+  assert.deepEqual(capturedDeleteWhere?.jobs, { none: {} })
+  assert.ok(capturedDeleteWhere?.preparedSlicingSources)
+})
+
+test('snapshot recreation waits for cleanup byte deletion and its recreated bytes survive', async () => {
+  const { pruneUnreferencedProjectSnapshots } = await import('./library-cleanup.js')
+  const { snapshotMutationKey, snapshotMutationMutex } = await import('./print-file-snapshots.js')
+  const originalLibraryFile = rootPrisma.libraryFile
+  const storedPath = 'recreated.3mf'
+  const filePath = resolveLibraryPath(storedPath)
+  await writeFile(filePath, 'old')
+  let deletionStarted!: () => void
+  const deletionEntered = new Promise<void>((resolve) => { deletionStarted = resolve })
+  let releaseDeletion!: () => void
+  const deletionReleased = new Promise<void>((resolve) => { releaseDeletion = resolve })
+  Object.defineProperty(rootPrisma, 'libraryFile', {
+    configurable: true,
+    value: {
+      ...originalLibraryFile,
+      findMany: async () => [{
+        id: 'old-row', workspaceId: 'workspace-1', snapshotKey: 'hash:recreated.3mf', ownerBridgeId: null, storedPath
+      }],
+      deleteMany: async () => ({ count: 1 })
+    }
+  })
+
+  const pruning = pruneUnreferencedProjectSnapshots({
+    deleteLibraryFileBytes: async () => {
+      deletionStarted()
+      await deletionReleased
+      await rm(filePath, { force: true })
+    },
+    retainedPreparedSourceIds: () => []
+  })
+  await deletionEntered
+  const recreation = snapshotMutationMutex.run(
+    snapshotMutationKey('workspace-1', 'hash:recreated.3mf'),
+    async () => { await writeFile(filePath, 'new') }
+  )
+  releaseDeletion()
+  await Promise.all([pruning, recreation])
+
+  assert.equal(await readFile(filePath, 'utf8'), 'new')
+})
+
 test('pruneUnreferencedProjectSnapshots enforces "no job, no kept project"', async () => {
   // A slice preserves the project it handed the engine, but that is only worth keeping if the user
   // went on to start a print (or kept the sliced output). Snapshot rows are exempt from every other
@@ -224,11 +305,13 @@ test('pruneUnreferencedProjectSnapshots enforces "no job, no kept project"', asy
       ...originalLibraryFile,
       findMany: async (args: unknown) => {
         queries.push(args)
-        return [{ id: 'project-1', ownerBridgeId: 'bridge-1', storedPath: 'abc-part.3mf' }]
+        return [{
+          id: 'project-1', workspaceId: 'workspace-1', snapshotKey: 'hash:abc-part.3mf', ownerBridgeId: 'bridge-1', storedPath: 'abc-part.3mf'
+        }]
       },
-      delete: async (args: { where: { id: string } }) => {
+      deleteMany: async (args: { where: { id: string } }) => {
         deletedIds.push(args.where.id)
-        return { id: args.where.id }
+        return { count: 1 }
       }
     }
   })
@@ -237,7 +320,8 @@ test('pruneUnreferencedProjectSnapshots enforces "no job, no kept project"', asy
     const result = await pruneUnreferencedProjectSnapshots({
       deleteLibraryFileBytes: async (input: { storedPath: string }) => {
         deletedBytes.push(input.storedPath)
-      }
+      },
+      retainedPreparedSourceIds: () => ['prepared-live']
     })
 
     assert.equal(result.removed, 1)
@@ -255,6 +339,10 @@ test('pruneUnreferencedProjectSnapshots enforces "no job, no kept project"', asy
     assert.deepEqual(where.jobs, { none: {} })
     assert.deepEqual(where.slicedOutputs, { none: {} })
     assert.deepEqual(where.sourceProjectJobs, { none: {} })
+    const preparedRelation = where.preparedSlicingSources as { none: { OR: Array<Record<string, unknown>> } }
+    assert.equal(preparedRelation.none.OR.length, 2)
+    assert.deepEqual(preparedRelation.none.OR[1], { id: { in: ['prepared-live'] } })
+    assert.ok(preparedRelation.none.OR[0]?.expiresAt, 'a fresh staged proof protects the pre-enqueue gap')
   } finally {
     Object.defineProperty(rootPrisma, 'libraryFile', { configurable: true, value: originalLibraryFile })
   }
@@ -365,11 +453,14 @@ test('pruneAbandonedUploadSessions reaps stale .part/.json but keeps recently-to
   // An abandoned session whose files were last touched > 24h ago.
   const stalePart = path.join(uploadDir, 'stale.part')
   const staleMeta = path.join(uploadDir, 'stale.json')
+  const stalePendingMeta = path.join(uploadDir, 'stale.json.abcd-1234.tmp')
   await writeFile(stalePart, Buffer.from('partial bytes'))
   await writeFile(staleMeta, JSON.stringify({ id: 'stale' }))
+  await writeFile(stalePendingMeta, JSON.stringify({ id: 'stale' }))
   const old = new Date(Date.now() - (25 * 60 * 60 * 1000))
   await utimes(stalePart, old, old)
   await utimes(staleMeta, old, old)
+  await utimes(stalePendingMeta, old, old)
 
   // An in-flight session touched just now (its .json is rewritten on every chunk).
   const activePart = path.join(uploadDir, 'active.part')
@@ -382,6 +473,7 @@ test('pruneAbandonedUploadSessions reaps stale .part/.json but keeps recently-to
   assert.equal(result.removed, 1) // counted per .part removed
   await assert.rejects(stat(stalePart), /ENOENT/)
   await assert.rejects(stat(staleMeta), /ENOENT/)
+  await assert.rejects(stat(stalePendingMeta), /ENOENT/)
   // The active session is untouched.
   assert.ok((await stat(activePart)).isFile())
   assert.ok((await stat(activeMeta)).isFile())
@@ -390,4 +482,24 @@ test('pruneAbandonedUploadSessions reaps stale .part/.json but keeps recently-to
 test('pruneAbandonedUploadSessions is a no-op when the .uploads dir does not exist', async () => {
   const result = await pruneAbandonedUploadSessions()
   assert.equal(result.removed, 0)
+})
+
+test('pruneExpiredLibraryUploadCompletions sweeps expired receipts globally', async () => {
+  const now = new Date('2026-09-10T18:00:00.000Z')
+  let where: unknown
+  Object.defineProperty(rootPrisma, 'libraryUploadCompletion', {
+    configurable: true,
+    value: {
+      ...rootPrisma.libraryUploadCompletion,
+      deleteMany: async (args: { where: unknown }) => {
+        where = args.where
+        return { count: 2 }
+      }
+    }
+  })
+
+  const result = await pruneExpiredLibraryUploadCompletions(now)
+
+  assert.deepEqual(where, { expiresAt: { lt: now } })
+  assert.deepEqual(result, { removed: 2 })
 })

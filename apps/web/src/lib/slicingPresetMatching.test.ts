@@ -372,6 +372,8 @@ test('buildFilamentMappings attaches per-material setting overrides to the match
     { 1: { nozzle_temperature: ['255'] } } // only slot 1 has an override
   )
   assert.deepEqual(mappings[0]?.settingOverrides, { nozzle_temperature: ['255'] })
+  assert.equal(mappings[0]?.materialType, 'PETG')
+  assert.equal(mappings[0]?.material, 'Bambu PETG Basic')
   assert.equal(mappings[1]?.settingOverrides, undefined)
   assert.deepEqual(unresolved, [])
 })

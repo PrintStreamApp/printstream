@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { fetchPlateClearingStateFromUrl } from './plateClearing.js'
+import { fetchPlateClearingStateFromUrl, findClearablePlatePrinters } from './plateClearing.js'
 
 const TEST_URL = 'http://example.test/api/plugins/plate-clearing/state'
 
@@ -68,4 +68,35 @@ test('fetchPlateClearingState still throws for other server failures', async () 
       writable: true
     })
   }
+})
+
+test('findClearablePlatePrinters matches the per-card online and idle eligibility', () => {
+  const printers = [
+    { id: 'ready', name: 'Ready' },
+    { id: 'cleared', name: 'Cleared' },
+    { id: 'busy', name: 'Busy' },
+    { id: 'offline', name: 'Offline' },
+    { id: 'unknown', name: 'Unknown' }
+  ]
+  const status = (online: boolean, stage: string) => ({ online, stage }) as never
+
+  assert.deepEqual(
+    findClearablePlatePrinters(
+      printers,
+      {
+        ready: status(true, 'idle'),
+        cleared: status(true, 'idle'),
+        busy: status(true, 'printing'),
+        offline: status(false, 'idle')
+      },
+      {
+        ready: false,
+        cleared: true,
+        busy: false,
+        offline: false,
+        unknown: false
+      }
+    ),
+    [{ id: 'ready', name: 'Ready' }]
+  )
 })

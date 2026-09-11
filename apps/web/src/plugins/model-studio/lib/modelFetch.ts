@@ -37,6 +37,11 @@ export class ModelFetchStallError extends Error {
   }
 }
 
+export interface ModelFetchProgress {
+  loadedBytes: number
+  totalBytes: number | null
+}
+
 /**
  * Global cap on concurrent model downloads. The browser already limits connections per host
  * (~6 on HTTP/1.1), but for bridge-owned files each request fans out web -> API -> bridge, so
@@ -69,7 +74,13 @@ function releaseModelFetchSlot(): void {
 }
 
 /** One fetch attempt with both stall guards. Throws {@link ModelFetchStallError} on a stall. */
-async function fetchModelBytesOnce(url: string, init: RequestInit, stallMs: number, headersMs: number): Promise<Uint8Array> {
+async function fetchModelBytesOnce(
+  url: string,
+  init: RequestInit,
+  stallMs: number,
+  headersMs: number,
+  onProgress?: (progress: ModelFetchProgress) => void
+): Promise<Uint8Array> {
   const controller = new AbortController()
   const callerSignal = init.signal ?? undefined
   const onCallerAbort = () => controller.abort(callerSignal?.reason)
@@ -103,10 +114,15 @@ async function fetchModelBytesOnce(url: string, init: RequestInit, stallMs: numb
     arm(headersMs, 'headers')
     const response = await fetch(url, { ...init, signal: controller.signal })
     if (!response.ok) throw new Error(`Request failed (${response.status}).`)
+    const declaredTotal = Number.parseInt(response.headers.get('x-uncompressed-content-length') ?? '', 10)
+    const totalBytes = Number.isFinite(declaredTotal) && declaredTotal >= 0 ? declaredTotal : null
+    onProgress?.({ loadedBytes: 0, totalBytes })
     if (!response.body) {
       // No readable stream (e.g. a polyfilled environment): fall back to a single read.
       if (timer) clearTimeout(timer)
-      return new Uint8Array(await response.arrayBuffer())
+      const bytes = new Uint8Array(await response.arrayBuffer())
+      onProgress?.({ loadedBytes: bytes.length, totalBytes: totalBytes ?? bytes.length })
+      return bytes
     }
     const reader = response.body.getReader()
     const chunks: Uint8Array[] = []
@@ -118,6 +134,7 @@ async function fetchModelBytesOnce(url: string, init: RequestInit, stallMs: numb
       if (value) {
         chunks.push(value)
         total += value.length
+        onProgress?.({ loadedBytes: total, totalBytes })
       }
     }
     const out = new Uint8Array(total)
@@ -152,12 +169,13 @@ export async function fetchModelBytes(
   init: RequestInit = {},
   stallMs: number = MODEL_FETCH_STALL_MS,
   headersMs: number = MODEL_FETCH_HEADERS_MS,
-  attempts: number = MODEL_FETCH_ATTEMPTS
+  attempts: number = MODEL_FETCH_ATTEMPTS,
+  onProgress?: (progress: ModelFetchProgress) => void
 ): Promise<Uint8Array> {
   let lastError: unknown
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
-      return await fetchModelBytesOnce(url, init, stallMs, headersMs)
+      return await fetchModelBytesOnce(url, init, stallMs, headersMs, onProgress)
     } catch (error) {
       lastError = error
       const callerAborted = !!init.signal?.aborted

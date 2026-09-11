@@ -71,6 +71,7 @@ import {
   formatSlicingMetadataDisplay,
   formatSlicingProgress,
   getLatestSlicingProgressFrame,
+  getSlicingProgressPercent,
   getSlicingJobStatusLabel,
   isActiveSlicingJob,
   slicingStatusColor
@@ -1018,7 +1019,7 @@ function ActiveSlicingJobCard({
 }) {
   const [pending, setPending] = useState(false)
   const progressFrame = getLatestSlicingProgressFrame(job)
-  const progressPercent = progressFrame?.totalPercent ?? null
+  const progressPercent = getSlicingProgressPercent(job, progressFrame)
   const displayName = formatLibraryFileName(job.outputFileName ?? job.sourceFileName)
   const metadataLabel = formatSlicingMetadataDisplay(job.metadata)
 

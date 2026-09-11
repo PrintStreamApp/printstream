@@ -19,12 +19,14 @@ import { zipArchiveEntries } from './zipArchiveClient'
 import {
   decodePlateThumbnails,
   emptyThreeMfBakeSource,
+  isThreeMfModelEntryPath,
   planEditedThreeMf,
   plateThumbnailEntries,
   readThreeMfBakeSource,
   type ImportedObjectInput,
   type ThreeMfBakeOptions,
-  type ThreeMfBakeResult
+  type ThreeMfBakeResult,
+  weldModelEntryMeshes
 } from '@printstream/shared/three-mf'
 import type { SceneEdit } from '@printstream/shared'
 import { applyBakeSettingsPasses, type ClientBakeSettingsPasses } from './clientBakeSettingsPasses'
@@ -69,11 +71,14 @@ export async function bakeClientThreeMf(
   edit: SceneEdit,
   imports: ImportedObjectInput[] = [],
   options: ThreeMfBakeOptions = {},
-  settingsPasses: ClientBakeSettingsPasses = {}
+  settingsPasses: ClientBakeSettingsPasses = {},
+  signal?: AbortSignal
 ): Promise<ClientBakeOutput> {
+  signal?.throwIfAborted()
   const source = archive
     ? await readThreeMfBakeSource(async (entryPath) => archive.entryText(entryPath), edit)
     : emptyThreeMfBakeSource()
+  signal?.throwIfAborted()
   const plan = planEditedThreeMf(source, edit, imports, options)
 
   const encoder = new TextEncoder()
@@ -83,6 +88,7 @@ export async function bakeClientThreeMf(
     // Copy pass: every source entry survives unless a transform rewrites it, or returns null to
     // drop it (how a stale slice_info record is removed rather than carried forward).
     for (const entryPath of archive.entryNames()) {
+      signal?.throwIfAborted()
       const transform = plan.copy.transforms.get(entryPath)
       if (!transform) {
         const bytes = archive.entryBytes(entryPath)
@@ -95,10 +101,14 @@ export async function bakeClientThreeMf(
     // Appended entries never displace one the copy pass already wrote, a 3MF reader rejects an
     // archive with duplicate names, and the transform is the more specific answer for that entry.
     for (const extra of plan.copy.appendEntries) {
+      signal?.throwIfAborted()
       if (output[extra.name] === undefined) output[extra.name] = encoder.encode(extra.content)
     }
   } else {
-    for (const entry of plan.freshEntries ?? []) output[entry.name] = encoder.encode(entry.content)
+    for (const entry of plan.freshEntries ?? []) {
+      signal?.throwIfAborted()
+      output[entry.name] = encoder.encode(entry.content)
+    }
   }
 
   // The editor's own plate renders, written LAST so they replace whatever the base archive carried.
@@ -111,6 +121,19 @@ export async function bakeClientThreeMf(
 
   // Everything that rewrites the settings the bake just wrote, in the order that module owns.
   await applyBakeSettingsPasses(output, edit, settingsPasses)
+  signal?.throwIfAborted()
+
+  // Prepared slice snapshots bypass server-side content mutation. Heal legacy triangle-soup
+  // imports here so the uploaded archive has the same engine-ready geometry as the old server
+  // preparation path. Exact-coordinate welding is a no-op for current and Studio-authored meshes.
+  if (settingsPasses.sliceTarget) {
+    for (const [entryPath, bytes] of Object.entries(output)) {
+      signal?.throwIfAborted()
+      if (!isThreeMfModelEntryPath(entryPath)) continue
+      const welded = weldModelEntryMeshes(new TextDecoder().decode(bytes))
+      if (welded != null) output[entryPath] = encoder.encode(welded)
+    }
+  }
 
   // Judge the bake on what it WROTE, the same check the api runs after its own write
   // (`three-mf-scene-builder.ts`). This host needs it more, not less: the api can re-inspect a
@@ -124,13 +147,13 @@ export async function bakeClientThreeMf(
     console.warn(`[three-mf-bake] wrote a project with repairable settings defects: ${settingsRepairReasons.join(', ')}`)
   }
 
-  return { bytes: await deflateArchive(output), result: plan.result }
+  return { bytes: await deflateArchive(output, signal), result: plan.result }
 }
 
 /**
  * Deflate through the dedicated zip worker (bounded, always settles, a wedged save must surface
  * an error, never hang "Saving…"). Level 6 matches what BambuStudio writes.
  */
-function deflateArchive(entries: Record<string, Uint8Array>): Promise<Uint8Array> {
-  return zipArchiveEntries(entries, 6)
+function deflateArchive(entries: Record<string, Uint8Array>, signal?: AbortSignal): Promise<Uint8Array> {
+  return zipArchiveEntries(entries, 6, signal)
 }

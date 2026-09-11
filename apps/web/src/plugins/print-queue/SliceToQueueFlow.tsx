@@ -123,7 +123,7 @@ export function SliceToQueueFlow({
           printers={printersQuery.data.printers}
           trackingCopy={{
             title: 'Add to queue',
-            pendingText: 'This stays here until slicing is ready, then continues to the queue setup.',
+            pendingText: 'Queue setup will appear once slicing is ready.',
             readyText: 'Slicing finished. Opening the queue setup…'
           }}
           renderReady={(outputFile) => (

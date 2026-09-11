@@ -3,7 +3,7 @@
  * context menu. Reads the slot context defensively and launches the pressure-advance wizard for
  * that slot via the store (the menu unmounts on click, so the wizard is hosted elsewhere).
  */
-import { MenuItem } from '@mui/joy'
+import { ListItemDecorator, MenuItem } from '@mui/joy'
 import ScienceRoundedIcon from '@mui/icons-material/ScienceRounded'
 import { openSlotCalibration } from './slotCalibrationStore'
 
@@ -25,7 +25,8 @@ export function AmsSlotCalibrateMenuItem(props: Record<string, unknown>) {
         openSlotCalibration({ printerId, amsId, slotId, filamentType, label })
       }}
     >
-      <ScienceRoundedIcon /> Calibrate filament…
+      <ListItemDecorator><ScienceRoundedIcon /></ListItemDecorator>
+      Calibrate filament…
     </MenuItem>
   )
 }

@@ -290,6 +290,62 @@ test('the project records the Filament Track Switch machine it was sliced for', 
   }
 })
 
+test('runtime-only authoring preserves browser-authored settings and changes only the live switch fact', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'authoring-runtime-only-'))
+  try {
+    const projectPath = path.join(dir, 'part.3mf')
+    const browserAuthored = {
+      printer_settings_id: 'Browser machine',
+      print_settings_id: 'Browser process',
+      filament_settings_id: ['Browser filament'],
+      curr_bed_type: 'Textured PEI Plate',
+      layer_height: '0.12',
+      wall_loops: '5'
+    }
+    await writeProject(projectPath, browserAuthored)
+    let processResolveCalls = 0
+    let filamentResolveCalls = 0
+    slicerClient.resolveProcessConfig = (async () => {
+      processResolveCalls += 1
+      return { name: 'Server process', layer_height: '0.28' }
+    }) as typeof slicerClient.resolveProcessConfig
+    slicerClient.resolveFilamentConfig = (async () => {
+      filamentResolveCalls += 1
+      return { name: 'Server filament' }
+    }) as typeof slicerClient.resolveFilamentConfig
+
+    const authoredPath = await authorSliceSettingsIntoProject({
+      workspaceId: 'workspace-1',
+      slicerTargetId: 'bambustudio-2-7-1',
+      target: makeTarget({
+        processProfileId: buildBuiltinSlicingPresetId('process', 'Server process'),
+        processSettingOverrides: { wall_loops: '2' },
+        machineSettingOverrides: { nozzle_diameter: ['0.6'] },
+        filamentMappings: [{
+          projectFilamentId: 1,
+          source: 'manual',
+          profileId: buildBuiltinSlicingPresetId('filament', 'Server filament')
+        }],
+        plateType: 'Cool Plate'
+      }),
+      projectPath,
+      fileName: 'part.3mf',
+      hasFilamentTrackSwitch: true,
+      runtimeOnly: true
+    })
+
+    assert.ok(authoredPath)
+    assert.deepEqual(await readProjectSettings(authoredPath), {
+      ...browserAuthored,
+      has_filament_switcher: '1'
+    })
+    assert.equal(processResolveCalls, 0)
+    assert.equal(filamentResolveCalls, 0)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
 function makeTarget(overrides: Partial<Extract<SlicingTarget, { mode: 'manualProfile' }>>): SlicingTarget {
   return {
     mode: 'manualProfile',
@@ -323,4 +379,3 @@ async function writeProject(filePath: string, settings: Record<string, unknown>)
     zip.end()
   })
 }
-

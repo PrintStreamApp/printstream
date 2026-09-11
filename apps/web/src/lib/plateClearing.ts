@@ -7,7 +7,12 @@
  */
 import { useEffect } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { extractErrorMessage, wsEventSchema } from '@printstream/shared'
+import {
+  extractErrorMessage,
+  isPrinterIdleCompatibleStage,
+  wsEventSchema,
+  type PrinterStatus
+} from '@printstream/shared'
 import { buildApiUrl } from './apiUrl'
 import { usePluginCatalogQuery } from './pluginCatalogQuery'
 import { isPluginActiveByName } from './pluginSettings'
@@ -24,6 +29,22 @@ export interface PlateClearingStateResponse {
 
 export const PLATE_CLEARING_STATE_QUERY_KEY = ['plate-clearing', 'state'] as const
 const PLATE_CLEARING_PLUGIN_NAME = 'plate-clearing'
+
+/**
+ * Returns the printers whose uncleared plates can be confirmed from the dashboard now.
+ * Offline and active printers stay gated, matching the per-card action.
+ */
+export function findClearablePlatePrinters<T extends { id: string }>(
+  printers: readonly T[],
+  statuses: Readonly<Record<string, PrinterStatus>>,
+  clearedByPrinterId: Readonly<Record<string, boolean>>
+): T[] {
+  return printers.filter((printer) => {
+    if (clearedByPrinterId[printer.id] !== false) return false
+    const status = statuses[printer.id]
+    return status?.online === true && isPrinterIdleCompatibleStage(status.stage)
+  })
+}
 
 export function mergePlateClearingState(
   existing: PlateClearingStateResponse | undefined,
