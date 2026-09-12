@@ -87,10 +87,13 @@ jobs:
             fi
           fi
 
-          set +e
-          existing_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" --jq '.object.sha' 2>tag-error.txt)"
-          tag_status=$?
-          set -e
+          if existing_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" --jq '.object.sha' 2>tag-error.txt)"; then
+            tag_status=0
+          else
+            tag_status=$?
+            # gh can write the HTTP error body to stdout. It is not a tag object.
+            existing_sha=''
+          fi
           if [ "$tag_status" -ne 0 ] && ! grep -q '(HTTP 404)' tag-error.txt; then
             cat tag-error.txt >&2
             exit "$tag_status"
