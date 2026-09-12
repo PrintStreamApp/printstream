@@ -16,8 +16,8 @@
  *      which on arm64 runs bin/bambu-studio through `qemu-x86_64-static -L <sysroot>` (plus a
  *      per-slice headless weston + the cross-compiled GL shim for plate thumbnails).
  *
- * qemu-user-static, weston and the x86-64 cross compiler are baked into the arm64 devcontainer
- * image (.devcontainer/Dockerfile);
+ * qemu-user-static, weston and the x86-64 cross compiler are baked into the arm64 development
+ * image (`docker/dev/Dockerfile`);
  * everything heavy this script produces lands in the persistent slicer data volume, so it only
  * runs the downloads once. Every step is idempotent (skips populated outputs) and the wrapper +
  * targets manifest are rewritten on each run, so an existing data volume self-heals after a
@@ -67,7 +67,7 @@ if (process.arch === 'x64') {
 }
 
 if (!hasCommand('qemu-x86_64-static')) {
-  console.error('[setup-slicer-qemu] qemu-x86_64-static not found. Rebuild the arm64 devcontainer')
+  console.error('[setup-slicer-qemu] qemu-x86_64-static not found. Rebuild the arm64 development image')
   console.error('[setup-slicer-qemu] (it installs qemu-user-static + weston + the x86-64 cross compiler) or `apt-get install qemu-user-static`.')
   process.exit(1)
 }
@@ -168,13 +168,13 @@ function installWrapper() {
 function installGlShim() {
   if (!hasCommand('x86_64-linux-gnu-gcc')) {
     console.warn('[setup-slicer-qemu] x86_64-linux-gnu-gcc not found; sliced output will not get CLI-rendered plate thumbnails.')
-    console.warn('[setup-slicer-qemu] Rebuild the arm64 devcontainer (it installs the cross compiler + weston) to enable them.')
+    console.warn('[setup-slicer-qemu] Rebuild the arm64 development image (it installs the cross compiler + weston) to enable them.')
     return
   }
   execFileSync('x86_64-linux-gnu-gcc', ['-shared', '-fPIC', '-O2', '-o', GL_SHIM, GL_SHIM_SRC])
   if (!hasCommand('weston')) {
     console.warn('[setup-slicer-qemu] weston not found; the CLI\'s thumbnail GL needs a headless Wayland compositor.')
-    console.warn('[setup-slicer-qemu] Rebuild the arm64 devcontainer (it installs weston) to enable plate thumbnails.')
+    console.warn('[setup-slicer-qemu] Rebuild the arm64 development image (it installs weston) to enable plate thumbnails.')
   }
 }
 

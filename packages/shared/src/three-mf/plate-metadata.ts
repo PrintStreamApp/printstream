@@ -6,7 +6,7 @@
  * OWNS the per-plate key policy. `renderArrangedModelSettingsPlates` builds each plate block from
  * the `SceneEdit`, and `replaceModelSettingsPlates` deletes every source block before inserting
  * them, so any key the edit cannot express was silently discarded on EVERY save and every slice.
- * Our plate model carries four fields; BambuStudio's own writer emits nineteen
+ * Our plate model carries six settings (plus lock); BambuStudio's own writer emits nineteen
  * (`bbs_3mf.cpp:8082-8194`), and its importer reads all of them (`:4457-4655`).
  *
  * WHAT THAT COST. These are not cosmetic. `print_sequence` is per-plate print-by-object,
@@ -23,7 +23,7 @@
  *
  *  - CARRIED: settings the user made that THIS EDIT does not author and that no edit invalidates.
  *    `locked`, `print_sequence` (per-plate print-by-object) and `spiral_mode` (vase mode). The
- *    editor authors all three now, so the carry is the fallback for an edit that does not mention
+ *    editor authors these now, so the carry is the fallback for an edit that does not mention
  *    the key at all (an older client, a hand-built request) rather than the only source. An edit
  *    that says "same as global" says so with null, which is NOT the same as staying silent: the
  *    carry would put the source's value straight back over the user's choice. `authoredPlateKeys`
@@ -32,8 +32,8 @@
  *    filament INDICES. `filament_maps` / `filament_volume_maps` are the nozzle grouping;
  *    `filament_map_mode` goes with them or a plate is pinned to Manual with no map, which makes the
  *    engine fall back to the project-global map rather than to auto (`PartPlate.cpp:266-289`); and
- *    the print-sequence lists hold filament ids as their VALUES, which is why the project-level copy
- *    of the same key is re-keyed value-wise rather than remapped positionally.
+ *    the print-sequence lists hold filament ids as their VALUES. The editor authors those lists;
+ *    the carry remains only for older clients whose edit does not mention them.
  *  - NEVER CARRIED: `bed_type`. The engine prefers a plate's own value over the project-global
  *    `curr_bed_type` we author (`PartPlate.cpp:619-625`), so carrying a stale one silently outlives
  *    the user's change. It is now AUTHORED instead -- the editor models a per-plate bed type, so the
@@ -44,6 +44,7 @@
  */
 
 import { canonicalCurrBedType } from '../plate-types.js'
+import { serializeOtherLayerFilamentSequences } from '../plate-filament-sequence.js'
 import type { SceneEditPlate } from '../slicing.js'
 import { escapeXmlAttribute } from './xml-write.js'
 
@@ -82,7 +83,8 @@ const FILAMENT_SCOPED_PLATE_KEYS: ReadonlySet<string> = new Set([
  * puts the source's value straight back over the user's choice.
  */
 export function authoredPlateMetadata(
-  plate: Pick<SceneEditPlate, 'plateType' | 'printSequence' | 'spiralMode' | 'locked'>,
+  plate: Pick<SceneEditPlate,
+    'plateType' | 'printSequence' | 'firstLayerFilamentSequence' | 'otherLayerFilamentSequences' | 'spiralMode' | 'locked'>,
   options: { allowBedType: boolean }
 ): { entries: PlateMetadataEntry[]; keys: ReadonlySet<string> } {
   const entries: PlateMetadataEntry[] = []
@@ -96,6 +98,20 @@ export function authoredPlateMetadata(
     author('bed_type', canonicalCurrBedType(plate.plateType))
   }
   if (plate.printSequence !== undefined) author('print_sequence', plate.printSequence)
+  if (plate.firstLayerFilamentSequence !== undefined) {
+    author('first_layer_print_sequence', plate.firstLayerFilamentSequence?.join(' ') ?? null)
+  }
+  if (plate.otherLayerFilamentSequences !== undefined) {
+    keys.add('other_layers_print_sequence')
+    keys.add('other_layers_print_sequence_nums')
+    const serialized = plate.otherLayerFilamentSequences
+      ? serializeOtherLayerFilamentSequences(plate.otherLayerFilamentSequences)
+      : null
+    if (serialized) {
+      entries.push({ key: 'other_layers_print_sequence', rawValue: serialized.value })
+      entries.push({ key: 'other_layers_print_sequence_nums', rawValue: serialized.count })
+    }
+  }
   // `true`/`false`, matching what BambuStudio itself writes. Its `spiral_mode` line streams a bare
   // `getBool()` (`bbs_3mf.cpp:8376`), which looks like it would emit `1`/`0` -- but `std::boolalpha`
   // was inserted into the SAME stream by the `locked` line above it (`:8334`) and is sticky, and

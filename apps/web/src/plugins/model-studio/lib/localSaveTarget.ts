@@ -91,6 +91,32 @@ export function createLocalSaveTarget(options: LocalSaveTargetOptions): EditorSa
       return { id: saved.name, name: saved.name }
     },
 
-    exportBytes: bake
+    exportBytes: bake,
+
+    /** Bake the complete engine-ready project in the tab; the public job client uploads it later. */
+    async stageSnapshot(input, signal) {
+      signal?.throwIfAborted()
+      const archive = options.archive()
+      if (!archive) throw new Error('The open project is no longer available; reopen it and slice again.')
+      input.onPhase?.('applying')
+      const { bytes } = await bakeClientThreeMf(
+        archive,
+        input.sceneEdit,
+        await options.importStore.importsForBake(signal, importIdsReferencedBy(input.sceneEdit)),
+        input.objectProcessOverrides ? { objectProcessOverrides: input.objectProcessOverrides } : {},
+        {
+          stripHostScripts: true,
+          sliceTarget: {
+            target: input.target,
+            slicerTargetId: input.slicerTargetId,
+            resolvers: PUBLIC_RETARGET_RESOLVERS,
+            ...(signal ? { signal } : {})
+          }
+        },
+        signal
+      )
+      signal?.throwIfAborted()
+      return bytes
+    }
   }
 }

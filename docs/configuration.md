@@ -8,7 +8,7 @@ See `.env.dev.example` in the workspace root for local development and `.env.ser
 |---|---|---|
 | `API_PORT` | `4000` | API HTTP port. |
 | `NODE_ENV` | `development` | Runtime mode (`development` / `production` / `test`). The Compose stacks set `production`. |
-| `DATABASE_URL` | `postgresql://postgres:postgres@db:5432/printstream?schema=public` | Prisma PostgreSQL URL. The default expects the repo's Compose/devcontainer `db` service; use `localhost` or another host only if you run Postgres outside Compose. |
+| `DATABASE_URL` | `postgresql://postgres:postgres@db:5432/printstream?schema=public` | Prisma PostgreSQL URL. Devkit replaces this with the checkout's Compose database URL. |
 | `DATABASE_CONNECTION_LIMIT` | *(Prisma default: CPUs×2+1)* | Prisma connection-pool size for this process. Set it to match expected concurrency against the Postgres `max_connections` budget; the CPU-count default can bottleneck a busy single-process multi-workspace API. Appended to `DATABASE_URL` as `connection_limit`. |
 | `DATABASE_POOL_TIMEOUT` | *(Prisma default: 10s)* | Seconds a query waits for a free pooled connection before erroring (P2024). Appended to `DATABASE_URL` as `pool_timeout`. |
 | `DB_WAIT_TIMEOUT_MS` | `60000` | Max time `npm run dev:db` waits for Postgres to accept connections before failing. |
@@ -41,15 +41,28 @@ See `.env.dev.example` in the workspace root for local development and `.env.ser
 | `LIBRARY_RECYCLE_RETENTION_DAYS` | `30` | How long recycle-bin (soft-deleted) library files stay restorable before scheduled cleanup removes them permanently. |
 | `LIBRARY_UNREFERENCED_SLICE_RETENTION_HOURS` | `24` | How long unreferenced sliced outputs (never saved to the library or snapshotted for print history) are kept before cleanup removes them. |
 | `SLICER_SERVICE_URL` | *(unset)* | Optional URL for the standalone slicer container. Set to enable server-side slicing orchestration. Accepts a comma-separated list of identical slicer instances; slices are assigned to the least-busy instance and progress follows the instance that owns the job. |
-| `SLICER_SERVICE_TOKEN` | *(unset)* | Optional bearer token shared between the API and slicer container. Treat this as a secret. |
+| `SLICER_SERVICE_TOKEN` | *(unset)* | Bearer token shared between the API and slicer container. Required by the shipped server Compose deployment. Treat this as a secret. |
+| `SLICER_REQUIRE_AUTH` | `false` (`true` in server Compose) | Refuse slicer startup unless `SLICER_SERVICE_TOKEN` is set. Leave false only for an explicitly loopback-only standalone runtime. |
+| `SLICER_MAX_INPUT_BYTES` / `SLICER_MAX_INFLATED_BYTES` / `SLICER_MAX_ARCHIVE_ENTRIES` | `536870912` / `2147483648` / `4096` | Independent hostile-archive limits enforced by the slicer service before invoking its native engine. |
+| `SLICER_MAX_OUTPUT_BYTES` | `1073741824` | Maximum native output file size. The API may request a smaller per-job ceiling but cannot widen this limit. |
+| `SLICER_ENGINE_UID` / `SLICER_ENGINE_GID` | `1001` / `0` | Fallback Unix identity for non-job engine probes. Hostile jobs derive private high-numbered uids and gids from their server-issued ids, so concurrent engines cannot traverse files, signal processes, or inspect process state across jobs. |
+| `SLICER_MEMORY_LIMIT` / `SLICER_CPU_LIMIT` / `SLICER_PIDS_LIMIT` | `8g` / `4.0` / `512` | Server Compose resource ceilings for the native slicer container. |
+| `SLICER_WORK_LIMIT` | `4g` | Hard tmpfs ceiling for all disposable slicer work files in the server Compose deployment. This prevents native code from filling the host disk even by spreading output across many files. |
 | `SLICER_BIND_HOST` | `127.0.0.1` | Host interface for the published slicer port in Compose (`127.0.0.1` keeps it private to the server). |
 | `SLICER_BIND_PORT` | `4010` | Host port mapped to slicer container port `4010` in Compose. |
-| `SLICING_MAX_CONCURRENT_JOBS` | *(one per slicer URL)* | Maximum slicing jobs the API runs at once across all slicer instances. Defaults to the number of configured `SLICER_SERVICE_URL` entries. Raising it above that makes single instances run concurrent CLI slices, which contend on the shared per-target BambuStudio home dir; prefer adding instances instead. |
+| `SLICING_MAX_CONCURRENT_JOBS` | *(one per slicer URL)* | Maximum slicing jobs the API runs at once across all slicer instances. Defaults to the number of configured `SLICER_SERVICE_URL` entries. Each invocation has its own BambuStudio home, but concurrent native engines still contend for CPU and memory; prefer adding instances instead. |
 | `SLICING_MAX_QUEUED_JOBS` | `25` | Maximum number of queued slicing jobs waiting for a concurrency slot. |
 | `SLICING_REQUEST_TIMEOUT_MS` | `1800000` | Timeout for API-to-slicer requests. |
+| `PUBLIC_SLICING_ENABLED` | cloud: `true` | Enables anonymous slicing from `/3mf-editor` on the hosted cloud. The editor and its API routes are absent from self-hosted, native, and OSS deployments regardless of this value. |
+| `PUBLIC_SLICING_MAX_CONCURRENT_JOBS` | `1` (capped below total slicing concurrency in production) | Maximum anonymous slices running at once. Production always reserves at least one total slot for workspace work, so public slicing is unavailable there when only one slicing slot exists. Development may lend its single slot to the public editor because no competing users share that process. |
+| `PUBLIC_SLICING_MAX_QUEUED_JOBS` | `20` | Global cap covering incomplete uploads and queued anonymous slices. |
+| `PUBLIC_SLICING_MAX_QUEUED_JOBS_PER_IP` / `PUBLIC_SLICING_MAX_ACTIVE_JOBS_PER_IP` | `2` / `1` | Per-address anonymous upload, queue, and execution limits. Set `TRUST_PROXY` correctly before relying on client addresses behind a proxy. |
+| `PUBLIC_SLICING_MAX_INPUT_BYTES` / `PUBLIC_SLICING_MAX_INFLATED_BYTES` / `PUBLIC_SLICING_MAX_OUTPUT_BYTES` | `268435456` / `536870912` / `536870912` | Compressed input, inflated archive, and downloaded artifact limits for anonymous jobs. |
+| `PUBLIC_SLICING_MAX_RUNTIME_MS` | `1200000` | Maximum execution time for one anonymous slice. |
+| `PUBLIC_SLICING_UPLOAD_TTL_MINUTES` / `PUBLIC_SLICING_JOB_TTL_MINUTES` | `30` / `60` | Retention for abandoned uploads and completed or failed anonymous jobs. |
 | `SLICER_DEFAULT_TARGET_ID` | *(first installed target)* | Override the default slicer version shown in the slice dialog. Must match an `id` from the built-in target manifest (`/opt/printstream-slicers/targets.json`). |
 | `SLICER_ENABLE_PIPE_PROGRESS` | `true` | When `true`, append Bambu/Orca CLI `--pipe` progress JSON frames into slicing job output so the UI can render determinate progress updates. |
-| `SLICER_BAMBUSTUDIO_HOME_DIR` | under slicer work dir | Isolated home directory used when launching BambuStudio. Subdirectories are created per target id. |
+| `SLICER_BAMBUSTUDIO_HOME_DIR` | under slicer work dir | Base home used by non-job probes. Every slice invocation receives a fresh home inside its disposable job directory. |
 | `SLICER_BAMBUSTUDIO_DATA_DIR` | under slicer work dir | Persistent `--datadir` used for slicer presets and first-run state. Subdirectories are created per target id. |
 | `SLICER_KEEP_WORK_DIR` | `false` | Debugging aid: keep each slice job's work directory (the rewritten input 3MF and the materialized profiles the CLI loaded) instead of deleting it when the job ends. The work dirs are large and are never swept, so leave this off outside an investigation. |
 | `PRINT_JOB_THUMBNAIL_RETENTION_DAYS` | `90` | How long completed-job thumbnail PNGs and persisted final-frame snapshot JPGs are retained before scheduled cleanup removes them. |

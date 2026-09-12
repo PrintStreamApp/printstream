@@ -12,12 +12,12 @@ import { createReadStream, createWriteStream } from 'node:fs'
 import { access, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
+import { Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { spawn } from 'node:child_process'
 import { z } from 'zod'
 import {
   buildBuiltinSlicingPresetId,
-  createSlicingJobSchema,
   extractProfileMetadata,
   isDirectPrintableFileName,
   isProjectSlicingPresetId,
@@ -68,6 +68,12 @@ import { sanitizeBuiltinSlicerProfileJson } from './profile-json.js'
 import { isVisibleBambuStudioProfile } from './profile-visibility.js'
 import { getPublicSlicerTargets, getSlicerTargetRegistry, resolveSlicerTarget, type RuntimeSlicerTarget } from './slicer-targets.js'
 import { slicerInputPolicy } from './prepared-input-policy.js'
+import { assertNoSlicerHostScripts, validateSlicerInputArchive } from './input-archive-security.js'
+import {
+  engineProcessEnvironment,
+  engineProcessIdentity,
+  prepareEngineWritableDirectory
+} from './engine-process-security.js'
 
 const FALLBACK_MANUAL_MACHINE_PROFILE_ID = '__printstream-fallback-manual-machine__'
 const MAX_OUTPUT_LINES_HEADER_BYTES = 8 * 1024
@@ -365,6 +371,11 @@ app.post('/slice', async (request, response) => {
     response.status(400).json({ error: parsed.error.issues[0]?.message ?? 'Invalid slice payload' })
     return
   }
+  const declaredLength = Number(request.header('content-length'))
+  if (Number.isFinite(declaredLength) && declaredLength > env.SLICER_MAX_INPUT_BYTES) {
+    response.status(413).json({ error: 'Slice input exceeds the configured size limit.' })
+    return
+  }
   const registry = await getSlicerTargetRegistry()
   const slicerTarget = resolveSlicerTarget(registry, parsed.data.request.slicerTargetId ?? null)
   if (!slicerTarget) {
@@ -372,14 +383,22 @@ app.post('/slice', async (request, response) => {
     return
   }
 
-  const workDir = path.join(env.SLICER_WORK_DIR, parsed.data.jobId.replace(/[^a-zA-Z0-9_-]/g, '_') || randomUUID())
-  const bambuHomeDir = path.join(env.SLICER_BAMBUSTUDIO_HOME_DIR, slicerTarget.id)
+  const safeJobId = parsed.data.jobId.replace(/[^a-zA-Z0-9_-]/g, '_') || 'slice'
+  // A retry gets a new unguessable tree. Never reopen a directory a previously compromised native
+  // process could have populated with symlinks or deliberately inaccessible descendants.
+  const workDir = path.join(env.SLICER_WORK_DIR, `${safeJobId}-${randomUUID()}`)
+  // Every hostile project gets a fresh application home. No settings, caches, or plugin state can
+  // flow from one user's native-engine invocation into the next one.
+  const bambuHomeDir = path.join(workDir, 'runtime-home')
   const bambuConfigDir = path.join(bambuHomeDir, '.config')
   const bambuCacheDir = path.join(bambuHomeDir, '.cache')
-  const bambuDataDir = path.join(env.SLICER_BAMBUSTUDIO_DATA_DIR, slicerTarget.id)
+  const bambuDataDir = path.join(bambuHomeDir, '.local', 'share')
+  const jobTempDir = path.join(workDir, 'tmp')
   const inputPath = path.join(workDir, 'input.3mf')
-  const outputFileName = normalizeOutputFileName(parsed.data.request.outputFileName ?? buildDefaultOutputFileName(parsed.data.sourceFileName))
+  const requestedOutputName = 'outputFileName' in parsed.data.request ? parsed.data.request.outputFileName : undefined
+  const outputFileName = normalizeOutputFileName(requestedOutputName ?? buildDefaultOutputFileName(parsed.data.sourceFileName))
   const outputPath = path.join(workDir, outputFileName)
+  const maxOutputBytes = Math.min(parsed.data.maxOutputBytes ?? env.SLICER_MAX_OUTPUT_BYTES, env.SLICER_MAX_OUTPUT_BYTES)
   const outputLines: SlicingOutputLine[] = []
   activeSliceOutput.set(parsed.data.jobId, outputLines)
   // Abort the CLI if the API client genuinely disconnects before we finish responding (a real
@@ -415,18 +434,37 @@ app.post('/slice', async (request, response) => {
   try {
     appendStructuredOutput(outputLines, 'system', 'Receiving the project')
     await Promise.all([
-      mkdir(workDir, { recursive: true }),
-      mkdir(bambuConfigDir, { recursive: true }),
-      mkdir(bambuCacheDir, { recursive: true }),
-      mkdir(bambuDataDir, { recursive: true })
+      prepareEngineWritableDirectory(workDir, parsed.data.jobId),
+      prepareEngineWritableDirectory(bambuHomeDir, parsed.data.jobId),
+      prepareEngineWritableDirectory(bambuConfigDir, parsed.data.jobId),
+      prepareEngineWritableDirectory(bambuCacheDir, parsed.data.jobId),
+      prepareEngineWritableDirectory(bambuDataDir, parsed.data.jobId),
+      prepareEngineWritableDirectory(jobTempDir, parsed.data.jobId)
     ])
     const supportedFlags = await getSupportedCliFlags(slicerTarget, {
+      jobKey: parsed.data.jobId,
       bambuHomeDir,
       bambuConfigDir,
       bambuCacheDir,
       bambuDataDir
     })
-    await pipeline(request, createWriteStream(inputPath))
+    let receivedBytes = 0
+    const inputLimit = new Transform({
+      transform(chunk: Buffer, _encoding, callback) {
+        receivedBytes += chunk.byteLength
+        if (receivedBytes > env.SLICER_MAX_INPUT_BYTES) {
+          callback(new SliceInputLimitError())
+          return
+        }
+        callback(null, chunk)
+      }
+    })
+    await pipeline(request, inputLimit, createWriteStream(inputPath))
+    await validateSlicerInputArchive(inputPath, {
+      maxEntries: env.SLICER_MAX_ARCHIVE_ENTRIES,
+      maxInflatedBytes: env.SLICER_MAX_INFLATED_BYTES
+    })
+    await assertNoSlicerHostScripts(inputPath)
     const inputPolicy = slicerInputPolicy(parsed.data.request)
     appendStructuredOutput(
       outputLines,
@@ -445,7 +483,7 @@ app.post('/slice', async (request, response) => {
     })
     // A browser-prepared project is already the complete record of what this slice means. Do not
     // restamp the packaged result from request metadata after the engine has consumed that record.
-    const slicedArtifactMetadata = inputPolicy.rewriteRequestMetadata
+    const slicedArtifactMetadata = inputPolicy.rewriteRequestMetadata && 'sourceFileId' in parsed.data.request
       ? buildSlicedArtifactMetadata(parsed.data.request, parsed.data.profileFiles ?? [])
       : null
     appendStructuredOutput(outputLines, 'system', 'Starting the slicer')
@@ -473,6 +511,9 @@ app.post('/slice', async (request, response) => {
       bambuConfigDir,
       bambuCacheDir,
       bambuDataDir,
+      jobKey: parsed.data.jobId,
+      jobTempDir,
+      maxOutputBytes,
       signal: cliAbort.signal
     })
     appendStructuredOutput(outputLines, 'system', 'Collecting the sliced file')
@@ -497,6 +538,7 @@ app.post('/slice', async (request, response) => {
     }
     const info = await stat(outputPath)
     if (!info.isFile() || info.size <= 0) throw new Error('Slicer did not produce an output file')
+    if (info.size > maxOutputBytes) throw new SliceOutputLimitError()
     if (!isDirectPrintableFileName(outputFileName)) throw new Error('Slicer output must be .gcode or .gcode.3mf')
 
     // Try to read metadata from JSON export
@@ -535,7 +577,7 @@ app.post('/slice', async (request, response) => {
     if (tail) {
       console.error(`[slice ${parsed.data.jobId}] output tail:\n${tail}`)
     }
-    response.status(500).json({
+    response.status(error instanceof SliceInputLimitError || error instanceof SliceOutputLimitError ? 413 : 500).json({
       error: (error as Error).message || 'Slicing failed',
       output: outputLines
     })
@@ -544,6 +586,18 @@ app.post('/slice', async (request, response) => {
     // above (it must precede any await so a mid-slice cancel still triggers it). Nothing to do here.
   }
 })
+
+class SliceInputLimitError extends Error {
+  constructor() {
+    super('Slice input exceeds the configured size limit.')
+  }
+}
+
+class SliceOutputLimitError extends Error {
+  constructor() {
+    super('Slicer output exceeds the configured size limit.')
+  }
+}
 
 function readSliceEnvelope(request: Request): unknown {
   const header = request.header('x-printstream-slice-request')
@@ -586,6 +640,9 @@ async function runCli(input: {
   bambuConfigDir: string
   bambuCacheDir: string
   bambuDataDir: string
+  jobKey: string
+  jobTempDir: string
+  maxOutputBytes: number
   /** Aborted when the API client cancels the slice; kills the CLI child so the slot frees. */
   signal?: AbortSignal
 }): Promise<void> {
@@ -648,6 +705,7 @@ async function runCli(input: {
           XDG_CACHE_HOME: input.bambuCacheDir,
           XDG_DATA_HOME: input.bambuDataDir
         },
+        engineJobKey: input.jobKey,
         log: (message) => appendStructuredOutput(input.outputLines, 'system', message),
         signal: input.signal
       })
@@ -726,6 +784,9 @@ async function runCli(input: {
     bambuConfigDir: input.bambuConfigDir,
     bambuCacheDir: input.bambuCacheDir,
     bambuDataDir: input.bambuDataDir,
+    jobKey: input.jobKey,
+    jobTempDir: input.jobTempDir,
+    maxOutputBytes: input.maxOutputBytes,
     signal: input.signal
   })
 }
@@ -748,6 +809,9 @@ async function runMergedAllPlateFallback(input: {
   bambuConfigDir: string
   bambuCacheDir: string
   bambuDataDir: string
+  jobKey: string
+  jobTempDir: string
+  maxOutputBytes: number
   /** Client-cancel signal, forwarded to executeCli to kill the CLI child. */
   signal?: AbortSignal
 }): Promise<void> {
@@ -785,6 +849,9 @@ async function runMergedAllPlateFallback(input: {
       bambuConfigDir: input.bambuConfigDir,
       bambuCacheDir: input.bambuCacheDir,
       bambuDataDir: input.bambuDataDir,
+      jobKey: input.jobKey,
+      jobTempDir: input.jobTempDir,
+      maxOutputBytes: input.maxOutputBytes,
       signal: input.signal
     })
     await normalizeCliOutput({
@@ -854,6 +921,7 @@ async function recenterRepairedProjectForLargerBed(repairedPath: string, sourceP
 async function getSupportedCliFlags(
   slicerTarget: RuntimeSlicerTarget,
   directories: {
+    jobKey: string
     bambuHomeDir: string
     bambuConfigDir: string
     bambuCacheDir: string
@@ -865,15 +933,15 @@ async function getSupportedCliFlags(
 
   const helpText = await new Promise<string>((resolve, reject) => {
     const child = spawn(slicerTarget.cliPath, [...slicerTarget.cliArgsPrefix, '--help'], {
+      ...engineProcessIdentity(directories.jobKey),
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: {
-        ...process.env,
+      env: engineProcessEnvironment(process.env, {
         SLICER_APPDIR: slicerTarget.appDir ?? process.env.SLICER_APPDIR,
         HOME: directories.bambuHomeDir,
         XDG_CONFIG_HOME: directories.bambuConfigDir,
         XDG_CACHE_HOME: directories.bambuCacheDir,
         XDG_DATA_HOME: directories.bambuDataDir
-      }
+      })
     })
     let stdout = ''
     let stderr = ''
@@ -919,9 +987,13 @@ async function executeCli(input: {
   bambuConfigDir: string
   bambuCacheDir: string
   bambuDataDir: string
+  jobKey: string
+  jobTempDir: string
+  maxOutputBytes: number
   /** Aborted on client cancel; kills the CLI child so the slicer slot frees. */
   signal?: AbortSignal
 }): Promise<void> {
+  const jobTempDir = input.jobTempDir
   let progressPipePath: string | null = null
   let progressPipeReader: ReturnType<typeof createReadStream> | null = null
   const args = [...input.args]
@@ -946,7 +1018,7 @@ async function executeCli(input: {
     try {
       progressPipePath = path.join(path.dirname(input.outputPath), `${input.slicerTarget.id}-${randomUUID()}.pipe`)
       await rm(progressPipePath, { force: true })
-      await mkfifo(progressPipePath)
+      await mkfifo(progressPipePath, input.jobKey)
       progressPipeReader = createReadStream(progressPipePath, { encoding: 'utf8' })
       progressPipeReader.on('data', (chunk: string | Buffer) => {
         const text = String(chunk)
@@ -970,19 +1042,21 @@ async function executeCli(input: {
       let stderrCombined = ''
       let stdoutCombined = ''
       const child = spawn(input.slicerTarget.cliPath, [...input.slicerTarget.cliArgsPrefix, ...args], {
+        ...engineProcessIdentity(input.jobKey),
         // `detached` makes the child its own process-group leader so termination can
         // signal the whole group: the launcher runs the CLI with helper processes
         // (a per-slice weston; qemu on arm64) that a bare child.kill() would orphan.
         detached: true,
         stdio: ['ignore', 'pipe', 'pipe'],
-        env: {
-          ...process.env,
+        env: engineProcessEnvironment(process.env, {
           SLICER_APPDIR: input.slicerTarget.appDir ?? process.env.SLICER_APPDIR,
           HOME: input.bambuHomeDir,
           XDG_CONFIG_HOME: input.bambuConfigDir,
           XDG_CACHE_HOME: input.bambuCacheDir,
-          XDG_DATA_HOME: input.bambuDataDir
-        }
+          XDG_DATA_HOME: input.bambuDataDir,
+          TMPDIR: jobTempDir,
+          SLICER_MAX_FILE_BLOCKS: String(Math.ceil(input.maxOutputBytes / 512))
+        })
       })
       // Reset the stall clock to the moment the CLI actually starts.
       lastOutputAt = Date.now()
@@ -1181,9 +1255,12 @@ function buildCliArgs(input: {
   ])
 }
 
-async function mkfifo(pipePath: string): Promise<void> {
+async function mkfifo(pipePath: string, jobKey: string): Promise<void> {
   await new Promise<void>((resolve, reject) => {
-    const child = spawn('mkfifo', [pipePath], { stdio: 'ignore' })
+    const child = spawn('mkfifo', [pipePath], {
+      ...engineProcessIdentity(jobKey),
+      stdio: 'ignore'
+    })
     child.on('error', reject)
     child.on('close', (code) => {
       if (code === 0) resolve()
@@ -1442,7 +1519,7 @@ export async function prepareInputThreeMf(input: {
   slicerTarget: RuntimeSlicerTarget
   inputPath: string
   outputPath: string
-  request: z.infer<typeof createSlicingJobSchema>
+  request: z.infer<typeof sliceEnvelopeSchema>['request']
   profileFiles: SlicingPresetFile[]
   stripEmbeddedProfileRefs: boolean
   processSettingOverrides: Record<string, string | string[]>
@@ -1470,6 +1547,10 @@ export async function prepareInputThreeMf(input: {
       rewroteProjectSettings: false,
       manualFilamentMap
     }
+  }
+
+  if (!('sourceFileId' in input.request)) {
+    throw new Error('An unprepared public slicing request cannot be executed.')
   }
 
   const machineSwitchProfileName = input.profileFiles.find((profile) => profile.kind === 'machine')?.name ?? null
@@ -1616,7 +1697,7 @@ function deriveModelFromMachineName(name: string): string {
   return name.replace(/\s+\d+(?:\.\d+)?\s*nozzle.*$/i, '').trim() || name
 }
 
-function shouldStripEmbeddedProfileRefs(request: z.infer<typeof createSlicingJobSchema>): boolean {
+function shouldStripEmbeddedProfileRefs(request: z.infer<typeof sliceEnvelopeSchema>['request']): boolean {
   return request.target.mode === 'manualProfile' && request.target.printerProfileId === FALLBACK_MANUAL_MACHINE_PROFILE_ID
 }
 
@@ -2192,7 +2273,7 @@ const SLICE_MAX_HEADER_BYTES = 2 * 1024 * 1024
 /**
  * Remove leftover per-job scratch dirs under SLICER_WORK_DIR at startup. Each slice
  * normally rm's its own work dir when the response closes, but a slicer crash/restart
- * mid-slice orphans the dir: over time those fill the (shared) work volume. At boot no
+ * mid-slice orphans the dir: over time those fill the bounded work filesystem. At boot no
  * slice is in flight, so every job dir is an orphan and safe to delete. The persistent
  * BambuStudio home/data dirs (which live under the work dir in the default layout) are
  * preserved.
@@ -2267,6 +2348,9 @@ export function startSlicerServer(options: {
   port?: number
   background?: boolean
 } = {}): Promise<SlicerServerHandle> {
+  if (env.SLICER_REQUIRE_AUTH && !env.SLICER_SERVICE_TOKEN) {
+    return Promise.reject(new Error('SLICER_SERVICE_TOKEN is required when SLICER_REQUIRE_AUTH is enabled'))
+  }
   if (options.background ?? true) {
     void sweepStaleWorkDirs()
     void prewarmBuiltinProfiles()

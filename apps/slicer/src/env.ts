@@ -19,6 +19,14 @@ function positiveIntEnv(defaultValue: number) {
   }, z.coerce.number().int().positive().default(defaultValue))
 }
 
+function nonnegativeIntEnv(defaultValue: number) {
+  return z.preprocess((value) => {
+    if (typeof value !== 'string') return value
+    const trimmed = value.trim()
+    return trimmed.length === 0 ? undefined : trimmed
+  }, z.coerce.number().int().nonnegative().default(defaultValue))
+}
+
 function booleanEnv(defaultValue: boolean) {
   return z.preprocess((value) => {
     if (typeof value === 'boolean') return value
@@ -38,6 +46,18 @@ const envSchema = z.object({
   SLICER_CLI_PATH: optionalStringEnv(),
   SLICER_CLI_ARGS_TEMPLATE: z.string().default('--slice {plate} --debug 2 --outputdir {outputDir} --min-save --export-3mf {outputFileName} --export-json {input} {input}'),
   SLICER_SERVICE_TOKEN: optionalStringEnv(),
+  /** Refuse startup without a bearer token. Enabled by the shipped server Compose deployment. */
+  SLICER_REQUIRE_AUTH: booleanEnv(false),
+  /** Maximum compressed project body accepted directly by POST /slice. */
+  SLICER_MAX_INPUT_BYTES: positiveIntEnv(512 * 1024 * 1024),
+  /** Maximum aggregate expanded bytes accepted before invoking the native engine. */
+  SLICER_MAX_INFLATED_BYTES: positiveIntEnv(2 * 1024 * 1024 * 1024),
+  SLICER_MAX_ARCHIVE_ENTRIES: positiveIntEnv(4_096),
+  /** Hard ceiling for any single native output file, even if a trusted caller asks for more. */
+  SLICER_MAX_OUTPUT_BYTES: positiveIntEnv(1024 * 1024 * 1024),
+  /** Fallback Unix identity for non-job engine probes when the service itself is root. */
+  SLICER_ENGINE_UID: positiveIntEnv(1_001),
+  SLICER_ENGINE_GID: nonnegativeIntEnv(0),
   /**
    * The shared Linux runtime closure an engine install needs, as a pinned
    * artifact. CONFIGURATION, never request input: this service downloads it and

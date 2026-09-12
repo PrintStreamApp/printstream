@@ -13,13 +13,14 @@
  * worker-owned, so their buffers transfer back zero-copy.
  */
 /// <reference lib="webworker" />
-import { unzipSync, zipSync } from 'fflate'
+import { zipSync } from 'fflate'
+import { boundedUnzipArchive, type ZipInflationLimits } from './boundedZipArchive'
 
 /** fflate's compression-level range. */
 export type ZipCompressionLevel = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9
 
 export type ZipArchiveRequest =
-  | { op: 'unzip'; bytes: Uint8Array }
+  | { op: 'unzip'; bytes: Uint8Array; limits: ZipInflationLimits }
   | { op: 'zip'; entries: Record<string, Uint8Array>; level: ZipCompressionLevel }
 
 export type ZipArchiveResponse =
@@ -38,7 +39,7 @@ ctx.onmessage = (event: MessageEvent<ZipArchiveRequest>) => {
   const request = event.data
   try {
     if (request.op === 'unzip') {
-      const entries = unzipSync(request.bytes)
+      const entries = boundedUnzipArchive(request.bytes, request.limits)
       ctx.postMessage({ ok: true, entries } satisfies ZipArchiveResponse, buffersOf(Object.values(entries)))
     } else {
       const bytes = zipSync(request.entries, { level: request.level })

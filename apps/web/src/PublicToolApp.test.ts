@@ -36,3 +36,14 @@ test('the public shell does not mount the workspace-only toast stacks', async ()
     assert.ok(!source.includes(workspaceOnly), `${workspaceOnly} needs a workspace`)
   }
 })
+
+test('the hosted tool keeps the shared header and footer inside its viewport shell', async () => {
+  const { source } = await readSourceFile(SHELL)
+  assert.match(source, /<PublicShell\s+contentMaxWidth="none"\s+fillViewport\s+footer=\{<PublicFooter\s*\/>\}/)
+  assert.match(source, /<PublicHeader\b/)
+})
+
+test('the shared public brand links back to the marketing home page', async () => {
+  const { source } = await readSourceFile('private/cloud/MarketingHomeHeader.tsx')
+  assert.match(source, /component=\{RouterLink\}[\s\S]*?to="\/"[\s\S]*?aria-label="PrintStream home"/)
+})

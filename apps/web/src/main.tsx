@@ -48,8 +48,9 @@ async function clearOldOriginState(): Promise<void> {
 // A cold load of a public marketing page must not show the app-boot splash ("Loading the app…"),
 // so dismiss it immediately and skip the boot-progress text: Root renders the light marketing
 // branch. Real app loads (and entering the app from marketing, see Root) keep/re-show the splash.
-// Public tools get the same treatment for the same reason: they render their own surface and never
-// wait on app bootstrap, so the "Loading the app…" splash would be a lie.
+// Cloud-only public tools get the same treatment for the same reason: they render their own surface
+// and never wait on app bootstrap, so the "Loading the app…" splash would be a lie. Their private
+// route manifest is empty in self-hosted, native, and OSS builds.
 const marketingColdLoad = isPublicToolPath(window.location.pathname)
   || (marketingRoutePaths.length > 0 && isMarketingPath(window.location.pathname))
 const bootProgress = (percent: number, status: string): void => {

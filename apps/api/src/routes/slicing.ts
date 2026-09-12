@@ -60,6 +60,7 @@ import { enqueueLibraryPrint } from '../lib/library-printing.js'
 import { discardHiddenSlicedOutput, unhideSlicedOutput } from '../lib/library-files.js'
 import { broadcastLibraryChanged, broadcastPrintDispatchChanged, broadcastSlicingPresetsChanged } from '../lib/ws-resource-events.js'
 import { createCustomSlicingPresets, deleteCustomSlicingPreset, listCustomSlicingPresetRecords, listCustomSlicingPresets, resolveSlicingPresetFiles, zipPresetBundle } from '../lib/slicing-presets.js'
+import { resolveWorkspaceSlicingTier } from '../lib/slicing-priority.js'
 
 export const slicingRouter = Router()
 
@@ -679,6 +680,7 @@ slicingRouter.post('/jobs', requireRequestPermission(LIBRARY_UPLOAD_PERMISSION),
   const job = slicingJobs.enqueue({
     workspaceId,
     workspace: request.workspace ?? { id: workspaceId, slug: workspaceId, name: workspaceId },
+    executionTier: await resolveWorkspaceSlicingTier(workspaceId),
     sourceFileId: sourceFile.id,
     sourceFileName: sourceEntry.name,
     sourcePath,

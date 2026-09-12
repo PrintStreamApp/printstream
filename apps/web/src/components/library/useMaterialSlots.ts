@@ -23,7 +23,7 @@
  * `useLocalSliceSettingsController.ts` (public host: browser presets, anonymous resolvers).
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { LibraryFile, SceneEditFilament, ThreeMfIndex } from '@printstream/shared'
+import type { LibraryFile, MixedFilamentConfig, SceneEditFilament, ThreeMfIndex } from '@printstream/shared'
 import type { SlicingPresetSummary } from '@printstream/shared'
 import {
   buildFilamentMappings,
@@ -91,6 +91,8 @@ export interface SessionFilamentSlot {
   pickedOptionId?: string
   pickedColor?: string
   pickedToolheadId?: string
+  /** Virtual mixed-slot recipe; null explicitly marks a physical slot in a mixed project. */
+  mixedFilament?: MixedFilamentConfig | null
 }
 
 /** The file's slots as a session list, each slot cloning the settings of the base slot it came from. */
@@ -100,7 +102,8 @@ function materialiseFrom(base: readonly SliceProjectFilament[]): SessionFilament
     sourceIndex: index,
     label: filament.label,
     color: filament.color,
-    nozzleId: filament.nozzleId
+    nozzleId: filament.nozzleId,
+    ...(filament.mixedFilament !== undefined ? { mixedFilament: filament.mixedFilament } : {})
   }))
 }
 
@@ -125,7 +128,8 @@ function adoptBase(base: readonly SliceProjectFilament[], previous: readonly Ses
       profileEdited: carried?.profileEdited,
       pickedOptionId: carried?.pickedOptionId,
       pickedColor: carried?.pickedColor,
-      pickedToolheadId: carried?.pickedToolheadId
+      pickedToolheadId: carried?.pickedToolheadId,
+      ...(filament.mixedFilament !== undefined ? { mixedFilament: filament.mixedFilament } : {})
     }
   })
 }
@@ -159,6 +163,7 @@ function slotsEqual(a: readonly SessionFilamentSlot[], b: readonly SessionFilame
       && slot.pickedOptionId === other.pickedOptionId
       && slot.pickedColor === other.pickedColor
       && slot.pickedToolheadId === other.pickedToolheadId
+      && JSON.stringify(slot.mixedFilament ?? undefined) === JSON.stringify(other.mixedFilament ?? undefined)
       && Boolean(slot.profileEdited) === Boolean(other.profileEdited)
       && JSON.stringify(slot.settingOverrides ?? null) === JSON.stringify(other.settingOverrides ?? null)
   })
@@ -301,6 +306,85 @@ export interface AddedMaterialChoice {
   toolheadId?: string
 }
 
+/** Complete virtual-slot edit from the mixed-material dialog. */
+export interface MixedMaterialChoice {
+  /** Existing virtual slot to replace; null appends a new one. */
+  projectFilamentId: number | null
+  color: string
+  type: string
+  mixedFilament: MixedFilamentConfig
+}
+
+/**
+ * Insert or replace one virtual mixed slot while retaining the first component's profile source.
+ * Existing physical slots gain explicit null metadata so deleting the final mix remains expressible.
+ */
+function upsertMixedFilamentSlot(
+  slots: readonly SessionFilamentSlot[],
+  choice: MixedMaterialChoice,
+  baseProjectFilaments: readonly SliceProjectFilament[]
+): SessionFilamentSlot[] {
+  const normalizedColor = normalizeSliceFilamentColor(choice.color)
+  const existingIndex = choice.projectFilamentId == null
+    ? -1
+    : slots.findIndex((slot) => slot.projectFilamentId === choice.projectFilamentId)
+
+  if (existingIndex >= 0) {
+    return slots.map((slot, index) => {
+      if (index !== existingIndex) {
+        return slot
+      }
+
+      return {
+        ...slot,
+        label: choice.type,
+        color: normalizedColor,
+        pickedColor: normalizedColor,
+        mixedFilament: choice.mixedFilament
+      }
+    })
+  }
+
+  const firstComponentId = choice.mixedFilament.componentIds[0]
+  const firstComponent = slots.find((slot) => slot.projectFilamentId === firstComponentId)
+
+  if (!firstComponent) {
+    return [...slots]
+  }
+
+  const maxId = Math.max(
+    0,
+    ...baseProjectFilaments.map((entry) => entry.projectFilamentId),
+    ...slots.map((entry) => entry.projectFilamentId)
+  )
+  const physicalSlots = slots.map((slot) => {
+    return slot.mixedFilament === undefined ? { ...slot, mixedFilament: null } : slot
+  })
+
+  return [...physicalSlots, {
+    projectFilamentId: maxId + 1,
+    sourceIndex: firstComponent.sourceIndex,
+    label: choice.type,
+    color: normalizedColor,
+    nozzleId: firstComponent.nozzleId,
+    pickedOptionId: firstComponent.pickedOptionId,
+    pickedColor: normalizedColor,
+    pickedToolheadId: firstComponent.pickedToolheadId,
+    mixedFilament: choice.mixedFilament
+  }]
+}
+
+/** Remap a virtual recipe from session ids to the positional ids the next saved file will use. */
+function remapMixedFilamentForSave(
+  mixedFilament: MixedFilamentConfig,
+  savedIdBySessionId: ReadonlyMap<number, number>
+): MixedFilamentConfig {
+  return {
+    ...mixedFilament,
+    componentIds: mixedFilament.componentIds.map((id) => savedIdBySessionId.get(id) ?? 0)
+  }
+}
+
 export interface MaterialSlots {
   /** Base slots minus removed, plus session-added: the full ordered list (session id space). */
   projectFilaments: SliceProjectFilament[]
@@ -319,6 +403,9 @@ export interface MaterialSlots {
   profileEditedFilamentIds: Set<number>
   /** Append a material slot from the choice the user confirmed in the add dialog. */
   handleAddFilament: (choice: AddedMaterialChoice) => void
+  /** Replace the whole project list from occupied AMS slots, preserving row ids for object links. */
+  handleSyncFilaments: (choices: AddedMaterialChoice[]) => void
+  handleUpsertMixedFilament: (choice: MixedMaterialChoice) => void
   handleRemoveFilament: (projectFilamentId: number) => void
   /** Move a slot to an insertion gap (0..N, between-tiles drag semantics). */
   handleReorderFilament: (fromIndex: number, insertAt: number) => void
@@ -390,7 +477,8 @@ export function useMaterialSlots(params: MaterialSlotsParams): MaterialSlots {
         label: slot.label,
         color: slot.color,
         nozzleId: slot.nozzleId,
-        usedOnSelectedPlate: usedByBaseId.get(slot.projectFilamentId) ?? true
+        usedOnSelectedPlate: usedByBaseId.get(slot.projectFilamentId) ?? true,
+        ...(slot.mixedFilament !== undefined ? { mixedFilament: slot.mixedFilament } : {})
       }))
     },
     [slotList, baseProjectFilaments]
@@ -579,6 +667,53 @@ export function useMaterialSlots(params: MaterialSlotsParams): MaterialSlots {
     })
   }, [projectFilaments, baseProjectFilaments])
 
+  const handleUpsertMixedFilament = useCallback((choice: MixedMaterialChoice) => {
+    setSessionOwned(true)
+    setSessionSlots((slots) => {
+      return upsertMixedFilamentSlot(slots, choice, baseProjectFilaments)
+    })
+  }, [baseProjectFilaments])
+
+  const handleSyncFilaments = useCallback((choices: AddedMaterialChoice[]) => {
+    if (choices.length === 0) {
+      return
+    }
+
+    // Process settings name slot POSITIONS. Remove tail rows from highest to lowest so the host's
+    // existing one-slot remapper can safely update every reference without a second bulk algorithm.
+    for (let index = sessionSlots.length - 1; index >= choices.length; index -= 1) {
+      onFilamentRemoved?.(index + 1)
+    }
+
+    setSessionOwned(true)
+    setSessionSlots((slots) => {
+      const maxId = Math.max(
+        0,
+        ...baseProjectFilaments.map((entry) => entry.projectFilamentId),
+        ...slots.map((entry) => entry.projectFilamentId)
+      )
+      const carriedMixedMetadata = slots.some((slot) => slot.mixedFilament !== undefined)
+
+      return choices.map((choice, index): SessionFilamentSlot => {
+        const current = slots[index]
+        const color = normalizeSliceFilamentColor(choice.color)
+
+        return {
+          projectFilamentId: current?.projectFilamentId ?? maxId + index - slots.length + 1,
+          sourceIndex: current?.sourceIndex ?? (baseProjectFilaments.length > 0 ? 0 : null),
+          label: choice.label,
+          color,
+          nozzleId: current?.nozzleId ?? null,
+          pickedOptionId: choice.optionId,
+          pickedColor: color,
+          pickedToolheadId: choice.toolheadId,
+          profileEdited: true,
+          ...(carriedMixedMetadata ? { mixedFilament: null } : {})
+        }
+      })
+    })
+  }, [baseProjectFilaments, onFilamentRemoved, sessionSlots])
+
   const handleRemoveFilament = useCallback((projectFilamentId: number) => {
     // BambuStudio parity: a material can be removed even while a process setting references it:
     // the setting falls back to "Default" rather than the delete being refused. Those settings
@@ -717,13 +852,19 @@ export function useMaterialSlots(params: MaterialSlotsParams): MaterialSlots {
     // A session that never diverged bakes the base unchanged, so nothing moved.
     if (!sessionOwned) return null
     const sourceRemap = buildFilamentSourceRemap(sessionSlots.map((slot) => slot.sourceIndex))
+    const savedIdBySessionId = new Map(sessionSlots.map((slot, index) => [slot.projectFilamentId, index + 1] as const))
     setSessionSlots((current) => current.map((slot, index) => ({
       ...slot,
       projectFilamentId: index + 1,
       // Slot i of the file we just wrote IS this slot, so that is what a later save clones from.
       sourceIndex: index,
       // The pick is baked into the saved file now, so it is no longer an edit pending against it.
-      profileEdited: undefined
+      profileEdited: undefined,
+      ...(slot.mixedFilament
+        ? {
+            mixedFilament: remapMixedFilamentForSave(slot.mixedFilament, savedIdBySessionId)
+          }
+        : {})
     })))
     setSessionOwned(false)
     return sourceRemap
@@ -760,7 +901,11 @@ export function useMaterialSlots(params: MaterialSlotsParams): MaterialSlots {
    * delta-save rule in `docs/slicer-architecture.md` (a "changed vs base" gate lost data twice).
    */
   const desiredFilaments = useMemo<SceneEditFilament[] | null>(() => {
-    if (sessionSlots.length === 0) return null
+    if (sessionSlots.length === 0) {
+      return null
+    }
+
+    const savedIdBySessionId = new Map(sessionSlots.map((slot, index) => [slot.projectFilamentId, index + 1] as const))
     return sessionSlots.map((filament) => {
       // A slot the file has no counterpart for (fresh add, or one an undo brought back after the
       // save that removed it) has nothing to clone, so the writer authors it from its preset. 0 is
@@ -795,7 +940,19 @@ export function useMaterialSlots(params: MaterialSlotsParams): MaterialSlots {
         // actually has that nozzle. A dual-nozzle project switched to a single-nozzle printer
         // otherwise carried nozzle 1 through (from the pick AND the baked value), which BambuStudio
         // reads out of bounds and SIGSEGVs on (exit 139). Null on single-nozzle machines.
-        nozzleId: clampNozzleId(parseSliceToolheadNozzleId(filamentToolheadIds[filament.projectFilamentId]) ?? filament.nozzleId ?? null, availableNozzleIds)
+        nozzleId: clampNozzleId(
+          parseSliceToolheadNozzleId(filamentToolheadIds[filament.projectFilamentId])
+            ?? filament.nozzleId
+            ?? null,
+          availableNozzleIds
+        ),
+        ...(filament.mixedFilament !== undefined
+          ? {
+              mixedFilament: filament.mixedFilament
+                ? remapMixedFilamentForSave(filament.mixedFilament, savedIdBySessionId)
+                : null
+            }
+          : {})
       }
     })
   }, [sessionSlots, baseProjectFilaments, materialOptions, filamentMaterialOptionIds, filamentColors, filamentToolheadIds, availableNozzleIds, filamentProfiles])
@@ -825,6 +982,8 @@ export function useMaterialSlots(params: MaterialSlotsParams): MaterialSlots {
     filamentSettingOverridesById, setFilamentSettingOverridesById,
     profileEditedFilamentIds,
     handleAddFilament,
+    handleSyncFilaments,
+    handleUpsertMixedFilament,
     handleRemoveFilament,
     handleReorderFilament,
     handleMaterialOptionChange,

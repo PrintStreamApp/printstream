@@ -80,7 +80,7 @@ export interface EditorSaveTarget {
    * @returns the staged file's id.
    * @throws AbortError when the caller cancels before staging commits.
    */
-  stageSnapshot?(input: StageSnapshotInput, signal?: AbortSignal): Promise<string>
+  stageSnapshot?(input: StageSnapshotInput, signal?: AbortSignal): Promise<string | Uint8Array>
   /**
    * True when a save lands in the library, so the caller should invalidate library queries and tell
    * the slice controller to rebase its material overlay. False for a local file.
@@ -101,8 +101,8 @@ export interface EditorSaveTarget {
  */
 export interface StageSnapshotInput {
   sceneEdit: SceneEdit
-  sourceFileId: string
-  configurationBaseFileId: string
+  sourceFileId: string | null
+  configurationBaseFileId: string | null
   configurationBaseVersionId: string | null
   objectProcessOverrides?: Record<string, Record<string, string | string[]>> | undefined
   /** The frozen target the host is about to submit with this prepared source. */
@@ -224,6 +224,9 @@ export function createApiSaveTarget(options: ApiSaveTargetOptions): EditorSaveTa
     },
 
     async stageSnapshot(input, signal) {
+      if (!input.sourceFileId || !input.configurationBaseFileId) {
+        throw new Error('The project source is no longer available; reopen it and slice again.')
+      }
       signal?.throwIfAborted()
       const archive = options.archive()
       if (!archive) {

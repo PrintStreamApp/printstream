@@ -25,6 +25,9 @@ import InventoryRoundedIcon from '@mui/icons-material/Inventory2Rounded'
 import { Printer3dRoundedIcon } from '../Printer3dRoundedIcon'
 import DeleteRoundedIcon from '@mui/icons-material/DeleteRounded'
 import OpacityRoundedIcon from '@mui/icons-material/OpacityRounded'
+import GradientRoundedIcon from '@mui/icons-material/GradientRounded'
+import SyncRoundedIcon from '@mui/icons-material/SyncRounded'
+import AccountTreeRoundedIcon from '@mui/icons-material/AccountTreeRounded'
 import DragIndicatorRoundedIcon from '@mui/icons-material/DragIndicatorRounded'
 import TuneRoundedIcon from '@mui/icons-material/TuneRounded'
 import SearchRoundedIcon from '@mui/icons-material/SearchRounded'
@@ -46,7 +49,7 @@ import type {
   SlicingPresetSummary,
   ThreeMfIndex
 } from '@printstream/shared'
-import { formatNozzleDiameterLabel, isProcessOptionVisibleInMode, machineSettingsCatalog } from '@printstream/shared'
+import { calcFlushVolumeFromColor, canonicalBambuModelKey, formatNozzleDiameterLabel, isProcessOptionVisibleInMode, machineSettingsCatalog, suggestProjectFlushVolumes } from '@printstream/shared'
 import { useNavigate } from 'react-router-dom'
 import { prioritizeLoadedMaterialOptionsForFilament } from '../../lib/sliceLoadedMaterialOptions'
 import type { PrinterTrayOption } from '../../lib/libraryViewHelpers'
@@ -75,7 +78,7 @@ const MachineSettingsDialog = lazy(() => import('../settings/MachineSettingsDial
 // every slice dialog and in both editor hosts, including the public one) for a dialog most sessions
 // never open.
 const SettingsSearchDialog = lazy(() => import('../settings/SettingsSearchDialog'))
-import type { AddedMaterialChoice, SessionFilamentSlot } from './useMaterialSlots'
+import type { AddedMaterialChoice, MixedMaterialChoice, SessionFilamentSlot } from './useMaterialSlots'
 import { machineOverridesCarriedWarning, machineTargetConflictWarnings } from '../../lib/machineSwitchWarnings'
 import { MaterialEditDialog } from './MaterialEditDialog'
 import { MaterialSwatchButton } from './MaterialSwatchButton'
@@ -88,6 +91,7 @@ import { StickySectionHeader } from './StickySectionHeader'
 import type { EmbeddedProjectPreset } from '@printstream/shared/three-mf'
 import { ProjectPresetsDialog } from './ProjectPresetsDialog'
 import { FlushVolumesDialog } from './FlushVolumesDialog'
+import { FilamentGroupingDialog, type GroupingFilament, type GroupingToolhead } from './FilamentGroupingDialog'
 import type { FlushGridFilament } from './FlushVolumesGrid'
 import type { FlushDatasets } from '../../plugins/model-studio/lib/flushDatasets'
 import { useFilamentChangedCount, useProcessChangedCount } from './useBakedPresetChanges'
@@ -97,6 +101,8 @@ import { LibraryPlateCardPicker } from '../LibraryPlateSelect'
 import { useEffectiveSlicerDeveloperMode } from '../../lib/slicerDeveloperMode'
 import { useSingleListReorderDrag } from '../../hooks/useListReorderDrag'
 import { ListReorderCaret } from '../ListReorderCaret'
+import { MixedFilamentDialog, type MixedFilamentComponentOption } from './MixedFilamentDialog'
+import { ConfirmActionDialog } from '../ConfirmActionDialog'
 
 /**
  * Stateful bridge from `SliceFileModal` to the shared `SliceSettingsPanel`.
@@ -305,6 +311,8 @@ export interface SliceSettingsController {
    */
   printerTrayMap: Map<number, PrinterTrayOption>
   materialToolheadOptions: ReturnType<typeof buildSliceDialogToolheads>
+  /** Ready FTS routing removes Convenience mode because either inlet can serve either nozzle. */
+  filamentTrackSwitchReady?: boolean
   filamentMaterialOptionIds: Record<number, string>
   filamentMaterialTypeFilters: Record<number, string>
   setFilamentMaterialTypeFilters: React.Dispatch<React.SetStateAction<Record<number, string>>>
@@ -333,6 +341,8 @@ export interface SliceSettingsController {
    */
   retargetTarget: SlicingManualProfileTarget | null
   onAddFilament: (choice: AddedMaterialChoice) => void
+  onSyncFilaments: (choices: AddedMaterialChoice[]) => void
+  onUpsertMixedFilament: (choice: MixedMaterialChoice) => void
   onRemoveFilament: (projectFilamentId: number) => void
   /**
    * Drag-reorder a material to an insertion gap (0..N, between-rows semantics: same conversion
@@ -540,12 +550,12 @@ export const SliceSettingsPanel = memo(function SliceSettingsPanel({ controller,
     settingsSearchKey, setSettingsSearchKey,
     machineSettingOverrides, setMachineSettingOverrides, machineOverridesModel, setMachineOverridesModel,
     hasPlateObjects, selectedSliceObjectIds, plateObjects, onToggleSliceObject, openSliceObjectSettings, plateGcode, perObjectSettings,
-    projectFilaments, materialOptions, loadedMaterialOptions, printerTrayMap, materialToolheadOptions,
+    projectFilaments, materialOptions, loadedMaterialOptions, printerTrayMap, materialToolheadOptions, filamentTrackSwitchReady,
     filamentMaterialOptionIds, filamentMaterialTypeFilters, setFilamentMaterialTypeFilters,
     filamentToolheadIds, setFilamentToolheadIds, filamentColors, setFilamentColors,
     filamentSettingOverridesById, openFilamentSettings,
     handleMaterialOptionChange,
-    onAddFilament, onRemoveFilament, onReorderFilament, filamentInUse, filamentSupportOnly, flushVolumes
+    onAddFilament, onSyncFilaments, onUpsertMixedFilament, onRemoveFilament, onReorderFilament, filamentInUse, filamentSupportOnly, flushVolumes
   } = controller
   // Local, unlike the process/material dialogs whose open-state rides the controller: this one
   // edits a stored preset and emits nothing, so no host or controller has a stake in it.
@@ -660,8 +670,75 @@ export const SliceSettingsPanel = memo(function SliceSettingsPanel({ controller,
   // compact swatch row). Panel-local: both surfaces render their own panel instance.
   const [materialDialogFilamentId, setMaterialDialogFilamentId] = useState<number | null>(null)
   const [addingMaterial, setAddingMaterial] = useState(false)
+  // `undefined` is closed, null adds, and an id edits that existing virtual slot.
+  const [mixedFilamentTarget, setMixedFilamentTarget] = useState<number | null | undefined>(undefined)
+  const [syncAmsOpen, setSyncAmsOpen] = useState(false)
   const [projectPresetsOpen, setProjectPresetsOpen] = useState(false)
   const [flushVolumesOpen, setFlushVolumesOpen] = useState(false)
+  const [filamentGroupingOpen, setFilamentGroupingOpen] = useState(false)
+  const mixedComponentOptions = useMemo(
+    () => buildMixedFilamentComponentOptions({
+      projectFilaments,
+      materialOptions,
+      materialOptionIds: filamentMaterialOptionIds,
+      materialTypeFilters: filamentMaterialTypeFilters,
+      colors: filamentColors
+    }),
+    [filamentColors, filamentMaterialOptionIds, filamentMaterialTypeFilters, materialOptions, projectFilaments]
+  )
+
+  const editingMixedFilament = useMemo(
+    () => resolveEditingMixedMaterial({
+      targetId: mixedFilamentTarget,
+      projectFilaments,
+      colors: filamentColors,
+      materialTypeFilters: filamentMaterialTypeFilters
+    }),
+    [filamentColors, filamentMaterialTypeFilters, mixedFilamentTarget, projectFilaments]
+  )
+
+  const groupingFilaments = useMemo(
+    () => buildGroupingFilaments({
+      projectFilaments,
+      materialOptions,
+      loadedMaterialOptions,
+      materialOptionIds: filamentMaterialOptionIds,
+      colors: filamentColors,
+      settingOverridesById: filamentSettingOverridesById,
+      filamentSupportOnly,
+      flushVolumes
+    }),
+    [
+      filamentColors,
+      filamentMaterialOptionIds,
+      filamentSettingOverridesById,
+      filamentSupportOnly,
+      flushVolumes,
+      loadedMaterialOptions,
+      materialOptions,
+      projectFilaments
+    ]
+  )
+
+  const groupingToolheads = useMemo(
+    () => buildGroupingToolheads(materialToolheadOptions, selectedPrinterModel),
+    [materialToolheadOptions, selectedPrinterModel]
+  )
+
+  const groupingFlushMatrix = useMemo(
+    () => buildGroupingFlushMatrix({
+      groupingFilaments,
+      projectFilaments,
+      colors: filamentColors,
+      flushVolumes
+    }),
+    [filamentColors, flushVolumes, groupingFilaments, projectFilaments]
+  )
+  const amsSyncOptions = useMemo(() => loadedMaterialOptions
+    .filter((option) => option.source === 'ams' && option.trayId != null)
+    .sort((left, right) => (left.trayId ?? 0) - (right.trayId ?? 0)), [loadedMaterialOptions])
+  const syncWouldOrphanObject = projectFilaments.slice(amsSyncOptions.length)
+    .some((filament) => filamentInUse?.(filament.projectFilamentId) ?? false)
   // Whether the Materials header carries the project-presets action, which decides where the
   // `ml: 'auto'` push lives: with two actions it belongs on the FIRST of them, or both claim it and
   // the pair splits across the header.
@@ -1142,6 +1219,53 @@ export const SliceSettingsPanel = memo(function SliceSettingsPanel({ controller,
                 Flushing
               </Button>
             )}
+            {groupingToolheads && groupingFilaments.length > 1 && (
+              <Tooltip title="Group materials between nozzles">
+                <IconButton
+                  type="button"
+                  size="sm"
+                  variant="plain"
+                  color="neutral"
+                  aria-label="Filament grouping"
+                  onClick={() => setFilamentGroupingOpen(true)}
+                >
+                  <AccountTreeRoundedIcon />
+                </IconButton>
+              </Tooltip>
+            )}
+            {showMaterialEditing && targetMode === 'realPrinter' && amsSyncOptions.length > 0 && (
+              <Tooltip title={syncWouldOrphanObject
+                ? 'The AMS has fewer materials than this project uses. Reassign those objects before syncing.'
+                : 'Replace the project material list with the occupied AMS slots'}>
+                <span>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="plain"
+                    color="neutral"
+                    startDecorator={<SyncRoundedIcon />}
+                    disabled={syncWouldOrphanObject}
+                    onClick={() => setSyncAmsOpen(true)}
+                  >
+                    Sync AMS
+                  </Button>
+                </span>
+              </Tooltip>
+            )}
+            {showMaterialEditing && mixedComponentOptions.length >= 2 && (
+              <Tooltip title="Add mixed material">
+                <IconButton
+                  type="button"
+                  size="sm"
+                  variant="plain"
+                  color="neutral"
+                  aria-label="Add mixed material"
+                  onClick={() => setMixedFilamentTarget(null)}
+                >
+                  <GradientRoundedIcon />
+                </IconButton>
+              </Tooltip>
+            )}
             {showMaterialEditing && (loadedMaterialsForAdd.length > 0 ? (
               // Same two choices the row swatch offers, for the same reason: a material the printer
               // is already holding should not have to be named by hand.
@@ -1237,26 +1361,42 @@ export const SliceSettingsPanel = memo(function SliceSettingsPanel({ controller,
                         <DragIndicatorRoundedIcon fontSize="small" />
                       </Box>
                     )}
-                    <MaterialSwatchButton
-                      filamentIndex={filamentIndex}
-                      presetName={presetName}
-                      fullPresetName={selectedOption?.profileId ? selectedOption.material : null}
-                      colorName={colorName}
-                      color={normalizedColor}
-                      presetUnmatched={presetUnmatched}
-                      selectedMaterialOptionId={selectedOption?.id ?? null}
-                      loadedMaterials={loadedMaterialsForFilament.length > 0
-                        ? {
-                            groups: groupSliceMaterialOptionsByGroup(loadedMaterialsForFilament),
-                            trayMap: printerTrayMap,
-                            // Through the controller (not the picker Modal) so the editor's dirty
-                            // flag and undo see the pick without the materialEditListenerRef detour.
-                            onSelect: (option) => handleMaterialOptionChange(filament.projectFilamentId, option)
-                          }
-                        : null}
-                      onOpenMaterialDialog={() => setMaterialDialogFilamentId(filament.projectFilamentId)}
-                    />
-                    {materialToolheadOptions.length > 0 && (useToolheadButtonSet ? (
+                    {filament.mixedFilament ? (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="soft"
+                        color="neutral"
+                        startDecorator={(
+                          <Box sx={{ width: 18, height: 18, borderRadius: '50%', bgcolor: normalizedColor, border: '1px solid', borderColor: 'divider' }} />
+                        )}
+                        onClick={() => setMixedFilamentTarget(filament.projectFilamentId)}
+                        sx={{ justifyContent: 'flex-start', minWidth: 0 }}
+                      >
+                        Mixed {filament.label}
+                      </Button>
+                    ) : (
+                      <MaterialSwatchButton
+                        filamentIndex={filamentIndex}
+                        presetName={presetName}
+                        fullPresetName={selectedOption?.profileId ? selectedOption.material : null}
+                        colorName={colorName}
+                        color={normalizedColor}
+                        presetUnmatched={presetUnmatched}
+                        selectedMaterialOptionId={selectedOption?.id ?? null}
+                        loadedMaterials={loadedMaterialsForFilament.length > 0
+                          ? {
+                              groups: groupSliceMaterialOptionsByGroup(loadedMaterialsForFilament),
+                              trayMap: printerTrayMap,
+                              // Through the controller (not the picker Modal) so the editor's dirty
+                              // flag and undo see the pick without the materialEditListenerRef detour.
+                              onSelect: (option) => handleMaterialOptionChange(filament.projectFilamentId, option)
+                            }
+                          : null}
+                        onOpenMaterialDialog={() => setMaterialDialogFilamentId(filament.projectFilamentId)}
+                      />
+                    )}
+                    {!filament.mixedFilament && materialToolheadOptions.length > 0 && (useToolheadButtonSet ? (
                       <ButtonGroup
                         size="sm"
                         // Soft group with a solid selected button (the GizmoToolbar pattern).
@@ -1314,18 +1454,22 @@ export const SliceSettingsPanel = memo(function SliceSettingsPanel({ controller,
                         ))}
                       </Select>
                     ))}
-                    <FilamentTuneButton
-                      filamentIndex={filamentIndex}
-                      projectFilamentId={filament.projectFilamentId}
-                      selectedOption={selectedOption}
-                      slicerTargetId={selectedSlicerTargetIdForGuards}
-                      sourceFileId={file.id}
-                      resolveConfig={resolveFilamentConfig}
-                      overrides={filamentSettingOverridesById[filament.projectFilamentId] ?? {}}
-                      onOpen={() => openFilamentSettings(filament.projectFilamentId)}
-                    />
+                    {!filament.mixedFilament && (
+                      <FilamentTuneButton
+                        filamentIndex={filamentIndex}
+                        projectFilamentId={filament.projectFilamentId}
+                        selectedOption={selectedOption}
+                        slicerTargetId={selectedSlicerTargetIdForGuards}
+                        sourceFileId={file.id}
+                        resolveConfig={resolveFilamentConfig}
+                        overrides={filamentSettingOverridesById[filament.projectFilamentId] ?? {}}
+                        onOpen={() => openFilamentSettings(filament.projectFilamentId)}
+                      />
+                    )}
                     {showMaterialEditing && (() => {
-                      const inUse = filamentInUse?.(filament.projectFilamentId) ?? false
+                      const usedByMixedFilament = projectFilaments.some((candidate) =>
+                        candidate.mixedFilament?.componentIds.includes(filament.projectFilamentId))
+                      const inUse = (filamentInUse?.(filament.projectFilamentId) ?? false) || usedByMixedFilament
                       const supportOnly = filamentSupportOnly?.(filament.projectFilamentId) ?? false
                       const removeDisabled = projectFilaments.length <= 1 || inUse
                       // `inUse` covers OBJECT references only. A material used just by a process
@@ -1334,7 +1478,9 @@ export const SliceSettingsPanel = memo(function SliceSettingsPanel({ controller,
                       const removeTitle = projectFilaments.length <= 1
                         ? 'A project needs at least one material'
                         : inUse
-                          ? 'This material is used by an object: reassign it before removing'
+                          ? usedByMixedFilament
+                            ? 'This material is part of a mixed material: edit or remove that mix first'
+                            : 'This material is used by an object: reassign it before removing'
                           : supportOnly
                             ? 'Remove material: supports using it fall back to the default material'
                             : 'Remove material'
@@ -1521,6 +1667,67 @@ export const SliceSettingsPanel = memo(function SliceSettingsPanel({ controller,
           }}
         />
       )}
+      {groupingToolheads && filamentGroupingOpen && (
+        <FilamentGroupingDialog
+          open
+          filaments={groupingFilaments}
+          toolheads={groupingToolheads}
+          initialAssignments={filamentToolheadIds}
+          flushVolumes={groupingFlushMatrix}
+          slicerTargetId={selectedSlicerTargetIdForGuards}
+          sourceFileId={file.id}
+          resolveConfig={resolveFilamentConfig}
+          qualityAvailable={groupingToolheads[0].extruderType !== groupingToolheads[1].extruderType}
+          matchAvailable={!filamentTrackSwitchReady && groupingFilaments.some((filament) => Boolean(filament.loadedToolheadId))}
+          dynamicMapping={String(machineSettingOverrides.enable_filament_dynamic_map ?? '0') === '1'}
+          onClose={() => setFilamentGroupingOpen(false)}
+          onApply={(nextAssignments, dynamicMapping) => {
+            settingsEditListenerRef.current?.()
+            setFilamentToolheadIds((current) => ({ ...current, ...nextAssignments }))
+            const existingDynamicMapping = String(machineSettingOverrides.enable_filament_dynamic_map ?? '0') === '1'
+            if (dynamicMapping !== existingDynamicMapping) {
+              setMachineSettingOverrides((current) => ({
+                ...current,
+                enable_filament_dynamic_map: dynamicMapping ? '1' : '0'
+              }))
+              setMachineOverridesModel(selectedPrinterModel)
+            }
+            setFilamentGroupingOpen(false)
+          }}
+        />
+      )}
+      {mixedFilamentTarget !== undefined && (
+        <MixedFilamentDialog
+          key={mixedFilamentTarget ?? 'new'}
+          open
+          components={mixedComponentOptions}
+          editing={editingMixedFilament}
+          onClose={() => setMixedFilamentTarget(undefined)}
+          onApply={(choice) => {
+            onUpsertMixedFilament(choice)
+            // The engine's mixed-gradient path is gated by this process option. Enabling the
+            // visible gradient is the user's explicit choice, so author the matching process
+            // setting in the same undo step instead of saving a gradient the slicer ignores.
+            if (choice.mixedFilament.gradient) {
+              setProcessSettingOverrides((current) => ({ ...current, enable_mixed_color_sublayer: '1' }))
+            }
+            setMixedFilamentTarget(undefined)
+          }}
+        />
+      )}
+      <ConfirmActionDialog
+        open={syncAmsOpen}
+        title="Sync project materials with AMS?"
+        description={describeAmsSync(projectFilaments.length, amsSyncOptions.length)}
+        confirmLabel="Sync AMS"
+        color="primary"
+        confirmDecorator={<SyncRoundedIcon />}
+        onClose={() => setSyncAmsOpen(false)}
+        onConfirm={() => {
+          onSyncFilaments(amsSyncOptions.map(addedChoiceFromOption))
+          setSyncAmsOpen(false)
+        }}
+      />
       {hasProjectPresets && (
         <ProjectPresetsDialog
           open={projectPresetsOpen}
@@ -1578,4 +1785,287 @@ function FilamentTuneButton(props: {
       onClick={onOpen}
     />
   )
+}
+
+type ProjectFilament = SliceSettingsController['projectFilaments'][number]
+type FlushVolumeController = SliceSettingsController['flushVolumes']
+
+interface MixedComponentOptionInputs {
+  projectFilaments: ProjectFilament[]
+  materialOptions: SliceMaterialOption[]
+  materialOptionIds: Record<number, string>
+  materialTypeFilters: Record<number, string>
+  colors: Record<number, string>
+}
+
+interface EditingMixedMaterialInputs {
+  targetId: number | null | undefined
+  projectFilaments: ProjectFilament[]
+  colors: Record<number, string>
+  materialTypeFilters: Record<number, string>
+}
+
+/** Resolves the virtual slot being edited; new and stale targets both return null. */
+function resolveEditingMixedMaterial(
+  inputs: EditingMixedMaterialInputs
+): MixedMaterialChoice | null {
+  if (inputs.targetId == null) {
+    return null
+  }
+
+  const filament = inputs.projectFilaments.find(
+    (candidate) => candidate.projectFilamentId === inputs.targetId
+  )
+
+  if (!filament?.mixedFilament) {
+    return null
+  }
+
+  return {
+    projectFilamentId: filament.projectFilamentId,
+    color: normalizeSliceFilamentColor(
+      inputs.colors[filament.projectFilamentId] ?? filament.color
+    ),
+    type: inputs.materialTypeFilters[filament.projectFilamentId] ?? filament.label,
+    mixedFilament: filament.mixedFilament
+  }
+}
+
+/** Describes the destructive scope of replacing the project palette from the AMS. */
+function describeAmsSync(projectCount: number, amsCount: number): string {
+  const projectNoun = projectCount === 1 ? 'material' : 'materials'
+  const amsNoun = amsCount === 1 ? 'slot' : 'slots'
+
+  return `This replaces the project’s ${projectCount} ${projectNoun} with the ${amsCount} occupied AMS ${amsNoun}, in AMS order. Mixed materials are removed.`
+}
+
+/**
+ * Presents physical project filaments as candidates for a virtual mixed slot.
+ * Existing virtual slots are excluded because the slicer format only supports
+ * physical filaments as mixture components.
+ */
+function buildMixedFilamentComponentOptions(
+  inputs: MixedComponentOptionInputs
+): MixedFilamentComponentOption[] {
+  const options: MixedFilamentComponentOption[] = []
+
+  inputs.projectFilaments.forEach((filament, index) => {
+    if (filament.mixedFilament) {
+      return
+    }
+
+    const selectedOption = inputs.materialOptions.find(
+      (option) => option.id === inputs.materialOptionIds[filament.projectFilamentId]
+    )
+    const materialType = selectedOption?.materialType
+      ?? inputs.materialTypeFilters[filament.projectFilamentId]
+      ?? filament.label
+
+    options.push({
+      id: filament.projectFilamentId,
+      label: `Material ${index + 1}: ${selectedOption?.materialType ?? filament.label}`,
+      type: materialType,
+      color: normalizeSliceFilamentColor(
+        inputs.colors[filament.projectFilamentId] ?? filament.color
+      )
+    })
+  })
+
+  return options
+}
+
+interface GroupingFilamentInputs {
+  projectFilaments: ProjectFilament[]
+  materialOptions: SliceMaterialOption[]
+  loadedMaterialOptions: SliceMaterialOption[]
+  materialOptionIds: Record<number, string>
+  colors: Record<number, string>
+  settingOverridesById: Record<number, Record<string, string | string[]>>
+  filamentSupportOnly: SliceSettingsController['filamentSupportOnly']
+  flushVolumes: FlushVolumeController
+}
+
+/**
+ * Adapts editable project materials to the grouping solver's stable input.
+ * Virtual mixtures are intentionally omitted because only their physical
+ * components map to toolheads in the authored 3MF.
+ */
+function buildGroupingFilaments(inputs: GroupingFilamentInputs): GroupingFilament[] {
+  const filaments: GroupingFilament[] = []
+
+  inputs.projectFilaments.forEach((filament, index) => {
+    if (filament.mixedFilament) {
+      return
+    }
+
+    const selectedOption = inputs.materialOptions.find(
+      (option) => option.id === inputs.materialOptionIds[filament.projectFilamentId]
+    ) ?? null
+
+    filaments.push({
+      id: filament.projectFilamentId,
+      projectFilamentId: filament.projectFilamentId,
+      label: `Material ${index + 1}: ${selectedOption?.materialType ?? filament.label}`,
+      color: normalizeSliceFilamentColor(
+        inputs.colors[filament.projectFilamentId] ?? filament.color
+      ),
+      profileId: selectedOption?.profileId ?? null,
+      loadedToolheadId: findLoadedToolheadId(selectedOption, inputs.loadedMaterialOptions),
+      supportOnly: inputs.filamentSupportOnly?.(filament.projectFilamentId)
+        ?? inputs.flushVolumes?.context.filamentIsSupport[index]
+        ?? false,
+      overrides: inputs.settingOverridesById[filament.projectFilamentId] ?? {}
+    })
+  })
+
+  return filaments
+}
+
+/**
+ * Resolves the nozzle that already carries a selected material. A directly
+ * selected tray wins; otherwise matching prefers preset identity and falls
+ * back to the visible material type and colour.
+ */
+function findLoadedToolheadId(
+  selectedOption: SliceMaterialOption | null,
+  loadedOptions: SliceMaterialOption[]
+): string | null {
+  if (selectedOption?.toolheadId) {
+    return selectedOption.toolheadId
+  }
+
+  const matchingLoadedOption = loadedOptions.find((loadedOption) => {
+    if (!loadedOption.toolheadId) {
+      return false
+    }
+
+    const sameProfile = Boolean(
+      selectedOption?.profileId
+      && loadedOption.profileId === selectedOption.profileId
+    )
+    const sameMaterialAndColor = Boolean(
+      selectedOption
+      && selectedOption.materialType === loadedOption.materialType
+      && normalizeSliceFilamentColor(selectedOption.color)
+        === normalizeSliceFilamentColor(loadedOption.color)
+    )
+
+    return sameProfile || sameMaterialAndColor
+  })
+
+  return matchingLoadedOption?.toolheadId ?? null
+}
+
+/**
+ * Describes a dual-toolhead printer in slicer-extruder order. X2D is the only
+ * supported model with different extruder types, and its Bowden side is the
+ * quality mode's preferred support extruder.
+ */
+function buildGroupingToolheads(
+  materialToolheads: SliceSettingsController['materialToolheadOptions'],
+  selectedPrinterModel: string
+): [GroupingToolhead, GroupingToolhead] | null {
+  if (materialToolheads.length !== 2) {
+    return null
+  }
+
+  const hasDifferentExtruderTypes = canonicalBambuModelKey(selectedPrinterModel) === 'X2D'
+  const mappedToolheads = materialToolheads.map((toolhead, printableBitIndex): GroupingToolhead => {
+    const usesBowdenExtruder = hasDifferentExtruderTypes && printableBitIndex === 1
+
+    return {
+      id: toolhead.id,
+      label: toolhead.label,
+      printableBitIndex,
+      nozzleFlow: toolhead.nozzleFlow,
+      extruderType: usesBowdenExtruder ? 'bowden' : 'direct',
+      preferSupport: usesBowdenExtruder
+    }
+  })
+
+  return [mappedToolheads[0]!, mappedToolheads[1]!]
+}
+
+interface GroupingFlushMatrixInputs {
+  groupingFilaments: GroupingFilament[]
+  projectFilaments: ProjectFilament[]
+  colors: Record<number, string>
+  flushVolumes: FlushVolumeController
+}
+
+/**
+ * Builds the pairwise purge cost used by the grouping solver. Stored or
+ * suggested per-extruder matrices are averaged; projects without purge context
+ * use the same colour formula as the flush-volume editor.
+ */
+function buildGroupingFlushMatrix(inputs: GroupingFlushMatrixInputs): number[][] | null {
+  if (inputs.groupingFilaments.length < 2) {
+    return null
+  }
+
+  if (!inputs.flushVolumes) {
+    return buildColorBasedGroupingFlushMatrix(inputs.groupingFilaments)
+  }
+
+  const blocks = inputs.flushVolumes.value?.matrix
+    ?? inputs.flushVolumes.context.storedBlocks
+    ?? suggestProjectFlushVolumes({
+      context: inputs.flushVolumes.context,
+      colors: inputs.projectFilaments.map((filament) => normalizeSliceFilamentColor(
+        inputs.colors[filament.projectFilamentId] ?? filament.color
+      )),
+      datasets: inputs.flushVolumes.datasets
+    })
+
+  const projectPositions = inputs.groupingFilaments.map((filament) => (
+    inputs.projectFilaments.findIndex(
+      (candidate) => candidate.projectFilamentId === filament.id
+    )
+  ))
+
+  return projectPositions.map((fromIndex) => (
+    projectPositions.map((toIndex) => averageFlushVolume(blocks, fromIndex, toIndex))
+  ))
+}
+
+/** Creates a purge-cost matrix when no engine or stored matrix is available. */
+function buildColorBasedGroupingFlushMatrix(filaments: GroupingFilament[]): number[][] {
+  const colors = filaments.map((filament) => groupingRgb(filament.color))
+
+  return colors.map((fromColor, fromIndex) => (
+    colors.map((toColor, toIndex) => {
+      if (fromIndex === toIndex) {
+        return 0
+      }
+
+      return calcFlushVolumeFromColor(fromColor, toColor, 0, null)
+    })
+  ))
+}
+
+/** Averages one transition across the printer's per-extruder purge matrices. */
+function averageFlushVolume(
+  blocks: number[][][],
+  fromIndex: number,
+  toIndex: number
+): number {
+  const values = blocks
+    .map((block) => block[fromIndex]?.[toIndex])
+    .filter((value): value is number => Number.isFinite(value))
+
+  if (values.length === 0) {
+    return 0
+  }
+
+  return values.reduce((sum, value) => sum + value, 0) / values.length
+}
+
+/** Parse the panel's normalized six-digit swatch for the formula-only grouping fallback. */
+function groupingRgb(color: string): { r: number; g: number; b: number } {
+  const normalized = normalizeSliceFilamentColor(color).replace(/^#/, '')
+  return {
+    r: Number.parseInt(normalized.slice(0, 2), 16),
+    g: Number.parseInt(normalized.slice(2, 4), 16),
+    b: Number.parseInt(normalized.slice(4, 6), 16)
+  }
 }

@@ -1,19 +1,13 @@
 #!/usr/bin/env node
 /**
- * Dev runner. Runs web/api/bridge/shared and the slicer in one place -- the workspace container
- * under the devcontainer, or the host machine directly (no sibling slicer container either way).
- *
- * Multi-checkout dev mode is an OPT-IN layer on top, provided by the shared `@ryanewen/devkit`
- * package and off unless the machine has a marker file outside the repo. When on, it gives each
- * checkout and worktree its own hostname, database and ports so several can run at once; when off
- * -- the devcontainer, CI, any fresh clone -- this file behaves exactly as it did without it. What
- * is PrintStream-specific about it (our ports, the env our servers read, the slicer checks) lives
- * in `devkit.config.mjs`; everything else is the package's.
+ * Dev runner. Devkit orchestrates this checkout's source-mounted Node, PostgreSQL, and slicer
+ * containers. Compose reinvokes this file with `--container-runtime` to prepare the database and
+ * run the web, API, bridge, shared, and optional in-process slicer watchers.
  *
  * Slicer:
  *   - **x86 / amd64 (the common case):** bootstrap the BambuStudio AppImage + profiles into a
  *     named volume (`scripts/dev/setup-slicer.mjs`, once) and run the slicer here under
- *     `tsx watch`, with the API pointed at `http://localhost:4010`.
+ *     `tsx watch`, with the API pointed at the configured local slicer port.
  *   - **arm64 (Windows on ARM / WSL, Apple silicon, etc.):** BambuStudio is x86-only, so bootstrap an x86-64 qemu emulation
  *     environment (`scripts/dev/setup-slicer-qemu.mjs`, once) and run the same slicer here under
  *     emulation. Slower than native but real, local slicing: no remote dependency.
@@ -38,11 +32,19 @@ import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { inheritWorktreeFiles, preflight, refreshBaselineAfterMigrations, removeRoute } from '@ryanewen/devkit'
+import {
+  checkoutCompose,
+  checkoutComposeLifecycle,
+  inheritWorktreeFiles,
+  preflight
+} from '@ryanewen/devkit'
+import { DEV_PORTS } from '../../devkit.config.mjs'
 import { assertHostDevPortsAvailable } from './dev-port-guard.mjs'
-import { inspectSlicerSource } from './slicer-image.mjs'
+import { inspectSlicerSource, slicerSourceFingerprint } from './slicer-image.mjs'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
+const containerRuntime = process.argv.includes('--container-runtime')
+const teardown = process.argv.includes('--down')
 
 // A linked worktree does not receive ignored files from Git. Devkit inherits the explicitly-listed
 // local config from the primary checkout before this runner tries to read it, without replacing a
@@ -58,16 +60,21 @@ await inheritWorktreeFiles({ repoRoot })
 // and host mode (which assigns further down) still wins over both.
 if (existsSync(path.join(repoRoot, '.env'))) process.loadEnvFile(path.join(repoRoot, '.env'))
 
-// Multi-checkout dev mode, if this machine opted into it. Returns null (touching nothing) for every
-// other setup -- the devcontainer, CI, and any clone without the marker -- so the rest of this file
-// behaves exactly as it did before devkit existed. See the package's config.mjs for the gate.
+// The host invocation obtains checkout-specific resources from Devkit. Compose reinvokes this
+// runner with `--container-runtime`, where those values are already present in the environment.
 let hostMode = null
-try {
-  hostMode = await preflight({ repoRoot })
-  await assertHostDevPortsAvailable(hostMode)
-} catch (error) {
-  console.error(`\n[dev] ${error.message}\n`)
-  process.exit(1)
+if (!containerRuntime) {
+  try {
+    hostMode = await preflight({ repoRoot, teardown })
+    if (!hostMode) {
+      console.error('\n[dev] Devkit is not enabled; run `npm run dev:bootstrap` once on this host.\n')
+      process.exit(1)
+    }
+    if (!teardown) await assertHostDevPortsAvailable(hostMode)
+  } catch (error) {
+    console.error(`\n[dev] ${error.message}\n`)
+    process.exit(1)
+  }
 }
 // Applied to the ambient environment rather than threaded through each spawn: the slicer data root
 // below, `npm run dev:db`, and the watchers all need it, and Node's `--env-file` does not override
@@ -79,15 +86,46 @@ const runLocalSlicer = !forceRemote
 const useQemuSlicer = runLocalSlicer && process.arch !== 'x64'
 const DATA_ROOT = process.env.SLICER_DATA_ROOT || '/home/node/.printstream-slicer'
 
-function runSync(command, args) {
-  const result = spawnSync(command, args, { stdio: 'inherit', cwd: repoRoot })
+function runSync(command, args, env = process.env) {
+  const result = spawnSync(command, args, { stdio: 'inherit', cwd: repoRoot, env })
   if (result.status !== 0) process.exit(result.status ?? 1)
 }
 
-// Pre-steps: db up + the two libs the apps import at boot.
-runSync('npm', ['run', 'dev:db'])
-runSync('npm', ['run', 'build', '--workspace', '@printstream/shared'])
-runSync('npm', ['run', 'build', '--workspace', '@printstream/bridge-runtime'])
+let composeInvocation = null
+let composeLifecycle = null
+let checkoutSlicerImage = null
+let checkoutSlicerSourceFingerprint = null
+if (hostMode) {
+  checkoutSlicerImage = `${hostMode.identity.composeProject}-slicer`
+  checkoutSlicerSourceFingerprint = slicerSourceFingerprint(repoRoot)
+  composeInvocation = checkoutCompose(hostMode, {
+    files: [path.join(repoRoot, 'compose.dev.yml')],
+    projectDirectory: repoRoot,
+    env: {
+      DEVKIT_WEB_PORT: String(hostMode.ports.web),
+      DEVKIT_COMPOSE_PROJECT: hostMode.identity.composeProject,
+      SLICER_IMAGE: checkoutSlicerImage,
+      SLICER_SOURCE_FINGERPRINT: checkoutSlicerSourceFingerprint || 'unknown',
+      HOST_UID: String(process.getuid?.() ?? 1000),
+      HOST_GID: String(process.getgid?.() ?? 1000)
+    }
+  })
+  composeLifecycle = checkoutComposeLifecycle(hostMode, composeInvocation, {
+    profiles: ['slicer']
+  })
+  if (teardown) {
+    process.exit(composeLifecycle.stop())
+  }
+} else {
+  if (containerRuntime) {
+    runSync('npm', ['run', 'db:wait'])
+    runSync('node', ['scripts/bootstrap-prisma-migrations.mjs'])
+  } else {
+    runSync('npm', ['run', 'dev:db'])
+  }
+  runSync('npm', ['run', 'build', '--workspace', '@printstream/shared'])
+  runSync('npm', ['run', 'build', '--workspace', '@printstream/bridge-runtime'])
+}
 
 let slicerEnv = {}
 if (runLocalSlicer) {
@@ -96,7 +134,7 @@ if (runLocalSlicer) {
   // One port for both halves: multi-checkout dev mode derives a per-checkout slicer port, and a
   // hardcoded URL here would point every checkout's API at the FIRST checkout's slicer (or at
   // nothing, when that one is not running).
-  const slicerPort = process.env.SLICER_PORT || '4010'
+  const slicerPort = process.env.SLICER_PORT || DEV_PORTS.slicer
   slicerEnv = {
     SLICER_SERVICE_URL: `http://localhost:${slicerPort}`,
     SLICER_TARGETS_FILE: path.join(DATA_ROOT, 'slicers', 'targets.json'),
@@ -119,17 +157,25 @@ if (runLocalSlicer) {
   // it did nothing rather than like it was never there). Only when the source is actually newer,
   // which costs a few hundred ms of docker inspect plus git to establish; the rebuild itself is
   // ~14s and layer-cached, and is skipped entirely on every start where nothing moved.
-  const slicerSource = inspectSlicerSource({ repoRoot })
-  if (slicerSource.state === 'differs') {
-    console.log(`[dev] slicer: rebuilding the container, your source is newer (${slicerSource.reason})`)
+  const slicerSource = inspectSlicerSource({
+    repoRoot,
+    composeProject: hostMode?.identity.composeProject,
+    imageRef: checkoutSlicerImage,
+    sourceFingerprint: checkoutSlicerSourceFingerprint
+  })
+  if (composeInvocation && ['differs', 'not-built'].includes(slicerSource.state)) {
+    const reason = slicerSource.state === 'differs'
+      ? `your source is newer (${slicerSource.reason})`
+      : 'this checkout has no slicer image yet'
+    console.log(`[dev] slicer: building the checkout container, ${reason}`)
     const rebuilt = spawnSync(
-      'docker',
-      ['compose', '-f', 'compose.dev.yml', '--profile', 'slicer', 'up', '-d', '--build', 'slicer'],
-      { stdio: 'inherit', cwd: repoRoot }
+      composeInvocation.command,
+      [...composeInvocation.args, '--profile', 'slicer', 'up', '-d', '--build', 'slicer'],
+      { stdio: 'inherit', cwd: repoRoot, env: composeInvocation.env }
     )
-    // Never fatal: a slicer that failed to rebuild still serves its old build, and taking the whole
-    // dev session down over it would be a worse trade than saying so and carrying on.
-    if (rebuilt.status !== 0) console.warn('[dev] slicer: rebuild FAILED; the container is still running its previous build')
+    // Never fatal: the API already treats an unavailable remote slicer as a service-level error.
+    // Keeping the rest of dev up leaves the web, API and bridge available while it is repaired.
+    if (rebuilt.status !== 0) console.warn('[dev] slicer: checkout container build FAILED; continuing without it')
   }
 }
 
@@ -151,6 +197,18 @@ if (hostMode) {
   console.log('')
 }
 
+if (composeLifecycle) {
+  try {
+    // Compose builds a declared image when it is absent. Existing images stay untouched here;
+    // the slicer-specific freshness check above is the one authority that requests a rebuild.
+    process.exit(await composeLifecycle.run(['up', '--remove-orphans']))
+  } catch (error) {
+    console.error(`[dev] could not start Docker Compose: ${error.message}`)
+    process.exit(1)
+  }
+}
+
+// Without Devkit, the foreground process group owns its own children and needs no Compose cleanup.
 const child = spawn(
   'npx',
   [
@@ -161,26 +219,4 @@ const child = spawn(
   ],
   { stdio: 'inherit', cwd: repoRoot, env: { ...process.env, ...slicerEnv } }
 )
-
-// After the watchers are up, not before: a schema change reaching the primary checkout is the
-// signal that every future checkout should start from newer data, but capturing it is worth no
-// delay to the session that triggered it. Best-effort by contract -- see devkit's preflight.mjs.
-if (hostMode) {
-  try {
-    refreshBaselineAfterMigrations(hostMode)
-  } catch (error) {
-    console.log(`[dev] baseline refresh skipped: ${error.message}`)
-  }
-}
-
-// The proxy route names a port that is about to stop being served. A leftover file cannot misroute
-// to another checkout (Traefik reports a bad gateway instead), so this is tidiness, not safety.
-process.on('exit', () => { if (hostMode) removeRoute(hostMode.config, hostMode.identity) })
-// Do NOT install a SIGINT/SIGTERM handler here. Ctrl-C already SIGINTs the whole foreground process
-// group, so `concurrently` and every service receive it directly and shut down on their own. If
-// run-dev instead CATCHES the signal (exits normally rather than terminating from it), the
-// `npm run dev` wrapper the shell is waiting on prints a stray blank line before returning the prompt,
-// regardless of how fast we then exit. Letting run-dev terminate with the signal keeps Ctrl-C clean.
-// We only relay concurrently's eventual exit code. (A previous "reliable shutdown" handler added that
-// blank line and a marker that raced the prompt; this is the deliberate revert. See git history.)
 child.on('exit', (code) => process.exit(code ?? 0))

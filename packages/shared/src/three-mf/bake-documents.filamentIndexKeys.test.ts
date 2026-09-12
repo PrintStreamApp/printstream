@@ -29,6 +29,55 @@ const reversed = [
   slot('PLA', 'Bambu PLA Basic', 0)
 ]
 
+test('mixed-filament component ids follow physical slots through a reorder', () => {
+  const after = JSON.parse(applyFilamentList(
+    project({
+      filament_is_mixed: ['0', '0', '1'],
+      filament_mixed_components: ['', '', '1,2'],
+      filament_mixed_sublayer_ratios: ['', '', '0.6,0.4']
+    }),
+    reversed
+  )) as Record<string, unknown>
+
+  assert.deepEqual(after.filament_is_mixed, ['1', '0', '0'])
+  assert.deepEqual(after.filament_mixed_components, ['3,2', '', ''])
+  assert.deepEqual(after.filament_mixed_sublayer_ratios, ['0.6,0.4', '', ''])
+})
+
+test('an authored mixed slot writes every parallel recipe array', () => {
+  const physical = (sourceIndex: number): SceneEditFilament => ({
+    ...slot('PLA', 'Bambu PLA Basic', sourceIndex),
+    mixedFilament: null
+  })
+  const after = JSON.parse(applyFilamentList(project({}), [
+    physical(0),
+    physical(0),
+    {
+      ...slot('PLA', 'Bambu PLA Basic', 0),
+      mixedFilament: {
+        componentIds: [1, 2],
+        ratios: [0.6, 0.4],
+        gradient: true,
+        gradientRange: [0.1, 0.9],
+        gradientCurve: [
+          { x: 0, y: 0.2, mIn: null, mOut: null },
+          { x: 1, y: 0.8, mIn: null, mOut: null }
+        ],
+        gradientPerPart: true,
+        issues: []
+      }
+    }
+  ])) as Record<string, unknown>
+
+  assert.deepEqual(after.filament_is_mixed, ['0', '0', '1'])
+  assert.deepEqual(after.filament_mixed_components, ['', '', '1,2'])
+  assert.deepEqual(after.filament_mixed_sublayer_ratios, ['', '', '0.6,0.4'])
+  assert.deepEqual(after.filament_mixed_gradient, ['0', '0', '1'])
+  assert.deepEqual(after.filament_mixed_gradient_range, ['', '', '0.1,0.9'])
+  assert.deepEqual(after.filament_mixed_gradient_curve, ['', '', '0.0000,0.2000|1.0000,0.8000'])
+  assert.deepEqual(after.filament_mixed_gradient_per_part, ['0', '0', '1'])
+})
+
 test('scalar filament-index process keys follow the permutation', () => {
   const after = JSON.parse(applyFilamentList(
     project({ support_filament: '1', support_interface_filament: '3', wall_filament: '0' }),

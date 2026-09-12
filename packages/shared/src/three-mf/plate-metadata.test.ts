@@ -15,6 +15,9 @@ const MODEL_SETTINGS = [
   '    <metadata key="plater_name" value="Plate 1"/>',
   '    <metadata key="bed_type" value="Textured PEI Plate"/>',
   '    <metadata key="print_sequence" value="by object"/>',
+  '    <metadata key="first_layer_print_sequence" value="2 1"/>',
+  '    <metadata key="other_layers_print_sequence" value="2 2147483646 1 2"/>',
+  '    <metadata key="other_layers_print_sequence_nums" value="1"/>',
   '    <metadata key="spiral_mode" value="1"/>',
   '    <metadata key="locked" value="true"/>',
   '    <metadata key="filament_maps" value="1 2"/>',
@@ -109,6 +112,10 @@ test('the print-sequence lists follow the filament set, since their values are f
   const entries = parseSourcePlateMetadata(withSequence).get(1)
   assert.ok(keys(preservedPlateMetadata(entries, true)).includes('first_layer_print_sequence'))
   assert.ok(!keys(preservedPlateMetadata(entries, false)).includes('first_layer_print_sequence'))
+  assert.ok(keys(preservedPlateMetadata(entries, true)).includes('other_layers_print_sequence'))
+  assert.ok(keys(preservedPlateMetadata(entries, true)).includes('other_layers_print_sequence_nums'))
+  assert.ok(!keys(preservedPlateMetadata(entries, false)).includes('other_layers_print_sequence'))
+  assert.ok(!keys(preservedPlateMetadata(entries, false)).includes('other_layers_print_sequence_nums'))
 })
 
 test('the map MODE is dropped with its map, not left pinning Manual', () => {
@@ -180,4 +187,3 @@ test('an edit whose plates name no source is unmapped, never assumed to be the i
   // A session-added plate has no source record to carry, so it contributes nothing.
   assert.deepEqual(sourcePlateMapping([{ index: 1, sourceIndex: 3 }, { index: 2, sourceIndex: null }]), new Map([[3, 1]]))
 })
-

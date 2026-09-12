@@ -46,7 +46,6 @@ docs/current-work-status.md
 *.db-shm
 .DS_Store
 # Deployment-local copies live at the repo root; the nested
-# .devcontainer/compose.yml is tracked.
 /compose.yml
 /nginx.conf
 

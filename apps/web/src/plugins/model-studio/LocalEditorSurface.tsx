@@ -4,9 +4,8 @@
  * queries, settings state) run only while a project is actually open, a hook cannot be called
  * conditionally, so the "no project yet" branch must not host it.
  *
- * Slicing is deliberately NOT wired here (`onSlice` omitted): a browser cannot reach printers or the
- * slicer. With neither `onSlice` nor `onApply`, `EditorView`'s footer renders NO slice control at all,
- * not a disabled one, so the surface never advertises an action this host cannot perform.
+ * Slicing uses the anonymous ephemeral queue. It uploads only the browser-authored, engine-ready
+ * project after an explicit click and exposes no printer, bridge, library, history, or dispatch seam.
  * Everything else, arrange, transform, materials, process presets, plate/nozzle/model, works
  * against the settings sidebar the controller feeds. The import seam differs in ONE way here: the
  * local store has no library to import from, which `EditorView` reads off the store; formats are
@@ -18,7 +17,7 @@
  * manager is the BROWSER-STORAGE one: the workspace manager's every request needs a workspace, so
  * handing the editor that one is what made "Manage" report a permission error here.
  */
-import { lazy, useCallback, useMemo, useRef } from 'react'
+import { lazy, useCallback, useMemo, useRef, useState } from 'react'
 import { Box } from '@mui/joy'
 import EditorView from './EditorView'
 import { useMobileViewport } from '../../components/useMobileViewport'
@@ -29,9 +28,13 @@ import type { LocalImportStore } from './lib/localImportStore'
 import type { ClientThreeMfProject } from './lib/clientThreeMfProject'
 import type { LocalProjectFile } from './lib/localProjectFile'
 import { useLocalSliceSettingsController } from './useLocalSliceSettingsController'
+import { PublicSlicingDialog } from './PublicSlicingDialog'
+import { submitPublicSlice, type PublicSlicingSession } from './lib/publicSlicingClient'
+import { usePromptDialog } from '../../components/PromptDialogProvider'
+import { hasPostProcessingScripts, hasPostProcessingValue } from './lib/projectScriptSafety'
 
 // Global process + per-material "tune" dialogs. The library host renders these from its
-// still-mounted slice dialog; a server-less host has no such wrapper, so it renders them here,
+// still-mounted slice dialog; a workspace-less host has no such wrapper, so it renders them here,
 // wired to the local controller + anonymous resolvers. (Per-object process dialogs are rendered by
 // EditorView itself.)
 const ProcessSettingsDialog = lazy(() => import('../../components/ProcessSettingsDialog'))
@@ -52,9 +55,11 @@ export interface LocalEditorSurfaceProps {
 
 export function LocalEditorSurface({ project, projectFile, importStore, archiveRef, onProjectFileChanged, onClose }: LocalEditorSurfaceProps) {
   const isMobileViewport = useMobileViewport()
+  const { confirm } = usePromptDialog()
   const projectSource = useMemo(() => createLocalProjectSource(project), [project])
   const {
     controller,
+    slicingAvailable,
     targetPrinterModel,
     resolveProcessConfig,
     resolveFilamentConfig,
@@ -65,6 +70,53 @@ export function LocalEditorSurface({ project, projectFile, importStore, archiveR
     setFilamentSettingsFilamentId,
     setFilamentSettingOverridesById,
   } = useLocalSliceSettingsController({ project, isMobileViewport, onClose })
+  const [publicSliceSession, setPublicSliceSession] = useState<PublicSlicingSession | null>(null)
+  const [submittingPublicSlice, setSubmittingPublicSlice] = useState(false)
+
+  const slicePublicProject = useCallback(async (options: Parameters<NonNullable<React.ComponentProps<typeof EditorView>['onSlice']>>[0]) => {
+    const target = controller.retargetTarget
+    if (!target || !slicingAvailable) return
+    const carriesHostScripts = hasPostProcessingScripts(project.archive.indexEntries().projectSettingsJson)
+      || hasPostProcessingValue(target.processSettingOverrides?.post_process)
+    if (carriesHostScripts) {
+      const accepted = await confirm({
+        title: 'Post-processing scripts will not run',
+        description: 'This project contains commands intended to run on the slicer computer. Public slicing removes those commands before upload. Printer G-code in the project is preserved.',
+        confirmLabel: 'Slice without scripts',
+        color: 'warning'
+      })
+      if (!accepted) return
+    }
+    const { post_process: _removedHostScripts, ...safeProcessOverrides } = target.processSettingOverrides ?? {}
+    const safeTarget = {
+      ...target,
+      processSettingOverrides: Object.keys(safeProcessOverrides).length > 0 ? safeProcessOverrides : undefined
+    }
+    setSubmittingPublicSlice(true)
+    try {
+      const prepared = await options.stageSnapshot(safeTarget, controller.selectedSlicerTargetId, options.signal)
+      if (!(prepared instanceof Uint8Array)) {
+        throw new Error('The browser could not prepare this project for public slicing.')
+      }
+      const session = await submitPublicSlice(
+        prepared,
+        project.fileName,
+        {
+          preparedProject: { contractVersion: 1 },
+          slicerTargetId: controller.selectedSlicerTargetId || undefined,
+          target: safeTarget,
+          plate: options.plate,
+          allowNewerProjectFile: controller.projectVersionWarning?.acknowledged || undefined
+        },
+        options.signal,
+        () => undefined,
+        setPublicSliceSession
+      )
+      setPublicSliceSession(session)
+    } finally {
+      setSubmittingPublicSlice(false)
+    }
+  }, [confirm, controller, project.archive, project.fileName, slicingAvailable])
 
   // Read through a ref so the catalogue settling does not rebuild the save target (which would
   // otherwise be a new object on every catalogue update, for a value only a save ever reads).
@@ -108,6 +160,10 @@ export function LocalEditorSurface({ project, projectFile, importStore, archiveR
         importStore={importStore}
         saveTarget={saveTarget}
         sliceConfig={controller}
+        canSlice={slicingAvailable && controller.retargetTarget != null}
+        sliceDisabledReason={!slicingAvailable ? 'Public slicing capacity is unavailable on this server.' : undefined}
+        slicing={submittingPublicSlice}
+        onSlice={slicePublicProject}
         // Drives the bed + zones and follows a model switch, exactly as the library host does; and
         // fetch the plate mesh from the anonymous catalogue so it loads with no workspace.
         targetPrinterModel={targetPrinterModel}
@@ -125,6 +181,13 @@ export function LocalEditorSurface({ project, projectFile, importStore, archiveR
         hosting="page"
         onClose={onClose}
       />
+      {publicSliceSession && (
+        <PublicSlicingDialog
+          session={publicSliceSession}
+          onSessionChange={setPublicSliceSession}
+          onClose={() => setPublicSliceSession(null)}
+        />
+      )}
       {processSettingsDialogOpen && controller.selectedProcessProfile && (
         <LazyDialogBoundary label="settings" onClose={() => { controller.setProcessSettingsDialogOpen(false); controller.setSettingsSearchKey(null) }}>
           <ProcessSettingsDialog

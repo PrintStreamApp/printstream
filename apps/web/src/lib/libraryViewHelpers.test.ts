@@ -15,6 +15,14 @@ const filament = (id: number, color: string): ThreeMfProjectFilament => ({
 
 const white = filament(1, '#FFFFFF')
 const black = filament(2, '#000000')
+const mixed = {
+	...filament(3, '#808080'),
+	mixedFilament: {
+		componentIds: [1, 2], ratios: [0.5, 0.5], gradient: false,
+		gradientRange: [0.1, 0.9] as [number, number], gradientCurve: null,
+		gradientPerPart: false, issues: []
+	}
+}
 
 test('visibleMappingFilaments: sliced plate narrows the project list to the plate-used ids', () => {
 	const visible = visibleMappingFilaments([white, black], new Set([1]), true)
@@ -27,6 +35,16 @@ test('visibleMappingFilaments: UNSLICED plate keeps every project filament even 
 	// by usedIds would hide the painted black (id 2) from AMS mapping. The unsliced
 	// path must surface the full project palette instead.
 	const visible = visibleMappingFilaments([white, black], new Set([1]), false)
+	assert.deepEqual(visible.map((f) => f.id), [1, 2])
+})
+
+test('visibleMappingFilaments: a used mixed slot maps its physical components, never the virtual slot', () => {
+	const visible = visibleMappingFilaments([white, black, mixed], new Set([3]), true)
+	assert.deepEqual(visible.map((f) => f.id), [1, 2])
+})
+
+test('visibleMappingFilaments: an unsliced project offers every physical slot but no mixed virtual slot', () => {
+	const visible = visibleMappingFilaments([white, black, mixed], new Set([3]), false)
 	assert.deepEqual(visible.map((f) => f.id), [1, 2])
 })
 

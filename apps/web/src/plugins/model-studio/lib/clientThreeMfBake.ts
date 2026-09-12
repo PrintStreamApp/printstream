@@ -13,7 +13,7 @@
  *
  * Memory: the api streams mesh entries past the transforms, but a browser archive is already fully
  * inflated in memory, so the peak here is roughly the source archive plus the output. That is
- * bounded by `MAX_CLIENT_THREE_MF_BYTES` at open time.
+ * bounded by the ZIP client's compressed and expanded-byte limits at open time.
  */
 import { zipArchiveEntries } from './zipArchiveClient'
 import {
@@ -31,6 +31,9 @@ import {
 import type { SceneEdit } from '@printstream/shared'
 import { applyBakeSettingsPasses, type ClientBakeSettingsPasses } from './clientBakeSettingsPasses'
 import type { ThreeMfArchive } from './threeMfArchive'
+import { hasPostProcessingScripts, removePostProcessingScripts } from './projectScriptSafety'
+
+const PROJECT_SETTINGS_ENTRY = 'Metadata/project_settings.config'
 
 /**
  * Base64 to bytes, through the platform decoder the browser already has.
@@ -122,6 +125,17 @@ export async function bakeClientThreeMf(
   // Everything that rewrites the settings the bake just wrote, in the order that module owns.
   await applyBakeSettingsPasses(output, edit, settingsPasses)
   signal?.throwIfAborted()
+
+  // Desktop BambuStudio can execute post-processing commands as its local user. The hosted engine
+  // must never execute a command supplied by an anonymous archive, so a prepared slice clears that
+  // one host-side option after the UI warning. Printer start/end/layer G-code is intentionally kept.
+  const projectSettings = output[PROJECT_SETTINGS_ENTRY]
+  if (settingsPasses.stripHostScripts && projectSettings) {
+    const json = new TextDecoder().decode(projectSettings)
+    if (hasPostProcessingScripts(json)) {
+      output[PROJECT_SETTINGS_ENTRY] = encoder.encode(removePostProcessingScripts(json))
+    }
+  }
 
   // Prepared slice snapshots bypass server-side content mutation. Heal legacy triangle-soup
   // imports here so the uploaded archive has the same engine-ready geometry as the old server

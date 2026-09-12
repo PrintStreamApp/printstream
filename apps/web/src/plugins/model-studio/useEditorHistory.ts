@@ -343,6 +343,14 @@ export function useEditorHistory({
       setNozzleDiameter: (value) => { recordSliceConfigHistory(); sliceConfig.setNozzleDiameter(value) },
       setNozzleFlow: (value) => { recordSliceConfigHistory(); sliceConfig.setNozzleFlow(value) },
       onAddFilament: (choice) => { recordSliceConfigHistory(); sliceConfig.onAddFilament(choice) },
+      onSyncFilaments: (choices) => {
+        recordSliceConfigHistory()
+        sliceConfig.onSyncFilaments(choices)
+      },
+      onUpsertMixedFilament: (choice) => {
+        recordSliceConfigHistory()
+        sliceConfig.onUpsertMixedFilament(choice)
+      },
       // BambuStudio parity: only an OBJECT reference blocks removal: reassign the object first.
       // A material referenced solely by a process setting (support / support interface, infill or
       // wall filament) is removable: BambuStudio drops the setting back to "Default" instead of

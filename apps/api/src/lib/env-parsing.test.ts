@@ -56,3 +56,17 @@ test('the real PLATFORM_ADMIN_EMAIL declaration accepts an empty value', async (
   const { env } = await import('./env.js')
   assert.equal(env.PLATFORM_ADMIN_EMAIL, undefined)
 })
+
+test('development lends its single slicer slot to the public editor without relaxing production', async () => {
+  const { resolvePublicSlicingMaxConcurrentJobs } = await import('./env.js')
+
+  assert.equal(resolvePublicSlicingMaxConcurrentJobs({ totalJobs: 1, nodeEnv: 'development' }), 1)
+  assert.equal(resolvePublicSlicingMaxConcurrentJobs({ totalJobs: 1, nodeEnv: 'test' }), 1)
+  assert.equal(resolvePublicSlicingMaxConcurrentJobs({ totalJobs: 1, nodeEnv: 'production' }), 0)
+  assert.equal(resolvePublicSlicingMaxConcurrentJobs({ totalJobs: 2, nodeEnv: 'production' }), 1)
+  assert.equal(resolvePublicSlicingMaxConcurrentJobs({
+    totalJobs: 3,
+    requestedAnonymousJobs: 3,
+    nodeEnv: 'production'
+  }), 2)
+})

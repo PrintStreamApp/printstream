@@ -16,8 +16,16 @@
  *    open or save that never settles. Node tests take this path by design (no `Worker` there), so
  *    the fallback only warns when a worker was actually attempted.
  */
-import { unzipSync, zipSync } from 'fflate'
+import { zipSync } from 'fflate'
+import { boundedUnzipArchive, type ZipInflationLimits } from './boundedZipArchive'
 import type { ZipArchiveRequest, ZipArchiveResponse, ZipCompressionLevel } from './zipArchiveWorker'
+
+/** Browser-wide defaults for archives held completely in memory. */
+export const CLIENT_ZIP_INFLATION_LIMITS: ZipInflationLimits = {
+  maxEntries: 4_096,
+  maxEntryBytes: 256 * 1024 * 1024,
+  maxInflatedBytes: 512 * 1024 * 1024
+}
 
 /** Floor of the per-operation deadline, so tiny archives still absorb worker spawn + queue time. */
 export const ZIP_ARCHIVE_BASE_DEADLINE_MS = 30_000
@@ -102,14 +110,21 @@ function shouldFallBack(error: unknown): boolean {
 }
 
 /** Inflate a whole zip archive to its entries, off the main thread when workers are available. */
-export async function unzipArchiveBytes(bytes: Uint8Array): Promise<Record<string, Uint8Array>> {
+export async function unzipArchiveBytes(
+  bytes: Uint8Array,
+  limits: ZipInflationLimits = CLIENT_ZIP_INFLATION_LIMITS
+): Promise<Record<string, Uint8Array>> {
   try {
-    const response = await runViaWorker({ op: 'unzip', bytes }, zipArchiveDeadlineMs(bytes.byteLength))
+    const response = await runViaWorker({ op: 'unzip', bytes, limits }, zipArchiveDeadlineMs(bytes.byteLength))
     if ('entries' in response) return response.entries
     throw new Error('zip archive worker returned the wrong response shape')
   } catch (error) {
-    if (!shouldFallBack(error)) throw new Error(error instanceof Error ? error.message : String(error))
-    return unzipSync(bytes)
+    // Retrying a stalled or failed inflate on the UI thread turns an isolated worker failure into
+    // a tab-wide freeze. Only environments with no Worker at all take the synchronous path.
+    if (!(error instanceof WorkerUnavailableError)) {
+      throw new Error(error instanceof Error ? error.message : String(error))
+    }
+    return boundedUnzipArchive(bytes, limits)
   }
 }
 

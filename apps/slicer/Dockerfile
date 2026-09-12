@@ -65,7 +65,7 @@ ARG DEBIAN_FRONTEND=noninteractive
 ARG TARGETARCH
 # amd64: install the native GTK/WebKit/Mesa closure BambuStudio links (the AppImage does
 # not bundle it). arm64: the x86-64 CLI runs under qemu-user against the baked sysroot, so
-# install the emulator + the native tools (gosu/weston) only; the x86-64 libs come from
+# install the emulator + the native compositor only; the x86-64 libs come from
 # the sysroot copied in below. `weston` (native on both arches: Wayland is a socket
 # protocol, so an arm64 compositor serves the emulated x86-64 client) and amd64's
 # `libosmesa6` are the launcher's offscreen-GL pieces for plate thumbnail rendering; see
@@ -75,11 +75,10 @@ RUN set -eux; \
 	apt-get update; \
 	if [ "$TARGETARCH" = "arm64" ]; then \
 		apt-get install -y --no-install-recommends \
-			ca-certificates gosu qemu-user-static weston; \
+			ca-certificates qemu-user-static weston; \
 	else \
 		apt-get install -y --no-install-recommends \
 			ca-certificates \
-			gosu \
 			libasound2 \
 			libdbus-1-3 \
 			libegl1 \
@@ -134,7 +133,12 @@ COPY apps/slicer/docker/generate-bambustudio-full-profiles.mjs apps/slicer/docke
 # needs) and remove was undone by the next recreate.
 ENV SLICER_ENGINE_LAUNCH=container
 ENV SLICER_TARGETS_FILE=/data/engines/targets.json
-RUN mkdir -p /data/engines && chown -R node:node /data/engines
+# Non-job diagnostics use this account. Hostile project jobs receive private high-numbered numeric
+# uids and gids from the service, with explicit HOME/XDG paths, so they need no persistent account.
+RUN useradd --uid 1001 --gid 0 --home-dir /nonexistent --shell /usr/sbin/nologin slicer-engine \
+	&& mkdir -p /data/engines \
+	&& chown -R root:root /data/engines \
+	&& chmod 0755 /data/engines
 COPY apps/slicer/docker/bambu-studio-cli.sh /usr/local/bin/bambu-studio-cli
 COPY apps/slicer/docker/bambu-studio-cli.sh /usr/local/bin/slicer-cli
 RUN chmod +x /usr/local/bin/bambu-studio-cli /usr/local/bin/slicer-cli
@@ -148,21 +152,19 @@ RUN chmod +x /usr/local/bin/slicer-entrypoint.sh
 # AGPL network-source offer. Keep apps/slicer/THIRD-PARTY-NOTICES.txt current
 # with `npm run notices`.
 COPY apps/slicer/THIRD-PARTY-SLICERS.md apps/slicer/THIRD-PARTY-NOTICES.txt LICENSE /app/licenses/
-# Create the work dir owned by `node` so a freshly-created named volume mounted
-# here (compose sets SLICER_WORK_DIR=/work) inherits that ownership and the
-# unprivileged process can write its slicing scratch. A work volume created by an
-# older root-running image stays root-owned; the entrypoint (see below) self-heals
-# that on boot, so no manual volume recreation is needed.
-RUN mkdir -p /work && chown node:node /work
+# The service alone owns the work-volume root. Each native job receives a private group on its
+# root-owned subdirectory, so concurrent untrusted engines cannot traverse one another's files.
+RUN mkdir -p /work && chown root:root /work && chmod 0755 /work
 WORKDIR /app/apps/slicer
+
+# Keep the dev-only fingerprint at the end so changing it updates image metadata without
+# invalidating the expensive runtime and cross-architecture dependency layers above.
+ARG PRINTSTREAM_SLICER_SOURCE_FINGERPRINT=unknown
+LABEL io.printstream.dev.source-fingerprint="${PRINTSTREAM_SLICER_SOURCE_FINGERPRINT}"
 EXPOSE 4010
-# Drop privileges: the slicer runs a large third-party native binary (BambuStudio)
-# over arbitrary user-supplied 3MF geometry, the highest-risk untrusted-input
-# surface in the stack. The AppImage is extracted at build time and run directly
-# (no FUSE needed at runtime), and work/home dirs live under /work (or /tmp), so
-# the CLI runs fine unprivileged. `node` (uid 1000) ships with the base image.
-# The container STARTS as root so the entrypoint can fix a stale root-owned work
-# volume, then drops to `node` via gosu before exec'ing the CMD, so the slicer
-# itself never runs as root.
+# The service starts as root with only the capabilities declared in Compose. It owns runtime engine
+# installation, then every hostile native job drops to a private numeric uid and gid before exec.
+# Non-job diagnostics use the static `slicer-engine` account. Neither can replace the root-owned
+# mode-0755 engine being executed. See engine-process-security.ts.
 ENTRYPOINT ["/usr/local/bin/slicer-entrypoint.sh"]
 CMD ["node", "dist/main.js"]

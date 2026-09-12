@@ -10,6 +10,9 @@ export interface PreparedSourceCarrier {
   preparedSource?: {
     contractVersion?: number
   } | null
+  preparedProject?: {
+    contractVersion?: number
+  } | null
 }
 
 export interface SlicerInputPolicy {
@@ -32,6 +35,7 @@ export interface SlicerInputPolicy {
  */
 export function slicerInputPolicy(request: PreparedSourceCarrier): SlicerInputPolicy {
   const preparedV1 = request.preparedSource?.contractVersion === 1
+    || request.preparedProject?.contractVersion === 1
   return {
     projectSettingsAuthoritative: preparedV1,
     loadRequestProfiles: !preparedV1,

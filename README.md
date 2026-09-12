@@ -10,7 +10,7 @@ PrintStream is a web app for monitoring and controlling Bambu Lab printers. Open
 
 **This repository is the self-hosted community edition.** The main PrintStream product is the hosted version at [printstream.app](https://printstream.app): the same software, run for you in the cloud, so the only thing you install is the small bridge that talks to your printers. This edition is for people who prefer to run the whole stack on their own hardware. The website has the full feature tour and screenshots. PrintStream is a product of [Dynamic Solutions](https://dynamic-solutions.ca).
 
-> **Beta: read before you rely on it.** PrintStream is in active beta. It has been tested with the **Bambu Lab P1P, P1S, and H2D**. Other Bambu Lab models should work, but this hasn't been confirmed yet, so expect to verify behavior on untested hardware, and please report what you find. See [Safety & liability](#safety--liability) before connecting printers.
+> **Printer support.** PrintStream supports all Bambu Lab printer models. See [Safety & liability](#safety--liability) before connecting printers.
 
 ## What you get
 
@@ -50,7 +50,7 @@ curl -fsSL https://raw.githubusercontent.com/PrintStreamApp/printstream/main/.en
 docker compose up -d
 ```
 
-This pulls the combined app image (`ghcr.io/printstreamapp/printstream`) and the slicer image from GHCR and starts everything.
+This pulls the combined app and slicer images from the current release on GHCR. The example follows `latest` so `docker compose pull` updates normally; every GitHub release also lists matching SemVer image tags for installations that require an explicit version pin.
 
 **On arm64 hosts (Raspberry Pi, ARM NAS):** all three images (app, bridge, and the optional `slicer`) are multi-arch and run natively. The slicer bundles the x86 Bambu Studio CLI and runs it under qemu-user emulation on arm64, so server-side slicing works there too (slower than on x86, but functional). If you would rather not pay the emulation cost, start the stack without the slicer (`docker compose up -d --scale slicer=0`) and point `SLICER_SERVICE_URL` at a remote x86 slicer, or leave it unset to disable server-side slicing.
 
@@ -95,7 +95,7 @@ Day-to-day development happens in a primary repository that also contains the cl
 Forks, issues, and pull requests here are welcome all the same. Accepted pull requests are merged into the primary repository and arrive back here with the next snapshot, so your change may land as part of a larger export rather than as a direct merge of your branch.
 
 - [ARCHITECTURE.md](ARCHITECTURE.md): how the pieces fit together
-- [docs/development.md](docs/development.md): dev setup (devcontainer or host) and testing
+- [docs/development.md](docs/development.md): Devkit setup and testing
 - [docs/deployment.md](docs/deployment.md): production deployment reference
 - [docs/configuration.md](docs/configuration.md): every environment variable
 

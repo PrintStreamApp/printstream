@@ -65,6 +65,19 @@ test('the copy pass carries through every entry the bake does not rewrite', asyn
   assert.ok(entries['3D/3dmodel.model'])
 })
 
+test('a public prepared snapshot clears host scripts while preserving printer G-code', async () => {
+  const archive = await openThreeMfArchive(sourceArchive({
+    'Metadata/project_settings.config': JSON.stringify({
+      post_process: ['host-command'],
+      machine_start_gcode: 'G28'
+    })
+  }))
+  const { bytes } = await bakeClientThreeMf(archive, EMPTY_EDIT, [], {}, { stripHostScripts: true })
+  const settings = JSON.parse(strFromU8(unzipSync(bytes)['Metadata/project_settings.config']!)) as Record<string, unknown>
+  assert.deepEqual(settings.post_process, [])
+  assert.equal(settings.machine_start_gcode, 'G28')
+})
+
 test('a prepared slice snapshot exact-welds legacy triangle-soup object entries', async () => {
   const soup = [
     '<?xml version="1.0" encoding="UTF-8"?>',

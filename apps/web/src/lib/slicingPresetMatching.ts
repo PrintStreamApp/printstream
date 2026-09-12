@@ -820,7 +820,14 @@ export function buildSliceDialogProjectFilaments(
   file: LibraryFile,
   bakedIndex: ThreeMfIndex | null,
   selectedPlate: number
-): Array<{ projectFilamentId: number; label: string; color: string | null; nozzleId: number | null; usedOnSelectedPlate: boolean }> {
+): Array<{
+  projectFilamentId: number
+  label: string
+  color: string | null
+  nozzleId: number | null
+  usedOnSelectedPlate: boolean
+  mixedFilament?: ThreeMfIndex['projectFilaments'][number]['mixedFilament']
+}> {
   if (bakedIndex?.projectFilaments.length) {
     // BambuStudio shows every project material at all times; we mirror that and
     // flag which ones the currently-selected plate actually uses (material/color
@@ -845,12 +852,17 @@ export function buildSliceDialogProjectFilaments(
     if (platedFilamentIds.length > 0) {
       for (const id of bakedIndex.supportFilamentIds ?? []) usedOnPlate.add(id)
     }
+    const hasMixedFilaments = bakedIndex.projectFilaments.some((filament) => filament.mixedFilament != null)
     return bakedIndex.projectFilaments.map((filament) => ({
       projectFilamentId: filament.id,
       label: filament.filamentName ?? filament.filamentType ?? `Filament ${filament.id}`,
       color: filament.color,
       nozzleId: filament.nozzleId ?? null,
-      usedOnSelectedPlate: platedFilamentIds.length === 0 ? true : usedOnPlate.has(filament.id)
+      usedOnSelectedPlate: platedFilamentIds.length === 0 ? true : usedOnPlate.has(filament.id),
+      // Once a project has a virtual slot, physical nulls are explicit so deleting the last mix
+      // still clears the parallel metadata arrays on save. Ordinary projects omit the field and
+      // therefore remain byte-stable.
+      ...(hasMixedFilaments ? { mixedFilament: filament.mixedFilament ?? null } : {})
     }))
   }
   return file.projectFilamentChips.map((filament, index) => ({
@@ -995,7 +1007,13 @@ export interface FilamentMappingResult {
  * a slot is never silently dropped.
  */
 export function buildFilamentMappings(
-  projectFilaments: Array<{ projectFilamentId: number; label: string; color: string | null; nozzleId: number | null }>,
+  projectFilaments: Array<{
+    projectFilamentId: number
+    label: string
+    color: string | null
+    nozzleId: number | null
+    mixedFilament?: unknown
+  }>,
   optionIds: Record<number, string>,
   colors: Record<number, string>,
   toolheadIds: Record<number, string>,
@@ -1007,6 +1025,12 @@ export function buildFilamentMappings(
   const unresolved: UnresolvedFilamentSlot[] = []
 
   for (const filament of projectFilaments) {
+    // A mixed slot is a virtual recipe. The slicer expands it to its physical components, so it
+    // never receives a profile/tray mapping of its own.
+    if (filament.mixedFilament) {
+      continue
+    }
+
     const optionId = optionIds[filament.projectFilamentId]
     if (!optionId) {
       unresolved.push({ projectFilamentId: filament.projectFilamentId, label: filament.label, reason: 'unselected' })

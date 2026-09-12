@@ -183,7 +183,12 @@ test('buildThreeMfIndex prefers model_settings object_id over slice_info identif
     {
       index: 1, name: null, thumbnailFile: null, usedFilamentIds: [],
       objects: [{ id: 71, name: 'My Sign Draft.3mf', identifyIds: [48216], processOverrides: {} }],
-      bedTypeOverride: null, printSequence: null, spiralMode: null, locked: false
+      bedTypeOverride: null,
+      printSequence: null,
+      firstLayerFilamentSequence: null,
+      otherLayerFilamentSequences: null,
+      spiralMode: null,
+      locked: false
     }
   ]
 

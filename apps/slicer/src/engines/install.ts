@@ -21,7 +21,7 @@
  */
 import { createHash } from 'node:crypto'
 import { createWriteStream } from 'node:fs'
-import { chmod, mkdir, rename, rm, stat, statfs } from 'node:fs/promises'
+import { chmod, lstat, mkdir, rename, rm, stat, statfs, symlink } from 'node:fs/promises'
 import { execFile } from 'node:child_process'
 import path from 'node:path'
 import { pipeline } from 'node:stream/promises'
@@ -90,6 +90,7 @@ export async function installEngine(options: InstallEngineOptions): Promise<void
       await mkdir(sharedSysrootDir(), { recursive: true })
       // `--strip-components=1` drops the wrapper directory the packer adds.
       await run('tar', ['-xzf', archive, '-C', sharedSysrootDir(), '--strip-components=1'])
+      await makeEngineTreeReadOnlyToRunner(sharedSysrootDir())
       await rm(archive, { force: true })
     }
 
@@ -119,6 +120,12 @@ export async function installEngine(options: InstallEngineOptions): Promise<void
 
     report({ phase: 'profiles', label: 'Preparing printer profiles' })
     await generateFullProfiles(path.join(engineAppDir(engine.id), 'resources', 'profiles'), engineProfileDir(engine.id))
+    await linkGeneratedProfiles(engineAppDir(engine.id), engineProfileDir(engine.id))
+
+    // The service remains the owner for later remove/update operations. Hostile jobs run under
+    // private identities, so removing group/other write bits makes the installed engine immutable
+    // to any code execution gained while parsing a project.
+    await makeEngineTreeReadOnlyToRunner(target)
 
     await registerEngine(engine)
     report({ phase: 'done', label: `${engine.label} is ready.` })
@@ -127,6 +134,24 @@ export async function installEngine(options: InstallEngineOptions): Promise<void
     // retry starts clean rather than resuming an unknown state.
     await rm(engineDir(engine.id), { recursive: true, force: true }).catch(() => undefined)
     throw error
+  }
+}
+
+/** Unix permissions are the container's engine/service boundary; Windows uses its native host policy. */
+async function makeEngineTreeReadOnlyToRunner(target: string): Promise<void> {
+  if (process.platform === 'win32') return
+  await run('chmod', ['-R', 'go-w', target])
+}
+
+/** Create the profile links while the trusted installer still owns the writable engine tree. */
+async function linkGeneratedProfiles(appDir: string, profileDir: string): Promise<void> {
+  if (process.platform === 'win32') return
+  const bundledProfilesDir = path.join(appDir, 'resources', 'profiles', 'BBL')
+  await mkdir(bundledProfilesDir, { recursive: true })
+  for (const kind of ['machine_full', 'process_full', 'filament_full']) {
+    const destination = path.join(bundledProfilesDir, kind)
+    if (await lstat(destination).then(() => true, () => false)) continue
+    await symlink(path.join(profileDir, kind), destination, 'dir')
   }
 }
 

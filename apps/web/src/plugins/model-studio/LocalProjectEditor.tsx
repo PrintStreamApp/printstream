@@ -6,9 +6,8 @@
  * and hands them to the SAME `EditorView` the library uses. There is deliberately no second editor
  * and no reduced feature set; what differs is only where bytes come from and go.
  *
- * Nothing is uploaded. The file is unzipped and parsed in the tab, edits bake in the tab, and a save
- * writes back through the handle the user granted (or downloads a copy where the browser has no
- * File System Access API).
+ * Editing and saving stay in the tab. Slicing is the one explicit exception: after the user clicks
+ * Slice, the browser uploads an engine-ready temporary copy to the isolated public slicing queue.
  *
  * Hosts that mount this must provide a React Query client: `EditorView` loads through queries even
  * when the source is local. See the public shell.
@@ -111,9 +110,9 @@ export function LocalProjectEditor({ intro }: LocalProjectEditorProps) {
       >
         <Card variant="outlined" sx={{ borderStyle: 'dashed' }}>
           <CardContent sx={{ alignItems: 'center', gap: 1.5, py: 6 }}>
-            <Typography level="title-md">Open a 3MF project</Typography>
+            <Typography level="title-md">Edit and slice a 3MF project</Typography>
             <Typography level="body-sm" textColor="text.tertiary" sx={{ textAlign: 'center' }}>
-              Your file is opened by your browser and never leaves your machine.
+              Editing stays in your browser. Slicing is done one our server. If you choose to slice, the file is uploaded to our server temporarily, kept private, and deleted within one hour.
             </Typography>
             <Button size="sm" startDecorator={<FolderOpenRoundedIcon />} loading={opening} onClick={() => void pick()}>
               Choose a file

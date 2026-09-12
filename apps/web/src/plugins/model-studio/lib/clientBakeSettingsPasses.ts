@@ -78,6 +78,8 @@ export async function applyBakeSettingsPasses(
 export interface ClientBakeSettingsPasses {
   /** Exact engine input authoring. Mutually exclusive with the save-oriented passes below. */
   sliceTarget?: ClientSliceSettingsPass
+  /** Public-host policy: clear operating-system post-processing commands after warning the user. */
+  stripHostScripts?: boolean
   /**
    * "Save this project for a different printer". Resolved against the settings the bake wrote,
    * because the plan's filament rebind targets are picked from the filament list it just authored.

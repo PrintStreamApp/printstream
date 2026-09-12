@@ -7,7 +7,7 @@
 # (DEFAULT_NODE_VERSION in packages/sea-runtime/scripts/build-harness.mjs), and CI runs the whole
 # suite inside THIS image, so a 20 here meant every test the project has ever run ran two majors
 # behind production. The comment above already claimed it matched the slicer's node:22 base.
-FROM mcr.microsoft.com/devcontainers/typescript-node:4.0.6-22-trixie
+FROM node:22.22.3-trixie
 
 ARG DEBIAN_FRONTEND=noninteractive
 
@@ -27,10 +27,10 @@ RUN set -eux; \
       less \
       nsis \
       # PGDG 16 client, not the distro's: pg_dump's major must MATCH the
-      # devcontainer db service (postgres:16). The server-backup system
+      # development database service (postgres:16). The server-backup system
       # refuses a mismatched dump because it cannot restore (a newer pg_dump
       # writes SET statements the older server rejects). Keep in lockstep
-      # with .devcontainer/compose.yml's db image.
+      # with Devkit's configured PostgreSQL image.
       postgresql-common \
       ripgrep \
       squashfs-tools \
@@ -84,15 +84,4 @@ RUN set -eux; \
       rm -rf /var/lib/apt/lists/*; \
     fi
 
-# Pre-create /home/node/.vscode-server owned by node. This MUST live in the
-# image, not in fix-volume-perms.sh (postCreateCommand): the persist overlay
-# mounts a named volume at the SUB-path .vscode-server/extensions, so Docker
-# auto-creates the parent .vscode-server as root. VS Code then installs its
-# server (mkdir .vscode-server/bin) *before* postCreate runs, so a postCreate
-# chown is too late: it fails with "permission denied". Creating the parent
-# (and the extensions mountpoint) node-owned here makes the bin install work
-# and lets the fresh volume initialize with node ownership. Do not fold this
-# back into the generic volume-perms script.
-RUN set -eux; \
-    mkdir -p /home/node/.vscode-server/extensions /home/node/.vscode-server/data/agent-host /home/node/.vscode-server/data/agentSessionData; \
-    chown -R node:node /home/node/.vscode-server
+WORKDIR /workspace

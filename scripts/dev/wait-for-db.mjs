@@ -1,6 +1,6 @@
 /**
  * Waits for the PostgreSQL host in DATABASE_URL to accept TCP connections.
- * Used by the devcontainer and local setup scripts before running Prisma.
+ * Used by development and CI setup before running Prisma.
  */
 import net from 'node:net'
 import { setTimeout as delay } from 'node:timers/promises'

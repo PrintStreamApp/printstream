@@ -12,10 +12,11 @@
  * back to the site.
  */
 import { Box, Stack, Typography } from '@mui/joy'
+import { Link as RouterLink } from 'react-router-dom'
 
-export function BrandMark({ size = 'md' }: { size?: 'sm' | 'md' }) {
+export function BrandMark({ size = 'md', to }: { size?: 'sm' | 'md'; to?: string }) {
   const logo = size === 'sm' ? 32 : 44
-  return (
+  const mark = (
     <Stack
       direction="row"
       spacing={1.25}
@@ -34,6 +35,29 @@ export function BrandMark({ size = 'md' }: { size?: 'sm' | 'md' }) {
       <Typography level={size === 'sm' ? 'title-md' : 'title-lg'} sx={{ color: 'common.white' }}>
         PrintStream
       </Typography>
+    </Stack>
+  )
+
+  if (!to) return mark
+
+  return (
+    <Stack
+      component={RouterLink}
+      to={to}
+      aria-label="PrintStream home"
+      sx={{
+        width: 'fit-content',
+        mx: 'auto',
+        borderRadius: 'sm',
+        textDecoration: 'none',
+        '&:focus-visible': {
+          outline: '2px solid',
+          outlineColor: 'primary.300',
+          outlineOffset: 3
+        }
+      }}
+    >
+      {mark}
     </Stack>
   )
 }

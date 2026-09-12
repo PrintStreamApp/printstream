@@ -10,7 +10,7 @@
  * Contract: {@link openThreeMfArchive} decompresses the whole archive once, up front, and every
  * accessor after that is synchronous and allocation-cheap. That is the right trade for the editor
  * (the user is about to look at every plate anyway) but means peak memory is roughly the
- * uncompressed project, hence {@link MAX_CLIENT_THREE_MF_BYTES}.
+ * uncompressed project, hence the compressed and inflated limits enforced by the ZIP client.
  */
 import { unzipArchiveBytes } from './zipArchiveClient'
 import { CUSTOM_GCODE_PER_LAYER_ENTRY, THREE_MF_SLICE_INFO_ENTRY as SLICE_INFO_ENTRY, type ThreeMfSceneEntries,
@@ -29,7 +29,7 @@ const CUT_INFORMATION_ENTRY = 'Metadata/cut_information.xml'
 const PLATE_THUMBNAIL_PATTERN = /^Metadata\/plate_(\d+)\.png$/
 
 /**
- * Refuse archives above this size. Everything is held decompressed in memory here, and a browser
+ * Refuse compressed archives above this size. Everything is held decompressed in memory here, and a browser
  * tab that runs out of heap dies with no recoverable error, a clear "too large, open it in the
  * app" message is strictly better. Comfortably above any hand-authored project.
  */

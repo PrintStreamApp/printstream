@@ -15,6 +15,8 @@ import { auditLogEntrySchema } from './logs.js'
 import { preservedSliceSettingsSchema, sceneEditSvgPartSchema, sceneEditTextInfoSchema } from './slicing.js'
 import { AMS_TRAY_UNMAPPED, AMS_UNIT_TYPES, isPhysicalAmsTrayIndex, type AmsUnitType } from './ams-tray-index.js'
 import { printPauseScheduleSchema } from './print-pause-schedule.js'
+import { mixedFilamentConfigSchema } from './mixed-filament.js'
+import { plateLayerFilamentSequenceSchema } from './plate-filament-sequence.js'
 
 /**
  * AMS generation for a unit. Derived by the status parser from the MQTT
@@ -1861,6 +1863,8 @@ export const threeMfPlateSchema = z.object({
   bedTypeOverride: z.string().nullable().optional(),
   /** The plate's own print sequence, null when it inherits the global. Absent from older servers. */
   printSequence: z.enum(['by layer', 'by object']).nullable().optional(),
+  firstLayerFilamentSequence: z.array(z.number().int().positive()).nullable().optional(),
+  otherLayerFilamentSequences: z.array(plateLayerFilamentSequenceSchema).nullable().optional(),
   /** The plate's own vase mode, null when it inherits the global. Absent from older servers. */
   spiralMode: z.boolean().nullable().optional(),
   /** Locked against arrange; absent means unlocked (there is no global to inherit). */
@@ -1924,7 +1928,9 @@ export const threeMfProjectFilamentSchema = z.object({
    * BambuStudio labels it "money/kg" and stores no currency anywhere, so a consumer that shows it
    * supplies its own symbol. Optional so an older server/bridge still validates.
    */
-  costPerKg: z.number().nullable().optional()
+  costPerKg: z.number().nullable().optional(),
+  /** Virtual mixed-filament recipe. Null is a physical slot; absent means an older parser. */
+  mixedFilament: mixedFilamentConfigSchema.nullable().optional()
 })
 export type ThreeMfProjectFilament = z.infer<typeof threeMfProjectFilamentSchema>
 

@@ -4,9 +4,9 @@
  * registry. Consumed by the web footer to show the running build and, when
  * applicable, a subtle "update available" hint.
  *
- * Visibility is applied server-side: `revision` is null when there is nothing
- * to show (a source/dev run with no baked identity, or a viewer not permitted
- * to see the cloud image's version). `update` is null for any image that is
+ * Visibility is applied server-side: product `version` is public, while
+ * `revision` is null when a viewer is not permitted to see the exact cloud
+ * build. `update` is null for any image that is
  * not the published open-core image, since only that image has a GHCR update
  * channel.
  */
@@ -47,6 +47,8 @@ export const appUpdateInfoSchema = z.object({
 export type AppUpdateInfo = z.infer<typeof appUpdateInfoSchema>
 
 export const appVersionResponseSchema = z.object({
+  /** Product SemVer baked into the distribution; absent on legacy builds. */
+  version: z.string().nullable().optional(),
   /** Full git revision the running image was built from; null when nothing to show. */
   revision: z.string().nullable(),
   /** Short form of `revision` for display. */
@@ -80,6 +82,7 @@ export type AppUpdateStartResponse = z.infer<typeof appUpdateStartResponseSchema
 
 /** Nothing-to-show payload (dev/source run, or viewer not permitted). */
 export const EMPTY_APP_VERSION_RESPONSE: AppVersionResponse = {
+  version: null,
   revision: null,
   shortRevision: null,
   published: false,

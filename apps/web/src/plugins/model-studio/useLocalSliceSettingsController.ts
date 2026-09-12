@@ -73,6 +73,8 @@ const NOOP_NAVIGATE = (() => undefined) as unknown as ReturnType<typeof useNavig
 
 export interface LocalSliceSettings {
   controller: SliceSettingsController
+  /** Execution capacity is separate from catalogue availability. */
+  slicingAvailable: boolean
   /**
    * The printer model the editor should render the bed + zones for: passed to `EditorView` as a
    * SEPARATE prop (like the library host does), not part of the controller, so a model switch moves
@@ -82,7 +84,7 @@ export interface LocalSliceSettings {
   /**
    * Anonymous resolver for the process tune dialogs: passed to `EditorView` (per-object dialogs)
    * and used by the host to render the GLOBAL process dialog, which no shared component renders for
-   * a server-less host (the library host's still-mounted slice dialog does that job).
+   * a workspace-less host (the library host's still-mounted slice dialog does that job).
    */
   resolveProcessConfig: ProcessConfigResolver
   /**
@@ -305,7 +307,7 @@ export function useLocalSliceSettingsController(params: LocalSliceSettingsContro
   )
   const materialOptions = useMemo(() => buildSliceMaterialOptions(compatibleFilamentProfiles, []), [compatibleFilamentProfiles])
   // Which material's tune dialog is open. Owned here because the sidebar row opens it through the
-  // controller, but RENDERED by the host, a server-less host has no still-mounted slice dialog to
+  // controller, but RENDERED by the host, a workspace-less host has no still-mounted slice dialog to
   // render it from, which is the same split the global process dialog uses.
   const [filamentSettingsFilamentId, setFilamentSettingsFilamentId] = useState<number | null>(null)
   const settingsEditListenerRef = useRef<(() => void) | null>(null)
@@ -331,7 +333,7 @@ export function useLocalSliceSettingsController(params: LocalSliceSettingsContro
     filamentToolheadIds, setFilamentToolheadIds,
     filamentMaterialTypeFilters, setFilamentMaterialTypeFilters,
     filamentSettingOverridesById, setFilamentSettingOverridesById,
-    handleAddFilament, handleRemoveFilament, handleReorderFilament, handleMaterialOptionChange,
+    handleAddFilament, handleSyncFilaments, handleUpsertMixedFilament, handleRemoveFilament, handleReorderFilament, handleMaterialOptionChange,
     materialEditListenerRef,
     desiredFilaments, filamentMappingResult,
     onProjectSaved: handleProjectSaved,
@@ -542,6 +544,8 @@ export function useLocalSliceSettingsController(params: LocalSliceSettingsContro
     desiredFilaments,
     retargetTarget,
     onAddFilament: handleAddFilament,
+    onSyncFilaments: handleSyncFilaments,
+    onUpsertMixedFilament: handleUpsertMixedFilament,
     onRemoveFilament: handleRemoveFilament,
     onReorderFilament: handleReorderFilament,
     configSnapshot,
@@ -567,6 +571,7 @@ export function useLocalSliceSettingsController(params: LocalSliceSettingsContro
 
   return {
     controller,
+    slicingAvailable: targetsQuery.data?.slicingAvailable === true,
     targetPrinterModel: targetPrinterModel ?? undefined,
     resolveProcessConfig,
     resolveFilamentConfig,

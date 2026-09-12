@@ -1,6 +1,6 @@
 {
   "name": "@printstream/bridge-runtime",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "main": "./dist/index.js",
@@ -17,9 +17,10 @@
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json"  },
+    "build": "tsc -p tsconfig.json"
+  },
   "dependencies": {
-    "@printstream/shared": "0.1.0",
+    "@printstream/shared": "1.0.0",
     "basic-ftp": "^5.3.0",
     "mqtt": "^5.10.1"
   },

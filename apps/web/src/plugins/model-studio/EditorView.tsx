@@ -72,6 +72,7 @@ import {
   isFilamentIdentitySettingKey,
   formatBytes,
   readProjectFlushContext,
+  reconcilePlateFilamentSequence,
   type ThreeMfSettingsRepairReason,
   MAX_SVG_SOURCE_BYTES
 } from '@printstream/shared'
@@ -776,7 +777,7 @@ interface EditorViewProps {
      * Bake and stage against the exact target the host is about to submit. The host owns target
      * construction, while this editor owns the open archive and import store needed for the bake.
      */
-    stageSnapshot: (target: SlicingTarget, slicerTargetId: string | null, signal?: AbortSignal) => Promise<string | null>
+    stageSnapshot: (target: SlicingTarget, slicerTargetId: string | null, signal?: AbortSignal) => Promise<string | Uint8Array | null>
     signal: AbortSignal
   }) => void | Promise<void>
 }
@@ -899,6 +900,46 @@ const LIBRARY_PICKER_COPY: Record<'import' | ModelSourceRequest['kind'], { title
   addPart: {
     title: 'Add part from library',
     description: 'Choose an STL, STEP, or 3MF file to add as a part inside the selected object.'
+  }
+}
+
+/**
+ * Reconciles per-plate custom print orders with the current project materials.
+ * Material edits can occur without reopening Plate Settings, so this emission
+ * boundary drops removed ids and appends new physical ids in project order.
+ * Virtual mixed slots are excluded because the slicer sequences their physical
+ * components, not the virtual slot itself.
+ */
+function reconcileSceneEditFilamentSequences(
+  edit: SceneEdit,
+  projectFilaments: SliceSettingsController['projectFilaments']
+): SceneEdit {
+  const physicalFilamentIds = projectFilaments
+    .filter((filament) => !filament.mixedFilament)
+    .map((filament) => filament.projectFilamentId)
+
+  if (physicalFilamentIds.length === 0) {
+    return edit
+  }
+
+  return {
+    ...edit,
+    plates: edit.plates.map((plate) => ({
+      ...plate,
+      firstLayerFilamentSequence: plate.firstLayerFilamentSequence
+        ? reconcilePlateFilamentSequence(
+            plate.firstLayerFilamentSequence,
+            physicalFilamentIds
+          )
+        : plate.firstLayerFilamentSequence,
+      otherLayerFilamentSequences: plate.otherLayerFilamentSequences?.map((range) => ({
+        ...range,
+        filamentIds: reconcilePlateFilamentSequence(
+          range.filamentIds,
+          physicalFilamentIds
+        )
+      })) ?? plate.otherLayerFilamentSequences
+    }))
   }
 }
 
@@ -9498,7 +9539,8 @@ function EditorView({
   // tells the bake this client distinguishes the two at all; stamping it onto every plate, as this
   // did before per-plate bed types, would save the global as N overrides that then outlive it.
   const buildSceneEditOut = useCallback((current: EditorState, options?: { thumbnails?: Array<{ plateIndex: number; png: string }> }): SceneEdit => {
-    const base = buildSceneEdit(current)
+    const raw = buildSceneEdit(current)
+    const base = reconcileSceneEditFilamentSequences(raw, sliceConfig?.projectFilaments ?? [])
     const plateType = sliceConfig?.plateType.trim()
     // ALWAYS carries the key, null when there is no global to state: its PRESENCE is what tells the
     // bake this client authors per-plate bed types. Spreading it only when truthy meant an unseeded
@@ -11519,6 +11561,8 @@ function EditorView({
           settings={{
             plateTypeOverride: plate.plateTypeOverride,
             printSequence: plate.printSequence,
+            firstLayerFilamentSequence: plate.firstLayerFilamentSequence,
+            otherLayerFilamentSequences: plate.otherLayerFilamentSequences,
             spiralMode: plate.spiralMode,
             locked: plate.locked
           }}
@@ -11535,6 +11579,14 @@ function EditorView({
             resolveConfig: resolveProcessConfig
           } : null}
           globalProcessOverrides={perObject?.globalOverrides ?? EMPTY_OBJECT_OVERRIDES}
+          filaments={(sliceConfig?.projectFilaments ?? [])
+            .filter((filament) => !filament.mixedFilament)
+            .map((filament) => ({
+              id: filament.projectFilamentId,
+              label: filament.label,
+              color: sliceConfig?.filamentColors[filament.projectFilamentId] ?? filament.color ?? '#FFFFFF'
+            }))}
+          hasMixedFilaments={(sliceConfig?.projectFilaments ?? []).some((filament) => filament.mixedFilament != null)}
           onApply={(settings) => handleApplyPlateSettings(plate.plateId, settings)}
           onClose={() => setPlateSettingsId(null)}
         />

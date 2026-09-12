@@ -18,6 +18,7 @@ import type {
   LibraryThreeMfPrimeTower,
   LibraryThreeMfScene,
   LibraryThreeMfSceneInstance,
+  PlateLayerFilamentSequence,
   SceneEdit,
   SceneEditFlushVolumes,
   SceneEditImportPartFilament,
@@ -272,6 +273,10 @@ export interface EditorPlate {
   plateTypeOverride: string | null
   /** This plate's own print sequence, or null when it takes the global. */
   printSequence: 'by layer' | 'by object' | null
+  /** Physical material order on the first layer; null lets the slicer choose. */
+  firstLayerFilamentSequence: number[] | null
+  /** Physical material orders for later layer ranges; null lets the slicer choose. */
+  otherLayerFilamentSequences: PlateLayerFilamentSequence[] | null
   /** This plate's own vase mode, or null when it takes the global. */
   spiralMode: boolean | null
   /** Locked against arrange. Not a tri-state: there is no global lock to inherit. */
@@ -314,8 +319,15 @@ export interface EditorPlate {
  */
 export const INHERITED_PLATE_SETTINGS: Pick<
   EditorPlate,
-  'plateTypeOverride' | 'printSequence' | 'spiralMode' | 'locked'
-> = { plateTypeOverride: null, printSequence: null, spiralMode: null, locked: false }
+  'plateTypeOverride' | 'printSequence' | 'firstLayerFilamentSequence' | 'otherLayerFilamentSequences' | 'spiralMode' | 'locked'
+> = {
+  plateTypeOverride: null,
+  printSequence: null,
+  firstLayerFilamentSequence: null,
+  otherLayerFilamentSequences: null,
+  spiralMode: null,
+  locked: false
+}
 
 /** One layer-based filament change: swap to `filamentId` at print height `z` (mm). */
 export interface EditorFilamentChange {
@@ -1101,6 +1113,10 @@ export function seedEditorState(
       // global as N per-plate overrides the user never asked for.
       plateTypeOverride: plate.bedTypeOverride ?? null,
       printSequence: plate.printSequence ?? null,
+      firstLayerFilamentSequence: plate.firstLayerFilamentSequence ? [...plate.firstLayerFilamentSequence] : null,
+      otherLayerFilamentSequences: plate.otherLayerFilamentSequences
+        ? plate.otherLayerFilamentSequences.map((range) => ({ ...range, filamentIds: [...range.filamentIds] }))
+        : null,
       spiralMode: plate.spiralMode ?? null,
       locked: plate.locked ?? false,
       bed: { ...fallbackBed },
@@ -2011,6 +2027,8 @@ export function buildSceneEdit(state: EditorState): SceneEdit {
       // file's value and quietly undo the user clearing an override.
       plateType: plate.plateTypeOverride,
       printSequence: plate.printSequence,
+      firstLayerFilamentSequence: plate.firstLayerFilamentSequence,
+      otherLayerFilamentSequences: plate.otherLayerFilamentSequences,
       spiralMode: plate.spiralMode,
       locked: plate.locked,
       primeTower: plate.primeTower ? { x: plate.primeTower.x, y: plate.primeTower.y } : null
@@ -2075,7 +2093,11 @@ export function buildSceneEdit(state: EditorState): SceneEdit {
     // Absent unless the session edited them: a project that legitimately carries NO matrix must
     // not have one materialised just because the editor was opened.
     flushVolumes: state.flushVolumes
-      ? { matrix: state.flushVolumes.matrix.map((block) => block.map((row) => [...row])), multiplier: [...state.flushVolumes.multiplier] }
+      ? {
+          matrix: state.flushVolumes.matrix?.map((block) => block.map((row) => [...row])) ?? null,
+          multiplier: [...state.flushVolumes.multiplier],
+          ...(state.flushVolumes.primeVolumeMode ? { primeVolumeMode: state.flushVolumes.primeVolumeMode } : {})
+        }
       : undefined,
     repairedImportIds: collectRepairedImportIds(state),
     objectClones: collectObjectClones(state)
@@ -2121,6 +2143,14 @@ export function rebaseSceneEditFilamentIds(edit: SceneEdit, remap: Map<number, n
     id == null ? null : remap.get(id) ?? null
   return {
     ...edit,
+    plates: edit.plates.map((plate) => ({
+      ...plate,
+      firstLayerFilamentSequence: plate.firstLayerFilamentSequence?.map(translate).filter((id): id is number => id != null) ?? plate.firstLayerFilamentSequence,
+      otherLayerFilamentSequences: plate.otherLayerFilamentSequences?.map((range) => ({
+        ...range,
+        filamentIds: range.filamentIds.map(translate).filter((id): id is number => id != null)
+      })) ?? plate.otherLayerFilamentSequences
+    })),
     instances: edit.instances.map((instance) => ({ ...instance, filamentId: translate(instance.filamentId) })),
     partFilaments: edit.partFilaments
       ?.map((part) => ({ ...part, filamentId: translate(part.filamentId) }))
@@ -2183,6 +2213,12 @@ export function rebaseEditorStateFilamentIds(state: EditorState, remap: Map<numb
     ...state,
     plates: state.plates.map((plate) => ({
       ...plate,
+      firstLayerFilamentSequence: plate.firstLayerFilamentSequence
+        ?.map(translate).filter((id): id is number => id != null) ?? plate.firstLayerFilamentSequence,
+      otherLayerFilamentSequences: plate.otherLayerFilamentSequences?.map((range) => ({
+        ...range,
+        filamentIds: range.filamentIds.map(translate).filter((id): id is number => id != null)
+      })) ?? plate.otherLayerFilamentSequences,
       instances: plate.instances.map((instance) => ({
         ...instance,
         filamentId: translate(instance.filamentId),
@@ -3378,6 +3414,10 @@ export function cloneEditorState(state: EditorState): EditorState {
         excludeAreas: plate.bed.excludeAreas.map((area) => ({ ...area, polygon: area.polygon.map((point) => ({ ...point })) }))
       },
       ...(plate.layerHeightLimits ? { layerHeightLimits: { ...plate.layerHeightLimits } } : {}),
+      ...(plate.firstLayerFilamentSequence ? { firstLayerFilamentSequence: [...plate.firstLayerFilamentSequence] } : {}),
+      ...(plate.otherLayerFilamentSequences
+        ? { otherLayerFilamentSequences: plate.otherLayerFilamentSequences.map((range) => ({ ...range, filamentIds: [...range.filamentIds] })) }
+        : {}),
       instances: plate.instances.map((instance) => ({
         ...instance,
         // An import's source object carries the identity per-object settings and added volumes hang
@@ -3489,7 +3529,13 @@ export function cloneEditorState(state: EditorState): EditorState {
     ...(state.settingsRepairStaged ? { settingsRepairStaged: true } : {}),
     ...(state.removedEmbeddedPresets ? { removedEmbeddedPresets: [...state.removedEmbeddedPresets] } : {}),
     ...(state.flushVolumes
-      ? { flushVolumes: { matrix: state.flushVolumes.matrix.map((block) => block.map((row) => [...row])), multiplier: [...state.flushVolumes.multiplier] } }
+      ? {
+          flushVolumes: {
+            matrix: state.flushVolumes.matrix?.map((block) => block.map((row) => [...row])) ?? null,
+            multiplier: [...state.flushVolumes.multiplier],
+            ...(state.flushVolumes.primeVolumeMode ? { primeVolumeMode: state.flushVolumes.primeVolumeMode } : {})
+          }
+        }
       : {}),
     ...(state.objectClones ? { objectClones: { ...state.objectClones } } : {}),
     // A session-added volume is a PART (this plugin's part-is-a-part rule), so it is copied whole

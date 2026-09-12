@@ -2,8 +2,8 @@
  * Running-app identity for the web footer: the build the image was made from
  * and, for the published open-core image, whether a newer image is available
  * on GHCR. Visibility is applied here (see `resolveAppVersionPayload`): the
- * published image is shown to everyone; the cloud image's version is shown to
- * platform users only; a source/dev run shows nothing.
+ * product SemVer is shown to everyone, while exact cloud revisions remain
+ * visible only to platform users.
  *
  * Also the web's trigger for the native app's one-click in-place update
  * (`POST /update/start`): a twin of the bridges' `update/start` action, gated

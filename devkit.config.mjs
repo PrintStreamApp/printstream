@@ -10,13 +10,21 @@
  */
 import { inspectSlicerSource } from './scripts/dev/slicer-image.mjs'
 
+/** Fixed listeners inside every checkout container; Compose receives these through `env()`. */
+export const DEV_PORTS = Object.freeze({
+  api: '4000',
+  metrics: '4001',
+  slicer: '4010',
+  web: '5173'
+})
+
 export default {
   /**
    * Order matters: these are offsets within this checkout's derived block, so reordering moves
    * every service to a different port. `web` first makes it the block's base, which is the one the
    * proxy routes to and therefore the one worth being stable.
    */
-  ports: ['web', 'api', 'metrics', 'slicer'],
+  ports: ['web'],
 
   /** Pin the PostgreSQL server version this project expects. */
   database: { engine: 'postgres', version: '16.13-bookworm' },
@@ -51,6 +59,9 @@ export default {
    */
   worktreeFiles: ['.env'],
 
+  /** Open the proxied UI only when the API and its database are ready for requests. */
+  browser: { path: '/', healthPath: '/api/health/ready' },
+
   /**
    * Everything here is a value the app already reads from its environment; devkit adds no new
    * configuration surface to the app itself.
@@ -59,14 +70,14 @@ export default {
    * browser actually addresses, and the configured authentication provider derives its relying
    * party identity from that hostname.
    */
-  env: ({ ports, url, identity, configDir }) => ({
-    API_PORT: String(ports.api),
-    METRICS_PORT: String(ports.metrics),
+  env: ({ url, identity, configDir }) => ({
+    API_PORT: DEV_PORTS.api,
+    METRICS_PORT: DEV_PORTS.metrics,
     CLIENT_ORIGIN: url,
-    BRIDGE_SERVER_URL: `http://localhost:${ports.api}`,
-    VITE_DEV_PORT: String(ports.web),
-    VITE_API_PORT: String(ports.api),
-    SLICER_PORT: String(ports.slicer),
+    BRIDGE_SERVER_URL: `http://localhost:${DEV_PORTS.api}`,
+    VITE_DEV_PORT: DEV_PORTS.web,
+    VITE_API_PORT: DEV_PORTS.api,
+    SLICER_PORT: DEV_PORTS.slicer,
     /** A container-absolute default (run-dev.mjs's) would not exist on the host. */
     SLICER_DATA_ROOT: process.env.SLICER_DATA_ROOT || `${configDir}/slicer`,
     SLICER_WORK_DIR: process.env.SLICER_WORK_DIR || `${configDir}/slicer-work/${identity.slug}`
@@ -77,16 +88,33 @@ export default {
    * knows about, so its staleness is this project's to report rather than devkit's.
    */
   checks: [
-    ({ repoRoot }) => {
-      const source = inspectSlicerSource({ repoRoot })
-      if (source.state === 'matches') return { label: 'slicer source', detail: 'the running image is newer than your slicer source' }
+    ({ repoRoot, identity }) => {
+      const source = inspectSlicerSource({
+        repoRoot,
+        composeProject: identity.composeProject,
+        imageRef: `${identity.composeProject}-slicer`
+      })
+      if (source.state === 'matches') {
+        return {
+          label: 'slicer source',
+          detail: 'the local image matches your slicer source'
+        }
+      }
+
       if (source.state === 'not-running') return { label: 'slicer', detail: 'no slicer container running (in-process slicer, or none)' }
+      if (source.state === 'not-built') {
+        return {
+          label: 'slicer image',
+          detail: 'this checkout has no local slicer image',
+          fix: 'npm run dev'
+        }
+      }
       if (source.state === 'differs') {
         return {
           state: '!',
           label: 'slicer source',
-          detail: `${source.reason}: the running container predates it`,
-          fix: 'docker compose -f compose.dev.yml --profile slicer up -d --build slicer'
+          detail: `${source.reason}: the local image predates it`,
+          fix: 'npm run dev'
         }
       }
       return { state: '!', label: 'slicer source', detail: `cannot tell: ${source.reason}` }

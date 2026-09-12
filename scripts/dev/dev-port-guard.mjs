@@ -1,10 +1,9 @@
 /**
  * Refuse a second host-mode dev stack before its partial watchers can disturb the first one.
  *
- * Devkit assigns fixed web/API ports and publishes the web port through a fixed proxy route. Those
+ * Devkit assigns the published ports and routes the first through a fixed proxy hostname. Those
  * ports are therefore identities, not preferences: silently walking to another port starts a stack
- * the advertised hostname cannot reach. The bind probe is intentionally limited to the two services
- * this runner always starts; a remote/container slicer may legitimately own its assigned port.
+ * the advertised hostname cannot reach. Internal container ports are deliberately absent here.
  */
 import { createServer } from 'node:net'
 
@@ -12,10 +11,7 @@ import { createServer } from 'node:net'
 export async function assertHostDevPortsAvailable(hostMode, options = {}) {
   if (!hostMode) return
   const isPortAvailable = options.isPortAvailable ?? canBindPort
-  const assigned = [
-    { name: 'web', port: hostMode.ports.web },
-    { name: 'api', port: hostMode.ports.api }
-  ]
+  const assigned = hostMode.project.ports.map((name) => ({ name, port: hostMode.ports[name] }))
   const availability = await Promise.all(assigned.map(async (service) => ({
     ...service,
     available: await isPortAvailable(service.port)

@@ -56,12 +56,13 @@ export function AppVersionFooter() {
     }
   })
 
-  if (!data || data.revision == null || data.shortRevision == null) return null
+  if (!data || (!data.version && !data.shortRevision)) return null
   const update = data.update
   const lapsed = update?.status === 'updatesLapsed'
   const hasUpdate = update?.status === 'updateAvailable' || lapsed
   const canApply = data.canApplyUpdate && !lapsed
   const targetBuild = update?.latestShortRevision ? ` build ${update.latestShortRevision}` : ' the new build'
+  const displayedVersion = data.version ? `v${data.version}` : `build ${data.shortRevision}`
 
   return (
     <Stack
@@ -71,8 +72,8 @@ export function AppVersionFooter() {
       useFlexGap
       sx={{ flexWrap: 'wrap', justifyContent: 'center' }}
     >
-      <Typography level="body-xs" title={data.revision} sx={{ color: 'neutral.500', fontFamily: 'code' }}>
-        {`build ${data.shortRevision}`}
+      <Typography level="body-xs" title={data.revision ?? undefined} sx={{ color: 'neutral.500', fontFamily: 'code' }}>
+        {displayedVersion}
       </Typography>
       {hasUpdate && update && (
         <Tooltip variant="soft" title={describeUpdate(update, canApply)}>

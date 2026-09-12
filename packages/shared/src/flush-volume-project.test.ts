@@ -42,7 +42,11 @@ test('a dual-nozzle project reads one matrix block per extruder', () => {
   assert.deepEqual(context.storedBlocks, [[[0, 90], [900, 0]], [[0, 91], [901, 0]]])
   assert.equal(context.matrixInconsistent, false)
   assert.deepEqual(context.multiplier, [1, 1])
+  assert.deepEqual(context.multipliers, { normal: [1, 1], fast: [1.2, 1.2] })
   assert.equal(context.multiplierKey, 'flush_multiplier')
+  assert.equal(context.primeVolumeMode, 'Default')
+  assert.equal(context.supportsPrimeSaving, true)
+  assert.equal(context.supportsFastPurge, false)
   assert.deepEqual(context.filamentIsSupport, [false, true])
 })
 
@@ -98,11 +102,17 @@ test('a `nil` retraction distance is unset, not zero', () => {
 
 test('Fast purge mode reads the fast multiplier', () => {
   const context = readProjectFlushContext(JSON.stringify({
-    ...h2dProject, prime_volume_mode: 'Fast', flush_multiplier_fast: ['1.2', '1.4']
+    ...h2dProject,
+    prime_volume_mode: 'Fast',
+    flush_multiplier_fast: ['1.2', '1.4'],
+    support_fast_purge_mode: '1'
   }))
   assert.ok(context)
   assert.equal(context.multiplierKey, 'flush_multiplier_fast')
   assert.deepEqual(context.multiplier, [1.2, 1.4])
+  assert.deepEqual(context.multipliers, { normal: [1, 1], fast: [1.2, 1.4] })
+  assert.equal(context.primeVolumeMode, 'Fast')
+  assert.equal(context.supportsFastPurge, true)
 })
 
 test('an absent multiplier falls back to the engine default for its key', () => {

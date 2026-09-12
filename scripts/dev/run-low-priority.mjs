@@ -2,7 +2,7 @@
  * Runs a command at the lowest CPU scheduling priority.
  *
  * Owns the "heavy repo scripts must not starve co-resident dev servers" rule: `npm run validate`
- * (lint + full test suite + seven tsc builds) shares the devcontainer with the dev API and Vite,
+ * (lint + full test suite + seven tsc builds) shares the development container with the dev API and Vite,
  * and an un-niced run starves them badly enough that multi-megabyte responses stall past the web
  * app's transfer watchdogs mid-smoke-test. Lowering priority costs validate wall-clock time only
  * when something else wants the CPU, which is exactly the intended trade.

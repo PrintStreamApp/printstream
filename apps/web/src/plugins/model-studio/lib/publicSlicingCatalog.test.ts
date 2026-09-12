@@ -124,7 +124,7 @@ test('an unconfigured slicer maps to an empty target list, not an error', async 
   const { restore } = installFetch(async () => jsonResponse({ configured: false, defaultTargetId: null, targets: [] }))
   try {
     const result = await publicSlicerTargetsQueryOptions().queryFn({})
-    assert.deepEqual(result, { configured: false, defaultTargetId: null, targets: [] })
+    assert.deepEqual(result, { configured: false, slicingAvailable: false, defaultTargetId: null, targets: [] })
   } finally {
     restore()
   }

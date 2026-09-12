@@ -73,7 +73,7 @@ function parseNullableSide(raw: string): EditorSidebarSideSetting | null {
 function useWorkspaceKeySuffix(): string {
   const deviceOnly = useViewportSettingsDeviceOnly()
   const slug = useAuthBootstrapQuery().data?.workspace?.slug
-  // A server-less host keys on its own name rather than `ambient`: it is not "signed in without a
+  // A workspace-less host keys on its own name rather than `ambient`: it is not "signed in without a
   // workspace", it is a different surface, and sharing a key would let one shadow the other.
   if (deviceOnly) return 'local'
   return slug ?? 'ambient'

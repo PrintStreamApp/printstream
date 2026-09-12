@@ -11,6 +11,15 @@ test('browser-prepared-v1 makes the uploaded project authoritative', () => {
   })
 })
 
+test('anonymous prepared projects are authoritative without a fabricated source id', () => {
+  assert.deepEqual(slicerInputPolicy({ preparedProject: { contractVersion: 1 } }), {
+    projectSettingsAuthoritative: true,
+    loadRequestProfiles: false,
+    ensureEmbeddedProjectSettings: false,
+    rewriteRequestMetadata: false
+  })
+})
+
 test('ordinary, calibration, and unknown-version inputs retain legacy preparation', () => {
   const legacy = {
     projectSettingsAuthoritative: false,

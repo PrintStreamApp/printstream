@@ -152,12 +152,12 @@ const envSchema = z.object({
   // Paddle billing (cloud-only; unset in self-hosted/OSS builds). The private
   // billing module reads these; when absent, billing is inert and plans are unlimited.
   /**
-   * Master launch switch for billing enforcement (cloud-only). While false,
-   * the beta default, plans exist but nothing is enforced or sold: no Free
+   * Master switch for billing enforcement (cloud-only). While false, plans
+   * exist but nothing is enforced or sold: no Free
    * printer cap, no Pro plugin gating, and checkout/portal actions are
    * refused. Paddle config (below) can be present for admin surfaces and
-   * webhook processing without turning enforcement on. Flip to true at launch
-   * (staging keeps it true for sandbox testing).
+   * webhook processing without turning enforcement on. Production and staging
+   * keep it true; false is the safe posture for a new or incomplete deployment.
    */
   BILLING_ENFORCEMENT: booleanEnv(false),
   /**
@@ -316,6 +316,21 @@ const envSchema = z.object({
   SLICING_MAX_QUEUED_JOBS: positiveIntEnv(25),
   SLICING_REQUEST_TIMEOUT_MS: positiveIntEnv(30 * 60 * 1000),
   SLICING_MAX_ARTIFACT_BYTES: positiveIntEnv(1024 * 1024 * 1024),
+  /**
+   * Anonymous slicing is opt-in on self-hosted deployments and on by default in the cloud. The
+   * The cloud-only policy lives under `private/cloud/public-slicing/policy.ts`.
+   */
+  PUBLIC_SLICING_ENABLED: optionalBooleanEnv(),
+  PUBLIC_SLICING_MAX_CONCURRENT_JOBS: optionalPositiveIntEnv(),
+  PUBLIC_SLICING_MAX_QUEUED_JOBS: positiveIntEnv(20),
+  PUBLIC_SLICING_MAX_QUEUED_JOBS_PER_IP: positiveIntEnv(2),
+  PUBLIC_SLICING_MAX_ACTIVE_JOBS_PER_IP: positiveIntEnv(1),
+  PUBLIC_SLICING_MAX_INPUT_BYTES: positiveIntEnv(256 * 1024 * 1024),
+  PUBLIC_SLICING_MAX_INFLATED_BYTES: positiveIntEnv(512 * 1024 * 1024),
+  PUBLIC_SLICING_MAX_OUTPUT_BYTES: positiveIntEnv(512 * 1024 * 1024),
+  PUBLIC_SLICING_JOB_TTL_MINUTES: positiveIntEnv(60),
+  PUBLIC_SLICING_UPLOAD_TTL_MINUTES: positiveIntEnv(30),
+  PUBLIC_SLICING_MAX_RUNTIME_MS: positiveIntEnv(20 * 60 * 1000),
   BRIDGE_RELEASES_DIR: z.string().default('./data/bridge-releases'),
   // Native (SEA) server builds the live cloud server offers for download. Not
   // documented in the example env files on purpose: it is internal plumbing for
@@ -334,6 +349,7 @@ const envSchema = z.object({
   // absence is what keeps the apply path refusing on Docker/dev runs:
   // - PRINTSTREAM_SERVER_EXE: the installed executable to swap. Only ever set
   //   by a PACKAGED native run, so a dev process can never swap its own node.
+  // - PRINTSTREAM_SERVER_VERSION: the product SemVer baked into the native binary.
   // - PRINTSTREAM_SERVER_BUILD_REVISION: the git revision baked into the native
   //   binary; the footer's build identity (app-build-info.ts falls back to it,
   //   since only Docker images carry app-build-metadata.json).
@@ -343,6 +359,7 @@ const envSchema = z.object({
   // - NATIVE_UPDATE_PUBLIC_KEY: test-only trust-root override, undocumented
   //   like NATIVE_UPDATE_ORIGIN; shipped builds use the baked official key.
   PRINTSTREAM_SERVER_EXE: optionalStringEnv(),
+  PRINTSTREAM_SERVER_VERSION: optionalStringEnv(),
   PRINTSTREAM_SERVER_BUILD_REVISION: optionalStringEnv(),
   PRINTSTREAM_UPDATE_STATE_FILE: optionalStringEnv(),
   PRINTSTREAM_UPDATE_HELD_BACK_FILE: optionalStringEnv(),
@@ -464,11 +481,36 @@ const slicerServiceUrls = (parsedEnv.SLICER_SERVICE_URL ?? '')
   .map((url) => url.trim().replace(/\/+$/, ''))
   .filter((url) => url.length > 0)
 
+/**
+ * Resolve the anonymous share of the slicer pool.
+ *
+ * Production always reserves one slot for workspace work. A one-slot development process has no
+ * competing users to protect, so it may lend that slot to the public editor; otherwise the normal
+ * dev setup can expose the catalogue but can never execute the slice it offers.
+ */
+export function resolvePublicSlicingMaxConcurrentJobs(input: {
+  totalJobs: number
+  requestedAnonymousJobs?: number
+  nodeEnv: 'development' | 'test' | 'production'
+}): number {
+  const reservedWorkspaceJobs = input.nodeEnv === 'production' ? 1 : 0
+  const availableAnonymousJobs = Math.max(0, input.totalJobs - reservedWorkspaceJobs)
+  return Math.min(input.requestedAnonymousJobs ?? 1, availableAnonymousJobs)
+}
+
+const slicingMaxConcurrentJobs = parsedEnv.SLICING_MAX_CONCURRENT_JOBS
+  ?? Math.max(1, slicerServiceUrls.length)
+
 export const env = {
   ...parsedEnv,
   SLICER_SERVICE_URLS: slicerServiceUrls,
   // One concurrent slice per slicer instance unless explicitly overridden.
-  SLICING_MAX_CONCURRENT_JOBS: parsedEnv.SLICING_MAX_CONCURRENT_JOBS ?? Math.max(1, slicerServiceUrls.length),
+  SLICING_MAX_CONCURRENT_JOBS: slicingMaxConcurrentJobs,
+  PUBLIC_SLICING_MAX_CONCURRENT_JOBS: resolvePublicSlicingMaxConcurrentJobs({
+    totalJobs: slicingMaxConcurrentJobs,
+    requestedAnonymousJobs: parsedEnv.PUBLIC_SLICING_MAX_CONCURRENT_JOBS,
+    nodeEnv: parsedEnv.NODE_ENV
+  }),
   PRINTSTREAM_BRIDGE_SOURCE_FINGERPRINT: parsedEnv.PRINTSTREAM_BRIDGE_SOURCE_FINGERPRINT ?? bridgeBuildMetadata.sourceFingerprint,
   /**
    * The bridge build this server's own commit expects. Not operator-settable:

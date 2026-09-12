@@ -19,7 +19,8 @@
  * RUNNING container rather than duplicated here, so the two cannot drift.
  */
 import { spawnSync } from 'node:child_process'
-import { statSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { readFileSync, statSync } from 'node:fs'
 import path from 'node:path'
 
 /**
@@ -48,6 +49,7 @@ const IMAGE_SOURCE_PATHS = [
 ]
 
 const SERVICE = 'slicer'
+const SOURCE_FINGERPRINT_LABEL = 'io.printstream.dev.source-fingerprint'
 
 function dockerCli(args, { timeoutMs = 15_000 } = {}) {
   const result = spawnSync('docker', args, { encoding: 'utf8', timeout: timeoutMs })
@@ -63,7 +65,43 @@ function gitCli(args, cwd) {
   return { ok: result.status === 0, stdout: (result.stdout || '').trim() }
 }
 
-/** The container id of the shared slicer, or null when it is not running. */
+/**
+ * Returns a stable digest of every tracked or unignored slicer build input in the checkout.
+ *
+ * File paths are included so equal bytes moved between files still change the result. Missing
+ * tracked files are represented explicitly, which makes an uncommitted deletion invalidate the
+ * image too. Null means Git could not enumerate the checkout safely.
+ */
+export function slicerSourceFingerprint(repoRoot, { git = gitCli, read = readFileSync } = {}) {
+  const listed = git(
+    ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', ...IMAGE_SOURCE_PATHS],
+    repoRoot
+  )
+
+  if (!listed.ok) {
+    return null
+  }
+
+  const files = listed.stdout.split('\0').filter(Boolean).sort()
+  const hash = createHash('sha256')
+
+  for (const file of files) {
+    hash.update(file)
+    hash.update('\0')
+
+    try {
+      hash.update(read(path.join(repoRoot, file)))
+    } catch {
+      hash.update('<missing>')
+    }
+
+    hash.update('\0')
+  }
+
+  return hash.digest('hex')
+}
+
+/** The container id of this checkout's slicer, or null when it is not running. */
 function runningContainerId(docker, composeProject) {
   const found = docker([
     'ps', '--quiet',
@@ -106,7 +144,7 @@ function isRegistryReference(imageRef) {
 }
 
 /**
- * Inspects the shared slicer container and compares what it runs against the registry.
+ * Inspects the checkout's slicer container and compares what it runs against the registry.
  *
  * Never throws: a machine with no Docker, no container, or no network still gets a readout.
  *
@@ -115,7 +153,7 @@ function isRegistryReference(imageRef) {
  */
 export function inspectSlicerImage({
   run = dockerCli,
-  composeProject = process.env.COMPOSE_PROJECT_NAME || 'printstream-dev'
+  composeProject = process.env.COMPOSE_PROJECT_NAME || 'printstream'
 } = {}) {
   const docker = run
   const container = runningContainerId(docker, composeProject)
@@ -148,47 +186,79 @@ export function inspectSlicerImage({
 }
 
 /**
- * Whether the running container can actually contain this checkout's slicer code.
+ * Whether the checkout's local image can actually contain this checkout's slicer code.
  *
  * The failure this exists to name: editing `apps/slicer` changes NOTHING about a container running
  * the published image, and nothing says so. The slice succeeds, against the old build, so the
  * result looks like your change had no effect rather than like it was never there. That reads as a
  * bug in the code you just wrote, which is the worst possible place to send someone.
  *
- * Compared by TIME rather than by commit, which is the weaker signal and the only available one.
- * The image stamps `org.opencontainers.image.revision`, but the published image is built from the
- * PUBLIC snapshot repo (`org.opencontainers.image.source`), whose history is a scripted export with
- * its own lineage: that SHA does not exist in this clone and never will, so a `git diff` against it
- * fails identically whether the source differs or not. Build time versus source age crosses both
- * lineages.
- *
- * Consequences of using a timestamp, both deliberate: a source file merely TOUCHED since the build
- * reads as newer, and a change published after this image was built does not read as newer at all
- * (that is what the image-digest check above is for). It answers "could my edits be in there?",
- * which is the question being asked, not "is this image current?".
+ * Local dev images carry a content fingerprint of every build-affecting input. This avoids both
+ * Git-lineage ambiguity and Docker's reproducible-build timestamp trap: a fully cached build can
+ * recreate the same old image timestamp even though the build just succeeded. Older images without
+ * the label fall back to source age once, then acquire a fingerprint on their migration build.
  */
 export function inspectSlicerSource({
   repoRoot,
   run = dockerCli,
   git = gitCli,
   stat = statSync,
-  composeProject = process.env.COMPOSE_PROJECT_NAME || 'printstream-dev'
+  composeProject = process.env.COMPOSE_PROJECT_NAME || 'printstream',
+  imageRef: configuredImageRef = null,
+  sourceFingerprint = slicerSourceFingerprint(repoRoot, { git })
 } = {}) {
   const container = runningContainerId(run, composeProject)
-  if (!container) return { state: 'not-running' }
 
-  // The IMAGE's own creation time, not the `org.opencontainers.image.created` LABEL. Only the
-  // publish workflow stamps that label, so reading it worked for a pulled image and returned
-  // "unknown" for every locally built one, which is now the default and the case that matters most.
-  // `.Created` exists on every image and means the same thing for both: when this build happened.
-  // `.Config.Image` (the reference the container was created from), not `.Image` (the resolved
+  // `.Config.Image` is the reference the container was created from, not `.Image` (the resolved
   // id): under Docker Desktop's containerd image store that id does not inspect as an image at all,
   // so the lookup failed and every answer came back "unknown".
-  const image = run(['inspect', container, '--format', '{{.Config.Image}}'])
+  // A stopped Devkit checkout has no container because teardown runs `compose down`, but its image
+  // remains. Falling back to the configured checkout image is load-bearing: treating no container
+  // as no image caused every following launch to rebuild the already-current slicer.
+  const image = container
+    ? run(['inspect', container, '--format', '{{.Config.Image}}'])
+    : { ok: Boolean(configuredImageRef), stdout: configuredImageRef || '' }
   const imageRef = image.ok ? image.stdout.trim() : ''
+
+  if (!imageRef) {
+    return { state: 'not-running' }
+  }
+
+  // Docker can reuse every build layer and reproduce an older image config exactly. Its `.Created`
+  // timestamp then remains older than recently touched source even after a successful build, which
+  // made every launch rebuild forever. New local images carry the exact source digest instead.
+  const label = run([
+    'image',
+    'inspect',
+    imageRef,
+    '--format',
+    `{{index .Config.Labels "${SOURCE_FINGERPRINT_LABEL}"}}`
+  ])
+  const builtFingerprint = label.ok ? label.stdout.trim() : ''
+
+  if (sourceFingerprint && builtFingerprint && builtFingerprint !== '<no value>') {
+    if (sourceFingerprint === builtFingerprint) {
+      return { state: 'matches' }
+    }
+
+    return {
+      state: 'differs',
+      reason: 'this checkout\'s slicer source differs from the local image'
+    }
+  }
+
+  // Existing images predate the fingerprint label. Keep the timestamp fallback so they only need
+  // one migration build, after which all future checks use content rather than modification time.
   const created = imageRef ? run(['image', 'inspect', imageRef, '--format', '{{.Created}}']) : { ok: false, stdout: '' }
   const builtAt = created.ok ? Date.parse(created.stdout.trim()) : Number.NaN
-  if (!Number.isFinite(builtAt)) return { state: 'unknown', reason: 'the image records no build time' }
+
+  if (!Number.isFinite(builtAt)) {
+    if (!container && configuredImageRef) {
+      return { state: 'not-built', imageRef: configuredImageRef }
+    }
+
+    return { state: 'unknown', reason: 'the image records no build time' }
+  }
 
   // Committed changes and uncommitted ones both count: the question is what is on disk now, not
   // what has been recorded. `git log -1` covers the former, file mtimes the latter.

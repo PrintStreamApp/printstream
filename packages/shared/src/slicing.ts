@@ -5,6 +5,9 @@
 import { z } from 'zod'
 import { STAGED_IMPORT_FORMATS } from './import-formats.js'
 import { processSettingOverridesSchema } from './process-settings.js'
+import { primeVolumeModeSchema } from './purge-mode.js'
+import { mixedFilamentConfigSchema } from './mixed-filament.js'
+import { plateLayerFilamentSequenceSchema } from './plate-filament-sequence.js'
 import { degenerateTransformMessage, findDegenerateTransformColumn } from './three-mf/transform-validity.js'
 import { TEXT_SURFACE_TYPES, type TextInfo } from './three-mf/text-info.js'
 import { isSvgArchiveEntry } from './three-mf/svg-shape.js'
@@ -365,6 +368,10 @@ export const sceneEditPlateSchema = z.object({
    * full height before starting the next; see `print_sequence` in the process catalog.
    */
   printSequence: z.enum(['by layer', 'by object']).nullable().optional(),
+  /** Physical filament order for layer 1; null means automatic. */
+  firstLayerFilamentSequence: z.array(z.number().int().positive()).min(1).max(64).nullable().optional(),
+  /** Custom physical filament orders for later layer ranges; null means automatic. */
+  otherLayerFilamentSequences: z.array(plateLayerFilamentSequenceSchema).max(128).nullable().optional(),
   /** Per-plate vase mode, or null/absent for "same as global" (the `spiral_mode` process key). */
   spiralMode: z.boolean().nullable().optional(),
   /**
@@ -670,7 +677,9 @@ export const sceneEditFilamentSchema = z.object({
    * leaves the slot's existing nozzle assignment untouched (single-nozzle projects, or slots
    * the user did not (re)assign).
    */
-  nozzleId: z.number().int().min(0).nullable().optional()
+  nozzleId: z.number().int().min(0).nullable().optional(),
+  /** Virtual mixed-slot recipe. Null explicitly marks a physical slot in a mixed-filament list. */
+  mixedFilament: mixedFilamentConfigSchema.nullable().optional()
 })
 export type SceneEditFilament = z.infer<typeof sceneEditFilamentSchema>
 
@@ -1107,22 +1116,26 @@ export type SceneEditImportPartProcessOverride = z.infer<typeof sceneEditImportP
 /**
  * Edited purge volumes for the project: BambuStudio's "Flushing volumes for filament change".
  *
- * `matrix` is ONE `filaments x filaments` block PER EXTRUDER, in extruder order, holding mm3 to
+ * `matrix`, when set, is ONE `filaments x filaments` block PER EXTRUDER, in extruder order, holding mm3 to
  * purge going from the row's filament to the column's. It is carried structured rather than
  * pre-flattened so the bake can check it against the filament set it is actually writing: a
  * flat array cannot be told apart from one sized for a different material list, and writing a
  * mis-sized `flush_volumes_matrix` is not a soft failure: the engine reads it out of bounds and
  * segfaults mid-slice. See `flush-volumes-matrix.ts`.
  *
- * `multiplier` carries one entry per extruder. Which KEY it lands in depends on the project's
- * `prime_volume_mode`, so the bake decides that from the document rather than the client.
+ * `multiplier` carries one entry per extruder and lands in the key selected by `primeVolumeMode`.
+ * The mode is optional for compatibility with edits created before purge-mode editing existed;
+ * absent means use the mode already stored in the document.
  *
- * Absent means "leave the project's flush settings alone", including leaving them ABSENT, which
- * is a legitimate state that makes BambuStudio compute the matrix itself.
+ * A null matrix means "leave the project's matrix alone", including leaving it ABSENT, which is a
+ * legitimate state that makes BambuStudio compute the matrix itself. This lets a purge-mode or
+ * multiplier-only edit avoid materialising the calculated preview as if the user edited its cells.
+ * An absent `flushVolumes` means leave every purge setting alone.
  */
 export const sceneEditFlushVolumesSchema = z.object({
-  matrix: z.array(z.array(z.array(z.number().nonnegative()).max(64)).max(64)).min(1).max(16),
-  multiplier: z.array(z.number().nonnegative()).min(1).max(16)
+  matrix: z.array(z.array(z.array(z.number().nonnegative()).max(64)).max(64)).min(1).max(16).nullable(),
+  multiplier: z.array(z.number().nonnegative()).min(1).max(16),
+  primeVolumeMode: primeVolumeModeSchema.optional()
 })
 export type SceneEditFlushVolumes = z.infer<typeof sceneEditFlushVolumesSchema>
 
@@ -1748,6 +1761,70 @@ export const createSlicingJobSchema = z.object({
 export type CreateSlicingJob = z.infer<typeof createSlicingJobSchema>
 
 /**
+ * Engine request for an anonymous, browser-prepared project.
+ *
+ * It deliberately has no workspace, library, bridge, printer, history, or source-lineage id. The
+ * marker says the uploaded archive already carries the complete v1 settings contract, just as a
+ * workspace prepared source does, without pretending the temporary file is a library record.
+ */
+export const publicSlicingExecutionRequestSchema = z.object({
+  preparedProject: z.object({ contractVersion: z.literal(1) }),
+  slicerTargetId: z.string().trim().min(1).optional(),
+  target: slicingManualProfileTargetSchema,
+  /** 0 slices all plates; positive values are 1-based plate indexes. */
+  plate: z.number().int().nonnegative().default(0),
+  allowNewerProjectFile: z.boolean().optional()
+}).superRefine((value, context) => {
+  const scripts = value.target.processSettingOverrides?.post_process
+  const present = typeof scripts === 'string'
+    ? scripts.trim().length > 0
+    : Array.isArray(scripts) && scripts.some((entry) => entry.trim().length > 0)
+  if (present) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['target', 'processSettingOverrides', 'post_process'],
+      message: 'Post-processing scripts cannot run on the public slicing server'
+    })
+  }
+})
+export type PublicSlicingExecutionRequest = z.infer<typeof publicSlicingExecutionRequestSchema>
+
+export const publicSlicingJobStatusSchema = z.enum([
+  'uploading',
+  'queued',
+  'slicing',
+  'ready',
+  'failed',
+  'cancelled'
+])
+export type PublicSlicingJobStatus = z.infer<typeof publicSlicingJobStatusSchema>
+
+export const publicSlicingJobSchema = z.object({
+  id: z.string().trim().min(1),
+  fileName: z.string().trim().min(1),
+  sizeBytes: z.number().int().nonnegative(),
+  uploadedBytes: z.number().int().nonnegative(),
+  status: publicSlicingJobStatusSchema,
+  queuePosition: z.number().int().positive().nullable(),
+  estimatedWaitSeconds: z.number().int().positive().nullable(),
+  message: z.string().nullable(),
+  error: z.string().nullable(),
+  outputFileName: z.string().nullable(),
+  outputSizeBytes: z.number().int().nonnegative().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  expiresAt: z.string()
+})
+export type PublicSlicingJob = z.infer<typeof publicSlicingJobSchema>
+
+export const createPublicSlicingUploadSchema = z.object({
+  fileName: z.string().trim().min(1).max(255).refine((name) => name.toLowerCase().endsWith('.3mf'), 'A .3mf file is required'),
+  sizeBytes: z.number().int().positive()
+})
+
+export const completePublicSlicingUploadSchema = publicSlicingExecutionRequestSchema
+
+/**
  * The slice settings preserved beside a sliced output's project 3MF, so a later
  * "slice again" can reopen the prepare-print dialog on what actually ran.
  *
@@ -1997,7 +2074,9 @@ export type SlicingPresetFile = z.infer<typeof slicingPresetFileSchema>
 export const sliceEnvelopeSchema = z.object({
   jobId: z.string().trim().min(1),
   sourceFileName: z.string().trim().min(1),
-  request: createSlicingJobSchema,
+  request: z.union([createSlicingJobSchema, publicSlicingExecutionRequestSchema]),
+  /** Trusted API ceiling enforced by the slicer while the native process writes its artifact. */
+  maxOutputBytes: z.number().int().positive().optional(),
   profileFiles: z.array(slicingPresetFileSchema).optional(),
   /**
    * API-resolved facts used only to choose how the engine is executed. They never rewrite a

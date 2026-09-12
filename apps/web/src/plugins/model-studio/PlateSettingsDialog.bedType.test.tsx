@@ -27,6 +27,8 @@ type Draft = DialogProps['settings']
 const INHERITED: Draft = {
   plateTypeOverride: null,
   printSequence: null,
+  firstLayerFilamentSequence: null,
+  otherLayerFilamentSequences: null,
   spiralMode: null,
   locked: false
 }
@@ -49,6 +51,8 @@ async function renderDialog(options: {
           globalPlateType={options.globalPlateType ?? 'High Temp Plate'}
           processContext={null}
           globalProcessOverrides={{}}
+          filaments={[]}
+          hasMixedFilaments={false}
           onApply={() => {}}
           onClose={() => {}}
         />

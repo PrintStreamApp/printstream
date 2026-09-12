@@ -78,6 +78,21 @@ test('rejects malformed or incomplete prepared archives before proof issuance', 
   }
 })
 
+test('rejects operating-system post-processing commands before invoking the slicer', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'prepared-validation-scripts-'))
+  try {
+    const settings = validSettings()
+    settings.post_process = ['/tmp/untrusted-command']
+    const projectPath = await writeProject(dir, { projectSettings: JSON.stringify(settings) })
+    await assert.rejects(
+      validatePreparedSlicingProject({ projectPath, target }),
+      /Post-processing scripts cannot run/
+    )
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
 test('rejects target identities and mappings not present in the staged project', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'prepared-validation-target-'))
   try {
@@ -186,6 +201,22 @@ test('bounds prepared ZIP entry count and aggregate inflated bytes', async () =>
       validateZipArchiveLimits(underdeclaredPath, { maxEntries: 100, maxUncompressedBytes: 64 }),
       /expands beyond the allowed size/,
       'the emitted byte counter rejects an archive whose central directory under-declares every entry'
+    )
+
+    const duplicatePath = path.join(dir, 'duplicate.3mf')
+    const duplicateZip = new yazl.ZipFile()
+    const duplicateOutput = createWriteStream(duplicatePath)
+    duplicateZip.outputStream.pipe(duplicateOutput)
+    duplicateZip.addBuffer(Buffer.from('one'), 'Metadata/value.txt')
+    duplicateZip.addBuffer(Buffer.from('two'), 'metadata/value.txt')
+    duplicateZip.end()
+    await new Promise<void>((resolve, reject) => {
+      duplicateOutput.on('close', resolve)
+      duplicateOutput.on('error', reject)
+    })
+    await assert.rejects(
+      validateZipArchiveLimits(duplicatePath, { maxEntries: 100, maxUncompressedBytes: 1024 }),
+      /duplicate entry names/
     )
   } finally {
     await rm(dir, { recursive: true, force: true })

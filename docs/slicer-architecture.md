@@ -33,8 +33,8 @@ through the `SceneEdit` contract and the baked 3MF on disk.
 | **Shared 3MF model** | api/bridge/shared/web | the `apps/api/src/lib/three-mf-*.ts` modules own the Node ZIP I/O (read + write, re-exported via the `three-mf.ts` barrel); the pure transforms live in `@printstream/shared/three-mf`: the **index** and **scene** parses, and the whole bake (`bake-documents`, plus `object-clone`, `mesh-repair`, `xml-write`). Shared by `three-mf-reader.ts`, the bridge's `apps/bridge/src/library-3mf.ts`, and the web's client-side 3MF surfaces (no hand-kept mirror) |
 | **Printer retarget** | shared/api | "Save as a different printer": rewrites a project's machine + process settings (no slicing). `packages/shared/src/machine-retarget.ts`, `apps/api/src/lib/save-retarget.ts`. See `docs/project-printer-retarget.md` |
 | **Calibration** | api/web plugin | Builds disposable calibration prints (PA towers, flow plates) and runs them through the slicing pipeline + dispatcher. `apps/api/src/plugins/calibration/**`, `apps/web/src/plugins/calibration/**`. See "Calibration (plugin surface)" below |
-| **Public editor** (web host) | web | The server-less host of the SAME `EditorView`, at `/3mf-editor`: `apps/web/src/PublicToolApp.tsx` (shell), `LocalProjectEditor.tsx` (file picker + archive), `LocalEditorSurface.tsx` (mounts the editor + the dialogs no slice modal renders), `useLocalSliceSettingsController.ts`, `LocalSlicingPresetsDialog.tsx`, and the `lib/local*.ts` seams (project source, save target, import store, process/filament resolvers, machine retarget, browser preset storage). See "The public editor" below |
-| **Public editor** (anonymous api) | api | `routes/public-slicing.ts`, the anonymous catalogue (`/api/public/slicing/*`): profiles, targets, bed-model, flush-data/flush-calibration, and builtin-ONLY `resolve-process` / `resolve-filament` / `resolve-machine` |
+| **Public editor** (cloud web host) | web | The cloud-only, account-free host of the SAME `EditorView`, at `/3mf-editor`: `apps/web/src/PublicToolApp.tsx` (shell), `LocalProjectEditor.tsx` (file picker + archive), `LocalEditorSurface.tsx` (mounts the editor + the dialogs no slice modal renders), `useLocalSliceSettingsController.ts`, `LocalSlicingPresetsDialog.tsx`, and the `lib/local*.ts` seams (project source, save target, import store, process/filament resolvers, machine retarget, browser preset storage). See "The public editor" below |
+| **Public editor** (anonymous api) | api | `private/cloud/public-slicing/routes.ts`, the cloud-only anonymous catalogue (`/api/public/slicing/*`): profiles, targets, bed-model, flush-data/flush-calibration, and builtin-ONLY `resolve-process` / `resolve-filament` / `resolve-machine` |
 
 ## The no-save-first rule
 
@@ -984,23 +984,50 @@ but has no save-to-library (the run *is* the tracked entity).
 
 ## The public editor
 
-`/3mf-editor` mounts the **same `EditorView`** with no account and no workspace. It is not a fork or
+On the hosted cloud, `/3mf-editor` mounts the **same `EditorView`** with no account and no workspace. The route and its anonymous API are not mounted by self-hosted, native, or OSS deployments. It is not a fork or
 a reduced variant: the difference is entirely in the seams the host supplies (project source, save
 target, import store, materials, preset manager, config resolvers), which is why the editor itself
 has no "is this public?" flag anywhere.
 
-It is not server-LESS, only workspace-less. The user's FILE never leaves the tab, but the preset
-bodies do not live in the tab: the catalogue, the bed mesh, the flush tables, and every preset
-resolve come from `/api/public/slicing/*`, and the sidebar stays inert until they arrive
-(`slicerDataReady`). "Nothing is uploaded" is the promise; "nothing is fetched" is not.
+It is not server-LESS, only workspace-less. Editing and saving remain in the tab. The catalogue,
+bed mesh, flush tables, and built-in preset resolves come from `/api/public/slicing/*`. A project is
+uploaded only after the user explicitly clicks Slice, and then only after the browser has baked the
+complete engine-ready v1 project.
 
-**Slicing is deliberately not wired.** `LocalEditorSurface` omits `onSlice`, so the footer renders no
-slice control at all: a browser can reach neither the printers nor the slicer, and opening public
-slicing needs a capacity/abuse answer first (a lowest-priority public lane, per-IP limits, and
-fairness against paying workspaces' slices). Everything else (arrange, transform, materials,
-process/filament presets and their tune dialogs, per-object overrides, machine retarget on save)
-works, as does importing geometry from an STL, a STEP, or another 3MF. Absent by design alongside
-slicing: every library affordance, import FROM the library (gated on
+Public execution is a separate ephemeral lifecycle (`private/cloud/public-slicing/jobs.ts`), not a workspace job
+with invented library ids. A random bearer capability protects status, cancel, retry, log, and
+download; only its digest is retained. Input arrives as exact-offset resumable chunks, and inputs
+and outputs are deleted after the configured short TTL. The module has no Prisma, library, bridge,
+printer, history, or dispatch dependency. `slicing-execution-scheduler.ts` is the only shared seam:
+paid workspace jobs rank above free workspace jobs, both rank above anonymous jobs, and production
+keeps anonymous concurrency below total capacity so at least one workspace slot remains available.
+A one-slot development process may lend that slot to the editor because it has no competing users.
+Public callers are spread by prior starts within their lane and receive a queue position plus an
+estimate based on observed slice durations.
+
+The uploaded project is hostile input at both boundaries. The browser inflates it under compressed,
+per-entry, aggregate-expanded-size, entry-count and duplicate-name limits; a stalled worker is never
+retried on the UI thread. The API repeats those checks, and the slicer service independently limits
+its HTTP body and walks the ZIP before starting BambuStudio. Public prepared snapshots clear
+`post_process`: those commands run on the slicer computer rather than the printer, so the browser
+warns that they will not run and the API plus slicer both reject any client that bypasses that pass.
+Printer G-code is preserved. The server Compose deployment requires slicer authentication, gives
+each invocation a fresh BambuStudio home, drops Linux capabilities, enables `no-new-privileges`,
+uses a read-only container root, and caps memory, CPU and process count. The trusted service owns
+runtime engine installation as root with only `CHOWN`, `DAC_OVERRIDE`, `KILL`, `SETGID`, and
+`SETUID`; every hostile native BambuStudio child drops to a private per-job uid and gid. Installed
+engines are root-owned with group/other write bits removed, `/work` itself is not writable by native
+processes, and each unguessable disposable job tree is traversable only by its own group. The file
+size rlimit and a slicer-owned output ceiling stop native output before it fills the shared work
+area, whose server Compose mount is additionally bounded by a 4 GB tmpfs so many-file output cannot
+fill the host disk. Native children also receive an
+allowlisted runtime environment rather than the service bearer token or deployment environment, so
+a parser compromise cannot replace the executable used by later slices or authenticate back to the
+engine-management service.
+
+Everything else (arrange, transform, materials, process/filament presets and their tune dialogs,
+per-object overrides, machine retarget on save) works, as does importing geometry from an STL, a
+STEP, or another 3MF. Absent by design: every library affordance, import FROM the library (gated on
 `EditorImportStore.supportsLibrarySource`) and export TO it (gated separately, on the save target not
 being library-backed, since that is a question about where a save lands rather than what the store
 can read).
@@ -1014,6 +1041,7 @@ What the host must answer for itself, and where:
 | Staged imports | uploaded, parsed server-side | parsed in the tab, off the main thread (`importStagingWorker.ts`: STL, the shared 3MF extractor, and the OCCT WASM for STEP); same formats, no library source |
 | Presets | workspace catalogue + custom presets | `/api/public/slicing/*` + the user's browser-stored presets |
 | Preset resolution | `/api/slicing/profiles/resolve-*` | `/api/public/slicing/resolve-*`, **builtin ids only** |
+| Slice execution | persistent workspace job and library result | temporary token-protected job and G-code download only |
 
 Two rules hold the boundary. **The anonymous routes resolve built-in presets and nothing else**: a
 `custom:` id is workspace data and is refused at the route, while a `project:` preset is resolved in
@@ -1136,6 +1164,24 @@ browser, so the one tier with a genuinely incomplete baseline was also the one t
   filament set, so a stale one is conformed instead; which KEY it lands in follows the project's
   `prime_volume_mode` through `flushMultiplierKeyForPrimeVolumeMode`, since BambuStudio's own
   dialog reads and writes `flush_multiplier_fast` in Fast mode.
+- **The remaining Bambu multi-material project controls share the same material authoring seam.**
+  Mixed filament slots are virtual entries referencing two or three same-type physical slots;
+  their ratios and optional Hermite gradient are parsed and written by
+  `packages/shared/src/mixed-filament.ts`, while tray mapping expands them back to physical
+  components. The engine support was proven against the shipped slicer before the editor exposed
+  the control. Per-plate first-layer and later-layer filament sequences round-trip through
+  `plate-filament-sequence.ts`; list changes reconcile each custom order by retaining survivors and
+  appending new physical slots, and mixed filaments disable sequencing as they do in BambuStudio.
+  Sync AMS replaces the complete project material list in live tray order, preserving surviving
+  session ids and refusing to remove a tail slot still used by an object. Dual-nozzle grouping uses
+  `filament-grouping.ts`: exhaustive valid bipartitions below ten physical filaments, then a bounded
+  deterministic local search, scored from the project purge matrix (or the verified colour formula
+  when no matrix is stored). Profile `filament_printable` masks and extruder variants are hard
+  constraints; Convenience mode prefers the printer's loaded sides and is absent when a Filament
+  Track Switch is ready. Every result writes the existing material-to-toolhead map, so saved projects
+  and `--filament-map` slicing cannot disagree. The same dialog owns
+  `enable_filament_dynamic_map`; the three purge modes author `prime_volume_mode` and keep the normal
+  and fast multiplier sets independent.
 - **The suggested volumes are a verified port of BambuStudio's calculation, and its measured tables
   are read from the slicer at runtime.** `packages/shared/src/flush-volume-calc.ts` ports
   `FlushVolCalculator` + `WipingDialog::CalcFlushingVolumes`; it was diffed against BambuStudio's
@@ -1222,7 +1268,8 @@ browser, so the one tier with a genuinely incomplete baseline was also the one t
   `@printstream/shared/three-mf` (`index-parser.ts`, `scene-parser.ts`). The index parse is
   consumed by `apps/api/src/lib/three-mf-reader.ts` and `apps/bridge/src/library-3mf.ts`; the
   scene parse by that same reader and by the web's public 3MF editor (`/3mf-editor`), which
-  unzips the user's file in the browser and never uploads it. Changing the index shape means editing that parser
+  unzips the user's file in the browser. Editing and saving stay local; an explicit Slice uploads
+  only the browser-prepared temporary copy. Changing the index shape means editing that parser
   once, updating the shared schema, and bumping `THREE_MF_INDEX_PARSER_VERSION`; see
   the API development notes and the bridge development notes. Keep both parsers Node-free; each app
   owns its own ZIP I/O and caching. (All 3MF *writing* (`three-mf-scene-builder.ts`,

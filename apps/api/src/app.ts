@@ -31,7 +31,6 @@ import { adminPluginsRouter } from './routes/admin-plugins.js'
 import { pluginCatalogRouter } from './routes/plugin-catalog.js'
 import { notificationsRouter } from './routes/notifications.js'
 import { printDispatchRouter } from './routes/print-dispatch.js'
-import { publicSlicingRouter } from './routes/public-slicing.js'
 import { slicingRouter } from './routes/slicing.js'
 import { editorRouter } from './routes/editor.js'
 import { deleteOperationsRouter } from './routes/delete-operations.js'
@@ -222,14 +221,6 @@ app.use('/api/printer-views', printerViewsRouter)
 app.use('/api/library', libraryRouter)
 app.use('/api/jobs', jobsRouter)
 app.use('/api/print-dispatch', printDispatchRouter)
-// Anonymous, read-only slicer catalogue for the public editor. Its own limiter: the profile
-// catalogue is the one large body served without a session, so it is capped separately rather than
-// competing with an anonymous IP's general API budget.
-app.use('/api/public/slicing', createRateLimitMiddleware({
-  name: 'public-slicing',
-  windowMs: 60_000,
-  max: 60
-}), publicSlicingRouter)
 app.use('/api/slicing', slicingRouter)
 app.use('/api/editor', editorRouter)
 app.use('/api/delete-operations', deleteOperationsRouter)

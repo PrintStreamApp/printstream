@@ -1,7 +1,10 @@
 # Publishes the open-core Docker images to GHCR so self-hosters can `docker pull`
 # instead of building from source. Rolling model: every push to the public repo's
-# `main` (i.e. each `npm run export:public` snapshot) rebuilds and republishes
-# `:latest`, plus an immutable `:sha-<short>` for pinning a specific build.
+# `main` (i.e. each `npm run export:public` snapshot) publishes the SemVer from
+# the root package.json, moves `:latest` for stable versions, and retains an immutable `:sha-<short>`
+# provenance tag. After all three images land, the same workflow creates the
+# matching GitHub Release. A new snapshot must bump the version: two different
+# source trees are never allowed to claim the same SemVer.
 #
 # Three images:
 #   printstream          - the combined app (web + API + bridge in one image; the
@@ -34,15 +37,73 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# A newer snapshot supersedes an in-flight one; don't pile up :latest pushes.
+# Every snapshot is a versioned release. Let each one finish so a later push
+# cannot leave the earlier SemVer with only part of its image set published.
 concurrency:
   group: docker-publish-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
+  version:
+    if: github.repository == 'PrintStreamApp/printstream'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.product.outputs.version }}
+      tag: ${{ steps.product.outputs.tag }}
+      prerelease: ${{ steps.product.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - id: product
+        name: Read and validate the product version
+        run: |
+          version="$(node scripts/ci/product-version.mjs)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          if [[ "$version" == *-* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Refuse to reuse a version for different source
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.product.outputs.tag }}
+          VERSION: ${{ steps.product.outputs.version }}
+        run: |
+          if [ -n "$BEFORE_SHA" ] \
+            && [ "$BEFORE_SHA" != "0000000000000000000000000000000000000000" ] \
+            && git cat-file -e "${BEFORE_SHA}:package.json" 2>/dev/null; then
+            previous_version="$(git show "${BEFORE_SHA}:package.json" | node -e "let source=''; process.stdin.on('data', chunk => source += chunk); process.stdin.on('end', () => console.log(JSON.parse(source).version))")"
+            if [ "$previous_version" = "$VERSION" ] && [ "$BEFORE_SHA" != "$GITHUB_SHA" ]; then
+              printf '%s\n' "Public source changed without a product version bump (${VERSION})." >&2
+              exit 1
+            fi
+          fi
+
+          set +e
+          existing_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" --jq '.object.sha' 2>tag-error.txt)"
+          tag_status=$?
+          set -e
+          if [ "$tag_status" -ne 0 ] && ! grep -q '(HTTP 404)' tag-error.txt; then
+            cat tag-error.txt >&2
+            exit "$tag_status"
+          fi
+          if [ -n "$existing_sha" ] && [ "$existing_sha" != "$GITHUB_SHA" ]; then
+            printf '%s\n' "${TAG} already points at ${existing_sha}; bump package.json before publishing a new image set." >&2
+            exit 1
+          fi
+
   # Build the combined app image once per architecture on a native runner and
   # push each result by digest (no tag yet: the merge job assembles the tags).
   build-app:
+    needs: version
     # Only the public open-core repo publishes; skipped in the private mirror.
     if: github.repository == 'PrintStreamApp/printstream'
     runs-on: ${{ matrix.runner }}
@@ -87,6 +148,7 @@ jobs:
           # update channel; REVISION is the commit shown to users.
           build-args: |
             PRINTSTREAM_IMAGE_REVISION=${{ github.sha }}
+            PRINTSTREAM_IMAGE_VERSION=${{ needs.version.outputs.version }}
             PRINTSTREAM_IMAGE_PUBLISHED=true
           outputs: type=image,name=ghcr.io/printstreamapp/printstream,push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=printstream-${{ matrix.arch }}
@@ -136,7 +198,7 @@ jobs:
 
   # Merge the per-arch digests into a single multi-arch manifest and tag it.
   merge-app:
-    needs: build-app
+    needs: [version, build-app]
     if: github.repository == 'PrintStreamApp/printstream'
     runs-on: ubuntu-latest
     permissions:
@@ -163,7 +225,8 @@ jobs:
         with:
           images: ghcr.io/printstreamapp/printstream
           tags: |
-            type=raw,value=latest
+            type=raw,value=latest,enable=${{ needs.version.outputs.prerelease == 'false' }}
+            type=raw,value=${{ needs.version.outputs.version }}
             type=sha,format=short
 
       - name: Create multi-arch manifest and push
@@ -174,11 +237,11 @@ jobs:
             $(printf 'ghcr.io/printstreamapp/printstream@sha256:%s ' *)
 
       - name: Inspect image
-        run: docker buildx imagetools inspect ghcr.io/printstreamapp/printstream:latest
+        run: docker buildx imagetools inspect "ghcr.io/printstreamapp/printstream:${{ needs.version.outputs.version }}"
 
   # Merge the per-arch bridge digests into a single multi-arch manifest and tag it.
   merge-bridge:
-    needs: build-app
+    needs: [version, build-app]
     if: github.repository == 'PrintStreamApp/printstream'
     runs-on: ubuntu-latest
     permissions:
@@ -205,7 +268,8 @@ jobs:
         with:
           images: ghcr.io/printstreamapp/printstream-bridge
           tags: |
-            type=raw,value=latest
+            type=raw,value=latest,enable=${{ needs.version.outputs.prerelease == 'false' }}
+            type=raw,value=${{ needs.version.outputs.version }}
             type=sha,format=short
 
       - name: Create multi-arch manifest and push
@@ -216,7 +280,7 @@ jobs:
             $(printf 'ghcr.io/printstreamapp/printstream-bridge@sha256:%s ' *)
 
       - name: Inspect image
-        run: docker buildx imagetools inspect ghcr.io/printstreamapp/printstream-bridge:latest
+        run: docker buildx imagetools inspect "ghcr.io/printstreamapp/printstream-bridge:${{ needs.version.outputs.version }}"
 
   # The slicer bundles the x86 Bambu Studio CLI. On arm64 that CLI runs under
   # qemu-user emulation against an x86-64 sysroot baked into the image at build time
@@ -225,6 +289,7 @@ jobs:
   # Building natively (not under QEMU) keeps the arm64 build's npm install and the
   # sysroot apt closure on a real arm64 CPU.
   build-slicer:
+    needs: version
     if: github.repository == 'PrintStreamApp/printstream'
     runs-on: ${{ matrix.runner }}
     permissions:
@@ -283,7 +348,7 @@ jobs:
 
   # Merge the per-arch slicer digests into a single multi-arch manifest and tag it.
   merge-slicer:
-    needs: build-slicer
+    needs: [version, build-slicer]
     if: github.repository == 'PrintStreamApp/printstream'
     runs-on: ubuntu-latest
     permissions:
@@ -310,7 +375,8 @@ jobs:
         with:
           images: ghcr.io/printstreamapp/printstream-slicer
           tags: |
-            type=raw,value=latest
+            type=raw,value=latest,enable=${{ needs.version.outputs.prerelease == 'false' }}
+            type=raw,value=${{ needs.version.outputs.version }}
             type=sha,format=short
 
       - name: Create multi-arch manifest and push
@@ -321,4 +387,51 @@ jobs:
             $(printf 'ghcr.io/printstreamapp/printstream-slicer@sha256:%s ' *)
 
       - name: Inspect image
-        run: docker buildx imagetools inspect ghcr.io/printstreamapp/printstream-slicer:latest
+        run: docker buildx imagetools inspect "ghcr.io/printstreamapp/printstream-slicer:${{ needs.version.outputs.version }}"
+
+  release:
+    needs: [version, merge-app, merge-bridge, merge-slicer]
+    if: github.repository == 'PrintStreamApp/printstream'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Create the matching GitHub release once
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.version.outputs.tag }}
+          VERSION: ${{ needs.version.outputs.version }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; image publication retry is complete."
+            exit 0
+          fi
+
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+            -f tag_name="$TAG" \
+            -f target_commitish="$GITHUB_SHA" \
+            --jq '.body' > generated-notes.md
+
+          {
+            printf '%s\n\n' '## Container images'
+            printf '%s\n' '```console'
+            printf 'docker pull ghcr.io/printstreamapp/printstream:%s\n' "$VERSION"
+            printf 'docker pull ghcr.io/printstreamapp/printstream-bridge:%s\n' "$VERSION"
+            printf 'docker pull ghcr.io/printstreamapp/printstream-slicer:%s\n' "$VERSION"
+            printf '%s\n\n' '```'
+            printf '%s\n\n' 'All three tags identify the image set built from this release commit. The `sha-` tags remain available for immutable provenance.'
+            cat generated-notes.md
+          } > release-notes.md
+
+          release_args=()
+          if [ "$PRERELEASE" = "true" ]; then
+            release_args+=(--prerelease)
+          fi
+
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "$TAG" \
+            --notes-file release-notes.md \
+            "${release_args[@]}"

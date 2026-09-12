@@ -8,8 +8,9 @@
  * It does NOT create a React Query client: `main.tsx` already provides one above `Root`, so both
  * shells inherit it. The editor loads through queries even when its data is local, so that matters.
  *
- * Core, not private: the tools are capability the open-source and self-hosted builds serve too. The
- * cloud site adds its own landing copy and SEO around them separately.
+ * The shell stays core so the private discovery seam can reference it without reversing the
+ * open-core dependency, but its route manifest is private and cloud-only. Self-hosted, native, and
+ * OSS builds therefore never mount it.
  */
 import { Suspense, lazy, useEffect } from 'react'
 import Box from '@mui/joy/Box'
@@ -25,6 +26,10 @@ import { ViewportSettingsScopeProvider } from './lib/editorViewportSettings'
 import { dismissSplashScreenImmediately } from './lib/splashScreen'
 import { buildChromeCssVars } from './theme/buildTheme'
 import { defaultChrome, theme } from './theme/theme'
+import { PublicShell } from './components/PublicShell'
+import { publicToolChrome } from './lib/publicToolChrome'
+import { useAuthBootstrapQuery } from './lib/authQuery'
+import { PUBLIC_TOOL_ROUTE_PATHS } from './lib/publicToolManifest'
 
 // Three.js and the 3MF parsers are the heaviest chunk in the app; only fetch them once someone is
 // actually on the tool's route.
@@ -45,6 +50,30 @@ export default function PublicToolApp() {
     }
   }, [])
 
+  const PublicHeader = publicToolChrome?.Header
+  const PublicFooter = publicToolChrome?.Footer
+  const authBootstrapQuery = useAuthBootstrapQuery({
+    enabled: Boolean(PublicHeader),
+    suppressGlobalErrorToast: true
+  })
+  const actorType = authBootstrapQuery.data?.actor?.type ?? 'anonymous'
+  const tool = (
+    <Suspense fallback={<ToolLoading />}>
+      <Routes>
+        {PUBLIC_TOOL_ROUTE_PATHS.map((path) => (
+          <Route key={path} path={path} element={<LocalProjectEditor />} />
+        ))}
+        {/* Any other path is the one-render hand-off to the app branch: render nothing rather
+            than redirecting, exactly as the marketing shell does. */}
+        <Route path="*" element={null} />
+      </Routes>
+    </Suspense>
+  )
+
+  // Public tools are declared by a private cloud manifest. This backstop prevents a direct import
+  // from reviving the editor in an OSS/native build where that manifest and its chrome are absent.
+  if (!PublicHeader || !PublicFooter) return null
+
   return (
     <AppThemeProvider theme={theme}>
       <CssBaseline />
@@ -53,15 +82,21 @@ export default function PublicToolApp() {
       {/* No workspace behind these pages, so viewport preferences are device-only: a "workspace
           default vs this device" pair has no default to point at. */}
       <ViewportSettingsScopeProvider deviceOnly>
-        <Box sx={{ ...chromeVars, height: '100dvh', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-          <Suspense fallback={<ToolLoading />}>
-            <Routes>
-              <Route path="/3mf-editor" element={<LocalProjectEditor />} />
-              {/* Any other path is the one-render hand-off to the app branch: render nothing rather
-                  than redirecting, exactly as the marketing shell does. */}
-              <Route path="*" element={null} />
-            </Routes>
-          </Suspense>
+        <Box sx={chromeVars}>
+          <PublicShell contentMaxWidth="none" fillViewport footer={<PublicFooter />}>
+            <PublicHeader
+              isAuthenticated={actorType !== 'anonymous'}
+              authPending={authBootstrapQuery.isPending}
+              appHref="/workspaces"
+            />
+            {/* The chrome owns fixed space; the editor flexes into everything left between it. */}
+            <Box
+              component="main"
+              sx={{ flex: 1, minHeight: 0, minWidth: 0, display: 'flex', flexDirection: 'column' }}
+            >
+              {tool}
+            </Box>
+          </PublicShell>
         </Box>
         {/* Every toast the editor raises (an import refused, a save failed) is rendered by this
             host or by nothing at all. Without a Toaster here, `toast.error` on `/3mf-editor` went

@@ -24,16 +24,18 @@
  */
 import { useMemo, useState } from 'react'
 import {
-  Alert, Box, Button, DialogActions, Divider, FormControl, FormLabel, Input, Stack, Tab, TabList,
-  TabPanel, Tabs, Tooltip, Typography
+  Alert, Box, Button, DialogActions, Divider, FormControl, FormLabel, Input, Option, Select, Stack,
+  Tab, TabList, TabPanel, Tabs, Tooltip, Typography
 } from '@mui/joy'
 import CalculateRoundedIcon from '@mui/icons-material/CalculateRounded'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import WarningAmberRoundedIcon from '@mui/icons-material/WarningAmberRounded'
 import {
   FLUSH_MULTIPLIER_RANGE,
+  availablePrimeVolumeModes,
   suggestProjectFlushVolumes,
   type FlushCalibrationVerdict,
+  type PrimeVolumeMode,
   type ProjectFlushContext,
   type SceneEditFlushVolumes
 } from '@printstream/shared'
@@ -73,7 +75,16 @@ export interface FlushVolumesDialogProps {
 }
 
 export function FlushVolumesDialog({
-  open, onClose, context, filaments, extruderLabels, datasets, calibration, value, onApply, onRepair
+  open,
+  onClose,
+  context,
+  filaments,
+  extruderLabels,
+  datasets,
+  calibration,
+  value,
+  onApply,
+  onRepair
 }: FlushVolumesDialogProps): JSX.Element {
   // What BambuStudio's "Re-calculate" would produce, per extruder, for the SESSION's materials:
   // through the shared composer, so the dialog cannot pair "read the project" with "calculate"
@@ -88,28 +99,63 @@ export function FlushVolumesDialog({
   )
 
   const [blocks, setBlocks] = useState<number[][][]>(
-    () => value?.matrix.map((block) => block.map((row) => [...row]))
+    () => value?.matrix?.map((block) => block.map((row) => [...row]))
       ?? seedFlushBlocks({ context, filamentCount: filaments.length, suggestion })
   )
-  const [multiplier, setMultiplier] = useState<number[]>(() => value?.multiplier ?? context.multiplier)
+  const availableModes = useMemo(() => availablePrimeVolumeModes(context), [context])
+  const [primeVolumeMode, setPrimeVolumeMode] = useState<PrimeVolumeMode>(() => {
+    const initial = value?.primeVolumeMode ?? context.primeVolumeMode
+    return availableModes.includes(initial) ? initial : 'Default'
+  })
+  const [multipliers, setMultipliers] = useState<Record<'normal' | 'fast', number[]>>(() => {
+    const initial = {
+      normal: [...context.multipliers.normal],
+      fast: [...context.multipliers.fast]
+    }
+
+    if (value) {
+      const valueSet = multiplierSetFor(value.primeVolumeMode ?? context.primeVolumeMode)
+      initial[valueSet] = [...value.multiplier]
+    }
+
+    return initial
+  })
+  const activeMultiplierSet = multiplierSetFor(primeVolumeMode)
+  const multiplier = multipliers[activeMultiplierSet]
   // A project with no stored matrix is showing a PREVIEW, not its own values, until the user acts.
-  const [touched, setTouched] = useState(value !== null)
+  const [matrixTouched, setMatrixTouched] = useState(value?.matrix != null)
+  const [settingsTouched, setSettingsTouched] = useState(value !== null)
   const [extruderTab, setExtruderTab] = useState(0)
 
-  const previewing = isPreviewingFlushVolumes({ context, touched })
+  const previewing = isPreviewingFlushVolumes({ context, touched: matrixTouched })
+  const dirty = matrixTouched || settingsTouched
 
   const setCell = (extruderIndex: number, fromIndex: number, toIndex: number, next: number) => {
-    setTouched(true)
-    setBlocks((current) => current.map((block, index) => index !== extruderIndex
-      ? block
-      : block.map((row, rowIndex) => rowIndex !== fromIndex
-        ? row
-        : row.map((cell, cellIndex) => cellIndex === toIndex ? clampVolume(next) : cell))))
+    setMatrixTouched(true)
+    setBlocks((current) => updateFlushCell(
+      current,
+      extruderIndex,
+      fromIndex,
+      toIndex,
+      next
+    ))
   }
 
   const recalculate = (extruderIndex: number) => {
-    setTouched(true)
-    setBlocks((current) => current.map((block, index) => index === extruderIndex ? suggestion(index) : block))
+    setMatrixTouched(true)
+    setBlocks((current) => current.map((block, index) => (
+      index === extruderIndex ? suggestion(index) : block
+    )))
+  }
+
+  const setMultiplier = (extruderIndex: number, next: number) => {
+    setSettingsTouched(true)
+    setMultipliers((current) => updateMultiplier(
+      current,
+      activeMultiplierSet,
+      extruderIndex,
+      next
+    ))
   }
 
   // Where the numbers came from, and how confidently we may say so: see `lib/flushVolumesModel.ts`.
@@ -128,6 +174,33 @@ export function FlushVolumesDialog({
               How much filament (mm³) to purge when swapping each material for another. Rows are the material
               being swapped out, columns the one being swapped in.
             </Typography>
+
+            {availableModes.length > 1 && (
+              <FormControl sx={{ maxWidth: 280 }}>
+                <FormLabel>Purge mode</FormLabel>
+                <Select<PrimeVolumeMode>
+                  size="sm"
+                  value={primeVolumeMode}
+                  onChange={(_event, next) => {
+                    if (!next) {
+                      return
+                    }
+
+                    setPrimeVolumeMode(next)
+                    setSettingsTouched(true)
+                  }}
+                >
+                  {availableModes.map((mode) => (
+                    <Option key={mode} value={mode}>
+                      {purgeModeLabel(mode)}
+                    </Option>
+                  ))}
+                </Select>
+                <Typography level="body-xs" textColor="text.tertiary" sx={{ mt: 0.5 }}>
+                  {purgeModeDescription(primeVolumeMode)}
+                </Typography>
+              </FormControl>
+            )}
 
             {context.matrixInconsistent && (
               <Alert color="warning" variant="soft" startDecorator={<WarningAmberRoundedIcon />}>
@@ -171,10 +244,7 @@ export function FlushVolumesDialog({
                       values={blocks[index] ?? []}
                       multiplier={multiplier[index] ?? 1}
                       onCellChange={(from, to, next) => setCell(index, from, to, next)}
-                      onMultiplierChange={(next) => {
-                        setTouched(true)
-                        setMultiplier((current) => current.map((entry, entryIndex) => entryIndex === index ? next : entry))
-                      }}
+                      onMultiplierChange={(next) => setMultiplier(index, next)}
                       onRecalculate={() => recalculate(index)}
                     />
                   </TabPanel>
@@ -186,10 +256,7 @@ export function FlushVolumesDialog({
                 values={blocks[0] ?? []}
                 multiplier={multiplier[0] ?? 1}
                 onCellChange={(from, to, next) => setCell(0, from, to, next)}
-                onMultiplierChange={(next) => {
-                  setTouched(true)
-                  setMultiplier((current) => current.map((entry, index) => index === 0 ? next : entry))
-                }}
+                onMultiplierChange={(next) => setMultiplier(0, next)}
                 onRecalculate={() => recalculate(0)}
               />
             )}
@@ -204,14 +271,14 @@ export function FlushVolumesDialog({
           <Button type="button" variant="plain" color="neutral" onClick={onClose}>Cancel</Button>
           <Button
             type="button"
-            // Nothing to save while previewing: the project deliberately carries no matrix, and
-            // writing the suggestion back would materialise one the user never asked for: the
-            // absence is what lets BambuStudio compute it at slice time. The alert above says how
-            // to claim these values (change one).
-            disabled={previewing}
+            // A purge-mode or multiplier edit may be saved while the grid is still a preview. Its
+            // null matrix preserves the project's deliberate absence instead of claiming the
+            // suggested cells as user-authored values.
+            disabled={!dirty}
             onClick={() => onApply({
-              matrix: blocks.map((block) => block.map((row) => [...row])),
-              multiplier
+              matrix: matrixTouched ? blocks.map((block) => block.map((row) => [...row])) : null,
+              multiplier,
+              primeVolumeMode
             })}
           >
             Save
@@ -274,6 +341,78 @@ function ExtruderPanel({ filaments, values, multiplier, onCellChange, onMultipli
   )
 }
 
+/** Rounds a purge volume to the non-negative integer unit accepted by the slicer. */
 function clampVolume(value: number): number {
   return Math.max(0, Math.round(value))
+}
+
+/** Maps a purge mode to the independent multiplier set Bambu stores for it. */
+function multiplierSetFor(mode: PrimeVolumeMode): 'normal' | 'fast' {
+  return mode === 'Fast' ? 'fast' : 'normal'
+}
+
+/** Updates one matrix cell without mutating the surrounding React state. */
+function updateFlushCell(
+  blocks: number[][][],
+  extruderIndex: number,
+  fromIndex: number,
+  toIndex: number,
+  value: number
+): number[][][] {
+  return blocks.map((block, candidateExtruder) => {
+    if (candidateExtruder !== extruderIndex) {
+      return block
+    }
+
+    return block.map((row, candidateRow) => {
+      if (candidateRow !== fromIndex) {
+        return row
+      }
+
+      return row.map((cell, candidateColumn) => (
+        candidateColumn === toIndex ? clampVolume(value) : cell
+      ))
+    })
+  })
+}
+
+/** Updates one extruder's multiplier while preserving the inactive mode's values. */
+function updateMultiplier(
+  multipliers: Record<'normal' | 'fast', number[]>,
+  activeSet: 'normal' | 'fast',
+  extruderIndex: number,
+  value: number
+): Record<'normal' | 'fast', number[]> {
+  return {
+    ...multipliers,
+    [activeSet]: multipliers[activeSet].map((entry, index) => (
+      index === extruderIndex ? value : entry
+    ))
+  }
+}
+
+/** Returns the user-facing name for Bambu's persisted purge-mode value. */
+function purgeModeLabel(mode: PrimeVolumeMode): string {
+  if (mode === 'Saving') {
+    return 'Prime Saving'
+  }
+
+  if (mode === 'Fast') {
+    return 'Fast'
+  }
+
+  return 'Standard'
+}
+
+/** Summarizes the print-quality trade-off for the selected purge mode. */
+function purgeModeDescription(mode: PrimeVolumeMode): string {
+  if (mode === 'Saving') {
+    return 'Uses less purge material and prints faster, with some risk of colour mixing or small surface defects.'
+  }
+
+  if (mode === 'Fast') {
+    return 'Uses faster purging tuned for this printer, with some risk of slight colour mixing.'
+  }
+
+  return 'Performs a full purge for the best print quality.'
 }

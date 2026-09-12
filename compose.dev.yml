@@ -1,51 +1,57 @@
-# Development Postgres, and optionally the slicer, for running PrintStream directly on your machine.
-#
-# Backs `docs/development.md`'s "Quick start (host machine)". The devcontainer has its own copy at
-# `.devcontainer/compose.yml` which publishes NO ports (nothing outside that container needs to
-# reach it), so it cannot serve a host process. This one publishes, and is otherwise the same image
-# and credentials.
+# Containerized development runtime. Devkit adds this checkout's PostgreSQL service.
 #
 # Named `compose.dev.yml` rather than `compose.yml` because the root `compose.yml` is gitignored and
-# reserved for a deployment-local copy of `compose.server.example.yml` (see .gitignore). Run it
-# explicitly: `docker compose -f compose.dev.yml up -d db`.
-#
-# Not used by multi-checkout dev mode, which uses devkit's shared Postgres for every project rather
-# than one per checkout.
+# reserved for a deployment-local copy of `compose.server.example.yml` (see .gitignore). Devkit
+# combines this file with the checkout's generated database service.
 #
 # Bound to 127.0.0.1 because the credentials below are a throwaway development pair. Do not remove
 # the bind address to "make it reachable" -- on a laptop that publishes an unauthenticated database
 # to whatever network you are on.
-
-# ONE project name regardless of which checkout you run this from. Compose otherwise names the
-# project after the DIRECTORY, so `docker compose -f compose.dev.yml up -d slicer` in a worktree
-# would build a second stack and fail binding a port the first one already holds. Every checkout
-# and worktree shares these services, exactly as they share the multi-checkout proxy and Postgres.
-# Override with COMPOSE_PROJECT_NAME (which wins over this) when you deliberately want your own.
-name: printstream-dev
-
 services:
-  db:
-    image: postgres:16-bookworm
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+  node:
+    build:
+      context: .
+      dockerfile: docker/dev/Dockerfile
+    working_dir: /workspace
+    user: "${HOST_UID:?host uid is required}:${HOST_GID:?host gid is required}"
+    init: true
+    env_file:
+      - path: .env
+        required: false
     environment:
-      POSTGRES_DB: printstream
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d printstream"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
+      HOME: /tmp/devkit-home
+      NODE_ENV: development
+      DATABASE_URL: ${DATABASE_URL:?database URL is required}
+      API_PORT: ${API_PORT:?api port is required}
+      METRICS_PORT: ${METRICS_PORT:?metrics port is required}
+      CLIENT_ORIGIN: ${CLIENT_ORIGIN:?client origin is required}
+      BRIDGE_SERVER_URL: ${BRIDGE_SERVER_URL:?bridge server URL is required}
+      VITE_API_PORT: ${VITE_API_PORT:?vite api port is required}
+      VITE_DEV_ALLOWED_HOSTS: ${VITE_DEV_ALLOWED_HOSTS:?allowed hosts are required}
+      VITE_DEV_HOST: 0.0.0.0
+      VITE_DEV_PORT: ${VITE_DEV_PORT:?vite port is required}
+      SLICER_PORT: ${SLICER_PORT:?slicer port is required}
+      SLICER_DATA_ROOT: /slicer-data
+      SLICER_WORK_DIR: /slicer-work
+      SLICER_SERVICE_URL: http://slicer:${SLICER_PORT:?slicer port is required}
+      DEVKIT_COMPOSE_PROJECT: ${DEVKIT_COMPOSE_PROJECT:?compose project is required}
+    ports:
+      - "127.0.0.1:${DEVKIT_WEB_PORT:?web port is required}:${VITE_DEV_PORT:?vite port is required}"
+      - "[::1]:${DEVKIT_WEB_PORT:?web port is required}:${VITE_DEV_PORT:?vite port is required}"
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      - .:/workspace
+      - slicer-data:/slicer-data
+      - slicer-work:/slicer-work
+    depends_on:
+      database:
+        condition: service_healthy
+    command: node scripts/dev/run-dev.mjs --container-runtime
 
   # Opt-in: `docker compose -f compose.dev.yml up -d slicer`, then set PRINTSTREAM_DEV_SLICER=remote
   # so `npm run dev` leaves the in-process slicer alone and the API uses SLICER_SERVICE_URL.
   #
   # Why a container rather than the in-process slicer `npm run dev` normally starts: that path needs
-  # BambuStudio's x86-64 toolchain on the machine itself, which the devcontainer image bakes in and a
+  # BambuStudio's x86-64 toolchain, which the development image bakes in and a
   # bare host does not have. On arm64 it needs qemu-user-static, weston and an x86-64 cross compiler
   # besides. The published image already carries all of it, including the emulation sysroot for
   # arm64, so this is the same engine without installing any of it system-wide.
@@ -56,13 +62,9 @@ services:
   #
   #   docker compose -f compose.dev.yml --profile slicer up -d --build slicer
   #
-  # SHARED by every checkout and worktree, like the proxy and Postgres: slicing is stateless per
-  # request, so a second copy would only cost another engine download and a port clash. A worktree
-  # that wants its own (to run ITS source without disturbing the shared one) overrides the project,
-  # tag and port, the last being that checkout's DERIVED slicer port from `dev:doctor`:
-  #
-  #   COMPOSE_PROJECT_NAME=printstream-slicer-wt SLICER_IMAGE=printstream-slicer-wt \
-  #     SLICER_BIND_PORT=22083 docker compose -f compose.dev.yml --profile slicer up -d --build slicer
+  # The slicer belongs to this checkout's Compose project too. That costs one engine process per
+  # running worktree, but guarantees each branch runs the slicer source mounted beside its API and
+  # lets `devkit --down` remove the complete checkout runtime as one unit.
   #
   # To skip building entirely (you are not touching the slicer and want the fastest start), point
   # SLICER_IMAGE at the published engine and pull it instead of building:
@@ -76,6 +78,8 @@ services:
     build:
       context: .
       dockerfile: apps/slicer/Dockerfile
+      args:
+        PRINTSTREAM_SLICER_SOURCE_FINGERPRINT: ${SLICER_SOURCE_FINGERPRINT:-unknown}
     profiles:
       - slicer
     restart: unless-stopped
@@ -84,14 +88,12 @@ services:
     # working; tini reaps. Same reason as the production stack.
     init: true
     environment:
-      SLICER_PORT: 4010
+      SLICER_PORT: ${SLICER_PORT:?slicer port is required}
       SLICER_WORK_DIR: /work
       SLICER_BAMBUSTUDIO_HOME_DIR: /work/bambustudio-home
       SLICER_BAMBUSTUDIO_DATA_DIR: /work/bambustudio-data
       # Engines download on first use (~530 MB each). Name ids here to preload instead.
       SLICER_PRELOAD_ENGINES: ${SLICER_PRELOAD_ENGINES:-}
-    ports:
-      - "${SLICER_BIND_HOST:-127.0.0.1}:${SLICER_BIND_PORT:-4010}:4010"
     volumes:
       - slicer-work:/work
       # Engines live outside the image so they survive an image update, and outside the repo so a
@@ -99,12 +101,7 @@ services:
       - slicer-engines:/data/engines
 
 volumes:
-  postgres-data:
-    name: ${POSTGRES_VOLUME:-printstream-postgres-data}
-  # `-compose-` on purpose: `printstream-slicer-dev-work` is the DEVCONTAINER's in-workspace slicer
-  # volume (.devcontainer/compose.yml), and reusing it would silently mix two different slicers'
-  # state through one directory.
+  slicer-data:
   slicer-work:
-    name: ${SLICER_WORK_VOLUME:-printstream-slicer-compose-work}
   slicer-engines:
     name: ${SLICER_ENGINES_VOLUME:-printstream-slicer-compose-engines}

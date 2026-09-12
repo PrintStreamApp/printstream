@@ -43,6 +43,12 @@ export XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
 export LIBGL_ALWAYS_SOFTWARE="${LIBGL_ALWAYS_SOFTWARE:-1}"
 export GALLIUM_DRIVER="${GALLIUM_DRIVER:-llvmpipe}"
 
+# POSIX file-size limits stop a hostile project before its G-code fills the bounded work filesystem.
+# The service supplies 512-byte blocks from its trusted output ceiling; the API cannot widen it.
+if [ -n "${SLICER_MAX_FILE_BLOCKS:-}" ]; then
+  ulimit -f "$SLICER_MAX_FILE_BLOCKS"
+fi
+
 mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" "$XDG_DATA_HOME"
 
 # Generated machine/process/filament presets are stored at <target>/profiles/*.
@@ -56,7 +62,14 @@ if [ -d "$generated_profiles" ] && [ -d "$bbl_profiles_dir" ]; then
     src="$generated_profiles/$profile_kind"
     dest="$bbl_profiles_dir/$profile_kind"
     if [ -d "$src" ] && [ ! -e "$dest" ]; then
-      ln -s "$src" "$dest"
+      if [ -w "$bbl_profiles_dir" ]; then
+        # Native development may use a legacy engine installed before profile links moved into the
+        # trusted installer. The hardened container prepares them before dropping privileges.
+        ln -s "$src" "$dest"
+      else
+        echo "bambu-studio-cli: required generated profile link is missing: $dest" >&2
+        exit 1
+      fi
     fi
   done
 fi

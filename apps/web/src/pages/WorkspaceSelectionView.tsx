@@ -7,6 +7,7 @@ import type { CustomerSummary, WorkspaceSummary } from '@printstream/shared'
 import { BILLING_SCOPE_LABEL } from '../lib/billingScope'
 import type { ReactNode } from 'react'
 import { BrandMark } from '../components/BrandMark'
+import { useRuntimePolicy } from '../lib/runtimePolicy'
 import { CONTEXT_CHOOSER_TITLE } from '../lib/workspaceRoute'
 
 /** Section heading in the chooser, separating scopes that are different things. */
@@ -61,6 +62,8 @@ export function WorkspaceSelectionView({
   title?: string
   description?: string
 }) {
+  const { selfHosted } = useRuntimePolicy()
+
   return (
     <Stack
       justifyContent="center"
@@ -94,7 +97,7 @@ export function WorkspaceSelectionView({
         {/* Like sign-in, this stands outside the shell's chrome: no workspace is
             active yet, so the logo bar that normally carries the brand is not
             there. */}
-        <BrandMark />
+        <BrandMark to={selfHosted ? undefined : '/'} />
         <Stack spacing={0.75}>
           {/* `h3`, not `h2`: this is a page heading, and the conventions reserve
               `h2` for auth/setup/marketing heroes. Next to the brand mark above

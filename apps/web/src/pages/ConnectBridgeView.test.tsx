@@ -7,8 +7,10 @@ const dom = installJsdomGlobals()
 
 // Joy components must load after the jsdom globals exist (SSR detection at import).
 const React = (await import('react')).default
+;(globalThis as typeof globalThis & { React: typeof React }).React = React
 const { CssVarsProvider } = await import('@mui/joy/styles')
 const { cleanup, render, waitFor } = await import('@testing-library/react')
+const { MemoryRouter } = await import('react-router-dom')
 const { ConnectBridgeView } = await import('./ConnectBridgeView')
 
 afterEach(() => {
@@ -36,15 +38,17 @@ test('ConnectBridgeView warns when the deep link has no code', () => {
 test('ConnectBridgeView prompts for a workspace when several are accessible', () => {
   const selected: string[] = []
   const view = render(
-    <CssVarsProvider>
-      <ConnectBridgeView
-        code="ABCD1234"
-        workspaces={[workspace('a', 'Workspace A'), workspace('b', 'Workspace B')]}
-        activeWorkspaceId={null}
-        pending={false}
-        onConnect={(id) => selected.push(id)}
-      />
-    </CssVarsProvider>
+    <MemoryRouter>
+      <CssVarsProvider>
+        <ConnectBridgeView
+          code="ABCD1234"
+          workspaces={[workspace('a', 'Workspace A'), workspace('b', 'Workspace B')]}
+          activeWorkspaceId={null}
+          pending={false}
+          onConnect={(id) => selected.push(id)}
+        />
+      </CssVarsProvider>
+    </MemoryRouter>
   )
 
   assert.ok(view.getByText('Connect your bridge'))

@@ -50,6 +50,7 @@ import { recordSliceJob } from './metrics.js'
 import { prisma } from './prisma.js'
 import { resolveLibraryFileToLocalPath } from './bridge-library-files.js'
 import { resolvePinnedContentBase, type LibraryContentBase } from './library-content-base.js'
+import { slicingExecutionScheduler, type SlicingExecutionTier } from './slicing-execution-scheduler.js'
 
 const DEFAULT_SLICING_PROGRESS_POLL_INTERVAL_MS = 750
 /** How long a finished job stays in `listActive`: see its doc for who relies on this. */
@@ -62,6 +63,7 @@ interface SlicingJobState {
   id: string
   workspaceId: string
   workspace: RequestWorkspaceSummary
+  executionTier: Exclude<SlicingExecutionTier, 'anonymous'>
   sourceFileId: string
   sourceFileName: string
   sourcePath: string
@@ -101,6 +103,7 @@ interface PersistedSlicingJobState {
   id: string
   workspaceId: string
   workspace: RequestWorkspaceSummary
+  executionTier?: Exclude<SlicingExecutionTier, 'anonymous'>
   sourceFileId: string
   sourceFileName: string
   sourcePath: string
@@ -263,8 +266,8 @@ export class SlicingJobs {
     const persistState = options?.persistState ?? env.NODE_ENV !== 'test'
     this.persistencePath = persistState ? (options?.stateFilePath ?? DEFAULT_SLICING_STATE_FILE) : null
     this.hydrateFromDisk()
-    this.recomputeQueuePositions()
     this.pumpQueue()
+    this.recomputeQueuePositions()
   }
 
   /**
@@ -337,6 +340,7 @@ export class SlicingJobs {
   enqueue(input: {
     workspaceId: string
     workspace: RequestWorkspaceSummary
+    executionTier?: Exclude<SlicingExecutionTier, 'anonymous'>
     sourceFileId: string
     sourceFileName: string
     sourcePath: string
@@ -358,6 +362,7 @@ export class SlicingJobs {
       id: randomUUID(),
       workspaceId: input.workspaceId,
       workspace: input.workspace,
+      executionTier: input.executionTier ?? 'paid',
       sourceFileId: input.sourceFileId,
       sourceFileName: input.sourceFileName,
       sourcePath: input.sourcePath,
@@ -389,8 +394,8 @@ export class SlicingJobs {
       plate: job.request.plate,
       profileCount: job.profileFiles.length
     })
-    this.recomputeQueuePositions()
     this.pumpQueue()
+    this.recomputeQueuePositions()
     this.schedulePersist()
     broadcastSlicingChanged(job.workspaceId)
     return toDto(job)
@@ -403,6 +408,7 @@ export class SlicingJobs {
     job.cancelRequested = true
     job.controller?.abort()
     if (job.status === 'queued') {
+      slicingExecutionScheduler.cancel(job.id)
       this.finish(job, 'cancelled', 'Cancelled before slicing started')
       this.logJobEvent(job, 'warn', 'Cancelled queued slicing job before start')
       this.pumpQueue()
@@ -499,8 +505,8 @@ export class SlicingJobs {
     // orders on it, so keeping it lets a retry resume its original place rather than queue behind
     // work submitted while it was failing.
     this.logJobEvent(job, 'info', `Retrying slicing job for ${job.sourceFileName}`)
-    this.recomputeQueuePositions()
     this.pumpQueue()
+    this.recomputeQueuePositions()
     this.schedulePersist()
     broadcastSlicingChanged(job.workspaceId)
     return toDto(job)
@@ -580,21 +586,17 @@ export class SlicingJobs {
   }
 
   private pumpQueue(): void {
-    const activeCount = Array.from(this.jobs.values()).filter((job) => job.status === 'preparing' || job.status === 'slicing' || job.status === 'saving').length
-    const available = Math.max(0, env.SLICING_MAX_CONCURRENT_JOBS - activeCount)
-    if (available === 0) return
-
-    const queued = Array.from(this.jobs.values())
-      .filter((job) => job.status === 'queued' && !job.cancelRequested)
-      .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
-      .slice(0, available)
-
-    for (const job of queued) {
-      // Claim the slot SYNCHRONOUSLY: run() only flips the status after its first await, so a
-      // re-entrant pumpQueue (from enqueue/cancel/finish in the same tick) would otherwise
-      // re-select this still-`queued` job and double-run it / overshoot the concurrency cap.
-      job.status = 'preparing'
-      void this.run(job)
+    for (const job of this.jobs.values()) {
+      if (job.status !== 'queued' || job.cancelRequested) continue
+      slicingExecutionScheduler.enqueue({
+        id: job.id,
+        tier: job.executionTier,
+        createdAt: job.createdAt,
+        start: () => {
+          job.status = 'preparing'
+          void this.run(job)
+        }
+      })
     }
   }
 
@@ -716,6 +718,7 @@ export class SlicingJobs {
         await progressTracker.catch(() => undefined)
         job.controller = null
         job.activeSlicerJobId = null
+        slicingExecutionScheduler.complete(job.id)
         this.recomputeQueuePositions()
         this.schedulePersist()
         broadcastSlicingChanged(job.workspaceId)
@@ -1125,12 +1128,10 @@ export class SlicingJobs {
   }
 
   private recomputeQueuePositions(): void {
-    const queued = Array.from(this.jobs.values())
-      .filter((job) => job.status === 'queued')
-      .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
-    let position = 1
     for (const job of this.jobs.values()) job.queuePosition = null
-    for (const job of queued) job.queuePosition = position++
+    for (const job of this.jobs.values()) {
+      if (job.status === 'queued') job.queuePosition = slicingExecutionScheduler.position(job.id)
+    }
   }
 
   private appendCliOutput(job: SlicingJobState, lines: SlicingOutputLine[]): void {
@@ -1262,6 +1263,7 @@ function serializeSlicingJobState(job: SlicingJobState): PersistedSlicingJobStat
     id: job.id,
     workspaceId: job.workspaceId,
     workspace: job.workspace,
+    executionTier: job.executionTier,
     sourceFileId: job.sourceFileId,
     sourceFileName: job.sourceFileName,
     sourcePath: job.sourcePath,
@@ -1317,6 +1319,7 @@ function hydratePersistedJob(persisted: PersistedSlicingJobState): SlicingJobSta
     id: persisted.id,
     workspaceId: persisted.workspaceId,
     workspace: persisted.workspace,
+    executionTier: persisted.executionTier ?? 'paid',
     sourceFileId: persisted.sourceFileId,
     sourceFileName: persisted.sourceFileName,
     sourcePath: persisted.sourcePath,

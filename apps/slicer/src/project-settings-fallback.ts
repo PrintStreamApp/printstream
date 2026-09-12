@@ -38,6 +38,7 @@
  * BambuStudio project, and any save with no material change), so normal slicing is untouched.
  */
 import { spawn } from 'node:child_process'
+import { engineProcessEnvironment, engineProcessIdentity } from './engine-process-security.js'
 import { createWriteStream } from 'node:fs'
 import { access, readFile, rm } from 'node:fs/promises'
 import path from 'node:path'
@@ -389,6 +390,7 @@ async function exportMergedProjectSettings(input: {
   profileArgs: readonly string[]
   workDir: string
   env: NodeJS.ProcessEnv
+  engineJobKey?: string
   signal?: AbortSignal
 }): Promise<ExportMergedProjectSettingsResult> {
   // `--export-settings` writes the fully merged `--load-settings`/`--load-filaments` config; it
@@ -398,10 +400,13 @@ async function exportMergedProjectSettings(input: {
   let combinedOutput = ''
   const exitCode = await new Promise<number | null>((resolve, reject) => {
     const child = spawn(input.cliPath, args, {
+      ...engineProcessIdentity(input.engineJobKey),
       // BambuStudio logs its errors (boost log `[error]` lines) to STDOUT, so both streams must
       // be captured, with stdout ignored, a compatibility failure here is undiagnosable.
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...input.env, SLICER_APPDIR: input.appDir ?? input.env.SLICER_APPDIR }
+      env: engineProcessEnvironment(input.env, {
+        SLICER_APPDIR: input.appDir ?? input.env.SLICER_APPDIR
+      })
     })
     const capture = (chunk: string) => { combinedOutput = (combinedOutput + chunk).slice(-4000) }
     child.stdout.setEncoding('utf8')
@@ -488,6 +493,8 @@ export async function ensureEmbeddedProjectSettings(input: {
   profileDir?: string | null
   workDir: string
   env: NodeJS.ProcessEnv
+  /** Server-issued key that selects this job's private native primary group. */
+  engineJobKey?: string
   log: (message: string) => void
   signal?: AbortSignal
 }): Promise<string> {
@@ -549,6 +556,7 @@ export async function ensureEmbeddedProjectSettings(input: {
     profileArgs: exportArgs,
     workDir: input.workDir,
     env: input.env,
+    engineJobKey: input.engineJobKey,
     signal: input.signal
   })
   const projectSettings = exported.settings

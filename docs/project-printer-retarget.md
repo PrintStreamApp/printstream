@@ -241,7 +241,7 @@ When BambuStudio releases a new version we want to support:
 
 ## Verifying after a change
 
-Against a source-built slicer (devcontainer):
+Against a source-built slicer (development container):
 
 1. Retarget a single-extruder project to a multi-extruder machine (e.g. an A1 mini project → H2D) via
    the editor's "switch printer + Save", or by calling `retargetSavedProjectMachine` directly.

@@ -112,6 +112,21 @@ test('Fast purge mode writes the fast multiplier, leaving the normal one alone',
   assert.deepEqual(after.flush_multiplier, ['1', '1'])
 })
 
+test('changing purge mode does not materialise an absent matrix', () => {
+  const { flush_volumes_matrix: _omitted, ...withoutMatrix } = singleNozzleProject
+  const after = applyEdit({
+    ...withoutMatrix,
+    prime_volume_mode: 'Default',
+    flush_multiplier_fast: ['1.2']
+  }, {
+    flushVolumes: { matrix: null, multiplier: [1.4], primeVolumeMode: 'Fast' }
+  })
+  assert.equal(after.prime_volume_mode, 'Fast')
+  assert.deepEqual(after.flush_multiplier_fast, ['1.4'])
+  assert.deepEqual(after.flush_multiplier, ['1'])
+  assert.equal('flush_volumes_matrix' in after, false)
+})
+
 test('no flushVolumes edit leaves the project untouched, including an ABSENT matrix', () => {
   // Absence is legitimate, it is what makes BambuStudio compute the matrix itself, so opening
   // the dialog and cancelling must not materialise one.

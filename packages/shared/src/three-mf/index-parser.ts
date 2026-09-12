@@ -30,6 +30,12 @@ import type {
 import { objectHeadOf, readObjectProcessOverridesFromHead } from './object-overrides.js'
 import { decodeXmlAttributeValue } from './xml-write.js'
 import { canonicalCurrBedType } from '../plate-types.js'
+import { parseProjectMixedFilaments } from '../mixed-filament.js'
+import {
+  parseFirstLayerFilamentSequence,
+  parseOtherLayerFilamentSequences,
+  type PlateLayerFilamentSequence
+} from '../plate-filament-sequence.js'
 
 export { decodeXmlAttributeValue }
 
@@ -113,8 +119,11 @@ export { decodeXmlAttributeValue }
  *      entry would invalidate it. Also adds `projectPlateType`, the project-global on its own:
  *      once `plateType` resolves an override first, "the first plate that names one" is no longer
  *      the project's value, and reading it as such re-saves one plate's override as the global.
+ * v41: each project filament identifies virtual mixed slots, their components, ratios, gradient,
+ *      and validation issues. Older cached indexes expose those slots as physical trays.
+ * v42: plate indexes include first-layer and ranged later-layer physical filament sequences.
  */
-export const THREE_MF_INDEX_PARSER_VERSION = 40
+export const THREE_MF_INDEX_PARSER_VERSION = 42
 
 /**
  * Optional archive entries the index parser can use, passed by name rather than by position.
@@ -147,6 +156,10 @@ export interface ModelSettingsPlateMetadata {
   bedTypeOverride: string | null
   /** The plate's own `print_sequence`, or null when it inherits the global. */
   printSequence: 'by layer' | 'by object' | null
+  /** Custom physical filament order for layer 1; null means automatic. */
+  firstLayerFilamentSequence: number[] | null
+  /** Custom physical filament orders for later layer ranges; null means automatic. */
+  otherLayerFilamentSequences: PlateLayerFilamentSequence[] | null
   /** The plate's own `spiral_mode` (vase mode), or null when it inherits the global. */
   spiralMode: boolean | null
   /** Locked against arrange. Absent means unlocked; there is no global to inherit. */
@@ -198,6 +211,8 @@ export function buildThreeMfIndex(
       // The name-only form predates per-plate settings and carries no metadata to read them from.
       bedTypeOverride: null,
       printSequence: null,
+      firstLayerFilamentSequence: null,
+      otherLayerFilamentSequences: null,
       spiralMode: null,
       locked: false
     }))
@@ -298,6 +313,8 @@ export function buildThreeMfIndex(
     plate.bedTypeOverride = metadata?.bedTypeOverride ?? null
     plate.plateType = plate.bedTypeOverride ?? plateType
     plate.printSequence = metadata?.printSequence ?? null
+    plate.firstLayerFilamentSequence = metadata?.firstLayerFilamentSequence ?? null
+    plate.otherLayerFilamentSequences = metadata?.otherLayerFilamentSequences ?? null
     plate.spiralMode = metadata?.spiralMode ?? null
     plate.locked = metadata?.locked ?? false
     // Unsliced plates have no slice_info nozzle metadata; show the project's configured
@@ -585,10 +602,11 @@ export function parseProjectFilaments(json: string): BridgeLibraryThreeMfProject
   // only", sidetext "money/kg"). It carries NO currency, in the 3MF or in Studio, so a consumer
   // renders a bare number or supplies its own symbol; do not invent a currency field here.
   const costs = nullableNumberArray(record.filament_cost)
+  const mixedFilaments = parseProjectMixedFilaments(record)
   // Every parallel array counts toward the slot total, including the support/soluble
   // flags: omitting them truncated the filament list whenever they were the longest,
   // and those flags now drive preset filtering (`resolveDisplayFilamentType`).
-  const length = Math.max(colors.length, types.length, names.length, chamberTemperatures.length, supportFlags.length, solubleFlags.length, vendors.length, costs.length)
+  const length = Math.max(colors.length, types.length, names.length, chamberTemperatures.length, supportFlags.length, solubleFlags.length, vendors.length, costs.length, mixedFilaments.length)
   const out: BridgeLibraryThreeMfProjectFilament[] = []
   for (let i = 0; i < length; i++) {
     out.push({
@@ -613,7 +631,8 @@ export function parseProjectFilaments(json: string): BridgeLibraryThreeMfProject
       chamberTemperature: chamberTemperatures[i] ?? null,
       isSupport: configFlag(supportFlags[i]),
       isSoluble: configFlag(solubleFlags[i]),
-      costPerKg: costs[i] ?? null
+      costPerKg: costs[i] ?? null,
+      mixedFilament: mixedFilaments[i] ?? null
     })
   }
   return out
@@ -1249,6 +1268,11 @@ export function parseModelSettingsPlates(xml: string, projectSettingsJson: strin
       objects,
       bedTypeOverride: canonicalCurrBedType(meta.get('bed_type')),
       printSequence: parsePlatePrintSequence(meta.get('print_sequence')),
+      firstLayerFilamentSequence: parseFirstLayerFilamentSequence(meta.get('first_layer_print_sequence')),
+      otherLayerFilamentSequences: parseOtherLayerFilamentSequences(
+        meta.get('other_layers_print_sequence'),
+        meta.get('other_layers_print_sequence_nums')
+      ),
       spiralMode: parsePlateBoolean(meta.get('spiral_mode')),
       locked: parsePlateBoolean(meta.get('locked')) === true
     })

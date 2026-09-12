@@ -146,7 +146,7 @@ export interface EditorSave {
     onProgress?: (progress: ChunkedLibraryUploadProgress) => void,
     onReconciliationStart?: (stopWaiting: () => void) => void,
     onReconciliationRequired?: (retry: () => void, message: string, stopWaiting: () => void) => void
-  ) => Promise<string | null>
+  ) => Promise<string | Uint8Array | null>
   /** A save is in flight (drives the disabled/loading state of Save/Slice/Close). */
   saving: boolean
   saveAsOpen: boolean
@@ -494,11 +494,11 @@ export function useEditorSave({
     onProgress?: (progress: ChunkedLibraryUploadProgress) => void,
     onReconciliationStart?: (stopWaiting: () => void) => void,
     onReconciliationRequired?: (retry: () => void, message: string, stopWaiting: () => void) => void
-  ): Promise<string | null> => {
+  ): Promise<string | Uint8Array | null> => {
     if (!saveTarget.stageSnapshot) return null
     const sourceFileId = effectiveBaseFileId
     const configurationBaseFileId = contentBase?.fileId ?? effectiveBaseFileId
-    if (!sourceFileId || !configurationBaseFileId) {
+    if (saveTarget.isLibraryBacked && (!sourceFileId || !configurationBaseFileId)) {
       throw new Error('The project source is no longer available; reopen it and slice again.')
     }
     return await saveTarget.stageSnapshot({

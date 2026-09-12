@@ -1,8 +1,13 @@
 {
   "name": "printstream",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "license": "SEE LICENSE IN LICENSE",
+  "packageManager": "npm@10.9.8",
+  "engines": {
+    "node": "22.22.3",
+    "npm": "10.9.8"
+  },
   "type": "module",
   "workspaces": [
     "apps/*",
@@ -16,6 +21,7 @@
     "db:seed:dev": "npm run db:seed:dev --workspace @printstream/api --",
     "db:wait": "node --env-file=.env scripts/dev/wait-for-db.mjs",
     "dev": "node scripts/dev/run-dev.mjs",
+    "dev:down": "npm run dev -- --down",
     "dev:bootstrap": "devkit bootstrap",
     "dev:db": "npm run db:wait && node --env-file=.env scripts/bootstrap-prisma-migrations.mjs",
     "dev:doctor": "devkit doctor",
@@ -27,11 +33,12 @@
     "typecheck": "npm run build --workspace @printstream/shared && npm run build --workspace @printstream/bridge-runtime && npm run build --workspace @printstream/sea-runtime && npm run build --workspace @printstream/api && npm run typecheck --workspace @printstream/bridge && npm run typecheck --workspace @printstream/slicer && npm run typecheck --workspace @printstream/web",
     "validate": "node scripts/dev/run-exclusive.mjs node scripts/dev/run-low-priority.mjs npm run validate:stages",
     "validate:changed": "node scripts/dev/run-low-priority.mjs node scripts/dev/run-changed.mjs",
-    "validate:stages": "npm run lint && npm run test && npm run test:scripts && npm run typecheck && npm run prisma:validate --workspace @printstream/api"
+    "validate:stages": "npm run lint && npm run test && npm run test:scripts && npm run version:check && npm run typecheck && npm run prisma:validate --workspace @printstream/api",
+    "version:check": "node scripts/ci/product-version.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^9.24.0",
-    "@ryanewen/devkit": "github:RyanEwen/devkit#v0.3.1",
+    "@ryanewen/devkit": "github:RyanEwen/devkit#v0.8.0",
     "@typescript/native": "npm:typescript@^7.0.2",
     "concurrently": "^9.1.2",
     "eslint": "^9.24.0",

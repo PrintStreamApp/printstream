@@ -17,13 +17,27 @@ const ambientOverlayBase = [
   'var(--printstream-shell-ambient-overlay-glow)'
 ].join(',')
 
-export function PublicShell({ children, footer }: { children: ReactNode; footer?: ReactNode }) {
+export function PublicShell({
+  children,
+  footer,
+  contentMaxWidth = 1200,
+  fillViewport = false
+}: {
+  children: ReactNode
+  footer?: ReactNode
+  /** Maximum width of the main child stack. Public tools may use the full viewport. */
+  contentMaxWidth?: number | string
+  /** Keep children and footer inside one viewport, with the child stack taking remaining height. */
+  fillViewport?: boolean
+}) {
   // No BrandChromeContext provider: PublicShell has no header of its own, and the
   // context's default (false = "nothing brands the page above") is exactly right.
   return (
     <Box
       sx={{
-        minHeight: '100vh',
+        minHeight: fillViewport ? 0 : '100vh',
+        height: fillViewport ? '100dvh' : undefined,
+        overflow: fillViewport ? 'hidden' : undefined,
         position: 'relative',
         display: 'flex',
         flexDirection: 'column',
@@ -58,7 +72,15 @@ export function PublicShell({ children, footer }: { children: ReactNode; footer?
       />
       <Stack
         spacing={4}
-        sx={{ position: 'relative', zIndex: 1, width: '100%', maxWidth: 1200, mx: 'auto' }}
+        sx={{
+          position: 'relative',
+          zIndex: 1,
+          width: '100%',
+          maxWidth: contentMaxWidth,
+          mx: 'auto',
+          flex: fillViewport ? 1 : undefined,
+          minHeight: fillViewport ? 0 : undefined
+        }}
       >
         {children}
       </Stack>
@@ -73,7 +95,8 @@ export function PublicShell({ children, footer }: { children: ReactNode; footer?
             maxWidth: 1200,
             mx: 'auto',
             mt: 'auto',
-            pt: 4,
+            pt: fillViewport ? 2 : 4,
+            flexShrink: 0,
             display: 'flex',
             justifyContent: 'center'
           }}

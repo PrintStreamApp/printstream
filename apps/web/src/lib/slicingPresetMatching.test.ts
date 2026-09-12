@@ -405,6 +405,22 @@ test('buildFilamentMappings reports unresolved slots instead of silently droppin
   ])
 })
 
+test('buildFilamentMappings leaves virtual mixed slots to slicer expansion', () => {
+  const projectFilaments = [
+    { projectFilamentId: 1, label: 'PLA', color: '#FF0000', nozzleId: null, mixedFilament: null },
+    { projectFilamentId: 2, label: 'PLA', color: '#0000FF', nozzleId: null, mixedFilament: null },
+    { projectFilamentId: 3, label: 'Mixed PLA', color: '#800080', nozzleId: null, mixedFilament: { componentIds: [1, 2] } }
+  ]
+  const options = [materialOption({ id: 'opt-pla', profileId: 'builtin:filament:PLA' })]
+  const { mappings, unresolved } = buildFilamentMappings(
+    projectFilaments,
+    { 1: 'opt-pla', 2: 'opt-pla' },
+    {}, {}, options
+  )
+  assert.deepEqual(mappings.map((mapping) => mapping.projectFilamentId), [1, 2])
+  assert.deepEqual(unresolved, [])
+})
+
 // Issue #66: the material picker filters by EXACT type equality, and support presets
 // are typed by base polymer (`filament_type: ["PLA"]` + `filament_is_support`) while a
 // project filament / AMS tray reports the derived `PLA-S`. Comparing those two

@@ -4,7 +4,7 @@
  *
  * Mirrors the slicer image's build-time `install-slicer-targets` step, but writes into a
  * dev data dir (a named volume mounted in the workspace) instead of the image, so the
- * BambuStudio AppImage + flattened profile caches persist across devcontainer rebuilds and
+ * BambuStudio AppImage + flattened profile caches persist across development-image rebuilds and
  * are only fetched once. Idempotent (skips when already populated) and **arch-gated**:
  * BambuStudio is x86-only, so on arm64 this no-ops. arm64 dev hosts instead bootstrap an
  * x86-64 qemu emulation environment via `scripts/dev/setup-slicer-qemu.mjs`; `run-dev.mjs`
@@ -70,6 +70,6 @@ function installGlShim() {
   execFileSync('gcc', ['-shared', '-fPIC', '-O2', '-o', shim, shimSource])
   if (spawnSync('sh', ['-c', 'command -v weston'], { stdio: 'ignore' }).status !== 0) {
     console.warn('[setup-slicer] weston not found; the CLI\'s thumbnail GL needs a headless Wayland compositor.')
-    console.warn('[setup-slicer] Rebuild the devcontainer (it installs weston) to enable plate thumbnails.')
+    console.warn('[setup-slicer] Rebuild the development image (it installs weston) to enable plate thumbnails.')
   }
 }

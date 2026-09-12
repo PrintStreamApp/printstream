@@ -39,6 +39,7 @@ import { createSlicingJobSchema } from '@printstream/shared'
 import {
   amsTrayIndex,
   effectiveAmsNozzleId,
+  expandMixedFilamentIds,
   formatNozzleDiameterLabel,
   formatNozzleLabel,
   getPrinterControlCapabilities,
@@ -283,7 +284,14 @@ export function visibleMappingFilaments(
   usedIds: Set<number>,
   plateIsSliced: boolean
 ): ThreeMfProjectFilament[] {
-  return plateIsSliced ? filamentsForMapping(filaments, usedIds) : filaments
+  const physicalFilaments = filaments.filter((filament) => !filament.mixedFilament)
+
+  if (!plateIsSliced) {
+    return physicalFilaments
+  }
+
+  const physicalUsedIds = expandMixedFilamentIds(filaments, usedIds)
+  return filamentsForMapping(physicalFilaments, physicalUsedIds)
 }
 
 export function trayHasLoadedFilament(tray: Pick<PrinterTrayOption, 'filamentType' | 'color' | 'colors' | 'trayInfoIdx' | 'trayName'>): boolean {

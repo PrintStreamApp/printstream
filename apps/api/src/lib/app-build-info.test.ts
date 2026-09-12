@@ -9,23 +9,28 @@ test('the native binary revision env feeds the build identity when no metadata f
   // its host publishes the baked revision as env. Without this fallback the
   // native footer rendered nothing at all: update notice included.
   const previous = env.PRINTSTREAM_SERVER_BUILD_REVISION
+  const previousVersion = env.PRINTSTREAM_SERVER_VERSION
   resetAppBuildInfoCache()
+  env.PRINTSTREAM_SERVER_VERSION = '1.0.0'
   env.PRINTSTREAM_SERVER_BUILD_REVISION = 'nativerev1234'
   try {
     const build = getAppBuildInfo()
+    assert.equal(build.version, '1.0.0')
     assert.equal(build.revision, 'nativerev1234')
     assert.equal(build.shortRevision, 'nativer')
     // `published` means the GHCR image channel specifically, never the native app.
     assert.equal(build.published, false)
   } finally {
     env.PRINTSTREAM_SERVER_BUILD_REVISION = previous
+    env.PRINTSTREAM_SERVER_VERSION = previousVersion
     resetAppBuildInfoCache()
   }
 })
 
-const PUBLISHED: AppBuildInfo = { revision: 'a'.repeat(40), shortRevision: 'aaaaaaa', published: true }
-const CLOUD: AppBuildInfo = { revision: 'b'.repeat(40), shortRevision: 'bbbbbbb', published: false }
+const PUBLISHED: AppBuildInfo = { version: '1.0.0', revision: 'a'.repeat(40), shortRevision: 'aaaaaaa', published: true }
+const CLOUD: AppBuildInfo = { version: '1.0.0', revision: 'b'.repeat(40), shortRevision: 'bbbbbbb', published: false }
 const DEV: AppBuildInfo = { revision: null, shortRevision: null, published: false }
+const SOURCE: AppBuildInfo = { version: '1.0.0', revision: null, shortRevision: null, published: false }
 
 const UPDATE: AppUpdateInfo = {
   status: 'updateAvailable',
@@ -38,6 +43,7 @@ const UPDATE: AppUpdateInfo = {
 
 test('published image shows the build and update to everyone', () => {
   const anon = resolveAppVersionPayload({ build: PUBLISHED, isPlatformUser: false, update: UPDATE })
+  assert.equal(anon.version, '1.0.0')
   assert.equal(anon.revision, PUBLISHED.revision)
   assert.equal(anon.shortRevision, 'aaaaaaa')
   assert.equal(anon.published, true)
@@ -52,6 +58,7 @@ test('cloud image shows the build only to platform users and never an update hin
   assert.equal(admin.update, null)
 
   const member = resolveAppVersionPayload({ build: CLOUD, isPlatformUser: false, update: UPDATE })
+  assert.equal(member.version, '1.0.0')
   assert.equal(member.revision, null)
   assert.equal(member.shortRevision, null)
   assert.equal(member.update, null)
@@ -62,6 +69,13 @@ test('source/dev run with no baked revision shows nothing', () => {
   assert.equal(result.revision, null)
   assert.equal(result.published, false)
   assert.equal(result.update, null)
+})
+
+test('source run shows the product version without exposing a revision', () => {
+  const result = resolveAppVersionPayload({ build: SOURCE, isPlatformUser: false, update: null })
+  assert.equal(result.version, '1.0.0')
+  assert.equal(result.revision, null)
+  assert.equal(result.shortRevision, null)
 })
 
 test('canApplyUpdate needs native + an available update + a platform binary', () => {

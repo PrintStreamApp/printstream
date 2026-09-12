@@ -18,7 +18,11 @@ export async function openZip(filePath: string): Promise<ZipFile> {
   })
 }
 
-export async function readZipEntryBuffer(zipFile: ZipFile, entry: Entry): Promise<Buffer> {
+export async function readZipEntryBuffer(
+  zipFile: ZipFile,
+  entry: Entry,
+  maxBytes = Number.POSITIVE_INFINITY
+): Promise<Buffer> {
   return await new Promise((resolve, reject) => {
     zipFile.openReadStream(entry, (error, stream) => {
       if (error || !stream) {
@@ -26,7 +30,15 @@ export async function readZipEntryBuffer(zipFile: ZipFile, entry: Entry): Promis
         return
       }
       const chunks: Buffer[] = []
-      stream.on('data', (chunk: Buffer) => chunks.push(chunk))
+      let received = 0
+      stream.on('data', (chunk: Buffer) => {
+        received += chunk.byteLength
+        if (received > maxBytes) {
+          stream.destroy(new Error(`Entry exceeds the maximum decoded size: ${entry.fileName}`))
+          return
+        }
+        chunks.push(chunk)
+      })
       stream.on('error', reject)
       stream.on('end', () => resolve(Buffer.concat(chunks)))
     })

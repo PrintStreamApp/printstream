@@ -40,6 +40,7 @@ import type {
 } from '@printstream/shared'
 import { bakedObjectProcessOverrides, changedObjectProcessOverrides } from './objectProcessOverrideSubmission'
 import { PER_OBJECT_PROCESS_KEYS,
+  isFilamentTrackSwitchReady,
   isProjectNewerThanSlicer,
   isProjectSlicingPresetId,
   slicingTargetSchema
@@ -564,7 +565,7 @@ export function SliceFileModal({
     filamentToolheadIds, setFilamentToolheadIds,
     filamentMaterialTypeFilters, setFilamentMaterialTypeFilters,
     filamentSettingOverridesById, setFilamentSettingOverridesById,
-    handleAddFilament, handleRemoveFilament, handleReorderFilament, handleMaterialOptionChange,
+    handleAddFilament, handleSyncFilaments, handleUpsertMixedFilament, handleRemoveFilament, handleReorderFilament, handleMaterialOptionChange,
     materialEditListenerRef,
     desiredFilaments, filamentMappingResult,
     onProjectSaved: handleProjectSaved,
@@ -995,11 +996,14 @@ export function SliceFileModal({
       onTogglePrint: toggleSliceObject
     } : null,
     projectFilaments: visibleProjectFilaments, materialOptions, loadedMaterialOptions, printerTrayMap, materialToolheadOptions,
+    filamentTrackSwitchReady: selectedPrinterStatus ? isFilamentTrackSwitchReady(selectedPrinterStatus) : false,
     filamentMaterialOptionIds, filamentMaterialTypeFilters, setFilamentMaterialTypeFilters,
     filamentToolheadIds, setFilamentToolheadIds, filamentColors, setFilamentColors,
     filamentSettingOverridesById, openFilamentSettings: setFilamentSettingsFilamentId,
     handleMaterialOptionChange,
-    desiredFilaments, retargetTarget, onAddFilament: handleAddFilament, onRemoveFilament: handleRemoveFilament, onReorderFilament: handleReorderFilament,
+    desiredFilaments, retargetTarget, onAddFilament: handleAddFilament, onSyncFilaments: handleSyncFilaments,
+    onUpsertMixedFilament: handleUpsertMixedFilament,
+    onRemoveFilament: handleRemoveFilament, onReorderFilament: handleReorderFilament,
     configSnapshot, restoreConfig, materialEditListenerRef, onProjectSaved: handleProjectSaved, settingsEditListenerRef,
     // The editor resolves each slot's preset at SAVE time from this, so the saved project carries the
     // material's physics and not just its name. Omitting it is not a smaller feature, it silently
@@ -1053,7 +1057,7 @@ export function SliceFileModal({
     plate: number
     sceneEdit: SceneEdit
     contentBase: { fileId: string; versionId?: string | null } | null
-    stageSnapshot: (target: SlicingTarget, slicerTargetId: string | null, signal?: AbortSignal) => Promise<string | null>
+    stageSnapshot: (target: SlicingTarget, slicerTargetId: string | null, signal?: AbortSignal) => Promise<string | Uint8Array | null>
     signal: AbortSignal
   }) => {
     if (!canSliceFromEditor) return
@@ -1088,6 +1092,9 @@ export function SliceFileModal({
       frozenInput.slicerTargetId || null,
       opts.signal
     )
+    if (typeof stagedFileId !== 'string') {
+      throw new Error('The server did not confirm the prepared slicing project.')
+    }
     opts.signal.throwIfAborted()
     const input: SliceFileSubmitInput = { ...frozenInput, preparedSourceId: stagedFileId }
 

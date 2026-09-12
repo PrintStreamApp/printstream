@@ -70,7 +70,7 @@ services:
       # the repo checkout and are bind-mounted so the API can serve them.
       BRIDGE_RELEASES_DIR: /data/bridge-releases
       # Accepts a comma-separated list of identical slicer instances to slice in
-      # parallel (add a second slicer service with its own work volume and list
+      # parallel (add a second slicer service with its own bounded work tmpfs and list
       # both URLs). Concurrency defaults to one job per listed instance;
       # SLICING_MAX_QUEUED_JOBS defaults to 25. See docs/configuration.md.
       SLICER_SERVICE_URL: ${SLICER_SERVICE_URL:-http://slicer:4010}
@@ -137,6 +137,11 @@ services:
     environment:
       SLICER_PORT: 4010
       SLICER_SERVICE_TOKEN: ${SLICER_SERVICE_TOKEN:-}
+      SLICER_REQUIRE_AUTH: "true"
+      SLICER_MAX_INPUT_BYTES: ${SLICER_MAX_INPUT_BYTES:-536870912}
+      SLICER_MAX_INFLATED_BYTES: ${SLICER_MAX_INFLATED_BYTES:-2147483648}
+      SLICER_MAX_ARCHIVE_ENTRIES: ${SLICER_MAX_ARCHIVE_ENTRIES:-4096}
+      SLICER_MAX_OUTPUT_BYTES: ${SLICER_MAX_OUTPUT_BYTES:-1073741824}
       SLICER_DEFAULT_TARGET_ID: ${SLICER_DEFAULT_TARGET_ID:-}
       SLICER_CLI_ARGS_TEMPLATE: ${SLICER_CLI_ARGS_TEMPLATE:---slice {plate} --debug 2 --outputdir {outputDir} --min-save --export-3mf {outputFileName} --export-json {input} {input}}
       SLICER_ENABLE_PIPE_PROGRESS: ${SLICER_ENABLE_PIPE_PROGRESS:-true}
@@ -149,8 +154,32 @@ services:
       SLICER_PRELOAD_ENGINES: ${SLICER_PRELOAD_ENGINES:-}
     ports:
       - "${SLICER_BIND_HOST:-127.0.0.1}:${SLICER_BIND_PORT:-4010}:4010"
+    # The native engine parses hostile projects. Keep its kernel and host impact bounded even if a
+    # malformed file reaches a vulnerability in BambuStudio.
+    read_only: true
+    cap_drop:
+      - ALL
+    cap_add:
+      # The root service uses these only to migrate mount ownership and drop native children to
+      # private per-job identities. DAC_OVERRIDE lets it remove mode-0700 files a crashed native
+      # child left in its disposable tree; capabilities are cleared during the uid transition.
+      - CHOWN
+      - DAC_OVERRIDE
+      - KILL
+      - SETGID
+      - SETUID
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: ${SLICER_PIDS_LIMIT:-512}
+    mem_limit: ${SLICER_MEMORY_LIMIT:-8g}
+    cpus: ${SLICER_CPU_LIMIT:-4.0}
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+      # Every work artifact is disposable. A memory-backed filesystem gives the entire native
+      # boundary a hard storage ceiling, so arbitrary code cannot fill the host disk by spreading
+      # writes across many files to evade the per-file rlimit.
+      - /work:size=${SLICER_WORK_LIMIT:-4g},mode=0755
     volumes:
-      - printstream-slicer-work:/work
       # Slicing engines (Bambu Studio builds), downloaded on demand rather than
       # baked into the image. A BIND mount, not a named volume, so you choose
       # which disk carries them: each engine is roughly 530 MB installed, and the
@@ -205,12 +234,6 @@ volumes:
     name: ${BRIDGE_DATA_VOLUME_NAME:-printstream-bridge-data}
   printstream-provision:
     name: ${PROVISION_VOLUME_NAME:-printstream-provision}
-  # Scratch space for in-progress slices. The slicer now runs unprivileged (USER
-  # node); on upgrade from an older root image, recreate this volume so it is
-  # owned by the new runtime user: `docker compose rm -sf slicer && docker volume
-  # rm <project>_printstream-slicer-work`. It holds only transient slice artifacts.
-  printstream-slicer-work:
-    name: ${SLICER_WORK_VOLUME_NAME:-printstream-slicer-work}
   printstream-postgres-data:
     name: ${POSTGRES_DATA_VOLUME_NAME:-printstream-postgres-data}
 

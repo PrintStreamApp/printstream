@@ -41,6 +41,9 @@ const MODEL_SETTINGS_XML = [
   '    <metadata key="plater_id" value="1"/>',
   '    <metadata key="bed_type" value="Cool Plate"/>',
   '    <metadata key="print_sequence" value="by object"/>',
+  '    <metadata key="first_layer_print_sequence" value="2 1"/>',
+  '    <metadata key="other_layers_print_sequence" value="2 2147483646 1 2"/>',
+  '    <metadata key="other_layers_print_sequence_nums" value="1"/>',
   '    <metadata key="spiral_mode" value="1"/>',
   '    <metadata key="locked" value="true"/>',
   '  </plate>',
@@ -102,6 +105,9 @@ test('a plate that says nothing about a key keeps the source value', () => {
   // them would silently discard settings the user made in BambuStudio.
   const out = bake(edit({}))
   assert.deepEqual(valuesOf(out, 'print_sequence'), ['by object'])
+  assert.deepEqual(valuesOf(out, 'first_layer_print_sequence'), ['2 1'])
+  assert.deepEqual(valuesOf(out, 'other_layers_print_sequence'), ['2 2147483646 1 2'])
+  assert.deepEqual(valuesOf(out, 'other_layers_print_sequence_nums'), ['1'])
   assert.deepEqual(valuesOf(out, 'spiral_mode'), ['1'])
   assert.deepEqual(valuesOf(out, 'locked'), ['true'])
 })
@@ -121,6 +127,26 @@ test('print sequence and the arrange lock author over the source', () => {
   // Unlocking writes nothing at all rather than `locked="false"`: absence IS unlocked, and the
   // carried `locked="true"` must not survive the user clearing it.
   assert.deepEqual(valuesOf(out, 'locked'), [])
+})
+
+test('filament orders author over the source as one matched metadata set', () => {
+  const out = bake(edit({
+    firstLayerFilamentSequence: [1, 2],
+    otherLayerFilamentSequences: [
+      { startLayer: 2, endLayer: 20, filamentIds: [2, 1] },
+      { startLayer: 21, endLayer: null, filamentIds: [1, 2] }
+    ]
+  }))
+  assert.deepEqual(valuesOf(out, 'first_layer_print_sequence'), ['1 2'])
+  assert.deepEqual(valuesOf(out, 'other_layers_print_sequence'), ['2 20 2 1 21 2147483646 1 2'])
+  assert.deepEqual(valuesOf(out, 'other_layers_print_sequence_nums'), ['2'])
+})
+
+test('Auto removes every source filament-order key', () => {
+  const out = bake(edit({ firstLayerFilamentSequence: null, otherLayerFilamentSequences: null }))
+  assert.deepEqual(valuesOf(out, 'first_layer_print_sequence'), [])
+  assert.deepEqual(valuesOf(out, 'other_layers_print_sequence'), [])
+  assert.deepEqual(valuesOf(out, 'other_layers_print_sequence_nums'), [])
 })
 
 test('an edit that names no global plate type cannot author a per-plate bed type', () => {

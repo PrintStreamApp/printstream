@@ -23,57 +23,29 @@ packages/
   bridge-runtime/ Shared LAN transport (MQTT/FTPS/camera/SSDP) used by api + bridge
   sea-runtime/    Generic single-file-executable (SEA) plumbing (service install, tray, paths)
 .github/      CI workflows
-.devcontainer/  VS Code dev container
+docker/dev/   Development process image
 ```
 
-## Quick start (devcontainer)
+## Quick start
 
-1. Open the repo in VS Code with the **Dev Containers** extension installed.
-2. "Reopen in Container". The devcontainer starts a `db` Postgres service, installs dependencies, and applies the checked-in Prisma migrations.
-3. From a terminal inside the container:
+The editor stays on the host. Docker runs the Node watchers, PostgreSQL, and optional slicer from
+this checkout, with the source tree mounted at `/workspace`. Each worktree receives a separate
+Compose project, database volume, and loopback web port; only Traefik is machine-wide.
 
 ```bash
 cp .env.server.example .env
-npm run dev
-```
-
-This starts the shared TypeScript watcher, the API on port 4000, the bridge runtime, and the Vite dev server on port 5173. Visit http://localhost:5173.
-
-The bridge dev default points at `http://api:4000`, which is the right target when the bridge runs in Docker on the same network as the API container. If you run the bridge watcher directly in the devcontainer or on your host instead of Docker, override `BRIDGE_SERVER_URL` in `.env` to `http://localhost:4000`.
-
-The checked-in devcontainer installs `ffmpeg`, which the API uses to proxy chamber cameras on RTSP-based X/X2/H-series printers during development.
-
-## Quick start (host machine)
-
-Match the Node everything else uses first: 22.22.3, which the production images, SEA builds, and `.nvmrc` pin (`DEFAULT_NODE_VERSION` in `packages/sea-runtime/scripts/build-harness.mjs`). The devcontainer uses the same Node 22 major. The repo carries an `.nvmrc`, so `nvm use` picks up the exact host version.
-
-```bash
-nvm use          # or: nvm install
-cp .env.server.example .env
-docker compose -f compose.dev.yml up -d db
-
-# The example env is written for processes running INSIDE Compose, so it addresses Postgres and the
-# API by service name. From the host, both are on localhost:
-sed -i 's|@db:5432|@localhost:5432|; s|http://api:4000|http://localhost:4000|' .env
-
+nvm install
+nvm use
 npm install
-npm run db:generate
+npm run dev:bootstrap   # once per machine
 npm run dev
 ```
 
-Install `ffmpeg` too (`sudo apt-get install -y ffmpeg`). The devcontainer bakes it in, and it is required rather than optional for the bridge: it relays RTSP chamber cameras on X/X2/H-series printers.
-
-**Take the distro build, not the pinned static one.** The static build the standalone executables embed (`FFMPEG_STATIC` in `packages/sea-runtime/scripts/build-harness.mjs`, selectable anywhere with `BRIDGE_FFMPEG_PATH`) relays cameras perfectly but ships **no `drawtext` filter**, despite advertising `--enable-libfreetype` in its configure line; it has `drawbox` only. `apps/bridge/src/demo-simulator.test.ts` watermarks with `drawtext` and deliberately keeps the real renderer, so with only that build the test fails on a missing FILTER rather than a missing binary: the render falls back to the source bytes and the test's `notEqual` catches it. Nothing says "wrong ffmpeg", so it reads as a broken renderer.
-
-Without root, unpack the distro build instead of installing it, which is what `apt-get --download-only` plus `dpkg-deb -x` is for (the same technique `apps/slicer/docker/build-x86-sysroot.mjs` uses). Run it in a container matching YOUR distro release so the libraries load against the host loader, unpack to a prefix, and put a wrapper that sets `LD_LIBRARY_PATH` on your `PATH`.
-
-`npm run dev` applies the checked-in migrations itself (see below), so there is no separate migrate step.
-
-`compose.dev.yml` defines that `db` service and publishes it on `127.0.0.1:5432`. It is separate from `.devcontainer/compose.yml`, which runs the same image but publishes no ports because nothing outside that container needs to reach it. (The bare `compose.yml` name is gitignored and reserved for a deployment-local copy of `compose.server.example.yml`.)
-
-If you are not using the repo's Compose-managed Postgres service, point the workspace-root `.env` at your own PostgreSQL instance before running the Prisma commands.
-
-`npm run dev` starts the bridge runtime too. The `.env.server.example` bridge default uses `http://api:4000` so a bridge running in Docker can reach the API by service name on the same Compose network. If you are running the bridge watcher directly on your host instead of Docker, override `BRIDGE_SERVER_URL=http://localhost:4000` in `.env`.
+The host uses the exact Node/npm pair in `.nvmrc` and `package.json` for the thin launcher. The
+image supplies the matching Node 22 runtime plus ffmpeg, PostgreSQL tooling, and the slicer
+toolchain. `npm run dev:down` removes this checkout's containers and network while
+preserving its database volume. Run `npm run dev:host -- snapshot` when the primary checkout's
+current data should become the baseline for new worktrees.
 
 `npm run dev` waits for the local database and applies checked-in Prisma migrations before it starts the API and web watchers. If the database cannot consume the checked-in migration history as-is yet, startup falls back to `db push` and baselines the current checked-in migrations so future deploys can return to normal `migrate deploy` behavior.
 
@@ -83,20 +55,18 @@ For local schema work, prefer `npm run db:migrate -- <name>` so Prisma records a
 
 To clear local auth identities, roles, sessions, service accounts, and auth-provider setup state while preserving workspaces, printers, library files, jobs, and other app data, run `npm run db:reset-auth`. The script reseeds built-in platform roles and each existing workspace's built-in roles after the reset.
 
-## Multi-checkout dev mode (optional)
+## Multi-checkout development
 
-Running several checkouts at once (a few git worktrees, or two projects that both want port 5173) normally means renumbering ports by hand and remembering which is which. This optional mode removes that: each checkout gets its own hostname, database and ports, all **derived from its path**, so nothing is ever assigned, recorded, or reclaimed.
-
-**It is off unless you turn it on.** The switch is a marker file outside the repo, so a fresh clone, CI, and the devcontainer all behave exactly as they always have. `npm run dev` makes no Docker calls and no database calls beyond the usual ones until you opt in.
+Running several checkouts at once (a few Git worktrees, or two projects that both want port 5173) normally means renumbering ports by hand. Devkit removes that: each checkout gets its own hostname, database, and ports, all derived from its path.
 
 ```bash
-npm run dev:bootstrap    # once per machine, from a host shell (not the devcontainer)
+npm run dev:bootstrap    # once per machine
 npm run dev:host -- snapshot     # once, from your primary checkout: capture current dev data as the baseline
 npm install              # once per NEW worktree: node_modules is per-checkout, not shared
 npm run dev              # in any checkout or worktree
 ```
 
-Everything a checkout is named by is derived on that first `npm run dev`, so a new worktree needs no setup beyond the install: it gets its hostname, its own database cloned from the baseline, its own ports, its proxy route, and a copy of the primary checkout's ignored `.env`. If the worktree already has an `.env`, devkit leaves it alone. Deleting the worktree stops producing its derived resources; `dev:host -- prune` drops the orphaned database.
+Everything a checkout is named by is derived on that first `npm run dev`, so a new worktree needs no setup beyond the install: it gets its hostname, its own database restored from the baseline, its own ports, its proxy route, and a copy of the primary checkout's ignored `.env`. If the worktree already has an `.env`, devkit leaves it alone. Deleting the worktree stops producing its derived resources; `dev:host -- prune` removes the orphaned database volume.
 
 Only one dev stack may run for a checkout. A second `npm run dev` exits before starting watchers and
 names the occupied web/API ports. In host mode those ports are part of the proxy identity, so Vite
@@ -118,26 +88,30 @@ Hostnames nest as `<worktree>.<repo>.localhost`, which browsers resolve to loopb
 
 ### What it sets up
 
-| Piece | Where | Shared by |
+| Piece | Where | Ownership |
 | --- | --- | --- |
 | Traefik proxy on IPv4 and IPv6 loopback port 80 | `~/.config/devkit/infra` | every project on the machine |
-| One Postgres, one database per checkout | same stack | every project on the machine |
+| Node, Postgres, and the optional slicer | this checkout's Compose stack | this checkout only |
 | Baseline database + `data/` archive | `~/.config/devkit/baselines` | every worktree of one clone |
 
-The first `npm run dev` in a new worktree clones the baseline database (a `CREATE DATABASE ... TEMPLATE` file copy, well under a second), restores the `data/` archive, and applies whatever migrations that branch adds. It is not seeded empty, because a library with no files in it is not something you can develop against.
+The first `npm run dev` in a new worktree restores the portable SQL baseline and `data/` archive,
+then applies whatever migrations that branch adds. It is not seeded empty, because a library with
+no files in it is not something you can develop against.
 
 ### Commands
 
 | Command | What it does |
 | --- | --- |
 | `npm run dev:doctor` | prints the state of every precondition, and the command that fixes each |
-| `npm run dev:host -- snapshot` | refreshes the baseline from the current checkout's data (keeps the previous as `_prev`) |
-| `npm run dev:host -- reset` | drops and re-clones a worktree's database; `-- --empty` skips the baseline |
-| `npm run dev:host -- prune` | drops databases whose worktree is gone; add `-- --yes` to actually drop |
-| `npm run dev:host -- infra` | restarts the shared stack, e.g. after Docker Desktop was restarted |
+| `npm run dev:host -- snapshot` | refreshes the portable baseline from the current checkout |
+| `npm run dev:host -- reset` | recreates a worktree's database volume; `-- --empty` skips the baseline |
+| `npm run dev:host -- prune` | finds volumes whose worktree is gone; add `-- --yes` to remove them |
+| `npm run dev:host -- infra` | restarts the machine proxy and this checkout's database |
 | `devproxy ls` | every `*.localhost` name registered on this machine, PrintStream's and others' |
 
-The baseline refreshes itself whenever the primary checkout applies a new migration, which is exactly when a merged schema change reaches `dev`. `dev:doctor` nags if it goes stale otherwise. `dev:host -- reset` deliberately refuses on the primary checkout: that database is the real dev data the baseline is captured *from*, not a disposable copy.
+Refresh the baseline explicitly when primary-checkout data should become the starting point for new
+worktrees. `dev:host -- reset` deliberately refuses on the primary checkout because its database is
+the source for snapshots, not disposable state.
 
 ### Naming any other project on the machine
 
@@ -160,11 +134,9 @@ Two differences from the routes `npm run dev` writes, which `devproxy ls` labels
 
 Devkit's `worktreeFiles` allowlist in `devkit.config.mjs` names ignored local configuration a new worktree needs. PrintStream lists `.env`, so the first `npm run dev` copies the primary checkout's file before loading it. Copying is create-only: edit a worktree's `.env` when that branch needs different values and later starts will preserve it.
 
-Host mode publishes its derived `DATABASE_URL` into the dev servers it starts. Tests, validation, and the Prisma CLI still read `.env` directly, which is why inheriting the primary checkout's host-ready file matters: they no longer fall back to the example's devcontainer-only `@db:5432` address.
-
-### Turning it off
-
-`DEVKIT=0` for one run, or delete `~/.config/devkit/host.json` permanently. The devcontainer keeps working throughout and always wins over the marker, so "Reopen in Container" is a full escape hatch.
+Devkit publishes its derived `DATABASE_URL` into the development processes it starts. Tests,
+validation, and the Prisma CLI still read `.env` directly, which is why inheriting the primary
+checkout's file matters.
 
 Shared implementation lives in `@ryanewen/devkit`; PrintStream's ports, environment, inherited files, baseline paths, and project-specific checks live in `devkit.config.mjs`.
 
@@ -174,7 +146,7 @@ By default the slicer runs in the same place as the rest of the dev stack: `npm 
 
 Use `BAMBUSTUDIO_APPIMAGE_URL` only when you want to pin a specific AppImage URL instead of using GitHub's latest stable release. Use `BAMBUSTUDIO_APPIMAGE_ASSET_REGEX` if the upstream release contains multiple AppImage assets and you need to force a particular filename pattern.
 
-`SLICER_SERVICE_URL` comes from your local env file rather than the devcontainer definition, and `npm run dev` points it at the slicer it started for you. Override it only to use a remote worker instead. To verify the local slicer once `npm run dev` is up, run:
+`SLICER_SERVICE_URL` comes from your local env file, and `npm run dev` points it at the slicer it started for you. Override it only to use a remote worker instead. To verify the local slicer once `npm run dev` is up, run:
 
 ```bash
 curl http://localhost:4010/health
@@ -186,7 +158,7 @@ On **x86** the slicer runs alongside the other watchers automatically as part of
 
 ### Running the slicer as a container instead (host machines)
 
-The in-process paths above need BambuStudio's toolchain on the machine itself: on x86 the AppImage's runtime libraries, and on arm64 also `qemu-user-static`, the x86-64 cross toolchain (`gcc-x86-64-linux-gnu`, `libc6-dev-amd64-cross`) and `weston`. The devcontainer image installs all of it; a bare host has none of it, and without it `setup-slicer-qemu.mjs` exits and takes the whole `npm run dev` down with it.
+The development process image includes BambuStudio's runtime libraries and, on arm64, `qemu-user-static`, the x86-64 cross toolchain (`gcc-x86-64-linux-gnu`, `libc6-dev-amd64-cross`), and `weston`.
 
 The slicer image already carries the lot, including the arm64 emulation sysroot, so a host machine can run the same engine without installing any of it:
 
@@ -232,7 +204,7 @@ Three rules worth knowing, because they are what makes the cache safe to trust:
 
 Controls: `npm run test -- --no-cache` (or `PRINTSTREAM_NO_TEST_CACHE=1`) ignores it for one run, `npm run test -- --clear-cache` empties it. Deleting the cache directory is always safe and costs one slow run.
 
-Measured on a 12-core devcontainer, test stage only (add roughly 9s for lint, script tests, typecheck and prisma validate):
+Measured on a 12-core development container, test stage only (add roughly 9s for lint, script tests, typecheck and prisma validate):
 
 | Working tree | Test files run | Test stage |
 | --- | --- | --- |

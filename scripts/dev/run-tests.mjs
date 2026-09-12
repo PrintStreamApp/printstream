@@ -214,7 +214,7 @@ function runTest(files, { quiet = false } = {}) {
         cwd: workspaceRoot,
         // TZ is pinned so a result cannot depend on where the developer is sitting. Tests that build
         // a UTC instant and assert on LOCAL formatting (apps/web/src/lib/time.test.ts) silently
-        // assumed the devcontainer and CI, both of which run with TZ unset (UTC); on a host machine
+        // assumed the development container and CI, both of which run with TZ unset (UTC); on a host machine
         // in any other zone they failed with no hint that the clock was the variable. Override it
         // deliberately for a test that needs a specific zone, rather than relying on the ambient one.
         env: {

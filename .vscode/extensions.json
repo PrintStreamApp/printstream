@@ -1,10 +1,7 @@
 {
-  // Extensions VS Code offers to install when this workspace is opened.
-  // eslint + prisma match our toolchain. The Microsoft PostgreSQL extension is
-  // commented out rather than dropped: settings.json still carries the
-  // preconfigured connection it reads, so re-enable this line to use it.
   "recommendations": [
-    // "ms-ossdata.vscode-pgsql",
+    "ms-ossdata.vscode-pgsql",
+    "Prisma.prisma",
     "dbaeumer.vscode-eslint"
   ]
 }

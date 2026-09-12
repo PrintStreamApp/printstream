@@ -88,6 +88,6 @@ download) and no weston ships there.
   stamp forces existing dev/native sysroots to rebuild when the closure changes.
 - `apps/slicer/Dockerfile`: `weston` (+`libosmesa6` on amd64) in the runtime; `glshim` build
   stage cross-compiles the shim on arm64.
-- `.devcontainer/Dockerfile` + `scripts/dev/setup-slicer*.mjs`: dev parity (weston, cross
+- `docker/dev/Dockerfile` + `scripts/dev/setup-slicer*.mjs`: dev parity (weston, cross
   compiler, per-boot shim compile into the slicer data dir).
 - `apps/slicer/src/output-metadata.ts` / `index.ts`: the stale-preview strip.

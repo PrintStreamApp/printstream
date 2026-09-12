@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { inspectSlicerImage, inspectSlicerSource } from './slicer-image.mjs'
+import {
+  inspectSlicerImage,
+  inspectSlicerSource,
+  slicerSourceFingerprint
+} from './slicer-image.mjs'
 
 const CONTAINER = 'abc123'
 const IMAGE = 'ghcr.io/printstreamapp/printstream-slicer:latest'
@@ -91,18 +95,67 @@ test('an unreachable registry reads as unknown', () => {
  * `inspectSlicerSource` answers "could my edits be in the running container?", so its fixtures are a
  * build time and a working tree, not digests.
  */
-function fakeSourceDocker({ containerId = CONTAINER, created = '2026-09-01T00:00:00Z' } = {}) {
+function fakeSourceDocker({
+  containerId = CONTAINER,
+  created = '2026-09-01T00:00:00Z',
+  fingerprint = null
+} = {}) {
   return (args) => {
     const joined = args.join(' ')
     if (joined.startsWith('ps ')) return { ok: true, stdout: containerId ?? '', stderr: '' }
     // The reference, not the resolved id: see the note in the module.
     if (joined.includes('.Config.Image')) return { ok: true, stdout: 'printstream-slicer-dev', stderr: '' }
+    if (joined.includes('source-fingerprint')) {
+      return { ok: true, stdout: fingerprint || '<no value>', stderr: '' }
+    }
     if (joined.startsWith('image inspect')) {
       return created === null ? { ok: false, stdout: '', stderr: 'no such image' } : { ok: true, stdout: created, stderr: '' }
     }
     return { ok: false, stdout: '', stderr: 'unexpected call' }
   }
 }
+
+test('the slicer source fingerprint is stable across file enumeration order', () => {
+  const files = new Map([
+    ['/repo/apps/slicer/src/index.ts', Buffer.from('slicer')],
+    ['/repo/package.json', Buffer.from('{"name":"printstream"}')]
+  ])
+  const read = (file) => files.get(file)
+  const first = slicerSourceFingerprint('/repo', {
+    git: () => ({ ok: true, stdout: 'package.json\0apps/slicer/src/index.ts\0' }),
+    read
+  })
+  const second = slicerSourceFingerprint('/repo', {
+    git: () => ({ ok: true, stdout: 'apps/slicer/src/index.ts\0package.json\0' }),
+    read
+  })
+
+  assert.equal(first, second)
+})
+
+test('a matching source fingerprint wins over an old image timestamp', () => {
+  const fingerprint = 'current-source'
+  const result = inspectSlicerSource({
+    repoRoot: '/repo',
+    run: fakeSourceDocker({ fingerprint }),
+    git: fakeGit({ dirty: ' M apps/slicer/src/index.ts' }),
+    stat: () => ({ mtimeMs: Date.parse('2026-09-10T00:00:00Z') }),
+    sourceFingerprint: fingerprint
+  })
+
+  assert.equal(result.state, 'matches')
+})
+
+test('a changed source fingerprint requires a rebuild', () => {
+  const result = inspectSlicerSource({
+    repoRoot: '/repo',
+    run: fakeSourceDocker({ fingerprint: 'built-source' }),
+    git: fakeGit(),
+    sourceFingerprint: 'current-source'
+  })
+
+  assert.equal(result.state, 'differs')
+})
 
 function fakeGit({ lastCommit = '2026-08-01T00:00:00Z', dirty = '' } = {}) {
   return (args) => {
@@ -178,6 +231,28 @@ test('an image built after an uncommitted change matches', () => {
 test('no container is not-running rather than a staleness claim', () => {
   const result = inspectSlicerSource({ repoRoot: '/repo', run: fakeSourceDocker({ containerId: '' }), git: fakeGit() })
   assert.equal(result.state, 'not-running')
+})
+
+test('a stopped checkout reuses its existing current image', () => {
+  const result = inspectSlicerSource({
+    repoRoot: '/repo',
+    run: fakeSourceDocker({ containerId: '' }),
+    git: fakeGit(),
+    imageRef: 'printstream-slicer-dev'
+  })
+
+  assert.equal(result.state, 'matches')
+})
+
+test('a stopped checkout with no local image reports that a first build is needed', () => {
+  const result = inspectSlicerSource({
+    repoRoot: '/repo',
+    run: fakeSourceDocker({ containerId: '', created: null }),
+    git: fakeGit(),
+    imageRef: 'printstream-slicer-dev'
+  })
+
+  assert.equal(result.state, 'not-built')
 })
 
 test('an image with no readable build time is unknown, never matches', () => {

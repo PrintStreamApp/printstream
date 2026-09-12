@@ -33,12 +33,15 @@ const REQUIRED_PACKAGE_ENTRIES = ['[Content_Types].xml', '_rels/.rels', THREE_MF
 const MAX_MODEL_ENTRY_BYTES = 64 * 1024 * 1024
 export const MAX_PREPARED_ARCHIVE_ENTRIES = 4_096
 export const MAX_PREPARED_ARCHIVE_UNCOMPRESSED_BYTES = 2 * 1024 * 1024 * 1024
+export const MAX_PREPARED_ARCHIVE_ENTRY_BYTES = 256 * 1024 * 1024
 
 export interface PreparedSlicingValidationInput {
   projectPath: string
   target: SlicingTarget
   /** Current server-owned model for a real-printer target. */
   printerModel?: string | null
+  /** Optional tighter host-specific archive budget, such as the anonymous queue's limit. */
+  maxUncompressedBytes?: number
 }
 
 /** Fail closed unless `projectPath` is a complete, target-consistent browser-prepared-v1 project. */
@@ -49,7 +52,8 @@ export async function validatePreparedSlicingProject(input: PreparedSlicingValid
   try {
     await validateZipArchiveLimits(input.projectPath, {
       maxEntries: MAX_PREPARED_ARCHIVE_ENTRIES,
-      maxUncompressedBytes: MAX_PREPARED_ARCHIVE_UNCOMPRESSED_BYTES
+      maxUncompressedBytes: input.maxUncompressedBytes ?? MAX_PREPARED_ARCHIVE_UNCOMPRESSED_BYTES,
+      maxEntryBytes: MAX_PREPARED_ARCHIVE_ENTRY_BYTES
     })
     const [rootModel, modelSettings, projectSettings, ...packageEntries] = await Promise.all([
       readEntry(input.projectPath, THREE_MF_MODEL_ENTRY, undefined, MAX_MODEL_ENTRY_BYTES),
@@ -89,7 +93,17 @@ export async function validatePreparedSlicingProject(input: PreparedSlicingValid
   }
 
   assertCompleteProjectSettings(settings, projectSettingsJson, modelSettingsXml)
+  assertNoPostProcessingScripts(settings)
   assertFrozenTarget(settings, modelSettingsXml, input.target, input.printerModel)
+}
+
+/** Host commands can never inherit the public caller's consent, so they must be absent server-side. */
+function assertNoPostProcessingScripts(settings: Record<string, unknown>): void {
+  const value = settings.post_process
+  const present = typeof value === 'string'
+    ? value.trim().length > 0
+    : Array.isArray(value) && value.some((entry) => typeof entry === 'string' && entry.trim().length > 0)
+  if (present) fail('Post-processing scripts cannot run on the public slicing server.')
 }
 
 function assertCompleteProjectSettings(

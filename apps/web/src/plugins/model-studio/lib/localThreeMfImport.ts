@@ -1,5 +1,5 @@
 /**
- * Reads a 3MF the user picked as an IMPORT (not as the open project) for the server-less host.
+ * Reads a 3MF the user picked as an IMPORT (not as the open project) for the workspace-less host.
  *
  * The api answers the same question by unzipping the upload with yauzl; here the file never leaves
  * the tab, so it is unzipped in a worker (`zipArchiveClient` via {@link openThreeMfArchive}) and fed

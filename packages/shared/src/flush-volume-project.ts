@@ -23,6 +23,7 @@ import {
   readFlushVolumesMatrixBlock
 } from './flush-volumes-matrix.js'
 import { calcFlushVolumesMatrix, resolveMinFlushVolumes, type FlushVolumeDataset } from './flush-volume-calc.js'
+import { parsePrimeVolumeMode, type PrimeVolumeMode } from './purge-mode.js'
 
 export interface ProjectFlushContext {
   filamentCount: number
@@ -33,8 +34,16 @@ export interface ProjectFlushContext {
   matrixInconsistent: boolean
   /** One entry per extruder, defaulted to the engine's own default when absent or short. */
   multiplier: number[]
+  /** Both stored multiplier sets, so changing mode does not reuse the other mode's scaling. */
+  multipliers: Record<'normal' | 'fast', number[]>
   /** Which key `multiplier` came from, decided by `prime_volume_mode`. */
   multiplierKey: 'flush_multiplier' | 'flush_multiplier_fast'
+  /** The project's current `prime_volume_mode`, defaulted the same way as BambuStudio. */
+  primeVolumeMode: PrimeVolumeMode
+  /** Fast is a single-nozzle alternative enabled by the machine preset. */
+  supportsFastPurge: boolean
+  /** Prime Saving is available when the machine supports more than one nozzle. */
+  supportsPrimeSaving: boolean
   /** `nozzle_flush_dataset` per extruder: selects which measured table applies. */
   datasetCodes: number[]
   /** Per-extruder, then per-filament dead volume floors (`get_min_flush_volumes`). */
@@ -73,11 +82,11 @@ export function readProjectFlushContext(projectSettingsJson: string | null | und
     blocks.push(block)
   }
 
-  const multiplierKey = flushMultiplierKeyForPrimeVolumeMode(record.prime_volume_mode)
-  const storedMultiplier = numberList(record[multiplierKey])
-  const multiplierDefault = multiplierKey === 'flush_multiplier_fast' ? 1.2 : 1
-  const multiplier = Array.from({ length: extruderCount }, (_unused, index) =>
-    storedMultiplier[index] ?? storedMultiplier[storedMultiplier.length - 1] ?? multiplierDefault)
+  const primeVolumeMode = parsePrimeVolumeMode(record.prime_volume_mode)
+  const multiplierKey = flushMultiplierKeyForPrimeVolumeMode(primeVolumeMode)
+  const normalMultiplier = conformedMultiplier(record.flush_multiplier, extruderCount, 1)
+  const fastMultiplier = conformedMultiplier(record.flush_multiplier_fast, extruderCount, 1.2)
+  const multiplier = multiplierKey === 'flush_multiplier_fast' ? fastMultiplier : normalMultiplier
 
   const variantIndices = resolveExtruderVariantIndices(record, extruderCount)
   const datasetCodesRaw = numberList(record.nozzle_flush_dataset)
@@ -94,7 +103,12 @@ export function readProjectFlushContext(projectSettingsJson: string | null | und
     storedBlocks: blocks.length === extruderCount ? blocks : null,
     matrixInconsistent,
     multiplier,
+    multipliers: { normal: normalMultiplier, fast: fastMultiplier },
     multiplierKey,
+    primeVolumeMode,
+    supportsFastPurge: truthyFlag(firstValue(record.support_fast_purge_mode)),
+    supportsPrimeSaving: numberList(record.extruder_max_nozzle_count).some((count) => count > 1)
+      || extruderCount > 1,
     // Resolved through the VARIANT table, not by position: see `resolveExtruderVariantIndices`.
     // Absent means dataset 0, the config default.
     datasetCodes: variantIndices.map((variantIndex) => datasetCodesRaw[variantIndex] ?? 0),
@@ -119,6 +133,15 @@ export function readProjectFlushContext(projectSettingsJson: string | null | und
       truthyFlag(asArray(record.filament_is_support)[index])),
     filamentColors
   }
+}
+
+/** Conform a scalar/short multiplier exactly as the engine-facing bake does. */
+function conformedMultiplier(value: unknown, count: number, fallback: number): number[] {
+  const stored = numberList(value)
+
+  return Array.from({ length: count }, (_unused, index) => {
+    return stored[index] ?? stored[stored.length - 1] ?? fallback
+  })
 }
 
 /**
@@ -239,6 +262,11 @@ function resolveExtruderVariantIndices(record: Record<string, unknown>, extruder
 
 function asArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : []
+}
+
+/** Read the first scalar from a vector-valued config option. */
+function firstValue(value: unknown): unknown {
+  return Array.isArray(value) ? value[0] : value
 }
 
 function stringList(value: unknown): string[] {

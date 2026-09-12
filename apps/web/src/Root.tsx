@@ -38,8 +38,8 @@ function AppLoadingSplash() {
 export function Root() {
   const location = useLocation()
   // Read the real initial URL synchronously (before any client navigation) for the cold-load decision.
-  // Public TOOL paths are core (they exist in the open-source build too), so unlike the marketing
-  // fast-path this decision does not depend on a private module being present.
+  // Public tool paths come from a private cloud manifest. In other builds that manifest is empty,
+  // so the same URL enters the normal app rather than mounting the anonymous editor.
   const startsOutsideApp = isPublicToolPath(window.location.pathname)
     || (marketingRoutePaths.length > 0 && isMarketingPath(window.location.pathname))
   const [enteredApp, setEnteredApp] = useState(!startsOutsideApp)

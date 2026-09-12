@@ -10,13 +10,16 @@
  */
 import type { SlicerFamily, SlicingCapabilities, SlicingPresetSummary } from '@printstream/shared'
 import { apiFetch } from '../../../lib/apiClient'
+import { getBrowserEnv } from '../../../lib/browserEnv'
 
 /** The catalogue is effectively static per slicer image; keep it fresh for a few minutes. */
-const CATALOGUE_STALE_TIME_MS = 5 * 60_000
+const DEVELOPMENT = getBrowserEnv().devMode
+const CATALOGUE_STALE_TIME_MS = DEVELOPMENT ? 0 : 5 * 60_000
 const CATALOGUE_STALL_TIMEOUT_MS = 25_000
 
 interface PublicTargetsResponse {
   configured: boolean
+  slicingAvailable: boolean
   defaultTargetId: string | null
   targets: Array<{
     id: string
@@ -30,6 +33,7 @@ interface PublicTargetsResponse {
 
 export interface PublicSlicerTargets {
   configured: boolean
+  slicingAvailable: boolean
   defaultTargetId: string | null
   /** Mapped to the full descriptor shape the settings panel/controller expect. */
   targets: SlicingCapabilities['targets']
@@ -43,7 +47,12 @@ async function fetchWithStallGuard<T>(path: string, signal: AbortSignal | undefi
   let stalled = false
   const stallTimer = setTimeout(() => { stalled = true; controller.abort() }, CATALOGUE_STALL_TIMEOUT_MS)
   try {
-    return await apiFetch<T>(path, { signal: controller.signal })
+    return await apiFetch<T>(path, {
+      signal: controller.signal,
+      // A previous dev response may still carry the production-style public cache lifetime. Bypass
+      // it so an API restart that changes availability is visible without clearing browser data.
+      cache: DEVELOPMENT ? 'no-store' : undefined
+    })
   } catch (error) {
     if (stalled && !signal?.aborted) throw new Error(stallMessage)
     throw error
@@ -62,6 +71,7 @@ export function publicSlicerTargetsQueryOptions() {
       )
       return {
         configured: body.configured,
+        slicingAvailable: body.slicingAvailable === true,
         defaultTargetId: body.defaultTargetId,
         // The public endpoint omits deployment-only fields; fill the descriptor so the value still
         // satisfies the shared type. `slicerName` is display-only here and the estimate-mode switch

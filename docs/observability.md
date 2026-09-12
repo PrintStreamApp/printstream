@@ -40,8 +40,7 @@ runtime starts and every instrument is a cheap no-op, so the self-hosted/OSS
 build carries zero overhead unless you opt in.
 
 > **Keep the metrics port internal.** It is meant for an internal scraper only;
-> do not publish or reverse-proxy it publicly. The example stack below never
-> maps it to the host.
+> do not publish or reverse-proxy it publicly.
 
 ### What is measured
 
@@ -78,28 +77,11 @@ session ends (or after ~90s without an update).
 | `printstream_bridge_memory_rss_bytes` | gauge | `bridge_id`, `workspace_id` | Bridge process resident memory. |
 | `printstream_bridge_api_reconnects` | counter | `bridge_id`, `workspace_id` | Cumulative bridge→API reconnects (resets on bridge restart, a flapping-link signal). |
 
-### Running Prometheus + Grafana (example)
+### Connecting a scraper
 
-An optional Compose overlay stands up Prometheus and Grafana scraping the API,
-without publishing the metrics port to the host:
-
-```sh
-cp prometheus.example.yml prometheus.yml
-docker compose -f compose.yml -f compose.observability.yml up -d
-```
-
-- `compose.observability.example.yml` enables `METRICS_ENABLED` on the `api`
-  service and adds `prometheus` (scraping `api:9464` on the internal network)
-  and `grafana` services.
-- `prometheus.example.yml` is the scrape config. Copy it to `prometheus.yml`
-  (kept out of git, like `compose.yml`).
-- Grafana's UI binds to `127.0.0.1:3000` by default (`GRAFANA_PORT`,
-  `GRAFANA_BIND_HOST`). Change the admin password (`GRAFANA_ADMIN_PASSWORD`) and
-  keep it behind your own auth/proxy. On first login, add a Prometheus data
-  source pointing at `http://prometheus:9090`.
-
-Running the API outside Docker? Point your existing Prometheus at
-`http://<api-host>:9464/metrics` instead, and set `METRICS_ENABLED=true` /
-`METRICS_PORT` on the API process.
+Set `METRICS_ENABLED=true` on the API service, keep `METRICS_PORT` on a private
+interface or container network, and point your existing Prometheus deployment at
+`http://<api-host>:9464/metrics`. Change the port in the target when you override
+`METRICS_PORT`.
 
 See `docs/configuration.md` for the `METRICS_ENABLED` / `METRICS_PORT` variables.

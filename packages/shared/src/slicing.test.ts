@@ -4,6 +4,7 @@ import {
   createSlicingJobSchema,
   exportArrangedThreeMfSchema,
   parsePreservedSliceSettings,
+  publicSlicingExecutionRequestSchema,
   saveArrangedThreeMfSchema,
   sliceEnvelopeSchema,
   slicingTargetSchema,
@@ -19,6 +20,18 @@ const retarget = {
   nozzleDiameters: [0.4],
   filamentMappings: [{ projectFilamentId: 1, profileId: 'builtin:filament:H2D' }]
 }
+
+test('public slicing refuses host post-processing commands in request overrides', () => {
+  const base = {
+    preparedProject: { contractVersion: 1 as const },
+    target: retarget
+  }
+  assert.equal(publicSlicingExecutionRequestSchema.safeParse(base).success, true)
+  assert.equal(publicSlicingExecutionRequestSchema.safeParse({
+    ...base,
+    target: { ...retarget, processSettingOverrides: { post_process: ['/tmp/untrusted'] } }
+  }).success, false)
+})
 
 test('a browser-prepared source keeps original lineage and cannot repeat baked edits', () => {
   const base = {
@@ -61,9 +74,11 @@ test('slice envelope carries an execution-only printer model independently of pr
       target: retarget,
       plate: 0
     },
+    maxOutputBytes: 512 * 1024 * 1024,
     executionHints: { printerModel: 'P1S' }
   })
   assert.equal(parsed.executionHints?.printerModel, 'P1S')
+  assert.equal(parsed.maxOutputBytes, 512 * 1024 * 1024)
 })
 
 test('saveArrangedThreeMf carries an optional retarget machine + slicer target', () => {

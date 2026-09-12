@@ -20,24 +20,45 @@ jobs:
     # run instead of burning a full 6h runner. The suite's own per-test timeout
     # (run-tests.mjs --test-timeout) is the first line of defense; this is the backstop.
     timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16-bookworm
+        env:
+          POSTGRES_DB: printstream
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d printstream"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/printstream?schema=public
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      - name: Ensure ~/.ssh exists for devcontainer bind mount
-        run: mkdir -p ~/.ssh
-
-      - name: Run checks in devcontainer
-        uses: devcontainers/ci@v0.3
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
         with:
-          # This automatically builds the devcontainer, starts the compose services (like db),
-          # runs the postCreateCommand (which installs deps and migrates the db),
-          # and then executes the runCmd.
-          # Build first: tests resolve workspace packages (@printstream/shared,
-          # @printstream/bridge-runtime) through their dist/ entry points, which
-          # don't exist yet on a fresh install.
-          runCmd: npm run build && npm run validate
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client and apply migrations
+        run: |
+          npm run db:generate
+          node scripts/dev/wait-for-db.mjs
+          node scripts/bootstrap-prisma-migrations.mjs
+
+      # Tests resolve workspace packages through their built dist entry points.
+      - name: Build and validate
+        run: npm run build && npm run validate
 
   # The installer window and the tray are PowerShell programs written inside
   # TypeScript template literals, so nothing above can see them: tsc and the
@@ -55,7 +76,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version-file: .nvmrc
 
       - name: Install dependencies
         run: npm ci

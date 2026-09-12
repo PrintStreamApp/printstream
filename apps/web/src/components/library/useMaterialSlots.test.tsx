@@ -83,6 +83,78 @@ test('every added slot keeps its pick, not just the first', () => {
   )
 })
 
+test('a mixed slot stays virtual and its component ids follow save order', () => {
+  const { result } = renderSlots()
+  act(() => {
+    result.current.handleUpsertMixedFilament({
+      projectFilamentId: null,
+      color: '#801180',
+      type: 'PLA',
+      mixedFilament: {
+        componentIds: [1, 2],
+        ratios: [0.6, 0.4],
+        gradient: false,
+        gradientRange: [0.1, 0.9],
+        gradientCurve: null,
+        gradientPerPart: false,
+        issues: []
+      }
+    })
+  })
+  assert.equal(result.current.projectFilaments[2]?.mixedFilament?.componentIds.join(','), '1,2')
+  // Move physical slot 1 after the virtual slot: save order is [physical 2, mix, physical 1].
+  act(() => {
+    result.current.handleReorderFilament(0, 3)
+  })
+  assert.deepEqual(result.current.desiredFilaments?.[1]?.mixedFilament?.componentIds, [3, 1])
+
+  // Removing the last virtual slot leaves explicit physical nulls, which tell the bake to clear
+  // the parallel mixed arrays instead of mistaking this for an older client that knows no mixes.
+  act(() => {
+    result.current.handleRemoveFilament(3)
+  })
+  assert.deepEqual(result.current.desiredFilaments?.map((filament) => filament.mixedFilament), [null, null])
+})
+
+test('syncing AMS replaces the whole list in tray order and reports removed tail positions', () => {
+  const removed: number[] = []
+  const { result } = renderSlots({
+    baseProjectFilaments: [slot(1, '#111111'), slot(2, '#222222'), slot(3, '#333333')],
+    onFilamentRemoved: (position) => removed.push(position)
+  })
+  act(() => {
+    result.current.handleSyncFilaments([
+      { optionId: 'loaded:a1', color: '#AA0000', label: 'PETG', toolheadId: 'nozzle-1' },
+      { optionId: 'loaded:a2', color: '#00AA00', label: 'PLA', toolheadId: 'nozzle-0' }
+    ])
+  })
+
+  assert.deepEqual(removed, [3], 'tail references are remapped from the highest removed position')
+  assert.deepEqual(result.current.projectFilaments.map((filament) => ({
+    id: filament.projectFilamentId,
+    label: filament.label,
+    color: filament.color
+  })), [
+    { id: 1, label: 'PETG', color: '#aa0000' },
+    { id: 2, label: 'PLA', color: '#00aa00' }
+  ])
+  assert.deepEqual(result.current.filamentMaterialOptionIds, { 1: 'loaded:a1', 2: 'loaded:a2' })
+  assert.deepEqual(result.current.filamentToolheadIds, { 1: 'nozzle-1', 2: 'nozzle-0' })
+})
+
+test('syncing more AMS slots mints stable ids after the existing project range', () => {
+  const { result } = renderSlots()
+  act(() => {
+    result.current.handleSyncFilaments([
+      { optionId: 'loaded:a1', color: '#110000', label: 'PLA' },
+      { optionId: 'loaded:a2', color: '#220000', label: 'PLA' },
+      { optionId: 'loaded:a3', color: '#330000', label: 'PLA' },
+      { optionId: 'loaded:a4', color: '#440000', label: 'PLA' }
+    ])
+  })
+  assert.deepEqual(result.current.projectFilaments.map((filament) => filament.projectFilamentId), [1, 2, 3, 4])
+})
+
 test('removing a base slot reports its 1-based pre-removal position to the host remap', () => {
   const positions: number[] = []
   const { result } = renderSlots({ onFilamentRemoved: (position) => positions.push(position) })

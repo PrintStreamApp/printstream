@@ -80,7 +80,7 @@ export function readEntry(
  */
 export function validateZipArchiveLimits(
   filePath: string,
-  options: { maxEntries: number; maxUncompressedBytes: number }
+  options: { maxEntries: number; maxUncompressedBytes: number; maxEntryBytes?: number }
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     yauzl.open(filePath, { lazyEntries: true, validateEntrySizes: false }, (openError, zipFile) => {
@@ -92,6 +92,7 @@ export function validateZipArchiveLimits(
       let entryCount = 0
       let declaredBytes = 0
       let inflatedBytes = 0
+      const names = new Set<string>()
       const finish = (error?: Error) => {
         if (settled) return
         settled = true
@@ -103,6 +104,16 @@ export function validateZipArchiveLimits(
       zipFile.on('end', () => finish())
       zipFile.on('entry', (entry: Entry) => {
         entryCount += 1
+        const normalizedName = entry.fileName
+          .split('/')
+          .filter((segment) => segment !== '.')
+          .join('/')
+          .toLowerCase()
+        if (names.has(normalizedName)) {
+          finish(new Error('Archive contains duplicate entry names'))
+          return
+        }
+        names.add(normalizedName)
         declaredBytes += entry.uncompressedSize
         if (entryCount > options.maxEntries) {
           finish(new Error('Archive has too many entries'))
@@ -110,6 +121,10 @@ export function validateZipArchiveLimits(
         }
         if (declaredBytes > options.maxUncompressedBytes) {
           finish(new Error('Archive expands beyond the allowed size'))
+          return
+        }
+        if (entry.uncompressedSize > (options.maxEntryBytes ?? options.maxUncompressedBytes)) {
+          finish(new Error('Archive entry expands beyond the allowed size'))
           return
         }
         if (entry.fileName.endsWith('/')) {

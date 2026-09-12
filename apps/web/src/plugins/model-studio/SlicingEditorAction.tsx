@@ -52,7 +52,7 @@ export function SlicingEditorAction(props: Record<string, unknown>) {
         plate: number
         sceneEdit: SceneEdit
         contentBase: EditorContentBasePin | null
-        stageSnapshot: (target: SlicingTarget, slicerTargetId: string | null, signal?: AbortSignal) => Promise<string | null>
+        stageSnapshot: (target: SlicingTarget, slicerTargetId: string | null, signal?: AbortSignal) => Promise<string | Uint8Array | null>
         signal: AbortSignal
       }) => void | Promise<void>)
     : undefined

@@ -36,6 +36,7 @@ import { repairModelSettingsObjectExtruders, setObjectLevelExtruderMetadata, sha
 import { inspectProjectFilamentIds, repairFilamentIds } from '../repairs/filament-ids.js'
 import { inspectProjectInheritsGroup, repairInheritsGroup } from '../repairs/inherits-group.js'
 import { resizeParallelPresetRecord } from '../three-mf-project-config.js'
+import { remapMixedFilamentComponentIds, serializeMixedFilamentGradientCurve } from '../mixed-filament.js'
 import {
   defaultFlushMultiplierFor,
   flushMultiplierKeyForPrimeVolumeMode,
@@ -2287,6 +2288,7 @@ export function applyFilamentList(projectSettingsJson: string, filaments: SceneE
       }
       record[key] = Array.from({ length: newCount }, (_unused, i) => value[sourceFor(i)])
     }
+    remapMixedFilamentReferences(record, newCount, sourceFor)
     // `different_settings_to_system` and `inherits_group` are PARALLEL PRESET RECORDS,
     // `[process, ...filament slots, machine]` (length oldCount+2), so the generic remap above skips
     // both. `resizeParallelPresetRecord` rebuilds them: each new slot follows its source slot, and a
@@ -2364,6 +2366,7 @@ export function applyFilamentList(projectSettingsJson: string, filaments: SceneE
   // material physics and wipes that slot's `inherits_group`. Fixing it means teaching the
   // COMPARISON to derive both sides, not just changing what is written.
   record.filament_type = filaments.map((filament, i) => filament.type ?? (typeof previousTypes[i] === 'string' ? previousTypes[i] : 'PLA'))
+  authorMixedFilamentDefinitions(record, filaments)
   // Persist the chosen filament preset name per slot so a material PROFILE change (e.g. PLA -> PETG)
   // survives a save, otherwise `filament_settings_id` keeps the prior preset and the project reopens
   // as the old material (with a name/type mismatch). A slot with no explicit `settingsId` keeps the
@@ -2551,6 +2554,91 @@ export function applyFilamentList(projectSettingsJson: string, filaments: SceneE
   }
 
   return JSON.stringify(record)
+}
+
+/**
+ * Remap component references after the generic parallel-array move has relocated mixed slots.
+ *
+ * Component ids are values in the old 1-based filament space. A removed source becomes zero,
+ * BambuStudio's visible broken-reference sentinel, instead of silently targeting a different slot.
+ */
+function remapMixedFilamentReferences(
+  record: Record<string, unknown>,
+  newCount: number,
+  sourceFor: (newIndex: number) => number
+): void {
+  if (!Array.isArray(record.filament_mixed_components)) {
+    return
+  }
+
+  const mixedFlags = Array.isArray(record.filament_is_mixed)
+    ? record.filament_is_mixed
+    : []
+  const newSlotForOldSlot = new Map<number, number>()
+
+  for (let newIndex = 0; newIndex < newCount; newIndex++) {
+    const oldSlot = sourceFor(newIndex) + 1
+    if (!newSlotForOldSlot.has(oldSlot)) {
+      newSlotForOldSlot.set(oldSlot, newIndex + 1)
+    }
+  }
+
+  record.filament_mixed_components = record.filament_mixed_components.map((value, index) => {
+    const isMixed = mixedConfigBoolean(mixedFlags[index])
+
+    if (!isMixed || typeof value !== 'string') {
+      return value
+    }
+
+    return remapMixedFilamentComponentIds(value, newSlotForOldSlot)
+  })
+}
+
+/**
+ * Author every parallel mixed-filament vector when the client explicitly understands that schema.
+ *
+ * An omitted `mixedFilament` field preserves older projects byte-for-byte. Explicit nulls represent
+ * physical slots and allow deleting the final virtual mix without leaving stale project arrays.
+ */
+function authorMixedFilamentDefinitions(
+  record: Record<string, unknown>,
+  filaments: SceneEditFilament[]
+): void {
+  const understandsMixedFilaments = filaments.some((filament) => {
+    return filament.mixedFilament !== undefined
+  })
+
+  if (!understandsMixedFilaments) {
+    return
+  }
+
+  record.filament_is_mixed = filaments.map((filament) => {
+    return filament.mixedFilament ? '1' : '0'
+  })
+  record.filament_mixed_components = filaments.map((filament) => {
+    return filament.mixedFilament?.componentIds.join(',') ?? ''
+  })
+  record.filament_mixed_sublayer_ratios = filaments.map((filament) => {
+    return filament.mixedFilament?.ratios.join(',') ?? ''
+  })
+  record.filament_mixed_gradient = filaments.map((filament) => {
+    return filament.mixedFilament?.gradient ? '1' : '0'
+  })
+  record.filament_mixed_gradient_range = filaments.map((filament) => {
+    return filament.mixedFilament?.gradientRange.join(',') ?? ''
+  })
+  record.filament_mixed_gradient_curve = filaments.map((filament) => {
+    const curve = filament.mixedFilament?.gradientCurve
+    return curve ? serializeMixedFilamentGradientCurve(curve) : ''
+  })
+  record.filament_mixed_gradient_per_part = filaments.map((filament) => {
+    return filament.mixedFilament?.gradientPerPart ? '1' : '0'
+  })
+}
+
+/** Read the boolean encodings Bambu uses in mixed-filament project vectors. */
+function mixedConfigBoolean(value: unknown): boolean {
+  return value === true || value === 1 || value === '1' || value === 'true'
 }
 
 /**
@@ -3150,13 +3238,18 @@ function applyFlushVolumes(projectSettingsJson: string, flushVolumes: SceneEditF
   if (filamentCount <= 0) return projectSettingsJson
 
   const blocks = flushVolumes.matrix
-  const shapeMatches = blocks.length === extruderCount
+  const shapeMatches = blocks !== null
+    && blocks.length === extruderCount
     && blocks.every((block) => block.length === filamentCount && block.every((row) => row.length === filamentCount))
-  if (shapeMatches) {
+  if (blocks !== null && shapeMatches) {
     record.flush_volumes_matrix = writeFlushVolumesMatrixBlocks(blocks)
   }
 
-  const multiplierKey = flushMultiplierKeyForPrimeVolumeMode(record.prime_volume_mode)
+  if (flushVolumes.primeVolumeMode) {
+    record.prime_volume_mode = flushVolumes.primeVolumeMode
+  }
+
+  const multiplierKey = flushMultiplierKeyForPrimeVolumeMode(flushVolumes.primeVolumeMode ?? record.prime_volume_mode)
   const multiplier = flushVolumes.multiplier.map((value) => String(value))
   record[multiplierKey] = repairFlushMultiplier(multiplier, extruderCount, defaultFlushMultiplierFor(multiplierKey))
     ?? multiplier

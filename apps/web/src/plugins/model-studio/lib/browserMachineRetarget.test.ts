@@ -191,7 +191,7 @@ test('an unresolvable process preset still lets the machine retarget through', a
  * (the api client takes `body: unknown`) and pass, then 400/405 in the browser and silently drop the
  * user's printer switch. These pin the real requests instead.
  *
- * The expected keys are the ones `apps/api/src/routes/public-slicing.ts` parses.
+ * The expected keys are the ones `apps/api/src/private/cloud/public-slicing/routes.ts` parses.
  */
 test('the real resolvers post the ids the anonymous routes actually parse', async () => {
   const sent: Array<{ url: string; method: string; body: Record<string, unknown> }> = []

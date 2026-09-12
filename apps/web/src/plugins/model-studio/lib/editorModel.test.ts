@@ -492,6 +492,36 @@ test('seedEditorState seeds plates without a scene empty, and fillPlateFromScene
   assert.equal(state.plates[1]?.instances.length, 0)
 })
 
+test('per-plate filament orders seed, emit, and snapshot without sharing arrays', () => {
+  const index = threeMfIndexSchema.parse({
+    plates: [{
+      index: 1,
+      name: null,
+      hasThumbnail: false,
+      plateType: null,
+      nozzleSizes: [],
+      filaments: [],
+      objects: [],
+      firstLayerFilamentSequence: [2, 1],
+      otherLayerFilamentSequences: [{ startLayer: 2, endLayer: null, filamentIds: [1, 2] }]
+    }],
+    projectFilaments: [],
+    compatiblePrinterModels: []
+  })
+  const state = seedEditorState(index, new Map())
+  assert.deepEqual(buildSceneEdit(state).plates[0]?.firstLayerFilamentSequence, [2, 1])
+  assert.deepEqual(buildSceneEdit(state).plates[0]?.otherLayerFilamentSequences, [
+    { startLayer: 2, endLayer: null, filamentIds: [1, 2] }
+  ])
+
+  const snapshot = cloneEditorState(state)
+  assert.notEqual(snapshot.plates[0]?.firstLayerFilamentSequence, state.plates[0]?.firstLayerFilamentSequence)
+  assert.notEqual(
+    snapshot.plates[0]?.otherLayerFilamentSequences?.[0]?.filamentIds,
+    state.plates[0]?.otherLayerFilamentSequences?.[0]?.filamentIds
+  )
+})
+
 test('seeded plates carry a unique session identity and remember their source index', () => {
   const index = threeMfIndexSchema.parse({
     plates: [1, 2, 3].map((plateIndex) => ({
@@ -1194,7 +1224,11 @@ test('buildSessionFilamentIdRemap is null for identity and maps session ids to p
 test('rebaseSceneEditFilamentIds translates every id-carrying field and drops unmappable ids', () => {
   const remap = buildSessionFilamentIdRemap([2])!
   const edit = {
-    plates: [{ index: 1 }],
+    plates: [{
+      index: 1,
+      firstLayerFilamentSequence: [5, 2],
+      otherLayerFilamentSequences: [{ startLayer: 2, endLayer: null, filamentIds: [2, 5] }]
+    }],
     instances: [
       { objectId: 2, plateIndex: 1, position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 }, filamentId: 2 },
       { objectId: 3, plateIndex: 1, position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 }, filamentId: 5 }
@@ -1208,6 +1242,10 @@ test('rebaseSceneEditFilamentIds translates every id-carrying field and drops un
     filamentChanges: [{ plateIndex: 1, changes: [{ z: 3, filamentId: 2 }, { z: 6, filamentId: 5 }] }]
   } as unknown as Parameters<typeof rebaseSceneEditFilamentIds>[0]
   const next = rebaseSceneEditFilamentIds(edit, remap)
+  assert.deepEqual(next.plates[0]?.firstLayerFilamentSequence, [1])
+  assert.deepEqual(next.plates[0]?.otherLayerFilamentSequences, [
+    { startLayer: 2, endLayer: null, filamentIds: [1] }
+  ])
   assert.equal(next.instances[0]!.filamentId, 1, 'kept slot follows to its saved id')
   assert.equal(next.instances[1]!.filamentId, null, 'a removed material becomes inherit, never a guess')
   assert.deepEqual(next.partFilaments, [{ objectId: 2, partIndex: 0, filamentId: 1 }], 'unmappable part assignment dropped')
@@ -1223,11 +1261,17 @@ test('rebaseEditorStateFilamentIds moves live instances, parts, and added parts 
   instance.filamentId = 2
   instance.parts = instance.parts.map((part) => ({ ...part, filamentId: 2 }))
   state.plates[0]!.instances.push(instance)
+  state.plates[0]!.firstLayerFilamentSequence = [5, 2]
+  state.plates[0]!.otherLayerFilamentSequences = [{ startLayer: 2, endLayer: null, filamentIds: [2, 5] }]
   const hostId = addedPartHostId(instance)!
   state.addedParts = { [hostId]: [{ key: 'ap-1', meshImportId: 'imp-2', subtype: 'normal_part', name: 'Cube', matrix: [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0], filamentId: 2 }] as never }
   const remap = buildSessionFilamentIdRemap([2])!
   const next = rebaseEditorStateFilamentIds(state, remap)
   assert.equal(next.plates[0]!.instances[0]!.filamentId, 1)
+  assert.deepEqual(next.plates[0]!.firstLayerFilamentSequence, [1])
+  assert.deepEqual(next.plates[0]!.otherLayerFilamentSequences, [
+    { startLayer: 2, endLayer: null, filamentIds: [1] }
+  ])
   assert.equal(next.plates[0]!.instances[0]!.parts[0]!.filamentId, 1)
   assert.equal(next.addedParts![hostId]![0]!.filamentId, 1)
   // The original state is untouched (the rebase replaces, never mutates).

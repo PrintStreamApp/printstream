@@ -54,6 +54,41 @@ test('per-object process overrides reach the index, scoped to the object and to 
   assert.deepEqual(objects.find((object) => object.id === 8)?.processOverrides, {})
 })
 
+test('per-plate filament orders reach the index without losing range boundaries', () => {
+  const xml = [
+    '<config>',
+    '  <plate>',
+    '    <metadata key="plater_id" value="1"/>',
+    '    <metadata key="first_layer_print_sequence" value="3 1 2"/>',
+    '    <metadata key="other_layers_print_sequence" value="2 12 2 3 1 13 2147483646 1 2 3"/>',
+    '    <metadata key="other_layers_print_sequence_nums" value="2"/>',
+    '  </plate>',
+    '</config>'
+  ].join('\n')
+
+  const plate = parseModelSettingsPlates(xml)[0]
+  assert.deepEqual(plate?.firstLayerFilamentSequence, [3, 1, 2])
+  assert.deepEqual(plate?.otherLayerFilamentSequences, [
+    { startLayer: 2, endLayer: 12, filamentIds: [2, 3, 1] },
+    { startLayer: 13, endLayer: null, filamentIds: [1, 2, 3] }
+  ])
+})
+
+test('malformed per-plate filament orders fall back to Auto', () => {
+  const xml = [
+    '<config><plate>',
+    '  <metadata key="plater_id" value="1"/>',
+    '  <metadata key="first_layer_print_sequence" value="2 nope 1"/>',
+    '  <metadata key="other_layers_print_sequence" value="2 10 1 2"/>',
+    '  <metadata key="other_layers_print_sequence_nums" value="2"/>',
+    '</plate></config>'
+  ].join('\n')
+
+  const plate = parseModelSettingsPlates(xml)[0]
+  assert.equal(plate?.firstLayerFilamentSequence, null)
+  assert.equal(plate?.otherLayerFilamentSequences, null)
+})
+
 test('a project filament slot keeps the raw filament_settings_id, not just the display name', () => {
   // `filamentName` is a DISPLAY value: it strips the `@BBL…` machine suffix, which collapses a
   // built-in and any workspace preset inheriting it onto one string. Since no installed preset is
@@ -147,6 +182,21 @@ test('the vendor array counts toward the slot total', () => {
     filament_vendor: ['Polymaker', 'Bambu Lab', 'Bambu Lab']
   }))
   assert.equal(slots.length, 3)
+})
+
+test('project filaments distinguish virtual mixed slots from physical trays', () => {
+  const slots = parseProjectFilaments(JSON.stringify({
+    filament_colour: ['#FF0000', '#0000FF', '#800080'],
+    filament_type: ['PLA', 'PLA', 'PLA'],
+    filament_is_mixed: ['0', '0', '1'],
+    filament_mixed_components: ['', '', '1,2'],
+    filament_mixed_sublayer_ratios: ['', '', '0.5,0.5']
+  }))
+
+  assert.equal(slots[0]?.mixedFilament, null)
+  assert.deepEqual(slots[2]?.mixedFilament?.componentIds, [1, 2])
+  assert.deepEqual(slots[2]?.mixedFilament?.ratios, [0.5, 0.5])
+  assert.deepEqual(slots[2]?.mixedFilament?.issues, [])
 })
 
 test('the index carries the process preset\'s PARENT, which is what the engine judges it by', () => {

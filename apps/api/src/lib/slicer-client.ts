@@ -7,12 +7,12 @@
  * slices go to the least-busy instance, progress polls follow the instance
  * that owns the job, and reads (health/profiles/resolve) fail over in order.
  */
-import { slicerEngineInstallStatusSchema, slicingMetadataSchema, slicingOutputLineSchema, slicingPresetSummarySchema, slicingTargetDescriptorSchema, type CreateSlicingJob, type SliceEnvelope, type SlicerEngineInstallStatus, type SlicingMetadata, type SlicingOutputLine, type SlicingPresetSummary, type SlicingTargetDescriptor } from '@printstream/shared'
+import { slicerEngineInstallStatusSchema, slicingMetadataSchema, slicingOutputLineSchema, slicingPresetSummarySchema, slicingTargetDescriptorSchema, type SliceEnvelope, type SlicerEngineInstallStatus, type SlicingMetadata, type SlicingOutputLine, type SlicingPresetSummary, type SlicingTargetDescriptor } from '@printstream/shared'
 import { createReadStream, createWriteStream } from 'node:fs'
 import { mkdtemp, rename, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { Readable } from 'node:stream'
+import { Readable, Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import type { ReadableStream as NodeReadableStream } from 'node:stream/web'
 import { Agent } from 'undici'
@@ -43,10 +43,12 @@ export interface SlicerRunInput {
   jobId: string
   sourceFileName: string
   sourcePath: string
-  request: CreateSlicingJob
+  request: SliceEnvelope['request']
   profileFiles?: ResolvedSlicingPresetFile[]
   /** API-resolved facts that choose engine execution without rewriting prepared project metadata. */
   executionHints?: SliceEnvelope['executionHints']
+  /** Optional caller-specific output ceiling enforced while streaming the artifact. */
+  maxArtifactBytes?: number
   signal: AbortSignal
 }
 
@@ -366,11 +368,12 @@ export class SlicerClient {
   }
 
   private async runOnInstance(baseUrl: string, input: SlicerRunInput): Promise<SlicerRunResult> {
+    const maxArtifactBytes = Math.min(input.maxArtifactBytes ?? env.SLICING_MAX_ARTIFACT_BYTES, env.SLICING_MAX_ARTIFACT_BYTES)
     // The slice request travels to the slicer as a base64 HTTP header, so it must stay small.
     // The editor's per-plate thumbnails (base64 PNGs) are only needed by the API (it bakes them
     // into the sliced output after the slice): the slicer already receives the arranged 3MF, so
     // strip them from the envelope to avoid blowing the header size limit (HTTP 431).
-    const slicerRequest = input.request.sceneEdit?.plateThumbnails
+    const slicerRequest = 'sceneEdit' in input.request && input.request.sceneEdit?.plateThumbnails
       ? { ...input.request, sceneEdit: { ...input.request.sceneEdit, plateThumbnails: undefined } }
       : input.request
     // Typed against the shared SliceEnvelope so the producer (here) and the slicer's
@@ -379,6 +382,7 @@ export class SlicerClient {
       jobId: input.jobId,
       sourceFileName: input.sourceFileName,
       request: slicerRequest,
+      maxOutputBytes: maxArtifactBytes,
       profileFiles: input.profileFiles ?? [],
       executionHints: input.executionHints
     }
@@ -394,6 +398,7 @@ export class SlicerClient {
       sourceSize: sourceInfo.size,
       envelope,
       outputPath: downloadPath,
+      maxArtifactBytes,
       signal: input.signal
     }).catch(async (error) => {
       await rm(downloadPath, { force: true }).catch(() => undefined)
@@ -405,7 +410,7 @@ export class SlicerClient {
     const output = parseOutputLinesHeader(response.headers.get('x-printstream-output-lines'))
     const metadata = parseMetadataHeader(response.headers.get('x-printstream-metadata'))
     const contentLength = parseContentLength(response.headers.get('content-length'))
-    if (contentLength != null && contentLength > env.SLICING_MAX_ARTIFACT_BYTES) {
+    if (contentLength != null && contentLength > maxArtifactBytes) {
       await rm(downloadPath, { force: true }).catch(() => undefined)
       await rm(artifactDir, { recursive: true, force: true }).catch(() => undefined)
       throw new Error('Sliced artifact exceeds configured size limit')
@@ -417,7 +422,7 @@ export class SlicerClient {
       await rm(artifactDir, { recursive: true, force: true }).catch(() => undefined)
       throw new Error('Slicer service returned an empty artifact')
     }
-    if (downloadInfo.size > env.SLICING_MAX_ARTIFACT_BYTES) {
+    if (downloadInfo.size > maxArtifactBytes) {
       await rm(downloadPath, { force: true }).catch(() => undefined)
       await rm(artifactDir, { recursive: true, force: true }).catch(() => undefined)
       throw new Error('Sliced artifact exceeds configured size limit')
@@ -596,6 +601,7 @@ export class SlicerClient {
     sourceSize: number
     envelope: string
     outputPath: string
+    maxArtifactBytes: number
     signal: AbortSignal
   }): Promise<{ headers: Headers }> {
     const requestBody = Readable.toWeb(createReadStream(input.sourcePath)) as unknown as BodyInit
@@ -635,8 +641,24 @@ export class SlicerClient {
       throw new Error('Slicer service returned an empty response body')
     }
 
+    const contentLength = parseContentLength(response.headers.get('content-length'))
+    if (contentLength != null && contentLength > input.maxArtifactBytes) {
+      throw new Error('Sliced artifact exceeds configured size limit')
+    }
+
+    let receivedBytes = 0
+    const enforceSizeLimit = new Transform({
+      transform(chunk: Buffer, _encoding, callback) {
+        receivedBytes += chunk.byteLength
+        callback(receivedBytes > input.maxArtifactBytes
+          ? new Error('Sliced artifact exceeds configured size limit')
+          : null, chunk)
+      }
+    })
+
     await pipeline(
       Readable.fromWeb(response.body as unknown as NodeReadableStream),
+      enforceSizeLimit,
       createWriteStream(input.outputPath)
     ).catch((error: unknown) => {
       if (signal.aborted) {

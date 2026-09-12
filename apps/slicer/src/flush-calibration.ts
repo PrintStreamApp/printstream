@@ -23,6 +23,7 @@
  * the first stayed correct. No amount of testing the calculator could have found that.
  */
 import { spawn } from 'node:child_process'
+import { engineProcessEnvironment, engineProcessIdentity } from './engine-process-security.js'
 import { readFile, rm } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
@@ -87,8 +88,11 @@ export async function runFlushCalibration(input: FlushCalibrationInput): Promise
   try {
     const exitCode = await new Promise<number | null>((resolve, reject) => {
       const child = spawn(input.cliPath, args, {
+        ...engineProcessIdentity(),
         stdio: ['ignore', 'ignore', 'ignore'],
-        env: { ...input.env, SLICER_APPDIR: input.appDir ?? input.env.SLICER_APPDIR }
+        env: engineProcessEnvironment(input.env, {
+          SLICER_APPDIR: input.appDir ?? input.env.SLICER_APPDIR
+        })
       })
       const timer = setTimeout(() => { try { child.kill('SIGKILL') } catch { /* already gone */ } }, PROBE_TIMEOUT_MS)
       const onAbort = () => { try { child.kill('SIGKILL') } catch { /* already gone */ } }

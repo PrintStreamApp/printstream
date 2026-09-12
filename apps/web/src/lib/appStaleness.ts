@@ -58,7 +58,7 @@ const RELOAD_ATTEMPT_KEY = 'printstream:stale-reload-target'
  *
  * The reported id cannot be trusted on its own, because a response header can be replayed
  * out of the browser's HTTP cache long after it was issued: several `/api` routes are
- * deliberately cacheable (`routes/public-slicing.ts` serves the catalogue as
+ * deliberately cacheable (`private/cloud/public-slicing/routes.ts` serves the catalogue as
  * `public, max-age=3600`) and they are fetched through `apiFetch` like everything else.
  * A build id is an unordered hash, so a replayed OLD id is indistinguishable from a
  * genuine NEW one, and a current tab would reload itself over a stale cache entry, land

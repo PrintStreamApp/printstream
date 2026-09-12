@@ -16,6 +16,8 @@ import {
   bridgeUpdateActionResponseSchema
 } from './bridges.js'
 import { logLevelSchema } from './logs.js'
+import { mixedFilamentConfigSchema } from './mixed-filament.js'
+import { plateLayerFilamentSequenceSchema } from './plate-filament-sequence.js'
 import {
   discoveredPrinterSchema,
   printerConnectionValidationInputSchema,
@@ -791,7 +793,12 @@ export const bridgeLibraryThreeMfProjectFilamentSchema = z.object({
    * BambuStudio labels it "money/kg" and stores no currency anywhere, so a consumer that shows it
    * supplies its own symbol. Optional so a bridge running an older parser still validates.
    */
-  costPerKg: z.number().nullable().optional()
+  costPerKg: z.number().nullable().optional(),
+  /**
+   * Virtual mixed-filament definition from the project arrays. Null is a physical slot; absent
+   * means the index came from a bridge predating mixed-filament parsing.
+   */
+  mixedFilament: mixedFilamentConfigSchema.nullable().optional()
 })
 
 export type BridgeLibraryThreeMfProjectFilament = z.infer<typeof bridgeLibraryThreeMfProjectFilamentSchema>
@@ -815,6 +822,10 @@ export const bridgeLibraryThreeMfPlateSchema = z.object({
   bedTypeOverride: z.string().nullable().optional(),
   /** The plate's own `print_sequence`, null when it inherits the global. Absent from older parsers. */
   printSequence: z.enum(['by layer', 'by object']).nullable().optional(),
+  /** Custom physical filament order for layer 1; null means automatic. */
+  firstLayerFilamentSequence: z.array(z.number().int().positive()).nullable().optional(),
+  /** Custom physical filament orders for later layer ranges; null means automatic. */
+  otherLayerFilamentSequences: z.array(plateLayerFilamentSequenceSchema).nullable().optional(),
   /** The plate's own `spiral_mode` (vase mode), null when it inherits. Absent from older parsers. */
   spiralMode: z.boolean().nullable().optional(),
   /** Locked against arrange. No global to inherit, so absent means unlocked. */

@@ -65,6 +65,7 @@ import {
   buildPrinterTrayGroups,
   buildPrinterTrayMap,
   formatCompatibilityIssue,
+  visibleMappingFilaments,
   type PrinterTrayOption
 } from '../lib/libraryViewHelpers'
 import { PrinterMapping } from './library/PrinterMapping'
@@ -229,7 +230,7 @@ export function StoragePrintModal({
     return map
   }, [activePlate])
   const visibleFilaments = useMemo(
-    () => filamentEntries.filter((filament) => usedIds.size === 0 || usedIds.has(filament.id)),
+    () => visibleMappingFilaments(filamentEntries, usedIds, true),
     [filamentEntries, usedIds]
   )
   const trayGroups = useMemo(() => buildPrinterTrayGroups(status), [status])
