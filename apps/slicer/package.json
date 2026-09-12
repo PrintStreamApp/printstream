@@ -1,6 +1,6 @@
 {
   "name": "@printstream/slicer",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,7 +9,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@printstream/shared": "1.0.3",
+    "@printstream/shared": "1.0.4",
     "@types/yauzl": "^2.10.3",
     "@types/yazl": "^3.3.1",
     "express": "^5.1.0",

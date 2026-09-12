@@ -19,6 +19,8 @@ test('root services isolate jobs and retain the configured diagnostic runner', {
   assert.deepEqual(first, same)
   assert.notEqual(first.uid, other.uid)
   assert.notEqual(first.gid, other.gid)
+  assert.ok(first.uid != null && first.uid <= 65_534)
+  assert.ok(first.gid != null && first.gid <= 65_534)
   assert.deepEqual(engineProcessIdentity(), {
     uid: env.SLICER_ENGINE_UID,
     gid: env.SLICER_ENGINE_GID

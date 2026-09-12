@@ -1,6 +1,6 @@
 {
   "name": "@printstream/api",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "private": true,
   "type": "module",
   "exports": {
@@ -26,9 +26,9 @@
     "@opentelemetry/resources": "^2.8.0",
     "@opentelemetry/sdk-metrics": "^2.8.0",
     "@opentelemetry/semantic-conventions": "^1.41.1",
-    "@printstream/bridge-runtime": "1.0.3",
-    "@printstream/sea-runtime": "1.0.3",
-    "@printstream/shared": "1.0.3",
+    "@printstream/bridge-runtime": "1.0.4",
+    "@printstream/sea-runtime": "1.0.4",
+    "@printstream/shared": "1.0.4",
     "@prisma/client": "^6.5.0",
     "@simplewebauthn/server": "^13.3.0",
     "@types/yauzl": "^2.10.3",

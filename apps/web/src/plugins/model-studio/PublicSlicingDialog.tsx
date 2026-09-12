@@ -19,9 +19,9 @@ export function PublicSlicingDialog({ session, onSessionChange, onClose }: {
   onSessionChange: (session: PublicSlicingSession) => void
   onClose: () => void
 }) {
-  const [job, setJob] = useState(session.job)
   const [log, setLog] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const job = session.job
   const jobId = session.job.id
   const accessToken = session.accessToken
 
@@ -31,7 +31,6 @@ export function PublicSlicingDialog({ session, onSessionChange, onClose }: {
     const poll = async () => {
       try {
         const next = await readPublicSlice({ accessToken, job: { id: jobId } }, controller.signal)
-        setJob(next.job)
         onSessionChange({ accessToken, job: next.job })
       } catch (error) {
         if (!controller.signal.aborted) console.warn('[public-slicing] status poll failed', error)
@@ -46,7 +45,6 @@ export function PublicSlicingDialog({ session, onSessionChange, onClose }: {
     setBusy(true)
     try {
       const next = await operation()
-      setJob(next.job)
       onSessionChange({ ...session, job: next.job })
     } finally {
       setBusy(false)

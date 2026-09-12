@@ -12,8 +12,11 @@ import { createHash } from 'node:crypto'
 import { chmod, chown, mkdir } from 'node:fs/promises'
 import { env } from './env.js'
 
-const JOB_ID_BASE = 100_000
-const JOB_ID_RANGE = 2_000_000_000
+// Rootless Docker commonly maps only the first 65,536 container identities. Chowning a tmpfs entry
+// to an otherwise valid 32-bit uid/gid outside that mapping fails with EINVAL before the engine can
+// start. Keep job identities above image accounts but inside the portable mapped range.
+const JOB_ID_BASE = 10_000
+const JOB_ID_RANGE = 55_535
 
 const ENGINE_ENVIRONMENT_KEYS = new Set([
   'BAMBUSTUDIO_APPDIR',
