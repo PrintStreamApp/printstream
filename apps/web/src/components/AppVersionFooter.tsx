@@ -1,18 +1,20 @@
-import { useState } from 'react'
+import { useState, useSyncExternalStore } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import SystemUpdateAltRoundedIcon from '@mui/icons-material/SystemUpdateAltRounded'
 import { Chip, Stack, Tooltip, Typography } from '@mui/joy'
 import { extractErrorMessage, type AppUpdateStartResponse, type AppVersionResponse } from '@printstream/shared'
 import { apiFetch } from '../lib/apiClient'
+import { resolveDisplayedAppBuild } from '../lib/appVersionDisplay'
+import { isWebUpdatePending, subscribeWebUpdatePending } from '../lib/appStaleness'
 import { waitForNewBuild } from '../lib/appUpdateRestart'
 import { ConfirmActionDialog } from './ConfirmActionDialog'
 
 /**
- * Footer line showing the running image's build and, for the published
+ * Footer line showing the loaded UI's version and, for the published
  * open-core image, a subtle "update available" hint when GHCR's `:latest` is a
- * newer build. The server applies visibility (everyone for the published image,
- * platform users only for the cloud image, nobody for a source/dev run), so this
- * renders nothing whenever there is no build to show.
+ * newer build. The visible version comes from this browser bundle, not the API:
+ * after a deploy, the API can be newer while this tab is waiting for a safe
+ * automatic reload. Update availability and permissions remain server-owned.
  *
  * On the native app the hint is also the TRIGGER: `canApplyUpdate` (settings
  * managers only) makes the chip clickable, and confirming posts
@@ -34,6 +36,11 @@ export function AppVersionFooter() {
     refetchOnWindowFocus: false
   })
   const [confirmOpen, setConfirmOpen] = useState(false)
+  const safeReloadPending = useSyncExternalStore(
+    subscribeWebUpdatePending,
+    isWebUpdatePending,
+    () => false
+  )
   // Once true, the server is swapping its binary; the dialog stays up (and
   // uncloseable) until the new build answers and the page reloads itself.
   const [restarting, setRestarting] = useState(false)
@@ -56,13 +63,13 @@ export function AppVersionFooter() {
     }
   })
 
-  if (!data || (!data.version && !data.shortRevision)) return null
-  const update = data.update
+  const displayedBuild = resolveDisplayedAppBuild(data)
+  const update = data?.update
   const lapsed = update?.status === 'updatesLapsed'
   const hasUpdate = update?.status === 'updateAvailable' || lapsed
-  const canApply = data.canApplyUpdate && !lapsed
+  const canApply = Boolean(data?.canApplyUpdate && !lapsed)
+  const uiReloadRequired = displayedBuild.reloadRequired || safeReloadPending
   const targetBuild = update?.latestShortRevision ? ` build ${update.latestShortRevision}` : ' the new build'
-  const displayedVersion = data.version ? `v${data.version}` : `build ${data.shortRevision}`
 
   return (
     <Stack
@@ -72,9 +79,24 @@ export function AppVersionFooter() {
       useFlexGap
       sx={{ flexWrap: 'wrap', justifyContent: 'center' }}
     >
-      <Typography level="body-xs" title={data.revision ?? undefined} sx={{ color: 'neutral.500', fontFamily: 'code' }}>
-        {displayedVersion}
-      </Typography>
+      {uiReloadRequired ? (
+        <Tooltip
+          variant="soft"
+          title={describePendingUiReload(displayedBuild.version, displayedBuild.serverVersion)}
+        >
+          <Chip size="sm" variant="soft" color="warning" sx={{ fontFamily: 'code' }}>
+            v{displayedBuild.version} (UI reload required)
+          </Chip>
+        </Tooltip>
+      ) : (
+        <Typography
+          level="body-xs"
+          title={displayedBuild.revision ?? undefined}
+          sx={{ color: 'neutral.500', fontFamily: 'code' }}
+        >
+          v{displayedBuild.version}
+        </Typography>
+      )}
       {hasUpdate && update && (
         <Tooltip variant="soft" title={describeUpdate(update, canApply)}>
           <Chip
@@ -115,6 +137,13 @@ export function AppVersionFooter() {
       />
     </Stack>
   )
+}
+
+function describePendingUiReload(uiVersion: string, serverVersion: string | null): string {
+  const versionDifference = serverVersion && serverVersion !== uiVersion
+    ? ` This tab is running v${uiVersion}, while the server is v${serverVersion}.`
+    : ''
+  return `A newer PrintStream UI is ready.${versionDifference} Save or finish your current work; the UI will reload automatically as soon as it is safe.`
 }
 
 function describeUpdate(update: NonNullable<AppVersionResponse['update']>, canApply: boolean): string {

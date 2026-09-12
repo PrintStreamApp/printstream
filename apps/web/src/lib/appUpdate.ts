@@ -1,18 +1,19 @@
 /**
  * Service-worker registration and update polling.
  *
- * Registers immediately, then asks the worker to re-check for a new build on a timer and
- * on every signal that the tab just came back to life. When workbox activates a new
- * worker it does NOT reload here: it hands off to `appStaleness.ts`, which owns the one
- * reload policy shared with the build-id detector, so an update can never discard unsaved
- * work. That handoff is the `onNeedReload` option; without it, vite-plugin-pwa reloads
- * the page itself, unconditionally, which is what this used to do.
+ * Registers immediately, then asks both the worker and the no-cache served-build probe
+ * to re-check on a timer and whenever the tab comes back to life. `main.tsx` also runs
+ * the served-build probe before the app first becomes interactive. When workbox activates
+ * a new worker it does NOT reload here: it hands off to `appStaleness.ts`, which owns the
+ * one reload policy shared with the build-id detector, so an update can never discard
+ * unsaved work. That handoff is the `onNeedReload` option; without it, vite-plugin-pwa
+ * reloads the page itself, unconditionally, which is what this used to do.
  *
  * This is a best-effort detector, not the primary one. Every trigger below is dead while
  * an iOS home-screen app is suspended, and that can last weeks; the build-id comparison
  * in `appStaleness.ts` is what covers that case. Both exist because they fail
- * independently: the worker notices a new build with no server round trip, and the build
- * id notices one when the worker is not running at all.
+ * independently: the worker notices a new build from its asset graph, and the build-id
+ * path still works when registration is unhealthy or has not finished yet.
  *
  * Do not reintroduce `onNeedRefresh` here. Under `registerType: 'autoUpdate'` (see
  * `vite.config.ts`) vite-plugin-pwa never calls it and `updateServiceWorker()` is a
@@ -20,7 +21,7 @@
  * could not run.
  */
 import { registerSW } from 'virtual:pwa-register'
-import { requestServiceWorkerReload } from './appStaleness'
+import { checkForServedWebUpdate, requestServiceWorkerReload } from './appStaleness'
 
 const UPDATE_POLL_MS = 60 * 1000
 
@@ -29,10 +30,13 @@ let updateEventListenersRegistered = false
 
 function checkForUpdates(): void {
   void serviceWorkerRegistration?.update()
+  // The direct probe is faster than waiting for a worker lifecycle and also
+  // works when registration is unhealthy. Both feed the same safe-reload gate.
+  void checkForServedWebUpdate()
 }
 
 /**
- * Ask the service worker to re-check for a new build now.
+ * Ask both update detectors to re-check for a new build now.
  *
  * Best-effort and fire-and-forget: it resolves against the network and does nothing
  * observable when there is no update or no registration. Call it from a path that smells

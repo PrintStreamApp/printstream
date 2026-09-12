@@ -14,6 +14,7 @@ import { shouldRetryQuery } from './lib/queryRetry'
 import { getBrowserEnv } from './lib/browserEnv'
 import { registerAppServiceWorker } from './lib/appUpdate'
 import { trackMutationsAsAppBusy } from './lib/appBusyMutations'
+import { checkForServedWebUpdate } from './lib/appStaleness'
 import { shouldSuppressGlobalErrorToast, shouldSuppressPassiveAuthQueryError } from './lib/queryErrorToast'
 import { extractDisabledPluginNameFromErrorMessage } from './lib/pluginSettings'
 import { PLUGIN_CATALOG_QUERY_KEY } from './lib/pluginCatalogQuery'
@@ -32,6 +33,21 @@ import '@fontsource/space-grotesk/700.css'
 import './index.css'
 
 const browserEnv = getBrowserEnv()
+const STARTUP_UPDATE_CHECK_TIMEOUT_MS = 1_000
+
+/**
+ * Give a resumed or cold-started PWA one brief chance to detect a stale UI
+ * before it becomes interactive. Offline or slow networks must not block boot.
+ */
+async function checkForUpdateBeforeRender(): Promise<void> {
+  const controller = new AbortController()
+  const timeout = window.setTimeout(() => controller.abort(), STARTUP_UPDATE_CHECK_TIMEOUT_MS)
+  try {
+    await checkForServedWebUpdate(controller.signal)
+  } finally {
+    window.clearTimeout(timeout)
+  }
+}
 
 async function clearOldOriginState(): Promise<void> {
   if ('serviceWorker' in navigator) {
@@ -63,6 +79,7 @@ if (browserEnv.devMode) {
   void clearOldOriginState()
 } else {
   registerAppServiceWorker()
+  await checkForUpdateBeforeRender()
 }
 const root = ReactDOM.createRoot(document.getElementById('root')!)
 

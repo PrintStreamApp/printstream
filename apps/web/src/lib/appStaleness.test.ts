@@ -112,6 +112,21 @@ test('reloads when the mismatch is confirmed and nothing is in flight', async ()
   assert.equal(reloads, 1)
 })
 
+test('the startup preflight finds a new served build without waiting for a hint', async () => {
+  await staleness.checkForServedWebUpdate()
+
+  assert.equal(probeCalls, 1)
+  assert.equal(reloads, 1)
+})
+
+test('the startup preflight leaves a current tab alone', async () => {
+  probedBuildId = 'build-old'
+  await staleness.checkForServedWebUpdate()
+
+  assert.equal(probeCalls, 1)
+  assert.equal(reloads, 0)
+})
+
 test('ignores a build id replayed from the HTTP cache', async () => {
   // Several /api routes are `public, max-age=3600`, so a cached response can carry an id
   // from an hour ago. Ids are unordered hashes, so an OLD id looks exactly like a NEW one.
@@ -149,6 +164,7 @@ test('holds the reload while work is in flight, and takes it once the work finis
   staleness.observeServedWebBuildId('build-new')
   await settleProbe()
   assert.equal(reloads, 0, 'must not reload over unsaved work')
+  assert.equal(staleness.isWebUpdatePending(), true)
 
   // `subscribe` replays the current entries synchronously, so this reads them and leaves
   // no listener behind to fire during the next test's cleanup.
@@ -210,6 +226,7 @@ test('a rollback to the running build cancels the pending update', async () => {
 
   // The deploy went away and the server is back on what this tab already runs.
   staleness.observeServedWebBuildId('build-old')
+  assert.equal(staleness.isWebUpdatePending(), false)
   busy.setAppBusy('mutations', false)
   await new Promise((resolve) => setTimeout(resolve, 1_800))
   assert.equal(reloads, 0, 'nothing to move to')

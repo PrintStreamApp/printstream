@@ -2,8 +2,8 @@
  * Gets a tab that is running an old build onto the current one, safely.
  *
  * Owns the RELOAD POLICY. Two detectors feed it and neither decides anything itself:
- *  - `observeServedWebBuildId`, from the build id the server reports on the WS `hello`
- *    frame and the `X-PrintStream-Web-Build` response header (`webBuildId.ts`);
+ *  - the served build id, observed from WS/API hints and checked directly before
+ *    startup render and on wake-up signals (`webBuildId.ts` and `appUpdate.ts`);
  *  - `requestServiceWorkerReload`, from workbox activating a new worker (`appUpdate.ts`).
  *
  * Why a second detector at all: the service worker used to be the only one, and it is
@@ -78,6 +78,7 @@ const BUILD_ID_PROBE_PATH = '/build-id.json'
 const IDLE_SETTLE_MS = 1_500
 
 let targetBuildId: string | null = null
+const pendingUpdateListeners = new Set<() => void>()
 let stopWatchingIdle: (() => void) | null = null
 let idleTimer: number | null = null
 let noticeToastId: number | null = null
@@ -145,7 +146,7 @@ function clearLandedReloadAttempt(): void {
 }
 
 function cancelPendingUpdate(): void {
-  targetBuildId = null
+  setTargetBuildId(null)
   stopWatchingIdle?.()
   stopWatchingIdle = null
   if (idleTimer !== null) {
@@ -156,6 +157,24 @@ function cancelPendingUpdate(): void {
     toast.dismiss(noticeToastId)
     noticeToastId = null
   }
+}
+
+/** Whether this tab is waiting to reload onto the bundle the server now serves. */
+export function isWebUpdatePending(): boolean {
+  return targetBuildId !== null
+}
+
+/** Subscribe a UI surface to changes in the pending safe-reload state. */
+export function subscribeWebUpdatePending(listener: () => void): () => void {
+  pendingUpdateListeners.add(listener)
+  return () => pendingUpdateListeners.delete(listener)
+}
+
+/** Update the pending target and notify UI subscribers only when the state changes. */
+function setTargetBuildId(nextBuildId: string | null): void {
+  if (targetBuildId === nextBuildId) return
+  targetBuildId = nextBuildId
+  for (const listener of pendingUpdateListeners) listener()
 }
 
 /**
@@ -273,21 +292,42 @@ async function confirmThenBeginUpdate(candidateBuildId: string): Promise<void> {
   confirmingBuildId = candidateBuildId
   try {
     const servedBuildId = await probeServedWebBuildId()
-    const localBuildId = readLocalWebBuildId()
-    if (!servedBuildId || !localBuildId || servedBuildId === localBuildId) return
-    if (targetBuildId === servedBuildId) return
-    cancelPendingUpdate()
-    targetBuildId = servedBuildId
-    beginUpdate(servedBuildId)
+    applyConfirmedServedBuild(servedBuildId)
   } finally {
     confirmingBuildId = null
   }
 }
 
+/** Apply an authoritative served-build answer through the shared reload policy. */
+function applyConfirmedServedBuild(servedBuildId: string | null): void {
+  const localBuildId = readLocalWebBuildId()
+  if (!servedBuildId || !localBuildId) return
+  if (servedBuildId === localBuildId) {
+    if (targetBuildId !== null) cancelPendingUpdate()
+    return
+  }
+  if (targetBuildId === servedBuildId) return
+  cancelPendingUpdate()
+  setTargetBuildId(servedBuildId)
+  beginUpdate(servedBuildId)
+}
+
+/**
+ * Check the server's bundle directly, without waiting for service-worker
+ * registration or an API response to reveal a mismatch.
+ */
+export async function checkForServedWebUpdate(signal?: AbortSignal): Promise<void> {
+  applyConfirmedServedBuild(await probeServedWebBuildId(signal))
+}
+
 /** The build the server is serving right now, straight from disk, or null if unknown. */
-async function probeServedWebBuildId(): Promise<string | null> {
+async function probeServedWebBuildId(signal?: AbortSignal): Promise<string | null> {
   try {
-    const response = await fetch(BUILD_ID_PROBE_PATH, { cache: 'no-store', credentials: 'omit' })
+    const response = await fetch(BUILD_ID_PROBE_PATH, {
+      cache: 'no-store',
+      credentials: 'omit',
+      signal
+    })
     if (!response.ok) return null
     const body = await response.json() as { buildId?: unknown }
     return typeof body.buildId === 'string' ? body.buildId.trim() || null : null
