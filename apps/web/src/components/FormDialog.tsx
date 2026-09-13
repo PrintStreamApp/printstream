@@ -42,6 +42,7 @@ export function FormDialog({
   submitLabel,
   onSubmit,
   submitDisabled = false,
+  secondaryActions,
   width = 'min(640px, 100%)',
   children
 }: {
@@ -55,6 +56,8 @@ export function FormDialog({
   submitLabel: ReactNode
   onSubmit: () => void
   submitDisabled?: boolean
+  /** Optional actions placed between dismiss and confirm, preserving the shared footer order. */
+  secondaryActions?: ReactNode
   width?: string
   children: ReactNode
 }) {
@@ -78,6 +81,7 @@ export function FormDialog({
         </DialogContent>
         <DialogActions>
           <Button variant="plain" color="neutral" disabled={busy} onClick={onClose}>Cancel</Button>
+          {secondaryActions}
           <Button loading={busy} disabled={submitDisabled} onClick={onSubmit}>{submitLabel}</Button>
         </DialogActions>
       </ModalDialog>

@@ -1799,6 +1799,27 @@ export const publicSlicingJobStatusSchema = z.enum([
 ])
 export type PublicSlicingJobStatus = z.infer<typeof publicSlicingJobStatusSchema>
 
+/** Per-material usage in a slice result (one row per project filament that was used). */
+export const slicingMaterialUsageSchema = z.object({
+  id: z.number().int().nullable().optional(),
+  type: z.string().nullable().optional(),
+  color: z.string().nullable().optional(),
+  weightGrams: z.number().nonnegative().nullable().optional(),
+  lengthMm: z.number().nonnegative().nullable().optional()
+})
+export type SlicingMaterialUsage = z.infer<typeof slicingMaterialUsageSchema>
+
+export const slicingMetadataSchema = z.object({
+  estimatedPrintTimeSeconds: z.number().nonnegative().nullable().optional(),
+  estimatedPrepareTimeSeconds: z.number().nonnegative().nullable().optional(),
+  estimatedFilamentLengthMm: z.number().nonnegative().nullable().optional(),
+  estimatedFilamentWeightGrams: z.number().nonnegative().nullable().optional(),
+  estimatedFilamentCost: z.number().nonnegative().nullable().optional(),
+  /** Per-material usage breakdown (weight/length per project filament). */
+  materials: z.array(slicingMaterialUsageSchema).nullable().optional()
+}).optional()
+export type SlicingMetadata = z.infer<typeof slicingMetadataSchema>
+
 export const publicSlicingJobSchema = z.object({
   id: z.string().trim().min(1),
   fileName: z.string().trim().min(1),
@@ -1811,6 +1832,8 @@ export const publicSlicingJobSchema = z.object({
   error: z.string().nullable(),
   outputFileName: z.string().nullable(),
   outputSizeBytes: z.number().int().nonnegative().nullable(),
+  /** The same authoritative engine estimates returned for a workspace slicing job. */
+  metadata: slicingMetadataSchema,
   createdAt: z.string(),
   updatedAt: z.string(),
   expiresAt: z.string()
@@ -1880,27 +1903,6 @@ export const slicingOutputLineSchema = z.object({
   createdAt: z.string()
 })
 export type SlicingOutputLine = z.infer<typeof slicingOutputLineSchema>
-
-/** Per-material usage in a slice result (one row per project filament that was used). */
-export const slicingMaterialUsageSchema = z.object({
-  id: z.number().int().nullable().optional(),
-  type: z.string().nullable().optional(),
-  color: z.string().nullable().optional(),
-  weightGrams: z.number().nonnegative().nullable().optional(),
-  lengthMm: z.number().nonnegative().nullable().optional()
-})
-export type SlicingMaterialUsage = z.infer<typeof slicingMaterialUsageSchema>
-
-export const slicingMetadataSchema = z.object({
-  estimatedPrintTimeSeconds: z.number().nonnegative().nullable().optional(),
-  estimatedPrepareTimeSeconds: z.number().nonnegative().nullable().optional(),
-  estimatedFilamentLengthMm: z.number().nonnegative().nullable().optional(),
-  estimatedFilamentWeightGrams: z.number().nonnegative().nullable().optional(),
-  estimatedFilamentCost: z.number().nonnegative().nullable().optional(),
-  /** Per-material usage breakdown (weight/length per project filament). */
-  materials: z.array(slicingMaterialUsageSchema).nullable().optional()
-}).optional()
-export type SlicingMetadata = z.infer<typeof slicingMetadataSchema>
 
 export const slicingJobSchema = z.object({
   id: z.string(),

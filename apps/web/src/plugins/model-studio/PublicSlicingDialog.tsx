@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import { Alert, Button, Stack, Typography } from '@mui/joy'
 import type { PublicSlicingJob } from '@printstream/shared'
 import { FormDialog } from '../../components/FormDialog'
+import { SliceEstimates } from '../../components/library/SliceEstimates'
 import { ProgressBar } from '../../components/ProgressBar'
 import { downloadBlob } from '../../lib/downloadBlob'
 import { openClientThreeMfProjectFromBytes } from './lib/clientThreeMfProject'
@@ -46,7 +47,6 @@ export function PublicSlicingDialog({ session, onSessionChange, onClose }: {
           return
         }
         setArtifact({ blob, source: { fileName, project } })
-        setPreviewOpen(true)
       } catch (error) {
         if (!controller.signal.aborted) {
           setPreviewError(error instanceof Error ? error.message : 'The G-code preview could not be opened.')
@@ -123,6 +123,17 @@ export function PublicSlicingDialog({ session, onSessionChange, onClose }: {
           else if (active) void act(() => cancelPublicSlice({ ...session, job }))
           else onClose()
         }}
+        secondaryActions={job.status === 'ready' ? (
+          <Button
+            type="button"
+            variant="outlined"
+            color="neutral"
+            disabled={busy || !artifact}
+            onClick={() => setPreviewOpen(true)}
+          >
+            Preview G-code
+          </Button>
+        ) : null}
       >
         <Stack spacing={2}>
         {job.status === 'uploading' ? (
@@ -137,6 +148,9 @@ export function PublicSlicingDialog({ session, onSessionChange, onClose }: {
         {job.status === 'ready' && !artifact && !previewError && (
           <Typography level="body-sm">Loading G-code preview…</Typography>
         )}
+        {job.status === 'ready' && (
+          <SliceEstimates metadata={job.metadata} />
+        )}
         {job.status === 'ready' && previewError && (
           <Stack spacing={1}>
             <Alert color="warning">{previewError}</Alert>
@@ -144,11 +158,6 @@ export function PublicSlicingDialog({ session, onSessionChange, onClose }: {
               Retry G-code preview
             </Button>
           </Stack>
-        )}
-        {job.status === 'ready' && artifact && !previewOpen && (
-          <Button variant="plain" size="sm" onClick={() => setPreviewOpen(true)}>
-            Preview G-code
-          </Button>
         )}
         {job.status === 'failed' && (
           <Button variant="plain" size="sm" onClick={() => void readPublicSliceLog({ ...session, job }).then((result) => setLog(result.output.map((line) => line.text).join('\n') || 'No engine log was returned.'))}>

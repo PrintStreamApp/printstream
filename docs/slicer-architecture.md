@@ -1005,6 +1005,11 @@ A one-slot development process may lend that slot to the editor because it has n
 Public callers are spread by prior starts within their lane and receive a queue position plus an
 estimate based on observed slice durations.
 
+When a job finishes, its response carries the same engine-reported `SlicingMetadata` as a workspace
+job, and the public result dialog renders it through the shared `SliceEstimates` component. The
+browser downloads the temporary G-code archive once and keeps it in memory for both Download and
+the shared full toolpath preview; opening Preview does not upload the result back to the API.
+
 The uploaded project is hostile input at both boundaries. The browser inflates it under compressed,
 per-entry, aggregate-expanded-size, entry-count and duplicate-name limits; a stalled worker is never
 retried on the UI thread. The API repeats those checks, and the slicer service independently limits
@@ -1041,7 +1046,7 @@ What the host must answer for itself, and where:
 | Staged imports | uploaded, parsed server-side | parsed in the tab, off the main thread (`importStagingWorker.ts`: STL, the shared 3MF extractor, and the OCCT WASM for STEP); same formats, no library source |
 | Presets | workspace catalogue + custom presets | `/api/public/slicing/*` + the user's browser-stored presets |
 | Preset resolution | `/api/slicing/profiles/resolve-*` | `/api/public/slicing/resolve-*`, **builtin ids only** |
-| Slice execution | persistent workspace job and library result | temporary token-protected job and G-code download only |
+| Slice execution | persistent workspace job and library result | temporary token-protected job, matching slice estimates, in-browser G-code preview, and download |
 
 Two rules hold the boundary. **The anonymous routes resolve built-in presets and nothing else**: a
 `custom:` id is workspace data and is refused at the route, while a `project:` preset is resolved in
