@@ -10,6 +10,7 @@
 import type { SpawnOptions } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { chmod, chown, mkdir } from 'node:fs/promises'
+import path from 'node:path'
 import { env } from './env.js'
 
 // Rootless Docker commonly maps only the first 65,536 container identities. Chowning a tmpfs entry
@@ -108,4 +109,39 @@ export async function prepareEngineWritableDirectory(directory: string, jobKey?:
   const identity = engineProcessIdentity(jobKey)
   if (identity.gid != null) await chown(directory, 0, identity.gid)
   await chmod(directory, 0o770)
+}
+
+/**
+ * Prepare a private work tree, including every intermediate directory below its root.
+ *
+ * Recursive mkdir applies its restrictive mode to implicit parents too, so preparing only a leaf
+ * such as `runtime-home/.local/share` can leave `.local` owned by root and inaccessible after the
+ * engine drops privileges. Descendants must remain inside `root`; an escaped path is rejected.
+ */
+export async function prepareEngineWritableDirectoryTree(
+  root: string,
+  descendants: readonly string[],
+  jobKey?: string
+): Promise<void> {
+  const resolvedRoot = path.resolve(root)
+  const directories = new Set([resolvedRoot])
+
+  for (const descendant of descendants) {
+    const resolvedDescendant = path.resolve(descendant)
+    const relative = path.relative(resolvedRoot, resolvedDescendant)
+    if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+      throw new Error(`Engine work directory escapes its root: ${descendant}`)
+    }
+
+    let directory = resolvedRoot
+    for (const segment of relative.split(path.sep).filter(Boolean)) {
+      directory = path.join(directory, segment)
+      directories.add(directory)
+    }
+  }
+
+  // Parents go first so no implicit root-owned directory is left behind by a descendant mkdir.
+  for (const directory of directories) {
+    await prepareEngineWritableDirectory(directory, jobKey)
+  }
 }

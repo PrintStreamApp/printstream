@@ -1,0 +1,17 @@
+/** Lazy host for previewing a public slice that remains entirely in the browser. */
+import { lazy } from 'react'
+import { LazyDialogBoundary } from '../../components/LazyDialogBoundary'
+import type { InMemoryGcodePreviewSource } from './lib/inMemoryGcodePreview'
+
+const PreviewView = lazy(() => import('./PreviewView').then((module) => ({ default: module.PreviewView })))
+
+export function PublicGcodePreview({ source, onClose }: {
+  source: InMemoryGcodePreviewSource
+  onClose: () => void
+}) {
+  return (
+    <LazyDialogBoundary variant="maximized" label="the G-code preview" onClose={onClose}>
+      <PreviewView inMemoryGcode={source} onPreviewClose={onClose} />
+    </LazyDialogBoundary>
+  )
+}

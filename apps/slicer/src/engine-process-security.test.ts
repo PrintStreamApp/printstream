@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, rm, stat } from 'node:fs/promises'
+import { spawnSync } from 'node:child_process'
+import { chmod, mkdtemp, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 import {
   engineProcessEnvironment,
   engineProcessIdentity,
-  prepareEngineWritableDirectory
+  prepareEngineWritableDirectory,
+  prepareEngineWritableDirectoryTree
 } from './engine-process-security.js'
 import { env } from './env.js'
 
@@ -59,6 +61,47 @@ test('job directories are writable only by the service and the job-specific nati
     const metadata = await stat(directory)
     assert.equal(metadata.mode & 0o777, 0o770)
     if (process.getuid?.() === 0) assert.equal(metadata.gid, engineProcessIdentity('job-a').gid)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('job directory trees assign implicit parents to the native job group', { skip: process.platform === 'win32' }, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'slicer-engine-security-'))
+  const workDirectory = path.join(root, 'job')
+  const localDirectory = path.join(workDirectory, 'runtime-home', '.local')
+  const dataDirectory = path.join(localDirectory, 'share')
+
+  try {
+    await chmod(root, 0o755)
+    await prepareEngineWritableDirectoryTree(workDirectory, [dataDirectory], 'job-a')
+
+    for (const directory of [workDirectory, path.dirname(localDirectory), localDirectory, dataDirectory]) {
+      const metadata = await stat(directory)
+      assert.equal(metadata.mode & 0o777, 0o770)
+      if (process.getuid?.() === 0) assert.equal(metadata.gid, engineProcessIdentity('job-a').gid)
+    }
+
+    if (process.getuid?.() === 0) {
+      const probe = spawnSync('/bin/mkdir', ['-p', dataDirectory], {
+        ...engineProcessIdentity('job-a'),
+        encoding: 'utf8'
+      })
+      assert.equal(probe.status, 0, probe.stderr)
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('job directory trees reject descendants outside their work root', { skip: process.platform === 'win32' }, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'slicer-engine-security-'))
+
+  try {
+    await assert.rejects(
+      prepareEngineWritableDirectoryTree(path.join(root, 'job'), [path.join(root, 'peer')], 'job-a'),
+      /escapes its root/
+    )
   } finally {
     await rm(root, { recursive: true, force: true })
   }

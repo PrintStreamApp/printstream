@@ -12,7 +12,7 @@
  * to rebuild after a lost WebGL context.
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Alert, Box, Button, CircularProgress, DialogContent, ModalClose, Sheet, Slider, Stack, Switch, Typography, Tooltip } from '@mui/joy'
+import { Alert, Box, Button, CircularProgress, DialogContent, FormControl, FormLabel, ModalClose, Option, Select, Sheet, Slider, Stack, Switch, Typography, Tooltip } from '@mui/joy'
 import { choosePlateStripOrientation, EDITOR_GRID_GAP_PX } from './lib/editorChromeLayout'
 import { useQuery } from '@tanstack/react-query'
 import { isMeshLibraryFileKind } from '@printstream/shared'
@@ -66,6 +66,8 @@ import { ProgressBar } from '../../components/ProgressBar'
 import { GcodeLayerSlider } from './GcodeLayerSlider'
 import { GcodeScrubberValueChip } from './GcodeScrubberValueChip'
 import { buildGcodeLayerEventMarkers, maxGcodeLayerHeightReference, type GcodeLayerEventMarker } from './lib/gcodeLayerEvents'
+import { toThreeMfIndexDto } from '@printstream/shared/three-mf'
+import { readInMemoryPlateGcode, type InMemoryGcodePreviewSource } from './lib/inMemoryGcodePreview'
 
 const PLATED_PREVIEW_GRID_SIZE = 320
 /**
@@ -134,6 +136,7 @@ interface PreviewRig {
  */
 export function PreviewView(props: Record<string, unknown>) {
   const fileId = typeof props.previewFileId === 'string' ? props.previewFileId : null
+  const inMemoryGcode = (props.inMemoryGcode as InMemoryGcodePreviewSource | undefined) ?? null
   // Archived-version mode: read the version's bytes through the versioned
   // resource routes and take the file metadata from the caller (there is no
   // version-detail endpoint) so nothing touches the current file.
@@ -144,7 +147,7 @@ export function PreviewView(props: Record<string, unknown>) {
     ? props.previewPlateIndex
     : null
   const onClose = typeof props.onPreviewClose === 'function' ? props.onPreviewClose as (() => void) : undefined
-  const open = Boolean(fileId)
+  const open = Boolean(fileId || inMemoryGcode)
   const [viewerContainer, setViewerContainer] = useState<HTMLDivElement | null>(null)
   const [viewCubeContainer, setViewCubeContainer] = useState<HTMLDivElement | null>(null)
   const [selectedPlate, setSelectedPlate] = useState(1)
@@ -271,14 +274,14 @@ export function PreviewView(props: Record<string, unknown>) {
   const fileQuery = useQuery({
     queryKey: ['library-preview-file', fileId ?? 'missing'],
     queryFn: ({ signal }) => apiFetch<{ file: LibraryFile }>(`/api/library/${fileId}`, { signal }),
-    enabled: open && !fileOverride
+    enabled: open && !fileOverride && !inMemoryGcode
   })
   const file = fileOverride ?? fileQuery.data?.file ?? null
-  const previewMode = useMemo(() => resolvePreviewMode(file), [file])
+  const previewMode = useMemo(() => inMemoryGcode ? 'plate-gcode' : resolvePreviewMode(file), [file, inMemoryGcode])
   const platesQuery = useQuery({
     queryKey: ['library-preview-plates', fileId ?? 'missing', versionId ?? 'current'],
     queryFn: ({ signal }) => apiFetch<ThreeMfIndex>(`${resourceBase}/plates`, { signal }),
-    enabled: Boolean(open && fileId && !isMeshPreviewMode(previewMode)),
+    enabled: Boolean(open && fileId && !inMemoryGcode && !isMeshPreviewMode(previewMode)),
     staleTime: 60_000,
     refetchOnMount: 'always'
   })
@@ -288,18 +291,24 @@ export function PreviewView(props: Record<string, unknown>) {
     // Fetched for the plated 3MF scene AND the G-code preview: the G-code path renders
     // toolpaths, but reads the scene's `bed` to draw the printer's true plate (size +
     // nozzle-only exclude zones) instead of a generic square grid.
-    enabled: Boolean(open && fileId && (previewMode === '3mf' || previewMode === 'plate-gcode')),
+    enabled: Boolean(open && fileId && !inMemoryGcode && (previewMode === '3mf' || previewMode === 'plate-gcode')),
     staleTime: 60_000,
     refetchOnMount: 'always'
   })
-  const plates = useMemo(() => platesQuery.data?.plates ?? [], [platesQuery.data])
+  const inMemoryIndex = useMemo(
+    () => inMemoryGcode ? toThreeMfIndexDto(inMemoryGcode.project.index) : null,
+    [inMemoryGcode]
+  )
+  const platesData = inMemoryIndex ?? platesQuery.data
+  const plates = useMemo(() => platesData?.plates ?? [], [platesData])
+  const sceneData = inMemoryGcode?.project.sceneForPlate(selectedPlate) ?? sceneQuery.data
 
   // The 3D build plate, honouring the same preference the editor writes, a plate that looks one
   // way while editing and another while previewing the slice of that same file is exactly the
   // inconsistency this shares. The scene carries the printer it was placed for; a file whose
   // printer is unknown, or a printer with no bundled mesh, keeps the plain grid.
   const showBedModel = useShowBedModel()
-  const scenePrinterModel = sceneQuery.data?.bed.printerModel ?? null
+  const scenePrinterModel = sceneData?.bed.printerModel ?? null
   const [bedModelGeometry, setBedModelGeometry] = useState<THREE.BufferGeometry | null>(null)
   useEffect(() => {
     // Mirrors EditorView: the CACHED original is disposed when replaced, which is safe because
@@ -319,13 +328,14 @@ export function PreviewView(props: Record<string, unknown>) {
       printerModel: scenePrinterModel,
       // The preview has no slicer target of its own; the API falls back to the default target.
       slicerTargetId: null,
-      signal: controller.signal
+      signal: controller.signal,
+      basePath: inMemoryGcode ? '/api/public/slicing/bed-model' : undefined
     }).then((geometry) => {
       if (controller.signal.aborted) geometry?.dispose()
       else replaceGeometry(geometry)
     })
     return () => controller.abort()
-  }, [open, showBedModel, scenePrinterModel])
+  }, [inMemoryGcode, open, showBedModel, scenePrinterModel])
   const bedModel = showBedModel ? bedModelGeometry : null
 
   useEffect(() => {
@@ -627,10 +637,10 @@ export function PreviewView(props: Record<string, unknown>) {
     const isPlatedPreview = previewMode === '3mf' || previewMode === 'plate-gcode'
 
     if (
-      fileQuery.isLoading
-      || (!isMeshPreviewMode(previewMode) && platesQuery.isLoading)
+      (!inMemoryGcode && fileQuery.isLoading)
+      || (!inMemoryGcode && !isMeshPreviewMode(previewMode) && platesQuery.isLoading)
       // Wait for the scene on both plated modes so the bed is known before the first draw.
-      || (isPlatedPreview && sceneQuery.isLoading)
+      || (!inMemoryGcode && isPlatedPreview && sceneQuery.isLoading)
     ) {
       setViewerState({ loading: true, error: null })
       return
@@ -646,7 +656,7 @@ export function PreviewView(props: Record<string, unknown>) {
       return
     }
 
-    if (!fileId || !file || !previewMode) {
+    if ((!fileId && !inMemoryGcode) || (!file && !inMemoryGcode) || !previewMode) {
       if (fileQuery.isSuccess) {
         setViewerState({ loading: false, error: '3D preview is only available for STL and 3MF library files.' })
       }
@@ -762,12 +772,15 @@ export function PreviewView(props: Record<string, unknown>) {
         })
         .catch(handleLoadError)
     } else if (previewMode === 'plate-gcode') {
-      // Stall-guarded: the gcode body can be large and fans out web->API->bridge,
-      // so a wedged transport mid-body must surface an error instead of spinning.
-      void fetchModelText(buildApiUrl(`${resourceBase}/plate-gcode?plate=${selectedPlate}`), {
-        credentials: 'include',
-        signal: loadAbortController.signal
-      })
+      // A library preview uses the stall-guarded web->API->bridge reader. The public editor
+      // already holds the output archive, so it reads that private artifact directly in the tab.
+      const gcodeText = inMemoryGcode
+        ? Promise.resolve().then(() => readInMemoryPlateGcode(inMemoryGcode, selectedPlate))
+        : fetchModelText(buildApiUrl(`${resourceBase}/plate-gcode?plate=${selectedPlate}`), {
+            credentials: 'include',
+            signal: loadAbortController.signal
+          })
+      void gcodeText
         .then((text) => {
           if (cancelled) return
           const parsed = parseGcodeLayers(text)
@@ -780,7 +793,7 @@ export function PreviewView(props: Record<string, unknown>) {
           setGcodeLayerEventMarkers(buildGcodeLayerEventMarkers(parsed.layerZ, {
             pauses: plate?.pauses,
             filamentChanges: plate?.filamentChanges,
-            projectFilaments: platesQuery.data?.projectFilaments
+            projectFilaments: platesData?.projectFilaments
           }, {
             pauseLayers: parsed.pauseLayers,
             filamentChangeLayers: parsed.filamentChangeLayers
@@ -792,11 +805,10 @@ export function PreviewView(props: Record<string, unknown>) {
           setGcodeStats(parsed.stats)
           setGcodeRanges(parsed.ranges)
           setGcodeConflictInput(parsed)
-          attachObject(buildPlateGcodePreviewObject(preview.object, sceneQuery.data?.bed ?? null, bedModel))
+          attachObject(buildPlateGcodePreviewObject(preview.object, sceneData?.bed ?? null, bedModel))
         })
         .catch(handleLoadError)
     } else {
-      const sceneData = sceneQuery.data
       if (!sceneData) {
         setViewerState({ loading: false, error: 'No plated 3D scene is available for this 3MF.' })
         return
@@ -845,18 +857,19 @@ export function PreviewView(props: Record<string, unknown>) {
     open,
     file,
     fileId,
+    inMemoryGcode,
     resourceBase,
     fileQuery.error,
     fileQuery.isLoading,
     fileQuery.isSuccess,
     platesQuery.isLoading,
-    sceneQuery.data,
+    sceneData,
     sceneQuery.error,
     sceneQuery.isLoading,
     previewMode,
     selectedPlate,
     plates,
-    platesQuery.data?.projectFilaments,
+    platesData?.projectFilaments,
     // The bed mesh resolves asynchronously (and flips with the preference), so the content has to
     // rebuild when it lands, otherwise the plate keeps whichever surface it was first built with.
     bedModel
@@ -1033,7 +1046,7 @@ export function PreviewView(props: Record<string, unknown>) {
         <ModalClose sx={{ top: 12, right: 12, zIndex: 2 }} />
         {/* Extra right padding clears the header icons (maximize/shrink + close). */}
         {showPreviewChrome && (
-          <DialogFileTitle title={heading} fileName={file ? formatLibraryFileName(file.name) : null} sx={{ pr: 12 }} />
+          <DialogFileTitle title={heading} fileName={inMemoryGcode?.fileName ?? (file ? formatLibraryFileName(file.name) : null)} sx={{ pr: 12 }} />
         )}
         <BodyContainer
           ref={setPreviewBodyNode}
@@ -1045,7 +1058,24 @@ export function PreviewView(props: Record<string, unknown>) {
             direction={platesVertical ? 'row' : 'column'}
             sx={{ minWidth: 0, ...(expanded ? { flex: 1, minHeight: 0 } : null) }}
           >
-            {showPlatePicker && fileId && showPreviewChrome && (
+            {showPlatePicker && inMemoryGcode && plates.length > 1 && showPreviewChrome && (
+              <Sheet variant="outlined" sx={{ p: 1, borderRadius: 'sm' }}>
+                <FormControl size="sm">
+                  <FormLabel>Plate</FormLabel>
+                  <Select
+                    value={selectedPlate}
+                    onChange={(_event, value) => { if (value != null) setSelectedPlate(value) }}
+                  >
+                    {plates.map((plate) => (
+                      <Option key={plate.index} value={plate.index}>
+                        {plate.name?.trim() || `Plate ${plate.index}`}
+                      </Option>
+                    ))}
+                  </Select>
+                </FormControl>
+              </Sheet>
+            )}
+            {showPlatePicker && fileId && !inMemoryGcode && showPreviewChrome && (
               <Sheet
                 variant="outlined"
                 sx={{ p: 1, borderRadius: 'sm', ...(platesVertical ? { width: 172, flexShrink: 0, display: 'flex', minHeight: 0 } : null) }}
@@ -1322,7 +1352,7 @@ export function PreviewView(props: Record<string, unknown>) {
         open={allPlatesStatsOpen}
         onClose={() => setAllPlatesStatsOpen(false)}
         plates={plates}
-        projectFilaments={platesQuery.data?.projectFilaments ?? []}
+        projectFilaments={platesData?.projectFilaments ?? []}
       />
     </>
   )

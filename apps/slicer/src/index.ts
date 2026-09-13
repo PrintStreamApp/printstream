@@ -72,7 +72,7 @@ import { assertNoSlicerHostScripts, validateSlicerInputArchive } from './input-a
 import {
   engineProcessEnvironment,
   engineProcessIdentity,
-  prepareEngineWritableDirectory
+  prepareEngineWritableDirectoryTree
 } from './engine-process-security.js'
 
 const FALLBACK_MANUAL_MACHINE_PROFILE_ID = '__printstream-fallback-manual-machine__'
@@ -433,14 +433,13 @@ app.post('/slice', async (request, response) => {
   })
   try {
     appendStructuredOutput(outputLines, 'system', 'Receiving the project')
-    await Promise.all([
-      prepareEngineWritableDirectory(workDir, parsed.data.jobId),
-      prepareEngineWritableDirectory(bambuHomeDir, parsed.data.jobId),
-      prepareEngineWritableDirectory(bambuConfigDir, parsed.data.jobId),
-      prepareEngineWritableDirectory(bambuCacheDir, parsed.data.jobId),
-      prepareEngineWritableDirectory(bambuDataDir, parsed.data.jobId),
-      prepareEngineWritableDirectory(jobTempDir, parsed.data.jobId)
-    ])
+    await prepareEngineWritableDirectoryTree(workDir, [
+      bambuHomeDir,
+      bambuConfigDir,
+      bambuCacheDir,
+      bambuDataDir,
+      jobTempDir
+    ], parsed.data.jobId)
     const supportedFlags = await getSupportedCliFlags(slicerTarget, {
       jobKey: parsed.data.jobId,
       bambuHomeDir,

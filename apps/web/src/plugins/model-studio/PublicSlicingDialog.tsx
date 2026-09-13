@@ -5,6 +5,9 @@ import type { PublicSlicingJob } from '@printstream/shared'
 import { FormDialog } from '../../components/FormDialog'
 import { ProgressBar } from '../../components/ProgressBar'
 import { downloadBlob } from '../../lib/downloadBlob'
+import { openClientThreeMfProjectFromBytes } from './lib/clientThreeMfProject'
+import type { InMemoryGcodePreviewSource } from './lib/inMemoryGcodePreview'
+import { PublicGcodePreview } from './PublicGcodePreview'
 import {
   cancelPublicSlice,
   downloadPublicSlice,
@@ -21,9 +24,42 @@ export function PublicSlicingDialog({ session, onSessionChange, onClose }: {
 }) {
   const [log, setLog] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [artifact, setArtifact] = useState<{ blob: Blob; source: InMemoryGcodePreviewSource } | null>(null)
+  const [previewOpen, setPreviewOpen] = useState(false)
+  const [previewError, setPreviewError] = useState<string | null>(null)
   const job = session.job
   const jobId = session.job.id
   const accessToken = session.accessToken
+
+  useEffect(() => {
+    if (job.status !== 'ready' || artifact || previewError) return
+    const controller = new AbortController()
+    const load = async () => {
+      setBusy(true)
+      try {
+        const blob = await downloadPublicSlice({ ...session, job })
+        if (controller.signal.aborted) return
+        const fileName = job.outputFileName ?? 'slice.gcode.3mf'
+        const project = await openClientThreeMfProjectFromBytes(fileName, new Uint8Array(await blob.arrayBuffer()))
+        if (controller.signal.aborted) {
+          project.dispose()
+          return
+        }
+        setArtifact({ blob, source: { fileName, project } })
+        setPreviewOpen(true)
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          setPreviewError(error instanceof Error ? error.message : 'The G-code preview could not be opened.')
+        }
+      } finally {
+        if (!controller.signal.aborted) setBusy(false)
+      }
+    }
+    void load()
+    return () => controller.abort()
+  }, [artifact, job, previewError, session])
+
+  useEffect(() => () => artifact?.source.project.dispose(), [artifact])
 
   useEffect(() => {
     if (job.status !== 'queued' && job.status !== 'slicing') return
@@ -54,7 +90,8 @@ export function PublicSlicingDialog({ session, onSessionChange, onClose }: {
   const download = async () => {
     setBusy(true)
     try {
-      downloadBlob(await downloadPublicSlice({ ...session, job }), job.outputFileName ?? 'slice.gcode.3mf')
+      const blob = artifact?.blob ?? await downloadPublicSlice({ ...session, job })
+      downloadBlob(blob, job.outputFileName ?? 'slice.gcode.3mf')
     } finally {
       setBusy(false)
     }
@@ -73,20 +110,21 @@ export function PublicSlicingDialog({ session, onSessionChange, onClose }: {
   }
 
   return (
-    <FormDialog
-      open
-      title="Slice project"
-      onClose={dismiss}
-      busy={busy}
-      submitLabel={job.status === 'ready' ? 'Download G-code' : job.status === 'failed' ? 'Retry' : active ? 'Cancel slice' : 'Close'}
-      onSubmit={() => {
-        if (job.status === 'ready') void download()
-        else if (job.status === 'failed') void act(() => retryPublicSlice({ ...session, job }))
-        else if (active) void act(() => cancelPublicSlice({ ...session, job }))
-        else onClose()
-      }}
-    >
-      <Stack spacing={2}>
+    <>
+      <FormDialog
+        open
+        title="Slice project"
+        onClose={dismiss}
+        busy={busy}
+        submitLabel={job.status === 'ready' ? 'Download G-code' : job.status === 'failed' ? 'Retry' : active ? 'Cancel slice' : 'Close'}
+        onSubmit={() => {
+          if (job.status === 'ready') void download()
+          else if (job.status === 'failed') void act(() => retryPublicSlice({ ...session, job }))
+          else if (active) void act(() => cancelPublicSlice({ ...session, job }))
+          else onClose()
+        }}
+      >
+        <Stack spacing={2}>
         {job.status === 'uploading' ? (
           <ProgressBar value={job.sizeBytes > 0 ? (job.uploadedBytes / job.sizeBytes) * 100 : 0} />
         ) : (job.status === 'queued' || job.status === 'slicing') && <ProgressBar />}
@@ -96,6 +134,22 @@ export function PublicSlicingDialog({ session, onSessionChange, onClose }: {
             : job.message ?? 'Preparing slice…'}
         </Typography>
         {job.error && <Alert color="danger">{job.error}</Alert>}
+        {job.status === 'ready' && !artifact && !previewError && (
+          <Typography level="body-sm">Loading G-code preview…</Typography>
+        )}
+        {job.status === 'ready' && previewError && (
+          <Stack spacing={1}>
+            <Alert color="warning">{previewError}</Alert>
+            <Button variant="plain" size="sm" onClick={() => setPreviewError(null)}>
+              Retry G-code preview
+            </Button>
+          </Stack>
+        )}
+        {job.status === 'ready' && artifact && !previewOpen && (
+          <Button variant="plain" size="sm" onClick={() => setPreviewOpen(true)}>
+            Preview G-code
+          </Button>
+        )}
         {job.status === 'failed' && (
           <Button variant="plain" size="sm" onClick={() => void readPublicSliceLog({ ...session, job }).then((result) => setLog(result.output.map((line) => line.text).join('\n') || 'No engine log was returned.'))}>
             {log == null ? 'Show engine log' : 'Refresh engine log'}
@@ -105,7 +159,11 @@ export function PublicSlicingDialog({ session, onSessionChange, onClose }: {
         <Alert color="neutral" variant="soft">
           Slicing temporarily uploads this prepared project. It is deleted automatically within one hour. This tool cannot connect to or control a printer.
         </Alert>
-      </Stack>
-    </FormDialog>
+        </Stack>
+      </FormDialog>
+      {artifact && previewOpen && (
+        <PublicGcodePreview source={artifact.source} onClose={() => setPreviewOpen(false)} />
+      )}
+    </>
   )
 }
