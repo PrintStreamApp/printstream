@@ -47,6 +47,8 @@ export interface PublicRouteContext {
    * register first.
    */
   customerBasePath?: string | null
+  /** Canonical account-level support inbox route for the signed-in actor. */
+  billingMessagesHref?: string | null
   /** Where the public demo entry should land. */
   demoLandingRoute: string
 }

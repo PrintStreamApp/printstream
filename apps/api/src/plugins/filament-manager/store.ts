@@ -74,6 +74,8 @@ function writableData(input: Partial<SpoolCreateInput>): Prisma.FilamentSpoolUnc
   // Explicit null must CLEAR the preset (revert to auto-match), so no `?? undefined` collapse.
   if (input.slicingPresetName !== undefined) data.slicingPresetName = input.slicingPresetName
   assign('serial', input.serial ?? undefined)
+  // Explicit null clears provenance when a scanned product code is removed in the spool form.
+  if (input.productCode !== undefined) data.productCode = input.productCode
   assign('nozzleTempMin', input.nozzleTempMin ?? undefined)
   assign('nozzleTempMax', input.nozzleTempMax ?? undefined)
   assign('diameterMm', input.diameterMm)

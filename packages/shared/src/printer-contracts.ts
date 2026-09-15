@@ -113,6 +113,39 @@ export const printerDetectionOptionStateSchema = printerPrintOptionStateSchema.e
 })
 export type PrinterDetectionOptionState = z.infer<typeof printerDetectionOptionStateSchema>
 
+export const printerPurifyAirModeSchema = z.enum(['off', 'internal', 'exhaust'])
+export type PrinterPurifyAirMode = z.infer<typeof printerPurifyAirModeSchema>
+
+export const printerDoorDetectionModeSchema = z.enum(['off', 'notify', 'pause'])
+export type PrinterDoorDetectionMode = z.infer<typeof printerDoorDetectionModeSchema>
+
+export const printerSmartNozzleBlobModeSchema = z.enum(['off', 'on', 'auto'])
+export type PrinterSmartNozzleBlobMode = z.infer<typeof printerSmartNozzleBlobModeSchema>
+
+export const printerCameraResolutionSchema = z.enum(['720p', '1080p'])
+export type PrinterCameraResolution = z.infer<typeof printerCameraResolutionSchema>
+
+export const printerPurifyAirOptionStateSchema = z.object({
+  supported: z.boolean(),
+  current: printerPurifyAirModeSchema.nullable()
+})
+
+export const printerDoorDetectionOptionStateSchema = z.object({
+  supported: z.boolean(),
+  current: printerDoorDetectionModeSchema.nullable()
+})
+
+export const printerSmartNozzleBlobOptionStateSchema = z.object({
+  supported: z.boolean(),
+  current: printerSmartNozzleBlobModeSchema.nullable()
+})
+
+export const printerCameraResolutionOptionStateSchema = z.object({
+  supported: z.boolean(),
+  current: printerCameraResolutionSchema.nullable(),
+  available: z.array(printerCameraResolutionSchema)
+})
+
 export const printerPrintOptionKeySchema = z.enum([
   'aiMonitoring',
   'spaghettiDetection',
@@ -122,7 +155,15 @@ export const printerPrintOptionKeySchema = z.enum([
   'firstLayerInspection',
   'autoRecovery',
   'promptSound',
-  'filamentTangleDetection'
+  'filamentTangleDetection',
+  'foreignObjectDetection',
+  'printedPartDisplacementDetection',
+  'buildPlateTypeDetection',
+  'buildPlateAlignmentDetection',
+  'idleHeatingProtection',
+  'printStatusSnapshot',
+  'storeSentFilesOnExternalStorage',
+  'cameraAutoRecord'
 ])
 export type PrinterPrintOptionKey = z.infer<typeof printerPrintOptionKeySchema>
 
@@ -135,9 +176,55 @@ export const printerPrintOptionsSchema = z.object({
   firstLayerInspection: printerPrintOptionStateSchema,
   autoRecovery: printerPrintOptionStateSchema,
   promptSound: printerPrintOptionStateSchema,
-  filamentTangleDetection: printerPrintOptionStateSchema
+  filamentTangleDetection: printerPrintOptionStateSchema,
+  foreignObjectDetection: printerPrintOptionStateSchema.default({ supported: false, enabled: null }),
+  printedPartDisplacementDetection: printerPrintOptionStateSchema.default({ supported: false, enabled: null }),
+  buildPlateTypeDetection: printerPrintOptionStateSchema.default({ supported: false, enabled: null }),
+  buildPlateAlignmentDetection: printerPrintOptionStateSchema.default({ supported: false, enabled: null }),
+  idleHeatingProtection: printerPrintOptionStateSchema.default({ supported: false, enabled: null }),
+  printStatusSnapshot: printerPrintOptionStateSchema.default({ supported: false, enabled: null }),
+  storeSentFilesOnExternalStorage: printerPrintOptionStateSchema.default({ supported: false, enabled: null }),
+  cameraAutoRecord: printerPrintOptionStateSchema.default({ supported: false, enabled: null }),
+  purifyAirAtPrintEnd: printerPurifyAirOptionStateSchema.default({ supported: false, current: null }),
+  openDoorDetection: printerDoorDetectionOptionStateSchema.default({ supported: false, current: null }),
+  smartNozzleBlobDetection: printerSmartNozzleBlobOptionStateSchema.default({ supported: false, current: null }),
+  cameraResolution: printerCameraResolutionOptionStateSchema.default({
+    supported: false,
+    current: null,
+    available: []
+  })
 })
 export type PrinterPrintOptions = z.infer<typeof printerPrintOptionsSchema>
+
+/**
+ * Builds the neutral state used before a printer reports its runtime print
+ * option capabilities. Every call returns fresh nested objects and arrays.
+ */
+export function createUnsupportedPrinterPrintOptions(): PrinterPrintOptions {
+  return {
+    aiMonitoring: { supported: false, enabled: null, sensitivity: null },
+    spaghettiDetection: { supported: false, enabled: null, sensitivity: null },
+    purgeChutePileupDetection: { supported: false, enabled: null, sensitivity: null },
+    nozzleClumpingDetection: { supported: false, enabled: null, sensitivity: null },
+    airPrintingDetection: { supported: false, enabled: null, sensitivity: null },
+    firstLayerInspection: { supported: false, enabled: null },
+    autoRecovery: { supported: false, enabled: null },
+    promptSound: { supported: false, enabled: null },
+    filamentTangleDetection: { supported: false, enabled: null },
+    foreignObjectDetection: { supported: false, enabled: null },
+    printedPartDisplacementDetection: { supported: false, enabled: null },
+    buildPlateTypeDetection: { supported: false, enabled: null },
+    buildPlateAlignmentDetection: { supported: false, enabled: null },
+    idleHeatingProtection: { supported: false, enabled: null },
+    printStatusSnapshot: { supported: false, enabled: null },
+    storeSentFilesOnExternalStorage: { supported: false, enabled: null },
+    cameraAutoRecord: { supported: false, enabled: null },
+    purifyAirAtPrintEnd: { supported: false, current: null },
+    openDoorDetection: { supported: false, current: null },
+    smartNozzleBlobDetection: { supported: false, current: null },
+    cameraResolution: { supported: false, current: null, available: [] }
+  }
+}
 
 export const printerCommandTransportSchema = z.object({
   mqttBedTemperature: z.boolean().nullable(),
@@ -450,9 +537,9 @@ export type PrinterNozzle = z.infer<typeof printerNozzleSchema>
  * motion state). Only H2C-class machines report a rack; on everything else
  * `PrinterStatus.nozzleRack` stays `null` and no rack UI renders.
  *
- * This is a read-only status surface. Bambu exposes no "load nozzle N now"
- * command (swaps are automatic during prints), so we intentionally model state,
- * not a manual swap action.
+ * Firmware does not expose a direct "load nozzle N" command; swaps remain
+ * automatic during prints. The separate `controlNozzleRack` command only homes
+ * or raises the A/B rack carriage and re-reads the parked hotend metadata.
  *
  * NOTE: the wire shapes here mirror BambuStudio's `DevNozzleSystemParser`
  * (`DevNozzleSystem.cpp`) but have NOT yet been verified against a live H2C
@@ -596,10 +683,25 @@ export const printerConnectionWarningSchema = z.object({
 })
 export type PrinterConnectionWarning = z.infer<typeof printerConnectionWarningSchema>
 
-/** A printer error: an HMS/device error code and its resolved message, if known. */
+/** Recovery controls the vendor HMS action table can map onto PrintStream. */
+export const printerHmsActionSchema = z.enum([
+  'resume',
+  'ignoreHmsError',
+  'retryAmsFilamentChange',
+  'confirmAmsFilamentExtruded',
+  'loadFilament',
+  'checkAssistant',
+  'jumpToLiveView',
+  'stop'
+])
+export type PrinterHmsAction = z.infer<typeof printerHmsActionSchema>
+
+/** A printer error: an HMS/device error code, message, and vendor-directed actions. */
 export const printerErrorSchema = z.object({
   code: z.string(),
-  message: z.string().nullable()
+  message: z.string().nullable(),
+  /** Absent when no per-device vendor table is cached; empty when the table names no supported action. */
+  actions: z.array(printerHmsActionSchema).optional()
 })
 export type PrinterError = z.infer<typeof printerErrorSchema>
 
@@ -754,6 +856,14 @@ export const printerCommandSchema = z.discriminatedUnion('type', [
     option: printerPrintOptionKeySchema,
     enabled: z.boolean(),
     sensitivity: printerPrintOptionSensitivitySchema.optional()
+  }),
+  z.object({ type: z.literal('setPurifyAirAtPrintEnd'), mode: printerPurifyAirModeSchema }),
+  z.object({ type: z.literal('setOpenDoorDetection'), mode: printerDoorDetectionModeSchema }),
+  z.object({ type: z.literal('setSmartNozzleBlobDetection'), mode: printerSmartNozzleBlobModeSchema }),
+  z.object({ type: z.literal('setCameraResolution'), resolution: printerCameraResolutionSchema }),
+  z.object({
+    type: z.literal('controlNozzleRack'),
+    action: z.enum(['home', 'raiseA', 'raiseB', 'refreshAll'])
   }),
   z.object({ type: z.literal('refresh') }),
   z.object({
@@ -1058,13 +1168,16 @@ export const printNozzleOffsetCalibrationModeSchema = z.preprocess((value) => {
 }, z.enum(['off', 'on', 'auto']))
 export type PrintNozzleOffsetCalibrationMode = z.infer<typeof printNozzleOffsetCalibrationModeSchema>
 
+export const printTimelapseStorageSchema = z.enum(['external', 'internal'])
+export type PrintTimelapseStorage = z.infer<typeof printTimelapseStorageSchema>
+
 /**
  * The print-start knobs a user chooses in the send dialog: the settings that are a
  * PROPERTY OF THE PRINT and so should come back when that print is repeated.
  *
  * This is the BASE that {@link printFromLibrarySchema} spreads, rather than a `.pick()` off
  * it, only because it has to be defined before `printJobSchema` below. Same guarantee
- * either way: there is one declaration of these seven, so a knob cannot be added to the
+ * either way: there is one declaration of these nine, so a knob cannot be added to the
  * dispatch payload and silently left out of what gets recorded.
  *
  * Recorded per print job (`PrintJob.printOptionsJson`) and replayed by re-print; see
@@ -1083,6 +1196,8 @@ export const printStartOptionSelectionSchema = z.object({
   flowCalibration: printOnOffAutoModeSchema.default('off'),
   firstLayerInspection: z.boolean().default(true),
   timelapse: z.boolean().default(false),
+  timelapseStorage: printTimelapseStorageSchema.default('external'),
+  externalFilamentChangeAssist: z.boolean().default(false),
   filamentDynamicsCalibration: z.boolean().default(false),
   nozzleOffsetCalibration: printNozzleOffsetCalibrationModeSchema.default('auto')
 })
@@ -1134,8 +1249,8 @@ export const printJobSchema = z.object({
    *
    * PARTIAL by design, and null when nothing at all was recorded: a field is absent when
    * the job never captured it, which a client must not confuse with a field captured at its
-   * default value. Absent means "fall back": to the remembered preference in the print
-   * dialog, to the schema default on the API's re-print path. Jobs recorded before the
+   * default value. Absent means "fall back" to the schema default on either re-print path.
+   * Jobs recorded before the
    * options were persisted carry at most `bedLevel`, and externally started prints carry
    * nothing, since their options were never ours to see.
    */
@@ -1173,7 +1288,7 @@ export type ThreeMfSettingsRepairReason = z.infer<typeof threeMfSettingsRepairRe
  * rest -- surfaces that care fall back on the file's extension, as the editor's library picker
  * already does for STEP files predating the `step` kind.
  */
-export const LIBRARY_FILE_KINDS = ['3mf', 'gcode', 'stl', 'step', 'obj', 'gltf', 'amf', 'other'] as const
+export const LIBRARY_FILE_KINDS = ['3mf', 'gcode', 'stl', 'step', 'obj', 'gltf', 'amf', 'fbx', 'other'] as const
 
 export const libraryFileSchema = z.object({
   id: z.string(),
@@ -1566,6 +1681,7 @@ export function classifyLibraryFileKind(name: string): LibraryFile['kind'] {
   if (lower.endsWith('.obj')) return 'obj'
   if (lower.endsWith('.gltf') || lower.endsWith('.glb')) return 'gltf'
   if (lower.endsWith('.amf')) return 'amf'
+  if (lower.endsWith('.fbx')) return 'fbx'
   return 'other'
 }
 
@@ -1582,7 +1698,7 @@ export function classifyLibraryFileKind(name: string): LibraryFile['kind'] {
  * is usually a project), so callers that can see the parsed index add it via `geometryOnly`; the
  * web's `isPreviewOnlyLibraryFile` is where those two halves are combined.
  */
-export const MESH_LIBRARY_FILE_KINDS = ['stl', 'step', 'obj', 'gltf', 'amf'] as const
+export const MESH_LIBRARY_FILE_KINDS = ['stl', 'step', 'obj', 'gltf', 'amf', 'fbx'] as const
 
 export type MeshLibraryFileKind = (typeof MESH_LIBRARY_FILE_KINDS)[number]
 
@@ -1676,6 +1792,14 @@ export const printerPrintStartOptionsSchema = z.object({
   flowCalibration: printerPrintStartModeStateSchema,
   firstLayerInspection: printerPrintStartBooleanStateSchema,
   timelapse: printerPrintStartBooleanStateSchema,
+  internalTimelapseStorage: printerPrintStartBooleanStateSchema.default({
+    supported: false,
+    current: null
+  }),
+  externalFilamentChangeAssist: printerPrintStartBooleanStateSchema.default({
+    supported: false,
+    current: null
+  }),
   filamentDynamicsCalibration: printerPrintStartBooleanStateSchema,
   nozzleOffsetCalibration: printerPrintStartNozzleOffsetStateSchema
 })
@@ -1685,11 +1809,13 @@ export const printFromLibrarySchema = z.object({
   fileId: z.string(),
   printerId: z.string(),
   useAms: z.boolean().default(true),
-  // The seven recorded/replayable print-start knobs, declared once in
+  // The nine recorded/replayable print-start knobs, declared once in
   // `printStartOptionSelectionSchema` so this payload and the print history cannot drift.
   ...printStartOptionSelectionSchema.shape,
   allowIncompatibleFilament: z.boolean().default(false),
   allowPlateTypeMismatch: z.boolean().default(false),
+  /** Consent to print on a model outside the file's declared compatible family. */
+  allowPrinterModelMismatch: z.boolean().default(false),
   /**
    * Consent to print a file sliced for a different class of machine than the target, one with a
    * Filament Track Switch, or one without. Deliberately SEPARATE from
@@ -2022,6 +2148,8 @@ export const printerStoragePrintSchema = z.object({
   ...printStartOptionSelectionSchema.shape,
   amsMapping: z.array(amsMappingEntrySchema).optional(),
   allowIncompatibleFilament: z.boolean().default(false),
+  /** See {@link printFromLibrarySchema}.allowPrinterModelMismatch. */
+  allowPrinterModelMismatch: z.boolean().default(false),
   /** See {@link printFromLibrarySchema}.allowFilamentTrackSwitchMismatch. */
   allowFilamentTrackSwitchMismatch: z.boolean().default(false),
   /** See {@link printFromLibrarySchema}.allowInsufficientFilament. */

@@ -8,6 +8,8 @@ import { processSettingOverridesSchema } from './process-settings.js'
 import { primeVolumeModeSchema } from './purge-mode.js'
 import { mixedFilamentConfigSchema } from './mixed-filament.js'
 import { plateLayerFilamentSequenceSchema } from './plate-filament-sequence.js'
+import { projectAuxiliariesSchema } from './project-auxiliaries.js'
+import { MAX_PORTABLE_MACHINE_BED_ASSET_BYTES } from './machine-bed-assets.js'
 import { degenerateTransformMessage, findDegenerateTransformColumn } from './three-mf/transform-validity.js'
 import { TEXT_SURFACE_TYPES, type TextInfo } from './three-mf/text-info.js'
 import { isSvgArchiveEntry } from './three-mf/svg-shape.js'
@@ -139,7 +141,8 @@ export const uploadSlicingPresetSchema = z.object({
   kind: slicingPresetKindSchema.optional(),
   fileName: z.string().trim().min(1).max(255).optional(),
   encoding: z.enum(['utf8', 'base64']).default('utf8'),
-  content: z.string().trim().min(1).max(2 * 1024 * 1024),
+  // Portable custom-bed assets can add two 1 MB binary payloads after base64 expansion.
+  content: z.string().trim().min(1).max(3 * 1024 * 1024),
   /** When true, overwrite existing same-name presets instead of reporting them as conflicts. */
   overwrite: z.boolean().optional()
 })
@@ -939,6 +942,25 @@ export const sceneEditImportPartTransformSchema = z.object({
 })
 export type SceneEditImportPartTransform = z.infer<typeof sceneEditImportPartTransformSchema>
 
+/** Replace one baked volume's mesh while preserving its host, ordinal, metadata, and transform. */
+export const sceneEditPartMeshReplacementSchema = z.object({
+  objectId: z.number().int(),
+  partIndex: z.number().int().nonnegative(),
+  meshImportId: z.string().trim().min(1)
+})
+export type SceneEditPartMeshReplacement = z.infer<typeof sceneEditPartMeshReplacementSchema>
+
+/** The same in-place mesh replacement for a solid of an unsaved multi-solid import. */
+export const sceneEditImportPartMeshReplacementSchema = z.object({
+  importId: z.string().trim().min(1),
+  partIndex: z.number().int().nonnegative(),
+  meshImportId: z.string().trim().min(1)
+}).refine(
+  (replacement) => replacement.importId !== replacement.meshImportId,
+  { message: 'A part replacement cannot use its host import as its mesh' }
+)
+export type SceneEditImportPartMeshReplacement = z.infer<typeof sceneEditImportPartMeshReplacementSchema>
+
 /**
  * A new volume added INSIDE an existing object (BambuStudio's "Add part / negative part /
  * modifier / support blocker / enforcer"): `meshImportId`'s staged mesh becomes a new object
@@ -1142,6 +1164,18 @@ export type SceneEditFlushVolumes = z.infer<typeof sceneEditFlushVolumesSchema>
 export const sceneEditSchema = z.object({
   plates: z.array(sceneEditPlateSchema).min(1),
   /**
+   * Bed dimensions whose plate-local coordinate system `instances` and prime-tower positions use.
+   *
+   * The bake uses these dimensions for the global multi-plate grid. This matters during a printer
+   * change: the source archive's build-item offsets were authored with the old bed stride, while
+   * the live editor has already translated every plate's contents onto the new bed. Older clients
+   * omit this and retain the source-project dimensions.
+   */
+  placementBedSize: z.object({
+    width: z.number().positive(),
+    depth: z.number().positive()
+  }).optional(),
+  /**
    * The project-global bed type, written as `curr_bed_type` in `project_settings.config`. A plate
    * overrides it with its own {@link sceneEditPlateSchema} `plateType`.
    *
@@ -1152,6 +1186,8 @@ export const sceneEditSchema = z.object({
    */
   plateType: z.string().trim().min(1).nullable().optional(),
   instances: z.array(sceneEditInstanceSchema),
+  /** Complete desired state of BambuStudio's five managed `Auxiliaries/` folders. */
+  projectAuxiliaries: projectAuxiliariesSchema.optional(),
   /** Optional new volumes added inside existing objects (negative parts, modifiers, ...). */
   addedParts: z.array(sceneEditAddedPartSchema).max(200).optional(),
   /**
@@ -1222,6 +1258,8 @@ export const sceneEditSchema = z.object({
   partTypeChanges: z.array(sceneEditPartTypeChangeSchema).max(400).optional(),
   /** Optional part-placement changes (move/rotate/scale a part inside its object). */
   partTransforms: z.array(sceneEditPartTransformSchema).max(400).optional(),
+  /** Mesh swaps that retain the baked volume's existing identity and list position. */
+  partMeshReplacements: z.array(sceneEditPartMeshReplacementSchema).max(400).optional(),
   /**
    * Optional part REMOVALS on in-project objects. Complete state, like every other domain the
    * editor owns: the whole set of parts this session removed, not a diff. Applied after every
@@ -1247,6 +1285,8 @@ export const sceneEditSchema = z.object({
   importPartTypes: z.array(sceneEditImportPartTypeSchema).max(400).optional(),
   /** Optional part-placement changes for multi-solid imports' solids, keyed by import + solid index. */
   importPartTransforms: z.array(sceneEditImportPartTransformSchema).max(400).optional(),
+  /** Mesh swaps for volumes whose host is still a staged import. */
+  importPartMeshReplacements: z.array(sceneEditImportPartMeshReplacementSchema).max(400).optional(),
   /**
    * Optional staged imports the user asked to mesh-repair. The import counterpart of
    * `repairedObjectIds`: an unsaved import has no mesh in the document yet, so the repair is
@@ -1458,6 +1498,8 @@ export const stagedImportSchema = z.object({
   format: stagedImportFormatSchema,
   triangleCount: z.number().int().nonnegative(),
   bounds: z.object({ min: sceneEditVec3Schema, max: sceneEditVec3Schema }),
+  /** Source appearance retained beside the staged mesh and available for filament-paint mapping. */
+  sourceColorMode: z.enum(['vertex', 'material', 'texture']).optional(),
   /** The import's named solids (always ≥1; >1 only for a multi-solid STEP assembly). */
   parts: z.array(stagedImportPartSchema).min(1)
 })
@@ -1834,6 +1876,8 @@ export const publicSlicingJobSchema = z.object({
   outputSizeBytes: z.number().int().nonnegative().nullable(),
   /** The same authoritative engine estimates returned for a workspace slicing job. */
   metadata: slicingMetadataSchema,
+  /** Material labels and colours used to enrich the engine's per-id usage rows. */
+  filamentMappings: z.array(slicingFilamentMappingSchema).optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
   expiresAt: z.string()
@@ -2068,10 +2112,9 @@ export const slicingPresetFileSchema = z.object({
 export type SlicingPresetFile = z.infer<typeof slicingPresetFileSchema>
 
 /**
- * Wire contract for the slice-request envelope the API POSTs to the standalone
- * slicer's `/slice` endpoint (carried as a base64 header). The API is the
- * producer and the slicer validates against this same schema, so the two
- * cannot drift.
+ * Wire contract for the slice-request envelope the API POSTs to the standalone slicer's `/slice`
+ * endpoint. Current clients carry it in the framed request-body manifest; the worker still accepts
+ * the former base64-header transport during rolling upgrades. Both validate this schema.
  */
 export const sliceEnvelopeSchema = z.object({
   jobId: z.string().trim().min(1),
@@ -2089,3 +2132,29 @@ export const sliceEnvelopeSchema = z.object({
   }).optional()
 })
 export type SliceEnvelope = z.infer<typeof sliceEnvelopeSchema>
+
+/** Magic prefix for the streamed API-to-slicer upload body. */
+export const SLICE_UPLOAD_FRAME_MAGIC = 'PSL2'
+/** Magic plus the unsigned 32-bit manifest length. */
+export const SLICE_UPLOAD_FRAME_HEADER_BYTES = 8
+/** Defensive ceiling for the JSON part of a framed upload. */
+export const MAX_SLICE_UPLOAD_MANIFEST_BYTES = 8 * 1024 * 1024
+
+/** One raw custom-bed payload that follows the framed upload manifest. */
+export const sliceUploadBedAssetSchema = z.object({
+  profileId: z.string().trim().min(1),
+  kind: z.enum(['model', 'texture']),
+  name: z.string().trim().min(1).max(255),
+  byteLength: z.number().int().positive().max(MAX_PORTABLE_MACHINE_BED_ASSET_BYTES)
+})
+export type SliceUploadBedAsset = z.infer<typeof sliceUploadBedAssetSchema>
+
+/**
+ * Manifest at the front of a slice upload. Large bed binaries follow it as raw bytes, in descriptor
+ * order, and the source 3MF occupies the remainder of the body.
+ */
+export const sliceUploadManifestSchema = z.object({
+  envelope: sliceEnvelopeSchema,
+  bedAssets: z.array(sliceUploadBedAssetSchema).max(2).default([])
+})
+export type SliceUploadManifest = z.infer<typeof sliceUploadManifestSchema>

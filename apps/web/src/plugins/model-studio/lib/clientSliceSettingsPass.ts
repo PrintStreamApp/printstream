@@ -16,6 +16,7 @@ import {
   parseBuiltinSlicingPresetId,
   rebindProjectFilamentPhysics,
   retargetProjectSettingsToMachine,
+  slicingPresetProvenance,
   stripSliceInfoPrinterModelId,
   type ProcessConfig,
   type ProfileRecord,
@@ -67,7 +68,10 @@ export async function applyClientSliceSettings(
   settings = retargetProjectSettingsToMachine(settings, machine.config, {
     printerSettingsId: machine.name,
     printerModel: firstProfileString(machine.config.printer_model)
-      ?? (pass.target.mode === 'manualProfile' ? pass.target.printerModel : machine.name)
+      ?? (pass.target.mode === 'manualProfile' ? pass.target.printerModel : machine.name),
+    printerPresetInherits: slicingPresetProvenance(machineProfileId) === 'workspace'
+      ? firstProfileString(machine.config.inherits)
+      : null
   })
 
   const processProfileId = pass.target.processProfileId

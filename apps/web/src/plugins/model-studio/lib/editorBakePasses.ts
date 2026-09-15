@@ -11,7 +11,7 @@
  *
  * Counterpart: the api's `routes/editor.ts` bake, whose passes these mirror one for one.
  */
-import { buildBuiltinSlicingPresetId, parseBuiltinSlicingPresetId, processPresetFitsMachine, projectDefinesMachineCompletely, projectMatchesNozzleDiameters,
+import { buildBuiltinSlicingPresetId, parseBuiltinSlicingPresetId, processPresetFitsMachine, projectDefinesMachineCompletely, projectMatchesNozzleDiameters, slicingPresetProvenance,
   firstProfileString
 } from '@printstream/shared'
 import type { ExportArrangedThreeMf, MachineRetargetPlan, ProcessConfig, ProfileRecord, SaveArrangedThreeMf, SlicingPresetSummary } from '@printstream/shared'
@@ -195,6 +195,9 @@ async function sameModelPresetPlan(
   const plan: MachineRetargetPlan = {
     machineConfig: resolved.config,
     printerSettingsId: resolved.name,
+    printerPresetInherits: slicingPresetProvenance(retarget.printerProfileId) === 'workspace'
+      ? firstProfileString(resolved.config.inherits)
+      : null,
     // The model the resolved preset itself reports, falling back to what the save targeted: the
     // preset is the authority on which machine it describes.
     printerModel: firstProfileString(resolved.config.printer_model) ?? retarget.printerModel ?? '',

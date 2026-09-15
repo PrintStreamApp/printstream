@@ -197,6 +197,9 @@ export async function buildMachineRetargetPlan(input: MachineRetargetInput): Pro
   const plan: MachineRetargetPlan = {
     machineConfig: machine.config,
     printerSettingsId: machine.name,
+    printerPresetInherits: slicingPresetProvenance(target.printerProfileId) === 'workspace'
+      ? firstProfileString(machine.config.inherits)
+      : null,
     printerModel,
     // Nothing chosen leaves the project's OWN process, which is right only while that process still
     // fits the machine being authored. When it does not, this is where BambuStudio would have
@@ -330,7 +333,8 @@ export async function resolveFilamentRebinds(
   if (!targetModelKey) return null
   const machineRetargeted = retargetProjectSettingsToMachine(input.projectSettings, plan.machineConfig, {
     printerSettingsId: plan.printerSettingsId,
-    printerModel: plan.printerModel
+    printerModel: plan.printerModel,
+    printerPresetInherits: plan.printerPresetInherits
   })
   const selections = selectFilamentRebindTargets({
     filamentSettingsIds: machineRetargeted.filament_settings_id,

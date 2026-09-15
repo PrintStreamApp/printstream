@@ -3,7 +3,9 @@
  *
  * A `browser-prepared-v1` project has already had the user's complete editor and slicing intent
  * authored into its 3MF. The runtime may still perform mechanics the CLI itself requires, but it
- * must not reinterpret the request into another project or load profiles that override that file.
+ * must not reinterpret the request into another project or load process/filament profiles that
+ * override that file. The selected custom machine may ride beside it as a runtime identity and
+ * portable-asset carrier when it matches the machine already authored into the project.
  */
 
 export interface PreparedSourceCarrier {
@@ -18,7 +20,7 @@ export interface PreparedSourceCarrier {
 export interface SlicerInputPolicy {
   /** The uploaded project's settings are the slice's source of truth. */
   projectSettingsAuthoritative: boolean
-  /** Load request profile files on the CLI, which overrides embedded project settings. */
+  /** Load general request profile files on the CLI, which overrides embedded project settings. */
   loadRequestProfiles: boolean
   /** Synthesize/repair an incomplete embedded project config through `--export-settings`. */
   ensureEmbeddedProjectSettings: boolean

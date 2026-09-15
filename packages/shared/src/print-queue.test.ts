@@ -9,6 +9,7 @@ import {
   normalizeHexColor,
   queueDispatchSchema,
   queueItemCreateSchema,
+  queuePrintOptionsSchema,
   summarizeQueueItemEligibility,
   type QueueItemPlacement,
   type QueueLoadedSlot,
@@ -19,6 +20,12 @@ import type { PrinterStage, PrinterStatus } from './printer.js'
 
 const EXACT = { allowTypeOnlyMatch: false }
 const TYPE_ONLY = { allowTypeOnlyMatch: true }
+
+test('new queue items default automatic bed leveling and flow dynamics calibration', () => {
+  const options = queuePrintOptionsSchema.parse({})
+  assert.equal(options.bedLevel, 'auto')
+  assert.equal(options.flowCalibration, 'auto')
+})
 
 function slot(
   trayIndex: number,

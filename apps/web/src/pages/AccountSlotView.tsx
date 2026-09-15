@@ -13,16 +13,14 @@
  * `h3` every other top-level view uses. Adding a heading here instead would
  * print the title twice.
  *
- * The slots are filled by PRIVATE cloud plugins and are empty in a public
- * build, so callers must not register these routes unconditionally:
- * `accountSlotHasContent` (in `lib/accountSlots.ts`) answers that, and the OSS
- * build simply has no such pages.
+ * The slot is catalog-aware so a disabled self-hosted cloud connection does
+ * not leave behind an empty route.
  *
  * Counterpart: `CurrentAccountPanel`, which links here instead of rendering the
  * same slots inline.
  */
-import { StaticPluginSlot } from '../plugin/StaticPluginSlot'
+import { PluginSlot } from '../plugin/PluginSlot'
 
 export function AccountSlotView({ slot }: { slot: string }) {
-  return <StaticPluginSlot name={slot} context={{ presentation: 'standalone-page' }} />
+  return <PluginSlot name={slot} context={{ presentation: 'standalone-page' }} />
 }

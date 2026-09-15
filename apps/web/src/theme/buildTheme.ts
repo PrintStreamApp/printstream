@@ -535,6 +535,18 @@ export function createAppTheme(palette: PrintStreamThemePalette) {
           useFlexGap: true
         }
       },
+      JoyFormLabel: {
+        styleOverrides: {
+          root: {
+            // An open Select treats its label as click-away, then the label's native
+            // activation clicks the associated button and reopens it. Let that click
+            // land on the FormControl while open; closed labels remain interactive.
+            '&:has(~ .MuiSelect-root [role="combobox"][aria-expanded="true"])': {
+              pointerEvents: 'none'
+            }
+          }
+        }
+      },
       JoyModalDialog: {
         styleOverrides: {
           root: {

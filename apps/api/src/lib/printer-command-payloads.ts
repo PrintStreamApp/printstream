@@ -121,6 +121,31 @@ export function commandToMqttPayloads(
       }]
     case 'setPrintOption':
       return [printOptionToMqttPayload(command)]
+    case 'setPurifyAirAtPrintEnd':
+      return [{
+        print: {
+          command: 'print_option',
+          air_purification: command.mode === 'internal' ? 1 : command.mode === 'exhaust' ? 2 : 0
+        }
+      }]
+    case 'setOpenDoorDetection':
+      return [{
+        system: {
+          command: 'set_door_stat',
+          config: command.mode === 'notify' ? 1 : command.mode === 'pause' ? 2 : 0
+        }
+      }]
+    case 'setSmartNozzleBlobDetection':
+      return [{
+        print: {
+          command: 'print_option',
+          nozzle_blob_detect_v2: command.mode === 'on' ? 1 : command.mode === 'auto' ? 2 : 0
+        }
+      }]
+    case 'setCameraResolution':
+      return [{ camera: { command: 'ipcam_resolution_set', resolution: command.resolution } }]
+    case 'controlNozzleRack':
+      return [nozzleRackControlPayload(command.action)]
     case 'refresh':
       return [
         { info: { command: 'get_version' } },
@@ -319,6 +344,9 @@ export function commandToMqttPayloads(
         print: {
           command: 'ams_filament_setting',
           ams_id: command.amsId,
+          // Virtual spools still use slot 0. `tray_id` remains the firmware's shared
+          // virtual-tray marker, rather than identifying which of the two spools this is.
+          slot_id: 0,
           tray_id: VIRTUAL_TRAY_SETTING_ID,
           tray_info_idx: command.trayInfoIdx,
           tray_color: command.trayColor.toUpperCase(),
@@ -333,6 +361,7 @@ export function commandToMqttPayloads(
         print: {
           command: 'ams_filament_setting',
           ams_id: command.amsId,
+          slot_id: 0,
           tray_id: VIRTUAL_TRAY_SETTING_ID,
           tray_info_idx: '',
           tray_type: '',
@@ -475,6 +504,36 @@ function printOptionToMqttPayload(
           filament_tangle_detect: command.enabled
         }
       }
+    case 'foreignObjectDetection':
+      return xcamPrintOptionPayload('fod_check', command.enabled)
+    case 'printedPartDisplacementDetection':
+      return xcamPrintOptionPayload('model_movement_check', command.enabled)
+    case 'buildPlateTypeDetection':
+      return xcamPrintOptionPayload('buildplate_marker_detector', command.enabled)
+    case 'buildPlateAlignmentDetection':
+      return xcamPrintOptionPayload('plate_offset_switch', command.enabled)
+    case 'idleHeatingProtection':
+      return { print: { command: 'set_against_continued_heating_mode', enable: command.enabled } }
+    case 'printStatusSnapshot':
+      return { camera: { command: 'ipcam_cap_pic_set', control: command.enabled ? 'enable' : 'disable' } }
+    case 'storeSentFilesOnExternalStorage':
+      return { system: { command: 'print_cache_set', config: command.enabled } }
+    case 'cameraAutoRecord':
+      return { camera: { command: 'ipcam_record_set', control: command.enabled ? 'enable' : 'disable' } }
+  }
+}
+
+function nozzleRackControlPayload(
+  action: 'home' | 'raiseA' | 'raiseB' | 'refreshAll'
+): Record<string, unknown> {
+  if (action === 'refreshAll') {
+    return { print: { command: 'holder_nozzle_refresh', id: 0xff } }
+  }
+  return {
+    print: {
+      command: 'nozzle_holder_ctrl',
+      action: action === 'raiseA' ? 1 : action === 'raiseB' ? 2 : 0
+    }
   }
 }
 

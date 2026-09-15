@@ -10,7 +10,9 @@
  * options are vectors, and a vector's elements mean different things depending on which page the
  * option sits on. Collapsing them to element 0 (what `createProcessConfigAccessor` does, and what
  * the process dialog therefore does) silently edits one element of a preset that holds several.
- * See {@link machineColumnsForPage}.
+ * See {@link machineColumnsForPage}. The non-catalog rectangular bed editor lives separately in
+ * `machine-build-volume.ts`; keeping polygon policy out of this page/column module avoids another
+ * responsibility accumulating here.
  *
  * Counterpart: `scripts/dev/generate-machine-settings.mjs`, which produces the generated catalog
  * from BambuStudio's TabPrinter layout + PrintConfig.cpp metadata, and
@@ -33,15 +35,17 @@ export function diffMachineConfig(base: ProcessConfig, edited: ProcessConfig): P
 /**
  * The preset body to persist for an edited machine.
  *
- * Built over the RESOLVED config rather than the editor's own, because the editor only ever sees
- * the catalog's 77 options. BambuStudio's printer tab edits the rest through bespoke widgets we do
- * not have, the printable area, bed shape and exclusion zones, the model/variant identity, and a
- * save assembled from the editable keys alone would drop every one of them, quietly rebuilding the
- * preset around a different bed. So the resolved config is the base and only the keys the user
- * could actually change are laid over it.
+ * Built over the RESOLVED config rather than the editor's own, because most edits come from the
+ * catalog's 77 options and the rectangular printable area comes from one focused bespoke dialog.
+ * BambuStudio carries more non-catalog values we do not edit, including exclusion zones, custom
+ * bed asset paths and model/variant identity. A save assembled from editable keys alone would drop
+ * them, so the resolved config remains the base and the user's actual diffs are laid over it.
  *
  * `type` is stamped because `parseProfileJson` reads it to route the preset into the machine
- * collection; the API re-derives and re-validates it either way.
+ * collection; the API re-derives and re-validates it either way. A new preset copied from a
+ * built-in should inherit from THAT preset, not from the built-in's own parent. Otherwise the new
+ * preset opens with the source preset's inherited differences already emphasized as if they were
+ * authored here.
  */
 export function buildMachinePresetConfig(input: {
   /** The preset exactly as `/profiles/resolve-machine` returned it, non-catalog keys included. */
@@ -51,13 +55,23 @@ export function buildMachinePresetConfig(input: {
   /** The edited config. */
   edited: ProcessConfig
   name: string
+  /** Built-in preset this newly copied preset derives from; omitted when updating an existing one. */
+  inheritFrom?: string
 }): ProcessConfig {
-  return {
+  const saved: ProcessConfig = {
     ...input.resolved,
     ...diffMachineConfig(input.baseline, input.edited),
     name: input.name,
     type: 'machine'
   }
+  if (input.inheritFrom) saved.inherits = input.inheritFrom
+  // A focused non-catalog editor can intentionally remove a resolved field (custom bed assets are
+  // the first one). Absence from the live edited config is the deletion marker; without this pass
+  // spreading the resolved base resurrects the value during every save.
+  for (const key of Object.keys(input.baseline)) {
+    if (!(key in input.edited)) delete saved[key]
+  }
+  return saved
 }
 
 /** Catalog page ids whose vector options carry a per-column meaning. */

@@ -187,7 +187,7 @@ export function QueueSection(props: Record<string, unknown>) {
   const handleStart = async (
     printerId: string,
     amsMapping: number[],
-    consents: { allowInsufficientFilament: boolean; allowBlacklistedFilament: boolean }
+    consents: { allowInsufficientFilament: boolean; allowBlacklistedFilament: boolean; allowPrinterModelMismatch: boolean }
   ) => {
     if (!startingItem) return
     const id = startingItem.id

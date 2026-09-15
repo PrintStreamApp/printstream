@@ -14,10 +14,14 @@ import { useMemo } from 'react'
 import type { PluginSurface } from '@printstream/shared'
 import { useAuthBootstrapQuery } from '../lib/authQuery'
 import { usePluginCatalogQuery } from '../lib/pluginCatalogQuery'
-import { isPluginActiveByName, pluginSupportsRuntimeSurface } from '../lib/pluginSettings'
+import {
+  activePluginSlots
+} from '../lib/pluginSettings'
 import { webPluginRegistry } from './registry'
+import { useRuntimePolicy } from '../lib/runtimePolicy'
 
 export function usePluginSlots(name: string) {
+  const { selfHosted } = useRuntimePolicy()
   const authBootstrapQuery = useAuthBootstrapQuery()
   const pluginStateQuery = usePluginCatalogQuery({
     enabled: authBootstrapQuery.isSuccess ? (!authBootstrapQuery.data.authEnabled || authBootstrapQuery.data.actor.type !== 'anonymous') : false,
@@ -29,10 +33,13 @@ export function usePluginSlots(name: string) {
     [pluginStateQuery.data?.plugins]
   )
   return useMemo(
-    () => webPluginRegistry
-      .slots(name)
-      .filter((slot) => pluginSupportsRuntimeSurface(slot, currentSurface))
-      .filter((slot) => isPluginActiveByName(slot.pluginName, apiPluginsByName, pluginStateQuery.data?.plugins != null)),
-    [apiPluginsByName, currentSurface, name, pluginStateQuery.data?.plugins]
+    () => activePluginSlots(webPluginRegistry.slots(name), {
+      selfHosted,
+      actorType: authBootstrapQuery.data?.actor.type,
+      currentSurface,
+      apiPluginsByName,
+      hasPluginState: pluginStateQuery.data?.plugins != null
+    }),
+    [apiPluginsByName, authBootstrapQuery.data?.actor.type, currentSurface, name, pluginStateQuery.data?.plugins, selfHosted]
   )
 }

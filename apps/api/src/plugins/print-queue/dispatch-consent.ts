@@ -8,8 +8,8 @@
  *
  * Contract: every path that builds a queue dispatch states its origin here, and
  * only `person-start` can withhold. Getting it wrong is invisible until a print
- * runs dry or a queue stalls, which is why the three answers live together
- * instead of as three booleans at three call sites.
+ * runs dry, a wrong-machine file starts, or a queue stalls. That is why the
+ * answers live together instead of as adjacent booleans at several call sites.
  *
  * Counterparts: `assertSufficientFilament` and `assertFilamentBlacklist` in
  * `apps/api/src/lib/print-filament-compatibility.ts` are what these consent to,
@@ -67,16 +67,17 @@ export function allowsBlacklistedFilament(origin: QueueDispatchOrigin, personCon
   return origin === 'person-start' ? personConfirmed : false
 }
 
-/** Every consent a queued dispatch carries, resolved together so a caller cannot supply one and forget the other. */
+/** Every consent a queued dispatch carries, resolved together so callers cannot silently omit one. */
 export interface QueueDispatchConsents {
   allowInsufficientFilament: boolean
   allowBlacklistedFilament: boolean
+  allowPrinterModelMismatch: boolean
 }
 
 /**
  * The consents for a dispatch from `origin`, with a person's own answers where there is a person.
  *
- * Bundled rather than threaded as two booleans: they travel together through four helpers, and two
+ * Bundled rather than threaded as booleans: they travel together through several helpers, and
  * adjacent boolean parameters are a swap waiting to happen that the type checker cannot see.
  */
 export function resolveQueueDispatchConsents(
@@ -85,6 +86,8 @@ export function resolveQueueDispatchConsents(
 ): QueueDispatchConsents {
   return {
     allowInsufficientFilament: allowsInsufficientFilament(origin, personAnswers.allowInsufficientFilament === true),
-    allowBlacklistedFilament: allowsBlacklistedFilament(origin, personAnswers.allowBlacklistedFilament === true)
+    allowBlacklistedFilament: allowsBlacklistedFilament(origin, personAnswers.allowBlacklistedFilament === true),
+    // A model mismatch is never assumed by an unattended or diagnostic path.
+    allowPrinterModelMismatch: origin === 'person-start' && personAnswers.allowPrinterModelMismatch === true
   }
 }

@@ -27,6 +27,7 @@ import { maintenancePlugin } from '../plugins/maintenance/index.js'
 import { printQueuePlugin } from '../plugins/print-queue/index.js'
 import { homeAssistantPlugin } from '../plugins/home-assistant/index.js'
 import { remoteImportsPlugin } from '../plugins/remote-imports/index.js'
+import { cloudConnectionPlugin } from '../plugins/cloud-connection/index.js'
 
 export async function registerBuiltinPlugins(): Promise<void> {
   // Build-exclusive auth providers. The self-hosted (OSS) build uses only
@@ -61,6 +62,15 @@ export async function registerBuiltinPlugins(): Promise<void> {
       runtimeSurfaces: ['platform', 'workspace'],
       managerSurfaces: ['platform', 'workspace'],
       workspaceAccess: 'always'
+    })
+    await pluginRegistry.register(cloudConnectionPlugin, {
+      // Support is a primary product path, and both relays stay dormant until
+      // a person uses them. Administrators can still disable the connection
+      // install-wide or per workspace from the plugin manager.
+      defaultEnabled: true,
+      runtimeSurfaces: ['workspace'],
+      managerSurfaces: ['platform', 'workspace'],
+      workspaceAccess: 'controlled'
     })
   }
   await pluginRegistry.register(modelStudioPlugin, {

@@ -1,6 +1,7 @@
 /**
  * Queue completion tracking. Reconciles queued items against real printer lifecycle
- * events so copies count down and failures surface for manual re-queue.
+ * events so copies count down, completed backlog work leaves the queue, reusable
+ * pinned items reset, and failures surface for manual re-queue.
  *
  * Runs in the background (printer-event handlers have no workspace request context), so
  * it uses `rootPrisma` with an explicit `workspaceId` taken from the event's printer.
@@ -33,16 +34,16 @@ export function createQueueCompletionHandlers(deps: QueueCompletionDeps): QueueC
     printerId: string,
     jobName: string,
     statuses: string[]
-  ): Promise<{ id: string; quantity: number; completedCount: number } | null> {
+  ): Promise<{ id: string; quantity: number; completedCount: number; pinned: boolean } | null> {
     const byJob = await rootPrisma.queueItem.findFirst({
       where: { workspaceId, lastPrintJobId: jobId, status: { in: statuses } },
-      select: { id: true, quantity: true, completedCount: true }
+      select: { id: true, quantity: true, completedCount: true, pinned: true }
     })
     if (byJob) return byJob
     return rootPrisma.queueItem.findFirst({
       where: { workspaceId, lastPrinterId: printerId, lastJobName: jobName, status: { in: statuses } },
       orderBy: { lastDispatchedAt: 'desc' },
-      select: { id: true, quantity: true, completedCount: true }
+      select: { id: true, quantity: true, completedCount: true, pinned: true }
     })
   }
 
@@ -67,17 +68,24 @@ export function createQueueCompletionHandlers(deps: QueueCompletionDeps): QueueC
     if (event.result === 'success') {
       const completedCount = item.completedCount + 1
       const done = completedCount >= item.quantity
-      await rootPrisma.queueItem.update({
-        where: { id: item.id },
-        data: {
-          completedCount,
-          status: done ? 'done' : 'queued',
-          lastResult: 'success',
-          lastFinishedAt: new Date(),
-          // Clear dispatch linkage when re-queuing remaining copies so it can dispatch again.
-          ...(done ? {} : { lastPrintJobId: null, lastDispatchJobId: null })
-        }
-      })
+      if (done && !item.pinned) {
+        // Completed backlog work leaves the queue. A user who wants a reusable
+        // print template explicitly pins it instead.
+        await rootPrisma.queueItem.delete({ where: { id: item.id } })
+      } else {
+        await rootPrisma.queueItem.update({
+          where: { id: item.id },
+          data: {
+            completedCount: done ? 0 : completedCount,
+            status: 'queued',
+            lastResult: 'success',
+            lastFinishedAt: new Date(),
+            // Every reusable or remaining-copy cycle gets fresh dispatch linkage.
+            lastPrintJobId: null,
+            lastDispatchJobId: null
+          }
+        })
+      }
     } else {
       await rootPrisma.queueItem.update({
         where: { id: item.id },

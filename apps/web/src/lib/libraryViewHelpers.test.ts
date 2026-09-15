@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { createSlicingJobSchema, type ThreeMfProjectFilament } from '@printstream/shared'
-import { buildCreateSlicingJobBody, buildPrinterTrayGroups, buildSlicedOutputFileName, buildSlicedPlateLabel, filamentsForMapping, visibleMappingFilaments, type SliceFileSubmitInput } from './libraryViewHelpers'
+import { buildCreateSlicingJobBody, buildPrinterTrayGroups, buildSlicedOutputFileName, buildSlicedPlateLabel, filamentsForMapping, mappingUsesExternalSpool, plateMappingNeedsExternalSpoolChangeAssist, visibleMappingFilaments, type SliceFileSubmitInput } from './libraryViewHelpers'
 import { filterTrayGroupsForFilament } from './printerTrayMapping'
 
 const filament = (id: number, color: string): ThreeMfProjectFilament => ({
@@ -51,6 +51,19 @@ test('visibleMappingFilaments: an unsliced project offers every physical slot bu
 test('filamentsForMapping: an empty used set surfaces all filaments', () => {
 	const visible = filamentsForMapping([white, black], new Set())
 	assert.deepEqual(visible.map((f) => f.id), [1, 2])
+})
+
+test('mappingUsesExternalSpool checks only filaments used by the selected plate', () => {
+	assert.equal(mappingUsesExternalSpool([0, 255], [white]), false)
+	assert.equal(mappingUsesExternalSpool([0, 255], [black]), true)
+	assert.equal(mappingUsesExternalSpool([254], [white]), true)
+	assert.equal(mappingUsesExternalSpool(undefined, [white]), false)
+})
+
+test('external spool change assist requires two visible filaments on the same spool', () => {
+	assert.equal(plateMappingNeedsExternalSpoolChangeAssist([255, 255], [white, black]), true)
+	assert.equal(plateMappingNeedsExternalSpoolChangeAssist([255, 254], [white, black]), false)
+	assert.equal(plateMappingNeedsExternalSpoolChangeAssist([255, 255], [white]), false)
 })
 
 const printSubmitInput = (overrides: Partial<SliceFileSubmitInput> = {}): SliceFileSubmitInput => ({

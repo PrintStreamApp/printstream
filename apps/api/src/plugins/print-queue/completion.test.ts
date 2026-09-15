@@ -15,28 +15,42 @@ function handlers(isEnabledForWorkspace: (workspaceId: string | null) => boolean
   return createQueueCompletionHandlers({ isEnabledForWorkspace, logger })
 }
 
-function stubItem(item: { id: string; quantity: number; completedCount: number } | null) {
+function stubItem(item: { id: string; quantity: number; completedCount: number; pinned: boolean } | null) {
   const updates: Array<Record<string, unknown>> = []
+  const deletes: Array<Record<string, unknown>> = []
   stub(printerManager, 'getWorkspaceId', () => 'workspace-1')
   stub(rootPrisma.queueItem, 'findFirst', async () => item)
   stub(rootPrisma.queueItem, 'update', async ({ data }: { data: Record<string, unknown> }) => {
     updates.push(data)
     return {}
   })
-  return updates
+  stub(rootPrisma.queueItem, 'delete', async (args: Record<string, unknown>) => {
+    deletes.push(args)
+    return {}
+  })
+  return { updates, deletes }
 }
 
-test('a successful final copy marks the item done', async () => {
-  const updates = stubItem({ id: 'q1', quantity: 1, completedCount: 0 })
+test('a successful final copy removes an unpinned item from the queue', async () => {
+  const { updates, deletes } = stubItem({ id: 'q1', quantity: 1, completedCount: 0, pinned: false })
   await handlers().onFinished({ jobId: 'job-1', printer, jobName: 'plate.gcode.3mf', result: 'success' })
-  assert.equal(updates.length, 1)
-  assert.equal(updates[0]?.completedCount, 1)
-  assert.equal(updates[0]?.status, 'done')
+  assert.equal(updates.length, 0)
+  assert.equal(deletes.length, 1)
+})
+
+test('a successful final copy resets a pinned item for another manual start', async () => {
+  const { updates, deletes } = stubItem({ id: 'q1', quantity: 1, completedCount: 0, pinned: true })
+  await handlers().onFinished({ jobId: 'job-1', printer, jobName: 'plate.gcode.3mf', result: 'success' })
+  assert.equal(deletes.length, 0)
+  assert.equal(updates[0]?.completedCount, 0)
+  assert.equal(updates[0]?.status, 'queued')
   assert.equal(updates[0]?.lastResult, 'success')
+  assert.equal(updates[0]?.lastPrintJobId, null)
+  assert.equal(updates[0]?.lastDispatchJobId, null)
 })
 
 test('a successful non-final copy returns the item to the queue and clears dispatch linkage', async () => {
-  const updates = stubItem({ id: 'q1', quantity: 3, completedCount: 0 })
+  const { updates } = stubItem({ id: 'q1', quantity: 3, completedCount: 0, pinned: false })
   await handlers().onFinished({ jobId: 'job-1', printer, jobName: 'plate.gcode.3mf', result: 'success' })
   assert.equal(updates[0]?.completedCount, 1)
   assert.equal(updates[0]?.status, 'queued')
@@ -45,27 +59,27 @@ test('a successful non-final copy returns the item to the queue and clears dispa
 })
 
 test('a failed print moves the item to failed for manual re-queue', async () => {
-  const updates = stubItem({ id: 'q1', quantity: 2, completedCount: 0 })
+  const { updates } = stubItem({ id: 'q1', quantity: 2, completedCount: 0, pinned: false })
   await handlers().onFinished({ jobId: 'job-1', printer, jobName: 'plate.gcode.3mf', result: 'failed' })
   assert.equal(updates[0]?.status, 'failed')
   assert.equal(updates[0]?.lastResult, 'failed')
 })
 
 test('a print start moves a dispatching item to printing', async () => {
-  const updates = stubItem({ id: 'q1', quantity: 1, completedCount: 0 })
+  const { updates } = stubItem({ id: 'q1', quantity: 1, completedCount: 0, pinned: false })
   await handlers().onStarted({ jobId: 'job-1', printer, jobName: 'plate.gcode.3mf' })
   assert.equal(updates[0]?.status, 'printing')
   assert.equal(updates[0]?.lastPrintJobId, 'job-1')
 })
 
 test('no matching queue item is a no-op', async () => {
-  const updates = stubItem(null)
+  const { updates } = stubItem(null)
   await handlers().onFinished({ jobId: 'job-x', printer, jobName: 'plate.gcode.3mf', result: 'success' })
   assert.equal(updates.length, 0)
 })
 
 test('events for a disabled workspace are ignored', async () => {
-  const updates = stubItem({ id: 'q1', quantity: 1, completedCount: 0 })
+  const { updates } = stubItem({ id: 'q1', quantity: 1, completedCount: 0, pinned: false })
   await handlers(() => false).onFinished({ jobId: 'job-1', printer, jobName: 'plate.gcode.3mf', result: 'success' })
   assert.equal(updates.length, 0)
 })

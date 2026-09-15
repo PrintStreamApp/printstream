@@ -43,7 +43,7 @@ function enclosingJsxProp(source: string, at: number): string | null {
 
 test('the api store offers every format its server can convert', () => {
   assert.equal(createApiImportStore().supportsLibrarySource, true)
-  assert.equal(importFileAccept(createApiImportStore()), '.stl,.step,.stp,.3mf,.obj,.gltf,.glb,.amf')
+  assert.equal(importFileAccept(createApiImportStore()), '.stl,.step,.stp,.3mf,.obj,.gltf,.glb,.amf,.fbx')
 })
 
 test('a server-less store offers the same formats, having no library to import from', () => {
@@ -53,7 +53,7 @@ test('a server-less store offers the same formats, having no library to import f
   // depending on which host opened it.
   assert.equal(store.supportsLibrarySource, false)
   assert.deepEqual([...store.importableFormats].sort(), [...createApiImportStore().importableFormats].sort())
-  assert.equal(importFileAccept(store), '.stl,.step,.stp,.3mf,.obj,.gltf,.glb,.amf')
+  assert.equal(importFileAccept(store), '.stl,.step,.stp,.3mf,.obj,.gltf,.glb,.amf,.fbx')
   store.dispose()
 })
 
@@ -122,7 +122,7 @@ test('the import picker takes its accept list from the store', async () => {
   const normalized = (await readFile(path.join(PLUGIN_ROOT, 'EditorView.tsx'), 'utf8')).replace(/\s+/g, ' ')
   // Both halves matter: the input must read the derived value, AND that value must come from the
   // store. Checking only the first let a literal be reintroduced one line up.
-  assert.match(normalized, /accept=\{importAccept\}/)
+  assert.match(normalized, /accept=\{`\$\{importAccept\},\.mtl,\.png,\.jpg,\.jpeg`\}/)
   // Anchored on the closing paren of the memo body: an unanchored prefix match accepted
   // `importFileAccept(importStore) + ',.step,.stp,.3mf'`, which puts the whole bug back.
   assert.match(normalized, /const importAccept = useMemo\(\s*\(\) => importFileAccept\(importStore\),/)

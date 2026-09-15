@@ -4,15 +4,15 @@
  *
  * One panel is mounted per tab, and Joy unmounts the inactive ones, which is what keeps a
  * selection, a page index or a filter from a printer tab leaking into the material tab. Sort
- * order and page size are the deliberate exception: they persist and are shared across kinds,
- * because they are a display preference rather than a property of the list being shown.
+ * order and page size are the deliberate exceptions: page size is shared, while each kind keeps
+ * its own sort field because its metadata differs (for example, only Material has Brand).
  */
 import React, { lazy } from 'react'
 import DeleteRoundedIcon from '@mui/icons-material/DeleteRounded'
 import DownloadRoundedIcon from '@mui/icons-material/DownloadRounded'
 import CompareArrowsRoundedIcon from '@mui/icons-material/CompareArrowsRounded'
 import SearchRoundedIcon from '@mui/icons-material/SearchRounded'
-import { Alert, Button, Chip, FormControl, FormLabel, Select, Sheet, Stack, Tooltip, Typography } from '@mui/joy'
+import { Alert, Button, FormControl, FormLabel, Select, Sheet, Stack, Tooltip, Typography } from '@mui/joy'
 import { extractErrorMessage, MAX_EXPORTABLE_SLICING_PRESETS, type SlicingCapabilities, type SlicingPresetSummary } from '@printstream/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '../../../lib/apiClient'
@@ -22,6 +22,7 @@ import {
   DEFAULT_SLICING_PRESET_SORT_DIRECTION,
   DEFAULT_SLICING_PRESET_SORT_VALUE,
   defaultSlicingPresetSources,
+  formatSlicingPresetSource,
   setAllFilteredSlicingPresetsSelected,
   slicingPresetSourcesAreDefault,
   sortSlicingPresets,
@@ -32,16 +33,19 @@ import {
 } from '../../../lib/slicingPresetDirectory'
 import {
   SLICING_PRESET_FACETS,
+  SLICING_PRESET_SOURCE_FACET,
   collectSlicingPresetFacetOptions,
   countActiveSlicingPresetFacets,
   filterSlicingPresetsForKind,
   findSlicingPresetFacet,
   groupSlicingPresetsByFacet,
+  sortSlicingPresetsByFacet,
   type SlicingPresetFacetSelections
 } from '../../../lib/slicingPresetFacets'
 import { type DirectorySortDirection, type DirectorySortOption } from '../../DirectoryControls'
 import { DirectoryPrimaryToolbar, type ModalSafeStickyTop } from '../../DirectoryToolbar'
 import { EmptyState } from '../../EmptyState'
+import { BulkSelectionActions } from '../../BulkSelectionActions'
 import { LazyDialogBoundary } from '../../LazyDialogBoundary'
 
 // Code-split like every other host of these dialogs: they pull in the whole settings catalog.
@@ -61,10 +65,35 @@ type SlicingPresetPageSize = (typeof SLICING_PRESET_PAGE_SIZE_OPTIONS)[number]
 
 
 // 'kind' is gone from the sort options: every row in a panel is the same kind now.
-const SLICING_PRESET_SORT_OPTIONS: ReadonlyArray<DirectorySortOption<SlicingPresetSortValue>> = [
+const BASE_SLICING_PRESET_SORT_OPTIONS: ReadonlyArray<DirectorySortOption<SlicingPresetSortValue>> = [
   { value: 'updatedAt', label: 'Updated' },
-  { value: 'name', label: 'Name' }
+  { value: 'name', label: 'Name' },
+  { value: 'source', label: 'Source' }
 ]
+
+const FACET_SORT_PREFIX = 'facet:'
+type SlicingPresetPanelSortValue = SlicingPresetSortValue | `${typeof FACET_SORT_PREFIX}${string}`
+
+function slicingPresetSortOptions(
+  kind: SlicingPresetKind
+): ReadonlyArray<DirectorySortOption<SlicingPresetPanelSortValue>> {
+  return [
+    ...BASE_SLICING_PRESET_SORT_OPTIONS,
+    ...SLICING_PRESET_FACETS[kind].map((facet) => ({
+      value: `${FACET_SORT_PREFIX}${facet.id}` as SlicingPresetPanelSortValue,
+      label: facet.label
+    }))
+  ]
+}
+
+const SLICING_PRESET_SORT_OPTIONS_BY_KIND: Record<
+  SlicingPresetKind,
+  ReadonlyArray<DirectorySortOption<SlicingPresetPanelSortValue>>
+> = {
+  machine: slicingPresetSortOptions('machine'),
+  process: slicingPresetSortOptions('process'),
+  filament: slicingPresetSortOptions('filament')
+}
 
 // Legacy `slicingProfiles` spelling reserved: these are persisted per-device display prefs, and
 // renaming them would silently reset every user's sort and page size. See the localSlicingPresets note.
@@ -72,16 +101,39 @@ const SLICING_PRESET_SORT_KEY = 'printstream.slicingProfiles.sort'
 const SLICING_PRESET_SORT_DIR_KEY = 'printstream.slicingProfiles.sortDir'
 const SLICING_PRESET_PAGE_SIZE_KEY = 'printstream.slicingProfiles.pageSize'
 
-const SLICING_PRESET_SORT_VALUES = new Set<string>(SLICING_PRESET_SORT_OPTIONS.map((option) => option.value))
+type SlicingPresetSortPreferences = Record<SlicingPresetKind, SlicingPresetPanelSortValue>
+
+const DEFAULT_SLICING_PRESET_SORT_PREFERENCES: SlicingPresetSortPreferences = {
+  machine: DEFAULT_SLICING_PRESET_SORT_VALUE,
+  process: DEFAULT_SLICING_PRESET_SORT_VALUE,
+  filament: DEFAULT_SLICING_PRESET_SORT_VALUE
+}
 
 /** Sentinel for the grouping control's "off" state; every other value is a facet id. */
 const NO_GROUPING = 'none'
 
-// Coerce stored (or corrupt) preference blobs back into valid values.
-function sanitizeSlicingPresetSort(value: unknown): SlicingPresetSortValue {
-  return SLICING_PRESET_SORT_VALUES.has(value as string)
-    ? (value as SlicingPresetSortValue)
-    : DEFAULT_SLICING_PRESET_SORT_VALUE
+/**
+ * Coerces stored sort preferences into one valid value per tab.
+ *
+ * The old representation was one string shared by every tab. Reading it into each tab preserves
+ * existing preferences while allowing kind-specific fields such as Brand from now on.
+ */
+function sanitizeSlicingPresetSort(value: unknown): SlicingPresetSortPreferences {
+  const stored = typeof value === 'object' && value !== null
+    ? value as Partial<Record<SlicingPresetKind, unknown>>
+    : null
+
+  return (Object.keys(SLICING_PRESET_FACETS) as SlicingPresetKind[]).reduce<SlicingPresetSortPreferences>(
+    (preferences, kind) => {
+      const candidate = stored?.[kind] ?? value
+      const validValues = SLICING_PRESET_SORT_OPTIONS_BY_KIND[kind].map((option) => option.value)
+      preferences[kind] = validValues.includes(candidate as SlicingPresetPanelSortValue)
+        ? candidate as SlicingPresetPanelSortValue
+        : DEFAULT_SLICING_PRESET_SORT_VALUE
+      return preferences
+    },
+    { ...DEFAULT_SLICING_PRESET_SORT_PREFERENCES }
+  )
 }
 
 function sanitizeSlicingPresetSortDirection(value: unknown): DirectorySortDirection {
@@ -103,6 +155,8 @@ export function SlicingPresetKindPanel({ kind, profiles, emptyDescription, stick
   stickyTop?: ModalSafeStickyTop
   stickySurface?: string
 }): JSX.Element {
+  const facets = SLICING_PRESET_FACETS[kind]
+  const sortOptions = SLICING_PRESET_SORT_OPTIONS_BY_KIND[kind]
   const queryClient = useQueryClient()
   const { confirm } = usePromptDialog()
   const [search, setSearch] = React.useState('')
@@ -126,7 +180,12 @@ export function SlicingPresetKindPanel({ kind, profiles, emptyDescription, stick
   // Facet id to group by, or 'none'. Per-kind like the filters (the options differ per kind), so
   // it resets with the panel rather than persisting across tabs.
   const [groupFacetId, setGroupFacetId] = React.useState<string>(NO_GROUPING)
-  const [sortValue, setSortValue] = usePersistentState<SlicingPresetSortValue>(SLICING_PRESET_SORT_KEY, DEFAULT_SLICING_PRESET_SORT_VALUE, sanitizeSlicingPresetSort)
+  const [sortPreferences, setSortPreferences] = usePersistentState<SlicingPresetSortPreferences>(
+    SLICING_PRESET_SORT_KEY,
+    DEFAULT_SLICING_PRESET_SORT_PREFERENCES,
+    sanitizeSlicingPresetSort
+  )
+  const sortValue = sortPreferences[kind]
   const [sortDirection, setSortDirection] = usePersistentState<DirectorySortDirection>(SLICING_PRESET_SORT_DIR_KEY, DEFAULT_SLICING_PRESET_SORT_DIRECTION, sanitizeSlicingPresetSortDirection)
   const [pageSize, setPageSize] = usePersistentState<SlicingPresetPageSize>(SLICING_PRESET_PAGE_SIZE_KEY, SLICING_PRESET_PAGE_SIZE_OPTIONS[0], sanitizeSlicingPresetPageSize)
   const [page, setPage] = React.useState(0)
@@ -174,7 +233,6 @@ export function SlicingPresetKindPanel({ kind, profiles, emptyDescription, stick
   })
   const exportError = exportPresets.error ? extractErrorMessage(exportPresets.error) : null
 
-  const facets = SLICING_PRESET_FACETS[kind]
   // Options come from the unfiltered list so picking one filter never empties the other's menu.
   const facetOptions = React.useMemo(() => collectSlicingPresetFacetOptions(profiles, facets), [facets, profiles])
   const defaultSources = React.useMemo(() => defaultSlicingPresetSources(profiles), [profiles])
@@ -193,12 +251,18 @@ export function SlicingPresetKindPanel({ kind, profiles, emptyDescription, stick
     ),
     [facetSelections, kind, profiles, search, sources]
   )
-  const sortedProfiles = React.useMemo(
-    () => sortSlicingPresets(filteredProfiles, sortValue, sortDirection),
-    [filteredProfiles, sortDirection, sortValue]
-  )
+  const sortFacet = sortValue.startsWith(FACET_SORT_PREFIX)
+    ? findSlicingPresetFacet(kind, sortValue.slice(FACET_SORT_PREFIX.length))
+    : null
+  const sortedProfiles = React.useMemo(() => (
+    sortFacet
+      ? sortSlicingPresetsByFacet(filteredProfiles, sortFacet, sortDirection)
+      : sortSlicingPresets(filteredProfiles, sortValue as SlicingPresetSortValue, sortDirection)
+  ), [filteredProfiles, sortDirection, sortFacet, sortValue])
 
-  const groupFacet = findSlicingPresetFacet(kind, groupFacetId)
+  const groupFacet = groupFacetId === SLICING_PRESET_SOURCE_FACET.id
+    ? SLICING_PRESET_SOURCE_FACET
+    : findSlicingPresetFacet(kind, groupFacetId)
   // Grouped mode shows every match under its group heading and drops paging, matching the spool
   // library (`plugins/filament-manager/SpoolResults.tsx`): paging a grouped list would cut
   // groups in half.
@@ -228,6 +292,8 @@ export function SlicingPresetKindPanel({ kind, profiles, emptyDescription, stick
     () => selectedProfiles.filter((profile) => profile.source === 'custom'),
     [selectedProfiles]
   )
+  /** Built-ins can be compared but remain owned by the slicer and cannot be deleted. */
+  const deletableProfiles = exportableProfiles
   const [comparing, setComparing] = React.useState<[SlicingPresetSummary, SlicingPresetSummary] | null>(null)
   /**
    * Compare needs EXACTLY two presets, and every panel holds one kind, so a selection of two here
@@ -316,18 +382,18 @@ export function SlicingPresetKindPanel({ kind, profiles, emptyDescription, stick
   }
 
   async function handleDeleteSelectedProfiles() {
-    if (selectedProfiles.length === 0) return
+    if (deletableProfiles.length === 0) return
     const confirmed = await confirm({
       title: 'Delete selected presets?',
-      description: selectedProfiles.length === 1
-        ? `Delete ${selectedProfiles[0]?.name ?? 'this preset'}?`
-        : `Delete ${selectedProfiles.length} selected presets?`,
+      description: deletableProfiles.length === 1
+        ? `Delete ${deletableProfiles[0]?.name ?? 'this preset'}?`
+        : `Delete ${deletableProfiles.length} selected presets?`,
       confirmLabel: 'Delete selected',
       color: 'danger'
     })
     if (!confirmed) return
-    await deleteProfiles.mutateAsync(selectedProfiles.map((profile) => profile.id))
-    setSelectionMode(false)
+    await deleteProfiles.mutateAsync(deletableProfiles.map((profile) => profile.id))
+    exitSelectionMode()
   }
 
   // Shared by both result modes. In grouped mode a profile can render in several groups; keying
@@ -396,6 +462,57 @@ export function SlicingPresetKindPanel({ kind, profiles, emptyDescription, stick
     </LazyDialogBoundary>
   )
 
+  const selectionActions = selectionMode ? (
+    <BulkSelectionActions onCancel={exitSelectionMode} cancelDisabled={deleteProfiles.isPending}>
+      <Tooltip title={comparablePair
+        ? 'Compare these two presets side by side'
+        : 'Select exactly two presets to compare'}
+      >
+        <span>
+          <Button
+            size="sm"
+            variant="soft"
+            startDecorator={<CompareArrowsRoundedIcon />}
+            disabled={!comparablePair}
+            onClick={() => { if (comparablePair) setComparing([comparablePair[0], comparablePair[1]]) }}
+          >
+            Compare
+          </Button>
+        </span>
+      </Tooltip>
+      <Tooltip title={exportDisabledReason ?? 'Export the selected custom presets as a BambuStudio bundle'}>
+        <span>
+          <Button
+            size="sm"
+            variant="soft"
+            startDecorator={<DownloadRoundedIcon />}
+            // Built-ins belong to the slicer image rather than the workspace, so exporting one
+            // would hand back a copy that stops tracking the engine it came from. The count
+            // names what WILL be exported so a mixed selection does not read as a silent drop.
+            // Past the cap the button says so rather than letting the route reject the post:
+            // the server's Zod message ("Array must contain at most 200 element(s)") is not
+            // something a user can act on.
+            disabled={exportDisabledReason != null || exportPresets.isPending}
+            loading={exportPresets.isPending}
+            onClick={() => void handleExportSelectedProfiles()}
+          >
+            Export{exportableProfiles.length > 0 ? ` (${exportableProfiles.length})` : ''}
+          </Button>
+        </span>
+      </Tooltip>
+      <Button
+        size="sm"
+        color="danger"
+        startDecorator={<DeleteRoundedIcon />}
+        disabled={deletableProfiles.length === 0}
+        loading={deleteProfiles.isPending && (deleteProfiles.variables?.length ?? 0) > 1}
+        onClick={() => void handleDeleteSelectedProfiles()}
+      >
+        Delete{deletableProfiles.length > 0 ? ` (${deletableProfiles.length})` : ''}
+      </Button>
+    </BulkSelectionActions>
+  ) : null
+
   // The kind has no presets at all, not even built-ins, so the slicer has nothing installed.
   if (profiles.length === 0) {
     return <EmptyState compact icon={<SearchRoundedIcon />} title="No presets yet" description={emptyDescription} />
@@ -405,74 +522,6 @@ export function SlicingPresetKindPanel({ kind, profiles, emptyDescription, stick
     <Stack spacing={1.25}>
       {deleteError && <Alert color="danger">{deleteError}</Alert>}
       {exportError && <Alert color="danger">{exportError}</Alert>}
-
-      <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-        {!selectionMode && filteredProfiles.length > 0 && (
-          <Button size="sm" variant="soft" onClick={() => setSelectionMode(true)}>Select...</Button>
-        )}
-        {selectionMode && (
-          <>
-            <Chip size="sm" variant="soft" color="neutral">{selectedProfiles.length} selected</Chip>
-            <Button
-              size="sm"
-              variant="soft"
-              onClick={() => setSelectedProfileIds((current) => setAllFilteredSlicingPresetsSelected(current, filteredProfiles, !allFilteredProfilesSelected))}
-              disabled={filteredProfiles.length === 0 || deleteProfiles.isPending}
-            >
-              {allFilteredProfilesSelected ? 'Clear all results' : 'Select all results'}
-            </Button>
-            <Button size="sm" variant="plain" onClick={exitSelectionMode} disabled={deleteProfiles.isPending}>
-              Cancel
-            </Button>
-            <Tooltip title={comparablePair
-              ? 'Compare these two presets side by side'
-              : 'Select exactly two presets to compare'}
-            >
-              <span>
-                <Button
-                  size="sm"
-                  variant="soft"
-                  startDecorator={<CompareArrowsRoundedIcon />}
-                  disabled={!comparablePair}
-                  onClick={() => { if (comparablePair) setComparing([comparablePair[0], comparablePair[1]]) }}
-                >
-                  Compare
-                </Button>
-              </span>
-            </Tooltip>
-            <Tooltip title={exportDisabledReason ?? 'Export the selected custom presets as a BambuStudio bundle'}>
-              <span>
-                <Button
-                  size="sm"
-                  variant="soft"
-                  startDecorator={<DownloadRoundedIcon />}
-                  // Built-ins belong to the slicer image rather than the workspace, so exporting one
-                  // would hand back a copy that stops tracking the engine it came from. The count
-                  // names what WILL be exported so a mixed selection does not read as a silent drop.
-                  // Past the cap the button says so rather than letting the route reject the post:
-                  // the server's Zod message ("Array must contain at most 200 element(s)") is not
-                  // something a user can act on.
-                  disabled={exportDisabledReason != null || exportPresets.isPending}
-                  loading={exportPresets.isPending}
-                  onClick={() => void handleExportSelectedProfiles()}
-                >
-                  Export{exportableProfiles.length > 0 ? ` (${exportableProfiles.length})` : ''}
-                </Button>
-              </span>
-            </Tooltip>
-            <Button
-              size="sm"
-              color="danger"
-              startDecorator={<DeleteRoundedIcon />}
-              disabled={selectedProfiles.length === 0}
-              loading={deleteProfiles.isPending && (deleteProfiles.variables?.length ?? 0) > 1}
-              onClick={() => void handleDeleteSelectedProfiles()}
-            >
-              Delete selected{selectedProfiles.length > 0 ? ` (${selectedProfiles.length})` : ''}
-            </Button>
-          </>
-        )}
-      </Stack>
 
       <DirectoryPrimaryToolbar
         stickyTop={stickyTop}
@@ -485,6 +534,19 @@ export function SlicingPresetKindPanel({ kind, profiles, emptyDescription, stick
         }}
         searchPlaceholder="Search preset name"
         searchAriaLabel="Search slicing presets"
+        selection={filteredProfiles.length > 0 || selectionMode ? {
+          active: selectionMode,
+          checked: allFilteredProfilesSelected,
+          indeterminate: selectedFilteredCount > 0 && !allFilteredProfilesSelected,
+          disabled: filteredProfiles.length === 0 || deleteProfiles.isPending,
+          onActivate: () => setSelectionMode(true),
+          onChange: (selected) => setSelectedProfileIds((current) => (
+            setAllFilteredSlicingPresetsSelected(current, filteredProfiles, selected)
+          )),
+          ariaLabel: !selectionMode
+            ? 'Select presets'
+            : allFilteredProfilesSelected ? 'Clear all filtered presets' : 'Select all filtered presets'
+        } : undefined}
         filters={{
           activeCount: activeFilterCount,
           onClear: clearFilters,
@@ -498,7 +560,7 @@ export function SlicingPresetKindPanel({ kind, profiles, emptyDescription, stick
                 value={sources}
                 onChange={(_event, value) => { setPage(0); setSourceSelection((value ?? []) as SlicingPresetSource[]) }}
                 placeholder="All sources"
-                renderValue={() => sources.length === 0 ? null : sources.map((source) => source === 'custom' ? 'User presets' : 'Built-in presets').join(', ')}
+                renderValue={() => sources.length === 0 ? null : sources.map(formatSlicingPresetSource).join(', ')}
                 slotProps={{ listbox: { disablePortal: true } }}
               >
                 <MultiSelectOption value="custom" selected={sources.includes('custom')}>User presets</MultiSelectOption>
@@ -532,11 +594,12 @@ export function SlicingPresetKindPanel({ kind, profiles, emptyDescription, stick
             })
           ]
         }}
-        // The same facets serve as group-by options, so each tab groups by exactly what it filters by.
+        // Source and the kind's facets are both filterable and groupable.
         grouping={{
           value: groupFacetId,
           options: [
             { value: NO_GROUPING, label: 'No grouping' },
+            { value: SLICING_PRESET_SOURCE_FACET.id, label: SLICING_PRESET_SOURCE_FACET.label },
             ...facets.map((facet) => ({ value: facet.id, label: facet.label }))
           ],
           onChange: (value) => {
@@ -553,10 +616,13 @@ export function SlicingPresetKindPanel({ kind, profiles, emptyDescription, stick
         pageSizeAriaLabel="Presets per page"
         pageSizeRenderValue={(value) => `${value} per page`}
         sortValue={sortValue}
-        sortOptions={SLICING_PRESET_SORT_OPTIONS}
+        sortOptions={sortOptions}
         onSortValueChange={(value) => {
           setPage(0)
-          setSortValue(value as SlicingPresetSortValue)
+          setSortPreferences((current) => ({
+            ...current,
+            [kind]: value as SlicingPresetPanelSortValue
+          }))
         }}
         sortDirection={sortDirection}
         onSortDirectionChange={(direction) => {
@@ -567,19 +633,23 @@ export function SlicingPresetKindPanel({ kind, profiles, emptyDescription, stick
       />
 
       {filteredProfiles.length === 0 ? (
-        <EmptyState
-          compact
-          icon={<SearchRoundedIcon />}
-          title="No presets match"
-          description="No custom slicing presets match the current search or filters."
-          action={(search.trim().length > 0 || activeFilterCount > 0) ? (
-            <Button size="sm" variant="plain" color="neutral" onClick={resetSearchAndFilters}>
-              Clear search and filters
-            </Button>
-          ) : undefined}
-        />
+        <Stack spacing={1.25}>
+          {selectionActions}
+          <EmptyState
+            compact
+            icon={<SearchRoundedIcon />}
+            title="No presets match"
+            description="No custom slicing presets match the current search or filters."
+            action={(search.trim().length > 0 || activeFilterCount > 0) ? (
+              <Button size="sm" variant="plain" color="neutral" onClick={resetSearchAndFilters}>
+                Clear search and filters
+              </Button>
+            ) : undefined}
+          />
+        </Stack>
       ) : groups ? (
         <Stack spacing={1.5}>
+          {selectionActions}
           {groups.map((group) => (
             <Stack key={group.key} spacing={0.75}>
               <Typography level="title-sm" textColor="text.tertiary">{group.label} · {group.profiles.length}</Typography>
@@ -588,16 +658,19 @@ export function SlicingPresetKindPanel({ kind, profiles, emptyDescription, stick
           ))}
         </Stack>
       ) : (
-        <PaginatedSection
-          showingLabel={`Showing ${safePage * pageSize + 1}-${Math.min(sortedProfiles.length, (safePage + 1) * pageSize)} of ${sortedProfiles.length}`}
-          previousDisabled={safePage === 0}
-          nextDisabled={safePage >= pageCount - 1}
-          onPrevious={() => setPage((current) => Math.max(0, current - 1))}
-          onNext={() => setPage((current) => Math.min(pageCount - 1, current + 1))}
-          spacing={1.25}
-        >
-          <PresetRowList>{visibleProfiles.map(renderProfileRow)}</PresetRowList>
-        </PaginatedSection>
+        <Stack spacing={1.25}>
+          {selectionActions}
+          <PaginatedSection
+            showingLabel={`Showing ${safePage * pageSize + 1}-${Math.min(sortedProfiles.length, (safePage + 1) * pageSize)} of ${sortedProfiles.length}`}
+            previousDisabled={safePage === 0}
+            nextDisabled={safePage >= pageCount - 1}
+            onPrevious={() => setPage((current) => Math.max(0, current - 1))}
+            onNext={() => setPage((current) => Math.min(pageCount - 1, current + 1))}
+            spacing={1.25}
+          >
+            <PresetRowList>{visibleProfiles.map(renderProfileRow)}</PresetRowList>
+          </PaginatedSection>
+        </Stack>
       )}
       {editor}
       {comparing && (

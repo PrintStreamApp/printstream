@@ -134,6 +134,27 @@ test('retarget blanks the inherited machine parent so the CLI derives the system
   assert.deepEqual(out.inherits_group, ['0.20mm Standard @BBL A1M', 'Bambu PLA Basic @BBL A1M', 'Bambu PLA Basic @BBL A1M', ''])
 })
 
+test('retarget keeps a custom machine linked to its system parent', () => {
+  const out = retargetProjectSettingsToMachine({
+    ...a1Project,
+    inherits_group: ['0.20mm Standard @BBL A1M', 'PLA parent 1', 'PLA parent 2', 'Old machine']
+  }, {
+    ...h2dMachine,
+    name: 'Custom H2D'
+  }, {
+    printerSettingsId: 'Custom H2D',
+    printerModel: 'Bambu Lab H2D',
+    printerPresetInherits: 'Bambu Lab H2D 0.4 nozzle'
+  })
+
+  assert.deepEqual(out.inherits_group, [
+    '0.20mm Standard @BBL A1M',
+    'PLA parent 1',
+    'PLA parent 2',
+    'Bambu Lab H2D 0.4 nozzle'
+  ])
+})
+
 test('the machine parent is cleared at the filament-count index, not at the array end', () => {
   // Regression: derived from `inherits_group.length - 1`, this blanked whatever entry happened to
   // sit last. On a project carrying a LONG record (a stale slot left by an earlier save) that is

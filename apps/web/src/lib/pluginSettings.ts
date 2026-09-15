@@ -5,8 +5,9 @@
  * resolves display names and the platform/workspace surfaces a plugin supports, and
  * parses disabled/not-installed plugin names out of API error messages.
  */
-import type { PluginCatalogEntry, PluginManagementEntry, PluginSurface } from '@printstream/shared'
-import type { WebPlugin } from '../plugin/types'
+import type { AuthActorSummary, PluginCatalogEntry, PluginManagementEntry, PluginSurface } from '@printstream/shared'
+import type { WebPlugin, WebPluginSlot } from '../plugin/types'
+import type { RegisteredWebPluginSlot } from '../plugin/registry'
 
 export type ApiPluginInfo = PluginCatalogEntry | PluginManagementEntry
 
@@ -83,6 +84,45 @@ export function isPluginActiveByName(
   if (!hasPluginState) return false
   const plugin = apiPluginsByName.get(pluginName)
   return plugin ? plugin.availableInCurrentContext && plugin.installed && plugin.enabled : true
+}
+
+/** Whether the current actor satisfies a slot's person-identity requirement. */
+export function pluginSlotSupportsActor(
+  slot: Pick<WebPluginSlot, 'requiresAuthenticatedUser'>,
+  actorType: AuthActorSummary['type'] | undefined
+): boolean {
+  return !slot.requiresAuthenticatedUser || actorType === 'user'
+}
+
+/** Whether a web contribution belongs in the current deployment mode. */
+export function pluginSupportsDeployment(
+  plugin: Pick<WebPlugin, 'selfHostedOnly' | 'cloudOnly'>,
+  selfHosted: boolean
+): boolean {
+  if (plugin.selfHostedOnly && !selfHosted) return false
+  if (plugin.cloudOnly && selfHosted) return false
+  return true
+}
+
+/**
+ * Apply the deployment, actor, surface, and persisted-state gates shared by
+ * `<PluginSlot />` and shell decisions that need to know whether a slot exists.
+ */
+export function activePluginSlots(
+  slots: readonly RegisteredWebPluginSlot[],
+  options: {
+    selfHosted: boolean
+    actorType: AuthActorSummary['type'] | undefined
+    currentSurface: PluginSurface
+    apiPluginsByName: ReadonlyMap<string, ApiPluginInfo>
+    hasPluginState: boolean
+  }
+): RegisteredWebPluginSlot[] {
+  return slots
+    .filter((slot) => pluginSupportsDeployment(slot, options.selfHosted))
+    .filter((slot) => pluginSlotSupportsActor(slot, options.actorType))
+    .filter((slot) => pluginSupportsRuntimeSurface(slot, options.currentSurface))
+    .filter((slot) => isPluginActiveByName(slot.pluginName, options.apiPluginsByName, options.hasPluginState))
 }
 
 /**

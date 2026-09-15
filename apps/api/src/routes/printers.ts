@@ -38,6 +38,7 @@ import {
   getExternalSpoolLoadAvailability,
   getExternalSpoolUnloadAvailability,
   getIgnoreHmsErrorAvailability,
+  getNozzleRackControlAvailability,
   canUseExtruderControl,
   canUseMotionControl,
   canUsePrintSpeedControl,
@@ -142,6 +143,7 @@ import {
 } from '../lib/print-dispatcher.js'
 import { calibrationOption } from '../lib/printer-calibration.js'
 import { commandToMqttPayloads, resolvePressureAdvanceCommandContext } from '../lib/printer-command-payloads.js'
+import { observePrinterSettingConfirmation } from '../lib/printer-setting-confirmation.js'
 import { plateSkipIdentifyIdsFromIndex } from '../lib/three-mf-output.js'
 import { armPostStartObjectSkip } from '../lib/post-start-object-skip.js'
 import { startCalibrationJob } from '../lib/calibration-jobs.js'
@@ -547,12 +549,14 @@ printersRouter.post('/:id/command', async (request, response) => {
   }
 
   const payloads = commandToMqttPayloads(existing.model, parsed.data, status)
+  const settingConfirmation = observePrinterSettingConfirmation(existing.id, parsed.data)
   if (payloads.length > 0) {
     let anySent = false
     for (const payload of payloads) {
       if (printerManager.publishCommand(existing.id, payload)) anySent = true
     }
     if (!anySent) {
+      settingConfirmation?.cancel()
       if (parsed.data.type === 'refresh') {
         await reconnectPrinter(toPrinterDto(existing))
         response.status(202).end()
@@ -560,6 +564,10 @@ printersRouter.post('/:id/command', async (request, response) => {
       }
       throw badRequest('Printer is not connected: command was not delivered')
     }
+  }
+  if (settingConfirmation && !await settingConfirmation.promise) {
+    console.warn(`[printer-setting] ${existing.name} did not confirm ${parsed.data.type}`)
+    throw conflict('The printer did not confirm the setting change. Its previous value has been kept.')
   }
   const commandAudit = describePrinterCommandAudit(parsed.data)
   if (commandAudit) {
@@ -659,6 +667,10 @@ function getPrinterCommandPermission(
     case 'clearHmsErrors':
       return PRINTERS_CONTROL_HMS_CLEAR_SCOPE
     case 'setPrintOption':
+    case 'setPurifyAirAtPrintEnd':
+    case 'setOpenDoorDetection':
+    case 'setSmartNozzleBlobDetection':
+    case 'setCameraResolution':
       return PRINTERS_MANAGE_SETTINGS_SCOPE
     case 'setAmsUserSettings':
     case 'setAmsFilamentBackup':
@@ -722,6 +734,16 @@ function describePrinterCommandAudit(
       return { action: 'set-air-management', resource: 'printer', summary: 'Changed air management mode' }
     case 'setPrintOption':
       return { action: 'set-print-option', resource: 'printer', summary: `Changed print option ${command.option} (${command.enabled ? 'on' : 'off'})` }
+    case 'setPurifyAirAtPrintEnd':
+      return { action: 'set-print-option', resource: 'printer', summary: `Changed end-of-print air purification to ${command.mode}` }
+    case 'setOpenDoorDetection':
+      return { action: 'set-print-option', resource: 'printer', summary: `Changed open-door detection to ${command.mode}` }
+    case 'setSmartNozzleBlobDetection':
+      return { action: 'set-print-option', resource: 'printer', summary: `Changed smart nozzle blob detection to ${command.mode}` }
+    case 'setCameraResolution':
+      return { action: 'set-camera-resolution', resource: 'printer', summary: `Changed camera resolution to ${command.resolution}` }
+    case 'controlNozzleRack':
+      return { action: 'control-nozzle-rack', resource: 'printer', summary: `Requested nozzle rack action ${command.action}` }
     case 'setNozzleTemperature':
       return { action: 'set-nozzle-temperature', resource: 'printer', summary: `Set nozzle temperature to ${command.target}C` }
     case 'setBedTemperature':
@@ -796,6 +818,14 @@ function describePrinterCommandAuditMetadata(
       return { lightNode: command.node, on: command.on }
     case 'setPrintOption':
       return { option: command.option, enabled: command.enabled }
+    case 'setPurifyAirAtPrintEnd':
+    case 'setOpenDoorDetection':
+    case 'setSmartNozzleBlobDetection':
+      return { mode: command.mode }
+    case 'setCameraResolution':
+      return { resolution: command.resolution }
+    case 'controlNozzleRack':
+      return { action: command.action }
     case 'setFanSpeed':
       return { fan: command.fan, percent: command.percent }
     case 'setNozzleTemperature':
@@ -903,6 +933,39 @@ function validatePrinterControlCommand(
       return
     case 'setPrintOption':
       requireLiveControlConnection(status, 'Printer settings')
+      if (status?.printOptions[command.option]?.supported !== true) {
+        throw badRequest('This printer has not reported support for that setting')
+      }
+      return
+    case 'setPurifyAirAtPrintEnd':
+      requireLiveControlConnection(status, 'Printer settings')
+      if (status?.printOptions.purifyAirAtPrintEnd?.supported !== true) {
+        throw badRequest('This printer has not reported support for end-of-print air purification')
+      }
+      return
+    case 'setOpenDoorDetection':
+      requireLiveControlConnection(status, 'Printer settings')
+      if (status?.printOptions.openDoorDetection?.supported !== true) {
+        throw badRequest('This printer has not reported support for open-door detection')
+      }
+      return
+    case 'setSmartNozzleBlobDetection':
+      requireLiveControlConnection(status, 'Printer settings')
+      if (status?.printOptions.smartNozzleBlobDetection?.supported !== true) {
+        throw badRequest('This printer has not reported support for smart nozzle blob detection')
+      }
+      return
+    case 'setCameraResolution':
+      requireLiveControlConnection(status, 'Camera settings')
+      if (
+        status?.printOptions.cameraResolution?.supported !== true
+        || !status.printOptions.cameraResolution.available.includes(command.resolution)
+      ) {
+        throw badRequest('This printer has not reported that camera resolution as available')
+      }
+      return
+    case 'controlNozzleRack':
+      requirePrinterActionAvailability(getNozzleRackControlAvailability(status))
       return
     case 'setNozzleTemperature':
       requireLiveControlConnection(status, 'Temperature control')
@@ -1667,6 +1730,7 @@ printersRouter.post('/:id/storage/print', requireRequestPermission(PRINTS_DISPAT
         amsMapping: parsed.data.amsMapping,
         allowIncompatibleFilament: parsed.data.allowIncompatibleFilament,
         allowFilamentTrackSwitchMismatch: parsed.data.allowFilamentTrackSwitchMismatch,
+        allowPrinterModelMismatch: parsed.data.allowPrinterModelMismatch,
         allowInsufficientFilament: parsed.data.allowInsufficientFilament,
         allowBlacklistedFilament: parsed.data.allowBlacklistedFilament
       })
@@ -1773,6 +1837,8 @@ printersRouter.post('/:id/storage/print', requireRequestPermission(PRINTS_DISPAT
         filamentDynamicsCalibration: normalizedOptions.filamentDynamicsCalibration,
         nozzleOffsetCalibration: normalizedOptions.nozzleOffsetCalibration,
         timelapse: normalizedOptions.timelapse,
+        timelapseStorage: normalizedOptions.timelapseStorage,
+        externalFilamentChangeAssist: normalizedOptions.externalFilamentChangeAssist,
         useAms: parsed.data.useAms,
         amsMapping: parsed.data.amsMapping,
         dualNozzles: printerModelHasDualNozzles(printer.model),

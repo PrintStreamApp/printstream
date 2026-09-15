@@ -33,7 +33,7 @@ import { SlicingEditorAction } from './SlicingEditorAction'
 export const modelStudioPlugin: WebPlugin = {
   name: 'model-studio',
   version: '0.1.0',
-  description: '3D studio for library files: a multi-plate 3MF project editor with painting, supports, and per-layer filament changes, plus STL, STEP, plated 3MF, and G-code previews.',
+  description: '3D studio for library files: a multi-plate 3MF project editor with painting, supports, per-layer filament changes, mesh previews, and G-code previews.',
   slots: [
     { name: 'library.fileActions', component: LibraryPreviewAction },
     { name: 'library.fileActions', component: LibraryOpenInBambuStudioAction },

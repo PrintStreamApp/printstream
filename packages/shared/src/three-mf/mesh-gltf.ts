@@ -8,8 +8,8 @@
  * WHY NOT three.js's `GLTFLoader`. It is already in the web app, but `packages/shared` depends on
  * `zod` alone and is consumed by the api and the bridge, so pulling three.js in would land a
  * browser-oriented 3D library in two processes that have no use for one. The loader also produces
- * `BufferGeometry` and materials, where the ~150 lines below produce the flat positions/indices the
- * 3MF writer actually wants. Geometry-only glTF is a small, fully specified subset.
+ * host-specific scene objects, while this module produces the flat mesh, source colours, and part
+ * structure the 3MF writer and filament mapper actually need.
  *
  * NODES ARE FLATTENED, MESHES BECOME PARTS. A glTF scene is a transform hierarchy; a 3MF import is
  * one object. So each node's world matrix is composed down the tree and baked into its vertices, and
@@ -26,17 +26,25 @@
  *  - Draco / meshopt / any `KHR_draco_mesh_compression` primitive: the geometry is behind a codec we
  *    do not ship, so the accessor data is not readable at all.
  *  - A `.gltf` naming external buffers or images by relative URI. Both hosts import a SINGLE file,
- *    so a sibling `.bin` is a file we are never handed. Embedded `data:` URIs and GLB's own binary
- *    chunk are fine, which is what the great majority of exported assets use.
+ *    so a sibling resource is a file we are never handed. Embedded `data:` URIs and GLB buffer
+ *    views are fine, which is what the great majority of exported assets use.
  * Both throw with the reason, because a scene that quietly imports missing half its meshes is worse
  * than one that says why it cannot.
  *
- * NOT HANDLED: textures, materials, animation, skins, morph targets. This is a geometry importer.
- * The texture-to-filament-painting half of issue #90 is where image data earns its keep.
+ * Base-colour textures and factors become filament-paint source colours. Other material channels,
+ * animation, skins, and morph targets are not represented by a printable triangle surface.
  */
-import { assertImportTriangleBudget, computeMeshBounds, mergeImportedMeshes, weldImportedMeshVertices } from './mesh-stl.js'
+import { assertImportTriangleBudget, computeMeshBounds, MAX_IMPORT_TRIANGLES, mergeImportedMeshes, weldImportedMeshVertices } from './mesh-stl.js'
 import { ModelImportError } from './imported-mesh.js'
 import type { ImportedMesh, ImportedMeshPart } from './imported-mesh.js'
+import { sampleTexturedTriangles, type DecodedTextureImage } from './mesh-texture.js'
+import {
+  countTexturedGltfPrimitiveInstances,
+  decodeGltfDataUri,
+  decodeReferencedGltfTextureImages,
+  gltfPrimitiveAppearance,
+  texturedTrianglesFromGltfPrimitive
+} from './mesh-gltf-texture.js'
 
 /** glTF works in metres; every other format here and the 3MF writer work in millimetres. */
 const GLTF_MILLIMETRES_PER_UNIT = 1000
@@ -58,13 +66,20 @@ const MODE_TRIANGLES = 4
  * Accepts bytes rather than text so the GLB and JSON containers can be told apart by magic number
  * exactly as a binary and ASCII STL are, rather than by trusting the extension the user typed.
  */
-export function parseGltfMesh(bytes: Uint8Array): ImportedMesh {
+export function parseGltfMesh(
+  bytes: Uint8Array,
+  options: { decodedImages?: ReadonlyMap<number, DecodedTextureImage> } = {}
+): ImportedMesh {
   const { json, binary } = isGlb(bytes) ? readGlbChunks(bytes) : { json: readGltfJson(bytes), binary: undefined }
   const buffers = resolveBuffers(json, binary)
   const parts: ImportedMeshPart[] = []
+  const flatNodes = flattenNodes(json)
+  const texturedPrimitiveCount = countTexturedGltfPrimitiveInstances(json, flatNodes, options.decodedImages)
+  const textureTarget = texturedPrimitiveCount > 0 ? Math.ceil(10_000 / texturedPrimitiveCount) : 0
   let triangleCount = 0
+  let outputTriangleCount = 0
 
-  for (const node of flattenNodes(json)) {
+  for (const node of flatNodes) {
     const mesh = (json.meshes ?? [])[node.mesh]
     if (mesh == null) continue
     for (const [index, primitive] of (mesh.primitives ?? []).entries()) {
@@ -83,6 +98,7 @@ export function parseGltfMesh(bytes: Uint8Array): ImportedMesh {
         ? Array.from({ length: positions.length / 3 }, (_, vertex) => vertex)
         : readAccessorIntegers(json, buffers, primitive.indices)
       if (indices.length < 3) continue
+      if (indices.length % 3 !== 0) throw new ModelImportError('glTF triangle index count is not divisible by three')
 
       // Indices come from the file and are NOT implied by the accessor bounds check: an index may
       // sit comfortably inside its own accessor and still name a vertex the POSITION accessor does
@@ -109,13 +125,65 @@ export function parseGltfMesh(bytes: Uint8Array): ImportedMesh {
       if (matrixMirrors(node.matrix)) reverseTriangleWinding(indices)
       const name = (mesh.name ?? node.name ?? `Mesh ${parts.length + 1}`) +
         ((mesh.primitives ?? []).length > 1 ? ` (${index + 1})` : '')
-      parts.push({ name, mesh: weldImportedMeshVertices({ positions, indices, bounds: computeMeshBounds(positions) }) })
+      const appearance = gltfPrimitiveAppearance(
+        json,
+        buffers,
+        primitive,
+        vertexCount,
+        options.decodedImages,
+        readTextureCoordinates
+      )
+      let imported: ImportedMesh
+      if (appearance?.texture && appearance.uvs) {
+        const triangles = texturedTrianglesFromGltfPrimitive(
+          positions,
+          indices,
+          appearance.uvs,
+          appearance.texture,
+          appearance.factor,
+          { wrapU: appearance.wrapU, wrapV: appearance.wrapV }
+        )
+        imported = sampleTexturedTriangles(triangles, {
+          targetTriangles: textureTarget,
+          maxTriangles: Math.max(triangles.length, MAX_IMPORT_TRIANGLES - outputTriangleCount)
+        })
+      } else {
+        const triangleCornerColors = appearance?.hasExplicitFactor
+          ? Array.from({ length: indices.length }, () => appearance.factor).flat()
+          : undefined
+        imported = weldImportedMeshVertices({
+          positions,
+          indices,
+          bounds: computeMeshBounds(positions),
+          ...(triangleCornerColors
+            ? { triangleCornerColors, sourceColorMode: 'material' as const }
+            : {})
+        })
+      }
+      outputTriangleCount += imported.indices.length / 3
+      assertImportTriangleBudget(outputTriangleCount)
+      parts.push({ name, mesh: imported })
     }
   }
 
   if (parts.length === 0) throw new ModelImportError('glTF contained no triangles')
   const merged = mergeImportedMeshes(parts.map((part) => part.mesh))
   return parts.length > 1 ? { ...merged, parts } : merged
+}
+
+/**
+ * Decode only image sources reached by mesh primitives in the active scene.
+ *
+ * External image URIs are refused because the editor currently stages glTF as one self-contained
+ * file. Embedded data URIs and GLB buffer-view images are passed to the host image decoder.
+ */
+export async function decodeGltfTextureImages(
+  bytes: Uint8Array,
+  decodeTexture: (name: string, bytes: Uint8Array) => Promise<DecodedTextureImage> | DecodedTextureImage
+): Promise<Map<number, DecodedTextureImage>> {
+  const { json, binary } = isGlb(bytes) ? readGlbChunks(bytes) : { json: readGltfJson(bytes), binary: undefined }
+  const buffers = resolveBuffers(json, binary)
+  return decodeReferencedGltfTextureImages(json, buffers, flattenNodes(json), decodeTexture)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -183,37 +251,9 @@ function resolveBuffers(json: GltfDocument, binary: Uint8Array | undefined): Uin
       if (!binary) throw new ModelImportError('glTF file is missing its binary chunk')
       return binary
     }
-    if (buffer.uri.startsWith('data:')) return decodeDataUri(buffer.uri)
+    if (buffer.uri.startsWith('data:')) return decodeGltfDataUri(buffer.uri)
     throw new ModelImportError('This glTF refers to a separate binary file, so only a self-contained .glb or .gltf can be imported')
   })
-}
-
-/**
- * Decode a `data:` buffer URI.
- *
- * Both decoders raise errors that are NOT ours and must not escape: `atob` throws a `DOMException`
- * on malformed base64 (in a browser that is not even `instanceof Error`) and `decodeURIComponent`
- * throws a `URIError`. Either one reaching the caller is classified as a runtime failure rather than
- * a bad file, so the staging worker re-parses on the main thread -- freezing the tab on its way to
- * showing the user "Invalid character" as the reason their model would not import.
- */
-function decodeDataUri(uri: string): Uint8Array {
-  const comma = uri.indexOf(',')
-  if (comma < 0) throw new ModelImportError('glTF file could not be read')
-  const payload = uri.slice(comma + 1)
-  try {
-    if (!/;base64$/i.test(uri.slice(0, comma))) {
-      // Percent-encoded text payloads are legal but never produced for binary buffers.
-      return new TextEncoder().encode(decodeURIComponent(payload))
-    }
-    // `atob` rather than `Buffer`: this module runs in the browser too, where there is no Buffer.
-    const binary = atob(payload)
-    const bytes = new Uint8Array(binary.length)
-    for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index)
-    return bytes
-  } catch {
-    throw new ModelImportError('glTF file could not be read')
-  }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -229,7 +269,7 @@ function decodeDataUri(uri: string): Uint8Array {
 function readAccessorFloats(json: GltfDocument, buffers: Uint8Array[], accessorIndex: number, components: number): number[] {
   const { view, accessor, stride } = accessorView(json, buffers, accessorIndex)
   const size = COMPONENT_BYTES[accessor.componentType]
-  if (size == null || accessor.componentType !== 5126) {
+  if (size == null || accessor.componentType !== 5126 || accessor.type !== 'VEC3') {
     throw new ModelImportError('glTF vertex positions are in a format that cannot be imported')
   }
   const out: number[] = []
@@ -238,6 +278,29 @@ function readAccessorFloats(json: GltfDocument, buffers: Uint8Array[], accessorI
     for (let component = 0; component < components; component += 1) {
       out.push(view.getFloat32(base + component * size, true) * GLTF_MILLIMETRES_PER_UNIT)
     }
+  }
+  return out
+}
+
+/** Read VEC2 texture coordinates, including the normalized integer encodings glTF permits. */
+function readTextureCoordinates(json: GltfDocument, buffers: Uint8Array[], accessorIndex: number): number[] {
+  const { view, accessor, stride } = accessorView(json, buffers, accessorIndex)
+  if (accessor.type !== 'VEC2') throw new ModelImportError('glTF texture coordinates are in a format that cannot be imported')
+  const size = COMPONENT_BYTES[accessor.componentType]
+  if (size == null) throw new ModelImportError('glTF texture coordinates are in a format that cannot be imported')
+  let read: ((at: number) => number) | null = null
+  if (accessor.componentType === 5126) {
+    read = (at) => view.getFloat32(at, true)
+  } else if (accessor.componentType === 5121 && accessor.normalized) {
+    read = (at) => view.getUint8(at) / 255
+  } else if (accessor.componentType === 5123 && accessor.normalized) {
+    read = (at) => view.getUint16(at, true) / 65535
+  }
+  if (!read) throw new ModelImportError('glTF texture coordinates are in a format that cannot be imported')
+  const out: number[] = []
+  for (let element = 0; element < accessor.count; element += 1) {
+    const base = element * (stride || 2 * size)
+    out.push(read(base), read(base + size))
   }
   return out
 }
@@ -432,7 +495,7 @@ function applyNodeMatrix(positions: number[], matrix: readonly number[]): void {
 // every field is optional in the spec, the failure modes that matter are bounds (handled above), and
 // a schema over the whole document would reject files the spec allows and we can read.
 
-interface GltfDocument {
+export interface GltfDocument {
   scene?: number
   scenes?: Array<{ nodes?: number[] }>
   nodes?: GltfNode[]
@@ -440,6 +503,38 @@ interface GltfDocument {
   accessors?: GltfAccessor[]
   bufferViews?: Array<{ buffer: number; byteOffset?: number; byteLength?: number; byteStride?: number }>
   buffers?: Array<{ uri?: string; byteLength?: number }>
+  images?: GltfImage[]
+  textures?: Array<{
+    source?: number
+    sampler?: number
+    extensions?: { KHR_texture_basisu?: unknown; EXT_texture_webp?: unknown }
+  }>
+  samplers?: Array<{ wrapS?: number; wrapT?: number }>
+  materials?: Array<{ pbrMetallicRoughness?: GltfPbrMaterial }>
+}
+
+interface GltfImage {
+  uri?: string
+  bufferView?: number
+  mimeType?: string
+}
+
+interface GltfPbrMaterial {
+  baseColorFactor?: number[]
+  baseColorTexture?: GltfTextureInfo
+}
+
+interface GltfTextureInfo {
+  index: number
+  texCoord?: number
+  extensions?: { KHR_texture_transform?: GltfTextureTransform }
+}
+
+export interface GltfTextureTransform {
+  offset?: number[]
+  rotation?: number
+  scale?: number[]
+  texCoord?: number
 }
 
 interface GltfNode {
@@ -452,11 +547,12 @@ interface GltfNode {
   scale?: number[]
 }
 
-interface GltfPrimitive {
+export interface GltfPrimitive {
   attributes?: Record<string, number>
   indices?: number
   mode?: number
   extensions?: Record<string, unknown>
+  material?: number
 }
 
 interface GltfAccessor {
@@ -466,4 +562,5 @@ interface GltfAccessor {
   count: number
   type: string
   sparse?: unknown
+  normalized?: boolean
 }

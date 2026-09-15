@@ -129,11 +129,13 @@ test('choosing a different printer is undoable and restores the previous target'
   const controller = makeController(START)
   const { result, refresh } = renderHistory(controller)
   assert.equal(result.current.canUndo, false)
+  const initialRevision = result.current.revision
 
   act(() => { result.current.sliceConfigForPanel!.selectPrinter({ id: 'printer-b' } as never) })
   refresh()
   assert.equal(result.current.canUndo, true, 'a printer pick must record a checkpoint')
   assert.equal(result.current.hasUnsavedChanges, true)
+  assert.ok(result.current.revision > initialRevision, 'slice-result owners must see the input change')
   assert.equal(controller.read().printerId, 'printer-b')
 
   act(() => { result.current.undo() })

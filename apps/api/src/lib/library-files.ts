@@ -440,7 +440,8 @@ export async function deleteLibraryFolderTree(
   return { deletedFiles: rows.length }
 }
 
-function buildLibraryStoredPath(fileName: string): string {
+/** Build a collision-resistant bridge path for a newly materialized library file. */
+export function buildLibraryStoredPath(fileName: string): string {
   const safe = fileName.replace(/[^\w.-]+/g, '_')
   // A short random token disambiguates two uploads of the same name within the
   // same millisecond, without it they'd resolve to one storedPath and the two
@@ -617,11 +618,12 @@ export async function discardHiddenSlicedOutput(fileId: string): Promise<boolean
 async function discardUnreferencedProjectSnapshot(projectFileId: string | null): Promise<void> {
   if (!projectFileId) return
   try {
-    const [outputs, jobs] = await Promise.all([
+    const [outputs, jobs, cacheEntries] = await Promise.all([
       prisma.libraryFile.count({ where: { sourceProjectFileId: projectFileId } }),
-      prisma.printJob.count({ where: { sourceProjectFileId: projectFileId } })
+      prisma.printJob.count({ where: { sourceProjectFileId: projectFileId } }),
+      prisma.sliceCacheEntry.count({ where: { sourceProjectFileId: projectFileId } })
     ])
-    if (outputs > 0 || jobs > 0) return
+    if (outputs > 0 || jobs > 0 || cacheEntries > 0) return
     const project = await prisma.libraryFile.findUnique({
       where: { id: projectFileId },
       select: { id: true, ownerBridgeId: true, storedPath: true, snapshotKey: true }

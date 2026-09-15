@@ -71,6 +71,8 @@ export interface EditorHistory {
    * project, tracked as a signature-vs-baseline diff: see the retarget-signature block).
    */
   hasUnsavedChanges: boolean
+  /** Monotonic signal that an output-affecting scene or slice-settings operation occurred. */
+  revision: number
   canUndo: boolean
   canRedo: boolean
   undo: () => void
@@ -80,6 +82,8 @@ export interface EditorHistory {
   /** Snapshot the current scene before a scene mutation begins. */
   recordHistory: () => void
   recordHistoryRef: MutableRefObject<() => void>
+  /** Snapshot scene and slice configuration for one action that changes both. */
+  recordCombinedHistory: () => void
   /** Snapshot the current slice configuration before a settings mutation begins. */
   recordSliceConfigHistory: () => void
   /** Slice controller wrapped so settings edits record an undo checkpoint first. */
@@ -108,6 +112,7 @@ export function useEditorHistory({
   const [dirty, setDirty] = useState(false)
   const [canUndo, setCanUndo] = useState(false)
   const [canRedo, setCanRedo] = useState(false)
+  const [revision, setRevision] = useState(0)
 
   // Push the model's flags into refs/state after any operation that changes them.
   const syncFlags = useCallback(() => {
@@ -116,6 +121,7 @@ export function useEditorHistory({
     setDirty(model.isDirty)
     setCanUndo(model.canUndo)
     setCanRedo(model.canRedo)
+    setRevision((current) => current + 1)
     // Unsaved edits block an automatic reload onto a new build (`lib/appStaleness.ts`).
     // The `beforeunload` guard below cannot cover that: a scripted reload never triggers
     // it, and mobile Safari ignores it outright.
@@ -210,6 +216,17 @@ export function useEditorHistory({
   }, [syncFlags, stateRef])
   const recordHistoryRef = useRef(recordHistory)
   recordHistoryRef.current = recordHistory
+
+  /** Snapshot both ownership domains before one gesture changes geometry and material slots. */
+  const recordCombinedHistory = useCallback(() => {
+    const current = stateRef.current
+    if (!current) return
+    modelRef.current!.record({
+      state: cloneEditorState(current),
+      sliceConfig: configSnapshotRef.current ?? null
+    })
+    syncFlags()
+  }, [syncFlags, stateRef])
 
   /** Snapshot the current slice configuration before a settings mutation begins. */
   const recordSliceConfigHistory = useCallback(() => {
@@ -394,6 +411,7 @@ export function useEditorHistory({
     markSaved,
     rebaseFilamentSources,
     hasUnsavedChanges,
+    revision,
     canUndo,
     canRedo,
     undo,
@@ -402,6 +420,7 @@ export function useEditorHistory({
     redoRef,
     recordHistory,
     recordHistoryRef,
+    recordCombinedHistory,
     recordSliceConfigHistory,
     sliceConfigForPanel
   }

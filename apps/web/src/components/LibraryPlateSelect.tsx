@@ -8,6 +8,7 @@ import { buildApiUrl } from '../lib/apiUrl'
 import { getSceneThumbnailProvider } from '../lib/modelThumbnailRegistry'
 import { OverflowTooltipText } from './OverflowTooltipText'
 import { SquareMediaFrame } from './SquareMediaFrame'
+import { PLATE_PICKER_TILE_WIDTH_PX } from './platePickerLayout'
 
 export function LibraryPlateSelect({
   fileId,
@@ -163,7 +164,7 @@ export function LibraryPlateCardPicker({
                 // `flex` fixes the MAIN axis, which flips with the orientation, in a rail the
                 // tile fills the width and its height is what must not stretch.
                 flex: '0 0 auto',
-                width: orientation === 'vertical' ? '100%' : (collapsed ? 'auto' : 140),
+                width: orientation === 'vertical' ? '100%' : (collapsed ? 'auto' : PLATE_PICKER_TILE_WIDTH_PX),
                 maxWidth: orientation === 'vertical' ? '100%' : (collapsed ? 200 : undefined),
                 p: 0.75,
                 border: 0,

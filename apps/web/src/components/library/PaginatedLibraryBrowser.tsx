@@ -38,6 +38,7 @@ export function PaginatedLibraryBrowser({
   pagedFiles,
   pagination,
   emptyState,
+  beforeItems,
   renderBrowser,
   groupSpacing = 1.5
 }: {
@@ -52,6 +53,8 @@ export function PaginatedLibraryBrowser({
   pagedFiles: LibraryFile[]
   pagination: LibraryPaginationState
   emptyState?: ReactNode
+  /** Optional controls rendered above the top pagination row and result rows. */
+  beforeItems?: ReactNode
   renderBrowser: (folders: LibraryFolder[], files: LibraryFile[], emptyStateNode?: ReactNode) => ReactNode
   /** Vertical spacing between the group sections (grouped mode). */
   groupSpacing?: StackProps['spacing']
@@ -61,9 +64,10 @@ export function PaginatedLibraryBrowser({
   if (group !== 'none') {
     // Grouped mode shows all filtered entries (no pagination): folders first,
     // then a section per file group.
-    if (filteredItemCount === 0) return <>{renderBrowser(pagedFolders, pagedFiles, emptyState)}</>
+    if (filteredItemCount === 0) return <>{beforeItems}{renderBrowser(pagedFolders, pagedFiles, emptyState)}</>
     return (
       <Stack spacing={groupSpacing}>
+        {beforeItems}
         {filteredFolders.length > 0 && (
           <Stack spacing={0.75}>
             <Typography level="title-sm" textColor="text.tertiary">Folders · {filteredFolders.length}</Typography>
@@ -82,17 +86,20 @@ export function PaginatedLibraryBrowser({
 
   if (filteredItemCount > 0) {
     return (
-      <PaginatedSection
-        showingLabel={pagination.showingLabel}
-        previousDisabled={pagination.currentPage <= 1}
-        nextDisabled={pagination.currentPage >= pagination.pageCount}
-        onPrevious={() => pagination.onPageChange(Math.max(1, pagination.currentPage - 1))}
-        onNext={() => pagination.onPageChange(Math.min(pagination.pageCount, pagination.currentPage + 1))}
-      >
-        {renderBrowser(pagedFolders, pagedFiles, emptyState)}
-      </PaginatedSection>
+      <Stack spacing={1}>
+        {beforeItems}
+        <PaginatedSection
+          showingLabel={pagination.showingLabel}
+          previousDisabled={pagination.currentPage <= 1}
+          nextDisabled={pagination.currentPage >= pagination.pageCount}
+          onPrevious={() => pagination.onPageChange(Math.max(1, pagination.currentPage - 1))}
+          onNext={() => pagination.onPageChange(Math.min(pagination.pageCount, pagination.currentPage + 1))}
+        >
+          {renderBrowser(pagedFolders, pagedFiles, emptyState)}
+        </PaginatedSection>
+      </Stack>
     )
   }
 
-  return <>{renderBrowser(pagedFolders, pagedFiles, emptyState)}</>
+  return <>{beforeItems}{renderBrowser(pagedFolders, pagedFiles, emptyState)}</>
 }

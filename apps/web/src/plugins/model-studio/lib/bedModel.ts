@@ -54,6 +54,8 @@ export const BED_MODEL_OBJECT_NAME = 'printstreamBedModel'
 export async function loadBedModelGeometry(input: {
   printerModel: string
   slicerTargetId: string | null
+  /** Selected workspace preset, so its portable custom model can outrank bundled resources. */
+  machineProfileId?: string | null
   signal?: AbortSignal
   /**
    * Endpoint to fetch the bed mesh from. Defaults to the workspace route; the public 3MF editor passes
@@ -63,6 +65,7 @@ export async function loadBedModelGeometry(input: {
 }): Promise<THREE.BufferGeometry | null> {
   const params = new URLSearchParams({ printerModel: input.printerModel })
   if (input.slicerTargetId) params.set('targetId', input.slicerTargetId)
+  if (input.machineProfileId) params.set('machineProfileId', input.machineProfileId)
   const bytes = await fetchModelBytes(buildApiUrl(`${input.basePath ?? '/api/slicing/bed-model'}?${params.toString()}`), { signal: input.signal })
     .catch(() => null)
   if (!bytes || bytes.byteLength === 0) return null
@@ -79,57 +82,111 @@ export async function loadBedModelGeometry(input: {
   }
 }
 
+/** Load the selected custom preset's optional PNG/SVG bed texture. */
+export async function loadBedTexture(input: {
+  machineProfileId: string | null
+  signal?: AbortSignal
+}): Promise<THREE.Texture | null> {
+  if (!input.machineProfileId) return null
+  const params = new URLSearchParams({ machineProfileId: input.machineProfileId })
+  try {
+    const response = await fetch(buildApiUrl(`/api/slicing/bed-texture?${params.toString()}`), {
+      credentials: 'include',
+      signal: input.signal
+    })
+    if (!response.ok) return null
+    const objectUrl = URL.createObjectURL(await response.blob())
+    try {
+      const texture = await new THREE.TextureLoader().loadAsync(objectUrl)
+      texture.colorSpace = THREE.SRGBColorSpace
+      texture.needsUpdate = true
+      return texture
+    } finally {
+      URL.revokeObjectURL(objectUrl)
+    }
+  } catch {
+    return null
+  }
+}
+
 /**
- * Build the bed object from a parsed geometry, positioned for a plate of `width` x `depth`
- * centred on (`centerX`, `centerY`). Materials are semi-matte so the plate reads as a surface
- * without competing with the models; `renderOrder`/`depthWrite` keep the grid drawn on top.
+ * Build the optional bed mesh and texture at the printable area's origin. The texture covers the
+ * printable rectangle while a model may extend around it for handles or the printer frame.
  */
 export function createBedModelObject(input: {
-  geometry: THREE.BufferGeometry
+  geometry?: THREE.BufferGeometry | null
+  texture?: THREE.Texture | null
   /** Scene X of the printable area's origin (its minimum corner), which mesh x=0 maps onto. */
   originX: number
   /** Scene Y of the printable area's origin. */
   originY: number
+  /** Printable dimensions used to place a custom texture over the build surface. */
+  width?: number
+  depth?: number
 }): THREE.Object3D {
-  const material = new THREE.MeshStandardMaterial({
-    color: 0x2a3242,
-    roughness: 0.85,
-    metalness: 0.1,
-    transparent: true,
-    opacity: 1
-  })
-  // Clone: the caller caches one parsed geometry across rebuilds, and each bed group is
-  // disposed wholesale when the plate is rebuilt.
-  const mesh = new THREE.Mesh(input.geometry.clone(), material)
-  mesh.name = BED_MODEL_OBJECT_NAME
-  // Straight translation to the printable origin: the mesh's own coordinates place the plate
-  // (and its overhanging frame/handle) correctly around it. `-max.z` keeps the top face flush
-  // with the model plane for any bed authored above z=0.
-  const topZ = input.geometry.boundingBox?.max.z ?? 0
-  mesh.position.set(input.originX, input.originY, -topZ)
-  mesh.receiveShadow = true
-  // Drawn before the grid/models so the grid lines stay legible on the plate surface.
-  mesh.renderOrder = -1
-  // Fade with the camera's height above the plate. Called just before this mesh draws, so it
-  // costs nothing when no plate is rendered and needs no per-frame scene traversal.
-  mesh.onBeforeRender = (_renderer, _scene, camera) => {
-    const opacity = bedOpacityForCameraHeight(camera.position.z - mesh.getWorldPosition(WORLD_POSITION).z)
-    if (material.opacity !== opacity) {
-      material.opacity = opacity
-      // While see-through it must not occlude the models above it, which is the whole point.
-      material.depthWrite = opacity >= 1
-      material.needsUpdate = true
+  const group = new THREE.Group()
+  group.name = BED_MODEL_OBJECT_NAME
+
+  const fadeWithCamera = (mesh: THREE.Mesh, material: THREE.Material & { opacity: number; depthWrite: boolean }) => {
+    mesh.onBeforeRender = (_renderer, _scene, camera) => {
+      const opacity = bedOpacityForCameraHeight(camera.position.z - mesh.getWorldPosition(WORLD_POSITION).z)
+      if (material.opacity !== opacity) {
+        material.opacity = opacity
+        // While see-through it must not occlude the models above it, which is the whole point.
+        material.depthWrite = opacity >= 1
+        material.needsUpdate = true
+      }
     }
   }
-  return mesh
+
+  if (input.geometry) {
+    const material = new THREE.MeshStandardMaterial({
+      color: 0x2a3242,
+      roughness: 0.85,
+      metalness: 0.1,
+      transparent: true,
+      opacity: 1
+    })
+    // Clone: the caller caches one parsed geometry across rebuilds, and each bed group is
+    // disposed wholesale when the plate is rebuilt.
+    const mesh = new THREE.Mesh(input.geometry.clone(), material)
+    const topZ = input.geometry.boundingBox?.max.z ?? 0
+    mesh.position.set(input.originX, input.originY, -topZ)
+    mesh.receiveShadow = true
+    mesh.renderOrder = -1
+    fadeWithCamera(mesh, material)
+    group.add(mesh)
+  }
+
+  if (input.texture && input.width && input.depth) {
+    const material = new THREE.MeshBasicMaterial({
+      map: input.texture.clone(),
+      transparent: true,
+      opacity: 1,
+      side: THREE.DoubleSide
+    })
+    const surface = new THREE.Mesh(new THREE.PlaneGeometry(input.width, input.depth), material)
+    surface.position.set(input.originX + input.width / 2, input.originY + input.depth / 2, 0.02)
+    surface.renderOrder = -0.5
+    fadeWithCamera(surface, material)
+    group.add(surface)
+  }
+
+  return group
 }
 
 /** Release the bed mesh's GPU resources; call when the bed is replaced or the scene torn down. */
 export function disposeBedModelObject(bed: THREE.Object3D | null): void {
   if (!bed) return
-  const mesh = bed as THREE.Mesh
-  mesh.geometry?.dispose()
-  const material = mesh.material
-  if (Array.isArray(material)) material.forEach((entry) => entry.dispose())
-  else material?.dispose()
+  bed.traverse((child) => {
+    const mesh = child as THREE.Mesh
+    mesh.geometry?.dispose()
+    const materials = Array.isArray(mesh.material) ? mesh.material : mesh.material ? [mesh.material] : []
+    for (const material of materials) {
+      for (const value of Object.values(material as unknown as Record<string, unknown>)) {
+        if (value && (value as THREE.Texture).isTexture) (value as THREE.Texture).dispose()
+      }
+      material.dispose()
+    }
+  })
 }

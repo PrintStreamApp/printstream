@@ -5,8 +5,9 @@
  * queued items are matched to printers by their loaded AMS material and dispatched
  * on demand (manual single dispatch or "start all idle"). Dispatch always flows
  * through `enqueueLibraryPrint`, so print guards (e.g. plate-clearing) and the
- * per-printer dispatcher still apply. Copies count down and failures surface for
- * manual re-queue as real printer jobs complete. v1 is manual-dispatch only;
+ * per-printer dispatcher still apply. Unpinned items leave the queue after their final copy;
+ * pinned items reset for another run, and failures surface for manual re-queue as real printer
+ * jobs complete. v1 is manual-dispatch only;
  * autonomous auto-advance is a deliberate later phase.
  */
 import type { ApiPlugin } from '../../plugin/types.js'

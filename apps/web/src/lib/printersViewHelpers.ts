@@ -103,6 +103,7 @@ export type PrinterControlCommand = Extract<
       | 'moveAxis'
       | 'homeAxes'
       | 'extrudeFilament'
+      | 'controlNozzleRack'
   }
 >
 
@@ -778,6 +779,11 @@ export function printerStateSortRank(status: PrinterStatus | undefined): number 
 
 // --- Printers overview directory toolbar (search / sort / group / pagination) ---
 
+/** Directory controls and pagination only help when there is a fleet to organize. */
+export function shouldShowPrinterOverviewDirectoryControls(printersCount: number): boolean {
+  return printersCount > 1
+}
+
 /** Sort fields offered in the overview toolbar; direction is a separate toggle. */
 export const PRINTER_OVERVIEW_SORT_FIELD_OPTIONS: ReadonlyArray<{ value: PrinterViewSort['key']; label: string }> = [
   { value: 'name', label: 'Name' },
@@ -927,7 +933,8 @@ export function isPrinterControlCommand(command: PrinterCommand): command is Pri
     command.type === 'setPrintSpeed' ||
     command.type === 'moveAxis' ||
     command.type === 'homeAxes' ||
-    command.type === 'extrudeFilament'
+    command.type === 'extrudeFilament' ||
+    command.type === 'controlNozzleRack'
   )
 }
 
@@ -953,6 +960,8 @@ export function printerControlSuccessMessage(command: PrinterControlCommand): st
       return 'Homing requested'
     case 'extrudeFilament':
       return command.distanceMm > 0 ? 'Extrusion requested' : 'Retraction requested'
+    case 'controlNozzleRack':
+      return command.action === 'refreshAll' ? 'Hotend re-read requested' : 'Nozzle rack movement requested'
   }
 }
 

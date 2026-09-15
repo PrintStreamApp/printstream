@@ -16,6 +16,16 @@ export type RegisteredWebPluginSlot = WebPluginSlot & {
   pluginName: string
   runtimeSurfaces: PluginSurface[]
   managerSurfaces: PluginSurface[]
+  selfHostedOnly?: boolean
+  cloudOnly?: boolean
+}
+
+export type RegisteredWebPluginRoute = WebPluginRoute & {
+  pluginName: string
+  runtimeSurfaces: PluginSurface[]
+  managerSurfaces: PluginSurface[]
+  selfHostedOnly?: boolean
+  cloudOnly?: boolean
 }
 
 class WebPluginRegistry {
@@ -33,13 +43,20 @@ class WebPluginRegistry {
     return Array.from(this.plugins.values())
   }
 
-  routes(): Array<WebPluginRoute & { pluginName: string; runtimeSurfaces: PluginSurface[]; managerSurfaces: PluginSurface[] }> {
-    const out: Array<WebPluginRoute & { pluginName: string; runtimeSurfaces: PluginSurface[]; managerSurfaces: PluginSurface[] }> = []
+  routes(): RegisteredWebPluginRoute[] {
+    const out: RegisteredWebPluginRoute[] = []
     for (const plugin of this.plugins.values()) {
       const runtimeSurfaces = normalizePluginSurfaces(plugin.runtimeSurfaces)
       const managerSurfaces = normalizeManagerSurfaces(plugin.managerSurfaces, runtimeSurfaces)
       for (const route of plugin.routes ?? []) {
-        out.push({ ...route, pluginName: plugin.name, runtimeSurfaces, managerSurfaces })
+        out.push({
+          ...route,
+          pluginName: plugin.name,
+          runtimeSurfaces,
+          managerSurfaces,
+          selfHostedOnly: plugin.selfHostedOnly,
+          cloudOnly: plugin.cloudOnly
+        })
       }
     }
     return out
@@ -51,7 +68,14 @@ class WebPluginRegistry {
       const runtimeSurfaces = normalizePluginSurfaces(plugin.runtimeSurfaces)
       const managerSurfaces = normalizeManagerSurfaces(plugin.managerSurfaces, runtimeSurfaces)
       for (const slot of plugin.slots ?? []) {
-        if (slot.name === name) out.push({ ...slot, pluginName: plugin.name, runtimeSurfaces, managerSurfaces })
+        if (slot.name === name) out.push({
+          ...slot,
+          pluginName: plugin.name,
+          runtimeSurfaces,
+          managerSurfaces,
+          selfHostedOnly: plugin.selfHostedOnly,
+          cloudOnly: plugin.cloudOnly
+        })
       }
     }
     return out.sort((a, b) => (a.order ?? 0) - (b.order ?? 0))

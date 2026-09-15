@@ -50,7 +50,7 @@ import { shouldShowNoConnectedPrintersEmptyState } from '../lib/printersEmptySta
 import { usePlateClearingSync } from '../lib/plateClearing'
 import { useRuntimePolicy } from '../lib/runtimePolicy'
 import { buildWorkspacePath, buildWorkspaceSelectionPath } from '../lib/workspaceRoute'
-import { HISTORY_RESULTS, OVERVIEW_VIEW_LABEL, DEFAULT_PRINTER_CARD_CONTENT_SETTINGS, type PrinterStateFilter, parseHistoryViewMode, formatHistoryResultsSummary, formatPrinterViewSelectValue, parseCardsPerRow, parsePrinterStateFilter, encodePrinterViewSort, jobToLibraryFile, printerStateFilterLabel, matchesPrinterStateFilter, matchesPrinterViewAttributeFilters, matchesPrinterSearch, filterPrintersForView, sortPrintersForView, groupPrintersForOverview, parseStoredStringArray, parsePrinterModelFilter, parsePrinterViewSort, parsePrinterCardContentSettings, parsePrinterGroupBy, parsePrinterOverviewPageSize, sameStringSet, PRINTER_OVERVIEW_PAGE_SIZE_OPTIONS, type PrinterGroupBy } from '../lib/printersViewHelpers'
+import { HISTORY_RESULTS, OVERVIEW_VIEW_LABEL, DEFAULT_PRINTER_CARD_CONTENT_SETTINGS, type PrinterStateFilter, parseHistoryViewMode, formatHistoryResultsSummary, formatPrinterViewSelectValue, parseCardsPerRow, parsePrinterStateFilter, encodePrinterViewSort, jobToLibraryFile, printerStateFilterLabel, matchesPrinterStateFilter, matchesPrinterViewAttributeFilters, matchesPrinterSearch, filterPrintersForView, sortPrintersForView, groupPrintersForOverview, parseStoredStringArray, parsePrinterModelFilter, parsePrinterViewSort, parsePrinterCardContentSettings, parsePrinterGroupBy, parsePrinterOverviewPageSize, sameStringSet, shouldShowPrinterOverviewDirectoryControls, PRINTER_OVERVIEW_PAGE_SIZE_OPTIONS, type PrinterGroupBy } from '../lib/printersViewHelpers'
 import { EMPTY_PRINTERS, EMPTY_PRINT_JOBS, EMPTY_PRINTER_VIEWS, HISTORY_PAGE_SIZE_OPTIONS, HISTORY_SORT_OPTIONS, PRINTER_HISTORY_VIEW_MODE_KEY, PRINTER_HISTORY_SORT_DIR_KEY, PRINTER_HISTORY_RESULT_FILTER_KEY, PRINTER_HISTORY_PAGE_SIZE_KEY, OVERVIEW_VIEW_OPTION_VALUE, NEW_VIEW_OPTION_VALUE, PUBLIC_DEMO_PRINTER_MUTATION_NOTICE, showDemoPrinterMutationNotice, showDemoFileUploadNotice, DEFAULT_SINGLE_PRINTER_CARD_CONTENT_SETTINGS } from '../lib/printerViewConstants'
 import { PrinterHistoryCard, PrinterStatsCardGrid } from '../components/printers/PrinterSummaryCards'
 import { PluginSlot } from '../plugin/PluginSlot'
@@ -368,6 +368,7 @@ export function PrintersView() {
   const printerRows = printersQuery.data?.printers
   const status = statusQuery.data
   const printers = printersQuery.data?.printers ?? EMPTY_PRINTERS
+  const showOverviewDirectoryControls = shouldShowPrinterOverviewDirectoryControls(printers.length)
   const persistedJobs = jobsQuery.data?.jobs ?? EMPTY_PRINT_JOBS
   const printerViews = printerViewsQuery.data?.views ?? EMPTY_PRINTER_VIEWS
   const effectiveDefaultViewId = resolveEffectiveDefaultPrinterViewId({
@@ -1285,7 +1286,7 @@ export function PrintersView() {
             context={{ printers, statuses: status }}
           />
 
-          {printers.length > 0 && (
+          {showOverviewDirectoryControls && (
             <PrinterOverviewToolbar
               printers={printers}
               search={overviewSearch}
@@ -1400,6 +1401,7 @@ export function PrintersView() {
               onPrevious={() => setOverviewPage((current) => Math.max(0, current - 1))}
               onNext={() => setOverviewPage((current) => Math.min(overviewPageCount - 1, current + 1))}
               spacing={1.5}
+              showPagination={showOverviewDirectoryControls}
             >
               <Stack spacing={2.5}>
                 {printerGroups.map((groupEntry) => (
@@ -1599,7 +1601,6 @@ export function PrintersView() {
       {pickerForPrinter && (
         <LibraryPickerModal
           printerName={pickerForPrinter.name}
-          printerModel={pickerForPrinter.model}
           canSlice={canUploadLibrary}
           onClose={() => setPickerForPrinter(null)}
           onPick={(file) => {

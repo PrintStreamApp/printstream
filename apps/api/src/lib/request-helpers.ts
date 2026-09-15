@@ -95,15 +95,20 @@ export async function sendModelBuffer(
     await pipeline(Readable.from(chunkBody(body), { objectMode: false }), response)
   } catch (error) {
     // A client disconnect mid-stream (the editor superseded the load or navigated away) is
-    // expected once we've started writing. Other failures cannot become an HTTP error once headers
-    // are out, but still need an operational trace or a truncated transfer is invisible.
+    // expected, including before the first chunk makes `headersSent` true. On that early-close path
+    // the completed request body may leave `request.aborted` false, while the response is already
+    // destroyed. Do not hand that transport closure to Express as a misleading application 500.
+    const transportClosed = error instanceof Error
+      && (error as NodeJS.ErrnoException).code === 'ERR_STREAM_PREMATURE_CLOSE'
+    if (request.aborted || (response.destroyed && transportClosed)) return
+
+    // Other failures cannot become an HTTP error once headers are out, but still need an
+    // operational trace or a truncated transfer is invisible.
     if (!response.headersSent && !response.writableEnded) throw error
-    if (!request.aborted) {
-      console.warn(
-        `[model-response] failed while streaming ${request.originalUrl || request.url || 'model bytes'}`,
-        error instanceof Error ? error.message : error
-      )
-    }
+    console.warn(
+      `[model-response] failed while streaming ${request.originalUrl || request.url || 'model bytes'}`,
+      error instanceof Error ? error.message : error
+    )
   }
 }
 

@@ -157,6 +157,8 @@ export interface ParsedGcodeLayers {
   extrusionHeights: Float32Array
   /** Per-segment feature index into {@link GCODE_FEATURE_COLORS} (length = segment count). */
   extrusionRoles: Uint8Array
+  /** Chronological rendered-move id for each extrusion segment. */
+  extrusionMoveIds: Uint32Array
   /** Per-segment speed in mm/s (length = segment count). */
   extrusionFeedrates: Float32Array
   /** Per-segment volumetric flow in mm3/s (length = segment count). */
@@ -184,10 +186,14 @@ export interface ParsedGcodeLayers {
    * (length = travel segment count).
    */
   travelKinds: Uint8Array
+  /** Chronological rendered-move id for each travel segment. */
+  travelMoveIds: Uint32Array
   /** Flat wipe-move vertex positions, ordered by layer. */
   wipePositions: Float32Array
   /** Cumulative wipe vertex count at the END of each layer (length = layerCount). */
   wipeLayerEnd: number[]
+  /** Chronological rendered-move id for each wipe segment. */
+  wipeMoveIds: Uint32Array
   /** Point-marker positions [x,y,z,...], ordered by layer. */
   markerPositions: Float32Array
   /** Per-marker {@link GcodeMarkerKind} (length = marker count). */
@@ -279,13 +285,21 @@ function readWords(tokens: string[]): Record<string, number> {
 
 /**
  * Parse G-code into per-layer extrusion/travel segments with per-segment width, layer height and
- * feature role. A new layer starts whenever an extruding move occurs at a Z that differs from the
- * current layer's Z (so travel z-hops never create phantom layers, independent of slicer-specific
- * layer comments). Handles G0/G1 linear moves, G2/G3 arc moves (I/J centre form, interpolated),
+ * feature role. When the slicer emits explicit CHANGE_LAYER markers, those markers own the layer
+ * boundaries and pre-marker custom extrusion is folded into Layer 1; otherwise a new layer starts
+ * whenever an extruding move occurs at a Z that differs from the current layer's Z (so travel
+ * z-hops never create phantom layers).
+ * Handles G0/G1 linear moves, G2/G3 arc moves (I/J centre form, interpolated),
  * absolute/relative positioning (G90/G91), absolute/relative extrusion (M82/M83), G92 axis resets,
  * and BambuStudio's `; FEATURE:` / `; LINE_WIDTH:` / `; LAYER_HEIGHT:` annotations.
  */
 export function parseGcodeLayers(text: string): ParsedGcodeLayers {
+  const lines = text.split('\n')
+  // Bambu start G-code can extrude a nozzle-load line several millimetres above the plate. It
+  // belongs in Layer 1's preview, but must not become a layer boundary. Only recognize an exact
+  // emitted marker so marker text quoted inside the CONFIG block cannot change generic G-code.
+  const hasExplicitLayerMarkers = lines.some((line) => /^\s*;\s*(?:CHANGE_LAYER|LAYER_CHANGE)\s*$/i.test(line))
+  let explicitLayerMarkerSeen = false
   let x = 0
   let y = 0
   let z = 0
@@ -335,6 +349,7 @@ export function parseGcodeLayers(text: string): ParsedGcodeLayers {
   const widthLayers: number[][] = []
   const heightLayers: number[][] = []
   const roleLayers: number[][] = []
+  const extrusionMoveIdLayers: number[][] = []
   const feedrateLayers: number[][] = []
   const volumetricLayers: number[][] = []
   const fanLayers: number[][] = []
@@ -342,7 +357,9 @@ export function parseGcodeLayers(text: string): ParsedGcodeLayers {
   const travelLayers: number[][] = []
   const travelFeedrateLayers: number[][] = []
   const travelKindLayers: number[][] = []
+  const travelMoveIdLayers: number[][] = []
   const wipeLayers: number[][] = []
+  const wipeMoveIdLayers: number[][] = []
   const markerLayers: number[][] = []
   const markerKindLayers: number[][] = []
   const markerWidthLayers: number[][] = []
@@ -357,16 +374,20 @@ export function parseGcodeLayers(text: string): ParsedGcodeLayers {
   /** The printed object currently being emitted, or -1 between objects. */
   let currentObjectId = -1
   const objectIdLayers: number[][] = []
+  // One id space across every rendered path kind. The move scrubber merges these ids according
+  // to the currently visible kinds, preserving the order in which the printer executes them.
+  let nextMoveId = 0
 
   const ensureLayer = (index: number) => {
     while (extrusionLayers.length <= index) {
       extrusionLayers.push([]); widthLayers.push([]); heightLayers.push([]); roleLayers.push([])
       feedrateLayers.push([]); volumetricLayers.push([]); fanLayers.push([]); temperatureLayers.push([])
+      extrusionMoveIdLayers.push([])
       objectIdLayers.push([])
     }
     while (travelLayers.length <= index) {
-      travelLayers.push([]); travelFeedrateLayers.push([]); travelKindLayers.push([])
-      wipeLayers.push([]); markerLayers.push([]); markerKindLayers.push([])
+      travelLayers.push([]); travelFeedrateLayers.push([]); travelKindLayers.push([]); travelMoveIdLayers.push([])
+      wipeLayers.push([]); wipeMoveIdLayers.push([]); markerLayers.push([]); markerKindLayers.push([])
       markerWidthLayers.push([]); markerHeightLayers.push([])
     }
   }
@@ -374,6 +395,13 @@ export function parseGcodeLayers(text: string): ParsedGcodeLayers {
   // Advance to a new layer when an extruding MOVE's target Z changes: called ONCE per move
   // (not per interpolated arc sub-segment), so a Z-changing arc is one layer, not hundreds.
   const advanceLayerForZ = (targetZ: number) => {
+    if (hasExplicitLayerMarkers) {
+      // Custom startup extrusion is provisionally assigned to the first layer. Its machine Z is
+      // not the print layer's Z, so the first extrusion after CHANGE_LAYER supplies the readout.
+      if (layer < 0) layer = 0
+      if (explicitLayerMarkerSeen && layerZ[layer] === undefined) layerZ[layer] = targetZ
+      return
+    }
     if (currentLayerZ === null || Math.abs(targetZ - currentLayerZ) > Z_EPSILON) {
       layer += 1
       currentLayerZ = targetZ
@@ -401,6 +429,7 @@ export function parseGcodeLayers(text: string): ParsedGcodeLayers {
     widthLayers[layer]!.push(width)
     heightLayers[layer]!.push(height)
     roleLayers[layer]!.push(curRole)
+    extrusionMoveIdLayers[layer]!.push(nextMoveId++)
     objectIdLayers[layer]!.push(currentObjectId)
     const volumetric = curFeedrateMmS * curMm3PerMm
     feedrateLayers[layer]!.push(curFeedrateMmS)
@@ -432,6 +461,7 @@ export function parseGcodeLayers(text: string): ParsedGcodeLayers {
     travelLayers[layer]!.push(ax, ay, az, bx, by, bz)
     travelFeedrateLayers[layer]!.push(curFeedrateMmS)
     travelKindLayers[layer]!.push(kind)
+    travelMoveIdLayers[layer]!.push(nextMoveId++)
     // Travel speeds join the Speed ramp only in the range that includes them: see
     // `GcodeValueRanges.feedrateWithTravel` for why both are kept.
     if (curFeedrateMmS > 0) updateValueRange(ranges.feedrateWithTravel, curFeedrateMmS)
@@ -441,6 +471,7 @@ export function parseGcodeLayers(text: string): ParsedGcodeLayers {
     if (layer < 0) return
     ensureLayer(layer)
     wipeLayers[layer]!.push(ax, ay, az, bx, by, bz)
+    wipeMoveIdLayers[layer]!.push(nextMoveId++)
   }
 
   /** Record a point marker at the head's current position, sized by the last extrusion. */
@@ -453,11 +484,17 @@ export function parseGcodeLayers(text: string): ParsedGcodeLayers {
     markerHeightLayers[layer]!.push(curHeight > 0 ? curHeight : DEFAULT_LAYER_HEIGHT)
   }
 
-  for (const rawLine of text.split('\n')) {
+  for (const rawLine of lines) {
     const semi = rawLine.indexOf(';')
     if (semi >= 0) {
       const comment = rawLine.slice(semi + 1)
       const reservedTag = comment.trim().toUpperCase()
+      if (reservedTag === 'CHANGE_LAYER' || reservedTag === 'LAYER_CHANGE') {
+        if (explicitLayerMarkerSeen) layer += 1
+        else if (layer < 0) layer = 0
+        explicitLayerMarkerSeen = true
+        currentLayerZ = null
+      }
       // Exact whole-comment matches avoid the config block, which quotes these strings inside
       // values on every file whether or not the plate contains a custom layer event.
       if (reservedTag === 'PAUSE_PRINTING' || reservedTag === 'PAUSE_PRINT') pendingLayerEvents.push('pause')
@@ -684,7 +721,7 @@ export function parseGcodeLayers(text: string): ParsedGcodeLayers {
     for (const layerPositions of layers) { positions.set(layerPositions, offset); offset += layerPositions.length }
     return { positions, layerEnd }
   }
-  const flattenScalar = <T extends Float32Array | Uint8Array | Uint16Array | Int32Array>(
+  const flattenScalar = <T extends Float32Array | Uint8Array | Uint16Array | Uint32Array | Int32Array>(
     layers: number[][],
     TypedArray: { new (length: number): T }
   ): T => {
@@ -735,6 +772,7 @@ export function parseGcodeLayers(text: string): ParsedGcodeLayers {
     extrusionWidths: flattenScalar(widthLayers, Float32Array),
     extrusionHeights: heights,
     extrusionRoles: roles,
+    extrusionMoveIds: flattenScalar(extrusionMoveIdLayers, Uint32Array),
     extrusionFeedrates: flattenScalar(feedrateLayers, Float32Array),
     extrusionVolumetric: flattenScalar(volumetricLayers, Float32Array),
     extrusionFanSpeeds: flattenScalar(fanLayers, Uint8Array),
@@ -744,8 +782,10 @@ export function parseGcodeLayers(text: string): ParsedGcodeLayers {
     travelLayerEnd: travel.layerEnd,
     travelFeedrates: flattenScalar(travelFeedrateLayers, Float32Array),
     travelKinds: flattenScalar(travelKindLayers, Uint8Array),
+    travelMoveIds: flattenScalar(travelMoveIdLayers, Uint32Array),
     wipePositions: wipe.positions,
     wipeLayerEnd: wipe.layerEnd,
+    wipeMoveIds: flattenScalar(wipeMoveIdLayers, Uint32Array),
     markerPositions: markers.positions,
     markerKinds: flattenScalar(markerKindLayers, Uint8Array),
     markerWidths: flattenScalar(markerWidthLayers, Float32Array),
@@ -854,10 +894,9 @@ export interface LayeredGcodePreview {
   layerCount: number
   /**
    * Show the print up to `topLayer` (0-based, inclusive). With `single`, show only that
-   * layer. `moveEnd` truncates the topmost visible layer after its first N extrusion moves
-   * (1-based; omitted/clamped = the whole layer) for Bambu-style within-layer scrubbing.
-   * Travel moves are only shown for the topmost visible layer (Bambu-style). O(1): only
-   * adjusts geometry draw ranges.
+   * layer. `moveEnd` truncates the topmost visible layer after its first N visible path segments
+   * (1-based; omitted/clamped = the whole layer) for Bambu-style chronological scrubbing.
+   * O(1) after the visible move list has been cached: only adjusts geometry draw ranges.
    */
   setVisibleLayers: (
     topLayer: number,
@@ -872,8 +911,8 @@ export interface LayeredGcodePreview {
    * must pass the same value they pass to {@link setVisibleLayers}.
    */
   setViewMode: (mode: GcodeViewMode, options?: { showTravel?: boolean }) => void
-  /** Number of scrubbable extrusion moves rendered on a layer (drives the move slider). */
-  moveCount: (layer: number) => number
+  /** Number of chronological path segments currently represented by the move slider. */
+  moveCount: (layer: number, options?: { showTravel?: boolean; markers?: GcodeMarkerVisibility }) => number
   /** The layer's print Z in mm (its top): what a layer pause or filament change keys on. */
   layerZ: (layer: number) => number
   dispose: () => void
@@ -1024,13 +1063,8 @@ interface ExtrusionGeometryBuild {
    * bounds while sharing one position buffer with every other layer.
    */
   layerVertexEnd: number[]
-  /**
-   * Cumulative emitted-move count at the end of each layer (the bead mesh skips
-   * degenerate segments, so this can differ from the parsed segment count).
-   */
-  layerMoveEnd: number[]
-  /** Draw-range end after the given emitted move (within-layer scrub boundaries). */
-  moveEndIndex: (move: number) => number
+  /** Draw-range end after each parsed extrusion segment (degenerate segments retain the prior end). */
+  segmentIndexEnd: Uint32Array
 }
 
 /**
@@ -1127,8 +1161,7 @@ function buildExtrusionGeometry(parsed: ParsedGcodeLayers): ExtrusionGeometryBui
   const indices = vertexCount > 65536 ? new Uint32Array(indexCount) : new Uint16Array(indexCount)
   const layerIndexEnd: number[] = []
   const layerVertexEnd: number[] = []
-  const moveIndexEnd: number[] = []
-  const layerMoveEnd: number[] = []
+  const segmentIndexEnd = new Uint32Array(segCount)
   let vCount = 0
   let iCount = 0
 
@@ -1200,7 +1233,11 @@ function buildExtrusionGeometry(parsed: ParsedGcodeLayers): ExtrusionGeometryBui
       const bx = pos[o + 3]!, by = pos[o + 4]!
       let dx = bx - ax, dy = by - ay
       const len = Math.hypot(dx, dy)
-      if (len < DEGENERATE_SEGMENT_LENGTH) { weldRingBase = -1; continue }
+      if (len < DEGENERATE_SEGMENT_LENGTH) {
+        weldRingBase = -1
+        segmentIndexEnd[seg] = iCount
+        continue
+      }
       dx /= len; dy /= len
       const nx = -dy, ny = dx
       const halfW = (widths[seg]! || DEFAULT_EXTRUSION_WIDTH) / 2
@@ -1227,11 +1264,10 @@ function buildExtrusionGeometry(parsed: ParsedGcodeLayers): ExtrusionGeometryBui
         const p1 = (p + 1) % P
         pushQuad(startBase + p, endBase + p, endBase + p1, startBase + p1)
       }
-      moveIndexEnd.push(iCount)
+      segmentIndexEnd[seg] = iCount
     }
     layerIndexEnd.push(iCount)
     layerVertexEnd.push(vCount)
-    layerMoveEnd.push(moveIndexEnd.length)
   }
 
   // A silent mismatch would render garbage from misaligned buffers; fail loudly instead.
@@ -1251,8 +1287,7 @@ function buildExtrusionGeometry(parsed: ParsedGcodeLayers): ExtrusionGeometryBui
     segmentVertexStart,
     layerIndexEnd,
     layerVertexEnd,
-    layerMoveEnd,
-    moveEndIndex: (move) => moveIndexEnd[move] ?? 0
+    segmentIndexEnd
   }
 }
 
@@ -1364,7 +1399,7 @@ export function buildLayeredGcodePreview(parsed: ParsedGcodeLayers): LayeredGcod
   // DoubleSide was quietly covering for.
   const material = new THREE.MeshStandardMaterial({ vertexColors: true, side: THREE.FrontSide, roughness: 0.82, metalness: 0.0 })
   applyMoireFade(material, representativeLayerHeight(parsed.extrusionHeights), medianPositive(parsed.extrusionWidths, DEFAULT_EXTRUSION_WIDTH))
-  const { geometry: extrusionGeometry, layerIndexEnd, layerVertexEnd, layerMoveEnd, moveEndIndex } = build
+  const { geometry: extrusionGeometry, layerIndexEnd, layerVertexEnd, segmentIndexEnd } = build
   // One mesh per layer so three can sort them front-to-back: see buildPerLayerMeshes. Their bounds
   // are real (not the whole plate), so frustum culling is left ON here, unlike the single mesh this
   // replaced, whose draw-range scrubbing invalidated any bounds it might have had.
@@ -1434,8 +1469,12 @@ export function buildLayeredGcodePreview(parsed: ParsedGcodeLayers): LayeredGcod
   // because nothing re-derives geometry. See the memory contract in the JSDoc above.
   const layerCount = parsed.layerCount
   const layerZ = parsed.layerZ
+  const extrusionLayerEnd = parsed.extrusionLayerEnd
+  const extrusionMoveIds = parsed.extrusionMoveIds
   const travelLayerEnd = parsed.travelLayerEnd
+  const travelMoveIds = parsed.travelMoveIds
   const wipeLayerEnd = parsed.wipeLayerEnd
+  const wipeMoveIds = parsed.wipeMoveIds
   // The per-segment METRICS a repaint re-reads, pulled out INDIVIDUALLY. Holding `parsed` itself
   // here (which is what this used to do) captures the position arrays too, which is exactly what
   // the paragraph above says must not happen: they are the 11 MiB the free-on-upload contract
@@ -1574,23 +1613,76 @@ export function buildLayeredGcodePreview(parsed: ParsedGcodeLayers): LayeredGcod
     if (!keepResident.has(typed)) typed.onUpload(releaseArray)
   }
 
-  const layerMoveCount = (layer: number): number => {
-    const clamped = Math.max(0, Math.min(layer, layerCount - 1))
-    const start = clamped > 0 ? layerMoveEnd[clamped - 1]! : 0
-    return (layerMoveEnd[clamped] ?? 0) - start
+  /** First index whose move id is greater than `cutoff`, within one layer's sorted range. */
+  const upperBoundMoveId = (ids: Uint32Array, start: number, end: number, cutoff: number): number => {
+    let low = start
+    let high = end
+    while (low < high) {
+      const middle = (low + high) >>> 1
+      if (ids[middle]! <= cutoff) low = middle + 1
+      else high = middle
+    }
+    return low
   }
+
+  // BambuStudio's slider is a filtered chronological segment list. Keep one cached list per
+  // layer/visibility combination so dragging only performs binary searches and draw-range edits.
+  const visibleMoveIds = new Map<string, number[]>()
+  const layerMoves = (
+    layer: number,
+    options?: { showTravel?: boolean; markers?: GcodeMarkerVisibility }
+  ): number[] => {
+    const clamped = Math.max(0, Math.min(layer, layerCount - 1))
+    const includeTravel = options?.showTravel ?? false
+    const includeWipe = options?.markers?.wipe ?? false
+    const key = `${clamped}:${includeTravel ? 1 : 0}:${includeWipe ? 1 : 0}`
+    const cached = visibleMoveIds.get(key)
+    if (cached) return cached
+
+    const moves: number[] = []
+    const extrusionStart = (clamped > 0 ? extrusionLayerEnd[clamped - 1]! : 0) / 2
+    const extrusionEnd = (extrusionLayerEnd[clamped] ?? 0) / 2
+    let previousIndexEnd = clamped > 0 ? layerIndexEnd[clamped - 1]! : 0
+    for (let segment = extrusionStart; segment < extrusionEnd; segment++) {
+      const indexEnd = segmentIndexEnd[segment]!
+      if (indexEnd > previousIndexEnd) moves.push(extrusionMoveIds[segment]!)
+      previousIndexEnd = indexEnd
+    }
+    if (includeTravel) {
+      const start = (clamped > 0 ? travelLayerEnd[clamped - 1]! : 0) / 2
+      const end = (travelLayerEnd[clamped] ?? 0) / 2
+      for (let segment = start; segment < end; segment++) moves.push(travelMoveIds[segment]!)
+    }
+    if (includeWipe) {
+      const start = (clamped > 0 ? wipeLayerEnd[clamped - 1]! : 0) / 2
+      const end = (wipeLayerEnd[clamped] ?? 0) / 2
+      for (let segment = start; segment < end; segment++) moves.push(wipeMoveIds[segment]!)
+    }
+    moves.sort((a, b) => a - b)
+    visibleMoveIds.set(key, moves)
+    return moves
+  }
+
+  const layerMoveCount: LayeredGcodePreview['moveCount'] = (layer, options) => layerMoves(layer, options).length
 
   const setVisibleLayers: LayeredGcodePreview['setVisibleLayers'] = (topLayer, options) => {
     const clamped = Math.max(0, Math.min(topLayer, layerCount - 1))
     const single = options?.single ?? false
+    const moves = layerMoves(clamped, options)
+    const requestedMoveEnd = options?.moveEnd === undefined
+      ? moves.length
+      : Math.max(0, Math.min(moves.length, Math.floor(options.moveEnd)))
+    const moveCutoff = requestedMoveEnd >= moves.length ? Number.POSITIVE_INFINITY : moves[requestedMoveEnd - 1] ?? -1
     // Where the TOP layer should stop, in the global index space (the within-layer scrub).
     const topLayerStart = clamped > 0 ? layerIndexEnd[clamped - 1]! : 0
-    let topEnd = layerIndexEnd[clamped] ?? 0
-    if (options?.moveEnd !== undefined && options.moveEnd < layerMoveCount(clamped)) {
-      const firstMove = clamped > 0 ? layerMoveEnd[clamped - 1]! : 0
-      const lastMove = firstMove + Math.max(0, Math.floor(options.moveEnd)) - 1
-      topEnd = lastMove >= firstMove ? moveEndIndex(lastMove) : topLayerStart
-    }
+    const extrusionSegmentStart = (clamped > 0 ? extrusionLayerEnd[clamped - 1]! : 0) / 2
+    const extrusionSegmentEnd = (extrusionLayerEnd[clamped] ?? 0) / 2
+    const visibleExtrusionEnd = Number.isFinite(moveCutoff)
+      ? upperBoundMoveId(extrusionMoveIds, extrusionSegmentStart, extrusionSegmentEnd, moveCutoff)
+      : extrusionSegmentEnd
+    const topEnd = visibleExtrusionEnd > extrusionSegmentStart
+      ? segmentIndexEnd[visibleExtrusionEnd - 1]!
+      : topLayerStart
     // Visibility per layer instead of one draw range: below the top they are whole, the top one is
     // truncated, and `single` shows only the top. A hidden mesh is not submitted OR sorted, so this
     // is also what keeps the front-to-back ordering meaningful while scrubbing.
@@ -1619,7 +1711,13 @@ export function buildLayeredGcodePreview(parsed: ParsedGcodeLayers): LayeredGcod
       const travelStart = single
         ? (clamped > 0 ? travelLayerEnd[clamped - 1]! : 0)
         : 0
-      const travelEnd = travelLayerEnd[clamped] ?? 0
+      const fullTravelEnd = travelLayerEnd[clamped] ?? 0
+      const topTravelSegmentStart = (clamped > 0 ? travelLayerEnd[clamped - 1]! : 0) / 2
+      const topTravelSegmentEnd = fullTravelEnd / 2
+      const visibleTravelEnd = Number.isFinite(moveCutoff)
+        ? upperBoundMoveId(travelMoveIds, topTravelSegmentStart, topTravelSegmentEnd, moveCutoff) * 2
+        : fullTravelEnd
+      const travelEnd = Math.max(travelStart, visibleTravelEnd)
       travel.visible = travelEnd > travelStart
       travelGeometry.setDrawRange(travelStart, Math.max(0, travelEnd - travelStart))
     } else {
@@ -1631,7 +1729,13 @@ export function buildLayeredGcodePreview(parsed: ParsedGcodeLayers): LayeredGcod
     const markers = options?.markers
     if (markers?.wipe) {
       const wipeStart = single ? (clamped > 0 ? wipeLayerEnd[clamped - 1]! : 0) : 0
-      const wipeEnd = wipeLayerEnd[clamped] ?? 0
+      const fullWipeEnd = wipeLayerEnd[clamped] ?? 0
+      const topWipeSegmentStart = (clamped > 0 ? wipeLayerEnd[clamped - 1]! : 0) / 2
+      const topWipeSegmentEnd = fullWipeEnd / 2
+      const visibleWipeEnd = Number.isFinite(moveCutoff)
+        ? upperBoundMoveId(wipeMoveIds, topWipeSegmentStart, topWipeSegmentEnd, moveCutoff) * 2
+        : fullWipeEnd
+      const wipeEnd = Math.max(wipeStart, visibleWipeEnd)
       wipe.visible = wipeEnd > wipeStart
       wipeGeometry.setDrawRange(wipeStart, Math.max(0, wipeEnd - wipeStart))
     } else {

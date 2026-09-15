@@ -201,7 +201,7 @@ function uploadRenderedThumbnail(file: LibraryFile, dataUrl: string): void {
 
 /**
  * Render (or return a cached) PNG data URL preview for a raw-mesh library file: STL, STEP, OBJ,
- * glTF, AMF, or a geometry-only 3MF (all served as STL by `/mesh`). Resolves to `null` when
+ * glTF, AMF, FBX, or a geometry-only 3MF (all served as STL by `/mesh`). Resolves to `null` when
  * the preview can't be produced (aborted, fetch/parse failure) so callers fall back to
  * the kind label.
  *

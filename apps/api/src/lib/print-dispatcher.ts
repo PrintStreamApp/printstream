@@ -30,6 +30,7 @@ import {
   getPrinterPrintStartOptions,
   formatBytes,
   isPhysicalAmsTrayIndex,
+  mappingNeedsExternalSpoolChangeAssist,
   printerModelHasDualNozzles,
   printStartOptionSelectionSchema,
   trayIndexToAmsSlot,
@@ -305,10 +306,13 @@ class PrintDispatcher {
         flowCalibration: normalizedOptions.flowCalibration,
         firstLayerInspection: normalizedOptions.firstLayerInspection,
         timelapse: normalizedOptions.timelapse,
+        timelapseStorage: normalizedOptions.timelapseStorage,
+        externalFilamentChangeAssist: normalizedOptions.externalFilamentChangeAssist,
         filamentDynamicsCalibration: normalizedOptions.filamentDynamicsCalibration,
         nozzleOffsetCalibration: normalizedOptions.nozzleOffsetCalibration,
         allowIncompatibleFilament: input.allowIncompatibleFilament,
         allowPlateTypeMismatch: input.allowPlateTypeMismatch,
+        allowPrinterModelMismatch: input.allowPrinterModelMismatch,
         allowFilamentTrackSwitchMismatch: input.allowFilamentTrackSwitchMismatch,
         allowInsufficientFilament: input.allowInsufficientFilament,
         allowBlacklistedFilament: input.allowBlacklistedFilament,
@@ -814,6 +818,8 @@ export interface ProjectFilePrintCommandInput {
   filamentDynamicsCalibration: boolean
   nozzleOffsetCalibration: PrintNozzleOffsetCalibrationMode
   timelapse: boolean
+  timelapseStorage?: PrintStartOptionSelection['timelapseStorage']
+  externalFilamentChangeAssist?: boolean
   /**
    * Caller's AMS preference. Only a baseline: when `amsMapping` names any tray,
    * the wire `use_ams` is derived from the mapping instead (see
@@ -941,7 +947,10 @@ export function buildProjectFilePrintCommand(input: ProjectFilePrintCommandInput
     vibration_cali: input.vibrationCompensation,
     layer_inspect: input.firstLayerInspection,
     use_ams: resolveEffectiveUseAms(input.useAms, input.amsMapping),
-    cfg: '0',
+    cfg: String(
+      (input.externalFilamentChangeAssist && mappingNeedsExternalSpoolChangeAssist(input.amsMapping) ? 0x1 : 0)
+      | (input.timelapse && input.timelapseStorage === 'internal' ? 0x4 : 0)
+    ),
     extrude_cali_flag: input.filamentDynamicsCalibration ? 1 : 0,
     extrude_cali_manual_mode: 0,
     nozzle_offset_cali: resolveNozzleOffsetCalibrationFlag(input.nozzleOffsetCalibration),
@@ -975,6 +984,8 @@ function buildPrintStartPayload(job: DispatchJobState): Record<string, unknown> 
     filamentDynamicsCalibration: job.options.filamentDynamicsCalibration,
     nozzleOffsetCalibration: job.options.nozzleOffsetCalibration,
     timelapse: job.options.timelapse,
+    timelapseStorage: job.options.timelapseStorage,
+    externalFilamentChangeAssist: job.options.externalFilamentChangeAssist,
     useAms: job.options.useAms,
     amsMapping: job.options.amsMapping,
     dualNozzles: job.dualNozzles,
@@ -1167,6 +1178,12 @@ export function normalizePrintStartOptionsForPrinter(
     ),
     firstLayerInspection: printStartOptions.firstLayerInspection.supported && options.firstLayerInspection,
     timelapse: printStartOptions.timelapse.supported && options.timelapse,
+    timelapseStorage: printStartOptions.internalTimelapseStorage.supported
+      ? options.timelapseStorage
+      : 'external',
+    externalFilamentChangeAssist:
+      printStartOptions.externalFilamentChangeAssist.supported
+      && options.externalFilamentChangeAssist,
     filamentDynamicsCalibration: BAMBU_STUDIO_SEND_DIALOG_DEFAULTS.filamentDynamicsCalibration,
     nozzleOffsetCalibration: printStartOptions.nozzleOffsetCalibration.supported ? options.nozzleOffsetCalibration : 'off'
   }

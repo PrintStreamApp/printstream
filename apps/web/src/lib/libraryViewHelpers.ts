@@ -44,6 +44,7 @@ import {
   formatNozzleLabel,
   getPrinterControlCapabilities,
   isDualReachableAmsUnit,
+  mappingNeedsExternalSpoolChangeAssist,
   normalizeFallbackPlateLabel,
   supportsPrinterDoorSensor
 } from '@printstream/shared'
@@ -388,6 +389,24 @@ export function printerHasSelectableTrays(status: PrinterStatus | undefined): bo
 
 export function isExternalSpoolMappingValue(value: number): boolean {
   return value === VIRTUAL_TRAY_MAIN_ID || value === VIRTUAL_TRAY_DEPUTY_ID
+}
+
+/** Whether any filament shown for the selected plate will print from an external spool. */
+export function mappingUsesExternalSpool(
+  mapping: readonly number[] | null | undefined,
+  filaments: readonly Pick<ThreeMfProjectFilament, 'id'>[]
+): boolean {
+  return filaments.some((filament) => isExternalSpoolMappingValue(mapping?.[filament.id - 1] ?? -1))
+}
+
+/** Whether the selected plate maps multiple filaments onto the same external spool. */
+export function plateMappingNeedsExternalSpoolChangeAssist(
+  mapping: readonly number[] | null | undefined,
+  filaments: readonly Pick<ThreeMfProjectFilament, 'id'>[]
+): boolean {
+  return mappingNeedsExternalSpoolChangeAssist(
+    filaments.map((filament) => mapping?.[filament.id - 1] ?? -1)
+  )
 }
 
 export function externalSpoolLabel(spool: ExternalSpool, spoolCount: number): string {

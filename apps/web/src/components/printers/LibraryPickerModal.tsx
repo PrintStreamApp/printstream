@@ -5,7 +5,7 @@ import { useQuery } from '@tanstack/react-query'
 import { EmptyState } from '../../components/EmptyState'
 import { LibraryBreadcrumb, LibraryBreadcrumbRow } from '../../components/LibraryBreadcrumb'
 import { LibraryPickerEmptyState } from '../../components/LibraryPickerEmptyState'
-import { isDirectPrintableFileName, isPrinterModelCompatible, type LibraryBrowseResponse, type LibraryFile, type LibraryFolder, type PrinterModel } from '@printstream/shared'
+import { isDirectPrintableFileName, type LibraryBrowseResponse, type LibraryFile, type LibraryFolder } from '@printstream/shared'
 import { apiFetch } from '../../lib/apiClient'
 import { buildLibraryBreadcrumb, isBridgeFolderId, fromBridgeFolderId, toBridgeFolderId } from '../../lib/libraryNavigation'
 import { isUnslicedThreeMfFile } from '../../lib/libraryFileTags'
@@ -30,13 +30,11 @@ import { LIBRARY_VIEW_MODE_KEY, LIBRARY_SORT_KEY, LIBRARY_GROUP_KEY, LIBRARY_PAG
  * reuses the same toolbar (`DirectoryPrimaryToolbar`), filters
  * (`useLibraryFilters` + `LibraryMetadataFilters`), grouping, and pagination
  * (`PaginatedLibraryBrowser`) so the picker is inline with the Library page. It
- * only surfaces direct-printable files; when launched from a specific printer
- * card, incompatible files stay visible for context but are disabled with a
- * short compatibility note before handing control back to {@link PrintModal}.
+ * only surfaces direct-printable files. Model mismatches remain selectable because
+ * {@link PrintModal} owns the explicit warning and audited per-dispatch override.
  */
 export function LibraryPickerModal({
   printerName,
-  printerModel,
   canSlice,
   onPick,
   onClose
@@ -45,7 +43,6 @@ export function LibraryPickerModal({
    * caller has not yet chosen a printer (e.g. the page-level Print
    * button): the user picks the printer in the subsequent PrintModal. */
   printerName?: string
-  printerModel?: PrinterModel
   canSlice: boolean
   onPick: (file: LibraryFile) => void
   onClose: () => void
@@ -180,17 +177,13 @@ export function LibraryPickerModal({
         onFolderOpen={(folder) => navigateToFolder(folder.id)}
         onFilePick={onPick}
         isFilePickable={(file) => {
-          if (isDirectPrintableFileName(file.name)) {
-            return printerModel ? isPrinterModelCompatible(file.compatiblePrinterModels, printerModel) : true
-          }
+          // Keep mismatched G-code selectable. The locked PrintModal opened next owns the
+          // explicit model warning and audited per-dispatch confirmation.
+          if (isDirectPrintableFileName(file.name)) return true
           return canSlice && isUnslicedThreeMfFile(file)
         }}
         getFileDisabledReason={(file) => {
-          if (isDirectPrintableFileName(file.name)) {
-            return printerModel && !isPrinterModelCompatible(file.compatiblePrinterModels, printerModel)
-              ? `Not compatible with ${printerModel}.`
-              : null
-          }
+          if (isDirectPrintableFileName(file.name)) return null
           if (isUnslicedThreeMfFile(file) && !canSlice) {
             return 'You need Library Upload permission to slice 3MF files before printing.'
           }

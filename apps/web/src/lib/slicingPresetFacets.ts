@@ -13,7 +13,12 @@
  * metadata itself comes from `slicingPresetSummarySchema` in `@printstream/shared`.
  */
 import type { SlicingPresetSummary } from '@printstream/shared'
-import { filterSlicingPresets, type SlicingPresetKind } from './slicingPresetDirectory'
+import {
+  filterSlicingPresets,
+  formatSlicingPresetSource,
+  type SlicingPresetKind,
+  type SlicingPresetSortDirection
+} from './slicingPresetDirectory'
 import { resolveProfileLayerHeight } from './slicingPresetSelection'
 
 /** Selected values per facet id. A facet absent (or empty) constrains nothing. */
@@ -78,6 +83,12 @@ const FILAMENT_FACETS: ReadonlyArray<SlicingPresetFacet> = [
     label: 'Brand',
     placeholder: 'All brands',
     valuesOf: (profile) => uniqueStrings([profile.filamentVendor])
+  },
+  {
+    id: 'compatiblePrinter',
+    label: 'Compatible printer',
+    placeholder: 'All printers',
+    valuesOf: (profile) => uniqueStrings(profile.compatiblePrinters ?? [])
   }
 ]
 
@@ -85,6 +96,14 @@ export const SLICING_PRESET_FACETS: Record<SlicingPresetKind, ReadonlyArray<Slic
   machine: MACHINE_FACETS,
   process: PROCESS_FACETS,
   filament: FILAMENT_FACETS
+}
+
+/** Source is filtered separately because its default follows the data, but it remains groupable. */
+export const SLICING_PRESET_SOURCE_FACET: SlicingPresetFacet = {
+  id: 'source',
+  label: 'Source',
+  placeholder: 'All sources',
+  valuesOf: (profile) => [formatSlicingPresetSource(profile.source)]
 }
 
 /**
@@ -153,6 +172,41 @@ export function groupSlicingPresetsByFacet(
     if (left.label === UNGROUPED_LABEL) return 1
     if (right.label === UNGROUPED_LABEL) return -1
     return left.label.localeCompare(right.label, undefined, { numeric: true, sensitivity: 'base' })
+  })
+}
+
+/**
+ * Sorts profiles by the first display value of a facet, with missing values kept at the end.
+ * Multi-valued facets use their alphabetically first value so the order is deterministic; grouping
+ * remains the better tool when someone needs to see a row under every compatible printer.
+ */
+export function sortSlicingPresetsByFacet(
+  profiles: ReadonlyArray<SlicingPresetSummary>,
+  facet: SlicingPresetFacet,
+  sortDirection: SlicingPresetSortDirection
+): SlicingPresetSummary[] {
+  const directionMultiplier = sortDirection === 'asc' ? 1 : -1
+  const compare = (left: string, right: string) => left.localeCompare(
+    right,
+    undefined,
+    { numeric: true, sensitivity: 'base' }
+  )
+  const firstValue = (profile: SlicingPresetSummary): string | null => {
+    const values = [...facet.valuesOf(profile)].sort(compare)
+    return values[0] ?? null
+  }
+
+  return [...profiles].sort((left, right) => {
+    const leftValue = firstValue(left)
+    const rightValue = firstValue(right)
+    if (leftValue === null && rightValue !== null) return 1
+    if (rightValue === null && leftValue !== null) return -1
+
+    const comparison = leftValue !== null && rightValue !== null
+      ? compare(leftValue, rightValue)
+      : 0
+    const withNameFallback = comparison === 0 ? compare(left.name, right.name) : comparison
+    return withNameFallback * directionMultiplier
   })
 }
 

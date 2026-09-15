@@ -79,6 +79,44 @@ test('an STL picked from disk is parsed and welded in the tab', async () => {
   }
 })
 
+test('an OBJ with vertex colours reports its retained source appearance', async () => {
+  const store = createLocalImportStore()
+  try {
+    const source = ['v 0 0 0 1 0 0', 'v 1 0 0 0 1 0', 'v 0 1 0 0 0 1', 'f 1 2 3'].join('\n')
+    const staged = await store.stageFile(new File([source], 'Coloured.obj'), 'object')
+    assert.equal(staged.sourceColorMode, 'vertex')
+    assert.deepEqual(Array.from(await store.fetchSourceColors(staged.importId) ?? []), [
+      1, 0, 0, 1,
+      0, 1, 0, 1,
+      0, 0, 1, 1
+    ])
+  } finally {
+    store.dispose()
+  }
+})
+
+test('an OBJ selected with its MTL reports retained per-face material colours', async () => {
+  const store = createLocalImportStore()
+  try {
+    const obj = ['mtllib model.mtl', 'v 0 0 0', 'v 1 0 0', 'v 0 1 0', 'usemtl shell', 'f 1 2 3'].join('\n')
+    const staged = await store.stageFile(
+      new File([obj], 'model.obj'),
+      'object',
+      undefined,
+      [new File(['newmtl shell\nKd 1 0.5 0'], 'model.mtl')]
+    )
+
+    assert.equal(staged.sourceColorMode, 'material')
+    assert.deepEqual(Array.from(await store.fetchSourceColors(staged.importId) ?? []), [
+      1, 0.5, 0, 1,
+      1, 0.5, 0, 1,
+      1, 0.5, 0, 1
+    ])
+  } finally {
+    store.dispose()
+  }
+})
+
 test('only the final extension is dropped from an import name', async () => {
   const store = createLocalImportStore()
   try {

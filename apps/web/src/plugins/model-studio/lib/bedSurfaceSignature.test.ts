@@ -36,6 +36,12 @@ test('gaining or losing the plate mesh is stale', () => {
   assert.notEqual(bedSurfaceSignature(A1_BED), bedSurfaceSignature({ ...A1_BED, bedModel: null }))
 })
 
+test('gaining or replacing a custom bed texture is stale', () => {
+  const textured = { ...A1_BED, bedTexture: { uuid: 'texture-a' } }
+  assert.notEqual(bedSurfaceSignature(A1_BED), bedSurfaceSignature(textured))
+  assert.notEqual(bedSurfaceSignature(textured), bedSurfaceSignature({ ...textured, bedTexture: { uuid: 'texture-b' } }))
+})
+
 test('a printer switch that resizes the bed is stale', () => {
   assert.notEqual(bedSurfaceSignature(A1_BED), bedSurfaceSignature(H2D_BED))
 })

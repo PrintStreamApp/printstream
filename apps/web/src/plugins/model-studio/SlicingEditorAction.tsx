@@ -56,6 +56,9 @@ export function SlicingEditorAction(props: Record<string, unknown>) {
         signal: AbortSignal
       }) => void | Promise<void>)
     : undefined
+  const onSliceInputChanged = typeof props.onSliceInputChanged === 'function'
+    ? (props.onSliceInputChanged as () => void)
+    : undefined
   // When the editor IS the slice UI (simple mode removed), the host opens it
   // directly: no button, and closing the editor closes the host dialog.
   const autoOpen = props.autoOpen === true
@@ -118,6 +121,7 @@ export function SlicingEditorAction(props: Record<string, unknown>) {
             canSlice={canSlice}
             sliceDisabledReason={sliceDisabledReason}
             slicing={slicing}
+            onSliceInputChanged={onSliceInputChanged}
             onSlice={onSlice}
           />
         </LazyDialogBoundary>

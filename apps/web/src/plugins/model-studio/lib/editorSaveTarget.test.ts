@@ -68,6 +68,7 @@ function target() {
       stageFromLibrary: async () => { throw new Error('unused') },
       meshUrl: () => '',
       fetchMesh: async () => new ArrayBuffer(0),
+      fetchSourceColors: async () => null,
       importsForBake: async () => [],
       dispose: () => {}
     },
@@ -176,6 +177,7 @@ test('a save against an existing project refuses to bake from a released archive
       stageFile: async () => { throw new Error('unused') },
       stageFromLibrary: async () => { throw new Error('unused') },
       meshUrl: () => '', fetchMesh: async () => new ArrayBuffer(0),
+      fetchSourceColors: async () => null,
       importsForBake: async () => [], dispose: () => {}
     },
     projectName: () => 'Bracket.3mf'

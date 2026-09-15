@@ -13,19 +13,21 @@ import {
   spoolAdjustSchema,
   spoolAssignSchema,
   filamentManagerSettingsSchema,
+  filamentBarcodeLookupInputSchema,
   type FilamentUsageEntry,
   type FilamentUsageSource
 } from '@printstream/shared'
 import type { FilamentSpoolUsage } from '@prisma/client'
 import type { ApiPluginContext } from '../../plugin/types.js'
-import { annotateRequestAuditLog } from '../../lib/audit-logs.js'
+import { annotateRequestAuditLog, skipRequestAuditLog } from '../../lib/audit-logs.js'
 import { requireRequestPermission } from '../../lib/authorization.js'
-import { badRequest, notFound } from '../../lib/http-error.js'
+import { badRequest, HttpError, notFound } from '../../lib/http-error.js'
 import { requireRequestWorkspaceId, requireRouteParam } from '../../lib/request-helpers.js'
 import { broadcastPluginSettingsChanged } from '../../lib/ws-resource-events.js'
 import { toSpoolDto } from './dto.js'
 import { broadcastSpoolsChanged } from './events.js'
 import { loadAutoAddBambuSpools, setAutoAddBambuSpools } from './settings.js'
+import type { FilamentBarcodeCatalog } from './barcode-catalog.js'
 import {
   adjustSpoolRow,
   assignSpoolRow,
@@ -53,7 +55,7 @@ function usageToDto(row: FilamentSpoolUsage): FilamentUsageEntry {
   }
 }
 
-export function registerFilamentManagerRoutes(context: ApiPluginContext): void {
+export function registerFilamentManagerRoutes(context: ApiPluginContext, barcodeCatalog: FilamentBarcodeCatalog): void {
   const db = context.prisma
 
   // --- settings -----------------------------------------------------
@@ -81,6 +83,24 @@ export function registerFilamentManagerRoutes(context: ApiPluginContext): void {
   context.router.get('/stats', requireRequestPermission(LIBRARY_VIEW_PERMISSION), async (request, response) => {
     const workspaceId = requireRequestWorkspaceId(request)
     response.json(await readFilamentUsageStats(db, workspaceId))
+  })
+
+  // A lookup reads a public catalog and changes no PrintStream state. Barcode scanners may retry
+  // rapidly while settling on a label, so recording each attempt would create audit-log noise.
+  context.router.post('/barcodes/lookup', requireRequestPermission(LIBRARY_MANAGE_PERMISSION), async (request, response) => {
+    skipRequestAuditLog(request)
+    const parsed = filamentBarcodeLookupInputSchema.safeParse(request.body)
+    if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message ?? 'Invalid barcode')
+    try {
+      response.json({
+        code: parsed.data.code,
+        source: 'open-filament-database',
+        product: await barcodeCatalog.lookup(parsed.data.code)
+      })
+    } catch (error) {
+      context.logger.warn('Filament barcode lookup is unavailable', error)
+      throw new HttpError(503, 'The filament barcode catalog is temporarily unavailable')
+    }
   })
 
   // --- spools -------------------------------------------------------

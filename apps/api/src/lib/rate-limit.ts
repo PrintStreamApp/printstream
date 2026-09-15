@@ -15,6 +15,8 @@ export interface RateLimitOptions {
   max: number
   methods?: readonly RateLimitMethod[]
   skip?: (request: Request) => boolean
+  /** Optional authenticated subject override, such as a self-hosted licence id. */
+  subject?: (request: Request) => string | null
   now?: () => number
 }
 
@@ -45,7 +47,7 @@ export function createRateLimitMiddleware(options: RateLimitOptions): RequestHan
       nextCleanupAt = currentTime + options.windowMs
     }
 
-    const key = `${options.name}:${readRateLimitSubject(request)}`
+    const key = `${options.name}:${options.subject?.(request) ?? readRateLimitSubject(request)}`
     const existing = entries.get(key)
     const entry = existing && existing.resetAt > currentTime
       ? existing

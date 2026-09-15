@@ -11,7 +11,7 @@
  */
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { parseGltfMesh } from './mesh-gltf.js'
+import { decodeGltfTextureImages, parseGltfMesh } from './mesh-gltf.js'
 import { ModelImportError } from './imported-mesh.js'
 
 /** Pack a JSON document and an optional binary chunk into a valid GLB. */
@@ -83,6 +83,116 @@ test('a GLB triangle parses, converted from metres to millimetres', () => {
   const mesh = parseGltfMesh(triangleGlb())
   assert.equal(mesh.indices.length / 3, 1)
   assert.deepEqual(mesh.bounds, { min: { x: 0, y: 0, z: 0 }, max: { x: 1000, y: 1000, z: 0 } })
+})
+
+test('an embedded GLB base-colour texture becomes sampled source painting', async () => {
+  const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0])
+  const indices = new Uint16Array([0, 1, 2])
+  const uvs = new Float32Array([0, 0, 1, 0, 0, 1])
+  const bytes = new Uint8Array(72)
+  bytes.set(new Uint8Array(positions.buffer), 0)
+  bytes.set(new Uint8Array(indices.buffer), 36)
+  bytes.set(new Uint8Array(uvs.buffer), 44)
+  bytes.set([1, 2, 3, 4], 68)
+  const source = glb({
+    asset: { version: '2.0' },
+    scenes: [{ nodes: [0] }], scene: 0,
+    nodes: [{ mesh: 0 }],
+    meshes: [{ primitives: [{ attributes: { POSITION: 0, TEXCOORD_0: 2 }, indices: 1, material: 0 }] }],
+    accessors: [
+      { bufferView: 0, componentType: 5126, count: 3, type: 'VEC3' },
+      { bufferView: 1, componentType: 5123, count: 3, type: 'SCALAR' },
+      { bufferView: 2, componentType: 5126, count: 3, type: 'VEC2' }
+    ],
+    bufferViews: [
+      { buffer: 0, byteOffset: 0, byteLength: 36 },
+      { buffer: 0, byteOffset: 36, byteLength: 6 },
+      { buffer: 0, byteOffset: 44, byteLength: 24 },
+      { buffer: 0, byteOffset: 68, byteLength: 4 }
+    ],
+    buffers: [{ byteLength: bytes.length }],
+    images: [{ bufferView: 3, mimeType: 'image/png' }],
+    textures: [{ source: 0 }],
+    materials: [{ pbrMetallicRoughness: { baseColorFactor: [0.5, 1, 1, 1], baseColorTexture: { index: 0 } } }]
+  }, bytes)
+  let decodedBytes: Uint8Array | undefined
+  const decodedImages = await decodeGltfTextureImages(source, (_name, imageBytes) => {
+    decodedBytes = imageBytes
+    return {
+      width: 2,
+      height: 2,
+      rgba: Uint8Array.from([
+        255, 0, 0, 255, 0, 255, 0, 255,
+        0, 0, 255, 255, 255, 255, 255, 255
+      ])
+    }
+  })
+  const mesh = parseGltfMesh(source, { decodedImages })
+
+  assert.deepEqual(decodedBytes, Uint8Array.from([1, 2, 3, 4]))
+  assert.equal(mesh.sourceColorMode, 'texture')
+  assert.ok(mesh.indices.length / 3 >= 10_000)
+  assert.equal(mesh.triangleCornerColors?.length, mesh.indices.length * 4)
+  assert.ok(Math.max(...mesh.triangleCornerColors!.filter((_value, index) => index % 4 === 0)) <= 0.5)
+})
+
+test('a used external glTF image is refused rather than silently losing its texture', async () => {
+  const { bytes, positionBytes } = triangleBuffer()
+  const source = glb({
+    asset: { version: '2.0' }, scenes: [{ nodes: [0] }], scene: 0,
+    nodes: [{ mesh: 0 }],
+    meshes: [{ primitives: [{ attributes: { POSITION: 0 }, indices: 1, material: 0 }] }],
+    accessors: [
+      { bufferView: 0, componentType: 5126, count: 3, type: 'VEC3' },
+      { bufferView: 1, componentType: 5123, count: 3, type: 'SCALAR' }
+    ],
+    bufferViews: [
+      { buffer: 0, byteOffset: 0, byteLength: positionBytes },
+      { buffer: 0, byteOffset: positionBytes, byteLength: 6 }
+    ],
+    buffers: [{ byteLength: bytes.length }],
+    images: [{ uri: 'texture.png' }], textures: [{ source: 0 }],
+    materials: [{ pbrMetallicRoughness: { baseColorTexture: { index: 0 } } }]
+  }, bytes)
+  await assert.rejects(() => decodeGltfTextureImages(source, () => {
+    throw new Error('decoder should not be reached')
+  }), /separate image file/)
+})
+
+test('an extension-only compressed texture is refused rather than imported colourless', async () => {
+  const source = new TextEncoder().encode(JSON.stringify({
+    asset: { version: '2.0' }, scenes: [{ nodes: [0] }], scene: 0,
+    nodes: [{ mesh: 0 }],
+    meshes: [{ primitives: [{ attributes: { POSITION: 0 }, material: 0 }] }],
+    textures: [{ extensions: { KHR_texture_basisu: { source: 0 } } }],
+    materials: [{ pbrMetallicRoughness: { baseColorTexture: { index: 0 } } }]
+  }))
+  await assert.rejects(() => decodeGltfTextureImages(source, () => {
+    throw new Error('decoder should not be reached')
+  }), /Basis Universal/)
+})
+
+test('a textured primitive without UVs is refused rather than imported colourless', () => {
+  const { bytes, positionBytes } = triangleBuffer()
+  const source = glb({
+    asset: { version: '2.0' }, scenes: [{ nodes: [0] }], scene: 0,
+    nodes: [{ mesh: 0 }],
+    meshes: [{ primitives: [{ attributes: { POSITION: 0 }, indices: 1, material: 0 }] }],
+    accessors: [
+      { bufferView: 0, componentType: 5126, count: 3, type: 'VEC3' },
+      { bufferView: 1, componentType: 5123, count: 3, type: 'SCALAR' }
+    ],
+    bufferViews: [
+      { buffer: 0, byteOffset: 0, byteLength: positionBytes },
+      { buffer: 0, byteOffset: positionBytes, byteLength: 6 }
+    ],
+    buffers: [{ byteLength: bytes.length }],
+    images: [{ bufferView: 0, mimeType: 'image/png' }], textures: [{ source: 0 }],
+    materials: [{ pbrMetallicRoughness: { baseColorTexture: { index: 0 } } }]
+  }, bytes)
+  assert.throws(() => parseGltfMesh(source, {
+    decodedImages: new Map([[0, { width: 1, height: 1, rgba: Uint8Array.of(255, 0, 0, 255) }]])
+  }), /missing texture coordinates/)
 })
 
 test('a node translation is scaled to millimetres alongside the coordinates it moves', () => {

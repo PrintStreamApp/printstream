@@ -75,9 +75,12 @@ export function QueueItemCard(props: QueueItemCardProps) {
             <Typography level="body-xs" textColor="text.tertiary" noWrap>{sourceLine}</Typography>
           ) : null}
         </Box>
-        <Chip size="sm" variant="soft" color={item.remaining > 1 ? 'primary' : 'neutral'}>
-          {item.completedCount}/{item.quantity}
-        </Chip>
+        <Stack direction="row" spacing={0.5}>
+          {item.pinned ? <Chip size="sm" variant="soft" color="primary">Pinned</Chip> : null}
+          <Chip size="sm" variant="soft" color={item.remaining > 1 ? 'primary' : 'neutral'}>
+            {item.completedCount}/{item.quantity}
+          </Chip>
+        </Stack>
       </Stack>
 
       <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>

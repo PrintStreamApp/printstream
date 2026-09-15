@@ -20,9 +20,11 @@
  * content uses its own fallback (see `Markdown.tsx`, which shows the raw text meanwhile).
  */
 import { Box, Button, CircularProgress, DialogActions, ModalClose, ModalDialog, Stack, Typography } from '@mui/joy'
-import { dialogPresentationProps } from '../lib/dialogPresentation'
 import { ScrollableModalDialog } from './ScrollableDialog'
 import { BackAwareModal } from './BackAwareModal'
+import { useDialogPresentationState } from '../hooks/useDialogPresentationState'
+import { useMobileViewport } from './useMobileViewport'
+import { dialogPresentationProps } from '../lib/dialogPresentation'
 
 export interface LazyDialogFallbackProps {
   /** What is opening, as the user would say it. Announced to screen readers. */
@@ -30,18 +32,37 @@ export interface LazyDialogFallbackProps {
   /** Optional detail when the short label cannot say what the startup work is. */
   description?: string
   /**
-   * Which shell to draw. `maximized` matches the 3D editor/preview, which open at the shared
-   * maximized size; `dialog` matches the standard 720px-wide scrollable form dialogs.
+   * Which shell to draw. `maximized` matches the editor; `preview` resolves the preview's
+   * remembered desktop size and forced-maximized phone size; `dialog` matches the standard
+   * 720px-wide scrollable form dialogs.
    */
-  variant?: 'dialog' | 'maximized'
+  variant?: 'dialog' | 'maximized' | 'preview'
   /** Dismisses the requested dialog while its code finishes loading harmlessly in the background. */
   onClose: () => void
 }
 
 /** Centred spinner + label, the same idiom the editor uses for its own project-loading state. */
-function LoadingBody({ label, description }: { label: string; description?: string }) {
+function LoadingBody({
+  label,
+  description,
+  previewFootprint = false,
+  expanded = false
+}: {
+  label: string
+  description?: string
+  previewFootprint?: boolean
+  expanded?: boolean
+}) {
   return (
-    <Box sx={{ flex: 1, minHeight: 160, display: 'grid', placeItems: 'center' }}>
+    <Box
+      sx={{
+        flex: expanded ? 1 : undefined,
+        minHeight: expanded ? 0 : 160,
+        height: previewFootprint && !expanded ? { xs: '50dvh', sm: '62dvh' } : undefined,
+        display: 'grid',
+        placeItems: 'center'
+      }}
+    >
       <Stack spacing={1} alignItems="center" role="status" aria-live="polite">
         <CircularProgress size="sm" />
         <Typography level="body-sm" textColor="text.tertiary">{label}</Typography>
@@ -56,22 +77,57 @@ function LoadingBody({ label, description }: { label: string; description?: stri
 }
 
 export function LazyDialogFallback({ label, description, variant = 'dialog', onClose }: LazyDialogFallbackProps) {
+  const isMobile = useMobileViewport()
+  const { presentation: requestedPreviewPresentation } = useDialogPresentationState({
+    maximizedStorageKey: variant === 'preview' ? 'bambu.preview.maximized' : null,
+    base: variant === 'maximized' ? 'maximized' : undefined
+  })
+  const previewPresentation = isMobile && requestedPreviewPresentation === 'standard'
+    ? 'maximized'
+    : requestedPreviewPresentation
+
   // The import itself cannot be aborted, but closing can safely unmount this request while the
   // browser finishes and caches it. Reopening then uses that cached module rather than trapping the
   // user behind an operation they cannot control.
   if (variant === 'maximized') {
-    // The same shared geometry the real dialog uses, so the swap when the chunk lands is a fill-in
-    // rather than a resize.
     const mode = dialogPresentationProps('maximized')
     return (
       <BackAwareModal open onClose={onClose}>
         <ModalDialog variant="outlined" aria-busy {...mode} sx={[mode.sx, { display: 'flex', p: 0 }]}>
           <ModalClose />
-          <LoadingBody label={label} description={description} />
+          <LoadingBody label={label} description={description} expanded />
           <DialogActions sx={{ px: 2, pb: 2 }}>
             <Button variant="outlined" color="neutral" onClick={onClose}>Close</Button>
           </DialogActions>
         </ModalDialog>
+      </BackAwareModal>
+    )
+  }
+  if (variant === 'preview') {
+    const expanded = previewPresentation !== 'standard'
+    return (
+      <BackAwareModal open onClose={onClose}>
+        <ScrollableModalDialog
+          variant="outlined"
+          aria-busy
+          presentation={previewPresentation}
+          sx={{
+            width: { xs: '100%', md: 1120 },
+            maxWidth: '100%',
+            ...(expanded ? { display: 'flex', minHeight: 0 } : null)
+          }}
+        >
+          <ModalClose />
+          <LoadingBody
+            label={label}
+            description={description}
+            previewFootprint
+            expanded={expanded}
+          />
+          <DialogActions>
+            <Button variant="outlined" color="neutral" onClick={onClose}>Close</Button>
+          </DialogActions>
+        </ScrollableModalDialog>
       </BackAwareModal>
     )
   }

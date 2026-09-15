@@ -8,6 +8,14 @@ import path from 'node:path'
 import { afterEach, test } from 'node:test'
 import { closeEphemeralServer } from '../test-utils/http-test-server.js'
 import { SlicerClient, SlicerServiceError } from './slicer-client.js'
+import {
+  readPortableMachineBedAsset,
+  setPortableMachineBedAsset,
+  SLICE_UPLOAD_FRAME_HEADER_BYTES,
+  SLICE_UPLOAD_FRAME_MAGIC,
+  type ProcessConfig,
+  type SliceUploadManifest
+} from '@printstream/shared'
 
 const cleanupPaths = new Set<string>()
 
@@ -27,12 +35,13 @@ test('slicer client streams slice responses to disk with content length', async 
 
   const artifactBytes = Buffer.from('artifact-bytes')
   let seenContentLength: string | undefined
-  let seenEnvelope: string | undefined
+  let seenBody = Buffer.alloc(0)
   const server = createServer((request, response) => {
     seenContentLength = request.headers['content-length']
-    seenEnvelope = typeof request.headers['x-printstream-slice-request'] === 'string' ? request.headers['x-printstream-slice-request'] : undefined
-    request.resume()
+    const chunks: Buffer[] = []
+    request.on('data', (chunk: Buffer) => chunks.push(chunk))
     request.on('end', () => {
+      seenBody = Buffer.concat(chunks)
       response.statusCode = 200
       response.setHeader('Content-Type', 'application/octet-stream')
       response.setHeader('Content-Length', String(artifactBytes.byteLength))
@@ -57,12 +66,76 @@ test('slicer client streams slice responses to disk with content length', async 
       signal: new AbortController().signal
     })
 
-    assert.equal(seenContentLength, String(sourceBytes.byteLength))
-    assert.equal(typeof seenEnvelope, 'string')
+    assert.equal(seenContentLength, String(seenBody.byteLength))
+    assert.equal(requestFrame(seenBody).manifest.envelope.jobId, 'job-1')
+    assert.deepEqual(requestFrame(seenBody).source, sourceBytes)
     assert.equal(result.outputFileName, 'result.gcode.3mf')
     assert.equal(result.output.length, 1)
     assert.equal(await readFile(result.artifactPath, 'utf8'), artifactBytes.toString('utf8'))
     cleanupPaths.add(path.dirname(result.artifactPath))
+  } finally {
+    await closeEphemeralServer(server)
+  }
+})
+
+test('slicer client moves portable bed assets out of the manifest and sends their raw bytes', async () => {
+  const sourceDir = await mkdtemp(path.join(tmpdir(), 'printstream-slicer-client-assets-'))
+  cleanupPaths.add(sourceDir)
+  const sourcePath = path.join(sourceDir, 'input.3mf')
+  const sourceBytes = Buffer.from('project')
+  await writeFile(sourcePath, sourceBytes)
+
+  // Two maximum-sized assets previously made the base64 request header ~3.7 MB and guaranteed a
+  // 431 response against the slicer's 2 MB cap. The framed manifest must stay small instead.
+  const modelBytes = Buffer.alloc(1024 * 1024, 1)
+  const textureBytes = Buffer.alloc(1024 * 1024, 2)
+  let config = setPortableMachineBedAsset({}, 'model', { name: 'bed.stl', bytes: modelBytes })
+  config = setPortableMachineBedAsset(config, 'texture', { name: 'bed.svg', bytes: textureBytes })
+  let seenBody = Buffer.alloc(0)
+  const server = createServer((request, response) => {
+    const chunks: Buffer[] = []
+    request.on('data', (chunk: Buffer) => chunks.push(chunk))
+    request.on('end', () => {
+      seenBody = Buffer.concat(chunks)
+      response.statusCode = 200
+      response.setHeader('Content-Length', '1')
+      response.end('x')
+    })
+  })
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()))
+
+  try {
+    const address = server.address()
+    assert.ok(address && typeof address === 'object')
+    const client = new SlicerClient(`http://127.0.0.1:${address.port}`)
+    const result = await client.run({
+      jobId: 'job-assets',
+      sourceFileName: 'input.3mf',
+      sourcePath,
+      request: makeRequest(),
+      profileFiles: [{
+        id: 'custom:machine',
+        source: 'custom',
+        kind: 'machine',
+        name: 'Custom machine',
+        content: JSON.stringify(config)
+      }],
+      signal: new AbortController().signal
+    })
+    cleanupPaths.add(path.dirname(result.artifactPath))
+
+    const frame = requestFrame(seenBody)
+    assert.ok(Buffer.byteLength(JSON.stringify(frame.manifest), 'utf8') < 16 * 1024)
+    assert.deepEqual(frame.manifest.bedAssets.map((asset) => [asset.kind, asset.byteLength]), [
+      ['model', modelBytes.byteLength],
+      ['texture', textureBytes.byteLength]
+    ])
+    const transferredProfile = frame.manifest.envelope.profileFiles?.[0]
+    const transferredConfig = JSON.parse(transferredProfile?.content ?? '{}') as ProcessConfig
+    assert.equal(readPortableMachineBedAsset(transferredConfig, 'model'), null)
+    assert.equal(readPortableMachineBedAsset(transferredConfig, 'texture'), null)
+    assert.deepEqual(frame.assets, [modelBytes, textureBytes])
+    assert.deepEqual(frame.source, sourceBytes)
   } finally {
     await closeEphemeralServer(server)
   }
@@ -272,10 +345,10 @@ async function createSlicerStub(name: string) {
       response.end(JSON.stringify({ output: [{ stream: 'system', text: name, createdAt: new Date().toISOString() }] }))
       return
     }
-    const envelope = typeof request.headers['x-printstream-slice-request'] === 'string' ? request.headers['x-printstream-slice-request'] : ''
-    const parsed = JSON.parse(Buffer.from(envelope, 'base64url').toString('utf8')) as { jobId?: string }
-    request.resume()
+    const chunks: Buffer[] = []
+    request.on('data', (chunk: Buffer) => chunks.push(chunk))
     request.on('end', () => {
+      const parsed = requestFrame(Buffer.concat(chunks)).manifest.envelope
       sliceJobIds.push(parsed.jobId ?? 'unknown')
       pendingSlices.push(() => {
         const artifactBytes = Buffer.from(`artifact-from-${name}`)
@@ -298,6 +371,21 @@ async function createSlicerStub(name: string) {
     },
     close: () => closeEphemeralServer(server)
   }
+}
+
+/** Decode enough of a framed request for transport assertions and HTTP stubs. */
+function requestFrame(body: Buffer): { manifest: SliceUploadManifest; assets: Buffer[]; source: Buffer } {
+  assert.equal(body.subarray(0, 4).toString('ascii'), SLICE_UPLOAD_FRAME_MAGIC)
+  const manifestLength = body.readUInt32BE(4)
+  const manifestEnd = SLICE_UPLOAD_FRAME_HEADER_BYTES + manifestLength
+  const manifest = JSON.parse(body.subarray(SLICE_UPLOAD_FRAME_HEADER_BYTES, manifestEnd).toString('utf8')) as SliceUploadManifest
+  const assets: Buffer[] = []
+  let offset = manifestEnd
+  for (const descriptor of manifest.bedAssets) {
+    assets.push(body.subarray(offset, offset + descriptor.byteLength))
+    offset += descriptor.byteLength
+  }
+  return { manifest, assets, source: body.subarray(offset) }
 }
 
 async function waitFor(condition: () => boolean, timeoutMs = 5000): Promise<void> {

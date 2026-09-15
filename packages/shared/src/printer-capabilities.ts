@@ -14,6 +14,10 @@ import {
   type PrinterStage,
   type PrinterStatus
 } from './printer-contracts.js'
+import {
+  BAMBU_STUDIO_PRINT_OPTION_CAPABILITIES,
+  type BambuStudioPrintOptionConfig
+} from './generated/printer-print-option-capabilities.generated.js'
 
 export interface PrinterCalibrationCapabilities {
   xcam: boolean
@@ -90,6 +94,8 @@ export interface PrinterPrintOptionCapabilities {
   flowCalibrationAuto: boolean
   firstLayerInspection: boolean
   timelapse: boolean
+  internalTimelapseStorage: boolean
+  externalFilamentChangeAssist: boolean
   filamentDynamicsCalibration: boolean
   nozzleOffsetCalibration: boolean
 }
@@ -149,12 +155,6 @@ const AUTO_FLOW_CALIBRATION_MODELS: ReadonlySet<PrinterModel> = new Set([
   'H2DPRO',
   'H2C',
   'H2S'
-])
-
-const FIRST_LAYER_INSPECTION_MODELS: ReadonlySet<PrinterModel> = new Set([
-  'X1',
-  'X1C',
-  'X1E'
 ])
 
 const DOOR_SENSOR_MODELS: ReadonlySet<PrinterModel> = new Set([
@@ -237,6 +237,13 @@ export function mayRequireExternalStorageForActiveSkipObjects(model: PrinterMode
   return ACTIVE_SKIP_OBJECT_EXTERNAL_STORAGE_MODELS.has(model)
 }
 
+export function supportsStoreSentFilesOnExternalStorage(
+  model: PrinterModel,
+  firmwareVersion?: string | null
+): boolean {
+  return getBambuStudioPrintOptionConfig(model, firmwareVersion).storeSentFilesOnExternalStorage
+}
+
 const CORE_XY_MOTION_MODELS: ReadonlySet<PrinterModel> = new Set([
   'X1',
   'X1C',
@@ -258,22 +265,23 @@ export function usesCoreXyMotionSystem(model: PrinterModel): boolean {
 /** Print-start options that Bambu clients expose conditionally by model. */
 export function getPrinterPrintStartOptions(
   model: PrinterModel,
-  status?: (Pick<PrinterStatus, 'printOptions'> & { printStartOptions?: PrinterPrintStartOptions }) | null
+  status?: {
+    printOptions: PrinterStatus['printOptions']
+    printStartOptions?: Partial<PrinterPrintStartOptions>
+  } | null
 ): PrinterPrintStartOptions {
-  if (status?.printStartOptions) return status.printStartOptions
-
   const calibration = getPrinterCalibrationCapabilities(model)
   const firstLayerInspectionSupported =
     status?.printOptions.firstLayerInspection.supported ?? supportsPrinterFirstLayerInspection(model)
-
-  return {
+  const fallback: PrinterPrintStartOptions = {
     bedLevel: {
       supported: calibration.bedLeveling,
       autoSupported: supportsPrinterAutoBedLeveling(model),
       current: null
     },
     vibrationCompensation: {
-      supported: calibration.vibration,
+      // BambuStudio sends this as a fixed false value; it is not a print-dialog choice.
+      supported: false,
       current: null
     },
     flowCalibration: {
@@ -291,6 +299,14 @@ export function getPrinterPrintStartOptions(
       supported: supportsPrinterCamera(model),
       current: null
     },
+    internalTimelapseStorage: {
+      supported: false,
+      current: null
+    },
+    externalFilamentChangeAssist: {
+      supported: false,
+      current: null
+    },
     filamentDynamicsCalibration: {
       supported: false,
       current: null
@@ -300,11 +316,35 @@ export function getPrinterPrintStartOptions(
       current: null
     }
   }
+
+  const reported = status?.printStartOptions
+  if (!reported) return fallback
+
+  // Older APIs and cached status snapshots can omit newly introduced fields. Merge every
+  // field independently so one partial capability report cannot make print submission fail.
+  return {
+    bedLevel: reported.bedLevel ?? fallback.bedLevel,
+    vibrationCompensation: fallback.vibrationCompensation,
+    flowCalibration: reported.flowCalibration ?? fallback.flowCalibration,
+    firstLayerInspection: reported.firstLayerInspection ?? fallback.firstLayerInspection,
+    timelapse: reported.timelapse ?? fallback.timelapse,
+    internalTimelapseStorage:
+      reported.internalTimelapseStorage ?? fallback.internalTimelapseStorage,
+    externalFilamentChangeAssist:
+      reported.externalFilamentChangeAssist ?? fallback.externalFilamentChangeAssist,
+    filamentDynamicsCalibration:
+      reported.filamentDynamicsCalibration ?? fallback.filamentDynamicsCalibration,
+    nozzleOffsetCalibration:
+      reported.nozzleOffsetCalibration ?? fallback.nozzleOffsetCalibration
+  }
 }
 
 export function getPrinterPrintOptionCapabilities(
   model: PrinterModel,
-  status?: (Pick<PrinterStatus, 'printOptions'> & { printStartOptions?: PrinterPrintStartOptions }) | null
+  status?: {
+    printOptions: PrinterStatus['printOptions']
+    printStartOptions?: Partial<PrinterPrintStartOptions>
+  } | null
 ): PrinterPrintOptionCapabilities {
   const options = getPrinterPrintStartOptions(model, status)
   return {
@@ -315,6 +355,8 @@ export function getPrinterPrintOptionCapabilities(
     flowCalibrationAuto: options.flowCalibration.autoSupported,
     firstLayerInspection: options.firstLayerInspection.supported,
     timelapse: options.timelapse.supported,
+    internalTimelapseStorage: options.internalTimelapseStorage.supported,
+    externalFilamentChangeAssist: options.externalFilamentChangeAssist.supported,
     filamentDynamicsCalibration: options.filamentDynamicsCalibration.supported,
     nozzleOffsetCalibration: options.nozzleOffsetCalibration.supported
   }
@@ -332,8 +374,49 @@ export function supportsPrinterAutoFlowCalibration(model: PrinterModel): boolean
   return AUTO_FLOW_CALIBRATION_MODELS.has(model)
 }
 
-export function supportsPrinterFirstLayerInspection(model: PrinterModel): boolean {
-  return FIRST_LAYER_INSPECTION_MODELS.has(model)
+export function supportsPrinterFirstLayerInspection(
+  model: PrinterModel,
+  firmwareVersion?: string | null
+): boolean {
+  return getBambuStudioPrintOptionConfig(model, firmwareVersion).firstLayerInspection
+}
+
+export function supportsPrinterAutoRecovery(
+  model: PrinterModel,
+  firmwareVersion?: string | null
+): boolean {
+  return getBambuStudioPrintOptionConfig(model, firmwareVersion).autoRecovery
+}
+
+const UNKNOWN_BAMBU_STUDIO_PRINT_OPTION_CONFIG: BambuStudioPrintOptionConfig = Object.freeze({
+  aiMonitoring: false,
+  autoRecovery: false,
+  buildPlateDetection: false,
+  buildPlateDetectionType: null,
+  firstLayerInspection: false,
+  promptSound: false,
+  storeSentFilesOnExternalStorage: false
+})
+
+/**
+ * Resolves the same cumulative firmware-versioned printer resource BambuStudio overlays onto MQTT.
+ * A missing firmware version deliberately selects the base `00.00.00.00` snapshot, matching
+ * Studio before its post-connect `get_version` response arrives.
+ */
+export function getBambuStudioPrintOptionConfig(
+  model: PrinterModel,
+  firmwareVersion?: string | null
+): BambuStudioPrintOptionConfig {
+  const snapshots = BAMBU_STUDIO_PRINT_OPTION_CAPABILITIES[model]
+  if (!snapshots || snapshots.length === 0) return UNKNOWN_BAMBU_STUDIO_PRINT_OPTION_CONFIG
+
+  const installedVersion = firmwareVersion?.trim() || '00.00.00.00'
+  let resolved = snapshots[0]!.config
+  for (const snapshot of snapshots) {
+    if (snapshot.minimumFirmwareVersion > installedVersion) break
+    resolved = snapshot.config
+  }
+  return resolved
 }
 
 export interface PrinterControlCapabilities {

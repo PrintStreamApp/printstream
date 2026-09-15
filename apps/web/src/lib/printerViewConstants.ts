@@ -92,7 +92,15 @@ export const PRINTER_SETTINGS_LABELS: Record<PrinterPrintOptionKey, string> = {
   firstLayerInspection: 'First-layer inspection',
   autoRecovery: 'Auto-recovery from step loss',
   promptSound: 'Notification sounds',
-  filamentTangleDetection: 'Filament tangle detection'
+  filamentTangleDetection: 'Filament tangle detection',
+  foreignObjectDetection: 'Foreign object detection',
+  printedPartDisplacementDetection: 'Printed part displacement detection',
+  buildPlateTypeDetection: 'Build plate type detection',
+  buildPlateAlignmentDetection: 'Build plate alignment detection',
+  idleHeatingProtection: 'Idle heating protection',
+  printStatusSnapshot: 'Print status snapshot',
+  storeSentFilesOnExternalStorage: 'Store sent files on external storage',
+  cameraAutoRecord: 'Automatically record prints'
 }
 
 export const PRINTER_SETTINGS_DESCRIPTIONS: Record<PrinterPrintOptionKey, string> = {
@@ -104,17 +112,45 @@ export const PRINTER_SETTINGS_DESCRIPTIONS: Record<PrinterPrintOptionKey, string
   firstLayerInspection: 'Checks the first printed layer before the rest of the job continues.',
   autoRecovery: 'Attempts to recover automatically after skipped steps or motion loss events.',
   promptSound: 'Plays the printer notification sound for prompts and warnings.',
-  filamentTangleDetection: 'Warns when the printer detects filament tangles or feed obstruction.'
+  filamentTangleDetection: 'Warns when the printer detects filament tangles or feed obstruction.',
+  foreignObjectDetection: 'Checks for objects on the build plate before printing to avoid collisions.',
+  printedPartDisplacementDetection: 'Monitors the printed part and alerts when it shifts or collapses.',
+  buildPlateTypeDetection: 'Checks that the detected build plate type matches the print.',
+  buildPlateAlignmentDetection: 'Checks that the build plate is seated and aligned correctly.',
+  idleHeatingProtection: 'Stops heating automatically after five minutes without printer activity.',
+  printStatusSnapshot: 'Captures printer-camera snapshots for print status updates.',
+  storeSentFilesOnExternalStorage: 'Keeps remotely sent print files on the printer\'s external storage.',
+  cameraAutoRecord: 'Records camera video automatically while a print is running.'
 }
 
 export const PRINTER_SETTINGS_SECTIONS: Array<{ title: string; options: PrinterPrintOptionKey[] }> = [
   {
     title: 'AI monitoring',
-    options: ['aiMonitoring', 'spaghettiDetection', 'purgeChutePileupDetection', 'nozzleClumpingDetection', 'airPrintingDetection']
+    options: [
+      'aiMonitoring',
+      'spaghettiDetection',
+      'purgeChutePileupDetection',
+      'nozzleClumpingDetection',
+      'airPrintingDetection',
+      'foreignObjectDetection',
+      'printedPartDisplacementDetection'
+    ]
   },
   {
     title: 'Protection',
-    options: ['firstLayerInspection', 'autoRecovery', 'filamentTangleDetection', 'promptSound']
+    options: [
+      'firstLayerInspection',
+      'buildPlateTypeDetection',
+      'buildPlateAlignmentDetection',
+      'autoRecovery',
+      'filamentTangleDetection',
+      'idleHeatingProtection',
+      'promptSound'
+    ]
+  },
+  {
+    title: 'Camera and storage',
+    options: ['printStatusSnapshot', 'cameraAutoRecord', 'storeSentFilesOnExternalStorage']
   }
 ]
 

@@ -58,15 +58,15 @@ export default tseslint.config(
       'no-restricted-syntax': [
         'error',
         {
-          selector: 'JSXElement[openingElement.name.name="MenuItem"] > JSXElement > JSXOpeningElement[name.name=/Icon$/]',
+          selector: 'JSXElement[openingElement.name.name="MenuItem"] > JSXElement > JSXOpeningElement[name.name=/(Icon|Rounded|Outlined|Sharp|TwoTone)$/]',
           message: 'Wrap MenuItem icons in ListItemDecorator.'
         },
         {
-          selector: 'JSXElement[openingElement.name.name="MenuItem"] > JSXExpressionContainer > ConditionalExpression > JSXElement > JSXOpeningElement[name.name=/Icon$/]',
+          selector: 'JSXElement[openingElement.name.name="MenuItem"] > JSXExpressionContainer > ConditionalExpression > JSXElement > JSXOpeningElement[name.name=/(Icon|Rounded|Outlined|Sharp|TwoTone)$/]',
           message: 'Wrap MenuItem icons in ListItemDecorator.'
         },
         {
-          selector: 'JSXElement[openingElement.name.name="MenuItem"] > JSXExpressionContainer > LogicalExpression > JSXElement > JSXOpeningElement[name.name=/Icon$/]',
+          selector: 'JSXElement[openingElement.name.name="MenuItem"] > JSXExpressionContainer > LogicalExpression > JSXElement > JSXOpeningElement[name.name=/(Icon|Rounded|Outlined|Sharp|TwoTone)$/]',
           message: 'Wrap MenuItem icons in ListItemDecorator.'
         }
       ],

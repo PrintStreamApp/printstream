@@ -14,7 +14,7 @@ import { installJsdomGlobals } from '../../test-utils/jsdom'
 
 installJsdomGlobals()
 
-const { renderHook, cleanup } = await import('@testing-library/react')
+const { renderHook, cleanup, waitFor } = await import('@testing-library/react')
 const { QueryClient, QueryClientProvider } = await import('@tanstack/react-query')
 const React = await import('react')
 const { useProcessChangedCount, useFilamentChangedCount } = await import('./useBakedPresetChanges')
@@ -92,4 +92,75 @@ test('the same rule holds for the per-material badge', () => {
     )
   )
   assert.deepEqual(calls, [])
+})
+
+test('a project badge stays hidden until its baseline resolves', () => {
+  const pendingResolver = async () => await new Promise<never>(() => {})
+  const view = renderHook(
+    () => useProcessChangedCount({
+      slicerTargetId: 'bambustudio-2-7-1-62',
+      processProfileId: 'project:process:0.20mm Standard @BBL H2D',
+      sourceFileId: 'local-project',
+      // This can be a reset-to-preset healing override, so its presence alone is not a change.
+      overrides: { wall_loops: '2' },
+      resolveConfig: pendingResolver
+    }),
+    { wrapper }
+  )
+
+  assert.equal(view.result.current, 0)
+  view.unmount()
+})
+
+test('local editor projects do not reuse another resolver instance\'s cached process count', async () => {
+  const client = new QueryClient({ defaultOptions: { queries: { gcTime: Infinity, retry: false } } })
+  const sharedWrapper = ({ children }: { children: React.ReactNode }) =>
+    React.createElement(QueryClientProvider, { client }, children)
+  const common = {
+    slicerTargetId: 'bambustudio-2-7-1-62',
+    processProfileId: 'project:process:0.20mm Standard @BBL H2D',
+    sourceFileId: 'local-project',
+    overrides: {}
+  }
+  let firstCalls = 0
+  const firstResolver = async () => {
+    firstCalls += 1
+    return {
+      config: { wall_loops: '3' },
+      baseConfig: { wall_loops: '2' },
+      overriddenKeys: ['wall_loops'],
+      declaresOverrides: true
+    }
+  }
+  const first = renderHook(
+    () => useProcessChangedCount({
+      ...common,
+      resolveConfig: firstResolver
+    }),
+    { wrapper: sharedWrapper }
+  )
+  await waitFor(() => assert.equal(first.result.current, 1))
+  first.unmount()
+
+  let secondCalls = 0
+  const secondResolver = async () => {
+    secondCalls += 1
+    return {
+      config: { wall_loops: '2' },
+      baseConfig: { wall_loops: '2' },
+      overriddenKeys: [],
+      declaresOverrides: true
+    }
+  }
+  const second = renderHook(
+    () => useProcessChangedCount({
+      ...common,
+      resolveConfig: secondResolver
+    }),
+    { wrapper: sharedWrapper }
+  )
+  await waitFor(() => assert.equal(second.result.current, 0))
+
+  assert.equal(firstCalls, 1)
+  assert.equal(secondCalls, 1, 'the second project must resolve its own in-memory archive')
 })

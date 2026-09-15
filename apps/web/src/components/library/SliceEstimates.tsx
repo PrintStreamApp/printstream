@@ -37,7 +37,8 @@ export function SliceEstimates({
     stats.push({ label: 'Estimated cost', value: formatFilamentCost(metadata.estimatedFilamentCost) })
   }
 
-  if (stats.length === 0) {
+  const materials = metadata?.materials ?? []
+  if (stats.length === 0 && materials.length === 0) {
     return (
       <Typography level="body-sm" textColor="text.secondary">
         Slicing finished. The slicer did not report usage estimates for this job.
@@ -49,9 +50,11 @@ export function SliceEstimates({
   // each row from the slice request's chosen material (keyed by projectFilamentId == id).
   const materialInfoById = new Map<number, { name: string | null; color: string | null }>()
   for (const mapping of filamentMappings ?? []) {
-    materialInfoById.set(mapping.projectFilamentId, { name: mapping.material ?? null, color: mapping.color ?? null })
+    materialInfoById.set(mapping.projectFilamentId, {
+      name: mapping.material ?? mapping.materialType ?? null,
+      color: mapping.color ?? null
+    })
   }
-  const materials = metadata?.materials ?? []
 
   return (
     <Stack spacing={1}>
@@ -63,7 +66,7 @@ export function SliceEstimates({
           </Stack>
         ))}
       </Stack>
-      {materials.length > 1 && (
+      {materials.length > 0 && (
         <Stack spacing={0.5}>
           <Typography level="body-xs" textColor="text.tertiary" sx={{ textTransform: 'uppercase', letterSpacing: 0.4 }}>Per material</Typography>
           {materials.map((material, index) => {
@@ -76,7 +79,9 @@ export function SliceEstimates({
                   <Box sx={{ width: 14, height: 14, borderRadius: '3px', flexShrink: 0, bgcolor: color || 'neutral.softBg', border: '1px solid rgba(255,255,255,0.18)' }} />
                   <Typography level="body-sm" textColor="text.tertiary" noWrap>{name}</Typography>
                 </Stack>
-                <Typography level="body-sm" fontWeight="md">{material.weightGrams != null ? `${material.weightGrams.toFixed(1)} g` : '–'}</Typography>
+                <Typography level="body-sm" fontWeight="md">
+                  {formatMaterialUsage(material.weightGrams, material.lengthMm)}
+                </Typography>
               </Stack>
             )
           })}
@@ -84,4 +89,12 @@ export function SliceEstimates({
       )}
     </Stack>
   )
+}
+
+/** Format the weight and length the engine reported for one project material. */
+function formatMaterialUsage(weightGrams?: number | null, lengthMm?: number | null): string {
+  const values: string[] = []
+  if (weightGrams != null) values.push(`${weightGrams.toFixed(1)} g`)
+  if (lengthMm != null) values.push(`${(lengthMm / 1000).toFixed(2)} m`)
+  return values.join(' · ') || '–'
 }

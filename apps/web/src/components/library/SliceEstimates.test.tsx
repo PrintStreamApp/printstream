@@ -44,19 +44,31 @@ test('falls back to a notice when the slicer reported no usage estimates', () =>
   assert.ok(view.getByText(/did not report usage estimates/i))
 })
 
-test('shows a per-material breakdown only when more than one material is used', () => {
+test('still renders per-material usage when aggregate estimates are absent', () => {
+  const view = renderEstimates(
+    { materials: [{ id: 1, weightGrams: 5 }] },
+    [{ projectFilamentId: 1, materialType: 'PLA', source: 'manual' }]
+  )
+  assert.ok(view.getByText('PLA'))
+  assert.ok(view.getByText('5.0 g'))
+  assert.equal(view.queryByText(/did not report usage estimates/i), null)
+})
+
+test('shows every used material, including a single-material slice', () => {
   const single = renderEstimates({
     estimatedFilamentWeightGrams: 5,
-    materials: [{ id: 1, type: 'PLA', weightGrams: 5 }]
+    materials: [{ id: 1, type: 'PLA', weightGrams: 5, lengthMm: 2010 }]
   })
-  assert.equal(single.queryByText('Per material'), null)
+  assert.ok(single.getByText('Per material'))
+  assert.ok(single.getByText('PLA'))
+  assert.ok(single.getByText('5.0 g · 2.01 m'))
   cleanup()
 
   const multi = renderEstimates(
     {
       estimatedFilamentWeightGrams: 8,
       materials: [
-        { id: 1, weightGrams: 5 },
+        { id: 1, weightGrams: 5, lengthMm: 2000 },
         { id: 2, weightGrams: 3 }
       ]
     },
@@ -65,5 +77,6 @@ test('shows a per-material breakdown only when more than one material is used', 
   assert.ok(multi.getByText('Per material'))
   // Row 1 is enriched from the mapping; row 2 has no mapping, so it falls back to a label.
   assert.ok(multi.getByText('Matte Black'))
+  assert.ok(multi.getByText('5.0 g · 2.00 m'))
   assert.ok(multi.getByText('Material 2'))
 })

@@ -23,22 +23,27 @@
  * `machineColumnsForPage` and renders one control per column. See `@printstream/shared`'s
  * `machine-settings.ts` for the rule and its BambuStudio sources.
  *
- * A save writes the FULL resolved config, not just the catalog's 77 keys, so the printer's
- * bespoke non-catalog values, `printable_area`, `bed_shape`, `printer_model`, survive an edit
- * untouched. BambuStudio edits those through widgets this dialog does not have; dropping them would
- * silently rebuild the preset around a different bed.
+ * A focused child dialog edits BambuStudio's rectangular `printable_area` and `printable_height`
+ * together, including the G-code origin. A save still starts from the FULL resolved config rather
+ * than the catalog's 77 keys, so other non-catalog values such as exclusion zones, custom bed asset
+ * paths and model identity survive untouched.
  *
  * Counterpart: `components/workspaceMachineResolver.ts`, the one module that fetches that route.
  */
 import { useEffect, useState } from 'react'
+import TuneRoundedIcon from '@mui/icons-material/TuneRounded'
+import { Button, Chip, Stack, Tooltip, Typography } from '@mui/joy'
 import {
   applyProcessConfigDefaults,
   buildMachinePresetConfig,
   diffProcessConfig,
+  hasPerExtruderMachineBuildVolume,
   machineColumnsForPage,
   machineColumnValue,
   machineSettingsCatalog,
+  portableMachineBedAssetsEqual,
   processConfigValuesEqual,
+  readRectangularMachineBuildVolume,
   setMachineColumnValue,
   type ProcessConfig
 } from '@printstream/shared'
@@ -47,6 +52,7 @@ import { resolveWorkspaceMachineConfig } from '../workspaceMachineResolver'
 import { useEffectiveSlicerDeveloperMode } from '../../lib/slicerDeveloperMode'
 import { usePromptDialog } from '../PromptDialogProvider'
 import { SettingsCatalogDialog } from './SettingsCatalogDialog'
+import { MachineBuildVolumeDialog } from './MachineBuildVolumeDialog'
 import type { SettingsCatalogAdapter, SettingsFieldColumn } from './settingsCatalogAdapter'
 
 export interface MachineSettingsDialogProps {
@@ -108,6 +114,7 @@ export default function MachineSettingsDialog(props: MachineSettingsDialogProps)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  const [buildVolumeOpen, setBuildVolumeOpen] = useState(false)
 
   useEffect(() => {
     if (!open || !machineProfileId) return
@@ -235,13 +242,24 @@ export default function MachineSettingsDialog(props: MachineSettingsDialogProps)
     setConfig({ ...baseConfig })
   }
 
+  const buildVolume = readRectangularMachineBuildVolume(config)
+  const printableAreaChanged = baseConfig !== null
+    && !processConfigValuesEqual(baseConfig.printable_area, config.printable_area)
+  const bedAssetsChanged = applyScope === 'preset'
+    && baseConfig !== null
+    && !portableMachineBedAssetsEqual(baseConfig, config)
+  // Height already belongs to the generated catalog, so it marks this composite header but must
+  // not be added to `additionalModifiedCount` a second time.
+  const buildVolumeChanged = printableAreaChanged || isChanged('printable_height') || bedAssetsChanged
+  const buildVolumeUnavailable = hasPerExtruderMachineBuildVolume(config)
+
   /**
    * Save the edited printer as a preset. `overwrite` updates the original custom preset in place.
    *
-   * Written over the RESOLVED config rather than the editor's own, so every key BambuStudio's
-   * printer tab edits through a widget we do not have, the printable area, the bed shape and
-   * exclusion zones, the model and variant identity, is carried through exactly as it arrived.
-   * Only the catalog keys the user could actually see are replaced.
+   * Written over the RESOLVED config rather than the editor's own, so every non-catalog key we do
+   * not edit (custom bed asset paths and model/variant identity) is carried through exactly as it
+   * arrived. Coordinate-based safety regions move only when the G-code origin moves. The normal
+   * catalog changes and focused build-volume edit are the only user-authored replacements.
    */
   const savePreset = async (name: string, overwrite: boolean) => {
     if (!baseConfig) return
@@ -252,7 +270,11 @@ export default function MachineSettingsDialog(props: MachineSettingsDialogProps)
         resolved: resolvedConfig,
         baseline: baseConfig,
         edited: config,
-        name
+        name,
+        // A built-in copied as a user preset derives from the preset the user selected, not from
+        // that preset's own parent. Updating or copying an existing custom preset keeps its stored
+        // ancestry because workspace custom presets cannot currently inherit from one another.
+        inheritFrom: !overwrite && !canEditOriginal ? machineProfileName : undefined
       })
       await apiFetch('/api/slicing/profiles', {
         method: 'POST',
@@ -285,31 +307,72 @@ export default function MachineSettingsDialog(props: MachineSettingsDialogProps)
   }
 
   return (
-    <SettingsCatalogDialog
-      open={open}
-      onClose={onClose}
-      catalog={machineSettingsCatalog}
-      initialQuery={initialQuery}
-      titlePrefix="Printer settings"
-      presetName={machineProfileName}
-      loading={loading}
-      loadingLabel="Loading printer settings…"
-      error={error}
-      ready={baseConfig !== null}
-      showDeveloperOptions={showDeveloperOptions}
-      adapter={adapter}
-      actions={{
-        onResetAll: handleResetAll,
-        onCancel: onClose,
-        saving,
-        onUpdatePreset: canEditOriginal ? () => void savePreset(machineProfileName, true) : undefined,
-        onSaveAsPreset: () => void handleSaveAsPreset(),
-        // Omitted at 'preset' scope (the settings page edits a stored preset and has nothing to
-        // apply to); present in a project, where it saves the edit INTO the project instead.
-        apply: applyScope === 'preset'
-          ? undefined
-          : { label: applyScope === 'project' ? 'Apply to this project' : 'Apply to this slice', onApply: handleApply }
-      }}
-    />
+    <>
+      <SettingsCatalogDialog
+        open={open}
+        onClose={onClose}
+        catalog={machineSettingsCatalog}
+        initialQuery={initialQuery}
+        titlePrefix="Printer settings"
+        presetName={machineProfileName}
+        loading={loading}
+        loadingLabel="Loading printer settings…"
+        error={error}
+        ready={baseConfig !== null}
+        showDeveloperOptions={showDeveloperOptions}
+        adapter={adapter}
+        additionalModifiedCount={(printableAreaChanged ? 1 : 0) + (bedAssetsChanged ? 1 : 0)}
+        header={baseConfig ? (
+          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ sm: 'center' }}>
+            <Tooltip
+              title={buildVolumeUnavailable
+                ? 'This profile has independent toolhead reach limits, which must be edited together.'
+                : ''}
+            >
+              <span>
+                <Button
+                  size="sm"
+                  variant="soft"
+                  startDecorator={<TuneRoundedIcon />}
+                  onClick={() => setBuildVolumeOpen(true)}
+                  disabled={buildVolumeUnavailable}
+                >
+                  Bed and build volume
+                </Button>
+              </span>
+            </Tooltip>
+            <Typography level="body-xs" textColor="text.tertiary">
+              {buildVolume.volume.width} x {buildVolume.volume.depth} x {buildVolume.volume.height} mm
+            </Typography>
+            {buildVolumeChanged && <Chip size="sm" variant="soft" color="warning">Changed</Chip>}
+            {buildVolumeUnavailable && (
+              <Typography level="body-xs" textColor="text.tertiary">
+                Per-toolhead build volumes are not editable yet.
+              </Typography>
+            )}
+          </Stack>
+        ) : undefined}
+        actions={{
+          onResetAll: handleResetAll,
+          onCancel: onClose,
+          saving,
+          onUpdatePreset: canEditOriginal ? () => void savePreset(machineProfileName, true) : undefined,
+          onSaveAsPreset: () => void handleSaveAsPreset(),
+          // Omitted at 'preset' scope (the settings page edits a stored preset and has nothing to
+          // apply to); present in a project, where it saves the edit INTO the project instead.
+          apply: applyScope === 'preset'
+            ? undefined
+            : { label: applyScope === 'project' ? 'Apply to this project' : 'Apply to this slice', onApply: handleApply }
+        }}
+      />
+      {buildVolumeOpen && (
+        <MachineBuildVolumeDialog
+          config={config}
+          allowAssetEditing={applyScope === 'preset'}
+          onClose={() => setBuildVolumeOpen(false)}
+          onApply={setConfig}
+        />
+      )}
+    </>
   )
 }

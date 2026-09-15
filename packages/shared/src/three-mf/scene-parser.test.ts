@@ -95,6 +95,49 @@ test('buildSceneManifest places parts in plate-local coordinates', () => {
   assert.equal((xs[1] ?? 0) - (xs[0] ?? 0), 40)
 })
 
+test('a printer override decodes every plate with the source grid before centering it on the target bed', () => {
+  const modelSettingsXml = [
+    '<config>',
+    ...[1, 2, 3].map((id) => `<object id="${id}"><part id="${100 + id}" subtype="normal_part"/></object>`),
+    ...[1, 2, 3].map((id) => [
+      '<plate>',
+      `  <metadata key="plater_id" value="${id}"/>`,
+      `  <model_instance><metadata key="object_id" value="${id}"/><metadata key="instance_id" value="0"/></model_instance>`,
+      '</plate>'
+    ].join('\n')),
+    '</config>'
+  ].join('\n')
+  // Three 256 mm plates use a 2-column grid. Each object is at its own plate centre: plate 2 has
+  // one +307.2 mm X stride, while plate 3 has one -307.2 mm Y stride.
+  const rootModelXml = [
+    '<model><resources>',
+    ...[1, 2, 3].map((id) => `<object id="${id}"><components><component objectid="${100 + id}" transform="1 0 0 0 1 0 0 0 1 0 0 0"/></components></object>`),
+    '</resources><build>',
+    '<item objectid="1" transform="1 0 0 0 1 0 0 0 1 128 128 0"/>',
+    '<item objectid="2" transform="1 0 0 0 1 0 0 0 1 435.2 128 0"/>',
+    '<item objectid="3" transform="1 0 0 0 1 0 0 0 1 128 -179.2 0"/>',
+    '</build></model>'
+  ].join('\n')
+  const entries = {
+    rootModelXml,
+    modelSettingsXml,
+    projectSettingsJson: JSON.stringify({
+      printer_settings_id: 'Bambu Lab P1S 0.4 nozzle',
+      printable_area: ['0x0', '256x0', '256x256', '0x256'],
+      printable_height: '256'
+    })
+  }
+
+  for (const plate of [1, 2, 3]) {
+    const scene = buildSceneManifest(entries, plate, 'H2D')
+    assert.equal(scene.bed.minX, 0)
+    assert.equal(scene.bed.maxX, 350)
+    assert.ok(Math.abs((scene.instances[0]?.transform[9] ?? 0) - 175) < 1e-9, `plate ${plate} X drifted`)
+    assert.ok(Math.abs((scene.instances[0]?.transform[10] ?? 0) - 160) < 1e-9, `plate ${plate} Y drifted`)
+    assert.ok(Math.abs((scene.parts[0]?.transform[9] ?? 0) - 175) < 1e-9, `plate ${plate} part X drifted`)
+  }
+})
+
 test('buildSceneManifest falls back to the first plate when the index is absent', () => {
   const scene = buildSceneManifest({
     rootModelXml: ROOT_MODEL_XML,

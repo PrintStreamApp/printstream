@@ -111,7 +111,12 @@ const NOZZLE_VOLUME_TYPE_INDEX: Record<string, string> = {
 export function retargetProjectSettingsToMachine(
   projectSettings: ProfileRecord,
   machineProfile: ProfileRecord,
-  target: { printerSettingsId: string; printerModel: string }
+  target: {
+    printerSettingsId: string
+    printerModel: string
+    /** System parent of a custom User preset; null/absent means the selected preset is system. */
+    printerPresetInherits?: string | null
+  }
 ): ProfileRecord {
   const next: ProfileRecord = { ...projectSettings }
   for (const [key, value] of Object.entries(machineProfile)) {
@@ -141,8 +146,9 @@ export function retargetProjectSettingsToMachine(
   // parent there (e.g. "Bambu Lab P1P 0.4 nozzle"), and CLIs from 2.7.1 on validate every loaded
   // filament preset against that name, a stale slot fails the slice with "filament preset ... is
   // not compatible with printer <old machine>". Blank it so the rewritten printer_settings_id is
-  // the system identity.
-  clearInheritsGroupSlot(next, 'machine')
+  // the system identity. A custom User preset is the exception: its installed system identity is
+  // its parent, and blanking this slot makes the CLI search machine_full for the custom name.
+  setInheritsGroupSlot(next, 'machine', target.printerPresetInherits ?? '')
   // `flush_volumes_matrix` is a PROJECT key, not a machine-profile one, so the overwrite above
   // leaves it at the SOURCE machine's extruder count while `nozzle_diameter` above just changed
   // that count. Retargeting a single-nozzle project onto a dual-nozzle printer therefore left one
@@ -339,13 +345,18 @@ export function readMachineSettingOverrides(
  * no count arithmetic can get wrong.
  */
 export function clearInheritsGroupSlot(record: ProfileRecord, slot: 'process' | 'machine'): void {
+  setInheritsGroupSlot(record, slot, '')
+}
+
+/** Write one known-position `inherits_group` slot without reshaping a malformed parallel record. */
+function setInheritsGroupSlot(record: ProfileRecord, slot: 'process' | 'machine', value: string): void {
   if (!Array.isArray(record.inherits_group) || record.inherits_group.length === 0) return
   const machineIndex = machinePresetSlotIndexFor(record)
   if (slot === 'machine' && machineIndex == null) return
   const index = slot === 'process' ? 0 : machineIndex!
   if (index >= record.inherits_group.length) return
   const inheritsGroup = [...record.inherits_group as string[]]
-  inheritsGroup[index] = ''
+  inheritsGroup[index] = value
   record.inherits_group = inheritsGroup
 }
 
@@ -395,6 +406,8 @@ export interface MachineRetargetPlan {
   machineConfig: ProfileRecord
   /** Machine preset name, persisted as `printer_settings_id`. */
   printerSettingsId: string
+  /** System parent written into `inherits_group` when the selected machine is a custom preset. */
+  printerPresetInherits?: string | null
   printerModel: string
   /**
    * Fully-resolved process preset for the target, when one could be resolved. Absent/null leaves
@@ -463,7 +476,8 @@ export function applyMachineRetargetToProjectSettings(
 ): ProfileRecord {
   let next = retargetProjectSettingsToMachine(projectSettings, plan.machineConfig, {
     printerSettingsId: plan.printerSettingsId,
-    printerModel: plan.printerModel
+    printerModel: plan.printerModel,
+    printerPresetInherits: plan.printerPresetInherits
   })
   if (plan.processConfig) {
     next = applyProcessProfileToProjectSettings(next, plan.processConfig, plan.processSettingOverrides ?? {})

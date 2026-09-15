@@ -33,27 +33,34 @@ test('an unattended sweep consents to low filament but never to a blacklisted ma
   const sweep = resolveQueueDispatchConsents('unattended-sweep')
   assert.equal(sweep.allowInsufficientFilament, true)
   assert.equal(sweep.allowBlacklistedFilament, false)
+  assert.equal(sweep.allowPrinterModelMismatch, false)
 })
 
 test('a person start carries their own answers, and only theirs', () => {
   assert.deepEqual(
     resolveQueueDispatchConsents('person-start', { allowInsufficientFilament: true, allowBlacklistedFilament: true }),
-    { allowInsufficientFilament: true, allowBlacklistedFilament: true }
+    { allowInsufficientFilament: true, allowBlacklistedFilament: true, allowPrinterModelMismatch: false }
   )
   assert.deepEqual(
     resolveQueueDispatchConsents('person-start'),
-    { allowInsufficientFilament: false, allowBlacklistedFilament: false }
+    { allowInsufficientFilament: false, allowBlacklistedFilament: false, allowPrinterModelMismatch: false }
   )
   // One answer must never imply the other.
   assert.deepEqual(
     resolveQueueDispatchConsents('person-start', { allowInsufficientFilament: true }),
-    { allowInsufficientFilament: true, allowBlacklistedFilament: false }
+    { allowInsufficientFilament: true, allowBlacklistedFilament: false, allowPrinterModelMismatch: false }
   )
 })
 
 test('a dry run withholds both, so each guard runs and can be reported', () => {
   assert.deepEqual(
     resolveQueueDispatchConsents('dry-run', { allowInsufficientFilament: true, allowBlacklistedFilament: true }),
-    { allowInsufficientFilament: false, allowBlacklistedFilament: false }
+    { allowInsufficientFilament: false, allowBlacklistedFilament: false, allowPrinterModelMismatch: false }
   )
+})
+
+test('only a person can consent to a printer-model mismatch', () => {
+  assert.equal(resolveQueueDispatchConsents('person-start', { allowPrinterModelMismatch: true }).allowPrinterModelMismatch, true)
+  assert.equal(resolveQueueDispatchConsents('unattended-sweep', { allowPrinterModelMismatch: true }).allowPrinterModelMismatch, false)
+  assert.equal(resolveQueueDispatchConsents('dry-run', { allowPrinterModelMismatch: true }).allowPrinterModelMismatch, false)
 })

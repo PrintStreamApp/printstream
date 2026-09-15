@@ -37,10 +37,14 @@ function stagedDescriptor(overrides: Partial<StagedImport> = {}): StagedImport {
 }
 
 /**
- * Stub the two calls the store makes: staging (whose response it remembers) and the mesh fetch.
- * `meshFor` returns the STL bytes for a given `part` query, or null to 404.
+ * Stub the calls the store makes: staging, mesh fetches, and the optional source-colour sidecar.
+ * A callback returns bytes for a given `part` query, null for a 204, or undefined for a 404.
  */
-function stubTransport(descriptor: StagedImport, meshFor: (part: string | null) => Uint8Array | null): void {
+function stubTransport(
+  descriptor: StagedImport,
+  meshFor: (part: string | null) => Uint8Array | null | undefined,
+  colorsFor: (part: string | null) => Uint8Array | null | undefined = () => undefined
+): void {
   globalThis.fetch = (async (input: string | URL | Request) => {
     const url = new URL(typeof input === 'string' ? input : input.toString(), 'http://localhost')
     if (url.pathname.endsWith('/imports')) {
@@ -48,10 +52,18 @@ function stubTransport(descriptor: StagedImport, meshFor: (part: string | null) 
         status: 201, headers: { 'content-type': 'application/json' }
       })
     }
-    const bytes = meshFor(url.searchParams.get('part'))
-    if (!bytes) return new Response('gone', { status: 404 })
+    const bytes = url.pathname.endsWith('/source-colors')
+      ? colorsFor(url.searchParams.get('part'))
+      : meshFor(url.searchParams.get('part'))
+    if (bytes === null) return new Response(null, { status: 204 })
+    if (bytes === undefined) return new Response('gone', { status: 404 })
     return new Response(bytes as BlobPart, { status: 200, headers: { 'content-type': 'application/octet-stream' } })
   }) as typeof fetch
+}
+
+/** Encode normalized test colours as the API's byte-RGBA transport. */
+function rgbaBytes(values: number[]): Uint8Array {
+  return Uint8Array.from(values, (value) => Math.round(value * 255))
 }
 
 test('an import staged this session is fetched back and rebuilt for the bake', async () => {
@@ -130,4 +142,48 @@ test('a disposed store offers the bake nothing, so a closed session cannot resur
   store.dispose()
 
   assert.deepEqual(await store.importsForBake(), [])
+})
+
+test('source vertex colours round-trip separately from STL geometry', async () => {
+  const descriptor = stagedDescriptor({ sourceColorMode: 'vertex' })
+  stubTransport(
+    descriptor,
+    () => meshToBinaryStl(triangle()),
+    () => rgbaBytes([1, 0.5, 0, 1, 0, 1, 0, 0.25, 0, 0, 1, 1])
+  )
+  const store = createApiImportStore()
+
+  const staged = await store.stageFile(new File([new Uint8Array([1])], 'Coloured.obj'), 'object')
+  const colors = await store.fetchSourceColors(staged.importId)
+
+  assert.deepEqual(Array.from(colors ?? []).map((value) => Math.round(value * 255)), [255, 128, 0, 255, 0, 255, 0, 64, 0, 0, 255, 255])
+})
+
+test('an import without source colours reports no sidecar', async () => {
+  const descriptor = stagedDescriptor()
+  stubTransport(descriptor, () => meshToBinaryStl(triangle()), () => null)
+  const store = createApiImportStore()
+
+  const staged = await store.stageFile(new File([new Uint8Array([1])], 'Plain.obj'), 'object')
+
+  assert.equal(await store.fetchSourceColors(staged.importId), null)
+})
+
+test('OBJ material companions are included in the staging multipart request', async () => {
+  const descriptor = stagedDescriptor({ format: 'obj' })
+  let body: FormData | undefined
+  globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+    body = init?.body as FormData
+    return new Response(JSON.stringify({ import: descriptor }), {
+      status: 201,
+      headers: { 'content-type': 'application/json' }
+    })
+  }) as typeof fetch
+  const store = createApiImportStore()
+  const first = new File(['newmtl shell'], 'shell.mtl')
+  const second = new File(['newmtl detail'], 'detail.mtl')
+
+  await store.stageFile(new File(['mtllib shell.mtl detail.mtl'], 'model.obj'), 'object', undefined, [first, second])
+
+  assert.deepEqual(body?.getAll('companion'), [first, second])
 })

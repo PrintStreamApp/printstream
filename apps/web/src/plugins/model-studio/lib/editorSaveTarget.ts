@@ -17,7 +17,7 @@
  * sniffing for a controller: the post-save choreography around a library save is order-sensitive
  * (see `useEditorSave`) and must be skipped wholesale, not partially, when there is no library.
  */
-import type { ExportArrangedThreeMf, SaveArrangedThreeMf, SceneEdit, SlicingPresetSummary, SlicingTarget } from '@printstream/shared'
+import type { ExportArrangedThreeMf, LibraryFile, SaveArrangedThreeMf, SceneEdit, SlicingPresetSummary, SlicingTarget } from '@printstream/shared'
 import { apiFetch } from '../../../lib/apiClient'
 import {
   uploadLibraryFileInChunks,
@@ -33,6 +33,8 @@ import type { ThreeMfArchive } from './threeMfArchive'
 export interface EditorSavedFile {
   id: string
   name: string
+  /** Complete server record when this save landed in the workspace library. */
+  libraryFile?: LibraryFile
   /**
    * The version row this save archived: the content that was current until now, i.e. the bytes
    * this save authored FROM. The caller pins it so the NEXT save authors from the same original
@@ -215,6 +217,7 @@ export function createApiSaveTarget(options: ApiSaveTargetOptions): EditorSaveTa
       return {
         id: uploaded.file.id,
         name: uploaded.file.name,
+        libraryFile: uploaded.file,
         archivedVersionId: uploaded.archivedVersionId
       }
     },

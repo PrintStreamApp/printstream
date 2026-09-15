@@ -37,6 +37,7 @@ import {
   remapCustomGcodeFilamentIds,
   resolvePartPaintByEntry,
   resolveRepairMeshesByEntry,
+  replaceObjectMeshInModelXml,
   rewriteSliceInfoNozzleGroups,
   serializeBrimEarPoints,
   subModelPathsForObjects,
@@ -61,6 +62,12 @@ import { LAYER_CONFIG_RANGES_ENTRY, serializeLayerConfigRanges } from './layer-c
 import { LAYER_HEIGHTS_PROFILE_ENTRY, serializeLayerHeightProfiles } from './layer-height-profile.js'
 import { OBJECT_ORDINAL_SIDECAR_ENTRIES, remapObjectOrdinalSidecar } from './object-ordinal-sidecars.js'
 import { remapSliceInfoPlates, sourcePlateMapping } from './plate-metadata.js'
+import {
+  applyProjectAuxiliaryMetadata,
+  applyProjectAuxiliaryRelationships,
+  managedProjectAuxiliaryPrefixes,
+  projectAuxiliaryArchiveEntries
+} from './project-auxiliaries.js'
 
 /** Outcome of a bake the slicer needs afterwards. */
 export interface ThreeMfBakeResult {
@@ -109,9 +116,11 @@ export interface ThreeMfBakePlan {
     /** Entry name → rewrite, or `null` from the transform to DROP that entry from the output. */
     transforms: Map<string, (xml: string) => string | null>
     /** Entries to add that the source did not already contain. */
-    appendEntries: Array<{ name: string; content: string }>
+    appendEntries: ThreeMfBakeArchiveEntry[]
+    /** Source entry prefixes to omit before appending complete replacement state. */
+    dropPrefixes: string[]
   } | null
-  freshEntries: Array<{ name: string; content: string }> | null
+  freshEntries: ThreeMfBakeArchiveEntry[] | null
   /**
    * The repairable defects present in the documents this bake WROTE, a save-time counterpart to
    * the same check every surface runs on a file at rest ({@link collectSettingsRepairReasons}).
@@ -126,6 +135,12 @@ export interface ThreeMfBakePlan {
    * write, so before that this reports on an unwritten document and returns nothing useful.
    */
   settingsRepairReasons: () => ThreeMfSettingsRepairReason[]
+}
+
+/** An archive entry authored by the shared plan; text remains text until the host writes it. */
+export interface ThreeMfBakeArchiveEntry {
+  name: string
+  content: string | Uint8Array
 }
 
 export interface ThreeMfBakeOptions {
@@ -419,6 +434,15 @@ export function planEditedThreeMf(
   const basePaintRemap = slotRemap && !isIdentityFilamentSlotRemap(slotRemap) ? slotRemap : null
   const plateMapping = sourcePlateMapping(edit.plates)
 
+  // Auxiliaries are complete state when present. The root metadata and package cover relationships
+  // are authored here beside the binary entries so the API and browser cannot disagree about them.
+  const auxiliaryEntries = edit.projectAuxiliaries
+    ? projectAuxiliaryArchiveEntries(edit.projectAuxiliaries)
+    : []
+  if (edit.projectAuxiliaries) {
+    modelXml = applyProjectAuxiliaryMetadata(modelXml, edit.projectAuxiliaries)
+  }
+
   // Layer-based filament changes + layer pauses: merged with the source sidecar
   // (preserving unedited entry types and plates); both absent keeps the source file untouched,
   // unless a slot permutation re-keyed the sidecar's tool changes, which must save even without
@@ -475,7 +499,7 @@ export function planEditedThreeMf(
     // (the read above fell back). Reuse that instead of a 1-byte existence probe, which threw
     // "Entry too large" for every real config and made us append a DUPLICATE entry.
     const hasModelSettings = baseModelSettingsXml !== NEW_PROJECT_MODEL_SETTINGS_XML
-    const extraEntries = hasModelSettings
+    const extraEntries: ThreeMfBakeArchiveEntry[] = hasModelSettings
       ? []
       : [{ name: 'Metadata/model_settings.config', content: withObjectOverrides(modelSettingsXml, objectProcessOverrides) }]
     if (brimEarPointsContent !== null) {
@@ -510,6 +534,19 @@ export function planEditedThreeMf(
       ['3D/3dmodel.model', () => modelXml],
       ['Metadata/model_settings.config', () => withObjectOverrides(modelSettingsXml, objectProcessOverrides)]
     ])
+    if (edit.projectAuxiliaries) {
+      const hasModelCover = edit.projectAuxiliaries.files.some(
+        (file) => file.category === 'Model Pictures' && file.cover
+      )
+      transforms.set('_rels/.rels', (xml) => applyProjectAuxiliaryRelationships(xml, hasModelCover))
+      // Supply a valid default when a damaged-but-readable base has no package relationships. The
+      // writers skip this append when the transformed source entry already supplied the name.
+      extraEntries.push({
+        name: '_rels/.rels',
+        content: applyProjectAuxiliaryRelationships(THREE_MF_RELS_XML, hasModelCover)
+      })
+      extraEntries.push(...auxiliaryEntries)
+    }
     if (brimEarPointsContent !== null) {
       transforms.set(BRIM_EAR_POINTS_ENTRY, () => brimEarPointsContent)
     }
@@ -594,12 +631,20 @@ export function planEditedThreeMf(
     const touchedEntryPaths = new Set([
       ...(basePaintRemap ? allSubModelPaths(baseModelXml) : []),
       ...paintChannels.flatMap((channel) => [...channel.byEntry.keys()]),
-      ...repairMeshesByEntry.keys()
+      ...repairMeshesByEntry.keys(),
+      ...documents.partMeshReplacementsByEntry.keys()
     ])
     touchedEntryPaths.delete('3D/3dmodel.model')
     for (const entryPath of touchedEntryPaths) {
       transforms.set(entryPath, (xml) => {
-        const rekeyed = basePaintRemap ? remapColorPaintInModelXml(xml, basePaintRemap) : xml
+        const replacements = documents.partMeshReplacementsByEntry.get(entryPath)
+        const replaced = replacements
+          ? [...replacements].reduce(
+            (current, [objectId, mesh]) => replaceObjectMeshInModelXml(current, objectId, mesh),
+            xml
+          )
+          : xml
+        const rekeyed = basePaintRemap ? remapColorPaintInModelXml(replaced, basePaintRemap) : replaced
         const painted = paintChannels.reduce((acc, channel) => {
           const paints = channel.byEntry.get(entryPath)
           return paints ? applyTrianglePaintToModelEntry(acc, channel.attribute, paints) : acc
@@ -692,7 +737,16 @@ export function planEditedThreeMf(
         extraEntries.push({ name: THREE_MF_MODEL_RELS_ENTRY, content: updatedModelRels })
       }
     }
-    return { result, copy: { transforms, appendEntries: extraEntries }, freshEntries: null, settingsRepairReasons }
+    return {
+      result,
+      copy: {
+        transforms,
+        appendEntries: extraEntries,
+        dropPrefixes: edit.projectAuxiliaries ? managedProjectAuxiliaryPrefixes() : []
+      },
+      freshEntries: null,
+      settingsRepairReasons
+    }
   }
   return {
     result,
@@ -700,7 +754,15 @@ export function planEditedThreeMf(
     settingsRepairReasons,
     freshEntries: [
     { name: '[Content_Types].xml', content: THREE_MF_CONTENT_TYPES_XML },
-    { name: '_rels/.rels', content: THREE_MF_RELS_XML },
+    {
+      name: '_rels/.rels',
+      content: edit.projectAuxiliaries
+        ? applyProjectAuxiliaryRelationships(
+            THREE_MF_RELS_XML,
+            edit.projectAuxiliaries.files.some((file) => file.category === 'Model Pictures' && file.cover)
+          )
+        : THREE_MF_RELS_XML
+    },
     { name: '3D/3dmodel.model', content: modelXml },
     { name: THREE_MF_MODEL_RELS_ENTRY, content: appendImportPartRelationships(null, []) },
     { name: 'Metadata/model_settings.config', content: withObjectOverrides(modelSettingsXml, objectProcessOverrides) },
@@ -714,6 +776,7 @@ export function planEditedThreeMf(
     ...(customGcodeContent ? [{ name: CUSTOM_GCODE_PER_LAYER_ENTRY, content: customGcodeContent }] : []),
     // See the copy-path note above: these bytes are what makes an SVG part re-editable at all.
     ...(edit.svgSources ?? []).map((source) => ({ name: source.entryPath, content: source.markup })),
+    ...auxiliaryEntries,
     ...(options.extraEntries ?? [])
     ]
   }

@@ -2,10 +2,11 @@
  * Self-hosted license refresh client (core). Keeps a subscription-backed key
  * alive by asking the vendor cloud to re-sign it, on a timer.
  *
- * **This is the only thing a self-hosted install phones home for**, and it is
- * deliberately narrow: it sends the license key and nothing else, no printer
- * counts, no telemetry, no install identifier beyond the key's own id. Nothing
- * else in a self-hosted deployment contacts us.
+ * **This is the only automatic identified request a Docker self-hosted install
+ * makes.** It is deliberately narrow: it sends the license key and installation
+ * id, with no printer counts or telemetry. The optional cloud-connection plugin
+ * can relay support and Suggestions only while a person actively uses those
+ * surfaces.
  *
  * **The daily timer only ever runs for a subscription key.** A perpetual key
  * (Lifetime or community) is skipped, so a free non-commercial install and an

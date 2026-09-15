@@ -16,13 +16,14 @@
  * Deliberately NOT covered: React Query wiring. The source is a plain async interface, and the
  * caller owns the caching, keys, and abort signals.
  */
-import type { LibraryThreeMfScene, PrinterModel, ThreeMfIndex } from '@printstream/shared'
+import type { LibraryThreeMfScene, PrinterModel, ProjectAuxiliaries, ThreeMfIndex } from '@printstream/shared'
 import { readEmbeddedProjectPresets, type EmbeddedProjectPreset } from './embeddedProjectPresets'
 import { toThreeMfIndexDto } from '@printstream/shared/three-mf'
 import { buildApiUrl } from '../../../lib/apiUrl'
 import { MODEL_FETCH_HEADERS_MS, fetchModelBytes, type ModelFetchProgress } from './modelFetch'
 import { openClientThreeMfProjectFromBytes, type ClientThreeMfProject } from './clientThreeMfProject'
 import type { ThreeMfArchive } from './threeMfArchive'
+import { readProjectAuxiliariesFromArchive } from './projectAuxiliaries'
 
 /**
  * Body-stall budget for the archive, deliberately far above the mesh-entry default, and no retry.
@@ -77,6 +78,8 @@ export interface EditorProjectSource {
    * Optional, and null when the project carries no settings entry (a from-scratch scaffold).
    */
   loadProjectSettings?(): Promise<string | null>
+  /** BambuStudio-compatible attachments and descriptive project metadata. */
+  loadProjectAuxiliaries?(): Promise<ProjectAuxiliaries>
   /**
    * Every entry name the opened archive holds.
    *
@@ -206,6 +209,7 @@ export function createArchiveProjectSource(
     loadEmbeddedPresets: async () => readEmbeddedProjectPresets((await open()).archive),
 
     loadProjectSettings: async () => (await open()).archive.indexEntries().projectSettingsJson,
+    loadProjectAuxiliaries: async () => readProjectAuxiliariesFromArchive((await open()).archive),
     listEntries: async () => (await open()).archive.entryNames(),
 
     // Releases the archive and revokes its object URLs, and leaves the source RE-OPENABLE on
@@ -237,6 +241,7 @@ export function createLocalProjectSource(project: ClientThreeMfProject): EditorP
     archive: () => project.archive,
     loadEmbeddedPresets: async () => readEmbeddedProjectPresets(project.archive),
     loadProjectSettings: async () => project.archive.indexEntries().projectSettingsJson,
+    loadProjectAuxiliaries: async () => readProjectAuxiliariesFromArchive(project.archive),
     listEntries: async () => project.archive.entryNames()
   }
 }

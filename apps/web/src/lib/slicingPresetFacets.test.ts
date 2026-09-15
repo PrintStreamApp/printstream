@@ -7,7 +7,8 @@ import {
   countActiveSlicingPresetFacets,
   filterSlicingPresetsForKind,
   findSlicingPresetFacet,
-  groupSlicingPresetsByFacet
+  groupSlicingPresetsByFacet,
+  sortSlicingPresetsByFacet
 } from './slicingPresetFacets'
 
 /** Facet lookup that fails the test loudly rather than typing as possibly-undefined. */
@@ -70,9 +71,24 @@ test('process layer height comes from the preset name', () => {
   assert.deepEqual(fine.map((entry) => entry.id), ['p2'])
 })
 
-test('filament facets filter by material and brand', () => {
+test('filament facets filter by material, brand, and compatible printer', () => {
   const petg = filterSlicingPresetsForKind(FILAMENTS, 'filament', '', { filamentType: ['PETG'] })
   assert.deepEqual(petg.map((entry) => entry.id), ['f2'])
+
+  const compatible = profile({
+    id: 'f3',
+    kind: 'filament',
+    name: 'Printer-specific PLA',
+    filamentType: 'PLA',
+    filamentVendor: 'Polymaker',
+    compatiblePrinters: ['Bambu Lab H2D 0.4 nozzle']
+  })
+  assert.deepEqual(
+    filterSlicingPresetsForKind([...FILAMENTS, compatible], 'filament', '', {
+      compatiblePrinter: ['Bambu Lab H2D 0.4 nozzle']
+    }).map((entry) => entry.id),
+    ['f3']
+  )
 })
 
 test('search narrows within the active kind', () => {
@@ -103,6 +119,30 @@ test('profiles missing the grouped value fall into a bucket sorted last', () => 
   const noVendor = profile({ id: 'f3', kind: 'filament', name: 'Mystery', filamentType: 'PLA' })
   const groups = groupSlicingPresetsByFacet([noVendor, ...FILAMENTS], facet('filament', 'filamentVendor'))
   assert.deepEqual(groups.map((group) => group.label), ['Bambu Lab', 'Polymaker', 'Unspecified'])
+})
+
+test('facet sorting follows display values and keeps unspecified profiles last', () => {
+  const noVendor = profile({ id: 'f3', kind: 'filament', name: 'Mystery', filamentType: 'PLA' })
+  const vendor = facet('filament', 'filamentVendor')
+
+  assert.deepEqual(
+    sortSlicingPresetsByFacet([noVendor, ...FILAMENTS], vendor, 'asc').map((entry) => entry.id),
+    ['f2', 'f1', 'f3']
+  )
+  assert.deepEqual(
+    sortSlicingPresetsByFacet([noVendor, ...FILAMENTS], vendor, 'desc').map((entry) => entry.id),
+    ['f1', 'f2', 'f3']
+  )
+})
+
+test('facet sorting uses display values and keeps unspecified profiles last', () => {
+  const noVendor = profile({ id: 'f3', kind: 'filament', name: 'Mystery', filamentType: 'PLA' })
+  const sorted = sortSlicingPresetsByFacet(
+    [noVendor, ...FILAMENTS],
+    facet('filament', 'filamentVendor'),
+    'asc'
+  )
+  assert.deepEqual(sorted.map((entry) => entry.id), ['f2', 'f1', 'f3'])
 })
 
 test('the active-filter count ignores facets with nothing selected', () => {

@@ -6,7 +6,7 @@
  */
 import { FormControl, FormLabel, Select } from '@mui/joy'
 import type { FilamentSpoolStatus } from '@printstream/shared'
-import { DirectoryPrimaryToolbar } from '../../components/DirectoryToolbar'
+import { DirectoryPrimaryToolbar, type DirectorySelectionConfig } from '../../components/DirectoryToolbar'
 import { MultiSelectOption } from '../../components/MultiSelectOption'
 import { PAGE_SIZE_OPTIONS } from './constants'
 import { SPOOL_GROUP_OPTIONS, SPOOL_SORT_OPTIONS, STATUS_LABELS } from './filters'
@@ -18,12 +18,14 @@ export function SpoolDirectoryToolbar({
   directory,
   searchPlaceholder = 'Search by brand, colour, material…',
   searchAriaLabel = 'Search spools',
+  selection,
   compactControls = false,
   pinnable = true
 }: {
   directory: SpoolDirectory
   searchPlaceholder?: string
   searchAriaLabel?: string
+  selection?: DirectorySelectionConfig
   compactControls?: boolean
   pinnable?: boolean
 }) {
@@ -35,6 +37,7 @@ export function SpoolDirectoryToolbar({
       onSearchChange={directory.setSearch}
       searchPlaceholder={searchPlaceholder}
       searchAriaLabel={searchAriaLabel}
+      selection={selection}
       filters={{
         activeCount: directory.activeFilterCount,
         onClear: directory.clearFilters,

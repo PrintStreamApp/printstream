@@ -15,6 +15,7 @@
  */
 import { useEffect, useMemo, useState } from 'react'
 import { PrintObjectsSection } from './library/PrintObjectsSection'
+import { PrintStartOptionsFields } from './library/PrintStartOptionsFields'
 import { plateHasSliceData } from '../lib/slicingPresetMatching'
 import {
   Alert, Button, Checkbox, DialogActions, FormControl, FormLabel, Option, Select, Stack, Typography
@@ -24,6 +25,7 @@ import {
   findFilamentCompatibilityIssues,
   formatNozzleLabel,
   getPrinterPrintOptionCapabilities,
+  getPrinterPrintStartOptions,
   loadedSlotsFromStatus,
   mergeAmsMapping,
   platePrintSkipSelection,
@@ -31,9 +33,11 @@ import {
   trayCanSatisfyRequirement,
   filamentTrackSwitchArrangement,
   filamentTrackSwitchMismatch,
+  isPrinterModelCompatible,
   type FilamentCompatibilityIssue,
   type PrintNozzleOffsetCalibrationMode,
   type PrintOnOffAutoMode,
+  type PrintTimelapseStorage,
   type Printer,
   type PrinterStatus,
   type PrinterTrayMapping,
@@ -41,14 +45,11 @@ import {
   type ThreeMfProjectFilament
 } from '@printstream/shared'
 import { apiFetch } from '../lib/apiClient'
-import { useAuthBootstrapQuery } from '../lib/authQuery'
 import { readCurrentWorkspaceScopeKey, workspaceQueryKeys } from '../lib/workspaceScope'
-import { useLocalStorageState } from '../hooks/useLocalStorageState'
 import {
-  buildPrintStartPreferenceKey,
-  DEFAULT_STORED_PRINT_START_OPTIONS,
-  parseStoredPrintStartOptions,
-  resolvePrintStartPreferenceDefaults
+  arePrintStartModesAvailable,
+  DEFAULT_PRINT_START_OPTIONS,
+  resolvePrintStartDefaults
 } from '../lib/printStartOptions'
 import { BackAwareModal as Modal } from './BackAwareModal'
 import { DialogSection } from './DialogSection'
@@ -65,6 +66,7 @@ import {
   buildPrinterTrayGroups,
   buildPrinterTrayMap,
   formatCompatibilityIssue,
+  plateMappingNeedsExternalSpoolChangeAssist,
   visibleMappingFilaments,
   type PrinterTrayOption
 } from '../lib/libraryViewHelpers'
@@ -89,9 +91,12 @@ export function StoragePrintModal({
     vibrationCompensation: boolean
     flowCalibration: PrintOnOffAutoMode
     timelapse: boolean
+    timelapseStorage: PrintTimelapseStorage
+    externalFilamentChangeAssist: boolean
     nozzleOffsetCalibration: PrintNozzleOffsetCalibrationMode
     amsMapping?: PrinterTrayMapping[]
     allowIncompatibleFilament: boolean
+    allowPrinterModelMismatch: boolean
     allowFilamentTrackSwitchMismatch: boolean
     allowInsufficientFilament: boolean
     allowBlacklistedFilament: boolean
@@ -102,14 +107,15 @@ export function StoragePrintModal({
 }) {
   const printerId = printer.id
   const [plate, setPlate] = useState(1)
-  const [bedLevel, setBedLevel] = useState<PrintOnOffAutoMode>('on')
-  const [vibrationCompensation, setVibrationCompensation] = useState(false)
-  const [flowCalibration, setFlowCalibration] = useState<PrintOnOffAutoMode>('off')
+  const [bedLevel, setBedLevel] = useState<PrintOnOffAutoMode>('auto')
+  const [flowCalibration, setFlowCalibration] = useState<PrintOnOffAutoMode>('auto')
   const [timelapse, setTimelapse] = useState(false)
+  const [timelapseStorage, setTimelapseStorage] = useState<PrintTimelapseStorage>('external')
+  const [externalFilamentChangeAssist, setExternalFilamentChangeAssist] = useState(false)
   const [nozzleOffsetCalibration, setNozzleOffsetCalibration] = useState<PrintNozzleOffsetCalibrationMode>('auto')
-  const [printOptionsTouched, setPrintOptionsTouched] = useState(false)
   const [printOptionsInitialized, setPrintOptionsInitialized] = useState(false)
   const [allowIncompatibleFilament, setAllowIncompatibleFilament] = useState(false)
+  const [allowPrinterModelMismatch, setAllowPrinterModelMismatch] = useState(false)
   const [allowFilamentTrackSwitchMismatch, setAllowFilamentTrackSwitchMismatch] = useState(false)
   const [allowInsufficientFilament, setAllowInsufficientFilament] = useState(false)
   const [allowBlacklistedFilament, setAllowBlacklistedFilament] = useState(false)
@@ -121,7 +127,6 @@ export function StoragePrintModal({
    */
   const [explicitMapping, setExplicitMapping] = useState<number[]>([])
   const fileName = filePath.split('/').pop() || filePath
-  const authBootstrapQuery = useAuthBootstrapQuery()
   const workspaceScopeKey = readCurrentWorkspaceScopeKey()
   const statusQuery = useQuery<Record<string, PrinterStatus>>({
     queryKey: workspaceQueryKeys.printerStatus(workspaceScopeKey),
@@ -133,6 +138,18 @@ export function StoragePrintModal({
   })
   const statuses = useMemo(() => statusQuery.data ?? {}, [statusQuery.data])
   const status = statuses[printerId]
+  const printStartOptions = useMemo(
+    () => getPrinterPrintStartOptions(
+      printer.model,
+      status
+        ? {
+            printOptions: status.printOptions,
+            printStartOptions: status.printStartOptions
+          }
+        : null
+    ),
+    [printer.model, status]
+  )
   const optionCapabilities = useMemo(
     () => getPrinterPrintOptionCapabilities(
       printer.model,
@@ -145,18 +162,9 @@ export function StoragePrintModal({
     ),
     [printer.model, status]
   )
-  const storedPrintOptionsKey = useMemo(
-    () => buildPrintStartPreferenceKey(authBootstrapQuery.data, [printer.model]),
-    [authBootstrapQuery.data, printer.model]
-  )
-  const [storedPrintOptions, setStoredPrintOptions, storedPrintOptionsReady] = useLocalStorageState(
-    storedPrintOptionsKey,
-    DEFAULT_STORED_PRINT_START_OPTIONS,
-    parseStoredPrintStartOptions
-  )
-  const resolvedStoredPrintOptions = useMemo(
-    () => resolvePrintStartPreferenceDefaults(storedPrintOptions),
-    [storedPrintOptions]
+  const resolvedDefaultPrintOptions = useMemo(
+    () => resolvePrintStartDefaults(DEFAULT_PRINT_START_OPTIONS, printStartOptions),
+    [printStartOptions]
   )
   const platesQuery = useQuery({
     queryKey: ['printer-storage-plates', printerId, filePath],
@@ -170,6 +178,8 @@ export function StoragePrintModal({
   })
   const plates = useMemo(() => platesQuery.data?.plates ?? [], [platesQuery.data])
   const projectFilaments = useMemo(() => platesQuery.data?.projectFilaments ?? [], [platesQuery.data])
+  const compatiblePrinterModels = platesQuery.data?.compatiblePrinterModels ?? []
+  const hasPrinterModelMismatch = !isPrinterModelCompatible(compatiblePrinterModels, printer.model)
   // Same rule and same alert as the library print dialog, a file already on the printer's storage
   // still has to have been sliced for the kind of machine it is about to print on. Undefined (an
   // older server that does not send the flag) reads as unknown, not as "no switch".
@@ -243,6 +253,10 @@ export function StoragePrintModal({
   const effectiveMapping = useMemo(
     () => mergeAmsMapping(explicitMapping, autoMapping) ?? [],
     [autoMapping, explicitMapping]
+  )
+  const needsExternalSpoolChangeAssist = useMemo(
+    () => plateMappingNeedsExternalSpoolChangeAssist(effectiveMapping, visibleFilaments),
+    [effectiveMapping, visibleFilaments]
   )
   const autoSelectedIds = useMemo(
     () => autoSelectedFilamentIds(visibleFilaments, autoMapping, explicitMapping),
@@ -350,8 +364,9 @@ export function StoragePrintModal({
   const hasPrintSettings =
     optionCapabilities.timelapse
     || optionCapabilities.bedLevel
-    || optionCapabilities.vibrationCompensation
     || optionCapabilities.flowCalibration
+    || optionCapabilities.internalTimelapseStorage
+    || (optionCapabilities.externalFilamentChangeAssist && needsExternalSpoolChangeAssist)
     || optionCapabilities.nozzleOffsetCalibration
   const showCompatibilitySection =
     platesQuery.isLoading
@@ -359,6 +374,7 @@ export function StoragePrintModal({
     || (mappingCapable && hardCompatibilityIssues.length > 0)
     || (mappingCapable && softCompatibilityIssues.length > 0)
     || (!mappingCapable && automaticCompatibilityIssues.length > 0)
+    || hasPrinterModelMismatch
     || error != null
 
   useEffect(() => {
@@ -366,61 +382,56 @@ export function StoragePrintModal({
   }, [filePath, issueSignature])
 
   useEffect(() => {
-    if (printOptionsTouched) return
-    if (!storedPrintOptionsReady) return
-    if (printOptionsInitialized) return
-    setBedLevel(resolvedStoredPrintOptions.bedLevel)
-    setVibrationCompensation(resolvedStoredPrintOptions.vibrationCompensation)
-    setFlowCalibration(resolvedStoredPrintOptions.flowCalibration)
-    setTimelapse(resolvedStoredPrintOptions.timelapse)
-    setNozzleOffsetCalibration(resolvedStoredPrintOptions.nozzleOffsetCalibration)
-    setPrintOptionsInitialized(true)
-  }, [printOptionsInitialized, printOptionsTouched, resolvedStoredPrintOptions, storedPrintOptionsReady])
+    setAllowPrinterModelMismatch(false)
+  }, [filePath, hasPrinterModelMismatch])
 
   useEffect(() => {
-    if (!storedPrintOptionsReady) return
-    if (!printOptionsInitialized && !printOptionsTouched) return
-    setStoredPrintOptions({
-      bedLevel,
-      vibrationCompensation,
-      flowCalibration,
-      timelapse,
-      nozzleOffsetCalibration
-    })
-  }, [
-    bedLevel,
-    vibrationCompensation,
-    flowCalibration,
-    nozzleOffsetCalibration,
-    printOptionsInitialized,
-    printOptionsTouched,
-    setStoredPrintOptions,
-    storedPrintOptionsReady,
-    timelapse
-  ])
+    if (printOptionsInitialized) return
+    setBedLevel(resolvedDefaultPrintOptions.bedLevel)
+    setFlowCalibration(resolvedDefaultPrintOptions.flowCalibration)
+    setTimelapse(resolvedDefaultPrintOptions.timelapse)
+    setTimelapseStorage(resolvedDefaultPrintOptions.timelapseStorage)
+    setExternalFilamentChangeAssist(resolvedDefaultPrintOptions.externalFilamentChangeAssist)
+    setNozzleOffsetCalibration(resolvedDefaultPrintOptions.nozzleOffsetCalibration)
+    setPrintOptionsInitialized(true)
+  }, [printOptionsInitialized, resolvedDefaultPrintOptions])
+
+  // Firmware detail can arrive after the model fallback initialized these controls. Keep the
+  // selection representable if that more precise capability report removes an Auto choice.
+  useEffect(() => {
+    if (bedLevel === 'auto' && printStartOptions.bedLevel.supported && !printStartOptions.bedLevel.autoSupported) {
+      setBedLevel('on')
+    }
+    if (flowCalibration === 'auto'
+      && printStartOptions.flowCalibration.supported
+      && !printStartOptions.flowCalibration.autoSupported) {
+      setFlowCalibration('on')
+    }
+  }, [bedLevel, flowCalibration, printStartOptions])
+
+  const hasValidPrintOptions = arePrintStartModesAvailable({ bedLevel, flowCalibration }, printStartOptions)
 
   const updateBedLevel = (value: PrintOnOffAutoMode) => {
-    setPrintOptionsTouched(true)
     setBedLevel(value)
   }
 
-  const updateVibrationCompensation = (value: boolean) => {
-    setPrintOptionsTouched(true)
-    setVibrationCompensation(value)
-  }
-
   const updateFlowCalibration = (value: PrintOnOffAutoMode) => {
-    setPrintOptionsTouched(true)
     setFlowCalibration(value)
   }
 
   const updateTimelapse = (value: boolean) => {
-    setPrintOptionsTouched(true)
     setTimelapse(value)
   }
 
+  const updateTimelapseStorage = (value: PrintTimelapseStorage) => {
+    setTimelapseStorage(value)
+  }
+
+  const updateExternalFilamentChangeAssist = (value: boolean) => {
+    setExternalFilamentChangeAssist(value)
+  }
+
   const updateNozzleOffsetCalibration = (value: PrintNozzleOffsetCalibrationMode) => {
-    setPrintOptionsTouched(true)
     setNozzleOffsetCalibration(value)
   }
 
@@ -477,59 +488,22 @@ export function StoragePrintModal({
           )}
           {hasPrintSettings && (
             <DialogSection title="Print settings">
-              <Stack spacing={1.25}>
-                {optionCapabilities.timelapse && (
-                  <FormControl orientation="horizontal" sx={{ justifyContent: 'space-between' }}>
-                    <FormLabel>Timelapse</FormLabel>
-                    <Select<'off' | 'on'> value={timelapse ? 'on' : 'off'} onChange={(_event, value) => value && updateTimelapse(value === 'on')}>
-                      <Option value="off">Off</Option>
-                      <Option value="on">On</Option>
-                    </Select>
-                  </FormControl>
-                )}
-                {optionCapabilities.bedLevel && (
-                  <FormControl orientation="horizontal" sx={{ justifyContent: 'space-between' }}>
-                    <FormLabel>Auto Bed Leveling</FormLabel>
-                    <Select<PrintOnOffAutoMode> value={bedLevel} onChange={(_event, value) => value && updateBedLevel(value)}>
-                      <Option value="off">Off</Option>
-                      <Option value="on">On</Option>
-                      {optionCapabilities.bedLevelAuto && <Option value="auto">Auto</Option>}
-                    </Select>
-                  </FormControl>
-                )}
-                {optionCapabilities.vibrationCompensation && (
-                  <FormControl orientation="horizontal" sx={{ justifyContent: 'space-between' }}>
-                    <FormLabel>Vibration Compensation</FormLabel>
-                    <Select<'off' | 'on'> value={vibrationCompensation ? 'on' : 'off'} onChange={(_event, value) => value && updateVibrationCompensation(value === 'on')}>
-                      <Option value="off">Off</Option>
-                      <Option value="on">On</Option>
-                    </Select>
-                  </FormControl>
-                )}
-                {optionCapabilities.flowCalibration && (
-                  <FormControl orientation="horizontal" sx={{ justifyContent: 'space-between' }}>
-                    <FormLabel>Flow Dynamics Calibration</FormLabel>
-                    <Select<PrintOnOffAutoMode> value={flowCalibration} onChange={(_event, value) => value && updateFlowCalibration(value)}>
-                      <Option value="off">Off</Option>
-                      <Option value="on">On</Option>
-                      {optionCapabilities.flowCalibrationAuto && <Option value="auto">Auto</Option>}
-                    </Select>
-                  </FormControl>
-                )}
-                {optionCapabilities.nozzleOffsetCalibration && (
-                  <FormControl orientation="horizontal" sx={{ justifyContent: 'space-between' }}>
-                    <FormLabel>Nozzle Offset Calibration</FormLabel>
-                    <Select<PrintNozzleOffsetCalibrationMode>
-                      value={nozzleOffsetCalibration}
-                      onChange={(_event, value) => value && updateNozzleOffsetCalibration(value)}
-                    >
-                      <Option value="off">Off</Option>
-                      <Option value="on">On</Option>
-                      <Option value="auto">Auto</Option>
-                    </Select>
-                  </FormControl>
-                )}
-              </Stack>
+              <PrintStartOptionsFields
+                timelapse={timelapse}
+                onTimelapseChange={updateTimelapse}
+                timelapseStorage={timelapseStorage}
+                onTimelapseStorageChange={updateTimelapseStorage}
+                externalFilamentChangeAssist={externalFilamentChangeAssist}
+                onExternalFilamentChangeAssistChange={updateExternalFilamentChangeAssist}
+                needsExternalSpoolChangeAssist={needsExternalSpoolChangeAssist}
+                bedLevel={bedLevel}
+                onBedLevelChange={updateBedLevel}
+                flowCalibration={flowCalibration}
+                onFlowCalibrationChange={updateFlowCalibration}
+                nozzleOffsetCalibration={nozzleOffsetCalibration}
+                onNozzleOffsetCalibrationChange={updateNozzleOffsetCalibration}
+                capabilities={optionCapabilities}
+              />
             </DialogSection>
           )}
           {showCompatibilitySection && (
@@ -546,6 +520,21 @@ export function StoragePrintModal({
                       {selectedTrayWarnings.map((warning) => (
                         <Typography key={warning} level="body-xs">{warning}</Typography>
                       ))}
+                    </Stack>
+                  </Alert>
+                )}
+                {hasPrinterModelMismatch && (
+                  <Alert color="warning" variant="soft">
+                    <Stack spacing={1}>
+                      <Typography level="title-sm">Printer model mismatch</Typography>
+                      <Typography level="body-sm">
+                        This file was sliced for {compatiblePrinterModels.join(', ')}, but {printer.name} is a {printer.model}. Build volume and motion limits may differ.
+                      </Typography>
+                      <Checkbox
+                        label="Print on this model anyway"
+                        checked={allowPrinterModelMismatch}
+                        onChange={(event) => setAllowPrinterModelMismatch(event.target.checked)}
+                      />
                     </Stack>
                   </Alert>
                 )}
@@ -646,12 +635,18 @@ export function StoragePrintModal({
                 // sliced "Plate 2" output), and the skip selection is mapped against this plate.
                 plate: activePlate?.index ?? plate,
                 bedLevel,
-                vibrationCompensation,
+                vibrationCompensation: false,
                 flowCalibration,
                 timelapse,
+                timelapseStorage,
+                externalFilamentChangeAssist:
+                  optionCapabilities.externalFilamentChangeAssist
+                  && needsExternalSpoolChangeAssist
+                  && externalFilamentChangeAssist,
                 nozzleOffsetCalibration,
                 amsMapping: sanitizeTrayMapping(effectiveMapping) as PrinterTrayMapping[] | undefined,
                 allowIncompatibleFilament,
+                allowPrinterModelMismatch,
                 allowFilamentTrackSwitchMismatch,
                 allowInsufficientFilament,
                 allowBlacklistedFilament,
@@ -660,10 +655,12 @@ export function StoragePrintModal({
             }}
             loading={submitting}
             disabled={
-              (mappingCapable && !allMappingsComplete)
+              !hasValidPrintOptions
+              || (mappingCapable && !allMappingsComplete)
               || (hardCompatibilityIssues.length > 0 && !allowIncompatibleFilament)
               || (softCompatibilityIssues.length > 0 && !allowIncompatibleFilament)
               || (!mappingCapable && automaticCompatibilityIssues.length > 0 && !allowIncompatibleFilament)
+              || (hasPrinterModelMismatch && !allowPrinterModelMismatch)
               || (trackSwitchMismatches.length > 0 && !allowFilamentTrackSwitchMismatch)
               || (lowFilamentEntries.length > 0 && !allowInsufficientFilament)
               || (hasBlacklistedFilament && !allowBlacklistedFilament)

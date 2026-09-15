@@ -10,7 +10,7 @@ import type { CreateSlicingJob, SlicingOutputLine } from '@printstream/shared'
 import yazl from 'yazl'
 import { readPrintJobThumbnail, savePrintJobThumbnail } from './print-job-thumbnails.js'
 import { prisma } from './prisma.js'
-import { SlicerServiceError, slicerClient } from './slicer-client.js'
+import { SlicerServiceError, slicerClient, type SlicerCapabilities } from './slicer-client.js'
 import { SlicingJobs, resolveSlicingSourcePath, type AuthorSliceSettings, type PersistSlicedArtifact, type ResolveSlicingSource } from './slicing-jobs.js'
 
 // These suites slice from fixture paths that don't exist on disk and mock the
@@ -55,6 +55,56 @@ test('resolveSlicingSourcePath returns the persisted path when it still exists',
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
+})
+
+test('an unchanged hidden slice is ready from cache without occupying the slicer', async () => {
+  let runCalls = 0
+  let lookupCalls = 0
+  slicerClient.isConfigured = (() => true) as typeof slicerClient.isConfigured
+  slicerClient.run = (async () => {
+    runCalls += 1
+    throw new Error('the slicer must not run on a cache hit')
+  }) as typeof slicerClient.run
+
+  const jobs = new SlicingJobs({
+    resolveSource: passthroughResolveSource,
+    authorSliceSettings: noAuthoring,
+    persistThumbnail: async () => null,
+    resolveSlicerCapabilities: async () => makeCacheCapabilities(),
+    lookupResultCache: async () => {
+      lookupCalls += 1
+      return {
+        cacheKey: 'cache-key',
+        hit: {
+          outputFileId: 'fresh-cache-output',
+          outputFileName: 'part.gcode.3mf',
+          slicerName: 'Bambu Studio',
+          metadata: { estimatedPrintTimeSeconds: 90 }
+        }
+      }
+    }
+  })
+
+  const job = jobs.enqueue({
+    workspaceId: 'workspace-1',
+    workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
+    sourceFileId: 'file-1',
+    sourceFileName: 'part.3mf',
+    sourcePath: '/tmp/part.3mf',
+    targetBridgeId: 'bridge-1',
+    request: { ...makeRequest(), hiddenOutput: true, slicerTargetId: 'bambu-studio' }
+  })
+
+  await waitFor(() => {
+    const current = jobs.get('workspace-1', job.id)
+    assert.equal(current.status, 'ready')
+    assert.equal(current.outputFileId, 'fresh-cache-output')
+    assert.equal(current.outputFileName, 'part.gcode.3mf')
+    assert.deepEqual(current.metadata, { estimatedPrintTimeSeconds: 90 })
+    assert.equal(current.output.at(-1)?.text, 'Slicing complete')
+  })
+  assert.equal(lookupCalls, 1)
+  assert.equal(runCalls, 0)
 })
 
 test('a missing browser-prepared cache re-resolves only a same-workspace hidden snapshot', async () => {
@@ -371,6 +421,7 @@ test('listActive drops finished jobs older than the recency window while list ke
 
 test('slicing jobs persist slice-to-print artifacts as hidden files', async () => {
   const persistedInputs: Array<{ hidden: boolean; folderId: string | null; fileName: string }> = []
+  const cachedInputs: Array<{ cacheKey: string; outputFileId: string }> = []
   const jobs = new SlicingJobs({
     progressPollIntervalMs: 10,
     progressHeartbeatIntervalMs: 10_000,
@@ -395,6 +446,12 @@ test('slicing jobs persist slice-to-print artifacts as hidden files', async () =
         },
         unchanged: false
       } as Awaited<ReturnType<PersistSlicedArtifact>>
+    },
+    persistThumbnail: async () => null,
+    resolveSlicerCapabilities: async () => makeCacheCapabilities(),
+    lookupResultCache: async () => ({ cacheKey: 'cache-miss-key', hit: null }),
+    storeResultCache: async (input) => {
+      cachedInputs.push({ cacheKey: input.cacheKey, outputFileId: input.outputFileId })
     }
   })
   const tempDir = await mkdtemp(path.join(tmpdir(), 'slicing-jobs-success-'))
@@ -433,6 +490,73 @@ test('slicing jobs persist slice-to-print artifacts as hidden files', async () =
     })
 
     assert.deepEqual(persistedInputs, [{ hidden: true, folderId: 'folder-1', fileName: 'result.gcode.3mf' }])
+    assert.deepEqual(cachedInputs, [{ cacheKey: 'cache-miss-key', outputFileId: 'hidden-output-file' }])
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
+})
+
+test('a queued runtime-state change prevents storing a slice under the earlier cache identity', async () => {
+  let lookupStarted = false
+  let releaseLookup: (() => void) | undefined
+  const lookupGate = new Promise<void>((resolve) => { releaseLookup = resolve })
+  let storeCalls = 0
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'slicing-jobs-cache-runtime-'))
+  const sourcePath = path.join(tempDir, 'part.3mf')
+  const artifactPath = path.join(tempDir, 'result.gcode.3mf')
+  await writeFile(sourcePath, 'prepared project bytes')
+  await createTestThreeMf(artifactPath, { printer_settings_id: 'Bambu Lab X1C 0.4 nozzle' })
+
+  const jobs = new SlicingJobs({
+    progressPollIntervalMs: 10,
+    progressHeartbeatIntervalMs: 10_000,
+    resolveSource: passthroughResolveSource,
+    authorSliceSettings: noAuthoring,
+    persistArtifact: async (input) => ({
+      file: { id: 'runtime-output', ownerBridgeId: input.bridgeId, name: input.fileName },
+      unchanged: false
+    } as Awaited<ReturnType<PersistSlicedArtifact>>),
+    persistThumbnail: async () => null,
+    preserveProject: async () => null,
+    resolveSlicerCapabilities: async () => makeCacheCapabilities(),
+    lookupResultCache: async () => {
+      lookupStarted = true
+      await lookupGate
+      return { cacheKey: 'switch-state-key', hit: null }
+    },
+    storeResultCache: async () => { storeCalls += 1 }
+  })
+  slicerClient.isConfigured = (() => true) as typeof slicerClient.isConfigured
+  slicerClient.progress = (async () => ({ kind: 'unclaimed' })) as typeof slicerClient.progress
+  slicerClient.run = (async () => ({
+    outputFileName: 'result.gcode.3mf',
+    output: [],
+    metadata: undefined,
+    artifactPath
+  })) as typeof slicerClient.run
+
+  const job = jobs.enqueue({
+    workspaceId: 'workspace-1',
+    workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
+    sourceFileId: 'file-1',
+    sourceFileName: 'part.3mf',
+    sourcePath,
+    targetBridgeId: 'bridge-1',
+    request: { ...makeRequest(), hiddenOutput: true, slicerTargetId: 'bambu-studio' }
+  })
+
+  try {
+    await waitFor(() => assert.equal(lookupStarted, true))
+    const internal = (jobs as unknown as {
+      jobs: Map<string, { cacheHasFilamentTrackSwitch: boolean | null }>
+    }).jobs.get(job.id)
+    assert.ok(internal)
+    // The manual-profile target reads false at execution. Simulate a lookup that observed true.
+    internal.cacheHasFilamentTrackSwitch = true
+    releaseLookup?.()
+
+    await waitFor(() => assert.equal(jobs.get('workspace-1', job.id).status, 'ready'))
+    assert.equal(storeCalls, 0)
   } finally {
     await rm(tempDir, { recursive: true, force: true })
   }
@@ -1201,6 +1325,27 @@ function makeRequest(): CreateSlicingJob {
       filamentMappings: []
     },
     plate: 1
+  }
+}
+
+/** Minimal healthy engine catalogue for cache-orchestration tests. */
+function makeCacheCapabilities(): SlicerCapabilities {
+  return {
+    configured: true,
+    healthy: true,
+    slicerName: 'Bambu Studio',
+    defaultTargetId: 'bambu-studio',
+    targets: [{
+      id: 'bambu-studio',
+      label: 'Bambu Studio',
+      family: 'bambustudio',
+      version: '1.0.0',
+      slicerName: 'Bambu Studio',
+      supportsEstimateModeMachineSwitch: false,
+      isDefault: true,
+      prerelease: false
+    }],
+    engineInstall: null
   }
 }
 

@@ -1,7 +1,7 @@
 /**
  * Client helpers for the editor's foreign-model staging endpoints.
  *
- * Imports are staged server-side: a foreign STL/STEP/3MF is parsed (and STEP
+ * Imports are staged server-side: a foreign model is parsed (and STEP
  * tessellated) into a mesh keyed by `importId`. An import-backed editor instance
  * then references that `importId` in the `SceneEdit` it emits; the backend bakes
  * the staged mesh into the output 3MF at save/slice time, so no extra upload is
@@ -10,7 +10,8 @@
  * `apiFetch` is JSON-only, so the multipart upload here uses a raw `fetch` that
  * mirrors `apiFetch`'s credentials + workspace-context header handling. The mesh
  * itself is fetched as a binary STL (rendered with `STLLoader.parse`) rather than
- * shipped as JSON.
+ * shipped as JSON. Source colours travel in a separate byte RGBA sidecar because STL cannot
+ * represent them; the editor normalizes and quantizes that sidecar into ordinary 3MF colour paint.
  */
 import { STAGED_IMPORT_FORMATS, extractErrorMessage, type ImportNormalization, type StagedImport } from '@printstream/shared'
 import { parseStlMesh, type ImportedMesh, type ImportedObjectInput } from '@printstream/shared/three-mf'
@@ -32,6 +33,13 @@ export function importMeshUrl(importId: string, partIndex?: number): string {
   // wrongly fetch the full merged mesh (7× the bytes → the "model download stalled" the user hit).
   const separator = base.includes('?') ? '&' : '?'
   return `${base}${separator}part=${encodeURIComponent(String(partIndex))}`
+}
+
+/** Credentialed binary source-colour URL, with the same optional part addressing as the mesh. */
+export function importSourceColorsUrl(importId: string, partIndex?: number): string {
+  const base = buildApiUrl(`/api/editor/imports/${encodeURIComponent(importId)}/source-colors`)
+  if (partIndex == null) return base
+  return `${base}${base.includes('?') ? '&' : '?'}part=${encodeURIComponent(String(partIndex))}`
 }
 
 /**
@@ -59,10 +67,12 @@ async function readImportResponse(response: Response): Promise<StagedImport> {
 export async function stageImportFromFile(
   file: File,
   normalize: ImportNormalization,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  companions: readonly File[] = []
 ): Promise<StagedImport> {
   const form = new FormData()
   form.append('file', file)
+  for (const companion of companions) form.append('companion', companion)
   // A multipart text field beside the file; the server rebases only an `object` (see
   // `ImportNormalization`), so an added part must reach it as `part` or its Z gets floored.
   form.append('normalize', normalize)
@@ -106,6 +116,25 @@ export async function fetchImportMesh(importId: string, partIndex?: number, sign
   })
   // `fetchModelBytes` returns a tightly-sized Uint8Array backed by a fresh ArrayBuffer.
   return bytes.buffer as ArrayBuffer
+}
+
+/** Fetch an API-staged import's optional byte-RGBA sidecar as normalized floats. */
+export async function fetchImportSourceColors(
+  importId: string,
+  partIndex?: number,
+  signal?: AbortSignal
+): Promise<Float32Array | null> {
+  const bytes = await fetchModelBytes(importSourceColorsUrl(importId, partIndex), {
+    method: 'GET',
+    credentials: 'include',
+    headers: workspaceHeaders(),
+    signal
+  })
+  if (bytes.byteLength === 0) return null
+  if (bytes.byteLength % 4 !== 0) {
+    throw new Error('Imported source colours are corrupt.')
+  }
+  return Float32Array.from(bytes, (value) => value / 255)
 }
 
 /**
@@ -155,19 +184,20 @@ function createStore(): EditorImportStore {
 
   return {
     supportsLibrarySource: true,
-    // Every catalogued format: the server parses STL/OBJ/glTF/AMF directly, converts STEP through
+    // Every catalogued format: the server parses STL/OBJ/glTF/AMF/FBX directly, converts STEP through
     // OpenCASCADE and extracts 3MF geometry, so all of them reach the bake. Derived rather than
     // listed because a hand-copied list on each of the two stores is precisely how one host comes to
     // offer a format the other refuses. A host that genuinely CANNOT stage one still narrows here.
     importableFormats: STAGED_IMPORT_FORMATS,
-    async stageFile(file, normalize, signal) {
-      return remember(await stageImportFromFile(file, normalize, signal))
+    async stageFile(file, normalize, signal, companions) {
+      return remember(await stageImportFromFile(file, normalize, signal, companions))
     },
     async stageFromLibrary(libraryFileId, normalize, objectId, signal) {
       return remember(await stageImportFromLibrary(libraryFileId, normalize, objectId, signal))
     },
     meshUrl: importMeshUrl,
     fetchMesh: fetchImportMesh,
+    fetchSourceColors: fetchImportSourceColors,
 
     async importsForBake(signal, referencedIds) {
       // Sequential rather than concurrent: a staged assembly is one request PER SOLID, and a project

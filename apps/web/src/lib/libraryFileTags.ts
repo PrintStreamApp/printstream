@@ -43,7 +43,7 @@ export function isUnslicedThreeMfFile(file: LibraryFile): boolean {
 
 /**
  * Files whose only library action is the read-only 3D preview: every bare mesh (STL, STEP, OBJ,
- * glTF, AMF) and geometry-only 3MFs have no direct-print path (unlike gcode) and aren't editable
+ * glTF, AMF, FBX) and geometry-only 3MFs have no direct-print path (unlike gcode) and aren't editable
  * projects (unlike project 3MFs), so a click on one should open the previewer rather
  * than do nothing. The server converts each to a mesh for the previewer.
  *

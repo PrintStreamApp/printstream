@@ -46,7 +46,7 @@ export type AddedPartSource =
   /** Geometry the caller already built (the Text tool), staged as-is rather than generated here. */
   | { kind: 'soup'; soup: Float32Array; name: string }
   | { kind: 'primitive'; shape: PrimitiveKind }
-  | { kind: 'file'; file: File }
+  | { kind: 'file'; file: File; companionFiles?: readonly File[] }
   | { kind: 'library'; libraryFileId: string }
 
 export interface StagedAddedPartGeometry {
@@ -129,7 +129,7 @@ export async function stageAddedPartGeometry(
   // a helper volume half its own height above where the user put it (invisible, since an aid is
   // translucent and does not print).
   const staged = source.kind === 'file'
-    ? await store.stageFile(source.file, 'part', signal)
+    ? await store.stageFile(source.file, 'part', signal, source.companionFiles)
     : await store.stageFromLibrary(source.libraryFileId, 'part', undefined, signal)
   return { importId: staged.importId, soup: await soupFromStagedImport(store, staged.importId, signal), name: staged.name }
 }

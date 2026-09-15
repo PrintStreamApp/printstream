@@ -85,7 +85,8 @@ export async function authorProjectMachineFromProfile(input: {
 
   const authored = retargetProjectSettingsToMachine(projectSettings, machineConfig, {
     printerSettingsId: input.machineFile.name,
-    printerModel: firstString(machineConfig.printer_model) ?? deriveModelFromMachineName(input.machineFile.name)
+    printerModel: firstString(machineConfig.printer_model) ?? deriveModelFromMachineName(input.machineFile.name),
+    printerPresetInherits: input.machineFile.source === 'custom' ? firstString(machineConfig.inherits) : null
   })
 
   const outDir = await mkdtemp(path.join(tmpdir(), 'printstream-authored-machine-'))
@@ -415,7 +416,8 @@ export async function retargetSavedProjectMachine(input: RetargetSavedProjectInp
   // the operation's ORDER rather than open-coding half of it here.
   const machineRetargeted = retargetProjectSettingsToMachine(projectSettings, machineConfig, {
     printerSettingsId: machineFile.name,
-    printerModel
+    printerModel,
+    printerPresetInherits: machineFile.source === 'custom' ? firstString(machineConfig.inherits) : null
   })
 
   // Bring the process (print/quality) settings over to the target printer's process too, so the
@@ -453,6 +455,7 @@ export async function retargetSavedProjectMachine(input: RetargetSavedProjectInp
   const retargeted = applyMachineRetargetToProjectSettings(projectSettings, {
     machineConfig,
     printerSettingsId: machineFile.name,
+    printerPresetInherits: machineFile.source === 'custom' ? firstString(machineConfig.inherits) : null,
     printerModel,
     processConfig,
     processSettingOverrides: input.retarget.processSettingOverrides ?? {},

@@ -15,7 +15,7 @@ animationFrameWindow.requestAnimationFrame = (callback) => dom.window.setTimeout
 animationFrameWindow.cancelAnimationFrame = (handle) => dom.window.clearTimeout(handle)
 
 const React = (await import('react')).default
-const { cleanup, render, screen } = await import('@testing-library/react')
+const { cleanup, fireEvent, render, screen } = await import('@testing-library/react')
 const { SliceResultModal } = await import('./SliceThenPrintModal')
 
 afterEach(() => { cleanup() })
@@ -64,4 +64,53 @@ test('a cancelled slice explains the outcome without showing active progress', (
 
   assert.ok(screen.getByText('Slicing was cancelled. No sliced file was saved.'))
   assert.equal(screen.queryByRole('progressbar'), null)
+})
+
+test('an editor-owned ready result can close without discarding its hidden output', () => {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, staleTime: Number.POSITIVE_INFINITY } }
+  })
+  queryClient.setQueryData<SlicingJobResponse>(['slicing-job', 'slice-ready'], {
+    job: {
+      id: 'slice-ready',
+      sourceFileId: 'project-1',
+      sourceFileName: 'project.3mf',
+      outputFileId: 'output-1',
+      outputFileName: 'project.gcode.3mf',
+      target: { mode: 'manualProfile', printerModel: 'A1', printerProfileId: 'printer', filamentMappings: [] },
+      plate: 1,
+      status: 'ready',
+      queuePosition: null,
+      slicerName: 'stable',
+      metadata: undefined,
+      output: [],
+      error: null,
+      createdAt: '2026-09-10T00:00:00.000Z',
+      updatedAt: '2026-09-10T00:00:01.000Z',
+      startedAt: '2026-09-10T00:00:00.000Z',
+      finishedAt: '2026-09-10T00:00:01.000Z',
+      cancelRequested: false
+    }
+  })
+  let retained = false
+
+  render(
+    <QueryClientProvider client={queryClient}>
+      <SliceResultModal
+        sourceFile={{ id: 'project-1', name: 'project.3mf' } as LibraryFile}
+        jobId="slice-ready"
+        printers={[]}
+        canPrint={false}
+        folders={[]}
+        bridgeId={null}
+        bridgeName={null}
+        showRoot={false}
+        retainReadyResultOnClose
+        onClose={(result) => { retained = result.retained }}
+      />
+    </QueryClientProvider>
+  )
+
+  fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+  assert.equal(retained, true)
 })

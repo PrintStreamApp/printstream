@@ -99,14 +99,19 @@ export function weldImportedMeshVertices(mesh: ImportedMesh): ImportedMesh {
   }
   if (positions.length === mesh.positions.length) return mesh
   const indices: number[] = []
+  const triangleCornerColors = mesh.triangleCornerColors ? [] as number[] : undefined
   for (let triangle = 0; triangle + 2 < mesh.indices.length; triangle += 3) {
     const a = remap[mesh.indices[triangle] ?? 0] ?? 0
     const b = remap[mesh.indices[triangle + 1] ?? 0] ?? 0
     const c = remap[mesh.indices[triangle + 2] ?? 0] ?? 0
     if (a === b || b === c || c === a) continue
     indices.push(a, b, c)
+    if (triangleCornerColors) {
+      const colorOffset = triangle * 4
+      triangleCornerColors.push(...mesh.triangleCornerColors!.slice(colorOffset, colorOffset + 12))
+    }
   }
-  return { ...mesh, positions, indices }
+  return { ...mesh, positions, indices, ...(triangleCornerColors ? { triangleCornerColors } : {}) }
 }
 
 /**
@@ -197,6 +202,13 @@ function parseAsciiStl(bytes: Uint8Array): ImportedMesh {
 export function mergeImportedMeshes(meshes: ImportedMesh[]): ImportedMesh {
   const positions: number[] = []
   const indices: number[] = []
+  const hasTriangleCornerColors = meshes.some((mesh) => mesh.triangleCornerColors != null)
+  const triangleCornerColors = hasTriangleCornerColors ? [] as number[] : undefined
+  const sourceColorMode = meshes.some((mesh) => mesh.sourceColorMode === 'texture')
+    ? 'texture' as const
+    : meshes.some((mesh) => mesh.sourceColorMode === 'vertex')
+      ? 'vertex' as const
+      : meshes.some((mesh) => mesh.sourceColorMode === 'material') ? 'material' as const : undefined
   const accumulator = new BoundsAccumulator()
   for (const mesh of meshes) {
     const base = positions.length / 3
@@ -208,8 +220,24 @@ export function mergeImportedMeshes(meshes: ImportedMesh[]): ImportedMesh {
       accumulator.add(x, y, z)
     }
     for (const index of mesh.indices) indices.push(base + index)
+    if (triangleCornerColors) {
+      if (mesh.triangleCornerColors?.length === mesh.indices.length * 4) {
+        for (const channel of mesh.triangleCornerColors) triangleCornerColors.push(channel)
+      } else {
+        // An uncoloured sibling still needs explicit undefined corners so later parts stay aligned.
+        for (let channel = 0; channel < mesh.indices.length * 4; channel += 1) {
+          triangleCornerColors.push(0)
+        }
+      }
+    }
   }
-  return { positions, indices, bounds: accumulator.bounds() }
+  return {
+    positions,
+    indices,
+    bounds: accumulator.bounds(),
+    ...(triangleCornerColors ? { triangleCornerColors } : {}),
+    ...(sourceColorMode ? { sourceColorMode } : {})
+  }
 }
 
 

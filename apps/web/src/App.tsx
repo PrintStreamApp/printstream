@@ -90,8 +90,10 @@ import { isWorkspaceLandingReady, pluginBasePath, resolveDefaultWorkspaceRoute, 
 import {
   CONTEXT_CHOOSER_LABEL, buildPlatformWorkspacePath, buildWorkspacePath, buildWorkspaceSelectionPath, isPlatformWorkspacePath, isWorkspaceCandidatePath, parseWorkspacePathname } from './lib/workspaceRoute'
 import {
+  activePluginSlots,
   isPluginActiveByName,
   shouldMountPluginRouteByName,
+  pluginSupportsDeployment,
   pluginSupportsRuntimeSurface
 } from './lib/pluginSettings'
 import { runtimePolicyContext } from './lib/runtimePolicy'
@@ -253,7 +255,6 @@ export function App() {
   // fresh array each render would re-run it on every render.
   const customerOptions = authBootstrapQuery.data?.customers ?? NO_CUSTOMERS
   const hasBillingScopeView = accountSlotHasContent(BILLING_SCOPE_SLOT)
-  const hasMessagesSlot = accountSlotHasContent(ACCOUNT_MESSAGES_SLOT)
   const actorType = authBootstrapQuery.data?.actor.type ?? 'anonymous'
   const isPlatformUser = authBootstrapQuery.data?.actor.type === 'user' && (authBootstrapQuery.data.actor.isPlatformUser ?? false)
   // Self-hosted (OSS) deployments hide the cloud-only platform-admin and
@@ -434,19 +435,40 @@ export function App() {
     () => new Map((pluginStateQuery.data?.plugins ?? []).map((plugin) => [plugin.name, plugin] as const)),
     [pluginStateQuery.data?.plugins]
   )
+  // `App` owns the runtime-policy provider, so it cannot consume that context
+  // itself. Apply the same pure slot filters with the policy already resolved
+  // from auth bootstrap instead of calling `usePluginSlots` above the provider.
+  const hasMessagesSlot = useMemo(
+    () => activePluginSlots(webPluginRegistry.slots(ACCOUNT_MESSAGES_SLOT), {
+      selfHosted: selfHostedDeployment,
+      actorType: authBootstrapQuery.data?.actor.type,
+      currentSurface: currentPluginSurface,
+      apiPluginsByName,
+      hasPluginState: pluginStateQuery.data?.plugins != null
+    }).length > 0,
+    [
+      apiPluginsByName,
+      authBootstrapQuery.data?.actor.type,
+      currentPluginSurface,
+      pluginStateQuery.data?.plugins,
+      selfHostedDeployment
+    ]
+  )
   const pluginRoutes = useMemo(
     () => allPluginRoutes
+      .filter((route) => pluginSupportsDeployment(route, selfHostedDeployment))
       .filter((route) => pluginSupportsRuntimeSurface(route, currentPluginSurface))
       .filter((route) => isPluginActiveByName(route.pluginName, apiPluginsByName, pluginStateQuery.data?.plugins != null)),
-    [allPluginRoutes, apiPluginsByName, currentPluginSurface, pluginStateQuery.data?.plugins]
+    [allPluginRoutes, apiPluginsByName, currentPluginSurface, pluginStateQuery.data?.plugins, selfHostedDeployment]
   )
   // Routes, unlike tabs, stay mounted through the plugin-state load window so a
   // cold-loaded deep link is not 404'd before the catalog answers.
   const mountedPluginRoutes = useMemo(
     () => allPluginRoutes
+      .filter((route) => pluginSupportsDeployment(route, selfHostedDeployment))
       .filter((route) => pluginSupportsRuntimeSurface(route, currentPluginSurface))
       .filter((route) => shouldMountPluginRouteByName(route.pluginName, apiPluginsByName, pluginStateQuery.data?.plugins != null)),
-    [allPluginRoutes, apiPluginsByName, currentPluginSurface, pluginStateQuery.data?.plugins]
+    [allPluginRoutes, apiPluginsByName, currentPluginSurface, pluginStateQuery.data?.plugins, selfHostedDeployment]
   )
   const pluginTabs = useMemo<ReadonlyArray<ShellTab>>(
     () => pluginRoutes
@@ -950,8 +972,7 @@ export function App() {
   ) : null
   // App-shell footer: the feedback entry point (plus any plugin-contributed
   // footer actions, e.g. the cloud suggestion box), dev runtime chips (dev
-  // only), and the running build / update hint. AppVersionFooter renders
-  // nothing when there is no build to show.
+  // only), and the running build / release notes / update hint.
   const appFooterTrailing = (
     <Stack spacing={0.75} alignItems="center" useFlexGap>
       <Stack direction="row" spacing={1} useFlexGap alignItems="center" justifyContent="center" sx={{ flexWrap: 'wrap' }}>
@@ -1014,6 +1035,9 @@ export function App() {
     // it afterwards. Null leaves the CTA on its signed-out path.
     customerBasePath: customerOptions[0]
       ? customerApiBase(customerOptions[0].id)
+      : null,
+    billingMessagesHref: customerOptions[0]
+      ? buildBillingScopePath(customerOptions[0].id, 'messages')
       : null,
     demoLandingRoute: publicDemoLandingRoute
   }

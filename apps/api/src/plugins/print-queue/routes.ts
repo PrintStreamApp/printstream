@@ -36,6 +36,7 @@ import { requireRequestWorkspaceId, requireRouteParam } from '../../lib/request-
 import { broadcastPluginSettingsChanged, broadcastPrintDispatchChanged, broadcastQueueChanged } from '../../lib/ws-resource-events.js'
 import type { ApiPluginContext } from '../../plugin/types.js'
 import { resolveQueueDispatchConsents, type QueueDispatchConsents } from './dispatch-consent.js'
+import { buildQueueDispatchLinkage } from './dispatch-linkage.js'
 import {
   buildOrderedPrinterContexts,
   loadQueueSettings,
@@ -101,6 +102,7 @@ export function registerQueueRoutes(context: ApiPluginContext): void {
         plateIndex: parsed.data.plate,
         plateName: plate.plateName,
         quantity: orderLink ? 1 : parsed.data.quantity,
+        pinned: orderLink ? false : parsed.data.pinned,
         sortKey,
         targetKind: parsed.data.target.kind,
         targetPrinterId: parsed.data.target.kind === 'printer' ? parsed.data.target.printerId ?? null : null,
@@ -123,7 +125,12 @@ export function registerQueueRoutes(context: ApiPluginContext): void {
       action: 'queue-item-add',
       resource: 'queue item',
       summary: `Added "${created.fileName}" to the print queue.`,
-      metadata: { queueItemId: created.id, libraryFileId: file.id, quantity: created.quantity }
+      metadata: {
+        queueItemId: created.id,
+        libraryFileId: file.id,
+        quantity: created.quantity,
+        pinned: created.pinned
+      }
     })
     // Mirror the queued state onto the order print (shows "queued", blocks a double start).
     if (orderLink) {
@@ -151,6 +158,9 @@ export function registerQueueRoutes(context: ApiPluginContext): void {
       throw conflict('Only a held item can be resumed')
     }
     if (parsed.data.target) await assertTargetPrinter(prisma, parsed.data.target)
+    if (parsed.data.pinned === true && existing.orderPrintId) {
+      throw conflict('Order-linked queue items cannot be pinned')
+    }
 
     // A plate change re-inspects the 3MF to refresh the plate name and the default
     // required materials (unless the caller also sent an explicit material override).
@@ -194,6 +204,7 @@ export function registerQueueRoutes(context: ApiPluginContext): void {
         plateIndex,
         plateName,
         quantity: parsed.data.quantity ?? undefined,
+        pinned: parsed.data.pinned ?? undefined,
         targetKind: parsed.data.target?.kind ?? undefined,
         targetPrinterId: parsed.data.target
           ? (parsed.data.target.kind === 'printer' ? parsed.data.target.printerId ?? null : null)
@@ -212,8 +223,20 @@ export function registerQueueRoutes(context: ApiPluginContext): void {
       }
     })
 
+    const updated = await readQueueItem(prisma, existing.id)
+    annotateRequestAuditLog(request, {
+      action: 'queue-item-update',
+      resource: 'queue item',
+      summary: `Updated "${updated.fileName}" in the print queue.`,
+      metadata: {
+        queueItemId: updated.id,
+        quantity: updated.quantity,
+        pinned: updated.pinned,
+        targetKind: updated.target.kind
+      }
+    })
     broadcastQueueChanged(requireRequestWorkspaceId(request))
-    response.json({ item: await readQueueItem(prisma, existing.id) })
+    response.json({ item: updated })
   })
 
   router.post('/items/reorder', requireRequestPermission(PRINTS_DISPATCH_PERMISSION), async (request, response) => {
@@ -242,12 +265,21 @@ export function registerQueueRoutes(context: ApiPluginContext): void {
 
     const queueSettings = await loadQueueSettings(settings, workspaceId)
     const contexts = await buildOrderedPrinterContexts(prisma, queueSettings)
+    const consents = resolveQueueDispatchConsents(
+      parsed.data.dryRun ? 'dry-run' : 'person-start',
+      {
+        allowInsufficientFilament: parsed.data.allowInsufficientFilament === true,
+        allowBlacklistedFilament: parsed.data.allowBlacklistedFilament === true,
+        allowPrinterModelMismatch: parsed.data.allowPrinterModelMismatch === true
+      }
+    )
     const target = resolveDispatchTarget(
       toQueueItemPlacement(item),
       contexts,
       toMatchOptions(queueSettings),
       parsed.data.printerId,
-      parsed.data.amsMapping
+      parsed.data.amsMapping,
+      consents.allowPrinterModelMismatch
     )
 
     // Dry run ("Check"): report what a real Start would do, without uploading or starting.
@@ -258,28 +290,56 @@ export function registerQueueRoutes(context: ApiPluginContext): void {
         contexts,
         parsed.data.amsMapping,
         workspaceId,
-        resolveQueueDispatchConsents('dry-run')
+        consents
       ))
       return
     }
 
     if (!target.ok) throw conflict(target.reason)
 
+    // Claim before enqueuing. The dispatcher can accept work before the HTTP request
+    // finishes, so claiming afterward leaves a window where a second Start can enqueue
+    // the same item. Preserve `failed` on rollback so a retry does not erase its history.
+    const previousStatus = item.status
+    const claim = await prisma.queueItem.updateMany({
+      where: { id: item.id, status: previousStatus },
+      data: { status: 'dispatching' }
+    })
+    if (claim.count !== 1) throw conflict('This queued item is already in progress')
+
     // An explicit mapping is the user's per-start material choice and wins outright; the auto path still
     // merges the item's stored slot overrides with the matcher's result.
-    const consents = resolveQueueDispatchConsents('person-start', {
-      allowInsufficientFilament: parsed.data.allowInsufficientFilament === true,
-      allowBlacklistedFilament: parsed.data.allowBlacklistedFilament === true
-    })
-    const job = await applyDispatch(
-      prisma,
-      item,
-      target.printerId,
-      target.amsMapping,
-      workspaceId,
-      parsed.data.amsMapping,
-      consents
-    )
+    let job
+    let dispatchAccepted = false
+    try {
+      job = await applyDispatch(
+        prisma,
+        item,
+        target.printerId,
+        target.amsMapping,
+        workspaceId,
+        parsed.data.amsMapping,
+        consents,
+        () => {
+          dispatchAccepted = true
+        }
+      )
+    } catch (error) {
+      if (!dispatchAccepted) {
+        try {
+          await prisma.queueItem.updateMany({
+            where: { id: item.id, status: 'dispatching' },
+            data: { status: previousStatus }
+          })
+        } catch (rollbackError) {
+          logger.warn('Could not roll back failed queue dispatch claim', {
+            queueItemId: item.id,
+            error: rollbackError
+          })
+        }
+      }
+      throw error
+    }
 
     annotateRequestAuditLog(request, {
       action: 'queue-item-dispatch',
@@ -327,6 +387,7 @@ export function registerQueueRoutes(context: ApiPluginContext): void {
         claimed.add(item.id)
         if (claimResult.count !== 1) break
 
+        let dispatchAccepted = false
         try {
           const job = await applyDispatch(
             prisma,
@@ -335,11 +396,27 @@ export function registerQueueRoutes(context: ApiPluginContext): void {
             evaluation.amsMapping,
             workspaceId,
             undefined,
-            resolveQueueDispatchConsents('unattended-sweep')
+            resolveQueueDispatchConsents('unattended-sweep'),
+            () => {
+              dispatchAccepted = true
+            }
           )
           dispatched.push({ itemId: item.id, printerId: printer.printerId, jobId: job.printJobId })
         } catch (error) {
-          await prisma.queueItem.updateMany({ where: { id: item.id, status: 'dispatching' }, data: { status: 'queued' } }).catch(() => undefined)
+          if (!dispatchAccepted) {
+            try {
+              await prisma.queueItem.updateMany({
+                where: { id: item.id, status: 'dispatching' },
+                data: { status: 'queued' }
+              })
+            } catch (rollbackError) {
+              logger.warn('Could not roll back failed bulk queue dispatch claim', {
+                queueItemId: item.id,
+                printerId: printer.printerId,
+                error: rollbackError
+              })
+            }
+          }
           logger.warn('Queue auto-dispatch failed for item', { queueItemId: item.id, printerId: printer.printerId, error })
         }
         break
@@ -439,9 +516,9 @@ function assertDispatchable(item: QueueItemRow): void {
 
 /**
  * Enqueue a queued item to a printer through the shared library-print path and record
- * the dispatch linkage used for completion reconciliation. When not pre-claimed, the
- * status is flipped to `dispatching` here; on a pre-claimed bulk dispatch the row is
- * already `dispatching`.
+ * the dispatch linkage used for completion reconciliation. Callers claim the row as
+ * `dispatching` before entering this helper, so accepting a job cannot leave it eligible
+ * for a concurrent second dispatch.
  */
 async function applyDispatch(
   prisma: AnyPrismaClient,
@@ -453,7 +530,9 @@ async function applyDispatch(
   // Required, not defaulted: these are consent flags, and a default hands every
   // caller that forgets them the unattended sweep's override. See
   // `resolveQueueDispatchConsents`.
-  consents: QueueDispatchConsents
+  consents: QueueDispatchConsents,
+  /** Marks the irreversible boundary after the dispatcher accepts the print. */
+  onAccepted: () => void
 ) {
   if (!item.libraryFileId) throw notFound('The library file for this queued item is no longer available')
 
@@ -466,19 +545,11 @@ async function applyDispatch(
     buildQueueDispatchInput(item, item.libraryFileId, printerId, amsMapping, consents),
     workspaceId
   )
+  onAccepted()
 
   await prisma.queueItem.update({
     where: { id: item.id },
-    data: {
-      status: 'dispatching',
-      lastPrinterId: printerId,
-      lastDispatchJobId: job.id,
-      lastPrintJobId: job.printJobId,
-      lastJobName: job.jobName,
-      lastDispatchedAt: new Date(),
-      lastResult: null,
-      lastFinishedAt: null
-    }
+    data: buildQueueDispatchLinkage(job, printerId)
   })
   // Record the dispatch against the linked order print (the orders plugin listens);
   // it marks the print started so its existing PrintJob poll-sync tracks the result.

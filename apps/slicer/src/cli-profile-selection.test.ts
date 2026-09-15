@@ -3,6 +3,7 @@ import test from 'node:test'
 import {
   buildPerMaterialFilamentOverrides,
   selectCliProfileFiles,
+  selectPreparedRuntimeProfileFiles,
   selectSettingsExportProfileFiles
 } from './cli-profile-selection.js'
 
@@ -32,6 +33,19 @@ test('keeps machine presets when project settings were not rewritten', () => {
   assert.deepEqual(selected, [
     { kind: 'machine' },
     { kind: 'process' }
+  ])
+})
+
+test('prepared runtime profiles keep only the custom machine sidecar', () => {
+  const selected = selectPreparedRuntimeProfileFiles([
+    { id: 'builtin-machine', source: 'builtin' as const, kind: 'machine' as const },
+    { id: 'custom-machine', source: 'custom' as const, kind: 'machine' as const },
+    { id: 'custom-process', source: 'custom' as const, kind: 'process' as const },
+    { id: 'custom-filament', source: 'custom' as const, kind: 'filament' as const }
+  ])
+
+  assert.deepEqual(selected, [
+    { id: 'custom-machine', source: 'custom', kind: 'machine' }
   ])
 })
 

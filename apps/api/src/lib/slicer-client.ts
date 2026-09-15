@@ -8,7 +8,7 @@
  * that owns the job, and reads (health/profiles/resolve) fail over in order.
  */
 import { slicerEngineInstallStatusSchema, slicingMetadataSchema, slicingOutputLineSchema, slicingPresetSummarySchema, slicingTargetDescriptorSchema, type SliceEnvelope, type SlicerEngineInstallStatus, type SlicingMetadata, type SlicingOutputLine, type SlicingPresetSummary, type SlicingTargetDescriptor } from '@printstream/shared'
-import { createReadStream, createWriteStream } from 'node:fs'
+import { createWriteStream } from 'node:fs'
 import { mkdtemp, rename, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -17,6 +17,7 @@ import { pipeline } from 'node:stream/promises'
 import type { ReadableStream as NodeReadableStream } from 'node:stream/web'
 import { Agent } from 'undici'
 import { env } from './env.js'
+import { buildSliceUploadFrame } from './slice-upload-frame.js'
 import type { ResolvedSlicingPresetFile } from './slicing-presets.js'
 
 /**
@@ -369,10 +370,9 @@ export class SlicerClient {
 
   private async runOnInstance(baseUrl: string, input: SlicerRunInput): Promise<SlicerRunResult> {
     const maxArtifactBytes = Math.min(input.maxArtifactBytes ?? env.SLICING_MAX_ARTIFACT_BYTES, env.SLICING_MAX_ARTIFACT_BYTES)
-    // The slice request travels to the slicer as a base64 HTTP header, so it must stay small.
-    // The editor's per-plate thumbnails (base64 PNGs) are only needed by the API (it bakes them
-    // into the sliced output after the slice): the slicer already receives the arranged 3MF, so
-    // strip them from the envelope to avoid blowing the header size limit (HTTP 431).
+    // The editor's per-plate thumbnails are only needed by the API, which bakes them into the
+    // sliced output afterwards. Keep them out of the worker manifest even though the manifest now
+    // travels in the body: a large plate set still should not cross this process boundary twice.
     const slicerRequest = 'sceneEdit' in input.request && input.request.sceneEdit?.plateThumbnails
       ? { ...input.request, sceneEdit: { ...input.request.sceneEdit, plateThumbnails: undefined } }
       : input.request
@@ -386,17 +386,16 @@ export class SlicerClient {
       profileFiles: input.profileFiles ?? [],
       executionHints: input.executionHints
     }
-    const envelope = Buffer.from(JSON.stringify(sliceEnvelope), 'utf8').toString('base64url')
     const sourceInfo = await stat(input.sourcePath)
     if (!sourceInfo.isFile() || sourceInfo.size <= 0) throw new Error('Slicing source file is missing or empty')
+    const upload = buildSliceUploadFrame(sliceEnvelope, input.sourcePath, sourceInfo.size)
 
     const artifactDir = await mkdtemp(path.join(tmpdir(), 'printstream-slice-'))
     const downloadPath = path.join(artifactDir, 'download.bin')
     const response = await this.runSliceRequest({
       url: `${baseUrl}/slice`,
-      sourcePath: input.sourcePath,
-      sourceSize: sourceInfo.size,
-      envelope,
+      body: upload.body,
+      contentLength: upload.contentLength,
       outputPath: downloadPath,
       maxArtifactBytes,
       signal: input.signal
@@ -597,14 +596,13 @@ export class SlicerClient {
 
   private async runSliceRequest(input: {
     url: string
-    sourcePath: string
-    sourceSize: number
-    envelope: string
+    body: Readable
+    contentLength: number
     outputPath: string
     maxArtifactBytes: number
     signal: AbortSignal
   }): Promise<{ headers: Headers }> {
-    const requestBody = Readable.toWeb(createReadStream(input.sourcePath)) as unknown as BodyInit
+    const requestBody = Readable.toWeb(input.body) as unknown as BodyInit
     // Bound the slice (the long call) by SLICING_REQUEST_TIMEOUT_MS combined with the caller's
     // cancel signal, otherwise a slicer that stalls mid-stream leaves the job slicing forever,
     // holding a concurrency slot. The timeout aborts both the fetch and the body pipeline below.
@@ -613,8 +611,7 @@ export class SlicerClient {
       method: 'POST',
       headers: {
         'Content-Type': 'application/octet-stream',
-        'Content-Length': String(input.sourceSize),
-        'X-PrintStream-Slice-Request': input.envelope,
+        'Content-Length': String(input.contentLength),
         ...this.headers()
       },
       body: requestBody,

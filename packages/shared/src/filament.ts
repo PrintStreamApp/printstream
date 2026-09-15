@@ -48,6 +48,8 @@ const spoolWritableShape = {
   /** Slicing preset (filament profile name) this spool slices with; null = auto-match at slice time. */
   slicingPresetName: optionalText(200).optional(),
   serial: optionalText(80).optional(),
+  /** Retail GTIN/UPC/EAN or manufacturer article number scanned from the box. */
+  productCode: optionalText(128).optional(),
   nozzleTempMin: tempSchema.nullable().optional(),
   nozzleTempMax: tempSchema.nullable().optional(),
   diameterMm: z.number().positive().max(10).optional(),
@@ -114,6 +116,7 @@ export const filamentSpoolSchema = z.object({
   /** Slicing preset (filament profile name) this spool slices with; null = auto-match. */
   slicingPresetName: z.string().nullable(),
   serial: z.string().nullable(),
+  productCode: z.string().nullable(),
   nozzleTempMin: z.number().nullable(),
   nozzleTempMax: z.number().nullable(),
   diameterMm: z.number(),
@@ -150,6 +153,38 @@ export const filamentSpoolListSchema = z.object({
   spools: z.array(filamentSpoolSchema)
 })
 export type FilamentSpoolList = z.infer<typeof filamentSpoolListSchema>
+
+/** A barcode or manufacturer article number to resolve against the filament catalog. */
+export const filamentBarcodeLookupInputSchema = z.object({
+  code: z.string().trim().min(1).max(128)
+})
+export type FilamentBarcodeLookupInput = z.infer<typeof filamentBarcodeLookupInputSchema>
+
+/** Catalog fields used to prefill the normal spool form after a successful scan. */
+export const filamentBarcodeProductSchema = z.object({
+  title: z.string(),
+  productCode: z.string(),
+  brand: z.string().nullable(),
+  filamentType: z.string(),
+  materialSubtype: z.string().nullable(),
+  colorName: z.string().nullable(),
+  colorHex: filamentHexColorSchema.nullable(),
+  diameterMm: z.number().positive().max(10).nullable(),
+  netWeightGrams: z.number().int().positive().max(100_000).nullable(),
+  spoolCoreGrams: z.number().int().nonnegative().max(100_000).nullable(),
+  nozzleTempMin: tempSchema.nullable(),
+  nozzleTempMax: tempSchema.nullable(),
+  refill: z.boolean()
+})
+export type FilamentBarcodeProduct = z.infer<typeof filamentBarcodeProductSchema>
+
+/** Result of resolving a scanned code in the server-cached Open Filament Database. */
+export const filamentBarcodeLookupResultSchema = z.object({
+  code: z.string(),
+  source: z.literal('open-filament-database'),
+  product: filamentBarcodeProductSchema.nullable()
+})
+export type FilamentBarcodeLookupResult = z.infer<typeof filamentBarcodeLookupResultSchema>
 
 export const filamentUsageEntrySchema = z.object({
   id: z.string(),

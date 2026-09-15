@@ -21,6 +21,7 @@ test('authors a selected process even when the printer did not change', async ()
         config: {
           printer_model: 'Test Printer',
           printer_settings_id: 'Selected Machine',
+          inherits: 'System Test Printer 0.4 nozzle',
           printable_area: ['0x0', '200x0', '200x200', '0x200']
         }
       }
@@ -41,7 +42,7 @@ test('authors a selected process even when the printer did not change', async ()
   }
   const target: SlicingTarget = {
     mode: 'manualProfile',
-    printerProfileId: 'machine:selected',
+    printerProfileId: 'custom:selected',
     printerModel: 'Test Printer',
     processProfileId: 'process:selected',
     processSettingOverrides: { sparse_infill_density: '28%' },
@@ -54,7 +55,10 @@ test('authors a selected process even when the printer did not change', async ()
       printer_settings_id: 'Selected Machine',
       print_settings_id: 'Old Draft',
       layer_height: '0.28',
-      sparse_infill_density: '5%'
+      sparse_infill_density: '5%',
+      filament_settings_id: ['Generic PLA'],
+      filament_colour: ['#FFFFFF'],
+      inherits_group: ['Old process parent', 'Old filament parent', 'Old machine parent']
     })),
     [THREE_MF_SLICE_INFO_ENTRY]: encoder.encode(
       '<config>\n  <metadata key="printer_model_id" value="OLD"/>\n  <plate><filament id="1" group_id="0"/></plate>\n</config>'
@@ -73,6 +77,7 @@ test('authors a selected process even when the printer did not change', async ()
   assert.equal(settings.layer_height, '0.12')
   assert.equal(settings.sparse_infill_density, '28%')
   assert.equal(settings.curr_bed_type, 'Textured PEI Plate')
+  assert.deepEqual(settings.inherits_group, ['', 'Old filament parent', 'System Test Printer 0.4 nozzle'])
   assert.doesNotMatch(decoder.decode(output[THREE_MF_SLICE_INFO_ENTRY]), /printer_model_id/)
   assert.doesNotMatch(decoder.decode(output[THREE_MF_SLICE_INFO_ENTRY]), /group_id/)
   assert.deepEqual(seenSignals, [abort.signal, abort.signal])

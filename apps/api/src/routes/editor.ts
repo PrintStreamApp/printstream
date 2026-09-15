@@ -2,9 +2,9 @@
  * 3D editor support API.
  *
  * Backs the interactive plate editor's foreign-geometry import and persistence:
- * - stage an STL/STEP/3MF from an upload or an existing library file (parsed/tessellated/extracted
- *   to a mesh held transiently and referenced by `importId` in a `SceneEdit`; 3MF is geometry-only:
- *   see `lib/three-mf-mesh-extract.ts`),
+ * - stage any catalogued model format from an upload or an existing library file
+ *   (parsed/tessellated/extracted to a mesh held transiently and referenced by `importId` in a
+ *   `SceneEdit`; 3MF is geometry-only: see `lib/three-mf-mesh-extract.ts`),
  * - stream a staged import back as binary STL for rendering,
  * - bake an edited arrangement (base project or a new one, plus imports) into a 3MF and persist it
  *   as a new library file or a new version of the base, or stream the bake back as a download
@@ -17,7 +17,7 @@
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { Router } from 'express'
+import { Router, type RequestHandler } from 'express'
 import multer from 'multer'
 import {
   LIBRARY_DOWNLOAD_PERMISSION,
@@ -32,6 +32,12 @@ import {
   type StagedImport
 } from '@printstream/shared'
 import { z } from 'zod'
+import {
+  MAX_OBJ_MATERIAL_BYTES,
+  MAX_OBJ_MATERIAL_FILES,
+  MAX_OBJ_TEXTURE_BYTES,
+  MAX_OBJ_TEXTURE_FILES
+} from '@printstream/shared/three-mf'
 import { annotateRequestAuditLog, skipRequestAuditLog } from '../lib/audit-logs.js'
 import { requireRequestPermission } from '../lib/authorization.js'
 import { resolveLibraryFileToLocalPath } from '../lib/bridge-library-files.js'
@@ -41,17 +47,54 @@ import { applyMachineOverridesToProject, applyMachinePresetChange, healSavedProj
 import { badRequest, HttpError, notFound } from '../lib/http-error.js'
 import { getStagedImport, resolveSceneEditImports, stageImport } from '../lib/import-store.js'
 import { discardHiddenSlicedOutput, persistLibraryFileFromLocalPath } from '../lib/library-files.js'
+import { resolveLibraryObjMaterialCompanions } from '../lib/library-obj-materials.js'
 import { describeImportFormats, detectImportFormat, meshToBinaryStl, parseImportedMesh, type ImportedMesh } from '../lib/mesh-import.js'
 import { extractThreeMfImportMesh } from '../lib/three-mf-mesh-extract.js'
 import { prisma } from '../lib/prisma.js'
-import { requireRequestWorkspaceId, requireRouteParam, sendModelBuffer, singleUploadWithLimit } from '../lib/request-helpers.js'
+import { requireRequestWorkspaceId, requireRouteParam, sendModelBuffer } from '../lib/request-helpers.js'
 import { buildEditedThreeMf, createObjectCustomizedThreeMf, embedPlateThumbnails, rekeyReplacedObjectOverrides } from '../lib/three-mf.js'
 
 const MAX_IMPORT_UPLOAD_BYTES = 256 * 1024 * 1024
 
+/** Keep multipart uploads in memory while applying the smaller resource ceilings during streaming. */
+const boundedImportMemoryStorage: multer.StorageEngine = {
+  _handleFile(_request, file, callback) {
+    const maxBytes = file.fieldname === 'companion'
+      ? path.extname(file.originalname).toLowerCase() === '.mtl' ? MAX_OBJ_MATERIAL_BYTES : MAX_OBJ_TEXTURE_BYTES
+      : MAX_IMPORT_UPLOAD_BYTES
+    const chunks: Buffer[] = []
+    let size = 0
+    let settled = false
+    const finish = (error?: Error) => {
+      if (settled) return
+      settled = true
+      if (error) callback(error)
+      else callback(undefined, { buffer: Buffer.concat(chunks), size })
+    }
+    file.stream.on('data', (chunk: Buffer) => {
+      // Multer may keep draining the part after the storage callback reports the limit. Do not
+      // retain that tail, or the smaller companion ceiling bounds the response but not memory.
+      if (settled) return
+      size += chunk.length
+      if (size > maxBytes) {
+        chunks.length = 0
+        finish(new multer.MulterError('LIMIT_FILE_SIZE', file.fieldname))
+        return
+      }
+      chunks.push(chunk)
+    })
+    file.stream.on('error', (error) => finish(error))
+    file.stream.on('end', () => finish())
+  },
+  _removeFile(_request, file, callback) {
+    file.buffer = Buffer.alloc(0)
+    callback(null)
+  }
+}
+
 const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: MAX_IMPORT_UPLOAD_BYTES }
+  storage: boundedImportMemoryStorage,
+  limits: { fileSize: MAX_IMPORT_UPLOAD_BYTES, files: MAX_OBJ_MATERIAL_FILES + MAX_OBJ_TEXTURE_FILES + 1 }
 })
 
 export const editorRouter = Router()
@@ -68,33 +111,96 @@ async function extractThreeMfMeshFromBuffer(buffer: Buffer): Promise<ImportedMes
   }
 }
 
-/** Wrap multer so payload-too-large surfaces as a clean 413. */
-function uploadImportFile(field: string) {
-  return singleUploadWithLimit({
-    upload,
-    field,
-    maxBytes: MAX_IMPORT_UPLOAD_BYTES,
-    onLimitExceeded: (maxBytes) =>
-      new HttpError(413, `Imported file exceeds ${Math.floor(maxBytes / (1024 * 1024))} MB limit`),
-    onOtherError: (error) => (error instanceof Error ? error : undefined)
+/**
+ * Accept one model plus a small, bounded set of OBJ material and texture resources.
+ *
+ * The storage engine applies the smaller companion ceilings while streaming. Aggregate material
+ * and texture limits are checked immediately after parsing and before geometry work, while the
+ * file-count limit bounds memory even for a deliberately oversized multipart request.
+ */
+const uploadImportFiles: RequestHandler = (request, response, next) => {
+  upload.fields([
+    { name: 'file', maxCount: 1 },
+    { name: 'companion', maxCount: MAX_OBJ_MATERIAL_FILES + MAX_OBJ_TEXTURE_FILES }
+  ])(request, response, (error: unknown) => {
+    if (error instanceof multer.MulterError) {
+      if (error.code === 'LIMIT_FILE_SIZE') {
+        next(new HttpError(413, error.field === 'companion'
+          ? 'An OBJ companion resource exceeds its size limit'
+          : `Imported file exceeds ${Math.floor(MAX_IMPORT_UPLOAD_BYTES / (1024 * 1024))} MB limit`))
+        return
+      }
+      if (error.code === 'LIMIT_FILE_COUNT') {
+        next(new HttpError(413, `An OBJ can include at most ${MAX_OBJ_MATERIAL_FILES} material and ${MAX_OBJ_TEXTURE_FILES} texture files`))
+        return
+      }
+      if (error.code === 'LIMIT_UNEXPECTED_FILE') {
+        next(badRequest('Unexpected file field in model import'))
+        return
+      }
+    }
+    next(error)
   })
+}
+
+/** Validate and return optional MTL and texture files uploaded beside an OBJ. */
+function importCompanionFiles(request: Express.Request): Express.Multer.File[] {
+  const files = request.files as Record<string, Express.Multer.File[]> | undefined
+  const companions = files?.companion ?? []
+  let materialBytes = 0
+  let textureBytes = 0
+  let materialCount = 0
+  let textureCount = 0
+  const names = new Set<string>()
+  for (const companion of companions) {
+    const extension = path.extname(companion.originalname).toLowerCase()
+    if (extension !== '.mtl' && extension !== '.png' && extension !== '.jpg' && extension !== '.jpeg') {
+      throw badRequest('Only MTL, PNG, and JPEG files can accompany an OBJ import')
+    }
+    if (extension === '.mtl') {
+      materialCount += 1
+      materialBytes += companion.size
+    } else {
+      textureCount += 1
+      textureBytes += companion.size
+    }
+    if (materialCount > MAX_OBJ_MATERIAL_FILES || textureCount > MAX_OBJ_TEXTURE_FILES) {
+      throw new HttpError(413, `An OBJ can include at most ${MAX_OBJ_MATERIAL_FILES} material and ${MAX_OBJ_TEXTURE_FILES} texture files`)
+    }
+    if (materialBytes > MAX_OBJ_MATERIAL_BYTES) {
+      throw new HttpError(413, 'OBJ material files exceed the 16 MB combined limit')
+    }
+    if (textureBytes > MAX_OBJ_TEXTURE_BYTES) throw new HttpError(413, 'OBJ textures exceed the 64 MB combined limit')
+    const name = companion.originalname.toLowerCase()
+    if (names.has(name)) throw badRequest(`Duplicate companion file: ${companion.originalname}`)
+    names.add(name)
+  }
+  return companions
 }
 
 editorRouter.post(
   '/imports',
   requireRequestPermission(LIBRARY_UPLOAD_PERMISSION),
-  uploadImportFile('file'),
+  uploadImportFiles,
   async (request, response) => {
     const workspaceId = requireRequestWorkspaceId(request)
-    const file = request.file
+    const files = request.files as Record<string, Express.Multer.File[]> | undefined
+    const file = files?.file?.[0]
     if (!file) throw badRequest('No file uploaded')
     const format = detectImportFormat(file.originalname)
     if (!format) {
       throw badRequest(`Only ${describeImportFormats()} files can be imported from your device`)
     }
+    const companions = importCompanionFiles(request)
+    if (companions.length > 0 && format !== 'obj') {
+      throw badRequest('Companion resources are only supported with OBJ imports')
+    }
     const mesh = format === '3mf'
       ? await extractThreeMfMeshFromBuffer(file.buffer)
-      : await parseImportedMesh(file.buffer, format)
+      : await parseImportedMesh(file.buffer, format, companions.map((companion) => ({
+          name: companion.originalname,
+          bytes: companion.buffer
+        })))
     const name = path.parse(file.originalname).name || 'Imported model'
     // A multipart field, so it arrives as text beside the file. Defaulting rather than rejecting a
     // request that omits it: `object` is the common case, and the CLIENT type already makes the
@@ -121,7 +227,7 @@ editorRouter.post(
 
     const libraryFile = await prisma.libraryFile.findFirst({
       where: { id: parsed.data.libraryFileId, workspaceId },
-      select: { id: true, name: true, ownerBridgeId: true, storedPath: true }
+      select: { id: true, workspaceId: true, name: true, ownerBridgeId: true, storedPath: true, folderId: true }
     })
     if (!libraryFile) throw notFound('Library file not found')
     const format = detectImportFormat(libraryFile.name)
@@ -130,9 +236,13 @@ editorRouter.post(
     }
 
     const localPath = await resolveLibraryFileToLocalPath(libraryFile)
+    const sourceBytes = format === '3mf' ? null : await readFile(localPath)
+    const companions = format === 'obj' && sourceBytes
+      ? await resolveLibraryObjMaterialCompanions(libraryFile, sourceBytes)
+      : []
     const mesh = format === '3mf'
       ? await extractThreeMfImportMesh(localPath, parsed.data.objectId != null ? { objectId: parsed.data.objectId } : undefined)
-      : await parseImportedMesh(await readFile(localPath), format)
+      : await parseImportedMesh(sourceBytes!, format, companions)
     const name = path.parse(libraryFile.name).name || 'Imported model'
     const staged = stageImport({ workspaceId, name, format, mesh, normalize: parsed.data.normalize })
     // Transient and high-frequency, exactly as for the upload route above: audited where the
@@ -150,16 +260,7 @@ editorRouter.get(
     const importId = requireRouteParam(request.params.importId, 'Import id')
     const record = getStagedImport(importId, workspaceId)
     if (!record) throw notFound('Imported model not found or expired')
-    // `?part=N` streams the Nth named solid of a multi-solid import; without it (or for a
-    // single-solid import) the merged mesh is returned.
-    const partParam = request.query.part
-    const parts = record.mesh.parts
-    let mesh = record.mesh
-    if (typeof partParam === 'string' && parts && parts.length > 1) {
-      const index = Number.parseInt(partParam, 10)
-      if (!Number.isInteger(index) || index < 0 || index >= parts.length) throw badRequest('Invalid import part')
-      mesh = parts[index]!.mesh
-    }
+    const mesh = stagedImportMesh(record.mesh, request.query.part)
     // `meshToBinaryStl` is shared code and returns a Uint8Array; the response helper takes a
     // Buffer. Buffer.from over the same memory, no copy.
     const stl = Buffer.from(meshToBinaryStl(mesh).buffer)
@@ -167,6 +268,45 @@ editorRouter.get(
     await sendModelBuffer(request, response, stl, 'model/stl')
   }
 )
+
+editorRouter.get(
+  '/imports/:importId/source-colors',
+  requireRequestPermission(LIBRARY_UPLOAD_PERMISSION),
+  async (request, response) => {
+    const workspaceId = requireRequestWorkspaceId(request)
+    const importId = requireRouteParam(request.params.importId, 'Import id')
+    const record = getStagedImport(importId, workspaceId)
+    if (!record) throw notFound('Imported model not found or expired')
+    const colors = stagedImportMesh(record.mesh, request.query.part).triangleCornerColors
+    if (!colors) {
+      response.status(204).end()
+      return
+    }
+    // The quantizer works on 8-bit RGB buckets, so byte RGBA is lossless for this workflow and one
+    // quarter the size of float32. It also gives the wire format no platform-endian dependency.
+    const values = Uint8Array.from(colors, (value) => Math.round(Math.max(0, Math.min(1, value)) * 255))
+    const buffer = Buffer.from(values.buffer, values.byteOffset, values.byteLength)
+    response.setHeader('Cache-Control', 'private, max-age=300')
+    await sendModelBuffer(request, response, buffer, 'application/vnd.printstream.source-colors')
+  }
+)
+
+/** Resolve the merged staged mesh or one named part from a route's optional `?part=N`. */
+function stagedImportMesh(mesh: ImportedMesh, partParam: unknown): ImportedMesh {
+  if (partParam == null) return mesh
+  if (typeof partParam !== 'string') throw badRequest('Invalid import part')
+  const index = Number(partParam)
+  const parts = mesh.parts
+  if (!Number.isInteger(index) || index < 0) throw badRequest('Invalid import part')
+  if (!parts || parts.length <= 1) {
+    if (index === 0) return mesh
+    throw badRequest('Invalid import part')
+  }
+  if (index >= parts.length) {
+    throw badRequest('Invalid import part')
+  }
+  return parts[index]!.mesh
+}
 
 /** Name the failing field so a malformed save/export is actionable (full issues go to the log). */
 function parseArrangedBody<T>(schema: { safeParse: (body: unknown) => z.SafeParseReturnType<unknown, T> }, body: unknown, what: string): T {

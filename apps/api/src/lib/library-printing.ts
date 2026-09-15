@@ -192,6 +192,7 @@ async function assertLibraryPrintSourceReady(input: PrintFromLibrary, source: Li
       amsMapping: input.amsMapping,
       allowIncompatibleFilament: input.allowIncompatibleFilament,
       allowPlateTypeMismatch: input.allowPlateTypeMismatch,
+      allowPrinterModelMismatch: input.allowPrinterModelMismatch,
       allowFilamentTrackSwitchMismatch: input.allowFilamentTrackSwitchMismatch,
       allowInsufficientFilament: input.allowInsufficientFilament,
       allowBlacklistedFilament: input.allowBlacklistedFilament,

@@ -84,6 +84,7 @@ import {
   renderSelectionOverlay
 } from './lib/selectionBox'
 import { FOOTPRINT_CELL_MM, shiftFootprintCells } from './lib/arrange'
+import { createPointerClaim } from './lib/pointerClaim'
 import { type EditorInstance, type EditorPlate } from './lib/editorModel'
 import {
   applySelectionDelta,
@@ -573,10 +574,11 @@ export function useEditorScene(params: EditorSceneParams): void {
     // Last transform the selection box was fitted to; lets animate() skip the precise
     // bounds recompute on frames where the selected object hasn't moved (see animate).
     let selectionBoxSig = ''
-    // Frames to wait before replacing a CHEAP selection box with the precise fit. Counted down
-    // rather than done immediately: landing the per-vertex walk on the selecting frame is the exact
-    // hitch the cheap path exists to avoid. A drag in progress cancels it outright, and a drop that
-    // re-fitted cheaply re-arms it, since that fresh cheap fit is loose all over again.
+    // Frames to wait before revealing a new selection box with its precise fit. Counted down rather
+    // than done immediately: landing the per-vertex walk on the selecting frame is the exact hitch
+    // this delay exists to avoid. The provisional transformed-AABB fit stays hidden because it can
+    // be dramatically larger than reoriented geometry. A drag in progress cancels the pending fit,
+    // and a drop that re-fitted cheaply re-arms it.
     let selectionBoxPreciseFitDelay = 0
     const selectionBoxValue = new THREE.Box3()
     const setSelectionHighlight = (group: THREE.Object3D | null) => {
@@ -589,19 +591,20 @@ export function useEditorScene(params: EditorSceneParams): void {
         selectionBoxPreciseFitDelay = 0
       }
       if (group) {
-        // Cheap (transformed-AABB) box on selection: the precise per-vertex walk froze selecting a
-        // many-part high-poly object for a beat: the hitch when you drag an object that wasn't
-        // already selected (the pointer-down selects it first). It is exact for an axis-aligned
-        // object and only loosens slightly around a reoriented one, and the box is visual-only.
+        // Seed the hidden helper cheaply. The precise per-vertex walk froze selection of a
+        // many-part high-poly object for a beat, so it remains deferred; the transformed-AABB seed
+        // can be dramatically loose around a reoriented object and therefore must not be painted.
         fitSelectionBox(selectionBoxValue, printableMeshBox(group, false))
         selectionBoxSig = selectionBoxSignature(group)
-        // ...and then upgrade it. The cheap box is a TRANSFORMED LOCAL AABB, so on a reoriented
-        // object it is the AABB of a rotated AABB -- not "slightly loose" as this once claimed, but
-        // visibly larger than the model. It used to self-correct because the box was only really
-        // looked at around a drag, and a drop re-fits precisely; resting in Select there is no drag
-        // and no gizmo, so the loose box is the only selection affordance and it never got fixed.
+        // Upgrade before revealing it. The cheap box is a transformed local AABB, so on a
+        // reoriented object it is the AABB of a rotated AABB and can be visibly larger than the
+        // model. The delay preserves responsive selection without exposing that placeholder.
         selectionBoxPreciseFitDelay = 2
         selectionBox = createSelectionBox(selectionBoxValue, PRIMARY_SELECTION_STYLE)
+        // Never paint the transformed-AABB placeholder. On the next settled frame the precise fit
+        // reveals the helper at its final size, so selecting a reoriented object cannot flash a box
+        // several times larger than the object before correcting itself.
+        selectionBox.visible = false
         scene.add(selectionBox)
       }
     }
@@ -615,7 +618,7 @@ export function useEditorScene(params: EditorSceneParams): void {
     const selectionOwners = createSelectionOwnerTracker()
     const syncSelectionOwners = () => {
       const owners = new Set<THREE.Object3D>()
-      if (selectionBox && selectionTarget) owners.add(selectionTarget)
+      if (selectionBox?.visible && selectionTarget) owners.add(selectionTarget)
       for (const helper of extraSelectionBoxes.values()) {
         const owner = helper.userData.selectionOwner as THREE.Object3D | undefined
         if (owner) owners.add(owner)
@@ -1231,6 +1234,9 @@ export function useEditorScene(params: EditorSceneParams): void {
     // skipped entirely once its mode ends, so without this flag the canvas kept a `copy` cursor over
     // models, the bed and every later tool until something else happened to write the style.
     let connectorCursorShown = false
+    // Selectable geometry claims its primary pointer in the capture phase, before OrbitControls can
+    // enter a rotate/pan state. Empty-space presses still reach OrbitControls unchanged.
+    const selectedObjectPointer = createPointerClaim(renderer.domElement, orbit)
 
     /**
      * Instance groups whose meshes have been handed to {@link ensureMeshBvh}.
@@ -2210,6 +2216,19 @@ export function useEditorScene(params: EditorSceneParams): void {
       }
     }
 
+    /**
+     * Claim a selectable object's primary press before OrbitControls handles pointer-down.
+     *
+     * Selection itself remains in {@link onPointerDown}; this capture listener owns only gesture
+     * arbitration. Transform handles are excluded because TransformControls owns those presses,
+     * and non-selection tools keep their existing pointer behavior.
+     */
+    const claimSelectedObjectPointer = (event: PointerEvent) => {
+      if (!allowsSelectionPicking(gizmoModeRef.current)) return
+      const gizmoControl = transform as unknown as { axis?: string | null }
+      selectedObjectPointer.claim(event, !gizmoControl.axis && Boolean(pickInstanceGroup(event)))
+    }
+
     const onPointerMove = (event: PointerEvent) => {
       if (gizmoModeRef.current === 'text' && !textDragging) {
         const over = overText(event)
@@ -2363,6 +2382,7 @@ export function useEditorScene(params: EditorSceneParams): void {
     }
 
     const endBodyDrag = (event: PointerEvent) => {
+      selectedObjectPointer.release(event)
       if (measureClickStart) {
         const start = measureClickStart
         measureClickStart = null
@@ -2481,6 +2501,7 @@ export function useEditorScene(params: EditorSceneParams): void {
       cameraRig.groundPivot(ORBIT_PIVOT_PLANE_Z)
     }
 
+    renderer.domElement.addEventListener('pointerdown', claimSelectedObjectPointer, true)
     renderer.domElement.addEventListener('pointerdown', onPointerDown)
     renderer.domElement.addEventListener('pointerdown', onPointerDownGroundPivot)
     renderer.domElement.addEventListener('pointermove', onPointerMove)
@@ -2697,6 +2718,10 @@ export function useEditorScene(params: EditorSceneParams): void {
             // box with nothing pending.
             const precise = interacting ? false : (dragJustEnded && !upgrade ? lastDragChangedOrientation : true)
             fitSelectionBox(selectionBoxValue, printableMeshBox(selectionTarget, precise))
+            // A newly selected object starts hidden. Reveal it only after a precise fit, whether
+            // that is the deferred settled-frame upgrade or a rotate/scale drop that already pays
+            // for exact bounds. Pure-move drops remain hidden until their deferred precise fit.
+            if (precise) selectionBox.visible = true
           }
         }
         // Keep ear markers flat on the bed through rotations/scales (their matrices bake
@@ -2784,6 +2809,7 @@ export function useEditorScene(params: EditorSceneParams): void {
       orbit.removeEventListener('change', requestRender)
       cameraRig.dispose()
       renderer.domElement.removeEventListener('pointermove', onPointerMoveRender)
+      renderer.domElement.removeEventListener('pointerdown', claimSelectedObjectPointer, true)
       renderer.domElement.removeEventListener('pointerdown', onPointerDown)
       renderer.domElement.removeEventListener('pointerdown', onPointerDownGroundPivot)
       renderer.domElement.removeEventListener('pointerleave', onPointerLeave)
@@ -2791,6 +2817,7 @@ export function useEditorScene(params: EditorSceneParams): void {
       renderer.domElement.removeEventListener('pointerup', endBodyDrag)
       renderer.domElement.removeEventListener('pointercancel', endBodyDrag)
       renderer.domElement.removeEventListener('contextmenu', onContextMenu)
+      selectedObjectPointer.dispose()
       transformEvents.removeEventListener('dragging-changed', onDraggingChanged)
       transformEvents.removeEventListener('objectChange', onObjectChange)
       transform.detach()

@@ -26,6 +26,7 @@ import {
   MAX_AMF_SOURCE_BYTES,
   ModelImportError,
   ThreeMfImportError,
+  decodeGltfTextureImages,
   extractThreeMfImportMesh,
   isZippedAmf,
   meshToBinaryStl,
@@ -33,15 +34,18 @@ import {
   parseGltfMesh,
   parseObjMesh,
   parseStlMesh,
+  resolveObjMaterials,
   rebaseImportedMesh,
   stepMeshFromOcctResult,
   type ImportedMesh
 } from '@printstream/shared/three-mf'
+import { parseFbxMesh } from './fbxImport'
 import type { ImportNormalization, StagedImportFormat } from '@printstream/shared'
 import { ThreeMfArchiveError, assertThreeMfSizeWithinLimit, threeMfArchiveFromEntries } from './threeMfArchive'
 import { readZippedAmfDocument } from './localAmfImport'
 import { threeMfArchiveImportSource } from './localThreeMfImport'
 import { loadOcctReader } from './occtLoader'
+import { decodeTextureImage } from './textureImage'
 
 export interface ImportStagingRequest {
   id: number
@@ -54,6 +58,8 @@ export interface ImportStagingRequest {
   /** Whether the staged geometry is a whole OBJECT (normalised to the editor pivot) or a PART. */
   normalize: ImportNormalization
   buffer: ArrayBuffer
+  /** Sidecar resources selected with the model, currently OBJ material libraries. */
+  companions: Array<{ name: string; buffer: ArrayBuffer }>
 }
 
 export type ImportStagingResponse =
@@ -102,7 +108,11 @@ function isDataError(error: unknown): boolean {
  * the shared catalogue without a parse here fails the typecheck rather than reaching a user as a
  * file the picker offered and the worker then returned nothing for.
  */
-async function parseImportMesh(format: ImportStagingRequest['format'], bytes: Uint8Array): Promise<ImportedMesh> {
+async function parseImportMesh(
+  format: ImportStagingRequest['format'],
+  bytes: Uint8Array,
+  companions: ImportStagingRequest['companions']
+): Promise<ImportedMesh> {
   switch (format) {
     case 'stl':
       return parseStlMesh(bytes)
@@ -115,10 +125,17 @@ async function parseImportMesh(format: ImportStagingRequest['format'], bytes: Ui
       const read = await loadOcctReader()
       return stepMeshFromOcctResult(read(bytes))
     }
-    case 'obj':
-      return parseObjMesh(bytes)
+    case 'obj': {
+      const resources = companions.map((companion) => ({
+        name: companion.name,
+        bytes: new Uint8Array(companion.buffer)
+      }))
+      return parseObjMesh(bytes, { materials: await resolveObjMaterials(bytes, resources, decodeTextureImage) })
+    }
     case 'gltf':
-      return parseGltfMesh(bytes)
+      return parseGltfMesh(bytes, { decodedImages: await decodeGltfTextureImages(bytes, decodeTextureImage) })
+    case 'fbx':
+      return await parseFbxMesh(bytes)
     case 'amf':
       if (!isZippedAmf(bytes) && bytes.byteLength > MAX_AMF_SOURCE_BYTES) {
         throw new ModelImportError('AMF is too large to import')
@@ -130,9 +147,10 @@ async function parseImportMesh(format: ImportStagingRequest['format'], bytes: Ui
 async function stage(
   format: ImportStagingRequest['format'],
   bytes: Uint8Array,
-  normalize: ImportStagingRequest['normalize']
+  normalize: ImportStagingRequest['normalize'],
+  companions: ImportStagingRequest['companions']
 ): Promise<{ mesh: ImportedMesh; stl: Uint8Array }> {
-  const mesh = await parseImportMesh(format, bytes)
+  const mesh = await parseImportMesh(format, bytes, companions)
   // Normalise BEFORE serializing, so the viewport's STL and the mesh the bake writes are the same
   // geometry. An STL import used to hand the picked bytes straight back as the viewport's copy,
   // which was free but is no longer possible: rebasing the mesh and not the bytes would render the
@@ -143,10 +161,10 @@ async function stage(
 }
 
 ctx.onmessage = (event: MessageEvent<ImportStagingRequest>) => {
-  const { id, format, normalize, buffer } = event.data
+  const { id, format, normalize, buffer, companions } = event.data
   void (async () => {
     try {
-      const { mesh, stl } = await stage(format, new Uint8Array(buffer), normalize)
+      const { mesh, stl } = await stage(format, new Uint8Array(buffer), normalize, companions)
       const partStls = (mesh.parts ?? []).map((part) => meshToBinaryStl(part.mesh))
       // Every STL buffer is transferred (all freshly built here, nothing else references them); the
       // mesh's plain number arrays go by structured clone, which the bake needs them as.

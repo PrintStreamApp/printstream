@@ -20,6 +20,8 @@ import {
   AMS_LITE_MIXED_TRAY_INDEX_OFFSET,
   MAX_PRINT_PAUSE_POINTS,
   amsUnitTypeFromCode,
+  createUnsupportedPrinterPrintOptions,
+  getBambuStudioPrintOptionConfig,
   getPrinterDisplayCapabilities,
   getPrinterPrintStartOptions,
   getPrinterControlCapabilities,
@@ -29,6 +31,7 @@ import {
   supportsPrinterAirductMode,
   supportsPrinterDoorSensor,
   supportsPrinterSecondaryChamberLight,
+  supportsPrinterCamera,
   type AmsUnitType,
   type Printer,
   type PrinterAmsDryingPhase,
@@ -45,6 +48,7 @@ import {
   formatHmsCode,
   formatPrintErrorCode,
   getHmsDeviceType,
+  lookupHmsActions,
   lookupHmsMessage
 } from './hms-codes.js'
 import { parseTrayColor, parseTrayColors } from './tray-colors.js'
@@ -337,7 +341,21 @@ export function parseReport(value: unknown, printer: Printer, currentStatus?: Pr
     if (modules.length > 0) {
       const ota = modules.find((module) => module.name === 'ota')
       const delta: Partial<PrinterStatus> = { firmwareModules: modules }
-      if (ota) delta.firmwareVersion = ota.version
+      if (ota) {
+        delta.firmwareVersion = ota.version
+        delta.printOptions = parsePrintOptions(
+          {},
+          currentStatus?.printOptions,
+          printer.model,
+          ota.version
+        )
+        delta.printStartOptions = parsePrintStartOptions(
+          {},
+          printer.model,
+          delta.printOptions,
+          currentStatus?.printStartOptions
+        )
+      }
       return delta
     }
   }
@@ -508,8 +526,18 @@ export function parseReport(value: unknown, printer: Printer, currentStatus?: Pr
     }
   }
 
-  delta.printOptions = parsePrintOptions(print, currentStatus?.printOptions)
-  delta.printStartOptions = getPrinterPrintStartOptions(printer.model, { printOptions: delta.printOptions })
+  delta.printOptions = parsePrintOptions(
+    print,
+    currentStatus?.printOptions,
+    printer.model,
+    currentStatus?.firmwareVersion
+  )
+  delta.printStartOptions = parsePrintStartOptions(
+    print,
+    printer.model,
+    delta.printOptions,
+    currentStatus?.printStartOptions
+  )
 
   delta.amsSettings = parseAmsSettings(print, currentStatus?.amsSettings)
 
@@ -1021,7 +1049,12 @@ function parseHmsErrors(
       // no text is noise. Dropping it here hides it everywhere (status, chips, notifications).
       const message = lookupHmsMessage(canonical, deviceType)
       if (!message) continue
-      entries.push({ code: canonical, message })
+      const actions = lookupHmsActions(canonical, deviceType)
+      entries.push({
+        code: canonical,
+        message,
+        ...(actions != null ? { actions } : {})
+      })
     }
   }
 
@@ -1038,9 +1071,11 @@ function parseDeviceError(
   }
 
   const canonical = formatPrintErrorCode(printErrorCode)
+  const actions = lookupHmsActions(canonical, deviceType)
   return {
     code: canonical,
-    message: lookupHmsMessage(canonical, deviceType)
+    message: lookupHmsMessage(canonical, deviceType),
+    ...(actions != null ? { actions } : {})
   }
 }
 
@@ -1518,12 +1553,14 @@ function decodeActiveTraySelection(rawRoute: number, packedByExtruder: boolean):
     const normalized = rawRoute & 0xffff
     if (normalized === 0xffff) return null
     const amsId = normalized >> 8
-    const slot = normalized & 0x3
-    if (amsId === VIRTUAL_TRAY_MAIN_ID && slot === 3) return null
+    const rawSlot = normalized & 0xff
     if (amsId === VIRTUAL_TRAY_MAIN_ID || amsId === VIRTUAL_TRAY_DEPUTY_ID) {
-      return { amsId, slot: 0 }
+      // Dual-nozzle reports retain the route's full 8-bit slot. A real external
+      // spool is slot 0; 0xff is the unselected sentinel. Masking to two bits
+      // changed that sentinel into slot 3 and falsely highlighted Ext-L/Ext-R.
+      return rawSlot === 0 ? { amsId, slot: 0 } : null
     }
-    return amsId >= 0 ? { amsId, slot } : null
+    return rawSlot <= 3 ? { amsId, slot: rawSlot } : null
   }
 
   if (rawRoute === 255) return null
@@ -1650,20 +1687,42 @@ function parseChamberLightOffRequiresConfirm(stat: unknown): boolean | null {
 }
 
 function makeDefaultPrintOptions(): PrinterStatus['printOptions'] {
-  return {
-    aiMonitoring: { supported: false, enabled: null, sensitivity: null },
-    spaghettiDetection: { supported: false, enabled: null, sensitivity: null },
-    purgeChutePileupDetection: { supported: false, enabled: null, sensitivity: null },
-    nozzleClumpingDetection: { supported: false, enabled: null, sensitivity: null },
-    airPrintingDetection: { supported: false, enabled: null, sensitivity: null },
-    firstLayerInspection: { supported: false, enabled: null },
-    autoRecovery: { supported: false, enabled: null },
-    promptSound: { supported: false, enabled: null },
-    filamentTangleDetection: { supported: false, enabled: null }
+  return createUnsupportedPrinterPrintOptions()
+}
+
+/**
+ * Combines model fallbacks with the two send-dialog capabilities that only
+ * exist in live report bits. Partial reports retain the previous bit state.
+ */
+function parsePrintStartOptions(
+  print: Record<string, unknown>,
+  model: Printer['model'],
+  printOptions: PrinterStatus['printOptions'],
+  current: PrinterStatus['printStartOptions'] | null | undefined
+): PrinterStatus['printStartOptions'] {
+  const base = getPrinterPrintStartOptions(model, {
+    printOptions,
+    printStartOptions: current ?? undefined
+  })
+  const next = {
+    ...base,
+    internalTimelapseStorage: { ...base.internalTimelapseStorage },
+    externalFilamentChangeAssist: { ...base.externalFilamentChangeAssist }
   }
+  const fun = stringOrNull(print.fun)
+  if (fun) {
+    next.internalTimelapseStorage.supported = isHexBitSet(fun, 28)
+    next.externalFilamentChangeAssist.supported = isHexBitSet(fun, 48)
+  }
+  const flag3 = numberOrNull(print.flag3)
+  if (flag3 !== null && ((Math.trunc(flag3) >> 16) & 0x1) !== 0) {
+    next.externalFilamentChangeAssist.supported = true
+  }
+  return next
 }
 
 function clonePrintOptions(options: PrinterStatus['printOptions']): PrinterStatus['printOptions'] {
+  const fallback = makeDefaultPrintOptions()
   return {
     aiMonitoring: { ...options.aiMonitoring },
     spaghettiDetection: { ...options.spaghettiDetection },
@@ -1673,22 +1732,64 @@ function clonePrintOptions(options: PrinterStatus['printOptions']): PrinterStatu
     firstLayerInspection: { ...options.firstLayerInspection },
     autoRecovery: { ...options.autoRecovery },
     promptSound: { ...options.promptSound },
-    filamentTangleDetection: { ...options.filamentTangleDetection }
+    filamentTangleDetection: { ...options.filamentTangleDetection },
+    foreignObjectDetection: { ...fallback.foreignObjectDetection, ...options.foreignObjectDetection },
+    printedPartDisplacementDetection: {
+      ...fallback.printedPartDisplacementDetection,
+      ...options.printedPartDisplacementDetection
+    },
+    buildPlateTypeDetection: { ...fallback.buildPlateTypeDetection, ...options.buildPlateTypeDetection },
+    buildPlateAlignmentDetection: {
+      ...fallback.buildPlateAlignmentDetection,
+      ...options.buildPlateAlignmentDetection
+    },
+    idleHeatingProtection: { ...fallback.idleHeatingProtection, ...options.idleHeatingProtection },
+    printStatusSnapshot: { ...fallback.printStatusSnapshot, ...options.printStatusSnapshot },
+    storeSentFilesOnExternalStorage: {
+      ...fallback.storeSentFilesOnExternalStorage,
+      ...options.storeSentFilesOnExternalStorage
+    },
+    cameraAutoRecord: { ...fallback.cameraAutoRecord, ...options.cameraAutoRecord },
+    purifyAirAtPrintEnd: { ...fallback.purifyAirAtPrintEnd, ...options.purifyAirAtPrintEnd },
+    openDoorDetection: { ...fallback.openDoorDetection, ...options.openDoorDetection },
+    smartNozzleBlobDetection: {
+      ...fallback.smartNozzleBlobDetection,
+      ...options.smartNozzleBlobDetection
+    },
+    cameraResolution: {
+      ...fallback.cameraResolution,
+      ...options.cameraResolution,
+      available: [...(options.cameraResolution?.available ?? fallback.cameraResolution.available)]
+    }
   }
 }
 
 function parsePrintOptions(
   print: Record<string, unknown>,
-  existing: PrinterStatus['printOptions'] | undefined
+  existing: PrinterStatus['printOptions'] | undefined,
+  model: Printer['model'],
+  firmwareVersion: string | null | undefined
 ): PrinterStatus['printOptions'] {
   const next = clonePrintOptions(existing ?? makeDefaultPrintOptions())
   const homeFlag = numberOrNull(print.home_flag)
   const cfg = stringOrNull(print.cfg)
   const fun = stringOrNull(print.fun)
+  const fun2 = stringOrNull(print.fun2)
   const xcam = isObject(print.xcam) ? print.xcam : null
+  const xcamCfg = xcam ? numberOrNull(xcam.cfg) : null
+  const ipcam = isObject(print.ipcam) ? print.ipcam : null
+  const modelConfig = getBambuStudioPrintOptionConfig(model, firmwareVersion)
+
+  // BambuStudio overlays the matching firmware-versioned model resource onto
+  // every report before parsing it. Apply those facts first, then let explicit
+  // live report fields override them in the same order Studio does.
+  next.firstLayerInspection.supported = modelConfig.firstLayerInspection
+  next.autoRecovery.supported = modelConfig.autoRecovery
+  next.promptSound.supported = modelConfig.promptSound
+  next.storeSentFilesOnExternalStorage.supported = modelConfig.storeSentFilesOnExternalStorage
+  next.buildPlateTypeDetection.supported = modelConfig.buildPlateDetection
 
   if (homeFlag !== null) {
-    next.autoRecovery.supported = true
     next.autoRecovery.enabled = ((Math.trunc(homeFlag) >> 4) & 0x1) !== 0
     next.promptSound.supported = ((Math.trunc(homeFlag) >> 18) & 0x1) !== 0
     next.promptSound.enabled = ((Math.trunc(homeFlag) >> 17) & 0x1) !== 0
@@ -1697,43 +1798,61 @@ function parsePrintOptions(
   }
 
   if (cfg) {
-    next.firstLayerInspection.supported = true
     next.firstLayerInspection.enabled = isHexBitSet(cfg, 12)
-    next.aiMonitoring.supported = true
     next.aiMonitoring.enabled = isHexBitSet(cfg, 15)
     next.aiMonitoring.sensitivity = parseAiMonitoringSensitivity(hexBitsValue(cfg, 13, 2))
-    next.autoRecovery.supported = true
     next.autoRecovery.enabled = isHexBitSet(cfg, 16)
-    next.promptSound.supported = true
     next.promptSound.enabled = isHexBitSet(cfg, 22)
-    next.filamentTangleDetection.supported = true
     next.filamentTangleDetection.enabled = isHexBitSet(cfg, 23)
+
+    next.idleHeatingProtection.enabled = hexBitsValue(cfg, 32, 2) !== 0
+    next.purifyAirAtPrintEnd.current = parsePurifyAirMode(hexBitsValue(cfg, 36, 2))
+    const snapshotState = hexBitsValue(cfg, 38, 2)
+    next.printStatusSnapshot.supported = snapshotState === 1 || snapshotState === 2
+    next.printStatusSnapshot.enabled = snapshotState === 2
+    next.smartNozzleBlobDetection.current = parseSmartNozzleBlobMode(hexBitsValue(cfg, 43, 2))
+    next.storeSentFilesOnExternalStorage.enabled = isHexBitSet(cfg, 19)
+    next.openDoorDetection.current = parseDoorDetectionMode(hexBitsValue(cfg, 20, 2))
+    next.cameraAutoRecord.enabled = isHexBitSet(cfg, 3)
+    next.cameraResolution.current = isHexBitSet(cfg, 4) ? '1080p' : '720p'
   }
 
   if (fun) {
-    next.firstLayerInspection.supported = next.firstLayerInspection.supported || isHexBitSet(fun, 5)
-    next.promptSound.supported = next.promptSound.supported || isHexBitSet(fun, 8)
-    next.filamentTangleDetection.supported = next.filamentTangleDetection.supported || isHexBitSet(fun, 9)
-    next.spaghettiDetection.supported = next.spaghettiDetection.supported || isHexBitSet(fun, 42)
-    next.purgeChutePileupDetection.supported = next.purgeChutePileupDetection.supported || isHexBitSet(fun, 43)
-    next.nozzleClumpingDetection.supported = next.nozzleClumpingDetection.supported || isHexBitSet(fun, 44)
-    next.airPrintingDetection.supported = next.airPrintingDetection.supported || isHexBitSet(fun, 45)
+    // `cfg` carries current values, while `fun` carries capabilities. Assign
+    // these bits authoritatively so a later full report can also clear stale
+    // support. Bambu Studio follows the same split, notably for filament
+    // tangle detection, which some H2D reports include in `cfg` but not `fun`.
+    next.promptSound.supported = isHexBitSet(fun, 8)
+    next.filamentTangleDetection.supported = isHexBitSet(fun, 9)
+    next.spaghettiDetection.supported = isHexBitSet(fun, 42)
+    next.purgeChutePileupDetection.supported = isHexBitSet(fun, 43)
+    next.nozzleClumpingDetection.supported = isHexBitSet(fun, 44)
+    next.airPrintingDetection.supported = isHexBitSet(fun, 45)
+    next.openDoorDetection.supported = isHexBitSet(fun, 12)
+    next.idleHeatingProtection.supported = isHexBitSet(fun, 62)
   }
 
+  if (fun2) {
+    next.buildPlateAlignmentDetection.supported = isHexBitSet(fun2, 2)
+    next.purifyAirAtPrintEnd.supported = isHexBitSet(fun2, 4)
+    next.foreignObjectDetection.supported = isHexBitSet(fun2, 13)
+    next.printedPartDisplacementDetection.supported = isHexBitSet(fun2, 14)
+    next.smartNozzleBlobDetection.supported = isHexBitSet(fun2, 15)
+  }
+
+  const reportedRemoteStorageSupport = booleanishOrNull(print.support_save_remote_print_file_to_storage)
+  if (reportedRemoteStorageSupport !== null) {
+    next.storeSentFilesOnExternalStorage.supported = reportedRemoteStorageSupport
+  }
+  next.cameraAutoRecord.supported = supportsPrinterCamera(model)
+
   applyPrintOptionSupport(next.firstLayerInspection, print.support_first_layer_inspect)
-  applyPrintOptionSupport(next.aiMonitoring, print.support_ai_monitoring)
   applyPrintOptionSupport(next.autoRecovery, print.support_auto_recovery_step_loss)
-  applyPrintOptionSupport(next.promptSound, print.support_prompt_sound)
   applyPrintOptionSupport(next.filamentTangleDetection, print.support_filament_tangle_detect)
 
   if (xcam) {
-    const xcamCfg = numberOrNull(xcam.cfg)
     if (xcamCfg !== null) {
       next.aiMonitoring.supported = true
-      next.spaghettiDetection.supported = true
-      next.purgeChutePileupDetection.supported = true
-      next.nozzleClumpingDetection.supported = true
-      next.airPrintingDetection.supported = true
       next.spaghettiDetection.enabled = ((Math.trunc(xcamCfg) >> 7) & 0x1) !== 0
       next.spaghettiDetection.sensitivity = parseDetectionSensitivity((Math.trunc(xcamCfg) >> 8) & 0x3)
       next.purgeChutePileupDetection.enabled = ((Math.trunc(xcamCfg) >> 10) & 0x1) !== 0
@@ -1742,14 +1861,42 @@ function parsePrintOptions(
       next.nozzleClumpingDetection.sensitivity = parseDetectionSensitivity((Math.trunc(xcamCfg) >> 14) & 0x3)
       next.airPrintingDetection.enabled = ((Math.trunc(xcamCfg) >> 16) & 0x1) !== 0
       next.airPrintingDetection.sensitivity = parseDetectionSensitivity((Math.trunc(xcamCfg) >> 17) & 0x3)
+      next.buildPlateAlignmentDetection.enabled = ((Math.trunc(xcamCfg) >> 20) & 0x1) !== 0
+      next.foreignObjectDetection.enabled = ((Math.trunc(xcamCfg) >> 21) & 0x1) !== 0
+      next.printedPartDisplacementDetection.enabled = ((Math.trunc(xcamCfg) >> 22) & 0x1) !== 0
     }
 
     applyPrintOptionEnabled(next.aiMonitoring, booleanishOrNull(xcam.printing_monitor), true)
-    applyPrintOptionEnabled(next.firstLayerInspection, booleanishOrNull(xcam.first_layer_inspector), true)
+    // H2D still reports the legacy current-value field even though Studio's
+    // model resource hides the control. A value is not a capability signal.
+    applyPrintOptionEnabled(next.firstLayerInspection, booleanishOrNull(xcam.first_layer_inspector), false)
     applyPrintOptionEnabled(next.spaghettiDetection, booleanishOrNull(xcam.spaghetti_detector), true)
     applyPrintOptionEnabled(next.purgeChutePileupDetection, booleanishOrNull(xcam.pileup_detector), true)
     applyPrintOptionEnabled(next.nozzleClumpingDetection, booleanishOrNull(xcam.clump_detector), true)
     applyPrintOptionEnabled(next.airPrintingDetection, booleanishOrNull(xcam.airprint_detector), true)
+    applyPrintOptionEnabled(next.buildPlateTypeDetection, booleanishOrNull(xcam.buildplate_marker_detector), true)
+  }
+
+  applyPrintOptionSupport(next.buildPlateTypeDetection, print.support_build_plate_marker_detect)
+  if (numberOrNull(print.support_build_plate_marker_detect_type) !== null) {
+    next.buildPlateTypeDetection.supported = true
+  }
+
+  if (ipcam) {
+    const autoRecord = stringOrNull(ipcam.ipcam_record)
+    if (autoRecord) {
+      next.cameraAutoRecord.supported = true
+      next.cameraAutoRecord.enabled = autoRecord === 'enable'
+    }
+
+    const currentResolution = parseCameraResolution(ipcam.resolution)
+    if (currentResolution) next.cameraResolution.current = currentResolution
+    if (Array.isArray(ipcam.resolution_supported)) {
+      next.cameraResolution.available = ipcam.resolution_supported
+        .map(parseCameraResolution)
+        .filter((value): value is '720p' | '1080p' => value !== null)
+      next.cameraResolution.supported = next.cameraResolution.available.length > 1
+    }
   }
 
   applyXcamModuleUpdate(
@@ -1759,11 +1906,50 @@ function parsePrintOptions(
     normalizePrintOptionSensitivity(print.halt_print_sensitivity)
   )
 
+  // Studio exposes the legacy aggregate AI control only when the model says it
+  // exists and no refined detector protocol is available. `xcam.cfg` reports
+  // current values for the refined controls; it does not add another setting.
+  const configuredAiMonitoring = booleanishOrNull(print.support_ai_monitoring)
+    ?? modelConfig.aiMonitoring
+  const hasRefinedAiDetection = xcamCfg !== null
+    || next.spaghettiDetection.supported
+    || next.purgeChutePileupDetection.supported
+    || next.nozzleClumpingDetection.supported
+    || next.airPrintingDetection.supported
+    || next.foreignObjectDetection.supported
+    || next.printedPartDisplacementDetection.supported
+  next.aiMonitoring.supported = configuredAiMonitoring && !hasRefinedAiDetection
+  next.promptSound.supported = booleanishOrNull(print.support_prompt_sound)
+    ?? modelConfig.promptSound
+
   return next
 }
 
+function parsePurifyAirMode(value: number | null): PrinterStatus['printOptions']['purifyAirAtPrintEnd']['current'] {
+  if (value === 1) return 'internal'
+  if (value === 2) return 'exhaust'
+  return value === 0 ? 'off' : null
+}
+
+function parseDoorDetectionMode(value: number | null): PrinterStatus['printOptions']['openDoorDetection']['current'] {
+  if (value === 1) return 'notify'
+  if (value === 2) return 'pause'
+  return value === 0 ? 'off' : null
+}
+
+function parseSmartNozzleBlobMode(value: number | null): PrinterStatus['printOptions']['smartNozzleBlobDetection']['current'] {
+  if (value === 1) return 'on'
+  if (value === 2) return 'auto'
+  return value === 0 ? 'off' : null
+}
+
+function parseCameraResolution(value: unknown): '720p' | '1080p' | null {
+  const normalized = stringOrNull(value)?.toLowerCase()
+  return normalized === '720p' || normalized === '1080p' ? normalized : null
+}
+
 function applyPrintOptionSupport(
-  option: PrinterStatus['printOptions'][keyof PrinterStatus['printOptions']],
+  option: { supported: boolean },
   value: unknown
 ): void {
   const supported = booleanishOrNull(value)
@@ -1771,7 +1957,7 @@ function applyPrintOptionSupport(
 }
 
 function applyPrintOptionEnabled(
-  option: PrinterStatus['printOptions'][keyof PrinterStatus['printOptions']],
+  option: { supported: boolean; enabled: boolean | null },
   enabled: boolean | null,
   markSupported: boolean
 ): void {
@@ -1795,7 +1981,6 @@ function applyXcamModuleUpdate(
       if (sensitivity !== null) options.aiMonitoring.sensitivity = sensitivity
       break
     case 'first_layer_inspector':
-      options.firstLayerInspection.supported = true
       options.firstLayerInspection.enabled = enabled
       break
     case 'spaghetti_detector':
@@ -1817,6 +2002,22 @@ function applyXcamModuleUpdate(
       options.airPrintingDetection.supported = true
       options.airPrintingDetection.enabled = enabled
       if (sensitivity !== null) options.airPrintingDetection.sensitivity = sensitivity
+      break
+    case 'fod_check':
+      options.foreignObjectDetection.supported = true
+      options.foreignObjectDetection.enabled = enabled
+      break
+    case 'model_movement_check':
+      options.printedPartDisplacementDetection.supported = true
+      options.printedPartDisplacementDetection.enabled = enabled
+      break
+    case 'buildplate_marker_detector':
+      options.buildPlateTypeDetection.supported = true
+      options.buildPlateTypeDetection.enabled = enabled
+      break
+    case 'plate_offset_switch':
+      options.buildPlateAlignmentDetection.supported = true
+      options.buildPlateAlignmentDetection.enabled = enabled
       break
     default:
       break

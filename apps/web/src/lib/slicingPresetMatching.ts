@@ -15,6 +15,7 @@
  */
 import type {
   LibraryFile,
+  FilamentSpool,
   Printer,
   PrinterNozzleFlow,
   PrinterStatus,
@@ -1067,7 +1068,7 @@ function buildFilamentMapping(
   }
 }
 
-export function buildSliceMaterialOptions(profiles: SlicingPresetSummary[], loadedMaterials: SliceMaterialOption[]): SliceMaterialOption[] {
+export function buildSliceMaterialOptions(profiles: SlicingPresetSummary[], materialSources: SliceMaterialOption[]): SliceMaterialOption[] {
   const profileOptions = profiles.map((profile) => ({
     id: buildProfileMaterialOptionId(profile.id),
     label: formatSlicingPresetDisplayName(profile),
@@ -1094,7 +1095,67 @@ export function buildSliceMaterialOptions(profiles: SlicingPresetSummary[], load
     remainingGrams: null,
     remainPercent: null
   }))
-  return [...loadedMaterials, ...dedupeSliceMaterialProfileOptions(profileOptions)]
+  return [...materialSources, ...dedupeSliceMaterialProfileOptions(profileOptions)]
+}
+
+/**
+ * Turn tracked, unloaded or loaded inventory spools into material choices for project editing.
+ *
+ * Inventory is a material source, not a printer routing source, so these choices use the manual
+ * mapping source and carry no tray/toolhead. Their pinned slicing preset wins when present; the
+ * ordinary filament resolver supplies the best compatible profile otherwise.
+ */
+export function buildInventoryMaterialOptions(
+  spools: ReadonlyArray<Pick<FilamentSpool,
+    'id' | 'archivedAt' | 'deletedAt' | 'brand' | 'filamentType' | 'materialSubtype' |
+    'trayInfoIdx' | 'slicingPresetName' | 'colorHex' | 'colors' | 'colorName' |
+    'remainingGrams' | 'remainPercent'>>,
+  profiles: SlicingPresetSummary[],
+  selectedMachineProfile: SlicingPresetSummary | null,
+  selectedPrinterModel: string
+): SliceMaterialOption[] {
+  return spools
+    .filter((spool) => spool.archivedAt == null && spool.deletedAt == null)
+    .map((spool) => {
+      const resolution = resolveFilamentPreset(profiles, {
+        trayName: spool.materialSubtype ?? spool.filamentType,
+        trayInfoIdx: spool.trayInfoIdx,
+        trayFilamentType: spool.filamentType,
+        pinnedPresetName: spool.slicingPresetName,
+        selectedMachineProfile,
+        selectedPrinterModel
+      })
+      const profile = resolution.status === 'resolved' ? resolution.profile : null
+      const color = normalizeSliceFilamentColor(spool.colorHex)
+      const label = [normalizeFilamentVendorLabel(spool.brand ?? ''), spool.materialSubtype ?? spool.filamentType]
+        .filter(Boolean)
+        .join(' ')
+      return {
+        id: `inventory:${spool.id}`,
+        label: label || spool.filamentType,
+        group: 'Filament library',
+        materialType: spool.filamentType,
+        brand: normalizeFilamentVendorLabel(spool.brand ?? ''),
+        profileId: profile?.id ?? null,
+        material: profile?.name ?? spool.slicingPresetName ?? spool.materialSubtype ?? spool.filamentType,
+        color,
+        colors: spool.colors.length > 0 ? spool.colors : color ? [color] : [],
+        source: 'manual' as const,
+        trayId: null,
+        nozzleId: null,
+        toolheadId: null,
+        metadata: [
+          spool.colorName,
+          `${Math.round(spool.remainingGrams)} g left`,
+          profile ? formatSlicingPresetDisplayName(profile) : null
+        ].filter(Boolean).join(' - '),
+        slotLabel: null,
+        presetLabel: profile ? formatSlicingPresetBrandedName(profile) : null,
+        colorName: spool.colorName,
+        remainingGrams: spool.remainingGrams,
+        remainPercent: spool.remainPercent
+      }
+    })
 }
 
 export function dedupeSliceMaterialProfileOptions(options: SliceMaterialOption[]): SliceMaterialOption[] {

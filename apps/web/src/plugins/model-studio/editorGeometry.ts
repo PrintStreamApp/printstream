@@ -37,7 +37,7 @@ import type { EditorInstance, EditorPlate, EditorState } from './lib/editorModel
  * manipulation handle. Ours has to be a mode for the same reason -- the move gizmo's arrows and
  * bounding box sit exactly where the thickness shading needs to be read.
  */
-export type GizmoMode = 'select' | 'translate' | 'rotate' | 'scale' | 'layFace' | 'cut' | 'meshBoolean' | 'paintSupports' | 'paintSeam' | 'paintColor' | 'paintFuzzy' | 'brimEars' | 'measure' | 'layerHeight' | 'text' | 'svg'
+export type GizmoMode = 'select' | 'translate' | 'rotate' | 'scale' | 'layFace' | 'cut' | 'meshBoolean' | 'simplify' | 'paintSupports' | 'paintSeam' | 'paintColor' | 'paintFuzzy' | 'brimEars' | 'measure' | 'layerHeight' | 'text' | 'svg'
 
 /**
  * Objects that exist only to be LOOKED at: they are never printed, never part of the object's
@@ -56,6 +56,7 @@ export function isViewportAidMesh(object: THREE.Object3D): boolean {
   return Boolean(
     object.userData.isHelperVolume || object.userData.isFaceHull || object.userData.isPrimeTower
     || object.userData.isPaintOverlay || object.userData.isLayerHeightVisual
+    || object.userData.isSimplifyPreview
     // Brim ear markers are the one aid tagged by NAME rather than a `userData` flag (they are
     // plain discs the ear editor raycasts against), so they were invisible to this predicate and
     // reached every geometry reader that trusts it: `printableMeshBox` had to exclude them a second

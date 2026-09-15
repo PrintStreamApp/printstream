@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto'
 import { copyFileSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { test } from 'node:test'
+import { test, type TestContext } from 'node:test'
 import { Client } from 'pg'
 import {
   applyPendingMigrations,
@@ -47,16 +47,24 @@ test('selectPendingMigrations drops the already-applied names and keeps order', 
   assert.deepEqual(selectPendingMigrations(all, new Set(['a_init', 'b_second', 'c_third'])), [])
 })
 
+test('the full-validation database policy fails closed when PostgreSQL disappears', async (t) => {
+  await assert.rejects(
+    migrationTestAdminUrl(t, {
+      adminUrl: 'postgresql://unreachable/postgres',
+      required: true,
+      connect: async () => false
+    }),
+    /Full validation requires the migration test database/
+  )
+})
+
 test('the checked-in migrations replay from empty into exactly the current schema', async (t) => {
   // Stronger than the baseline.sql drift check this replaced: it proves the
   // MIGRATIONS (not a parallel snapshot) reproduce `schema.prisma` from empty,
   // which is the property that lets `migrate deploy` provision a fresh database
   // and `migrate dev` validate against a shadow database.
-  const adminUrl = process.env.TEST_ADMIN_DATABASE_URL ?? toMaintenanceUrl(process.env.DATABASE_URL)
-  if (!adminUrl || !(await canConnect(adminUrl))) {
-    t.skip('no reachable Postgres (set TEST_ADMIN_DATABASE_URL)')
-    return
-  }
+  const adminUrl = await migrationTestAdminUrl(t)
+  if (!adminUrl) return
 
   const schemaPath = path.resolve(defaultMigrationsDir(), '..', 'schema.prisma')
   const repoRoot = path.resolve(schemaPath, '..', '..', '..', '..')
@@ -101,15 +109,13 @@ test('the checked-in migrations replay from empty into exactly the current schem
 /**
  * Integration: provision a throwaway database from baseline, then prove
  * idempotency. Gated on a reachable Postgres so the unit suite stays green in CI
- * without a database: set TEST_ADMIN_DATABASE_URL (or DATABASE_URL) to a cluster
- * where we may CREATE/DROP DATABASE to exercise it.
+ * without a database: set TEST_ADMIN_DATABASE_URL (or DATABASE_URL) to a cluster where we may
+ * CREATE/DROP DATABASE to exercise it. Full validation marks the database as required and fails
+ * rather than skipping this coverage.
  */
 test('applyPendingMigrations baselines a fresh database then is a no-op', async (t) => {
-  const adminUrl = process.env.TEST_ADMIN_DATABASE_URL ?? toMaintenanceUrl(process.env.DATABASE_URL)
-  if (!adminUrl || !(await canConnect(adminUrl))) {
-    t.skip('no reachable Postgres (set TEST_ADMIN_DATABASE_URL)')
-    return
-  }
+  const adminUrl = await migrationTestAdminUrl(t)
+  if (!adminUrl) return
 
   const dbName = `printstream_migtest_${randomUUID().replace(/-/g, '')}`
   const admin = new Client({ connectionString: adminUrl })
@@ -168,6 +174,34 @@ function toMaintenanceUrl(databaseUrl: string | undefined): string | undefined {
   return withDatabaseName(databaseUrl, 'postgres')
 }
 
+/**
+ * Returns a reachable administrator URL, skipping only for an explicitly targeted test run.
+ * The full validation launcher sets its requirement flag so losing PostgreSQL can never turn a
+ * required integration assertion into a green skip.
+ */
+async function migrationTestAdminUrl(
+  t: TestContext,
+  options: {
+    adminUrl?: string
+    required?: boolean
+    connect?: (databaseUrl: string) => Promise<boolean>
+  } = {}
+): Promise<string | undefined> {
+  const adminUrl = options.adminUrl
+    ?? process.env.TEST_ADMIN_DATABASE_URL
+    ?? toMaintenanceUrl(process.env.DATABASE_URL)
+  const connect = options.connect ?? canConnect
+  if (adminUrl && await connect(adminUrl)) return adminUrl
+
+  const reason = 'no reachable Postgres (set TEST_ADMIN_DATABASE_URL)'
+  const required = options.required ?? process.env.PRINTSTREAM_REQUIRE_TEST_DATABASE === '1'
+  if (required) {
+    assert.fail(`Full validation requires the migration test database: ${reason}`)
+  }
+
+  t.skip(reason)
+  return undefined
+}
 
 function withDatabaseName(databaseUrl: string, dbName: string): string {
   const url = new URL(databaseUrl)
@@ -195,11 +229,8 @@ async function canConnect(databaseUrl: string): Promise<boolean> {
  * state that blocks `prisma migrate deploy` outright (P3009).
  */
 test('applyPendingMigrations collapses a pre-squash history without re-running retired migrations', async (t) => {
-  const adminUrl = process.env.TEST_ADMIN_DATABASE_URL ?? toMaintenanceUrl(process.env.DATABASE_URL)
-  if (!adminUrl || !(await canConnect(adminUrl))) {
-    t.skip('no reachable Postgres (set TEST_ADMIN_DATABASE_URL)')
-    return
-  }
+  const adminUrl = await migrationTestAdminUrl(t)
+  if (!adminUrl) return
 
   const dbName = `printstream_legacytest_${randomUUID().replace(/-/g, '')}`
   const admin = new Client({ connectionString: adminUrl })
@@ -295,11 +326,8 @@ test('applyPendingMigrations collapses a pre-squash history without re-running r
  * functions insert these rows without naming it, so the INSERT fails outright).
  */
 test('a freshly provisioned database has working stats rollup triggers', async (t) => {
-  const adminUrl = process.env.TEST_ADMIN_DATABASE_URL ?? toMaintenanceUrl(process.env.DATABASE_URL)
-  if (!adminUrl || !(await canConnect(adminUrl))) {
-    t.skip('no reachable Postgres (set TEST_ADMIN_DATABASE_URL)')
-    return
-  }
+  const adminUrl = await migrationTestAdminUrl(t)
+  if (!adminUrl) return
 
   const dbName = `printstream_statstest_${randomUUID().replace(/-/g, '')}`
   const admin = new Client({ connectionString: adminUrl })

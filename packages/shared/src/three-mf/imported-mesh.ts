@@ -39,6 +39,16 @@ export interface ImportedMesh {
   indices: number[]
   bounds: ImportedMeshBounds
   /**
+   * Optional source RGBA values in TRIANGLE-CORNER order: four numbers for each entry in
+   * `indices`. Alpha zero marks a corner whose source vertex had no colour. This deliberately does
+   * not key by the welded vertex index, because two faces may share one geometric vertex while
+   * assigning different colours at that corner. The colour-to-filament importer consumes this
+   * sidecar to author `paint_color`; the 3MF geometry writer ignores it.
+   */
+  triangleCornerColors?: number[]
+  /** Which source appearance supplied {@link triangleCornerColors}; used to describe the mapping UI. */
+  sourceColorMode?: 'vertex' | 'material' | 'texture'
+  /**
    * Individual named solids when the source held more than one (a multi-solid STEP
    * assembly). Each part is a self-contained mesh in the same coordinate space as the
    * merged geometry above, so the editor can render and the 3MF builder can bake them

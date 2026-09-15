@@ -47,7 +47,8 @@ export function PaginatedSection({
   onPrevious,
   onNext,
   children,
-  spacing = 1
+  spacing = 1,
+  showPagination = true
 }: {
   showingLabel: string
   previousDisabled: boolean
@@ -56,6 +57,8 @@ export function PaginatedSection({
   onNext: () => void
   children: ReactNode
   spacing?: number
+  /** Whether to render the count and navigation chrome around the content. */
+  showPagination?: boolean
 }) {
   const anchorRef = useRef<HTMLDivElement | null>(null)
 
@@ -79,7 +82,19 @@ export function PaginatedSection({
 
   return (
     <Stack spacing={spacing}>
-      <Box ref={anchorRef} sx={{ scrollMarginTop: sectionScrollMarginTop }}>
+      {showPagination && (
+        <Box ref={anchorRef} sx={{ scrollMarginTop: sectionScrollMarginTop }}>
+          <PaginationFooter
+            showingLabel={showingLabel}
+            previousDisabled={previousDisabled}
+            nextDisabled={nextDisabled}
+            onPrevious={handlePrevious}
+            onNext={handleNext}
+          />
+        </Box>
+      )}
+      {children}
+      {showPagination && (
         <PaginationFooter
           showingLabel={showingLabel}
           previousDisabled={previousDisabled}
@@ -87,15 +102,7 @@ export function PaginatedSection({
           onPrevious={handlePrevious}
           onNext={handleNext}
         />
-      </Box>
-      {children}
-      <PaginationFooter
-        showingLabel={showingLabel}
-        previousDisabled={previousDisabled}
-        nextDisabled={nextDisabled}
-        onPrevious={handlePrevious}
-        onNext={handleNext}
-      />
+      )}
     </Stack>
   )
 }

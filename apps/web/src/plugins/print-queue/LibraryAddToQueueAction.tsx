@@ -6,7 +6,7 @@
  * ({@link LibraryAddToQueueHost}) renders the flow, since the menu (and this item)
  * unmount on click.
  */
-import { MenuItem } from '@mui/joy'
+import { ListItemDecorator, MenuItem } from '@mui/joy'
 import PlaylistAddRounded from '@mui/icons-material/PlaylistAddRounded'
 import { isDirectPrintableFileName } from '@printstream/shared'
 import { requestAddToQueue, requestSliceThenQueue } from './libraryAddStore'
@@ -30,7 +30,8 @@ export function LibraryAddToQueueAction(props: Record<string, unknown>) {
         else requestSliceThenQueue({ id: fileId, name })
       }}
     >
-      <PlaylistAddRounded /> Add to queue
+      <ListItemDecorator><PlaylistAddRounded /></ListItemDecorator>
+      Add to queue
     </MenuItem>
   )
 }

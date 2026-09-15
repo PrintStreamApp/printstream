@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate'
-import type { SceneEdit, SlicingTarget } from '@printstream/shared'
+import { encodeProjectAuxiliaryBase64, type SceneEdit, type SlicingTarget } from '@printstream/shared'
 import type { RetargetResolvers } from './browserMachineRetarget'
 import { bakeClientThreeMf } from './clientThreeMfBake'
 import { openThreeMfArchive } from './threeMfArchive'
@@ -63,6 +63,30 @@ test('the copy pass carries through every entry the bake does not rewrite', asyn
   // The model itself is rewritten (the build section is regenerated), so it is present but need
   // not match byte-for-byte.
   assert.ok(entries['3D/3dmodel.model'])
+})
+
+test('an auxiliary edit replaces managed folders with opaque bytes and preserves unknown folders', async () => {
+  const archive = await openThreeMfArchive(sourceArchive({
+    '_rels/.rels': '<Relationships><Relationship Target="old" Id="rel-2"/><Relationship Target="old" Id="rel-4"/><Relationship Target="old" Id="rel-5"/></Relationships>',
+    'Auxiliaries/Others/removed.txt': 'old',
+    'Auxiliaries/Vendor Data/preserved.bin': 'vendor'
+  }))
+  const edit: SceneEdit = {
+    ...EMPTY_EDIT,
+    projectAuxiliaries: {
+      files: [{ category: 'Others', name: 'added.txt', contentBase64: encodeProjectAuxiliaryBase64(Uint8Array.from([0, 255, 7])) }],
+      metadata: {
+        modelName: '', modelAuthor: '', modelDescription: '', modelId: '',
+        profileName: '', profileAuthor: '', profileDescription: ''
+      }
+    }
+  }
+
+  const { bytes } = await bakeClientThreeMf(archive, edit)
+  const entries = unzipSync(bytes)
+  assert.equal(entries['Auxiliaries/Others/removed.txt'], undefined)
+  assert.deepEqual([...entries['Auxiliaries/Others/added.txt']!], [0, 255, 7])
+  assert.equal(strFromU8(entries['Auxiliaries/Vendor Data/preserved.bin']!), 'vendor')
 })
 
 test('a public prepared snapshot clears host scripts while preserving printer G-code', async () => {

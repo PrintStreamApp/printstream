@@ -5,6 +5,7 @@ import {
   amsUnitLetter,
   amsUnitTypeFromCode,
   isPhysicalAmsTrayIndex,
+  mappingNeedsExternalSpoolChangeAssist,
   trayIndexToAmsSlot,
   AMS_HT_TRAY_INDEX_MIN,
   AMS_TRAY_UNMAPPED
@@ -103,6 +104,16 @@ test('amsMappingEntrySchema accepts the unmapped sentinel that a tray index reje
   assert.equal(amsMappingEntrySchema.safeParse(-2).success, false)
   assert.equal(amsMappingEntrySchema.safeParse(160).success, false)
   assert.equal(amsMappingEntrySchema.safeParse(-1.5).success, false)
+})
+
+test('external spool change assist requires multiple filaments on one external spool', () => {
+  assert.equal(mappingNeedsExternalSpoolChangeAssist([255]), false)
+  assert.equal(mappingNeedsExternalSpoolChangeAssist([254]), false)
+  assert.equal(mappingNeedsExternalSpoolChangeAssist([255, 254]), false)
+  assert.equal(mappingNeedsExternalSpoolChangeAssist([255, 255]), true)
+  assert.equal(mappingNeedsExternalSpoolChangeAssist([254, 254]), true)
+  assert.equal(mappingNeedsExternalSpoolChangeAssist([0, 255, -1, 255]), true)
+  assert.equal(mappingNeedsExternalSpoolChangeAssist(undefined), false)
 })
 
 test('amsUnitLetter folds the AMS HT band (128+) back to A-Y', () => {

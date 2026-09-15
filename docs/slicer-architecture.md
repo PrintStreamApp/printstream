@@ -24,7 +24,7 @@ through the `SceneEdit` contract and the baked 3MF on disk.
 
 | Concern | Layer | Key modules |
 | --- | --- | --- |
-| **Editor** | web | `apps/web/src/plugins/model-studio/`: `EditorView.tsx` (3D editor), `lib/editorModel.ts` (the editable scene model + `buildSceneEdit`), `lib/editorProjectSource.ts` (where the project is READ from; see below), `lib/threeMfScene.ts` (scene→Three.js), `lib/editorImports.ts`, `lib/meshCut.ts` (Cut tool: plane cut + capped halves, oriented per half, staged as imports) |
+| **Editor** | web | `apps/web/src/plugins/model-studio/`: `EditorView.tsx` (3D editor), `lib/editorModel.ts` (the editable scene model + `buildSceneEdit`), `lib/editorProjectSource.ts` (where the project is READ from; see below), `lib/threeMfScene.ts` (scene→Three.js), `lib/editorImports.ts`, `lib/meshCut.ts` (Cut tool: plane cut + capped halves, oriented per half, staged as imports), `lib/meshSimplify.ts` (worker-safe, paint-preserving mesh decimation) |
 | **Editor** | api | `routes/editor.ts` (save, staged imports, and the no-persist `POST /export-3mf` download bake), `lib/import-store.ts`, `lib/mesh-import.ts` (the per-host parse dispatch: STEP's OpenCASCADE WASM and a zipped AMF's ZIP layer; every parse itself is shared), `lib/three-mf-mesh-extract.ts` (3MF geometry import: first non-empty plate → one part per placed part, helper volumes CARRIED with their subtype but excluded from the merged mesh + re-centring, group re-centred on origin); `lib/three-mf-scene-builder.ts` (`buildEditedThreeMf`) |
 | **Slicing** | web | the slice UI in `components/library/`: `SliceFileModal.tsx`, `SliceSettingsPanel.tsx` (`SliceSettingsController`; materials render as compact one-line swatch rows), `MaterialEditDialog.tsx` (the expanded per-material type/preset/color inputs, reached from a swatch row via `MaterialSwatchButton.tsx`, whose menu also assigns the printer's loaded materials directly), `FilamentSettingsDialog.tsx` (material settings), plus `components/ProcessSettingsDialog.tsx`, `components/settings/MachineSettingsDialog.tsx` (printer presets, from the slicing-preset manager) and the per-object settings surfaces inside `SliceSettingsPanel.tsx` and the editor's `editorPanels.tsx`. All three settings dialogs share `components/settings/SettingsCatalogDialog.tsx` + `SettingValueField.tsx` |
 | **Slicing** | api | `routes/slicing.ts`, `lib/slicing-jobs.ts`, `lib/slicer-client.ts`, `lib/slicing-presets.ts` |
@@ -60,7 +60,7 @@ UI and then drops it at bake time, with no error anywhere.
 ## Importable formats are one catalogue
 
 `packages/shared/src/import-formats.ts` is the single source of truth for which model formats the
-editor can stage as geometry: STL, STEP, 3MF, OBJ, glTF/GLB and AMF. It owns the extensions, the
+editor can stage as geometry: STL, STEP, 3MF, OBJ, glTF/GLB, AMF and FBX. It owns the extensions, the
 user-facing labels, `detectImportFormat`, and the `accept` string every file picker derives from.
 
 That table exists because the same fact used to be written out in six places -- an extension chain
@@ -68,31 +68,89 @@ in `mesh-stl.ts`, a format-to-extensions map in the web's import store, a hand-w
 staging worker's request, a capability list on each of the two import stores, and two prose strings
 in the api's refusals -- and they had already drifted about `.stp`.
 
-**Every parse is shared and dependency-free**, in `packages/shared/src/three-mf/`: `mesh-stl.ts`,
-`mesh-obj.ts`, `mesh-gltf.ts`, `mesh-amf.ts`, plus `mesh-extract.ts` (3MF) and `step-mesh.ts`
+**Every geometry conversion is shared and dependency-free**, in `packages/shared/src/three-mf/`: `mesh-stl.ts`,
+`mesh-obj.ts`, `mesh-gltf.ts`, `mesh-amf.ts`, and FBX scene conversion in `mesh-fbx-scene.ts`, plus
+`mesh-extract.ts` (3MF) and `step-mesh.ts`
 (STEP's quality settings and per-solid fold). They must stay Node-free and DOM-free, and must not
 import `three`: `packages/shared` depends on `zod` alone and is consumed by the api and the bridge.
 Only the LOADING is per host -- the OpenCASCADE WASM for STEP, and a ZIP layer for a zipped AMF
 (yauzl in the api, fflate in the browser).
+
+FBX follows the same boundary with a heavier parser: each host lazily loads Three.js's maintained
+FBX loader, then hands its structural scene to the shared dependency-free converter. The converter
+owns units, world transforms, mirrored winding, validation, triangle limits, multi-part naming, and
+material-to-triangle assignment. Each host prevents Three.js from performing image I/O during its
+synchronous parse, then decodes only embedded PNG/JPEG diffuse textures that are actually referenced
+by mesh materials. External texture files are refused rather than requested relative to the app.
+Skinned models are refused rather than silently baked in the wrong pose. Three.js's ASCII detector
+can reject a valid file when an unrelated character happens to line up with one sampled byte of its
+binary signature; `prepareFbxLoaderBytes` adds a legal deterministic comment before ASCII input so
+that accidental match cannot decide whether the file opens.
 
 **The parse dispatchers are exhaustive `switch`es with no `default`** (`parseImportedMesh` in the
 api, `parseImportMesh` in the staging worker, `parseOnMainThread` in the local store), so adding a
 format to the catalogue without teaching all three to parse it fails the typecheck instead of
 reaching a user as a file the picker offered and the import then refused.
 
-Three format-specific decisions are ported deliberately and are easy to get backwards:
+Four format-specific decisions are ported deliberately and are easy to get backwards:
 
 - **An OBJ is ONE mesh.** BambuStudio never splits on `o`/`g` (`Format/OBJ.cpp:94-99`) -- those are
   material and draw grouping, so splitting would turn a two-colour model into two objects. Polygons
-  fan-triangulate and a face with fewer than three vertices is fatal, not skipped.
+  fan-triangulate and a face with fewer than three vertices is fatal, not skipped. In-file vertex
+  RGBA is retained in triangle-corner order, with alpha zero marking an uncoloured corner. It must
+  not be attached to welded vertices: two faces can share one position but carry different colours
+  there. When an OBJ and its referenced `.mtl` files are selected together, `newmtl`, `Kd`, `d` and
+  `Tr` provide per-face colour for corners that have no in-file vertex colour. A `map_Kd` can also
+  resolve a selected or same-library-directory PNG/JPEG. The shared sampler repeat-wraps OBJ's
+  bottom-origin V coordinate before converting it to the decoder's top-origin pixel rows, then
+  bilinearly samples it. Like
+  BambuStudio, low-poly textured input is subdivided to roughly 10,000 faces and each resulting face
+  uses seven-point triangular sampling before colour clustering. Subdivision never crosses the
+  global import triangle ceiling. Staged summaries report whether the source is `vertex`, `material`
+  or `texture` without sending the potentially large colour sidecar in JSON. Library-backed imports
+  resolve named resources only from the OBJ's own workspace, owning bridge and logical folder, then
+  read their bytes through the same bridge-aware file helper as the OBJ. Missing resources fall back
+  to flat `Kd`; duplicate names are refused rather than making colour depend on upload recency.
 - **An AMF's `<volume>`s are parts**, sharing their object's one vertex pool, which is exactly what
   the multi-solid STEP machinery already means. We honour all five spec units where BambuStudio
   honours only `inch` (`Format/AMF.cpp:280-281`), so a metre-declared file does not open a thousand
   times too small. Both hosts cap the decoded XML at 64 MiB before the in-memory parse, and refuse
   `<constellation>` instances rather than silently dropping their copies and placement transforms.
 - **glTF is defined in METRES**, so every coordinate and the node translation column are scaled by
-  1000. Draco-compressed primitives and a `.gltf` naming an external `.bin` are REFUSED with a
-  reason rather than partly imported, because a scene silently missing half its meshes is worse.
+  1000. Embedded PNG/JPEG base-colour textures (GLB buffer views or data URIs), base-colour factors,
+  alternate texture-coordinate sets, normalized integer UVs and `KHR_texture_transform` feed the
+  same shared texture sampler as OBJ. Repeat, clamp-to-edge and mirrored-repeat sampler modes are
+  preserved. Draco-compressed primitives, external `.bin`/image resources,
+  and extension-only Basis/WebP textures are REFUSED with a reason rather than partly imported,
+  because a scene silently missing half its meshes or colours is worse.
+- **FBX declares centimetres per file unit**, so `UnitScaleFactor` is multiplied by 10 before the
+  mesh enters the millimetre editor. Every scene mesh keeps its world transform and becomes one
+  named part. A mirrored transform reverses triangle winding; a skinned mesh is refused because
+  animation has no 3MF representation and importing an arbitrary bind pose would be dishonest.
+  Embedded PNG/JPEG diffuse textures, their UV transforms and wrapping modes feed the shared texture
+  sampler; explicit flat diffuse materials feed the same mapping flow without subdivision.
+
+Imported source colours use a sidecar rather than changing the geometry transport. There is one editor
+with two storage adapters: the API-backed adapter fetches byte RGBA from
+`GET /api/editor/imports/:importId/source-colors`, while the browser-only adapter reads the same
+triangle-corner data directly from memory. Byte channels are lossless here because the shared
+quantizer's first step is an 8-bit histogram, and make the API payload one quarter the size of
+float32 with no endian-dependent wire encoding. `source-color-paint.ts` owns deterministic
+1-32 colour clustering, Bambu's optional gamma correction, and conversion of whole, two-colour and
+three-colour triangles into the existing `paint_color` tree codec. The mapping dialog can match the
+palette to current filament swatches, append recoloured variants of compatible project presets, or
+skip the source appearance. Gamma correction is a per-device preference and survives later imports.
+Its output enters `EditorState.colorPaint` like a brush stroke, so the viewport, undo, material
+re-keying, save and slice paths need no separate colour-import format. The same mapper runs for
+"Replace with"; replacement first drops every triangle-indexed paint channel from the old topology,
+then seeds the accepted source colour paint on the new body.
+
+This covers direct OBJ vertex colours, flat OBJ/FBX material colours, OBJ `map_Kd` textures, embedded
+glTF/GLB base-colour textures, and embedded FBX diffuse textures. Texture imports expose
+4/8/16/Recommended colour-count choices and a 0-10 smoothing level; smoothing removes isolated
+face-label regions without moving the imported geometry. Rotatable Original/Multi-Color preview
+tabs compare the retained texture with the current reduced palette without rebuilding the renderer
+or resetting the camera as the controls change.
 
 The LIBRARY's `kind` axis (`classifyLibraryFileKind`) is deliberately a separate list: it also
 answers for G-code and for files nothing can import, and it calls a `.gcode.3mf` a `gcode` where the
@@ -198,6 +256,12 @@ features. The editor's `buildSceneEdit(state)` produces it; `buildEditedThreeMf`
 consumes it to rewrite the 3MF's `<build>` section and `model_settings.config`. Per
 instance it carries the geometry reference (`objectId` or staged `importId`), `plateIndex`,
 decomposed transform (or a full `matrix`), optional `filamentId`, and `printable`.
+`placementBedSize` names the bed whose plate-local coordinate frame those transforms use. On a
+printer-model change, scene parsing removes each plate's global origin with the SOURCE bed stride,
+then translates the plate-local arrangement by the old-to-new bed-centre delta. The bake uses
+`placementBedSize` for the target multi-plate grid stride, so later plates reopen where the editor
+showed them. This translation preserves layout and is reversible; it never scales or re-arranges
+objects.
 
 Per-part extensions ride alongside the instances: `partFilaments` (material
 reassignment, only for parts that HAVE a material: normal parts and modifiers, whose
@@ -519,6 +583,13 @@ Bambu object_id). The editor-arranged path now applies them via `createObjectCus
 after the bake (previously skipped whenever a `sceneEdit` was present); the original object's
 name also travels onto the replacement via `objectNames` (importId-keyed).
 
+`partMeshReplacements` is the volume-level counterpart. Each entry addresses a host object and its
+base part ordinal plus a staged mesh import. The bake replaces only that component mesh payload, so
+the host component, part block, list position, subtype, name, settings and transform remain intact.
+`importPartMeshReplacements` applies the same rule to a multi-solid import before its first save.
+This seam is used by Simplify; a part simplification must not be represented as remove-plus-add,
+because that changes the volume's identity and moves it to the end of the object.
+
 `repairedObjectIds` carries BambuStudio's per-object "fix model": each entry is an in-project
 object the user right-clicked → **Repair mesh** in the editor. Unlike `meshReplacements`, this is
 NOT a geometry swap. `buildEditedThreeMf` resolves each marked root object to the entries that
@@ -649,11 +720,33 @@ different things per page**, which is why `machineColumnsForPage`
 Collapsing a vector to element 0 (what `createProcessConfigAccessor` does, and therefore what the
 process dialog does) would silently edit extruder 1 of an H2D and leave extruder 2 unreachable.
 
-A save writes the **full resolved config** through `buildMachinePresetConfig`, laying only the
-catalog keys the user could see over it. BambuStudio's printer tab edits the rest through bespoke
-widgets this dialog does not have (the printable area, bed shape and exclusion zones, the
-model/variant identity), and those are absent from the catalog by design; assembling a save from
-the editable keys alone would drop them and quietly rebuild the preset around a different bed.
+A save writes the **full resolved config** through `buildMachinePresetConfig`, laying the values the
+user changed over it. The generated catalog still owns ordinary printer settings; the focused
+`MachineBuildVolumeDialog` owns BambuStudio's rectangular printable area, G-code origin and maximum
+height, with the parse/validation/serialization contract in
+`packages/shared/src/machine-build-volume.ts`. BambuStudio 2.7's circular and arbitrary-shape tabs
+are disabled, so we do not offer shapes its own Create Printer flow hides. A non-rectangular source
+is shown by its bounds and requires an explicit Apply that warns it will become a rectangle.
+Changing the G-code origin translates `bed_exclude_area`, `bed_heat_soak_area` and
+`wrapping_exclude_area` by the same delta so those hardware regions stay fixed relative to the
+physical bed. Profiles with `extruder_printable_area` or `extruder_printable_height` are view-only
+for build volume: a single global rectangle cannot safely replace two different toolhead reach
+limits, so the editor stays disabled until it can author the whole constraint set together.
+
+Other bespoke values remain pass-through, notably model/variant identity. Custom bed models and
+textures have an additional portability contract: `bed_custom_model` / `bed_custom_texture` retain
+the BambuStudio-compatible display name, while namespaced `printstream_bed_*` fields carry bounded
+base64 bytes inside the machine preset. `MachineBuildVolumeDialog` accepts an STL model and PNG or
+SVG texture, each up to 1 MB, only while editing a stored preset. Project and one-off slice override
+dialogs omit those controls so binary assets never inflate a project 3MF. The API removes the
+base64 payloads from the JSON manifest and streams their raw bytes ahead of the source 3MF; the
+slicer restores them in memory, then `materializeProfileFile` writes them into the task-local
+profile directory, replaces the two standard values with absolute paths, and strips the PrintStream
+payload fields before the engine reads the resolved config. The workspace bed-model and texture
+routes also serve the selected preset's assets to the editor viewport. A BambuStudio import that
+contains only host paths remains labelled path-only and is preserved until explicitly replaced or
+removed. Starting each save from the full resolved config keeps every untouched value alive rather
+than quietly rebuilding the preset around a different bed.
 
 ### Global process settings persist through the editor's save
 
@@ -756,9 +849,14 @@ null**, so before the adopt-in-place change every save of a new project orphaned
 
 The flag is **only** for editor-born projects. A project opened from a real library file must keep
 reading its base: `rewriteThreeMfEntries` copies every entry it has no transform for through
-verbatim, and that passthrough is the only thing preserving what `SceneEdit` cannot express:
-`Auxiliaries/` attachments, plate thumbnails, `_rels/`, `[Content_Types].xml`, and whatever a
-future BambuStudio adds. A new-project scaffold holds none of that: it is itself a from-null bake
+verbatim, preserving plate thumbnails, unknown `Auxiliaries/` folders, `[Content_Types].xml`, and
+whatever a future BambuStudio adds. The five BambuStudio attachment folders are the deliberate
+exception. They pass through untouched until the user applies the Project files and details dialog;
+then `SceneEdit.projectAuxiliaries` is complete state, the bake replaces only those five folders and
+`.thumbnails`, updates the root-model metadata, and retargets the cover relationships in
+`_rels/.rels`. This distinction prevents an unread or newly introduced auxiliary folder from being
+deleted while still making add, rename and delete ordinary dirty, undoable edits. A new-project
+scaffold holds none of that: it is itself a from-null bake
 of one plate and one default filament (`POST /api/editor/new-project`), both already modelled by
 the editor state. A genuine **Save As** from an already-saved project still re-mounts on the new
 file, deliberately: an older file stays behind, and re-reading is also what converts that
@@ -830,7 +928,8 @@ The upload completion records a server-issued preparation proof beside the conte
 hidden snapshot. That proof binds the immutable bytes to two independent identities: `sourceFileId`
 is the project lineage used by slice placement and history, while `contentBase.fileId` plus its
 optional version is the exact current or archived file the editor opened. They differ after Save As.
-The proof also binds the contract version, slicer engine, frozen target, and current real-printer model. The server still applies ZIP
+The proof also binds the contract version, slicer engine, frozen target, current real-printer model,
+and the exact custom-machine body when that machine must accompany the slice. The server still applies ZIP
 safety limits, verifies the required package/settings shape and target identities, resolves named
 workspace presets to confirm they remain available, but does not apply those bodies to the archive
 or recompute the browser's output. The slice endpoint accepts the prepared path only when that proof matches the
@@ -841,10 +940,17 @@ that lease. The API does not repeat the browser's scene, settings,
 machine, or mesh rewrites. The only project setting it may change is the live Filament Track Switch fact, which cannot safely be frozen
 in a browser while a job waits in the queue; that change is made only in the disposable input copy.
 The slicer service likewise treats the embedded project settings as authoritative: it does not load
-request profiles over them, synthesize missing settings, or restamp the sliced project from request
-metadata. The browser removes stale `slice_info` nozzle groups that crash the CLI and authors the
-per-plate manual map. The slicer only reads that map back for the `--filament-map` argument the
-engine requires; it does not rewrite the staged archive.
+process or filament profiles over them, synthesize missing settings, or restamp the sliced project
+from request metadata. A selected custom machine is the narrow runtime exception. The API carries
+the exact workspace-owned preset already verified by the preparation proof, and the slicer loads it
+only so BambuStudio can resolve the User preset's inherited machine identity and so embedded custom
+bed assets can receive task-local paths. The same machine and overrides were already authored into
+the project; overwriting that preset after preparation invalidates the proof and requires a fresh
+bake. Built-in machines need no sidecar. Attachment bytes already embedded in the prepared 3MF are
+removed from the later JSON job request so the attachment limit cannot collide with the API's much
+smaller control-request limit. The browser removes stale `slice_info` nozzle groups
+that crash the CLI and authors the per-plate manual map. The slicer only reads that map back for the
+`--filament-map` argument the engine requires; it does not rewrite the staged archive.
 
 Large editor saves and prepared slicing snapshots use the resumable library upload protocol. Chunk
 writes pace themselves against the API's advertised shared write budget, and that pacing remains
@@ -855,6 +961,12 @@ an upload pause, not as project preparation. A visible save locks cancellation w
 begins because the file or version mutation may already commit. A prepared-snapshot operation may
 still be abandoned throughout completion and reconciliation because the snapshot cannot print
 without the later job request and unreferenced-snapshot cleanup reclaims it.
+
+The editor retains its last successful prepared source for the open session. A later Slice action
+reuses it before baking or uploading when the scene, object overrides, pinned content base, frozen
+target, and slicer version are structurally identical. Plate scope is deliberately not part of the
+prepared-source identity because the same authored project can feed distinct per-plate cache keys.
+Any byte-affecting edit invalidates the reuse and stages a new immutable project.
 
 Non-editor callers do not hold an opened archive or the complete editor state, so they retain the
 legacy API preparation path. `slice-settings-authoring.ts` writes their process and filament
@@ -935,6 +1047,43 @@ The web offers it as "Slice again" beside Reprint on both history surfaces (`Job
 project now declares its own presets, the dialog derives the right ones with no seeding, which is
 the same rule as everywhere else (see "project presets are the basis").
 
+## Unchanged slices are reused
+
+A hidden workspace slice first checks a durable, per-source cache before it enters the native
+engine scheduler. The cache identity hashes the exact source bytes, selected engine descriptor,
+resolved preset contents, complete output-affecting request, target bridge, execution printer
+model, and live Filament Track Switch state. Placement-only values such as the destination folder,
+browser owner, visible source/version row ids, and prepared-source proof id are excluded because
+they cannot change G-code. Changing any actual slice input is therefore a miss. Within an open
+editor, the browser reuses its prepared source when those inputs are unchanged, so the cache lookup
+happens without first rebuilding and uploading the project.
+
+After a completed editor slice, closing only the results dialog retains that hidden output's job
+reference in browser memory. Repeating the identical slice reopens the seeded result immediately and
+does not create an API job. The retained output is discarded as soon as the editor's plate, scene,
+or slice settings change, or when the owning editor closes. The request identity is checked again at
+submission as a final guard. It is intentionally not persisted in browser storage: if the page or
+browser exits before that best-effort discard, the unreferenced-output sweep reclaims it after
+`LIBRARY_UNREFERENCED_SLICE_RETENTION_HOURS`.
+
+The reusable artifact is a hidden, content-addressed snapshot, never the transient output row the
+slice dialog owns. A hit copies that immutable artifact into a fresh hidden slice row and then
+finishes the job normally. Save, Print, Back, Cancel, and two simultaneous dialogs can consequently
+operate on their own outputs without mutating or deleting the shared cache. Cache lookup happens
+before scheduler admission, so a hit does not occupy a slicer slot.
+
+Slice timing comes from BambuStudio's JSON export, but material length and weight are overlaid from
+the finished artifact's `Metadata/slice_info.config`. Some BambuStudio releases report
+`total_used_m: 0` in `result.json` despite writing the correct `used_m` into the 3MF and G-code;
+the artifact is authoritative because it describes the file that will actually print.
+
+There is one active cache entry per workspace and source lineage. A successful slice replaces that
+entry; a hit refreshes its last-use time. Entries expire after
+`LIBRARY_UNREFERENCED_SLICE_RETENTION_HOURS`, then the ordinary unreferenced-snapshot pass reclaims
+the artifact and preserved project bytes when no print, kept output, prepared proof, or other cache
+entry references them. Cache reads and writes are best-effort: storage or database failure falls
+back to a real slice or leaves the completed slice usable.
+
 ## Calibration (plugin surface)
 
 Filament calibration (`calibration` plugin: `apps/api/src/plugins/calibration/`,
@@ -1005,10 +1154,12 @@ A one-slot development process may lend that slot to the editor because it has n
 Public callers are spread by prior starts within their lane and receive a queue position plus an
 estimate based on observed slice durations.
 
-When a job finishes, its response carries the same engine-reported `SlicingMetadata` as a workspace
-job, and the public result dialog renders it through the shared `SliceEstimates` component. The
-browser downloads the temporary G-code archive once and keeps it in memory for both Download and
-the shared full toolpath preview; opening Preview does not upload the result back to the API.
+When a job finishes, its response carries the same engine-reported `SlicingMetadata` and filament
+mappings as a workspace job. The public and workspace result dialogs share `SliceResultPanel` and
+`SliceEstimates`, including print and preparation time plus each material's weight and length; only
+their footer actions differ. The browser downloads the temporary G-code archive once and keeps it
+in memory for both Download and the shared full toolpath preview; opening Preview does not upload
+the result back to the API.
 
 The uploaded project is hostile input at both boundaries. The browser inflates it under compressed,
 per-entry, aggregate-expanded-size, entry-count and duplicate-name limits; a stalled worker is never

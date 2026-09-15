@@ -23,6 +23,7 @@ import type { RequestAuthContext } from '../lib/auth-context.js'
 import { prisma, rootPrisma } from '../lib/prisma.js'
 import { restorePrismaMethodsAfterEach, usePrismaStubs } from '../test-utils/prisma-stubs.js'
 import { HttpError } from '../lib/http-error.js'
+import { LIBRARY_DERIVED_CHIPS_VERSION } from '../lib/library-derived-chips.js'
 
 const p = prisma as unknown as Record<string, Record<string, unknown>>
 // Auto-restore the prisma/rootPrisma methods these tests override (was a per-method save/restore block).
@@ -733,6 +734,59 @@ test('library plates responses return 304 when the file validator still matches'
     assert.equal(secondResponse.headers.get('cache-control'), 'private, no-cache, max-age=0, must-revalidate, s-maxage=0')
     assert.equal(await secondResponse.text(), '')
   })
+})
+
+test('library plates inspection failures do not masquerade as material-free files', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'printstream-library-invalid-'))
+  tempDirs.push(dir)
+  const invalidArchivePath = path.join(dir, 'invalid.gcode.3mf')
+  await writeFile(invalidArchivePath, 'not a zip archive', 'utf8')
+
+  prisma.libraryFile.findUnique = ((async () => ({
+    id: 'file-1',
+    workspaceId: 'workspace-1',
+    ownerBridgeId: null,
+    folderId: null,
+    name: 'Invalid.gcode.3mf',
+    storedPath: invalidArchivePath,
+    sizeBytes: 17,
+    kind: 'gcode',
+    hidden: false,
+    compatiblePrinterModels: null,
+    derivedChipsJson: JSON.stringify({
+      sourcePath: invalidArchivePath,
+      chips: {
+        plateCount: 3,
+        compatiblePrinterModels: ['H2D'],
+        plateTypeChips: ['Textured PEI Plate'],
+        nozzleSizeChips: ['0.4 mm'],
+        projectFilamentChips: [{ label: 'Bambu PLA Basic', color: '#482960' }]
+      }
+    }),
+    derivedChipsVersion: LIBRARY_DERIVED_CHIPS_VERSION,
+    snapshotKey: null,
+    uploadedAt: new Date('2026-05-01T00:00:00.000Z'),
+    createdAt: new Date('2026-05-01T00:00:00.000Z'),
+    updatedAt: new Date('2026-05-01T00:00:00.000Z')
+  })) as unknown) as typeof prisma.libraryFile.findUnique
+
+  const originalWarn = console.warn
+  console.warn = () => undefined
+  try {
+    await withLibraryApp({
+      authEnabled: true,
+      actor: { type: 'user', userId: 'user-1' },
+      permissions: [LIBRARY_VIEW_PERMISSION],
+      runtimePolicy: { demoMode: false }
+    }, async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/api/library/file-1/plates`)
+
+      assert.equal(response.status, 500)
+      assert.deepEqual(await response.json(), { error: 'Internal server error' })
+    })
+  } finally {
+    console.warn = originalWarn
+  }
 })
 
 test('library plate gcode returns the selected plate payload', async () => {

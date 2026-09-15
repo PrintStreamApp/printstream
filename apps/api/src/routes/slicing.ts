@@ -21,6 +21,7 @@ import {
   PRINTS_DISPATCH_PERMISSION,
   filamentSlotValuesCarryTo,
   printFromLibrarySchema,
+  portableMachineBedAssetBytes,
   resolveFilamentConfigRequestSchema,
   resolveMachineConfigRequestSchema,
   readMachineSettingOverrides,
@@ -31,6 +32,7 @@ import {
   buildSlicingPresetBundle,
   type CreateSlicingJob,
   type ProcessConfig,
+  type PortableMachineBedAssetKind,
   type ProjectFilamentConfig,
   type ProjectProcessConfig,
   type ResolveFilamentConfigResponse,
@@ -263,12 +265,63 @@ slicingRouter.get('/bed-model', requireRequestPermission(LIBRARY_VIEW_PERMISSION
   const printerModel = typeof request.query.printerModel === 'string' ? request.query.printerModel.trim() : ''
   if (!printerModel) throw badRequest('printerModel is required')
   const targetId = typeof request.query.targetId === 'string' ? request.query.targetId : null
+  const machineProfileId = typeof request.query.machineProfileId === 'string' ? request.query.machineProfileId.trim() : ''
+  const customAsset = machineProfileId
+    ? await resolvePortableBedAsset(requireRequestWorkspaceId(request), machineProfileId, 'model')
+    : null
+  if (customAsset) {
+    // A custom preset keeps its id when overwritten, so this URL does not version with its bytes.
+    response.setHeader('Cache-Control', 'private, no-store')
+    await sendModelBuffer(request, response, customAsset.bytes, 'model/stl')
+    return
+  }
   const bytes = await slicerClient.bedModel(targetId, printerModel)
   if (!bytes) throw notFound('No bed model for this printer')
-  // Immutable per slicer image; let the browser keep it for the session.
-  response.setHeader('Cache-Control', 'private, max-age=86400')
+  // A custom preset can gain an asset while retaining its id; only the pure bundled lookup is
+  // immutable for the slicer image.
+  response.setHeader('Cache-Control', machineProfileId ? 'private, no-store' : 'private, max-age=86400')
   await sendModelBuffer(request, response, bytes, 'model/stl')
 })
+
+/** The selected custom machine preset's portable bed texture, when it carries one. */
+slicingRouter.get('/bed-texture', requireRequestPermission(LIBRARY_VIEW_PERMISSION), async (request, response) => {
+  const machineProfileId = typeof request.query.machineProfileId === 'string' ? request.query.machineProfileId.trim() : ''
+  if (!machineProfileId) throw badRequest('machineProfileId is required')
+  const asset = await resolvePortableBedAsset(
+    requireRequestWorkspaceId(request),
+    machineProfileId,
+    'texture'
+  )
+  if (!asset) throw notFound('No custom bed texture for this printer preset')
+  response.setHeader('Cache-Control', 'private, no-store')
+  await sendModelBuffer(
+    request,
+    response,
+    asset.bytes,
+    asset.name.toLowerCase().endsWith('.svg') ? 'image/svg+xml' : 'image/png',
+    { compress: !asset.name.toLowerCase().endsWith('.png') }
+  )
+})
+
+/** Resolve one workspace-owned portable asset without exposing the preset's base64 JSON. */
+async function resolvePortableBedAsset(
+  workspaceId: string,
+  machineProfileId: string,
+  kind: PortableMachineBedAssetKind
+): Promise<{ name: string; bytes: Buffer } | null> {
+  const [profile] = await resolveSlicingPresetFiles(workspaceId, [{ id: machineProfileId, kind: 'machine' }])
+  if (!profile || profile.source !== 'custom' || !profile.content) return null
+  try {
+    const asset = portableMachineBedAssetBytes(JSON.parse(profile.content) as ProcessConfig, kind)
+    return asset ? { name: asset.name, bytes: Buffer.from(asset.bytes) } : null
+  } catch (error) {
+    console.warn(
+      `[slicing] could not decode portable ${kind} asset from machine preset ${machineProfileId}`,
+      error instanceof Error ? error.message : error
+    )
+    return null
+  }
+}
 
 /**
  * BambuStudio's measured flush tables, proxied from the slicer's bundled resources for the
@@ -664,18 +717,20 @@ slicingRouter.post('/jobs', requireRequestPermission(LIBRARY_UPLOAD_PERMISSION),
     : parsed.data.contentBase
       ? await resolveLibraryFileToLocalPath(contentEntry)
       : await resolveLibraryFileToLocalPath(sourceEntry)
-  // A prepared project is self-describing and the slicer deliberately does not load request
-  // profiles over it. Resolving those files here would repeat browser work and add avoidable I/O
-  // before the job can even enter the queue. Legacy callers still need the sidecar profiles.
-  const profileFiles = parsed.data.preparedSource
-    ? []
-    : await (async () => {
-      const requestedFiles = await resolveSlicingPresetFiles(workspaceId, collectRequestedProfileIds(parsed.data))
-      return [
-        ...requestedFiles,
-        ...await resolveProjectFilamentPresetFiles(workspaceId, sourcePath, requestedFiles)
-      ]
-    })()
+  // A prepared project is self-describing, so process and filament sidecars must not override it.
+  // A selected custom machine is the narrow exception: authorization already resolved its exact
+  // workspace-owned body, and the slicer needs that body only for User-preset compatibility and
+  // task-local custom-bed asset paths. Legacy callers still need every requested sidecar profile.
+  let profileFiles
+  if (parsed.data.preparedSource) {
+    profileFiles = preparedEntry?.runtimeMachineProfile ? [preparedEntry.runtimeMachineProfile] : []
+  } else {
+    const requestedFiles = await resolveSlicingPresetFiles(workspaceId, collectRequestedProfileIds(parsed.data))
+    profileFiles = [
+      ...requestedFiles,
+      ...await resolveProjectFilamentPresetFiles(workspaceId, sourcePath, requestedFiles)
+    ]
+  }
 
   const job = slicingJobs.enqueue({
     workspaceId,

@@ -6,13 +6,14 @@
  * The canonical Bambu identifier is the 16-hex-character concatenation
  * `AAAAAAAA` + `CCCCCCCC` (for HMS) or 8-character `CCCCCCCC` (for the
  * `device_error` namespace). Bambu publishes a JSON dictionary of these
- * codes at https://e.bambulab.com/query.php?lang=en.
+ * codes plus a device-specific action table that defines which recovery
+ * controls its clients present.
  *
  * This module owns:
  *   - fetching that dictionary on startup and refreshing it daily
  *   - caching it in memory and on disk (so we work offline after the first
  *     successful fetch)
- *   - synchronous lookups by canonical code
+ *   - synchronous message and recovery-action lookups by canonical code
  *   - small formatters for the two code shapes
  *
  * The parser falls back gracefully: if the dictionary is empty or the
@@ -21,9 +22,11 @@
  */
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
+import type { PrinterHmsAction } from '@printstream/shared'
 import { env } from './env.js'
 
 const DICTIONARY_URL = 'https://e.bambulab.com/query.php?lang=en'
+const ACTIONS_URL = 'https://e.bambulab.com/hms/GetActionImage.php'
 const CACHE_FILE = path.resolve(path.dirname(env.LIBRARY_DIR), 'hms-codes.json')
 const REFRESH_MS = 24 * 60 * 60 * 1000
 const GENERIC_DEVICE_TYPE = '__generic__'
@@ -40,6 +43,16 @@ interface BambuDictionary {
   }
 }
 
+interface BambuActionEntry {
+  ecode?: unknown
+  actions?: unknown
+  device?: unknown
+}
+
+interface BambuActionDictionary {
+  data?: BambuActionEntry[]
+}
+
 type DictionaryFetcher = typeof fetch
 
 interface DiskDictionaryLoadResult {
@@ -48,6 +61,7 @@ interface DiskDictionaryLoadResult {
 }
 
 const messagesByDeviceType = new Map<string, Map<string, string>>()
+const actionsByDeviceType = new Map<string, Map<string, PrinterHmsAction[]>>()
 const initializedDeviceTypes = new Set<string>()
 const inFlightRefreshes = new Map<string, Promise<number>>()
 let started = false
@@ -67,6 +81,10 @@ function getCacheFile(deviceType?: string | null): string {
   const normalized = normalizeDeviceType(deviceType)
   if (!normalized) return CACHE_FILE
   return path.resolve(path.dirname(env.LIBRARY_DIR), `hms-codes.${normalized}.json`)
+}
+
+function getActionCacheFile(deviceType: string): string {
+  return path.resolve(path.dirname(env.LIBRARY_DIR), `hms-actions.${deviceType}.json`)
 }
 
 function buildDictionaryIndex(dict: BambuDictionary): Map<string, string> {
@@ -91,6 +109,42 @@ function setDictionaryIndex(dict: BambuDictionary, deviceType?: string | null): 
   return nextMessages.size
 }
 
+const ACTION_ID_MAP = new Map<number, PrinterHmsAction>([
+  [2, 'resume'],
+  [3, 'resume'],
+  [4, 'resume'],
+  [5, 'stop'],
+  [6, 'checkAssistant'],
+  [7, 'confirmAmsFilamentExtruded'],
+  [8, 'retryAmsFilamentChange'],
+  [10, 'loadFilament'],
+  [12, 'resume'],
+  [13, 'jumpToLiveView'],
+  [27, 'ignoreHmsError'],
+  [28, 'resume']
+])
+
+function setActionIndex(dict: BambuActionDictionary, deviceType: string): number {
+  const nextActions = new Map<string, PrinterHmsAction[]>()
+  const entries = Array.isArray(dict.data) ? dict.data : []
+  for (const entry of entries) {
+    if (typeof entry.ecode !== 'string' || !Array.isArray(entry.actions)) continue
+    const entryDevice = typeof entry.device === 'string' ? entry.device.trim().toUpperCase() : null
+    if (!entryDevice || (entryDevice !== 'DEFAULT' && normalizeDeviceType(entryDevice) !== deviceType)) continue
+    const ecode = entry.ecode.toUpperCase()
+    // BambuStudio uses the first matching device/default row. Preserve that ordering when a
+    // table contains both, instead of allowing the later row to silently replace it.
+    if (nextActions.has(ecode)) continue
+    const actions = Array.from(new Set(entry.actions.flatMap((id) => {
+      const action = typeof id === 'number' ? ACTION_ID_MAP.get(id) : undefined
+      return action ? [action] : []
+    })))
+    nextActions.set(ecode, actions)
+  }
+  actionsByDeviceType.set(deviceType, nextActions)
+  return nextActions.size
+}
+
 export function normalizeDeviceType(deviceType?: string | null): string | null {
   if (typeof deviceType !== 'string') return null
   const normalized = deviceType.trim().slice(0, 3).toUpperCase()
@@ -107,6 +161,12 @@ export function getHmsDictionaryUrl(deviceType?: string | null): string {
   if (normalized) {
     url.searchParams.set('d', normalized)
   }
+  return url.toString()
+}
+
+export function getHmsActionDictionaryUrl(deviceType: string): string {
+  const url = new URL(ACTIONS_URL)
+  url.searchParams.set('d', normalizeDeviceType(deviceType) ?? deviceType)
   return url.toString()
 }
 
@@ -132,6 +192,18 @@ export function lookupHmsMessage(canonicalCode: string, deviceType?: string | nu
   return message && message.length > 0 ? message : null
 }
 
+/**
+ * Return the supported recovery actions named by Bambu's per-device table.
+ * Null means no table/entry is known; an empty array means the entry exists but
+ * only names controls PrintStream cannot safely perform.
+ */
+export function lookupHmsActions(canonicalCode: string, deviceType?: string | null): PrinterHmsAction[] | null {
+  const normalized = normalizeDeviceType(deviceType)
+  if (!normalized) return null
+  const actions = actionsByDeviceType.get(normalized)?.get(canonicalCode.toUpperCase())
+  return actions ? [...actions] : null
+}
+
 function isFreshCacheFile(mtimeMs: number, nowMs = Date.now()): boolean {
   return nowMs - mtimeMs < REFRESH_MS
 }
@@ -144,6 +216,17 @@ async function loadFromDisk(deviceType?: string | null): Promise<DiskDictionaryL
       stat(cacheFile)
     ])
     const count = setDictionaryIndex(JSON.parse(raw) as BambuDictionary, deviceType)
+    return { count, fresh: count > 0 && isFreshCacheFile(info.mtimeMs) }
+  } catch {
+    return { count: 0, fresh: false }
+  }
+}
+
+async function loadActionsFromDisk(deviceType: string): Promise<DiskDictionaryLoadResult> {
+  try {
+    const cacheFile = getActionCacheFile(deviceType)
+    const [raw, info] = await Promise.all([readFile(cacheFile, 'utf8'), stat(cacheFile)])
+    const count = setActionIndex(JSON.parse(raw) as BambuActionDictionary, deviceType)
     return { count, fresh: count > 0 && isFreshCacheFile(info.mtimeMs) }
   } catch {
     return { count: 0, fresh: false }
@@ -171,6 +254,22 @@ async function refreshFromNetwork(deviceType?: string | null): Promise<number> {
   return count
 }
 
+async function refreshActionsFromNetwork(deviceType: string): Promise<number> {
+  const response = await dictionaryFetcher(getHmsActionDictionaryUrl(deviceType), {
+    headers: { Accept: 'application/json' },
+    signal: AbortSignal.timeout(15_000)
+  })
+  if (!response.ok) throw new Error(`HMS action fetch failed: ${response.status}`)
+  const text = await response.text()
+  const count = setActionIndex(JSON.parse(text) as BambuActionDictionary, deviceType)
+  if (count > 0) {
+    const cacheFile = getActionCacheFile(deviceType)
+    await mkdir(path.dirname(cacheFile), { recursive: true })
+    await writeFile(cacheFile, text, 'utf8')
+  }
+  return count
+}
+
 async function refreshDictionary(deviceType?: string | null): Promise<number> {
   const key = getDeviceTypeKey(deviceType)
   const inFlight = inFlightRefreshes.get(key)
@@ -188,20 +287,21 @@ export async function ensureHmsDeviceTypeDictionary(deviceType?: string | null):
   if (!normalized || initializedDeviceTypes.has(normalized)) return
 
   initializedDeviceTypes.add(normalized)
-  const fromDisk = await loadFromDisk(normalized)
+  const [fromDisk, actionsFromDisk] = await Promise.all([
+    loadFromDisk(normalized),
+    loadActionsFromDisk(normalized)
+  ])
   if (fromDisk.count > 0) {
     console.log(`HMS dictionary loaded from cache for ${normalized} (${fromDisk.count} entries)`)
   }
-  if (fromDisk.fresh) {
-    return
-  }
-
-  try {
-    const count = await refreshDictionary(normalized)
-    console.log(`HMS dictionary refreshed from Bambu for ${normalized} (${count} entries)`)
-  } catch (error) {
-    console.warn(`HMS dictionary refresh failed for ${normalized}:`, (error as Error).message)
-  }
+  await Promise.all([
+    fromDisk.fresh ? Promise.resolve() : refreshDictionary(normalized)
+      .then((count) => console.log(`HMS dictionary refreshed from Bambu for ${normalized} (${count} entries)`))
+      .catch((error) => console.warn(`HMS dictionary refresh failed for ${normalized}:`, (error as Error).message)),
+    actionsFromDisk.fresh ? Promise.resolve() : refreshActionsFromNetwork(normalized)
+      .then((count) => console.log(`HMS action table refreshed from Bambu for ${normalized} (${count} entries)`))
+      .catch((error) => console.warn(`HMS action refresh failed for ${normalized}:`, (error as Error).message))
+  ])
 }
 
 /**
@@ -229,12 +329,14 @@ export async function startHmsCodeService(): Promise<void> {
 
     for (const deviceType of initializedDeviceTypes) {
       if (deviceType === GENERIC_DEVICE_TYPE) continue
-      try {
-        const count = await refreshDictionary(deviceType)
-        console.log(`HMS dictionary refreshed from Bambu for ${deviceType} (${count} entries)`)
-      } catch (error) {
-        console.warn(`HMS dictionary refresh failed for ${deviceType}:`, (error as Error).message)
-      }
+      await Promise.all([
+        refreshDictionary(deviceType)
+          .then((count) => console.log(`HMS dictionary refreshed from Bambu for ${deviceType} (${count} entries)`))
+          .catch((error) => console.warn(`HMS dictionary refresh failed for ${deviceType}:`, (error as Error).message)),
+        refreshActionsFromNetwork(deviceType)
+          .then((count) => console.log(`HMS action table refreshed from Bambu for ${deviceType} (${count} entries)`))
+          .catch((error) => console.warn(`HMS action refresh failed for ${deviceType}:`, (error as Error).message))
+      ])
     }
   }
 
@@ -257,6 +359,7 @@ export function resetHmsCodeServiceForTests(): void {
     refreshTimer = null
   }
   messagesByDeviceType.clear()
+  actionsByDeviceType.clear()
   initializedDeviceTypes.clear()
   inFlightRefreshes.clear()
   dictionaryFetcher = fetch
@@ -265,4 +368,9 @@ export function resetHmsCodeServiceForTests(): void {
 
 export function isFreshHmsCacheFileForTests(mtimeMs: number, nowMs: number): boolean {
   return isFreshCacheFile(mtimeMs, nowMs)
+}
+
+export function ingestHmsActionDictionaryForTests(dict: BambuActionDictionary, deviceType: string): void {
+  const normalized = normalizeDeviceType(deviceType)
+  if (normalized) setActionIndex(dict, normalized)
 }

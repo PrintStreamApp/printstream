@@ -1,13 +1,21 @@
 import { useState, useSyncExternalStore } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
+import NewReleasesRoundedIcon from '@mui/icons-material/NewReleasesRounded'
 import SystemUpdateAltRoundedIcon from '@mui/icons-material/SystemUpdateAltRounded'
-import { Chip, Stack, Tooltip, Typography } from '@mui/joy'
+import { Button, Chip, Stack, Tooltip } from '@mui/joy'
 import { extractErrorMessage, type AppUpdateStartResponse, type AppVersionResponse } from '@printstream/shared'
 import { apiFetch } from '../lib/apiClient'
 import { resolveDisplayedAppBuild } from '../lib/appVersionDisplay'
 import { isWebUpdatePending, subscribeWebUpdatePending } from '../lib/appStaleness'
 import { waitForNewBuild } from '../lib/appUpdateRestart'
+import { hasUnreadProductRelease } from '../lib/productChangelog'
+import { useLocalStorageState } from '../hooks/useLocalStorageState'
 import { ConfirmActionDialog } from './ConfirmActionDialog'
+import { ProductChangelogDialog } from './ProductChangelogDialog'
+
+const LAST_READ_RELEASE_KEY = 'printstream.productChangelog.lastReadVersion'
+const parseStoredVersion = (raw: string): string | null => raw.trim() || null
+const serializeStoredVersion = (value: string | null): string => value ?? ''
 
 /**
  * Footer line showing the loaded UI's version and, for the published
@@ -15,6 +23,9 @@ import { ConfirmActionDialog } from './ConfirmActionDialog'
  * newer build. The visible version comes from this browser bundle, not the API:
  * after a deploy, the API can be newer while this tab is waiting for a safe
  * automatic reload. Update availability and permissions remain server-owned.
+ * The version is also the entry point to the bundled product changelog. A
+ * per-device last-read version gives a newly published entry a one-time visual
+ * treatment without adding server-side notification state.
  *
  * On the native app the hint is also the TRIGGER: `canApplyUpdate` (settings
  * managers only) makes the chip clickable, and confirming posts
@@ -36,6 +47,7 @@ export function AppVersionFooter() {
     refetchOnWindowFocus: false
   })
   const [confirmOpen, setConfirmOpen] = useState(false)
+  const [changelogOpen, setChangelogOpen] = useState(false)
   const safeReloadPending = useSyncExternalStore(
     subscribeWebUpdatePending,
     isWebUpdatePending,
@@ -64,6 +76,13 @@ export function AppVersionFooter() {
   })
 
   const displayedBuild = resolveDisplayedAppBuild(data)
+  const [lastReadRelease, setLastReadRelease] = useLocalStorageState<string | null>(
+    LAST_READ_RELEASE_KEY,
+    null,
+    parseStoredVersion,
+    serializeStoredVersion
+  )
+  const releaseUnread = hasUnreadProductRelease(displayedBuild.version, lastReadRelease)
   const update = data?.update
   const lapsed = update?.status === 'updatesLapsed'
   const hasUpdate = update?.status === 'updateAvailable' || lapsed
@@ -84,18 +103,37 @@ export function AppVersionFooter() {
           variant="soft"
           title={describePendingUiReload(displayedBuild.version, displayedBuild.serverVersion)}
         >
-          <Chip size="sm" variant="soft" color="warning" sx={{ fontFamily: 'code' }}>
+          <Chip
+            size="sm"
+            variant="soft"
+            color="warning"
+            onClick={() => {
+              setLastReadRelease(displayedBuild.version)
+              setChangelogOpen(true)
+            }}
+            sx={{ fontFamily: 'code' }}
+          >
             v{displayedBuild.version} (UI reload required)
           </Chip>
         </Tooltip>
       ) : (
-        <Typography
-          level="body-xs"
-          title={displayedBuild.revision ?? undefined}
-          sx={{ color: 'neutral.500', fontFamily: 'code' }}
-        >
-          v{displayedBuild.version}
-        </Typography>
+        <Tooltip title={releaseUnread ? 'See what changed in this version' : 'View release notes'} variant="soft">
+          <Button
+            size="sm"
+            variant={releaseUnread ? 'soft' : 'plain'}
+            color={releaseUnread ? 'primary' : 'neutral'}
+            startDecorator={releaseUnread ? <NewReleasesRoundedIcon fontSize="small" /> : undefined}
+            aria-label={`View release notes for PrintStream v${displayedBuild.version}`}
+            title={displayedBuild.revision ?? undefined}
+            onClick={() => {
+              setLastReadRelease(displayedBuild.version)
+              setChangelogOpen(true)
+            }}
+            sx={{ minHeight: 24, fontFamily: 'code', fontSize: 'xs' }}
+          >
+            v{displayedBuild.version}
+          </Button>
+        </Tooltip>
       )}
       {hasUpdate && update && (
         <Tooltip variant="soft" title={describeUpdate(update, canApply)}>
@@ -135,6 +173,12 @@ export function AppVersionFooter() {
           startUpdate.mutate()
         }}
       />
+      {changelogOpen && (
+        <ProductChangelogDialog
+          currentVersion={displayedBuild.version}
+          onClose={() => setChangelogOpen(false)}
+        />
+      )}
     </Stack>
   )
 }

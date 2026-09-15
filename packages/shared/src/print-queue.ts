@@ -29,6 +29,7 @@ import { z } from 'zod'
 import {
   amsMappingEntrySchema,
   printFromLibrarySchema,
+  printOnOffAutoModeSchema,
   isPrinterActiveJobStage,
   type PrinterModel,
   type PrinterStatus
@@ -553,6 +554,11 @@ export const queuePrintOptionsSchema = printFromLibrarySchema.omit({
   printerId: true,
   plate: true,
   amsMapping: true
+}).extend({
+  // Queue creation has no per-device remembered preference to seed from. Match the fresh print
+  // dialogs' defaults; capable printers decide whether recent calibration can be reused.
+  bedLevel: printOnOffAutoModeSchema.default('auto'),
+  flowCalibration: printOnOffAutoModeSchema.default('auto')
 })
 export type QueuePrintOptions = z.infer<typeof queuePrintOptionsSchema>
 
@@ -621,6 +627,8 @@ export const queueItemCreateSchema = z.object({
   libraryFileId: z.string().min(1),
   plate: z.number().int().positive().default(1),
   quantity: z.number().int().positive().max(999).default(1),
+  /** Keep the item after its requested copies finish so it can be started again. */
+  pinned: z.boolean().default(false),
   target: queueTargetSchema.default({ kind: 'any' }),
   options: queuePrintOptionsSchema.optional(),
   /** Concrete AMS tray mapping (specific-printer target); the matcher computes one otherwise. */
@@ -636,6 +644,8 @@ export type QueueItemCreateInput = z.infer<typeof queueItemCreateSchema>
 export const queueItemUpdateSchema = z.object({
   plate: z.number().int().positive().optional(),
   quantity: z.number().int().positive().max(999).optional(),
+  /** Keep the item after its requested copies finish so it can be started again. */
+  pinned: z.boolean().optional(),
   target: queueTargetSchema.optional(),
   options: queuePrintOptionsSchema.optional(),
   /** Set the manual AMS mapping override, or `null` to clear it. */
@@ -680,7 +690,9 @@ export const queueDispatchSchema = z.object({
    * shortfall makes a print pause, whereas an abrasive through the wrong nozzle damages the
    * printer, so an unattended queue must refuse it rather than assume consent.
    */
-  allowBlacklistedFilament: z.boolean().optional()
+  allowBlacklistedFilament: z.boolean().optional(),
+  /** Consent to start on a model outside the file's declared compatible family. */
+  allowPrinterModelMismatch: z.boolean().optional()
 }).refine((value) => !value.amsMapping || !!value.printerId, {
   message: 'Choose a printer when overriding the AMS slots'
 })
@@ -715,6 +727,7 @@ export const queueItemSchema = z.object({
   plateName: z.string().nullable(),
   quantity: z.number().int().positive(),
   completedCount: z.number().int().nonnegative(),
+  pinned: z.boolean().default(false),
   remaining: z.number().int().nonnegative(),
   sortKey: z.number(),
   target: queueTargetSchema,

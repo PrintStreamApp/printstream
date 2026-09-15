@@ -60,6 +60,7 @@ const PLACEHOLDER_SEAM_ENTRIES: Record<string, unknown[]> = {
   partProcessOverrides: [{ objectId: PLACEHOLDER, partIndex: 0, settings: { wall_loops: '3' } }],
   partTypeChanges: [{ objectId: PLACEHOLDER, partIndex: 0, subtype: 'modifier_part' }],
   partTransforms: [{ objectId: PLACEHOLDER, partIndex: 0, matrix: [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0] }],
+  partMeshReplacements: [{ objectId: PLACEHOLDER, partIndex: 0, meshImportId: 'imp-simplified' }],
   removedParts: [{ objectId: PLACEHOLDER, partIndex: 0 }],
   partOrder: [{ objectId: PLACEHOLDER, order: [1, 0] }],
   supportPaint: [{ objectId: PLACEHOLDER, componentObjectId: 1, triangles: { '0': '8' } }],

@@ -14,6 +14,7 @@ import {
 } from '@mui/joy'
 import ArrowBackRoundedIcon from '@mui/icons-material/ArrowBackRounded'
 import ErrorOutlineRoundedIcon from '@mui/icons-material/ErrorOutlineRounded'
+import ViewInArRoundedIcon from '@mui/icons-material/ViewInArRounded'
 import WarningAmberRoundedIcon from '@mui/icons-material/WarningAmberRounded'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type {
@@ -24,6 +25,7 @@ import type {
   PrintNozzleOffsetCalibrationMode,
   PrintOnOffAutoMode,
   PrintStartOptionSelection,
+  PrintTimelapseStorage,
   Printer,
   PrinterStatus,
   StartOrderPrintInput,
@@ -61,7 +63,6 @@ import {
   usePlateClearingStates,
   usePlateClearingSync
 } from '../../lib/plateClearing'
-import { useLocalStorageState } from '../../hooks/useLocalStorageState'
 import { BackAwareModal as Modal } from '../BackAwareModal'
 import { DialogFileTitle } from '../DialogFileTitle'
 import { FilamentBlacklistAlert } from '../FilamentBlacklistAlert'
@@ -80,12 +81,11 @@ import { formatLibraryFileName } from '../../lib/libraryDisplay'
 import { filterTrayGroupsForFilament, sanitizeTrayMapping } from '../../lib/printerTrayMapping'
 import {
   applyRecordedPrintStartOptions,
-  buildPrintStartPreferenceKey,
-  DEFAULT_STORED_PRINT_START_OPTIONS,
+  arePrintStartModesAvailable,
+  DEFAULT_PRINT_START_OPTIONS,
   mergePrintStartOptions,
-  parseStoredPrintStartOptions,
   resolveFirstLayerInspectionDefault,
-  resolvePrintStartPreferenceDefaults
+  resolvePrintStartDefaults
 } from '../../lib/printStartOptions'
 import {
   AVAILABLE_PRINT_STAGES,
@@ -98,6 +98,7 @@ import {
   formatPlateTypeIssue,
   getSelectedTrayWarningMessages,
   isExternalSpoolMappingValue,
+  plateMappingNeedsExternalSpoolChangeAssist,
   printerHasChamber,
   printerHasSelectableTrays,
   printerStatusChipColor,
@@ -123,10 +124,10 @@ interface PrintModalProps {
   lockPrinterSelection?: boolean
   defaultPlate?: number
   /**
-   * Print-start options to open with instead of this browser's remembered preferences:
+   * Print-start options to open with instead of the normal fresh-print defaults:
    * how a re-print restores the settings the original print was started with. Each field is
    * independent: one the job never recorded is absent, and that control falls back to the
-   * remembered preference exactly as a fresh print would. Values are still clamped to what
+   * PrintStream default exactly as a fresh print would. Values are still clamped to what
    * the selected printer supports, so an `auto` from an H2D shows as `on` on a P1S.
    */
   defaultPrintOptions?: Partial<PrintStartOptionSelection> | null
@@ -202,6 +203,7 @@ export function PrintModal({
   const platesQuery = useQuery({
     queryKey: ['library-plates', file.id, versionId ?? 'current'],
     queryFn: ({ signal }) => apiFetch<ThreeMfIndex>(`${resourceBasePath}/plates`, { signal }),
+    retry: 2,
     staleTime: 60_000,
     refetchOnMount: 'always'
   })
@@ -276,32 +278,13 @@ export function PrintModal({
     [printers, selectedIds]
   )
   const hasSelectedPrinters = selectedPrinters.length > 0
-  const preferencePrinterModels = useMemo(() => {
-    if (selectedPrinters.length > 0) {
-      return selectedPrinters.map((printer) => printer.model)
-    }
-    if (singlePrinterMode && defaultPrinterId) {
-      const defaultPrinter = printers.find((printer) => printer.id === defaultPrinterId)
-      return defaultPrinter ? [defaultPrinter.model] : []
-    }
-    return []
-  }, [defaultPrinterId, printers, selectedPrinters, singlePrinterMode])
-  const storedPrintOptionsKey = useMemo(
-    () => buildPrintStartPreferenceKey(authBootstrapQuery.data, preferencePrinterModels),
-    [authBootstrapQuery.data, preferencePrinterModels]
-  )
-  const [storedPrintOptions, setStoredPrintOptions, storedPrintOptionsReady] = useLocalStorageState(
-    storedPrintOptionsKey,
-    DEFAULT_STORED_PRINT_START_OPTIONS,
-    parseStoredPrintStartOptions
-  )
   const [plateIndex, setPlateIndex] = useState<number>(defaultPlate ?? 1)
-  const [bedLevel, setBedLevel] = useState<PrintOnOffAutoMode>('on')
-  const [vibrationCompensation, setVibrationCompensation] = useState(false)
-  const [flowCalibration, setFlowCalibration] = useState<PrintOnOffAutoMode>('off')
+  const [bedLevel, setBedLevel] = useState<PrintOnOffAutoMode>('auto')
+  const [flowCalibration, setFlowCalibration] = useState<PrintOnOffAutoMode>('auto')
   const [timelapse, setTimelapse] = useState(false)
+  const [timelapseStorage, setTimelapseStorage] = useState<PrintTimelapseStorage>('external')
+  const [externalFilamentChangeAssist, setExternalFilamentChangeAssist] = useState(false)
   const [nozzleOffsetCalibration, setNozzleOffsetCalibration] = useState<PrintNozzleOffsetCalibrationMode>('auto')
-  const [printOptionsTouched, setPrintOptionsTouched] = useState(false)
   const [initializedPrintOptionsSelectionKey, setInitializedPrintOptionsSelectionKey] = useState<string | null>(null)
   const [mappings, setMappings] = useState<AmsMappingsBySerial>(() => {
     if (!defaultPrinterId || !defaultAmsMapping || defaultAmsMapping.length === 0) return {}
@@ -314,6 +297,7 @@ export function PrintModal({
   const [sentPrinterIds, setSentPrinterIds] = useState<string[] | null>(null)
   const [allowIncompatibleFilament, setAllowIncompatibleFilament] = useState(false)
   const [allowPlateTypeMismatch, setAllowPlateTypeMismatch] = useState(false)
+  const [allowPrinterModelMismatch, setAllowPrinterModelMismatch] = useState(false)
   const [allowFilamentTrackSwitchMismatch, setAllowFilamentTrackSwitchMismatch] = useState(false)
   const [allowInsufficientFilament, setAllowInsufficientFilament] = useState(false)
   const [allowBlacklistedFilament, setAllowBlacklistedFilament] = useState(false)
@@ -430,6 +414,24 @@ export function PrintModal({
     }
     return next
   }, [autoMappings, mappings, selectedIds])
+  const needsExternalSpoolChangeAssist = useMemo(
+    () => selectedPrinters.some((printer) => {
+      const printerStatus = statuses[printer.id]
+      const capabilities = getPrinterPrintOptionCapabilities(
+        printer.model,
+        printerStatus
+          ? {
+              printOptions: printerStatus.printOptions,
+              printStartOptions: printerStatus.printStartOptions
+            }
+          : null
+      )
+
+      return capabilities.externalFilamentChangeAssist
+        && plateMappingNeedsExternalSpoolChangeAssist(effectiveMappings[printer.id], visibleFilaments)
+    }),
+    [effectiveMappings, selectedPrinters, statuses, visibleFilaments]
+  )
   /** Rows whose effective selection is the matcher's (not an explicit pick): flagged in the mapping UI. */
   const autoSelectedIdsByPrinter = useMemo(() => {
     const next: Record<string, Set<number>> = {}
@@ -715,6 +717,12 @@ export function PrintModal({
     () => printers.filter((printer) => !isPrinterModelCompatible(compatiblePrinterModels, printer.model)),
     [compatiblePrinterModels, printers]
   )
+  const selectedModelMismatchPrinters = useMemo(
+    () => selectedPrinters.filter(
+      (printer) => !isPrinterModelCompatible(compatiblePrinterModels, printer.model)
+    ),
+    [compatiblePrinterModels, selectedPrinters]
+  )
   const visiblePrinters = useMemo(
     () => {
       if (printerSelectionLocked) {
@@ -758,60 +766,67 @@ export function PrintModal({
   const visiblePrintOptionCapabilities = useMemo(() => ({
     bedLevel: visiblePrintStartOptions?.bedLevel.supported ?? false,
     bedLevelAuto: visiblePrintStartOptions?.bedLevel.autoSupported ?? false,
-    vibrationCompensation: visiblePrintStartOptions?.vibrationCompensation.supported ?? false,
     flowCalibration: visiblePrintStartOptions?.flowCalibration.supported ?? false,
     flowCalibrationAuto: visiblePrintStartOptions?.flowCalibration.autoSupported ?? false,
     firstLayerInspection: visiblePrintStartOptions?.firstLayerInspection.supported ?? false,
     timelapse: visiblePrintStartOptions?.timelapse.supported ?? false,
+    internalTimelapseStorage: visiblePrintStartOptions?.internalTimelapseStorage.supported ?? false,
+    externalFilamentChangeAssist: visiblePrintStartOptions?.externalFilamentChangeAssist.supported ?? false,
     nozzleOffsetCalibration: visiblePrintStartOptions?.nozzleOffsetCalibration.supported ?? false
   }), [visiblePrintStartOptions])
-  // What the form opens with: this browser's remembered preferences, with any options the
-  // job being re-printed actually recorded layered over them, then clamped to what the
-  // selected printer supports. Clamping LAST is what keeps a restored `auto` from rendering
-  // as an empty dropdown on a printer that has no Auto.
-  const resolvedStoredPrintOptions = useMemo(
-    () => resolvePrintStartPreferenceDefaults(
-      applyRecordedPrintStartOptions(storedPrintOptions, defaultPrintOptions),
+  // Fresh prints always use PrintStream's defaults. A re-print restores only the options
+  // recorded on that job, then clamps them to what the selected printer supports.
+  const resolvedDefaultPrintOptions = useMemo(
+    () => resolvePrintStartDefaults(
+      applyRecordedPrintStartOptions(DEFAULT_PRINT_START_OPTIONS, defaultPrintOptions),
       visiblePrintStartOptions
     ),
-    [defaultPrintOptions, storedPrintOptions, visiblePrintStartOptions]
+    [defaultPrintOptions, visiblePrintStartOptions]
   )
   const selectedPrinterSelectionKey = useMemo(
     () => selectedIds.slice().sort().join(','),
     [selectedIds]
   )
 
-  // Print options are remembered per printer-model set (the storage key). When the model set
-  // changes, clear the "user touched" flag so the form re-seeds from the new model's own
-  // remembered (capability-clamped) values instead of carrying the previous model's edits over
-  // and writing them into the new model's key. Keyed on the storage key rather than the raw
-  // selection so adding a same-model printer keeps any in-progress edits.
-  useEffect(() => {
-    setPrintOptionsTouched(false)
-  }, [storedPrintOptionsKey])
-
   useEffect(() => {
     if (!hasSelectedPrinters) {
       setInitializedPrintOptionsSelectionKey(null)
       return
     }
-    if (printOptionsTouched) return
-    if (!storedPrintOptionsReady) return
-    if (initializedPrintOptionsSelectionKey === selectedPrinterSelectionKey) return
-    setBedLevel(resolvedStoredPrintOptions.bedLevel)
-    setVibrationCompensation(resolvedStoredPrintOptions.vibrationCompensation)
-    setFlowCalibration(resolvedStoredPrintOptions.flowCalibration)
-    setTimelapse(resolvedStoredPrintOptions.timelapse)
-    setNozzleOffsetCalibration(resolvedStoredPrintOptions.nozzleOffsetCalibration)
+    if (initializedPrintOptionsSelectionKey !== null) return
+    setBedLevel(resolvedDefaultPrintOptions.bedLevel)
+    setFlowCalibration(resolvedDefaultPrintOptions.flowCalibration)
+    setTimelapse(resolvedDefaultPrintOptions.timelapse)
+    setTimelapseStorage(resolvedDefaultPrintOptions.timelapseStorage)
+    setExternalFilamentChangeAssist(resolvedDefaultPrintOptions.externalFilamentChangeAssist)
+    setNozzleOffsetCalibration(resolvedDefaultPrintOptions.nozzleOffsetCalibration)
     setInitializedPrintOptionsSelectionKey(selectedPrinterSelectionKey)
   }, [
     hasSelectedPrinters,
     initializedPrintOptionsSelectionKey,
-    printOptionsTouched,
-    resolvedStoredPrintOptions,
-    selectedPrinterSelectionKey,
-    storedPrintOptionsReady
+    resolvedDefaultPrintOptions,
+    selectedPrinterSelectionKey
   ])
+
+  // Adding another printer must not reset choices already made in this dialog. Only
+  // clamp Auto when the combined selection cannot represent it.
+  useEffect(() => {
+    if (bedLevel === 'auto'
+      && visiblePrintStartOptions?.bedLevel.supported
+      && !visiblePrintStartOptions.bedLevel.autoSupported) {
+      setBedLevel('on')
+    }
+    if (flowCalibration === 'auto'
+      && visiblePrintStartOptions?.flowCalibration.supported
+      && !visiblePrintStartOptions.flowCalibration.autoSupported) {
+      setFlowCalibration('on')
+    }
+  }, [bedLevel, flowCalibration, visiblePrintStartOptions])
+
+  const hasValidPrintOptions = arePrintStartModesAvailable(
+    { bedLevel, flowCalibration },
+    visiblePrintStartOptions
+  )
 
   const selectedTrayWarningEntries = useMemo(() => {
     return selectedIds
@@ -885,59 +900,36 @@ export function PrintModal({
     setAllowPlateTypeMismatch(false)
   }, [hardwareSignature])
 
+  const modelMismatchSignature = selectedModelMismatchPrinters
+    .map((printer) => `${printer.id}:${printer.model}`)
+    .sort()
+    .join(',')
+
   useEffect(() => {
-    if (!hasSelectedPrinters) return
-    if (!storedPrintOptionsReady) return
-    if (!printOptionsTouched && initializedPrintOptionsSelectionKey !== selectedPrinterSelectionKey) return
-    // Re-opening an old print's settings is not the user choosing them, so a re-print does
-    // not rewrite the remembered defaults until a control is actually touched. Without this,
-    // re-printing one job would quietly make that job's options the default for every
-    // subsequent print from this browser.
-    if (defaultPrintOptions && !printOptionsTouched) return
-    setStoredPrintOptions({
-      bedLevel,
-      vibrationCompensation,
-      flowCalibration,
-      timelapse,
-      nozzleOffsetCalibration
-    })
-  }, [
-    bedLevel,
-    defaultPrintOptions,
-    vibrationCompensation,
-    flowCalibration,
-    hasSelectedPrinters,
-    initializedPrintOptionsSelectionKey,
-    timelapse,
-    nozzleOffsetCalibration,
-    printOptionsTouched,
-    selectedPrinterSelectionKey,
-    setStoredPrintOptions,
-    storedPrintOptionsReady
-  ])
+    setAllowPrinterModelMismatch(false)
+  }, [modelMismatchSignature])
 
   const updateBedLevel = (value: PrintOnOffAutoMode) => {
-    setPrintOptionsTouched(true)
     setBedLevel(value)
   }
 
-  const updateVibrationCompensation = (value: boolean) => {
-    setPrintOptionsTouched(true)
-    setVibrationCompensation(value)
-  }
-
   const updateFlowCalibration = (value: PrintOnOffAutoMode) => {
-    setPrintOptionsTouched(true)
     setFlowCalibration(value)
   }
 
   const updateTimelapse = (value: boolean) => {
-    setPrintOptionsTouched(true)
     setTimelapse(value)
   }
 
+  const updateTimelapseStorage = (value: PrintTimelapseStorage) => {
+    setTimelapseStorage(value)
+  }
+
+  const updateExternalFilamentChangeAssist = (value: boolean) => {
+    setExternalFilamentChangeAssist(value)
+  }
+
   const updateNozzleOffsetCalibration = (value: PrintNozzleOffsetCalibrationMode) => {
-    setPrintOptionsTouched(true)
     setNozzleOffsetCalibration(value)
   }
 
@@ -946,8 +938,7 @@ export function PrintModal({
       const next = current.filter((printerId) => {
         const printer = printers.find((entry) => entry.id === printerId)
         return printer
-          ? isPrinterModelCompatible(compatiblePrinterModels, printer.model)
-            && clearedByPrinterId[printerId] !== false
+          ? clearedByPrinterId[printerId] !== false
           : false
       })
       return next.length === current.length ? current : next
@@ -958,7 +949,6 @@ export function PrintModal({
     if (!printerSelectionLocked || !defaultPrinterId) return
     const lockedPrinter = printers.find((printer) => printer.id === defaultPrinterId)
     const next = lockedPrinter
-      && isPrinterModelCompatible(compatiblePrinterModels, lockedPrinter.model)
       && clearedByPrinterId[defaultPrinterId] !== false
       && availablePrinterIds.has(defaultPrinterId)
       ? [defaultPrinterId]
@@ -968,9 +958,8 @@ export function PrintModal({
 
   const togglePrinter = (printer: Printer) => {
     if (printerSelectionLocked) return
-    const modelCompatible = isPrinterModelCompatible(compatiblePrinterModels, printer.model)
     const plateNeedsClear = clearedByPrinterId[printer.id] === false
-    if ((!isAvailable(printer.id) || !modelCompatible || plateNeedsClear) && !selectedIds.includes(printer.id)) return
+    if ((!isAvailable(printer.id) || plateNeedsClear) && !selectedIds.includes(printer.id)) return
     setSelectedIds((current) => {
       if (selectionMode === 'single') {
         return current.includes(printer.id) ? [] : [printer.id]
@@ -1035,15 +1024,22 @@ export function PrintModal({
             const body = {
               useAms: true,
               bedLevel: normalizedBedLevel,
-              vibrationCompensation: capabilities.vibrationCompensation && vibrationCompensation,
+              vibrationCompensation: false,
               flowCalibration: normalizedFlowCalibration,
               firstLayerInspection: resolveFirstLayerInspectionDefault(printStartOptions),
               timelapse: capabilities.timelapse && timelapse,
+              timelapseStorage:
+                capabilities.internalTimelapseStorage ? timelapseStorage : 'external',
+              externalFilamentChangeAssist:
+                capabilities.externalFilamentChangeAssist
+                && plateMappingNeedsExternalSpoolChangeAssist(effectiveMappings[printerId], visibleFilaments)
+                && externalFilamentChangeAssist,
               filamentDynamicsCalibration: false,
               nozzleOffsetCalibration:
                 capabilities.nozzleOffsetCalibration ? nozzleOffsetCalibration : 'off',
               allowIncompatibleFilament,
               allowPlateTypeMismatch,
+              allowPrinterModelMismatch,
               allowFilamentTrackSwitchMismatch,
               allowInsufficientFilament,
               allowBlacklistedFilament,
@@ -1152,9 +1148,34 @@ export function PrintModal({
         </Stack>
         <ScrollableDialogBody sx={{ p: 0, overflowX: 'hidden' }}>
         <Stack spacing={2} sx={{ width: '100%', minWidth: 0 }}>
+          {platesQuery.isError ? (
+            <Alert color="danger" variant="soft" startDecorator={<ErrorOutlineRoundedIcon />}>
+              <Stack spacing={0.5} alignItems="flex-start">
+                <Typography level="body-sm">Plate and material details could not be loaded.</Typography>
+                <Button size="sm" variant="plain" color="danger" onClick={() => void platesQuery.refetch()}>
+                  Retry
+                </Button>
+              </Stack>
+            </Alert>
+          ) : null}
           {plates.length > 0 && (
             <>
-              <Typography level="title-sm">Plate</Typography>
+              <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
+                <Typography level="title-sm">Plate</Typography>
+                {canOpenThreeDimensionalPreview ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="plain"
+                    color="neutral"
+                    startDecorator={<ViewInArRoundedIcon />}
+                    onClick={() => setPreviewFileId(file.id)}
+                    sx={{ flexShrink: 0 }}
+                  >
+                    Preview
+                  </Button>
+                ) : null}
+              </Stack>
               <Sheet variant="outlined" sx={{ p: 1, borderRadius: 'sm' }}>
                 <LibraryPlateCardPicker
                   fileId={file.id}
@@ -1164,7 +1185,6 @@ export function PrintModal({
                   value={plateIndex}
                   onChange={setPlateIndex}
                   label={null}
-                  onPreview={canOpenThreeDimensionalPreview ? () => setPreviewFileId(file.id) : undefined}
                 />
               </Sheet>
             </>
@@ -1206,8 +1226,8 @@ export function PrintModal({
                 const available = isAvailable(printer.id)
                 const modelCompatible = isPrinterModelCompatible(compatiblePrinterModels, printer.model)
                 const plateNeedsClear = clearedByPrinterId[printer.id] === false
-                const plateClearActionable = available && modelCompatible && plateNeedsClear
-                const selectable = available && modelCompatible && !plateNeedsClear
+                const plateClearActionable = available && plateNeedsClear
+                const selectable = available && !plateNeedsClear
                 const canToggleSelection = selectable && !printerSelectionLocked
                 const canConfirmClear = canClearPlate && plateClearActionable
                 const toggle = () => canToggleSelection && togglePrinter(printer)
@@ -1384,10 +1404,13 @@ export function PrintModal({
               <PrintStartOptionsFields
                 timelapse={timelapse}
                 onTimelapseChange={updateTimelapse}
+                timelapseStorage={timelapseStorage}
+                onTimelapseStorageChange={updateTimelapseStorage}
+                externalFilamentChangeAssist={externalFilamentChangeAssist}
+                onExternalFilamentChangeAssistChange={updateExternalFilamentChangeAssist}
+                needsExternalSpoolChangeAssist={needsExternalSpoolChangeAssist}
                 bedLevel={bedLevel}
                 onBedLevelChange={updateBedLevel}
-                vibrationCompensation={vibrationCompensation}
-                onVibrationCompensationChange={updateVibrationCompensation}
                 flowCalibration={flowCalibration}
                 onFlowCalibrationChange={updateFlowCalibration}
                 nozzleOffsetCalibration={nozzleOffsetCalibration}
@@ -1458,6 +1481,22 @@ export function PrintModal({
             confirmed={allowFilamentTrackSwitchMismatch}
             onConfirmedChange={setAllowFilamentTrackSwitchMismatch}
           />
+
+          {selectedModelMismatchPrinters.length > 0 ? (
+            <Alert color="warning" variant="soft" startDecorator={<WarningAmberRoundedIcon />}>
+              <Stack spacing={1}>
+                <Typography level="title-sm">Printer model mismatch</Typography>
+                <Typography level="body-sm">
+                  This file was sliced for {compatiblePrinterModels.join(', ')}. The selected {selectedModelMismatchPrinters.length === 1 ? 'printer is' : 'printers are'} {selectedModelMismatchPrinters.map((printer) => `${printer.name} (${printer.model})`).join(', ')}. Build volume and motion limits may differ.
+                </Typography>
+                <Checkbox
+                  label="Print on the selected model anyway"
+                  checked={allowPrinterModelMismatch}
+                  onChange={(event) => setAllowPrinterModelMismatch(event.target.checked)}
+                />
+              </Stack>
+            </Alert>
+          ) : null}
 
           <LowFilamentAlert
             entries={lowFilamentEntries}
@@ -1547,10 +1586,14 @@ export function PrintModal({
             <Button
               loading={submitting}
               disabled={
-                selectedIds.length === 0
+                !hasValidPrintOptions
+                || platesQuery.isPending
+                || platesQuery.isError
+                || selectedIds.length === 0
                 || !allMappingsComplete
                 || hasHardNozzleDiameterIssues
                 || (hasPlateTypeIssues && !allowPlateTypeMismatch)
+                || (selectedModelMismatchPrinters.length > 0 && !allowPrinterModelMismatch)
                 || (trackSwitchMismatches.length > 0 && !allowFilamentTrackSwitchMismatch)
                 || (lowFilamentEntries.length > 0 && !allowInsufficientFilament)
                 || (hasBlacklistedFilament && !allowBlacklistedFilament)

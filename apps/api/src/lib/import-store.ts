@@ -48,6 +48,9 @@ function toSummary(record: StagedImportRecord): StagedImport {
     format: record.format,
     triangleCount: Math.floor(record.mesh.indices.length / 3),
     bounds: record.mesh.bounds,
+    ...(record.mesh.triangleCornerColors
+      ? { sourceColorMode: record.mesh.sourceColorMode ?? 'vertex' as const }
+      : {}),
     parts
   }
 }
@@ -98,6 +101,13 @@ export function resolveSceneEditImports(workspaceId: string, edit: SceneEdit): I
   // itself an instance, so it is already collected by the instance loop above.
   for (const part of edit.addedParts ?? []) {
     importIds.add(part.meshImportId)
+  }
+  for (const replacement of edit.partMeshReplacements ?? []) {
+    importIds.add(replacement.meshImportId)
+  }
+  for (const replacement of edit.importPartMeshReplacements ?? []) {
+    importIds.add(replacement.importId)
+    importIds.add(replacement.meshImportId)
   }
   const resolved: ImportedObjectInput[] = []
   for (const importId of importIds) {

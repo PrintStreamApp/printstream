@@ -23,13 +23,13 @@ import { isActiveSlicingJob, isDirectPrintableFileName, isFilamentTrackSwitchRea
 import { env } from './env.js'
 import { conflict, HttpError, notFound } from './http-error.js'
 import { persistHistoryThumbnailFromLibrary } from './job-history-thumbnail-source.js'
-import { persistLibraryFileFromLocalPath } from './library-files.js'
+import { discardHiddenSlicedOutput, persistLibraryFileFromLocalPath } from './library-files.js'
 import { printerManager } from './printer-manager.js'
 import { authorSliceSettingsIntoProject } from './slice-settings-authoring.js'
 import { preserveSlicedProject } from './sliced-project-preservation.js'
 import { deletePrintJobThumbnail } from './print-job-thumbnails.js'
 import { authorProjectMachineFromProfile } from './save-retarget.js'
-import { SlicerServiceError, slicerClient } from './slicer-client.js'
+import { SlicerServiceError, slicerClient, type SlicerCapabilities } from './slicer-client.js'
 import {
   INITIAL_SLICER_CONTACT,
   UNKNOWN_JOB_GRACE_MS,
@@ -51,6 +51,12 @@ import { prisma } from './prisma.js'
 import { resolveLibraryFileToLocalPath } from './bridge-library-files.js'
 import { resolvePinnedContentBase, type LibraryContentBase } from './library-content-base.js'
 import { slicingExecutionScheduler, type SlicingExecutionTier } from './slicing-execution-scheduler.js'
+import {
+  lookupSlicingResultCache,
+  storeSlicingResultCache,
+  type SliceCacheHit,
+  type SliceCacheLookupInput
+} from './slice-cache.js'
 
 const DEFAULT_SLICING_PROGRESS_POLL_INTERVAL_MS = 750
 /** How long a finished job stays in `listActive`: see its doc for who relies on this. */
@@ -93,6 +99,12 @@ interface SlicingJobState {
    * controller. In-memory only, a lost slice is never resumed, so it need not survive a restart.
    */
   lostReason: string | null
+  /** Deterministic identity computed before queueing; null when this run is not cacheable. */
+  cacheKey: string | null
+  /** Live switch fact included in `cacheKey`, retained so a queued run cannot store under stale facts. */
+  cacheHasFilamentTrackSwitch: boolean | null
+  /** A cache probe bypasses the execution scheduler until it proves the slice must run. */
+  cacheLookupPending: boolean
 }
 
 interface PersistedSlicingJobsState {
@@ -124,6 +136,8 @@ interface PersistedSlicingJobState {
   startedAt: string | null
   finishedAt: string | null
   cancelRequested: boolean
+  cacheKey?: string | null
+  cacheHasFilamentTrackSwitch?: boolean | null
 }
 
 export type PersistSlicedArtifact = typeof persistLibraryFileFromLocalPath
@@ -137,6 +151,9 @@ export type ResolveSlicingSource = (input: {
   contentBase?: LibraryContentBase | null
   preparedSource?: CreateSlicingJob['preparedSource'] | null
 }) => Promise<string>
+export type LookupSlicingResultCache = typeof lookupSlicingResultCache
+export type StoreSlicingResultCache = typeof storeSlicingResultCache
+export type ResolveSlicerCapabilities = () => Promise<SlicerCapabilities>
 
 /**
  * Resolve the local path to slice from. Prefers the persisted local/_bridge-cache
@@ -237,6 +254,9 @@ export class SlicingJobs {
   private readonly preserveProject: PreserveSlicedProject
   private readonly authorSliceSettings: AuthorSliceSettings
   private readonly resolveSource: ResolveSlicingSource
+  private readonly lookupResultCache: LookupSlicingResultCache | null
+  private readonly storeResultCache: StoreSlicingResultCache
+  private readonly resolveSlicerCapabilities: ResolveSlicerCapabilities
   private persistTimer: ReturnType<typeof setTimeout> | null = null
   private persistPromise: Promise<void> = Promise.resolve()
 
@@ -252,6 +272,10 @@ export class SlicingJobs {
     preserveProject?: PreserveSlicedProject
     authorSliceSettings?: AuthorSliceSettings
     resolveSource?: ResolveSlicingSource
+    /** Null disables cache probes; tests default to disabled unless they opt into the seam. */
+    lookupResultCache?: LookupSlicingResultCache | null
+    storeResultCache?: StoreSlicingResultCache
+    resolveSlicerCapabilities?: ResolveSlicerCapabilities
   }) {
     this.progressPollIntervalMs = options?.progressPollIntervalMs ?? DEFAULT_SLICING_PROGRESS_POLL_INTERVAL_MS
     this.progressHeartbeatIntervalMs = options?.progressHeartbeatIntervalMs ?? DEFAULT_SLICING_PROGRESS_HEARTBEAT_INTERVAL_MS
@@ -262,6 +286,11 @@ export class SlicingJobs {
     this.preserveProject = options?.preserveProject ?? preserveSlicedProject
     this.authorSliceSettings = options?.authorSliceSettings ?? authorSliceSettingsIntoProject
     this.resolveSource = options?.resolveSource ?? resolveSlicingSourcePath
+    this.lookupResultCache = options?.lookupResultCache !== undefined
+      ? options.lookupResultCache
+      : env.NODE_ENV === 'test' ? null : lookupSlicingResultCache
+    this.storeResultCache = options?.storeResultCache ?? storeSlicingResultCache
+    this.resolveSlicerCapabilities = options?.resolveSlicerCapabilities ?? (() => slicerClient.capabilities())
 
     const persistState = options?.persistState ?? env.NODE_ENV !== 'test'
     this.persistencePath = persistState ? (options?.stateFilePath ?? DEFAULT_SLICING_STATE_FILE) : null
@@ -358,6 +387,11 @@ export class SlicingJobs {
     }
 
     const now = new Date()
+    const cacheLookupPending = Boolean(
+      this.lookupResultCache
+      && input.targetBridgeId
+      && input.request.hiddenOutput === true
+    )
     const job: SlicingJobState = {
       id: randomUUID(),
       workspaceId: input.workspaceId,
@@ -386,7 +420,10 @@ export class SlicingJobs {
       cancelRequested: false,
       controller: null,
       activeSlicerJobId: null,
-      lostReason: null
+      lostReason: null,
+      cacheKey: null,
+      cacheHasFilamentTrackSwitch: null,
+      cacheLookupPending
     }
     this.jobs.set(job.id, job)
     this.logJobEvent(job, 'info', `Queued slicing job for ${job.sourceFileName}`, {
@@ -394,7 +431,11 @@ export class SlicingJobs {
       plate: job.request.plate,
       profileCount: job.profileFiles.length
     })
-    this.pumpQueue()
+    if (cacheLookupPending) {
+      void this.resolveCachedResult(job)
+    } else {
+      this.pumpQueue()
+    }
     this.recomputeQueuePositions()
     this.schedulePersist()
     broadcastSlicingChanged(job.workspaceId)
@@ -585,9 +626,100 @@ export class SlicingJobs {
     return status ? isFilamentTrackSwitchReady(status) : false
   }
 
+  /**
+   * Resolve a cache hit before this job occupies a scarce native-engine slot.
+   *
+   * Lookup and bridge-copy failures degrade to a normal queued slice. A hit owns a fresh hidden
+   * output, so cancellation/discard can clean it without affecting the immutable cached artifact.
+   */
+  private async resolveCachedResult(job: SlicingJobState): Promise<void> {
+    await withWorkspaceRequestContext(job.workspace, async () => {
+      let materializedHit: SliceCacheHit | null = null
+      try {
+        const targetBridgeId = job.targetBridgeId
+        const cache = this.lookupResultCache
+        if (!targetBridgeId || !cache) return
+
+        const capabilities = await this.resolveSlicerCapabilities()
+        const targetId = job.request.slicerTargetId ?? capabilities.defaultTargetId
+        const slicerTarget = targetId
+          ? capabilities.targets.find((candidate) => candidate.id === targetId) ?? null
+          : null
+        if (!slicerTarget) return
+
+        job.slicerName = slicerTarget.slicerName
+        const hasFilamentTrackSwitch = this.targetHasFilamentTrackSwitch(job.request.target)
+        job.cacheHasFilamentTrackSwitch = hasFilamentTrackSwitch
+        const lookupInput: SliceCacheLookupInput = {
+          workspaceId: job.workspaceId,
+          sourceFileId: job.sourceFileId,
+          sourceFileName: job.sourceFileName,
+          sourcePath: job.sourcePath,
+          targetBridgeId,
+          executionPrinterModel: job.executionPrinterModel,
+          hasFilamentTrackSwitch,
+          request: job.request,
+          profileFiles: job.profileFiles,
+          slicerTarget
+        }
+        const lookup = await cache(lookupInput)
+        job.cacheKey = lookup.cacheKey
+        materializedHit = lookup.hit
+        if (!materializedHit) return
+
+        // A cancel may arrive while the bridge is copying the immutable artifact. Never attach the
+        // completed copy to a terminal job; discard it below after leaving this branch.
+        if (job.status !== 'queued' || job.cancelRequested) return
+
+        job.cacheLookupPending = false
+        job.startedAt = new Date()
+        job.outputFileId = materializedHit.outputFileId
+        job.outputFileName = materializedHit.outputFileName
+        job.slicerName = materializedHit.slicerName ?? slicerTarget.slicerName
+        job.metadata = materializedHit.metadata
+        this.setStatus(job, 'saving', 'Using the unchanged slice')
+        await this.ensureHistoryThumbnail(job)
+        if (job.cancelRequested) {
+          this.finish(job, 'cancelled', 'Slicing cancelled')
+          return
+        }
+        this.logJobEvent(job, 'info', 'Reused cached slicing result', {
+          outputFileId: materializedHit.outputFileId,
+          cacheKey: job.cacheKey
+        })
+        this.finish(job, 'ready', 'Slicing complete')
+      } catch (error) {
+        this.logJobEvent(
+          job,
+          'warn',
+          `Slice cache lookup failed; slicing normally: ${error instanceof Error ? error.message : String(error)}`
+        )
+      } finally {
+        if (materializedHit && (job.status === 'cancelled' || job.status === 'failed')) {
+          try {
+            await discardHiddenSlicedOutput(materializedHit.outputFileId)
+          } catch (error) {
+            this.logJobEvent(
+              job,
+              'warn',
+              `Could not discard unused cached output: ${error instanceof Error ? error.message : String(error)}`
+            )
+          }
+        }
+        job.cacheLookupPending = false
+        if (job.status === 'queued' && !job.cancelRequested) {
+          this.pumpQueue()
+        }
+        this.recomputeQueuePositions()
+        this.schedulePersist()
+        broadcastSlicingChanged(job.workspaceId)
+      }
+    })
+  }
+
   private pumpQueue(): void {
     for (const job of this.jobs.values()) {
-      if (job.status !== 'queued' || job.cancelRequested) continue
+      if (job.status !== 'queued' || job.cancelRequested || job.cacheLookupPending) continue
       slicingExecutionScheduler.enqueue({
         id: job.id,
         tier: job.executionTier,
@@ -679,7 +811,8 @@ export class SlicingJobs {
         job.outputFileName = saved.name
         // Only now that the output is durable: a snapshot for a cancelled or unsaved slice
         // would never be swept (see print-file-snapshots.ts) and nothing would point at it.
-        await this.keepSlicedProject(job, result.preparedProjectPath, saved)
+        const sourceProjectFileId = await this.keepSlicedProject(job, result.preparedProjectPath, saved)
+        await this.keepSlicingResultCache(job, saved, sourceProjectFileId)
         await this.ensureHistoryThumbnail(job)
         this.logJobEvent(job, 'info', `Saved sliced artifact as ${saved.name}`, {
           outputFileId: saved.id,
@@ -847,13 +980,25 @@ export class SlicingJobs {
       // facts that the tab cannot author safely. Best-effort, a slice that worked before must still
       // work.
       {
+        const hasFilamentTrackSwitch = this.targetHasFilamentTrackSwitch(job.request.target)
+        if (
+          job.cacheKey
+          && job.cacheHasFilamentTrackSwitch !== hasFilamentTrackSwitch
+        ) {
+          // The pre-queue lookup hashed the live state it observed. If that fact changed while this
+          // job waited, the project authored below cannot be stored under the earlier identity.
+          // Skip this one cache fill; the completed slice remains fully usable.
+          job.cacheKey = null
+          job.cacheHasFilamentTrackSwitch = hasFilamentTrackSwitch
+          this.logJobEvent(job, 'info', 'Live printer configuration changed while queued; skipping slice cache write')
+        }
         const authoredPath = await this.authorSliceSettings({
           workspaceId: job.workspaceId,
           slicerTargetId: job.request.slicerTargetId,
           target: job.request.target,
           projectPath: sourcePath,
           fileName: path.basename(job.sourceFileName) || 'source.3mf',
-          hasFilamentTrackSwitch: this.targetHasFilamentTrackSwitch(job.request.target),
+          hasFilamentTrackSwitch,
           // The browser-prepared-v1 contract makes every editor-owned setting in the snapshot
           // authoritative. Only the live printer fact above may still be authored here.
           runtimeOnly: job.request.preparedSource?.contractVersion === 1
@@ -1103,8 +1248,8 @@ export class SlicingJobs {
     job: SlicingJobState,
     preparedProjectPath: string | null,
     saved: { id: string; ownerBridgeId: string | null }
-  ): Promise<void> {
-    if (!preparedProjectPath) return
+  ): Promise<string | null> {
+    if (!preparedProjectPath) return null
     try {
       const projectFileId = await this.preserveProject({
         workspaceId: job.workspaceId,
@@ -1116,8 +1261,41 @@ export class SlicingJobs {
       if (projectFileId) {
         this.logJobEvent(job, 'info', 'Kept the sliced project for re-slicing', { projectFileId })
       }
+      return projectFileId
     } catch (error) {
       this.logJobEvent(job, 'warn', `Could not keep the sliced project: ${(error as Error).message}`)
+      return null
+    }
+  }
+
+  /** Cache a completed hidden output without making cache persistence part of slice success. */
+  private async keepSlicingResultCache(
+    job: SlicingJobState,
+    saved: { id: string; name: string; ownerBridgeId: string | null },
+    sourceProjectFileId: string | null
+  ): Promise<void> {
+    if (!job.cacheKey || !saved.ownerBridgeId || job.request.hiddenOutput !== true) return
+    try {
+      await this.storeResultCache({
+        workspaceId: job.workspaceId,
+        sourceFileId: job.sourceFileId,
+        cacheKey: job.cacheKey,
+        outputFileId: saved.id,
+        outputFileName: saved.name,
+        sourceProjectFileId,
+        slicerName: job.slicerName,
+        metadata: job.metadata,
+        settings: toPreservedSliceSettings(job.request)
+      })
+      this.logJobEvent(job, 'info', 'Cached slicing result for unchanged re-slices', {
+        cacheKey: job.cacheKey
+      })
+    } catch (error) {
+      this.logJobEvent(
+        job,
+        'warn',
+        `Could not cache the slicing result: ${error instanceof Error ? error.message : String(error)}`
+      )
     }
   }
 
@@ -1283,7 +1461,9 @@ function serializeSlicingJobState(job: SlicingJobState): PersistedSlicingJobStat
     updatedAt: job.updatedAt.toISOString(),
     startedAt: job.startedAt?.toISOString() ?? null,
     finishedAt: job.finishedAt?.toISOString() ?? null,
-    cancelRequested: job.cancelRequested
+    cancelRequested: job.cancelRequested,
+    cacheKey: job.cacheKey,
+    cacheHasFilamentTrackSwitch: job.cacheHasFilamentTrackSwitch
   }
 }
 
@@ -1343,7 +1523,14 @@ function hydratePersistedJob(persisted: PersistedSlicingJobState): SlicingJobSta
     cancelRequested: status === 'queued' ? Boolean(persisted.cancelRequested) : false,
     controller: null,
     activeSlicerJobId: null,
-    lostReason: null
+    lostReason: null,
+    cacheKey: typeof persisted.cacheKey === 'string' ? persisted.cacheKey : null,
+    cacheHasFilamentTrackSwitch: typeof persisted.cacheHasFilamentTrackSwitch === 'boolean'
+      ? persisted.cacheHasFilamentTrackSwitch
+      : null,
+    // A process restart loses only the in-flight probe. Requeue the job normally; a later
+    // successful run can still fill the cache from a key persisted before the restart.
+    cacheLookupPending: false
   }
 }
 

@@ -10,6 +10,7 @@ import { useEffect, useMemo, useState } from 'react'
 import ArrowBackRoundedIcon from '@mui/icons-material/ArrowBackRounded'
 import {
   Button,
+  Checkbox,
   DialogActions,
   DialogTitle,
   FormControl,
@@ -51,8 +52,16 @@ import { LibraryPlateCardPicker } from '../../components/LibraryPlateSelect'
 import { PrintObjectsSection } from '../../components/library/PrintObjectsSection'
 import { PrintStartOptionsFields } from '../../components/library/PrintStartOptionsFields'
 import { plateHasSliceData } from '../../lib/slicingPresetMatching'
-import { buildLibraryResourceBasePath, visibleMappingFilaments } from '../../lib/libraryViewHelpers'
-import { mergePrintStartOptions } from '../../lib/printStartOptions'
+import {
+  buildLibraryResourceBasePath,
+  plateMappingNeedsExternalSpoolChangeAssist,
+  visibleMappingFilaments
+} from '../../lib/libraryViewHelpers'
+import {
+  arePrintStartModesAvailable,
+  mergePrintStartOptions,
+  resolvePrintStartDefaults
+} from '../../lib/printStartOptions'
 import { readCurrentWorkspaceScopeKey, workspaceQueryKeys } from '../../lib/workspaceScope'
 import { toast } from '../../lib/toast'
 import { useAddQueueItem, useUpdateQueueItem } from './api'
@@ -131,6 +140,7 @@ export function QueueItemDialog({ open, onClose, onBack, fixedFile, defaultPlate
   const selectedFile = initialFile
   const [plateIndex, setPlateIndex] = useState(item?.plateIndex ?? defaultPlate ?? 1)
   const [quantity, setQuantity] = useState(item?.quantity ?? 1)
+  const [pinned, setPinned] = useState(item?.pinned ?? false)
   const [targetValue, setTargetValue] = useState(item ? encodeTarget(item.target) : 'any')
   const [options, setOptions] = useState<QueuePrintOptions>(item?.options ?? queuePrintOptionsSchema.parse({}))
   // Overrides default to null = "follow the file/printer"; set once the user edits.
@@ -251,6 +261,10 @@ export function QueueItemDialog({ open, onClose, onBack, fixedFile, defaultPlate
     }).amsMapping
   }, [target.kind, target.printerId, statuses, usedGramsById, visibleFilaments, resolveSlotFilament])
   const effectiveMapping = mappingOverride ?? computedMapping
+  const needsExternalSpoolChangeAssist = useMemo(
+    () => plateMappingNeedsExternalSpoolChangeAssist(effectiveMapping, visibleFilaments),
+    [effectiveMapping, visibleFilaments]
+  )
   // With no explicit override every filled row is the matcher's suggestion; an override's
   // rows are the user's (its -1 entries mean "resolve by material at dispatch", not auto).
   const autoSelectedIds = useMemo(
@@ -275,7 +289,7 @@ export function QueueItemDialog({ open, onClose, onBack, fixedFile, defaultPlate
   // Gate the Print settings to what the target actually supports, exactly like the Print
   // dialog: a specific printer uses its own (live) capabilities; "any"/model uses the union
   // over the file's compatible models. Null = no model info (plain gcode) → show the full set.
-  const optionCapabilities = useMemo(() => {
+  const targetPrintStartOptions = useMemo(() => {
     const entries: PrinterPrintStartOptions[] = []
     if (target.kind === 'printer' && targetPrinter) {
       const status = statuses[targetPrinter.id]
@@ -287,21 +301,45 @@ export function QueueItemDialog({ open, onClose, onBack, fixedFile, defaultPlate
       const models = (target.kind === 'model' && target.model ? [target.model] : compatibleModels) as PrinterModel[]
       for (const model of models) entries.push(getPrinterPrintStartOptions(model, null))
     }
-    if (entries.length === 0) return null
-    const merged = mergePrintStartOptions(entries)
-    return {
-      timelapse: merged.timelapse.supported,
-      bedLevel: merged.bedLevel.supported,
-      bedLevelAuto: merged.bedLevel.autoSupported,
-      vibrationCompensation: merged.vibrationCompensation.supported,
-      flowCalibration: merged.flowCalibration.supported,
-      flowCalibrationAuto: merged.flowCalibration.autoSupported,
-      nozzleOffsetCalibration: merged.nozzleOffsetCalibration.supported
-    }
+    return entries.length > 0 ? mergePrintStartOptions(entries) : null
   }, [target.kind, target.model, targetPrinter, statuses, compatibleModels])
 
+  const optionCapabilities = useMemo(() => {
+    if (!targetPrintStartOptions) return null
+    return {
+      timelapse: targetPrintStartOptions.timelapse.supported,
+      bedLevel: targetPrintStartOptions.bedLevel.supported,
+      bedLevelAuto: targetPrintStartOptions.bedLevel.autoSupported,
+      flowCalibration: targetPrintStartOptions.flowCalibration.supported,
+      flowCalibrationAuto: targetPrintStartOptions.flowCalibration.autoSupported,
+      nozzleOffsetCalibration: targetPrintStartOptions.nozzleOffsetCalibration.supported,
+      internalTimelapseStorage: targetPrintStartOptions.internalTimelapseStorage.supported,
+      externalFilamentChangeAssist: targetPrintStartOptions.externalFilamentChangeAssist.supported
+    }
+  }, [targetPrintStartOptions])
+
+  // Queue defaults start at Auto before the file's model metadata has loaded. If the eventual
+  // target only supports On/Off, move the stored selection to On before rendering or submitting;
+  // otherwise Joy Select has no matching option and misleadingly displays an empty field.
+  useEffect(() => {
+    if (!targetPrintStartOptions) return
+    setOptions((current) => {
+      const resolved = resolvePrintStartDefaults(current, targetPrintStartOptions)
+      if (resolved.bedLevel === current.bedLevel && resolved.flowCalibration === current.flowCalibration) {
+        return current
+      }
+      return {
+        ...current,
+        bedLevel: resolved.bedLevel,
+        flowCalibration: resolved.flowCalibration
+      }
+    })
+  }, [targetPrintStartOptions])
+
+  const hasValidPrintOptions = arePrintStartModesAvailable(options, targetPrintStartOptions)
+
   const submit = async () => {
-    if (!selectedFile) return
+    if (!selectedFile || !hasValidPrintOptions) return
     const isSpecific = target.kind === 'printer'
     // Preserve -1 (material-mode) entries so the dispatcher resolves those slots by material match.
     const amsMapping = isSpecific ? sanitizeQueueMapping(effectiveMapping) : undefined
@@ -315,6 +353,10 @@ export function QueueItemDialog({ open, onClose, onBack, fixedFile, defaultPlate
       : { skipInstances: [] }
     const submittedOptions: QueuePrintOptions = {
       ...options,
+      externalFilamentChangeAssist:
+        Boolean(optionCapabilities?.externalFilamentChangeAssist)
+        && needsExternalSpoolChangeAssist
+        && options.externalFilamentChangeAssist,
       // A legacy whole-object selection is REWRITTEN as instances on the first save, since the
       // picker resolved it to concrete copies above; keeping both would double-describe the same
       // exclusion in two id spaces.
@@ -328,6 +370,7 @@ export function QueueItemDialog({ open, onClose, onBack, fixedFile, defaultPlate
           input: {
             plate,
             quantity,
+            pinned,
             target,
             options: submittedOptions,
             amsMapping: isSpecific ? amsMapping ?? null : null,
@@ -341,6 +384,7 @@ export function QueueItemDialog({ open, onClose, onBack, fixedFile, defaultPlate
           plate,
           // An order-linked item is one order print → always a single copy.
           quantity: orderLink ? 1 : quantity,
+          pinned: orderLink ? false : pinned,
           target,
           options: submittedOptions,
           ...(isSpecific && amsMapping ? { amsMapping } : {}),
@@ -402,6 +446,15 @@ export function QueueItemDialog({ open, onClose, onBack, fixedFile, defaultPlate
                 </FormControl>
               </Stack>
 
+              {!orderLink ? (
+                <Checkbox
+                  checked={pinned}
+                  onChange={(event) => setPinned(event.target.checked)}
+                  label="Keep in queue after printing"
+                  size="sm"
+                />
+              ) : null}
+
               {fileFilaments.length > 0 ? (
                 <DialogSection title="Materials">
                   {target.kind === 'printer' ? (
@@ -439,10 +492,13 @@ export function QueueItemDialog({ open, onClose, onBack, fixedFile, defaultPlate
                 <PrintStartOptionsFields
                   timelapse={options.timelapse}
                   onTimelapseChange={(value) => setOptions({ ...options, timelapse: value })}
+                  timelapseStorage={options.timelapseStorage}
+                  onTimelapseStorageChange={(value) => setOptions({ ...options, timelapseStorage: value })}
+                  externalFilamentChangeAssist={options.externalFilamentChangeAssist}
+                  onExternalFilamentChangeAssistChange={(value) => setOptions({ ...options, externalFilamentChangeAssist: value })}
+                  needsExternalSpoolChangeAssist={needsExternalSpoolChangeAssist}
                   bedLevel={options.bedLevel}
                   onBedLevelChange={(value) => setOptions({ ...options, bedLevel: value })}
-                  vibrationCompensation={options.vibrationCompensation}
-                  onVibrationCompensationChange={(value) => setOptions({ ...options, vibrationCompensation: value })}
                   flowCalibration={options.flowCalibration}
                   onFlowCalibrationChange={(value) => setOptions({ ...options, flowCalibration: value })}
                   nozzleOffsetCalibration={options.nozzleOffsetCalibration}
@@ -466,7 +522,7 @@ export function QueueItemDialog({ open, onClose, onBack, fixedFile, defaultPlate
           )}
           <Stack direction="row" spacing={1}>
             <Button variant="plain" color="neutral" onClick={onClose}>Cancel</Button>
-            <Button variant="solid" loading={busy} disabled={!selectedFile} onClick={submit}>
+            <Button variant="solid" loading={busy} disabled={!selectedFile || !hasValidPrintOptions} onClick={submit}>
               {isEdit ? 'Save' : 'Add to queue'}
             </Button>
           </Stack>
@@ -475,4 +531,3 @@ export function QueueItemDialog({ open, onClose, onBack, fixedFile, defaultPlate
     </BackAwareModal>
   )
 }
-

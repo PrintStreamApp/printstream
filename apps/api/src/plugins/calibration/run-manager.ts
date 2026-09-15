@@ -336,12 +336,16 @@ export async function printRun(deps: CalibrationRunManagerDeps, db: AnyPrismaCli
     vibrationCompensation: false,
     firstLayerInspection: true,
     timelapse: false,
+    timelapseStorage: 'external',
+    externalFilamentChangeAssist: false,
     nozzleOffsetCalibration: 'auto',
     allowIncompatibleFilament: true,
     // The run was sliced for the plate the user chose (defaulting to the installed one), so the
     // plate is already deliberate: don't re-block at dispatch. If they overrode to a plate that is
     // not installed, that was their explicit choice.
     allowPlateTypeMismatch: true,
+    // The output was sliced for this exact printer in the immediately preceding step.
+    allowPrinterModelMismatch: false,
     // NOT waived, unlike the two above. A calibration plate is sliced by us, for this printer, moments
     // earlier, so its Filament Track Switch flag already matches the machine. A mismatch here would
     // mean the switch was fitted or removed mid-run, which is worth stopping for rather than printing

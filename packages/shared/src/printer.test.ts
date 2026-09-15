@@ -11,6 +11,7 @@ import {
   getIgnoreHmsErrorAvailability,
   getJumpToLiveViewAvailability,
   getLoadFilamentAvailability,
+  getNozzleRackControlAvailability,
   getPauseAvailability,
   getPausedPrinterActions,
   getPrinterRecoveryActions,
@@ -28,11 +29,13 @@ import {
   getResumeAvailability,
   getStopAvailability,
   printerInputSchema,
+  printerPrintOptionsSchema,
   supportsPrinterChamberTemperatureDisplay,
   supportsPrinterAirductMode,
   supportsPrinterCamera,
   supportsPrinterDoorSensor,
   supportsPrinterSecondaryChamberLight,
+  supportsStoreSentFilesOnExternalStorage,
   usesCoreXyMotionSystem,
   classifyLibraryFileKind
 } from './printer.js'
@@ -73,6 +76,23 @@ test('printer support helpers expose model-specific capabilities', () => {
   assert.equal(usesCoreXyMotionSystem('A1mini'), false)
 })
 
+test('printer print-option parsing fills fields absent from an older status payload', () => {
+  const parsed = printerPrintOptionsSchema.parse({
+    aiMonitoring: { supported: false, enabled: null, sensitivity: null },
+    spaghettiDetection: { supported: false, enabled: null, sensitivity: null },
+    purgeChutePileupDetection: { supported: false, enabled: null, sensitivity: null },
+    nozzleClumpingDetection: { supported: false, enabled: null, sensitivity: null },
+    airPrintingDetection: { supported: false, enabled: null, sensitivity: null },
+    firstLayerInspection: { supported: false, enabled: null },
+    autoRecovery: { supported: false, enabled: null },
+    promptSound: { supported: false, enabled: null },
+    filamentTangleDetection: { supported: false, enabled: null }
+  })
+
+  assert.deepEqual(parsed.cameraResolution, { supported: false, current: null, available: [] })
+  assert.deepEqual(parsed.foreignObjectDetection, { supported: false, enabled: null })
+})
+
 test('printer capability helpers reflect model-specific feature sets', () => {
   assert.deepEqual(getPrinterCalibrationCapabilities('P2S'), {
     xcam: false,
@@ -104,6 +124,9 @@ test('printer capability helpers reflect model-specific feature sets', () => {
   assert.equal(getPrinterPrintOptionCapabilities('H2DPRO').nozzleOffsetCalibration, true)
   assert.equal(getPrinterPrintOptionCapabilities('X1C').firstLayerInspection, true)
   assert.equal(getPrinterPrintOptionCapabilities('P1P').timelapse, true)
+  assert.equal(supportsStoreSentFilesOnExternalStorage('X1C'), true)
+  assert.equal(supportsStoreSentFilesOnExternalStorage('P1S'), false)
+  assert.equal(supportsStoreSentFilesOnExternalStorage('X1E'), false)
   assert.deepEqual(getPrinterPrintStartOptions('X1C', {
     printOptions: {
       aiMonitoring: { supported: false, enabled: null, sensitivity: null },
@@ -119,6 +142,39 @@ test('printer capability helpers reflect model-specific feature sets', () => {
   }).firstLayerInspection, {
     supported: true,
     current: false
+  })
+  assert.deepEqual(getPrinterPrintStartOptions('X1C', {
+    printOptions: {
+      aiMonitoring: { supported: false, enabled: null, sensitivity: null },
+      spaghettiDetection: { supported: false, enabled: null, sensitivity: null },
+      purgeChutePileupDetection: { supported: false, enabled: null, sensitivity: null },
+      nozzleClumpingDetection: { supported: false, enabled: null, sensitivity: null },
+      airPrintingDetection: { supported: false, enabled: null, sensitivity: null },
+      firstLayerInspection: { supported: true, enabled: false },
+      autoRecovery: { supported: false, enabled: null },
+      promptSound: { supported: false, enabled: null },
+      filamentTangleDetection: { supported: false, enabled: null }
+    },
+    // Simulates a cached status from before the two newest fields existed.
+    printStartOptions: {
+      bedLevel: { supported: true, autoSupported: false, current: 'on' },
+      vibrationCompensation: { supported: true, current: true },
+      flowCalibration: { supported: true, autoSupported: false, current: 'off' },
+      firstLayerInspection: { supported: true, current: false },
+      timelapse: { supported: true, current: true },
+      filamentDynamicsCalibration: { supported: false, current: null },
+      nozzleOffsetCalibration: { supported: false, current: null }
+    }
+  }), {
+    bedLevel: { supported: true, autoSupported: false, current: 'on' },
+    vibrationCompensation: { supported: false, current: null },
+    flowCalibration: { supported: true, autoSupported: false, current: 'off' },
+    firstLayerInspection: { supported: true, current: false },
+    timelapse: { supported: true, current: true },
+    internalTimelapseStorage: { supported: false, current: null },
+    externalFilamentChangeAssist: { supported: false, current: null },
+    filamentDynamicsCalibration: { supported: false, current: null },
+    nozzleOffsetCalibration: { supported: false, current: null }
   })
   assert.equal(getPrinterPrintOptionCapabilities('X2D', {
     printOptions: {
@@ -475,6 +531,91 @@ test('an H2D paused on an AMS error mid filament change still offers Resume', ()
     externalSpools: []
   })
   assert.ok(actions.some((action) => action.id === 'resume'), 'Resume must be offered')
+})
+
+test('vendor HMS actions replace inferred recovery buttons when available', () => {
+  const actions = getPrinterRecoveryActions({
+    online: true,
+    stage: 'paused',
+    subStage: null,
+    jobId: 'job-1',
+    deviceError: {
+      code: '05004070',
+      message: 'The printer needs attention',
+      actions: ['ignoreHmsError']
+    },
+    hmsErrors: [],
+    filamentChange: { currentStepIndex: null, currentStepLabel: null, steps: [] },
+    ams: [],
+    externalSpools: []
+  })
+
+  assert.deepEqual(actions, [
+    { id: 'ignoreHmsError', label: 'Continue' }
+  ])
+})
+
+test('an authoritative empty vendor HMS action entry suppresses inferred recovery buttons', () => {
+  const actions = getPrinterRecoveryActions({
+    online: true,
+    stage: 'paused',
+    subStage: null,
+    jobId: 'job-1',
+    deviceError: {
+      code: '05004070',
+      message: 'The printer needs attention',
+      actions: []
+    },
+    hmsErrors: [],
+    filamentChange: { currentStepIndex: null, currentStepLabel: null, steps: [] },
+    ams: [],
+    externalSpools: []
+  })
+
+  assert.deepEqual(actions, [])
+})
+
+test('a missing vendor action entry on any current error preserves inferred recovery buttons', () => {
+  const actions = getPrinterRecoveryActions({
+    online: true,
+    stage: 'paused',
+    subStage: null,
+    jobId: 'job-1',
+    deviceError: {
+      code: '05004070',
+      message: 'The printer needs attention',
+      actions: ['ignoreHmsError']
+    },
+    hmsErrors: [{ code: 'UNKNOWN', message: 'Another warning' }],
+    filamentChange: { currentStepIndex: null, currentStepLabel: null, steps: [] },
+    ams: [],
+    externalSpools: []
+  })
+
+  assert.ok(actions.some((action) => action.id === 'resume'))
+  assert.ok(actions.some((action) => action.id === 'jumpToLiveView'))
+})
+
+test('nozzle rack controls require an idle printer and idle rack', () => {
+  const idle = {
+    online: true,
+    stage: 'idle' as const,
+    filamentChange: { currentStepIndex: null, currentStepLabel: null, steps: [] },
+    nozzleRack: {
+      status: 'idle' as const,
+      position: 'centre' as const,
+      replacingFromNozzleId: null,
+      replacingToNozzleId: null,
+      nozzles: []
+    }
+  }
+
+  assert.equal(getNozzleRackControlAvailability(idle).allowed, true)
+  assert.equal(getNozzleRackControlAvailability({ ...idle, stage: 'printing' }).allowed, false)
+  assert.equal(getNozzleRackControlAvailability({
+    ...idle,
+    nozzleRack: { ...idle.nozzleRack, status: 'liftHotendRack' }
+  }).allowed, false)
 })
 
 test('a cancelled print offers no recovery actions', () => {

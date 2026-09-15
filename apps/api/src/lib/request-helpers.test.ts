@@ -164,3 +164,21 @@ test('sendModelBuffer does not warn for an explicitly aborted client request', a
     console.warn = originalWarn
   }
 })
+
+test('sendModelBuffer ignores a client response closed before headers were sent', async () => {
+  const originalWarn = console.warn
+  let warned = false
+  console.warn = () => { warned = true }
+  try {
+    const ctx = mockResponse()
+    Object.defineProperties(ctx.res, {
+      destroyed: { value: true },
+      headersSent: { value: false }
+    })
+
+    await sendModelBuffer(mockRequest(), ctx.res, Buffer.alloc(256 * 1024, 0x41), 'model/3mf')
+    assert.equal(warned, false)
+  } finally {
+    console.warn = originalWarn
+  }
+})

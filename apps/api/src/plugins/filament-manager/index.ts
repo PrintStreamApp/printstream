@@ -18,7 +18,8 @@
  * models (`FilamentSpool` / `FilamentSpoolUsage`) rather than the `Setting`
  * store. Live changes fan out over the generic `plugin.event` WS envelope.
  *
- * External deps: none beyond the printer event bus and Prisma.
+ * External deps: the Open Filament Database JSON catalog, fetched lazily and cached in memory for
+ * barcode lookup. Scanned codes stay local to the API.
  */
 import type { ApiPlugin } from '../../plugin/types.js'
 import { rootPrisma } from '../../lib/prisma.js'
@@ -26,13 +27,15 @@ import { registerFilamentManagerRoutes } from './routes.js'
 import { createStatusObserver } from './status-sync.js'
 import { createConsumptionObserver } from './consumption.js'
 import { findLoadedSpoolIdentity } from './store.js'
+import { FilamentBarcodeCatalog } from './barcode-catalog.js'
 
 export const filamentManagerPlugin: ApiPlugin = {
   name: 'filament-manager',
   version: '0.1.0',
   description: 'Track filament spools: auto-add Bambu spools, see what is loaded where, and watch remaining filament.',
   register(context) {
-    registerFilamentManagerRoutes(context)
+    const barcodeCatalog = new FilamentBarcodeCatalog(context.logger)
+    registerFilamentManagerRoutes(context, barcodeCatalog)
 
     const onStatus = createStatusObserver(context)
     const onJobFinished = createConsumptionObserver(context)

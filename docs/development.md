@@ -28,26 +28,62 @@ docker/dev/   Development process image
 
 ## Quick start
 
-The editor stays on the host. Docker runs the Node watchers, PostgreSQL, and optional slicer from
-this checkout, with the source tree mounted at `/workspace`. Each worktree receives a separate
-Compose project, database volume, and loopback web port; only Traefik is machine-wide.
+The editor and printer bridge stay on the host. Docker runs the remaining Node watchers,
+PostgreSQL, and optional slicer from this checkout, with the source tree mounted at `/workspace`.
+The bridge is the deliberate exception because Docker Desktop's Linux network cannot reach every
+printer LAN that WSL can. Each worktree receives a separate Compose project, database volume, and
+loopback web/API ports; only Traefik is machine-wide.
 
 ```bash
 cp .env.server.example .env
 nvm install
 nvm use
-npm install
+npm ci                 # initial clone only; this installs Devkit itself
 npm run dev:bootstrap   # once per machine
 npm run dev
 ```
 
-The host uses the exact Node/npm pair in `.nvmrc` and `package.json` for the thin launcher. The
-image supplies the matching Node 22 runtime plus ffmpeg, PostgreSQL tooling, and the slicer
-toolchain. `npm run dev:down` removes this checkout's containers and network while
-preserving its database volume. Run `npm run dev:host -- snapshot` when the primary checkout's
-current data should become the baseline for new worktrees.
+The host uses the exact Node/npm pair in `.nvmrc` and `package.json` for the thin launcher (currently
+Node 22.22.3 and npm 10.9.8). Do not run the install with Node 24/npm 11: the engine check rejects
+that pair. The image supplies the matching Node 22 runtime, PostgreSQL tooling, and the slicer
+toolchain. The host bridge uses `ffmpeg` from `PATH` (or `BRIDGE_FFMPEG_PATH`) for camera relay;
+printer status, library storage, and printing still work when it is absent, but camera streaming
+does not. `npm run dev:down` removes this checkout's containers and network while preserving its
+database volume. Run `npm run dev:host -- snapshot` when the primary checkout's current data should
+become the baseline for new worktrees.
 
-`npm run dev` waits for the local database and applies checked-in Prisma migrations before it starts the API and web watchers. If the database cannot consume the checked-in migration history as-is yet, startup falls back to `db push` and baselines the current checked-in migrations so future deploys can return to normal `migrate deploy` behavior.
+If the pinned host runtime is unavailable, install through the pinned container while preserving
+host ownership:
+
+```bash
+docker run --rm --user "$(id -u):$(id -g)" --volume "$PWD:/workspace" --workdir /workspace node:22.22.3-bookworm npm ci
+```
+
+## Validation
+
+Run `npm run validate` on the host after `nvm use`. The command uses Devkit to start and provision
+the worktree's PostgreSQL infrastructure when no configured database is already reachable, so the
+database-backed migration tests never silently skip just because `npm run dev` is stopped. Docker
+Desktop must therefore be available unless `TEST_ADMIN_DATABASE_URL` or `DATABASE_URL` names a
+reachable PostgreSQL cluster on which the tests may create and drop temporary databases. It also
+regenerates the install-local Prisma client before typechecking, so `npm ci` followed by validation
+is sufficient in a fresh worktree.
+
+Validation deliberately stays outside the development container: the source-mounted container sees
+the checkout's host-installed `node_modules`, while the validation lock and content-addressed test
+cache live in the host's cache directory and are shared across worktrees. Moving the command into
+the development container would add a Docker dependency without providing a clean dependency
+install, and would lose the fast shared-cache path the validation scripts are designed around.
+
+The development image, host validation, and CI all select the same exact Node version. CI remains
+the clean-environment check: it starts from a fresh checkout, runs `npm ci`, provisions PostgreSQL
+16, then runs the production build and full validation suite. Use the development container for
+the running application and its heavier system dependencies, not as the default validation shell.
+
+`npm run dev` generates the install-local Prisma client, waits for the local database, and applies
+checked-in Prisma migrations before it starts the API and web watchers. If the database cannot
+consume the checked-in migration history as-is yet, startup falls back to `db push` and baselines
+the current checked-in migrations so future deploys can return to normal `migrate deploy` behavior.
 
 That fallback is a compatibility bridge, not a substitute for real migrations. If a feature needs a new table or column, add and commit a real Prisma migration before considering the change complete.
 
@@ -62,20 +98,38 @@ Running several checkouts at once (a few Git worktrees, or two projects that bot
 ```bash
 npm run dev:bootstrap    # once per machine
 npm run dev:host -- snapshot     # once, from your primary checkout: capture current dev data as the baseline
-npm install              # once per NEW worktree: node_modules is per-checkout, not shared
+nvm use                  # use the exact Node/npm pair declared by this repository
+npm run dev:prepare-worktree     # once in a new linked worktree
 npm run dev              # in any checkout or worktree
 ```
 
-Everything a checkout is named by is derived on that first `npm run dev`, so a new worktree needs no setup beyond the install: it gets its hostname, its own database restored from the baseline, its own ports, its proxy route, and a copy of the primary checkout's ignored `.env`. If the worktree already has an `.env`, devkit leaves it alone. Deleting the worktree stops producing its derived resources; `dev:host -- prune` removes the orphaned database volume.
+Each worktree must contain a real `node_modules` directory. Do not symlink it from the primary
+checkout or a sibling: the development container mounts only the current worktree at `/workspace`,
+so an external symlink is invisible there. `npm run dev:prepare-worktree` first delegates to the
+machine-level `devkit prepare` command, which copies declared ignored files and replaces a missing,
+stale, or linked dependency tree transactionally. It then provisions the checkout database and
+restores the paired filesystem baseline before tests can create partial runtime directories. Finally,
+it verifies every declared baseline path, including the bridge identity and bridge-owned library, so
+an incomplete restore fails with a repair command instead of starting an unpaired bridge. A fresh
+standalone clone still needs one explicit `npm ci` to install Devkit itself. The generated Prisma
+client is also install-local, so startup regenerates it inside the container before touching the
+database and full validation regenerates it before typechecking.
+
+Everything a checkout is named by is derived during worktree preparation, so it gets its hostname,
+its own database restored from the baseline, its own ports, its proxy route, and a copy of the
+primary checkout's ignored `.env`. `npm run dev` rechecks that setup before starting services. If
+the worktree already has an `.env`, Devkit leaves it alone. Deleting the worktree stops producing
+its derived resources; `dev:host -- prune` removes the orphaned database volume.
 
 Only one dev stack may run for a checkout. A second `npm run dev` exits before starting watchers and
 names the occupied web/API ports. In host mode those ports are part of the proxy identity, so Vite
 also refuses a collision instead of silently moving to a URL the checkout hostname does not serve.
 
-The API and bridge run under a shared polling supervisor rather than `tsx watch`. If WSL or the host
-kills a service child under memory pressure, the supervisor logs the exit and restarts it with
-bounded backoff; edits to service source or compiled shared dependencies also trigger a reload. This
-keeps the proxy from remaining alive with a permanently missing API behind it.
+The container API and host bridge each run under the same polling supervisor rather than `tsx
+watch`. If WSL or the container runtime kills a service child under memory pressure, the supervisor
+logs the exit and restarts it with bounded backoff; edits to service source or compiled shared
+dependencies also trigger a reload. This keeps the proxy from remaining alive with a permanently
+missing API or bridge behind it.
 
 After that, `npm run dev` prints where the checkout is answering:
 
@@ -92,11 +146,17 @@ Hostnames nest as `<worktree>.<repo>.localhost`, which browsers resolve to loopb
 | --- | --- | --- |
 | Traefik proxy on IPv4 and IPv6 loopback port 80 | `~/.config/devkit/infra` | every project on the machine |
 | Node, Postgres, and the optional slicer | this checkout's Compose stack | this checkout only |
+| Printer bridge | WSL host process targeting the checkout's derived API port | this checkout only |
 | Baseline database + `data/` archive | `~/.config/devkit/baselines` | every worktree of one clone |
 
-The first `npm run dev` in a new worktree restores the portable SQL baseline and `data/` archive,
-then applies whatever migrations that branch adds. It is not seeded empty, because a library with
-no files in it is not something you can develop against.
+`npm run dev:prepare-worktree` restores the portable SQL baseline and filesystem archive before any
+tests run; `npm run dev` then applies whatever migrations that branch adds. The archive includes the
+development bridge's identity under `apps/bridge/data`, so the isolated checkout reconnects the
+bridge represented by its cloned database instead of registering a new unpaired one. The
+bridge-owned file library travels with the database, so keep it limited to the small set of reference
+projects needed for development; API fallback data under `data/` travels too. Refresh the snapshot
+after changing those reference projects or deliberately pairing or replacing the primary development
+bridge.
 
 ### Commands
 
@@ -134,9 +194,10 @@ Two differences from the routes `npm run dev` writes, which `devproxy ls` labels
 
 Devkit's `worktreeFiles` allowlist in `devkit.config.mjs` names ignored local configuration a new worktree needs. PrintStream lists `.env`, so the first `npm run dev` copies the primary checkout's file before loading it. Copying is create-only: edit a worktree's `.env` when that branch needs different values and later starts will preserve it.
 
-Devkit publishes its derived `DATABASE_URL` into the development processes it starts. Tests,
-validation, and the Prisma CLI still read `.env` directly, which is why inheriting the primary
-checkout's file matters.
+Devkit publishes its derived `DATABASE_URL` into the development processes it starts. Full
+validation also receives the checkout database's loopback URL from its database-only preflight;
+direct test and Prisma commands still read `.env`, which is why inheriting the primary checkout's
+file matters.
 
 Shared implementation lives in `@ryanewen/devkit`; PrintStream's ports, environment, inherited files, baseline paths, and project-specific checks live in `devkit.config.mjs`.
 
@@ -146,10 +207,10 @@ By default the slicer runs in the same place as the rest of the dev stack: `npm 
 
 Use `BAMBUSTUDIO_APPIMAGE_URL` only when you want to pin a specific AppImage URL instead of using GitHub's latest stable release. Use `BAMBUSTUDIO_APPIMAGE_ASSET_REGEX` if the upstream release contains multiple AppImage assets and you need to force a particular filename pattern.
 
-`SLICER_SERVICE_URL` comes from your local env file, and `npm run dev` points it at the slicer it started for you. Override it only to use a remote worker instead. To verify the local slicer once `npm run dev` is up, run:
+`SLICER_SERVICE_URL` comes from your local env file, and `npm run dev` points it at the slicer it started for you. Override it only to use a remote worker instead. To verify the local slicer once `npm run dev` is up, ask through the checkout API health endpoint; the slicer's internal `4010` port is intentionally not published:
 
 ```bash
-curl http://localhost:4010/health
+curl http://issue-123.printstream.localhost/api/health
 ```
 
 Then upload an unsliced `.3mf` project to the library, and use the file action menu's `Slice` command. The slicer runs BambuStudio under isolated `HOME` and XDG config/cache directories inside the slicer work volume so first-run state does not use the container user's default home. The exact `SLICER_CLI_ARGS_TEMPLATE` must match the CLI flags supported by the BambuStudio build you install; PrintStream substitutes `{input}`, `{output}`, `{outputDir}`, `{outputFileName}`, 1-based `{plate}`, `{plateZeroBased}`, `{homeDir}`, `{configDir}`, `{cacheDir}`, and `{dataDir}`.
@@ -166,9 +227,15 @@ The slicer image already carries the lot, including the arm64 emulation sysroot,
 docker compose -f compose.dev.yml --profile slicer up -d slicer
 ```
 
-Then set `PRINTSTREAM_DEV_SLICER=remote` in `.env` (`run-dev.mjs` reads `.env`, so it does not need to be a shell prefix) and leave `SLICER_SERVICE_URL=http://127.0.0.1:4010`. `npm run dev` then starts no slicer of its own and the API uses the container.
+Set `PRINTSTREAM_DEV_SLICER=remote` in `.env` (`run-dev.mjs` reads `.env`, so it does not need to be a shell prefix). `npm run dev` then starts the checkout's Compose slicer automatically and points the API at `http://slicer:4010` on that checkout's isolated network. The fixed internal port can be reused by every worktree because it is never bound directly to the host.
 
-**It builds from THIS checkout**, so the container runs the code you are editing, and the engine downloads once into a named volume that survives rebuilds. Measured on an arm64 host: about 1m40s for a full build, 14s to rebuild after a slicer source change, 4s when nothing changed.
+**It builds from THIS checkout**, so the container runs the code you are editing, and the engine
+downloads once into a machine-wide named volume. Every active worktree has its own lightweight
+slicer container and work volume, but the image tag is derived from the baked slicer inputs:
+worktrees with identical inputs reuse one completed image, while a branch that changes the slicer,
+its shared code, or its build dependencies receives a separate image. Docker shares the large
+runtime layers between those images. Measured on an arm64 host: about 1m40s for a full build, 14s to
+rebuild after a slicer source change, 4s when nothing changed.
 
 `npm run dev` rebuilds the container when your slicer source is newer than its image. The build is layer-cached, and after a successful rebuild dirty source is recognised as current rather than rebuilt again on every start. `dev:doctor` reports the same state without changing it and names the manual command:
 
@@ -188,7 +255,7 @@ BambuStudio CLI logs all diagnostics through stdout/stderr, and some successful 
 npm run test
 ```
 
-This runs the repo's TypeScript test suite via Node's built-in test runner. `npm run validate` includes linting, tests, typechecking, and Prisma schema validation, so new features should add or update focused regression tests before they are considered complete. Validate runs its stages at the lowest CPU scheduling priority (`scripts/dev/run-low-priority.mjs`), so it can share a machine with the running dev servers without starving them; it only takes longer when something else actually wants the CPU.
+This runs the repo's TypeScript test suite via Node's built-in test runner. `npm run validate` includes linting, typechecking, tests, and Prisma schema validation, so new features should add or update focused regression tests before they are considered complete. Typechecking runs before tests because it builds the workspace packages that tests import through their `dist` entry points; this keeps validation reliable after a clean `npm ci`. Validate runs its stages at the lowest CPU scheduling priority (`scripts/dev/run-low-priority.mjs`), so it can share a machine with the running dev servers without starving them; it only takes longer when something else actually wants the CPU.
 
 ### Validate is incremental
 

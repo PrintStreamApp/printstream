@@ -57,12 +57,17 @@ import { useLocation, useNavigate, useParams, useSearchParams } from 'react-rout
 import { apiFetch } from '../lib/apiClient'
 import { prefetchSlicingPresets } from '../lib/slicingPresetsQuery'
 import { refreshSlicingJobs, seedSlicingJob } from '../lib/slicingJobsCache'
+import {
+  browserSliceResultIdentity,
+  canReuseBrowserSliceResult,
+  type BrowserSliceResultIdentity
+} from '../lib/browserSliceResultCache'
 import { buildApiUrl } from '../lib/apiUrl'
 import { invalidateLibraryQueries } from '../lib/libraryQueryInvalidation'
 import { useAuthBootstrapQuery } from '../lib/authQuery'
 import { useLocalStorageState } from '../hooks/useLocalStorageState'
-import { useMobileViewport } from '../components/useMobileViewport'
 import { EmptyState } from '../components/EmptyState'
+import { BulkSelectionActions } from '../components/BulkSelectionActions'
 import { SplitButton } from '../components/SplitButton'
 import { LibraryBreadcrumb } from '../components/LibraryBreadcrumb'
 import { LibraryRecycleBinModal } from '../components/LibraryRecycleBinModal'
@@ -131,7 +136,9 @@ import { ListSkeleton } from '../components/ListSkeleton'
  * file the user cannot select and has no way to learn is supported. Note the DROP zone below has no
  * filter at all, so before this the two routes into the library already disagreed.
  */
-const LIBRARY_UPLOAD_ACCEPT = ['.gcode', ...importFormatExtensions(STAGED_IMPORT_FORMATS)].join(',')
+// MTL is a companion resource rather than an importable model, but it must be uploadable beside an
+// OBJ so a later library-backed editor import can resolve the OBJ's `mtllib` reference.
+const LIBRARY_UPLOAD_ACCEPT = ['.gcode', '.mtl', ...importFormatExtensions(STAGED_IMPORT_FORMATS)].join(',')
 
 type LibraryContextMenuState =
   | { kind: 'file'; file: LibraryFile; x: number; y: number }
@@ -153,6 +160,10 @@ type SliceThenPrintTarget = {
    * Unset for the slice-results target, which reuses this shape.
    */
   closeConfigOnDismiss?: boolean
+}
+
+type SliceResultTarget = SliceThenPrintTarget & {
+  requestIdentity: BrowserSliceResultIdentity
 }
 
 /**
@@ -177,6 +188,9 @@ export function LibraryView() {
   const contextMenuAnchorRef = useRef<HTMLDivElement | null>(null)
   const [printTarget, setPrintTarget] = useState<LibraryPrintTarget | null>(null)
   const [previewFileId, setPreviewFileId] = useState<string | null>(null)
+  // The list already owns the selected file's classification. Passing it to the preview prevents
+  // the dialog shell from waiting on a second request before it knows which chrome to reserve.
+  const [previewFile, setPreviewFile] = useState<LibraryFile | null>(null)
   // When set, the 3D preview overlay shows this archived version (read-only,
   // via the versioned resource routes) instead of the file's current content.
   const [previewVersion, setPreviewVersion] = useState<LibraryFileVersion | null>(null)
@@ -192,7 +206,10 @@ export function LibraryView() {
   // When set, the slice dialog targets this archived version of sliceTarget.
   const [sliceVersionId, setSliceVersionId] = useState<string | null>(null)
   const [sliceThenPrintTarget, setSliceThenPrintTarget] = useState<SliceThenPrintTarget | null>(null)
-  const [sliceResultTarget, setSliceResultTarget] = useState<SliceThenPrintTarget | null>(null)
+  const [sliceResultTarget, setSliceResultTarget] = useState<SliceResultTarget | null>(null)
+  // A completed editor slice remains server-owned but can be reopened synchronously while this
+  // editor session lives. A ref is sufficient: retaining or disposing it does not render UI.
+  const cachedSliceResultRef = useRef<SliceResultTarget | null>(null)
   const [historyTarget, setHistoryTarget] = useState<LibraryFile | null>(null)
   const [renameTarget, setRenameTarget] = useState<LibraryFile | null>(null)
   const [moveTarget, setMoveTarget] = useState<LibraryFile | null>(null)
@@ -204,7 +221,6 @@ export function LibraryView() {
   const [recycleBinOpen, setRecycleBinOpen] = useState(false)
   const [dragMoveError, setDragMoveError] = useState<string | null>(null)
   const [draggedLibraryItem, setDraggedLibraryItem] = useState<LibraryDragItem | null>(null)
-  const isMobileViewport = useMobileViewport()
   const [viewMode, setViewMode] = useLocalStorageState<LibraryViewMode>(
     LIBRARY_VIEW_MODE_KEY,
     'list',
@@ -435,6 +451,7 @@ export function LibraryView() {
     // `library.overlays` slot).
     if (isPreviewFirstLibraryFile(file)) {
       setPreviewVersion(null)
+      setPreviewFile(file)
       setPreviewFileId(file.id)
       return
     }
@@ -449,7 +466,17 @@ export function LibraryView() {
   // scaffold the user abandoned (a saved copy is a separate visible file).
   const sliceTargetCleanupRef = useRef<(() => void) | null>(null)
 
+  /** Discard the browser-retained hidden output. Server cleanup remains the failure backstop. */
+  const discardCachedSliceResult = useCallback(() => {
+    const cached = cachedSliceResultRef.current
+    cachedSliceResultRef.current = null
+    if (cached) {
+      void apiFetch(`/api/slicing/jobs/${cached.jobId}/discard`, { method: 'POST' }).catch(() => undefined)
+    }
+  }, [])
+
   const closeSliceDialog = () => {
+    discardCachedSliceResult()
     setSliceTarget(null)
     setSliceFlow('library')
     setSliceVersionId(null)
@@ -552,7 +579,11 @@ export function LibraryView() {
         })
       }
       if (variables.action === 'slice') {
-        setSliceResultTarget({ sourceFile: variables.file, jobId: response.job.id })
+        setSliceResultTarget({
+          sourceFile: variables.file,
+          jobId: response.job.id,
+          requestIdentity: browserSliceResultIdentity(variables)
+        })
       }
     }
   })
@@ -945,7 +976,11 @@ export function LibraryView() {
               name: file.name,
               canDownload: canDownloadLibrary,
               onAction,
-              onPreview: () => { setPreviewVersion(null); setPreviewFileId(file.id) }
+              onPreview: () => {
+                setPreviewVersion(null)
+                setPreviewFile(file)
+                setPreviewFileId(file.id)
+              }
             }}
           />
         )}
@@ -1024,6 +1059,36 @@ export function LibraryView() {
   }
 
   const showSelectionControls = canManageLibrary && !bridgeRootMode && selectionMode
+  const allVisibleFilesSelected = filteredFiles.length > 0 && selectedVisibleFiles.length === filteredFiles.length
+  const someVisibleFilesSelected = selectedVisibleFiles.length > 0 && !allVisibleFilesSelected
+  const selectionActions = showSelectionControls ? (
+    <BulkSelectionActions
+      onCancel={() => {
+        setSelectionMode(false)
+        setSelectedFileIds([])
+      }}
+      cancelDisabled={recycleFiles.isPending}
+    >
+      <Button
+        size="sm"
+        startDecorator={<DriveFileMoveRoundedIcon />}
+        disabled={selectedVisibleFiles.length === 0 || recycleFiles.isPending}
+        onClick={() => setMoveSelectionTarget(selectedVisibleFiles)}
+      >
+        Move{selectedVisibleFiles.length > 0 ? ` (${selectedVisibleFiles.length})` : ''}
+      </Button>
+      <Button
+        size="sm"
+        color="danger"
+        startDecorator={<DeleteRoundedIcon />}
+        disabled={selectedVisibleFiles.length === 0}
+        loading={recycleFiles.isPending}
+        onClick={() => void moveSelectedFilesToRecycleBin()}
+      >
+        Recycle{selectedVisibleFiles.length > 0 ? ` (${selectedVisibleFiles.length})` : ''}
+      </Button>
+    </BulkSelectionActions>
+  ) : null
   const showPrimaryLibraryActions =
     (canManageLibrary && !bridgeRootMode) ||
     (canUploadLibrary && !bridgeRootMode)
@@ -1111,11 +1176,6 @@ export function LibraryView() {
                 justifyContent: { xs: 'flex-start', sm: 'flex-end' }
               }}
             >
-              {!showSelectionControls && canManageLibrary && !bridgeRootMode && !isMobileViewport ? (
-                <Button size="sm" variant="soft" onClick={() => setSelectionMode(true)}>
-                  Select...
-                </Button>
-              ) : null}
               {canManageLibrary && !bridgeRootMode && <Button size="sm" variant="soft" startDecorator={<CreateNewFolderRoundedIcon />} onClick={() => setCreatingFolder(true)}>New folder</Button>}
               {canUploadLibrary && !bridgeRootMode && (
                 <PluginSlot
@@ -1127,56 +1187,6 @@ export function LibraryView() {
             </Stack>
           )}
         </Stack>
-
-        {!showNoConnectedBridgesPlaceholder && showSelectionControls && (
-          <Stack
-            direction="row"
-            spacing={1}
-            useFlexGap
-            sx={{
-              flexWrap: 'wrap',
-              justifyContent: { xs: 'flex-start', sm: 'flex-end' }
-            }}
-          >
-            <Button
-              size="sm"
-              variant="soft"
-              onClick={() => setAllVisibleFilesSelected(selectedVisibleFiles.length !== filteredFiles.length && filteredFiles.length > 0)}
-              disabled={filteredFiles.length === 0 || recycleFiles.isPending}
-            >
-              {selectedVisibleFiles.length === filteredFiles.length && filteredFiles.length > 0 ? 'Clear all' : 'Select all'}
-            </Button>
-            <Button
-              size="sm"
-              variant="plain"
-              onClick={() => {
-                setSelectionMode(false)
-                setSelectedFileIds([])
-              }}
-              disabled={recycleFiles.isPending}
-            >
-              Cancel
-            </Button>
-            <Button
-              size="sm"
-              startDecorator={<DriveFileMoveRoundedIcon />}
-              disabled={selectedVisibleFiles.length === 0 || recycleFiles.isPending}
-              onClick={() => setMoveSelectionTarget(selectedVisibleFiles)}
-            >
-              Move selected{selectedVisibleFiles.length > 0 ? ` (${selectedVisibleFiles.length})` : ''}
-            </Button>
-            <Button
-              size="sm"
-              color="danger"
-              startDecorator={<DeleteRoundedIcon />}
-              disabled={selectedVisibleFiles.length === 0}
-              loading={recycleFiles.isPending}
-              onClick={() => void moveSelectedFilesToRecycleBin()}
-            >
-              Recycle selected{selectedVisibleFiles.length > 0 ? ` (${selectedVisibleFiles.length})` : ''}
-            </Button>
-          </Stack>
-        )}
 
         {canUploadLibrary && !bridgeRootMode && !showNoConnectedBridgesPlaceholder && (
           <>
@@ -1300,6 +1310,17 @@ export function LibraryView() {
         searchPlaceholder="Search files and folders"
         searchAriaLabel="Search library"
         searchEndDecorator={<SearchScopeToggle allFolders={searchAllFolders} onChange={setSearchAllFolders} />}
+        selection={canManageLibrary && !bridgeRootMode ? {
+          active: selectionMode,
+          checked: allVisibleFilesSelected,
+          indeterminate: someVisibleFilesSelected,
+          disabled: filteredFiles.length === 0 || recycleFiles.isPending,
+          onActivate: () => setSelectionMode(true),
+          onChange: setAllVisibleFilesSelected,
+          ariaLabel: !selectionMode
+            ? 'Select library files'
+            : allVisibleFilesSelected ? 'Clear all visible library files' : 'Select all visible library files'
+        } : undefined}
         filters={{
           activeCount: activeMetadataFilterCount,
           onClear: clearMetadataFilters,
@@ -1346,6 +1367,7 @@ export function LibraryView() {
           pageCount: libraryFilters.pageCount,
           onPageChange: libraryFilters.setPage
         }}
+        beforeItems={selectionActions}
         emptyState={libraryEmptyState}
         renderBrowser={renderBrowser}
       />
@@ -1424,10 +1446,11 @@ export function LibraryView() {
         context={{
           previewFileId,
           previewVersionId: previewVersion?.versionId ?? null,
-          previewFile: previewVersion ? toHistoryPrintFile(previewVersion) : undefined,
+          previewFile: previewVersion ? toHistoryPrintFile(previewVersion) : previewFile ?? undefined,
           onPreviewClose: () => {
             setPreviewFileId(null)
             setPreviewVersion(null)
+            setPreviewFile(null)
           }
         }}
       />
@@ -1459,7 +1482,11 @@ export function LibraryView() {
           bridgeId={resolvedBridgeId ?? null}
           bridgeName={activeBridgeName}
           showRoot={showGlobalRootBreadcrumb}
-          onClose={() => setSliceResultTarget(null)}
+          retainReadyResultOnClose
+          onClose={({ retained }) => {
+            cachedSliceResultRef.current = retained ? sliceResultTarget : null
+            setSliceResultTarget(null)
+          }}
         />
       )}
 
@@ -1574,10 +1601,37 @@ export function LibraryView() {
           // "Save as" in the editor makes a NEW file: re-target the dialog to it (the key includes
           // the file id, so this cleanly re-mounts the editor on the just-saved project).
           onSavedAs={(saved) => { void openSliceForSavedFile(saved) }}
-          onSubmit={(input, action, options) => {
-            const variables = { file: sliceTarget, versionId: sliceVersionId, action, keepDialogOpen: options?.keepDialogOpen, ...input }
+          onSliceInputChanged={discardCachedSliceResult}
+          onSubmit={async (input, action, options) => {
+            // An editor-born project adopts its first saved file without re-mounting. Its slice
+            // must follow that adopted record, not the hidden scaffold this modal opened with.
+            const variables = {
+              file: options?.sourceFile ?? sliceTarget,
+              versionId: options?.sourceFile ? null : sliceVersionId,
+              action,
+              keepDialogOpen: options?.keepDialogOpen,
+              ...input
+            }
+            const cached = cachedSliceResultRef.current
+            if (
+              action === 'slice'
+              && cached
+              && canReuseBrowserSliceResult(
+                cached.requestIdentity,
+                browserSliceResultIdentity(variables)
+              )
+            ) {
+              setSliceResultTarget(cached)
+              return
+            }
+
+            // A different submission supersedes the retained output. Discard before starting the
+            // replacement; failure is harmless because the server's unreferenced-output sweep owns
+            // eventual cleanup.
+            discardCachedSliceResult()
             if (options?.keepDialogOpen) {
-              return startSlicingJob.mutateAsync(variables).then(() => undefined)
+              await startSlicingJob.mutateAsync(variables)
+              return
             }
             startSlicingJob.mutate(variables)
           }}

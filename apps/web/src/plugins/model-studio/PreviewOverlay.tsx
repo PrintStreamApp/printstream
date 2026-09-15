@@ -18,7 +18,7 @@ export function PreviewOverlay(props: Record<string, unknown>) {
   // `previewFileId` and the thumbnail can be clicked again after a reload.
   const onClose = typeof props.onPreviewClose === 'function' ? props.onPreviewClose as () => void : () => undefined
   return (
-    <LazyDialogBoundary variant="maximized" label="the 3D preview" onClose={onClose}>
+    <LazyDialogBoundary variant="preview" label="the 3D preview" onClose={onClose}>
       <PreviewView {...props} />
     </LazyDialogBoundary>
   )

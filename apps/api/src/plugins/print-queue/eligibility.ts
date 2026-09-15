@@ -110,13 +110,17 @@ export function resolveDispatchTarget(
   contexts: ServerPrinterContext[],
   options: QueueMatchOptions,
   explicitPrinterId?: string,
-  explicitAmsMapping?: number[]
+  explicitAmsMapping?: number[],
+  allowPrinterModelMismatch = false
 ): DispatchTarget {
+  const effectivePlacement = allowPrinterModelMismatch
+    ? { ...placement, compatibleModels: [] }
+    : placement
   if (explicitAmsMapping) {
     if (!explicitPrinterId) return { ok: false, reason: 'Choose a printer to start this item' }
     const context = contexts.find((entry) => entry.printerId === explicitPrinterId)
     if (!context) return { ok: false, reason: 'That printer is not connected' }
-    const constraints = evaluateQueuePlacementConstraints(placement, context)
+    const constraints = evaluateQueuePlacementConstraints(effectivePlacement, context)
     if (!constraints.eligible) return { ok: false, reason: constraints.reason ?? 'That printer cannot run this item' }
     if (!constraints.idle) return { ok: false, reason: `${context.name} is busy` }
     return { ok: true, printerId: context.printerId, amsMapping: explicitAmsMapping }
@@ -125,7 +129,7 @@ export function resolveDispatchTarget(
   if (explicitPrinterId) {
     const context = contexts.find((entry) => entry.printerId === explicitPrinterId)
     if (!context) return { ok: false, reason: 'That printer is not connected' }
-    const evaluation = evaluateQueueItemForPrinter(placement, context, options)
+    const evaluation = evaluateQueueItemForPrinter(effectivePlacement, context, options)
     if (!evaluation.eligible) return { ok: false, reason: evaluation.reason ?? 'That printer cannot run this item' }
     if (!evaluation.idle) return { ok: false, reason: `${context.name} is busy` }
     return { ok: true, printerId: context.printerId, amsMapping: evaluation.amsMapping }

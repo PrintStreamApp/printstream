@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { bedOpacityForCameraHeight } from './bedModel'
+import * as THREE from 'three'
+import { bedOpacityForCameraHeight, createBedModelObject } from './bedModel'
 
 // The plate must not occlude the models when the user orbits underneath it: the plain grid is
 // see-through by nature, and a solid modelled plate is not.
@@ -22,4 +23,19 @@ test('it bottoms out at a small non-zero opacity rather than vanishing', () => {
   assert.ok(deep > 0, 'the plate still reads as present from far below')
   assert.equal(deep, bedOpacityForCameraHeight(-40))
   assert.ok(deep < 0.2)
+})
+
+test('a custom texture covers the printable rectangle at its origin', () => {
+  const texture = new THREE.DataTexture(Uint8Array.from([255, 255, 255, 255]), 1, 1)
+  const bed = createBedModelObject({
+    texture,
+    originX: -10,
+    originY: 20,
+    width: 200,
+    depth: 180
+  })
+  const surface = bed.children[0] as THREE.Mesh
+
+  assert.ok(surface.geometry instanceof THREE.PlaneGeometry)
+  assert.deepEqual(surface.position.toArray(), [90, 110, 0.02])
 })

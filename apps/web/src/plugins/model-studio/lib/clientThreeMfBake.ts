@@ -92,6 +92,9 @@ export async function bakeClientThreeMf(
     // drop it (how a stale slice_info record is removed rather than carried forward).
     for (const entryPath of archive.entryNames()) {
       signal?.throwIfAborted()
+      if (plan.copy.dropPrefixes.some((prefix) => entryPath.toLowerCase().startsWith(prefix.toLowerCase()))) {
+        continue
+      }
       const transform = plan.copy.transforms.get(entryPath)
       if (!transform) {
         const bytes = archive.entryBytes(entryPath)
@@ -105,12 +108,14 @@ export async function bakeClientThreeMf(
     // archive with duplicate names, and the transform is the more specific answer for that entry.
     for (const extra of plan.copy.appendEntries) {
       signal?.throwIfAborted()
-      if (output[extra.name] === undefined) output[extra.name] = encoder.encode(extra.content)
+      if (output[extra.name] === undefined) {
+        output[extra.name] = typeof extra.content === 'string' ? encoder.encode(extra.content) : extra.content
+      }
     }
   } else {
     for (const entry of plan.freshEntries ?? []) {
       signal?.throwIfAborted()
-      output[entry.name] = encoder.encode(entry.content)
+      output[entry.name] = typeof entry.content === 'string' ? encoder.encode(entry.content) : entry.content
     }
   }
 

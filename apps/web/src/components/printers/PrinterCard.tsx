@@ -209,6 +209,15 @@ function PrinterCardComponent({
         toast.success('Filament unload requested')
       } else if (command.type === 'setPrintOption') {
         toast.success(`${PRINTER_SETTINGS_LABELS[command.option]} updated`)
+      } else if (
+        command.type === 'setPurifyAirAtPrintEnd'
+        || command.type === 'setOpenDoorDetection'
+        || command.type === 'setSmartNozzleBlobDetection'
+        || command.type === 'setCameraResolution'
+      ) {
+        toast.success('Printer setting updated')
+      } else if (command.type === 'controlNozzleRack') {
+        toast.success(command.action === 'refreshAll' ? 'Hotend re-read requested' : 'Nozzle rack movement requested')
       } else if (command.type === 'setAmsUserSettings') {
         toast.success('AMS settings updated')
       } else if (command.type === 'setAmsFilamentBackup') {
@@ -238,6 +247,11 @@ function PrinterCardComponent({
         command.type === 'loadAmsFilament' ||
         command.type === 'unloadAmsFilament' ||
         command.type === 'setPrintOption' ||
+        command.type === 'setPurifyAirAtPrintEnd' ||
+        command.type === 'setOpenDoorDetection' ||
+        command.type === 'setSmartNozzleBlobDetection' ||
+        command.type === 'setCameraResolution' ||
+        command.type === 'controlNozzleRack' ||
         command.type === 'setAmsUserSettings' ||
         command.type === 'setAmsFilamentBackup' ||
         command.type === 'switchAmsFirmware' ||

@@ -2,8 +2,8 @@
  * Printer controls dialog extracted from `pages/PrintersView.tsx`: a tabbed
  * modal (lights, speed, temperatures, nozzles, fans, motion, extruder) that
  * only enables controls supported and safe for the printer's current state,
- * and emits `PrinterControlCommand`s to its caller. The Nozzles tab (read-only
- * nozzle-changer rack) appears only on printers that report one (H2C).
+ * and emits `PrinterControlCommand`s to its caller. The Nozzles tab appears
+ * only on printers that report a nozzle rack (H2C).
  */
 import { useState } from 'react'
 import {
@@ -392,7 +392,7 @@ export function PrinterControlsDialog({
               )}
 
               {activeTab === 'nozzles' && status.nozzleRack != null && (
-                <NozzleRackSection rack={status.nozzleRack} />
+                <NozzleRackSection status={status} submitting={submitting} onSubmit={onSubmit} />
               )}
 
               {activeTab === 'trackSwitch' && status.filamentTrackSwitch?.installed === true && (

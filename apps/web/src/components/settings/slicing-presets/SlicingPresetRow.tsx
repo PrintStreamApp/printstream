@@ -16,6 +16,13 @@ import { SLICING_PRESET_FACETS } from '../../../lib/slicingPresetFacets'
 /** Beyond this the chips outweigh the preset name; the rest collapse into a "+N" with a tooltip. */
 const MAX_ROW_FACET_CHIPS = 3
 
+/** The row action names the different promise made by each preset source and kind. */
+function presetOpenLabel(profile: SlicingPresetSummary): string {
+  if (profile.source !== 'builtin') return 'Edit'
+  if (profile.kind === 'machine') return 'Customize'
+  return 'View'
+}
+
 export function SlicingPresetRow({
   profile,
   selectionMode,
@@ -34,8 +41,9 @@ export function SlicingPresetRow({
   /** Absent when this kind has no editor to open yet. */
   onOpen?: () => void
 }): JSX.Element {
-  // A built-in belongs to the slicer, not the workspace: it cannot be deleted or bulk-selected,
-  // and its editor opens read-only-with-save-as (see `canEditOriginal`).
+  // A built-in belongs to the slicer, not the workspace: it can participate in selection-backed
+  // comparisons, but cannot be deleted and its editor opens read-only-with-save-as (see
+  // `canEditOriginal`).
   const isBuiltin = profile.source === 'builtin'
   // Same source as the tab's filters, so a row always shows the values it can be filtered by.
   const facetValues = SLICING_PRESET_FACETS[profile.kind].flatMap((facet) => facet.valuesOf(profile))
@@ -49,6 +57,9 @@ export function SlicingPresetRow({
         alignItems: 'center',
         gap: 1,
         minWidth: 0,
+        // The normal row's 32px action establishes its density. Keep that same height when
+        // selection mode replaces the action with a smaller checkbox.
+        minHeight: 41,
         px: 1,
         py: 0.5,
         borderBottom: '1px solid',
@@ -57,7 +68,7 @@ export function SlicingPresetRow({
         '&:hover': { bgcolor: 'background.level1' }
       }}
     >
-      {selectionMode && !isBuiltin && (
+      {selectionMode && (
         <Checkbox
           size="sm"
           checked={selected}
@@ -110,7 +121,9 @@ export function SlicingPresetRow({
       {!selectionMode && (
         <Stack direction="row" spacing={0.25} sx={{ flexShrink: 0 }}>
           {onOpen && (
-            <Button size="sm" variant="plain" onClick={onOpen}>{isBuiltin ? 'View' : 'Edit'}</Button>
+            <Button size="sm" variant="plain" onClick={onOpen}>
+              {presetOpenLabel(profile)}
+            </Button>
           )}
           {!isBuiltin && (
             <Button size="sm" variant="plain" color="danger" loading={deleting} onClick={onDelete}>Delete</Button>

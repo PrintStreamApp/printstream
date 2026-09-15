@@ -179,6 +179,7 @@ export function annotateRequestAuditLog(
 export function printOverrideAuditMetadata(overrides: {
   allowIncompatibleFilament?: boolean
   allowPlateTypeMismatch?: boolean
+  allowPrinterModelMismatch?: boolean
   allowFilamentTrackSwitchMismatch?: boolean
   allowInsufficientFilament?: boolean
   allowBlacklistedFilament?: boolean
@@ -186,6 +187,7 @@ export function printOverrideAuditMetadata(overrides: {
   return {
     ...(overrides.allowIncompatibleFilament ? { allowIncompatibleFilament: true } : {}),
     ...(overrides.allowPlateTypeMismatch ? { allowPlateTypeMismatch: true } : {}),
+    ...(overrides.allowPrinterModelMismatch ? { allowPrinterModelMismatch: true } : {}),
     ...(overrides.allowFilamentTrackSwitchMismatch ? { allowFilamentTrackSwitchMismatch: true } : {}),
     ...(overrides.allowInsufficientFilament ? { allowInsufficientFilament: true } : {}),
     ...(overrides.allowBlacklistedFilament ? { allowBlacklistedFilament: true } : {})

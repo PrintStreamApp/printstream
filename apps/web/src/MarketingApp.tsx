@@ -27,6 +27,7 @@ import { dismissSplashScreenImmediately } from './lib/splashScreen'
 import { buildChromeCssVars } from './theme/buildTheme'
 import { defaultChrome, theme } from './theme/theme'
 import { customerApiBase } from './lib/customerRoutes'
+import { buildBillingScopePath } from './lib/billingScope'
 
 // Where the "enter app" CTAs point on a cold marketing load. Navigating here leaves the marketing
 // fast-path, so `Root` mounts the full app, which then resolves real auth + workspace destination.
@@ -48,6 +49,7 @@ export default function MarketingApp() {
   const routes = marketingModule?.routes ?? []
   const authBootstrapQuery = useAuthBootstrapQuery({ suppressGlobalErrorToast: true })
   const actorType = authBootstrapQuery.data?.actor?.type ?? 'anonymous'
+  const customer = authBootstrapQuery.data?.customers?.[0]
   const context = {
     isAuthenticated: actorType !== 'anonymous',
     authPending: authBootstrapQuery.isPending,
@@ -55,9 +57,8 @@ export default function MarketingApp() {
     accountHref: APP_ENTRY,
     // No account here means no billing scope to route a purchase at; the CTA
     // falls back to its workspace-scoped path, as it did before.
-    customerBasePath: authBootstrapQuery.data?.customers?.[0]
-      ? customerApiBase(authBootstrapQuery.data.customers[0].id)
-      : null,
+    customerBasePath: customer ? customerApiBase(customer.id) : null,
+    billingMessagesHref: customer ? buildBillingScopePath(customer.id, 'messages') : null,
     demoLandingRoute: ''
   }
 

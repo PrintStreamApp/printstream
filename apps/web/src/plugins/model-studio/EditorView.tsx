@@ -39,6 +39,7 @@ import {
 import OpenWithRoundedIcon from '@mui/icons-material/OpenWith'
 import ReplayRoundedIcon from '@mui/icons-material/ReplayRounded'
 import InventoryRoundedIcon from '@mui/icons-material/Inventory2Rounded'
+import AttachFileRoundedIcon from '@mui/icons-material/AttachFileRounded'
 import UndoRoundedIcon from '@mui/icons-material/UndoRounded'
 import RedoRoundedIcon from '@mui/icons-material/RedoRounded'
 import TuneRoundedIcon from '@mui/icons-material/TuneRounded'
@@ -70,7 +71,6 @@ import {
   threeMfPartSubtypeCarriesFilament,
   FILAMENT_SETTING_KEYS,
   isFilamentIdentitySettingKey,
-  formatBytes,
   readProjectFlushContext,
   reconcilePlateFilamentSequence,
   type ThreeMfSettingsRepairReason,
@@ -78,8 +78,10 @@ import {
 } from '@printstream/shared'
 import { MODEL_UNIT_MILLIMETRES, buildVanillaThreeMfEntries, type ConvertibleModelUnit,
   adaptiveLayerHeightProfile,
+  buildImportedColorPaint,
   flatLayerHeightProfile,
   paintLayerHeightProfile,
+  parseStlMesh,
   smoothLayerHeightProfile,
   TEXT_INFO_DEFAULTS,
   TEXT_INFO_DEFAULT_SURFACE_TYPE,
@@ -118,7 +120,7 @@ import { LibraryFilePickerDialog } from '../../components/LibraryFilePickerDialo
 import { LibraryDestinationDialog } from '../../components/LibraryDestinationDialog'
 import { formatLibraryFileName, splitLibraryFileNameForRename } from '../../lib/libraryDisplay'
 import { useMobileViewport } from '../../components/useMobileViewport'
-import { createBedModelObject, loadBedModelGeometry } from './lib/bedModel'
+import { createBedModelObject, loadBedModelGeometry, loadBedTexture } from './lib/bedModel'
 import { bedSurfaceSignature } from './lib/bedSurfaceSignature'
 import { EditorSettingsDialog } from '../../components/library/EditorSettingsDialog'
 import { SliceSettingsPanel, type SliceSettingsController } from '../../components/library/SliceSettingsPanel'
@@ -179,6 +181,7 @@ import {
   type ViewPreset
 } from './lib/viewCube'
 import { createPlateThumbnailRenderer, type PlateThumbnailRenderer } from './lib/plateThumbnail'
+import { resolveImportFileSelection } from './lib/importFileSelection'
 import {
   buildSceneEdit,
   buildSessionFilamentIdRemap,
@@ -189,6 +192,7 @@ import {
   fillPlateFromScene,
   findFreePlatePosition,
   placeInstanceAt,
+  movePlateContentsToBed,
   instanceFromStagedImport,
   replaceInstanceGeometry,
   carriedPartSubtypes,
@@ -395,6 +399,7 @@ import { BrimEarsPanel } from './BrimEarsPanel'
 import { CutToolPanel } from './CutToolPanel'
 import { HeightRangesDialog } from './HeightRangesDialog'
 import { PlateSettingsDialog, type PlateSettingsDraft } from './PlateSettingsDialog'
+import { ProjectAuxiliariesDialog } from './ProjectAuxiliariesDialog'
 import { LayerHeightPanel } from './LayerHeightPanel'
 import { SvgToolPanel, type SvgToolValue } from './SvgToolPanel'
 import { buildSvgPieceSoups, detectSvgBackgroundPiece, parseSvgShapes, svgHeightMm, svgObjectFrameShift, type ParsedSvg } from './lib/svgGeometry'
@@ -420,7 +425,19 @@ import {
 import { MeasurePanel } from './MeasurePanel'
 import { MeshBooleanPanel } from './MeshBooleanPanel'
 import { useEditorMeshBoolean } from './useEditorMeshBoolean'
+import { SimplifyPanel } from './SimplifyPanel'
+import { useEditorSimplify } from './useEditorSimplify'
 import { PaintToolPanel } from './PaintToolPanel'
+import { SourceColorImportDialog } from './SourceColorImportDialog'
+import {
+  APPEND_SOURCE_COLOR,
+  matchSourceColorsToFilaments,
+  shouldMapSourceColors,
+  supportsSourceColorGamma,
+  sourceColorHex,
+  type SourceColorImportChoice
+} from './lib/sourceColorImport'
+import { paintMapsAfterMeshReplacement } from './lib/meshReplacementPaint'
 import { useEditorHistory } from './useEditorHistory'
 import { useEditorPaint } from './useEditorPaint'
 import { useEditorSave } from './useEditorSave'
@@ -456,8 +473,8 @@ function supportFilamentRefs(overrides: Record<string, string | string[]> | unde
 // editor standing instead of unmounting the app. Matches LibraryView's treatment of the same
 // component.
 import type { ProcessConfigResolver } from '../../components/ProcessSettingsDialog'
-import { ProgressBar } from '../../components/ProgressBar'
-import { ProgressSpinner } from '../../components/ProgressSpinner'
+import { ViewportBuildOverlay } from './ViewportBuildOverlay'
+import { EditorOpeningStatus } from './EditorOpeningStatus'
 const ProcessSettingsDialogImpl = lazy(() => import('../../components/ProcessSettingsDialog'))
 // Same treatment: it pulls in the whole grid and is opened rarely, so it must not ride the
 // editor's own chunk.
@@ -761,6 +778,8 @@ interface EditorViewProps {
   sliceDisabledReason?: string
   /** A slice job is in flight (drives the Slice button's loading state). */
   slicing?: boolean
+  /** Notify the host that a retained slice result no longer represents the editor. */
+  onSliceInputChanged?: () => void
   /**
    * Slice a single 1-based plate without persisting a project; the host opens a results dialog that
    * can save/print.
@@ -773,6 +792,8 @@ interface EditorViewProps {
     plate: number
     sceneEdit: SceneEdit
     contentBase: EditorContentBasePin | null
+    /** The adopted library record after an editor-born project is first saved in place. */
+    sourceFile?: LibraryFile
     /**
      * Bake and stage against the exact target the host is about to submit. The host owns target
      * construction, while this editor owns the open archive and import store needed for the bake.
@@ -887,19 +908,33 @@ type ModelSourceRequest =
   | { kind: 'replace'; key: string }
   | { kind: 'addPart'; key: string; subtype: SceneEditPartSubtype }
 
+/** Staged OBJ data held while the user maps its retained vertex colours. */
+interface PendingSourceColorImport {
+  staged: StagedImport
+  mesh: ReturnType<typeof parseStlMesh>
+  sourceColors: Float32Array
+  sourceColorMode: NonNullable<StagedImport['sourceColorMode']>
+  target: { kind: 'add' } | { kind: 'replace'; key: string }
+}
+
+interface SourceColorPaintCommit {
+  filamentId: number
+  colorPaint: Record<number, string>
+}
+
 /** Library-picker copy per {@link ModelSourceRequest} kind ('import' = no pending request). */
 const LIBRARY_PICKER_COPY: Record<'import' | ModelSourceRequest['kind'], { title: string; description: string }> = {
   import: {
     title: 'Add from library',
-    description: 'Choose an STL, STEP, or 3MF file to add to this project.'
+    description: 'Choose an STL, STEP, 3MF, OBJ, glTF, AMF, or FBX file to add to this project.'
   },
   replace: {
     title: 'Replace from library',
-    description: 'Choose an STL, STEP, or 3MF file to swap in for the selected object, its position and settings are kept.'
+    description: 'Choose an importable model to swap in for the selected object, its position and settings are kept.'
   },
   addPart: {
     title: 'Add part from library',
-    description: 'Choose an STL, STEP, or 3MF file to add as a part inside the selected object.'
+    description: 'Choose an importable model to add as a part inside the selected object.'
   }
 }
 
@@ -973,6 +1008,7 @@ function EditorView({
   canSlice = false,
   sliceDisabledReason,
   slicing: slicingProp = false,
+  onSliceInputChanged,
   onSlice
 }: EditorViewProps) {
   // `hasNoBaseFile` gates DATA loading (a fileless project seeds empty, skipping the scene
@@ -991,6 +1027,7 @@ function EditorView({
   const [viewerContainer, setViewerContainer] = useState<HTMLDivElement | null>(null)
   const [viewCubeContainer, setViewCubeContainer] = useState<HTMLDivElement | null>(null)
   const [state, setState] = useState<EditorState | null>(null)
+  const [projectAuxiliariesOpen, setProjectAuxiliariesOpen] = useState(false)
   const [activePlateIndex, setActivePlateIndex] = useState(1)
   /**
    * Which plate's settings dialog is open, by its session-stable `plateId`, or null for none.
@@ -1111,6 +1148,7 @@ function EditorView({
     queryClient.removeQueries({ queryKey: ['library-editor-plates', baseFileId] })
     queryClient.removeQueries({ queryKey: ['library-editor-scene-initial', baseFileId] })
     queryClient.removeQueries({ queryKey: ['library-editor-scenes-rest', baseFileId] })
+    queryClient.removeQueries({ queryKey: ['library-editor-auxiliaries', baseFileId] })
     // The file's own DTO goes too. Nothing invalidates this key (`library-files` does not prefix-match
     // `library-file`), so at a 60s staleTime a reopen inside that window inherits the PRE-save row,
     // including `currentVersionNumber`, which seeds the concurrent-save baseline. That made an
@@ -1201,6 +1239,18 @@ function EditorView({
     queryKey: ['library-editor-project-settings', baseFileId, baseVersionId ?? 'current'],
     enabled: !hasNoBaseFile && typeof projectSource.loadProjectSettings === 'function',
     queryFn: () => projectSource.loadProjectSettings?.() ?? Promise.resolve(null),
+    staleTime: Infinity
+  })
+
+  // Attachments can be large and are irrelevant to normal editing, so do not decode/base64 them
+  // until the user opens their dialog. Until Apply, SceneEdit keeps this absent and an unrelated
+  // save streams the archive entries through byte-for-byte.
+  const projectAuxiliariesQuery = useQuery({
+    queryKey: ['library-editor-auxiliaries', baseFileId, baseVersionId ?? 'current'],
+    enabled: projectAuxiliariesOpen
+      && !hasNoBaseFile
+      && typeof projectSource.loadProjectAuxiliaries === 'function',
+    queryFn: () => projectSource.loadProjectAuxiliaries?.() ?? Promise.reject(new Error('This project source cannot read attachments.')),
     staleTime: Infinity
   })
 
@@ -1302,6 +1352,7 @@ function EditorView({
   // override are both edited in the editor settings dialog.
   const sidebarSide = useEffectiveSidebarSide()
   const [bedModelGeometry, setBedModelGeometry] = useState<THREE.BufferGeometry | null>(null)
+  const [bedTexture, setBedTexture] = useState<THREE.Texture | null>(null)
   const [editorSettingsOpen, setEditorSettingsOpen] = useState(false)
   // The preset manager is its own dialog, supplied by the host and reached from the sidebar's
   // "Manage" action; the gear opens editor settings. Deliberately no path from one to the other:
@@ -1473,23 +1524,41 @@ function EditorView({
         return next
       })
     }
+    const replaceTexture = (next: THREE.Texture | null) => {
+      setBedTexture((previous) => {
+        if (previous && previous !== next) previous.dispose()
+        return next
+      })
+    }
     if (!showBedModel || !targetPrinterModel) {
       replaceGeometry(null)
+      replaceTexture(null)
       return undefined
     }
     const controller = new AbortController()
-    void loadBedModelGeometry({
-      printerModel: targetPrinterModel,
-      slicerTargetId: sliceConfig?.selectedSlicerTargetId ?? null,
-      basePath: bedModelPath,
-      signal: controller.signal
-    }).then((geometry) => {
-      // A switch that lands after this fetch resolved must not strand the geometry it produced.
-      if (controller.signal.aborted) geometry?.dispose()
-      else replaceGeometry(geometry)
+    const machineProfileId = sliceConfig?.selectedMachineProfile?.id ?? null
+    void Promise.all([
+      loadBedModelGeometry({
+        printerModel: targetPrinterModel,
+        slicerTargetId: sliceConfig?.selectedSlicerTargetId ?? null,
+        machineProfileId,
+        basePath: bedModelPath,
+        signal: controller.signal
+      }),
+      bedModelPath ? Promise.resolve(null) : loadBedTexture({ machineProfileId, signal: controller.signal })
+    ]).then(([geometry, texture]) => {
+      // A switch that lands after these fetches resolved must not strand the resources produced.
+      if (controller.signal.aborted) {
+        geometry?.dispose()
+        texture?.dispose()
+      } else {
+        replaceGeometry(geometry)
+        replaceTexture(texture)
+      }
     })
     return () => controller.abort()
-  }, [showBedModel, targetPrinterModel, sliceConfig?.selectedSlicerTargetId, bedModelPath])
+  }, [showBedModel, targetPrinterModel, sliceConfig?.selectedSlicerTargetId,
+    sliceConfig?.selectedMachineProfile?.id, sliceConfig?.selectedMachineProfile?.updatedAt, bedModelPath])
   useEffect(() => {
     setMeasurePoints([])
   }, [activePlateIndex])
@@ -1643,6 +1712,13 @@ function EditorView({
   const footprintCacheRef = useRef<Map<string, { shapeSig: string; cells: Set<number>; baseX: number; baseY: number }>>(new Map())
   const [importing, setImporting] = useState(false)
   const [libraryPickerOpen, setLibraryPickerOpen] = useState(false)
+  const [sourceColorImport, setSourceColorImport] = useState<PendingSourceColorImport | null>(null)
+  const replaceWithStagedRef = useRef<(
+    key: string,
+    staged: StagedImport,
+    sourceColorPaint?: SourceColorPaintCommit,
+    options?: { recordHistory?: boolean }
+  ) => boolean>(() => false)
   // What the next picked library file / uploaded local file is FOR. The library picker and the
   // hidden file input are shared by three flows, so the pending request, not a boolean each,
   // decides where the staged import lands. Null means "add it to the plate as a new model".
@@ -1853,6 +1929,7 @@ function EditorView({
     markSaved,
     rebaseFilamentSources: rebaseHistoryFilamentSources,
     hasUnsavedChanges,
+    revision: historyRevision,
     canUndo,
     canRedo,
     undo,
@@ -1861,6 +1938,7 @@ function EditorView({
     redoRef,
     recordHistory,
     recordHistoryRef,
+    recordCombinedHistory,
     recordSliceConfigHistory,
     sliceConfigForPanel
   } = useEditorHistory({
@@ -1876,6 +1954,9 @@ function EditorView({
     // (no baseline is captured until the first save): see the retarget-signature block.
     editorBorn: isNewProject
   })
+  useEffect(() => {
+    onSliceInputChanged?.()
+  }, [activePlateIndex, historyRevision, onSliceInputChanged])
   // Read through a ref so the save handler stays stable (it is built far below, and the history
   // action is re-created per render), the same shape as recordHistoryRef/undoRef.
   const rebaseHistoryFilamentSourcesRef = useRef(rebaseHistoryFilamentSources)
@@ -2108,9 +2189,6 @@ function EditorView({
     // setState in the same flush), so neither index can address "the same plate" reliably.
     const filledPlates = new Map<number, EditorPlate>()
     const nextBeds = new Map<number, EditorPlate['bed']>()
-    // Per-plate {dx,dy} to shift already-placed instances when the bed's ORIGIN moves under them:
-    // see below. Absent for plates whose bed didn't move that way.
-    const recenter = new Map<number, { dx: number; dy: number }>()
     // Session-added plates have no scene of their own but share the project's one printer bed,
     // so they borrow any loaded scene's bed, otherwise a printer switch would leave them on the
     // bed they copied from their template plate at add time.
@@ -2133,21 +2211,6 @@ function EditorView({
       }
       if (!bedsEqual(plate.bed, nextBed)) {
         nextBeds.set(plate.plateId, nextBed)
-        // Objects placed before the real printer bed resolved were positioned against the
-        // origin-centred FALLBACK bed (min < 0, centre at 0,0). When the real, 0-based bed
-        // (min >= 0) arrives, an object left at its fallback coordinates sits near the machine's
-        // front-left corner, partly off the plate, and the slice fails with BambuStudio's
-        // CLI_NO_SUITABLE_OBJECTS (exit 206). Shift each placed instance by the bed-centre delta so
-        // it keeps the same position RELATIVE TO THE PLATE instead of stranding at the old origin.
-        // Only for this fallback -> real transition (not real -> real printer switches, which
-        // preserve exact placement, BambuStudio-style).
-        const wasFallback = plate.bed.minX < 0 && plate.bed.minY < 0
-        const isRealBed = nextBed.minX >= 0 && nextBed.minY >= 0
-        if (wasFallback && isRealBed && plate.instances.length > 0) {
-          const dx = (nextBed.minX + nextBed.maxX) / 2 - (plate.bed.minX + plate.bed.maxX) / 2
-          const dy = (nextBed.minY + nextBed.maxY) / 2 - (plate.bed.minY + plate.bed.maxY) / 2
-          if (dx !== 0 || dy !== 0) recenter.set(plate.plateId, { dx, dy })
-        }
       }
     }
     if (filledPlates.size === 0 && nextBeds.size === 0) return
@@ -2162,16 +2225,9 @@ function EditorView({
           if (filled) return { ...filled, index: plate.index }
           const bed = nextBeds.get(plate.plateId)
           if (!bed) return plate
-          const shift = recenter.get(plate.plateId)
-          if (!shift) return { ...plate, bed }
-          return {
-            ...plate,
-            bed,
-            instances: plate.instances.map((instance) => ({
-              ...instance,
-              position: instance.position.clone().add(new THREE.Vector3(shift.dx, shift.dy, 0))
-            }))
-          }
+          // The live state is already plate-local. Retarget it from the bed it currently uses,
+          // rather than from the earlier snapshot, so rapid model changes cannot double-shift it.
+          return movePlateContentsToBed(plate, bed)
         })
       }
     })
@@ -2666,7 +2722,17 @@ function EditorView({
           // their original indexes, so position `i` and solid `i` stop agreeing the moment one is
           // removed, and every later solid would render its neighbour's mesh.
           const partGeometries = await Promise.all(
-            instance.parts.map(async (part) => ({ part, geometry: await fetchImportGeometry(importId, part.partIndex) }))
+            instance.parts.map(async (part) => {
+              const replacementId = importHostId != null
+                ? stateRef.current?.partMeshReplacements?.[partSlotKey(importHostId, part.partIndex)]
+                : undefined
+              return {
+                part,
+                geometry: replacementId
+                  ? await fetchImportGeometry(replacementId)
+                  : await fetchImportGeometry(importId, part.partIndex)
+              }
+            })
           )
           for (const { part, geometry } of partGeometries) {
             // A solid with no explicit material prints in the object's, so colour it that way
@@ -2744,7 +2810,17 @@ function EditorView({
         // stay deterministic. Serial awaits here made multi-part objects load at one
         // network round-trip per part.
         const partEntries = await Promise.all(
-          instance.parts.map(async (part) => ({ part, geometries: await fetchGeometry(part.entryPath) }))
+          instance.parts.map(async (part) => {
+            const replacementId = stateRef.current?.partMeshReplacements?.[
+              partSlotKey(instance.objectId, part.partIndex)
+            ]
+            return {
+              part,
+              geometries: replacementId
+                ? new Map([[part.componentObjectId, await fetchImportGeometry(replacementId)]])
+                : await fetchGeometry(part.entryPath)
+            }
+          })
         )
         for (const { part, geometries } of partEntries) {
           const geometry = geometries.get(part.componentObjectId)
@@ -3807,13 +3883,16 @@ function EditorView({
     // forced the atomic-swap path. The rule itself lives in lib/bedSurfaceSignature.ts, which
     // documents what it has already got wrong; the atomic (staging) path rebuilds unconditionally.
     const bedModel = showBedModel ? bedModelGeometry : null
+    const customBedTexture = showBedModel ? bedTexture : null
+    const hasBedAppearance = Boolean(bedModel || customBedTexture)
     const bedSignature = bedSurfaceSignature({
       width: bedWidth,
       depth: bedDepth,
       centerX: bedCenterX,
       centerY: bedCenterY,
       excludeAreas: activePlate.bed.excludeAreas,
-      bedModel
+      bedModel,
+      bedTexture: customBedTexture
     })
     if (incremental) {
       const existingBed = plateRoot.children.find((child) => child.userData?.isBedSurface)
@@ -3823,10 +3902,10 @@ function EditorView({
           plateRoot.remove(existingBed)
         }
         // Show the destination plate's empty bed straight away; models append onto it as they build.
-        const liveBed = createPreviewPlateSurface({ width: bedWidth, depth: bedDepth, centerX: bedCenterX, centerY: bedCenterY, excludeAreas: activePlate.bed.excludeAreas, showSurfaceFill: !bedModel, axisLabelEdge: bedModel ? 'rear' : 'front' })
+        const liveBed = createPreviewPlateSurface({ width: bedWidth, depth: bedDepth, centerX: bedCenterX, centerY: bedCenterY, excludeAreas: activePlate.bed.excludeAreas, showSurfaceFill: !hasBedAppearance, axisLabelEdge: hasBedAppearance ? 'rear' : 'front' })
         liveBed.userData.isBedSurface = true
         liveBed.userData.bedSignature = bedSignature
-        if (bedModel) liveBed.add(createBedModelObject({ geometry: bedModel, originX: bedCenterX - bedWidth / 2, originY: bedCenterY - bedDepth / 2 }))
+        if (hasBedAppearance) liveBed.add(createBedModelObject({ geometry: bedModel, texture: customBedTexture, originX: bedCenterX - bedWidth / 2, originY: bedCenterY - bedDepth / 2, width: bedWidth, depth: bedDepth }))
         plateRoot.add(liveBed)
       }
     }
@@ -3837,12 +3916,12 @@ function EditorView({
       const staging = incremental ? null : new THREE.Group()
       const target = staging ?? plateRoot
       if (staging) {
-        const bedSurface = createPreviewPlateSurface({ width: bedWidth, depth: bedDepth, centerX: bedCenterX, centerY: bedCenterY, excludeAreas: activePlate.bed.excludeAreas, showSurfaceFill: !bedModel, axisLabelEdge: bedModel ? 'rear' : 'front' })
+        const bedSurface = createPreviewPlateSurface({ width: bedWidth, depth: bedDepth, centerX: bedCenterX, centerY: bedCenterY, excludeAreas: activePlate.bed.excludeAreas, showSurfaceFill: !hasBedAppearance, axisLabelEdge: hasBedAppearance ? 'rear' : 'front' })
         // Tagged so the thumbnail renderer hides it (Bambu-style model-only thumbnails); the
         // signature lets a later incremental rebuild detect a bed-dimension change.
         bedSurface.userData.isBedSurface = true
         bedSurface.userData.bedSignature = bedSignature
-        if (bedModel) bedSurface.add(createBedModelObject({ geometry: bedModel, originX: bedCenterX - bedWidth / 2, originY: bedCenterY - bedDepth / 2 }))
+        if (hasBedAppearance) bedSurface.add(createBedModelObject({ geometry: bedModel, texture: customBedTexture, originX: bedCenterX - bedWidth / 2, originY: bedCenterY - bedDepth / 2, width: bedWidth, depth: bedDepth }))
         staging.add(bedSurface)
       }
       const builtGroups = new Map<string, THREE.Group>()
@@ -3984,7 +4063,8 @@ function EditorView({
     // showBedModel/bedModelGeometry are read when building the bed surface, so a toggle (or a
     // late-arriving mesh) has to rebuild the plate, without them the option appears to do nothing.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activePlateIndex, activeInstanceKeys, buildInstanceGroup, sceneReady, rebuildToken, showBedModel, bedModelGeometry])
+  }, [activePlateIndex, activeInstanceKeys, buildInstanceGroup, sceneReady, rebuildToken,
+    showBedModel, bedModelGeometry, bedTexture])
 
   const reattachGizmo = useCallback(() => {
     const transform = transformRef.current
@@ -4696,8 +4776,13 @@ function EditorView({
    * Non-`structure` kinds MUST NOT change the geometry or key set of the active plate, only the
    * listed attribute, or the in-place sync will desync from state. When unsure, use `structure`.
    */
-  const updatePlates = useCallback((updater: (plates: EditorPlate[]) => EditorPlate[], kind: PlateEditKind = 'structure') => {
-    recordHistory()
+  const updatePlates = useCallback((
+    updater: (plates: EditorPlate[]) => EditorPlate[],
+    kind: PlateEditKind = 'structure',
+    /** False only when the caller already recorded one combined scene/config frame. */
+    options: { recordHistory?: boolean } = {}
+  ) => {
+    if (options.recordHistory !== false) recordHistory()
     setState((current) => {
       if (!current) return current
       // Spread `...current` so the session-only fields kept on the state object, support/seam/
@@ -5394,13 +5479,14 @@ function EditorView({
   const addInstanceToActivePlate = useCallback((
     instance: EditorInstance,
     /** The new model's XY footprint: where its centre sits in mesh coords, and how big it is. */
-    footprint?: { center: { x: number; y: number }; size: { width: number; depth: number } }
+    footprint?: { center: { x: number; y: number }; size: { width: number; depth: number } },
+    options: { recordHistory?: boolean } = {}
   ) => {
     // BambuStudio parity: a project must have a material before any object (import, primitive,
     // cut/split half) can be added. This is the single chokepoint for every add path.
     if ((sliceConfigRef.current?.projectFilaments?.length ?? 0) === 0) {
       toast.error('Add a material to the project before adding objects.')
-      return
+      return false
     }
     const plate = stateRef.current?.plates.find((entry) => entry.index === activePlateIndex)
     if (plate) {
@@ -5424,12 +5510,15 @@ function EditorView({
       // Primitives are already origin-centred (centroid ~ 0), so this is a no-op for them.
       instance.position.set(spot.x - (footprint?.center.x ?? 0), spot.y - (footprint?.center.y ?? 0), instance.position.z)
     }
-    updatePlates((plates) =>
-      plates.map((plate) =>
+    updatePlates(
+      (plates) => plates.map((plate) =>
         plate.index === activePlateIndex ? { ...plate, instances: [...plate.instances, instance] } : plate
-      )
+      ),
+      'structure',
+      options
     )
     setSelectedKey(instance.key)
+    return true
   }, [activePlateIndex, updatePlates])
 
   // Persist a dragged prime tower's new lower-left corner into the active plate. The drag already
@@ -5457,12 +5546,60 @@ function EditorView({
   movePrimeTowerRef.current = handleMovePrimeTower
 
   /** Add an import-backed instance onto the active plate from a staged foreign model. */
-  const addStagedImport = useCallback((staged: StagedImport) => {
+  const addStagedImport = useCallback((
+    staged: StagedImport,
+    sourceColorPaint?: SourceColorPaintCommit,
+    options: { recordHistory?: boolean } = {}
+  ) => {
     // The material guard lives in addInstanceToActivePlate (the shared add chokepoint).
     // Centre the model on the drop spot using its bounds' XY midpoint (imports keep file coords),
     // and hand over its size so placement keeps it clear of what's already on the plate.
-    addInstanceToActivePlate(instanceFromStagedImport(staged, importStore.meshUrl), stagedFootprint(staged))
+    const instance = instanceFromStagedImport(staged, importStore.meshUrl)
+    if (sourceColorPaint) instance.filamentId = sourceColorPaint.filamentId
+    const added = addInstanceToActivePlate(instance, stagedFootprint(staged), options)
+    if (!added) return false
+    if (!sourceColorPaint || Object.keys(sourceColorPaint.colorPaint).length === 0) return true
+    const hostId = addedPartHostId(instance)
+    if (hostId == null) return true
+    // Queued after the plate insert and deliberately without a second history snapshot: importing
+    // the geometry and accepting its colours is one action, so one Undo removes both.
+    setState((current) => current ? {
+      ...current,
+      colorPaint: {
+        ...(current.colorPaint ?? {}),
+        [supportPaintKey(hostId, 0)]: sourceColorPaint.colorPaint
+      }
+    } : current)
+    return true
   }, [addInstanceToActivePlate, importStore])
+
+  /** Pause a staged source-colour model for mapping, returning whether a dialog was opened. */
+  const queueSourceColorMapping = useCallback(async (
+    staged: StagedImport,
+    target: PendingSourceColorImport['target']
+  ): Promise<boolean> => {
+    const sourceColorMode = staged.sourceColorMode
+    if (!shouldMapSourceColors(sourceColorMode)) return false
+    const [sourceColors, meshBytes] = await Promise.all([
+      importStore.fetchSourceColors(staged.importId),
+      importStore.fetchMesh(staged.importId)
+    ])
+    if (!sourceColors) return false
+    setSourceColorImport({
+      staged,
+      sourceColors,
+      sourceColorMode,
+      mesh: parseStlMesh(new Uint8Array(meshBytes)),
+      target
+    })
+    return true
+  }, [importStore])
+
+  /** Add immediately unless the source-colour mapper takes ownership of the staged import. */
+  const addOrMapStagedImport = useCallback(async (staged: StagedImport) => {
+    if (await queueSourceColorMapping(staged, { kind: 'add' })) return false
+    return addStagedImport(staged)
+  }, [addStagedImport, queueSourceColorMapping])
 
   /**
    * The object's HELPER volumes (modifier / negative / support blocker / enforcer) as WORLD triangle
@@ -6809,6 +6946,33 @@ function EditorView({
     rebuildToken
   })
 
+  // Simplify is a one-volume, paint-preserving geometry replacement. Its worker preview and commit
+  // live in a focused hook beside the Boolean hook rather than adding another state machine here.
+  const simplify = useEditorSimplify({
+    gizmoMode,
+    setGizmoMode,
+    selectedKey,
+    extraSelectedKeys,
+    gizmoPart,
+    activePlateIndex,
+    stateRef,
+    groupByKeyRef,
+    setState,
+    importStore,
+    paint,
+    rotorOf,
+    nextInstanceKey,
+    recordHistoryRef,
+    setSelectedKey,
+    setPartSelection,
+    setGizmoPart,
+    setAddedPartMeshVersion,
+    setRebuildToken,
+    regenerateActiveThumbnailRef,
+    rebuildToken,
+    addedPartMeshVersion
+  })
+
 
   const handleAssembleSelection = useCallback(async () => {
     const keys = allSelectedKeysRef.current()
@@ -6866,27 +7030,104 @@ function EditorView({
     setImporting(true)
     try {
       const staged = await importStore.stageFromLibrary(libraryFileId, 'object', undefined)
-      addStagedImport(staged)
-      toast.success(`Imported ${staged.name}`)
+      if (await addOrMapStagedImport(staged)) toast.success(`Imported ${staged.name}`)
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Unable to import the selected model.')
     } finally {
       setImporting(false)
     }
-  }, [addStagedImport, importStore])
+  }, [addOrMapStagedImport, importStore])
 
-  const handleImportFile = useCallback(async (file: File) => {
+  const handleImportFile = useCallback(async (file: File, companionFiles: readonly File[] = []) => {
     setImporting(true)
     try {
-      const staged = await importStore.stageFile(file, 'object')
-      addStagedImport(staged)
-      toast.success(`Imported ${staged.name}`)
+      const staged = await importStore.stageFile(file, 'object', undefined, companionFiles)
+      if (await addOrMapStagedImport(staged)) toast.success(`Imported ${staged.name}`)
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Unable to import the model file.')
     } finally {
       setImporting(false)
     }
-  }, [addStagedImport, importStore])
+  }, [addOrMapStagedImport, importStore])
+
+  const canAppendSourceColors = Boolean(sliceConfig && materials.options.some((option) => (
+    sliceConfig.filamentMaterialOptionIds[option.id] != null
+  )))
+
+  /** Commit the colour dialog's mapping as one imported object plus ordinary colour paint. */
+  const handleApplySourceColors = useCallback((choice: SourceColorImportChoice) => {
+    const pending = sourceColorImport
+    if (!pending) return
+    const nearestExisting = matchSourceColorsToFilaments(choice.quantized, materials.options)
+    let nextFilamentId = Math.max(0, ...materials.options.map((option) => option.id))
+    const resolved: number[] = []
+    const appended: Array<{ optionId: string; color: string; label: string }> = []
+
+    for (const [index, mapping] of choice.mappings.entries()) {
+      if (mapping !== APPEND_SOURCE_COLOR) {
+        resolved.push(mapping)
+        continue
+      }
+      const templateId = nearestExisting[index]
+      const template = materials.options.find((option) => option.id === templateId)
+      const optionId = templateId == null ? undefined : sliceConfig?.filamentMaterialOptionIds[templateId]
+      if (!template || !optionId || !sliceConfig) {
+        toast.error('A matching material preset is needed before a new filament can be appended.')
+        return
+      }
+      nextFilamentId += 1
+      appended.push({
+        optionId,
+        color: sourceColorHex(choice.quantized.clusters[index]!.color),
+        label: template.label ?? 'PLA'
+      })
+      resolved.push(nextFilamentId)
+    }
+    if (nextFilamentId > 255) {
+      toast.error('This colour mapping would exceed the project limit of 255 filaments.')
+      return
+    }
+    if (appended.length > 0 && !sliceConfig) {
+      toast.error('This editor cannot append project filaments.')
+      return
+    }
+    const baseFilamentId = resolved[0] ?? materials.options[0]?.id
+    if (baseFilamentId == null) {
+      toast.error('Add a material to the project before importing this model.')
+      return
+    }
+    const colorPaint = buildImportedColorPaint(
+      pending.mesh,
+      choice.quantized.labels,
+      resolved,
+      baseFilamentId
+    )
+    const sourceColorPaint = { filamentId: baseFilamentId, colorPaint }
+    if (appended.length > 0) recordCombinedHistory()
+    const historyOptions = appended.length > 0 ? { recordHistory: false } : undefined
+    const committed = pending.target.kind === 'add'
+      ? addStagedImport(pending.staged, sourceColorPaint, historyOptions)
+      : replaceWithStagedRef.current(pending.target.key, pending.staged, sourceColorPaint, historyOptions)
+    if (!committed) return
+    // The ids were predicted from the controller's append rule. React batches these writes with
+    // the geometry and paint, while the combined frame above restores both ownership domains.
+    for (const filament of appended) {
+      sliceConfig?.onAddFilament({ optionId: filament.optionId, color: filament.color, label: filament.label })
+    }
+    setSourceColorImport(null)
+    toast.success(`${pending.target.kind === 'add' ? 'Imported' : 'Replaced with'} ${pending.staged.name} with ${choice.quantized.clusters.length} source colours`)
+  }, [addStagedImport, materials.options, recordCombinedHistory, sliceConfig, sourceColorImport])
+
+  /** Import the already-staged geometry while deliberately discarding its source appearance. */
+  const handleSkipSourceColors = useCallback(() => {
+    if (!sourceColorImport) return
+    const committed = sourceColorImport.target.kind === 'add'
+      ? addStagedImport(sourceColorImport.staged)
+      : replaceWithStagedRef.current(sourceColorImport.target.key, sourceColorImport.staged)
+    if (!committed) return
+    toast.success(`${sourceColorImport.target.kind === 'add' ? 'Imported' : 'Replaced with'} ${sourceColorImport.staged.name} without source colours`)
+    setSourceColorImport(null)
+  }, [addStagedImport, sourceColorImport])
 
   /**
    * Swap an object's geometry for a freshly staged foreign model, BambuStudio "Replace
@@ -6896,9 +7137,14 @@ function EditorView({
    * its identity (`replacedObjectId`) so its per-object process overrides follow the new mesh
    * at slice time. The replacements are import-backed; one undoable step (via `updatePlates`).
    */
-  const handleReplaceWithStaged = useCallback((key: string, staged: StagedImport) => {
+  const handleReplaceWithStaged = useCallback((
+    key: string,
+    staged: StagedImport,
+    sourceColorPaint?: SourceColorPaintCommit,
+    options: { recordHistory?: boolean } = {}
+  ): boolean => {
     const target = stateRef.current?.plates.flatMap((plate) => plate.instances).find((entry) => entry.key === key)
-    if (!target) return
+    if (!target) return false
     // The original object's id is retained for the slicer when replacing an in-project object
     // (or an already-replaced one); a plain import has no in-project identity to keep.
     const replacedObjectId = target.source.kind === 'object' ? target.objectId : target.source.replacedObjectId
@@ -6917,8 +7163,6 @@ function EditorView({
     // The replacement RETAINS the object identity that added parts are keyed by, so the old
     // shape's blockers/modifiers would silently reattach to an unrelated mesh. Drop them, matching
     // how paint and brim ears fall away (see `dropAddedPartsForReplacedHost`).
-    const state = stateRef.current
-    if (state) dropAddedPartsForReplacedHost(state, target)
     // A modifier or blocker is a slicing decision about a NAMED piece of the model, so it survives
     // a swap for a revised export of that model. Recorded as explicit type changes rather than
     // only set on the instance: the bake reads an unsaved import's subtypes from
@@ -6936,10 +7180,16 @@ function EditorView({
           instance, staged, replacedObjectId, importStore.meshUrl,
           worldFootprintCenterForRef.current?.(instance.key) ?? null, carriedSubtypes
         )
+        if (sourceColorPaint) replacement.filamentId = sourceColorPaint.filamentId
         if (instance.key === key) selectedReplacementKey = replacement.key
         return replacement
       })
-    })))
+    })), 'structure', options)
+    // `updatePlates` records history before queuing the replacement. Clear geometry-bound state
+    // only after that snapshot, otherwise Undo restores the old mesh without its removed helper
+    // volumes. The following setState commits these mutations together with the paint cleanup.
+    const state = stateRef.current
+    if (state) dropAddedPartsForReplacedHost(state, target)
     // The replacement's host id is what `collectImportPartTypes` keys the emitted
     // `importPartTypes` on, so record the carry there too. Without it the bake reads the STAGED
     // record's subtypes (which a STEP or a plain 3MF does not have) and the volumes print.
@@ -6953,26 +7203,35 @@ function EditorView({
         return { ...current, partTypeChanges }
       })
     }
+    const replacementHostId = addedPartHostId(target)
+    if (replacementHostId != null) {
+      setState((current) => current ? {
+        ...current,
+        ...paintMapsAfterMeshReplacement(current, replacementHostId, sourceColorPaint?.colorPaint)
+      } : current)
+    }
     if (selectedReplacementKey) {
       setExtraSelectedKeys([])
       setSelectedKey(selectedReplacementKey)
       setGizmoMode('translate')
     }
+    return true
   }, [updatePlates, importStore])
+  replaceWithStagedRef.current = handleReplaceWithStaged
 
   /** Replace `key`'s geometry with an uploaded local model file. */
-  const handleReplaceFromFile = useCallback(async (key: string, file: File) => {
+  const handleReplaceFromFile = useCallback(async (key: string, file: File, companionFiles: readonly File[] = []) => {
     setImporting(true)
     try {
-      const staged = await importStore.stageFile(file, 'object')
-      handleReplaceWithStaged(key, staged)
-      toast.success(`Replaced with ${staged.name}`)
+      const staged = await importStore.stageFile(file, 'object', undefined, companionFiles)
+      if (await queueSourceColorMapping(staged, { kind: 'replace', key })) return
+      if (handleReplaceWithStaged(key, staged)) toast.success(`Replaced with ${staged.name}`)
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Unable to replace the model.')
     } finally {
       setImporting(false)
     }
-  }, [handleReplaceWithStaged, importStore])
+  }, [handleReplaceWithStaged, importStore, queueSourceColorMapping])
 
   /** Replace `key`'s geometry with a model picked from the library. */
   const handleReplaceFromLibrary = useCallback(async (key: string, libraryFileId: string) => {
@@ -6981,14 +7240,14 @@ function EditorView({
     setImporting(true)
     try {
       const staged = await importStore.stageFromLibrary(libraryFileId, 'object', undefined)
-      handleReplaceWithStaged(key, staged)
-      toast.success(`Replaced with ${staged.name}`)
+      if (await queueSourceColorMapping(staged, { kind: 'replace', key })) return
+      if (handleReplaceWithStaged(key, staged)) toast.success(`Replaced with ${staged.name}`)
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Unable to replace the model.')
     } finally {
       setImporting(false)
     }
-  }, [handleReplaceWithStaged, importStore])
+  }, [handleReplaceWithStaged, importStore, queueSourceColorMapping])
 
   /**
    * BambuStudio's "Split -> To parts" (`ObjectList::split` -> `ModelVolume::split`): the same
@@ -9860,6 +10119,7 @@ function EditorView({
           plate,
           sceneEdit,
           contentBase,
+          ...(savedFile?.libraryFile ? { sourceFile: savedFile.libraryFile } : {}),
           stageSnapshot: (target, slicerTargetId, signal) => stageSnapshotFor(
             sceneEdit,
             target,
@@ -9882,6 +10142,11 @@ function EditorView({
           ),
           signal: abort.signal
         })
+        // A normal host also clears this through `slicingProp` when its create-job mutation starts.
+        // An unchanged browser-cached result deliberately starts no mutation, so successful handoff
+        // must close the preparation dialog directly as well.
+        setPreparingSlice(false)
+        setTransferProgress(null)
       } catch (error) {
         // Rethrowing here would only become an unhandled rejection: the console sees it but the
         // /api/logs buffer (which captures console.*) does not, and the user is left staring at a
@@ -9895,7 +10160,7 @@ function EditorView({
         if (slicePreparationAbortRef.current === abort) slicePreparationAbortRef.current = null
       }
     })()
-  }, [onSlice, buildSceneEditOut, authorFilamentConfigs, stateRef, contentBase, stageSnapshotFor])
+  }, [onSlice, buildSceneEditOut, authorFilamentConfigs, stateRef, contentBase, savedFile, stageSnapshotFor])
   const retryPreparationStatus = useCallback(() => {
     const retry = preparationRecoveryRetryRef.current
     if (!retry) return
@@ -10204,11 +10469,6 @@ function EditorView({
   // same-plate dimming rebuild.
   const showBuildOverlay = viewportBuilding || !sceneReady
   const buildOverlayIncremental = buildIncremental || !sceneReady
-  // Null, not 0, while the part count is unknown or a single part: the bar and spinner are then
-  // indeterminate, and a 0 would size their moving segment to nothing (see `ProgressBar`).
-  const buildProgressPercent = buildProgress && buildProgress.total > 1
-    ? Math.round((buildProgress.done / buildProgress.total) * 100)
-    : null
   const loadError = platesQuery.error instanceof Error
     ? platesQuery.error.message
     : initialSceneQuery.error instanceof Error
@@ -10221,9 +10481,6 @@ function EditorView({
       ? 'Unpacking project and reading its plates and settings…'
       : 'Downloading project…'
     : 'Reading plate objects, positions, and settings…'
-  const projectDownloadPercent = projectOpenPhase === 'loading-file' && projectDownloadProgress?.totalBytes
-    ? Math.min(100, Math.round((projectDownloadProgress.loadedBytes / projectDownloadProgress.totalBytes) * 100))
-    : null
   // Re-run only the reads that actually failed: the project source's archive memo is cleared on
   // rejection, so an errored query's refetch re-downloads, while a healthy query's data stays put.
   const retryProjectLoad = () => {
@@ -10398,21 +10655,10 @@ function EditorView({
           // here would unmount the WebGL canvas and reinitialize the entire scene (a visible
           // "reload" of the dialog on every plate switch).
           <Box sx={{ flex: 1, display: 'grid', placeItems: 'center' }}>
-            <Stack spacing={1} alignItems="center" role="status" aria-live="polite">
-              <CircularProgress size="sm" />
-              <Typography level="body-sm" textColor="text.tertiary">{initialLoadLabel}</Typography>
-              {projectOpenPhase === 'loading-file' && projectDownloadProgress && (
-                <Stack spacing={0.5} sx={{ width: { xs: 240, sm: 320 }, mt: 0.5 }}>
-                  <ProgressBar value={projectDownloadPercent} />
-                  <Typography level="body-xs" textColor="text.tertiary" textAlign="center">
-                    {formatBytes(projectDownloadProgress.loadedBytes)}
-                    {projectDownloadProgress.totalBytes != null
-                      ? ` of ${formatBytes(projectDownloadProgress.totalBytes)}`
-                      : ' downloaded'}
-                  </Typography>
-                </Stack>
-              )}
-            </Stack>
+            <EditorOpeningStatus
+              label={initialLoadLabel}
+              downloadProgress={projectOpenPhase === 'loading-file' ? projectDownloadProgress : null}
+            />
           </Box>
         ) : (
           (() => {
@@ -10459,80 +10705,13 @@ function EditorView({
                   whenever the inline value is cleared, keeping the canvas non-scrolling every time.
                 */}
                 <Box ref={setViewerContainer} sx={{ position: 'absolute', inset: 0, touchAction: 'none', '& canvas': { touchAction: 'none' } }} />
-                {showBuildOverlay && buildOverlayIncremental && (
-                  // Incremental / first load: a progress bar pinned to the top edge PLUS a centred
-                  // spinner + count over a light scrim. The centre carries the "still loading"
-                  // message clearly (a bare top bar was too easy to miss), while the light dim still
-                  // lets each model show as it lands. The bar/count are part-based, so even a single
-                  // multi-solid assembly shows real progress.
-                  <>
-                    <ProgressBar
-                      value={buildProgressPercent}
-                      thickness={4}
-                      sx={{
-                        position: 'absolute',
-                        top: 0,
-                        left: 0,
-                        right: 0,
-                        zIndex: 3,
-                        pointerEvents: 'none',
-                        '--LinearProgress-radius': '0px'
-                      }}
-                    />
-                    <Box
-                      sx={{
-                        position: 'absolute',
-                        inset: 0,
-                        zIndex: 2,
-                        pointerEvents: 'none',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        gap: 1.25,
-                        bgcolor: 'rgba(13, 19, 34, 0.4)'
-                      }}
-                    >
-                      <ProgressSpinner size="md" value={buildProgressPercent} />
-                      <Typography level="body-sm" textColor="common.white">
-                        {buildProgress && buildProgress.total > 1
-                          ? `Building the 3D view… ${buildProgress.done} of ${buildProgress.total}`
-                          : 'Building the 3D view…'}
-                      </Typography>
-                    </Box>
-                  </>
-                )}
-                {showBuildOverlay && !buildOverlayIncremental && (
-                  // Atomic rebuild: the previous plate is still visible, so dim it more to signal
-                  // work while the replacement is assembled off-screen.
-                  <Box
-                    sx={{
-                      position: 'absolute',
-                      inset: 0,
-                      zIndex: 2,
-                      pointerEvents: 'none',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: 1.25,
-                      bgcolor: 'rgba(13, 19, 34, 0.55)'
-                    }}
-                  >
-                    {buildProgress && buildProgress.total > 1 ? (
-                      <>
-                        <ProgressSpinner size="md" value={buildProgressPercent} />
-                        <Typography level="body-sm" textColor="common.white">
-                          Building the 3D view… ({buildProgress.done}/{buildProgress.total})
-                        </Typography>
-                      </>
-                    ) : (
-                      <>
-                        <CircularProgress size="md" />
-                        <Typography level="body-sm" textColor="common.white">Building the 3D view…</Typography>
-                      </>
-                    )}
-                  </Box>
+                {showBuildOverlay && (
+                  // First/incremental builds leave more of the arriving scene visible; an atomic
+                  // rebuild dims the previous plate while its replacement assembles off-screen.
+                  <ViewportBuildOverlay
+                    progress={buildProgress}
+                    incremental={buildOverlayIncremental}
+                  />
                 )}
                 {importing && (
                   <Box
@@ -10646,6 +10825,19 @@ function EditorView({
                         aria-label="Parameter table"
                       >
                         <TableRowsRoundedIcon />
+                      </IconButton>
+                    </Tooltip>
+                  )}
+                  {showEditorChrome && state && (
+                    <Tooltip title="Project files and details">
+                      <IconButton
+                        size="sm"
+                        variant="soft"
+                        color="neutral"
+                        onClick={() => setProjectAuxiliariesOpen(true)}
+                        aria-label="Project files and details"
+                      >
+                        <AttachFileRoundedIcon />
                       </IconButton>
                     </Tooltip>
                   )}
@@ -10773,6 +10965,23 @@ function EditorView({
                     warning={meshBoolean.warning}
                     busy={meshBoolean.busy}
                     onApply={meshBoolean.apply}
+                    onClose={() => setGizmoMode(RESTING_GIZMO_MODE)}
+                  />
+                )}
+                {gizmoMode === 'simplify' && selectedKey && (
+                  <SimplifyPanel
+                    name={simplify.name}
+                    sourceTriangles={simplify.sourceTriangles}
+                    previewTriangles={simplify.previewTriangles}
+                    mode={simplify.mode}
+                    onModeChange={simplify.setMode}
+                    detail={simplify.detail}
+                    onDetailChange={simplify.setDetail}
+                    ratio={simplify.ratio}
+                    onRatioChange={simplify.setRatio}
+                    busy={simplify.busy}
+                    error={simplify.error}
+                    onApply={simplify.apply}
                     onClose={() => setGizmoMode(RESTING_GIZMO_MODE)}
                   />
                 )}
@@ -11269,17 +11478,27 @@ function EditorView({
         <input
           ref={fileInputRef}
           type="file"
-          accept={importAccept}
+          accept={`${importAccept},.mtl,.png,.jpg,.jpeg`}
+          multiple
           hidden
           onChange={(event) => {
-            const file = event.target.files?.[0]
+            const files = event.target.files
             event.target.value = ''
-            if (!file) return
+            if (!files?.length) return
             const request = modelRequest
             setModelRequest(null)
-            if (request?.kind === 'replace') void handleReplaceFromFile(request.key, file)
-            else if (request?.kind === 'addPart') void handleAddPartVolume(request.key, request.subtype, { kind: 'file', file })
-            else void handleImportFile(file)
+            let selection
+            try {
+              selection = resolveImportFileSelection(files, importStore.importableFormats)
+            } catch (error) {
+              toast.error(error instanceof Error ? error.message : 'Unable to use the selected files.')
+              return
+            }
+            const { file, companionFiles } = selection
+            if (request?.kind === 'replace') void handleReplaceFromFile(request.key, file, companionFiles)
+            else if (request?.kind === 'addPart') {
+              void handleAddPartVolume(request.key, request.subtype, { kind: 'file', file, companionFiles })
+            } else void handleImportFile(file, companionFiles)
           }}
         />
         {contextMenu?.kind === 'object' && (
@@ -11417,7 +11636,41 @@ function EditorView({
       onClose={() => setEditorSettingsOpen(false)}
     />
 
+    {projectAuxiliariesOpen && state && (
+      <ProjectAuxiliariesDialog
+        auxiliaries={state.projectAuxiliaries ?? projectAuxiliariesQuery.data}
+        loading={projectAuxiliariesQuery.isLoading}
+        loadError={projectAuxiliariesQuery.error instanceof Error
+          ? projectAuxiliariesQuery.error.message
+          : null}
+        onRetry={() => void projectAuxiliariesQuery.refetch()}
+        onClose={() => setProjectAuxiliariesOpen(false)}
+        onApply={(projectAuxiliaries) => {
+          recordHistory()
+          setState((current) => current ? { ...current, projectAuxiliaries } : current)
+        }}
+      />
+    )}
+
     {presetManager?.({ open: slicingPresetsOpen, onClose: closeSlicingPresets })}
+
+    {sourceColorImport && (
+      <SourceColorImportDialog
+        name={sourceColorImport.staged.name}
+        sourceColors={sourceColorImport.sourceColors}
+        mesh={sourceColorImport.mesh}
+        sourceColorMode={sourceColorImport.sourceColorMode}
+        gammaCorrectable={supportsSourceColorGamma(
+          sourceColorImport.staged.format,
+          sourceColorImport.sourceColorMode
+        )}
+        filaments={materials.options}
+        canAppend={canAppendSourceColors}
+        onCancel={() => setSourceColorImport(null)}
+        onSkip={handleSkipSourceColors}
+        onApply={handleApplySourceColors}
+      />
+    )}
 
     {libraryPickerOpen && (
       <LibraryFilePickerDialog
@@ -11429,7 +11682,7 @@ function EditorView({
           <EmptyState
             icon={<InventoryRoundedIcon />}
             title="No importable files here"
-            description="Open a subfolder, or upload an STL, STEP, or 3MF file to the library first."
+            description="Open a subfolder, or upload an importable model to the library first."
           />
         }
         onPick={(file) => {

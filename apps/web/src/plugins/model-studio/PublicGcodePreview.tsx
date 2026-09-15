@@ -10,7 +10,7 @@ export function PublicGcodePreview({ source, onClose }: {
   onClose: () => void
 }) {
   return (
-    <LazyDialogBoundary variant="maximized" label="the G-code preview" onClose={onClose}>
+    <LazyDialogBoundary variant="preview" label="the G-code preview" onClose={onClose}>
       <PreviewView inMemoryGcode={source} onPreviewClose={onClose} />
     </LazyDialogBoundary>
   )

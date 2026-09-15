@@ -1,20 +1,22 @@
 /**
- * Read-only nozzle-changer (rack) section: the body of the printer controls
- * dialog's Nozzles tab.
+ * Nozzle-changer (rack) status and safe maintenance controls: the body of the
+ * printer controls dialog's Nozzles tab.
  *
  * The H2C has a static left nozzle and a swappable right-side nozzle system: a
  * rack of spare hotends the printer swaps automatically during prints. Bambu
- * exposes no manual "load nozzle N" command, so this surface is informational,
- * it lists the mounted and parked hotends and the current changer state.
+ * exposes no manual "load nozzle N" command. It does expose rack positioning,
+ * homing, and hotend re-read commands for physical maintenance.
  *
  * Rendered only when `status.nozzleRack` is present (H2C only); the tab is
  * hidden otherwise.
  */
-import { Box, Chip, Sheet, Stack, Typography } from '@mui/joy'
+import { Box, Button, ButtonGroup, Chip, Sheet, Stack, Typography } from '@mui/joy'
 import SwapVertRoundedIcon from '@mui/icons-material/SwapVertRounded'
-import type { NozzleRack, NozzleRackSlot } from '@printstream/shared'
+import { getNozzleRackControlAvailability, type NozzleRackSlot, type PrinterStatus } from '@printstream/shared'
 import { DialogSection } from '../DialogSection'
 import { formatNozzleRackStatus, formatNozzleSlotHardware, summarizeNozzleRack } from '../../lib/nozzleRackHelpers'
+import { usePromptDialog } from '../PromptDialogProvider'
+import type { PrinterControlCommand } from '../../lib/printersViewHelpers'
 
 function NozzleRow({ slot }: { slot: NozzleRackSlot }) {
   return (
@@ -43,8 +45,32 @@ function NozzleRow({ slot }: { slot: NozzleRackSlot }) {
   )
 }
 
-export function NozzleRackSection({ rack }: { rack: NozzleRack }) {
+export function NozzleRackSection({
+  status,
+  submitting,
+  onSubmit
+}: {
+  status: PrinterStatus
+  submitting: boolean
+  onSubmit: (command: PrinterControlCommand) => void
+}) {
+  const { confirm } = usePromptDialog()
+  const rack = status.nozzleRack
+  if (!rack) return null
+
   const summary = summarizeNozzleRack(rack)
+  const availability = getNozzleRackControlAvailability(status)
+  const controlsDisabled = submitting || !availability.allowed
+
+  const requestMotion = async (action: 'home' | 'raiseA' | 'raiseB') => {
+    const accepted = await confirm({
+      title: 'Move the nozzle rack?',
+      description: 'The toolhead and hotend rack may move. Keep your hands away from the chamber.',
+      confirmLabel: 'Move rack',
+      color: 'warning'
+    })
+    if (accepted) onSubmit({ type: 'controlNozzleRack', action })
+  }
 
   return (
     <DialogSection title="Nozzle changer" wrapInSheet={false}>
@@ -90,9 +116,27 @@ export function NozzleRackSection({ rack }: { rack: NozzleRack }) {
             </Box>
           ) : null}
 
-          <Typography level="body-xs" textColor="text.tertiary">
-            The printer swaps nozzles automatically during prints; this view is read-only.
-          </Typography>
+          <Stack spacing={0.75}>
+            <Typography level="body-xs" textColor="text.tertiary">Rack maintenance</Typography>
+            <ButtonGroup size="sm" variant="outlined" color="neutral" sx={{ alignSelf: 'flex-start', flexWrap: 'wrap' }}>
+              <Button disabled={controlsDisabled} onClick={() => void requestMotion('raiseA')}>Raise row A</Button>
+              <Button disabled={controlsDisabled} onClick={() => void requestMotion('raiseB')}>Raise row B</Button>
+              <Button disabled={controlsDisabled} onClick={() => void requestMotion('home')}>Home</Button>
+            </ButtonGroup>
+            <Button
+              size="sm"
+              variant="soft"
+              color="neutral"
+              disabled={controlsDisabled}
+              onClick={() => onSubmit({ type: 'controlNozzleRack', action: 'refreshAll' })}
+              sx={{ alignSelf: 'flex-start' }}
+            >
+              Re-read hotends
+            </Button>
+            {!availability.allowed && (
+              <Typography level="body-xs" textColor="text.tertiary">{availability.reason}</Typography>
+            )}
+          </Stack>
         </Stack>
       </Sheet>
     </DialogSection>

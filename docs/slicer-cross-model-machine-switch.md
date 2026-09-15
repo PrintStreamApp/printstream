@@ -73,14 +73,14 @@ and topology are already self-consistent: the same reason a project saved via
 ## Why the `inherits_group` blank matters
 
 BambuStudio resolves the project's *system* printer from the machine (last)
-slot of `inherits_group`, not from `printer_settings_id`. A project saved with
-an inherited/custom machine preset keeps its old parent there (e.g.
-`Bambu Lab P1P 0.4 nozzle`), and CLIs from 2.7.1 on validate every loaded
-filament preset against that name, so a stale slot fails the slice with the
-misleading `filament preset … is not compatible with printer <old machine>`.
-Both the slice-time rewrite (`rewriteProjectSettingsMetadata`) and the shared
-retarget blank the relevant slots when they rewrite the corresponding
-`*_settings_id`.
+slot of `inherits_group`, not from `printer_settings_id`. A system preset uses
+an empty slot so its own id is the system identity. A custom User preset must
+instead name its system parent there. If the slot keeps an old parent (e.g.
+`Bambu Lab P1P 0.4 nozzle`), CLIs from 2.7.1 on validate every loaded filament
+preset against the wrong machine. If a custom preset's slot is blank, the CLI
+searches `machine_full` for the custom name and rejects a compatible process.
+The shared retarget therefore blanks the slot for a system target and writes
+the verified parent for a custom target.
 
 ## The same-model heal and the remaining guard
 

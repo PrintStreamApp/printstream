@@ -104,57 +104,63 @@ export function QueueMaterialRow({
 
   return (
     <Stack spacing={0.5}>
-      {requiredGrams != null ? (
-        <Typography level="body-xs" textColor="text.tertiary" sx={{ alignSelf: 'flex-end' }}>
-          Needs ~{Math.round(requiredGrams)}g
-        </Typography>
-      ) : null}
-      <Select
-        size="sm"
-        value={selectValue}
-        color={warn ? 'warning' : 'neutral'}
-        onChange={(_event, next) => select(next)}
-        renderValue={() => (
+      <Stack direction="row" spacing={1} alignItems="center" sx={{ minWidth: 0 }}>
+        <Box sx={{ flex: '1 1 0', minWidth: 0 }}>
           <FilamentOptionLabel
-            color={value.color}
-            filamentType={value.filamentType}
-            filamentName={value.filamentName}
-            remainingGrams={libMatch?.remainingGrams}
-            remainPercent={libMatch?.remainPercent}
-            requiredGrams={requiredGrams}
-            aggregated={(libMatch?.spoolCount ?? 0) > 1}
-            warningLabel={selectedWarningLabel}
+            color={file.color}
+            filamentType={file.filamentType}
+            filamentName={file.filamentName}
+            secondary={requiredGrams != null ? `Needs ~${Math.round(requiredGrams)}g` : 'File material'}
           />
-        )}
-        slotProps={{ button: { sx: { minHeight: 40, textAlign: 'left', justifyContent: 'flex-start' } }, listbox: { sx: { maxHeight: '45vh' } } }}
-      >
-        <Option value="file">
-          <FilamentOptionLabel color={file.color} filamentType={file.filamentType} filamentName={file.filamentName} secondary="File default" />
-        </Option>
-
-        {suggestionList.length > 0 ? (
-          <Typography level="body-xs" textColor="text.tertiary" sx={{ px: 1, pt: 0.75, pb: 0.25, fontWeight: 'lg', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-            Suggested from library
-          </Typography>
-        ) : null}
-        {suggestionList.map((material) => (
-          <Option key={material.key} value={`lib:${material.key}`}>
+        </Box>
+        <Select
+          size="sm"
+          value={selectValue}
+          color={warn ? 'warning' : 'neutral'}
+          onChange={(_event, next) => select(next)}
+          renderValue={() => (
             <FilamentOptionLabel
-              color={material.color}
-              filamentType={material.filamentType}
-              filamentName={material.brand}
-              remainingGrams={material.remainingGrams}
-              remainPercent={material.remainPercent}
+              color={value.color}
+              filamentType={value.filamentType}
+              filamentName={value.filamentName}
+              remainingGrams={libMatch?.remainingGrams}
+              remainPercent={libMatch?.remainPercent}
               requiredGrams={requiredGrams}
-              aggregated={material.spoolCount > 1}
-              warningLabel={suggestionWarningLabel(material.filamentType)}
+              aggregated={(libMatch?.spoolCount ?? 0) > 1}
+              warningLabel={selectedWarningLabel}
             />
+          )}
+          sx={{ flex: '1 1 0', minWidth: 0 }}
+          slotProps={{ button: { sx: { minHeight: 40, textAlign: 'left', justifyContent: 'flex-start' } }, listbox: { sx: { maxHeight: '45vh' } } }}
+        >
+          <Option value="file">
+            <FilamentOptionLabel color={file.color} filamentType={file.filamentType} filamentName={file.filamentName} secondary="File default" />
           </Option>
-        ))}
-        {materials.length > 0 ? <Option value="browse">Browse all materials…</Option> : null}
 
-        <Option value="custom">Custom material…</Option>
-      </Select>
+          {suggestionList.length > 0 ? (
+            <Typography level="body-xs" textColor="text.tertiary" sx={{ px: 1, pt: 0.75, pb: 0.25, fontWeight: 'lg', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              Suggested from library
+            </Typography>
+          ) : null}
+          {suggestionList.map((material) => (
+            <Option key={material.key} value={`lib:${material.key}`}>
+              <FilamentOptionLabel
+                color={material.color}
+                filamentType={material.filamentType}
+                filamentName={material.brand}
+                remainingGrams={material.remainingGrams}
+                remainPercent={material.remainPercent}
+                requiredGrams={requiredGrams}
+                aggregated={material.spoolCount > 1}
+                warningLabel={suggestionWarningLabel(material.filamentType)}
+              />
+            </Option>
+          ))}
+          {materials.length > 0 ? <Option value="browse">Browse all materials…</Option> : null}
+
+          <Option value="custom">Custom material…</Option>
+        </Select>
+      </Stack>
 
       {isCustom ? (
         <Stack direction="row" spacing={1} alignItems="flex-end" sx={{ pl: 0.5 }}>

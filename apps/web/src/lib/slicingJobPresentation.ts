@@ -1,4 +1,8 @@
-import { getSlicingJobStatusLabel, type SlicingJob, type SlicingMetadata } from '@printstream/shared'
+import {
+  getSlicingJobStatusLabel as getSharedSlicingJobStatusLabel,
+  type SlicingJob,
+  type SlicingMetadata
+} from '@printstream/shared'
 import { formatLibraryFileName } from './libraryDisplay'
 import { formatSecondsDuration } from './time'
 import { formatFilamentCost } from './filamentCost'
@@ -6,11 +10,18 @@ import { formatFilamentCost } from './filamentCost'
 // Status classification/labels and the history-result mapping moved to @printstream/shared
 // (`slicing.ts` / `job-history.ts`) so the server-side job-history search filters on the same
 // text these cards render; re-exported so the web's import sites keep one path.
-export { getSlicingJobStatusLabel, isActiveSlicingJob, slicingHistoryResult } from '@printstream/shared'
+export { isActiveSlicingJob, slicingHistoryResult } from '@printstream/shared'
 
 export interface SlicingProgressFrame {
   message: string
   totalPercent: number | null
+  plateIndex: number | null
+  plateCount: number | null
+}
+
+interface SlicingPlateProgress {
+  index: number
+  count: number
 }
 
 /** The engine's own progress, parsed from the JSON frames it writes to stdout. */
@@ -40,6 +51,15 @@ export function getSlicingProgressPercent(
   return getLatestSlicingActivity(job)?.kind === 'engine'
     ? progressFrame?.totalPercent ?? null
     : null
+}
+
+/** Adds durable per-plate context to the status chip while an all-plates slice is running. */
+export function getSlicingJobStatusLabel(job: SlicingJob): string {
+  const baseLabel = getSharedSlicingJobStatusLabel(job)
+  if (job.status !== 'slicing' || job.plate !== 0) return baseLabel
+
+  const plate = getCurrentSlicingPlate(job)
+  return plate ? `${baseLabel} ${plate.index} of ${plate.count}` : baseLabel
 }
 
 export function formatSlicingProgress(job: SlicingJob, progressFrame: SlicingProgressFrame | null): string {
@@ -128,7 +148,7 @@ function getLatestSlicingActivity(job: SlicingJob):
   return null
 }
 
-function parseSlicingProgressFrame(value: string): Pick<SlicingProgressFrame, 'message' | 'totalPercent'> | null {
+function parseSlicingProgressFrame(value: string): SlicingProgressFrame | null {
   const trimmed = value.trim()
   if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) return null
 
@@ -137,10 +157,67 @@ function parseSlicingProgressFrame(value: string): Pick<SlicingProgressFrame, 'm
     const message = firstNonEmptyString(parsed.message, parsed.status)
     if (!message) return null
     const totalPercent = normalizeProgressPercent(firstFiniteNumber(parsed.total_percent, parsed.totalPercent, parsed.percent))
-    return { message, totalPercent }
+    return {
+      message,
+      totalPercent,
+      plateIndex: positiveIntegerOrNull(parsed.plate_index, parsed.plateIndex),
+      plateCount: positiveIntegerOrNull(parsed.plate_count, parsed.plateCount)
+    }
   } catch {
     return null
   }
+}
+
+/**
+ * Tracks a multi-plate engine frame or the fallback slicer's explicit system phase.
+ * Engine heartbeat lines are transparent so they cannot erase the current plate from the chip.
+ */
+function getCurrentSlicingPlate(job: SlicingJob): SlicingPlateProgress | null {
+  let current: SlicingPlateProgress | null = null
+
+  for (const line of job.output) {
+    const text = line?.text?.trim()
+    if (!text) continue
+
+    const frame = parseSlicingProgressFrame(text)
+    if (frame) {
+      if (
+        frame.plateIndex != null
+        && frame.plateCount != null
+        && frame.plateCount > 1
+        && frame.plateIndex <= frame.plateCount
+      ) {
+        current = { index: frame.plateIndex, count: frame.plateCount }
+      }
+      continue
+    }
+
+    if (line.stream !== 'system') continue
+    const fallbackPlate = /^Slicing plate (\d+) of (\d+)$/.exec(text)
+    if (fallbackPlate) {
+      const index = Number(fallbackPlate[1])
+      const count = Number(fallbackPlate[2])
+      current = index > 0 && count > 1 && index <= count ? { index, count } : null
+      continue
+    }
+
+    if (!isSlicerHeartbeat(text)) current = null
+  }
+
+  return current
+}
+
+function isSlicerHeartbeat(message: string): boolean {
+  return /^Slicing\.\.\. \S+ elapsed$/.test(message)
+    || message.startsWith('The slicer service is no longer tracking')
+    || message.startsWith('Lost contact with the slicer service')
+}
+
+function positiveIntegerOrNull(...values: unknown[]): number | null {
+  for (const value of values) {
+    if (typeof value === 'number' && Number.isInteger(value) && value > 0) return value
+  }
+  return null
 }
 
 function firstNonEmptyString(...values: unknown[]): string | null {

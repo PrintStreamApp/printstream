@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { STEP_TESSELLATION, describeImportFormats, detectImportFormat, meshToBinaryStl, parseStlMesh, weldImportedMeshVertices } from './mesh-import.js'
+import { STEP_TESSELLATION, describeImportFormats, detectImportFormat, meshToBinaryStl, parseImportedMesh, parseStlMesh, weldImportedMeshVertices } from './mesh-import.js'
 
 /** Build a minimal binary STL containing the given triangles (each 3 xyz vertices). */
 function buildBinaryStl(triangles: number[][][]): Buffer {
@@ -30,6 +30,7 @@ test('detectImportFormat recognizes supported extensions', () => {
   assert.equal(detectImportFormat('scene.gltf'), 'gltf')
   assert.equal(detectImportFormat('scene.glb'), 'gltf')
   assert.equal(detectImportFormat('part.amf'), 'amf')
+  assert.equal(detectImportFormat('assembly.fbx'), 'fbx')
   assert.equal(detectImportFormat('notes.txt'), null)
 })
 
@@ -38,9 +39,31 @@ test('the refusal message names every format the server actually accepts', () =>
   // which is worse than no message once a fourth format lands: it tells a user their file is
   // unsupported when it is merely misnamed.
   const described = describeImportFormats()
-  for (const label of ['STL', 'STEP', '3MF', 'OBJ', 'glTF', 'AMF']) {
+  for (const label of ['STL', 'STEP', '3MF', 'OBJ', 'glTF', 'AMF', 'FBX']) {
     assert.ok(described.includes(label), `${label} must be named in the refusal message`)
   }
+})
+
+test('an OBJ resolves the selected MTL resource named by mtllib', async () => {
+  const obj = Buffer.from([
+    'mtllib materials/model.mtl',
+    'v 0 0 0',
+    'v 1 0 0',
+    'v 0 1 0',
+    'usemtl shell',
+    'f 1 2 3'
+  ].join('\n'))
+  const mesh = await parseImportedMesh(obj, 'obj', [{
+    name: 'MODEL.MTL',
+    bytes: Buffer.from('newmtl shell\nKd 0.25 0.5 0.75')
+  }])
+
+  assert.equal(mesh.sourceColorMode, 'material')
+  assert.deepEqual(mesh.triangleCornerColors, [
+    0.25, 0.5, 0.75, 1,
+    0.25, 0.5, 0.75, 1,
+    0.25, 0.5, 0.75, 1
+  ])
 })
 
 test('STEP tessellation quality matches BambuStudio defaults', () => {

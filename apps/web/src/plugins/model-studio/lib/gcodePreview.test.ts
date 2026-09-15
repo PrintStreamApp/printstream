@@ -53,6 +53,46 @@ test('parseGcodeLayers groups extrusion by Z height and ignores travel z-hops', 
   assertCloseArray(parsed.extrusionPositions, 0, [0, 0, 0.2, 10, 0, 0.2])
 })
 
+test('parseGcodeLayers folds machine-start purge extrusion into the explicit first layer', () => {
+  const gcode = [
+    'G90', 'M83',
+    '; FEATURE: Custom',
+    'G1 X250 Y0 Z5.8',
+    'G1 X290 E10', // H2D nozzle-load line, not a print layer
+    '; CHANGE_LAYER',
+    '; layer num/total_layer_count: 1/1',
+    '; FEATURE: Outer wall',
+    'G1 X0 Y0 Z0.2',
+    'G1 X10 Y0 E1',
+    'G1 X10 Y10 E1'
+  ].join('\n')
+
+  const parsed = parseGcodeLayers(gcode)
+  assert.equal(parsed.layerCount, 1)
+  assert.deepEqual(parsed.layerZ, [0.2])
+  assert.deepEqual(parsed.extrusionLayerEnd, [6])
+  assertCloseArray(parsed.extrusionPositions, 0, [250, 0, 5.8, 290, 0, 5.8])
+  assertCloseArray(parsed.extrusionPositions, 6, [0, 0, 0.2, 10, 0, 0.2])
+  assert.deepEqual(Array.from(parsed.extrusionMoveIds), [0, 2, 3])
+  assert.deepEqual(Array.from(parsed.travelMoveIds), [1])
+
+  const preview = buildLayeredGcodePreview(parsed)
+  assert.equal(preview.moveCount(0), 3)
+  preview.setVisibleLayers(0, { single: true, moveEnd: 1 })
+  assert.ok(drawnTriangles(preview).size > 0, 'the first, purge-line move is rendered')
+
+  // When Travel is visible, it occupies its real position between the purge line and the model.
+  // The slider must reveal the travel at step 2 without revealing the model's first bead early.
+  assert.equal(preview.moveCount(0, { showTravel: true }), 4)
+  const travel = preview.object.children.find((child) => (child as THREE.LineSegments).isLineSegments) as THREE.LineSegments
+  preview.setVisibleLayers(0, { single: true, showTravel: true, moveEnd: 1 })
+  assert.equal(travel.visible, false)
+  preview.setVisibleLayers(0, { single: true, showTravel: true, moveEnd: 2 })
+  assert.equal(travel.visible, true)
+  assert.equal(travel.geometry.drawRange.count, 2)
+  preview.dispose()
+})
+
 test('parseGcodeLayers places custom layer events from reserved tags in print order', () => {
   const gcode = [
     'G90', 'M82',

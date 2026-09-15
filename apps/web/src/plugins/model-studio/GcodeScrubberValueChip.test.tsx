@@ -24,3 +24,16 @@ test('reserves the widest scrubber value without exposing duplicate text', () =>
   assert.equal(dom.window.getComputedStyle(reference!).visibility, 'hidden')
   assert.equal(dom.window.getComputedStyle(reference!.parentElement!).display, 'grid')
 })
+
+test('sideways values keep physical space before and after the text', () => {
+  render(React.createElement(GcodeScrubberValueChip, {
+    value: '100/100',
+    widthReference: '100/100',
+    sideways: true
+  }))
+
+  const chip = screen.getAllByText('100/100')[0]!.closest('.MuiChip-root')!
+  const style = dom.window.getComputedStyle(chip)
+  assert.equal(style.paddingTop, '4px')
+  assert.equal(style.paddingBottom, '4px')
+})

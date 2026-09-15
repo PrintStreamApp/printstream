@@ -2,10 +2,10 @@
  * Runs a command at the lowest CPU scheduling priority.
  *
  * Owns the "heavy repo scripts must not starve co-resident dev servers" rule: `npm run validate`
- * (lint + full test suite + seven tsc builds) shares the development container with the dev API and Vite,
- * and an un-niced run starves them badly enough that multi-megabyte responses stall past the web
- * app's transfer watchdogs mid-smoke-test. Lowering priority costs validate wall-clock time only
- * when something else wants the CPU, which is exactly the intended trade.
+ * (lint + full test suite + workspace typechecks) runs on the host alongside the containerized dev
+ * API and Vite. An un-niced run competes for enough CPU that multi-megabyte responses can stall past
+ * the web app's transfer watchdogs mid-smoke-test. Lowering priority costs validate wall-clock time
+ * only when something else wants the CPU, which is exactly the intended trade.
  *
  * Priority is set on THIS process before spawning, so every descendant inherits it: POSIX children
  * inherit the nice value, and Windows children inherit a lowered priority class (only NORMAL and

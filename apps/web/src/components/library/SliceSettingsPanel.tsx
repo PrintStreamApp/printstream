@@ -1178,10 +1178,10 @@ export const SliceSettingsPanel = memo(function SliceSettingsPanel({ controller,
                 Hidden when the project carries none (most do), so it is never a dead affordance,
                 and the count makes its presence the information. */}
             {/* One right-aligned group, so each control does not have to work out whether it is
-                the first of them. Labels are deliberately terse (`Add`, `Flushing`): the header is
-                a single uniform-height row in a ~540px sidebar, and every header is the same
-                height so pinned ones cover each other exactly (see StickySectionHeader), which
-                means it cannot wrap. The section title supplies the noun `Add` omits. */}
+                the first of them. The header is a single uniform-height row in a ~540px sidebar,
+                and every header is the same height so pinned ones cover each other exactly (see
+                StickySectionHeader), which means it cannot wrap. Secondary actions stay as icons
+                with their names in tooltips. */}
             <Stack direction="row" spacing={0.5} alignItems="center" sx={{ ml: 'auto' }}>
             {embeddedPresets && onRemoveEmbeddedPreset && embeddedPresets.length > 0 && (
               // Icon + count rather than a labelled button: spelled out it took ~160px of a
@@ -1203,21 +1203,24 @@ export const SliceSettingsPanel = memo(function SliceSettingsPanel({ controller,
                 </Badge>
               </Tooltip>
             )}
-            {/* Beside Add, not below the list. It is a materials-level action like the others, and
-                at one word it costs the header ~90px rather than the ~150px `Flushing volumes`
-                did. Still gated on there being a PAIR: one material has nothing to purge into,
-                which is how BambuStudio gates it too. */}
-            {flushVolumes && projectFilaments.length > 1 && (
-              <Button
-                type="button"
-                size="sm"
-                variant="plain"
-                color="neutral"
-                startDecorator={<OpacityRoundedIcon />}
-                onClick={() => setFlushVolumesOpen(true)}
-              >
-                Flushing
-              </Button>
+            {showMaterialEditing && targetMode === 'realPrinter' && amsSyncOptions.length > 0 && (
+              <Tooltip title={syncWouldOrphanObject
+                ? 'The AMS has fewer materials than this project uses. Reassign those objects before syncing.'
+                : 'Replace the project material list with the occupied AMS slots'}>
+                <span>
+                  <IconButton
+                    type="button"
+                    size="sm"
+                    variant="plain"
+                    color="neutral"
+                    aria-label="Sync materials with AMS"
+                    disabled={syncWouldOrphanObject}
+                    onClick={() => setSyncAmsOpen(true)}
+                  >
+                    <SyncRoundedIcon />
+                  </IconButton>
+                </span>
+              </Tooltip>
             )}
             {groupingToolheads && groupingFilaments.length > 1 && (
               <Tooltip title="Group materials between nozzles">
@@ -1233,23 +1236,22 @@ export const SliceSettingsPanel = memo(function SliceSettingsPanel({ controller,
                 </IconButton>
               </Tooltip>
             )}
-            {showMaterialEditing && targetMode === 'realPrinter' && amsSyncOptions.length > 0 && (
-              <Tooltip title={syncWouldOrphanObject
-                ? 'The AMS has fewer materials than this project uses. Reassign those objects before syncing.'
-                : 'Replace the project material list with the occupied AMS slots'}>
-                <span>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="plain"
-                    color="neutral"
-                    startDecorator={<SyncRoundedIcon />}
-                    disabled={syncWouldOrphanObject}
-                    onClick={() => setSyncAmsOpen(true)}
-                  >
-                    Sync AMS
-                  </Button>
-                </span>
+            {/* Beside the other material tools, not below the list. It is a materials-level action
+                like the others, and the icon-only treatment keeps this compact header consistent.
+                Still gated on there being a PAIR: one material has nothing to purge into, which is
+                how BambuStudio gates it too. */}
+            {flushVolumes && projectFilaments.length > 1 && (
+              <Tooltip title="Flushing volumes">
+                <IconButton
+                  type="button"
+                  size="sm"
+                  variant="plain"
+                  color="neutral"
+                  aria-label="Flushing volumes"
+                  onClick={() => setFlushVolumesOpen(true)}
+                >
+                  <OpacityRoundedIcon />
+                </IconButton>
               </Tooltip>
             )}
             {showMaterialEditing && mixedComponentOptions.length >= 2 && (

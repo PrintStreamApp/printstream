@@ -12,7 +12,7 @@ import { createReadStream, createWriteStream } from 'node:fs'
 import { access, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
-import { Transform } from 'node:stream'
+import { Transform, type Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { spawn } from 'node:child_process'
 import { z } from 'zod'
@@ -27,7 +27,8 @@ import {
   type SlicingMaterialUsage,
   type SlicingMetadata,
   type SlicingOutputLine,
-  type SlicingPresetKind
+  type SlicingPresetKind,
+  type ProcessConfig
 } from '@printstream/shared'
 import yauzl, { type Entry } from 'yauzl'
 import yazl from 'yazl'
@@ -46,6 +47,7 @@ import { backfillPlateThumbnails, mergeAllPlateOutputs, readPlateIdsFromModelSet
 import {
   buildPerMaterialFilamentOverrides,
   selectCliProfileFiles,
+  selectPreparedRuntimeProfileFiles,
   selectSettingsExportProfileFiles
 } from './cli-profile-selection.js'
 import { assertSupportedEmbeddedMachineSwitch, shouldRetargetEmbeddedMachine } from './machine-switch-guard.js'
@@ -65,6 +67,8 @@ import { resolveCustomProfileConfig } from './custom-profile-resolve.js'
 import { sanitizeProfileFileName } from './profile-file-name.js'
 import { buildFilamentSlotCoverage, type FilamentSlotRequest } from './filament-slot-coverage.js'
 import { sanitizeBuiltinSlicerProfileJson } from './profile-json.js'
+import { materializePortableBedAssets } from './portable-bed-assets.js'
+import { readFramedSliceUpload, SliceUploadFrameError } from './slice-upload-frame.js'
 import { isVisibleBambuStudioProfile } from './profile-visibility.js'
 import { getPublicSlicerTargets, getSlicerTargetRegistry, resolveSlicerTarget, type RuntimeSlicerTarget } from './slicer-targets.js'
 import { slicerInputPolicy } from './prepared-input-policy.js'
@@ -74,6 +78,7 @@ import {
   engineProcessIdentity,
   prepareEngineWritableDirectoryTree
 } from './engine-process-security.js'
+import { mergeSlicedOutputUsage, parseSlicedOutputUsage } from './sliced-output-usage.js'
 
 const FALLBACK_MANUAL_MACHINE_PROFILE_ID = '__printstream-fallback-manual-machine__'
 const MAX_OUTPUT_LINES_HEADER_BYTES = 8 * 1024
@@ -365,14 +370,36 @@ app.get('/jobs/:id', (request, response) => {
 })
 
 app.post('/slice', async (request, response) => {
-  const envelope = readSliceEnvelope(request)
+  const declaredBodyLengthValue = Number(request.header('content-length'))
+  const declaredBodyLength = Number.isFinite(declaredBodyLengthValue) && declaredBodyLengthValue >= 0
+    ? declaredBodyLengthValue
+    : null
+  let envelope: unknown
+  let source: Readable = request
+  let declaredSourceLength = declaredBodyLength
+  try {
+    const legacyEnvelope = readSliceEnvelope(request)
+    if (legacyEnvelope !== null) {
+      envelope = legacyEnvelope
+    } else {
+      const upload = await readFramedSliceUpload(request, declaredBodyLength)
+      envelope = upload.envelope
+      source = upload.source
+      declaredSourceLength = upload.declaredSourceLength
+    }
+  } catch (error) {
+    console.warn('[slice] rejected upload frame:', error instanceof Error ? error.message : error)
+    response.status(error instanceof SliceUploadFrameError ? 400 : 500).json({
+      error: error instanceof Error ? error.message : 'Invalid slice upload'
+    })
+    return
+  }
   const parsed = sliceEnvelopeSchema.safeParse(envelope)
   if (!parsed.success) {
     response.status(400).json({ error: parsed.error.issues[0]?.message ?? 'Invalid slice payload' })
     return
   }
-  const declaredLength = Number(request.header('content-length'))
-  if (Number.isFinite(declaredLength) && declaredLength > env.SLICER_MAX_INPUT_BYTES) {
+  if (declaredSourceLength !== null && declaredSourceLength > env.SLICER_MAX_INPUT_BYTES) {
     response.status(413).json({ error: 'Slice input exceeds the configured size limit.' })
     return
   }
@@ -458,7 +485,7 @@ app.post('/slice', async (request, response) => {
         callback(null, chunk)
       }
     })
-    await pipeline(request, inputLimit, createWriteStream(inputPath))
+    await pipeline(source, inputLimit, createWriteStream(inputPath))
     await validateSlicerInputArchive(inputPath, {
       maxEntries: env.SLICER_MAX_ARCHIVE_ENTRIES,
       maxInflatedBytes: env.SLICER_MAX_INFLATED_BYTES
@@ -529,6 +556,11 @@ app.post('/slice', async (request, response) => {
     if (outputFileName.toLowerCase().endsWith('.3mf')) {
       await backfillPlateThumbnails(outputPath, inputPath)
     }
+    // Read usage before an explicitly requested plain `.gcode` is extracted from its temporary
+    // packaged result. The package is authoritative when result.json reports a false zero length.
+    const packagedUsage = await readZipEntryText(outputPath, 'Metadata/slice_info.config')
+      .then(parseSlicedOutputUsage)
+      .catch(() => null)
     if (outputFileName.toLowerCase().endsWith('.gcode')) {
       const extracted = await extractGcodeFromPackagedOutput(outputPath)
       if (!extracted) {
@@ -541,7 +573,10 @@ app.post('/slice', async (request, response) => {
     if (!isDirectPrintableFileName(outputFileName)) throw new Error('Slicer output must be .gcode or .gcode.3mf')
 
     // Try to read metadata from JSON export
-    const metadata = await tryReadSlicingMetadata(workDir, outputFileName)
+    const metadata = mergeSlicedOutputUsage(
+      await tryReadSlicingMetadata(workDir, outputFileName),
+      packagedUsage
+    )
     // Prepare time comes from the finished G-code's own header, not from result.json, whose
     // same-named field is the CLI's wall clock in milliseconds. Applied here rather than inside the
     // JSON reader because it is the OUTPUT that carries the answer.
@@ -648,8 +683,8 @@ async function runCli(input: {
   const supportedFlags = input.supportedFlags
   const cliProfileFiles = input.inputPolicy.loadRequestProfiles
     ? selectCliProfileFiles(input.profileFiles, { rewroteProjectSettings: input.rewroteProjectSettings })
-    : []
-  const profileArgs = input.inputPolicy.loadRequestProfiles
+    : selectPreparedRuntimeProfileFiles(input.profileFiles)
+  const profileArgs = input.inputPolicy.loadRequestProfiles || cliProfileFiles.length > 0
     ? await prepareProfileArgs({
         profileFiles: cliProfileFiles,
         workDir: path.dirname(input.outputPath),
@@ -660,6 +695,7 @@ async function runCli(input: {
         machineSettingOverrides: input.machineSettingOverrides,
         filamentSettingOverrides: input.filamentSettingOverrides,
         perMaterialFilamentOverrides: input.perMaterialFilamentOverrides,
+        includeFilamentProfiles: input.inputPolicy.loadRequestProfiles,
         log: (message) => appendStructuredOutput(input.outputLines, 'system', message)
       })
     : []
@@ -673,12 +709,14 @@ async function runCli(input: {
   // profile handed to it explicitly (see `selectSettingsExportProfileFiles`). Only re-materialized
   // when the slice's selection actually dropped something, and silently: the caller already
   // logged whatever `prepareProfileArgs` had to say about this same file set.
-  const exportProfileFiles = input.inputPolicy.loadRequestProfiles
+  const exportProfileFiles = input.inputPolicy.ensureEmbeddedProjectSettings
     ? selectSettingsExportProfileFiles(input.profileFiles)
     : []
-  const exportProfileArgs = exportProfileFiles.length === cliProfileFiles.length
-    ? profileArgs
-    : await prepareProfileArgs({
+  let exportProfileArgs: string[] = []
+  if (input.inputPolicy.ensureEmbeddedProjectSettings) {
+    exportProfileArgs = exportProfileFiles.length === cliProfileFiles.length
+      ? profileArgs
+      : await prepareProfileArgs({
         profileFiles: exportProfileFiles,
         workDir: path.dirname(input.outputPath),
         profileDir: input.slicerTarget.profileDir,
@@ -689,6 +727,7 @@ async function runCli(input: {
         filamentSettingOverrides: input.filamentSettingOverrides,
         perMaterialFilamentOverrides: input.perMaterialFilamentOverrides
       })
+  }
   const preparedInputPath = input.inputPolicy.ensureEmbeddedProjectSettings
     ? await ensureEmbeddedProjectSettings({
         inputPath: input.inputPath,
@@ -1372,6 +1411,8 @@ async function prepareProfileArgs(input: {
   filamentSettingOverrides?: Record<string, string | string[]>
   /** Per-material "tune" overrides keyed by 1-based project filament slot. */
   perMaterialFilamentOverrides?: Record<number, Record<string, string | string[]>>
+  /** False for prepared input, whose embedded filament settings must remain authoritative. */
+  includeFilamentProfiles?: boolean
   /** Surfaces slot-coverage decisions into the job's output so they are not invisible. */
   log?: (message: string) => void
 }): Promise<string[]> {
@@ -1398,6 +1439,10 @@ async function prepareProfileArgs(input: {
       ? processSettingOverrides
       : profile.kind === 'machine' ? machineSettingOverrides : undefined
     settingsPaths.push(await materializeProfileFile(profile, customDir, input.profileDir, presetOverrides))
+  }
+
+  if (input.includeFilamentProfiles === false) {
+    return settingsPaths.length > 0 ? ['--load-settings', settingsPaths.join(';')] : []
   }
 
   // `--load-filaments` is POSITIONAL: one entry per project slot, or none at all.
@@ -1491,23 +1536,21 @@ async function materializeProfileFile(
     throw new Error(`Custom ${profile.kind} profile ${profile.name} is missing content`)
   }
 
-  // Custom (User) presets are sparse diffs and the BambuStudio CLI does not
-  // resolve a process/machine profile's `inherits` chain on --load-settings, so
-  // merge the diff onto its system base (restoring compatible_printers and the
-  // inherited defaults) before handing it to the CLI.
-  const merged = await resolveCustomProfileConfig(profile.content, profile.kind, profileDir)
+  // Custom (User) presets are sparse diffs and the BambuStudio CLI does not resolve a
+  // process/machine profile's `inherits` chain on --load-settings, so merge the diff onto its
+  // system base before handing it to the CLI.
+  let resolved = await resolveCustomProfileConfig(profile.content, profile.kind, profileDir) as ProcessConfig
   if (overrides && Object.keys(overrides).length > 0) {
-    for (const [key, value] of Object.entries(overrides)) merged[key] = value
+    for (const [key, value] of Object.entries(overrides)) resolved[key] = value
   }
-  await writeFile(profilePath, `${JSON.stringify(merged, null, 2)}\n`)
+  if (profile.kind === 'machine') {
+    resolved = await materializePortableBedAssets(resolved, outputDir)
+  }
+  await writeFile(profilePath, `${JSON.stringify(resolved, null, 2)}\n`)
   return profilePath
 }
 
-/**
- * Applies setting overrides onto a serialized profile JSON string, preserving the rest of the
- * document. Override values are written verbatim (BambuStudio serialized strings / string arrays).
- * Kind-agnostic: used for the process preset and the machine preset alike.
- */
+/** Apply verbatim override values to serialized builtin profile JSON. */
 function applyProfileSettingOverrides(profileJson: string, overrides: Record<string, string | string[]>): string {
   const parsed = JSON.parse(profileJson) as Record<string, unknown>
   for (const [key, value] of Object.entries(overrides)) parsed[key] = value
@@ -2263,10 +2306,9 @@ app.use((error: unknown, _request: Request, response: Response, _next: NextFunct
   response.status(500).json({ error: 'Internal server error' })
 })
 
-// The slice request envelope (sceneEdit + the selected printer/filament/process profile
-// files) travels as the base64 `X-PrintStream-Slice-Request` header, which can reach
-// hundreds of KB when several materials are mapped. Node's default 16KB header cap rejects
-// that with HTTP 431, so raise the limit for this internal API→slicer call.
+// Rolling upgrades may pair this worker with an older API that still carries the envelope in the
+// `X-PrintStream-Slice-Request` header. Keep the compatibility ceiling until that protocol is
+// retired; current clients use the framed request body instead.
 const SLICE_MAX_HEADER_BYTES = 2 * 1024 * 1024
 
 /**

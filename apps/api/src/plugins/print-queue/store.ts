@@ -198,6 +198,7 @@ export function toQueueItemDto(row: QueueItemRow): QueueItemDto {
     plateName: row.plateName,
     quantity: row.quantity,
     completedCount: row.completedCount,
+    pinned: row.pinned,
     remaining: Math.max(0, row.quantity - row.completedCount),
     sortKey: row.sortKey,
     target: {

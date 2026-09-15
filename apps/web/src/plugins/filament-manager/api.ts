@@ -10,6 +10,7 @@
 import { useCallback } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
+  type FilamentBarcodeLookupResult,
   type FilamentSpool,
   type FilamentSpoolList,
   type FilamentUsageList,
@@ -26,6 +27,14 @@ import { FILAMENT_STATS_QUERY_KEY, SPOOLS_QUERY_KEY, spoolUsageQueryKey } from '
 import { useFilamentSync } from './useFilamentSync'
 
 const BASE = '/api/plugins/filament-manager'
+
+/** Resolve a scanned retail barcode or manufacturer article number without creating a spool. */
+export function lookupFilamentBarcode(code: string): Promise<FilamentBarcodeLookupResult> {
+  return apiFetch<FilamentBarcodeLookupResult>(`${BASE}/barcodes/lookup`, {
+    method: 'POST',
+    body: { code }
+  })
+}
 
 /**
  * Aggregate filament-usage stats for the stats page. Gated by `enabled` so the

@@ -13,10 +13,7 @@ import type {
   Printer,
   PrinterStatus
 } from '@printstream/shared'
-import { getPrinterDisplayCapabilities } from '@printstream/shared'
-
-const UNSUPPORTED_PRINT_OPTION = { supported: false, enabled: null }
-const UNSUPPORTED_DETECTION_OPTION = { supported: false, enabled: null, sensitivity: null }
+import { createUnsupportedPrinterPrintOptions, getPrinterDisplayCapabilities } from '@printstream/shared'
 
 export function buildHomeAssistantSnapshot(
   printers: readonly Printer[],
@@ -103,17 +100,7 @@ function buildPrinterSnapshot(
     },
     lightOn: status?.lightOn ?? null,
     speedLevel: status?.speedLevel ?? null,
-    printOptions: status?.printOptions ?? {
-      aiMonitoring: UNSUPPORTED_DETECTION_OPTION,
-      spaghettiDetection: UNSUPPORTED_DETECTION_OPTION,
-      purgeChutePileupDetection: UNSUPPORTED_DETECTION_OPTION,
-      nozzleClumpingDetection: UNSUPPORTED_DETECTION_OPTION,
-      airPrintingDetection: UNSUPPORTED_DETECTION_OPTION,
-      firstLayerInspection: UNSUPPORTED_PRINT_OPTION,
-      autoRecovery: UNSUPPORTED_PRINT_OPTION,
-      promptSound: UNSUPPORTED_PRINT_OPTION,
-      filamentTangleDetection: UNSUPPORTED_PRINT_OPTION
-    },
+    printOptions: status?.printOptions ?? createUnsupportedPrinterPrintOptions(),
     amsSettings: status?.amsSettings ?? {
       detectOnInsert: null,
       detectOnPowerup: null,

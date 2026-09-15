@@ -2,8 +2,9 @@
  * The G-code preview's legend: how the toolpath is coloured, what the colours mean, what is
  * shown, and what the print costs (#92).
  *
- * BambuStudio's equivalent is one floating legend holding all four, and keeping them together is
- * the point: the colour-scheme picker is meaningless without the key beneath it, and the Travel
+ * Desktop follows BambuStudio with one floating legend; mobile opens the same content as an opaque
+ * cover over the 3D viewport. Keeping all four sections together is the point: the colour-scheme
+ * picker is meaningless without the key beneath it, and the Travel
  * checkbox belongs beside the swatch that says what travel looks like. Extracted from
  * `PreviewView.tsx` (which was already ~1400 lines) when it grew past the per-feature time table
  * it started as; that growth is also why it is no longer called the stats panel -- statistics are
@@ -15,6 +16,7 @@
  */
 import { Box, Button, Divider, IconButton, Option, Select, Sheet, Stack, Switch, Tooltip, Typography } from '@mui/joy'
 import ExpandLessRoundedIcon from '@mui/icons-material/ExpandLessRounded'
+import CloseRoundedIcon from '@mui/icons-material/CloseRounded'
 import QueryStatsRoundedIcon from '@mui/icons-material/QueryStatsRounded'
 import type { ThreeMfIndex } from '@printstream/shared'
 import {
@@ -36,6 +38,7 @@ import {
   type GcodeViewMode
 } from './lib/gcodeViewModes'
 import { formatSecondsDuration } from '../../lib/time'
+import { VIEW_CUBE_FOOTPRINT_PX, VIEWPORT_INSET_PX } from './lib/previewChromeLayout'
 
 /** A hex int as a CSS colour, for the swatches that must match the rendered geometry exactly. */
 function swatchColor(hex: number): string {
@@ -112,6 +115,8 @@ export interface GcodeToolpathPanelProps {
    * Today that is the toolpath-conflict banner, which is present only on a conflicting plate.
    */
   bottomReservePx?: number
+  /** `cover` fills the mobile viewport; `overlay` floats over the desktop viewport. */
+  presentation?: 'overlay' | 'cover'
 }
 
 export function GcodeToolpathPanel({
@@ -128,8 +133,14 @@ export function GcodeToolpathPanel({
   markers,
   onMarkersChange,
   onShowAllPlates,
-  bottomReservePx = 0
+  bottomReservePx = 0,
+  presentation = 'overlay'
 }: GcodeToolpathPanelProps) {
+  const cover = presentation === 'cover'
+  const overlayTop = VIEWPORT_INSET_PX
+  const overlayBottomClearance = bottomReservePx > 0
+    ? bottomReservePx
+    : VIEW_CUBE_FOOTPRINT_PX + 8
   const authoritativeTotal = plate?.prediction ?? stats.headerTotalSeconds ?? stats.totalSeconds
   const scale = stats.totalSeconds > 0 && authoritativeTotal > 0 ? authoritativeTotal / stats.totalSeconds : 1
   const rows = stats.featureSeconds
@@ -148,6 +159,8 @@ export function GcodeToolpathPanel({
   const metricRange = modeInfo.metric ? gcodeMetricRange(ranges, modeInfo.metric, showTravel) : null
   const legendRows = metricRange ? rangeLegendRows(metricRange) : []
 
+  if (!open && cover) return null
+
   if (!open) {
     return (
       <Tooltip title="Toolpath legend and statistics">
@@ -156,7 +169,7 @@ export function GcodeToolpathPanel({
           variant="soft"
           onClick={onToggle}
           aria-label="Show the toolpath legend"
-          sx={{ position: 'absolute', left: 12, top: 72, zIndex: 1, bgcolor: 'rgba(13, 19, 34, 0.72)', backdropFilter: 'blur(2px)' }}
+          sx={{ position: 'absolute', left: VIEWPORT_INSET_PX, top: overlayTop, zIndex: 1, bgcolor: 'rgba(13, 19, 34, 0.72)', backdropFilter: 'blur(2px)' }}
         >
           <QueryStatsRoundedIcon />
         </IconButton>
@@ -166,24 +179,28 @@ export function GcodeToolpathPanel({
 
   return (
     <Sheet
-      variant="soft"
+      variant={cover ? 'outlined' : 'soft'}
       sx={{
         position: 'absolute',
-        left: 12,
-        // Below the Moves scrubber strip (top: 12 + its height), never over it.
-        top: 72,
-        zIndex: 1,
+        inset: cover ? 0 : undefined,
+        left: cover ? 0 : VIEWPORT_INSET_PX,
+        // Align the legend with the viewport toolbar instead of leaving a stale toolbar-sized gap.
+        top: cover ? 0 : overlayTop,
+        // The view cube deliberately uses the tooltip layer so ordinary viewport chrome cannot
+        // cover it. This is not ordinary chrome: the mobile legend replaces the whole viewport.
+        zIndex: cover ? (theme) => theme.zIndex.tooltip + 1 : 1,
         px: 1.25,
         py: 1,
-        borderRadius: 'md',
-        bgcolor: 'rgba(13, 19, 34, 0.78)',
-        backdropFilter: 'blur(2px)',
-        width: 'min(248px, calc(100% - 110px))',
-        // The panel grows downward from `top: 72`, and the conflict banner comes UP from the
-        // bottom edge, so the two can meet. The banner tells the panel how much room it needs
-        // rather than either guessing: both carry `zIndex: 1` and the banner renders later, so an
-        // overlap is not a cosmetic near-miss, it silently takes the panel's clicks.
-        maxHeight: `calc(100% - ${140 + bottomReservePx}px)`,
+        borderRadius: cover ? 'inherit' : 'md',
+        // The mobile cover must be genuinely opaque. Theme background surfaces use alpha in dark
+        // mode, which recreated the faint toolpaths the cover is meant to replace.
+        bgcolor: cover ? 'neutral.900' : 'rgba(13, 19, 34, 0.78)',
+        backdropFilter: cover ? undefined : 'blur(2px)',
+        width: cover ? '100%' : 'min(248px, calc(100% - 110px))',
+        // The panel grows downward from its top inset. Subtract both that inset and the chrome at
+        // the bottom so it cannot cover the view cube or a conflict banner stacked above it.
+        maxHeight: cover ? '100%' : `calc(100% - ${overlayTop + overlayBottomClearance}px)`,
+        minHeight: cover ? '100%' : undefined,
         overflow: 'auto',
         display: 'flex',
         flexDirection: 'column',
@@ -194,16 +211,24 @@ export function GcodeToolpathPanel({
         direction="row"
         justifyContent="space-between"
         alignItems="center"
-        onClick={onToggle}
-        sx={{ cursor: 'pointer', userSelect: 'none' }}
-        aria-label="Collapse the toolpath legend"
+        onClick={cover ? undefined : onToggle}
+        sx={{ cursor: cover ? 'default' : 'pointer', userSelect: 'none' }}
+        aria-label={cover ? undefined : 'Collapse the toolpath legend'}
       >
         <Typography level="title-sm" textColor="neutral.100">Toolpath</Typography>
-        <Tooltip title="Collapse">
-          <IconButton size="sm" variant="plain" aria-label="Hide the toolpath legend">
-            <ExpandLessRoundedIcon />
-          </IconButton>
-        </Tooltip>
+        {cover ? (
+          <Tooltip title="Close">
+            <IconButton size="sm" variant="plain" onClick={onToggle} aria-label="Close the toolpath legend">
+              <CloseRoundedIcon />
+            </IconButton>
+          </Tooltip>
+        ) : (
+          <Tooltip title="Collapse">
+            <IconButton size="sm" variant="plain" aria-label="Hide the toolpath legend">
+              <ExpandLessRoundedIcon />
+            </IconButton>
+          </Tooltip>
+        )}
       </Stack>
 
       <Select

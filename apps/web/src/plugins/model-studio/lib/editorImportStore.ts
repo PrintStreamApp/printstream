@@ -42,8 +42,16 @@ export function importFileAccept(store: EditorImportStore): string {
 }
 
 export interface EditorImportStore {
-  /** Stage a model the user picked from disk. See {@link ImportNormalization} for `normalize`. */
-  stageFile(file: File, normalize: ImportNormalization, signal?: AbortSignal): Promise<StagedImport>
+  /**
+   * Stage a model the user picked from disk. `companions` carries selected sidecars such as an
+   * OBJ's `.mtl` libraries; stores ignore none silently and validate them at their host boundary.
+   */
+  stageFile(
+    file: File,
+    normalize: ImportNormalization,
+    signal?: AbortSignal,
+    companions?: readonly File[]
+  ): Promise<StagedImport>
   /**
    * Formats {@link EditorImportStore.stageFile} can actually handle on this host. Callers must
    * narrow their file pickers to these (see {@link importFileAccept}) rather than offering every
@@ -66,6 +74,11 @@ export interface EditorImportStore {
   meshUrl(importId: string, partIndex?: number): string
   /** The staged mesh as binary STL, for the geometry paths that read bytes rather than a URL. */
   fetchMesh(importId: string, partIndex?: number, signal?: AbortSignal): Promise<ArrayBuffer>
+  /**
+   * Source RGBA in triangle-corner order, or null when the import carried no colour sidecar.
+   * Returns a copy because callers quantize asynchronously and must not mutate staged geometry.
+   */
+  fetchSourceColors(importId: string, partIndex?: number, signal?: AbortSignal): Promise<Float32Array | null>
   /**
    * Staged geometry to hand the bake directly, which every host must now answer: the bake runs in
    * the BROWSER on both, so nobody else is left to resolve an `importId`.

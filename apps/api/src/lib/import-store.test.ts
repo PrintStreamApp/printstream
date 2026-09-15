@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { stageImport } from './import-store.js'
+import { resolveSceneEditImports, stageImport } from './import-store.js'
 import type { ImportedMesh } from './mesh-import.js'
 
 /** A trivial single-triangle mesh with the given bounds, for staging tests. */
@@ -18,6 +18,13 @@ test('stageImport summarizes a single-solid import as one part named after the i
   assert.equal(summary.parts[0]?.name, 'Widget')
   assert.equal(summary.parts[0]?.triangleCount, 1)
   assert.equal(summary.triangleCount, 1)
+})
+
+test('stageImport reports retained source vertex colours without putting them in the summary', () => {
+  const coloured = { ...mesh(10), triangleCornerColors: [1, 0, 0, 1, 0, 1, 0, 1, 0, 0, 1, 1] }
+  const summary = stageImport({ workspaceId: 't1', name: 'Coloured', format: 'obj', mesh: coloured, normalize: 'object' })
+  assert.equal(summary.sourceColorMode, 'vertex')
+  assert.equal('triangleCornerColors' in summary, false, 'large per-corner data stays in the staged record')
 })
 
 test('stageImport summarizes a multi-solid import as one part per named solid', () => {
@@ -51,4 +58,28 @@ test('stageImport leaves a part import exactly as staged', () => {
   const summary = stageImport({ workspaceId: 't1', name: 'Blocker', format: 'stl', mesh: mesh(10), normalize: 'part' })
   assert.deepEqual(summary.bounds.min, { x: 0, y: 0, z: 0 })
   assert.deepEqual(summary.bounds.max, { x: 10, y: 10, z: 0 })
+})
+
+test('part mesh replacements resolve both their host and replacement imports', () => {
+  const workspaceId = 'part-replacement'
+  const host = stageImport({ workspaceId, name: 'Assembly', format: 'stl', mesh: mesh(10), normalize: 'object' })
+  const replacement = stageImport({ workspaceId, name: 'Simplified', format: 'stl', mesh: mesh(5), normalize: 'part' })
+  const imports = resolveSceneEditImports(workspaceId, {
+    plates: [{ index: 1 }],
+    instances: [{
+      importId: host.importId,
+      plateIndex: 1,
+      position: { x: 0, y: 0, z: 0 },
+      rotation: { x: 0, y: 0, z: 0 },
+      scale: { x: 1, y: 1, z: 1 },
+      filamentId: null
+    }],
+    importPartMeshReplacements: [{
+      importId: host.importId,
+      partIndex: 0,
+      meshImportId: replacement.importId
+    }]
+  })
+
+  assert.deepEqual(new Set(imports.map((entry) => entry.importId)), new Set([host.importId, replacement.importId]))
 })

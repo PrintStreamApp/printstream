@@ -10,6 +10,8 @@ import {
   machineSupportsSilentMode,
   setMachineColumnValue
 } from './machine-settings.js'
+import { applyRectangularMachineBuildVolume } from './machine-build-volume.js'
+import { clearPortableMachineBedAsset, setPortableMachineBedAsset } from './machine-bed-assets.js'
 import type { ProcessConfig } from './process-settings.js'
 
 /** A two-extruder printer, as an H2D preset resolves. */
@@ -144,6 +146,69 @@ test('saving a printer preset preserves the keys the editor cannot show', () => 
   assert.equal(saved.printable_height, '240')
   assert.equal(saved.name, 'X1C tall bed')
   assert.equal(saved.type, 'machine')
+})
+
+test('a preset copied from a built-in inherits from the selected preset rather than its parent', () => {
+  const saved = buildMachinePresetConfig({
+    resolved: {
+      inherits: 'Bambu Lab P1P 0.4 nozzle',
+      machine_unload_filament_time: '28'
+    },
+    baseline: { machine_unload_filament_time: '28' },
+    edited: { machine_unload_filament_time: '28' },
+    name: 'Bambu Lab P1S 0.4 nozzle (custom)',
+    inheritFrom: 'Bambu Lab P1S 0.4 nozzle'
+  })
+
+  assert.equal(saved.inherits, 'Bambu Lab P1S 0.4 nozzle')
+})
+
+test('saving a printer preset carries an edited rectangular build volume', () => {
+  const resolved: ProcessConfig = {
+    printable_area: ['0x0', '256x0', '256x256', '0x256'],
+    printable_height: '256',
+    bed_custom_model: '/existing/plate.stl',
+    bed_custom_texture: '/existing/plate.svg',
+    printer_model: 'Bambu Lab A1'
+  }
+  const edited = applyRectangularMachineBuildVolume(resolved, {
+    width: 300,
+    depth: 280,
+    originX: 150,
+    originY: 140,
+    height: 320
+  })
+  const saved = buildMachinePresetConfig({
+    resolved,
+    baseline: { ...resolved },
+    edited,
+    name: 'A1 expanded volume'
+  })
+
+  assert.deepEqual(saved.printable_area, ['-150x-140', '150x-140', '150x140', '-150x140'])
+  assert.equal(saved.printable_height, '320')
+  assert.equal(saved.bed_custom_model, '/existing/plate.stl')
+  assert.equal(saved.bed_custom_texture, '/existing/plate.svg')
+})
+
+test('saving a printer preset carries portable bed assets and explicit removals', () => {
+  const resolved: ProcessConfig = { bed_custom_model: '/old/bed.stl', printer_model: 'Custom' }
+  const embedded = setPortableMachineBedAsset(resolved, 'model', {
+    name: 'portable.stl',
+    bytes: Uint8Array.from([1, 2, 3])
+  })
+  const saved = buildMachinePresetConfig({ resolved, baseline: { ...resolved }, edited: embedded, name: 'Portable' })
+  assert.equal(saved.bed_custom_model, 'portable.stl')
+  assert.equal(typeof saved.printstream_bed_model_content, 'string')
+
+  const removed = buildMachinePresetConfig({
+    resolved: saved,
+    baseline: { ...saved },
+    edited: clearPortableMachineBedAsset(saved, 'model'),
+    name: 'Portable'
+  })
+  assert.equal(removed.bed_custom_model, undefined)
+  assert.equal(removed.printstream_bed_model_content, undefined)
 })
 
 test('a saved printer preset carries a per-extruder edit as a full vector', () => {

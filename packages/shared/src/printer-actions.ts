@@ -174,13 +174,17 @@ export function getPrinterRecoveryActions(
   status: PrinterRecoveryActionStatus | null | undefined
 ): PrinterRecoveryAction[] {
   const actions: PrinterRecoveryAction[] = []
+  const vendorActions = getVendorRecoveryActions(status)
+  const vendorAllows = (action: PrinterRecoveryActionId) => vendorActions == null || vendorActions.has(action)
 
   const waitingForFilamentExtrusion = getRetryAmsFilamentChangeAvailability(status).allowed
   if (waitingForFilamentExtrusion) {
-    actions.push(
-      { id: 'retryAmsFilamentChange', label: 'Retry' },
-      { id: 'confirmAmsFilamentExtruded', label: 'Continue' }
-    )
+    if (vendorAllows('retryAmsFilamentChange')) {
+      actions.push({ id: 'retryAmsFilamentChange', label: 'Retry' })
+    }
+    if (vendorAllows('confirmAmsFilamentExtruded')) {
+      actions.push({ id: 'confirmAmsFilamentExtruded', label: 'Continue' })
+    }
   }
 
   // Resume is offered for EVERY paused printer, including one waiting on the filament-change
@@ -189,29 +193,49 @@ export function getPrinterRecoveryActions(
   // no way to simply carry on. BambuStudio has no such exclusion (`MachineObject::can_resume()`
   // is `print_status == "PAUSE"` and nothing else), so a state we cannot interpret must not cost
   // the user the vendor's own escape hatch.
-  if (getResumeAvailability(status).allowed) {
+  if (vendorAllows('resume') && getResumeAvailability(status).allowed) {
     actions.push({ id: 'resume', label: 'Resume' })
   }
 
   if (!waitingForFilamentExtrusion) {
-    if (getLoadFilamentAvailability(status).allowed) {
+    if (vendorAllows('loadFilament') && getLoadFilamentAvailability(status).allowed) {
       actions.push({ id: 'loadFilament', label: 'Load filament' })
     }
 
-    if (!isPausedFilamentRunoutWarning(status) && getIgnoreHmsErrorAvailability(status).allowed) {
+    if (
+      vendorAllows('ignoreHmsError')
+      && !isPausedFilamentRunoutWarning(status)
+      && getIgnoreHmsErrorAvailability(status).allowed
+    ) {
       actions.push({ id: 'ignoreHmsError', label: 'Continue' })
     }
   }
 
-  if (getCheckAssistantAvailability(status).allowed) {
+  if (vendorAllows('checkAssistant') && getCheckAssistantAvailability(status).allowed) {
     actions.push({ id: 'checkAssistant', label: 'Check assistant' })
   }
 
-  if (getJumpToLiveViewAvailability(status).allowed) {
+  if (vendorAllows('jumpToLiveView') && getJumpToLiveViewAvailability(status).allowed) {
     actions.push({ id: 'jumpToLiveView', label: 'Live view' })
   }
 
   return actions
+}
+
+/**
+ * Null preserves the legacy status-driven fallbacks when an action table entry
+ * is missing for any current error. An empty set is authoritative only when
+ * every error has a vendor entry and none names a control PrintStream can run.
+ */
+function getVendorRecoveryActions(
+  status: Pick<PrinterStatus, 'deviceError' | 'hmsErrors'> | null | undefined
+): Set<PrinterRecoveryActionId> | null {
+  if (!status) return null
+  const errors = [...status.hmsErrors, ...(status.deviceError ? [status.deviceError] : [])]
+  if (errors.length === 0 || errors.some((error) => error.actions === undefined)) return null
+  return new Set(errors.flatMap((error) => error.actions ?? []).filter(
+    (action): action is PrinterRecoveryActionId => action !== 'stop'
+  ))
 }
 
 export function getPauseAvailability(
@@ -309,6 +333,22 @@ export function getStopAvailability(
 ): PrinterActionAvailability {
   if (status?.online !== true) return blockPrinterAction('Stop is only available while the printer is connected')
   if (!isPrinterActiveJobStage(status.stage)) return blockPrinterAction('Stop is only available while a print is active')
+  return allowPrinterAction()
+}
+
+/**
+ * Rack motion and hotend re-reads share BambuStudio's safety gate: the printer
+ * must be connected, outside a print/filament operation, and reporting an idle
+ * rack. Presence of `nozzleRack` is the runtime capability signal.
+ */
+export function getNozzleRackControlAvailability(
+  status: Pick<PrinterStatus, 'online' | 'stage' | 'filamentChange' | 'nozzleRack'> | null | undefined
+): PrinterActionAvailability {
+  if (status?.online !== true) return blockPrinterAction('Nozzle rack control is only available while the printer is connected')
+  if (!status.nozzleRack) return blockPrinterAction('This printer does not report a controllable nozzle rack')
+  if (isPrinterActiveJobStage(status.stage)) return blockPrinterAction('Finish or stop the print before moving the nozzle rack')
+  if (filamentActionBusyReason(status)) return blockPrinterAction('Finish the filament change before moving the nozzle rack')
+  if (status.nozzleRack.status !== 'idle') return blockPrinterAction('Wait for the nozzle rack to finish its current operation')
   return allowPrinterAction()
 }
 

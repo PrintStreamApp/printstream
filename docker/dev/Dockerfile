@@ -4,9 +4,9 @@
 # `node:22-trixie` base, so the runtime libs installed below line up with that proven setup.
 #
 # Node 22 to match what actually SHIPS: the production images and the SEA builds pin 22.22.3
-# (DEFAULT_NODE_VERSION in packages/sea-runtime/scripts/build-harness.mjs), and CI runs the whole
-# suite inside THIS image, so a 20 here meant every test the project has ever run ran two majors
-# behind production. The comment above already claimed it matched the slicer's node:22 base.
+# (DEFAULT_NODE_VERSION in packages/sea-runtime/scripts/build-harness.mjs). Host validation and CI
+# select the same pin through .nvmrc; this image keeps the development runtime aligned with them and
+# with the slicer's node:22 base.
 FROM node:22.22.3-trixie
 
 ARG DEBIAN_FRONTEND=noninteractive

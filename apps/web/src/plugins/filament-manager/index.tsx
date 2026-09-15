@@ -2,8 +2,8 @@
  * Filament-manager plugin (web side).
  *
  * Adds the top-level **Filament** tab (custom spool icon on mobile), a spool
- * inventory with search/filter/sort/group, list and icon views, and graphical +
- * numeric remaining-filament. Also contributes the plugin-manager settings panel
+ * inventory with catalog-backed barcode scanning, search/filter/sort/group, list and icon views,
+ * and graphical + numeric remaining-filament. Also contributes the plugin-manager settings panel
  * for the `autoAddBambuSpools` toggle, and the filament stats cards into the stats slot.
  *
  * Eager-loaded with the app shell. (The @mui/x-charts dependency the stats cards use is
@@ -25,7 +25,7 @@ import { useLoadedSpoolIdentityLookup } from './api'
 export const filamentManagerPlugin: WebPlugin = {
   name: 'filament-manager',
   version: '0.1.0',
-  description: 'Track filament spools, what is loaded where, and how much is left.',
+  description: 'Scan and track filament spools, what is loaded where, and how much is left.',
   // Core print/slice dialogs resolve the loaded spool's identity through the
   // slotFilamentIdentity registry (pull-based, like the API's slot resolver) so
   // a tracked custom spool labels as itself ("Michael's PLA") without core

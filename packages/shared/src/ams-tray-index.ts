@@ -91,6 +91,26 @@ export const VIRTUAL_TRAY_MAIN_ID = 255
 export const VIRTUAL_TRAY_DEPUTY_ID = 254
 
 /**
+ * Whether a print routes more than one project filament through the same external spool.
+ * BambuStudio enables its manual-change assistance only for that case: one filament on an
+ * external spool needs no mid-print swap, and one filament on each spool needs no shared-spool
+ * swap either.
+ */
+export function mappingNeedsExternalSpoolChangeAssist(
+  mapping: readonly number[] | null | undefined
+): boolean {
+  let mainCount = 0
+  let deputyCount = 0
+
+  for (const trayIndex of mapping ?? []) {
+    if (trayIndex === VIRTUAL_TRAY_MAIN_ID) mainCount += 1
+    if (trayIndex === VIRTUAL_TRAY_DEPUTY_ID) deputyCount += 1
+  }
+
+  return mainCount > 1 || deputyCount > 1
+}
+
+/**
  * `ams_mapping[i]` for a filament index with NO tray: not a tray id, the absence of one.
  *
  * `ams_mapping` is POSITIONAL over the whole project's filament list, so a plate that uses

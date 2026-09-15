@@ -97,7 +97,8 @@ export function disposeImportStagingWorker(): void {
 export async function stageImportGeometry(
   format: ImportStagingRequest['format'],
   bytes: Uint8Array,
-  normalize: ImportStagingRequest['normalize']
+  normalize: ImportStagingRequest['normalize'],
+  companions: ReadonlyArray<{ name: string; bytes: Uint8Array }> = []
 ): Promise<StagedImportGeometry> {
   const active = ensureWorker()
   const id = nextRequestId
@@ -105,6 +106,11 @@ export async function stageImportGeometry(
   // Copy into a transferable buffer: the caller's bytes must survive for the fallback path, and a
   // transferred original would be detached out from under it.
   const transferable = bytes.slice().buffer
+  const transferableCompanions = companions.map((companion) => ({
+    name: companion.name,
+    buffer: companion.bytes.slice().buffer
+  }))
+  const transfer = [transferable, ...transferableCompanions.map((companion) => companion.buffer)]
 
   const response = await new Promise<ImportStagingResponse>((resolve) => {
     const timer = setTimeout(() => {
@@ -114,7 +120,13 @@ export async function stageImportGeometry(
       resolve({ id, ok: false, error: 'Import staging worker made no progress in time', dataError: false })
     }, importStagingDeadlineMs(bytes.byteLength))
     pending.set(id, (message) => { clearTimeout(timer); resolve(message) })
-    active.postMessage({ id, format, normalize, buffer: transferable } satisfies ImportStagingRequest, [transferable])
+    active.postMessage({
+      id,
+      format,
+      normalize,
+      buffer: transferable,
+      companions: transferableCompanions
+    } satisfies ImportStagingRequest, transfer)
   })
 
   if (response.ok) return { mesh: response.mesh, stl: response.stl, partStls: response.partStls }

@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { WebPlugin } from '../plugin/types.js'
+import type { RegisteredWebPluginSlot } from '../plugin/registry.js'
+import { cloudConnectionWebPlugin } from '../plugins/cloud-connection/index.js'
 import {
+  activePluginSlots,
   compareNotificationPluginEntries,
   extractDisabledPluginNameFromErrorMessage,
   extractUnavailablePluginNameFromErrorMessage,
@@ -12,6 +15,8 @@ import {
   isPluginActiveByName,
   isNotificationPlugin,
   mergePlugins,
+  pluginSlotSupportsActor,
+  pluginSupportsDeployment,
   shouldMountPluginRouteByName,
   shouldRenderPluginSettingsPanel,
   type ApiPluginInfo,
@@ -35,6 +40,78 @@ const panelPlugin: WebPlugin = {
   name: 'notifications-browser',
   settingsPanel: () => null
 }
+
+test('authenticated-user slots stay hidden for anonymous actors', () => {
+  const protectedSlot = { requiresAuthenticatedUser: true }
+  assert.equal(pluginSlotSupportsActor(protectedSlot, undefined), false)
+  assert.equal(pluginSlotSupportsActor(protectedSlot, 'anonymous'), false)
+  assert.equal(pluginSlotSupportsActor(protectedSlot, 'service-account'), false)
+  assert.equal(pluginSlotSupportsActor(protectedSlot, 'user'), true)
+  assert.equal(pluginSlotSupportsActor({}, 'anonymous'), true)
+})
+
+test('cloud connection slots remain available to an auth-disabled administrator', () => {
+  assert.ok(cloudConnectionWebPlugin.slots?.length)
+  assert.equal(
+    cloudConnectionWebPlugin.slots?.every((slot) => pluginSlotSupportsActor(slot, 'anonymous')),
+    true
+  )
+})
+
+test('deployment-specific web contributions stay on their intended host', () => {
+  assert.equal(pluginSupportsDeployment({ selfHostedOnly: true }, true), true)
+  assert.equal(pluginSupportsDeployment({ selfHostedOnly: true }, false), false)
+  assert.equal(pluginSupportsDeployment({ cloudOnly: true }, true), false)
+  assert.equal(pluginSupportsDeployment({ cloudOnly: true }, false), true)
+  assert.equal(pluginSupportsDeployment({}, true), true)
+  assert.equal(pluginSupportsDeployment({}, false), true)
+})
+
+test('activePluginSlots applies deployment and actor gates without runtime context', () => {
+  const slots: RegisteredWebPluginSlot[] = [
+    {
+      name: 'account.support',
+      component: () => null,
+      pluginName: 'support',
+      runtimeSurfaces: ['workspace'],
+      managerSurfaces: ['platform'],
+      cloudOnly: true
+    },
+    {
+      name: 'account.support',
+      component: () => null,
+      pluginName: 'cloud-connection',
+      runtimeSurfaces: ['workspace'],
+      managerSurfaces: ['platform', 'workspace'],
+      selfHostedOnly: true
+    }
+  ]
+  const apiPlugins = new Map<string, ApiPluginInfo>([
+    ['cloud-connection', createApiPlugin({ name: 'cloud-connection' })]
+  ])
+
+  assert.deepEqual(activePluginSlots(slots, {
+    selfHosted: true,
+    actorType: 'user',
+    currentSurface: 'workspace',
+    apiPluginsByName: apiPlugins,
+    hasPluginState: true
+  }).map((slot) => slot.pluginName), ['cloud-connection'])
+  assert.deepEqual(activePluginSlots(slots, {
+    selfHosted: true,
+    actorType: 'anonymous',
+    currentSurface: 'workspace',
+    apiPluginsByName: apiPlugins,
+    hasPluginState: true
+  }).map((slot) => slot.pluginName), ['cloud-connection'])
+  assert.deepEqual(activePluginSlots(slots, {
+    selfHosted: false,
+    actorType: 'user',
+    currentSurface: 'workspace',
+    apiPluginsByName: apiPlugins,
+    hasPluginState: true
+  }).map((slot) => slot.pluginName), ['support'])
+})
 
 // A route must outlive the plugin-state load window that a nav tab deliberately
 // waits out, otherwise a cold-loaded deep link 404s before the answer arrives.

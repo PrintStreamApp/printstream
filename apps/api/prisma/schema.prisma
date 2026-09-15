@@ -186,6 +186,7 @@ model Workspace {
   libraryFileReplicas    LibraryFileReplica[]
   libraryFileFavorites   LibraryFileFavorite[]
   preparedSlicingSources PreparedSlicingSource[]
+  sliceCacheEntries      SliceCacheEntry[]
   libraryUploadCompletions LibraryUploadCompletion[]
   printerViews           PrinterView[]
   authMemberships        AuthWorkspaceMembership[]
@@ -819,6 +820,9 @@ model LibraryFile {
   orderPrints            OrderPrint[]
   queueItems             QueueItem[]
   preparedSlicingSources PreparedSlicingSource[]
+  sliceCacheSources      SliceCacheEntry[]        @relation("SliceCacheSource")
+  sliceCacheArtifacts    SliceCacheEntry[]        @relation("SliceCacheArtifact")
+  sliceCacheProjects     SliceCacheEntry[]        @relation("SliceCacheProject")
 
   @@index([workspaceId, uploadedAt])
   @@index([workspaceId, folderId])
@@ -830,6 +834,43 @@ model LibraryFile {
   @@index([workspaceId, ownerBridgeId, folderId, hidden, printCount], map: "LibraryFile_workspace_bridge_folder_printCount_idx")
   @@index([workspaceId, ownerBridgeId, folderId, hidden, lastPrintedAt], map: "LibraryFile_workspace_bridge_folder_lastPrintedAt_idx")
   @@unique([workspaceId, snapshotKey], map: "LibraryFile_workspaceId_snapshotKey_key")
+}
+
+/// The most recent completed slice for one project lineage.
+///
+/// The cache key binds the source bytes, engine identity, profiles, runtime printer facts, and
+/// every output-affecting request field. The artifact is an immutable content-addressed library
+/// snapshot; a hit copies it into a fresh transient output so Save, Print, Back, and Cancel never
+/// mutate shared cache state. `sourceProjectFileId` is the exact project handed to the engine and
+/// restores re-slice provenance on that fresh output.
+///
+/// Lifecycle: one row per source bounds churn, `updatedAt` is refreshed on hits, and artifact
+/// maintenance deletes entries after the unreferenced-slice retention window. Source deletion and
+/// workspace deletion cascade; losing an artifact invalidates the entry, while losing only the
+/// preserved project degrades the hit to an output without a future "Slice again" link.
+model SliceCacheEntry {
+  id                  String   @id @default(cuid())
+  workspaceId         String
+  sourceFileId        String
+  cacheKey            String
+  artifactFileId      String
+  sourceProjectFileId String?
+  outputFileName      String
+  slicerName          String?
+  metadataJson        String?
+  sliceSettingsJson   String
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  workspace     Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  sourceFile    LibraryFile  @relation("SliceCacheSource", fields: [sourceFileId], references: [id], onDelete: Cascade)
+  artifactFile  LibraryFile  @relation("SliceCacheArtifact", fields: [artifactFileId], references: [id], onDelete: Cascade)
+  sourceProject LibraryFile? @relation("SliceCacheProject", fields: [sourceProjectFileId], references: [id], onDelete: SetNull)
+
+  @@unique([workspaceId, sourceFileId], map: "SliceCacheEntry_workspaceId_sourceFileId_key")
+  @@index([workspaceId, updatedAt])
+  @@index([artifactFileId])
+  @@index([sourceProjectFileId])
 }
 
 /// Server-issued proof that a hidden snapshot was staged specifically as a browser-authored,
@@ -1512,6 +1553,7 @@ model FilamentSpool {
   // step, done once on the spool. Null = auto-match at slice time.
   slicingPresetName String?
   serial            String? // manual serial for non-Bambu spools
+  productCode       String? // retail GTIN/UPC/EAN or manufacturer article number from the box
   nozzleTempMin     Int?
   nozzleTempMax     Int?
   diameterMm        Float   @default(1.75)
@@ -1661,7 +1703,10 @@ model CalibrationResult {
 /// `completedCount` track first-class copies: the row counts down rather than being
 /// exploded into N rows. `requiredFilamentsJson` snapshots the plate's required
 /// filaments at add time so eligibility/AMS matching needs no per-list 3MF inspection.
-/// v1 is manual-dispatch only; auto-advance is a deliberate later phase. `status` is the
+/// v1 is manual-dispatch only; auto-advance is a deliberate later phase. A standalone
+/// `pinned` item resets after its requested copies finish so it remains as a reusable
+/// print template; an unpinned item is removed. Order-linked rows cannot be pinned.
+/// `status` is the
 /// dispatch lifecycle (queued|held|dispatching|printing|done|failed); per-printer
 /// eligibility is computed live (not persisted) from the shared matcher.
 model QueueItem {
@@ -1677,6 +1722,7 @@ model QueueItem {
   // First-class copies: the row stays queued until completedCount reaches quantity.
   quantity              Int       @default(1)
   completedCount        Int       @default(0)
+  pinned                Boolean   @default(false)
   // Fractional rank for cheap drag-reorder without renumbering siblings.
   sortKey               Float     @default(0)
   // Hybrid targeting: 'any' | 'printer' | 'model'.
@@ -1810,8 +1856,9 @@ model PrinterMaintenanceLog {
 /// across workspaces via `rootPrisma`; the participant/workspace columns are
 /// point-in-time snapshots (no FKs) so a conversation outlives the account or
 /// workspace it came from. `workspaceId` is deliberately unscoped (see
-/// WORKSPACE_SCOPED_MODELS exceptions). Unused in self-hosted, which emails
-/// help/feedback instead of messaging.
+/// WORKSPACE_SCOPED_MODELS exceptions). Licensed self-hosted conversations
+/// additionally snapshot the customer, licence, and installation that
+/// authenticated them; those values are evidence, not live foreign keys.
 model SupportConversation {
   id                 String    @id @default(cuid())
   /// "feedback" | "bug" | "question" (user-initiated) | "message" (platform-initiated).
@@ -1824,6 +1871,14 @@ model SupportConversation {
   userName           String?
   workspaceId        String?
   workspaceName      String?
+  /// Cloud customer that owns a self-hosted licence. Null for hosted users.
+  customerId         String?
+  customerName       String?
+  /// Licence and one-way installation fingerprint when a self-hosted thread opened.
+  /// Snapshots on purpose: releasing/rebinding must not rewrite history.
+  licenseId               String?
+  licenseName             String?
+  installationFingerprint String?
   resolvedAt         DateTime?
   /// Platform operator handling this conversation (claim), with a display-name
   /// snapshot for lists. Unclaimed conversations notify every operator;
@@ -1842,6 +1897,7 @@ model SupportConversation {
 
   @@index([lastMessageAt])
   @@index([userId, lastMessageAt])
+  @@index([licenseId, installationFingerprint, lastMessageAt], map: "SupportConversation_license_install_fp_lastMessage_idx")
   @@index([status, lastMessageAt])
 }
 
@@ -1927,27 +1983,35 @@ model SupportAttachment {
 /// Product suggestion board post (cloud-only). Not workspace-owned: the board is
 /// platform-wide and shared by every cloud workspace, accessed via `rootPrisma`.
 /// `authorName` is a display snapshot so posts survive account deletion.
+/// Self-hosted authors use `authorCustomerId` instead of impersonating a cloud
+/// user; licence and installation fields are private origin snapshots.
 /// `status` is the platform team's triage state (a `suggestionStatusSchema`
-/// value; see `@printstream/shared/private`), settable only by platform admins.
+/// value; see `@printstream/shared`), settable only by platform admins.
 /// Harmless/unused in self-hosted or OSS deployments.
 model Suggestion {
-  id           String   @id @default(cuid())
-  title        String
-  body         String
-  status       String   @default("open")
-  authorUserId String?
-  authorName   String
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id                            String   @id @default(cuid())
+  title                         String
+  body                          String
+  status                        String   @default("open")
+  authorUserId                  String?
+  authorCustomerId              String?
+  authorName                    String
+  sourceLicenseId               String?
+  sourceInstallationFingerprint String?
+  createdAt                     DateTime @default(now())
+  updatedAt                     DateTime @updatedAt
 
   votes    SuggestionVote[]
   comments SuggestionComment[]
 
   @@index([createdAt])
   @@index([authorUserId])
+  @@index([authorCustomerId])
 }
 
-/// One user's vote on a suggestion (cloud-only; see Suggestion).
+/// One voting identity's vote on a suggestion (cloud-only; see Suggestion).
+/// Hosted identities are AuthUser ids; connected installs use a Customer id
+/// namespace, making every licence and local user under that Customer one vote.
 model SuggestionVote {
   suggestionId String
   userId       String
@@ -1963,15 +2027,19 @@ model SuggestionVote {
 }
 
 /// A comment on a suggestion (cloud-only; see Suggestion). Replies reference
-/// their top-level parent via `parentId` (one nesting level).
+/// their top-level parent via `parentId` (one nesting level). Author and origin
+/// snapshots follow the same user-vs-Customer rules as Suggestion.
 model SuggestionComment {
-  id           String   @id @default(cuid())
-  suggestionId String
-  parentId     String?
-  authorUserId String?
-  authorName   String
-  body         String
-  createdAt    DateTime @default(now())
+  id                            String   @id @default(cuid())
+  suggestionId                  String
+  parentId                      String?
+  authorUserId                  String?
+  authorCustomerId              String?
+  authorName                    String
+  sourceLicenseId               String?
+  sourceInstallationFingerprint String?
+  body                          String
+  createdAt                     DateTime @default(now())
 
   suggestion Suggestion          @relation(fields: [suggestionId], references: [id], onDelete: Cascade)
   parent     SuggestionComment?  @relation("SuggestionCommentReplies", fields: [parentId], references: [id], onDelete: Cascade)
@@ -1979,6 +2047,7 @@ model SuggestionComment {
 
   @@index([suggestionId, createdAt])
   @@index([authorUserId])
+  @@index([authorCustomerId])
 }
 
 /// A single-use invite code that gates cloud self-registration during the

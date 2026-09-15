@@ -2,7 +2,7 @@ process.env.NODE_ENV = 'test'
 
 import assert from 'node:assert/strict'
 import { afterEach, mock, test } from 'node:test'
-import type { Printer, PrinterStatus } from '@printstream/shared'
+import { createUnsupportedPrinterPrintOptions, type Printer, type PrinterStatus } from '@printstream/shared'
 
 const { printerEvents } = await import('./printer-events.js')
 const printerManagerModule = await import('./printer-manager.js')
@@ -308,17 +308,7 @@ function makeStatus(overrides: Partial<PrinterStatus>): PrinterStatus {
       mqttHoming: false,
       newFanControl: false
     },
-    printOptions: {
-      aiMonitoring: { supported: false, enabled: null, sensitivity: null },
-      spaghettiDetection: { supported: false, enabled: null, sensitivity: null },
-      purgeChutePileupDetection: { supported: false, enabled: null, sensitivity: null },
-      nozzleClumpingDetection: { supported: false, enabled: null, sensitivity: null },
-      airPrintingDetection: { supported: false, enabled: null, sensitivity: null },
-      firstLayerInspection: { supported: false, enabled: null },
-      autoRecovery: { supported: false, enabled: null },
-      promptSound: { supported: false, enabled: null },
-      filamentTangleDetection: { supported: false, enabled: null }
-    },
+    printOptions: createUnsupportedPrinterPrintOptions(),
     deviceError: null,
     hmsErrors: [],
     amsSettings: {

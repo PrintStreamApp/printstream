@@ -7,10 +7,10 @@
  * meshes) additionally carries them as `parts`, so the editor imports it as one object with many
  * parts rather than collapsing the assembly into one blob.
  *
- * WHAT THIS MODULE STILL OWNS is only what cannot be shared: the per-host LOADING. Every parse
- * itself lives in `@printstream/shared/three-mf`, because the browser runs the same parsers for the
- * public editor, where nothing is uploaded, and a file must not import differently depending on
- * which host opened it. Two things are host-shaped:
+ * WHAT THIS MODULE STILL OWNS is only what cannot be shared: the per-host LOADING. Every geometry
+ * conversion lives in `@printstream/shared/three-mf`, because the browser runs the same work for
+ * the public editor, where nothing is uploaded, and a file must not import differently depending
+ * on which host opened it. Four things are host-shaped:
  *
  *  - STEP needs `occt-import-js` (OpenCASCADE compiled to WASM), loaded lazily on first STEP import
  *    so installs that never open one do not pay the ~7 MB. The quality settings
@@ -18,20 +18,28 @@
  *  - A zipped AMF needs a ZIP layer, which the shared package deliberately has none of; the api
  *    unzips with yauzl and the browser with fflate, exactly as they already do either side of
  *    `mesh-extract.ts`.
+ *  - FBX needs Three.js's maintained format loader. Each host loads it lazily, then hands the
+ *    structural scene to the shared converter for transforms, units, validation, and part folding.
+ *  - PNG/JPEG texture bytes are decoded with host-native codecs, then handed to the shared sampler
+ *    as plain RGBA pixels.
  */
 import yauzl, { type Entry } from 'yauzl'
 
 import type { StagedImportFormat } from '@printstream/shared'
+import { parseFbxMesh } from './fbx-import.js'
+import { decodeTextureImage } from './texture-image.js'
 
 import {
   MAX_AMF_SOURCE_BYTES,
   ModelImportError,
   STEP_TESSELLATION,
+  decodeGltfTextureImages,
   isZippedAmf,
   parseAmfMesh,
   parseGltfMesh,
   parseObjMesh,
   parseStlMesh,
+  resolveObjMaterials,
   stepMeshFromOcctResult,
   type ImportedMesh,
   type ImportedMeshBounds,
@@ -39,8 +47,8 @@ import {
   type OcctReadResult
 } from '@printstream/shared/three-mf'
 
-// Every parse, the welding/merging, the binary-STL writer, and the STEP tessellation QUALITY + fold
-// live in the shared module: both hosts import geometry, and only the loading differs.
+// Every geometry conversion, the welding/merging, the binary-STL writer, and the STEP tessellation
+// QUALITY + fold live in the shared module: both hosts import geometry, and only loading differs.
 // Re-exported so api call sites keep one import path.
 export {
   MAX_IMPORT_TRIANGLES,
@@ -67,12 +75,22 @@ export type { ImportedMesh, ImportedMeshBounds, ImportedMeshPart }
  * `3mf` is absent deliberately -- it is object-aware (the caller may name which object to extract)
  * and so is dispatched by the routes through `three-mf-mesh-extract.ts` instead.
  */
-export async function parseImportedMesh(buffer: Buffer, format: Exclude<StagedImportFormat, '3mf'>): Promise<ImportedMesh> {
+export async function parseImportedMesh(
+  buffer: Buffer,
+  format: Exclude<StagedImportFormat, '3mf'>,
+  companions: ReadonlyArray<{ name: string; bytes: Uint8Array }> = [],
+  options: { sourceAppearance?: boolean } = {}
+): Promise<ImportedMesh> {
   switch (format) {
     case 'stl': return parseStlMesh(buffer)
     case 'step': return tessellateStepMesh(buffer)
-    case 'obj': return parseObjMesh(buffer)
-    case 'gltf': return parseGltfMesh(buffer)
+    case 'obj': {
+      return parseObjMesh(buffer, { materials: await resolveObjMaterials(buffer, companions, decodeTextureImage) })
+    }
+    case 'gltf': return options.sourceAppearance === false
+      ? parseGltfMesh(buffer)
+      : parseGltfMesh(buffer, { decodedImages: await decodeGltfTextureImages(buffer, decodeTextureImage) })
+    case 'fbx': return parseFbxMesh(buffer, options)
     case 'amf': {
       if (!isZippedAmf(buffer) && buffer.byteLength > MAX_AMF_SOURCE_BYTES) {
         throw new ModelImportError('AMF is too large to import')

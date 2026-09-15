@@ -4,6 +4,8 @@ import { test } from 'node:test'
 import {
   inspectSlicerImage,
   inspectSlicerSource,
+  slicerComposeUpArgs,
+  slicerDevImageRef,
   slicerSourceFingerprint
 } from './slicer-image.mjs'
 
@@ -155,6 +157,33 @@ test('a changed source fingerprint requires a rebuild', () => {
   })
 
   assert.equal(result.state, 'differs')
+})
+
+test('dev slicer images are shared only when their source fingerprints match', () => {
+  assert.equal(
+    slicerDevImageRef('same-content', 'checkout-a'),
+    slicerDevImageRef('same-content', 'checkout-b')
+  )
+  assert.notEqual(
+    slicerDevImageRef('content-a', 'checkout'),
+    slicerDevImageRef('content-b', 'checkout')
+  )
+  assert.equal(slicerDevImageRef(null, 'checkout-a'), 'printstream-slicer-dev:checkout-a')
+})
+
+test('the slicer always starts but rebuilds only when its source image differs', () => {
+  assert.deepEqual(
+    slicerComposeUpArgs('matches'),
+    ['--profile', 'slicer', 'up', '-d', 'slicer']
+  )
+  assert.deepEqual(
+    slicerComposeUpArgs('differs'),
+    ['--profile', 'slicer', 'up', '-d', '--build', 'slicer']
+  )
+  assert.deepEqual(
+    slicerComposeUpArgs('not-built'),
+    ['--profile', 'slicer', 'up', '-d', '--build', 'slicer']
+  )
 })
 
 function fakeGit({ lastCommit = '2026-08-01T00:00:00Z', dirty = '' } = {}) {

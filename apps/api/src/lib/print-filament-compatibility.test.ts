@@ -17,6 +17,7 @@ function buildIndex(overrides: {
   filaments?: Array<Partial<ThreeMfIndex['plates'][number]['filaments'][number]> & { id: number }>
   nozzleSizes?: string[]
   slicedWithFilamentTrackSwitch?: boolean
+  compatiblePrinterModels?: ThreeMfIndex['compatiblePrinterModels']
 } = {}): ThreeMfIndex {
   return {
     plates: [{
@@ -44,7 +45,7 @@ function buildIndex(overrides: {
       weight: null
     }],
     projectFilaments: [],
-    compatiblePrinterModels: [],
+    compatiblePrinterModels: overrides.compatiblePrinterModels ?? [],
     supportFilamentIds: [],
     printerProfileName: null,
     processProfileName: null,
@@ -85,6 +86,26 @@ function buildStatus(overrides: {
 
 /** Workspace + printer the guard needs to look up tracked spool grams. */
 const SCOPE = { workspaceId: 'workspace-1', printerId: 'printer-1' }
+
+test('a printer model mismatch requires only its own explicit consent', async () => {
+  const index = buildIndex({ compatiblePrinterModels: ['A1'] })
+  const input = {
+    ...SCOPE,
+    plate: 1,
+    printerModel: 'H2D' as const,
+    printerStatus: buildStatus(),
+    amsMapping: [0]
+  }
+
+  await assert.rejects(assertLibraryPrintCompatibilityForIndex(index, input), /Confirm the model mismatch/)
+  await assert.rejects(
+    assertLibraryPrintCompatibilityForIndex(index, { ...input, allowIncompatibleFilament: true }),
+    /Confirm the model mismatch/
+  )
+  await assert.doesNotReject(
+    assertLibraryPrintCompatibilityForIndex(index, { ...input, allowPrinterModelMismatch: true })
+  )
+})
 
 test('an undetected nozzle diameter does not block dispatch', async () => {
   // No detected nozzles and no saved selection: the sliced 0.4 requirement has

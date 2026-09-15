@@ -19,6 +19,7 @@ import type {
   LibraryThreeMfScene,
   LibraryThreeMfSceneInstance,
   PlateLayerFilamentSequence,
+  ProjectAuxiliaries,
   SceneEdit,
   SceneEditFlushVolumes,
   SceneEditImportPartFilament,
@@ -384,6 +385,8 @@ export interface EditorCutGroup {
 
 export interface EditorState {
   plates: EditorPlate[]
+  /** Complete managed `Auxiliaries/` state, present only after its dialog authors an edit. */
+  projectAuxiliaries?: ProjectAuxiliaries
   /**
    * Per-part support-paint overrides made this session, keyed by
    * {@link supportPaintKey}. Each value is the COMPLETE desired paint map for that
@@ -552,6 +555,8 @@ export interface EditorState {
    * emitted as `SceneEdit.partTransforms`.
    */
   partTransforms?: Record<string, number[]>
+  /** Staged replacement mesh per base part ordinal, preserving the part's identity and metadata. */
+  partMeshReplacements?: Record<string, string>
   /**
    * Part ORDER changed this session (the sidebar drag inside an object), keyed by
    * {@link addedPartHostId}. The value is the object's COMPLETE desired sequence of BASE ordinals
@@ -1574,6 +1579,43 @@ export function placeInstanceAt(instance: EditorInstance, x: number, y: number):
 }
 
 /**
+ * Replace a plate's bed while preserving every item's offset from the physical bed centre.
+ *
+ * Printer changes must translate the arrangement, never scale or re-arrange it. Instances are
+ * copied before placement because {@link placeInstanceAt} also updates an exact shear matrix in
+ * place. The prime tower shares the plate-local coordinate frame and follows the same translation.
+ * Applying the inverse bed change restores the original coordinates, which keeps target-model
+ * changes compatible with the editor's undo/redo history.
+ */
+export function movePlateContentsToBed(
+  plate: EditorPlate,
+  bed: EditorPlate['bed']
+): EditorPlate {
+  const dx = (bed.minX + bed.maxX - plate.bed.minX - plate.bed.maxX) / 2
+  const dy = (bed.minY + bed.maxY - plate.bed.minY - plate.bed.maxY) / 2
+  if (dx === 0 && dy === 0) return { ...plate, bed }
+
+  const instances = plate.instances.map((instance) => {
+    const moved = {
+      ...instance,
+      position: instance.position.clone(),
+      ...(instance.exactMatrix ? { exactMatrix: [...instance.exactMatrix] } : {})
+    }
+    placeInstanceAt(moved, moved.position.x + dx, moved.position.y + dy)
+    return moved
+  })
+
+  return {
+    ...plate,
+    bed,
+    instances,
+    primeTower: plate.primeTower
+      ? { ...plate.primeTower, x: plate.primeTower.x + dx, y: plate.primeTower.y + dy }
+      : null
+  }
+}
+
+/**
  * Deep-clone an instance (for duplicate), offsetting it clear of the source.
  *
  * Copied WHOLE, then overridden, on the same rule as {@link cloneEditorState}: a copy is the same
@@ -2014,6 +2056,7 @@ function instanceTransformMatrix(instance: EditorInstance): number[] {
 }
 
 export function buildSceneEdit(state: EditorState): SceneEdit {
+  const placementBed = state.plates[0]?.bed
   return {
     plates: state.plates.map((plate) => ({
       index: plate.index,
@@ -2033,6 +2076,14 @@ export function buildSceneEdit(state: EditorState): SceneEdit {
       locked: plate.locked,
       primeTower: plate.primeTower ? { x: plate.primeTower.x, y: plate.primeTower.y } : null
     })),
+    ...(placementBed
+      ? {
+          placementBedSize: {
+            width: placementBed.maxX - placementBed.minX,
+            depth: placementBed.maxY - placementBed.minY
+          }
+        }
+      : {}),
     instances: state.plates.flatMap((plate) =>
       plate.instances.map((instance) => ({
         // Exactly one geometry reference per the locked SceneEditInstance contract.
@@ -2054,10 +2105,12 @@ export function buildSceneEdit(state: EditorState): SceneEdit {
         ...(instance.printable ? {} : { printable: false })
       }))
     ),
+    projectAuxiliaries: state.projectAuxiliaries,
     partFilaments: collectPartFilaments(state),
     partProcessOverrides: collectPartProcessOverrides(state),
     partTypeChanges: collectPartTypeChanges(state),
     partTransforms: collectPartTransforms(state),
+    ...collectPartMeshReplacements(state),
     importPartFilaments: collectImportPartFilaments(state),
     importPartProcessOverrides: collectImportPartProcessOverrides(state),
     importPartTypes: collectImportPartTypes(state),
@@ -2429,6 +2482,40 @@ function collectMeshReplacements(state: EditorState): SceneEdit['meshReplacement
   }
   if (byObject.size === 0) return undefined
   return [...byObject].map(([objectId, importId]) => ({ objectId, importId }))
+}
+
+/** Emit in-place volume mesh replacements in the address space of each surviving host. */
+function collectPartMeshReplacements(
+  state: EditorState
+): Pick<SceneEdit, 'partMeshReplacements' | 'importPartMeshReplacements'> {
+  if (!state.partMeshReplacements) return {}
+  const hosts = partHostAddresses(state)
+  const instancesByHost = new Map<number, EditorInstance>()
+  for (const plate of state.plates) {
+    for (const instance of plate.instances) {
+      const hostId = addedPartHostId(instance)
+      if (hostId != null && !instancesByHost.has(hostId)) instancesByHost.set(hostId, instance)
+    }
+  }
+  const partMeshReplacements: NonNullable<SceneEdit['partMeshReplacements']> = []
+  const importPartMeshReplacements: NonNullable<SceneEdit['importPartMeshReplacements']> = []
+  for (const [key, meshImportId] of Object.entries(state.partMeshReplacements)) {
+    const parsed = parsePartSlotKey(key)
+    if (!parsed) continue
+    const host = hosts.get(parsed.objectId)
+    if (!host) continue
+    const instance = instancesByHost.get(parsed.objectId)
+    if (!instance?.parts.some((part) => part.partIndex === parsed.partIndex)) continue
+    if ('objectId' in host) {
+      partMeshReplacements.push({ objectId: host.objectId, partIndex: parsed.partIndex, meshImportId })
+    } else {
+      importPartMeshReplacements.push({ importId: host.importId, partIndex: parsed.partIndex, meshImportId })
+    }
+  }
+  return {
+    ...(partMeshReplacements.length > 0 ? { partMeshReplacements } : {}),
+    ...(importPartMeshReplacements.length > 0 ? { importPartMeshReplacements } : {})
+  }
 }
 
 /**
@@ -3269,6 +3356,7 @@ function copySessionEditsOntoClone(state: EditorState, objectId: number, cloneOb
   rekeyParts(state.partProcessOverrides, partSlotKey)
   rekeyParts(state.partTypeChanges, partSlotKey)
   rekeyParts(state.partTransforms, partSlotKey)
+  rekeyParts(state.partMeshReplacements, partSlotKey)
   if (state.removedParts?.[objectId]) {
     // Base-file ordinals, so they address the copy's volumes exactly as they address the source's:
     // the clone pre-pass duplicates that same object's XML.
@@ -3443,6 +3531,17 @@ export function cloneEditorState(state: EditorState): EditorState {
       ...(plate.pauses ? { pauses: plate.pauses.map((pause) => ({ ...pause })) } : {}),
       ...(plate.pausesOverride ? { pausesOverride: plate.pausesOverride.map((pause) => ({ ...pause })) } : {})
     })),
+    ...(state.projectAuxiliaries
+      ? {
+          projectAuxiliaries: {
+            files: state.projectAuxiliaries.files.map((file) => ({ ...file })),
+            metadata: { ...state.projectAuxiliaries.metadata },
+            ...(state.projectAuxiliaries.coverThumbnails
+              ? { coverThumbnails: { ...state.projectAuxiliaries.coverThumbnails } }
+              : {})
+          }
+        }
+      : {}),
     ...(state.supportPaint
       ? {
         supportPaint: Object.fromEntries(
@@ -3486,6 +3585,7 @@ export function cloneEditorState(state: EditorState): EditorState {
         )
       }
       : {}),
+    ...(state.partMeshReplacements ? { partMeshReplacements: { ...state.partMeshReplacements } } : {}),
     ...(state.partOrder
       ? {
         partOrder: Object.fromEntries(

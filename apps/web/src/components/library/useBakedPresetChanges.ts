@@ -10,8 +10,8 @@
  * preset REDUCE the count (a fully reset material reads 0 even though heal overrides ride the
  * slice request).
  *
- * Installed presets (builtin/custom) cannot differ from themselves, so no fetch happens; the
- * count falls back to the session override count.
+ * While a required baseline is unresolved, the badge stays hidden. Counting raw override keys in
+ * that window is not safe because a reset-to-preset healing override is still an override key.
  */
 import { useQueries, useQuery } from '@tanstack/react-query'
 import {
@@ -29,6 +29,27 @@ import type { FilamentConfigResolver } from './FilamentSettingsDialog'
 
 const PROJECT_PROFILE_PREFIX = 'project:'
 
+// Local editor resolvers close over one in-memory project. The synthetic file id is shared by
+// every locally opened project, so it cannot scope React Query's cache on its own. Give each
+// resolver identity a stable token: the badge and its dialog share results within one editor,
+// while a newly opened project can never inherit the previous project's count.
+const resolverCacheScopes = new WeakMap<object, number>()
+const resolverScopeState = globalThis as typeof globalThis & {
+  __printstreamBakedPresetResolverScope?: number
+}
+
+function resolverCacheScope(resolveConfig: object | undefined): number | null {
+  if (!resolveConfig) return null
+  const existing = resolverCacheScopes.get(resolveConfig)
+  if (existing !== undefined) return existing
+  // Keep the sequence on globalThis so Vite hot replacement cannot restart it at 1 while the
+  // long-lived QueryClient still holds entries created by the previous module instance.
+  const scope = (resolverScopeState.__printstreamBakedPresetResolverScope ?? 0) + 1
+  resolverScopeState.__printstreamBakedPresetResolverScope = scope
+  resolverCacheScopes.set(resolveConfig, scope)
+  return scope
+}
+
 /** Count of filament settings whose final sliced value differs from the external preset. */
 export function useFilamentChangedCount(input: {
   slicerTargetId: string
@@ -43,6 +64,7 @@ export function useFilamentChangedCount(input: {
    */
   resolveConfig?: FilamentConfigResolver
 }): number {
+  const cacheScope = resolverCacheScope(input.resolveConfig)
   // Resolved for EVERY preset kind, not just project-embedded ones. The old fallback counted
   // override KEYS for an installed preset, which is not the same question: resetting a drifted
   // value emits a heal override (the dialog writes the preset's value rather than deleting the
@@ -56,7 +78,7 @@ export function useFilamentChangedCount(input: {
     && Boolean(input.slicerTargetId)
     && Boolean(input.resolveConfig || serverFileId || !input.filamentProfileId?.startsWith(PROJECT_PROFILE_PREFIX))
   const query = useQuery({
-    queryKey: ['filament-baked-changes', input.slicerTargetId, input.filamentProfileId, input.sourceFileId, input.projectFilamentId, Boolean(input.resolveConfig)],
+    queryKey: ['filament-baked-changes', input.slicerTargetId, input.filamentProfileId, input.sourceFileId, input.projectFilamentId, cacheScope],
     enabled,
     staleTime: 60_000,
     queryFn: async ({ signal }) => {
@@ -79,7 +101,8 @@ export function useFilamentChangedCount(input: {
       return prepareResolvedFilamentState(response)
     }
   })
-  if (!enabled || !query.data) return Object.keys(input.overrides).length
+  if (!enabled) return Object.keys(input.overrides).length
+  if (!query.data) return 0
   return resolvedFilamentModifiedKeys(query.data, input.overrides).length
 }
 
@@ -108,12 +131,13 @@ export function useUnchangedProjectFilamentPresetIds(input: {
   presets: Array<{ filamentProfileId: string; projectFilamentId: number }>
   resolveConfig?: FilamentConfigResolver
 }): Set<string> {
+  const cacheScope = resolverCacheScope(input.resolveConfig)
   // Same rule as the badge above: a synthetic local id is not a server file.
   const canResolve = Boolean(input.slicerTargetId) && Boolean(input.resolveConfig || serverSourceFileId(input.sourceFileId))
   const results = useQueries({
     queries: input.presets.map((preset) => ({
       // Deliberately the SAME key the per-material badge uses, so the two share one fetch.
-      queryKey: ['filament-baked-changes', input.slicerTargetId, preset.filamentProfileId, input.sourceFileId, preset.projectFilamentId, Boolean(input.resolveConfig)],
+      queryKey: ['filament-baked-changes', input.slicerTargetId, preset.filamentProfileId, input.sourceFileId, preset.projectFilamentId, cacheScope],
       enabled: canResolve,
       staleTime: 60_000,
       queryFn: async ({ signal }: { signal: AbortSignal }) => {
@@ -166,12 +190,13 @@ export function useProcessChangedCount(input: {
   visibilityContext?: Partial<ProcessVisibilityContext>
   developerMode?: boolean
 }): number {
+  const cacheScope = resolverCacheScope(input.resolveConfig)
   const isProjectPreset = Boolean(input.processProfileId?.startsWith(PROJECT_PROFILE_PREFIX))
   // A project preset can differ from its parent; a builtin/custom can't differ from itself, so it
   // never fetches. The workspace path needs a server file; the resolver path reads the in-tab archive.
   const enabled = isProjectPreset && Boolean(input.slicerTargetId) && Boolean(input.resolveConfig || serverSourceFileId(input.sourceFileId))
   const query = useQuery({
-    queryKey: ['process-baked-changes', input.slicerTargetId, input.processProfileId, input.sourceFileId, Boolean(input.resolveConfig)],
+    queryKey: ['process-baked-changes', input.slicerTargetId, input.processProfileId, input.sourceFileId, cacheScope],
     enabled,
     staleTime: 60_000,
     queryFn: async ({ signal }) => {
@@ -184,7 +209,8 @@ export function useProcessChangedCount(input: {
       )
     }
   })
-  if (!enabled || !query.data) return Object.keys(input.overrides).length
+  if (!enabled) return Object.keys(input.overrides).length
+  if (!query.data) return 0
   return resolvedVisibleProcessModifiedKeys(query.data, input.overrides, {
     ...(input.visibilityContext ? { visibilityContext: input.visibilityContext } : {}),
     developerMode: input.developerMode === true

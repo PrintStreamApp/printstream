@@ -92,13 +92,16 @@ export interface SettingsCatalogDialogProps {
    * every host mounts these lazily and unmounts them on close.
    */
   initialQuery?: string
+  /** Modified values rendered outside the generated catalog, such as machine bed geometry. */
+  additionalModifiedCount?: number
   actions: SettingsCatalogDialogActions
 }
 
 export function SettingsCatalogDialog(props: SettingsCatalogDialogProps): JSX.Element {
   const {
     open, onClose, catalog, titlePrefix, presetName, subtitle, header, loading, loadingLabel, error,
-    ready, showDeveloperOptions, isKeyVisible, adapter, corrections, filamentChoices, initialQuery, actions
+    ready, showDeveloperOptions, isKeyVisible, adapter, corrections, filamentChoices, initialQuery,
+    additionalModifiedCount = 0, actions
   } = props
   const [activePage, setActivePage] = useState(0)
   const [query, setQuery] = useState(initialQuery ?? '')
@@ -121,11 +124,13 @@ export function SettingsCatalogDialog(props: SettingsCatalogDialogProps): JSX.El
   const pageShownCounts = countShownPerPage(filter)
   const pageHasContent = pagesWithContent(filter)
   const modifiedPages = pagesWithModified(filter)
-  // Derived here rather than passed in, so the title's "*", the Reset all / "Changed only" enabled
-  // states and the tab emphasis can never disagree about what counts as modified. Note this gates on
-  // VISIBILITY (developer tier + the conditional engine): a modified setting the user cannot see
-  // must not mark the dialog, or "Reset all" appears live with nothing on screen to reset.
-  const modifiedCount = countModified(filter)
+  // Catalog changes drive the tabs and "Changed only" because those controls can reveal only
+  // catalog rows. A caller may add a focused setting outside that catalog; it still marks the title
+  // and enables Reset all, while its always-visible header owns its own changed indicator.
+  // Visibility still gates catalog changes: a modified setting the user cannot see must not mark
+  // the dialog or offer a reset with no corresponding row.
+  const catalogModifiedCount = countModified(filter)
+  const modifiedCount = catalogModifiedCount + additionalModifiedCount
 
   // Keep the active tab on a page that still has content.
   const pageHasContentKey = pageHasContent.map((has) => (has ? '1' : '0')).join('')
@@ -182,7 +187,7 @@ export function SettingsCatalogDialog(props: SettingsCatalogDialogProps): JSX.El
                 label="Changed only"
                 checked={showChangedOnly}
                 onChange={(event) => setShowChangedOnly(event.target.checked)}
-                disabled={modifiedCount === 0 && !showChangedOnly}
+                disabled={catalogModifiedCount === 0 && !showChangedOnly}
               />
             </Stack>
             <TabList
@@ -208,7 +213,7 @@ export function SettingsCatalogDialog(props: SettingsCatalogDialogProps): JSX.El
               ) : null)}
             </TabList>
             <ScrollableDialogBody sx={{ mt: 0, px: 0 }}>
-              {showChangedOnly && modifiedCount === 0 && (
+              {showChangedOnly && catalogModifiedCount === 0 && additionalModifiedCount === 0 && (
                 <Typography level="body-sm" textColor="text.tertiary" sx={{ p: 2 }}>No changed settings.</Typography>
               )}
               {corrections && corrections.length > 0 && (

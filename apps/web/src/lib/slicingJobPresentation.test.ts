@@ -5,6 +5,7 @@ import {
   formatSlicingMetadataDisplay,
   formatSlicingProgress,
   getLatestSlicingProgressFrame,
+  getSlicingJobStatusLabel,
   getSlicingProgressPercent
 } from './slicingJobPresentation.js'
 
@@ -106,6 +107,45 @@ test('getLatestSlicingProgressFrame reports the newest engine frame', () => {
   assert.equal(frame?.totalPercent, 100)
   assert.equal(formatSlicingProgress(job, frame), 'Finalizing (100%)')
   assert.equal(getSlicingProgressPercent(job, frame), 100)
+})
+
+test('an all-plates engine frame keeps the current plate in the slicing chip', () => {
+  const job = buildJob({
+    output: [
+      {
+        stream: 'stdout',
+        text: '{"message":"Generating supports","plate_count":4,"plate_index":2,"total_percent":42}',
+        createdAt: '2026-05-24T00:00:02.000Z'
+      }
+    ]
+  })
+
+  assert.equal(getSlicingJobStatusLabel(job), 'Slicing 2 of 4')
+  assert.equal(formatSlicingProgress(job, getLatestSlicingProgressFrame(job)), 'Generating supports (42%)')
+})
+
+test('the fallback slicer keeps its plate in the chip through progress and heartbeat lines', () => {
+  const job = buildJob({
+    output: [
+      { stream: 'system', text: 'Slicing plate 3 of 4', createdAt: '2026-05-24T00:00:01.000Z' },
+      // The per-plate CLI reports its actual plate id with a local plate_count of one.
+      { stream: 'stdout', text: '{"message":"Generating walls","plate_count":1,"plate_index":3,"total_percent":28}', createdAt: '2026-05-24T00:00:02.000Z' },
+      { stream: 'system', text: 'Slicing... 2m elapsed', createdAt: '2026-05-24T00:00:03.000Z' }
+    ]
+  })
+
+  assert.equal(getSlicingJobStatusLabel(job), 'Slicing 3 of 4')
+})
+
+test('a post-slice system phase removes stale plate context from the chip', () => {
+  const job = buildJob({
+    output: [
+      { stream: 'system', text: 'Slicing plate 4 of 4', createdAt: '2026-05-24T00:00:01.000Z' },
+      { stream: 'system', text: 'Combining per-plate exports into a single project artifact', createdAt: '2026-05-24T00:00:02.000Z' }
+    ]
+  })
+
+  assert.equal(getSlicingJobStatusLabel(job), 'Slicing')
 })
 
 test('saving replaces the stale 100% engine frame with the real server phase', () => {

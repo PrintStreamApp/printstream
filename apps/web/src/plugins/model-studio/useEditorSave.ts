@@ -31,10 +31,14 @@ import { type ConfirmDialogOptions } from '../../components/PromptDialogProvider
 import { type SliceSettingsController } from '../../components/library/SliceSettingsPanel'
 import { buildSessionFilamentIdRemap, buildSingleObjectExportState, type EditorState } from './lib/editorModel'
 import { objectIdsAcceptingOverrides, selectObjectProcessOverridesForSave } from './lib/sceneEditIdentity'
-import type { EditorSaveTarget } from './lib/editorSaveTarget'
-import type { EditorPersistenceLifecycle } from './lib/editorSaveTarget'
+import type { EditorPersistenceLifecycle, EditorSavedFile, EditorSaveTarget } from './lib/editorSaveTarget'
 import type { ChunkedLibraryUploadProgress } from '../../lib/chunkedLibraryUpload'
 import { initialContentBasePin, nextContentBasePin, type EditorContentBasePin } from './lib/contentBasePin'
+import {
+  canReusePreparedSliceStage,
+  preparedSliceStageIdentity,
+  type PreparedSliceStageIdentity
+} from './lib/preparedSliceStageCache'
 
 type PlateThumbnail = { plateIndex: number; png: string }
 
@@ -116,7 +120,7 @@ export interface EditorSave {
    * saved file, so a plain Save no longer looks like the project reloaded. Null until the first
    * save (and always null for a project opened from a file, which already has its own base).
    */
-  savedFile: { id: string; name: string } | null
+  savedFile: EditorSavedFile | null
   /**
    * The bytes this session authors from (`contentBasePin.ts`), for every consumer of its
    * `SceneEdit`, not just the save. A SLICE must bake from these too: the edit is a diff against
@@ -205,7 +209,12 @@ export function useEditorSave({
   )
   const [saving, setSaving] = useState(false)
   const [saveAsOpen, setSaveAsOpen] = useState(false)
-  const [savedFile, setSavedFile] = useState<{ id: string; name: string } | null>(null)
+  const [savedFile, setSavedFile] = useState<EditorSavedFile | null>(null)
+  /** Last successful immutable stage, reusable while every byte-affecting input is unchanged. */
+  const preparedSliceStageRef = useRef<{
+    identity: PreparedSliceStageIdentity
+    result: string | Uint8Array
+  } | null>(null)
   // Saves of an editor-born project target the adopted file once it exists, and always bake from
   // the editor state, never from the bytes of the save before them (see `ignoreBaseContent`).
   const effectiveBaseFileId = savedFile?.id ?? baseFileId
@@ -308,7 +317,7 @@ export function useEditorSave({
       payload: SaveArrangedThreeMf,
       successMessage: string,
       options?: EditorPersistenceLifecycle & { asProject?: boolean }
-    ): Promise<{ id: string; name: string } | null> => {
+    ): Promise<EditorSavedFile | null> => {
       // BambuStudio parity: a project must have a material before it can be saved.
       const materialsPresent = hasMaterials
         ? hasMaterials()
@@ -501,7 +510,7 @@ export function useEditorSave({
     if (saveTarget.isLibraryBacked && (!sourceFileId || !configurationBaseFileId)) {
       throw new Error('The project source is no longer available; reopen it and slice again.')
     }
-    return await saveTarget.stageSnapshot({
+    const stageInput = {
       sceneEdit: edit,
       sourceFileId,
       // Lends its bridge and identifies the immutable base; nothing is written to it.
@@ -514,7 +523,18 @@ export function useEditorSave({
       onProgress,
       onReconciliationStart,
       onReconciliationRequired
-    }, signal)
+    }
+    const identity = preparedSliceStageIdentity(stageInput)
+    const previous = preparedSliceStageRef.current
+    if (previous && canReusePreparedSliceStage(previous.identity, identity)) {
+      signal?.throwIfAborted()
+      return previous.result
+    }
+
+    const result = await saveTarget.stageSnapshot(stageInput, signal)
+    signal?.throwIfAborted()
+    preparedSliceStageRef.current = { identity, result }
+    return result
   }, [saveTarget, contentBase, effectiveBaseFileId, effectiveBaseVersionId, collectObjectProcessOverrides])
 
   const handleApply = useCallback(() => {

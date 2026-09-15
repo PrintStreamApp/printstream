@@ -5,10 +5,15 @@ import { afterEach, test } from 'node:test'
 import express from 'express'
 import type { Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { JOBS_VIEW_PERMISSION } from '@printstream/shared'
+import {
+  JOBS_VIEW_PERMISSION,
+  LIBRARY_VIEW_PERMISSION,
+  setPortableMachineBedAsset
+} from '@printstream/shared'
 import type { RequestAuthContext } from '../lib/auth-context.js'
 import { HttpError } from '../lib/http-error.js'
 import { savePrintJobThumbnail } from '../lib/print-job-thumbnails.js'
+import { rootPrisma } from '../lib/prisma.js'
 import { type RequestWorkspaceSummary } from '../lib/workspace-context.js'
 import { slicingJobs } from '../lib/slicing-jobs.js'
 import { slicingRouter } from './slicing.js'
@@ -17,10 +22,50 @@ const TEST_WORKSPACE = { id: 'workspace-1', slug: 'workspace-1', name: 'Workspac
 
 const originalGetThumbnailInfo = slicingJobs.getThumbnailInfo
 const originalSetThumbnailPath = slicingJobs.setThumbnailPath
+const originalSettingFindUnique = rootPrisma.setting.findUnique
 
 afterEach(() => {
   slicingJobs.getThumbnailInfo = originalGetThumbnailInfo
   slicingJobs.setThumbnailPath = originalSetThumbnailPath
+  rootPrisma.setting.findUnique = originalSettingFindUnique
+})
+
+test('custom bed assets cannot be read through another workspace', async () => {
+  const profileId = 'custom:workspace-one-printer'
+  const profileContent = setPortableMachineBedAsset({}, 'texture', {
+    name: 'private-bed.svg',
+    bytes: new TextEncoder().encode('<svg/>')
+  })
+  const storedProfiles = JSON.stringify([{
+    id: profileId,
+    kind: 'machine',
+    name: 'Workspace One Printer',
+    content: JSON.stringify(profileContent),
+    updatedAt: '2026-09-13T00:00:00.000Z'
+  }])
+
+  rootPrisma.setting.findUnique = (async (args) => args.where.key === 'workspace.slicing.profiles.workspace-1'
+    ? { key: args.where.key, value: storedProfiles }
+    : null) as typeof rootPrisma.setting.findUnique
+
+  const auth: RequestAuthContext = {
+    authEnabled: true,
+    actor: { type: 'user', userId: 'user-1' },
+    permissions: [LIBRARY_VIEW_PERMISSION],
+    runtimePolicy: { demoMode: false }
+  }
+  await withSlicingApp({ auth, workspace: TEST_WORKSPACE }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/slicing/bed-texture?machineProfileId=${encodeURIComponent(profileId)}`)
+    assert.equal(response.status, 200)
+    assert.equal(await response.text(), '<svg/>')
+  })
+  await withSlicingApp({
+    auth,
+    workspace: { id: 'workspace-2', slug: 'workspace-2', name: 'Workspace 2' }
+  }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/slicing/bed-texture?machineProfileId=${encodeURIComponent(profileId)}`)
+    assert.equal(response.status, 404)
+  })
 })
 
 test('slicing job thumbnail route serves persisted thumbnails for authorized workspaces', async () => {

@@ -4,8 +4,10 @@ import { Alert, Button, Stack, Typography } from '@mui/joy'
 import type { PublicSlicingJob } from '@printstream/shared'
 import { FormDialog } from '../../components/FormDialog'
 import { SliceEstimates } from '../../components/library/SliceEstimates'
+import { SliceResultPanel } from '../../components/library/SliceResultPanel'
 import { ProgressBar } from '../../components/ProgressBar'
 import { downloadBlob } from '../../lib/downloadBlob'
+import { formatLibraryFileName } from '../../lib/libraryDisplay'
 import { openClientThreeMfProjectFromBytes } from './lib/clientThreeMfProject'
 import type { InMemoryGcodePreviewSource } from './lib/inMemoryGcodePreview'
 import { PublicGcodePreview } from './PublicGcodePreview'
@@ -113,7 +115,7 @@ export function PublicSlicingDialog({ session, onSessionChange, onClose }: {
     <>
       <FormDialog
         open
-        title="Slice project"
+        title="Slice results"
         onClose={dismiss}
         busy={busy}
         submitLabel={job.status === 'ready' ? 'Download G-code' : job.status === 'failed' ? 'Retry' : active ? 'Cancel slice' : 'Close'}
@@ -139,17 +141,25 @@ export function PublicSlicingDialog({ session, onSessionChange, onClose }: {
         {job.status === 'uploading' ? (
           <ProgressBar value={job.sizeBytes > 0 ? (job.uploadedBytes / job.sizeBytes) * 100 : 0} />
         ) : (job.status === 'queued' || job.status === 'slicing') && <ProgressBar />}
-        <Typography level="body-sm">
-          {job.status === 'queued' && job.queuePosition
-            ? `Waiting in the public queue, position ${job.queuePosition}${job.estimatedWaitSeconds ? `, about ${Math.max(1, Math.ceil(job.estimatedWaitSeconds / 60))} minute${job.estimatedWaitSeconds > 60 ? 's' : ''}` : ''}. Workspace slices run first.`
-            : job.message ?? 'Preparing slice…'}
-        </Typography>
-        {job.error && <Alert color="danger">{job.error}</Alert>}
-        {job.status === 'ready' && !artifact && !previewError && (
-          <Typography level="body-sm">Loading G-code preview…</Typography>
+        {job.status !== 'ready' && (
+          <Typography level="body-sm">
+            {job.status === 'queued' && job.queuePosition
+              ? `Waiting in the public queue, position ${job.queuePosition}${job.estimatedWaitSeconds ? `, about ${Math.max(1, Math.ceil(job.estimatedWaitSeconds / 60))} minute${job.estimatedWaitSeconds > 60 ? 's' : ''}` : ''}. Workspace slices run first.`
+              : job.message ?? 'Preparing slice…'}
+          </Typography>
         )}
+        {job.error && <Alert color="danger">{job.error}</Alert>}
         {job.status === 'ready' && (
-          <SliceEstimates metadata={job.metadata} />
+          <SliceResultPanel
+            displayName={formatLibraryFileName(job.outputFileName ?? job.fileName)}
+            statusLabel="Ready"
+            statusColor="success"
+          >
+            <SliceEstimates metadata={job.metadata} filamentMappings={job.filamentMappings} />
+            {!artifact && !previewError && (
+              <Typography level="body-sm" textColor="text.secondary">Loading G-code preview…</Typography>
+            )}
+          </SliceResultPanel>
         )}
         {job.status === 'ready' && previewError && (
           <Stack spacing={1}>

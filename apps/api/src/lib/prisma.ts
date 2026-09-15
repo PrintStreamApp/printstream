@@ -63,6 +63,7 @@ export const WORKSPACE_SCOPED_MODELS = new Set([
   'LibraryFolder',
   'LibraryFileFavorite',
   'PreparedSlicingSource',
+  'SliceCacheEntry',
   'LibraryUploadCompletion',
   'PrinterView',
   'AuditLog',

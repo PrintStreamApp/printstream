@@ -49,6 +49,7 @@ import {
   type PrinterRecoveryLoadCommand,
   type PrinterSettingsDialogCommand
 } from '../../lib/printerViewTypes'
+import { PrinterModeSettings } from './PrinterModeSettings'
 
 export function PrinterSettingsDialog({
   printerModel,
@@ -69,16 +70,23 @@ export function PrinterSettingsDialog({
   onClose: () => void
   onSubmit: (command: PrinterSettingsDialogCommand) => void
 }) {
+  // A tab can keep a status object across an API/WebSocket hot update. Optional
+  // access is deliberate: the running shared-schema module can itself predate
+  // a newly HMR-loaded settings table and therefore cannot add those fields.
   const supportedSections = PRINTER_SETTINGS_SECTIONS
     .map((section) => ({
       ...section,
-      options: section.options.filter((option) => settings[option].supported)
+      options: section.options.filter((option) => settings[option]?.supported === true)
     }))
     .filter((section) => section.options.length > 0)
   const supportsAirManagement = getPrinterDisplayCapabilities(printerModel).airductMode
   const airManagementLocked = ductMode === 'laser'
   const availableAirManagementModes = ductAvailableModes.length > 0 ? ductAvailableModes : AIR_MANAGEMENT_MODES
   const selectedAirManagementMode: PrinterSelectableAirductMode = ductMode === 'heating' ? 'heating' : 'cooling'
+  const supportsModeSettings = settings.purifyAirAtPrintEnd?.supported === true
+    || settings.openDoorDetection?.supported === true
+    || settings.smartNozzleBlobDetection?.supported === true
+    || settings.cameraResolution?.supported === true
 
   return (
     <Modal open onClose={onClose}>
@@ -86,7 +94,7 @@ export function PrinterSettingsDialog({
         <ModalClose />
         <Typography level="h4">Printer settings for {printerName}</Typography>
         <Typography level="body-sm" textColor="text.tertiary" sx={{ mb: 1 }}>
-          These options come from the printer&apos;s live capability report. Unsupported settings stay hidden.
+          These options follow the printer model, installed firmware, and live capability report. Unsupported settings stay hidden.
         </Typography>
 
         <ScrollableDialogBody>
@@ -126,7 +134,8 @@ export function PrinterSettingsDialog({
                 </Sheet>
               </Stack>
             )}
-            {supportedSections.length === 0 && !supportsAirManagement ? (
+            <PrinterModeSettings settings={settings} submitting={submitting} onSubmit={onSubmit} />
+            {supportedSections.length === 0 && !supportsAirManagement && !supportsModeSettings ? (
               <Sheet variant="soft" sx={{ p: 1.5, borderRadius: 'md' }}>
                 <Typography level="body-sm">This printer has not reported any configurable Bambu Studio-style settings yet.</Typography>
               </Sheet>

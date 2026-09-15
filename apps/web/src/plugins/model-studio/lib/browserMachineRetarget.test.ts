@@ -62,7 +62,13 @@ function stubResolvers(overrides: Partial<RetargetResolvers> = {}) {
     canResolve: (presetId) => slicingPresetProvenance(presetId) === 'builtin',
     machine: async (id, targetId) => {
       calls.push({ kind: 'machine', id, targetId })
-      return { config: { printer_model: ['Bambu Lab H2D'] } as ProfileRecord, name: 'Bambu Lab H2D 0.4 nozzle' }
+      return {
+        config: {
+          printer_model: ['Bambu Lab H2D'],
+          inherits: 'Bambu Lab H2D 0.4 nozzle'
+        } as ProfileRecord,
+        name: 'Bambu Lab H2D 0.4 nozzle'
+      }
     },
     process: async (id, targetId) => {
       calls.push({ kind: 'process', id, targetId })
@@ -303,6 +309,7 @@ test('which presets a host can retarget onto is the resolvers\' answer, not a ru
   const plan = await buildMachineRetargetPlan(input({ target: workspacePreset, resolvers: workspaceHost.resolvers }))
   assert.ok(plan, 'the workspace host retargets onto its own preset')
   assert.equal(workspaceHost.calls[0]?.id, 'custom:printer-abc', 'and resolves it by id')
+  assert.equal(plan.printerPresetInherits, 'Bambu Lab H2D 0.4 nozzle')
 })
 
 test('a project preset is refused by BOTH hosts, since it lives in the file being saved', () => {

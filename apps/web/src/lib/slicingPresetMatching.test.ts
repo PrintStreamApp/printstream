@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { LibraryFile, SlicingPresetSummary, ThreeMfFilament, ThreeMfIndex, ThreeMfProjectFilament } from '@printstream/shared'
-import { resolveInitialManualPrinterModel, isProcessProfileCompatible, buildFilamentMappings, buildBakedFilamentProfileSelection, buildProcessFilamentChoices, buildProjectSlicingPresets, buildSliceDialogProjectFilaments, plateModelFilamentIds, buildProfileMaterialOptionId, buildRedundantProjectPresetCandidates, buildSliceMaterialOptions, filterSliceMaterialOptions, isFilamentProfileCompatible, repointMaterialOptionToCompatibleAlias, narrowMaterialOptions, resolveProfileMaterialType, slicingPresetsResponseIsUsable, type SliceMaterialOption } from './slicingPresetMatching'
+import { resolveInitialManualPrinterModel, isProcessProfileCompatible, buildFilamentMappings, buildBakedFilamentProfileSelection, buildProcessFilamentChoices, buildProjectSlicingPresets, buildSliceDialogProjectFilaments, plateModelFilamentIds, buildProfileMaterialOptionId, buildRedundantProjectPresetCandidates, buildSliceMaterialOptions, buildInventoryMaterialOptions, filterSliceMaterialOptions, isFilamentProfileCompatible, repointMaterialOptionToCompatibleAlias, narrowMaterialOptions, resolveProfileMaterialType, slicingPresetsResponseIsUsable, type SliceMaterialOption } from './slicingPresetMatching'
 import { formatSlicingPresetBrandedName, formatSlicingPresetDisplayName } from './slicingPresetSelection'
 
 function materialOption(overrides: Partial<SliceMaterialOption> & { id: string }): SliceMaterialOption {
@@ -457,6 +457,30 @@ test('a model PLA preset stays out of the PLA-S bucket', () => {
   }
   assert.equal(resolveProfileMaterialType(modelPreset), 'PLA')
   assert.deepEqual(narrowMaterialOptions(buildSliceMaterialOptions([modelPreset], []), 'PLA-S'), [])
+})
+
+test('filament-library spools become colour and quantity aware editor material choices', () => {
+  const options = buildInventoryMaterialOptions([{
+    id: 'spool-1',
+    archivedAt: null,
+    deletedAt: null,
+    brand: 'Bambu Lab',
+    filamentType: 'PLA',
+    materialSubtype: 'PLA Basic',
+    trayInfoIdx: null,
+    slicingPresetName: FILAMENT_A1M.name,
+    colorHex: '#FFFFFF',
+    colors: [],
+    colorName: 'Jade White',
+    remainingGrams: 1000,
+    remainPercent: 100
+  }], [FILAMENT_A1M], A1_MINI_MACHINE, 'A1mini')
+
+  assert.equal(options.length, 1)
+  assert.equal(options[0]?.group, 'Filament library')
+  assert.equal(options[0]?.profileId, FILAMENT_A1M.id)
+  assert.equal(options[0]?.color, '#ffffff')
+  assert.equal(options[0]?.remainingGrams, 1000)
 })
 
 // A 3MF's own support filament carries `filament_is_support` per slot, so the project

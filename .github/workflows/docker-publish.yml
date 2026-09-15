@@ -3,8 +3,9 @@
 # `main` (i.e. each `npm run export:public` snapshot) publishes the SemVer from
 # the root package.json, moves `:latest` for stable versions, and retains an immutable `:sha-<short>`
 # provenance tag. After all three images land, the same workflow creates the
-# matching GitHub Release. A new snapshot must bump the version: two different
-# source trees are never allowed to claim the same SemVer.
+# matching GitHub Release, led by the same manually approved changelog entry the
+# app displays. A new snapshot must bump the version: two different source trees
+# are never allowed to claim the same SemVer.
 #
 # Three images:
 #   printstream          - the combined app (web + API + bridge in one image; the
@@ -62,6 +63,7 @@ jobs:
         name: Read and validate the product version
         run: |
           version="$(node scripts/ci/product-version.mjs)"
+          node scripts/ci/product-changelog.mjs --require-current
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=v$version" >> "$GITHUB_OUTPUT"
           if [[ "$version" == *-* ]]; then
@@ -399,6 +401,8 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v5
+
       - name: Create the matching GitHub release once
         env:
           GH_TOKEN: ${{ github.token }}
@@ -416,7 +420,10 @@ jobs:
             -f target_commitish="$GITHUB_SHA" \
             --jq '.body' > generated-notes.md
 
+          node scripts/ci/product-release-notes.mjs "$VERSION" > product-notes.md
+
           {
+            cat product-notes.md
             printf '%s\n\n' '## Container images'
             printf '%s\n' '```console'
             printf 'docker pull ghcr.io/printstreamapp/printstream:%s\n' "$VERSION"
@@ -425,6 +432,7 @@ jobs:
             printf '%s\n\n' '```'
             printf '%s\n\n' 'All three tags identify the image set built from this release commit. The `sha-` tags remain available for immutable provenance.'
             cat generated-notes.md
+            printf '\n\n%s\n' '*AI disclosure: these release notes and the related code were written with the assistance of AI.*'
           } > release-notes.md
 
           release_args=()

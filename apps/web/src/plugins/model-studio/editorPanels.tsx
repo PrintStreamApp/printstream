@@ -62,6 +62,7 @@ import AutoFixHighRoundedIcon from '@mui/icons-material/AutoFixHighRounded'
 import HelpOutlineRoundedIcon from '@mui/icons-material/HelpOutlineRounded'
 import FlipRoundedIcon from '@mui/icons-material/FlipRounded'
 import JoinInnerRoundedIcon from '@mui/icons-material/JoinInnerRounded'
+import CompressRoundedIcon from '@mui/icons-material/CompressRounded'
 import LockRoundedIcon from '@mui/icons-material/LockRounded'
 import LockOpenRoundedIcon from '@mui/icons-material/LockOpenRounded'
 import GridViewRoundedIcon from '@mui/icons-material/GridViewRounded'
@@ -90,6 +91,7 @@ import { PRIMITIVE_LABELS, type PrimitiveKind } from './lib/primitives'
 import { plateDisplayName } from './lib/plateName'
 import { useListReorderDrag, useSingleListReorderDrag, type ListReorderGroup } from '../../hooks/useListReorderDrag'
 import { ListReorderCaret } from '../../components/ListReorderCaret'
+import { PLATE_PICKER_TILE_WIDTH_PX } from '../../components/platePickerLayout'
 import type { FilamentOption } from './EditorView'
 
 /**
@@ -302,9 +304,9 @@ export function PlateThumbnailStrip({
               // stretch; in a band it is the reverse. `flex` names the axis being fixed, so it
               // has to flip with the orientation or the tiles grow to fill the scroller.
               flex: '0 0 auto',
-              width: vertical ? '100%' : (collapsed ? 'auto' : 92),
-              minWidth: vertical ? 0 : (collapsed ? 0 : 92),
-              maxWidth: vertical ? '100%' : (collapsed ? 160 : 92),
+              width: vertical ? '100%' : (collapsed ? 'auto' : PLATE_PICKER_TILE_WIDTH_PX),
+              minWidth: vertical ? 0 : (collapsed ? 0 : PLATE_PICKER_TILE_WIDTH_PX),
+              maxWidth: vertical ? '100%' : (collapsed ? 160 : PLATE_PICKER_TILE_WIDTH_PX),
               p: 0.5,
               border: active ? undefined : '1px solid',
               borderColor: active ? undefined : 'neutral.outlinedBorder',
@@ -648,6 +650,7 @@ export function GizmoToolbar({
       // Beside Cut: both reshape the geometry itself rather than painting or placing it, and
       // BambuStudio carries its own `GLGizmoMeshBoolean` in the same toolbar.
       { value: 'meshBoolean', label: 'Boolean', icon: <JoinInnerRoundedIcon /> },
+      { value: 'simplify', label: 'Simplify', icon: <CompressRoundedIcon /> },
       { value: 'paintSupports', label: 'Paint supports', short: 'Supports', icon: <BrushRoundedIcon /> },
       { value: 'paintSeam', label: 'Paint seam', short: 'Seam', icon: <FormatPaintRoundedIcon /> },
       { value: 'paintColor', label: 'Paint color', short: 'Color', icon: <PaletteRoundedIcon /> },

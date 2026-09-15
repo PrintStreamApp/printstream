@@ -48,7 +48,16 @@ Business use needs a commercial key: either a Pro subscription (which covers
 self-hosting at no extra cost over the hosted service) or a one-time Lifetime
 license. A Pro-backed key carries an expiry and refreshes itself daily against
 whichever deployment issued it. The key says which, so there is nothing to
-configure; that refresh sends the key and nothing else.
+configure; that refresh sends the key and random installation id, but no printer
+counts or telemetry. A separate cloud-connection plugin is enabled by default
+for licensed in-app support and the shared suggestion board, and can be
+disabled by an administrator. Help discloses its payload inline, the plugin
+settings describe both surfaces, and the connection contacts the vendor only
+while a person uses one of them. Support shows the account holder and licence
+name; Suggestions publicly use only the account-holder name and allow one vote
+per Customer. Unread support replies are emailed to the account holder after
+five minutes. Licence and installation context is retained only as private
+operator context and is not part of public attribution.
 
 ### Updating
 

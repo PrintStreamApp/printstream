@@ -1,6 +1,6 @@
 import type { SlicingPresetSummary } from '@printstream/shared'
 
-export type SlicingPresetSortValue = 'updatedAt' | 'name' | 'kind'
+export type SlicingPresetSortValue = 'updatedAt' | 'name' | 'kind' | 'source'
 export type SlicingPresetKind = SlicingPresetSummary['kind']
 export type SlicingPresetSortDirection = 'asc' | 'desc'
 
@@ -13,6 +13,11 @@ export function formatSlicingPresetKind(kind: SlicingPresetSummary['kind']): str
     case 'process': return 'Process'
     case 'filament': return 'Material'
   }
+}
+
+/** User-facing ownership label shared by the Source filter, grouping and sorting controls. */
+export function formatSlicingPresetSource(source: SlicingPresetSummary['source']): string {
+  return source === 'builtin' ? 'Built-in presets' : 'User presets'
 }
 
 export function filterSlicingPresets(
@@ -43,6 +48,10 @@ export function sortSlicingPresets(
         break
       case 'kind':
         comparison = formatSlicingPresetKind(left.kind).localeCompare(formatSlicingPresetKind(right.kind), undefined, { sensitivity: 'base' })
+        if (comparison === 0) comparison = left.name.localeCompare(right.name, undefined, { sensitivity: 'base' })
+        break
+      case 'source':
+        comparison = formatSlicingPresetSource(left.source).localeCompare(formatSlicingPresetSource(right.source), undefined, { sensitivity: 'base' })
         if (comparison === 0) comparison = left.name.localeCompare(right.name, undefined, { sensitivity: 'base' })
         break
       case 'updatedAt': {

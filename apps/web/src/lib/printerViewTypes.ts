@@ -22,4 +22,12 @@ export type PrinterRecoveryFilamentSource = {
   command: PrinterRecoveryLoadCommand
 }
 
-export type PrinterSettingsDialogCommand = Extract<PrinterCommand, { type: 'setPrintOption' | 'setAirductMode' }>
+export type PrinterSettingsDialogCommand = Extract<PrinterCommand, {
+  type:
+    | 'setPrintOption'
+    | 'setAirductMode'
+    | 'setPurifyAirAtPrintEnd'
+    | 'setOpenDoorDetection'
+    | 'setSmartNozzleBlobDetection'
+    | 'setCameraResolution'
+}>

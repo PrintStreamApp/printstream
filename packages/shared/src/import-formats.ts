@@ -39,7 +39,8 @@ export const IMPORT_FORMAT_EXTENSIONS = {
   '3mf': ['.3mf'],
   obj: ['.obj'],
   gltf: ['.gltf', '.glb'],
-  amf: ['.amf']
+  amf: ['.amf'],
+  fbx: ['.fbx']
 } as const satisfies Readonly<Record<string, readonly [string, ...string[]]>>
 
 /** Every staged-import format, in offer order. The source the `StagedImportFormat` enum derives from. */
@@ -60,7 +61,8 @@ export const IMPORT_FORMAT_LABELS: Readonly<Record<StagedImportFormatName, strin
   '3mf': '3MF',
   obj: 'OBJ',
   gltf: 'glTF',
-  amf: 'AMF'
+  amf: 'AMF',
+  fbx: 'FBX'
 }
 
 /**
@@ -90,7 +92,7 @@ export function importFormatExtensions(formats: readonly StagedImportFormat[]): 
 }
 
 /**
- * The formats named as a user-facing list ("STL, STEP, 3MF, OBJ, glTF and AMF"), for the refusals
+ * The formats named as a user-facing list ("STL, STEP, 3MF, OBJ, glTF, AMF and FBX"), for the refusals
  * that have to say what WOULD have been accepted.
  *
  * Derived rather than written out because those strings sat in the api's two import routes and were

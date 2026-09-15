@@ -27,6 +27,7 @@ import {
   formatBytes,
   type PrintNozzleOffsetCalibrationMode,
   type PrintOnOffAutoMode,
+  type PrintTimelapseStorage,
   type Printer,
   type PrinterStorageList,
   type PrinterTrayMapping
@@ -46,6 +47,7 @@ import { SquareMediaFrame } from './SquareMediaFrame'
 import { StoragePrintModal } from './StoragePrintModal'
 import { ListSkeleton } from '../components/ListSkeleton'
 import { ProgressBar } from './ProgressBar'
+import { DirectorySelectionButton } from './DirectoryToolbar'
 
 /** Three-dot vertical glyph. Inlined here to avoid importing back into the pages layer. */
 function MoreVertIcon() {
@@ -187,9 +189,12 @@ export function PrinterStorageModal({
       vibrationCompensation: boolean
       flowCalibration: PrintOnOffAutoMode
       timelapse: boolean
+      timelapseStorage: PrintTimelapseStorage
+      externalFilamentChangeAssist: boolean
       nozzleOffsetCalibration: PrintNozzleOffsetCalibrationMode
       amsMapping?: PrinterTrayMapping[]
       allowIncompatibleFilament: boolean
+      allowPrinterModelMismatch: boolean
       allowFilamentTrackSwitchMismatch: boolean
       allowInsufficientFilament: boolean
       allowBlacklistedFilament: boolean
@@ -207,11 +212,14 @@ export function PrinterStorageModal({
           bedLevel: args.bedLevel,
           vibrationCompensation: args.vibrationCompensation,
           timelapse: args.timelapse,
+          timelapseStorage: args.timelapseStorage,
+          externalFilamentChangeAssist: args.externalFilamentChangeAssist,
           flowCalibration: args.flowCalibration,
           filamentDynamicsCalibration: false,
           nozzleOffsetCalibration: args.nozzleOffsetCalibration,
           amsMapping: args.amsMapping,
           allowIncompatibleFilament: args.allowIncompatibleFilament,
+          allowPrinterModelMismatch: args.allowPrinterModelMismatch,
           allowFilamentTrackSwitchMismatch: args.allowFilamentTrackSwitchMismatch,
           allowInsufficientFilament: args.allowInsufficientFilament,
           allowBlacklistedFilament: args.allowBlacklistedFilament,
@@ -384,16 +392,20 @@ export function PrinterStorageModal({
                   {flat && <Box sx={{ flex: 1 }} />}
                   {allowManage && selectionMode ? (
                     <>
-                      {selectableEntries.length > 0 && (
-                        <Button
-                          size="sm"
-                          variant="soft"
-                          onClick={toggleAllVisibleEntries}
-                          disabled={startDeleteJob.isPending}
-                        >
-                          {selectedVisibleEntryPaths.length === selectableEntries.length ? 'Clear all' : 'Select all'}
-                        </Button>
-                      )}
+                      <DirectorySelectionButton
+                        selection={{
+                          active: true,
+                          checked: selectedVisibleEntryPaths.length === selectableEntries.length,
+                          indeterminate: selectedVisibleEntryPaths.length > 0 && selectedVisibleEntryPaths.length < selectableEntries.length,
+                          disabled: selectableEntries.length === 0 || startDeleteJob.isPending,
+                          onActivate: () => setSelectionMode(true),
+                          onChange: () => toggleAllVisibleEntries(),
+                          ariaLabel: selectedVisibleEntryPaths.length === selectableEntries.length
+                            ? 'Clear all printer files'
+                            : 'Select all printer files'
+                        }}
+                        iconOnly={isMobileViewport}
+                      />
                       <Button
                         size="sm"
                         variant="plain"
@@ -417,15 +429,18 @@ export function PrinterStorageModal({
                         Delete selected{selectedVisibleEntryPaths.length > 0 ? ` (${selectedVisibleEntryPaths.length})` : ''}
                       </Button>
                     </>
-                  ) : allowManage && selectableEntries.length > 0 && !isMobileViewport ? (
-                    <Button
-                      size="sm"
-                      variant="soft"
-                      onClick={() => setSelectionMode(true)}
-                      disabled={startDeleteJob.isPending}
-                    >
-                      Select...
-                    </Button>
+                  ) : allowManage && selectableEntries.length > 0 ? (
+                    <DirectorySelectionButton
+                      selection={{
+                        active: false,
+                        checked: false,
+                        disabled: startDeleteJob.isPending,
+                        onActivate: () => setSelectionMode(true),
+                        onChange: () => undefined,
+                        ariaLabel: 'Select printer files'
+                      }}
+                      iconOnly={isMobileViewport}
+                    />
                   ) : null}
                   {allowUpload && (
                     <>

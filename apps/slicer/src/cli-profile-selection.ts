@@ -5,6 +5,10 @@ type PresetKinded = {
   kind: SlicingPresetKind
 }
 
+type SourcedPresetKinded = PresetKinded & {
+  source: 'builtin' | 'custom'
+}
+
 /**
  * Which profile files reach the CLI's `--load-settings`. Once the input 3MF's
  * project settings were rewritten (identity + any native machine retarget baked
@@ -23,6 +27,19 @@ export function selectCliProfileFiles<T extends PresetKinded>(
   }
 
   return profileFiles.filter((profile) => profile.kind !== 'machine')
+}
+
+/**
+ * Runtime-only profile sidecars allowed beside an authoritative browser-prepared project.
+ *
+ * Process and filament profiles would override settings already authored into the 3MF. Built-in
+ * machines need no sidecar. A custom machine is different: the CLI needs its User-preset lineage
+ * to accept the embedded process, and its portable build-plate assets need task-local paths.
+ */
+export function selectPreparedRuntimeProfileFiles<T extends SourcedPresetKinded>(
+  profileFiles: readonly T[]
+): T[] {
+  return profileFiles.filter((profile) => profile.kind === 'machine' && profile.source === 'custom')
 }
 
 /**

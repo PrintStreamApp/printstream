@@ -186,6 +186,26 @@ export async function inspectBridgeLibraryThreeMf(input: {
 }
 
 /**
+ * Rebuilds an index after a caller detects that a cached result contradicts metadata already
+ * derived from the same file version. This deliberately bypasses both memory and derived-index
+ * caches while retaining the full local byte cache, which is content-validated against the
+ * bridge before use. The retry makes development parser reloads and interrupted cache writes
+ * self-healing without turning a transient stale index into a print-dialog failure.
+ */
+export async function refreshBridgeLibraryThreeMf(input: {
+  ownerBridgeId?: string | null
+  storedPath: string
+}, signal?: AbortSignal): Promise<BridgeLibraryThreeMfIndex> {
+  const bridgeId = requireLibraryOwnerBridgeId(input.ownerBridgeId)
+  const localPath = await ensureBridgeLibraryLocalCopy({ bridgeId, storedPath: input.storedPath })
+
+  bridgeThreeMfIndexCache.delete(localPath)
+  const index = await readPlateIndex(localPath, signal)
+  await writeCachedBridgeLibraryDerivedIndex(bridgeId, input.storedPath, index)
+  return index
+}
+
+/**
  * Whether a bridge's inspect3mf result must be discarded in favour of pulling the bytes and
  * parsing locally.
  *

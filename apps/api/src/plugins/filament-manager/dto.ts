@@ -70,6 +70,7 @@ export function toSpoolDto(row: SpoolRowWithPrinter): FilamentSpool {
     bambuUuid: row.bambuUuid,
     slicingPresetName: row.slicingPresetName,
     serial: row.serial,
+    productCode: row.productCode,
     nozzleTempMin: row.nozzleTempMin,
     nozzleTempMax: row.nozzleTempMax,
     diameterMm: row.diameterMm,

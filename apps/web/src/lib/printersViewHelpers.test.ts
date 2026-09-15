@@ -6,10 +6,17 @@ import {
   derivePrinterStateBucket,
   filamentPresetLabel,
   matchesPrinterStateFilter,
-  printerStateSortRank
+  printerStateSortRank,
+  shouldShowPrinterOverviewDirectoryControls
 } from './printersViewHelpers.js'
 
 const BAMBU_RFID = '0F674662BC86478AA008E7CCAD3B3A2A'
+
+test('printer overview directory controls only appear for a multi-printer fleet', () => {
+  assert.equal(shouldShowPrinterOverviewDirectoryControls(0), false)
+  assert.equal(shouldShowPrinterOverviewDirectoryControls(1), false)
+  assert.equal(shouldShowPrinterOverviewDirectoryControls(2), true)
+})
 
 test('filamentPresetLabel surfaces the Bambu preset name for a scanned Bambu spool', () => {
   assert.equal(

@@ -8,7 +8,14 @@
  */
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { parseObjMesh } from './mesh-obj.js'
+import {
+  parseObjMaterialColors,
+  parseObjMaterials,
+  parseObjMesh,
+  referencedObjMaterialLibraries,
+  resolveObjMaterials
+} from './mesh-obj.js'
+import { mergeImportedMeshes } from './mesh-stl.js'
 import { ModelImportError } from './imported-mesh.js'
 
 const encode = (text: string): Uint8Array => new TextEncoder().encode(text)
@@ -62,13 +69,163 @@ test('face syntax carrying texture and normal indices reads only the position', 
   assert.deepEqual(full.bounds, normalsOnly.bounds)
 })
 
-test('trailing vertex-colour fields are not read as coordinates', () => {
+test('trailing vertex colours stay aligned to face corners', () => {
   // `v x y z r g b`. Reading past the third field would treat the red channel as a fourth
   // coordinate and shift every later vertex, which is silent and total.
   const mesh = parseObjMesh(encode([
     'v 0 0 0 1 0 0', 'v 1 0 0 0 1 0', 'v 0 1 0 0 0 1', 'f 1 2 3'
   ].join('\n')))
   assert.deepEqual(mesh.bounds, { min: { x: 0, y: 0, z: 0 }, max: { x: 1, y: 1, z: 0 } })
+  assert.deepEqual(mesh.triangleCornerColors, [
+    1, 0, 0, 1,
+    0, 1, 0, 1,
+    0, 0, 1, 1
+  ])
+})
+
+test('OBJ colour channels clamp like BambuStudio and missing colours remain undefined', () => {
+  const mesh = parseObjMesh(encode([
+    'v 0 0 0 2 -1 0.5 0.25', 'v 1 0 0', 'v 0 1 0 0 0 1', 'f 1 2 3'
+  ].join('\n')))
+  assert.deepEqual(mesh.triangleCornerColors, [
+    1, 0, 0.5, 0.25,
+    0, 0, 0, 0,
+    0, 0, 1, 1
+  ])
+})
+
+test('MTL diffuse colours paint each face through its active material', () => {
+  const materials = parseObjMaterialColors(encode([
+    'newmtl Signal Red', 'Kd 1.2 -1 0.25',
+    'newmtl Glass', 'Kd 0 0.5 1', 'd 0.5'
+  ].join('\n')))
+  const mesh = parseObjMesh(encode([
+    'mtllib palette.mtl',
+    'v 0 0 0', 'v 1 0 0', 'v 0 1 0',
+    'v 0 0 1', 'v 1 0 1', 'v 0 1 1',
+    'usemtl Signal Red', 'f 1 2 3',
+    'usemtl Glass', 'f 4 5 6'
+  ].join('\n')), { materialColors: materials })
+
+  assert.equal(mesh.sourceColorMode, 'material')
+  assert.deepEqual(mesh.triangleCornerColors, [
+    1, 0, 0.25, 1, 1, 0, 0.25, 1, 1, 0, 0.25, 1,
+    0, 0.5, 1, 0.5, 0, 0.5, 1, 0.5, 0, 0.5, 1, 0.5
+  ])
+})
+
+test('vertex colours take precedence while MTL fills otherwise-uncoloured corners', () => {
+  const materials = parseObjMaterialColors(encode(['newmtl blue', 'Kd 0 0 1'].join('\n')))
+  const mesh = parseObjMesh(encode([
+    'v 0 0 0 1 0 0', 'v 1 0 0', 'v 0 1 0', 'usemtl blue', 'f 1 2 3'
+  ].join('\n')), { materialColors: materials })
+
+  assert.equal(mesh.sourceColorMode, 'vertex')
+  assert.deepEqual(mesh.triangleCornerColors, [
+    1, 0, 0, 1,
+    0, 0, 1, 1,
+    0, 0, 1, 1
+  ])
+})
+
+test('OBJ material-library references are unique and comment-safe', () => {
+  assert.deepEqual(referencedObjMaterialLibraries(encode([
+    'mtllib primary.mtl accents.mtl # bundled palettes',
+    'mtllib primary.mtl'
+  ].join('\n'))), ['primary.mtl', 'accents.mtl'])
+})
+
+test('a malformed MTL colour is a classified import error', () => {
+  assert.throws(
+    () => parseObjMaterialColors(encode(['newmtl broken', 'Kd red green blue'].join('\n'))),
+    ModelImportError
+  )
+})
+
+test('MTL texture references retain paths with options and spaces', () => {
+  const materials = parseObjMaterials(encode([
+    'newmtl shell',
+    'Kd 0.2 0.3 0.4',
+    'map_Kd -s 1 1 1 textures/Shell Colour.png'
+  ].join('\n')))
+  assert.deepEqual(materials.get('shell'), {
+    color: [0.2, 0.3, 0.4, 1],
+    textureName: 'textures/Shell Colour.png'
+  })
+})
+
+test('OBJ map_Kd textures use independent UV indices and flip the OBJ V axis', async () => {
+  const obj = encode([
+    'mtllib shell.mtl',
+    'v 0 0 0', 'v 1 0 0', 'v 0 1 0',
+    'vt 0 1', 'vt 1 1', 'vt 0 0',
+    'usemtl shell', 'f 1/3 2/1 3/2'
+  ].join('\n'))
+  const companions = [
+    { name: 'shell.mtl', bytes: encode('newmtl shell\nmap_Kd pixels.png') },
+    { name: 'pixels.png', bytes: Uint8Array.of(1) }
+  ]
+  const materials = await resolveObjMaterials(obj, companions, () => ({
+    width: 2,
+    height: 2,
+    rgba: Uint8Array.from([
+      255, 0, 0, 255, 0, 255, 0, 255,
+      0, 0, 255, 255, 255, 255, 255, 255
+    ])
+  }))
+  const mesh = parseObjMesh(obj, { materials })
+
+  assert.equal(mesh.sourceColorMode, 'texture')
+  assert.ok(mesh.indices.length / 3 >= 10_000)
+  assert.equal(mesh.triangleCornerColors?.length, mesh.indices.length * 4)
+  const colors = new Set<string>()
+  for (let offset = 0; offset < mesh.triangleCornerColors!.length; offset += 4) {
+    colors.add(mesh.triangleCornerColors!.slice(offset, offset + 3).map((value) => Math.round(value * 16)).join(','))
+  }
+  assert.ok(colors.size > 4, 'subdivision should retain texture detail beyond the original corners')
+})
+
+test('unused material textures are not decoded', async () => {
+  const obj = encode([
+    'mtllib catalogue.mtl',
+    'v 0 0 0', 'v 1 0 0', 'v 0 1 0',
+    'usemtl plain', 'f 1 2 3'
+  ].join('\n'))
+  let decoded = 0
+  await resolveObjMaterials(obj, [
+    { name: 'catalogue.mtl', bytes: encode('newmtl plain\nKd 1 0 0\nnewmtl unused\nmap_Kd huge.png') },
+    { name: 'huge.png', bytes: Uint8Array.of(1) }
+  ], () => {
+    decoded += 1
+    return { width: 1, height: 1, rgba: Uint8Array.of(0, 0, 0, 255) }
+  })
+  assert.equal(decoded, 0)
+})
+
+test('colours stay aligned when welding drops a degenerate triangle', () => {
+  const mesh = parseObjMesh(encode([
+    'v 0 0 0 1 0 0', 'v 0 0 0 0 1 0', 'v 1 0 0 0 0 1',
+    'v 0 1 0 1 1 0', 'f 1 2 3', 'f 1 3 4'
+  ].join('\n')))
+  assert.equal(mesh.indices.length, 3)
+  assert.deepEqual(mesh.triangleCornerColors, [
+    1, 0, 0, 1,
+    0, 0, 1, 1,
+    1, 1, 0, 1
+  ])
+})
+
+test('mesh merging preserves colours and inserts undefined corners for uncoloured siblings', () => {
+  const coloured = parseObjMesh(encode([
+    'v 0 0 0 1 0 0', 'v 1 0 0 0 1 0', 'v 0 1 0 0 0 1', 'f 1 2 3'
+  ].join('\n')))
+  const plain = parseObjMesh(encode([
+    'v 0 0 1', 'v 1 0 1', 'v 0 1 1', 'f 1 2 3'
+  ].join('\n')))
+  const merged = mergeImportedMeshes([plain, coloured])
+  assert.equal(merged.triangleCornerColors?.length, merged.indices.length * 4)
+  assert.deepEqual(merged.triangleCornerColors?.slice(0, 12), new Array(12).fill(0))
+  assert.deepEqual(merged.triangleCornerColors?.slice(12), coloured.triangleCornerColors)
 })
 
 test('object and group markers do not split the mesh', () => {

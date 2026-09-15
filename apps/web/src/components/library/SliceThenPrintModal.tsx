@@ -36,6 +36,7 @@ import {
 } from '../../lib/slicingJobPresentation'
 import { buildDefaultAmsMappingFromSlicingTarget, resolveSlicingLeaveAction } from '../../lib/slicingPrintHandoff'
 import { SliceEstimates } from './SliceEstimates'
+import { SliceResultPanel } from './SliceResultPanel'
 import { toast } from '../../lib/toast'
 import { suppressJobToast } from '../../lib/dialogToastSuppression'
 import { useRetrySlicingJob } from '../../hooks/useRetrySlicingJob'
@@ -358,6 +359,7 @@ export function SliceResultModal({
   bridgeId,
   bridgeName,
   showRoot,
+  retainReadyResultOnClose = false,
   onClose
 }: {
   sourceFile: LibraryFile
@@ -368,7 +370,9 @@ export function SliceResultModal({
   bridgeId: string | null
   bridgeName: string | null
   showRoot: boolean
-  onClose: () => void
+  /** Hide a completed, uncommitted result without discarding it so its owner can reopen it. */
+  retainReadyResultOnClose?: boolean
+  onClose: (result: { retained: boolean }) => void
 }) {
   const queryClient = useQueryClient()
   // The job's own record, not the list: see the sibling dialog above.
@@ -389,20 +393,27 @@ export function SliceResultModal({
   const printedRef = useRef(printed)
   printedRef.current = printed
   const dismissHandledRef = useRef(false)
-  // Closing must not orphan the slice: cancel a still-running job, or discard the
-  // still-hidden output if it finished but was never saved or printed.
+  // Closing normally abandons the slice. An editor-owned result can instead be hidden and retained
+  // until that editor changes its request or closes, which makes a same-session re-slice instant.
   const handleClose = useCallback(() => {
     dismissHandledRef.current = true
     const current = jobRef.current
+    const retained = Boolean(
+      retainReadyResultOnClose
+      && !savedRef.current
+      && !printedRef.current
+      && current?.status === 'ready'
+      && current.outputFileId
+    )
     if (current && isSlicingInProgress(current.status)) {
       void apiFetch(`/api/slicing/jobs/${jobId}/cancel`, { method: 'POST' })
         .then(() => queryClient.invalidateQueries({ queryKey: ['slicing-jobs'] }))
         .catch(() => undefined)
-    } else if (!savedRef.current && !printedRef.current && current?.status === 'ready' && current.outputFileId) {
+    } else if (!retained && !savedRef.current && !printedRef.current && current?.status === 'ready' && current.outputFileId) {
       void apiFetch(`/api/slicing/jobs/${jobId}/discard`, { method: 'POST' }).catch(() => undefined)
     }
-    onClose()
-  }, [jobId, queryClient, onClose])
+    onClose({ retained })
+  }, [jobId, queryClient, retainReadyResultOnClose, onClose])
   // Torn down without an explicit close (e.g. navigated away): apply the same cleanup so a
   // running job is cancelled and an unkept output discarded rather than orphaned.
   useOrphanSliceCleanup(() => {
@@ -497,49 +508,47 @@ export function SliceResultModal({
               </Alert>
             )}
             {job && (
-              <Sheet variant="outlined" sx={{ p: 1.25, borderRadius: 'sm' }}>
-                <Stack spacing={1}>
-                  <Stack direction="row" justifyContent="space-between" alignItems="center" spacing={1}>
-                    <Typography level="title-md" sx={{ minWidth: 0, overflowWrap: 'anywhere' }}>{displayName}</Typography>
-                    <Chip size="sm" variant="soft" color={slicingStatusColor(job.status)}>{getSlicingJobStatusLabel(job)}</Chip>
-                  </Stack>
-                  {!ready && job.status !== 'failed' && job.status !== 'cancelled' && (
-                    <>
-                      <ProgressBar value={progressPercent} color={slicingStatusColor(job.status)} />
-                      <Typography level="body-sm" textColor="text.secondary" sx={{ overflowWrap: 'anywhere' }}>
-                        {formatSlicingProgress(job, progressFrame)}
-                      </Typography>
-                    </>
-                  )}
-                  {ready && (
-                    <SliceEstimates metadata={job.metadata} filamentMappings={job.target.filamentMappings} />
-                  )}
-                  {ready && job.outputFileId && (
-                    <Button
-                      type="button"
-                      variant="outlined"
-                      color="neutral"
-                      size="sm"
-                      startDecorator={<VisibilityRoundedIcon />}
-                      onClick={() => setPreviewing(true)}
-                      sx={{ width: { xs: '100%', sm: 'auto' }, alignSelf: { sm: 'flex-start' } }}
-                    >
-                      Preview
-                    </Button>
-                  )}
-                  {job.status === 'cancelled' && (
-                    <Alert color="warning" variant="soft" startDecorator={<ErrorOutlineRoundedIcon />}>
-                      Slicing was cancelled. No sliced file was saved.
-                    </Alert>
-                  )}
-                  {jobError && job.status !== 'cancelled' && (
-                    <Alert color="danger" variant="soft" startDecorator={<ErrorOutlineRoundedIcon />}>
-                      {jobError}
-                    </Alert>
-                  )}
-                  {job.status === 'failed' && <SlicingEngineLog jobId={job.id} />}
-                </Stack>
-              </Sheet>
+              <SliceResultPanel
+                displayName={displayName}
+                statusLabel={getSlicingJobStatusLabel(job)}
+                statusColor={slicingStatusColor(job.status)}
+              >
+                {!ready && job.status !== 'failed' && job.status !== 'cancelled' && (
+                  <>
+                    <ProgressBar value={progressPercent} color={slicingStatusColor(job.status)} />
+                    <Typography level="body-sm" textColor="text.secondary" sx={{ overflowWrap: 'anywhere' }}>
+                      {formatSlicingProgress(job, progressFrame)}
+                    </Typography>
+                  </>
+                )}
+                {ready && (
+                  <SliceEstimates metadata={job.metadata} filamentMappings={job.target.filamentMappings} />
+                )}
+                {ready && job.outputFileId && (
+                  <Button
+                    type="button"
+                    variant="outlined"
+                    color="neutral"
+                    size="sm"
+                    startDecorator={<VisibilityRoundedIcon />}
+                    onClick={() => setPreviewing(true)}
+                    sx={{ width: { xs: '100%', sm: 'auto' }, alignSelf: { sm: 'flex-start' } }}
+                  >
+                    Preview
+                  </Button>
+                )}
+                {job.status === 'cancelled' && (
+                  <Alert color="warning" variant="soft" startDecorator={<ErrorOutlineRoundedIcon />}>
+                    Slicing was cancelled. No sliced file was saved.
+                  </Alert>
+                )}
+                {jobError && job.status !== 'cancelled' && (
+                  <Alert color="danger" variant="soft" startDecorator={<ErrorOutlineRoundedIcon />}>
+                    {jobError}
+                  </Alert>
+                )}
+                {job.status === 'failed' && <SlicingEngineLog jobId={job.id} />}
+              </SliceResultPanel>
             )}
           </Stack>
         </ScrollableDialogBody>

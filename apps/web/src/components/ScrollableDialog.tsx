@@ -98,8 +98,12 @@ function assignRef<T>(ref: React.ForwardedRef<T>, value: T | null) {
  * shorter than the body it simply hugs the bottom, which is the expected
  * chat-thread look.
  */
-export const ScrollableDialogBody = React.forwardRef<HTMLDivElement, DialogContentProps & { pinToBottom?: boolean }>(function ScrollableDialogBody({ sx, children, pinToBottom = false, ...props }, ref) {
-  const { scrollRef, scrollAreaSx, contentSx } = useScrollbarGutter(children)
+export const ScrollableDialogBody = React.forwardRef<HTMLDivElement, DialogContentProps & {
+  pinToBottom?: boolean
+  /** Styles for the stable inner content box, useful when an enlarged dialog needs a flex body. */
+  contentSx?: DialogContentProps['sx']
+}>(function ScrollableDialogBody({ sx, contentSx, children, pinToBottom = false, ...props }, ref) {
+  const { scrollRef, scrollAreaSx, contentSx: gutterContentSx } = useScrollbarGutter(children)
 
   return (
     <DialogContent
@@ -120,7 +124,7 @@ export const ScrollableDialogBody = React.forwardRef<HTMLDivElement, DialogConte
         ...sxArray(sx)
       ]}
     >
-      <Box sx={contentSx}>
+      <Box sx={[gutterContentSx, ...sxArray(contentSx)]}>
         {children}
       </Box>
     </DialogContent>

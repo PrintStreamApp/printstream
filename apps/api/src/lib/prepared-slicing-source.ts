@@ -4,14 +4,17 @@
  * The browser sends its frozen target twice: when staging the immutable project and when queuing
  * the slice. The server verifies that its referenced presets and real printer are still available
  * at both boundaries, then binds that request to the immutable snapshot. The browser-authored 3MF
- * is authoritative, so this module deliberately does not resolve preset bodies or rebuild it.
+ * is authoritative. The one preset body retained at queue time is a selected custom machine,
+ * which the slicer needs as a runtime identity and custom-bed asset carrier. It must not be used
+ * to rebuild the project.
  */
 import { createHash } from 'node:crypto'
 import { isProjectSlicingPresetId, type CreateSlicingJob, type SlicingTarget } from '@printstream/shared'
+import { canonicalJson } from './canonical-json.js'
 import { env } from './env.js'
 import { badRequest } from './http-error.js'
 import { prisma } from './prisma.js'
-import { resolveSlicingPresetFiles } from './slicing-presets.js'
+import { resolveSlicingPresetFiles, type ResolvedSlicingPresetFile } from './slicing-presets.js'
 
 export interface PreparedSlicingConfiguration {
   contractVersion: 1
@@ -21,6 +24,8 @@ export interface PreparedSlicingConfiguration {
 
 export interface PreparedSlicingAuthorization extends PreparedSlicingConfiguration {
   printerModel: string | null
+  /** Exact custom machine selected by the browser, retained only for slicer runtime mechanics. */
+  runtimeMachineProfile?: ResolvedSlicingPresetFile | null
 }
 
 /** Lease covering a staged proof until its job is enqueued and protected by a live reference. */
@@ -34,7 +39,11 @@ export function preparedSlicingConfigurationDigest(input: PreparedSlicingAuthori
     contractVersion: input.contractVersion,
     slicerTargetId: input.slicerTargetId ?? null,
     target: input.target,
-    printerModel: input.printerModel
+    printerModel: input.printerModel,
+    // The custom machine is loaded beside the already-authored project at slice time. Bind its
+    // exact body into the proof so an overwrite between staging and enqueue cannot silently pair
+    // that immutable 3MF with different machine settings or custom-bed assets.
+    runtimeMachineProfile: input.runtimeMachineProfile ?? null
   })).digest('hex')
 }
 
@@ -74,17 +83,34 @@ export async function authorizePreparedSlicingConfiguration(input: PreparedSlici
     if (!printer) throw badRequest('The target printer no longer exists.')
     printerModel = printer.model
   }
-  return { ...input, printerModel }
+  const machineProfile = byId.get(machineId)!
+  return {
+    ...input,
+    printerModel,
+    runtimeMachineProfile: machineProfile.source === 'custom' ? machineProfile : null
+  }
 }
 
-/** Resolve a prepared source only when its server-issued proof matches this exact slice. */
+/**
+ * Resolve a prepared source only when its server-issued proof matches this exact slice.
+ *
+ * A custom machine profile rides beside the source as runtime-only data. The prepared 3MF remains
+ * authoritative for project settings; the sidecar supplies the User-preset lineage the CLI needs
+ * for compatibility checks and task-local paths for embedded custom-bed assets.
+ */
 export async function resolvePreparedSlicingSource(input: {
   workspaceId: string
   sourceFileId: string
   request: CreateSlicingJob
   /** Test seam only; production callers always resolve from server-owned state. */
   authorization?: PreparedSlicingAuthorization
-}): Promise<{ id: string; name: string; ownerBridgeId: string | null; storedPath: string } | null> {
+}): Promise<{
+  id: string
+  name: string
+  ownerBridgeId: string | null
+  storedPath: string
+  runtimeMachineProfile: ResolvedSlicingPresetFile | null
+} | null> {
   const prepared = input.request.preparedSource
   if (!prepared) return null
   const configurationBase = input.request.contentBase
@@ -119,17 +145,8 @@ export async function resolvePreparedSlicingSource(input: {
   if (!proof) {
     throw badRequest('The prepared project does not match this source and slicing configuration. Prepare it again.')
   }
-  return proof.libraryFile
-}
-
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`
-  if (value && typeof value === 'object') {
-    return `{${Object.entries(value as Record<string, unknown>)
-      .filter(([, child]) => child !== undefined)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, child]) => `${JSON.stringify(key)}:${canonicalJson(child)}`)
-      .join(',')}}`
+  return {
+    ...proof.libraryFile,
+    runtimeMachineProfile: authorization.runtimeMachineProfile ?? null
   }
-  return JSON.stringify(value)
 }

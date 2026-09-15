@@ -37,6 +37,8 @@ export interface BedSurfaceSignatureInput {
    * testable without a renderer; `uuid` is what makes one parsed mesh distinguishable from another.
    */
   bedModel: { uuid: string } | null
+  /** Optional custom texture, identity-keyed for the same replacement rule as the mesh. */
+  bedTexture?: { uuid: string } | null
 }
 
 /** Opaque token: equal signatures mean the standing bed is still the one this input would build. */
@@ -47,6 +49,7 @@ export function bedSurfaceSignature(input: BedSurfaceSignatureInput): string {
     input.centerX,
     input.centerY,
     input.excludeAreas,
-    input.bedModel?.uuid ?? null
+    input.bedModel?.uuid ?? null,
+    input.bedTexture?.uuid ?? null
   ])
 }

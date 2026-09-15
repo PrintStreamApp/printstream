@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { printerStatusSchema, type Printer } from '@printstream/shared'
+import { printerStatusSchema, type Printer, type PrinterStatus } from '@printstream/shared'
 import { makeOfflineStatus, parseReport } from './bambu-report-parser.js'
 
 const printer: Printer = {
@@ -127,6 +127,196 @@ test('parseReport leaves nozzleRack null for a printer with no rack markers', ()
   )
   // A plain nozzle list with no parked nozzle and no holder is not a rack.
   assert.equal('nozzleRack' in (delta ?? {}), false)
+})
+
+test('parseReport exposes live print-start storage and external-change capabilities', () => {
+  const delta = parseReport({
+    print: {
+      // fun bits 28 and 48: internal timelapse storage and external spool change assist.
+      fun: '1000010000000'
+    }
+  }, printer)
+
+  assert.equal(delta?.printStartOptions?.vibrationCompensation.supported, false)
+  assert.equal(delta?.printStartOptions?.internalTimelapseStorage.supported, true)
+  assert.equal(delta?.printStartOptions?.externalFilamentChangeAssist.supported, true)
+})
+
+test('parseReport decodes capability-gated persistent print settings', () => {
+  const delta = parseReport({
+    print: {
+      fun: '4000000000001000',
+      fun2: 'E014',
+      cfg: '10A100280018',
+      xcam: {
+        cfg: (1 << 20) | (1 << 21) | (1 << 22),
+        buildplate_marker_detector: true
+      },
+      ipcam: {
+        ipcam_record: 'enable',
+        resolution: '1080p',
+        resolution_supported: ['720p', '1080p']
+      }
+    }
+  }, { ...printer, model: 'H2D' })
+
+  const options = delta?.printOptions
+  assert.equal(options?.foreignObjectDetection.enabled, true)
+  assert.equal(options?.printedPartDisplacementDetection.enabled, true)
+  assert.equal(options?.buildPlateTypeDetection.enabled, true)
+  assert.equal(options?.buildPlateAlignmentDetection.enabled, true)
+  assert.equal(options?.idleHeatingProtection.enabled, true)
+  assert.equal(options?.purifyAirAtPrintEnd.current, 'exhaust')
+  assert.equal(options?.openDoorDetection.current, 'pause')
+  assert.equal(options?.smartNozzleBlobDetection.current, 'auto')
+  assert.equal(options?.printStatusSnapshot.enabled, true)
+  assert.equal(options?.storeSentFilesOnExternalStorage.enabled, true)
+  assert.equal(options?.cameraAutoRecord.enabled, true)
+  assert.deepEqual(options?.cameraResolution, {
+    supported: true,
+    current: '1080p',
+    available: ['720p', '1080p']
+  })
+})
+
+test('packed setting values do not advertise unsupported printer controls', () => {
+  const delta = parseReport({
+    print: {
+      // cfg bit 23 is the current filament-tangle value. Studio requires the
+      // separate fun bit 9 before it offers the setting to the user.
+      cfg: '800000',
+      fun: '0',
+      xcam: {
+        // Detection values likewise do not prove the individual controls exist.
+        cfg: (1 << 7) | (1 << 10) | (1 << 13) | (1 << 16)
+      }
+    }
+  }, { ...printer, model: 'H2D' })
+
+  const options = delta?.printOptions
+  assert.equal(options?.filamentTangleDetection.enabled, true)
+  assert.equal(options?.filamentTangleDetection.supported, false)
+  assert.equal(options?.firstLayerInspection.supported, false)
+  assert.equal(options?.autoRecovery.supported, true)
+  assert.equal(options?.spaghettiDetection.supported, false)
+  assert.equal(options?.purgeChutePileupDetection.supported, false)
+  assert.equal(options?.nozzleClumpingDetection.supported, false)
+  assert.equal(options?.airPrintingDetection.supported, false)
+})
+
+test('model resources distinguish first-layer inspection from step-loss recovery', () => {
+  const h2d = parseReport({
+    print: {
+      fun: '20',
+      xcam: { first_layer_inspector: true }
+    }
+  }, { ...printer, model: 'H2D' })
+  const x1c = parseReport({ print: {} }, { ...printer, model: 'X1C' })
+
+  // fun bit 5 is not a first-layer capability bit. Studio reads both settings
+  // from its model resource, where H2D has recovery but no first-layer check.
+  assert.equal(h2d?.printOptions?.firstLayerInspection.supported, false)
+  assert.equal(h2d?.printOptions?.autoRecovery.supported, true)
+  assert.equal(x1c?.printOptions?.firstLayerInspection.supported, true)
+  assert.equal(x1c?.printOptions?.autoRecovery.supported, false)
+})
+
+test('get_version reapplies firmware-specific Studio print-option capabilities', () => {
+  const x1c = { ...printer, model: 'X1C' as const }
+  const current = makeOfflineStatus(x1c)
+  current.printOptions.autoRecovery.enabled = true
+
+  const delta = parseReport({
+    info: {
+      command: 'get_version',
+      module: [{ name: 'ota', sw_ver: '01.01.01.00', hw_ver: 'OTA' }]
+    }
+  }, x1c, current)
+
+  assert.equal(delta?.firmwareVersion, '01.01.01.00')
+  assert.equal(delta?.printOptions?.autoRecovery.supported, true)
+  assert.equal(delta?.printOptions?.autoRecovery.enabled, true)
+  assert.equal(delta?.printOptions?.buildPlateTypeDetection.supported, true)
+  assert.equal(delta?.printOptions?.aiMonitoring.supported, true)
+})
+
+test('refined AI reports hide Studio legacy aggregate AI monitoring', () => {
+  const delta = parseReport({
+    print: {
+      fun: '40000000000',
+      xcam: { cfg: 0 }
+    }
+  }, { ...printer, model: 'H2D' })
+
+  assert.equal(delta?.printOptions?.spaghettiDetection.supported, true)
+  assert.equal(delta?.printOptions?.aiMonitoring.supported, false)
+})
+
+test('authoritative capability reports clear stale print-setting support', () => {
+  const current = makeOfflineStatus({ ...printer, model: 'H2D' })
+  current.printOptions.filamentTangleDetection.supported = true
+  current.printOptions.spaghettiDetection.supported = true
+
+  const delta = parseReport(
+    { print: { fun: '0' } },
+    { ...printer, model: 'H2D' },
+    current
+  )
+
+  assert.equal(delta?.printOptions?.filamentTangleDetection.supported, false)
+  assert.equal(delta?.printOptions?.spaghettiDetection.supported, false)
+})
+
+test('explicit print-setting support overrides packed capability bits', () => {
+  const delta = parseReport({
+    print: {
+      fun: '0',
+      support_filament_tangle_detect: true
+    }
+  }, { ...printer, model: 'H2D' })
+
+  assert.equal(delta?.printOptions?.filamentTangleDetection.supported, true)
+})
+
+test('remote print storage follows the live capability outside static model fallbacks', () => {
+  const unsupported = parseReport({ print: {} }, { ...printer, model: 'P1S' })
+  const reported = parseReport({
+    print: { support_save_remote_print_file_to_storage: true }
+  }, { ...printer, model: 'P1S' })
+
+  assert.equal(unsupported?.printOptions?.storeSentFilesOnExternalStorage.supported, false)
+  assert.equal(reported?.printOptions?.storeSentFilesOnExternalStorage.supported, true)
+})
+
+test('parseReport fills persistent settings missing from an older current status', () => {
+  const current = makeOfflineStatus(printer)
+  const legacyPrintOptions = {
+    aiMonitoring: current.printOptions.aiMonitoring,
+    spaghettiDetection: current.printOptions.spaghettiDetection,
+    purgeChutePileupDetection: current.printOptions.purgeChutePileupDetection,
+    nozzleClumpingDetection: current.printOptions.nozzleClumpingDetection,
+    airPrintingDetection: current.printOptions.airPrintingDetection,
+    firstLayerInspection: current.printOptions.firstLayerInspection,
+    autoRecovery: current.printOptions.autoRecovery,
+    promptSound: current.printOptions.promptSound,
+    filamentTangleDetection: current.printOptions.filamentTangleDetection
+  } as PrinterStatus['printOptions']
+
+  const delta = parseReport(
+    { print: {} },
+    printer,
+    { ...current, printOptions: legacyPrintOptions }
+  )
+
+  assert.deepEqual(delta?.printOptions?.foreignObjectDetection, {
+    supported: false,
+    enabled: null
+  })
+  assert.deepEqual(delta?.printOptions?.cameraResolution, {
+    supported: false,
+    current: null,
+    available: []
+  })
 })
 
 test('makeOfflineStatus starts with skippedObjectIds unknown (null)', () => {
@@ -446,6 +636,52 @@ test('an external slot reporting a tray uuid is not treated as empty', () => {
   assert.equal(spool?.trayUuid, 'ABCDEF1234567890ABCDEF1234567890')
   assert.equal(spool?.color, '#FF0000')
   assert.deepEqual(spool?.colors, ['#FF0000'])
+})
+
+test('dual-nozzle route sentinels do not mark an external spool active', () => {
+  const h2d = { ...printer, model: 'H2D' as const }
+  const delta = parseReport(
+    {
+      print: {
+        device: {
+          extruder: {
+            info: [
+              { id: 0, snow: 0xffff },
+              { id: 1, snow: 0xfeff }
+            ]
+          }
+        }
+      }
+    },
+    h2d,
+    makeOfflineStatus(h2d)
+  )
+
+  assert.equal(delta?.externalSpools?.find((spool) => spool.amsId === 255)?.active, false)
+  assert.equal(delta?.externalSpools?.find((spool) => spool.amsId === 254)?.active, false)
+})
+
+test('dual-nozzle route slot zero marks the addressed external spool active', () => {
+  const h2d = { ...printer, model: 'H2D' as const }
+  const delta = parseReport(
+    {
+      print: {
+        device: {
+          extruder: {
+            info: [
+              { id: 0, snow: 0xff00 },
+              { id: 1, snow: 0xffff }
+            ]
+          }
+        }
+      }
+    },
+    h2d,
+    makeOfflineStatus(h2d)
+  )
+
+  assert.equal(delta?.externalSpools?.find((spool) => spool.amsId === 255)?.active, true)
+  assert.equal(delta?.externalSpools?.find((spool) => spool.amsId === 254)?.active, false)
 })
 
 test('an emptied external slot drops its calibration alongside its identity', () => {

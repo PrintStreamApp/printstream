@@ -401,9 +401,26 @@ export function buildSceneManifest(
   const projectFilaments = projectSettingsJson ? parseProjectFilaments(projectSettingsJson) : []
   const projectFilamentsById = new Map(projectFilaments.map((filament) => [filament.id, filament]))
   const plateType = extractPlateType(projectSettingsJson)
-  const { bed, width, depth } = extractSceneBed(projectSettingsJson, plateType, overrideModel)
+  const sourceBed = extractSceneBed(projectSettingsJson, plateType)
+  const displayedBed = overrideModel
+    ? extractSceneBed(projectSettingsJson, plateType, overrideModel)
+    : sourceBed
   const plateInstances = resolvePlateInstances(modelSettingsScene.plates, plate.index)
-  const plateOrigin = resolveProjectPlateOrigin(plateInstances, rootBuildTransformsByObjectId, bed, width, depth)
+  // Build-item offsets belong to the SOURCE project's multi-plate grid. Decoding them with an
+  // override printer's bed stride increasingly misplaces later plates (plate 2 by one X stride,
+  // then later rows by Y strides). Remove the source origin first, then translate the resulting
+  // plate-local placement by the bed-centre delta so centred arrangements stay centred.
+  const plateOrigin = resolveProjectPlateOrigin(
+    plateInstances,
+    rootBuildTransformsByObjectId,
+    sourceBed.bed,
+    sourceBed.width,
+    sourceBed.depth
+  )
+  const bedShift = {
+    x: (displayedBed.bed.minX + displayedBed.bed.maxX - sourceBed.bed.minX - sourceBed.bed.maxX) / 2,
+    y: (displayedBed.bed.minY + displayedBed.bed.maxY - sourceBed.bed.minY - sourceBed.bed.maxY) / 2
+  }
 
   const parts: ThreeMfScenePart[] = []
   const instances: ThreeMfSceneInstance[] = []
@@ -419,8 +436,8 @@ export function buildSceneManifest(
     // editor manipulates objects relative to the plate centre. The inverse (re-adding the origin)
     // is applied by the arrangement writer at slice time.
     const placement = [...buildTransform]
-    placement[9] = (placement[9] ?? 0) - plateOrigin.x
-    placement[10] = (placement[10] ?? 0) - plateOrigin.y
+    placement[9] = (placement[9] ?? 0) - plateOrigin.x + bedShift.x
+    placement[10] = (placement[10] ?? 0) - plateOrigin.y + bedShift.y
 
     const instanceParts: ThreeMfSceneInstancePart[] = []
     // Connector volumes are named by ORDINAL among this object's components, which is the position
@@ -445,8 +462,8 @@ export function buildSceneManifest(
         : null
       const filament = filamentId != null ? projectFilamentsById.get(filamentId) ?? null : null
       const transform = composeThreeMfTransforms(buildTransform, component.transform)
-      transform[9] = (transform[9] ?? 0) - plateOrigin.x
-      transform[10] = (transform[10] ?? 0) - plateOrigin.y
+      transform[9] = (transform[9] ?? 0) - plateOrigin.x + bedShift.x
+      transform[10] = (transform[10] ?? 0) - plateOrigin.y + bedShift.y
       parts.push({
         entryPath: component.entryPath,
         objectId: component.objectId,
@@ -524,13 +541,16 @@ export function buildSceneManifest(
 
   const filamentChanges = parseCustomGcodeToolChanges(customGcodeText, plate.index)
   const pauses = parseCustomGcodePauses(customGcodeText, plate.index)
+  const primeTower = parsePrimeTower(projectSettingsJson, plate.index)
   const scene: ThreeMfScene = {
     plateIndex: plate.index,
     plateName: plate.name,
-    bed,
+    bed: displayedBed.bed,
     parts,
     instances,
-    primeTower: parsePrimeTower(projectSettingsJson, plate.index),
+    primeTower: primeTower
+      ? { ...primeTower, x: primeTower.x + bedShift.x, y: primeTower.y + bedShift.y }
+      : null,
     ...(filamentChanges.length > 0 ? { filamentChanges } : {}),
     ...(pauses.length > 0 ? { pauses } : {}),
     ...(projectFilaments.length > 0
@@ -1271,4 +1291,3 @@ export function composeThreeMfTransforms(parent: readonly number[], child: reado
 function readThreeMfPartSubtype(partBlock: string, partAttrs: Record<string, string>): string | null {
   return partAttrs.subtype?.trim() || readModelSettingsMetadataString(partBlock, 'volume_type') || null
 }
-

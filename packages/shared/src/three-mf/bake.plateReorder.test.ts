@@ -132,6 +132,30 @@ test('a plate move carries layer pauses the session never edited onto the new pl
   assert.doesNotMatch(plateBlock(out, 2), /type="2"/, 'source plate 1 had no tool change')
 })
 
+test('the bake uses the editor placement bed for a retargeted multi-plate grid', () => {
+  const edit: SceneEdit = {
+    plates: [{ index: 1, sourceIndex: 1 }, { index: 2, sourceIndex: 2 }],
+    placementBedSize: { width: 350, depth: 320 },
+    instances: [
+      { ...instance(1, 1), position: { x: 175, y: 160, z: 0 } },
+      { ...instance(2, 2), position: { x: 175, y: 160, z: 0 } }
+    ]
+  }
+  const plan = planEditedThreeMf(baseSource(), edit)
+  const rewrite = plan.copy?.transforms.get('3D/3dmodel.model')
+  assert.ok(rewrite)
+  const model = rewrite(BASE_MODEL_XML)
+  assert.ok(model)
+
+  const transforms = Array.from(model.matchAll(/<item\b[^>]*transform="([^"]+)"/g), (match) =>
+    (match[1] ?? '').split(/\s+/).map(Number))
+  assert.deepEqual(transforms.map((transform) => transform.slice(9, 11)), [
+    [175, 160],
+    // Two plates use two columns; the H2D stride is 350 * 1.2 = 420 mm.
+    [595, 160]
+  ])
+})
+
 test('an edited plate wins over the moved source content at the same number', () => {
   const edit = { ...swappedEdit(), pauses: [{ plateIndex: 1, pauses: [{ z: 12 }] }] } as unknown as SceneEdit
   const out = customGcodeOutput(edit)

@@ -51,6 +51,28 @@ const IMAGE_SOURCE_PATHS = [
 const SERVICE = 'slicer'
 const SOURCE_FINGERPRINT_LABEL = 'io.printstream.dev.source-fingerprint'
 
+/**
+ * Names a local dev image by the content baked into it, so identical worktrees share the completed
+ * image while branches with real slicer differences remain isolated.
+ */
+export function slicerDevImageRef(sourceFingerprint, fallbackTag) {
+  return `printstream-slicer-dev:${sourceFingerprint || fallbackTag}`
+}
+
+/**
+ * Compose arguments that start this checkout's slicer, rebuilding only when its image cannot
+ * contain the current source. Identical worktrees reuse the content-addressed image and the shared
+ * engine volume, while each isolated Compose network may reuse internal port 4010 safely.
+ */
+export function slicerComposeUpArgs(sourceState) {
+  return [
+    '--profile', 'slicer',
+    'up', '-d',
+    ...(['differs', 'not-built'].includes(sourceState) ? ['--build'] : []),
+    'slicer'
+  ]
+}
+
 function dockerCli(args, { timeoutMs = 15_000 } = {}) {
   const result = spawnSync('docker', args, { encoding: 'utf8', timeout: timeoutMs })
   return {

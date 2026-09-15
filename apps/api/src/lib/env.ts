@@ -239,20 +239,24 @@ const envSchema = z.object({
   /** `owner/repo` holding the native build releases. */
   GITHUB_RELEASE_REPO: optionalStringEnv(),
   /**
-   * Paddle discount id for the beta-exit launch promo on Pro. Must be a
+   * Paddle discount id for the current 50%-off promotion on Pro. Must be a
    * *recurring* percentage discount restricted to the Pro price ids: it rides
    * every later item change, so an eligible subscriber keeps the promo rate
    * when they add printers, long after the promo window closes. See
-   * `private/cloud/launch-promo.ts` for why this is a discount and not a
+   * `private/cloud/promotion.ts` for why this is a discount and not a
    * second set of half-price price ids.
    */
+  PADDLE_DISCOUNT_PROMO_PRO: optionalStringEnv(),
+  /** Legacy name retained so deployed secrets can migrate without an outage. */
   PADDLE_DISCOUNT_LAUNCH_PROMO_PRO: optionalStringEnv(),
   /**
-   * Paddle discount id for the launch promo on the Lifetime license: one-time,
-   * restricted to the Lifetime price id. Kept separate from the Pro discount so
-   * it can be withdrawn when the window closes without touching the recurring
-   * discount on live Pro subscriptions.
+   * Paddle discount id for the current promotion on the Lifetime license:
+   * one-time, restricted to the Lifetime price id. Kept separate from the Pro
+   * discount so it can be withdrawn when the window closes without touching
+   * the recurring discount on live Pro subscriptions.
    */
+  PADDLE_DISCOUNT_PROMO_LIFETIME: optionalStringEnv(),
+  /** Legacy name retained so deployed secrets can migrate without an outage. */
   PADDLE_DISCOUNT_LAUNCH_PROMO_LIFETIME: optionalStringEnv(),
   /**
    * OVERRIDE for where a self-hosted install refreshes a subscription-backed

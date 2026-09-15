@@ -40,22 +40,35 @@ type FormState = {
   costDollars: string
   notes: string
   slicingPresetName: string
+  productCode: string
+  colorName: string
+  diameterMm: string
+  spoolCoreGrams: string
+  nozzleTempMin: string
+  nozzleTempMax: string
 }
 
 type FieldOption = { label: string; group: string }
 
-function initialState(spool: FilamentSpool | null): FormState {
+function initialState(spool: FilamentSpool | null, initialValues?: Partial<SpoolCreateInput> | null): FormState {
+  const netWeightGrams = spool?.netWeightGrams ?? initialValues?.netWeightGrams ?? 1000
   return {
-    brand: spool?.brand ?? '',
-    filamentType: spool?.filamentType ?? '',
-    materialSubtype: spool?.materialSubtype ?? '',
-    colorHex: spool?.colorHex ?? '#888888',
-    netWeightGrams: String(spool?.netWeightGrams ?? 1000),
-    remainingGrams: spool ? String(Math.round(spool.remainingGrams)) : '1000',
-    vendor: spool?.vendor ?? '',
+    brand: spool?.brand ?? initialValues?.brand ?? '',
+    filamentType: spool?.filamentType ?? initialValues?.filamentType ?? '',
+    materialSubtype: spool?.materialSubtype ?? initialValues?.materialSubtype ?? '',
+    colorHex: spool?.colorHex ?? initialValues?.colorHex ?? '#888888',
+    colorName: spool?.colorName ?? initialValues?.colorName ?? '',
+    diameterMm: String(spool?.diameterMm ?? initialValues?.diameterMm ?? 1.75),
+    spoolCoreGrams: String(spool?.spoolCoreGrams ?? initialValues?.spoolCoreGrams ?? ''),
+    nozzleTempMin: String(spool?.nozzleTempMin ?? initialValues?.nozzleTempMin ?? ''),
+    nozzleTempMax: String(spool?.nozzleTempMax ?? initialValues?.nozzleTempMax ?? ''),
+    netWeightGrams: String(netWeightGrams),
+    remainingGrams: spool ? String(Math.round(spool.remainingGrams)) : String(initialValues?.remainingGrams ?? netWeightGrams),
+    vendor: spool?.vendor ?? initialValues?.vendor ?? '',
     costDollars: spool?.costCents != null ? (spool.costCents / 100).toFixed(2) : '',
-    notes: spool?.notes ?? '',
-    slicingPresetName: spool?.slicingPresetName ?? ''
+    notes: spool?.notes ?? initialValues?.notes ?? '',
+    slicingPresetName: spool?.slicingPresetName ?? initialValues?.slicingPresetName ?? '',
+    productCode: spool?.productCode ?? initialValues?.productCode ?? ''
   }
 }
 
@@ -115,19 +128,29 @@ function FieldAutocomplete({
   )
 }
 
-export function SpoolFormDialog({ open, spool, onClose }: { open: boolean; spool: FilamentSpool | null; onClose: () => void }) {
+export function SpoolFormDialog({
+  open,
+  spool,
+  initialValues,
+  onClose
+}: {
+  open: boolean
+  spool: FilamentSpool | null
+  initialValues?: Partial<SpoolCreateInput> | null
+  onClose: () => void
+}) {
   const { create, update } = useSpoolMutations()
   const spoolsQuery = useSpoolsQuery()
-  const [form, setForm] = useState<FormState>(() => initialState(spool))
+  const [form, setForm] = useState<FormState>(() => initialState(spool, initialValues))
   const [error, setError] = useState<string | null>(null)
 
   // Re-seed the form whenever the dialog opens for a different spool.
   useEffect(() => {
     if (open) {
-      setForm(initialState(spool))
+      setForm(initialState(spool, initialValues))
       setError(null)
     }
-  }, [open, spool])
+  }, [open, spool, initialValues])
 
   const set = <K extends keyof FormState>(key: K) => (value: string) => setForm((prev) => ({ ...prev, [key]: value }))
 
@@ -185,6 +208,8 @@ export function SpoolFormDialog({ open, spool, onClose }: { open: boolean; spool
     : `Bambu ${bambuMaterialKey} colours`
   const knownColorName = (bambuMaterialKey ? bambuColorName(normalizedColorHex, bambuMaterialKey) : null)
     ?? commonFilamentColorName(normalizedColorHex)
+  const displayedColorName = form.colorName || knownColorName
+  const setColor = (value: string) => setForm((previous) => ({ ...previous, colorHex: value, colorName: '' }))
 
   const submit = async () => {
     setError(null)
@@ -200,13 +225,19 @@ export function SpoolFormDialog({ open, spool, onClose }: { open: boolean; spool
       brand: form.brand.trim() || null,
       materialSubtype: form.materialSubtype.trim() || null,
       colorHex: /^#[0-9A-Fa-f]{6}$/.test(form.colorHex) ? form.colorHex : null,
+      colorName: form.colorName.trim() || knownColorName || null,
+      diameterMm: Number(form.diameterMm) || 1.75,
+      spoolCoreGrams: form.spoolCoreGrams.trim() ? Math.max(0, Math.round(Number(form.spoolCoreGrams))) : null,
+      nozzleTempMin: form.nozzleTempMin.trim() ? Math.round(Number(form.nozzleTempMin)) : null,
+      nozzleTempMax: form.nozzleTempMax.trim() ? Math.round(Number(form.nozzleTempMax)) : null,
       netWeightGrams: net,
       remainingGrams: form.remainingGrams.trim() ? Math.max(0, Number(form.remainingGrams)) : net,
       vendor: form.vendor.trim() || null,
       costCents: cost != null && !Number.isNaN(cost) ? cost : null,
       currency: cost != null && !Number.isNaN(cost) ? 'USD' : null,
       notes: form.notes.trim() || null,
-      slicingPresetName: form.slicingPresetName.trim() || null
+      slicingPresetName: form.slicingPresetName.trim() || null,
+      productCode: form.productCode.trim() || null
     }
     try {
       if (spool) await update.mutateAsync({ id: spool.id, input: payload })
@@ -246,7 +277,7 @@ export function SpoolFormDialog({ open, spool, onClose }: { open: boolean; spool
                 <Input
                   type="color"
                   value={validColorHex}
-                  onChange={(e) => set('colorHex')(e.target.value)}
+                  onChange={(e) => setColor(e.target.value)}
                   sx={{ width: 64, p: 0.5 }}
                 />
               </FormControl>
@@ -256,10 +287,10 @@ export function SpoolFormDialog({ open, spool, onClose }: { open: boolean; spool
                 title={colorSwatchTitle}
                 swatches={colorSwatches}
                 selectedHex={normalizedColorHex}
-                onPick={(hex) => set('colorHex')(hex)}
+                onPick={setColor}
               />
-              {knownColorName && (
-                <Typography level="body-xs" textColor="text.tertiary">Known colour: {knownColorName}</Typography>
+              {displayedColorName && (
+                <Typography level="body-xs" textColor="text.tertiary">Known colour: {displayedColorName}</Typography>
               )}
             </Stack>
             <FormControl>
@@ -276,6 +307,12 @@ export function SpoolFormDialog({ open, spool, onClose }: { open: boolean; spool
                 auto-match by material type.
               </Typography>
             </FormControl>
+            {(spool?.productCode != null || initialValues?.productCode != null) && (
+              <FormControl>
+                <FormLabel>Product code</FormLabel>
+                <Input value={form.productCode} onChange={(event) => set('productCode')(event.target.value)} />
+              </FormControl>
+            )}
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.25}>
               <FormControl sx={{ flex: 1, minWidth: 0 }}>
                 <FormLabel>Net weight (g)</FormLabel>
@@ -284,6 +321,26 @@ export function SpoolFormDialog({ open, spool, onClose }: { open: boolean; spool
               <FormControl sx={{ flex: 1, minWidth: 0 }}>
                 <FormLabel>Remaining (g)</FormLabel>
                 <Input type="number" value={form.remainingGrams} onChange={(e) => set('remainingGrams')(e.target.value)} />
+              </FormControl>
+            </Stack>
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.25}>
+              <FormControl sx={{ flex: 1, minWidth: 0 }}>
+                <FormLabel>Diameter (mm)</FormLabel>
+                <Input type="number" value={form.diameterMm} onChange={(event) => set('diameterMm')(event.target.value)} />
+              </FormControl>
+              <FormControl sx={{ flex: 1, minWidth: 0 }}>
+                <FormLabel>Empty spool/core (g)</FormLabel>
+                <Input type="number" value={form.spoolCoreGrams} onChange={(event) => set('spoolCoreGrams')(event.target.value)} />
+              </FormControl>
+            </Stack>
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.25}>
+              <FormControl sx={{ flex: 1, minWidth: 0 }}>
+                <FormLabel>Minimum nozzle temp (°C)</FormLabel>
+                <Input type="number" value={form.nozzleTempMin} onChange={(event) => set('nozzleTempMin')(event.target.value)} />
+              </FormControl>
+              <FormControl sx={{ flex: 1, minWidth: 0 }}>
+                <FormLabel>Maximum nozzle temp (°C)</FormLabel>
+                <Input type="number" value={form.nozzleTempMax} onChange={(event) => set('nozzleTempMax')(event.target.value)} />
               </FormControl>
             </Stack>
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.25}>

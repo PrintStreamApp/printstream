@@ -8,10 +8,10 @@
  * `snapshotKey` and are excluded from this cleanup path.
  * Without cleanup these would accumulate forever, so we age them out
  * after `LIBRARY_TRANSIENT_RETENTION_DAYS` (default 7) of not being
- * touched. Three further passes handle: unreferenced sliced outputs
+ * touched. Further passes handle: unreferenced sliced outputs
  * (origin='slice', never kept or snapshotted: swept after
- * `LIBRARY_UNREFERENCED_SLICE_RETENTION_HOURS`), preserved project
- * snapshots no job or kept output points at any more (the "no job, no
+ * `LIBRARY_UNREFERENCED_SLICE_RETENTION_HOURS`), expired slice-cache entries, preserved project
+ * snapshots no job, cache, or kept output points at any more (the "no job, no
  * kept project" rule), and expired recycle-bin entries
  * (`LIBRARY_RECYCLE_RETENTION_DAYS`).
  *
@@ -194,6 +194,24 @@ export async function pruneUnreferencedSlicedOutputs(
 }
 
 /**
+ * Expire unchanged-slice cache entries after the same window as abandoned slice outputs.
+ *
+ * The row owns no bytes directly. Deleting it releases its immutable artifact and preserved
+ * project snapshots, which the following snapshot pass removes when nothing else references them.
+ * Hits refresh `updatedAt`, so the window measures disuse rather than creation time.
+ */
+export async function pruneExpiredSliceCacheEntries(): Promise<{ removed: number }> {
+  const cutoff = new Date(Date.now() - env.LIBRARY_UNREFERENCED_SLICE_RETENTION_HOURS * ONE_HOUR_MS)
+  const result = await rootPrisma.sliceCacheEntry.deleteMany({
+    where: { updatedAt: { lt: cutoff } }
+  })
+  if (result.count > 0) {
+    console.log(`[library-cleanup] pruned ${result.count} expired slice cache entr${result.count === 1 ? 'y' : 'ies'}`)
+  }
+  return { removed: result.count }
+}
+
+/**
  * Delete preserved project snapshots that nothing references any more.
  *
  * The rule this enforces is "no job, no kept project": a slice preserves the project it handed the
@@ -237,6 +255,8 @@ export async function pruneUnreferencedProjectSnapshots(
     jobs: { none: {} },
     slicedOutputs: { none: {} },
     sourceProjectJobs: { none: {} },
+    sliceCacheArtifacts: { none: {} },
+    sliceCacheProjects: { none: {} },
     preparedSlicingSources: { none: { OR: protectedProofs } }
   }
   const stale = await rootPrisma.libraryFile.findMany({
@@ -399,10 +419,11 @@ export async function pruneDormantBridges(): Promise<{ removed: number }> {
 }
 
 export async function runArtifactMaintenance(): Promise<void> {
-  // Sequenced deliberately, not folded into the batch below: aging out a sliced output is what
-  // makes its preserved project unreferenced, so running the snapshot pass afterwards lets ONE
-  // maintenance cycle reclaim both instead of leaving the project until the next run.
+  // Sequenced deliberately, not folded into the batch below: aging out a sliced output or cache
+  // entry is what makes its snapshots unreferenced, so running the snapshot pass afterwards lets
+  // ONE maintenance cycle reclaim both instead of leaving bytes until the next run.
   await pruneUnreferencedSlicedOutputs()
+  await pruneExpiredSliceCacheEntries()
   await pruneUnreferencedProjectSnapshots()
 
   // Several prunes run purely for their side effects; we only bind the few whose

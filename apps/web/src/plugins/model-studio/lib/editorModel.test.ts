@@ -33,6 +33,7 @@ import {
   mintPlateId,
   movePartBefore,
   movePlate,
+  movePlateContentsToBed,
   placeInstanceAt,
   printedParts,
   replaceInstanceGeometry,
@@ -127,6 +128,33 @@ test('buildSceneEdit emits per-part filament + a meshReplacements entry for a mu
   // The synthetic identity rides along as a meshReplacements entry so per-object process
   // overrides authored against it re-key onto the baked object at slice time.
   assert.deepEqual(edit.meshReplacements, [{ objectId: syntheticId, importId: 'imp-3' }])
+})
+
+test('buildSceneEdit addresses in-place part mesh replacements without changing part identity', () => {
+  const state: EditorState = seedEmptyEditorState()
+  const imported = instanceFromStagedImport(MULTI)
+  const syntheticId = imported.source.kind === 'import' ? imported.source.replacedObjectId! : 0
+  const baked = instanceFromStagedImport(MULTI)
+  baked.source = { kind: 'object' }
+  baked.objectId = 7
+  state.plates[0]!.instances.push(imported, baked)
+  state.partMeshReplacements = {
+    [partSlotKey(syntheticId, 1)]: 'simplified-import-part',
+    [partSlotKey(7, 0)]: 'simplified-baked-part'
+  }
+
+  const edit = buildSceneEdit(state)
+  assert.deepEqual(edit.importPartMeshReplacements, [{
+    importId: MULTI.importId,
+    partIndex: 1,
+    meshImportId: 'simplified-import-part'
+  }])
+  assert.deepEqual(edit.partMeshReplacements, [{
+    objectId: 7,
+    partIndex: 0,
+    meshImportId: 'simplified-baked-part'
+  }])
+  assert.equal(baked.parts[0]?.partIndex, 0)
 })
 
 test('buildSceneEdit routes part-type changes to partTypeChanges (objects) and importPartTypes (imports)', () => {
@@ -2159,6 +2187,37 @@ test('placeInstanceAt is a no-op on the matrix for an ordinary instance', () => 
   placeInstanceAt(instance, 7, 8)
   assert.deepEqual([instance.position.x, instance.position.y], [7, 8])
   assert.equal(instance.exactMatrix, undefined)
+})
+
+test('a printer bed change preserves every plate item relative to the bed centre', () => {
+  const state = seedEmptyEditorState()
+  const plate = state.plates[0]!
+  plate.bed = { minX: 0, maxX: 256, minY: 0, maxY: 256, maxZ: 256, excludeAreas: [] }
+  plate.primeTower = { x: 40, y: 50, width: 35, sizing: { ribWall: false } as never }
+
+  const ordinary = instanceFromStagedImport(STAGED)
+  ordinary.position.set(128, 128, 0)
+  const sheared = instanceFromStagedImport(STAGED)
+  sheared.position.set(100, 120, 0)
+  sheared.exactMatrix = [2, 0.5, 0, 0, 1, 0, 0, 0, 1, 100, 120, 0]
+  plate.instances = [ordinary, sheared]
+
+  const targetBed = { minX: 0, maxX: 350, minY: 0, maxY: 320, maxZ: 325, excludeAreas: [] }
+  const moved = movePlateContentsToBed(plate, targetBed)
+  assert.deepEqual([moved.instances[0]!.position.x, moved.instances[0]!.position.y], [175, 160])
+  assert.deepEqual([moved.instances[1]!.position.x, moved.instances[1]!.position.y], [147, 152])
+  assert.deepEqual(moved.instances[1]!.exactMatrix?.slice(9), [147, 152, 0])
+  assert.deepEqual([moved.primeTower?.x, moved.primeTower?.y], [87, 82])
+  assert.deepEqual([sheared.position.x, sheared.position.y], [100, 120], 'the previous state was mutated')
+  assert.deepEqual(sheared.exactMatrix.slice(9), [100, 120, 0], 'the previous exact matrix was mutated')
+
+  const restored = movePlateContentsToBed(moved, plate.bed)
+  assert.deepEqual([restored.instances[0]!.position.x, restored.instances[0]!.position.y], [128, 128])
+  assert.deepEqual(restored.instances[1]!.exactMatrix?.slice(9), [100, 120, 0])
+  assert.deepEqual([restored.primeTower?.x, restored.primeTower?.y], [40, 50])
+
+  const edit = sceneEditSchema.parse(buildSceneEdit({ ...state, plates: [moved] }))
+  assert.deepEqual(edit.placementBedSize, { width: 350, depth: 320 })
 })
 
 test('an undo snapshot reaches every nested collection it copies', () => {

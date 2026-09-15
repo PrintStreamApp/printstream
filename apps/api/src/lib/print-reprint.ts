@@ -103,11 +103,11 @@ export function parseAmsMapping(value: string | null): number[] | null {
  * Each knob resolves in one order: request override -> what the row RECORDED -> the schema
  * default. The middle step is the point: before it existed, an override-less re-print
  * dropped to the defaults and silently changed the print (issue #97: an Auto bed-leveling
- * job came back as On, and six other options came back as their defaults). A field the row
+ * job came back as On, and other options came back as their defaults). A field the row
  * never recorded is absent rather than guessed, which is what lets `??` chain straight
  * through to the schema.
  *
- * The five `allow*` consent flags are deliberately NOT restored: each means "I accept this
+ * The six `allow*` consent flags are deliberately NOT restored: each means "I accept this
  * risk right now", so replaying one would re-grant a safety bypass nobody was shown. They
  * are not recorded on the row at all, so this cannot later regress into reading them.
  *
@@ -127,10 +127,14 @@ export function buildReprintOptions(
     flowCalibration: overrides.flowCalibration ?? recorded.flowCalibration,
     firstLayerInspection: overrides.firstLayerInspection ?? recorded.firstLayerInspection,
     timelapse: overrides.timelapse ?? recorded.timelapse,
+    timelapseStorage: overrides.timelapseStorage ?? recorded.timelapseStorage,
+    externalFilamentChangeAssist:
+      overrides.externalFilamentChangeAssist ?? recorded.externalFilamentChangeAssist,
     filamentDynamicsCalibration: overrides.filamentDynamicsCalibration ?? recorded.filamentDynamicsCalibration,
     nozzleOffsetCalibration: overrides.nozzleOffsetCalibration ?? recorded.nozzleOffsetCalibration,
     allowIncompatibleFilament: overrides.allowIncompatibleFilament,
     allowPlateTypeMismatch: overrides.allowPlateTypeMismatch,
+    allowPrinterModelMismatch: overrides.allowPrinterModelMismatch,
     allowFilamentTrackSwitchMismatch: overrides.allowFilamentTrackSwitchMismatch,
     allowInsufficientFilament: overrides.allowInsufficientFilament,
     allowBlacklistedFilament: overrides.allowBlacklistedFilament,

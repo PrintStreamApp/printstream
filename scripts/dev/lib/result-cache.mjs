@@ -102,7 +102,13 @@ const NEVER_CACHE_MARKER = '@validate-cache-never'
 const MISSING = '\0missing'
 
 /** Env vars that change which tests run or how they behave, so they belong in the salt. */
-const SALT_ENV_KEYS = ['NODE_ENV', 'DATABASE_URL', 'TEST_ADMIN_DATABASE_URL', 'SELF_HOSTED']
+const SALT_ENV_KEYS = [
+  'NODE_ENV',
+  'DATABASE_URL',
+  'TEST_ADMIN_DATABASE_URL',
+  'PRINTSTREAM_REQUIRE_TEST_DATABASE',
+  'SELF_HOSTED'
+]
 
 /**
  * Decides which of `testFiles` can be skipped.

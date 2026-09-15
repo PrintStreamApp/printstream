@@ -8,6 +8,8 @@ const CHOICE = {
   flowCalibration: 'auto',
   firstLayerInspection: false,
   timelapse: true,
+  timelapseStorage: 'internal',
+  externalFilamentChangeAssist: true,
   filamentDynamicsCalibration: true,
   nozzleOffsetCalibration: 'off'
 } as const

@@ -36,6 +36,7 @@ import {
   isPluginEnabled,
   isPluginInstalled,
   mergePlugins,
+  pluginSupportsDeployment,
   pluginHasManagerSurface,
   shouldRenderPluginSettingsPanel,
   type ApiPluginInfo,
@@ -173,8 +174,8 @@ export function PluginManagerSection({ surface }: PluginManagerSectionProps) {
   const merged = hasPluginState
     ? mergePlugins(apiPlugins, webPlugins)
       .filter((entry) => !isAuthPlugin(entry.name))
-      // Self-hosted-only plugins (e.g. email-smtp) have no backend in cloud; hide them.
-      .filter((entry) => selfHosted || !entry.web?.selfHostedOnly)
+      // Deployment-specific web companions have no backend on the other host.
+      .filter((entry) => pluginSupportsDeployment(entry.web ?? {}, selfHosted))
     : []
   const platformEntries = merged.filter((entry) => pluginHasManagerSurface(entry, 'platform') && !pluginHasManagerSurface(entry, 'workspace'))
   const workspaceEntries = merged.filter((entry) => pluginHasManagerSurface(entry, 'workspace'))

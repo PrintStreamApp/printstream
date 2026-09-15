@@ -31,7 +31,6 @@ import { StaticPluginSlot } from '../plugin/StaticPluginSlot'
 import { usePluginSlots } from '../plugin/usePluginSlots'
 import { AccountDestinationCard } from './AccountDestinationCard'
 import {
-  accountSlotHasContent,
   ACCOUNT_MESSAGES_SUBPATH,
   buildAccountPath,
   ACCOUNT_MESSAGES_SLOT
@@ -191,6 +190,7 @@ export function CurrentAccountPanel({
   // mounted. The cost is that this section and its nav entry appear once the
   // catalog resolves; showing a dead card sooner is the worse trade.
   const accountNotificationSlots = usePluginSlots('account.notifications')
+  const accountMessageSlots = usePluginSlots(ACCOUNT_MESSAGES_SLOT)
   const showsAccountNotificationsSection = isAuthenticatedUser && accountNotificationSlots.length > 0
   const accountHeadingTitle = isAuthenticatedUser
     ? 'User account'
@@ -249,7 +249,7 @@ export function CurrentAccountPanel({
    * It renders only when a plugin fills the slot: empty in a public build,
    * where the route does not exist and the card would be a dead end.
    */
-  const showsMessagesDestination = !isSupportUser && accountSlotHasContent(ACCOUNT_MESSAGES_SLOT)
+  const showsMessagesDestination = !isSupportUser && accountMessageSlots.length > 0
   const destinationsSection = showsMessagesDestination ? (
     <Box sx={{ scrollMarginTop: sectionScrollMarginTop }}>
       <AccountDestinationCard

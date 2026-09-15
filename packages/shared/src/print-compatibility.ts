@@ -60,7 +60,10 @@ const FILAMENT_FAMILY_PATTERNS: Array<{ family: string; pattern: RegExp }> = [
 ]
 
 const PRINTER_COMPATIBILITY_FAMILIES: readonly (readonly PrinterModel[])[] = [
-  ['X1C', 'X1E', 'P1S']
+  // Bambu Studio's current machine resources declare these models mutually compatible.
+  // This is deliberately narrower than "same bed size": other cross-model prints still
+  // require the explicit, audited override at dispatch.
+  ['X1', 'X1C', 'X1E', 'P1P', 'P1S']
 ]
 
 export function normalizeFilamentFamily(value: string | null | undefined): string | null {

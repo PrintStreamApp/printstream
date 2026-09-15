@@ -14,6 +14,7 @@ export function SpoolResults({
   directory,
   hasAnySpools,
   loading = false,
+  beforeItems,
   renderRows,
   emptyState,
   noMatchState
@@ -22,6 +23,8 @@ export function SpoolResults({
   /** Whether the source has any spools at all (drives "empty" vs "no matches"). */
   hasAnySpools: boolean
   loading?: boolean
+  /** Optional controls rendered above the top pagination row and result rows. */
+  beforeItems?: ReactNode
   renderRows: (spools: FilamentSpool[]) => ReactNode
   /** Shown when there are no spools at all. */
   emptyState: ReactNode
@@ -33,12 +36,13 @@ export function SpoolResults({
   if (loading) {
     return <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}><CircularProgress /></Box>
   }
-  if (!hasAnySpools) return <>{emptyState}</>
-  if (total === 0) return <>{noMatchState}</>
+  if (!hasAnySpools) return <>{beforeItems}{emptyState}</>
+  if (total === 0) return <>{beforeItems}{noMatchState}</>
 
   if (grouped) {
     return (
       <Stack spacing={1.5}>
+        {beforeItems}
         {groups.map((bucket) => (
           <Stack key={bucket.key} spacing={0.75}>
             <Typography level="title-sm" textColor="text.tertiary">{bucket.label} · {bucket.spools.length}</Typography>
@@ -50,14 +54,17 @@ export function SpoolResults({
   }
 
   return (
-    <PaginatedSection
-      showingLabel={`Showing ${start + 1}–${Math.min(start + pageSize, total)} of ${total}`}
-      previousDisabled={page <= 1}
-      nextDisabled={start + pageSize >= total}
-      onPrevious={() => setPage((current) => Math.max(1, current - 1))}
-      onNext={() => setPage((current) => current + 1)}
-    >
-      {renderRows(pageItems)}
-    </PaginatedSection>
+    <Stack spacing={1}>
+      {beforeItems}
+      <PaginatedSection
+        showingLabel={`Showing ${start + 1}–${Math.min(start + pageSize, total)} of ${total}`}
+        previousDisabled={page <= 1}
+        nextDisabled={start + pageSize >= total}
+        onPrevious={() => setPage((current) => Math.max(1, current - 1))}
+        onNext={() => setPage((current) => current + 1)}
+      >
+        {renderRows(pageItems)}
+      </PaginatedSection>
+    </Stack>
   )
 }

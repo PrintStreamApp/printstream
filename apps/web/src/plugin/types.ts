@@ -46,6 +46,8 @@ export interface WebPluginSlot {
   name: string
   /** Component rendered into the slot. Receives whatever props the slot host passes. */
   component: ComponentType<WebPluginSlotComponentProps>
+  /** Hide the contribution unless the current actor is a signed-in human user. */
+  requiresAuthenticatedUser?: boolean
   /** Optional ordering hint when multiple plugins target the same slot. */
   order?: number
 }
@@ -64,6 +66,8 @@ export interface WebPlugin {
    * can only evaluate at runtime via `runtimePolicy.selfHosted`.
    */
   selfHostedOnly?: boolean
+  /** Hidden on self-hosted deployments even when a private source checkout contains it. */
+  cloudOnly?: boolean
   routes?: WebPluginRoute[]
   slots?: WebPluginSlot[]
   /**

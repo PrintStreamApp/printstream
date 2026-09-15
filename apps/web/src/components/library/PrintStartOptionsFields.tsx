@@ -1,15 +1,15 @@
 /**
  * Shared "Print settings" field group used by the Print dialog and the print-queue's
  * Add/Edit dialog so the two surfaces stay identical. Renders the start-of-print
- * calibration toggles (timelapse, bed leveling, vibration compensation, flow dynamics,
- * nozzle offset) as labelled on/off(/auto) selects.
+ * calibration and send toggles (timelapse, bed leveling, flow dynamics, nozzle offset,
+ * and external-spool change assist) as labelled selects.
  *
  * `capabilities` gates which rows render to what a chosen printer supports; omit it
  * (the queue's "any eligible printer" case has no single printer) to show the full set.
  */
 import { Box, FormControl, FormLabel, Option, Select, Tooltip } from '@mui/joy'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
-import type { PrintNozzleOffsetCalibrationMode, PrintOnOffAutoMode } from '@printstream/shared'
+import type { PrintNozzleOffsetCalibrationMode, PrintOnOffAutoMode, PrintTimelapseStorage } from '@printstream/shared'
 
 const printOptionFieldSx = {
   display: 'grid',
@@ -29,9 +29,9 @@ const printOptionSelectSx = {
 
 const printOptionHelpText = {
   bedLevel: 'This checks the flatness of the heatbed. Leveling makes the extruded height uniform.',
-  vibrationCompensation: 'This calibrates printer vibrations before the print starts to reduce ringing and improve surface quality.',
   flowCalibration: 'This process determines the dynamic flow values to improve overall print quality. Automatic mode skips calibration if the filament was calibrated recently.',
-  nozzleOffsetCalibration: 'Calibrate nozzle offsets to enhance print quality. Automatic mode checks for calibration before printing and skips it when unnecessary.'
+  nozzleOffsetCalibration: 'Calibrate nozzle offsets to enhance print quality. Automatic mode checks for calibration before printing and skips it when unnecessary.',
+  externalFilamentChangeAssist: 'Pause multi-color prints at external-spool changes so filament can be changed manually.'
 } as const
 
 export function PrintOptionLabel({ label, tooltip }: { label: string; tooltip?: string }) {
@@ -64,9 +64,10 @@ export function PrintOptionLabel({ label, tooltip }: { label: string; tooltip?: 
 /** Which rows to render, and whether bed-level / flow support an "Auto" mode. */
 export interface PrintStartOptionsCapabilities {
   timelapse: boolean
+  internalTimelapseStorage: boolean
+  externalFilamentChangeAssist: boolean
   bedLevel: boolean
   bedLevelAuto: boolean
-  vibrationCompensation: boolean
   flowCalibration: boolean
   flowCalibrationAuto: boolean
   nozzleOffsetCalibration: boolean
@@ -76,19 +77,24 @@ const ALL_CAPABILITIES: PrintStartOptionsCapabilities = {
   timelapse: true,
   bedLevel: true,
   bedLevelAuto: true,
-  vibrationCompensation: true,
   flowCalibration: true,
   flowCalibrationAuto: true,
-  nozzleOffsetCalibration: true
+  nozzleOffsetCalibration: true,
+  internalTimelapseStorage: true,
+  externalFilamentChangeAssist: true
 }
 
 export interface PrintStartOptionsFieldsProps {
   timelapse: boolean
   onTimelapseChange: (value: boolean) => void
+  timelapseStorage: PrintTimelapseStorage
+  onTimelapseStorageChange: (value: PrintTimelapseStorage) => void
+  externalFilamentChangeAssist: boolean
+  onExternalFilamentChangeAssistChange: (value: boolean) => void
+  /** Show external-spool assist only when one external spool needs a mid-print material change. */
+  needsExternalSpoolChangeAssist: boolean
   bedLevel: PrintOnOffAutoMode
   onBedLevelChange: (value: PrintOnOffAutoMode) => void
-  vibrationCompensation: boolean
-  onVibrationCompensationChange: (value: boolean) => void
   flowCalibration: PrintOnOffAutoMode
   onFlowCalibrationChange: (value: PrintOnOffAutoMode) => void
   nozzleOffsetCalibration: PrintNozzleOffsetCalibrationMode
@@ -100,10 +106,13 @@ export interface PrintStartOptionsFieldsProps {
 export function PrintStartOptionsFields({
   timelapse,
   onTimelapseChange,
+  timelapseStorage,
+  onTimelapseStorageChange,
+  externalFilamentChangeAssist,
+  onExternalFilamentChangeAssistChange,
+  needsExternalSpoolChangeAssist,
   bedLevel,
   onBedLevelChange,
-  vibrationCompensation,
-  onVibrationCompensationChange,
   flowCalibration,
   onFlowCalibrationChange,
   nozzleOffsetCalibration,
@@ -127,6 +136,34 @@ export function PrintStartOptionsFields({
           </Select>
         </FormControl>
       )}
+      {caps.timelapse && caps.internalTimelapseStorage && timelapse && (
+        <FormControl sx={printOptionFieldSx}>
+          <PrintOptionLabel label="Save timelapse to" />
+          <Select<PrintTimelapseStorage>
+            value={timelapseStorage}
+            onChange={(_event, value) => value && onTimelapseStorageChange(value)}
+            size="sm"
+            sx={printOptionSelectSx}
+          >
+            <Option value="external">Memory card</Option>
+            <Option value="internal">Built-in storage</Option>
+          </Select>
+        </FormControl>
+      )}
+      {caps.externalFilamentChangeAssist && needsExternalSpoolChangeAssist && (
+        <FormControl sx={printOptionFieldSx}>
+          <PrintOptionLabel label="External spool change assist" tooltip={printOptionHelpText.externalFilamentChangeAssist} />
+          <Select<'off' | 'on'>
+            value={externalFilamentChangeAssist ? 'on' : 'off'}
+            onChange={(_event, value) => value && onExternalFilamentChangeAssistChange(value === 'on')}
+            size="sm"
+            sx={printOptionSelectSx}
+          >
+            <Option value="off">Off</Option>
+            <Option value="on">On</Option>
+          </Select>
+        </FormControl>
+      )}
       {caps.bedLevel && (
         <FormControl sx={printOptionFieldSx}>
           <PrintOptionLabel label="Auto Bed Leveling" tooltip={printOptionHelpText.bedLevel} />
@@ -139,20 +176,6 @@ export function PrintStartOptionsFields({
             <Option value="off">Off</Option>
             <Option value="on">On</Option>
             {caps.bedLevelAuto && <Option value="auto">Auto</Option>}
-          </Select>
-        </FormControl>
-      )}
-      {caps.vibrationCompensation && (
-        <FormControl sx={printOptionFieldSx}>
-          <PrintOptionLabel label="Vibration Compensation" tooltip={printOptionHelpText.vibrationCompensation} />
-          <Select<'off' | 'on'>
-            value={vibrationCompensation ? 'on' : 'off'}
-            onChange={(_event, value) => value && onVibrationCompensationChange(value === 'on')}
-            size="sm"
-            sx={printOptionSelectSx}
-          >
-            <Option value="off">Off</Option>
-            <Option value="on">On</Option>
           </Select>
         </FormControl>
       )}

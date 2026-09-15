@@ -25,18 +25,25 @@
  */
 import {
   MAX_AMF_SOURCE_BYTES,
+  MAX_OBJ_MATERIAL_BYTES,
+  MAX_OBJ_MATERIAL_FILES,
+  MAX_OBJ_TEXTURE_BYTES,
+  MAX_OBJ_TEXTURE_FILES,
   ModelImportError,
   ThreeMfImportError,
   computeMeshBounds,
+  decodeGltfTextureImages,
   isZippedAmf,
   meshToBinaryStl,
   parseAmfMesh,
   parseGltfMesh,
   parseObjMesh,
   parseStlMesh,
+  resolveObjMaterials,
   rebaseImportedMesh,
   type ImportedMesh
 } from '@printstream/shared/three-mf'
+import { parseFbxMesh } from './fbxImport'
 import { IMPORT_FORMAT_LABELS, STAGED_IMPORT_FORMATS, detectImportFormat, type ImportNormalization, type StagedImport, type StagedImportFormat } from '@printstream/shared'
 import type { EditorImportStore } from './editorImportStore'
 import { ThreeMfArchiveError } from './threeMfArchive'
@@ -44,6 +51,7 @@ import { ImportStagingDataError, disposeImportStagingWorker, stageImportGeometry
 import { extractThreeMfImportFromFile } from './localThreeMfImport'
 import { tessellateStepInBrowser } from './localStepImport'
 import { readZippedAmfDocument } from './localAmfImport'
+import { decodeTextureImage } from './textureImage'
 
 export class LocalImportError extends Error {}
 
@@ -114,10 +122,11 @@ async function stageGeometry(
   format: StagedImportFormat,
   file: File,
   bytes: Uint8Array,
-  normalize: ImportNormalization
+  normalize: ImportNormalization,
+  companions: ReadonlyArray<{ name: string; bytes: Uint8Array }>
 ): Promise<{ mesh: ImportedMesh; stl: Uint8Array; partStls: Uint8Array[] }> {
   try {
-    return await stageImportGeometry(format, bytes, normalize)
+    return await stageImportGeometry(format, bytes, normalize, companions)
   } catch (error) {
     if (error instanceof ImportStagingDataError) throw new LocalImportError(error.message)
     if (typeof Worker !== 'undefined') {
@@ -125,7 +134,7 @@ async function stageGeometry(
     }
     // The fallback leaves `partStls` empty; `stage` then serializes each part inline, which is the
     // freeze this whole path exists to avoid: acceptable only because it is the last resort.
-    const mesh = await parseOnMainThread(format, file, bytes)
+    const mesh = await parseOnMainThread(format, file, bytes, companions)
     // The same normalisation the worker applies, and the reason the STL branch can no longer hand
     // the picked bytes back untouched as its STL: rebasing the mesh but not the bytes would render
     // the model at its file coordinates while baking it at the origin.
@@ -143,7 +152,12 @@ async function stageGeometry(
  *
  * 3MF takes the `File` rather than the bytes because its extractor wants the in-tab archive.
  */
-async function parseOnMainThread(format: StagedImportFormat, file: File, bytes: Uint8Array): Promise<ImportedMesh> {
+async function parseOnMainThread(
+  format: StagedImportFormat,
+  file: File,
+  bytes: Uint8Array,
+  companions: ReadonlyArray<{ name: string; bytes: Uint8Array }>
+): Promise<ImportedMesh> {
   switch (format) {
     case 'stl':
       return parseStlMesh(bytes)
@@ -152,15 +166,55 @@ async function parseOnMainThread(format: StagedImportFormat, file: File, bytes: 
     case 'step':
       return await tessellateStepInBrowser(bytes)
     case 'obj':
-      return parseObjMesh(bytes)
+      return parseObjMesh(bytes, { materials: await resolveObjMaterials(bytes, companions, decodeTextureImage) })
     case 'gltf':
-      return parseGltfMesh(bytes)
+      return parseGltfMesh(bytes, { decodedImages: await decodeGltfTextureImages(bytes, decodeTextureImage) })
+    case 'fbx':
+      return await parseFbxMesh(bytes)
     case 'amf':
       if (!isZippedAmf(bytes) && bytes.byteLength > MAX_AMF_SOURCE_BYTES) {
         throw new ModelImportError('AMF is too large to import')
       }
       return parseAmfMesh(isZippedAmf(bytes) ? readZippedAmfDocument(bytes) : new TextDecoder().decode(bytes))
   }
+}
+
+/** Validate and read optional OBJ material and texture resources before starting a worker. */
+async function readCompanionFiles(
+  format: StagedImportFormat,
+  files: readonly File[],
+  signal?: AbortSignal
+): Promise<Array<{ name: string; bytes: Uint8Array }>> {
+  if (files.length === 0) return []
+  if (format !== 'obj') throw new LocalImportError('Companion resources are only supported with OBJ imports.')
+  const materialFiles = files.filter((file) => file.name.toLowerCase().endsWith('.mtl'))
+  const textureFiles = files.filter((file) => /\.(png|jpe?g)$/i.test(file.name))
+  if (materialFiles.length > MAX_OBJ_MATERIAL_FILES || textureFiles.length > MAX_OBJ_TEXTURE_FILES) {
+    throw new LocalImportError(`An OBJ can include at most ${MAX_OBJ_MATERIAL_FILES} material and ${MAX_OBJ_TEXTURE_FILES} texture files.`)
+  }
+  let materialBytes = 0
+  let textureBytes = 0
+  const names = new Set<string>()
+  for (const file of files) {
+    if (!file.name.toLowerCase().endsWith('.mtl') && !/\.(png|jpe?g)$/i.test(file.name)) {
+      throw new LocalImportError('Only MTL, PNG, and JPEG files can accompany an OBJ import.')
+    }
+    if (file.name.toLowerCase().endsWith('.mtl')) materialBytes += file.size
+    else textureBytes += file.size
+    if (materialBytes > MAX_OBJ_MATERIAL_BYTES) {
+      throw new LocalImportError('OBJ material files exceed the 16 MB combined limit.')
+    }
+    if (textureBytes > MAX_OBJ_TEXTURE_BYTES) throw new LocalImportError('OBJ textures exceed the 64 MB combined limit.')
+    const name = file.name.toLowerCase()
+    if (names.has(name)) throw new LocalImportError(`Duplicate companion file: ${file.name}`)
+    names.add(name)
+  }
+  const companions: Array<{ name: string; bytes: Uint8Array }> = []
+  for (const file of files) {
+    signal?.throwIfAborted()
+    companions.push({ name: file.name, bytes: new Uint8Array(await file.arrayBuffer()) })
+  }
+  return companions
 }
 
 export function createLocalImportStore(): LocalImportStore {
@@ -189,6 +243,7 @@ export function createLocalImportStore(): LocalImportStore {
       format,
       triangleCount: Math.floor(mesh.indices.length / 3),
       bounds: mesh.bounds,
+      ...(mesh.triangleCornerColors ? { sourceColorMode: mesh.sourceColorMode ?? 'vertex' as const } : {}),
       parts: (mesh.parts ?? [{ name, mesh, subtype: null }]).map((part) => ({
         name: part.name,
         triangleCount: Math.floor(part.mesh.indices.length / 3),
@@ -238,7 +293,16 @@ export function createLocalImportStore(): LocalImportStore {
       return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
     },
 
-    async stageFile(file, normalize, signal) {
+    async fetchSourceColors(importId, partIndex) {
+      const entry = entryOrThrow(importId)
+      const mesh = partIndex == null || (partIndex === 0 && entry.parts.length === 0)
+        ? entry.mesh
+        : entry.parts[partIndex]?.mesh
+      if (!mesh) throw new LocalImportError(`This model has no part ${partIndex}.`)
+      return mesh.triangleCornerColors ? Float32Array.from(mesh.triangleCornerColors) : null
+    },
+
+    async stageFile(file, normalize, signal, companionFiles = []) {
       const format = detectImportFormat(file.name)
       if (!format) throw new LocalImportError(`${file.name} is not a model this editor can import.`)
       // The api names an import `path.parse(originalname).name`; matching it is what makes the same
@@ -248,11 +312,12 @@ export function createLocalImportStore(): LocalImportStore {
       const name = importDisplayName(file.name)
       const bytes = new Uint8Array(await file.arrayBuffer())
       try {
+        const companions = await readCompanionFiles(format, companionFiles, signal)
         // Off the main thread: OCCT tessellation and a 3MF's mesh parse + STL serialization are
         // seconds of work on a real assembly, and inline they freeze the tab with a spinner that
         // never paints. The STL the viewport loads is serialized FROM the same mesh the bake writes,
         // paint lands per triangle INDEX, so the two orderings have to be the one ordering.
-        const { mesh, stl, partStls } = await stageGeometry(format, file, bytes, normalize)
+        const { mesh, stl, partStls } = await stageGeometry(format, file, bytes, normalize, companions)
         // Staging is slow enough that the caller may have given up meanwhile (dialog closed, editor
         // unmounted). Check before inserting: `stage` mutates the store, and an abandoned entry
         // would otherwise sit in `entries`, and in `importsForBake()`, until dispose.

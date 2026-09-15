@@ -20,6 +20,7 @@ import {
   readThreeMfBakeSource,
   type ImportedObjectInput,
   type ThreeMfBakeOptions,
+  type ThreeMfBakeArchiveEntry,
   type ThreeMfBakeResult,
   type ThreeMfEntryTextReader
 } from '@printstream/shared/three-mf'
@@ -59,7 +60,13 @@ export async function buildEditedThreeMf(
   const plan = planEditedThreeMf(source, edit, imports, options)
 
   if (plan.copy && baseSourcePath) {
-    await rewriteThreeMfEntries(baseSourcePath, outputPath, plan.copy.transforms, plan.copy.appendEntries)
+    await rewriteThreeMfEntries(
+      baseSourcePath,
+      outputPath,
+      plan.copy.transforms,
+      plan.copy.appendEntries,
+      plan.copy.dropPrefixes
+    )
   } else {
     await writeFreshThreeMf(outputPath, plan.freshEntries ?? [])
   }
@@ -115,7 +122,7 @@ function readThreeMfEntryText(sourcePath: string): ThreeMfEntryTextReader {
 
 
 /** Write a brand-new 3MF (ZIP) from a fixed set of UTF-8 text entries. */
-function writeFreshThreeMf(outputPath: string, entries: Array<{ name: string; content: string }>): Promise<void> {
+function writeFreshThreeMf(outputPath: string, entries: ThreeMfBakeArchiveEntry[]): Promise<void> {
   return new Promise((resolve, reject) => {
     const outputZip = new yazl.ZipFile()
     const output = createWriteStream(outputPath)
@@ -135,7 +142,7 @@ function writeFreshThreeMf(outputPath: string, entries: Array<{ name: string; co
     output.on('error', finish)
     output.on('finish', () => finish())
     for (const entry of entries) {
-      outputZip.addBuffer(Buffer.from(entry.content, 'utf8'), entry.name)
+      outputZip.addBuffer(entryBuffer(entry.content), entry.name)
     }
     outputZip.end()
   })
@@ -161,7 +168,8 @@ function rewriteThreeMfEntries(
   sourcePath: string,
   outputPath: string,
   transforms: Map<string, (xml: string) => string | null>,
-  extraEntries: Array<{ name: string; content: string }> = []
+  extraEntries: ThreeMfBakeArchiveEntry[] = [],
+  dropPrefixes: string[] = []
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     yauzl.open(sourcePath, { lazyEntries: true }, (openError, sourceZip) => {
@@ -199,11 +207,15 @@ function rewriteThreeMfEntries(
         for (const entry of extraEntries) {
           if (writtenNames.has(entry.name)) continue
           writtenNames.add(entry.name)
-          outputZip.addBuffer(Buffer.from(entry.content, 'utf8'), entry.name)
+          outputZip.addBuffer(entryBuffer(entry.content), entry.name)
         }
         outputZip.end()
       })
       sourceZip.on('entry', (entry: Entry) => {
+        if (dropPrefixes.some((prefix) => entry.fileName.toLowerCase().startsWith(prefix.toLowerCase()))) {
+          sourceZip.readEntry()
+          return
+        }
         if (writtenNames.has(entry.fileName)) { sourceZip.readEntry(); return }
         writtenNames.add(entry.fileName)
         const transform = transforms.get(entry.fileName)
@@ -243,4 +255,9 @@ function rewriteThreeMfEntries(
       sourceZip.readEntry()
     })
   })
+}
+
+/** Preserve binary entries verbatim while keeping text encoding explicit. */
+function entryBuffer(content: string | Uint8Array): Buffer {
+  return typeof content === 'string' ? Buffer.from(content, 'utf8') : Buffer.from(content)
 }

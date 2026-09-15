@@ -5,7 +5,7 @@
  * library flow on 3MF projects, the direct hand-off to the model studio's full
  * 3D editor via the `slicing.editor` plugin slot). It composes the slice form,
  * engine target, plate scope, per-object overrides, output naming, save
- * destination, the loaded-printer material picker, and feeds it to the shared
+ * destination, the loaded-printer and filament-library material picker, and feeds it to the shared
  * `SliceSettingsPanel` through a `SliceSettingsController`. The submit payload
  * shape is the shared `SliceFileSubmitInput`.
  *
@@ -29,6 +29,7 @@ import { useQuery } from '@tanstack/react-query'
 import type {
   LibraryFile,
   LibraryFolder,
+  FilamentSpoolList,
   Printer,
   SceneEdit,
   SceneEditPlateFilamentChanges,
@@ -52,6 +53,7 @@ import { permuteFilamentIndexOverrides, permutePerObjectFilamentIndexOverrides, 
 import { resolveSliceDisabledReason } from '../../lib/slicingPresetSelection'
 import {
   buildLoadedPrinterMaterialOptions,
+  buildInventoryMaterialOptions,
   buildProjectSlicingPresets,
   buildRedundantProjectPresetCandidates,
   buildProcessFilamentChoices,
@@ -94,6 +96,7 @@ import { useMachineTarget } from './useMachineTarget'
 import { useMaterialSlots } from './useMaterialSlots'
 import { useProcessProfileSelection } from './useProcessProfileSelection'
 import { SliceSettingsPanel, type SliceSettingsController, type SliceConfigSnapshot } from './SliceSettingsPanel'
+import { sceneEditForPreparedSlice } from './preparedSlicePayload'
 import { SlicingPresetsDialog } from './SlicingPresetsDialog'
 import { resolveWorkspaceFilamentConfig } from './workspaceFilamentResolver'
 import { resolveWorkspaceProcessConfig } from '../workspaceProcessResolver'
@@ -161,6 +164,7 @@ export function SliceFileModal({
   onBack,
   onClose,
   onSavedAs,
+  onSliceInputChanged,
   onSubmit
 }: {
   file: LibraryFile
@@ -201,7 +205,13 @@ export function SliceFileModal({
   onClose: () => void
   /** After a "Save as" in the editor: re-open the editor on the newly-created file (`file.id` changes). */
   onSavedAs?: (file: { id: string; name: string }) => void
-  onSubmit: (input: SliceFileSubmitInput, action: SliceFileSubmitAction, options?: { keepDialogOpen?: boolean }) => void | Promise<void>
+  /** The full editor changed an input that invalidates an owner-retained slice result. */
+  onSliceInputChanged?: () => void
+  onSubmit: (
+    input: SliceFileSubmitInput,
+    action: SliceFileSubmitAction,
+    options?: { keepDialogOpen?: boolean; sourceFile?: LibraryFile }
+  ) => void | Promise<void>
 }) {
   const navigate = useNavigate()
   const { workspaceSlug } = useParams<{ workspaceSlug: string }>()
@@ -483,6 +493,23 @@ export function SliceFileModal({
     () => filamentProfiles.filter((profile) => isFilamentProfileCompatible(profile, selectedMachineProfile, selectedProcessProfile, selectedPrinterModel, selectedNozzleDiameters)),
     [filamentProfiles, selectedMachineProfile, selectedNozzleDiameters, selectedPrinterModel, selectedProcessProfile]
   )
+  // The filament-manager plugin is optional. A disabled or unavailable endpoint simply contributes
+  // no inventory choices, preserving the normal system/user-preset picker.
+  const filamentInventoryQuery = useQuery<FilamentSpoolList>({
+    queryKey: ['filament-manager', 'spools', 'slice-materials'],
+    queryFn: ({ signal }) => apiFetch<FilamentSpoolList>('/api/plugins/filament-manager/spools?includeArchived=true', { signal }),
+    retry: false,
+    staleTime: 30_000
+  })
+  const inventoryMaterialOptions = useMemo(
+    () => buildInventoryMaterialOptions(
+      filamentInventoryQuery.data?.spools ?? [],
+      compatibleFilamentProfiles,
+      selectedMachineProfile,
+      selectedPrinterModel
+    ),
+    [compatibleFilamentProfiles, filamentInventoryQuery.data?.spools, selectedMachineProfile, selectedPrinterModel]
+  )
   const loadedMaterialSource = useMemo<LoadedMaterialSource | null>(
     () => targetMode === 'realPrinter' && selectedPrinterStatus
       ? {
@@ -508,8 +535,8 @@ export function SliceFileModal({
     [compatibleFilamentProfiles, printerId, resolveSlotFilament, selectedMachineProfile, selectedPrinterModel, stableLoadedMaterialSource]
   )
   const materialOptions = useMemo(
-    () => buildSliceMaterialOptions(compatibleFilamentProfiles, loadedMaterialOptions),
-    [compatibleFilamentProfiles, loadedMaterialOptions]
+    () => buildSliceMaterialOptions(compatibleFilamentProfiles, [...loadedMaterialOptions, ...inventoryMaterialOptions]),
+    [compatibleFilamentProfiles, inventoryMaterialOptions, loadedMaterialOptions]
   )
   const selectedPlate = !requiresSinglePlate && plateMode === 'all' ? 0 : Number.parseInt(plateNumber, 10)
   const baseProjectFilaments = useMemo(
@@ -1057,16 +1084,18 @@ export function SliceFileModal({
     plate: number
     sceneEdit: SceneEdit
     contentBase: { fileId: string; versionId?: string | null } | null
+    sourceFile?: LibraryFile
     stageSnapshot: (target: SlicingTarget, slicerTargetId: string | null, signal?: AbortSignal) => Promise<string | Uint8Array | null>
     signal: AbortSignal
   }) => {
     if (!canSliceFromEditor) return
+    const sourceFile = opts.sourceFile ?? file
     // Name the output from the scope actually being sliced: `suggestedOutputFileName`
     // tracks the editor's per-object plate selection (always a single plate), so a
     // whole-project slice (plate 0) would otherwise wrongly get a "Plate 1" suffix.
     const slicedPlate = opts.plate > 0 ? opts.sceneEdit.plates.find((plate) => plate.index === opts.plate) : null
     const outputFileName = buildSlicedOutputFileName(
-      file.name,
+      sourceFile.name,
       opts.plate > 0
         ? { plateName: slicedPlate?.name ?? null, plateNumber: opts.plate, plateCount: opts.sceneEdit.plates.length }
         : undefined
@@ -1082,7 +1111,7 @@ export function SliceFileModal({
       selectedObjectIds: undefined,
       // Land the (initially hidden) gcode next to the source project, so "Save to
       // library" only has to reveal it.
-      outputFolderId: file.folderId ?? null
+      outputFolderId: sourceFile.folderId ?? null
     }
     // Freeze the request target BEFORE the bake. The editor owns the open bytes, but this host owns
     // the authoritative mapping/preset target; preparing from controller fragments earlier made a
@@ -1096,13 +1125,17 @@ export function SliceFileModal({
       throw new Error('The server did not confirm the prepared slicing project.')
     }
     opts.signal.throwIfAborted()
-    const input: SliceFileSubmitInput = { ...frozenInput, preparedSourceId: stagedFileId }
+    const input: SliceFileSubmitInput = {
+      ...frozenInput,
+      sceneEdit: sceneEditForPreparedSlice(opts.sceneEdit),
+      preparedSourceId: stagedFileId
+    }
 
     setSceneEdit(opts.sceneEdit)
     setSceneEditContentBase(opts.contentBase)
     setPreparedSourceId(stagedFileId)
     setEditorPlatePreference(opts.plate)
-    await onSubmit(input, 'slice', { keepDialogOpen: true })
+    await onSubmit(input, 'slice', { keepDialogOpen: true, sourceFile })
   }
 
   // Context handed to the 3D editor (the "full slicer"). Shared by the slim
@@ -1126,6 +1159,7 @@ export function SliceFileModal({
       setPreparedSourceId(stagedFileId)
     },
     onSlice: handleEditorSlice,
+    onSliceInputChanged,
     canSlice: canSliceFromEditor,
     sliceDisabledReason,
     slicing: submitting && (submitAction === 'print' || submitAction === 'slice'),

@@ -11,9 +11,9 @@
  * live library file or an archived version, and shows a "Reload 3D view" overlay
  * to rebuild after a lost WebGL context.
  */
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { Alert, Box, Button, CircularProgress, DialogContent, FormControl, FormLabel, ModalClose, Option, Select, Sheet, Slider, Stack, Switch, Typography, Tooltip } from '@mui/joy'
-import { choosePlateStripOrientation, EDITOR_GRID_GAP_PX } from './lib/editorChromeLayout'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Alert, Box, Button, Checkbox, FormControl, FormLabel, IconButton, ModalClose, Option, Select, Sheet, Slider, Stack, Typography, Tooltip } from '@mui/joy'
+import { choosePlateStripOrientation, EDITOR_GRID_GAP_PX, PLATE_STRIP_VERTICAL_THICKNESS } from './lib/editorChromeLayout'
 import { useQuery } from '@tanstack/react-query'
 import { isMeshLibraryFileKind } from '@printstream/shared'
 import type { LibraryFile, LibraryThreeMfScene, ThreeMfIndex } from '@printstream/shared'
@@ -30,6 +30,7 @@ import type { ParsedGcodeLayers } from './lib/gcodePreview'
 import { gcodeViewModeMetric, isGcodeViewMode, type GcodeViewMode } from './lib/gcodeViewModes'
 import { scanGcodeToolpathConflicts, type GcodeToolpathConflict } from './lib/gcodeConflicts'
 import WarningRoundedIcon from '@mui/icons-material/WarningRounded'
+import QueryStatsRoundedIcon from '@mui/icons-material/QueryStatsRounded'
 import { GcodeToolpathPanel } from './GcodeToolpathPanel'
 import { AllPlatesStatsDialog } from './AllPlatesStatsDialog'
 import { BackAwareModal as Modal } from '../../components/BackAwareModal'
@@ -62,12 +63,13 @@ import {
   type ViewPreset
 } from './lib/viewCube'
 import { createViewportCameraRig } from './lib/viewportCamera'
-import { ProgressBar } from '../../components/ProgressBar'
-import { GcodeLayerSlider } from './GcodeLayerSlider'
+import { ViewportBuildOverlay } from './ViewportBuildOverlay'
+import { GCODE_SLIDER_END_INSET_PX, GcodeLayerSlider } from './GcodeLayerSlider'
 import { GcodeScrubberValueChip } from './GcodeScrubberValueChip'
 import { buildGcodeLayerEventMarkers, maxGcodeLayerHeightReference, type GcodeLayerEventMarker } from './lib/gcodeLayerEvents'
 import { toThreeMfIndexDto } from '@printstream/shared/three-mf'
 import { readInMemoryPlateGcode, type InMemoryGcodePreviewSource } from './lib/inMemoryGcodePreview'
+import { useMobileViewport } from '../../components/useMobileViewport'
 
 const PLATED_PREVIEW_GRID_SIZE = 320
 /**
@@ -87,6 +89,27 @@ const GCODE_CONFLICT_ALERT_RESERVE_PX = VIEW_CUBE_FOOTPRINT_PX + 96
  * Comfortably inside a 60fps frame, so scrubbing stays smooth while the scan proceeds.
  */
 const CONFLICT_SCAN_SLICE_MS = 8
+/**
+ * Zero is the valid "before the first move" replay position. A parsed layer's TOTAL remains
+ * non-zero; conflating those values made move 1 impossible to watch appear.
+ */
+const GCODE_REPLAY_START = 0
+/** Shared phone-row geometry so Layers and Moves give their sliders the same touch track. */
+const HORIZONTAL_GCODE_SCRUBBER_SX = {
+  minWidth: 0,
+  minHeight: 44,
+  // Phones keep the compact editor treatment; larger viewports restore a full spacing unit at
+  // both ends. This is container padding, separate from the thumb's endpoint clearance.
+  px: { xs: 0.5, sm: 1 },
+  py: 0,
+  display: 'flex',
+  alignItems: 'center',
+  gap: 0.5
+} as const
+/** Fixed tracks prevent the canvas resizing once parsed G-code controls appear. */
+const GCODE_HORIZONTAL_SCRUBBER_HEIGHT_PX = 44
+/** 42px Joy touch target, 4px inline padding, and the outlined sheet's two borders. */
+const GCODE_VERTICAL_SCRUBBER_WIDTH_PX = 48
 // Normalized editor "home" direction, so the G-code preview opens at the same angle the full
 // editor does (a slightly-elevated front view) instead of the iso corner.
 const PREVIEW_HOME_VIEW_DIRECTION = (() => {
@@ -135,6 +158,7 @@ interface PreviewRig {
  * plate-scoped printer-ready 3MF/G-code files.
  */
 export function PreviewView(props: Record<string, unknown>) {
+  const isMobile = useMobileViewport()
   const fileId = typeof props.previewFileId === 'string' ? props.previewFileId : null
   const inMemoryGcode = (props.inMemoryGcode as InMemoryGcodePreviewSource | undefined) ?? null
   // Archived-version mode: read the version's bytes through the versioned
@@ -152,7 +176,7 @@ export function PreviewView(props: Record<string, unknown>) {
   const [viewCubeContainer, setViewCubeContainer] = useState<HTMLDivElement | null>(null)
   const [selectedPlate, setSelectedPlate] = useState(1)
   const [viewerState, setViewerState] = useState<{ loading: boolean; error: string | null }>({
-    loading: false,
+    loading: true,
     error: null
   })
   // Per-part progress for the plated 3MF scene: the bed + camera are shown first, then parts stream
@@ -183,6 +207,7 @@ export function PreviewView(props: Record<string, unknown>) {
   const [gcodeTopLayer, setGcodeTopLayer] = useState(0)
   const [gcodeLayerHeightWidthReference, setGcodeLayerHeightWidthReference] = useState<string | null>(null)
   const [gcodeSingleLayer, setGcodeSingleLayer] = useState(false)
+  const [mobileLegendOpen, setMobileLegendOpen] = useState(false)
   const [gcodeLayerEventMarkers, setGcodeLayerEventMarkers] = useState<GcodeLayerEventMarker[]>([])
   // Within-layer scrub (Bambu's horizontal move slider): null shows the whole top layer.
   const [gcodeMoveCount, setGcodeMoveCount] = useState(0)
@@ -251,9 +276,16 @@ export function PreviewView(props: Record<string, unknown>) {
   // Maximized frees the viewer from its fixed dvh band; full screen drops the plate picker and
   // header too. Both come from the shared dialog modes, which also own the rule that only the
   // maximized preference is remembered: see `hooks/useDialogPresentationState.ts`.
-  const { presentation, maximized, setMaximized, fullScreen, setFullScreen } = useDialogPresentationState({
+  const { presentation: requestedPresentation, maximized, setMaximized, fullScreen, setFullScreen } = useDialogPresentationState({
     maximizedStorageKey: 'bambu.preview.maximized'
   })
+  // A phone's standard dialog is already full width; making its viewport shorter only creates a
+  // second size with no useful distinction. Keep the desktop preference intact and force the
+  // expanded shell on mobile. Full screen remains separate because it removes the dialog and
+  // plate-picker chrome while keeping the G-code controls available around the viewport.
+  const presentation = isMobile && requestedPresentation === 'standard'
+    ? 'maximized'
+    : requestedPresentation
   const [allPlatesStatsOpen, setAllPlatesStatsOpen] = useState(false)
   const [previewBodyNode, setPreviewBodyNode] = useState<HTMLDivElement | null>(null)
   const [previewBodySize, setPreviewBodySize] = useState({ width: 0, height: 0 })
@@ -278,6 +310,11 @@ export function PreviewView(props: Record<string, unknown>) {
   })
   const file = fileOverride ?? fileQuery.data?.file ?? null
   const previewMode = useMemo(() => inMemoryGcode ? 'plate-gcode' : resolvePreviewMode(file), [file, inMemoryGcode])
+  // A caller can replace the preview source without unmounting the overlay. Mark that boundary
+  // before paint so chrome derived from the previous file cannot flash while the new queries settle.
+  useLayoutEffect(() => {
+    setViewerState({ loading: true, error: null })
+  }, [fileId, versionId, inMemoryGcode])
   const platesQuery = useQuery({
     queryKey: ['library-preview-plates', fileId ?? 'missing', versionId ?? 'current'],
     queryFn: ({ signal }) => apiFetch<ThreeMfIndex>(`${resourceBase}/plates`, { signal }),
@@ -382,14 +419,16 @@ export function PreviewView(props: Record<string, unknown>) {
     // preview rendered its first frames with three's default Y-up and the floor grid flashed as a
     // vertical wall until the model finished loading and applyViewPreset('iso') corrected the camera.
     camera.up.set(BAMBU_THREE_MF_ISO_UP.x, BAMBU_THREE_MF_ISO_UP.y, BAMBU_THREE_MF_ISO_UP.z)
-    if (isPlatedPreview) {
-      camera.position.set(150, 150, 200)
-    } else {
-      // Open mesh previews already pointing down the iso corner so the bed reads as a floor on frame
-      // one; attachObject re-frames to the model bounds (same iso preset) once the mesh loads.
-      const isoDirection = VIEW_PRESET_CONFIG.iso.direction
-      camera.position.set(isoDirection.x * 200, isoDirection.y * 200, isoDirection.z * 200)
-    }
+    // Start in the same direction the loaded content will use. Starting plated scenes at a generic
+    // vector made the first visible frames rotate rapidly when attachObject applied the real preset.
+    const initialDirection = previewMode === 'plate-gcode'
+      ? PREVIEW_HOME_VIEW_DIRECTION
+      : VIEW_PRESET_CONFIG.iso.direction
+    camera.position.set(
+      initialDirection.x * 200,
+      initialDirection.y * 200,
+      initialDirection.z * 200
+    )
 
     // Log depth only for the plated 3MF scene, whose coincident coplanar part surfaces
     // z-fight across the wide depth range. G-code toolpaths have no such geometry, and
@@ -801,6 +840,8 @@ export function PreviewView(props: Record<string, unknown>) {
           setGcodeTopLayer(preview.layerCount - 1)
           setGcodeSingleLayer(false)
           setGcodeMoveEnd(null)
+          // The visibility-aware effect below immediately replaces this baseline after the layer
+          // count lands, without making a visibility toggle rebuild the parsed preview.
           setGcodeMoveCount(preview.moveCount(preview.layerCount - 1))
           setGcodeStats(parsed.stats)
           setGcodeRanges(parsed.ranges)
@@ -875,13 +916,16 @@ export function PreviewView(props: Record<string, unknown>) {
     bedModel
   ])
 
-  // Track the scrubbable move count of the current top layer; changing layers resets the
-  // within-layer scrub to "whole layer".
+  // Track the chronological moves represented by the current visibility choices. Changing the
+  // layer or the visible path kinds resets the within-layer scrub to "whole layer".
   useEffect(() => {
     if (gcodeLayerCount === 0) return
     setGcodeMoveEnd(null)
-    setGcodeMoveCount(gcodePreviewRef.current?.moveCount(gcodeTopLayer) ?? 0)
-  }, [gcodeTopLayer, gcodeLayerCount])
+    setGcodeMoveCount(gcodePreviewRef.current?.moveCount(gcodeTopLayer, {
+      showTravel: gcodeShowTravel,
+      markers: gcodeMarkers
+    }) ?? 0)
+  }, [gcodeTopLayer, gcodeLayerCount, gcodeShowTravel, gcodeMarkers])
 
   // Apply the layer + move sliders to the built G-code preview (draw-range only; cheap).
   useEffect(() => {
@@ -890,7 +934,7 @@ export function PreviewView(props: Record<string, unknown>) {
       single: gcodeSingleLayer,
       showTravel: gcodeShowTravel,
       markers: gcodeMarkers,
-      moveEnd: gcodeMoveEnd ?? undefined
+      moveEnd: gcodeMoveEnd == null ? undefined : Math.max(GCODE_REPLAY_START, gcodeMoveEnd)
     })
     // Draw ranges change what's on screen without a camera move; redraw.
     rig?.invalidate()
@@ -973,7 +1017,7 @@ export function PreviewView(props: Record<string, unknown>) {
           })
           break
         case 'ArrowLeft':
-          setGcodeMoveEnd((end) => Math.max((end ?? gcodeMoveCount) - 1, 0))
+          setGcodeMoveEnd((end) => Math.max((end ?? gcodeMoveCount) - 1, GCODE_REPLAY_START))
           break
         default:
           return
@@ -986,23 +1030,49 @@ export function PreviewView(props: Record<string, unknown>) {
 
   if (!open || !onClose) return null
 
-  const heading = isMeshPreviewMode(previewMode) ? '3D preview' : '3D plate preview'
+  let heading = '3D plate preview'
+  if (previewMode === 'plate-gcode') heading = 'G-code preview'
+  else if (isMeshPreviewMode(previewMode)) heading = '3D preview'
   const showPlatePicker = !isMeshPreviewMode(previewMode) && plates.length > 0
 
   // Either enlarged mode switches the body from a scrolling column to a flex column so the viewer
   // fills the freed height instead of keeping its fixed dvh band.
   const expanded = presentation !== 'standard'
+  const showPreviewChrome = !fullScreen
   const gcodeOverlaysReady = previewMode === 'plate-gcode' && !viewerState.loading && !viewerState.error
   const showsGcodeLayerColumn = gcodeOverlaysReady && gcodeLayerCount > 1
-  const showsGcodeMovesStrip = gcodeOverlaysReady && gcodeMoveCount > 1
+  // Every parsed preview layer owns at least one extrusion move. Keep the rail present for that
+  // one-move case: hiding it made the first layer look as though it contained no moves at all.
+  const showsGcodeMovesStrip = gcodeOverlaysReady && gcodeMoveCount > 0
   const gcodeLayerCounterWidthReference = `${gcodeLayerCount}/${gcodeLayerCount}`
   const gcodeMoveCounterWidthReference = `${gcodeMoveCount}/${gcodeMoveCount}`
+  const visibleGcodeMoveEnd = Math.max(GCODE_REPLAY_START, gcodeMoveEnd ?? gcodeMoveCount)
   const gcodeLayerHeight = gcodePreviewRef.current?.layerZ(gcodeTopLayer)
-  const showPreviewChrome = !fullScreen
-  // Where the viewport's floating controls sit. Extracted because four of them share two
-  // corners and which are present changes with the mode: two absolutely-positioned boxes
-  // landing on each other throws nothing, the higher z-index just eats the other's clicks.
-  const chrome = previewChromeLayout({ fullScreen, showsGcodeLayerColumn, showsGcodeMovesStrip })
+  const showMobileLegendButton = isMobile && gcodeOverlaysReady && Boolean(gcodeStats && gcodeRanges)
+  // Reserve the eventual scrubber tracks while G-code parses so their arrival populates chrome
+  // instead of resizing the WebGL canvas. Once loaded, a genuinely one-layer/empty file may drop
+  // an inapplicable track, while normal multi-layer G-code keeps the exact reserved geometry.
+  const reservesLoadingGcodeChrome = previewMode === 'plate-gcode' && viewerState.loading
+  const laysOutGcodeLayerColumn = showsGcodeLayerColumn || reservesLoadingGcodeChrome
+  const laysOutGcodeMovesStrip = showsGcodeMovesStrip || reservesLoadingGcodeChrome
+
+  let gcodeGridColumns = 'minmax(0, 1fr)'
+  if (laysOutGcodeLayerColumn && !isMobile) {
+    gcodeGridColumns += ` ${GCODE_VERTICAL_SCRUBBER_WIDTH_PX}px`
+  }
+
+  const horizontalScrubberTrack = `${GCODE_HORIZONTAL_SCRUBBER_HEIGHT_PX}px`
+  const gcodeGridRowTracks = ['minmax(0, 1fr)']
+  if (isMobile && laysOutGcodeLayerColumn) gcodeGridRowTracks.unshift(horizontalScrubberTrack)
+  if (laysOutGcodeMovesStrip) gcodeGridRowTracks.push(horizontalScrubberTrack)
+  const gcodeGridRows = gcodeGridRowTracks.join(' ')
+  const viewportGridRow = isMobile
+    ? 1 + Number(laysOutGcodeLayerColumn)
+    : 1
+  const movesGridRow = viewportGridRow + 1
+  // Where the controls that still float over the viewport sit. The scrubbers have their own grid
+  // tracks outside the 3D area, so they no longer participate in corner collision arithmetic.
+  const chrome = previewChromeLayout({ showLegendToggle: showMobileLegendButton })
   // Same rule the editor uses: the strip runs along whichever axis leaves the 3D area best
   // proportioned. There is no sidebar here, so the whole body width is the viewport's to spend.
   const plateStripOrientation = choosePlateStripOrientation({
@@ -1019,8 +1089,6 @@ export function PreviewView(props: Record<string, unknown>) {
    * a fixed 62dvh band has no height for a rail to reclaim.
    */
   const platesVertical = showPlatePicker && expanded && plateStripOrientation === 'vertical'
-  const BodyContainer = expanded ? DialogContent : ScrollableDialogBody
-
   return (
     <>
       <Modal open onClose={onClose}>
@@ -1034,7 +1102,7 @@ export function PreviewView(props: Record<string, unknown>) {
         {/* Maximize resizes the DIALOG, so it belongs in the dialog's header. Its full-screen
             sibling does not: that enlarges the 3D area alone, so its toggle sits on the 3D area
             (below), the way the editor's viewport toolbar carries it. */}
-        {showPreviewChrome && (
+        {showPreviewChrome && !isMobile && (
           <MaximizeDialogButton
             active={maximized}
             onToggle={setMaximized}
@@ -1043,14 +1111,22 @@ export function PreviewView(props: Record<string, unknown>) {
         )}
         {/* No `onClick`: Joy closes the dialog through the Modal's own `onClose` before it would
             reach one, so passing `onClose` here closed the preview twice per click. */}
-        <ModalClose sx={{ top: 12, right: 12, zIndex: 2 }} />
+        {showPreviewChrome && <ModalClose sx={{ top: 12, right: 12, zIndex: 2 }} />}
         {/* Extra right padding clears the header icons (maximize/shrink + close). */}
         {showPreviewChrome && (
           <DialogFileTitle title={heading} fileName={inMemoryGcode?.fileName ?? (file ? formatLibraryFileName(file.name) : null)} sx={{ pr: 12 }} />
         )}
-        <BodyContainer
+        <ScrollableDialogBody
           ref={setPreviewBodyNode}
-          sx={{ pt: fullScreen ? 0 : 1.5, ...(expanded ? { flex: '1 1 0', minHeight: 0, display: 'flex', flexDirection: 'column' } : null) }}
+          sx={{
+            pt: fullScreen ? 0 : 1.5,
+            ...(expanded
+              ? { flex: '1 1 0', minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }
+              : null)
+          }}
+          contentSx={expanded
+            ? { flex: 1, minHeight: 0, minWidth: 0, display: 'flex', flexDirection: 'column' }
+            : undefined}
         >
           <Stack
             spacing={fullScreen ? 0 : 1.5}
@@ -1059,7 +1135,7 @@ export function PreviewView(props: Record<string, unknown>) {
             sx={{ minWidth: 0, ...(expanded ? { flex: 1, minHeight: 0 } : null) }}
           >
             {showPlatePicker && inMemoryGcode && plates.length > 1 && showPreviewChrome && (
-              <Sheet variant="outlined" sx={{ p: 1, borderRadius: 'sm' }}>
+              <Sheet key="plate-select" variant="outlined" sx={{ p: 1, borderRadius: 'sm' }}>
                 <FormControl size="sm">
                   <FormLabel>Plate</FormLabel>
                   <Select
@@ -1077,8 +1153,9 @@ export function PreviewView(props: Record<string, unknown>) {
             )}
             {showPlatePicker && fileId && !inMemoryGcode && showPreviewChrome && (
               <Sheet
+                key="plate-strip"
                 variant="outlined"
-                sx={{ p: 1, borderRadius: 'sm', ...(platesVertical ? { width: 172, flexShrink: 0, display: 'flex', minHeight: 0 } : null) }}
+                sx={{ p: 1, borderRadius: 'sm', ...(platesVertical ? { width: PLATE_STRIP_VERTICAL_THICKNESS, flexShrink: 0, display: 'flex', minHeight: 0 } : null) }}
               >
                 <Box sx={{ width: '100%', minWidth: 0, ...(platesVertical ? { display: 'flex', minHeight: 0 } : null) }}>
                   <LibraryPlateCardPicker
@@ -1096,29 +1173,98 @@ export function PreviewView(props: Record<string, unknown>) {
                 </Box>
               </Sheet>
             )}
-            <Sheet
-              variant="soft"
+            <Box
+              key="viewer-grid"
               sx={{
-                // Expanded: fill whatever height the plate strip leaves; normal: fixed band.
+                // The scrubbers are viewport CHROME, not viewport CONTENT: their own grid tracks
+                // keep them from covering toolpaths and give the vertical rail a true centre line.
                 height: expanded ? 'auto' : { xs: '50dvh', sm: '62dvh' },
                 flex: expanded ? 1 : 'initial',
                 minWidth: 0,
-                // Full screen has no chrome to leave room for, so the floor would only stop the
-                // canvas shrinking with the window.
                 minHeight: fullScreen ? 0 : { xs: 300, sm: 360 },
-                borderRadius: fullScreen ? 0 : 'md',
-                position: 'relative',
-                overflow: 'hidden',
-                bgcolor: '#0d1322'
+                gridTemplateColumns: gcodeGridColumns,
+                gridTemplateRows: gcodeGridRows,
+                gap: fullScreen ? 0 : 0.5,
+                display: 'grid'
               }}
             >
+              {showsGcodeMovesStrip && (
+                <Sheet
+                  variant="outlined"
+                  sx={{
+                    ...HORIZONTAL_GCODE_SCRUBBER_SX,
+                    gridColumn: 1,
+                    gridRow: movesGridRow,
+                    borderRadius: fullScreen ? 0 : 'sm',
+                    display: 'flex'
+                  }}
+                >
+                  <Typography level="body-xs" textColor="text.secondary" sx={{ whiteSpace: 'nowrap' }}>
+                    Moves
+                  </Typography>
+                  <Slider
+                    size="sm"
+                    min={GCODE_REPLAY_START}
+                    max={gcodeMoveCount}
+                    value={visibleGcodeMoveEnd}
+                    onChange={(_event, value) => {
+                      const next = typeof value === 'number' ? value : value[0] ?? GCODE_REPLAY_START
+                      setGcodeMoveEnd(Math.max(GCODE_REPLAY_START, next))
+                    }}
+                    aria-label="G-code moves within the top layer"
+                    sx={{
+                      flex: 1,
+                      minWidth: 0,
+                      mx: `${GCODE_SLIDER_END_INSET_PX}px`
+                    }}
+                  />
+                  {!isMobile && (
+                    <GcodeScrubberValueChip
+                      value={`${visibleGcodeMoveEnd}/${gcodeMoveCount}`}
+                      widthReference={gcodeMoveCounterWidthReference}
+                    />
+                  )}
+                </Sheet>
+              )}
+              <Sheet
+                variant="soft"
+                sx={{
+                  gridColumn: 1,
+                  gridRow: viewportGridRow,
+                  minWidth: 0,
+                  minHeight: 0,
+                  borderRadius: fullScreen ? 0 : 'md',
+                  position: 'relative',
+                  overflow: 'hidden',
+                  bgcolor: '#0d1322'
+                }}
+              >
               <Box ref={setViewerContainer} sx={{ position: 'absolute', inset: 0 }} />
+              {isMobile && gcodeOverlaysReady && (
+                <Stack
+                  direction="row"
+                  spacing={0.5}
+                  sx={{ position: 'absolute', top: 8, left: 8, zIndex: 1, flexWrap: 'wrap' }}
+                >
+                  <GcodeScrubberValueChip
+                    value={`Layer ${gcodeTopLayer + 1}/${gcodeLayerCount}`}
+                    widthReference={`Layer ${gcodeLayerCounterWidthReference}`}
+                  />
+                  {gcodeLayerHeight != null && gcodeLayerHeightWidthReference != null && (
+                    <GcodeScrubberValueChip
+                      value={`Z ${gcodeLayerHeight.toFixed(2)} mm`}
+                      widthReference={`Z ${gcodeLayerHeightWidthReference}`}
+                    />
+                  )}
+                  <GcodeScrubberValueChip
+                    value={`Moves ${visibleGcodeMoveEnd}/${gcodeMoveCount}`}
+                    widthReference={`Moves ${gcodeMoveCounterWidthReference}`}
+                  />
+                </Stack>
+              )}
               {/* On the 3D area, not in the dialog header: this mode enlarges the viewport alone, so
-                  the control belongs on the thing it resizes: the editor's viewport toolbar carries
-                  its twin the same way. `soft` because `plain` disappears against the scene. Full
-                  screen drops the dialog's padding, which brings the close X down over this corner,
-                  so step left of it there. With the G-code scrubbers up it steps clear of each one
-                  present, into the inner corner between them. */}
+                  the control belongs on the thing it resizes. The editor's viewport toolbar carries
+                  its twin the same way. `soft` because `plain` disappears against the scene. */}
               <FullScreenDialogButton
                 active={fullScreen}
                 onToggle={setFullScreen}
@@ -1126,44 +1272,24 @@ export function PreviewView(props: Record<string, unknown>) {
                 variant="soft"
                 sx={{ position: 'absolute', ...chrome.fullScreenToggle, zIndex: 2 }}
               />
+              {showMobileLegendButton && (
+                <Tooltip title="Toolpath legend and statistics">
+                  <IconButton
+                    size="sm"
+                    variant="soft"
+                    onClick={() => setMobileLegendOpen(true)}
+                    aria-label="Show the toolpath legend"
+                    sx={{ position: 'absolute', ...chrome.gcodeLegendToggle, zIndex: 2 }}
+                  >
+                    <QueryStatsRoundedIcon />
+                  </IconButton>
+                </Tooltip>
+              )}
               {viewerState.loading && (
-                <Stack
-                  spacing={1}
-                  alignItems="center"
-                  justifyContent="center"
-                  sx={{ position: 'absolute', inset: 0, bgcolor: 'rgba(8, 11, 20, 0.42)', backdropFilter: 'blur(2px)' }}
-                >
-                  <CircularProgress size="sm" />
-                  <Typography level="body-sm" textColor="neutral.200">Loading 3D preview…</Typography>
-                </Stack>
+                <ViewportBuildOverlay />
               )}
               {sceneProgress && !viewerState.loading && !viewerState.error && (
-                // Slim top bar while the plate's parts stream in (the bed is already shown beneath).
-                <Sheet
-                  variant="soft"
-                  sx={{
-                    position: 'absolute',
-                    ...chrome.sceneProgress,
-                    zIndex: 2,
-                    px: 1.5,
-                    py: 0.75,
-                    borderRadius: 'md',
-                    bgcolor: 'rgba(13, 19, 34, 0.72)',
-                    backdropFilter: 'blur(2px)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 1.25
-                  }}
-                >
-                  <CircularProgress size="sm" />
-                  <Typography level="body-xs" textColor="neutral.200" sx={{ whiteSpace: 'nowrap' }}>
-                    Loading models… {sceneProgress.done} of {sceneProgress.total}
-                  </Typography>
-                  <ProgressBar
-                    value={(sceneProgress.done / Math.max(sceneProgress.total, 1)) * 100}
-                    sx={{ flex: 1 }}
-                  />
-                </Sheet>
+                <ViewportBuildOverlay progress={sceneProgress} />
               )}
               {viewerState.error && !viewerState.loading && (
                 <Alert color="warning" variant="soft" sx={{ position: 'absolute', top: 16, left: 16, right: 16, zIndex: 1 }}>
@@ -1203,91 +1329,7 @@ export function PreviewView(props: Record<string, unknown>) {
                   )}
                 </Stack>
               )}
-              {showsGcodeLayerColumn && (
-                <Sheet
-                  variant="soft"
-                  sx={{
-                    position: 'absolute',
-                    ...chrome.gcodeLayerColumn,
-                    zIndex: 1,
-                    px: 1,
-                    py: 1.5,
-                    borderRadius: 'md',
-                    bgcolor: 'rgba(13, 19, 34, 0.72)',
-                    backdropFilter: 'blur(2px)',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'center',
-                    gap: 1
-                  }}
-                >
-                  <GcodeScrubberValueChip
-                    value={`${gcodeTopLayer + 1}/${gcodeLayerCount}`}
-                    widthReference={gcodeLayerCounterWidthReference}
-                  />
-                  {/* The layer's print height: what a pause or filament change in the editor keys on. */}
-                  {gcodeLayerHeight != null && gcodeLayerHeightWidthReference != null && (
-                    <GcodeScrubberValueChip
-                      value={`${gcodeLayerHeight.toFixed(2)} mm`}
-                      widthReference={gcodeLayerHeightWidthReference}
-                    />
-                  )}
-                  <GcodeLayerSlider
-                    layerCount={gcodeLayerCount}
-                    value={gcodeTopLayer}
-                    markers={gcodeLayerEventMarkers}
-                    onChange={setGcodeTopLayer}
-                  />
-                  <Switch
-                    size="sm"
-                    checked={gcodeSingleLayer}
-                    onChange={(event) => setGcodeSingleLayer(event.target.checked)}
-                    slotProps={{ input: { 'aria-label': 'Show only the selected layer' } }}
-                  />
-                  <Typography level="body-xs" textColor="neutral.300" sx={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}>
-                    Single layer
-                  </Typography>
-                </Sheet>
-              )}
-              {showsGcodeMovesStrip && (
-                // Top edge: the bottom-left corner belongs to the view cube and the right
-                // edge to the layer panel, so the move scrubber gets the top strip
-                // (stopping short of the layer panel's column).
-                <Sheet
-                  variant="soft"
-                  sx={{
-                    position: 'absolute',
-                    ...chrome.gcodeMovesStrip,
-                    zIndex: 1,
-                    px: 1.5,
-                    py: 0.75,
-                    borderRadius: 'md',
-                    bgcolor: 'rgba(13, 19, 34, 0.72)',
-                    backdropFilter: 'blur(2px)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 1
-                  }}
-                >
-                  <Typography level="body-xs" textColor="neutral.300" sx={{ whiteSpace: 'nowrap' }}>
-                    Moves
-                  </Typography>
-                  <Slider
-                    size="sm"
-                    min={0}
-                    max={gcodeMoveCount}
-                    value={gcodeMoveEnd ?? gcodeMoveCount}
-                    onChange={(_event, value) => setGcodeMoveEnd(typeof value === 'number' ? value : value[0] ?? 0)}
-                    aria-label="G-code moves within the top layer"
-                    sx={{ flex: 1, minWidth: 0 }}
-                  />
-                  <GcodeScrubberValueChip
-                    value={`${gcodeMoveEnd ?? gcodeMoveCount}/${gcodeMoveCount}`}
-                    widthReference={gcodeMoveCounterWidthReference}
-                  />
-                </Sheet>
-              )}
-              {previewMode === 'plate-gcode' && gcodeStats && gcodeRanges && !viewerState.loading && !viewerState.error && (
+              {!isMobile && previewMode === 'plate-gcode' && gcodeStats && gcodeRanges && !viewerState.loading && !viewerState.error && (
                 <GcodeToolpathPanel
                   stats={gcodeStats}
                   ranges={gcodeRanges}
@@ -1304,6 +1346,24 @@ export function PreviewView(props: Record<string, unknown>) {
                   onShowAllPlates={plates.length > 1 ? () => setAllPlatesStatsOpen(true) : undefined}
                   // Room for the conflict banner stacked above the view cube, when there is one.
                   bottomReservePx={gcodeConflict ? GCODE_CONFLICT_ALERT_RESERVE_PX : 0}
+                />
+              )}
+              {showMobileLegendButton && mobileLegendOpen && gcodeStats && gcodeRanges && (
+                <GcodeToolpathPanel
+                  stats={gcodeStats}
+                  ranges={gcodeRanges}
+                  plate={plates.find((plate) => plate.index === selectedPlate) ?? null}
+                  layerCount={gcodeLayerCount}
+                  open
+                  onToggle={() => setMobileLegendOpen(false)}
+                  viewMode={gcodeViewMode}
+                  onViewModeChange={setGcodeViewMode}
+                  showTravel={gcodeShowTravel}
+                  onShowTravelChange={setGcodeShowTravel}
+                  markers={gcodeMarkers}
+                  onMarkersChange={setGcodeMarkers}
+                  onShowAllPlates={plates.length > 1 ? () => setAllPlatesStatsOpen(true) : undefined}
+                  presentation="cover"
                 />
               )}
               {gcodeConflict && (
@@ -1337,9 +1397,92 @@ export function PreviewView(props: Record<string, unknown>) {
                   disabled={viewerState.loading || Boolean(viewerState.error)}
                 />
               </Box>
-            </Sheet>
+              </Sheet>
+              {showsGcodeLayerColumn && (
+                <Sheet
+                  variant="outlined"
+                  sx={{
+                    ...(isMobile ? HORIZONTAL_GCODE_SCRUBBER_SX : {
+                      minHeight: 0,
+                      px: 0.25,
+                      py: 1,
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      gap: 0.5
+                    }),
+                    gridColumn: isMobile ? 1 : 2,
+                    gridRow: isMobile ? 1 : '1 / -1',
+                    borderRadius: fullScreen ? 0 : 'sm',
+                    flexDirection: isMobile ? 'row' : 'column',
+                    display: 'flex'
+                  }}
+                >
+                  {isMobile && (
+                    <Typography level="body-xs" textColor="text.secondary" sx={{ whiteSpace: 'nowrap' }}>
+                      Layers
+                    </Typography>
+                  )}
+                  {!isMobile && (
+                    <GcodeScrubberValueChip
+                      value={`${gcodeTopLayer + 1}/${gcodeLayerCount}`}
+                      widthReference={gcodeLayerCounterWidthReference}
+                      sideways
+                    />
+                  )}
+                  {/* The layer's print height: what a pause or filament change in the editor keys on. */}
+                  {!isMobile && gcodeLayerHeight != null && gcodeLayerHeightWidthReference != null && (
+                    <GcodeScrubberValueChip
+                      value={`${gcodeLayerHeight.toFixed(2)} mm`}
+                      widthReference={gcodeLayerHeightWidthReference}
+                      sideways
+                    />
+                  )}
+                  <GcodeLayerSlider
+                    layerCount={gcodeLayerCount}
+                    value={gcodeTopLayer}
+                    markers={gcodeLayerEventMarkers}
+                    onChange={setGcodeTopLayer}
+                    orientation={isMobile ? 'horizontal' : 'vertical'}
+                  />
+                  <Box
+                    component="label"
+                    sx={{
+                      display: 'flex',
+                      flexDirection: isMobile ? 'row' : 'column',
+                      alignItems: 'center',
+                      gap: 0.5,
+                      flexShrink: 0,
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <Typography
+                      level="body-xs"
+                      textColor="text.secondary"
+                      sx={isMobile
+                        ? { whiteSpace: 'nowrap' }
+                        : {
+                            writingMode: 'vertical-rl',
+                            textOrientation: 'sideways',
+                            transform: 'rotate(180deg)',
+                            lineHeight: 1,
+                            textAlign: 'center'
+                          }}
+                    >
+                      Single
+                    </Typography>
+                    <Checkbox
+                      size="sm"
+                      checked={gcodeSingleLayer}
+                      onChange={(event) => setGcodeSingleLayer(event.target.checked)}
+                      slotProps={{ input: { 'aria-label': 'Show only the selected layer' } }}
+                    />
+                  </Box>
+                </Sheet>
+              )}
+            </Box>
           </Stack>
-        </BodyContainer>
+        </ScrollableDialogBody>
       </ScrollableModalDialog>
       </Modal>
       {/*

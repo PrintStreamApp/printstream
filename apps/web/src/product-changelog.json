@@ -1,0 +1,28 @@
+{
+  "releases": [
+    {
+      "version": "1.1.0",
+      "releasedOn": "2026-09-15",
+      "changes": [
+        "Redesigned the 3D and G-code previewers with responsive layouts, full-screen viewing, stable loading progress, and controls that no longer cover the model.",
+        "Improved G-code inspection with separate layer and move scrubbers, first-move replay, selected-layer isolation, clearer event markers, and mobile-friendly toolpath statistics.",
+        "Added direct 3D preview access while preparing a print, and improved camera gestures, object selection feedback, initial framing, and scene-building transitions.",
+        "Import FBX models and preserve colours and textures from FBX, OBJ, and glTF files in Model Studio.",
+        "Convert imported source colours into configurable filament painting with colour reduction, smoothing, matching previews, and undo support.",
+        "Simplify detailed meshes while preserving painted regions, with adjustable detail levels and previews.",
+        "View and edit project metadata, attachments, cover images, and other BambuStudio project files without losing them when saving or slicing.",
+        "Reuse unchanged slicing results, show clearer multi-plate progress, and report sliced material usage more accurately.",
+        "Customize printer build volumes, origins, printable heights, and bed appearance for workspace machine presets.",
+        "Control supported printer protection modes, camera resolution, nozzle-rack maintenance, and additional Bambu printer settings.",
+        "Use printer-specific print options including automatic calibration modes, timelapse storage, nozzle-offset calibration, and external-spool change assistance.",
+        "Preview printer-model mismatches before dispatch and explicitly approve cross-model prints when appropriate.",
+        "Keep selected jobs in the print queue after completion and use improved material mapping, printer selection, and dispatch safeguards.",
+        "Scan filament barcodes to identify materials, prefill spool details, and expose tracked inventory in Model Studio.",
+        "Manage library files, printer storage, filament, and slicing presets with improved bulk selection, sorting, grouping, filtering, and mobile layouts.",
+        "Access support and suggestions directly from licensed self-hosted installations, with clearer conversation attribution and unread replies.",
+        "Apply for education and community access through the cloud signup flow.",
+        "View version-specific release notes from the app footer."
+      ]
+    }
+  ]
+}

@@ -4,9 +4,8 @@
 # reserved for a deployment-local copy of `compose.server.example.yml` (see .gitignore). Devkit
 # combines this file with the checkout's generated database service.
 #
-# Bound to 127.0.0.1 because the credentials below are a throwaway development pair. Do not remove
-# the bind address to "make it reachable" -- on a laptop that publishes an unauthenticated database
-# to whatever network you are on.
+# Browser and host-bridge entry points bind to loopback only. Do not remove the bind address to
+# "make it reachable": on a laptop that would expose development services to the current network.
 services:
   node:
     build:
@@ -25,7 +24,8 @@ services:
       API_PORT: ${API_PORT:?api port is required}
       METRICS_PORT: ${METRICS_PORT:?metrics port is required}
       CLIENT_ORIGIN: ${CLIENT_ORIGIN:?client origin is required}
-      BRIDGE_SERVER_URL: ${BRIDGE_SERVER_URL:?bridge server URL is required}
+      # The bridge watcher runs on the host, where printer LAN routes are available.
+      PRINTSTREAM_DEV_BRIDGE: host
       VITE_API_PORT: ${VITE_API_PORT:?vite api port is required}
       VITE_DEV_ALLOWED_HOSTS: ${VITE_DEV_ALLOWED_HOSTS:?allowed hosts are required}
       VITE_DEV_HOST: 0.0.0.0
@@ -38,8 +38,14 @@ services:
     ports:
       - "127.0.0.1:${DEVKIT_WEB_PORT:?web port is required}:${VITE_DEV_PORT:?vite port is required}"
       - "[::1]:${DEVKIT_WEB_PORT:?web port is required}:${VITE_DEV_PORT:?vite port is required}"
+      - "127.0.0.1:${DEVKIT_API_PORT:?api port is required}:${API_PORT:?api port is required}"
+      - "[::1]:${DEVKIT_API_PORT:?api port is required}:${API_PORT:?api port is required}"
     volumes:
       - .:/workspace
+      # A linked worktree's `.git` is a file pointing into the primary checkout's absolute Git
+      # directory. Mount that directory at the same absolute path so Git-aware validation works
+      # inside the source-mounted container too. Read-only is sufficient for diff/test discovery.
+      - ${PRINTSTREAM_GIT_COMMON_DIR:?git common dir is required}:${PRINTSTREAM_GIT_COMMON_DIR:?git common dir is required}:ro
       - slicer-data:/slicer-data
       - slicer-work:/slicer-work
     depends_on:

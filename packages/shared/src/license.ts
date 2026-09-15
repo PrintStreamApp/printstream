@@ -167,7 +167,7 @@ export type LicenseStatusResponse = z.infer<typeof licenseStatusResponseSchema>
 /**
  * Result of an operator-triggered "check for license updates" (`POST
  * /api/license/check`). `skipped` means there was nothing to check, no key
- * installed, or a perpetual one that never phones home.
+ * installed, or no entitlement a user-initiated refresh can update.
  */
 export const licenseCheckResponseSchema = licenseStatusResponseSchema.extend({
   outcome: z.enum(['skipped', 'unchanged', 'renewed', 'revoked', 'failed'])

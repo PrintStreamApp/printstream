@@ -25,6 +25,8 @@ function recordedJson(options: Record<string, unknown>): string {
     flowCalibration: 'off',
     firstLayerInspection: true,
     timelapse: false,
+    timelapseStorage: 'external',
+    externalFilamentChangeAssist: false,
     filamentDynamicsCalibration: false,
     nozzleOffsetCalibration: 'auto',
     ...options
@@ -53,6 +55,8 @@ test('every recorded option survives an override-less re-print', () => {
         flowCalibration: 'auto',
         firstLayerInspection: false,
         timelapse: true,
+        timelapseStorage: 'internal',
+        externalFilamentChangeAssist: true,
         filamentDynamicsCalibration: true,
         nozzleOffsetCalibration: 'off'
       })
@@ -67,6 +71,8 @@ test('every recorded option survives an override-less re-print', () => {
       flowCalibration: options.flowCalibration,
       firstLayerInspection: options.firstLayerInspection,
       timelapse: options.timelapse,
+      timelapseStorage: options.timelapseStorage,
+      externalFilamentChangeAssist: options.externalFilamentChangeAssist,
       filamentDynamicsCalibration: options.filamentDynamicsCalibration,
       nozzleOffsetCalibration: options.nozzleOffsetCalibration
     },
@@ -76,6 +82,8 @@ test('every recorded option survives an override-less re-print', () => {
       flowCalibration: 'auto',
       firstLayerInspection: false,
       timelapse: true,
+      timelapseStorage: 'internal',
+      externalFilamentChangeAssist: true,
       filamentDynamicsCalibration: true,
       nozzleOffsetCalibration: 'off'
     }
@@ -101,6 +109,7 @@ test('consent flags are never restored from the recorded options', () => {
       printOptionsJson: recordedJson({
         allowIncompatibleFilament: true,
         allowPlateTypeMismatch: true,
+        allowPrinterModelMismatch: true,
         allowFilamentTrackSwitchMismatch: true,
         allowInsufficientFilament: true,
         allowBlacklistedFilament: true
@@ -111,6 +120,7 @@ test('consent flags are never restored from the recorded options', () => {
 
   assert.equal(options.allowIncompatibleFilament, false)
   assert.equal(options.allowPlateTypeMismatch, false)
+  assert.equal(options.allowPrinterModelMismatch, false)
   assert.equal(options.allowFilamentTrackSwitchMismatch, false)
   assert.equal(options.allowInsufficientFilament, false)
   assert.equal(options.allowBlacklistedFilament, false)

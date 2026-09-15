@@ -378,6 +378,7 @@ test('print override metadata records only the gates a dispatch actually bypasse
   assert.deepEqual(printOverrideAuditMetadata({
     allowIncompatibleFilament: false,
     allowPlateTypeMismatch: false,
+    allowPrinterModelMismatch: false,
     allowFilamentTrackSwitchMismatch: false,
     allowInsufficientFilament: false
   }), {})
@@ -386,11 +387,13 @@ test('print override metadata records only the gates a dispatch actually bypasse
   assert.deepEqual(printOverrideAuditMetadata({
     allowIncompatibleFilament: true,
     allowPlateTypeMismatch: true,
+    allowPrinterModelMismatch: true,
     allowFilamentTrackSwitchMismatch: true,
     allowInsufficientFilament: true
   }), {
     allowIncompatibleFilament: true,
     allowPlateTypeMismatch: true,
+    allowPrinterModelMismatch: true,
     allowFilamentTrackSwitchMismatch: true,
     allowInsufficientFilament: true
   })
@@ -404,6 +407,7 @@ test('every dispatch route feeds the audit helper the gates its own schema expos
   const allOverrides = {
     allowIncompatibleFilament: true,
     allowPlateTypeMismatch: true,
+    allowPrinterModelMismatch: true,
     allowFilamentTrackSwitchMismatch: true,
     allowInsufficientFilament: true,
     allowBlacklistedFilament: true
@@ -425,10 +429,11 @@ test('every dispatch route feeds the audit helper the gates its own schema expos
   assert.deepEqual(printOverrideAuditMetadata(reprintJobSchema.parse({})), {})
 
   // Printer-storage print, deliberately has NO plate-type gate to bypass (nothing compares a
-  // stored file against the printer's plate), so it records the other two and only those.
+  // stored file against the printer's plate), so it records every other print override.
   const storagePrint = printerStoragePrintSchema.parse({ path: '/model.3mf', ...allOverrides })
   assert.deepEqual(printOverrideAuditMetadata(storagePrint), {
     allowIncompatibleFilament: true,
+    allowPrinterModelMismatch: true,
     allowFilamentTrackSwitchMismatch: true,
     allowInsufficientFilament: true,
     allowBlacklistedFilament: true

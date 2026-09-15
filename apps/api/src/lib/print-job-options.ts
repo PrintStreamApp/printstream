@@ -5,12 +5,12 @@
  * Owns BOTH directions in one module on purpose. The jobs DTO (what the print dialog
  * restores from) and `reprintJobFromRow` (what an override-less `POST /jobs/:id/reprint`
  * dispatches) both ask this module what a row recorded. When they each derived it, they
- * disagreed: the API guessed `'on'` while the browser used its own remembered preference, so
+ * disagreed: the API guessed `'on'` while the browser applied a different fallback, so
  * a print could come back one way through the dialog and another way through the API.
  *
  * Contract: `readRecordedPrintStartOptions` returns only what is actually KNOWN about a row,
  * so a caller can tell "recorded as off" from "never recorded" and fall back for itself
- * (the schema default on the API side, the remembered preference in the dialog). It never
+ * (the schema default on each side). It never
  * invents a value to fill the gap; inventing one is what issue #97 was.
  */
 import { printStartOptionSelectionSchema } from '@printstream/shared'

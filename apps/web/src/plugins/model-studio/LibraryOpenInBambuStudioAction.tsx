@@ -1,4 +1,4 @@
-import { MenuItem } from '@mui/joy'
+import { ListItemDecorator, MenuItem } from '@mui/joy'
 import OpenInNewRounded from '@mui/icons-material/OpenInNewRounded'
 import { extractErrorMessage, type LibraryDownloadLinkResponse } from '@printstream/shared'
 import { apiFetch } from '../../lib/apiClient'
@@ -49,7 +49,8 @@ export function LibraryOpenInBambuStudioAction(props: Record<string, unknown>) {
 
   return (
     <MenuItem onClick={() => { void openInBambuStudio() }}>
-      <OpenInNewRounded /> Open in Bambu Studio
+      <ListItemDecorator><OpenInNewRounded /></ListItemDecorator>
+      Open in Bambu Studio
     </MenuItem>
   )
 }

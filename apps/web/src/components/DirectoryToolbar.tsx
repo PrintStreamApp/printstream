@@ -2,16 +2,20 @@
  * Shared directory-toolbar controls reused across every browse surface (library,
  * jobs, printers, slicing profiles, plugin directories, etc.).
  *
- * `DirectoryPrimaryToolbar` is the primary row: search, sort, grouping, filters,
- * and page-size. When the row can't fit its controls side by side (narrow
- * viewport, phone, or `compactControls`), sort/grouping/filters collapse into a
- * single combined "options" dropdown. The individual menus (`DirectoryFiltersMenu`,
+ * `DirectoryPrimaryToolbar` is the primary row: search, optional select-all,
+ * sort, grouping, filters, and page-size. When the row can't fit its controls
+ * side by side (narrow viewport, phone, or `compactControls`),
+ * sort/grouping/filters collapse into a single combined "options" dropdown.
+ * The individual menus (`DirectoryFiltersMenu`,
  * `DirectoryGroupingMenu`, `DirectorySortMenu`, `DirectoryPageSizeMenu`) are also
  * exported for surfaces that compose their own layout.
  */
 import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown'
 import CategoryRoundedIcon from '@mui/icons-material/CategoryRounded'
+import CheckBoxOutlineBlankRoundedIcon from '@mui/icons-material/CheckBoxOutlineBlankRounded'
+import CheckBoxRoundedIcon from '@mui/icons-material/CheckBoxRounded'
 import FormatListNumberedRoundedIcon from '@mui/icons-material/FormatListNumberedRounded'
+import IndeterminateCheckBoxRoundedIcon from '@mui/icons-material/IndeterminateCheckBoxRounded'
 import PushPinOutlinedIcon from '@mui/icons-material/PushPinOutlined'
 import PushPinRoundedIcon from '@mui/icons-material/PushPinRounded'
 import SearchRoundedIcon from '@mui/icons-material/SearchRounded'
@@ -212,6 +216,83 @@ export type DirectoryFiltersConfig = {
   children: ReactNode
 }
 
+/** Optional selection-mode and select-all control for directories that support bulk actions. */
+export type DirectorySelectionConfig = {
+  active: boolean
+  checked: boolean
+  indeterminate?: boolean
+  disabled?: boolean
+  onActivate: () => void
+  onChange: (selected: boolean) => void
+  ariaLabel?: string
+}
+
+/**
+ * Enters selection mode without selecting anything, then becomes the master
+ * checkbox button once row checkboxes are visible.
+ */
+export function DirectorySelectionButton({
+  selection,
+  iconOnly
+}: {
+  selection: DirectorySelectionConfig
+  iconOnly: boolean
+}) {
+  let label = 'Select'
+  let icon = <CheckBoxOutlineBlankRoundedIcon />
+
+  if (selection.active) {
+    label = selection.checked ? 'Clear all' : 'Select all'
+    if (selection.indeterminate) {
+      icon = <IndeterminateCheckBoxRoundedIcon />
+    } else if (selection.checked) {
+      icon = <CheckBoxRoundedIcon />
+    }
+  }
+
+  const handleClick = () => {
+    if (!selection.active) {
+      selection.onActivate()
+      return
+    }
+
+    selection.onChange(!selection.checked)
+  }
+
+  if (iconOnly) {
+    return (
+      <Tooltip title={label}>
+        <Button
+          size="sm"
+          variant="outlined"
+          color="neutral"
+          disabled={selection.disabled}
+          aria-label={selection.ariaLabel ?? label}
+          onClick={handleClick}
+          sx={{ minWidth: 32, width: 32, px: 0, flexShrink: 0 }}
+        >
+          {icon}
+        </Button>
+      </Tooltip>
+    )
+  }
+
+  return (
+    <Button
+      size="sm"
+      variant="outlined"
+      color="neutral"
+      startDecorator={icon}
+      disabled={selection.disabled}
+      aria-label={selection.ariaLabel ?? (selection.active ? 'Select all results' : 'Select results')}
+      onClick={handleClick}
+      sx={{ flexShrink: 0 }}
+    >
+      {label}
+    </Button>
+  )
+}
+
 /** A `top` value for the pinned toolbar: one length, or a responsive record of them. */
 export type ModalSafeStickyTop = number | string | Record<string, number | string>
 
@@ -221,6 +302,7 @@ export function DirectoryPrimaryToolbar<TSort extends string, TPageSize extends 
   searchPlaceholder,
   searchAriaLabel,
   searchEndDecorator,
+  selection,
   filters,
   grouping,
   pageSizeValue,
@@ -262,6 +344,8 @@ export function DirectoryPrimaryToolbar<TSort extends string, TPageSize extends 
   stickySurface?: string
   /** Optional control rendered at the right end of the search field (e.g. a scope toggle). */
   searchEndDecorator?: ReactNode
+  /** Opt-in selection button for directories whose result rows support selection. */
+  selection?: DirectorySelectionConfig
   filters?: DirectoryFiltersConfig
   grouping?: DirectoryGroupingConfig<TGroup>
   pageSizeValue: TPageSize
@@ -344,10 +428,11 @@ export function DirectoryPrimaryToolbar<TSort extends string, TPageSize extends 
   }, [])
 
   const dropdownControlCount = (sortConfig != null ? 1 : 0) + (grouping != null ? 1 : 0) + (filters != null ? 1 : 0) + 1 /* page size */
-  const controlCount = dropdownControlCount + (showViewModeToggle ? 1 : 0)
+  const controlCount = dropdownControlCount + (showViewModeToggle ? 1 : 0) + (selection ? 1 : 0)
   // Estimated width the separate controls need on one row (dropdowns ~150, view-mode
   // toggle ~84, 8px gaps, plus a small buffer so labels don't truncate).
-  const widthForSeparate = dropdownControlCount * 150 + (showViewModeToggle ? 84 : 0) + 8 * Math.max(0, controlCount - 1) + 16
+  const selectionControlWidth = selection ? (isMobile ? 32 : 100) : 0
+  const widthForSeparate = dropdownControlCount * 150 + (showViewModeToggle ? 84 : 0) + selectionControlWidth + 8 * Math.max(0, controlCount - 1) + 16
   const fitsSeparate = rowWidth == null ? !(isMobile || compactControls) : rowWidth >= widthForSeparate
   const combineControls = !fitsSeparate && (grouping != null || filters != null)
   // When combined the row is intentionally compact: stay on one line and shorten the
@@ -392,8 +477,16 @@ export function DirectoryPrimaryToolbar<TSort extends string, TPageSize extends 
           line (nowrap) so a fit-content container (e.g. the print dialog) grows to
           fit it instead of wrapping the controls. */}
       <Box ref={rowRef} sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: compact ? 'nowrap' : 'wrap', minWidth: 0 }}>
+        {selection && (
+          <DirectorySelectionButton selection={selection} iconOnly={isMobile} />
+        )}
         {combineControls ? (
-          <DirectoryControlsMenu sort={sortConfig} grouping={grouping} filters={filters} />
+          <DirectoryControlsMenu
+            sort={sortConfig}
+            grouping={grouping}
+            filters={filters}
+            pinning={pinnable && isMobile ? { pinned, onChange: setPinned } : undefined}
+          />
         ) : (
           <>
             {sortConfig ? <DirectorySortMenu {...sortConfig} /> : null}
@@ -419,7 +512,7 @@ export function DirectoryPrimaryToolbar<TSort extends string, TPageSize extends 
           {showViewModeToggle && viewMode && onViewModeChange && (
             <ViewModeToggle viewMode={viewMode} onViewModeChange={onViewModeChange} />
           )}
-          {pinnable && (
+          {pinnable && !(combineControls && isMobile) && (
             <Tooltip title={pinned ? 'Unpin toolbar' : 'Pin toolbar so it stays while scrolling'}>
               <IconButton
                 size="sm"
@@ -458,12 +551,14 @@ type DirectorySortConfig<T extends string> = {
 function DirectoryControlsMenu<TSort extends string, TGroup extends string>({
   sort,
   grouping,
-  filters
+  filters,
+  pinning
 }: {
   /** Absent when the directory has nothing to order by. */
   sort?: DirectorySortConfig<TSort> | null
   grouping?: DirectoryGroupingConfig<TGroup>
   filters?: DirectoryFiltersConfig
+  pinning?: { pinned: boolean, onChange: (pinned: boolean) => void }
 }) {
   const [open, setOpen] = useState(false)
   const buttonRef = useRef<HTMLButtonElement>(null)
@@ -548,6 +643,24 @@ function DirectoryControlsMenu<TSort extends string, TGroup extends string>({
                   </Button>
                 )}
               </Stack>
+            </>
+          )}
+          {pinning && (
+            <>
+              <ListDivider sx={{ my: 0.25 }} />
+              <Button
+                size="sm"
+                variant="plain"
+                color="neutral"
+                startDecorator={pinning.pinned ? <PushPinRoundedIcon /> : <PushPinOutlinedIcon />}
+                onClick={() => {
+                  pinning.onChange(!pinning.pinned)
+                  setOpen(false)
+                }}
+                sx={{ justifyContent: 'flex-start' }}
+              >
+                {pinning.pinned ? 'Unpin toolbar' : 'Pin toolbar'}
+              </Button>
             </>
           )}
         </Stack>

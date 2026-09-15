@@ -22,6 +22,7 @@ import { authPasswordWebPlugin } from '../plugins/auth-password'
 import { authOauthWebPlugin } from '../plugins/auth-oauth'
 import { privateWebPlugins } from '../lib/privateModules'
 import { remoteImportsPlugin } from '../plugins/remote-imports'
+import { cloudConnectionWebPlugin } from '../plugins/cloud-connection'
 import type { WebPlugin } from './types'
 import type { PluginSurface } from '@printstream/shared'
 
@@ -33,7 +34,11 @@ export function registerBuiltinPlugins(): void {
   registerBuiltinPlugin(authPasswordWebPlugin, { runtimeSurfaces: ['platform', 'workspace'], managerSurfaces: ['platform'] })
   registerBuiltinPlugin(authOauthWebPlugin, { runtimeSurfaces: ['platform', 'workspace'], managerSurfaces: ['platform'] })
   for (const plugin of privateWebPlugins) {
-    registerBuiltinPlugin(plugin, { runtimeSurfaces: ['platform', 'workspace'], managerSurfaces: ['platform'] })
+    registerBuiltinPlugin(plugin, {
+      runtimeSurfaces: ['platform', 'workspace'],
+      managerSurfaces: ['platform'],
+      cloudOnly: true
+    })
   }
   registerBuiltinPlugin(modelStudioPlugin, { runtimeSurfaces: ['workspace'], managerSurfaces: ['platform', 'workspace'] })
   registerBuiltinPlugin(notificationsNtfyPlugin, { runtimeSurfaces: ['workspace'], managerSurfaces: ['platform', 'workspace'] })
@@ -53,12 +58,22 @@ export function registerBuiltinPlugins(): void {
   registerBuiltinPlugin(homeAssistantWebPlugin, { runtimeSurfaces: ['workspace'], managerSurfaces: ['platform', 'workspace'] })
   registerBuiltinPlugin(maintenanceWebPlugin, { runtimeSurfaces: ['workspace'], managerSurfaces: ['platform', 'workspace'] })
   registerBuiltinPlugin(remoteImportsPlugin, { runtimeSurfaces: ['workspace'], managerSurfaces: ['platform', 'workspace'] })
+  registerBuiltinPlugin(cloudConnectionWebPlugin, {
+    runtimeSurfaces: ['workspace'],
+    managerSurfaces: ['platform', 'workspace'],
+    selfHostedOnly: true
+  })
   webPluginRegistry.runInitHooks()
 }
 
 function registerBuiltinPlugin(
   plugin: WebPlugin,
-  metadata: { runtimeSurfaces: PluginSurface[]; managerSurfaces: PluginSurface[]; selfHostedOnly?: boolean }
+  metadata: {
+    runtimeSurfaces: PluginSurface[]
+    managerSurfaces: PluginSurface[]
+    selfHostedOnly?: boolean
+    cloudOnly?: boolean
+  }
 ): void {
   webPluginRegistry.register({ ...plugin, ...metadata })
 }

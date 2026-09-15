@@ -10,7 +10,7 @@
  * (skipping the strict material match).
  */
 import { useEffect, useMemo, useState } from 'react'
-import { Alert, Button, DialogActions, DialogContent, DialogTitle, FormControl, FormLabel, ModalDialog, Stack, Typography } from '@mui/joy'
+import { Alert, Button, Checkbox, DialogActions, DialogContent, DialogTitle, FormControl, FormLabel, ModalDialog, Stack, Typography } from '@mui/joy'
 import {
   evaluateQueueMatch,
   mergeAmsMapping,
@@ -90,7 +90,7 @@ export function QueueStartDialog({
   onStart: (
     printerId: string,
     amsMapping: number[],
-    consents: { allowInsufficientFilament: boolean; allowBlacklistedFilament: boolean }
+    consents: { allowInsufficientFilament: boolean; allowBlacklistedFilament: boolean; allowPrinterModelMismatch: boolean }
   ) => void
   onClose: () => void
 }) {
@@ -106,12 +106,12 @@ export function QueueStartDialog({
     return map
   }, [item])
 
-  // Printers the user can start on right now, connected, idle, model-compatible, and not excluded by a
-  // pinned target, ranked most-ready first (the one needing the fewest material overrides leads).
+  // Connected, idle printers that satisfy the item's pinned target. A model mismatch stays visible so
+  // a person can explicitly accept it; automated queue dispatch remains strictly model-compatible.
   const ranked = useMemo(() => printers
     .map((printer) => ({ printer, match: matchPrinterAspects(item, printer, statuses[printer.id], allowTypeOnlyMatch) }))
     .filter(({ printer, match }) => {
-      if (!match.idle || match.model === 'mismatch') return false
+      if (!match.idle) return false
       if (item.target.kind === 'printer' && item.target.printerId && printer.id !== item.target.printerId) return false
       if (item.target.kind === 'model' && item.target.model && printer.model !== item.target.model) return false
       return true
@@ -146,6 +146,7 @@ export function QueueStartDialog({
   const [printerPickerOpen, setPrinterPickerOpen] = useState(false)
   const [allowInsufficientFilament, setAllowInsufficientFilament] = useState(false)
   const [allowBlacklistedFilament, setAllowBlacklistedFilament] = useState(false)
+  const [allowPrinterModelMismatch, setAllowPrinterModelMismatch] = useState(false)
   const selectedPrinterId = picked && ranked.some((entry) => entry.printer.id === picked) ? picked : defaultPrinterId
 
   const autoMapping = selectedPrinterId ? autoMappingFor(selectedPrinterId) : baseMapping(item)
@@ -154,6 +155,7 @@ export function QueueStartDialog({
   const autoSelectedIds = autoSelectedFilamentIds(filaments, autoMapping, explicitMapping)
   const selectedPrinter = printers.find((printer) => printer.id === selectedPrinterId) ?? null
   const selectedEntry = ranked.find((entry) => entry.printer.id === selectedPrinterId) ?? null
+  const hasPrinterModelMismatch = selectedEntry?.match.model === 'mismatch'
   const allMapped = item.requiredFilaments.every((filament) => (mapping[filament.id - 1] ?? -1) >= 0)
 
   /**
@@ -206,6 +208,10 @@ export function QueueStartDialog({
   useEffect(() => {
     setAllowBlacklistedFilament(false)
   }, [blacklistSignature])
+
+  useEffect(() => {
+    setAllowPrinterModelMismatch(false)
+  }, [selectedPrinterId])
 
   const handleMappingChange = (filamentId: number, tray: number) => {
     if (!selectedPrinterId) return
@@ -315,6 +321,20 @@ export function QueueStartDialog({
                     This print has no material requirements: start it on the selected printer.
                   </Typography>
                 )}
+                {hasPrinterModelMismatch ? (
+                  <Alert color="warning" variant="soft">
+                    <Stack spacing={1}>
+                      <Typography level="body-sm">
+                        This file was sliced for {item.compatibleModels.join(', ')}, not {selectedPrinter?.model}. Printer dimensions and motion limits may differ.
+                      </Typography>
+                      <Checkbox
+                        label="Print on this model anyway"
+                        checked={allowPrinterModelMismatch}
+                        onChange={(event) => setAllowPrinterModelMismatch(event.target.checked)}
+                      />
+                    </Stack>
+                  </Alert>
+                ) : null}
               </>
             )}
           </Stack>
@@ -330,10 +350,15 @@ export function QueueStartDialog({
               || busy
               || (lowFilamentEntries.length > 0 && !allowInsufficientFilament)
               || (hasBlacklistProhibitions(blacklistEntries) && !allowBlacklistedFilament)
+              || (hasPrinterModelMismatch && !allowPrinterModelMismatch)
             }
             onClick={() => {
               if (selectedPrinterId) {
-                onStart(selectedPrinterId, mapping, { allowInsufficientFilament, allowBlacklistedFilament })
+                onStart(selectedPrinterId, mapping, {
+                  allowInsufficientFilament,
+                  allowBlacklistedFilament,
+                  allowPrinterModelMismatch
+                })
               }
             }}
           >

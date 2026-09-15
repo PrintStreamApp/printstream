@@ -602,6 +602,50 @@ function renderImportedMeshObjectXml(
   ].join('\n')
 }
 
+/** Replace only an object's mesh payload, retaining its id, UUID, type, and surrounding entry. */
+export function replaceObjectMeshInModelXml(modelXml: string, objectId: number, mesh: ImportedMesh): string {
+  const replacementMesh = /<mesh>[\s\S]*?<\/mesh>/.exec(renderImportedMeshObjectXml(objectId, mesh, null))?.[0]
+  if (!replacementMesh) throw new Error('Unable to serialize a replacement volume mesh')
+  let found = false
+  const output = modelXml.replace(/<object\b([^>]*)>[\s\S]*?<\/object>/g, (block, attrs: string) => {
+    if (Number.parseInt(parseAttrs(attrs).id ?? '', 10) !== objectId) return block
+    if (!/<mesh>/.test(block)) throw new Error(`Part mesh replacement target ${objectId} is not a mesh object`)
+    found = true
+    return block.replace(/<mesh>[\s\S]*?<\/mesh>/, replacementMesh)
+  })
+  if (!found) throw new Error(`Part mesh replacement target ${objectId} was not found`)
+  return output
+}
+
+/** Resolve a host's base part ordinal to the mesh object and archive entry that owns it. */
+function partMeshAddress(
+  modelXml: string,
+  modelSettingsXml: string,
+  hostObjectId: number,
+  partIndex: number
+): { entryPath: string; objectId: number } {
+  const host = [...modelXml.matchAll(/<object\b([^>]*)>([\s\S]*?)<\/object>/g)]
+    .find((match) => Number.parseInt(parseAttrs(match[1] ?? '').id ?? '', 10) === hostObjectId)
+  const component = host ? [...(host[2] ?? '').matchAll(/<component\b([^>]*)\/>/g)][partIndex] : undefined
+  const componentAttrs = parseAttrs(component?.[1] ?? '')
+  const componentObjectId = Number.parseInt(componentAttrs.objectid ?? '', 10)
+  if (Number.isInteger(componentObjectId)) {
+    return {
+      entryPath: componentAttrs['p:path']?.replace(/^\//, '') ?? '3D/3dmodel.model',
+      objectId: componentObjectId
+    }
+  }
+
+  // Inline-mesh objects have no components. Their settings parts are the volume list itself.
+  const settingsObject = [...modelSettingsXml.matchAll(/<object\b([^>]*)>[\s\S]*?<\/object>/g)]
+    .find((match) => Number.parseInt(parseAttrs(match[1] ?? '').id ?? '', 10) === hostObjectId)?.[0]
+  const part = settingsObject ? [...settingsObject.matchAll(/<part\b([^>]*)>/g)][partIndex] : undefined
+  const objectId = Number.parseInt(parseAttrs(part?.[1] ?? '').id ?? '', 10)
+  if (!Number.isInteger(objectId)) throw new Error(`Part ${partIndex} of object ${hostObjectId} was not found`)
+  if (objectId === hostObjectId) return { entryPath: '3D/3dmodel.model', objectId }
+  return { entryPath: '3D/3dmodel.model', objectId }
+}
+
 /**
  * Render the matching `model_settings.config` `<object>` metadata for an imported mesh
  * object. `extruder` records the placing instance's filament at BOTH levels, exactly as
@@ -840,6 +884,8 @@ export function buildEditedThreeMfDocuments(
    * removal or reorder permutes; the caller remaps it. Empty for the overwhelmingly common save.
    */
   volumeLayouts: ReadonlyMap<number, number[]>
+  /** Existing sub-model entries whose mesh payload changes during the streaming copy. */
+  partMeshReplacementsByEntry: ReadonlyMap<string, ReadonlyMap<number, ImportedMesh>>
 } {
   // When the source is a Production-Extension project, BambuStudio's GUI requires a p:UUID on every
   // injected object/component/build-item (see modelUsesProductionExtension); a fresh/core 3MF needs
@@ -878,6 +924,15 @@ export function buildEditedThreeMfDocuments(
   edit = cloned.edit
   let nextObjectId = cloned.nextObjectId
   const importIdToObjectId = new Map<string, number>()
+  const importsById = new Map(imports.map((imported) => [imported.importId, imported]))
+  const consumedReplacementIds = new Set([
+    ...(edit.partMeshReplacements ?? []).map((replacement) => replacement.meshImportId),
+    ...(edit.importPartMeshReplacements ?? []).map((replacement) => replacement.meshImportId)
+  ])
+  const independentlyUsedImportIds = new Set([
+    ...edit.instances.flatMap((instance) => instance.importId ? [instance.importId] : []),
+    ...(edit.addedParts ?? []).map((part) => part.meshImportId)
+  ])
   const meshObjects: string[] = []
   const settingsObjects: string[] = []
   // Split-out sub-model part files for imported objects (Production-Extension layout). Populated only
@@ -953,6 +1008,14 @@ export function buildEditedThreeMfDocuments(
     if (!byPart) { byPart = new Map(); importPartTypes.set(entry.importId, byPart) }
     byPart.set(entry.partIndex, entry.subtype)
   }
+  const importPartMeshReplacements = new Map<string, Map<number, ImportedMesh>>()
+  for (const entry of edit.importPartMeshReplacements ?? []) {
+    const replacement = importsById.get(entry.meshImportId)
+    if (!replacement) throw new Error('Scene edit references an unknown part replacement mesh')
+    let byPart = importPartMeshReplacements.get(entry.importId)
+    if (!byPart) { byPart = new Map(); importPartMeshReplacements.set(entry.importId, byPart) }
+    byPart.set(entry.partIndex, replacement.mesh)
+  }
   const importRemovedParts = new Map<string, Set<number>>()
   for (const entry of edit.importRemovedParts ?? []) {
     let byPart = importRemovedParts.get(entry.importId)
@@ -964,6 +1027,7 @@ export function buildEditedThreeMfDocuments(
   const toExtruder = (filamentId: number | null): number | null =>
     filamentId != null ? filamentToExtruder.get(filamentId) ?? filamentId : null
   for (const imported of imports) {
+    if (consumedReplacementIds.has(imported.importId) && !independentlyUsedImportIds.has(imported.importId)) continue
     const objectId = nextObjectId
     nextObjectId += 1
     importIdToObjectId.set(imported.importId, objectId)
@@ -1021,7 +1085,13 @@ export function buildEditedThreeMfDocuments(
           return matrix ? [[i, matrix] as const] : []
         }))
         : undefined
-      const solidMeshXmls = multiParts.map((entry, i) => renderImportedMeshObjectXml(componentIds[i]!, entry.part.mesh, genUuid, solidPaint?.get(entry.sourceIndex)))
+      const replacementMeshes = importPartMeshReplacements.get(imported.importId)
+      const solidMeshXmls = multiParts.map((entry, i) => renderImportedMeshObjectXml(
+        componentIds[i]!,
+        replacementMeshes?.get(entry.sourceIndex) ?? entry.part.mesh,
+        genUuid,
+        solidPaint?.get(entry.sourceIndex)
+      ))
       if (genUuid) {
         // Production extension: emit the solids as a separate /3D/Objects sub-model and reference
         // them by p:path, so a plate fetches/parses only this import's part file, not the whole
@@ -1084,7 +1154,12 @@ export function buildEditedThreeMfDocuments(
   })
 
   const plateType = extractPlateType(projectSettingsJson)
-  const { width, depth } = extractSceneBed(projectSettingsJson, plateType)
+  const sourceBed = extractSceneBed(projectSettingsJson, plateType)
+  // A printer change translates the live editor state into the TARGET bed's plate-local frame.
+  // Build the global plate grid with that same stride. Falling back to the source dimensions keeps
+  // edits from older clients byte-compatible and remains the right answer without a printer change.
+  const width = edit.placementBedSize?.width ?? sourceBed.width
+  const depth = edit.placementBedSize?.depth ?? sourceBed.depth
   const origins = computePlateOrigins(edit.plates, width, depth)
   const arranged = assignArrangedInstances(resolved, origins)
 
@@ -1133,6 +1208,22 @@ export function buildEditedThreeMfDocuments(
       edit.plateType !== undefined
     )
   )
+
+  // Replace a baked volume in place. The model-settings part and host component are untouched, so
+  // its ordinal, subtype, name, process metadata and object-local transform all remain authoritative.
+  const partMeshReplacementsByEntry = new Map<string, Map<number, ImportedMesh>>()
+  for (const replacement of edit.partMeshReplacements ?? []) {
+    const imported = importsById.get(replacement.meshImportId)
+    if (!imported) throw new Error('Scene edit references an unknown part replacement mesh')
+    const address = partMeshAddress(modelXml, modelSettingsXml, replacement.objectId, replacement.partIndex)
+    if (address.entryPath === '3D/3dmodel.model') {
+      modelXml = replaceObjectMeshInModelXml(modelXml, address.objectId, imported.mesh)
+      continue
+    }
+    const byObject = partMeshReplacementsByEntry.get(address.entryPath) ?? new Map<number, ImportedMesh>()
+    byObject.set(address.objectId, imported.mesh)
+    partMeshReplacementsByEntry.set(address.entryPath, byObject)
+  }
 
   // Attach added part volumes BEFORE the unreferenced-object sweep: a part mesh is
   // only kept alive by the <component> reference inserted here.
@@ -1252,7 +1343,15 @@ export function buildEditedThreeMfDocuments(
     modelSettingsXml = repairModelSettingsObjectExtruders(modelSettingsXml).xml
   }
 
-  return { modelXml, modelSettingsXml, importIdToObjectId, partFileEntries, clonedObjectIds: cloned.resolvedIds, volumeLayouts }
+  return {
+    modelXml,
+    modelSettingsXml,
+    importIdToObjectId,
+    partFileEntries,
+    clonedObjectIds: cloned.resolvedIds,
+    volumeLayouts,
+    partMeshReplacementsByEntry
+  }
 }
 
 const IDENTITY_THREE_MF_TRANSFORM = '1 0 0 0 1 0 0 0 1 0 0 0'

@@ -14,6 +14,7 @@ process.env.LIBRARY_DIR = path.join(testRoot, 'library')
 const {
   pruneAbandonedUploadSessions,
   pruneExpiredLibraryUploadCompletions,
+  pruneExpiredSliceCacheEntries,
   pruneHiddenLibraryFiles,
   prunePrintJobSnapshots,
   prunePrintJobThumbnails
@@ -29,6 +30,7 @@ restorePrismaMethodsAfterEach([
   [rootPrisma, 'libraryFile'],
   [rootPrisma, 'libraryUploadCompletion'],
   [rootPrisma, 'printJob'],
+  [rootPrisma, 'sliceCacheEntry'],
   [rootPrisma, 'bridge']
 ])
 
@@ -123,6 +125,30 @@ test('pruneHiddenLibraryFiles applies the shorter demo retention window', async 
   assert.deepEqual(deletedIds, ['demo-row'])
   await assert.rejects(stat(resolveLibraryPath(staleDemoPath)), /ENOENT/)
   await stat(resolveLibraryPath(freshDefaultPath))
+})
+
+test('pruneExpiredSliceCacheEntries expires entries by last use', async () => {
+  const originalSliceCacheEntry = rootPrisma.sliceCacheEntry
+  let where: Record<string, unknown> | null = null
+  Object.defineProperty(rootPrisma, 'sliceCacheEntry', {
+    configurable: true,
+    value: {
+      ...originalSliceCacheEntry,
+      deleteMany: async (args: { where: Record<string, unknown> }) => {
+        where = args.where
+        return { count: 2 }
+      }
+    }
+  })
+
+  const before = Date.now()
+  assert.deepEqual(await pruneExpiredSliceCacheEntries(), { removed: 2 })
+  const after = Date.now()
+  const cutoff = (where as { updatedAt?: { lt?: Date } } | null)?.updatedAt?.lt
+  assert.ok(cutoff instanceof Date)
+  const retentionMs = 24 * 60 * 60 * 1000
+  assert.ok(cutoff.getTime() >= before - retentionMs)
+  assert.ok(cutoff.getTime() <= after - retentionMs)
 })
 
 test('prunePrintJobThumbnails removes stale thumbnail files and clears rows', async () => {
@@ -339,6 +365,8 @@ test('pruneUnreferencedProjectSnapshots enforces "no job, no kept project"', asy
     assert.deepEqual(where.jobs, { none: {} })
     assert.deepEqual(where.slicedOutputs, { none: {} })
     assert.deepEqual(where.sourceProjectJobs, { none: {} })
+    assert.deepEqual(where.sliceCacheArtifacts, { none: {} })
+    assert.deepEqual(where.sliceCacheProjects, { none: {} })
     const preparedRelation = where.preparedSlicingSources as { none: { OR: Array<Record<string, unknown>> } }
     assert.equal(preparedRelation.none.OR.length, 2)
     assert.deepEqual(preparedRelation.none.OR[1], { id: { in: ['prepared-live'] } })

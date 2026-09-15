@@ -53,6 +53,7 @@ import {
   copyBridgeLibraryFile,
   deleteLibraryFileBytes,
   inspectBridgeLibraryThreeMf,
+  refreshBridgeLibraryThreeMf,
   readBridgeLibraryThumbnail,
   resolveLibraryFileToLocalPath,
   storeBridgeLibraryFile
@@ -2006,8 +2007,8 @@ libraryRouter.put(
  * files that carry no embedded image.
  *
  * ONE OUTPUT FORMAT, whatever went in: every consumer is the browser's STL loader. STL ships
- * verbatim; STEP is tessellated through OpenCASCADE (BambuStudio-matched quality); OBJ, glTF and
- * AMF are parsed and re-serialized. The conversion happens HERE rather than in the browser because
+ * verbatim; STEP is tessellated through OpenCASCADE (BambuStudio-matched quality); OBJ, glTF, AMF,
+ * and FBX are parsed and re-serialized. The conversion happens HERE rather than in the browser because
  * the bridge ships no 3D renderer and the client should hold one loader, not six parsers.
  * 3MF/gcode keep using `/thumbnail`, except for geometry-only 3MFs handled below.
  */
@@ -2040,7 +2041,12 @@ libraryRouter.get('/:id/mesh', requireRequestPermission(LIBRARY_VIEW_PERMISSION)
       // triangle mesh at all to start from.
       stl = row.kind === 'stl'
         ? buffer
-        : Buffer.from(meshToBinaryStl(await parseImportedMesh(buffer, meshImportFormatForKind(row.kind))))
+        : Buffer.from(meshToBinaryStl(await parseImportedMesh(
+            buffer,
+            meshImportFormatForKind(row.kind),
+            [],
+            { sourceAppearance: false }
+          )))
     } else {
       // Unreachable: the gate above admits only a mesh kind or a 3MF. Stated rather than assumed,
       // so the narrowing that lets `meshImportFormatForKind` take a proven kind is enforced by the
@@ -2312,10 +2318,13 @@ libraryRouter.post('/:id/reprint', requireRequestPermission(PRINTS_DISPATCH_PERM
     flowCalibration: true,
     firstLayerInspection: true,
     timelapse: true,
+    timelapseStorage: true,
+    externalFilamentChangeAssist: true,
     filamentDynamicsCalibration: true,
     nozzleOffsetCalibration: true,
     allowIncompatibleFilament: true,
     allowPlateTypeMismatch: true,
+    allowPrinterModelMismatch: true,
     allowFilamentTrackSwitchMismatch: true,
     allowInsufficientFilament: true,
     allowBlacklistedFilament: true,
@@ -2358,6 +2367,7 @@ libraryRouter.post('/:id/reprint', requireRequestPermission(PRINTS_DISPATCH_PERM
       amsMapping: parsed.data.amsMapping,
       allowIncompatibleFilament: parsed.data.allowIncompatibleFilament,
       allowPlateTypeMismatch: parsed.data.allowPlateTypeMismatch,
+      allowPrinterModelMismatch: parsed.data.allowPrinterModelMismatch,
       allowFilamentTrackSwitchMismatch: parsed.data.allowFilamentTrackSwitchMismatch,
       allowInsufficientFilament: parsed.data.allowInsufficientFilament,
       allowBlacklistedFilament: parsed.data.allowBlacklistedFilament,
@@ -2398,6 +2408,8 @@ libraryRouter.post('/:id/reprint', requireRequestPermission(PRINTS_DISPATCH_PERM
     filamentDynamicsCalibration: normalizedOptions.filamentDynamicsCalibration,
     nozzleOffsetCalibration: normalizedOptions.nozzleOffsetCalibration,
     timelapse: normalizedOptions.timelapse,
+    timelapseStorage: normalizedOptions.timelapseStorage,
+    externalFilamentChangeAssist: normalizedOptions.externalFilamentChangeAssist,
     useAms: parsed.data.useAms,
     amsMapping: parsed.data.amsMapping,
     dualNozzles: printerModelHasDualNozzles(printer.model)
@@ -2847,22 +2859,60 @@ function requestFreshnessMatches(request: Request, etag: string): boolean {
 async function sendLibraryFilePlates(
   request: Request,
   response: Response,
-  row: { kind: string; ownerBridgeId?: string | null; storedPath: string; sizeBytes: number; uploadedAt: Date }
+  row: {
+    kind: string
+    ownerBridgeId?: string | null
+    storedPath: string
+    sizeBytes: number
+    uploadedAt: Date
+    derivedChipsJson?: string | null
+    derivedChipsVersion?: number | null
+  }
 ): Promise<void> {
-  if (sendNotModifiedIfLibraryFileFresh(request, response, row, 'plates')) return
+  // Include the response contract in the validator. Older builds cached inspection failures as
+  // empty 200 responses under the bare `plates` key; changing the key prevents a browser from
+  // revalidating and reusing that unsafe response after this strict inspection fix ships.
+  if (sendNotModifiedIfLibraryFileFresh(
+    request,
+    response,
+    row,
+    `plates:complete-index:v${THREE_MF_INDEX_PARSER_VERSION}`
+  )) return
   if (row.kind !== '3mf' && row.kind !== 'gcode') {
     response.json({ plates: [], projectFilaments: [], compatiblePrinterModels: [], supportFilamentIds: [], printerProfileName: null, processProfileName: null, processProfileInherits: null } satisfies LibraryThreeMfIndexDto)
     return
   }
   const signal = requestAbortSignal(request, response)
   try {
-    const index = await readLibraryThreeMfIndex(row, signal)
+    let index = await readLibraryThreeMfIndex(row, signal)
+    const knownChips = parseDerivedChips(
+      row.derivedChipsJson,
+      row.derivedChipsVersion,
+      row.storedPath
+    )
+    const indexLooksIncomplete = knownChips && (
+      index.plates.length < knownChips.plateCount
+      || (knownChips.projectFilamentChips.length > 0 && index.projectFilaments.length === 0)
+    )
+    if (indexLooksIncomplete && row.ownerBridgeId) {
+      index = await refreshBridgeLibraryThreeMf(row, signal)
+    }
+    if (knownChips && (
+      index.plates.length < knownChips.plateCount
+      || (knownChips.projectFilamentChips.length > 0 && index.projectFilaments.length === 0)
+    )) {
+      throw new Error('3MF inspection returned less metadata than the current library index')
+    }
     // Shared with the browser's local-file path, so a plate cannot read as thumbnail-less on one
     // surface and not the other.
     response.json(toThreeMfIndexDto(index) satisfies LibraryThreeMfIndexDto)
   } catch (error) {
     if ((error as Error).name === 'AbortError') return
-    response.json({ plates: [], projectFilaments: [], compatiblePrinterModels: [], supportFilamentIds: [], printerProfileName: null, processProfileName: null, processProfileInherits: null } satisfies LibraryThreeMfIndexDto)
+    console.warn(`[library] could not inspect plates for ${row.storedPath}: ${(error as Error).message}`)
+    // An empty success is unsafe here: print dialogs interpret it as a genuinely material-free
+    // file and omit mapping controls. Let the request fail so query retry/error handling can keep
+    // the user from dispatching without the archive's real plate and filament metadata.
+    throw error
   }
 }
 

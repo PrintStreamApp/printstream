@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 /**
  * Dev runner. Devkit orchestrates this checkout's source-mounted Node, PostgreSQL, and slicer
- * containers. Compose reinvokes this file with `--container-runtime` to prepare the database and
- * run the web, API, bridge, shared, and optional in-process slicer watchers.
+ * containers, plus a host bridge that retains access to the printer LAN. Compose reinvokes this
+ * file with `--container-runtime` to prepare the database and run the web, API, shared, and
+ * optional in-process slicer watchers.
  *
  * Slicer:
  *   - **x86 / amd64 (the common case):** bootstrap the BambuStudio AppImage + profiles into a
@@ -40,7 +41,13 @@ import {
 } from '@ryanewen/devkit'
 import { DEV_PORTS } from '../../devkit.config.mjs'
 import { assertHostDevPortsAvailable } from './dev-port-guard.mjs'
-import { inspectSlicerSource, slicerSourceFingerprint } from './slicer-image.mjs'
+import { hostBridgeProcessSpec, stopHostService } from './host-bridge.mjs'
+import {
+  inspectSlicerSource,
+  slicerComposeUpArgs,
+  slicerDevImageRef,
+  slicerSourceFingerprint
+} from './slicer-image.mjs'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const containerRuntime = process.argv.includes('--container-runtime')
@@ -91,21 +98,48 @@ function runSync(command, args, env = process.env) {
   if (result.status !== 0) process.exit(result.status ?? 1)
 }
 
+/** Absolute common Git directory, mounted into linked-worktree containers for read-only discovery. */
+function resolveGitCommonDirectory() {
+  const result = spawnSync('git', ['rev-parse', '--git-common-dir'], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe']
+  })
+  const commonDir = result.stdout?.trim()
+  if (result.status !== 0 || !commonDir) {
+    throw new Error(`Could not resolve the Git common directory: ${result.stderr?.trim() || 'git returned no path'}`)
+  }
+  return path.resolve(repoRoot, commonDir)
+}
+
 let composeInvocation = null
 let composeLifecycle = null
 let checkoutSlicerImage = null
 let checkoutSlicerSourceFingerprint = null
 if (hostMode) {
-  checkoutSlicerImage = `${hostMode.identity.composeProject}-slicer`
+  // The bridge is the one host-side service: Docker Desktop cannot route this machine's Compose
+  // networks to the printer LAN. Build its shared imports before starting its polling supervisor;
+  // the source-mounted container will keep the same outputs current after startup.
+  if (!teardown) {
+    runSync('npm', ['run', 'build', '--workspace', '@printstream/shared'])
+    runSync('npm', ['run', 'build', '--workspace', '@printstream/bridge-runtime'])
+  }
+
   checkoutSlicerSourceFingerprint = slicerSourceFingerprint(repoRoot)
+  checkoutSlicerImage = slicerDevImageRef(
+    checkoutSlicerSourceFingerprint,
+    hostMode.identity.composeProject
+  )
   composeInvocation = checkoutCompose(hostMode, {
     files: [path.join(repoRoot, 'compose.dev.yml')],
     projectDirectory: repoRoot,
     env: {
       DEVKIT_WEB_PORT: String(hostMode.ports.web),
+      DEVKIT_API_PORT: String(hostMode.ports.api),
       DEVKIT_COMPOSE_PROJECT: hostMode.identity.composeProject,
       SLICER_IMAGE: checkoutSlicerImage,
       SLICER_SOURCE_FINGERPRINT: checkoutSlicerSourceFingerprint || 'unknown',
+      PRINTSTREAM_GIT_COMMON_DIR: resolveGitCommonDirectory(),
       HOST_UID: String(process.getuid?.() ?? 1000),
       HOST_GID: String(process.getgid?.() ?? 1000)
     }
@@ -118,6 +152,10 @@ if (hostMode) {
   }
 } else {
   if (containerRuntime) {
+    // The client is install-local and a fresh worktree has none. Generate it on
+    // every start so `npm ci && npm run dev` is the complete bootstrap path and
+    // a schema edit cannot accidentally run against stale generated types.
+    runSync('npm', ['run', 'db:generate'])
     runSync('npm', ['run', 'db:wait'])
     runSync('node', ['scripts/bootstrap-prisma-migrations.mjs'])
   } else {
@@ -151,40 +189,44 @@ if (runLocalSlicer) {
     console.log('[dev] slicer: running locally under x86-64 qemu emulation (arm64). First-run bootstrap downloads ~400MB once.')
   }
 } else {
-  console.log(`[dev] slicer: not running locally (PRINTSTREAM_DEV_SLICER=remote). The API uses SLICER_SERVICE_URL=${process.env.SLICER_SERVICE_URL || '(unset)'}; point it at a reachable slicer.`)
-  // Rebuilt, not merely reported: in dev a container should run the code you are editing, and the
-  // state this avoids is silent (a slice succeeds against the OLD build, so your change looks like
-  // it did nothing rather than like it was never there). Only when the source is actually newer,
-  // which costs a few hundred ms of docker inspect plus git to establish; the rebuild itself is
-  // ~14s and layer-cached, and is skipped entirely on every start where nothing moved.
+  // A container-mode slicer always starts with this checkout. Its image is rebuilt only when the
+  // source fingerprint differs; identical worktrees reuse the completed image and shared engine
+  // volume while their isolated networks safely reuse internal port 4010.
   const slicerSource = inspectSlicerSource({
     repoRoot,
     composeProject: hostMode?.identity.composeProject,
     imageRef: checkoutSlicerImage,
     sourceFingerprint: checkoutSlicerSourceFingerprint
   })
-  if (composeInvocation && ['differs', 'not-built'].includes(slicerSource.state)) {
-    const reason = slicerSource.state === 'differs'
-      ? `your source is newer (${slicerSource.reason})`
-      : 'this checkout has no slicer image yet'
-    console.log(`[dev] slicer: building the checkout container, ${reason}`)
-    const rebuilt = spawnSync(
+  if (composeInvocation) {
+    const rebuild = ['differs', 'not-built'].includes(slicerSource.state)
+    if (rebuild) {
+      const reason = slicerSource.state === 'differs'
+        ? `your source is newer (${slicerSource.reason})`
+        : 'this checkout has no slicer image yet'
+      console.log(`[dev] slicer: building the checkout container, ${reason}`)
+    } else {
+      console.log(`[dev] slicer: starting the checkout container from shared image ${checkoutSlicerImage}`)
+    }
+    const started = spawnSync(
       composeInvocation.command,
-      [...composeInvocation.args, '--profile', 'slicer', 'up', '-d', '--build', 'slicer'],
+      [...composeInvocation.args, ...slicerComposeUpArgs(slicerSource.state)],
       { stdio: 'inherit', cwd: repoRoot, env: composeInvocation.env }
     )
     // Never fatal: the API already treats an unavailable remote slicer as a service-level error.
     // Keeping the rest of dev up leaves the web, API and bridge available while it is repaired.
-    if (rebuilt.status !== 0) console.warn('[dev] slicer: checkout container build FAILED; continuing without it')
+    if (started.status !== 0) console.warn('[dev] slicer: checkout container start FAILED; continuing without it')
   }
 }
 
 const procs = [
   ['shared', 'magenta', 'npm run dev --workspace @printstream/shared'],
   ['api', 'green', 'npm run dev --workspace @printstream/api'],
-  ['bridge', 'yellow', 'npm run dev --workspace @printstream/bridge'],
   ['web', 'blue', 'npm run dev --workspace @printstream/web']
 ]
+if (process.env.PRINTSTREAM_DEV_BRIDGE !== 'host') {
+  procs.splice(2, 0, ['bridge', 'yellow', 'npm run dev --workspace @printstream/bridge'])
+}
 if (runLocalSlicer) {
   procs.unshift(['slicer', 'cyan', 'npm run dev --workspace @printstream/slicer'])
 }
@@ -198,14 +240,26 @@ if (hostMode) {
 }
 
 if (composeLifecycle) {
+  const bridgeSpec = hostBridgeProcessSpec({
+    repoRoot,
+    apiPort: hostMode.ports.api
+  })
+  const hostBridge = spawn(bridgeSpec.command, bridgeSpec.args, bridgeSpec.options)
+  hostBridge.on('error', (error) => {
+    console.error(`[dev] could not start the host bridge: ${error.message}`)
+  })
+
+  let exitCode = 1
   try {
     // Compose builds a declared image when it is absent. Existing images stay untouched here;
     // the slicer-specific freshness check above is the one authority that requests a rebuild.
-    process.exit(await composeLifecycle.run(['up', '--remove-orphans']))
+    exitCode = await composeLifecycle.run(['up', '--remove-orphans'])
   } catch (error) {
     console.error(`[dev] could not start Docker Compose: ${error.message}`)
-    process.exit(1)
+  } finally {
+    await stopHostService(hostBridge)
   }
+  process.exit(exitCode)
 }
 
 // Without Devkit, the foreground process group owns its own children and needs no Compose cleanup.

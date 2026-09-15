@@ -197,6 +197,8 @@ test('createPrintJobStartRecord stores the print-start selection for re-print', 
     flowCalibration: 'auto',
     firstLayerInspection: false,
     timelapse: true,
+    timelapseStorage: 'internal',
+    externalFilamentChangeAssist: true,
     filamentDynamicsCalibration: true,
     nozzleOffsetCalibration: 'off'
   } as const

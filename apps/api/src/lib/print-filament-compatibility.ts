@@ -64,6 +64,7 @@ interface LibraryPrintCompatibilityIndexInput {
   amsMapping?: number[]
   allowIncompatibleFilament?: boolean
   allowPlateTypeMismatch?: boolean
+  allowPrinterModelMismatch?: boolean
   allowFilamentTrackSwitchMismatch?: boolean
   allowInsufficientFilament?: boolean
   allowBlacklistedFilament?: boolean
@@ -82,6 +83,7 @@ interface AutomaticPrintCompatibilityInput {
   useAms: boolean
   amsMapping?: number[]
   allowIncompatibleFilament?: boolean
+  allowPrinterModelMismatch?: boolean
   allowFilamentTrackSwitchMismatch?: boolean
   allowInsufficientFilament?: boolean
   allowBlacklistedFilament?: boolean
@@ -98,7 +100,7 @@ export async function assertLibraryPrintCompatibilityForIndex(
   index: ThreeMfIndex,
   input: LibraryPrintCompatibilityIndexInput
 ): Promise<void> {
-  assertCompatiblePrinterModel(index.compatiblePrinterModels, input.printerModel)
+  assertCompatiblePrinterModel(index.compatiblePrinterModels, input.printerModel, input.allowPrinterModelMismatch)
   assertPrinterHardwareCompatibility(index, input)
   // Before the `allowIncompatibleFilament` early return, for the same reason the Track Switch
   // check is: that flag consents to WHICH materials the trays hold, and "enough of it is left"
@@ -117,7 +119,11 @@ export async function assertLibraryPrintCompatibilityForIndex(
 export async function assertAutomaticPrintCompatibility(
   input: AutomaticPrintCompatibilityInput
 ): Promise<void> {
-  assertCompatiblePrinterModel(input.index?.compatiblePrinterModels ?? [], input.printerModel)
+  assertCompatiblePrinterModel(
+    input.index?.compatiblePrinterModels ?? [],
+    input.printerModel,
+    input.allowPrinterModelMismatch
+  )
   // Printing a .3mf already sitting on the printer's storage still has to agree with the machine
   // about the switch: BambuStudio checks its SD-card path the same way (`slicing_with_fila_switch`
   // reads the plate data under `FROM_SDCARD_VIEW`). Skipped when there is no index to read it from.
@@ -494,12 +500,13 @@ function formatAutomaticCompatibilityMessage(issues: AutomaticCompatibilityIssue
 
 function assertCompatiblePrinterModel(
   compatibleModels: readonly PrinterModel[],
-  printerModel: PrinterModel
+  printerModel: PrinterModel,
+  allowPrinterModelMismatch = false
 ): void {
-  if (isPrinterModelCompatible(compatibleModels, printerModel)) return
+  if (allowPrinterModelMismatch || isPrinterModelCompatible(compatibleModels, printerModel)) return
   if (compatibleModels.length === 0) return
   throw conflict(
-    `This file is only compatible with ${compatibleModels.join(', ')} and cannot be printed on ${printerModel}.`
+    `This file is only compatible with ${compatibleModels.join(', ')} and was not sliced for ${printerModel}. Confirm the model mismatch to print anyway.`
   )
 }
 
@@ -507,4 +514,3 @@ function externalSpoolLabel(amsId: number, spoolCount: number): string {
   if (spoolCount > 1) return amsId === 255 ? 'Ext-R' : 'Ext-L'
   return 'Ext'
 }
-

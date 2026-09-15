@@ -7,6 +7,7 @@ import {
   defaultSlicingPresetSources,
   filterSlicingPresets,
   formatSlicingPresetKind,
+  formatSlicingPresetSource,
   setAllFilteredSlicingPresetsSelected,
   slicingPresetSourcesAreDefault,
   sortSlicingPresets,
@@ -60,7 +61,7 @@ test('filterSlicingPresets treats multiple selected kinds as OR', () => {
   )
 })
 
-test('sortSlicingPresets sorts by updated date, name, and type', () => {
+test('sortSlicingPresets sorts by updated date, name, type, and source', () => {
   assert.deepEqual(
     sortSlicingPresets(PROFILES, 'updatedAt', 'desc').map((profile) => profile.id),
     ['machine-1', 'filament-1', 'process-1']
@@ -72,6 +73,11 @@ test('sortSlicingPresets sorts by updated date, name, and type', () => {
   assert.deepEqual(
     sortSlicingPresets(PROFILES, 'kind', 'asc').map((profile) => `${profile.id}:${formatSlicingPresetKind(profile.kind)}`),
     ['filament-1:Material', 'machine-1:Printer', 'process-1:Process']
+  )
+  const mixedSources = [{ ...PROFILES[0]!, source: 'builtin' as const }, PROFILES[1]!]
+  assert.deepEqual(
+    sortSlicingPresets(mixedSources, 'source', 'asc').map((profile) => formatSlicingPresetSource(profile.source)),
+    ['Built-in presets', 'User presets']
   )
 })
 

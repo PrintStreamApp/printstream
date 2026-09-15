@@ -4,8 +4,9 @@
 
 Changing the **printer a 3MF project targets** (e.g. opening an A1 mini project, switching the
 printer to H2D, and saving), so the saved project opens and slices for the new machine. PrintStream
-does this **by rewriting the project's machine settings, not by re-slicing**, so the user's layout,
-arrangement, and filament selection are preserved exactly.
+does this **by rewriting the project's machine settings, not by re-slicing**, so the user's relative
+layout, arrangement, and filament selection are preserved. When the bed centre changes, every
+plate's contents are translated by the same centre delta. They are never scaled or re-arranged.
 
 The slicer's *cross-model machine switch* (`docs/slicer-cross-model-machine-switch.md`) is the
 **slice-time** twin of this operation: it applies the same `retargetProjectSettingsToMachine`
@@ -103,7 +104,7 @@ copy of the file to a failed save would be far worse than losing the printer swi
 | **Machine** (bed, nozzle, extruder topology, gcode, limits) | Replaced with the target machine's (step 2). |
 | **Process** (layer height, walls, speeds, `print_settings_id`) | Replaced with the target's process preset + user overrides (step 3). With no preset chosen, a CROSS-MODEL retarget keeps the project's own **only while it still fits the target**: its parent (`inherits_group[0]`) is looked up and, if that preset does not list the target machine, the machine's `default_print_profile` is authored instead. A same-model preset change (a nozzle switch) never reselects. See "Why a process can be switched without being chosen" below. |
 | **Filaments** (selection, colours) | Preserved. The editor's save already embeds the user's assigned (target-compatible) filaments via `applyFilamentList`; the retarget leaves `filament_settings_id`/`filament_colour` untouched. The per-extruder *map* is re-derived for the new topology (step 2). |
-| **Layout** (object positions, plates, paint, parts, brim ears) | Preserved exactly: `model_settings.config` is copied verbatim, no re-arrange. |
+| **Layout** (object positions, plates, paint, parts, brim ears) | Preserved relative to each plate. Objects and the prime tower translate by the bed-centre delta, without scaling or re-arranging. `SceneEdit.placementBedSize` makes the bake author the global multi-plate grid with the target bed stride. |
 | **Printer-compatibility declarations** (`print_compatible_printers` / `compatible_printers`, slice_info `printer_model_id`) | Re-declared for the target so the project's compatibility chips read as the new printer only. The source printer's declarations aren't machine settings (so the field-set overwrite skips them) and the embedded slice was for the old printer: both would otherwise linger as stale chips (an A1/A1 mini chip on an H2D project). The save sets `print_compatible_printers`/`compatible_printers` to the target and strips the stale slice_info `printer_model_id` (matching a BambuStudio saved-not-sliced project). |
 
 ### Coverage
@@ -127,8 +128,8 @@ Consequences to be aware of:
   `default_print_profile` when it does not (below). It was previously kept unconditionally, on the
   assumption that these presets are cross-compatible within a family; that is false across families
   and produced files that opened correctly and could not be sliced at all.
-- **Smaller target bed**: positions are preserved, so objects authored for a larger bed may land
-  out-of-bounds on a smaller machine. The user re-arranges, exactly as in BambuStudio.
+- **Smaller target bed**: the arrangement is re-centred but not scaled or packed, so objects authored
+  for a larger bed may still land out-of-bounds. The user must then re-arrange them.
 
 ### Failure modes
 

@@ -219,6 +219,8 @@ test('cancel marks a failed dispatch as cancelled and closes its tracked history
     updates.push(input)
     return { id: input.where.id }
   })
+  // The history finalizer asks for optional library filament usage before updating the row.
+  stubPrisma(rootPrisma.libraryFile, 'findUnique', async () => null)
   stubPrisma(rootPrisma.printer, 'findUnique', async () => ({ workspaceId: 'workspace-1' }))
 
   jobs.set('dispatch-failed', {
@@ -426,8 +428,10 @@ test('buildProjectFilePrintCommand maps options onto the project_file payload', 
     filamentDynamicsCalibration: true,
     nozzleOffsetCalibration: 'off',
     timelapse: true,
+    timelapseStorage: 'internal',
+    externalFilamentChangeAssist: false,
     useAms: true,
-    amsMapping: [0, 1],
+    amsMapping: [0, 255],
     dualNozzles: false
   })
   assert.deepEqual(payload, {
@@ -445,7 +449,7 @@ test('buildProjectFilePrintCommand maps options onto the project_file payload', 
     vibration_cali: true,
     layer_inspect: false,
     use_ams: true,
-    cfg: '0',
+    cfg: '4',
     extrude_cali_flag: 1,
     extrude_cali_manual_mode: 0,
     nozzle_offset_cali: 0,
@@ -454,12 +458,36 @@ test('buildProjectFilePrintCommand maps options onto the project_file payload', 
     project_id: '12345',
     subtask_id: '12345',
     task_id: '12345',
-    ams_mapping: [0, 1],
+    ams_mapping: [0, -1],
     ams_mapping2: [
       { ams_id: 0, slot_id: 0 },
-      { ams_id: 0, slot_id: 1 }
+      { ams_id: 255, slot_id: 0 }
     ]
   })
+})
+
+test('buildProjectFilePrintCommand encodes external-spool assist only for an external mapping', () => {
+  const base = {
+    remoteName: 'Widget.gcode.3mf',
+    param: 'Metadata/plate_1.gcode',
+    subtaskName: 'Widget',
+    submissionId: '12345',
+    bedLevel: 'off' as const,
+    flowCalibration: 'off' as const,
+    vibrationCompensation: false,
+    firstLayerInspection: true,
+    filamentDynamicsCalibration: false,
+    nozzleOffsetCalibration: 'off' as const,
+    timelapse: false,
+    externalFilamentChangeAssist: true,
+    useAms: true,
+    dualNozzles: false
+  }
+
+  assert.equal(buildProjectFilePrintCommand({ ...base, amsMapping: [0] }).cfg, '0')
+  assert.equal(buildProjectFilePrintCommand({ ...base, amsMapping: [255] }).cfg, '0')
+  assert.equal(buildProjectFilePrintCommand({ ...base, amsMapping: [255, 255] }).cfg, '1')
+  assert.equal(buildProjectFilePrintCommand({ ...base, amsMapping: [255, 254] }).cfg, '0')
 })
 
 test('buildProjectFilePrintCommand encodes the mapping wire forms across the tray-index bands', () => {

@@ -371,6 +371,7 @@ test('discarding an unsaved slice also drops the preserved project nothing else 
   ))
   stub(prisma.libraryFile, 'count', async () => 0)
   stub(prisma.printJob, 'count', async () => 0)
+  stub(prisma.sliceCacheEntry, 'count', async () => 0)
   stub(prisma.libraryFile, 'delete', async (args: { where: { id: string } }) => {
     deleted.push(args.where.id)
     return { id: args.where.id }
@@ -389,6 +390,7 @@ test('discarding a slice keeps a preserved project another slice still points at
   ))
   stub(prisma.libraryFile, 'count', async () => 1)
   stub(prisma.printJob, 'count', async () => 0)
+  stub(prisma.sliceCacheEntry, 'count', async () => 0)
   stub(prisma.libraryFile, 'delete', async (args: { where: { id: string } }) => {
     deleted.push(args.where.id)
     return { id: args.where.id }
@@ -396,6 +398,23 @@ test('discarding a slice keeps a preserved project another slice still points at
 
   assert.equal(await discardHiddenSlicedOutput('output-1'), true)
   assert.deepEqual(deleted, ['output-1'], 'the shared project survives')
+})
+
+test('discarding a slice keeps a preserved project referenced by the unchanged-slice cache', async () => {
+  const deleted: string[] = []
+  stub(prisma.libraryFile, 'findUnique', async () => (
+    { id: 'output-1', ownerBridgeId: 'bridge-1', storedPath: 'out.gcode.3mf', hidden: true, sourceProjectFileId: 'project-1', versions: [] }
+  ))
+  stub(prisma.libraryFile, 'count', async () => 0)
+  stub(prisma.printJob, 'count', async () => 0)
+  stub(prisma.sliceCacheEntry, 'count', async () => 1)
+  stub(prisma.libraryFile, 'delete', async (args: { where: { id: string } }) => {
+    deleted.push(args.where.id)
+    return { id: args.where.id }
+  })
+
+  assert.equal(await discardHiddenSlicedOutput('output-1'), true)
+  assert.deepEqual(deleted, ['output-1'], 'the cached project survives')
 })
 
 const UPLOAD_BYTES = Buffer.from('bytes the browser baked')

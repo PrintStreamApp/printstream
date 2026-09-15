@@ -57,6 +57,36 @@ test('prepared slicing digest is stable across object key order and changes with
     },
     printerModel: 'P1S'
   }), 'a changed submitted target invalidates the proof')
+
+  const customMachine = {
+    id: 'custom:machine',
+    source: 'custom' as const,
+    kind: 'machine' as const,
+    name: 'Custom machine',
+    content: '{"inherits":"Bambu Lab P1S 0.4 nozzle"}'
+  }
+  const withCustomMachine = preparedSlicingConfigurationDigest({
+    contractVersion: 1,
+    slicerTargetId: 'bambu-1',
+    target: {
+      mode: 'manualProfile',
+      printerModel: 'P1S',
+      printerProfileId: customMachine.id
+    },
+    printerModel: 'P1S',
+    runtimeMachineProfile: customMachine
+  })
+  assert.notEqual(withCustomMachine, preparedSlicingConfigurationDigest({
+    contractVersion: 1,
+    slicerTargetId: 'bambu-1',
+    target: {
+      mode: 'manualProfile',
+      printerModel: 'P1S',
+      printerProfileId: customMachine.id
+    },
+    printerModel: 'P1S',
+    runtimeMachineProfile: { ...customMachine, content: '{"inherits":"Bambu Lab A1 0.4 nozzle"}' }
+  }), 'an overwritten custom machine invalidates the prepared proof')
 })
 
 test('a deleted non-project process preset cannot collapse into an unbound proof', async () => {
@@ -72,6 +102,54 @@ test('a deleted non-project process preset cannot collapse into an unbound proof
       processProfileId: 'custom:deleted-process'
     }
   }), /Slicing profile not found/)
+})
+
+test('prepared authorization retains only a custom machine as runtime sidecar', async () => {
+  const profileId = 'custom:portable-machine'
+  const content = JSON.stringify({
+    type: 'machine',
+    name: 'Portable machine',
+    inherits: 'Bambu Lab P1S 0.4 nozzle'
+  })
+  rootPrisma.setting.findUnique = (async () => ({
+    key: 'workspace.slicing.profiles.workspace-1',
+    value: JSON.stringify([{
+      id: profileId,
+      kind: 'machine',
+      name: 'Portable machine',
+      content,
+      updatedAt: '2026-09-13T00:00:00.000Z'
+    }])
+  })) as typeof rootPrisma.setting.findUnique
+
+  const custom = await authorizePreparedSlicingConfiguration({
+    workspaceId: 'workspace-1',
+    contractVersion: 1,
+    target: {
+      mode: 'manualProfile',
+      printerModel: 'P1S',
+      printerProfileId: profileId
+    }
+  })
+  assert.deepEqual(custom.runtimeMachineProfile, {
+    id: profileId,
+    source: 'custom',
+    kind: 'machine',
+    name: 'Portable machine',
+    content
+  })
+
+  rootPrisma.setting.findUnique = (async () => null) as typeof rootPrisma.setting.findUnique
+  const builtin = await authorizePreparedSlicingConfiguration({
+    workspaceId: 'workspace-1',
+    contractVersion: 1,
+    target: {
+      mode: 'manualProfile',
+      printerModel: 'P1S',
+      printerProfileId: buildBuiltinSlicingPresetId('machine', 'Bambu Lab P1S 0.4 nozzle')
+    }
+  })
+  assert.equal(builtin.runtimeMachineProfile, null)
 })
 
 test('prepared provenance is checked against source lineage and every frozen target setting', async () => {
