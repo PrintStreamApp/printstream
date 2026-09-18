@@ -23,6 +23,8 @@ export interface PlatformNotificationEventDefinition {
   event: string
   label: string
   variables: string[]
+  /** Product route used when an emitter does not have a more specific destination. */
+  defaultUrl: string
   defaults: {
     enabled: boolean
     title: string
@@ -158,6 +160,7 @@ export async function emitPlatformNotification(
       console.warn('[platform-notifications] unregistered event dropped', { event })
       return
     }
+    const definition = definitions.get(event)!
     const template = await getPlatformNotificationTemplate(event)
     if (!template.enabled) return
 
@@ -169,7 +172,7 @@ export async function emitPlatformNotification(
       body: renderPlatformNotificationTemplate(template.body, variables),
       timestamp: new Date().toISOString(),
       tag: options.tag ?? `platform:${event}`,
-      url: options.url,
+      url: options.url ?? definition.defaultUrl,
       targetUserIds: options.targetUserIds,
       emailHandledExternally: options.emailHandledExternally
     }

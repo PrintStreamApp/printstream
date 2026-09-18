@@ -76,4 +76,6 @@ docs/current-work-status.md
 apps/desktop/**/bin/
 apps/desktop/**/obj/
 apps/desktop/artifacts/
+apps/desktop/PrintStream.Desktop/app.ico
+apps/desktop/PrintStream.Desktop/Images/
 apps/desktop/**/*.pfx

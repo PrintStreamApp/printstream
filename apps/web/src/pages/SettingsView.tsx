@@ -16,6 +16,7 @@ import { pageSectionStackSpacing } from '../components/dashboard/PageSectionHead
 import { NestedViewHeader } from '../components/NestedViewHeader'
 import { NotificationChannelsPanel } from '../components/NotificationChannelsPanel'
 import { NotificationTemplatesPanel } from '../components/NotificationTemplatesPanel'
+import { NativeAppSettingsButton } from '../native/NativeAppSettingsButton'
 import { BridgeSettingsSection } from '../components/settings/BridgeManagementSection'
 import { ServerBackupsSection } from '../components/settings/ServerBackupsSection'
 import { NavTabOrderEditor } from '../components/settings/NavTabOrderEditor'
@@ -186,6 +187,7 @@ export function SettingsView({
   return (
     <Stack spacing={2}>
       {visibleSubview === 'root' && <Typography level="h3" startDecorator={<SettingsRoundedIcon />}>Settings</Typography>}
+      {visibleSubview === 'root' && <NativeAppSettingsButton />}
       {demoSettingsLocked && (
         <Alert color="warning" variant="soft">
           This is the public demo. Settings and authentication changes you make here will not take effect.

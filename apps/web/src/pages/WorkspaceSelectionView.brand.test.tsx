@@ -34,3 +34,22 @@ test('self-hosted chooser brand remains non-interactive', () => {
   const view = renderChooser(true)
   assert.equal(view.queryByRole('link', { name: 'PrintStream home' }), null)
 })
+
+test('cloud workspaces are listed before administrative workspaces', () => {
+  const view = render(
+    <runtimePolicyContext.Provider value={{ demoMode: false, managedBridge: false, selfHosted: false }}>
+      <MemoryRouter>
+        <WorkspaceSelectionView
+          workspaceOptions={[{ id: 'farm', slug: 'farm', name: 'Farm' }]}
+          allowPlatformSelection
+          onPlatformSelect={() => {}}
+          onWorkspaceSelect={() => {}}
+        />
+      </MemoryRouter>
+    </runtimePolicyContext.Provider>
+  )
+
+  const text = view.container.textContent ?? ''
+  assert.ok(text.indexOf('Cloud workspaces') < text.indexOf('Administrative workspaces'))
+  assert.ok(text.indexOf('Farm') < text.indexOf('Platform'))
+})

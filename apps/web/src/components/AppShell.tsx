@@ -12,7 +12,7 @@ import { HorizontalOverflowScroller } from './HorizontalOverflowScroller'
 import { appShellDesktopSecondaryNavHostId } from './AppShell.constants'
 import { navDensitySx, sectionTabSx } from '../theme/theme'
 import { useShellTabBadges } from '../lib/shellBadges'
-import { CONTEXT_CHOOSER_LABEL } from '../lib/workspaceRoute'
+import { WORKSPACE_CHOOSER_LABEL } from '../lib/workspaceRoute'
 import { tabTooltip } from './tabTooltip'
 import { useFittedNavDensity } from '../hooks/useFittedNavDensity'
 
@@ -46,20 +46,20 @@ interface AppShellProps<TValue extends string> {
   onOpenAccount?: () => void
   workspaceLabel?: string
   workspaceChooserLabel?: string
-  /**
-   * Icon for the context being named. The shell only ever receives the NAME,
-   * which cannot say whether "Home" is a workspace, an account or the
-   * platform, and those behave nothing alike.
-   */
+  /** Switcher affordance shown beside the active workspace name. */
   workspaceChooserIcon?: ReactNode
   showNavigationFrame?: boolean
   unconstrainedWidth?: boolean
   identity?: ShellIdentity | null
+  identityIcon?: ReactNode
   workspaceChooserAvailable?: boolean
   onOpenWorkspaceChooser?: () => void
   workspaceChooserPending?: boolean
   onLogoClick?: () => void
   contentHeaderTrailing?: ReactNode
+  /** Footer actions that stay together beside the user/workspace group. */
+  footerActions?: ReactNode
+  /** Secondary footer content rendered below the primary row. */
   footerTrailing?: ReactNode
   children: ReactNode
 }
@@ -76,11 +76,13 @@ export function AppShell<TValue extends string>({
   showNavigationFrame = false,
   unconstrainedWidth = false,
   identity = null,
+  identityIcon,
   workspaceChooserAvailable = false,
   onOpenWorkspaceChooser,
   workspaceChooserPending = false,
   onLogoClick,
   contentHeaderTrailing,
+  footerActions,
   footerTrailing,
   children
 }: AppShellProps<TValue>) {
@@ -110,10 +112,10 @@ export function AppShell<TValue extends string>({
   const canOpenWorkspaceChooser = workspaceChooserAvailable && typeof onOpenWorkspaceChooser === 'function'
   const badgedTabs = useShellTabBadges()
   const showsWorkspaceChooser = workspaceChooserAvailable
-  const workspaceChooserButtonLabel = workspaceChooserLabel ?? CONTEXT_CHOOSER_LABEL
+  const workspaceChooserButtonLabel = workspaceChooserLabel ?? WORKSPACE_CHOOSER_LABEL
   const workspaceChooserButtonAriaLabel = workspaceChooserLabel
-    ? `${CONTEXT_CHOOSER_LABEL}. Currently in: ${workspaceChooserLabel}`
-    : CONTEXT_CHOOSER_LABEL
+    ? `${WORKSPACE_CHOOSER_LABEL}. Currently in: ${workspaceChooserLabel}`
+    : WORKSPACE_CHOOSER_LABEL
   const shouldNavigateToTab = (tabValue: TValue) => {
     if (currentPath === tabValue) return false
     if (currentPath.startsWith(`${tabValue}/`)) return true
@@ -529,73 +531,70 @@ export function AppShell<TValue extends string>({
         </Tabs>
 
         <Box component="footer" sx={{ textAlign: 'center', pb: 1, mt: 'auto', pt: 3 }}>
-          <Stack
-            direction="row"
-            spacing={{ xs: 1.25, sm: 2.5 }}
-            alignItems="center"
-            justifyContent="center"
-            useFlexGap
-            sx={{ flexWrap: 'wrap' }}
-          >
-            {identity && (
+          {(identity || showsWorkspaceChooser || footerActions) ? (
+            <Stack
+              direction="row"
+              spacing={{ xs: 1.25, sm: 2.5 }}
+              alignItems="center"
+              justifyContent="center"
+              useFlexGap
+              sx={{ flexWrap: 'wrap' }}
+            >
               <Stack
                 direction="row"
-                spacing={{ xs: 0.5, sm: 0.75 }}
+                spacing={{ xs: 1.25, sm: 2.5 }}
                 alignItems="center"
-                sx={{ px: { xs: 0.25, sm: 0.5 } }}
+                useFlexGap
+                data-footer-group="workspace-identity"
+                sx={{ flexWrap: 'nowrap', flexShrink: 0 }}
               >
-                <Typography level="body-xs" sx={{ color: 'neutral.500', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-                  Signed in as
-                </Typography>
-                {onOpenAccount ? (
+                {showsWorkspaceChooser && (
                   <Button
                     variant="plain"
                     color="neutral"
                     size="sm"
+                    startDecorator={workspaceChooserIcon}
+                    aria-label={workspaceChooserButtonAriaLabel}
+                    onClick={canOpenWorkspaceChooser ? () => onOpenWorkspaceChooser() : undefined}
+                    loading={workspaceChooserPending}
+                    disabled={workspaceChooserPending || !canOpenWorkspaceChooser}
+                    sx={{ width: 'fit-content', maxWidth: '100%' }}
+                  >
+                    {workspaceChooserButtonLabel}
+                  </Button>
+                )}
+                {identity && (onOpenAccount ? (
+                  <Button
+                    variant="plain"
+                    color="neutral"
+                    size="sm"
+                    startDecorator={identityIcon}
                     onClick={onOpenAccount}
-                    sx={{ width: 'fit-content', maxWidth: '100%', px: 0.5 }}
+                    sx={{ width: 'fit-content', maxWidth: '100%' }}
                   >
                     {identity.primary}
                   </Button>
                 ) : (
-                  <Typography level="title-sm" sx={{ color: 'common.white' }}>
+                  <Typography level="title-sm" startDecorator={identityIcon} sx={{ color: 'common.white' }}>
                     {identity.primary}
                   </Typography>
-                )}
+                ))}
               </Stack>
-            )}
-            {showsWorkspaceChooser && (
+              {footerActions ? (
               <Stack
                 direction="row"
-                spacing={{ xs: 0.5, sm: 1 }}
+                spacing={1}
                 alignItems="center"
-                sx={{ width: 'fit-content', maxWidth: '100%' }}
+                justifyContent="center"
+                useFlexGap
+                data-footer-group="actions"
+                sx={{ flexWrap: 'nowrap', flexShrink: 0 }}
               >
-                {/* "Context", not "Workspace". The thing named beside it is
-                    whichever context you are in -- a cloud workspace, the
-                    billing account, or the platform -- so the fixed word was
-                    wrong two times in three, and said "Workspace: Platform" on
-                    a customer's own billing pages. Same reasoning as
-                    CONTEXT_CHOOSER_LABEL. */}
-                <Typography level="body-xs" sx={{ color: 'neutral.500', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-                  Context
-                </Typography>
-                <Button
-                  variant="plain"
-                  color="neutral"
-                  size="sm"
-                  startDecorator={workspaceChooserIcon}
-                  aria-label={workspaceChooserButtonAriaLabel}
-                  onClick={canOpenWorkspaceChooser ? () => onOpenWorkspaceChooser() : undefined}
-                  loading={workspaceChooserPending}
-                  disabled={workspaceChooserPending || !canOpenWorkspaceChooser}
-                  sx={{ width: 'fit-content', maxWidth: '100%' }}
-                >
-                  {workspaceChooserButtonLabel}
-                </Button>
+                {footerActions}
               </Stack>
-            )}
-          </Stack>
+              ) : null}
+            </Stack>
+          ) : null}
           {footerTrailing ? (
             <Box sx={{ mt: 1, display: 'flex', justifyContent: 'center' }}>
               {footerTrailing}

@@ -39,7 +39,7 @@ test('AppShell opens the workspace chooser from the shell action', () => {
   )
 
   const chooserButton = view.getByRole('button', {
-    name: 'Switch context. Currently in: Alpha workspace'
+    name: 'Switch workspace. Currently in: Alpha workspace'
   })
   assert.ok(view.getByText('Alpha workspace'))
   fireEvent.click(chooserButton)
@@ -137,6 +137,50 @@ test('AppShell renders an optional footer supplement', () => {
   assert.ok(view.getByText('Body'))
 })
 
+test('AppShell keeps identity and workspace separate from one non-wrapping action group', () => {
+  const view = renderWithProviders(
+    <AppShell
+      tabs={tabs}
+      activeTab="/printers"
+      currentPath="/printers"
+      onTabChange={() => {}}
+      onOpenAccount={() => {}}
+      identity={{ primary: 'Test User', secondary: 'user@example.com' }}
+      identityIcon={<span data-testid="identity-icon" />}
+      workspaceChooserLabel="Home"
+      workspaceChooserIcon={<span data-testid="workspace-switcher-icon" />}
+      workspaceChooserAvailable
+      onOpenWorkspaceChooser={() => {}}
+      footerActions={(
+        <>
+          <button>Help &amp; feedback</button>
+          <button>Suggestions</button>
+          <button>Settings</button>
+        </>
+      )}
+    >
+      <div>Body</div>
+    </AppShell>
+  )
+
+  const identityGroup = view.container.querySelector('[data-footer-group="workspace-identity"]')
+  const actionsGroup = view.container.querySelector('[data-footer-group="actions"]')
+  assert.ok(identityGroup)
+  assert.ok(actionsGroup)
+  assert.ok(identityGroup.contains(view.getByRole('button', { name: 'Test User' })))
+  assert.ok(identityGroup.contains(view.getByTestId('identity-icon')))
+  assert.equal(view.queryByText('User'), null)
+  assert.equal(view.queryByText('Workspace'), null)
+  const workspaceButton = view.getByRole('button', { name: /Currently in: Home/ })
+  assert.ok(identityGroup.contains(workspaceButton))
+  assert.ok(workspaceButton.contains(view.getByTestId('workspace-switcher-icon')))
+  const userButton = view.getByRole('button', { name: 'Test User' })
+  assert.ok((workspaceButton.compareDocumentPosition(userButton) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0)
+  assert.ok(actionsGroup.contains(view.getByRole('button', { name: 'Help & feedback' })))
+  assert.ok(actionsGroup.contains(view.getByRole('button', { name: 'Suggestions' })))
+  assert.ok(actionsGroup.contains(view.getByRole('button', { name: 'Settings' })))
+})
+
 test('AppShell can render a chooser shell without nav tabs or workspace footer label', () => {
   const view = renderWithProviders(
     <AppShell
@@ -152,10 +196,8 @@ test('AppShell can render a chooser shell without nav tabs or workspace footer l
   )
 
   assert.equal(view.queryByText('Printers'), null)
-  // The chooser's eyebrow. "Context", since what it names may be a workspace,
-  // the billing account, or the platform.
-  assert.equal(view.queryByText('Context'), null)
-  assert.equal(view.queryByRole('button', { name: /Switch context/i }), null)
+  assert.equal(view.queryByText('Workspace'), null)
+  assert.equal(view.queryByRole('button', { name: /Switch workspace/i }), null)
   assert.ok(view.getByText('Choose a workspace'))
 })
 

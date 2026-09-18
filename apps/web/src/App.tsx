@@ -1,6 +1,3 @@
-import CreditCardRoundedIcon from '@mui/icons-material/CreditCardRounded'
-import BusinessRoundedIcon from '@mui/icons-material/BusinessRounded'
-import ApartmentRoundedIcon from '@mui/icons-material/ApartmentRounded'
 import { Alert, Box, Button, Stack, Typography } from '@mui/joy'
 import CssBaseline from '@mui/joy/CssBaseline'
 import { NativeBillingButton } from './native/NativeBillingButton'
@@ -41,7 +38,6 @@ import { Component, useEffect, useMemo, useRef, useState, type ErrorInfo, type R
 import { isNativeConnectionReady } from './native/connectionReady'
 import { useNativeSession } from './native/useNativeSession'
 import { isNativeApp, PrintStreamInstance } from './native/bridge'
-import { NativeAppSettingsButton } from './native/NativeAppSettingsButton'
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { AppShell, type ShellTab } from './components/AppShell'
 import { ScrollReset } from './components/ScrollReset'
@@ -68,7 +64,6 @@ import { LicenseBanner } from './components/LicenseBanner'
 import { BridgeCrashBanner } from './components/BridgeCrashBanner'
 import { BridgeDebugCaptureBanner } from './components/BridgeDebugCaptureBanner'
 import { LibraryUploadPanel } from './components/LibraryUploadPanel'
-import { DevRuntimeStatus } from './components/DevRuntimeStatus'
 import { AppVersionFooter } from './components/AppVersionFooter'
 import { BILLING_SCOPE_SECTION_ICONS } from './components/billingScopeSectionIcons'
 import { HelpFeedbackButton } from './components/HelpFeedbackButton'
@@ -93,7 +88,7 @@ import { publishAuthBootstrapData, publishPluginCatalogData } from './lib/appShe
 import { PluginCatalogQueryProvider, usePluginCatalogQuery } from './lib/pluginCatalogQuery'
 import { isWorkspaceLandingReady, pluginBasePath, resolveDefaultWorkspaceRoute, resolveWorkspaceRouteRedirect, resolveWorkspaceLandingPath, resolveWorkspaceSwitchDestination, shouldClearPendingWorkspaceRoute } from './lib/workspaceSwitch'
 import {
-  CONTEXT_CHOOSER_LABEL, buildPlatformWorkspacePath, buildWorkspacePath, buildWorkspaceSelectionPath, isPlatformWorkspacePath, isWorkspaceCandidatePath, parseWorkspacePathname } from './lib/workspaceRoute'
+  WORKSPACE_CHOOSER_LABEL, buildPlatformWorkspacePath, buildWorkspacePath, buildWorkspaceSelectionPath, isPlatformWorkspacePath, isWorkspaceCandidatePath, parseWorkspacePathname } from './lib/workspaceRoute'
 import {
   activePluginSlots,
   isPluginActiveByName,
@@ -177,14 +172,6 @@ const baseCoreTabs: ReadonlyArray<ShellTab> = [
     description: 'Print time, filament used, and success rates over time.',
     mobileIcon: <QueryStatsRoundedIcon />
   },
-  {
-    value: '/settings',
-    label: 'Settings',
-    ariaLabel: 'Settings',
-    icon: <SettingsRoundedIcon />,
-    mobileIcon: <SettingsRoundedIcon />,
-    iconOnly: true
-  }
 ]
 
 // Default left-to-right order for the leading plugin tabs (Orders, Filament,
@@ -199,8 +186,6 @@ const PLUGIN_TAB_DEFAULT_ORDER: readonly string[] = ['/orders', '/filament', '/c
 registerBuiltinPlugins()
 
 const NO_CUSTOMERS: CustomerSummary[] = []
-
-const webRuntimeStartedAt = new Date().toISOString()
 
 export function App() {
   const queryClient = useQueryClient()
@@ -573,39 +558,16 @@ export function App() {
         if (tab.value === '/printers') return hasWorkspaceContext && canViewPrinters
         if (tab.value === '/library') return hasWorkspaceContext && canViewLibrary
         if (tab.value === '/jobs') return hasWorkspaceContext && canViewJobs
-        if (tab.value === '/settings') return canManageSettings || canManageWorkspaces
         return true
       })
     },
-    [authBootstrapReady, canManageSettings, canManageWorkspaces, canViewJobs, canViewLibrary, canViewPrinters, hasWorkspaceContext, inPlatformMode, quickStartDismissed]
+    [authBootstrapReady, canViewJobs, canViewLibrary, canViewPrinters, hasWorkspaceContext, inPlatformMode, quickStartDismissed]
   )
   const platformTabs = useMemo<ReadonlyArray<ShellTab>>(
     () => inPlatformMode
-      ? [
-          ...(platformAdmin?.navTabs ?? []),
-          {
-            value: '/platform/settings',
-            label: 'Settings',
-            ariaLabel: 'Settings',
-            icon: <SettingsRoundedIcon />,
-            mobileIcon: <SettingsRoundedIcon />,
-            iconOnly: true
-          }
-        ]
+      ? [...(platformAdmin?.navTabs ?? [])]
       : [],
     [inPlatformMode, platformAdmin]
-  )
-  const accountTab = useMemo<ShellTab | null>(
-    () => showsAccountTab
-      ? {
-          value: inPlatformMode ? '/platform/account' : '/account',
-          label: 'Account',
-          ariaLabel: 'Account',
-          icon: <AccountCircleRoundedIcon />,
-          iconOnly: true
-        }
-      : null,
-    [inPlatformMode, showsAccountTab]
   )
   const workspaceContextHint = readWorkspaceContextHint()
   const canUseWorkspaceChooser = authBootstrapReady && isAuthenticated && switchableWorkspaceChoiceCount > 0
@@ -731,19 +693,19 @@ export function App() {
       ? {
           value: '/workspaces',
           label: 'Workspaces',
-          ariaLabel: CONTEXT_CHOOSER_LABEL,
+          ariaLabel: WORKSPACE_CHOOSER_LABEL,
           icon: <SwapHorizRoundedIcon />,
           iconOnly: true
         }
       : null,
     [showsWorkspaceSwitcher]
   )
-  // Settings is pinned at the end of the content tabs; the rest (core content +
-  // plugin tabs) are user-orderable. Empty order → built-in default (Filament
-  // after Printers). Device override wins over the workspace default.
+  // Content tabs are user-orderable. Settings and Account live in the footer,
+  // leaving the toolbar for the workspace's primary destinations. Empty order
+  // uses the built-in default (Filament after Printers). Device override wins
+  // over the workspace default.
   const sharedNavTabOrder = useMemo(() => generalSettingsQuery.data?.navTabOrder ?? [], [generalSettingsQuery.data?.navTabOrder])
   const effectiveNavTabOrder = deviceNavTabOrderOverride ?? sharedNavTabOrder
-  const settingsTab = useMemo(() => coreTabs.find((tab) => tab.value === '/settings') ?? null, [coreTabs])
   // Core content tabs resolve on auth bootstrap but plugin tabs (Queue, Orders,
   // Filament) only after the plugin catalog query settles, a later, separate
   // round-trip. Rendering as each source arrives makes tabs visibly pop into the
@@ -754,7 +716,7 @@ export function App() {
     && (!pluginCatalogEnabled || hasPluginState || pluginStateQuery.isError)
   const navContentTabs = useMemo<ReadonlyArray<ShellTab>>(
     () => contentTabsReady
-      ? orderNavTabs([...coreTabs.filter((tab) => tab.value !== '/settings'), ...pluginTabs], effectiveNavTabOrder)
+      ? orderNavTabs([...coreTabs, ...pluginTabs], effectiveNavTabOrder)
       : [],
     [contentTabsReady, coreTabs, pluginTabs, effectiveNavTabOrder]
   )
@@ -762,11 +724,9 @@ export function App() {
     () => [
       ...platformTabs,
       ...navContentTabs,
-      ...(settingsTab ? [settingsTab] : []),
-      ...(accountTab ? [accountTab] : []),
       ...(workspaceChooserTab ? [workspaceChooserTab] : [])
     ],
-    [accountTab, navContentTabs, platformTabs, settingsTab, workspaceChooserTab]
+    [navContentTabs, platformTabs, workspaceChooserTab]
   )
 
   /**
@@ -950,7 +910,7 @@ export function App() {
   const billingScopeTabs = useMemo<ReadonlyArray<ShellTab>>(
     () => [
       ...(billingScopeAccountId
-        ? billingScopeSections.map((entry) => ({
+        ? billingScopeSections.filter((entry) => entry.id !== 'settings').map((entry) => ({
             value: buildBillingScopePath(billingScopeAccountId, entry.id),
             label: entry.label,
             ...(entry.description ? { description: entry.description } : {}),
@@ -958,17 +918,12 @@ export function App() {
             // Like every workspace tab: the mobile dock renders icon-only
             // (label in the tooltip), with labels, seven tabs overflow a
             // 375px dock.
-            mobileIcon: BILLING_SCOPE_SECTION_ICONS[entry.id],
-            // Settings is a gear everywhere else in the app, so it is a gear
-            // here. It also stops the one utility tab competing for width with
-            // the six that are the actual content of this scope.
-            ...(entry.id === 'settings' ? { iconOnly: true } : {})
+            mobileIcon: BILLING_SCOPE_SECTION_ICONS[entry.id]
           }))
         : []),
-      ...(accountTab ? [accountTab] : []),
       ...(workspaceChooserTab ? [workspaceChooserTab] : [])
     ],
-    [accountTab, billingScopeAccountId, workspaceChooserTab]
+    [billingScopeAccountId, workspaceChooserTab]
   )
   const shellTabs = usesPublicChrome ? [] : inBillingScope ? billingScopeTabs : tabs
   const activeTab = inBillingScope
@@ -988,33 +943,10 @@ export function App() {
     : inBillingScope
       ? (billingScopeAccountName ?? BILLING_SCOPE_LABEL)
       : currentWorkspaceChooserLabel
-  // The same icons the chooser page uses for each kind, so the thing you picked
-  // there is recognisable in the chrome afterwards.
-  const shellWorkspaceChooserIcon = usesPublicChrome
-    ? undefined
-    : inBillingScope
-      ? <CreditCardRoundedIcon />
-      : inPlatformMode ? <ApartmentRoundedIcon /> : <BusinessRoundedIcon />
+  const shellWorkspaceChooserIcon = usesPublicChrome ? undefined : <SwapHorizRoundedIcon />
   const shellWorkspaceChooserAvailable = !usesPublicChrome && (canUseWorkspaceChooser || isNativeApp())
-  // The badge owns its own 5s poll: hoisting it here re-rendered the whole tree every tick.
-  const devRuntimeIndicator = browserEnv.devMode ? (
-    <DevRuntimeStatus webStartedAt={webRuntimeStartedAt} />
-  ) : null
-  // App-shell footer: the feedback entry point (plus any plugin-contributed
-  // footer actions, e.g. the cloud suggestion box), dev runtime chips (dev
-  // only), and the running build / release notes / update hint.
   const appFooterTrailing = (
     <Stack spacing={0.75} alignItems="center" useFlexGap>
-      <Stack direction="row" spacing={1} useFlexGap alignItems="center" justifyContent="center" sx={{ flexWrap: 'wrap' }}>
-        {selfHostedDeployment && hasWorkspaceContext && canManageSettings && (
-          <NativeBillingButton />
-        )}
-        {/* Platform users staff the support inbox: hide the help entry point there. */}
-        {!inPlatformMode && <HelpFeedbackButton />}
-        <PluginSlot name="shell.footer" />
-        {!isWorkspaceSelectionRoute && <NativeAppSettingsButton />}
-      </Stack>
-      {devRuntimeIndicator}
       <AppVersionFooter />
     </Stack>
   )
@@ -1046,6 +978,32 @@ export function App() {
     : activeWorkspaceSlug
       ? buildWorkspacePath(activeWorkspaceSlug, '/account')
       : buildWorkspaceSelectionPath()
+  const footerSettingsPath = inBillingScope && billingScopeAccountId
+    ? buildBillingScopePath(billingScopeAccountId, 'settings')
+    : inPlatformMode
+      ? '/platform/settings'
+      : workspaceSettingsPath
+  // Primary footer actions stay together as one wrapping unit beside the
+  // user/workspace unit. Platform users staff the support inbox, so Help is
+  // hidden there. Settings remains the final, persistent utility action.
+  const appFooterActions = (
+    <>
+      {selfHostedDeployment && hasWorkspaceContext && canManageSettings && (
+        <NativeBillingButton />
+      )}
+      {!inPlatformMode && <HelpFeedbackButton />}
+      <PluginSlot name="shell.footer" />
+      <Button
+        size="sm"
+        variant="plain"
+        color="neutral"
+        startDecorator={<SettingsRoundedIcon />}
+        onClick={() => navigate(footerSettingsPath)}
+      >
+        Settings
+      </Button>
+    </>
+  )
   const platformOverviewRouteElement = renderProtectedElement(
     canUsePlatformWorkspace
       ? (inPlatformMode
@@ -1261,12 +1219,14 @@ export function App() {
               showNavigationFrame={false}
               unconstrainedWidth={effectiveUnconstrainedWidth}
               identity={isMarketingRoute || isPublicInfoRoute ? null : shellIdentity}
+              identityIcon={<AccountCircleRoundedIcon />}
               workspaceChooserAvailable={shellWorkspaceChooserAvailable}
               onOpenWorkspaceChooser={openWorkspaceChooser}
               workspaceChooserPending={workspaceSwitchPending}
               onLogoClick={() => navigate('/')}
+              footerActions={(isMarketingRoute || isPublicInfoRoute) ? undefined : appFooterActions}
               footerTrailing={(isMarketingRoute || isPublicInfoRoute)
-                ? (marketing ? <marketing.Footer /> : devRuntimeIndicator)
+                ? (marketing ? <marketing.Footer /> : undefined)
                 : appFooterTrailing}
             >
               {disabledActivePluginRoute ? <Navigate to={inPlatformMode ? '/platform/settings/plugins' : `${workspaceSettingsPath}/plugins`} replace /> : null}
@@ -1620,7 +1580,7 @@ class RouteErrorBoundary extends Component<{ children: ReactNode; resetKey: stri
             </Typography>
             <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap' }}>
               <Button size="sm" variant="solid" color="danger" onClick={this.reset}>Try again</Button>
-              <Button size="sm" variant="soft" color="neutral" onClick={() => window.location.assign('/workspaces')}>{CONTEXT_CHOOSER_LABEL}</Button>
+              <Button size="sm" variant="soft" color="neutral" onClick={() => window.location.assign('/workspaces')}>{WORKSPACE_CHOOSER_LABEL}</Button>
               <Button size="sm" variant="plain" color="neutral" onClick={() => window.location.reload()}>Reload</Button>
             </Stack>
           </Stack>

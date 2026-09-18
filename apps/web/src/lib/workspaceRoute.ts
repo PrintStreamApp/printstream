@@ -76,27 +76,13 @@ function splitRoute(path: string): { pathname: string; suffix: string } {
   }
 }
 
-/**
- * What the context chooser is called, wherever it is offered.
- *
- * "Context", because that is what changes and it is the only word true of all
- * three destinations. NOT "cloud workspace" (the list also holds the billing
- * context and, for an operator, the platform context, so naming it after one
- * mislabels the other two) and NOT "account" (nothing here switches accounts:
- * the billing context is one area of the SAME account, alongside its
- * workspaces).
- *
- * `WorkspaceSelectionView`'s own heading had already reasoned its way out of
- * naming any one of them; the tab and buttons that OPEN it had not, and told a
- * customer they were about to change workspaces when the same click reaches
- * their billing area.
- */
-export const CONTEXT_CHOOSER_LABEL = 'Switch context'
+/** What the workspace chooser is called wherever it is offered. */
+export const WORKSPACE_CHOOSER_LABEL = 'Switch workspace'
 
 /**
  * The chooser page's own heading.
  *
- * A question, so the page needs no collective noun for the three things below
- * it: "Choose a context" is the app's internal vocabulary, not the user's.
+ * A question keeps the heading natural above both cloud and administrative
+ * workspaces.
  */
-export const CONTEXT_CHOOSER_TITLE = 'Where do you want to work?'
+export const WORKSPACE_CHOOSER_TITLE = 'Where do you want to work?'

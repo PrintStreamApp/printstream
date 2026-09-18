@@ -8,7 +8,7 @@ import { BILLING_SCOPE_LABEL } from '../lib/billingScope'
 import type { ReactNode } from 'react'
 import { BrandMark } from '../components/BrandMark'
 import { useRuntimePolicy } from '../lib/runtimePolicy'
-import { CONTEXT_CHOOSER_TITLE } from '../lib/workspaceRoute'
+import { WORKSPACE_CHOOSER_TITLE } from '../lib/workspaceRoute'
 
 /** Section heading in the chooser, separating scopes that are different things. */
 function ChoiceGroupLabel({ children }: { children: ReactNode }) {
@@ -29,16 +29,13 @@ function ChoiceGroupLabel({ children }: { children: ReactNode }) {
  * Three kinds of destination, and they are genuinely different things rather
  * than one list with flags: a WORKSPACE runs printers, a BILLING account holds
  * licences and the payment method, and the PLATFORM scope administers the
- * deployment. Billing sits above the workspaces because a customer with several
- * reaches it as often as any one of them, and below Platform because almost
- * nobody has that.
+ * deployment. Cloud workspaces stay first because they are the common
+ * destination; the less frequent administrative workspaces are grouped last.
  *
- * The default title names none of the three, for the same reason the tab that
- * opens this page does not: the list holds cloud workspaces, the billing
- * context and (for an operator) the platform context, so naming it after one
- * mislabels the other two. The group heading below IS "Cloud workspaces",
- * that one covers only the cards it sits above. Both strings come from
- * `workspaceRoute.ts` so the door and the room cannot disagree again.
+ * The default title stays broad because the page separates cloud workspaces
+ * from billing and platform destinations under an "Administrative workspaces"
+ * heading. The title comes from `workspaceRoute.ts` so the door and the room
+ * cannot disagree.
  */
 export function WorkspaceSelectionView({
   workspaceOptions,
@@ -48,7 +45,7 @@ export function WorkspaceSelectionView({
   onCustomerSelect,
   onWorkspaceSelect,
   selectionPending = false,
-  title = CONTEXT_CHOOSER_TITLE,
+  title = WORKSPACE_CHOOSER_TITLE,
   description
 }: {
   workspaceOptions: ReadonlyArray<WorkspaceSummary>
@@ -112,52 +109,9 @@ export function WorkspaceSelectionView({
 
         <Stack spacing={1.25}>
           {/*
-            Labelled for the same reason "Cloud workspaces" is: once both kinds
-            are on screen the reader has to be able to tell them apart, and
-            these two are the ones you ADMINISTER from rather than print in.
-            Suppressed when neither is present, so a customer with only
-            workspaces never sees a heading over nothing.
-          */}
-          {(allowPlatformSelection && onPlatformSelect) || (onCustomerSelect && customerOptions.length > 0) ? (
-            <ChoiceGroupLabel>Administrative workspaces</ChoiceGroupLabel>
-          ) : null}
-
-          {allowPlatformSelection && onPlatformSelect ? (
-            <WorkspaceChoiceCard
-              icon={<ApartmentRoundedIcon />}
-              title="Platform"
-              bodyDescription="Manage workspaces and platform settings."
-              selectionPending={selectionPending}
-              onClick={onPlatformSelect}
-            />
-          ) : null}
-
-          {/*
-            No group heading and no per-account name: the card IS the scope, and
-            almost everyone has exactly one. The account used to be titled by a
-            display name copied off its owner at creation, which then went stale
-            the moment they renamed themselves and told the reader nothing the
-            card does not.
-          */}
-          {onCustomerSelect ? customerOptions.map((account) => (
-            <WorkspaceChoiceCard
-              key={account.id}
-              icon={<CreditCardRoundedIcon />}
-              title={BILLING_SCOPE_LABEL}
-              bodyDescription="License keys, cloud plans, payment method, and invoices."
-              selectionPending={selectionPending}
-              onClick={() => onCustomerSelect(account.id)}
-            />
-          )) : null}
-
-          {/*
-            Labelled only when there is something above to distinguish them
-            from: a user with one workspace and no billing access should not be
-            given a heading over a single card.
-
-            "Cloud workspaces" once there IS something above, because what is
-            above is the account that also holds SELF-HOSTED licences. The
-            distinction only exists where both are on screen.
+            Labelled only when administrative destinations are also present.
+            A customer with only workspaces does not need a heading over the
+            one kind of choice available.
           */}
           {(onCustomerSelect && customerOptions.length > 0) || allowPlatformSelection ? (
             <ChoiceGroupLabel>Cloud workspaces</ChoiceGroupLabel>
@@ -186,6 +140,41 @@ export function WorkspaceSelectionView({
               self-hosted license instead.
             </Typography>
           ) : null}
+
+          {/*
+            These are less common than opening a printer workspace, so the
+            group follows the regular choices in every switcher.
+          */}
+          {(allowPlatformSelection && onPlatformSelect) || (onCustomerSelect && customerOptions.length > 0) ? (
+            <ChoiceGroupLabel>Administrative workspaces</ChoiceGroupLabel>
+          ) : null}
+
+          {allowPlatformSelection && onPlatformSelect ? (
+            <WorkspaceChoiceCard
+              icon={<ApartmentRoundedIcon />}
+              title="Platform"
+              bodyDescription="Manage workspaces and platform settings."
+              selectionPending={selectionPending}
+              onClick={onPlatformSelect}
+            />
+          ) : null}
+
+          {/*
+            No per-account name: the card IS the scope, and almost everyone has
+            exactly one. The account used to be titled by a display name copied
+            off its owner at creation, which went stale after a rename and told
+            the reader nothing the card does not.
+          */}
+          {onCustomerSelect ? customerOptions.map((account) => (
+            <WorkspaceChoiceCard
+              key={account.id}
+              icon={<CreditCardRoundedIcon />}
+              title={BILLING_SCOPE_LABEL}
+              bodyDescription="License keys, cloud plans, payment method, and invoices."
+              selectionPending={selectionPending}
+              onClick={() => onCustomerSelect(account.id)}
+            />
+          )) : null}
         </Stack>
       </Stack>
     </Stack>

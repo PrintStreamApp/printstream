@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { AmsUnit, PrinterStatus } from '@printstream/shared'
+import { readSourceFile } from '../test-utils/sourceTree.js'
 import {
   amsUnitSlotSpan,
   derivePrinterStateBucket,
@@ -16,6 +17,12 @@ test('printer overview directory controls only appear for a multi-printer fleet'
   assert.equal(shouldShowPrinterOverviewDirectoryControls(0), false)
   assert.equal(shouldShowPrinterOverviewDirectoryControls(1), false)
   assert.equal(shouldShowPrinterOverviewDirectoryControls(2), true)
+})
+
+test('PrintersView uses the fleet-only condition for its overview toolbar', async () => {
+  const { source } = await readSourceFile('pages/PrintersView.tsx')
+
+  assert.match(source, /\{showOverviewDirectoryControls && \(\s*<PrinterOverviewToolbar/)
 })
 
 test('filamentPresetLabel surfaces the Bambu preset name for a scanned Bambu spool', () => {

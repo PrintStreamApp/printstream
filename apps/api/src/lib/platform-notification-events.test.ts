@@ -23,6 +23,7 @@ registerPlatformNotificationEvents([
     event: 'test-event',
     label: 'Test event',
     variables: ['name'],
+    defaultUrl: '/platform/test-events',
     defaults: { enabled: true, title: 'Hello {{name}}', body: 'Body for {{name}}' }
   }
 ])
@@ -72,10 +73,10 @@ test('templates fall back to defaults, persist updates, and reset', async () => 
   assert.ok(all.some((template) => template.event === 'test-event'))
 })
 
-test('emitPlatformNotification renders and fans out over the bus', async () => {
+test('emitPlatformNotification renders and fans out with the event destination', async () => {
   stubEmptyStorage()
-  const received: Array<{ title: string; body: string; workspaceId?: string }> = []
-  const listener = (event: { message: { title: string; body: string; workspaceId?: string } }) => {
+  const received: Array<{ title: string; body: string; workspaceId?: string; url?: string }> = []
+  const listener = (event: { message: { title: string; body: string; workspaceId?: string; url?: string } }) => {
     received.push(event.message)
   }
   printerEvents.on('platform.notification', listener)
@@ -89,6 +90,7 @@ test('emitPlatformNotification renders and fans out over the bus', async () => {
   assert.equal(received[0]?.title, 'Hello Nico')
   assert.equal(received[0]?.body, 'Body for Nico')
   assert.equal(received[0]?.workspaceId, undefined, 'platform messages carry no workspace')
+  assert.equal(received[0]?.url, '/platform/test-events')
 })
 
 test('emitPlatformNotification forwards targeting and email-suppression options', async () => {

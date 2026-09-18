@@ -1,6 +1,16 @@
 {
   "releases": [
     {
+      "version": "1.3.3",
+      "releasedOn": "2026-09-18",
+      "changes": [
+        "Workspace and account controls now use a cleaner footer layout, with Settings always available and App settings accessible from the Settings page on native apps.",
+        "Workspace switchers now prioritize everyday workspaces and list administrative workspaces last.",
+        "Platform notifications now open the relevant administrative page.",
+        "Single-printer pages no longer show unnecessary fleet sorting and filtering controls."
+      ]
+    },
+    {
       "version": "1.3.2",
       "releasedOn": "2026-09-18",
       "changes": [

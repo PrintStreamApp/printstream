@@ -1302,7 +1302,7 @@ export function PrintersView() {
             context={{ printers, statuses: status }}
           />
 
-          {(showOverviewDirectoryControls || printers.length > 0) && (
+          {showOverviewDirectoryControls && (
             <PrinterOverviewToolbar
               printers={printers}
               tagFilter={tagFilter}

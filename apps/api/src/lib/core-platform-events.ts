@@ -15,6 +15,7 @@ export function registerCorePlatformNotificationEvents(): void {
       event: 'server-backup-failed',
       label: 'Server backup failed',
       variables: ['reason'],
+      defaultUrl: '/platform/settings/backups',
       defaults: {
         enabled: true,
         title: 'Server backup failed',

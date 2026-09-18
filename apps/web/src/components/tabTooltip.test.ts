@@ -13,8 +13,8 @@ import { tabTooltip } from './tabTooltip'
 test('an icon-only tab is named, because nothing else names it', () => {
   assert.equal(tabTooltip({ label: 'Settings', iconOnly: true }), 'Settings')
   assert.equal(
-    tabTooltip({ label: 'Workspaces', ariaLabel: 'Switch context', iconOnly: true }),
-    'Switch context'
+    tabTooltip({ label: 'Workspaces', ariaLabel: 'Switch workspace', iconOnly: true }),
+    'Switch workspace'
   )
 })
 
