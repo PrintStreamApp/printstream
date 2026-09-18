@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import type { NotificationMessage } from '@printstream/shared'
-import type { ApiPluginContext } from '../../plugin/types.js'
-import { withMobileNotificationImage } from './images.js'
+import type { ApiPluginContext } from '../plugin/types.js'
+import { prepareNativeNotificationImage } from './native-notification-images.js'
 
 const message: NotificationMessage = {
   id: 'message', category: 'system', level: 'info', title: 'Finished', body: 'Ready',
@@ -14,7 +14,7 @@ test('native job snapshots are scoped and copied to the existing short-lived cap
     assert.deepEqual(args, { where: { id: 'job', printer: { workspaceId: 'workspace' } }, select: { snapshotPath: true } })
     return { snapshotPath: 'saved.jpg' }
   } } } as unknown as ApiPluginContext['prisma']
-  const result = await withMobileNotificationImage(message, prisma, {
+  const result = await prepareNativeNotificationImage(message, prisma, {
     read: async (file) => { assert.equal(file, 'saved.jpg'); return Buffer.from('jpeg') },
     store: (bytes) => { assert.equal(bytes.toString(), 'jpeg'); return 'random-capability' }
   })
@@ -23,10 +23,10 @@ test('native job snapshots are scoped and copied to the existing short-lived cap
 
 test('missing scope, missing image, and oversized images keep the text but omit the picture', async () => {
   const prisma = { printJob: { findFirst: async () => ({ snapshotPath: 'saved.jpg' }) } } as unknown as ApiPluginContext['prisma']
-  const images = { read: async () => Buffer.alloc(1024 * 1024 + 1), store: () => { throw new Error('must not store') } }
-  assert.equal((await withMobileNotificationImage(message, prisma, images)).imageUrl, undefined)
-  assert.equal((await withMobileNotificationImage({ ...message, workspaceId: undefined }, prisma, images)).imageUrl, undefined)
-  const absent = await withMobileNotificationImage(message, prisma, { ...images, read: async () => null })
+  const images = { read: async () => Buffer.alloc(3 * 1024 * 1024 + 1), store: () => { throw new Error('must not store') } }
+  assert.equal((await prepareNativeNotificationImage(message, prisma, images)).imageUrl, undefined)
+  assert.equal((await prepareNativeNotificationImage({ ...message, workspaceId: undefined }, prisma, images)).imageUrl, undefined)
+  const absent = await prepareNativeNotificationImage(message, prisma, { ...images, read: async () => null })
   assert.equal(absent.imageUrl, undefined)
   assert.equal(absent.title, 'Finished')
 })

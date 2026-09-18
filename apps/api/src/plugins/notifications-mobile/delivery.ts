@@ -6,7 +6,7 @@ import { mayReceiveMobileNotifications } from './access.js'
 import { MobileSubscriptions } from './subscriptions.js'
 import { buildMobilePushData } from './fcm.js'
 import { mobileDeliveryTransport, sendMobileNotification } from './transport.js'
-import { withMobileNotificationImage } from './images.js'
+import { prepareNativeNotificationImage } from '../../lib/native-notification-images.js'
 
 /** Return a scope-safe sender; injected transport functions allow tests without real device tokens. */
 export function mobileNotificationHandler(context: ApiPluginContext, subscriptions: MobileSubscriptions, transport = {
@@ -34,7 +34,7 @@ export function mobileNotificationHandler(context: ApiPluginContext, subscriptio
           if (delivered.has(entry.token)) return
           delivered.add(entry.token)
           try {
-            prepared ??= withMobileNotificationImage(message, context.prisma)
+            prepared ??= prepareNativeNotificationImage(message, context.prisma)
             if (await transport.send(entry.token, buildMobilePushData(await prepared, entry.origin, entry.bindingId), entry.transport ?? 'direct')) {
               accepted++
             } else {

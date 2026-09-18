@@ -4,6 +4,7 @@ import type { ApiPlugin } from '../../plugin/types.js'
 import { badRequest, forbidden, unauthorized } from '../../lib/http-error.js'
 import { subscribePrinterNotifications } from '../../lib/notification-format.js'
 import { requestNativeNotificationAccount, mayReceiveNativeNotifications } from '../../lib/native-notification-access.js'
+import { prepareNativeNotificationImage } from '../../lib/native-notification-images.js'
 import { DesktopNotificationFeed } from './feed.js'
 
 export const notificationsDesktopPlugin: ApiPlugin = {
@@ -26,7 +27,7 @@ export const notificationsDesktopPlugin: ApiPlugin = {
       response.json(feed.read(scope, userId, query.data.cursor))
     })
     context.onShutdown(subscribePrinterNotifications(context.printerEvents, async (message) => {
-      feed.add(message)
+      feed.add(await prepareNativeNotificationImage(message, context.prisma))
     }, {
       shouldHandleWorkspaceId: (scope) => context.isEnabledForWorkspace?.(scope) ?? true,
       onError: () => context.logger.warn('Windows notification preparation failed')
