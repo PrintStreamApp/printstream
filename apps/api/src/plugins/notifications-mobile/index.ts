@@ -1,5 +1,6 @@
 /** Android notification plugin: personal enrolment, test delivery, and native FCM event fan-out. */
 import { randomUUID } from 'node:crypto'
+import { z } from 'zod'
 import { mobilePushRegistrationSchema, mobileRelayGrantSchema } from '@printstream/shared'
 import type { ApiPlugin } from '../../plugin/types.js'
 import { annotateRequestAuditLog, skipRequestAuditLog } from '../../lib/audit-logs.js'
@@ -11,7 +12,14 @@ import { mayReceiveMobileNotifications } from './access.js'
 import { requestNativeNotificationAccount } from '../../lib/native-notification-access.js'
 import { MobileSubscriptions } from './subscriptions.js'
 import { mobileDeliveryTransport } from './transport.js'
-import { mobileNotificationHandler } from './delivery.js'
+import { mobileDismissalHandler, mobileNotificationHandler } from './delivery.js'
+
+const mobileDismissalSchema = z.object({
+  bindingId: z.string().uuid(),
+  scope: z.string().min(1).nullable(),
+  tag: z.string().min(1).max(180),
+  notificationId: z.string().min(1).max(200).optional()
+})
 
 export const notificationsMobilePlugin: ApiPlugin = {
   name: 'notifications-mobile', version: '1.0.0',
@@ -21,6 +29,35 @@ export const notificationsMobilePlugin: ApiPlugin = {
     const transport = mobileDeliveryTransport()
     const isMobilePushConfigured = () => transport !== 'unavailable'
     if (transport !== 'unavailable') context.onShutdown(registerMobileNotificationTransport(transport))
+
+    context.router.post('/dismissals', async (request, response) => {
+      // A swipe or tap can arrive without a live WebView session. The random
+      // binding identifies the enrolled device without exposing its FCM token.
+      // This high-frequency, best-effort gesture has no durable state to audit.
+      skipRequestAuditLog(request)
+      const parsed = mobileDismissalSchema.safeParse(request.body)
+      if (!parsed.success) throw badRequest('Invalid notification dismissal')
+      const devices = await subscriptions.read(parsed.data.scope)
+      const device = devices.find((entry) => entry.bindingId === parsed.data.bindingId)
+      if (!device || device.userId.startsWith('anonymous:')) {
+        response.status(202).json({ ok: true })
+        return
+      }
+      if (!await mayReceiveMobileNotifications(context, device.userId, parsed.data.scope)) {
+        response.status(202).json({ ok: true })
+        return
+      }
+
+      context.printerEvents.emit('notification.dismiss', {
+        tag: parsed.data.tag,
+        notificationId: parsed.data.notificationId,
+        workspaceId: null,
+        targetUserIds: [device.userId],
+        excludeMobileBindingIds: [device.bindingId]
+      })
+      response.status(202).json({ ok: true })
+    })
+
     context.router.use(async (request, _response, next) => {
       const account = requestNativeNotificationAccount(request)
       if (!await mayReceiveMobileNotifications(context, account, request.workspace?.id ?? null)) {
@@ -70,6 +107,19 @@ export const notificationsMobilePlugin: ApiPlugin = {
       shouldHandleWorkspaceId: (scope) => context.isEnabledForWorkspace?.(scope) ?? true,
       onError: () => context.logger.warn('Native notification fan-out failed')
     }))
+    const dismiss = mobileDismissalHandler(context, subscriptions)
+    const onDismiss = (event: {
+      tag: string
+      notificationId?: string
+      targetUserIds?: string[]
+      excludeMobileBindingIds?: string[]
+    }) => {
+      dismiss(event).catch(() => context.logger.warn('Native notification dismissal fan-out failed'))
+    }
+    context.printerEvents.on('notification.dismiss', onDismiss)
+    context.onShutdown(() => {
+      context.printerEvents.off('notification.dismiss', onDismiss)
+    })
     context.router.post('/test', async (request, response) => {
       const userId = requestNativeNotificationAccount(request)
       const accepted = await deliver({ id: randomUUID(), category: 'system', level: 'info', title: 'PrintStream notifications are ready',

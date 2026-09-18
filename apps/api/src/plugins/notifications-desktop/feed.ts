@@ -36,9 +36,9 @@ export class DesktopNotificationFeed {
     })
   }
 
-  dismiss(message: { workspaceId: string | null; targetUserIds?: string[]; tag: string }): void {
+  dismiss(message: { workspaceId: string | null; targetUserIds?: string[]; tag: string; notificationId?: string }): void {
     this.append(message.workspaceId, message.targetUserIds, {
-      id: randomUUID(), type: 'dismiss', tag: message.tag
+      id: randomUUID(), type: 'dismiss', tag: message.tag, notificationId: message.notificationId
     })
   }
 

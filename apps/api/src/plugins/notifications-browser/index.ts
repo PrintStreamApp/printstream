@@ -62,17 +62,17 @@
  *
  * ## Dismissals are cross-scope, on purpose
  *
- * A dismissal reported by a service worker carries no workspace hint: a
+ * An authenticated dismissal reported by a service worker carries no workspace hint: a
  * service worker has no tab, so `X-PrintStream-Workspace` is absent and the
  * request falls back to the shared workspace-context cookie, which for a
  * platform user or a multi-workspace member reads `platform`, a scope whose
  * subscription list a workspace device can never be in. Scoping the fan-out
  * to the request's workspace therefore matched zero recipients and still
  * answered `202`, which is why dismissal sync silently did nothing. So a
- * dismissal fans out by ACTOR KEY across every scope holding subscriptions,
- * exactly as a user-targeted message with no `workspaceId` does: the actor
- * key is the authorization, and the device is that actor's wherever it
- * registered. Do not reintroduce a request-workspace scope here.
+ * dismissal fans out through the shared `notification.dismiss` event by user
+ * across every channel and scope. Auth-disabled self-hosted sessions have no
+ * person identity, so their dismissals stay local rather than clearing alerts
+ * on every unrelated device connected to that server.
  */
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
@@ -318,29 +318,58 @@ export const notificationsBrowserPlugin: ApiPlugin = {
         throw badRequest('Invalid dismissal payload')
       }
 
+      // A device gesture is personal only when authentication gives us a
+      // stable user. Anonymous self-hosted devices may be operated by unrelated
+      // people, so their dismissal deliberately stays local.
+      if (request.auth.actor.type !== 'user') {
+        response.status(202).json({ ok: true })
+        return
+      }
+
       // Retracting your own notification from your own devices needs no
-      // workspace permission; being the actor the subscriptions name IS the
-      // authorization, which is also why no scope membership is checked.
+      // workspace permission. The authenticated user id is the authorization,
+      // which is also why no request-workspace membership is checked here.
       const actorKey = buildNotificationActorKey(request.auth)
       if (!actorKey) {
         throw unauthorized(AUTHENTICATION_REQUIRED_MESSAGE)
       }
 
-      await deliverTargetedPush({
-        // Deliberately scope-less: see "Dismissals are cross-scope" above.
-        workspaceId: null,
-        payload: {
-          type: 'dismiss',
+      if (parsed.data.tag) {
+        await deliverTargetedPush({
+          workspaceId: null,
+          payload: {
+            type: 'dismiss',
+            notificationId: parsed.data.notificationId,
+            tag: parsed.data.tag
+          },
+          targetActorKeys: [actorKey],
+          getScopedDelivery: getOrCreateScopedDelivery,
+          listSubscriptionWorkspaceScopes: listSubscriptionWorkspaceScopesForDismissal,
+          isEnabledForWorkspace: (scope) => context.isEnabledForWorkspace?.(scope) ?? true,
+          excludeEndpoints: parsed.data.endpoint ? new Set([parsed.data.endpoint]) : undefined,
+          sendOptions: dismissalSendOptions(parsed.data.tag)
+        })
+        context.printerEvents.emit('notification.dismiss', {
+          tag: parsed.data.tag,
           notificationId: parsed.data.notificationId,
-          tag: parsed.data.tag
-        },
-        targetActorKeys: [actorKey],
-        getScopedDelivery: getOrCreateScopedDelivery,
-        listSubscriptionWorkspaceScopes: listSubscriptionWorkspaceScopesForDismissal,
-        isEnabledForWorkspace: (scope) => context.isEnabledForWorkspace?.(scope) ?? true,
-        excludeEndpoints: parsed.data.endpoint ? new Set([parsed.data.endpoint]) : undefined,
-        sendOptions: dismissalSendOptions(parsed.data.tag ?? parsed.data.notificationId ?? '')
-      })
+          workspaceId: null,
+          targetUserIds: [request.auth.actor.userId],
+          skipBrowser: true
+        })
+      } else {
+        // Older notifications may carry only an id. Native surfaces group by
+        // tag, so this fallback stays within browser push.
+        await deliverTargetedPush({
+          workspaceId: null,
+          payload: { type: 'dismiss', notificationId: parsed.data.notificationId },
+          targetActorKeys: [actorKey],
+          getScopedDelivery: getOrCreateScopedDelivery,
+          listSubscriptionWorkspaceScopes: listSubscriptionWorkspaceScopesForDismissal,
+          isEnabledForWorkspace: (scope) => context.isEnabledForWorkspace?.(scope) ?? true,
+          excludeEndpoints: parsed.data.endpoint ? new Set([parsed.data.endpoint]) : undefined,
+          sendOptions: dismissalSendOptions(parsed.data.notificationId ?? '')
+        })
+      }
       response.status(202).json({ ok: true })
     })
 
@@ -383,8 +412,16 @@ export const notificationsBrowserPlugin: ApiPlugin = {
     // (e.g. a support thread was read), retract the delivered notification by
     // its tag: targeted at specific users' devices, or across the whole
     // originating scope when the event carries no targets.
-    const handleDismiss = async (event: { tag: string; workspaceId: string | null; targetUserIds?: string[] }) => {
-      const dismissPayload = { type: 'dismiss', tag: event.tag }
+    const handleDismiss = async (event: {
+      tag: string
+      notificationId?: string
+      workspaceId: string | null
+      targetUserIds?: string[]
+      excludeBrowserEndpoints?: string[]
+      skipBrowser?: boolean
+    }) => {
+      if (event.skipBrowser) return
+      const dismissPayload = { type: 'dismiss', tag: event.tag, notificationId: event.notificationId }
       const sendOptions = dismissalSendOptions(event.tag)
       if (event.targetUserIds && event.targetUserIds.length > 0) {
         await deliverTargetedPush({
@@ -394,6 +431,7 @@ export const notificationsBrowserPlugin: ApiPlugin = {
           getScopedDelivery: getOrCreateScopedDelivery,
           listSubscriptionWorkspaceScopes: listSubscriptionWorkspaceScopesForDismissal,
           isEnabledForWorkspace: (scope) => context.isEnabledForWorkspace?.(scope) ?? true,
+          excludeEndpoints: event.excludeBrowserEndpoints ? new Set(event.excludeBrowserEndpoints) : undefined,
           sendOptions
         })
         return
@@ -402,7 +440,14 @@ export const notificationsBrowserPlugin: ApiPlugin = {
       const scopedDelivery = await getOrCreateScopedDelivery(event.workspaceId)
       await scopedDelivery.sendToAll(dismissPayload, sendOptions)
     }
-    const onDismiss = (event: { tag: string; workspaceId: string | null; targetUserIds?: string[] }) => {
+    const onDismiss = (event: {
+      tag: string
+      notificationId?: string
+      workspaceId: string | null
+      targetUserIds?: string[]
+      excludeBrowserEndpoints?: string[]
+      skipBrowser?: boolean
+    }) => {
       handleDismiss(event).catch((error) => context.logger.warn('web-push dismissal fanout failed', error))
     }
     context.printerEvents.on('notification.dismiss', onDismiss)

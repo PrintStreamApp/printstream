@@ -138,11 +138,10 @@ test('a dismissal never reaches another actor devices', async () => {
   assert.deepEqual(sent.map((entry) => entry.endpoint), ['https://push.example.test/mine'])
 })
 
-test('an auth-disabled install enrols devices and syncs dismissals between them', async () => {
-  // No auth provider means no memberships to check and one implicit operator,
-  // so both devices belong to it. Before this, the membership guard rejected
-  // the anonymous actor outright and browser notifications could not be
-  // enabled at all on a self-hosted install with auth switched off.
+test('an auth-disabled install enrols devices but keeps dismissals local', async () => {
+  // No auth provider means no person identity. The server may broadcast
+  // workspace alerts to both devices, but one operator dismissing an alert
+  // must not clear it for another person using the same installation.
   const sent = captureSentPushes()
 
   await withBrowserNotificationsApp({
@@ -161,7 +160,7 @@ test('an auth-disabled install enrols devices and syncs dismissals between them'
     assert.equal(response.status, 202)
   })
 
-  assert.deepEqual(sent.map((entry) => entry.endpoint), ['https://push.example.test/desktop'])
+  assert.deepEqual(sent, [])
 })
 
 test('dismissing your own notification does not require settings.manage', async () => {

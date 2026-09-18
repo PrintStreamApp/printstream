@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import type { NotificationMessage } from '@printstream/shared'
 import type { ApiPluginContext } from '../../plugin/types.js'
-import { mobileNotificationHandler } from './delivery.js'
+import { mobileDismissalHandler, mobileNotificationHandler } from './delivery.js'
 import { MobileSubscriptions, type MobileDevice } from './subscriptions.js'
 
 const bindingId = '6caa2337-01f6-4be2-a7d3-a628c5dc9b57'
@@ -35,10 +35,18 @@ function fixture() {
   const subscriptions = new MobileSubscriptions(context)
   const device = (userId: string, token = userId): MobileDevice => ({ userId, token, bindingId, origin: 'https://printstream.app', updatedAt: Date.now() })
   const sent: string[] = []
-  const deliver = mobileNotificationHandler(context, subscriptions, {
-    configured: () => true, send: async (token) => { sent.push(token); return token !== 'expired' }
-  })
-  return { subscriptions, device, sent, deliver, membershipChecks, context }
+  const payloads: Record<string, string>[] = []
+  const transport = {
+    configured: () => true,
+    send: async (token: string, data: Record<string, string>) => {
+      sent.push(token)
+      payloads.push(data)
+      return token !== 'expired'
+    }
+  }
+  const deliver = mobileNotificationHandler(context, subscriptions, transport)
+  const dismiss = mobileDismissalHandler(context, subscriptions, transport)
+  return { subscriptions, device, sent, payloads, deliver, dismiss, membershipChecks, context }
 }
 
 test('broadcast stays scoped and checks enabled membership at delivery time', async () => {
@@ -57,6 +65,30 @@ test('personal cross-scope messages deduplicate devices and exclude other actors
   await f.subscriptions.update('disabled', () => [f.device('alice', 'disabled-device')])
   assert.equal(await f.deliver({ ...message, workspaceId: undefined, targetUserIds: ['alice'] }), 1)
   assert.deepEqual(f.sent, ['alice'])
+})
+
+test('personal dismissals cross scopes, exclude the reporting binding and ignore other actors', async () => {
+  const f = fixture()
+  await f.subscriptions.update('alpha', () => [
+    f.device('alice', 'phone'),
+    { ...f.device('alice', 'tablet'), bindingId: '4ab4ef8f-1a68-49a2-85ee-c53a8abeb4b2' },
+    f.device('bob', 'bob')
+  ])
+  await f.subscriptions.update('beta', () => [f.device('alice', 'tablet')])
+
+  assert.equal(await f.dismiss({
+    tag: 'printer:p1:job',
+    targetUserIds: ['alice'],
+    excludeMobileBindingIds: [bindingId]
+  }), 1)
+  assert.deepEqual(f.sent, ['tablet'])
+  assert.deepEqual(f.payloads[0], {
+    kind: 'dismiss',
+    tag: 'printer:p1:job',
+    id: '',
+    origin: 'https://printstream.app',
+    bindingId: '4ab4ef8f-1a68-49a2-85ee-c53a8abeb4b2'
+  })
 })
 
 test('expired devices are removed but transport failures preserve enrolment', async () => {

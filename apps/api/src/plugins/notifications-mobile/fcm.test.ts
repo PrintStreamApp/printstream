@@ -9,19 +9,19 @@ const message: NotificationMessage = {
 }
 
 test('native payload keeps only same-origin links and optional snapshot routes', () => {
-  const data = buildMobilePushData({ ...message, imageUrl: 'https://printstream.app/api/notifications/snapshots/image.jpg' }, 'https://printstream.app', 'binding')
+  const data = buildMobilePushData({ ...message, imageUrl: 'https://printstream.app/api/notifications/snapshots/image.jpg' }, 'https://printstream.app', 'binding', 'workspace-1')
   assert.equal(data.url, '/workspaces/team/printers')
   assert.equal(data.image, '/api/notifications/snapshots/image.jpg')
-  const external = buildMobilePushData({ ...message, url: '//evil.example/path', imageUrl: 'https://evil.example/image' }, 'https://printstream.app', 'binding')
+  const external = buildMobilePushData({ ...message, url: '//evil.example/path', imageUrl: 'https://evil.example/image' }, 'https://printstream.app', 'binding', 'workspace-1')
   assert.equal(external.url, '/')
   assert.equal(external.image, '/')
 })
 
 test('native payload budgets UTF-8 bytes, not just character count', () => {
-  const data = buildMobilePushData({ ...message, title: '😀'.repeat(160), body: '😀'.repeat(1000), tag: '😀'.repeat(180) }, 'https://printstream.app', 'binding')
+  const data = buildMobilePushData({ ...message, title: '😀'.repeat(160), body: '😀'.repeat(1000), tag: '😀'.repeat(180) }, 'https://printstream.app', 'binding', 'workspace-1')
   assert.ok(Buffer.byteLength(JSON.stringify(data)) <= 3000)
   assert.equal(typeof data.body, 'string')
-  assert.throws(() => buildMobilePushData({ ...message, url: '/' + 'a'.repeat(4000) }, 'https://printstream.app', 'binding'), /budget/)
+  assert.throws(() => buildMobilePushData({ ...message, url: '/' + 'a'.repeat(4000) }, 'https://printstream.app', 'binding', 'workspace-1'), /budget/)
 })
 
 test('only explicit UNREGISTERED responses retire subscriptions', () => {

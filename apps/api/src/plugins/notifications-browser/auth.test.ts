@@ -226,7 +226,7 @@ test('a legacy subscription with no actor key is quarantined until re-enrolment'
   })
 })
 
-test('browser notification dismissals require an authenticated actor', async () => {
+test('signed-out browser dismissals stay local without revealing account state', async () => {
   await withBrowserNotificationsApp({
     authEnabled: true,
     actor: { type: 'anonymous' },
@@ -239,8 +239,8 @@ test('browser notification dismissals require an authenticated actor', async () 
       body: JSON.stringify({ tag: 'printer:p1:job' })
     })
 
-    assert.equal(response.status, 401)
-    assert.deepEqual(await response.json(), { error: 'Authentication required.' })
+    assert.equal(response.status, 202)
+    assert.deepEqual(await response.json(), { ok: true })
   })
 })
 

@@ -16,11 +16,10 @@ const SERVICE_ACCOUNT_PREFIX = 'service-account:'
 /**
  * The auth-disabled install's single implicit operator.
  *
- * With no auth provider enabled there is no user id to key on, but the devices
- * still need to reach each other's dismissals: an actor-less subscription
- * matches no targeted delivery at all. It cannot collide with a real actor,
- * and if auth is later enabled these entries simply stop matching, which
- * re-enabling notifications on the device repairs.
+ * With no auth provider enabled there is no user id to key on. The key keeps
+ * anonymous workspace broadcasts deliverable without pretending every device
+ * connected to that server belongs to one person. User-gesture dismissals are
+ * therefore never targeted at this key.
  */
 export const LOCAL_OPERATOR_ACTOR_KEY = 'local:operator'
 

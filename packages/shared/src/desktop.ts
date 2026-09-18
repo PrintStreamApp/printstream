@@ -9,6 +9,7 @@ export const desktopNotificationEventSchema = z.object({
   id: z.string(),
   type: z.enum(['notification', 'dismiss']),
   tag: z.string(),
+  notificationId: z.string().optional(),
   title: z.string().optional(),
   body: z.string().optional(),
   url: z.string().optional(),

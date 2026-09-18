@@ -10,13 +10,20 @@ type Handler = (request: Request, response: Response) => Promise<void>
 
 /** Register the real plugin with a narrowly stubbed membership store, without opening a test socket. */
 async function routeHarness() {
-  let handler: Handler | undefined
+  let readHandler: Handler | undefined
+  let dismissHandler: Handler | undefined
   let member = true
   let platformUser = false
   const membershipQueries: unknown[] = []
+  const printerEvents = new PrinterEventBus()
+  const dismissals: unknown[] = []
+  printerEvents.on('notification.dismiss', (event) => dismissals.push(event))
   await notificationsDesktopPlugin.register({
-    router: { get(_path: string, route: Handler) { handler = route } },
-    printerEvents: new PrinterEventBus(),
+    router: {
+      get(_path: string, route: Handler) { readHandler = route },
+      post(_path: string, route: Handler) { dismissHandler = route }
+    },
+    printerEvents,
     logger: { warn() {} },
     onShutdown() {},
     prisma: {
@@ -31,16 +38,18 @@ async function routeHarness() {
       setting: { async findUnique() { return null } }
     }
   } as never)
-  assert.ok(handler)
+  assert.ok(readHandler)
+  assert.ok(dismissHandler)
 
   return {
     membershipQueries,
+    dismissals,
     revoke() { member = false },
     allowPlatform() { platformUser = true },
     async read(options: { actor?: string; enrolled?: string; platform?: boolean; cursor?: unknown; authEnabled?: boolean } = {}) {
       let result: unknown
       let cacheControl: unknown
-      await handler!({
+      await readHandler!({
         auth: { authEnabled: options.authEnabled ?? true, runtimePolicy: { demoMode: false }, actor: options.actor === 'anonymous' ? { type: 'anonymous' } : { type: 'user', userId: options.actor ?? 'alice' } },
         workspace: options.platform ? null : { id: 'workshop' },
         query: options.cursor === undefined ? {} : { cursor: options.cursor },
@@ -51,6 +60,26 @@ async function routeHarness() {
       } as Response)
       assert.equal(cacheControl, 'no-store')
       return result
+    },
+    async dismiss(options: { actor?: string; enrolled?: string; authEnabled?: boolean } = {}) {
+      let status = 200
+      let result: unknown
+      await dismissHandler!({
+        auth: {
+          authEnabled: options.authEnabled ?? true,
+          runtimePolicy: { demoMode: false },
+          actor: options.actor === 'anonymous'
+            ? { type: 'anonymous' }
+            : { type: 'user', userId: options.actor ?? 'alice' }
+        },
+        workspace: { id: 'workshop' },
+        body: { tag: 'printer:p1:job', notificationId: 'message-1' },
+        get: () => options.enrolled ?? 'alice'
+      } as unknown as Request, {
+        status(value: number) { status = value; return this },
+        json(value: unknown) { result = value }
+      } as Response)
+      return { status, result }
     }
   }
 }
@@ -88,6 +117,29 @@ test('self-hosted anonymous reads require disabled authentication and the matchi
     await assert.rejects(app.read({ actor: 'anonymous', authEnabled: true, enrolled: 'anonymous:workshop' }), { statusCode: 401 })
     await assert.rejects(app.read({ actor: 'anonymous', authEnabled: false, platform: true, enrolled: 'anonymous:workshop' }), { statusCode: 401 })
     assert.equal(app.membershipQueries.length, 0)
+  } finally {
+    env.SELF_HOSTED = previous
+  }
+})
+
+test('desktop dismissals synchronize only for an identified eligible user', async () => {
+  const app = await routeHarness()
+  assert.deepEqual(await app.dismiss(), { status: 202, result: { ok: true } })
+  assert.deepEqual(app.dismissals, [{
+    tag: 'printer:p1:job',
+    notificationId: 'message-1',
+    workspaceId: null,
+    targetUserIds: ['alice']
+  }])
+
+  const previous = env.SELF_HOSTED
+  env.SELF_HOSTED = true
+  try {
+    assert.deepEqual(await app.dismiss({ actor: 'anonymous', authEnabled: false, enrolled: 'anonymous:workshop' }), {
+      status: 202,
+      result: { ok: true }
+    })
+    assert.equal(app.dismissals.length, 1)
   } finally {
     env.SELF_HOSTED = previous
   }

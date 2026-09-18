@@ -14,8 +14,9 @@
  *
  * Dealing with a notification on ONE device clears it on the others. Both
  * gestures count and both are reported to
- * `POST /api/plugins/notifications-browser/dismissals`, which pushes a
- * `{ type: 'dismiss' }` payload to the same account's other devices:
+ * `POST /api/plugins/notifications-browser/dismissals`, which retracts the
+ * alert from the same authenticated account's browser, Android, and Windows
+ * devices. Auth-disabled self-hosted dismissals stay on this browser:
  *
  * - `notificationclose`, the user swiped it away; and
  * - `notificationclick`, the user tapped it (or its action button).

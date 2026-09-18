@@ -81,9 +81,19 @@ export interface PrinterEvents {
    * `targetUserIds` the dismissal addresses only those users' devices
    * (cross-scope when `workspaceId` is null, mirroring the targeted-delivery
    * contract); without it every subscription in the given scope is asked.
+   * Exclusion lists identify the device that already handled the gesture, so
+   * channel plugins do not spend a silent delivery echoing back to it.
    * Channels that cannot retract (email, webhooks) ignore it.
    */
-  'notification.dismiss': (event: { tag: string; workspaceId: string | null; targetUserIds?: string[] }) => void
+  'notification.dismiss': (event: {
+    tag: string
+    notificationId?: string
+    workspaceId: string | null
+    targetUserIds?: string[]
+    excludeBrowserEndpoints?: string[]
+    excludeMobileBindingIds?: string[]
+    skipBrowser?: boolean
+  }) => void
   /**
    * A filament spool became loaded in an AMS slot (the `filament-manager` plugin
    * emits on RFID auto-association and manual slot assignment). Carries the

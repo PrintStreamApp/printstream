@@ -9,7 +9,7 @@ export function isMobilePushConfigured(): boolean {
 }
 
 /** Bounded data-only payload; Android displays it without a running WebView. */
-export function buildMobilePushData(message: NotificationMessage, origin: string, bindingId: string) {
+export function buildMobilePushData(message: NotificationMessage, origin: string, bindingId: string, scope: string | null) {
   const route = (value?: string): string => {
     try {
       const url = new URL(value ?? '/', origin)
@@ -19,7 +19,7 @@ export function buildMobilePushData(message: NotificationMessage, origin: string
     }
   }
   const data = {
-    id: message.id, bindingId, origin,
+    kind: 'notification', id: message.id, bindingId, origin, scope: scope ?? '',
     title: message.title.slice(0, 160), body: message.body.slice(0, 600),
     level: message.level, tag: (message.tag ?? message.id).slice(0, 180),
     url: route(message.url), image: message.imageUrl ? route(message.imageUrl) : '',
@@ -31,6 +31,11 @@ export function buildMobilePushData(message: NotificationMessage, origin: string
   }
   if (Buffer.byteLength(JSON.stringify(data)) > 3000) throw new Error('Mobile push metadata exceeds payload budget')
   return data
+}
+
+/** A native retraction carries only the stable grouping data Android needs. */
+export function buildMobileDismissData(tag: string, notificationId: string | undefined, origin: string, bindingId: string) {
+  return { kind: 'dismiss', tag: tag.slice(0, 180), id: notificationId?.slice(0, 200) ?? '', origin, bindingId }
 }
 
 /** Only UNREGISTERED retires a token; permission/project errors must not erase devices. */

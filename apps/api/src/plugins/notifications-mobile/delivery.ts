@@ -4,7 +4,7 @@ import type { ApiPluginContext } from '../../plugin/types.js'
 import { listWorkspaceScopesWithPluginSetting } from '../../lib/notification-scope.js'
 import { mayReceiveMobileNotifications } from './access.js'
 import { MobileSubscriptions } from './subscriptions.js'
-import { buildMobilePushData } from './fcm.js'
+import { buildMobileDismissData, buildMobilePushData } from './fcm.js'
 import { mobileDeliveryTransport, sendMobileNotification } from './transport.js'
 import { prepareNativeNotificationImage } from '../../lib/native-notification-images.js'
 
@@ -35,7 +35,7 @@ export function mobileNotificationHandler(context: ApiPluginContext, subscriptio
           delivered.add(entry.token)
           try {
             prepared ??= prepareNativeNotificationImage(message, context.prisma)
-            if (await transport.send(entry.token, buildMobilePushData(await prepared, entry.origin, entry.bindingId), entry.transport ?? 'direct')) {
+            if (await transport.send(entry.token, buildMobilePushData(await prepared, entry.origin, entry.bindingId, current), entry.transport ?? 'direct')) {
               accepted++
             } else {
               await subscriptions.update(current, (entries) => entries.filter((device) => device.token !== entry.token))
@@ -46,6 +46,54 @@ export function mobileNotificationHandler(context: ApiPluginContext, subscriptio
         }))
       }
     }
+    return accepted
+  }
+}
+
+/** Send a tag retraction to one authenticated user's enrolled Android devices. */
+export function mobileDismissalHandler(context: ApiPluginContext, subscriptions: MobileSubscriptions, transport = {
+  configured: () => mobileDeliveryTransport() !== 'unavailable',
+  send: sendMobileNotification
+}) {
+  return async (event: {
+    tag: string
+    notificationId?: string
+    targetUserIds?: string[]
+    excludeMobileBindingIds?: string[]
+  }): Promise<number> => {
+    if (!transport.configured() || !event.targetUserIds?.length) return 0
+    const scopes = [null, ...await listWorkspaceScopesWithPluginSetting(context.prisma, context.pluginName, 'devices')]
+    const excluded = new Set(event.excludeMobileBindingIds ?? [])
+    const delivered = new Set<string>()
+    let accepted = 0
+
+    for (const scope of scopes) {
+      if (!(context.isEnabledForWorkspace?.(scope) ?? true)) continue
+      const devices = await subscriptions.read(scope)
+      for (let offset = 0; offset < devices.length; offset += 8) {
+        await Promise.all(devices.slice(offset, offset + 8).map(async (entry) => {
+          if (delivered.has(entry.token) || excluded.has(entry.bindingId)) return
+          if (!event.targetUserIds!.includes(entry.userId)) return
+          if (!await mayReceiveMobileNotifications(context, entry.userId, scope)) return
+          if (delivered.has(entry.token)) return
+          delivered.add(entry.token)
+          try {
+            if (await transport.send(
+              entry.token,
+              buildMobileDismissData(event.tag, event.notificationId, entry.origin, entry.bindingId),
+              entry.transport ?? 'direct'
+            )) {
+              accepted++
+            } else {
+              await subscriptions.update(scope, (entries) => entries.filter((device) => device.token !== entry.token))
+            }
+          } catch {
+            context.logger.warn('Native notification dismissal delivery failed', { workspaceId: scope })
+          }
+        }))
+      }
+    }
+
     return accepted
   }
 }
