@@ -11,6 +11,7 @@
  * a card whose only control fails on click is worse than no card.
  */
 import NotificationsActiveRoundedIcon from '@mui/icons-material/NotificationsActiveRounded'
+import { isNativeApp } from '../../native/bridge'
 import { AccountNotificationChannelCard } from '../../components/AccountNotificationChannelCard'
 import { useAuthBootstrapQuery } from '../../lib/authQuery'
 import { scopeAcceptsPersonalNotifications } from '../../lib/personalNotificationScope'
@@ -18,6 +19,7 @@ import { BrowserNotificationsPanel } from './BrowserNotificationsPanel'
 
 export function BrowserNotificationsAccountSection() {
   const bootstrap = useAuthBootstrapQuery().data
+  if (isNativeApp()) return null
   if (!scopeAcceptsPersonalNotifications(bootstrap)) return null
 
   return (

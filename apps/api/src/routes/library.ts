@@ -4,6 +4,7 @@
  * preview plugin (and future viewers) can fetch the raw bytes without
  * loading them into memory.
  */
+import { libraryTagWhere, parseLibraryTagIds } from '../lib/library-tag-filters.js'
 import { createReadStream, mkdirSync } from 'node:fs'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { appendFile, copyFile, readFile, readdir, rename, rm, stat, unlink, writeFile } from 'node:fs/promises'
@@ -256,6 +257,7 @@ type LibraryUploadSessionResponse = Pick<LibraryUploadSession,
 > & { completion: LibraryUploadCompletion | null }
 
 type LibraryFileRow = {
+  sourceTagSnapshotJson?: string | null
   id: string
   workspaceId: string
   name: string
@@ -276,6 +278,7 @@ type LibraryFileRow = {
 }
 
 type LibraryFileVersionRow = {
+  sourceTagSnapshotJson?: string | null
   id: string
   libraryFileId: string
   workspaceId: string
@@ -571,6 +574,7 @@ libraryRouter.get('/browse', requireRequestPermission(LIBRARY_VIEW_PERMISSION), 
   // active bridge (ignoring folderId/parentId) instead of listing one folder. Drives the library
   // search box's "All folders" scope; absent => the normal single-folder listing.
   const search = typeof request.query.search === 'string' ? request.query.search.trim() : ''
+  const tagIds = parseLibraryTagIds(request.query.tagIds)
   const searching = search.length > 0
   const nameContains = { contains: search, mode: 'insensitive' as const }
   const bridges = (await prisma.bridge.findMany({
@@ -621,7 +625,7 @@ libraryRouter.get('/browse', requireRequestPermission(LIBRARY_VIEW_PERMISSION), 
   const [fileRows, folderRows] = await Promise.all([
     prisma.libraryFile.findMany({
       where: visibleLibraryFilesWhere({
-        ...(searching ? { name: nameContains } : {}),
+        ...libraryTagWhere(workspaceId, search, tagIds),
         ...(flatList ? {} : { folderId }),
         ownerBridgeId: activeBridgeId,
         ...(workspaceId ? { workspaceId } : {}),
@@ -1509,6 +1513,7 @@ libraryRouter.post('/versions/:versionId/restore', requireRequestPermission(LIBR
         where: { id: current.id },
         data: {
           storedPath,
+          sourceTagSnapshotJson: version.sourceTagSnapshotJson ?? null,
           sizeBytes: version.sizeBytes,
           kind: version.kind,
           thumbnailPath: version.thumbnailPath,
@@ -1607,6 +1612,7 @@ libraryRouter.delete('/:id/current-version', requireRequestPermission(LIBRARY_MA
       data: {
         // The previous version's bytes become the current content verbatim: the file
         // now *is* that version (number and all), not a new "restored from" copy.
+        sourceTagSnapshotJson: prev.sourceTagSnapshotJson ?? null,
         storedPath: prev.storedPath,
         ownerBridgeId: prev.ownerBridgeId,
         sizeBytes: prev.sizeBytes,
@@ -1702,6 +1708,7 @@ libraryRouter.post('/versions/:versionId/print', requireRequestPermission(PRINTS
     snapshotKey: null,
     // An archived version has no preserved project of its own: the re-slice link is
     // recorded per sliced OUTPUT, and this dispatches historical bytes instead.
+    sourceTagSnapshotJson: version.sourceTagSnapshotJson ?? null,
     sourceProjectFileId: null,
     sliceSettingsJson: null
   })
@@ -2696,6 +2703,7 @@ function buildLibraryStoredPath(fileName: string): string {
 
 function toLibraryFileVersionCreateInput(row: LibraryFileRow) {
   return {
+    sourceTagSnapshotJson: row.sourceTagSnapshotJson ?? null,
     workspaceId: row.workspaceId,
     libraryFileId: row.id,
     ownerBridgeId: row.ownerBridgeId,

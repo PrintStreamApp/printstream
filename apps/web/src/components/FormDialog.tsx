@@ -40,6 +40,7 @@ export function FormDialog({
   description,
   error,
   submitLabel,
+  cancelLabel = 'Cancel',
   onSubmit,
   submitDisabled = false,
   secondaryActions,
@@ -54,6 +55,8 @@ export function FormDialog({
   description?: ReactNode
   error?: ReactNode
   submitLabel: ReactNode
+  /** Use a contextual dismissal such as Not now for optional onboarding. */
+  cancelLabel?: ReactNode
   onSubmit: () => void
   submitDisabled?: boolean
   /** Optional actions placed between dismiss and confirm, preserving the shared footer order. */
@@ -80,7 +83,7 @@ export function FormDialog({
           </Stack>
         </DialogContent>
         <DialogActions>
-          <Button variant="plain" color="neutral" disabled={busy} onClick={onClose}>Cancel</Button>
+          <Button variant="plain" color="neutral" disabled={busy} onClick={onClose}>{cancelLabel}</Button>
           {secondaryActions}
           <Button loading={busy} disabled={submitDisabled} onClick={onSubmit}>{submitLabel}</Button>
         </DialogActions>

@@ -1,5 +1,5 @@
 /**
- * The "Filament types" + "Filament brands" donut stat cards, rendered from a
+ * The "Material types" + "Filament brands" donut stat cards, rendered from a
  * FilamentUsageStats. Shared by the per-workspace stats page (filament-manager
  * plugin) and the platform overview so both render identically. Each donut shows
  * every slice; the legend names only the top few. Renders nothing when there is
@@ -34,7 +34,7 @@ export function FilamentBreakdownCards({ stats }: { stats: FilamentUsageStats })
     <>
       <BreakdownStatCard
         icon={<CategoryRoundedIcon />}
-        label="Filament types"
+        label="Material types"
         primaryValue={formatKilograms(stats.totalGramsUsed)}
         description={`Used across ${stats.byType.length} ${stats.byType.length === 1 ? 'type' : 'types'}.`}
         items={toBreakdownItems(stats.byType)}

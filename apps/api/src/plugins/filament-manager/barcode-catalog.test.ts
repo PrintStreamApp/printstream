@@ -131,9 +131,24 @@ test('downloads once, resolves both code forms, and reports unknown codes', asyn
 
   const retail = await catalog.lookup('6975337032878')
   const article = await catalog.lookup('40101')
-  assert.equal(retail?.brand, 'Bambu Lab')
+  assert.equal(retail?.brand, 'Bambu')
   assert.equal(retail?.productCode, '6975337032878')
   assert.equal(article?.productCode, '40101')
   assert.equal(await catalog.lookup('not-known'), null)
   assert.equal(requests, 1)
+})
+
+test('barcode prefills retain the full product line used by calibration matching', () => {
+  for (const [brand, name, material, expected] of [
+    ['Polymaker', 'PolyLite PETG', 'PETG', 'PolyLite PETG'],
+    ['Bambu Lab', 'PLA Metal', 'PLA', 'PLA Metal'],
+    ['Polymaker', 'Polymaker PolyLite PETG', 'PETG', 'PolyLite PETG']
+  ]) {
+    const index = buildBarcodeCatalogIndex({
+      ...CATALOG,
+      brands: [{ ...CATALOG.brands[0], name: brand }],
+      filaments: [{ ...CATALOG.filaments[0], name, material }]
+    })
+    assert.equal(index.articles.get('40101')?.materialSubtype, expected)
+  }
 })

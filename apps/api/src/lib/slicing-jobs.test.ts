@@ -66,12 +66,14 @@ test('an unchanged hidden slice is ready from cache without occupying the slicer
     throw new Error('the slicer must not run on a cache hit')
   }) as typeof slicerClient.run
 
+  const sourceTag = { id: 'source-tag', entityKind: 'file' as const, name: 'Original', group: '', color: '#123456' }
   const jobs = new SlicingJobs({
     resolveSource: passthroughResolveSource,
     authorSliceSettings: noAuthoring,
     persistThumbnail: async () => null,
     resolveSlicerCapabilities: async () => makeCacheCapabilities(),
-    lookupResultCache: async () => {
+    lookupResultCache: async (input) => {
+      assert.deepEqual(JSON.parse(input.sourceTagSnapshotJson!), { tags: [sourceTag], spoolIds: [] })
       lookupCalls += 1
       return {
         cacheKey: 'cache-key',
@@ -86,6 +88,7 @@ test('an unchanged hidden slice is ready from cache without occupying the slicer
   })
 
   const job = jobs.enqueue({
+    tagSnapshot: [sourceTag],
     workspaceId: 'workspace-1',
     workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
     sourceFileId: 'file-1',
@@ -331,8 +334,10 @@ test('slicing jobs reload persisted history after restart', async () => {
     throw new SlicerServiceError('Slicing failed', [])
   }) as typeof slicerClient.run
 
+  const capturedTags = [{ id: 'tag', entityKind: 'file' as const, name: 'Original', group: 'Customer', color: '#123456' }]
   const first = new SlicingJobs(options)
   const queued = first.enqueue({
+    tagSnapshot: capturedTags,
     workspaceId: 'workspace-1',
     workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
     sourceFileId: 'file-1',
@@ -341,6 +346,8 @@ test('slicing jobs reload persisted history after restart', async () => {
     targetBridgeId: null,
     request: makeRequest()
   })
+
+  capturedTags[0]!.name = 'Changed after enqueue'
 
   try {
     await waitFor(async () => {
@@ -359,6 +366,9 @@ test('slicing jobs reload persisted history after restart', async () => {
     assert.equal(list[0]?.id, queued.id)
     assert.equal(list[0]?.status, 'failed')
     assert.equal(list[0]?.error, 'Slicing failed')
+    assert.equal(list[0]?.tagSnapshot?.[0]?.name, 'Original')
+    list[0]!.tagSnapshot![0]!.name = 'Changed DTO'
+    assert.equal(reloaded.get('workspace-1', queued.id).tagSnapshot?.[0]?.name, 'Original')
   } finally {
     await rm(tempDir, { recursive: true, force: true })
   }
@@ -420,6 +430,7 @@ test('listActive drops finished jobs older than the recency window while list ke
 })
 
 test('slicing jobs persist slice-to-print artifacts as hidden files', async () => {
+  const sourceTag = { id: 'source-tag', entityKind: 'file' as const, name: 'Original', group: '', color: '#123456' }
   const persistedInputs: Array<{ hidden: boolean; folderId: string | null; fileName: string }> = []
   const cachedInputs: Array<{ cacheKey: string; outputFileId: string }> = []
   const jobs = new SlicingJobs({
@@ -427,6 +438,7 @@ test('slicing jobs persist slice-to-print artifacts as hidden files', async () =
     progressHeartbeatIntervalMs: 10_000,
     resolveSource: passthroughResolveSource, authorSliceSettings: noAuthoring,
     persistArtifact: async (input) => {
+      assert.deepEqual(JSON.parse(input.sourceTagSnapshotJson!), { tags: [sourceTag], spoolIds: [] })
       persistedInputs.push({ hidden: input.hidden, folderId: input.folderId, fileName: input.fileName })
       return {
         file: {
@@ -468,6 +480,7 @@ test('slicing jobs persist slice-to-print artifacts as hidden files', async () =
   })) as typeof slicerClient.run
 
   const job = jobs.enqueue({
+    tagSnapshot: [sourceTag],
     workspaceId: 'workspace-1',
     workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
     sourceFileId: 'file-1',

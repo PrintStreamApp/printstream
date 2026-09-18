@@ -90,6 +90,7 @@ export const wsResourceChangedEventSchema = z.object({
     'logs',
     'orders',
     'printer.views',
+    'tags',
     'printer.storage',
     'notification.templates',
     'plugins',

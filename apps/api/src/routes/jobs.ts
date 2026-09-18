@@ -12,6 +12,7 @@
  * history row may carry rich PrintStream metadata (library file, plate, AMS
  * mapping) or almost none for an external job.
  */
+import { jobHistoryTagMatcher, readJobHistoryTags, jobHistoryTagCatalog } from '../lib/job-history-tags.js'
 import { Router } from 'express'
 import { Prisma } from '@prisma/client'
 import { z } from 'zod'
@@ -182,6 +183,13 @@ jobsRouter.get('/', requireRequestPermission(JOBS_VIEW_PERMISSION), async (reque
   })
 })
 
+/** Historical filter vocabulary, including tag versions no longer present in live catalogs. */
+jobsRouter.get('/history/tags', requireRequestPermission(JOBS_VIEW_PERMISSION), async (request, response) => {
+  const workspaceId = requireRequestWorkspaceId(request)
+  const jobs = slicingJobs.list(workspaceId).filter((job) => !isActiveSlicingJob(job))
+  response.json({ tags: jobHistoryTagCatalog(await readJobHistoryTags(workspaceId, jobs)) })
+})
+
 /**
  * The merged job history, finished prints + terminal slicing jobs, filtered, sorted, and
  * PAGED server-side (the shared `selectJobHistoryPage` owns the semantics; the Jobs view's
@@ -206,10 +214,13 @@ jobsRouter.get('/history', requireRequestPermission(JOBS_VIEW_PERMISSION), async
   const terminalSlicingJobs = slicingJobs.list(workspaceId).filter((job) => !isActiveSlicingJob(job))
   const printers = await prisma.printer.findMany({ where: { workspaceId }, select: { id: true, name: true } })
   const printerNames = new Map(printers.map((printer) => [printer.id, printer.name]))
+  const tagsByJob = await readJobHistoryTags(workspaceId, terminalSlicingJobs)
   const result = selectJobHistoryPage({
     printJobs,
     slicingJobs: terminalSlicingJobs,
     query: parsedQuery.data,
+    matchesAdditionalSearch: jobHistoryTagMatcher(tagsByJob, parsedQuery.data.search),
+    matchesTags: jobHistoryTagMatcher(tagsByJob, '', parsedQuery.data.tagIds),
     printerNameFor: (id) => printerNames.get(id) ?? null
   })
   // Gzip-piped like the slicing list: a 100-row page of jobs is still repetitive JSON.

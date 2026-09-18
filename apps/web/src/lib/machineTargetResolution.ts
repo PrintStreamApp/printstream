@@ -222,7 +222,9 @@ export function resolveMachineTarget(inputs: MachineTargetInputs, intent: Machin
   const fileModel = resolveInitialManualPrinterModel(file)
   let manualPrinterModel = 'unknown'
   let modelOrigin: MachineTargetOrigin = 'unseeded'
-  if (intent.printerModel && printerModelOptions.includes(intent.printerModel)) {
+  // A loading catalogue cannot invalidate a deliberate model pick. Keep it visible until
+  // the destination catalogue can actually answer whether it is supported.
+  if (intent.printerModel && (!catalogueResolved || printerModelOptions.includes(intent.printerModel))) {
     manualPrinterModel = intent.printerModel
     modelOrigin = 'user'
   } else if (projectModel) {
@@ -255,7 +257,9 @@ export function resolveMachineTarget(inputs: MachineTargetInputs, intent: Machin
   let nozzleOrigin: MachineTargetOrigin = 'unseeded'
   const offeredNozzle = (value: string | null | undefined): string | null =>
     value && nozzleDiameterOptions.includes(value) ? value : null
-  const nozzleFromIntent = offeredNozzle(intent.nozzleDiameter)
+  const nozzleFromIntent = !catalogueResolved && intent.nozzleDiameter
+    ? intent.nozzleDiameter
+    : offeredNozzle(intent.nozzleDiameter)
   const nozzleFromProject = offeredNozzle(projectNozzle)
   const nozzleFromPrinter = offeredNozzle(printerNozzle)
   if (nozzleFromIntent) { nozzleDiameter = nozzleFromIntent; nozzleOrigin = 'user' }
@@ -336,7 +340,9 @@ export function resolveMachineTarget(inputs: MachineTargetInputs, intent: Machin
   //    what is physically on that machine. `plateFromPrinter` is non-null only when a real printer
   //    is the target, so a model-only target still seeds from the project.
   const plateTypeOptions = resolveCompatiblePlateTypes(file, bakedIndex, selectedMachineProfile, printerCompatibleProcessProfiles)
-  const plateFromIntent = matchPlateTypeByLabel(plateTypeOptions, intent.plateType)
+  const plateFromIntent = !catalogueResolved && intent.plateType
+    ? intent.plateType
+    : matchPlateTypeByLabel(plateTypeOptions, intent.plateType)
   const plateFromProject = matchPlateTypeByLabel(plateTypeOptions, resolveProjectPlateType(file, bakedIndex))
   const plateFromPrinter = matchPlateTypeByLabel(plateTypeOptions, selectedPrinter?.currentPlateType)
   let plateType = ''

@@ -4,6 +4,7 @@
  * `DirectoryPrimaryToolbar` + `PaginatedSection` composition (and the filament-manager's spool
  * directory) without importing those plugins. Default sort is "best match" to the sliced filament.
  */
+import { useTagFilter } from '../../hooks/useTagFilter'
 import { useEffect, useMemo, useState } from 'react'
 import { Button, Checkbox, DialogActions, DialogTitle, FormControl, FormLabel, Select, Sheet, Stack } from '@mui/joy'
 import PaletteRounded from '@mui/icons-material/PaletteRounded'
@@ -42,6 +43,8 @@ export function MaterialPickerDialog({
   color: string | null
   requiredGrams?: number | null
 }) {
+  const tagFilter = useTagFilter('spool', 'queue.material-picker')
+  const { matches: matchesTags, searchText: tagSearchText, value: selectedTagIds } = tagFilter
   const [search, setSearch] = useState('')
   // Default to filtering to the sliced file's (compatible) type so the picker leads with usable
   // materials, but only when the library actually has that type, otherwise fall back to all types
@@ -65,13 +68,15 @@ export function MaterialPickerDialog({
   const filtered = useMemo(() => {
     const needle = search.trim().toLowerCase()
     return materials.filter((material) => {
+      const spoolIds = (excludeLoaded ? material.availableSpoolIds : material.spoolIds) ?? []
+      if (selectedTagIds.length && !spoolIds.some(matchesTags)) return false
       // When excluding loaded, drop materials whose spools are *all* loaded into machines.
       if (excludeLoaded && material.loadedSpoolCount >= material.spoolCount) return false
       if (types.length > 0 && !types.includes(material.filamentType)) return false
       if (!needle) return true
-      return [material.filamentType, material.brand, material.colorName, material.color].some((field) => field?.toLowerCase().includes(needle))
+      return [material.filamentType, material.brand, material.colorName, material.color, ...spoolIds.map(tagSearchText)].some((field) => field?.toLowerCase().includes(needle))
     })
-  }, [materials, search, types, excludeLoaded])
+  }, [materials, search, types, excludeLoaded, matchesTags, tagSearchText, selectedTagIds])
 
   const sorted = useMemo(() => {
     const factor = direction === 'asc' ? 1 : -1
@@ -92,7 +97,7 @@ export function MaterialPickerDialog({
 
   useEffect(() => {
     setPage(1)
-  }, [search, types, excludeLoaded, sort, direction, pageSize])
+  }, [search, types, excludeLoaded, sort, direction, pageSize, selectedTagIds])
 
   return (
     <Modal open={open} onClose={onClose}>
@@ -104,6 +109,7 @@ export function MaterialPickerDialog({
           <DirectoryPrimaryToolbar
             pinStorageKey="print-queue.material-picker"
             compactControls
+            tagFilter={tagFilter}
             searchValue={search}
             onSearchChange={setSearch}
             searchPlaceholder="Search materials…"
@@ -115,12 +121,12 @@ export function MaterialPickerDialog({
               children: (
                 <Stack spacing={1.25}>
                   <FormControl>
-                    <FormLabel>Type</FormLabel>
+                    <FormLabel>Material type</FormLabel>
                     <Select
                       multiple
                       value={types}
                       onChange={(_event, value) => setTypes(value)}
-                      placeholder="All types"
+                      placeholder="All material types"
                       renderValue={() => (types.length === 0 ? null : types.join(', '))}
                       slotProps={{ listbox: { disablePortal: true } }}
                     >

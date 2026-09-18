@@ -77,14 +77,15 @@ function renderPicker() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: Infinity, staleTime: Infinity } }
   })
+  queryClient.setQueryData(['auth-bootstrap', 'ambient'], { workspace: null, authEnabled: false, permissions: [] })
   // Keys mirror LibraryPickerModal's browse/folders queries. The empty string is
   // `allFolderSearch`, which stays empty while the search scope is "This folder".
   queryClient.setQueryData<LibraryBrowseResponse>(
-    ['library-browse', 'printer-picker', 'root', 'none', '', false],
+    ['library-browse', 'printer-picker', 'root', 'none', '', false, []],
     browsePayload([dragonsFolder], [makeFile('file-ship', 'ship-hull.gcode.3mf', null)])
   )
   queryClient.setQueryData<LibraryBrowseResponse>(
-    ['library-browse', 'printer-picker', dragonsFolder.id, 'none', '', false],
+    ['library-browse', 'printer-picker', dragonsFolder.id, 'none', '', false, []],
     browsePayload([], [makeFile('file-castle', 'castle-tower.gcode.3mf', dragonsFolder.id)])
   )
   queryClient.setQueryData<{ folders: LibraryFolder[] }>(

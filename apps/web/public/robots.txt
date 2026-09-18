@@ -2,4 +2,5 @@
 # search-engine indexing by default. (The hosted cloud deployment replaces
 # this file with a dynamic policy that allows its public marketing pages.)
 User-agent: *
+Allow: /.well-known/assetlinks.json
 Disallow: /

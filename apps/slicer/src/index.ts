@@ -54,6 +54,7 @@ import { assertSupportedEmbeddedMachineSwitch, shouldRetargetEmbeddedMachine } f
 import { readBedModel } from './bed-model.js'
 import { readFlushDatasets } from './flush-data.js'
 import { runFlushCalibration } from './flush-calibration.js'
+import { isRetractionCalibration, rewriteRetractionCalibration } from './retraction-calibration.js'
 import { buildSkipObjectsArgs, deriveSkipObjectIdentifyIds } from './skip-objects.js'
 import { buildFilamentMapArgs } from './filament-map-args.js'
 import { ensurePositionalInputArgument, insertArgsBeforePositionalInput } from './cli-input-args.js'
@@ -491,6 +492,7 @@ app.post('/slice', async (request, response) => {
       maxInflatedBytes: env.SLICER_MAX_INFLATED_BYTES
     })
     await assertNoSlicerHostScripts(inputPath)
+    const retractionCalibration = await isRetractionCalibration(inputPath)
     const inputPolicy = slicerInputPolicy(parsed.data.request)
     appendStructuredOutput(
       outputLines,
@@ -558,6 +560,7 @@ app.post('/slice', async (request, response) => {
     }
     // Read usage before an explicitly requested plain `.gcode` is extracted from its temporary
     // packaged result. The package is authoritative when result.json reports a false zero length.
+    if (retractionCalibration) await rewriteRetractionCalibration(outputPath)
     const packagedUsage = await readZipEntryText(outputPath, 'Metadata/slice_info.config')
       .then(parseSlicedOutputUsage)
       .catch(() => null)

@@ -101,7 +101,7 @@ test('reading spools anywhere subscribes to inventory changes', async () => {
 
     ws.jsonListeners[0]?.(SPOOLS_CHANGED)
     assert.ok(
-      invalidated.some((key) => key.join('/') === SPOOLS_QUERY_KEY.join('/')),
+      invalidated.some((key) => key.join('/') === SPOOLS_QUERY_KEY.join('/')) && invalidated.some((key) => key[0] === 'tags'),
       'a spools.changed event should invalidate the spool list'
     )
   } finally {

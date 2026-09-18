@@ -28,6 +28,8 @@ import {
   type PrinterConnectionValidation
 } from '@printstream/shared'
 import { env } from './env.js'
+import { decorateSlotMaterials, loadSlotMaterials } from './slot-materials.js'
+import { PrinterCommandReplies } from './printer-command-replies.js'
 import { bridgeSessionManager } from './bridge-session-manager.js'
 import { rootPrisma } from './prisma.js'
 import { printerEvents } from './printer-events.js'
@@ -73,6 +75,7 @@ const LOG_MQTT_TRAFFIC = env.MQTT_DEBUG_LOGS
 const BRIDGE_OFFLINE_GRACE_MS = 15_000
 
 class PrinterManager {
+  private readonly commandReplies = new PrinterCommandReplies()
   private readonly managed = new Map<string, ManagedPrinter>()
   private readonly workspaceIds = new Map<string, string>()
   private readonly bridgeIds = new Map<string, string | null>()
@@ -87,6 +90,7 @@ class PrinterManager {
     this.started = true
 
     const rows = await rootPrisma.printer.findMany({ orderBy: { position: 'asc' } })
+    await loadSlotMaterials(rows)
     const printers = rows.map((row) => toPrinter(row))
     const deviceTypes = new Set<string>()
     for (const printer of printers) {
@@ -221,12 +225,27 @@ class PrinterManager {
     })
   }
 
-  private publishCommandWithSequence(printerId: string, payload: Record<string, unknown>): string | null {
+  /** Send an automatic calibration command and await its correlated firmware reply. Never saves a profile. */
+  async requestAutomaticCalibration(printerId: string, command: 'extrusion_cali' | 'extrusion_cali_get_result', fields: Record<string, unknown>): Promise<Record<string, unknown>> {
+    let reply: Promise<Record<string, unknown>> | undefined
+    const sent = this.publishCommandWithSequence(printerId, { print: { ...fields, command } }, (sequenceId) => {
+      reply = this.commandReplies.wait(printerId, sequenceId, command)
+    })
+    if (!sent) {
+      this.commandReplies.clear(printerId, 'Printer is not connected')
+      if (reply) return await reply
+      throw new Error('Printer is not connected')
+    }
+    return await reply!
+  }
+
+  private publishCommandWithSequence(printerId: string, payload: Record<string, unknown>, beforeSend?: (sequenceId: string) => void): string | null {
     const entry = this.managed.get(printerId)
     const bridgeId = this.bridgeIds.get(printerId) ?? null
     if (entry && bridgeId) {
       const nextSequenceId = ++entry.sequenceId
       const stamped = stampSequenceId(payload, nextSequenceId)
+      beforeSend?.(String(nextSequenceId))
       if (LOG_MQTT_TRAFFIC) {
         console.log(`[bridge:publish] ${entry.printer.name} via ${bridgeId}`, JSON.stringify(stamped))
       }
@@ -281,6 +300,12 @@ class PrinterManager {
     if (!entry) return
     entry.lastJobName = null
     this.mergeAndEmit(entry, { lastJobName: null })
+  }
+
+  /** Publish a local slot-identity change through the normal status channel. */
+  refreshSlotMaterials(printerId: string): void {
+    const entry = this.managed.get(printerId)
+    if (entry) this.mergeAndEmit(entry, {})
   }
 
   /** Most recent cached status for one managed printer. */
@@ -475,6 +500,7 @@ class PrinterManager {
     }
 
     this.resolvePressureAdvanceProfiles(entry, parsed)
+    this.commandReplies.accept(entry.printer.id, parsed)
 
     const delta = parseReport(parsed, entry.printer, entry.status)
     if (!delta) return
@@ -484,13 +510,13 @@ class PrinterManager {
 
   private mergeAndEmit(entry: ManagedPrinter, delta: Partial<PrinterStatus>): PrinterStatus {
     const previous = entry.status
-    const next: PrinterStatus = {
+    const next: PrinterStatus = decorateSlotMaterials({
       ...previous,
       ...delta,
       printerId: entry.printer.id,
       lastJobName: resolveLastJobName(entry, delta),
       observedAt: new Date().toISOString()
-    }
+    })
     // Suppress redundant emits: bridges (and some report paths) deliver the
     // same status repeatedly, and `observedAt` is the only field that differs
     // each time. Comparing everything except `observedAt` lets genuinely new
@@ -566,6 +592,7 @@ class PrinterManager {
   }
 
   private clearPendingPressureAdvanceRequests(printerId: string, reason: string): void {
+    this.commandReplies.clear(printerId, reason)
     for (const [key, pending] of this.pendingPressureAdvanceProfiles.entries()) {
       if (!key.startsWith(`${printerId}:`)) continue
       clearTimeout(pending.timer)

@@ -14,9 +14,11 @@
  */
 import { Suspense, lazy, useEffect, useState } from 'react'
 import { useLocation } from 'react-router-dom'
-import { isMarketingPath, marketingRoutePaths } from './lib/marketingManifest'
+import { marketingRoutePaths, isMarketingPath } from './lib/marketingManifest'
 import { isPublicToolPath } from './lib/publicToolManifest'
 import { showSplashScreen } from './lib/splashScreen'
+import { isNativeApp } from './native/bridge'
+import { rememberNativeReturnPath } from './native/navigation'
 
 const App = lazy(() => import('./App').then((module) => ({ default: module.App })))
 const MarketingApp = lazy(() => import('./MarketingApp'))
@@ -37,6 +39,7 @@ function AppLoadingSplash() {
 
 export function Root() {
   const location = useLocation()
+  const nativeApp = isNativeApp()
   // Read the real initial URL synchronously (before any client navigation) for the cold-load decision.
   // Public tool paths come from a private cloud manifest. In other builds that manifest is empty,
   // so the same URL enters the normal app rather than mounting the anonymous editor.
@@ -44,6 +47,11 @@ export function Root() {
     || (marketingRoutePaths.length > 0 && isMarketingPath(window.location.pathname))
   const [enteredApp, setEnteredApp] = useState(!startsOutsideApp)
   const onPublicTool = isPublicToolPath(location.pathname)
+
+  useEffect(() => {
+    if (!nativeApp) return
+    rememberNativeReturnPath(location.pathname)
+  }, [location.pathname, nativeApp])
 
   useEffect(() => {
     if (!isMarketingPath(location.pathname) && !isPublicToolPath(location.pathname)) setEnteredApp(true)

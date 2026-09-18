@@ -107,6 +107,18 @@ test('opening a slot that has no preset renders rather than crashing', () => {
   assert.ok(screen.getByPlaceholderText('Choose a material profile'))
 })
 
+test('preset options use the shared Bambu brand mark', () => {
+  renderDialog({ typeFilter: 'PLA', materialOptions: [PLA_OPTION], selectedOption: PLA_OPTION })
+
+  const input = screen.getByDisplayValue('Bambu PLA Basic')
+  fireEvent.focus(input)
+  fireEvent.mouseDown(input)
+
+  const option = screen.getByRole('option')
+  assert.equal(option.querySelectorAll('svg').length, 1)
+  assert.match(option.textContent ?? '', /PLA Basic/)
+})
+
 test('Done is disabled until a preset is chosen, and says why', () => {
   const { unmount } = renderDialog({ typeFilter: 'PLA-S', materialOptions: [SUPPORT_OPTION], selectedOption: null })
 
@@ -135,7 +147,7 @@ test('switching the material type clears a preset that belongs to the old type',
     onMaterialOptionChange: (option) => optionChanges.push(option)
   })
 
-  fireEvent.click(screen.getByRole('combobox', { name: 'Type' }))
+  fireEvent.click(screen.getByRole('combobox', { name: 'Material type' }))
   fireEvent.click(screen.getByRole('option', { name: 'PLA-S' }))
 
   assert.deepEqual(typeChanges, ['PLA-S'])
@@ -151,7 +163,7 @@ test('re-picking the same material type keeps the current preset', () => {
     onMaterialOptionChange: (option) => optionChanges.push(option)
   })
 
-  fireEvent.click(screen.getByRole('combobox', { name: 'Type' }))
+  fireEvent.click(screen.getByRole('combobox', { name: 'Material type' }))
   fireEvent.click(screen.getByRole('option', { name: 'PLA' }))
 
   assert.deepEqual(optionChanges, [])

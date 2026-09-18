@@ -26,6 +26,7 @@ import { rootPrisma } from '../../lib/prisma.js'
 import { registerFilamentManagerRoutes } from './routes.js'
 import { createStatusObserver } from './status-sync.js'
 import { createConsumptionObserver } from './consumption.js'
+import { broadcastSpoolsChanged } from './events.js'
 import { findLoadedSpoolIdentity } from './store.js'
 import { FilamentBarcodeCatalog } from './barcode-catalog.js'
 
@@ -47,7 +48,14 @@ export const filamentManagerPlugin: ApiPlugin = {
     // loaded spool) without them importing this plugin. Uses rootPrisma with an explicit workspace
     // filter since the resolver runs outside a per-request scope.
     const offResolver = context.registerSlotFilamentResolver(({ workspaceId, printerId, amsId, slotId }) =>
-      findLoadedSpoolIdentity(rootPrisma, workspaceId, printerId, amsId, slotId))
+      findLoadedSpoolIdentity(rootPrisma, workspaceId, printerId, amsId, slotId),
+      async ({ workspaceId, printerId, amsId, slotId }) => {
+        await rootPrisma.filamentSpool.updateMany({
+          where: { workspaceId, loadedPrinterId: printerId, loadedAmsId: amsId, loadedSlotId: slotId },
+          data: { loadedPrinterId: null, loadedAmsId: null, loadedSlotId: null, loadedAt: null }
+        })
+        broadcastSpoolsChanged(context, workspaceId)
+      })
 
     context.onShutdown(() => {
       context.printerEvents.off('status', onStatus)

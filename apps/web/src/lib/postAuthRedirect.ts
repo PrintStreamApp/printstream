@@ -55,6 +55,11 @@ function resolveExplicitRedirectPath(redirectPath: string | undefined): string |
     return redirectPath
   }
 
+  // Billing entry must survive sign-in instead of returning to the general workspace chooser.
+  if (redirectPath === '/billing' || /^\/billing\/[a-zA-Z0-9_-]+(?:\/[a-zA-Z0-9_-]+)?$/.test(redirectPath)) {
+    return redirectPath
+  }
+
   if (isPlatformWorkspacePath(redirectPath)) {
     return redirectPath
   }

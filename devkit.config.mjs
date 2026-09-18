@@ -100,8 +100,9 @@ export default {
       VITE_DEV_PORT: DEV_PORTS.web,
       VITE_API_PORT: DEV_PORTS.api,
       SLICER_PORT: DEV_PORTS.slicer,
-      /** A container-absolute default (run-dev.mjs's) would not exist on the host. */
+      /** Shared cache only: downloaded toolchains/profiles, never project input or slice output. */
       SLICER_DATA_ROOT: process.env.SLICER_DATA_ROOT || `${configDir}/slicer`,
+      /** Mutable slicer work is isolated per checkout even when the slicer runs on the host. */
       SLICER_WORK_DIR: process.env.SLICER_WORK_DIR || `${configDir}/slicer-work/${identity.slug}`
     }
   },

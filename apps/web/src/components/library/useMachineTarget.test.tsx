@@ -198,18 +198,20 @@ test('a locked preferred printer pins the target without an effect racing the pi
 
 // ---- reset + snapshot ---------------------------------------------------------------------------
 
-test('an engine-target change clears every pick, not just some of them', () => {
-  // Pre-S2 this reset the model's touched flag and the process's, but never the plate's.
-  const params = baseParams({ machineProfiles: [H2D_04, A1_04], bakedIndex: index({ compatiblePrinterModels: ['H2D'] }), ...SETTLED, resetToken: 'engine-1' })
+test('a new engine catalogue preserves the chosen model and plate through loading', () => {
+  const params = baseParams({ machineProfiles: [H2D_04, A1_04], bakedIndex: index({ compatiblePrinterModels: ['H2D'] }), ...SETTLED })
   const { result, rerender } = renderTarget(params)
   act(() => { result.current.selectPrinterModel('A1') })
   act(() => { result.current.handlePlateTypeChange('cool_plate') })
   assert.equal(result.current.manualPrinterModel, 'A1')
   assert.equal(result.current.plateType, 'cool_plate')
 
-  rerender({ ...params, resetToken: 'engine-2' })
-  assert.equal(result.current.manualPrinterModel, 'H2D', 'back to the project')
-  assert.equal(result.current.plateType, 'textured_pei_plate')
+  rerender({ ...params, machineProfiles: [], catalogueResolved: false })
+  assert.equal(result.current.manualPrinterModel, 'A1', 'loading cannot invalidate the selection')
+  assert.equal(result.current.plateType, 'cool_plate')
+  rerender({ ...params, machineProfiles: [H2D_04, { ...A1_04 }] })
+  assert.equal(result.current.manualPrinterModel, 'A1')
+  assert.equal(result.current.plateType, 'cool_plate')
 })
 
 test('the snapshot round-trips the picks; everything else re-derives on restore', () => {

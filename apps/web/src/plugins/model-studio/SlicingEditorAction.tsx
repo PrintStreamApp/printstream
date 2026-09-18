@@ -106,6 +106,7 @@ export function SlicingEditorAction(props: Record<string, unknown>) {
             baseFileId={fileId}
             baseVersionId={baseVersionId}
             isNewProject={isNewProject}
+            initialImportFileId={typeof props.initialImportFileId === 'string' ? props.initialImportFileId : undefined}
             bridgeId={bridgeId}
             folderId={folderId}
             currentEdit={currentEdit}

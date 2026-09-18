@@ -41,6 +41,7 @@ export const jobHistoryQuerySchema = z.object({
   pageSize: z.coerce.number().int().min(1).max(100).default(10),
   search: z.string().trim().max(200).default(''),
   printerIds: commaSeparated,
+  tagIds: commaSeparated.pipe(z.array(z.string().min(1).max(100)).max(100)),
   results: commaSeparated.pipe(z.array(printJobResultSchema)),
   sortBy: z.enum(['started', 'ended']).default('ended'),
   sortDirection: z.enum(['asc', 'desc']).default('desc')
@@ -136,6 +137,10 @@ export function selectJobHistoryPage(input: {
   printJobs: ReadonlyArray<PrintJob>
   slicingJobs: ReadonlyArray<SlicingJob>
   query: JobHistoryQuery
+  /** Server-resolved matches on linked entity tags, OR with the ordinary search text. */
+  matchesAdditionalSearch?: (entry: JobHistoryEntry) => boolean
+  /** ALL selected tag IDs must match, together with ordinary search and other facets. */
+  matchesTags?: (entry: JobHistoryEntry) => boolean
   printerNameFor: (printerId: string) => string | null
 }): JobHistoryResponse {
   const { query } = input
@@ -158,11 +163,12 @@ export function selectJobHistoryPage(input: {
   const printerIds = new Set(query.printerIds)
   const results = new Set(query.results)
   const search = query.search.toLowerCase()
-  const filtered = entries.filter(({ derived }) => {
+  const filtered = entries.filter(({ entry, derived }) => {
     if (printerIds.size > 0 && (derived.printerId == null || !printerIds.has(derived.printerId))) return false
     if (results.size > 0 && !results.has(derived.result)) return false
+    if (query.tagIds.length > 0 && !input.matchesTags?.(entry)) return false
     if (!search) return true
-    return derived.searchHaystack.includes(search)
+    return derived.searchHaystack.includes(search) || (input.matchesAdditionalSearch?.(entry) ?? false)
   })
 
   filtered.sort((left, right) => {

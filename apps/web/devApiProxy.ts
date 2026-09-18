@@ -1,7 +1,8 @@
 /**
- * Dev-only forwarding middleware for plain HTTP `/api` traffic (wired in `vite.config.ts`).
+ * Dev-only forwarding middleware for API-owned plain HTTP routes (wired in `vite.config.ts`).
  *
- * Replaces Vite's `server.proxy` entry for `/api`. That entry rides the bundled http-proxy-3,
+ * Replaces Vite's `server.proxy` entry for `/api` and forwards the mobile discovery document.
+ * That entry rides the bundled http-proxy-3,
  * which wedges requests that accompany or FOLLOW an aborted large response: the request never
  * completes and never errors. The editor provokes the trigger constantly because React StrictMode
  * fires each archive fetch twice in dev and aborts one. MEASURED in-browser against the real
@@ -35,16 +36,44 @@ function withoutHopByHopHeaders<T extends Record<string, unknown>>(headers: T): 
   return cleaned
 }
 
+/** Whether a dev-server request belongs to the API process rather than Vite. */
+export function isDevApiRequest(url: string): boolean {
+  return url === '/api'
+    || url.startsWith('/api/')
+    || url.startsWith('/api?')
+    || url === '/.well-known/printstream-mobile.json'
+    || url.startsWith('/.well-known/printstream-mobile.json?')
+}
+
+/**
+ * Build upstream headers while preserving the public origin for discovery.
+ * The API derives `canonicalOrigin` from Host, which must remain Vite's origin
+ * even though the TCP request is delivered to the API's private dev port.
+ */
+export function devApiProxyHeaders(
+  url: string,
+  headers: http.IncomingHttpHeaders,
+  apiPort: string
+): http.IncomingHttpHeaders {
+  const discovery = url === '/.well-known/printstream-mobile.json'
+    || url.startsWith('/.well-known/printstream-mobile.json?')
+
+  return {
+    ...withoutHopByHopHeaders(headers),
+    host: discovery ? headers.host : `localhost:${apiPort}`
+  }
+}
+
 export function devApiProxy(apiPort: string): Plugin {
   return {
     name: 'printstream:dev-api-proxy',
     apply: 'serve',
     configureServer(server) {
       // Registered inside configureServer (not its returned thunk), so it runs BEFORE Vite's
-      // internal middlewares and `/api` requests never enter the transform pipeline.
+      // internal middlewares and API-owned requests never enter the transform pipeline.
       server.middlewares.use((req, res, next) => {
         const url = req.url ?? ''
-        if (url !== '/api' && !url.startsWith('/api/') && !url.startsWith('/api?')) return next()
+        if (!isDevApiRequest(url)) return next()
 
         let clientAborted = false
         const proxyReq = http.request(
@@ -53,7 +82,7 @@ export function devApiProxy(apiPort: string): Plugin {
             port: Number(apiPort),
             path: url,
             method: req.method,
-            headers: { ...withoutHopByHopHeaders(req.headers), host: `localhost:${apiPort}` },
+            headers: devApiProxyHeaders(url, req.headers, apiPort),
             agent: false
           },
           (proxyRes) => {

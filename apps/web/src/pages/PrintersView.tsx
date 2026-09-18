@@ -1,3 +1,9 @@
+import { useDirectorySelection } from '../hooks/useDirectorySelection'
+import { useTagFilter } from '../hooks/useTagFilter'
+import { useTagAssignment } from '../hooks/useTagAssignment'
+import { BulkSelectionActions } from '../components/BulkSelectionActions'
+import { Checkbox } from '@mui/joy'
+import LabelIcon from '@mui/icons-material/LabelOutlined'
 import { useCallback, useDeferredValue, useEffect, useMemo, useState, type ComponentProps } from 'react'
 import { Alert, Box, Button, CircularProgress, Divider, FormControl, ListItemDecorator, MenuItem, Option, Select, Sheet, Stack, Typography } from '@mui/joy'
 import FolderCopyRoundedIcon from '@mui/icons-material/FolderCopyRounded'
@@ -445,11 +451,16 @@ export function PrintersView() {
     workspacePath
   ])
 
+  const tagFilter = useTagFilter('printer', 'printers.overview')
+  const { matches: matchesTags, searchText: tagSearchText } = tagFilter
+  const { openTags, tagDialog } = useTagAssignment('printer')
+  useEffect(() => { setOverviewPage(0) }, [tagFilter.value])
   const filteredPrinters = useMemo(
     () => {
       const attributeFiltered = (printerRows ?? []).filter((printer) => {
         const status = printerStatuses?.[printer.id]
-        return matchesPrinterSearch(printer, deferredOverviewSearch)
+        return matchesTags(printer.id)
+          && (matchesPrinterSearch(printer, deferredOverviewSearch) || tagSearchText(printer.id).toLowerCase().includes(deferredOverviewSearch.trim().toLowerCase()))
           && matchesPrinterStateFilter(status, effectiveStateFilter)
           && matchesPrinterViewAttributeFilters(printer, status, {
             modelFilter: effectiveModelFilter,
@@ -461,6 +472,8 @@ export function PrintersView() {
       return sortPrintersForView(viewFiltered, printerStatuses ?? {}, effectiveSort)
     },
     [
+      matchesTags,
+      tagSearchText,
       deferredOverviewSearch,
       effectiveModelFilter,
       effectiveNozzleDiameterFilter,
@@ -472,6 +485,9 @@ export function PrintersView() {
       printerStatuses
     ]
   )
+  const printerSelection = useDirectorySelection(filteredPrinters)
+  const { selectionMode: tagSelectionMode, setSelectionMode: setTagSelectionMode, selectedItems: selectedTagPrinters } = printerSelection
+  const allTagPrintersSelected = filteredPrinters.length > 0 && selectedTagPrinters.length === filteredPrinters.length
   const bridgeNameById = useMemo(() => {
     const map = new Map<string, string>()
     for (const bridge of bridgesQuery.data?.bridges ?? []) map.set(bridge.id, bridge.name)
@@ -1286,9 +1302,18 @@ export function PrintersView() {
             context={{ printers, statuses: status }}
           />
 
-          {showOverviewDirectoryControls && (
+          {(showOverviewDirectoryControls || printers.length > 0) && (
             <PrinterOverviewToolbar
               printers={printers}
+              tagFilter={tagFilter}
+              selection={canManagePrinters ? {
+                active: tagSelectionMode,
+                checked: allTagPrintersSelected,
+                indeterminate: selectedTagPrinters.length > 0 && !allTagPrintersSelected,
+                onActivate: () => setTagSelectionMode(true),
+                onChange: printerSelection.setAllSelected,
+                ariaLabel: 'Select printers'
+              } : undefined}
               search={overviewSearch}
               onSearchChange={(value) => { setOverviewPage(0); setOverviewSearch(value) }}
               group={effectiveGroup}
@@ -1393,6 +1418,10 @@ export function PrintersView() {
             />
           )}
 
+          {tagDialog}
+          {tagSelectionMode && canManagePrinters && <BulkSelectionActions onCancel={() => { setTagSelectionMode(false) }}>
+            <Button size="sm" variant="soft" startDecorator={<LabelIcon />} disabled={!selectedTagPrinters.length} onClick={() => openTags(selectedTagPrinters.map((printer) => printer.id))}>Assign tags</Button>
+          </BulkSelectionActions>}
           {filteredPrinters.length > 0 && (
             <PaginatedSection
               showingLabel={`Showing ${safeOverviewPage * overviewPageSize + 1}-${Math.min(filteredPrinters.length, (safeOverviewPage + 1) * overviewPageSize)} of ${filteredPrinters.length}`}
@@ -1422,8 +1451,9 @@ export function PrintersView() {
                       }}
                     >
                       {groupEntry.printers.map((printer) => (
+                        <Stack key={printer.id} spacing={0.5}>
+                        {tagSelectionMode && <Checkbox label={`Select ${printer.name}`} checked={printerSelection.selectedIds.has(printer.id)} onChange={() => printerSelection.toggle(printer)} />}
                         <PrinterCard
-                          key={printer.id}
                           printer={printer}
                           status={status?.[printer.id]}
                           dispatchLink={dispatchJobsByPrinter.get(printer.id)}
@@ -1444,6 +1474,7 @@ export function PrintersView() {
                           onPrintLocal={handleCardPrintLocal}
                           onOpenDetails={handleCardOpenDetails}
                         />
+                        </Stack>
                       ))}
                     </Box>
                   </Stack>

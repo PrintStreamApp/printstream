@@ -459,6 +459,23 @@ test('a model PLA preset stays out of the PLA-S bucket', () => {
   assert.deepEqual(narrowMaterialOptions(buildSliceMaterialOptions([modelPreset], []), 'PLA-S'), [])
 })
 
+test('narrowing presets for a PETG slot excludes other printer-compatible polymers', () => {
+  const petg: SlicingPresetSummary = {
+    id: 'builtin:filament:petg', source: 'builtin', kind: 'filament',
+    name: 'Bambu PETG HF @BBL H2D', filamentType: 'PETG', filamentVendor: 'Bambu Lab'
+  }
+  const asa: SlicingPresetSummary = {
+    ...petg,
+    id: 'builtin:filament:asa',
+    name: 'Bambu ASA @BBL H2D',
+    filamentType: 'ASA'
+  }
+
+  const options = narrowMaterialOptions(buildSliceMaterialOptions([asa, petg], []), 'PETG')
+
+  assert.deepEqual(options.map((option) => option.profileId), [petg.id])
+})
+
 test('filament-library spools become colour and quantity aware editor material choices', () => {
   const options = buildInventoryMaterialOptions([{
     id: 'spool-1',

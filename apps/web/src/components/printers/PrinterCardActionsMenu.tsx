@@ -2,8 +2,10 @@
  * The printer-card header overflow ("⋮") menu: edit, refresh, settings, controls, calibration,
  * storage browsing, and the external-spool toggle, each gated by the caller's permissions and the
  * printer's online state. Plugins can inject extra items via the `printer.card.menuItems` slot.
- * Extracted from PrinterCard; it deals only in intents (onEdit/onRefresh/…), never dialog state.
+ * Extracted from PrinterCard; printer operations remain caller-owned. The tag dialog is mounted
+ * outside the menu so closing the menu does not discard it.
  */
+import { useTagAssignment } from '../../hooks/useTagAssignment'
 import { Dropdown, IconButton, Menu, MenuButton, MenuItem } from '@mui/joy'
 import type { Printer } from '@printstream/shared'
 import { MoreVertIcon } from './PrinterGlyphs'
@@ -54,7 +56,10 @@ export function PrinterCardActionsMenu({
   onBrowseTimelapses,
   onToggleExternalSpools
 }: PrinterCardActionsMenuProps) {
+  const { openTags, tagDialog } = useTagAssignment('printer')
   return (
+    <>
+    {tagDialog}
     <Dropdown>
       <MenuButton
         slots={{ root: IconButton }}
@@ -64,6 +69,7 @@ export function PrinterCardActionsMenu({
       </MenuButton>
       <Menu size="sm" placement="bottom-end">
         {canManagePrinter && <MenuItem onClick={() => onEdit(printer)}>Edit</MenuItem>}
+        {canManagePrinter && <MenuItem onClick={() => openTags([printer.id])}>Assign tags</MenuItem>}
         {canControlPrinter && <MenuItem disabled={!isOnline} onClick={onRefresh}>Refresh</MenuItem>}
         {canManagePrinter && <MenuItem disabled={!isOnline} onClick={onOpenPrinterSettings}>Printer settings…</MenuItem>}
         <PluginSlot name="printer.card.menuItems" context={{ printerId: printer.id, printerName: printer.name, isOnline }} />
@@ -82,5 +88,6 @@ export function PrinterCardActionsMenu({
         )}
       </Menu>
     </Dropdown>
+    </>
   )
 }

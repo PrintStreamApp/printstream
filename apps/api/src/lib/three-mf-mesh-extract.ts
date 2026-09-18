@@ -17,10 +17,7 @@ import {
 } from '@printstream/shared/three-mf'
 import { badRequest } from './http-error.js'
 import { readEntry } from './three-mf-internal.js'
-import { readPlateIndex, readSceneManifest } from './three-mf-reader.js'
-
-/** Same cap the scene reader uses for mesh-bearing model entries. */
-const MAX_MODEL_ENTRY_BYTES = 64 * 1024 * 1024
+import { readPlateIndex, readSceneManifest, THREE_MF_MODEL_ENTRY_MAX_BYTES } from './three-mf-reader.js'
 
 /**
  * Reads the archive off disk.
@@ -34,9 +31,13 @@ function nodeImportSource(filePath: string): ThreeMfImportSource {
   return {
     async readEntryText(entryPath) {
       try {
-        return (await readEntry(filePath, entryPath, undefined, MAX_MODEL_ENTRY_BYTES)).toString('utf8')
+        return (await readEntry(filePath, entryPath, undefined, THREE_MF_MODEL_ENTRY_MAX_BYTES)).toString('utf8')
       } catch (error) {
         if (isMissingEntryError(error)) return null
+        if (error instanceof Error && /^(Entry too large:|Entry exceeds the maximum decoded size)/.test(error.message)) {
+          console.warn('[editor] 3MF import refused: model entry exceeds the 256 MiB limit')
+          throw new ThreeMfImportError('This 3MF contains a model entry larger than the 256 MiB import limit.')
+        }
         throw error
       }
     },

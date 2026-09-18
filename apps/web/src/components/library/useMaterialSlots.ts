@@ -22,6 +22,7 @@
  * Counterparts: `SliceFileModal.tsx` (workspace host: printers, dispatch, plate narrowing),
  * `useLocalSliceSettingsController.ts` (public host: browser presets, anonymous resolvers).
  */
+import { replaceMaterialRecipe } from './materialSlotReplacement'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { LibraryFile, MixedFilamentConfig, SceneEditFilament, ThreeMfIndex } from '@printstream/shared'
 import type { SlicingPresetSummary } from '@printstream/shared'
@@ -58,6 +59,8 @@ export interface SessionFilamentSlot {
    * adding a material by hand already does.
    */
   sourceIndex: number | null
+  /** Deleted base slots redirected here; separate from the source of this slot's settings. */
+  replacedSourceIndices?: number[]
   label: string
   color: string | null
   nozzleId: number | null
@@ -156,6 +159,7 @@ function slotsEqual(a: readonly SessionFilamentSlot[], b: readonly SessionFilame
     return other !== undefined
       && slot.projectFilamentId === other.projectFilamentId
       && slot.sourceIndex === other.sourceIndex
+      && JSON.stringify(slot.replacedSourceIndices) === JSON.stringify(other.replacedSourceIndices)
       && slot.label === other.label
       && slot.color === other.color
       && slot.nozzleId === other.nozzleId
@@ -218,7 +222,11 @@ export function rebaseMaterialSlotsSnapshot(
     ...snapshot,
     sessionSlots: snapshot.sessionSlots.map((slot) => ({
       ...slot,
-      sourceIndex: slot.sourceIndex == null ? null : sourceRemap.get(slot.sourceIndex) ?? null
+      sourceIndex: slot.sourceIndex == null ? null : sourceRemap.get(slot.sourceIndex) ?? null,
+      replacedSourceIndices: slot.replacedSourceIndices?.flatMap((index) => {
+        const mapped = sourceRemap.get(index)
+        return mapped == null ? [] : [mapped]
+      })
     }))
   }
 }
@@ -244,6 +252,8 @@ export interface MaterialSlotsSnapshot {
 }
 
 export interface MaterialSlotsParams {
+  /** False while the target catalogue is loading: absence is not incompatibility. */
+  catalogueReady?: boolean
   file: LibraryFile
   bakedIndex: ThreeMfIndex | null
   /** The file's persisted slots (`buildSliceDialogProjectFilaments`); the overlay applies on top. */
@@ -274,7 +284,7 @@ export interface MaterialSlotsParams {
    * its filament-INDEX references (process overrides + per-object overrides), those live with the
    * process state, not here. Called BEFORE the removal mutates the list.
    */
-  onFilamentRemoved?: (removedPosition: number) => void
+  onFilamentRemoved?: (removedPosition: number, replacementPosition?: number) => void
   /**
    * The list was reordered: `remap` is the 1-based old-position → new-position permutation over
    * the pre-reorder ordered list. Same host duty as `onFilamentRemoved`: remap the filament-INDEX
@@ -406,7 +416,7 @@ export interface MaterialSlots {
   /** Replace the whole project list from occupied AMS slots, preserving row ids for object links. */
   handleSyncFilaments: (choices: AddedMaterialChoice[]) => void
   handleUpsertMixedFilament: (choice: MixedMaterialChoice) => void
-  handleRemoveFilament: (projectFilamentId: number) => void
+  handleRemoveFilament: (projectFilamentId: number, replacementId?: number) => void
   /** Move a slot to an insertion gap (0..N, between-tiles drag semantics). */
   handleReorderFilament: (fromIndex: number, insertAt: number) => void
   handleMaterialOptionChange: (projectFilamentId: number, option: SliceMaterialOption | null) => void
@@ -422,7 +432,9 @@ export interface MaterialSlots {
   onProjectSaved: () => Map<number, number> | null
   /**
    * Seed the option picks + colours from the baked index (the host's one-shot "apply the file's
-   * defaults" moment, gated by ITS readiness latch). Composes the seed with the compat
+   * defaults" moment, gated by ITS readiness latch). Preserves valid session picks and edited
+   * colours on subsequent engine switches. Does nothing while the catalogue is loading.
+   * Composes the seed with the compat
    * reconciliation in ONE updater, so the result matches "seed, then reconcile" regardless of
    * where the host's effect sits relative to this hook's own, intra-flush effect order must not
    * be load-bearing across the module boundary.
@@ -436,7 +448,7 @@ export interface MaterialSlots {
 
 export function useMaterialSlots(params: MaterialSlotsParams): MaterialSlots {
   const {
-    file, bakedIndex, baseProjectFilaments, filamentProfiles, compatibleFilamentProfiles,
+    catalogueReady = true, file, bakedIndex, baseProjectFilaments, filamentProfiles, compatibleFilamentProfiles,
     materialOptions, selectedMachineProfile, toolheadOptions, visibleFilamentsFilter, onFilamentRemoved, onFilamentReordered
   } = params
 
@@ -570,11 +582,16 @@ export function useMaterialSlots(params: MaterialSlotsParams): MaterialSlots {
   // caller-supplied objects, and an updater that always mints a new object turns an unstable
   // caller identity into an infinite render loop instead of a wasted render.
   useEffect(() => {
+    if (!catalogueReady) return
     setFilamentMaterialOptionIds((current) => {
       const defaults = buildInitialFilamentMaterialOptionSelection(file, bakedIndex, compatibleFilamentProfiles, selectedMachineProfile)
       const next: Record<number, string> = { ...defaults }
       for (const [filamentId, optionId] of Object.entries(current)) {
-        if (!optionId) continue
+        if (!optionId) {
+          // An explicit cleared choice is not a request to restore the file's preset.
+          next[Number(filamentId)] = optionId
+          continue
+        }
         if (materialOptions.some((option) => option.id === optionId)) {
           next[Number(filamentId)] = optionId
           continue
@@ -582,11 +599,13 @@ export function useMaterialSlots(params: MaterialSlotsParams): MaterialSlots {
         // The pick left the compatible set (a machine switch). Prefer this machine's build of the
         // same product over re-seeding from the file, which would revert the user's own choice.
         const repointed = repointMaterialOptionToCompatibleAlias(optionId, filamentProfiles, materialOptions)
-        if (repointed) next[Number(filamentId)] = repointed
+        // Never silently replace a missing choice with the file's original polymer. Keep the
+        // id unresolved until the user selects a replacement or returns to a supporting engine.
+        next[Number(filamentId)] = repointed ?? optionId
       }
       return recordsEqual(current, next) ? current : next
     })
-  }, [bakedIndex, compatibleFilamentProfiles, file, filamentProfiles, materialOptions, selectedMachineProfile, setFilamentMaterialOptionIds])
+  }, [catalogueReady, bakedIndex, compatibleFilamentProfiles, file, filamentProfiles, materialOptions, selectedMachineProfile, setFilamentMaterialOptionIds])
   // Merge baked colours/toolheads UNDER the session's, a late-arriving index fills gaps without
   // overwriting what the user already picked.
   //
@@ -599,6 +618,15 @@ export function useMaterialSlots(params: MaterialSlotsParams): MaterialSlots {
   // closes that window; `mergeUnder` returns the SAME record when nothing differs, so the extra
   // runs cost a comparison and cannot loop.
   const slotIdsKey = slotList.map((slot) => slot.projectFilamentId).join(',')
+  // A preset seed can also arrive before its slot. Fill missing picks after adoption without
+  // re-running compatibility replacement, which would overwrite explicit AMS/session choices.
+  useEffect(() => {
+    if (!catalogueReady) return
+    setFilamentMaterialOptionIds((current) => mergeUnder(
+      buildInitialFilamentMaterialOptionSelection(file, bakedIndex, compatibleFilamentProfiles, selectedMachineProfile),
+      current
+    ))
+  }, [catalogueReady, bakedIndex, compatibleFilamentProfiles, file, selectedMachineProfile, slotIdsKey, setFilamentMaterialOptionIds])
   useEffect(() => {
     setFilamentColors((current) => mergeUnder(buildInitialFilamentColorSelection(file, bakedIndex), current))
   }, [bakedIndex, file, slotIdsKey, setFilamentColors])
@@ -620,7 +648,7 @@ export function useMaterialSlots(params: MaterialSlotsParams): MaterialSlots {
   // save never bakes) a stale dual-nozzle selection after a switch to a single-nozzle printer.
   const offeredToolheadIds = useMemo(() => new Set((toolheadOptions ?? []).map((toolhead) => toolhead.id)), [toolheadOptions])
   useEffect(() => {
-    if (offeredToolheadIds.size === 0) return
+    if (!catalogueReady || offeredToolheadIds.size === 0) return
     setFilamentToolheadIds((current) => {
       const next: Record<number, string> = {}
       for (const [slot, id] of Object.entries(current)) {
@@ -628,7 +656,7 @@ export function useMaterialSlots(params: MaterialSlotsParams): MaterialSlots {
       }
       return recordsEqual(current, next) ? current : next
     })
-  }, [offeredToolheadIds, setFilamentToolheadIds])
+  }, [catalogueReady, offeredToolheadIds, setFilamentToolheadIds])
 
   const handleAddFilament = useCallback((choice: AddedMaterialChoice) => {
     const template = projectFilaments[0] ?? null
@@ -714,21 +742,26 @@ export function useMaterialSlots(params: MaterialSlotsParams): MaterialSlots {
     })
   }, [baseProjectFilaments, onFilamentRemoved, sessionSlots])
 
-  const handleRemoveFilament = useCallback((projectFilamentId: number) => {
-    // BambuStudio parity: a material can be removed even while a process setting references it:
-    // the setting falls back to "Default" rather than the delete being refused. Those settings
-    // store the material's POSITION in the ordered list, so every reference above the removed one
-    // also shifts down (the host remaps them: see onFilamentRemoved). Done BEFORE the removal so
-    // the position still resolves against the pre-removal list. `projectFilaments` is a dependency,
-    // not incidental: captured stale, a removal after an add computes the wrong position.
+  const handleRemoveFilament = useCallback((projectFilamentId: number, replacementId?: number) => {
     const removedPosition = projectFilaments.findIndex((filament) => filament.projectFilamentId === projectFilamentId) + 1
-    if (removedPosition > 0) onFilamentRemoved?.(removedPosition)
-    // The per-slot keyed state is deliberately LEFT in place: an undo that puts this slot back
-    // wants its colour/preset/nozzle/overrides, and entries for slots the list no longer holds are
-    // ignored by every reader (they are keyed lookups, not iterations).
+    const replacementPosition = projectFilaments.findIndex((filament) => filament.projectFilamentId === replacementId) + 1
+    if (projectFilaments.length <= 1 || removedPosition === 0) return
+    if (replacementId !== undefined && (replacementPosition === 0 || replacementId === projectFilamentId)) return
+
+    onFilamentRemoved?.(removedPosition, replacementPosition)
     setSessionOwned(true)
-    setSessionSlots((slots) => slots.filter((slot) => slot.projectFilamentId !== projectFilamentId))
-  }, [projectFilaments, onFilamentRemoved])
+    setSessionSlots((slots) => {
+      const removed = slots.find((slot) => slot.projectFilamentId === projectFilamentId)
+      const aliases = [...(removed?.replacedSourceIndices ?? [])]
+      if (removed?.sourceIndex != null && baseProjectFilaments[removed.sourceIndex]?.projectFilamentId === projectFilamentId) aliases.push(removed.sourceIndex)
+      return slots.filter((slot) => slot.projectFilamentId !== projectFilamentId).map((slot) => ({
+        ...(replacementId === undefined ? slot : replaceMaterialRecipe(slot, slots, projectFilamentId, replacementId)),
+        ...(slot.projectFilamentId === replacementId
+          ? { replacedSourceIndices: [...new Set([...(slot.replacedSourceIndices ?? []), ...aliases])] }
+          : {})
+      }))
+    })
+  }, [projectFilaments, onFilamentRemoved, baseProjectFilaments])
 
   /**
    * Move the slot at `fromIndex` into insertion gap `insertAt` (0..N, the between-tiles semantics
@@ -788,16 +821,8 @@ export function useMaterialSlots(params: MaterialSlotsParams): MaterialSlots {
   const paramsRef = useRef(params)
   paramsRef.current = params
   const applyBakedMaterialDefaults = useCallback(() => {
-    const { file: f, bakedIndex: baked, filamentProfiles: profiles, compatibleFilamentProfiles: compatible, materialOptions: options, selectedMachineProfile: machine, baseProjectFilaments: base } = paramsRef.current
-    // Slots the FILE has no counterpart for (session adds). The baked seed speaks only for the
-    // file's own filaments, so it must not answer for these, it re-seeds from scratch, and a bare
-    // replace would clear an added material's preset. Reachable whenever the latch re-arms after an
-    // add (the host re-applies on a slicer-target switch), which is how a material the user had just
-    // chosen came back blank.
-    const fileIds = new Set(base.map((filament) => filament.projectFilamentId))
-    const sessionAddedIds = slotListRef.current
-      .map((slot) => slot.projectFilamentId)
-      .filter((filamentId) => !fileIds.has(filamentId))
+    if (paramsRef.current.catalogueReady === false) return
+    const { file: f, bakedIndex: baked, filamentProfiles: profiles, compatibleFilamentProfiles: compatible, materialOptions: options, selectedMachineProfile: machine } = paramsRef.current
     setFilamentMaterialOptionIds((current) => {
       // The full-catalogue seed (what the file names), narrowed by the same rule as the compat
       // reconciliation effect: keep a seeded pick only while it resolves to a pickable option.
@@ -806,20 +831,11 @@ export function useMaterialSlots(params: MaterialSlotsParams): MaterialSlots {
       for (const [filamentId, optionId] of Object.entries(seeded)) {
         if (optionId && options.some((option) => option.id === optionId)) next[Number(filamentId)] = optionId
       }
-      for (const filamentId of sessionAddedIds) {
-        const picked = current[filamentId]
-        if (picked) next[filamentId] = picked
-      }
-      return next
+      // Preserve unresolved and explicitly cleared picks too. Their validation belongs to the
+      // mapping gate, not to seeding, or an engine switch silently changes the material.
+      return mergeUnder(next, current)
     })
-    setFilamentColors((current) => {
-      const next: Record<number, string> = { ...buildInitialFilamentColorSelection(f, baked) }
-      for (const filamentId of sessionAddedIds) {
-        const picked = current[filamentId]
-        if (picked) next[filamentId] = picked
-      }
-      return next
-    })
+    setFilamentColors((current) => mergeUnder(buildInitialFilamentColorSelection(f, baked), current))
   }, [setFilamentMaterialOptionIds, setFilamentColors])
 
   // Identity of the BASE material list (ids/labels/colors/nozzles, not the plate-usage flag,
@@ -858,6 +874,7 @@ export function useMaterialSlots(params: MaterialSlotsParams): MaterialSlots {
       projectFilamentId: index + 1,
       // Slot i of the file we just wrote IS this slot, so that is what a later save clones from.
       sourceIndex: index,
+      replacedSourceIndices: undefined,
       // The pick is baked into the saved file now, so it is no longer an edit pending against it.
       profileEdited: undefined,
       ...(slot.mixedFilament
@@ -935,6 +952,7 @@ export function useMaterialSlots(params: MaterialSlotsParams): MaterialSlots {
           ? filamentProfiles.find((profile) => profile.id === selectedOption.profileId)?.filamentIds?.[0]
           : null) ?? null,
         sourceIndex,
+        replacedSourceIndices: filament.replacedSourceIndices,
         // The chosen toolhead's runtime nozzle id (0 = right, 1 = left), falling back to the slot's
         // baked nozzle so unchanged slots keep their assignment, but ONLY when the current machine
         // actually has that nozzle. A dual-nozzle project switched to a single-nozzle printer

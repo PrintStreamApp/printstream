@@ -1,21 +1,10 @@
 /**
- * Owns the Library view's filter/search/sort/pagination concern, extracted
- * verbatim from `pages/LibraryView.tsx`: the search box + deferred search, the
- * four metadata filters (file type, printer model, nozzle size, plate type; each
- * multi-select, an empty selection means "no filter" for that facet), the
- * filters dialog open flag, page/page-size, and the persisted sort. From
- * those it derives the distinct filter option lists, the metadata/search-filtered
- * entries, and the sorted+paginated page the browser renders.
- *
- * Inputs are the already-resolved `visibleFiles`/`childFolders` for the current
- * folder plus the `currentFolderId`/`requestedBridgeId` that reset paging when
- * the user navigates. The browse/folders queries do NOT depend on this filter
- * state, so it lives here rather than in the view.
- *
- * Invariant: behavior-preserving: the bodies below are moved unchanged from
- * LibraryView. Selection state (and `selectedVisibleFiles`) stays in the view;
- * it reads `filteredFiles` from this hook's return.
+ * Owns library metadata facets and pagination for the page and all library pickers.
+ * The caller supplies search, sort, and the shared tag facet because they also drive
+ * server-side browse filtering before the result cap. This hook reapplies those
+ * filters locally, interleaves folders, and sorts before paginating.
  */
+import { type TagFilter } from './useTagFilter'
 import { useEffect, useMemo, useState } from 'react'
 import { formatLibraryFileKindLabel } from '../lib/libraryDisplay'
 import {
@@ -58,6 +47,7 @@ function pruneToOptions(current: string[], options: string[]): string[] {
 }
 
 export interface LibraryFiltersParams {
+  tagFilter: TagFilter
   visibleFiles: LibraryFile[]
   childFolders: LibraryFolder[]
   currentFolderId: string | null
@@ -75,6 +65,7 @@ export interface LibraryFiltersParams {
 }
 
 export interface LibraryFilters {
+  tagFilter: TagFilter
   fileTypeFilters: string[]
   setFileTypeFilters: (values: string[]) => void
   printerModelFilters: string[]
@@ -104,18 +95,20 @@ export interface LibraryFilters {
   clearMetadataFilters: () => void
 }
 
-/** True when none of the four metadata facets have any selectable values (the filters control can be disabled). */
+/** True when neither tags nor metadata facets have any selectable values (the filters control can be disabled). */
 export function libraryFacetsEmpty(filters: Pick<LibraryFilters,
-  'fileTypeOptions' | 'printerModelOptions' | 'nozzleSizeOptions' | 'plateTypeOptions'
+  'fileTypeOptions' | 'printerModelOptions' | 'nozzleSizeOptions' | 'plateTypeOptions' | 'tagFilter'
 >): boolean {
-  return filters.fileTypeOptions.length === 0
+  return filters.tagFilter.tags.length === 0 && filters.tagFilter.value.length === 0
+    && filters.fileTypeOptions.length === 0
     && filters.printerModelOptions.length === 0
     && filters.nozzleSizeOptions.length === 0
     && filters.plateTypeOptions.length === 0
 }
 
 export function useLibraryFilters(params: LibraryFiltersParams): LibraryFilters {
-  const { visibleFiles, childFolders, currentFolderId, requestedBridgeId, deferredSearch, sort, favoritesOnly } = params
+  const { tagFilter, visibleFiles, childFolders, currentFolderId, requestedBridgeId, deferredSearch, sort, favoritesOnly } = params
+  const { matches: matchesTags, searchText: tagSearchText } = tagFilter
   const [fileTypeFilters, setFileTypeFilters] = usePersistentState<string[]>(LIBRARY_FILE_TYPE_FILTERS_KEY, EMPTY_FILTER_VALUES, sanitizeFilterValues)
   const [printerModelFilters, setPrinterModelFilters] = usePersistentState<string[]>(LIBRARY_PRINTER_MODEL_FILTERS_KEY, EMPTY_FILTER_VALUES, sanitizeFilterValues)
   const [nozzleSizeFilters, setNozzleSizeFilters] = usePersistentState<string[]>(LIBRARY_NOZZLE_SIZE_FILTERS_KEY, EMPTY_FILTER_VALUES, sanitizeFilterValues)
@@ -140,22 +133,23 @@ export function useLibraryFilters(params: LibraryFiltersParams): LibraryFilters 
     () => collectDistinctLibraryFilterValues(visibleFiles.flatMap((file) => file.plateTypeChips)),
     [visibleFiles]
   )
-  const activeMetadataFilterCount = Number(fileTypeFilters.length > 0)
+  const activeMetadataFilterCount = Number(tagFilter.value.length > 0) + Number(fileTypeFilters.length > 0)
     + Number(printerModelFilters.length > 0)
     + Number(nozzleSizeFilters.length > 0)
     + Number(plateTypeFilters.length > 0)
   const metadataFilteredFiles = useMemo(
-    () => filterLibraryFilesByMetadata(visibleFiles, {
+    () => filterLibraryFilesByMetadata(visibleFiles.filter((file) => matchesTags(file.id)), {
       fileTypes: fileTypeFilters,
       printerModels: printerModelFilters,
       nozzleSizes: nozzleSizeFilters,
       plateTypes: plateTypeFilters
     }),
-    [fileTypeFilters, nozzleSizeFilters, plateTypeFilters, printerModelFilters, visibleFiles]
+    [fileTypeFilters, nozzleSizeFilters, plateTypeFilters, printerModelFilters, visibleFiles, matchesTags]
   )
   const filteredEntries = useMemo(
-    () => filterLibraryEntries(childFolders, metadataFilteredFiles, deferredSearch),
-    [childFolders, deferredSearch, metadataFilteredFiles]
+    // Tags filter files, not the folders/bridge entries needed to navigate to them.
+    () => filterLibraryEntries(childFolders, metadataFilteredFiles, deferredSearch, tagSearchText),
+    [childFolders, deferredSearch, metadataFilteredFiles, tagSearchText]
   )
   const filteredFolders = filteredEntries.folders
   const filteredFiles = filteredEntries.files
@@ -180,7 +174,7 @@ export function useLibraryFilters(params: LibraryFiltersParams): LibraryFilters 
 
   useEffect(() => {
     setPage(1)
-  }, [currentFolderId, deferredSearch, favoritesOnly, fileTypeFilters, nozzleSizeFilters, pageSize, plateTypeFilters, printerModelFilters, requestedBridgeId])
+  }, [tagFilter.value, currentFolderId, deferredSearch, favoritesOnly, fileTypeFilters, nozzleSizeFilters, pageSize, plateTypeFilters, printerModelFilters, requestedBridgeId])
 
   // Drop any selected facet value that is no longer offered (e.g. after navigating
   // to a folder without it). The functional updater keeps the same array identity
@@ -214,6 +208,7 @@ export function useLibraryFilters(params: LibraryFiltersParams): LibraryFilters 
   }, [currentPage, page])
 
   function clearMetadataFilters() {
+    tagFilter.clear()
     setFileTypeFilters([])
     setPrinterModelFilters([])
     setNozzleSizeFilters([])
@@ -221,6 +216,7 @@ export function useLibraryFilters(params: LibraryFiltersParams): LibraryFilters 
   }
 
   return {
+    tagFilter,
     fileTypeFilters,
     setFileTypeFilters,
     printerModelFilters,

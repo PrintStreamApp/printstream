@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { createWriteStream } from 'node:fs'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
@@ -277,4 +277,36 @@ test('a 3MF declaring inches is imported at millimetre scale', async () => {
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
+})
+
+test('imports model entries above 64 MiB without losing Bambu part types', async () => {
+  // Padding reproduces the inflated boundary cheaply. Bambu metadata matters here: falling
+  // back to vanilla parsing after a scene-reader size refusal turns the blocker into a solid.
+  const modelXml = BAMBU_ROOT_MODEL_XML.replace('</model>', `${' '.repeat(64 * 1024 * 1024)}</model>`)
+  await withFixture([
+    ['3D/3dmodel.model', modelXml],
+    ['Metadata/model_settings.config', BAMBU_MODEL_SETTINGS_XML]
+  ], async (filePath) => {
+    const mesh = await extractThreeMfImportMesh(filePath)
+    assert.deepEqual(mesh.parts?.map((part) => part.name), ['Box', 'Lid', 'Blocker'])
+    assert.deepEqual(mesh.parts?.map((part) => part.subtype), ['normal_part', 'normal_part', 'support_blocker'])
+    assert.equal(mesh.indices.length / 3, 2)
+    assert.equal(mesh.bounds.max.x - mesh.bounds.min.x, 90)
+  })
+})
+
+test('reports the model-entry size limit as a user-facing refusal', async () => {
+  await withFixture([['3D/3dmodel.model', '<model/>']], async (filePath) => {
+    // The central directory declares the inflated size. Raising that field exercises the
+    // pre-inflate guard without allocating a quarter-gigabyte fixture just to reject it.
+    const zip = await readFile(filePath)
+    const centralHeader = zip.indexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02]))
+    assert.ok(centralHeader >= 0)
+    zip.writeUInt32LE(256 * 1024 * 1024 + 1, centralHeader + 24)
+    await writeFile(filePath, zip)
+    await assert.rejects(() => extractThreeMfImportMesh(filePath), {
+      statusCode: 400,
+      message: 'This 3MF contains a model entry larger than the 256 MiB import limit.'
+    })
+  })
 })

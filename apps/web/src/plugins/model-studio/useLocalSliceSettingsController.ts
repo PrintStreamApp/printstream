@@ -21,6 +21,7 @@
  *
  * Counterpart: `apps/web/src/components/library/SliceFileModal.tsx` (the workspace controller).
  */
+import { resolveSliceDisabledReason } from '../../lib/slicingPresetSelection'
 import { useCallback, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import type { useNavigate } from 'react-router-dom'
@@ -75,6 +76,9 @@ export interface LocalSliceSettings {
   controller: SliceSettingsController
   /** Execution capacity is separate from catalogue availability. */
   slicingAvailable: boolean
+  /** Readiness of the selected presets, independent of server capacity. */
+  slicingReady: boolean
+  sliceDisabledReason: string | null
   /**
    * The printer model the editor should render the bed + zones for: passed to `EditorView` as a
    * SEPARATE prop (like the library host does), not part of the controller, so a model switch moves
@@ -205,8 +209,7 @@ export function useLocalSliceSettingsController(params: LocalSliceSettingsContro
     machineProfiles,
     processProfiles,
     projectResolved: true,
-    catalogueResolved: (profilesQuery.data?.length ?? 0) > 0 || profilesQuery.isError,
-    resetToken: selectedSlicerTargetId
+    catalogueResolved: (profilesQuery.data?.length ?? 0) > 0 || profilesQuery.isError
   })
 
   // ---- Anonymous process-config resolver (tune dialogs + machine-switch carry-over) ----
@@ -293,7 +296,9 @@ export function useLocalSliceSettingsController(params: LocalSliceSettingsContro
     plateType,
     bakedProcessProfileName: bakedIndex.processProfileName,
     carryOverridesOnRepick,
-    resetToken: selectedSlicerTargetId
+    catalogueKey: selectedSlicerTargetId,
+    catalogueReady: (profilesQuery.data?.length ?? 0) > 0,
+    carryOverridesReady: !projectProcessProfileId || projectProcessResolveQuery.isSuccess
   })
   const [processSettingsDialogOpen, setProcessSettingsDialogOpen] = useState(false)
   /** Set by the cross-catalog settings search; seeds the next catalog dialog's search box. */
@@ -315,9 +320,9 @@ export function useLocalSliceSettingsController(params: LocalSliceSettingsContro
   const baseProjectFilaments = useMemo(() => buildSliceDialogProjectFilaments(file, bakedIndex, selectedPlate), [bakedIndex, file, selectedPlate])
   // Removing a slot must remap the filament-INDEX references living with the process state:
   // see useMaterialSlots.onFilamentRemoved (positions above the removed one shift down).
-  const handleFilamentIndexRemap = useCallback((removedPosition: number) => {
-    setProcessSettingOverrides((current) => remapFilamentIndexOverrides(current, removedPosition))
-    setObjectProcessOverrides((current) => remapPerObjectFilamentIndexOverrides(current, removedPosition))
+  const handleFilamentIndexRemap = useCallback((removedPosition: number, replacementPosition?: number) => {
+    setProcessSettingOverrides((current) => remapFilamentIndexOverrides(current, removedPosition, replacementPosition))
+    setObjectProcessOverrides((current) => remapPerObjectFilamentIndexOverrides(current, removedPosition, replacementPosition))
   }, [setProcessSettingOverrides])
   // A reorder renumbers every position at once: same duty, permutation form.
   const handleFilamentIndexPermute = useCallback((remap: ReadonlyMap<number, number>) => {
@@ -339,6 +344,7 @@ export function useLocalSliceSettingsController(params: LocalSliceSettingsContro
     onProjectSaved: handleProjectSaved,
     materialSnapshot, restoreMaterialSnapshot
   } = useMaterialSlots({
+    catalogueReady: (profilesQuery.data?.length ?? 0) > 0,
     file,
     bakedIndex,
     baseProjectFilaments,
@@ -427,6 +433,29 @@ export function useLocalSliceSettingsController(params: LocalSliceSettingsContro
   const projectIsNewerThanSlicer = isProjectNewerThanSlicer(file.projectVersion, selectedSlicerTarget?.version)
   const [allowNewerProjectFile, setAllowNewerProjectFile] = useState(false)
   const slicerDataReady = Boolean(targetsQuery.data) && !profilesQuery.isLoading && (profilesQuery.data?.length ?? 0) > 0
+
+  const slicingReady = slicerDataReady && !profilesQuery.isError && retargetTarget !== null
+    && selectedProcessProfile !== null && filamentMappingResult.unresolved.length === 0
+    && (!projectIsNewerThanSlicer || allowNewerProjectFile)
+  const sliceDisabledReason = resolveSliceDisabledReason({
+    canSlice: slicingReady,
+    configured: targetsQuery.data?.configured === true,
+    selectedSlicerTargetId,
+    profilesError: profilesQuery.isError ? 'Failed to load slicing presets.' : null,
+    slicerDataReady,
+    printerProfileId,
+    processProfileId,
+    printerProfileIncompatible: false,
+    processProfileIncompatible: processProfileId.length > 0 && selectedProcessProfile === null,
+    blockedByProjectVersion: projectIsNewerThanSlicer && !allowNewerProjectFile,
+    nozzleDiameterCount: selectedNozzleDiameters.length,
+    missingFilamentProfile: filamentMappingResult.unresolved.length > 0,
+    staleFilamentSelection: filamentMappingResult.unresolved.some((slot) => slot.reason === 'staleSelection'),
+    missingFilamentToolhead: false,
+    targetMode: 'manualProfile',
+    printerId: '',
+    submitting: false
+  })
 
   const controller: SliceSettingsController = {
     // Supplied by `EditorView`, which holds the archive these are read from: see the note on the
@@ -572,6 +601,8 @@ export function useLocalSliceSettingsController(params: LocalSliceSettingsContro
   return {
     controller,
     slicingAvailable: targetsQuery.data?.slicingAvailable === true,
+    slicingReady,
+    sliceDisabledReason,
     targetPrinterModel: targetPrinterModel ?? undefined,
     resolveProcessConfig,
     resolveFilamentConfig,

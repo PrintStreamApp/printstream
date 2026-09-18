@@ -414,9 +414,12 @@ export const emailCodeVerifyResponseSchema = z.object({
   redirectTo: z.string().nullable().optional(),
   /**
    * How many passkeys the signed-in user already has. Zero means the client
-   * just watched the user sign in the hard way and should offer to set one up.
+   * just watched the user sign in the hard way and should offer to set one up,
+   * unless offerPasskeySetup is false for an operator-managed identity.
    */
-  passkeyCount: z.number().int().nonnegative().default(0)
+  passkeyCount: z.number().int().nonnegative().default(0),
+  /** Shared/operator-managed identities must not be offered personal passkey enrolment. */
+  offerPasskeySetup: z.boolean().optional()
 })
 
 export type EmailCodeVerifyResponse = z.infer<typeof emailCodeVerifyResponseSchema>

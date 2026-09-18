@@ -121,6 +121,7 @@ test('a cache hit copies the immutable artifact into a fresh disposable output',
     const data = createdData as Record<string, unknown> | null
     assert.equal(data?.hidden, true)
     assert.equal(data?.origin, 'slice')
+    assert.equal(data?.sourceTagSnapshotJson, input.sourceTagSnapshotJson)
     assert.equal(data?.sourceProjectFileId, 'preserved-project')
     assert.equal(data?.sliceSettingsJson, JSON.stringify(makePreservedSettings()))
     assert.equal(refreshedId, 'cache-1')
@@ -173,6 +174,7 @@ test('storing a cache entry snapshots the output and atomically replaces the sou
 function makeLookupInput(sourcePath: string): SliceCacheLookupInput {
   return {
     workspaceId: 'workspace-1',
+    sourceTagSnapshotJson: JSON.stringify({ tags: [], spoolIds: [] }),
     sourceFileId: 'source-1',
     sourceFileName: 'project.3mf',
     sourcePath,

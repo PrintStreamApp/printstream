@@ -76,7 +76,10 @@ test('websocket reconnect refreshes jobs and dispatch queries after the initial 
     assert.deepEqual(invalidatedKeys, [])
 
     openListeners[0]?.()
-    assert.deepEqual(invalidatedKeys, ['jobs', 'job-history', 'print-dispatch'])
+    assert.deepEqual(invalidatedKeys, ['tags', 'jobs', 'job-history', 'print-dispatch'])
+    invalidatedKeys.length = 0
+    jsonListeners[0]?.({ type: 'resource.changed', resource: 'tags' })
+    assert.deepEqual(invalidatedKeys, ['job-history', 'tags', 'library-browse'])
   } finally {
     queryClient.invalidateQueries = originalInvalidateQueries
     wsClient.onOpen = originalOnOpen

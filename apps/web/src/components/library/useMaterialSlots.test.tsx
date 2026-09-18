@@ -531,3 +531,50 @@ test('a no-op drop (same position) reports nothing and keeps list identity', () 
   assert.deepEqual(result.current.projectFilaments.map((entry) => entry.projectFilamentId),
     before.map((entry) => entry.projectFilamentId))
 })
+
+
+test('replacement tracks base references through reordering and chained deletion', () => {
+  const { result } = renderSlots({ baseProjectFilaments: [slot(1, '#111111'), slot(2, '#222222'), slot(3, '#333333')] })
+  act(() => result.current.handleReorderFilament(2, 0))
+  act(() => result.current.handleRemoveFilament(1, 3))
+  assert.deepEqual(result.current.projectFilaments.map((entry) => entry.projectFilamentId), [3, 2])
+  assert.deepEqual(result.current.desiredFilaments?.[0]?.replacedSourceIndices, [0])
+  act(() => result.current.handleRemoveFilament(3, 2))
+  assert.deepEqual(result.current.desiredFilaments?.[0]?.replacedSourceIndices, [0, 2])
+  act(() => result.current.handleRemoveFilament(2))
+  assert.equal(result.current.projectFilaments.length, 1, 'the last material cannot be removed even through a direct call')
+})
+
+test('invalid replacement and deleting a nonexistent material leave the list alone', () => {
+  const { result } = renderSlots()
+  const before = result.current.projectFilaments
+  act(() => result.current.handleRemoveFilament(1, 1))
+  act(() => result.current.handleRemoveFilament(1, 999))
+  act(() => result.current.handleRemoveFilament(999, 2))
+  assert.equal(result.current.projectFilaments, before)
+})
+
+test('deleting an added material does not redirect the base material it cloned', () => {
+  const { result } = renderSlots()
+  act(() => result.current.handleAddFilament({ optionId: 'profile:pla', color: '#123456', label: 'PLA' }))
+  act(() => result.current.handleRemoveFilament(3, 2))
+  assert.deepEqual(result.current.desiredFilaments?.[1]?.replacedSourceIndices, [])
+})
+
+test('a late first material gets its preset without another user edit', async () => {
+  const { buildSliceMaterialOptions } = await import('../../lib/slicingPresetMatching')
+  const profiles = [{ id: 'pla', source: 'builtin', kind: 'filament', name: 'Generic PLA', filamentType: 'PLA' }] as import('@printstream/shared').SlicingPresetSummary[]
+  const index = {
+    plates: [], compatiblePrinterModels: [], supportFilamentIds: [],
+    projectFilaments: [{ id: 1, filamentType: 'PLA', filamentName: 'Generic PLA', color: '#111111', nozzleId: null }]
+  } as unknown as ThreeMfIndex
+  const props = {
+    file: FILE, bakedIndex: index, baseProjectFilaments: [] as SliceProjectFilament[],
+    filamentProfiles: profiles, compatibleFilamentProfiles: profiles,
+    materialOptions: buildSliceMaterialOptions(profiles, []), selectedMachineProfile: null
+  }
+  const view = renderHook((p: typeof props) => useMaterialSlots(p), { initialProps: props })
+  view.rerender({ ...props, baseProjectFilaments: [slot(1, '#111111')] })
+  assert.equal(view.result.current.filamentMaterialOptionIds[1], 'profile:pla')
+  assert.deepEqual(view.result.current.filamentMappingResult.unresolved, [])
+})

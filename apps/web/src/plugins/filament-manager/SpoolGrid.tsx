@@ -6,6 +6,7 @@
  * toggles its selection on click, deferring bulk actions to the Filament tab's
  * selection bar.
  */
+import { EntityTagChips } from '../../components/tags/EntityTagChips'
 import { Box, Card, CardContent, Checkbox, Chip, Stack, Typography } from '@mui/joy'
 import type { FilamentSpool } from '@printstream/shared'
 import { SpoolColorSwatch, SpoolRemaining } from './SpoolVisuals'
@@ -78,8 +79,9 @@ export function SpoolGrid({
               <SpoolColorSwatch colorHex={spool.colorHex} colors={spool.colors} size={36} />
               <Box sx={{ flex: 1, minWidth: 0 }}>
                 <Typography level="title-sm" noWrap>{spoolTitle(spool)}</Typography>
+                    <EntityTagChips kind="spool" id={spool.id} />
                 <Stack direction="row" spacing={0.5} sx={{ mt: 0.25, flexWrap: 'wrap' }}>
-                  <Chip size="sm" variant="soft">{spool.materialSubtype ?? spool.filamentType}</Chip>
+                  <Chip size="sm" variant="soft">{spool.filamentType}</Chip>
                   <Chip size="sm" variant="soft" color={STATUS_COLORS[spool.status]}>{STATUS_LABELS[spool.status]}</Chip>
                 </Stack>
               </Box>

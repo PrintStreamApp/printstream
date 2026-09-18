@@ -41,7 +41,7 @@ import { AmsSpoolSetupDialog, type AmsSpoolSetupTarget } from '../AmsSpoolSetupD
  * `buildPrinterTrayGroups` derives from printer status alone and has no way to
  * reach the filament-manager lookup, which is a React hook.
  */
-type MappingTrayOption = PrinterTrayOption & { remainingGrams?: number | null }
+export type MappingTrayOption = PrinterTrayOption & { remainingGrams?: number | null }
 
 /** AMS unit id for the tracked-spool lookup; an external spool is addressed by its mapping value. */
 function trayAmsId(tray: PrinterTrayOption): number | null {
@@ -309,7 +309,7 @@ export function PrinterMapping({
 }
 
 /** Color swatch + slot label + loaded filament type + remaining estimate, used in slot Selects. */
-function SlotOptionLabel({
+export function SlotOptionLabel({
   tray,
   trays,
   printerId,
@@ -563,4 +563,3 @@ function WarningGlyph() {
     </Box>
   )
 }
-

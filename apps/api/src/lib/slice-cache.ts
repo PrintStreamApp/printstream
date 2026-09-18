@@ -32,6 +32,8 @@ import type { ResolvedSlicingPresetFile } from './slicing-presets.js'
 export const SLICE_CACHE_KEY_VERSION = 2
 
 export interface SliceCacheLookupInput {
+  /** Current request provenance, not the previous cache writer's tags. Excluded from byte identity. */
+  sourceTagSnapshotJson?: string | null
   workspaceId: string
   sourceFileId: string
   sourceFileName: string
@@ -154,7 +156,8 @@ export async function lookupSlicingResultCache(
             hidden: true,
             origin: 'slice',
             sourceProjectFileId,
-            sliceSettingsJson: entry.sliceSettingsJson
+            sliceSettingsJson: entry.sliceSettingsJson,
+            sourceTagSnapshotJson: input.sourceTagSnapshotJson ?? null
           },
           select: { id: true, name: true }
         })

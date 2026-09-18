@@ -116,8 +116,15 @@ export function normalizeFilamentVendorLabel(vendor: string | null | undefined):
   return trimmed === 'Bambu Lab' ? 'Bambu' : trimmed
 }
 
+/**
+ * Resolve the manufacturer when firmware supplies a preset name rather than a
+ * vendor field. Studio's PolyLite, PolyTerra and Fiberon presets all declare
+ * filament_vendor=Polymaker; their first word is a product family, not a vendor.
+ * Keep this shared so AMS identity and preset-only material options agree.
+ */
 export function brandFromPresetName(name: string): string {
-  const first = name.split(' ')[0]
+  const first = name.trim().split(/\s+/)[0] ?? ''
+  if (/^(polylite|polyterra|fiberon)$/i.test(first)) return 'Polymaker'
   return first || 'Other'
 }
 
@@ -129,4 +136,18 @@ export function filamentPresetNameFromId(trayInfoIdx: string | null | undefined)
 export function filamentPresetBrandFromId(trayInfoIdx: string | null | undefined): string | null {
   const presetName = filamentPresetNameFromId(trayInfoIdx)
   return presetName ? brandFromPresetName(presetName) : null
+}
+
+/**
+ * Product line from a known bundled preset, excluding its manufacturer and machine suffix.
+ * Unknown/custom recipe names and Generic presets cannot establish a product identity.
+ */
+export function filamentProductLineFromPresetName(name: string): string | null {
+  const base = name.split('@')[0]!.trim()
+  const known = Object.values(BAMBU_FILAMENT_PRESET_NAMES)
+    .find((candidate) => candidate.toLowerCase() === base.toLowerCase())
+  if (!known) return null
+  const brand = brandFromPresetName(known)
+  if (brand === 'Generic') return null
+  return known.startsWith(`${brand} `) ? known.slice(brand.length + 1) : known
 }

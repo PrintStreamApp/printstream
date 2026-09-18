@@ -47,6 +47,8 @@ export function AuthOAuthSignInSection({
               : `${provider.label} is enabled for this install. Continue with your external identity provider.`}
           </Typography>
           <Stack direction="row" justifyContent="flex-end">
+            {/* The Android host recognizes this same-origin authorize route and
+                keeps its provider redirects in the WebView's OAuth window. */}
             <Button onClick={() => window.location.assign(target)}>
               Continue with {provider.label}
             </Button>

@@ -20,25 +20,10 @@ export const PAGE_SIZE_OPTIONS = [
   { value: 96, label: '96 per page' }
 ] as const
 
-/**
- * Seed suggestions for the add/edit spool autocompletes. They bootstrap the
- * dropdowns before a workspace has its own spools; the user's existing spool
- * brands/variants/vendors are merged in on top so the list learns over time.
- */
-export const FILAMENT_MATERIAL_SUGGESTIONS = [
-  'PLA', 'PETG', 'ABS', 'ASA', 'TPU', 'PC', 'PVA', 'PA', 'PLA-CF', 'PETG-CF', 'Nylon', 'HIPS'
-] as const
-
-// "Bambu", not "Bambu Lab": every derived path spells it that way (preset names read "Bambu PLA
-// Basic", and `resolveFilamentIdentity` yields "Bambu" for a genuine tray), so offering the legal
-// name here split one manufacturer across two brands in the inventory filter.
-// `normalizeFilamentVendorLabel` is the rule; the API canonicalises on write.
-export const FILAMENT_BRAND_SUGGESTIONS = [
-  'Bambu', 'Polymaker', 'eSUN', 'Overture', 'Prusament', 'Hatchbox',
-  'SUNLU', 'Inland', 'Elegoo', 'ColorFabb', 'Fillamentum', 'Atomic Filament'
-] as const
-
-export const FILAMENT_VARIANT_SUGGESTIONS = [
-  'PLA Basic', 'PLA Matte', 'PLA Silk', 'PLA+', 'PLA-CF',
-  'PETG', 'PETG HF', 'PETG-CF', 'ABS', 'ASA', 'TPU 95A', 'PA-CF', 'PC'
-] as const
+// Compatibility re-export for filament-manager callers. The values are app-wide
+// because calibration and spool editing offer the same filament vocabulary.
+export {
+  FILAMENT_BRAND_SUGGESTIONS,
+  FILAMENT_MATERIAL_SUGGESTIONS,
+  FILAMENT_PRODUCT_LINE_SUGGESTIONS
+} from '../../lib/filamentSuggestions'

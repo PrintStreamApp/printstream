@@ -1,11 +1,20 @@
 import assert from 'node:assert/strict'
-import { afterEach, mock, test } from 'node:test'
+import { afterEach, beforeEach, mock, test } from 'node:test'
 import { startCalibrationJob } from './calibration-jobs.js'
 import { rootPrisma } from './prisma.js'
-import { restorePrismaMethodsAfterEach } from '../test-utils/prisma-stubs.js'
+import { restorePrismaMethodsAfterEach, usePrismaStubs } from '../test-utils/prisma-stubs.js'
 import { consumePendingPrintJobSource, clearAllPendingPrintJobSources } from './pending-print-job-source.js'
 import { printerEvents } from './printer-events.js'
 import { printerManager } from './printer-manager.js'
+
+const stub = usePrismaStubs()
+
+// Job creation captures tags and selected inventory spools. These unit tests must not read
+// the developer's database; snapshot semantics have dedicated job-tag capture tests.
+beforeEach(() => {
+  stub(rootPrisma.workspaceTag, 'findMany', async () => [])
+  stub(rootPrisma.filamentSpool, 'findMany', async () => [])
+})
 
 restorePrismaMethodsAfterEach([
   [rootPrisma.printJob, 'findUnique'],

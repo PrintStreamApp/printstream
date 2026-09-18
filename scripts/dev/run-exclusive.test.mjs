@@ -28,8 +28,7 @@ async function signalWrapper(childScript, signal) {
   const child = spawn(process.execPath, [wrapper, process.execPath, '-e', childScript], {
     env: { ...process.env, XDG_CACHE_HOME: cacheHome },
     stdio: ['ignore', 'pipe', 'pipe'],
-    // Its own process group, so the cleanup above can reap a grandchild that outlived the wrapper
-    // without ever reaching the test runner itself.
+    // Isolate this test wrapper from the test runner when delivering signals.
     detached: true
   })
   let output = ''
@@ -57,22 +56,14 @@ async function signalWrapper(childScript, signal) {
   return { exited, output }
 }
 
-test('a signal aimed at the wrapper alone terminates it rather than being swallowed', async () => {
-  // The regression: with a permanent forwarding listener the wrapper outlived its own SIGTERM and
-  // kept the repo lock, so every later validate on the clone queued behind a process that was never
-  // going to finish.
-  //
-  // The child must IGNORE the signal, which is the whole discrimination. A child that dies on it
-  // resolves the wrapper's promise and the wrapper exits through its NORMAL path, so the assertion
-  // passes with the defect still in place: written that way first, this test was green against
-  // `prependListener`. With an unkillable child the wrapper can only leave via the signal itself.
+test('a child ignoring cancellation is killed before the wrapper releases its lock', async () => {
   const result = await signalWrapper(
-    'process.on("SIGTERM", () => {}); setInterval(() => {}, 1000); console.log("READY")',
+    'process.on("SIGTERM", () => {}); setInterval(() => {}, 1000); console.log("READY PID=" + process.pid)',
     'SIGTERM'
   )
-  assert.equal(result.exited, true, 'the wrapper must not survive its own signal')
-  // The child is deliberately NOT asserted on: forwarding hands the signal over, it does not wait,
-  // and one that ignores it outlives the wrapper. That limit is stated in `run-exclusive.mjs`.
+  assert.equal(result.exited, true, 'shutdown must escalate rather than leave an orphan')
+  const pid = Number(result.output.match(/PID=(\d+)/)[1])
+  assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' })
 })
 
 test('the signal reaches the CHILD, which is the point of forwarding it', async () => {

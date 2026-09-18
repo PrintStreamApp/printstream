@@ -4,9 +4,10 @@
  * load/unload filament actions, persisting through the printer command
  * endpoint.
  */
+import { useSlotFilamentIdentityLookup } from '../../lib/slotFilamentIdentity'
 import { useCallback, useMemo, useState } from 'react'
 import {
-  AutocompleteOption, Button, ButtonGroup, FormControl, FormLabel, Input, ListItemContent, ModalDialog, Option, Select, Stack, Typography
+  AutocompleteOption, Button, ButtonGroup, FormControl, FormLabel, Input, ListItemContent, Stack, Typography
 } from '@mui/joy'
 import RestartAltRoundedIcon from '@mui/icons-material/RestartAltRounded'
 import SaveRoundedIcon from '@mui/icons-material/SaveRounded'
@@ -15,8 +16,15 @@ import {
   getExternalSpoolLoadAvailability,
   getExternalSpoolUnloadAvailability,
   type ExternalSpool,
+  slotMaterialAllowsPreset,
+  slotMaterialCompatibilityError,
+  type SlotMaterialIdentity,
   type PrinterStatus
 } from '@printstream/shared'
+import { ScrollableModalDialog, ScrollableDialogBody } from '../ScrollableDialog'
+import { PrinterMaterialSettings } from '../PrinterMaterialSettings'
+import { SlotMaterialFields } from '../SlotMaterialFields'
+import { slotMaterialDraft, automaticSlotMaterial, inventorySlotMaterial } from '../../lib/slotMaterialDraft'
 import { apiFetch } from '../../lib/apiClient'
 import { toast } from '../../lib/toast'
 import { DialogSection } from '../DialogSection'
@@ -26,7 +34,7 @@ import { BackAwareModal as Modal } from '../BackAwareModal'
 import { ColorSwatchPicker } from '../ColorSwatchPicker'
 import { FilamentChangeProgressPanel } from './FilamentChangeProgressPanel'
 import { bambuMaterialFromPresetName, bambuMaterialFromType } from '../../data/bambuColors'
-import { BAMBU_FILAMENT_PRESETS, BAMBU_FILAMENT_PRESET_GROUPS, FILAMENT_PRESETS, filamentTypeDefaults } from '../../data/filamentSetupCatalog'
+import { BAMBU_FILAMENT_PRESETS, BAMBU_FILAMENT_PRESET_GROUPS, filamentTypeDefaults } from '../../data/filamentSetupCatalog'
 import { COMMON_FILAMENT_COLOR_SWATCHES, resolveFilamentColorSwatches } from '../../lib/filamentColor'
 import { externalSpoolLabel, normalizeHex } from '../../lib/printersViewHelpers'
 import { usePendingFilamentActionLabel, withDisabledActionReason } from './printerActionHelpers'
@@ -47,10 +55,22 @@ export function ExternalSpoolEditModal({
   onClose: () => void
 }) {
   const label = externalSpoolLabel(spool.amsId, spoolCount)
+  const lookupIdentity = useSlotFilamentIdentityLookup()
+  const trackedIdentity = lookupIdentity(printerId, spool.amsId, null)
   const initialBambuPreset = BAMBU_FILAMENT_PRESETS.find((entry) => entry.id === spool.trayInfoIdx)
   const [type, setType] = useState<string>(spool.filamentType ?? initialBambuPreset?.type ?? 'PLA')
-  const [color, setColor] = useState<string>(spool.color ?? '#000000')
+  const [materialDraft, setMaterialIdentity] = useState<SlotMaterialIdentity | null>(null)
+  const materialIdentity = materialDraft ?? slotMaterialDraft({ ...spool, spool: trackedIdentity })
+  const [manualIdentity, setManualIdentity] = useState<boolean | null>(null)
+  const [color, setColorValue] = useState<string>(spool.color ?? '#000000')
+  /** Colour and its optional display name are independent; picker edits preserve the entered name. */
+  const setColor = (next: string) => {
+    setColorValue(next)
+    setMaterialIdentity(materialIdentity)
+    setManualIdentity(true)
+  }
   const [trayInfoIdx, setTrayInfoIdx] = useState<string>(spool.trayInfoIdx ?? '')
+  const compatibilityError = slotMaterialCompatibilityError(materialIdentity.filamentType, type, trayInfoIdx)
   const [error, setError] = useState<string | null>(null)
   const [pendingFilamentActionLabel, setPendingFilamentActionLabel] = usePendingFilamentActionLabel(status)
 
@@ -59,11 +79,13 @@ export function ExternalSpoolEditModal({
     const preset = (fromBambu?.tempMin != null && fromBambu?.tempMax != null)
       ? { tempMin: fromBambu.tempMin, tempMax: fromBambu.tempMax }
       : filamentTypeDefaults(type)
-    return { tempMin: preset?.tempMin ?? 190, tempMax: preset?.tempMax ?? 230 }
+    if (!preset) throw new Error('Choose a compatible printer material preset before saving.')
+    return { tempMin: preset.tempMin, tempMax: preset.tempMax }
   }
 
   const send = useMutation({
     mutationFn: () => {
+      if (compatibilityError) throw new Error(compatibilityError)
       const trayColor = color.replace('#', '').padEnd(8, 'F').slice(0, 8).toUpperCase()
       const { tempMin, tempMax } = tempsForCurrentType()
       return apiFetch(`/api/printers/${printerId}/command`, {
@@ -74,6 +96,7 @@ export function ExternalSpoolEditModal({
           trayInfoIdx,
           trayColor,
           trayType: type,
+          materialIdentity: (manualIdentity ?? Boolean(spool.materialIdentity || !trackedIdentity?.spoolId)) ? materialIdentity : null,
           nozzleTempMin: tempMin,
           nozzleTempMax: tempMax
         }
@@ -134,9 +157,6 @@ export function ExternalSpoolEditModal({
     onError: (err: Error) => setError(err.message)
   })
 
-  const applyPreset = (next: string) => {
-    setType(next)
-  }
 
   const applyBambuPreset = (next: string) => {
     setTrayInfoIdx(next)
@@ -146,10 +166,13 @@ export function ExternalSpoolEditModal({
   }
 
   // Lets the filament-manager plugin's "Pick from library" populate the form.
-  const applyFilamentFromLibrary = useCallback((values: { filamentType?: string | null; colorHex?: string | null; trayInfoIdx?: string | null }) => {
-    if (typeof values.trayInfoIdx === 'string') setTrayInfoIdx(values.trayInfoIdx)
-    if (values.filamentType) setType(values.filamentType)
-    if (values.colorHex) setColor(values.colorHex)
+  const applyFilamentFromLibrary = useCallback((values: { brand?: string | null; colorName?: string | null; materialSubtype?: string | null; filamentType?: string | null; colorHex?: string | null; trayInfoIdx?: string | null }) => {
+    setManualIdentity(false)
+    setMaterialIdentity({ brand: values.brand ?? null, filamentType: values.filamentType ?? 'PLA', materialSubtype: values.materialSubtype ?? null, colorName: values.colorName ?? null })
+    const hardware = values.trayInfoIdx ? inventorySlotMaterial(values.filamentType ?? '', values.trayInfoIdx) : automaticSlotMaterial({ brand: values.brand ?? null, filamentType: values.filamentType ?? '', materialSubtype: values.materialSubtype ?? null })
+    setTrayInfoIdx(hardware?.presetId ?? '')
+    setType(hardware?.type ?? '')
+    if (values.colorHex) setColorValue(values.colorHex)
   }, [])
 
   const currentCustomPresetId = trayInfoIdx && !BAMBU_FILAMENT_PRESETS.some((preset) => preset.id === trayInfoIdx)
@@ -163,9 +186,9 @@ export function ExternalSpoolEditModal({
       ? [{ id: currentCustomPresetId, label: 'Current custom preset', brand: 'Custom' } as PresetOption]
       : []),
     ...BAMBU_FILAMENT_PRESET_GROUPS.flatMap((group) =>
-      group.presets.map((preset) => ({ id: preset.id, label: preset.name, brand: group.brand }))
+      group.presets.filter((preset) => slotMaterialAllowsPreset(materialIdentity.filamentType, preset.type)).map((preset) => ({ id: preset.id, label: preset.name, brand: group.brand }))
     )
-  ], [currentCustomPresetId])
+  ], [currentCustomPresetId, materialIdentity.filamentType])
   const selectedPresetOption = useMemo(
     () => presetOptions.find((option) => option.id === trayInfoIdx) ?? presetOptions[0],
     [presetOptions, trayInfoIdx]
@@ -189,7 +212,8 @@ export function ExternalSpoolEditModal({
 
   return (
     <Modal open onClose={onClose}>
-      <ModalDialog sx={{ maxWidth: 420, width: '100%' }}>
+      <ScrollableModalDialog sx={{ maxWidth: 420, width: '100%' }}>
+        <ScrollableDialogBody>
         <Typography level="h4">{label}</Typography>
         <Typography level="body-sm" textColor="text.tertiary">
           Manual filament slot. It shares the nozzle path with AMS and does not support RFID scan.
@@ -203,51 +227,38 @@ export function ExternalSpoolEditModal({
                   kind: 'external',
                   printerId,
                   amsId: spool.amsId,
-                  currentValues: { filamentType: type, colorHex: color, trayInfoIdx },
+                  currentValues: { ...materialIdentity, colorHex: color, trayInfoIdx },
                   onApplyFilament: applyFilamentFromLibrary
                 }}
               />
-              <FormControl>
-                <FormLabel>Bambu preset</FormLabel>
-                <DeferredKeyboardAutocomplete
-                  options={presetOptions}
-                  value={selectedPresetOption}
-                  onChange={(_event, value) => {
-                    if (value) applyBambuPreset(value.id)
-                  }}
-                  getOptionLabel={(option) => option.label}
-                  isOptionEqualToValue={(option, value) => option.id === value.id}
-                  groupBy={(option) => option.brand}
-                  disableClearable
-                  selectOnFocus
-                  handleHomeEndKeys
-                  openOnFocus
-                  slotProps={{ listbox: { sx: { maxHeight: 360 } } }}
-                  renderOption={(props, option) => (
-                    <AutocompleteOption {...props} key={option.id}>
-                      <ListItemContent>{option.label}</ListItemContent>
-                    </AutocompleteOption>
-                  )}
-                />
-              </FormControl>
-              <FormControl>
-                <FormLabel>Color</FormLabel>
+              <SlotMaterialFields value={materialIdentity} onChange={(next) => {
+                setMaterialIdentity(next)
+                setManualIdentity(true)
+                if (next.filamentType !== materialIdentity.filamentType || next.brand !== materialIdentity.brand || next.materialSubtype !== materialIdentity.materialSubtype) {
+                  const hardware = automaticSlotMaterial(next)
+                  setType(hardware?.type ?? '')
+                  setTrayInfoIdx(hardware?.presetId ?? '')
+                }
+              }} />
+              <Stack spacing={0.5}>
+                <FormLabel>Colour</FormLabel>
                 <Stack direction="row" spacing={1} alignItems="center">
                   <Input
                     type="color"
                     value={normalizeHex(color)}
                     onChange={(event) => setColor(event.target.value)}
-                    slotProps={{ input: { 'aria-label': 'Color' } }}
+                    slotProps={{ input: { 'aria-label': 'Colour' } }}
                     sx={{ width: 56, p: 0.5 }}
                   />
                   <Input
                     value={color}
                     onChange={(event) => setColor(event.target.value)}
                     placeholder="#RRGGBB"
+                      slotProps={{ input: { 'aria-label': 'Colour hex' } }}
                     sx={{ flex: 1 }}
                   />
                 </Stack>
-              </FormControl>
+              </Stack>
               {colorSwatches.length > 0 && (
                 <ColorSwatchPicker
                   title={colorSwatchTitle}
@@ -256,16 +267,34 @@ export function ExternalSpoolEditModal({
                   onPick={(hex) => setColor(hex)}
                 />
               )}
-              {trayInfoIdx === '' && (
+              <PrinterMaterialSettings error={compatibilityError}>
                 <FormControl>
-                  <FormLabel>Type</FormLabel>
-                  <Select value={type} onChange={(_event, value) => value && applyPreset(value)}>
-                    {FILAMENT_PRESETS.map((preset) => (
-                      <Option key={preset.type} value={preset.type}>{preset.type}</Option>
-                    ))}
-                  </Select>
+                  <FormLabel>Printer material preset</FormLabel>
+
+                  <DeferredKeyboardAutocomplete
+                    options={presetOptions}
+                    value={selectedPresetOption}
+                    onChange={(_event, value) => {
+                      if (value) applyBambuPreset(value.id)
+                    }}
+                    getOptionLabel={(option) => option.label}
+                    isOptionEqualToValue={(option, value) => option.id === value.id}
+                    groupBy={(option) => option.brand}
+                    disableClearable
+                    selectOnFocus
+                    handleHomeEndKeys
+                    openOnFocus
+                    slotProps={{ listbox: { sx: { maxHeight: 360 } } }}
+                    renderOption={(props, option) => (
+                      <AutocompleteOption {...props} key={option.id}>
+                        <ListItemContent>{option.label}</ListItemContent>
+                      </AutocompleteOption>
+                    )}
+                  />
+                  {compatibilityError && <Typography level="body-xs" color="danger">{compatibilityError}</Typography>}
                 </FormControl>
-              )}
+              </PrinterMaterialSettings>
+
             </Stack>
           </DialogSection>
 
@@ -326,11 +355,12 @@ export function ExternalSpoolEditModal({
             </Button>
             <Stack direction="row" spacing={1}>
               <Button variant="plain" onClick={onClose}>Cancel</Button>
-              <Button loading={send.isPending} startDecorator={<SaveRoundedIcon />} onClick={() => send.mutate()}>Save</Button>
+              <Button disabled={Boolean(compatibilityError)} loading={send.isPending} startDecorator={<SaveRoundedIcon />} onClick={() => send.mutate()}>Save</Button>
             </Stack>
           </Stack>
         </Stack>
-      </ModalDialog>
+        </ScrollableDialogBody>
+      </ScrollableModalDialog>
     </Modal>
   )
 }

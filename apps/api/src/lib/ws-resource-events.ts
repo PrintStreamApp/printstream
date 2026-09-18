@@ -17,6 +17,7 @@ type ResourceName =
   | 'logs'
   | 'orders'
   | 'printer.views'
+  | 'tags'
   | 'billing'
   | 'notification.templates'
   | 'plugin.settings'

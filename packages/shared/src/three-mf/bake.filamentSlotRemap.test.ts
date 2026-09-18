@@ -166,3 +166,20 @@ test('remapColorPaintInModelXml drops paint whose material was removed and keeps
   assert.equal(out, '<triangle v1="0" v2="1" v3="2" paint_supports="8"/>',
     'paint_color removed, support paint (same code, different channel) untouched')
 })
+
+
+test('deleting an in-use tail material preserves its chosen replacement in untouched archive data', () => {
+  const edit = identityEdit()
+  edit.filaments = [
+    { color: '#FFFFFF', sourceIndex: 0 },
+    { color: '#00FF00', sourceIndex: 1, replacedSourceIndices: [2] }
+  ] as SceneEdit['filaments']
+  const plan = planEditedThreeMf(baseSource(), edit)
+  const painted = plan.copy?.transforms.get('3D/Objects/object_2.model')?.('<triangle paint_color="0C" paint_supports="8"/>')
+  assert.equal(painted, '<triangle paint_color="8" paint_supports="8"/>')
+  const settings = plan.copy?.transforms.get('Metadata/model_settings.config')?.(BASE_MODEL_SETTINGS_XML) ?? ''
+  assert.match(settings, /<part\b[\s\S]*?<metadata key="extruder" value="2"\/>/)
+  assert.match(settings, /<metadata key="support_filament" value="2"\/>/)
+  const changes = plan.copy?.transforms.get('Metadata/custom_gcode_per_layer.xml')?.(BASE_CUSTOM_GCODE_XML) ?? ''
+  assert.ok(changes.includes('top_z="1.2" type="2" extruder="2"'))
+})

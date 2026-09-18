@@ -25,6 +25,8 @@ import type {
 } from '@printstream/shared'
 import {
   amsTrayIndex,
+  brandFromPresetName,
+  filamentProductLineFromPresetName,
   buildProjectSlicingPresetId,
   effectiveAmsNozzleId,
   formatNozzleLabel,
@@ -273,6 +275,10 @@ export type SliceMaterialOption = {
   group: string
   materialType: string
   brand: string
+  /** Tracked spool identity, when this choice represents a filament-library spool. */
+  spoolId?: string | null
+  /** Specific material family, distinct from the broad `materialType` (e.g. PLA Pro vs PLA). */
+  materialSubtype?: string | null
   profileId: string | null
   material: string | null
   color: string | null
@@ -1080,6 +1086,8 @@ export function buildSliceMaterialOptions(profiles: SlicingPresetSummary[], mate
     group: isProjectSlicingPreset(profile) ? '3MF project presets' : profile.source === 'custom' ? 'User presets' : 'System presets',
     materialType: resolveProfileMaterialType(profile),
     brand: resolveProfileMaterialBrand(profile),
+    spoolId: null,
+    materialSubtype: filamentProductLineFromPresetName(profile.name),
     profileId: isProjectSlicingPreset(profile) ? null : profile.id,
     material: profile.name,
     color: null,
@@ -1136,6 +1144,8 @@ export function buildInventoryMaterialOptions(
         group: 'Filament library',
         materialType: spool.filamentType,
         brand: normalizeFilamentVendorLabel(spool.brand ?? ''),
+        spoolId: spool.id,
+        materialSubtype: spool.materialSubtype,
         profileId: profile?.id ?? null,
         material: profile?.name ?? spool.slicingPresetName ?? spool.materialSubtype ?? spool.filamentType,
         color,
@@ -1218,7 +1228,7 @@ export function buildLoadedPrinterMaterialOptions(
         ?? ([identity.brand, identity.subtype ?? identity.type].filter(Boolean).join(' ') || null)
       // A tracked spool names the row outright ("Michael's PLA"); otherwise the
       // matched preset names it, with the tray identity as the last fallback.
-      const label = spool
+      const label = slot.materialIdentity || spool
         ? identityMaterial ?? fallbackLabel
         : preset.profile ? formatSlicingPresetDisplayName(preset.profile) : identityMaterial ?? fallbackLabel
       const color = normalizeSliceFilamentColor(identity.colorHex ?? slot.color ?? slot.colors[0] ?? null)
@@ -1227,8 +1237,10 @@ export function buildLoadedPrinterMaterialOptions(
         id: `loaded:ams:${unit.unitId}:${slot.slot}:${preset.profile?.id ?? fallbackLabel}:${color}`,
         label,
         group,
-        materialType: resolveLoadedMaterialType(slot.filamentType, preset.profile, preset.profile?.name ?? label),
+        materialType: resolveLoadedMaterialType(identity.type, preset.profile, preset.profile?.name ?? label),
         brand: identity.brand ?? '',
+        spoolId: slot.materialIdentity ? null : spool?.spoolId ?? null,
+        materialSubtype: identity.subtype,
         profileId: preset.profile?.id ?? null,
         material: preset.profile ? preset.profile.name : identityMaterial ?? slot.filamentType?.trim() ?? label,
         color,
@@ -1269,7 +1281,7 @@ export function buildLoadedPrinterMaterialOptions(
     const preset = { profile: resolution.status === 'resolved' ? resolution.profile : null }
     const identityMaterial = identity.presetName
       ?? ([identity.brand, identity.subtype ?? identity.type].filter(Boolean).join(' ') || null)
-    const label = trackedSpool
+    const label = spool.materialIdentity || trackedSpool
       ? identityMaterial ?? fallbackLabel
       : preset.profile ? formatSlicingPresetDisplayName(preset.profile) : identityMaterial ?? fallbackLabel
     const color = normalizeSliceFilamentColor(identity.colorHex ?? spool.color ?? spool.colors[0] ?? null)
@@ -1282,8 +1294,10 @@ export function buildLoadedPrinterMaterialOptions(
       id: `loaded:external:${spool.amsId}:${preset.profile?.id ?? fallbackLabel}:${color}`,
       label,
       group: formatPrinterMaterialSourceGroup(sourceLabel, spool.nozzleId, nozzleCount),
-      materialType: resolveLoadedMaterialType(spool.filamentType, preset.profile, preset.profile?.name ?? label),
+      materialType: resolveLoadedMaterialType(identity.type, preset.profile, preset.profile?.name ?? label),
       brand: identity.brand ?? '',
+      spoolId: spool.materialIdentity ? null : trackedSpool?.spoolId ?? null,
+      materialSubtype: identity.subtype,
       profileId: preset.profile?.id ?? null,
       material: preset.profile ? preset.profile.name : identityMaterial ?? spool.filamentType?.trim() ?? label,
       color,
@@ -1439,7 +1453,7 @@ export function extractMaterialBrand(value: string): string {
   const beforeAt = value.split('@')[0]?.trim() ?? value
   const words = beforeAt.split(/\s+/).filter(Boolean)
   if (words.length === 0) return 'Other'
-  const first = words[0] as string
+  const first = brandFromPresetName(beforeAt)
   if (/^(?:fdm_)?filament_/i.test(first)) return 'Other'
   if (/^(generic|bambu|polymaker|esun|sunlu|overture|prusament|hatchbox|flashforge)$/i.test(first)) {
     return first.replace(/^bambu$/i, 'Bambu')
@@ -1496,8 +1510,8 @@ export function buildProfileMaterialOptionId(profileId: string): string {
  * "Bambu PLA Basic @BBL A1" and the material survives the switch.
  *
  * @returns the option id to use instead, or null when no compatible option shares the alias (the
- *   vendor publishes no variant for this machine): the caller then falls back to the file's own
- *   default, which is the honest answer.
+ *   vendor publishes no variant for this machine). Callers retain that unresolved selection so
+ *   the user can choose a replacement instead of silently restoring the file's material.
  */
 export function repointMaterialOptionToCompatibleAlias(
   optionId: string,

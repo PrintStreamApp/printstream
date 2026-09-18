@@ -1,45 +1,46 @@
-/**
- * Deriving the build id from the emitted bundle.
- *
- * The property that matters is not "produces a hash" but "cannot silently produce a
- * USELESS one". A build id that never changes looks exactly like a healthy one from every
- * angle: the meta tag and `build-id.json` still agree, the server still reports a string,
- * every client agrees with every server, and staleness detection is simply dead. That is
- * how the native update channel shipped inert for two weeks.
- *
- * Importing the plugin here also brings it into the web tsconfig's program, which
- * `include: ["src/**\/*"]` otherwise leaves out entirely.
- */
+/** Regression coverage for complete, deterministic browser build identities. */
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { computeWebBuildId } from '../../webBuildIdPlugin'
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import { build } from 'vite'
+import { computeWebBuildId, webBuildIdPlugin } from '../../webBuildIdPlugin'
+import { WEB_BUILD_ID_META_NAME } from './webBuildId'
 
-test('refuses to derive an id from nothing', () => {
-  // sha256('') is a perfectly valid-looking hash, identical in every build forever. The
-  // guard has to be the empty INPUT, not a falsy output.
+test('build identity is stable but changes with HTML, asset bytes or file names', () => {
+  const html = { fileName: 'index.html', source: '<head></head>' }
+  const script = { fileName: 'assets/app.js', source: 'one' }
+  const original = computeWebBuildId([html, script])
+  assert.equal(original, computeWebBuildId([script, html]))
+  assert.notEqual(original, computeWebBuildId([{ ...html, source: '<head><title>new</title></head>' }, script]))
+  assert.notEqual(original, computeWebBuildId([html, { ...script, source: 'two' }]))
+  assert.notEqual(original, computeWebBuildId([html, { ...script, fileName: 'assets/new.js' }]))
   assert.throws(() => computeWebBuildId([]), /no emitted assets/)
-  assert.throws(() => computeWebBuildId(['index.html']), /no emitted assets/)
 })
 
-test('is stable for the same bundle regardless of emit order', () => {
-  const first = computeWebBuildId(['assets/a-111.js', 'assets/b-222.css'])
-  const second = computeWebBuildId(['assets/b-222.css', 'assets/a-111.js'])
-  assert.equal(first, second)
-})
-
-test('moves when any emitted file name changes', () => {
-  // Vite content-hashes these names, so a changed name IS changed content.
-  const before = computeWebBuildId(['assets/a-111.js', 'assets/b-222.css'])
-  assert.notEqual(before, computeWebBuildId(['assets/a-999.js', 'assets/b-222.css']))
-  assert.notEqual(before, computeWebBuildId(['assets/a-111.js', 'assets/b-222.css', 'assets/c-333.js']))
-})
-
-test('ignores HTML, which is the file being stamped', () => {
-  // `index.html` carries the id itself, so including it would make the id depend on its
-  // own output. Excluding it is why an index.html-only change is invisible here and is
-  // left to the service worker instead.
-  assert.equal(
-    computeWebBuildId(['assets/a-111.js']),
-    computeWebBuildId(['assets/a-111.js', 'index.html'])
-  )
+test('real Vite builds stamp matching identities and detect public-only and HTML-only changes', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'web-build-id-'))
+  try {
+    await mkdir(path.join(directory, 'public'))
+    await writeFile(path.join(directory, 'index.html'), '<html><head></head><body><script type="module" src="/main.js"></script></body></html>')
+    await writeFile(path.join(directory, 'main.js'), 'console.log("stable app")')
+    await writeFile(path.join(directory, 'public', 'icon.svg'), '<svg/>')
+    const compile = async (): Promise<string> => {
+      await build({ root: directory, configFile: false, logLevel: 'silent', plugins: [webBuildIdPlugin()] })
+      const { buildId } = JSON.parse(await readFile(path.join(directory, 'dist', 'build-id.json'), 'utf8')) as { buildId: string }
+      const html = await readFile(path.join(directory, 'dist', 'index.html'), 'utf8')
+      assert.ok(html.includes(`name="${WEB_BUILD_ID_META_NAME}" content="${buildId}"`))
+      return buildId
+    }
+    const original = await compile()
+    assert.equal(await compile(), original, 'identical rebuilds must not bounce clients')
+    await writeFile(path.join(directory, 'public', 'icon.svg'), '<svg><path/></svg>')
+    const publicChanged = await compile()
+    assert.notEqual(publicChanged, original)
+    await writeFile(path.join(directory, 'index.html'), '<html><head><title>Changed</title></head><body><script type="module" src="/main.js"></script></body></html>')
+    assert.notEqual(await compile(), publicChanged)
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
 })

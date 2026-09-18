@@ -16,7 +16,7 @@ import ArrowBackRoundedIcon from '@mui/icons-material/ArrowBackRounded'
 import ErrorOutlineRoundedIcon from '@mui/icons-material/ErrorOutlineRounded'
 import ViewInArRoundedIcon from '@mui/icons-material/ViewInArRounded'
 import WarningAmberRoundedIcon from '@mui/icons-material/WarningAmberRounded'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type {
   FilamentCompatibilityIssue,
   LibraryFile,
@@ -57,9 +57,7 @@ import { apiFetch } from '../../lib/apiClient'
 import { useAuthBootstrapQuery } from '../../lib/authQuery'
 import { readCurrentWorkspaceScopeKey, workspaceQueryKeys } from '../../lib/workspaceScope'
 import {
-  PLATE_CLEARING_STATE_QUERY_KEY,
-  mergePlateClearingState,
-  type PlateClearingStateResponse,
+  useMarkPrinterPlateCleared,
   usePlateClearingStates,
   usePlateClearingSync
 } from '../../lib/plateClearing'
@@ -305,18 +303,7 @@ export function PrintModal({
   const [previewFileId, setPreviewFileId] = useState<string | null>(null)
   const canOpenThreeDimensionalPreview = (file.kind === '3mf' || file.kind === 'gcode') && plates.length > 0
 
-  const confirmPlateCleared = useMutation({
-    mutationFn: async (printerId: string) => {
-      await apiFetch(`/api/plugins/plate-clearing/state/${printerId}/clear`, { method: 'POST' })
-      return printerId
-    },
-    onSuccess: (printerId) => {
-      queryClient.setQueryData<PlateClearingStateResponse>(
-        PLATE_CLEARING_STATE_QUERY_KEY,
-        (existing) => mergePlateClearingState(existing, printerId, true)
-      )
-    }
-  })
+  const confirmPlateCleared = useMarkPrinterPlateCleared()
 
   const activePlate = useMemo(
     () => plates.find((plate) => plate.index === plateIndex) ?? plates[0],
@@ -614,11 +601,12 @@ export function PrintModal({
         effectiveMappings[printerId],
         plateFilamentIds,
         undefined,
-        selectedIds.length > 1 ? printer?.name ?? printerId : null
+        selectedIds.length > 1 ? printer?.name ?? printerId : null,
+        resolveSlotFilament
       )
       return entry ? [entry] : []
     }),
-    [effectiveMappings, plateFilamentIds, printers, selectedIds, statuses]
+    [effectiveMappings, plateFilamentIds, printers, selectedIds, statuses, resolveSlotFilament]
   )
   const hasBlacklistedFilament = hasBlacklistProhibitions(blacklistEntries)
   /**

@@ -54,12 +54,7 @@ export interface MachineTargetParams {
   projectResolved: boolean
   /** The profile catalogue for the current engine target settled. */
   catalogueResolved: boolean
-  /**
-   * Bumped by the host when the engine target changes. A different catalogue means picks made
-   * against the old one no longer bind, so the whole intent clears: uniformly, unlike the pre-S2
-   * reset which cleared the model's touched flag and the process's but not the plate's.
-   */
-  resetToken?: unknown
+
 }
 
 export interface MachineTarget {
@@ -107,18 +102,12 @@ export interface MachineTarget {
 export function useMachineTarget(params: MachineTargetParams): MachineTarget {
   const {
     file, bakedIndex, machineProfiles, processProfiles,
-    printers, lockedPreferredPrinter = null, projectResolved, catalogueResolved, resetToken
+    printers, lockedPreferredPrinter = null, projectResolved, catalogueResolved
   } = params
 
   const [intent, setIntent] = useState<MachineTargetIntent>(EMPTY_MACHINE_TARGET_INTENT)
-  // React's "adjust state when a prop changes" recipe rather than an effect: clearing during render
-  // means the very first render after an engine change already resolves against the new catalogue,
-  // where an effect would paint one frame of stale picks first.
-  const [seenResetToken, setSeenResetToken] = useState(resetToken)
-  if (seenResetToken !== resetToken) {
-    setSeenResetToken(resetToken)
-    setIntent(EMPTY_MACHINE_TARGET_INTENT)
-  }
+  // Engine changes re-resolve the existing intent against the new catalogue. They are not
+  // a request to restore the project's printer, nozzle, or plate selection.
 
   // Identity-keyed on purpose. `bakedIndex`/`printers`/the profile arrays change identity on every
   // refetch while saying the same thing; for a MEMO that costs a recompute, and the repo's

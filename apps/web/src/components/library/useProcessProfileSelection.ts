@@ -50,11 +50,12 @@ export interface ProcessProfileSelectionInput {
    * stable, or the re-pick effect re-fires every render.
    */
   carryOverridesOnRepick?: Record<string, string | string[]> | null
-  /**
-   * Bumped by the host when the slicer target changes, which clears the "user chose this" flag so
-   * the fallback may re-pick against the new catalogue.
-   */
-  resetToken?: unknown
+  /** False while the destination engine catalogue is loading; partial lists cannot re-pick. */
+  catalogueReady?: boolean
+  /** Engine identity, so a changed catalogue cannot masquerade as a deliberate machine change. */
+  catalogueKey?: string
+  /** False until the project's baked deltas are known; do not abandon them while resolving. */
+  carryOverridesReady?: boolean
   /**
    * Whether the profile list is COMPLETE: specifically, whether the project's own embedded presets
    * have been merged in yet. Defaults to true for hosts that build the list from one source.
@@ -88,7 +89,7 @@ export function useProcessProfileSelection(input: ProcessProfileSelectionInput):
   const {
     processProfiles, printerCompatibleProcessProfiles, selectedMachineProfile,
     selectedPrinterModel, selectedNozzleDiameters, plateType, bakedProcessProfileName,
-    carryOverridesOnRepick, resetToken, projectPresetsReady = true
+    carryOverridesOnRepick, catalogueKey, catalogueReady = true, carryOverridesReady = true, projectPresetsReady = true
   } = input
 
   const processProfileSelectionTouchedRef = useRef(false)
@@ -119,15 +120,30 @@ export function useProcessProfileSelection(input: ProcessProfileSelectionInput):
   // the effect on every catalogue refetch.
   const hasSelectedProcessProfile = selectedAnyProcessProfile != null
 
-  // A new target means a different catalogue, so a prior deliberate choice no longer binds.
-  useEffect(() => {
-    processProfileSelectionTouchedRef.current = false
-  }, [resetToken])
+  // Version changes may alter availability, but cannot authorize a different process. Only a
+  // physical machine/nozzle/plate change invokes the established machine-switch fallback.
+  // Two presets for the same physical model may have different process compatibility.
+  const machineKey = JSON.stringify([selectedPrinterModel, selectedNozzleDiameters, plateType, selectedMachineProfile?.id])
+  const selectionMachineRef = useRef<string | null>(null)
+  const selectionCatalogueRef = useRef(catalogueKey)
 
   useEffect(() => {
     // Never re-pick against a half-built list: see `projectPresetsReady`.
-    if (!projectPresetsReady) return
-    if (processProfileId && compatibleProcessProfiles.some((profile) => profile.id === processProfileId)) return
+    if (!projectPresetsReady || !catalogueReady) return
+    if (selectionCatalogueRef.current !== catalogueKey) {
+      selectionCatalogueRef.current = catalogueKey
+      // The new engine may temporarily derive a fallback machine too. That is still an engine
+      // switch, not permission to replace the process the user selected.
+      selectionMachineRef.current = machineKey
+    }
+    if (processProfileId && compatibleProcessProfiles.some((profile) => profile.id === processProfileId)) {
+      selectionMachineRef.current = machineKey
+      return
+    }
+    // Keep an unavailable choice unresolved, so Slice remains blocked and switching back restores
+    // it. Replacing the id here made a round trip permanently forget the user's selected preset.
+    if (processProfileId && selectionMachineRef.current === machineKey) return
+    if (isProjectSlicingPresetId(processProfileId) && !carryOverridesReady) return
     if (!processProfileId && processProfileSelectionTouchedRef.current) return
     const nextId = ((): string | null => {
       const previousName = selectedAnyProcessProfile?.name ?? bakedProcessProfileName ?? null
@@ -168,8 +184,9 @@ export function useProcessProfileSelection(input: ProcessProfileSelectionInput):
     if (isProjectSlicingPresetId(processProfileId) && !isProjectSlicingPresetId(nextId) && carryOverridesOnRepick) {
       setProcessSettingOverrides((prev) => ({ ...carryOverridesOnRepick, ...prev }))
     }
+    selectionMachineRef.current = machineKey
     setProcessProfileId(nextId)
-  }, [bakedProcessProfileName, carryOverridesOnRepick, compatibleProcessProfiles, hasSelectedProcessProfile, processProfileId, projectPresetsReady, selectedAnyProcessProfile?.name, selectedProcessLayerHeight, selectedMachineProfile?.defaultProcessProfile])
+  }, [catalogueKey, catalogueReady, carryOverridesReady, machineKey, bakedProcessProfileName, carryOverridesOnRepick, compatibleProcessProfiles, hasSelectedProcessProfile, processProfileId, projectPresetsReady, selectedAnyProcessProfile?.name, selectedProcessLayerHeight, selectedMachineProfile?.defaultProcessProfile])
 
   return {
     compatibleProcessProfiles,

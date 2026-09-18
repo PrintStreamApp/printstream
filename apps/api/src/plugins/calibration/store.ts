@@ -7,10 +7,11 @@
  * `{ id, workspaceId }` so the workspace filter is enforced atomically.
  *
  * Saving a result de-dupes in code (not via a DB unique across nullable identity
- * columns): a save for the same target (kind + printer model + nozzle + scope +
+ * columns): a save for the same target (kind + hardware target + nozzle + scope +
  * spool/identity) updates the existing row instead of accumulating duplicates.
  */
 import { Prisma } from '@prisma/client'
+import { calibrationPrinterTargetSchema, calibrationMatchesPrinter, type CalibrationPrinterTarget } from '@printstream/shared'
 import type { CalibrationResult as CalibrationResultRow, CalibrationRun as CalibrationRunRow } from '@prisma/client'
 import type { CalibrationKind, CalibrationMeasurement, CalibrationParameters, CalibrationRunStatus, CalibrationScope } from '@printstream/shared'
 import type { AnyPrismaClient } from '../../lib/prisma.js'
@@ -24,6 +25,7 @@ export interface FilamentIdentity {
 }
 
 export interface CreateRunInput extends FilamentIdentity {
+  status?: CalibrationRunStatus
   kind: CalibrationKind
   printerId: string | null
   printerModel: string
@@ -39,7 +41,7 @@ export async function createRun(db: AnyPrismaClient, workspaceId: string, input:
     data: {
       workspaceId,
       kind: input.kind,
-      status: 'slicing',
+      status: input.status ?? 'slicing',
       printerId: input.printerId,
       printerModel: input.printerModel,
       nozzleDiameter: input.nozzleDiameter,
@@ -64,22 +66,32 @@ export async function listRuns(db: AnyPrismaClient, workspaceId: string): Promis
 }
 
 export interface RunPatch {
+  parameters?: CalibrationParameters
   status?: CalibrationRunStatus
   slicingJobId?: string | null
   outputFileId?: string | null
   errorMessage?: string | null
   measurement?: CalibrationMeasurement | null
   resultValue?: number | null
+  brand?: string | null
+  filamentType?: string | null
+  materialSubtype?: string | null
+  colorName?: string | null
 }
 
 export async function updateRun(db: AnyPrismaClient, workspaceId: string, id: string, patch: RunPatch): Promise<void> {
   const data: Prisma.CalibrationRunUpdateManyMutationInput = {}
+  if (patch.parameters !== undefined) data.parametersJson = patch.parameters as Prisma.InputJsonValue
   if (patch.status !== undefined) data.status = patch.status
   if (patch.slicingJobId !== undefined) data.slicingJobId = patch.slicingJobId
   if (patch.outputFileId !== undefined) data.outputFileId = patch.outputFileId
   if (patch.errorMessage !== undefined) data.errorMessage = patch.errorMessage
   if (patch.measurement !== undefined) data.measuredJson = (patch.measurement ?? Prisma.DbNull) as Prisma.InputJsonValue | typeof Prisma.DbNull
   if (patch.resultValue !== undefined) data.resultValue = patch.resultValue
+  if (patch.brand !== undefined) data.brand = patch.brand
+  if (patch.filamentType !== undefined) data.filamentType = patch.filamentType
+  if (patch.materialSubtype !== undefined) data.materialSubtype = patch.materialSubtype
+  if (patch.colorName !== undefined) data.colorName = patch.colorName
   await db.calibrationRun.updateMany({ where: { id, workspaceId }, data })
 }
 
@@ -93,6 +105,8 @@ export async function findRunBySlicingJob(db: AnyPrismaClient, workspaceId: stri
 }
 
 export interface SaveResultInput extends FilamentIdentity {
+  printerTarget?: CalibrationPrinterTarget
+  pressureAdvanceMode?: 'native' | 'linear'
   kind: CalibrationKind
   value: number
   printerModel: string
@@ -111,7 +125,14 @@ export async function saveResult(db: AnyPrismaClient, workspaceId: string, input
   const target: Prisma.CalibrationResultWhereInput = {
     workspaceId,
     kind: input.kind,
-    printerModel: input.printerModel,
+    ...(input.printerTarget
+      ? { OR: [
+          { printerTargetJson: { equals: input.printerTarget } },
+          ...(input.printerTarget.scope === 'models' && input.printerTarget.models.length === 1
+            ? [{ printerTargetJson: { equals: Prisma.DbNull }, printerModel: input.printerTarget.models[0] }]
+            : [])
+        ] }
+      : { printerModel: input.printerModel, printerTargetJson: { equals: Prisma.DbNull } }),
     nozzleDiameter: input.nozzleDiameter,
     scope: input.scope,
     ...(input.scope === 'spool'
@@ -127,7 +148,10 @@ export async function saveResult(db: AnyPrismaClient, workspaceId: string, input
   if (existing) {
     return db.calibrationResult.update({
       where: { id: existing.id },
-      data: { value: input.value, runId: input.runId }
+      data: {
+        value: input.value, runId: input.runId, printerModel: input.printerModel,
+        pressureAdvanceMode: input.pressureAdvanceMode ?? 'native', printerTargetJson: input.printerTarget
+      }
     })
   }
   return db.calibrationResult.create({
@@ -135,6 +159,8 @@ export async function saveResult(db: AnyPrismaClient, workspaceId: string, input
       workspaceId,
       kind: input.kind,
       value: input.value,
+      printerTargetJson: input.printerTarget,
+      pressureAdvanceMode: input.pressureAdvanceMode ?? 'native',
       printerModel: input.printerModel,
       nozzleDiameter: input.nozzleDiameter,
       scope: input.scope,
@@ -156,6 +182,11 @@ export async function deleteResult(db: AnyPrismaClient, workspaceId: string, id:
   await db.calibrationResult.deleteMany({ where: { id, workspaceId } })
 }
 
+/** Remove results still owned by one run before replacing that run's target set. */
+export async function deleteResultsForRun(db: AnyPrismaClient, workspaceId: string, runId: string): Promise<void> {
+  await db.calibrationResult.deleteMany({ where: { workspaceId, runId } })
+}
+
 /**
  * Candidate results for resolution: everything of one kind for a printer model +
  * nozzle. The caller ({@link ./resolution.js}) applies spool/identity precedence.
@@ -165,12 +196,17 @@ export async function findResolvableResults(
   workspaceId: string,
   kind: CalibrationKind,
   printerModel: string,
-  nozzleDiameter: string
+  nozzleDiameter: string,
+  printerId?: string | null
 ): Promise<ResolvableCalibrationResult[]> {
   const rows = await db.calibrationResult.findMany({
-    where: { workspaceId, kind, printerModel, nozzleDiameter }
+    where: { workspaceId, kind, nozzleDiameter }, orderBy: { updatedAt: 'desc' }
   })
   return rows.map((row) => ({
+    printerModel: row.printerModel,
+    nozzleDiameter: row.nozzleDiameter,
+    printerTarget: row.printerTargetJson == null ? undefined : calibrationPrinterTargetSchema.parse(row.printerTargetJson),
+    pressureAdvanceMode: row.pressureAdvanceMode === 'linear' ? 'linear' as const : 'native' as const,
     kind: row.kind as CalibrationKind,
     value: row.value,
     scope: row.scope as CalibrationScope,
@@ -179,5 +215,5 @@ export async function findResolvableResults(
     filamentType: row.filamentType,
     materialSubtype: row.materialSubtype,
     colorName: row.colorName
-  }))
+  })).filter((row) => calibrationMatchesPrinter(row, { printerId, printerModel, nozzleDiameter }))
 }

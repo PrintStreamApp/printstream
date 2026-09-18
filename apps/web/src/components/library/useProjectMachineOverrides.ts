@@ -12,7 +12,7 @@
  * frame. It never overwrites a map the user has already touched this session either, so a
  * mid-session preset switch cannot wipe an in-flight edit.
  *
- * "Once per (file, preset)" is the intent, but the guard latches on an ANSWER rather than on an
+ * "Once per file version" is the intent, but the guard latches on an ANSWER rather than on an
  * attempt -- see {@link machineOverrideSeedDecision}, where the difference is the whole correctness
  * of the hook. The identity includes the file VERSION, because a save rewrites the project's machine
  * block without changing the file id.
@@ -86,10 +86,10 @@ export function useProjectMachineOverrides(input: {
     }, { signal })
   })
 
-  // Keyed on the same identity as the query, so one answer seeds at most once even across
-  // re-renders, and a genuinely different file or preset can seed again.
+  // Overrides belong to the file version, not the engine used to read them. Once seeded, a
+  // version/preset switch must not resurrect values the user deliberately cleared to {}.
   const seededKey = useRef<string | null>(null)
-  const key = `${input.sourceFileId ?? ''}|${input.fileVersion}|${input.machineProfileId}|${input.slicerTargetId}`
+  const key = `${input.sourceFileId ?? ''}|${input.fileVersion}`
   // Null is the server saying it could not read the file; treat it as no answer at all rather than
   // as an empty set, or the save downstream reads it as "this project overrides nothing".
   const overrides = query.data?.projectOverrides ?? undefined

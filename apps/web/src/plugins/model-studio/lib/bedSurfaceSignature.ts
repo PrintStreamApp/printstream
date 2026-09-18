@@ -1,10 +1,9 @@
 /**
  * Whether the bed surface already standing in the viewport is STALE.
  *
- * OWNS the one question the editor's INCREMENTAL (empty-plate) build asks before it reuses the bed
- * it finds on the plate: would rebuilding produce a different bed? The atomic (staging) build path
- * rebuilds unconditionally and asks nothing, so on a plate with no models this predicate is the only
- * thing between a printer switch and a plate that no longer matches the printer.
+ * OWNS whether the editor must replace its visible bed before rebuilding objects. Both build
+ * strategies update the live bed immediately; an atomic build also constructs its staging bed.
+ * This keeps a slow object rebuild from leaving the previous printer's surface on screen.
  *
  * It is a CORRECTNESS predicate, not an optimisation: it names every input the bed is built from and
  * never reasons about which of them "must already be right". It used to answer whether a 3D plate

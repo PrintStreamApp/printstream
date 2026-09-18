@@ -10,7 +10,7 @@ import { createWriteStream } from 'node:fs'
 import { rm, rename } from 'node:fs/promises'
 import { type Entry } from 'yauzl'
 import yazl from 'yazl'
-import { openZip, readZipEntryBuffer, readZipEntryText } from './zip-io.js'
+import { openZip, readZipEntryBuffer, readZipEntryText, readAllZipEntries, writeZip } from './zip-io.js'
 
 const DIRECT_ALL_PLATE_MODELS = new Set(['H2D', 'H2DPRO', 'H2C'])
 
@@ -359,31 +359,6 @@ export async function backfillPlateThumbnails(outputPath: string, inputPath: str
   }
 }
 
-async function readAllZipEntries(filePath: string): Promise<Array<{ name: string; buffer: Buffer; mtime: Date }>> {
-  const zipFile = await openZip(filePath)
-  return await new Promise((resolve, reject) => {
-    const entries: Array<{ name: string; buffer: Buffer; mtime: Date }> = []
-    let settled = false
-    const finish = (error?: Error) => {
-      if (settled) return
-      settled = true
-      zipFile.close()
-      if (error) reject(error)
-      else resolve(entries)
-    }
-    zipFile.on('error', finish)
-    zipFile.on('end', () => finish())
-    zipFile.on('entry', (entry: Entry) => {
-      if (entry.fileName.endsWith('/')) { zipFile.readEntry(); return }
-      readZipEntryBuffer(zipFile, entry).then(
-        (buffer) => { entries.push({ name: entry.fileName, buffer, mtime: entry.getLastModDate() }); zipFile.readEntry() },
-        (error) => finish(error as Error)
-      )
-    })
-    zipFile.readEntry()
-  })
-}
-
 async function readZipEntryBufferByName(filePath: string, entryName: string): Promise<Buffer> {
   const zipFile = await openZip(filePath)
   return await new Promise((resolve, reject) => {
@@ -405,20 +380,5 @@ async function readZipEntryBufferByName(filePath: string, entryName: string): Pr
       )
     })
     zipFile.readEntry()
-  })
-}
-
-async function writeZip(filePath: string, entries: Array<{ name: string; buffer: Buffer; mtime?: Date }>): Promise<void> {
-  const zip = new yazl.ZipFile()
-  const stream = createWriteStream(filePath)
-  await new Promise<void>((resolve, reject) => {
-    zip.outputStream.on('error', reject)
-    stream.on('error', reject)
-    stream.on('finish', () => resolve())
-    zip.outputStream.pipe(stream)
-    for (const entry of entries) {
-      zip.addBuffer(entry.buffer, entry.name, entry.mtime ? { mtime: entry.mtime } : undefined)
-    }
-    zip.end()
   })
 }

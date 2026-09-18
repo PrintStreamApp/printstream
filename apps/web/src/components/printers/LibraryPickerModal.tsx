@@ -1,3 +1,14 @@
+/**
+ * Lightweight library picker used by the printer card's "Print" button.
+ *
+ * Mirrors {@link LibraryView}'s folder navigation (root listing + drill-in) and
+ * reuses the same toolbar (`DirectoryPrimaryToolbar`), filters
+ * (`useLibraryFilters` + `LibraryMetadataFilters`), grouping, and pagination
+ * (`PaginatedLibraryBrowser`) so the picker is inline with the Library page. It
+ * only surfaces direct-printable files. Model mismatches remain selectable because
+ * {@link PrintModal} owns the explicit warning and audited per-dispatch override.
+ */
+import { useTagFilter } from '../../hooks/useTagFilter'
 import { useDeferredValue, useMemo, useState, type ReactNode } from 'react'
 import { Box, Button, CircularProgress, ModalClose, Stack, Typography } from '@mui/joy'
 import Inventory2RoundedIcon from '@mui/icons-material/Inventory2Rounded'
@@ -23,16 +34,6 @@ import { LIBRARY_GROUP_OPTIONS, type LibraryGroupBy } from '../../lib/libraryDir
 import { parseLibraryViewMode, parseLibrarySort } from '../../lib/printersViewHelpers'
 import { LIBRARY_VIEW_MODE_KEY, LIBRARY_SORT_KEY, LIBRARY_GROUP_KEY, LIBRARY_PAGE_SIZE_OPTIONS, LIBRARY_SORT_OPTIONS, parseLibraryGroup } from '../../lib/libraryViewHelpers'
 
-/**
- * Lightweight library picker used by the printer card's "Print" button.
- *
- * Mirrors {@link LibraryView}'s folder navigation (root listing + drill-in) and
- * reuses the same toolbar (`DirectoryPrimaryToolbar`), filters
- * (`useLibraryFilters` + `LibraryMetadataFilters`), grouping, and pagination
- * (`PaginatedLibraryBrowser`) so the picker is inline with the Library page. It
- * only surfaces direct-printable files. Model mismatches remain selectable because
- * {@link PrintModal} owns the explicit warning and audited per-dispatch override.
- */
 export function LibraryPickerModal({
   printerName,
   canSlice,
@@ -71,10 +72,12 @@ export function LibraryPickerModal({
   const [group, setGroup] = useLocalStorageState<LibraryGroupBy>(LIBRARY_GROUP_KEY, 'none', parseLibraryGroup, String)
   const [favoritesOnly, setFavoritesOnly] = useState(false)
 
+  const tagFilter = useTagFilter('file', 'library')
   const browseQuery = useQuery({
-    queryKey: ['library-browse', 'printer-picker', folderId ?? 'root', bridgeId ?? 'none', allFolderSearch, favoritesOnly],
+    queryKey: ['library-browse', 'printer-picker', folderId ?? 'root', bridgeId ?? 'none', allFolderSearch, favoritesOnly, tagFilter.value],
     queryFn: ({ signal }) => {
       const params = new URLSearchParams()
+      if (tagFilter.value.length) params.set('tagIds', tagFilter.value.join(','))
       if (folderId) params.set('folderId', folderId)
       if (bridgeId) params.set('bridgeId', bridgeId)
       if (allFolderSearch) params.set('search', allFolderSearch)
@@ -110,7 +113,7 @@ export function LibraryPickerModal({
     [bridgeFolders, bridgeRootMode, browseData?.folders]
   )
 
-  const filters = useLibraryFilters({
+  const filters = useLibraryFilters({ tagFilter,
     visibleFiles: pickerFiles,
     childFolders,
     currentFolderId: folderId,

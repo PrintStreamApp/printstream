@@ -326,10 +326,11 @@ export function StoragePrintModal({
       printer.model,
       status,
       effectiveMapping,
-      (activePlate?.filaments ?? []).map((filament) => filament.id)
+      (activePlate?.filaments ?? []).map((filament) => filament.id),
+      undefined, undefined, resolveSlotFilament
     )
     return entry ? [entry] : []
-  }, [activePlate, effectiveMapping, printer.model, printerId, status])
+  }, [activePlate, effectiveMapping, printer.model, printerId, status, resolveSlotFilament])
   const hasBlacklistedFilament = hasBlacklistProhibitions(blacklistEntries)
   // Drop the consent when what it consents to changes; see the same effect in `library/PrintModal`.
   const blacklistSignature = useMemo(

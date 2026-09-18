@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { fitPerspectiveDepthRange } from './previewDepthRange.js'
+import { fitPerspectiveDepthRange, previewDepthRadius } from './previewDepthRange.js'
 
 /**
  * Smallest depth step a linear 24-bit buffer can resolve at `z`, given the planes. This is the
@@ -73,4 +73,19 @@ test('near never reaches zero even with degenerate content', () => {
 test('the far plane always clears the back of the content', () => {
   const { far } = fitPerspectiveDepthRange(FRAMED_DISTANCE, BED_RADIUS)
   assert.ok(far >= FRAMED_DISTANCE + BED_RADIUS, 'content behind the centre must not be clipped')
+})
+
+test('small model previews retain the entire floor grid at oblique viewing angles', () => {
+  const radius = previewDepthRadius(20, {
+    min: { x: -160, y: -160, z: -10 },
+    max: { x: 160, y: 160, z: -10 }
+  })
+  const distance = 300
+  const { near, far } = fitPerspectiveDepthRange(distance, radius)
+  const gridCornerDistance = Math.hypot(160, 160, 10)
+  assert.ok(near <= distance - gridCornerDistance)
+  assert.ok(far >= distance + gridCornerDistance)
+  assert.ok(fitPerspectiveDepthRange(distance, 20).far < distance + gridCornerDistance,
+    'the model-only range clipped the floor')
+  assert.equal(previewDepthRadius(250), 250, 'plated previews retain their existing depth precision')
 })

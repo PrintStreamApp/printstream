@@ -202,3 +202,16 @@ test('shouldShowWorkspaceSwitcher stays visible when the workspace slug is inval
     activeWorkspaceSlug: null
   }), true)
 })
+
+test('native self-hosted toolbar offers the directory without cloud memberships', () => {
+  assert.equal(shouldShowWorkspaceSwitcher({
+    authRouteState: 'redirect',
+    canUseWorkspaceChooser: false,
+    nativeApp: true
+  }), true)
+  assert.equal(shouldShowWorkspaceSwitcher({
+    authRouteState: 'redirect',
+    canUseWorkspaceChooser: false,
+    nativeApp: false
+  }), false)
+})

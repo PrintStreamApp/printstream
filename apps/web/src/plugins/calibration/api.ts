@@ -6,6 +6,7 @@
  */
 import type {
   CalibrationResult,
+  ManualCalibrationResult,
   CalibrationRun,
   CreateCalibrationRun,
   SaveCalibrationResult,
@@ -53,6 +54,11 @@ export async function deleteCalibrationRun(runId: string): Promise<void> {
 
 export async function deleteCalibrationResult(resultId: string): Promise<void> {
   await apiFetch(`/api/plugins/calibration/results/${resultId}`, { method: 'DELETE' })
+}
+
+/** Save an externally measured value without slicing or printing. */
+export async function saveManualCalibration(body: ManualCalibrationResult, resultId?: string): Promise<void> {
+  await apiFetch(`/api/plugins/calibration/results${resultId ? `/${resultId}` : ''}`, { method: resultId ? 'PUT' : 'POST', body })
 }
 
 /** A run is still working (slicing or printing): poll while any is in these states. */

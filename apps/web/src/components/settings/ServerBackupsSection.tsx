@@ -162,9 +162,10 @@ export function ServerBackupsSection({ canManage }: { canManage: boolean }) {
               <BackupDetail label="Folder" value={status.directory ?? 'Unknown'} />
             </Box>
             <Typography level="body-xs" textColor="text.tertiary" sx={{ mt: 1 }}>
-              Retention keeps every backup for a week, then one per week for a month, then one per month for a year.
-              Manual backups are kept until you delete them. Backups on the same disk do not protect against disk
-              failure, so copy this folder off this machine with any sync tool.
+              {status.maxAgeDays != null
+                ? `All backups, including manual and pre-restore snapshots, expire after ${status.maxAgeDays} days. Any off-machine copies must follow the same limit.`
+                : 'Retention keeps every scheduled backup for a week, then one per week for a month, then one per month for a year. Manual backups are kept until you delete them.'}
+              {' '}Backups on the same disk do not protect against disk failure, so keep an off-machine copy subject to the same retention policy.
             </Typography>
           </CardContent>
         </Card>

@@ -367,3 +367,57 @@ test('a freshly provisioned database has working stats rollup triggers', async (
     await admin.end().catch(() => undefined)
   }
 })
+
+test('tag catalog upgrade preserves shared definitions and moves assignments to independent copies', async (t) => {
+  const adminUrl = await migrationTestAdminUrl(t)
+  if (!adminUrl) return
+  const dbName = `printstream_tags_${randomUUID().replace(/-/g, '')}`
+  const admin = new Client({ connectionString: adminUrl })
+  await admin.connect()
+  await admin.query(`CREATE DATABASE "${dbName}"`)
+  const target = new Client({ connectionString: withDatabaseName(adminUrl, dbName) })
+  try {
+    await target.connect()
+    // Only the identity columns are relevant to this upgrade's foreign keys.
+    for (const table of ['Workspace', 'Printer', 'LibraryFile', 'FilamentSpool']) {
+      await target.query(`CREATE TABLE "${table}" ("id" TEXT PRIMARY KEY)`)
+      await target.query(`INSERT INTO "${table}" VALUES ('one')`)
+    }
+    const migrations = listMigrationFiles(defaultMigrationsDir())
+    await target.query(migrations.find((migration) => migration.name === '20260915000000_workspace_tags')!.sql)
+    await target.query(`INSERT INTO "WorkspaceTag" (id, "workspaceId", name, "nameKey", color, "group") VALUES ('tag', 'one', 'Phaetus Conch', 'phaetus conch', '#38bdf8', 'Nozzle')`)
+    for (const table of ['_PrinterTags', '_LibraryFileTags', '_SpoolTags']) {
+      await target.query(`INSERT INTO "${table}" VALUES ('one', 'tag')`)
+    }
+    await target.query(migrations.find((migration) => migration.name === '20260916000000_tag_entity_catalogs')!.sql)
+    const tags = await target.query('SELECT name, color, "group", "entityKind" FROM "WorkspaceTag" ORDER BY "entityKind"')
+    assert.deepEqual(tags.rows, ['printer', 'file', 'spool'].map((entityKind) => ({ name: 'Phaetus Conch', color: '#38bdf8', group: 'Nozzle', entityKind })))
+    for (const [table, kind] of [['_PrinterTags', 'printer'], ['_LibraryFileTags', 'file'], ['_SpoolTags', 'spool']]) {
+      const result = await target.query(`SELECT t."entityKind" FROM "${table}" a JOIN "WorkspaceTag" t ON t.id = a."B"`)
+      assert.deepEqual(result.rows, [{ entityKind: kind }])
+    }
+    await target.query(`CREATE TABLE "PrintJob" (id TEXT PRIMARY KEY, "workspaceId" TEXT, "printerId" TEXT, "fileId" TEXT, "sourceLibraryFileId" TEXT, "sourceProjectFileId" TEXT)`)
+    await target.query(`INSERT INTO "PrintJob" VALUES ('job', 'one', 'one', 'snapshot', 'one', NULL)`)
+    await target.query(`CREATE TABLE "FilamentSpoolUsage" ("workspaceId" TEXT, "spoolId" TEXT, "jobId" TEXT)`)
+    await target.query(`INSERT INTO "FilamentSpoolUsage" VALUES ('one', 'one', 'job')`)
+    await target.query(migrations.find((migration) => migration.name === '20260916020000_job_tag_snapshots')!.sql)
+    const before = await target.query(`SELECT "tagSnapshotJson" FROM "PrintJob" WHERE id = 'job'`)
+    const snapshot = JSON.parse(before.rows[0].tagSnapshotJson)
+    assert.equal(snapshot.tags.length, 3)
+    assert.deepEqual(snapshot.spoolIds, ['one'])
+    await target.query(`UPDATE "WorkspaceTag" SET name = 'Renamed', color = '#abcdef', "group" = 'Changed'`)
+    await target.query(`DELETE FROM "LibraryFile"`)
+    await target.query(`DELETE FROM "FilamentSpool"`)
+    await target.query(`DELETE FROM "FilamentSpoolUsage"`)
+    await target.query(`DELETE FROM "WorkspaceTag" WHERE "entityKind" = 'printer'`)
+    const after = await target.query(`SELECT "tagSnapshotJson" FROM "PrintJob" WHERE id = 'job'`)
+    assert.equal(after.rows[0].tagSnapshotJson, before.rows[0].tagSnapshotJson)
+
+    const remaining = await target.query('SELECT count(*)::int AS count FROM "WorkspaceTag"')
+    assert.equal(remaining.rows[0].count, 2)
+  } finally {
+    await target.end()
+    await admin.query(`DROP DATABASE IF EXISTS "${dbName}"`)
+    await admin.end()
+  }
+})

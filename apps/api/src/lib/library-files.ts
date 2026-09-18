@@ -26,6 +26,7 @@ import { isUniqueConstraintError } from './prisma-errors.js'
 type PersistedLibraryFileRow = Awaited<ReturnType<typeof prisma.libraryFile.create>>
 
 type LibraryOverwriteTarget = {
+  sourceTagSnapshotJson?: string | null
   id: string
   workspaceId: string
   name: string
@@ -101,6 +102,8 @@ export async function persistLibraryFileFromLocalPath(input: {
   targetFileId?: string | null
   request?: Request
   auditAction?: 'upload' | 'slice' | 'import'
+  /** Frozen source-file tags for generated content; ordinary replacements clear provenance. */
+  sourceTagSnapshotJson?: string | null
   /** Lifecycle origin override; defaults from `auditAction` ('slice' or 'upload'). */
   origin?: 'upload' | 'slice' | 'scaffold' | 'import'
   missingBridgeMessage?: string
@@ -159,6 +162,9 @@ export async function persistLibraryFileFromLocalPath(input: {
   if (overwriteTarget) {
     const unchangedFile = await resolveUnchangedOverwrite(ownerBridgeId, overwriteTarget, input.sourcePath)
     if (unchangedFile) {
+      if (input.sourceTagSnapshotJson !== undefined) {
+        await prisma.libraryFile.update({ where: { id: unchangedFile.id }, data: { sourceTagSnapshotJson: input.sourceTagSnapshotJson } })
+      }
       if (input.completionReceiptId) {
         await prisma.libraryUploadCompletion.update({
           where: { id: input.completionReceiptId },
@@ -214,6 +220,7 @@ export async function persistLibraryFileFromLocalPath(input: {
             // (see `preserveSlicedProject`); an upload correctly leaves it clear.
             sourceProjectFileId: null,
             sliceSettingsJson: null,
+            sourceTagSnapshotJson: input.sourceTagSnapshotJson ?? null,
             restoredFromVersionNumber: null
           }
         })
@@ -244,6 +251,7 @@ export async function persistLibraryFileFromLocalPath(input: {
         hidden: input.hidden,
         uploadedAt,
         origin,
+        sourceTagSnapshotJson: input.sourceTagSnapshotJson ?? null,
         createdById: attribution.createdById,
         createdByName: attribution.createdByName
       }
@@ -486,6 +494,7 @@ async function findLibraryOverwriteTargetById(input: {
 
 function toLibraryFileVersionCreateInput(row: LibraryOverwriteTarget) {
   return {
+    sourceTagSnapshotJson: row.sourceTagSnapshotJson ?? null,
     workspaceId: row.workspaceId,
     libraryFileId: row.id,
     ownerBridgeId: row.ownerBridgeId,
@@ -569,6 +578,7 @@ export async function unhideSlicedOutput(
           // this is also what keeps its preserved project referenced.
           sourceProjectFileId: output.sourceProjectFileId,
           sliceSettingsJson: output.sliceSettingsJson,
+          sourceTagSnapshotJson: output.sourceTagSnapshotJson,
           restoredFromVersionNumber: null
         },
         select: { id: true, name: true }

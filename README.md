@@ -8,7 +8,7 @@ PrintStream is a web app for monitoring and controlling Bambu Lab printers. Open
 
 > Smaller, simpler, and more touch-friendly than the alternatives. Plugin-extensible, with nothing to run at the printer site but a small bridge.
 
-**This repository is the self-hosted community edition.** The main PrintStream product is the hosted version at [printstream.app](https://printstream.app): the same software, run for you in the cloud, so the only thing you install is the small bridge that talks to your printers. This edition is for people who prefer to run the whole stack on their own hardware. The website has the full feature tour and screenshots. PrintStream is a product of [Dynamic Solutions](https://dynamic-solutions.ca).
+**The public repository contains the self-hosted community edition.** The main PrintStream product is the hosted version at [printstream.app](https://printstream.app): the same software, run for you in the cloud, so the only thing you install is the small bridge that talks to your printers. The community edition is for people who prefer to run the whole stack on their own hardware. The website has the full feature tour and screenshots. PrintStream is a product of [Dynamic Solutions](https://dynamic-solutions.ca).
 
 > **Printer support.** PrintStream supports all Bambu Lab printer models. See [Safety & liability](#safety--liability) before connecting printers.
 
@@ -16,10 +16,11 @@ PrintStream is a web app for monitoring and controlling Bambu Lab printers. Open
 
 - **Live dashboard**: every printer at a glance, with progress, temperatures, ETA, layer count, AMS contents, camera view, and error alerts.
 - **Full control**: pause, resume, stop, lights, calibration, skip objects mid-print, AMS and spool management.
-- **Shared print library**: upload 3MF / G-code / STL / STEP / OBJ / glTF / AMF / FBX files into folders, browse plates and previews, keep version history, and restore from a recycle bin.
+- **Shared print library**: upload 3MF / G-code / STL / STEP / OBJ / glTF / AMF / FBX files into folders, browse plates and previews, keep version history, and restore from a recycle bin. With Model Studio enabled, choose **Add to new 3MF** on a model file to open a new project with that model already imported.
 - **Send prints anywhere**: pick a file, map filaments to AMS slots, and queue it to one or many printers, with automatic compatibility checks (printer model, plate type, nozzle).
 - **Slice in your browser** *(optional)*: a slicer service runs real Bambu Studio / OrcaSlicer versions server-side, so you can go from plain 3MF to printable file without leaving the app. Repeating an unchanged Model Studio slice reopens its result immediately, with a durable server cache as the fallback.
 - **3D editor** *(optional)*: arrange models, edit supports and materials, paint colors, and save multi-plate projects right in the browser.
+- **Tags**: organize printers, library files, and inventory spools with independent tag catalogs, bulk assignment, and all-tag filtering. Job history preserves the tags captured for each job. See [Tags](docs/tags.md).
 - **Jobs & stats**: print history with snapshots, success rates, print hours, and filament usage per printer and per workspace. Finished prints can be re-dispatched as-is or sliced again from the project they were made from.
 - **Production orders** *(optional)*: define what needs printing and track completion across many prints.
 - **Notifications**: browser push, Discord, or ntfy, with camera snapshots attached.
@@ -91,9 +92,9 @@ PrintStream is a TypeScript monorepo: Express + Prisma + MQTT/WebSockets on the 
 
 ### Where development happens
 
-Day-to-day development happens in a primary repository that also contains the closed-source cloud surface of the hosted product. This public repository is a snapshot of the open core, exported at development milestones rather than commit-by-commit, so it can sit a little behind the hosted version and its history is regenerated with each snapshot.
+Day-to-day development happens in PrintStream's private source repository, which contains both the open core and the closed-source cloud surface of the hosted product. The public repository is a snapshot of the open core, exported at development milestones rather than commit-by-commit, so it can sit a little behind the hosted version and its history is regenerated with each snapshot.
 
-Forks, issues, and pull requests here are welcome all the same. Accepted pull requests are merged into the primary repository and arrive back here with the next snapshot, so your change may land as part of a larger export rather than as a direct merge of your branch.
+Forks, issues, and pull requests in the public repository are welcome. Accepted pull requests are merged into the primary repository and arrive back in the public repository with the next snapshot, so a change may land as part of a larger export rather than as a direct merge of its branch.
 
 - [ARCHITECTURE.md](ARCHITECTURE.md): how the pieces fit together
 - [docs/development.md](docs/development.md): Devkit setup and testing

@@ -10,7 +10,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { machineOverrideSeedDecision } from './useProjectMachineOverrides'
 
-const KEY = 'file|v1|machine|target'
+const KEY = 'file|v1'
 
 test('a stale empty answer does not consume the seed the fresh answer needs', () => {
   // What a remount sees first: the cached pre-save answer.
@@ -39,7 +39,7 @@ test('the user\'s own edits are never clobbered, and seeding happens once per fi
   )
   // A SAVE changes the file version, so the key changes and the new content seeds again.
   assert.equal(
-    machineOverrideSeedDecision({ overrides: { support_air_filtration: '1' }, seededKey: KEY, key: 'file|v2|machine|target', hasCurrentEdits: false }),
+    machineOverrideSeedDecision({ overrides: { support_air_filtration: '1' }, seededKey: KEY, key: 'file|v2', hasCurrentEdits: false }),
     'seed'
   )
 })

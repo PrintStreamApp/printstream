@@ -7,6 +7,7 @@
  * selection on click, and the per-row actions column is hidden in favour of the
  * Filament tab's bulk action bar.
  */
+import { EntityTagChips } from '../../components/tags/EntityTagChips'
 import { Box, Checkbox, Chip, Sheet, Stack, Table, Typography } from '@mui/joy'
 import type { FilamentSpool } from '@printstream/shared'
 import { SpoolColorSwatch, SpoolRemaining } from './SpoolVisuals'
@@ -49,7 +50,7 @@ export function SpoolList({
                 squeeze the checkbox rather than grow the column. */}
             {selectable && <th style={{ width: 64 }} aria-label="Select" />}
             <th style={{ width: '30%' }}>Spool</th>
-            <th style={{ width: 96 }}>Material</th>
+            <th style={{ width: 120 }}>Material type</th>
             <th style={{ width: 110 }}>Brand</th>
             <th style={{ width: '20%' }}>Remaining</th>
             <th>Loaded</th>
@@ -81,10 +82,11 @@ export function SpoolList({
                   <Stack direction="row" spacing={1} alignItems="center" sx={{ minWidth: 0 }}>
                     <SpoolColorSwatch colorHex={spool.colorHex} colors={spool.colors} />
                     <Typography level="title-sm" noWrap>{spoolTitle(spool)}</Typography>
+                    <EntityTagChips kind="spool" id={spool.id} />
                   </Stack>
                 </th>
                 <td>
-                  <Chip size="sm" variant="soft">{spool.materialSubtype ?? spool.filamentType}</Chip>
+                  <Chip size="sm" variant="soft">{spool.filamentType}</Chip>
                 </td>
                 <td>
                   <Typography level="body-sm" noWrap textColor={spool.brand ? undefined : 'text.tertiary'}>

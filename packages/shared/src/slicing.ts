@@ -2,6 +2,7 @@
  * Server-side slicing contracts shared by the API, slicer UI, and the
  * standalone BambuStudio CLI worker runtime.
  */
+import { jobTagSchema } from './tags.js'
 import { z } from 'zod'
 import { STAGED_IMPORT_FORMATS } from './import-formats.js'
 import { processSettingOverridesSchema } from './process-settings.js'
@@ -671,6 +672,8 @@ export const sceneEditFilamentSchema = z.object({
   presetInherits: z.string().nullable().optional(),
   presetChangedKeys: z.array(z.string()).optional(),
   sourceIndex: z.number().int().nonnegative().nullable().optional(),
+  /** Deleted base slots whose references must use this material (0-based, not settings sources). */
+  replacedSourceIndices: z.array(z.number().int().nonnegative()).optional(),
   /**
    * Desired runtime nozzle for this slot on a dual-nozzle machine (0 = right, 1 = left),
    * the same nozzle-id space the shared index parser (`extractNozzleMapping`) canonicalises
@@ -1949,6 +1952,7 @@ export const slicingOutputLineSchema = z.object({
 export type SlicingOutputLine = z.infer<typeof slicingOutputLineSchema>
 
 export const slicingJobSchema = z.object({
+  tagSnapshot: z.array(jobTagSchema).optional(),
   id: z.string(),
   sourceFileId: z.string(),
   sourceFileName: z.string(),

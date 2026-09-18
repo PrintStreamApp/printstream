@@ -146,6 +146,7 @@ model CustomerMembership {
 }
 
 model Workspace {
+  tags        WorkspaceTag[]
   id          String    @id @default(cuid())
   slug        String    @unique
   name        String
@@ -400,6 +401,7 @@ model SelfHostedSubscription {
 /// hardware snapshot. `accessCode` is the LAN access code, a secret: never log
 /// it or surface it to the browser beyond where strictly required.
 model Printer {
+  tags                   WorkspaceTag[] @relation("PrinterTags")
   id                     String   @id @default(cuid())
   workspaceId            String
   bridgeId               String?
@@ -505,6 +507,14 @@ model PrintJob {
   sourceType             String    @default("library")
   calibrationOption      Int?
   fileId                 String?
+  /// Optional original source identity, separate from the deduplicated immutable file snapshot.
+  /// Workspace-local; retained through recycling and cleared on permanent source deletion.
+  /// Null for historical jobs whose source identity was never recorded.
+  sourceLibraryFileId    String?
+  /// Immutable tag vocabulary/assignments captured when recorded, plus spool IDs already captured.
+  /// Captured before dispatch (or on first observation). Source/tag deletion never changes history.
+  /// Null is legacy unknown, never permission to re-read live assignments.
+  tagSnapshotJson        String?
   fileName               String?
   fileSizeBytes          Int?
   // Re-slice provenance, copied off the printed library file at dispatch so it
@@ -550,6 +560,7 @@ model PrintJob {
   workspace     Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   printer       Printer      @relation(fields: [printerId], references: [id], onDelete: Cascade)
   file          LibraryFile? @relation("PrintJobFile", fields: [fileId], references: [id], onDelete: SetNull)
+  sourceLibraryFile LibraryFile? @relation("PrintJobSourceLibraryFile", fields: [sourceLibraryFileId], references: [id], onDelete: SetNull)
   sourceProject LibraryFile? @relation("PrintJobSourceProject", fields: [sourceProjectFileId], references: [id], onDelete: SetNull)
   orderPrints   OrderPrint[] @relation("OrderPrintLastJob")
   queueItems    QueueItem[]  @relation("QueueItemLastJob")
@@ -559,6 +570,7 @@ model PrintJob {
   @@index([workspaceId, printerId, taskId])
   @@index([workspaceId, finishedAt, printerId])
   @@index([workspaceId, fileId])
+  @@index([workspaceId, sourceLibraryFileId])
 }
 
 /// Durable journal of the print-dispatch lifecycle (queued -> uploading -> start
@@ -746,6 +758,7 @@ model WorkspaceFeatureUsage {
 /// `visibleLibraryFilesWhere` (`lib/library-visibility.ts`) so hidden and
 /// recycled rows never leak into listings or name matching.
 model LibraryFile {
+  tags                      WorkspaceTag[] @relation("LibraryFileTags")
   id                        String    @id @default(cuid())
   workspaceId               String
   ownerBridgeId             String?
@@ -802,6 +815,9 @@ model LibraryFile {
   // Set on the output, never on the project snapshot itself. Null on uploads and
   // on outputs sliced before project preservation shipped; the UI treats null as
   // "re-slice unavailable" rather than re-deriving anything.
+  /// Source-file tags frozen when slicing was queued, for this output's current content.
+  /// Independent of source/tag deletion and slicing-history retention; never a live assignment.
+  sourceTagSnapshotJson String?
   sourceProjectFileId       String?
   sliceSettingsJson         String?
 
@@ -812,6 +828,7 @@ model LibraryFile {
   slicedOutputs          LibraryFile[]           @relation("LibraryFileSourceProject")
   replicas               LibraryFileReplica[]
   jobs                   PrintJob[]              @relation("PrintJobFile")
+  sourceLibraryJobs      PrintJob[]              @relation("PrintJobSourceLibraryFile")
   sourceProjectJobs      PrintJob[]              @relation("PrintJobSourceProject")
   versions               LibraryFileVersion[]
   downloadLinks          LibraryDownloadLink[]
@@ -968,6 +985,8 @@ model LibraryFileVersion {
   ownerBridgeId             String?
   folderId                  String?
   name                      String
+  /// Immutable source-file tag provenance for these archived bytes; independent of live tags.
+  sourceTagSnapshotJson String?
   storedPath                String
   sizeBytes                 Int
   kind                      String   @default("other")
@@ -1529,6 +1548,7 @@ model OrderPrint {
 /// `FilamentSpoolUsage`). Workspace-scoped, soft-deletable (recycle) and separately
 /// archivable (used up but kept for history), mirroring `LibraryFile`.
 model FilamentSpool {
+  tags        WorkspaceTag[] @relation("SpoolTags")
   id          String    @id @default(cuid())
   workspaceId String
   createdAt   DateTime  @default(now())
@@ -1615,19 +1635,18 @@ model FilamentSpoolUsage {
 
 /// One run of a slicer-generated calibration print (the `calibration` plugin):
 /// the wizard's state machine from slicing a generated test through printing it
-/// to the user entering a measured result. `kind` is 'pressureAdvance' (a K-value
-/// tower) or 'flowRatio' (a flow patch plate, pass 1 or 2). `parametersJson`
-/// holds the typed test parameters (PA start/end/step, or flow current-ratio +
-/// pass); `measuredJson` holds what the user reported (best band height in mm, or
-/// selected patch offset). Cross-entity links (`printerId`, `spoolId`,
+/// to the user entering a measured result. `kind` identifies pressure advance,
+/// flow ratio, temperature, max volumetric speed, VFA, or retraction. The JSON
+/// columns hold the kind-specific test parameters and the user's selected band
+/// or measured height. Cross-entity links (`printerId`, `spoolId`,
 /// `slicingJobId`, `outputFileId`) are soft references: the run survives a
 /// printer/spool/file delete as history, mirroring `FilamentSpoolUsage.jobId`.
 model CalibrationRun {
   id              String   @id @default(cuid())
   workspaceId     String
-  /// 'pressureAdvance' | 'flowRatio'.
+  /// See `calibrationKindSchema` in `@printstream/shared`.
   kind            String
-  /// 'slicing' | 'readyToPrint' | 'printing' | 'awaitingResult' | 'saved' | 'discarded' | 'failed'.
+  /// 'slicing' | 'readyToPrint' | 'printing' | 'awaitingResult' | 'saved' | 'failed'.
   status          String   @default("slicing")
   // Target printer + AMS slot the test filament is loaded in.
   printerId       String?
@@ -1661,8 +1680,9 @@ model CalibrationRun {
 }
 
 /// A saved calibration value applied automatically when its filament is used
-/// (the `calibration` plugin). Keyed by `printerModel` + `nozzleDiameter` because
-/// a PA/flow value is portable across printers of the same model and nozzle.
+/// (the `calibration` plugin). Applicability is selected models or named printers
+/// plus nozzle diameter, independently of filament scope. The workspace owns the
+/// row and cascades its deletion; removing a named printer never broadens a rule.
 /// `scope` is 'spool' (one specific `spoolId`) or 'identity' (every spool whose
 /// brand/type/subtype/color match the non-null identity fields here: a null
 /// field is a wildcard, so the save step's ticked "match criteria" chips decide
@@ -1671,11 +1691,16 @@ model CalibrationRun {
 model CalibrationResult {
   id              String   @id @default(cuid())
   workspaceId     String
-  /// 'pressureAdvance' | 'flowRatio'.
+  /// See `calibrationKindSchema` in `@printstream/shared`.
   kind            String
-  /// K value (pressureAdvance) or flow ratio (flowRatio).
+  /// The calibrated value; its unit is owned by `kind`.
   value           Float
-  // Where it applies: portable across printers of this model + nozzle size.
+  /// Native preserves legacy/Studio K values; linear is an explicit M900 L1000 M10 calibration.
+  pressureAdvanceMode String @default("native")
+  /// Explicit model set or workspace-owned printer ids. Null preserves the legacy printerModel rule.
+  /// Printer ids are soft targets: deletion never broadens the rule to other printers.
+  printerTargetJson Json?
+  // Original model retained as provenance and the fallback for legacy rows.
   printerModel    String
   nozzleDiameter  String
   /// 'spool' | 'identity'.
@@ -2106,4 +2131,29 @@ model PendingRegistration {
   inviteCode BetaInviteCode? @relation(fields: [inviteCodeId], references: [id], onDelete: Cascade)
 
   @@index([email, expiresAt])
+}
+
+enum TagEntityKind {
+  printer
+  file
+  spool
+}
+
+/// Freeform vocabulary isolated by workspace and entity kind. Assignments follow the live entity, survive recycling,
+/// and cascade away on permanent entity/tag deletion. Group is an optional category,
+/// not a permission boundary; normalized names are unique within each workspace/entity kind catalog.
+model WorkspaceTag {
+  entityKind  TagEntityKind
+  id          String          @id @default(cuid())
+  workspaceId String
+  name        String
+  nameKey     String
+  color       String
+  group       String          @default("")
+  workspace   Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  printers    Printer[]       @relation("PrinterTags")
+  files       LibraryFile[]   @relation("LibraryFileTags")
+  spools      FilamentSpool[] @relation("SpoolTags")
+
+  @@unique([workspaceId, entityKind, nameKey])
 }

@@ -6,7 +6,7 @@
  * than a hard failure that breaks core pages.
  */
 import { useEffect } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   extractErrorMessage,
   isPrinterIdleCompatibleStage,
@@ -14,6 +14,7 @@ import {
   type PrinterStatus
 } from '@printstream/shared'
 import { buildApiUrl } from './apiUrl'
+import { apiFetch } from './apiClient'
 import { usePluginCatalogQuery } from './pluginCatalogQuery'
 import { isPluginActiveByName } from './pluginSettings'
 import { wsClient } from './wsClient'
@@ -54,6 +55,30 @@ export function mergePlateClearingState(
   const printers = existing?.printers ?? []
   const others = printers.filter((row) => row.printerId !== printerId)
   return { printers: [...others, { printerId, cleared }] }
+}
+
+/** Confirm one printer's physical plate is clear and return its id for cache updates. */
+export async function markPrinterPlateCleared(printerId: string): Promise<string> {
+  await apiFetch(`/api/plugins/plate-clearing/state/${printerId}/clear`, { method: 'POST' })
+  return printerId
+}
+
+/**
+ * Shared single-printer clear action. The API broadcasts the state too, but updating the cache
+ * immediately keeps the print action responsive on the client that made the acknowledgement.
+ */
+export function useMarkPrinterPlateCleared() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: markPrinterPlateCleared,
+    onSuccess: (printerId) => {
+      queryClient.setQueryData<PlateClearingStateResponse>(
+        PLATE_CLEARING_STATE_QUERY_KEY,
+        (existing) => mergePlateClearingState(existing, printerId, true)
+      )
+    }
+  })
 }
 
 export async function fetchPlateClearingStateFromUrl(requestUrl: string): Promise<PlateClearingStateResponse> {

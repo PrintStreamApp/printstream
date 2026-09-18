@@ -27,8 +27,10 @@ import { emitPlatformNotification } from './platform-notification-events.js'
 import {
   BACKUPS_DIR_UNSET_REASON,
   createServerBackup,
+  pruneServerBackups,
   readSnapshotManifests,
   serverBackupsDir,
+  serverBackupMaxAgeDays,
   serverBackupUsage
 } from './server-backup-store.js'
 import { readPendingRestoreMarker } from './server-backup-restore.js'
@@ -53,12 +55,12 @@ let warnedUnavailable = false
 
 /**
  * Seeds `lastBackupAt` from snapshots already on disk and starts the
- * due-check timers. No-op with the schedule disabled.
+ * due-check timers. Cloud retention runs even when scheduled backups are disabled.
  */
 export function startServerBackups(): void {
   if (scheduleTimer || initialTimer) return
   void seedLastBackupAt()
-  if (env.BACKUP_INTERVAL_HOURS <= 0) return
+  if (env.BACKUP_INTERVAL_HOURS <= 0 && isSelfHostedDeployment()) return
   initialTimer = setTimeout(() => { void runIfDue() }, INITIAL_SCHEDULE_DELAY_MS)
   initialTimer.unref?.()
   scheduleTimer = setInterval(() => { void runIfDue() }, SCHEDULE_CHECK_INTERVAL_MS)
@@ -90,6 +92,7 @@ export async function getServerBackupStatus(): Promise<ServerBackupStatus> {
         : tools.unavailableReason,
     directory,
     intervalHours: env.BACKUP_INTERVAL_HOURS,
+    maxAgeDays: serverBackupMaxAgeDays(),
     running: state.running,
     snapshotCount: usage.snapshotCount,
     totalBytes: usage.totalBytes,
@@ -167,6 +170,20 @@ function nextDueAt(): string | null {
 
 async function runIfDue(): Promise<void> {
   if (state.running || !serverBackupsDir()) return
+  if (!isSelfHostedDeployment()) {
+    try {
+      // A pending restore owns its source snapshot until restart applies it.
+      if (await readPendingRestoreMarker()) {
+        console.warn('[server-backup] Pending restore is blocking cloud retention; complete the restore promptly.')
+        return
+      }
+      const count = await pruneServerBackups(serverBackupsDir()!, Date.now(), serverBackupMaxAgeDays(), false)
+      if (count > 0) console.log(`[server-backup] cloud retention removed ${count} expired snapshots`)
+    } catch (error) {
+      console.error(`[server-backup] cloud retention failed: ${(error as Error).message}`)
+    }
+  }
+  if (env.BACKUP_INTERVAL_HOURS <= 0) return
   const dueMs = state.lastBackupAt
     ? Date.parse(state.lastBackupAt) + env.BACKUP_INTERVAL_HOURS * 3_600_000
     : 0

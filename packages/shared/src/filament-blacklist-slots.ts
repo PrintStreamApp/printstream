@@ -14,8 +14,8 @@
  * adopt the other's wording to use this.
  *
  * The material identity comes from `resolveFilamentIdentity`, not from the tray fields directly,
- * because the vendor predicate is a genuine-Bambu question and that resolver is the single place
- * that gate lives. Reading `trayInfoIdx` here and calling it Bambu would brand any tray whose
+ * because a raw Bambu preset ID does not prove the physical vendor. Explicit PrintStream
+ * identity takes precedence, including a user-declared vendor; RFID remains the raw-data gate. Reading `trayInfoIdx` here and calling it Bambu would brand any tray whose
  * preset id merely looks Bambu-shaped, which is exactly what the resolver exists to prevent.
  */
 import { amsTrayIndex, amsUnitLetter } from './ams-tray-index.js'
@@ -27,6 +27,8 @@ import {
   type FilamentBlacklistFinding,
   type FilamentBlacklistQuery
 } from './filament-blacklist.js'
+import { knownSlotMaterialType } from './slot-material-compatibility.js'
+import type { SlotMaterialIdentity } from './slot-material.js'
 import type { PrinterStatus } from './printer-contracts.js'
 
 /** A tray, the rules that fired on it, and enough to say which tray it was. */
@@ -50,6 +52,7 @@ interface SlotDescriptor {
   color: string | null
   colors: readonly string[]
   occupied: boolean
+  materialIdentity?: SlotMaterialIdentity | null
   nozzleId: number | null
 }
 
@@ -74,6 +77,7 @@ function describeSlots(status: PrinterStatus): SlotDescriptor[] {
       slots.push({
         trayIndex: amsTrayIndex(unit.type, unit.unitId, slot.slot),
         fallbackLabel: `AMS ${amsUnitLetter(unit.unitId)} Slot ${slot.slot + 1}`,
+        materialIdentity: slot.materialIdentity,
         filamentType: slot.filamentType,
         trayName: slot.trayName,
         trayInfoIdx: slot.trayInfoIdx,
@@ -89,6 +93,7 @@ function describeSlots(status: PrinterStatus): SlotDescriptor[] {
     slots.push({
       trayIndex: spool.amsId,
       fallbackLabel: externalSpoolLabel(spool.amsId, status.externalSpools.length),
+      materialIdentity: spool.materialIdentity,
       filamentType: spool.filamentType,
       trayName: spool.trayName,
       trayInfoIdx: spool.trayInfoIdx,
@@ -126,6 +131,8 @@ function parseDiameter(diameter: string | null | undefined): number | null {
 }
 
 export interface PrinterFilamentBlacklistInput {
+  /** Inventory identity by global tray index; explicit manual identity always wins. */
+  inventoryIdentities?: ReadonlyMap<number, SlotMaterialIdentity>
   /** Canonical `PrinterModel` key for the target printer. */
   printerModel: string
   status: PrinterStatus | undefined
@@ -175,7 +182,10 @@ export function checkPrinterFilamentBlacklist(
 ): FilamentBlacklistSlotFindings[] {
   if (!input.status) return []
   const hasFilamentSwitch = isFilamentTrackSwitchInstalled(input.status)
-  const slots = describeSlots(input.status)
+  const slots = describeSlots(input.status).map((slot) => ({
+    ...slot,
+    materialIdentity: slot.materialIdentity ?? input.inventoryIdentities?.get(slot.trayIndex)
+  }))
   const slotsByTrayIndex = new Map(slots.map((slot) => [slot.trayIndex, slot]))
   const supportIds = new Set(input.supportFilamentIds ?? [])
   const knowsSupportUsage = input.supportFilamentIds != null
@@ -236,6 +246,8 @@ export function checkFilamentBlacklistForAssignment(input: {
   filamentId: string | null
   filamentName?: string | null
   filamentVendor?: string | null
+  /** PrintStream identity wins over the selected compatibility preset. */
+  materialIdentity?: SlotMaterialIdentity | null
 }): FilamentBlacklistFinding[] {
   if (!input.status) return []
   const unit = input.status.ams.find((entry) => entry.unitId === input.amsId)
@@ -245,10 +257,7 @@ export function checkFilamentBlacklistForAssignment(input: {
 
   return checkFilamentBlacklist({
     printerModel: input.printerModel,
-    filamentId: input.filamentId || null,
-    filamentType: input.filamentType,
-    filamentName: input.filamentName ?? null,
-    filamentVendor: input.filamentVendor ?? null,
+    ...blacklistMaterialFields(input),
     nozzleFlow: nozzle?.flow ?? null,
     nozzleDiameter: parseDiameter(nozzle?.diameter),
     extruderId: effectiveAmsNozzleId(unit),
@@ -282,12 +291,13 @@ function buildQuery(input: {
 
   return {
     printerModel: input.printerModel,
-    filamentId: slot.trayInfoIdx,
-    filamentType: identity.type ?? slot.filamentType,
-    // The rules match on the FULL preset name ("Bambu TPU 85A"), which only a genuine tray carries;
-    // the tray's own free-text name is the next best thing a third-party spool can offer.
-    filamentName: identity.presetName ?? slot.trayName,
-    filamentVendor: identity.brand,
+    ...blacklistMaterialFields({
+      materialIdentity: slot.materialIdentity,
+      filamentId: slot.trayInfoIdx,
+      filamentType: identity.type ?? slot.filamentType,
+      filamentName: identity.presetName ?? slot.trayName,
+      filamentVendor: identity.brand
+    }),
     nozzleFlow: nozzle?.flow ?? null,
     nozzleDiameter: parseDiameter(nozzle?.diameter),
     extruderId: slot.nozzleId,
@@ -299,5 +309,40 @@ function buildQuery(input: {
     // which entries draw geometry as opposed to support alone. Null keeps the rules that ask
     // correctly inert; none ship today.
     usedForObject: null
+  }
+}
+
+/**
+ * Draft and live checks use physical identity, never the compatibility preset's claimed brand.
+ * A preset ID used solely for compatibility must not grant a material-specific whitelist exemption.
+ * Unclassified physical names retain the hardware type's safety checks rather than disabling them.
+ */
+function blacklistMaterialFields(input: {
+  materialIdentity?: SlotMaterialIdentity | null
+  filamentId: string | null
+  filamentType: string | null
+  filamentName?: string | null
+  filamentVendor?: string | null
+}): Pick<FilamentBlacklistQuery, 'filamentId' | 'filamentType' | 'filamentName' | 'filamentVendor'> {
+  const physical = input.materialIdentity
+  if (!physical) {
+    return {
+      filamentId: input.filamentId || null,
+      filamentType: input.filamentType,
+      filamentName: input.filamentName ?? null,
+      filamentVendor: input.filamentVendor ?? null
+    }
+  }
+
+  // Rule names use "Bambu", while vendor comparisons also accept "Bambu Lab".
+  const brand = physical.brand?.trim().replace(/^bambu lab$/i, 'Bambu') ?? null
+  const product = physical.materialSubtype?.trim() || physical.filamentType.trim()
+  const name = brand && !product.toLowerCase().startsWith(`${brand.toLowerCase()} `)
+    ? `${brand} ${product}` : product
+  return {
+    filamentId: null,
+    filamentType: knownSlotMaterialType(physical.filamentType) ?? input.filamentType,
+    filamentName: name,
+    filamentVendor: physical.brand
   }
 }

@@ -93,7 +93,7 @@ test('pruneServerBackups ages scheduled snapshots but never manual or pre-restor
     // A crashed run's staging dir is swept regardless.
     mkdirSync(path.join(backupsDir, 'server-backup-stale.partial'))
 
-    const pruned = await pruneServerBackups(backupsDir, now)
+    const pruned = await pruneServerBackups(backupsDir, now, null)
 
     assert.equal(pruned, 1)
     assert.ok(existsSync(path.join(backupsDir, oldScheduledA)), 'oldest scheduled snapshot in the bucket survives')
@@ -101,6 +101,24 @@ test('pruneServerBackups ages scheduled snapshots but never manual or pre-restor
     assert.ok(existsSync(path.join(backupsDir, oldManual)), 'manual snapshots are keep-until-deleted')
     assert.ok(existsSync(path.join(backupsDir, oldPreRestore)), 'pre-restore snapshots are keep-until-deleted')
     assert.ok(!readdirSync(backupsDir).some((name) => name.endsWith('.partial')))
+  } finally {
+    rmSync(backupsDir, { recursive: true, force: true })
+  }
+})
+
+test('cloud retention expires all backup triggers at 30 days without sweeping an in-flight backup', async () => {
+  const backupsDir = mkdtempSync(path.join(tmpdir(), 'cloud-backup-retention-'))
+  try {
+    const now = Date.now()
+    const old = (['scheduled', 'manual', 'pre-restore'] as const).map((trigger, index) =>
+      writeSnapshot(backupsDir, now - (30 + index) * DAY_MS, trigger))
+    const recent = writeSnapshot(backupsDir, now - 29 * DAY_MS, 'manual')
+    const partial = path.join(backupsDir, 'server-backup-active.partial')
+    mkdirSync(partial)
+    assert.equal(await pruneServerBackups(backupsDir, now, 30, false), 3)
+    for (const name of old) assert.equal(existsSync(path.join(backupsDir, name)), false)
+    assert.ok(existsSync(path.join(backupsDir, recent)))
+    assert.ok(existsSync(partial))
   } finally {
     rmSync(backupsDir, { recursive: true, force: true })
   }

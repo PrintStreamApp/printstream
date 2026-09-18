@@ -5,6 +5,7 @@
  * targets, then hand orchestration to the API-side slicing queue. The
  * BambuStudio CLI itself runs in a separate slicer runtime/container.
  */
+import { captureJobTags } from '../lib/job-tag-snapshots.js'
 import { Router } from 'express'
 import { z } from 'zod'
 import {
@@ -733,6 +734,7 @@ slicingRouter.post('/jobs', requireRequestPermission(LIBRARY_UPLOAD_PERMISSION),
   }
 
   const job = slicingJobs.enqueue({
+    tagSnapshot: await captureJobTags(prisma, workspaceId, { printerId: parsed.data.target.mode === 'realPrinter' ? parsed.data.target.printerId : null, fileIds: [sourceFile.id] }),
     workspaceId,
     workspace: request.workspace ?? { id: workspaceId, slug: workspaceId, name: workspaceId },
     executionTier: await resolveWorkspaceSlicingTier(workspaceId),

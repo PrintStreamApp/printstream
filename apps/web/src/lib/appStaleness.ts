@@ -4,7 +4,7 @@
  * Owns the RELOAD POLICY. Two detectors feed it and neither decides anything itself:
  *  - the served build id, observed from WS/API hints and checked directly before
  *    startup render and on wake-up signals (`webBuildId.ts` and `appUpdate.ts`);
- *  - `requestServiceWorkerReload`, from workbox activating a new worker (`appUpdate.ts`).
+ *  - worker activation, which requests the same served-build comparison (`appUpdate.ts`).
  *
  * Why a second detector at all: the service worker used to be the only one, and it is
  * the one that fails on a suspended phone. Its update check runs on a timer and on
@@ -86,19 +86,6 @@ let noticeToastId: number | null = null
 let confirmingBuildId: string | null = null
 
 /**
- * Swallow exactly ONE service-worker reload, because this page load is already the
- * result of one.
- *
- * After a build-id reload the worker still has its own update to apply, and activating it
- * would otherwise fire a second, visible refresh onto the bundle this tab is already
- * running. One-shot on purpose: a later activation in the same page load is a genuinely
- * new deploy. Do NOT widen this to "the ids currently agree": the worker is the ONLY
- * detector for a deploy that changes `index.html` or a `public/` file, neither of which
- * moves the build id, and that test would silence it for exactly those.
- */
-let suppressNextServiceWorkerReload = false
-
-/**
  * How the tab actually navigates.
  *
  * Indirected purely so tests can observe the decision: jsdom refuses to let
@@ -140,9 +127,6 @@ function clearLandedReloadAttempt(): void {
   const attempted = readReloadAttempt()
   if (!attempted || attempted !== readLocalWebBuildId()) return
   writeReloadAttempt(null)
-  // This load IS the reload's destination, so the worker's own pending activation is
-  // redundant. See `suppressNextServiceWorkerReload`.
-  suppressNextServiceWorkerReload = true
 }
 
 function cancelPendingUpdate(): void {
@@ -239,8 +223,8 @@ function watchForIdle(): void {
 }
 
 /** Start moving this tab onto `buildId`, now or as soon as it is safe. */
-function beginUpdate(buildId: string | null): void {
-  if (buildId && readReloadAttempt() === buildId) {
+function beginUpdate(buildId: string): void {
+  if (readReloadAttempt() === buildId) {
     // Already reloaded once for this exact build and came back still on the old one.
     // Something upstream is answering with stale HTML; another reload would loop.
     showUpdateNotice(true)
@@ -336,31 +320,10 @@ async function probeServedWebBuildId(signal?: AbortSignal): Promise<string | nul
   }
 }
 
-/**
- * The service worker activated a new build under this tab.
- *
- * No target id: workbox reports that it swapped, not what it swapped to. There is no loop
- * to guard against, because a worker activates once per update.
- *
- * This is NOT redundant with the build-id detector. It is the only thing that notices a
- * deploy which changed `index.html` or a file in `public/`, since neither is part of the
- * bundle the id is derived from. The single case worth swallowing is handled by
- * {@link suppressNextServiceWorkerReload}.
- */
-export function requestServiceWorkerReload(): void {
-  if (targetBuildId !== null) return
-  if (suppressNextServiceWorkerReload) {
-    suppressNextServiceWorkerReload = false
-    return
-  }
-  beginUpdate(null)
-}
-
 /** Test seam: drop all pending state (does not touch `sessionStorage`). */
 export function resetAppStalenessForTests(): void {
   cancelPendingUpdate()
   confirmingBuildId = null
-  suppressNextServiceWorkerReload = false
 }
 
 /** Test seam: observe the reload decision. See {@link reloadPage}. */

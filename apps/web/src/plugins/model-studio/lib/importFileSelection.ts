@@ -35,3 +35,14 @@ export function resolveImportFileSelection(
   }
   return { file, companionFiles }
 }
+
+/**
+ * Snapshot the pick before resetting the input so selecting the same file fires again.
+ * Browsers clear the existing FileList in place when value is reset; retaining that live list
+ * silently loses the model and all companions before selection validation can run.
+ */
+export function takeSelectedImportFiles(input: Pick<HTMLInputElement, 'files' | 'value'>): File[] {
+  const files = Array.from(input.files ?? [])
+  input.value = ''
+  return files
+}

@@ -7,7 +7,7 @@
  * bounded by time and response size, and an expired working catalog remains usable if the upstream
  * is temporarily unavailable.
  */
-import type { FilamentBarcodeProduct } from '@printstream/shared'
+import { normalizeFilamentVendorLabel, type FilamentBarcodeProduct } from '@printstream/shared'
 import type { PluginLogger } from '../../plugin/types.js'
 
 const OPEN_FILAMENT_DATABASE_URL = 'https://api.openfilamentdatabase.org/json/all.json'
@@ -59,10 +59,13 @@ export function canonicalizeFilamentGtin(code: string): string {
   return digits.replace(/^0+/, '') || '0'
 }
 
-function materialSubtype(name: string | null, material: string): string | null {
+/** Keep the catalog's complete product line, including its material (e.g. PLA Metal). */
+function productLine(name: string | null, brand: string | null): string | null {
   if (!name) return null
-  const withoutMaterial = name.replace(new RegExp(`\\b${material.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i'), '')
-  return withoutMaterial.replace(/\s+/g, ' ').replace(/^[\s+-]+|[\s+-]+$/g, '') || null
+  const line = brand && name.toLowerCase().startsWith(`${brand.toLowerCase()} `)
+    ? name.slice(brand.length + 1).trim()
+    : name.trim()
+  return line || null
 }
 
 /**
@@ -156,9 +159,9 @@ export function buildBarcodeCatalogIndex(payload: unknown): BarcodeCatalogIndex 
     const product: FilamentBarcodeProduct = {
       title: [brandName, filamentName, colorName].filter(Boolean).join(' '),
       productCode,
-      brand: brandName,
+      brand: normalizeFilamentVendorLabel(brandName) || null,
       filamentType: material,
-      materialSubtype: materialSubtype(filamentName, material),
+      materialSubtype: productLine(filamentName, brandName),
       colorName,
       colorHex: normalizeHex(variant.color_hex),
       diameterMm: finiteNumber(size.diameter),

@@ -15,11 +15,11 @@ import {
   type PrinterStatus
 } from '@printstream/shared'
 import { usePromptDialog } from '../../components/PromptDialogProvider'
-import { apiFetch } from '../../lib/apiClient'
 import { useAuthBootstrapQuery } from '../../lib/authQuery'
 import {
   PLATE_CLEARING_STATE_QUERY_KEY,
   findClearablePlatePrinters,
+  markPrinterPlateCleared,
   type PlateClearingStateResponse,
   mergePlateClearingState,
   usePlateClearingStates,
@@ -68,7 +68,7 @@ export function PlateClearingOverviewAction({
   const clearAll = useMutation({
     mutationFn: async (targetPrinters: OverviewPrinter[]) => {
       const results = await Promise.allSettled(targetPrinters.map((printer) => (
-        apiFetch(`/api/plugins/plate-clearing/state/${printer.id}/clear`, { method: 'POST' })
+        markPrinterPlateCleared(printer.id)
       )))
       const clearedIds = results.flatMap((result, index) => (
         result.status === 'fulfilled' ? [targetPrinters[index]!.id] : []

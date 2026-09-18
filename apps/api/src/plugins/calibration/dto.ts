@@ -7,6 +7,8 @@
 import type { CalibrationRun as CalibrationRunRow, CalibrationResult as CalibrationResultRow } from '@prisma/client'
 import {
   calibrationKindSchema,
+  calibrationPrinterTargetSchema,
+  pressureAdvanceModeSchema,
   calibrationMeasurementSchema,
   calibrationParametersSchema,
   calibrationRunStatusSchema,
@@ -49,6 +51,8 @@ export function toCalibrationRunDto(row: CalibrationRunRow): CalibrationRun {
 
 export function toCalibrationResultDto(row: CalibrationResultRow): CalibrationResult {
   return {
+    printerTarget: row.printerTargetJson == null ? { scope: 'models', models: [row.printerModel] } : calibrationPrinterTargetSchema.parse(row.printerTargetJson),
+    pressureAdvanceMode: pressureAdvanceModeSchema.parse(row.pressureAdvanceMode ?? 'native'),
     id: row.id,
     kind: calibrationKindSchema.parse(row.kind),
     value: row.value,

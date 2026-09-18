@@ -39,6 +39,12 @@ apps/bridge/release/
 apps/bridge/.cache/
 apps/server/release/
 apps/server/.cache/
+# Capacitor's platform trees are generated from the maintained mobile overlays.
+# Firebase config and release signing material are injected locally/through CI.
+apps/mobile/android/
+apps/mobile/ios/
+apps/mobile/release.keystore
+google-services.json
 docs/current-work-status.md
 *.db
 *.db-journal
@@ -65,3 +71,9 @@ docs/current-work-status.md
 # on a content hash per file, so sharing it across machines or branches buys nothing and risks
 # masking a real finding. CI always runs it cold.
 .eslintcache
+
+# Windows client build outputs and local signing material.
+apps/desktop/**/bin/
+apps/desktop/**/obj/
+apps/desktop/artifacts/
+apps/desktop/**/*.pfx

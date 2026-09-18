@@ -18,10 +18,13 @@ import { checkForServedWebUpdate } from './lib/appStaleness'
 import { shouldSuppressGlobalErrorToast, shouldSuppressPassiveAuthQueryError } from './lib/queryErrorToast'
 import { extractDisabledPluginNameFromErrorMessage } from './lib/pluginSettings'
 import { PLUGIN_CATALOG_QUERY_KEY } from './lib/pluginCatalogQuery'
-import { isMarketingPath, marketingRoutePaths } from './lib/marketingManifest'
+import { marketingRoutePaths, isMarketingPath } from './lib/marketingManifest'
 import { isPublicToolPath } from './lib/publicToolManifest'
 import { dismissSplashScreenImmediately, setSplashScreenProgress } from './lib/splashScreen'
 import { toast } from './lib/toast'
+import { isNativeApp } from './native/bridge'
+import { clearNativeReturnPath } from './native/navigation'
+import { shouldManageAppServiceWorker } from './lib/appServiceWorkerHost'
 // Self-hosted brand fonts (no Google Fonts CDN dependency). Weights mirror the
 // theme: IBM Plex Sans 400/500/600 (body + UI), Space Grotesk 400/500/700 (display).
 import '@fontsource/ibm-plex-sans/400.css'
@@ -67,6 +70,17 @@ async function clearOldOriginState(): Promise<void> {
 // Cloud-only public tools get the same treatment for the same reason: they render their own surface
 // and never wait on app bootstrap, so the "Loading the app…" splash would be a lie. Their private
 // route manifest is empty in self-hosted, native, and OSS builds.
+const nativeApp = isNativeApp()
+// Consume the native welcome marker before any public header reads its caller.
+// This is presentation state, never an authentication or origin-trust signal.
+if (nativeApp) {
+  const entryUrl = new URL(window.location.href)
+  if (entryUrl.searchParams.get('nativeEntry') === 'welcome') {
+    clearNativeReturnPath()
+    entryUrl.searchParams.delete('nativeEntry')
+    window.history.replaceState(window.history.state, '', entryUrl.pathname + entryUrl.search + entryUrl.hash)
+  }
+}
 const marketingColdLoad = isPublicToolPath(window.location.pathname)
   || (marketingRoutePaths.length > 0 && isMarketingPath(window.location.pathname))
 const bootProgress = (percent: number, status: string): void => {
@@ -77,7 +91,10 @@ if (marketingColdLoad) dismissSplashScreenImmediately()
 bootProgress(12, 'Starting app shell')
 if (browserEnv.devMode) {
   void clearOldOriginState()
-} else {
+} else if (shouldManageAppServiceWorker({
+  devMode: browserEnv.devMode,
+  nativeAndroid: nativeApp
+})) {
   registerAppServiceWorker()
   await checkForUpdateBeforeRender()
 }

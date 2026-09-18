@@ -13,6 +13,7 @@
  * contributes the settings panel and the once-per-device enrollment prompt.
  */
 import type { WebPlugin } from '../../plugin/types'
+import { isNativeApp } from '../../native/bridge'
 import { waitForAuthBootstrapData, waitForPluginCatalogData } from '../../lib/appShellQueryData'
 import { scopeAcceptsPersonalNotifications } from '../../lib/personalNotificationScope'
 import { toast } from '../../lib/toast'
@@ -117,6 +118,7 @@ export const notificationsBrowserPlugin: WebPlugin = {
     }
   ],
   init() {
+    if (isNativeApp()) return
     // Lets the service worker suppress pushes whose subject is on screen.
     installNotificationVisibilityResponder()
     void promptForBrowserNotificationEnrollmentOnAppLoad()

@@ -1,13 +1,18 @@
 process.env.NODE_ENV = 'test'
 
 import assert from 'node:assert/strict'
-import { afterEach, test } from 'node:test'
+import { afterEach, beforeEach, mock, test } from 'node:test'
 import type { PrintDispatchJob, PrintFromLibrary, Printer } from '@printstream/shared'
 import { bridgeSessionManager } from './bridge-session-manager.js'
 import { enqueueLibraryPrint, validateLibraryPrint } from './library-printing.js'
 import { printDispatcher } from './print-dispatcher.js'
 import { printerManager } from './printer-manager.js'
-import { prisma } from './prisma.js'
+import { prisma, rootPrisma } from './prisma.js'
+import { withWorkspaceRequestContext } from './workspace-context.js'
+import { usePrismaStubs } from '../test-utils/prisma-stubs.js'
+
+const stub = usePrismaStubs()
+beforeEach(() => { stub(prisma.workspaceTag, 'findMany', async () => []) })
 
 const originalLibraryFileFindFirst = prisma.libraryFile.findFirst
 const originalLibraryFileFindMany = prisma.libraryFile.findMany
@@ -320,4 +325,57 @@ test('every consent flag on the wire is forwarded to the compatibility guard', a
       `library-printing.ts must forward ${flag} to assertLibraryPrintCompatibilityForIndex`
     )
   }
+})
+
+test('dispatch preserves live source identity across snapshot deduplication and history reprints', async () => {
+  const source = { ...makeLibraryFile({ id: 'original-file' }), snapshotKey: null }
+  const snapshot = makeLibraryFile({ id: 'shared-snapshot', snapshotKey: 'dedupe-key', hidden: true })
+  prisma.libraryFile.findFirst = (async () => source) as typeof prisma.libraryFile.findFirst
+  stub(prisma.printer, 'findFirst', async () => makePrinter())
+  bridgeSessionManager.isConnected = () => true
+  printerManager.getPrinter = () => makePrinter()
+  stub(rootPrisma.libraryFile, 'update', async () => snapshot)
+  const rpc = mock.method(bridgeSessionManager, 'requestRpc', async (_bridgeId: string, method: string) => {
+    if (method === 'library.stat') return { sizeBytes: 123, contentSha256: 'a'.repeat(64) }
+    if (method === 'library.copy') return { ok: true }
+    throw new Error(`Unexpected RPC ${method}`)
+  })
+  const dispatched: Array<{ snapshotId: string; sourceId: string | null | undefined }> = []
+  printDispatcher.enqueueSnapshotPrint = async (input) => {
+    dispatched.push({ snapshotId: input.snapshot.id, sourceId: input.sourceLibraryFileId })
+    return makeJob()
+  }
+  try {
+    await withWorkspaceRequestContext({ id: 'workspace-1', slug: 'test', name: 'Test' } as Parameters<typeof withWorkspaceRequestContext>[0], async () => {
+      await enqueueLibraryPrint(makePrintInput(), 'workspace-1')
+      prisma.libraryFile.findFirst = (async () => snapshot) as typeof prisma.libraryFile.findFirst
+      await enqueueLibraryPrint(makePrintInput(), 'workspace-1', 'original-file')
+      await enqueueLibraryPrint(makePrintInput(), 'workspace-1')
+    })
+    assert.deepEqual(dispatched, [
+      { snapshotId: 'shared-snapshot', sourceId: 'original-file' },
+      { snapshotId: 'shared-snapshot', sourceId: 'original-file' },
+      { snapshotId: 'shared-snapshot', sourceId: null }
+    ])
+  } finally {
+    rpc.mock.restore()
+  }
+})
+
+
+test('slice-and-print carries source project vocabulary independently of source deletion', async () => {
+  const saved = { id: 'source-tag', entityKind: 'file', name: 'Original project', group: 'Customer', color: '#123456' }
+  stub(prisma.libraryFile, 'findFirst', async () => ({
+    ...makeLibraryFile({ snapshotKey: 'existing-byte-snapshot' }),
+    sourceTagSnapshotJson: JSON.stringify({ tags: [saved], spoolIds: [] })
+  }))
+  stub(prisma.printer, 'findFirst', async () => makePrinter())
+  stub(prisma.workspaceTag, 'findMany', async () => [])
+  bridgeSessionManager.isConnected = (() => true) as typeof bridgeSessionManager.isConnected
+  printerManager.getPrinter = (() => makePrinter()) as typeof printerManager.getPrinter
+  printDispatcher.enqueueSnapshotPrint = (async (input) => {
+    assert.deepEqual(input.tagSnapshot, [saved])
+    return makeJob()
+  }) as typeof printDispatcher.enqueueSnapshotPrint
+  await enqueueLibraryPrint(makePrintInput(), 'workspace-1')
 })

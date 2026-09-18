@@ -6,6 +6,9 @@
  * goes through `@printstream/shared` so the web client and the API agree
  * on the wire format.
  */
+import { saveSlotMaterial, removePrinterSlotMaterials } from '../lib/slot-materials.js'
+import { validateSlotMaterialCommand } from '../lib/slot-material-command.js'
+import { slotFilamentResolvers } from '../lib/slot-filament-registry.js'
 import { Router } from 'express'
 import { randomUUID } from 'node:crypto'
 import { stat, unlink } from 'node:fs/promises'
@@ -14,6 +17,7 @@ import { tmpdir } from 'node:os'
 import multer from 'multer'
 import { z } from 'zod'
 import {
+  hasBambuRfidTag,
   PRINTERS_CONTROL_CALIBRATE_SCOPE,
   PRINTERS_CONTROL_HMS_CLEAR_SCOPE,
   PRINTERS_CONTROL_MANUAL_CONTROLS_SCOPE,
@@ -486,6 +490,7 @@ printersRouter.delete('/:id', requireRequestPermission(PRINTERS_MANAGE_PERMISSIO
     }
   })
   await prisma.printer.delete({ where: { id: existing.id } })
+  await removePrinterSlotMaterials(existing.workspaceId, existing.id)
   printerManager.remove(existing.id)
   notifyPrinterCountChanged(existing.workspaceId)
   await syncBridgePrinterConfig(existing.bridgeId)
@@ -522,6 +527,14 @@ printersRouter.post('/:id/command', async (request, response) => {
     validateCalibrationCommand(existing.model, parsed.data)
   }
 
+  if (parsed.data.type === 'setAmsSlot' && parsed.data.materialIdentity) {
+    const command = parsed.data
+    const slot = status?.ams.find((unit) => unit.unitId === command.amsId)?.slots.find((tray) => tray.slot === command.slotId)
+    if (!slot) throw badRequest('The AMS slot is no longer available')
+    if (hasBambuRfidTag(slot.trayUuid)) throw badRequest('RFID filament details are read-only')
+  }
+
+  await validateSlotMaterialCommand(existing.workspaceId, existing.id, parsed.data)
   validatePrinterControlCommand(existing.model, status, parsed.data)
 
   if (parsed.data.type === 'calibrate') {
@@ -569,6 +582,15 @@ printersRouter.post('/:id/command', async (request, response) => {
     console.warn(`[printer-setting] ${existing.name} did not confirm ${parsed.data.type}`)
     throw conflict('The printer did not confirm the setting change. Its previous value has been kept.')
   }
+  const slotCommand = parsed.data
+  if ((slotCommand.type === 'setAmsSlot' || slotCommand.type === 'setExternalSpool') && slotCommand.materialIdentity) {
+    await slotFilamentResolvers.release({ workspaceId: existing.workspaceId, printerId: existing.id,
+      amsId: slotCommand.amsId, slotId: slotCommand.type === 'setAmsSlot' ? slotCommand.slotId : null })
+  }
+  await saveSlotMaterial(existing.workspaceId, existing.id, slotCommand)
+  if (['setAmsSlot', 'setExternalSpool', 'resetAmsSlot', 'resetExternalSpool', 'rescanAmsSlot'].includes(slotCommand.type)) {
+    printerManager.refreshSlotMaterials(existing.id)
+  }
   const commandAudit = describePrinterCommandAudit(parsed.data)
   if (commandAudit) {
     annotateRequestAuditLog(request, {
@@ -580,6 +602,8 @@ printersRouter.post('/:id/command', async (request, response) => {
         printerName: existing.name,
         jobId: relatedJobId,
         commandType: parsed.data.type,
+        ...((parsed.data.type === 'setAmsSlot' || parsed.data.type === 'setExternalSpool')
+          ? { manualMaterial: parsed.data.materialIdentity ?? null } : {}),
         ...describePrinterCommandAuditMetadata(parsed.data)
       }
     })

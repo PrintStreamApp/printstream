@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { boxMesh, flowRatioPlate, pressureAdvanceTower } from './geometry.js'
+import { boxMesh, flowRatioPlate, maxVolumetricSpeedTower, pressureAdvanceTower, retractionTower, temperatureTower, vfaTower } from './geometry.js'
 
 function signedVolume(positions: number[], indices: number[]): number {
   let volume = 0
@@ -78,4 +78,15 @@ test('pressureAdvanceTower height equals the K-step count in mm', () => {
   assert.equal(tower.mesh.bounds.max.x - tower.mesh.bounds.min.x, 70)
   assert.equal(tower.mesh.bounds.max.y - tower.mesh.bounds.min.y, 70)
   assert.equal(isClosedManifold(tower.mesh.indices), true)
+})
+
+test('generated tower heights preserve each calibration value-to-height mapping', () => {
+  assert.equal(temperatureTower(230, 190).heightMm, 90)
+  assert.equal(maxVolumetricSpeedTower(5, 40, 5).heightMm, 8)
+  assert.equal(vfaTower(40, 200, 10).heightMm, 85)
+  const retraction = retractionTower(0, 2, 0.1)
+  assert.equal(retraction.heightMm, 22.4)
+  assert.equal(retraction.mesh.bounds.min.x, -22)
+  assert.equal(retraction.mesh.bounds.max.x, 22)
+  assert.equal(isClosedManifold(retraction.mesh.indices), true)
 })

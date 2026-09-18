@@ -20,6 +20,7 @@
 import { lazy, useCallback, useMemo, useRef, useState } from 'react'
 import { Box } from '@mui/joy'
 import EditorView from './EditorView'
+import { slicingTargetWithSavedMaterials } from '../../lib/slicingTargetMaterials'
 import { useMobileViewport } from '../../components/useMobileViewport'
 import { LazyDialogBoundary } from '../../components/LazyDialogBoundary'
 import { createLocalProjectSource } from './lib/editorProjectSource'
@@ -60,6 +61,8 @@ export function LocalEditorSurface({ project, projectFile, importStore, archiveR
   const {
     controller,
     slicingAvailable,
+    slicingReady,
+    sliceDisabledReason,
     targetPrinterModel,
     resolveProcessConfig,
     resolveFilamentConfig,
@@ -75,7 +78,7 @@ export function LocalEditorSurface({ project, projectFile, importStore, archiveR
 
   const slicePublicProject = useCallback(async (options: Parameters<NonNullable<React.ComponentProps<typeof EditorView>['onSlice']>>[0]) => {
     const target = controller.retargetTarget
-    if (!target || !slicingAvailable) return
+    if (!target || !slicingAvailable || !slicingReady) return
     const carriesHostScripts = hasPostProcessingScripts(project.archive.indexEntries().projectSettingsJson)
       || hasPostProcessingValue(target.processSettingOverrides?.post_process)
     if (carriesHostScripts) {
@@ -88,10 +91,10 @@ export function LocalEditorSurface({ project, projectFile, importStore, archiveR
       if (!accepted) return
     }
     const { post_process: _removedHostScripts, ...safeProcessOverrides } = target.processSettingOverrides ?? {}
-    const safeTarget = {
+    const safeTarget = slicingTargetWithSavedMaterials({
       ...target,
       processSettingOverrides: Object.keys(safeProcessOverrides).length > 0 ? safeProcessOverrides : undefined
-    }
+    }, controller.projectFilaments.map((filament) => filament.projectFilamentId))
     setSubmittingPublicSlice(true)
     try {
       const prepared = await options.stageSnapshot(safeTarget, controller.selectedSlicerTargetId, options.signal)
@@ -116,7 +119,7 @@ export function LocalEditorSurface({ project, projectFile, importStore, archiveR
     } finally {
       setSubmittingPublicSlice(false)
     }
-  }, [confirm, controller, project.archive, project.fileName, slicingAvailable])
+  }, [confirm, controller, project.archive, project.fileName, slicingAvailable, slicingReady])
 
   // Read through a ref so the catalogue settling does not rebuild the save target (which would
   // otherwise be a new object on every catalogue update, for a value only a save ever reads).
@@ -160,8 +163,8 @@ export function LocalEditorSurface({ project, projectFile, importStore, archiveR
         importStore={importStore}
         saveTarget={saveTarget}
         sliceConfig={controller}
-        canSlice={slicingAvailable && controller.retargetTarget != null}
-        sliceDisabledReason={!slicingAvailable ? 'Public slicing capacity is unavailable on this server.' : undefined}
+        canSlice={slicingAvailable && slicingReady}
+        sliceDisabledReason={!slicingAvailable ? 'Public slicing capacity is unavailable on this server.' : sliceDisabledReason ?? undefined}
         slicing={submittingPublicSlice}
         onSlice={slicePublicProject}
         // Drives the bed + zones and follows a model switch, exactly as the library host does; and

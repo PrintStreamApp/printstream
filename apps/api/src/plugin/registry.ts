@@ -362,12 +362,14 @@ export class PluginRegistry {
         entry.shutdownHandlers.push(off)
         return off
       },
-      registerSlotFilamentResolver: (resolver) => {
+      registerSlotFilamentResolver: (resolver, release) => {
         // Only answer for workspaces this plugin is enabled for, mirroring print guards, a
         // disabled filament plugin must not leak spool associations into other plugins.
         const scopedResolver: SlotFilamentResolver = (query) =>
           this.isEnabledForWorkspace(entry, query.workspaceId) ? resolver(query) : Promise.resolve(null)
-        const off = slotFilamentResolvers.register(scopedResolver)
+        // Release is cleanup of an old association, including while inventory is disabled:
+        // re-enabling it must not resurrect stock the user replaced with manual filament.
+        const off = slotFilamentResolvers.register(scopedResolver, release)
         entry.shutdownHandlers.push(off)
         return off
       },

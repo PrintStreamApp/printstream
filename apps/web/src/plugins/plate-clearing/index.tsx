@@ -19,7 +19,6 @@
  * updates simultaneously.
  */
 /* eslint-disable react-refresh/only-export-components -- plugin entry exports a component intentionally */
-import { useState } from 'react'
 import { Box, Button, Checkbox, MenuItem, Stack, Tooltip, Typography } from '@mui/joy'
 import CheckCircleRoundedIcon from '@mui/icons-material/CheckCircleRounded'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -33,9 +32,7 @@ import { apiFetch } from '../../lib/apiClient'
 import { useAuthBootstrapQuery } from '../../lib/authQuery'
 import { readCurrentWorkspaceScopeKey, workspaceQueryKeys } from '../../lib/workspaceScope'
 import {
-  PLATE_CLEARING_STATE_QUERY_KEY,
-  type PlateClearingStateResponse,
-  mergePlateClearingState,
+  useMarkPrinterPlateCleared,
   usePlateClearingState,
   usePlateClearingSync
 } from '../../lib/plateClearing'
@@ -49,7 +46,6 @@ function PlateClearingAction({
   presentation?: 'inline' | 'menu'
 }) {
   usePlateClearingSync()
-  const queryClient = useQueryClient()
   const authBootstrapQuery = useAuthBootstrapQuery()
   const workspaceScopeKey = readCurrentWorkspaceScopeKey()
   const { cleared } = usePlateClearingState(printerId)
@@ -61,7 +57,6 @@ function PlateClearingAction({
     refetchOnWindowFocus: false,
     refetchOnReconnect: false
   })
-  const [pending, setPending] = useState(false)
   const authEnabled = authBootstrapQuery.data?.authEnabled ?? false
   const canClearPlate = authBootstrapQuery.data
     ? !authEnabled || authBootstrapQuery.data.permissions.includes(PRINTERS_CLEAR_PLATE_PERMISSION)
@@ -69,33 +64,18 @@ function PlateClearingAction({
   const status = statusQuery.data?.[printerId]
   const canMarkCleared = status?.online && isPrinterIdleCompatibleStage(status.stage)
 
-  const confirm = useMutation({
-    mutationFn: async () => {
-      setPending(true)
-      try {
-        await apiFetch(`/api/plugins/plate-clearing/state/${printerId}/clear`, { method: 'POST' })
-      } finally {
-        setPending(false)
-      }
-    },
-    onSuccess: () => {
-      queryClient.setQueryData<PlateClearingStateResponse>(
-        PLATE_CLEARING_STATE_QUERY_KEY,
-        (existing) => mergePlateClearingState(existing, printerId, true)
-      )
-    }
-  })
+  const confirm = useMarkPrinterPlateCleared()
 
   if (authBootstrapQuery.isLoading || !canClearPlate || cleared || !canMarkCleared) return null
 
   if (presentation === 'menu') {
-    return <MenuItem disabled={pending} onClick={() => confirm.mutate()}>{pending ? 'Marking cleared…' : 'Mark cleared'}</MenuItem>
+    return <MenuItem disabled={confirm.isPending} onClick={() => confirm.mutate(printerId)}>{confirm.isPending ? 'Marking cleared…' : 'Mark cleared'}</MenuItem>
   }
 
   return (
     <Box sx={{ display: 'flex', justifyContent: 'flex-start', alignItems: 'center' }}>
       <Tooltip title="Confirm that the printer plate has been cleared and that a new job can be started.">
-        <Button size="sm" color="warning" loading={pending} startDecorator={<CheckCircleRoundedIcon />} onClick={() => confirm.mutate()}>
+        <Button size="sm" color="warning" loading={confirm.isPending} startDecorator={<CheckCircleRoundedIcon />} onClick={() => confirm.mutate(printerId)}>
           Mark cleared
         </Button>
       </Tooltip>

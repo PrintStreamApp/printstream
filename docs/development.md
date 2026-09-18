@@ -107,19 +107,20 @@ Each worktree must contain a real `node_modules` directory. Do not symlink it fr
 checkout or a sibling: the development container mounts only the current worktree at `/workspace`,
 so an external symlink is invisible there. `npm run dev:prepare-worktree` first delegates to the
 machine-level `devkit prepare` command, which copies declared ignored files and replaces a missing,
-stale, or linked dependency tree transactionally. It then provisions the checkout database and
-restores the paired filesystem baseline before tests can create partial runtime directories. Finally,
-it verifies every declared baseline path, including the bridge identity and bridge-owned library, so
-an incomplete restore fails with a repair command instead of starting an unpaired bridge. A fresh
-standalone clone still needs one explicit `npm ci` to install Devkit itself. The generated Prisma
-client is also install-local, so startup regenerates it inside the container before touching the
-database and full validation regenerates it before typechecking.
+stale, or linked dependency tree transactionally. It deliberately stops there: creating or opening a
+worktree does not start Docker, provision PostgreSQL, register a proxy route, or restore runtime data.
+A fresh standalone clone still needs one explicit `npm ci` to install Devkit itself. The generated
+Prisma client is also install-local, so startup regenerates it inside the container before touching
+the database and full validation regenerates it before typechecking.
 
-Everything a checkout is named by is derived during worktree preparation, so it gets its hostname,
-its own database restored from the baseline, its own ports, its proxy route, and a copy of the
-primary checkout's ignored `.env`. `npm run dev` rechecks that setup before starting services. If
-the worktree already has an `.env`, Devkit leaves it alone. Deleting the worktree stops producing
-its derived resources; `dev:host -- prune` removes the orphaned database volume.
+Worktree preparation derives no runtime resources. On the first `npm run dev`, Devkit derives the
+checkout's hostname, ports, Compose project, and isolated database, restores the database and paired
+filesystem baseline, and registers its proxy route. The ignored `.env` is copied during preparation;
+if the worktree already has one, Devkit leaves it alone. Use `npm run dev:remove-worktree` to remove a
+feature checkout; it tears down the checkout, removes the worktree, and deletes its private database,
+slicer-data, and slicer-work volumes while preserving the shared slicer-engine cache.
+`npm run dev:host -- prune` remains available for database volumes orphaned by worktrees removed
+outside this workflow.
 
 Only one dev stack may run for a checkout. A second `npm run dev` exits before starting watchers and
 names the occupied web/API ports. In host mode those ports are part of the proxy identity, so Vite
@@ -149,14 +150,25 @@ Hostnames nest as `<worktree>.<repo>.localhost`, which browsers resolve to loopb
 | Printer bridge | WSL host process targeting the checkout's derived API port | this checkout only |
 | Baseline database + `data/` archive | `~/.config/devkit/baselines` | every worktree of one clone |
 
-`npm run dev:prepare-worktree` restores the portable SQL baseline and filesystem archive before any
-tests run; `npm run dev` then applies whatever migrations that branch adds. The archive includes the
-development bridge's identity under `apps/bridge/data`, so the isolated checkout reconnects the
-bridge represented by its cloned database instead of registering a new unpaired one. The
-bridge-owned file library travels with the database, so keep it limited to the small set of reference
-projects needed for development; API fallback data under `data/` travels too. Refresh the snapshot
-after changing those reference projects or deliberately pairing or replacing the primary development
-bridge.
+Slicer project inputs, generated output, and temporary work are always checkout-private. In Compose,
+that state lives in the project-scoped `slicer-work` volume; host mode uses a directory keyed by the
+checkout identity. Only reusable artifacts are shared: content-addressed container images, downloaded
+engine binaries, and the host toolchain/profile cache. Shared cache locations must never hold project
+files or branch-specific generated output.
+
+The first `npm run dev` restores the portable SQL baseline and filesystem archive, then applies
+whatever migrations that branch adds. The archive includes the development bridge's identity under
+`apps/bridge/data`, so the isolated checkout reconnects the bridge represented by its cloned database
+instead of registering a new unpaired one. The bridge-owned file library travels with the database,
+so keep it limited to the small set of reference projects needed for development; API fallback data
+under `data/` travels too. Refresh the snapshot after changing those reference projects or
+deliberately pairing or replacing the primary development bridge.
+
+Devkit records a successful filesystem restore in `data/.devkit-baseline-restored`. Test uploads
+created before the first start do not suppress that restore. Existing files are never overwritten,
+so upgrading Devkit does not replace a bridge identity that an affected worktree already generated.
+Removing the receipt retries restoration of missing files on the next start; it does not reset the
+database or replace existing bridge credentials.
 
 ### Commands
 
@@ -167,6 +179,7 @@ bridge.
 | `npm run dev:host -- reset` | recreates a worktree's database volume; `-- --empty` skips the baseline |
 | `npm run dev:host -- prune` | finds volumes whose worktree is gone; add `-- --yes` to remove them |
 | `npm run dev:host -- infra` | restarts the machine proxy and this checkout's database |
+| `npm run dev:remove-worktree` | tears down and removes the current linked worktree and its private volumes; the guarded agent workflows normally call this |
 | `devproxy ls` | every `*.localhost` name registered on this machine, PrintStream's and others' |
 
 Refresh the baseline explicitly when primary-checkout data should become the starting point for new
@@ -192,7 +205,7 @@ Two differences from the routes `npm run dev` writes, which `devproxy ls` labels
 
 ### Local configuration in worktrees
 
-Devkit's `worktreeFiles` allowlist in `devkit.config.mjs` names ignored local configuration a new worktree needs. PrintStream lists `.env`, so the first `npm run dev` copies the primary checkout's file before loading it. Copying is create-only: edit a worktree's `.env` when that branch needs different values and later starts will preserve it.
+Devkit's `worktreeFiles` allowlist in `devkit.config.mjs` names ignored local configuration a new worktree needs. PrintStream lists `.env`, so `npm run dev:prepare-worktree` copies the primary checkout's file without starting development infrastructure. The first `npm run dev` rechecks it before loading. Copying is create-only: edit a worktree's `.env` when that branch needs different values and later preparation or starts will preserve it.
 
 Devkit publishes its derived `DATABASE_URL` into the development processes it starts. Full
 validation also receives the checkout database's loopback URL from its database-only preflight;
@@ -287,13 +300,17 @@ The last row is the cache working correctly rather than failing: 430 test files 
 
 Concurrent full validates do not finish sooner in aggregate: the CPU is already saturated by one run, because each `node --test` child uses about two cores. Running three at once instead made each take 375s rather than 110s and produced load-induced flakes that never occur solo. So `npm run validate` takes a repo-wide lock (`scripts/dev/run-exclusive.mjs`) and queues behind any other validate on the same clone, reporting who it is waiting for. `PRINTSTREAM_NO_REPO_LOCK=1` runs anyway.
 
-`npm run validate:changed` deliberately does **not** take the lock, because it is the inner loop and must never be blocked by someone else's full gate.
+`npm run validate:changed` also takes the lock because its whole-program typecheck can compete for the same memory. Both commands acquire the lock before preparation (including any Devkit dependency refresh and PostgreSQL setup), and hold it until their children finish. Lock acquisition errors fail the command instead of silently running concurrently. Script tests run at most two files concurrently; all files still run. Linux PID namespaces are recorded so a sandbox cannot mistake a host process for a dead holder. Cancellation terminates the owned POSIX process group before releasing the lock.
+
+A controlled Linux ARM64 script-test comparison (120 passing tests, process-tree RSS sampled every 100 ms) reduced the peak from 528 MiB at Node's default concurrency to 301 MiB at two files, with runtime changing from 4.42s to 4.62s. These are script-stage figures, not a whole-validation or host-memory claim. A separate 893-file import-graph comparison retained about 2 GiB in esbuild after planning before service cleanup, versus zero afterward; planning took 2.65s and 2.47s respectively. Cleanup reduces overlap with test workers, not the peak during graph construction itself.
+
+Direct `npm test`, `npm run typecheck`, `devkit prepare`, and unrelated repositories do not acquire this lock; use `node scripts/dev/run-exclusive.mjs <command> ...` to coordinate a standalone heavy command.
 
 ### The inner loop
 
 `npm run validate:changed` is the fastest feedback path: it lints only the changed files, typechecks in full (TypeScript is whole-program, so this is what catches a changed shared module breaking a consumer elsewhere), and runs tests scoped to each changed file's subtree. It prints the scopes it chose and names what it could not cover. It is a subset by construction, not a gate: behavioural breakage in a consumer outside those subtrees is not covered. Use it while iterating; use `npm run validate` before you commit.
 
-The aggregate test runner runs the whole suite in sequential batches of 50 files, and Node isolates each file in its own subprocess. The batch boundary releases the aggregate process's native memory and test metadata instead of retaining them across the entire suite; failures are still collected across every batch before reporting. An unattributed failed batch is re-run file-by-file so aggregate pressure cannot hide the responsible test. Within a batch, concurrency is capped so a busy/shared CPU does not make timing-sensitive suites flake. The default is the lowest of half the available cores, four workers, and a memory budget that reserves 3 GiB for dev servers and the host before allowing about 1.5 GiB per worker. This matters in WSL and memory-capped containers, where CPU-only sizing can otherwise fill swap. Tune concurrency explicitly with `npm run test -- --concurrency=<n>` or `NODE_TEST_CONCURRENCY=<n> npm run test` when a dedicated machine can sustain more. The batch size can be overridden with `--batch-size=<n>` or `NODE_TEST_BATCH_SIZE=<n>` for diagnostics. Pass a path substring to scope the run, e.g. `npm run test -- print-job-recorder`.
+The cache planner stops its esbuild service after import-graph calculation so its native heap does not remain resident alongside test workers. The aggregate test runner runs the whole suite in sequential batches of 50 files, and Node isolates each file in its own subprocess. The batch boundary releases the aggregate process's native memory and test metadata instead of retaining them across the entire suite; failures are still collected across every batch before reporting. An unattributed failed batch is re-run file-by-file so aggregate pressure cannot hide the responsible test. Within a batch, concurrency is capped so a busy/shared CPU does not make timing-sensitive suites flake. The default is the lowest of half the available cores, four workers, and a memory budget that reserves 3 GiB for dev servers and the host before allowing about 1.5 GiB per worker. This matters in WSL and memory-capped containers, where CPU-only sizing can otherwise fill swap. Tune concurrency explicitly with `npm run test -- --concurrency=<n>` or `NODE_TEST_CONCURRENCY=<n> npm run test` when a dedicated machine can sustain more. The batch size can be overridden with `--batch-size=<n>` or `NODE_TEST_BATCH_SIZE=<n>` for diagnostics. Pass a path substring to scope the run, e.g. `npm run test -- print-job-recorder`.
 
 When a run fails, the runner re-runs only the failing files one at a time to pinpoint them and to separate genuine failures from load-induced flakes (a file that fails under the full run but passes alone). It exits non-zero only for reproducible failures.
 

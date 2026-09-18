@@ -23,45 +23,50 @@ if (!command) {
 
 const label = process.env.PRINTSTREAM_LOCK_LABEL || [command, ...args].join(' ')
 
+// On POSIX the owned process group includes npm's shells and all compiler/test descendants.
+// Keep the lock until shutdown completes; forwarding only to npm can leave those children alive.
 const code = await withRepoLock(label, () => new Promise((resolve) => {
-  // shell on Windows so `npm` resolves to npm.cmd; stdio inherited so output/interactivity pass through.
-  const child = spawn(command, args, { stdio: 'inherit', shell: process.platform === 'win32' })
+  const grouped = process.platform !== 'win32'
+  const child = spawn(command, args, {
+    stdio: 'inherit',
+    shell: !grouped,
+    detached: grouped
+  })
+  let receivedSignal
+  let escalation
+  const handlers = new Map()
+
+  const signalTree = (signal) => {
+    try {
+      if (grouped) process.kill(-child.pid, signal)
+      else child.kill(signal)
+    } catch (error) {
+      if (error.code !== 'ESRCH') throw error
+    }
+  }
+  const finish = (code) => {
+    clearTimeout(escalation)
+    for (const [signal, handler] of handlers) process.removeListener(signal, handler)
+    // A shell may exit before its children. Reap only this command's group before releasing.
+    if (receivedSignal && grouped) signalTree('SIGKILL')
+    resolve(receivedSignal ? { SIGHUP: 129, SIGINT: 130, SIGTERM: 143 }[receivedSignal] : code)
+  }
   child.on('error', (error) => {
     console.error(`run-exclusive: failed to start ${command}: ${error.message}`)
-    resolve(1)
+    finish(1)
   })
-  child.on('exit', (childCode, signal) => resolve(childCode ?? (signal ? 1 : 0)))
+  child.on('close', (childCode, signal) => finish(childCode ?? (signal ? 1 : 0)))
 
-  // A signal aimed at THIS pid rather than the process group (a supervisor, an IDE stop button)
-  // reaches the wrapper alone. Without forwarding, `withRepoLock`'s own handler removes the lock
-  // file and re-raises, and the suite this was serialising keeps running with the lock gone: the
-  // next run on the same clone starts immediately and the two contend, which is exactly the ~3.4x
-  // slowdown and load-induced flaking the lock exists to prevent.
-  //
-  // A signal aimed at THIS pid rather than the process group (a supervisor, an IDE stop button)
-  // reaches the wrapper alone. Without forwarding, `withRepoLock`'s own handler removes the lock file
-  // and re-raises, and the suite this was serialising keeps running with the lock gone: the next run
-  // on the same clone starts immediately and the two contend, which is the ~3.4x slowdown and
-  // load-induced flaking the lock exists to prevent.
-  //
-  // `prependOnceListener`, and BOTH halves of that matter. Prepend, so this runs before repo-lock's
-  // handler releases the lock. ONCE, because a registered listener suppresses the signal's default
-  // disposition: with a permanent one, repo-lock's `process.kill(process.pid, sig)` re-raise cannot
-  // terminate anything and merely re-enters this forwarder, so the wrapper stays alive holding the
-  // lock forever (`repo-lock.mjs` documents the same trap for its own listener). `once` removes it
-  // before invoking, so by the time the re-raise lands there is nothing left to intercept it.
-  //
-  // KNOWN LIMIT, stated rather than papered over: this hands the signal on, it does not wait. The
-  // wrapper is killed by the re-raise in the same delivery, and Node emits no `'exit'` for a
-  // signal-caused termination, so there is no hook left from which to escalate. A child that IGNORES
-  // the signal therefore outlives the wrapper with the lock already released. Covering that would
-  // mean run-exclusive owning the whole shutdown (catch, kill, await the child, release, exit)
-  // instead of composing with `withRepoLock`, which is a bigger change than the failure justifies:
-  // every command this wraps is an npm script that dies on SIGINT/SIGTERM. On Windows the shell
-  // wrapper receives it, the same reach the uninstrumented version had.
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
-    process.prependOnceListener(signal, () => { child.kill(signal) })
+    const handler = () => {
+      if (receivedSignal) return
+      receivedSignal = signal
+      signalTree(signal)
+      escalation = setTimeout(() => signalTree('SIGKILL'), 2000)
+    }
+    handlers.set(signal, handler)
+    process.on(signal, handler)
   }
-}))
+}), { handleSignals: false })
 
 process.exit(code)

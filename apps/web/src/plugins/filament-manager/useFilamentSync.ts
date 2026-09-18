@@ -26,6 +26,6 @@ import { FILAMENT_STATS_QUERY_KEY, SPOOLS_QUERY_KEY } from './queryKeys'
  */
 export const useFilamentSync = createWsQuerySync((event) => (
   event.type === 'plugin.event' && event.pluginName === 'filament-manager'
-    ? [SPOOLS_QUERY_KEY, FILAMENT_STATS_QUERY_KEY]
+    ? [SPOOLS_QUERY_KEY, FILAMENT_STATS_QUERY_KEY, ['tags']]
     : null
 ))

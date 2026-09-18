@@ -1,27 +1,29 @@
 /**
  * Calibration plugin (built-in, API side).
  *
- * Generates, slices, prints, and records OrcaSlicer-style calibration tests:
- * pressure-advance towers and flow-ratio plates. A run flows through the normal
+ * Generates, slices, prints, and records filament and motion calibration tests:
+ * pressure advance, flow ratio, temperature, retraction, max volumetric speed, and VFA. Manual tests use the normal
  * pipeline (hidden library 3MF → slicing queue → print dispatcher); the user
- * enters a measurement and the computed value is saved, keyed by printer model +
- * nozzle and scoped to a spool or a filament identity so it can be reused.
+ * enters a measurement. X1 automatic PA observes firmware's standalone routine.
+ * Values are saved for selected printers or models, a nozzle size, and a spool
+ * or filament identity. Neither path writes printer-side calibration profiles.
  *
  * Extension surfaces: HTTP routes at `/api/plugins/calibration` (`routes.ts`).
  * External deps: none beyond the slicing/print pipeline, the printer event bus,
- * MQTT (for the optional pressure-advance push), and Prisma. It never imports
+ * and Prisma. It never imports
  * another plugin: the loaded filament's spool/identity comes from the shared
  * `slotFilamentResolvers` seam (filled by whichever filament plugin is present),
  * with the printer's live AMS status filling any gaps.
  */
-import { amsTrayIndex, filamentColorLabel, printerModelSchema, type PrinterCommand, type PrinterPressureAdvanceProfile } from '@printstream/shared'
+import { amsTrayIndex, calibrationFilamentIdentityFromTray } from '@printstream/shared'
 import type { ApiPlugin } from '../../plugin/types.js'
 import { rootPrisma } from '../../lib/prisma.js'
 import { slotFilamentResolvers } from '../../lib/slot-filament-registry.js'
 import { printerManager } from '../../lib/printer-manager.js'
-import { commandToMqttPayloads, resolvePressureAdvanceCommandContext } from '../../lib/printer-command-payloads.js'
 import { registerCalibrationRoutes } from './routes.js'
-import { autoApplyOnLoad, handlePrintFinished, type CalibrationRunManagerDeps } from './run-manager.js'
+import { handlePrintFinished, type CalibrationRunManagerDeps } from './run-manager.js'
+import { AutomaticPaRuns } from './automatic-pa.js'
+import { printGuards } from '../../lib/print-guards.js'
 
 function firstNozzleDiameter(raw: string | null): string {
   if (!raw) return '0.4'
@@ -45,23 +47,9 @@ const deps: CalibrationRunManagerDeps = {
   async resolveSlotFilament(_db, workspaceId, printerId, amsId, slotId) {
     const status = printerManager.getStatus(printerId)
     const slot = status?.ams.find((unit) => unit.unitId === amsId)?.slots.find((entry) => entry.slot === slotId)
-    // Prefer the tracked spool's rich identity (brand/colour/subtype + spoolId, so the run can be
-    // saved "for this spool") when a filament plugin resolves the slot; fall back to the printer's
-    // live tray for the fields it reports when no spool is tracked. The colour fallback derives a
-    // human label from the tray's colour hex ("White", or the hex itself), never `trayName`,
-    // which is a material sub-brand / raw tray code (e.g. "A00-B9"), not a colour.
+    // Capture the same canonical identity used by the slice picker and calibration wizard.
     const spool = await slotFilamentResolvers.resolve({ workspaceId, printerId, amsId, slotId })
-    return {
-      spoolId: spool?.spoolId ?? null,
-      brand: spool?.brand ?? null,
-      filamentType: spool?.filamentType ?? slot?.filamentType ?? null,
-      materialSubtype: spool?.materialSubtype ?? null,
-      colorName: spool?.colorName ?? filamentColorLabel(slot?.color) ?? null
-    }
-  },
-  getSlotK(printerId, amsId, slotId) {
-    const status = printerManager.getStatus(printerId)
-    return status?.ams.find((unit) => unit.unitId === amsId)?.slots.find((entry) => entry.slot === slotId)?.k ?? null
+    return calibrationFilamentIdentityFromTray(slot, spool)
   },
   resolveTrayIndex(printerId, amsId, slotId) {
     const status = printerManager.getStatus(printerId)
@@ -69,68 +57,18 @@ const deps: CalibrationRunManagerDeps = {
     if (!unit) return null
     return amsTrayIndex(unit.type, amsId, slotId)
   },
-  async applyPrinterKValue(input) {
-    const status = printerManager.getStatus(input.printerId)
-    const model = printerModelSchema.safeParse(input.printerModel).success ? input.printerModel : 'unknown'
-    const context = resolvePressureAdvanceCommandContext(status, input.amsId)
-    // Associate the K profile with the tray's Bambu preset when it has one; empty for custom
-    // filament: the printer accepts an empty filament id and applies it to the tray all the same
-    // (verified on hardware).
-    const slot = status?.ams.find((unit) => unit.unitId === input.amsId)?.slots.find((entry) => entry.slot === input.slotId)
-    const filamentId = slot?.trayInfoIdx ?? ''
-    const label = [input.identity.brand, input.identity.filamentType].filter(Boolean).join(' ').trim()
-    const profileName = `PS ${label || 'Calibration'}`.slice(0, 64)
-
-    const publish = (command: PrinterCommand) => {
-      for (const payload of commandToMqttPayloads(model, command, status)) {
-        printerManager.publishCommand(input.printerId, payload)
-      }
-    }
-    const loadProfiles = () => printerManager.requestPressureAdvanceProfiles(input.printerId, {
-      filamentId,
-      extruderId: context.extruderId,
-      nozzleDiameter: input.nozzleDiameter,
-      nozzleTypeCode: context.nozzleTypeCode
-    })
-    const sameName = (profile: PrinterPressureAdvanceProfile) => (profile.name?.trim() ?? '') === profileName && profile.filamentId === filamentId
-    const matchesTarget = (profile: PrinterPressureAdvanceProfile) => sameName(profile) && Math.abs(profile.kValue - input.kValue) < 0.0005
-    const newest = (profiles: PrinterPressureAdvanceProfile[]) => [...profiles].sort((left, right) => right.caliIdx - left.caliIdx)[0]
-
-    // Creating a K profile does NOT apply it: the tray keeps its current selection until the
-    // profile is selected (verified on Farm 06). So reuse an existing matching profile; otherwise
-    // clear stale same-name profiles (avoid accumulation), create the new one, then select it.
-    let profiles = await loadProfiles()
-    let target = newest(profiles.filter(matchesTarget))
-    if (!target) {
-      for (const stale of profiles.filter(sameName)) {
-        publish({ type: 'deleteAmsPressureAdvanceProfile', amsId: input.amsId, slotId: input.slotId, caliIdx: stale.caliIdx, filamentId, nozzleDiameter: input.nozzleDiameter, extruderId: context.extruderId })
-      }
-      publish({
-        type: 'createAmsPressureAdvanceProfile',
-        amsId: input.amsId,
-        slotId: input.slotId,
-        kValue: input.kValue,
-        filamentId,
-        settingId: '',
-        profileName,
-        nozzleDiameter: input.nozzleDiameter,
-        extruderId: 0
-      })
-      profiles = await loadProfiles()
-      target = newest(profiles.filter(matchesTarget))
-    }
-    if (target) {
-      publish({ type: 'selectAmsPressureAdvanceProfile', amsId: input.amsId, slotId: input.slotId, caliIdx: target.caliIdx, filamentId, nozzleDiameter: input.nozzleDiameter, extruderId: context.extruderId })
-    }
-  }
 }
 
 export const calibrationPlugin: ApiPlugin = {
   name: 'calibration',
   version: '0.1.0',
-  description: 'Print pressure-advance and flow-ratio calibration tests, then save the result for reuse on matching filament.',
-  register(context) {
-    registerCalibrationRoutes(context, deps)
+  description: 'Print filament and motion calibration tests, then save the result for reuse on matching filament.',
+  async register(context) {
+    const automatic = new AutomaticPaRuns(rootPrisma, deps, printerManager, (message, detail) => context.logger.warn(message, detail))
+    await automatic.recover()
+    const removeGuard = printGuards.register(({ printerId }) => !automatic.isActive(printerId)
+      ? true : { allowed: false, reason: 'Automatic pressure advance calibration is in progress' })
+    registerCalibrationRoutes(context, deps, automatic)
 
     const onPrintFinished = (event: { printer: { id: string }; result: 'success' | 'failed' | 'cancelled' }) => {
       if (event.result !== 'success') return
@@ -142,21 +80,12 @@ export const calibrationPlugin: ApiPlugin = {
     }
     context.printerEvents.on('print-job.finished', onPrintFinished)
 
-    // When a filament is loaded into a slot, apply its saved pressure-advance value.
-    const onFilamentLoaded = (event: {
-      workspaceId: string; printerId: string; amsId: number; slotId: number; spoolId: string
-      brand: string | null; filamentType: string | null; materialSubtype: string | null; colorName: string | null
-    }) => {
-      if (!(context.isEnabledForWorkspace?.(event.workspaceId) ?? true)) return
-      void autoApplyOnLoad(deps, rootPrisma, event).catch((error) => {
-        context.logger.warn('Failed to auto-apply saved calibration on filament load', error instanceof Error ? error.message : error)
-      })
-    }
-    context.printerEvents.on('ams-slot.filament-loaded', onFilamentLoaded)
+    // Plugin values are slice inputs, not printer profiles. AMS owns printer-side K selection.
 
     context.onShutdown(() => {
+      automatic.close()
+      removeGuard()
       context.printerEvents.off('print-job.finished', onPrintFinished)
-      context.printerEvents.off('ams-slot.filament-loaded', onFilamentLoaded)
     })
   }
 }

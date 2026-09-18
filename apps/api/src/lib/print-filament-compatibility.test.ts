@@ -564,3 +564,17 @@ test('the printer-storage path enforces the blacklist too', async () => {
     /TPU is not supported by AMS/
   )
 })
+
+test('inventory-backed Bambu PET-CF still blocks dispatch after manual identity is cleared', async () => {
+  const off = slotFilamentResolvers.register(async (query) => {
+    assert.equal(query.workspaceId, SCOPE.workspaceId)
+    return { spoolId: 'inventory-spool', brand: 'Bambu', filamentType: 'PET-CF', materialSubtype: 'PET-CF', colorName: 'Black', remainingGrams: null }
+  })
+  try {
+    const input = { ...SCOPE, plate: 1, printerModel: 'P1S' as const, printerStatus: buildStatus({ amsFilamentType: 'PET-CF' }), amsMapping: [0] }
+    await assert.rejects(assertAutomaticPrintCompatibility({ ...input, index: null, useAms: true }), /PET-CF/)
+    await assert.doesNotReject(assertAutomaticPrintCompatibility({ ...input, index: null, useAms: true, allowBlacklistedFilament: true }))
+  } finally {
+    off()
+  }
+})

@@ -11,6 +11,9 @@ import { apiFetch } from '../../lib/apiClient'
 import { colorDistance, resolveProjectFilamentColorName } from '../../lib/filamentColor'
 
 export interface LibraryMaterial {
+  /** Inventory identities backing this aggregate; tag filters never tag the material itself. */
+  spoolIds?: string[]
+  availableSpoolIds?: string[]
   /** `type|color` identity, matched against a filament's required type+colour. */
   key: string
   filamentType: string
@@ -77,6 +80,8 @@ export function suggestMaterials(
 }
 
 interface MaterialAccumulator {
+  spoolIds: string[]
+  availableSpoolIds: string[]
   key: string
   filamentType: string
   color: string | null
@@ -109,6 +114,8 @@ export function useFilamentLibrary() {
         const loaded = spool.loadedPrinterId != null
         const existing = byKey.get(key)
         if (existing) {
+          existing.spoolIds.push(spool.id)
+          if (!loaded) existing.availableSpoolIds.push(spool.id)
           existing.spoolCount += 1
           existing.grams += spool.remainingGrams
           existing.net += spool.netWeightGrams
@@ -126,6 +133,8 @@ export function useFilamentLibrary() {
           ?? resolveProjectFilamentColorName({ color: spool.colorHex, filamentName: spool.brand, filamentType: spool.filamentType })
           ?? normalizeHexColor(spool.colorHex)
         byKey.set(key, {
+          spoolIds: [spool.id],
+          availableSpoolIds: loaded ? [] : [spool.id],
           key,
           filamentType: spool.filamentType,
           color: normalizeHexColor(spool.colorHex),
@@ -142,6 +151,8 @@ export function useFilamentLibrary() {
       }
       return Array.from(byKey.values())
         .map((material): LibraryMaterial => ({
+          spoolIds: material.spoolIds,
+          availableSpoolIds: material.availableSpoolIds,
           key: material.key,
           filamentType: material.filamentType,
           color: material.color,

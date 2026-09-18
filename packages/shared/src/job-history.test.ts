@@ -187,3 +187,29 @@ test('printer facet is unfiltered, deduped, name-sorted, and name-resolved per k
     { id: 'printer-a', name: 'Voron... not really' }
   ])
 })
+
+test('linked tag matches participate before pagination and retain ordinary filters', () => {
+  const result = selectJobHistoryPage({
+    printJobs: [printJob({ id: 'one' }), printJob({ id: 'two' }), printJob({ id: 'failed', result: 'failed' })],
+    slicingJobs: [],
+    query: jobHistoryQuerySchema.parse({ search: 'Phaetus Conch', pageSize: 1, results: 'success' }),
+    printerNameFor: () => null,
+    matchesAdditionalSearch: () => true
+  })
+  assert.equal(result.totalUnfiltered, 3)
+  assert.equal(result.total, 2)
+  assert.equal(result.entries.length, 1)
+})
+
+test('selected tags filter before pagination and intersect text search', () => {
+  const result = selectJobHistoryPage({
+    printJobs: [printJob({ id: 'tagged' }), printJob({ id: 'untagged' }), printJob({ id: 'other-name', fileName: 'Other.3mf' })],
+    slicingJobs: [],
+    query: query({ search: 'Benchy', tagIds: ['printer-tag', 'file-tag'], pageSize: 1 }),
+    printerNameFor,
+    matchesTags: (entry) => entry.kind === 'print' && entry.printJob.id !== 'untagged'
+  })
+  assert.equal(result.totalUnfiltered, 3)
+  assert.equal(result.total, 1)
+  assert.equal(result.entries[0]?.kind === 'print' && result.entries[0].printJob.id, 'tagged')
+})

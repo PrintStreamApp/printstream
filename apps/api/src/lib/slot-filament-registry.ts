@@ -8,11 +8,14 @@
  * consult the registry through this shared core seam instead of importing the
  * owning plugin or reaching into its tables.
  *
- * The registry is best-effort and optional: with no resolver registered (the
+ * Core manual slot identity takes precedence. Otherwise the registry is best-effort:
+ * with no resolver registered (the
  * owning plugin absent or disabled for the workspace) `resolve` returns `null` and
  * consumers fall back to whatever they can observe on their own. A resolver that
  * throws is treated as "no answer" so one plugin's failure never breaks another.
  */
+
+import { manualSlotMaterial } from './slot-materials.js'
 
 /** Identity of the filament/spool loaded in a slot. Any field may be null when unknown. */
 export interface SlotFilamentIdentity {
@@ -51,10 +54,15 @@ export type SlotFilamentResolver = (query: SlotFilamentQuery) => Promise<SlotFil
 
 class SlotFilamentResolverRegistry {
   private readonly resolvers = new Set<SlotFilamentResolver>()
+  private readonly releases = new Set<(query: SlotFilamentQuery) => Promise<void>>()
 
-  register(resolver: SlotFilamentResolver): () => void {
+  register(resolver: SlotFilamentResolver, release?: (query: SlotFilamentQuery) => Promise<void>): () => void {
     this.resolvers.add(resolver)
-    return () => this.resolvers.delete(resolver)
+    if (release) this.releases.add(release)
+    return () => {
+      this.resolvers.delete(resolver)
+      if (release) this.releases.delete(release)
+    }
   }
 
   /**
@@ -63,17 +71,30 @@ class SlotFilamentResolverRegistry {
    * could map the slot to a spool.
    */
   async resolve(query: SlotFilamentQuery): Promise<SlotFilamentIdentity | null> {
+    const manual = manualSlotMaterial(query)
+    if (manual) return { ...manual, spoolId: null, remainingGrams: null }
+    return this.resolveInventory(query)
+  }
+
+  /** Read only inventory when a command clears manual identity. Validation can fail closed on lookup errors. */
+  async resolveInventory(query: SlotFilamentQuery, failOnError = false): Promise<SlotFilamentIdentity | null> {
     for (const resolver of this.resolvers) {
       try {
         const result = await resolver(query)
         if (result) return result
       } catch (error) {
-        // Best-effort: a failing resolver must not break the consumer, but log it, a silent
-        // failure here shows up downstream as a run/print with no spool for no visible reason.
-        console.warn('[slot-filament] a resolver threw; falling back', error instanceof Error ? error.message : error)
+        // Display/calibration lookups may fall back, but command validation must not lose
+        // a known physical type just because its inventory provider is temporarily unavailable.
+        console.warn('[slot-filament] a resolver threw', error instanceof Error ? error.message : error)
+        if (failOnError) throw error
       }
     }
     return null
+  }
+
+  /** Release tracked inventory before assigning an independent manual identity; failures abort the save. */
+  async release(query: SlotFilamentQuery): Promise<void> {
+    for (const release of this.releases) await release(query)
   }
 
   size(): number {

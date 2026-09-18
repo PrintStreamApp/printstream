@@ -53,6 +53,8 @@ export const serverBackupStatusSchema = z.object({
   directory: z.string().nullable(),
   /** Scheduled cadence in hours; 0 = manual backups only. */
   intervalHours: z.number().nonnegative(),
+  /** Absolute retention cap for every trigger; absent/null preserves the self-hosted retention ladder. */
+  maxAgeDays: z.number().positive().nullable().optional(),
   running: z.boolean(),
   snapshotCount: z.number().int().nonnegative(),
   /** Logical bytes across all snapshots (on-disk usage is lower via hardlinks). */

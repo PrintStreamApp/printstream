@@ -6,6 +6,7 @@
  * library: {@link persistLibraryFileFromLocalPath} for the sliced file and
  * {@link persistHistoryThumbnailFromLibrary} for its history thumbnail.
  */
+import type { JobTag } from '@printstream/shared'
 import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { copyFile, mkdir, mkdtemp, rename, rm, stat, writeFile } from 'node:fs/promises'
@@ -66,6 +67,7 @@ const DEFAULT_SLICING_STATE_FILE = path.resolve(path.dirname(env.LIBRARY_DIR), '
 const INTERRUPTED_SLICING_MESSAGE = 'Slicing was interrupted by a server restart. Slice again to retry.'
 
 interface SlicingJobState {
+  tagSnapshot?: JobTag[]
   id: string
   workspaceId: string
   workspace: RequestWorkspaceSummary
@@ -112,6 +114,7 @@ interface PersistedSlicingJobsState {
 }
 
 interface PersistedSlicingJobState {
+  tagSnapshot?: JobTag[]
   id: string
   workspaceId: string
   workspace: RequestWorkspaceSummary
@@ -367,6 +370,7 @@ export class SlicingJobs {
   }
 
   enqueue(input: {
+    tagSnapshot?: JobTag[]
     workspaceId: string
     workspace: RequestWorkspaceSummary
     executionTier?: Exclude<SlicingExecutionTier, 'anonymous'>
@@ -393,6 +397,7 @@ export class SlicingJobs {
       && input.request.hiddenOutput === true
     )
     const job: SlicingJobState = {
+      tagSnapshot: structuredClone(input.tagSnapshot ?? []),
       id: randomUUID(),
       workspaceId: input.workspaceId,
       workspace: input.workspace,
@@ -652,6 +657,7 @@ export class SlicingJobs {
         job.cacheHasFilamentTrackSwitch = hasFilamentTrackSwitch
         const lookupInput: SliceCacheLookupInput = {
           workspaceId: job.workspaceId,
+          sourceTagSnapshotJson: JSON.stringify({ tags: (job.tagSnapshot ?? []).filter((tag) => tag.entityKind === 'file'), spoolIds: [] }),
           sourceFileId: job.sourceFileId,
           sourceFileName: job.sourceFileName,
           sourcePath: job.sourcePath,
@@ -805,7 +811,8 @@ export class SlicingJobs {
           folderId: job.request.outputFolderId ?? null,
           bridgeId: job.targetBridgeId,
           hidden: shouldHideSlicedArtifact(job.request),
-          auditAction: 'slice'
+          auditAction: 'slice',
+          sourceTagSnapshotJson: JSON.stringify({ tags: (job.tagSnapshot ?? []).filter((tag) => tag.entityKind === 'file'), spoolIds: [] })
         })
         job.outputFileId = saved.id
         job.outputFileName = saved.name
@@ -1440,6 +1447,7 @@ function serializeSlicingJobState(job: SlicingJobState): PersistedSlicingJobStat
   return {
     id: job.id,
     workspaceId: job.workspaceId,
+    tagSnapshot: job.tagSnapshot ?? [],
     workspace: job.workspace,
     executionTier: job.executionTier,
     sourceFileId: job.sourceFileId,
@@ -1498,6 +1506,7 @@ function hydratePersistedJob(persisted: PersistedSlicingJobState): SlicingJobSta
   return {
     id: persisted.id,
     workspaceId: persisted.workspaceId,
+    tagSnapshot: persisted.tagSnapshot ?? [],
     workspace: persisted.workspace,
     executionTier: persisted.executionTier ?? 'paid',
     sourceFileId: persisted.sourceFileId,
@@ -1543,6 +1552,7 @@ function parseTimestamp(value: string | null | undefined): Date | null {
 
 function toDto(job: SlicingJobState): SlicingJob {
   return {
+    tagSnapshot: structuredClone(job.tagSnapshot ?? []),
     id: job.id,
     sourceFileId: job.sourceFileId,
     sourceFileName: job.sourceFileName,

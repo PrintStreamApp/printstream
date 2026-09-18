@@ -7,7 +7,7 @@
  */
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { hostname, tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, test } from 'node:test'
@@ -74,7 +74,7 @@ test('steals a lock whose holder is gone', async () => {
   // A holder that died without releasing: a pid that cannot exist, on this host so the pid probe
   // is meaningful, with a fresh heartbeat so only the liveness check can free it.
   plantHolder({
-    token: 'stale', pid: 2 ** 22, host: hostname(), label: 'dead run', cwd: sandbox, heartbeatAt: Date.now()
+    token: 'stale', pid: 2 ** 22, host: hostname(), pidNamespace: process.platform === 'linux' ? readlinkSync('/proc/self/ns/pid') : null, label: 'dead run', cwd: sandbox, heartbeatAt: Date.now()
   })
 
   let ran = false
@@ -179,4 +179,38 @@ test('the escape hatch skips locking entirely', async () => {
   let ran = false
   await withRepoLock('ignores the lock', async () => { ran = true })
   assert.equal(ran, true, 'PRINTSTREAM_NO_REPO_LOCK must run regardless of who holds the lock')
+})
+
+test('does not probe a live holder in another PID namespace with the same hostname', {
+  skip: process.platform !== 'linux' && 'PID namespace isolation is Linux-specific'
+}, async () => {
+  plantHolder({ token: 'sandbox', pid: 2 ** 22, host: hostname(), pidNamespace: 'different', heartbeatAt: Date.now() })
+  let ran = false
+  const attempt = withRepoLock('waiter', async () => { ran = true })
+  await new Promise((resolve) => setTimeout(resolve, 150))
+  assert.equal(ran, false)
+  rmSync(lockPath(), { force: true })
+  await attempt
+})
+
+test('an inaccessible lock directory fails rather than starting an uncoordinated job', async () => {
+  writeFileSync(path.join(cacheHome, 'not-a-directory'), '')
+  process.env.XDG_CACHE_HOME = path.join(cacheHome, 'not-a-directory')
+  let ran = false
+  await assert.rejects(withRepoLock('blocked', async () => { ran = true }))
+  assert.equal(ran, false)
+})
+
+test('a live holder in our namespace is not stolen when its heartbeat is delayed', async () => {
+  plantHolder({
+    token: 'busy', pid: process.pid, host: hostname(),
+    pidNamespace: process.platform === 'linux' ? readlinkSync('/proc/self/ns/pid') : null,
+    heartbeatAt: Date.now() - 10 * 60_000
+  })
+  let ran = false
+  const attempt = withRepoLock('waiter', async () => { ran = true })
+  await new Promise((resolve) => setTimeout(resolve, 150))
+  assert.equal(ran, false)
+  rmSync(lockPath(), { force: true })
+  await attempt
 })

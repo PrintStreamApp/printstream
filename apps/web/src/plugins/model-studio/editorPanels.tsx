@@ -66,8 +66,6 @@ import CompressRoundedIcon from '@mui/icons-material/CompressRounded'
 import LockRoundedIcon from '@mui/icons-material/LockRounded'
 import LockOpenRoundedIcon from '@mui/icons-material/LockOpenRounded'
 import GridViewRoundedIcon from '@mui/icons-material/GridViewRounded'
-import UnfoldLessRoundedIcon from '@mui/icons-material/UnfoldLessRounded'
-import UnfoldMoreRoundedIcon from '@mui/icons-material/UnfoldMoreRounded'
 import AdjustRoundedIcon from '@mui/icons-material/AdjustRounded'
 import BlurOnRoundedIcon from '@mui/icons-material/BlurOnRounded'
 import BrushRoundedIcon from '@mui/icons-material/BrushRounded'
@@ -79,6 +77,7 @@ import type { LibraryFile, SceneEditHelperVolumeSubtype, SceneEditPartSubtype } 
 import { canonicalThreeMfPartSubtype, detectImportFormat, isMeshLibraryFileKind, threeMfPartSubtypeCarriesFilament } from '@printstream/shared'
 import { useLocalStorageState } from '../../hooks/useLocalStorageState'
 import { useMobileViewport } from '../../components/useMobileViewport'
+import { PlatePreviewToggle } from '../../components/PlatePreviewToggle'
 import { SettingsTuneButton } from '../../components/SettingsTuneButton'
 import { ActionMenuButton } from '../../components/ActionMenuButton'
 import { type ContextMenuAnchor } from './contextMenuChrome'
@@ -457,24 +456,11 @@ export function PlateThumbnailStrip({
           <AddRoundedIcon />
         </IconButton>
       </Tooltip>
-      <Tooltip title={collapsed ? 'Show plate previews' : 'Hide plate previews'}>
-        <IconButton
-          size="sm"
-          variant="plain"
-          color="neutral"
-          onClick={() => setCollapsed(!collapsed)}
-          aria-label={collapsed ? 'Show plate previews' : 'Hide plate previews'}
-          // Push to the far END of the strip, which is a different axis per orientation: `ml` in a
-          // row, `mt` in the rail's column. Using `ml` in both left the rail's button pinned to the
-          // right edge, out of line with tiles that stretch the full width. `!important` beats the
-          // margin Stack injects between children on whichever axis it is spacing.
-          sx={vertical
-            ? { flex: '0 0 auto', alignSelf: 'center', mt: 'auto !important' }
-            : { flex: '0 0 auto', alignSelf: 'center', ml: 'auto !important' }}
-        >
-          {collapsed ? <UnfoldMoreRoundedIcon fontSize="small" /> : <UnfoldLessRoundedIcon fontSize="small" />}
-        </IconButton>
-      </Tooltip>
+      <PlatePreviewToggle
+        collapsed={collapsed}
+        orientation={orientation}
+        onToggle={() => setCollapsed(!collapsed)}
+      />
       <ListReorderCaret setCaretElement={setCaretElement} vertical={vertical} />
     </Stack>
     </Sheet>

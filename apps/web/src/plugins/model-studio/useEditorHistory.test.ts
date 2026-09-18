@@ -15,6 +15,7 @@ installJsdomGlobals()
 
 const { renderHook, act } = await import('@testing-library/react')
 const { useEditorHistory } = await import('./useEditorHistory')
+const { remapBaseMaterialPaint } = await import('./lib/materialReplacement')
 type SliceConfigSnapshot = import('../../components/library/SliceSettingsPanel').SliceConfigSnapshot
 type SliceSettingsController = import('../../components/library/SliceSettingsPanel').SliceSettingsController
 
@@ -361,4 +362,82 @@ test('a restored frame re-points its sourceIndex at the base the save left behin
     [0, null, 1],
     'survivors follow the file, and the re-added slot has nothing left to clone'
   )
+})
+
+
+test('replacing an in-use material is one combined undo and redo step', () => {
+  type EditorState = import('./lib/editorModel').EditorState
+  const controller = makeController({ ...START, sessionSlots: [slot(1, 0), slot(2, 1)] })
+  const stateRef: { current: EditorState | null } = { current: { plates: [], colorPaint: { '1:0': { 0: '8' } } } }
+  const build = (): SliceSettingsController => ({
+    ...controller.build(),
+    projectFilaments: (controller.read().sessionSlots ?? []).map((entry) => ({ ...entry, usedOnSelectedPlate: true })),
+    onRemoveFilament: (id) => controller.setSessionSlots((controller.read().sessionSlots ?? []).filter((entry) => entry.projectFilamentId !== id))
+  })
+  const view = renderHook(({ config }) => useEditorHistory({
+    stateRef,
+    setState: (value) => { stateRef.current = typeof value === 'function' ? value(stateRef.current) : value },
+    setSelectedKey: () => {}, setActivePlateIndex: () => {}, setRebuildToken: () => {},
+    sliceConfig: config, usedFilamentIds: new Set([2]), supportOnlyFilamentIds: new Set()
+  }), { initialProps: { config: build() } })
+  act(() => view.result.current.sliceConfigForPanel!.onRemoveFilament(2, 1))
+  act(() => view.rerender({ config: build() }))
+  assert.equal(stateRef.current?.colorPaint?.['1:0']?.[0], '4')
+  assert.equal(controller.read().sessionSlots?.length, 1)
+  act(() => view.result.current.undo())
+  act(() => view.rerender({ config: build() }))
+  assert.equal(stateRef.current?.colorPaint?.['1:0']?.[0], '8')
+  assert.equal(controller.read().sessionSlots?.length, 2)
+  assert.equal(view.result.current.canUndo, false)
+  act(() => view.result.current.redo())
+  assert.equal(stateRef.current?.colorPaint?.['1:0']?.[0], '4')
+  assert.equal(controller.read().sessionSlots?.length, 1)
+  assert.deepEqual(stateRef.current?.baseFilamentIds, { 1: 1, 2: 1 })
+  act(() => view.rerender({ config: build() }))
+  act(() => view.result.current.recordHistory())
+  stateRef.current = { ...stateRef.current!, colorPaint: {} }
+  act(() => view.result.current.undo())
+  assert.deepEqual(stateRef.current?.baseFilamentIds, { 1: 1, 2: 1 })
+  view.unmount()
+})
+
+test('unverified source paint requires a replacement and remains one undo step', () => {
+  type EditorState = import('./lib/editorModel').EditorState
+  const controller = makeController({ ...START, sessionSlots: [slot(1, 0), slot(2, 1)] })
+  const stateRef: { current: EditorState | null } = { current: { plates: [] } }
+  const build = (): SliceSettingsController => ({
+    ...controller.build(),
+    projectFilaments: (controller.read().sessionSlots ?? []).map((entry) => ({ ...entry, usedOnSelectedPlate: true })),
+    onRemoveFilament: (id) => controller.setSessionSlots((controller.read().sessionSlots ?? []).filter((entry) => entry.projectFilamentId !== id))
+  })
+  const view = renderHook(({ config }) => useEditorHistory({
+    stateRef,
+    setState: (value) => { stateRef.current = typeof value === 'function' ? value(stateRef.current) : value },
+    setSelectedKey: () => {}, setActivePlateIndex: () => {}, setRebuildToken: () => {},
+    sliceConfig: config, usedFilamentIds: new Set<number>(), unverifiedFilamentIds: new Set([2]), supportOnlyFilamentIds: new Set()
+  }), { initialProps: { config: build() } })
+  assert.equal(view.result.current.sliceConfigForPanel!.filamentInUse!(2), false)
+  assert.equal(view.result.current.sliceConfigForPanel!.filamentRemovalNeedsReplacement!(2), true)
+  act(() => view.result.current.sliceConfigForPanel!.onRemoveFilament(2))
+  assert.equal(controller.read().sessionSlots?.length, 2)
+  assert.equal(view.result.current.canUndo, false)
+  act(() => view.result.current.sliceConfigForPanel!.onRemoveFilament(2, 1))
+  act(() => view.rerender({ config: build() }))
+  assert.equal(remapBaseMaterialPaint(stateRef.current!, { 0: '8' })?.[0], '4')
+  assert.equal(controller.read().sessionSlots?.length, 1)
+  act(() => view.result.current.undo())
+  act(() => view.rerender({ config: build() }))
+  assert.equal(remapBaseMaterialPaint(stateRef.current!, { 0: '8' })?.[0], '8')
+  assert.equal(controller.read().sessionSlots?.length, 2)
+  assert.equal(view.result.current.canUndo, false)
+  act(() => view.result.current.redo())
+  assert.equal(remapBaseMaterialPaint(stateRef.current!, { 0: '8' })?.[0], '4')
+  assert.equal(controller.read().sessionSlots?.length, 1)
+  assert.deepEqual(stateRef.current?.baseFilamentIds, { 1: 1, 2: 1 })
+  act(() => view.rerender({ config: build() }))
+  act(() => view.result.current.recordHistory())
+  stateRef.current = { ...stateRef.current!, colorPaint: {} }
+  act(() => view.result.current.undo())
+  assert.deepEqual(stateRef.current?.baseFilamentIds, { 1: 1, 2: 1 })
+  view.unmount()
 })

@@ -39,6 +39,7 @@ const tempSchema = z.number().int().min(0).max(500)
 const spoolWritableShape = {
   brand: optionalText(120).optional(),
   filamentType: z.string().trim().min(1).max(40),
+  /** Product line, such as PolyLite PETG or PLA Metal. The stored field name is shared with inventory. */
   materialSubtype: optionalText(60).optional(),
   colorName: optionalText(80).optional(),
   colorHex: filamentHexColorSchema.nullable().optional(),

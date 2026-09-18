@@ -19,13 +19,13 @@
  * checkout. Two different clones do not contend.
  *
  * Liveness assumes the holder shares our PID namespace: we probe `kill(pid, 0)` only when the
- * recorded hostname matches ours, and otherwise fall back to heartbeat staleness alone. That is
- * why the holder heartbeats: a container that dies without releasing must not wedge the repo
- * forever. Assumes a lock file on a filesystem with atomic `O_EXCL` create (local disk, not NFS);
+ * recorded hostname and PID namespace match ours, and otherwise use heartbeat staleness. A live
+ * local holder wins over an overdue heartbeat. Heartbeats let us reclaim a lock from a container
+ * that dies without releasing it. Assumes atomic `O_EXCL` creation on local disk, not NFS;
  * revisit if the repo ever lives on a network mount.
  */
 import { randomUUID } from 'node:crypto'
-import { closeSync, mkdirSync, openSync, readFileSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs'
+import { closeSync, mkdirSync, openSync, readFileSync, readlinkSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs'
 import { hostname } from 'node:os'
 import path from 'node:path'
 
@@ -43,25 +43,19 @@ const WAIT_NOTICE_MS = 30_000
 /**
  * Runs `fn` while holding the repo-wide heavy-job lock.
  *
- * Best-effort by design: any failure to create or read the lock directory degrades to running
- * WITHOUT the lock (with a warning) rather than blocking work, because this is a scheduling
- * optimisation and never a correctness gate.
+ * Acquisition errors reject the job: silently running without coordination can exhaust host RAM.
+ * The explicit PRINTSTREAM_NO_REPO_LOCK override remains available for dedicated machines.
  *
  * @param {string} label human-readable description of the job, shown to whoever is waiting
  * @param {() => Promise<T>} fn
+ * @param {{ handleSignals?: boolean }} options disable signal handling only when the caller awaits child shutdown
  * @returns {Promise<T>}
  * @template T
  */
-export async function withRepoLock(label, fn) {
+export async function withRepoLock(label, fn, { handleSignals = true } = {}) {
   if (process.env.PRINTSTREAM_NO_REPO_LOCK === '1') return fn()
 
-  let handle
-  try {
-    handle = await acquire(label)
-  } catch (error) {
-    console.warn(`repo-lock: could not acquire (${error.message}); running without it`)
-    return fn()
-  }
+  const handle = await acquire(label, handleSignals)
 
   try {
     return await fn()
@@ -70,7 +64,7 @@ export async function withRepoLock(label, fn) {
   }
 }
 
-async function acquire(label) {
+async function acquire(label, handleSignals) {
   const lockPath = lockFilePath()
   mkdirSync(path.dirname(lockPath), { recursive: true })
 
@@ -84,7 +78,7 @@ async function acquire(label) {
       if (waitedFrom) {
         console.error(`repo-lock: acquired after ${Math.round((Date.now() - waitedFrom) / 1000)}s.`)
       }
-      return startHolding(lockPath, token, label)
+      return startHolding(lockPath, token, label, handleSignals)
     }
 
     const holder = readHolder(lockPath)
@@ -125,7 +119,7 @@ function tryClaim(lockPath, token, label) {
   }
 }
 
-function startHolding(lockPath, token, label) {
+function startHolding(lockPath, token, label, handleSignals) {
   let released = false
 
   const heartbeat = setInterval(() => {
@@ -161,7 +155,7 @@ function startHolding(lockPath, token, label) {
   }
 
   process.on('exit', release)
-  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+  for (const signal of handleSignals ? ['SIGINT', 'SIGTERM', 'SIGHUP'] : []) {
     const handler = () => {
       // `release` removes this listener first, which is what makes the re-raise below terminate:
       // Node only applies a signal's default disposition when nothing is listening for it, so
@@ -178,13 +172,14 @@ function startHolding(lockPath, token, label) {
 }
 
 function holderRecord(token, label) {
-  return { token, pid: process.pid, host: hostname(), label, cwd: process.cwd(), heartbeatAt: Date.now() }
+  return { token, pid: process.pid, host: hostname(), pidNamespace: pidNamespace(), label, cwd: process.cwd(), heartbeatAt: Date.now() }
 }
 
 function readHolder(lockPath) {
   try {
     return JSON.parse(readFileSync(lockPath, 'utf8'))
   } catch {
+    // A claim can be mid-write; the caller checks file age before reclaiming unreadable records.
     return null
   }
 }
@@ -216,10 +211,12 @@ function fileAgeMs(file) {
 
 function isStale(holder) {
   if (!holder) return true
-  if (Date.now() - (holder.heartbeatAt ?? 0) > STALE_AFTER_MS) return true
-  // A pid probe is only meaningful in our own namespace; across hosts/containers the heartbeat
-  // above is the only signal we have.
-  if (holder.host !== hostname()) return false
+  // A live local holder remains authoritative even if host pressure delayed its heartbeat.
+  // Sandboxes can share a hostname while having entirely different PID namespaces.
+  const namespace = pidNamespace()
+  const sameNamespace = holder.host === hostname()
+    && (process.platform !== 'linux' || (namespace && holder.pidNamespace === namespace))
+  if (!sameNamespace) return Date.now() - (holder.heartbeatAt ?? 0) > STALE_AFTER_MS
   try {
     process.kill(holder.pid, 0)
     return false
@@ -241,4 +238,15 @@ function lockFilePath() {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/** Linux namespace identity prevents probing a sandbox PID in an unrelated process table. */
+function pidNamespace() {
+  if (process.platform !== 'linux') return null
+  try {
+    return readlinkSync('/proc/self/ns/pid')
+  } catch {
+    // Without namespace access, use the heartbeat instead of probing a potentially unrelated PID.
+    return null
+  }
 }

@@ -36,6 +36,9 @@ import {
   ACCOUNT_MESSAGES_SLOT
 } from '../lib/accountSlots'
 import { AuthSessionList } from './AuthSessionList'
+import { isNativeApp, PrintStreamInstance } from '../native/bridge'
+import { NativeWelcomeButton } from '../native/NativeWelcomeButton'
+import { NativeAppSettingsButton } from '../native/NativeAppSettingsButton'
 
 /**
  * Self-service account surface for signed-in end users.
@@ -133,8 +136,28 @@ export function CurrentAccountPanel({
   })
   const logoutMutation = useMutation({
     meta: { suppressGlobalErrorToast: true },
-    mutationFn: () => apiFetch<void>('/api/auth/logout', { method: 'POST' }),
+    mutationFn: async () => {
+      const { clearNativeNotifications } = await import('../native/notifications')
+      try {
+        await clearNativeNotifications()
+      } catch {
+        // A broken native bridge must not leave the authenticated server session alive.
+        console.warn('Could not clear native notifications during sign out; continuing with session revocation.')
+      }
+      await apiFetch<void>('/api/auth/logout', { method: 'POST' })
+    },
     onSuccess: async () => {
+      if (isNativeApp()) {
+        try {
+          await PrintStreamInstance.signedOut()
+          await PrintStreamInstance.welcome()
+          return
+        } catch {
+          // The server session is already revoked. Preserve the normal web
+          // logout fallback if returning to the native start screen fails.
+          console.warn('Could not return to native setup after signing out.')
+        }
+      }
       // Cloud: leave the app entirely, a hard load of the marketing home
       // drops all signed-in state (WS connection, caches, sticky entered-app
       // branch) and boots the light marketing bundle. Self-hosted has no
@@ -306,6 +329,8 @@ export function CurrentAccountPanel({
   return (
     <Stack spacing={pageSectionStackSpacing} sx={{ pb: showSectionNav ? { xs: mobileSectionNavReserveSpace, sm: 0 } : undefined }}>
       {sections.length > 0 && <SectionNav aria-label="Account sections" sections={sections} mb={0} />}
+      {isNativeApp() && <NativeWelcomeButton label="Change server" />}
+      <NativeAppSettingsButton />
 
       {showHeading && (
         <AccountPageHeading
@@ -460,6 +485,11 @@ export function CurrentAccountPanel({
                 authBootstrapReady: authBootstrapQuery.isSuccess
               }}
             />
+            {!selfHosted && isAuthenticatedUser && (
+              <Button component="a" href="/delete-account" variant="plain" color="danger" sx={{ alignSelf: 'flex-start' }}>
+                Delete account and personal data
+              </Button>
+            )}
           </Stack>
         </Box>
       )}

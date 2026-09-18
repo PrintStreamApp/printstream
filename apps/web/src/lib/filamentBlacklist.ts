@@ -14,12 +14,15 @@
  * make the checkbox claim to cover a risk it does not.
  */
 import {
+  trayIndexToAmsSlot,
+  type SlotMaterialIdentity,
   blacklistProhibitions,
   blacklistWarnings,
   checkPrinterFilamentBlacklist,
   type FilamentBlacklistFinding,
   type PrinterStatus
 } from '@printstream/shared'
+import type { SlotFilamentIdentityLookup } from './slotFilamentIdentity'
 import { printerSlotLabeller } from './lowFilament'
 
 /** One tray, named the way this dialog names trays, and what the rules said about it. */
@@ -56,11 +59,20 @@ export function findPrinterFilamentBlacklist(
    */
   plateFilamentIds?: readonly number[],
   supportFilamentIds?: readonly number[],
-  printerName?: string | null
+  printerName?: string | null,
+  resolveSlotFilament?: SlotFilamentIdentityLookup
 ): FilamentBlacklistEntry | null {
   if (!status) return null
   const labelFor = printerSlotLabeller(status)
+  const inventoryIdentities = new Map<number, SlotMaterialIdentity>()
+  for (const trayIndex of new Set(amsMapping ?? [])) {
+    const ref = trayIndexToAmsSlot(trayIndex)
+    if (!ref) continue
+    const identity = resolveSlotFilament?.(printerId, ref.amsId, ref.slotId)
+    if (identity?.filamentType) inventoryIdentities.set(trayIndex, { brand: identity.brand ?? null, filamentType: identity.filamentType, materialSubtype: identity.materialSubtype ?? null, colorName: identity.colorName ?? null })
+  }
   const slots = checkPrinterFilamentBlacklist({
+    inventoryIdentities,
     printerModel,
     status,
     amsMapping,

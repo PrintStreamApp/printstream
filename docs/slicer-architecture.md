@@ -36,6 +36,40 @@ through the `SceneEdit` contract and the baked 3MF on disk.
 | **Public editor** (cloud web host) | web | The cloud-only, account-free host of the SAME `EditorView`, at `/3mf-editor`: `apps/web/src/PublicToolApp.tsx` (shell), `LocalProjectEditor.tsx` (file picker + archive), `LocalEditorSurface.tsx` (mounts the editor + the dialogs no slice modal renders), `useLocalSliceSettingsController.ts`, `LocalSlicingPresetsDialog.tsx`, and the `lib/local*.ts` seams (project source, save target, import store, process/filament resolvers, machine retarget, browser preset storage). See "The public editor" below |
 | **Public editor** (anonymous api) | api | `private/cloud/public-slicing/routes.ts`, the cloud-only anonymous catalogue (`/api/public/slicing/*`): profiles, targets, bed-model, flush-data/flush-calibration, and builtin-ONLY `resolve-process` / `resolve-filament` / `resolve-machine` |
 
+## Editor catalogue and material readiness
+
+Changing slicer versions preserves the selected printer, model, nozzle and plate choices. The new
+catalogue revalidates those choices once loaded; a loading catalogue cannot invalidate them.
+Unavailable machine choices continue through the existing conflict reporting rather than clearing
+intent. Process and material preset ids survive engine changes even when unavailable: the selection
+remains unresolved and Slice is blocked until the user chooses a replacement or returns to a
+supporting engine. A loading catalogue never re-picks the process from the project-only subset.
+Explicitly clearing a preset is also retained. Real machine changes may still select a compatible
+process/material alias, but a project process cannot be abandoned until its baked deltas are known.
+Machine overrides seed once per file version, not per engine/preset, so a reset to an empty override
+map is not undone by a later catalogue switch.
+
+Keeping a preset selected does not freeze its built-in values: engine versions ship their own
+preset baselines. Explicit overrides remain on top; untouched inherited values follow that engine.
+
+Optional build-plate meshes and textures belong to one machine/engine selection. Changing that
+selection immediately hides the previous assets and shows the plain grid while the new assets
+load. Cancelled requests dispose their results, and returning to a previous selection never reuses
+an already-disposed resource. The live bed updates before any asynchronous object rebuild, so
+a populated plate does not keep the previous mesh while its models are being rebuilt.
+
+The workspace editor holds its preset catalogue against background refreshes. An explicit slicer
+version change releases that snapshot immediately, including when the destination catalogue is
+already cached. Material initialization runs for every target change even if machine readiness
+stays true across the switch; otherwise the settings panel can remain stuck loading. Until the
+new catalogue and machine target are ready, material reconciliation must preserve the session's
+picks rather than interpret missing options as incompatibility. Initialization fills defaults while
+preserving valid session presets and edited colours, including on a cached version switch.
+
+Material presets, colours, and nozzle assignments may arrive before their slots. Their initial
+seeding must run again when the slots appear, filling missing values while preserving explicit
+session choices. A late first material must become sliceable without a second edit.
+
 ## The no-save-first rule
 
 Every editor edit must work on a model with **no baked 3MF identity yet**: a staged import, a
@@ -67,6 +101,14 @@ That table exists because the same fact used to be written out in six places -- 
 in `mesh-stl.ts`, a format-to-extensions map in the web's import store, a hand-written union on the
 staging worker's request, a capability list on each of the two import stores, and two prose strings
 in the api's refusals -- and they had already drifted about `.stp`.
+
+The model picker snapshots its selected files before resetting the input, because browsers clear
+that live `FileList` in place. Geometry-only 3MF import accepts model entries up to 256 MiB
+uncompressed, matching the browser archive and bake budgets, while retaining the shared triangle
+limit. The API scene reader uses the same model-entry limit so a large Bambu root model keeps
+its part types instead of falling back to generic geometry parsing. A 3MF exported by a modelling service may contain Bambu project metadata and incomplete
+filament settings; its origin does not make it geometry-only. Importing its geometry into another
+project drops those settings, while opening it as a project retains the normal repair checks.
 
 **Every geometry conversion is shared and dependency-free**, in `packages/shared/src/three-mf/`: `mesh-stl.ts`,
 `mesh-obj.ts`, `mesh-gltf.ts`, `mesh-amf.ts`, and FBX scene conversion in `mesh-fbx-scene.ts`, plus
@@ -1093,15 +1135,42 @@ job queue and print dispatcher as any other slice, and saves the measured result
 filament identity for reuse. It never reaches into the editor or the pipeline internals:
 it builds a 3MF on disk and hands it to `POST /api/slicing/jobs` like everything else.
 
-Two calibration kinds, both built in `build-3mf.ts` from geometry in `geometry.ts`:
+Six printable calibration kinds are built in `build-3mf.ts` from procedural geometry in
+`geometry.ts`. The generators intentionally do not redistribute BambuStudio's AGPL model assets.
 
 | Kind | Geometry | How the swept variable is encoded | Slice-time process overrides |
 | --- | --- | --- | --- |
 | **Pressure advance** (`pressureAdvance`) | one `tower_with_seam` tower (`pressureAdvanceTower`) | a `Metadata/custom_gcode_per_layer.xml` sidecar injects `M400` + `M900 K…` at each height band, so K steps up the tower | `PA_TOWER_PROCESS_OVERRIDES`: rear seam, 2 walls, no top/infill, and a brim (see the brim invariant below) |
 | **Flow ratio** (`flowRatio`, pass 1/2) | a grid of patches (`flowRatioPlate`), one object per offset | each patch object carries its own `print_flow_ratio` metadata override (`currentFlowRatio * (100 + offset) / 100`) so one slice prints the whole ladder | `FLOW_PROCESS_OVERRIDES`: solid readable top surface at a neutral base flow |
+| **Temperature** (`temperature`) | a banded hexagonal tower (`temperatureTower`) | `M104` changes the nozzle temperature by 5 C every 10 mm | PA-style hollow tower settings and a stabilizing brim |
+| **Max volumetric speed** (`maxVolumetricSpeed`) | a short 12-sided vase tower (`maxVolumetricSpeedTower`) | the known nozzle-derived bead area converts each requested mm3/s value to a linear speed; `M220` applies that speed against a fixed 100 mm/s wall baseline | one-wall spiral vase, fixed line width/layer height, cooling slowdown disabled |
+| **VFA** (`vfa`) | a 16-sided vase tower (`vfaTower`) | `M220` raises speed every 5 mm against a fixed 100 mm/s wall baseline | one-wall spiral vase, cooling slowdown disabled |
+
+| **Retraction** (`retraction`) | two hollow posts with labelled height bands (`retractionTower`) | marked bands select paired, relative E-axis retract/restore distances in the slicer worker | fixed 0.8 mm baseline, relative extrusion, no wipe or extra restart distance |
+
+Retraction uses `Metadata/printstream_retraction_calibration.json` to opt the generated
+project into a bounded toolpath rewrite. `retraction-calibration-gcode.ts` changes only
+paired E-only retract/restore moves, including pairs crossing band boundaries. Deposition,
+startup and ending commands stay intact. Absolute extrusion, wipe-style retraction, unmatched
+pairs and missing bands fail the slice rather than producing misleading labels. The packaged
+G-code checksum is regenerated. Ordinary projects without the marker bypass this step.
+A real Bambu Studio 2.8.2.61 slice verified the 0 / 0.2 / 0.4 mm sweep and its checksum.
+
+**Automatic Micro Lidar PA.** X1-series printers can run firmware's standalone Flow Dynamics
+routine. Preparation freezes the selected preset's temperatures and loaded tray identity;
+the explicit Print action rechecks the printer, nozzle, filament and plate guard before
+sending `extrusion_cali`. The observer must see a fresh active job finish with the same task
+identity before reading `extrusion_cali_get_result`. Disconnect, interruption, failure and
+bounded deadlines fail closed. Firmware's latest result cannot identify a run after restart,
+so interrupted runs must be repeated. Only a matching tray, filament and nozzle with confidence
+code zero becomes a native-mode PS result. Saving uses the ordinary result dialog and never
+sends `extrusion_cali_set` or `extrusion_cali_sel`. Firmware may retain its own temporary
+measurement; PS does not create a named hardware profile. This path bypasses slicing because
+the printer authors the measurement pattern, and reserves the printer against other PS dispatches.
 
 **Run lifecycle.** A `CalibrationRun` row tracks state `slicing → readyToPrint →
-printing → awaitingResult → saved` (or `discarded`/`failed`), managed by `run-manager.ts`.
+printing → awaitingResult → saved` (or `failed`), managed by `run-manager.ts`.
+Discarding deletes the run instead of adding a parked lifecycle state.
 The build produces a **hidden** library 3MF; `run-manager` enqueues it on the slicing job
 queue (`processSettingOverrides` carry the per-kind overrides), reconciles the queue on
 read to advance `slicing → readyToPrint` (recording the job's `outputFileId` on the run),
@@ -1114,22 +1183,63 @@ but has no save-to-library (the run *is* the tracked entity).
 
 **Result application** (measured best band → reused on matching filament):
 
-- **Pressure advance K is printer-side, not slice-time.** `applyPrinterKValue` must
-  *create the K profile and then select it* on the tray: creating alone does not apply it
-  (see the hardware-verified note in the plugin). `autoApplyOnLoad` (on the
-  `ams-slot.filament-loaded` bus event) pushes a filament's saved K when it is loaded into
-  a slot, so a calibrated spool self-applies.
-- **Flow ratio is a saved value keyed by filament identity.** `store.ts` persists a
-  `CalibrationResult`; `resolution.ts` picks the best match by identity **specificity**
-  (RFID/brand/preset over bare type). Tying a run to the loaded spool uses the pull-based
-  `slotFilamentResolvers` registry (filled by `filament-manager`); see the plugin guide.
-- **Not yet wired: the SliceFileModal "calibrated flow" chip.** A saved flow ratio is
-  *not* currently injected into an ordinary user print, and the slice dialog does not
-  surface that a calibrated value exists for the selected filament. Wiring it means baking
-  the resolved `filament_flow_ratio` into a normal slice **and** showing a chip in
-  `SliceFileModal`: a core-dialog change that needs slice verification, so it is a known
-  follow-up. (Pressure advance already reaches real prints via the printer-side path
-  above, so it needs no such chip.)
+- **Pressure advance K has explicit per-slice and durable printer-profile paths.** The material
+  menu contributes `enable_pressure_advance` and `pressure_advance` alongside other selected
+  values. Shared filament authoring translates explicit Bambu K overrides into a marked
+  `M400`/`M900` block appended to the material's existing start script, because Studio ignores
+  the native pressure-advance setting on Bambu machines. The activation hook runs after startup
+  and on material changes. Reauthoring replaces only that generated block, preserving custom
+  script content. Do not override removes the ephemeral contribution, not an existing printer/profile value.
+  New K towers and their saved results use the same shared linear command, `M400` followed by
+  `M900 K... L1000 M10`. The result's `pressureAdvanceMode` is persisted independently of its
+  source run; old runs/results without a mode remain native, never silently converted. Manual
+  entry asks which mode was measured. The internal `printstream_pressure_advance_mode` slice
+  setting is consumed by shared filament authoring before writing engine settings.
+  Neither native nor linear plugin results are copied to printer-side profiles. Native results
+  retain plain `M900 K...` when selected for slicing. Printer profiles are managed manually in AMS.
+  See Bambu's [linear-mode explanation](https://forum.bambulab.com/t/flow-calibration/892/11).
+  This command path needs hardware acceptance in addition to the authored-project tests.
+  The AMS editor follows Studio's existing-profile selection: preserve the reported selection
+  when opening a slot; on a filament change, choose an existing same-name profile or Default.
+  Confirming the AMS edit sends the selection to the printer. Loading a library spool does not
+  create or replace printer profiles from plugin values.
+- **Filament-owned values are slice-time values keyed by filament identity.** `store.ts` persists a
+  `CalibrationResult`. Hardware applicability is independent of filament scope: select one or
+  more printer models, or one or more named printers. Nozzle diameter always matches exactly.
+  Identity separates manufacturer, material type, product line, and colour. Product line uses
+  the inventory's `materialSubtype` field: Polymaker / PETG / PolyLite PETG and Bambu / PLA /
+  PLA Metal are distinct examples. Leaving the product line unspecified matches every line
+  with the other selected attributes. Known tray and slicing preset names resolve through
+  `filamentProductLineFromPresetName`; colour-catalogue families must never supply product
+  identity. Tracked spool fields take precedence over tray-derived fields. Calibration capture
+  on the API and web uses `calibrationFilamentIdentityFromTray`, matching the slice picker.
+  The shared `resolveTargetedCalibrationValue` matcher prefers an eligible named-printer rule
+  over a model rule, then a spool-specific result over an identity result, then the most specific
+  identity. Model-only slicing never adopts a named-printer rule. Existing rows without a target
+  retain their original single-model applicability. Named targets are validated within the workspace. Tying a run to the loaded
+  spool uses the pull-based `slotFilamentResolvers` registry (filled by `filament-manager`). In a
+  workspace slice surface, the `slicing.material.status` slot resolves each selected material and
+  contributes K, flow ratio, temperature, max volumetric speed, and retraction settings to that
+  material's `filamentMappings[].settingOverrides`. The material row opens a grouped calibration
+  menu with one value or Do not override per type, allowing different types to be used together. These settings are ephemeral:
+  disabling the plugin or changing the material removes them. An explicit material-settings
+  override wins over the calibrated value, with that priority disclosed in the tooltip.
+  The public editor has no workspace plugin graph and receives no contribution.
+  A VFA result is stored and shown but remains
+  advisory: it is a global process speed, and silently selecting one filament's result for a
+  multi-material job would be incorrect.
+- **Calibration state is visible before slicing.** The `printer.amsSlot.status` plugin slot renders
+  a compact marker on loaded AMS slots. It uses the core loaded-spool registry when available, then
+  the same shared precedence matcher as slicing, so a spool-specific result visibly overrides a
+  broader family result.
+
+**Hardware acceptance checklist.** A release smoke test uses a real printer and a custom,
+non-Bambu filament for the full path: print a PA tower, enter its best band, save the K
+value, then confirm the printer's profile is unchanged. Run flow pass 1 and pass 2, save
+the result, reopen a normal workspace slice with that filament selected, confirm the calibrated
+flow chip and `filament_flow_ratio` in the prepared project, then unload and reload the filament and
+confirm the printer profile is unchanged. This remains a physical acceptance test; automated tests cover
+resolution precedence, automatic observation deadlines and slice-setting composition but cannot assert printer firmware state. Also run automatic X1 calibration, save its measured K in PS, and verify hardware profiles remain unchanged. Print a retraction tower and check that its labelled bands correspond to the actual result.
 
 ## The public editor
 
@@ -1328,6 +1438,22 @@ browser, so the one tier with a genuinely incomplete baseline was also the one t
   the control. Per-plate first-layer and later-layer filament sequences round-trip through
   `plate-filament-sequence.ts`; list changes reconcile each custom order by retaining survivors and
   appending new physical slots, and mixed filaments disable sequencing as they do in BambuStudio.
+  Model Studio allows deleting any material while at least one remains. A used material requires
+  a chosen replacement; unassigned imports count as using the first material and retain the
+  chosen replacement explicitly when that default is deleted. Assignments, colour paint, layer changes and process references move in
+  one combined undo step. Source materials also require confirmation when their untouched paint
+  usage is unknown; the plate index cannot prove absence, and uncertainty does not count as actual
+  usage for prime towers or badges. History snapshots retain the base-to-session material map.
+  Material removal and replacement invalidate inactive plate thumbnails, including on undo/redo,
+  and regenerate them progressively; superseded captures cannot publish stale images.
+  At slice submission, both editor hosts translate the target material mappings from stable
+  session IDs to the saved list positions before preparing bytes and submitting the same target;
+  otherwise a deletion or reorder assigns preset physics to the wrong slots.
+  `SceneEditFilament.replacedSourceIndices` carries deleted base-slot
+  references separately from `sourceIndex` (the settings template), so untouched archive paint and
+  settings use the same replacement. Chained deletions carry those aliases forward. History
+  frames from before the first replacement retain identity aliases to the pinned original bytes,
+  independently of configuration template indices rebased by a later save.
   Sync AMS replaces the complete project material list in live tray order, preserving surviving
   session ids and refusing to remove a tail slot still used by an object. Dual-nozzle grouping uses
   `filament-grouping.ts`: exhaustive valid bipartitions below ten physical filaments, then a bounded

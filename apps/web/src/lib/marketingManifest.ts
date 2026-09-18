@@ -9,10 +9,12 @@
  * In the open-source build there is no `src/private`, so the glob is empty and
  * `marketingRoutePaths` is `[]`: `Root` then always loads the app (today's behavior).
  */
-const manifestModules = import.meta.glob('../private/*/marketingRoutes.ts', { eager: true }) as Record<
-  string,
-  { MARKETING_ROUTE_PATHS?: readonly string[] }
->
+let manifestModules: Record<string, { MARKETING_ROUTE_PATHS?: readonly string[] }> = {}
+try {
+  manifestModules = import.meta.glob('../private/*/marketingRoutes.ts', { eager: true }) as typeof manifestModules
+} catch {
+  // Node tests have no Vite glob transform; behave like the public build.
+}
 
 /** Public marketing *page* paths (empty in the public/OSS build). */
 export const marketingRoutePaths: ReadonlyArray<string> = Object.values(manifestModules).flatMap(
@@ -20,6 +22,6 @@ export const marketingRoutePaths: ReadonlyArray<string> = Object.values(manifest
 )
 
 /** True when `pathname` is a public marketing page the light entry can serve without the app shell. */
-export function isMarketingPath(pathname: string): boolean {
-  return marketingRoutePaths.includes(pathname)
+export function isMarketingPath(pathname: string, paths: readonly string[] = marketingRoutePaths): boolean {
+  return paths.includes(pathname)
 }

@@ -384,6 +384,8 @@ export interface EditorCutGroup {
 }
 
 export interface EditorState {
+  /** Immutable base-file material id to live session id mapping, retained across saves and undo. */
+  baseFilamentIds?: Record<number, number>
   plates: EditorPlate[]
   /** Complete managed `Auxiliaries/` state, present only after its dialog authors an edit. */
   projectAuxiliaries?: ProjectAuxiliaries
@@ -2288,7 +2290,10 @@ export function rebaseEditorStateFilamentIds(state: EditorState, remap: Map<numb
     // Colour paint stores the filament id IN the triangle code, so it has to move with everything
     // else, otherwise the painted regions survive the renumber pointing at whatever material now
     // holds the old number, and the model prints those areas in the wrong colour.
-    ...(state.colorPaint ? { colorPaint: remapColorPaintMap(state.colorPaint, remap) } : {})
+    ...(state.colorPaint ? { colorPaint: remapColorPaintMap(state.colorPaint, remap) } : {}),
+    baseFilamentIds: state.baseFilamentIds
+      ? Object.fromEntries(Object.entries(state.baseFilamentIds).map(([id, liveId]) => [id, remap.get(liveId) ?? liveId]))
+      : Object.fromEntries(remap)
   }
 }
 
@@ -3492,6 +3497,7 @@ export function makeInstanceIndependent(state: EditorState, instance: EditorInst
  */
 export function cloneEditorState(state: EditorState): EditorState {
   return {
+    ...(state.baseFilamentIds ? { baseFilamentIds: { ...state.baseFilamentIds } } : {}),
     plates: state.plates.map((plate) => ({
       ...plate,
       // The bed's exclude zones are polygons of points, so a one-level spread would share them:

@@ -33,6 +33,7 @@ export function SpoolDirectoryToolbar({
   return (
     <DirectoryPrimaryToolbar
       pinStorageKey="filament"
+      tagFilter={directory.tagFilter}
       searchValue={directory.search}
       onSearchChange={directory.setSearch}
       searchPlaceholder={searchPlaceholder}
@@ -45,8 +46,8 @@ export function SpoolDirectoryToolbar({
         children: (
           <>
             <FormControl>
-              <FormLabel>Material</FormLabel>
-              <Select multiple value={filters.types} onChange={(_e, value) => setFilters((p) => ({ ...p, types: value }))} placeholder="All materials" renderValue={() => filters.types.length === 0 ? null : filters.types.join(', ')} slotProps={{ listbox: { disablePortal: true } }}>
+              <FormLabel>Material type</FormLabel>
+              <Select multiple value={filters.types} onChange={(_e, value) => setFilters((p) => ({ ...p, types: value }))} placeholder="All material types" renderValue={() => filters.types.length === 0 ? null : filters.types.join(', ')} slotProps={{ listbox: { disablePortal: true } }}>
                 {facets.types.map((type) => <MultiSelectOption key={type} value={type} selected={filters.types.includes(type)}>{type}</MultiSelectOption>)}
               </Select>
             </FormControl>

@@ -1,6 +1,6 @@
 /**
- * Round colour-swatch grid used by spool setup surfaces (AMS slot / external spool
- * editors and the print-flow spool-setup dialog) to pick a filament colour.
+ * Round color-swatch grid shared by filament setup and tag editing. Callers supply
+ * the palette, selection, and optional custom-color action.
  */
 import { Box, Typography } from '@mui/joy'
 import type { FilamentColorSwatchOption } from '../lib/filamentColor'
@@ -92,7 +92,7 @@ export function ColorSwatchPicker({
           </Box>
         ) : null}
         {swatches.map((swatch) => {
-          const isSelected = swatch.hex.toUpperCase() === selectedHex
+          const isSelected = swatch.hex.toUpperCase() === selectedHex.toUpperCase()
           return (
             <Box
               key={`${swatch.name}-${swatch.hex}`}
@@ -101,6 +101,7 @@ export function ColorSwatchPicker({
               onClick={() => onPick(swatch.hex)}
               title={`${swatch.name} (${swatch.hex})`}
               aria-label={`${swatch.name} ${swatch.hex}`}
+              aria-pressed={isSelected}
               sx={{
                 appearance: 'none',
                 p: 0,

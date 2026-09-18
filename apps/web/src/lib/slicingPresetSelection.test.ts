@@ -30,6 +30,7 @@ function buildProfile(id: string, name: string): SlicingPresetSummary {
 
 test('pickStandardProcessProfile prefers the 0.20mm Standard preset over the first in the list', () => {
   const profiles = [
+    buildProfile('custom:standard', '0.20mm Standard @BBL X1C - Ryan'),
     buildProfile('builtin:fine', '0.08mm Extra Fine @BBL X1C'),
     buildProfile('builtin:strength', '0.20mm Strength @BBL X1C'),
     buildProfile('builtin:standard', '0.20mm Standard @BBL X1C'),

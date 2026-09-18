@@ -192,3 +192,50 @@ test('clears an inherited manual map when retargeting to a single-nozzle machine
   assert.equal('filament_map' in settings, false)
   assert.doesNotMatch(decoder.decode(output[THREE_MF_MODEL_SETTINGS_ENTRY]), /filament_map/)
 })
+
+for (const sessionIds of [[2, 3], [3, 2]]) {
+  test(`prepares surviving session materials ${sessionIds.join(',')} in saved-slot order`, async () => {
+    const { slicingTargetWithSavedMaterials } = await import('../../../lib/slicingTargetMaterials')
+    const { inspectProjectFilamentPhysics } = await import('@printstream/shared')
+    const names: Record<number, string> = { 2: 'Selected Metal', 3: 'Selected PETG' }
+    const densities: Record<number, string> = { 2: '1.3', 3: '1.4' }
+    const target: SlicingTarget = {
+      mode: 'manualProfile', printerModel: 'Single Printer', printerProfileId: 'machine:single',
+      filamentMappings: [2, 3].map((id) => ({
+        projectFilamentId: id, source: 'manual', profileId: String(id),
+        settingOverrides: { filament_density: densities[id]! }
+      }))
+    }
+    const settings = {
+      filament_settings_id: sessionIds.map((id) => names[id]),
+      filament_colour: ['#444444', '#FFFFFF'], filament_type: ['PLA', 'PETG'],
+      filament_density: ['1.2', '1.2'], filament_diameter: ['1.75', '1.75'],
+      filament_flow_ratio: ['1', '1'], nozzle_temperature: ['220', '240'],
+      nozzle_temperature_initial_layer: ['220', '240']
+    }
+    const output = { [THREE_MF_PROJECT_SETTINGS_ENTRY]: encoder.encode(JSON.stringify(settings)) }
+    const frozenTarget = slicingTargetWithSavedMaterials(target, sessionIds)
+    await applyClientSliceSettings(output, {
+      plates: [], filaments: sessionIds.map(() => ({ color: '#FFFFFF' }))
+    } as unknown as SceneEdit, {
+      target: frozenTarget, slicerTargetId: null,
+      resolvers: {
+        canResolve: () => true,
+        machine: async () => ({ name: 'Single Machine', config: {
+          printer_model: 'Single Printer', physical_extruder_map: ['0'], extruder_nozzle_stats: ['Standard#1']
+        } }),
+        process: async () => ({ config: {}, baseConfig: {}, overriddenKeys: [] }),
+        filament: async (id) => ({
+          config: { name: names[Number(id)]!, filament_density: [densities[Number(id)]!] },
+          baseConfig: {}, overriddenKeys: []
+        })
+      }
+    })
+    const json = decoder.decode(output[THREE_MF_PROJECT_SETTINGS_ENTRY])
+    const authored = JSON.parse(json)
+    assert.deepEqual(authored.filament_settings_id, sessionIds.map((id) => names[id]))
+    assert.deepEqual(authored.filament_density, sessionIds.map((id) => densities[id]))
+    assert.equal(inspectProjectFilamentPhysics(json)?.inconsistent, false)
+    assert.deepEqual(target.filamentMappings?.map((mapping) => mapping.projectFilamentId), [2, 3], 'session target remains unchanged')
+  })
+}

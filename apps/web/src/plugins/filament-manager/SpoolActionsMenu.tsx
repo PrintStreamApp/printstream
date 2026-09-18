@@ -3,6 +3,9 @@
  * recycle. Pure presentational leaf: the parent view owns the mutations and
  * confirmations and passes handlers in.
  */
+import { useEntityTags } from '../../hooks/useEntityTags'
+import { useTagAssignment } from '../../hooks/useTagAssignment'
+import LabelIcon from '@mui/icons-material/LabelOutlined'
 import MoreVertRoundedIcon from '@mui/icons-material/MoreVertRounded'
 import EditRoundedIcon from '@mui/icons-material/EditRounded'
 import StraightenRoundedIcon from '@mui/icons-material/StraightenRounded'
@@ -24,12 +27,17 @@ export function SpoolActionsMenu({
   onUnassign: (spool: FilamentSpool) => void
   onRecycle: (spool: FilamentSpool) => void
 }) {
+  const { openTags, tagDialog } = useTagAssignment('spool')
+  const { canAssign } = useEntityTags('spool')
   return (
+    <>
+    {tagDialog}
     <Dropdown>
       <MenuButton slots={{ root: IconButton }} slotProps={{ root: { size: 'sm', variant: 'plain', color: 'neutral', 'aria-label': 'Spool actions' } }}>
         <MoreVertRoundedIcon />
       </MenuButton>
       <Menu size="sm" placement="bottom-end">
+        {canAssign && <MenuItem onClick={() => openTags([spool.id])}><ListItemDecorator><LabelIcon /></ListItemDecorator>Assign tags</MenuItem>}
         <MenuItem onClick={() => onEdit(spool)}>
           <ListItemDecorator><EditRoundedIcon /></ListItemDecorator>
           Edit
@@ -51,5 +59,6 @@ export function SpoolActionsMenu({
         </MenuItem>
       </Menu>
     </Dropdown>
+    </>
   )
 }

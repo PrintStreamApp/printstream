@@ -32,7 +32,7 @@ import type { PluginCatalogEntry, PluginManagementEntry, PluginSurface, PluginWo
 import type { PrinterEventBus } from '../lib/printer-events.js'
 import type { RegisteredAuthProvider, RegisteredAuthProviderResolver } from '../lib/auth-registry.js'
 import type { PrintGuard } from '../lib/print-guards.js'
-import type { SlotFilamentResolver } from '../lib/slot-filament-registry.js'
+import type { SlotFilamentResolver, SlotFilamentQuery } from '../lib/slot-filament-registry.js'
 import type { BambuAccountResolver } from '../lib/bambu-account-registry.js'
 import type { WorkspaceScopedPrismaClient } from '../lib/prisma.js'
 import type { WsBroadcaster } from '../lib/ws-server.js'
@@ -107,9 +107,11 @@ export interface ApiPluginContext {
    * it. A plugin owning filament inventory registers one; other plugins consult
    * `slotFilamentResolvers` to learn a slot's spool without importing this one.
    * The resolver is only consulted for workspaces this plugin is enabled for, and
-   * is removed automatically when the plugin stops.
+   * is removed automatically when the plugin stops. The optional release callback clears
+   * old inventory on a manual assignment, even while the plugin is disabled; failures
+   * abort the save so callers cannot silently keep charging the previous spool.
    */
-  registerSlotFilamentResolver(resolver: SlotFilamentResolver): () => void
+  registerSlotFilamentResolver(resolver: SlotFilamentResolver, release?: (query: SlotFilamentQuery) => Promise<void>): () => void
   /**
    * Register a resolver that returns the workspace's connected Bambu Lab account.
    * The plugin owning that connection registers one; plugins that need to act as the

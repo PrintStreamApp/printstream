@@ -16,6 +16,7 @@ export function NumberField({
   label,
   value,
   onChange,
+  onClear,
   step,
   min,
   max,
@@ -23,8 +24,10 @@ export function NumberField({
   endDecorator
 }: {
   label: string
-  value: number
+  value: number | null
   onChange: (value: number) => void
+  /** Opt into a genuinely empty value instead of restoring the last number on blur. */
+  onClear?: () => void
   step?: number
   min?: number
   max?: number
@@ -39,13 +42,16 @@ export function NumberField({
       <FormLabel>{label}</FormLabel>
       <Input
         type="number"
-        value={draft ?? (Number.isFinite(value) ? value : '')}
+        value={draft ?? (value != null && Number.isFinite(value) ? value : '')}
         endDecorator={endDecorator}
         slotProps={{ input: { step, min, max } }}
         onChange={(event) => {
           const text = event.target.value
           setDraft(text)
-          if (text.trim() === '') return // transient empty, not a 0
+          if (text.trim() === '') {
+            onClear?.()
+            return // Empty is not zero; callers without onClear keep the last number.
+          }
           const next = Number(text)
           if (Number.isFinite(next)) onChange(next)
         }}

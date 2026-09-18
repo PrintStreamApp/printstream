@@ -3,6 +3,7 @@ import BusinessRoundedIcon from '@mui/icons-material/BusinessRounded'
 import ApartmentRoundedIcon from '@mui/icons-material/ApartmentRounded'
 import { Alert, Box, Button, Stack, Typography } from '@mui/joy'
 import CssBaseline from '@mui/joy/CssBaseline'
+import { NativeBillingButton } from './native/NativeBillingButton'
 import { AppThemeProvider } from './theme/AppThemeProvider'
 import AccountCircleRoundedIcon from '@mui/icons-material/AccountCircleRounded'
 import ChecklistRoundedIcon from '@mui/icons-material/ChecklistRounded'
@@ -37,6 +38,10 @@ import {
 } from '@printstream/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Component, useEffect, useMemo, useRef, useState, type ErrorInfo, type ReactNode } from 'react'
+import { isNativeConnectionReady } from './native/connectionReady'
+import { useNativeSession } from './native/useNativeSession'
+import { isNativeApp, PrintStreamInstance } from './native/bridge'
+import { NativeAppSettingsButton } from './native/NativeAppSettingsButton'
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { AppShell, type ShellTab } from './components/AppShell'
 import { ScrollReset } from './components/ScrollReset'
@@ -57,7 +62,7 @@ import {
   workspaceScopedRoutePath
 } from './appShellHelpers'
 import { orderNavTabs } from './lib/navTabOrder'
-import { marketingModule, platformAdminModule } from './lib/privateModules'
+import { marketingModule, platformAdminModule, PrivateBillingEntryView } from './lib/privateModules'
 import { BridgeUpdateBanner } from './components/BridgeUpdateBanner'
 import { LicenseBanner } from './components/LicenseBanner'
 import { BridgeCrashBanner } from './components/BridgeCrashBanner'
@@ -262,6 +267,20 @@ export function App() {
   // running the private tree with SELF_HOSTED=true). In a real public build the
   // modules are already absent, so these stay null regardless.
   const selfHostedDeployment = authBootstrapQuery.data?.runtimePolicy.selfHosted ?? false
+  const nativeConnectionReady = isNativeConnectionReady({
+    ready: authBootstrapReady,
+    actorType,
+    selfHosted: selfHostedDeployment,
+    authEnabled,
+    setupRequired: authSetupRequired,
+    hasWorkspace: hasWorkspaceContext
+  })
+  useNativeSession(
+    authBootstrapReady && !authBootstrapQuery.isFetching,
+    nativeConnectionReady,
+    selfHostedDeployment && actorType === 'user',
+    authBootstrapQuery.data
+  )
   const platformAdmin = selfHostedDeployment ? null : platformAdminModule
   const marketing = selfHostedDeployment ? null : marketingModule
   const canUsePlatformWorkspace = isPlatformUser
@@ -666,7 +685,9 @@ export function App() {
   // Without it (public open-source builds) none of these flags fire and `/`
   // falls through to the in-app landing redirect.
   const marketingRoutes = marketing?.routes ?? []
-  const isMarketingRoute = routeWorkspaceSlug == null && appPathname === '/' && marketing != null
+  const isMarketingRoute = routeWorkspaceSlug == null
+    && appPathname === '/'
+    && marketingRoutes.some((route) => route.path === '/')
   const isPublicInfoRoute = routeWorkspaceSlug == null
     && marketingRoutes.some((route) => route.publicChrome && route.path !== '/' && route.path === appPathname)
   // Marketing-module routes must skip the top-level auth gate: a cached ambient
@@ -700,11 +721,13 @@ export function App() {
       })
   const showsWorkspaceSwitcher = shouldShowWorkspaceSwitcher({
     authRouteState,
+    canUseWorkspaceChooser,
+    nativeApp: isNativeApp(),
     requestedWorkspaceSlug: routeWorkspaceSlug,
     activeWorkspaceSlug
   })
   const workspaceChooserTab = useMemo<ShellTab | null>(
-    () => (canUseWorkspaceChooser && showsWorkspaceSwitcher)
+    () => showsWorkspaceSwitcher
       ? {
           value: '/workspaces',
           label: 'Workspaces',
@@ -713,7 +736,7 @@ export function App() {
           iconOnly: true
         }
       : null,
-    [canUseWorkspaceChooser, showsWorkspaceSwitcher]
+    [showsWorkspaceSwitcher]
   )
   // Settings is pinned at the end of the content tabs; the rest (core content +
   // plugin tabs) are user-orderable. Empty order → built-in default (Filament
@@ -774,6 +797,13 @@ export function App() {
   }
 
   const openWorkspaceChooser = () => {
+    if (isNativeApp()) {
+      void PrintStreamInstance.menu({ view: 'switcher' }).catch(() => {
+        console.warn('Could not open the native switcher.')
+        navigate(buildWorkspaceSelectionPath())
+      })
+      return
+    }
     navigate(buildWorkspaceSelectionPath())
   }
 
@@ -896,7 +926,7 @@ export function App() {
     : effectiveAppTheme === 'aurora'
       ? (usesPlatformTheme ? platformAuroraTheme : auroraTheme)
       : (usesPlatformTheme ? platformTheme : theme)
-  const usesPublicChrome = isWorkspaceSelectionRoute || isConnectBridgeRoute || isMarketingRoute || isPublicInfoRoute
+  const usesPublicChrome = appPathname === '/billing' || isWorkspaceSelectionRoute || isConnectBridgeRoute || isMarketingRoute || isPublicInfoRoute
   /**
    * The billing scope carries no content tabs of its own.
    *
@@ -965,7 +995,7 @@ export function App() {
     : inBillingScope
       ? <CreditCardRoundedIcon />
       : inPlatformMode ? <ApartmentRoundedIcon /> : <BusinessRoundedIcon />
-  const shellWorkspaceChooserAvailable = !usesPublicChrome && canUseWorkspaceChooser
+  const shellWorkspaceChooserAvailable = !usesPublicChrome && (canUseWorkspaceChooser || isNativeApp())
   // The badge owns its own 5s poll: hoisting it here re-rendered the whole tree every tick.
   const devRuntimeIndicator = browserEnv.devMode ? (
     <DevRuntimeStatus webStartedAt={webRuntimeStartedAt} />
@@ -976,15 +1006,19 @@ export function App() {
   const appFooterTrailing = (
     <Stack spacing={0.75} alignItems="center" useFlexGap>
       <Stack direction="row" spacing={1} useFlexGap alignItems="center" justifyContent="center" sx={{ flexWrap: 'wrap' }}>
+        {selfHostedDeployment && hasWorkspaceContext && canManageSettings && (
+          <NativeBillingButton />
+        )}
         {/* Platform users staff the support inbox: hide the help entry point there. */}
         {!inPlatformMode && <HelpFeedbackButton />}
         <PluginSlot name="shell.footer" />
+        {!isWorkspaceSelectionRoute && <NativeAppSettingsButton />}
       </Stack>
       {devRuntimeIndicator}
       <AppVersionFooter />
     </Stack>
   )
-  const shouldAutoSelectOnlyWorkspace = authBootstrapReady
+  const shouldAutoSelectOnlyWorkspace = !isNativeApp() && authBootstrapReady
     && isAuthenticated
     && !isMarketingRoute
     && !isPublicInfoRoute
@@ -1426,6 +1460,7 @@ export function App() {
                   not one: it has no workspace context, no printers, and no
                   workspace slug to hang off.
                 */}
+                {hasBillingScopeView && PrivateBillingEntryView && <Route path="/billing" element={renderProtectedElement(<PrivateBillingEntryView />)} />}
                 {hasBillingScopeView ? (
                   <Route
                     path={BILLING_SCOPE_ROUTE}

@@ -153,3 +153,10 @@ test('deriveFacets returns sorted unique types and brands', () => {
   assert.deepEqual(facets.types, ['PETG', 'PLA'])
   assert.deepEqual(facets.brands, ['Bambu', 'Polymaker'])
 })
+
+test('spool tag search composes with material facets', () => {
+  const spools = [makeSpool({ id: 'a', filamentType: 'PLA' }), makeSpool({ id: 'b', filamentType: 'PETG' })]
+  const extra = () => 'Workshop Location'
+  assert.deepEqual(applyFilters(spools, { ...EMPTY_FILTERS, search: 'workshop', types: ['PLA'] }, extra).map((spool) => spool.id), ['a'])
+  assert.equal(applyFilters(spools, { ...EMPTY_FILTERS, search: 'absent' }, extra).length, 0)
+})

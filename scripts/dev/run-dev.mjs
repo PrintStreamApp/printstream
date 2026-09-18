@@ -123,6 +123,7 @@ if (hostMode) {
   if (!teardown) {
     runSync('npm', ['run', 'build', '--workspace', '@printstream/shared'])
     runSync('npm', ['run', 'build', '--workspace', '@printstream/bridge-runtime'])
+    runSync('npm', ['run', 'build', '--workspace', '@printstream/sea-runtime'])
   }
 
   checkoutSlicerSourceFingerprint = slicerSourceFingerprint(repoRoot)
@@ -163,6 +164,7 @@ if (hostMode) {
   }
   runSync('npm', ['run', 'build', '--workspace', '@printstream/shared'])
   runSync('npm', ['run', 'build', '--workspace', '@printstream/bridge-runtime'])
+  runSync('npm', ['run', 'build', '--workspace', '@printstream/sea-runtime'])
 }
 
 let slicerEnv = {}

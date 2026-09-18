@@ -116,6 +116,16 @@ const envSchema = z.object({
    * Empty collapses to the dev default, like unset.
    */
   CLIENT_ORIGIN: trimmedEnv(z.string().default('http://localhost:5173')),
+  /**
+   * Comma-separated SHA-256 signing-certificate fingerprints for Android builds
+   * allowed to use passkeys. These are public certificate identities, not keys.
+   * Include both Play App Signing and direct/upload certificates when both
+   * distribution paths are supported.
+   */
+  ANDROID_APP_CERT_FINGERPRINTS: optionalStringEnv(),
+  /** Server-only service-account file for the Firebase project used by the Android build. */
+  FCM_SERVICE_ACCOUNT_FILE: optionalStringEnv(),
+  FCM_PROJECT_ID: optionalStringEnv(),
   AUTH_LOCAL_EMAIL_CODE_TTL_MINUTES: positiveIntEnv(15),
   /**
    * Create a default workspace on first start when the database has none.
@@ -336,6 +346,7 @@ const envSchema = z.object({
   PUBLIC_SLICING_UPLOAD_TTL_MINUTES: positiveIntEnv(30),
   PUBLIC_SLICING_MAX_RUNTIME_MS: positiveIntEnv(20 * 60 * 1000),
   BRIDGE_RELEASES_DIR: z.string().default('./data/bridge-releases'),
+  NATIVE_UI_RELEASES_DIR: z.string().default('./data/native-ui'),
   // Native (SEA) server builds the live cloud server offers for download. Not
   // documented in the example env files on purpose: it is internal plumbing for
   // the release channel, and a self-hosted server never promotes a build.

@@ -97,3 +97,12 @@ test('per-object overrides permute and keep identity when untouched', () => {
   assert.deepEqual(next['object-1'], { support_interface_filament: '2' })
   assert.equal(next['object-2'], perObject['object-2'])
 })
+
+
+test('replacement positions are resolved against the pre-deletion order', () => {
+  assert.equal(remapFilamentIndexValue('2', 2, 3), '2')
+  assert.equal(remapFilamentIndexValue('3', 3, 1), '1')
+  assert.deepEqual(remapFilamentIndexOverrides({ support_filament: ['2', '3'], support_interface_filament: '0' }, 2, 3), {
+    support_filament: ['2', '2'], support_interface_filament: '0'
+  })
+})

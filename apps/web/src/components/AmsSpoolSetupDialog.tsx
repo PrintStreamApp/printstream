@@ -149,7 +149,7 @@ export function AmsSpoolSetupDialog({ target, onClose }: { target: AmsSpoolSetup
           </FormControl>
           {trayInfoIdx === '' && (
             <FormControl>
-              <FormLabel>Type</FormLabel>
+              <FormLabel>Material type</FormLabel>
               <Select value={type} onChange={(_event, value) => { if (value) setType(value) }}>
                 {FILAMENT_PRESETS.map((preset) => (
                   <Option key={preset.type} value={preset.type}>{preset.type}</Option>

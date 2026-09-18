@@ -26,6 +26,9 @@ services:
       CLIENT_ORIGIN: ${CLIENT_ORIGIN:?client origin is required}
       # The bridge watcher runs on the host, where printer LAN routes are available.
       PRINTSTREAM_DEV_BRIDGE: host
+      # Preserve the tri-state deployment override so the private source tree can exercise the
+      # public self-hosted auth and UI paths with `SELF_HOSTED=true npm run dev`.
+      SELF_HOSTED: ${SELF_HOSTED:-}
       VITE_API_PORT: ${VITE_API_PORT:?vite api port is required}
       VITE_DEV_ALLOWED_HOSTS: ${VITE_DEV_ALLOWED_HOSTS:?allowed hosts are required}
       VITE_DEV_HOST: 0.0.0.0

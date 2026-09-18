@@ -1,7 +1,7 @@
 /**
- * Slot button for the `library.create` extension point.
+ * Shared new-project action for the toolbar and the library model shortcut.
  *
- * Renders a "New 3MF" button in the library toolbar. A new project is backed
+ * Renders a "New 3MF" button, or a menu item when the mobile host requests it. A new project is backed
  * by a hidden, empty 3MF "scaffold" so it opens the SAME full editor (settings,
  * materials, slice) as an existing file, no file-less code path. The scaffold stays
  * out of the library (hidden); the user's real file is created when they Save, and the
@@ -10,9 +10,11 @@
  * Self-contained so the slot renders nothing harmful when the plugin is absent (the
  * host's `<PluginSlot>` already renders nothing in that case). Mounted by the
  * `LibraryView` toolbar with `context={{ folderId, bridgeId, onRequestSlice }}`.
+ * The model shortcut also supplies initialImportFileId, which the host forwards to the
+ * editor for a one-shot import after its empty scene and material have loaded.
  */
 import { useState } from 'react'
-import { Button } from '@mui/joy'
+import { Button, ListItemDecorator, MenuItem } from '@mui/joy'
 import ViewInArRoundedIcon from '@mui/icons-material/ViewInArRounded'
 import { apiFetch } from '../../lib/apiClient'
 import { toast } from '../../lib/toast'
@@ -22,8 +24,11 @@ export function LibraryCreateAction(props: Record<string, unknown>) {
   const bridgeId = typeof props.bridgeId === 'string' ? props.bridgeId : null
   // Host opens the full slice/editor flow on a file; `onDiscard` cleans up the scaffold.
   const onRequestSlice = typeof props.onRequestSlice === 'function'
-    ? (props.onRequestSlice as (file: { id: string; name: string }, opts?: { onDiscard?: () => void }) => void)
+    ? (props.onRequestSlice as (file: { id: string; name: string }, opts?: { onDiscard?: () => void; initialImportFileId?: string }) => void)
     : undefined
+  const initialImportFileId = typeof props.initialImportFileId === 'string' ? props.initialImportFileId : undefined
+  const onAction = typeof props.onAction === 'function' ? props.onAction as () => void : undefined
+  const label = initialImportFileId ? 'Add to new 3MF' : 'New 3MF'
   const [creating, setCreating] = useState(false)
 
   const handleCreate = async () => {
@@ -34,7 +39,9 @@ export function LibraryCreateAction(props: Record<string, unknown>) {
         method: 'POST',
         body: { bridgeId, folderId }
       })
+      onAction?.()
       onRequestSlice(file, {
+        initialImportFileId,
         onDiscard: () => {
           // Best-effort: abandoning a new project should never surface an error to the user, and
           // the server sweeps un-discarded scaffolds anyway (pruneHiddenLibraryFiles). But it must
@@ -52,6 +59,15 @@ export function LibraryCreateAction(props: Record<string, unknown>) {
     }
   }
 
+  if (props.presentation === 'menu-item') {
+    return (
+      <MenuItem disabled={creating} onClick={() => void handleCreate()}>
+        <ListItemDecorator><ViewInArRoundedIcon /></ListItemDecorator>
+        {label}
+      </MenuItem>
+    )
+  }
+
   return (
     <Button
       type="button"
@@ -62,7 +78,7 @@ export function LibraryCreateAction(props: Record<string, unknown>) {
       startDecorator={<ViewInArRoundedIcon />}
       onClick={() => void handleCreate()}
     >
-      New 3MF
+      {label}
     </Button>
   )
 }

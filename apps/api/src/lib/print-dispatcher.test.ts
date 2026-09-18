@@ -595,3 +595,13 @@ test('buildProjectFilePrintCommand omits skip_objects when empty, null, or absen
   assert.equal('skip_objects' in buildProjectFilePrintCommand({ ...base, skipObjects: null }), false)
   assert.equal('skip_objects' in buildProjectFilePrintCommand({ ...base }), false)
 })
+
+test('dispatch recording keeps the live library source separate from its print snapshot', () => {
+  const job = { ...buildDispatchFixture(), fileId: 'shared-snapshot', sourceLibraryFileId: 'original-file' }
+  const dispatcher = printDispatcher as unknown as {
+    buildPendingStartMetadata: (input: typeof job) => { fileId: string; sourceLibraryFileId: string }
+  }
+  const metadata = dispatcher.buildPendingStartMetadata(job)
+  assert.equal(metadata.fileId, 'shared-snapshot')
+  assert.equal(metadata.sourceLibraryFileId, 'original-file')
+})

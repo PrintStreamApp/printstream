@@ -20,13 +20,14 @@
  * precedence: encoded multi-colour match > common name (non-genuine) > Bambu
  * swatch (genuine, material-scoped) > meaningful tray name.
  */
+import type { SlotMaterialIdentity } from './slot-material.js'
 import { commonFilamentColorName, normalizeHexColor } from './filament-color.js'
 import {
   bambuMaterialFromPresetName,
   bambuMaterialFromType,
   bambuSwatchForHex
 } from './bambu-colors.js'
-import { brandFromPresetName, filamentPresetBrandFromId, filamentPresetNameFromId } from './bambu-filament-presets.js'
+import { brandFromPresetName, filamentPresetBrandFromId, filamentPresetNameFromId, filamentProductLineFromPresetName } from './bambu-filament-presets.js'
 import { findBambuEncodedMultiColor, findBambuEncodedMultiColorAlias } from './bambu-encoded-multi-colors.js'
 
 export interface ResolvedFilamentDisplay {
@@ -38,6 +39,7 @@ export interface ResolvedFilamentDisplay {
 
 /** Raw live-tray fields as reported by the printer (AMS slot / external spool). */
 export interface FilamentColorInput {
+  materialIdentity?: SlotMaterialIdentity | null
   color: string | null | undefined
   colors?: readonly string[] | null | undefined
   trayName: string | null | undefined
@@ -63,7 +65,7 @@ export interface ResolvedFilamentIdentity {
   brand: string | null
   /** Filament type as reported ("PLA"); spool field wins over the tray. */
   type: string | null
-  /** Bambu material family ("PLA Basic"), only when the tray's preset id declares it. */
+  /** Product line ("PLA Basic", "PolyLite PETG"); tracked values win over known presets. */
   subtype: string | null
   /** Full preset name ("Bambu PLA Basic"): genuine Bambu only. */
   presetName: string | null
@@ -92,6 +94,14 @@ export function isGenuineBambuTray(input: Pick<FilamentColorInput, 'trayUuid' | 
 }
 
 export function resolveFilamentDisplay(input: FilamentColorInput): ResolvedFilamentDisplay {
+  if (input.materialIdentity) {
+    return {
+      name: input.materialIdentity.colorName ?? commonFilamentColorName(input.color),
+      material: input.materialIdentity.materialSubtype ?? input.materialIdentity.filamentType,
+      colors: normalizePalette(input.colors, input.color),
+      rawTrayCode: null
+    }
+  }
   const trayInfoIdx = input.trayInfoIdx?.trim() ?? ''
   const material = resolveDisplayMaterial(trayInfoIdx, input.filamentType)
   const palette = normalizePalette(input.colors, input.color)
@@ -177,14 +187,14 @@ export function resolveFilamentIdentity(
   const presetName = filamentPresetNameFromId(trayInfoIdx)
   const presetBrand = presetName ? brandFromPresetName(presetName) : null
   const genuineBambu = isGenuineBambuTray(input)
-  const spool = input.spool ?? null
+  const spool: FilamentSpoolIdentityInput | null = input.materialIdentity ?? input.spool ?? null
 
   // Subtype only when the tray's preset id declares it, never inferred from the
   // bare filament type (that inference is what branded custom PLA "PLA Basic").
-  const presetSubtype = presetName ? bambuMaterialFromPresetName(presetName) : null
+  const presetSubtype = presetName ? filamentProductLineFromPresetName(presetName) : null
 
   // Brand: the spool's own brand; else 'Bambu' only when genuine; else a
-  // third-party preset brand the tray itself declares (e.g. PolyLite). A
+  // third-party preset manufacturer the tray itself declares (e.g. Polymaker). A
   // user-assigned Bambu preset id on custom filament yields no brand claim.
   const trayBrand = genuineBambu ? 'Bambu' : (presetBrand && presetBrand !== 'Bambu' && presetBrand !== 'Generic' ? presetBrand : null)
 
@@ -192,9 +202,9 @@ export function resolveFilamentIdentity(
 
   return {
     genuineBambu,
-    brand: spool?.brand ?? trayBrand,
+    brand: input.materialIdentity ? input.materialIdentity.brand : spool?.brand ?? trayBrand,
     type: spool?.filamentType ?? (input.filamentType?.trim() || null),
-    subtype: spool?.materialSubtype ?? presetSubtype,
+    subtype: input.materialIdentity ? input.materialIdentity.materialSubtype : spool?.materialSubtype ?? presetSubtype,
     presetName: genuineBambu ? presetName : null,
     colorHex,
     colors: display.colors,

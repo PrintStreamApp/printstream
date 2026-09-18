@@ -7,6 +7,7 @@ import {
   resolveProjectFilamentColorName
 } from './filament-identity.js'
 import { bambuSwatchForHex } from './bambu-colors.js'
+import { filamentPresetBrandFromId } from './bambu-filament-presets.js'
 
 const GENUINE_PLA_WHITE = {
   color: 'FFFFFFFF',
@@ -62,6 +63,16 @@ test('tracked spool fields override tray derivation', () => {
   assert.equal(identity.brand, "Michael's")
   assert.equal(identity.colorName, 'Bright White')
   assert.equal(filamentIdentityLabel(identity), "Michael's PLA · Bright White")
+})
+
+test('Polymaker product-family presets resolve the manufacturer without overriding tracked identity', () => {
+  for (const trayInfoIdx of ['GFG60', 'GFB60', 'GFL00', 'GFL01', 'GFL50']) {
+    assert.equal(filamentPresetBrandFromId(trayInfoIdx), 'Polymaker')
+    const tray = { ...CUSTOM_PLA_WHITE, trayInfoIdx }
+    assert.equal(resolveFilamentIdentity(tray).brand, 'Polymaker')
+    assert.equal(resolveFilamentIdentity(tray).genuineBambu, false)
+    assert.equal(resolveFilamentIdentity({ ...tray, spool: { brand: 'My own filament' } }).brand, 'My own filament')
+  }
 })
 
 test('isGenuineBambuTray requires an RFID tag and rejects third-party preset ids', () => {

@@ -2,6 +2,7 @@
  * Express application wiring. Keeps middleware and route mounting in one
  * place; route handlers stay thin and delegate to modules under `src/lib`.
  */
+import { tagsRouter } from './routes/tags.js'
 import cors from 'cors'
 import express from 'express'
 import type { NextFunction, Request, Response } from 'express'
@@ -50,6 +51,8 @@ import { createRateLimitMiddleware } from './lib/rate-limit.js'
 import { registerPrivateModules } from './lib/private-modules.js'
 import { isSelfHostedDeployment } from './lib/deployment-mode.js'
 import { installWebApp } from './lib/serve-web.js'
+import { mobileDiscoveryRouter } from './routes/mobile-discovery.js'
+import { androidAssetLinksRouter } from './routes/android-asset-links.js'
 
 installLogCapture()
 
@@ -147,6 +150,11 @@ app.use((_request: Request, response: Response, next: NextFunction) => {
   response.setHeader(cspHeaderName, cspHeaderValue)
   next()
 })
+// The Android shell validates the product and canonical origin before it loads
+// any remote code into its bridge-enabled WebView. Keep this ahead of auth and
+// audit middleware: it is a static-like, account-free discovery document.
+app.use('/.well-known', mobileDiscoveryRouter)
+app.use('/.well-known', androidAssetLinksRouter)
 const skipHealthChecks = (request: Request) => request.originalUrl.startsWith('/api/health')
 app.use('/api', createRateLimitMiddleware({
   name: 'api-preauth',
@@ -219,6 +227,7 @@ app.use('/api/server-backups', serverBackupsRouter)
 app.use('/api/printers', printersRouter)
 app.use('/api/printer-views', printerViewsRouter)
 app.use('/api/library', libraryRouter)
+app.use('/api/tags', tagsRouter)
 app.use('/api/jobs', jobsRouter)
 app.use('/api/print-dispatch', printDispatchRouter)
 app.use('/api/slicing', slicingRouter)

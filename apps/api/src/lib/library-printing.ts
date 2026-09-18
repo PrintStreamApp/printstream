@@ -19,10 +19,14 @@ import { readLibraryThreeMfIndex } from './library-three-mf.js'
 import { printGuards } from './print-guards.js'
 import { assertLibraryPrintCompatibilityForIndex } from './print-filament-compatibility.js'
 import { ensureLibrarySnapshotRecord, type SnapshotLibraryFile } from './print-file-snapshots.js'
+import { captureJobTags, readJobTagSnapshot } from './job-tag-snapshots.js'
 import { visibleLibraryFilesWhere } from './library-visibility.js'
 
 export interface LibraryPrintSource extends SnapshotLibraryFile {
+  sourceTagSnapshotJson?: string | null
   fileId: string
+  /** Explicit lineage for history reprints; undefined uses the dispatched library source. */
+  sourceLibraryFileId?: string | null
   /**
    * Re-slice provenance carried onto the history row (see `DispatchJobState`). Read
    * from the file that is actually dispatched, which is not always the one asked for:
@@ -34,6 +38,7 @@ export interface LibraryPrintSource extends SnapshotLibraryFile {
 }
 
 interface LibraryFilePrintRow extends SnapshotLibraryFile {
+  sourceTagSnapshotJson?: string | null
   fileId?: string
   workspaceId: string
   folderId: string | null
@@ -42,8 +47,15 @@ interface LibraryFilePrintRow extends SnapshotLibraryFile {
   sliceSettingsJson?: string | null
 }
 
-export async function enqueueLibraryPrint(input: PrintFromLibrary, workspaceId: string): Promise<PrintDispatchJob> {
-  return enqueueLibraryPrintSource(input, await resolveLibraryPrintSource(input.fileId, workspaceId))
+/** Dispatch a library file, optionally carrying a history job's original source identity. */
+export async function enqueueLibraryPrint(
+  input: PrintFromLibrary,
+  workspaceId: string,
+  sourceLibraryFileId?: string | null
+): Promise<PrintDispatchJob> {
+  const source = await resolveLibraryPrintSource(input.fileId, workspaceId)
+  if (sourceLibraryFileId !== undefined) source.sourceLibraryFileId = sourceLibraryFileId
+  return enqueueLibraryPrintSource(input, source)
 }
 
 /** Resolve a library file id to a connected print source (preferring a connected duplicate when the
@@ -95,6 +107,7 @@ async function resolveConnectedLibrarySource(file: LibraryFilePrintRow): Promise
 
 function toLibraryPrintSource(file: LibraryFilePrintRow): LibraryPrintSource {
   return {
+    sourceTagSnapshotJson: file.sourceTagSnapshotJson ?? null,
     fileId: file.fileId ?? file.id,
     workspaceId: file.workspaceId,
     name: file.name,
@@ -107,6 +120,12 @@ function toLibraryPrintSource(file: LibraryFilePrintRow): LibraryPrintSource {
     sourceProjectFileId: file.sourceProjectFileId ?? null,
     sliceSettingsJson: file.sliceSettingsJson ?? null
   }
+}
+
+/** A shared snapshot has no unique source; history reprints carry their recorded lineage explicitly. */
+function resolveSourceLibraryFileId(source: LibraryPrintSource): string | null {
+  if (source.sourceLibraryFileId !== undefined) return source.sourceLibraryFileId
+  return source.snapshotKey ? null : source.fileId
 }
 
 export async function enqueueLibraryPrintSource(
@@ -125,6 +144,14 @@ export async function enqueueLibraryPrintSource(
   })
 
   try {
+    const sourceLibraryFileId = resolveSourceLibraryFileId(source)
+    const currentTags = await captureJobTags(prisma, source.workspaceId, {
+      printerId: input.printerId,
+      fileIds: sourceLibraryFileId ? [sourceLibraryFileId] : []
+    })
+    // Keep slice provenance even when the source project or slicing-history row is gone.
+    const sourceTags = readJobTagSnapshot(source.sourceTagSnapshotJson).tags.filter((tag) => tag.entityKind === 'file')
+    const tagSnapshot = [...sourceTags, ...currentTags.filter((tag) => !sourceTags.some((saved) => saved.id === tag.id))]
     const plateName = resolveRequestedPlateName(source.name, index, input.plate)
     const snapshot = await ensureLibrarySnapshotRecord({
       id: source.id,
@@ -142,6 +169,8 @@ export async function enqueueLibraryPrintSource(
       snapshot,
       // From the source, not the snapshot: the snapshot is content-deduped and may be
       // shared with an unrelated print of identical bytes, so it carries no project link.
+      sourceLibraryFileId,
+      tagSnapshot,
       sourceProjectFileId: source.sourceProjectFileId,
       sliceSettingsJson: source.sliceSettingsJson,
       plateName,

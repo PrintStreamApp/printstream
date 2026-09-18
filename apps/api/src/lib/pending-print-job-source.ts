@@ -6,7 +6,7 @@
  * printer manager later observes the real transition and links it back to
  * the same tracked job row.
  */
-import type { PrintStartOptionSelection } from '@printstream/shared'
+import type { PrintStartOptionSelection, JobTagSnapshot } from '@printstream/shared'
 
 export interface PendingPrintJobSource {
   jobKind: 'file' | 'calibration' | 'external'
@@ -17,6 +17,10 @@ export interface PendingPrintJobSource {
   fileName: string | null
   fileSizeBytes: number | null
   sourceKind: '3mf' | 'gcode' | null
+  /** Frozen before dispatch; absent only for starts observed outside the dispatcher. */
+  tagSnapshot?: JobTagSnapshot
+  /** Optional original library identity; history never depends on this live link. */
+  sourceLibraryFileId?: string | null
   /**
    * Re-slice provenance for the printed artifact: the preserved project 3MF it was
    * sliced from and the settings that produced it. Optional because only the library

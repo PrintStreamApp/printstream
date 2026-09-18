@@ -74,8 +74,8 @@ const PROCESS_FACETS: ReadonlyArray<SlicingPresetFacet> = [
 const FILAMENT_FACETS: ReadonlyArray<SlicingPresetFacet> = [
   {
     id: 'filamentType',
-    label: 'Material',
-    placeholder: 'All materials',
+    label: 'Material type',
+    placeholder: 'All material types',
     valuesOf: (profile) => uniqueStrings([profile.filamentType])
   },
   {

@@ -120,7 +120,8 @@ import { LibraryFilePickerDialog } from '../../components/LibraryFilePickerDialo
 import { LibraryDestinationDialog } from '../../components/LibraryDestinationDialog'
 import { formatLibraryFileName, splitLibraryFileNameForRename } from '../../lib/libraryDisplay'
 import { useMobileViewport } from '../../components/useMobileViewport'
-import { createBedModelObject, loadBedModelGeometry, loadBedTexture } from './lib/bedModel'
+import { createBedModelObject } from './lib/bedModel'
+import { useBedAppearance } from './useBedAppearance'
 import { bedSurfaceSignature } from './lib/bedSurfaceSignature'
 import { EditorSettingsDialog } from '../../components/library/EditorSettingsDialog'
 import { SliceSettingsPanel, type SliceSettingsController } from '../../components/library/SliceSettingsPanel'
@@ -181,7 +182,9 @@ import {
   type ViewPreset
 } from './lib/viewCube'
 import { createPlateThumbnailRenderer, type PlateThumbnailRenderer } from './lib/plateThumbnail'
-import { resolveImportFileSelection } from './lib/importFileSelection'
+import { materialThumbnailsChanged, type MaterialThumbnailInputs } from './lib/materialThumbnailInvalidation'
+import { useInitialLibraryImport } from './useInitialLibraryImport'
+import { resolveImportFileSelection, takeSelectedImportFiles } from './lib/importFileSelection'
 import {
   buildSceneEdit,
   buildSessionFilamentIdRemap,
@@ -439,6 +442,8 @@ import {
 } from './lib/sourceColorImport'
 import { paintMapsAfterMeshReplacement } from './lib/meshReplacementPaint'
 import { useEditorHistory } from './useEditorHistory'
+import { remapBaseMaterialPaint, withBaseMaterialReferences, unverifiedSourceMaterialIds, sceneObjectMaterialIds } from './lib/materialReplacement'
+import { FILAMENT_INDEX_PROCESS_KEYS } from '@printstream/shared'
 import { useEditorPaint } from './useEditorPaint'
 import { useEditorSave } from './useEditorSave'
 import type { EditorContentBasePin } from './lib/contentBasePin'
@@ -448,20 +453,16 @@ import { getMeasurement,
 import { isCircleCentrePick, sameMeasureFeature } from './lib/measureFeatures'
 import { useEditorScene, type MeasurePick } from './useEditorScene'
 
-/**
- * The 1-based filament ids referenced as support material by a process-override map
- * (`support_filament` / `support_interface_filament`). `'0'` / non-positive means "use the
- * default", i.e. no specific material, those are ignored. Used to count support materials as
- * "in use" for the material remove-guard.
- */
-function supportFilamentRefs(overrides: Record<string, string | string[]> | undefined): number[] {
+/** Read positive material positions from process settings; zero means the object's default. */
+function filamentSettingRefs(overrides: Record<string, string | string[]> | undefined, keys: readonly string[] = FILAMENT_INDEX_PROCESS_KEYS): number[] {
   if (!overrides) return []
   const ids: number[] = []
-  for (const key of ['support_filament', 'support_interface_filament']) {
+  for (const key of keys) {
     const raw = overrides[key]
-    const value = Array.isArray(raw) ? raw[0] : raw
-    const id = value != null ? Number.parseInt(value, 10) : Number.NaN
-    if (Number.isInteger(id) && id > 0) ids.push(id)
+    for (const value of Array.isArray(raw) ? raw : [raw]) {
+      const id = value != null ? Number.parseInt(value, 10) : Number.NaN
+      if (Number.isInteger(id) && id > 0) ids.push(id)
+    }
   }
   return ids
 }
@@ -664,6 +665,8 @@ interface EditorViewProps {
   currentEdit?: SceneEdit | null
   /** Plate to open on (1-based); the editor still loads and shows every plate. */
   initialPlateIndex?: number
+  /** Library model to import once into a newly created project after its scene is ready. */
+  initialImportFileId?: string
   /** Target printer model selected in the slice dialog; overrides the bed + zones. */
   targetPrinterModel?: string
   /**
@@ -983,6 +986,7 @@ function EditorView({
   isNewProject: isNewProjectScaffold = false,
   baseVersionId = null,
   initialPlateIndex,
+  initialImportFileId,
   targetPrinterModel,
   bedModelPath,
   flushDataPath,
@@ -1192,7 +1196,8 @@ function EditorView({
     for (const channel of TRIANGLE_PAINT_CHANNELS) {
       const spec = PAINT_CHANNEL_SPECS[channel]
       const sessionCodes = stateRef.current?.[spec.stateKey]?.[paintKey]
-      const codes = sessionCodes ?? getGeometryTrianglePaint(mesh.geometry, channel)
+      const baseCodes = getGeometryTrianglePaint(mesh.geometry, channel)
+      const codes = sessionCodes ?? (channel === 'color' ? remapBaseMaterialPaint(stateRef.current, baseCodes) : baseCodes)
       if (!codes || Object.keys(codes).length === 0) continue
       const overlay = buildTrianglePaintOverlay(mesh.geometry, codes, {
         palette: spec.palette,
@@ -1254,17 +1259,9 @@ function EditorView({
     staleTime: Infinity
   })
 
-  // BambuStudio parity: a project must have a material, and a material in use can't be removed.
-  // `usedFilamentIds` is the live set of materials referenced by any object/part, layer filament
-  // change, colour paint, OR support setting (across every plate); `hasMaterials` whether the
-  // project has any material at all. Support materials count even though no geometry references
-  // them directly: the baked `support_filament`/`support_interface_filament` (from the loaded
-  // index) plus any live session override of those settings. We track the OBJECT side and the
-  // SUPPORT side separately so the remove-blocked copy can be accurate: `supportOnlyFilamentIds`
-  // is the materials used ONLY for supports (no object/part/layer/paint reference), which earn the
-  // "used for supports" wording rather than "used by an object". Both are derived through a stable
-  // string key so they only change identity when the materials actually in use change, not on
-  // every drag, so they can gate the memoized settings-panel controller.
+  // Live geometry, paint and process usage determines whether deletion needs a replacement.
+  // Stable keys keep the memoized settings controller unchanged during unrelated scene drags.
+  // Settings-only usage remains distinct for the materials summary, but also requires confirmation.
   const bakedSupportFilamentIds = platesQuery.data?.supportFilamentIds
   const sessionSupportOverrides = sliceConfig?.perObjectSettings
   // Paint mutates `EditorState` IN PLACE (a clone per pointer-move would be brutal), so the state
@@ -1276,7 +1273,7 @@ function EditorView({
   const paintCommittedRef = useRef<(() => void) | null>(null)
   paintCommittedRef.current = () => setPaintRevision((revision) => revision + 1)
   const usageKey = useMemo(() => {
-    const objectIds = new Set<number>()
+    const objectIds = sceneObjectMaterialIds(state, sliceConfig?.projectFilaments.map((filament) => filament.projectFilamentId) ?? [])
     const supportIds = new Set<number>()
     for (const plate of state?.plates ?? []) {
       for (const instance of plate.instances) {
@@ -1285,6 +1282,22 @@ function EditorView({
       }
       // Layer-based filament changes reference materials too.
       for (const change of effectiveFilamentChanges(plate)) objectIds.add(change.filamentId)
+    }
+    for (const parts of Object.values(state?.addedParts ?? {})) {
+      for (const part of parts) if (part.filamentId != null) objectIds.add(part.filamentId)
+    }
+    const settingMaps = [
+      ...Object.values(state?.partProcessOverrides ?? {}),
+      ...Object.values(state?.addedParts ?? {}).flatMap((parts) => parts.flatMap((part) => part.settings ? [part.settings] : [])),
+      ...Object.values(state?.heightRanges ?? {}).flatMap((ranges) => ranges.map((range) => range.settings)),
+      ...(state?.plates ?? []).flatMap((plate) => plate.instances.flatMap((instance) =>
+        (instance.heightRanges ?? []).map((range) => range.settings)))
+    ]
+    for (const settings of settingMaps) {
+      for (const position of [...filamentSettingRefs(settings), Number(settings.extruder ?? 0)]) {
+        const id = sliceConfig?.projectFilaments[position - 1]?.projectFilamentId
+        if (id != null) objectIds.add(id)
+      }
     }
     // Colour-painted triangles reference materials through their paint codes. Walk the whole split
     // TREE, not just whole-triangle codes: a brush dab splits triangles, so a partially painted
@@ -1296,25 +1309,31 @@ function EditorView({
     }
     // Support materials: baked project support (from the loaded 3MF) plus any in-session override
     // of the support_filament / support_interface_filament settings (global or per-object).
-    for (const id of bakedSupportFilamentIds ?? []) supportIds.add(id)
+    for (const id of bakedSupportFilamentIds ?? []) supportIds.add(state?.baseFilamentIds?.[id] ?? id)
     if (sessionSupportOverrides) {
-      for (const id of supportFilamentRefs(sessionSupportOverrides.globalOverrides)) supportIds.add(id)
-      for (const overrides of Object.values(sessionSupportOverrides.value)) {
-        for (const id of supportFilamentRefs(overrides)) supportIds.add(id)
+      const supportKeys = ['support_filament', 'support_interface_filament']
+      const otherKeys = FILAMENT_INDEX_PROCESS_KEYS.filter((key) => !supportKeys.includes(key))
+      const overrides = [sessionSupportOverrides.globalOverrides, ...Object.values(sessionSupportOverrides.value)]
+      for (const settings of overrides) {
+        for (const position of filamentSettingRefs(settings, supportKeys)) {
+          const id = sliceConfig?.projectFilaments[position - 1]?.projectFilamentId
+          if (id != null) supportIds.add(id)
+        }
+        for (const position of filamentSettingRefs(settings, otherKeys)) {
+          const id = sliceConfig?.projectFilaments[position - 1]?.projectFilamentId
+          if (id != null) objectIds.add(id)
+        }
       }
     }
-    // PROMOTE a support reference to genuine usage when the baked index attributes it to a plate.
-    // The index only does that for an object carrying its OWN `enable_support` opt-in (see
-    // `parseModelSettingsObjectFilamentIds`), which is the case the project-wide toggle hides: a
-    // process with support DISABLED but a support-interface material set, plus per-object overrides
-    // turning support on, really does print in that material, so it must not read as "referenced
-    // only by a setting" and be freely removable. A support material no plate attributes stays
-    // support-only (removable, BambuStudio drops the setting to Default). Deliberately conservative:
-    // the attribution comes from the baked file, so turning those overrides off in-session keeps the
-    // material blocked until reopen rather than risking a silent print change.
+    // A sliced index contributes known usage, but cannot prove an unlisted material unused:
+    // unsliced paint and skipped objects are covered separately by unverifiedFilamentIds.
     const bakedPlateFilamentIds = new Set<number>()
     for (const plate of platesQuery.data?.plates ?? []) {
-      for (const filament of plate.filaments) bakedPlateFilamentIds.add(filament.id)
+      for (const filament of plate.filaments) {
+        const id = state?.baseFilamentIds?.[filament.id] ?? filament.id
+        bakedPlateFilamentIds.add(id)
+        objectIds.add(id)
+      }
     }
     for (const id of supportIds) {
       if (bakedPlateFilamentIds.has(id)) objectIds.add(id)
@@ -1324,7 +1343,7 @@ function EditorView({
     // `paintRevision` is an INVALIDATION KEY, not a value this body reads: paint mutates the state
     // object in place, so its identity cannot signal a stroke (see the revision's declaration).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state, paintRevision, bakedSupportFilamentIds, sessionSupportOverrides, platesQuery.data])
+  }, [state, paintRevision, bakedSupportFilamentIds, sessionSupportOverrides, platesQuery.data, sliceConfig?.projectFilaments])
   const { usedFilamentIds, supportOnlyFilamentIds } = useMemo(() => {
     const [objectStr = '', supportStr = ''] = usageKey.split('|')
     const objectIds = new Set(objectStr ? objectStr.split(',').map(Number) : [])
@@ -1334,6 +1353,11 @@ function EditorView({
       supportOnlyFilamentIds: new Set<number>([...supportIds].filter((id) => !objectIds.has(id)))
     }
   }, [usageKey])
+  const unverifiedFilamentIds = useMemo(() => unverifiedSourceMaterialIds(
+    hasNoBaseFile ? [] : platesQuery.data?.projectFilaments.map((filament) => filament.id),
+    state?.baseFilamentIds,
+    sliceConfig?.projectFilaments.map((filament) => filament.projectFilamentId) ?? []
+  ), [hasNoBaseFile, platesQuery.data, state?.baseFilamentIds, sliceConfig?.projectFilaments])
   const hasMaterials = materials.options.length > 0
 
   // Flips true once the Three.js scene/plate root exist, so the plate-build effect
@@ -1351,8 +1375,14 @@ function EditorView({
   // below the viewport regardless). Read-only here: the workspace default and this device's
   // override are both edited in the editor settings dialog.
   const sidebarSide = useEffectiveSidebarSide()
-  const [bedModelGeometry, setBedModelGeometry] = useState<THREE.BufferGeometry | null>(null)
-  const [bedTexture, setBedTexture] = useState<THREE.Texture | null>(null)
+  const { geometry: bedModelGeometry, texture: bedTexture } = useBedAppearance({
+    enabled: showBedModel,
+    printerModel: targetPrinterModel,
+    slicerTargetId: sliceConfig?.selectedSlicerTargetId ?? null,
+    machineProfileId: sliceConfig?.selectedMachineProfile?.id ?? null,
+    updatedAt: sliceConfig?.selectedMachineProfile?.updatedAt,
+    basePath: bedModelPath
+  })
   const [editorSettingsOpen, setEditorSettingsOpen] = useState(false)
   // The preset manager is its own dialog, supplied by the host and reached from the sidebar's
   // "Manage" action; the gear opens editor settings. Deliberately no path from one to the other:
@@ -1510,55 +1540,6 @@ function EditorView({
     if (gizmoMode !== 'measure') setMeasurePoints([])
   }, [gizmoMode])
 
-  // Fetch the printer's 3D plate mesh only while the option is on. A printer with no bundled
-  // bed simply resolves null and the grid stays: see lib/bedModel.ts.
-  //
-  // Each cached geometry is released when it is replaced: switching printer model refetches, and
-  // without this every switch leaked a bed geometry (CPU arrays plus its GPU upload). Disposing
-  // the CACHED original is safe because the rendered beds are clones of it, so a live plate is
-  // never pulled out from under the scene.
-  useEffect(() => {
-    const replaceGeometry = (next: THREE.BufferGeometry | null) => {
-      setBedModelGeometry((previous) => {
-        if (previous && previous !== next) previous.dispose()
-        return next
-      })
-    }
-    const replaceTexture = (next: THREE.Texture | null) => {
-      setBedTexture((previous) => {
-        if (previous && previous !== next) previous.dispose()
-        return next
-      })
-    }
-    if (!showBedModel || !targetPrinterModel) {
-      replaceGeometry(null)
-      replaceTexture(null)
-      return undefined
-    }
-    const controller = new AbortController()
-    const machineProfileId = sliceConfig?.selectedMachineProfile?.id ?? null
-    void Promise.all([
-      loadBedModelGeometry({
-        printerModel: targetPrinterModel,
-        slicerTargetId: sliceConfig?.selectedSlicerTargetId ?? null,
-        machineProfileId,
-        basePath: bedModelPath,
-        signal: controller.signal
-      }),
-      bedModelPath ? Promise.resolve(null) : loadBedTexture({ machineProfileId, signal: controller.signal })
-    ]).then(([geometry, texture]) => {
-      // A switch that lands after these fetches resolved must not strand the resources produced.
-      if (controller.signal.aborted) {
-        geometry?.dispose()
-        texture?.dispose()
-      } else {
-        replaceGeometry(geometry)
-        replaceTexture(texture)
-      }
-    })
-    return () => controller.abort()
-  }, [showBedModel, targetPrinterModel, sliceConfig?.selectedSlicerTargetId,
-    sliceConfig?.selectedMachineProfile?.id, sliceConfig?.selectedMachineProfile?.updatedAt, bedModelPath])
   useEffect(() => {
     setMeasurePoints([])
   }, [activePlateIndex])
@@ -1949,6 +1930,7 @@ function EditorView({
     setRebuildToken,
     sliceConfig,
     usedFilamentIds,
+    unverifiedFilamentIds,
     supportOnlyFilamentIds,
     // A scaffold has no machine of its own, so its SEEDED target is unsaved work from the start
     // (no baseline is captured until the first save): see the retarget-signature block.
@@ -3894,20 +3876,21 @@ function EditorView({
       bedModel,
       bedTexture: customBedTexture
     })
-    if (incremental) {
-      const existingBed = plateRoot.children.find((child) => child.userData?.isBedSurface)
-      if (!existingBed || existingBed.userData.bedSignature !== bedSignature) {
-        if (existingBed) {
-          disposeObject3D(existingBed)
-          plateRoot.remove(existingBed)
-        }
-        // Show the destination plate's empty bed straight away; models append onto it as they build.
-        const liveBed = createPreviewPlateSurface({ width: bedWidth, depth: bedDepth, centerX: bedCenterX, centerY: bedCenterY, excludeAreas: activePlate.bed.excludeAreas, showSurfaceFill: !hasBedAppearance, axisLabelEdge: hasBedAppearance ? 'rear' : 'front' })
-        liveBed.userData.isBedSurface = true
-        liveBed.userData.bedSignature = bedSignature
-        if (hasBedAppearance) liveBed.add(createBedModelObject({ geometry: bedModel, texture: customBedTexture, originX: bedCenterX - bedWidth / 2, originY: bedCenterY - bedDepth / 2, width: bedWidth, depth: bedDepth }))
-        plateRoot.add(liveBed)
+    // Bed updates are cheap and independent of the object rebuild. Replace the visible bed
+    // immediately even when models are rebuilding off-screen, or the old printer's mesh stays
+    // visible until every object finishes loading.
+    const existingBed = plateRoot.children.find((child) => child.userData?.isBedSurface)
+    if (!existingBed || existingBed.userData.bedSignature !== bedSignature) {
+      if (existingBed) {
+        disposeObject3D(existingBed)
+        plateRoot.remove(existingBed)
       }
+      // Show the destination plate's empty bed straight away; models append onto it as they build.
+      const liveBed = createPreviewPlateSurface({ width: bedWidth, depth: bedDepth, centerX: bedCenterX, centerY: bedCenterY, excludeAreas: activePlate.bed.excludeAreas, showSurfaceFill: !hasBedAppearance, axisLabelEdge: hasBedAppearance ? 'rear' : 'front' })
+      liveBed.userData.isBedSurface = true
+      liveBed.userData.bedSignature = bedSignature
+      if (hasBedAppearance) liveBed.add(createBedModelObject({ geometry: bedModel, texture: customBedTexture, originX: bedCenterX - bedWidth / 2, originY: bedCenterY - bedDepth / 2, width: bedWidth, depth: bedDepth }))
+      plateRoot.add(liveBed)
     }
 
     void (async () => {
@@ -4619,12 +4602,13 @@ function EditorView({
           if (options?.updateLive !== false) setPlateThumbnails((existing) => ({ ...existing, [plate.plateId]: url }))
           const png = url.replace(/^data:image\/png;base64,/, '')
           if (png.length > 0) out.push({ plateIndex: plate.index, png })
-        } catch {
+        } catch (error) {
           // A deliberate save/slice cancellation stops the whole capture. Rendering failures stay
           // best-effort per plate, but treating AbortError as one would leave the expensive loop
           // running after the dialog had closed.
           options?.signal?.throwIfAborted()
           // Best-effort per plate; a failed plate just keeps its previous thumbnail.
+          console.warn('[editor] plate thumbnail capture failed', { plateId: plate.plateId, error })
         } finally {
           disposeObject3D(group)
         }
@@ -4634,25 +4618,15 @@ function EditorView({
     [buildInstanceGroup, getThumbnailRenderer]
   )
 
-  /**
-   * Watch the live filament colours and invalidate the embedded thumbnails a recolour makes wrong.
-   *
-   * Keyed on the COLOUR MAP rather than `materialSyncToken` deliberately: that token is also
-   * bumped at the end of every plate build to reconcile part colours, so marking from it invalidated
-   * every unopened plate on OPEN and dragged the whole project's geometry into the background,
-   * exactly the up-front build cost the plate strip exists to avoid. A colour map that changed
-   * VALUES is the narrow signal; first population is a seed, not a change.
-   */
-  const previousFilamentColorsRef = useRef<Record<number, string> | null>(null)
+  // Watch material values and base-reference replacements, not build tokens: opening a plate
+  // must not eagerly render every other plate. Replacements can change paint and assignments
+  // without changing any surviving swatch, and history can restore the map without a deletion.
+  const previousThumbnailMaterialsRef = useRef<MaterialThumbnailInputs | null>(null)
   useEffect(() => {
-    const previous = previousFilamentColorsRef.current
-    previousFilamentColorsRef.current = filamentColors
-    if (!previous) return
-    const recoloured = Object.entries(filamentColors).some(([id, color]) => {
-      const before = previous[Number(id)]
-      return before !== undefined && before !== color
-    })
-    if (!recoloured) return
+    const next = { colors: filamentColors, baseIds: state?.baseFilamentIds }
+    const previous = previousThumbnailMaterialsRef.current
+    previousThumbnailMaterialsRef.current = next
+    if (!materialThumbnailsChanged(previous, next)) return
     const current = stateRef.current
     if (!current) return
     // EVERY plate but the active one, whichever source it is showing. Filtering to plates without a
@@ -4668,15 +4642,14 @@ function EditorView({
       return next
     })
     setStaleEmbeddedPlates(new Set(affected))
-  }, [filamentColors, stateRef, activePlateIndex])
+  }, [filamentColors, state?.baseFilamentIds, stateRef, activePlateIndex])
 
   /**
-   * Re-render the plates whose embedded thumbnail a recolour invalidated, ONE per pass, so a
+   * Re-render the plates whose embedded thumbnail a material edit invalidated, ONE per pass, so a
    * multi-plate project refreshes progressively instead of blocking on the whole set.
    *
    * This is the deliberate exception to the "never build a non-active plate in the background"
-   * rule below: it runs only after a material was actually recoloured, only for plates the user
-   * has not opened, and it is bounded by that set draining. It also costs far less than it used
+   * rule below: it runs only after a material was changed, only for inactive plates, and it is bounded by that set draining. It also costs far less than it used
    * to: the project's meshes come from the archive already inflated in the tab, so building a
    * plate is local work rather than a per-entry fetch.
    */
@@ -4687,9 +4660,13 @@ function EditorView({
     const current = stateRef.current
     if (!current) return
     let cancelled = false
+    const controller = new AbortController()
     void (async () => {
       try {
-        await captureAllPlateThumbnails(current, { force: true, only: new Set([next]) })
+        await captureAllPlateThumbnails(current, { force: true, only: new Set([next]), signal: controller.signal })
+      } catch (error) {
+        // A newer material edit cancels this capture before it can publish an outdated image.
+        if (!controller.signal.aborted) console.warn('[editor] material thumbnail refresh failed', error)
       } finally {
         // Drop it either way: a plate that failed to render must not wedge the queue behind it,
         // and it simply keeps showing the loading tile.
@@ -4700,7 +4677,10 @@ function EditorView({
         })
       }
     })()
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+      controller.abort()
+    }
   }, [staleEmbeddedPlates, captureAllPlateThumbnails, stateRef])
 
   // Non-active plates no longer render in the background to fill the plate strip, that made
@@ -7037,6 +7017,13 @@ function EditorView({
       setImporting(false)
     }
   }, [addOrMapStagedImport, importStore])
+
+  useInitialLibraryImport({
+    fileId: isNewProjectScaffold ? initialImportFileId : undefined,
+    ready: state !== null && sceneReady && !viewportBuilding
+      && (sliceConfig?.projectFilaments.length ?? 0) > 0,
+    importFromLibrary: handleImportFromLibrary
+  })
 
   const handleImportFile = useCallback(async (file: File, companionFiles: readonly File[] = []) => {
     setImporting(true)
@@ -9809,6 +9796,18 @@ function EditorView({
     // Annotated, not inferred: the literal above narrows `plateType` to `string | null`, and under
     // `exactOptionalPropertyTypes` the rebase's `SceneEdit` return then will not assign back into it.
     let withFilaments: SceneEdit = sliceConfig?.desiredFilaments ? { ...withPlateType, filaments: sliceConfig.desiredFilaments } : withPlateType
+    // Base bytes remain pinned across saves. Reconstruct their reference aliases from scene
+    // history, whose values follow live renumbering, rather than from the latest saved index.
+    if (withFilaments.filaments) {
+      withFilaments = {
+        ...withFilaments,
+        filaments: withBaseMaterialReferences(
+          withFilaments.filaments,
+          sliceConfig?.projectFilaments.map((filament) => filament.projectFilamentId) ?? [],
+          current.baseFilamentIds
+        )
+      }
+    }
     // The desired list bakes as slots 1..N, so a session that removed/reordered materials
     // renumbers every filament id: translate the edit's SESSION ids to match, or the bake writes
     // stale ids into the file (a part `extruder="2"` in a 1-filament project). No-op (null remap)
@@ -11482,9 +11481,8 @@ function EditorView({
           multiple
           hidden
           onChange={(event) => {
-            const files = event.target.files
-            event.target.value = ''
-            if (!files?.length) return
+            const files = takeSelectedImportFiles(event.target)
+            if (files.length === 0) return
             const request = modelRequest
             setModelRequest(null)
             let selection

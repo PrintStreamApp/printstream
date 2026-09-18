@@ -1,5 +1,5 @@
 /**
- * Calibration page: start pressure-advance / flow-ratio calibrations, track each
+ * Calibration page: start filament and motion calibrations, track each
  * run through slicing → printing → result entry, and manage the saved values that
  * are reused when matching filament is loaded. Runs poll while any is still
  * working (the slice queue emits no WS event).
@@ -9,11 +9,11 @@ import { Box, Button, Card, Chip, IconButton, Sheet, Stack, Table, Typography } 
 import ScienceRoundedIcon from '@mui/icons-material/ScienceRounded'
 import AddRoundedIcon from '@mui/icons-material/AddRounded'
 import DeleteRoundedIcon from '@mui/icons-material/DeleteRounded'
+import EditRoundedIcon from '@mui/icons-material/EditRounded'
 import TuneRoundedIcon from '@mui/icons-material/TuneRounded'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import type { CalibrationRun, Printer } from '@printstream/shared'
+import { isAutomaticPressureAdvance, type CalibrationResult, type CalibrationRun, type Printer } from '@printstream/shared'
 import { apiFetch } from '../../lib/apiClient'
-import { toast } from '../../lib/toast'
 import { EmptyState } from '../../components/EmptyState'
 import { PageSectionHeading, pageSectionStackSpacing } from '../../components/dashboard/PageSectionHeading'
 import {
@@ -22,13 +22,15 @@ import {
   deleteCalibrationRun,
   fetchCalibrationResults,
   fetchCalibrationRuns,
-  isCalibrationRunActive,
-  printCalibrationRun
+  isCalibrationRunActive
 } from './api'
 import { NewCalibrationDialog } from './NewCalibrationDialog'
-import { CalibrationResultDialog } from './CalibrationResultDialog'
-import { runTitle } from './runPresentation'
+import { CalibrationResultDialog, type CalibrationIdentitySuggestions } from './CalibrationResultDialog'
+import { CalibrationSlicePrintModal } from './CalibrationSlicePrintModal'
+import { calibrationKindLabel, calibrationValueLabel, calibrationPrinterTargetLabel, runTitle } from './runPresentation'
 import { suppressJobToast } from '../../lib/dialogToastSuppression'
+import { PluginSlot } from '../../plugin/PluginSlot'
+import { SavedCalibrationDirectory } from './SavedCalibrationDirectory'
 
 const STATUS_LABELS: Record<CalibrationRun['status'], { label: string; color: 'neutral' | 'primary' | 'success' | 'warning' | 'danger' }> = {
   slicing: { label: 'Slicing', color: 'primary' },
@@ -49,15 +51,43 @@ const NEXT_STEP: Record<CalibrationRun['status'], string | null> = {
   failed: null
 }
 
+/** Known filament values from earlier runs/results, offered without preventing a new value. */
+function buildIdentitySuggestions(
+  runs: CalibrationRun[],
+  results: CalibrationResult[]
+): CalibrationIdentitySuggestions {
+  const sources = [...runs, ...results]
+  const values = (field: keyof CalibrationIdentitySuggestions) => [...new Set(sources
+    .map((source) => source[field]?.trim())
+    .filter((value): value is string => Boolean(value)))]
+    .sort((left, right) => left.localeCompare(right, undefined, { sensitivity: 'base' }))
+
+  return {
+    brand: values('brand'),
+    filamentType: values('filamentType'),
+    materialSubtype: sources.flatMap((source) => source.materialSubtype?.trim()
+      ? [{ filamentType: source.filamentType, label: source.materialSubtype.trim() }]
+      : []),
+    colorName: values('colorName')
+  }
+}
+
 export function CalibrationView() {
   const queryClient = useQueryClient()
   const [showNew, setShowNew] = useState(false)
+  const [showManual, setShowManual] = useState(false)
+  const [editingResult, setEditingResult] = useState<CalibrationResult | null>(null)
+  const closeSavedValueDialog = useCallback(() => setEditingResult(null), [])
+  const editingResults = useMemo(() => editingResult ? [editingResult] : [], [editingResult])
+  const closeManualDialog = useCallback(() => setShowManual(false), [])
   const [resultRun, setResultRun] = useState<CalibrationRun | null>(null)
+  const [readyRun, setReadyRun] = useState<CalibrationRun | null>(null)
   // Stable across the parent's frequent re-renders (printer-status ticks) so the
   // memoized dialogs don't re-render, otherwise a fresh inline `onClose` each
   // render defeats React.memo and thrashes their dropdowns.
   const closeNewDialog = useCallback(() => setShowNew(false), [])
   const closeResultDialog = useCallback(() => setResultRun(null), [])
+  const closeReadyRun = useCallback(() => setReadyRun(null), [])
 
   // Shares the `['printers']` cache key with the rest of the app, which stores the
   // full `{ printers }` response: read `.printers`, never treat data as the array.
@@ -78,9 +108,14 @@ export function CalibrationView() {
   })
   const resultsQuery = useQuery({ queryKey: calibrationKeys.results, queryFn: ({ signal }) => fetchCalibrationResults(signal) })
 
-  const runs = runsQuery.data ?? []
-  const results = resultsQuery.data ?? []
+  const runs = useMemo(() => runsQuery.data ?? [], [runsQuery.data])
+  const results = useMemo(() => resultsQuery.data ?? [], [resultsQuery.data])
+  const unfinishedRuns = useMemo(() => runs.filter((run) => run.status !== 'saved'), [runs])
   const printers = useMemo(() => printersQuery.data?.printers ?? [], [printersQuery.data])
+  const identitySuggestions = useMemo(
+    () => buildIdentitySuggestions(runs, results),
+    [runs, results]
+  )
 
   // This page shows each run's slice progress inline (status chip + next-step line), so the global
   // slicing toast for a calibration run is redundant: suppress it while its slice is in flight.
@@ -92,12 +127,6 @@ export function CalibrationView() {
 
   const invalidateRuns = () => queryClient.invalidateQueries({ queryKey: calibrationKeys.runs })
 
-  // Errors are surfaced once by the global mutation error handler (main.tsx); do not add a local
-  // onError toast here or the message shows twice.
-  const printRun = useMutation({
-    mutationFn: (runId: string) => printCalibrationRun(runId),
-    onSuccess: () => { void invalidateRuns(); toast.success('Calibration print dispatched') }
-  })
   const removeRun = useMutation({
     mutationFn: (runId: string) => deleteCalibrationRun(runId),
     onSuccess: () => void invalidateRuns()
@@ -121,42 +150,45 @@ export function CalibrationView() {
           icon={<ScienceRoundedIcon />}
           title="Runs"
           description="Calibration prints working through slicing, printing, and result entry."
-          count={runs.length}
+          count={unfinishedRuns.length}
         />
-        {runs.length === 0 ? (
+        {unfinishedRuns.length === 0 ? (
           <Sheet variant="soft" sx={{ borderRadius: 'md', p: 2 }}>
-            <EmptyState icon={<ScienceRoundedIcon />} title="No calibrations yet" description="Print a pressure-advance tower or flow-ratio plate, then enter the result to save it." action={<Button size="sm" startDecorator={<AddRoundedIcon />} onClick={() => setShowNew(true)} disabled={printers.length === 0}>New calibration</Button>} />
+            <EmptyState icon={<ScienceRoundedIcon />} title="No unfinished calibrations" description="Start a calibration to print a test. Completed results are in Saved values below." action={<Button size="sm" startDecorator={<AddRoundedIcon />} onClick={() => setShowNew(true)} disabled={printers.length === 0}>New calibration</Button>} />
           </Sheet>
         ) : (
         <Stack spacing={1}>
-          {runs.map((run) => {
+          {unfinishedRuns.map((run) => {
             const badge = STATUS_LABELS[run.status]
+            const automatic = isAutomaticPressureAdvance(run.parameters)
+            const nextStep = automatic && run.status === 'printing'
+              ? 'The printer is measuring pressure advance with Micro Lidar.'
+              : automatic && run.status === 'awaitingResult'
+                ? 'Review the measured value and choose where it applies.'
+                : NEXT_STEP[run.status]
             return (
               <Card key={run.id} variant="outlined" orientation="horizontal" sx={{ alignItems: 'center', gap: 1.5 }}>
                 <Box sx={{ flex: 1, minWidth: 0 }}>
                   <Typography level="title-sm">{runTitle(run)}</Typography>
                   <Typography level="body-xs" textColor="text.tertiary">
                     {printerName.get(run.printerId ?? '') ?? 'Printer'} · {run.printerModel} · {run.nozzleDiameter} mm
-                    {run.resultValue != null ? ` · ${run.parameters.kind === 'flowRatio' ? `flow ${run.resultValue.toFixed(3)}` : `K ${run.resultValue.toFixed(4)}`}` : ''}
+                    {run.resultValue != null ? ` · ${calibrationValueLabel(run.kind, run.resultValue)}` : ''}
                   </Typography>
                   {run.errorMessage ? <Typography level="body-xs" color="danger">{run.errorMessage}</Typography> : null}
-                  {!run.errorMessage && NEXT_STEP[run.status] ? (
-                    <Typography level="body-xs" textColor="text.secondary" sx={{ mt: 0.25 }}>{NEXT_STEP[run.status]}</Typography>
+                  {!run.errorMessage && nextStep ? (
+                    <Typography level="body-xs" textColor="text.secondary" sx={{ mt: 0.25 }}>{nextStep}</Typography>
                   ) : null}
                 </Box>
                 <Chip size="sm" variant="soft" color={badge.color}>{badge.label}</Chip>
-                {run.status === 'readyToPrint' ? <Button size="sm" onClick={() => printRun.mutate(run.id)} loading={printRun.isPending}>Print</Button> : null}
-                {/* A saved run stays editable: the dialog resubmits the on-screen measurement and
-                    the result store upserts (re-applying to the printer), so a mis-entered
-                    measurement can be corrected without reprinting the test. */}
-                {run.status === 'awaitingResult' || run.status === 'saved' ? (
+                {run.status === 'readyToPrint' ? <Button size="sm" onClick={() => setReadyRun(run)}>Print</Button> : null}
+                {run.status === 'awaitingResult' ? (
                   <Button
                     size="sm"
-                    variant={run.status === 'saved' && run.resultValue != null ? 'outlined' : 'solid'}
-                    color={run.status === 'saved' && run.resultValue != null ? 'neutral' : 'primary'}
+                    variant="solid"
+                    color="primary"
                     onClick={() => setResultRun(run)}
                   >
-                    {run.status === 'saved' && run.resultValue != null ? 'Edit result' : 'Enter result'}
+                    {automatic ? 'Save result' : 'Enter result'}
                   </Button>
                 ) : null}
                 <IconButton size="sm" variant="plain" color="danger" aria-label="Delete run" onClick={() => removeRun.mutate(run.id)}><DeleteRoundedIcon /></IconButton>
@@ -171,12 +203,12 @@ export function CalibrationView() {
         <PageSectionHeading
           icon={<TuneRoundedIcon />}
           title="Saved values"
-          description="Applied automatically when matching filament is loaded."
+          actions={<Button size="sm" startDecorator={<AddRoundedIcon />} onClick={() => setShowManual(true)}>Add saved value</Button>}
+          description="Applied automatically when matching filament is loaded. Values saved for one spool are used first."
           count={results.length}
         />
-        {results.length === 0 ? (
-          <Typography level="body-sm" textColor="text.tertiary">Nothing saved yet. Enter the result on a run to save it.</Typography>
-        ) : (
+        <SavedCalibrationDirectory results={results} runs={runs} printers={printers}>
+          {(pageResults) => (
           <Sheet variant="outlined" sx={{ borderRadius: 'sm', overflow: 'auto' }}>
             <Table size="sm" borderAxis="xBetween" hoverRow>
               <thead>
@@ -186,23 +218,64 @@ export function CalibrationView() {
                 <tr><th>Test</th><th>Value</th><th>Applies to</th><th>Printer</th><th aria-label="Actions" style={{ width: 64 }} /></tr>
               </thead>
               <tbody>
-                {results.map((result) => (
+                {pageResults.map((result) => (
                   <tr key={result.id}>
-                    <th scope="row">{result.kind === 'flowRatio' ? 'Flow ratio' : 'Pressure advance'}</th>
-                    <td>{result.kind === 'flowRatio' ? result.value.toFixed(3) : `K ${result.value.toFixed(4)}`}</td>
-                    <td>{result.scope === 'spool' ? 'This spool' : [result.brand, result.filamentType, result.materialSubtype, result.colorName].filter(Boolean).join(' ') || 'Any filament'}</td>
-                    <td>{result.printerModel} · {result.nozzleDiameter} mm</td>
-                    <td><IconButton size="sm" variant="plain" color="danger" aria-label="Delete saved value" onClick={() => removeResult.mutate(result.id)}><DeleteRoundedIcon /></IconButton></td>
+                    <th scope="row">{calibrationKindLabel(result.kind)}</th>
+                    <td>{calibrationValueLabel(result.kind, result.value)}</td>
+                    <td>
+                      {result.scope === 'spool' ? (
+                        <PluginSlot
+                          name="calibration.spoolTarget"
+                          context={{ spoolId: result.spoolId }}
+                          fallback={<Typography level="body-sm">Specific spool</Typography>}
+                        />
+                      ) : (
+                        <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap' }}>
+                          {[result.brand, result.filamentType, result.materialSubtype, result.colorName]
+                            .filter((value): value is string => Boolean(value))
+                            .map((value) => <Chip key={value} size="sm" variant="soft">{value}</Chip>)}
+                        </Stack>
+                      )}
+                    </td>
+                    <td>{calibrationPrinterTargetLabel(result, printerName)} · {result.nozzleDiameter} mm</td>
+                    <td>
+                      <Stack direction="row" spacing={0.25} justifyContent="flex-end">
+                        {(
+                          <IconButton
+                            size="sm"
+                            variant="plain"
+                            color="neutral"
+                            aria-label="Edit saved value"
+                            onClick={() => setEditingResult(result)}
+                          >
+                            <EditRoundedIcon />
+                          </IconButton>
+                        )}
+                        <IconButton size="sm" variant="plain" color="danger" aria-label="Delete saved value" onClick={() => removeResult.mutate(result.id)}><DeleteRoundedIcon /></IconButton>
+                      </Stack>
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </Table>
           </Sheet>
-        )}
+          )}
+        </SavedCalibrationDirectory>
       </Stack>
 
       {showNew ? <NewCalibrationDialog printers={printers} onClose={closeNewDialog} /> : null}
-      {resultRun ? <CalibrationResultDialog run={resultRun} onClose={closeResultDialog} /> : null}
+      {showManual ? <CalibrationResultDialog printers={printers} identitySuggestions={identitySuggestions} onClose={closeManualDialog} /> : null}
+      {editingResult ? <CalibrationResultDialog printers={printers} savedResults={editingResults} identitySuggestions={identitySuggestions} onClose={closeSavedValueDialog} /> : null}
+      {readyRun ? <CalibrationSlicePrintModal run={readyRun} onClose={closeReadyRun} /> : null}
+      {resultRun ? (
+        <CalibrationResultDialog
+          run={resultRun}
+          printers={printers}
+          savedResults={results.filter((result) => result.runId === resultRun.id)}
+          identitySuggestions={identitySuggestions}
+          onClose={closeResultDialog}
+        />
+      ) : null}
     </Stack>
   )
 }

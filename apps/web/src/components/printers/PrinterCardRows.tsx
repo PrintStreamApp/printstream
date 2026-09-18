@@ -13,7 +13,7 @@ import RestartAltRoundedIcon from '@mui/icons-material/RestartAltRounded'
 import DownloadRoundedIcon from '@mui/icons-material/DownloadRounded'
 import EjectRoundedIcon from '@mui/icons-material/EjectRounded'
 import LocalFireDepartmentRoundedIcon from '@mui/icons-material/LocalFireDepartmentRounded'
-import { type AmsSlot, type AmsUnit, type ExternalSpool } from '@printstream/shared'
+import { calibrationFilamentIdentityFromTray, type AmsSlot, type AmsUnit, type ExternalSpool } from '@printstream/shared'
 import { AmsSlotTooltipBody, ExternalSpoolTooltipBody } from './FilamentTooltipBodies'
 import { useControlledMenuClickAway } from '../../hooks/useControlledMenuClickAway'
 import {
@@ -379,6 +379,20 @@ export function AmsUnitRow({
                 >
                   {slotLabel}
                 </Typography>
+                {hasFilament ? (
+                  <Box sx={{ position: 'absolute', top: 2, right: 3, zIndex: 1 }}>
+                    <PluginSlot
+                      name="printer.amsSlot.status"
+                      context={{
+                        printerId,
+                        printerModel,
+                        amsId: unit.unitId,
+                        slotId: slot.slot,
+                        filament: calibrationFilamentIdentityFromTray(slot)
+                      }}
+                    />
+                  </Box>
+                ) : null}
                 {hasFilament ? (
                   <Stack
                     spacing={hasColorName ? 0 : 0.125}

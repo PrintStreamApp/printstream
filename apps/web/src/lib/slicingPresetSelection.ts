@@ -306,9 +306,16 @@ export function pickMachineDefaultFilamentProfile(
  */
 export function pickStandardProcessProfile(profiles: SlicingPresetSummary[]): SlicingPresetSummary | null {
   const twentyMicron = profiles.filter((profile) => resolveProfileLayerHeight(profile) === '0.20mm')
+  const builtins = twentyMicron.filter((profile) => profile.source === 'builtin')
   // The quality TIER genuinely has no field of its own: BambuStudio encodes it in
-  // the preset name ("0.20mm Standard @BBL X1C"), so this one stays a name read.
-  return twentyMicron.find((profile) => profile.name.toLowerCase().includes('standard')) ?? twentyMicron[0] ?? null
+  // the preset name ("0.20mm Standard @BBL X1C"), so this one stays a name read. A
+  // user's derivative can carry the same words and catalogues list custom presets first;
+  // the conventional DEFAULT must never silently become that custom profile.
+  return builtins.find((profile) => profile.name.toLowerCase().includes('standard'))
+    ?? builtins[0]
+    ?? twentyMicron.find((profile) => profile.name.toLowerCase().includes('standard'))
+    ?? twentyMicron[0]
+    ?? null
 }
 
 function normalizedProfileText(value: string): string {

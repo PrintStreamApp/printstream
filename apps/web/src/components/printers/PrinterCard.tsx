@@ -1,3 +1,4 @@
+import { EntityTagChips } from '../tags/EntityTagChips'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Box, Card, CardContent, Chip, Divider, Stack, Typography } from '@mui/joy'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -769,6 +770,7 @@ function PrinterCardComponent({
         </Stack>
 
         <Divider sx={{ mb: 0.75 }} inset="context" />
+        <EntityTagChips kind="printer" id={printer.id} />
 
         {!isOnline && (
           <Box

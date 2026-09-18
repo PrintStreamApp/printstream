@@ -24,13 +24,13 @@ const FILAMENT_INDEX_DEFAULT = '0'
 
 /**
  * The value a filament-index setting should take after the material at 1-based `removedPosition`
- * is deleted: refs to it become "Default", refs above it shift down, refs below are untouched.
+ * is deleted: refs to it use the replacement position (or Default when omitted); higher refs shift down.
  * Non-numeric or already-default values pass through unchanged.
  */
-export function remapFilamentIndexValue(value: string, removedPosition: number): string {
+export function remapFilamentIndexValue(value: string, removedPosition: number, replacementPosition = 0): string {
   const index = Number.parseInt(value, 10)
   if (!Number.isFinite(index) || index <= 0) return value
-  if (index === removedPosition) return FILAMENT_INDEX_DEFAULT
+  if (index === removedPosition) return String(replacementPosition > removedPosition ? replacementPosition - 1 : replacementPosition)
   return index > removedPosition ? String(index - 1) : value
 }
 
@@ -81,9 +81,10 @@ function mapFilamentIndexOverrides(
 /** {@link remapFilamentIndexValue} over a whole override map (same-object return when unchanged). */
 export function remapFilamentIndexOverrides(
   overrides: Record<string, string | string[]>,
-  removedPosition: number
+  removedPosition: number,
+  replacementPosition = 0
 ): Record<string, string | string[]> {
-  return mapFilamentIndexOverrides(overrides, (value) => remapFilamentIndexValue(value, removedPosition))
+  return mapFilamentIndexOverrides(overrides, (value) => remapFilamentIndexValue(value, removedPosition, replacementPosition))
 }
 
 /** {@link permuteFilamentIndexValue} over a whole override map (same-object return when unchanged). */
@@ -117,9 +118,10 @@ function mapPerObjectFilamentIndexOverrides<T extends Record<string, Record<stri
 /** Per-object removal remap (same-object return when unchanged). */
 export function remapPerObjectFilamentIndexOverrides<T extends Record<string, Record<string, string | string[]>>>(
   perObject: T,
-  removedPosition: number
+  removedPosition: number,
+  replacementPosition = 0
 ): T {
-  return mapPerObjectFilamentIndexOverrides(perObject, (overrides) => remapFilamentIndexOverrides(overrides, removedPosition))
+  return mapPerObjectFilamentIndexOverrides(perObject, (overrides) => remapFilamentIndexOverrides(overrides, removedPosition, replacementPosition))
 }
 
 /** Per-object reorder remap (same-object return when unchanged). */

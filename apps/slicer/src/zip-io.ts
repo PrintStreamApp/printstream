@@ -7,6 +7,8 @@
  * 3MF entries, so this is the single shared copy. Kept slicer-local on purpose:
  * the slicer is a separate workspace and must not import from `apps/api`.
  */
+import { createWriteStream } from 'node:fs'
+import yazl from 'yazl'
 import yauzl, { type Entry, type ZipFile } from 'yauzl'
 
 export async function openZip(filePath: string): Promise<ZipFile> {
@@ -70,5 +72,48 @@ export async function readZipEntryText(filePath: string, entryName: string): Pro
       )
     })
     zipFile.readEntry()
+  })
+}
+
+/** Read an engine-produced archive for a bounded whole-package rewrite. */
+export async function readAllZipEntries(filePath: string): Promise<Array<{ name: string; buffer: Buffer; mtime: Date }>> {
+  const zipFile = await openZip(filePath)
+  return await new Promise((resolve, reject) => {
+    const entries: Array<{ name: string; buffer: Buffer; mtime: Date }> = []
+    let settled = false
+    const finish = (error?: Error) => {
+      if (settled) return
+      settled = true
+      zipFile.close()
+      if (error) reject(error)
+      else resolve(entries)
+    }
+    zipFile.on('error', finish)
+    zipFile.on('end', () => finish())
+    zipFile.on('entry', (entry: Entry) => {
+      if (entry.fileName.endsWith('/')) { zipFile.readEntry(); return }
+      readZipEntryBuffer(zipFile, entry).then(
+        (buffer) => { entries.push({ name: entry.fileName, buffer, mtime: entry.getLastModDate() }); zipFile.readEntry() },
+        (error) => finish(error as Error)
+      )
+    })
+    zipFile.readEntry()
+  })
+}
+
+
+/** Write replacement entries; callers rename the finished archive atomically. */
+export async function writeZip(filePath: string, entries: Array<{ name: string; buffer: Buffer; mtime?: Date }>): Promise<void> {
+  const zip = new yazl.ZipFile()
+  const stream = createWriteStream(filePath)
+  await new Promise<void>((resolve, reject) => {
+    zip.outputStream.on('error', reject)
+    stream.on('error', reject)
+    stream.on('finish', () => resolve())
+    zip.outputStream.pipe(stream)
+    for (const entry of entries) {
+      zip.addBuffer(entry.buffer, entry.name, entry.mtime ? { mtime: entry.mtime } : undefined)
+    }
+    zip.end()
   })
 }

@@ -21,6 +21,7 @@ import { AmsSlotFilamentIdentity } from './AmsSlotFilamentIdentity'
 import { FilamentView } from './FilamentView'
 import { FilamentStatsCards } from './FilamentStatsCards'
 import { useLoadedSpoolIdentityLookup } from './api'
+import { CalibrationIdentitySuggestions, CalibrationSpoolPicker, CalibrationSpoolTarget } from './CalibrationSpoolTargets'
 
 export const filamentManagerPlugin: WebPlugin = {
   name: 'filament-manager',
@@ -45,6 +46,9 @@ export const filamentManagerPlugin: WebPlugin = {
     { name: 'ams.slotEditor', component: SlotEditorActions },
     { name: 'externalSpool.editor', component: SlotEditorActions },
     { name: 'printer.amsSlot.filamentIdentity', component: AmsSlotFilamentIdentity },
+    { name: 'calibration.spoolPicker', component: CalibrationSpoolPicker },
+    { name: 'calibration.spoolTarget', component: CalibrationSpoolTarget },
+    { name: 'calibration.identitySuggestions', component: CalibrationIdentitySuggestions },
     { name: 'stats.cards', component: FilamentStatsCards }
   ]
 }

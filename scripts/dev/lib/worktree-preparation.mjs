@@ -1,22 +1,17 @@
 /**
- * Fully prepares a linked worktree before tests or application code can create partial data dirs.
+ * Prepares a linked worktree for repository tooling without starting development infrastructure.
  *
- * `devkit prepare` owns ignored config and checkout-local dependencies. Its development preflight
- * owns the paired database and filesystem baseline. Both must run here, in that order: tests create
- * `data/library/_bridge-cache`, and if that happens first Devkit can mistake the partial directory
- * for a restored baseline and leave bridge identity/library files behind.
+ * `devkit prepare` owns ignored config and checkout-local dependencies. Database provisioning and
+ * the paired filesystem baseline remain part of the first development preflight, so creating a
+ * worktree cannot leave a PostgreSQL container running before anyone starts the application.
  */
-import { existsSync } from 'node:fs'
-import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 
-/** Prepare dependencies, isolated infrastructure, and every configured baseline path. */
+/** Prepare checkout-local files and dependencies, propagating Devkit's actionable failure text. */
 export async function prepareWorktree({
   repoRoot,
   environment = process.env,
-  run = spawnSync,
-  pathExists = existsSync,
-  loadDevkit = () => import('@ryanewen/devkit')
+  run = spawnSync
 }) {
   const checkout = run('devkit', ['prepare'], {
     cwd: repoRoot,
@@ -31,36 +26,9 @@ export async function prepareWorktree({
     }
   }
 
-  let runtime
-  try {
-    const { preflight } = await loadDevkit()
-    runtime = await preflight({ repoRoot, checkDependencies: false })
-  } catch (error) {
-    return { state: 'failed', detail: error instanceof Error ? error.message : String(error) }
-  }
-  if (!runtime) {
-    return { state: 'failed', detail: 'Devkit is not enabled for this checkout; run `npm run dev:bootstrap` first.' }
-  }
-
-  if (!runtime.identity.isPrimary) {
-    const missing = runtime.project.baselinePaths.filter(
-      (relativePath) => !pathExists(path.join(repoRoot, relativePath))
-    )
-    if (missing.length > 0) {
-      return {
-        state: 'failed',
-        detail: [
-          `Devkit did not restore the complete worktree data baseline: ${missing.join(', ')}.`,
-          'Refresh it with `npm run dev:host -- snapshot` from the primary checkout, then run `npm run dev:host -- reset` here.'
-        ].join(' ')
-      }
-    }
-  }
-
   return {
     state: 'prepared',
     repoRoot,
-    baselinePathCount: runtime.project.baselinePaths.length,
-    lines: runtime.lines
+    lines: checkout.stdout.split('\n').map((line) => line.trim()).filter(Boolean)
   }
 }

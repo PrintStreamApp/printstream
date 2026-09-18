@@ -12,3 +12,6 @@ export const COMMUNITY_LICENSE_URL = 'https://printstream.app/self-host/communit
  * earlier would read as "your licence is expiring", which it is not.
  */
 export const LICENSE_RENEWAL_URL = 'https://printstream.app/self-host/renew'
+
+/** Cloud resolves authorized billing accounts after sign-in; a single account opens its licenses directly. */
+export const CLOUD_BILLING_ENTRY_URL = 'https://printstream.app/billing'

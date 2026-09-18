@@ -188,11 +188,11 @@ export function QueueMaterialRow({
             />
           </FormControl>
           <FormControl sx={{ flex: 1, minWidth: 0 }}>
-            <FormLabel>Type</FormLabel>
+            <FormLabel>Material type</FormLabel>
             <Select
               size="sm"
               value={(value.filamentType ?? '') || null}
-              placeholder="Choose a type…"
+              placeholder="Choose a material type…"
               onChange={(_event, next) => next && onChange({ ...value, id: file.id, filamentType: next })}
             >
               {typeOptions.map((type) => <Option key={type} value={type}>{type}</Option>)}

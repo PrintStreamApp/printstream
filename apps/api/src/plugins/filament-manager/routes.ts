@@ -4,6 +4,8 @@
  * `LIBRARY_MANAGE`; the auto-add toggle uses `SETTINGS_MANAGE`. Handlers stay
  * thin: data logic lives in `store.ts`, serialization in `dto.ts`.
  */
+import { clearSlotMaterial } from '../../lib/slot-materials.js'
+import { printerManager } from '../../lib/printer-manager.js'
 import {
   LIBRARY_MANAGE_PERMISSION,
   LIBRARY_VIEW_PERMISSION,
@@ -177,6 +179,8 @@ export function registerFilamentManagerRoutes(context: ApiPluginContext, barcode
     if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message ?? 'Invalid assignment payload')
     const row = await assignSpoolRow(db, workspaceId, id, parsed.data)
     if (!row) throw notFound('Filament spool not found')
+    await clearSlotMaterial(workspaceId, parsed.data.printerId, parsed.data.amsId, parsed.data.slotId ?? null)
+    printerManager.refreshSlotMaterials(parsed.data.printerId)
     annotateRequestAuditLog(request, {
       action: 'assign-filament-spool',
       resource: 'filament spool',

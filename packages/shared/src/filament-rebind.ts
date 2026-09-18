@@ -26,6 +26,7 @@
  * `apps/api/src/lib/save-retarget.ts`; this module never fetches.
  */
 import { canonicalBambuModelKey } from './bambu-model-keys.js'
+import { withFilamentPressureAdvance } from './filament-pressure-advance.js'
 import { filamentKeyWidth, filamentVariantRowsPerSlot, filamentVariantsPerSlot, isFilamentVariantOption } from './variant-options.js'
 import { filamentIdForPresetName } from './repairs/filament-ids.js'
 import { filamentSettingsCatalog, FILAMENT_SETTING_KEYS, isFilamentIdentitySettingKey } from './filament-settings.js'
@@ -108,6 +109,8 @@ export function applyFilamentSlotOverrides(
   if (identityCount === 0) return record
   const positions = Object.keys(overridesByPosition).map(Number).filter((position) => Number.isInteger(position) && position >= 1 && position <= identityCount)
   if (positions.length === 0) return record
+
+  overridesByPosition = withFilamentPressureAdvance(record, overridesByPosition, slotConfigs)
 
   const variantRows = filamentVariantRowsPerSlot(record, identityCount)
 

@@ -180,6 +180,47 @@ test('it builds filament choices for the global process dialog (issue #86)', asy
   assert.deepEqual(choices.map((choice) => choice.usedByPlateModels), [true, true])
 })
 
+test('an unavailable process blocks public slicing with an explanation', async () => {
+  const client = seededClient()
+  const project = fakeProject()
+  let result: ReturnType<typeof useLocalSliceSettingsController> | null = null
+  function Probe() {
+    result = useLocalSliceSettingsController({ project, isMobileViewport: false, onClose: () => undefined })
+    return null
+  }
+  await act(async () => {
+    render(React.createElement(QueryClientProvider, { client }, React.createElement(Probe)))
+  })
+  await act(async () => { result!.controller.setProcessProfileId('unavailable-process') })
+  assert.equal(result!.slicingReady, false)
+  assert.ok(result!.sliceDisabledReason)
+  cleanup()
+  client.clear()
+})
+
+test('a failed catalogue refresh blocks slicing even when cached presets remain', async () => {
+  const client = seededClient()
+  const project = fakeProject()
+  let result: ReturnType<typeof useLocalSliceSettingsController> | null = null
+  function Probe() {
+    result = useLocalSliceSettingsController({ project, isMobileViewport: false, onClose: () => undefined })
+    return null
+  }
+  await act(async () => {
+    render(React.createElement(QueryClientProvider, { client }, React.createElement(Probe)))
+  })
+  assert.equal(result!.slicingReady, true)
+  await act(async () => {
+    const query = client.getQueryCache().find({ queryKey: publicSlicingPresetsQueryOptions(TARGET_ID).queryKey })!
+    query.setState({ status: 'error', error: new Error('Catalogue refresh failed') })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  })
+  assert.equal(result!.slicingReady, false)
+  assert.equal(result!.sliceDisabledReason, 'Failed to load slicing presets.')
+  cleanup()
+  client.clear()
+})
+
 test('add then remove a material moves the project filament count', async () => {
   const get = await renderController()
   assert.equal(get().projectFilaments.length, 2)

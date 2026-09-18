@@ -103,3 +103,11 @@ test('resolvePostAuthRedirectPath preserves platform redirects', () => {
 test('resolvePostAuthRedirectPath falls back to the workspace chooser for signed-in users without another destination', () => {
   assert.equal(resolvePostAuthRedirectPath(buildBootstrap()), '/workspaces')
 })
+test('billing entry survives sign-in without accepting external or malformed billing paths', () => {
+  for (const path of ['/billing', '/billing/customer-1', '/billing/customer-1/licenses']) {
+    assert.equal(resolvePostAuthRedirectPath(buildBootstrap(), path), path)
+  }
+  for (const path of ['https://other.example/billing', '//other.example/billing', '/billing/../platform', '/billing/%2f%2fevil']) {
+    assert.equal(resolvePostAuthRedirectPath(buildBootstrap(), path), '/workspaces')
+  }
+})

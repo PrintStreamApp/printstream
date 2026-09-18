@@ -16,6 +16,7 @@ import { memo } from 'react'
 import type React from 'react'
 import type { ReactNode } from 'react'
 import { lazy, useCallback, useMemo, useState } from 'react'
+import { RemoveMaterialDialog } from './RemoveMaterialDialog'
 import {
   Alert, Badge, Box, Button, ButtonGroup, Chip, CircularProgress, Dropdown, FormControl, FormLabel, IconButton, Input,
   List, ListItem, Menu, MenuButton, Option, Select, Sheet, Stack, Switch, Tooltip, Typography
@@ -322,6 +323,15 @@ export interface SliceSettingsController {
   setFilamentColors: React.Dispatch<React.SetStateAction<Record<number, string>>>
   /** Per-material filament setting overrides keyed by projectFilamentId (material "tune" dialog). */
   filamentSettingOverridesById: Record<number, Record<string, string | string[]>>
+  /**
+   * Workspace plugin status beside a material choice. Optional because the public editor has no
+   * workspace or plugin graph. The workspace host owns the slot and supplies this renderer.
+   */
+  renderMaterialStatus?: (context: {
+    projectFilamentId: number
+    selectedOption: SliceMaterialOption | null
+    explicitSettings: Record<string, string | string[]>
+  }) => ReactNode
   /** Open the material settings dialog for a given filament slot. */
   openFilamentSettings: React.Dispatch<React.SetStateAction<number | null>>
   handleMaterialOptionChange: (projectFilamentId: number, option: SliceMaterialOption | null) => void
@@ -343,7 +353,7 @@ export interface SliceSettingsController {
   onAddFilament: (choice: AddedMaterialChoice) => void
   onSyncFilaments: (choices: AddedMaterialChoice[]) => void
   onUpsertMixedFilament: (choice: MixedMaterialChoice) => void
-  onRemoveFilament: (projectFilamentId: number) => void
+  onRemoveFilament: (projectFilamentId: number, replacementId?: number) => void
   /**
    * Drag-reorder a material to an insertion gap (0..N, between-rows semantics: same conversion
    * as the plate strip's `movePlate`). Slot NUMBERS are positional identity in the saved 3MF, so
@@ -353,13 +363,14 @@ export interface SliceSettingsController {
   onReorderFilament: (fromIndex: number, insertAt: number) => void
   /**
    * Whether a material is assigned to any object/part (the 3D editor supplies live usage).
-   * When it returns true the material can't be removed: BambuStudio parity. Absent → not gated.
+   * When true, removal asks for a replacement. Absent means no known scene usage.
    */
   filamentInUse?: (projectFilamentId: number) => boolean
+  /** Includes unverified source paint; does not imply actual usage for tower or badge decisions. */
+  filamentRemovalNeedsReplacement?: (projectFilamentId: number) => boolean
   /**
    * Whether a material flagged by {@link filamentInUse} is used ONLY for supports (no object/
-   * part/layer/paint reference). Lets the remove-blocked tooltip/toast say "used for supports"
-   * instead of "used by an object". Absent → treated as object usage.
+   * part/layer/paint reference). Used by the materials summary and replacement confirmation.
    */
   filamentSupportOnly?: (projectFilamentId: number) => boolean
   /**
@@ -553,9 +564,9 @@ export const SliceSettingsPanel = memo(function SliceSettingsPanel({ controller,
     projectFilaments, materialOptions, loadedMaterialOptions, printerTrayMap, materialToolheadOptions, filamentTrackSwitchReady,
     filamentMaterialOptionIds, filamentMaterialTypeFilters, setFilamentMaterialTypeFilters,
     filamentToolheadIds, setFilamentToolheadIds, filamentColors, setFilamentColors,
-    filamentSettingOverridesById, openFilamentSettings,
+    filamentSettingOverridesById, openFilamentSettings, renderMaterialStatus,
     handleMaterialOptionChange,
-    onAddFilament, onSyncFilaments, onUpsertMixedFilament, onRemoveFilament, onReorderFilament, filamentInUse, filamentSupportOnly, flushVolumes
+    onAddFilament, onSyncFilaments, onUpsertMixedFilament, onRemoveFilament, onReorderFilament, filamentInUse, filamentRemovalNeedsReplacement, filamentSupportOnly, flushVolumes
   } = controller
   // Local, unlike the process/material dialogs whose open-state rides the controller: this one
   // edits a stored preset and emits nothing, so no host or controller has a stake in it.
@@ -670,6 +681,8 @@ export const SliceSettingsPanel = memo(function SliceSettingsPanel({ controller,
   // compact swatch row). Panel-local: both surfaces render their own panel instance.
   const [materialDialogFilamentId, setMaterialDialogFilamentId] = useState<number | null>(null)
   const [addingMaterial, setAddingMaterial] = useState(false)
+  const [removingMaterialId, setRemovingMaterialId] = useState<number | null>(null)
+  const closeRemoveMaterial = useCallback(() => setRemovingMaterialId(null), [])
   // `undefined` is closed, null adds, and an id edits that existing virtual slot.
   const [mixedFilamentTarget, setMixedFilamentTarget] = useState<number | null | undefined>(undefined)
   const [syncAmsOpen, setSyncAmsOpen] = useState(false)
@@ -1468,24 +1481,18 @@ export const SliceSettingsPanel = memo(function SliceSettingsPanel({ controller,
                         onOpen={() => openFilamentSettings(filament.projectFilamentId)}
                       />
                     )}
+                    {!filament.mixedFilament && renderMaterialStatus?.({
+                      projectFilamentId: filament.projectFilamentId,
+                      selectedOption,
+                      explicitSettings: filamentSettingOverridesById[filament.projectFilamentId] ?? {}
+                    })}
                     {showMaterialEditing && (() => {
                       const usedByMixedFilament = projectFilaments.some((candidate) =>
                         candidate.mixedFilament?.componentIds.includes(filament.projectFilamentId))
                       const inUse = (filamentInUse?.(filament.projectFilamentId) ?? false) || usedByMixedFilament
                       const supportOnly = filamentSupportOnly?.(filament.projectFilamentId) ?? false
-                      const removeDisabled = projectFilaments.length <= 1 || inUse
-                      // `inUse` covers OBJECT references only. A material used just by a process
-                      // setting stays removable, the setting falls back to "Default", so say so
-                      // rather than leaving the user to guess what happens to their supports.
-                      const removeTitle = projectFilaments.length <= 1
-                        ? 'A project needs at least one material'
-                        : inUse
-                          ? usedByMixedFilament
-                            ? 'This material is part of a mixed material: edit or remove that mix first'
-                            : 'This material is used by an object: reassign it before removing'
-                          : supportOnly
-                            ? 'Remove material: supports using it fall back to the default material'
-                            : 'Remove material'
+                      const removeDisabled = projectFilaments.length <= 1
+                      const removeTitle = removeDisabled ? 'A project needs at least one material' : 'Remove material'
                       return (
                         <Tooltip title={removeTitle}>
                           <span>
@@ -1494,7 +1501,10 @@ export const SliceSettingsPanel = memo(function SliceSettingsPanel({ controller,
                               variant="plain"
                               color="danger"
                               disabled={removeDisabled}
-                              onClick={() => onRemoveFilament(filament.projectFilamentId)}
+                              onClick={() => {
+                                if (inUse || supportOnly || filamentRemovalNeedsReplacement?.(filament.projectFilamentId)) setRemovingMaterialId(filament.projectFilamentId)
+                                else onRemoveFilament(filament.projectFilamentId)
+                              }}
                               aria-label={`Remove material ${filamentIndex + 1}`}
                             >
                               <DeleteRoundedIcon fontSize="small" />
@@ -1513,6 +1523,13 @@ export const SliceSettingsPanel = memo(function SliceSettingsPanel({ controller,
             </Stack>
           </Sheet>
       </>)}
+      <RemoveMaterialDialog
+        materialId={removingMaterialId}
+        filaments={projectFilaments}
+        colors={filamentColors}
+        onClose={closeRemoveMaterial}
+        onRemove={onRemoveFilament}
+      />
       {showInlineObjects && hasPlateObjects && (<>
           <StickySectionHeader><Typography level="title-sm">Objects</Typography></StickySectionHeader>
           <Sheet variant="outlined" sx={{ p: 0.5, borderRadius: 'sm' }}>
@@ -1585,7 +1602,7 @@ export const SliceSettingsPanel = memo(function SliceSettingsPanel({ controller,
             typeFilter={typeFilter}
             typeOptions={resolveMaterialTypeOptions(materialOptions)}
             onTypeFilterChange={(value) => setFilamentMaterialTypeFilters((current) => ({ ...current, [filament.projectFilamentId]: value }))}
-            materialOptions={narrowMaterialOptions(materialOptions, typeFilter, selectedOption?.id)}
+            materialOptions={narrowMaterialOptions(materialOptions, typeFilter)}
             selectedOption={selectedOption}
             onMaterialOptionChange={(option) => handleMaterialOptionChange(filament.projectFilamentId, option)}
             color={normalizeSliceFilamentColor(filamentColors[filament.projectFilamentId] ?? filament.color)}

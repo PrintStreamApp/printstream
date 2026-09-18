@@ -13,6 +13,7 @@
  * history + thumbnail hooks) stay declared in EditorView and are threaded in as refs/params;
  * module-level paint helpers/types are imports below, not params.
  */
+import { remapBaseMaterialPaint } from './lib/materialReplacement'
 import { useCallback, useEffect, useRef, useState, type Dispatch, type MutableRefObject, type SetStateAction } from 'react'
 import * as THREE from 'three'
 import { isNonRenderableThreeMfPartSubtype } from '@printstream/shared'
@@ -216,7 +217,8 @@ export function useEditorPaint(params: EditorPaintParams): EditorPaint {
     if (!key) return null
     const override = stateRef.current?.[PAINT_CHANNEL_SPECS[channel].stateKey]?.[key]
     if (override) return Object.keys(override).length > 0 ? override : null
-    return getGeometryTrianglePaint(mesh.geometry as THREE.BufferGeometry, channel)
+    const base = getGeometryTrianglePaint(mesh.geometry as THREE.BufferGeometry, channel)
+    return channel === 'color' ? remapBaseMaterialPaint(stateRef.current, base) : base
   }, [stateRef])
 
   /** Replace a tagged mesh's painted-triangle overlay for one channel. */
@@ -381,7 +383,8 @@ export function useEditorPaint(params: EditorPaintParams): EditorPaint {
       if (!codes) {
         // First stroke on this part: seed from the source mesh's existing paint so
         // erasing/overpainting starts from what the file already had.
-        codes = { ...(getGeometryTrianglePaint(geometry, channel) ?? {}) }
+        const base = getGeometryTrianglePaint(geometry, channel)
+        codes = { ...((channel === 'color' ? remapBaseMaterialPaint(state, base) : base) ?? {}) }
         channelPaint[key] = codes
       }
       target.updateWorldMatrix(true, false)
@@ -519,7 +522,9 @@ export function useEditorPaint(params: EditorPaintParams): EditorPaint {
     const scan = getTriangleScanData(geometry)
     if (!scan) return null
     const stateKey = PAINT_CHANNEL_SPECS[channel].stateKey
-    const existing = state[stateKey]?.[key] ?? getGeometryTrianglePaint(geometry, channel) ?? {}
+    const existing = state[stateKey]?.[key] ?? (channel === 'color'
+      ? remapBaseMaterialPaint(state, getGeometryTrianglePaint(geometry, channel))
+      : getGeometryTrianglePaint(geometry, channel)) ?? {}
     // The copy IS the isolation: every apply below mutates it, and the caller never sees it.
     const before: SupportPaintCodes = { ...existing }
     const codes: SupportPaintCodes = { ...existing }

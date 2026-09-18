@@ -23,7 +23,7 @@ import { OrbitControls } from 'three-stdlib'
 import { apiFetch } from '../../lib/apiClient'
 import { buildApiUrl } from '../../lib/apiUrl'
 import { useLocalStorageState } from '../../hooks/useLocalStorageState'
-import { fitPerspectiveDepthRange } from './lib/previewDepthRange'
+import { fitPerspectiveDepthRange, previewDepthRadius } from './lib/previewDepthRange'
 import { previewChromeLayout, VIEW_CUBE_FOOTPRINT_PX } from './lib/previewChromeLayout'
 import { buildLayeredGcodePreview, parseGcodeLayers, type GcodeMarkerVisibility, type GcodeStats, type GcodeValueRanges, type LayeredGcodePreview } from './lib/gcodePreview'
 import type { ParsedGcodeLayers } from './lib/gcodePreview'
@@ -740,10 +740,13 @@ export function PreviewView(props: Record<string, unknown>) {
         // Rest the floor grid under the now-centred model.
         rig.stlGrid.position.z = -size.z / 2
       }
-      // The object was just re-centred on the origin, so the box's bounding sphere is the
-      // scene sphere the depth fit brackets each frame.
+      // Frame the model alone, but fit depth to everything we draw. The floor grid is
+      // much wider than small models; excluding it clips its lines at the model's near/far planes.
       const sphere = box.getBoundingSphere(new THREE.Sphere())
-      rig.contentRadius = sphere.radius
+      rig.contentRadius = previewDepthRadius(
+        sphere.radius,
+        rig.stlGrid ? new THREE.Box3().setFromObject(rig.stlGrid) : undefined
+      )
       const maxDimension = Math.max(size.x, size.y, size.z, 20)
       const distance = isPlatedPreview
         ? Math.max(sphere.radius * 3, maxDimension * 2, 120)

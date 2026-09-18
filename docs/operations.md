@@ -34,8 +34,12 @@ Settings → Backups ("Back up now"). Each backup is one directory:
 - `manifest.json`: app build, Postgres version, and the applied-migration set,
   which is how restore refuses a backup taken by a newer version.
 
-Retention is automatic (7 daily, then 4 weekly, then 12 monthly); manual and
-pre-restore backups are kept until deleted. A failed scheduled backup raises a
+Self-hosted retention is automatic (7 daily, then 4 weekly, then 12 monthly); manual and
+pre-restore backups are kept until deleted. Cloud backups have a 30-day maximum age
+for all triggers, including manual and pre-restore snapshots. Cloud retention runs
+even when scheduled creation is disabled; off-host copies must enforce the same cap.
+A pending restore temporarily blocks pruning and logs a warning, so complete it promptly.
+A failed scheduled backup raises a
 notification through the configured channels. Same-disk backups do not protect
 against disk loss; sync the backups directory off-host with any tool (the
 artifacts are plain files).

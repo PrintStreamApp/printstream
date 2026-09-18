@@ -23,6 +23,8 @@
  * printer row. Metadata-column writes tolerate a DB still missing the newest
  * columns (logged, then retried without them) so recording never blocks a print.
  */
+import { capturePrintJobTags } from './print-job-tag-capture.js'
+import { withOptionalPrintSource } from './print-job-source-link.js'
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import type { PendingPrintJobSource } from './pending-print-job-source.js'
@@ -55,6 +57,11 @@ let printJobSnapshotEnsurer: typeof ensurePrintJobSnapshot = ensurePrintJobSnaps
 const activeJobs = new Map<string, string>()
 const activeJobTaskIds = new Map<string, string | null>()
 const activeJobPrinterFilePaths = new Map<string, string | null>()
+const supersededActiveJobs = new Map<string, {
+  jobId: string
+  taskId: string | null
+  printerFilePath: string | null
+}>()
 const externalJobActivations = new Map<string, Promise<string | null>>()
 const pendingTrackedJobActivations = new Map<string, Promise<string | null>>()
 const trackedStartGraceUntil = new Map<string, number>()
@@ -151,6 +158,7 @@ export function stopPrintJobRecorder(): void {
   activeJobs.clear()
   activeJobTaskIds.clear()
   activeJobPrinterFilePaths.clear()
+  supersededActiveJobs.clear()
   externalJobActivations.clear()
   pendingTrackedJobActivations.clear()
   trackedStartGraceUntil.clear()
@@ -231,6 +239,14 @@ export async function failTrackedPrintJobStart(input: {
     jobId: input.jobId,
     result: 'failed'
   })
+
+  const superseded = supersededActiveJobs.get(input.printerId)
+  if (superseded) {
+    activeJobs.set(input.printerId, superseded.jobId)
+    activeJobTaskIds.set(input.printerId, superseded.taskId)
+    activeJobPrinterFilePaths.set(input.printerId, superseded.printerFilePath)
+    supersededActiveJobs.delete(input.printerId)
+  }
 }
 
 export async function resolveRelevantPrintJobId(printerId: string): Promise<string | null> {
@@ -256,7 +272,24 @@ export async function resolvePrintJobIdByTaskId(printerId: string, taskId: strin
   return row?.id ?? null
 }
 
-function onTrackedJobStarting(event: { printerId: string }): void {
+function onTrackedJobStarting(event: { printerId: string; jobId: string }): void {
+  // A newly reserved tracked start supersedes any in-memory association left by the
+  // preceding print. The event and MQTT publish are synchronous with no await between
+  // them, so the next status can safely bind the pending row instead of rewriting the
+  // previous row with the new task id and its stale thumbnail.
+  if (activeJobs.get(event.printerId) !== event.jobId) {
+    const activeJobId = activeJobs.get(event.printerId)
+    if (activeJobId) {
+      supersededActiveJobs.set(event.printerId, {
+        jobId: activeJobId,
+        taskId: activeJobTaskIds.get(event.printerId) ?? null,
+        printerFilePath: activeJobPrinterFilePaths.get(event.printerId) ?? null
+      })
+    }
+    activeJobs.delete(event.printerId)
+    activeJobTaskIds.delete(event.printerId)
+    activeJobPrinterFilePaths.delete(event.printerId)
+  }
   trackedStartGraceUntil.set(event.printerId, Date.now() + TRACKED_START_GRACE_MS)
 }
 
@@ -313,6 +346,14 @@ export async function createPrintJobStartRecord(input: {
     fileId: input.metadata?.fileId ?? null,
     fileName: input.metadata?.fileName ?? null,
     fileSizeBytes: input.metadata?.fileSizeBytes ?? null,
+    sourceLibraryFileId: input.metadata?.sourceLibraryFileId ?? null,
+    tagSnapshotJson: JSON.stringify(input.metadata?.tagSnapshot ?? await capturePrintJobTags(rootPrisma, printer.workspaceId, {
+      printerId: input.printerId,
+      fileIds: [input.metadata?.sourceLibraryFileId, input.metadata?.fileId].filter((id): id is string => Boolean(id)),
+      amsMapping: input.metadata?.amsMapping,
+      useAms: input.metadata?.useAms,
+      observedStatus: input.metadata?.jobKind === 'calibration' ? null : printerManager.getStatus(input.printerId)
+    })),
     sourceProjectFileId: input.metadata?.sourceProjectFileId ?? null,
     sliceSettingsJson: input.metadata?.sliceSettingsJson ?? null,
     plate: input.metadata?.plate ?? null,
@@ -328,7 +369,8 @@ export async function createPrintJobStartRecord(input: {
 
   let created: PrintJobStartRecord
   try {
-    created = await rootPrisma.printJob.create({ data })
+    created = await withOptionalPrintSource(data.sourceLibraryFileId, (sourceLibraryFileId) =>
+      rootPrisma.printJob.create({ data: { ...data, sourceLibraryFileId } }))
   } catch (error) {
     if (!isMissingColumnError(error)) throw error
     console.warn('Recording print history without calibration columns; PrintJob migration is missing')
@@ -397,7 +439,7 @@ export async function upsertTrackedPrintJobRecord(input: {
   })
 
   if (existing) {
-    await rootPrisma.printJob.update({
+    await withOptionalPrintSource(input.metadata.sourceLibraryFileId ?? null, (sourceLibraryFileId) => rootPrisma.printJob.update({
       where: { id: input.jobId },
       data: {
         printerId: input.printerId,
@@ -407,6 +449,7 @@ export async function upsertTrackedPrintJobRecord(input: {
         fileId: input.metadata.fileId,
         fileName: input.metadata.fileName,
         fileSizeBytes: input.metadata.fileSizeBytes,
+        sourceLibraryFileId,
         sourceProjectFileId: input.metadata.sourceProjectFileId ?? null,
         sliceSettingsJson: input.metadata.sliceSettingsJson ?? null,
         plate: input.metadata.plate,
@@ -422,7 +465,7 @@ export async function upsertTrackedPrintJobRecord(input: {
         sourceType: mapStoredJobKind(input.metadata.jobKind),
         calibrationOption: input.metadata.calibrationOption
       }
-    })
+    }))
   } else {
     await createPrintJobStartRecord({
       jobId: input.jobId,
@@ -603,7 +646,7 @@ async function closeStaleUnfinishedPrintJobsForPrinter(input: {
   })
 
   console.warn(
-    `[print-job-recorder] closed ${staleJobIds.length} stale unfinished print job${staleJobIds.length === 1 ? '' : 's'} for ${input.printerId} after terminal status reconciliation`
+    `[print-job-recorder] closed ${staleJobIds.length} stale unfinished print job${staleJobIds.length === 1 ? '' : 's'} for ${input.printerId}`
   )
   broadcastJobsChanged(await readPrinterWorkspaceId(input.printerId))
 }
@@ -994,13 +1037,16 @@ async function activatePendingTrackedPrintJob(input: {
 
     const nextJobName = input.observedJobName || dispatched.jobName || metadata.fileName || metadata.jobId
     await syncActiveJobIdentity(input.printerId, dispatched.id, input.observedTaskId, input.observedPrinterFilePath)
-    const effectiveTaskId = normalizeActivePrintTaskId(input.observedTaskId) ?? normalizeActivePrintTaskId(dispatched.taskId)
-    if (effectiveTaskId) {
-      await closeDuplicateUnfinishedPrintJobs({
-        printerId: input.printerId,
-        taskId: effectiveTaskId,
-        preferredJobId: dispatched.id
+    const superseded = supersededActiveJobs.get(input.printerId)
+    if (superseded && superseded.jobId !== dispatched.id) {
+      // The printer has now confirmed the replacement start, so the displaced row
+      // cannot still be active. Close that exact row without sweeping unrelated
+      // recovery records that may need terminal reconciliation.
+      await rootPrisma.printJob.updateMany({
+        where: { id: superseded.jobId, finishedAt: null },
+        data: { finishedAt: new Date(), progressPercent: null, result: 'unknown' }
       })
+      supersededActiveJobs.delete(input.printerId)
     }
 
     if (nextJobName && nextJobName !== dispatched.jobName) {
@@ -1010,7 +1056,7 @@ async function activatePendingTrackedPrintJob(input: {
       })
     }
 
-    if (metadata.jobKind === 'file') {
+    if (metadata.fileId) {
       scheduleDelayedThumbnailPersist({
         jobId: dispatched.id,
         printerId: input.printerId,

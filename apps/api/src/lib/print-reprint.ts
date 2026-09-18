@@ -37,6 +37,8 @@ export interface ReprintJobRow {
   printerId: string
   sourceType: string | null
   fileId: string | null
+  /** Original live library entity, distinct from the retained print snapshot. */
+  sourceLibraryFileId?: string | null
   calibrationOption: number | null
   useAms: boolean | null
   bedLevel: boolean | null
@@ -204,7 +206,7 @@ export async function reprintJobFromRow(input: {
     const job = await enqueueLibraryPrint({
       fileId: row.fileId,
       ...restartOptions
-    }, workspaceId)
+    }, workspaceId, row.sourceLibraryFileId)
 
     return { kind: 'file', job }
   }

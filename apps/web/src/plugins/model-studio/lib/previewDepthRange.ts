@@ -73,3 +73,20 @@ export function fitPerspectiveDepthRange(distance: number, radius: number): { ne
   const far = Math.max(safeDistance + safeRadius, near + safeRadius)
   return { near, far }
 }
+
+/**
+ * Radius about the model's centred origin that includes its floor grid. Framing stays model-only;
+ * clipping must include the wider grid, even though its centre is below the orbit target.
+ */
+export function previewDepthRadius(modelRadius: number, floorBounds?: {
+  min: { x: number; y: number; z: number }
+  max: { x: number; y: number; z: number }
+}): number {
+  if (!floorBounds) return modelRadius
+  const { min, max } = floorBounds
+  return Math.max(modelRadius, Math.hypot(
+    Math.max(Math.abs(min.x), Math.abs(max.x)),
+    Math.max(Math.abs(min.y), Math.abs(max.y)),
+    Math.max(Math.abs(min.z), Math.abs(max.z))
+  ))
+}

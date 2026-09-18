@@ -1,13 +1,12 @@
 import { useEffect, useState } from 'react'
-import { Box, Button, FormControl, FormLabel, IconButton, Option, Select, Sheet, Stack, Tooltip, Typography } from '@mui/joy'
-import UnfoldLessRoundedIcon from '@mui/icons-material/UnfoldLessRounded'
-import UnfoldMoreRoundedIcon from '@mui/icons-material/UnfoldMoreRounded'
+import { Box, Button, FormControl, FormLabel, Option, Select, Sheet, Stack, Typography } from '@mui/joy'
 import ViewInArRoundedIcon from '@mui/icons-material/ViewInArRounded'
 import type { ThreeMfIndex } from '@printstream/shared'
 import { buildApiUrl } from '../lib/apiUrl'
 import { getSceneThumbnailProvider } from '../lib/modelThumbnailRegistry'
 import { OverflowTooltipText } from './OverflowTooltipText'
 import { SquareMediaFrame } from './SquareMediaFrame'
+import { PlatePreviewToggle } from './PlatePreviewToggle'
 import { PLATE_PICKER_TILE_WIDTH_PX } from './platePickerLayout'
 
 export function LibraryPlateSelect({
@@ -206,18 +205,11 @@ export function LibraryPlateCardPicker({
           )
         })}
         {onToggleCollapsed ? (
-          <Tooltip title={collapsed ? 'Show plate previews' : 'Hide plate previews'}>
-            <IconButton
-              size="sm"
-              variant="plain"
-              color="neutral"
-              onClick={onToggleCollapsed}
-              aria-label={collapsed ? 'Show plate previews' : 'Hide plate previews'}
-              sx={{ flex: '0 0 auto', alignSelf: 'center', ml: 'auto' }}
-            >
-              {collapsed ? <UnfoldMoreRoundedIcon fontSize="small" /> : <UnfoldLessRoundedIcon fontSize="small" />}
-            </IconButton>
-          </Tooltip>
+          <PlatePreviewToggle
+            collapsed={collapsed}
+            orientation={orientation}
+            onToggle={onToggleCollapsed}
+          />
         ) : null}
       </Box>
     </FormControl>

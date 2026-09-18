@@ -14,6 +14,8 @@ import { authOauthPlugin } from '../plugins/auth-oauth/index.js'
 import { notificationsNtfyPlugin } from '../plugins/notifications-ntfy/index.js'
 import { notificationsDiscordPlugin } from '../plugins/notifications-discord/index.js'
 import { notificationsBrowserPlugin } from '../plugins/notifications-browser/index.js'
+import { notificationsMobilePlugin } from '../plugins/notifications-mobile/index.js'
+import { notificationsDesktopPlugin } from '../plugins/notifications-desktop/index.js'
 import { notificationsEmailPlugin } from '../plugins/notifications-email/index.js'
 import { emailSmtpPlugin } from '../plugins/email-smtp/index.js'
 import { modelStudioPlugin } from '../plugins/model-studio/index.js'
@@ -102,6 +104,14 @@ export async function registerBuiltinPlugins(): Promise<void> {
     runtimeSurfaces: ['platform', 'workspace'],
     managerSurfaces: ['platform', 'workspace'],
     workspaceAccess: 'controlled'
+  })
+  await pluginRegistry.register(notificationsMobilePlugin, {
+    defaultEnabled: true, runtimeSurfaces: ['platform', 'workspace'],
+    managerSurfaces: ['platform', 'workspace'], workspaceAccess: 'controlled'
+  })
+  await pluginRegistry.register(notificationsDesktopPlugin, {
+    defaultEnabled: true, runtimeSurfaces: ['platform', 'workspace'],
+    managerSurfaces: ['platform', 'workspace'], workspaceAccess: 'controlled'
   })
   await pluginRegistry.register(notificationsEmailPlugin, {
     // Notification channels run on both surfaces: workspaces deliver

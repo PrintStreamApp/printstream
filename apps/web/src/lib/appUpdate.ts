@@ -4,9 +4,9 @@
  * Registers immediately, then asks both the worker and the no-cache served-build probe
  * to re-check on a timer and whenever the tab comes back to life. `main.tsx` also runs
  * the served-build probe before the app first becomes interactive. When workbox activates
- * a new worker it does NOT reload here: it hands off to `appStaleness.ts`, which owns the
- * one reload policy shared with the build-id detector, so an update can never discard
- * unsaved work. That handoff is the `onNeedReload` option; without it, vite-plugin-pwa
+ * a new worker, `appStaleness.ts` compares the served build with the loaded page before
+ * deciding whether a reload is needed, and protects unsaved work when it is.
+ * That handoff is the `onNeedReload` option; without it, vite-plugin-pwa
  * reloads the page itself, unconditionally, which is what this used to do.
  *
  * This is a best-effort detector, not the primary one. Every trigger below is dead while
@@ -21,7 +21,7 @@
  * could not run.
  */
 import { registerSW } from 'virtual:pwa-register'
-import { checkForServedWebUpdate, requestServiceWorkerReload } from './appStaleness'
+import { checkForServedWebUpdate } from './appStaleness'
 
 const UPDATE_POLL_MS = 60 * 1000
 
@@ -29,7 +29,8 @@ let serviceWorkerRegistration: ServiceWorkerRegistration | null = null
 let updateEventListenersRegistered = false
 
 function checkForUpdates(): void {
-  void serviceWorkerRegistration?.update()
+  // Offline update checks are expected to fail; the next wake or poll retries.
+  void serviceWorkerRegistration?.update().catch(() => {})
   // The direct probe is faster than waiting for a worker lifecycle and also
   // works when registration is unhealthy. Both feed the same safe-reload gate.
   void checkForServedWebUpdate()
@@ -51,10 +52,10 @@ export function registerAppServiceWorker(): void {
 
   registerSW({
     immediate: true,
-    // Replaces vite-plugin-pwa's built-in `window.location.reload()`. Same trigger, but
-    // routed through the busy gate.
+    // A new worker may be catching up to this already-current page. Activation
+    // checks the build just like polling; it never forces a redundant refresh.
     onNeedReload() {
-      requestServiceWorkerReload()
+      void checkForServedWebUpdate()
     },
     onRegisteredSW(_swUrl, registration) {
       if (!registration) return

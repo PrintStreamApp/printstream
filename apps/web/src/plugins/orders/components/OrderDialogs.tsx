@@ -12,6 +12,7 @@
  * These are extracted from `OrdersView.tsx` unchanged; behavior, props, and
  * markup are preserved.
  */
+import { useTagFilter } from '../../../hooks/useTagFilter'
 import { useDeferredValue, useEffect, useMemo, useState } from 'react'
 import {
   Accordion,
@@ -625,15 +626,17 @@ export function TemplateLibraryFilePickerDialog({
   const [sort, setSort] = useLocalStorageState<LibrarySort>(LIBRARY_SORT_KEY, { key: 'name', dir: 'asc' }, parseLibrarySort)
   const [group, setGroup] = useLocalStorageState<LibraryGroupBy>(LIBRARY_GROUP_KEY, 'none', parseLibraryGroup, String)
   const [favoritesOnly, setFavoritesOnly] = useState(false)
+  const tagFilter = useTagFilter('file', 'library')
   const browseQuery = useQuery<LibraryBrowseResponse>({
-    queryKey: ['library-browse', 'orders-picker', currentFolderId ?? 'root', bridgeId ?? 'none', favoritesOnly],
-    queryFn: () => {
+    queryKey: ['library-browse', 'orders-picker', currentFolderId ?? 'root', bridgeId ?? 'none', favoritesOnly, tagFilter.value],
+    queryFn: ({ signal }) => {
       const params = new URLSearchParams()
+      if (tagFilter.value.length) params.set('tagIds', tagFilter.value.join(','))
       if (currentFolderId) params.set('folderId', currentFolderId)
       if (bridgeId) params.set('bridgeId', bridgeId)
       if (favoritesOnly) params.set('favoritesOnly', 'true')
       const search = params.toString()
-      return apiFetch<LibraryBrowseResponse>(`/api/library/browse${search ? `?${search}` : ''}`)
+      return apiFetch<LibraryBrowseResponse>(`/api/library/browse${search ? `?${search}` : ''}`, { signal })
     },
     staleTime: 60_000
   })
@@ -668,7 +671,7 @@ export function TemplateLibraryFilePickerDialog({
     () => browseData?.files ?? [],
     [browseData?.files]
   )
-  const filters = useLibraryFilters({
+  const filters = useLibraryFilters({ tagFilter,
     visibleFiles,
     childFolders,
     currentFolderId,

@@ -6,11 +6,17 @@
  * `SliceSettingsPanel`/`SliceSettingsController` (the latter also drives the
  * model studio's borrowed slice config).
  */
+import { useTagFilter } from '../hooks/useTagFilter'
+import { useTagAssignment } from '../hooks/useTagAssignment'
+import LabelIcon from '@mui/icons-material/LabelOutlined'
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react'
 import {
   Alert, Badge, Box, Button, CircularProgress, Dropdown, IconButton,
   ListItemDecorator, Menu, MenuButton, MenuItem, Sheet, Stack, Tooltip, Typography
 } from '@mui/joy'
+import { ActionMenuButton } from '../components/ActionMenuButton'
+import { usePluginSlots } from '../plugin/usePluginSlots'
+import AddRoundedIcon from '@mui/icons-material/AddRounded'
 import CreateNewFolderRoundedIcon from '@mui/icons-material/CreateNewFolderRounded'
 import FolderCopyRoundedIcon from '@mui/icons-material/FolderCopyRounded'
 import DriveFolderUploadRoundedIcon from '@mui/icons-material/DriveFolderUploadRounded'
@@ -173,6 +179,7 @@ type SliceResultTarget = SliceThenPrintTarget & {
  * grouping: the on-disk layout under `LIBRARY_DIR` stays flat.
  */
 export function LibraryView() {
+  const createSlots = usePluginSlots('library.create')
   const { confirm } = usePromptDialog()
   const navigate = useNavigate()
   const location = useLocation()
@@ -180,6 +187,7 @@ export function LibraryView() {
   const { workspaceSlug, folderId: currentFolderIdParam } = useParams<{ workspaceSlug: string; folderId?: string }>()
   const [searchParams, setSearchParams] = useSearchParams()
   const queryClient = useQueryClient()
+  const { openTags, tagDialog } = useTagAssignment('file')
   const authBootstrapQuery = useAuthBootstrapQuery()
   const inputRef = useRef<HTMLInputElement | null>(null)
   const folderInputRef = useRef<HTMLInputElement | null>(null)
@@ -199,6 +207,7 @@ export function LibraryView() {
   // editor saves via "Save as new" (prompting for name + destination) rather than overwriting
   // the throwaway scaffold. Set from the scaffold flow's `onDiscard` presence.
   const [sliceTargetIsNewProject, setSliceTargetIsNewProject] = useState(false)
+  const [initialImportFileId, setInitialImportFileId] = useState<string | undefined>()
   // How the slice/editor dialog was opened: 'library' (the Edit action, slice/save
   // focused) or 'print' (the Print action, slice-then-print focused, matching the
   // PrintersView print dialog's 3MF flow).
@@ -264,10 +273,12 @@ export function LibraryView() {
   // from the path rather than local state; the toggle navigates to/from it.
   const favoritesOnly = isLibraryFavoritesPath(location.pathname)
 
+  const tagFilter = useTagFilter('file', 'library')
   const browseQuery = useQuery({
-    queryKey: ['library-browse', currentFolderId ?? 'root', requestedBridgeId ?? 'none', allFolderSearch, sort.key, sort.dir, favoritesOnly],
-    queryFn: () => {
+    queryKey: ['library-browse', currentFolderId ?? 'root', requestedBridgeId ?? 'none', allFolderSearch, sort.key, sort.dir, favoritesOnly, tagFilter.value],
+    queryFn: ({ signal }) => {
       const params = new URLSearchParams()
+      if (tagFilter.value.length) params.set('tagIds', tagFilter.value.join(','))
       if (currentFolderId) params.set('folderId', currentFolderId)
       if (requestedBridgeId) params.set('bridgeId', requestedBridgeId)
       if (allFolderSearch) params.set('search', allFolderSearch)
@@ -275,7 +286,7 @@ export function LibraryView() {
       params.set('dir', sort.dir)
       if (favoritesOnly) params.set('favoritesOnly', 'true')
       const query = params.toString()
-      return apiFetch<LibraryBrowseResponse>(`/api/library/browse${query ? `?${query}` : ''}`)
+      return apiFetch<LibraryBrowseResponse>(`/api/library/browse${query ? `?${query}` : ''}`, { signal })
     },
     enabled: authBootstrapQuery.isSuccess ? (canViewLibrary && !showNoConnectedBridgesPlaceholder) : false
   })
@@ -367,7 +378,7 @@ export function LibraryView() {
   // silently dropping rows: the user narrows via a subfolder or search.
   const browseTruncated = browseData?.truncated ?? false
   const browseFileLimitLabel = browseData?.fileLimit?.toLocaleString() ?? ''
-  const libraryFilters = useLibraryFilters({ visibleFiles, childFolders, currentFolderId, requestedBridgeId, deferredSearch, sort, favoritesOnly })
+  const libraryFilters = useLibraryFilters({ tagFilter, visibleFiles, childFolders, currentFolderId, requestedBridgeId, deferredSearch, sort, favoritesOnly })
   // Only the fields referenced outside the shared filters/pagination components
   // are destructured; the rest are passed straight through via `libraryFilters`.
   const {
@@ -481,6 +492,7 @@ export function LibraryView() {
     setSliceFlow('library')
     setSliceVersionId(null)
     setSliceTargetIsNewProject(false)
+    setInitialImportFileId(undefined)
     const cleanup = sliceTargetCleanupRef.current
     sliceTargetCleanupRef.current = null
     cleanup?.()
@@ -491,13 +503,14 @@ export function LibraryView() {
   // full editor). `onDiscard` (scaffold cleanup) runs when the dialog closes.
   const openSliceForSavedFile = useCallback(async (
     file: { id: string; name: string },
-    opts?: { onDiscard?: () => void; flow?: 'library' | 'print' }
+    opts?: { onDiscard?: () => void; flow?: 'library' | 'print'; initialImportFileId?: string }
   ) => {
     try {
       const { file: full } = await apiFetch<{ file: LibraryFile }>(`/api/library/${file.id}`)
       sliceTargetCleanupRef.current = opts?.onDiscard ?? null
       // A new-project scaffold is the only caller that passes an onDiscard cleanup.
       setSliceTargetIsNewProject(Boolean(opts?.onDiscard))
+      setInitialImportFileId(opts?.initialImportFileId)
       setSliceVersionId(null)
       setSliceFlow(opts?.flow ?? 'library')
       setSliceTarget(full)
@@ -975,6 +988,10 @@ export function LibraryView() {
               kind: file.kind,
               name: file.name,
               canDownload: canDownloadLibrary,
+              canUpload: canUploadLibrary,
+              folderId: currentFolderId,
+              bridgeId: activeBridgeId,
+              onRequestSlice: openSliceForSavedFile,
               onAction,
               onPreview: () => {
                 setPreviewVersion(null)
@@ -1015,6 +1032,7 @@ export function LibraryView() {
             {file.favorite ? 'Unfavorite' : 'Favorite'}
           </MenuItem>
         )}
+        {canManageLibrary && <MenuItem onClick={() => { onAction?.(); openTags([file.id]) }}><ListItemDecorator><LabelIcon /></ListItemDecorator>Assign tags</MenuItem>}
         {canManageLibrary && <MenuItem onClick={() => {
           onAction?.()
           setRenameTarget(file)
@@ -1069,6 +1087,7 @@ export function LibraryView() {
       }}
       cancelDisabled={recycleFiles.isPending}
     >
+      <Button size="sm" variant="soft" startDecorator={<LabelIcon />} disabled={!selectedVisibleFiles.length} onClick={() => openTags(selectedVisibleFiles.map((file) => file.id))}>Assign tags</Button>
       <Button
         size="sm"
         startDecorator={<DriveFileMoveRoundedIcon />}
@@ -1176,12 +1195,27 @@ export function LibraryView() {
                 justifyContent: { xs: 'flex-start', sm: 'flex-end' }
               }}
             >
-              {canManageLibrary && !bridgeRootMode && <Button size="sm" variant="soft" startDecorator={<CreateNewFolderRoundedIcon />} onClick={() => setCreatingFolder(true)}>New folder</Button>}
+              {!bridgeRootMode && (canManageLibrary || (canUploadLibrary && createSlots.length > 0)) && (
+                <ActionMenuButton label="New" ariaLabel="Create new" size="sm" startDecorator={<AddRoundedIcon />} sx={{ display: { xs: 'inline-flex', sm: 'none' } }}>
+                  {canUploadLibrary && (
+                    <PluginSlot name="library.create" context={{ folderId: currentFolderId, bridgeId: activeBridgeId, onSaved: invalidateAll, onRequestSlice: openSliceForSavedFile, presentation: 'menu-item' }} />
+                  )}
+                  {canManageLibrary && (
+                    <MenuItem onClick={() => setCreatingFolder(true)}>
+                      <ListItemDecorator><CreateNewFolderRoundedIcon /></ListItemDecorator>
+                      New Folder
+                    </MenuItem>
+                  )}
+                </ActionMenuButton>
+              )}
+              {canManageLibrary && !bridgeRootMode && <Button size="sm" variant="soft" sx={{ display: { xs: 'none', sm: 'inline-flex' } }} startDecorator={<CreateNewFolderRoundedIcon />} onClick={() => setCreatingFolder(true)}>New folder</Button>}
               {canUploadLibrary && !bridgeRootMode && (
-                <PluginSlot
-                  name="library.create"
-                  context={{ folderId: currentFolderId, bridgeId: activeBridgeId, onSaved: invalidateAll, onRequestSlice: openSliceForSavedFile }}
-                />
+                <Box sx={{ display: { xs: 'none', sm: 'inline-flex' } }}>
+                  <PluginSlot
+                    name="library.create"
+                    context={{ folderId: currentFolderId, bridgeId: activeBridgeId, onSaved: invalidateAll, onRequestSlice: openSliceForSavedFile }}
+                  />
+                </Box>
               )}
               {canUploadLibrary && !bridgeRootMode && uploadSplitButton}
             </Stack>
@@ -1490,6 +1524,7 @@ export function LibraryView() {
         />
       )}
 
+      {tagDialog}
       {canManageLibrary && creatingFolder && (
         <CreateFolderModal
           parentId={currentFolderId}
@@ -1584,6 +1619,7 @@ export function LibraryView() {
           file={sliceTarget}
           flow={sliceFlow}
           isNewProject={sliceTargetIsNewProject}
+          initialImportFileId={initialImportFileId}
           versionId={sliceVersionId}
           folders={allFolders}
           currentFolderId={currentFolderId}

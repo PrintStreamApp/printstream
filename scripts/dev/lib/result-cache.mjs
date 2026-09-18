@@ -238,18 +238,26 @@ function markerDir(workspaceRoot) {
  */
 async function buildGraph({ workspaceRoot, testFiles }) {
   const esbuild = await import('esbuild')
-  const result = await esbuild.build({
-    entryPoints: testFiles,
-    bundle: true,
-    write: false,
-    metafile: true,
-    packages: 'external',
-    platform: 'neutral',
-    format: 'esm',
-    logLevel: 'silent',
-    outdir: path.join(workspaceRoot, '.esbuild-graph-unused'),
-    absWorkingDir: workspaceRoot
-  })
+  let result
+  try {
+    result = await esbuild.build({
+      entryPoints: testFiles,
+      bundle: true,
+      write: false,
+      metafile: true,
+      packages: 'external',
+      platform: 'neutral',
+      format: 'esm',
+      logLevel: 'silent',
+      outdir: path.join(workspaceRoot, '.esbuild-graph-unused'),
+      absWorkingDir: workspaceRoot
+    })
+  } finally {
+    // This CLI owns its esbuild service. Graph construction is finished before any tests start;
+    // retaining the idle service keeps its large native heap resident alongside test workers.
+    // Release it on failure too, since cache failure falls back to running the complete suite.
+    esbuild.stop()
+  }
 
   // Files esbuild could not fully analyse. Its warning is the only signal that a dynamic import
   // was left out of the graph, which would make a digest cover less than the test actually runs.

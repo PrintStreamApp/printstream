@@ -36,6 +36,8 @@ import {
   trayIndexToAmsSlot,
   VIRTUAL_TRAY_DEPUTY_ID,
   VIRTUAL_TRAY_MAIN_ID,
+  type JobTag,
+  type JobTagSnapshot,
   type PrintDispatchJob,
   type PrintFromLibrary,
   type PrintNozzleOffsetCalibrationMode,
@@ -68,6 +70,7 @@ import { normalizeExactPrinterFilePath } from './printer-file-path.js'
 import { cancelTrackedPrintJobRecord, startTrackedPrintJob } from './print-job-recorder.js'
 import { recordDispatchedPrintPauseSchedule } from './print-pause-schedule-scan.js'
 import { ensureLibraryFileReplica, resolveLibraryFileToLocalPath } from './bridge-library-files.js'
+import { capturePrintJobTags } from './print-job-tag-capture.js'
 import { recordPrintDispatch } from './metrics.js'
 import { markDispatchStartAttempted, recordDispatchEnqueued, recordDispatchStatus } from './dispatch-journal.js'
 
@@ -91,6 +94,9 @@ interface DispatchJobState {
   fileSizeBytes: number
   sourceKind: '3mf' | 'gcode'
   projectFilamentChips: PrintDispatchJob['projectFilamentChips']
+  tagSnapshot: JobTagSnapshot
+  /** Optional live lineage, independent of the shared content snapshot and frozen tags. */
+  sourceLibraryFileId: string | null
   /**
    * Re-slice provenance carried from the printed library file onto the history row:
    * the preserved project 3MF this artifact was sliced from, and the settings that
@@ -149,6 +155,10 @@ interface EnqueueLibraryPrintInput extends PrintFromLibrary {
 interface EnqueueSnapshotPrintInput extends Omit<EnqueueLibraryPrintInput, 'fileId'> {
   fileName: string
   snapshot: SnapshotLibraryFile
+  /** Printer/file tags frozen by the library entrypoint before snapshot preparation. */
+  tagSnapshot?: JobTag[]
+  /** Original library identity; never inferred from a shared snapshot. */
+  sourceLibraryFileId?: string | null
   /** See `DispatchJobState.sourceProjectFileId`; read off the printed file by the caller. */
   sourceProjectFileId?: string | null
   sliceSettingsJson?: string | null
@@ -294,6 +304,14 @@ class PrintDispatcher {
       fileSizeBytes: snapshot.sizeBytes,
       sourceKind,
       projectFilamentChips,
+      sourceLibraryFileId: input.sourceLibraryFileId ?? null,
+      tagSnapshot: await capturePrintJobTags(rootPrisma, snapshot.workspaceId, {
+        printerId: printer.id,
+        tags: input.tagSnapshot,
+        fileIds: input.sourceLibraryFileId ? [input.sourceLibraryFileId] : [],
+        amsMapping,
+        useAms: input.useAms
+      }),
       sourceProjectFileId: input.sourceProjectFileId ?? null,
       sliceSettingsJson: input.sliceSettingsJson ?? null,
       localPath,
@@ -700,6 +718,8 @@ class PrintDispatcher {
       fileName: job.fileName,
       fileSizeBytes: job.fileSizeBytes,
       sourceKind: job.sourceKind,
+      sourceLibraryFileId: job.sourceLibraryFileId,
+      tagSnapshot: job.tagSnapshot,
       sourceProjectFileId: job.sourceProjectFileId,
       sliceSettingsJson: job.sliceSettingsJson,
       plate: job.options.plate,

@@ -13,13 +13,15 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Alert, Button, Chip, CircularProgress, DialogActions, Sheet, Stack, Typography } from '@mui/joy'
 import ErrorOutlineRoundedIcon from '@mui/icons-material/ErrorOutlineRounded'
+import CheckCircleRoundedIcon from '@mui/icons-material/CheckCircleRounded'
 import PrintRoundedIcon from '@mui/icons-material/PrintRounded'
 import VisibilityRoundedIcon from '@mui/icons-material/VisibilityRounded'
 import WarningAmberRoundedIcon from '@mui/icons-material/WarningAmberRounded'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useLocation, useNavigate } from 'react-router-dom'
-import type { CalibrationRun } from '@printstream/shared'
+import { PRINTERS_CLEAR_PLATE_PERMISSION, isAutomaticPressureAdvance, type CalibrationRun } from '@printstream/shared'
 import { BackAwareModal as Modal } from '../../components/BackAwareModal'
+import { usePromptDialog } from '../../components/PromptDialogProvider'
 import { ScrollableDialogBody, ScrollableModalDialog } from '../../components/ScrollableDialog'
 import { SliceEstimates } from '../../components/library/SliceEstimates'
 import { PluginSlot } from '../../plugin/PluginSlot'
@@ -36,6 +38,12 @@ import {
 import { calibrationKeys, fetchCalibrationRuns, isCalibrationRunActive, printCalibrationRun } from './api'
 import { runTitle } from './runPresentation'
 import { ProgressBar } from '../../components/ProgressBar'
+import { useAuthBootstrapQuery } from '../../lib/authQuery'
+import {
+  useMarkPrinterPlateCleared,
+  usePlateClearingState,
+  usePlateClearingSync
+} from '../../lib/plateClearing'
 
 const STATUS_LABELS: Record<CalibrationRun['status'], { label: string; color: 'neutral' | 'primary' | 'success' | 'warning' | 'danger' }> = {
   slicing: { label: 'Slicing', color: 'primary' },
@@ -50,7 +58,9 @@ export function CalibrationSlicePrintModal({ run: initialRun, onClose }: { run: 
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const location = useLocation()
+  const { confirm } = usePromptDialog()
   const [previewing, setPreviewing] = useState(false)
+  usePlateClearingSync()
 
   // Authoritative run lifecycle (slicing -> readyToPrint -> printing) comes from the runs list, which
   // reconciles the slice queue on read; the slicing job only supplies the live progress bar detail.
@@ -64,6 +74,7 @@ export function CalibrationSlicePrintModal({ run: initialRun, onClose }: { run: 
     () => runsQuery.data?.find((entry) => entry.id === initialRun.id) ?? initialRun,
     [runsQuery.data, initialRun]
   )
+  const automatic = isAutomaticPressureAdvance(run.parameters)
 
   // The job's own record, not the list: the list carries only active/recent jobs now, and this
   // dialog can be reopened on a run whose slice finished long ago.
@@ -84,7 +95,7 @@ export function CalibrationSlicePrintModal({ run: initialRun, onClose }: { run: 
     mutationFn: () => printCalibrationRun(run.id),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: calibrationKeys.runs })
-      toast.success('Calibration print started: measure it and enter the result when it finishes')
+      toast.success(automatic ? 'Automatic calibration started. Review the measured result when it finishes.' : 'Calibration print started: measure it and enter the result when it finishes')
       handleClose()
     }
   })
@@ -95,6 +106,32 @@ export function CalibrationSlicePrintModal({ run: initialRun, onClose }: { run: 
   const isSlicing = run.status === 'slicing'
   const isReady = run.status === 'readyToPrint'
   const isFailed = run.status === 'failed'
+  const plateClearing = usePlateClearingState(run.printerId ?? '')
+  const markPlateCleared = useMarkPrinterPlateCleared()
+  const authBootstrapQuery = useAuthBootstrapQuery()
+  const authEnabled = authBootstrapQuery.data?.authEnabled ?? false
+  const canClearPlate = authBootstrapQuery.data
+    ? !authEnabled || authBootstrapQuery.data.permissions.includes(PRINTERS_CLEAR_PLATE_PERMISSION)
+    : false
+  const plateNeedsClear = isReady && !plateClearing.loading && !plateClearing.cleared
+
+  /** Confirm the physical acknowledgement before changing the shared printer state. */
+  const confirmPlateIsClear = async () => {
+    if (!run.printerId) return
+    const accepted = await confirm({
+      title: 'Confirm build plate cleared?',
+      description: 'Confirm that the printer build plate has been cleared?',
+      confirmLabel: 'Plate is cleared',
+      color: 'warning',
+      confirmDecorator: <CheckCircleRoundedIcon />
+    })
+    if (!accepted) return
+    try {
+      await markPlateCleared.mutateAsync(run.printerId)
+    } catch {
+      // The global mutation handler surfaces the API error; keep this prepared run open.
+    }
+  }
 
   return (
     <>
@@ -105,9 +142,9 @@ export function CalibrationSlicePrintModal({ run: initialRun, onClose }: { run: 
           <Stack spacing={1.25}>
             <Typography level="body-sm" textColor="text.tertiary">
               {isReady
-                ? 'Slicing finished. Clear the plate, then start the print.'
+                ? automatic ? 'Clear the plate, then start automatic calibration.' : 'Slicing finished. Clear the plate, then start the print.'
                 : isFailed
-                  ? 'Slicing failed. You can close this and try again from the Calibration page.'
+                  ? 'Calibration failed. You can close this and try again from the Calibration page.'
                   : 'Preparing your calibration print.'}
             </Typography>
 
@@ -138,7 +175,7 @@ export function CalibrationSlicePrintModal({ run: initialRun, onClose }: { run: 
                     </Typography>
                   </>
                 )}
-                {isReady && (
+                {isReady && !automatic && (
                   <SliceEstimates metadata={job?.metadata} filamentMappings={job?.target.filamentMappings} />
                 )}
                 {isReady && run.outputFileId && (
@@ -153,6 +190,13 @@ export function CalibrationSlicePrintModal({ run: initialRun, onClose }: { run: 
                   >
                     Preview
                   </Button>
+                )}
+                {plateNeedsClear && (
+                  <Alert color="warning" variant="soft" startDecorator={<WarningAmberRoundedIcon />}>
+                    {canClearPlate
+                      ? 'Confirm that the build plate is clear to print this calibration without starting over.'
+                      : 'The build plate must be marked clear by someone with printer control permission.'}
+                  </Alert>
                 )}
                 {isFailed && run.errorMessage && (
                   <Alert color="danger" variant="soft" startDecorator={<ErrorOutlineRoundedIcon />}>{run.errorMessage}</Alert>
@@ -169,9 +213,27 @@ export function CalibrationSlicePrintModal({ run: initialRun, onClose }: { run: 
             {isSlicing ? 'Slice in background' : 'Close'}
           </Button>
           {isReady && (
-            <Button type="button" startDecorator={<PrintRoundedIcon />} loading={print.isPending} onClick={() => print.mutate()}>
-              Print calibration
-            </Button>
+            plateNeedsClear && canClearPlate ? (
+              <Button
+                type="button"
+                color="warning"
+                startDecorator={<CheckCircleRoundedIcon />}
+                loading={markPlateCleared.isPending}
+                onClick={() => void confirmPlateIsClear()}
+              >
+                Mark plate cleared
+              </Button>
+            ) : (
+              <Button
+                type="button"
+                startDecorator={<PrintRoundedIcon />}
+                loading={print.isPending || plateClearing.loading}
+                disabled={plateNeedsClear}
+                onClick={() => print.mutate()}
+              >
+                Print calibration
+              </Button>
+            )
           )}
         </DialogActions>
       </ScrollableModalDialog>

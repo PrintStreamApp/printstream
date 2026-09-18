@@ -2864,6 +2864,11 @@ export function filamentSlotIdRemap(filaments: SceneEditFilament[]): Map<number,
     const src = filament.sourceIndex ?? i
     if (src >= 0 && !remap.has(src + 1)) remap.set(src + 1, i + 1)
   })
+  // Explicit replacements override template ancestry: a new slot can clone a deleted slot's
+  // settings without being the material the user chose to replace it with.
+  filaments.forEach((filament, index) => {
+    for (const sourceIndex of filament.replacedSourceIndices ?? []) remap.set(sourceIndex + 1, index + 1)
+  })
   return remap
 }
 

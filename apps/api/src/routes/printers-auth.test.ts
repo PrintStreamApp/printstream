@@ -20,7 +20,7 @@ import type { RequestAuthContext } from '../lib/auth-context.js'
 import { HttpError } from '../lib/http-error.js'
 import { prisma, rootPrisma } from '../lib/prisma.js'
 import { LICENSE_FIRST_RUN_SETTING_KEY, SELF_HOSTED_GRACE_DAYS } from '../lib/license-enforcement.js'
-import { restorePrismaMethodsAfterEach } from '../test-utils/prisma-stubs.js'
+import { restorePrismaMethodsAfterEach, usePrismaStubs } from '../test-utils/prisma-stubs.js'
 import { bridgeSessionManager } from '../lib/bridge-session-manager.js'
 import { printerDiscovery } from '../lib/printer-discovery.js'
 import { printerManager } from '../lib/printer-manager.js'
@@ -30,6 +30,15 @@ import type { RequestWorkspaceSummary } from '../lib/workspace-context.js'
 const p = prisma as unknown as Record<string, Record<string, unknown>>
 const rp = rootPrisma as unknown as Record<string, Record<string, unknown>>
 // Auto-restore the prisma/rootPrisma methods these tests override (was a per-method save/restore block).
+const stub = usePrismaStubs()
+
+// Job creation captures tags and selected inventory spools. These unit tests must not read
+// the developer's database; snapshot semantics have dedicated job-tag capture tests.
+beforeEach(() => {
+  stub(rootPrisma.workspaceTag, 'findMany', async () => [])
+  stub(rootPrisma.filamentSpool, 'findMany', async () => [])
+})
+
 restorePrismaMethodsAfterEach([
   [p.printer, 'findMany'],
   [rp.bridge, 'findMany'],

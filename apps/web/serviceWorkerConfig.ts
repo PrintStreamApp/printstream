@@ -30,7 +30,8 @@ export const workboxConfig: WorkboxOptions = {
   // The OpenCASCADE build is ~7.6 MB and is only reached when someone imports a STEP file
   // in the 3MF editor. Precaching it would make every install pay that download up front
   // (and trip the size limit above, which fails the build); it is fetched on demand.
-  globIgnores: ['**/occt-import-js*.wasm'],
+  // The served-build probe must describe the network, never the worker's precache.
+  globIgnores: ['**/occt-import-js*.wasm', '**/build-id.json'],
   // OFF, and it must stay off. vite-plugin-pwa defaults it to `index.html`, which
   // registers a precache-first NavigationRoute BEFORE any `runtimeCaching` entry. Workbox
   // takes the first matching route, so leaving it set silently turns the route below into

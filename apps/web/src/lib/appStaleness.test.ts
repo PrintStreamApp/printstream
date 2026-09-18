@@ -291,23 +291,50 @@ test('the deferred notice carries no reload button', async () => {
   assert.equal(notices[0]!.action, undefined)
 })
 
-test('the service worker still reloads when the build id did not move', async () => {
-  // The case the build id CANNOT see: a deploy that only changed index.html or a public/
-  // file leaves the id identical, so the worker is the only detector left. Suppressing it
-  // whenever the ids agree would silence it for exactly those deploys.
-  staleness.observeServedWebBuildId('build-old')
+test('worker activation does not refresh an already-current page, including repeated activations', async () => {
+  probedBuildId = 'build-old'
+  await staleness.checkForServedWebUpdate()
   await settleProbe()
-  staleness.requestServiceWorkerReload()
+  await staleness.checkForServedWebUpdate()
+  await settleProbe()
+  assert.equal(reloads, 0)
+  assert.equal(staleness.isWebUpdatePending(), false)
+})
+
+test('worker activation cannot refresh without a known served build', async () => {
+  probedBuildId = null
+  await staleness.checkForServedWebUpdate()
+  await settleProbe()
+  assert.equal(reloads, 0)
+})
+
+test('worker activation refreshes a confirmed stale page only once', async () => {
+  await staleness.checkForServedWebUpdate()
+  await settleProbe()
+  await staleness.checkForServedWebUpdate()
+  await settleProbe()
+  assert.equal(reloads, 1)
+  assert.equal(window.sessionStorage.getItem('printstream:stale-reload-target'), 'build-new')
+})
+
+test('worker activation protects work and reloads after it finishes', async () => {
+  busy.setAppBusy('slicing', true)
+  await staleness.checkForServedWebUpdate()
+  await settleProbe()
+  assert.equal(reloads, 0)
+  assert.equal(staleness.isWebUpdatePending(), true)
+  busy.setAppBusy('slicing', false)
+  await new Promise((resolve) => setTimeout(resolve, 1_800))
   assert.equal(reloads, 1)
 })
 
-test('the service-worker detector obeys the same in-flight gate', () => {
-  busy.setAppBusy('slicing', true)
-  staleness.requestServiceWorkerReload()
-  assert.equal(reloads, 0, 'worker activation used to reload unconditionally')
-
-  staleness.resetAppStalenessForTests()
-  busy.setAppBusy('slicing', false)
-  staleness.requestServiceWorkerReload()
-  assert.equal(reloads, 1)
+test('a current page with an open dialog does not queue a later worker refresh', async () => {
+  probedBuildId = 'build-old'
+  busy.setAppBusy('dialog-open', true)
+  await staleness.checkForServedWebUpdate()
+  await settleProbe()
+  assert.equal(staleness.isWebUpdatePending(), false)
+  busy.setAppBusy('dialog-open', false)
+  await new Promise((resolve) => setTimeout(resolve, 1_800))
+  assert.equal(reloads, 0)
 })

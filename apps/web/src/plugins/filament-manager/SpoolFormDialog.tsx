@@ -3,7 +3,7 @@
  * spool" button and each row's Edit action. Submits to the create or update
  * endpoint via the shared mutations; closes on success.
  *
- * Brand / Material / Variant / Vendor are chevron-style free-text autocompletes:
+ * Brand / Material / Product line / Vendor are chevron-style free-text autocompletes:
  * the workspace's own previously-used values are grouped under "Used before"
  * above curated suggestions, so past entries are one click away. The colour uses
  * the same preset swatch grid as the AMS slot editor and is combination-aware,
@@ -27,7 +27,7 @@ import { slicingPresetsQueryOptions } from '../../lib/slicingPresetsQuery'
 import { formatSlicingPresetDisplayName } from '../../lib/slicingPresetSelection'
 import { bambuColorName, bambuMaterialFromPresetName, bambuMaterialFromType } from '../../data/bambuColors'
 import { useSpoolMutations, useSpoolsQuery } from './api'
-import { FILAMENT_BRAND_SUGGESTIONS, FILAMENT_MATERIAL_SUGGESTIONS, FILAMENT_VARIANT_SUGGESTIONS } from './constants'
+import { FILAMENT_BRAND_SUGGESTIONS, FILAMENT_MATERIAL_SUGGESTIONS, FILAMENT_PRODUCT_LINE_SUGGESTIONS } from './constants'
 
 type FormState = {
   brand: string
@@ -132,11 +132,14 @@ export function SpoolFormDialog({
   open,
   spool,
   initialValues,
+  onSaved,
   onClose
 }: {
   open: boolean
   spool: FilamentSpool | null
   initialValues?: Partial<SpoolCreateInput> | null
+  /** Optional continuation for picker flows that need the created/updated row. */
+  onSaved?: (spool: FilamentSpool) => void | Promise<void>
   onClose: () => void
 }) {
   const { create, update } = useSpoolMutations()
@@ -157,7 +160,7 @@ export function SpoolFormDialog({
   const spools = useMemo(() => spoolsQuery.data ?? [], [spoolsQuery.data])
   const brandOptions = useMemo(() => buildOptions(spools.map((s) => s.brand ?? ''), FILAMENT_BRAND_SUGGESTIONS), [spools])
   const materialOptions = useMemo(() => buildOptions(spools.map((s) => s.filamentType), FILAMENT_MATERIAL_SUGGESTIONS), [spools])
-  const variantOptions = useMemo(() => buildOptions(spools.map((s) => s.materialSubtype ?? ''), FILAMENT_VARIANT_SUGGESTIONS), [spools])
+  const productLineOptions = useMemo(() => buildOptions(spools.map((s) => s.materialSubtype ?? ''), FILAMENT_PRODUCT_LINE_SUGGESTIONS), [spools])
   const vendorOptions = useMemo(() => buildOptions(spools.map((s) => s.vendor ?? ''), []), [spools])
 
   // Slicing-preset picker options: filament profiles from the slicer catalogue,
@@ -240,8 +243,10 @@ export function SpoolFormDialog({
       productCode: form.productCode.trim() || null
     }
     try {
-      if (spool) await update.mutateAsync({ id: spool.id, input: payload })
-      else await create.mutateAsync(payload)
+      const saved = spool
+        ? await update.mutateAsync({ id: spool.id, input: payload })
+        : await create.mutateAsync(payload)
+      await onSaved?.(saved)
       onClose()
     } catch (caught) {
       setError(extractErrorMessage(caught, 'Could not save the spool.'))
@@ -263,14 +268,14 @@ export function SpoolFormDialog({
                 <FieldAutocomplete options={brandOptions} value={form.brand} onChange={set('brand')} placeholder="Bambu, Polymaker…" />
               </FormControl>
               <FormControl sx={{ flex: 1, minWidth: 0 }} required>
-                <FormLabel>Material</FormLabel>
+                <FormLabel>Material type</FormLabel>
                 <FieldAutocomplete options={materialOptions} value={form.filamentType} onChange={set('filamentType')} placeholder="PLA" />
               </FormControl>
             </Stack>
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.25}>
               <FormControl sx={{ flex: 1, minWidth: 0 }}>
-                <FormLabel>Variant</FormLabel>
-                <FieldAutocomplete options={variantOptions} value={form.materialSubtype} onChange={set('materialSubtype')} placeholder="PLA Silk, Matte…" />
+                <FormLabel>Product line</FormLabel>
+                <FieldAutocomplete options={productLineOptions} value={form.materialSubtype} onChange={set('materialSubtype')} placeholder="PolyLite PETG, PLA Metal" />
               </FormControl>
               <FormControl>
                 <FormLabel>Colour</FormLabel>

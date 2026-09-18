@@ -9,6 +9,8 @@
  * Desktop adds a multi-select mode ({@link useSpoolSelection}) with a bulk action
  * bar for unloading and recycling several spools at once.
  */
+import { useTagAssignment } from '../../hooks/useTagAssignment'
+import LabelIcon from '@mui/icons-material/LabelOutlined'
 import { useCallback, useMemo, useState } from 'react'
 import { Alert, Box, Button, Chip, Stack, Typography } from '@mui/joy'
 import AddRoundedIcon from '@mui/icons-material/AddRounded'
@@ -33,6 +35,7 @@ import { useSpoolDirectory } from './useSpoolDirectory'
 import { useSpoolSelection } from './useSpoolSelection'
 
 export function FilamentView() {
+  const { openTags, tagDialog } = useTagAssignment('spool')
   const spoolsQuery = useSpoolsQuery()
   const { recycle, unassign } = useSpoolMutations()
   const { confirm } = usePromptDialog()
@@ -126,6 +129,7 @@ export function FilamentView() {
 
   const selectionActions = selection.selectionMode ? (
     <BulkSelectionActions onCancel={() => setSelectionMode(false)}>
+      <Button size="sm" variant="soft" startDecorator={<LabelIcon />} disabled={!selectedSpools.length || !directory.tagFilter.canAssign} onClick={() => openTags(selectedSpools.map((spool) => spool.id))}>Assign tags</Button>
       <Button
         size="sm"
         variant="soft"
@@ -150,7 +154,8 @@ export function FilamentView() {
 
   return (
     <Stack spacing={1.5}>
-      <Stack direction="row" spacing={1} alignItems="flex-start" justifyContent="space-between" sx={{ flexWrap: 'wrap' }}>
+      {tagDialog}
+      <Stack direction="row" spacing={1} alignItems="flex-start" justifyContent="space-between" sx={{ flexWrap: 'nowrap' }}>
         <Box sx={{ minWidth: 0 }}>
           <Typography level="h3" startDecorator={<FilamentSpoolIcon />}>Filament</Typography>
           {summary.count > 0 && (
@@ -161,11 +166,13 @@ export function FilamentView() {
             </Stack>
           )}
         </Box>
-        <Stack direction="row" spacing={1} alignItems="center">
-          <Button size="sm" variant="soft" startDecorator={<QrCodeScannerRoundedIcon />} onClick={() => setScanning(true)}>
-            Scan barcode
+        <Stack direction="row" spacing={1} alignItems="center" sx={{ flexShrink: 0 }}>
+          <Button size="sm" variant="soft" startDecorator={<QrCodeScannerRoundedIcon />} aria-label="Scan barcode" onClick={() => setScanning(true)}>
+            <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>Scan barcode</Box>
           </Button>
-          <Button size="sm" startDecorator={<AddRoundedIcon />} onClick={() => setCreating(true)}>Add spool</Button>
+          <Button size="sm" startDecorator={<AddRoundedIcon />} aria-label="Add spool" onClick={() => setCreating(true)}>
+            <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>Add spool</Box>
+          </Button>
         </Stack>
       </Stack>
 

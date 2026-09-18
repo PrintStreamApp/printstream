@@ -1,6 +1,6 @@
 /**
- * The grouped slicing-profile picker (process/machine presets) shared by the slice settings
- * panel and the process-settings dialog's profile switcher. Groups options the Bambu way
+ * The grouped slicing-profile picker (process, machine, or filament presets) shared by slicing
+ * surfaces and the process-settings dialog's profile switcher. Groups options the Bambu way
  * (3MF project presets / User presets / System presets, group band styling comes
  * from `DeferredKeyboardAutocomplete`), keeps option names on ONE line (ellipsized), and
  * surfaces the full preset name via tooltips, on each option and on the selected value,

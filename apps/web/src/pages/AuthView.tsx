@@ -1,16 +1,19 @@
 import ErrorOutlineRoundedIcon from '@mui/icons-material/ErrorOutlineRounded'
-import { Alert, Stack, Typography } from '@mui/joy'
+import { Alert, Button, Stack, Typography } from '@mui/joy'
 import React from 'react'
 import { useLocation } from 'react-router-dom'
 import { resolveAuthScope, useAuthBootstrapQuery } from '../lib/authQuery'
 import { resolveSettingsAuthState } from '../lib/settingsAuth'
 import { BrandMark } from '../components/BrandMark'
 import { StaticPluginSlot } from '../plugin/StaticPluginSlot'
+import { isNativeApp } from '../native/bridge'
+import { NativeWelcomeButton } from '../native/NativeWelcomeButton'
 
 /**
  * Core auth shell. Providers contribute their sign-in methods via plugin slots.
  */
 export function AuthView({ redirectPath }: { redirectPath?: string } = {}) {
+  const native = isNativeApp()
   const location = useLocation()
   const authBootstrapQuery = useAuthBootstrapQuery({ suppressGlobalErrorToast: true })
   const authError = new URLSearchParams(location.search).get('error')
@@ -36,17 +39,24 @@ export function AuthView({ redirectPath }: { redirectPath?: string } = {}) {
     <Stack
       justifyContent="center"
       sx={{
-        minHeight: {
+        // Native auth has no app navigation chrome to subtract from its height.
+        minHeight: native ? 'calc(100dvh - var(--app-top-inset, 0px) - env(safe-area-inset-bottom, 0px))' : {
           xs: 'calc(100dvh - var(--app-top-inset, 0px) - 11rem)',
           sm: 'calc(100dvh - var(--app-top-inset, 0px) - 9rem)'
         },
-        py: { xs: 2, sm: 4 }
+        py: { xs: 2, sm: 4 },
+        px: 3,
+        boxSizing: 'border-box'
       }}
     >
-      <Stack spacing={2} sx={{ width: '100%', maxWidth: 420, mx: 'auto' }}>
+      <Stack spacing={2} sx={{ width: '100%', maxWidth: native ? 360 : 420, mx: 'auto' }}>
         {/* This screen renders outside the shell's chrome, so without this it
             carries no brand mark at all. */}
         <BrandMark />
+        {authBootstrapQuery.isError && <Alert color="danger">
+          Could not load sign-in options.
+          <Button size="sm" variant="plain" onClick={() => { void authBootstrapQuery.refetch() }}>Try again</Button>
+        </Alert>}
         {!showsInlineSignInTitle && <Typography level="h2">{authTitle}</Typography>}
         {authError && (
           <Alert color="danger" variant="soft" startDecorator={<ErrorOutlineRoundedIcon />}>
@@ -90,6 +100,7 @@ export function AuthView({ redirectPath }: { redirectPath?: string } = {}) {
             authScopeKey
           }}
         />
+        {native && <Stack alignItems="flex-end"><NativeWelcomeButton /></Stack>}
       </Stack>
     </Stack>
   )

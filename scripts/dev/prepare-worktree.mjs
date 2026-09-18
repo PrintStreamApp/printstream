@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/** Fully bootstrap this checkout for tests and development. */
+/** Prepare checkout-local files and dependencies without starting development infrastructure. */
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -13,5 +13,5 @@ if (result.state === 'failed') {
   process.exitCode = 1
 } else {
   for (const line of result.lines) console.log(`[worktree-prepare] ${line}`)
-  console.log(`[worktree-prepare] ready, verified ${result.baselinePathCount} baseline path(s)`)
+  console.log('[worktree-prepare] ready; development infrastructure remains stopped')
 }

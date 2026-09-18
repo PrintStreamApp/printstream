@@ -20,6 +20,7 @@ import { extractErrorMessage, type FilamentSpool } from '@printstream/shared'
 import { BackAwareModal as Modal } from '../../components/BackAwareModal'
 import { ScrollableDialogBody, ScrollableModalDialog } from '../../components/ScrollableDialog'
 import { EmptyState } from '../../components/EmptyState'
+import { DialogSection } from '../../components/DialogSection'
 import { toast } from '../../lib/toast'
 import { useSpoolsQuery, useSpoolMutations } from './api'
 import { FilamentSpoolIcon } from '../../components/FilamentSpoolIcon'
@@ -31,13 +32,15 @@ import { useSpoolDirectory } from './useSpoolDirectory'
 import { SPOOL_PICKER_PREFS_KEY } from './constants'
 import { spoolTitle } from './filters'
 
-type ApplyValues = { filamentType?: string | null; colorHex?: string | null; trayInfoIdx?: string | null }
+type ApplyValues = { brand?: string | null; colorName?: string | null; filamentType?: string | null; materialSubtype?: string | null; colorHex?: string | null; trayInfoIdx?: string | null; spoolLabel?: string }
 
 type SlotContext = {
+  /** Hosts may place the library picker and save action on opposite sides of their fields. */
+  action?: unknown
   printerId?: unknown
   amsId?: unknown
   slotId?: unknown
-  currentValues?: { filamentType?: unknown; colorHex?: unknown; trayInfoIdx?: unknown }
+  currentValues?: { brand?: unknown; materialSubtype?: unknown; colorName?: unknown; filamentType?: unknown; colorHex?: unknown; trayInfoIdx?: unknown }
   onApplyFilament?: unknown
 }
 
@@ -69,9 +72,9 @@ export function SlotEditorActions(props: SlotContext) {
   const assignInput = { printerId, amsId, slotId }
 
   const pickSpool = async (spool: FilamentSpool) => {
-    onApply?.({ filamentType: spool.filamentType, colorHex: spool.colorHex, trayInfoIdx: spool.trayInfoIdx })
     try {
       await assign.mutateAsync({ id: spool.id, input: assignInput })
+      onApply?.({ brand: spool.brand, colorName: spool.colorName, filamentType: spool.filamentType, materialSubtype: spool.materialSubtype, colorHex: spool.colorHex, trayInfoIdx: spool.trayInfoIdx, spoolLabel: spoolTitle(spool) })
       toast.success(`Loaded ${spoolTitle(spool)} here`)
     } catch (error) {
       toast.error(extractErrorMessage(error, 'Could not record the spool assignment.'))
@@ -83,10 +86,14 @@ export function SlotEditorActions(props: SlotContext) {
     try {
       const created = await create.mutateAsync({
         filamentType: currentType ?? 'PLA',
+        brand: typeof current.brand === 'string' ? current.brand : null,
+        materialSubtype: typeof current.materialSubtype === 'string' ? current.materialSubtype : null,
+        colorName: typeof current.colorName === 'string' ? current.colorName : null,
         colorHex: currentColor && HEX.test(currentColor) ? currentColor : null,
         trayInfoIdx: currentPreset || null
       })
       await assign.mutateAsync({ id: created.id, input: assignInput })
+      onApply?.({ brand: created.brand, colorName: created.colorName, filamentType: created.filamentType, materialSubtype: created.materialSubtype, colorHex: created.colorHex, trayInfoIdx: created.trayInfoIdx, spoolLabel: spoolTitle(created) })
       toast.success('Saved to filament library and loaded here')
     } catch (error) {
       toast.error(extractErrorMessage(error, 'Could not save the spool.'))
@@ -99,7 +106,7 @@ export function SlotEditorActions(props: SlotContext) {
 
   return (
     <Box
-      sx={{
+      sx={props.action === 'pick' || props.action === 'save' ? {} : {
         display: 'flex',
         gap: 1,
         flexWrap: 'wrap',
@@ -108,12 +115,18 @@ export function SlotEditorActions(props: SlotContext) {
         bgcolor: 'background.level1'
       }}
     >
-      <Button size="sm" variant="soft" startDecorator={<Inventory2RoundedIcon />} onClick={() => setPickerOpen(true)}>
+      {props.action === 'pick' ? (
+        <DialogSection title="Filament library">
+          <Button fullWidth size="sm" variant="soft" startDecorator={<Inventory2RoundedIcon />} onClick={() => setPickerOpen(true)}>
+            Pick from library
+          </Button>
+        </DialogSection>
+      ) : props.action !== 'save' && <Button size="sm" variant="soft" startDecorator={<Inventory2RoundedIcon />} onClick={() => setPickerOpen(true)}>
         Pick from library
-      </Button>
-      <Button size="sm" variant="plain" startDecorator={<LibraryAddRoundedIcon />} loading={create.isPending} onClick={() => void saveCurrent()}>
+      </Button>}
+      {props.action !== 'pick' && <Button size="sm" variant="plain" startDecorator={<LibraryAddRoundedIcon />} loading={create.isPending} onClick={() => void saveCurrent()}>
         Save to library
-      </Button>
+      </Button>}
 
       <Modal open={pickerOpen} onClose={() => setPickerOpen(false)}>
         <ScrollableModalDialog variant="outlined" sx={{ width: { xs: '100%', sm: 720 } }}>

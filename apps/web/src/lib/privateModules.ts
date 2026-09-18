@@ -99,6 +99,8 @@ export interface PrivatePlatformAdminModule {
 
 export interface PrivateWebModule {
   name: string
+  /** Authorized cloud billing entry; absent in self-hosted builds. */
+  BillingEntryView?: ComponentType
   marketing?: PrivateMarketingModule
   platformAdmin?: PrivatePlatformAdminModule
   /**
@@ -136,3 +138,7 @@ export const platformAdminModule: PrivatePlatformAdminModule | null =
 /** Cloud-only built-in web plugins (empty in OSS); registered with the public built-ins. */
 export const privateWebPlugins: ReadonlyArray<WebPlugin> =
   privateWebModules.flatMap((entry) => entry.plugins ?? [])
+
+/** Optional cloud entry, discovered through the same private boundary as billing content. */
+export const PrivateBillingEntryView: ComponentType | null =
+  privateWebModules.find((entry) => entry.BillingEntryView)?.BillingEntryView ?? null

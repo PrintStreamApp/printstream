@@ -11,6 +11,7 @@
  * `./logs.js`, never on the capability tables or action-availability logic.
  */
 import { z } from 'zod'
+import { slotMaterialIdentitySchema } from './slot-material.js'
 import { auditLogEntrySchema } from './logs.js'
 import { preservedSliceSettingsSchema, sceneEditSvgPartSchema, sceneEditTextInfoSchema } from './slicing.js'
 import { AMS_TRAY_UNMAPPED, AMS_UNIT_TYPES, isPhysicalAmsTrayIndex, type AmsUnitType } from './ams-tray-index.js'
@@ -312,6 +313,8 @@ export const printerStageSchema = z.enum([
 export type PrinterStage = z.infer<typeof printerStageSchema>
 
 export const amsSlotSchema = z.object({
+  /** PS identity; MQTT type/preset fields remain the hardware compatibility settings. */
+  materialIdentity: slotMaterialIdentitySchema.nullable().optional(),
   slot: z.number().int().min(0),
   trayName: z.string().nullable(),
   filamentType: z.string().nullable(),
@@ -439,6 +442,8 @@ export const virtualTrayAmsIdSchema = z.union([z.literal(254), z.literal(255)])
 export type VirtualTrayAmsId = z.infer<typeof virtualTrayAmsIdSchema>
 
 export const externalSpoolSchema = z.object({
+  /** PS identity; MQTT type/preset fields remain the hardware compatibility settings. */
+  materialIdentity: slotMaterialIdentitySchema.nullable().optional(),
   /** Virtual tray id (`255` main/right, `254` deputy/left). */
   amsId: virtualTrayAmsIdSchema,
   /** Physical extruder/nozzle this external spool feeds, when known. */
@@ -979,6 +984,8 @@ export const printerCommandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('skipObjects'), objectIds: z.array(z.number().int()) }),
   z.object({
     type: z.literal('setAmsSlot'),
+    /** Local identity only, never serialized into MQTT. Null clears a manual assignment. */
+    materialIdentity: slotMaterialIdentitySchema.nullable().optional(),
     /** 0-based AMS unit id (`A` = 0, `B` = 1, ...). */
     amsId: z.number().int().min(0),
     /** 0-based slot index within the unit (0..3 for a standard AMS). */
@@ -1019,6 +1026,8 @@ export const printerCommandSchema = z.discriminatedUnion('type', [
   }),
   z.object({
     type: z.literal('setExternalSpool'),
+    /** Local identity only, never serialized into MQTT. Null clears a manual assignment. */
+    materialIdentity: slotMaterialIdentitySchema.nullable().optional(),
     amsId: virtualTrayAmsIdSchema,
     /** Bambu filament preset id (e.g. `GFA00` for Bambu PLA Basic). Empty for custom. */
     trayInfoIdx: z.string().max(32).default(''),

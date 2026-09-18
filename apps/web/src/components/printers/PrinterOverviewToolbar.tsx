@@ -7,6 +7,8 @@
  * Sort and the four filters are the same controls the Edit-view dialog used to
  * own; here they drive the active saved view (or the Overview defaults) live.
  */
+import type { TagFilter } from '../../hooks/useTagFilter'
+import type { DirectorySelectionConfig } from '../DirectoryToolbar'
 import { FormControl, FormLabel, Option, Select } from '@mui/joy'
 import type { PrinterModel, Printer } from '@printstream/shared'
 import { DirectoryPrimaryToolbar } from '../DirectoryToolbar'
@@ -28,6 +30,8 @@ import type { PrinterViewSort } from '@printstream/shared'
 
 export function PrinterOverviewToolbar({
   printers,
+  tagFilter,
+  selection,
   search,
   onSearchChange,
   group,
@@ -50,6 +54,8 @@ export function PrinterOverviewToolbar({
   onClearFilters
 }: {
   printers: Printer[]
+  tagFilter?: TagFilter
+  selection?: DirectorySelectionConfig
   search: string
   onSearchChange: (value: string) => void
   group: PrinterGroupBy
@@ -84,6 +90,8 @@ export function PrinterOverviewToolbar({
   return (
     <DirectoryPrimaryToolbar
       pinStorageKey="printers.overview"
+      tagFilter={tagFilter}
+      selection={selection}
       searchValue={search}
       onSearchChange={onSearchChange}
       searchPlaceholder="Search printers by name, model, or host"

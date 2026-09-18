@@ -10,6 +10,8 @@
  * `DirectoryGroupingMenu`, `DirectorySortMenu`, `DirectoryPageSizeMenu`) are also
  * exported for surfaces that compose their own layout.
  */
+import { TagPicker } from './tags/TagPicker'
+import type { TagFilter } from '../hooks/useTagFilter'
 import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown'
 import CategoryRoundedIcon from '@mui/icons-material/CategoryRounded'
 import CheckBoxOutlineBlankRoundedIcon from '@mui/icons-material/CheckBoxOutlineBlankRounded'
@@ -303,7 +305,8 @@ export function DirectoryPrimaryToolbar<TSort extends string, TPageSize extends 
   searchAriaLabel,
   searchEndDecorator,
   selection,
-  filters,
+  filters: baseFilters,
+  tagFilter,
   grouping,
   pageSizeValue,
   pageSizeOptions,
@@ -347,6 +350,7 @@ export function DirectoryPrimaryToolbar<TSort extends string, TPageSize extends 
   /** Opt-in selection button for directories whose result rows support selection. */
   selection?: DirectorySelectionConfig
   filters?: DirectoryFiltersConfig
+  tagFilter?: TagFilter
   grouping?: DirectoryGroupingConfig<TGroup>
   pageSizeValue: TPageSize
   pageSizeOptions: ReadonlyArray<PageSizeOption<TPageSize>>
@@ -387,6 +391,14 @@ export function DirectoryPrimaryToolbar<TSort extends string, TPageSize extends 
   /** Namespaces the persisted pin state so each view remembers its own pin (e.g. "library", "jobs.history"). */
   pinStorageKey?: string
 }) {
+  const filters: DirectoryFiltersConfig | undefined = tagFilter ? {
+    ...baseFilters,
+    activeCount: (baseFilters?.activeCount ?? 0) + Number(tagFilter.value.length > 0),
+    disabled: false,
+    clearDisabled: !tagFilter.value.length && (baseFilters?.clearDisabled ?? true),
+    onClear: () => { baseFilters?.onClear?.(); tagFilter.clear() },
+    children: <><TagPicker tags={tagFilter.tags} value={tagFilter.value} onChange={tagFilter.onChange} disabled={tagFilter.isPending} />{tagFilter.isError && <Typography color="danger" level="body-sm">Could not load tags.</Typography>}{baseFilters?.children}</>
+  } : baseFilters
   const isMobile = useMobileViewport()
   const [pinned, setPinned] = useLocalStorageState<boolean>(
     pinStorageKey ? `${TOOLBAR_PINNED_KEY}.${pinStorageKey}` : TOOLBAR_PINNED_KEY,

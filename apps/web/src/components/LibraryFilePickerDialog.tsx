@@ -12,6 +12,7 @@
  * Files are loaded per-folder from `/api/library/browse`, including bridge-root
  * mode where the top level lists bridges instead of folders.
  */
+import { useTagFilter } from '../hooks/useTagFilter'
 import { useDeferredValue, useMemo, useState, type ReactNode } from 'react'
 import { Alert, Box, Button, CircularProgress, Sheet, Stack, Typography } from '@mui/joy'
 import { useQuery } from '@tanstack/react-query'
@@ -79,10 +80,12 @@ export function LibraryFilePickerDialog({
   const [group, setGroup] = useLocalStorageState<LibraryGroupBy>(LIBRARY_GROUP_KEY, 'none', parseLibraryGroup, String)
   const [favoritesOnly, setFavoritesOnly] = useState(false)
 
+  const tagFilter = useTagFilter('file', 'library')
   const browseQuery = useQuery({
-    queryKey: ['library-browse', 'file-picker', folderId ?? 'root', bridgeId ?? 'none', favoritesOnly],
+    queryKey: ['library-browse', 'file-picker', folderId ?? 'root', bridgeId ?? 'none', favoritesOnly, tagFilter.value],
     queryFn: ({ signal }) => {
       const params = new URLSearchParams()
+      if (tagFilter.value.length) params.set('tagIds', tagFilter.value.join(','))
       if (folderId) params.set('folderId', folderId)
       if (bridgeId) params.set('bridgeId', bridgeId)
       if (favoritesOnly) params.set('favoritesOnly', 'true')
@@ -118,7 +121,7 @@ export function LibraryFilePickerDialog({
     [bridgeFolders, bridgeRootMode, browseData?.folders]
   )
 
-  const filters = useLibraryFilters({
+  const filters = useLibraryFilters({ tagFilter,
     visibleFiles,
     childFolders,
     currentFolderId: folderId,

@@ -8,17 +8,22 @@
  * lazily advances to `readyToPrint`/`failed` when the slice finishes; `printRun`
  * dispatches (`printing`); the `print-job.finished` listener advances to
  * `awaitingResult`; `submitMeasurement` computes the value; `saveRunResult`
- * persists it (and, for pressure advance, can push it to the printer).
+ * persists it in PrintStream. Printer profiles are a separate AMS workflow.
  *
  * Cross-entity links on the run are soft references, and slice status is polled
  * (the slicing queue emits no events), so nothing here holds long-lived state.
  */
+import { captureJobTags } from '../../lib/job-tag-snapshots.js'
 import { mkdtemp, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import {
   flowRatioFromOffset,
+  isAutomaticPressureAdvance,
+  calibrationSavedValueSchema,
+  calibrationPrinterTargetSchema,
   pressureAdvanceFromHeight,
+  directCalibrationMeasurementValue,
   type CalibrationMeasurement,
   type CreateCalibrationRun,
   type SaveCalibrationResult
@@ -32,14 +37,23 @@ import { resolveLibraryFileToLocalPath } from '../../lib/bridge-library-files.js
 import { resolveSlicingPresetFiles } from '../../lib/slicing-presets.js'
 import { slicingJobs } from '../../lib/slicing-jobs.js'
 import { enqueueLibraryPrint } from '../../lib/library-printing.js'
-import { buildFlowRatioThreeMf, buildPressureAdvanceThreeMf } from './build-3mf.js'
-import { renderCalibrationCover } from './cover.js'
-import { createRun, findResolvableResults, getRun, saveResult, updateRun, type FilamentIdentity } from './store.js'
+import {
+  buildFlowRatioThreeMf,
+  buildMaxVolumetricSpeedThreeMf,
+  buildPressureAdvanceThreeMf,
+  buildTemperatureThreeMf,
+  buildVfaThreeMf,
+  buildRetractionThreeMf
+} from './build-3mf.js'
+import { createRun, deleteResultsForRun, getRun, saveResult, updateRun, type FilamentIdentity } from './store.js'
+import { toCalibrationRunParameters } from './dto.js'
+import { validateCalibrationPrinterTarget } from './printer-target.js'
 
 /**
- * Process overrides for the flow-ratio plate: a solid, readable top surface at a
- * neutral base flow so each patch's own `print_flow_ratio` is what varies
- * (mirrors BambuStudio's flow-test recipe). Whole-plate, applied at slice time.
+ * Process overrides for the flow-ratio plate: a solid, readable top surface. Each
+ * patch's `print_flow_ratio` varies as a multiplier over the selected filament
+ * preset's baseline (mirrors BambuStudio's flow-test recipe). Whole-plate,
+ * applied at slice time.
  */
 const FLOW_PROCESS_OVERRIDES: Record<string, string> = {
   wall_loops: '3',
@@ -74,6 +88,31 @@ const PA_TOWER_PROCESS_OVERRIDES: Record<string, string> = {
   alternate_extra_wall: '0'
 }
 
+const VASE_TOWER_PROCESS_OVERRIDES: Record<string, string> = {
+  enable_overhang_speed: '0',
+  enable_height_slowdown: '0',
+  wall_loops: '1',
+  top_shell_layers: '0',
+  bottom_shell_layers: '1',
+  sparse_infill_density: '0%',
+  spiral_mode: '1',
+  outer_wall_speed: '100',
+  brim_type: 'outer_only',
+  brim_width: '3',
+  brim_object_gap: '0'
+}
+
+function calibrationRunLabel(parameters: CreateCalibrationRun['parameters']): string {
+  switch (parameters.kind) {
+    case 'flowRatio': return `Flow calibration pass ${parameters.pass}`
+    case 'pressureAdvance': return 'Pressure advance tower'
+    case 'temperature': return 'Temperature tower'
+    case 'maxVolumetricSpeed': return 'Max volumetric speed tower'
+    case 'vfa': return 'VFA tower'
+    case 'retraction': return 'Retraction tower'
+  }
+}
+
 export interface CalibrationRunManagerDeps {
   /** Resolve a printer to the fields the run needs; throws `notFound` if missing. */
   resolvePrinter(db: AnyPrismaClient, workspaceId: string, printerId: string): Promise<{
@@ -88,10 +127,6 @@ export interface CalibrationRunManagerDeps {
   resolveSlotFilament(db: AnyPrismaClient, workspaceId: string, printerId: string, amsId: number, slotId: number): Promise<
     FilamentIdentity & { spoolId: string | null }
   >
-  /** Push a pressure-advance K value to the printer's own profile for a tray (optional). */
-  applyPrinterKValue?(input: { printerId: string; printerModel: string; amsId: number; slotId: number; kValue: number; nozzleDiameter: string; identity: FilamentIdentity }): Promise<void>
-  /** The K value the printer currently reports for a slot, if known (to skip a redundant push). */
-  getSlotK?(printerId: string, amsId: number, slotId: number): number | null
   /**
    * The printer's global AMS tray index for a slot (unit-type aware), used to pin the calibration
    * print to the selected tray. Returns null when the printer/slot is not in live status, in which
@@ -110,61 +145,6 @@ export function calibrationAmsMapping(trayIndex: number | null): number[] | unde
   return trayIndex != null ? [trayIndex] : undefined
 }
 
-/** Whether to push a saved K: only when one resolved and it differs from what the slot already has. */
-export function shouldApplyKValue(saved: number | null, currentK: number | null): boolean {
-  if (saved == null) return false
-  if (currentK == null) return true
-  return Math.abs(currentK - saved) > 1e-4
-}
-
-/**
- * When a filament is loaded into a slot, apply its saved pressure-advance value
- * to the printer (if one resolves and differs from the slot's current K). Called
- * from the `ams-slot.filament-loaded` bus listener; best-effort and idempotent.
- */
-export async function autoApplyOnLoad(
-  deps: CalibrationRunManagerDeps,
-  db: AnyPrismaClient,
-  event: { workspaceId: string; printerId: string; amsId: number; slotId: number; spoolId: string; brand: string | null; filamentType: string | null; materialSubtype: string | null; colorName: string | null }
-): Promise<void> {
-  let printer
-  try {
-    printer = await deps.resolvePrinter(db, event.workspaceId, event.printerId)
-  } catch {
-    return
-  }
-  // When the spool carries no colour name, fall back to the same slot-derived colour label
-  // used at run creation (resolveSlotFilament), so identity matching on colour stays
-  // symmetric between save time and apply time.
-  let colorName = event.colorName
-  if (colorName == null) {
-    try {
-      colorName = (await deps.resolveSlotFilament(db, event.workspaceId, event.printerId, event.amsId, event.slotId)).colorName
-    } catch {
-      // keep null: colour simply doesn't constrain the match
-    }
-  }
-  const identity: FilamentIdentity & { spoolId: string | null } = {
-    spoolId: event.spoolId,
-    brand: event.brand,
-    filamentType: event.filamentType,
-    materialSubtype: event.materialSubtype,
-    colorName
-  }
-  const saved = await resolveSavedValue(db, event.workspaceId, 'pressureAdvance', printer.model, printer.nozzleDiameter, identity)
-  const currentK = deps.getSlotK?.(event.printerId, event.amsId, event.slotId) ?? null
-  if (!deps.applyPrinterKValue || !shouldApplyKValue(saved, currentK)) return
-  await deps.applyPrinterKValue({
-    printerId: event.printerId,
-    printerModel: printer.model,
-    amsId: event.amsId,
-    slotId: event.slotId,
-    kValue: saved as number,
-    nozzleDiameter: printer.nozzleDiameter,
-    identity: { brand: event.brand, filamentType: event.filamentType, materialSubtype: event.materialSubtype, colorName: event.colorName }
-  })
-}
-
 export async function startRun(
   deps: CalibrationRunManagerDeps,
   db: AnyPrismaClient,
@@ -172,6 +152,10 @@ export async function startRun(
   workspace: RequestWorkspaceSummary,
   input: CreateCalibrationRun
 ): Promise<CalibrationRunRow> {
+  // Freeze the mode used by newly generated towers. Old runs without it stay native.
+  if (input.parameters.kind === 'pressureAdvance') {
+    input = { ...input, parameters: { ...input.parameters, pressureAdvanceMode: 'linear' } }
+  }
   const printer = await deps.resolvePrinter(db, workspaceId, input.printerId)
   if (!printer.bridgeId) throw badRequest('The target printer is not attached to a bridge; a calibration print needs one to store the sliced file.')
   // The web supplies what it knows about the loaded filament; the printer's live AMS status fills gaps.
@@ -188,32 +172,79 @@ export async function startRun(
   const threeMfPath = path.join(workDir, 'calibration.3mf')
   try {
     const kind = input.parameters.kind
-    const label = kind === 'flowRatio'
-      ? `Flow calibration pass ${input.parameters.pass}`
-      : 'Pressure advance tower'
+    const label = calibrationRunLabel(input.parameters)
     // Slice for the plate the web chose, defaulting to the one installed on the printer, so the
     // gcode's bed temperature matches the actual plate (a mismatched plate = wrong temp = poor
     // adhesion). `curr_bed_type` is picked up by the --export-settings project-settings synthesis.
     const plateType = input.plateType ?? printer.currentPlateType ?? null
     const overrides: Record<string, string> = {
-      ...(kind === 'flowRatio' ? FLOW_PROCESS_OVERRIDES : PA_TOWER_PROCESS_OVERRIDES),
+      ...(kind === 'flowRatio'
+        ? FLOW_PROCESS_OVERRIDES
+        : kind === 'pressureAdvance' || kind === 'temperature' || kind === 'retraction'
+          ? PA_TOWER_PROCESS_OVERRIDES
+          : VASE_TOWER_PROCESS_OVERRIDES),
       ...(plateType ? { curr_bed_type: plateType } : {})
+    }
+    if (kind === 'maxVolumetricSpeed') {
+      const nozzleDiameter = Number(printer.nozzleDiameter)
+      overrides.outer_wall_line_width = String(nozzleDiameter * 1.75)
+      overrides.initial_layer_print_height = String(nozzleDiameter * 0.8)
+      overrides.layer_height = String(nozzleDiameter * 0.8)
     }
     const processSettingOverrides = Object.keys(overrides).length > 0 ? overrides : undefined
 
-    if (input.parameters.kind === 'flowRatio') {
-      await buildFlowRatioThreeMf({
-        outputPath: threeMfPath,
-        printerModel: printer.model,
-        currentFlowRatio: input.parameters.currentFlowRatio,
-        offsets: input.parameters.offsets
+    switch (input.parameters.kind) {
+      case 'flowRatio':
+        await buildFlowRatioThreeMf({ outputPath: threeMfPath, printerModel: printer.model, currentFlowRatio: input.parameters.currentFlowRatio, offsets: input.parameters.offsets })
+        break
+      case 'pressureAdvance':
+        await buildPressureAdvanceThreeMf({ outputPath: threeMfPath, printerModel: printer.model, parameters: input.parameters })
+        break
+      case 'temperature':
+        await buildTemperatureThreeMf({ outputPath: threeMfPath, printerModel: printer.model, parameters: input.parameters })
+        break
+      case 'maxVolumetricSpeed':
+        await buildMaxVolumetricSpeedThreeMf({
+          outputPath: threeMfPath,
+          printerModel: printer.model,
+          nozzleDiameter: Number(printer.nozzleDiameter),
+          flowRatio: input.parameters.currentFlowRatio,
+          parameters: input.parameters
+        })
+        break
+      case 'vfa':
+        await buildVfaThreeMf({ outputPath: threeMfPath, printerModel: printer.model, parameters: input.parameters })
+        break
+      case 'retraction':
+        await buildRetractionThreeMf({ outputPath: threeMfPath, printerModel: printer.model, parameters: input.parameters })
+        break
+    }
+
+    const filamentSettingOverrides: Record<string, string> = kind === 'temperature'
+      ? {
+          nozzle_temperature: String(input.parameters.startTemperature),
+          nozzle_temperature_initial_layer: String(input.parameters.startTemperature)
+        }
+      : kind === 'maxVolumetricSpeed'
+        ? { filament_max_volumetric_speed: '60', slow_down_layer_time: '0' }
+        : kind === 'vfa'
+          ? { filament_max_volumetric_speed: '200', slow_down_layer_time: '0' }
+          : {}
+
+    // Both tests compute their result from this baseline. Freeze it into the slice,
+    // even when the user changed it from the selected preset's flow ratio.
+    if (input.parameters.kind === 'flowRatio' || input.parameters.kind === 'maxVolumetricSpeed') {
+      filamentSettingOverrides.filament_flow_ratio = String(input.parameters.currentFlowRatio)
+    }
+    if (kind === 'retraction') {
+      // A fixed nonzero baseline guarantees a retract/unretract pair even in the
+      // zero-length band. No wipe or extra restart extrusion may obscure that pair.
+      Object.assign(filamentSettingOverrides, {
+        filament_retraction_length: '0.8', filament_retract_restart_extra: '0',
+        filament_wipe: '0', filament_retract_before_wipe: '0',
+        filament_retraction_minimum_travel: '1', filament_retract_when_changing_layer: '1'
       })
-    } else {
-      await buildPressureAdvanceThreeMf({
-        outputPath: threeMfPath,
-        printerModel: printer.model,
-        parameters: input.parameters
-      })
+      Object.assign(overrides, { layer_height: '0.2', initial_layer_print_height: '0.2', spiral_mode: '0' })
     }
 
     const sizeBytes = (await stat(threeMfPath)).size
@@ -235,15 +266,18 @@ export async function startRun(
         printerId: input.printerId,
         printerProfileId: input.printerProfileId,
         processProfileId: input.processProfileId,
-        filamentMappings: [{ projectFilamentId: 1, source: 'manual' as const, profileId: input.filamentProfileId }],
+        ...(kind === 'retraction' ? { machineSettingOverrides: { use_relative_e_distances: '1', use_firmware_retraction: '0' } } : {}),
+        filamentMappings: [{
+          projectFilamentId: 1,
+          source: 'manual' as const,
+          profileId: input.filamentProfileId,
+          ...(Object.keys(filamentSettingOverrides).length > 0 ? { settingOverrides: filamentSettingOverrides } : {})
+        }],
         ...(processSettingOverrides ? { processSettingOverrides } : {})
       },
       plate: 1,
       hiddenOutput: true,
-      outputFileName: `${label} (sliced).gcode.3mf`,
-      // BambuStudio's CLI renders no useful preview for the procedural calibration geometry, so embed
-      // a recognizable per-kind cover as the plate thumbnail (jobs/history/printer card read it).
-      plateThumbnails: [{ plateIndex: 1, png: renderCalibrationCover(kind).toString('base64') }]
+      outputFileName: `${label} (sliced).gcode.3mf`
     }
     const profileFiles = await resolveSlicingPresetFiles(workspaceId, [
       { id: input.printerProfileId, kind: 'machine' },
@@ -252,6 +286,7 @@ export async function startRun(
     ])
 
     const job = slicingJobs.enqueue({
+    tagSnapshot: await captureJobTags(db, workspaceId, { printerId: printer.id, fileIds: [sourceFile.id] }),
       workspaceId,
       workspace,
       sourceFileId: sourceFile.id,
@@ -369,6 +404,7 @@ export async function printRun(deps: CalibrationRunManagerDeps, db: AnyPrismaCli
 export async function handlePrintFinished(db: AnyPrismaClient, workspaceId: string, printerId: string, outputFileId: string | null): Promise<void> {
   const runs = await db.calibrationRun.findMany({ where: { workspaceId, printerId, status: 'printing' } })
   for (const run of runs) {
+    if (isAutomaticPressureAdvance(toCalibrationRunParameters(run))) continue
     if (outputFileId && run.outputFileId && run.outputFileId !== outputFileId) continue
     await updateRun(db, workspaceId, run.id, { status: 'awaitingResult' })
   }
@@ -384,6 +420,9 @@ export async function submitMeasurement(
 ): Promise<number> {
   const run = await getRun(db, workspaceId, runId)
   if (!run) throw notFound('Calibration run not found')
+  if (isAutomaticPressureAdvance(toCalibrationRunParameters(run))) {
+    throw conflict('Automatic calibration uses the printer measurement, not a manually entered band.')
+  }
   if (measurement.kind !== parameters.kind) throw badRequest('Measurement does not match the calibration kind')
 
   let value: number
@@ -392,13 +431,18 @@ export async function submitMeasurement(
   } else if (measurement.kind === 'pressureAdvance' && parameters.kind === 'pressureAdvance') {
     value = pressureAdvanceFromHeight(parameters.startK, parameters.step, measurement.bestHeightMm)
   } else {
-    throw badRequest('Measurement does not match the calibration kind')
+    if (measurement.kind !== parameters.kind) {
+      throw badRequest('Measurement does not match the calibration kind')
+    }
+    const directValue = directCalibrationMeasurementValue(measurement)
+    if (directValue == null) throw badRequest('Measurement does not match the calibration kind')
+    value = directValue
   }
   await updateRun(db, workspaceId, runId, { measurement, resultValue: value })
   return value
 }
 
-/** Persist a run's computed result to the store (and optionally to the printer). */
+/** Persist a run's computed result in PrintStream; never writes a printer profile. */
 export async function saveRunResult(
   deps: CalibrationRunManagerDeps,
   db: AnyPrismaClient,
@@ -409,55 +453,88 @@ export async function saveRunResult(
   const run = await getRun(db, workspaceId, runId)
   if (!run) throw notFound('Calibration run not found')
   if (run.resultValue == null) throw conflict('Enter a measurement before saving this calibration.')
+  if (options.value !== undefined && run.status !== 'saved') {
+    throw conflict('Record the printed measurement before editing a saved value.')
+  }
+  const value = options.value ?? run.resultValue
+  const parameters = run.kind === 'pressureAdvance' ? toCalibrationRunParameters(run) : null
+  if (parameters && isAutomaticPressureAdvance(parameters) && !['awaitingResult', 'saved'].includes(run.status)) {
+    throw conflict('Wait for a successful automatic measurement before saving.')
+  }
+  const pressureAdvanceMode = parameters?.kind === 'pressureAdvance' ? parameters.pressureAdvanceMode ?? 'native' : 'native'
+  if (options.applyToPrinter) {
+    throw badRequest('Save this value in PrintStream, or enter it manually in an AMS printer profile.')
+  }
+  if (!calibrationSavedValueSchema.safeParse({ kind: run.kind, value }).success) {
+    throw badRequest('The calibration value is outside the allowed range for this test.')
+  }
 
+  const correctedIdentity: FilamentIdentity = {
+    brand: options.identity?.brand !== undefined ? options.identity.brand : run.brand,
+    filamentType: options.identity?.filamentType !== undefined ? options.identity.filamentType : run.filamentType,
+    materialSubtype: options.identity?.materialSubtype !== undefined ? options.identity.materialSubtype : run.materialSubtype,
+    colorName: options.identity?.colorName !== undefined ? options.identity.colorName : run.colorName
+  }
   const identity: FilamentIdentity = {
-    brand: options.scope === 'identity' && options.match?.brand ? run.brand : null,
-    filamentType: options.scope === 'identity' && options.match?.filamentType ? run.filamentType : null,
-    materialSubtype: options.scope === 'identity' && options.match?.materialSubtype ? run.materialSubtype : null,
-    colorName: options.scope === 'identity' && options.match?.colorName ? run.colorName : null
+    brand: options.scope === 'identity' && options.match?.brand ? correctedIdentity.brand : null,
+    filamentType: options.scope === 'identity' && options.match?.filamentType ? correctedIdentity.filamentType : null,
+    materialSubtype: options.scope === 'identity' && options.match?.materialSubtype ? correctedIdentity.materialSubtype : null,
+    colorName: options.scope === 'identity' && options.match?.colorName ? correctedIdentity.colorName : null
   }
-  await saveResult(db, workspaceId, {
-    kind: run.kind as CreateCalibrationRun['parameters']['kind'],
-    value: run.resultValue,
-    printerModel: run.printerModel,
-    nozzleDiameter: run.nozzleDiameter,
-    scope: options.scope,
-    spoolId: options.scope === 'spool' ? run.spoolId : null,
-    runId: run.id,
-    ...identity
-  })
+  if (options.scope === 'identity' && (Object.keys(identity) as Array<keyof FilamentIdentity>)
+    .some((field) => options.match?.[field] && !identity[field]?.trim())) {
+    throw badRequest('Enter a value for every checked filament detail')
+  }
+  const spoolIds = options.scope === 'spool'
+    ? [...new Set(options.spoolIds ?? (run.spoolId ? [run.spoolId] : []))]
+    : []
+  if (options.scope === 'spool' && spoolIds.length === 0) {
+    throw conflict('Choose at least one filament-library spool for this calibration.')
+  }
+  if (options.scope === 'identity' && Object.values(identity).every((value) => value == null || value.trim() === '')) {
+    throw conflict('Enter and select at least one filament detail for this calibration.')
+  }
 
-  if (options.applyToPrinter && run.kind === 'pressureAdvance' && deps.applyPrinterKValue && run.printerId != null && run.amsId != null && run.slotId != null) {
-    // Best-effort: the result is already saved to the store; pushing to the printer's own K profile
-    // needs the printer online and responsive, so a failure here must not fail the save.
-    try {
-      await deps.applyPrinterKValue({
-        printerId: run.printerId,
-        printerModel: run.printerModel,
-        amsId: run.amsId,
-        slotId: run.slotId,
-        kValue: run.resultValue,
-        nozzleDiameter: run.nozzleDiameter,
-        identity: { brand: run.brand, filamentType: run.filamentType, materialSubtype: run.materialSubtype, colorName: run.colorName }
-      })
-    } catch (error) {
-      console.warn('[calibration] saved the result but could not push the K value to the printer', error instanceof Error ? error.message : error)
+  // Roll back every target and the run state if any replacement fails.
+  await db.$transaction(async (transaction) => {
+    let requestedTarget = options.printerTarget
+    if (!requestedTarget && run.status === 'saved') {
+      const existing = await transaction.calibrationResult.findFirst({ where: { workspaceId, runId: run.id } })
+      if (existing) {
+        requestedTarget = existing.printerTargetJson == null
+          ? { scope: 'models', models: [existing.printerModel] }
+          : calibrationPrinterTargetSchema.parse(existing.printerTargetJson)
+      }
     }
-  }
+    const printerTarget = await validateCalibrationPrinterTarget(transaction as AnyPrismaClient, workspaceId, requestedTarget, run.printerModel)
 
-  await updateRun(db, workspaceId, runId, { status: 'saved' })
-}
+    // Preserve corrected identity together with the saved results.
+    if (options.identity) {
+      await updateRun(transaction as AnyPrismaClient, workspaceId, run.id, correctedIdentity)
+    }
 
-/** Resolve the best saved value for a filament on a printer model + nozzle (auto-apply). */
-export async function resolveSavedValue(
-  db: AnyPrismaClient,
-  workspaceId: string,
-  kind: CreateCalibrationRun['parameters']['kind'],
-  printerModel: string,
-  nozzleDiameter: string,
-  filament: FilamentIdentity & { spoolId: string | null }
-): Promise<number | null> {
-  const candidates = await findResolvableResults(db, workspaceId, kind, printerModel, nozzleDiameter)
-  const { resolveCalibrationValue } = await import('./resolution.js')
-  return resolveCalibrationValue(candidates, filament)?.value ?? null
+    // A saved run is editable. Replace only rows still attributed to this run so
+    // changing its scope or selected spool set cannot leave invisible stale rules.
+    await deleteResultsForRun(transaction as AnyPrismaClient, workspaceId, run.id)
+    const targets = options.scope === 'spool' ? spoolIds : [null]
+    for (const spoolId of targets) {
+      await saveResult(transaction as AnyPrismaClient, workspaceId, {
+        kind: run.kind as CreateCalibrationRun['parameters']['kind'],
+        value,
+        printerModel: run.printerModel,
+        printerTarget,
+        pressureAdvanceMode,
+        nozzleDiameter: run.nozzleDiameter,
+        scope: options.scope,
+        spoolId,
+        runId: run.id,
+        ...identity
+      })
+    }
+
+    await updateRun(transaction as AnyPrismaClient, workspaceId, runId, {
+      status: 'saved',
+      ...(options.value !== undefined ? { resultValue: value } : {})
+    })
+  })
 }

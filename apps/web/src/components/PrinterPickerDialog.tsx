@@ -21,6 +21,8 @@
  * usePrinterStatuses) and every caller mounts this dialog only while it is open, so status ticks
  * cannot thrash a closed picker or its dropdowns.
  */
+import { useTagFilter } from '../hooks/useTagFilter'
+import { EntityTagChips } from './tags/EntityTagChips'
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Button, Chip, DialogActions, DialogTitle, FormControl, FormLabel, Select, Sheet, Stack, Typography } from '@mui/joy'
 import { formatPrinterNozzleSizesLabel, normalizePlateType, resolvePrinterNozzleSizeLabels, type Printer } from '@printstream/shared'
@@ -75,6 +77,8 @@ export function PrinterPickerDialog({
    */
   anyOption?: { label: string; description?: string }
 }) {
+  const tagFilter = useTagFilter('printer', 'printer-picker')
+  const { matches: matchesTags, searchText: tagSearchText } = tagFilter
   const [search, setSearch] = useState('')
   const [models, setModels] = useState<string[]>([])
   const [nozzleSizes, setNozzleSizes] = useState<string[]>([])
@@ -117,6 +121,7 @@ export function PrinterPickerDialog({
   const filtered = useMemo(() => {
     const terms = search.trim().toLowerCase().split(/\s+/).filter(Boolean)
     return entries.filter((entry) => {
+      if (!matchesTags(entry.printer.id)) return false
       const modelLabel = formatPrinterModelLabel(entry.printer.model)
       const hardware = hardwareById.get(entry.printer.id)
       const nozzleLabels = hardware?.nozzleLabels ?? []
@@ -125,11 +130,11 @@ export function PrinterPickerDialog({
       if (terms.length === 0) return true
       // Address included on purpose: on a farm of identically-named machines it is what tells
       // them apart, and it is what an operator has in front of them.
-      const haystack = [entry.printer.name, modelLabel, entry.printer.model, entry.printer.host, ...nozzleLabels, hardware?.plateTypeLabel]
+      const haystack = [tagSearchText(entry.printer.id), entry.printer.name, modelLabel, entry.printer.model, entry.printer.host, ...nozzleLabels, hardware?.plateTypeLabel]
         .filter(Boolean).join(' ').toLowerCase()
       return terms.every((term) => haystack.includes(term))
     })
-  }, [entries, search, models, nozzleSizes, hardwareById])
+  }, [entries, search, models, nozzleSizes, hardwareById, matchesTags, tagSearchText])
 
   const sorted = useMemo(() => {
     const factor = direction === 'asc' ? 1 : -1
@@ -151,7 +156,7 @@ export function PrinterPickerDialog({
 
   useEffect(() => {
     setPage(1)
-  }, [search, models, nozzleSizes, sort, direction, pageSize])
+  }, [search, models, nozzleSizes, sort, direction, pageSize, tagFilter.value])
 
   const sortOptions = useMemo(() => [
     ...(hasRanks ? [{ value: 'match' as const, label: 'Best match' }] : []),
@@ -186,6 +191,7 @@ export function PrinterPickerDialog({
           <DirectoryPrimaryToolbar
             pinStorageKey="printer-picker"
             compactControls
+            tagFilter={tagFilter}
             searchValue={search}
             onSearchChange={setSearch}
             searchPlaceholder="Search printers…"
@@ -308,7 +314,7 @@ export function PrinterPickerDialog({
                                   {formatStageLabel(status)}
                                 </Chip>
                               )}
-                              meta={entry.meta}
+                              meta={<><EntityTagChips kind="printer" id={entry.printer.id} />{entry.meta}</>}
                               hardware={showModelChip || hardware?.nozzleSizeLabel || hardware?.plateTypeLabel ? (
                                 <PrinterHardwareChips
                                   model={showModelChip ? entry.printer.model : null}

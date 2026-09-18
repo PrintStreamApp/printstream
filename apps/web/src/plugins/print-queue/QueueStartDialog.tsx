@@ -196,7 +196,8 @@ export function QueueStartDialog({
       printers.find((entry) => entry.id === selectedPrinterId)?.model ?? 'unknown',
       statuses[selectedPrinterId],
       mapping,
-      filaments.map((filament) => filament.id)
+      filaments.map((filament) => filament.id),
+      undefined, undefined, resolveSlotFilament
     )].filter((entry): entry is NonNullable<typeof entry> => entry != null)
     : []
 

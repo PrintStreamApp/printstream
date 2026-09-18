@@ -9,6 +9,8 @@
  *   each sliced with its own `print_flow_ratio` (the smoothest top surface wins);
  * - a **pressure-advance tower** is one tall square-section prism whose corners
  *   reveal ringing as K is stepped once per mm of Z via injected layer G-code.
+ * - the remaining tower tests use procedural prisms or separated posts so the
+ *   repository does not redistribute BambuStudio's AGPL calibration assets.
  *
  * Output meshes are plain indexed triangle soup in the same minimal shape the
  * editor's importer produces ({@link ImportedMesh}: flat `positions`/`indices` +
@@ -16,6 +18,7 @@
  * 3MF builder can bake them as ordinary objects.
  */
 import type { ImportedMesh } from '../../lib/mesh-import.js'
+import { flowCalibrationColumns } from '@printstream/shared'
 
 /** Millimetre footprint + height of a generated box. */
 export interface BoxDimensions {
@@ -129,7 +132,7 @@ export function flowRatioPlate(offsets: readonly number[], options: FlowPlateOpt
   const patchSize = options.patchSize ?? 20
   const patchHeight = options.patchHeight ?? 1.2
   const gap = options.gap ?? 4
-  const columns = options.columns ?? Math.min(offsets.length, Math.ceil(Math.sqrt(offsets.length)))
+  const columns = options.columns ?? flowCalibrationColumns(offsets.length)
   const rows = Math.ceil(offsets.length / columns)
   const pitch = patchSize + gap
   const gridWidth = columns * pitch - gap
@@ -180,5 +183,78 @@ export function pressureAdvanceTower(
     mesh: polygonPrism(PA_TOWER_FOOTPRINT, heightMm),
     heightMm,
     bandStartZ: baseHeight
+  }
+}
+
+/** A regular polygon footprint, useful for vase-mode speed and VFA towers. */
+function regularPolygon(radius: number, sides: number): Array<readonly [number, number]> {
+  return Array.from({ length: sides }, (_unused, index) => {
+    const angle = (Math.PI * 2 * index) / sides
+    return [Math.cos(angle) * radius, Math.sin(angle) * radius] as const
+  })
+}
+
+/** Merge disconnected meshes into one valid indexed mesh without welding their vertices. */
+function combineMeshes(meshes: readonly ImportedMesh[]): ImportedMesh {
+  const positions: number[] = []
+  const indices: number[] = []
+  for (const mesh of meshes) {
+    const vertexOffset = positions.length / 3
+    positions.push(...mesh.positions)
+    indices.push(...mesh.indices.map((index) => index + vertexOffset))
+  }
+  return {
+    positions,
+    indices,
+    bounds: {
+      min: {
+        x: Math.min(...meshes.map((mesh) => mesh.bounds.min.x)),
+        y: Math.min(...meshes.map((mesh) => mesh.bounds.min.y)),
+        z: Math.min(...meshes.map((mesh) => mesh.bounds.min.z))
+      },
+      max: {
+        x: Math.max(...meshes.map((mesh) => mesh.bounds.max.x)),
+        y: Math.max(...meshes.map((mesh) => mesh.bounds.max.y)),
+        z: Math.max(...meshes.map((mesh) => mesh.bounds.max.z))
+      }
+    }
+  }
+}
+
+/** Ten millimetres per 5 C band, matching BambuStudio's temperature tower. */
+export function temperatureTower(startTemperature: number, endTemperature: number): { mesh: ImportedMesh; heightMm: number } {
+  const bands = Math.floor((startTemperature - endTemperature) / 5) + 1
+  const heightMm = Math.max(10, bands * 10)
+  return { mesh: polygonPrism(regularPolygon(24, 6), heightMm), heightMm }
+}
+
+/** One millimetre of height per tested volumetric-speed step. */
+export function maxVolumetricSpeedTower(startSpeed: number, endSpeed: number, step: number): { mesh: ImportedMesh; heightMm: number } {
+  const heightMm = Math.max(2, Math.ceil((endSpeed - startSpeed) / step) + 1)
+  return { mesh: polygonPrism(regularPolygon(28, 12), heightMm), heightMm }
+}
+
+/** Five millimetres per speed band, matching BambuStudio's VFA tower. */
+export function vfaTower(startSpeed: number, endSpeed: number, step: number): { mesh: ImportedMesh; heightMm: number } {
+  const bands = Math.floor((endSpeed - startSpeed) / step) + 1
+  const heightMm = Math.max(5, bands * 5)
+  return { mesh: polygonPrism(regularPolygon(22, 16), heightMm), heightMm }
+}
+
+/**
+ * Two separated posts force a travel move on every layer, making stringing visibly decrease as
+ * retraction grows. The first 1.4 mm is a stable base before the one-millimetre test bands begin.
+ */
+export function retractionTower(startLength: number, endLength: number, step: number): { mesh: ImportedMesh; heightMm: number; bandStartZ: number } {
+  const bandStartZ = 1.4
+  const bands = Math.floor((endLength - startLength) / step + 1e-8) + 1
+  const heightMm = bandStartZ + Math.max(1, bands)
+  return {
+    mesh: combineMeshes([
+      boxMesh({ width: 8, depth: 8, height: heightMm }, -18, 0),
+      boxMesh({ width: 8, depth: 8, height: heightMm }, 18, 0)
+    ]),
+    heightMm,
+    bandStartZ
   }
 }

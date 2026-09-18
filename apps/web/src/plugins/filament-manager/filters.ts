@@ -22,13 +22,13 @@ export const SPOOL_SORT_OPTIONS: ReadonlyArray<{ value: SpoolSort; label: string
   { value: 'used', label: 'Recently used' },
   { value: 'remaining', label: 'Remaining' },
   { value: 'brand', label: 'Brand' },
-  { value: 'type', label: 'Material' },
+  { value: 'type', label: 'Material type' },
   { value: 'name', label: 'Name' }
 ]
 
 export const SPOOL_GROUP_OPTIONS: ReadonlyArray<{ value: SpoolGroupBy; label: string }> = [
   { value: 'none', label: 'No grouping' },
-  { value: 'type', label: 'Material' },
+  { value: 'type', label: 'Material type' },
   { value: 'brand', label: 'Brand' },
   { value: 'color', label: 'Colour' },
   { value: 'status', label: 'Status' }
@@ -141,9 +141,9 @@ function matchesSearch(spool: FilamentSpool, query: string): boolean {
   return haystack.includes(query.toLowerCase())
 }
 
-export function applyFilters(spools: FilamentSpool[], filters: SpoolFilterState): FilamentSpool[] {
+export function applyFilters(spools: FilamentSpool[], filters: SpoolFilterState, extraSearchText?: (id: string) => string): FilamentSpool[] {
   return spools.filter((spool) => {
-    if (!matchesSearch(spool, filters.search.trim())) return false
+    if (!matchesSearch(spool, filters.search.trim()) && !(extraSearchText?.(spool.id).toLowerCase().includes(filters.search.trim().toLowerCase()) ?? false)) return false
     if (filters.types.length > 0 && !filters.types.includes(spool.filamentType)) return false
     if (filters.brands.length > 0 && !(spool.brand && filters.brands.includes(spool.brand))) return false
     if (filters.statuses.length > 0 && !filters.statuses.includes(spool.status)) return false

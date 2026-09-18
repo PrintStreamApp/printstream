@@ -1,3 +1,4 @@
+import { metadataChipStyles } from './metadataChipStyles'
 /**
  * Reusable library browser surface.
  *
@@ -9,6 +10,7 @@
  * mode, files show their upload date and size; in icon mode the
  * thumbnail is the focus and only the name is shown.
  */
+import { EntityTagChips } from './tags/EntityTagChips'
 import React, { useEffect, useRef, useState, type DragEvent, type MouseEvent, type ReactNode } from 'react'
 import LinkOffRoundedIcon from '@mui/icons-material/LinkOffRounded'
 import StarRoundedIcon from '@mui/icons-material/StarRounded'
@@ -564,12 +566,13 @@ export function LibraryFileRow({
         </Chip>
       </Box>
       <Stack sx={{ flex: 1, minWidth: 0 }} spacing={0.25}>
-        <Typography level="title-sm" noWrap>{formatLibraryFileName(file.name)}</Typography>
-        <Stack direction="row" spacing={0.75} alignItems="center" sx={{ flexWrap: 'wrap', minWidth: 0 }}>
-          <Typography level="body-xs" textColor="text.tertiary" noWrap>
-            {formatBytes(file.sizeBytes)} · {formatDate(file.uploadedAt)}
-          </Typography>
+        <Stack direction="row" spacing={0.75} useFlexGap alignItems="center" sx={{ flexWrap: 'wrap', minWidth: 0 }}>
+          <Typography level="title-sm" noWrap sx={{ minWidth: 0, maxWidth: '100%' }}>{formatLibraryFileName(file.name)}</Typography>
+          <EntityTagChips kind="file" id={file.id} chipSx={metadataChipStyles(true)} />
         </Stack>
+        <Typography level="body-xs" textColor="text.tertiary" noWrap>
+          {formatBytes(file.sizeBytes)} · {formatDate(file.uploadedAt)}
+        </Typography>
         {!hideFilamentSwatches && compactTags.filament.length > 0 && (
           <FileTagRow
             tags={compactTags.filament}
@@ -885,6 +888,7 @@ function FileTile({
         <Box sx={{ display: 'flex', justifyContent: 'center', py: 0.25 }}>
           <Typography level="body-xs" sx={{ minWidth: 0, textAlign: 'center' }} noWrap>{formatLibraryFileName(file.name)}</Typography>
         </Box>
+        <EntityTagChips kind="file" id={file.id} chipSx={metadataChipStyles(true)} align="center" />
         {!hideMetadataTags && (
           <FileTagRow
             tags={compactTags.meta}
@@ -1074,9 +1078,7 @@ function renderTagChip({
         />
       ) : undefined}
       sx={{
-        '--Chip-minHeight': compact ? '15px' : '17px',
-        fontSize: compact ? '9px' : '10px',
-        maxWidth: '100%',
+        ...metadataChipStyles(compact),
         ...(kind === 'filament'
           ? {
             backgroundColor: 'var(--joy-palette-neutral-softBg)',

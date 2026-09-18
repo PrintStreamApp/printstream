@@ -45,7 +45,8 @@ export function filterLibraryFilesByMetadata(
 export function filterLibraryEntries(
   folders: ReadonlyArray<LibraryFolder>,
   files: ReadonlyArray<LibraryFile>,
-  search: string
+  search: string,
+  extraSearchText?: (id: string) => string
 ): FilteredLibraryEntries {
   const needle = search.trim().toLowerCase()
   if (!needle) {
@@ -61,7 +62,7 @@ export function filterLibraryEntries(
       const displayName = formatLibraryFileName(file.name).toLowerCase()
       const rawName = file.name.toLowerCase()
       const kindLabel = formatLibraryFileKindLabel(file.name, file.kind).toLowerCase()
-      return displayName.includes(needle) || rawName.includes(needle) || kindLabel.includes(needle)
+      return displayName.includes(needle) || rawName.includes(needle) || kindLabel.includes(needle) || (extraSearchText?.(file.id).toLowerCase().includes(needle) ?? false)
     })
   }
 }

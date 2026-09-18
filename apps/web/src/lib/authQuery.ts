@@ -8,7 +8,8 @@
  * after a sign-in/out or provider change through this module's invalidation
  * helper so identity/permissions refresh.
  */
-import { createContext, createElement, useContext, type ReactNode } from 'react'
+import { createContext, createElement, useContext, useEffect, type ReactNode } from 'react'
+import { syncNativeNotifications } from '../native/notifications'
 import type { AuthBootstrap } from '@printstream/shared'
 import { useQuery, type QueryClient, type UseQueryResult } from '@tanstack/react-query'
 import { apiFetch } from './apiClient'
@@ -58,6 +59,17 @@ export function buildAuthBootstrapQueryOptions(authScopeKey: string) {
 export function AuthBootstrapQueryProvider(
   { children, value }: { children: ReactNode; value: UseQueryResult<AuthBootstrap> }
 ) {
+  useEffect(() => {
+    const refresh = () => {
+      if (!value.data || document.visibilityState === 'hidden') return
+      void syncNativeNotifications(value.data).catch(() => {
+        console.warn('Native notification renewal failed; open Account to retry.')
+      })
+    }
+    refresh()
+    document.addEventListener('visibilitychange', refresh)
+    return () => document.removeEventListener('visibilitychange', refresh)
+  }, [value.data])
   return createElement(authBootstrapQueryContext.Provider, { value }, children)
 }
 

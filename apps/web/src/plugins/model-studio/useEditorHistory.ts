@@ -21,7 +21,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type MutableRefObject, type SetStateAction } from 'react'
 import { setAppBusy } from '../../lib/appBusy'
-import { toast } from '../../lib/toast'
+import { replaceEditorMaterial } from './lib/materialReplacement'
 import { type SliceSettingsController } from '../../components/library/SliceSettingsPanel'
 import { cloneEditorState, type EditorState } from './lib/editorModel'
 import { rebaseMaterialSlotsSnapshot } from '../../components/library/useMaterialSlots'
@@ -40,9 +40,11 @@ export interface EditorHistoryParams {
   /** Bumped on restore to force a plate re-render; owned by the caller (shared with other mutations). */
   setRebuildToken: Dispatch<SetStateAction<number>>
   sliceConfig: SliceSettingsController | undefined
-  /** Live set of materials any object/part/layer/paint OR support setting references (remove-guard). */
+  /** Live set of materials any object/part/layer/paint or process setting references (replacement prompt). */
   usedFilamentIds: Set<number>
-  /** Subset of {@link usedFilamentIds} used ONLY for supports: drives the accurate remove-blocked copy. */
+  /** Base materials whose untouched source paint has not been exhaustively inspected. */
+  unverifiedFilamentIds?: ReadonlySet<number>
+  /** Subset of {@link usedFilamentIds} used only by settings, also used by the materials summary. */
   supportOnlyFilamentIds: Set<number>
   /**
    * The project was CREATED in the editor (new-project scaffold / fileless start). Its seeded
@@ -98,6 +100,7 @@ export function useEditorHistory({
   setRebuildToken,
   sliceConfig,
   usedFilamentIds,
+  unverifiedFilamentIds,
   supportOnlyFilamentIds,
   editorBorn = false
 }: EditorHistoryParams): EditorHistory {
@@ -368,23 +371,27 @@ export function useEditorHistory({
         recordSliceConfigHistory()
         sliceConfig.onUpsertMixedFilament(choice)
       },
-      // BambuStudio parity: only an OBJECT reference blocks removal: reassign the object first.
-      // A material referenced solely by a process setting (support / support interface, infill or
-      // wall filament) is removable: BambuStudio drops the setting back to "Default" instead of
-      // refusing, and the controller does the same, remapping the surviving references to their
-      // new positions (`lib/filamentIndexOverrides.ts`). Blocking on those instead stranded a
-      // material that could not be deleted until the project was saved and reopened, because the
-      // support set is seeded from the LAST SAVED index and a cleared override never removes it.
-      filamentInUse: (projectFilamentId: number) =>
-        usedFilamentIds.has(projectFilamentId) && !supportOnlyFilamentIds.has(projectFilamentId),
+      filamentInUse: (projectFilamentId: number) => usedFilamentIds.has(projectFilamentId),
+      filamentRemovalNeedsReplacement: (projectFilamentId: number) =>
+        usedFilamentIds.has(projectFilamentId) || (unverifiedFilamentIds?.has(projectFilamentId) ?? false),
       filamentSupportOnly: (projectFilamentId: number) => supportOnlyFilamentIds.has(projectFilamentId),
-      onRemoveFilament: (projectFilamentId: number) => {
-        if (usedFilamentIds.has(projectFilamentId) && !supportOnlyFilamentIds.has(projectFilamentId)) {
-          toast.error('This material is used by one or more objects. Reassign them to another material before removing it.')
-          return
+      onRemoveFilament: (projectFilamentId: number, replacementId?: number) => {
+        const ids = sliceConfig.projectFilaments.map((filament) => filament.projectFilamentId)
+        if (ids.length <= 1 || !ids.includes(projectFilamentId)) return
+        if (replacementId !== undefined && (replacementId === projectFilamentId || !ids.includes(replacementId))) return
+        if ((usedFilamentIds.has(projectFilamentId) || unverifiedFilamentIds?.has(projectFilamentId)) && replacementId === undefined) return
+
+        recordCombinedHistory()
+        if (stateRef.current) {
+          // Unused deletion still shifts surviving positional settings. Its fallback is never
+          // applied to a known use, because the guard above requires an explicit choice for those.
+          const resolvedReplacement = replacementId ?? ids.find((id) => id !== projectFilamentId)!
+          const next = replaceEditorMaterial(stateRef.current, ids, projectFilamentId, resolvedReplacement)
+          stateRef.current = next
+          setState(next)
+          setRebuildToken((token) => token + 1)
         }
-        recordSliceConfigHistory()
-        sliceConfig.onRemoveFilament(projectFilamentId)
+        sliceConfig.onRemoveFilament(projectFilamentId, replacementId)
       },
       // A reorder is one drop gesture, one checkpoint, one Ctrl+Z. The snapshot's sessionSlots
       // carry the order, so undo restores the pre-drag list (and the filament-INDEX overrides,
@@ -404,7 +411,7 @@ export function useEditorHistory({
       setFilamentColors: (value) => { recordMaterialEdit(); sliceConfig.setFilamentColors(value) },
       setFilamentToolheadIds: (value) => { recordMaterialEdit(); sliceConfig.setFilamentToolheadIds(value) }
     }
-  }, [sliceConfig, recordSliceConfigHistory, recordMaterialEdit, usedFilamentIds, supportOnlyFilamentIds])
+  }, [sliceConfig, recordSliceConfigHistory, recordMaterialEdit, usedFilamentIds, unverifiedFilamentIds, supportOnlyFilamentIds, recordCombinedHistory, stateRef, setState, setRebuildToken])
 
   return {
     dirtyRef,

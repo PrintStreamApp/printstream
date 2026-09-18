@@ -1,5 +1,5 @@
 /**
- * The library's four metadata facet filters (file type, printer model, nozzle
+ * The library's shared tag and metadata facet filters (file type, printer model, nozzle
  * size, plate type), rendered as the children of a `DirectoryFiltersMenu`.
  *
  * Each facet is **multi-select**: pick any number of values (OR within a facet,
@@ -11,11 +11,13 @@
  * selected values), and `disablePortal` so opening it does not dismiss the
  * surrounding filters panel.
  */
+import { TagPicker } from '../tags/TagPicker'
 import { FormControl, FormLabel, Select } from '@mui/joy'
 import { MultiSelectOption } from '../MultiSelectOption'
 import type { LibraryFilters } from '../../hooks/useLibraryFilters'
 
 type LibraryMetadataFilterFields = Pick<LibraryFilters,
+  | 'tagFilter'
   | 'fileTypeFilters' | 'setFileTypeFilters' | 'fileTypeOptions'
   | 'printerModelFilters' | 'setPrinterModelFilters' | 'printerModelOptions'
   | 'nozzleSizeFilters' | 'setNozzleSizeFilters' | 'nozzleSizeOptions'
@@ -25,6 +27,7 @@ type LibraryMetadataFilterFields = Pick<LibraryFilters,
 export function LibraryMetadataFilters({ filters }: { filters: LibraryMetadataFilterFields }) {
   return (
     <>
+      <TagPicker tags={filters.tagFilter.tags} value={filters.tagFilter.value} onChange={filters.tagFilter.onChange} disabled={filters.tagFilter.isPending} />
       <FormControl>
         <FormLabel>File type</FormLabel>
         <Select

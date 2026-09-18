@@ -10,6 +10,7 @@
  * Each caller passes its own key (see {@link SPOOL_DIRECTORY_PREFS_KEY} /
  * {@link SPOOL_PICKER_PREFS_KEY}) so the tab and the picker don't share state.
  */
+import { useTagFilter, type TagFilter } from '../../hooks/useTagFilter'
 import { useCallback, useDeferredValue, useEffect, useMemo, useState } from 'react'
 import type { FilamentSpool, FilamentSpoolStatus } from '@printstream/shared'
 import type { DirectorySortDirection, DirectoryViewMode } from '../../components/DirectoryControls'
@@ -23,6 +24,7 @@ import {
 } from './filters'
 
 export interface SpoolDirectory {
+  tagFilter: TagFilter
   search: string
   setSearch: (value: string) => void
   filters: SpoolFilterState
@@ -106,6 +108,8 @@ export function useSpoolDirectory(
   spools: FilamentSpool[],
   options?: { storageKey?: string }
 ): SpoolDirectory {
+  const tagFilter = useTagFilter('spool', options?.storageKey ?? 'filament')
+  const { matches: matchesTags, searchText: tagSearchText } = tagFilter
   const [search, setSearch] = useState('')
   const deferredSearch = useDeferredValue(search)
   const [prefs, setPrefs] = usePersistentState<SpoolDirectoryPrefs>(
@@ -140,14 +144,14 @@ export function useSpoolDirectory(
 
   const facets = useMemo(() => deriveFacets(spools), [spools])
   const visible = useMemo(
-    () => sortSpools(applyFilters(spools, { ...filters, search: deferredSearch }), sort, direction),
-    [spools, filters, deferredSearch, sort, direction]
+    () => sortSpools(applyFilters(spools.filter((spool) => matchesTags(spool.id)), { ...filters, search: deferredSearch }, tagSearchText), sort, direction),
+    [spools, filters, deferredSearch, sort, direction, matchesTags, tagSearchText]
   )
 
   // Reset to the first page whenever the result set changes shape.
   useEffect(() => {
     setPage(1)
-  }, [deferredSearch, filters, sort, direction, pageSize, group])
+  }, [deferredSearch, filters, sort, direction, pageSize, group, tagFilter.value])
 
   // Drop persisted facet selections that no longer exist once real spools load.
   // Guarded on a non-empty list so the initial (still-loading) empty facet set
@@ -170,6 +174,7 @@ export function useSpoolDirectory(
   const groups = useMemo(() => groupSpools(pageItems, group), [pageItems, group])
 
   return {
+    tagFilter,
     search, setSearch,
     filters, setFilters,
     clearFilters,

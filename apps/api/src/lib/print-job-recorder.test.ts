@@ -5,7 +5,7 @@ import { createWriteStream } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { afterEach, mock, test } from 'node:test'
+import { afterEach, beforeEach, mock, test } from 'node:test'
 import type { Printer, PrinterStatus } from '@printstream/shared'
 import yazl from 'yazl'
 import { readRecordedPrintStartOptions } from './print-job-options.js'
@@ -44,10 +44,17 @@ const printer: Printer = {
 }
 
 const tempDirs = new Set<string>()
+beforeEach(() => {
+  Object.defineProperty(rootPrisma.printer, 'findUnique', { value: async () => null, configurable: true })
+  Object.defineProperty(rootPrisma.workspaceTag, 'findMany', { value: async () => [], configurable: true })
+  Object.defineProperty(rootPrisma.filamentSpool, 'findMany', { value: async () => [], configurable: true })
+})
 
 // Snapshot + auto-restore every rootPrisma method the suite overrides, so the tests can keep using
 // raw Object.defineProperty at their setup sites without hand-tracking originals or a restore block.
 restorePrismaMethodsAfterEach([
+  [rootPrisma.workspaceTag, 'findMany'],
+  [rootPrisma.filamentSpool, 'findMany'],
   [rootPrisma.printJob, 'findFirst'],
   [rootPrisma.printJob, 'findUnique'],
   [rootPrisma.printJob, 'create'],
@@ -55,6 +62,7 @@ restorePrismaMethodsAfterEach([
   [rootPrisma.printJob, 'updateMany'],
   [rootPrisma.printer, 'findUnique'],
   [rootPrisma.libraryFile, 'findUnique'],
+  [rootPrisma.libraryFile, 'updateMany'],
   [rootPrisma.libraryFile, 'findMany'],
   [rootPrisma.printerStats, 'upsert'],
   [rootPrisma, '$transaction']
@@ -190,6 +198,9 @@ test('createPrintJobStartRecord stores the print-start selection for re-print', 
     configurable: true
   })
 
+  const tags = [{ id: 'file-tag', entityKind: 'file', name: 'Conch', group: 'Nozzle', color: '#123456' }]
+  Object.defineProperty(rootPrisma.workspaceTag, 'findMany', { value: async () => tags, configurable: true })
+
   // Every option away from its schema default, so a dropped field cannot pass by coincidence.
   const printOptions = {
     bedLevel: 'auto',
@@ -210,6 +221,7 @@ test('createPrintJobStartRecord stores the print-start selection for re-print', 
       jobKind: 'file',
       jobId: 'job-1',
       fileId: 'file-1',
+      sourceLibraryFileId: 'live-widget',
       fileName: 'widget.3mf',
       fileSizeBytes: 1024,
       sourceKind: '3mf',
@@ -229,6 +241,9 @@ test('createPrintJobStartRecord stores the print-start selection for re-print', 
     }),
     printOptions
   )
+  assert.equal((stored as unknown as { sourceLibraryFileId: string }).sourceLibraryFileId, 'live-widget')
+  tags[0]!.name = 'Renamed later'
+  assert.equal(JSON.parse((stored as unknown as { tagSnapshotJson: string }).tagSnapshotJson).tags[0].name, 'Conch')
   // The lossy legacy column still records what it always did, for older readers.
   assert.equal((stored as unknown as { bedLevel: boolean | null }).bedLevel, true)
 })
@@ -1444,6 +1459,88 @@ test('status within the tracked start grace binds the printer task id back to th
   assert.equal(updates[0]?.data.taskId, 'printer-task')
 })
 
+test('a consecutive tracked start replaces the stale active row instead of assigning it the new task', async () => {
+  const updates: Array<{ where: { id: string }; data: Record<string, unknown> }> = []
+  const closedRows: Array<{ where: Record<string, unknown>; data: Record<string, unknown> }> = []
+
+  Object.defineProperty(rootPrisma.printJob, 'findUnique', {
+    value: async ({ where }: { where: { id: string } }) => ({
+      id: where.id,
+      jobName: where.id === 'dispatch-old' ? 'Old calibration' : 'New calibration',
+      taskId: null,
+      printerFilePath: null
+    }),
+    configurable: true
+  })
+  Object.defineProperty(rootPrisma.printJob, 'findMany', {
+    value: async () => [],
+    configurable: true
+  })
+  Object.defineProperty(rootPrisma.printJob, 'update', {
+    value: async (input: { where: { id: string }; data: Record<string, unknown> }) => {
+      updates.push(input)
+      return { id: input.where.id }
+    },
+    configurable: true
+  })
+  Object.defineProperty(rootPrisma.printJob, 'updateMany', {
+    value: async (input: { where: Record<string, unknown>; data: Record<string, unknown> }) => {
+      closedRows.push(input)
+      return { count: 1 }
+    },
+    configurable: true
+  })
+
+  startPrintJobRecorder()
+
+  for (const [jobId, taskId] of [
+    ['dispatch-old', 'task-old'],
+    ['dispatch-new', 'task-new']
+  ] as const) {
+    registerPendingPrintJobSource('printer-1', {
+      jobKind: 'file',
+      jobId,
+      fileId: `${jobId}-file`,
+      fileName: `${jobId}.gcode.3mf`,
+      fileSizeBytes: 123,
+      sourceKind: '3mf',
+      plate: 1,
+      useAms: true,
+      bedLevel: true,
+      amsMapping: [0],
+      calibrationOption: null
+    })
+    printerEvents.emit('print.job.starting', {
+      printerId: 'printer-1',
+      jobId,
+      taskId: null,
+      fileName: `${jobId}.gcode.3mf`
+    })
+    printerEvents.emit('status', {
+      printerId: 'printer-1',
+      online: true,
+      stage: 'printing',
+      taskId,
+      gcodeFile: 'Metadata/plate_1.gcode'
+    } as PrinterStatus)
+
+    await waitForAssertion(() => {
+      assert.ok(updates.some((update) => update.where.id === jobId && update.data.taskId === taskId))
+    })
+    await new Promise((resolve) => setImmediate(resolve))
+  }
+
+  await waitForAssertion(() => {
+    assert.equal(closedRows.length, 1)
+  })
+
+  assert.equal(
+    updates.some((update) => update.where.id === 'dispatch-old' && update.data.taskId === 'task-new'),
+    false
+  )
+  assert.deepEqual(closedRows[0]?.where, { id: 'dispatch-old', finishedAt: null })
+})
+
 test('concurrent tracked start activation does not fall back to an external row', async () => {
   const creates: Array<Record<string, unknown>> = []
   const updates: Array<{ where: { id: string }; data: Record<string, unknown> }> = []
@@ -1972,4 +2069,50 @@ test('cancelTrackedPrintJobRecord creates and closes a cancelled history row whe
   assert.equal(updates.length, 1)
   assert.equal(updates[0]?.where.id, 'dispatch-1')
   assert.equal(updates[0]?.data.result, 'cancelled')
+})
+
+
+test('recording after source deletion keeps the dispatch tag snapshot and cancellation cannot rewrite it', async () => {
+  const snapshot = { tags: [{ id: 't', entityKind: 'spool' as const, name: 'Dry at dispatch', group: '', color: '#123456' }], spoolIds: ['rfid-spool'] }
+  const creates: Array<Record<string, unknown>> = []
+  Object.defineProperty(rootPrisma.printer, 'findUnique', { value: async () => ({ workspaceId: 'workspace-1' }), configurable: true })
+  Object.defineProperty(rootPrisma.workspaceTag, 'findMany', { value: async () => { throw new Error('must not recapture live tags') }, configurable: true })
+  Object.defineProperty(rootPrisma.libraryFile, 'findUnique', { value: async () => null, configurable: true })
+  Object.defineProperty(rootPrisma.libraryFile, 'updateMany', { value: async () => ({ count: 1 }), configurable: true })
+  Object.defineProperty(rootPrisma.printJob, 'create', {
+    value: async ({ data }: { data: Record<string, unknown> }) => {
+      creates.push(data)
+      if (data.sourceLibraryFileId) throw Object.assign(new Error('source deleted'), { code: 'P2003' })
+      return { id: 'job-frozen', jobName: 'Cube' }
+    }, configurable: true
+  })
+  await createPrintJobStartRecord({
+    jobId: 'job-frozen', printerId: 'printer-1', jobName: 'Cube',
+    metadata: {
+      jobKind: 'file', jobId: 'job-frozen', fileId: 'retained-bytes', sourceLibraryFileId: 'deleted-source',
+      fileName: 'Cube.gcode', fileSizeBytes: 123, sourceKind: 'gcode', plate: 1, useAms: true,
+      bedLevel: false, amsMapping: [0], calibrationOption: null, tagSnapshot: snapshot
+    }
+  })
+  assert.equal(creates.length, 2)
+  assert.equal(creates[1]?.sourceLibraryFileId, null)
+  assert.equal(creates[1]?.fileId, 'retained-bytes')
+  assert.deepEqual(JSON.parse(String(creates[1]?.tagSnapshotJson)), snapshot)
+
+  // Finish paths only update outcome fields; no consumption event is needed for spool tags.
+  let finishedWrites = 0
+  Object.defineProperty(rootPrisma.printJob, 'findUnique', { value: async () => ({
+    id: 'job-frozen', printerId: 'printer-1', workspaceId: 'workspace-1', jobName: 'Cube',
+    sourceType: 'external', fileId: null, taskId: null, startedAt: new Date(), printerStatsRecordedAt: new Date()
+  }), configurable: true })
+  Object.defineProperty(rootPrisma.printJob, 'update', {
+    value: async ({ data }: { data: Record<string, unknown> }) => {
+      assert.equal('tagSnapshotJson' in data, false)
+      assert.equal(data.result, 'cancelled')
+      finishedWrites += 1
+      return { id: 'job-frozen' }
+    }, configurable: true
+  })
+  await finishTrackedPrintJobRecord({ jobId: 'job-frozen', result: 'cancelled' })
+  assert.equal(finishedWrites, 1)
 })

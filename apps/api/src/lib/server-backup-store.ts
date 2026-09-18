@@ -47,6 +47,7 @@ import {
 import { Client } from 'pg'
 import { selectBackupsToPrune, type ServerBackupSnapshot, type ServerBackupTrigger } from '@printstream/shared'
 import { env } from './env.js'
+import { isSelfHostedDeployment } from './deployment-mode.js'
 import { getAppBuildInfo } from './app-build-info.js'
 import { listMigrationFiles } from './apply-migrations.js'
 import { libpqCompatibleUrl, resolvePgTools, runPgTool } from './server-backup-tools.js'
@@ -304,17 +305,26 @@ export function restoreBlockedReason(
 }
 
 /**
- * Applies the shared retention ladder to SCHEDULED snapshots (manual and
- * pre-restore ones are keep-until-deleted) and sweeps `.partial` leftovers.
+ * Applies the shared scheduled-snapshot ladder. Cloud additionally expires ALL
+ * completed snapshots after 30 days, including manual/pre-restore snapshots, to
+ * honor account deletion. Self-hosted manual snapshots remain keep-until-deleted.
+ * Timer-only cleanup skips partial directories because a backup may be starting.
  */
-export async function pruneServerBackups(backupsDir: string, nowMs: number): Promise<number> {
+export async function pruneServerBackups(
+  backupsDir: string,
+  nowMs: number,
+  maxAgeDays: number | null = serverBackupMaxAgeDays(),
+  sweepPartials = true
+): Promise<number> {
   const manifests = await readSnapshotManifests(backupsDir)
   const scheduled = manifests.filter((entry) => entry.manifest.trigger === 'scheduled')
-  const byTime = new Map(scheduled.map((entry) => [Date.parse(entry.manifest.createdAt), entry]))
+  const timesToPrune = new Set(selectBackupsToPrune(scheduled.map((entry) => Date.parse(entry.manifest.createdAt)), nowMs))
   let pruned = 0
-  for (const timeMs of selectBackupsToPrune([...byTime.keys()], nowMs)) {
-    const entry = byTime.get(timeMs)
-    if (!entry) continue
+  for (const entry of manifests) {
+    const createdAt = Date.parse(entry.manifest.createdAt)
+    const expired = maxAgeDays !== null && createdAt <= nowMs - maxAgeDays * 86_400_000
+    const scheduledPrune = entry.manifest.trigger === 'scheduled' && timesToPrune.has(createdAt)
+    if (!expired && !scheduledPrune) continue
     try {
       await rm(entry.dir, { recursive: true, force: true })
       pruned += 1
@@ -322,6 +332,7 @@ export async function pruneServerBackups(backupsDir: string, nowMs: number): Pro
       console.warn(`[server-backup] failed to prune snapshot ${entry.name}: ${(error as Error).message}`)
     }
   }
+  if (!sweepPartials) return pruned
   let entries: string[] = []
   try {
     entries = await readdir(backupsDir)
@@ -333,6 +344,11 @@ export async function pruneServerBackups(backupsDir: string, nowMs: number): Pro
     await rm(path.join(backupsDir, name), { recursive: true, force: true }).catch(() => undefined)
   }
   return pruned
+}
+
+/** Cloud deletion policy caps every snapshot; self-hosted owners keep their existing retention ladder. */
+export function serverBackupMaxAgeDays(): number | null {
+  return isSelfHostedDeployment() ? null : 30
 }
 
 /** Logical bytes across all snapshots plus free space on the backup disk. */

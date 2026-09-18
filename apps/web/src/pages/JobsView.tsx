@@ -1,3 +1,5 @@
+import { useJobHistoryTagFilters } from '../hooks/useJobHistoryTagFilters'
+import { JobHistoryTagFilters } from '../components/tags/JobHistoryTagFilters'
 import { Box, Button, Card, CardContent, Chip, FormControl, ListItemDecorator, MenuItem, Select, Stack, Typography } from '@mui/joy'
 import ContentCutRoundedIcon from '@mui/icons-material/ContentCutRounded'
 import DeleteRoundedIcon from '@mui/icons-material/DeleteRounded'
@@ -165,6 +167,7 @@ function buildJobHistoryUrl(input: {
   page: number
   pageSize: number
   search: string
+  tagIds: ReadonlyArray<string>
   printerIds: ReadonlyArray<string>
   results: ReadonlyArray<PrintJob['result']>
   sortBy: HistorySortValue
@@ -174,6 +177,7 @@ function buildJobHistoryUrl(input: {
   params.set('page', String(input.page))
   params.set('pageSize', String(input.pageSize))
   if (input.search) params.set('search', input.search)
+  if (input.tagIds.length) params.set('tagIds', input.tagIds.join(','))
   if (input.printerIds.length > 0) params.set('printerIds', input.printerIds.join(','))
   if (input.results.length > 0) params.set('results', input.results.join(','))
   params.set('sortBy', input.sortBy)
@@ -219,6 +223,7 @@ export function JobsView() {
   const [deleteHistoryJobTarget, setDeleteHistoryJobTarget] = useState<PrintJob | null>(null)
   const [deleteSlicingHistoryJobTarget, setDeleteSlicingHistoryJobTarget] = useState<SlicingJob | null>(null)
   const [restartingJobId, setRestartingJobId] = useState<string | null>(null)
+  const historyTags = useJobHistoryTagFilters()
   const [historySearch, setHistorySearch] = useState('')
   const deferredHistorySearch = useDeferredValue(historySearch)
   const [historyPrinterIds, setHistoryPrinterIds] = usePersistentState<string[]>(HISTORY_PRINTER_FILTER_KEY, [], sanitizeHistoryPrinterIds)
@@ -264,6 +269,7 @@ export function JobsView() {
       page: historyPage + 1,
       pageSize: historyPageSize,
       search: deferredHistorySearch.trim(),
+      tagIds: historyTags.ids,
       printerIds: historyPrinterIds,
       results: historyResults,
       sortBy: historySortValue,
@@ -273,6 +279,7 @@ export function JobsView() {
       page: historyPage + 1,
       pageSize: historyPageSize,
       search: deferredHistorySearch.trim(),
+      tagIds: historyTags.ids,
       printerIds: historyPrinterIds,
       results: historyResults,
       sortBy: historySortValue,
@@ -449,7 +456,7 @@ export function JobsView() {
   )
   const historyPageCount = Math.max(1, Math.ceil(historyTotal / historyPageSize))
   const safeHistoryPage = Math.min(historyPage, historyPageCount - 1)
-  const activeHistoryFilterCount = Number(historyPrinterIds.length > 0) + Number(historyResults.length > 0)
+  const activeHistoryFilterCount = Number(historyPrinterIds.length > 0) + Number(historyResults.length > 0) + historyTags.activeCount
   const effectiveHistoryViewMode: DirectoryViewMode = isMobileViewport ? 'list' : historyViewMode
 
   // Deleting the last row of the last page (or narrowing filters) can strand the page index past
@@ -459,6 +466,8 @@ export function JobsView() {
   }, [historyPageCount])
 
   function clearHistoryFilters() {
+    setHistoryPage(0)
+    historyTags.clear()
     setHistoryPrinterIds([])
     setHistoryResults([])
   }
@@ -688,7 +697,7 @@ export function JobsView() {
                   setHistoryPage(0)
                   setHistorySearch(value)
                 }}
-                searchPlaceholder="Search file, printer, result, slicer, or time"
+                searchPlaceholder="Search file, printer, tags, result, slicer, or time"
                 searchAriaLabel="Search job history"
                 filters={{
                   activeCount: activeHistoryFilterCount,
@@ -696,6 +705,7 @@ export function JobsView() {
                   clearDisabled: activeHistoryFilterCount === 0,
                   children: (
                     <>
+                      <JobHistoryTagFilters filters={historyTags.filters} onChange={() => setHistoryPage(0)} />
                       <FormControl>
                         <Typography level="body-sm" textColor="text.tertiary">Printer</Typography>
                         <Select

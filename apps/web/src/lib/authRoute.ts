@@ -93,10 +93,14 @@ export function shouldUsePlatformAuthTheme(input: {
   return input.authRouteState === 'auth' && !input.hasWorkspaceContext
 }
 
+/** Native hosts own a cross-server directory even when this server has no cloud workspace choices. */
 export function shouldShowWorkspaceSwitcher(input: {
   authRouteState: AuthRouteState
   requestedWorkspaceSlug?: string | null
   activeWorkspaceSlug?: string | null
+  canUseWorkspaceChooser?: boolean
+  nativeApp?: boolean
 }): boolean {
   return input.authRouteState === 'redirect'
+    && (input.nativeApp === true || input.canUseWorkspaceChooser !== false)
 }

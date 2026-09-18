@@ -8,18 +8,20 @@
  *
  * The filament-manager plugin registers a hook (from its `init`, before the
  * React tree mounts, so the hook identity is stable for the whole session);
- * when no plugin registers, or the plugin is disabled for the workspace, the
- * lookup resolves nothing and callers fall back to tray-derived identity.
+ * Core manual slot identity takes precedence independently of plugin enablement.
+ * Otherwise, no active inventory plugin means callers fall back to tray-derived identity.
  */
+import { useQuery } from '@tanstack/react-query'
+import { readCurrentWorkspaceScopeKey, workspaceQueryKeys } from './workspaceScope'
 import { useMemo } from 'react'
-import type { FilamentSpoolIdentityInput } from '@printstream/shared'
+import type { FilamentSpoolIdentityInput, PrinterStatus } from '@printstream/shared'
 import { useAuthBootstrapQuery } from './authQuery'
 import { usePluginCatalogQuery } from './pluginCatalogQuery'
 import { isPluginActiveByName } from './pluginSettings'
 
 /** The tracked spool loaded at a slot, in the canonical resolver's spool shape. */
 export type SlotFilamentIdentity = FilamentSpoolIdentityInput & {
-  spoolId: string
+  spoolId: string | null
   /** The slicing preset (filament profile name) the spool is pinned to; null = auto-match. */
   slicingPresetName?: string | null
   /** Tracked remaining quantity: covers non-RFID spools the printer can't estimate. */
@@ -81,5 +83,23 @@ export function useSlotFilamentIdentityLookup(): SlotFilamentIdentityLookup {
   // Registration is fixed before mount (plugin init), so this branch is
   // render-stable and the conditional hook call is safe.
   const lookup = registration ? registration.useLookup(active) : NULL_LOOKUP
-  return active ? lookup : NULL_LOOKUP
+  const manual = useQuery({
+    queryKey: workspaceQueryKeys.printerStatus(readCurrentWorkspaceScopeKey()),
+    queryFn: () => Promise.resolve<Record<string, PrinterStatus>>({}),
+    initialData: {}, staleTime: Infinity, refetchOnWindowFocus: false, refetchOnReconnect: false,
+    select: (statuses: Record<string, PrinterStatus>) => Object.values(statuses).flatMap((status) => [
+      ...status.ams.flatMap((unit) => unit.slots.flatMap((slot) => slot.materialIdentity
+        ? [{ key: `${status.printerId}:${unit.unitId}:${slot.slot}`, identity: slot.materialIdentity }] : [])),
+      ...status.externalSpools.flatMap((slot) => slot.materialIdentity
+        ? [{ key: `${status.printerId}:${slot.amsId}:-1`, identity: slot.materialIdentity }] : [])
+    ])
+  })
+  return useMemo(() => {
+    const identities = new Map(manual.data?.map((entry) => [entry.key, entry.identity]))
+    return (printerId, amsId, slotId) => {
+      const identity = identities.get(`${printerId}:${amsId}:${slotId ?? -1}`)
+      if (identity) return { ...identity, spoolId: null }
+      return active ? lookup(printerId, amsId, slotId) : null
+    }
+  }, [manual.data, active, lookup])
 }

@@ -238,7 +238,7 @@ export function AmsDryingModal({
             >
               <Stack spacing={1.25}>
                 <FormControl>
-                  <FormLabel>Filament type</FormLabel>
+                  <FormLabel>Material type</FormLabel>
                   <Select value={filamentType} onChange={handleFilamentTypeChange}>
                     {AMS_DRYING_FILAMENT_TYPES.map((type) => (
                       <Option key={type} value={type}>{type}</Option>

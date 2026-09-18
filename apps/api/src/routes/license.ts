@@ -13,8 +13,9 @@ import {
   setLicenseRequestSchema
 } from '@printstream/shared'
 import { Router } from 'express'
-import { annotateRequestAuditLog } from '../lib/audit-logs.js'
-import { requireRequestPermission } from '../lib/authorization.js'
+import { annotateRequestAuditLog, skipRequestAuditLog } from '../lib/audit-logs.js'
+import { requireAuthenticatedCurrentUser, requireRequestPermission } from '../lib/authorization.js'
+import { readMobileConnectionName } from '../lib/mobile-connection-name.js'
 import { badRequest, conflict } from '../lib/http-error.js'
 import { requestCommunityLicense } from '../lib/community-license-request-client.js'
 import { getLicenseEnforcement, invalidateLicenseCache, isLicenseEnforced } from '../lib/license-enforcement.js'
@@ -23,6 +24,13 @@ import { clearInstalledLicenseKey, getInstalledLicenseStatus, setInstalledLicens
 import { rootPrisma } from '../lib/prisma.js'
 
 export const licenseRouter = Router()
+
+// Unlike public discovery, a licence label is available only after sign-in.
+licenseRouter.post('/mobile-name', requireAuthenticatedCurrentUser(), async (request, response) => {
+  // Read-only connection metadata; no useful durable audit event or credential payload.
+  skipRequestAuditLog(request)
+  response.json(await readMobileConnectionName())
+})
 
 /**
  * The full status payload, assembled once because three routes return it and a

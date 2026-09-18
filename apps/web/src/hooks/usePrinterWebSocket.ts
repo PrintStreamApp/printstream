@@ -25,6 +25,7 @@ export function usePrinterWebSocket(enabled = true, scopeKey = 'default'): void 
     const removeOpenListener = wsClient.onOpen(() => {
       clearPrinterFtpActivity()
       if (seenSocketOpen) {
+        void queryClient.invalidateQueries({ queryKey: ['tags'] })
         void queryClient.invalidateQueries({ queryKey: ['jobs'] })
         void queryClient.invalidateQueries({ queryKey: ['job-history'] })
         void queryClient.invalidateQueries({ queryKey: ['print-dispatch'] })
@@ -63,6 +64,7 @@ export function usePrinterWebSocket(enabled = true, scopeKey = 'default'): void 
         )
       }
       if (event.type === 'printer.removed' || event.type === 'printer.list') {
+        void queryClient.invalidateQueries({ queryKey: ['tags', scopeKey, 'printer'] })
         void queryClient.invalidateQueries({ queryKey: ['printers'] })
       }
       if (event.type === 'printer.discovered') {
@@ -78,6 +80,11 @@ export function usePrinterWebSocket(enabled = true, scopeKey = 'default'): void 
         markPrinterFtpActivity(event.printerId, event.active)
       }
       if (event.type === 'resource.changed') {
+        if (event.resource === 'tags') {
+          void queryClient.invalidateQueries({ queryKey: ['job-history'] })
+          void queryClient.invalidateQueries({ queryKey: ['tags'] })
+          void queryClient.invalidateQueries({ queryKey: ['library-browse'] })
+        }
         if (event.resource === 'bridges') {
           void invalidateBridgeQueries(queryClient)
         }
@@ -85,6 +92,7 @@ export function usePrinterWebSocket(enabled = true, scopeKey = 'default'): void 
           void queryClient.invalidateQueries({ queryKey: ['delete-operations'] })
         }
         if (event.resource === 'library') {
+          void queryClient.invalidateQueries({ queryKey: ['tags', scopeKey, 'file'] })
           // List-only: a background library change (another file, a print snapshot, a
           // bridge re-index) must refresh the grid but NOT refetch an open editor's scene,
           // which would rebuild the 3D view mid-edit. The editor refreshes on its own save.

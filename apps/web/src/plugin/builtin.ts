@@ -7,6 +7,8 @@ import { modelStudioPlugin } from '../plugins/model-studio'
 import { notificationsNtfyPlugin } from '../plugins/notifications-ntfy'
 import { notificationsDiscordPlugin } from '../plugins/notifications-discord'
 import { notificationsBrowserPlugin } from '../plugins/notifications-browser'
+import { notificationsMobilePlugin } from '../plugins/notifications-mobile'
+import { notificationsDesktopPlugin } from '../plugins/notifications-desktop'
 import { notificationsEmailWebPlugin } from '../plugins/notifications-email'
 import { emailSmtpWebPlugin } from '../plugins/email-smtp'
 import { plateClearingPlugin } from '../plugins/plate-clearing'
@@ -44,6 +46,8 @@ export function registerBuiltinPlugins(): void {
   registerBuiltinPlugin(notificationsNtfyPlugin, { runtimeSurfaces: ['workspace'], managerSurfaces: ['platform', 'workspace'] })
   registerBuiltinPlugin(notificationsDiscordPlugin, { runtimeSurfaces: ['workspace'], managerSurfaces: ['platform', 'workspace'] })
   registerBuiltinPlugin(notificationsBrowserPlugin, { runtimeSurfaces: ['workspace'], managerSurfaces: ['platform', 'workspace'] })
+  registerBuiltinPlugin(notificationsMobilePlugin, { runtimeSurfaces: ['platform', 'workspace'], managerSurfaces: ['platform', 'workspace'] })
+  registerBuiltinPlugin(notificationsDesktopPlugin, { runtimeSurfaces: ['platform', 'workspace'], managerSurfaces: ['platform', 'workspace'] })
   registerBuiltinPlugin(notificationsEmailWebPlugin, { runtimeSurfaces: ['workspace'], managerSurfaces: ['platform', 'workspace'] })
   // email-smtp is OSS-only: the API registers its backend only when self-hosted, so hide the
   // manager panel in cloud too (the web can only know at runtime via runtimePolicy.selfHosted).

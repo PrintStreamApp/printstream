@@ -52,6 +52,7 @@ const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient }
  * `WORKSPACE_SCOPED_EXCEPTION_MODELS` if it genuinely cannot be auto-scoped).
  */
 export const WORKSPACE_SCOPED_MODELS = new Set([
+  'WorkspaceTag',
   'Bridge',
   'Printer',
   'PrintJob',

@@ -49,6 +49,14 @@ import yauzl, { type Entry } from 'yauzl'
 import { env } from './env.js'
 import { readEntry } from './three-mf-internal.js'
 
+/**
+ * Match the browser archive reader and bake's 256 MiB model-entry budget. Dense exports can
+ * exceed 64 MiB of XML while remaining below the shared triangle cap (Meshy's 905,502 faces do).
+ * The ZIP reader still enforces the bound on both declared and actually inflated bytes.
+ */
+export const THREE_MF_MODEL_ENTRY_MAX_BYTES = 256 * 1024 * 1024
+
+
 // Re-export the shared index+scene parser surface that other api modules import from this reader,
 // so moving those parses into `@printstream/shared/three-mf` did not churn every call site.
 export {
@@ -245,7 +253,7 @@ export async function readSceneManifest(
   }
 
   const [rootModelXml, modelSettingsXml, projectSettingsJson, brimEarPointsText, layerConfigRangesXml, layerHeightsProfileText, customGcodeText, cutInformationXml] = await Promise.all([
-    readEntry(filePath, '3D/3dmodel.model', signal, 64 * 1024 * 1024).then((buffer) => buffer.toString('utf8')),
+    readEntry(filePath, '3D/3dmodel.model', signal, THREE_MF_MODEL_ENTRY_MAX_BYTES).then((buffer) => buffer.toString('utf8')),
     // Default 8 MiB cap: matches the bridge's bound for the same entry; only the
     // mesh XML above legitimately outgrows it.
     readEntry(filePath, 'Metadata/model_settings.config', signal).then((buffer) => buffer.toString('utf8')),

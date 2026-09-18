@@ -179,3 +179,10 @@ test('groupLibraryFiles buckets by date added relative to now', () => {
   const groups = groupLibraryFiles(files, 'dateAdded', now)
   assert.deepEqual(groups.map((group) => `${group.label}:${group.files.length}`), ['Today:1', 'This week:2'])
 })
+
+test('library search matches custom tag names and groups without excluding ordinary name matches', () => {
+  const extra = (id: string) => id === 'file-2' ? 'Workshop Location' : ''
+  assert.deepEqual(filterLibraryEntries(folders, files, 'workshop', extra).files.map((file) => file.id), ['file-2'])
+  assert.deepEqual(filterLibraryEntries(folders, files, 'location', extra).files.map((file) => file.id), ['file-2'])
+  assert.deepEqual(filterLibraryEntries(folders, files, 'alpha-benchy', extra).files.map((file) => file.id), ['file-1'])
+})

@@ -31,6 +31,7 @@ import {
   type FilamentCompatibilityIssue,
   type PrinterNozzleDiameterSelection,
   type PrinterModel,
+  type SlotMaterialIdentity,
   type PrinterStatus
 } from '@printstream/shared'
 import { conflict, HttpError } from './http-error.js'
@@ -106,7 +107,7 @@ export async function assertLibraryPrintCompatibilityForIndex(
   // check is: that flag consents to WHICH materials the trays hold, and "enough of it is left"
   // is a separate judgement the dialog asks separately.
   await assertSufficientFilament(index, input)
-  assertFilamentBlacklist(index, input)
+  await assertFilamentBlacklist(index, input)
   const issues = getLibraryPrintCompatibilityIssues(index, input)
   // Nozzle-mismatch issues are overridable too: the tray→nozzle binding comes
   // from status parsing that can be wrong (H2D AMS/nozzle parsing is unverified
@@ -135,7 +136,7 @@ export async function assertAutomaticPrintCompatibility(
   if (input.index) await assertSufficientFilament(input.index, input)
   // Runs with or without an index: the rules grade the MATERIAL IN THE TRAY against the machine,
   // so they have something to say even when we cannot read what the file wants.
-  assertFilamentBlacklist(input.index, input)
+  await assertFilamentBlacklist(input.index, input)
   if (input.allowIncompatibleFilament) return
   const issues = getAutomaticPrintCompatibilityIssues(input)
   if (issues.length === 0) return
@@ -263,20 +264,34 @@ function assertFilamentTrackSwitchMatch(
  * sentence from the shared rule text, the same two the print dialogs warn from, so a dispatch can
  * never be refused by a check the dialog never showed.
  */
-function assertFilamentBlacklist(
+async function assertFilamentBlacklist(
   index: ThreeMfIndex | null,
   input: Pick<
     LibraryPrintCompatibilityIndexInput,
-    'plate' | 'printerModel' | 'printerStatus' | 'amsMapping' | 'allowBlacklistedFilament'
+    'plate' | 'printerModel' | 'printerStatus' | 'amsMapping' | 'allowBlacklistedFilament' | 'workspaceId' | 'printerId'
   >
-): void {
+): Promise<void> {
   if (input.allowBlacklistedFilament || !input.printerStatus) return
   // No mapping means nothing to grade. The dialogs grade the trays they mapped, so an unmapped
   // dispatch (an override-less history re-print, a calibration pinned to the external spool) must
   // not be refused over whatever else happens to be loaded.
   if (!input.amsMapping || input.amsMapping.length === 0) return
   const plate = index?.plates.find((entry) => entry.index === input.plate)
+  const inventoryIdentities = new Map<number, SlotMaterialIdentity>()
+  const usedIds = plate ? new Set(plate.filaments.map((filament) => filament.id)) : null
+  for (const [index, trayIndex] of input.amsMapping.entries()) {
+    if (usedIds && !usedIds.has(index + 1)) continue
+    if (inventoryIdentities.has(trayIndex)) continue
+    const ref = trayIndexToAmsSlot(trayIndex)
+    if (!ref) continue
+    // A failed inventory read must not silently remove a hardware prohibition.
+    const identity = await slotFilamentResolvers.resolveInventory({
+      workspaceId: input.workspaceId, printerId: input.printerId, ...ref
+    }, true)
+    if (identity?.filamentType) inventoryIdentities.set(trayIndex, { ...identity, filamentType: identity.filamentType })
+  }
   const entries = checkPrinterFilamentBlacklist({
+    inventoryIdentities,
     printerModel: input.printerModel,
     status: input.printerStatus,
     amsMapping: input.amsMapping,

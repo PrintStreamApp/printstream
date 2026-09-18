@@ -1,6 +1,6 @@
 /**
- * Owns the full validation gate's runtime prerequisites before entering the existing lock and
- * low-priority wrappers. PostgreSQL coverage is mandatory here even though direct targeted test
+ * Owns the full validation gate's runtime prerequisites inside the lock and low-priority
+ * wrappers installed by the npm entrypoint. PostgreSQL coverage is mandatory even though targeted test
  * runs remain usable without a database.
  */
 import { spawn } from 'node:child_process'
@@ -25,6 +25,7 @@ const { prepareValidationDatabase } = await import('./lib/validation-database.mj
 
 let prepared
 try {
+  console.error('[validate] Preparing PostgreSQL; Devkit may refresh checkout dependencies.')
   prepared = await prepareValidationDatabase({ repoRoot: workspaceRoot })
 } catch (error) {
   console.error(`[validate] ${error.message}`)
@@ -34,19 +35,13 @@ try {
 console.error(`[validate] PostgreSQL coverage ready (${prepared.source}).`)
 
 const child = spawn(
-  process.execPath,
-  [
-    path.join(workspaceRoot, 'scripts/dev/run-exclusive.mjs'),
-    process.execPath,
-    path.join(workspaceRoot, 'scripts/dev/run-low-priority.mjs'),
-    'npm',
-    'run',
-    'validate:stages'
-  ],
+  'npm',
+  ['run', 'validate:stages'],
   {
     cwd: workspaceRoot,
     env: prepared.environment,
-    stdio: 'inherit'
+    stdio: 'inherit',
+    shell: process.platform === 'win32'
   }
 )
 
