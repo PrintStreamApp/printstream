@@ -47,6 +47,7 @@ export function LicenseSettingsSection({ canManage }: { canManage: boolean }) {
   const queryClient = useQueryClient()
   const [key, setKey] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [replacingLicense, setReplacingLicense] = useState(false)
 
   const licenseQuery = useQuery({
     queryKey: ['license'],
@@ -55,12 +56,22 @@ export function LicenseSettingsSection({ canManage }: { canManage: boolean }) {
 
   const saveMutation = useMutation({
     mutationFn: (value: string) => apiFetch<LicenseStatusResponse>('/api/license', { method: 'PUT', body: { key: value } }),
-    onSuccess: () => { setError(null); setKey(''); void queryClient.invalidateQueries({ queryKey: ['license'] }) },
+    onSuccess: () => {
+      setError(null)
+      setKey('')
+      setReplacingLicense(false)
+      void queryClient.invalidateQueries({ queryKey: ['license'] })
+    },
     onError: (mutationError) => setError(extractErrorMessage(mutationError, 'Could not save the license key.'))
   })
   const removeMutation = useMutation({
     mutationFn: () => apiFetch('/api/license', { method: 'DELETE' }),
-    onSuccess: () => { setError(null); void queryClient.invalidateQueries({ queryKey: ['license'] }) },
+    onSuccess: () => {
+      setError(null)
+      setKey('')
+      setReplacingLicense(false)
+      void queryClient.invalidateQueries({ queryKey: ['license'] })
+    },
     onError: (mutationError) => setError(extractErrorMessage(mutationError, 'Could not remove the license.'))
   })
   // The manual pull. The daily timer covers the ordinary case; this is for the
@@ -168,37 +179,62 @@ export function LicenseSettingsSection({ canManage }: { canManage: boolean }) {
 
           {error ? <Alert color="danger" variant="soft">{error}</Alert> : null}
 
-          {canManage ? (
-            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ sm: 'flex-end' }}>
-              <Input
-                value={key}
-                onChange={(event) => setKey(event.target.value)}
-                placeholder="Paste a license key (PSL1…)"
-                sx={{ flex: 1 }}
-              />
-              <Button
-                onClick={() => saveMutation.mutate(key.trim())}
-                disabled={!key.trim() || saveMutation.isPending}
-                loading={saveMutation.isPending}
-              >
-                Save
-              </Button>
-              {/* "Refresh license", not "check for updates" -- beside the
-                  updates-and-support copy that phrase reads as SOFTWARE
-                  updates. Shown for a Lifetime key too: renewing the annual
-                  addon re-signs the stored key, and this is how an owner who
-                  has just paid collects it without hunting for the email. Only
-                  a community key has nothing to pull. */}
-              {canPullKey ? (
-                <Button variant="outlined" color="neutral" onClick={() => checkMutation.mutate()} loading={checkMutation.isPending}>
-                  Refresh license
-                </Button>
+          {canManage && licenseQuery.isSuccess ? (
+            <Stack spacing={1}>
+              {(!status?.valid || replacingLicense) ? (
+                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
+                  <Input
+                    value={key}
+                    onChange={(event) => setKey(event.target.value)}
+                    placeholder="Paste a license key (PSL1…)"
+                    sx={{ flex: 1 }}
+                  />
+                  <Button
+                    onClick={() => saveMutation.mutate(key.trim())}
+                    disabled={!key.trim() || saveMutation.isPending}
+                    loading={saveMutation.isPending}
+                  >
+                    Save
+                  </Button>
+                  {status?.valid ? (
+                    <Button
+                      variant="plain"
+                      color="neutral"
+                      disabled={saveMutation.isPending}
+                      onClick={() => {
+                        setKey('')
+                        setReplacingLicense(false)
+                      }}
+                    >
+                      Cancel
+                    </Button>
+                  ) : null}
+                </Stack>
               ) : null}
-              {status?.valid || isExpired ? (
-                <Button variant="outlined" color="danger" onClick={() => removeMutation.mutate()} loading={removeMutation.isPending}>
-                  Remove
-                </Button>
-              ) : null}
+
+              <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap' }}>
+                {status?.valid && !replacingLicense ? (
+                  <Button variant="outlined" color="neutral" onClick={() => setReplacingLicense(true)}>
+                    Replace license
+                  </Button>
+                ) : null}
+                {/* "Refresh license", not "check for updates": beside the
+                    updates-and-support copy that phrase reads as SOFTWARE
+                    updates. Shown for a Lifetime key too: renewing the annual
+                    addon re-signs the stored key, and this is how an owner who
+                    has just paid collects it without hunting for the email. Only
+                    a community key has nothing to pull. */}
+                {canPullKey ? (
+                  <Button variant="outlined" color="neutral" onClick={() => checkMutation.mutate()} loading={checkMutation.isPending}>
+                    Refresh license
+                  </Button>
+                ) : null}
+                {status?.valid || isExpired ? (
+                  <Button variant="outlined" color="danger" onClick={() => removeMutation.mutate()} loading={removeMutation.isPending}>
+                    Remove
+                  </Button>
+                ) : null}
+              </Stack>
             </Stack>
           ) : null}
 

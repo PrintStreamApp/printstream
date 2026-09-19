@@ -302,8 +302,8 @@ export function ParameterTableDialog({
                 icon={<TableRowsRoundedIcon />}
                 title={filtersActive ? 'Nothing matches' : 'No objects yet'}
                 description={filtersActive
-                  ? 'No object or part matches the current search and filter.'
-                  : 'Add a model to the project and its settings will appear here.'}
+                  ? 'Try another search or filter.'
+                  : 'Add a model to view its settings.'}
                 {...(filtersActive
                   ? {
                     action: (

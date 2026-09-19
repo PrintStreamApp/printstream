@@ -9,7 +9,7 @@
  * the queue's permissions (the host page has its own jobs-permission gate).
  */
 import { useEffect, useMemo, useState } from 'react'
-import { Button, Sheet, Stack, Typography } from '@mui/joy'
+import { Box, Button, Sheet, Stack, Typography } from '@mui/joy'
 import AddRounded from '@mui/icons-material/AddRounded'
 import PlaylistPlayRounded from '@mui/icons-material/PlaylistPlayRounded'
 import PlayArrowRounded from '@mui/icons-material/PlayArrowRounded'
@@ -272,21 +272,39 @@ export function QueueSection(props: Record<string, unknown>) {
         title="Print queue"
         description="Prints lined up to run next."
         count={items.length}
+        actionsInline
         actions={canManage ? (
-          <Stack direction="row" spacing={1} alignItems="center" sx={{ flexWrap: 'wrap' }}>
+          <Stack
+            direction="row"
+            spacing={{ xs: 0.5, sm: 1 }}
+            alignItems="center"
+            sx={{ flexWrap: 'nowrap' }}
+          >
             <Button
               size="sm"
               variant="outlined"
               color="neutral"
               startDecorator={<PlayArrowRounded />}
+              aria-label={idleEligibleCount > 0 ? `Start all idle (${idleEligibleCount})` : 'Start all idle'}
               loading={dispatchAll.isPending}
               disabled={idleEligibleCount === 0}
               onClick={handleDispatchAll}
+              sx={{ whiteSpace: 'nowrap' }}
             >
-              {idleEligibleCount > 0 ? `Start all idle (${idleEligibleCount})` : 'Start all idle'}
+              <Box component="span" sx={{ display: { xs: 'inline', sm: 'none' } }}>Start</Box>
+              <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>
+                {idleEligibleCount > 0 ? `Start all idle (${idleEligibleCount})` : 'Start all idle'}
+              </Box>
             </Button>
-            <Button size="sm" startDecorator={<AddRounded />} onClick={() => setPickerOpen(true)}>
-              Add to queue
+            <Button
+              size="sm"
+              startDecorator={<AddRounded />}
+              aria-label="Add to queue"
+              onClick={() => setPickerOpen(true)}
+              sx={{ whiteSpace: 'nowrap' }}
+            >
+              <Box component="span" sx={{ display: { xs: 'inline', sm: 'none' } }}>Add</Box>
+              <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>Add to queue</Box>
             </Button>
           </Stack>
         ) : undefined}
@@ -297,7 +315,7 @@ export function QueueSection(props: Record<string, unknown>) {
           compact
           icon={<PlaylistPlayRounded />}
           title="The queue is empty"
-          description={canManage ? 'Add a printable library file to line up prints across your printers.' : 'No prints are queued right now.'}
+          description={canManage ? 'Add a library file to get started.' : 'No prints are queued right now.'}
         />
       ) : (
         <>

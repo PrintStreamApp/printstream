@@ -108,7 +108,7 @@ export function HeightRangesDialog({
           <EmptyState
             icon={<LayersRoundedIcon />}
             title="No height ranges"
-            description="Add a range to print part of this model at a different layer height or with different settings."
+            description="Add a range to vary layer height or other settings."
           />
         ) : bands.map((band, index) => (
           <Sheet

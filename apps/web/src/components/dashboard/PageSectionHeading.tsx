@@ -37,6 +37,7 @@ export function PageSectionHeading({
   description,
   count,
   actions,
+  actionsInline = false,
   level = 'title-lg'
 }: {
   /** The section's icon, matching the icon its `EmptyState` uses. */
@@ -48,6 +49,8 @@ export function PageSectionHeading({
   count?: number | null
   /** Section-level actions, right-aligned beside the title on desktop and wrapping below it when narrow. */
   actions?: ReactNode
+  /** Keep compact actions beside the heading on narrow screens instead of wrapping them below. */
+  actionsInline?: boolean
   /**
    * Typography level for the title. `h3` when this section IS a page rather
    * than one of several stacked on one, a section that becomes its own route
@@ -62,9 +65,9 @@ export function PageSectionHeading({
         spacing={1}
         alignItems="flex-start"
         justifyContent="space-between"
-        sx={{ flexWrap: 'wrap', rowGap: 0.75 }}
+        sx={{ flexWrap: actionsInline ? 'nowrap' : 'wrap', rowGap: 0.75 }}
       >
-        <Box sx={{ minWidth: 0 }}>
+        <Box sx={{ minWidth: 0, flex: actionsInline ? '1 1 0' : undefined }}>
           <Typography
             level={level}
             startDecorator={icon}

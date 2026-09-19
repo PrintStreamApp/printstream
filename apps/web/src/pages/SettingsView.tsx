@@ -1,7 +1,6 @@
 import React from 'react'
-import KeyboardArrowRightRoundedIcon from '@mui/icons-material/KeyboardArrowRightRounded'
 import SettingsRoundedIcon from '@mui/icons-material/SettingsRounded'
-import { Alert, Card, FormLabel, Option, Select, Stack, Typography } from '@mui/joy'
+import { Alert, FormLabel, Option, Select, Stack, Typography } from '@mui/joy'
 import {
   type AppLandingPageSetting,
   type AppThemeSetting,
@@ -37,6 +36,7 @@ import { SlicingPresetsSettingsSection } from '../components/settings/slicing-pr
 import { SlicerEngineVisibilityCard } from './SlicerEngineVisibilityCard'
 import { SlicerEnginesSection } from './SlicerEnginesSection'
 import { LogsPanel } from './LogsView'
+import { SettingsOverviewCard } from '../components/settings/SettingsOverviewCard'
 
 type LandingPageSettingSelectValue = AppLandingPageSetting
 type DeviceLandingPageSettingSelectValue = 'follow-default' | LandingPageSettingSelectValue
@@ -187,7 +187,6 @@ export function SettingsView({
   return (
     <Stack spacing={2}>
       {visibleSubview === 'root' && <Typography level="h3" startDecorator={<SettingsRoundedIcon />}>Settings</Typography>}
-      {visibleSubview === 'root' && <NativeAppSettingsButton />}
       {demoSettingsLocked && (
         <Alert color="warning" variant="soft">
           This is the public demo. Settings and authentication changes you make here will not take effect.
@@ -196,9 +195,10 @@ export function SettingsView({
 
       {visibleSubview === 'root' ? (
         <Stack spacing={1.5}>
+          <NativeAppSettingsButton />
           <SettingsOverviewCard
             title="General"
-            description="Application layout defaults and device-specific interface preferences."
+            description="App appearance and layout."
             onAction={() => navigate(settingsPath('/settings/general'))}
           />
 
@@ -295,7 +295,7 @@ export function SettingsView({
               { label: 'Settings', onClick: () => navigate(settingsPath()) },
               { label: 'General' }
             ]}
-            description="Application layout defaults and device-specific interface preferences."
+            description="App appearance and layout."
           />
 
           {(sharedSettingsError || sharedSettingsSaveError) && (
@@ -305,7 +305,6 @@ export function SettingsView({
           )}
 
           <ThemeSettingCard
-            sharedScopeLabel="everyone in this workspace"
             sharedAppTheme={sharedAppTheme}
             deviceAppThemeOverride={deviceAppThemeOverride}
             canManageSettings={canManageSettings}
@@ -325,17 +324,14 @@ export function SettingsView({
           {landingPageOptions.length > 0 && (
           <GeneralSettingCard
             title="Default page"
-            description="Choose which page opens first, including enabled plugin pages and saved printer views."
+            description="Choose the page that opens first."
             resetDisabled={deviceLandingPageOverride == null && !(canManageSettings && sharedLandingPage !== DEFAULT_APP_LANDING_PAGE)}
             onReset={() => {
               if (canManageSettings) onSetSharedLandingPage(DEFAULT_APP_LANDING_PAGE)
               onClearDeviceLandingPageOverride()
             }}
           >
-            <GeneralSettingSelectRow
-              label="Default setting"
-              helper="Shared with everyone in this workspace, and applied to devices that do not have their own override."
-            >
+            <GeneralSettingSelectRow label="Default setting">
               <Select<LandingPageSettingSelectValue>
                 value={sharedLandingPageSelectValue}
                 disabled={sharedSettingsSaving}
@@ -348,10 +344,7 @@ export function SettingsView({
               </Select>
             </GeneralSettingSelectRow>
 
-            <GeneralSettingSelectRow
-              label="This device"
-              helper="Saved in this browser, for this workspace only. Other workspaces keep their own. Choose follow default to inherit the shared setting."
-            >
+            <GeneralSettingSelectRow label="This device">
               <Select<DeviceLandingPageSettingSelectValue>
                 value={deviceLandingPageSelectValue}
                 onChange={(_event, value) => {
@@ -381,17 +374,14 @@ export function SettingsView({
 
           <GeneralSettingCard
             title="Full-width layout"
-            description="Remove the desktop max-width cap so the app can expand across the full viewport on wide screens."
+            description="Choose whether the app fills wide screens."
             resetDisabled={deviceUnconstrainedWidthOverride == null && !(canManageSettings && sharedUnconstrainedWidth)}
             onReset={() => {
               if (canManageSettings) onSetSharedUnconstrainedWidth(false)
               onClearDeviceUnconstrainedWidthOverride()
             }}
           >
-            <GeneralSettingSelectRow
-              label="Default setting"
-              helper="Shared with everyone in this workspace, and applied to devices that do not have their own override."
-            >
+            <GeneralSettingSelectRow label="Default setting">
               <Select<WidthSettingSelectValue>
                 value={sharedWidthSelectValue}
                 disabled={sharedSettingsSaving}
@@ -405,10 +395,7 @@ export function SettingsView({
               </Select>
             </GeneralSettingSelectRow>
 
-            <GeneralSettingSelectRow
-              label="This device"
-              helper="Saved in this browser and applied in every workspace on it, unlike the page and tab-order choices above. Choose follow default to inherit the shared setting."
-            >
+            <GeneralSettingSelectRow label="This device">
               <Select<DeviceWidthSettingSelectValue>
                 value={deviceWidthSelectValue}
                 onChange={(_event, value) => {
@@ -437,7 +424,7 @@ export function SettingsView({
           {onSetSharedNavTabOrder && onSetDeviceNavTabOrder && onClearDeviceNavTabOrderOverride && navTabOptions.length > 0 && (
             <GeneralSettingCard
               title="Navigation order"
-              description="Reorder the primary navigation tabs. Settings, Account, and platform tabs always stay at the end."
+              description="Reorder the main navigation tabs."
               resetDisabled={deviceNavTabOrder == null && !(canManageSettings && sharedNavTabOrder.length > 0)}
               onReset={() => {
                 if (canManageSettings) onSetSharedNavTabOrder?.([])
@@ -446,11 +433,6 @@ export function SettingsView({
             >
               <Stack spacing={0.5}>
                 <FormLabel>Default order</FormLabel>
-                <Typography level="body-xs" textColor="text.tertiary">
-                  {canManageSettings
-                    ? 'Shared with everyone in this workspace, and applied to devices that do not set their own order.'
-                    : 'Set by a workspace admin. You can still set a per-device order below.'}
-                </Typography>
                 <NavTabOrderEditor
                   options={navTabOptions}
                   order={sharedNavTabOrder}
@@ -461,9 +443,6 @@ export function SettingsView({
 
               <Stack spacing={0.5}>
                 <FormLabel>This device</FormLabel>
-                <Typography level="body-xs" textColor="text.tertiary">
-                  Saved in this browser, for this workspace only. Other workspaces keep their own order.
-                </Typography>
                 <NavTabOrderEditor
                   options={navTabOptions}
                   order={deviceNavTabOrder ?? sharedNavTabOrder}
@@ -667,60 +646,6 @@ function resolveVisibleWorkspaceSettingsSubview(
   if (subview === 'slicing' && !options.showsSlicerEngines) return 'root'
   if (subview === 'backups' && !options.showsServerBackups) return 'root'
   return subview
-}
-
-function SettingsOverviewCard({
-  title,
-  description,
-  onAction
-}: {
-  title: string
-  description: string
-  onAction: () => void
-}) {
-  return (
-    <Card
-      component="button"
-      type="button"
-      variant="outlined"
-      onClick={onAction}
-      sx={{
-        p: 2,
-        textAlign: 'left',
-        cursor: 'pointer',
-        transition: 'background-color 0.2s ease, border-color 0.2s ease, transform 0.2s ease',
-        '&:hover': {
-          backgroundColor: 'background.level1',
-          borderColor: 'primary.softColor'
-        },
-        '&:focus-visible': {
-          outline: '2px solid',
-          outlineColor: 'focusVisible',
-          outlineOffset: '2px'
-        }
-      }}
-    >
-      <Stack
-        direction="row"
-        spacing={1.5}
-        justifyContent="space-between"
-        alignItems="center"
-      >
-        <Stack spacing={0.4} sx={{ flex: 1, minWidth: 0 }}>
-          <Typography level="title-lg">{title}</Typography>
-          <Typography level="body-sm" textColor="text.tertiary">{description}</Typography>
-        </Stack>
-        <Typography
-          aria-hidden="true"
-          level="title-lg"
-          textColor="text.tertiary"
-          sx={{ display: 'inline-flex', alignItems: 'center', flexShrink: 0 }}
-        >
-          <KeyboardArrowRightRoundedIcon />
-        </Typography>
-      </Stack>
-    </Card>
-  )
 }
 
 function ensureLandingPageOptions(

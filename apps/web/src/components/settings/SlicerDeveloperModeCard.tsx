@@ -36,14 +36,14 @@ export function SlicerDeveloperModeCard() {
   return (
     <GeneralSettingCard
       title="Developer slicer settings"
-      description="Show BambuStudio's developer-mode options in the quality/process settings editor. These advanced options are hidden by default because incorrect values can produce failed or unsafe prints."
+      description="Show advanced slicer options. Incorrect values can cause failed or unsafe prints."
       resetDisabled={deviceOverride == null && !(canManageSettings && sharedEnabled)}
       onReset={() => {
         if (canManageSettings) updateGeneralSettings.mutate({ slicerDeveloperMode: false })
         setDeviceOverride(null)
       }}
     >
-      <GeneralSettingSelectRow label="Default setting" helper="Shared with everyone in this workspace, and applied to devices that do not have their own override.">
+      <GeneralSettingSelectRow label="Default setting">
         <Select<SharedValue>
           value={sharedSelectValue}
           disabled={!canManageSettings || updateGeneralSettings.isPending}
@@ -57,7 +57,7 @@ export function SlicerDeveloperModeCard() {
         </Select>
       </GeneralSettingSelectRow>
 
-      <GeneralSettingSelectRow label="This device" helper="Saved in this browser and applied in every workspace on it. Choose follow default to inherit the shared setting.">
+      <GeneralSettingSelectRow label="This device">
         <Select<DeviceValue>
           value={deviceSelectValue}
           onChange={(_event, value) => {

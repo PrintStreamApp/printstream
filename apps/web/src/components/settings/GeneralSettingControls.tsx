@@ -1,6 +1,6 @@
 /**
  * Building blocks for "general settings" cards: a titled card with an
- * optional reset action, a label + helper + right-aligned select row, and
+ * optional reset action, a label + right-aligned select row, and
  * the notice shown when a device override is shadowing the shared default.
  * Shared by the workspace Settings view and the Platform workspace.
  */
@@ -17,7 +17,7 @@ export function GeneralSettingCard({
 }: {
   title: string
   description: string
-  /** When provided, a "Reset to default" button is shown opposite the title. */
+  /** When provided, a "Reset" button is shown opposite the title. */
   onReset?: () => void
   resetDisabled?: boolean
   children: React.ReactNode
@@ -43,7 +43,7 @@ export function GeneralSettingCard({
                 onClick={onReset}
                 sx={{ flexShrink: 0 }}
               >
-                Reset to default
+                Reset
               </Button>
             )}
           </Stack>
@@ -58,11 +58,9 @@ export function GeneralSettingCard({
 
 export function GeneralSettingSelectRow({
   label,
-  helper,
   children
 }: {
   label: string
-  helper: string
   children: React.ReactNode
 }) {
   return (
@@ -74,9 +72,6 @@ export function GeneralSettingSelectRow({
     >
       <Stack spacing={0.35} sx={{ minWidth: 0, flex: 1 }}>
         <FormLabel>{label}</FormLabel>
-        <Typography level="body-xs" textColor="text.tertiary">
-          {helper}
-        </Typography>
       </Stack>
       <FormControl size="sm" sx={{ width: { xs: '100%', sm: 240 }, flexShrink: 0 }}>
         {children}

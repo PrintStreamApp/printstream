@@ -1,6 +1,16 @@
 {
   "releases": [
     {
+      "version": "1.3.4",
+      "releasedOn": "2026-09-19",
+      "changes": [
+        "Navigation and page actions now fit better on phones, with secondary destinations collected in one larger menu.",
+        "Jobs now show whether they are print or slicing jobs and can be filtered by type.",
+        "Model Studio keeps mobile tools reachable, keeps full-screen exits below native status bars, and keeps selection bounds accurate while rotating or scaling.",
+        "Settings, empty states, license controls, library uploads, and printer links are clearer and less repetitive."
+      ]
+    },
+    {
       "version": "1.3.3",
       "releasedOn": "2026-09-18",
       "changes": [

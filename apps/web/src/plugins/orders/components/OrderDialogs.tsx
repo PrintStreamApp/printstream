@@ -797,8 +797,8 @@ export function TemplateLibraryFilePickerDialog({
                               bridgeRootMode
                                 ? 'Connect a bridge to browse its files.'
                                 : currentFolderId
-                                ? 'Choose another folder or upload a printer-ready file here from the Library page.'
-                                : 'Upload printer-ready files in the Library page, then add them to this template.'
+                                ? 'Choose another folder or upload a file from Library.'
+                                : 'Upload a file in Library, then add it here.'
                             }
                           />
                         )

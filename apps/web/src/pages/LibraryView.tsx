@@ -74,7 +74,6 @@ import { useAuthBootstrapQuery } from '../lib/authQuery'
 import { useLocalStorageState } from '../hooks/useLocalStorageState'
 import { EmptyState } from '../components/EmptyState'
 import { BulkSelectionActions } from '../components/BulkSelectionActions'
-import { SplitButton } from '../components/SplitButton'
 import { LibraryBreadcrumb } from '../components/LibraryBreadcrumb'
 import { LibraryRecycleBinModal } from '../components/LibraryRecycleBinModal'
 import { CreateFolderModal, MoveFolderModal, RenameFolderModal } from '../components/library/LibraryFolderDialogs'
@@ -765,19 +764,16 @@ export function LibraryView() {
     setContextMenuAnchorEl(node)
   }
 
-  // Split Upload button (files picker primary, folder picker in the menu).
-  // Shared by the page toolbar and the empty-folder state so both offer the
-  // same upload paths.
-  const uploadSplitButton = (
-    <SplitButton
-      ariaLabel="upload"
-      menuAriaLabel="More upload options"
+  // Files and folders are peer upload sources, so Upload names a menu category
+  // rather than silently choosing files when the wide half is clicked.
+  const uploadMenuButton = (
+    <ActionMenuButton
+      ariaLabel="Upload"
       size="sm"
       label="Upload"
       startDecorator={<FileUploadRoundedIcon />}
-      // Both halves gate together: every upload path needs the same bridge storage.
+      // Every upload path needs the same bridge storage.
       disabled={bridgeResourceUnavailable}
-      onClick={() => inputRef.current?.click()}
     >
       <MenuItem onClick={() => inputRef.current?.click()}>
         <ListItemDecorator><FileUploadRoundedIcon /></ListItemDecorator>
@@ -793,7 +789,7 @@ export function LibraryView() {
         name="library.upload.menu"
         context={{ folderId: currentFolderId, bridgeId: activeBridgeId }}
       />
-    </SplitButton>
+    </ActionMenuButton>
   )
 
   const libraryEmptyState = deferredSearch.trim()
@@ -801,7 +797,7 @@ export function LibraryView() {
         <EmptyState
           icon={<SearchRoundedIcon />}
           title="No matches found"
-          description="Try a different search to find a file or folder in this library view."
+          description="Try a different search."
         />
       )
     : favoritesOnly
@@ -809,17 +805,7 @@ export function LibraryView() {
           <EmptyState
             icon={<StarBorderRoundedIcon />}
             title="No favorite files yet"
-            description="Open any file's ⋮ menu and choose Favorite to keep it here for quick access."
-            action={(
-              <Button
-                size="sm"
-                variant="soft"
-                startDecorator={<FolderOpenRoundedIcon />}
-                onClick={() => navigate(buildLibraryFolderRoute(workspaceSlug ?? '', null, activeBridgeId))}
-              >
-                Browse library
-              </Button>
-            )}
+            description="Choose Favorite from a file's menu to keep it here."
           />
         )
     : bridgeRootMode
@@ -836,23 +822,8 @@ export function LibraryView() {
             title={currentFolderId ? 'This folder is empty' : 'Your library is empty'}
             description={
               currentFolderId
-                ? 'Upload files or create a folder here to organize prints for later.'
-                : 'Upload your first 3MF/G-code file to start building a library.'
-            }
-            action={
-              <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', justifyContent: 'center' }}>
-                {canManageLibrary && (
-                  <Button
-                    size="sm"
-                    variant="soft"
-                    startDecorator={<CreateNewFolderRoundedIcon />}
-                    onClick={() => setCreatingFolder(true)}
-                  >
-                    New folder
-                  </Button>
-                )}
-                {canUploadLibrary && !demoMode && uploadSplitButton}
-              </Stack>
+                ? 'Upload a file or create a folder.'
+                : 'Upload a 3MF or G-code file to get started.'
             }
           />
         )
@@ -1087,7 +1058,7 @@ export function LibraryView() {
       }}
       cancelDisabled={recycleFiles.isPending}
     >
-      <Button size="sm" variant="soft" startDecorator={<LabelIcon />} disabled={!selectedVisibleFiles.length} onClick={() => openTags(selectedVisibleFiles.map((file) => file.id))}>Assign tags</Button>
+      <Button size="sm" variant="soft" startDecorator={<LabelIcon />} disabled={!selectedVisibleFiles.length} onClick={() => openTags(selectedVisibleFiles.map((file) => file.id))}>Tags</Button>
       <Button
         size="sm"
         startDecorator={<DriveFileMoveRoundedIcon />}
@@ -1217,7 +1188,7 @@ export function LibraryView() {
                   />
                 </Box>
               )}
-              {canUploadLibrary && !bridgeRootMode && uploadSplitButton}
+              {canUploadLibrary && !bridgeRootMode && uploadMenuButton}
             </Stack>
           )}
         </Stack>

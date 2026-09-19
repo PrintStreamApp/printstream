@@ -143,7 +143,7 @@ export function SlotEditorActions(props: SlotContext) {
                   <EmptyState
                     icon={<FilamentSpoolIcon />}
                     title="No spools yet"
-                    description="Add spools from the Filament tab, or insert a Bambu spool into an AMS slot to add it automatically."
+                    description="Add a spool from Filament or load one into an AMS."
                     compact
                   />
                 }

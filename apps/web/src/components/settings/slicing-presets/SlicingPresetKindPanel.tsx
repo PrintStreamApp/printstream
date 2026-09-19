@@ -348,11 +348,6 @@ export function SlicingPresetKindPanel({ kind, profiles, emptyDescription, stick
     setSourceSelection(null)
   }
 
-  function resetSearchAndFilters() {
-    setSearch('')
-    clearFilters()
-  }
-
   async function handleDeleteProfile(profile: SlicingPresetSummary) {
     const confirmed = await confirm({
       title: 'Delete preset?',
@@ -639,12 +634,7 @@ export function SlicingPresetKindPanel({ kind, profiles, emptyDescription, stick
             compact
             icon={<SearchRoundedIcon />}
             title="No presets match"
-            description="No custom slicing presets match the current search or filters."
-            action={(search.trim().length > 0 || activeFilterCount > 0) ? (
-              <Button size="sm" variant="plain" color="neutral" onClick={resetSearchAndFilters}>
-                Clear search and filters
-              </Button>
-            ) : undefined}
+            description="Try another search or filter."
           />
         </Stack>
       ) : groups ? (

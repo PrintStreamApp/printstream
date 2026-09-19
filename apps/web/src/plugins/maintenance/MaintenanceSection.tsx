@@ -174,12 +174,7 @@ export function MaintenanceSection(props: Record<string, unknown>) {
         <EmptyState
           icon={<BuildRoundedIcon />}
           title="No maintenance tasks"
-          description="Add a task to start tracking servicing for this printer."
-          action={canManage ? (
-            <Button size="sm" variant="soft" startDecorator={<AddRoundedIcon />} onClick={handleOpenAdd}>
-              Add task
-            </Button>
-          ) : undefined}
+          description="Add a task to track this printer's maintenance."
         />
       )}
 

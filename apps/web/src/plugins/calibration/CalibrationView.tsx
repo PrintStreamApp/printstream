@@ -140,10 +140,7 @@ export function CalibrationView() {
 
   return (
     <Stack spacing={pageSectionStackSpacing}>
-      <Stack direction="row" spacing={1} alignItems="flex-start" justifyContent="space-between" sx={{ flexWrap: 'wrap' }}>
-        <Typography level="h3" startDecorator={<ScienceRoundedIcon />}>Calibration</Typography>
-        <Button size="sm" startDecorator={<AddRoundedIcon />} onClick={() => setShowNew(true)} disabled={printers.length === 0}>New calibration</Button>
-      </Stack>
+      <Typography level="h3" startDecorator={<ScienceRoundedIcon />}>Calibration</Typography>
 
       <Stack spacing={1}>
         <PageSectionHeading
@@ -151,11 +148,16 @@ export function CalibrationView() {
           title="Runs"
           description="Calibration prints working through slicing, printing, and result entry."
           count={unfinishedRuns.length}
+          actions={<Button size="sm" startDecorator={<AddRoundedIcon />} onClick={() => setShowNew(true)} disabled={printers.length === 0}>New calibration</Button>}
+          actionsInline
         />
         {unfinishedRuns.length === 0 ? (
-          <Sheet variant="soft" sx={{ borderRadius: 'md', p: 2 }}>
-            <EmptyState icon={<ScienceRoundedIcon />} title="No unfinished calibrations" description="Start a calibration to print a test. Completed results are in Saved values below." action={<Button size="sm" startDecorator={<AddRoundedIcon />} onClick={() => setShowNew(true)} disabled={printers.length === 0}>New calibration</Button>} />
-          </Sheet>
+          <EmptyState
+            compact
+            icon={<ScienceRoundedIcon />}
+            title="No unfinished calibrations"
+            description="Start a calibration to print a test."
+          />
         ) : (
         <Stack spacing={1}>
           {unfinishedRuns.map((run) => {
@@ -204,6 +206,7 @@ export function CalibrationView() {
           icon={<TuneRoundedIcon />}
           title="Saved values"
           actions={<Button size="sm" startDecorator={<AddRoundedIcon />} onClick={() => setShowManual(true)}>Add saved value</Button>}
+          actionsInline
           description="Applied automatically when matching filament is loaded. Values saved for one spool are used first."
           count={results.length}
         />

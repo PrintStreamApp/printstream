@@ -88,8 +88,6 @@ export function OrdersListRoute({
   pendingDeleteOrderId,
   pendingEditOrderId,
   pendingOrderId,
-  templatesAvailable,
-  onCreateOrder,
   canManageOrders,
   canStartOrderPrint,
   loading
@@ -134,8 +132,6 @@ export function OrdersListRoute({
   pendingDeleteOrderId: string | null
   pendingEditOrderId: string | null
   pendingOrderId: string | null
-  templatesAvailable: boolean
-  onCreateOrder: () => void
   canManageOrders: boolean
   canStartOrderPrint: boolean
   loading: boolean
@@ -148,10 +144,7 @@ export function OrdersListRoute({
       {orders.length === 0 && !loading ? (
         <EmptyBlock
           title="No production orders"
-          message="Create an order from a template to track starts, confirmations, and manual completions."
-          actionLabel="Create order"
-          disabled={!canManageOrders || !templatesAvailable}
-          onAction={onCreateOrder}
+          message="Create one from a template to track production."
         />
       ) : (
         <Stack spacing={pageSectionStackSpacing}>
@@ -320,10 +313,7 @@ export function TemplatesListRoute({
       {templates.length === 0 && !loading ? (
         <EmptyBlock
           title="No templates yet"
-          message="Create a template with the plates and quantities you repeatedly need to print."
-          actionLabel="Create template"
-          disabled={!canManageOrders}
-          onAction={onCreateTemplate}
+          message="Create a template for frequently printed plates and quantities."
         />
       ) : filteredTemplates.length === 0 ? (
         <SectionEmptyState title="No templates found" message="No templates match that search." />

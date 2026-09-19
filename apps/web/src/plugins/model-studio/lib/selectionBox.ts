@@ -67,6 +67,24 @@ export const PRIMARY_SELECTION_STYLE: SelectionBoxStyle = { color: SELECTION_BOX
 export const EXTRA_SELECTION_STYLE: SelectionBoxStyle = { color: SELECTION_BOX_EXTRA_COLOR, opacity: 0.45 }
 
 /**
+ * Whether the primary outline must walk mesh vertices for this frame.
+ *
+ * Translation can carry a cheap transformed AABB until the settled-frame upgrade. Rotation and
+ * scale cannot: transforming the previous AABB makes it balloon while the mesh turns, then snap
+ * back on release. Those gestures therefore pay for exact bounds while they are visible.
+ */
+export function selectionBoxNeedsPreciseBounds(input: {
+  interacting: boolean
+  changedOrientation: boolean
+  dragJustEnded: boolean
+  upgrade: boolean
+}): boolean {
+  if (input.interacting) return input.changedOrientation
+  if (input.dragJustEnded && !input.upgrade) return input.changedOrientation
+  return true
+}
+
+/**
  * A selection outline for `box`. The helper keeps a REFERENCE to the box, refitting itself during
  * render, so callers update the outline by writing into that same box via {@link fitSelectionBox}.
  */

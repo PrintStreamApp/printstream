@@ -1,15 +1,15 @@
 /** Suggestion-board adapters for the self-hosted cloud-connection plugin. */
 import { Alert } from '@mui/joy'
-import { SuggestionsFooterLink } from '../../components/suggestions/SuggestionsFooterLink'
+import { SuggestionsMenuItem } from '../../components/suggestions/SuggestionsMenuItem'
 import { SuggestionsView } from '../../components/suggestions/SuggestionsView'
 import { ListSkeleton } from '../../components/ListSkeleton'
 import { useCloudSupportEligibility } from './useCloudSupportEligibility'
 
 const SELF_HOSTED_SUGGESTIONS_BASE = '/api/plugins/cloud-connection/suggestions'
 
-export function SelfHostedSuggestionsFooterLink() {
+export function SelfHostedSuggestionsMenuItem() {
   const eligible = useCloudSupportEligibility()
-  return eligible ? <SuggestionsFooterLink /> : null
+  return eligible ? <SuggestionsMenuItem /> : null
 }
 
 export function SelfHostedSuggestionsView() {

@@ -36,12 +36,16 @@ export function slicingHistoryResult(job: SlicingJob): PrintJob['result'] {
 
 const commaSeparated = z.string().default('').transform((value) => value.split(',').filter(Boolean))
 
+export const jobHistoryKindSchema = z.enum(['print', 'slicing'])
+export type JobHistoryKind = z.infer<typeof jobHistoryKindSchema>
+
 export const jobHistoryQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(10),
   search: z.string().trim().max(200).default(''),
   printerIds: commaSeparated,
   tagIds: commaSeparated.pipe(z.array(z.string().min(1).max(100)).max(100)),
+  kinds: commaSeparated.pipe(z.array(jobHistoryKindSchema)),
   results: commaSeparated.pipe(z.array(printJobResultSchema)),
   sortBy: z.enum(['started', 'ended']).default('ended'),
   sortDirection: z.enum(['asc', 'desc']).default('desc')
@@ -161,9 +165,11 @@ export function selectJobHistoryPage(input: {
     .sort((left, right) => left.name.localeCompare(right.name))
 
   const printerIds = new Set(query.printerIds)
+  const kinds = new Set(query.kinds)
   const results = new Set(query.results)
   const search = query.search.toLowerCase()
   const filtered = entries.filter(({ entry, derived }) => {
+    if (kinds.size > 0 && !kinds.has(entry.kind)) return false
     if (printerIds.size > 0 && (derived.printerId == null || !printerIds.has(derived.printerId))) return false
     if (results.size > 0 && !results.has(derived.result)) return false
     if (query.tagIds.length > 0 && !input.matchesTags?.(entry)) return false

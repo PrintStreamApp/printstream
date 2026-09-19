@@ -24,6 +24,7 @@ import {
   getPrinterDisplayCapabilities,
   isDirectPrintableFileName,
   type JobHistoryResponse,
+  type JobHistoryKind,
   type LibraryFile,
   type Permission,
   type PrintDispatchJob,
@@ -126,6 +127,7 @@ const HISTORY_VIEW_MODE_KEY = 'printstream.jobs.history.viewMode'
 const HISTORY_SORT_KEY = 'printstream.jobs.history.sort'
 const HISTORY_SORT_DIR_KEY = 'printstream.jobs.history.sortDir'
 const HISTORY_RESULT_FILTER_KEY = 'printstream.jobs.history.resultFilter'
+const HISTORY_KIND_FILTER_KEY = 'printstream.jobs.history.kindFilter'
 const HISTORY_PRINTER_FILTER_KEY = 'printstream.jobs.history.printerFilter'
 const HISTORY_PAGE_SIZE_KEY = 'printstream.jobs.history.pageSize'
 
@@ -154,6 +156,11 @@ function sanitizeHistoryPrinterIds(value: unknown): string[] {
   return value.filter((entry): entry is string => typeof entry === 'string')
 }
 
+function sanitizeHistoryKinds(value: unknown): JobHistoryKind[] {
+  if (!Array.isArray(value)) return []
+  return value.filter((entry): entry is JobHistoryKind => entry === 'print' || entry === 'slicing')
+}
+
 function sanitizeHistoryPageSize(value: unknown): number {
   return (HISTORY_PAGE_SIZE_OPTIONS as readonly number[]).includes(value as number)
     ? (value as number)
@@ -170,6 +177,7 @@ function buildJobHistoryUrl(input: {
   tagIds: ReadonlyArray<string>
   printerIds: ReadonlyArray<string>
   results: ReadonlyArray<PrintJob['result']>
+  kinds: ReadonlyArray<JobHistoryKind>
   sortBy: HistorySortValue
   sortDirection: DirectorySortDirection
 }): string {
@@ -180,6 +188,7 @@ function buildJobHistoryUrl(input: {
   if (input.tagIds.length) params.set('tagIds', input.tagIds.join(','))
   if (input.printerIds.length > 0) params.set('printerIds', input.printerIds.join(','))
   if (input.results.length > 0) params.set('results', input.results.join(','))
+  if (input.kinds.length > 0) params.set('kinds', input.kinds.join(','))
   params.set('sortBy', input.sortBy)
   params.set('sortDirection', input.sortDirection)
   return `/api/jobs/history?${params.toString()}`
@@ -228,6 +237,7 @@ export function JobsView() {
   const deferredHistorySearch = useDeferredValue(historySearch)
   const [historyPrinterIds, setHistoryPrinterIds] = usePersistentState<string[]>(HISTORY_PRINTER_FILTER_KEY, [], sanitizeHistoryPrinterIds)
   const [historyResults, setHistoryResults] = usePersistentState<PrintJob['result'][]>(HISTORY_RESULT_FILTER_KEY, [], sanitizeHistoryResults)
+  const [historyKinds, setHistoryKinds] = usePersistentState<JobHistoryKind[]>(HISTORY_KIND_FILTER_KEY, [], sanitizeHistoryKinds)
   const [historySortValue, setHistorySortValue] = usePersistentState<HistorySortValue>(HISTORY_SORT_KEY, 'ended', sanitizeHistorySort)
   const [historySortDirection, setHistorySortDirection] = usePersistentState<DirectorySortDirection>(HISTORY_SORT_DIR_KEY, 'desc', sanitizeHistorySortDirection)
   const [historyPage, setHistoryPage] = useState(0)
@@ -272,6 +282,7 @@ export function JobsView() {
       tagIds: historyTags.ids,
       printerIds: historyPrinterIds,
       results: historyResults,
+      kinds: historyKinds,
       sortBy: historySortValue,
       sortDirection: historySortDirection
     }],
@@ -282,6 +293,7 @@ export function JobsView() {
       tagIds: historyTags.ids,
       printerIds: historyPrinterIds,
       results: historyResults,
+      kinds: historyKinds,
       sortBy: historySortValue,
       sortDirection: historySortDirection
     }), { signal }),
@@ -456,7 +468,7 @@ export function JobsView() {
   )
   const historyPageCount = Math.max(1, Math.ceil(historyTotal / historyPageSize))
   const safeHistoryPage = Math.min(historyPage, historyPageCount - 1)
-  const activeHistoryFilterCount = Number(historyPrinterIds.length > 0) + Number(historyResults.length > 0) + historyTags.activeCount
+  const activeHistoryFilterCount = Number(historyPrinterIds.length > 0) + Number(historyResults.length > 0) + Number(historyKinds.length > 0) + historyTags.activeCount
   const effectiveHistoryViewMode: DirectoryViewMode = isMobileViewport ? 'list' : historyViewMode
 
   // Deleting the last row of the last page (or narrowing filters) can strand the page index past
@@ -470,6 +482,7 @@ export function JobsView() {
     historyTags.clear()
     setHistoryPrinterIds([])
     setHistoryResults([])
+    setHistoryKinds([])
   }
 
   // Sections contributed by `jobs.sections` slot plugins (e.g. the print queue).
@@ -539,7 +552,7 @@ export function JobsView() {
               compact
               icon={<PrintRoundedIcon />}
               title="No jobs in progress"
-              description="Queued slicing jobs, print dispatches, and live prints will appear here while work is on its way to or running on a printer."
+              description="Slicing and printing jobs will appear here."
             />
           )}
           {activeSlicingJobs.map((job) => (
@@ -591,6 +604,7 @@ export function JobsView() {
                           columnGap: 1
                         }}
                       >
+                        <Chip size="sm" variant="outlined" color="neutral">Print</Chip>
                         <Chip size="sm" color={dispatchStatusColor(dispatchJob.status)} variant="soft">{statusLabel(dispatchJob.status)}</Chip>
                         {canDispatchPrints && cancellable && (
                           <Button
@@ -686,7 +700,7 @@ export function JobsView() {
               compact
               icon={<HistoryRoundedIcon />}
               title="No job history yet"
-              description="Completed and failed slicing jobs and prints will show up here once work has been started from PrintStream."
+              description="Finished jobs will appear here."
             />
           )}
           {historyTotalUnfiltered > 0 && (
@@ -706,6 +720,28 @@ export function JobsView() {
                   children: (
                     <>
                       <JobHistoryTagFilters filters={historyTags.filters} onChange={() => setHistoryPage(0)} />
+                      <FormControl>
+                        <Typography level="body-sm" textColor="text.tertiary">Type</Typography>
+                        <Select
+                          size="sm"
+                          multiple
+                          value={historyKinds}
+                          onChange={(_event, value) => {
+                            setHistoryPage(0)
+                            setHistoryKinds(value ?? [])
+                          }}
+                          placeholder="All types"
+                          renderValue={() => historyKinds.length === 0
+                            ? null
+                            : historyKinds.length === 1
+                              ? (historyKinds[0] === 'print' ? 'Print' : 'Slicing')
+                              : 'All types'}
+                          slotProps={{ listbox: { disablePortal: true } }}
+                        >
+                          <MultiSelectOption value="print" selected={historyKinds.includes('print')}>Print</MultiSelectOption>
+                          <MultiSelectOption value="slicing" selected={historyKinds.includes('slicing')}>Slicing</MultiSelectOption>
+                        </Select>
+                      </FormControl>
                       <FormControl>
                         <Typography level="body-sm" textColor="text.tertiary">Printer</Typography>
                         <Select
@@ -1047,6 +1083,7 @@ function ActiveSlicingJobCard({
               </Typography>
             </Stack>
             <Stack direction="row" spacing={1} alignItems="center" sx={{ flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+              <Chip size="sm" variant="outlined" color="neutral">Slicing</Chip>
               <Chip size="sm" color={slicingStatusColor(job.status)} variant="soft">{getSlicingJobStatusLabel(job)}</Chip>
               {canCancel && (
                 <Button
@@ -1159,6 +1196,7 @@ function SlicingJobHistoryCard({ job, printerName, action }: { job: SlicingJob; 
                   <Chip size="sm" variant="soft" color={slicingStatusColor(job.status)} sx={{ flexShrink: 0 }}>
                     {getSlicingJobStatusLabel(job)}
                   </Chip>
+                  <Chip size="sm" variant="outlined" color="neutral" sx={{ flexShrink: 0 }}>Slicing</Chip>
                 </Stack>
                 <Typography level="body-sm" textColor="text.tertiary" sx={{ textWrap: 'pretty', overflowWrap: 'anywhere' }}>
                   {detail}
@@ -1286,16 +1324,18 @@ function ActiveJobCard({ job, canViewCamera, workspaceSlug }: { job: LiveJob; ca
                 />
               </Typography>
             </Stack>
-            <Chip
-              size="sm"
-              variant="soft"
-              color={waitingForPrinterStart ? (pendingStartWarning ? 'warning' : 'success') : stageLabelColor(livePrinterStatus)}
-              sx={{ flexShrink: 0 }}
-            >
-              {waitingForPrinterStart
-                ? (pendingStartWarning ? 'Start delayed' : 'Waiting to start')
-                : (job.online ? capitalize(job.stage) : `${capitalize(job.stage)} offline`)}
-            </Chip>
+            <Stack direction="row" spacing={1} alignItems="center" sx={{ flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+              <Chip size="sm" variant="outlined" color="neutral">Print</Chip>
+              <Chip
+                size="sm"
+                variant="soft"
+                color={waitingForPrinterStart ? (pendingStartWarning ? 'warning' : 'success') : stageLabelColor(livePrinterStatus)}
+              >
+                {waitingForPrinterStart
+                  ? (pendingStartWarning ? 'Start delayed' : 'Waiting to start')
+                  : (job.online ? capitalize(job.stage) : `${capitalize(job.stage)} offline`)}
+              </Chip>
+            </Stack>
           </Stack>
 
           <PrinterJobMediaStrip

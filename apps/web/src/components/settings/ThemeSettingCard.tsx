@@ -14,7 +14,6 @@ type DeviceThemeSettingSelectValue = 'follow-default' | AppThemeSetting
 
 export function ThemeSettingCard({
   hasSharedSetting = true,
-  sharedScopeLabel = 'everyone here',
   sharedAppTheme,
   deviceAppThemeOverride,
   canManageSettings,
@@ -31,15 +30,6 @@ export function ThemeSettingCard({
    * that did nothing, which is worse than no control.
    */
   hasSharedSetting?: boolean
-  /**
-   * Who the SHARED default is shared with, named by the host.
-   *
-   * The card is rendered in three scopes and the row said only "shared
-   * default", which answers device-vs-shared and not shared-with-whom. Someone
-   * changing it in one workspace could not tell whether they had just restyled
-   * their team, every workspace, or the whole deployment.
-   */
-  sharedScopeLabel?: string
   sharedAppTheme: AppThemeSetting
   deviceAppThemeOverride: AppThemeSetting | null
   canManageSettings: boolean
@@ -53,7 +43,7 @@ export function ThemeSettingCard({
   return (
     <GeneralSettingCard
       title="Theme"
-      description="Choose the app's appearance: the default look, the Aurora background treatment, or one of the flat styles (Graphite accents, Slate, Code Dark)."
+      description="Choose the app's appearance."
       resetDisabled={deviceAppThemeOverride == null && !(hasSharedSetting && canManageSettings && sharedAppTheme !== 'default')}
       onReset={() => {
         if (hasSharedSetting && canManageSettings) onSetSharedAppTheme('default')
@@ -61,10 +51,7 @@ export function ThemeSettingCard({
       }}
     >
       {hasSharedSetting ? (
-      <GeneralSettingSelectRow
-        label="Default setting"
-        helper={`Shared with ${sharedScopeLabel}, and applied to devices that do not have their own override.`}
-      >
+      <GeneralSettingSelectRow label="Default setting">
         <Select<AppThemeSetting>
           value={sharedAppTheme}
           disabled={sharedSettingsSaving}
@@ -80,12 +67,7 @@ export function ThemeSettingCard({
       </GeneralSettingSelectRow>
       ) : null}
 
-      <GeneralSettingSelectRow
-        label="This device"
-        helper={hasSharedSetting
-          ? 'Saved in this browser only, and applies wherever you go in the app on it. Choose follow default to inherit the shared setting.'
-          : 'Saved in this browser only. Nobody else on the account sees this choice.'}
-      >
+      <GeneralSettingSelectRow label="This device">
         <Select<DeviceThemeSettingSelectValue>
           value={deviceThemeSelectValue}
           onChange={(_event, value) => {

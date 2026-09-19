@@ -41,7 +41,7 @@ export function ListSection({
   emptyIcon,
   emptyTitle,
   emptyDescription,
-  /** Offered in the empty state AND under the content, so it is reachable either way. */
+  /** Offered in the empty state AND under content. Omit when a nearby heading already carries it. */
   actions,
   error,
   children

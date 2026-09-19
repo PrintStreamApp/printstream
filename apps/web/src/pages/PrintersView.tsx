@@ -1154,7 +1154,7 @@ export function PrintersView() {
                   compact
                   icon={<PrintRoundedIcon />}
                   title="No print history yet"
-                  description="Completed and failed prints for this printer will appear here once a job has been started from PrintStream."
+                  description="Finished prints will appear here."
                 />
               )}
 
@@ -1381,12 +1381,7 @@ export function PrintersView() {
             <EmptyState
               icon={<Printer3dRoundedIcon />}
               title="No printers connected"
-              description="Add your first Bambu printer to start monitoring status, browsing storage, and sending prints from the library."
-              action={canManagePrinters ? (
-                <Button size="sm" startDecorator={<AddIcon />} onClick={() => setOpen(true)}>
-                  Add printer
-                </Button>
-              ) : undefined}
+              description="Add a printer to get started."
             />
           )}
 
@@ -1403,24 +1398,12 @@ export function PrintersView() {
                   ? `No printers are currently in the ${printerStateFilterLabel(effectiveStateFilter).toLowerCase()} state.`
                   : 'No printers match the current search or filters.'
               }
-              action={
-                <Button
-                  size="sm"
-                  variant="soft"
-                  onClick={() => {
-                    setOverviewSearch('')
-                    applyToolbarChange({ stateFilter: 'all', modelFilter: [], nozzleDiameterFilter: [], plateTypeFilter: [], printerIds: [] })
-                  }}
-                >
-                  Clear filters
-                </Button>
-              }
             />
           )}
 
           {tagDialog}
           {tagSelectionMode && canManagePrinters && <BulkSelectionActions onCancel={() => { setTagSelectionMode(false) }}>
-            <Button size="sm" variant="soft" startDecorator={<LabelIcon />} disabled={!selectedTagPrinters.length} onClick={() => openTags(selectedTagPrinters.map((printer) => printer.id))}>Assign tags</Button>
+            <Button size="sm" variant="soft" startDecorator={<LabelIcon />} disabled={!selectedTagPrinters.length} onClick={() => openTags(selectedTagPrinters.map((printer) => printer.id))}>Tags</Button>
           </BulkSelectionActions>}
           {filteredPrinters.length > 0 && (
             <PaginatedSection

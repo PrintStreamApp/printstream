@@ -81,7 +81,8 @@ import {
   createSelectionBox,
   createSelectionOwnerTracker,
   fitSelectionBox,
-  renderSelectionOverlay
+  renderSelectionOverlay,
+  selectionBoxNeedsPreciseBounds
 } from './lib/selectionBox'
 import { FOOTPRINT_CELL_MM, shiftFootprintCells } from './lib/arrange'
 import { createPointerClaim } from './lib/pointerClaim'
@@ -2679,9 +2680,9 @@ export function useEditorScene(params: EditorSceneParams): void {
         }
         // Track the selected object's mesh bounds (Box3Helper fits itself to the box value in its
         // own updateMatrixWorld during render). The PRECISE walk (per-vertex) is the priciest
-        // per-frame work for high-poly models, so: only recompute when the object actually moved
-        // (idle selections / camera orbits skip it), and while dragging use the cheap transformed-
-        // AABB path so high-poly drags stay smooth, then restore the precise box on the drop frame.
+        // per-frame work for high-poly models, so idle selections and pure moves avoid it. Rotation
+        // and scale cannot: transforming the old local AABB inflates it as it turns, sometimes by
+        // multiples, then snaps smaller on release even though the mesh never changed size.
         if (selectionBox && selectionTarget) {
           const sig = selectionBoxSignature(selectionTarget)
           // A drop re-fits immediately -- cheap for a translation, precise for a reorientation --
@@ -2710,13 +2711,18 @@ export function useEditorScene(params: EditorSceneParams): void {
           }
           if (sig !== selectionBoxSig || dragJustEnded || upgrade) {
             selectionBoxSig = sig
-            // Precise (per-vertex) is only needed to hug a REORIENTED object. Mid-drag stays cheap,
-            // and so does the drop frame of a pure move -- that one is corrected by the upgrade the
-            // re-arm above scheduled, rather than by paying for the walk inside the gesture.
+            // Precise (per-vertex) is only needed to hug a REORIENTED object. Pure moves stay cheap,
+            // including their drop frame; the delayed upgrade corrects that box after the gesture.
+            // Rotate/scale must stay precise DURING the gesture or the outline visibly balloons.
             // An upgrade frame is ALWAYS precise -- it exists for nothing else, and letting the
             // drag answer win here would consume the countdown on a cheap fit and leave the loose
             // box with nothing pending.
-            const precise = interacting ? false : (dragJustEnded && !upgrade ? lastDragChangedOrientation : true)
+            const precise = selectionBoxNeedsPreciseBounds({
+              interacting,
+              changedOrientation: lastDragChangedOrientation,
+              dragJustEnded,
+              upgrade
+            })
             fitSelectionBox(selectionBoxValue, printableMeshBox(selectionTarget, precise))
             // A newly selected object starts hidden. Reveal it only after a precise fit, whether
             // that is the deferred settled-frame upgrade or a rotate/scale drop that already pays

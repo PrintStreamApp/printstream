@@ -36,11 +36,11 @@ export function BuildPlateSettingCard() {
     return (
       <GeneralSettingCard
         title="3D build plate"
-        description="Show the printer’s modelled build plate instead of the plain grid. Turn it off for a plain grid on every printer, including those with no plate model."
+        description="Show the printer's 3D build plate instead of a plain grid."
         resetDisabled={deviceOverride == null}
         onReset={() => setDeviceOverride(null)}
       >
-        <GeneralSettingSelectRow label="Build plate" helper="Saved in this browser, for this workspace only.">
+        <GeneralSettingSelectRow label="Build plate">
           <Select<'on' | 'off'>
             value={deviceOverride ?? true ? 'on' : 'off'}
             onChange={(_event, value) => { if (value) setDeviceOverride(value === 'on') }}
@@ -56,7 +56,7 @@ export function BuildPlateSettingCard() {
   return (
     <GeneralSettingCard
       title="3D build plate"
-      description="Show the printer’s modelled build plate instead of the plain grid. Turn it off for a plain grid on every printer, including those with no plate model."
+      description="Show the printer's 3D build plate instead of a plain grid."
       // Reset means "back to the shipped default": the plate is on by default, so a shared value
       // of true is already reset.
       resetDisabled={deviceOverride == null && !(canManageSettings && !sharedEnabled)}
@@ -65,7 +65,7 @@ export function BuildPlateSettingCard() {
         setDeviceOverride(null)
       }}
     >
-      <GeneralSettingSelectRow label="Default setting" helper="Shared with everyone in this workspace, and applied to devices that do not have their own override.">
+      <GeneralSettingSelectRow label="Default setting">
         <Select<'on' | 'off'>
           value={sharedEnabled ? 'on' : 'off'}
           disabled={!canManageSettings || save.isPending}
@@ -76,7 +76,7 @@ export function BuildPlateSettingCard() {
         </Select>
       </GeneralSettingSelectRow>
 
-      <GeneralSettingSelectRow label="This device" helper="Saved in this browser, for this workspace only. Choose follow default to inherit the shared setting.">
+      <GeneralSettingSelectRow label="This device">
         <Select<DeviceChoice<'on' | 'off'>>
           value={deviceValue}
           onChange={(_event, value) => {
@@ -113,11 +113,11 @@ export function PanelPositionSettingCard() {
     return (
       <GeneralSettingCard
         title="Panel position"
-        description="Which side the objects and settings panel sits on."
+        description="Choose which side holds the objects and settings panel."
         resetDisabled={deviceOverride == null}
         onReset={() => setDeviceOverride(null)}
       >
-        <GeneralSettingSelectRow label="Panel side" helper="Saved in this browser, for this workspace only.">
+        <GeneralSettingSelectRow label="Panel side">
           <Select<EditorSidebarSideSetting>
             value={deviceOverride ?? 'right'}
             onChange={(_event, value) => { if (value) setDeviceOverride(value) }}
@@ -134,14 +134,14 @@ export function PanelPositionSettingCard() {
   return (
     <GeneralSettingCard
       title="Panel position"
-      description="Which side of the 3D view the settings and objects panel sits on. Narrow screens always stack it below the view."
+      description="Choose which side of the 3D view holds the objects and settings panel."
       resetDisabled={deviceOverride == null && !(canManageSettings && sharedSide !== 'right')}
       onReset={() => {
         if (canManageSettings) save.mutate({ editorSidebarSide: 'right' })
         setDeviceOverride(null)
       }}
     >
-      <GeneralSettingSelectRow label="Default setting" helper="Shared with everyone in this workspace, and applied to devices that do not have their own override.">
+      <GeneralSettingSelectRow label="Default setting">
         <Select<EditorSidebarSideSetting>
           value={sharedSide}
           disabled={!canManageSettings || save.isPending}
@@ -152,7 +152,7 @@ export function PanelPositionSettingCard() {
         </Select>
       </GeneralSettingSelectRow>
 
-      <GeneralSettingSelectRow label="This device" helper="Saved in this browser, for this workspace only. Choose follow default to inherit the shared setting.">
+      <GeneralSettingSelectRow label="This device">
         <Select<DeviceChoice<EditorSidebarSideSetting>>
           value={deviceValue}
           onChange={(_event, value) => {

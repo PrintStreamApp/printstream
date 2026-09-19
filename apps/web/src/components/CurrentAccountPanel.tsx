@@ -25,7 +25,7 @@ import { useRuntimePolicy } from '../lib/runtimePolicy'
 import { isPlatformWorkspacePath } from '../lib/workspaceRoute'
 import { PageSectionHeading, pageSectionStackSpacing } from '../components/dashboard/PageSectionHeading'
 import { SectionNav, type SectionNavEntry } from '../components/dashboard/SectionNav'
-import { mobileSectionNavReserveSpace, sectionScrollMarginTop } from '../components/dashboard/SectionNav.constants'
+import { sectionScrollMarginTop } from '../components/dashboard/SectionNav.constants'
 import { PluginSlot } from '../plugin/PluginSlot'
 import { StaticPluginSlot } from '../plugin/StaticPluginSlot'
 import { usePluginSlots } from '../plugin/usePluginSlots'
@@ -327,7 +327,7 @@ export function CurrentAccountPanel({
   }
 
   return (
-    <Stack spacing={pageSectionStackSpacing} sx={{ pb: showSectionNav ? { xs: mobileSectionNavReserveSpace, sm: 0 } : undefined }}>
+    <Stack spacing={pageSectionStackSpacing}>
       {sections.length > 0 && <SectionNav aria-label="Account sections" sections={sections} mb={0} />}
       {isNativeApp() && <NativeWelcomeButton label="Change server" />}
       <NativeAppSettingsButton />

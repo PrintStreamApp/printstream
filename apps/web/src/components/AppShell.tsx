@@ -6,7 +6,7 @@
  * row, and a max-width content column.
  */
 import React, { type MouseEvent, type ReactNode } from 'react'
-import { Box, Button, Stack, Tab, TabList, Tabs, Tooltip, Typography } from '@mui/joy'
+import { Box, Stack, Tab, TabList, Tabs, Tooltip, Typography } from '@mui/joy'
 import type { ShellIdentity } from '../lib/authUi'
 import { HorizontalOverflowScroller } from './HorizontalOverflowScroller'
 import { appShellDesktopSecondaryNavHostId } from './AppShell.constants'
@@ -15,6 +15,7 @@ import { useShellTabBadges } from '../lib/shellBadges'
 import { WORKSPACE_CHOOSER_LABEL } from '../lib/workspaceRoute'
 import { tabTooltip } from './tabTooltip'
 import { useFittedNavDensity } from '../hooks/useFittedNavDensity'
+import { AppNavigationMenu } from './AppNavigationMenu'
 
 const ambientOverlayBase = [
   'var(--printstream-shell-ambient-overlay-base)',
@@ -46,7 +47,8 @@ interface AppShellProps<TValue extends string> {
   onOpenAccount?: () => void
   workspaceLabel?: string
   workspaceChooserLabel?: string
-  /** Switcher affordance shown beside the active workspace name. */
+  workspaceChooserActionLabel?: string
+  /** Icon for the workspace/connection destination in the navigation menu. */
   workspaceChooserIcon?: ReactNode
   showNavigationFrame?: boolean
   unconstrainedWidth?: boolean
@@ -57,8 +59,8 @@ interface AppShellProps<TValue extends string> {
   workspaceChooserPending?: boolean
   onLogoClick?: () => void
   contentHeaderTrailing?: ReactNode
-  /** Footer actions that stay together beside the user/workspace group. */
-  footerActions?: ReactNode
+  /** Secondary app-wide destinations rendered in the main navigation's kebab menu. */
+  navigationMenuActions?: ReactNode
   /** Secondary footer content rendered below the primary row. */
   footerTrailing?: ReactNode
   children: ReactNode
@@ -72,6 +74,7 @@ export function AppShell<TValue extends string>({
   onOpenAccount,
   workspaceLabel,
   workspaceChooserLabel,
+  workspaceChooserActionLabel,
   workspaceChooserIcon,
   showNavigationFrame = false,
   unconstrainedWidth = false,
@@ -82,7 +85,7 @@ export function AppShell<TValue extends string>({
   workspaceChooserPending = false,
   onLogoClick,
   contentHeaderTrailing,
-  footerActions,
+  navigationMenuActions,
   footerTrailing,
   children
 }: AppShellProps<TValue>) {
@@ -111,11 +114,7 @@ export function AppShell<TValue extends string>({
   const showsNavigationFrame = showNavigationFrame || hasTabs
   const canOpenWorkspaceChooser = workspaceChooserAvailable && typeof onOpenWorkspaceChooser === 'function'
   const badgedTabs = useShellTabBadges()
-  const showsWorkspaceChooser = workspaceChooserAvailable
-  const workspaceChooserButtonLabel = workspaceChooserLabel ?? WORKSPACE_CHOOSER_LABEL
-  const workspaceChooserButtonAriaLabel = workspaceChooserLabel
-    ? `${WORKSPACE_CHOOSER_LABEL}. Currently in: ${workspaceChooserLabel}`
-    : WORKSPACE_CHOOSER_LABEL
+  const workspaceChooserAction = workspaceChooserActionLabel ?? WORKSPACE_CHOOSER_LABEL
   const shouldNavigateToTab = (tabValue: TValue) => {
     if (currentPath === tabValue) return false
     if (currentPath.startsWith(`${tabValue}/`)) return true
@@ -331,6 +330,18 @@ export function AppShell<TValue extends string>({
                     </Tab>
                     </Tooltip>
                   ))}
+                  <AppNavigationMenu
+                    accountLabel={identity?.primary}
+                    accountIcon={identityIcon}
+                    onOpenAccount={onOpenAccount}
+                    workspaceActionLabel={workspaceChooserAction}
+                    workspaceContextLabel={workspaceChooserLabel}
+                    workspaceActionIcon={workspaceChooserIcon}
+                    onOpenWorkspaceChooser={canOpenWorkspaceChooser ? onOpenWorkspaceChooser : undefined}
+                    workspaceActionDisabled={workspaceChooserPending}
+                    actions={navigationMenuActions}
+                    mobile
+                  />
                 </TabList>
               </HorizontalOverflowScroller>
             </Box>
@@ -492,6 +503,17 @@ export function AppShell<TValue extends string>({
                   </Tab>
                   </Tooltip>
                 ))}
+                <AppNavigationMenu
+                  accountLabel={identity?.primary}
+                  accountIcon={identityIcon}
+                  onOpenAccount={onOpenAccount}
+                  workspaceActionLabel={workspaceChooserAction}
+                  workspaceContextLabel={workspaceChooserLabel}
+                  workspaceActionIcon={workspaceChooserIcon}
+                  onOpenWorkspaceChooser={canOpenWorkspaceChooser ? onOpenWorkspaceChooser : undefined}
+                  workspaceActionDisabled={workspaceChooserPending}
+                  actions={navigationMenuActions}
+                />
               </TabList>
               <Box id={appShellDesktopSecondaryNavHostId} />
             </Box>
@@ -531,72 +553,8 @@ export function AppShell<TValue extends string>({
         </Tabs>
 
         <Box component="footer" sx={{ textAlign: 'center', pb: 1, mt: 'auto', pt: 3 }}>
-          {(identity || showsWorkspaceChooser || footerActions) ? (
-            <Stack
-              direction="row"
-              spacing={{ xs: 1.25, sm: 2.5 }}
-              alignItems="center"
-              justifyContent="center"
-              useFlexGap
-              sx={{ flexWrap: 'wrap' }}
-            >
-              <Stack
-                direction="row"
-                spacing={{ xs: 1.25, sm: 2.5 }}
-                alignItems="center"
-                useFlexGap
-                data-footer-group="workspace-identity"
-                sx={{ flexWrap: 'nowrap', flexShrink: 0 }}
-              >
-                {showsWorkspaceChooser && (
-                  <Button
-                    variant="plain"
-                    color="neutral"
-                    size="sm"
-                    startDecorator={workspaceChooserIcon}
-                    aria-label={workspaceChooserButtonAriaLabel}
-                    onClick={canOpenWorkspaceChooser ? () => onOpenWorkspaceChooser() : undefined}
-                    loading={workspaceChooserPending}
-                    disabled={workspaceChooserPending || !canOpenWorkspaceChooser}
-                    sx={{ width: 'fit-content', maxWidth: '100%' }}
-                  >
-                    {workspaceChooserButtonLabel}
-                  </Button>
-                )}
-                {identity && (onOpenAccount ? (
-                  <Button
-                    variant="plain"
-                    color="neutral"
-                    size="sm"
-                    startDecorator={identityIcon}
-                    onClick={onOpenAccount}
-                    sx={{ width: 'fit-content', maxWidth: '100%' }}
-                  >
-                    {identity.primary}
-                  </Button>
-                ) : (
-                  <Typography level="title-sm" startDecorator={identityIcon} sx={{ color: 'common.white' }}>
-                    {identity.primary}
-                  </Typography>
-                ))}
-              </Stack>
-              {footerActions ? (
-              <Stack
-                direction="row"
-                spacing={1}
-                alignItems="center"
-                justifyContent="center"
-                useFlexGap
-                data-footer-group="actions"
-                sx={{ flexWrap: 'nowrap', flexShrink: 0 }}
-              >
-                {footerActions}
-              </Stack>
-              ) : null}
-            </Stack>
-          ) : null}
           {footerTrailing ? (
-            <Box sx={{ mt: 1, display: 'flex', justifyContent: 'center' }}>
+            <Box sx={{ display: 'flex', justifyContent: 'center' }}>
               {footerTrailing}
             </Box>
           ) : null}

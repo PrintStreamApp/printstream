@@ -20,8 +20,7 @@ after(() => {
   dom.window.close()
 })
 
-test('AppShell opens the workspace chooser from the shell action', () => {
-  let openCount = 0
+test('AppShell removes the workspace name from the footer and exposes switching from the nav menu', () => {
   const view = renderWithProviders(
     <AppShell
       tabs={tabs}
@@ -30,20 +29,15 @@ test('AppShell opens the workspace chooser from the shell action', () => {
       onTabChange={() => {}}
       workspaceChooserLabel="Alpha workspace"
       workspaceChooserAvailable
-      onOpenWorkspaceChooser={() => {
-        openCount += 1
-      }}
+      onOpenWorkspaceChooser={() => {}}
     >
       <div>Body</div>
     </AppShell>
   )
 
-  const chooserButton = view.getByRole('button', {
-    name: 'Switch workspace. Currently in: Alpha workspace'
-  })
-  assert.ok(view.getByText('Alpha workspace'))
-  fireEvent.click(chooserButton)
-  assert.equal(openCount, 1)
+  assert.equal(view.queryByText('Alpha workspace'), null)
+  assert.equal(view.queryByRole('button', { name: /Alpha workspace/ }), null)
+  assert.equal(view.getAllByRole('button', { name: 'More' }).length, 2)
 })
 
 test('AppShell renders a shared workspace label above the current view', () => {
@@ -137,7 +131,7 @@ test('AppShell renders an optional footer supplement', () => {
   assert.ok(view.getByText('Body'))
 })
 
-test('AppShell keeps identity and workspace separate from one non-wrapping action group', () => {
+test('AppShell keeps app-wide identity and actions out of the footer', () => {
   const view = renderWithProviders(
     <AppShell
       tabs={tabs}
@@ -151,11 +145,12 @@ test('AppShell keeps identity and workspace separate from one non-wrapping actio
       workspaceChooserIcon={<span data-testid="workspace-switcher-icon" />}
       workspaceChooserAvailable
       onOpenWorkspaceChooser={() => {}}
-      footerActions={(
+      navigationMenuActions={(
         <>
-          <button>Help &amp; feedback</button>
-          <button>Suggestions</button>
-          <button>Settings</button>
+          <div role="menuitem">Help &amp; feedback</div>
+          <div role="menuitem">Suggestions</div>
+          <div role="menuitem">Billing and licensing</div>
+          <div role="menuitem">Settings</div>
         </>
       )}
     >
@@ -163,22 +158,13 @@ test('AppShell keeps identity and workspace separate from one non-wrapping actio
     </AppShell>
   )
 
-  const identityGroup = view.container.querySelector('[data-footer-group="workspace-identity"]')
-  const actionsGroup = view.container.querySelector('[data-footer-group="actions"]')
-  assert.ok(identityGroup)
-  assert.ok(actionsGroup)
-  assert.ok(identityGroup.contains(view.getByRole('button', { name: 'Test User' })))
-  assert.ok(identityGroup.contains(view.getByTestId('identity-icon')))
-  assert.equal(view.queryByText('User'), null)
-  assert.equal(view.queryByText('Workspace'), null)
-  const workspaceButton = view.getByRole('button', { name: /Currently in: Home/ })
-  assert.ok(identityGroup.contains(workspaceButton))
-  assert.ok(workspaceButton.contains(view.getByTestId('workspace-switcher-icon')))
-  const userButton = view.getByRole('button', { name: 'Test User' })
-  assert.ok((workspaceButton.compareDocumentPosition(userButton) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0)
-  assert.ok(actionsGroup.contains(view.getByRole('button', { name: 'Help & feedback' })))
-  assert.ok(actionsGroup.contains(view.getByRole('button', { name: 'Suggestions' })))
-  assert.ok(actionsGroup.contains(view.getByRole('button', { name: 'Settings' })))
+  assert.equal(view.container.querySelector('[data-footer-group="workspace-identity"]'), null)
+  assert.equal(view.queryByText('Home'), null)
+  assert.equal(view.container.querySelector('[data-footer-group="actions"]'), null)
+  assert.equal(view.queryByText('Test User'), null)
+
+  const moreButtons = view.getAllByRole('button', { name: 'More' })
+  assert.equal(moreButtons.length, 2)
 })
 
 test('AppShell can render a chooser shell without nav tabs or workspace footer label', () => {
@@ -218,27 +204,22 @@ test('AppShell highlights no tab when activeTab is null', () => {
   }
 })
 
-test('AppShell renders the signed-in user name as an account button without the email address', () => {
-  let openAccountCount = 0
+test('AppShell offers the navigation menu for a signed-in user without exposing the email address', () => {
   const view = renderWithProviders(
     <AppShell
       tabs={tabs}
       activeTab="/printers"
       currentPath="/printers"
       onTabChange={() => {}}
-      onOpenAccount={() => {
-        openAccountCount += 1
-      }}
+      onOpenAccount={() => {}}
       identity={{ primary: 'Test User', secondary: 'user@example.com' }}
     >
       <div>Body</div>
     </AppShell>
   )
 
-  const accountButton = view.getByRole('button', { name: 'Test User' })
+  assert.equal(view.getAllByRole('button', { name: 'More' }).length, 2)
   assert.equal(view.queryByText('user@example.com'), null)
-  fireEvent.click(accountButton)
-  assert.equal(openAccountCount, 1)
 })
 
 function renderWithProviders(node: React.ReactElement) {

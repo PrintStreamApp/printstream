@@ -105,7 +105,7 @@ export function PlatformView({
         <Stack spacing={1.5}>
           <PlatformOverviewCard
             title="General"
-            description="Appearance and interface preferences for the platform workspace."
+            description="Platform appearance."
             onAction={() => navigate('/platform/settings/general')}
           />
           {showsAuthenticationSection && (
@@ -161,7 +161,6 @@ export function PlatformView({
           )}
 
           <ThemeSettingCard
-            sharedScopeLabel="the platform workspace"
             sharedAppTheme={sharedAppTheme}
             deviceAppThemeOverride={deviceAppThemeOverride}
             canManageSettings={canManageSettings}

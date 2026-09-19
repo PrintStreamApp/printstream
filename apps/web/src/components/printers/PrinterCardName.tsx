@@ -8,7 +8,8 @@
  * trailing edge is PrinterCardHardwareChips.
  */
 import { type RefObject } from 'react'
-import { Box, Stack } from '@mui/joy'
+import { Box, Stack, Tooltip, Typography } from '@mui/joy'
+import ChevronRightRoundedIcon from '@mui/icons-material/ChevronRightRounded'
 import type { Printer } from '@printstream/shared'
 import { OverflowTooltipText } from '../OverflowTooltipText'
 
@@ -29,47 +30,71 @@ export function PrinterCardName({ printer, cardRef, onOpenDetails }: PrinterCard
       sx={{ minWidth: '4.5rem', flex: 1 }}
     >
       {onOpenDetails ? (
-        <Box
-          component="button"
-          type="button"
-          tabIndex={0}
-          onClick={() => onOpenDetails(printer)}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter' || event.key === ' ') {
-              event.preventDefault()
-              onOpenDetails(printer)
-            }
-          }}
-          sx={{
-            '--printer-name-color': 'var(--joy-palette-text-secondary)',
-            minWidth: 0,
-            maxWidth: '100%',
-            flexShrink: 1,
-            p: 0,
-            border: 0,
-            background: 'transparent',
-            font: 'inherit',
-            textAlign: 'left',
-            cursor: 'pointer',
-            '&:hover, &:focus-visible': {
-              '--printer-name-color': 'var(--joy-palette-primary-200)'
-            },
-            '&:focus-visible': {
-              outline: '2px solid var(--joy-palette-focusVisible)',
-              outlineOffset: '3px',
-              borderRadius: 'var(--joy-radius-xs)'
-            }
-          }}
-        >
-          <OverflowTooltipText
-            level="title-md"
-            noWrap
-            sx={{ minWidth: 0, maxWidth: '100%', color: 'var(--printer-name-color)', transition: 'color 0.15s ease' }}
-            className="printer-name-text"
-            text={printer.name}
-            observeRef={cardRef}
-          />
-        </Box>
+        <Tooltip title={`Open ${printer.name}`} placement="top" arrow>
+          <Box
+            component="button"
+            type="button"
+            aria-label={`Open ${printer.name} printer view`}
+            onClick={() => onOpenDetails(printer)}
+            sx={{
+              '--printer-name-color': 'var(--joy-palette-text-secondary)',
+              '--printer-name-chevron-opacity': 0.38,
+              minWidth: 0,
+              maxWidth: '100%',
+              flexShrink: 1,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 0.25,
+              p: 0,
+              border: 0,
+              background: 'transparent',
+              font: 'inherit',
+              textAlign: 'left',
+              cursor: 'pointer',
+              '&:hover, &:focus-visible': {
+                '--printer-name-color': 'var(--joy-palette-primary-200)',
+                '--printer-name-chevron-opacity': 0.85,
+                '& .printer-name-text': {
+                  textDecoration: 'underline',
+                  textDecorationThickness: '1px',
+                  textUnderlineOffset: '3px'
+                },
+                '& .printer-name-chevron': {
+                  transform: 'translateX(1px)'
+                }
+              },
+              '&:focus-visible': {
+                outline: '2px solid var(--joy-palette-focusVisible)',
+                outlineOffset: '3px',
+                borderRadius: 'var(--joy-radius-xs)'
+              }
+            }}
+          >
+            <Typography
+              component="span"
+              level="title-md"
+              noWrap
+              className="printer-name-text"
+              sx={{
+                minWidth: 0,
+                color: 'var(--printer-name-color)',
+                transition: 'color 0.15s ease'
+              }}
+            >
+              {printer.name}
+            </Typography>
+            <ChevronRightRoundedIcon
+              className="printer-name-chevron"
+              style={{
+                flexShrink: 0,
+                fontSize: 18,
+                color: 'var(--joy-palette-text-tertiary)',
+                opacity: 'var(--printer-name-chevron-opacity)',
+                transition: 'opacity 0.15s ease, transform 0.15s ease'
+              }}
+            />
+          </Box>
+        </Tooltip>
       ) : (
         <OverflowTooltipText level="title-md" noWrap sx={{ minWidth: 0 }} text={printer.name} observeRef={cardRef} />
       )}

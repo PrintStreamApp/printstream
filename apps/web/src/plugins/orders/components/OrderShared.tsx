@@ -15,7 +15,6 @@
  */
 import {
   Box,
-  Button,
   Chip,
   Dropdown,
   IconButton,
@@ -47,23 +46,16 @@ import { formatProjectFilamentLabel, getVisibleOrderSelectedVariants, stopEventP
 
 export function EmptyBlock({
   title,
-  message,
-  actionLabel,
-  onAction,
-  disabled = false
+  message
 }: {
   title: string
   message: string
-  actionLabel: string
-  onAction: () => void
-  disabled?: boolean
 }) {
   return (
     <EmptyState
       icon={<PlaylistAddRoundedIcon />}
       title={title}
       description={message}
-      action={<Button size="sm" disabled={disabled} onClick={onAction}>{actionLabel}</Button>}
     />
   )
 }

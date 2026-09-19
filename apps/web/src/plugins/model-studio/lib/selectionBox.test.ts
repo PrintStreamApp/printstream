@@ -20,8 +20,24 @@ import {
   createSelectionOwnerTracker,
   fitSelectionBox,
   renderSelectionOverlay,
+  selectionBoxNeedsPreciseBounds,
   setSelectionOwner
 } from './selectionBox'
+
+test('rotation and scale keep exact bounds throughout the gesture', () => {
+  assert.equal(selectionBoxNeedsPreciseBounds({
+    interacting: true,
+    changedOrientation: true,
+    dragJustEnded: false,
+    upgrade: false
+  }), true)
+  assert.equal(selectionBoxNeedsPreciseBounds({
+    interacting: true,
+    changedOrientation: false,
+    dragJustEnded: false,
+    upgrade: false
+  }), false, 'a pure move paid for a per-vertex walk')
+})
 
 test('outlines are depth-tested, so edges behind the model are hidden', () => {
   const helper = createSelectionBox(new THREE.Box3(), PRIMARY_SELECTION_STYLE)

@@ -134,13 +134,6 @@ export function SuggestionListPage({
         emptyDescription={status
           ? 'Nothing has this status right now. Clear the filter to see the whole board.'
           : 'Be the first: post an idea and let others vote on it.'}
-        // Only without a filter: inviting a first post while a filter is hiding
-        // the board would be answering a question nobody asked.
-        actions={status || loadError ? undefined : (
-          <Button size="sm" startDecorator={<AddRoundedIcon />} onClick={() => setComposerOpen(true)}>
-            New suggestion
-          </Button>
-        )}
       >
         <Stack spacing={1.5}>
           {suggestions.map((suggestion) => (

@@ -21,7 +21,7 @@ export function LibraryPickerEmptyState({
       <EmptyState
         icon={<StarBorderRoundedIcon />}
         title="No favorite files yet"
-        description="Open a file's ⋮ menu and choose Favorite to keep it here for quick access."
+        description="Choose Favorite from a file's menu to keep it here."
       />
     )
   }
@@ -30,7 +30,7 @@ export function LibraryPickerEmptyState({
       <EmptyState
         icon={<SearchRoundedIcon />}
         title="No matching files"
-        description="Try a different search, or use the breadcrumb to look in another folder."
+        description="Try another search or folder."
       />
     )
   }
@@ -38,7 +38,7 @@ export function LibraryPickerEmptyState({
     <EmptyState
       icon={<InventoryRoundedIcon />}
       title="No files here"
-      description="Open a subfolder or use the breadcrumb to find a file to pick."
+      description="Open another folder to find a file."
     />
   )
 }

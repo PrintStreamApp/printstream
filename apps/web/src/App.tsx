@@ -1,6 +1,6 @@
-import { Alert, Box, Button, Stack, Typography } from '@mui/joy'
+import { Alert, Box, Button, ListItemDecorator, MenuItem, Stack, Typography } from '@mui/joy'
 import CssBaseline from '@mui/joy/CssBaseline'
-import { NativeBillingButton } from './native/NativeBillingButton'
+import { NativeBillingMenuItem } from './native/NativeBillingMenuItem'
 import { AppThemeProvider } from './theme/AppThemeProvider'
 import AccountCircleRoundedIcon from '@mui/icons-material/AccountCircleRounded'
 import ChecklistRoundedIcon from '@mui/icons-material/ChecklistRounded'
@@ -66,7 +66,7 @@ import { BridgeDebugCaptureBanner } from './components/BridgeDebugCaptureBanner'
 import { LibraryUploadPanel } from './components/LibraryUploadPanel'
 import { AppVersionFooter } from './components/AppVersionFooter'
 import { BILLING_SCOPE_SECTION_ICONS } from './components/billingScopeSectionIcons'
-import { HelpFeedbackButton } from './components/HelpFeedbackButton'
+import { HelpFeedbackMenuItem } from './components/HelpFeedbackMenuItem'
 import { PluginSlot } from './plugin/PluginSlot'
 import { StaticPluginSlot } from './plugin/StaticPluginSlot'
 import { DeleteOperationToasts } from './components/DeleteOperationToasts'
@@ -688,19 +688,7 @@ export function App() {
     requestedWorkspaceSlug: routeWorkspaceSlug,
     activeWorkspaceSlug
   })
-  const workspaceChooserTab = useMemo<ShellTab | null>(
-    () => showsWorkspaceSwitcher
-      ? {
-          value: '/workspaces',
-          label: 'Workspaces',
-          ariaLabel: WORKSPACE_CHOOSER_LABEL,
-          icon: <SwapHorizRoundedIcon />,
-          iconOnly: true
-        }
-      : null,
-    [showsWorkspaceSwitcher]
-  )
-  // Content tabs are user-orderable. Settings and Account live in the footer,
+  // Content tabs are user-orderable. Workspace switching, Settings, and Account live in the menu,
   // leaving the toolbar for the workspace's primary destinations. Empty order
   // uses the built-in default (Filament after Printers). Device override wins
   // over the workspace default.
@@ -723,10 +711,9 @@ export function App() {
   const tabs = useMemo<ReadonlyArray<ShellTab>>(
     () => [
       ...platformTabs,
-      ...navContentTabs,
-      ...(workspaceChooserTab ? [workspaceChooserTab] : [])
+      ...navContentTabs
     ],
-    [navContentTabs, platformTabs, workspaceChooserTab]
+    [navContentTabs, platformTabs]
   )
 
   /**
@@ -904,8 +891,8 @@ export function App() {
    * Its sections ARE the scope's navigation, so they take the shell's main tab
    * row exactly as a workspace's pages do: the workspace content tabs are what
    * belonged to a scope this is not, and they are the ones dropped. The
-   * switcher and account tabs stay: dropping every tab once took the switcher
-   * with it and left the scope with no exit but the browser's back button.
+   * The app menu stays available for account and workspace switching, so those
+   * occasional exits do not consume billing-section tab space.
    */
   const billingScopeTabs = useMemo<ReadonlyArray<ShellTab>>(
     () => [
@@ -920,10 +907,9 @@ export function App() {
             // 375px dock.
             mobileIcon: BILLING_SCOPE_SECTION_ICONS[entry.id]
           }))
-        : []),
-      ...(workspaceChooserTab ? [workspaceChooserTab] : [])
+        : [])
     ],
-    [billingScopeAccountId, workspaceChooserTab]
+    [billingScopeAccountId]
   )
   const shellTabs = usesPublicChrome ? [] : inBillingScope ? billingScopeTabs : tabs
   const activeTab = inBillingScope
@@ -942,9 +928,12 @@ export function App() {
     ? undefined
     : inBillingScope
       ? (billingScopeAccountName ?? BILLING_SCOPE_LABEL)
-      : currentWorkspaceChooserLabel
+      : (isNativeApp() && selfHostedDeployment ? 'Connections' : currentWorkspaceChooserLabel)
+  const shellWorkspaceChooserActionLabel = isNativeApp() && selfHostedDeployment
+    ? 'Connections'
+    : WORKSPACE_CHOOSER_LABEL
   const shellWorkspaceChooserIcon = usesPublicChrome ? undefined : <SwapHorizRoundedIcon />
-  const shellWorkspaceChooserAvailable = !usesPublicChrome && (canUseWorkspaceChooser || isNativeApp())
+  const shellWorkspaceChooserAvailable = !usesPublicChrome && showsWorkspaceSwitcher
   const appFooterTrailing = (
     <Stack spacing={0.75} alignItems="center" useFlexGap>
       <AppVersionFooter />
@@ -978,30 +967,24 @@ export function App() {
     : activeWorkspaceSlug
       ? buildWorkspacePath(activeWorkspaceSlug, '/account')
       : buildWorkspaceSelectionPath()
-  const footerSettingsPath = inBillingScope && billingScopeAccountId
+  const navigationSettingsPath = inBillingScope && billingScopeAccountId
     ? buildBillingScopePath(billingScopeAccountId, 'settings')
     : inPlatformMode
       ? '/platform/settings'
       : workspaceSettingsPath
-  // Primary footer actions stay together as one wrapping unit beside the
-  // user/workspace unit. Platform users staff the support inbox, so Help is
-  // hidden there. Settings remains the final, persistent utility action.
-  const appFooterActions = (
+  // Secondary destinations stay behind the main navigation's final kebab.
+  // Platform users staff the support inbox, so Help is hidden there.
+  const appNavigationMenuActions = (
     <>
-      {selfHostedDeployment && hasWorkspaceContext && canManageSettings && (
-        <NativeBillingButton />
-      )}
-      {!inPlatformMode && <HelpFeedbackButton />}
-      <PluginSlot name="shell.footer" />
-      <Button
-        size="sm"
-        variant="plain"
-        color="neutral"
-        startDecorator={<SettingsRoundedIcon />}
-        onClick={() => navigate(footerSettingsPath)}
-      >
+      {!inPlatformMode ? <HelpFeedbackMenuItem /> : null}
+      <PluginSlot name="shell.menu" />
+      {selfHostedDeployment && hasWorkspaceContext && canManageSettings
+        ? <NativeBillingMenuItem />
+        : null}
+      <MenuItem onClick={() => navigate(navigationSettingsPath)}>
+        <ListItemDecorator><SettingsRoundedIcon fontSize="small" /></ListItemDecorator>
         Settings
-      </Button>
+      </MenuItem>
     </>
   )
   const platformOverviewRouteElement = renderProtectedElement(
@@ -1215,6 +1198,7 @@ export function App() {
               onOpenAccount={showsAccountTab ? () => navigate(accountPath) : undefined}
               workspaceLabel={shellWorkspaceLabel}
               workspaceChooserLabel={shellWorkspaceChooserLabel}
+              workspaceChooserActionLabel={shellWorkspaceChooserActionLabel}
               workspaceChooserIcon={shellWorkspaceChooserIcon}
               showNavigationFrame={false}
               unconstrainedWidth={effectiveUnconstrainedWidth}
@@ -1224,7 +1208,7 @@ export function App() {
               onOpenWorkspaceChooser={openWorkspaceChooser}
               workspaceChooserPending={workspaceSwitchPending}
               onLogoClick={() => navigate('/')}
-              footerActions={(isMarketingRoute || isPublicInfoRoute) ? undefined : appFooterActions}
+              navigationMenuActions={(isMarketingRoute || isPublicInfoRoute) ? undefined : appNavigationMenuActions}
               footerTrailing={(isMarketingRoute || isPublicInfoRoute)
                 ? (marketing ? <marketing.Footer /> : undefined)
                 : appFooterTrailing}

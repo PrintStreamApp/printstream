@@ -10753,33 +10753,6 @@ function EditorView({
                     '& > *': { pointerEvents: 'auto' }
                   }}
                 >
-                  {isMobile && (
-                    // The tools SCROLL on a phone rather than wrapping. `flexWrap` can only break
-                    // BETWEEN the two groups, and the first is fifteen buttons -- about 450px of
-                    // unbreakable flex item against ~370px of dialog -- so the overflow used to be
-                    // clipped by the viewport's `overflow: hidden` and those tools were simply
-                    // unreachable. Horizontal scrolling is the app's existing answer to a row that
-                    // does not fit (the mobile tab bar, `SectionNav`), so it is the one used here.
-                    // The fade goes to the group's own soft fill because this strip floats over the
-                    // 3D canvas and has no backdrop of its own to blend into.
-                    <HorizontalOverflowScroller
-                      fadeColor="var(--joy-palette-neutral-softBg)"
-                      fadeWidth={16}
-                      sx={{ flex: 1, minWidth: 0 }}
-                      scrollerSx={{ display: 'flex', gap: 1, alignItems: 'center' }}
-                    >
-                      <GizmoToolbar
-                        mode={gizmoMode}
-                        disabled={!selectedKey || controlsBusy}
-                        busy={controlsBusy}
-                        arrangeDisabled={controlsBusy || (activePlate?.instances.length ?? 0) === 0 || (activePlate?.locked ?? false)}
-                        onChange={handleGizmoModeChange}
-                        onDropToBed={handleDropToBed}
-                        onAutoOrient={handleAutoOrient}
-                        onArrangeAll={handleArrangeAll}
-                      />
-                    </HorizontalOverflowScroller>
-                  )}
                   <ButtonGroup size="sm" variant="outlined" aria-label="Undo and redo">
                     <Tooltip title="Undo (Ctrl/Cmd+Z)">
                       <IconButton onClick={undo} disabled={!canUndo || controlsBusy} aria-label="Undo">
@@ -10879,6 +10852,42 @@ function EditorView({
                       onArrangeAll={handleArrangeAll}
                       orientation="vertical"
                     />
+                  </Box>
+                )}
+                {isMobile && (
+                  // The editing tools own the bottom row on phones. Keeping them separate from
+                  // undo/redo makes both rows fit, while the shared overflow scroller exposes every
+                  // tool without wrapping over the model.
+                  <Box
+                    sx={{
+                      position: 'absolute',
+                      left: 8,
+                      right: 8,
+                      bottom: 8,
+                      zIndex: EDITOR_CHROME_Z_INDEX,
+                      pointerEvents: 'auto'
+                    }}
+                  >
+                    <HorizontalOverflowScroller
+                      // Fade into the viewport itself, not a neutral control surface. A wider cue
+                      // is intentional here: the connected buttons have no gaps, so a narrow fade
+                      // can disappear inside one button's dark disabled fill.
+                      fadeColor="#0d1322"
+                      fadeWidth={40}
+                      sx={{ minWidth: 0 }}
+                      scrollerSx={{ display: 'flex', gap: 1, alignItems: 'center' }}
+                    >
+                      <GizmoToolbar
+                        mode={gizmoMode}
+                        disabled={!selectedKey || controlsBusy}
+                        busy={controlsBusy}
+                        arrangeDisabled={controlsBusy || (activePlate?.instances.length ?? 0) === 0 || (activePlate?.locked ?? false)}
+                        onChange={handleGizmoModeChange}
+                        onDropToBed={handleDropToBed}
+                        onAutoOrient={handleAutoOrient}
+                        onArrangeAll={handleArrangeAll}
+                      />
+                    </HorizontalOverflowScroller>
                   </Box>
                 )}
                 {/* Transform readout, top-centre (sm+). On phones it stays docked in the objects
@@ -11114,7 +11123,7 @@ function EditorView({
                     // other viewport surface claims: the cube owns bottom-left, placement warnings
                     // bottom-right, and the transform readout the top centre.
                     sx={{
-                      position: 'absolute', bottom: 8, left: '50%', transform: 'translateX(-50%)',
+                      position: 'absolute', bottom: { xs: 50, sm: 8 }, left: '50%', transform: 'translateX(-50%)',
                       zIndex: VIEWPORT_AID_Z_INDEX
                     }}
                   >
@@ -11125,7 +11134,7 @@ function EditorView({
                   sx={{
                     position: 'absolute',
                     left: VIEW_CUBE_EDGE_INSET,
-                    bottom: VIEW_CUBE_EDGE_INSET,
+                    bottom: { xs: 50, sm: VIEW_CUBE_EDGE_INSET },
                     zIndex: VIEWPORT_AID_Z_INDEX
                   }}
                 >
@@ -11143,7 +11152,7 @@ function EditorView({
                   <Alert
                     color="warning"
                     variant="soft"
-                    sx={{ position: 'absolute', bottom: 8, left: 8, right: 8, zIndex: 1 }}
+                    sx={{ position: 'absolute', bottom: { xs: 50, sm: 8 }, left: 8, right: 8, zIndex: 1 }}
                     endDecorator={
                       <Button
                         size="sm"
@@ -11163,7 +11172,7 @@ function EditorView({
                     variant="soft"
                     color="danger"
                     sx={{
-                      position: 'absolute', right: 8, bottom: 8, zIndex: 2,
+                      position: 'absolute', right: 8, bottom: { xs: 50, sm: 8 }, zIndex: 2,
                       maxWidth: 'min(300px, calc(100% - 16px))', p: 1, borderRadius: 'sm',
                       boxShadow: 'sm', display: 'flex', flexDirection: 'column', gap: 0.25
                     }}
@@ -11680,7 +11689,7 @@ function EditorView({
           <EmptyState
             icon={<InventoryRoundedIcon />}
             title="No importable files here"
-            description="Open a subfolder, or upload an importable model to the library first."
+            description="Open another folder or upload a model first."
           />
         }
         onPick={(file) => {

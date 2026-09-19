@@ -168,7 +168,7 @@ export function CalibrationSpoolPicker(props: Record<string, unknown>) {
                   <EmptyState
                     icon={<FilamentSpoolIcon />}
                     title={`No ${filamentType ?? 'matching'} spools in the library`}
-                    description="Add this spool here, or assign an existing one from the AMS slot editor or Filament tab."
+                    description="Add this spool or assign an existing one."
                     compact
                   />
                 }

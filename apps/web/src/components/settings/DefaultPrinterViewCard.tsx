@@ -45,14 +45,14 @@ export function DefaultPrinterViewCard() {
   return (
     <GeneralSettingCard
       title="Default view"
-      description="Which view the Printers page opens with. Every view also keeps its own address for bookmarking."
+      description="Choose the view that the Printers page opens."
       resetDisabled={deviceOverride == null && !(canManageSettings && sharedDefaultViewId != null)}
       onReset={() => {
         if (canManageSettings) save.mutate({ printersDefaultViewId: null })
         setDeviceOverride(null)
       }}
     >
-      <GeneralSettingSelectRow label="Default setting" helper="Shared with everyone in this workspace, and applied to devices that do not have their own override.">
+      <GeneralSettingSelectRow label="Default setting">
         <Select<SharedValue>
           value={sharedSelectValue}
           disabled={!canManageSettings || save.isPending}
@@ -70,7 +70,7 @@ export function DefaultPrinterViewCard() {
         </Select>
       </GeneralSettingSelectRow>
 
-      <GeneralSettingSelectRow label="This device" helper="Saved in this browser, for this workspace only. Choose follow default to inherit the shared setting.">
+      <GeneralSettingSelectRow label="This device">
         <Select<DeviceValue>
           value={deviceSelectValue}
           onChange={(_event, value) => {

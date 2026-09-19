@@ -129,7 +129,7 @@ export function FilamentView() {
 
   const selectionActions = selection.selectionMode ? (
     <BulkSelectionActions onCancel={() => setSelectionMode(false)}>
-      <Button size="sm" variant="soft" startDecorator={<LabelIcon />} disabled={!selectedSpools.length || !directory.tagFilter.canAssign} onClick={() => openTags(selectedSpools.map((spool) => spool.id))}>Assign tags</Button>
+      <Button size="sm" variant="soft" startDecorator={<LabelIcon />} disabled={!selectedSpools.length || !directory.tagFilter.canAssign} onClick={() => openTags(selectedSpools.map((spool) => spool.id))}>Tags</Button>
       <Button
         size="sm"
         variant="soft"
@@ -168,9 +168,11 @@ export function FilamentView() {
         </Box>
         <Stack direction="row" spacing={1} alignItems="center" sx={{ flexShrink: 0 }}>
           <Button size="sm" variant="soft" startDecorator={<QrCodeScannerRoundedIcon />} aria-label="Scan barcode" onClick={() => setScanning(true)}>
+            <Box component="span" sx={{ display: { xs: 'inline', sm: 'none' } }}>Scan</Box>
             <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>Scan barcode</Box>
           </Button>
           <Button size="sm" startDecorator={<AddRoundedIcon />} aria-label="Add spool" onClick={() => setCreating(true)}>
+            <Box component="span" sx={{ display: { xs: 'inline', sm: 'none' } }}>Add</Box>
             <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>Add spool</Box>
           </Button>
         </Stack>
@@ -205,8 +207,7 @@ export function FilamentView() {
           <EmptyState
             icon={<FilamentSpoolIcon />}
             title="No spools yet"
-            description="Add a spool manually, or insert a Bambu spool into an AMS slot to add it automatically."
-            action={<Button size="sm" startDecorator={<AddRoundedIcon />} onClick={() => setCreating(true)}>Add spool</Button>}
+            description="Add a spool manually or load one into an AMS."
           />
         }
         noMatchState={

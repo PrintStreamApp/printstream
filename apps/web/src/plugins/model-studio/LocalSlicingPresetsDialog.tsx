@@ -162,7 +162,7 @@ export function LocalSlicingPresetsDialog({ open, onClose }: {
                 compact
                 icon={<InventoryRoundedIcon />}
                 title="No presets stored yet"
-                description="Upload a BambuStudio preset to slice with your own printer, process, or material settings."
+                description="Upload a BambuStudio preset to use custom slicing settings."
               />
             ) : (
               KIND_ORDER.map((kind) => {

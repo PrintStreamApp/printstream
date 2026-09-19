@@ -55,6 +55,7 @@ export function PrintJobHistoryCard({
                 <Chip size="sm" variant="soft" color={historyResultColor(job.result)} sx={{ flexShrink: 0 }}>
                   {historyResultLabel(job.result)}
                 </Chip>
+                <Chip size="sm" variant="outlined" color="neutral" sx={{ flexShrink: 0 }}>Print</Chip>
               </Stack>
               <Typography level="body-sm" textColor="text.tertiary" sx={{ textWrap: 'pretty', overflowWrap: 'anywhere' }}>
                 {showPrinterLink ? (

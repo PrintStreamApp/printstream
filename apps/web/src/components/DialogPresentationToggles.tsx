@@ -69,7 +69,9 @@ export function FullScreenDialogButton({
         color={color}
         size={size}
         onClick={() => onToggle(!active)}
-        sx={sx}
+        // Full-screen content reaches under native status bars by design. Keep the one control
+        // that can leave that mode inside the safe area, even when its parent toolbar starts at 0.
+        sx={[...(Array.isArray(sx) ? sx : [sx]), active ? { mt: 'var(--app-top-inset, 0px)' } : {}]}
       >
         {active ? <FullscreenExitRoundedIcon fontSize="small" /> : <FullscreenRoundedIcon fontSize="small" />}
       </IconButton>

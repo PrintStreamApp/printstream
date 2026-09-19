@@ -91,7 +91,7 @@ export interface PrivatePlatformAdminModule {
   CustomerDetailView: ComponentType
   /** Rendered at `/platform/messages` (the support-messaging inbox). */
   MessagesView: ComponentType
-  /** Rendered at `/platform/suggestions/*` (the shared suggestion board; footer-linked, no nav tab). */
+  /** Rendered at `/platform/suggestions/*` (the shared suggestion board; menu-linked, no workspace nav tab). */
   SuggestionsView: ComponentType
   /** Nav tabs listed before the platform settings tab. */
   navTabs: ReadonlyArray<ShellTab>

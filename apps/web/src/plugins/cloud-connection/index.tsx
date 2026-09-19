@@ -10,7 +10,7 @@ import {
   SelfHostedAccountMessagesSection,
   SelfHostedHelpDialogConversations
 } from './SupportSlots'
-import { SelfHostedSuggestionsFooterLink, SelfHostedSuggestionsView } from './SuggestionSlots'
+import { SelfHostedSuggestionsMenuItem, SelfHostedSuggestionsView } from './SuggestionSlots'
 
 export const cloudConnectionWebPlugin: WebPlugin = {
   name: 'cloud-connection',
@@ -31,8 +31,8 @@ export const cloudConnectionWebPlugin: WebPlugin = {
       component: SelfHostedHelpDialogConversations
     },
     {
-      name: 'shell.footer',
-      component: SelfHostedSuggestionsFooterLink
+      name: 'shell.menu',
+      component: SelfHostedSuggestionsMenuItem
     }
   ]
 }

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ComponentProps } from 'react'
 import {
   Alert,
+  Box,
   Button,
   Stack,
   Typography
@@ -408,9 +409,11 @@ export function OrdersView() {
       {/* Only the orders list carries the page heading. Templates and order detail are nested
           views that head themselves with an `Orders /` breadcrumb back to this route. */}
       {!showingOrderDetail && currentSection === 'orders' && (
-        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} justifyContent="space-between" alignItems={{ xs: 'stretch', sm: 'center' }}>
-          <Typography level="h3" startDecorator={<ChecklistRoundedIcon />}>Orders</Typography>
-          <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', rowGap: 1 }}>
+        <Stack direction="row" spacing={1} justifyContent="space-between" alignItems="center">
+          <Box sx={{ minWidth: 0 }}>
+            <Typography level="h3" startDecorator={<ChecklistRoundedIcon />}>Orders</Typography>
+          </Box>
+          <Stack direction="row" spacing={{ xs: 0.5, sm: 1 }} sx={{ flexShrink: 0 }}>
             <Button
               size="sm"
               variant="soft"
@@ -422,11 +425,13 @@ export function OrdersView() {
             </Button>
             <Button
               size="sm"
+              aria-label="New order"
               startDecorator={<PlaylistAddRoundedIcon />}
               disabled={!canManageOrders || templates.length === 0}
               onClick={() => setCreatingOrderFor(templates[0] ?? null)}
             >
-              New order
+              <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>New order</Box>
+              <Box component="span" sx={{ display: { xs: 'inline', sm: 'none' } }}>New</Box>
             </Button>
           </Stack>
         </Stack>
@@ -492,8 +497,6 @@ export function OrdersView() {
               pendingDeleteOrderId={pendingDeleteOrderId}
               pendingEditOrderId={pendingEditOrderId}
               pendingOrderId={pendingOrderId}
-              templatesAvailable={templates.length > 0}
-              onCreateOrder={() => setCreatingOrderFor(templates[0] ?? null)}
               canManageOrders={canManageOrders}
               canStartOrderPrint={canStartOrderPrint}
               loading={ordersQuery.isLoading}

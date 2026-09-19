@@ -75,6 +75,7 @@ test('query schema parses URL-shaped input with comma-separated lists', () => {
     page: '2',
     pageSize: '25',
     printerIds: 'a,b',
+    kinds: 'print,slicing',
     results: 'success,failed',
     sortBy: 'started',
     sortDirection: 'asc'
@@ -82,7 +83,20 @@ test('query schema parses URL-shaped input with comma-separated lists', () => {
   assert.equal(parsed.page, 2)
   assert.equal(parsed.pageSize, 25)
   assert.deepEqual(parsed.printerIds, ['a', 'b'])
+  assert.deepEqual(parsed.kinds, ['print', 'slicing'])
   assert.deepEqual(parsed.results, ['success', 'failed'])
+})
+
+test('job type filter selects print and slicing history independently', () => {
+  const page = selectJobHistoryPage({
+    printJobs: [printJob({})],
+    slicingJobs: [slicingJob({})],
+    query: query({ kinds: ['slicing'] }),
+    printerNameFor
+  })
+  assert.deepEqual(page.entries.map((entry) => entry.kind), ['slicing'])
+  assert.equal(page.total, 1)
+  assert.equal(page.totalUnfiltered, 2)
 })
 
 test('merges both sources sorted by end date, newest first by default', () => {
