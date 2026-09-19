@@ -67,6 +67,7 @@ import { LibraryUploadPanel } from './components/LibraryUploadPanel'
 import { AppVersionFooter } from './components/AppVersionFooter'
 import { BILLING_SCOPE_SECTION_ICONS } from './components/billingScopeSectionIcons'
 import { HelpFeedbackMenuItem } from './components/HelpFeedbackMenuItem'
+import { HelpFeedbackDialog } from './components/HelpFeedbackDialog'
 import { PluginSlot } from './plugin/PluginSlot'
 import { StaticPluginSlot } from './plugin/StaticPluginSlot'
 import { DeleteOperationToasts } from './components/DeleteOperationToasts'
@@ -204,6 +205,10 @@ export function App() {
   const routePlatformWorkspace = isPlatformWorkspacePath(location.pathname)
   const authBootstrapScopeKey = routeWorkspaceSlug ? `workspace:${routeWorkspaceSlug}` : routePlatformWorkspace ? 'platform' : 'ambient'
   const previousWorkspaceScopeKey = useRef(authBootstrapScopeKey)
+  // The dialog lives outside the dropdown because Joy unmounts menu contents
+  // when an item closes it. Keeping the state inside the item made the dialog
+  // disappear in the same click that requested it.
+  const [helpFeedbackOpen, setHelpFeedbackOpen] = useState(false)
   const [pendingWorkspaceRoute, setPendingWorkspaceRoute] = useState<{
     routePath: string
     targetWorkspaceId: string | null
@@ -976,7 +981,7 @@ export function App() {
   // Platform users staff the support inbox, so Help is hidden there.
   const appNavigationMenuActions = (
     <>
-      {!inPlatformMode ? <HelpFeedbackMenuItem /> : null}
+      {!inPlatformMode ? <HelpFeedbackMenuItem onOpen={() => setHelpFeedbackOpen(true)} /> : null}
       <PluginSlot name="shell.menu" />
       {selfHostedDeployment && hasWorkspaceContext && canManageSettings
         ? <NativeBillingMenuItem />
@@ -1224,6 +1229,9 @@ export function App() {
                         passkey setup offer). Static slot: auth surfaces must render without
                         consulting the plugin catalog. */}
                     <StaticPluginSlot name="shell.overlays" />
+                    {helpFeedbackOpen ? (
+                      <HelpFeedbackDialog onClose={() => setHelpFeedbackOpen(false)} />
+                    ) : null}
                     {hasWorkspaceContext && <LicenseBanner />}
                     {hasWorkspaceContext && canManageSettings && <BridgeUpdateBanner />}
                     {hasWorkspaceContext && canManageSettings && <BridgeCrashBanner />}

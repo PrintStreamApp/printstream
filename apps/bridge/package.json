@@ -1,6 +1,6 @@
 {
   "name": "@printstream/bridge",
-  "version": "1.3.4",
+  "version": "1.3.5",
   "private": true,
   "type": "module",
   "description": "Desktop tray bridge for connecting LAN Bambu printers to PrintStream.",
@@ -19,9 +19,9 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@printstream/bridge-runtime": "1.3.4",
-    "@printstream/sea-runtime": "1.3.4",
-    "@printstream/shared": "1.3.4",
+    "@printstream/bridge-runtime": "1.3.5",
+    "@printstream/sea-runtime": "1.3.5",
+    "@printstream/shared": "1.3.5",
     "dotenv": "^16.4.7",
     "mqtt": "^5.10.1",
     "ws": "^8.18.0",

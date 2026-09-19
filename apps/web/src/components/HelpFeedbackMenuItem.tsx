@@ -1,19 +1,13 @@
-/** App-navigation menu entry that opens the shared help and feedback dialog. */
-import React, { useState } from 'react'
+/** App-navigation menu entry that requests the shared help and feedback dialog. */
+import React from 'react'
 import HelpOutlineRoundedIcon from '@mui/icons-material/HelpOutlineRounded'
 import { ListItemDecorator, MenuItem } from '@mui/joy'
-import { HelpFeedbackDialog } from './HelpFeedbackDialog'
 
-export function HelpFeedbackMenuItem() {
-  const [open, setOpen] = useState(false)
-
+export function HelpFeedbackMenuItem({ onOpen }: { onOpen: () => void }) {
   return (
-    <>
-      <MenuItem onClick={() => setOpen(true)}>
-        <ListItemDecorator><HelpOutlineRoundedIcon fontSize="small" /></ListItemDecorator>
-        Help &amp; feedback
-      </MenuItem>
-      {open ? <HelpFeedbackDialog onClose={() => setOpen(false)} /> : null}
-    </>
+    <MenuItem onClick={onOpen}>
+      <ListItemDecorator><HelpOutlineRoundedIcon fontSize="small" /></ListItemDecorator>
+      Help &amp; feedback
+    </MenuItem>
   )
 }
