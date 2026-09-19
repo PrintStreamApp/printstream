@@ -12,7 +12,12 @@ export interface PrintStreamInstancePlugin {
   enterApp(): Promise<void>
   setConnectionName(options: { name: string | null }): Promise<void>
   signedOut(): Promise<void>
-  navigation(options: { notificationWorkspaces?: number; selfHostedAdmin?: boolean; destinations: Array<{ name: string; path: string }> }): Promise<void>
+  navigation(options: {
+    notificationWorkspaces?: number
+    notificationScopes?: Array<{ id: string; name: string; path: string }>
+    selfHostedAdmin?: boolean
+    destinations: Array<{ name: string; path: string }>
+  }): Promise<void>
   menu(options: { view: 'switcher' | 'startup' | 'settings' | 'billing' }): Promise<void>
 }
 

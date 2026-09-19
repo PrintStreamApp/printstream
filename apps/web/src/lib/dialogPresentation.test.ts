@@ -5,9 +5,15 @@ import {
   MAXIMIZED_DIALOG_GUTTER,
   dialogPresentationProps,
   resolveDialogPresentation,
+  safeFullscreenControlTop,
   scrollableDialogPresentation,
   withoutDialogSizing
 } from './dialogPresentation'
+
+test('a full-screen control cluster moves below native top chrome as one unit', () => {
+  assert.equal(safeFullscreenControlTop(false, 8), 8)
+  assert.equal(safeFullscreenControlTop(true, 8), 'calc(var(--app-top-inset, 0px) + 8px)')
+})
 
 test('a host-imposed presentation outranks both toggles', () => {
   assert.equal(

@@ -65,6 +65,7 @@ import { BridgeCrashBanner } from './components/BridgeCrashBanner'
 import { BridgeDebugCaptureBanner } from './components/BridgeDebugCaptureBanner'
 import { LibraryUploadPanel } from './components/LibraryUploadPanel'
 import { AppVersionFooter } from './components/AppVersionFooter'
+import { NativeAppPromotionDialog } from './components/NativeAppPromotionDialog'
 import { BILLING_SCOPE_SECTION_ICONS } from './components/billingScopeSectionIcons'
 import { HelpFeedbackMenuItem } from './components/HelpFeedbackMenuItem'
 import { HelpFeedbackDialog } from './components/HelpFeedbackDialog'
@@ -1229,6 +1230,7 @@ export function App() {
                         passkey setup offer). Static slot: auth surfaces must render without
                         consulting the plugin catalog. */}
                     <StaticPluginSlot name="shell.overlays" />
+                    <NativeAppPromotionDialog authenticated={actorType === 'user'} />
                     {helpFeedbackOpen ? (
                       <HelpFeedbackDialog onClose={() => setHelpFeedbackOpen(false)} />
                     ) : null}

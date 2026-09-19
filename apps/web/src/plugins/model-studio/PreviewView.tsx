@@ -63,6 +63,8 @@ import {
   type ViewPreset
 } from './lib/viewCube'
 import { createViewportCameraRig } from './lib/viewportCamera'
+import { guardTouchOrbitTransition } from './lib/touchOrbitGesture'
+import { safeFullscreenControlTop } from '../../lib/dialogPresentation'
 import { ViewportBuildOverlay } from './ViewportBuildOverlay'
 import { GCODE_SLIDER_END_INSET_PX, GcodeLayerSlider } from './GcodeLayerSlider'
 import { GcodeScrubberValueChip } from './GcodeScrubberValueChip'
@@ -466,6 +468,7 @@ export function PreviewView(props: Record<string, unknown>) {
     // can't get as close as I'd like". `zoomToCursor` also walks the target toward the cursor, so
     // rotation stops swinging around the plate centre once you have zoomed into a detail.
     controls.zoomToCursor = true
+    const releaseTouchOrbitGuard = guardTouchOrbitTransition(renderer.domElement, controls)
 
     let needsRender = true
     const rigState: PreviewRig = {
@@ -654,6 +657,7 @@ export function PreviewView(props: Record<string, unknown>) {
       window.removeEventListener('resize', onResize)
       resizeObserver?.disconnect()
       controls.removeEventListener('change', rigState.invalidate)
+      releaseTouchOrbitGuard()
       cameraRig.dispose()
       controls.dispose()
       renderer.dispose()
@@ -1268,26 +1272,35 @@ export function PreviewView(props: Record<string, unknown>) {
               {/* On the 3D area, not in the dialog header: this mode enlarges the viewport alone, so
                   the control belongs on the thing it resizes. The editor's viewport toolbar carries
                   its twin the same way. `soft` because `plain` disappears against the scene. */}
-              <FullScreenDialogButton
-                active={fullScreen}
-                onToggle={setFullScreen}
-                contentLabel="3D only"
-                variant="soft"
-                sx={{ position: 'absolute', ...chrome.fullScreenToggle, zIndex: 2 }}
-              />
-              {showMobileLegendButton && (
-                <Tooltip title="Toolpath legend and statistics">
-                  <IconButton
-                    size="sm"
-                    variant="soft"
-                    onClick={() => setMobileLegendOpen(true)}
-                    aria-label="Show the toolpath legend"
-                    sx={{ position: 'absolute', ...chrome.gcodeLegendToggle, zIndex: 2 }}
-                  >
-                    <QueryStatsRoundedIcon />
-                  </IconButton>
-                </Tooltip>
-              )}
+              <Stack
+                direction="row"
+                spacing={1}
+                sx={{
+                  position: 'absolute',
+                  top: safeFullscreenControlTop(fullScreen, chrome.fullScreenToggle.top),
+                  right: chrome.fullScreenToggle.right,
+                  zIndex: 2
+                }}
+              >
+                {showMobileLegendButton && (
+                  <Tooltip title="Toolpath legend and statistics">
+                    <IconButton
+                      size="sm"
+                      variant="soft"
+                      onClick={() => setMobileLegendOpen(true)}
+                      aria-label="Show the toolpath legend"
+                    >
+                      <QueryStatsRoundedIcon />
+                    </IconButton>
+                  </Tooltip>
+                )}
+                <FullScreenDialogButton
+                  active={fullScreen}
+                  onToggle={setFullScreen}
+                  contentLabel="3D only"
+                  variant="soft"
+                />
+              </Stack>
               {viewerState.loading && (
                 <ViewportBuildOverlay />
               )}

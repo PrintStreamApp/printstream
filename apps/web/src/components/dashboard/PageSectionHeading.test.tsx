@@ -32,7 +32,7 @@ after(() => {
   dom.window.close()
 })
 
-function renderHeading(props: { count?: number | null; description?: string }) {
+function renderHeading(props: { count?: number | null; description?: string; helpText?: string }) {
   return render(
     <CssVarsProvider>
       <PageSectionHeading
@@ -69,4 +69,11 @@ test('the count is hidden at zero and when absent', () => {
 
   const absent = renderHeading({})
   assert.deepEqual(paragraphsContainingDivs(absent.container), [])
+})
+
+test('optional detail uses a labelled help affordance instead of visible subtext', () => {
+  const view = renderHeading({ helpText: 'More detail about this section.' })
+
+  assert.ok(view.getByRole('button', { name: 'About Print history' }))
+  assert.equal(view.queryByText('More detail about this section.'), null)
 })

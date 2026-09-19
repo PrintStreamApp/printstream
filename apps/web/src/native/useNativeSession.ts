@@ -35,9 +35,15 @@ export function useNativeSession(authoritative: boolean, connected: boolean, lic
         for (const customer of bootstrap?.customers ?? []) {
           destinations.push({ name: `Billing and licensing: ${customer.name}`.slice(0, 120), path: `/billing/${customer.id}` })
         }
+        const scopes = notificationScopes(bootstrap)
         await PrintStreamInstance.navigation({
           destinations,
-          notificationWorkspaces: notificationScopes(bootstrap).length,
+          notificationWorkspaces: scopes.length,
+          notificationScopes: scopes.map(({ id, name, bootstrap: scope }) => ({
+            id,
+            name,
+            path: scope.workspace ? `/workspaces/${scope.workspace.slug}` : '/platform'
+          })),
           selfHostedAdmin: Boolean(bootstrap?.runtimePolicy.selfHosted && bootstrap.permissions.includes('settings.manage'))
         })
         if (cancelled) return

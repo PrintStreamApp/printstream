@@ -18,7 +18,8 @@
  * Counterpart: `SectionNav` renders the same sections as a nav strip, so a section's title and
  * count must agree between the two.
  */
-import { Box, Chip, Divider, Stack, Typography } from '@mui/joy'
+import HelpOutlineRoundedIcon from '@mui/icons-material/HelpOutlineRounded'
+import { Box, Chip, Divider, IconButton, Stack, Tooltip, Typography } from '@mui/joy'
 import { type ReactNode } from 'react'
 
 /**
@@ -35,6 +36,7 @@ export function PageSectionHeading({
   icon,
   title,
   description,
+  helpText,
   count,
   actions,
   actionsInline = false,
@@ -45,6 +47,8 @@ export function PageSectionHeading({
   title: string
   /** One short line saying what lands in this section. */
   description?: string
+  /** Optional detail kept behind a compact help affordance instead of permanent subtext. */
+  helpText?: string
   /** Item count. Hidden at zero (the section's empty state already says so), like `SectionNav`. */
   count?: number | null
   /** Section-level actions, right-aligned beside the title on desktop and wrapping below it when narrow. */
@@ -68,20 +72,29 @@ export function PageSectionHeading({
         sx={{ flexWrap: actionsInline ? 'nowrap' : 'wrap', rowGap: 0.75 }}
       >
         <Box sx={{ minWidth: 0, flex: actionsInline ? '1 1 0' : undefined }}>
-          <Typography
-            level={level}
-            startDecorator={icon}
-            endDecorator={count != null && count > 0 ? (
-              // `component="span"`, not Chip's default `div`: Typography renders as a
-              // `<p>` at every level this takes, and a `<div>` inside a `<p>` is invalid
-              // HTML: React logs a validateDOMNesting error, and the browser's parser
-              // is entitled to close the paragraph early and reparent the chip. Joy sets
-              // the chip's `display` from its own class, so the tag swap is visually inert.
-              <Chip component="span" size="sm" variant="soft" color="neutral">{count}</Chip>
+          <Stack direction="row" spacing={0.25} alignItems="center">
+            <Typography
+              level={level}
+              startDecorator={icon}
+              endDecorator={count != null && count > 0 ? (
+                // `component="span"`, not Chip's default `div`: Typography renders as a
+                // `<p>` at every level this takes, and a `<div>` inside a `<p>` is invalid
+                // HTML: React logs a validateDOMNesting error, and the browser's parser
+                // is entitled to close the paragraph early and reparent the chip. Joy sets
+                // the chip's `display` from its own class, so the tag swap is visually inert.
+                <Chip component="span" size="sm" variant="soft" color="neutral">{count}</Chip>
+              ) : null}
+            >
+              {title}
+            </Typography>
+            {helpText ? (
+              <Tooltip title={helpText} placement="top" arrow>
+                <IconButton size="sm" variant="plain" color="neutral" aria-label={`About ${title}`}>
+                  <HelpOutlineRoundedIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
             ) : null}
-          >
-            {title}
-          </Typography>
+          </Stack>
           {description && (
             <Typography level="body-sm" textColor="text.tertiary">{description}</Typography>
           )}

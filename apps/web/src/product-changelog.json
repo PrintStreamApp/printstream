@@ -1,6 +1,17 @@
 {
   "releases": [
     {
+      "version": "1.3.6",
+      "releasedOn": "2026-09-19",
+      "changes": [
+        "Native notifications now open the intended server, workspace, and page more reliably, including support messages and self-hosted backup alerts.",
+        "Native App settings now lists known notification workspaces as inline switches, and Back returns to the page that opened settings.",
+        "Android users can discover the native app from a one-time prompt after signing in on the web.",
+        "Model Studio keeps full-screen controls below native status bars and prevents a two-finger pan from unexpectedly becoming an orbit.",
+        "Material calibration now matches presets to the loaded material and uses clearer, more compact page copy."
+      ]
+    },
+    {
       "version": "1.3.5",
       "releasedOn": "2026-09-19",
       "changes": [

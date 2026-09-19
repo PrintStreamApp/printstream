@@ -1,7 +1,9 @@
 /**
- * Platform-scope notification events: operator-level triggers with editable
+ * Platform-defined notification events: operator-level triggers with editable
  * templates, delivered through the same channel plugins as printer
- * notifications but at the platform (workspaceless) scope.
+ * notifications. Cloud operator events normally use the platform
+ * (workspaceless) scope; install-wide self-hosted events may target a workspace
+ * because those installs do not expose a platform notification scope.
  *
  * Event definitions are registered at startup (`registerPlatformNotificationEvents`)
  * so deployments can differ: the private cloud module registers its operator
@@ -124,6 +126,13 @@ export function renderPlatformNotificationTemplate(template: string, variables: 
 
 export interface PlatformNotificationEmitOptions {
   /**
+   * Deliver a platform-defined event through one workspace's configured
+   * channels. Self-hosted install-wide events use this because those installs
+   * have no platform notification scope, while their settings live inside the
+   * default workspace.
+   */
+  workspaceId?: string
+  /**
    * Address the rendered message to specific platform users instead of
    * broadcasting to every platform-scope channel destination (e.g. a claimed
    * support conversation notifies only its assignee). Channel semantics
@@ -171,6 +180,7 @@ export async function emitPlatformNotification(
       title: renderPlatformNotificationTemplate(template.title, variables),
       body: renderPlatformNotificationTemplate(template.body, variables),
       timestamp: new Date().toISOString(),
+      workspaceId: options.workspaceId,
       tag: options.tag ?? `platform:${event}`,
       url: options.url ?? definition.defaultUrl,
       targetUserIds: options.targetUserIds,

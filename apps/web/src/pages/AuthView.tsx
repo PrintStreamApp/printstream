@@ -1,6 +1,6 @@
 import ErrorOutlineRoundedIcon from '@mui/icons-material/ErrorOutlineRounded'
 import { Alert, Button, Stack, Typography } from '@mui/joy'
-import React from 'react'
+import React, { useEffect } from 'react'
 import { useLocation } from 'react-router-dom'
 import { resolveAuthScope, useAuthBootstrapQuery } from '../lib/authQuery'
 import { resolveSettingsAuthState } from '../lib/settingsAuth'
@@ -8,6 +8,7 @@ import { BrandMark } from '../components/BrandMark'
 import { StaticPluginSlot } from '../plugin/StaticPluginSlot'
 import { isNativeApp } from '../native/bridge'
 import { NativeWelcomeButton } from '../native/NativeWelcomeButton'
+import { flagNativeAppPromotionAfterSignIn } from '../lib/nativeAppPromotion'
 
 /**
  * Core auth shell. Providers contribute their sign-in methods via plugin slots.
@@ -34,6 +35,14 @@ export function AuthView({ redirectPath }: { redirectPath?: string } = {}) {
   const enabledSignInProviderCount = authProviders.filter((provider) => provider.enabled && provider.capabilities.signIn).length
   const showsInlineSignInTitle = !showsInlineSetup && !showsProviderControls && enabledSignInProviderCount === 1
   const { authWorkspaceId, authScopeKey } = resolveAuthScope(authBootstrapQuery.data)
+
+  // Session storage survives the OAuth round trip, unlike component state. The authenticated
+  // shell consumes this signal, so an ordinary reload of an existing session never prompts.
+  useEffect(() => {
+    if (authBootstrapQuery.isSuccess && actorType === 'anonymous') {
+      flagNativeAppPromotionAfterSignIn()
+    }
+  }, [actorType, authBootstrapQuery.isSuccess])
 
   return (
     <Stack

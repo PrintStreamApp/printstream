@@ -513,7 +513,8 @@ export function JobsView() {
   return (
     <Stack spacing={pageSectionStackSpacing}>
       {!showNoConnectedBridgesPlaceholder && <SectionNav aria-label="Jobs sections" sections={sections} mb={0} />}
-      <Typography level="h3" startDecorator={<HistoryRoundedIcon />}>Jobs</Typography>
+      {/* Intentional page-heading exception: the queue, in-progress, and history headings already
+          name every part of this page. A second "Jobs" label added whitespace without orientation. */}
       {authBootstrapQuery.isLoading && <ListSkeleton rows={3} />}
       {authBootstrapQuery.isSuccess && !canViewJobs && (
         <EmptyState

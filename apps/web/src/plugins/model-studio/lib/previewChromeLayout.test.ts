@@ -27,7 +27,6 @@ test('the concrete insets are the ones the viewport was built around', () => {
   // move a control that was positioned by measurement against the real rendered chrome.
   assert.deepEqual(previewChromeLayout(base), {
     fullScreenToggle: { top: 12, right: 12 },
-    gcodeLegendToggle: { top: 12, right: 52 },
     sceneProgress: { top: 12, left: 12, right: 52 },
     gcodeConflictAlert: { bottom: 108, left: 12, right: 12 }
   })
@@ -35,7 +34,6 @@ test('the concrete insets are the ones the viewport was built around', () => {
 
 test('the mobile legend button sits beside full screen and progress clears both', () => {
   const layout = previewChromeLayout({ showLegendToggle: true })
-  assert.equal(layout.gcodeLegendToggle.right, 52)
   assert.equal(layout.sceneProgress.right, 92)
 })
 

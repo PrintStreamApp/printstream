@@ -413,8 +413,8 @@ export function subscribePrinterNotifications(
   const onPlatformNotification = (event: { message: NotificationMessage }) => {
     void (async () => {
       try {
-        // Platform-scope messages carry no workspace; channels deliver them
-        // through their platform configuration when enabled there.
+        // Platform-defined messages normally carry no workspace. Self-hosted
+        // install-wide events may name one because that is the scope users can enroll in.
         if (options.shouldHandleWorkspaceId && !options.shouldHandleWorkspaceId(event.message.workspaceId ?? null)) return
         await safeHandler(event.message)
       } catch (error) {

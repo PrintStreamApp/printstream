@@ -146,7 +146,7 @@ export function CalibrationView() {
         <PageSectionHeading
           icon={<ScienceRoundedIcon />}
           title="Runs"
-          description="Calibration prints working through slicing, printing, and result entry."
+          description="Find the best settings for a material."
           count={unfinishedRuns.length}
           actions={<Button size="sm" startDecorator={<AddRoundedIcon />} onClick={() => setShowNew(true)} disabled={printers.length === 0}>New calibration</Button>}
           actionsInline
@@ -205,9 +205,9 @@ export function CalibrationView() {
         <PageSectionHeading
           icon={<TuneRoundedIcon />}
           title="Saved values"
+          helpText="Applied automatically to matching materials. Values saved for a specific spool take priority."
           actions={<Button size="sm" startDecorator={<AddRoundedIcon />} onClick={() => setShowManual(true)}>Add saved value</Button>}
           actionsInline
-          description="Applied automatically when matching filament is loaded. Values saved for one spool are used first."
           count={results.length}
         />
         <SavedCalibrationDirectory results={results} runs={runs} printers={printers}>

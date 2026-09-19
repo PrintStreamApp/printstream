@@ -69,9 +69,9 @@ export function FullScreenDialogButton({
         color={color}
         size={size}
         onClick={() => onToggle(!active)}
-        // Full-screen content reaches under native status bars by design. Keep the one control
-        // that can leave that mode inside the safe area, even when its parent toolbar starts at 0.
-        sx={[...(Array.isArray(sx) ? sx : [sx]), active ? { mt: 'var(--app-top-inset, 0px)' } : {}]}
+        // Placement, including native safe-area movement, belongs to the WHOLE control cluster.
+        // Moving only this button splits one toolbar across two rows and leaves its peers obscured.
+        sx={sx}
       >
         {active ? <FullscreenExitRoundedIcon fontSize="small" /> : <FullscreenRoundedIcon fontSize="small" />}
       </IconButton>

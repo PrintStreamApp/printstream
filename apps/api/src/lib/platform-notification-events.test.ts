@@ -93,9 +93,9 @@ test('emitPlatformNotification renders and fans out with the event destination',
   assert.equal(received[0]?.url, '/platform/test-events')
 })
 
-test('emitPlatformNotification forwards targeting and email-suppression options', async () => {
+test('emitPlatformNotification forwards scope, targeting, and email-suppression options', async () => {
   stubEmptyStorage()
-  const received: Array<{ targetUserIds?: string[]; emailHandledExternally?: boolean; url?: string; level: string; tag?: string }> = []
+  const received: Array<{ workspaceId?: string; targetUserIds?: string[]; emailHandledExternally?: boolean; url?: string; level: string; tag?: string }> = []
   const listener = (event: { message: (typeof received)[number] }) => {
     received.push(event.message)
   }
@@ -103,6 +103,7 @@ test('emitPlatformNotification forwards targeting and email-suppression options'
   try {
     await emitPlatformNotification('test-event', { name: 'Nico' }, {
       targetUserIds: ['user-1'],
+      workspaceId: 'workspace-1',
       emailHandledExternally: true,
       url: '/platform/messages?conversation=c1',
       level: 'warning'
@@ -114,6 +115,7 @@ test('emitPlatformNotification forwards targeting and email-suppression options'
 
   assert.equal(received.length, 2)
   assert.deepEqual(received[0]?.targetUserIds, ['user-1'])
+  assert.equal(received[0]?.workspaceId, 'workspace-1')
   assert.equal(received[0]?.emailHandledExternally, true)
   assert.equal(received[0]?.url, '/platform/messages?conversation=c1')
   assert.equal(received[0]?.level, 'warning')

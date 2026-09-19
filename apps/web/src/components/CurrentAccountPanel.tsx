@@ -38,7 +38,6 @@ import {
 import { AuthSessionList } from './AuthSessionList'
 import { isNativeApp, PrintStreamInstance } from '../native/bridge'
 import { NativeWelcomeButton } from '../native/NativeWelcomeButton'
-import { NativeAppSettingsButton } from '../native/NativeAppSettingsButton'
 
 /**
  * Self-service account surface for signed-in end users.
@@ -330,7 +329,6 @@ export function CurrentAccountPanel({
     <Stack spacing={pageSectionStackSpacing}>
       {sections.length > 0 && <SectionNav aria-label="Account sections" sections={sections} mb={0} />}
       {isNativeApp() && <NativeWelcomeButton label="Change server" />}
-      <NativeAppSettingsButton />
 
       {showHeading && (
         <AccountPageHeading

@@ -122,9 +122,12 @@ export const notificationsMobilePlugin: ApiPlugin = {
     })
     context.router.post('/test', async (request, response) => {
       const userId = requestNativeNotificationAccount(request)
+      const url = request.workspace
+        ? `/workspaces/${encodeURIComponent(request.workspace.slug)}`
+        : '/platform'
       const accepted = await deliver({ id: randomUUID(), category: 'system', level: 'info', title: 'PrintStream notifications are ready',
         body: 'Print updates and alerts will appear here, even when the app is closed.', timestamp: new Date().toISOString(),
-        workspaceId: request.workspace?.id, targetUserIds: [userId], url: '/' })
+        workspaceId: request.workspace?.id, targetUserIds: [userId], url })
       if (!accepted) throw badRequest('No device accepted the test. Check enrolment and server push configuration.')
       annotateRequestAuditLog(request, { action: 'test-mobile-push', resource: 'notifications', summary: 'Requested a native test notification.' })
       response.status(202).json({ accepted })

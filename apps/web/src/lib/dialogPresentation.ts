@@ -72,6 +72,16 @@ const MAXIMIZED_DIALOG_GUTTER_PHONE = '0px'
 const safeTop = (gutter: string) => `calc(var(--app-top-inset, 0px) + ${gutter})`
 const safeBottom = (gutter: string) => `calc(var(--app-safe-bottom, 0px) + ${gutter})`
 
+/**
+ * Top position for a control cluster drawn over full-screen content.
+ *
+ * The cluster, not its full-screen button alone, moves below native status-bar chrome. Keeping
+ * adjacent actions together avoids splitting one toolbar across an obscured and reachable row.
+ */
+export function safeFullscreenControlTop(fullScreen: boolean, insetPx: number): number | string {
+  return fullScreen ? safeTop(`${insetPx}px`) : insetPx
+}
+
 export interface DialogPresentationInputs {
   /** The user's "make this bigger" preference. */
   maximized?: boolean

@@ -5,6 +5,14 @@ const EVENT = 'printstream:notification-settings'
 const CHANGED_EVENT = 'printstream:notification-settings-changed'
 // Capture the native one-shot request before workspace/auth redirects replace the URL.
 let pendingRequest = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('appNotifications') === '1'
+let pendingScope = pendingRequest && typeof window !== 'undefined'
+  ? new URLSearchParams(window.location.search).get('enableNotificationScope')
+  : null
+
+/** A local-shell toggle may identify the one scope the hosted consent flow should preselect. */
+export function requestedAppNotificationScope(): string | null {
+  return pendingScope && pendingScope.length <= 200 ? pendingScope : null
+}
 
 export function takeAppNotificationSettingsRequest(): boolean {
   const requested = pendingRequest
@@ -12,7 +20,9 @@ export function takeAppNotificationSettingsRequest(): boolean {
   if (requested) {
     const url = new URL(window.location.href)
     url.searchParams.delete('appNotifications')
+    url.searchParams.delete('enableNotificationScope')
     window.history.replaceState(window.history.state, '', url)
+    pendingScope = null
   }
   return requested
 }

@@ -31,6 +31,7 @@ import {
 import { apiFetch } from '../../lib/apiClient'
 import { useSlotFilamentIdentityLookup } from '../../lib/slotFilamentIdentity'
 import { readCurrentWorkspaceScopeKey, workspaceQueryKeys } from '../../lib/workspaceScope'
+import { slicingPresetsQueryOptions } from '../../lib/slicingPresetsQuery'
 import {
   BAMBU_STUDIO_PLATE_TYPES,
   formatPlateTypeLabel,
@@ -200,10 +201,8 @@ export const NewCalibrationDialog = memo(function NewCalibrationDialog({ printer
   })
   const targetId = capabilitiesQuery.data?.defaultTargetId ?? capabilitiesQuery.data?.targets[0]?.id ?? ''
   const profilesQuery = useQuery<SlicingPresetsResponse>({
-    queryKey: ['slicing-profiles', targetId],
-    queryFn: async ({ signal }) => apiFetch<SlicingPresetsResponse>(`/api/slicing/profiles?targetId=${encodeURIComponent(targetId)}`, { signal }),
-    enabled: Boolean(targetId),
-    staleTime: 5 * 60_000
+    ...slicingPresetsQueryOptions(targetId),
+    enabled: Boolean(targetId)
   })
   const profiles = useMemo(() => profilesQuery.data?.profiles ?? [], [profilesQuery.data])
   const profilesUsable = slicingPresetsResponseIsUsable(profiles)

@@ -78,7 +78,6 @@ function createServiceWorkerHarness(options: { endpoint?: string; fetchGate?: Pr
     return { ok: true }
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-implied-eval
   new Function('self', 'fetch', SOURCE)(self, fetchStub)
 
   const pending: Array<Promise<unknown>> = []
@@ -201,6 +200,25 @@ test('a tap opens the app even while the dismissal report is still in flight', a
   releaseReport()
   await clicked
   assert.equal(worker.posted.length, 1)
+})
+
+test('a tap preserves an in-app deep link and rejects an external destination', async () => {
+  const worker = createServiceWorkerHarness()
+
+  await worker.push({
+    id: 'n1',
+    title: 'Support reply',
+    url: '/workspaces/home/account/messages?conversation=conv-1'
+  })
+  await worker.click(worker.shown[0]!)
+  assert.equal(
+    worker.opened[0],
+    'https://printstream.test/workspaces/home/account/messages?conversation=conv-1'
+  )
+
+  await worker.push({ id: 'n2', title: 'Unsafe link', url: 'https://evil.example/messages' })
+  await worker.click(worker.shown[1]!)
+  assert.equal(worker.opened[1], 'https://printstream.test/')
 })
 
 test('a dismissal naming an id never retracts a different notification sharing its tag', async () => {

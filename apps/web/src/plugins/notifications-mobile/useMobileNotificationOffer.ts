@@ -7,7 +7,7 @@ import { extractErrorMessage, nativeNotificationAccount, type AuthBootstrap } fr
 import { isAppBusy, subscribeAppBusy } from '../../lib/appBusy'
 import { disableNativeNotifications, enableNativeNotifications, hasNativeNotifications, readNativeNotificationScope } from '../../native/notifications'
 import { notificationScopes, notificationSelectionKey, type NotificationScope } from '../../native/notificationScopes'
-import { finishAppNotificationSettings, hasAppNotificationSettingsRequest, notificationSettingsChanged, subscribeAppNotificationSettings, takeAppNotificationSettingsRequest } from '../../native/appSettings'
+import { finishAppNotificationSettings, hasAppNotificationSettingsRequest, notificationSettingsChanged, requestedAppNotificationScope, subscribeAppNotificationSettings, takeAppNotificationSettingsRequest } from '../../native/appSettings'
 import { dismissMobileNotificationOffer, isMobileNotificationOfferDismissed, notificationScopeOfferKey } from './prompt'
 import { startOfferLifecycle } from './offerLifecycle'
 
@@ -58,12 +58,17 @@ export function useMobileNotificationOffer(bootstrap: AuthBootstrap | undefined,
 
     async function load(isManual: boolean, signal: AbortSignal) {
       const loaded: NotificationChoice[] = []
+      const requestedScope = isManual ? requestedAppNotificationScope() : null
       // Reads never request Android permission. Serialize native account selection.
       for (const scope of notificationScopes(snapshot)) {
         if (!active() || signal.aborted) return false
         const state = await services.read(scope.bootstrap, signal)
         const offered = isMobileNotificationOfferDismissed(notificationScopeOfferKey(nativeNotificationAccount(snapshot)!, scope.id))
-        loaded.push({ ...scope, ...state, selected: state.enabled || (!isManual && !offered && state.available) })
+        loaded.push({
+          ...scope,
+          ...state,
+          selected: state.enabled || requestedScope === scope.id || (!isManual && !offered && state.available)
+        })
       }
       if (!active() || signal.aborted || (isManual ? !openRef.current : openRef.current)) return false
       setChoices(loaded)

@@ -40,8 +40,6 @@ export interface PreviewChromeInput {
 export interface PreviewChromeLayout {
   /** Enlarges the 3D area alone, so it sits on the 3D area rather than in the dialog header. */
   fullScreenToggle: { top: number; right: ResponsiveInset }
-  /** Opens the opaque, viewport-filling mobile toolpath legend. */
-  gcodeLegendToggle: { top: number; right: ResponsiveInset }
   /** Slim bar along the top while the plate's parts stream in. */
   sceneProgress: { top: number; left: number; right: number }
   /**
@@ -62,10 +60,6 @@ export function previewChromeLayout({
     fullScreenToggle: {
       top: VIEWPORT_INSET_PX,
       right: VIEWPORT_INSET_PX
-    },
-    gcodeLegendToggle: {
-      top: VIEWPORT_INSET_PX,
-      right: legendRight
     },
     sceneProgress: {
       top: VIEWPORT_INSET_PX,

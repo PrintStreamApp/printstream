@@ -25,6 +25,7 @@ import {
 } from './lib/measureFeatures'
 import { circleScreenZone, raySeesThroughCircle } from './lib/circleScreenZone'
 import { createViewportCameraRig } from './lib/viewportCamera'
+import { guardTouchOrbitTransition } from './lib/touchOrbitGesture'
 import * as THREE from 'three'
 import { createWebglRenderer } from './lib/webglRenderer'
 import { OrbitControls, TransformControls } from 'three-stdlib'
@@ -512,6 +513,7 @@ export function useEditorScene(params: EditorSceneParams): void {
     orbit.zoomToCursor = true
     orbit.target.set(0, 0, ORBIT_PIVOT_PLANE_Z)
     orbit.update()
+    const releaseTouchOrbitGuard = guardTouchOrbitTransition(renderer.domElement, orbit)
     orbitRef.current = orbit
     // This camera is brand new at the generic home pose (target (0,0,20): the
     // front-left corner of a Bambu bed). Clear the framed-view latch so the next
@@ -2813,6 +2815,7 @@ export function useEditorScene(params: EditorSceneParams): void {
       selectionOwners.dispose()
       requestRenderRef.current = null
       orbit.removeEventListener('change', requestRender)
+      releaseTouchOrbitGuard()
       cameraRig.dispose()
       renderer.domElement.removeEventListener('pointermove', onPointerMoveRender)
       renderer.domElement.removeEventListener('pointerdown', claimSelectedObjectPointer, true)

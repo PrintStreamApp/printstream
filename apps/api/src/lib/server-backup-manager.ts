@@ -24,6 +24,7 @@ import type { ServerBackupStatus } from '@printstream/shared'
 import { env } from './env.js'
 import { isSelfHostedDeployment } from './deployment-mode.js'
 import { emitPlatformNotification } from './platform-notification-events.js'
+import { rootPrisma } from './prisma.js'
 import {
   BACKUPS_DIR_UNSET_REASON,
   createServerBackup,
@@ -126,12 +127,11 @@ export async function startServerBackup(trigger: 'scheduled' | 'manual'): Promis
       state.lastError = (error as Error).message || 'Backup failed.'
       console.error(`[server-backup] backup failed: ${state.lastError}`)
       if (trigger === 'scheduled') {
+        const destination = await resolveBackupFailureNotificationDestination()
         await emitPlatformNotification(
           'server-backup-failed',
           { reason: state.lastError },
-          // The section lives in workspace Settings on self-hosted installs
-          // and in Platform settings on cloud.
-          { level: 'error', url: isSelfHostedDeployment() ? '/settings/backups' : '/platform/settings/backups' }
+          { level: 'error', ...destination }
         )
       }
     } finally {
@@ -140,6 +140,44 @@ export async function startServerBackup(trigger: 'scheduled' | 'manual'): Promis
     }
   })()
   return await getServerBackupStatus()
+}
+
+/**
+ * Route install-wide backup failures through a scope native apps actually
+ * enroll in. Cloud has a platform scope; self-hosted installs deliberately do
+ * not, so their notification belongs to the first live workspace and opens
+ * that workspace's Backups section.
+ */
+async function resolveBackupFailureNotificationDestination(): Promise<{
+  workspaceId?: string
+  url: string
+}> {
+  if (!isSelfHostedDeployment()) {
+    return { url: '/platform/settings/backups' }
+  }
+
+  let workspace: { id: string; slug: string } | null = null
+  try {
+    workspace = await rootPrisma.workspace.findFirst({
+      where: { deletedAt: null },
+      orderBy: { createdAt: 'asc' },
+      select: { id: true, slug: true }
+    })
+  } catch (error) {
+    // A database outage may be the reason the backup failed. Notification routing is
+    // best-effort and must not replace the original backup error or leave the run stuck.
+    console.warn(
+      `[server-backup] could not resolve a workspace for the failure notification: ${(error as Error).message}`
+    )
+  }
+  if (!workspace) {
+    return { url: '/workspaces' }
+  }
+
+  return {
+    workspaceId: workspace.id,
+    url: `/workspaces/${encodeURIComponent(workspace.slug)}/settings/backups`
+  }
 }
 
 /** Test hook: resolves once the in-flight run (if any) has finished. */

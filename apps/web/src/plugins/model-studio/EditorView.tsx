@@ -252,7 +252,7 @@ import { helperVolumeSpec } from './lib/helperVolumes'
 import { defaultPlateName, plateDisplayName, resolvePlateRename } from './lib/plateName'
 import { LazyDialogBoundary } from '../../components/LazyDialogBoundary'
 import { FullScreenDialogButton } from '../../components/DialogPresentationToggles'
-import { dialogPresentationProps } from '../../lib/dialogPresentation'
+import { dialogPresentationProps, safeFullscreenControlTop } from '../../lib/dialogPresentation'
 import { useDialogPresentationState } from '../../hooks/useDialogPresentationState'
 import { useShowBedModel } from './lib/useShowBedModel'
 import { useEffectiveSidebarSide } from '../../lib/editorViewportSettings'
@@ -10738,7 +10738,7 @@ function EditorView({
                     // Phones keep the wrapping strip across the top; from sm up the tools move
                     // into the vertical left rail, so this row only carries undo/redo + help
                     // and hugs the right edge, leaving the top-centre free for the transform.
-                    top: 8,
+                    top: safeFullscreenControlTop(fullScreen, 8),
                     left: { xs: 8, sm: 'auto' },
                     right: 8,
                     zIndex: EDITOR_CHROME_Z_INDEX,
