@@ -1,6 +1,13 @@
 {
   "releases": [
     {
+      "version": "1.3.8",
+      "releasedOn": "2026-09-19",
+      "changes": [
+        "Windows app updates now always carry the current PrintStream version, so a new package reliably replaces the installed app."
+      ]
+    },
+    {
       "version": "1.3.7",
       "releasedOn": "2026-09-19",
       "changes": [

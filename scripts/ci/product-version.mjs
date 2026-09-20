@@ -1,5 +1,7 @@
 /**
  * Owns the product SemVer shared by the root and every JavaScript workspace.
+ * The Windows package reads this same root value during its build; its project
+ * file must not declare a second version that can drift between releases.
  *
  * Home Assistant remains independently versioned because HACS publishes and
  * installs it on its own cadence. Build fingerprints and schema/protocol
@@ -52,6 +54,14 @@ export function readProductVersion(root = process.cwd()) {
           }
         }
       }
+    }
+  }
+
+  const desktopProject = path.join(root, 'apps', 'desktop', 'PrintStream.Desktop', 'PrintStream.Desktop.csproj')
+  if (existsSync(desktopProject)) {
+    const projectText = readFileSync(desktopProject, 'utf8')
+    if (/<Version>[^<]+<\/Version>/.test(projectText)) {
+      mismatches.push(`${path.relative(root, desktopProject)} declares a separate <Version>`)
     }
   }
 
