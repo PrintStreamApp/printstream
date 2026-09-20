@@ -5,8 +5,8 @@
  *
  * - Renders an "Update" Chip in the `printer.card.headerChips` slot
  *   when the printer's installed firmware is older than the latest
- *   version published by Bambu Lab. The chip is the only thing the
- *   plugin contributes to the core layout: the card is unchanged
+ *   downloadable package published by Bambu Lab. The chip is the only
+ *   thing the plugin contributes to the core layout: the card is unchanged
  *   when no update is available, and uninstalling the plugin removes
  *   the chip without touching anything else.
  * - Clicking the chip or choosing "Firmware updates..." from the
@@ -65,6 +65,7 @@ import {
   getFirmwareVersionsLoadState,
   getInstallableVersions,
   getModuleFirmware,
+  getPendingPublishedVersion,
   getSelectedPrerequisite,
   getSelectedReleaseNotes,
   isActiveUploadStatus,
@@ -317,6 +318,7 @@ function FirmwareUpdateDetailsDialog({
   const installable = isInstallableVersionSelected(installableVersions, selectedVersion)
   const busy = isActiveUploadStatus(progress?.status)
   const isDowngrade = isDowngradeSelection(update, selectedVersion)
+  const pendingPublishedVersion = getPendingPublishedVersion(update)
   const pendingInstall = firmwareStillPendingInstall(update, progress)
   const uploadedVersionIsLatest = isUploadedVersionLatest(update, progress)
   const selectedReleaseNotes = useMemo(() => getSelectedReleaseNotes(update, selectedVersion), [selectedVersion, update])
@@ -361,6 +363,14 @@ function FirmwareUpdateDetailsDialog({
                     <Typography level="body-md">{update.latestVersion ?? '–'}</Typography>
                   </Box>
                 </Stack>
+
+                {pendingPublishedVersion && (
+                  <Alert color="neutral" variant="soft" startDecorator={<InfoOutlinedIcon />}>
+                    Firmware {pendingPublishedVersion} has been announced, but Bambu Lab has not published a
+                    downloadable package for this printer yet. The latest version PrintStream can upload is{' '}
+                    {update.latestVersion ?? 'not currently available'}.
+                  </Alert>
+                )}
 
                 {offlineBlocked && offlineMinimum && (
                   <Alert color="warning" variant="soft" startDecorator={<WarningAmberRoundedIcon />}>
@@ -436,11 +446,9 @@ function FirmwareUpdateDetailsDialog({
                 {/* Suppressed while offline-blocked: that alert already explains why
                     nothing can be staged, and two alerts for one dead end read as two
                     separate problems. */}
-                {versionsLoadState === 'unavailable' && !offlineBlocked && (
+                {versionsLoadState === 'unavailable' && !offlineBlocked && !pendingPublishedVersion && (
                   <Alert color="neutral" variant="soft" startDecorator={<InfoOutlinedIcon />}>
-                    {update.latestVersion
-                      ? `Firmware ${update.latestVersion} is announced, but Bambu Lab hasn't published a downloadable file for this printer yet.`
-                      : 'No downloadable firmware versions are available for this printer right now.'}
+                    No downloadable firmware versions are available for this printer right now.
                   </Alert>
                 )}
 

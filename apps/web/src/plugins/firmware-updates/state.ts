@@ -43,6 +43,9 @@ export interface UpdateReport {
   online: boolean
   currentVersion: string | null
   sdCardPresent: boolean | null
+  /** Newest release Bambu has announced, even when no package is available yet. */
+  latestPublishedVersion: string | null
+  /** Newest release that can actually be uploaded to the printer. */
   latestVersion: string | null
   updateAvailable: boolean
   downloadUrl: string | null
@@ -224,6 +227,18 @@ export function isInstallableVersionSelected(
 
 export function isDowngradeSelection(update: UpdateReport | undefined, selectedVersion: string | null): boolean {
   return Boolean(selectedVersion && update?.currentVersion && selectedVersion !== update.latestVersion)
+}
+
+/**
+ * A newer release can appear on Bambu's wiki before its offline package reaches
+ * the download page. Keep that announcement distinct from the actionable latest
+ * version so the picker and update badge never promise a package that does not exist.
+ */
+export function getPendingPublishedVersion(update: UpdateReport | undefined): string | null {
+  if (!update?.latestPublishedVersion) return null
+  return update.latestPublishedVersion === update.latestVersion
+    ? null
+    : update.latestPublishedVersion
 }
 
 /**

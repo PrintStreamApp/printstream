@@ -1,6 +1,15 @@
 {
   "releases": [
     {
+      "version": "1.3.7",
+      "releasedOn": "2026-09-19",
+      "changes": [
+        "Bambu Cloud sign-in now completes correctly for accounts protected by an authenticator code.",
+        "Firmware update checks now distinguish downloadable updates from newer announcements that are not yet available to install.",
+        "Native app updates now reliably show their bundled interface instead of reopening an older downloaded version."
+      ]
+    },
+    {
       "version": "1.3.6",
       "releasedOn": "2026-09-19",
       "changes": [

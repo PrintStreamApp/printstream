@@ -12,6 +12,7 @@ import {
   getFirmwareVersionsLoadState,
   getInstallableVersions,
   getModuleFirmware,
+  getPendingPublishedVersion,
   getUpdatesStorageKey,
   getSelectedPrerequisite,
   getSelectedReleaseNotes,
@@ -39,6 +40,7 @@ const sampleUpdate: UpdateReport = {
   online: true,
   currentVersion: '01.09.00.00',
   sdCardPresent: true,
+  latestPublishedVersion: '01.10.00.00',
   latestVersion: '01.10.00.00',
   updateAvailable: true,
   downloadUrl: 'https://example.com/01.10.00.00.zip',
@@ -286,6 +288,14 @@ test('version selection falls back to the first installable version when the lat
 
   const installable = getInstallableVersions(update)
   assert.equal(getDefaultSelectedVersion(update, installable), '01.10.00.00')
+})
+
+test('pending published versions stay separate from the latest downloadable version', () => {
+  assert.equal(getPendingPublishedVersion(sampleUpdate), null)
+  assert.equal(getPendingPublishedVersion({
+    ...sampleUpdate,
+    latestPublishedVersion: '01.11.00.00'
+  }), '01.11.00.00')
 })
 
 test('module firmware sorts AMS units first and labels them 1-based', () => {

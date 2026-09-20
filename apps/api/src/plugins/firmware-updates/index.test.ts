@@ -83,7 +83,10 @@ test('firmware-updates routes expose installable versions in the update report',
       )
     }
     if (url.includes('wiki.bambulab.com')) {
-      return new Response('<div id="h-01100000-20260330"></div>', { status: 200, headers: { 'content-type': 'text/html' } })
+      return new Response(
+        '<div id="h-01110000-20260501"></div><div id="h-01100000-20260330"></div>',
+        { status: 200, headers: { 'content-type': 'text/html' } }
+      )
     }
     throw new Error(`Unexpected fetch: ${url}`)
   })
@@ -102,15 +105,23 @@ test('firmware-updates routes expose installable versions in the update report',
   const body = await response.json() as {
     updatesAvailable: number
     updates: Array<{
+      latestPublishedVersion: string | null
       latestVersion: string | null
       downloadUrl: string | null
       availableVersions: Array<{ version: string; fileAvailable: boolean }>
     }>
   }
   assert.equal(body.updatesAvailable, 1)
+  assert.equal(body.updates[0]?.latestPublishedVersion, '01.11.00.00')
   assert.equal(body.updates[0]?.latestVersion, '01.10.00.00')
   assert.equal(body.updates[0]?.downloadUrl, 'https://public-cdn.bblmw.com/example.zip')
-  assert.equal(body.updates[0]?.availableVersions[0]?.fileAvailable, true)
+  assert.deepEqual(body.updates[0]?.availableVersions.slice(0, 2).map(({ version, fileAvailable }) => ({
+    version,
+    fileAvailable
+  })), [
+    { version: '01.11.00.00', fileAvailable: false },
+    { version: '01.10.00.00', fileAvailable: true }
+  ])
   assert.deepEqual(broadcasts, [])
 })
 

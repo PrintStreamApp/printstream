@@ -15,7 +15,7 @@ interface RecordedCall {
   body: unknown
 }
 
-function stubFetch(responder: (call: RecordedCall) => { status?: number; body?: string; setCookie?: string }): RecordedCall[] {
+function stubFetch(responder: (call: RecordedCall) => { status?: number; body?: string; setCookies?: string[] }): RecordedCall[] {
   const calls: RecordedCall[] = []
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     const headers: Record<string, string> = {}
@@ -31,7 +31,7 @@ function stubFetch(responder: (call: RecordedCall) => { status?: number; body?: 
     calls.push(call)
     const result = responder(call)
     const responseHeaders = new Headers()
-    if (result.setCookie) responseHeaders.append('set-cookie', result.setCookie)
+    for (const cookie of result.setCookies ?? []) responseHeaders.append('set-cookie', cookie)
     return new Response(result.body ?? '', { status: result.status ?? 200, headers: responseHeaders })
   }) as typeof globalThis.fetch
   return calls
@@ -85,11 +85,12 @@ test('sign-in calls never carry the bearer token', async () => {
 })
 
 test('TOTP verification fetches a CSRF token and echoes it in both halves', async () => {
-  // The web origin refuses the request before reading the code unless the cookie and
-  // the header agree, which is why a CSRF failure must never read as "invalid code".
+  // The web origin needs both the double-submit token and the rest of the session
+  // cookies. Sending bbl_csrf_token alone reaches the handler but makes a valid code
+  // read as "Login failed".
   const calls = stubFetch((call) => call.url.endsWith('/api/csrf')
-    ? { setCookie: 'bbl_csrf_token=csrf-value; Path=/; HttpOnly' }
-    : { body: '{"accessToken":"issued"}' })
+    ? { setCookies: ['__cf_bm=edge-session; Path=/', 'bbl_csrf_token=csrf-value; Path=/; HttpOnly'] }
+    : { body: '{}', setCookies: ['token=issued-in-cookie; Path=/; HttpOnly'] })
 
   const result = await performBambuCloudRequest({
     region: 'global',
@@ -101,8 +102,9 @@ test('TOTP verification fetches a CSRF token and echoes it in both halves', asyn
   // The TFA endpoint is on the WEB origin, not the API host.
   assert.equal(calls[1]?.url, 'https://bambulab.com/api/sign-in/tfa')
   assert.equal(calls[1]?.headers['x-bbl-csrf-token'], 'csrf-value')
-  assert.equal(calls[1]?.headers.cookie, 'bbl_csrf_token=csrf-value')
-  assert.deepEqual(result.body, { accessToken: 'issued' })
+  assert.equal(calls[1]?.headers.cookie, '__cf_bm=edge-session; bbl_csrf_token=csrf-value')
+  assert.deepEqual(result.body, {})
+  assert.equal(result.tokenCookie, 'issued-in-cookie')
 })
 
 test('TOTP reports a missing CSRF token instead of sending a doomed request', async () => {
@@ -115,6 +117,23 @@ test('TOTP reports a missing CSRF token instead of sending a doomed request', as
   assert.equal(calls.length, 1, 'the code must not be spent on a request Bambu will refuse')
   assert.equal(result.status, 0)
   assert.match(result.bodyText ?? '', /security token/i)
+})
+
+test('TOTP preserves a Cloudflare challenge from the CSRF request', async () => {
+  const calls = stubFetch(() => ({
+    status: 403,
+    body: '<html><title>Just a moment...</title><script src="https://challenges.cloudflare.com/x"></script></html>'
+  }))
+
+  const result = await performBambuCloudRequest({
+    region: 'global',
+    request: { operation: 'verifyTotp', tfaKey: 'key', code: '123456' }
+  })
+
+  assert.equal(calls.length, 1, 'a challenge must stop before the authenticator code is sent')
+  assert.equal(result.status, 403)
+  assert.equal(result.body, null)
+  assert.match(result.bodyText ?? '', /Just a moment/)
 })
 
 test('a non-JSON body is handed back as text rather than thrown away', async () => {

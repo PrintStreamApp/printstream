@@ -33,7 +33,7 @@ function stubBridges(bridges: Array<{ id: string; connected: boolean }>): void {
     bridges.some((bridge) => bridge.id === bridgeId && bridge.connected))
 }
 
-function stubFetch(responder: (call: RecordedCall) => { status?: number; body?: string; setCookie?: string }): RecordedCall[] {
+function stubFetch(responder: (call: RecordedCall) => { status?: number; body?: string; setCookies?: string[] }): RecordedCall[] {
   const calls: RecordedCall[] = []
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     const headers: Record<string, string> = {}
@@ -44,7 +44,7 @@ function stubFetch(responder: (call: RecordedCall) => { status?: number; body?: 
     calls.push(call)
     const result = responder(call)
     const responseHeaders = new Headers()
-    if (result.setCookie) responseHeaders.append('set-cookie', result.setCookie)
+    for (const cookie of result.setCookies ?? []) responseHeaders.append('set-cookie', cookie)
     return new Response(result.body ?? '', { status: result.status ?? 200, headers: responseHeaders })
   }) as typeof globalThis.fetch
   return calls
@@ -151,8 +151,8 @@ test('the China region reaches its own hosts on the direct path too', async () =
 
 test('a China TOTP verification uses the China web origin for both CSRF legs', async () => {
   const calls = stubFetch((call) => call.url.endsWith('/api/csrf')
-    ? { setCookie: 'bbl_csrf_token=csrf-value; Path=/; HttpOnly' }
-    : { body: '{"accessToken":"issued"}' })
+    ? { setCookies: ['session=web-session; Path=/', 'bbl_csrf_token=csrf-value; Path=/; HttpOnly'] }
+    : { body: '{}', setCookies: ['token=issued-in-cookie; Path=/; HttpOnly'] })
 
   const result = await directBambuCloudRequest({
     region: 'china',
@@ -162,7 +162,25 @@ test('a China TOTP verification uses the China web origin for both CSRF legs', a
   assert.equal(calls[0]?.url, 'https://bambulab.cn/api/csrf')
   assert.equal(calls[1]?.url, 'https://bambulab.cn/api/sign-in/tfa')
   assert.equal(calls[1]?.headers['x-bbl-csrf-token'], 'csrf-value')
-  assert.deepEqual(result.body, { accessToken: 'issued' })
+  assert.equal(calls[1]?.headers.cookie, 'session=web-session; bbl_csrf_token=csrf-value')
+  assert.equal(result.tokenCookie, 'issued-in-cookie')
+})
+
+test('a Cloudflare challenge on the TOTP CSRF leg keeps its upstream response', async () => {
+  const calls = stubFetch(() => ({
+    status: 403,
+    body: '<html><title>Just a moment...</title><script src="https://challenges.cloudflare.com/x"></script></html>'
+  }))
+
+  const result = await directBambuCloudRequest({
+    region: 'global',
+    request: { operation: 'verifyTotp', tfaKey: 'key', code: '123456' }
+  })
+
+  assert.equal(calls.length, 1, 'a challenge must stop before the authenticator code is sent')
+  assert.equal(result.status, 403)
+  assert.equal(result.body, null)
+  assert.match(result.bodyText ?? '', /Just a moment/)
 })
 
 test('sign-in calls on the direct path never carry a stale bearer token', async () => {

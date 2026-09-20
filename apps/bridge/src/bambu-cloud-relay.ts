@@ -6,7 +6,9 @@
  * not decide whether a credential is dead, whether to retry, or what a status means.
  * The API plugin (`apps/api/src/plugins/bambu-cloud-sync/`) owns all of that, because
  * the bridge deploys separately and lags, so any rule kept here would need a bridge
- * rollout to fix. This module hands back the raw status and body and nothing else.
+ * rollout to fix. This module hands back the raw status and body, plus the access token
+ * Bambu sometimes places only in a response cookie. Extracting that cookie is transport
+ * normalization; the API still decides whether the response succeeded.
  *
  * Why the bridge at all: on a multi-workspace deployment every workspace would
  * otherwise reach Bambu from one shared egress IP, and Bambu's edge rate-limits and
@@ -44,6 +46,10 @@ interface PreparedRequest {
   /** True when the call must not carry the bearer token (the sign-in endpoints). */
   anonymous?: boolean
 }
+
+type CsrfTokenResult =
+  | { ok: true; token: string; cookie: string }
+  | { ok: false; response: BridgeBambuCloudRequestResult }
 
 export async function performBambuCloudRequest(
   params: BridgeBambuCloudRequestParams,
@@ -137,11 +143,11 @@ function prepareRequest(apiHost: string, params: PlainBambuCloudRequestParams): 
  * TOTP sign-in, which does not go where everything else goes.
  *
  * The code is verified at `bambulab.com/api/sign-in/tfa`, the WEB origin, not the API
- * host, and that origin enforces double-submit CSRF: without the `bbl_csrf_token`
- * cookie the request is refused before the code is even read, and with the cookie but
- * no matching header it is refused as `missing_header`. Only `GET /api/csrf` mints
- * one. A CSRF rejection therefore looks nothing like a wrong code and must not be
- * reported as one; the API side distinguishes them from the body.
+ * host, and that origin requires the cookie session established by `GET /api/csrf`
+ * plus double-submit CSRF: without the `bbl_csrf_token` cookie the request is refused
+ * before the code is read, and with the cookie but no matching header it is refused as
+ * `missing_header`. A CSRF rejection therefore looks nothing like a wrong code and
+ * must not be reported as one; the API side distinguishes them from the body.
  */
 async function performTotpVerification(
   webHost: string,
@@ -150,15 +156,7 @@ async function performTotpVerification(
   signal?: AbortSignal
 ): Promise<BridgeBambuCloudRequestResult> {
   const csrf = await fetchCsrfToken(webHost, signal)
-  if (!csrf) {
-    // Surfaced as a normal failed response rather than a thrown error so the API can
-    // tell the user their code was never the problem.
-    return {
-      status: 0,
-      body: null,
-      bodyText: 'Could not obtain a security token from Bambu Cloud (GET /api/csrf returned no bbl_csrf_token).'
-    }
-  }
+  if (!csrf.ok) return csrf.response
 
   return await executeRequest(
     { url: `https://${webHost}/api/sign-in/tfa`, method: 'POST', anonymous: true, body: { tfaKey, tfaCode: code } },
@@ -169,34 +167,52 @@ async function performTotpVerification(
 }
 
 /**
- * Mints a `bbl_csrf_token` and returns both halves of the double submit.
+ * Establishes Bambu's web session and returns its cookie jar plus CSRF header value.
  *
  * Fetched per verification rather than cached: a stale cookie that disagrees with the
  * header it is echoed in fails the same way a missing one does, and this runs at most
  * once per sign-in.
  */
-async function fetchCsrfToken(webHost: string, signal?: AbortSignal): Promise<{ token: string; cookie: string } | null> {
+async function fetchCsrfToken(webHost: string, signal?: AbortSignal): Promise<CsrfTokenResult> {
   try {
     const response = await fetchWithTimeout(`https://${webHost}/api/csrf`, {
       method: 'GET',
       headers: { 'user-agent': USER_AGENT, accept: 'application/json' }
     }, signal)
-    const setCookies = readSetCookies(response)
-    for (const raw of setCookies) {
-      const [pair] = raw.split(';')
-      const separator = pair?.indexOf('=') ?? -1
-      if (!pair || separator < 0) continue
-      if (pair.slice(0, separator).trim() !== 'bbl_csrf_token') continue
-      const token = pair.slice(separator + 1).trim()
-      if (token) return { token, cookie: `bbl_csrf_token=${token}` }
+    const cookies = readResponseCookies(response)
+    const token = cookies.get('bbl_csrf_token')
+    if (!token) {
+      const failure = await readBambuCloudResponse(response)
+      if (failure.status >= 200 && failure.status < 300) {
+        return {
+          ok: false,
+          response: {
+            status: 0,
+            body: null,
+            bodyText: 'Could not obtain a security token from Bambu Cloud (GET /api/csrf returned no bbl_csrf_token).'
+          }
+        }
+      }
+      return { ok: false, response: failure }
     }
-    return null
+
+    // The website's TOTP handler needs the complete session established by the
+    // CSRF response. Sending only bbl_csrf_token reaches the handler but yields
+    // "Login failed" for valid codes.
+    const cookie = [...cookies].map(([name, value]) => `${name}=${value}`).join('; ')
+    return { ok: true, token, cookie }
   } catch (error) {
-    // The caller turns this into "could not obtain a security token", which tells the user
-    // their code was not the problem but says nothing about why. Log the cause so a failing
-    // TOTP sign-in is diagnosable without reproducing it.
+    // The response tells the user their code was not the problem. Log the safe transport
+    // cause so a failing TOTP sign-in is diagnosable without reproducing it.
     console.warn(`[bambu-cloud-relay] could not fetch the CSRF token: ${(error as Error).message}`)
-    return null
+    return {
+      ok: false,
+      response: {
+        status: 0,
+        body: null,
+        bodyText: `Could not obtain a security token from Bambu Cloud (${(error as Error).message}).`
+      }
+    }
   }
 }
 
@@ -205,6 +221,22 @@ function readSetCookies(response: Response): string[] {
   if (typeof headers.getSetCookie === 'function') return headers.getSetCookie()
   const single = response.headers.get('set-cookie')
   return single ? [single] : []
+}
+
+/** Reads the latest non-empty value of every response cookie without logging it. */
+function readResponseCookies(response: Response): Map<string, string> {
+  const cookies = new Map<string, string>()
+
+  for (const raw of readSetCookies(response)) {
+    const [pair] = raw.split(';')
+    const separator = pair?.indexOf('=') ?? -1
+    if (!pair || separator <= 0) continue
+    const name = pair.slice(0, separator).trim()
+    const value = pair.slice(separator + 1).trim()
+    if (name && value) cookies.set(name, value)
+  }
+
+  return cookies
 }
 
 async function executeRequest(
@@ -227,15 +259,29 @@ async function executeRequest(
     ...(prepared.body === undefined ? {} : { body: JSON.stringify(prepared.body) })
   }, signal)
 
+  return await readBambuCloudResponse(response)
+}
+
+/** Converts one fetch response into the bounded RPC response contract. */
+async function readBambuCloudResponse(response: Response): Promise<BridgeBambuCloudRequestResult> {
+  // A successful authenticator verification may place the credential only in
+  // `Set-Cookie: token=...`. Return that one secret to the authenticated API and
+  // discard the rest of the website session.
+  const tokenCookie = readResponseCookies(response).get('token')
   const text = await response.text()
-  if (!text.trim()) return { status: response.status, body: null }
+  if (!text.trim()) return { status: response.status, body: null, ...(tokenCookie ? { tokenCookie } : {}) }
   try {
-    return { status: response.status, body: JSON.parse(text) as unknown }
+    return { status: response.status, body: JSON.parse(text) as unknown, ...(tokenCookie ? { tokenCookie } : {}) }
   } catch {
     // Not JSON: a Cloudflare interstitial, an edge error page, or a plain-text
     // validation message. Keep a bounded excerpt so it is diagnosable from a log
     // without replaying the request; the API decides what it means.
-    return { status: response.status, body: null, bodyText: text.slice(0, BAMBU_CLOUD_BODY_TEXT_LIMIT) }
+    return {
+      status: response.status,
+      body: null,
+      bodyText: text.slice(0, BAMBU_CLOUD_BODY_TEXT_LIMIT),
+      ...(tokenCookie ? { tokenCookie } : {})
+    }
   }
 }
 

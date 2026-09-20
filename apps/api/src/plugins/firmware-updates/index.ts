@@ -241,7 +241,8 @@ export const firmwareUpdatesPlugin: ApiPlugin = {
       const currentVersion = status?.firmwareVersion ?? null
       const apiKey = resolveApiKey(printer.model)
       const versions = await source.listVersions(printer.model)
-      const latest = versions[0] ?? null
+      const latestPublished = versions[0] ?? null
+      const latest = versions.find((version) => Boolean(version.downloadUrl)) ?? null
       const updateAvailable = Boolean(
         latest && currentVersion && compareVersions(latest.version, currentVersion) > 0
       )
@@ -252,6 +253,7 @@ export const firmwareUpdatesPlugin: ApiPlugin = {
         online: status?.online ?? false,
         currentVersion,
         sdCardPresent: status?.sdCardPresent ?? null,
+        latestPublishedVersion: latestPublished?.version ?? null,
         latestVersion: latest?.version ?? null,
         updateAvailable,
         downloadUrl: latest?.downloadUrl || null,
@@ -575,6 +577,9 @@ interface UpdateReport {
   online: boolean
   currentVersion: string | null
   sdCardPresent: boolean | null
+  /** Newest release Bambu has announced, even when its package is not downloadable yet. */
+  latestPublishedVersion: string | null
+  /** Newest release Bambu currently provides as a downloadable offline package. */
   latestVersion: string | null
   updateAvailable: boolean
   downloadUrl: string | null

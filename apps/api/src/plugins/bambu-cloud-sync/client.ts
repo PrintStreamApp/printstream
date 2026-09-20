@@ -2,11 +2,12 @@
  * The typed Bambu cloud operations, and the one place that decides what a response
  * MEANS.
  *
- * Everything below the transport hands back a raw status and body on purpose (see
- * `transport.ts`), so this module owns the whole interpretation layer: which failures
- * are a dead credential, which are Bambu's edge refusing us, which are the account's
- * preset quota, and which are ordinary errors. Keeping that here means a change in
- * Bambu's error shapes is an API-side fix, with no bridge rollout.
+ * Everything below the transport hands back a raw status and body plus the access
+ * token Bambu sometimes places only in a response cookie (see `transport.ts`). This
+ * module owns the whole interpretation layer: which failures are a dead credential,
+ * which are Bambu's edge refusing us, which are the account's preset quota, and which
+ * are ordinary errors. Keeping that here means a change in Bambu's error shapes is an
+ * API-side fix, with no bridge rollout.
  *
  * **Failure posture.** Every function throws `BambuCloudError` with a `kind`, and no
  * caller may treat an unclassified failure as "the credential is dead", a stray edge
@@ -268,7 +269,10 @@ export async function verifyBambuCloudTotp(
   if (response.status === 0) {
     throw new BambuCloudError(response.bodyText ?? 'Could not reach Bambu Cloud to verify the code.', 'http', 0)
   }
-  return readIssuedToken(response, 'Bambu Cloud rejected that authenticator code.')
+  const failureMessage = response.status === 429 || response.status >= 500
+    ? 'Bambu Cloud could not verify that authenticator code.'
+    : 'Bambu Cloud rejected that authenticator code.'
+  return readIssuedToken(response, failureMessage)
 }
 
 /**
@@ -385,7 +389,9 @@ function readIssuedToken(response: BambuCloudResponse, failureMessage: string): 
   const body = asRecord(response.body)
   const token = typeof body.accessToken === 'string' && body.accessToken
     ? body.accessToken
-    : typeof body.token === 'string' && body.token ? body.token : null
+    : typeof body.token === 'string' && body.token
+      ? body.token
+      : response.tokenCookie ?? null
   if (!token) throw new BambuCloudError(readErrorMessage(body) ?? failureMessage, 'http', response.status)
   return readBambuCloudCredential(body, token)
 }

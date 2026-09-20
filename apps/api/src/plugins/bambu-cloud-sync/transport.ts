@@ -45,6 +45,10 @@ export interface BambuCloudCallResult {
   route: BambuCloudCallRoute
 }
 
+type CsrfTokenResult =
+  | { ok: true; token: string; cookie: string }
+  | { ok: false; response: BambuCloudResponse }
+
 /**
  * Runs one cloud call, preferring the workspace's bridge.
  *
@@ -110,13 +114,7 @@ export async function directBambuCloudRequest(
 
   if (request.request.operation === 'verifyTotp') {
     const csrf = await fetchCsrfToken(hosts.web, signal)
-    if (!csrf) {
-      return {
-        status: 0,
-        body: null,
-        bodyText: 'Could not obtain a security token from Bambu Cloud (GET /api/csrf returned no bbl_csrf_token).'
-      }
-    }
+    if (!csrf.ok) return csrf.response
     return await execute(
       `https://${hosts.web}/api/sign-in/tfa`,
       'POST',
@@ -160,31 +158,48 @@ export async function directBambuCloudRequest(
   }
 }
 
-async function fetchCsrfToken(webHost: string, signal?: AbortSignal): Promise<{ token: string; cookie: string } | null> {
+async function fetchCsrfToken(webHost: string, signal?: AbortSignal): Promise<CsrfTokenResult> {
   try {
     const url = assertSafeOutboundUrl(`https://${webHost}/api/csrf`, { allowedHosts: BAMBU_CLOUD_ALLOWED_HOSTS })
     const response = await fetchWithTimeout(url.toString(), {
       method: 'GET',
       headers: { 'user-agent': USER_AGENT, accept: 'application/json' }
     }, signal)
-    const headers = response.headers as Headers & { getSetCookie?: () => string[] }
-    const cookies = typeof headers.getSetCookie === 'function'
-      ? headers.getSetCookie()
-      : [response.headers.get('set-cookie')].filter((value): value is string => Boolean(value))
-    for (const raw of cookies) {
-      const [pair] = raw.split(';')
-      const separator = pair?.indexOf('=') ?? -1
-      if (!pair || separator < 0) continue
-      if (pair.slice(0, separator).trim() !== 'bbl_csrf_token') continue
-      const token = pair.slice(separator + 1).trim()
-      if (token) return { token, cookie: `bbl_csrf_token=${token}` }
+    const cookies = readResponseCookies(response)
+    const token = cookies.get('bbl_csrf_token')
+    if (!token) {
+      const failure = await readBambuCloudResponse(response)
+      if (failure.status >= 200 && failure.status < 300) {
+        return {
+          ok: false,
+          response: {
+            status: 0,
+            body: null,
+            bodyText: 'Could not obtain a security token from Bambu Cloud (GET /api/csrf returned no bbl_csrf_token).'
+          }
+        }
+      }
+      return { ok: false, response: failure }
     }
-    return null
+
+    // Bambu's web login is a real cookie-backed session, not just double-submit
+    // CSRF. Sending only bbl_csrf_token reaches the TOTP handler but it answers
+    // "Login failed" even for a valid code. Preserve every cookie minted by the
+    // CSRF response, while still echoing bbl_csrf_token in the required header.
+    const cookie = [...cookies].map(([name, value]) => `${name}=${value}`).join('; ')
+    return { ok: true, token, cookie }
   } catch (error) {
-    // Same reason as the bridge relay's copy: the caller reports "could not obtain a
-    // security token", which is right for the user but leaves the cause unrecorded.
+    // The response tells the user their code was not the problem. Log the safe transport
+    // cause so a failing TOTP sign-in is diagnosable without reproducing it.
     console.warn(`[bambu-cloud-sync] could not fetch the CSRF token: ${(error as Error).message}`)
-    return null
+    return {
+      ok: false,
+      response: {
+        status: 0,
+        body: null,
+        bodyText: `Could not obtain a security token from Bambu Cloud (${(error as Error).message}).`
+      }
+    }
   }
 }
 
@@ -205,17 +220,51 @@ async function execute(
     ...(body === undefined ? {} : { body: JSON.stringify(body) })
   }, signal)
 
+  return await readBambuCloudResponse(response)
+}
+
+/** Converts one fetch response into the bounded cross-process response contract. */
+async function readBambuCloudResponse(response: Response): Promise<BambuCloudResponse> {
+  // The TOTP web endpoint sometimes returns the credential only as `Set-Cookie:
+  // token=...`, with no token in its JSON body. Forward only that cookie's value,
+  // never the rest of the web session.
+  const tokenCookie = readResponseCookies(response).get('token')
   const text = await response.text()
-  if (!text.trim()) return { status: response.status, body: null }
+  if (!text.trim()) return { status: response.status, body: null, ...(tokenCookie ? { tokenCookie } : {}) }
   try {
-    return { status: response.status, body: JSON.parse(text) as unknown }
+    return { status: response.status, body: JSON.parse(text) as unknown, ...(tokenCookie ? { tokenCookie } : {}) }
   } catch {
     // Not JSON: a Cloudflare interstitial, an edge error page, or a plain-text validation
     // message. Keep a bounded excerpt so the caller can say what actually came back
     // instead of reporting a generic parse failure. Mirrors the bridge relay's handling
     // in `apps/bridge/src/bambu-cloud-relay.ts`.
-    return { status: response.status, body: null, bodyText: text.slice(0, BAMBU_CLOUD_BODY_TEXT_LIMIT) }
+    return {
+      status: response.status,
+      body: null,
+      bodyText: text.slice(0, BAMBU_CLOUD_BODY_TEXT_LIMIT),
+      ...(tokenCookie ? { tokenCookie } : {})
+    }
   }
+}
+
+/** Reads the latest non-empty value of every response cookie without logging it. */
+function readResponseCookies(response: Response): Map<string, string> {
+  const headers = response.headers as Headers & { getSetCookie?: () => string[] }
+  const setCookies = typeof headers.getSetCookie === 'function'
+    ? headers.getSetCookie()
+    : [response.headers.get('set-cookie')].filter((value): value is string => Boolean(value))
+  const cookies = new Map<string, string>()
+
+  for (const raw of setCookies) {
+    const [pair] = raw.split(';')
+    const separator = pair?.indexOf('=') ?? -1
+    if (!pair || separator <= 0) continue
+    const name = pair.slice(0, separator).trim()
+    const value = pair.slice(separator + 1).trim()
+    if (name && value) cookies.set(name, value)
+  }
+
+  return cookies
 }
 
 async function fetchWithTimeout(url: string, init: RequestInit, signal?: AbortSignal): Promise<Response> {

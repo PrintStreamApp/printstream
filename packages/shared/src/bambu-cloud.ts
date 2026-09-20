@@ -239,17 +239,27 @@ export const bambuCloudRequestSchema = z.object({
 export type BambuCloudRequest = z.infer<typeof bambuCloudRequestSchema>
 
 /**
- * What a relay reports back: the raw HTTP outcome, not a verdict.
+ * What a relay reports back: the raw HTTP outcome, plus the one credential Bambu
+ * sometimes returns only as a response cookie, never a policy verdict.
  *
  * The bridge deploys separately from the API and lags it, so it deliberately does NOT
  * interpret the response, every "is this token dead / is this a Cloudflare challenge /
  * did this succeed" rule lives API-side, where it can be fixed by an API deploy alone.
- * The bridge's only job is to make the call and hand back what came out.
+ * The bridge's only job is to make the call and hand back what came out. Extracting
+ * `tokenCookie` is transport normalization: cookie headers cannot otherwise cross the
+ * RPC boundary, and the API still decides whether the response succeeded.
  */
 export const bambuCloudResponseSchema = z.object({
   status: z.number().int(),
   /** Parsed JSON body, or null when the response was not JSON (an HTML challenge page). */
   body: z.unknown().nullable(),
+  /**
+   * Access token Bambu returned only in its `token` response cookie. The TOTP web
+   * endpoint does not consistently echo this token in the JSON body. This is a secret:
+   * the relay may return it to the authenticated API but must never log or persist it;
+   * the API converts it into the normal encrypted credential immediately.
+   */
+  tokenCookie: z.string().min(1).max(8192).optional(),
   /**
    * The first part of a non-JSON body, so an unparseable response is diagnosable from
    * a log without replaying it. Truncated because a challenge page is large and this

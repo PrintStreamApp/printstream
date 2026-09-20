@@ -8,6 +8,7 @@ import {
   listBambuCloudSettings,
   readBambuCloudCredential,
   refreshBambuCloudCredential,
+  verifyBambuCloudTotp,
   type CallContext
 } from './client.js'
 import type { PluginLogger } from '../../plugin/types.js'
@@ -15,7 +16,7 @@ import type { PluginLogger } from '../../plugin/types.js'
 const logger: PluginLogger = { info: () => {}, warn: () => {}, error: () => {} }
 
 /** A context whose transport answers with one scripted response. */
-function contextReturning(response: { status: number; body?: unknown; bodyText?: string }): CallContext {
+function contextReturning(response: { status: number; body?: unknown; bodyText?: string; tokenCookie?: string }): CallContext {
   return {
     workspaceId: 'workspace-1',
     logger,
@@ -172,6 +173,43 @@ test('a login response yields the whole credential, not just the access token', 
   // live account, Bambu expires BOTH at the same instant (90 days), which is exactly why
   // renewal is scheduled as a fraction of the lifetime rather than just before expiry.
   assert.equal(Date.parse(credential.refreshExpiresAt ?? ''), Date.parse(credential.expiresAt ?? '') + (2_592_000 - 3600) * 1000)
+})
+
+test('TOTP accepts the access token Bambu returns only as a response cookie', async () => {
+  const credential = await verifyBambuCloudTotp(
+    contextReturning({ status: 200, body: {}, tokenCookie: 'cookie-token' }),
+    'global',
+    'challenge-key',
+    '123456'
+  )
+
+  assert.equal(credential.accessToken, 'cookie-token')
+})
+
+test('TOTP reports a CSRF-step Cloudflare challenge as temporary', async () => {
+  const error = await captureError(() => verifyBambuCloudTotp(
+    contextReturning({ status: 403, body: null, bodyText: '<html><title>Just a moment...</title></html>' }),
+    'global',
+    'challenge-key',
+    '123456'
+  ))
+
+  assert.equal(error.kind, 'challenge')
+  assert.equal(error.statusCode, 503)
+  assert.match(error.message, /temporarily blocking/i)
+})
+
+test('a TOTP upstream outage does not blame the authenticator code', async () => {
+  const error = await captureError(() => verifyBambuCloudTotp(
+    contextReturning({ status: 502, body: null, bodyText: 'Bad gateway' }),
+    'global',
+    'challenge-key',
+    '123456'
+  ))
+
+  assert.equal(error.statusCode, 502)
+  assert.match(error.message, /could not verify/i)
+  assert.doesNotMatch(error.message, /rejected/i)
 })
 
 test('a token response that states no lifetime degrades to unknown, not to a broken sign-in', () => {
