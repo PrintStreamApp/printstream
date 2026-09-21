@@ -1,6 +1,14 @@
 {
   "releases": [
     {
+      "version": "1.3.10",
+      "releasedOn": "2026-09-21",
+      "changes": [
+        "Windows app startup and passkey registration are more reliable, including saving new passkeys to Windows Hello on this device.",
+        "MakerWorld browsing in the desktop and Android apps now defaults to Download 3MF, and Android no longer prompts you to install Bambu Handy."
+      ]
+    },
+    {
       "version": "1.3.9",
       "releasedOn": "2026-09-21",
       "changes": [
