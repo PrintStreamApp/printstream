@@ -22,6 +22,7 @@ test('allows blob:/data: images and media for camera frames and thumbnails', () 
 const PADDLE = 'https://*.paddle.com'
 const CF_INSIGHTS_SCRIPT = 'https://static.cloudflareinsights.com'
 const CF_INSIGHTS_BEACON = 'https://cloudflareinsights.com'
+const PRINTSTREAM_CLOUD = 'https://printstream.app'
 // Apex + wildcard per host: `*.example.com` does not cover the apex in CSP, but
 // `sanitizeRemoteImportThumbnailUrl` accepts it, so both forms must be listed.
 const PROVIDER_IMAGES = [
@@ -41,14 +42,14 @@ test('locks down the high-value directives', () => {
   assert.deepEqual(directives.get('form-action'), ["'self'"])
 })
 
-test('cross-origin allow-list is exactly Paddle checkout + Cloudflare insights + provider images', () => {
+test('cross-origin allow-list is exactly the required product services and provider images', () => {
   // The cloud checkout needs Paddle.js + its iframe/APIs, Cloudflare's
   // edge-injected Web Analytics beacon needs its script + measurement hosts, and
   // remote-import candidate cards need the model providers' cover images.
   // Nothing else may be cross-origin.
   const expected: Record<string, string[]> = {
     'script-src': [PADDLE, CF_INSIGHTS_SCRIPT],
-    'connect-src': [PADDLE, CF_INSIGHTS_BEACON],
+    'connect-src': [PADDLE, CF_INSIGHTS_BEACON, PRINTSTREAM_CLOUD],
     'frame-src': [PADDLE],
     'img-src': [PADDLE, ...PROVIDER_IMAGES],
     'style-src': [PADDLE]

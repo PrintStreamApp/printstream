@@ -17,7 +17,7 @@ type BrowserAssistPanelProps = {
  *
  * Two audiences, and the difference matters: someone running the companion browser
  * helper gets the handoff instructions, while someone without it is told plainly that
- * this site is not importable yet and what to do instead. The helper is not pitched or
+ * this browser cannot capture it and what to do instead. The helper is not pitched or
  * linked to anyone: see `browserAssistState.ts` for why.
  *
  * It stands in for `RemoteImportsView`'s generic resolution alert for these URLs (that
@@ -39,10 +39,10 @@ export function BrowserAssistPanel({ extensionDetected, providerLabel }: Browser
     >
       <Stack spacing={0.5}>
         <Typography level="title-sm">
-          {detected ? `${providerLabel} model page` : `${providerLabel} pages cannot be imported yet`}
+          {detected ? `${providerLabel} model page` : `Use a PrintStream app or download manually`}
         </Typography>
         <Typography level="body-sm">
-          {providerLabel} does not publish a file link PrintStream can download on its own.
+          {providerLabel} does not publish a file link the PrintStream server can download on its own.
         </Typography>
         {statusCopy && <Typography level="body-sm">{statusCopy.message}</Typography>}
       </Stack>

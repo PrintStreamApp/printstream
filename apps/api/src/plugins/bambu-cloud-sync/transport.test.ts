@@ -138,6 +138,108 @@ test('the direct path pins every host to Bambu and carries the bearer token', as
   assert.equal(calls[0]?.headers.authorization, 'Bearer secret-token')
 })
 
+test('MakerWorld metadata uses the workspace bridge instead of shared server egress', async () => {
+  stubBridges([{ id: 'bridge-1', connected: true }])
+  const requestRpc = mock.method(bridgeSessionManager, 'requestRpc', async () => ({ status: 200, body: { id: 42 } }))
+  const calls = stubFetch(() => ({ body: '{}' }))
+
+  const result = await performBambuCloudCall(
+    WORKSPACE_ID,
+    { region: 'global', accessToken: 'token', request: { operation: 'getMakerWorldDesign', designId: 42 } },
+    logger
+  )
+
+  assert.equal(result.route, 'bridge')
+  assert.equal(calls.length, 0)
+  assert.equal(requestRpc.mock.calls[0]?.arguments[1], 'bambu.cloud.request')
+})
+
+test('a one-off bridge challenge is retried once on the same bridge', async () => {
+  stubBridges([{ id: 'bridge-1', connected: true }])
+  let attempt = 0
+  const requestRpc = mock.method(bridgeSessionManager, 'requestRpc', async () => {
+    attempt += 1
+    return attempt === 1
+      ? { status: 403, body: null, bodyText: '<html><title>Just a moment...</title></html>' }
+      : { status: 200, body: { id: 42 } }
+  })
+  const calls = stubFetch(() => ({ body: '{}' }))
+
+  const result = await performBambuCloudCall(
+    WORKSPACE_ID,
+    { region: 'global', accessToken: 'token', request: { operation: 'getMakerWorldDesign', designId: 42 } },
+    logger,
+    undefined,
+    { waitBeforeChallengeRetry: async () => {} }
+  )
+
+  assert.equal(result.route, 'bridge')
+  assert.equal(requestRpc.mock.callCount(), 2)
+  assert.equal(calls.length, 0)
+  assert.equal(logged.some((line) => line.includes('retrying once')), true)
+})
+
+test('a persistent bridge challenge stops after one retry', async () => {
+  stubBridges([{ id: 'bridge-1', connected: true }])
+  const requestRpc = mock.method(bridgeSessionManager, 'requestRpc', async () => ({
+    status: 403,
+    body: null,
+    bodyText: '<html><title>Just a moment...</title></html>'
+  }))
+
+  const result = await performBambuCloudCall(
+    WORKSPACE_ID,
+    { region: 'global', accessToken: 'token', request: { operation: 'getMakerWorldDesign', designId: 42 } },
+    logger,
+    undefined,
+    { waitBeforeChallengeRetry: async () => {} }
+  )
+
+  assert.equal(result.route, 'bridge')
+  assert.equal(result.response.status, 403)
+  assert.equal(requestRpc.mock.callCount(), 2)
+})
+
+test('a preset mutation is never replayed after an ambiguous challenge response', async () => {
+  stubBridges([{ id: 'bridge-1', connected: true }])
+  const requestRpc = mock.method(bridgeSessionManager, 'requestRpc', async () => ({
+    status: 503,
+    body: null
+  }))
+
+  const result = await performBambuCloudCall(
+    WORKSPACE_ID,
+    {
+      region: 'global',
+      accessToken: 'token',
+      request: {
+        operation: 'createSetting',
+        payload: { type: 'filament', name: 'My PLA', version: '1.0.0.0', base_id: 'GFSA00', setting: {} }
+      }
+    },
+    logger,
+    undefined,
+    { waitBeforeChallengeRetry: async () => {} }
+  )
+
+  assert.equal(result.response.status, 503)
+  assert.equal(requestRpc.mock.callCount(), 1)
+})
+
+test('the MakerWorld direct fallback pins its host and sends the web client identity', async () => {
+  const calls = stubFetch(() => ({ body: '{}' }))
+
+  await directBambuCloudRequest({
+    region: 'global',
+    accessToken: 'secret-token',
+    request: { operation: 'getMakerWorldDownloadTarget', instanceId: 99 }
+  })
+
+  assert.equal(calls[0]?.url, 'https://makerworld.com/api/v1/design-service/instance/99/f3mf')
+  assert.equal(calls[0]?.headers.authorization, 'Bearer secret-token')
+  assert.equal(calls[0]?.headers['x-bbl-app-source'], 'makerworld')
+})
+
 test('the China region reaches its own hosts on the direct path too', async () => {
   // The bridge relay has its own copy of this mapping; both sides must agree, and this
   // is the half that would silently send a China account to the global host.

@@ -23,7 +23,7 @@ function useImportPath(search = ''): string {
   return workspaceSlug ? buildWorkspacePath(workspaceSlug, path) : path
 }
 
-/** Library Upload menu: bring a file in from a URL. */
+/** Library Upload menu: bring a file in from a model site or direct URL. */
 export function LibraryImportMenuAction(props: Record<string, unknown>) {
   const bridgeId = typeof props.bridgeId === 'string' ? props.bridgeId : null
   // Carry the toolbar's current bridge so the view opens pointed where the user was.
@@ -32,7 +32,7 @@ export function LibraryImportMenuAction(props: Record<string, unknown>) {
   return (
     <MenuItem component={RouterLink} to={to}>
       <ListItemDecorator><CloudDownloadRoundedIcon /></ListItemDecorator>
-      Import from URL…
+      Import from web…
     </MenuItem>
   )
 }
@@ -49,7 +49,7 @@ export function PrinterImportMenuAction() {
   return (
     <MenuItem component={RouterLink} to={to}>
       <ListItemDecorator><CloudDownloadRoundedIcon /></ListItemDecorator>
-      Print from URL…
+      Print from web…
     </MenuItem>
   )
 }

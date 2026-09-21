@@ -14,18 +14,25 @@
  * connection. The direct path exists because a workspace may have no bridge, its
  * bridge may be offline, or it may be too old to know the method.
  *
+ * A Cloudflare interstitial is retried exactly once after a short pause. Live account
+ * connection and MakerWorld import attempts have both succeeded on the immediate next
+ * try; one bounded retry hides that edge blip without turning rejection into a loop.
+ *
  * Counterpart: `apps/bridge/src/bambu-cloud-relay.ts`.
  */
 import {
   BAMBU_CLOUD_ALLOWED_HOSTS,
   BAMBU_CLOUD_BODY_TEXT_LIMIT,
+  BAMBU_MAKERWORLD_CLIENT_HEADERS,
   BAMBU_SLICER_API_VERSION,
   bambuCloudHosts,
   bambuCloudResponseSchema,
+  isBambuCloudChallengeResponse,
   isUnsupportedBridgeRpcError,
   type BambuCloudRequest,
   type BambuCloudResponse
 } from '@printstream/shared'
+import { setTimeout as delay } from 'node:timers/promises'
 import { bridgeSessionManager } from '../../lib/bridge-session-manager.js'
 import { assertSafeOutboundUrl } from '../../lib/outbound-url-guard.js'
 import { rootPrisma } from '../../lib/prisma.js'
@@ -36,6 +43,12 @@ const USER_AGENT = 'PrintStream/1.0 (+https://printstream.app)'
 const REQUEST_TIMEOUT_MS = 20_000
 /** Generous: the relay's own HTTP timeout is 20s and the RPC has to outlive it. */
 const BRIDGE_RPC_TIMEOUT_MS = 30_000
+const CHALLENGE_RETRY_DELAY_MS = 1_500
+
+interface BambuCloudCallDeps {
+  /** Tests replace the pause; production waits long enough for a request-scoped challenge to clear. */
+  waitBeforeChallengeRetry?: (signal?: AbortSignal) => Promise<void>
+}
 
 export type BambuCloudCallRoute = 'bridge' | 'direct'
 
@@ -62,18 +75,28 @@ export async function performBambuCloudCall(
   workspaceId: string,
   request: BambuCloudRequest,
   logger: PluginLogger,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  deps: BambuCloudCallDeps = {}
 ): Promise<BambuCloudCallResult> {
+  const waitBeforeChallengeRetry = deps.waitBeforeChallengeRetry ?? waitForChallengeRetry
   const bridgeId = await findConnectedBridgeId(workspaceId)
   if (bridgeId) {
     try {
-      const result = await bridgeSessionManager.requestRpc<unknown>(
-        bridgeId,
-        'bambu.cloud.request',
-        request,
-        { timeoutMs: BRIDGE_RPC_TIMEOUT_MS }
-      )
-      return { response: bambuCloudResponseSchema.parse(result), route: 'bridge' }
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const result = await bridgeSessionManager.requestRpc<unknown>(
+          bridgeId,
+          'bambu.cloud.request',
+          request,
+          { timeoutMs: BRIDGE_RPC_TIMEOUT_MS }
+        )
+        const response = bambuCloudResponseSchema.parse(result)
+        if (attempt === 0 && shouldRetryChallenge(request, response)) {
+          logger.info('Bambu cloud call hit a temporary challenge via bridge; retrying once.')
+          await waitBeforeChallengeRetry(signal)
+          continue
+        }
+        return { response, route: 'bridge' }
+      }
     } catch (error) {
       const reason = isUnsupportedBridgeRpcError(error)
         ? 'the bridge is too old to relay Bambu cloud calls'
@@ -82,7 +105,49 @@ export async function performBambuCloudCall(
     }
   }
 
-  return { response: await directBambuCloudRequest(request, signal), route: 'direct' }
+  let response = await directBambuCloudRequest(request, signal)
+  if (shouldRetryChallenge(request, response)) {
+    logger.info('Bambu cloud call hit a temporary challenge via direct server call; retrying once.')
+    await waitBeforeChallengeRetry(signal)
+    response = await directBambuCloudRequest(request, signal)
+  }
+  return { response, route: 'direct' }
+}
+
+/** Waits between the one permitted challenge retry and respects request cancellation. */
+async function waitForChallengeRetry(signal?: AbortSignal): Promise<void> {
+  await delay(CHALLENGE_RETRY_DELAY_MS, undefined, signal ? { signal } : undefined)
+}
+
+/**
+ * Retries reads whenever the response classifies as a challenge. Sign-in POSTs are
+ * retried only for an unmistakable Cloudflare HTML page, which proves the request
+ * stopped at the edge. Preset writes and token rotation are never replayed because a
+ * body-less 503 cannot prove whether Bambu applied the mutation before responding.
+ */
+function shouldRetryChallenge(request: BambuCloudRequest, response: BambuCloudResponse): boolean {
+  if (!isBambuCloudChallengeResponse(response)) return false
+
+  switch (request.request.operation) {
+    case 'listSettings':
+    case 'getSetting':
+    case 'getMakerWorldDesign':
+    case 'getMakerWorldDownloadTarget':
+      return true
+    case 'login':
+    case 'verifyEmailCode':
+    case 'verifyTotp':
+      return /Just a moment|challenges\.cloudflare/i.test(response.bodyText ?? '')
+    case 'createSetting':
+    case 'patchSetting':
+    case 'deleteSetting':
+    case 'refreshToken':
+      return false
+    default: {
+      const unhandled: never = request.request
+      throw new Error(`Unsupported Bambu cloud operation: ${(unhandled as { operation: string }).operation}`)
+    }
+  }
 }
 
 /**
@@ -144,6 +209,22 @@ export async function directBambuCloudRequest(
       return await execute(`${settingBase}/${encodeURIComponent(request.request.settingId)}${versionQuery}`, 'PATCH', request.request.payload, authHeaders, signal)
     case 'deleteSetting':
       return await execute(`${settingBase}/${encodeURIComponent(request.request.settingId)}${versionQuery}`, 'DELETE', undefined, authHeaders, signal)
+    case 'getMakerWorldDesign':
+      return await execute(
+        `https://${hosts.makerWorld}/api/v1/design-service/design/${request.request.designId}`,
+        'GET',
+        undefined,
+        { ...authHeaders, ...BAMBU_MAKERWORLD_CLIENT_HEADERS },
+        signal
+      )
+    case 'getMakerWorldDownloadTarget':
+      return await execute(
+        `https://${hosts.makerWorld}/api/v1/design-service/instance/${request.request.instanceId}/f3mf`,
+        'GET',
+        undefined,
+        { ...authHeaders, ...BAMBU_MAKERWORLD_CLIENT_HEADERS },
+        signal
+      )
     case 'refreshToken':
       // No auth header on purpose: the access token this would carry is the expired one.
       return await execute(`https://${hosts.api}/v1/user-service/user/refreshtoken`, 'POST', { refreshToken: request.request.refreshToken }, {}, signal)

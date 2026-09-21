@@ -21,6 +21,7 @@
  * to whatever it can do unauthenticated. A resolver that throws is treated as "no
  * credential" so one plugin's failure cannot break another.
  */
+import type { BambuCloudResponse, MakerWorldCloudOperation } from '@printstream/shared'
 
 /** A workspace's connected Bambu Lab account, as far as a consuming plugin needs it. */
 export interface BambuAccountCredential {
@@ -38,6 +39,11 @@ export interface BambuAccountCredential {
    * with it runs under one member's account and the UI should say whose.
    */
   accountLabel: string
+  /**
+   * Runs one fixed MakerWorld operation through the workspace's bridge when possible.
+   * The caller supplies ids, never a URL, so this cannot become an SSRF proxy.
+   */
+  requestMakerWorld?: (request: MakerWorldCloudOperation) => Promise<BambuCloudResponse>
 }
 
 export interface BambuAccountQuery {

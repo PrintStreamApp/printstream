@@ -7,6 +7,7 @@ import LabelIcon from '@mui/icons-material/LabelOutlined'
 import { useCallback, useDeferredValue, useEffect, useMemo, useState, type ComponentProps } from 'react'
 import { Alert, Box, Button, CircularProgress, Divider, FormControl, ListItemDecorator, MenuItem, Option, Select, Sheet, Stack, Typography } from '@mui/joy'
 import FolderCopyRoundedIcon from '@mui/icons-material/FolderCopyRounded'
+import UploadFileRoundedIcon from '@mui/icons-material/UploadFileRounded'
 import AddIcon from '@mui/icons-material/Add'
 import HistoryRoundedIcon from '@mui/icons-material/HistoryRounded'
 import QueryStatsRoundedIcon from '@mui/icons-material/QueryStatsRounded'
@@ -60,7 +61,6 @@ import { HISTORY_RESULTS, OVERVIEW_VIEW_LABEL, DEFAULT_PRINTER_CARD_CONTENT_SETT
 import { EMPTY_PRINTERS, EMPTY_PRINT_JOBS, EMPTY_PRINTER_VIEWS, HISTORY_PAGE_SIZE_OPTIONS, HISTORY_SORT_OPTIONS, PRINTER_HISTORY_VIEW_MODE_KEY, PRINTER_HISTORY_SORT_DIR_KEY, PRINTER_HISTORY_RESULT_FILTER_KEY, PRINTER_HISTORY_PAGE_SIZE_KEY, OVERVIEW_VIEW_OPTION_VALUE, NEW_VIEW_OPTION_VALUE, PUBLIC_DEMO_PRINTER_MUTATION_NOTICE, showDemoPrinterMutationNotice, showDemoFileUploadNotice, DEFAULT_SINGLE_PRINTER_CARD_CONTENT_SETTINGS } from '../lib/printerViewConstants'
 import { PrinterHistoryCard, PrinterStatsCardGrid } from '../components/printers/PrinterSummaryCards'
 import { PluginSlot } from '../plugin/PluginSlot'
-import { usePluginSlots } from '../plugin/usePluginSlots'
 import { SplitButton } from '../components/SplitButton'
 import { PrinterCard } from '../components/printers/PrinterCard'
 import { PrinterSortModal, PrinterViewsModal } from '../components/printers/PrinterViewModals'
@@ -69,6 +69,7 @@ import { PrinterFormModal, LocalFilePrintGate, type PrinterFormValues } from '..
 import { PrinterOverviewToolbar } from '../components/printers/PrinterOverviewToolbar'
 import { LibraryPickerModal } from '../components/printers/LibraryPickerModal'
 import { ListSkeleton } from '../components/ListSkeleton'
+import { PrinterPickerDialog } from '../components/PrinterPickerDialog'
 
 type SliceFlowSubmitInput = Parameters<ComponentProps<typeof SliceFileModal>['onSubmit']>[0]
 type SliceFlowSubmitAction = Parameters<ComponentProps<typeof SliceFileModal>['onSubmit']>[1]
@@ -163,17 +164,11 @@ export function PrintersView() {
     (printer: Printer) => navigate(workspacePath(`/printers/${printer.id}`)),
     [navigate, workspacePath]
   )
-  // Page-level Print flow (button next to "Add printer"). Mirrors the
-  // per-card library flow but with no preselected printer - the user picks
-  // one in the subsequent PrintModal. "Print from local file" is still absent
-  // here (it needs a printer up front, since the upload targets that printer's
-  // bridge), but plugins can contribute further sources through the
-  // `printers.print.menu` slot, so this is a split button whose menu collapses
-  // to a plain button when nothing contributes.
+  // Page-level Print flow (button next to "Add printer"). Library files can
+  // defer machine selection to PrintModal. A local upload first uses the shared
+  // printer picker because bridge-owned storage needs a destination up front.
   const [pageLibraryPickerOpen, setPageLibraryPickerOpen] = useState(false)
-  // Decides the Print control's SHAPE, so it has to be known before render, an empty
-  // split-button menu is a caret that opens nothing.
-  const hasPrintSourcePlugins = usePluginSlots('printers.print.menu').length > 0
+  const [pageLocalPrinterPickerOpen, setPageLocalPrinterPickerOpen] = useState(false)
   const [sortDialogOpen, setSortDialogOpen] = useState(false)
   const [printerViewsDialogOpen, setPrinterViewsDialogOpen] = useState(false)
   const [printerViewsDialogMode, setPrinterViewsDialogMode] = useState<'settings' | 'create'>('settings')
@@ -933,32 +928,25 @@ export function PrintersView() {
               )}
               {canDispatchPrints && <Divider orientation="vertical" sx={{ alignSelf: 'stretch', mx: 0.25 }} />}
               {canDispatchPrints && (
-                hasPrintSourcePlugins ? (
-                  <SplitButton
-                    size="sm"
-                    label="Print"
-                    ariaLabel="print"
-                    menuAriaLabel="More print sources"
-                    startDecorator={<PrintRoundedIcon />}
-                    onClick={() => setPageLibraryPickerOpen(true)}
-                    groupSx={{ flex: '0 0 auto', minWidth: 0 }}
-                  >
-                    <MenuItem onClick={() => setPageLibraryPickerOpen(true)}>
-                      <ListItemDecorator><FolderCopyRoundedIcon /></ListItemDecorator>
-                      Print from library…
-                    </MenuItem>
-                    <PluginSlot name="printers.print.menu" />
-                  </SplitButton>
-                ) : (
-                  <Button
-                    size="sm"
-                    onClick={() => setPageLibraryPickerOpen(true)}
-                    startDecorator={<PrintRoundedIcon />}
-                    sx={{ flex: '0 0 auto', minWidth: 0 }}
-                  >
-                    Print
-                  </Button>
-                )
+                <SplitButton
+                  size="sm"
+                  label="Print"
+                  ariaLabel="print"
+                  menuAriaLabel="More print sources"
+                  startDecorator={<PrintRoundedIcon />}
+                  onClick={() => setPageLibraryPickerOpen(true)}
+                  groupSx={{ flex: '0 0 auto', minWidth: 0 }}
+                >
+                  <MenuItem onClick={() => setPageLibraryPickerOpen(true)}>
+                    <ListItemDecorator><FolderCopyRoundedIcon /></ListItemDecorator>
+                    Print from library…
+                  </MenuItem>
+                  <MenuItem onClick={() => setPageLocalPrinterPickerOpen(true)}>
+                    <ListItemDecorator><UploadFileRoundedIcon /></ListItemDecorator>
+                    Print from local file…
+                  </MenuItem>
+                  <PluginSlot name="printers.print.menu" />
+                </SplitButton>
               )}
             </Stack>
             <Stack
@@ -979,32 +967,25 @@ export function PrintersView() {
                 </Button>
               )}
               {canDispatchPrints && (
-                hasPrintSourcePlugins ? (
-                  <SplitButton
-                    size="sm"
-                    label="Print"
-                    ariaLabel="print"
-                    menuAriaLabel="More print sources"
-                    startDecorator={<PrintRoundedIcon />}
-                    onClick={() => setPageLibraryPickerOpen(true)}
-                    groupSx={{ flex: '0 0 auto', minWidth: 0 }}
-                  >
-                    <MenuItem onClick={() => setPageLibraryPickerOpen(true)}>
-                      <ListItemDecorator><FolderCopyRoundedIcon /></ListItemDecorator>
-                      Print from library…
-                    </MenuItem>
-                    <PluginSlot name="printers.print.menu" />
-                  </SplitButton>
-                ) : (
-                  <Button
-                    size="sm"
-                    onClick={() => setPageLibraryPickerOpen(true)}
-                    startDecorator={<PrintRoundedIcon />}
-                    sx={{ flex: '0 0 auto', minWidth: 0 }}
-                  >
-                    Print
-                  </Button>
-                )
+                <SplitButton
+                  size="sm"
+                  label="Print"
+                  ariaLabel="print"
+                  menuAriaLabel="More print sources"
+                  startDecorator={<PrintRoundedIcon />}
+                  onClick={() => setPageLibraryPickerOpen(true)}
+                  groupSx={{ flex: '0 0 auto', minWidth: 0 }}
+                >
+                  <MenuItem onClick={() => setPageLibraryPickerOpen(true)}>
+                    <ListItemDecorator><FolderCopyRoundedIcon /></ListItemDecorator>
+                    Print from library…
+                  </MenuItem>
+                  <MenuItem onClick={() => setPageLocalPrinterPickerOpen(true)}>
+                    <ListItemDecorator><UploadFileRoundedIcon /></ListItemDecorator>
+                    Print from local file…
+                  </MenuItem>
+                  <PluginSlot name="printers.print.menu" />
+                </SplitButton>
               )}
             </Stack>
           </Stack>
@@ -1644,6 +1625,24 @@ export function PrintersView() {
           }}
           onClose={closePrintFlow}
           onBack={pickerForPrinter || pageLibraryPickerOpen ? goBackFromPrintFlow : undefined}
+        />
+      )}
+
+      {pageLocalPrinterPickerOpen && (
+        <PrinterPickerDialog
+          open
+          title="Choose a printer for the local file"
+          entries={printers.map((printer) => ({
+            printer,
+            disabledReason: printer.bridgeId ? undefined : 'Assign this printer to a bridge first.'
+          }))}
+          selectedPrinterId={null}
+          onClose={() => setPageLocalPrinterPickerOpen(false)}
+          onSelect={(printer) => {
+            if (!printer) return
+            if (demoMode) showDemoFileUploadNotice()
+            setLocalFileForPrinter(printer)
+          }}
         />
       )}
 

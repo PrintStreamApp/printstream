@@ -1,11 +1,10 @@
 /**
  * Bambu Cloud preset sync (built-in plugin, API side).
  *
- * Keeps a workspace's slicing presets in step with the preset library on a Bambu Lab
- * account, both ways: what is newer in the cloud is pulled down, what changed here is
- * pushed up, and a preset the user explicitly confirms removing is deleted there too.
- * The engine and its conflict rules live in `sync.ts`; this file owns the HTTP surface
- * and the sign-in flow.
+ * Owns a workspace's Bambu Lab credential. It keeps slicing presets in step with the
+ * account's preset library and exposes the narrow account resolver used by the remote-imports
+ * plugin for user-requested MakerWorld downloads. The preset engine and its conflict rules live
+ * in `sync.ts`; this file owns the HTTP surface, sign-in flow, and cross-plugin credential seam.
  *
  * **Presets are never polled.** What is outstanding is worked out only when a person opens
  * a surface that uses presets (a cached check) or presses Sync: see `CHECK_CACHE_TTL_MS`.
@@ -50,6 +49,7 @@ import {
   verifyBambuCloudTotp
 } from './client.js'
 import { checkBambuCloudSync, resolvePendingDeletion, runBambuCloudSync } from './sync.js'
+import { performBambuCloudCall } from './transport.js'
 import {
   clearConnection,
   clearPresetBindings,
@@ -126,7 +126,7 @@ const resolveDeleteRequestSchema = z.object({
 export const bambuCloudSyncPlugin: ApiPlugin = {
   name: PLUGIN_NAME,
   version: '1.0.0',
-  description: 'Sync slicing presets with a Bambu Lab account, both ways.',
+  description: 'Use a Bambu Lab account for MakerWorld imports and two-way slicing preset sync.',
   runtimeSurfaces: ['workspace'],
   managerSurfaces: ['platform', 'workspace'],
 
@@ -331,8 +331,8 @@ export const bambuCloudSyncPlugin: ApiPlugin = {
     })
 
     // Publish the workspace's connection to the core seam other built-in plugins read
-    // (`lib/bambu-account-registry.ts`). Consumers gate on their own explicit opt-in;
-    // connecting an account here is consent to sync presets, nothing more. An expired
+    // (`lib/bambu-account-registry.ts`). Consumers own their own action and policy gates;
+    // remote-imports uses it only when someone requests a MakerWorld import. An expired
     // credential resolves to null rather than handing out a token that will 401.
     context.registerBambuAccountResolver(async ({ workspaceId }) => {
       const connection = await readConnection(context.settings.forWorkspace(workspaceId), logger)
@@ -341,7 +341,20 @@ export const bambuCloudSyncPlugin: ApiPlugin = {
       return {
         accessToken: connection.accessToken,
         region: connection.region,
-        accountLabel: connection.account
+        accountLabel: connection.account,
+        requestMakerWorld: async (operation) => {
+          const result = await performBambuCloudCall(
+            workspaceId,
+            { region: connection.region, accessToken: connection.accessToken, request: operation },
+            logger
+          )
+          if (result.response.status < 200 || result.response.status >= 300) {
+            logger.warn(
+              `MakerWorld ${operation.operation} returned HTTP ${result.response.status} via ${result.route}.`
+            )
+          }
+          return result.response
+        }
       }
     })
 

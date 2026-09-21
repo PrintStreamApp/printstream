@@ -520,6 +520,34 @@ export function LibraryView() {
   }, [])
 
   /**
+   * Create the normal hidden project scaffold, then import one library model
+   * into it. This is the route-level counterpart to the model action's
+   * "Add to new 3MF" command and preserves the same discard behavior.
+   */
+  const openImportedModelInStudio = useCallback(async (libraryFileId: string) => {
+    if (createSlots.length === 0) {
+      toast.error('Model Studio is not enabled for this workspace.')
+      return
+    }
+    try {
+      const { file } = await apiFetch<{ file: { id: string; name: string } }>('/api/editor/new-project', {
+        method: 'POST',
+        body: { bridgeId: activeBridgeId, folderId: currentFolderId }
+      })
+      await openSliceForSavedFile(file, {
+        initialImportFileId: libraryFileId,
+        onDiscard: () => {
+          void apiFetch(`/api/editor/scaffold/${file.id}/discard`, { method: 'POST' }).catch((error: unknown) => {
+            console.warn(`[model-studio] could not discard the abandoned project scaffold ${file.id}`, error)
+          })
+        }
+      })
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not open the imported model in Model Studio.')
+    }
+  }, [activeBridgeId, createSlots.length, currentFolderId, openSliceForSavedFile])
+
+  /**
    * Deep link into the slice/print flow: `?slice=<fileId>&sliceFlow=print`.
    *
    * Exists so a surface that produces a file elsewhere, today the remote-import view,
@@ -538,6 +566,18 @@ export function LibraryView() {
     setSearchParams(next, { replace: true })
     void openSliceForSavedFile({ id: requestedSliceFileId, name: '' }, { flow: requestedSliceFlow })
   }, [requestedSliceFileId, requestedSliceFlow, searchParams, setSearchParams, openSliceForSavedFile])
+
+  // A native provider's slicer action means "edit this model", including STL
+  // and geometry-only 3MF files which cannot themselves host the full editor.
+  // Consume the instruction once, then use the library's normal scaffold flow.
+  const requestedStudioImportFileId = searchParams.get('studioImport')?.trim() || null
+  useEffect(() => {
+    if (!requestedStudioImportFileId) return
+    const next = new URLSearchParams(searchParams)
+    next.delete('studioImport')
+    setSearchParams(next, { replace: true })
+    void openImportedModelInStudio(requestedStudioImportFileId)
+  }, [requestedStudioImportFileId, searchParams, setSearchParams, openImportedModelInStudio])
 
   // Uploads run through the module-level queue (lib/libraryUploadQueue), which
   // reports progress in a global toast and keeps draining after this view

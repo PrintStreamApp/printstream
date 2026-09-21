@@ -9,8 +9,9 @@
  *   images are rendered from `blob:`/`data:` object URLs built off WebSocket JPEG
  *   frames and proxied MJPEG/snapshot bytes (the case the old "CSP off" comment
  *   worried about). These are allowed; everything else cross-origin is not.
- * - `connect-src 'self'`: HTTP + same-origin WebSocket; blocks exfiltration of
- *   data to an attacker-controlled host, the usual XSS payload goal.
+ * - `connect-src 'self' https://printstream.app`: HTTP + same-origin WebSocket,
+ *   plus the public native-app catalogue used by self-hosted browsers. Other
+ *   cross-origin destinations remain blocked.
  * - `object-src 'none'`, `base-uri 'self'`, `frame-ancestors 'none'`,
  *   `form-action 'self'`: kill plugin embeds, `<base>` hijacking, clickjacking,
  *   and form-action hijacking outright.
@@ -45,6 +46,7 @@ const PADDLE = 'https://*.paddle.com'
 // the allowance is inert unless that edge feature is actually on.
 const CLOUDFLARE_INSIGHTS_SCRIPT = 'https://static.cloudflareinsights.com'
 const CLOUDFLARE_INSIGHTS_BEACON = 'https://cloudflareinsights.com'
+const PRINTSTREAM_CLOUD = 'https://printstream.app'
 
 // Model-provider cover images shown by the remote-imports plugin's import page.
 // Candidate cards render the provider's own thumbnail before anything has been
@@ -65,7 +67,7 @@ const CSP_DIRECTIVES: Record<string, string[]> = {
   'font-src': ["'self'", 'data:'],
   'style-src': ["'self'", "'unsafe-inline'", PADDLE],
   'script-src': ["'self'", "'unsafe-inline'", PADDLE, CLOUDFLARE_INSIGHTS_SCRIPT],
-  'connect-src': ["'self'", PADDLE, CLOUDFLARE_INSIGHTS_BEACON],
+  'connect-src': ["'self'", PADDLE, CLOUDFLARE_INSIGHTS_BEACON, PRINTSTREAM_CLOUD],
   'frame-src': ["'self'", PADDLE],
   'worker-src': ["'self'", 'blob:']
 }

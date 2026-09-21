@@ -1,4 +1,4 @@
-/** Personal Windows alerts, delivered directly to Windows apps without an external push provider. */
+/** Personal desktop alerts delivered directly without an external push provider. */
 import { desktopNotificationQuerySchema } from '@printstream/shared'
 import { z } from 'zod'
 import type { ApiPlugin } from '../../plugin/types.js'
@@ -16,7 +16,7 @@ const desktopDismissalSchema = z.object({
 
 export const notificationsDesktopPlugin: ApiPlugin = {
   name: 'notifications-desktop', version: '1.0.0',
-  description: 'Personal notifications for the Windows app.',
+  description: 'Personal notifications for the desktop app.',
   async register(context) {
     const feed = new DesktopNotificationFeed()
     context.router.get('/', async (request, response) => {
@@ -63,7 +63,7 @@ export const notificationsDesktopPlugin: ApiPlugin = {
       feed.add(await prepareNativeNotificationImage(message, context.prisma))
     }, {
       shouldHandleWorkspaceId: (scope) => context.isEnabledForWorkspace?.(scope) ?? true,
-      onError: () => context.logger.warn('Windows notification preparation failed')
+      onError: () => context.logger.warn('Desktop notification preparation failed')
     }))
     const dismiss = (event: {
       tag: string

@@ -136,7 +136,7 @@ export default defineConfig(({ command, mode }) => {
           "font-src 'self' data:",
           "style-src 'self' 'unsafe-inline' https://*.paddle.com",
           "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://*.paddle.com https://static.cloudflareinsights.com",
-          "connect-src 'self' ws: wss: https://*.paddle.com https://cloudflareinsights.com",
+          "connect-src 'self' ws: wss: https://*.paddle.com https://cloudflareinsights.com https://printstream.app",
           "frame-src 'self' https://*.paddle.com",
           "worker-src 'self' blob:",
           // The Vite proxy forwards this to the local API's violation sink, so

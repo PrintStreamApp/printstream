@@ -1,4 +1,4 @@
-/** Windows host notification feed. Cursors are opaque and never grant access. */
+/** Desktop host notification feed. Cursors are opaque and never grant access. */
 import { z } from 'zod'
 
 export const desktopNotificationQuerySchema = z.object({

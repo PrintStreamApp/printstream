@@ -7,18 +7,19 @@ export interface RemoteImportErrorGuidance {
 
 export function getRemoteImportErrorGuidance(message: string | null | undefined): RemoteImportErrorGuidance | null {
   const normalized = String(message ?? '').trim()
-  if (!/makerworld/i.test(normalized) || !/(captcha|robot|418)/i.test(normalized)) {
+  const isMakerWorldSecurityChallenge = /makerworld/i.test(normalized)
+    && /(security challenge|anti-bot|captcha|robot|418)/i.test(normalized)
+  if (!isMakerWorldSecurityChallenge) {
     return null
   }
 
   return {
-    title: 'Manual Intervention Required',
+    title: 'Manual download required',
     steps: [
-      'Refresh the captcha on MakerWorld by manually clicking the download button on the model page.',
-      'Solve the challenge there in MakerWorld.',
-      'Try Import to PrintStream again.'
+      'Open the model on MakerWorld and download the 3MF in your browser.',
+      'Return to the PrintStream Library, choose Upload files, and select the downloaded file.'
     ],
-    note: 'This check appears to be a random Bambu anti-bot challenge that can be tied to your IP address or VPN. If you do not want to solve it immediately, it can sometimes clear on its own after a few hours.',
+    note: 'Completing the security check in your browser does not grant PrintStream access to retry this URL.',
     requiresManualIntervention: true
   }
 }

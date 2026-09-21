@@ -21,6 +21,7 @@
  */
 import {
   BAMBU_CLOUD_BODY_TEXT_LIMIT,
+  BAMBU_MAKERWORLD_CLIENT_HEADERS,
   BAMBU_SLICER_API_VERSION,
   bambuCloudHosts,
   type BridgeBambuCloudRequestParams,
@@ -45,6 +46,7 @@ interface PreparedRequest {
   body?: unknown
   /** True when the call must not carry the bearer token (the sign-in endpoints). */
   anonymous?: boolean
+  headers?: Record<string, string>
 }
 
 type CsrfTokenResult =
@@ -63,8 +65,8 @@ export async function performBambuCloudRequest(
     return await performTotpVerification(hosts.web, params.request.tfaKey, params.request.code, signal)
   }
 
-  const prepared = prepareRequest(hosts.api, { ...params, request: params.request })
-  return await executeRequest(prepared, params.accessToken, {}, signal)
+  const prepared = prepareRequest(hosts, { ...params, request: params.request })
+  return await executeRequest(prepared, params.accessToken, prepared.headers ?? {}, signal)
 }
 
 /**
@@ -77,7 +79,8 @@ type PlainBambuCloudRequestParams = BridgeBambuCloudRequestParams & {
   request: Exclude<BridgeBambuCloudRequestParams['request'], { operation: 'verifyTotp' }>
 }
 
-function prepareRequest(apiHost: string, params: PlainBambuCloudRequestParams): PreparedRequest {
+function prepareRequest(hosts: ReturnType<typeof bambuCloudHosts>, params: PlainBambuCloudRequestParams): PreparedRequest {
+  const apiHost = hosts.api
   const settingBase = `https://${apiHost}/v1/iot-service/api/slicer/setting`
   // Bambu rejects a `slicer/setting` call with no `version` (HTTP 400) and one whose
   // format is not XX.YY.ZZ.WW (HTTP 422), on every verb including DELETE.
@@ -117,6 +120,18 @@ function prepareRequest(apiHost: string, params: PlainBambuCloudRequestParams): 
       }
     case 'deleteSetting':
       return { url: `${settingBase}/${encodeURIComponent(params.request.settingId)}${versionQuery}`, method: 'DELETE' }
+    case 'getMakerWorldDesign':
+      return {
+        url: `https://${hosts.makerWorld}/api/v1/design-service/design/${params.request.designId}`,
+        method: 'GET',
+        headers: BAMBU_MAKERWORLD_CLIENT_HEADERS
+      }
+    case 'getMakerWorldDownloadTarget':
+      return {
+        url: `https://${hosts.makerWorld}/api/v1/design-service/instance/${params.request.instanceId}/f3mf`,
+        method: 'GET',
+        headers: BAMBU_MAKERWORLD_CLIENT_HEADERS
+      }
     case 'refreshToken':
       // Trades the refresh token for a new credential. Anonymous: the point is that the
       // bearer token it would carry is the expired one.

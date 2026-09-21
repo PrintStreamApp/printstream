@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { buildLibraryBreadcrumb, buildLibraryFolderRoute, buildLibrarySliceHandoffRoute, toBridgeFolderId } from './libraryNavigation.js'
+import {
+  buildLibraryBreadcrumb,
+  buildLibraryFolderRoute,
+  buildLibraryModelStudioImportHandoffRoute,
+  buildLibrarySliceHandoffRoute,
+  toBridgeFolderId
+} from './libraryNavigation.js'
 
 test('buildLibraryFolderRoute keeps library navigation inside the active workspace', () => {
   assert.equal(buildLibraryFolderRoute('Default', null, null), '/workspaces/default/library')
@@ -113,5 +119,17 @@ test('buildLibrarySliceHandoffRoute omits what it does not have', () => {
   assert.equal(
     buildLibrarySliceHandoffRoute({ workspaceSlug: 'default', fileId: 'file-1', folderId: null, bridgeId: null }),
     '/workspaces/default/library?slice=file-1'
+  )
+})
+
+test('buildLibraryModelStudioImportHandoffRoute asks the library to create an editor project', () => {
+  assert.equal(
+    buildLibraryModelStudioImportHandoffRoute({
+      workspaceSlug: 'default',
+      fileId: 'model-1',
+      folderId: 'folder one',
+      bridgeId: 'bridge/main'
+    }),
+    '/workspaces/default/library/folder%20one?bridge=bridge%2Fmain&studioImport=model-1'
   )
 })

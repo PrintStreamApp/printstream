@@ -85,7 +85,9 @@ export function FormDialog({
         <DialogActions>
           <Button variant="plain" color="neutral" disabled={busy} onClick={onClose}>{cancelLabel}</Button>
           {secondaryActions}
-          <Button loading={busy} disabled={submitDisabled} onClick={onSubmit}>{submitLabel}</Button>
+          {submitLabel != null && (
+            <Button loading={busy} disabled={submitDisabled} onClick={onSubmit}>{submitLabel}</Button>
+          )}
         </DialogActions>
       </ModalDialog>
     </BackAwareModal>

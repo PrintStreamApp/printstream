@@ -18,6 +18,8 @@ export interface BridgePlatformHints {
   uaDataBitness?: string
 }
 
+export type ClientPlatformOs = 'android' | 'darwin' | 'win32' | 'linux'
+
 export const BRIDGE_PLATFORM_LABELS: Record<string, string> = {
   'win32-x64': 'Windows (x64)',
   'win32-arm64': 'Windows (ARM64)',
@@ -85,9 +87,16 @@ export function groupByBridgeOs<T>(items: readonly T[], keyOf: (item: T) => stri
 }
 
 export function resolveBridgePlatformKey(hints: BridgePlatformHints): string | null {
+  const platform = resolveClientPlatformKey(hints)
+  return platform?.startsWith('win32-') || platform?.startsWith('linux-') ? platform : null
+}
+
+/** Resolve the visitor's OS and architecture for any native download picker. */
+export function resolveClientPlatformKey(hints: BridgePlatformHints): string | null {
   const userAgent = hints.userAgent ?? ''
-  const os = resolveOs(hints.uaDataPlatform, userAgent)
+  const os = resolveClientOs(hints.uaDataPlatform, userAgent)
   if (!os) return null
+  if (os === 'android') return 'android-any'
 
   const archHint = resolveUaDataArch(hints.uaDataArchitecture, hints.uaDataBitness)
   if (os === 'win32') {
@@ -96,8 +105,8 @@ export function resolveBridgePlatformKey(hints: BridgePlatformHints): string | n
     // package is the safe default (it runs everywhere via emulation).
     return archHint === 'arm64' ? 'win32-arm64' : 'win32-x64'
   }
-  if (archHint) return `linux-${archHint}`
-  return /\b(aarch64|arm64)\b/i.test(userAgent) ? 'linux-arm64' : 'linux-x64'
+  if (archHint) return `${os}-${archHint}`
+  return /\b(aarch64|arm64)\b/i.test(userAgent) ? `${os}-arm64` : `${os}-x64`
 }
 
 /**
@@ -119,15 +128,17 @@ export function detectMacPlatform(navigatorLike: Navigator = navigator): boolean
   return isMacPlatform({ userAgent: navigatorLike.userAgent, uaDataPlatform: uaData?.platform })
 }
 
-function resolveOs(uaDataPlatform: string | undefined, userAgent: string): 'win32' | 'linux' | null {
+function resolveClientOs(uaDataPlatform: string | undefined, userAgent: string): ClientPlatformOs | null {
   const platform = uaDataPlatform?.toLowerCase() ?? ''
   if (platform === 'windows') return 'win32'
   if (platform === 'linux') return 'linux'
-  // No macOS package exists; Macs fall through to the "list everything" view.
-  if (platform === 'macos' || platform === 'android' || platform === 'ios' || platform === 'chrome os' || platform === 'chromeos') return null
+  if (platform === 'macos') return 'darwin'
+  if (platform === 'android') return 'android'
+  if (platform === 'ios' || platform === 'chrome os' || platform === 'chromeos') return null
 
-  // Mobile devices and Macs have no matching package even when the UA mentions Linux.
-  if (/Android|iPhone|iPad|iPod|CrOS|Mac OS X|Macintosh/i.test(userAgent)) return null
+  if (/Android/i.test(userAgent)) return 'android'
+  if (/iPhone|iPad|iPod|CrOS/i.test(userAgent)) return null
+  if (/Mac OS X|Macintosh/i.test(userAgent)) return 'darwin'
   if (/Windows NT/i.test(userAgent)) return 'win32'
   if (/Linux/i.test(userAgent)) return 'linux'
   return null
@@ -148,6 +159,12 @@ interface UaDataNavigator extends Navigator {
 }
 
 export async function detectBridgePlatformKey(navigatorLike: Navigator = navigator): Promise<string | null> {
+  const platform = await detectClientPlatformKey(navigatorLike)
+  return platform?.startsWith('win32-') || platform?.startsWith('linux-') ? platform : null
+}
+
+/** Gather low and high entropy browser hints for a native download recommendation. */
+export async function detectClientPlatformKey(navigatorLike: Navigator = navigator): Promise<string | null> {
   const uaData = (navigatorLike as UaDataNavigator).userAgentData
   let architecture: string | undefined
   let bitness: string | undefined
@@ -160,12 +177,20 @@ export async function detectBridgePlatformKey(navigatorLike: Navigator = navigat
       // Hints unavailable; fall back to user agent parsing.
     }
   }
-  return resolveBridgePlatformKey({
+  return resolveClientPlatformKey({
     userAgent: navigatorLike.userAgent,
     uaDataPlatform: uaData?.platform,
     ...(architecture !== undefined ? { uaDataArchitecture: architecture } : {}),
     ...(bitness !== undefined ? { uaDataBitness: bitness } : {})
   })
+}
+
+/** Match an exact package or an OS-wide store entry to the detected client. */
+export function isRecommendedPlatform(candidate: string, detected: string | null): boolean {
+  if (!detected) return false
+  if (candidate === detected) return true
+  const [candidateOs, candidateArch] = candidate.split('-')
+  return candidateArch === 'any' && candidateOs === detected.split('-')[0]
 }
 
 /**

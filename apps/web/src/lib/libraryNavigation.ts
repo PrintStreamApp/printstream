@@ -113,6 +113,25 @@ export function buildLibrarySliceHandoffRoute(input: {
   return buildWorkspacePath(input.workspaceSlug, `${base}?${params.toString()}`)
 }
 
+/**
+ * Open an imported model as the first object in a new Model Studio project.
+ *
+ * The library owns scaffold creation and cleanup, so producers such as the
+ * native model browser do not couple themselves to Model Studio internals.
+ */
+export function buildLibraryModelStudioImportHandoffRoute(input: {
+  workspaceSlug: string
+  fileId: string
+  folderId: string | null
+  bridgeId: string | null
+}): string {
+  const base = input.folderId ? `${LIBRARY_ROUTE}/${encodeURIComponent(input.folderId)}` : LIBRARY_ROUTE
+  const params = new URLSearchParams()
+  if (input.bridgeId) params.set('bridge', input.bridgeId)
+  params.set('studioImport', input.fileId)
+  return buildWorkspacePath(input.workspaceSlug, `${base}?${params.toString()}`)
+}
+
 /** Static path segment for the "Favorite Files" view (its own route, so it is bookmarkable + in history). */
 export const LIBRARY_FAVORITES_SEGMENT = 'favorites'
 

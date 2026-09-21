@@ -1,10 +1,19 @@
 {
   "releases": [
     {
+      "version": "1.3.9",
+      "releasedOn": "2026-09-21",
+      "changes": [
+        "Find PrintStream’s Android, Windows, and Linux apps from the new Apps section, including Linux AppImage and Debian packages for x64 and ARM64.",
+        "Check for updates from App settings, with installation handled by Google Play, Microsoft Store, or the matching Linux package."
+      ]
+    },
+    {
       "version": "1.3.8",
       "releasedOn": "2026-09-19",
       "changes": [
-        "Windows app updates now always carry the current PrintStream version, so a new package reliably replaces the installed app."
+        "Windows app updates now always carry the current PrintStream version, so a new package reliably replaces the installed app.",
+        "MakerWorld URL imports now use your bridge connection and retry one-off protection errors automatically."
       ]
     },
     {

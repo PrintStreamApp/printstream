@@ -13,24 +13,6 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  Alert,
-  Box,
-  Button,
-  Card,
-  FormControl,
-  FormHelperText,
-  FormLabel,
-  Input,
-  Stack,
-  Typography
-} from '@mui/joy'
-import CloudDownloadRoundedIcon from '@mui/icons-material/CloudDownloadRounded'
-import ExtensionRoundedIcon from '@mui/icons-material/ExtensionRounded'
-import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
-import FolderOpenRoundedIcon from '@mui/icons-material/FolderOpenRounded'
-import LaunchRoundedIcon from '@mui/icons-material/LaunchRounded'
-import PrintRoundedIcon from '@mui/icons-material/PrintRounded'
-import {
   IMPORTED_MODELS_FOLDER_NAME,
   canPrintRemoteImportCandidateDirectly,
   detectRemoteImportUrl,
@@ -49,19 +31,34 @@ import { useMutation, useQuery } from '@tanstack/react-query'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { apiFetch } from '../../lib/apiClient'
 import { buildWorkspacePath } from '../../lib/workspaceRoute'
-import { buildLibraryFolderRoute, buildLibrarySliceHandoffRoute, fromBridgeFolderId, isBridgeFolderId, toBridgeFolderId } from '../../lib/libraryNavigation'
-import { LibraryDestinationDialog } from '../../components/LibraryDestinationDialog'
+import {
+  buildLibraryFolderRoute,
+  buildLibraryModelStudioImportHandoffRoute,
+  buildLibrarySliceHandoffRoute
+} from '../../lib/libraryNavigation'
+import { isUnslicedThreeMfFile } from '../../lib/libraryFileTags'
 import { resolveImportReadiness } from './importReadiness'
-import { NestedViewHeader } from '../../components/NestedViewHeader'
-import { NoConnectedBridgesEmptyState } from '../../components/NoConnectedBridgesEmptyState'
-import { PrintModal } from '../../components/library/PrintModal'
-import { BrowserAssistPanel } from './BrowserAssistPanel'
-import { CandidatePicker } from './CandidatePicker'
 import { selectPickerCandidates } from './candidateSelection'
 import { probeRemoteImportHelper } from './extensionProbe'
-import { getRemoteImportErrorGuidance, type RemoteImportErrorGuidance } from './errorGuidance'
+import { getRemoteImportErrorGuidance } from './errorGuidance'
+import { isDesktopMakerWorldChallengeTest } from '../../native/desktopBridge'
+import { RemoteImportsContent } from './RemoteImportsContent'
+import {
+  downloadAndImportFromModelProvider,
+  isNativeApp,
+  nativeModelImportProviders,
+  type NativeModelProvider
+} from '../../native/bridge'
 
-export function RemoteImportsView() {
+interface NativeModelImportResult {
+  file: RemoteImportUploadResponse['file']
+  canPrintDirectly: boolean
+  printWasRequested: boolean
+  destinationBridgeId: string | null
+  destinationLabel: string
+}
+
+function useRemoteImportsController() {
   const { workspaceSlug } = useParams<{ workspaceSlug: string }>()
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
@@ -79,7 +76,14 @@ export function RemoteImportsView() {
   const [destinationOpen, setDestinationOpen] = useState(false)
   const [printTarget, setPrintTarget] = useState<RemoteImportUploadResponse['file'] | null>(null)
   const [extensionDetected, setExtensionDetected] = useState<boolean | null>(null)
-  const handoffFile = useMemo(() => parseUploadedFile(searchParams.get('uploadedFile')), [searchParams])
+  const uploadedFileParam = searchParams.get('uploadedFile')
+  const [dismissedHandoff, setDismissedHandoff] = useState<string | null>(null)
+  const handoffFile = useMemo(
+    () => uploadedFileParam && uploadedFileParam !== dismissedHandoff
+      ? parseUploadedFile(uploadedFileParam)
+      : null,
+    [dismissedHandoff, uploadedFileParam]
+  )
   const providerCandidates = useMemo(() => parseProviderCandidates(searchParams.get('candidates')), [searchParams])
   const resolution = useMemo(() => detectRemoteImportUrl(url), [url])
   const trimmedUrl = url.trim()
@@ -119,6 +123,13 @@ export function RemoteImportsView() {
     queryFn: ({ signal }) => apiFetch<RemoteImportCapabilitiesResponse>('/api/plugins/remote-imports/capabilities', { signal })
   })
 
+  const nativeProvidersQuery = useQuery({
+    queryKey: ['native-model-import-providers'],
+    queryFn: nativeModelImportProviders,
+    enabled: isNativeApp(),
+    staleTime: Infinity
+  })
+
   const printersQuery = useQuery({
     queryKey: ['printers'],
     queryFn: ({ signal }) => apiFetch<{ printers: Printer[] }>('/api/printers', { signal }),
@@ -126,26 +137,22 @@ export function RemoteImportsView() {
   })
 
   const bridges = useMemo(() => browseQuery.data?.bridgeEntries ?? [], [browseQuery.data])
+  const selectedBridgeId = bridges.some((bridge) => bridge.id === bridgeId) ? bridgeId : ''
 
-  // ALL folders, not one bridge's: with several bridges the destination picker shows each
-  // bridge as a root folder, which is the library's own convention (`LibraryView` builds
-  // the same `bridge:<id>` pseudo-folders). Same query key shape, so creating a folder
-  // anywhere refreshes this list.
+  // Folder ids do not expose their owning bridge. Keep the picker scoped to the
+  // selected bridge so a folder can never be submitted with another bridge id.
   const foldersQuery = useQuery({
-    queryKey: ['library-folders', 'all'],
-    queryFn: ({ signal }) => apiFetch<{ folders: LibraryFolder[] }>('/api/library/folders', { signal })
+    queryKey: ['library-folders', selectedBridgeId || 'none'],
+    queryFn: ({ signal }) => apiFetch<{ folders: LibraryFolder[] }>(
+      `/api/library/folders?bridgeId=${encodeURIComponent(selectedBridgeId)}`,
+      { signal }
+    ),
+    enabled: Boolean(selectedBridgeId)
   })
-  // One bridge is assumed rather than chosen; more than one and the picker shows a root
-  // per bridge. Mirrors `showGlobalRootBreadcrumb` in `LibraryView`.
-  const showBridgeRoots = bridges.length !== 1
-  const destinationFolders = useMemo<LibraryFolder[]>(() => {
-    const real = foldersQuery.data?.folders ?? []
-    if (!showBridgeRoots) return real
-    return [
-      ...bridges.map((bridge) => ({ id: toBridgeFolderId(bridge.id), name: bridge.name, parentId: null })),
-      ...real
-    ]
-  }, [bridges, foldersQuery.data?.folders, showBridgeRoots])
+  const destinationFolders = useMemo<LibraryFolder[]>(
+    () => foldersQuery.data?.folders ?? [],
+    [foldersQuery.data?.folders]
+  )
 
   /**
    * The picked destination resolved into what the API takes: a real folder id already
@@ -153,17 +160,15 @@ export function RemoteImportsView() {
    * means the default landing folder on the assumed bridge.
    */
   const destination = useMemo(() => {
-    if (pickedFolderId && isBridgeFolderId(pickedFolderId)) {
-      return { folderId: null as string | null, bridgeId: fromBridgeFolderId(pickedFolderId) }
-    }
-    return { folderId: pickedFolderId, bridgeId }
-  }, [pickedFolderId, bridgeId])
+    return { folderId: pickedFolderId, bridgeId: selectedBridgeId }
+  }, [pickedFolderId, selectedBridgeId])
 
   useEffect(() => {
-    if (bridges.length > 0 && !bridgeId) {
+    if (bridges.length > 0 && !selectedBridgeId) {
+      setPickedFolderId(null)
       setBridgeId(browseQuery.data?.activeBridgeId ?? bridges[0]?.id ?? '')
     }
-  }, [bridgeId, bridges, browseQuery.data?.activeBridgeId])
+  }, [bridges, browseQuery.data?.activeBridgeId, selectedBridgeId])
 
   // Keep the selection inside the list on screen. The picker is a radio group, so "nothing
   // selected" is only a legitimate state while the list is leftovers from a previous page,
@@ -213,6 +218,15 @@ export function RemoteImportsView() {
     setSearchParams(next, { replace: true })
   }, [candidateUrl, searchParams, setSearchParams, url])
 
+  const libraryFolderName = capabilitiesQuery.data?.libraryFolderName ?? IMPORTED_MODELS_FOLDER_NAME
+  const destinationFolderLabel = pickedFolderId
+    ? destinationFolders.find((folder) => folder.id === pickedFolderId)?.name ?? libraryFolderName
+    : libraryFolderName
+  const destinationBridgeName = bridges.find((bridge) => bridge.id === destination.bridgeId)?.name
+  const destinationLabel = bridges.length > 1 && destinationBridgeName
+    ? `${destinationBridgeName} / ${destinationFolderLabel}`
+    : destinationFolderLabel
+
   const importMutation = useMutation({
     mutationFn: async ({ openPrintSetup }: { openPrintSetup: boolean }) => {
       const result = await apiFetch<RemoteImportUploadResponse>('/api/plugins/remote-imports/import-url', {
@@ -231,12 +245,16 @@ export function RemoteImportsView() {
             workspaceSlug: workspaceSlug ?? '',
             fileId: result.file.id,
             folderId: result.file.folderId,
-            bridgeId: bridgeId || null,
+            bridgeId: destination.bridgeId || null,
             flow: 'print'
           }))
         }
       }
-      return result
+      return {
+        ...result,
+        destinationBridgeId: destination.bridgeId || null,
+        destinationLabel
+      }
     }
   })
 
@@ -249,37 +267,134 @@ export function RemoteImportsView() {
   const printFirst = searchParams.get('print') === '1'
   const makerWorldRef = useMemo(() => (importUrl ? parseMakerWorldModelUrl(importUrl) : null), [importUrl])
   const makerWorld = capabilitiesQuery.data?.makerWorld
-  const importedFile = importMutation.data?.file ?? handoffFile
+  /**
+   * Native hosts keep MakerWorld in an isolated browser session. The user completes
+   * any challenge and starts the download there; the host captures the resulting file.
+   */
+  const nativeImportMutation = useMutation({
+    mutationFn: async ({
+      provider,
+      startUrl,
+      openPrintSetup
+    }: {
+      provider: NativeModelProvider
+      startUrl: string
+      openPrintSetup: boolean
+    }): Promise<NativeModelImportResult | null> => {
+      if (!workspaceSlug) throw new Error('This model import is no longer available.')
+      const nativeResult = await downloadAndImportFromModelProvider({
+        provider,
+        modelUrl: startUrl,
+        workspace: workspaceSlug,
+        bridgeId: destination.bridgeId || null,
+        folderId: destination.folderId,
+        defaultFolderName: libraryFolderName
+      })
+      if ('externalOpened' in nativeResult || 'cancelled' in nativeResult) return null
+      const result = 'importUrl' in nativeResult
+        ? await apiFetch<RemoteImportUploadResponse>('/api/plugins/remote-imports/import-url', {
+            method: 'POST',
+            body: {
+              url: nativeResult.importUrl,
+              bridgeId: destination.bridgeId,
+              folderId: destination.folderId
+            }
+          })
+        : nativeResult
+      const file = libraryFileSchema.parse(result.file)
+      const canPrintDirectly = isDirectPrintableFileName(file.name)
+
+      if ('openAfterImport' in result && result.openAfterImport === 'model-studio') {
+        navigate(isUnslicedThreeMfFile(file)
+          ? buildLibrarySliceHandoffRoute({
+              workspaceSlug,
+              fileId: file.id,
+              folderId: file.folderId,
+              bridgeId: destination.bridgeId || null
+            })
+          : buildLibraryModelStudioImportHandoffRoute({
+              workspaceSlug,
+              fileId: file.id,
+              folderId: file.folderId,
+              bridgeId: destination.bridgeId || null
+            }))
+      } else if (openPrintSetup) {
+        if (canPrintDirectly) {
+          setPrintTarget(file)
+        } else {
+          navigate(buildLibrarySliceHandoffRoute({
+            workspaceSlug,
+            fileId: file.id,
+            folderId: file.folderId,
+            bridgeId: destination.bridgeId || null,
+            flow: 'print'
+          }))
+        }
+      }
+
+      return {
+        file,
+        canPrintDirectly,
+        printWasRequested: openPrintSetup,
+        destinationBridgeId: destination.bridgeId || null,
+        destinationLabel
+      }
+    }
+  })
+  const importedFile = importMutation.data?.file ?? nativeImportMutation.data?.file ?? handoffFile
+  const importedBridgeId = importMutation.data?.destinationBridgeId
+    ?? nativeImportMutation.data?.destinationBridgeId
+    ?? (selectedBridgeId || null)
   // Whether the LAST submit asked for print setup, and whether the file that came back
   // could actually take it. The API decides printability (only it has seen the bytes),
   // so this pair is what turns a silent no-op into an explanation.
-  const printWasRequested = importMutation.variables?.openPrintSetup === true
-  const importedPrintable = importMutation.data?.canPrintDirectly === true
+  const printWasRequested = nativeImportMutation.data?.printWasRequested
+    ?? importMutation.variables?.openPrintSetup === true
+  const importedPrintable = nativeImportMutation.data?.canPrintDirectly
+    ?? importMutation.data?.canPrintDirectly === true
   // Land in the folder the file went to, not the library root, with slicing being the
   // next step for most imports, "somewhere in the library" is not a useful destination.
   const goToImportedFolder = useCallback(
     () => navigate(
       workspaceSlug
-        ? buildLibraryFolderRoute(workspaceSlug, importedFile?.folderId ?? null, bridgeId || null)
+        ? buildLibraryFolderRoute(workspaceSlug, importedFile?.folderId ?? null, importedBridgeId)
         : libraryPath
     ),
-    [navigate, workspaceSlug, importedFile?.folderId, bridgeId, libraryPath]
+    [navigate, workspaceSlug, importedFile?.folderId, importedBridgeId, libraryPath]
   )
-  const libraryFolderName = capabilitiesQuery.data?.libraryFolderName ?? IMPORTED_MODELS_FOLDER_NAME
-  // Named for what the user picked, falling back to the folder that will be created.
-  const destinationLabel = pickedFolderId
-    ? destinationFolders.find((folder) => folder.id === pickedFolderId)?.name ?? libraryFolderName
-    : libraryFolderName
-  const displayedErrorMessage = importMutation.isError
-    ? ('message' in importMutation.error && typeof importMutation.error.message === 'string'
-        ? importMutation.error.message
-        : 'Import failed')
-    : searchError
-  const errorGuidance = getRemoteImportErrorGuidance(displayedErrorMessage)
+  const importedDestinationLabel = importMutation.data?.destinationLabel
+    ?? nativeImportMutation.data?.destinationLabel
+    ?? destinationLabel
+  const displayedErrorMessage = nativeImportMutation.isError
+    ? nativeImportMutation.error.message
+    : importMutation.isError
+      ? ('message' in importMutation.error && typeof importMutation.error.message === 'string'
+          ? importMutation.error.message
+          : 'Import failed')
+      : searchError
+  const challengeGuidance = getRemoteImportErrorGuidance(
+    importMutation.isError ? importMutation.error.message : searchError
+  )
+  const errorGuidance = challengeGuidance ?? getRemoteImportErrorGuidance(displayedErrorMessage)
   const requiresManualIntervention = errorGuidance?.requiresManualIntervention === true
+  const challengeTestMode = isDesktopMakerWorldChallengeTest()
+  const nativeProviders = nativeProvidersQuery.data ?? []
+  const canBrowseNativeMakerWorld = Boolean(destination.bridgeId) && nativeProviders.includes('makerworld')
+  const canBrowseNativePrintables = Boolean(destination.bridgeId) && nativeProviders.includes('printables')
+  const nativePastedProvider: NativeModelProvider | null = resolution.provider === 'makerworld' && canBrowseNativeMakerWorld
+    ? 'makerworld'
+    : resolution.provider === 'printables' && canBrowseNativePrintables
+      ? 'printables'
+      : null
+  const canUseNativeMakerWorldImport = (challengeGuidance?.requiresManualIntervention === true || challengeTestMode)
+    && makerWorldRef != null
+    && Boolean(destination.bridgeId)
+    && canBrowseNativeMakerWorld
+  const showUrlImportActions = (!isNativeApp() || Boolean(trimmedUrl))
+    && nativePastedProvider !== 'printables'
   const readiness = resolveImportReadiness({
     hasUrl: Boolean(importUrl),
-    hasBridge: Boolean(bridgeId),
+    hasBridge: Boolean(destination.bridgeId),
     strategy: importResolution.strategy,
     resolutionMessage: importResolution.message,
     hasSelectedCandidate: selectedCandidate != null,
@@ -293,318 +408,87 @@ export function RemoteImportsView() {
   })
   const showNoBridgesPlaceholder = !browseQuery.isPending && bridges.length === 0
 
-  return (
-    <Stack spacing={2.5}>
-      <NestedViewHeader
-        crumbs={[{ label: 'Library', onClick: goToLibrary }, { label: 'Import from URL' }]}
-        description="Paste a MakerWorld model link or a direct file URL. Both import straight into the library."
-      />
-
-      {showNoBridgesPlaceholder ? (
-        <NoConnectedBridgesEmptyState
-          title="Connect a bridge to import files"
-          description="Imported files are stored on a bridge, so connect one in Settings before importing from a URL."
-          managedTitle="Your library is starting up"
-          managedDescription="Importing will be available once PrintStream's services are running."
-        />
-      ) : (
-        <Card variant="outlined">
-          <Stack spacing={2}>
-            <FormControl>
-              <FormLabel>Source URL</FormLabel>
-              <Input
-                value={url}
-                placeholder="https://…"
-                onChange={(event) => setUrl(event.target.value)}
-                // Browser-assist URLs cannot be imported from here at all: opening the page is
-                // the actual next step, so it sits on the field rather than further down the card.
-                endDecorator={resolution.strategy === 'browser-assist' && (
-                  <Button
-                    component="a"
-                    href={url.trim()}
-                    target="_blank"
-                    rel="noreferrer"
-                    size="sm"
-                    variant="soft"
-                    startDecorator={<LaunchRoundedIcon />}
-                  >
-                    Open page
-                  </Button>
-                )}
-              />
-              <FormHelperText>
-                MakerWorld model pages and direct links to .3mf, .gcode, .stl, or .step files.
-              </FormHelperText>
-            </FormControl>
-
-            {/* Nothing this page can fetch itself, so the extension's files stay listed below,
-                say so, otherwise the picker looks like it answered the URL that was just typed. */}
-            {showStaleCandidatesNotice && (
-              <Alert size="sm" variant="soft" color="neutral" startDecorator={<ExtensionRoundedIcon />}>
-                <Typography level="body-sm">
-                  {resolution.strategy === 'browser-assist'
-                    ? `The files below are still from the previous page. This ${formatProviderName(resolution.provider)} page has no file PrintStream can fetch on its own.`
-                    : 'The files below are still from the previous page. This URL has no file PrintStream can fetch on its own.'}
-                </Typography>
-              </Alert>
-            )}
-
-            {pickerCandidates.length > 0 && (
-              <FormControl>
-                {/* No Clear action: one file is always the import target while the list matches
-                    the URL in the field, so deselecting has nothing to fall back to. */}
-                <FormLabel>Provider file</FormLabel>
-                <CandidatePicker
-                  candidates={pickerCandidates}
-                  selectedUrl={candidateUrl}
-                  onSelect={(candidate) => setCandidateUrl(candidate.sourceUrl)}
-                />
-                <FormHelperText>
-                  {pickerCandidates.length > 1
-                    ? 'Pick the file to import from the provider page.'
-                    : 'This is the file that will be imported.'}
-                </FormHelperText>
-              </FormControl>
-            )}
-
-            <FormControl>
-              <FormLabel>Save to</FormLabel>
-              {/* The button IS the value, matching "Choose printer" in `SliceSettingsPanel`:
-                  a chosen destination rendered as prose beside a Change button reads as a
-                  fact about the page rather than a setting the user owns. */}
-              <Button
-                type="button"
-                variant="outlined"
-                color="neutral"
-                startDecorator={<FolderOpenRoundedIcon />}
-                onClick={() => setDestinationOpen(true)}
-                sx={{ justifyContent: 'flex-start', fontWeight: 'md' }}
-              >
-                <Box component="span" sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {destinationLabel}
-                </Box>
-              </Button>
-              <FormHelperText>
-                {destination.folderId
-                  ? 'The file lands in this library folder.'
-                  : `${libraryFolderName} is created automatically the first time something is imported.`}
-              </FormHelperText>
-            </FormControl>
-
-            {providerCandidates.length > 0 && !staleProviderCandidates ? (
-              <Alert variant="soft" color="success" startDecorator={<ExtensionRoundedIcon />}>
-                <Stack spacing={0.5}>
-                  <Typography level="title-sm">
-                    Extension provided {providerCandidates.length} file{providerCandidates.length > 1 ? 's' : ''}
-                  </Typography>
-                  <Typography level="body-sm">
-                    Files were handed over from {formatProviderName(resolution.provider)}. Pick one above, then import.
-                  </Typography>
-                </Stack>
-              </Alert>
-            ) : makerWorldRef ? (
-              // MakerWorld resolves server-side through the connected account, so it must
-              // NOT get the browser-helper panel: `detectRemoteImportUrl` still calls it
-              // `browser-assist` (that classification predates the account path and is what
-              // an extension-only client still needs). Saying "install a helper" beside
-              // "downloads as your Bambu account" is two answers to one question.
-              null
-            ) : resolution.strategy === 'browser-assist' ? (
-              // The panel carries the explanation, the probe result, and the setup steps,
-              // so skip the generic alert here rather than stacking two notices.
-              <BrowserAssistPanel
-                extensionDetected={extensionDetected}
-                providerLabel={formatProviderName(resolution.provider)}
-              />
-            ) : !trimmedUrl ? (
-              // Nothing typed yet is not a problem to report. `detectRemoteImportUrl('')`
-              // resolves to "Unsupported URL / Paste a full URL.", which on a freshly
-              // opened form reads as a complaint about something the user has not done.
-              null
-            ) : (
-              <Alert
-                variant="soft"
-                color={resolution.strategy === 'server-download' ? 'success' : 'neutral'}
-                startDecorator={<CloudDownloadRoundedIcon />}
-              >
-                <Stack spacing={0.5}>
-                  <Typography level="title-sm">
-                    {formatResolutionTitle(resolution)}
-                  </Typography>
-                  <Typography level="body-sm">{resolution.message}</Typography>
-                </Stack>
-              </Alert>
-            )}
-
-            {/* Which Bambu account a MakerWorld download runs as, and why it might not
-                run at all. A workspace shares ONE connection, so this is regularly not
-                the person clicking: say so before the import, not after. */}
-            {makerWorldRef && makerWorld && (
-              <Alert
-                size="sm"
-                variant="soft"
-                color={makerWorld.enabled && makerWorld.accountConnected ? 'neutral' : 'warning'}
-                startDecorator={<InfoOutlinedIcon />}
-              >
-                <Typography level="body-sm">
-                  {!makerWorld.enabled
-                    ? 'MakerWorld imports are turned off for this workspace. Turn them on in the remote imports plugin settings, or use the browser helper extension.'
-                    : !makerWorld.accountConnected
-                        ? 'Connect a Bambu Lab account for this workspace to import MakerWorld models.'
-                        : `Downloads as the connected Bambu Lab account${makerWorld.accountLabel ? ` (${makerWorld.accountLabel})` : ''}.`}
-                </Typography>
-              </Alert>
-            )}
-
-            {/* Order follows intent: arriving from a Print control puts printing first. */}
-            <Stack direction={printFirst ? 'row-reverse' : 'row'} spacing={1} sx={{ flexWrap: 'wrap', justifyContent: 'flex-start' }}>
-              <Button
-                size="sm"
-                variant={printFirst ? 'soft' : 'solid'}
-                disabled={!readiness.canImport || importMutation.isPending}
-                loading={importMutation.isPending}
-                startDecorator={<CloudDownloadRoundedIcon />}
-                onClick={() => void importMutation.mutateAsync({ openPrintSetup: false })}
-              >
-                Import only
-              </Button>
-              {/* Only one of the pair is solid: both import, so two primaries would make
-                  the card argue with itself about which is the default. */}
-              <Button
-                size="sm"
-                variant={printFirst ? 'solid' : 'soft'}
-                disabled={!readiness.canImport || !readiness.canPrint || importMutation.isPending}
-                loading={importMutation.isPending}
-                startDecorator={<PrintRoundedIcon />}
-                onClick={() => void importMutation.mutateAsync({ openPrintSetup: true })}
-              >
-                Import and print
-              </Button>
-            </Stack>
-
-            {/* A disabled button with no explanation is the whole reason `readiness`
-                returns a reason at all: render it whenever there is one. */}
-            {readiness.reason && (
-              <Typography level="body-sm" textColor="text.tertiary">
-                {readiness.reason}
-              </Typography>
-            )}
-
-            {displayedErrorMessage && (
-              <RemoteImportErrorAlert message={displayedErrorMessage} guidance={errorGuidance} />
-            )}
-
-            {importedFile && (
-              <Alert color="success" variant="soft">
-                <Stack spacing={0.75}>
-                  <Typography level="title-sm">Imported {importedFile.name}</Typography>
-                  <Typography level="body-sm">
-                    {`The file is now in ${destinationLabel}.`}
-                  </Typography>
-                  {/* "Import and print" on a file that is not already sliced would otherwise
-                      just import and fall silent: the print step it promised never opens,
-                      with nothing on screen saying why. Say it, and point at where slicing
-                      happens. */}
-                  {printWasRequested && !importedPrintable && (
-                    <Typography level="body-sm">
-                      It is not sliced yet, so it cannot go straight to a printer. Open it in the
-                      library to slice it first.
-                    </Typography>
-                  )}
-                  <Button size="sm" onClick={goToImportedFolder} sx={{ alignSelf: 'flex-start' }}>
-                    {printWasRequested && !importedPrintable ? 'Open in library to slice' : 'Open Library'}
-                  </Button>
-                </Stack>
-              </Alert>
-            )}
-          </Stack>
-        </Card>
-      )}
-
-      {/* The library's own destination picker, so choosing where an import lands works
-          exactly like choosing where a save or move lands, including showing each
-          bridge as a root folder once there is more than one. */}
-      {destinationOpen && (
-        <LibraryDestinationDialog
-          title="Choose where to save"
-          description="Pick the library folder this import should land in."
-          initialFolderId={pickedFolderId}
-          folders={destinationFolders}
-          bridgeId={bridgeId || null}
-          bridgeName={bridges.find((bridge) => bridge.id === bridgeId)?.name ?? null}
-          showRoot={showBridgeRoots}
-          submitting={false}
-          error={null}
-          confirmActionLabel={({ outputFolderId, rootDestinationLabel }) => outputFolderId ? 'Save here' : `Save to ${rootDestinationLabel}`}
-          onClose={() => setDestinationOpen(false)}
-          onSubmit={({ outputFolderId }) => {
-            setPickedFolderId(outputFolderId)
-            setDestinationOpen(false)
-          }}
-        />
-      )}
-
-      {printTarget && printersQuery.data && (
-        <PrintModal
-          file={printTarget}
-          printers={printersQuery.data.printers}
-          onClose={closePrintModal}
-        />
-      )}
-    </Stack>
-  )
-}
-
-/**
- * The failure notice, with provider-specific recovery steps when there are any.
- *
- * One component because a failed import and the extension's `?error=` handoff are the
- * same thing to the user: rendering them from two copied blocks is exactly how the
- * wording drifted apart before.
- */
-function RemoteImportErrorAlert({
-  message,
-  guidance
-}: {
-  message: string
-  guidance: RemoteImportErrorGuidance | null
-}) {
-  return (
-    <Alert color="danger" variant="soft">
-      <Stack spacing={0.75}>
-        <Typography level="body-sm">{message}</Typography>
-        {guidance && (
-          <>
-            <Typography level="title-sm">{guidance.title}</Typography>
-            <Box component="ol" sx={{ pl: 2.5, m: 0 }}>
-              {guidance.steps.map((step) => (
-                <li key={step}>
-                  <Typography level="body-sm">{step}</Typography>
-                </li>
-              ))}
-            </Box>
-            <Typography level="body-sm">{guidance.note}</Typography>
-          </>
-        )}
-      </Stack>
-    </Alert>
-  )
-}
-
-function formatResolutionTitle(resolution: ReturnType<typeof detectRemoteImportUrl>): string {
-  if (resolution.strategy === 'server-download') {
-    return `${formatProviderName(resolution.provider)} direct file`
+  const clearPreviousImportState = () => {
+    setDismissedHandoff(uploadedFileParam)
+    const next = new URLSearchParams(searchParams)
+    next.delete('error')
+    next.delete('uploadedFile')
+    if (next.toString() !== searchParams.toString()) setSearchParams(next, { replace: true })
   }
-  if (resolution.strategy === 'browser-assist') {
-    return `${formatProviderName(resolution.provider)} model page`
+  const startServerImport = (openPrintSetup: boolean) => {
+    clearPreviousImportState()
+    nativeImportMutation.reset()
+    importMutation.mutate({ openPrintSetup })
   }
-  return 'Unsupported URL'
+  const startNativeImport = (input: {
+    provider: NativeModelProvider
+    startUrl: string
+    openPrintSetup: boolean
+  }) => {
+    clearPreviousImportState()
+    importMutation.reset()
+    nativeImportMutation.mutate(input)
+  }
+
+  return {
+    goToLibrary,
+    showNoBridgesPlaceholder,
+    canBrowseNativeMakerWorld,
+    canBrowseNativePrintables,
+    nativeImportMutation,
+    startNativeImport,
+    url,
+    setUrl,
+    trimmedUrl,
+    resolution,
+    nativePastedProvider,
+    showStaleCandidatesNotice,
+    providerCandidates,
+    pickerCandidates,
+    candidateUrl,
+    setCandidateUrl,
+    bridges,
+    selectedBridgeId,
+    setBridgeId,
+    setPickedFolderId,
+    foldersQuery,
+    destinationLabel,
+    setDestinationOpen,
+    destination,
+    libraryFolderName,
+    staleProviderCandidates,
+    makerWorldRef,
+    makerWorld,
+    showUrlImportActions,
+    printFirst,
+    readiness,
+    importMutation,
+    startServerImport,
+    displayedErrorMessage,
+    errorGuidance,
+    canUseNativeMakerWorldImport,
+    importUrl,
+    challengeTestMode,
+    importedFile,
+    importedDestinationLabel,
+    printWasRequested,
+    importedPrintable,
+    goToImportedFolder,
+    destinationOpen,
+    pickedFolderId,
+    destinationFolders,
+    printTarget,
+    printersQuery,
+    closePrintModal,
+    extensionDetected
+  }
 }
 
-function formatProviderName(provider: ReturnType<typeof detectRemoteImportUrl>['provider']): string {
-  if (provider === 'makerworld') return 'MakerWorld'
-  if (provider === 'printables') return 'Printables'
-  return 'Generic'
+export type RemoteImportsController = ReturnType<typeof useRemoteImportsController>
+
+/** Compose the import controller with its focused rendering surface. */
+export function RemoteImportsView() {
+  return <RemoteImportsContent controller={useRemoteImportsController()} />
 }
 
 function parseProviderCandidates(raw: string | null): RemoteImportCandidate[] {

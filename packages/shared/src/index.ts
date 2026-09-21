@@ -106,6 +106,7 @@ export * from './bambu-preset-codec.js'
 export * from './memory-cache.js'
 export * from './format-bytes.js'
 export * from './remote-imports.js'
+export * from './native-app-downloads.js'
 
 export * from './slot-material.js'
 

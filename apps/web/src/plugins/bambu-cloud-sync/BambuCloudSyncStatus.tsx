@@ -27,9 +27,12 @@ import CloseRoundedIcon from '@mui/icons-material/CloseRounded'
 import CloudSyncRoundedIcon from '@mui/icons-material/CloudSyncRounded'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { extractErrorMessage } from '@printstream/shared'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { apiFetch } from '../../lib/apiClient'
 import { toast } from '../../lib/toast'
 import { formatDateTime } from '../../lib/time'
+import { buildWorkspacePath, parseWorkspacePathname } from '../../lib/workspaceRoute'
+import { BAMBU_CLOUD_ACCOUNT_SETTINGS_PATH } from './settings-route'
 
 interface CheckResponse {
   connected: boolean
@@ -47,6 +50,12 @@ const CHECK_QUERY_KEY = ['bambu-cloud-sync', 'check']
 export function BambuCloudSyncStatus(): JSX.Element | null {
   const queryClient = useQueryClient()
   const [dismissed, setDismissed] = useState(false)
+  const location = useLocation()
+  const navigate = useNavigate()
+  const workspaceSlug = parseWorkspacePathname(location.pathname).workspaceSlug
+  const accountSettingsPath = workspaceSlug
+    ? buildWorkspacePath(workspaceSlug, BAMBU_CLOUD_ACCOUNT_SETTINGS_PATH)
+    : null
 
   const checkQuery = useQuery({
     queryKey: CHECK_QUERY_KEY,
@@ -88,9 +97,11 @@ export function BambuCloudSyncStatus(): JSX.Element | null {
       <StatusControl
         tone="warning"
         count={importable + uploadable + pending}
-        tooltip="Bambu Lab sign-in expired. Reconnect in Settings, then Slicing."
+        tooltip="Bambu Lab sign-in expired. Reconnect in Bambu account settings."
       >
-        <MenuItem disabled>Reconnect in Settings, then Slicing</MenuItem>
+        <MenuItem disabled={!accountSettingsPath} onClick={() => accountSettingsPath && navigate(accountSettingsPath)}>
+          Reconnect Bambu account
+        </MenuItem>
       </StatusControl>
     )
   }
@@ -103,9 +114,11 @@ export function BambuCloudSyncStatus(): JSX.Element | null {
       <StatusControl
         tone="warning"
         count={pending}
-        tooltip={`${pending} deleted preset${pending === 1 ? '' : 's'} to review. Decide in Settings, then Slicing.`}
+        tooltip={`${pending} deleted preset${pending === 1 ? '' : 's'} to review in Bambu account settings.`}
       >
-        <MenuItem disabled>Review in Settings, then Slicing</MenuItem>
+        <MenuItem disabled={!accountSettingsPath} onClick={() => accountSettingsPath && navigate(accountSettingsPath)}>
+          Review Bambu account sync
+        </MenuItem>
       </StatusControl>
     )
   }

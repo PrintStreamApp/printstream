@@ -57,14 +57,6 @@ export function readProductVersion(root = process.cwd()) {
     }
   }
 
-  const desktopProject = path.join(root, 'apps', 'desktop', 'PrintStream.Desktop', 'PrintStream.Desktop.csproj')
-  if (existsSync(desktopProject)) {
-    const projectText = readFileSync(desktopProject, 'utf8')
-    if (/<Version>[^<]+<\/Version>/.test(projectText)) {
-      mismatches.push(`${path.relative(root, desktopProject)} declares a separate <Version>`)
-    }
-  }
-
   if (mismatches.length > 0) {
     throw new Error(`Product version ${version} is not shared by: ${mismatches.join(', ')}`)
   }

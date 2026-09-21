@@ -36,6 +36,21 @@ test('a MakerWorld model explains each half of its unavailability', () => {
   )
 })
 
+test('a persistent MakerWorld security challenge directs the user to manual import', () => {
+  const readiness = resolveImportReadiness({
+    ...base,
+    strategy: 'browser-assist',
+    makerWorld: { enabled: true, accountConnected: true },
+    requiresManualIntervention: true
+  })
+
+  assert.deepEqual(readiness, {
+    canImport: false,
+    canPrint: false,
+    reason: 'Download the model manually from MakerWorld, then upload the downloaded file from the Library.'
+  })
+})
+
 test('a direct file URL imports, and prints only when already printable', () => {
   assert.deepEqual(
     resolveImportReadiness({ ...base, strategy: 'server-download', isDirectPrintable: true }),

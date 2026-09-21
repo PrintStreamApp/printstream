@@ -1,10 +1,10 @@
-/** Personal Windows preferences, reusing the native account and dialog conventions. */
+/** Personal desktop preferences, reusing the native account and dialog conventions. */
 import { useEffect, useRef, useState } from 'react'
 import { nativeNotificationAccount } from '@printstream/shared'
 import { Button, Checkbox, Stack, Typography } from '@mui/joy'
 import { FormDialog } from '../../components/FormDialog'
 import { useAuthBootstrapQuery } from '../../lib/authQuery'
-import { desktopRequest, isNativeWindows } from '../../native/desktopBridge'
+import { desktopRequest, supportsDesktopNotifications } from '../../native/desktopBridge'
 import { notificationScopes } from '../../native/notificationScopes'
 import { finishAppNotificationSettings, hasAppNotificationSettingsRequest, subscribeAppNotificationSettings, takeAppNotificationSettingsRequest } from '../../native/appSettings'
 
@@ -38,7 +38,7 @@ export function DesktopNotificationSettings() {
   }), [])
 
   useEffect(() => {
-    if (!isNativeWindows() || !hasBootstrap || !account) return
+    if (!supportsDesktopNotifications() || !hasBootstrap || !account) return
     let active = true
     setError(null)
     setLoading(true)
@@ -63,7 +63,7 @@ export function DesktopNotificationSettings() {
           if (requested || !preferences.asked) setOpen(true)
         }
       } catch {
-        if (active) setError('Could not read Windows notification settings.')
+        if (active) setError('Could not read desktop notification settings.')
       } finally {
         if (active) setLoading(false)
       }
@@ -73,7 +73,7 @@ export function DesktopNotificationSettings() {
     return () => { active = false }
   }, [account, scopeKey, hasBootstrap, revision])
 
-  if (!isNativeWindows() || !account || (!scopes.length && !settingsEntry.current)) return null
+  if (!supportsDesktopNotifications() || !account || (!scopes.length && !settingsEntry.current)) return null
 
   /** Closing records the prior consent, never the checkbox edits being cancelled. */
   async function save(enabled: string[]) {
@@ -89,7 +89,7 @@ export function DesktopNotificationSettings() {
       setOpen(false)
     } catch {
       if (currentContext.current === contextKey) {
-        setError('Could not save Windows notification settings. Please try again.')
+        setError('Could not save desktop notification settings. Please try again.')
       }
     } finally {
       if (currentContext.current === contextKey) setBusy(false)
@@ -101,7 +101,7 @@ export function DesktopNotificationSettings() {
     try {
       await desktopRequest('notifications.test')
     } catch {
-      if (currentContext.current === contextKey) setError('Windows could not display a test notification.')
+      if (currentContext.current === contextKey) setError('This computer could not display a test notification.')
     }
   }
 
@@ -117,7 +117,7 @@ export function DesktopNotificationSettings() {
           ? [...previous, scope.id] : previous.filter((id) => id !== scope.id))} />)}
       <Typography level="body-sm">Alerts arrive directly from your servers while PrintStream runs in the background. Quitting PrintStream stops alerts. Offline alerts are retained for up to one hour, subject to server capacity; restarting the server clears pending alerts.</Typography>
       <Button size="sm" variant="plain" disabled={busy || loading}
-        onClick={() => { void testNotifications() }}>Test Windows notifications</Button>
+        onClick={() => { void testNotifications() }}>Test desktop notifications</Button>
     </Stack>
   </FormDialog>
 }

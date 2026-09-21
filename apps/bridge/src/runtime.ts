@@ -65,6 +65,7 @@ import {
   createAbortError,
   type BridgeRuntimeInboundMessage,
   type Printer,
+  type BridgeUpdateActionResult,
   type BridgeRuntimeRegistrationRequest,
   type BridgeRuntimeRegistrationResponse,
   type BridgeCrashReport
@@ -131,6 +132,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import type { BridgeUpdateDriver } from './update-driver.js'
 import { createImagePullUpdateDriver } from './update-driver-imagepull.js'
+import { schedulePeriodicBridgeUpdate } from './update-scheduler.js'
 
 const RECONNECT_DELAY_MS = 5_000
 /** Ceiling for the reconnect backoff, so a long outage doesn't stretch retries indefinitely. */
@@ -170,6 +172,11 @@ export interface BridgeRuntimeClientOptions {
   simulator?: BridgeRuntimeSimulator | null
   /** Packaging-specific update mechanics; defaults to the Docker image-pull driver. */
   updateDriver?: BridgeUpdateDriver
+  /**
+   * Packaging-specific restart after an accepted update. Standalone Windows
+   * services require a non-zero restart exit code; Docker uses the default.
+   */
+  onUpdateInstalled?: (result: BridgeUpdateActionResult) => void
   /**
    * Path to the crash-detection run-state marker. Defaults to a
    * `bridge-run-state.json` next to `BRIDGE_STATE_FILE` (the bridge data dir),
@@ -259,6 +266,15 @@ export class BridgeRuntimeClient {
     // Backups run on their own schedule, independent of the connection loop:
     // protecting the library must not depend on the server being reachable.
     await initBridgeBackups()
+
+    // Only an explicitly supplied driver can self-update. The default image-pull
+    // driver merely reports a manual command, so periodically invoking it would
+    // add traffic without ever converging the bridge.
+    if (env.BRIDGE_AUTO_UPDATE && this.options.updateDriver) {
+      schedulePeriodicBridgeUpdate(async () => {
+        await this.runAutomaticBridgeUpdate()
+      })
+    }
 
     // Jittered exponential backoff so a fleet of bridges doesn't reconnect in
     // lockstep when the API restarts (each reconnect drives registration + DB
@@ -1095,7 +1111,11 @@ export class BridgeRuntimeClient {
         workspaceConnected: false,
         message: result.message
       })
-      this.scheduleBridgeRestart()
+      if (this.options.onUpdateInstalled) {
+        this.options.onUpdateInstalled(result)
+      } else {
+        this.scheduleBridgeRestart()
+      }
       return true
     } catch (error) {
       console.warn(`Automatic bridge update failed${describeErrorSuffix(error)}`)
@@ -1436,4 +1456,3 @@ function describeErrorSuffix(error: unknown): string {
 
   return `: ${error.message.trim()}.`
 }
-

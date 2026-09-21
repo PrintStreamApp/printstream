@@ -1,6 +1,10 @@
 import { z } from 'zod'
 import { LIBRARY_FILE_KINDS, classifyLibraryFileKind, isDirectPrintableFileName, isMeshLibraryFileKind, libraryFileSchema } from './printer.js'
-import { IMPORT_FORMAT_LABELS } from './import-formats.js'
+import {
+  IMPORT_FORMAT_LABELS,
+  STAGED_IMPORT_FORMATS,
+  importFormatExtensions
+} from './import-formats.js'
 import { workspaceSummarySchema } from './workspaces.js'
 
 export const remoteImportProviderSchema = z.enum([
@@ -48,6 +52,16 @@ export const remoteImportPrintableStatusSchema = z.enum([
 ])
 
 export type RemoteImportPrintableStatus = z.infer<typeof remoteImportPrintableStatusSchema>
+
+/**
+ * File suffixes a native model-site browser may capture into the library.
+ * Derived from the editor import catalogue, with G-code as the one library-only
+ * format. `.gcode.3mf` is already covered by the longer filename's `.3mf` suffix.
+ */
+export const REMOTE_IMPORT_FILE_EXTENSIONS = [
+  ...importFormatExtensions(STAGED_IMPORT_FORMATS),
+  '.gcode'
+] as const
 
 /**
  * Hosts whose images the import UI is willing to render.

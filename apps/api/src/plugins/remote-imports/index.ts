@@ -564,7 +564,7 @@ async function resolveOptedInMakerWorldCredential(
   }
   const credential = await bambuAccountResolvers.resolve({ workspaceId })
   if (!credential) {
-    throw badRequest('No Bambu Lab account is connected for this workspace. Connect one in the Bambu Cloud settings to import from MakerWorld.')
+    throw badRequest('No Bambu Lab account is connected for this workspace. Connect one in Settings under Bambu account to import from MakerWorld.')
   }
   return credential
 }

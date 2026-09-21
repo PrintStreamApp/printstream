@@ -42,11 +42,13 @@ interface BambuCloudHosts {
    * CSRF-protected where the API host is not.
    */
   readonly web: string
+  /** MakerWorld web/API origin for model metadata and signed download grants. */
+  readonly makerWorld: string
 }
 
 const BAMBU_CLOUD_HOSTS: Record<BambuCloudRegion, BambuCloudHosts> = {
-  global: { api: 'api.bambulab.com', web: 'bambulab.com' },
-  china: { api: 'api.bambulab.cn', web: 'bambulab.cn' }
+  global: { api: 'api.bambulab.com', web: 'bambulab.com', makerWorld: 'makerworld.com' },
+  china: { api: 'api.bambulab.cn', web: 'bambulab.cn', makerWorld: 'makerworld.com.cn' }
 }
 
 export function bambuCloudHosts(region: BambuCloudRegion): BambuCloudHosts {
@@ -55,7 +57,15 @@ export function bambuCloudHosts(region: BambuCloudRegion): BambuCloudHosts {
 
 /** Every Bambu host this feature is allowed to reach, for the outbound URL guard. */
 export const BAMBU_CLOUD_ALLOWED_HOSTS: readonly string[] = Object.values(BAMBU_CLOUD_HOSTS)
-  .flatMap((hosts) => [hosts.api, hosts.web])
+  .flatMap((hosts) => [hosts.api, hosts.web, hosts.makerWorld])
+
+/** Stable client identity MakerWorld expects on its authenticated web API calls. */
+export const BAMBU_MAKERWORLD_CLIENT_HEADERS: Readonly<Record<string, string>> = {
+  'X-BBL-Client-Type': 'web',
+  'X-BBL-Client-Version': '00.00.00.01',
+  'X-BBL-App-Source': 'makerworld',
+  'X-BBL-Client-Name': 'MakerWorld'
+}
 
 /**
  * The `version` query parameter every `slicer/setting` call requires.
@@ -213,6 +223,8 @@ export const bambuCloudOperationSchema = z.discriminatedUnion('operation', [
   z.object({ operation: z.literal('createSetting'), payload: bambuCloudSettingPayloadSchema }),
   z.object({ operation: z.literal('patchSetting'), settingId: z.string().min(1), payload: bambuCloudSettingPayloadSchema }),
   z.object({ operation: z.literal('deleteSetting'), settingId: z.string().min(1) }),
+  z.object({ operation: z.literal('getMakerWorldDesign'), designId: z.number().int().positive() }),
+  z.object({ operation: z.literal('getMakerWorldDownloadTarget'), instanceId: z.number().int().positive() }),
   /**
    * Trades a refresh token for a fresh credential. The ONLY operation that runs on a
    * schedule, and it exists purely so a connection does not lapse into a full password +
@@ -224,6 +236,10 @@ export const bambuCloudOperationSchema = z.discriminatedUnion('operation', [
 ])
 
 export type BambuCloudOperation = z.infer<typeof bambuCloudOperationSchema>
+export type MakerWorldCloudOperation = Extract<
+  BambuCloudOperation,
+  { operation: 'getMakerWorldDesign' | 'getMakerWorldDownloadTarget' }
+>
 
 export const bambuCloudRequestSchema = z.object({
   region: bambuCloudRegionSchema,

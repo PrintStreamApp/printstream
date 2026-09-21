@@ -1,5 +1,5 @@
 /**
- * Bounded reconnect buffer for running Windows clients. No device credentials or
+ * Bounded reconnect buffer for running desktop clients. No device credentials or
  * subscriptions are stored here. The route rechecks session and membership on
  * every read. Assumes one API process, like the printer event bus; a multi-node
  * deployment needs a shared event log before this buffer can span nodes.

@@ -77,7 +77,7 @@ export function BambuCloudConnectDialog({ onClose, onConnected }: {
     return (
       <FormDialog
         title="Connect a Bambu Lab account"
-        description="Signs in to Bambu Lab to sync your slicing presets. Your printers stay exactly as they are, this reads and writes your account's preset library, nothing else."
+        description="Signs in to Bambu Lab for pasted MakerWorld links and slicing preset sync. Your printers stay exactly as they are, and the app's separate MakerWorld browser keeps its own website sign-in."
         submitLabel="Continue"
         busy={busy}
         submitDisabled={!account.trim() || !password}

@@ -29,15 +29,3 @@ test('readProductVersion rejects malformed and drifting versions', () => {
   assert.throws(() => readProductVersion(fixture('1.2.3', '1.2.4')), /not shared/)
   assert.throws(() => readProductVersion(fixture('1.2.3', '1.2.3', '1.2.2')), /not shared/)
 })
-
-test('readProductVersion rejects a separate Windows package version', () => {
-  const root = fixture('1.2.3')
-  const projectDirectory = path.join(root, 'apps', 'desktop', 'PrintStream.Desktop')
-  mkdirSync(projectDirectory, { recursive: true })
-  writeFileSync(
-    path.join(projectDirectory, 'PrintStream.Desktop.csproj'),
-    '<Project><PropertyGroup><Version>1.2.3</Version></PropertyGroup></Project>'
-  )
-
-  assert.throws(() => readProductVersion(root), /declares a separate <Version>/)
-})

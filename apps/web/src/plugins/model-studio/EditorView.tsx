@@ -50,6 +50,7 @@ import CloseRoundedIcon from '@mui/icons-material/CloseRounded'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import * as THREE from 'three'
 import { OrbitControls, TransformControls } from 'three-stdlib'
+import type { OrbitPivotBounds } from './lib/viewportCamera'
 import type {
   LibraryFile,
   LibraryFolder,
@@ -2411,6 +2412,8 @@ function EditorView({
   // Bed centre of the active plate (plate-local frame == world frame), so the
   // camera frames the bed and body-drag stays on the bed plane.
   const bedCenterRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 })
+  // Live printable footprint used by the shared overview/detail orbit-pivot policy.
+  const bedBoundsRef = useRef<OrbitPivotBounds | null>(null)
   // Latest selection key + gizmo mode for non-React pointer/keyboard handlers.
   const selectedKeyRef = useRef<string | null>(null)
   selectedKeyRef.current = selectedKey
@@ -3656,6 +3659,7 @@ function EditorView({
     userAdjustedViewRef,
     viewDistanceRef,
     bedCenterRef,
+    bedBoundsRef,
     interactionActiveRef,
     onContextRefused: setViewerError,
     selectedKeyRef,
@@ -3796,6 +3800,12 @@ function EditorView({
     const bedCenterX = (activePlate.bed.minX + activePlate.bed.maxX) / 2
     const bedCenterY = (activePlate.bed.minY + activePlate.bed.maxY) / 2
     bedCenterRef.current = { x: bedCenterX, y: bedCenterY }
+    bedBoundsRef.current = {
+      minX: activePlate.bed.minX,
+      maxX: activePlate.bed.maxX,
+      minY: activePlate.bed.minY,
+      maxY: activePlate.bed.maxY
+    }
     // Re-frame the iso view on the new bed centre when the plate changes, sizing distance to
     // the bed. Adding/removing models on the same plate keeps the current camera.
     viewDistanceRef.current = Math.max(bedWidth, bedDepth) * 1.6

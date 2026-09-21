@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { bridgePlatformArchLabel, compareBridgePlatforms, groupByBridgeOs, isMacPlatform, resolveBridgePlatformKey } from './bridgePlatform'
+import {
+  bridgePlatformArchLabel,
+  compareBridgePlatforms,
+  groupByBridgeOs,
+  isMacPlatform,
+  isRecommendedPlatform,
+  resolveBridgePlatformKey,
+  resolveClientPlatformKey
+} from './bridgePlatform'
 
 const WINDOWS_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
 const MAC_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15'
@@ -59,6 +67,23 @@ test('resolveBridgePlatformKey returns null for phones, tablets, and unknowns', 
   assert.equal(resolveBridgePlatformKey({ userAgent: IPAD_UA }), null)
   assert.equal(resolveBridgePlatformKey({ userAgent: ANDROID_UA, uaDataPlatform: 'Android' }), null)
   assert.equal(resolveBridgePlatformKey({ userAgent: '' }), null)
+})
+
+test('resolveClientPlatformKey includes app-only Android and macOS targets', () => {
+  assert.equal(resolveClientPlatformKey({ userAgent: ANDROID_UA }), 'android-any')
+  assert.equal(resolveClientPlatformKey({ userAgent: MAC_UA }), 'darwin-x64')
+  assert.equal(resolveClientPlatformKey({
+    userAgent: MAC_UA,
+    uaDataPlatform: 'macOS',
+    uaDataArchitecture: 'arm',
+    uaDataBitness: '64'
+  }), 'darwin-arm64')
+})
+
+test('store destinations match any architecture on their detected OS', () => {
+  assert.equal(isRecommendedPlatform('win32-any', 'win32-arm64'), true)
+  assert.equal(isRecommendedPlatform('android-any', 'android-any'), true)
+  assert.equal(isRecommendedPlatform('linux-x64', 'linux-arm64'), false)
 })
 
 test('isMacPlatform spots Macs via UA-CH platform or the user agent', () => {

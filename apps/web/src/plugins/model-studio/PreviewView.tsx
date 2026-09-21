@@ -62,7 +62,11 @@ import {
   createViewCube,
   type ViewPreset
 } from './lib/viewCube'
-import { createViewportCameraRig } from './lib/viewportCamera'
+import {
+  createViewportCameraRig,
+  installOrbitPivotBehavior,
+  type OrbitPivotBounds
+} from './lib/viewportCamera'
 import { guardTouchOrbitTransition } from './lib/touchOrbitGesture'
 import { safeFullscreenControlTop } from '../../lib/dialogPresentation'
 import { ViewportBuildOverlay } from './ViewportBuildOverlay'
@@ -144,6 +148,10 @@ interface PreviewRig {
    * Feeds the per-frame depth-range fit (see `lib/previewDepthRange.ts`); 0 until content loads.
    */
   contentRadius: number
+  /** Printable/model footprint used to choose the overview or detail orbit pivot. */
+  pivotBounds: OrbitPivotBounds | null
+  /** Bed/floor height after the loaded object has been re-centred around the origin. */
+  pivotPlaneZ: number
   applyViewPreset: (preset: ViewPreset) => void
   syncViewCubeOrientation: () => void
   /**
@@ -480,6 +488,8 @@ export function PreviewView(props: Record<string, unknown>) {
       platedFrameRadius: 1,
       platedContentSize: null,
       contentRadius: 0,
+      pivotBounds: null,
+      pivotPlaneZ: 0,
       applyViewPreset: () => undefined,
       syncViewCubeOrientation: () => undefined,
       invalidate: () => {
@@ -506,6 +516,14 @@ export function PreviewView(props: Record<string, unknown>) {
     // implementation rather than one each. `invalidate` marks the frame dirty, so an animating
     // camera keeps drawing while an idle preview still costs nothing.
     const cameraRig = createViewportCameraRig(camera, controls, rigState.invalidate)
+    const releaseOrbitPivotBehavior = installOrbitPivotBehavior(
+      renderer.domElement,
+      controls,
+      cameraRig,
+      () => rigState.pivotBounds
+        ? { planeZ: rigState.pivotPlaneZ, bounds: rigState.pivotBounds }
+        : null
+    )
 
     const applyViewDirection = (from: { x: number; y: number; z: number }) => {
       if (camera instanceof THREE.OrthographicCamera && rigState.platedContentSize) {
@@ -658,6 +676,7 @@ export function PreviewView(props: Record<string, unknown>) {
       resizeObserver?.disconnect()
       controls.removeEventListener('change', rigState.invalidate)
       releaseTouchOrbitGuard()
+      releaseOrbitPivotBehavior()
       cameraRig.dispose()
       controls.dispose()
       renderer.dispose()
@@ -710,6 +729,9 @@ export function PreviewView(props: Record<string, unknown>) {
     // re-runs when it lands (rig is a dependency).
     if (!rig) return
     const { scene, camera, controls } = rig
+    // While new content is loading, no stale footprint from the previous plate/file may steer a
+    // gesture. The loader replaces both values atomically when the object is attached.
+    rig.pivotBounds = null
 
     let previewObject: THREE.Object3D | null = null
     let cancelled = false
@@ -740,6 +762,26 @@ export function PreviewView(props: Record<string, unknown>) {
       scene.add(object)
 
       const size = box.getSize(new THREE.Vector3())
+      if (isPlatedPreview && sceneData?.bed) {
+        // The complete plated scene is translated by `-center`; apply that same translation to
+        // the printer bed so the orbit policy continues to use the real printable footprint.
+        rig.pivotBounds = {
+          minX: sceneData.bed.minX - center.x,
+          maxX: sceneData.bed.maxX - center.x,
+          minY: sceneData.bed.minY - center.y,
+          maxY: sceneData.bed.maxY - center.y
+        }
+        rig.pivotPlaneZ = -center.z
+      } else {
+        // A loose mesh has no printer bed, so its own centred floor footprint is the subject.
+        rig.pivotBounds = {
+          minX: -size.x / 2,
+          maxX: size.x / 2,
+          minY: -size.y / 2,
+          maxY: size.y / 2
+        }
+        rig.pivotPlaneZ = -size.z / 2
+      }
       if (rig.stlGrid) {
         // Rest the floor grid under the now-centred model.
         rig.stlGrid.position.z = -size.z / 2

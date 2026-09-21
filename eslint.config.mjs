@@ -27,7 +27,7 @@ export default tseslint.config(
       // Native build outputs contain generated and copied browser assets.
       'apps/desktop/**/bin/**',
       'apps/desktop/**/obj/**',
-      'apps/desktop/artifacts/**'
+      'apps/desktop/**/artifacts/**'
     ]
   },
   js.configs.recommended,
@@ -37,16 +37,6 @@ export default tseslint.config(
     languageOptions: {
       globals: {
         ...globals.node
-      }
-    }
-  },
-  {
-    files: ['apps/desktop/PrintStream.Desktop/host-*.js'],
-    languageOptions: {
-      globals: {
-        ...globals.browser,
-        // Replaced with the exact trusted-origin list before injection by MainWindow.
-        __PRINTSTREAM_ORIGINS__: 'readonly'
       }
     }
   },

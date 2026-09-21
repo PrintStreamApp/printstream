@@ -74,6 +74,20 @@ test('the China region is reached on its own hosts', async () => {
   assert.match(calls[0]?.url ?? '', /^https:\/\/api\.bambulab\.cn\//)
 })
 
+test('MakerWorld calls use the regional origin and fixed named path', async () => {
+  const calls = stubFetch(() => ({ body: '{"id":42}' }))
+
+  await performBambuCloudRequest({
+    region: 'global',
+    accessToken: 'token',
+    request: { operation: 'getMakerWorldDesign', designId: 42 }
+  })
+
+  assert.equal(calls[0]?.url, 'https://makerworld.com/api/v1/design-service/design/42')
+  assert.equal(calls[0]?.headers.authorization, 'Bearer token')
+  assert.equal(calls[0]?.headers['x-bbl-client-name'], 'MakerWorld')
+})
+
 test('sign-in calls never carry the bearer token', async () => {
   const calls = stubFetch(() => ({ body: '{"loginType":"verifyCode"}' }))
   await performBambuCloudRequest({

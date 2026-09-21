@@ -38,14 +38,14 @@ export function resolveImportReadiness(input: {
   isDirectPrintable: boolean
   /** Set when the pasted URL names a MakerWorld model. */
   makerWorld: { enabled: boolean; accountConnected: boolean } | null
-  /** A provider challenge the user must clear themselves before retrying. */
+  /** A provider challenge that requires a manual browser download and library upload. */
   requiresManualIntervention: boolean
 }): ImportReadiness {
   const blocked = (reason: string): ImportReadiness => ({ canImport: false, canPrint: false, reason })
 
   if (!input.hasUrl) return { canImport: false, canPrint: false, reason: null }
   if (input.requiresManualIntervention) {
-    return blocked('Clear the challenge on the provider site, then try again.')
+    return blocked('Download the model manually from MakerWorld, then upload the downloaded file from the Library.')
   }
 
   if (input.makerWorld) {

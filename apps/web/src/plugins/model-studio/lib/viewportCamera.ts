@@ -28,10 +28,13 @@
  *
  * ## The pivot
  *
- * {@link ViewportCameraRig.groundPivot} re-seats the orbit target on a horizontal plane under the
- * middle of the view, once per rotate gesture. Without it the pivot is wherever panning last left
- * the target, and panning moves it in the SCREEN plane -- so on a tilted camera every vertical pan
- * lifts it off the plate, and the model then swings wide around a point floating in space.
+ * {@link ViewportCameraRig.groundPivot} chooses between two useful orbit targets once per rotate
+ * gesture. When the whole bed is comfortably visible, the bed is the subject and rotation moves
+ * the camera around its centre WITHOUT pulling that centre to the middle of the screen. Once the
+ * user has zoomed into a detail, the subject is the area under the middle of the view; that point
+ * is projected onto the bed plane and clamped to its footprint.
+ * Without this policy the pivot is wherever zoom-to-cursor or panning last left it, and either can
+ * leave the model swinging around a point floating in space or beyond a corner of the bed.
  *
  * Ports the pivot BambuStudio computes for a Ctrl-rotate (`GLCanvas3D.cpp:5941`): the point under
  * the screen centre, resolved when the drag starts and held for its duration. One deliberate
@@ -46,10 +49,11 @@
  * after a reframe slides the pivot along the view axis to reach a different height, which reads as
  * the centre of rotation jumping away from the middle of the plate.
  *
- * Staying ON the view axis is what makes the re-seat invisible: the ray through the middle of the
- * viewport IS the camera's forward axis, so the new pivot is already dead ahead and re-targeting
- * cannot rotate anything, only change the orbit RADIUS. (Studio flattens to `z = 0` regardless,
- * which it can afford because `rotate_on_sphere_with_target` carries its own orientation.)
+ * In close-up, staying ON the view axis makes the re-seat invisible: the ray through the middle of
+ * the viewport IS the camera's forward axis, so the new pivot is already dead ahead and
+ * re-targeting cannot rotate anything, only change the orbit RADIUS. (Studio flattens to `z = 0`
+ * regardless, which it can afford because `rotate_on_sphere_with_target` carries its own
+ * orientation.)
  */
 import * as THREE from 'three'
 import type { OrbitControls } from 'three-stdlib'
@@ -70,6 +74,27 @@ export const VIEW_TWEEN_MIN_ANGLE = 0.02
 export const ORBIT_PIVOT_MIN_AXIS_TILT = 0.08
 /** Multiples of the current pivot distance a new pivot may sit at before the old one is kept. */
 export const ORBIT_PIVOT_MAX_REACH = 8
+/**
+ * Maximum projected bed span (NDC is 2 units across the viewport) that still reads as an
+ * overview. The remaining 20% is breathing room around the bed, split across both sides.
+ */
+export const ORBIT_OVERVIEW_MAX_NDC_SPAN = 1.6
+/** Quiet period after pointer-up that marks the end of OrbitControls' damping tail. */
+export const ORBIT_DAMPING_SETTLE_MS = 160
+
+/** The printable footprint that bounds a useful orbit pivot. */
+export interface OrbitPivotBounds {
+  minX: number
+  maxX: number
+  minY: number
+  maxY: number
+}
+
+/** Live plate context read when a rotate gesture actually begins. */
+export interface OrbitPivotContext {
+  planeZ: number
+  bounds: OrbitPivotBounds
+}
 
 /** Where a swing should end up. */
 export interface ViewportCameraDestination {
@@ -96,11 +121,19 @@ export interface ViewportCameraRig {
   advance(now: number): boolean
   /** Stop steering the camera; the user has taken it. */
   cancel(): void
+  /** Whether the bed is currently framed as a whole subject rather than a zoomed detail. */
+  isOverview(planeZ: number, bounds: OrbitPivotBounds): boolean
+  /** Begin/end an overview orbit that preserves the bed's current screen position. */
+  beginInPlaceOrbit(pivot: THREE.Vector3): void
+  /** Keep correcting through the damping tail, then end after the controls settle. */
+  finishInPlaceOrbit(): void
+  /** End immediately because another gesture type has taken control. */
+  endInPlaceOrbit(): void
   /**
    * Re-seat the pivot on `planeZ` under the middle of the view. No-op when the camera is too level
    * to meet the plane usefully, or when the meeting point is absurdly far.
    */
-  groundPivot(planeZ: number): void
+  groundPivot(planeZ: number, bounds?: OrbitPivotBounds): void
   /** Remove the gesture listener. The camera and controls are the caller's to dispose. */
   dispose(): void
 }
@@ -115,6 +148,12 @@ interface ViewTween {
   readonly startedAt: number
 }
 
+interface InPlaceOrbitFrame {
+  readonly pivot: THREE.Vector3
+  /** Pivot position in camera space at gesture start, including depth/apparent scale. */
+  readonly cameraSpacePosition: THREE.Vector3
+}
+
 /**
  * Build the rig for one viewport.
  *
@@ -127,13 +166,48 @@ export function createViewportCameraRig(
   onChange?: () => void
 ): ViewportCameraRig {
   let tween: ViewTween | null = null
+  let inPlaceOrbit: InPlaceOrbitFrame | null = null
+  let inPlaceOrbitEndTimer: ReturnType<typeof setTimeout> | null = null
   const tweenTarget = new THREE.Vector3()
   const viewAxis = new THREE.Vector3()
+  const inPlacePivotOffset = new THREE.Vector3()
+  const inPlaceDesiredCameraPosition = new THREE.Vector3()
+  const inPlaceCorrection = new THREE.Vector3()
+
+  /**
+   * OrbitControls always keeps its target in the middle of the screen. During an overview orbit,
+   * place the camera so the bed centre retains its full camera-space position from gesture start.
+   * Preserving X/Y keeps an off-centre bed exactly where the user put it; preserving Z keeps its
+   * perspective scale, so rotation cannot quietly dolly the view closer or farther. This remains
+   * stable across OrbitControls' world-up correction, whereas accumulating quaternion deltas
+   * eventually drifts when the camera crosses an axis.
+   */
+  const preserveOverviewComposition = () => {
+    if (!inPlaceOrbit) return
+    if (inPlaceOrbitEndTimer) {
+      clearTimeout(inPlaceOrbitEndTimer)
+      inPlaceOrbitEndTimer = setTimeout(endInPlaceOrbitNow, ORBIT_DAMPING_SETTLE_MS)
+    }
+    camera.updateMatrixWorld(true)
+    inPlacePivotOffset.copy(inPlaceOrbit.cameraSpacePosition).applyQuaternion(camera.quaternion)
+    inPlaceDesiredCameraPosition.copy(inPlaceOrbit.pivot).sub(inPlacePivotOffset)
+    inPlaceCorrection.copy(inPlaceDesiredCameraPosition).sub(camera.position)
+    camera.position.add(inPlaceCorrection)
+    controls.target.add(inPlaceCorrection)
+    camera.updateMatrixWorld(true)
+  }
+
+  const endInPlaceOrbitNow = () => {
+    if (inPlaceOrbitEndTimer) clearTimeout(inPlaceOrbitEndTimer)
+    inPlaceOrbitEndTimer = null
+    inPlaceOrbit = null
+  }
 
   const cancel = () => { tween = null }
   // `start` rather than a pointerdown listener: it covers the wheel too, and a zoom made mid-swing
   // would otherwise be overwritten on the very next frame.
   controls.addEventListener('start', cancel)
+  controls.addEventListener('change', preserveOverviewComposition)
 
   return {
     swingTo({ direction, target, distance }) {
@@ -184,7 +258,31 @@ export function createViewportCameraRig(
 
     cancel,
 
-    groundPivot(planeZ: number) {
+    isOverview(planeZ: number, bounds: OrbitPivotBounds) {
+      return bedFitsComfortablyInView(camera, bounds, planeZ)
+    },
+
+    beginInPlaceOrbit(pivot: THREE.Vector3) {
+      if (inPlaceOrbitEndTimer) clearTimeout(inPlaceOrbitEndTimer)
+      inPlaceOrbitEndTimer = null
+      camera.updateMatrixWorld(true)
+      inPlaceOrbit = {
+        pivot: pivot.clone(),
+        cameraSpacePosition: pivot.clone().applyMatrix4(camera.matrixWorldInverse)
+      }
+    },
+
+    finishInPlaceOrbit() {
+      if (!inPlaceOrbit) return
+      if (inPlaceOrbitEndTimer) clearTimeout(inPlaceOrbitEndTimer)
+      inPlaceOrbitEndTimer = setTimeout(endInPlaceOrbitNow, ORBIT_DAMPING_SETTLE_MS)
+    },
+
+    endInPlaceOrbit() {
+      endInPlaceOrbitNow()
+    },
+
+    groundPivot(planeZ: number, bounds?: OrbitPivotBounds) {
       camera.getWorldDirection(viewAxis)
       // A camera looking level or upward never meets the plane; leave the pivot alone rather than
       // throwing it out to the horizon.
@@ -195,13 +293,165 @@ export function createViewportCameraRig(
       // the old pivot is the better answer.
       if (distance > camera.position.distanceTo(controls.target) * ORBIT_PIVOT_MAX_REACH) return
       controls.target.copy(camera.position).addScaledVector(viewAxis, distance)
+      if (bounds) constrainPivotToBounds(controls.target, bounds)
     },
 
     dispose() {
       controls.removeEventListener('start', cancel)
+      controls.removeEventListener('change', preserveOverviewComposition)
+      endInPlaceOrbitNow()
       cancel()
     }
   }
+}
+
+/**
+ * Install the rotate-start policy shared by editor and preview canvases.
+ *
+ * Touch waits until the first one-finger MOVE before choosing overview or detail behavior. A
+ * second finger arriving first marks the entire gesture as pan/dolly, so beginning a two-finger
+ * pan cannot rewrite the later orbit pivot. Capture-phase move runs before OrbitControls consumes
+ * that first rotation delta.
+ */
+export function installOrbitPivotBehavior(
+  element: HTMLElement,
+  controls: Pick<OrbitControls, 'enabled'>,
+  rig: Pick<
+    ViewportCameraRig,
+    'groundPivot' | 'isOverview' | 'beginInPlaceOrbit' | 'finishInPlaceOrbit' | 'endInPlaceOrbit'
+  >,
+  getContext: () => OrbitPivotContext | null
+): () => void {
+  const activeTouches = new Set<number>()
+  let multiTouchGesture = false
+  let touchGrounded = false
+  const gestureTarget: Pick<HTMLElement, 'addEventListener' | 'removeEventListener'> = element.ownerDocument ?? element
+
+  const beginOrbit = () => {
+    if (!controls.enabled) {
+      rig.endInPlaceOrbit()
+      return
+    }
+    const context = getContext()
+    if (!context) {
+      rig.endInPlaceOrbit()
+      return
+    }
+    if (rig.isOverview(context.planeZ, context.bounds)) {
+      rig.beginInPlaceOrbit(new THREE.Vector3(
+        (context.bounds.minX + context.bounds.maxX) / 2,
+        (context.bounds.minY + context.bounds.maxY) / 2,
+        context.planeZ
+      ))
+      return
+    }
+    rig.endInPlaceOrbit()
+    rig.groundPivot(context.planeZ, context.bounds)
+  }
+
+  const onPointerDown = (event: PointerEvent) => {
+    if (event.pointerType === 'touch') {
+      if (activeTouches.size === 0) {
+        multiTouchGesture = false
+        touchGrounded = false
+      }
+      activeTouches.add(event.pointerId)
+      if (activeTouches.size > 1) {
+        multiTouchGesture = true
+        rig.endInPlaceOrbit()
+      }
+      return
+    }
+    // OrbitControls maps modified left-drag and the other mouse buttons to pan/dolly. End any
+    // overview tail before those gestures so composition correction cannot fight an intentional
+    // pan that starts immediately after rotation.
+    if (event.button === 0 && !event.ctrlKey && !event.metaKey && !event.shiftKey) beginOrbit()
+    else rig.endInPlaceOrbit()
+  }
+
+  const onPointerMove = (event: PointerEvent) => {
+    if (event.pointerType !== 'touch' || !activeTouches.has(event.pointerId)) return
+    if (activeTouches.size !== 1 || multiTouchGesture || touchGrounded) return
+    beginOrbit()
+    touchGrounded = true
+  }
+
+  const onPointerEnd = (event: PointerEvent) => {
+    if (event.pointerType !== 'touch') {
+      rig.finishInPlaceOrbit()
+      return
+    }
+    activeTouches.delete(event.pointerId)
+    if (activeTouches.size === 0) {
+      multiTouchGesture = false
+      touchGrounded = false
+      rig.finishInPlaceOrbit()
+    }
+  }
+
+  // Wheel zoom is a different gesture and must not be mistaken for the tail of an overview orbit.
+  // Capture runs before OrbitControls' own wheel handler mutates the camera.
+  const onWheel = () => rig.endInPlaceOrbit()
+
+  element.addEventListener('pointerdown', onPointerDown)
+  element.addEventListener('wheel', onWheel, true)
+  gestureTarget.addEventListener('pointermove', onPointerMove as EventListener, true)
+  gestureTarget.addEventListener('pointerup', onPointerEnd as EventListener)
+  gestureTarget.addEventListener('pointercancel', onPointerEnd as EventListener)
+
+  return () => {
+    rig.endInPlaceOrbit()
+    element.removeEventListener('pointerdown', onPointerDown)
+    element.removeEventListener('wheel', onWheel, true)
+    gestureTarget.removeEventListener('pointermove', onPointerMove as EventListener, true)
+    gestureTarget.removeEventListener('pointerup', onPointerEnd as EventListener)
+    gestureTarget.removeEventListener('pointercancel', onPointerEnd as EventListener)
+  }
+}
+
+/**
+ * Whether the bed is small enough on screen that rotation should treat it as one whole subject.
+ * Projected SIZE is intentional rather than containment: panning does not turn an overview into a
+ * close-up, while zooming does. The bounds come from the active printer, never a standard-bed
+ * assumption.
+ */
+export function bedFitsComfortablyInView(
+  camera: THREE.Camera,
+  bounds: OrbitPivotBounds,
+  planeZ: number
+): boolean {
+  camera.updateMatrixWorld(true)
+  const minX = Math.min(bounds.minX, bounds.maxX)
+  const maxX = Math.max(bounds.minX, bounds.maxX)
+  const minY = Math.min(bounds.minY, bounds.maxY)
+  const maxY = Math.max(bounds.minY, bounds.maxY)
+  let projectedMinX = Infinity
+  let projectedMaxX = -Infinity
+  let projectedMinY = Infinity
+  let projectedMaxY = -Infinity
+
+  for (const [x, y] of [[minX, minY], [minX, maxY], [maxX, minY], [maxX, maxY]]) {
+    const corner = new THREE.Vector3(x, y, planeZ)
+    const cameraSpace = corner.clone().applyMatrix4(camera.matrixWorldInverse)
+    // A corner on/behind the eye cannot describe a useful overview.
+    if (!Number.isFinite(cameraSpace.z) || cameraSpace.z >= 0) return false
+    corner.project(camera)
+    if (!Number.isFinite(corner.x) || !Number.isFinite(corner.y)) return false
+    projectedMinX = Math.min(projectedMinX, corner.x)
+    projectedMaxX = Math.max(projectedMaxX, corner.x)
+    projectedMinY = Math.min(projectedMinY, corner.y)
+    projectedMaxY = Math.max(projectedMaxY, corner.y)
+  }
+
+  return projectedMaxX - projectedMinX <= ORBIT_OVERVIEW_MAX_NDC_SPAN
+    && projectedMaxY - projectedMinY <= ORBIT_OVERVIEW_MAX_NDC_SPAN
+}
+
+/** Keep a close-up pivot on the printable footprint even when the view centre has drifted past it. */
+export function constrainPivotToBounds(pivot: THREE.Vector3, bounds: OrbitPivotBounds): THREE.Vector3 {
+  pivot.x = THREE.MathUtils.clamp(pivot.x, Math.min(bounds.minX, bounds.maxX), Math.max(bounds.minX, bounds.maxX))
+  pivot.y = THREE.MathUtils.clamp(pivot.y, Math.min(bounds.minY, bounds.maxY), Math.max(bounds.minY, bounds.maxY))
+  return pivot
 }
 
 /** Wall clock for the tween. Split out so a test can drive `advance` without one. */

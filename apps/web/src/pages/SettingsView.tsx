@@ -31,6 +31,7 @@ import { resolveSettingsAuthState } from '../lib/settingsAuth'
 import { useRuntimePolicy } from '../lib/runtimePolicy'
 import { buildWorkspacePath, parseWorkspacePathname } from '../lib/workspaceRoute'
 import { StaticPluginSlot } from '../plugin/StaticPluginSlot'
+import { PluginSlot } from '../plugin/PluginSlot'
 import { LicenseSettingsSection } from './LicenseSettingsSection'
 import { SlicingPresetsSettingsSection } from '../components/settings/slicing-presets/SlicingPresetsSection'
 import { SlicerEngineVisibilityCard } from './SlicerEngineVisibilityCard'
@@ -221,6 +222,8 @@ export function SettingsView({
               onAction={() => navigate(settingsPath('/settings/plugins'))}
             />
           )}
+
+          <PluginSlot name="settings.overview" />
 
           {showsWorkspaceNotifications && (
             <SettingsOverviewCard

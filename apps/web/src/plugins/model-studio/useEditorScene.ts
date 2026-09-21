@@ -24,7 +24,11 @@ import {
   type MeshCircleIndex
 } from './lib/measureFeatures'
 import { circleScreenZone, raySeesThroughCircle } from './lib/circleScreenZone'
-import { createViewportCameraRig } from './lib/viewportCamera'
+import {
+  createViewportCameraRig,
+  installOrbitPivotBehavior,
+  type OrbitPivotBounds
+} from './lib/viewportCamera'
 import { guardTouchOrbitTransition } from './lib/touchOrbitGesture'
 import * as THREE from 'three'
 import { createWebglRenderer } from './lib/webglRenderer'
@@ -193,6 +197,7 @@ export interface EditorSceneParams {
   userAdjustedViewRef: MutableRefObject<boolean>
   viewDistanceRef: MutableRefObject<number>
   bedCenterRef: MutableRefObject<{ x: number; y: number }>
+  bedBoundsRef: MutableRefObject<OrbitPivotBounds | null>
   interactionActiveRef: MutableRefObject<boolean>
   /**
    * The browser would not grant a WebGL context. Reported rather than thrown: an unguarded
@@ -374,6 +379,7 @@ export function useEditorScene(params: EditorSceneParams): void {
     userAdjustedViewRef,
     viewDistanceRef,
     bedCenterRef,
+    bedBoundsRef,
     interactionActiveRef,
     onContextRefused,
     selectedKeyRef,
@@ -2488,25 +2494,19 @@ export function useEditorScene(params: EditorSceneParams): void {
       openContextMenuRef.current(key ? { x: event.clientX, y: event.clientY, key } : null)
     }
 
-    /**
-     * Re-seat the orbit pivot on whatever the drag is about to turn around.
-     *
-     * Registered AFTER `onPointerDown` on purpose, so it sees the `orbit.enabled = false` that
-     * handler writes for a gizmo drag, a paint stroke or a tool click, and leaves those alone.
-     * Studio resolves its pivot the same way, on the press rather than per move.
-     *
-     * Touch counts because `OrbitControls.touches.ONE` is a rotate; a second finger turns the
-     * gesture into a pan or a dolly, by which point the pivot is already seated and harmless.
-     */
-    const onPointerDownGroundPivot = (event: PointerEvent) => {
-      if (!orbit.enabled) return
-      if (event.pointerType !== 'touch' && event.button !== 0) return
-      cameraRig.groundPivot(ORBIT_PIVOT_PLANE_Z)
-    }
-
     renderer.domElement.addEventListener('pointerdown', claimSelectedObjectPointer, true)
     renderer.domElement.addEventListener('pointerdown', onPointerDown)
-    renderer.domElement.addEventListener('pointerdown', onPointerDownGroundPivot)
+    // Install AFTER the tool handler so mouse rotation sees `orbit.enabled = false` for a gizmo,
+    // paint stroke or tool click. Touch grounding waits for a one-finger move, which also lets a
+    // second finger claim pan/dolly without changing the later rotation pivot.
+    const releaseOrbitPivotBehavior = installOrbitPivotBehavior(
+      renderer.domElement,
+      orbit,
+      cameraRig,
+      () => bedBoundsRef.current
+        ? { planeZ: ORBIT_PIVOT_PLANE_Z, bounds: bedBoundsRef.current }
+        : null
+    )
     renderer.domElement.addEventListener('pointermove', onPointerMove)
     // The pointer leaving the canvas fires no move, so anything drawn UNDER it has to be cleared
     // here or it simply stays. Harmless for the brush ring; not for the fill preview, which is a
@@ -2816,11 +2816,11 @@ export function useEditorScene(params: EditorSceneParams): void {
       requestRenderRef.current = null
       orbit.removeEventListener('change', requestRender)
       releaseTouchOrbitGuard()
+      releaseOrbitPivotBehavior()
       cameraRig.dispose()
       renderer.domElement.removeEventListener('pointermove', onPointerMoveRender)
       renderer.domElement.removeEventListener('pointerdown', claimSelectedObjectPointer, true)
       renderer.domElement.removeEventListener('pointerdown', onPointerDown)
-      renderer.domElement.removeEventListener('pointerdown', onPointerDownGroundPivot)
       renderer.domElement.removeEventListener('pointerleave', onPointerLeave)
       renderer.domElement.removeEventListener('pointermove', onPointerMove)
       renderer.domElement.removeEventListener('pointerup', endBodyDrag)

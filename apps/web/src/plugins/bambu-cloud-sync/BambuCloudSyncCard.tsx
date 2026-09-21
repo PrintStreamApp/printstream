@@ -12,8 +12,9 @@
  * Sourced from `/status` rather than the last sync's own result so it survives a page
  * reload and surfaces anything the BACKGROUND pass found too, not just a manual sync.
  *
- * Rendered through the `slicing.presets.sync` slot, so the manager looks exactly as it
- * did when this plugin is not installed.
+ * Rendered both on the plugin-owned Bambu account Settings route and through the
+ * `slicing.presets.sync` slot. The Settings overview entry, route, and slicing panel all
+ * disappear when this plugin is disabled.
  *
  * Counterpart: `apps/api/src/plugins/bambu-cloud-sync/index.ts`.
  */
@@ -129,9 +130,9 @@ export function BambuCloudSyncCard(): JSX.Element {
         </Stack>
 
         <Typography level="body-sm" textColor="text.tertiary">
-          Keeps your presets and the ones in Bambu Studio in step, both ways. Whichever copy was
-          edited most recently wins. This does not connect your printers to Bambu&apos;s cloud, only
-          your account&apos;s preset library is read and written.
+          Lets this workspace import models from pasted MakerWorld links and keeps your presets and the ones in
+          Bambu Studio in step, both ways. Whichever preset copy was edited most recently wins. This
+          does not connect your printers to Bambu&apos;s cloud or sign in the separate MakerWorld browser.
         </Typography>
 
         {connection ? (

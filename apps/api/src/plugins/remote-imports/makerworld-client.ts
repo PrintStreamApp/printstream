@@ -23,22 +23,19 @@
  * Deliberately NOT here: which workspace may do this, and whether they opted in.
  * This module takes a credential it is handed and makes the calls.
  *
- * Known follow-up: `bambu-cloud-sync` routes its Bambu traffic through the BRIDGE
- * when one is connected, specifically so a multi-workspace cloud deployment does not
- * hit Bambu from one shared IP. These calls go direct from the API. Relaying them
- * would need new named operations on the bridge protocol (the relay takes named
- * operations, never URLs, so it cannot become an SSRF proxy), and the bridge deploys
- * separately, so a lagging bridge would have to fall back here anyway.
+ * The connected-account resolver routes these named calls through the workspace's
+ * bridge when possible. Only design/profile ids cross that boundary, never a URL, so
+ * the relay cannot become an SSRF proxy. A lagging/offline bridge falls back to the API.
  */
 import { assertSafeOutboundUrl } from '../../lib/outbound-url-guard.js'
 import { badRequest, HttpError } from '../../lib/http-error.js'
 import type { BambuAccountCredential } from '../../lib/bambu-account-registry.js'
-
-/** Per-region MakerWorld API origin, mirroring BambuStudio's `get_model_http_url`. */
-const MAKERWORLD_ORIGINS: Record<BambuAccountCredential['region'], string> = {
-  global: 'https://makerworld.com',
-  china: 'https://makerworld.com.cn'
-}
+import {
+  BAMBU_MAKERWORLD_CLIENT_HEADERS,
+  bambuCloudHosts,
+  type BambuCloudResponse,
+  type MakerWorldCloudOperation
+} from '@printstream/shared'
 
 /**
  * Hosts the signed download URL is allowed to point at. MakerWorld hands back a
@@ -47,17 +44,6 @@ const MAKERWORLD_ORIGINS: Record<BambuAccountCredential['region'], string> = {
  * SSRF primitive, since we fetch whatever URL it names.
  */
 const MAKERWORLD_FILE_HOSTS = ['bblmw.com', 'makerworld.com', 'makerworld.com.cn'] as const
-
-/**
- * Client headers the MakerWorld web app sends. Mirrored because the API varies its
- * behaviour by client; they are not a credential and carry nothing about the user.
- */
-const MAKERWORLD_CLIENT_HEADERS = {
-  'X-BBL-Client-Type': 'web',
-  'X-BBL-Client-Version': '00.00.00.01',
-  'X-BBL-App-Source': 'makerworld',
-  'X-BBL-Client-Name': 'MakerWorld'
-} as const
 
 const MAKERWORLD_TIMEOUT_MS = 20_000
 
@@ -92,6 +78,7 @@ export async function fetchMakerWorldDesign(input: {
 }): Promise<MakerWorldDesign> {
   const body = await makerWorldApiGet({
     path: `/api/v1/design-service/design/${input.designId}`,
+    operation: { operation: 'getMakerWorldDesign', designId: input.designId },
     credential: input.credential,
     deps: input.deps
   })
@@ -123,6 +110,7 @@ export async function fetchMakerWorldDownloadTarget(input: {
 }): Promise<MakerWorldDownloadTarget> {
   const body = await makerWorldApiGet({
     path: `/api/v1/design-service/instance/${input.instanceId}/f3mf`,
+    operation: { operation: 'getMakerWorldDownloadTarget', instanceId: input.instanceId },
     credential: input.credential,
     deps: input.deps
   })
@@ -163,18 +151,24 @@ export async function resolveMakerWorldDownload(input: {
 
 async function makerWorldApiGet(input: {
   path: string
+  operation: MakerWorldCloudOperation
   credential: BambuAccountCredential
   deps?: MakerWorldFetchDeps
 }): Promise<Record<string, unknown>> {
+  if (input.credential.requestMakerWorld) {
+    const response = await input.credential.requestMakerWorld(input.operation)
+    return readMakerWorldRelayResponse(response)
+  }
+
   const fetchImpl = input.deps?.fetchImpl ?? fetch
-  const url = `${MAKERWORLD_ORIGINS[input.credential.region]}${input.path}`
+  const url = `https://${bambuCloudHosts(input.credential.region).makerWorld}${input.path}`
   let response: Response
   try {
     response = await fetchImpl(url, {
       headers: {
         accept: 'application/json',
         authorization: `Bearer ${input.credential.accessToken}`,
-        ...MAKERWORLD_CLIENT_HEADERS
+        ...BAMBU_MAKERWORLD_CLIENT_HEADERS
       },
       signal: AbortSignal.timeout(MAKERWORLD_TIMEOUT_MS)
     })
@@ -183,7 +177,8 @@ async function makerWorldApiGet(input: {
   }
 
   if (!response.ok) {
-    throw translateMakerWorldError(response.status, await readErrorMessage(response))
+    const error = await readErrorResponse(response)
+    throw translateMakerWorldError(response.status, error.message, error.bodyText)
   }
 
   try {
@@ -193,23 +188,38 @@ async function makerWorldApiGet(input: {
   }
 }
 
+/** Interprets the raw bridge/direct transport response without exposing credentials. */
+function readMakerWorldRelayResponse(response: BambuCloudResponse): Record<string, unknown> {
+  const message = readBodyErrorMessage(response.body)
+  if (response.status < 200 || response.status >= 300) {
+    throw translateMakerWorldError(response.status, message, response.bodyText)
+  }
+  if (!response.body || typeof response.body !== 'object' || Array.isArray(response.body)) {
+    throw new HttpError(502, 'MakerWorld returned a response PrintStream could not read.')
+  }
+  return response.body as Record<string, unknown>
+}
+
 /**
  * Maps MakerWorld's failures onto something the user can act on.
  *
  * The distinction that matters: 401/403 means the stored Bambu credential is the
- * problem (reconnect), while 418 is the anti-bot challenge, which only clears by the
- * user visiting MakerWorld themselves, no amount of retrying here helps, so say so
- * rather than surfacing a bare status. Mirrors the guidance the browser helper shows
- * (`errorGuidance.ts`), so the two paths tell the user the same story.
+ * problem (reconnect), while 418 is the anti-bot challenge. The transport has already
+ * retried a challenge once before this runs, so a challenge that remains needs useful
+ * fallback guidance rather than another loop. Mirrors the guidance the browser helper
+ * shows (`errorGuidance.ts`), so the two paths tell the user the same story.
  */
-function translateMakerWorldError(status: number, message: string | null): HttpError {
+function translateMakerWorldError(status: number, message: string | null, bodyText?: string): HttpError {
+  if (status === 418 || (message != null && /captcha|robot/i.test(message)) || /Just a moment|challenges\.cloudflare/i.test(bodyText ?? '')) {
+    return new HttpError(
+      502,
+      'MakerWorld blocked PrintStream\'s automated download with a security challenge. Download the model manually from MakerWorld, then upload the downloaded file to your PrintStream library.'
+    )
+  }
   if (status === 401 || status === 403) {
     return new HttpError(502, message?.trim()
       ? `MakerWorld rejected the connected Bambu Lab account: ${message}`
-      : 'MakerWorld rejected the connected Bambu Lab account. Reconnect it in the Bambu Cloud settings.')
-  }
-  if (status === 418 || (message != null && /captcha|robot/i.test(message))) {
-    return new HttpError(502, 'MakerWorld blocked the download with an anti-bot challenge. Open the model on MakerWorld, download it there once to clear the challenge, then try again.')
+      : 'MakerWorld rejected the connected Bambu Lab account. Reconnect it in Settings under Bambu account.')
   }
   if (status === 404) {
     return new HttpError(404, 'That MakerWorld model could not be found. It may be private or removed.')
@@ -217,13 +227,20 @@ function translateMakerWorldError(status: number, message: string | null): HttpE
   return new HttpError(502, message?.trim() ? `MakerWorld responded: ${message}` : `MakerWorld responded ${status}.`)
 }
 
-async function readErrorMessage(response: Response): Promise<string | null> {
+function readBodyErrorMessage(body: unknown): string | null {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return null
+  const record = body as { error?: unknown; message?: unknown }
+  if (typeof record.error === 'string') return record.error
+  return typeof record.message === 'string' ? record.message : null
+}
+
+async function readErrorResponse(response: Response): Promise<{ message: string | null; bodyText: string }> {
+  const bodyText = await response.text()
   try {
-    const body = await response.json() as { error?: unknown; message?: unknown }
-    if (typeof body?.error === 'string') return body.error
-    if (typeof body?.message === 'string') return body.message
+    return { message: readBodyErrorMessage(JSON.parse(bodyText)), bodyText }
   } catch {
-    // A non-JSON error body tells us nothing useful; the status carries the meaning.
+    // HTML challenge pages are classified from the text; other non-JSON responses
+    // still fall back to their status without leaking the upstream body to the user.
+    return { message: null, bodyText }
   }
-  return null
 }

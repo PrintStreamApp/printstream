@@ -7,7 +7,7 @@
  * already running it keeps their handoff, this only governs what we say.
  *
  * The rule: mention the helper ONLY to someone who already has it. A user without it
- * gets an honest statement of what PrintStream cannot do yet, never a pitch for
+ * gets an honest statement of what this browser cannot do, never a pitch for
  * something they have no way to obtain. `null` while the probe is still out, so a
  * flash of the wrong answer never appears.
  */
@@ -24,7 +24,7 @@ export function getBrowserAssistStatusCopy(extensionDetected: boolean | null) {
       }
     : {
         color: 'neutral' as const,
-        title: 'Not importable yet',
-        message: 'PrintStream cannot download from this site on its own yet. Download the file in your browser, then upload it to the library.'
+        title: 'Use an app or download manually',
+        message: 'The desktop and Android apps can capture the download. In this browser, download the file yourself and upload it to the library.'
       }
 }

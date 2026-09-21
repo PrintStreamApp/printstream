@@ -8,6 +8,7 @@ import ErrorOutlineRoundedIcon from '@mui/icons-material/ErrorOutlineRounded'
 import ExtensionRoundedIcon from '@mui/icons-material/ExtensionRounded'
 import FolderCopyRoundedIcon from '@mui/icons-material/FolderCopyRounded'
 import HistoryRoundedIcon from '@mui/icons-material/HistoryRounded'
+import DownloadRoundedIcon from '@mui/icons-material/DownloadRounded'
 import QueryStatsRoundedIcon from '@mui/icons-material/QueryStatsRounded'
 import SettingsRoundedIcon from '@mui/icons-material/SettingsRounded'
 import SwapHorizRoundedIcon from '@mui/icons-material/SwapHorizRounded'
@@ -66,6 +67,7 @@ import { BridgeDebugCaptureBanner } from './components/BridgeDebugCaptureBanner'
 import { LibraryUploadPanel } from './components/LibraryUploadPanel'
 import { AppVersionFooter } from './components/AppVersionFooter'
 import { NativeAppPromotionDialog } from './components/NativeAppPromotionDialog'
+import { NativeAppDownloadsDialog } from './components/NativeAppDownloadsDialog'
 import { BILLING_SCOPE_SECTION_ICONS } from './components/billingScopeSectionIcons'
 import { HelpFeedbackMenuItem } from './components/HelpFeedbackMenuItem'
 import { HelpFeedbackDialog } from './components/HelpFeedbackDialog'
@@ -210,6 +212,7 @@ export function App() {
   // when an item closes it. Keeping the state inside the item made the dialog
   // disappear in the same click that requested it.
   const [helpFeedbackOpen, setHelpFeedbackOpen] = useState(false)
+  const [nativeAppDownloadsOpen, setNativeAppDownloadsOpen] = useState(false)
   const [pendingWorkspaceRoute, setPendingWorkspaceRoute] = useState<{
     routePath: string
     targetWorkspaceId: string | null
@@ -982,6 +985,12 @@ export function App() {
   // Platform users staff the support inbox, so Help is hidden there.
   const appNavigationMenuActions = (
     <>
+      {!isNativeApp() ? (
+        <MenuItem onClick={() => setNativeAppDownloadsOpen(true)}>
+          <ListItemDecorator><DownloadRoundedIcon fontSize="small" /></ListItemDecorator>
+          Download the app
+        </MenuItem>
+      ) : null}
       {!inPlatformMode ? <HelpFeedbackMenuItem onOpen={() => setHelpFeedbackOpen(true)} /> : null}
       <PluginSlot name="shell.menu" />
       {selfHostedDeployment && hasWorkspaceContext && canManageSettings
@@ -1233,6 +1242,13 @@ export function App() {
                     <NativeAppPromotionDialog authenticated={actorType === 'user'} />
                     {helpFeedbackOpen ? (
                       <HelpFeedbackDialog onClose={() => setHelpFeedbackOpen(false)} />
+                    ) : null}
+                    {!isNativeApp() ? (
+                      <NativeAppDownloadsDialog
+                        open={nativeAppDownloadsOpen}
+                        onClose={() => setNativeAppDownloadsOpen(false)}
+                        useHostedCatalogue={selfHostedDeployment}
+                      />
                     ) : null}
                     {hasWorkspaceContext && <LicenseBanner />}
                     {hasWorkspaceContext && canManageSettings && <BridgeUpdateBanner />}

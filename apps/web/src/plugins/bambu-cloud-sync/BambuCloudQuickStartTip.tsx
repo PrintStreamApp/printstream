@@ -16,6 +16,7 @@ import { useQuery } from '@tanstack/react-query'
 import CloudSyncRoundedIcon from '@mui/icons-material/CloudSyncRounded'
 import { QuickStartCard } from '../../components/QuickStartCard'
 import { apiFetch } from '../../lib/apiClient'
+import { BAMBU_CLOUD_ACCOUNT_SETTINGS_PATH } from './settings-route'
 
 /** Only what this card needs; the real response carries the rest of the sync state. */
 interface QuickStartStatusResponse {
@@ -49,13 +50,13 @@ export function BambuCloudQuickStartTip({
       icon={<CloudSyncRoundedIcon />}
       title={linked ? 'Bambu account linked' : expired ? 'Reconnect your Bambu account' : 'Link your Bambu account'}
       description={linked
-        ? 'Your Bambu Lab presets sync with this workspace, so the filament and process profiles you tuned in Bambu Studio are the ones you slice with here.'
+        ? 'This workspace can import from MakerWorld with your Bambu Lab account and sync the slicing presets you tuned in Bambu Studio.'
         : expired
-          ? 'The link to your Bambu Lab account has expired, so presets are no longer syncing. Reconnect it in Slicing settings.'
-          : 'Link a Bambu Lab account to sync your slicing presets both ways, so the filament and process profiles you tuned in Bambu Studio are the ones you slice with here.'}
+          ? 'The link to your Bambu Lab account has expired, so MakerWorld imports and preset sync are unavailable. Reconnect it in Bambu account settings.'
+          : 'Link a Bambu Lab account to import models from MakerWorld and sync your slicing presets both ways.'}
       // A linked account still links through: unlike a setup step there is nothing to "complete",
       // and the panel is where you sync, review held presets, or disconnect.
-      actionTo={workspacePath('/settings/slicing')}
+      actionTo={workspacePath(BAMBU_CLOUD_ACCOUNT_SETTINGS_PATH)}
     />
   )
 }

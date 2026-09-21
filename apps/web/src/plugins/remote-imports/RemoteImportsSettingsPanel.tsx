@@ -72,7 +72,7 @@ export function RemoteImportsSettingsPanel() {
           <Alert size="sm" variant="soft" color="warning">
             <Typography level="body-sm">
               No Bambu Lab account is connected for this workspace yet. Connect one in the Bambu
-              Cloud plugin settings before importing.
+              account area of Settings before importing.
             </Typography>
           </Alert>
         )}
@@ -88,8 +88,8 @@ export function RemoteImportsSettingsPanel() {
       </Stack>
 
       <Typography level="body-sm" textColor="text.tertiary">
-        Printables pages cannot be imported yet: they publish no link PrintStream can fetch on
-        its own. Download the file in your browser and upload it to the library instead.
+        Printables does not publish a link the server can fetch on its own. Browse it from the
+        PrintStream desktop or Android app to capture a download, or download and upload the file manually.
       </Typography>
     </Stack>
   )
