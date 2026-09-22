@@ -3,6 +3,7 @@ interface DesktopHost {
   version: 1
   /** Optional host-specific additions; absence preserves compatibility with older desktop builds. */
   capabilities?: {
+    platform?: 'win32' | 'darwin' | 'linux'
     makerWorldBrowserImport?: boolean
     modelBrowserImport?: readonly ('makerworld' | 'printables')[]
     makerWorldChallengeTest?: boolean
@@ -18,6 +19,11 @@ function desktopHost(): DesktopHost | undefined {
 
 export function isNativeDesktop(): boolean {
   return desktopHost()?.version === 1
+}
+
+/** The native desktop operating system, or null for older hosts and browsers. */
+export function desktopPlatform(): 'win32' | 'darwin' | 'linux' | null {
+  return desktopHost()?.capabilities?.platform ?? null
 }
 
 /** Electron can capture a user-driven MakerWorld download in its browser session. */

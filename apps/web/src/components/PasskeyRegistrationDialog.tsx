@@ -8,13 +8,9 @@ import {
   FormLabel,
   Input,
   ModalDialog,
-  Option,
-  Select,
   Typography
 } from '@mui/joy'
-import { isNativeDesktop } from '@printstream/shared'
 import React from 'react'
-import type { PasskeyRegistrationTarget } from '../lib/passkeyRegistrationOptions'
 import { BackAwareModal as Modal } from './BackAwareModal'
 
 export function PasskeyRegistrationDialog({
@@ -36,16 +32,13 @@ export function PasskeyRegistrationDialog({
   loading: boolean
   error: string | null
   onClose: () => void
-  onConfirm: (nickname: string | null, target: PasskeyRegistrationTarget) => void
+  onConfirm: (nickname: string | null) => void
 }) {
   const [nickname, setNickname] = useState('')
-  const [target, setTarget] = useState<PasskeyRegistrationTarget>('local-device')
-  const showTargetChoice = isNativeDesktop()
 
   useEffect(() => {
     if (!open) {
       setNickname('')
-      setTarget('local-device')
     }
   }, [open])
 
@@ -73,24 +66,6 @@ export function PasskeyRegistrationDialog({
           </Typography>
         </FormControl>
 
-        {showTargetChoice && (
-          <FormControl size="sm">
-            <FormLabel>Save passkey on</FormLabel>
-            <Select
-              value={target}
-              onChange={(_, value) => {
-                if (value) {
-                  setTarget(value)
-                }
-              }}
-              disabled={loading}
-            >
-              <Option value="local-device">This device (recommended)</Option>
-              <Option value="another-device">Another device or security key</Option>
-            </Select>
-          </FormControl>
-        )}
-
         {error && (
           <Typography level="body-sm" color="danger">
             {error}
@@ -103,10 +78,7 @@ export function PasskeyRegistrationDialog({
           </Button>
           <Button
             loading={loading}
-            onClick={() => onConfirm(
-              nickname.trim() ? nickname.trim() : null,
-              showTargetChoice ? target : 'another-device'
-            )}
+            onClick={() => onConfirm(nickname.trim() ? nickname.trim() : null)}
           >
             {confirmLabel}
           </Button>

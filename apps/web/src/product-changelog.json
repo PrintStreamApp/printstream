@@ -1,10 +1,26 @@
 {
   "releases": [
     {
+      "version": "1.3.12",
+      "releasedOn": "2026-09-21",
+      "changes": [
+        "Browse MakerWorld and Printables in the desktop and Android apps with one clear Use in PrintStream action for each model profile or file, then choose whether to download it or download and open it in Model Studio.",
+        "Provider sign-in, licence messages, and security challenges remain visible and recoverable, while completed imports return you to browsing so you can continue finding models.",
+        "Provider actions such as Open in Bambu Studio continue to open their named apps; PrintStream captures only supported model downloads."
+      ]
+    },
+    {
+      "version": "1.3.11",
+      "releasedOn": "2026-09-21",
+      "changes": [
+        "Creating a passkey from the Windows app now opens Windows Hello directly, without an extra device choice or fallback to another device. If Windows cannot create the passkey, PrintStream now provides clearer recovery guidance instead of reporting a timeout."
+      ]
+    },
+    {
       "version": "1.3.10",
       "releasedOn": "2026-09-21",
       "changes": [
-        "Windows app startup and passkey registration are more reliable, including saving new passkeys to Windows Hello on this device.",
+        "The Windows app now starts reliably after updating.",
         "MakerWorld browsing in the desktop and Android apps now defaults to Download 3MF, and Android no longer prompts you to install Bambu Handy."
       ]
     },

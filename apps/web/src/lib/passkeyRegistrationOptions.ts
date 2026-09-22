@@ -1,25 +1,32 @@
 import type { PublicKeyCredentialCreationOptionsJSON } from '@simplewebauthn/browser'
 
-export type PasskeyRegistrationTarget = 'local-device' | 'another-device'
-
 /**
- * Tailor server-issued registration options to the destination the user chose.
- * A local-device registration must request a platform authenticator so Chromium
- * opens Windows Hello (or the equivalent OS prompt) instead of preferring its
- * cross-device phone flow. The unmodified options preserve every authenticator
- * choice when the user explicitly selects another device.
+ * Tailor server-issued registration options to the current client.
+ *
+ * Native Windows registration is deliberately platform-only: the installed
+ * app should open Windows Hello, not add another destination choice before the
+ * operating system prompt. Web browsers and other desktop platforms retain
+ * their normal passkey-provider choices.
+ *
+ * Do not send `client-device` here. WebAuthn hints are preferences and take
+ * precedence over `authenticatorAttachment`; Chromium consequently delegated
+ * an unrestricted request to Windows, which fell back to phones and security
+ * keys after Windows Hello failed. Omitting hints preserves the strict
+ * platform-only attachment.
  */
-export function registrationOptionsForTarget(
+export function registrationOptionsForClient(
   options: PublicKeyCredentialCreationOptionsJSON,
-  target: PasskeyRegistrationTarget
+  nativeWindowsDesktop: boolean
 ): PublicKeyCredentialCreationOptionsJSON {
-  if (target === 'another-device') {
+  if (!nativeWindowsDesktop) {
     return options
   }
 
+  const platformOptions = { ...options }
+  delete platformOptions.hints
+
   return {
-    ...options,
-    hints: ['client-device'],
+    ...platformOptions,
     authenticatorSelection: {
       ...options.authenticatorSelection,
       authenticatorAttachment: 'platform'

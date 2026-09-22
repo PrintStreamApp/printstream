@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { PublicKeyCredentialCreationOptionsJSON } from '@simplewebauthn/browser'
-import { registrationOptionsForTarget } from './passkeyRegistrationOptions'
+import { registrationOptionsForClient } from './passkeyRegistrationOptions'
 
 const serverOptions = {
   rp: { id: 'printstream.example', name: 'PrintStream' },
@@ -14,17 +14,17 @@ const serverOptions = {
   }
 } satisfies PublicKeyCredentialCreationOptionsJSON
 
-test('local registration asks Chromium for the operating system authenticator', () => {
-  const result = registrationOptionsForTarget(serverOptions, 'local-device')
+test('native Windows registration strictly requests the operating system authenticator', () => {
+  const result = registrationOptionsForClient({ ...serverOptions, hints: ['client-device'] }, true)
 
-  assert.deepEqual(result.hints, ['client-device'])
+  assert.equal(result.hints, undefined)
   assert.equal(result.authenticatorSelection?.authenticatorAttachment, 'platform')
   assert.equal(result.authenticatorSelection?.residentKey, 'required')
   assert.equal('authenticatorAttachment' in serverOptions.authenticatorSelection, false)
 })
 
-test('another-device registration preserves the portable server options', () => {
-  const result = registrationOptionsForTarget(serverOptions, 'another-device')
+test('web registration preserves the server options and browser provider choices', () => {
+  const result = registrationOptionsForClient(serverOptions, false)
 
   assert.equal(result, serverOptions)
 })
