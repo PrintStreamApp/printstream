@@ -8,14 +8,22 @@ import { apiFetch } from '../lib/apiClient'
 import { resolveDisplayedAppBuild } from '../lib/appVersionDisplay'
 import { isWebUpdatePending, subscribeWebUpdatePending } from '../lib/appStaleness'
 import { waitForNewBuild } from '../lib/appUpdateRestart'
+import { hasUnreadCompanionRelease } from '../lib/companionChangelog'
 import { hasUnreadProductRelease } from '../lib/productChangelog'
 import { useLocalStorageState } from '../hooks/useLocalStorageState'
+import { isNativeApp, nativeAppBuild } from '../native/bridge'
+import { CompanionChangelogDialog } from './CompanionChangelogDialog'
 import { ConfirmActionDialog } from './ConfirmActionDialog'
 import { ProductChangelogDialog } from './ProductChangelogDialog'
 
 const LAST_READ_RELEASE_KEY = 'printstream.productChangelog.lastReadVersion'
+const LAST_READ_COMPANION_RELEASE_KEY = 'printstream.companionChangelog.lastReadVersion'
 const parseStoredVersion = (raw: string): string | null => raw.trim() || null
 const serializeStoredVersion = (value: string | null): string => value ?? ''
+
+interface AppVersionFooterProps {
+  deployment: 'cloud' | 'self-hosted'
+}
 
 /**
  * Footer line showing the loaded UI's version and, for the published
@@ -25,7 +33,9 @@ const serializeStoredVersion = (value: string | null): string => value ?? ''
  * automatic reload. Update availability and permissions remain server-owned.
  * The version is also the entry point to the bundled product changelog. A
  * per-device last-read version gives a newly published entry a one-time visual
- * treatment without adding server-side notification state.
+ * treatment without adding server-side notification state. Installed native
+ * wrappers add their own version beside it so server and app builds cannot be
+ * mistaken for each other.
  *
  * On the native app the hint is also the TRIGGER: `canApplyUpdate` (settings
  * managers only) makes the chip clickable, and confirming posts
@@ -38,7 +48,7 @@ const serializeStoredVersion = (value: string | null): string => value ?? ''
  * but the install's updates & support period has ended. It is deliberately
  * still a chip and not a warning: the build they own keeps running.
  */
-export function AppVersionFooter() {
+export function AppVersionFooter({ deployment }: AppVersionFooterProps) {
   const { data } = useQuery({
     queryKey: ['app', 'version'],
     queryFn: ({ signal }) => apiFetch<AppVersionResponse>('/api/app/version', { signal }),
@@ -46,8 +56,16 @@ export function AppVersionFooter() {
     staleTime: 10 * 60_000,
     refetchOnWindowFocus: false
   })
+  const { data: installedApp } = useQuery({
+    queryKey: ['native-app', 'build'],
+    queryFn: readNativeAppBuildForFooter,
+    enabled: isNativeApp(),
+    retry: false,
+    staleTime: Infinity
+  })
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [changelogOpen, setChangelogOpen] = useState(false)
+  const [companionChangelogOpen, setCompanionChangelogOpen] = useState(false)
   const safeReloadPending = useSyncExternalStore(
     subscribeWebUpdatePending,
     isWebUpdatePending,
@@ -83,12 +101,22 @@ export function AppVersionFooter() {
     serializeStoredVersion
   )
   const releaseUnread = hasUnreadProductRelease(displayedBuild.version, lastReadRelease)
+  const [lastReadCompanionRelease, setLastReadCompanionRelease] = useLocalStorageState<string | null>(
+    LAST_READ_COMPANION_RELEASE_KEY,
+    null,
+    parseStoredVersion,
+    serializeStoredVersion
+  )
+  const companionReleaseUnread = installedApp
+    ? hasUnreadCompanionRelease(installedApp.version, lastReadCompanionRelease)
+    : false
   const update = data?.update
   const lapsed = update?.status === 'updatesLapsed'
   const hasUpdate = update?.status === 'updateAvailable' || lapsed
   const canApply = Boolean(data?.canApplyUpdate && !lapsed)
   const uiReloadRequired = displayedBuild.reloadRequired || safeReloadPending
   const targetBuild = update?.latestShortRevision ? ` build ${update.latestShortRevision}` : ' the new build'
+  const deploymentLabel = deployment === 'self-hosted' ? 'Self-hosted' : 'Cloud'
 
   return (
     <Stack
@@ -113,27 +141,35 @@ export function AppVersionFooter() {
             }}
             sx={{ fontFamily: 'code' }}
           >
-            v{displayedBuild.version} (UI reload required)
+            {deploymentLabel} v{displayedBuild.version} (UI reload required)
           </Chip>
         </Tooltip>
       ) : (
-        <Tooltip title={releaseUnread ? 'See what changed in this version' : 'View release notes'} variant="soft">
-          <Button
-            size="sm"
-            variant={releaseUnread ? 'soft' : 'plain'}
-            color={releaseUnread ? 'primary' : 'neutral'}
-            startDecorator={releaseUnread ? <NewReleasesRoundedIcon fontSize="small" /> : undefined}
-            aria-label={`View release notes for PrintStream v${displayedBuild.version}`}
-            title={displayedBuild.revision ?? undefined}
-            onClick={() => {
-              setLastReadRelease(displayedBuild.version)
-              setChangelogOpen(true)
-            }}
-            sx={{ minHeight: 24, fontFamily: 'code', fontSize: 'xs' }}
-          >
-            v{displayedBuild.version}
-          </Button>
-        </Tooltip>
+        <FooterVersionButton
+          label={deploymentLabel}
+          version={displayedBuild.version}
+          unread={releaseUnread}
+          tooltip={releaseUnread ? 'See what changed in this version' : 'View release notes'}
+          ariaLabel={`View release notes for ${deploymentLabel} PrintStream v${displayedBuild.version}`}
+          title={displayedBuild.revision ?? undefined}
+          onClick={() => {
+            setLastReadRelease(displayedBuild.version)
+            setChangelogOpen(true)
+          }}
+        />
+      )}
+      {installedApp && (
+        <FooterVersionButton
+          label={installedApp.label}
+          version={installedApp.version}
+          unread={companionReleaseUnread}
+          tooltip={companionReleaseUnread ? 'See what changed in this app version' : 'View app release notes'}
+          ariaLabel={`View release notes for ${installedApp.label} v${installedApp.version}`}
+          onClick={() => {
+            setLastReadCompanionRelease(installedApp.version)
+            setCompanionChangelogOpen(true)
+          }}
+        />
       )}
       {hasUpdate && update && (
         <Tooltip variant="soft" title={describeUpdate(update, canApply)}>
@@ -179,8 +215,62 @@ export function AppVersionFooter() {
           onClose={() => setChangelogOpen(false)}
         />
       )}
+      {companionChangelogOpen && installedApp && (
+        <CompanionChangelogDialog
+          currentVersion={installedApp.version}
+          onClose={() => setCompanionChangelogOpen(false)}
+        />
+      )}
     </Stack>
   )
+}
+
+interface FooterVersionButtonProps {
+  label: string
+  version: string
+  unread: boolean
+  tooltip: string
+  ariaLabel: string
+  title?: string
+  onClick: () => void
+}
+
+/** Keep server and installed-app version entries visually and behaviorally aligned. */
+function FooterVersionButton({
+  label,
+  version,
+  unread,
+  tooltip,
+  ariaLabel,
+  title,
+  onClick
+}: FooterVersionButtonProps) {
+  return (
+    <Tooltip title={tooltip} variant="soft">
+      <Button
+        size="sm"
+        variant={unread ? 'soft' : 'plain'}
+        color={unread ? 'primary' : 'neutral'}
+        startDecorator={unread ? <NewReleasesRoundedIcon fontSize="small" /> : undefined}
+        aria-label={ariaLabel}
+        title={title}
+        onClick={onClick}
+        sx={{ minHeight: 24, fontFamily: 'code', fontSize: 'xs' }}
+      >
+        {label} v{version}
+      </Button>
+    </Tooltip>
+  )
+}
+
+/** Older native hosts lack version discovery; an absent footer label is the compatible fallback. */
+async function readNativeAppBuildForFooter() {
+  try {
+    return await nativeAppBuild()
+  } catch {
+    // This optional identity must not turn an otherwise supported older app into an operational error.
+    return null
+  }
 }
 
 function describePendingUiReload(uiVersion: string, serverVersion: string | null): string {

@@ -1,6 +1,15 @@
 {
   "releases": [
     {
+      "version": "1.3.13",
+      "releasedOn": "2026-09-23",
+      "changes": [
+        "Find the right PrintStream app from one download dialog, with Google Play, Microsoft Store, and Linux downloads together.",
+        "See installed app and connected server versions separately, and open the relevant release notes from the footer.",
+        "MakerWorld pages in the Windows app now keep the PrintStream import bar available whenever model controls are present."
+      ]
+    },
+    {
       "version": "1.3.12",
       "releasedOn": "2026-09-21",
       "changes": [

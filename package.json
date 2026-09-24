@@ -1,6 +1,6 @@
 {
   "name": "printstream",
-  "version": "1.3.12",
+  "version": "1.3.13",
   "private": true,
   "license": "SEE LICENSE IN LICENSE",
   "packageManager": "npm@10.9.8",
@@ -41,7 +41,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.24.0",
-    "@ryanewen/devkit": "github:RyanEwen/devkit#v0.10.1",
+    "@ryanewen/devkit": "github:RyanEwen/devkit#v0.11.1",
     "@typescript/native": "npm:typescript@^7.0.2",
     "concurrently": "^9.1.2",
     "eslint": "^9.24.0",

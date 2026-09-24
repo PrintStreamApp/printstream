@@ -1,7 +1,8 @@
 # Public web assets.
 
 This folder includes the generated PWA install icons used by the web manifest,
-browser favicon, iOS home-screen install flow, and push notifications.
+browser favicon, iOS home-screen install flow, push notifications, and the
+unmodified official Google Play and Microsoft Store distribution badges.
 
 The generated PNG assets in this folder are exported from `icon.svg` for the default app icon and `maskable-icon.svg` for Android launcher-safe maskable icons.
 To regenerate them, render the SVG in a browser, capture the SVG element itself, and write the

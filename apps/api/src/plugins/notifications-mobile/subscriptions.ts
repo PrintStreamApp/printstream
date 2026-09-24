@@ -5,7 +5,7 @@ import { messageNotificationScope } from '../../lib/notification-scope.js'
 
 const deviceSchema = z.object({
   userId: z.string(), token: z.string(), bindingId: z.string().uuid(), origin: z.string().url(), updatedAt: z.number(),
-  transport: z.enum(['direct', 'relay']).optional()
+  transport: z.enum(['direct', 'relay']).optional(), encryptionPublicKey: z.string().max(1024).optional()
 })
 export type MobileDevice = z.infer<typeof deviceSchema>
 const MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000

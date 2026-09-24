@@ -12,6 +12,7 @@ import { mayReceiveMobileNotifications } from './access.js'
 import { requestNativeNotificationAccount } from '../../lib/native-notification-access.js'
 import { MobileSubscriptions } from './subscriptions.js'
 import { mobileDeliveryTransport } from './transport.js'
+import { parseRelayEncryptionPublicKey } from './relay-encryption.js'
 import { mobileDismissalHandler, mobileNotificationHandler } from './delivery.js'
 
 const mobileDismissalSchema = z.object({
@@ -83,6 +84,14 @@ export const notificationsMobilePlugin: ApiPlugin = {
       const origin = readRequestOrigin(request)
       if (parsed.data.transport !== transport || (transport === 'relay' && !mobileRelayGrantSchema.safeParse(parsed.data.token).success)) {
         throw badRequest('Device enrollment does not match this server transport.')
+      }
+      if (transport === 'relay') {
+        if (!parsed.data.encryptionPublicKey) throw badRequest('Device enrollment is missing relay encryption.')
+        try {
+          parseRelayEncryptionPublicKey(parsed.data.encryptionPublicKey)
+        } catch {
+          throw badRequest('Device enrollment has an invalid relay encryption key.')
+        }
       }
       if (!origin) throw badRequest('Server origin is required')
       const userId = requestNativeNotificationAccount(request)

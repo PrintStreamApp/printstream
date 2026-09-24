@@ -45,7 +45,9 @@ export type MobileDiscoveryResponse = z.infer<typeof mobileDiscoveryResponseSche
 export const mobilePushRegistrationSchema = z.object({
   token: z.string().min(20).max(4096),
   bindingId: z.string().uuid(),
-  transport: z.enum(['direct', 'relay']).default('direct')
+  transport: z.enum(['direct', 'relay']).default('direct'),
+  /** DER SubjectPublicKeyInfo, used only by self-hosted servers to encrypt relay payloads. */
+  encryptionPublicKey: z.string().regex(/^[A-Za-z0-9+/]+={0,2}$/).max(1024).optional()
 })
 export type MobilePushRegistration = z.infer<typeof mobilePushRegistrationSchema>
 

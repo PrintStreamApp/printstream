@@ -190,13 +190,6 @@ const envSchema = z.object({
    * anything inferred.
    */
   SELF_HOST_RELEASE_CHANNEL: trimmedEnv(z.enum(['stable', 'staging']).default('stable')),
-  /**
-   * Advertise the Electron Windows app in the public download catalogue only
-   * after its replacement Microsoft Store listing is live. The existing store
-   * product still serves the legacy WinUI app and must not be recommended as
-   * supporting the new provider browser.
-   */
-  WINDOWS_COMPANION_STORE_RELEASED: booleanEnv(false),
   PADDLE_API_KEY: optionalStringEnv(),
   /**
    * The name charges appear as on a customer's bank statement, exactly as it is

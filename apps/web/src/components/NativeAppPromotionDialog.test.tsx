@@ -25,7 +25,7 @@ after(() => {
   dom.window.close()
 })
 
-test('offers Google Play once after sign-in and records dismissal', async () => {
+test('offers app downloads once after sign-in and records dismissal', async () => {
   const { fireEvent, screen, waitFor } = await import('@testing-library/react')
   const { flagNativeAppPromotionAfterSignIn, isNativeAppPromotionDismissed } = await import('../lib/nativeAppPromotion')
 
@@ -33,23 +33,36 @@ test('offers Google Play once after sign-in and records dismissal', async () => 
   await renderDialog()
 
   await screen.findByText('Take PrintStream with you')
-  const storeLink = screen.getByRole('link', { name: 'Get it on Google Play' })
-  assert.equal(storeLink.getAttribute('href'), 'https://play.google.com/store/apps/details?id=app.printstream')
+  assert.ok(screen.getByRole('button', { name: 'View app downloads' }))
 
   fireEvent.click(screen.getByRole('button', { name: 'Not now' }))
   await waitFor(() => assert.equal(screen.queryByText('Take PrintStream with you'), null))
   assert.equal(isNativeAppPromotionDismissed('android'), true)
 })
 
+test('opens the cross-platform app downloads from the Windows offer', async () => {
+  const { fireEvent, screen } = await import('@testing-library/react')
+  const { flagNativeAppPromotionAfterSignIn } = await import('../lib/nativeAppPromotion')
+
+  setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
+  flagNativeAppPromotionAfterSignIn()
+  let browseCount = 0
+  await renderDialog(() => { browseCount += 1 })
+
+  await screen.findByText('PrintStream for Windows')
+  fireEvent.click(screen.getByRole('button', { name: 'View app downloads' }))
+  assert.equal(browseCount, 1)
+})
+
 test('stays silent without a sign-in signal', async () => {
-  const { screen } = await import('@testing-library/react')
+  const { fireEvent, screen } = await import('@testing-library/react')
 
   await renderDialog()
 
   assert.equal(screen.queryByText('Take PrintStream with you'), null)
 })
 
-async function renderDialog() {
+async function renderDialog(onBrowseDownloads = () => undefined) {
   const { CssVarsProvider } = await import('@mui/joy/styles')
   const { render } = await import('@testing-library/react')
   const React = (await import('react')).default
@@ -59,7 +72,7 @@ async function renderDialog() {
     React.createElement(
       CssVarsProvider,
       null,
-      React.createElement(NativeAppPromotionDialog, { authenticated: true })
+      React.createElement(NativeAppPromotionDialog, { authenticated: true, onBrowseDownloads })
     )
   )
 }

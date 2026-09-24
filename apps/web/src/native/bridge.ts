@@ -4,7 +4,12 @@
  * reaching into Capacitor globals or learning implementation details.
  */
 import { Capacitor, registerPlugin } from '@capacitor/core'
-import { desktopRequest, isNativeDesktop, supportsDesktopModelBrowserImport } from './desktopBridge'
+import {
+  desktopPlatform,
+  desktopRequest,
+  isNativeDesktop,
+  supportsDesktopModelBrowserImport
+} from './desktopBridge'
 
 export type NativeModelProvider = 'makerworld' | 'printables'
 
@@ -35,8 +40,18 @@ interface ModelBrowserPlugin {
   }): Promise<{ file: unknown; openAfterImport?: 'model-studio' } | { externalOpened: true } | { importUrl: string }>
 }
 
+interface CapacitorAppPlugin {
+  getInfo(): Promise<{ version: string }>
+}
+
+export interface NativeAppBuild {
+  label: string
+  version: string
+}
+
 const androidInstance = registerPlugin<PrintStreamInstancePlugin>('PrintStreamInstance')
 const androidModelBrowser = registerPlugin<ModelBrowserPlugin>('PrintStreamModelBrowser')
+const androidApp = registerPlugin<CapacitorAppPlugin>('App')
 
 /** Both hosts implement this small connection contract; product UI remains shared. */
 export const PrintStreamInstance: PrintStreamInstancePlugin = {
@@ -56,6 +71,25 @@ export function isNativeApp(): boolean {
 /** True only inside the installed Android shell, never the browser/PWA. */
 export function isNativeAndroid(): boolean {
   return Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android'
+}
+
+/** Returns the installed wrapper's identity, separate from the connected server build. */
+export async function nativeAppBuild(): Promise<NativeAppBuild | null> {
+  if (isNativeDesktop()) {
+    const version = await desktopRequest<string>('app.version')
+    return { label: desktopAppLabel(desktopPlatform()), version }
+  }
+  if (isNativeAndroid()) {
+    const { version } = await androidApp.getInfo()
+    return { label: 'Android app', version }
+  }
+  return null
+}
+
+function desktopAppLabel(platform: ReturnType<typeof desktopPlatform>): string {
+  if (platform === 'win32') return 'Windows app'
+  if (platform === 'darwin') return 'macOS app'
+  return 'Linux app'
 }
 
 /** Discover only providers implemented by this installed native wrapper version. */

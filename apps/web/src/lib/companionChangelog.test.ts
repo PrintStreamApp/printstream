@@ -1,0 +1,18 @@
+import assert from 'node:assert/strict'
+import { test } from 'node:test'
+import companionRelease from '../../../companion-release.json'
+import {
+  companionReleases,
+  hasUnreadCompanionRelease
+} from './companionChangelog'
+
+test('the companion changelog starts with the package release', () => {
+  assert.deepEqual(companionReleases[0], companionRelease)
+})
+
+test('only notes for the installed app version are unread', () => {
+  const releases = [{ version: '1.2.3', releasedOn: '2026-09-13', changes: ['Added app release notes.'] }]
+  assert.equal(hasUnreadCompanionRelease('1.2.3', null, releases), true)
+  assert.equal(hasUnreadCompanionRelease('1.2.3', '1.2.3', releases), false)
+  assert.equal(hasUnreadCompanionRelease('1.2.4', null, releases), false)
+})

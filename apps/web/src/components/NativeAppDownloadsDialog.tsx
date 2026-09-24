@@ -11,6 +11,7 @@ import React from 'react'
 import { BackAwareModal } from './BackAwareModal'
 import { ScrollableDialogBody, ScrollableModalDialog } from './ScrollableDialog'
 import { detectClientPlatformKey, isRecommendedPlatform } from '../lib/bridgePlatform'
+import { StoreBadgeLink, type NativeAppStore } from './StoreBadgeLink'
 
 const HOSTED_CATALOGUE_URL = 'https://printstream.app/api/native-app/downloads'
 const OS_LABELS: Record<string, string> = {
@@ -73,6 +74,7 @@ export function NativeAppDownloadsDialog({
                 {group.items.map((download) => {
                   const recommended = isPreferredDownload(download, detectedPlatform)
                   const helpText = downloadHelpText(download)
+                  const store = nativeAppStoreForFormat(download.format)
                   return (
                     <Stack
                       key={`${download.platformKey}:${download.format}`}
@@ -92,20 +94,24 @@ export function NativeAppDownloadsDialog({
                           <Typography level="body-xs" textColor="text.tertiary">{helpText}</Typography>
                         ) : null}
                       </Stack>
-                      <Button
-                        component="a"
-                        href={download.url}
-                        target="_blank"
-                        rel="noreferrer"
-                        {...(download.fileName ? { download: download.fileName } : {})}
-                        size="sm"
-                        variant={recommended ? 'solid' : 'outlined'}
-                        color={recommended ? 'primary' : 'neutral'}
-                        startDecorator={<DownloadRoundedIcon />}
-                        sx={{ flexShrink: 0 }}
-                      >
-                        {download.fileName ? 'Download' : 'Open store'}
-                      </Button>
+                      {store ? (
+                        <StoreBadgeLink store={store} href={download.url} />
+                      ) : (
+                        <Button
+                          component="a"
+                          href={download.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          {...(download.fileName ? { download: download.fileName } : {})}
+                          size="sm"
+                          variant={recommended ? 'solid' : 'outlined'}
+                          color={recommended ? 'primary' : 'neutral'}
+                          startDecorator={<DownloadRoundedIcon />}
+                          sx={{ flexShrink: 0 }}
+                        >
+                          Download
+                        </Button>
+                      )}
                     </Stack>
                   )
                 })}
@@ -148,6 +154,13 @@ function downloadHelpText(download: NativeAppDownload): string | null {
   if (download.format === 'Debian package') {
     return 'Best for Ubuntu, Debian, and Linux Mint. Double-click it to open your graphical software installer.'
   }
+  return null
+}
+
+/** Map catalogue format labels to the matching official store badge. */
+function nativeAppStoreForFormat(format: string): NativeAppStore | null {
+  if (format === 'Google Play') return 'google-play'
+  if (format === 'Microsoft Store') return 'microsoft-store'
   return null
 }
 

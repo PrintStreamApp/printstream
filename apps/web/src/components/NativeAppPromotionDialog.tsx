@@ -1,21 +1,30 @@
 /** One-time browser promotion for the matching released native client after sign-in. */
 import AndroidRoundedIcon from '@mui/icons-material/AndroidRounded'
 import DesktopWindowsRoundedIcon from '@mui/icons-material/DesktopWindowsRounded'
-import { Button, DialogActions, DialogContent, DialogTitle, ModalClose, ModalDialog, Stack, Typography } from '@mui/joy'
+import DownloadRoundedIcon from '@mui/icons-material/DownloadRounded'
+import { Button, DialogActions, DialogContent, DialogTitle, ModalClose, ModalDialog, Typography } from '@mui/joy'
 import { useEffect, useRef, useState } from 'react'
 import React from 'react'
 import { isAppBusy, subscribeAppBusy } from '../lib/appBusy'
 import {
+  clearNativeAppPromotionAfterSignInFlag,
   detectNativeAppPromotion,
   dismissNativeAppPromotion,
+  hasNativeAppPromotionAfterSignInFlag,
   isNativeAppPromotionDismissed,
-  takeNativeAppPromotionAfterSignInFlag,
+  resetNativeAppPromotionDismissalForDevelopment,
   type NativeAppPromotion
 } from '../lib/nativeAppPromotion'
 import { isNativeApp } from '../native/bridge'
 import { BackAwareModal } from './BackAwareModal'
 
-export function NativeAppPromotionDialog({ authenticated }: { authenticated: boolean }) {
+export function NativeAppPromotionDialog({
+  authenticated,
+  onBrowseDownloads
+}: {
+  authenticated: boolean
+  onBrowseDownloads: () => void
+}) {
   const evaluated = useRef(false)
   const [candidate, setCandidate] = useState<NativeAppPromotion | null>(null)
   const [open, setOpen] = useState(false)
@@ -24,9 +33,23 @@ export function NativeAppPromotionDialog({ authenticated }: { authenticated: boo
     if (!authenticated || evaluated.current) return
     evaluated.current = true
 
-    if (!takeNativeAppPromotionAfterSignInFlag() || isNativeApp()) return
+    if (isNativeApp()) {
+      clearNativeAppPromotionAfterSignInFlag()
+      return
+    }
+
+    // Development hot reloads used to consume the session signal before the offer could appear.
+    // Recover an undismissed offer in dev so refreshing remains a reliable way to test it.
+    const isDevelopment = import.meta.env?.DEV === true
+    if (!hasNativeAppPromotionAfterSignInFlag() && !isDevelopment) return
+
     const promotion = detectNativeAppPromotion()
-    if (!promotion || isNativeAppPromotionDismissed(promotion.platform)) return
+    if (!promotion) return
+    if (isDevelopment) resetNativeAppPromotionDismissalForDevelopment(promotion.platform)
+    if (isNativeAppPromotionDismissed(promotion.platform)) {
+      clearNativeAppPromotionAfterSignInFlag()
+      return
+    }
     setCandidate(promotion)
   }, [authenticated])
 
@@ -56,6 +79,7 @@ export function NativeAppPromotionDialog({ authenticated }: { authenticated: boo
   if (!candidate) return null
 
   const dismiss = () => {
+    clearNativeAppPromotionAfterSignInFlag()
     dismissNativeAppPromotion(candidate.platform)
     setOpen(false)
     setCandidate(null)
@@ -65,27 +89,31 @@ export function NativeAppPromotionDialog({ authenticated }: { authenticated: boo
     <BackAwareModal open={open} onClose={dismiss}>
       <ModalDialog variant="outlined" sx={{ width: 'min(440px, 100%)' }}>
         <ModalClose />
-        <DialogTitle>Take PrintStream with you</DialogTitle>
-        <DialogContent>
-          <Stack spacing={1.5}>
+        <DialogTitle sx={{ alignItems: 'center' }}>
+          {candidate.platform === 'android'
+            ? <AndroidRoundedIcon color="primary" fontSize="medium" />
+            : <DesktopWindowsRoundedIcon color="primary" fontSize="medium" />}
+          {candidate.platform === 'android' ? 'Take PrintStream with you' : 'PrintStream for Windows'}
+        </DialogTitle>
+        <DialogContent sx={{ m: 0 }}>
+          <Typography level="body-sm" textColor="text.tertiary">
             {candidate.platform === 'android'
-              ? <AndroidRoundedIcon color="primary" fontSize="large" />
-              : <DesktopWindowsRoundedIcon color="primary" fontSize="large" />}
-            <Typography level="body-sm" textColor="text.tertiary">
-              Get the PrintStream app for {candidate.platformLabel} for quicker access, saved connections, and native notifications.
-            </Typography>
-          </Stack>
+              ? 'Keep printers, jobs, and your library close at hand with native notifications and saved server connections.'
+              : 'Keep printers, jobs, and your library close at hand with native notifications, saved server connections, and model-site browsing.'}
+          </Typography>
         </DialogContent>
-        <DialogActions>
+        <DialogActions sx={{ pt: 0 }}>
           <Button variant="plain" color="neutral" onClick={dismiss}>Not now</Button>
           <Button
-            component="a"
-            href={candidate.storeUrl}
-            target="_blank"
-            rel="noreferrer"
-            onClick={dismiss}
+            variant="solid"
+            color="primary"
+            startDecorator={<DownloadRoundedIcon />}
+            onClick={() => {
+              dismiss()
+              onBrowseDownloads()
+            }}
           >
-            {candidate.storeLabel}
+            View app downloads
           </Button>
         </DialogActions>
       </ModalDialog>

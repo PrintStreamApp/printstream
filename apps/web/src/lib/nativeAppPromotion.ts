@@ -2,9 +2,8 @@
  * Browser-only promotion state for the installed PrintStream clients.
  *
  * Visiting the sign-in screen raises a session flag, which survives an OAuth round trip. The app
- * shell consumes it after authentication and offers the matching released client once per browser
- * and platform. Native wrappers never qualify. Windows stays described here so certification is a
- * one-flag launch rather than a second implementation.
+ * shell retains it after authentication until the user acts on the matching released client offer.
+ * Native wrappers never qualify.
  */
 
 export type NativeAppPromotionPlatform = 'android' | 'windows'
@@ -12,13 +11,9 @@ export type NativeAppPromotionPlatform = 'android' | 'windows'
 export interface NativeAppPromotion {
   platform: NativeAppPromotionPlatform
   platformLabel: string
-  storeLabel: string
   storeUrl: string
 }
 
-interface NativeAppPromotionPlatformConfig extends NativeAppPromotion {
-  released: boolean
-}
 
 export interface NativeAppPlatformHints {
   userAgent?: string
@@ -27,22 +22,18 @@ export interface NativeAppPlatformHints {
 
 const PROMPT_AFTER_SIGN_IN_KEY = 'printstream.nativeAppPromotion.afterSignIn.v1'
 const DISMISSED_KEY_PREFIX = 'printstream.nativeAppPromotion.dismissed.v1.'
+const DEVELOPMENT_RESET_KEY = 'printstream.nativeAppPromotion.devReset.v1'
 
-const PLATFORM_CONFIG: Record<NativeAppPromotionPlatform, NativeAppPromotionPlatformConfig> = {
+const PLATFORM_CONFIG: Record<NativeAppPromotionPlatform, NativeAppPromotion> = {
   android: {
     platform: 'android',
     platformLabel: 'Android',
-    storeLabel: 'Get it on Google Play',
-    storeUrl: 'https://play.google.com/store/apps/details?id=app.printstream',
-    released: true
+    storeUrl: 'https://play.google.com/store/apps/details?id=app.printstream'
   },
   windows: {
     platform: 'windows',
     platformLabel: 'Windows',
-    storeLabel: 'Get it from Microsoft Store',
-    storeUrl: 'https://apps.microsoft.com/detail/9N2CJ8BB9RTZ',
-    // The listing exists, but it must not be promoted until Microsoft certifies the release.
-    released: false
+    storeUrl: 'https://apps.microsoft.com/detail/9N2CJ8BB9RTZ'
   }
 }
 
@@ -55,14 +46,21 @@ export function flagNativeAppPromotionAfterSignIn(): void {
   }
 }
 
-/** Consume the post-sign-in signal exactly once after authentication succeeds. */
-export function takeNativeAppPromotionAfterSignInFlag(): boolean {
+/** Check whether sign-in requested an app offer without consuming it before the user acts. */
+export function hasNativeAppPromotionAfterSignInFlag(): boolean {
   try {
-    const flagged = window.sessionStorage.getItem(PROMPT_AFTER_SIGN_IN_KEY) === '1'
-    window.sessionStorage.removeItem(PROMPT_AFTER_SIGN_IN_KEY)
-    return flagged
+    return window.sessionStorage.getItem(PROMPT_AFTER_SIGN_IN_KEY) === '1'
   } catch {
     return false
+  }
+}
+
+/** Clear the post-sign-in request after the offer is dismissed or followed. */
+export function clearNativeAppPromotionAfterSignInFlag(): void {
+  try {
+    window.sessionStorage.removeItem(PROMPT_AFTER_SIGN_IN_KEY)
+  } catch {
+    // Storage-denied browsers have no retained signal to clear.
   }
 }
 
@@ -73,15 +71,7 @@ export function resolveNativeAppPromotion(
   const platform = detectNativeAppPromotionPlatform(hints)
   if (!platform) return null
 
-  const config = PLATFORM_CONFIG[platform]
-  if (!config.released) return null
-
-  return {
-    platform: config.platform,
-    platformLabel: config.platformLabel,
-    storeLabel: config.storeLabel,
-    storeUrl: config.storeUrl
-  }
+  return PLATFORM_CONFIG[platform]
 }
 
 /** Gather browser hints without exposing navigator parsing to the dialog. */
@@ -98,6 +88,20 @@ export function isNativeAppPromotionDismissed(platform: NativeAppPromotionPlatfo
     return window.localStorage.getItem(`${DISMISSED_KEY_PREFIX}${platform}`) != null
   } catch {
     return false
+  }
+}
+
+/** Clear a stale dismissal once per dev tab without weakening real user dismissals. */
+export function resetNativeAppPromotionDismissalForDevelopment(
+  platform: NativeAppPromotionPlatform
+): void {
+  try {
+    if (window.sessionStorage.getItem(DEVELOPMENT_RESET_KEY) === '1') return
+
+    window.localStorage.removeItem(`${DISMISSED_KEY_PREFIX}${platform}`)
+    window.sessionStorage.setItem(DEVELOPMENT_RESET_KEY, '1')
+  } catch {
+    // Storage-denied browsers have no durable dismissal to reset.
   }
 }
 

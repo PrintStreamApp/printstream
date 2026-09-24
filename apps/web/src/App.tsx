@@ -35,7 +35,7 @@ import {
   type UpdateGeneralSettingsInput
 } from '@printstream/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Component, useEffect, useMemo, useRef, useState, type ErrorInfo, type ReactNode } from 'react'
+import { Component, useCallback, useEffect, useMemo, useRef, useState, type ErrorInfo, type ReactNode } from 'react'
 import { isNativeConnectionReady } from './native/connectionReady'
 import { useNativeSession } from './native/useNativeSession'
 import { isNativeApp, PrintStreamInstance } from './native/bridge'
@@ -213,6 +213,7 @@ export function App() {
   // disappear in the same click that requested it.
   const [helpFeedbackOpen, setHelpFeedbackOpen] = useState(false)
   const [nativeAppDownloadsOpen, setNativeAppDownloadsOpen] = useState(false)
+  const openNativeAppDownloads = useCallback(() => setNativeAppDownloadsOpen(true), [])
   const [pendingWorkspaceRoute, setPendingWorkspaceRoute] = useState<{
     routePath: string
     targetWorkspaceId: string | null
@@ -945,7 +946,7 @@ export function App() {
   const shellWorkspaceChooserAvailable = !usesPublicChrome && showsWorkspaceSwitcher
   const appFooterTrailing = (
     <Stack spacing={0.75} alignItems="center" useFlexGap>
-      <AppVersionFooter />
+      <AppVersionFooter deployment={selfHostedDeployment ? 'self-hosted' : 'cloud'} />
     </Stack>
   )
   const shouldAutoSelectOnlyWorkspace = !isNativeApp() && authBootstrapReady
@@ -1239,7 +1240,10 @@ export function App() {
                         passkey setup offer). Static slot: auth surfaces must render without
                         consulting the plugin catalog. */}
                     <StaticPluginSlot name="shell.overlays" />
-                    <NativeAppPromotionDialog authenticated={actorType === 'user'} />
+                    <NativeAppPromotionDialog
+                      authenticated={actorType === 'user'}
+                      onBrowseDownloads={openNativeAppDownloads}
+                    />
                     {helpFeedbackOpen ? (
                       <HelpFeedbackDialog onClose={() => setHelpFeedbackOpen(false)} />
                     ) : null}

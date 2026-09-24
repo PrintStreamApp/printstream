@@ -1,8 +1,10 @@
 name: CI
 
-# Runs the full repo validation (lint, tests, typecheck, prisma validate) and
-# a production build. Push-to-main coverage matters for the public repo, which
-# receives snapshot exports as direct pushes to main rather than PRs.
+# Runs shared repository validation (lint, tests, typecheck, prisma validate)
+# and a production build. Platform-specific companion checks own separate
+# workflows so a broken Android runner cannot make unrelated release evidence
+# look red. Push-to-main coverage matters for the public repo, which receives
+# snapshot exports as direct pushes to main rather than PRs.
 on:
   push:
     branches: [main]

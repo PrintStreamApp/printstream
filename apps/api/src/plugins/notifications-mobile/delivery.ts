@@ -35,7 +35,12 @@ export function mobileNotificationHandler(context: ApiPluginContext, subscriptio
           delivered.add(entry.token)
           try {
             prepared ??= prepareNativeNotificationImage(message, context.prisma)
-            if (await transport.send(entry.token, buildMobilePushData(await prepared, entry.origin, entry.bindingId, current), entry.transport ?? 'direct')) {
+            if (await transport.send(
+              entry.token,
+              buildMobilePushData(await prepared, entry.origin, entry.bindingId, current),
+              entry.transport ?? 'direct',
+              entry.encryptionPublicKey
+            )) {
               accepted++
             } else {
               await subscriptions.update(current, (entries) => entries.filter((device) => device.token !== entry.token))
@@ -81,7 +86,8 @@ export function mobileDismissalHandler(context: ApiPluginContext, subscriptions:
             if (await transport.send(
               entry.token,
               buildMobileDismissData(event.tag, event.notificationId, entry.origin, entry.bindingId),
-              entry.transport ?? 'direct'
+              entry.transport ?? 'direct',
+              entry.encryptionPublicKey
             )) {
               accepted++
             } else {

@@ -39,7 +39,7 @@ export function MobileNotificationSetupOffer() {
     </Button>}
     <Typography level="body-sm">Only this phone is affected. Change these choices anytime in App settings.</Typography>
     {bootstrap?.runtimePolicy.selfHosted
-      ? <Typography level="body-sm">Delivered through Google. If your server uses PrintStream's relay, your device token, server address, notification text and image links pass through PrintStream Cloud. Camera files stay on your server.</Typography>
+      ? <Typography level="body-sm">Delivered through Google. If your server uses PrintStream's relay, PrintStream Cloud receives your device token and an opaque device handle. Notification text, routes, and image links are encrypted for this phone before they leave your server. Camera files stay on your server.</Typography>
       : <Typography level="body-sm">Delivered through Google's push service.</Typography>}
   </FormDialog>
 }
