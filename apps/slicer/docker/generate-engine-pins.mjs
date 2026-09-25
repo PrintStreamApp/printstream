@@ -4,7 +4,7 @@
  *
  * Each engine ships a Linux AppImage and a Windows portable zip, and every one
  * has to be recorded with a URL and a sha256 so an install verifies what it
- * downloaded. That is 14 artifacts and ~5 GB of fetching, which is not something
+ * downloaded. That is several gigabytes of fetching, which is not something
  * to do by hand: a mistyped digit fails an install with a checksum error that
  * says nothing about which character is wrong.
  *
@@ -13,15 +13,26 @@
  * from the GitHub release rather than constructed, the same trap the
  * `slicer-targets.mjs` header warns about for `downloadUrl`.
  *
- * Prints a ready-to-paste `ENGINE_ASSETS` block. It does not edit the table
- * itself: a version bump should be a reviewed diff, not a silent rewrite.
+ * Prints an `ENGINE_ASSETS` block by default. `--write --only <tag>` appends one
+ * verified new target to the pin file; review its diff before committing.
  *
- * Usage: node apps/slicer/docker/generate-engine-pins.mjs [--only <tag>]
+ * Usage: node apps/slicer/docker/generate-engine-pins.mjs [--only <tag>] [--write]
  */
 import { createHash } from 'node:crypto'
+import { readFile, writeFile } from 'node:fs/promises'
 import { slicerTargets } from './slicer-targets.mjs'
 
 const only = process.argv.includes('--only') ? process.argv[process.argv.indexOf('--only') + 1] : null
+const write = process.argv.includes('--write')
+if (write && !only) throw new Error('--write requires --only so existing pins are not rehashed')
+const writePath = new URL('./engine-assets.mjs', import.meta.url)
+const targetId = only
+  ? slicerTargets.find((target) => only === target.id || only === releaseTagOf(target))?.id
+  : null
+let currentPins = write ? await readFile(writePath, 'utf8') : null
+if (write && (!targetId || currentPins?.includes(`  '${targetId}': {`))) {
+  throw new Error(`Engine pin ${only} is missing or already exists`)
+}
 
 /** The release tag a target's existing Linux URL was published under. */
 function releaseTagOf(target) {
@@ -100,4 +111,14 @@ for (const target of slicerTargets) {
   lines.push('  },')
 }
 lines.push('}')
-process.stdout.write(`${lines.join('\n')}\n`)
+if (write) {
+  const entry = `${lines.slice(1, -1).join('\n')}\n`
+  if (!currentPins?.endsWith('}\n')) throw new Error('Unexpected engine-assets.mjs layout')
+  currentPins = currentPins.replace(
+    /^ \* \d+ artifacts and ~\d+ GB of hashing, and a mistyped digit fails an install with$/m,
+    ' * Each target has two large artifacts to hash, and a mistyped digit fails an install with'
+  )
+  await writeFile(writePath, `${currentPins.slice(0, -2)}${entry}}\n`)
+} else {
+  process.stdout.write(`${lines.join('\n')}\n`)
+}

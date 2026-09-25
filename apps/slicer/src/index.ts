@@ -39,7 +39,7 @@ import { ensureEnginesInstalled } from './engines/ensure-engines.js'
 import { installEngine, removeEngine } from './engines/install.js'
 import { readManifest as readEngineManifest } from './engines/manifest.js'
 import { terminateSlicerChild } from './terminate-child.js'
-import { readPrepareTimeSeconds } from './gcode-header.js'
+import { readSlicedOutputTiming } from './gcode-header.js'
 import { outputSignalsSliceComplete } from './slice-progress.js'
 import { appendCappedTail, appendOutput, appendStructuredOutput } from './slice-output.js'
 import { openZip, readZipEntryBuffer, readZipEntryText } from './zip-io.js'
@@ -79,7 +79,7 @@ import {
   engineProcessIdentity,
   prepareEngineWritableDirectoryTree
 } from './engine-process-security.js'
-import { mergeSlicedOutputUsage, parseSlicedOutputUsage } from './sliced-output-usage.js'
+import { mergeSlicedOutputTiming, mergeSlicedOutputUsage, parseSlicedOutputUsage } from './sliced-output-usage.js'
 
 const FALLBACK_MANUAL_MACHINE_PROFILE_ID = '__printstream-fallback-manual-machine__'
 const MAX_OUTPUT_LINES_HEADER_BYTES = 8 * 1024
@@ -576,17 +576,10 @@ app.post('/slice', async (request, response) => {
     if (!isDirectPrintableFileName(outputFileName)) throw new Error('Slicer output must be .gcode or .gcode.3mf')
 
     // Try to read metadata from JSON export
-    const metadata = mergeSlicedOutputUsage(
-      await tryReadSlicingMetadata(workDir, outputFileName),
-      packagedUsage
+    const metadata = mergeSlicedOutputTiming(
+      mergeSlicedOutputUsage(await tryReadSlicingMetadata(workDir, outputFileName), packagedUsage),
+      await readSlicedOutputTiming(outputPath)
     )
-    // Prepare time comes from the finished G-code's own header, not from result.json, whose
-    // same-named field is the CLI's wall clock in milliseconds. Applied here rather than inside the
-    // JSON reader because it is the OUTPUT that carries the answer.
-    const prepareSeconds = await readPrepareTimeSeconds(outputPath)
-    if (metadata && prepareSeconds != null && prepareSeconds >= 1) {
-      metadata.estimatedPrepareTimeSeconds = Math.round(prepareSeconds)
-    }
 
     response.setHeader('Content-Type', 'application/octet-stream')
     response.setHeader('Content-Length', String(info.size))
@@ -2226,8 +2219,17 @@ async function readSlicingMetadataFile(jsonPath: string): Promise<SlicingMetadat
       // material on multiple plates sums into one row. Length is reported in metres in
       // result.json (`total_used_m`); convert to mm to match estimatedFilamentLengthMm.
       const byMaterial = new Map<number, SlicingMaterialUsage>()
-      for (const plate of data.sliced_plates) {
+      const plates: NonNullable<SlicingMetadataFields['plates']> = []
+      for (const [position, plate] of data.sliced_plates.entries()) {
         if (plate && typeof plate.total_predication === 'number') timeSeconds += plate.total_predication
+        // Keep one entry per output position even when timing is absent. Dropping a
+        // position would attach the next plate's time to the wrong packaged plate.
+        plates.push({
+          index: position + 1,
+          ...(plate && typeof plate.total_predication === 'number'
+            ? { estimatedPrintTimeSeconds: Math.round(plate.total_predication) }
+            : {})
+        })
         if (plate && Array.isArray(plate.filaments)) {
           for (const filament of plate.filaments) {
             if (!filament || typeof filament !== 'object') continue
@@ -2248,10 +2250,11 @@ async function readSlicingMetadataFile(jsonPath: string): Promise<SlicingMetadat
         }
       }
       if (timeSeconds > 0) metadata.estimatedPrintTimeSeconds = Math.round(timeSeconds)
+      if (plates.length > 0) metadata.plates = plates
       // NOTE: prepare time deliberately does NOT come from result.json. Its `prepare_time` is the
       // CLI's own wall clock in MILLISECONDS (`BambuStudio.cpp:6201`), not a print estimate, so it
       // measured this container rather than the printer and inflated by 1000x on the way. It is
-      // read from the finished G-code header instead; see `readPrepareTimeSeconds`.
+      // read from the finished G-code header instead; see `readSlicedOutputTiming`.
       if (weightGrams > 0) metadata.estimatedFilamentWeightGrams = weightGrams
       if (byMaterial.size > 0) {
         metadata.materials = [...byMaterial.values()].sort((a, b) => (a.id ?? 0) - (b.id ?? 0))

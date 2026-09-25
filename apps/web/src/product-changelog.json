@@ -1,6 +1,19 @@
 {
   "releases": [
     {
+      "version": "1.3.14",
+      "releasedOn": "2026-09-24",
+      "changes": [
+        "Compare printer reliability over a chosen date range, including outcomes by printer and material.",
+        "See combined and per-plate slice estimates, then preview or print individual plates.",
+        "Print from G-code previews and close dialogs from either the titlebar or footer.",
+        "Use Help and Suggestions with valid community or lapsed-support keys, with clearer support eligibility messages.",
+        "Keep perpetual terms on grandfathered Lifetime keys; choose perpetual or dated support and updates when issuing new ones.",
+        "Try Bambu Studio 2.8.4 as an optional beta.",
+        "Remove unused editor materials safely, and get more reliable Windows app startup."
+      ]
+    },
+    {
       "version": "1.3.13",
       "releasedOn": "2026-09-23",
       "changes": [

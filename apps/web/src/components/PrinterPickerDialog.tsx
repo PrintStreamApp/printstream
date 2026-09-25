@@ -24,7 +24,7 @@
 import { useTagFilter } from '../hooks/useTagFilter'
 import { EntityTagChips } from './tags/EntityTagChips'
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import { Button, Chip, DialogActions, DialogTitle, FormControl, FormLabel, Select, Sheet, Stack, Typography } from '@mui/joy'
+import { Button, Chip, DialogActions, DialogTitle, FormControl, FormLabel, ModalClose, Select, Sheet, Stack, Typography } from '@mui/joy'
 import { formatPrinterNozzleSizesLabel, normalizePlateType, resolvePrinterNozzleSizeLabels, type Printer } from '@printstream/shared'
 import { BackAwareModal as Modal } from './BackAwareModal'
 import { ScrollableDialogBody, ScrollableModalDialog } from './ScrollableDialog'
@@ -186,6 +186,7 @@ export function PrinterPickerDialog({
   return (
     <Modal open={open} onClose={onClose}>
       <ScrollableModalDialog sx={{ maxWidth: 640, width: '100%' }}>
+        <ModalClose />
         <DialogTitle>{title}</DialogTitle>
         <Stack spacing={1.5} sx={{ pt: 1, minHeight: 0, flex: 1 }}>
           <DirectoryPrimaryToolbar

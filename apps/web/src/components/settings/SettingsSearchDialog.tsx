@@ -12,7 +12,9 @@
 import SearchRoundedIcon from '@mui/icons-material/SearchRounded'
 import {
   Box,
+  Button,
   Chip,
+  DialogActions,
   DialogContent,
   DialogTitle,
   Input,
@@ -124,6 +126,9 @@ export function SettingsSearchDialog({
             )}
           </Stack>
         </DialogContent>
+        <DialogActions>
+          <Button variant="plain" color="neutral" onClick={onClose}>Close</Button>
+        </DialogActions>
       </ModalDialog>
     </BackAwareModal>
   )

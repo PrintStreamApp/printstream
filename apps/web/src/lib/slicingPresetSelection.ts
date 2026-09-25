@@ -351,7 +351,8 @@ export interface SliceDisabledReasonInput {
    * changed and its AMS options were rebuilt). Distinguished from a slot that was
    * never chosen because the user already made a choice and needs telling it lapsed.
    */
-  staleFilamentSelection?: boolean
+  /** 1-based material row numbers whose saved filament choice no longer resolves. */
+  staleFilamentSlotNumbers?: number[]
   missingFilamentToolhead: boolean
   targetMode: 'realPrinter' | 'manualProfile'
   printerId: string
@@ -380,7 +381,10 @@ export function resolveSliceDisabledReason(input: SliceDisabledReasonInput): str
   if (input.processProfileId.length === 0) return 'Choose a print-settings profile.'
   if (input.processProfileIncompatible) return 'The selected print settings aren’t compatible with the target printer: choose a compatible profile.'
   if (input.nozzleDiameterCount === 0) return 'Choose a nozzle size.'
-  if (input.staleFilamentSelection) return 'A material slot’s filament is no longer available: choose it again.'
+  if (input.staleFilamentSlotNumbers?.length) {
+    const slots = input.staleFilamentSlotNumbers.map((number) => `Material ${number}`).join(', ')
+    return `${slots}: the selected filament is unavailable. Choose a filament in the row${input.staleFilamentSlotNumbers.length > 1 ? 's' : ''} marked "Choose filament".`
+  }
   if (input.missingFilamentProfile) return 'Assign a filament to every material slot.'
   if (input.missingFilamentToolhead) return 'Assign a nozzle to every material slot.'
   if (input.targetMode === 'realPrinter' && input.printerId.length === 0) return 'Choose a printer to slice for.'

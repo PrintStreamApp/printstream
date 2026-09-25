@@ -75,6 +75,36 @@ test('readPrinterStats reports zero manual adjustments when no stats row exists'
   assert.equal(stats.totalPrintHours, 0)
 })
 
+test('readPrinterStats uses finished jobs in the selected period without lifetime adjustments', async () => {
+  stubPrinterLookup()
+  stub(prisma.printJob, 'groupBy', async (args: { where: Record<string, unknown> }) => {
+    assert.equal(args.where.workspaceId, 'workspace-1')
+    assert.equal(args.where.printerId, 'printer-1')
+    assert.deepEqual(args.where.finishedAt, {
+      gte: new Date('2026-09-01T00:00:00.000Z'),
+      lt: new Date('2026-09-25T00:00:00.000Z')
+    })
+    return [{
+      result: 'success',
+      _count: { _all: 2, filamentUsedGrams: 2, filamentUsedMeters: 0 },
+      _sum: { durationSeconds: 7200, filamentUsedGrams: 80, filamentUsedMeters: 0 }
+    }]
+  })
+  stub(prisma.printerStats, 'findUnique', async () => {
+    throw new Error('Lifetime rollup must not be read for a selected period')
+  })
+
+  const stats = await readPrinterStats('printer-1', {
+    from: new Date('2026-09-01T00:00:00.000Z'),
+    until: new Date('2026-09-25T00:00:00.000Z')
+  })
+  assert.ok(stats)
+  assert.equal(stats.totalPrints, 2)
+  assert.equal(stats.totalPrintHours, 2)
+  assert.equal(stats.manualPrints, 0)
+  assert.equal(stats.filamentKilogramsPrinted, 0.08)
+})
+
 type CapturedUpsertArgs = { where: unknown; create: Record<string, unknown>; update: Record<string, unknown> }
 
 test('setManualPrinterStats stores absolute values and converts hours to seconds', async () => {

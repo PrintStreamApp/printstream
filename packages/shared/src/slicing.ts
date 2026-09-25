@@ -1861,7 +1861,15 @@ export const slicingMetadataSchema = z.object({
   estimatedFilamentWeightGrams: z.number().nonnegative().nullable().optional(),
   estimatedFilamentCost: z.number().nonnegative().nullable().optional(),
   /** Per-material usage breakdown (weight/length per project filament). */
-  materials: z.array(slicingMaterialUsageSchema).nullable().optional()
+  materials: z.array(slicingMaterialUsageSchema).nullable().optional(),
+  /** Estimates for each sliced plate; aggregate fields above cover the whole job. */
+  plates: z.array(z.object({
+    index: z.number().int().positive(),
+    estimatedPrintTimeSeconds: z.number().nonnegative().nullable().optional(),
+    estimatedFilamentLengthMm: z.number().nonnegative().nullable().optional(),
+    estimatedFilamentWeightGrams: z.number().nonnegative().nullable().optional(),
+    materials: z.array(slicingMaterialUsageSchema).nullable().optional()
+  })).optional()
 }).optional()
 export type SlicingMetadata = z.infer<typeof slicingMetadataSchema>
 
@@ -1911,6 +1919,9 @@ export const completePublicSlicingUploadSchema = publicSlicingExecutionRequestSc
  */
 export const preservedSliceSettingsSchema = z.object({
   slicerTargetId: z.string().trim().min(1).optional(),
+  /** Actual engine selected for this slice. Absent on outputs saved before setup snapshots. */
+  slicerName: z.string().trim().min(1).optional(),
+  slicerVersion: z.string().trim().min(1).optional(),
   target: slicingTargetSchema,
   plate: z.number().int().nonnegative().default(0),
   allowNewerProjectFile: z.boolean().optional()

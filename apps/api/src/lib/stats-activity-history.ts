@@ -1,6 +1,6 @@
 /**
- * Builds the 30-day activity timeline used by the workspace and platform stats
- * cards.
+ * Builds the activity timeline used by the workspace and platform stats cards.
+ * The platform uses a 30-day window; workspace stats may select another range.
  *
  * Each point captures the total printer count for that UTC day alongside how
  * many unique printers had a print job active during that day, plus the total
@@ -9,10 +9,11 @@
 import type { StatsActivityHistory } from '@printstream/shared'
 import { prisma, rootPrisma } from './prisma.js'
 import { addUtcDays, startOfUtcDay, toUtcDateKey } from './utc-day.js'
+import type { StatsDateRange } from './stats-date-range.js'
 
 const ACTIVITY_WINDOW_DAYS = 30
 
-function buildStatsActivityHistory(input: {
+export function buildStatsActivityHistory(input: {
   printerCreatedAt: readonly Date[]
   printerActivity: ReadonlyArray<{
     printerId: string
@@ -20,10 +21,13 @@ function buildStatsActivityHistory(input: {
     finishedAt: Date | null
   }>
   now?: Date
+  range?: StatsDateRange
 }): StatsActivityHistory {
   const now = input.now ?? new Date()
   const today = startOfUtcDay(now)
-  const windowStart = addUtcDays(today, -(ACTIVITY_WINDOW_DAYS - 1))
+  const windowStart = input.range?.from ?? addUtcDays(today, -(ACTIVITY_WINDOW_DAYS - 1))
+  const windowEnd = input.range ? addUtcDays(input.range.until, -1) : today
+  const windowDays = Math.round((windowEnd.getTime() - windowStart.getTime()) / 86_400_000) + 1
   const printerDates = [...input.printerCreatedAt].sort((left, right) => left.getTime() - right.getTime())
   const activePrinterSets = new Map<string, Set<string>>()
   const usedPrintSeconds = new Map<string, number>()
@@ -31,11 +35,13 @@ function buildStatsActivityHistory(input: {
   for (const job of input.printerActivity) {
     const activityStartDay = startOfUtcDay(job.startedAt)
     const activityEnd = job.finishedAt ?? now
-    const activityEndDay = startOfUtcDay(activityEnd)
-    if (activityEndDay < windowStart || activityStartDay > today) continue
+    // A job ending exactly at midnight has no activity on the next day.
+    const lastActiveInstant = new Date(Math.max(job.startedAt.getTime(), activityEnd.getTime() - 1))
+    const activityEndDay = startOfUtcDay(lastActiveInstant)
+    if (activityEndDay < windowStart || activityStartDay > windowEnd) continue
 
     const boundedStart = activityStartDay < windowStart ? windowStart : activityStartDay
-    const boundedEnd = activityEndDay > today ? today : activityEndDay
+    const boundedEnd = activityEndDay > windowEnd ? windowEnd : activityEndDay
     for (let day = boundedStart; day <= boundedEnd; day = addUtcDays(day, 1)) {
       const nextDay = addUtcDays(day, 1)
       const key = toUtcDateKey(day)
@@ -55,7 +61,7 @@ function buildStatsActivityHistory(input: {
   const history: StatsActivityHistory = []
   let printerIndex = 0
   let totalPrinterCount = 0
-  for (let offset = 0; offset < ACTIVITY_WINDOW_DAYS; offset += 1) {
+  for (let offset = 0; offset < windowDays; offset += 1) {
     const day = addUtcDays(windowStart, offset)
     const nextDay = addUtcDays(day, 1)
     while (printerIndex < printerDates.length) {
@@ -77,10 +83,10 @@ function buildStatsActivityHistory(input: {
   return history
 }
 
-export async function readWorkspaceStatsActivityHistory(): Promise<StatsActivityHistory> {
+export async function readWorkspaceStatsActivityHistory(range?: StatsDateRange | null): Promise<StatsActivityHistory> {
   const today = startOfUtcDay(new Date())
-  const windowStart = addUtcDays(today, -(ACTIVITY_WINDOW_DAYS - 1))
-  const tomorrow = addUtcDays(today, 1)
+  const windowStart = range?.from ?? addUtcDays(today, -(ACTIVITY_WINDOW_DAYS - 1))
+  const tomorrow = range?.until ?? addUtcDays(today, 1)
   const [printers, jobs] = await Promise.all([
     prisma.printer.findMany({
       select: { createdAt: true }
@@ -103,7 +109,8 @@ export async function readWorkspaceStatsActivityHistory(): Promise<StatsActivity
 
   return buildStatsActivityHistory({
     printerCreatedAt: printers.map((printer) => printer.createdAt),
-    printerActivity: jobs
+    printerActivity: jobs,
+    ...(range ? { range } : {})
   })
 }
 

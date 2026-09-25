@@ -18,7 +18,17 @@ import { PrintObjectsSection } from './library/PrintObjectsSection'
 import { PrintStartOptionsFields } from './library/PrintStartOptionsFields'
 import { plateHasSliceData } from '../lib/slicingPresetMatching'
 import {
-  Alert, Button, Checkbox, DialogActions, FormControl, FormLabel, Option, Select, Stack, Typography
+  Alert,
+  Button,
+  Checkbox,
+  DialogActions,
+  FormControl,
+  FormLabel,
+  ModalClose,
+  Option,
+  Select,
+  Stack,
+  Typography
 } from '@mui/joy'
 import { useQuery } from '@tanstack/react-query'
 import {
@@ -437,8 +447,9 @@ export function StoragePrintModal({
   }
 
   return (
-    <Modal open onClose={onCancel}>
+    <Modal open onClose={() => { if (!submitting) onCancel() }}>
       <ScrollableModalDialog sx={{ width: { xs: '96vw', sm: 560 }, maxWidth: '100%' }}>
+        <ModalClose disabled={submitting} />
         <Typography level="h4">Send to printer</Typography>
         <Typography level="body-sm" textColor="text.tertiary" sx={{ mb: 1 }} noWrap>
           {fileName}

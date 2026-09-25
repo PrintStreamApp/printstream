@@ -18,7 +18,9 @@
 import {
   Alert,
   Box,
+  Button,
   Chip,
+  DialogActions,
   DialogContent,
   DialogTitle,
   ModalClose,
@@ -193,6 +195,9 @@ export function ComparePresetsDialog({
             )}
           </Stack>
         </DialogContent>
+        <DialogActions>
+          <Button variant="plain" color="neutral" onClick={onClose}>Close</Button>
+        </DialogActions>
       </ModalDialog>
     </BackAwareModal>
   )

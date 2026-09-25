@@ -16,6 +16,7 @@ import {
   FormControl,
   FormLabel,
   Input,
+  ModalClose,
   Stack,
   Typography
 } from '@mui/joy'
@@ -405,6 +406,7 @@ export function QueueItemDialog({ open, onClose, onBack, fixedFile, defaultPlate
   return (
     <BackAwareModal open={open} onClose={onClose}>
       <ScrollableModalDialog sx={{ maxWidth: 560, width: '100%' }}>
+        <ModalClose />
         <DialogTitle>{isEdit ? 'Edit queued print' : 'Add to queue'}</DialogTitle>
         <ScrollableDialogBody>
           <Stack spacing={2} sx={{ pt: 1 }}>

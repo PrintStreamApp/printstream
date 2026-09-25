@@ -10,7 +10,7 @@
  * owning progress, cancel and retry, and is neither replaced nor suppressed.
  */
 import CheckCircleRoundedIcon from '@mui/icons-material/CheckCircleRounded'
-import { Alert, Button, DialogActions, DialogContent, DialogTitle, ModalDialog, Stack, Typography } from '@mui/joy'
+import { Alert, Button, DialogActions, DialogContent, DialogTitle, ModalClose, ModalDialog, Stack, Typography } from '@mui/joy'
 import { BackAwareModal as Modal } from '../BackAwareModal'
 import { formatPrintSentMessage } from './printSentCopy'
 
@@ -24,6 +24,7 @@ export function PrintSentDialog({ fileName, printerNames, onClose }: {
   return (
     <Modal open onClose={onClose}>
       <ModalDialog variant="outlined" role="alertdialog" sx={{ width: { xs: '95vw', sm: 460 }, maxWidth: '95vw' }}>
+        <ModalClose />
         <DialogTitle>Print sent</DialogTitle>
         <DialogContent>
           <Stack spacing={1.25}>

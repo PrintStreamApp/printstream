@@ -1,4 +1,4 @@
-import { Box, Button, IconButton, ModalClose, ModalDialog, Stack, Tooltip, Typography } from '@mui/joy'
+import { Box, Button, DialogActions, IconButton, ModalClose, ModalDialog, Stack, Tooltip, Typography } from '@mui/joy'
 import FullscreenExitRoundedIcon from '@mui/icons-material/FullscreenExitRounded'
 import FullscreenRoundedIcon from '@mui/icons-material/FullscreenRounded'
 import LightbulbOutlinedIcon from '@mui/icons-material/LightbulbOutlined'
@@ -509,7 +509,7 @@ function CameraTile({
               sx={{
                 display: 'flex',
                 flexDirection: 'column',
-                maxHeight: 'calc(100dvh - 64px)',
+                maxHeight: 'calc(100dvh - 112px)',
                 minHeight: 0,
                 overflow: 'auto',
                 // Native fullscreen (the in-dialog fullscreen button) makes THIS element
@@ -598,6 +598,12 @@ function CameraTile({
                 paused={cameraPaused}
               />
             </Box>
+            <DialogActions>
+              <Button variant="plain" color="neutral" onClick={() => {
+                setDialogOpen(false)
+                camera.onDialogClose?.()
+              }}>Close</Button>
+            </DialogActions>
           </ModalDialog>
         </Modal>
       )}

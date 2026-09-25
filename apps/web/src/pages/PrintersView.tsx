@@ -44,6 +44,8 @@ import { type DirectorySortDirection, type DirectoryViewMode } from '../componen
 import { DirectoryPrimaryToolbar } from '../components/DirectoryToolbar'
 import { MultiSelectOption } from '../components/MultiSelectOption'
 import { PageSectionHeading, pageSectionStackSpacing } from '../components/dashboard/PageSectionHeading'
+import { StatsDateRangePicker } from '../components/StatsDateRangePicker'
+import { recentStatsDateRange, statsDateRangeSearch, type StatsDateRangeSelection } from '../lib/statsDateRange'
 import { SliceFileModal } from '../components/library/SliceFileModal'
 import { SliceThenPrintFlow } from '../components/library/SliceThenPrintFlow'
 import { buildCreateSlicingJobBody } from '../lib/libraryViewHelpers'
@@ -107,6 +109,7 @@ function sanitizeHistoryPageSize(value: unknown): number {
 }
 
 export function PrintersView() {
+  const [statsDateRange, setStatsDateRange] = useState<StatsDateRangeSelection>(() => recentStatsDateRange(30))
   const queryClient = useQueryClient()
   const { confirm } = usePromptDialog()
   const { demoMode } = useRuntimePolicy()
@@ -515,8 +518,8 @@ export function PrintersView() {
     [printers, routePrinterId]
   )
   const printerStatsQuery = useQuery({
-    queryKey: ['printer-stats', routePrinterId],
-    queryFn: ({ signal }) => apiFetch<PrinterStatsResponse>(`/api/printers/${routePrinterId}/stats`, { signal }),
+    queryKey: ['printer-stats', routePrinterId, statsDateRange?.from ?? 'all', statsDateRange?.to ?? 'all'],
+    queryFn: ({ signal }) => apiFetch<PrinterStatsResponse>(`/api/printers/${routePrinterId}/stats${statsDateRangeSearch(statsDateRange)}`, { signal }),
     enabled: authBootstrapQuery.isSuccess ? (singlePrinterView && canViewPrinters && selectedPrinter != null) : false
   })
   const selectedPrinterJobs = useMemo(() => {
@@ -828,35 +831,26 @@ export function PrintersView() {
       )}
 
       {singlePrinterView ? (
-        <Stack
-          direction="row"
-          spacing={1}
-          alignItems="flex-start"
-          justifyContent="space-between"
-          sx={{ flexWrap: 'wrap' }}
-        >
-          <NestedViewHeader
-            crumbs={[
-              { label: 'Printers', onClick: () => navigate(workspacePath('/printers')) },
-              { label: selectedPrinter?.name ?? 'Printer' }
-            ]}
-            description={selectedPrinter
-              ? `${selectedPrinter.model} details, live status, controls, storage, and print history.`
-              : 'Live status, controls, storage, and print history for this printer.'}
-          />
-          {selectedPrinter && (
+        <NestedViewHeader
+          crumbs={[
+            { label: 'Printers', onClick: () => navigate(workspacePath('/printers')) },
+            { label: selectedPrinter?.name ?? 'Printer' }
+          ]}
+          description={selectedPrinter
+            ? `${selectedPrinter.model} details, live status, controls, storage, and print history.`
+            : 'Live status, controls, storage, and print history for this printer.'}
+          action={selectedPrinter ? (
             <Button
               size="sm"
               variant="soft"
               color="neutral"
               startDecorator={<TuneRoundedIcon />}
               onClick={() => setSingleViewSettingsOpen(true)}
-              sx={{ flex: '0 0 auto' }}
             >
               View settings
             </Button>
-          )}
-        </Stack>
+          ) : null}
+        />
       ) : showNoConnectedBridgesPlaceholder ? (
         <Stack spacing={1}>
           <Typography level="h3" startDecorator={<Printer3dRoundedIcon />}>Printers</Typography>
@@ -1089,7 +1083,10 @@ export function PrintersView() {
               <PageSectionHeading
                 icon={<QueryStatsRoundedIcon />}
                 title="Print stats"
-                description="Totals and runtime recorded for this printer."
+                description={statsDateRange
+                  ? 'Retained job totals and runtime for the selected period.'
+                  : 'Lifetime print totals and runtime.'}
+                actions={<StatsDateRangePicker value={statsDateRange} onChange={setStatsDateRange} />}
               />
 
               {printerStatsQuery.isLoading && (
@@ -1106,7 +1103,7 @@ export function PrintersView() {
               )}
 
               {printerStatsQuery.data && (
-                <PrinterStatsCardGrid stats={printerStatsQuery.data.stats} />
+                <PrinterStatsCardGrid stats={printerStatsQuery.data.stats} allTime={statsDateRange === null} />
               )}
             </Stack>
           )}

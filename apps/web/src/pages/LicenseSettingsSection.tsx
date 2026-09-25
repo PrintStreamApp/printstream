@@ -174,6 +174,11 @@ export function LicenseSettingsSection({ canManage }: { canManage: boolean }) {
                   </Typography>
                 </Typography>
               ) : null}
+              {!subscription && status?.edition === 'commercial' && status.updatesUntil == null ? (
+                <Typography level="body-xs" textColor="text.tertiary">
+                  This key has perpetual updates and in-app support. Suggestions is also available.
+                </Typography>
+              ) : null}
             </Stack>
           )}
 

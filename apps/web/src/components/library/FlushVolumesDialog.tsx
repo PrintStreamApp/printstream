@@ -24,8 +24,24 @@
  */
 import { useMemo, useState } from 'react'
 import {
-  Alert, Box, Button, DialogActions, Divider, FormControl, FormLabel, Input, Option, Select, Stack,
-  Tab, TabList, TabPanel, Tabs, Tooltip, Typography
+  Alert,
+  Box,
+  Button,
+  DialogActions,
+  Divider,
+  FormControl,
+  FormLabel,
+  Input,
+  ModalClose,
+  Option,
+  Select,
+  Stack,
+  Tab,
+  TabList,
+  TabPanel,
+  Tabs,
+  Tooltip,
+  Typography
 } from '@mui/joy'
 import CalculateRoundedIcon from '@mui/icons-material/CalculateRounded'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
@@ -167,6 +183,7 @@ export function FlushVolumesDialog({
   return (
     <BackAwareModal open={open} onClose={onClose}>
       <ScrollableModalDialog sx={{ maxWidth: 760, width: '100%' }}>
+        <ModalClose />
         <Typography level="h4">Flushing volumes</Typography>
         <ScrollableDialogBody sx={{ mt: 1.5, px: 0 }}>
           <Stack spacing={1.5}>

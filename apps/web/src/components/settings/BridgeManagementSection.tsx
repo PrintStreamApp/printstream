@@ -5,7 +5,7 @@ import DownloadRoundedIcon from '@mui/icons-material/DownloadRounded'
 import HubRoundedIcon from '@mui/icons-material/HubRounded'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import WarningRoundedIcon from '@mui/icons-material/WarningRounded'
-import { Alert, Box, Button, Card, CardContent, Chip, DialogTitle, Divider, FormControl, FormLabel, Input, Sheet, Stack, Typography } from '@mui/joy'
+import { Alert, Box, Button, Card, CardContent, Chip, DialogTitle, Divider, FormControl, FormLabel, Input, ModalClose, Sheet, Stack, Typography } from '@mui/joy'
 import {
   type BridgeListResponse,
   type BridgeStandaloneDownloadsResponse,
@@ -175,6 +175,7 @@ function ConnectBridgeDialog({ initialCode, onClose }: { initialCode: string | n
   return (
     <BackAwareModal open onClose={onClose}>
       <ScrollableModalDialog sx={{ width: { xs: '100%', sm: 460 } }}>
+        <ModalClose />
         <DialogTitle>Connect a bridge</DialogTitle>
         <ScrollableDialogBody sx={{ mt: 1, p: 0 }}>
           <Stack spacing={1.25}>
@@ -394,6 +395,7 @@ function BridgeDetailsDialog({ bridge, onClose }: { bridge: BridgeSummary; onClo
     <>
       <BackAwareModal open onClose={onClose}>
         <ScrollableModalDialog sx={{ width: { xs: '100%', sm: 520 } }}>
+          <ModalClose />
           <DialogTitle>{bridge.name}</DialogTitle>
           <ScrollableDialogBody sx={{ mt: 1, p: 0 }}>
             <Stack spacing={1.5}>
@@ -669,6 +671,7 @@ function BridgeLogsDialog({ bridge, onClose }: { bridge: BridgeSummary; onClose:
   return (
     <BackAwareModal open onClose={onClose}>
       <ScrollableModalDialog sx={{ width: { xs: '100%', sm: 640 } }}>
+        <ModalClose />
         <DialogTitle>{bridge.name} logs</DialogTitle>
         <ScrollableDialogBody sx={{ mt: 1, p: 0 }}>
           <Stack spacing={1.25}>

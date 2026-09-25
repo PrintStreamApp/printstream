@@ -85,6 +85,7 @@ interface SlicingJobState {
   status: SlicingJobStatus
   queuePosition: number | null
   slicerName: string | null
+  slicerVersion?: string | null
   metadata: SlicingMetadata
   output: SlicingOutputLine[]
   error: string | null
@@ -131,6 +132,7 @@ interface PersistedSlicingJobState {
   profileFiles: ResolvedSlicingPresetFile[]
   status: SlicingJobStatus
   slicerName: string | null
+  slicerVersion?: string | null
   metadata: SlicingMetadata
   output: SlicingOutputLine[]
   error: string | null
@@ -511,6 +513,7 @@ export class SlicingJobs {
     job.output = []
     job.metadata = undefined
     job.slicerName = null
+    job.slicerVersion = null
     job.startedAt = null
     job.finishedAt = null
     job.cancelRequested = false
@@ -653,6 +656,7 @@ export class SlicingJobs {
         if (!slicerTarget) return
 
         job.slicerName = slicerTarget.slicerName
+        job.slicerVersion = slicerTarget.version
         const hasFilamentTrackSwitch = this.targetHasFilamentTrackSwitch(job.request.target)
         job.cacheHasFilamentTrackSwitch = hasFilamentTrackSwitch
         const lookupInput: SliceCacheLookupInput = {
@@ -682,6 +686,7 @@ export class SlicingJobs {
         job.outputFileId = materializedHit.outputFileId
         job.outputFileName = materializedHit.outputFileName
         job.slicerName = materializedHit.slicerName ?? slicerTarget.slicerName
+        job.slicerVersion = slicerTarget.version
         job.metadata = materializedHit.metadata
         this.setStatus(job, 'saving', 'Using the unchanged slice')
         await this.ensureHistoryThumbnail(job)
@@ -738,6 +743,21 @@ export class SlicingJobs {
     }
   }
 
+  /** Freeze the engine identity that produced this output before preserving slice settings. */
+  private async captureSlicerIdentity(job: SlicingJobState): Promise<void> {
+    if (job.slicerName && job.slicerVersion) return
+    try {
+      const capabilities = await this.resolveSlicerCapabilities()
+      const targetId = job.request.slicerTargetId ?? capabilities.defaultTargetId
+      const target = capabilities.targets.find((entry) => entry.id === targetId)
+      if (!target) return
+      job.slicerName = target.slicerName
+      job.slicerVersion = target.version
+    } catch (error) {
+      this.logJobEvent(job, 'warn', `Could not record slicer version: ${(error as Error).message}`)
+    }
+  }
+
   private async run(job: SlicingJobState): Promise<void> {
     await withWorkspaceRequestContext(job.workspace, async () => {
       const controller = new AbortController()
@@ -774,6 +794,7 @@ export class SlicingJobs {
         await progressTracker
         this.appendCliOutput(job, result.output.slice(observedOutputCount))
         job.metadata = result.metadata
+        await this.captureSlicerIdentity(job)
         job.outputFileName = normalizeOutputFileName(result.outputFileName ?? job.outputFileName ?? buildDefaultOutputFileName(job.sourceFileName))
         this.setStatus(job, 'saving', slicedArtifactSavingMessage(job.request))
         // Bake the editor's rendered plate previews into the sliced output so its library
@@ -1263,7 +1284,7 @@ export class SlicingJobs {
         fileName: job.sourceFileName,
         preparedProjectPath,
         output: saved,
-        settings: toPreservedSliceSettings(job.request)
+        settings: toPreservedSliceSettings(job)
       })
       if (projectFileId) {
         this.logJobEvent(job, 'info', 'Kept the sliced project for re-slicing', { projectFileId })
@@ -1292,7 +1313,7 @@ export class SlicingJobs {
         sourceProjectFileId,
         slicerName: job.slicerName,
         metadata: job.metadata,
-        settings: toPreservedSliceSettings(job.request)
+        settings: toPreservedSliceSettings(job)
       })
       this.logJobEvent(job, 'info', 'Cached slicing result for unchanged re-slices', {
         cacheKey: job.cacheKey
@@ -1419,9 +1440,12 @@ function shouldHideSlicedArtifact(request: CreateSlicingJob): boolean {
  * acknowledgement. The preset target rides along because the dialog seeds its pickers from it,
  * not because re-slicing needs it.
  */
-function toPreservedSliceSettings(request: CreateSlicingJob): PreservedSliceSettings {
+function toPreservedSliceSettings(job: SlicingJobState): PreservedSliceSettings {
+  const { request } = job
   return {
     ...(request.slicerTargetId ? { slicerTargetId: request.slicerTargetId } : {}),
+    ...(job.slicerName ? { slicerName: job.slicerName } : {}),
+    ...(job.slicerVersion ? { slicerVersion: job.slicerVersion } : {}),
     target: request.target,
     plate: request.plate,
     ...(request.allowNewerProjectFile ? { allowNewerProjectFile: true } : {})
@@ -1462,6 +1486,7 @@ function serializeSlicingJobState(job: SlicingJobState): PersistedSlicingJobStat
     profileFiles: job.profileFiles,
     status: job.status,
     slicerName: job.slicerName,
+    slicerVersion: job.slicerVersion ?? null,
     metadata: job.metadata,
     output: job.output,
     error: job.error,
@@ -1522,6 +1547,7 @@ function hydratePersistedJob(persisted: PersistedSlicingJobState): SlicingJobSta
     status,
     queuePosition: null,
     slicerName: persisted.slicerName,
+    slicerVersion: persisted.slicerVersion ?? null,
     metadata: persisted.metadata,
     output,
     error,

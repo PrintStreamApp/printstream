@@ -27,6 +27,7 @@ import {
   parsePreservedSliceSettings,
   PRINTS_DISPATCH_PERMISSION,
   printFromLibrarySchema,
+  printJobSetupSchema,
   PRINTERS_CONTROL_CALIBRATE_SCOPE,
   selectJobHistoryPage
 } from '@printstream/shared'
@@ -100,6 +101,7 @@ interface ModernJobRow extends JobRowBase {
   sourceProjectFileId: string | null
   sliceSettingsJson: string | null
   printOptionsJson: string | null
+  printSetupJson: string | null
   printer: { name: string }
   file: {
     sizeBytes: number
@@ -361,6 +363,7 @@ async function listJobs(workspaceId: string, printerId: string | undefined): Pro
         bedLevel: true,
         amsMapping: true,
         printOptionsJson: true,
+        printSetupJson: true,
         pauseScheduleJson: true,
         progressPercent: true,
         startedAt: true,
@@ -416,6 +419,17 @@ function normalizePrintJobResult(result: string): PrintJob['result'] {
   return result === 'success' || result === 'failed' || result === 'cancelled' ? result : 'unknown'
 }
 
+/** Corrupt or older setup snapshots degrade to unknown history details. */
+function readPrintJobSetup(value: string | null): PrintJob['printSetup'] {
+  if (!value) return null
+  try {
+    const parsed = printJobSetupSchema.safeParse(JSON.parse(value))
+    return parsed.success ? parsed.data : null
+  } catch {
+    return null
+  }
+}
+
 async function toPrintJobDto(row: PrintJobRow, activity: AuditLogEntry[]) {
   const jobKind = toPrintJobKind(row.sourceType)
   const projectFilamentChips = await resolveJobProjectFilamentChips(row)
@@ -434,6 +448,7 @@ async function toPrintJobDto(row: PrintJobRow, activity: AuditLogEntry[]) {
     fileSizeBytes: 'file' in row ? row.fileSizeBytes ?? row.file?.sizeBytes ?? null : row.fileSizeBytes,
     projectFilamentChips,
     plate: row.plate,
+    printSetup: 'printSetupJson' in row ? readPrintJobSetup(row.printSetupJson) : null,
     useAms: row.useAms,
     bedLevel: row.bedLevel,
     amsMapping: parseAmsMapping(row.amsMapping),

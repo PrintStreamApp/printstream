@@ -23,6 +23,7 @@ import {
   FormControl,
   FormLabel,
   Input,
+  ModalClose,
   ModalDialog,
   Stack,
   Switch,
@@ -234,6 +235,7 @@ function TemplateEditorDialog({ scope, template, onClose }: TemplateEditorDialog
           variant="outlined"
           sx={{ width: { xs: '95vw', sm: 520 }, maxWidth: '95vw' }}
         >
+          <ModalClose disabled={busy} />
           <DialogTitle>{template?.label ?? 'Edit notification'}</DialogTitle>
           <DialogContent>
             {template && (

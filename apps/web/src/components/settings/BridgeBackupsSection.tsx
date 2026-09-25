@@ -1,5 +1,5 @@
 import React from 'react'
-import { Alert, Box, Button, Chip, DialogTitle, Sheet, Stack, Table, Typography } from '@mui/joy'
+import { Alert, Box, Button, Chip, DialogTitle, ModalClose, Sheet, Stack, Table, Typography } from '@mui/joy'
 import {
   formatBytes,
   extractErrorMessage,
@@ -111,6 +111,7 @@ function BridgeBackupsDialog({ bridge, onClose }: { bridge: BridgeSummary; onClo
   return (
     <BackAwareModal open onClose={onClose}>
       <ScrollableModalDialog sx={{ width: { xs: '100%', sm: 560 } }}>
+        <ModalClose />
         <DialogTitle>{bridge.name} backups</DialogTitle>
         <ScrollableDialogBody sx={{ mt: 1, p: 0 }}>
           <Stack spacing={1.25}>

@@ -5,7 +5,7 @@
  * success via `onSaved`.
  */
 import { useState } from 'react'
-import { Box, Button, FormControl, FormLabel, Input, ModalDialog, Stack, Typography } from '@mui/joy'
+import { Box, Button, FormControl, FormLabel, Input, ModalClose, ModalDialog, Stack, Typography } from '@mui/joy'
 import type { LibraryFile } from '@printstream/shared'
 import { apiFetch } from '../../lib/apiClient'
 import { splitLibraryFileNameForRename } from '../../lib/libraryDisplay'
@@ -52,6 +52,7 @@ export function RenameFileModal({
   return (
     <Modal open onClose={onClose}>
       <ModalDialog sx={{ maxWidth: 480, width: '100%' }}>
+        <ModalClose />
         <Box component="form" onSubmit={handleSubmit} sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
           <Typography level="h4">Rename file</Typography>
           <FormControl>

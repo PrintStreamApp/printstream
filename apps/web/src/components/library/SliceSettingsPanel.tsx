@@ -1318,7 +1318,11 @@ export const SliceSettingsPanel = memo(function SliceSettingsPanel({ controller,
                 <Typography level="body-sm" textColor="text.tertiary">No materials yet. Add one to choose a material.</Typography>
               )}
               {projectFilaments.map((filament, filamentIndex) => {
-                const selectedOption = materialOptions.find((option) => option.id === filamentMaterialOptionIds[filament.projectFilamentId]) ?? null
+                const chosenOptionId = filamentMaterialOptionIds[filament.projectFilamentId]
+                const selectedOption = materialOptions.find((option) => option.id === chosenOptionId) ?? null
+                const selectionProblem = filament.mixedFilament || selectedOption
+                  ? null
+                  : chosenOptionId ? 'unavailable' : 'unselected'
                 const typeFilter = filamentMaterialTypeFilters[filament.projectFilamentId] ?? selectedOption?.materialType ?? ''
                 const selectedToolheadId = filamentToolheadIds[filament.projectFilamentId] ?? ''
                 const useToolheadButtonSet = materialToolheadOptions.length === 2
@@ -1330,7 +1334,9 @@ export const SliceSettingsPanel = memo(function SliceSettingsPanel({ controller,
                   filamentName: [selectedOption?.brand, (selectedOption?.material ?? selectedOption?.materialType ?? typeFilter) || filament.label].filter(Boolean).join(' ') || null,
                   filamentType: (selectedOption?.materialType ?? typeFilter) || filament.label
                 }) ?? normalizedColor.toUpperCase()
-                const presetName = selectedOption ? (selectedOption.presetLabel ?? selectedOption.label) : filament.label
+                const presetName = selectionProblem
+                  ? 'Choose filament'
+                  : selectedOption ? (selectedOption.presetLabel ?? selectedOption.label) : filament.label
                 const presetUnmatched = Boolean(selectedOption && selectedOption.source !== 'manual' && !selectedOption.profileId)
                 // What the printer currently has loaded for this slot, in the priority order the
                 // pickers use. Empty for a manual-profile target, which is exactly when the swatch
@@ -1398,6 +1404,7 @@ export const SliceSettingsPanel = memo(function SliceSettingsPanel({ controller,
                         colorName={colorName}
                         color={normalizedColor}
                         presetUnmatched={presetUnmatched}
+                        selectionProblem={selectionProblem}
                         selectedMaterialOptionId={selectedOption?.id ?? null}
                         loadedMaterials={loadedMaterialsForFilament.length > 0
                           ? {

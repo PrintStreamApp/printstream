@@ -227,9 +227,9 @@ export function CalibrationModal({
   const hasSelection = xcam || bedLeveling || vibration || motorNoise || nozzleOffset || highTempHeatbed || nozzleClumping
 
   return (
-    <Modal open onClose={onClose}>
+    <Modal open onClose={() => { if (!submitting) onClose() }}>
       <ModalDialog sx={{ width: { xs: '94vw', sm: 420 } }}>
-        <ModalClose />
+        <ModalClose disabled={submitting} />
         <Typography level="h4">Calibrate {printerName}</Typography>
         <Stack spacing={1.25} sx={{ mt: 1 }}>
           {capabilities.bedLeveling && (
@@ -380,7 +380,7 @@ export function SkipObjectsModal({
   }
 
   return (
-    <Modal open onClose={onClose}>
+    <Modal open onClose={() => { if (!submitting) onClose() }}>
       <ScrollableModalDialog
         sx={{
           width: { xs: '96vw', md: 920 },
@@ -389,7 +389,7 @@ export function SkipObjectsModal({
           // ScrollableModalDialog already enforces; the body scrolls once that's reached.
         }}
       >
-        <ModalClose />
+        <ModalClose disabled={submitting} />
         <Typography level="h4">Skip object on {printerName}</Typography>
         <Typography level="body-sm" textColor="text.tertiary" sx={{ mt: 0.25 }}>
           Choose one or more objects from the current plate to cancel while the rest of the print continues.

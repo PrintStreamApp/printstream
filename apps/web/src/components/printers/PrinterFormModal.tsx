@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Alert, Box, Button, Checkbox, Chip, FormControl, FormHelperText, FormLabel, Input, ListDivider, ModalDialog, Option, Select, Stack, Typography } from '@mui/joy'
+import { Alert, Box, Button, Checkbox, Chip, FormControl, FormHelperText, FormLabel, Input, ListDivider, ModalClose, ModalDialog, Option, Select, Stack, Typography } from '@mui/joy'
 import AddIcon from '@mui/icons-material/Add'
 import CheckCircleRoundedIcon from '@mui/icons-material/CheckCircleRounded'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
@@ -437,12 +437,13 @@ export function PrinterFormModal({
   }
 
   return (
-    <Modal open onClose={onCancel}>
+    <Modal open onClose={() => { if (!submitPending) onCancel() }}>
       <ScrollableModalDialog
         component="form"
         onSubmit={handleFormSubmit}
         sx={{ width: { xs: '96vw', sm: 640 }, maxWidth: '100%' }}
       >
+        <ModalClose disabled={submitPending} />
         <Typography level="h4">{title}</Typography>
         <ScrollableDialogBody sx={{ mt: 1 }}>
           <Stack spacing={2}>

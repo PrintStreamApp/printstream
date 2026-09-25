@@ -1,6 +1,6 @@
 /** Download picker shared by hosted and self-hosted browser clients. */
 import DownloadRoundedIcon from '@mui/icons-material/DownloadRounded'
-import { Alert, Button, Chip, DialogTitle, Divider, Stack, Typography } from '@mui/joy'
+import { Alert, Button, Chip, DialogTitle, Divider, ModalClose, Stack, Typography } from '@mui/joy'
 import {
   nativeAppDownloadsResponseSchema,
   type NativeAppDownload,
@@ -57,6 +57,7 @@ export function NativeAppDownloadsDialog({
   return (
     <BackAwareModal open onClose={onClose}>
       <ScrollableModalDialog sx={{ width: { xs: '100%', sm: 620 } }}>
+        <ModalClose />
         <DialogTitle>Download the PrintStream app</DialogTitle>
         <ScrollableDialogBody sx={{ mt: 1, p: 0 }}>
           <Stack spacing={2}>

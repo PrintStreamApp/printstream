@@ -18,7 +18,7 @@
  * Counterpart: `GcodeToolpathPanel.tsx` (the per-plate panel this expands on).
  */
 import { useMemo } from 'react'
-import { Box, Button, DialogActions, Sheet, Stack, Table, Typography } from '@mui/joy'
+import { Box, Button, DialogActions, ModalClose, Sheet, Stack, Table, Typography } from '@mui/joy'
 import type { ThreeMfIndex } from '@printstream/shared'
 import { BackAwareModal } from '../../components/BackAwareModal'
 import { DialogSection } from '../../components/DialogSection'
@@ -63,6 +63,7 @@ export function AllPlatesStatsDialog({ open, onClose, plates, projectFilaments }
   return (
     <BackAwareModal open={open} onClose={onClose}>
       <ScrollableModalDialog sx={{ maxWidth: 720, width: '100%' }}>
+        <ModalClose />
         <Typography level="title-lg">Statistics of all plates</Typography>
         <ScrollableDialogBody sx={{ mt: 1.5, px: 0 }}>
           <Stack spacing={2}>

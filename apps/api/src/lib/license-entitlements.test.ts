@@ -33,13 +33,17 @@ test('a live updates window is entitled', async () => {
   assert.equal(await describeUpdateBlock(reading(status())), null)
 })
 
-test('a lapsed window is the ONLY thing that withholds updates', async () => {
+test('a lapsed window withholds updates', async () => {
   const lapsed = reading(status({ updatesExpired: true }))
   assert.equal(await areUpdatesEntitled(lapsed), false)
 
   const reason = await describeUpdateBlock(lapsed)
   assert.ok(reason, 'a blocked update must explain itself')
   assert.match(reason, /keeps running/i, 'the message must say the current build still works')
+})
+
+test('a grandfathered commercial key without a deadline retains perpetual updates', async () => {
+  assert.equal(await areUpdatesEntitled(reading(status({ updatesUntil: null }))), true)
 })
 
 test('a community key is entitled: perpetual, with no window to lapse', async () => {

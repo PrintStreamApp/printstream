@@ -38,6 +38,7 @@ function renderSwatch(props: {
   onOpenMaterialDialog?: () => void
   onSelect?: (option: SliceMaterialOption) => void
   loaded?: SliceMaterialOption[] | null
+  selectionProblem?: 'unavailable' | 'unselected' | null
 }) {
   const loaded = props.loaded === undefined ? [SLOT_A1, SLOT_A2] : props.loaded
   return render(
@@ -48,6 +49,7 @@ function renderSwatch(props: {
         colorName="Jade White"
         color="#FFFFFF"
         presetUnmatched={false}
+        selectionProblem={props.selectionProblem ?? null}
         selectedMaterialOptionId={null}
         loadedMaterials={loaded ? {
           groups: [{ label: 'AMS 1', options: loaded }],
@@ -78,6 +80,13 @@ test('with a printer targeted, the swatch offers the loaded materials plus a man
   assert.equal(row.querySelectorAll('svg').length, 1, 'the Bambu brand mark stands in for the word')
   fireEvent.click(row)
   assert.deepEqual(picked.map((option) => option.id), ['tray:1'])
+})
+
+test('an unavailable choice is visible on the material row and names the action', () => {
+  renderSwatch({ loaded: null, selectionProblem: 'unavailable' })
+  const row = screen.getByRole('button', { name: /Choose filament for material 1: previous choice unavailable/ })
+  assert.match(row.getAttribute('title') ?? '', /selected filament is unavailable/)
+  assert.ok(row.querySelector('svg'), 'the row shows a warning alongside its prompt')
 })
 
 test('the manual item opens the material dialog', () => {

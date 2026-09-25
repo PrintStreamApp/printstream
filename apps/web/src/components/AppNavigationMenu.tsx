@@ -98,15 +98,6 @@ export function AppNavigationMenu({
             [`& .${listItemDecoratorClasses.root} svg`]: { fontSize: mobile ? 24 : 22 }
           }}
         >
-          {onOpenAccount ? (
-            <MenuItem onClick={onOpenAccount}>
-              {accountIcon ? <ListItemDecorator>{accountIcon}</ListItemDecorator> : null}
-              <Stack spacing={0}>
-                <Typography level="body-md">Account</Typography>
-                {accountLabel ? <Typography level="body-sm" textColor="text.tertiary">{accountLabel}</Typography> : null}
-              </Stack>
-            </MenuItem>
-          ) : null}
           {onOpenWorkspaceChooser ? (
             <MenuItem disabled={workspaceActionDisabled} onClick={onOpenWorkspaceChooser}>
               {workspaceActionIcon ? <ListItemDecorator>{workspaceActionIcon}</ListItemDecorator> : null}
@@ -115,6 +106,15 @@ export function AppNavigationMenu({
                 {workspaceContextLabel && workspaceContextLabel !== workspaceActionLabel ? (
                   <Typography level="body-sm" textColor="text.tertiary">{workspaceContextLabel}</Typography>
                 ) : null}
+              </Stack>
+            </MenuItem>
+          ) : null}
+          {onOpenAccount ? (
+            <MenuItem onClick={onOpenAccount}>
+              {accountIcon ? <ListItemDecorator>{accountIcon}</ListItemDecorator> : null}
+              <Stack spacing={0}>
+                <Typography level="body-md">Account</Typography>
+                {accountLabel ? <Typography level="body-sm" textColor="text.tertiary">{accountLabel}</Typography> : null}
               </Stack>
             </MenuItem>
           ) : null}

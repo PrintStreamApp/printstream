@@ -10,7 +10,7 @@
  * (skipping the strict material match).
  */
 import { useEffect, useMemo, useState } from 'react'
-import { Alert, Button, Checkbox, DialogActions, DialogContent, DialogTitle, FormControl, FormLabel, ModalDialog, Stack, Typography } from '@mui/joy'
+import { Alert, Button, Checkbox, DialogActions, DialogContent, DialogTitle, FormControl, FormLabel, ModalClose, ModalDialog, Stack, Typography } from '@mui/joy'
 import {
   evaluateQueueMatch,
   mergeAmsMapping,
@@ -229,6 +229,7 @@ export function QueueStartDialog({
   return (
     <Modal open onClose={onClose}>
       <ModalDialog sx={{ maxWidth: 520, width: '100%' }}>
+        <ModalClose />
         <DialogTitle>Start print: {printedName}</DialogTitle>
         <DialogContent>
           <Stack spacing={1.5}>

@@ -5,7 +5,7 @@
  * and the command to start it. The full, commented example lives at the repo
  * root in compose.bridge.example.yml; this is the condensed get-running form.
  */
-import { Button, DialogTitle, Stack, Typography } from '@mui/joy'
+import { Button, DialogTitle, ModalClose, Stack, Typography } from '@mui/joy'
 import React from 'react'
 import { BackAwareModal } from './BackAwareModal'
 import { CopyableCodeBlock } from './CopyableCodeBlock'
@@ -37,6 +37,7 @@ export function BridgeDockerDialog({ serverUrl, onClose }: { serverUrl: string; 
   return (
     <BackAwareModal open onClose={onClose}>
       <ScrollableModalDialog sx={{ width: { xs: '100%', sm: 640 } }}>
+        <ModalClose />
         <DialogTitle>Run the bridge with Docker</DialogTitle>
         <ScrollableDialogBody sx={{ mt: 1, p: 0 }}>
           <Stack spacing={1.25}>

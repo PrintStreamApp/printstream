@@ -5,7 +5,8 @@
  * stats page.
  */
 import { Router } from 'express'
-import { isPrinterActiveJobStage, workspaceStatsResponseSchema, type WorkspaceStatsResponse } from '@printstream/shared'
+import { PRINTERS_VIEW_PERMISSION, isPrinterActiveJobStage, workspaceMaterialOutcomesResponseSchema, workspacePrinterOutcomesResponseSchema, workspaceStatsResponseSchema, type WorkspaceStatsResponse } from '@printstream/shared'
+import { requireRequestPermission } from '../lib/authorization.js'
 import { buildFilamentSummary } from '../lib/filament-summary.js'
 import { isManagedBridgeMode } from '../lib/managed-bridge.js'
 import { readWorkspacePrintOutcomeBreakdown } from '../lib/print-outcome-breakdown.js'
@@ -14,6 +15,10 @@ import { isMissingColumnError } from '../lib/prisma-errors.js'
 import { printerManager } from '../lib/printer-manager.js'
 import { requireRequestWorkspaceId } from '../lib/request-helpers.js'
 import { readWorkspaceStatsActivityHistory } from '../lib/stats-activity-history.js'
+import { readWorkspacePrinterOutcomes } from '../lib/workspace-printer-outcomes.js'
+import { readWorkspaceMaterialOutcomes } from '../lib/workspace-material-outcomes.js'
+import { parseStatsDateRangeQuery } from '../lib/stats-date-range.js'
+import { readRangedPrintStats } from '../lib/ranged-print-stats.js'
 import { withWorkspaceRequestContext } from '../lib/workspace-context.js'
 
 function secondsToHours(seconds: number): number {
@@ -79,15 +84,35 @@ async function readWorkspaceStatsRow() {
 
 export const workspaceStatsRouter = Router()
 
+workspaceStatsRouter.get('/printers', requireRequestPermission(PRINTERS_VIEW_PERMISSION), async (request, response) => {
+  const workspaceId = requireRequestWorkspaceId(request)
+  const range = parseStatsDateRangeQuery(request.query)
+  const printers = await withWorkspaceRequestContext(request.workspace ?? null, async () => (
+    await readWorkspacePrinterOutcomes(workspaceId, range)
+  ))
+  response.json(workspacePrinterOutcomesResponseSchema.parse({ printers }))
+})
+
+workspaceStatsRouter.get('/materials', requireRequestPermission(PRINTERS_VIEW_PERMISSION), async (request, response) => {
+  const workspaceId = requireRequestWorkspaceId(request)
+  const range = parseStatsDateRangeQuery(request.query)
+  const materials = await withWorkspaceRequestContext(request.workspace ?? null, async () => (
+    await readWorkspaceMaterialOutcomes(workspaceId, range)
+  ))
+  response.json(workspaceMaterialOutcomesResponseSchema.parse({ materials }))
+})
+
 workspaceStatsRouter.get('/', async (request, response) => {
   const workspaceId = requireRequestWorkspaceId(request)
+  const range = parseStatsDateRangeQuery(request.query)
 
-  const [printerCount, bridgeCount, statsRow, activityLast30Days, unfinishedJobs] = await withWorkspaceRequestContext(request.workspace ?? null, async () => await Promise.all([
+  const [printerCount, bridgeCount, statsRow, activityLast30Days, unfinishedJobs, historicalPrintCount] = await withWorkspaceRequestContext(request.workspace ?? null, async () => await Promise.all([
     prisma.printer.count(),
     prisma.bridge.count(),
-    readWorkspaceStatsRow(),
-    readWorkspaceStatsActivityHistory(),
-    prisma.printJob.findMany({ where: { finishedAt: null }, select: { printerId: true } })
+    range ? readRangedPrintStats({ workspaceId, range }) : readWorkspaceStatsRow(),
+    readWorkspaceStatsActivityHistory(range),
+    prisma.printJob.findMany({ where: { finishedAt: null }, select: { printerId: true } }),
+    range ? prisma.printJob.count({ where: { result: { in: ['success', 'failed', 'cancelled'] } } }) : Promise.resolve(null)
   ]))
 
   const activePrinterIds = new Set<string>(unfinishedJobs.map((job) => job.printerId))
@@ -134,7 +159,7 @@ workspaceStatsRouter.get('/', async (request, response) => {
       id: 'start-first-print',
       title: 'Start your first print',
       description: 'Send a first print once the workspace has printers online so history and production stats can build up.',
-      complete: totalPrints > 0
+      complete: (historicalPrintCount ?? totalPrints) > 0
     }
   ] satisfies WorkspaceStatsResponse['quickStartItems']
   // Managed-bridge installs own the bundled bridge themselves, so the operator

@@ -5,7 +5,7 @@
  * owns `flattenFoldersForSelect`, the parent-folder option builder it alone uses.
  */
 import { useMemo, useState } from 'react'
-import { Box, Button, FormControl, FormLabel, Input, ModalDialog, Option, Select, Stack, Typography } from '@mui/joy'
+import { Box, Button, FormControl, FormLabel, Input, ModalClose, ModalDialog, Option, Select, Stack, Typography } from '@mui/joy'
 import CreateNewFolderRoundedIcon from '@mui/icons-material/CreateNewFolderRounded'
 import DriveFileMoveRoundedIcon from '@mui/icons-material/DriveFileMoveRounded'
 import type { LibraryFolder } from '@printstream/shared'
@@ -78,6 +78,7 @@ export function CreateFolderModal({
   return (
     <Modal open onClose={onClose}>
       <ModalDialog sx={{ maxWidth: 420, width: '100%' }}>
+        <ModalClose />
         <Box component="form" onSubmit={handleSubmit} sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
           <Typography level="h4">New folder</Typography>
           <FormControl>
@@ -130,6 +131,7 @@ export function RenameFolderModal({
   return (
     <Modal open onClose={onClose}>
       <ModalDialog sx={{ maxWidth: 420, width: '100%' }}>
+        <ModalClose />
         <Box component="form" onSubmit={handleSubmit} sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
           <Typography level="h4">Rename folder</Typography>
           <FormControl>
@@ -191,6 +193,7 @@ export function MoveFolderModal({
   return (
     <Modal open onClose={onClose}>
       <ModalDialog sx={{ maxWidth: 480, width: '100%' }}>
+        <ModalClose />
         <Typography level="h4">Move folder</Typography>
         <Typography level="body-sm" textColor="text.tertiary">{folder.name}</Typography>
         <FormControl>

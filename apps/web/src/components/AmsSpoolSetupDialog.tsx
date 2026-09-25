@@ -12,6 +12,7 @@ import {
   FormControl,
   FormLabel,
   Input,
+  ModalClose,
   ModalDialog,
   Option,
   Select,
@@ -115,6 +116,7 @@ export function AmsSpoolSetupDialog({ target, onClose }: { target: AmsSpoolSetup
   return (
     <BackAwareModal open onClose={onClose}>
       <ModalDialog sx={{ maxWidth: 400, width: '100%' }}>
+        <ModalClose />
         <Typography level="h4">Set up {target.label}</Typography>
         <Typography level="body-sm" textColor="text.tertiary">
           Tell the printer what is loaded in this slot so it can be mapped to the print.

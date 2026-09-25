@@ -9,6 +9,7 @@ import { workspaceStatsRouter } from './stats.js'
 import type { RequestAuthContext } from '../lib/auth-context.js'
 import { env } from '../lib/env.js'
 import { HttpError } from '../lib/http-error.js'
+import { PRINTERS_VIEW_PERMISSION } from '@printstream/shared'
 import { prisma } from '../lib/prisma.js'
 import { printerManager } from '../lib/printer-manager.js'
 import type { RequestWorkspaceSummary } from '../lib/workspace-context.js'
@@ -17,9 +18,11 @@ const TEST_WORKSPACE = { id: 'workspace-1', slug: 'workspace-1', name: 'Workspac
 
 const originalPrinterCount = prisma.printer.count
 const originalPrinterFindMany = prisma.printer.findMany
+const originalPrinterStatsFindMany = prisma.printerStats.findMany
 const originalBridgeCount = prisma.bridge.count
 const originalWorkspaceStatsFindFirst = prisma.workspaceStats.findFirst
 const originalPrintJobFindMany = prisma.printJob.findMany
+const originalPrintJobCount = prisma.printJob.count
 const originalPrintJobGroupBy = prisma.printJob.groupBy
 const originalSnapshots = printerManager.snapshots
 const originalGetWorkspaceId = printerManager.getWorkspaceId
@@ -27,12 +30,131 @@ const originalGetWorkspaceId = printerManager.getWorkspaceId
 afterEach(() => {
   prisma.printer.count = originalPrinterCount
   prisma.printer.findMany = originalPrinterFindMany
+  prisma.printerStats.findMany = originalPrinterStatsFindMany
   prisma.bridge.count = originalBridgeCount
   prisma.workspaceStats.findFirst = originalWorkspaceStatsFindFirst
   prisma.printJob.findMany = originalPrintJobFindMany
+  prisma.printJob.count = originalPrintJobCount
   prisma.printJob.groupBy = originalPrintJobGroupBy
   printerManager.snapshots = originalSnapshots
   printerManager.getWorkspaceId = originalGetWorkspaceId
+})
+
+test('printer outcomes include current workspace printers and exclude manual usage counts', async () => {
+  prisma.printer.findMany = (async (args: { where: { workspaceId: string } }) => {
+    assert.equal(args.where.workspaceId, TEST_WORKSPACE.id)
+    return [
+      { id: 'printer-a', name: 'Alpha', model: 'X1C', serial: 'serial-a' },
+      { id: 'printer-b', name: 'Beta', model: 'P1S', serial: 'serial-b' }
+    ]
+  }) as unknown as typeof prisma.printer.findMany
+  prisma.printerStats.findMany = (async (args: { where: { workspaceId: string; printerSerial: { in: string[] } } }) => {
+    assert.equal(args.where.workspaceId, TEST_WORKSPACE.id)
+    assert.deepEqual(args.where.printerSerial.in, ['serial-a', 'serial-b'])
+    return [{ printerSerial: 'serial-a', successfulPrints: 8, failedPrints: 2, cancelledPrints: 3, manualTotalPrints: 50 }]
+  }) as unknown as typeof prisma.printerStats.findMany
+
+  await withStatsApp({
+    auth: {
+      authEnabled: true,
+      actor: { type: 'user', userId: 'user-1' },
+      permissions: [PRINTERS_VIEW_PERMISSION],
+      runtimePolicy: { demoMode: false }
+    },
+    workspace: TEST_WORKSPACE
+  }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/stats/printers`)
+    assert.equal(response.status, 200)
+    assert.deepEqual(await response.json(), {
+      printers: [
+        { printerId: 'printer-a', name: 'Alpha', model: 'X1C', successfulPrints: 8, failedPrints: 2, cancelledPrints: 3 },
+        { printerId: 'printer-b', name: 'Beta', model: 'P1S', successfulPrints: 0, failedPrints: 0, cancelledPrints: 0 }
+      ]
+    })
+  })
+})
+
+test('printer outcomes require printer-view permission', async () => {
+  await withStatsApp({
+    auth: {
+      authEnabled: true,
+      actor: { type: 'user', userId: 'user-1' },
+      permissions: [],
+      runtimePolicy: { demoMode: false }
+    },
+    workspace: TEST_WORKSPACE
+  }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/stats/printers`)
+    assert.equal(response.status, 403)
+  })
+})
+
+test('printer outcomes use terminal jobs inside the selected date range', async () => {
+  prisma.printer.findMany = (async () => [
+    { id: 'printer-a', name: 'Alpha', model: 'X1C', serial: 'serial-a' }
+  ]) as unknown as typeof prisma.printer.findMany
+  prisma.printJob.groupBy = (async (args: { where: Record<string, unknown> }) => {
+    assert.equal(args.where.workspaceId, TEST_WORKSPACE.id)
+    assert.deepEqual(args.where.finishedAt, {
+      gte: new Date('2026-09-01T00:00:00.000Z'),
+      lt: new Date('2026-09-25T00:00:00.000Z')
+    })
+    return [{ printerId: 'printer-a', result: 'failed', _count: { _all: 2 } }]
+  }) as unknown as typeof prisma.printJob.groupBy
+  prisma.printerStats.findMany = (async () => {
+    throw new Error('Lifetime outcomes must not be read for a selected period')
+  }) as unknown as typeof prisma.printerStats.findMany
+
+  await withStatsApp({
+    auth: {
+      authEnabled: true,
+      actor: { type: 'user', userId: 'user-1' },
+      permissions: [PRINTERS_VIEW_PERMISSION],
+      runtimePolicy: { demoMode: false }
+    },
+    workspace: TEST_WORKSPACE
+  }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/stats/printers?from=2026-09-01&to=2026-09-24`)
+    assert.equal(response.status, 200)
+    assert.deepEqual(await response.json(), {
+      printers: [{ printerId: 'printer-a', name: 'Alpha', model: 'X1C', successfulPrints: 0, failedPrints: 2, cancelledPrints: 0 }]
+    })
+  })
+})
+
+test('workspace totals and activity follow the selected window without resetting onboarding', async () => {
+  prisma.printer.count = (async () => 1) as typeof prisma.printer.count
+  prisma.printer.findMany = (async () => [{ createdAt: new Date('2026-08-01T00:00:00.000Z') }]) as unknown as typeof prisma.printer.findMany
+  prisma.bridge.count = (async () => 1) as typeof prisma.bridge.count
+  prisma.printJob.findMany = (async () => []) as typeof prisma.printJob.findMany
+  prisma.printJob.count = (async () => 5) as typeof prisma.printJob.count
+  prisma.printJob.groupBy = (async () => [{
+    result: 'failed',
+    _count: { _all: 1, filamentUsedGrams: 0, filamentUsedMeters: 0 },
+    _sum: { durationSeconds: 3600, filamentUsedGrams: null, filamentUsedMeters: null }
+  }]) as unknown as typeof prisma.printJob.groupBy
+  prisma.workspaceStats.findFirst = (async () => {
+    throw new Error('Lifetime rollup must not be read for a selected period')
+  }) as unknown as typeof prisma.workspaceStats.findFirst
+  printerManager.snapshots = (() => []) as typeof printerManager.snapshots
+
+  await withStatsApp({
+    auth: {
+      authEnabled: true,
+      actor: { type: 'user', userId: 'user-1' },
+      permissions: [],
+      runtimePolicy: { demoMode: false }
+    },
+    workspace: TEST_WORKSPACE
+  }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/stats?from=2026-09-23&to=2026-09-24`)
+    assert.equal(response.status, 200)
+    const body = await response.json()
+    assert.equal(body.stats.totalPrints, 1)
+    assert.equal(body.stats.failedPrintHours, 1)
+    assert.deepEqual(body.stats.activityLast30Days.map((point: { date: string }) => point.date), ['2026-09-23', '2026-09-24'])
+    assert.equal(body.quickStartItems.find((item: { id: string }) => item.id === 'start-first-print')?.complete, true)
+  })
 })
 
 test('stats returns quick start when the workspace still needs bridge and printer setup', async () => {

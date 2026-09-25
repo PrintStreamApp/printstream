@@ -957,7 +957,7 @@ export function App() {
     && !canUsePlatformWorkspace
     && memberWorkspaceOptions.length === 1
   const workspaceStatsRouteElement = renderWorkspaceContextElement(
-    <WorkspaceStatsView />
+    <WorkspaceStatsView canViewPrinters={canViewPrinters} />
   )
   const workspaceGetStartedRouteElement = renderWorkspaceContextElement(
     generalSettingsQuery.data == null
@@ -986,6 +986,10 @@ export function App() {
   // Platform users staff the support inbox, so Help is hidden there.
   const appNavigationMenuActions = (
     <>
+      <MenuItem onClick={() => navigate(navigationSettingsPath)}>
+        <ListItemDecorator><SettingsRoundedIcon fontSize="small" /></ListItemDecorator>
+        Settings
+      </MenuItem>
       {!isNativeApp() ? (
         <MenuItem onClick={() => setNativeAppDownloadsOpen(true)}>
           <ListItemDecorator><DownloadRoundedIcon fontSize="small" /></ListItemDecorator>
@@ -997,10 +1001,6 @@ export function App() {
       {selfHostedDeployment && hasWorkspaceContext && canManageSettings
         ? <NativeBillingMenuItem />
         : null}
-      <MenuItem onClick={() => navigate(navigationSettingsPath)}>
-        <ListItemDecorator><SettingsRoundedIcon fontSize="small" /></ListItemDecorator>
-        Settings
-      </MenuItem>
     </>
   )
   const platformOverviewRouteElement = renderProtectedElement(

@@ -6,7 +6,7 @@
  * before replacing it (the server archives the replaced content as a version).
  */
 import { useMemo, useState, type ReactNode } from 'react'
-import { Box, Button, FormControl, FormHelperText, FormLabel, IconButton, Input, Sheet, Stack, Tooltip, Typography } from '@mui/joy'
+import { Box, Button, FormControl, FormHelperText, FormLabel, IconButton, Input, ModalClose, Sheet, Stack, Tooltip, Typography } from '@mui/joy'
 import FolderOpenRoundedIcon from '@mui/icons-material/FolderOpenRounded'
 import GridViewRoundedIcon from '@mui/icons-material/GridViewRounded'
 import ViewListRoundedIcon from '@mui/icons-material/ViewListRounded'
@@ -146,6 +146,7 @@ export function LibraryDestinationDialog({
   return (
     <Modal open onClose={onClose}>
       <ScrollableModalDialog sx={{ width: { xs: '100%', md: dialogWidth } }}>
+        <ModalClose />
         <Typography level="h4">{title}</Typography>
         <ScrollableDialogBody sx={{ mt: 1.5, p: 0 }}>
           <Stack spacing={1.5} sx={{ minHeight: 420, minWidth: 0 }}>

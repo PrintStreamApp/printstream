@@ -28,8 +28,8 @@ import {
 import { prisma } from './prisma.js'
 import type { ResolvedSlicingPresetFile } from './slicing-presets.js'
 
-// Version 2 includes corrected artifact-derived filament lengths in cached result metadata.
-export const SLICE_CACHE_KEY_VERSION = 2
+// Version 3 includes artifact-derived per-plate print times in cached result metadata.
+export const SLICE_CACHE_KEY_VERSION = 3
 
 export interface SliceCacheLookupInput {
   /** Current request provenance, not the previous cache writer's tags. Excluded from byte identity. */

@@ -1,5 +1,5 @@
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
-import { Alert, Box, Button, DialogTitle, Stack, Typography } from '@mui/joy'
+import { Alert, Box, Button, DialogTitle, ModalClose, Stack, Typography } from '@mui/joy'
 import {
   LAN_ONLY_MODE_TRADEOFF,
   MANAGED_BRIDGE_STEP,
@@ -27,6 +27,7 @@ export function ConnectivityGuideDialog({ onClose }: { onClose: () => void }) {
   return (
     <BackAwareModal open onClose={onClose}>
       <ScrollableModalDialog sx={{ width: { xs: '100%', sm: 520 } }}>
+        <ModalClose />
         <DialogTitle>How printers connect</DialogTitle>
         <ScrollableDialogBody sx={{ mt: 1, p: 0 }}>
           <Stack spacing={1.5}>

@@ -10,7 +10,18 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Alert, Box, Button, Card, CardContent, Checkbox, Chip, DialogActions, Sheet, Stack, Typography
+  Alert,
+  Box,
+  Button,
+  Card,
+  CardContent,
+  Checkbox,
+  Chip,
+  DialogActions,
+  ModalClose,
+  Sheet,
+  Stack,
+  Typography
 } from '@mui/joy'
 import ArrowBackRoundedIcon from '@mui/icons-material/ArrowBackRounded'
 import ErrorOutlineRoundedIcon from '@mui/icons-material/ErrorOutlineRounded'
@@ -1095,9 +1106,10 @@ export function PrintModal({
 
   return (
     <>
-      <Modal open onClose={dismissCurrentStep}>
+      <Modal open onClose={() => { if (!submitting) dismissCurrentStep() }}>
         <ScrollableModalDialog sx={{ maxWidth: 640, width: '100%' }}>
-        <DialogFileTitle title={title ?? 'Send to printer'} fileName={formatLibraryFileName(file.name)} />
+          <ModalClose disabled={submitting} />
+          <DialogFileTitle title={title ?? 'Send to printer'} fileName={formatLibraryFileName(file.name)} />
         <Stack
           direction={{ xs: 'column', sm: 'row' }}
           spacing={1}
@@ -1597,7 +1609,15 @@ export function PrintModal({
       </Modal>
       <PluginSlot
         name="library.overlays"
-        context={{ previewFileId, previewPlateIndex: plateIndex, onPreviewClose: () => setPreviewFileId(null) }}
+        context={{
+          previewFileId,
+          previewPlateIndex: plateIndex,
+          onPreviewPrint: (nextPlateIndex: number) => {
+            setPlateIndex(nextPlateIndex)
+            setPreviewFileId(null)
+          },
+          onPreviewClose: () => setPreviewFileId(null)
+        }}
       />
     </>
   )

@@ -28,6 +28,7 @@ import {
   FormLabel,
   IconButton,
   Input,
+  ModalClose,
   ModalDialog,
   Option,
   Select,
@@ -173,6 +174,7 @@ export function TemplateDialog({
   return (
     <Modal open onClose={onClose}>
       <ScrollableModalDialog sx={{ width: { xs: '100%', md: 920 } }}>
+        <ModalClose />
         <Typography level="h4">{isEditing ? 'Edit template' : 'New template'}</Typography>
         <ScrollableDialogBody sx={{ mt: 1.5, p: 0 }}>
           <Stack spacing={2} sx={{ minWidth: 0 }}>
@@ -351,6 +353,7 @@ export function EditOrderDialog({
   return (
     <Modal open onClose={onClose}>
       <ModalDialog sx={{ maxWidth: 560, width: '100%' }}>
+        <ModalClose />
         <Typography level="h4">Edit order</Typography>
         <Stack spacing={1.5}>
           <FormControl>
@@ -713,6 +716,7 @@ export function TemplateLibraryFilePickerDialog({
   return (
     <Modal open onClose={onClose}>
       <ScrollableModalDialog sx={{ width: { xs: '100%', md: 920 } }}>
+        <ModalClose />
         <Typography level="h4">Choose library file</Typography>
         <ScrollableDialogBody sx={{ mt: 1.5, p: 0 }}>
           <Stack spacing={2} sx={{ minHeight: 420, minWidth: 0 }}>
@@ -950,6 +954,7 @@ export function OrderDialog({
     <>
       <Modal open onClose={onClose}>
       <ScrollableModalDialog sx={{ width: { xs: '100%', sm: 560 } }}>
+        <ModalClose />
         <Typography level="h4">New order</Typography>
         <ScrollableDialogBody sx={{ mt: 1.5, p: 0 }}>
           <Stack spacing={2}>
@@ -1247,6 +1252,7 @@ export function OrderColorPickerModal({
   return (
     <Modal open onClose={onClose}>
       <ScrollableModalDialog sx={{ width: { xs: '100%', sm: 420 } }}>
+        <ModalClose />
         <Typography level="h4">Choose color</Typography>
         <Typography level="body-sm" textColor="text.tertiary">
           {templatePrint.item.libraryFileName} · Plate {templatePrint.item.plate}

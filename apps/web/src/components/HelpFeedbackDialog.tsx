@@ -17,9 +17,11 @@
  */
 import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Box, Button, DialogTitle, FormControl, FormHelperText, FormLabel, Radio, RadioGroup, Stack, Textarea, Typography } from '@mui/joy'
+import { Alert, Box, Button, DialogTitle, FormControl, FormHelperText, FormLabel, ModalClose, Radio, RadioGroup, Stack, Textarea, Typography } from '@mui/joy'
 import {
   SUPPORT_CONTACT_EMAIL,
+  hasInAppSupport,
+  inAppSupportUnavailabilityReason,
   type CreateSupportConversationRequest,
   type CreateSupportConversationResponse,
   type LicenseStatusResponse
@@ -70,11 +72,15 @@ export function HelpFeedbackDialog({
     staleTime: 5 * 60_000,
     meta: { suppressGlobalErrorToast: true }
   })
-  const selfHostedEligible = Boolean(
-    licenseQuery.data?.status.valid
-    && licenseQuery.data.status.edition === 'commercial'
-    && !licenseQuery.data.status.updatesExpired
-  )
+  const selfHostedEligible = licenseQuery.data ? hasInAppSupport(licenseQuery.data.status) : false
+  let supportUnavailableReason: string | null = null
+  if (selfHosted && cloudConnectionActive) {
+    if (licenseQuery.isError) {
+      supportUnavailableReason = `Could not check the installed licence: ${licenseQuery.error.message}`
+    } else if (licenseQuery.data) {
+      supportUnavailableReason = inAppSupportUnavailabilityReason(licenseQuery.data.status)
+    }
+  }
   const checkingSupport = selfHosted && cloudConnectionActive && licenseQuery.isPending
   const supportTransport = resolveHelpSupportTransport(
     selfHosted,
@@ -151,12 +157,16 @@ export function HelpFeedbackDialog({
     <>
       <Modal open onClose={onClose}>
         <ScrollableModalDialog sx={{ maxWidth: 520 }}>
+          <ModalClose />
           <DialogTitle>Help &amp; feedback</DialogTitle>
           <Typography level="body-sm" textColor="text.tertiary">
             {transportDescription}
           </Typography>
           <ScrollableDialogBody>
             <Stack spacing={1.5} sx={{ pt: 0.5 }}>
+              {supportUnavailableReason && (
+                <Alert color="warning" variant="soft">{supportUnavailableReason}</Alert>
+              )}
               <Box
                 component="form"
                 id={COMPOSE_FORM_ID}

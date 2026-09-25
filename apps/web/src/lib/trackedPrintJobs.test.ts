@@ -22,6 +22,7 @@ function makePrintJob(overrides: Partial<PrintJob>): PrintJob {
     sliceSettings: null,
     projectFilamentChips: [],
     plate: 1,
+    printSetup: null,
     useAms: true,
     bedLevel: true,
     amsMapping: [0],

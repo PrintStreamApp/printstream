@@ -28,6 +28,7 @@ export function MaterialSwatchButton({
   colorName,
   color,
   presetUnmatched,
+  selectionProblem,
   selectedMaterialOptionId,
   loadedMaterials,
   onOpenMaterialDialog
@@ -46,6 +47,8 @@ export function MaterialSwatchButton({
   color: string
   /** No slicing preset matched this filament: the row warns and the tooltip says to pick one. */
   presetUnmatched: boolean
+  /** A missing or lapsed selection must be visible on the row, not only on disabled Slice. */
+  selectionProblem: 'unavailable' | 'unselected' | null
   /** Currently-assigned material option, so the menu can mark it. */
   selectedMaterialOptionId: string | null
   /** Null (or empty) when no printer material is on offer: the click then opens the dialog. */
@@ -53,10 +56,19 @@ export function MaterialSwatchButton({
   onOpenMaterialDialog: () => void
 }) {
   const menuMaterials = loadedMaterials && loadedMaterials.groups.length > 0 ? loadedMaterials : null
-  const title = presetUnmatched
-    ? 'No preset matches this filament: click to pick one'
-    : `${fullPresetName ?? presetName} · ${colorName}: ${menuMaterials ? 'change material' : 'edit material'}`
-  const label = `${menuMaterials ? 'Change' : 'Edit'} material ${filamentIndex + 1}: ${presetName}, ${colorName}`
+  let title: string
+  if (selectionProblem === 'unavailable') {
+    title = `Material ${filamentIndex + 1}: the selected filament is unavailable. Choose another filament.`
+  } else if (selectionProblem === 'unselected') {
+    title = `Material ${filamentIndex + 1}: choose a filament to slice.`
+  } else if (presetUnmatched) {
+    title = 'No preset matches this filament: click to pick one'
+  } else {
+    title = `${fullPresetName ?? presetName} · ${colorName}: ${menuMaterials ? 'change material' : 'edit material'}`
+  }
+  const label = selectionProblem
+    ? `Choose filament for material ${filamentIndex + 1}: ${selectionProblem === 'unavailable' ? 'previous choice unavailable' : 'none selected'}`
+    : `${menuMaterials ? 'Change' : 'Edit'} material ${filamentIndex + 1}: ${presetName}, ${colorName}`
   const rowSx: SxProps = {
     appearance: 'none',
     flex: '1 1 140px',
@@ -103,7 +115,7 @@ export function MaterialSwatchButton({
       </Typography>
       {/* Positioned by a Joy wrapper: `sx` on a Material icon runs through the Material style
           engine, which this Joy-only app gives no theme, and throws at render. */}
-      {presetUnmatched && (
+      {(presetUnmatched || selectionProblem) && (
         <Box sx={{ ml: 'auto', flexShrink: 0, display: 'inline-flex' }}>
           <WarningAmberRoundedIcon fontSize="small" />
         </Box>

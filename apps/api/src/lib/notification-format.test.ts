@@ -271,6 +271,25 @@ const HMS_A = { code: '0300-0100-0001', message: 'Nozzle issue' }
 const HMS_B = { code: '0500-0200-0002', message: 'AMS filament jam' }
 const HMS_C = { code: '0700-0300-0003', message: 'Chamber overheating' }
 
+test('AMS refill handoff stays quiet while a real fault still notifies', async () => {
+  stubNotificationLookups()
+  const bus = new PrinterEventBus()
+  const received: NotificationMessage[] = []
+  const dispose = subscribePrinterNotifications(bus, (message) => {
+    received.push(message)
+  })
+  const refill = { code: '0700-8000-0001', message: 'AMS filament ran out, switching to other AMS slot.' }
+
+  bus.emit('status', makeStatus())
+  bus.emit('status', makeStatus({ hmsErrors: [refill] }))
+  bus.emit('status', makeStatus({ hmsErrors: [refill, HMS_B] }))
+  await new Promise((resolve) => setImmediate(resolve))
+  dispose()
+
+  assert.equal(received.length, 1)
+  assert.equal(received[0]?.body, 'Job: Calibration cube\nAMS filament jam')
+})
+
 test('multiple HMS errors notify once, listing every error', async () => {
   stubNotificationLookups()
   const bus = new PrinterEventBus()

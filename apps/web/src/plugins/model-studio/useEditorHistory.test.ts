@@ -441,3 +441,24 @@ test('unverified source paint requires a replacement and remains one undo step',
   assert.deepEqual(stateRef.current?.baseFilamentIds, { 1: 1, 2: 1 })
   view.unmount()
 })
+
+test('an unused material with a verified unpainted source removes without replacement', () => {
+  type EditorState = import('./lib/editorModel').EditorState
+  const controller = makeController({ ...START, sessionSlots: [slot(1, 0), slot(2, 1)] })
+  const stateRef: { current: EditorState | null } = { current: { plates: [] } }
+  const build = (): SliceSettingsController => ({
+    ...controller.build(),
+    projectFilaments: (controller.read().sessionSlots ?? []).map((entry) => ({ ...entry, usedOnSelectedPlate: false })),
+    onRemoveFilament: (id) => controller.setSessionSlots((controller.read().sessionSlots ?? []).filter((entry) => entry.projectFilamentId !== id))
+  })
+  const view = renderHook(({ config }) => useEditorHistory({
+    stateRef,
+    setState: (value) => { stateRef.current = typeof value === 'function' ? value(stateRef.current) : value },
+    setSelectedKey: () => {}, setActivePlateIndex: () => {}, setRebuildToken: () => {},
+    sliceConfig: config, usedFilamentIds: new Set<number>(), unverifiedFilamentIds: new Set<number>(), supportOnlyFilamentIds: new Set<number>()
+  }), { initialProps: { config: build() } })
+  assert.equal(view.result.current.sliceConfigForPanel!.filamentRemovalNeedsReplacement!(2), false)
+  act(() => view.result.current.sliceConfigForPanel!.onRemoveFilament(2))
+  assert.deepEqual(controller.read().sessionSlots?.map((entry) => entry.projectFilamentId), [1])
+  view.unmount()
+})

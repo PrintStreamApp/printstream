@@ -104,6 +104,7 @@ import {
 } from '../lib/active-print-job-assets.js'
 import { choosePreferredExactPrinterFilePath } from '../lib/printer-file-path.js'
 import { readPrinterStats, setManualPrinterStats } from '../lib/printer-stats.js'
+import { parseStatsDateRangeQuery } from '../lib/stats-date-range.js'
 import {
   resolveRelevantPrintJobId,
   startTrackedPrintJob
@@ -302,7 +303,7 @@ printersRouter.get('/status', requireRequestPermission(PRINTERS_VIEW_PERMISSION)
 
 printersRouter.get('/:id/stats', requireRequestPermission(PRINTERS_VIEW_PERMISSION), async (request, response) => {
   const printerId = requireRouteParam(request.params.id, 'Printer id')
-  const stats = await readPrinterStats(printerId)
+  const stats = await readPrinterStats(printerId, parseStatsDateRangeQuery(request.query))
   if (!stats) throw notFound('Printer not found')
   response.json(printerStatsResponseSchema.parse({ stats }))
 })

@@ -28,7 +28,7 @@ export function PublicSlicingDialog({ session, onSessionChange, onClose }: {
   const [log, setLog] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [artifact, setArtifact] = useState<{ blob: Blob; source: InMemoryGcodePreviewSource } | null>(null)
-  const [previewOpen, setPreviewOpen] = useState(false)
+  const [previewPlateIndex, setPreviewPlateIndex] = useState<number | null>(null)
   const [previewError, setPreviewError] = useState<string | null>(null)
   const job = session.job
   const jobId = session.job.id
@@ -125,13 +125,13 @@ export function PublicSlicingDialog({ session, onSessionChange, onClose }: {
           else if (active) void act(() => cancelPublicSlice({ ...session, job }))
           else onClose()
         }}
-        secondaryActions={job.status === 'ready' ? (
+        secondaryActions={job.status === 'ready' && (job.metadata?.plates?.length ?? 0) <= 1 ? (
           <Button
             type="button"
             variant="outlined"
             color="neutral"
             disabled={busy || !artifact}
-            onClick={() => setPreviewOpen(true)}
+            onClick={() => setPreviewPlateIndex(job.metadata?.plates?.[0]?.index ?? 1)}
           >
             Preview G-code
           </Button>
@@ -155,7 +155,11 @@ export function PublicSlicingDialog({ session, onSessionChange, onClose }: {
             statusLabel="Ready"
             statusColor="success"
           >
-            <SliceEstimates metadata={job.metadata} filamentMappings={job.filamentMappings} />
+            <SliceEstimates
+              metadata={job.metadata}
+              filamentMappings={job.filamentMappings}
+              onPreviewPlate={artifact ? setPreviewPlateIndex : undefined}
+            />
             {!artifact && !previewError && (
               <Typography level="body-sm" textColor="text.secondary">Loading G-code preview…</Typography>
             )}
@@ -180,8 +184,8 @@ export function PublicSlicingDialog({ session, onSessionChange, onClose }: {
         </Alert>
         </Stack>
       </FormDialog>
-      {artifact && previewOpen && (
-        <PublicGcodePreview source={artifact.source} onClose={() => setPreviewOpen(false)} />
+      {artifact && previewPlateIndex != null && (
+        <PublicGcodePreview source={artifact.source} plateIndex={previewPlateIndex} onClose={() => setPreviewPlateIndex(null)} />
       )}
     </>
   )

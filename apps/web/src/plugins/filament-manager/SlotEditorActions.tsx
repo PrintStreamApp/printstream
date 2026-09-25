@@ -13,7 +13,7 @@
  * dialog.
  */
 import { useMemo, useState } from 'react'
-import { Box, Button, DialogTitle, Stack } from '@mui/joy'
+import { Box, Button, DialogTitle, ModalClose, Stack } from '@mui/joy'
 import LibraryAddRoundedIcon from '@mui/icons-material/LibraryAddRounded'
 import Inventory2RoundedIcon from '@mui/icons-material/Inventory2Rounded'
 import { extractErrorMessage, type FilamentSpool } from '@printstream/shared'
@@ -130,6 +130,7 @@ export function SlotEditorActions(props: SlotContext) {
 
       <Modal open={pickerOpen} onClose={() => setPickerOpen(false)}>
         <ScrollableModalDialog variant="outlined" sx={{ width: { xs: '100%', sm: 720 } }}>
+          <ModalClose />
           <DialogTitle>Choose a spool</DialogTitle>
           <ScrollableDialogBody sx={{ mt: 1, p: 0 }}>
             <Stack spacing={1.5} sx={{ minWidth: 0 }}>

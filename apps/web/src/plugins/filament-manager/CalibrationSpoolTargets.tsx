@@ -5,7 +5,7 @@
  * the other. Only spools in the calibrated material family are selectable.
  */
 import { useEffect, useMemo, useState } from 'react'
-import { Box, Button, Card, DialogTitle, Stack, Typography } from '@mui/joy'
+import { Box, Button, Card, DialogTitle, ModalClose, Stack, Typography } from '@mui/joy'
 import Inventory2RoundedIcon from '@mui/icons-material/Inventory2Rounded'
 import LibraryAddRoundedIcon from '@mui/icons-material/LibraryAddRounded'
 import { extractErrorMessage, normalizeFilamentFamily, type FilamentSpool, type SpoolCreateInput } from '@printstream/shared'
@@ -152,6 +152,7 @@ export function CalibrationSpoolPicker(props: Record<string, unknown>) {
 
       <Modal open={open} onClose={() => setOpen(false)}>
         <ScrollableModalDialog variant="outlined" sx={{ width: { xs: '100%', sm: 760 }, maxWidth: '100%' }}>
+          <ModalClose />
           <DialogTitle>Choose calibrated spools</DialogTitle>
           <Typography level="body-sm" textColor="text.tertiary">
             Select every physical {filamentType ?? 'filament'} spool this measured value should apply to.

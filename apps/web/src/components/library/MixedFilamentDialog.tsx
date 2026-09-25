@@ -7,8 +7,19 @@
  */
 import { useMemo, useState } from 'react'
 import {
-  Alert, Box, Button, Checkbox, DialogActions, FormControl, FormLabel, Input, Option, Select,
-  Stack, Typography
+  Alert,
+  Box,
+  Button,
+  Checkbox,
+  DialogActions,
+  FormControl,
+  FormLabel,
+  Input,
+  ModalClose,
+  Option,
+  Select,
+  Stack,
+  Typography
 } from '@mui/joy'
 import { sampleMixedFilamentGradientCurve, type MixedFilamentConfig } from '@printstream/shared'
 import { BackAwareModal } from '../BackAwareModal'
@@ -122,6 +133,7 @@ export function MixedFilamentDialog({
   return (
     <BackAwareModal open={open} onClose={onClose}>
       <ScrollableModalDialog sx={{ width: '100%', maxWidth: 560 }}>
+        <ModalClose />
         <Typography level="h4">{editing ? 'Edit mixed material' : 'Add mixed material'}</Typography>
         <ScrollableDialogBody sx={{ mt: 1.5, px: 0 }}>
           <Stack spacing={1.5}>

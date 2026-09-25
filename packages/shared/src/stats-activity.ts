@@ -15,6 +15,7 @@ export const statsActivityPointSchema = z.object({
 
 export type StatsActivityPoint = z.infer<typeof statsActivityPointSchema>
 
-export const statsActivityHistorySchema = z.array(statsActivityPointSchema).length(30)
+/** Workspace ranges can be shorter or longer; platform stats still request 30 days. */
+export const statsActivityHistorySchema = z.array(statsActivityPointSchema).min(1).max(366)
 
 export type StatsActivityHistory = z.infer<typeof statsActivityHistorySchema>

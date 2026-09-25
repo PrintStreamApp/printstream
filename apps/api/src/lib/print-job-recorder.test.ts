@@ -1965,6 +1965,51 @@ test('upsertTrackedPrintJobRecord creates a persistent unfinished row for a disp
   assert.equal(creates[0]?.fileId, 'file-1')
 })
 
+test('reusing a history row clears setup from its previous print', async () => {
+  const updates: Array<Record<string, unknown>> = []
+  Object.defineProperty(rootPrisma.printer, 'findUnique', {
+    value: async () => ({ workspaceId: 'workspace-1', model: 'P1S' }),
+    configurable: true
+  })
+  Object.defineProperty(rootPrisma.printJob, 'findUnique', {
+    value: async () => ({ id: 'reused-job' }),
+    configurable: true
+  })
+  Object.defineProperty(rootPrisma.printJob, 'update', {
+    value: async ({ data }: { data: Record<string, unknown> }) => {
+      updates.push(data)
+      return { id: 'reused-job' }
+    },
+    configurable: true
+  })
+
+  await upsertTrackedPrintJobRecord({
+    jobId: 'reused-job',
+    printerId: 'printer-1',
+    jobName: 'External replacement',
+    metadata: {
+      jobKind: 'external',
+      jobId: 'reused-job',
+      fileId: null,
+      fileName: null,
+      fileSizeBytes: null,
+      sourceKind: null,
+      plate: null,
+      useAms: false,
+      bedLevel: false,
+      amsMapping: null,
+      calibrationOption: null
+    }
+  })
+
+  assert.equal(updates.length, 2)
+  assert.deepEqual(updates[1], {
+    slicedPlateType: null,
+    materialTypesJson: null,
+    printSetupJson: null
+  })
+})
+
 test('cancelTrackedPrintJobRecord clears matching pending dispatch metadata and closes the unfinished row', async () => {
   const updates: Array<{ where: { id: string }; data: Record<string, unknown> }> = []
   let findUniqueCalls = 0

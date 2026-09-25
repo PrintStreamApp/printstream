@@ -12,7 +12,7 @@
  * to rebuild after a lost WebGL context.
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { Alert, Box, Button, Checkbox, FormControl, FormLabel, IconButton, ModalClose, Option, Select, Sheet, Slider, Stack, Typography, Tooltip } from '@mui/joy'
+import { Alert, Box, Button, Checkbox, DialogActions, FormControl, FormLabel, IconButton, ModalClose, Option, Select, Sheet, Slider, Stack, Tooltip, Typography } from '@mui/joy'
 import { choosePlateStripOrientation, EDITOR_GRID_GAP_PX, PLATE_STRIP_VERTICAL_THICKNESS } from './lib/editorChromeLayout'
 import { useQuery } from '@tanstack/react-query'
 import { isMeshLibraryFileKind } from '@printstream/shared'
@@ -30,6 +30,7 @@ import type { ParsedGcodeLayers } from './lib/gcodePreview'
 import { gcodeViewModeMetric, isGcodeViewMode, type GcodeViewMode } from './lib/gcodeViewModes'
 import { scanGcodeToolpathConflicts, type GcodeToolpathConflict } from './lib/gcodeConflicts'
 import WarningRoundedIcon from '@mui/icons-material/WarningRounded'
+import PrintRoundedIcon from '@mui/icons-material/PrintRounded'
 import QueryStatsRoundedIcon from '@mui/icons-material/QueryStatsRounded'
 import { GcodeToolpathPanel } from './GcodeToolpathPanel'
 import { AllPlatesStatsDialog } from './AllPlatesStatsDialog'
@@ -181,6 +182,9 @@ export function PreviewView(props: Record<string, unknown>) {
     ? props.previewPlateIndex
     : null
   const onClose = typeof props.onPreviewClose === 'function' ? props.onPreviewClose as (() => void) : undefined
+  const onPrint = typeof props.onPreviewPrint === 'function'
+    ? props.onPreviewPrint as ((plateIndex: number, file: LibraryFile) => void)
+    : undefined
   const open = Boolean(fileId || inMemoryGcode)
   const [viewerContainer, setViewerContainer] = useState<HTMLDivElement | null>(null)
   const [viewCubeContainer, setViewCubeContainer] = useState<HTMLDivElement | null>(null)
@@ -1234,6 +1238,11 @@ export function PreviewView(props: Record<string, unknown>) {
                 gridTemplateColumns: gcodeGridColumns,
                 gridTemplateRows: gcodeGridRows,
                 gap: fullScreen ? 0 : 0.5,
+                // On phones the Layers track is the first grid row. In full screen it otherwise
+                // sits under the status bar/notch while the viewport itself still looks visible.
+                pt: fullScreen && isMobile ? 'var(--app-top-inset, 0px)' : 0,
+                pb: fullScreen && isMobile ? 'var(--app-safe-bottom, 0px)' : 0,
+                boxSizing: 'border-box',
                 display: 'grid'
               }}
             >
@@ -1541,6 +1550,16 @@ export function PreviewView(props: Record<string, unknown>) {
             </Box>
           </Stack>
         </ScrollableDialogBody>
+        {showPreviewChrome && (
+          <DialogActions>
+            <Button type="button" variant="plain" color="neutral" onClick={onClose}>Close</Button>
+            {previewMode === 'plate-gcode' && file && onPrint && (
+              <Button type="button" startDecorator={<PrintRoundedIcon />} onClick={() => onPrint(selectedPlate, file)}>
+                Print
+              </Button>
+            )}
+          </DialogActions>
+        )}
       </ScrollableModalDialog>
       </Modal>
       {/*

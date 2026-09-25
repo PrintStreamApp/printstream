@@ -11,7 +11,7 @@
  * Core, not part of the model-studio plugin, because both the editor (a plugin) and the shared
  * slice settings panel (core) open it: core must never import a plugin.
  */
-import { Box, Button, DialogActions, Typography } from '@mui/joy'
+import { Box, Button, DialogActions, ModalClose, Typography } from '@mui/joy'
 import { useScrollbarGutter } from '../../hooks/useScrollbarGutter'
 import { BackAwareModal } from '../BackAwareModal'
 import { ScrollableModalDialog } from '../ScrollableDialog'
@@ -31,6 +31,7 @@ export function SlicingPresetsDialog({ open, onClose }: {
   return (
     <BackAwareModal open={open} onClose={onClose}>
       <ScrollableModalDialog sx={{ maxWidth: 860, width: '100%' }}>
+        <ModalClose />
         <Typography level="h4">Slicing presets</Typography>
         <Box
           ref={gutter.scrollRef}

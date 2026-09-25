@@ -30,7 +30,16 @@
  */
 import { useCallback, useMemo, useState } from 'react'
 import {
-  Alert, Button, Checkbox, DialogActions, Divider, IconButton, Input, Stack, Typography
+  Alert,
+  Button,
+  Checkbox,
+  DialogActions,
+  Divider,
+  IconButton,
+  Input,
+  ModalClose,
+  Stack,
+  Typography
 } from '@mui/joy'
 import SearchRoundedIcon from '@mui/icons-material/SearchRounded'
 import CloseRoundedIcon from '@mui/icons-material/CloseRounded'
@@ -227,6 +236,7 @@ export function ParameterTableDialog({
         presentation={presentation}
         sx={{ maxWidth: parameterTableMinWidth(columns.length) + PARAMETER_TABLE_DIALOG_CHROME, width: '100%' }}
       >
+        <ModalClose />
         <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
           <Typography level="h4" sx={{ flex: 1, minWidth: 0 }}>Parameter table</Typography>
           <MaximizeDialogButton active={maximized} onToggle={setMaximized} />

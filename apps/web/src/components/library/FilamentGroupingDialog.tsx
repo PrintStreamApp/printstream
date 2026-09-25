@@ -7,7 +7,15 @@
  */
 import { useEffect, useMemo, useState } from 'react'
 import {
-  Alert, Box, Button, Checkbox, CircularProgress, DialogActions, Stack, Typography
+  Alert,
+  Box,
+  Button,
+  Checkbox,
+  CircularProgress,
+  DialogActions,
+  ModalClose,
+  Stack,
+  Typography
 } from '@mui/joy'
 import SwapHorizRoundedIcon from '@mui/icons-material/SwapHorizRounded'
 import {
@@ -183,6 +191,7 @@ export function FilamentGroupingDialog({
   return (
     <BackAwareModal open={open} onClose={onClose}>
       <ScrollableModalDialog sx={{ width: '100%', maxWidth: 720 }}>
+        <ModalClose />
         <Typography level="h4">Filament grouping</Typography>
         <ScrollableDialogBody sx={{ mt: 1.5, px: 0 }}>
           <Stack spacing={1.5}>

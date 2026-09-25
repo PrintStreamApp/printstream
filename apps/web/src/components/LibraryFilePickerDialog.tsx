@@ -14,7 +14,7 @@
  */
 import { useTagFilter } from '../hooks/useTagFilter'
 import { useDeferredValue, useMemo, useState, type ReactNode } from 'react'
-import { Alert, Box, Button, CircularProgress, Sheet, Stack, Typography } from '@mui/joy'
+import { Alert, Box, Button, CircularProgress, ModalClose, Sheet, Stack, Typography } from '@mui/joy'
 import { useQuery } from '@tanstack/react-query'
 import type { LibraryBrowseResponse, LibraryFile, LibraryFolder } from '@printstream/shared'
 import { apiFetch } from '../lib/apiClient'
@@ -177,6 +177,7 @@ export function LibraryFilePickerDialog({
   return (
     <Modal open onClose={onClose}>
       <ScrollableModalDialog sx={{ width: { xs: '100%', md: dialogWidth } }}>
+        <ModalClose />
         <Typography level="h4">{title}</Typography>
         <ScrollableDialogBody sx={{ mt: 1.5, p: 0 }}>
           <Stack spacing={1.5} sx={{ minHeight: 420, minWidth: 0 }}>

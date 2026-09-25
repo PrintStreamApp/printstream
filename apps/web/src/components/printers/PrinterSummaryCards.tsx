@@ -1,8 +1,8 @@
 /**
- * Printer history and lifetime-stats summary cards extracted from
+ * Printer history and stats summary cards extracted from
  * `pages/PrintersView.tsx`: `PrinterHistoryCard` wraps a finished job with
- * reprint / slice-again / delete actions, and `PrinterStatsCardGrid` lays out the lifetime
- * print/filament breakdown cards for a single printer.
+ * reprint / slice-again / delete actions, and `PrinterStatsCardGrid` lays out
+ * the selected period's print/filament breakdown for a single printer.
  */
 import { Box, Button, ListItemDecorator, MenuItem, Stack } from '@mui/joy'
 import RestartAltRoundedIcon from '@mui/icons-material/RestartAltRounded'
@@ -120,9 +120,11 @@ export function PrinterHistoryCard({
 }
 
 export function PrinterStatsCardGrid({
-  stats
+  stats,
+  allTime = true
 }: {
   stats: PrinterStatsResponse['stats']
+  allTime?: boolean
 }) {
   return (
     <Box
@@ -140,7 +142,9 @@ export function PrinterStatsCardGrid({
         icon={<QueryStatsRoundedIcon />}
         label="Total prints"
         primaryValue={formatPrinterStatsWholeNumber(stats.totalPrints)}
-        description="All recorded jobs for this printer across its lifetime in this workspace, plus any manually added usage."
+        description={allTime
+          ? 'All recorded jobs for this printer across its lifetime in this workspace, plus any manually added usage.'
+          : 'Jobs finished in the selected period. Manual usage is excluded.'}
         items={[
           {
             label: 'Successful',

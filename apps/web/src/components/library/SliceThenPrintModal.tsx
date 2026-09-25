@@ -9,7 +9,16 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
-  Alert, Button, Chip, CircularProgress, DialogActions, ModalClose, Sheet, Stack, Typography
+  Alert,
+  Box,
+  Button,
+  Chip,
+  CircularProgress,
+  DialogActions,
+  ModalClose,
+  Sheet,
+  Stack,
+  Typography
 } from '@mui/joy'
 import ErrorOutlineRoundedIcon from '@mui/icons-material/ErrorOutlineRounded'
 import PrintRoundedIcon from '@mui/icons-material/PrintRounded'
@@ -249,6 +258,7 @@ export function SliceThenPrintModal({
   return (
     <Modal open onClose={handleDismiss}>
       <ScrollableModalDialog sx={{ maxWidth: 520, width: '100%' }}>
+        <ModalClose />
         <Typography level="h4">{trackingCopy?.title ?? 'Print now'}</Typography>
         <ScrollableDialogBody sx={{ mt: 1 }}>
           <Stack spacing={1.25}>
@@ -379,10 +389,10 @@ export function SliceResultModal({
   const slicingJobQuery = useSlicingJob(jobId)
   const retrySlicing = useRetrySlicingJob()
   useEffect(() => suppressJobToast('slicing', jobId), [jobId])
-  const [printing, setPrinting] = useState(false)
+  const [printPlateIndex, setPrintPlateIndex] = useState<number | null>(null)
   const [saved, setSaved] = useState(false)
   const [printed, setPrinted] = useState(false)
-  const [previewing, setPreviewing] = useState(false)
+  const [previewPlateIndex, setPreviewPlateIndex] = useState<number | null>(null)
   const job = slicingJobQuery.data?.job ?? null
   // Keep the latest job/commit state in refs so the close handler and the unmount cleanup
   // act on current values without re-subscribing.
@@ -454,16 +464,16 @@ export function SliceResultModal({
   const outputFileQuery = useQuery({
     queryKey: ['library-file', job?.outputFileId ?? 'missing'],
     queryFn: ({ signal }) => apiFetch<{ file: LibraryFile }>(`/api/library/${job?.outputFileId}`, { signal }),
-    enabled: Boolean(printing && job?.status === 'ready' && job.outputFileId)
+    enabled: Boolean(printPlateIndex != null && job?.status === 'ready' && job.outputFileId)
   })
 
-  if (printing && canPrint && job?.status === 'ready' && outputFileQuery.data?.file) {
+  if (printPlateIndex != null && canPrint && job?.status === 'ready' && outputFileQuery.data?.file) {
     return (
       <PrintModal
         file={outputFileQuery.data.file}
         printers={printers}
         defaultPrinterId={job.target.mode === 'realPrinter' ? job.target.printerId : undefined}
-        defaultPlate={job.plate > 0 ? job.plate : 1}
+        defaultPlate={printPlateIndex}
         defaultAmsMapping={defaultAmsMapping}
         // Printing here returns to THIS dialog rather than to the page, so the send confirms
         // itself: the dispatch toast alone reads as nothing having happened when the results
@@ -473,7 +483,7 @@ export function SliceResultModal({
           await apiFetch(`/api/slicing/jobs/${job.id}/print`, { method: 'POST', body: { printerId, ...body } })
           setPrinted(true)
         }}
-        onClose={() => setPrinting(false)}
+        onClose={() => setPrintPlateIndex(null)}
       />
     )
   }
@@ -522,20 +532,12 @@ export function SliceResultModal({
                   </>
                 )}
                 {ready && (
-                  <SliceEstimates metadata={job.metadata} filamentMappings={job.target.filamentMappings} />
-                )}
-                {ready && job.outputFileId && (
-                  <Button
-                    type="button"
-                    variant="outlined"
-                    color="neutral"
-                    size="sm"
-                    startDecorator={<VisibilityRoundedIcon />}
-                    onClick={() => setPreviewing(true)}
-                    sx={{ width: { xs: '100%', sm: 'auto' }, alignSelf: { sm: 'flex-start' } }}
-                  >
-                    Preview
-                  </Button>
+                  <SliceEstimates
+                    metadata={job.metadata}
+                    filamentMappings={job.target.filamentMappings}
+                    onPreviewPlate={job.outputFileId ? setPreviewPlateIndex : undefined}
+                    onPrintPlate={canPrint && job.outputFileId ? setPrintPlateIndex : undefined}
+                  />
                 )}
                 {job.status === 'cancelled' && (
                   <Alert color="warning" variant="soft" startDecorator={<ErrorOutlineRoundedIcon />}>
@@ -552,7 +554,7 @@ export function SliceResultModal({
             )}
           </Stack>
         </ScrollableDialogBody>
-        <DialogActions>
+        <DialogActions sx={{ gap: { xs: 0.5, sm: 1 } }}>
           {job && isSlicingInProgress(job.status) ? (
             // No plain "Close" while slicing runs, leaving would orphan the output, so the
             // explicit exit cancels. Unlike the X, Escape and Back (all `handleClose`), this one
@@ -561,18 +563,37 @@ export function SliceResultModal({
               Cancel slicing
             </Button>
           ) : (
-            <Button type="button" variant="plain" color="neutral" onClick={handleClose}>Close</Button>
+            <Button type="button" size="sm" variant="plain" color="neutral" onClick={handleClose}>Close</Button>
+          )}
+          {ready && job.outputFileId && (
+            <Button
+              type="button"
+              size="sm"
+              variant="outlined"
+              color="neutral"
+              startDecorator={<VisibilityRoundedIcon />}
+              onClick={() => setPreviewPlateIndex(job.metadata?.plates?.[0]?.index ?? (job.plate > 0 ? job.plate : 1))}
+            >
+              Preview
+            </Button>
           )}
           {ready && (
             <Button
               type="button"
+              size="sm"
               variant="outlined"
               color="neutral"
+              aria-label={saved ? 'Saved' : 'Save to library'}
               loading={saveToLibrary.isPending}
               disabled={saved}
               onClick={() => setSaveDestinationOpen(true)}
             >
-              {saved ? 'Saved' : 'Save to library'}
+              {saved ? 'Saved' : (
+                <>
+                  <Box component="span" sx={{ display: { xs: 'inline', sm: 'none' } }}>Save</Box>
+                  <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>Save to library</Box>
+                </>
+              )}
             </Button>
           )}
           {/* An open slice dialog suppresses this job's toast (`dialogToastSuppression`), so while
@@ -588,7 +609,14 @@ export function SliceResultModal({
             </Button>
           )}
           {ready && canPrint && (
-            <Button type="button" startDecorator={<PrintRoundedIcon />} onClick={() => setPrinting(true)}>Print</Button>
+            <Button
+              type="button"
+              size="sm"
+              startDecorator={<PrintRoundedIcon />}
+              onClick={() => setPrintPlateIndex(job.metadata?.plates?.[0]?.index ?? (job.plate > 0 ? job.plate : 1))}
+            >
+              Print
+            </Button>
           )}
         </DialogActions>
       </ScrollableModalDialog>
@@ -620,9 +648,13 @@ export function SliceResultModal({
     <PluginSlot
       name="library.overlays"
       context={{
-        previewFileId: previewing && ready ? job?.outputFileId ?? null : null,
-        previewPlateIndex: job && job.plate > 0 ? job.plate : undefined,
-        onPreviewClose: () => setPreviewing(false)
+        previewFileId: previewPlateIndex != null && ready ? job?.outputFileId ?? null : null,
+        previewPlateIndex: previewPlateIndex ?? undefined,
+        onPreviewPrint: canPrint ? (plateIndex: number) => {
+          setPreviewPlateIndex(null)
+          setPrintPlateIndex(plateIndex)
+        } : undefined,
+        onPreviewClose: () => setPreviewPlateIndex(null)
       }}
     />
     </>

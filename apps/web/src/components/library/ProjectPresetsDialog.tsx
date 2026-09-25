@@ -15,6 +15,7 @@
  *
  * Opened from the Materials header; the editor owns the removals (undoable, applied on save).
  */
+import { ModalClose } from '@mui/joy'
 import DeleteRoundedIcon from '@mui/icons-material/DeleteRounded'
 import InventoryRoundedIcon from '@mui/icons-material/Inventory2Rounded'
 import Button from '@mui/joy/Button'
@@ -50,6 +51,7 @@ export function ProjectPresetsDialog({ open, onClose, presets, onRemove }: Proje
   return (
     <BackAwareModal open={open} onClose={onClose}>
       <ScrollableModalDialog sx={{ maxWidth: 560, width: '100%' }}>
+        <ModalClose />
         <Typography level="h4">Presets in this project</Typography>
         <ScrollableDialogBody sx={{ mt: 1.5, px: 0 }}>
           <Stack spacing={1.5}>

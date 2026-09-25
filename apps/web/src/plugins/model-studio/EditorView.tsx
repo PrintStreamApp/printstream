@@ -104,6 +104,7 @@ import { useFlushCalibration, useFlushDatasets } from './lib/flushDatasets'
 import { zipArchiveEntries } from './lib/zipArchiveClient'
 import { afterNextPaint } from '../../lib/afterNextPaint'
 import { apiFetch } from '../../lib/apiClient'
+import { randomUUID } from '../../lib/randomId'
 import { useAuthBootstrapQuery } from '../../lib/authQuery'
 import { downloadBlob } from '../../lib/downloadBlob'
 import { enqueueLibraryUploads } from '../../lib/libraryUploadQueue'
@@ -443,8 +444,7 @@ import {
 } from './lib/sourceColorImport'
 import { paintMapsAfterMeshReplacement } from './lib/meshReplacementPaint'
 import { useEditorHistory } from './useEditorHistory'
-import { remapBaseMaterialPaint, withBaseMaterialReferences, unverifiedSourceMaterialIds, sceneObjectMaterialIds } from './lib/materialReplacement'
-import { FILAMENT_INDEX_PROCESS_KEYS } from '@printstream/shared'
+import { editorMaterialUsage, liveSourceColorPaintMaterialIds, remapBaseMaterialPaint, withBaseMaterialReferences, unverifiedSourceMaterialIds, sourceColorPaintMaterialIds } from './lib/materialReplacement'
 import { useEditorPaint } from './useEditorPaint'
 import { useEditorSave } from './useEditorSave'
 import type { EditorContentBasePin } from './lib/contentBasePin'
@@ -453,20 +453,6 @@ import { getMeasurement,
 } from './lib/measureBetween'
 import { isCircleCentrePick, sameMeasureFeature } from './lib/measureFeatures'
 import { useEditorScene, type MeasurePick } from './useEditorScene'
-
-/** Read positive material positions from process settings; zero means the object's default. */
-function filamentSettingRefs(overrides: Record<string, string | string[]> | undefined, keys: readonly string[] = FILAMENT_INDEX_PROCESS_KEYS): number[] {
-  if (!overrides) return []
-  const ids: number[] = []
-  for (const key of keys) {
-    const raw = overrides[key]
-    for (const value of Array.isArray(raw) ? raw : [raw]) {
-      const id = value != null ? Number.parseInt(value, 10) : Number.NaN
-      if (Number.isInteger(id) && id > 0) ids.push(id)
-    }
-  }
-  return ids
-}
 
 // Code-split the heavy process-settings catalog (validation + full settings catalogue) out of the
 // editor chunk; it loads only when a settings dialog is first opened. A LOCAL `LazyDialogBoundary`
@@ -1274,77 +1260,18 @@ function EditorView({
   const paintCommittedRef = useRef<(() => void) | null>(null)
   paintCommittedRef.current = () => setPaintRevision((revision) => revision + 1)
   const usageKey = useMemo(() => {
-    const objectIds = sceneObjectMaterialIds(state, sliceConfig?.projectFilaments.map((filament) => filament.projectFilamentId) ?? [])
-    const supportIds = new Set<number>()
-    for (const plate of state?.plates ?? []) {
-      for (const instance of plate.instances) {
-        if (instance.filamentId != null) objectIds.add(instance.filamentId)
-        for (const part of instance.parts) if (part.filamentId != null) objectIds.add(part.filamentId)
-      }
-      // Layer-based filament changes reference materials too.
-      for (const change of effectiveFilamentChanges(plate)) objectIds.add(change.filamentId)
-    }
-    for (const parts of Object.values(state?.addedParts ?? {})) {
-      for (const part of parts) if (part.filamentId != null) objectIds.add(part.filamentId)
-    }
-    const settingMaps = [
-      ...Object.values(state?.partProcessOverrides ?? {}),
-      ...Object.values(state?.addedParts ?? {}).flatMap((parts) => parts.flatMap((part) => part.settings ? [part.settings] : [])),
-      ...Object.values(state?.heightRanges ?? {}).flatMap((ranges) => ranges.map((range) => range.settings)),
-      ...(state?.plates ?? []).flatMap((plate) => plate.instances.flatMap((instance) =>
-        (instance.heightRanges ?? []).map((range) => range.settings)))
-    ]
-    for (const settings of settingMaps) {
-      for (const position of [...filamentSettingRefs(settings), Number(settings.extruder ?? 0)]) {
-        const id = sliceConfig?.projectFilaments[position - 1]?.projectFilamentId
-        if (id != null) objectIds.add(id)
-      }
-    }
-    // Colour-painted triangles reference materials through their paint codes. Walk the whole split
-    // TREE, not just whole-triangle codes: a brush dab splits triangles, so a partially painted
-    // model's second filament would otherwise read as unused: removable, and no prime tower.
-    for (const channel of [state?.colorPaint]) {
-      for (const codes of Object.values(channel ?? {})) {
-        for (const code of Object.values(codes)) collectColorPaintFilamentIds(code, objectIds)
-      }
-    }
-    // Support materials: baked project support (from the loaded 3MF) plus any in-session override
-    // of the support_filament / support_interface_filament settings (global or per-object).
-    for (const id of bakedSupportFilamentIds ?? []) supportIds.add(state?.baseFilamentIds?.[id] ?? id)
-    if (sessionSupportOverrides) {
-      const supportKeys = ['support_filament', 'support_interface_filament']
-      const otherKeys = FILAMENT_INDEX_PROCESS_KEYS.filter((key) => !supportKeys.includes(key))
-      const overrides = [sessionSupportOverrides.globalOverrides, ...Object.values(sessionSupportOverrides.value)]
-      for (const settings of overrides) {
-        for (const position of filamentSettingRefs(settings, supportKeys)) {
-          const id = sliceConfig?.projectFilaments[position - 1]?.projectFilamentId
-          if (id != null) supportIds.add(id)
-        }
-        for (const position of filamentSettingRefs(settings, otherKeys)) {
-          const id = sliceConfig?.projectFilaments[position - 1]?.projectFilamentId
-          if (id != null) objectIds.add(id)
-        }
-      }
-    }
-    // A sliced index contributes known usage, but cannot prove an unlisted material unused:
-    // unsliced paint and skipped objects are covered separately by unverifiedFilamentIds.
-    const bakedPlateFilamentIds = new Set<number>()
-    for (const plate of platesQuery.data?.plates ?? []) {
-      for (const filament of plate.filaments) {
-        const id = state?.baseFilamentIds?.[filament.id] ?? filament.id
-        bakedPlateFilamentIds.add(id)
-        objectIds.add(id)
-      }
-    }
-    for (const id of supportIds) {
-      if (bakedPlateFilamentIds.has(id)) objectIds.add(id)
-    }
+    const { objectIds, supportIds } = editorMaterialUsage({
+      state,
+      sessionIds: sliceConfig?.projectFilaments.map((filament) => filament.projectFilamentId) ?? [],
+      bakedSupportIds: bakedSupportFilamentIds,
+      processOverrides: sessionSupportOverrides
+    })
     const sortJoin = (ids: Set<number>) => [...ids].sort((left, right) => left - right).join(',')
     return `${sortJoin(objectIds)}|${sortJoin(supportIds)}`
     // `paintRevision` is an INVALIDATION KEY, not a value this body reads: paint mutates the state
     // object in place, so its identity cannot signal a stroke (see the revision's declaration).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state, paintRevision, bakedSupportFilamentIds, sessionSupportOverrides, platesQuery.data, sliceConfig?.projectFilaments])
+  }, [state, paintRevision, bakedSupportFilamentIds, sessionSupportOverrides, sliceConfig?.projectFilaments])
   const { usedFilamentIds, supportOnlyFilamentIds } = useMemo(() => {
     const [objectStr = '', supportStr = ''] = usageKey.split('|')
     const objectIds = new Set(objectStr ? objectStr.split(',').map(Number) : [])
@@ -1354,11 +1281,36 @@ function EditorView({
       supportOnlyFilamentIds: new Set<number>([...supportIds].filter((id) => !objectIds.has(id)))
     }
   }, [usageKey])
+  // The local editor has no library file id. Give each opened source its own cache entry so paint
+  // evidence from a previous local file cannot mark this file safe to remove a material from.
+  const sourcePaintScanKey = useMemo(randomUUID, [projectSource])
+  const [sourceScenesReadyFor, setSourceScenesReadyFor] = useState<EditorProjectSource | null>(null)
+  const sourcePaintQuery = useQuery({
+    queryKey: ['library-editor-source-paint-materials', sourcePaintScanKey],
+    enabled: !hasNoBaseFile && platesQuery.isSuccess,
+    staleTime: Infinity,
+    retry: false,
+    queryFn: () => {
+      const archive = projectSource.archive()
+      if (!archive) throw new Error('The source archive is not ready for a colour-paint scan.')
+      return sourceColorPaintMaterialIds(archive)
+    }
+  })
+  useEffect(() => {
+    if (sourcePaintQuery.isError) {
+      console.warn('[editor] source colour-paint scan failed; material removal remains guarded', sourcePaintQuery.error)
+    }
+  }, [sourcePaintQuery.isError, sourcePaintQuery.error])
   const unverifiedFilamentIds = useMemo(() => unverifiedSourceMaterialIds(
     hasNoBaseFile ? [] : platesQuery.data?.projectFilaments.map((filament) => filament.id),
     state?.baseFilamentIds,
-    sliceConfig?.projectFilaments.map((filament) => filament.projectFilamentId) ?? []
-  ), [hasNoBaseFile, platesQuery.data, state?.baseFilamentIds, sliceConfig?.projectFilaments])
+    sliceConfig?.projectFilaments.map((filament) => filament.projectFilamentId) ?? [],
+    sourcePaintQuery.isSuccess && sourceScenesReadyFor === projectSource
+      ? liveSourceColorPaintMaterialIds(state, sourcePaintQuery.data)
+      : undefined
+    // Paint maps mutate in place, so the revision invalidates the source guard too.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  ), [hasNoBaseFile, platesQuery.data, state, paintRevision, sliceConfig?.projectFilaments, sourcePaintQuery.isSuccess, sourcePaintQuery.data, sourceScenesReadyFor, projectSource])
   const hasMaterials = materials.options.length > 0
 
   // Flips true once the Three.js scene/plate root exist, so the plate-build effect
@@ -2275,6 +2227,15 @@ function EditorView({
       ? { ...prev, partProcessOverrides: { ...(prev.partProcessOverrides ?? {}), ...additions } }
       : prev)
   }, [scenesByPlate])
+
+  // The first plate seeds before the others arrive. Keep source materials guarded until all
+  // scenes have been merged, including their object and part assignments and process overrides.
+  useEffect(() => {
+    if (!initialSceneQuery.isSuccess) return
+    if (restPlateIndices.length > 0 && !restScenesQuery.isSuccess) return
+    if (pendingScenePlatesRef.current.size > 0) return
+    setSourceScenesReadyFor(projectSource)
+  }, [initialSceneQuery.isSuccess, restPlateIndices.length, restScenesQuery.isSuccess, scenesByPlate, projectSource])
 
   const activePlate = useMemo(
     () => state?.plates.find((plate) => plate.index === activePlateIndex) ?? null,

@@ -9,7 +9,7 @@ const dom = installJsdomGlobals()
 // test only after the jsdom globals exist.
 const React = (await import('react')).default
 const { CssVarsProvider } = await import('@mui/joy/styles')
-const { cleanup, render } = await import('@testing-library/react')
+const { cleanup, fireEvent, render } = await import('@testing-library/react')
 const { SliceEstimates } = await import('./SliceEstimates')
 
 afterEach(() => {
@@ -20,10 +20,20 @@ after(() => {
   dom.window.close()
 })
 
-function renderEstimates(metadata: SlicingMetadata, filamentMappings?: Parameters<typeof SliceEstimates>[0]['filamentMappings']) {
+function renderEstimates(
+  metadata: SlicingMetadata,
+  filamentMappings?: Parameters<typeof SliceEstimates>[0]['filamentMappings'],
+  onPreviewPlate?: (plateIndex: number) => void,
+  onPrintPlate?: (plateIndex: number) => void
+) {
   return render(
     <CssVarsProvider>
-      <SliceEstimates metadata={metadata} filamentMappings={filamentMappings} />
+      <SliceEstimates
+        metadata={metadata}
+        filamentMappings={filamentMappings}
+        onPreviewPlate={onPreviewPlate}
+        onPrintPlate={onPrintPlate}
+      />
     </CssVarsProvider>
   )
 }
@@ -79,4 +89,22 @@ test('shows every used material, including a single-material slice', () => {
   assert.ok(multi.getByText('Matte Black'))
   assert.ok(multi.getByText('5.0 g · 2.00 m'))
   assert.ok(multi.getByText('Material 2'))
+})
+
+test('each sliced plate previews and prints its own plate index', () => {
+  let previewPlate: number | null = null
+  let printPlate: number | null = null
+  const view = renderEstimates({
+    estimatedPrintTimeSeconds: 8 * 3600,
+    plates: [{ index: 1, estimatedPrintTimeSeconds: 3 * 3600 }, { index: 2, estimatedPrintTimeSeconds: 5 * 3600 }]
+  }, undefined, (plateIndex) => { previewPlate = plateIndex }, (plateIndex) => { printPlate = plateIndex })
+
+  const previewButtons = view.getAllByRole('button', { name: 'Preview' })
+  const printButtons = view.getAllByRole('button', { name: 'Print' })
+  assert.equal(previewButtons.length, 2)
+  assert.equal(printButtons.length, 2)
+  fireEvent.click(previewButtons[1]!)
+  fireEvent.click(printButtons[0]!)
+  assert.equal(previewPlate, 2)
+  assert.equal(printPlate, 1)
 })

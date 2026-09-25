@@ -8,6 +8,7 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
+  ModalClose,
   ModalDialog,
   Stack,
   Switch,
@@ -315,6 +316,7 @@ export function PluginManagerSection({ surface }: PluginManagerSectionProps) {
 
       <Modal open={confirmUninstall != null} onClose={() => setConfirmUninstall(null)}>
         <ModalDialog variant="outlined" role="alertdialog">
+          <ModalClose />
           <DialogTitle>Uninstall plugin?</DialogTitle>
           <DialogContent>
             <Typography level="body-sm">

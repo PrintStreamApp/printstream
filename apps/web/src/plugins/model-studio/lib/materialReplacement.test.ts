@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { remapBaseMaterialPaint, replaceEditorMaterial, sceneObjectMaterialIds, unverifiedSourceMaterialIds, withBaseMaterialReferences } from './materialReplacement'
+import { editorMaterialUsage, liveColorPaintMaterialIds, liveSourceColorPaintMaterialIds, remapBaseMaterialPaint, replaceEditorMaterial, sceneObjectMaterialIds, sourceColorPaintMaterialIds, unverifiedSourceMaterialIds, withBaseMaterialReferences } from './materialReplacement'
 import { cloneEditorState, rebaseEditorStateFilamentIds, type EditorState } from './editorModel'
+import type { ThreeMfArchive } from './threeMfArchive'
+import { encodePaintTree } from './trianglePaintTree'
 
 // A minimal scene exercises the independent reference domains without loading a WebGL renderer.
 test('replacement covers scene, paint, settings, sequences and preserves the original for undo', () => {
@@ -65,6 +67,77 @@ test('unverified source paint requires confirmation without marking new material
   assert.deepEqual([...unverifiedSourceMaterialIds([1, 2], { 1: 2, 2: 2, 3: 2, 4: 1, 5: 2 }, [1, 2])], [2, 1])
   assert.deepEqual([...unverifiedSourceMaterialIds(undefined, undefined, [1, 2])], [1, 2])
   assert.deepEqual([...unverifiedSourceMaterialIds([], undefined, [1, 2])], [])
+  assert.deepEqual([...unverifiedSourceMaterialIds([1, 2, 3], undefined, [1, 2, 3, 4], new Set())], [])
+  assert.deepEqual([...unverifiedSourceMaterialIds([1, 2, 3], { 1: 2, 2: 1, 3: 2 }, [1, 2, 4], new Set([1, 3]))], [2])
+})
+
+test('source paint scan finds whole and split paint across model entries', () => {
+  const splitCode = encodePaintTree({ kind: 'split', splits: 1, special: 0, children: [
+    { kind: 'leaf', state: 2 }, { kind: 'leaf', state: 4 }
+  ] })
+  const entries = new Map([
+    ['3D/3dmodel.model', '<object id="10"><triangle paint_color="4"/><triangle paint_color="0C"/></object>'],
+    ['3D/Objects/part.model', `<object id="20"><triangle paint_color="${splitCode}"/></object>`],
+    ['Metadata/model_settings.config', '<triangle paint_color="10"/>']
+  ])
+  const archive = {
+    entryNames: () => [...entries.keys()],
+    entryText: (path: string) => entries.get(path) ?? null
+  } as ThreeMfArchive
+  assert.deepEqual([...sourceColorPaintMaterialIds(archive)], [
+    ['3D/3dmodel.model:10', new Set([1, 3])],
+    ['3D/Objects/part.model:20', new Set([2, 4])]
+  ])
+  entries.set('3D/Objects/part.model', '<object id="20"><triangle paint_color="invalid"/></object>')
+  assert.throws(() => sourceColorPaintMaterialIds(archive), /Unrecognized colour paint/)
+})
+
+test('source paint follows live parts and yields to complete session paint', () => {
+  const byMesh = new Map([
+    ['3D/part.model:20', new Set([2])],
+    ['3D/part.model:21', new Set([3])]
+  ])
+  const part = (id: number, partIndex: number) => ({
+    entryPath: '3D/part.model', componentObjectId: id, partIndex, subtype: null, filamentId: null
+  })
+  const first = { source: { kind: 'object' }, objectId: 10, parts: [part(20, 0), part(21, 1)] }
+  const second = { source: { kind: 'object' }, objectId: 11, parts: [part(20, 0)] }
+  const state = { plates: [{ index: 1, instances: [first, second] }] } as unknown as EditorState
+  assert.deepEqual([...liveSourceColorPaintMaterialIds(state, byMesh)], [2, 3])
+  state.plates[0]!.instances = [first as never]
+  state.colorPaint = { '10:20': { 0: '0C' }, '11:20': { 0: '8' } }
+  assert.deepEqual([...liveSourceColorPaintMaterialIds(state, byMesh)], [3])
+  assert.deepEqual([...liveColorPaintMaterialIds(state)], [3])
+  state.partMeshReplacements = { '10:1': 'replacement' }
+  assert.deepEqual([...liveSourceColorPaintMaterialIds(state, byMesh)], [])
+  state.plates[0]!.instances = []
+  assert.deepEqual([...liveColorPaintMaterialIds(state)], [])
+})
+
+test('a removed body does not keep its former material in use', () => {
+  const state = { plates: [{ index: 1, instances: [{
+    source: { kind: 'object' }, objectId: 10, filamentId: 2, bodyRemoved: true, parts: []
+  }] }], addedParts: { 10: [{ filamentId: 1, subtype: null }] } } as unknown as EditorState
+  assert.deepEqual([...sceneObjectMaterialIds(state, [1, 2])], [1])
+})
+
+test('usage selector includes live assignments, paint, settings and support without stale object references', () => {
+  const state = { plates: [{ index: 1, instances: [{
+    source: { kind: 'object' }, objectId: 10, filamentId: 1,
+    parts: [{ entryPath: '3D/part.model', componentObjectId: 20, partIndex: 0, filamentId: 2, subtype: null }]
+  }], filamentChanges: [{ z: 2, filamentId: 4 }] }],
+  colorPaint: { '10:20': { 0: '0C' }, '99:20': { 0: '3C' } },
+  partProcessOverrides: { '10:0': { extruder: '4' }, '99:0': { extruder: '6' } }
+  } as unknown as EditorState
+  const usage = editorMaterialUsage({
+    state, sessionIds: [1, 2, 3, 4, 5, 6], bakedSupportIds: [5],
+    processOverrides: {
+      globalOverrides: {},
+      value: { '99': { support_filament: '6' } }
+    }
+  })
+  assert.deepEqual([...usage.objectIds], [2, 1, 4, 3])
+  assert.deepEqual([...usage.supportIds], [5])
 })
 
 

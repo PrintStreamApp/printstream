@@ -44,7 +44,8 @@ async function withRelay(
     actor: { type: 'user', userId: 'local-user' },
     permissions: [],
     runtimePolicy: { demoMode: false }
-  }
+  },
+  feature: 'support' | 'suggestions' = 'support'
 ): Promise<void> {
   const app = express()
   app.use(express.json())
@@ -54,7 +55,8 @@ async function withRelay(
     next()
   })
   const router = express.Router()
-  registerCloudSupportRelay(router, {
+  const register = feature === 'support' ? registerCloudSupportRelay : registerCloudSuggestionRelay
+  register(router, {
     getInstallationId: async () => 'installation-secret',
     resolveContext: async () => CONTEXT,
     resolveOrigin: () => 'https://cloud.example.test',
@@ -90,6 +92,45 @@ test('unlicensed and community installs make zero vendor requests', async (t) =>
         assert.equal(response.status, 403)
       })
       assert.equal(vendorRequests, 0)
+    })
+  }
+})
+
+test('Help relays a grandfathered commercial key with perpetual support', async () => {
+  let vendorRequests = 0
+  await withRelay({
+    getLicenseKey: async () => 'grant-key',
+    getLicenseStatus: async () => status({ updatesUntil: null }),
+    fetch: async () => {
+      vendorRequests += 1
+      return new Response('{}')
+    }
+  }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/plugins/cloud-connection/support/conversations`)
+    assert.equal(response.status, 200)
+  })
+  assert.equal(vendorRequests, 1)
+})
+
+test('Suggestions relays valid community and lapsed-support keys', async (t) => {
+  for (const example of [
+    { name: 'community', licenseStatus: status({ edition: 'community', updatesUntil: null }) },
+    { name: 'lapsed support', licenseStatus: status({ updatesExpired: true }) }
+  ]) {
+    await t.test(example.name, async () => {
+      let vendorRequests = 0
+      await withRelay({
+        getLicenseKey: async () => 'installed-key',
+        getLicenseStatus: async () => example.licenseStatus,
+        fetch: async () => {
+          vendorRequests += 1
+          return new Response('{}')
+        }
+      }, async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/api/plugins/cloud-connection/suggestions`)
+        assert.equal(response.status, 200)
+      }, undefined, 'suggestions')
+      assert.equal(vendorRequests, 1)
     })
   }
 })

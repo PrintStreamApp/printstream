@@ -36,7 +36,7 @@ import { rootPrisma } from './prisma.js'
 import { isMissingColumnError } from './prisma-errors.js'
 import { serializeRecordedPrintStartOptions } from './print-job-options.js'
 import { ensurePrintJobSnapshot } from './print-job-snapshots.js'
-import { readLibraryThreeMfPlateUsage } from './library-three-mf.js'
+import { readLibraryThreeMfPlateDetails } from './library-three-mf.js'
 import { resolvePrinterCoverPath } from './printer-cover-source.js'
 import { recordFinishedPrinterStats } from './printer-stats.js'
 import { readPrinterStorageThreeMfIndex } from './printer-storage-3mf.js'
@@ -330,7 +330,7 @@ export async function createPrintJobStartRecord(input: {
 }): Promise<PrintJobStartRecord> {
   const printer = await rootPrisma.printer.findUnique({
     where: { id: input.printerId },
-    select: { workspaceId: true }
+    select: { workspaceId: true, model: true }
   })
   if (!printer) {
     throw new Error(`Printer not found for print job record: ${input.printerId}`)
@@ -395,6 +395,15 @@ export async function createPrintJobStartRecord(input: {
   // Each created job that targets a library file is one print of that file: roll it
   // into the file's denormalized print-history counters for the library sorts.
   await bumpLibraryFilePrintStats(data.fileId, data.startedAt)
+  await recordStartedPrintJobSetup({
+    jobId: created.id,
+    workspaceId: printer.workspaceId,
+    sourceType: data.sourceType,
+    fileId: data.fileId,
+    plate: data.plate,
+    printerModel: printer.model,
+    sliceSettingsJson: data.sliceSettingsJson
+  })
   return created
 }
 
@@ -466,6 +475,22 @@ export async function upsertTrackedPrintJobRecord(input: {
         calibrationOption: input.metadata.calibrationOption
       }
     }))
+    const printer = await rootPrisma.printer.findUnique({
+      where: { id: input.printerId },
+      select: { workspaceId: true, model: true }
+    })
+    if (printer) {
+      await recordStartedPrintJobSetup({
+        jobId: input.jobId,
+        workspaceId: printer.workspaceId,
+        sourceType: mapStoredJobKind(input.metadata.jobKind),
+        fileId: input.metadata.fileId,
+        plate: input.metadata.plate,
+        printerModel: printer.model,
+        sliceSettingsJson: input.metadata.sliceSettingsJson ?? null,
+        resetExisting: true
+      })
+    }
   } else {
     await createPrintJobStartRecord({
       jobId: input.jobId,
@@ -479,14 +504,17 @@ export async function upsertTrackedPrintJobRecord(input: {
   broadcastJobsChanged(await readPrinterWorkspaceId(input.printerId))
 }
 
-async function resolvePrintJobFilamentUsage(input: {
+async function resolvePrintJobPlateDetails(input: {
   workspaceId: string
   sourceType: string
   fileId: string | null
   plate: number | null
+  printerModel: string | null
+  sliceSettingsJson: string | null
 }): Promise<{
   usedGrams: number | null
   usedMeters: number | null
+  setup: import('@printstream/shared').PrintJobSetup
 } | null> {
   if (input.sourceType !== 'library' || !input.fileId || input.plate == null) {
     return null
@@ -504,11 +532,57 @@ async function resolvePrintJobFilamentUsage(input: {
   if (!file || file.workspaceId !== input.workspaceId || (file.kind !== '3mf' && file.kind !== 'gcode')) return null
 
   try {
-    return await readLibraryThreeMfPlateUsage(file, input.plate)
+    return await readLibraryThreeMfPlateDetails(file, input.plate, {
+      printerModel: input.printerModel,
+      sliceSettingsJson: input.sliceSettingsJson
+    })
   } catch (error) {
-    console.warn(`[print-job-recorder] filament usage lookup failed for file ${input.fileId} (plate ${input.plate})`, (error as Error).message)
+    console.warn(`[print-job-recorder] plate details lookup failed for file ${input.fileId} (plate ${input.plate})`, (error as Error).message)
     return null
   }
+}
+
+/** Freeze print setup at start so source-file cleanup cannot erase job history. */
+async function recordStartedPrintJobSetup(input: {
+  jobId: string
+  workspaceId: string
+  sourceType: string
+  fileId: string | null
+  plate: number | null
+  printerModel: string | null
+  sliceSettingsJson: string | null
+  resetExisting?: boolean
+}): Promise<void> {
+  const hasInspectableSource = input.sourceType === 'library' && input.fileId && input.plate != null
+  if (!hasInspectableSource && !input.resetExisting) return
+
+  try {
+    const details = hasInspectableSource ? await resolvePrintJobPlateDetails(input) : null
+    if (!details && !input.resetExisting) return
+    await rootPrisma.printJob.update({
+      where: { id: input.jobId },
+      data: {
+        slicedPlateType: details?.setup.slicedPlateType ?? null,
+        materialTypesJson: details?.setup.materialTypes.length ? JSON.stringify(details.setup.materialTypes) : null,
+        printSetupJson: details ? JSON.stringify(details.setup) : null
+      }
+    })
+  } catch (error) {
+    if (isMissingColumnError(error)) return
+    console.warn(`[print-job-recorder] setup snapshot failed for job ${input.jobId}`, (error as Error).message)
+  }
+}
+
+/** Persist the terminal result without changing the setup frozen when printing started. */
+async function updateFinishedPrintJob(jobId: string, data: {
+  finishedAt: Date
+  progressPercent: number | null
+  durationSeconds: number | null
+  filamentUsedGrams: number | null
+  filamentUsedMeters: number | null
+  result: 'success' | 'failed' | 'cancelled' | 'unknown'
+}): Promise<void> {
+  await rootPrisma.printJob.update({ where: { id: jobId }, data })
 }
 
 function mapStoredJobKind(jobKind: PendingPrintJobSource['jobKind']): 'library' | 'calibration' | 'external' {
@@ -693,33 +767,34 @@ export async function finishTrackedPrintJobRecord(input: {
       workspaceId: true,
       sourceType: true,
       fileId: true,
-      plate: true
+      plate: true,
+      sliceSettingsJson: true,
+      printer: { select: { model: true } }
     }
   })
   if (!existing) return
 
   const finishedAt = existing.finishedAt ?? new Date()
-  const filamentUsage = input.result === 'unknown'
+  const plateDetails = input.result === 'unknown'
     ? null
-    : await resolvePrintJobFilamentUsage({
+    : await resolvePrintJobPlateDetails({
       workspaceId: existing.workspaceId,
-        sourceType: existing.sourceType,
-        fileId: existing.fileId,
-        plate: existing.plate
-      })
+      sourceType: existing.sourceType,
+      fileId: existing.fileId,
+      plate: existing.plate,
+      printerModel: existing.printer?.model ?? null,
+      sliceSettingsJson: existing.sliceSettingsJson ?? null
+    })
 
-  await rootPrisma.printJob.update({
-    where: { id: input.jobId },
-    data: {
+  await updateFinishedPrintJob(input.jobId, {
       finishedAt,
       progressPercent: input.progressPercent ?? null,
       durationSeconds: existing.startedAt
         ? Math.max(0, Math.round((finishedAt.getTime() - existing.startedAt.getTime()) / 1000))
         : null,
-      filamentUsedGrams: filamentUsage?.usedGrams ?? null,
-      filamentUsedMeters: filamentUsage?.usedMeters ?? null,
+      filamentUsedGrams: plateDetails?.usedGrams ?? null,
+      filamentUsedMeters: plateDetails?.usedMeters ?? null,
       result: input.result
-    }
   })
 
   if (existing.taskId) {
@@ -825,27 +900,28 @@ async function onJobFinished(event: { printer: { id: string }; jobName: string; 
         workspaceId: true,
         sourceType: true,
         fileId: true,
-        plate: true
+        plate: true,
+        sliceSettingsJson: true,
+        printer: { select: { model: true } }
       }
     })
-    const filamentUsage = await resolvePrintJobFilamentUsage({
+    const plateDetails = await resolvePrintJobPlateDetails({
       workspaceId: existing?.workspaceId ?? '',
       sourceType: existing?.sourceType ?? 'external',
       fileId: existing?.fileId ?? null,
-      plate: existing?.plate ?? null
+      plate: existing?.plate ?? null,
+      printerModel: existing?.printer?.model ?? null,
+      sliceSettingsJson: existing?.sliceSettingsJson ?? null
     })
-    await rootPrisma.printJob.update({
-      where: { id: jobId },
-      data: {
+    await updateFinishedPrintJob(jobId, {
         finishedAt,
         progressPercent,
         durationSeconds: existing
           ? Math.max(0, Math.round((finishedAt.getTime() - existing.startedAt.getTime()) / 1000))
           : null,
-        filamentUsedGrams: filamentUsage?.usedGrams ?? null,
-        filamentUsedMeters: filamentUsage?.usedMeters ?? null,
+        filamentUsedGrams: plateDetails?.usedGrams ?? null,
+        filamentUsedMeters: plateDetails?.usedMeters ?? null,
         result: event.result
-      }
     })
     if (trackedTaskId) {
       await closeDuplicateUnfinishedPrintJobs({

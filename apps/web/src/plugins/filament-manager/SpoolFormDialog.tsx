@@ -12,7 +12,18 @@
  */
 import { useEffect, useMemo, useState } from 'react'
 import {
-  Alert, Box, Button, DialogActions, DialogTitle, FormControl, FormLabel, Input, Stack, Textarea, Typography
+  Alert,
+  Box,
+  Button,
+  DialogActions,
+  DialogTitle,
+  FormControl,
+  FormLabel,
+  Input,
+  ModalClose,
+  Stack,
+  Textarea,
+  Typography
 } from '@mui/joy'
 import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown'
 import { useQuery } from '@tanstack/react-query'
@@ -256,8 +267,9 @@ export function SpoolFormDialog({
   const saving = create.isPending || update.isPending
 
   return (
-    <Modal open={open} onClose={onClose}>
+    <Modal open={open} onClose={() => { if (!saving) onClose() }}>
       <ScrollableModalDialog variant="outlined" sx={{ width: { xs: '100%', sm: 520 }, maxWidth: '100%' }}>
+        <ModalClose disabled={saving} />
         <DialogTitle>{spool ? 'Edit spool' : 'Add spool'}</DialogTitle>
         <ScrollableDialogBody>
           <Stack spacing={1.25}>

@@ -18,7 +18,7 @@
  * Core, not part of the model-studio plugin, because the editor (a plugin) opens it and core must
  * never import a plugin.
  */
-import { Button, DialogActions, Stack, Typography } from '@mui/joy'
+import { Button, DialogActions, ModalClose, Stack, Typography } from '@mui/joy'
 import type { EditorSidebarSideSetting } from '@printstream/shared'
 import { BackAwareModal } from '../BackAwareModal'
 import { ScrollableDialogBody, ScrollableModalDialog } from '../ScrollableDialog'
@@ -40,6 +40,7 @@ export function EditorSettingsDialog({ open, onClose }: {
   return (
     <BackAwareModal open={open} onClose={onClose}>
       <ScrollableModalDialog sx={{ maxWidth: 640, width: '100%' }}>
+        <ModalClose />
         <Typography level="h4">Editor settings</Typography>
         <ScrollableDialogBody sx={{ mt: 1.5, px: 0 }}>
           <Stack spacing={1.5}>

@@ -6,7 +6,7 @@
  */
 import { useTagFilter } from '../../hooks/useTagFilter'
 import { useEffect, useMemo, useState } from 'react'
-import { Button, Checkbox, DialogActions, DialogTitle, FormControl, FormLabel, Select, Sheet, Stack } from '@mui/joy'
+import { Button, Checkbox, DialogActions, DialogTitle, FormControl, FormLabel, ModalClose, Select, Sheet, Stack } from '@mui/joy'
 import PaletteRounded from '@mui/icons-material/PaletteRounded'
 import { BackAwareModal as Modal } from '../../components/BackAwareModal'
 import { ScrollableDialogBody, ScrollableModalDialog } from '../../components/ScrollableDialog'
@@ -102,6 +102,7 @@ export function MaterialPickerDialog({
   return (
     <Modal open={open} onClose={onClose}>
       <ScrollableModalDialog sx={{ maxWidth: 640, width: '100%' }}>
+        <ModalClose />
         <DialogTitle>
           Choose a material{requiredGrams != null ? ` · needs ~${Math.round(requiredGrams)}g` : ''}
         </DialogTitle>

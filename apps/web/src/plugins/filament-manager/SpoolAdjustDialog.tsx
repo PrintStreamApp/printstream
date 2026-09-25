@@ -5,7 +5,7 @@
  * needs a correction.
  */
 import { useEffect, useState } from 'react'
-import { Alert, Box, Button, DialogContent, DialogTitle, FormControl, FormLabel, Input, ModalDialog, Typography } from '@mui/joy'
+import { Alert, Box, Button, DialogContent, DialogTitle, FormControl, FormLabel, Input, ModalClose, ModalDialog, Typography } from '@mui/joy'
 import { extractErrorMessage, type FilamentSpool } from '@printstream/shared'
 import { BackAwareModal as Modal } from '../../components/BackAwareModal'
 import { spoolTitle } from './filters'
@@ -40,8 +40,9 @@ export function SpoolAdjustDialog({ spool, onClose }: { spool: FilamentSpool | n
   }
 
   return (
-    <Modal open={spool != null} onClose={onClose}>
+    <Modal open={spool != null} onClose={() => { if (!adjust.isPending) onClose() }}>
       <ModalDialog variant="outlined" sx={{ width: { xs: '100%', sm: 420 }, maxWidth: '100%' }}>
+        <ModalClose disabled={adjust.isPending} />
         <DialogTitle>Adjust remaining</DialogTitle>
         <DialogContent>
           {spool && <Typography level="body-sm" textColor="text.tertiary" sx={{ mb: 1 }}>{spoolTitle(spool)}</Typography>}

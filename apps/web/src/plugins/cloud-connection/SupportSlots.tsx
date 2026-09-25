@@ -5,15 +5,15 @@ import {
   type AccountMessagesPresentation
 } from '../../components/support/AccountMessagesSection'
 import { HelpDialogConversations } from '../../components/support/HelpDialogConversations'
-import { useCloudSupportEligibility } from './useCloudSupportEligibility'
+import { useCloudSupportEligibility } from './useCloudFeatureEligibility'
 
 export const SELF_HOSTED_SUPPORT_BASE = '/api/plugins/cloud-connection/support'
 
 export function SelfHostedAccountMessagesSection({ presentation }: { presentation?: AccountMessagesPresentation }) {
   const eligible = useCloudSupportEligibility()
   if (eligible === undefined) return null
-  if (!eligible) {
-    return <Alert color="warning" variant="soft">In-app messages require a commercial license with current updates and support.</Alert>
+  if (!eligible.eligible) {
+    return <Alert color="warning" variant="soft">{eligible.reason}</Alert>
   }
   return <AccountMessagesSection base={SELF_HOSTED_SUPPORT_BASE} presentation={presentation} />
 }

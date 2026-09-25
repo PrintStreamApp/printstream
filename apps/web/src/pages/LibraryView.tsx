@@ -152,6 +152,7 @@ type LibraryContextMenuState =
 type LibraryPrintTarget = {
   file: LibraryFile
   versionId: string | null
+  defaultPlate?: number
 }
 
 type SliceThenPrintTarget = {
@@ -1482,6 +1483,7 @@ export function LibraryView() {
           file={printTarget.file}
           versionId={printTarget.versionId}
           printers={printersQuery.data?.printers ?? []}
+          defaultPlate={printTarget.defaultPlate}
           onClose={() => setPrintTarget(null)}
         />
       )}
@@ -1492,6 +1494,10 @@ export function LibraryView() {
           previewFileId,
           previewVersionId: previewVersion?.versionId ?? null,
           previewFile: previewVersion ? toHistoryPrintFile(previewVersion) : previewFile ?? undefined,
+          onPreviewPrint: canDispatchPrints ? (plateIndex: number, file: LibraryFile) => {
+            // Keep the preview mounted beneath print setup so Back returns to the plate.
+            setPrintTarget({ file, versionId: previewVersion?.versionId ?? null, defaultPlate: plateIndex })
+          } : undefined,
           onPreviewClose: () => {
             setPreviewFileId(null)
             setPreviewVersion(null)

@@ -80,5 +80,14 @@ export const slicerTargets = [
     slicerName: 'Bambu Studio',
     prerelease: true,
     downloadUrl: 'https://github.com/bambulab/BambuStudio/releases/download/v02.08.01.55/BambuStudio_ubuntu24.04-v02.08.01.55-20260715113557.AppImage'
+  },
+  {
+    id: 'bambustudio-2-8-4-57',
+    label: 'Bambu Studio 2.8.4.57 (beta)',
+    family: 'bambustudio',
+    version: '2.8.4.57',
+    slicerName: 'Bambu Studio',
+    prerelease: true,
+    downloadUrl: 'https://github.com/bambulab/BambuStudio/releases/download/v02.08.04.57/BambuStudio_ubu24-v02.08.04.57-20260922164607.AppImage'
   }
 ]

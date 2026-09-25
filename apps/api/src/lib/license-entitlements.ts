@@ -9,8 +9,9 @@
  * forever, they simply stop receiving newer ones. Anything that reads this
  * helper should degrade to "you are on the build you own", never to an error.
  *
- * Fails **open**: an unreadable license, an unlicensed install, or a community
- * key (perpetual, `updatesUntil: null`) all count as entitled. Withholding
+ * Fails **open** on an unreadable license or an unlicensed install. A community
+ * key and a grandfathered commercial key with no dated term remain entitled.
+ * Withholding
  * updates on a transient DB error would be a far worse failure than shipping a
  * build to someone whose addon expired an hour ago.
  */
@@ -50,5 +51,5 @@ export async function areUpdatesEntitled(readStatus: ReadStatus = getInstalledLi
  */
 export async function describeUpdateBlock(readStatus: ReadStatus = getInstalledLicenseStatus): Promise<string | null> {
   if (await areUpdatesEntitled(readStatus)) return null
-  return 'Updates and priority support for this license have ended. Renew to install newer releases; the build you have keeps running.'
+  return 'Updates and priority support are not currently included with this license. Renew to install newer releases; the build you have keeps running.'
 }

@@ -450,7 +450,9 @@ export function useLocalSliceSettingsController(params: LocalSliceSettingsContro
     blockedByProjectVersion: projectIsNewerThanSlicer && !allowNewerProjectFile,
     nozzleDiameterCount: selectedNozzleDiameters.length,
     missingFilamentProfile: filamentMappingResult.unresolved.length > 0,
-    staleFilamentSelection: filamentMappingResult.unresolved.some((slot) => slot.reason === 'staleSelection'),
+    staleFilamentSlotNumbers: filamentMappingResult.unresolved
+      .filter((slot) => slot.reason === 'staleSelection')
+      .map((slot) => projectFilaments.findIndex((filament) => filament.projectFilamentId === slot.projectFilamentId) + 1),
     missingFilamentToolhead: false,
     targetMode: 'manualProfile',
     printerId: '',

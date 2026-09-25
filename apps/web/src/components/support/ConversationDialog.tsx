@@ -10,7 +10,7 @@
  */
 import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Box, Button, Chip, DialogTitle, Divider, Sheet, Stack, Textarea, Tooltip, Typography } from '@mui/joy'
+import { Box, Button, Chip, DialogTitle, Divider, ModalClose, Sheet, Stack, Textarea, Tooltip, Typography } from '@mui/joy'
 import CheckCircleRoundedIcon from '@mui/icons-material/CheckCircleRounded'
 import SupportAgentRoundedIcon from '@mui/icons-material/SupportAgentRounded'
 import type {
@@ -135,6 +135,7 @@ export function ConversationDialog({
   return (
     <Modal open onClose={onClose}>
       <ScrollableModalDialog sx={{ maxWidth: 640 }}>
+        <ModalClose />
         <DialogTitle>
           <Stack spacing={0.5} sx={{ minWidth: 0, width: '100%' }}>
             <Stack direction="row" spacing={1} useFlexGap alignItems="center" sx={{ flexWrap: 'wrap' }}>

@@ -38,12 +38,22 @@ through the `SceneEdit` contract and the baked 3MF on disk.
 
 ## Editor catalogue and material readiness
 
+Removing a material in the editor asks for a replacement when the live scene or settings reference
+it. The check includes object and part assignments, layer changes, colour paint (including split
+triangles), support and support-interface settings, and filament-index overrides at their owning
+layer. The opened archive is also scanned for colour paint on plates not yet displayed. Until that
+scan succeeds and all plate scenes have merged, source materials retain the replacement prompt.
+A material with no references can then be removed directly. The archive scan uses the pinned source
+bytes, and `baseFilamentIds` maps its original paint ids through material removals and saves.
+
 Changing slicer versions preserves the selected printer, model, nozzle and plate choices. The new
 catalogue revalidates those choices once loaded; a loading catalogue cannot invalidate them.
 Unavailable machine choices continue through the existing conflict reporting rather than clearing
 intent. Process and material preset ids survive engine changes even when unavailable: the selection
 remains unresolved and Slice is blocked until the user chooses a replacement or returns to a
-supporting engine. A loading catalogue never re-picks the process from the project-only subset.
+supporting engine. The material row shows "Choose filament" with a warning when its saved choice
+is unavailable, and the disabled Slice explanation names the affected material number. A loading
+catalogue never re-picks the process from the project-only subset.
 Explicitly clearing a preset is also retained. Real machine changes may still select a compatible
 process/material alias, but a project process cannot be abandoned until its baked deltas are known.
 Machine overrides seed once per file version, not per engine/preset, so a reset to an empty override
@@ -1114,8 +1124,12 @@ finishes the job normally. Save, Print, Back, Cancel, and two simultaneous dialo
 operate on their own outputs without mutating or deleting the shared cache. Cache lookup happens
 before scheduler admission, so a hit does not occupy a slicer slot.
 
-Slice timing comes from BambuStudio's JSON export, but material length and weight are overlaid from
-the finished artifact's `Metadata/slice_info.config`. Some BambuStudio releases report
+Slice timing uses each finished plate's G-code header when available, summing those estimates for
+the whole job. BambuStudio's JSON export remains a fallback; its per-plate timing can be absent
+from merged all-plate exports, while `slice_info.config` may repeat the whole-job prediction on
+every plate. A contradictory per-plate breakdown is hidden when G-code timing is unavailable.
+Material length and weight are overlaid from the finished artifact's `Metadata/slice_info.config`.
+Some BambuStudio releases report
 `total_used_m: 0` in `result.json` despite writing the correct `used_m` into the 3MF and G-code;
 the artifact is authoritative because it describes the file that will actually print.
 
@@ -1441,9 +1455,10 @@ browser, so the one tier with a genuinely incomplete baseline was also the one t
   Model Studio allows deleting any material while at least one remains. A used material requires
   a chosen replacement; unassigned imports count as using the first material and retain the
   chosen replacement explicitly when that default is deleted. Assignments, colour paint, layer changes and process references move in
-  one combined undo step. Source materials also require confirmation when their untouched paint
-  usage is unknown; the plate index cannot prove absence, and uncertainty does not count as actual
-  usage for prime towers or badges. History snapshots retain the base-to-session material map.
+  one combined undo step. Source paint counts only for surviving mesh parts without a session paint
+  replacement. Until the source paint scan and scene load finish, material removal stays guarded;
+  the baked plate index cannot prove current usage after an edit. Uncertainty does not count as
+  actual usage for prime towers or badges. History snapshots retain the base-to-session material map.
   Material removal and replacement invalidate inactive plate thumbnails, including on undo/redo,
   and regenerate them progressively; superseded captures cannot publish stale images.
   At slice submission, both editor hosts translate the target material mappings from stable

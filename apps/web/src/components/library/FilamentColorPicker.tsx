@@ -5,7 +5,7 @@
  * share one control: the swatch family follows the chosen material exactly the same way in both.
  */
 import { useState } from 'react'
-import { Box, Button, DialogActions, FormControl, FormLabel, Input, ModalDialog, Sheet, Stack, Typography } from '@mui/joy'
+import { Box, Button, DialogActions, FormControl, FormLabel, Input, ModalClose, ModalDialog, Sheet, Stack, Typography } from '@mui/joy'
 import { BackAwareModal as Modal } from '../BackAwareModal'
 import { ColorSwatchPicker } from '../ColorSwatchPicker'
 import {
@@ -100,6 +100,7 @@ export function FilamentColorPicker({
       </Box>
       <Modal open={colorDialogOpen} onClose={() => setColorDialogOpen(false)}>
         <ModalDialog sx={{ maxWidth: 520, width: '100%' }}>
+          <ModalClose />
           <Stack direction="row" spacing={1.25} alignItems="center">
             <Box sx={{ width: 56, height: 56, borderRadius: 'sm', background: normalizedDraftColor, border: '1px solid', borderColor: 'divider', flexShrink: 0 }} />
             <Box sx={{ minWidth: 0 }}>

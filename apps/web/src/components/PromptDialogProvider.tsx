@@ -8,6 +8,7 @@ import {
   FormControl,
   FormLabel,
   Input,
+  ModalClose,
   ModalDialog,
   type ColorPaletteProp
 } from '@mui/joy'
@@ -254,7 +255,7 @@ export function PromptDialogProvider({ children }: { children: ReactNode }) {
       ) : null}
 
       {isTextPromptDialog(activeDialog) ? (
-        <Modal open onClose={() => closeTextPromptDialog(null)}>
+        <Modal open onClose={() => { if (!submitting) closeTextPromptDialog(null) }}>
           <ModalDialog
             component="form"
             variant="outlined"
@@ -264,6 +265,7 @@ export function PromptDialogProvider({ children }: { children: ReactNode }) {
             }}
             sx={{ width: { xs: '95vw', sm: 480 }, maxWidth: '95vw' }}
           >
+            <ModalClose disabled={submitting} />
             {activeDialog.options.title ? <DialogTitle>{activeDialog.options.title}</DialogTitle> : null}
             <DialogContent>
               {activeDialog.options.description ?? null}

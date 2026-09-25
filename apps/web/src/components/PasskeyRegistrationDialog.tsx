@@ -7,6 +7,7 @@ import {
   FormControl,
   FormLabel,
   Input,
+  ModalClose,
   ModalDialog,
   Typography
 } from '@mui/joy'
@@ -45,6 +46,7 @@ export function PasskeyRegistrationDialog({
   return (
     <Modal open={open} onClose={() => { if (!loading) onClose() }}>
       <ModalDialog variant="outlined" sx={{ width: 'min(520px, 100%)' }}>
+        <ModalClose disabled={loading} />
         <DialogTitle>{title}</DialogTitle>
         <DialogContent>
           <Typography level="body-sm" textColor="text.tertiary">

@@ -524,6 +524,15 @@ model PrintJob {
   sourceProjectFileId    String?
   sliceSettingsJson      String?
   plate                  Int?
+  /// Effective bed type requested by the selected 3MF plate at print time, not a sensor reading
+  /// of the physical plate. Frozen when the job starts; null for older or uninspectable jobs.
+  slicedPlateType        String?
+  /// Distinct material types used by the selected 3MF plate, serialized as a JSON string array.
+  /// A multi-material job belongs to each listed type. Null means unknown, not no material.
+  materialTypesJson      String?
+  /// Immutable selected-plate setup (material presets, process/machine presets, nozzle sizes,
+  /// slicer identity, and printer model). Null for older or uninspectable jobs.
+  printSetupJson         String?
   useAms                 Boolean?
   /// Lossy legacy record of the bed-leveling choice: true covers BOTH 'on' and 'auto'.
   /// Kept because rows written before `printOptionsJson` have nothing else, and because the

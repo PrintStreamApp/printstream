@@ -39,6 +39,13 @@ test('betas are offered, just never as the default', () => {
   const betas = listCatalogue('linux', 'x64').filter((engine) => engine.prerelease)
   assert.ok(betas.length > 0, 'betas must remain installable')
   assert.ok(betas.every((beta) => beta.id !== latestStableEngine('linux', 'x64')?.id))
+  for (const platform of [['linux', 'x64'], ['win32', 'x64']] as const) {
+    const newestBeta = findCatalogueEngine('bambustudio-2-8-4-57', platform[0], platform[1])
+    assert.ok(newestBeta)
+    assert.equal(newestBeta.version, '2.8.4.57')
+    assert.equal(newestBeta.prerelease, true)
+    assert.notEqual(newestBeta.id, latestStableEngine(platform[0], platform[1])?.id)
+  }
 })
 
 test('Linux on ARM is offered nothing rather than something it cannot run', () => {

@@ -6,8 +6,10 @@
  * inspect its 3MF metadata without duplicating that transport branching.
  */
 import type { LibraryFile } from '@printstream/shared'
+import type { PrintJobSetup } from '@printstream/shared'
 import { inspectBridgeLibraryThreeMf, resolveLibraryFileToLocalPath } from './bridge-library-files.js'
 import { readPlateIndex } from './three-mf.js'
+import { buildPrintJobSetup } from './print-job-setup.js'
 
 type LibraryThreeMfIndex = Awaited<ReturnType<typeof inspectBridgeLibraryThreeMf>>
 
@@ -55,18 +57,24 @@ export async function readLibraryProjectFilamentChips(file: {
   return ordered
 }
 
-export async function readLibraryThreeMfPlateUsage(file: {
+export async function readLibraryThreeMfPlateDetails(file: {
   ownerBridgeId?: string | null
   storedPath: string
-}, plate: number | null | undefined): Promise<{
+}, plate: number | null | undefined, context: {
+  printerModel: string | null
+  sliceSettingsJson: string | null
+}): Promise<{
   usedGrams: number | null
   usedMeters: number | null
+  setup: PrintJobSetup
 } | null> {
   if (plate == null) return null
 
   const index = await readLibraryThreeMfIndex(file)
   const plateEntry = index.plates.find((entry) => entry.index === plate)
   if (!plateEntry) return null
+  const setup = buildPrintJobSetup({ index, plate, ...context })
+  if (!setup) return null
 
   let gramTotal = 0
   let meterTotal = 0
@@ -86,7 +94,8 @@ export async function readLibraryThreeMfPlateUsage(file: {
 
   return {
     usedGrams: hasGramUsage ? gramTotal : null,
-    usedMeters: hasMeterUsage ? meterTotal : null
+    usedMeters: hasMeterUsage ? meterTotal : null,
+    setup
   }
 }
 

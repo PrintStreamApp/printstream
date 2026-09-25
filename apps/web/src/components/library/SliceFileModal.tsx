@@ -21,7 +21,12 @@ import { lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { LazyDialogBoundary } from '../LazyDialogBoundary'
 import { slicingTargetWithSavedMaterials } from '../../lib/slicingTargetMaterials'
 import {
-  Box, Button, DialogActions, Stack, Typography
+  Box,
+  Button,
+  DialogActions,
+  ModalClose,
+  Stack,
+  Typography
 } from '@mui/joy'
 import ArrowBackRoundedIcon from '@mui/icons-material/ArrowBackRounded'
 import ContentCutRoundedIcon from '@mui/icons-material/ContentCutRounded'
@@ -1107,7 +1112,9 @@ export function SliceFileModal({
     blockedByProjectVersion,
     nozzleDiameterCount: selectedNozzleDiameters.length,
     missingFilamentProfile,
-    staleFilamentSelection: filamentMappingResult.unresolved.some((slot) => slot.reason === 'staleSelection'),
+    staleFilamentSlotNumbers: filamentMappingResult.unresolved
+      .filter((slot) => slot.reason === 'staleSelection')
+      .map((slot) => projectFilaments.findIndex((filament) => filament.projectFilamentId === slot.projectFilamentId) + 1),
     missingFilamentToolhead,
     targetMode,
     printerId,
@@ -1224,6 +1231,7 @@ export function SliceFileModal({
       ) : (
       <Modal open onClose={onClose}>
         <ScrollableModalDialog sx={{ maxWidth: 560, width: '100%' }}>
+          <ModalClose />
           <Box component="form" onSubmit={handleSubmit} sx={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
             <Typography level="h4">{dialogTitle}</Typography>
             <ScrollableDialogBody sx={{ mt: 1 }}>

@@ -6,7 +6,7 @@
  * the page can open the matching dialog. Owns the version helpers nothing else uses.
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Alert, Button, Card, CardContent, Chip, CircularProgress, DialogActions, Stack, Typography } from '@mui/joy'
+import { Alert, Button, Card, CardContent, Chip, CircularProgress, DialogActions, ModalClose, Stack, Typography } from '@mui/joy'
 import DeleteOutlineRoundedIcon from '@mui/icons-material/DeleteOutlineRounded'
 import DesignServicesRoundedIcon from '@mui/icons-material/DesignServicesRounded'
 import DownloadRoundedIcon from '@mui/icons-material/DownloadRounded'
@@ -125,6 +125,7 @@ export function FileHistoryDialog({
   return (
     <Modal open onClose={onClose}>
       <ScrollableModalDialog sx={{ maxWidth: 720, width: '100%' }}>
+        <ModalClose />
         <DialogFileTitle title="Version history" fileName={formatLibraryFileName(file.name)} />
         <ScrollableDialogBody sx={{ px: 0 }}>
           {historyQuery.isLoading && (

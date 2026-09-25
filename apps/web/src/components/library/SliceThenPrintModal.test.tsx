@@ -111,6 +111,10 @@ test('an editor-owned ready result can close without discarding its hidden outpu
     </QueryClientProvider>
   )
 
+  const preview = screen.getByRole('button', { name: 'Preview' })
+  const save = screen.getByRole('button', { name: 'Save to library' })
+  assert.ok(preview.compareDocumentPosition(save) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING)
+
   fireEvent.click(screen.getByRole('button', { name: 'Close' }))
   assert.equal(retained, true)
 })

@@ -370,6 +370,16 @@ test('resolveSliceDisabledReason flags unmapped filament slots', () => {
   )
 })
 
+test('resolveSliceDisabledReason names the material rows with unavailable filament choices', () => {
+  assert.equal(
+    resolveSliceDisabledReason(buildSliceDisabledReasonInput({
+      missingFilamentProfile: true,
+      staleFilamentSlotNumbers: [2, 4]
+    })),
+    'Material 2, Material 4: the selected filament is unavailable. Choose a filament in the rows marked "Choose filament".'
+  )
+})
+
 
 test('resolveSliceDisabledReason blocks a project newer than the selected slicer', () => {
   // A genuine gate, unlike the settings-repair notice: BambuStudio refuses to open the file at all,

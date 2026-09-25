@@ -355,7 +355,7 @@ export function subscribePrinterNotifications(
     }
 
     const newErrors = isPrinterActiveJobStage(status.stage)
-      ? currentErrors.filter((entry) => !notifiedErrorCodes.has(entry.code))
+      ? currentErrors.filter((entry) => !notifiedErrorCodes.has(entry.code) && !isAmsRefillSwitch(entry.message))
       : []
     // Mark before the async work below so overlapping status events for the
     // same printer cannot send the same error twice.
@@ -369,7 +369,7 @@ export function subscribePrinterNotifications(
         if (!printer) return
         const jobName = readNotificationJobName(status)
 
-        if (previousState.stage !== 'paused' && status.stage === 'paused') {
+        if (previousState.stage !== 'paused' && status.stage === 'paused' && !isAmsRefillSwitch(readPauseReason(status))) {
           const paused = await formatJobPaused({
             printer,
             jobName,
@@ -446,6 +446,12 @@ function readPauseReason(status: PrinterStatus): string | null {
   return status.deviceError?.message
     ?? status.hmsErrors[0]?.message
     ?? status.subStage
+}
+
+/** A successful AMS refill handoff is expected printer behavior, even when firmware calls it an error. */
+function isAmsRefillSwitch(message: string | null): boolean {
+  return message != null
+    && /ams.*ran out.*switching to (?:the )?other ams slot/i.test(message)
 }
 
 /** Flatten the device error and every HMS error into one list of code+message entries. */

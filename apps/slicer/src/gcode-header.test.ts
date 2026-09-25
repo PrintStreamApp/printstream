@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 import yazl from 'yazl'
-import { readGcodeHeader, readPrepareTimeSeconds } from './gcode-header.js'
+import { readGcodeHeader, readPrepareTimeSeconds, readSlicedOutputTiming } from './gcode-header.js'
 
 /** Verbatim from a BambuStudio 2.8.2.61 slice: prepare = 4h 56m 29s - 4h 51m 5s = 324s. */
 const REAL_HEADER = [
@@ -97,6 +97,30 @@ test('an all-plate export sums the prepare phase across every plate', async (t) 
     zip.outputStream.pipe(out)
   })
   assert.equal(await readPrepareTimeSeconds(file), 324 * 3)
+})
+
+test('an all-plate export reports distinct plate times from its G-code headers', async (t) => {
+  const dir = await workDir(t)
+  const file = path.join(dir, 'distinct-plates.gcode.3mf')
+  const zip = new yazl.ZipFile()
+  zip.addBuffer(Buffer.from('; model printing time: 2h 50m; total estimated time: 3h\n'), 'Metadata/plate_1.gcode')
+  zip.addBuffer(Buffer.from('; model printing time: 4h 50m; total estimated time: 5h\n'), 'Metadata/plate_2.gcode')
+  zip.end()
+  await new Promise<void>((resolve, reject) => {
+    const out = createWriteStream(file)
+    out.on('close', resolve)
+    out.on('error', reject)
+    zip.outputStream.pipe(out)
+  })
+
+  assert.deepEqual(await readSlicedOutputTiming(file), {
+    totalSeconds: 8 * 3600,
+    prepareSeconds: 20 * 60,
+    plates: [
+      { index: 1, totalSeconds: 3 * 3600 },
+      { index: 2, totalSeconds: 5 * 3600 }
+    ]
+  })
 })
 
 test('an output with no time line reports nothing rather than zero', async (t) => {

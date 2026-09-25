@@ -18,6 +18,7 @@ export type WorkspaceStatsQuickStartItem = z.infer<typeof workspaceStatsQuickSta
 export const workspaceStatsSummarySchema = z.object({
   printerCount: z.number().int().nonnegative(),
   printsInProgress: z.number().int().nonnegative(),
+  // Keep the existing wire key for older clients; selected ranges change its length.
   activityLast30Days: statsActivityHistorySchema,
   totalPrints: z.number().int().nonnegative(),
   successfulPrints: z.number().int().nonnegative(),
@@ -57,3 +58,33 @@ export const workspaceStatsResponseSchema = z.object({
 })
 
 export type WorkspaceStatsResponse = z.infer<typeof workspaceStatsResponseSchema>
+
+/** Recorded outcomes for a current printer; manual usage adjustments are excluded. */
+export const workspacePrinterOutcomeSchema = z.object({
+  printerId: z.string(),
+  name: z.string(),
+  model: z.string(),
+  successfulPrints: z.number().int().nonnegative(),
+  failedPrints: z.number().int().nonnegative(),
+  cancelledPrints: z.number().int().nonnegative()
+})
+export type WorkspacePrinterOutcome = z.infer<typeof workspacePrinterOutcomeSchema>
+
+export const workspacePrinterOutcomesResponseSchema = z.object({
+  printers: z.array(workspacePrinterOutcomeSchema)
+})
+export type WorkspacePrinterOutcomesResponse = z.infer<typeof workspacePrinterOutcomesResponseSchema>
+
+/** Terminal print outcomes for one recorded material type. Multi-material jobs appear in each type. */
+export const workspaceMaterialOutcomeSchema = z.object({
+  materialType: z.string(),
+  successfulPrints: z.number().int().nonnegative(),
+  failedPrints: z.number().int().nonnegative(),
+  cancelledPrints: z.number().int().nonnegative()
+})
+export type WorkspaceMaterialOutcome = z.infer<typeof workspaceMaterialOutcomeSchema>
+
+export const workspaceMaterialOutcomesResponseSchema = z.object({
+  materials: z.array(workspaceMaterialOutcomeSchema)
+})
+export type WorkspaceMaterialOutcomesResponse = z.infer<typeof workspaceMaterialOutcomesResponseSchema>

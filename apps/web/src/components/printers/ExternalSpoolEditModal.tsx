@@ -7,7 +7,16 @@
 import { useSlotFilamentIdentityLookup } from '../../lib/slotFilamentIdentity'
 import { useCallback, useMemo, useState } from 'react'
 import {
-  AutocompleteOption, Button, ButtonGroup, FormControl, FormLabel, Input, ListItemContent, Stack, Typography
+  AutocompleteOption,
+  Button,
+  ButtonGroup,
+  FormControl,
+  FormLabel,
+  Input,
+  ListItemContent,
+  ModalClose,
+  Stack,
+  Typography
 } from '@mui/joy'
 import RestartAltRoundedIcon from '@mui/icons-material/RestartAltRounded'
 import SaveRoundedIcon from '@mui/icons-material/SaveRounded'
@@ -213,6 +222,7 @@ export function ExternalSpoolEditModal({
   return (
     <Modal open onClose={onClose}>
       <ScrollableModalDialog sx={{ maxWidth: 420, width: '100%' }}>
+        <ModalClose />
         <ScrollableDialogBody>
         <Typography level="h4">{label}</Typography>
         <Typography level="body-sm" textColor="text.tertiary">

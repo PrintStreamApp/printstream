@@ -19,8 +19,22 @@
  */
 import { useEffect, useState, type ReactNode } from 'react'
 import {
-  Alert, Box, Button, Checkbox, CircularProgress, DialogActions, Divider, IconButton, Input,
-  Stack, Tab, TabList, TabPanel, Tabs, Typography
+  Alert,
+  Box,
+  Button,
+  Checkbox,
+  CircularProgress,
+  DialogActions,
+  Divider,
+  IconButton,
+  Input,
+  ModalClose,
+  Stack,
+  Tab,
+  TabList,
+  TabPanel,
+  Tabs,
+  Typography
 } from '@mui/joy'
 import CloseRoundedIcon from '@mui/icons-material/CloseRounded'
 import RestartAltRoundedIcon from '@mui/icons-material/RestartAltRounded'
@@ -143,8 +157,9 @@ export function SettingsCatalogDialog(props: SettingsCatalogDialogProps): JSX.El
 
 
   return (
-    <BackAwareModal open={open} onClose={onClose}>
+    <BackAwareModal open={open} onClose={() => { if (!actions.saving) onClose() }}>
       <ScrollableModalDialog sx={{ maxWidth: 720, width: '100%' }}>
+        <ModalClose disabled={actions.saving} />
         <Typography level="h4">{titlePrefix}: {modifiedCount > 0 ? '*' : ''}{presetName}</Typography>
         {subtitle}
         {header}

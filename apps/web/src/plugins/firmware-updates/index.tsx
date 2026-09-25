@@ -38,6 +38,7 @@ import {
   FormControl,
   FormLabel,
   MenuItem,
+  ModalClose,
   ModalDialog,
   Option,
   Select,
@@ -335,6 +336,7 @@ function FirmwareUpdateDetailsDialog({
   return (
     <Modal open onClose={onClose}>
       <ModalDialog sx={{ maxWidth: 520, width: '100%' }}>
+        <ModalClose />
         <DialogTitle>Firmware update: {printerName}</DialogTitle>
         <DialogContent>
           <Stack spacing={1.5}>

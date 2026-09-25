@@ -8,7 +8,24 @@
  */
 import { useState } from 'react'
 import {
-  Alert, Box, Button, Checkbox, Chip, DialogActions, FormControl, FormHelperText, FormLabel, Input, ListDivider, ModalClose, ModalDialog, Option, Select, Sheet, Stack, Typography
+  Alert,
+  Box,
+  Button,
+  Checkbox,
+  Chip,
+  DialogActions,
+  FormControl,
+  FormHelperText,
+  FormLabel,
+  Input,
+  ListDivider,
+  ModalClose,
+  ModalDialog,
+  Option,
+  Select,
+  Sheet,
+  Stack,
+  Typography
 } from '@mui/joy'
 import WarningAmberRoundedIcon from '@mui/icons-material/WarningAmberRounded'
 import {
@@ -59,9 +76,9 @@ export function AmsSettingsModal({
     settings.remainEnabled != null
 
   return (
-    <Modal open onClose={onClose}>
+    <Modal open onClose={() => { if (!submitting) onClose() }}>
       <ScrollableModalDialog sx={{ width: { xs: '100%', sm: 640 } }}>
-        <ModalClose />
+        <ModalClose disabled={submitting} />
         <Typography level="h4">AMS settings</Typography>
         <Typography level="body-sm" textColor="text.tertiary">
           {printerName}
@@ -134,7 +151,7 @@ export function AmsSettingsModal({
           </Stack>
         </ScrollableDialogBody>
         <Stack direction="row" justifyContent="flex-end" spacing={1} sx={{ pt: 1 }}>
-          <Button variant="plain" color="neutral" onClick={onClose}>Close</Button>
+          <Button variant="plain" color="neutral" onClick={onClose} disabled={submitting}>Close</Button>
         </Stack>
       </ScrollableModalDialog>
     </Modal>
@@ -196,9 +213,9 @@ export function AmsDryingModal({
   }
 
   return (
-    <Modal open onClose={onClose}>
+    <Modal open onClose={() => { if (!submitting) onClose() }}>
       <ModalDialog sx={{ width: { xs: '96vw', sm: 460 } }}>
-        <ModalClose />
+        <ModalClose disabled={submitting} />
         <Typography level="h4">AMS {amsUnitLetter(unit.unitId)} drying</Typography>
         <Typography level="body-sm" textColor="text.tertiary">{printerName}</Typography>
         <Stack spacing={2} sx={{ mt: 1.5 }}>

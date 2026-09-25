@@ -8,7 +8,21 @@
 import { useSlotFilamentIdentityLookup } from '../../lib/slotFilamentIdentity'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  AutocompleteOption, Button, ButtonGroup, Divider, FormControl, FormLabel, Input, ListItemContent, ModalDialog, Option, Select, Sheet, Stack, Typography
+  AutocompleteOption,
+  Button,
+  ButtonGroup,
+  Divider,
+  FormControl,
+  FormLabel,
+  Input,
+  ListItemContent,
+  ModalClose,
+  ModalDialog,
+  Option,
+  Select,
+  Sheet,
+  Stack,
+  Typography
 } from '@mui/joy'
 import RefreshRoundedIcon from '@mui/icons-material/RefreshRounded'
 import RestartAltRoundedIcon from '@mui/icons-material/RestartAltRounded'
@@ -536,6 +550,7 @@ export function AmsSlotEditModal({
   return (
     <Modal open onClose={onClose}>
       <ScrollableModalDialog sx={{ maxWidth: 420, width: '100%' }}>
+        <ModalClose />
         <ScrollableDialogBody>
         <Typography level="h4">AMS {amsUnitLetter(unit.unitId)}{slot.slot + 1}</Typography>
         <Typography level="body-sm" textColor="text.tertiary">
@@ -717,6 +732,7 @@ export function AmsSlotEditModal({
 
           <Modal open={tuningOpen} onClose={() => setTuningOpen(false)}>
             <ModalDialog sx={{ maxWidth: 480, width: '100%', maxHeight: '90dvh', overflow: 'auto' }}>
+              <ModalClose />
               <Typography level="h4">Pressure advance &amp; calibration</Typography>
               <Typography level="body-sm" textColor="text.tertiary">
                 AMS {amsUnitLetter(unit.unitId)}{slot.slot + 1}{slot.filamentType ? ` · ${slot.filamentType}` : ''}

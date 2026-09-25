@@ -47,6 +47,9 @@ test('the app navigation menu exposes account and secondary destinations', async
   assert.ok(view.getByRole('menuitem', { name: 'Settings' }))
   const workspaceItem = view.getByRole('menuitem', { name: /Switch workspace Alpha workspace/ })
   assert.ok(workspaceItem.contains(view.getByTestId('workspace-icon')))
+  const menuItems = view.getAllByRole('menuitem')
+  assert.equal(menuItems[0], workspaceItem)
+  assert.equal(menuItems[1], accountItem)
 
   fireEvent.click(workspaceItem)
   assert.equal(workspaceOpenCount, 1)

@@ -1217,6 +1217,22 @@ export const projectFilamentChipSchema = z.object({
   color: z.string().nullable()
 })
 
+/** Frozen print setup from the selected plate. Null means this job had no inspectable source. */
+export const printJobSetupSchema = z.object({
+  printerModel: z.string().nullable(),
+  slicedPlateType: z.string().nullable(),
+  materialTypes: z.array(z.string()),
+  materialPresets: z.array(z.object({ materialType: z.string().nullable(), presetName: z.string() })),
+  printerProfileName: z.string().nullable(),
+  processProfileName: z.string().nullable(),
+  nozzleSizes: z.array(z.string()),
+  printSequence: z.enum(['by layer', 'by object']).nullable(),
+  slicerName: z.string().nullable(),
+  slicerVersion: z.string().nullable(),
+  projectVersion: z.string().nullable()
+})
+export type PrintJobSetup = z.infer<typeof printJobSetupSchema>
+
 export const printJobSchema = z.object({
   id: z.string(),
   printerId: z.string(),
@@ -1244,6 +1260,7 @@ export const printJobSchema = z.object({
   sliceSettings: preservedSliceSettingsSchema.nullable().default(null),
   projectFilamentChips: z.array(projectFilamentChipSchema),
   plate: z.number().int().positive().nullable(),
+  printSetup: printJobSetupSchema.nullable().default(null),
   useAms: z.boolean().nullable(),
   /**
    * Lossy legacy record of the bed-leveling choice, kept for rows written before

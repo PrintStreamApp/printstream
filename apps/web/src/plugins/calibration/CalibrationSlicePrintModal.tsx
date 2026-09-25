@@ -11,7 +11,7 @@
  * the run lives instead of back on wherever they launched it from.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Alert, Button, Chip, CircularProgress, DialogActions, Sheet, Stack, Typography } from '@mui/joy'
+import { Alert, Button, Chip, CircularProgress, DialogActions, ModalClose, Sheet, Stack, Typography } from '@mui/joy'
 import ErrorOutlineRoundedIcon from '@mui/icons-material/ErrorOutlineRounded'
 import CheckCircleRoundedIcon from '@mui/icons-material/CheckCircleRounded'
 import PrintRoundedIcon from '@mui/icons-material/PrintRounded'
@@ -137,6 +137,7 @@ export function CalibrationSlicePrintModal({ run: initialRun, onClose }: { run: 
     <>
     <Modal open onClose={handleClose}>
       <ScrollableModalDialog sx={{ maxWidth: 520, width: '100%' }}>
+        <ModalClose />
         <Typography level="h4">Calibration</Typography>
         <ScrollableDialogBody sx={{ mt: 1 }}>
           <Stack spacing={1.25}>
@@ -245,6 +246,12 @@ export function CalibrationSlicePrintModal({ run: initialRun, onClose }: { run: 
       context={{
         previewFileId: previewing && isReady ? run.outputFileId : null,
         previewPlateIndex: 1,
+        onPreviewPrint: isReady && !plateNeedsClear && !plateClearing.loading && !print.isPending
+          ? () => {
+            setPreviewing(false)
+            print.mutate()
+          }
+          : undefined,
         onPreviewClose: () => setPreviewing(false)
       }}
     />

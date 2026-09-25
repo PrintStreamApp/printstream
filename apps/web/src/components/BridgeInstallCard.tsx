@@ -9,7 +9,7 @@
  * installs); a dev placeholder download set can be passed in to preview the
  * native packages.
  */
-import { Alert, Button, Card, CardContent, Chip, DialogTitle, Dropdown, ListDivider, ListItem, Menu, MenuButton, MenuItem, Stack, Typography } from '@mui/joy'
+import { Alert, Button, Card, CardContent, Chip, DialogTitle, Dropdown, ListDivider, ListItem, Menu, MenuButton, MenuItem, ModalClose, Stack, Typography } from '@mui/joy'
 import React from 'react'
 import WarningAmberRoundedIcon from '@mui/icons-material/WarningAmberRounded'
 import ArrowDropDownRoundedIcon from '@mui/icons-material/ArrowDropDownRounded'
@@ -130,6 +130,7 @@ function BridgeInstallDialog({ download, serverUrlOverride, onClose }: {
   return (
     <BackAwareModal open onClose={onClose}>
       <ScrollableModalDialog sx={{ width: { xs: '100%', sm: 480 } }}>
+        <ModalClose />
         <DialogTitle>Install the bridge: {bridgePlatformLabel(download.platformKey)}</DialogTitle>
         <ScrollableDialogBody sx={{ mt: 1, p: 0 }}>
           <Stack spacing={1.25}>

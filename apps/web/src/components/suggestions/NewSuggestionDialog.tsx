@@ -4,7 +4,7 @@
  * reports the created post via `onCreated`.
  */
 import { useState } from 'react'
-import { Box, Button, FormControl, FormHelperText, FormLabel, Input, ModalDialog, Stack, Textarea, Typography } from '@mui/joy'
+import { Box, Button, FormControl, FormHelperText, FormLabel, Input, ModalClose, ModalDialog, Stack, Textarea, Typography } from '@mui/joy'
 import type { SuggestionResponse } from '@printstream/shared'
 import { apiFetch } from '../../lib/apiClient'
 import { BackAwareModal as Modal } from '../BackAwareModal'
@@ -48,6 +48,7 @@ export function NewSuggestionDialog({
   return (
     <Modal open onClose={onClose}>
       <ModalDialog sx={{ maxWidth: 520, width: '100%' }}>
+        <ModalClose />
         <Box component="form" onSubmit={handleSubmit} sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
           <Typography level="h4">New suggestion</Typography>
           <FormControl>

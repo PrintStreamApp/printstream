@@ -10,7 +10,7 @@
  * click at a dialog's edge should not discard someone's half-filled form. A lightbox holds
  * no such work, and the dark surround genuinely reads as "the thing I am looking past".
  */
-import { Box, ModalClose, ModalDialog, Typography } from '@mui/joy'
+import { Box, Button, DialogActions, ModalClose, ModalDialog, Typography } from '@mui/joy'
 import { BackAwareModal as Modal } from './BackAwareModal'
 
 export function ImageLightbox({
@@ -44,6 +44,9 @@ export function ImageLightbox({
             backgroundColor: 'var(--joy-palette-neutral-800)'
           }}
         />
+        <DialogActions>
+          <Button variant="plain" color="neutral" onClick={onClose}>Close</Button>
+        </DialogActions>
       </ModalDialog>
     </Modal>
   )

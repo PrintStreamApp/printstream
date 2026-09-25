@@ -11,6 +11,9 @@ import {
   SELF_HOSTED_SUPPORT_INSTALLATION_HEADER,
   SELF_HOSTED_SUPPORT_LICENSE_HEADER,
   SUPPORT_ATTACHMENT_CHUNK_BYTES,
+  canUseSuggestions,
+  hasInAppSupport,
+  inAppSupportUnavailabilityReason,
   type LicenseStatus,
   type SelfHostedSupportContext
 } from '@printstream/shared'
@@ -136,10 +139,13 @@ function registerCloudRelay(
           ? (dependencies.resolveContext ?? relayContext)(request)
           : Promise.resolve(null)
       ])
-      // This local guard is the privacy contract: ineligible installs do not
-      // make even a refused network request to the vendor.
-      if (!key || !status.valid || status.edition !== 'commercial' || status.updatesExpired) {
-        throw forbidden('Cloud features require a commercial license with current updates and support.')
+      // Only a person using the feature can reach this relay. Help needs a
+      // current support entitlement; Suggestions needs any valid installed key.
+      if (!key || (route.includeSupportContext ? !hasInAppSupport(status) : !canUseSuggestions(status))) {
+        const reason = route.includeSupportContext
+          ? inAppSupportUnavailabilityReason(status)
+          : 'Suggestions require a valid installed licence.'
+        throw forbidden(reason ?? 'This cloud feature is unavailable for the installed licence.')
       }
 
       if (isChunkPath(request)) {

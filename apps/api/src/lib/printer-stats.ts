@@ -11,6 +11,8 @@ import { readWorkspacePrintOutcomeBreakdown } from './print-outcome-breakdown.js
 import { prisma, rootPrisma } from './prisma.js'
 import { isMissingColumnError } from './prisma-errors.js'
 import { printerManager } from './printer-manager.js'
+import { readRangedPrintStats } from './ranged-print-stats.js'
+import type { StatsDateRange } from './stats-date-range.js'
 
 function secondsToHours(seconds: number): number {
   return seconds / 3600
@@ -147,7 +149,7 @@ export async function setManualPrinterStats(input: {
   })
 }
 
-export async function readPrinterStats(printerId: string): Promise<PrinterStatsResponse['stats'] | null> {
+export async function readPrinterStats(printerId: string, range?: StatsDateRange | null): Promise<PrinterStatsResponse['stats'] | null> {
   const printer = await prisma.printer.findFirst({
     where: { id: printerId },
     select: {
@@ -179,7 +181,13 @@ export async function readPrinterStats(printerId: string): Promise<PrinterStatsR
     cancelledFilamentUsedMeters: unknown
   } | null
 
-  try {
+  if (range) {
+    row = {
+      ...await readRangedPrintStats({ workspaceId: printer.workspaceId, printerId, range }),
+      manualTotalPrints: 0,
+      manualPrintDurationSeconds: 0
+    }
+  } else try {
     row = await prisma.printerStats.findUnique({
       where: {
         workspaceId_printerSerial: {

@@ -6,7 +6,7 @@
  * the server after the recycle retention window.
  */
 import { useMemo } from 'react'
-import { Box, Button, Chip, DialogActions, Stack, Typography } from '@mui/joy'
+import { Box, Button, Chip, DialogActions, ModalClose, Stack, Typography } from '@mui/joy'
 import DeleteForeverRoundedIcon from '@mui/icons-material/DeleteForeverRounded'
 import RestoreFromTrashRoundedIcon from '@mui/icons-material/RestoreFromTrashRounded'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -65,6 +65,7 @@ export function LibraryRecycleBinModal({ onClose }: { onClose: () => void }) {
   return (
     <Modal open onClose={onClose}>
       <ScrollableModalDialog sx={{ maxWidth: 560, width: '100%' }}>
+        <ModalClose />
         <Typography level="h4">Recycle bin</Typography>
         <Typography level="body-sm" textColor="text.tertiary">
           Deleted files can be restored from here. They are removed permanently when the bin is emptied or after the retention window expires.

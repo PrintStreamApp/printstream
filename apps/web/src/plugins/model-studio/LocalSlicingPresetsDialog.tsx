@@ -25,6 +25,7 @@ import {
   IconButton,
   List,
   ListItem,
+  ModalClose,
   Sheet,
   Stack,
   Typography
@@ -104,6 +105,7 @@ export function LocalSlicingPresetsDialog({ open, onClose }: {
   return (
     <BackAwareModal open={open} onClose={onClose}>
       <ScrollableModalDialog sx={{ maxWidth: 640, width: '100%' }}>
+        <ModalClose />
         <Typography level="h4">Slicing presets</Typography>
         <ScrollableDialogBody sx={{ mt: 1.5, px: 0 }}>
           <Stack spacing={1.5}>

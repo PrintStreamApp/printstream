@@ -43,9 +43,10 @@ export const licensePayloadSchema = z.object({
   /** Issue time, unix seconds. */
   issuedAt: z.number().int().nonnegative(),
   /**
-   * Updates & priority support are included until this unix time. `null` means
-   * perpetual: community keys, which only attest non-commercial use. Lapsing
-   * blocks *updates and support surfaces*, never the app itself.
+   * Updates & priority support are included until this unix time. A null value
+   * means perpetual: community keys and grandfathered commercial grants. New
+   * commercial grants receive a dated term. Lapsing a dated term blocks paid
+   * support and newer builds, never the app or Suggestions.
    */
   updatesUntil: z.number().int().nonnegative().nullable(),
   /**
@@ -117,6 +118,26 @@ export const licenseStatusSchema = z.object({
   metered: z.boolean()
 })
 export type LicenseStatus = z.infer<typeof licenseStatusSchema>
+
+/** In-app Help needs a commercial key with current or grandfathered support. */
+export function hasInAppSupport(status: Pick<LicenseStatus, 'valid' | 'edition' | 'updatesUntil' | 'updatesExpired'>): boolean {
+  return status.valid
+    && status.edition === 'commercial'
+    && !status.updatesExpired
+}
+
+/** The shared suggestion board is open to every install with a valid key. */
+export function canUseSuggestions(status: Pick<LicenseStatus, 'valid'>): boolean {
+  return status.valid
+}
+
+/** Explain the local Help fallback without suggesting that the app licence expired. */
+export function inAppSupportUnavailabilityReason(status: Pick<LicenseStatus, 'valid' | 'edition' | 'updatesUntil' | 'updatesExpired'>): string | null {
+  if (hasInAppSupport(status)) return null
+  if (!status.valid) return 'In-app support requires a valid licence. You can contact us by email.'
+  if (status.edition !== 'commercial') return 'Community licences use email support.'
+  return 'Updates and in-app support for this licence have ended. Renew support or contact us by email.'
+}
 
 /**
  * Self-hosted license enforcement state. Applies to every self-hosted build,

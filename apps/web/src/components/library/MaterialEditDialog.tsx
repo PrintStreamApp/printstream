@@ -15,8 +15,18 @@
  */
 import { useRef } from 'react'
 import {
-  Box, Button, DialogActions, FormControl, FormHelperText, FormLabel,
-  ModalDialog, Option, Select, Stack, Typography
+  Box,
+  Button,
+  DialogActions,
+  FormControl,
+  FormHelperText,
+  FormLabel,
+  ModalClose,
+  ModalDialog,
+  Option,
+  Select,
+  Stack,
+  Typography
 } from '@mui/joy'
 import { BackAwareModal } from '../BackAwareModal'
 import { FilamentColorPicker } from './FilamentColorPicker'
@@ -79,6 +89,7 @@ export function MaterialEditDialog({
   return (
     <BackAwareModal open onClose={revertAndClose}>
       <ModalDialog sx={{ maxWidth: 420, width: '100%' }}>
+        <ModalClose />
         <Typography level="h4">{mode === 'add' ? 'Add material' : `Material ${filamentIndex + 1}`}</Typography>
         <Stack spacing={1.25}>
           <FormControl>

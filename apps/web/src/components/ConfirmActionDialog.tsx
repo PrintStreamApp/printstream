@@ -1,6 +1,6 @@
 import DeleteRoundedIcon from '@mui/icons-material/DeleteRounded'
 import ErrorOutlineRoundedIcon from '@mui/icons-material/ErrorOutlineRounded'
-import { Alert, Button, DialogActions, DialogContent, DialogTitle, ModalDialog, Typography, type ColorPaletteProp } from '@mui/joy'
+import { Alert, Button, DialogActions, DialogContent, DialogTitle, ModalClose, ModalDialog, Typography, type ColorPaletteProp } from '@mui/joy'
 import type { ReactNode } from 'react'
 import { BackAwareModal as Modal } from './BackAwareModal'
 
@@ -32,6 +32,7 @@ export function ConfirmActionDialog({
   return (
     <Modal open={open} onClose={() => { if (!pending) onClose() }}>
       <ModalDialog variant="outlined" role="alertdialog" sx={{ width: { xs: '95vw', sm: 480 }, maxWidth: '95vw' }}>
+        <ModalClose disabled={pending} />
         {title ? <DialogTitle>{title}</DialogTitle> : null}
         <DialogContent>
           {typeof description === 'string' ? (
