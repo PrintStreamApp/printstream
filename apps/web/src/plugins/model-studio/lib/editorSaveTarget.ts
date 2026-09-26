@@ -23,7 +23,7 @@ import {
   uploadLibraryFileInChunks,
   type ChunkedLibraryUploadProgress
 } from '../../../lib/chunkedLibraryUpload'
-import { bakeClientThreeMf } from './clientThreeMfBake'
+import { bakeClientThreeMf, bakeCompleteProjectThreeMf } from './clientThreeMfBake'
 import { WORKSPACE_RETARGET_RESOLVERS } from './browserMachineRetarget'
 import { bakeOptionsFor, bakePassesFor } from './editorBakePasses'
 import { importIdsReferencedBy, type EditorImportStore } from './editorImportStore'
@@ -164,7 +164,8 @@ export function createApiSaveTarget(options: ApiSaveTargetOptions): EditorSaveTa
   const filamentPresets = createFilamentCatalogue()
   const bake = async (
     payload: SaveArrangedThreeMf | ExportArrangedThreeMf,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    requireCompleteMaterials = false
   ): Promise<Uint8Array> => {
     signal?.throwIfAborted()
     const archive = options.archive()
@@ -178,16 +179,18 @@ export function createApiSaveTarget(options: ApiSaveTargetOptions): EditorSaveTa
     if (!archive && payload.baseFileId != null && !('ignoreBaseContent' in payload && payload.ignoreBaseContent)) {
       throw new Error('The project this edit was opened from is no longer available; reopen it and save again.')
     }
-    const { bytes } = await bakeClientThreeMf(
+    const bakeArgs = [
       archive,
       payload.sceneEdit,
       await options.importStore.importsForBake(signal, importIdsReferencedBy(payload.sceneEdit)),
       bakeOptionsFor(payload),
       // The WORKSPACE resolvers, which reach this workspace's own presets as well as the built-ins.
       // That is the whole difference from the public host.
-      bakePassesFor(payload, { resolvers: WORKSPACE_RETARGET_RESOLVERS, filamentPresets, signal }),
-      signal
-    )
+      bakePassesFor(payload, { resolvers: WORKSPACE_RETARGET_RESOLVERS, filamentPresets, signal })
+    ] as const
+    const { bytes } = requireCompleteMaterials
+      ? await bakeCompleteProjectThreeMf(...bakeArgs, 'save', signal)
+      : await bakeClientThreeMf(...bakeArgs, signal)
     signal?.throwIfAborted()
     return bytes
   }
@@ -196,7 +199,7 @@ export function createApiSaveTarget(options: ApiSaveTargetOptions): EditorSaveTa
     isLibraryBacked: true,
 
     async persist(payload, lifecycle = {}) {
-      const bytes = await bake(payload, lifecycle.signal)
+      const bytes = await bake(payload, lifecycle.signal, true)
       // For a new VERSION the name is cosmetic: the addressed row keeps its own, precisely because
       // this session's copy of it may be stale. It still has to be a `.3mf` for the upload to
       // classify the kind correctly.
@@ -236,7 +239,7 @@ export function createApiSaveTarget(options: ApiSaveTargetOptions): EditorSaveTa
         throw new Error('The project this edit was opened from is no longer available; reopen it and slice again.')
       }
       input.onPhase?.('applying')
-      const { bytes } = await bakeClientThreeMf(
+      const { bytes } = await bakeCompleteProjectThreeMf(
         archive,
         input.sceneEdit,
         await options.importStore.importsForBake(signal, importIdsReferencedBy(input.sceneEdit)),
@@ -249,6 +252,7 @@ export function createApiSaveTarget(options: ApiSaveTargetOptions): EditorSaveTa
             ...(signal ? { signal } : {})
           }
         },
+        'slice',
         signal
       )
       signal?.throwIfAborted()

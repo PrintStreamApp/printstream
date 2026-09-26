@@ -578,3 +578,49 @@ test('a late first material gets its preset without another user edit', async ()
   assert.equal(view.result.current.filamentMaterialOptionIds[1], 'profile:pla')
   assert.deepEqual(view.result.current.filamentMappingResult.unresolved, [])
 })
+
+test('a late project material follows its installed preset when the redundant project preset is removed', async () => {
+  const { buildProfileMaterialOptionId, buildProjectSlicingPresets, buildSliceMaterialOptions } = await import('../../lib/slicingPresetMatching')
+  const installed = {
+    id: 'builtin:filament:generic-pla', source: 'builtin', kind: 'filament',
+    name: 'Generic PLA', filamentType: 'PLA'
+  } as import('@printstream/shared').SlicingPresetSummary
+  const file = {
+    ...FILE,
+    projectFilamentChips: [
+      { label: 'Generic PLA', color: '#ffffff' },
+      { label: 'Generic PLA', color: '#000000' }
+    ]
+  } as LibraryFile
+  const index = {
+    plates: [], compatiblePrinterModels: [], supportFilamentIds: [],
+    projectFilaments: [1, 2, 3].map((id) => ({
+      id, filamentType: 'PLA', filamentName: 'Generic PLA', filamentPresetName: 'Generic PLA',
+      color: '#ffffff', nozzleId: null
+    }))
+  } as unknown as ThreeMfIndex
+  const project = buildProjectSlicingPresets(index, 'filament')[0]!
+  const installedOptions = buildSliceMaterialOptions([installed], [])
+  const initial = {
+    file, bakedIndex: null as ThreeMfIndex | null,
+    baseProjectFilaments: [slot(1, '#ffffff'), slot(2, '#000000')],
+    filamentProfiles: [installed], compatibleFilamentProfiles: [installed],
+    materialOptions: installedOptions, selectedMachineProfile: null
+  }
+  const view = renderHook((props: typeof initial) => useMaterialSlots(props), { initialProps: initial })
+
+  const withIndex = {
+    ...initial,
+    bakedIndex: index,
+    baseProjectFilaments: [...initial.baseProjectFilaments, slot(3, '#ff8000')],
+    filamentProfiles: [project, installed],
+    compatibleFilamentProfiles: [project, installed],
+    materialOptions: buildSliceMaterialOptions([project, installed], [])
+  }
+  view.rerender(withIndex)
+  assert.equal(view.result.current.filamentMaterialOptionIds[3], buildProfileMaterialOptionId(project.id))
+
+  view.rerender({ ...withIndex, filamentProfiles: [installed], compatibleFilamentProfiles: [installed], materialOptions: installedOptions })
+  assert.equal(view.result.current.filamentMaterialOptionIds[3], buildProfileMaterialOptionId(installed.id))
+  assert.deepEqual(view.result.current.filamentMappingResult.unresolved, [])
+})

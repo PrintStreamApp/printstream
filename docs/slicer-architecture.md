@@ -79,6 +79,9 @@ preserving valid session presets and edited colours, including on a cached versi
 Material presets, colours, and nozzle assignments may arrive before their slots. Their initial
 seeding must run again when the slots appear, filling missing values while preserving explicit
 session choices. A late first material must become sliceable without a second edit.
+When a project filament preset is later proven identical to an installed preset and removed from
+the picker, late slots can still hold its encoded project id. Reconcile those ids by preset alias
+to a compatible installed choice before treating the material as unavailable.
 
 ## The no-save-first rule
 
@@ -1394,7 +1397,12 @@ browser, so the one tier with a genuinely incomplete baseline was also the one t
   makes this path rare in the first place: its SLICE emits the sceneEdit through the same
   `authorFilamentConfigs` pass as its save (`filamentConfigAuthoring.ts`), so a material change
   reaches the slicer with the new preset's physics authored in rather than with the dropped
-  arrays that made the config partial.
+  arrays that made the config partial. A selected 3MF project material has no external slice
+  profile ID, but the editor still resolves its project ID on save and repair. If that project's
+  slot has no physics, the named installed preset supplies the missing values.
+  Preset resolution reads the original 3MF slot identified by `sourceIndex`, not the slot's
+  current list position or session id. A material reorder changes both of those addresses while
+  the source archive stays fixed.
   When the export itself FAILS (e.g. the CLI's exit 239 "process not compatible with printer"
   from a cross-model machine/process pairing), the guard throws with that reason instead of
   slicing the incomplete config (proceeding is always the deterministic segfault), keeping the

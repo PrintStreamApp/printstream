@@ -3,7 +3,7 @@ import test from 'node:test'
 import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate'
 import { encodeProjectAuxiliaryBase64, type SceneEdit, type SlicingTarget } from '@printstream/shared'
 import type { RetargetResolvers } from './browserMachineRetarget'
-import { bakeClientThreeMf } from './clientThreeMfBake'
+import { bakeClientThreeMf, bakeCompleteProjectThreeMf } from './clientThreeMfBake'
 import { openThreeMfArchive } from './threeMfArchive'
 
 /**
@@ -63,6 +63,19 @@ test('the copy pass carries through every entry the bake does not rewrite', asyn
   // The model itself is rewritten (the build section is regenerated), so it is present but need
   // not match byte-for-byte.
   assert.ok(entries['3D/3dmodel.model'])
+})
+
+test('a save refuses a baked project that still lacks named material physics', async () => {
+  const archive = await openThreeMfArchive(sourceArchive({
+    'Metadata/project_settings.config': JSON.stringify({
+      filament_colour: ['#FFFFFF'],
+      filament_settings_id: ['Generic PLA']
+    })
+  }))
+  const baked = await bakeClientThreeMf(archive, EMPTY_EDIT)
+  assert.ok(baked.settingsRepairReasons.includes('filamentPhysics'))
+  await assert.rejects(() => bakeCompleteProjectThreeMf(archive, EMPTY_EDIT, [], {}, {}, 'save'), /repair and save again/)
+  await assert.rejects(() => bakeCompleteProjectThreeMf(archive, EMPTY_EDIT, [], {}, {}, 'slice'), /repair and slice again/)
 })
 
 test('an auxiliary edit replaces managed folders with opaque bytes and preserves unknown folders', async () => {

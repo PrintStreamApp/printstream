@@ -34,7 +34,12 @@ const MODEL_SETTINGS_XML = [
 const PROJECT_SETTINGS = JSON.stringify({
   filament_type: ['PLA'],
   filament_colour: ['#00FF00'],
-  filament_settings_id: ['Bambu PLA Basic']
+  filament_settings_id: ['Bambu PLA Basic'],
+  filament_diameter: ['1.75'],
+  filament_density: ['1.24'],
+  filament_flow_ratio: ['0.98'],
+  nozzle_temperature: ['220'],
+  nozzle_temperature_initial_layer: ['220']
 })
 
 function projectBlob(): Blob {
@@ -95,7 +100,7 @@ test('saving locally preserves the project rather than baking an empty one', asy
       importStore: createLocalImportStore(),
       projectFile: () => file,
       onProjectFileChanged: () => {},
-    filamentPresets: () => []
+      filamentPresets: () => []
     })
 
     await target.persist({

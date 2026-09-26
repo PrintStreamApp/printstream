@@ -16,7 +16,7 @@
  * preserves the project's embedded machine, so reopening showed the original printer again.
  */
 import type { ExportArrangedThreeMf, SaveArrangedThreeMf, SlicingPresetSummary } from '@printstream/shared'
-import { bakeClientThreeMf } from './clientThreeMfBake'
+import { bakeClientThreeMf, bakeCompleteProjectThreeMf } from './clientThreeMfBake'
 import { PUBLIC_RETARGET_RESOLVERS } from './browserMachineRetarget'
 import { bakeOptionsFor, bakePassesFor } from './editorBakePasses'
 import { importIdsReferencedBy, type EditorImportStore } from './editorImportStore'
@@ -43,10 +43,11 @@ export interface LocalSaveTargetOptions {
 export function createLocalSaveTarget(options: LocalSaveTargetOptions): EditorSaveTarget {
   const bake = async (
     payload: SaveArrangedThreeMf | ExportArrangedThreeMf,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    requireCompleteMaterials = false
   ): Promise<Uint8Array> => {
     signal?.throwIfAborted()
-    const { bytes } = await bakeClientThreeMf(
+    const bakeArgs = [
       options.archive(),
       payload.sceneEdit,
       await options.importStore.importsForBake(signal, importIdsReferencedBy(payload.sceneEdit)),
@@ -58,9 +59,11 @@ export function createLocalSaveTarget(options: LocalSaveTargetOptions): EditorSa
         // Already in hand on this host: its catalogue is browser-stored plus the builtin list.
         filamentPresets: async () => options.filamentPresets(),
         signal
-      }),
-      signal
-    )
+      })
+    ] as const
+    const { bytes } = requireCompleteMaterials
+      ? await bakeCompleteProjectThreeMf(...bakeArgs, 'save', signal)
+      : await bakeClientThreeMf(...bakeArgs, signal)
     signal?.throwIfAborted()
     return bytes
   }
@@ -70,7 +73,7 @@ export function createLocalSaveTarget(options: LocalSaveTargetOptions): EditorSa
 
     async persist(payload, lifecycle = {}) {
       const signal = lifecycle.signal
-      const bytes = await bake(payload, signal)
+      const bytes = await bake(payload, signal, true)
       const current = options.projectFile()
       // Branch on the save MODE, not on whether a name came along: "Save" means write back to the
       // file the user opened, "Save as" always asks where to put it. Keying off the name instead
@@ -99,7 +102,7 @@ export function createLocalSaveTarget(options: LocalSaveTargetOptions): EditorSa
       const archive = options.archive()
       if (!archive) throw new Error('The open project is no longer available; reopen it and slice again.')
       input.onPhase?.('applying')
-      const { bytes } = await bakeClientThreeMf(
+      const { bytes } = await bakeCompleteProjectThreeMf(
         archive,
         input.sceneEdit,
         await options.importStore.importsForBake(signal, importIdsReferencedBy(input.sceneEdit)),
@@ -113,6 +116,7 @@ export function createLocalSaveTarget(options: LocalSaveTargetOptions): EditorSa
             ...(signal ? { signal } : {})
           }
         },
+        'slice',
         signal
       )
       signal?.throwIfAborted()

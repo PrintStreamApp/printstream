@@ -33,6 +33,7 @@ import {
   getPrinterControlCapabilities,
   isProjectSlicingPresetId,
   normalizeFilamentVendorLabel,
+  parseProjectSlicingPresetId,
   printerModelSchema,
   resolveDisplayFilamentType
 } from '@printstream/shared'
@@ -1496,6 +1497,19 @@ export function buildProfileMaterialOptionId(profileId: string): string {
 }
 
 /**
+ * The preset the editor can resolve for a selected material. Project choices deliberately carry
+ * `profileId: null` for slice mappings, since their values already live in the 3MF. Save and
+ * repair still need their project id to read those values and, when absent, the named baseline.
+ */
+export function resolvableMaterialProfileId(option: SliceMaterialOption | null | undefined): string | null {
+  if (!option) return null
+  if (option.profileId) return option.profileId
+  if (!option.id.startsWith('profile:')) return null
+  const profileId = option.id.slice('profile:'.length)
+  return isProjectSlicingPresetId(profileId) ? profileId : null
+}
+
+/**
  * Carry a material pick across a machine change, BambuStudio-style.
  *
  * When the selected printer changes, a preset built for the old machine leaves the compatible
@@ -1521,13 +1535,17 @@ export function repointMaterialOptionToCompatibleAlias(
   if (!optionId.startsWith('profile:')) return null
   const profileId = optionId.slice('profile:'.length)
   const previous = allProfiles.find((profile) => profile.id === profileId)
-  if (!previous || previous.kind !== 'filament') return null
+  const source = previous ?? parseProjectSlicingPresetId(profileId)
+  if (source?.kind !== 'filament') return null
   // Both sides through `slicingPresetAlias`, never a display label: it is the one form derived from
   // the NAME alone, so a preset still matches itself when one side declares a vendor and the other
   // does not (an installed profile against the project preset for the same material). Matching on
   // `presetLabel` meant a Polymaker material silently failed to hand over and fell back to the
   // file's default, where a Bambu one survived.
-  const alias = slicingPresetAlias(previous)
+  // Redundant project presets leave the pickable catalogue after their baked settings prove
+  // identical to an installed preset. A late-arriving 3MF slot can still hold that project's id;
+  // its encoded name is enough to hand it to the installed preset with the same alias.
+  const alias = slicingPresetAlias(source)
   if (!alias) return null
   const aliasByProfileId = new Map(allProfiles.map((profile) => [profile.id, slicingPresetAlias(profile)]))
   return options.find((option) =>

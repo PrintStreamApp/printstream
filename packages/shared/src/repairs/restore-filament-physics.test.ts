@@ -99,6 +99,28 @@ test('a source short of the variant width is skipped, never padded from column 0
   assert.deepEqual(record.filament_density, ['1.2', '1.2', '1.2'])
 })
 
+test('one material keeps a scalar preset value as a valid variant broadcast', () => {
+  const record: Record<string, unknown> = {
+    filament_settings_id: ['Generic PLA'],
+    filament_colour: ['#FFFFFF'],
+    filament_extruder_variant: ['Direct Drive Standard', 'Direct Drive High Flow'],
+    filament_self_index: ['1', '1'],
+    filament_diameter: ['1.75'],
+    filament_density: ['1.24']
+  }
+  const config = {
+    nozzle_temperature: ['220'],
+    nozzle_temperature_initial_layer: ['220'],
+    filament_flow_ratio: ['0.98']
+  } as unknown as ProcessConfig
+
+  const result = restoreFilamentPhysics(record, [config])
+  assert.deepEqual(record.nozzle_temperature, ['220'])
+  assert.deepEqual(record.filament_flow_ratio, ['0.98'])
+  assert.ok(result.restoredKeys.includes('nozzle_temperature'))
+  assert.equal(inspectProjectFilamentPhysics(JSON.stringify(record))?.inconsistent, false)
+})
+
 /**
  * REPLACES a test that asserted the opposite, that an unresolved slot still occupied its columns,
  * filled with empty strings. That is what shipped, and it corrupted a real project: with a width of

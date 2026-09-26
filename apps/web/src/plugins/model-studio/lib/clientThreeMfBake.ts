@@ -28,7 +28,7 @@ import {
   type ThreeMfBakeResult,
   weldModelEntryMeshes
 } from '@printstream/shared/three-mf'
-import type { SceneEdit } from '@printstream/shared'
+import { collectSettingsRepairReasons, type SceneEdit, type ThreeMfSettingsRepairReason } from '@printstream/shared'
 import { applyBakeSettingsPasses, type ClientBakeSettingsPasses } from './clientBakeSettingsPasses'
 import type { ThreeMfArchive } from './threeMfArchive'
 import { hasPostProcessingScripts, removePostProcessingScripts } from './projectScriptSafety'
@@ -53,6 +53,37 @@ export interface ClientBakeOutput {
   bytes: Uint8Array
   /** Baked object ids the caller needs to re-key per-object overrides. */
   result: ThreeMfBakeResult
+  /** Defects in the final archive, after machine and material settings passes. */
+  settingsRepairReasons: ThreeMfSettingsRepairReason[]
+}
+
+/** Reject a saved or prepared project whose named materials lack temperatures and flow. */
+function assertCompleteProjectMaterialSettings(
+  reasons: readonly ThreeMfSettingsRepairReason[],
+  action: 'save' | 'slice'
+): void {
+  if (reasons.includes('filamentPhysics')) {
+    throw new Error(`The project still has incomplete material settings. Choose a compatible preset for each material, then repair and ${action} again.`)
+  }
+}
+
+/**
+ * Bake a complete project for either Save or prepared Slice, with one final material contract.
+ * Both paths must reject the same incomplete archive before writing or uploading it. Object exports
+ * use {@link bakeClientThreeMf} directly because they can intentionally salvage geometry alone.
+ */
+export async function bakeCompleteProjectThreeMf(
+  archive: ThreeMfArchive | null,
+  edit: SceneEdit,
+  imports: ImportedObjectInput[],
+  options: ThreeMfBakeOptions,
+  settingsPasses: ClientBakeSettingsPasses,
+  action: 'save' | 'slice',
+  signal?: AbortSignal
+): Promise<ClientBakeOutput> {
+  const output = await bakeClientThreeMf(archive, edit, imports, options, settingsPasses, signal)
+  assertCompleteProjectMaterialSettings(output.settingsRepairReasons, action)
+  return output
 }
 
 /**
@@ -154,19 +185,21 @@ export async function bakeClientThreeMf(
     }
   }
 
-  // Judge the bake on what it WROTE, the same check the api runs after its own write
-  // (`three-mf-scene-builder.ts`). This host needs it more, not less: the api can re-inspect a
-  // stored file later, while the public editor hands the bytes straight back to the user's disk and
-  // never sees them again. Runs after the transforms, since the project-settings one is lazy.
+  // Judge the FINAL documents, after settings passes: a machine retarget or tune override can
+  // change the result after the shared bake plan inspected its own output. The public editor hands
+  // these bytes straight back to the user's disk, so this is its last chance to detect a defect.
   //
   // Reports and never rewrites, for the same reason as the api: healing here would hide the
   // authoring bug that produced the defect, and repairs are the user's to ask for.
-  const settingsRepairReasons = plan.settingsRepairReasons()
+  const settingsRepairReasons = collectSettingsRepairReasons(
+    output[PROJECT_SETTINGS_ENTRY] ? new TextDecoder().decode(output[PROJECT_SETTINGS_ENTRY]) : null,
+    output['Metadata/model_settings.config'] ? new TextDecoder().decode(output['Metadata/model_settings.config']) : null
+  )
   if (settingsRepairReasons.length > 0) {
-    console.warn(`[three-mf-bake] wrote a project with repairable settings defects: ${settingsRepairReasons.join(', ')}`)
+    console.warn(`[three-mf-bake] baked a project with repairable settings defects: ${settingsRepairReasons.join(', ')}`)
   }
 
-  return { bytes: await deflateArchive(output, signal), result: plan.result }
+  return { bytes: await deflateArchive(output, signal), result: plan.result, settingsRepairReasons }
 }
 
 /**

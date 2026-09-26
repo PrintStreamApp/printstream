@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { LibraryFile, SlicingPresetSummary, ThreeMfFilament, ThreeMfIndex, ThreeMfProjectFilament } from '@printstream/shared'
-import { resolveInitialManualPrinterModel, isProcessProfileCompatible, buildFilamentMappings, buildBakedFilamentProfileSelection, buildProcessFilamentChoices, buildProjectSlicingPresets, buildSliceDialogProjectFilaments, plateModelFilamentIds, buildProfileMaterialOptionId, buildRedundantProjectPresetCandidates, buildSliceMaterialOptions, buildInventoryMaterialOptions, filterSliceMaterialOptions, isFilamentProfileCompatible, repointMaterialOptionToCompatibleAlias, narrowMaterialOptions, resolveProfileMaterialType, slicingPresetsResponseIsUsable, type SliceMaterialOption } from './slicingPresetMatching'
+import { resolveInitialManualPrinterModel, isProcessProfileCompatible, buildFilamentMappings, buildBakedFilamentProfileSelection, buildProcessFilamentChoices, buildProjectSlicingPresets, buildSliceDialogProjectFilaments, plateModelFilamentIds, buildProfileMaterialOptionId, buildRedundantProjectPresetCandidates, buildSliceMaterialOptions, buildInventoryMaterialOptions, filterSliceMaterialOptions, isFilamentProfileCompatible, repointMaterialOptionToCompatibleAlias, resolvableMaterialProfileId, narrowMaterialOptions, resolveProfileMaterialType, slicingPresetsResponseIsUsable, type SliceMaterialOption } from './slicingPresetMatching'
 import { formatSlicingPresetBrandedName, formatSlicingPresetDisplayName } from './slicingPresetSelection'
 
 function materialOption(overrides: Partial<SliceMaterialOption> & { id: string }): SliceMaterialOption {
@@ -525,6 +525,16 @@ test('a preset known only by name still derives the support display type', () =>
     kind: 'filament',
     name: 'Bambu Support For PLA'
   }), 'PLA-S')
+})
+
+test('a project material resolves for editor authoring while remaining unset for slice mapping', () => {
+  const project: SlicingPresetSummary = {
+    id: 'project:filament:Generic%20PLA', source: 'custom', kind: 'filament',
+    name: 'Generic PLA', filamentType: 'PLA'
+  }
+  const [option] = buildSliceMaterialOptions([project], [])
+  assert.equal(option?.profileId, null)
+  assert.equal(resolvableMaterialProfileId(option), project.id)
 })
 
 /**

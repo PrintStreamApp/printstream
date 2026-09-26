@@ -71,3 +71,35 @@ test('an EXISTING project keeps carrying its physics through a material change',
   assert.equal(inspectProjectFilamentPhysics(out)?.inconsistent, false)
   assert.deepEqual((JSON.parse(out) as Record<string, unknown>).filament_settings_id, ['Generic PLA'])
 })
+
+test('an unchanged project material fills the physics missing from a partial source', () => {
+  const base = JSON.stringify({
+    filament_colour: ['#FFFFFF'],
+    filament_type: ['PLA'],
+    filament_settings_id: ['Generic PLA'],
+    filament_diameter: ['1.75'],
+    filament_density: ['1.24']
+  })
+  const out = applyFilamentList(base, [
+    filament({ settingsId: null, config: RESOLVED_PLA as never })
+  ])
+  assert.equal(inspectProjectFilamentPhysics(out)?.inconsistent, false)
+  assert.deepEqual((JSON.parse(out) as Record<string, unknown>).nozzle_temperature, ['220'])
+})
+
+test('an unchanged one-material project restores scalar physics with two extruder variants', () => {
+  const base = JSON.stringify({
+    filament_colour: ['#FFFFFF'],
+    filament_type: ['PLA'],
+    filament_settings_id: ['Generic PLA'],
+    filament_extruder_variant: ['Direct Drive Standard', 'Direct Drive High Flow'],
+    filament_self_index: ['1', '1'],
+    filament_diameter: ['1.75'],
+    filament_density: ['1.24']
+  })
+  const out = applyFilamentList(base, [
+    filament({ settingsId: 'Generic PLA', config: RESOLVED_PLA as never })
+  ])
+  assert.equal(inspectProjectFilamentPhysics(out)?.inconsistent, false)
+  assert.deepEqual((JSON.parse(out) as Record<string, unknown>).nozzle_temperature, ['220'])
+})

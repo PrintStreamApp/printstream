@@ -191,6 +191,15 @@ export function restoreFilamentPhysics(
     const sourceWidth = perSlotColumns.find((columns) => columns !== null)?.length ?? 1
     // Variant-scoped keys follow the per-slot layout; everything else is uniform across slots.
     const variantScoped = isFilamentVariantOption(key)
+    // With ONE material, a single preset value is a valid broadcast across its variants: both
+    // the loader and our inspector accept a length-1 array. Keep that honest broadcast instead of
+    // manufacturing variant values the resolver did not supply. For multiple materials a short
+    // array could assign one material's value to another, so the strict width rule below remains.
+    if (variantScoped && slotCount === 1 && perSlotColumns[0]?.length === 1) {
+      record[key] = perSlotColumns[0]
+      restoredKeys.push(key)
+      continue
+    }
     // An unreadable layout (rows that do not divide evenly, with no `filament_self_index` to say how
     // they are shared) leaves the variant keys ALONE. Splitting them evenly anyway would undersize
     // the wider slot, the out-of-bounds shape that kills a slice, and inventing the division is

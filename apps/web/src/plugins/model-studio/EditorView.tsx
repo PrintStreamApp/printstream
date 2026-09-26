@@ -70,8 +70,6 @@ import {
   extractErrorMessage,
   isNonRenderableThreeMfPartSubtype,
   threeMfPartSubtypeCarriesFilament,
-  FILAMENT_SETTING_KEYS,
-  isFilamentIdentitySettingKey,
   readProjectFlushContext,
   reconcilePlateFilamentSequence,
   type ThreeMfSettingsRepairReason,
@@ -135,7 +133,8 @@ import {
 import { createDownloadProgressReporter, observeSavePreparation } from './lib/editorPreparation'
 import { useStrictModeSafeResourceDisposal } from './useStrictModeSafeResourceDisposal'
 import type { FilamentConfigResolver } from '../../components/library/FilamentSettingsDialog'
-import { applyRepairedFilamentConfigs, attachResolvedFilamentConfigs, rekeyByBakedSlot, type RepairedFilamentPreset } from './lib/filamentConfigAuthoring'
+import { applyRepairedFilamentConfigs, attachResolvedFilamentConfigs, filamentPhysicsFromResolution, rekeyByBakedSlot, sourceFilamentSlotId, type RepairedFilamentPreset } from './lib/filamentConfigAuthoring'
+import { resolvableMaterialProfileId } from '../../lib/slicingPresetMatching'
 import { StickySectionHeader, StickySectionScope } from '../../components/library/StickySectionHeader'
 import {
   createPreviewPlateSurface,
@@ -9857,7 +9856,7 @@ function EditorView({
     const controller = sliceConfigRef.current
     const orderedSessionIds = (controller?.projectFilaments ?? []).map((filament) => filament.projectFilamentId)
     const profileIdBySessionId = Object.fromEntries(Object.entries(controller?.filamentMaterialOptionIds ?? {}).map(
-      ([filamentId, optionId]) => [filamentId, controller?.materialOptions.find((option) => option.id === optionId)?.profileId ?? undefined]
+      ([filamentId, optionId]) => [filamentId, resolvableMaterialProfileId(controller?.materialOptions.find((option) => option.id === optionId)) ?? undefined]
     ))
     return attachResolvedFilamentConfigs(
       applyRepairedFilamentConfigs(edit, rekeyByBakedSlot(stateRef.current?.repairedFilamentConfigs, orderedSessionIds)),
@@ -10284,9 +10283,9 @@ function EditorView({
     try {
       const resolved: Record<number, RepairedFilamentPreset> = {}
       const unresolved: number[] = []
-      for (const slot of controller.projectFilaments) {
+      for (const [position, slot] of controller.projectFilaments.entries()) {
         const optionId = controller.filamentMaterialOptionIds[slot.projectFilamentId]
-        const profileId = controller.materialOptions.find((option) => option.id === optionId)?.profileId
+        const profileId = resolvableMaterialProfileId(controller.materialOptions.find((option) => option.id === optionId))
         if (!profileId) {
           unresolved.push(slot.projectFilamentId)
           continue
@@ -10296,19 +10295,14 @@ function EditorView({
             filamentProfileId: profileId,
             targetId: controller.selectedSlicerTargetId || null,
             sourceFileId: baseFileId ?? null,
-            projectFilamentId: slot.projectFilamentId
+            projectFilamentId: sourceFilamentSlotId(controller.desiredFilaments?.[position]?.sourceIndex, slot.projectFilamentId)
           })
-          // A config OBJECT is not the same as a config with VALUES. A slot whose preset resolves to
-          // the project's own (physics-dropped) slot comes back as `{}`: truthy, so it used to count
-          // as resolved: the repair reported success, the banner cleared, and the save then wrote
-          // nothing because no slot defined any key. The user got a "repaired" file that was
-          // untouched. Require at least one real filament setting before believing the slot.
-          const physicsKeys = response.config
-            ? Object.keys(response.config).filter((key) => FILAMENT_SETTING_KEYS.has(key) && !isFilamentIdentitySettingKey(key))
-            : []
-          if (physicsKeys.length > 0) {
+          // A project preset can resolve to the file's own empty slot. Restore from its named
+          // installed baseline in that case, and keep the repair pinned for the eventual save.
+          const physics = filamentPhysicsFromResolution(response)
+          if (physics) {
             resolved[slot.projectFilamentId] = {
-              config: response.config!,
+              config: physics,
               // Pinned with the values, because it is half of the same fact: a slot backed by a
               // USER preset needs its parent named in the saved project or BambuStudio reopens it
               // as a `(<project>.3mf)` copy. Absent when the parent did not resolve.

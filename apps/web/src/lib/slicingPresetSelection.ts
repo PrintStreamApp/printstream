@@ -36,7 +36,7 @@ export function isSelectableSlicingPreset(profile: SlicingPresetSummary): boolea
  * the right key for "the same product built for another machine" and the WRONG key for BINDING a
  * slot, which matches the raw name exactly (`find_preset_internal`).
  */
-export function slicingPresetAlias(profile: SlicingPresetSummary): string {
+export function slicingPresetAlias(profile: Pick<SlicingPresetSummary, 'name'>): string {
   const atIndex = profile.name.indexOf('@')
   return (atIndex === -1 ? profile.name : profile.name.slice(0, atIndex)).trim() || profile.name.trim()
 }

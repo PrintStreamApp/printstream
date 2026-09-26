@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { applyRepairedFilamentConfigs, attachResolvedFilamentConfigs, rekeyByBakedSlot } from './filamentConfigAuthoring'
+import { applyRepairedFilamentConfigs, attachResolvedFilamentConfigs, filamentPhysicsFromResolution, rekeyByBakedSlot } from './filamentConfigAuthoring'
 import type { SceneEdit } from '@printstream/shared'
 
 const edit = (filaments: unknown[]): SceneEdit => ({ plates: [], filaments } as unknown as SceneEdit)
@@ -57,6 +57,66 @@ test('a slot whose EFFECTIVE config carries no physics falls back to the preset 
     nozzle_temperature: ['220'],
     filament_flow_ratio: ['0.98']
   }, 'the named preset\'s values should stand in when the project declares none')
+})
+
+test('an unchanged project material with no authored name still receives its baseline physics', async () => {
+  const out = await attachResolvedFilamentConfigs(
+    edit([{ color: '#FFFFFF', settingsId: null }]),
+    (async () => ({
+      config: { filament_settings_id: ['Generic PLA'] },
+      baseConfig: { filament_settings_id: ['Generic PLA'], nozzle_temperature: ['220'], filament_flow_ratio: ['0.98'] }
+    })) as never,
+    { targetId: 't1', sourceFileId: 'f1', profileIdByFilamentId: { 1: 'project:filament:Generic%20PLA' } }
+  )
+  assert.deepEqual(out.filaments?.[0]?.config, {
+    filament_settings_id: ['Generic PLA'], nozzle_temperature: ['220'], filament_flow_ratio: ['0.98']
+  })
+})
+
+test('the material repair uses a named baseline when a project slot has no physics', () => {
+  assert.deepEqual(filamentPhysicsFromResolution({
+    config: { filament_settings_id: ['Generic PLA'] },
+    baseConfig: { nozzle_temperature: ['220'], filament_flow_ratio: ['0.98'] }
+  } as never), { filament_settings_id: ['Generic PLA'], nozzle_temperature: ['220'], filament_flow_ratio: ['0.98'] })
+})
+
+test('the material repair fills missing temperature and flow without losing project overrides', () => {
+  assert.deepEqual(filamentPhysicsFromResolution({
+    config: { filament_diameter: '1.75', filament_density: '1.24', bed_temperature: '65' },
+    baseConfig: {
+      filament_diameter: ['1.75'], filament_density: ['1.24'], bed_temperature: ['55'],
+      nozzle_temperature: ['220'], nozzle_temperature_initial_layer: ['220'], filament_flow_ratio: ['0.98']
+    }
+  } as never), {
+    filament_diameter: '1.75', filament_density: '1.24', bed_temperature: '65',
+    nozzle_temperature: ['220'], nozzle_temperature_initial_layer: ['220'], filament_flow_ratio: ['0.98']
+  })
+})
+
+test('an empty project vector cannot erase a valid named preset value', () => {
+  assert.deepEqual(filamentPhysicsFromResolution({
+    config: { nozzle_temperature: [], filament_flow_ratio: ['1.02'] },
+    baseConfig: { nozzle_temperature: ['220'], filament_flow_ratio: ['0.98'] }
+  } as never), { nozzle_temperature: ['220'], filament_flow_ratio: ['1.02'] })
+})
+
+test('reordered materials resolve from their original 3MF slots', async () => {
+  const lookedUp: number[] = []
+  const out = await attachResolvedFilamentConfigs(
+    edit([
+      { color: '#1', settingsId: null, sourceIndex: 1 },
+      { color: '#2', settingsId: null, sourceIndex: 0 }
+    ]),
+    (async (request: { projectFilamentId?: number }) => {
+      lookedUp.push(request.projectFilamentId!)
+      return { config: { nozzle_temperature: [String(request.projectFilamentId === 2 ? 245 : 220)] } }
+    }) as never,
+    { targetId: null, sourceFileId: 'file', profileIdByFilamentId: {
+      1: 'project:filament:Generic%20PETG', 2: 'project:filament:Generic%20PLA'
+    } }
+  )
+  assert.deepEqual(lookedUp, [2, 1])
+  assert.deepEqual(out.filaments?.map((slot) => slot.config?.nozzle_temperature), [['245'], ['220']])
 })
 
 test('a slot whose effective config HAS physics keeps it, tweaks and all', async () => {

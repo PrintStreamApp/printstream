@@ -15,15 +15,14 @@
  * `localFilamentResolver` for the public editor), so this needs no new endpoint and no server round
  * trip the editor was not already making.
  *
- * CONTRACT: best-effort and additive. A slot whose preset cannot be resolved is left without a
- * config, and the bake then falls back to its previous drop behaviour for that save, no worse than
- * before, and never the OLD material's values under a new name. A resolver that throws is logged
- * and treated as unresolved rather than failing the user's save.
+ * CONTRACT: resolution is best-effort and additive. A slot whose preset cannot be resolved is left
+ * without a config, and the final save guard refuses incomplete named materials. A resolver that
+ * throws is logged and treated as unresolved so a complete source can still save unchanged.
  *
  * Counterpart: `applyFilamentList` in `@printstream/shared/three-mf` consumes
  * `SceneEditFilament.config`.
  */
-import { FILAMENT_SETTING_KEYS, isFilamentIdentitySettingKey, type ProcessConfig, type SceneEdit } from '@printstream/shared'
+import { FILAMENT_SETTING_KEYS, isFilamentIdentitySettingKey, isProjectSlicingPresetId, type ProcessConfig, type ResolveFilamentConfigResponse, type SceneEdit } from '@printstream/shared'
 import type { FilamentConfigResolver } from '../../../components/library/FilamentSettingsDialog'
 
 /**
@@ -42,6 +41,28 @@ import type { FilamentConfigResolver } from '../../../components/library/Filamen
 function carriesFilamentPhysics(config: ProcessConfig | undefined): boolean {
   if (!config) return false
   return Object.keys(config).some((key) => FILAMENT_SETTING_KEYS.has(key) && !isFilamentIdentitySettingKey(key))
+}
+
+/**
+ * Combine a project's declared values with its named installed preset. A damaged project can still
+ * carry some physics (diameter and density in the reported file) while missing temperature and flow;
+ * accepting any one surviving key as a complete config saves the defect again. Explicit project
+ * values win so authored tweaks survive, while the baseline fills every absent preset option.
+ */
+export function filamentPhysicsFromResolution(response: ResolveFilamentConfigResponse): ProcessConfig | null {
+  const baseline = carriesFilamentPhysics(response.baseConfig) ? response.baseConfig : null
+  if (baseline) {
+    const declared = Object.fromEntries(Object.entries(response.config ?? {}).filter(([, value]) =>
+      !Array.isArray(value) || value.length > 0
+    ))
+    return { ...baseline, ...declared }
+  }
+  return carriesFilamentPhysics(response.config) ? response.config! : null
+}
+
+/** Source 3MF slot to read, independent of the slot's position after a reorder. */
+export function sourceFilamentSlotId(sourceIndex: number | null | undefined, fallbackId: number): number {
+  return sourceIndex == null ? fallbackId : sourceIndex + 1
 }
 
 export interface FilamentConfigAuthoringContext {
@@ -150,32 +171,19 @@ export async function attachResolvedFilamentConfigs(
     const profileId = context.profileIdByFilamentId[index + 1]
     // Already carries the user's repaired config: do not overwrite it with a fresh resolve.
     if (filament.config) return filament
-    // No preset picked for this slot, or its name never resolved: nothing to author from.
-    if (!profileId || !filament.settingsId) return filament
+    // A project choice keeps the source slot's name (`settingsId: null`), but its project preset
+    // can still supply physics from the source file or the installed preset it names.
+    if (!profileId || (!filament.settingsId && !isProjectSlicingPresetId(profileId))) return filament
     try {
       const response = await resolve({
         filamentProfileId: profileId,
         targetId: context.targetId,
         sourceFileId: context.sourceFileId,
-        projectFilamentId: index + 1
+        projectFilamentId: sourceFilamentSlotId(filament.sourceIndex, index + 1)
       }, context.signal ? { signal: context.signal } : undefined)
-      // `config` is the slot's EFFECTIVE config (preset plus whatever the project declared), which
-      // is what the file should carry, not `baseConfig`, which is the untouched preset and would
-      // discard the user's own in-project tweaks.
-      //
-      // ...UNLESS the effective config carries no physics at all, which happens whenever the slot
-      // resolves to the PROJECT's own preset and the project has none. A NEW project is exactly
-      // that case: its scaffold seeds `filament_settings_id` but no values, the resolver matches
-      // that name to a project-scoped preset before any installed one, and the answer describes the
-      // empty slot back to us. Authoring it wrote nothing, so every project born in the editor
-      // saved with no material physics and reopened flagged for repair -- measured end to end on an
-      // A1 0.2 nozzle: the save asked for `project:filament:Generic PLA` and got ONE key back,
-      // while the same slot's builtin preset answers with 141.
-      // There are no in-project tweaks to lose in that case (that is what "no physics" means), so
-      // the preset the slot names is the right thing to write, and the route already returns it.
-      const effective = carriesFilamentPhysics(response.config)
-        ? response.config
-        : (carriesFilamentPhysics(response.baseConfig) ? response.baseConfig : undefined)
+      // The resolver can return a partial PROJECT config and a complete installed baseline. Keep
+      // project values where declared, then fill missing preset options from that baseline.
+      const effective = filamentPhysicsFromResolution(response)
       if (!effective) return filament
       return {
         ...filament,

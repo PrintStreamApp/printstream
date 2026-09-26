@@ -67,6 +67,27 @@ test('saving writes the baked project back to the opened file', async () => {
   assert.ok(entries['Metadata/vendor.xml'], 'unrelated entries survive a local save')
 })
 
+test('saving an incomplete named material leaves the opened file untouched', async () => {
+  const zip = zipSync({
+    '3D/3dmodel.model': strToU8(MODEL_XML),
+    'Metadata/project_settings.config': strToU8(JSON.stringify({
+      filament_settings_id: ['Generic PLA'], filament_colour: ['#FFFFFF']
+    }))
+  })
+  const archive = await openThreeMfArchive(new Blob([new Uint8Array(zip)]))
+  const project = writableProject('Incomplete.3mf')
+  const target = createLocalSaveTarget({
+    archive: () => archive,
+    importStore: createLocalImportStore(),
+    projectFile: () => project.file,
+    onProjectFileChanged: () => {},
+    filamentPresets: () => []
+  })
+
+  await assert.rejects(() => target.persist(BASE_PAYLOAD), /incomplete material settings/)
+  assert.equal(project.writes.length, 0)
+})
+
 test('a local save is never library-backed, so the caller skips library bookkeeping', async () => {
   const target = createLocalSaveTarget({
     archive: () => null,
@@ -199,7 +220,12 @@ async function x1cProjectArchive() {
       nozzle_diameter: ['0.4'],
       filament_type: ['PLA'],
       filament_colour: ['#00FF00'],
-      filament_settings_id: ['Bambu PLA Basic @BBL X1C']
+      filament_settings_id: ['Bambu PLA Basic @BBL X1C'],
+      filament_diameter: ['1.75'],
+      filament_density: ['1.24'],
+      filament_flow_ratio: ['0.98'],
+      nozzle_temperature: ['220'],
+      nozzle_temperature_initial_layer: ['220']
     })),
     'Metadata/slice_info.config': strToU8(
       '<config>\n  <metadata key="printer_model_id" value="BL-P001"/>\n  <plate/>\n</config>'
@@ -221,7 +247,10 @@ function stubResolveFetch() {
       })
     }
     if (url.includes('/resolve-filament')) {
-      return Response.json({ config: { pre_start_fan_time: ['2'] }, baseConfig: {}, overriddenKeys: [] })
+      return Response.json({ config: {
+        pre_start_fan_time: ['2'], filament_diameter: ['1.75'], filament_density: ['1.24'],
+        filament_flow_ratio: ['0.98'], nozzle_temperature: ['220'], nozzle_temperature_initial_layer: ['220']
+      }, baseConfig: {}, overriddenKeys: [] })
     }
     return new Response('unexpected', { status: 404 })
   }) as typeof globalThis.fetch
