@@ -24,6 +24,7 @@ import { useAuthBootstrapQuery } from '../../lib/authQuery'
 import { useNotificationTagVisibilityClaim } from '../../lib/notificationTagVisibility'
 import { BackAwareModal as Modal } from '../BackAwareModal'
 import { Markdown } from '../Markdown'
+import { ImageLightbox } from '../ImageLightbox'
 import { ScrollableDialogBody, ScrollableModalDialog } from '../ScrollableDialog'
 import { SupportAttachmentsField } from '../SupportAttachmentsField'
 import { useSupportAttachmentDrafts } from '../../hooks/useSupportAttachmentDrafts'
@@ -253,6 +254,7 @@ function MessageBubble({
   viewer: SupportMessageSide
   base: string
 }) {
+  const [inlineImage, setInlineImage] = useState<{ src: string; filename: string } | null>(null)
   const own = message.side === viewer
   const context = [
     message.pageUrl ? { label: 'Page', value: message.pageUrl } : null,
@@ -270,7 +272,19 @@ function MessageBubble({
         color={own ? 'primary' : 'neutral'}
         sx={{ px: 1.25, py: 0.75, borderRadius: 'lg', maxWidth: '85%', ...(own ? { color: 'common.white' } : {}) }}
       >
-        <Markdown colorInherit={own} resolveUri={attachmentUriResolver(base)}>{message.body}</Markdown>
+        <Markdown
+          colorInherit={own}
+          resolveUri={attachmentUriResolver(base)}
+          onImageClick={(src, alt) => {
+            const attachment = message.attachments.find((candidate) =>
+              candidate.isImage
+              && buildApiUrl(`${base}/attachments/${encodeURIComponent(candidate.id)}`) === src
+            )
+            setInlineImage({ src, filename: attachment?.filename ?? (alt || 'Image') })
+          }}
+        >
+          {message.body}
+        </Markdown>
       </Sheet>
       <MessageAttachments
         attachments={message.attachments}
@@ -280,6 +294,15 @@ function MessageBubble({
           .filter((attachment) => message.body.includes(`attachment:${attachment.id}`))
           .map((attachment) => attachment.id))}
       />
+      {inlineImage && (
+        <ImageLightbox
+          src={inlineImage.src}
+          alt={inlineImage.filename}
+          title={inlineImage.filename}
+          downloadName={inlineImage.filename}
+          onClose={() => setInlineImage(null)}
+        />
+      )}
       {viewer === 'platform' && context.length > 0 && (
         <Stack direction="row" spacing={0.5} useFlexGap sx={{ flexWrap: 'wrap', maxWidth: '85%', justifyContent: own ? 'flex-end' : 'flex-start' }}>
           {context.map((entry) => (

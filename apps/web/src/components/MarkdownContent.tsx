@@ -15,7 +15,8 @@ import remarkGfm from 'remark-gfm'
 export default function MarkdownContent({
   children,
   colorInherit = false,
-  resolveUri
+  resolveUri,
+  onImageClick
 }: {
   children: string
   /** Inherit the surrounding text colour (e.g. inside a solid chat bubble). */
@@ -26,6 +27,7 @@ export default function MarkdownContent({
    * sanitizing transform. Unresolved custom schemes render as their alt text.
    */
   resolveUri?: (uri: string) => string | null
+  onImageClick?: (src: string, alt: string) => void
 }) {
   return (
     <Box
@@ -79,7 +81,18 @@ export default function MarkdownContent({
             <Link href={href} title={title} target="_blank" rel="noreferrer">
               {linkChildren}
             </Link>
-          )
+          ),
+          img: ({ node: _node, src, alt, title }) => onImageClick && src ? (
+            <Box
+              component="button"
+              type="button"
+              aria-label={`View ${alt || 'image'}`}
+              onClick={() => onImageClick(src, alt ?? '')}
+              sx={{ p: 0, border: 0, background: 'none', cursor: 'zoom-in', display: 'block' }}
+            >
+              <Box component="img" src={src} alt={alt ?? ''} title={title} />
+            </Box>
+          ) : <Box component="img" src={src} alt={alt ?? ''} title={title} />
         }}
       >
         {children}

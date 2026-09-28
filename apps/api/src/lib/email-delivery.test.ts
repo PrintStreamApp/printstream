@@ -36,7 +36,25 @@ test('sendEmail uses the first configured transport', async () => {
   assert.equal(await isEmailDeliveryConfigured(), true)
   await sendEmail({ to: 'a@b.co', subject: 'Hi', text: 'Body' })
   assert.equal(sink.length, 1)
-  assert.deepEqual(sink[0], { to: 'a@b.co', subject: 'Hi', text: 'Body' })
+  assert.equal(sink[0]?.to, 'a@b.co')
+  assert.equal(sink[0]?.subject, 'Hi')
+  assert.equal(sink[0]?.text, 'Body')
+  assert.match(sink[0]?.html ?? '', /<h1[^>]*>Hi<\/h1>/)
+  assert.match(sink[0]?.html ?? '', /printstream\.app\/icon-512\.png/)
+  assert.match(sink[0]?.html ?? '', /<p[^>]*>Body<\/p>/)
+  assert.match(sink[0]?.html ?? '', /href="https:\/\/printstream\.app"/)
+})
+
+test('plain-text fallback escapes HTML in the branded message', async () => {
+  const sink: EmailInput[] = []
+  emailTransportRegistry.clear()
+  emailTransportRegistry.register(fakeTransport('smtp', true, sink))
+
+  await sendEmail({ to: 'a@b.co', subject: '<Account>', text: '<script>alert(1)</script>' })
+
+  assert.match(sink[0]?.html ?? '', /&lt;Account&gt;/)
+  assert.match(sink[0]?.html ?? '', /&lt;script&gt;alert\(1\)&lt;\/script&gt;/)
+  assert.doesNotMatch(sink[0]?.html ?? '', /<script>/)
 })
 
 test('register returns a disposer that removes the transport', async () => {

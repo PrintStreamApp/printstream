@@ -13,6 +13,7 @@
 import { HttpError } from './http-error.js'
 import { isCloudflareEmailConfigured, sendCloudflareEmail } from './cloudflare-email.js'
 import { isSelfHostedDeployment } from './deployment-mode.js'
+import { emailTextToHtml, renderBrandedEmail } from './email-template.js'
 
 export interface EmailInput {
   to: string
@@ -74,7 +75,13 @@ export async function sendEmail(input: EmailInput): Promise<void> {
   if (!transport) {
     throw new HttpError(503, 'Email delivery is not configured.')
   }
-  await transport.send(input)
+  await transport.send({
+    ...input,
+    html: renderBrandedEmail({
+      title: input.subject,
+      bodyHtml: input.html ?? emailTextToHtml(input.text)
+    })
+  })
 }
 
 // Built-in Cloudflare transport: the cloud email path. It is treated as

@@ -14,6 +14,7 @@
 import type { NotificationMessage } from '@printstream/shared'
 import { env } from '../../lib/env.js'
 import { isEmailDeliveryConfigured, sendEmail } from '../../lib/email-delivery.js'
+import { emailActionButton, escapeEmailHtml } from '../../lib/email-template.js'
 import type { ApiPluginContext } from '../../plugin/types.js'
 import { messageNotificationScope } from '../../lib/notification-scope.js'
 import { readEmailSubscribers } from '../../lib/notification-subscribers.js'
@@ -92,13 +93,13 @@ async function resolvePlatformRecipients(context: ApiPluginContext, subscriberId
 }
 
 function buildEmailHtml(message: NotificationMessage): string {
-  const parts = [`<p>${escapeHtml(message.body)}</p>`]
+  const parts = [`<p style="margin:0 0 18px;color:#344153;font-size:16px;line-height:1.65;white-space:pre-wrap;">${escapeEmailHtml(message.body)}</p>`]
   const link = resolvePublicNotificationUrl(message.url)
   if (link) {
-    parts.push(`<p><a href="${escapeHtml(link)}">View in PrintStream</a></p>`)
+    parts.push(emailActionButton('View in PrintStream', link))
   }
   if (message.imageUrl && /^https?:\/\//i.test(message.imageUrl)) {
-    parts.push(`<p><img src="${escapeHtml(message.imageUrl)}" alt="Print snapshot" style="max-width:480px;border-radius:8px" /></p>`)
+    parts.push(`<p><img src="${escapeEmailHtml(message.imageUrl)}" alt="Print snapshot" style="max-width:100%;border-radius:8px" /></p>`)
   }
   return parts.join('')
 }
@@ -112,13 +113,4 @@ function resolvePublicNotificationUrl(path: string | undefined): string | undefi
   } catch {
     return undefined
   }
-}
-
-function escapeHtml(value: string): string {
-  return value
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;')
 }

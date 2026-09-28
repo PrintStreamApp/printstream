@@ -275,16 +275,19 @@ function useRemoteImportsController() {
     mutationFn: async ({
       provider,
       startUrl,
+      resume,
       openPrintSetup
     }: {
       provider: NativeModelProvider
       startUrl: string
+      resume?: boolean
       openPrintSetup: boolean
     }): Promise<NativeModelImportResult | null> => {
       if (!workspaceSlug) throw new Error('This model import is no longer available.')
       const nativeResult = await downloadAndImportFromModelProvider({
         provider,
         modelUrl: startUrl,
+        resume,
         workspace: workspaceSlug,
         bridgeId: destination.bridgeId || null,
         folderId: destination.folderId,
@@ -423,6 +426,7 @@ function useRemoteImportsController() {
   const startNativeImport = (input: {
     provider: NativeModelProvider
     startUrl: string
+    resume?: boolean
     openPrintSetup: boolean
   }) => {
     clearPreviousImportState()

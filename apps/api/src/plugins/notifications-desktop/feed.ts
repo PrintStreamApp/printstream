@@ -31,6 +31,7 @@ export class DesktopNotificationFeed {
   add(message: NotificationMessage): void {
     this.append(message.workspaceId ?? null, message.targetUserIds, {
       id: message.id, type: 'notification', tag: message.tag ?? message.id,
+      workspaceId: message.workspaceId ?? null,
       title: message.title.slice(0, 500), body: message.body.slice(0, 4000),
       url: message.url, imageUrl: message.imageUrl
     })
@@ -38,7 +39,10 @@ export class DesktopNotificationFeed {
 
   dismiss(message: { workspaceId: string | null; targetUserIds?: string[]; tag: string; notificationId?: string }): void {
     this.append(message.workspaceId, message.targetUserIds, {
-      id: randomUUID(), type: 'dismiss', tag: message.tag, notificationId: message.notificationId
+      id: randomUUID(), type: 'dismiss', tag: message.tag,
+      workspaceId: message.workspaceId,
+      crossScope: message.workspaceId === null && Boolean(message.targetUserIds?.length),
+      notificationId: message.notificationId
     })
   }
 

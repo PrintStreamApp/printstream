@@ -9,6 +9,10 @@ export const desktopNotificationEventSchema = z.object({
   id: z.string(),
   type: z.enum(['notification', 'dismiss']),
   tag: z.string(),
+  /** Owning scope, which may differ from the enrolled scope used to poll. */
+  workspaceId: z.string().nullable().optional(),
+  /** A personal dismissal can retract the same tag across enrolled scopes. */
+  crossScope: z.boolean().optional(),
   notificationId: z.string().optional(),
   title: z.string().optional(),
   body: z.string().optional(),

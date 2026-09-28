@@ -21,6 +21,7 @@ import { annotateRequestAuditLog } from '../../lib/audit-logs.js'
 import { createUserSession, setAuthSessionCookie } from '../../lib/auth-session.js'
 import { readAuthSessionMaxAgeSeconds } from '../../lib/auth-policy.js'
 import { isEmailDeliveryConfigured, sendEmail } from '../../lib/email-delivery.js'
+import { emailCodePanel, escapeEmailHtml } from '../../lib/email-template.js'
 import { badRequest, unauthorized } from '../../lib/http-error.js'
 import { clearWorkspaceContextCookie, setWorkspaceContextCookie } from '../../lib/workspace-context.js'
 import type { ApiPluginContext } from '../../plugin/types.js'
@@ -180,19 +181,10 @@ function buildResetText(code: string, expiresAt: Date): string {
 
 function buildResetHtml(code: string, expiresAt: Date): string {
   return [
-    '<p>Use this code to reset your PrintStream password:</p>',
-    `<p><strong style="font-size:1.5rem;letter-spacing:0.12em;font-family:ui-monospace,SFMono-Regular,Menlo,monospace">${escapeHtml(code)}</strong></p>`,
-    '<p>Enter it on the password reset screen along with your new password.</p>',
-    `<p>This code expires at ${escapeHtml(expiresAt.toUTCString())}.</p>`,
-    '<p>If you did not request a reset, you can ignore this email.</p>'
+    '<p style="margin:0 0 18px;color:#344153;font-size:16px;line-height:1.65;">Use this code to reset your PrintStream password:</p>',
+    emailCodePanel('Password reset code', code),
+    '<p style="margin:0 0 18px;color:#48566a;font-size:14px;line-height:1.6;">Enter it on the password reset screen along with your new password.</p>',
+    `<p style="margin:0 0 22px;color:#48566a;font-size:14px;line-height:1.6;">This code expires at ${escapeEmailHtml(expiresAt.toUTCString())}.</p>`,
+    '<p style="margin:0;padding-top:20px;border-top:1px solid #edf1f4;color:#6c798a;font-size:13px;line-height:1.55;">If you did not request a reset, you can ignore this email.</p>'
   ].join('')
-}
-
-function escapeHtml(value: string): string {
-  return value
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;')
 }

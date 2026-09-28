@@ -815,10 +815,13 @@ export function JobsView() {
                 disableIconModeOnMobile
               />
           )}
-          {historyTotalUnfiltered > 0 && historyTotal === 0 && (
-            <Typography level="body-sm" textColor="text.tertiary">
-              No job history matches the current search or filters.
-            </Typography>
+          {historyQuery.isSuccess && historyTotalUnfiltered > 0 && historyTotal === 0 && (
+            <EmptyState
+              compact
+              icon={<HistoryRoundedIcon />}
+              title="No matching job history"
+              description="Try a different search or clear the filters to see past jobs."
+            />
           )}
           {historyTotal > 0 && (
             <PaginatedSection

@@ -92,6 +92,7 @@ export function MessageAttachments({
           src={buildApiUrl(`${base}/attachments/${encodeURIComponent(lightbox.id)}`)}
           alt={lightbox.filename}
           title={lightbox.filename}
+          downloadName={lightbox.filename}
           onClose={() => setLightbox(null)}
         />
       )}

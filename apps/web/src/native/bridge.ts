@@ -33,6 +33,7 @@ interface ModelBrowserPlugin {
   downloadAndImport(options: {
     provider: NativeModelProvider
     modelUrl: string
+    resume?: boolean
     workspace: string
     bridgeId: string | null
     folderId: string | null

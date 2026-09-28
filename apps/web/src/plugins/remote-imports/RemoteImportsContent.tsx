@@ -79,6 +79,7 @@ export function RemoteImportsContent({ controller }: { controller: RemoteImports
                 startNativeImport({
                   provider,
                   startUrl: provider === 'makerworld' ? MAKERWORLD_BROWSE_URL : PRINTABLES_BROWSE_URL,
+                  resume: true,
                   openPrintSetup: false
                 })
               }}

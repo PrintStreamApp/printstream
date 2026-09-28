@@ -30,9 +30,25 @@ test('desktop feed starts fresh, replays reconnects and hides recipient metadata
   feed.dismiss({ workspaceId: 'a', targetUserIds: ['alice'], tag: 'thread' })
   const replay = feed.read('a', 'alice', initial.cursor)
   assert.deepEqual(replay.events.map((event) => event.type), ['notification', 'dismiss'])
+  assert.deepEqual(replay.events.map((event) => event.workspaceId), ['a', 'a'])
+  assert.equal(replay.events[1]?.crossScope, false)
   assert.equal('targetUserIds' in replay.events[0]!, false)
   assert.deepEqual(feed.read('a', 'alice', replay.cursor).events, [])
   assert.equal(feed.read('a', 'bob', initial.cursor).events.length, 0)
+})
+
+test('personal events retain one identity and advertise cross-scope dismissals', () => {
+  const feed = new DesktopNotificationFeed()
+  const cursor = feed.read('a', 'alice').cursor
+  feed.add(message('reply-1', { tag: 'support:thread', targetUserIds: ['alice'] }))
+  feed.dismiss({ workspaceId: null, targetUserIds: ['alice'], tag: 'support:thread', notificationId: 'reply-1' })
+
+  const first = feed.read('a', 'alice', cursor).events
+  const second = feed.read('b', 'alice', cursor).events
+  assert.deepEqual(first, second)
+  assert.deepEqual(first.map((event) => event.workspaceId), [null, null])
+  assert.equal(first[1]?.crossScope, true)
+  assert.equal(first[1]?.notificationId, 'reply-1')
 })
 
 test('desktop buffer expires on reads, caps count, and recovers after restart', () => {
