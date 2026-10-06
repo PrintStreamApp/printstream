@@ -35,6 +35,13 @@ export type SlicedArtifactMetadata = {
   filamentByProjectId: Map<number, FilamentMetadata>
 }
 
+/** Parse project settings from a 3MF entry, rejecting malformed non-object JSON. */
+export function parseProjectSettings(buffer: Buffer): Record<string, unknown> {
+  const parsed = JSON.parse(buffer.toString('utf8')) as unknown
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('3MF project_settings.config must be a JSON object')
+  return parsed as Record<string, unknown>
+}
+
 export function buildSlicedArtifactMetadata(
   request: CreateSlicingJob,
   profileFiles: SlicingPresetFile[]

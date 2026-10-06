@@ -1,4 +1,7 @@
-/** Pure palette helpers for the OBJ source-colour mapping dialog and its commit boundary. */
+/**
+ * Owns source-colour palette matching and the import commit plan shared by the dialog and editor.
+ * A plan predicts new project filament IDs before geometry and paint enter one history step.
+ */
 import type { StagedImportFormat } from '@printstream/shared'
 import type { QuantizedSourceColors } from '@printstream/shared/three-mf'
 import type { FilamentOption } from '../../../components/library/PlateGcodeSections'
@@ -12,6 +15,16 @@ export interface SourceColorImportChoice {
   quantized: QuantizedSourceColors
   mappings: SourceColorMapping[]
 }
+
+export interface PlannedSourceFilament {
+  optionId: string
+  color: string
+  label: string
+}
+
+export type SourceColorImportPlan =
+  | { ok: true; filamentIds: number[]; baseFilamentId: number; appended: PlannedSourceFilament[] }
+  | { ok: false; error: string }
 
 /** Whether a staged import retained source appearance that needs filament mapping. */
 export function shouldMapSourceColors(sourceColorMode: SourceColorMode | undefined): sourceColorMode is SourceColorMode {
@@ -62,6 +75,55 @@ export function matchSourceColorsToFilaments(
     }
     return best
   })
+}
+
+/**
+ * Resolve a dialog choice against the current project before committing geometry or paint.
+ * Appended IDs mirror the material controller's sequential allocation, so the caller must
+ * append filaments in this order after taking one combined history snapshot.
+ */
+export function planSourceColorImport(
+  choice: SourceColorImportChoice,
+  filaments: readonly FilamentOption[],
+  materialOptionIds: Readonly<Record<number, string>> | null
+): SourceColorImportPlan {
+  const nearestExisting = matchSourceColorsToFilaments(choice.quantized, filaments)
+  let nextFilamentId = Math.max(0, ...filaments.map((option) => option.id))
+  const filamentIds: number[] = []
+  const appended: PlannedSourceFilament[] = []
+
+  for (const [index, mapping] of choice.mappings.entries()) {
+    if (mapping !== APPEND_SOURCE_COLOR) {
+      filamentIds.push(mapping)
+      continue
+    }
+
+    const templateId = nearestExisting[index]
+    const template = filaments.find((option) => option.id === templateId)
+    const optionId = templateId == null ? undefined : materialOptionIds?.[templateId]
+    const cluster = choice.quantized.clusters[index]
+    if (!template || !optionId || !cluster) {
+      return { ok: false, error: 'A matching material preset is needed before a new filament can be appended.' }
+    }
+
+    nextFilamentId += 1
+    appended.push({
+      optionId,
+      color: sourceColorHex(cluster.color),
+      label: template.label ?? 'PLA'
+    })
+    filamentIds.push(nextFilamentId)
+  }
+
+  if (nextFilamentId > 255) {
+    return { ok: false, error: 'This colour mapping would exceed the project limit of 255 filaments.' }
+  }
+  const baseFilamentId = filamentIds[0] ?? filaments[0]?.id
+  if (baseFilamentId == null) {
+    return { ok: false, error: 'Add a material to the project before importing this model.' }
+  }
+
+  return { ok: true, filamentIds, baseFilamentId, appended }
 }
 
 /** Convert a normalized source palette colour into the project's CSS/persisted hex form. */

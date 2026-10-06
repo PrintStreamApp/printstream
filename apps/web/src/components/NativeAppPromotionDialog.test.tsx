@@ -55,7 +55,7 @@ test('opens the cross-platform app downloads from the Windows offer', async () =
 })
 
 test('stays silent without a sign-in signal', async () => {
-  const { fireEvent, screen } = await import('@testing-library/react')
+  const { screen } = await import('@testing-library/react')
 
   await renderDialog()
 

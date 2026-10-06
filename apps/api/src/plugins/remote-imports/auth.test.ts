@@ -651,6 +651,33 @@ test('remote imports accept browser-assisted file uploads', async () => {
   assert.equal(calls[0]?.fileName, 'upload.gcode')
 })
 
+test('browser-assisted uploads reject ambiguous multipart destination fields', async () => {
+  const { calls, persist } = recordingPersist()
+  const plugin = createRemoteImportsPlugin({ persistLibraryFile: persist })
+
+  await withRemoteImportsApp({
+    authEnabled: true,
+    actor: { type: 'user', userId: 'user-1' },
+    permissions: [LIBRARY_UPLOAD_PERMISSION],
+    runtimePolicy: { demoMode: false }
+  }, async ({ baseUrl }) => {
+    const body = new FormData()
+    body.append('file', new Blob(['mesh']), 'upload.gcode')
+    body.append('bridgeId', 'bridge-upload')
+    body.append('folderId', 'folder-one')
+    body.append('folderId', 'folder-two')
+
+    const response = await fetch(`${baseUrl}/api/plugins/remote-imports/import-upload`, {
+      method: 'POST',
+      body
+    })
+
+    assert.equal(response.status, 400)
+  }, plugin)
+
+  assert.equal(calls.length, 0)
+})
+
 // A chosen folder must be used as-is: creating `Imported models` alongside it would
 // leave an empty folder behind on every import that named a destination.
 test('an import into a chosen folder does not create the default folder', async () => {

@@ -7,10 +7,11 @@
  * Self-healing by design: it reconnects on every failure, clears and re-registers
  * when stored credentials are rejected, and exits (for the supervisor to restart)
  * after an accepted update. Update mechanics are delegated to a `BridgeUpdateDriver`
- * so this module stays packaging-agnostic (Docker image-pull vs standalone self-update).
+ * so this module stays packaging-agnostic (slim Docker bundle update, combined-image pull,
+ * or standalone executable self-update).
  */
 import { setTimeout as delay } from 'node:timers/promises'
-import { readFile, stat } from 'node:fs/promises'
+import { readFile } from 'node:fs/promises'
 import WebSocket from 'ws'
 import {
   bridgeBambuCloudRequestParamsSchema,
@@ -24,45 +25,12 @@ import {
   bridgeUpdateCheckParamsSchema,
   bridgeUpdateActionResultSchema,
   bridgeUpdateInstallParamsSchema,
-  bridgeLibraryCopyParamsSchema,
   bridgeCameraSnapshotParamsSchema,
-  bridgeLibraryDeleteParamsSchema,
-  bridgeLibraryInspect3mfParamsSchema,
-  bridgeLibraryReadChunkParamsSchema,
-  bridgeLibraryReadChunkResultSchema,
-  bridgeLibraryStatParamsSchema,
-  bridgeLibraryStatResultSchema,
-  bridgeLibraryInspect3mfResultSchema,
-  bridgeLibraryReadParamsSchema,
-  bridgeLibraryReadThumbnailParamsSchema,
-  bridgeLibraryReadThumbnailResultSchema,
   bridgePrinterValidationParamsSchema,
   bridgePrinterValidationResultSchema,
-  bridgeLibraryStoreChunkParamsSchema,
-  bridgeLibraryStoreStartParamsSchema,
-  bridgeLibraryStoreParamsSchema,
-  bridgeStorageDeleteParamsSchema,
-  bridgeStorageDownloadParamsSchema,
-  bridgeStorageFileSizeParamsSchema,
-  bridgeStorageListParamsSchema,
-  bridgeStorageUploadLibraryPlateParamsSchema,
-  bridgeStorageReadZipEntriesParamsSchema,
-  bridgeStorageRenameParamsSchema,
-  bridgeStorageUploadLibraryParamsSchema,
-  bridgeStorageUploadParamsSchema,
   bridgeRuntimeHelloMessageSchema,
   bridgeRuntimeOutboundMessageSchema,
   bridgeRuntimeRegistrationResponseSchema,
-  bridgeDebugCaptureStartParamsSchema,
-  bridgeDebugCaptureStopParamsSchema,
-  bridgeDebugCaptureReadParamsSchema,
-  bridgeDebugCaptureReadResultSchema,
-  bridgeDebugCaptureStatusResultSchema,
-  bridgeBackupRunParamsSchema,
-  bridgeBackupListParamsSchema,
-  bridgeBackupListResultSchema,
-  bridgeBackupStatusResultSchema,
-  createAbortError,
   type BridgeRuntimeInboundMessage,
   type Printer,
   type BridgeUpdateActionResult,
@@ -71,21 +39,11 @@ import {
   type BridgeCrashReport
 } from '@printstream/shared'
 import {
-  deletePrinterDirectory,
-  deletePrinterFile,
-  downloadFileFromPrinter,
-  downloadFileFromPrinterOffset,
   fetchSnapshot,
-  getPrinterFileSize,
   isFtpActivityActive,
   PrinterDiscovery,
-  listPrinterDirectory,
-  listPrinterDirectoryRecursive,
   onFtpActivityChange,
-  readRemoteZipEntries,
-  renamePrinterPath,
   streamFrames,
-  uploadFileToPrinterPath,
   validatePrinterLanConnection
 } from '@printstream/bridge-runtime'
 import { env } from './env.js'
@@ -93,42 +51,22 @@ import { getBridgeLogs, installBridgeLogCapture } from './bridge-logs.js'
 import {
   getCaptureStatus,
   onCaptureStatusChange,
-  readCapture,
   recordCaptureFrame,
-  startCapture,
-  stopCapture
 } from './debug-capture.js'
 import {
   getBridgeBackupStatus,
   initBridgeBackups,
-  listBridgeBackupSnapshots,
   onBridgeBackupStatusChange,
-  startBridgeBackup
 } from './backup-manager.js'
-import {
-  appendBridgeLibraryFileChunk,
-  copyBridgeLibraryFile,
-  deleteBridgeLibraryFile,
-  locateBridgeLibraryFile,
-  readBridgeLibraryFile,
-  readBridgeLibraryFileChunk,
-  startBridgeLibraryFileWrite,
-  statBridgeLibraryFile,
-  writeBridgeLibraryFile
-} from './library-storage.js'
-import {
-  createSinglePlateBridgeThreeMf,
-  readBridgeLibraryThreeMfIndex,
-  readBridgeLibraryThumbnail
-} from './library-3mf.js'
-import { THREE_MF_INDEX_PARSER_VERSION } from '@printstream/shared/three-mf'
+import { handleLibraryRpc } from './library-rpc.js'
+import { handleStorageRpc } from './storage-rpc.js'
+import { handleBackupRpc } from './backup-rpc.js'
+import { handleDebugCaptureRpc } from './debug-capture-rpc.js'
 import { performBambuCloudRequest } from './bambu-cloud-relay.js'
 import { BridgePrinterMonitor } from './printer-monitor.js'
 import { collectBridgeMetrics, recordApiReconnect } from './bridge-metrics.js'
 import { clearBridgeCredentials, loadBridgeState, writeBridgeState, type BridgeState } from './state-store.js'
 import { initCrashTracker, installBridgeCrashHandlers, markCleanShutdown } from './crash-tracker.js'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
 import path from 'node:path'
 import type { BridgeUpdateDriver } from './update-driver.js'
 import { createImagePullUpdateDriver } from './update-driver-imagepull.js'
@@ -684,55 +622,15 @@ export class BridgeRuntimeClient {
         return
       }
 
-      if (request.method === 'debug.capture.start') {
-        const params = bridgeDebugCaptureStartParamsSchema.parse(request.params)
-        socket.send(JSON.stringify({
-          type: 'bridge.rpc.success',
-          id: request.id,
-          result: bridgeDebugCaptureStatusResultSchema.parse(startCapture(params))
-        }))
+      const captureResult = handleDebugCaptureRpc(request.method, request.params)
+      if (captureResult.handled) {
+        socket.send(JSON.stringify({ type: 'bridge.rpc.success', id: request.id, result: captureResult.result }))
         return
       }
 
-      if (request.method === 'debug.capture.stop') {
-        bridgeDebugCaptureStopParamsSchema.parse(request.params)
-        socket.send(JSON.stringify({
-          type: 'bridge.rpc.success',
-          id: request.id,
-          result: bridgeDebugCaptureStatusResultSchema.parse(stopCapture('manual'))
-        }))
-        return
-      }
-
-      if (request.method === 'debug.capture.read') {
-        bridgeDebugCaptureReadParamsSchema.parse(request.params)
-        socket.send(JSON.stringify({
-          type: 'bridge.rpc.success',
-          id: request.id,
-          result: bridgeDebugCaptureReadResultSchema.parse(readCapture())
-        }))
-        return
-      }
-
-      if (request.method === 'bridge.backup.run') {
-        bridgeBackupRunParamsSchema.parse(request.params)
-        // Starts the run and answers immediately; completion is pushed as a
-        // `bridge.backup.status` message (a full backup outlives RPC timeouts).
-        socket.send(JSON.stringify({
-          type: 'bridge.rpc.success',
-          id: request.id,
-          result: bridgeBackupStatusResultSchema.parse(startBridgeBackup('manual'))
-        }))
-        return
-      }
-
-      if (request.method === 'bridge.backup.list') {
-        bridgeBackupListParamsSchema.parse(request.params)
-        socket.send(JSON.stringify({
-          type: 'bridge.rpc.success',
-          id: request.id,
-          result: bridgeBackupListResultSchema.parse({ snapshots: await listBridgeBackupSnapshots() })
-        }))
+      const backupResult = await handleBackupRpc(request.method, request.params)
+      if (backupResult.handled) {
+        socket.send(JSON.stringify({ type: 'bridge.rpc.success', id: request.id, result: backupResult.result }))
         return
       }
 
@@ -762,230 +660,27 @@ export class BridgeRuntimeClient {
         return
       }
 
-      if (request.method === 'storage.list') {
-        const parsed = bridgeStorageListParamsSchema.parse(request.params)
-        const entries = parsed.recursive
-          ? await listPrinterDirectoryRecursive(parsed.printer, parsed.path, parsed.maxDepth)
-          : await listPrinterDirectory(parsed.printer, parsed.path)
+      const storageResult = await handleStorageRpc(
+        request.method,
+        request.params,
+        abortController.signal,
+        (bytesSent, totalBytes) => sendBridgeRpcProgress(socket, request.id, bytesSent, totalBytes)
+      )
+      if (storageResult.handled) {
         socket.send(JSON.stringify({
           type: 'bridge.rpc.success',
           id: request.id,
-          result: { entries }
+          result: storageResult.result
         }))
         return
       }
 
-      if (request.method === 'storage.upload') {
-        const parsed = bridgeStorageUploadParamsSchema.parse(request.params)
-        const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-bridge-upload-'))
-        const tempFile = path.join(tempDir, 'upload.bin')
-        try {
-          sendBridgeRpcProgress(socket, request.id, 0, null)
-          await writeFile(tempFile, Buffer.from(parsed.fileBase64, 'base64'))
-          throwIfAborted(abortController.signal)
-          const info = await stat(tempFile)
-          const reportProgress = createBridgeRpcProgressReporter(socket, request.id, info.size)
-          reportProgress(0)
-          const uploadedPath = await uploadFileToPrinterPath(parsed.printer, tempFile, parsed.remotePath, reportProgress, { signal: abortController.signal })
-          socket.send(JSON.stringify({
-            type: 'bridge.rpc.success',
-            id: request.id,
-            result: { path: uploadedPath, sizeBytes: info.size }
-          }))
-        } finally {
-          await rm(tempDir, { recursive: true, force: true }).catch(() => undefined)
-        }
-        return
-      }
-
-      if (request.method === 'storage.uploadLibraryFile') {
-        const parsed = bridgeStorageUploadLibraryParamsSchema.parse(request.params)
-        sendBridgeRpcProgress(socket, request.id, 0, null)
-        const localPath = await locateBridgeLibraryFile(parsed.storedPath)
-        throwIfAborted(abortController.signal)
-        const info = await stat(localPath)
-        const reportProgress = createBridgeRpcProgressReporter(socket, request.id, info.size)
-        reportProgress(0)
-        const uploadedPath = await uploadFileToPrinterPath(
-          parsed.printer,
-          localPath,
-          parsed.remotePath,
-          reportProgress,
-          { signal: abortController.signal }
-        )
+      const libraryResult = await handleLibraryRpc(request.method, request.params)
+      if (libraryResult.handled) {
         socket.send(JSON.stringify({
           type: 'bridge.rpc.success',
           id: request.id,
-          result: { path: uploadedPath, sizeBytes: info.size }
-        }))
-        return
-      }
-
-      if (request.method === 'storage.uploadLibraryPlateFile') {
-        const parsed = bridgeStorageUploadLibraryPlateParamsSchema.parse(request.params)
-        const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-bridge-plate-'))
-        const tempFile = path.join(tempDir, path.basename(parsed.remotePath))
-        try {
-          sendBridgeRpcProgress(socket, request.id, 0, null)
-          await createSinglePlateBridgeThreeMf(await locateBridgeLibraryFile(parsed.storedPath), tempFile, parsed.plate)
-          throwIfAborted(abortController.signal)
-          const info = await stat(tempFile)
-          const reportProgress = createBridgeRpcProgressReporter(socket, request.id, info.size)
-          reportProgress(0)
-          const uploadedPath = await uploadFileToPrinterPath(parsed.printer, tempFile, parsed.remotePath, reportProgress, { signal: abortController.signal })
-          socket.send(JSON.stringify({
-            type: 'bridge.rpc.success',
-            id: request.id,
-            result: { path: uploadedPath, sizeBytes: info.size }
-          }))
-        } finally {
-          await rm(tempDir, { recursive: true, force: true }).catch(() => undefined)
-        }
-        return
-      }
-
-      if (request.method === 'storage.download') {
-        const parsed = bridgeStorageDownloadParamsSchema.parse(request.params)
-        const buffer = parsed.remotePath
-          ? await downloadFileFromPrinterOffset(parsed.printer, parsed.remotePath, parsed.startAt ?? 0, undefined, {
-              signal: abortController.signal,
-              maxBytes: parsed.maxBytes,
-              truncateAtMaxBytes: parsed.truncateAtMaxBytes
-            })
-          : await downloadFileFromPrinter(parsed.printer, parsed.candidates ?? [], undefined, {
-              signal: abortController.signal,
-              maxBytes: parsed.maxBytes,
-              truncateAtMaxBytes: parsed.truncateAtMaxBytes
-            })
-        socket.send(JSON.stringify({
-          type: 'bridge.rpc.success',
-          id: request.id,
-          result: {
-            bufferBase64: buffer ? buffer.toString('base64') : null
-          }
-        }))
-        return
-      }
-
-      if (request.method === 'storage.fileSize') {
-        const parsed = bridgeStorageFileSizeParamsSchema.parse(request.params)
-        const sizeBytes = await getPrinterFileSize(parsed.printer, parsed.remotePath, {
-          signal: abortController.signal
-        })
-        socket.send(JSON.stringify({
-          type: 'bridge.rpc.success',
-          id: request.id,
-          result: { sizeBytes }
-        }))
-        return
-      }
-
-      if (request.method === 'storage.readZipEntries') {
-        const parsed = bridgeStorageReadZipEntriesParamsSchema.parse(request.params)
-        const result = await readRemoteZipEntries(parsed.printer, parsed.remotePath, parsed.entryPaths, {
-          signal: abortController.signal,
-          tailScanBytes: parsed.tailScanBytes,
-          maxSuffixBytes: parsed.maxSuffixBytes
-        })
-        const entriesRecord: Record<string, string> = {}
-        for (const [entryPath, buffer] of result.entries) {
-          entriesRecord[entryPath] = buffer.toString('base64')
-        }
-        socket.send(JSON.stringify({
-          type: 'bridge.rpc.success',
-          id: request.id,
-          result: {
-            entries: entriesRecord,
-            remoteSize: result.remoteSize,
-            bytesRead: result.bytesRead
-          }
-        }))
-        return
-      }
-
-      if (request.method === 'storage.rename') {
-        const parsed = bridgeStorageRenameParamsSchema.parse(request.params)
-        await renamePrinterPath(parsed.printer, parsed.fromPath, parsed.toPath)
-        socket.send(JSON.stringify({
-          type: 'bridge.rpc.success',
-          id: request.id,
-          result: null
-        }))
-        return
-      }
-
-      if (request.method === 'storage.delete') {
-        const parsed = bridgeStorageDeleteParamsSchema.parse(request.params)
-        if (parsed.type === 'directory') {
-          await deletePrinterDirectory(parsed.printer, parsed.path)
-        } else {
-          await deletePrinterFile(parsed.printer, parsed.path)
-        }
-        socket.send(JSON.stringify({
-          type: 'bridge.rpc.success',
-          id: request.id,
-          result: null
-        }))
-        return
-      }
-
-      if (request.method === 'library.store') {
-        const parsed = bridgeLibraryStoreParamsSchema.parse(request.params)
-        await writeBridgeLibraryFile(parsed.storedPath, Buffer.from(parsed.fileBase64, 'base64'))
-        socket.send(JSON.stringify({
-          type: 'bridge.rpc.success',
-          id: request.id,
-          result: null
-        }))
-        return
-      }
-
-      if (request.method === 'library.storeStart') {
-        const parsed = bridgeLibraryStoreStartParamsSchema.parse(request.params)
-        await startBridgeLibraryFileWrite(parsed.storedPath)
-        socket.send(JSON.stringify({
-          type: 'bridge.rpc.success',
-          id: request.id,
-          result: null
-        }))
-        return
-      }
-
-      if (request.method === 'library.storeChunk') {
-        const parsed = bridgeLibraryStoreChunkParamsSchema.parse(request.params)
-        await appendBridgeLibraryFileChunk(parsed.storedPath, Buffer.from(parsed.chunkBase64, 'base64'))
-        socket.send(JSON.stringify({
-          type: 'bridge.rpc.success',
-          id: request.id,
-          result: null
-        }))
-        return
-      }
-
-      if (request.method === 'library.read') {
-        const parsed = bridgeLibraryReadParamsSchema.parse(request.params)
-        const buffer = await readBridgeLibraryFile(parsed.storedPath)
-        socket.send(JSON.stringify({
-          type: 'bridge.rpc.success',
-          id: request.id,
-          result: {
-            bufferBase64: buffer ? buffer.toString('base64') : null
-          }
-        }))
-        return
-      }
-
-      if (request.method === 'library.readChunk') {
-        const parsed = bridgeLibraryReadChunkParamsSchema.parse(request.params)
-        const chunk = await readBridgeLibraryFileChunk(parsed.storedPath, parsed.offset, parsed.maxBytes)
-        socket.send(JSON.stringify({
-          type: 'bridge.rpc.success',
-          id: request.id,
-          result: bridgeLibraryReadChunkResultSchema.parse({
-            bufferBase64: chunk ? chunk.buffer.toString('base64') : null,
-            eof: chunk?.eof ?? true,
-            sizeBytes: chunk?.sizeBytes
-          })
+          result: libraryResult.result
         }))
         return
       }
@@ -998,68 +693,6 @@ export class BridgeRuntimeClient {
           result: bridgeBambuCloudRequestResultSchema.parse(
             await performBambuCloudRequest(parsed, abortController.signal)
           )
-        }))
-        return
-      }
-
-      if (request.method === 'library.inspect3mf') {
-        const parsed = bridgeLibraryInspect3mfParamsSchema.parse(request.params)
-        const index = await readBridgeLibraryThreeMfIndex(await locateBridgeLibraryFile(parsed.storedPath))
-        socket.send(JSON.stringify({
-          type: 'bridge.rpc.success',
-          id: request.id,
-          // Report the parser version this index was built with: the API re-parses locally when
-          // this bridge lags behind its own parser, instead of caching an incomplete index.
-          result: bridgeLibraryInspect3mfResultSchema.parse({ index, parserVersion: THREE_MF_INDEX_PARSER_VERSION })
-        }))
-        return
-      }
-
-      if (request.method === 'library.stat') {
-        const parsed = bridgeLibraryStatParamsSchema.parse(request.params)
-        const info = await statBridgeLibraryFile(parsed.storedPath)
-        socket.send(JSON.stringify({
-          type: 'bridge.rpc.success',
-          id: request.id,
-          result: bridgeLibraryStatResultSchema.parse(info)
-        }))
-        return
-      }
-
-      if (request.method === 'library.copy') {
-        const parsed = bridgeLibraryCopyParamsSchema.parse(request.params)
-        await copyBridgeLibraryFile(parsed.sourceStoredPath, parsed.targetStoredPath)
-        socket.send(JSON.stringify({
-          type: 'bridge.rpc.success',
-          id: request.id,
-          result: null
-        }))
-        return
-      }
-
-      if (request.method === 'library.readThumbnail') {
-        const parsed = bridgeLibraryReadThumbnailParamsSchema.parse(request.params)
-        const png = await readBridgeLibraryThumbnail(
-          await locateBridgeLibraryFile(parsed.storedPath),
-          parsed.plateIndex ?? null
-        )
-        socket.send(JSON.stringify({
-          type: 'bridge.rpc.success',
-          id: request.id,
-          result: bridgeLibraryReadThumbnailResultSchema.parse({
-            pngBase64: png ? png.toString('base64') : null
-          })
-        }))
-        return
-      }
-
-      if (request.method === 'library.delete') {
-        const parsed = bridgeLibraryDeleteParamsSchema.parse(request.params)
-        await deleteBridgeLibraryFile(parsed.storedPath)
-        socket.send(JSON.stringify({
-          type: 'bridge.rpc.success',
-          id: request.id,
-          result: null
         }))
         return
       }
@@ -1342,22 +975,6 @@ export class BridgeRuntimeClient {
   }
 }
 
-function createBridgeRpcProgressReporter(socket: WebSocket, requestId: string, totalBytes: number): (bytesSent: number) => void {
-  let lastReportedBytes = -1
-
-  return (bytesSent) => {
-    const clampedBytes = Math.max(0, Math.min(totalBytes, Math.round(bytesSent)))
-    if (clampedBytes === lastReportedBytes) return
-    lastReportedBytes = clampedBytes
-    socket.send(JSON.stringify({
-      type: 'bridge.rpc.progress',
-      id: requestId,
-      bytesSent: clampedBytes,
-      totalBytes
-    }))
-  }
-}
-
 function sendBridgeRpcProgress(socket: WebSocket, requestId: string, bytesSent: number, totalBytes: number | null): void {
   socket.send(JSON.stringify({
     type: 'bridge.rpc.progress',
@@ -1365,10 +982,6 @@ function sendBridgeRpcProgress(socket: WebSocket, requestId: string, bytesSent: 
     bytesSent,
     totalBytes
   }))
-}
-
-function throwIfAborted(signal: AbortSignal): void {
-  if (signal.aborted) throw createAbortError('Bridge RPC cancelled')
 }
 
 function buildWebSocketUrl(baseUrl: string, connectPath: string): string {

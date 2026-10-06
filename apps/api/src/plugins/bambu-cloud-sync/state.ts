@@ -159,9 +159,9 @@ const connectionSchema = z.object({
    */
   ignoredRemoteSettingIds: z.array(z.string()).default([]),
   /**
-   * What the last CHECK found, and when. Written by `checkBambuCloudSync` (the background
-   * pass and the explicit refresh) so a surface can show whether anything is outstanding
-   * without making a Bambu call of its own, an editor open must not cost an API request.
+   * What the last on-open CHECK found, and when. Written by `checkBambuCloudSync`
+   * so status can replay it without another Bambu call. A completed sync clears it:
+   * the next check must recompute what remains, including skipped or failed presets.
    * Distinct from `lastSyncedAt`, which records the last time work was actually done.
    */
   lastCheck: z.object({

@@ -8,6 +8,7 @@ import { Prisma } from '@prisma/client'
 import { prisma } from './prisma.js'
 import { bridgeSessionManager } from './bridge-session-manager.js'
 import {
+  buildLibraryStoredPath,
   deleteLibraryFolderTree,
   discardHiddenSlicedOutput,
   ensureLibraryFolderPath,
@@ -17,6 +18,19 @@ import {
 import { usePrismaStubs, type PrismaStubber } from '../test-utils/prisma-stubs.js'
 
 const stub = usePrismaStubs()
+
+test('library storage paths do not collide for the same name within one millisecond', () => {
+  const originalNow = Date.now
+  Date.now = () => 1_700_000_000_000
+  try {
+    const first = buildLibraryStoredPath('Project 1.3mf')
+    const second = buildLibraryStoredPath('Project 1.3mf')
+    assert.notEqual(first, second)
+    assert.match(first, /^1700000000000-[0-9a-f]{8}-Project_1\.3mf$/)
+  } finally {
+    Date.now = originalNow
+  }
+})
 
 test('ensureLibraryFolderPath returns the base folder unchanged for an empty segment list', async () => {
   const folderId = await ensureLibraryFolderPath({

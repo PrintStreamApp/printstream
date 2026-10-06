@@ -25,6 +25,7 @@ import { fileURLToPath } from 'node:url'
 
 const source = readFileSync(fileURLToPath(new URL('./useEditorSave.ts', import.meta.url)), 'utf8')
 const editorViewSource = readFileSync(fileURLToPath(new URL('./EditorView.tsx', import.meta.url)), 'utf8')
+const preparationSource = readFileSync(fileURLToPath(new URL('./useEditorPreparation.ts', import.meta.url)), 'utf8')
 const sliceDialogSource = readFileSync(fileURLToPath(new URL('../../components/library/SliceFileModal.tsx', import.meta.url)), 'utf8')
 const libraryViewSource = readFileSync(fileURLToPath(new URL('../../pages/LibraryView.tsx', import.meta.url)), 'utf8')
 const saveTargetSource = readFileSync(fileURLToPath(new URL('./lib/editorSaveTarget.ts', import.meta.url)), 'utf8')
@@ -81,7 +82,8 @@ test('an editor-born project slices the library file it adopted on first save', 
   // editor boundary so job lineage, output naming, and destination do not fall back to that stale
   // scaffold after the editor adopts its first save without re-mounting.
   assert.match(saveTargetSource, /libraryFile: uploaded\.file/)
-  assert.match(editorViewSource, /savedFile\?\.libraryFile \? \{ sourceFile: savedFile\.libraryFile \}/)
+  assert.match(editorViewSource, /save: editorSave/)
+  assert.match(preparationSource, /sourceFile: savedFile\?\.libraryFile/)
   assert.match(sliceDialogSource, /const sourceFile = opts\.sourceFile \?\? file/)
   assert.match(sliceDialogSource, /onSubmit\(input, 'slice', \{ keepDialogOpen: true, sourceFile \}\)/)
   assert.match(libraryViewSource, /file: options\?\.sourceFile \?\? sliceTarget/)

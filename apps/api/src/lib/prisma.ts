@@ -279,7 +279,7 @@ export const prisma: PrismaClient = basePrisma.$extends({
           // handler, startup). Callers in those paths should use
           // rootPrisma explicitly. Log a warning so accidental bypasses
           // are visible in dev/staging.
-          if (process.env.NODE_ENV !== 'production') {
+          if (env.NODE_ENV !== 'production') {
             console.warn(
               `[prisma] workspace-scoped model ${model}.${operation} called without a workspace request context. ` +
               'Use rootPrisma for deliberate platform-wide operations.'
@@ -342,7 +342,7 @@ export const prisma: PrismaClient = basePrisma.$extends({
 export type WorkspaceScopedPrismaClient = typeof prisma
 export type AnyPrismaClient = PrismaClient | WorkspaceScopedPrismaClient
 
-if (process.env.NODE_ENV !== 'production') {
+if (env.NODE_ENV !== 'production') {
   globalForPrisma.prisma = basePrisma
 }
 

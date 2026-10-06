@@ -102,6 +102,24 @@ test('text with no outlines yields nothing rather than an empty part', async () 
   assert.equal(buildTextSoup(font, { ...OPTIONS, text: '' }).length, 0)
 })
 
+test('flat and surface text do not warn when extrusion is already non-indexed', async () => {
+  const loadedFont = await loadFont()
+  const warnings: string[] = []
+  const originalWarn = console.warn
+  console.warn = (...args: unknown[]) => { warnings.push(args.join(' ')) }
+  try {
+    buildTextSoup(loadedFont, OPTIONS)
+    buildSurfaceTextSoup(loadedFont, OPTIONS, [{
+      position: { x: 0, y: 0, z: 0 },
+      normal: { x: 0, y: 0, z: 1 },
+      tangent: { x: 1, y: 0, z: 0 }
+    }])
+  } finally {
+    console.warn = originalWarn
+  }
+  assert.deepEqual(warnings, [])
+})
+
 test('every bundled face loads and produces geometry', async () => {
   for (const file of ['dejavu-sans.ttf', 'dejavu-sans-bold.ttf', 'dejavu-serif.ttf',
     'dejavu-serif-bold.ttf', 'dejavu-mono.ttf', 'dejavu-mono-bold.ttf']) {

@@ -14,6 +14,7 @@
  */
 import type { ThreeMfSettingsRepairReason } from '@printstream/shared'
 import type { LibraryFile } from '@printstream/shared'
+import type { ThreeMfIndex } from './three-mf.js'
 import { THREE_MF_INDEX_PARSER_VERSION } from '@printstream/shared/three-mf'
 
 /** Parser version the persisted chips were built with; a bump invalidates them. */
@@ -43,6 +44,102 @@ export interface DerivedChips {
   projectVersion?: string | null
   /** Sliced for a Filament Track Switch machine; must not print on one without it. */
   slicedWithFilamentTrackSwitch?: boolean
+}
+
+/** Derive the cached library chip bundle from a parsed 3MF index. */
+export function deriveChips(index: ThreeMfIndex): DerivedChips {
+  // A geometry-only 3MF's plates are fabricated placeholders (see the shared index
+  // parser), so a plate count would be a lie: report none and carry the flag so the
+  // web renders the file like STL/STEP instead of a project.
+  if (index.geometryOnly) {
+    return { plateCount: 0, compatiblePrinterModels: [], plateTypeChips: [], nozzleSizeChips: [], projectFilamentChips: [], geometryOnly: true }
+  }
+  return {
+    plateCount: index.plates.length,
+    compatiblePrinterModels: index.compatiblePrinterModels,
+    plateTypeChips: collectPlateTypeChips(index),
+    nozzleSizeChips: collectNozzleSizeChips(index),
+    projectFilamentChips: collectProjectFilamentChips(index),
+    ...(index.objectExport ? { objectExport: true } : {}),
+    ...(index.needsSettingsRepair ? { needsSettingsRepair: true } : {}),
+    ...(index.settingsRepairReasons?.length ? { settingsRepairReasons: index.settingsRepairReasons } : {}),
+    ...(index.unrepairableSettingsRepairReasons?.length ? { unrepairableSettingsRepairReasons: index.unrepairableSettingsRepairReasons } : {}),
+    ...(index.projectVersion ? { projectVersion: index.projectVersion } : {}),
+    ...(index.slicedWithFilamentTrackSwitch ? { slicedWithFilamentTrackSwitch: true } : {})
+  }
+}
+
+function collectPlateTypeChips(index: {
+  plates: Array<{ plateType: string | null }>
+}): LibraryFile['plateTypeChips'] {
+  const seen = new Set<string>()
+  const ordered: LibraryFile['plateTypeChips'] = []
+  for (const plate of index.plates) {
+    const label = plate.plateType?.trim() ?? ''
+    if (!label || seen.has(label)) continue
+    seen.add(label)
+    ordered.push(label)
+  }
+  return ordered
+}
+
+function collectNozzleSizeChips(index: {
+  plates: Array<{ nozzleSizes: string[] }>
+}): LibraryFile['nozzleSizeChips'] {
+  const seen = new Set<string>()
+  const ordered: LibraryFile['nozzleSizeChips'] = []
+  for (const plate of index.plates) {
+    for (const size of plate.nozzleSizes) {
+      const label = `${size} mm`
+      if (seen.has(label)) continue
+      seen.add(label)
+      ordered.push(label)
+    }
+  }
+  return ordered
+}
+
+function collectProjectFilamentChips(index: {
+  plates: Array<{ filaments: Array<{ id: number; filamentType: string | null; filamentName: string | null; color: string | null }> }>
+  projectFilaments: Array<{ id: number; filamentType: string | null; filamentName: string | null; color: string | null }>
+}): LibraryFile['projectFilamentChips'] {
+  const seen = new Set<string>()
+  const ordered: LibraryFile['projectFilamentChips'] = []
+  const projectFilamentsById = new Map(index.projectFilaments.map((filament) => [filament.id, filament]))
+
+  for (const plate of index.plates) {
+    for (const filament of plate.filaments) {
+      const projectFilament = projectFilamentsById.get(filament.id)
+      const label = normalizeProjectFilamentLabel(
+        projectFilament?.filamentName
+        ?? filament.filamentName
+        ?? projectFilament?.filamentType
+        ?? filament.filamentType
+        ?? ''
+      )
+      const color = normalizeProjectFilamentColor(projectFilament?.color ?? filament.color ?? null)
+      const key = `${label}::${color ?? ''}`
+      if (!label || seen.has(key)) continue
+      seen.add(key)
+      ordered.push({ label, color })
+    }
+  }
+
+  return ordered
+}
+
+function normalizeProjectFilamentLabel(value: string): string {
+  return value
+    .trim()
+    .replace(/\s*\([^)]*\.(?:3mf|gcode(?:\.3mf)?)\)$/i, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function normalizeProjectFilamentColor(value: string | null): string | null {
+  if (!value) return null
+  const normalized = value.trim().toUpperCase()
+  return /^#[0-9A-F]{6}$/.test(normalized) ? normalized : null
 }
 
 /**

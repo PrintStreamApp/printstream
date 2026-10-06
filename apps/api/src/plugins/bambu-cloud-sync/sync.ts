@@ -192,11 +192,17 @@ async function runBambuCloudSyncLocked(context: SyncContext): Promise<BambuCloud
     bindings = await propagateConfirmedDeletes(context, callContext, session, bindings, connection, result)
 
     await writePresetBindings(context.store, [...bindings, ...reconciled.frozen])
+    // The listing predates this pass's cloud writes. Keeping it would make a new
+    // upload look deleted, or a confirmed deletion look importable, on the next check.
+    await context.store.delete(REMOTE_LISTING_CACHE_KEY)
     await writeConnection(context.store, {
       ...(await readConnection(context.store, context.logger) ?? connection),
       status: 'connected',
       lastSyncedAt: new Date().toISOString(),
-      lastError: null
+      lastError: null,
+      // A completed pass changes the inputs to the count. Unknown until checked
+      // again is honest; neither the old count nor a blanket zero is correct.
+      lastCheck: null
     })
     // A per-preset rejection never fails the pass, so without this line a sync that put
     // six presets on hold is indistinguishable in the log from one that did nothing. One

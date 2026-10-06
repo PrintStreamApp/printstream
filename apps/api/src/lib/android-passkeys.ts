@@ -5,7 +5,11 @@
  */
 import { env } from './env.js'
 
-export const PRINTSTREAM_ANDROID_PACKAGES = ['app.printstream', 'app.printstream.test'] as const
+export const PRINTSTREAM_ANDROID_PACKAGES = [
+  'app.printstream',
+  'app.printstream.dev',
+  'app.printstream.staging'
+] as const
 
 export interface AndroidAssetLinkStatement {
   relation: ['delegate_permission/common.get_login_creds', 'delegate_permission/common.handle_all_urls']

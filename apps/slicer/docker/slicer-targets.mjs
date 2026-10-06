@@ -1,3 +1,9 @@
+/**
+ * Pinned slicer engines bundled into the image and exposed as selectable targets.
+ *
+ * Keep versions and source tags aligned with THIRD-PARTY-SLICERS.md and the cloud licenses page.
+ * Prereleases are available for projects made by beta engines but cannot become the default.
+ */
 export const slicerTargets = [
   {
     id: 'bambustudio-2-6-0-51',

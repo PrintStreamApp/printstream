@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { SlicingOutputLine } from '@printstream/shared'
-import { appendCappedTail, appendOutput, appendStructuredOutput, MAX_COMBINED_OUTPUT_BYTES } from './slice-output.js'
+import { appendCappedTail, appendOutput, appendStructuredOutput, buildOutputLinesHeader, MAX_COMBINED_OUTPUT_BYTES } from './slice-output.js'
 
 test('appendStructuredOutput bounds the retained line count and keeps the most recent', () => {
   const lines: SlicingOutputLine[] = []
@@ -31,4 +31,22 @@ test('appendCappedTail keeps only the most recent bytes', () => {
 
 test('appendCappedTail leaves a short buffer untouched', () => {
   assert.equal(appendCappedTail('one ', 'two', 1024), 'one two')
+})
+
+test('slice response header prefers recent system progress and stays within its byte ceiling', () => {
+  const lines: SlicingOutputLine[] = [
+    { stream: 'stderr', text: 'native diagnostic', createdAt: '2026-09-25T00:00:00.000Z' },
+    ...Array.from({ length: 20 }, (_, index): SlicingOutputLine => ({
+      stream: 'system',
+      text: `${index}:` + 'é'.repeat(240),
+      createdAt: '2026-09-25T00:00:00.000Z'
+    }))
+  ]
+
+  const encoded = buildOutputLinesHeader(lines)
+  const summary = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8')) as SlicingOutputLine[]
+  assert.ok(Buffer.byteLength(encoded, 'utf8') <= 8 * 1024)
+  assert.ok(summary.length < 20)
+  assert.equal(summary.at(-1)?.text.startsWith('19:'), true)
+  assert.ok(summary.every((line) => line.stream === 'system'))
 })

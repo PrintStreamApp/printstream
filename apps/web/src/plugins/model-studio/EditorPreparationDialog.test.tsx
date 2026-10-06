@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict'
 import { after, afterEach, test } from 'node:test'
 import { installJsdomGlobals } from '../../test-utils/jsdom'
-import { readSourceFile } from '../../test-utils/sourceTree'
 
 const dom = installJsdomGlobals()
 
@@ -9,6 +8,7 @@ const React = (await import('react')).default
 const { cleanup, fireEvent, render, screen } = await import('@testing-library/react')
 const { EditorPreparationDialog } = await import('./EditorPreparationDialog')
 const { createDownloadProgressReporter, observeSavePreparation } = await import('./lib/editorPreparation')
+const { editorPreparationDialogState } = await import('./lib/editorPreparationPresentation')
 
 afterEach(() => { cleanup() })
 after(() => { dom.window.close() })
@@ -58,11 +58,27 @@ test('explains the initial version check and offers an explicit escape', () => {
   assert.equal(cancelled, true)
 })
 
-test('opens save preparation immediately instead of leaving the clicked button spinning', async () => {
-  const { source } = await readSourceFile('plugins/model-studio/EditorView.tsx')
-
-  assert.doesNotMatch(source, /showSlowSaveCheck|setShowSlowSaveCheck/)
-  assert.match(source, /savePreparationError \|\| preparingSave\s*\n\s*\? 'save'/)
+test('opens save preparation immediately and keeps uncertain operations visible', () => {
+  const base = {
+    slicePreparationError: null,
+    preparingSlice: false,
+    slicing: false,
+    savePreparationError: null,
+    preparingSave: false,
+    recoveryMessage: null,
+    savePreparationReconciling: false,
+    slicePreparationPhase: 'collecting' as const
+  }
+  assert.deepEqual(editorPreparationDialogState({ ...base, preparingSave: true }), {
+    action: 'save', slicePhase: 'collecting'
+  })
+  assert.deepEqual(editorPreparationDialogState({
+    ...base, preparingSave: true, savePreparationReconciling: true
+  }), { action: 'save', slicePhase: 'reconciling' })
+  assert.deepEqual(editorPreparationDialogState({
+    ...base, preparingSlice: true, preparingSave: true, recoveryMessage: 'Status unknown'
+  }), { action: 'slice', slicePhase: 'recovery-required' })
+  assert.equal(editorPreparationDialogState(base).action, null)
 })
 
 test('explains that the project file is created in the browser before upload', () => {

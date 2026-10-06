@@ -1473,8 +1473,8 @@ function RowMenuButton({ label, onOpen }: {
 /**
  * The slice-config half of a row's controls.
  *
- * Named and exported because it is passed as ONE object and `ObjectList` is memoised: the caller has
- * to build it in a `useMemo`, and an anonymous inline type cannot be annotated there.
+ * Named and exported because the memoised `ObjectList` receives one stable object.
+ * `useEditorObjectListProcessSettings` builds it and owns its invalidation rules.
  */
 export interface ObjectListPerObject {
   sliceObjectIds: Set<number>

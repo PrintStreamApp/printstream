@@ -2,7 +2,7 @@ process.env.NODE_ENV = 'test'
 
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { buildLibraryFileOrderBy } from './library.js'
+import { buildLibraryFileOrderBy } from './library-browse.js'
 
 test('name/date/size sorts map to their columns and honor direction', () => {
   assert.deepEqual(buildLibraryFileOrderBy('name', 'asc'), { name: 'asc' })

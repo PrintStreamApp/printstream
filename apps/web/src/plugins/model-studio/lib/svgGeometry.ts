@@ -248,12 +248,14 @@ export function buildSvgPieceSoups(parsed: ParsedSvg, options: SvgSoupOptions): 
     // orientation, so every face still points outward. See the module header.
     geometry.rotateX(Math.PI)
 
-    const nonIndexed = geometry.toNonIndexed()
+    // Three's ExtrudeGeometry is already non-indexed in some versions. Calling toNonIndexed on
+    // it again logs a warning on every SVG edit, including an unchanged re-extrusion.
+    const nonIndexed = geometry.index ? geometry.toNonIndexed() : geometry
     const positions = nonIndexed.getAttribute('position')
     const soup = new Float32Array(positions.array.length)
     soup.set(positions.array as Float32Array)
     geometry.dispose()
-    nonIndexed.dispose()
+    if (nonIndexed !== geometry) nonIndexed.dispose()
     if (soup.length > 0) {
       out.push({ soup, index: index + 1, coverage: (piece.width * piece.height) / wholeArea })
     }

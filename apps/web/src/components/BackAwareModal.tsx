@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, type ComponentProps } from 'react'
 import { Modal } from '@mui/joy'
 import React from 'react'
 import { setAppBusy } from '../lib/appBusy'
+import { backGestureCloseEvent } from './dialogBackGesture'
 
 type JoyModalProps = ComponentProps<typeof Modal>
 type BackAwareModalOnClose = NonNullable<JoyModalProps['onClose']>
@@ -24,27 +25,6 @@ interface BackAwareModalProps extends JoyModalProps {
 }
 
 const dialogHistoryStackStateKey = '__printStreamDialogStack'
-
-/**
- * Marks the synthetic event a Back gesture closes a dialog with, so a consumer can tell it from
- * the X. Both arrive as `closeClick` and mean the same thing to a dialog, so this is deliberately
- * not part of the reason: it is for DIAGNOSTICS, where naming the actual gesture is the point.
- */
-const backGestureCloseKey = '__printStreamBackGestureClose'
-
-/**
- * Was this close request the browser Back gesture rather than the dialog's own close affordance?
- *
- * Both report `closeClick` (Joy's reason enum has three members and no room for a fourth), which is
- * right for deciding what to DO. It is wrong for reporting what happened: `useEditorSave` logs the
- * pair of sources behind a duplicate close request precisely so an intermittent one can be traced,
- * and "the X" and "Back" are the two candidates a reader most needs to tell apart.
- */
-export function isBackGestureClose(event: unknown): boolean {
-  return typeof event === 'object'
-    && event !== null
-    && (event as Record<string, unknown>)[backGestureCloseKey] === true
-}
 
 interface ActiveDialogEntry {
   token: string
@@ -250,7 +230,7 @@ export function BackAwareModal({ open, onClose, dismissOnBackdropClick = false, 
    * do), the event carries the marker `isBackGestureClose` reads.
    */
   const requestClose = useCallback(() => {
-    onCloseRef.current?.({ [backGestureCloseKey]: true }, 'closeClick')
+    onCloseRef.current?.(backGestureCloseEvent(), 'closeClick')
   }, [])
 
   const syncClosedDialog = useCallback((token: string, closeViaHistory: boolean) => {

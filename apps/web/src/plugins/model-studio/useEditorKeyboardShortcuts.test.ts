@@ -40,6 +40,8 @@ function makeInput(overrides: Record<string, unknown> = {}) {
     redoRef: ref(spy('redo')),
     setGizmoModeRef: ref(spy('gizmo')),
     gizmoModeRef: ref<GizmoMode>('select'),
+    onNudge: spy('nudge'),
+    onRotateZ: spy('rotateZ'),
     ...overrides
   }
   return { input, calls }
@@ -120,7 +122,39 @@ test('shortcuts are inert when disabled', () => {
   const { input, calls } = makeInput({ enabledRef: ref(false) })
   renderHook(() => useEditorKeyboardShortcuts(input))
   press('Delete')
+  press('ArrowRight')
   assert.equal(calls.delete, undefined)
+  assert.equal(calls.nudge, undefined)
+})
+
+test('transform keys use one shortcut listener with coarse and fine movement', () => {
+  const { input, calls } = makeInput()
+  renderHook(() => useEditorKeyboardShortcuts(input))
+
+  assert.equal(press('ArrowLeft').defaultPrevented, true)
+  press('ArrowRight', { shiftKey: true })
+  press('ArrowUp', { ctrlKey: true })
+  press('ArrowDown', { metaKey: true })
+  press('[')
+  press(']')
+
+  const ordinaryStep = -(calls.nudge?.[0] as number[])[0]!
+  const coarseStep = (calls.nudge?.[1] as number[])[0]!
+  const fineStep = (calls.nudge?.[2] as number[])[1]!
+  assert.ok(coarseStep > ordinaryStep)
+  assert.ok(fineStep < ordinaryStep)
+  assert.deepEqual(calls.nudge?.[3], [0, -fineStep])
+  const rotationStep = (calls.rotateZ?.[0] as number[])[0]!
+  assert.ok(rotationStep > 0)
+  assert.deepEqual(calls.rotateZ, [[rotationStep], [-rotationStep]])
+
+  const field = document.createElement('input')
+  document.body.appendChild(field)
+  press('ArrowLeft', {}, field)
+  assert.equal(calls.nudge?.length, 4)
+  input.selectedKeyRef.current = null
+  press('ArrowLeft')
+  assert.equal(calls.nudge?.length, 4)
 })
 
 test('M/R/S switch the gizmo only with a selection', () => {

@@ -1,5 +1,8 @@
 name: "CodeQL Advanced Security Scan"
 
+# Public-snapshot security scan. The private source repository cannot run
+# CodeQL without a GitHub Advanced Security licence, so the job gates itself
+# to the exported public repository below.
 on:
   push:
     branches: [ "main" ]

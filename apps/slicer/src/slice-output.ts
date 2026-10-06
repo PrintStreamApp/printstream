@@ -10,6 +10,8 @@
 import type { SlicingOutputLine } from '@printstream/shared'
 
 /** Hard cap on retained structured output lines, with a low-water mark to trim to. */
+const MAX_OUTPUT_LINES_HEADER_BYTES = 8 * 1024
+
 const MAX_OUTPUT_LINES = 5_000
 const OUTPUT_LINES_TRIM_TO = 4_000
 
@@ -43,4 +45,29 @@ export function appendStructuredOutput(outputLines: SlicingOutputLine[], stream:
 export function appendCappedTail(current: string, chunk: string, maxBytes: number = MAX_COMBINED_OUTPUT_BYTES): string {
   const next = current + chunk
   return next.length > maxBytes ? next.slice(next.length - maxBytes) : next
+}
+
+/** Encode a bounded progress summary for the binary slice response header. */
+export function buildOutputLinesHeader(outputLines: SlicingOutputLine[]): string {
+  const latestSystemLines = outputLines.filter((line) => line.stream === 'system').slice(-20)
+  const fallbackLines = outputLines.slice(-8)
+  const candidateLines = latestSystemLines.length > 0 ? latestSystemLines : fallbackLines
+  const compactLines = candidateLines.map((line) => ({
+    stream: line.stream,
+    text: line.text.slice(0, 240),
+    createdAt: line.createdAt
+  }))
+
+  let selected = compactLines.slice()
+  let encoded = encodeOutputLines(selected)
+  while (selected.length > 1 && Buffer.byteLength(encoded, 'utf8') > MAX_OUTPUT_LINES_HEADER_BYTES) {
+    selected = selected.slice(Math.ceil(selected.length / 2))
+    encoded = encodeOutputLines(selected)
+  }
+
+  return encoded
+}
+
+function encodeOutputLines(lines: Array<Pick<SlicingOutputLine, 'stream' | 'text' | 'createdAt'>>): string {
+  return Buffer.from(JSON.stringify(lines), 'utf8').toString('base64url')
 }

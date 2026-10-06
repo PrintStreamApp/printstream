@@ -9,6 +9,7 @@ import {
   PRINTERS_CONTROL_PERMISSION,
   PRINTERS_MANAGE_PERMISSION,
   PRINTERS_VIEW_PERMISSION,
+  PRINTER_STORAGE_DOWNLOAD_PERMISSION,
   PRINTER_STORAGE_VIEW_PERMISSION,
   PRINTS_DISPATCH_PERMISSION,
   type PrinterStatsResponse,
@@ -410,6 +411,23 @@ test('printer cover serves persisted job thumbnails before printer storage looku
   assert.equal(printerStorageLookupCount, 0)
 })
 
+test('printer cover status returns idle state for a workspace-owned printer', async () => {
+  prisma.printer.findUnique = ((async () => ({ id: printer.id })) as unknown) as typeof prisma.printer.findUnique
+
+  await withPrintersApp({
+    authEnabled: true,
+    actor: { type: 'user', userId: 'user-1' },
+    permissions: [PRINTERS_VIEW_PERMISSION],
+    runtimePolicy: { demoMode: false }
+  }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/printers/${printer.id}/cover/status`)
+    assert.equal(response.status, 200)
+    assert.deepEqual(await response.json(), {
+      status: 'idle', progressPercent: null, message: ''
+    })
+  }, TEST_WORKSPACE)
+})
+
 test('discovered printers stay visible when only another workspace already adopted the same serial', async () => {
   const otherWorkspace: RequestWorkspaceSummary = { id: 'workspace-2', slug: 'workspace-2', name: 'Workspace 2' }
   let requestedWhere: unknown = null
@@ -700,6 +718,91 @@ test('printer storage browse allows the current parent storage-view permission',
     assert.equal(response.status, 200)
     assert.equal((await response.json()).path, '/')
   })
+})
+
+test('active print objects return an idle response when the workspace printer has no job', async () => {
+  mock.method(printerManagerPrototype, 'getPrinter', () => printer)
+  mock.method(printerManagerPrototype, 'getStatus', () => null)
+  mock.method(printerManagerPrototype, 'getLastJobName', () => null)
+  prisma.printer.findUnique = ((async () => ({ id: printer.id })) as unknown) as typeof prisma.printer.findUnique
+  rootPrisma.printer.findUnique = ((async () => ({ bridgeId: 'bridge-1' })) as unknown) as typeof rootPrisma.printer.findUnique
+  mock.method(bridgeSessionManager, 'isConnected', () => true)
+
+  await withPrintersApp({
+    authEnabled: true,
+    actor: { type: 'user', userId: 'user-1' },
+    permissions: [PRINTERS_VIEW_PERMISSION],
+    runtimePolicy: { demoMode: false }
+  }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/printers/${printer.id}/active-print-objects`)
+    assert.equal(response.status, 200)
+    assert.deepEqual(await response.json(), {
+      objects: [],
+      loading: false,
+      unavailableReason: null,
+      unavailableMessage: null
+    })
+  }, TEST_WORKSPACE)
+})
+
+test('printer storage download keeps its permission and rejects the root path', async () => {
+  mock.method(printerManagerPrototype, 'getPrinter', () => printer)
+  prisma.printer.findUnique = ((async () => ({ id: printer.id })) as unknown) as typeof prisma.printer.findUnique
+  rootPrisma.printer.findUnique = ((async () => ({ bridgeId: 'bridge-1' })) as unknown) as typeof rootPrisma.printer.findUnique
+  mock.method(bridgeSessionManager, 'isConnected', () => true)
+
+  await withPrintersApp({
+    authEnabled: true,
+    actor: { type: 'user', userId: 'user-1' },
+    permissions: [PRINTER_STORAGE_VIEW_PERMISSION],
+    runtimePolicy: { demoMode: false }
+  }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/printers/${printer.id}/storage/download?path=/part.3mf`)
+    assert.equal(response.status, 403)
+  })
+
+  await withPrintersApp({
+    authEnabled: true,
+    actor: { type: 'user', userId: 'user-1' },
+    permissions: [PRINTER_STORAGE_DOWNLOAD_PERMISSION],
+    runtimePolicy: { demoMode: false }
+  }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/printers/${printer.id}/storage/download?path=/`)
+    assert.equal(response.status, 400)
+    assert.deepEqual(await response.json(), { error: 'Invalid path' })
+  }, TEST_WORKSPACE)
+})
+
+test('printer storage delete keeps its edit scope and protects the root', async () => {
+  mock.method(printerManagerPrototype, 'getPrinter', () => printer)
+  prisma.printer.findUnique = ((async () => ({ id: printer.id })) as unknown) as typeof prisma.printer.findUnique
+  rootPrisma.printer.findUnique = ((async () => ({ bridgeId: 'bridge-1' })) as unknown) as typeof rootPrisma.printer.findUnique
+  mock.method(bridgeSessionManager, 'isConnected', () => true)
+
+  await withPrintersApp({
+    authEnabled: true,
+    actor: { type: 'user', userId: 'user-1' },
+    permissions: [PRINTER_STORAGE_VIEW_PERMISSION],
+    runtimePolicy: { demoMode: false }
+  }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/printers/${printer.id}/storage?path=/part.3mf`, {
+      method: 'DELETE'
+    })
+    assert.equal(response.status, 403)
+  })
+
+  await withPrintersApp({
+    authEnabled: true,
+    actor: { type: 'user', userId: 'user-1' },
+    permissions: [PRINTERS_MANAGE_PERMISSION],
+    runtimePolicy: { demoMode: false }
+  }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/printers/${printer.id}/storage?path=/`, {
+      method: 'DELETE'
+    })
+    assert.equal(response.status, 400)
+    assert.deepEqual(await response.json(), { error: 'Cannot delete root' })
+  }, TEST_WORKSPACE)
 })
 
 test('refresh commands allow the current parent printer-control permission', async () => {

@@ -10,7 +10,10 @@
  * preview it must not silently adopt) and how confidently the footnote may describe where they came
  * from. Both have a wrong answer that misleads rather than merely looks off.
  */
-import type { FlushCalibrationVerdict, ProjectFlushContext } from '@printstream/shared'
+import type { FlushCalibrationVerdict, FlushVolumeDataset, ProjectFlushContext } from '@printstream/shared'
+
+/** Parsed slicer flush tables keyed by `nozzle_flush_dataset` code. */
+export type FlushDatasets = Record<string, FlushVolumeDataset>
 
 /**
  * The blocks the grid opens on, for the SESSION's material count.

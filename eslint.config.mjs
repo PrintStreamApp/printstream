@@ -112,5 +112,15 @@ export default tseslint.config(
         }
       ]
     }
+  },
+  {
+    // These editor coordinators encode save, slice, and recovery decisions. Their existing
+    // nested branches are now explicit, so guard them without rewriting unrelated display copy.
+    files: [
+      'apps/web/src/plugins/model-studio/EditorView.tsx',
+      'apps/web/src/plugins/model-studio/EditorPreparationDialog.tsx',
+      'apps/web/src/plugins/model-studio/lib/editorPreparationPresentation.ts'
+    ],
+    rules: { 'no-nested-ternary': 'error' }
   }
 )

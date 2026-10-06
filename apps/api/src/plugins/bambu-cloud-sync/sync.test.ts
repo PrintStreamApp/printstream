@@ -687,6 +687,52 @@ test('a check records its answer so a surface can read it without calling Bambu'
   assert.equal(connection.lastCheck?.pushable, 0)
 })
 
+test('sync retires the pre-sync count and listing before a fresh check', async () => {
+  const store = createStore()
+  await connect(store)
+  cloudPresets.set('PFUS1', { type: 'filament', name: 'My PLA', update_time: '2026-04-06 19:03:50', setting: { filament_type: '"PLA"' } })
+  const before = await checkWithFakeCloud(store, { maxListingAgeMs: 60_000 })
+  assert.equal(before.pullable.length, 1)
+
+  await runSyncWithFakeCloud(store)
+  const connection = JSON.parse((await store.get('connection')) ?? '{}') as { lastCheck: unknown }
+  assert.equal(connection.lastCheck, null, 'status must not replay the count from before sync')
+  assert.equal(await store.get('remoteListing'), null, 'the next check must refresh cloud state')
+
+  calls = []
+  const after = await checkWithFakeCloud(store, { maxListingAgeMs: 60_000 })
+  assert.equal(after.pullable.length, 0)
+  assert.equal(after.pushable.length, 0)
+  assert.equal(after.pending.length, 0)
+  assert.deepEqual(calls.map((call) => call.operation), ['listSettings'])
+})
+
+test('a cached check after sync does not mistake a newly uploaded preset for a cloud deletion', async () => {
+  const store = createStore()
+  await connect(store)
+  await upsertCustomSlicingPresetRecords(WORKSPACE_ID, [{ kind: 'process', name: 'Mine', content: JSON.stringify({ layer_height: '0.28' }) }])
+  await checkWithFakeCloud(store, { maxListingAgeMs: 60_000 })
+
+  const result = await runSyncWithFakeCloud(store)
+  assert.equal(result.created.length, 1)
+  const after = await checkWithFakeCloud(store, { maxListingAgeMs: 60_000 })
+  assert.equal(after.pending.length, 0)
+  assert.equal(after.pullable.length, 0)
+  assert.equal(after.pushable.length, 0)
+})
+
+test('a skipped import still appears in the fresh post-sync preview', async () => {
+  const store = createStore()
+  await connect(store)
+  cloudPresets.set('PFUS1', { type: 'filament', name: 'Unavailable PLA', update_time: '2026-04-06 19:03:50', setting: {} })
+  await checkWithFakeCloud(store, { maxListingAgeMs: 60_000 })
+
+  const result = await runSyncWithFakeCloud(store)
+  assert.equal(result.skipped.length, 1)
+  const after = await checkWithFakeCloud(store, { maxListingAgeMs: 60_000 })
+  assert.equal(after.pullable.length, 1, 'sync completion must not assume every import succeeded')
+})
+
 test('a check still notices a deletion and freezes it for a decision', async () => {
   // Freezing is bookkeeping, not a write to presets or the cloud, and it is the only way
   // a deletion becomes a question the user can answer, so the check must still do it.

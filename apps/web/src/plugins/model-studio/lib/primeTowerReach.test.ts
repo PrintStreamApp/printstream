@@ -5,7 +5,9 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { clampPrimeTowerIntoReach, nozzleOnlyZoneBounds, primeTowerReachIssue } from './primeTowerReach'
+import type { LibraryThreeMfPrimeTower } from '@printstream/shared'
+import { seedEmptyEditorState } from './editorModel'
+import { clampPrimeTowerIntoReach, moveEditorPrimeTower, nozzleOnlyZoneBounds, primeTowerReachIssue } from './primeTowerReach'
 
 const rect = (minX: number, maxX: number, minY: number, maxY: number) => ({ minX, maxX, minY, maxY })
 const zone = (minX: number, maxX: number, label: string | null) => ({
@@ -68,4 +70,19 @@ test('a single-nozzle machine publishes no such zones, so nothing is constrained
   // computeNozzleOnlyZones only emits for the two-extruder layout; the rule must be inert otherwise.
   assert.equal(primeTowerReachIssue(rect(0, 40, 0, 40), [zone(0, 30, null)]), null)
   assert.deepEqual(clampPrimeTowerIntoReach(rect(0, 40, 0, 40), BED, [zone(0, 30, null)]), { x: 0, y: 0 })
+})
+
+test('editor tower writeback clamps the drag and preserves its other saved settings', () => {
+  const plate = seedEmptyEditorState().plates[0]!
+  plate.bed = { ...plate.bed, ...BED, excludeAreas: ZONES }
+  plate.primeTower = { x: 100, y: 40, width: 40, sizing: {} } as LibraryThreeMfPrimeTower
+
+  const moved = moveEditorPrimeTower(plate, { x: 10, y: 40 }, { width: 40, depth: 40 })
+  assert.ok(moved.primeTower!.x >= 30)
+  assert.equal(moved.primeTower!.y, 40)
+  assert.equal(moved.primeTower!.width, 40)
+  assert.equal(plate.primeTower.x, 100, 'the opened plate stays immutable')
+
+  const unmeasured = moveEditorPrimeTower(plate, { x: 10, y: 40 }, { width: 0, depth: 0 })
+  assert.equal(unmeasured.primeTower!.x, 10)
 })

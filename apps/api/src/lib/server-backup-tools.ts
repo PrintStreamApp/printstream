@@ -8,11 +8,11 @@
  * is cached for the process lifetime (tools do not appear mid-run).
  *
  * Resolution order per tool: explicit env override (`PG_DUMP_PATH` /
- * `PG_RESTORE_PATH`) → the native build's embedded Postgres bin dir
- * (`EMBEDDED_POSTGRES_BIN_DIR`; today that dir ships only initdb/pg_ctl/
- * postgres, so native installs resolve nothing there until the packaging
- * grows the client tools) → bare name on PATH (the Docker image apt-installs
- * a matching postgresql-client).
+ * `PG_RESTORE_PATH`) → the embedded Postgres bin dir
+ * (`EMBEDDED_POSTGRES_BIN_DIR`) → bare name on PATH (the Docker image
+ * apt-installs a matching postgresql-client). Current native builds extract
+ * `pg-tools/` and set both explicit paths before the API loads; the bin-dir
+ * fallback remains for other packaging layouts.
  */
 import path from 'node:path'
 import { access } from 'node:fs/promises'

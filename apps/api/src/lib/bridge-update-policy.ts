@@ -307,11 +307,11 @@ function readCurrentBridgeBuildPointer(releasesDir: string): CurrentBridgeBuildP
  * fragment matching the promoted fingerprint into the announced build. Returns
  * null when no artifacts for the promoted build have been published yet.
  *
- * Today only the standalone binary fragment is published (Docker bridges update
- * by image pull, so no app-bundle fragment exists). The merge stays general,
- * each fragment's ABI coordinates are pushed onto its own artifacts (`bundle` /
- * `binaries[*]`), and a bundle-carrying fragment, if one were ever present
- * again, would still supply the merged build's top-level coordinates.
+ * The standalone binary and slim Docker app-bundle fragments are published
+ * separately; the combined image's bridge role updates by image pull. Each
+ * fragment's ABI coordinates are pushed onto its own artifacts (`bundle` /
+ * `binaries[*]`), and the bundle fragment supplies the merged build's
+ * top-level coordinates.
  */
 function mergePublishedBuildFragments(releasesDir: string, pointer: CurrentBridgeBuildPointer): BridgeBuild | null {
   let merged: BridgeBuild | null = null

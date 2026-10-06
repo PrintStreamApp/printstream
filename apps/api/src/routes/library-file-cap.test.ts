@@ -2,7 +2,7 @@ process.env.NODE_ENV = 'test'
 
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { capLibraryFileRows, LIBRARY_BROWSE_FILE_LIMIT, parseLibraryFileIdsQuery } from './library.js'
+import { capLibraryFileRows, LIBRARY_BROWSE_FILE_LIMIT, parseLibraryFileIdsQuery } from './library-browse.js'
 
 test('returns all rows untouched when under the cap', () => {
   const result = capLibraryFileRows([1, 2, 3], 5)

@@ -6,9 +6,10 @@
  * manifest announces the build the server itself runs, and bridges converge to
  * it whenever their own fingerprint differs, including downgrades after a
  * server rollback (lockstep). How an update is obtained and applied depends on
- * packaging: Docker installs swap signed app bundles under the releases
- * directory, standalone installs replace their own binary in place. Each
- * packaging owns a driver; the runtime stays packaging-agnostic.
+ * packaging: the slim Docker bridge swaps signed app bundles under the releases
+ * directory, the combined image's bridge role is updated by image pull, and
+ * standalone installs replace their own binary in place. Each packaging owns a
+ * driver; the runtime stays packaging-agnostic.
  */
 import { bridgeReleaseManifestSchema, type BridgeBuild, type BridgeUpdateActionResult } from '@printstream/shared'
 

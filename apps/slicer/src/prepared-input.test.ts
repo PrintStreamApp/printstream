@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 import yazl from 'yazl'
-import { prepareInputThreeMf } from './index.js'
+import { prepareInputThreeMf } from './slice-input-preparation.js'
 
 async function writeThreeMf(dir: string, entries: Record<string, string>): Promise<string> {
   const filePath = path.join(dir, 'prepared.3mf')

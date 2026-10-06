@@ -48,7 +48,8 @@ const ALLOWED_WRITERS = new Set([
   'packages/shared/src/machine-retarget.ts',
   'packages/shared/src/filament-rebind.ts',
   'packages/shared/src/filament-preset-binding.ts',
-  'packages/shared/src/three-mf/bake-documents.ts',
+  // The bake's final settings pass delegates `inherits_group` sizing to its repair helper.
+  'packages/shared/src/three-mf/bake-project-settings-finishing.ts',
   // The repair stage: it owns the SIZE of `inherits_group`, which is the one defect the writers
   // above deliberately decline to heal during an ordinary save.
   'packages/shared/src/repairs/inherits-group.ts',
@@ -77,7 +78,7 @@ const RECORD_NAMES = ['different_settings_to_system', 'inherits_group', 'compati
 /**
  * An assignment TO either array, in every shape a writer actually uses:
  * `record.inherits_group =`, `next['inherits_group'] =`, and the OBJECT-LITERAL form
- * `{ ...record, inherits_group: rebuilt }`, which `bake-documents.ts` itself would have used and
+ * `{ ...record, inherits_group: rebuilt }`, which the bake settings pass could use and
  * which a property-syntax-only scan cannot see.
  */
 const ASSIGNMENT = new RegExp(

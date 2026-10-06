@@ -20,7 +20,7 @@ const WEB_PLUGIN = path.resolve(HERE, '../../../../web/src/plugins/bambu-cloud-s
  */
 test('a preset surface actually triggers the check, since nothing else will', async () => {
   const sources = await Promise.all(
-    ['BambuCloudSyncStatus.tsx', 'BambuCloudSyncCard.tsx'].map(async (file) => (
+    ['BambuCloudSyncStatus.tsx', 'BambuCloudSyncCard.tsx', 'useBambuCloudSyncCheck.ts'].map(async (file) => (
       await readFile(path.join(WEB_PLUGIN, file), 'utf8')
     ))
   )

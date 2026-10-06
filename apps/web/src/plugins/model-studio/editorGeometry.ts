@@ -764,13 +764,17 @@ export function groupTransformSignature(group: THREE.Object3D): string {
  * An object's footprint SHAPE signature: its orientation + scale but NOT its position. Two poses
  * with the same shape signature differ only by a translation, so their footprints are the same
  * shape shifted: letting the placement-warning recompute shift cached cells instead of
- * re-rasterizing (see {@link shiftFootprintCells}). Same fields/precision as
- * {@link groupTransformSignature} minus position.
+ * re-rasterizing (see {@link shiftFootprintCells}). Editor instances put rotation on a rotor CHILD,
+ * so both that child's orientation and the outer group's transform must be included.
  */
 export function groupShapeSignature(group: THREE.Object3D): string {
-  const r = (n: number) => Math.round(n * 100) / 100
   const { quaternion: q, scale: s } = group
-  return `${r(q.x)},${r(q.y)},${r(q.z)},${r(q.w)}|${r(s.x)},${r(s.y)},${r(s.z)}`
+  const { quaternion: rotorQ, scale: rotorScale } = rotorOf(group)
+  // A small rotation can move a long part into a new 2mm cell, so rounding here would reuse an
+  // incorrect footprint. Only translation is eligible for the cheap shifted-cell path.
+  return `${q.x},${q.y},${q.z},${q.w}|${s.x},${s.y},${s.z}`
+    + `|${rotorQ.x},${rotorQ.y},${rotorQ.z},${rotorQ.w}`
+    + `|${rotorScale.x},${rotorScale.y},${rotorScale.z}`
 }
 
 /**

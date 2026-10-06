@@ -84,8 +84,9 @@ auto-reverted; a pre-upgrade dump is your rollback.
 
 ## Bridge backups (built in)
 
-The bridge backs itself up: with `BRIDGE_BACKUP_DIR` set (the compose examples
-mount a host `./backups` directory), it snapshots its identity
+The bridge backs itself up: with `BRIDGE_BACKUP_DIR` set (the bridge-only Compose
+example mounts host `./backups`, while the combined server example uses
+`./bridge-backups`), it snapshots its identity
 file (`bridge-state.json`) and every library file on a schedule
 (`BRIDGE_BACKUP_INTERVAL_HOURS`, default daily; `0` = manual-only), and you can
 run one any time from Settings → Bridges → Manage → "Back up now".

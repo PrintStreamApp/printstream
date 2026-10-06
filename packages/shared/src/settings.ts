@@ -1,3 +1,9 @@
+/**
+ * Shared general-settings contract for API writes and web preferences.
+ *
+ * Defaults describe stored workspace or platform settings. Readers may layer device preferences on top, and
+ * the legacy landing-page values remain accepted so older saved settings still load.
+ */
 import { z } from 'zod'
 import { permissionSchema } from './permissions.js'
 

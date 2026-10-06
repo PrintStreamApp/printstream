@@ -3440,9 +3440,8 @@ export function instanceLinkageKey(instance: EditorInstance): string | null {
  * an independent copy of one silently returned the linked pair it was meant to break.
  *
  * The identity split is all that happens HERE, because it is all that can happen synchronously (the
- * caller runs inside a plate updater). Giving the copy its own MESH means re-staging its import,
- * which is async, and is `restageIndependentCopy` in `EditorView`, exactly as the added volumes
- * already work.
+ * caller runs inside a plate updater). Giving the copy its own mesh means re-staging its import,
+ * which is async and belongs to `editorIndependentCopyImports.ts`, as added volumes do.
  */
 export function makeInstanceIndependent(state: EditorState, instance: EditorInstance): void {
   if (instance.source.kind === 'object') {

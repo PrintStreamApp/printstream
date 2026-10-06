@@ -14,7 +14,7 @@
 import type { NotificationMessage } from '@printstream/shared'
 import { env } from '../../lib/env.js'
 import { isEmailDeliveryConfigured, sendEmail } from '../../lib/email-delivery.js'
-import { emailActionButton, escapeEmailHtml } from '../../lib/email-template.js'
+import { emailActionButton, emailParagraph, escapeEmailHtml } from '../../lib/email-template.js'
 import type { ApiPluginContext } from '../../plugin/types.js'
 import { messageNotificationScope } from '../../lib/notification-scope.js'
 import { readEmailSubscribers } from '../../lib/notification-subscribers.js'
@@ -93,7 +93,7 @@ async function resolvePlatformRecipients(context: ApiPluginContext, subscriberId
 }
 
 function buildEmailHtml(message: NotificationMessage): string {
-  const parts = [`<p style="margin:0 0 18px;color:#344153;font-size:16px;line-height:1.65;white-space:pre-wrap;">${escapeEmailHtml(message.body)}</p>`]
+  const parts = [emailParagraph(message.body, { lineBreaks: 'preserve' })]
   const link = resolvePublicNotificationUrl(message.url)
   if (link) {
     parts.push(emailActionButton('View in PrintStream', link))

@@ -411,3 +411,17 @@ export function shouldPullFromCloud(input: {
   if (input.lastSyncedCloudUpdateTime === null) return true
   return input.lastSyncedCloudUpdateTime < input.remoteCloudUpdateTime
 }
+
+/** Safe, workspace-scoped sync preview returned by the API plugin's `/check` route. */
+export const bambuCloudSyncCheckResponseSchema = z.object({
+  connected: z.boolean(),
+  status: z.enum(['connected', 'expired']).optional(),
+  checkedAt: z.string().optional(),
+  pullable: z.number().int().nonnegative().optional(),
+  pushable: z.number().int().nonnegative().optional(),
+  pending: z.number().int().nonnegative().optional(),
+  held: z.number().int().nonnegative().optional(),
+  route: z.enum(['bridge', 'direct']).optional()
+})
+
+export type BambuCloudSyncCheckResponse = z.infer<typeof bambuCloudSyncCheckResponseSchema>

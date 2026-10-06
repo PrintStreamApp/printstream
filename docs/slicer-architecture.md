@@ -30,13 +30,19 @@ through the `SceneEdit` contract and the baked 3MF on disk.
 | **Slicing** | api | `routes/slicing.ts`, `lib/slicing-jobs.ts`, `lib/slicer-client.ts`, `lib/slicing-presets.ts` |
 | **Slicing** | slicer | `apps/slicer/**`: the standalone BambuStudio CLI service (profile resolution, machine-switch, output metadata) |
 | **Shared 3MF model** | shared | `packages/shared/src/slicing.ts` (`SceneEdit`, slicing job contracts), the scene/index schemas in `printer.ts` |
-| **Shared 3MF model** | api/bridge/shared/web | the `apps/api/src/lib/three-mf-*.ts` modules own the Node ZIP I/O (read + write, re-exported via the `three-mf.ts` barrel); the pure transforms live in `@printstream/shared/three-mf`: the **index** and **scene** parses, and the whole bake (`bake-documents`, plus `object-clone`, `mesh-repair`, `xml-write`). Shared by `three-mf-reader.ts`, the bridge's `apps/bridge/src/library-3mf.ts`, and the web's client-side 3MF surfaces (no hand-kept mirror) |
+| **Shared 3MF model** | api/bridge/shared/web | the `apps/api/src/lib/three-mf-*.ts` modules own the Node ZIP I/O (read + write, re-exported via the `three-mf.ts` barrel); the pure transforms live in `@printstream/shared/three-mf`: the **index** and **scene** parses, and the bake coordinator (`bake-documents`) with focused XML, part-edit, filament-settings, sidecar, clone, mesh-repair, and XML-write modules. Shared by `three-mf-reader.ts`, the bridge's `apps/bridge/src/library-3mf.ts`, and the web's client-side 3MF surfaces (no hand-kept mirror) |
 | **Printer retarget** | shared/api | "Save as a different printer": rewrites a project's machine + process settings (no slicing). `packages/shared/src/machine-retarget.ts`, `apps/api/src/lib/save-retarget.ts`. See `docs/project-printer-retarget.md` |
 | **Calibration** | api/web plugin | Builds disposable calibration prints (PA towers, flow plates) and runs them through the slicing pipeline + dispatcher. `apps/api/src/plugins/calibration/**`, `apps/web/src/plugins/calibration/**`. See "Calibration (plugin surface)" below |
 | **Public editor** (cloud web host) | web | The cloud-only, account-free host of the SAME `EditorView`, at `/3mf-editor`: `apps/web/src/PublicToolApp.tsx` (shell), `LocalProjectEditor.tsx` (file picker + archive), `LocalEditorSurface.tsx` (mounts the editor + the dialogs no slice modal renders), `useLocalSliceSettingsController.ts`, `LocalSlicingPresetsDialog.tsx`, and the `lib/local*.ts` seams (project source, save target, import store, process/filament resolvers, machine retarget, browser preset storage). See "The public editor" below |
 | **Public editor** (anonymous api) | api | `private/cloud/public-slicing/routes.ts`, the cloud-only anonymous catalogue (`/api/public/slicing/*`): profiles, targets, bed-model, flush-data/flush-calibration, and builtin-ONLY `resolve-process` / `resolve-filament` / `resolve-machine` |
 
 ## Editor catalogue and material readiness
+
+The Bambu Cloud sync badge and preset manager share one workspace-scoped update preview.
+Opening either surface checks for outstanding imports, uploads, and deletion decisions; the
+manager shows those counts visibly beside its account controls. A completed sync invalidates
+both previews and the server's pre-sync cloud listing, so the next check reports what remains
+rather than replaying the old count. Skipped or failed work is not assumed to be up to date.
 
 Removing a material in the editor asks for a replacement when the live scene or settings reference
 it. The check includes object and part assignments, layer changes, colour paint (including split
@@ -79,6 +85,10 @@ preserving valid session presets and edited colours, including on a cached versi
 Material presets, colours, and nozzle assignments may arrive before their slots. Their initial
 seeding must run again when the slots appear, filling missing values while preserving explicit
 session choices. A late first material must become sliceable without a second edit.
+On reopening, shortened library chip labels can seed provisional preset guesses before the
+project index arrives. Exact saved preset names replace only those untouched guesses, even when
+compatible profiles arrive later or in batches. Explicit choices and clears retain user intent;
+colours are preserved. Saving retires pending guesses before the saved slot ids are rebased.
 When a project filament preset is later proven identical to an installed preset and removed from
 the picker, late slots can still hold its encoded project id. Reconcile those ids by preset alias
 to a compatible installed choice before treating the material as unavailable.
@@ -199,6 +209,9 @@ Its output enters `EditorState.colorPaint` like a brush stroke, so the viewport,
 re-keying, save and slice paths need no separate colour-import format. The same mapper runs for
 "Replace with"; replacement first drops every triangle-indexed paint channel from the old topology,
 then seeds the accepted source colour paint on the new body.
+`apps/web/src/plugins/model-studio/lib/editorGeometryReplacement.ts` owns that swap for all linked
+copies, preserving each placement and the object's identity while clearing geometry-bound parts
+after the one Undo checkpoint has been recorded.
 
 This covers direct OBJ vertex colours, flat OBJ/FBX material colours, OBJ `map_Kd` textures, embedded
 glTF/GLB base-colour textures, and embedded FBX diffuse textures. Texture imports expose
@@ -223,6 +236,9 @@ entries, plate thumbnails) from an inflated archive, through the same
 `@printstream/shared/three-mf` parsers.** The editor no longer calls `/plates`, `/scene`, or
 `/scene-entry`; those routes remain for the read-only preview and the slim slice/print dialogs,
 which want the parsed index and nothing more.
+
+`useEditorProjectSession` owns source creation and disposal, the source-backed query set, and
+cache removal when the editor closes. The host still owns a source it supplies to the editor.
 
 Three things follow, and they are the reason for the design:
 
@@ -1016,6 +1032,8 @@ an upload pause, not as project preparation. A visible save locks cancellation w
 begins because the file or version mutation may already commit. A prepared-snapshot operation may
 still be abandoned throughout completion and reconciliation because the snapshot cannot print
 without the later job request and unreferenced-snapshot cleanup reclaims it.
+When a second Slice attempt supersedes the first, the older attempt's completion and recovery
+callbacks cannot clear or change the newer preparation dialog.
 
 The editor retains its last successful prepared source for the open session. A later Slice action
 reuses it before baking or uploading when the scene, object overrides, pinned content base, frozen
@@ -1629,10 +1647,14 @@ own verified change; do not big-bang):
   (output/scene-builder → reader → internal); `three-mf.ts` is now a re-export barrel for the
   stable public API. Consumers still import from `three-mf.ts`; migrating them to the focused
   modules is a later increment.
-- `apps/web/src/pages/LibraryView.tsx` (~8k lines) → extract `SliceSettingsController` +
-  `SliceSettingsPanel` into their own slicing module, leaving LibraryView as the file
-  browser.
-- `apps/web/src/plugins/model-studio/EditorView.tsx` (~4k lines) → extract gizmo modes,
-  undo/redo history, and save flows into focused modules; keep scene-model logic in
-  `lib/editorModel.ts`.
-</content>
+- **Done:** `apps/web/src/pages/LibraryView.tsx` was reduced to the file-browser
+  orchestration. `SliceSettingsController` and `SliceSettingsPanel` now live in
+  `components/library/SliceSettingsPanel.tsx`, with the related dialogs and focused
+  helpers beside them.
+- `apps/web/src/plugins/model-studio/EditorView.tsx` remains the main decomposition
+  target. Undo/redo history, save flows, the WebGL scene, paint, mesh booleans, and
+  simplification already live in focused hooks. Continue with separate, verified
+  extractions for project/plate loading, import and export flows, and the text, SVG,
+  and cut tool controllers. Keep `EditorView` as the session coordinator, keep
+  scene-model logic in `lib/editorModel.ts`, and avoid moving shared mutable refs
+  across several boundaries in one change.

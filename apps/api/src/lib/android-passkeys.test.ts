@@ -26,11 +26,12 @@ test('Android passkey origin is the unpadded base64url certificate hash', () => 
   )
 })
 
-test('asset links associate both supported package ids with every certificate', () => {
+test('asset links associate the production, development, and staging app ids', () => {
   const statements = buildAndroidAssetLinks([FINGERPRINT])
   assert.deepEqual(statements.map((statement) => statement.target.package_name), [
     'app.printstream',
-    'app.printstream.test'
+    'app.printstream.dev',
+    'app.printstream.staging'
   ])
   assert.deepEqual(statements[0]?.target.sha256_cert_fingerprints, [FINGERPRINT])
   for (const statement of statements) {

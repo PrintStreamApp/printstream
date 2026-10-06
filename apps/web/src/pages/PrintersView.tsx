@@ -1,269 +1,151 @@
 import { useDirectorySelection } from '../hooks/useDirectorySelection'
+import { usePrinterDetailHistory } from '../hooks/usePrinterDetailHistory'
+import { usePrinterJobMutations } from '../hooks/usePrinterJobMutations'
+import { usePrinterOverviewResults } from '../hooks/usePrinterOverviewResults'
+import { usePrinterOverviewPreferences } from '../hooks/usePrinterOverviewPreferences'
+import { usePrinterPrintFlow } from '../hooks/usePrinterPrintFlow'
+import { usePrinterViewMutations } from '../hooks/usePrinterViewMutations'
+import { usePrinterViewDraft } from '../hooks/usePrinterViewDraft'
+import { usePrinterViewRoute } from '../hooks/usePrinterViewRoute'
+import { usePrinterDashboardData } from '../hooks/usePrinterDashboardData'
+import { type PrinterViewDraft } from '../lib/printerViewDraft'
 import { useTagFilter } from '../hooks/useTagFilter'
 import { useTagAssignment } from '../hooks/useTagAssignment'
 import { BulkSelectionActions } from '../components/BulkSelectionActions'
-import { Checkbox } from '@mui/joy'
 import LabelIcon from '@mui/icons-material/LabelOutlined'
-import { useCallback, useDeferredValue, useEffect, useMemo, useState, type ComponentProps } from 'react'
-import { Alert, Box, Button, CircularProgress, Divider, FormControl, ListItemDecorator, MenuItem, Option, Select, Sheet, Stack, Typography } from '@mui/joy'
-import FolderCopyRoundedIcon from '@mui/icons-material/FolderCopyRounded'
-import UploadFileRoundedIcon from '@mui/icons-material/UploadFileRounded'
-import AddIcon from '@mui/icons-material/Add'
-import HistoryRoundedIcon from '@mui/icons-material/HistoryRounded'
-import QueryStatsRoundedIcon from '@mui/icons-material/QueryStatsRounded'
+import { useCallback, useDeferredValue, useEffect, useMemo, useState } from 'react'
+import { Alert, Box, Button, Sheet, Stack, Typography } from '@mui/joy'
 import SaveRoundedIcon from '@mui/icons-material/SaveRounded'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
-import PrintRoundedIcon from '@mui/icons-material/PrintRounded'
 import TuneRoundedIcon from '@mui/icons-material/TuneRounded'
 import SortRoundedIcon from '@mui/icons-material/SortRounded'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { PaginatedSection } from '../components/PaginationFooter'
 import { Printer3dRoundedIcon } from '../components/Printer3dRoundedIcon'
 import { useNavigate, useParams } from 'react-router-dom'
-import { LIBRARY_UPLOAD_PERMISSION, CAMERA_VIEW_PERMISSION, JOBS_DELETE_PERMISSION, JOBS_VIEW_PERMISSION, PRINTERS_CONTROL_PERMISSION, PRINTERS_MANAGE_PERMISSION, PRINTERS_VIEW_PERMISSION, PRINTER_STORAGE_DOWNLOAD_PERMISSION, PRINTER_STORAGE_VIEW_PERMISSION, PRINTS_DISPATCH_PERMISSION, type BridgeListResponse, defaultPrinterViewSort, extractErrorMessage, type Permission, type DiscoveredPrinter, type LibraryFile, type PrintDispatchJob, type PrintJob, type PrintStartOptionSelection, type PrinterStatsResponse, type PrinterCardContentSettings, type Printer, type PrinterModel, type StartOrderPrintInput, type PrinterStatus, type SlicingCapabilities, type SlicingJobResponse, type PrinterView, type PrinterViewInput, type PrinterViewSort } from '@printstream/shared'
-import { apiFetch } from '../lib/apiClient'
-import { prefetchSlicingPresets } from '../lib/slicingPresetsQuery'
-import { refreshSlicingJobs, seedSlicingJob } from '../lib/slicingJobsCache'
-import { useAuthBootstrapQuery } from '../lib/authQuery'
-import { resolveEffectiveDefaultPrinterViewId, useDefaultPrinterViewOverride, useSharedDefaultPrinterViewId } from '../lib/printerViewDefaults'
-import { OVERVIEW_VIEW_ROUTE_ID, printerViewPath, resolveActivePrinterViewId } from '../lib/printerViewRoutes'
-import { printerViewsQueryKey as buildPrinterViewsQueryKey, usePrinterViewsQuery } from '../lib/printerViewsQuery'
-import { workspacePreferenceScopeKeyFromBootstrap } from '../lib/workspacePreferenceScope'
-import { readCurrentWorkspaceScopeKey, workspaceQueryKeys } from '../lib/workspaceScope'
-import { formatLibraryFileName } from '../lib/libraryDisplay'
-import { isUnslicedThreeMfFile } from '../lib/libraryFileTags'
-import { mapActiveDispatchJobsByPrinter, mapLatestActivePrintJobsByPrinter, mapLatestFinishedPrintJobsByPrinter } from '../lib/trackedPrintJobs'
-import { formatDateTime } from '../lib/time'
+import { type PrintJob, type Printer } from '@printstream/shared'
+import { printerViewPath } from '../lib/printerViewRoutes'
+import { printerViewsQueryKey as buildPrinterViewsQueryKey } from '../lib/printerViewsQuery'
 import { toast } from '../lib/toast'
 import { EmptyState } from '../components/EmptyState'
 import { ConfirmActionDialog } from '../components/ConfirmActionDialog'
 import { NestedViewHeader } from '../components/NestedViewHeader'
 import { NoConnectedBridgesEmptyState } from '../components/NoConnectedBridgesEmptyState'
-import { usePromptDialog } from '../components/PromptDialogProvider'
-import { type DirectorySortDirection, type DirectoryViewMode } from '../components/DirectoryControls'
-import { DirectoryPrimaryToolbar } from '../components/DirectoryToolbar'
-import { MultiSelectOption } from '../components/MultiSelectOption'
-import { PageSectionHeading, pageSectionStackSpacing } from '../components/dashboard/PageSectionHeading'
-import { StatsDateRangePicker } from '../components/StatsDateRangePicker'
-import { recentStatsDateRange, statsDateRangeSearch, type StatsDateRangeSelection } from '../lib/statsDateRange'
-import { SliceFileModal } from '../components/library/SliceFileModal'
-import { SliceThenPrintFlow } from '../components/library/SliceThenPrintFlow'
-import { buildCreateSlicingJobBody } from '../lib/libraryViewHelpers'
-import { SliceThenPrintModal } from '../components/library/SliceThenPrintModal'
-import { PrintModal } from '../components/library/PrintModal'
-import { useMobileViewport } from '../components/useMobileViewport'
-import { usePrintDispatchJobs } from '../hooks/usePrintDispatchJobs'
-import { useLocalStorageState } from '../hooks/useLocalStorageState'
-import { usePersistentState } from '../hooks/usePersistentState'
+import { recentStatsDateRange, type StatsDateRangeSelection } from '../lib/statsDateRange'
 import { shouldShowNoConnectedPrintersEmptyState } from '../lib/printersEmptyState'
 import { usePlateClearingSync } from '../lib/plateClearing'
 import { useRuntimePolicy } from '../lib/runtimePolicy'
 import { buildWorkspacePath, buildWorkspaceSelectionPath } from '../lib/workspaceRoute'
-import { HISTORY_RESULTS, OVERVIEW_VIEW_LABEL, DEFAULT_PRINTER_CARD_CONTENT_SETTINGS, type PrinterStateFilter, parseHistoryViewMode, formatHistoryResultsSummary, formatPrinterViewSelectValue, parseCardsPerRow, parsePrinterStateFilter, encodePrinterViewSort, jobToLibraryFile, printerStateFilterLabel, matchesPrinterStateFilter, matchesPrinterViewAttributeFilters, matchesPrinterSearch, filterPrintersForView, sortPrintersForView, groupPrintersForOverview, parseStoredStringArray, parsePrinterModelFilter, parsePrinterViewSort, parsePrinterCardContentSettings, parsePrinterGroupBy, parsePrinterOverviewPageSize, sameStringSet, shouldShowPrinterOverviewDirectoryControls, PRINTER_OVERVIEW_PAGE_SIZE_OPTIONS, type PrinterGroupBy } from '../lib/printersViewHelpers'
-import { EMPTY_PRINTERS, EMPTY_PRINT_JOBS, EMPTY_PRINTER_VIEWS, HISTORY_PAGE_SIZE_OPTIONS, HISTORY_SORT_OPTIONS, PRINTER_HISTORY_VIEW_MODE_KEY, PRINTER_HISTORY_SORT_DIR_KEY, PRINTER_HISTORY_RESULT_FILTER_KEY, PRINTER_HISTORY_PAGE_SIZE_KEY, OVERVIEW_VIEW_OPTION_VALUE, NEW_VIEW_OPTION_VALUE, PUBLIC_DEMO_PRINTER_MUTATION_NOTICE, showDemoPrinterMutationNotice, showDemoFileUploadNotice, DEFAULT_SINGLE_PRINTER_CARD_CONTENT_SETTINGS } from '../lib/printerViewConstants'
-import { PrinterHistoryCard, PrinterStatsCardGrid } from '../components/printers/PrinterSummaryCards'
+import { jobToLibraryFile, printerStateFilterLabel, shouldShowPrinterOverviewDirectoryControls } from '../lib/printersViewHelpers'
+import { NEW_VIEW_OPTION_VALUE, PUBLIC_DEMO_PRINTER_MUTATION_NOTICE, DEFAULT_SINGLE_PRINTER_CARD_CONTENT_SETTINGS } from '../lib/printerViewConstants'
 import { PluginSlot } from '../plugin/PluginSlot'
-import { SplitButton } from '../components/SplitButton'
-import { PrinterCard } from '../components/printers/PrinterCard'
-import { PrinterSortModal, PrinterViewsModal } from '../components/printers/PrinterViewModals'
+import { PrinterOverviewHeader } from '../components/printers/PrinterOverviewHeader'
+import { PrinterOverviewCardGrid } from '../components/printers/PrinterOverviewCardGrid'
+import { PrinterManagementDialogs } from '../components/printers/PrinterManagementDialogs'
+import { PrinterPrintFlowDialogs } from '../components/printers/PrinterPrintFlowDialogs'
+import { PrinterDetailContent } from '../components/printers/PrinterDetailContent'
+import { PrinterSavedViewDialogs } from '../components/printers/PrinterSavedViewDialogs'
 import { PrinterCardContentSettingsModal } from '../components/printers/PrinterCardContentSettingsModal'
-import { PrinterFormModal, LocalFilePrintGate, type PrinterFormValues } from '../components/printers/PrinterFormModal'
 import { PrinterOverviewToolbar } from '../components/printers/PrinterOverviewToolbar'
-import { LibraryPickerModal } from '../components/printers/LibraryPickerModal'
 import { ListSkeleton } from '../components/ListSkeleton'
-import { PrinterPickerDialog } from '../components/PrinterPickerDialog'
-
-type SliceFlowSubmitInput = Parameters<ComponentProps<typeof SliceFileModal>['onSubmit']>[0]
-type SliceFlowSubmitAction = Parameters<ComponentProps<typeof SliceFileModal>['onSubmit']>[1]
-
-/** The toolbar-editable ("view content") fields that stage as an unsaved draft on a saved view. */
-type PrinterViewDraft = Partial<{
-  sort: PrinterViewSort
-  group: PrinterGroupBy
-  stateFilter: PrinterStateFilter
-  modelFilter: PrinterModel[]
-  nozzleDiameterFilter: string[]
-  plateTypeFilter: string[]
-  printerIds: string[]
-}>
 
 /**
  * Printers dashboard. Lists configured printers with their live status
  * (sourced from the WS-fed `printer-status` cache) and supports adding
  * a new printer via a small modal.
  */
-const HISTORY_PAGE_SIZES = new Set<number>(HISTORY_PAGE_SIZE_OPTIONS)
-const HISTORY_RESULT_SET = new Set<PrintJob['result']>(HISTORY_RESULTS)
-
-/** Validators for the per-printer detail history's persisted directory controls (sort direction, result filter, page size). */
-function sanitizeHistorySortDirection(value: unknown): DirectorySortDirection {
-  return value === 'asc' ? 'asc' : 'desc'
-}
-function sanitizeHistoryResults(value: unknown): PrintJob['result'][] {
-  return Array.isArray(value)
-    ? value.filter((entry): entry is PrintJob['result'] => HISTORY_RESULT_SET.has(entry as PrintJob['result']))
-    : []
-}
-function sanitizeHistoryPageSize(value: unknown): number {
-  return typeof value === 'number' && HISTORY_PAGE_SIZES.has(value) ? value : HISTORY_PAGE_SIZE_OPTIONS[0]
-}
-
 export function PrintersView() {
   const [statsDateRange, setStatsDateRange] = useState<StatsDateRangeSelection>(() => recentStatsDateRange(30))
-  const queryClient = useQueryClient()
-  const { confirm } = usePromptDialog()
   const { demoMode } = useRuntimePolicy()
   const navigate = useNavigate()
   const { workspaceSlug, printerId: routePrinterId, viewId: routeViewId } = useParams<{ workspaceSlug: string; printerId?: string; viewId?: string }>()
   const workspacePath = useCallback((path: string) => (
     workspaceSlug ? buildWorkspacePath(workspaceSlug, path) : buildWorkspaceSelectionPath()
   ), [workspaceSlug])
-  const authBootstrapQuery = useAuthBootstrapQuery()
-  const workspacePreferenceScopeKey = workspacePreferenceScopeKeyFromBootstrap(authBootstrapQuery.data)
+  const singlePrinterView = Boolean(routePrinterId)
+  const {
+    authBootstrapQuery,
+    workspacePreferenceScopeKey,
+    workspaceScopeKey,
+    canOpenBridgesSettings,
+    canDeleteJobs,
+    canUploadLibrary,
+    canViewPrinters,
+    canManagePrinters,
+    canControlPrinters,
+    canViewPrinterStorage,
+    canDownloadPrinterStorage,
+    canDispatchPrints,
+    canViewCamera,
+    showNoConnectedBridgesPlaceholder,
+    printersQuery,
+    printerViewsQuery,
+    bridgesQuery,
+    discoveredQuery,
+    slicingCapabilitiesQuery,
+    jobsQuery,
+    printerRows,
+    printers,
+    printerViews,
+    printerStatuses,
+    status,
+    dispatchJobsByPrinter,
+    latestFinishedJobsByPrinter,
+    latestActiveJobsByPrinter
+  } = usePrinterDashboardData(singlePrinterView)
   const printerViewsQueryKey = useMemo(
     () => buildPrinterViewsQueryKey(workspacePreferenceScopeKey),
     [workspacePreferenceScopeKey]
   )
-  const singlePrinterView = Boolean(routePrinterId)
   usePlateClearingSync()
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState<Printer | null>(null)
-  const [pickerForPrinter, setPickerForPrinter] = useState<Printer | null>(null)
-  const [printTarget, setPrintTarget] = useState<{
-    file: LibraryFile
-    printerId: string
-    defaultPlate?: number
-    defaultPrintOptions?: Partial<PrintStartOptionSelection> | null
-    defaultAmsMapping?: number[] | null
-    submitPrint?: (input: {
-      printerId: string
-      body: Omit<StartOrderPrintInput, 'printerId'>
-    }) => Promise<void>
-  } | null>(null)
-  const [sliceTarget, setSliceTarget] = useState<{ file: LibraryFile; preferredPrinterId: string } | null>(null)
-  const [sliceThenPrintTarget, setSliceThenPrintTarget] = useState<{ sourceFile: LibraryFile; jobId: string; preferredPrinterId: string } | null>(null)
-  // "Slice again": re-slice the project a finished print was produced from, rather than
-  // re-dispatching the identical G-code. Mirrors JobsView.
-  const [resliceJob, setResliceJob] = useState<PrintJob | null>(null)
-  const [replayingJobId, setReplayingJobId] = useState<string | null>(null)
+  const printFlow = usePrinterPrintFlow(demoMode)
+  const {
+    setPrintTarget,
+    setResliceJob,
+    setPageLibraryPickerOpen,
+    setPageLocalPrinterPickerOpen,
+    handleCardPrint,
+    handleCardPrintLocal
+  } = printFlow
   const [deleteHistoryJobTarget, setDeleteHistoryJobTarget] = useState<PrintJob | null>(null)
-  const [deletePrinterViewTarget, setDeletePrinterViewTarget] = useState<PrinterView | null>(null)
-  // "Print from local file" target. Distinct from `pickerForPrinter`
-  // (which opens the library picker) - this opens a hidden file input,
-  // uploads the chosen file with `hidden=true`, then opens the regular
-  // PrintModal pre-targeting the originating printer.
-  const [localFileForPrinter, setLocalFileForPrinter] = useState<Printer | null>(null)
-  // Stable per-action callbacks for PrinterCard. The card is memoized, so these
-  // must keep a constant identity across the parent's per-status-tick re-renders
-  // or the whole grid would re-render anyway. Each takes the printer as an
-  // argument (rather than closing over it) so one callback serves every card.
+  // One stable edit callback serves every memoized PrinterCard.
   const handleCardEdit = useCallback((printer: Printer) => setEditing(printer), [])
-  const handleCardPrint = useCallback((printer: Printer) => setPickerForPrinter(printer), [])
-  const handleCardPrintLocal = useCallback((printer: Printer) => {
-    if (demoMode) showDemoFileUploadNotice()
-    setLocalFileForPrinter(printer)
-  }, [demoMode])
   const handleCardOpenDetails = useCallback(
     (printer: Printer) => navigate(workspacePath(`/printers/${printer.id}`)),
     [navigate, workspacePath]
   )
-  // Page-level Print flow (button next to "Add printer"). Library files can
-  // defer machine selection to PrintModal. A local upload first uses the shared
-  // printer picker because bridge-owned storage needs a destination up front.
-  const [pageLibraryPickerOpen, setPageLibraryPickerOpen] = useState(false)
-  const [pageLocalPrinterPickerOpen, setPageLocalPrinterPickerOpen] = useState(false)
   const [sortDialogOpen, setSortDialogOpen] = useState(false)
   const [printerViewsDialogOpen, setPrinterViewsDialogOpen] = useState(false)
   const [printerViewsDialogMode, setPrinterViewsDialogMode] = useState<'settings' | 'create'>('settings')
   const [singleViewSettingsOpen, setSingleViewSettingsOpen] = useState(false)
-  const [detailHistorySearch, setDetailHistorySearch] = useState('')
-  const deferredDetailHistorySearch = useDeferredValue(detailHistorySearch)
-  const [detailHistoryResults, setDetailHistoryResults] = usePersistentState<PrintJob['result'][]>(PRINTER_HISTORY_RESULT_FILTER_KEY, [], sanitizeHistoryResults)
-  const [detailHistorySortDirection, setDetailHistorySortDirection] = usePersistentState<DirectorySortDirection>(PRINTER_HISTORY_SORT_DIR_KEY, 'desc', sanitizeHistorySortDirection)
-  const [detailHistoryPage, setDetailHistoryPage] = useState(0)
-  const [detailHistoryPageSize, setDetailHistoryPageSize] = usePersistentState<number>(PRINTER_HISTORY_PAGE_SIZE_KEY, HISTORY_PAGE_SIZE_OPTIONS[0], sanitizeHistoryPageSize)
-  const [detailHistoryViewMode, setDetailHistoryViewMode] = useLocalStorageState<DirectoryViewMode>(
-    PRINTER_HISTORY_VIEW_MODE_KEY,
-    'list',
-    parseHistoryViewMode,
-    String
-  )
-  const isMobileViewport = useMobileViewport()
-
-  const closePrintFlow = () => {
-    setPrintTarget(null)
-    setSliceTarget(null)
-    setSliceThenPrintTarget(null)
-    setPickerForPrinter(null)
-    setPageLibraryPickerOpen(false)
-  }
-
-  const goBackFromPrintFlow = () => {
-    setPrintTarget(null)
-  }
-
-  const [cardsPerRow, setCardsPerRow] = useLocalStorageState(
-    `bambu.printers.cardsPerRow.${workspacePreferenceScopeKey}`,
-    3,
-    parseCardsPerRow,
-    String
-  )
-  const [stateFilter, setStateFilter] = useLocalStorageState<PrinterStateFilter>(
-    `bambu.printers.stateFilter.${workspacePreferenceScopeKey}`,
-    'all',
-    parsePrinterStateFilter,
-    String
-  )
-  const [modelFilter, setModelFilter] = useLocalStorageState<PrinterModel[]>(
-    `bambu.printers.modelFilter.${workspacePreferenceScopeKey}`,
-    [],
-    parsePrinterModelFilter,
-    JSON.stringify
-  )
-  const [nozzleDiameterFilter, setNozzleDiameterFilter] = useLocalStorageState<string[]>(
-    `bambu.printers.nozzleDiameterFilter.${workspacePreferenceScopeKey}`,
-    [],
-    parseStoredStringArray,
-    JSON.stringify
-  )
-  const [plateTypeFilter, setPlateTypeFilter] = useLocalStorageState<string[]>(
-    `bambu.printers.plateTypeFilter.${workspacePreferenceScopeKey}`,
-    [],
-    parseStoredStringArray,
-    JSON.stringify
-  )
-  const [printerCardContentSettings, setPrinterCardContentSettings] = useLocalStorageState<PrinterCardContentSettings>(
-    `bambu.printers.cardContentSettings.${workspacePreferenceScopeKey}`,
-    DEFAULT_PRINTER_CARD_CONTENT_SETTINGS,
-    parsePrinterCardContentSettings,
-    JSON.stringify
-  )
-  // The single-printer view shows one full-detail card; its content toggles are
-  // a workspace preference shared across every printer, independent of the
-  // multi-printer Overview/saved-view settings above.
-  const [singlePrinterCardContentSettings, setSinglePrinterCardContentSettings] = useLocalStorageState<PrinterCardContentSettings>(
-    `bambu.printers.singleCardContentSettings.${workspacePreferenceScopeKey}`,
-    DEFAULT_SINGLE_PRINTER_CARD_CONTENT_SETTINGS,
-    parsePrinterCardContentSettings,
-    JSON.stringify
-  )
-  const [defaultViewPrinterIds, setDefaultViewPrinterIds] = useLocalStorageState<string[]>(
-    `bambu.printers.viewPrinterIds.${workspacePreferenceScopeKey}`,
-    [],
-    parseStoredStringArray,
-    JSON.stringify
-  )
-  const [defaultViewSort, setDefaultViewSort] = useLocalStorageState<PrinterViewSort>(
-    `bambu.printers.viewSort.${workspacePreferenceScopeKey}`,
-    defaultPrinterViewSort,
-    parsePrinterViewSort,
-    encodePrinterViewSort
-  )
-  // Two-tier default view: this device's override shadows the workspace-shared
-  // default (see lib/printerViewDefaults.ts); both are edited from the View
-  // settings dialog's Default view card.
-  const [defaultViewOverride, setDefaultViewOverride] = useDefaultPrinterViewOverride()
-  const sharedDefaultViewId = useSharedDefaultPrinterViewId()
+  const {
+    cardsPerRow,
+    setCardsPerRow,
+    stateFilter,
+    setStateFilter,
+    modelFilter,
+    setModelFilter,
+    nozzleDiameterFilter,
+    setNozzleDiameterFilter,
+    plateTypeFilter,
+    setPlateTypeFilter,
+    printerCardContentSettings,
+    setPrinterCardContentSettings,
+    singlePrinterCardContentSettings,
+    setSinglePrinterCardContentSettings,
+    defaultViewPrinterIds,
+    setDefaultViewPrinterIds,
+    defaultViewSort,
+    setDefaultViewSort,
+    defaultViewOverride,
+    setDefaultViewOverride,
+    sharedDefaultViewId,
+    overviewGroup,
+    setOverviewGroup,
+    overviewPageSize,
+    setOverviewPageSize
+  } = usePrinterOverviewPreferences(workspacePreferenceScopeKey)
 
   // Overview directory-toolbar state. Search + page are ephemeral; page size is a
   // local display preference. Sort, grouping, the attribute filters, and the printer
@@ -271,221 +153,81 @@ export function PrintersView() {
   // user saves; on the Overview they write the local defaults (see applyToolbarChange).
   const [overviewSearch, setOverviewSearch] = useState('')
   const deferredOverviewSearch = useDeferredValue(overviewSearch)
-  // Overview has no server row, so its grouping is a local pref; saved views store
-  // grouping server-side on the view itself.
-  const [overviewGroup, setOverviewGroup] = useLocalStorageState<PrinterGroupBy>(
-    `bambu.printers.overviewGroup.${workspacePreferenceScopeKey}`,
-    'none',
-    parsePrinterGroupBy,
-    String
-  )
-  const [overviewPageSize, setOverviewPageSize] = useLocalStorageState<number>(
-    `bambu.printers.overviewPageSize.${workspacePreferenceScopeKey}`,
-    PRINTER_OVERVIEW_PAGE_SIZE_OPTIONS[1],
-    parsePrinterOverviewPageSize,
-    String
-  )
   const [overviewPage, setOverviewPage] = useState(0)
-  // Pending, unsaved toolbar edits to the active saved view (null = in sync with the
-  // saved view). Overlays the view's stored fields until Save changes / Reset.
-  const [viewDraft, setViewDraft] = useState<PrinterViewDraft | null>(null)
-
-  const grantedPermissions = useMemo(
-    () => new Set(authBootstrapQuery.data?.permissions ?? []),
-    [authBootstrapQuery.data?.permissions]
-  )
-  const authEnabled = authBootstrapQuery.data?.authEnabled ?? false
-  const canOpenBridgesSettings = authBootstrapQuery.data?.capabilities.canManageSettings ?? false
-  const hasPermission = useCallback(
-    (permission: Permission) => !authEnabled || grantedPermissions.has(permission),
-    [authEnabled, grantedPermissions]
-  )
-  const canDeleteJobs = hasPermission(JOBS_DELETE_PERMISSION)
-  const canUploadLibrary = hasPermission(LIBRARY_UPLOAD_PERMISSION)
-  const canViewPrinters = hasPermission(PRINTERS_VIEW_PERMISSION)
-  const canManagePrinters = hasPermission(PRINTERS_MANAGE_PERMISSION)
-  const canControlPrinters = hasPermission(PRINTERS_CONTROL_PERMISSION)
-  const canViewPrinterStorage = hasPermission(PRINTER_STORAGE_VIEW_PERMISSION)
-  const canDownloadPrinterStorage = hasPermission(PRINTER_STORAGE_DOWNLOAD_PERMISSION)
-  const canDispatchPrints = hasPermission(PRINTS_DISPATCH_PERMISSION)
-  const canViewJobs = hasPermission(JOBS_VIEW_PERMISSION)
-  const canViewCamera = hasPermission(CAMERA_VIEW_PERMISSION)
-  const workspaceScopeKey = readCurrentWorkspaceScopeKey()
-  const showNoConnectedBridgesPlaceholder = authBootstrapQuery.isSuccess
-    && !singlePrinterView
-    && authBootstrapQuery.data?.workspace != null
-    && !authBootstrapQuery.data.workspaceHasConnectedBridges
-
-  const printersQuery = useQuery({
-    queryKey: ['printers'],
-    queryFn: ({ signal }) => apiFetch<{ printers: Printer[] }>('/api/printers', { signal }),
-    enabled: authBootstrapQuery.isSuccess ? (canViewPrinters && !showNoConnectedBridgesPlaceholder) : false
-  })
-  const printerViewsQuery = usePrinterViewsQuery(!showNoConnectedBridgesPlaceholder)
-  const bridgesQuery = useQuery({
-    queryKey: ['bridges'],
-    queryFn: ({ signal }) => apiFetch<BridgeListResponse>('/api/bridges', { signal }),
-    enabled: authBootstrapQuery.isSuccess ? (canManagePrinters && !showNoConnectedBridgesPlaceholder) : false
-  })
-
-  // Discovered (LAN-broadcast) printers that the user has not yet
-  // adopted. The WebSocket fan-out keeps this cache fresh; the initial
-  // fetch covers the case where the WS replay has not arrived yet.
-  const discoveredQuery = useQuery({
-    queryKey: workspaceQueryKeys.printersDiscovered(workspaceScopeKey),
-    queryFn: ({ signal }) => apiFetch<{ printers: DiscoveredPrinter[] }>('/api/printers/discovered', { signal }),
-    enabled: authBootstrapQuery.isSuccess ? (canManagePrinters && !showNoConnectedBridgesPlaceholder) : false,
-    staleTime: 10_000
-  })
-  const slicingCapabilitiesQuery = useQuery({
-    queryKey: ['slicing-capabilities'],
-    queryFn: ({ signal }) => apiFetch<SlicingCapabilities>('/api/slicing/capabilities', { signal }),
-    enabled: authBootstrapQuery.isSuccess ? (canDispatchPrints && canUploadLibrary && !showNoConnectedBridgesPlaceholder) : false
-  })
-  // Warm the slicer profile catalogue before a print-from-library flow opens the slice dialog.
-  const slicingCapabilitiesData = slicingCapabilitiesQuery.data
-  useEffect(() => {
-    prefetchSlicingPresets(queryClient, slicingCapabilitiesData)
-  }, [queryClient, slicingCapabilitiesData])
-  const jobsQuery = useQuery({
-    queryKey: ['jobs'],
-    queryFn: ({ signal }) => apiFetch<{ jobs: PrintJob[] }>('/api/jobs', { signal }),
-    enabled: authBootstrapQuery.isSuccess ? (canViewJobs && !showNoConnectedBridgesPlaceholder) : false
-  })
-  const dispatchQuery = usePrintDispatchJobs({
-    enabled: authBootstrapQuery.isSuccess ? (canViewJobs && !showNoConnectedBridgesPlaceholder) : false,
-    suppressGlobalErrorToast: true
-  })
-
-  // Seed the status cache from HTTP so cards do not default to Offline if
-  // the WS replay is late, then keep it fresh from the shared WS hook.
-  const statusQuery = useQuery<Record<string, PrinterStatus>>({
-    queryKey: workspaceQueryKeys.printerStatus(workspaceScopeKey),
-    queryFn: async ({ signal }) => (await apiFetch<{ statuses: Record<string, PrinterStatus> }>('/api/printers/status', { signal })).statuses,
-    initialData: {},
-    enabled: authBootstrapQuery.isSuccess ? (canViewPrinters && !showNoConnectedBridgesPlaceholder) : false,
-    staleTime: Infinity,
-    refetchOnWindowFocus: false,
-    refetchOnReconnect: false
-  })
-  const printerStatuses = statusQuery.data
-  const printerRows = printersQuery.data?.printers
-  const status = statusQuery.data
-  const printers = printersQuery.data?.printers ?? EMPTY_PRINTERS
   const showOverviewDirectoryControls = shouldShowPrinterOverviewDirectoryControls(printers.length)
-  const persistedJobs = jobsQuery.data?.jobs ?? EMPTY_PRINT_JOBS
-  const printerViews = printerViewsQuery.data?.views ?? EMPTY_PRINTER_VIEWS
-  const effectiveDefaultViewId = resolveEffectiveDefaultPrinterViewId({
-    override: defaultViewOverride,
-    sharedDefaultViewId,
-    views: printerViews
-  })
-  // The URL owns the active view: a pinned `/printers/views/<id>` address wins,
-  // and the bare `/printers` address applies the effective default view.
-  const activePrinterViewId = resolveActivePrinterViewId({
+
+  const {
+    effectiveDefaultViewId,
+    activeViewId: activePrinterViewId,
+    activeView: activePrinterView,
+    navigateToSelectedView
+  } = usePrinterViewRoute({
+    views: printerViews,
+    viewsLoaded: Boolean(printerViewsQuery.data),
     routeViewId,
-    storedDefaultViewId: effectiveDefaultViewId,
-    views: printerViews
+    defaultViewOverride,
+    setDefaultViewOverride,
+    sharedDefaultViewId,
+    workspacePath,
+    navigate
   })
-  const activePrinterView = useMemo(
-    () => printerViews.find((view) => view.id === activePrinterViewId) ?? null,
-    [activePrinterViewId, printerViews]
-  )
   // Layout + card content are owned by the View settings dialog (not the toolbar),
   // so they read straight from the active view / local default.
   const effectiveCardsPerRow = activePrinterView?.cardsPerRow ?? cardsPerRow
   const effectiveCardContentSettings = activePrinterView?.cardContentSettings ?? printerCardContentSettings
   // Toolbar-owned "view content": the draft overlays the saved view; Overview reads its
   // local defaults. These drive the toolbar, filtering, sorting, and grouping below.
-  const effectiveSort = activePrinterView ? (viewDraft?.sort ?? activePrinterView.sort) : defaultViewSort
-  const effectiveGroup = activePrinterView ? (viewDraft?.group ?? activePrinterView.group) : overviewGroup
-  const effectiveStateFilter = activePrinterView ? (viewDraft?.stateFilter ?? activePrinterView.stateFilter) : stateFilter
-  const effectiveModelFilter = activePrinterView ? (viewDraft?.modelFilter ?? activePrinterView.modelFilter) : modelFilter
-  const effectiveNozzleDiameterFilter = activePrinterView ? (viewDraft?.nozzleDiameterFilter ?? activePrinterView.nozzleDiameterFilter) : nozzleDiameterFilter
-  const effectivePlateTypeFilter = activePrinterView ? (viewDraft?.plateTypeFilter ?? activePrinterView.plateTypeFilter) : plateTypeFilter
-  const effectivePrinterIds = activePrinterView ? (viewDraft?.printerIds ?? activePrinterView.printerIds) : defaultViewPrinterIds
-  // A saved view has unsaved toolbar edits when any "view content" field diverges from it.
-  const isViewDirty = activePrinterView != null && (
-    effectiveSort.key !== activePrinterView.sort.key
-    || effectiveSort.direction !== activePrinterView.sort.direction
-    || effectiveGroup !== activePrinterView.group
-    || effectiveStateFilter !== activePrinterView.stateFilter
-    || !sameStringSet(effectiveModelFilter, activePrinterView.modelFilter)
-    || !sameStringSet(effectiveNozzleDiameterFilter, activePrinterView.nozzleDiameterFilter)
-    || !sameStringSet(effectivePlateTypeFilter, activePrinterView.plateTypeFilter)
-    || !sameStringSet(effectivePrinterIds, activePrinterView.printerIds)
-  )
-  const dispatchJobsByPrinter = useMemo(
-    () => mapActiveDispatchJobsByPrinter(persistedJobs, dispatchQuery.data?.jobs ?? []),
-    [dispatchQuery.data?.jobs, persistedJobs]
-  )
-  const latestFinishedJobsByPrinter = useMemo(
-    () => mapLatestFinishedPrintJobsByPrinter(persistedJobs),
-    [persistedJobs]
-  )
-  const latestActiveJobsByPrinter = useMemo(
-    () => mapLatestActivePrintJobsByPrinter(persistedJobs),
-    [persistedJobs]
-  )
-  useEffect(() => {
-    if (!printerViewsQuery.data) return
-    // A device override naming a deleted view is cleared back to "follow the
-    // workspace default". The `overview` sentinel is not a view id and stays.
-    if (defaultViewOverride && defaultViewOverride !== OVERVIEW_VIEW_ROUTE_ID && !printerViews.some((view) => view.id === defaultViewOverride)) {
-      setDefaultViewOverride(null)
-    }
-    // A pinned address whose view no longer exists (deleted here or elsewhere)
-    // falls back to the bare address, which applies the effective default.
-    if (routeViewId && routeViewId !== OVERVIEW_VIEW_ROUTE_ID && !printerViews.some((view) => view.id === routeViewId)) {
-      navigate(workspacePath('/printers'), { replace: true })
-    }
+  const handleOverviewToolbarChange = useCallback((partial: PrinterViewDraft) => {
+    if (partial.sort !== undefined) setDefaultViewSort(partial.sort)
+    if (partial.group !== undefined) setOverviewGroup(partial.group)
+    if (partial.stateFilter !== undefined) setStateFilter(partial.stateFilter)
+    if (partial.modelFilter !== undefined) setModelFilter(partial.modelFilter)
+    if (partial.nozzleDiameterFilter !== undefined) setNozzleDiameterFilter(partial.nozzleDiameterFilter)
+    if (partial.plateTypeFilter !== undefined) setPlateTypeFilter(partial.plateTypeFilter)
+    if (partial.printerIds !== undefined) setDefaultViewPrinterIds(partial.printerIds)
   }, [
-    defaultViewOverride,
-    navigate,
-    printerViews,
-    printerViewsQuery.data,
-    routeViewId,
-    setDefaultViewOverride,
-    workspacePath
+    setDefaultViewPrinterIds,
+    setDefaultViewSort,
+    setModelFilter,
+    setNozzleDiameterFilter,
+    setOverviewGroup,
+    setPlateTypeFilter,
+    setStateFilter
   ])
-
+  const resetOverviewPage = useCallback(() => setOverviewPage(0), [])
+  const {
+    content: effectiveViewContent,
+    isDirty: isViewDirty,
+    apply: applyToolbarChange,
+    clear: clearViewDraft
+  } = usePrinterViewDraft({
+    activeView: activePrinterView,
+    activeViewId: activePrinterViewId,
+    overviewDefaults: {
+      sort: defaultViewSort,
+      group: overviewGroup,
+      stateFilter,
+      modelFilter,
+      nozzleDiameterFilter,
+      plateTypeFilter,
+      printerIds: defaultViewPrinterIds
+    },
+    onOverviewChange: handleOverviewToolbarChange,
+    onStageChange: resetOverviewPage
+  })
+  const {
+    sort: effectiveSort,
+    group: effectiveGroup,
+    stateFilter: effectiveStateFilter,
+    modelFilter: effectiveModelFilter,
+    nozzleDiameterFilter: effectiveNozzleDiameterFilter,
+    plateTypeFilter: effectivePlateTypeFilter,
+    printerIds: effectivePrinterIds
+  } = effectiveViewContent
   const tagFilter = useTagFilter('printer', 'printers.overview')
   const { matches: matchesTags, searchText: tagSearchText } = tagFilter
   const { openTags, tagDialog } = useTagAssignment('printer')
   useEffect(() => { setOverviewPage(0) }, [tagFilter.value])
-  const filteredPrinters = useMemo(
-    () => {
-      const attributeFiltered = (printerRows ?? []).filter((printer) => {
-        const status = printerStatuses?.[printer.id]
-        return matchesTags(printer.id)
-          && (matchesPrinterSearch(printer, deferredOverviewSearch) || tagSearchText(printer.id).toLowerCase().includes(deferredOverviewSearch.trim().toLowerCase()))
-          && matchesPrinterStateFilter(status, effectiveStateFilter)
-          && matchesPrinterViewAttributeFilters(printer, status, {
-            modelFilter: effectiveModelFilter,
-            nozzleDiameterFilter: effectiveNozzleDiameterFilter,
-            plateTypeFilter: effectivePlateTypeFilter
-          })
-      })
-      const viewFiltered = filterPrintersForView(attributeFiltered, effectivePrinterIds)
-      return sortPrintersForView(viewFiltered, printerStatuses ?? {}, effectiveSort)
-    },
-    [
-      matchesTags,
-      tagSearchText,
-      deferredOverviewSearch,
-      effectiveModelFilter,
-      effectiveNozzleDiameterFilter,
-      effectivePlateTypeFilter,
-      effectivePrinterIds,
-      effectiveSort,
-      effectiveStateFilter,
-      printerRows,
-      printerStatuses
-    ]
-  )
-  const printerSelection = useDirectorySelection(filteredPrinters)
-  const { selectionMode: tagSelectionMode, setSelectionMode: setTagSelectionMode, selectedItems: selectedTagPrinters } = printerSelection
-  const allTagPrintersSelected = filteredPrinters.length > 0 && selectedTagPrinters.length === filteredPrinters.length
   const bridgeNameById = useMemo(() => {
     const map = new Map<string, string>()
     for (const bridge of bridgesQuery.data?.bridges ?? []) map.set(bridge.id, bridge.name)
@@ -495,245 +237,51 @@ export function PrintersView() {
     (bridgeId: string | null) => (bridgeId ? bridgeNameById.get(bridgeId) ?? 'Unknown bridge' : 'No bridge'),
     [bridgeNameById]
   )
-  const overviewPageCount = Math.max(1, Math.ceil(filteredPrinters.length / overviewPageSize))
-  const safeOverviewPage = Math.min(overviewPage, overviewPageCount - 1)
-  const pagedPrinters = useMemo(() => {
-    const start = safeOverviewPage * overviewPageSize
-    return filteredPrinters.slice(start, start + overviewPageSize)
-  }, [filteredPrinters, overviewPageSize, safeOverviewPage])
-  const printerGroups = useMemo(
-    () => groupPrintersForOverview(pagedPrinters, printerStatuses ?? {}, effectiveGroup, resolveBridgeName),
-    [effectiveGroup, pagedPrinters, printerStatuses, resolveBridgeName]
-  )
+  const { filteredPrinters, printerGroups, overviewPageCount, safeOverviewPage } = usePrinterOverviewResults({
+    printers: printerRows,
+    statuses: printerStatuses,
+    search: deferredOverviewSearch,
+    matchesTags,
+    tagSearchText,
+    view: effectiveViewContent,
+    page: overviewPage,
+    setPage: setOverviewPage,
+    pageSize: overviewPageSize,
+    resolveBridgeName
+  })
   useEffect(() => {
-    setOverviewPage((current) => Math.min(current, Math.max(0, Math.ceil(filteredPrinters.length / overviewPageSize) - 1)))
-  }, [filteredPrinters.length, overviewPageSize])
-  useEffect(() => {
-    // Switching views drops any unsaved toolbar draft from the previous view.
+    // Switching saved views starts the directory at its first page.
     setOverviewPage(0)
-    setViewDraft(null)
   }, [activePrinterViewId])
+  const printerSelection = useDirectorySelection(filteredPrinters)
+  const { selectionMode: tagSelectionMode, setSelectionMode: setTagSelectionMode, selectedItems: selectedTagPrinters } = printerSelection
+  const allTagPrintersSelected = filteredPrinters.length > 0 && selectedTagPrinters.length === filteredPrinters.length
   const selectedPrinter = useMemo(
     () => (routePrinterId ? printers.find((printer) => printer.id === routePrinterId) ?? null : null),
     [printers, routePrinterId]
   )
-  const printerStatsQuery = useQuery({
-    queryKey: ['printer-stats', routePrinterId, statsDateRange?.from ?? 'all', statsDateRange?.to ?? 'all'],
-    queryFn: ({ signal }) => apiFetch<PrinterStatsResponse>(`/api/printers/${routePrinterId}/stats${statsDateRangeSearch(statsDateRange)}`, { signal }),
-    enabled: authBootstrapQuery.isSuccess ? (singlePrinterView && canViewPrinters && selectedPrinter != null) : false
-  })
-  const selectedPrinterJobs = useMemo(() => {
-    if (!routePrinterId) return []
-    return (jobsQuery.data?.jobs ?? [])
-      .filter((job) => job.printerId === routePrinterId && job.finishedAt)
-      .slice()
-      .sort((left, right) => detailHistorySortDirection === 'desc'
-        ? (right.finishedAt ?? '').localeCompare(left.finishedAt ?? '')
-        : (left.finishedAt ?? '').localeCompare(right.finishedAt ?? ''))
-  }, [detailHistorySortDirection, jobsQuery.data?.jobs, routePrinterId])
-  const filteredSelectedPrinterJobs = useMemo(() => {
-    const activeResults = new Set(detailHistoryResults)
-    const normalizedSearch = deferredDetailHistorySearch.trim().toLowerCase()
-    return selectedPrinterJobs.filter((job) => {
-      if (activeResults.size > 0 && !activeResults.has(job.result)) return false
-      if (!normalizedSearch) return true
-      const searchHaystack = [
-        formatLibraryFileName(job.fileName || job.jobName || 'Untitled'),
-        job.result,
-        formatDateTime(job.startedAt)
-      ].join(' ').toLowerCase()
-      return searchHaystack.includes(normalizedSearch)
-    })
-  }, [deferredDetailHistorySearch, detailHistoryResults, selectedPrinterJobs])
-  const detailHistoryPageCount = Math.max(1, Math.ceil(filteredSelectedPrinterJobs.length / detailHistoryPageSize))
-  const safeDetailHistoryPage = Math.min(detailHistoryPage, detailHistoryPageCount - 1)
-  const activeDetailHistoryFilterCount = Number(detailHistoryResults.length > 0)
-  const effectiveDetailHistoryViewMode: DirectoryViewMode = isMobileViewport ? 'list' : detailHistoryViewMode
-  const visibleSelectedPrinterJobs = useMemo(() => {
-    const start = safeDetailHistoryPage * detailHistoryPageSize
-    return filteredSelectedPrinterJobs.slice(start, start + detailHistoryPageSize)
-  }, [detailHistoryPageSize, filteredSelectedPrinterJobs, safeDetailHistoryPage])
+  const detailHistory = usePrinterDetailHistory(jobsQuery.data?.jobs, routePrinterId)
 
-  useEffect(() => {
-    setDetailHistoryPage((current) => Math.min(current, Math.max(0, Math.ceil(filteredSelectedPrinterJobs.length / detailHistoryPageSize) - 1)))
-  }, [detailHistoryPageSize, filteredSelectedPrinterJobs.length])
+  const { restartJob, deleteHistoryJob, replayingJobId } = usePrinterJobMutations(workspaceScopeKey)
 
-  function clearDetailHistoryFilters() {
-    setDetailHistoryResults([])
-  }
-
-  const addPrinter = useMutation({
-    mutationFn: (input: PrinterFormValues) =>
-      apiFetch<{ printer: Printer }>('/api/printers', { method: 'POST', body: input }),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['printers'] })
-      setOpen(false)
-    }
-  })
-
-  const editPrinter = useMutation({
-    mutationFn: ({ id, input }: { id: string; input: PrinterFormValues }) => {
-      // Access code is write-only: the server never sends it back, so a blank
-      // field means "keep the current code": omit it from the patch entirely.
-      const { accessCode, ...rest } = input
-      const body = accessCode.trim() ? input : rest
-      return apiFetch<{ printer: Printer }>(`/api/printers/${id}`, { method: 'PATCH', body })
-    },
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['printers'] })
-      // Edits can change the manual lifetime-stats adjustments shown on the stats cards.
-      void queryClient.invalidateQueries({ queryKey: ['printer-stats'] })
-      setEditing(null)
-    }
-  })
-
-  const deletePrinter = useMutation({
-    mutationFn: (id: string) => apiFetch(`/api/printers/${id}`, { method: 'DELETE' }),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['printers'] })
-      setEditing(null)
-    }
-  })
-
-  const reorderPrinters = useMutation({
-    mutationFn: (orderedIds: string[]) =>
-      apiFetch('/api/printers/reorder', {
-        method: 'POST',
-        body: { orderedIds }
-      }),
-    onSuccess: () => {
-      toast.success('Printer order saved')
-      void queryClient.invalidateQueries({ queryKey: ['printers'] })
-      setSortDialogOpen(false)
-    }
-  })
-  const restartJob = useMutation({
-    mutationFn: async (input: { jobId: string; body?: Record<string, unknown> }) => {
-      setReplayingJobId(input.jobId)
-      return await apiFetch<void | { job: PrintDispatchJob }>(`/api/jobs/${input.jobId}/reprint`, {
-        method: 'POST',
-        ...(input.body ? { body: input.body } : {})
-      })
-    },
-    onSettled: () => {
-      setReplayingJobId(null)
-    },
-    onSuccess: () => {
-      void Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['jobs'] }),
-        queryClient.invalidateQueries({ queryKey: ['print-dispatch'] }),
-        queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.printerStatus(workspaceScopeKey) })
-      ])
-    }
-  })
-  const deleteHistoryJob = useMutation({
-    mutationFn: (jobId: string) => apiFetch<void>(`/api/jobs/${jobId}`, { method: 'DELETE' }),
-    onSuccess: () => {
-      toast.success('History entry deleted')
-      void queryClient.invalidateQueries({ queryKey: ['jobs'] })
-    },
-    onError: (error) => {
-      toast.error(extractErrorMessage(error))
-    }
-  })
-  const startSlicingJob = useMutation({
-    mutationFn: async (input: {
-      file: LibraryFile
-      preferredPrinterId: string
-      action: SliceFlowSubmitAction
-    } & SliceFlowSubmitInput) => {
-      const body = buildCreateSlicingJobBody(input, {
-        sourceFileId: input.file.id,
-        outputFolderId: null,
-        hiddenOutput: input.action === 'print'
-      })
-      return await apiFetch<SlicingJobResponse>('/api/slicing/jobs', { method: 'POST', body })
-    },
-    onSuccess: (response, variables) => {
-      // Keep the slice dialog mounted beneath the print flow so its "Back" returns to
-      // slice settings; the whole flow is torn down together via closePrintFlow.
-      // The list refresh is not awaited: see slicingJobsCache.
-      seedSlicingJob(queryClient, response.job)
-      refreshSlicingJobs(queryClient)
-      if (variables.action === 'print') {
-        setSliceThenPrintTarget({
-          sourceFile: variables.file,
-          jobId: response.job.id,
-          preferredPrinterId: variables.preferredPrinterId
-        })
-      }
-    }
-  })
-  const createPrinterView = useMutation({
-    mutationFn: (input: PrinterViewInput) =>
-      apiFetch<{ view: PrinterView }>('/api/printer-views', { method: 'POST', body: input }),
-    onSuccess: ({ view }) => {
-      toast.success('View saved')
-      queryClient.setQueryData<{ views: PrinterView[] }>(printerViewsQueryKey, (current) => ({
-        views: [...(current?.views ?? []), view]
-      }))
-      void queryClient.invalidateQueries({ queryKey: printerViewsQueryKey })
-      setViewDraft(null)
-      setPrinterViewsDialogOpen(false)
-      // After the cache is seeded, so the new view's address renders it directly.
-      navigate(workspacePath(printerViewPath(view.id)))
-    }
-  })
-  const updatePrinterView = useMutation({
-    mutationFn: ({ id, input }: { id: string; input: PrinterViewInput }) =>
-      apiFetch<{ view: PrinterView }>(`/api/printer-views/${id}`, { method: 'PATCH', body: input }),
-    onSuccess: ({ view }) => {
-      toast.success('View updated')
-      queryClient.setQueryData<{ views: PrinterView[] }>(printerViewsQueryKey, (current) => ({
-        views: (current?.views ?? []).map((entry) => (entry.id === view.id ? view : entry))
-      }))
-      void queryClient.invalidateQueries({ queryKey: printerViewsQueryKey })
-      setPrinterViewsDialogOpen(false)
-    }
-  })
-  const deletePrinterView = useMutation({
-    mutationFn: (id: string) => apiFetch(`/api/printer-views/${id}`, { method: 'DELETE' }),
-    onSuccess: (_data, id) => {
-      toast.success('View deleted')
-      queryClient.setQueryData<{ views: PrinterView[] }>(printerViewsQueryKey, (current) => ({
-        views: (current?.views ?? []).filter((entry) => entry.id !== id)
-      }))
-      void queryClient.invalidateQueries({ queryKey: printerViewsQueryKey })
-      // If the deleted view was pinned in the URL, the stale-address effect
-      // above replaces to the bare route once the cache update lands. The API
-      // clears a workspace default naming the deleted view, so refresh the
-      // general-settings cache too.
+  const {
+    create: createPrinterView,
+    update: updatePrinterView,
+    remove: deletePrinterView,
+    saveToolbarContent
+  } = usePrinterViewMutations({
+    queryKey: printerViewsQueryKey,
+    clearDraft: clearViewDraft,
+    closeDialog: () => setPrinterViewsDialogOpen(false),
+    onCreated: (id) => navigate(workspacePath(printerViewPath(id))),
+    onDeleted: (id) => {
       if (defaultViewOverride === id) setDefaultViewOverride(null)
-      void queryClient.invalidateQueries({ queryKey: ['general-settings'] })
-      setPrinterViewsDialogOpen(false)
-    }
-  })
-  // Quiet (no toast / no dialog) PATCH used when the inline toolbar edits the
-  // active saved view in place. Reconciles the cache from the server response.
-  const quietUpdatePrinterView = useMutation({
-    mutationFn: ({ id, input }: { id: string; input: PrinterViewInput }) =>
-      apiFetch<{ view: PrinterView }>(`/api/printer-views/${id}`, { method: 'PATCH', body: input }),
-    onSuccess: ({ view }) => {
-      queryClient.setQueryData<{ views: PrinterView[] }>(printerViewsQueryKey, (current) => ({
-        views: (current?.views ?? []).map((entry) => (entry.id === view.id ? view : entry))
-      }))
-    },
-    onError: (error) => {
-      toast.error(extractErrorMessage(error))
-      void queryClient.invalidateQueries({ queryKey: printerViewsQueryKey })
+      // Leave the deleted view immediately so the selector never renders with no option.
+      // The route hook still repairs stale bookmarks and deletions from another session.
+      if (routeViewId === id) navigate(workspacePath('/printers'), { replace: true })
     }
   })
 
-  // Shared by the desktop and mobile view Selects. Switching views is a
-  // navigation, every view has its own address (see lib/printerViewRoutes.ts),
-  // so bookmarks and back/forward work; the draft clears in the same batch to
-  // avoid one frame of the next view under the previous view's unsaved edits.
-  //
-  // `null` is never a user pick (every option carries a value, Overview
-  // included): it is the base Select clearing a selection whose Option is not
-  // mounted, which happens transiently while the views are still loading and
-  // the active view's Option does not exist yet. Acting on it would "correct"
-  // a freshly opened view address back to the Overview mid-load.
   const handleViewSelectChange = useCallback((_event: unknown, value: string | null) => {
     if (value == null) return
     if (value === NEW_VIEW_OPTION_VALUE) {
@@ -741,83 +289,14 @@ export function PrintersView() {
       setPrinterViewsDialogOpen(true)
       return
     }
-    setViewDraft(null)
-    navigate(workspacePath(printerViewPath(value === OVERVIEW_VIEW_OPTION_VALUE ? OVERVIEW_VIEW_ROUTE_ID : value)))
-  }, [navigate, workspacePath])
+    navigateToSelectedView(value, clearViewDraft)
+  }, [clearViewDraft, navigateToSelectedView])
 
-  // Stage a toolbar "view content" change: on a saved view it overlays the draft
-  // (committed later via Save changes); on the Overview it writes the local defaults.
-  const applyToolbarChange = useCallback((partial: PrinterViewDraft) => {
-    setOverviewPage(0)
-    if (activePrinterView) {
-      setViewDraft((current) => ({ ...current, ...partial }))
-      return
-    }
-    if (partial.sort !== undefined) setDefaultViewSort(partial.sort)
-    if (partial.group !== undefined) setOverviewGroup(partial.group)
-    if (partial.stateFilter !== undefined) setStateFilter(partial.stateFilter)
-    if (partial.modelFilter !== undefined) setModelFilter(partial.modelFilter)
-    if (partial.nozzleDiameterFilter !== undefined) setNozzleDiameterFilter(partial.nozzleDiameterFilter)
-    if (partial.plateTypeFilter !== undefined) setPlateTypeFilter(partial.plateTypeFilter)
-    if (partial.printerIds !== undefined) setDefaultViewPrinterIds(partial.printerIds)
-  }, [
-    activePrinterView,
-    setDefaultViewPrinterIds,
-    setDefaultViewSort,
-    setModelFilter,
-    setNozzleDiameterFilter,
-    setOverviewGroup,
-    setPlateTypeFilter,
-    setStateFilter
-  ])
-
-  const resetActiveView = useCallback(() => setViewDraft(null), [])
-
-  // Commit the staged draft onto the saved view via PATCH (with an optimistic cache
-  // update so the UI settles immediately), then clear the draft.
   const saveActiveView = useCallback(() => {
     if (!activePrinterView) return
-    const input: PrinterViewInput = {
-      name: activePrinterView.name,
-      cardsPerRow: activePrinterView.cardsPerRow,
-      cardContentSettings: activePrinterView.cardContentSettings,
-      sort: effectiveSort,
-      group: effectiveGroup,
-      stateFilter: effectiveStateFilter,
-      modelFilter: effectiveModelFilter,
-      nozzleDiameterFilter: effectiveNozzleDiameterFilter,
-      plateTypeFilter: effectivePlateTypeFilter,
-      printerIds: effectivePrinterIds
-    }
-    queryClient.setQueryData<{ views: PrinterView[] }>(printerViewsQueryKey, (current) => ({
-      views: (current?.views ?? []).map((entry) => (entry.id === activePrinterView.id ? { ...entry, ...input } : entry))
-    }))
-    quietUpdatePrinterView.mutate({ id: activePrinterView.id, input })
-    setViewDraft(null)
-    toast.success('View updated')
-  }, [
-    activePrinterView,
-    effectiveGroup,
-    effectiveModelFilter,
-    effectiveNozzleDiameterFilter,
-    effectivePlateTypeFilter,
-    effectivePrinterIds,
-    effectiveSort,
-    effectiveStateFilter,
-    printerViewsQueryKey,
-    queryClient,
-    quietUpdatePrinterView
-  ])
+    saveToolbarContent(activePrinterView, effectiveViewContent)
+  }, [activePrinterView, effectiveViewContent, saveToolbarContent])
 
-  const printerViewsMutationError = createPrinterView.error
-    ? (createPrinterView.error as Error).message
-    : updatePrinterView.error
-      ? (updatePrinterView.error as Error).message
-      : deletePrinterView.error
-        ? (deletePrinterView.error as Error).message
-        : null
-  const printerViewsSubmitting = createPrinterView.isPending || updatePrinterView.isPending || deletePrinterView.isPending
-  const currentViewLabel = activePrinterView?.name ?? OVERVIEW_VIEW_LABEL
   const isOverviewDefaultView = effectiveDefaultViewId == null
 
   return (
@@ -851,187 +330,35 @@ export function PrintersView() {
             </Button>
           ) : null}
         />
-      ) : showNoConnectedBridgesPlaceholder ? (
+      ) : !authBootstrapQuery.isSuccess || !canViewPrinters || showNoConnectedBridgesPlaceholder ? (
         <Stack spacing={1}>
           <Typography level="h3" startDecorator={<Printer3dRoundedIcon />}>Printers</Typography>
         </Stack>
       ) : (
-        <Stack spacing={1}>
-          <Stack
-            direction="row"
-            spacing={1}
-            alignItems="center"
-            justifyContent="space-between"
-            sx={{ flexWrap: 'wrap' }}
-          >
-            <Typography level="h3" startDecorator={<Printer3dRoundedIcon />}>Printers</Typography>
-            <Stack
-              direction="row"
-              spacing={1}
-              alignItems="center"
-              sx={{ display: { xs: 'none', sm: 'flex' }, flexWrap: 'wrap', justifyContent: 'flex-end', ml: 'auto', '& > *': { minWidth: 0 } }}
-            >
-              <Select
-                size="sm"
-                value={activePrinterViewId ?? OVERVIEW_VIEW_OPTION_VALUE}
-                onChange={handleViewSelectChange}
-                sx={{ minWidth: 168, flex: '0 0 auto' }}
-                renderValue={() => `View: ${formatPrinterViewSelectValue(activePrinterViewId, printerViews, effectiveDefaultViewId, isOverviewDefaultView)}`}
-                slotProps={{ button: { 'aria-label': 'Saved printer views' } }}
-              >
-                <Option value={NEW_VIEW_OPTION_VALUE}>
-                  <Box component="span" sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.75 }}>
-                    <AddIcon fontSize="small" />
-                    <span>New view…</span>
-                  </Box>
-                </Option>
-                <Option value={OVERVIEW_VIEW_OPTION_VALUE}>
-                  {isOverviewDefaultView ? `${OVERVIEW_VIEW_LABEL} (Default)` : OVERVIEW_VIEW_LABEL}
-                </Option>
-                {printerViews.map((view) => (
-                  <Option key={view.id} value={view.id}>
-                    {effectiveDefaultViewId === view.id ? `${view.name} (Default)` : view.name}
-                  </Option>
-                ))}
-              </Select>
-              <Button
-                size="sm"
-                variant="soft"
-                color="neutral"
-                startDecorator={<TuneRoundedIcon />}
-                onClick={() => {
-                  setPrinterViewsDialogMode('settings')
-                  setPrinterViewsDialogOpen(true)
-                }}
-                sx={{ flex: '0 0 auto' }}
-              >
-                View settings
-              </Button>
-              {canManagePrinters && <Divider orientation="vertical" sx={{ alignSelf: 'stretch', mx: 0.25 }} />}
-              {canManagePrinters && (
-                <Button
-                  size="sm"
-                  aria-label="Add printer"
-                  startDecorator={<AddIcon />}
-                  sx={{ flex: '0 0 auto', minWidth: 0 }}
-                  disabled={(bridgesQuery.data?.bridges.length ?? 0) === 0}
-                  onClick={() => setOpen(true)}
-                >
-                  Add
-                </Button>
-              )}
-              {canDispatchPrints && <Divider orientation="vertical" sx={{ alignSelf: 'stretch', mx: 0.25 }} />}
-              {canDispatchPrints && (
-                <SplitButton
-                  size="sm"
-                  label="Print"
-                  ariaLabel="print"
-                  menuAriaLabel="More print sources"
-                  startDecorator={<PrintRoundedIcon />}
-                  onClick={() => setPageLibraryPickerOpen(true)}
-                  groupSx={{ flex: '0 0 auto', minWidth: 0 }}
-                >
-                  <MenuItem onClick={() => setPageLibraryPickerOpen(true)}>
-                    <ListItemDecorator><FolderCopyRoundedIcon /></ListItemDecorator>
-                    Print from library…
-                  </MenuItem>
-                  <MenuItem onClick={() => setPageLocalPrinterPickerOpen(true)}>
-                    <ListItemDecorator><UploadFileRoundedIcon /></ListItemDecorator>
-                    Print from local file…
-                  </MenuItem>
-                  <PluginSlot name="printers.print.menu" />
-                </SplitButton>
-              )}
-            </Stack>
-            <Stack
-              direction="row"
-              spacing={1}
-              alignItems="center"
-              sx={{ display: { xs: 'flex', sm: 'none' }, ml: 'auto', '& > *': { minWidth: 0 } }}
-            >
-              {canManagePrinters && (
-                <Button
-                  size="sm"
-                  aria-label="Add printer"
-                  onClick={() => setOpen(true)}
-                  startDecorator={<AddIcon />}
-                  sx={{ flex: '0 0 auto' }}
-                >
-                  Add
-                </Button>
-              )}
-              {canDispatchPrints && (
-                <SplitButton
-                  size="sm"
-                  label="Print"
-                  ariaLabel="print"
-                  menuAriaLabel="More print sources"
-                  startDecorator={<PrintRoundedIcon />}
-                  onClick={() => setPageLibraryPickerOpen(true)}
-                  groupSx={{ flex: '0 0 auto', minWidth: 0 }}
-                >
-                  <MenuItem onClick={() => setPageLibraryPickerOpen(true)}>
-                    <ListItemDecorator><FolderCopyRoundedIcon /></ListItemDecorator>
-                    Print from library…
-                  </MenuItem>
-                  <MenuItem onClick={() => setPageLocalPrinterPickerOpen(true)}>
-                    <ListItemDecorator><UploadFileRoundedIcon /></ListItemDecorator>
-                    Print from local file…
-                  </MenuItem>
-                  <PluginSlot name="printers.print.menu" />
-                </SplitButton>
-              )}
-            </Stack>
-          </Stack>
-          <Stack
-            spacing={1}
-            sx={{ display: { xs: 'flex', sm: 'none' }, width: '100%' }}
-          >
-            <Stack direction="row" spacing={1} sx={{ width: '100%', '& > *': { minWidth: 0 } }}>
-              <Select
-                size="sm"
-                value={activePrinterViewId ?? OVERVIEW_VIEW_OPTION_VALUE}
-                onChange={handleViewSelectChange}
-                sx={{ flex: '1 1 0', minWidth: 0 }}
-                renderValue={() => `View: ${formatPrinterViewSelectValue(activePrinterViewId, printerViews, effectiveDefaultViewId, isOverviewDefaultView)}`}
-                slotProps={{ button: { 'aria-label': 'Saved printer views' } }}
-              >
-                <Option value={NEW_VIEW_OPTION_VALUE}>
-                  <Box component="span" sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.75 }}>
-                    <AddIcon fontSize="small" />
-                    <span>New view…</span>
-                  </Box>
-                </Option>
-                <Option value={OVERVIEW_VIEW_OPTION_VALUE}>
-                  {isOverviewDefaultView ? `${OVERVIEW_VIEW_LABEL} (Default)` : OVERVIEW_VIEW_LABEL}
-                </Option>
-                {printerViews.map((view) => (
-                  <Option key={view.id} value={view.id}>
-                    {effectiveDefaultViewId === view.id ? `${view.name} (Default)` : view.name}
-                  </Option>
-                ))}
-              </Select>
-              <Button
-                size="sm"
-                variant="soft"
-                color="neutral"
-                startDecorator={<TuneRoundedIcon />}
-                onClick={() => {
-                  setPrinterViewsDialogMode('settings')
-                  setPrinterViewsDialogOpen(true)
-                }}
-                sx={{ flex: '0 0 auto', minWidth: 132, px: 1.5 }}
-              >
-                View settings
-              </Button>
-            </Stack>
-          </Stack>
-        </Stack>
+        <PrinterOverviewHeader
+          activeViewId={activePrinterViewId}
+          views={printerViews}
+          defaultViewId={effectiveDefaultViewId}
+          isOverviewDefault={isOverviewDefaultView}
+          canManagePrinters={canManagePrinters}
+          canDispatchPrints={canDispatchPrints}
+          hasBridges={(bridgesQuery.data?.bridges.length ?? 0) > 0}
+          onSelectView={handleViewSelectChange}
+          onOpenViewSettings={() => {
+            setPrinterViewsDialogMode('settings')
+            setPrinterViewsDialogOpen(true)
+          }}
+          onAddPrinter={() => setOpen(true)}
+          onPrintFromLibrary={() => setPageLibraryPickerOpen(true)}
+          onPrintFromLocalFile={() => setPageLocalPrinterPickerOpen(true)}
+        />
       )}
 
       {authBootstrapQuery.isLoading && <ListSkeleton rows={3} />}
       {printersQuery.isLoading && canViewPrinters && <ListSkeleton rows={3} />}
-      {printersQuery.error && <Typography color="danger">{(printersQuery.error as Error).message}</Typography>}
+      {authBootstrapQuery.isSuccess && canViewPrinters && printersQuery.error && (
+        <Typography color="danger">{(printersQuery.error as Error).message}</Typography>
+      )}
 
       {authBootstrapQuery.isSuccess && !canViewPrinters && (
         <EmptyState
@@ -1042,228 +369,60 @@ export function PrintersView() {
       )}
 
       {authBootstrapQuery.isSuccess && canViewPrinters && (singlePrinterView ? (
-        <Stack spacing={pageSectionStackSpacing}>
-          {!printersQuery.isLoading && !printersQuery.error && !selectedPrinter && (
-            <EmptyState
-              icon={<Printer3dRoundedIcon />}
-              title="Printer not found"
-              description="This printer does not exist or is no longer configured."
-              action={
-                <Button size="sm" variant="soft" color="neutral" onClick={() => navigate(workspacePath('/printers'))}>
-                  Back to printers
-                </Button>
-              }
-            />
-          )}
-
-          {selectedPrinter && (
-            <PrinterCard
-              printer={selectedPrinter}
-              status={status?.[selectedPrinter.id]}
-              dispatchLink={dispatchJobsByPrinter.get(selectedPrinter.id)}
-              activeJob={latestActiveJobsByPrinter.get(selectedPrinter.id)}
-              latestJob={latestFinishedJobsByPrinter.get(selectedPrinter.id)}
-              contentSettings={singlePrinterCardContentSettings}
-              cardsPerRow={1}
-              demoMode={demoMode}
-              canControlPrinter={canControlPrinters}
-              canManagePrinter={canManagePrinters}
-              canViewPrinterStorage={canViewPrinterStorage}
-              canDownloadPrinterStorage={canDownloadPrinterStorage}
-              canDispatchPrints={canDispatchPrints}
-              canViewCamera={canViewCamera}
-              onEdit={handleCardEdit}
-              onPrint={handleCardPrint}
-              onPrintLocal={handleCardPrintLocal}
-            />
-          )}
-
-          {selectedPrinter && (
-            <Stack spacing={1.5}>
-              <PageSectionHeading
-                icon={<QueryStatsRoundedIcon />}
-                title="Print stats"
-                description={statsDateRange
-                  ? 'Retained job totals and runtime for the selected period.'
-                  : 'Lifetime print totals and runtime.'}
-                actions={<StatsDateRangePicker value={statsDateRange} onChange={setStatsDateRange} />}
-              />
-
-              {printerStatsQuery.isLoading && (
-                <Stack direction="row" spacing={1} alignItems="center">
-                  <CircularProgress size="sm" />
-                  <Typography level="body-sm" textColor="text.tertiary">Loading printer stats…</Typography>
-                </Stack>
-              )}
-
-              {printerStatsQuery.error && (
-                <Alert color="danger" variant="soft">
-                  Printer stats could not be loaded right now.
-                </Alert>
-              )}
-
-              {printerStatsQuery.data && (
-                <PrinterStatsCardGrid stats={printerStatsQuery.data.stats} allTime={statsDateRange === null} />
-              )}
-            </Stack>
-          )}
-
-          {selectedPrinter && (
-            <PluginSlot
-              name="printer.detail.sections"
-              context={{ printerId: selectedPrinter.id, printerName: selectedPrinter.name, printerModel: selectedPrinter.model }}
-            />
-          )}
-
-          {selectedPrinter && (
-            <Stack spacing={1}>
-              <PageSectionHeading
-                icon={<HistoryRoundedIcon />}
-                title="Print history"
-                description="Finished, failed, and cancelled prints on this printer."
-                count={selectedPrinterJobs.length}
-              />
-
-              {jobsQuery.isLoading && <Typography>Loading history…</Typography>}
-              {jobsQuery.error && <Typography color="danger">{(jobsQuery.error as Error).message}</Typography>}
-
-              {!jobsQuery.isLoading && !jobsQuery.error && selectedPrinterJobs.length === 0 && (
-                <EmptyState
-                  compact
-                  icon={<PrintRoundedIcon />}
-                  title="No print history yet"
-                  description="Finished prints will appear here."
-                />
-              )}
-
-              {selectedPrinterJobs.length > 0 && (
-                <DirectoryPrimaryToolbar
-                    pinStorageKey="printers.history"
-                    searchValue={detailHistorySearch}
-                    onSearchChange={(value) => {
-                      setDetailHistoryPage(0)
-                      setDetailHistorySearch(value)
-                    }}
-                    searchPlaceholder="Search file, result, or time"
-                    searchAriaLabel="Search printer print history"
-                    filters={{
-                      activeCount: activeDetailHistoryFilterCount,
-                      onClear: clearDetailHistoryFilters,
-                      clearDisabled: activeDetailHistoryFilterCount === 0,
-                      children: (
-                        <FormControl>
-                          <Typography level="body-sm" textColor="text.tertiary">Results</Typography>
-                          <Select
-                            size="sm"
-                            multiple
-                            value={detailHistoryResults}
-                            onChange={(_event, value) => {
-                              setDetailHistoryPage(0)
-                              setDetailHistoryResults(value ?? [])
-                            }}
-                            placeholder="All results"
-                            renderValue={() => detailHistoryResults.length === 0
-                              ? null
-                              : formatHistoryResultsSummary(detailHistoryResults)}
-                            slotProps={{ listbox: { disablePortal: true, sx: { maxHeight: 280 } } }}
-                          >
-                            {HISTORY_RESULTS.map((result) => (
-                              <MultiSelectOption key={result} value={result} selected={detailHistoryResults.includes(result)}>{result}</MultiSelectOption>
-                            ))}
-                          </Select>
-                        </FormControl>
-                      )
-                    }}
-                    pageSizeValue={detailHistoryPageSize}
-                    pageSizeOptions={HISTORY_PAGE_SIZE_OPTIONS.map((value) => ({ value, label: `${value} rows per page` }))}
-                    onPageSizeChange={(value) => {
-                      setDetailHistoryPage(0)
-                      setDetailHistoryPageSize(value)
-                    }}
-                    pageSizeAriaLabel="Printer history rows per page"
-                    pageSizeRenderValue={(value) => `${value} per page`}
-                    sortValue="date"
-                    sortOptions={HISTORY_SORT_OPTIONS}
-                    onSortValueChange={() => undefined}
-                    sortDirection={detailHistorySortDirection}
-                    onSortDirectionChange={(direction) => {
-                      setDetailHistoryPage(0)
-                      setDetailHistorySortDirection(direction)
-                    }}
-                    sortAriaLabel="Sort printer print history by"
-                    viewMode={effectiveDetailHistoryViewMode}
-                    onViewModeChange={setDetailHistoryViewMode}
-                    disableIconModeOnMobile
-                  />
-              )}
-
-              {selectedPrinterJobs.length > 0 && filteredSelectedPrinterJobs.length === 0 && (
-                <Typography level="body-sm" textColor="text.tertiary">
-                  No print history matches the current search or filters.
-                </Typography>
-              )}
-
-              {filteredSelectedPrinterJobs.length > 0 && (
-                <PaginatedSection
-                  showingLabel={`Showing ${safeDetailHistoryPage * detailHistoryPageSize + 1}-${Math.min(filteredSelectedPrinterJobs.length, (safeDetailHistoryPage + 1) * detailHistoryPageSize)} of ${filteredSelectedPrinterJobs.length}`}
-                  previousDisabled={safeDetailHistoryPage === 0}
-                  nextDisabled={safeDetailHistoryPage >= detailHistoryPageCount - 1}
-                  onPrevious={() => setDetailHistoryPage((current) => Math.max(0, current - 1))}
-                  onNext={() => setDetailHistoryPage((current) => Math.min(detailHistoryPageCount - 1, current + 1))}
-                  spacing={1.5}
-                >
-                  <Box
-                    sx={{
-                      display: 'grid',
-                      gridTemplateColumns: effectiveDetailHistoryViewMode === 'icon'
-                        ? { xs: 'minmax(0, 1fr)', md: 'repeat(2, minmax(0, 1fr))' }
-                        : 'minmax(0, 1fr)',
-                      gap: 1.5,
-                      alignItems: 'stretch'
-                    }}
-                  >
-                    {visibleSelectedPrinterJobs.map((job) => (
-                      <PrinterHistoryCard
-                        key={job.id}
-                        job={job}
-                        canDeleteJobs={canDeleteJobs}
-                        canDispatchPrints={canDispatchPrints}
-                        canControlPrinters={canControlPrinters}
-                        canSliceFiles={canUploadLibrary}
-                        onReslice={setResliceJob}
-                        deletingJobId={deleteHistoryJob.isPending ? deleteHistoryJob.variables ?? null : null}
-                        replayingJobId={replayingJobId}
-                        onDelete={(jobId) => {
-                          const job = selectedPrinterJobs.find((entry) => entry.id === jobId) ?? null
-                          if (job) setDeleteHistoryJobTarget(job)
-                        }}
-                        onReprintLibrary={(reprintJob) => {
-                          setPrintTarget({
-                            file: jobToLibraryFile(reprintJob),
-                            printerId: reprintJob.printerId,
-                            defaultPlate: reprintJob.plate ?? 1,
-                            defaultPrintOptions: reprintJob.printOptions,
-                            defaultAmsMapping: reprintJob.amsMapping,
-                            submitPrint: async ({ printerId, body }) => {
-                              await restartJob.mutateAsync({
-                                jobId: reprintJob.id,
-                                body: {
-                                  printerId,
-                                  ...body
-                                }
-                              })
-                            }
-                          })
-                        }}
-                        onReprintCalibration={(jobId) => restartJob.mutate({ jobId })}
-                      />
-                    ))}
-                  </Box>
-                </PaginatedSection>
-              )}
-            </Stack>
-          )}
-        </Stack>
+        <PrinterDetailContent
+          printer={selectedPrinter}
+          printersLoading={printersQuery.isLoading}
+          hasPrintersError={Boolean(printersQuery.error)}
+          statuses={status}
+          dispatchJobsByPrinter={dispatchJobsByPrinter}
+          activeJobsByPrinter={latestActiveJobsByPrinter}
+          finishedJobsByPrinter={latestFinishedJobsByPrinter}
+          contentSettings={singlePrinterCardContentSettings}
+          cardProps={{
+            demoMode,
+            canControlPrinter: canControlPrinters,
+            canManagePrinter: canManagePrinters,
+            canViewPrinterStorage,
+            canDownloadPrinterStorage,
+            canDispatchPrints,
+            canViewCamera,
+            onEdit: handleCardEdit,
+            onPrint: handleCardPrint,
+            onPrintLocal: handleCardPrintLocal
+          }}
+          statsDateRange={statsDateRange}
+          onStatsDateRangeChange={setStatsDateRange}
+          historyProps={{
+            history: detailHistory,
+            jobsLoading: jobsQuery.isLoading,
+            jobsError: jobsQuery.error instanceof Error ? jobsQuery.error : null,
+            canDeleteJobs,
+            canDispatchPrints,
+            canControlPrinters,
+            canSliceFiles: canUploadLibrary,
+            deletingJobId: deleteHistoryJob.isPending ? deleteHistoryJob.variables ?? null : null,
+            replayingJobId,
+            onDelete: setDeleteHistoryJobTarget,
+            onReslice: setResliceJob,
+            onReprintLibrary: (reprintJob) => {
+              setPrintTarget({
+                file: jobToLibraryFile(reprintJob),
+                printerId: reprintJob.printerId,
+                defaultPlate: reprintJob.plate ?? 1,
+                defaultPrintOptions: reprintJob.printOptions,
+                defaultAmsMapping: reprintJob.amsMapping,
+                submitPrint: async ({ printerId, body }) => {
+                  await restartJob.mutateAsync({
+                    jobId: reprintJob.id,
+                    body: { printerId, ...body }
+                  })
+                }
+              })
+            },
+            onReprintCalibration: (jobId) => restartJob.mutate({ jobId })
+          }}
+          onBack={() => navigate(workspacePath('/printers'))}
+        />
       ) : showNoConnectedBridgesPlaceholder ? (
         <NoConnectedBridgesEmptyState
           title="Connect a bridge to add printers"
@@ -1328,7 +487,7 @@ export function PrintersView() {
                 Unsaved changes to <strong>{activePrinterView.name}</strong>
               </Typography>
               <Stack direction="row" spacing={1} sx={{ ml: 'auto' }}>
-                <Button size="sm" variant="plain" color="neutral" onClick={resetActiveView}>Reset</Button>
+                <Button size="sm" variant="plain" color="neutral" onClick={clearViewDraft}>Reset</Button>
                 <Button size="sm" variant="solid" color="primary" startDecorator={<SaveRoundedIcon />} onClick={saveActiveView}>
                   Save changes
                 </Button>
@@ -1393,190 +552,82 @@ export function PrintersView() {
               spacing={1.5}
               showPagination={showOverviewDirectoryControls}
             >
-              <Stack spacing={2.5}>
-                {printerGroups.map((groupEntry) => (
-                  <Stack key={groupEntry.key} spacing={groupEntry.label ? 1 : 0}>
-                    {groupEntry.label && (
-                      <Typography level="title-sm" textColor="text.tertiary">
-                        {groupEntry.label} · {groupEntry.printers.length}
-                      </Typography>
-                    )}
-                    <Box
-                      sx={{
-                        display: 'grid',
-                        gap: { xs: 1.5, sm: 2.5 },
-                        gridTemplateColumns: {
-                          xs: '1fr',
-                          sm: `repeat(${effectiveCardsPerRow}, minmax(0, 1fr))`
-                        }
-                      }}
-                    >
-                      {groupEntry.printers.map((printer) => (
-                        <Stack key={printer.id} spacing={0.5}>
-                        {tagSelectionMode && <Checkbox label={`Select ${printer.name}`} checked={printerSelection.selectedIds.has(printer.id)} onChange={() => printerSelection.toggle(printer)} />}
-                        <PrinterCard
-                          printer={printer}
-                          status={status?.[printer.id]}
-                          dispatchLink={dispatchJobsByPrinter.get(printer.id)}
-                          activeJob={latestActiveJobsByPrinter.get(printer.id)}
-                          latestJob={latestFinishedJobsByPrinter.get(printer.id)}
-                          contentSettings={effectiveCardContentSettings}
-                          compact={effectiveCardsPerRow >= 4}
-                          cardsPerRow={effectiveCardsPerRow}
-                          demoMode={demoMode}
-                          canControlPrinter={canControlPrinters}
-                          canManagePrinter={canManagePrinters}
-                          canViewPrinterStorage={canViewPrinterStorage}
-                          canDownloadPrinterStorage={canDownloadPrinterStorage}
-                          canDispatchPrints={canDispatchPrints}
-                          canViewCamera={canViewCamera}
-                          onEdit={handleCardEdit}
-                          onPrint={handleCardPrint}
-                          onPrintLocal={handleCardPrintLocal}
-                          onOpenDetails={handleCardOpenDetails}
-                        />
-                        </Stack>
-                      ))}
-                    </Box>
-                  </Stack>
-                ))}
-              </Stack>
+              <PrinterOverviewCardGrid
+                groups={printerGroups}
+                statuses={status}
+                dispatchJobsByPrinter={dispatchJobsByPrinter}
+                activeJobsByPrinter={latestActiveJobsByPrinter}
+                finishedJobsByPrinter={latestFinishedJobsByPrinter}
+                contentSettings={effectiveCardContentSettings}
+                cardsPerRow={effectiveCardsPerRow}
+                selection={tagSelectionMode ? {
+                  selectedIds: printerSelection.selectedIds,
+                  onToggle: printerSelection.toggle
+                } : undefined}
+                cardProps={{
+                  demoMode,
+                  canControlPrinter: canControlPrinters,
+                  canManagePrinter: canManagePrinters,
+                  canViewPrinterStorage,
+                  canDownloadPrinterStorage,
+                  canDispatchPrints,
+                  canViewCamera,
+                  onEdit: handleCardEdit,
+                  onPrint: handleCardPrint,
+                  onPrintLocal: handleCardPrintLocal,
+                  onOpenDetails: handleCardOpenDetails
+                }}
+              />
             </PaginatedSection>
           )}
         </Stack>
       ))}
 
-      {open && (
-        <PrinterFormModal
-          mode="add"
-          demoMode={demoMode}
-          submitting={addPrinter.isPending}
-          error={addPrinter.error ? (addPrinter.error as Error).message : null}
-          bridges={bridgesQuery.data?.bridges ?? []}
-          discovered={discoveredQuery.data?.printers ?? []}
-          onCancel={() => setOpen(false)}
-          onSubmit={(input) => {
-            if (demoMode) {
-              showDemoPrinterMutationNotice('add')
-              return
-            }
-            addPrinter.mutate(input)
-          }}
-        />
-      )}
+      <PrinterManagementDialogs
+        addOpen={open}
+        editing={editing}
+        sortOpen={sortDialogOpen}
+        printers={printers}
+        statuses={status}
+        bridges={bridgesQuery.data?.bridges ?? []}
+        discovered={discoveredQuery.data?.printers ?? []}
+        demoMode={demoMode}
+        onCloseAdd={() => setOpen(false)}
+        onCloseEdit={() => setEditing(null)}
+        onCloseSort={() => setSortDialogOpen(false)}
+      />
 
-      {editing && (
-        <PrinterFormModal
-          mode="edit"
-          demoMode={demoMode}
-          printerId={editing.id}
-          initialValues={{
-            ...editing,
-            bridgeId: editing.bridgeId ?? ''
-          }}
-          status={status?.[editing.id]}
-          bridges={bridgesQuery.data?.bridges ?? []}
-          submitting={editPrinter.isPending}
-          deleting={deletePrinter.isPending}
-          error={
-            editPrinter.error
-              ? (editPrinter.error as Error).message
-              : deletePrinter.error
-                ? (deletePrinter.error as Error).message
-                : null
-          }
-          onCancel={() => setEditing(null)}
-          onSubmit={(input) => {
-            if (demoMode) {
-              showDemoPrinterMutationNotice('edit')
-              return
-            }
-            editPrinter.mutate({ id: editing.id, input })
-          }}
-          onDelete={async () => {
-            const confirmed = await confirm({
-              title: `Remove ${editing.name}?`,
-              description: `Remove ${editing.name}? This will disconnect the printer.`,
-              confirmLabel: 'Remove printer',
-              color: 'danger'
-            })
-            if (!confirmed) return
-            if (demoMode) {
-              showDemoPrinterMutationNotice('delete')
-              return
-            }
-            deletePrinter.mutate(editing.id)
-          }}
-        />
-      )}
-
-      {sortDialogOpen && (
-        <PrinterSortModal
-          printers={printers}
-          submitting={reorderPrinters.isPending}
-          error={reorderPrinters.error ? (reorderPrinters.error as Error).message : null}
-          onCancel={() => setSortDialogOpen(false)}
-          onSubmit={(orderedIds) => reorderPrinters.mutate(orderedIds)}
-        />
-      )}
-
-      {printerViewsDialogOpen && (
-        <PrinterViewsModal
-          mode={printerViewsDialogMode}
-          activeView={activePrinterView}
-          currentViewLabel={printerViewsDialogMode === 'create' ? 'New view' : currentViewLabel}
-          currentState={
-            // View settings edits the saved view's committed content (independent of any
-            // pending toolbar draft); New view / Overview capture the current display.
-            printerViewsDialogMode === 'settings' && activePrinterView
-              ? {
-                  name: activePrinterView.name,
-                  printerIds: activePrinterView.printerIds,
-                  cardsPerRow: activePrinterView.cardsPerRow,
-                  stateFilter: activePrinterView.stateFilter,
-                  modelFilter: activePrinterView.modelFilter,
-                  nozzleDiameterFilter: activePrinterView.nozzleDiameterFilter,
-                  plateTypeFilter: activePrinterView.plateTypeFilter,
-                  sort: activePrinterView.sort,
-                  group: activePrinterView.group,
-                  cardContentSettings: activePrinterView.cardContentSettings
-                }
-              : {
-                  name: '',
-                  printerIds: effectivePrinterIds,
-                  cardsPerRow: effectiveCardsPerRow,
-                  stateFilter: effectiveStateFilter,
-                  modelFilter: effectiveModelFilter,
-                  nozzleDiameterFilter: effectiveNozzleDiameterFilter,
-                  plateTypeFilter: effectivePlateTypeFilter,
-                  sort: effectiveSort,
-                  group: effectiveGroup,
-                  cardContentSettings: effectiveCardContentSettings
-                }
-          }
-          submitting={printerViewsSubmitting}
-          error={printerViewsMutationError}
-          onClose={() => setPrinterViewsDialogOpen(false)}
-          onApplyDefault={(input) => {
-            setCardsPerRow(input.cardsPerRow)
-            setStateFilter(input.stateFilter)
-            setModelFilter(input.modelFilter)
-            setNozzleDiameterFilter(input.nozzleDiameterFilter)
-            setPlateTypeFilter(input.plateTypeFilter)
-            setPrinterCardContentSettings(input.cardContentSettings)
-            setDefaultViewPrinterIds(input.printerIds)
-            setDefaultViewSort(input.sort)
-            toast.success('Overview updated')
-            setPrinterViewsDialogOpen(false)
-          }}
-          onCreate={(input) => createPrinterView.mutate(input)}
-          onUpdate={(id, input) => updatePrinterView.mutate({ id, input })}
-          onDelete={(id) => {
-            const view = printerViews.find((entry) => entry.id === id) ?? null
-            if (view) setDeletePrinterViewTarget(view)
-          }}
-        />
-      )}
+      <PrinterSavedViewDialogs
+        open={printerViewsDialogOpen}
+        mode={printerViewsDialogMode}
+        activeView={activePrinterView}
+        displayedState={{
+          name: '',
+          printerIds: effectivePrinterIds,
+          cardsPerRow: effectiveCardsPerRow,
+          stateFilter: effectiveStateFilter,
+          modelFilter: effectiveModelFilter,
+          nozzleDiameterFilter: effectiveNozzleDiameterFilter,
+          plateTypeFilter: effectivePlateTypeFilter,
+          sort: effectiveSort,
+          group: effectiveGroup,
+          cardContentSettings: effectiveCardContentSettings
+        }}
+        views={printerViews}
+        mutations={{ create: createPrinterView, update: updatePrinterView, remove: deletePrinterView }}
+        onClose={() => setPrinterViewsDialogOpen(false)}
+        onApplyDefault={(input) => {
+          setCardsPerRow(input.cardsPerRow)
+          setStateFilter(input.stateFilter)
+          setModelFilter(input.modelFilter)
+          setNozzleDiameterFilter(input.nozzleDiameterFilter)
+          setPrinterCardContentSettings(input.cardContentSettings)
+          setDefaultViewPrinterIds(input.printerIds)
+          setDefaultViewSort(input.sort)
+          toast.success('Overview updated')
+          setPrinterViewsDialogOpen(false)
+        }}
+      />
 
       {singleViewSettingsOpen && (
         <PrinterCardContentSettingsModal
@@ -1590,141 +641,16 @@ export function PrintersView() {
         />
       )}
 
-      {pickerForPrinter && (
-        <LibraryPickerModal
-          printerName={pickerForPrinter.name}
-          canSlice={canUploadLibrary}
-          onClose={() => setPickerForPrinter(null)}
-          onPick={(file) => {
-            // Keep the picker mounted underneath so "Back" from the slice/print setup
-            // returns to file selection (matching the sliced-file branch below).
-            if (isUnslicedThreeMfFile(file)) {
-              setSliceTarget({ file, preferredPrinterId: pickerForPrinter.id })
-              return
-            }
-            setPrintTarget({ file, printerId: pickerForPrinter.id })
-          }}
-        />
-      )}
-
-      {printTarget && (
-        <PrintModal
-          file={printTarget.file}
-          printers={printersQuery.data?.printers ?? []}
-          defaultPrinterId={printTarget.printerId}
-          lockPrinterSelection={Boolean(printTarget.printerId)}
-          defaultPlate={printTarget.defaultPlate}
-          defaultPrintOptions={printTarget.defaultPrintOptions}
-          defaultAmsMapping={printTarget.defaultAmsMapping}
-          submitPrint={printTarget.submitPrint}
-          onSubmitted={() => {
-            void queryClient.invalidateQueries({ queryKey: ['jobs'] })
-          }}
-          onClose={closePrintFlow}
-          onBack={pickerForPrinter || pageLibraryPickerOpen ? goBackFromPrintFlow : undefined}
-        />
-      )}
-
-      {pageLocalPrinterPickerOpen && (
-        <PrinterPickerDialog
-          open
-          title="Choose a printer for the local file"
-          entries={printers.map((printer) => ({
-            printer,
-            disabledReason: printer.bridgeId ? undefined : 'Assign this printer to a bridge first.'
-          }))}
-          selectedPrinterId={null}
-          onClose={() => setPageLocalPrinterPickerOpen(false)}
-          onSelect={(printer) => {
-            if (!printer) return
-            if (demoMode) showDemoFileUploadNotice()
-            setLocalFileForPrinter(printer)
-          }}
-        />
-      )}
-
-      {localFileForPrinter && (
-        <LocalFilePrintGate
-          demoMode={demoMode}
-          printer={localFileForPrinter}
-          onCancel={() => setLocalFileForPrinter(null)}
-          onUploaded={(file) => {
-            setPrintTarget({ file, printerId: localFileForPrinter.id })
-            setLocalFileForPrinter(null)
-          }}
-        />
-      )}
-
-      {pageLibraryPickerOpen && (
-        <LibraryPickerModal
-          canSlice={canUploadLibrary}
-          onClose={() => setPageLibraryPickerOpen(false)}
-          onPick={(file) => {
-            // Keep the picker mounted underneath so "Back" from the slice/print setup
-            // returns to file selection (matching the sliced-file branch below).
-            if (isUnslicedThreeMfFile(file)) {
-              setSliceTarget({ file, preferredPrinterId: '' })
-              return
-            }
-            setPrintTarget({ file, printerId: '' })
-          }}
-        />
-      )}
-
-      {sliceTarget && (
-        <SliceFileModal
-          // Re-mount per file: the dialog's per-file state (materials, one-shot default
-          // seeding) must not survive a target swap. See LibraryView's mount.
-          key={sliceTarget.file.id}
-          file={sliceTarget.file}
-          printers={printersQuery.data?.printers ?? []}
-          capabilities={slicingCapabilitiesQuery.data ?? null}
-          capabilitiesLoading={slicingCapabilitiesQuery.isLoading && !slicingCapabilitiesQuery.data}
-          capabilitiesError={slicingCapabilitiesQuery.error instanceof Error ? slicingCapabilitiesQuery.error.message : null}
-          submitting={startSlicingJob.isPending}
-          submitAction={startSlicingJob.variables?.action ?? null}
-          submitError={startSlicingJob.error instanceof Error ? startSlicingJob.error.message : null}
-          flow="print"
-          preferredPrinterId={sliceTarget.preferredPrinterId || undefined}
-          // Back returns to the still-open library picker; Cancel abandons the whole flow.
-          onBack={() => setSliceTarget(null)}
-          onClose={closePrintFlow}
-          onSubmit={(input, action) => startSlicingJob.mutate({
-            file: sliceTarget.file,
-            preferredPrinterId: sliceTarget.preferredPrinterId,
-            action,
-            ...input
-          })}
-        />
-      )}
-
-      {canUploadLibrary && canDispatchPrints && resliceJob?.sourceProjectFileId && (
-        <SliceThenPrintFlow
-          fileId={resliceJob.sourceProjectFileId}
-          printers={printersQuery.data?.printers ?? []}
-          preferredPrinterId={resliceJob.printerId}
-          defaultPlate={resliceJob.plate ?? 1}
-          initialSlicerTargetId={resliceJob.sliceSettings?.slicerTargetId}
-          flowCopy={{
-            title: `Slice ${formatLibraryFileName(resliceJob.sourceProjectFileName ?? resliceJob.jobName)} again`,
-            description: 'These are the settings this print was sliced with. Change anything you like, then continue to printer selection.'
-          }}
-          onClose={() => setResliceJob(null)}
-        />
-      )}
-
-      {sliceThenPrintTarget && (
-        <SliceThenPrintModal
-          sourceFile={sliceThenPrintTarget.sourceFile}
-          jobId={sliceThenPrintTarget.jobId}
-          preferredPrinterId={sliceThenPrintTarget.preferredPrinterId || undefined}
-          lockPrinterSelection={Boolean(sliceThenPrintTarget.preferredPrinterId)}
-          printers={printersQuery.data?.printers ?? []}
-          // Back returns to the still-open slice settings; Cancel abandons the whole flow.
-          onBack={() => setSliceThenPrintTarget(null)}
-          onClose={closePrintFlow}
-        />
-      )}
+      <PrinterPrintFlowDialogs
+        flow={printFlow}
+        printers={printers}
+        capabilities={slicingCapabilitiesQuery.data ?? null}
+        capabilitiesLoading={slicingCapabilitiesQuery.isLoading && !slicingCapabilitiesQuery.data}
+        capabilitiesError={slicingCapabilitiesQuery.error instanceof Error ? slicingCapabilitiesQuery.error.message : null}
+        canUploadLibrary={canUploadLibrary}
+        canDispatchPrints={canDispatchPrints}
+        demoMode={demoMode}
+      />
 
       <ConfirmActionDialog
         open={deleteHistoryJobTarget != null}
@@ -1741,20 +667,7 @@ export function PrintersView() {
         }}
       />
 
-      <ConfirmActionDialog
-        open={deletePrinterViewTarget != null}
-        title="Delete saved view?"
-        description={deletePrinterViewTarget ? `Delete the saved printer view "${deletePrinterViewTarget.name}"? This only removes the saved layout and filters.` : ''}
-        confirmLabel="Delete view"
-        pending={deletePrinterView.isPending && deletePrinterView.variables === deletePrinterViewTarget?.id}
-        onClose={() => setDeletePrinterViewTarget(null)}
-        onConfirm={() => {
-          if (!deletePrinterViewTarget) return
-          deletePrinterView.mutate(deletePrinterViewTarget.id, {
-            onSettled: () => setDeletePrinterViewTarget(null)
-          })
-        }}
-      />
+
     </Stack>
   )
 }

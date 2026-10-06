@@ -10,8 +10,8 @@
  *
  * **This mount IS the trigger.** Nothing polls Bambu on a timer, so if this component
  * does not ask, the question is never asked at all. It calls `/check`, which is cheap on
- * both sides: one listing read at most, and the API serves a cached answer for ten
- * minutes, so opening the editor twenty times in that window is one Bambu call rather
+ * both sides: one listing read at most, and the API caches that cloud listing for ten
+ * minutes while recomputing the count, so opening the editor twenty times is one Bambu call rather
  * than twenty. (An earlier revision read `/status` instead, which only replays a stored
  * result, with no background pass left to produce one, this could never appear.)
  *
@@ -25,27 +25,16 @@ import { useState, type ReactNode } from 'react'
 import { Badge, CircularProgress, Dropdown, IconButton, ListItemDecorator, Menu, MenuButton, MenuItem, Tooltip } from '@mui/joy'
 import CloseRoundedIcon from '@mui/icons-material/CloseRounded'
 import CloudSyncRoundedIcon from '@mui/icons-material/CloudSyncRounded'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { extractErrorMessage } from '@printstream/shared'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { apiFetch } from '../../lib/apiClient'
 import { toast } from '../../lib/toast'
-import { formatDateTime } from '../../lib/time'
 import { buildWorkspacePath, parseWorkspacePathname } from '../../lib/workspaceRoute'
 import { BAMBU_CLOUD_ACCOUNT_SETTINGS_PATH } from './settings-route'
-
-interface CheckResponse {
-  connected: boolean
-  status?: 'connected' | 'expired'
-  /** True when the API replayed a recent answer instead of calling Bambu. */
-  cached?: boolean
-  checkedAt?: string
-  pullable?: number
-  pushable?: number
-  pending?: number
-}
-
-const CHECK_QUERY_KEY = ['bambu-cloud-sync', 'check']
+import { useBambuCloudSyncCheck } from './useBambuCloudSyncCheck'
+import { invalidateBambuCloudSyncQueries } from './syncQueryInvalidation'
+import { describeOutstanding, describeOutstandingLabel } from './syncStatusText'
 
 export function BambuCloudSyncStatus(): JSX.Element | null {
   const queryClient = useQueryClient()
@@ -57,24 +46,12 @@ export function BambuCloudSyncStatus(): JSX.Element | null {
     ? buildWorkspacePath(workspaceSlug, BAMBU_CLOUD_ACCOUNT_SETTINGS_PATH)
     : null
 
-  const checkQuery = useQuery({
-    queryKey: CHECK_QUERY_KEY,
-    queryFn: ({ signal }) => apiFetch<CheckResponse>('/api/plugins/bambu-cloud-sync/check', { method: 'POST', signal }),
-    // Two layers of restraint on top of each other: this keeps a mount from re-asking the
-    // API, and the API keeps a re-ask from reaching Bambu. Neither alone is enough: the
-    // editor and the print dialog mount this independently.
-    staleTime: 5 * 60_000,
-    // A workspace with no Bambu account is the common case; retrying its non-answer on
-    // every editor open would be pure noise.
-    retry: false
-  })
+  const checkQuery = useBambuCloudSyncCheck()
 
   const syncMutation = useMutation({
     mutationFn: async () => await apiFetch('/api/plugins/bambu-cloud-sync/sync', { method: 'POST' }),
     onSuccess: async () => {
-      // A pull writes presets, so every surface reading them is now stale.
-      await queryClient.invalidateQueries({ queryKey: ['slicing-profiles'] })
-      await queryClient.invalidateQueries({ queryKey: CHECK_QUERY_KEY })
+      await invalidateBambuCloudSyncQueries(queryClient)
       toast.show({ message: 'Presets synced with Bambu Cloud.', tone: 'success' })
     },
     onError: (error) => {
@@ -202,20 +179,4 @@ function StatusControl({ tone, count, tooltip, busy, onDismiss, children }: {
       </Menu>
     </Dropdown>
   )
-}
-
-function describeOutstandingLabel(importable: number, uploadable: number): string {
-  if (importable > 0 && uploadable > 0) return `${importable + uploadable} preset changes`
-  if (importable > 0) return `${importable} preset update${importable === 1 ? '' : 's'}`
-  return `${uploadable} preset${uploadable === 1 ? '' : 's'} to upload`
-}
-
-function describeOutstanding(importable: number, uploadable: number, pending: number, checkedAt: string | undefined): string {
-  const parts: string[] = []
-  if (importable > 0) parts.push(`${importable} to import from Bambu Cloud`)
-  if (uploadable > 0) parts.push(`${uploadable} to upload`)
-  if (pending > 0) parts.push(`${pending} deletion${pending === 1 ? '' : 's'} awaiting a decision in Settings`)
-  const checked = checkedAt ? new Date(checkedAt) : null
-  const when = !checked || Number.isNaN(checked.getTime()) ? '' : ` Checked ${formatDateTime(checked)}.`
-  return `${parts.join(', ')}.${when}`
 }

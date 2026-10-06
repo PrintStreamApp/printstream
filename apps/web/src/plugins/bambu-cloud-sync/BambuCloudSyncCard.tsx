@@ -2,7 +2,7 @@
  * The Bambu Cloud panel inside the slicing-preset manager.
  *
  * Shows whether an account is connected, lets someone connect or disconnect one, and
- * runs a sync on demand (a background pass also runs on its own schedule). The result
+ * checks for outstanding changes on opening and runs a sync on demand. The result
  * of a manual sync is reported per preset, because "synced" alone hides the two answers
  * that matter: what it decided to leave alone, and what Bambu rejected.
  *
@@ -10,7 +10,7 @@
  * reports it as a pending decision (`/status`'s `pendingDeletionConfirmations`), which
  * this card renders as its own banner with an explicit Confirm/Decline pair per preset.
  * Sourced from `/status` rather than the last sync's own result so it survives a page
- * reload and surfaces anything the BACKGROUND pass found too, not just a manual sync.
+ * reload and surfaces anything an on-open check found too, not just a manual sync.
  *
  * Rendered both on the plugin-owned Bambu account Settings route and through the
  * `slicing.presets.sync` slot. The Settings overview entry, route, and slicing panel all
@@ -26,6 +26,10 @@ import { extractErrorMessage } from '@printstream/shared'
 import { apiFetch } from '../../lib/apiClient'
 import { formatDateTime } from '../../lib/time'
 import { BambuCloudConnectDialog } from './BambuCloudConnectDialog'
+import { readCurrentWorkspaceScopeKey } from '../../lib/workspaceScope'
+import { useBambuCloudSyncCheck } from './useBambuCloudSyncCheck'
+import { invalidateBambuCloudSyncQueries } from './syncQueryInvalidation'
+import { BambuCloudSyncNotice } from './BambuCloudSyncNotice'
 
 interface SyncOutcome {
   name: string
@@ -76,17 +80,16 @@ export function BambuCloudSyncCard(): JSX.Element {
   const [lastResult, setLastResult] = useState<SyncResult | null>(null)
 
   const statusQuery = useQuery({
-    queryKey: STATUS_QUERY_KEY,
+    queryKey: [...STATUS_QUERY_KEY, readCurrentWorkspaceScopeKey()],
     queryFn: ({ signal }) => apiFetch<StatusResponse>('/api/plugins/bambu-cloud-sync/status', { signal })
   })
+  const checkQuery = useBambuCloudSyncCheck(statusQuery.data?.connection?.status === 'connected')
 
   const syncMutation = useMutation({
     mutationFn: async () => await apiFetch<SyncResult>('/api/plugins/bambu-cloud-sync/sync', { method: 'POST' }),
     onSuccess: async (result) => {
       setLastResult(result)
-      // The pull may have written presets, so the manager's list is now stale.
-      await queryClient.invalidateQueries({ queryKey: ['slicing-profiles'] })
-      await queryClient.invalidateQueries({ queryKey: STATUS_QUERY_KEY })
+      await invalidateBambuCloudSyncQueries(queryClient)
     }
   })
 
@@ -94,7 +97,7 @@ export function BambuCloudSyncCard(): JSX.Element {
     mutationFn: async () => await apiFetch('/api/plugins/bambu-cloud-sync/disconnect', { method: 'POST' }),
     onSuccess: async () => {
       setLastResult(null)
-      await queryClient.invalidateQueries({ queryKey: STATUS_QUERY_KEY })
+      await invalidateBambuCloudSyncQueries(queryClient)
     }
   })
 
@@ -105,10 +108,7 @@ export function BambuCloudSyncCard(): JSX.Element {
         body: { action }
       }),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: STATUS_QUERY_KEY })
-      // A `confirm` may have deleted a local preset (or, on the next sync, a cloud one);
-      // the manager's list needs to catch up either way.
-      await queryClient.invalidateQueries({ queryKey: ['slicing-profiles'] })
+      await invalidateBambuCloudSyncQueries(queryClient)
     }
   })
 
@@ -150,6 +150,15 @@ export function BambuCloudSyncCard(): JSX.Element {
                   : ' · not synced yet'}
               </Typography>
             </Stack>
+
+            {connection.status === 'connected' ? (
+              <BambuCloudSyncNotice
+                check={checkQuery.data}
+                checking={checkQuery.isFetching}
+                syncing={syncMutation.isPending}
+                error={checkQuery.error}
+              />
+            ) : null}
 
             {connection.status === 'expired' ? (
               <Alert color="warning" variant="soft">
@@ -223,7 +232,7 @@ export function BambuCloudSyncCard(): JSX.Element {
           onClose={() => setConnecting(false)}
           onConnected={async () => {
             setConnecting(false)
-            await queryClient.invalidateQueries({ queryKey: STATUS_QUERY_KEY })
+            await invalidateBambuCloudSyncQueries(queryClient)
           }}
         />
       ) : null}
@@ -242,13 +251,15 @@ export function BambuCloudSyncCard(): JSX.Element {
 function SyncResultSummary({ result }: { result: SyncResult }): JSX.Element {
   const changed = result.pulled.length + result.created.length + result.updated.length + result.deleted.length
   const needsDecision = result.missingRemotely.length + result.missingLocally.length
+  const unresolved = result.skipped.length + result.failed.length + needsDecision
+  const unchangedSummary = unresolved > 0 ? 'No presets were changed.' : 'Everything was already up to date.'
 
   return (
     <Alert color={result.failed.length > 0 ? 'warning' : 'neutral'} variant="soft">
       <Stack spacing={0.75}>
         <Typography level="body-sm">
           {changed === 0
-            ? 'Everything was already up to date.'
+            ? unchangedSummary
             : `Imported ${result.pulled.length}, uploaded ${result.created.length + result.updated.length}${result.deleted.length > 0 ? `, removed ${result.deleted.length} from Bambu Cloud` : ''}.`}
           {result.route === 'bridge' ? ' Synced through your bridge.' : ''}
           {needsDecision > 0 ? ` ${needsDecision} preset${needsDecision === 1 ? '' : 's'} deleted on one side need${needsDecision === 1 ? 's' : ''} a decision below.` : ''}

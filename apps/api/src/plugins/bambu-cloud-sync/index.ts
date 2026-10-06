@@ -29,7 +29,8 @@ import { z } from 'zod'
 import {
   bambuCloudRegionSchema,
   extractErrorMessage,
-  SETTINGS_MANAGE_PERMISSION
+  SETTINGS_MANAGE_PERMISSION,
+  type BambuCloudSyncCheckResponse
 } from '@printstream/shared'
 import type { ApiPlugin, ApiPluginContext, PluginSettingStore } from '../../plugin/types.js'
 import type { RequestAuthActor } from '../../lib/auth-context.js'
@@ -109,6 +110,10 @@ const verifyRequestSchema = z.object({
   code: z.string().trim().min(1).max(32),
   /** Present for an authenticator-app account; absent for an emailed code. */
   tfaKey: z.string().trim().min(1).max(500).optional()
+})
+
+const checkRequestSchema = z.object({
+  force: z.boolean().optional()
 })
 
 const resolveDeleteRequestSchema = z.object({
@@ -275,6 +280,9 @@ export const bambuCloudSyncPlugin: ApiPlugin = {
      */
     router.post('/check', requireRequestPermission(SETTINGS_MANAGE_PERMISSION), async (request, response) => {
       const workspaceId = requireRequestWorkspaceId(request)
+      const parsed = checkRequestSchema.safeParse(request.body ?? {})
+      if (!parsed.success) throw badRequest('Invalid sync check options.')
+
       const store = context.settings.forWorkspace(workspaceId)
       const connection = await readConnection(store, logger)
       if (!connection) {
@@ -283,7 +291,7 @@ export const bambuCloudSyncPlugin: ApiPlugin = {
         return
       }
 
-      const force = request.body != null && (request.body as { force?: unknown }).force === true
+      const force = parsed.data.force === true
       // The plan is ALWAYS recomputed; only Bambu's listing is reused. So a preset edited
       // or deleted here shows up on the very next look, while Bambu is still called at
       // most once per TTL.
@@ -303,7 +311,7 @@ export const bambuCloudSyncPlugin: ApiPlugin = {
         pending: plan.pending.length,
         held: plan.held.length,
         route: plan.route
-      })
+      } satisfies BambuCloudSyncCheckResponse)
     })
 
     /**

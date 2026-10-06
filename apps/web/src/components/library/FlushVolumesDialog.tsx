@@ -55,7 +55,7 @@ import {
   type ProjectFlushContext,
   type SceneEditFlushVolumes
 } from '@printstream/shared'
-import type { FlushDatasets } from '../../plugins/model-studio/lib/flushDatasets'
+import type { FlushDatasets } from '../../lib/flushVolumesModel'
 import { BackAwareModal } from '../BackAwareModal'
 import { ScrollableDialogBody, ScrollableModalDialog } from '../ScrollableDialog'
 import { FlushVolumesGrid, type FlushGridFilament } from './FlushVolumesGrid'

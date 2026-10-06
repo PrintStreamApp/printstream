@@ -16,7 +16,7 @@
  * default". Old stored values are plain view ids, which parse unchanged.
  *
  * Edited by `components/settings/DefaultPrinterViewCard.tsx` (rendered in the
- * printers View settings dialog); `pages/PrintersView.tsx` reads the effective
+ * printers View settings dialog); `hooks/usePrinterViewRoute.ts` reads the effective
  * id and clears a device override whose view no longer exists. A stale SHARED
  * id is read as Overview here and cleared server-side when its view is deleted.
  */

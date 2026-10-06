@@ -55,7 +55,8 @@ import { useLocalStorageState } from '../../hooks/useLocalStorageState'
 import { useResolvedProcessConfig } from './lib/useResolvedProcessConfig'
 import type { ProcessConfigResolver } from '../../components/ProcessSettingsDialog'
 import type { TableSortDirection } from '../../components/SortableTableHeader'
-import { ParameterTableGrid, parameterTableMinWidth, type ParameterTableBaselineState } from './ParameterTableGrid'
+import { ParameterTableGrid, type ParameterTableBaselineState } from './ParameterTableGrid'
+import { parameterTableMinWidth } from './lib/parameterTableLayout'
 import {
   buildParameterTableRows,
   filterOverriddenRows,

@@ -7,6 +7,14 @@
 const BRAND_URL = 'https://printstream.app'
 const LOGO_URL = `${BRAND_URL}/icon-512.png`
 
+type EmailParagraphKind = 'body' | 'detail' | 'disclaimer'
+
+interface EmailParagraphOptions {
+  kind?: EmailParagraphKind
+  marginBottom?: 0 | 18 | 22
+  lineBreaks?: 'br' | 'preserve'
+}
+
 /** Escape untrusted text before placing it in an HTML email. */
 export function escapeEmailHtml(value: string): string {
   return value
@@ -17,11 +25,26 @@ export function escapeEmailHtml(value: string): string {
     .replaceAll("'", '&#39;')
 }
 
+/** Render escaped copy with the shared body, detail, or disclaimer email style. */
+export function emailParagraph(text: string, options: EmailParagraphOptions = {}): string {
+  const kind = options.kind ?? 'body'
+  const marginBottom = options.marginBottom ?? (kind === 'disclaimer' ? 0 : 18)
+  const margin = marginBottom === 0 ? 'margin:0;' : `margin:0 0 ${marginBottom}px;`
+  const style = {
+    body: 'color:#344153;font-size:16px;line-height:1.65;',
+    detail: 'color:#48566a;font-size:14px;line-height:1.6;',
+    disclaimer: 'padding-top:20px;border-top:1px solid #edf1f4;color:#6c798a;font-size:13px;line-height:1.55;'
+  }[kind]
+  const lineStyle = options.lineBreaks === 'preserve' ? 'white-space:pre-wrap;' : ''
+  const escaped = escapeEmailHtml(text)
+  const content = options.lineBreaks === 'br' ? escaped.replaceAll('\n', '<br>') : escaped
+
+  return `<p style="${margin}${style}${lineStyle}overflow-wrap:anywhere;">${content}</p>`
+}
+
 /** Convert a plain-text message to readable HTML without interpreting markup. */
 export function emailTextToHtml(text: string): string {
-  return text.trim().split(/\n\s*\n/).map((paragraph) =>
-    `<p style="margin:0 0 18px;color:#344153;font-size:16px;line-height:1.65;overflow-wrap:anywhere;">${escapeEmailHtml(paragraph).replaceAll('\n', '<br>')}</p>`
-  ).join('')
+  return text.trim().split(/\n\s*\n/).map((paragraph) => emailParagraph(paragraph, { lineBreaks: 'br' })).join('')
 }
 
 /** Email-client-friendly action button; URL must come from a trusted caller. */

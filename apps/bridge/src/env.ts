@@ -61,6 +61,16 @@ export function resolveWorkspacePath(value: string): string {
   return path.isAbsolute(value) ? value : path.resolve(workspaceRoot, value)
 }
 
+/** Parse explicit environment booleans without treating the string `false` as truthy. */
+export function booleanEnv(defaultValue: boolean) {
+  return z.preprocess(
+    (value) => typeof value === 'string' ? value.trim().toLowerCase() : value,
+    z.enum(['0', '1', 'false', 'true'])
+      .default(defaultValue ? 'true' : 'false')
+      .transform((value) => value === '1' || value === 'true')
+  )
+}
+
 const envSchema = z.object({
   // Canonical name for the PrintStream server origin. `BRIDGE_CLOUD_URL` is
   // the legacy alias and keeps working so existing installs are unaffected.
@@ -94,17 +104,17 @@ const envSchema = z.object({
   BRIDGE_RELEASE_FINGERPRINT: z.string().trim().min(1).max(120).optional(),
   BRIDGE_PROTOCOL_VERSION: z.coerce.number().int().nonnegative().default(1),
   BRIDGE_RUNNER_ABI_VERSION: z.string().trim().min(1).max(120).default('node22-ffmpeg7-v1'),
-  BRIDGE_AUTO_UPDATE: z.coerce.boolean().default(false),
+  BRIDGE_AUTO_UPDATE: booleanEnv(false),
   // Pin this bridge to its current binary: refuse both periodic self-updates and
   // server-pushed (lockstep) updates. For running a fixed build (e.g. validating
   // a pre-release bridge against the production server without being pulled to
   // the published build).
-  BRIDGE_DISABLE_SELF_UPDATE: z.coerce.boolean().default(false),
+  BRIDGE_DISABLE_SELF_UPDATE: booleanEnv(false),
   // Baked true only in the slim Docker bridge image (whose launcher entrypoint
   // activates signed single-file app bundles from the releases dir). The
   // combined app image's bridge role and source runs leave it off and keep the
   // report-only image-pull driver.
-  BRIDGE_BUNDLE_SELF_UPDATE: z.coerce.boolean().default(false),
+  BRIDGE_BUNDLE_SELF_UPDATE: booleanEnv(false),
   BRIDGE_RELEASES_DIR: z.string().default('/data/releases'),
   BRIDGE_UPDATE_PUBLIC_KEY: z.string().trim().optional(),
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development')

@@ -3,8 +3,8 @@
  * shape and the rule for which view is active at a given address, so a view can
  * be bookmarked, shared, and chosen as the app's landing page.
  *
- * Contract (shared with the routes in `App.tsx` and `pages/PrintersView.tsx`,
- * which derives its active view from the URL instead of local state):
+ * Contract (shared with the routes in `App.tsx` and `hooks/usePrinterViewRoute.ts`,
+ * which derives the active view from the URL instead of local state):
  *  - `/printers` means "this device's default view": the per-device choice made
  *    via "Set as default" in the view settings dialog, falling back to the
  *    Overview. Deliberately not a redirect: the bare address stays meaningful as

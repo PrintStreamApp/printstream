@@ -1,14 +1,14 @@
 /**
- * Update driver for Docker installs. Docker bridges update by pulling a newer
- * image (`docker compose pull && docker compose up -d`), not in place: there is
+ * Update driver for the combined app image's bridge role. That packaging updates
+ * by pulling a newer image (`docker compose pull && docker compose up -d`): it has
  * no launcher, releases directory, or signed app bundle. This driver therefore
  * only *reports* whether the server has moved to a different build, the passive
  * out-of-sync / image-update status the API already derives from the bridge's
  * reported fingerprint covers the rest, and tells operators to pull when an
  * install is requested.
  *
- * The standalone (SEA) packaging keeps its in-place self-updater
- * (`src/private/sea/self-update.ts`); only the Docker path is image-pull.
+ * The slim Docker bridge has its signed bundle driver, and standalone (SEA)
+ * packaging keeps its in-place updater (`src/private/sea/self-update.ts`).
  */
 import type { BridgeUpdateActionResult } from '@printstream/shared'
 import { env } from './env.js'
@@ -28,7 +28,7 @@ export function createImagePullUpdateDriver(): BridgeUpdateDriver {
 
     async install(): Promise<BridgeUpdateActionResult> {
       const result = await evaluateCurrentBuild()
-      // Docker bridges cannot self-apply; surface the manual step instead of a
+      // This image cannot self-apply; surface the manual step instead of a
       // restart. `accepted` stays false so the runtime never schedules one.
       if (result.status === 'updateAvailable') {
         return { accepted: false, status: 'updateAvailable', message: `A newer bridge build is available. Update this Docker bridge by pulling a new image: ${PULL_HINT}.` }
@@ -55,7 +55,7 @@ async function evaluateCurrentBuild(): Promise<BridgeUpdateActionResult> {
   // Status is purely fingerprint-based here; the server's update policy
   // (apps/api/src/lib/bridge-update-policy.ts) is authoritative for the richer
   // protocol/ABI gating it shows in Settings. Either way the remedy is the same
-  // for a Docker bridge: pull a newer image.
+  // for the combined app image's bridge role: pull a newer image.
   if (build.sourceFingerprint === ownFingerprint) {
     return { accepted: false, status: 'current', message: 'Bridge matches the server build.' }
   }

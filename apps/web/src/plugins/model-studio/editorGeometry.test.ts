@@ -11,11 +11,30 @@ import * as THREE from 'three'
 import {
   BRIM_EAR_MARKER_NAME,
   buildFaceHullOverlay,
+  groupShapeSignature,
   isHiddenInPlateThumbnail,
   isViewportAidMesh,
   printableMeshBox,
   scaleGroupAboutPoint
 } from './editorGeometry'
+
+test('footprint shape signature follows the editor rotor but ignores translation', () => {
+  const group = new THREE.Group()
+  const rotor = new THREE.Group()
+  group.userData.rotor = rotor
+  group.add(rotor)
+  const original = groupShapeSignature(group)
+
+  group.position.x = 12
+  assert.equal(groupShapeSignature(group), original, 'translation can shift cached cells')
+
+  rotor.rotation.z = 0.001
+  const rotated = groupShapeSignature(group)
+  assert.notEqual(rotated, original, 'even a small rotation can move a long edge into a new cell')
+
+  rotor.scale.x = 1.5
+  assert.notEqual(groupShapeSignature(group), rotated, 'rotor scale changes the footprint shape')
+})
 
 /**
  * A group holding a 10mm cube whose geometry sits `offset` away from the group's own origin,

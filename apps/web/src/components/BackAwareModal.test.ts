@@ -10,7 +10,7 @@ let createElement: typeof import('react').createElement
 let render: typeof import('@testing-library/react').render
 let cleanup: typeof import('@testing-library/react').cleanup
 let BackAwareModal: typeof import('./BackAwareModal').BackAwareModal
-let isBackGestureClose: typeof import('./BackAwareModal').isBackGestureClose
+let isBackGestureClose: typeof import('./dialogBackGesture').isBackGestureClose
 let appBusy: typeof import('../lib/appBusy')
 
 before(async () => {
@@ -23,7 +23,7 @@ before(async () => {
   cleanup = testingLibrary.cleanup
   const backAwareModal = await import('./BackAwareModal')
   BackAwareModal = backAwareModal.BackAwareModal
-  isBackGestureClose = backAwareModal.isBackGestureClose
+  isBackGestureClose = (await import('./dialogBackGesture')).isBackGestureClose
   appBusy = await import('../lib/appBusy')
 })
 

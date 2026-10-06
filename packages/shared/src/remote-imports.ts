@@ -1,3 +1,10 @@
+/**
+ * Shared contracts and safety policy for remote model imports.
+ *
+ * The API resolves provider URLs and the web app displays the resulting candidates. Both use
+ * these schemas, file-kind classifications, and thumbnail-host rules so a provider response cannot
+ * be interpreted differently at the two ends of the import flow.
+ */
 import { z } from 'zod'
 import { LIBRARY_FILE_KINDS, classifyLibraryFileKind, isDirectPrintableFileName, isMeshLibraryFileKind, libraryFileSchema } from './printer.js'
 import {
@@ -177,6 +184,13 @@ export const remoteImportUrlImportRequestSchema = z.object({
 })
 
 export type RemoteImportUrlImportRequest = z.infer<typeof remoteImportUrlImportRequestSchema>
+
+/** Multipart fields posted beside browser-assisted file bytes. */
+export const remoteImportUploadFieldsSchema = z.object({
+  bridgeId: remoteImportUrlImportRequestSchema.shape.bridgeId,
+  folderId: z.string().trim().optional().transform((value) => value || null),
+  sourceUrl: z.string().trim().optional()
+})
 
 export const remoteImportUploadResponseSchema = z.object({
   file: libraryFileSchema,

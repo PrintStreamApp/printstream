@@ -320,11 +320,22 @@ test('a completed 3MF save does not wait for library-card metadata inspection', 
       bridgeId: project.ownerBridgeId,
       complete: { targetFileId: project.id }
     })
-    const settledBeforeInspection = await Promise.race([
-      completion.then(() => true),
-      new Promise<false>((resolve) => setTimeout(() => resolve(false), 250))
-    ])
-    releaseInspection?.()
+    // This checks that inspection cannot hold the response, not that a full three-request
+    // upload meets a 250 ms latency target under parallel test load. Keep a generous hang guard
+    // so a real awaited inspection fails without turning scheduler delay into a false failure.
+    let deadline: ReturnType<typeof setTimeout> | null = null
+    let settledBeforeInspection: boolean
+    try {
+      settledBeforeInspection = await Promise.race([
+        completion.then(() => true),
+        new Promise<false>((resolve) => {
+          deadline = setTimeout(() => resolve(false), 5_000)
+        })
+      ])
+    } finally {
+      if (deadline) clearTimeout(deadline)
+      releaseInspection?.()
+    }
     const result = await completion
 
     assert.equal(settledBeforeInspection, true, 'metadata inspection must run outside the blocking save path')

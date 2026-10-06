@@ -7,8 +7,8 @@
  * an empty field with a placeholder. Keeping the strip's label and the prompt's starting value
  * in one place is what stops the two drifting apart again.
  *
- * The counterpart surfaces are `editorPanels.tsx` (the strip) and `EditorView`'s
- * `handleRenamePlate`.
+ * The counterpart surfaces are `editorPanels.tsx` (the strip) and
+ * `useEditorPlateManagement` (the rename action).
  */
 
 /** Label an unnamed plate carries in the UI. `index` is the 1-based plate number. */

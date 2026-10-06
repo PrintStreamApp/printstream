@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
-import { resolveWorkspacePath } from './env.js'
+import { booleanEnv, resolveWorkspacePath } from './env.js'
 
 // Derive the workspace root the same way env.ts does (three levels above this
 // directory) instead of hardcoding an absolute checkout path: the suite must
@@ -22,4 +22,15 @@ test('resolveWorkspacePath resolves repo-relative bridge paths from the workspac
 
 test('resolveWorkspacePath preserves absolute paths', () => {
   assert.equal(resolveWorkspacePath('/tmp/bridge-state.json'), '/tmp/bridge-state.json')
+})
+
+test('bridge update flags parse false and true strings literally', () => {
+  const schema = booleanEnv(false)
+
+  assert.equal(schema.parse('false'), false)
+  assert.equal(schema.parse('0'), false)
+  assert.equal(schema.parse('true'), true)
+  assert.equal(schema.parse('1'), true)
+  assert.equal(schema.parse(undefined), false)
+  assert.throws(() => schema.parse('not-a-boolean'))
 })

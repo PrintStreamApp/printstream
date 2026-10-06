@@ -23,13 +23,10 @@ import { useQuery } from '@tanstack/react-query'
 import {
   evaluateFlushCalibration,
   parseFlushVolumeDataset,
-  type FlushCalibrationVerdict,
-  type FlushVolumeDataset
+  type FlushCalibrationVerdict
 } from '@printstream/shared'
 import { apiFetch } from '../../../lib/apiClient'
-
-/** Parsed tables keyed by `nozzle_flush_dataset` code. */
-export type FlushDatasets = Record<string, FlushVolumeDataset>
+import type { FlushDatasets } from '../../../lib/flushVolumesModel'
 
 /** Immutable for the life of a slicer image; keep it for the session. */
 const FLUSH_DATASET_STALE_TIME_MS = 60 * 60_000

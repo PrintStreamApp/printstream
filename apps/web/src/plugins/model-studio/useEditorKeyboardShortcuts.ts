@@ -20,7 +20,14 @@
  */
 import { useEffect, useRef, type MutableRefObject } from 'react'
 import { duplicateInstance, type EditorInstance, type EditorPlate } from './lib/editorModel'
-import { RESTING_GIZMO_MODE, type GizmoMode } from './editorGeometry'
+import {
+  KEY_MOVE_STEP,
+  KEY_MOVE_STEP_FINE,
+  KEY_MOVE_STEP_LARGE,
+  KEY_ROTATE_STEP,
+  RESTING_GIZMO_MODE,
+  type GizmoMode
+} from './editorGeometry'
 
 /** True when the keystroke is being typed into a field and must not trigger a shortcut. */
 function isTypingTarget(target: EventTarget | null): boolean {
@@ -28,6 +35,12 @@ function isTypingTarget(target: EventTarget | null): boolean {
   if (target.isContentEditable) return true
   const tag = target.tagName
   return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
+}
+
+/** The arrow and Z-rotation keys owned by the editor's transform callbacks. */
+function isTransformKey(key: string): boolean {
+  return key === 'ArrowLeft' || key === 'ArrowRight' || key === 'ArrowUp'
+    || key === 'ArrowDown' || key === '[' || key === ']'
 }
 
 export interface EditorKeyboardShortcutsInput {
@@ -67,6 +80,10 @@ export interface EditorKeyboardShortcutsInput {
   setGizmoModeRef: MutableRefObject<(mode: GizmoMode) => void>
   /** The live tool mode, so the shortcuts can TOGGLE rather than only set (see the M/R/S case). */
   gizmoModeRef: MutableRefObject<GizmoMode>
+  /** Move the current object or part along the plate axes, in millimetres. */
+  onNudge: (dx: number, dy: number) => void
+  /** Rotate the current object or part around Z, in radians. */
+  onRotateZ: (radians: number) => void
 }
 
 export function useEditorKeyboardShortcuts(input: EditorKeyboardShortcutsInput): void {
@@ -90,6 +107,35 @@ export function useEditorKeyboardShortcuts(input: EditorKeyboardShortcutsInput):
       const ctrl = event.ctrlKey || event.metaKey
       const selectedKey = api.selectedKeyRef.current
       const hasSelection = selectedKey != null
+
+      // Transform keys share this listener with undo, selection, and tool shortcuts. Handle them
+      // before Ctrl/Cmd commands so a fine-step arrow still reaches the transform callback.
+      if (hasSelection && isTransformKey(event.key)) {
+        let step = KEY_MOVE_STEP
+        if (ctrl) step = KEY_MOVE_STEP_FINE
+        if (event.shiftKey) step = KEY_MOVE_STEP_LARGE
+        event.preventDefault()
+        switch (event.key) {
+          case 'ArrowLeft':
+            api.onNudge(-step, 0)
+            return
+          case 'ArrowRight':
+            api.onNudge(step, 0)
+            return
+          case 'ArrowUp':
+            api.onNudge(0, step)
+            return
+          case 'ArrowDown':
+            api.onNudge(0, -step)
+            return
+          case '[':
+            api.onRotateZ(KEY_ROTATE_STEP)
+            return
+          case ']':
+            api.onRotateZ(-KEY_ROTATE_STEP)
+            return
+        }
+      }
 
       if (ctrl) {
         const key = event.key.toLowerCase()

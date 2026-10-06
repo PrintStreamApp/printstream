@@ -27,30 +27,14 @@ import { SortableTableHeader, type TableSortDirection } from '../../components/S
 import { formatSettingValueForDisplay } from '../../components/settings/settingValueDisplay'
 import { parameterTableColumnLabel } from './lib/parameterTableColumns'
 import { isUnsetCellValue } from './lib/parameterTable'
+import {
+  ACTIONS_COLUMN_WIDTH,
+  NAME_COLUMN_WIDTH,
+  PLATE_COLUMN_WIDTH,
+  SETTING_COLUMN_WIDTH,
+  parameterTableMinWidth
+} from './lib/parameterTableLayout'
 import type { ParameterTableCell, ParameterTableRow, ParameterTableSortKey } from './lib/parameterTable'
-
-/** Fixed leading columns, then one per chosen setting. Widths feed the scroller's min width. */
-const NAME_COLUMN_WIDTH = 260
-const PLATE_COLUMN_WIDTH = 96
-const SETTING_COLUMN_WIDTH = 150
-const ACTIONS_COLUMN_WIDTH = 64
-
-/**
- * How wide the grid needs to be for `settingColumns` chosen settings.
- *
- * EXPORTED because the dialog has to size itself from the same arithmetic. Left to a literal on
- * each side they disagreed silently: the dialog was 1200px wide, the default five columns need
- * 1170, and the 43px of chrome between them (the dialog's 20px padding either side plus the dialog
- * and Sheet borders) left the scroller at 1157. So the table overflowed by 13px and the grid
- * carried a horizontal scrollbar in its DEFAULT state, scrolling by a sliver, on every screen.
- *
- * The scroller is still the right answer for a genuinely wide selection; it just must not be the
- * answer for the set the dialog opens with.
- */
-export function parameterTableMinWidth(settingColumns: number): number {
-  return NAME_COLUMN_WIDTH + PLATE_COLUMN_WIDTH + ACTIONS_COLUMN_WIDTH
-    + settingColumns * SETTING_COLUMN_WIDTH
-}
 
 /**
  * Whether the inherited baseline (the resolved process preset) is known yet.

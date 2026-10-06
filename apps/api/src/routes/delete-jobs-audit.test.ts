@@ -28,6 +28,7 @@ const originalAuditLogCreate = rootPrisma.auditLog.create
 const printerManagerPrototype = Object.getPrototypeOf(printerManager) as typeof printerManager
 const originalGetPrinter = printerManagerPrototype.getPrinter
 const originalPrinterFindUnique = prisma.printer.findUnique
+const originalLibraryFindMany = prisma.libraryFile.findMany
 const TEST_WORKSPACE: RequestWorkspaceSummary = { id: 'workspace-1', slug: 'workspace-1', name: 'Workspace 1' }
 
 const TEST_PRINTER: Printer = {
@@ -50,9 +51,11 @@ afterEach(() => {
   rootPrisma.auditLog.create = originalAuditLogCreate
   printerManagerPrototype.getPrinter = originalGetPrinter
   prisma.printer.findUnique = originalPrinterFindUnique
+  prisma.libraryFile.findMany = originalLibraryFindMany
 })
 
 test('library delete jobs write an explicit audit entry', async () => {
+  prisma.libraryFile.findMany = ((async () => [{ hidden: false }]) as unknown) as typeof prisma.libraryFile.findMany
   const auditCreates: Array<Record<string, unknown>> = []
   rootPrisma.auditLog.create = (async (args: { data: Record<string, unknown> }) => {
     auditCreates.push(args.data)

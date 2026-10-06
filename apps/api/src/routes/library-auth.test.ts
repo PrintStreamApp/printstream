@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { createWriteStream } from 'node:fs'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { afterEach, beforeEach, test } from 'node:test'
+import { afterEach, beforeEach, mock, test } from 'node:test'
 import express from 'express'
 import type { AddressInfo } from 'node:net'
 import type { Server } from 'node:http'
@@ -24,8 +24,10 @@ import { prisma, rootPrisma } from '../lib/prisma.js'
 import { restorePrismaMethodsAfterEach, usePrismaStubs } from '../test-utils/prisma-stubs.js'
 import { HttpError } from '../lib/http-error.js'
 import { LIBRARY_DERIVED_CHIPS_VERSION } from '../lib/library-derived-chips.js'
+import { bridgeSessionManager } from '../lib/bridge-session-manager.js'
 
 const p = prisma as unknown as Record<string, Record<string, unknown>>
+const versionMutationStub = usePrismaStubs()
 // Auto-restore the prisma/rootPrisma methods these tests override (was a per-method save/restore block).
 restorePrismaMethodsAfterEach([
   [p.libraryFile, 'findMany'],
@@ -33,6 +35,9 @@ restorePrismaMethodsAfterEach([
   [p.libraryFile, 'delete'],
   [p.libraryFile, 'update'],
   [p.libraryFileVersion, 'findMany'],
+  [p.libraryFileVersion, 'findFirst'],
+  [p.libraryFileVersion, 'findUnique'],
+  [p.libraryFileVersion, 'delete'],
   [p.libraryFolder, 'findMany'],
   [p.libraryFolder, 'findFirst'],
   [p.bridge, 'findMany'],
@@ -47,6 +52,7 @@ beforeEach(() => {
 })
 
 afterEach(async () => {
+  mock.restoreAll()
 
   await Promise.all(tempDirs.splice(0).map(async (dir) => {
     await rm(dir, { recursive: true, force: true })
@@ -187,6 +193,42 @@ test('library folders are workspace scoped when a workspace is present', async (
         workspaceId: 'workspace-1'
       },
       orderBy: { name: 'asc' }
+    })
+  })
+})
+
+test('recycle-bin routes retain their static path and manage permission', async () => {
+  let findManyArgs: unknown
+  prisma.libraryFile.findMany = ((async (args: unknown) => {
+    findManyArgs = args
+    return []
+  }) as unknown) as typeof prisma.libraryFile.findMany
+
+  await withLibraryApp({
+    authEnabled: true,
+    actor: { type: 'user', userId: 'user-1' },
+    workspace: { id: 'workspace-1', slug: 'workspace-1', name: 'Workspace 1' },
+    permissions: [LIBRARY_VIEW_PERMISSION],
+    runtimePolicy: { demoMode: false }
+  } as RequestAuthContext & { workspace: { id: string; slug: string; name: string } }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/library/recycle-bin`)
+    assert.equal(response.status, 403)
+    assert.equal(findManyArgs, undefined)
+  })
+
+  await withLibraryApp({
+    authEnabled: true,
+    actor: { type: 'user', userId: 'user-1' },
+    workspace: { id: 'workspace-1', slug: 'workspace-1', name: 'Workspace 1' },
+    permissions: [LIBRARY_MANAGE_PERMISSION],
+    runtimePolicy: { demoMode: false }
+  } as RequestAuthContext & { workspace: { id: string; slug: string; name: string } }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/library/recycle-bin`)
+    assert.equal(response.status, 200)
+    assert.deepEqual(await response.json(), { files: [] })
+    assert.deepEqual(findManyArgs, {
+      where: { deletedAt: { not: null }, hidden: false, workspaceId: 'workspace-1' },
+      orderBy: { deletedAt: 'desc' }
     })
   })
 })
@@ -540,6 +582,261 @@ test('library file history lists the current file and older versions', async () 
   })
 })
 
+test('archived version media checks permission before a workspace-scoped lookup', async () => {
+  let capturedArgs: unknown
+  prisma.libraryFileVersion.findUnique = ((async (args: unknown) => {
+    capturedArgs = args
+    return null
+  }) as unknown) as typeof prisma.libraryFileVersion.findUnique
+
+  const actor = { type: 'user' as const, userId: 'user-1' }
+  const runtimePolicy = { demoMode: false }
+
+  await withLibraryApp({ authEnabled: true, actor, permissions: [], runtimePolicy }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/library/versions/version-1/plates`)
+    assert.equal(response.status, 403)
+    assert.equal(capturedArgs, undefined)
+  })
+
+  await withLibraryApp({
+    authEnabled: true,
+    actor,
+    permissions: [LIBRARY_VIEW_PERMISSION],
+    runtimePolicy
+  }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/library/versions/version-1/plates`)
+    assert.equal(response.status, 404)
+    assert.deepEqual(await response.json(), { error: 'Version not found' })
+    assert.deepEqual(capturedArgs, { where: { id: 'version-1' } })
+  })
+})
+
+test('archived version print keeps its static route and permission gate', async () => {
+  let capturedArgs: unknown
+  prisma.libraryFileVersion.findUnique = ((async (args: unknown) => {
+    capturedArgs = args
+    return null
+  }) as unknown) as typeof prisma.libraryFileVersion.findUnique
+
+  const actor = { type: 'user' as const, userId: 'user-1' }
+  const runtimePolicy = { demoMode: false }
+  const payload = {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ printerId: 'printer-1', plate: 1, useAms: true })
+  }
+
+  await withLibraryApp({ authEnabled: true, actor, permissions: [], runtimePolicy }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/library/versions/version-1/print`, payload)
+    assert.equal(response.status, 403)
+    assert.equal(capturedArgs, undefined)
+  })
+
+  await withLibraryApp({
+    authEnabled: true,
+    actor,
+    permissions: [PRINTS_DISPATCH_PERMISSION],
+    runtimePolicy
+  }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/library/versions/version-1/print`, payload)
+    assert.equal(response.status, 404)
+    assert.deepEqual(await response.json(), { error: 'Version not found' })
+    assert.deepEqual(capturedArgs, { where: { id: 'version-1' } })
+  })
+})
+
+test('current-file media checks permission before a workspace-scoped lookup', async () => {
+  let capturedArgs: unknown
+  prisma.libraryFile.findUnique = ((async (args: unknown) => {
+    capturedArgs = args
+    return null
+  }) as unknown) as typeof prisma.libraryFile.findUnique
+
+  const actor = { type: 'user' as const, userId: 'user-1' }
+  const runtimePolicy = { demoMode: false }
+
+  await withLibraryApp({ authEnabled: true, actor, permissions: [], runtimePolicy }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/library/file-1/plates`)
+    assert.equal(response.status, 403)
+    assert.equal(capturedArgs, undefined)
+  })
+
+  await withLibraryApp({
+    authEnabled: true,
+    actor,
+    permissions: [LIBRARY_VIEW_PERMISSION],
+    runtimePolicy
+  }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/library/file-1/plates`)
+    assert.equal(response.status, 404)
+    assert.deepEqual(await response.json(), { error: 'File not found' })
+    assert.deepEqual(capturedArgs, { where: { id: 'file-1' } })
+  })
+})
+
+test('deleting an archived version removes its row without touching current file bytes', async () => {
+  const version = {
+    id: 'version-1',
+    libraryFileId: 'file-1',
+    versionNumber: 1,
+    ownerBridgeId: null,
+    storedPath: 'archived.3mf'
+  }
+  let deletedWhere: unknown
+  prisma.libraryFileVersion.findUnique = ((async () => version) as unknown) as typeof prisma.libraryFileVersion.findUnique
+  prisma.libraryFile.findUnique = ((async () => ({
+    id: 'file-1',
+    name: 'Project.3mf',
+    hidden: false,
+    storedPath: 'current.3mf',
+    ownerBridgeId: null
+  })) as unknown) as typeof prisma.libraryFile.findUnique
+  prisma.libraryFileVersion.delete = ((async (args: { where: unknown }) => {
+    deletedWhere = args.where
+    return version
+  }) as unknown) as typeof prisma.libraryFileVersion.delete
+
+  await withLibraryApp({
+    authEnabled: true,
+    actor: { type: 'user', userId: 'user-1' },
+    permissions: [LIBRARY_MANAGE_PERMISSION],
+    runtimePolicy: { demoMode: false }
+  }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/library/versions/version-1`, { method: 'DELETE' })
+    assert.equal(response.status, 204)
+    assert.deepEqual(deletedWhere, { id: 'version-1' })
+  })
+})
+
+test('deleting the only current version leaves the file intact', async () => {
+  let updateCalled = false
+  prisma.libraryFile.findUnique = ((async () => ({ id: 'file-1', hidden: false })) as unknown) as typeof prisma.libraryFile.findUnique
+  prisma.libraryFileVersion.findFirst = ((async () => null) as unknown) as typeof prisma.libraryFileVersion.findFirst
+  prisma.libraryFile.update = ((async () => {
+    updateCalled = true
+    return {} as never
+  }) as unknown) as typeof prisma.libraryFile.update
+
+  await withLibraryApp({
+    authEnabled: true,
+    actor: { type: 'user', userId: 'user-1' },
+    permissions: [LIBRARY_MANAGE_PERMISSION],
+    runtimePolicy: { demoMode: false }
+  }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/library/file-1/current-version`, { method: 'DELETE' })
+    assert.equal(response.status, 409)
+    assert.deepEqual(await response.json(), { error: 'Cannot delete the only version of a file.' })
+    assert.equal(updateCalled, false)
+  })
+})
+
+test('deleting a current version promotes the latest archived version atomically', async () => {
+  const current = {
+    id: 'file-1',
+    name: 'Project.stl',
+    hidden: false,
+    storedPath: 'current.stl',
+    ownerBridgeId: null,
+    currentVersionNumber: 3,
+    sizeBytes: 30,
+    kind: 'stl',
+    thumbnailPath: null,
+    folderId: null,
+    uploadedAt: new Date('2026-09-25T12:00:00.000Z')
+  }
+  const previous = {
+    id: 'version-2',
+    libraryFileId: current.id,
+    versionNumber: 2,
+    storedPath: 'previous.stl',
+    ownerBridgeId: null,
+    sizeBytes: 20,
+    kind: 'stl',
+    thumbnailPath: null,
+    uploadedAt: new Date('2026-09-24T12:00:00.000Z')
+  }
+  let updateData: Record<string, unknown> | undefined
+  let deletedVersionId: string | undefined
+  prisma.libraryFile.findUnique = ((async () => current) as unknown) as typeof prisma.libraryFile.findUnique
+  prisma.libraryFileVersion.findFirst = ((async () => previous) as unknown) as typeof prisma.libraryFileVersion.findFirst
+  prisma.libraryFile.update = ((async (args: { data: Record<string, unknown> }) => {
+    updateData = args.data
+    return { ...current, ...args.data }
+  }) as unknown) as typeof prisma.libraryFile.update
+  prisma.libraryFileVersion.delete = ((async (args: { where: { id: string } }) => {
+    deletedVersionId = args.where.id
+    return previous
+  }) as unknown) as typeof prisma.libraryFileVersion.delete
+  versionMutationStub(prisma, '$transaction', async (run: (tx: typeof prisma) => Promise<unknown>) => await run(prisma))
+
+  await withLibraryApp({
+    authEnabled: true,
+    actor: { type: 'user', userId: 'user-1' },
+    permissions: [LIBRARY_MANAGE_PERMISSION],
+    runtimePolicy: { demoMode: false }
+  }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/library/file-1/current-version`, { method: 'DELETE' })
+    assert.equal(response.status, 200)
+    const body = await response.json() as { file: { currentVersionNumber: number; sizeBytes: number } }
+    assert.equal(body.file.currentVersionNumber, 2)
+    assert.equal(body.file.sizeBytes, 20)
+    assert.equal(deletedVersionId, 'version-2')
+    assert.equal(updateData?.storedPath, 'previous.stl')
+    assert.equal(updateData?.currentVersionNumber, 2)
+  })
+})
+
+test('restoring an archived version copies bytes and archives the former current version', async () => {
+  const current = {
+    id: 'file-1', workspaceId: 'workspace-1', name: 'Project.stl', hidden: false,
+    ownerBridgeId: 'bridge-1', storedPath: 'current.stl', sizeBytes: 30, kind: 'stl',
+    thumbnailPath: null, folderId: null, currentVersionNumber: 3, snapshotKey: null,
+    uploadedAt: new Date('2026-09-25T12:00:00.000Z')
+  }
+  const archived = {
+    id: 'version-1', libraryFileId: current.id, workspaceId: current.workspaceId,
+    name: current.name, ownerBridgeId: current.ownerBridgeId, storedPath: 'archived.stl',
+    sizeBytes: 10, kind: 'stl', thumbnailPath: null, versionNumber: 1
+  }
+  let archivedCurrent: Record<string, unknown> | undefined
+  let updatedData: Record<string, unknown> | undefined
+  prisma.libraryFile.findUnique = ((async () => current) as unknown) as typeof prisma.libraryFile.findUnique
+  prisma.libraryFileVersion.findUnique = ((async () => archived) as unknown) as typeof prisma.libraryFileVersion.findUnique
+  versionMutationStub(prisma.libraryFileVersion, 'create', async (args: { data: Record<string, unknown> }) => {
+    archivedCurrent = args.data
+    return { id: 'version-3' }
+  })
+  prisma.libraryFile.update = ((async (args: { data: Record<string, unknown> }) => {
+    updatedData = args.data
+    return { ...current, ...args.data }
+  }) as unknown) as typeof prisma.libraryFile.update
+  versionMutationStub(prisma, '$transaction', async (run: (tx: typeof prisma) => Promise<unknown>) => await run(prisma))
+  versionMutationStub(rootPrisma.authUser, 'findUnique', async () => ({ displayName: 'Ryan', email: 'ryan@example.com' }))
+  mock.method(bridgeSessionManager, 'isConnected', () => true)
+  const requestRpc = mock.method(bridgeSessionManager, 'requestRpc', async () => null)
+
+  await withLibraryApp({
+    authEnabled: true,
+    actor: { type: 'user', userId: 'user-1' },
+    permissions: [LIBRARY_MANAGE_PERMISSION],
+    runtimePolicy: { demoMode: false }
+  }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/library/versions/version-1/restore`, { method: 'POST' })
+    assert.equal(response.status, 200)
+    const body = await response.json() as { file: { currentVersionNumber: number; sizeBytes: number } }
+    assert.equal(body.file.currentVersionNumber, 4)
+    assert.equal(body.file.sizeBytes, 10)
+  })
+
+  assert.equal(archivedCurrent?.storedPath, 'current.stl')
+  assert.equal(archivedCurrent?.versionNumber, 3)
+  assert.equal(updatedData?.restoredFromVersionNumber, 1)
+  assert.equal(updatedData?.createdByName, 'Ryan')
+  assert.equal(requestRpc.mock.calls[0]?.arguments[1], 'library.copy')
+  assert.equal((requestRpc.mock.calls[0]?.arguments[2] as { sourceStoredPath: string }).sourceStoredPath, 'archived.stl')
+  assert.equal((requestRpc.mock.calls[0]?.arguments[2] as { targetStoredPath: string }).targetStoredPath, updatedData?.storedPath)
+})
+
 test('demo library delete rejects deleting visible curated files', async () => {
   let deleteCalled = false
   prisma.libraryFile.findUnique = ((async () => ({
@@ -576,6 +873,72 @@ test('demo library delete rejects deleting visible curated files', async () => {
     assert.deepEqual(await response.json(), { error: 'Curated demo library files are read-only in the public demo.' })
     assert.equal(deleteCalled, false)
   })
+})
+
+test('permanent file deletion reports failed current and archived byte cleanup', async () => {
+  const row = {
+    id: 'file-1', name: 'Project.stl', hidden: false,
+    ownerBridgeId: 'bridge-1', storedPath: 'current.stl',
+    versions: [{ ownerBridgeId: 'bridge-1', storedPath: 'archived.stl' }]
+  }
+  let deletedId: string | undefined
+  const warnings: string[] = []
+  prisma.libraryFile.findUnique = ((async () => row) as unknown) as typeof prisma.libraryFile.findUnique
+  prisma.libraryFile.delete = ((async (args: { where: { id: string } }) => {
+    deletedId = args.where.id
+    return row
+  }) as unknown) as typeof prisma.libraryFile.delete
+  mock.method(bridgeSessionManager, 'isConnected', () => true)
+  mock.method(bridgeSessionManager, 'requestRpc', async () => { throw new Error('bridge disk unavailable') })
+  mock.method(console, 'warn', (message: string) => { warnings.push(message) })
+
+  await withLibraryApp({
+    authEnabled: true,
+    actor: { type: 'user', userId: 'user-1' },
+    permissions: [LIBRARY_MANAGE_PERMISSION],
+    runtimePolicy: { demoMode: false }
+  }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/library/file-1`, { method: 'DELETE' })
+    assert.equal(response.status, 204)
+  })
+
+  assert.equal(deletedId, 'file-1')
+  assert.equal(warnings.length, 2)
+  assert.ok(warnings.every((message) => message.includes('bridge disk unavailable')))
+})
+
+test('favoriting a visible file updates only the acting user', async () => {
+  const row = {
+    id: 'file-1', name: 'Project.stl', ownerBridgeId: 'bridge-1',
+    storedPath: 'project.stl', sizeBytes: 12, kind: 'stl', thumbnailPath: null,
+    folderId: null, uploadedAt: new Date('2026-09-25T12:00:00.000Z')
+  }
+  let created: { userId: string; libraryFileId: string } | undefined
+  prisma.libraryFile.findFirst = ((async () => row) as unknown) as typeof prisma.libraryFile.findFirst
+  versionMutationStub(prisma.libraryFileFavorite, 'create', async (args: { data: { userId: string; libraryFileId: string } }) => {
+    created = args.data
+    return { id: 'favorite-1' }
+  })
+
+  await withLibraryApp({
+    authEnabled: true,
+    actor: { type: 'user', userId: 'user-1' },
+    workspace: { id: 'workspace-1', slug: 'test', name: 'Test' },
+    permissions: [LIBRARY_VIEW_PERMISSION],
+    runtimePolicy: { demoMode: false }
+  } as RequestAuthContext & { workspace: { id: string; slug: string; name: string } }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/library/file-1/favorite`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ favorite: true })
+    })
+    assert.equal(response.status, 200)
+    const body = await response.json() as { file: { favorite: boolean } }
+    assert.equal(body.file.favorite, true)
+  })
+
+  assert.equal(created?.userId, 'user-1')
+  assert.equal(created?.libraryFileId, 'file-1')
 })
 
 test('demo library patch rejects mutating visible curated files', async () => {
@@ -653,6 +1016,39 @@ test('library print dispatch passes authorization with prints.dispatch permissio
 
     assert.notEqual(response.status, 401)
     assert.notEqual(response.status, 403)
+  })
+})
+
+test('library reprint checks permission before looking up the current file', async () => {
+  let capturedArgs: unknown
+  prisma.libraryFile.findUnique = ((async (args: unknown) => {
+    capturedArgs = args
+    return null
+  }) as unknown) as typeof prisma.libraryFile.findUnique
+  const actor = { type: 'user' as const, userId: 'user-1' }
+  const runtimePolicy = { demoMode: false }
+  const payload = {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ printerId: 'printer-1', plate: 1, useAms: true })
+  }
+
+  await withLibraryApp({ authEnabled: true, actor, permissions: [], runtimePolicy }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/library/file-1/reprint`, payload)
+    assert.equal(response.status, 403)
+    assert.equal(capturedArgs, undefined)
+  })
+
+  await withLibraryApp({
+    authEnabled: true,
+    actor,
+    permissions: [PRINTS_DISPATCH_PERMISSION],
+    runtimePolicy
+  }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/library/file-1/reprint`, payload)
+    assert.equal(response.status, 404)
+    assert.deepEqual(await response.json(), { error: 'File not found' })
+    assert.deepEqual(capturedArgs, { where: { id: 'file-1' } })
   })
 })
 
@@ -935,6 +1331,46 @@ test('library preview asset reports when a 3mf has no embedded STL or STEP sourc
 
     assert.equal(response.status, 404)
     assert.deepEqual(await response.json(), { error: 'No embedded STL or STEP preview source found' })
+  })
+})
+
+test('mesh thumbnail upload keeps its viewer gate and PNG validation', async () => {
+  let lookups = 0
+  prisma.libraryFile.findUnique = ((async () => {
+    lookups += 1
+    return {
+      id: 'file-1',
+      kind: 'stl',
+      ownerBridgeId: null,
+      storedPath: 'mesh.stl',
+      uploadedAt: new Date('2026-05-01T00:00:00.000Z')
+    }
+  }) as unknown) as typeof prisma.libraryFile.findUnique
+
+  const actor = { type: 'user' as const, userId: 'user-1' }
+  const runtimePolicy = { demoMode: false }
+  const payload = {
+    method: 'PUT',
+    headers: { 'Content-Type': 'image/png' },
+    body: Buffer.from('not a PNG')
+  }
+
+  await withLibraryApp({ authEnabled: true, actor, permissions: [], runtimePolicy }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/library/file-1/thumbnail`, payload)
+    assert.equal(response.status, 403)
+    assert.equal(lookups, 0)
+  })
+
+  await withLibraryApp({
+    authEnabled: true,
+    actor,
+    permissions: [LIBRARY_VIEW_PERMISSION],
+    runtimePolicy
+  }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/library/file-1/thumbnail`, payload)
+    assert.equal(response.status, 400)
+    assert.deepEqual(await response.json(), { error: 'Body is not a PNG' })
+    assert.equal(lookups, 1)
   })
 })
 
@@ -1588,6 +2024,52 @@ test('library scene entry streams the requested internal model xml', async () =>
     assert.equal(response.headers.get('content-type'), 'application/xml; charset=utf-8')
     assert.equal(response.headers.get('cache-control'), 'private, no-cache, max-age=0, must-revalidate, s-maxage=0')
     assert.match(await response.text(), /^<\?xml version="1.0" encoding="UTF-8"\?>/)
+  })
+})
+
+test('archived scene entry keeps permission and conditional model-byte reads', async () => {
+  const archivePath = await createSceneArchive({
+    rootModelXml: MINIMAL_SCENE_MODEL_XML,
+    modelSettingsXml: MINIMAL_SCENE_MODEL_SETTINGS_XML,
+    projectSettingsJson: '{}'
+  })
+  let lookups = 0
+  prisma.libraryFileVersion.findUnique = ((async () => {
+    lookups += 1
+    return {
+      id: 'version-1',
+      ownerBridgeId: null,
+      storedPath: archivePath,
+      sizeBytes: 1024,
+      uploadedAt: new Date('2026-05-01T00:00:00.000Z')
+    }
+  }) as unknown) as typeof prisma.libraryFileVersion.findUnique
+  const actor = { type: 'user' as const, userId: 'user-1' }
+  const runtimePolicy = { demoMode: false }
+  const route = `/api/library/versions/version-1/scene-entry?path=${encodeURIComponent('3D/3dmodel.model')}`
+
+  await withLibraryApp({ authEnabled: true, actor, permissions: [], runtimePolicy }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}${route}`)
+    assert.equal(response.status, 403)
+    assert.equal(lookups, 0)
+  })
+
+  await withLibraryApp({
+    authEnabled: true,
+    actor,
+    permissions: [LIBRARY_VIEW_PERMISSION],
+    runtimePolicy
+  }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}${route}`)
+    assert.equal(response.status, 200)
+    assert.equal(response.headers.get('content-type'), 'application/xml; charset=utf-8')
+    assert.match(await response.text(), /<model /)
+    const etag = response.headers.get('etag')
+    assert.ok(etag)
+
+    const unchanged = await fetch(`${baseUrl}${route}`, { headers: { 'If-None-Match': etag } })
+    assert.equal(unchanged.status, 304)
+    assert.equal(lookups, 2)
   })
 })
 

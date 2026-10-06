@@ -53,6 +53,9 @@ services:
       NODE_ENV: production
       API_PORT: 4000
       DATABASE_URL: ${DATABASE_URL:-postgresql://postgres:postgres@db:5432/printstream?schema=public}
+      # Compose does not pass values from .env into a container unless they are
+      # listed here. Without this, stored credentials remain plaintext.
+      SECRETS_KEY: ${SECRETS_KEY:-}
       # Only needed when the web app is served from a DIFFERENT origin than the
       # API (a split topology with your own web tier). This single-container
       # stack serves both from one origin, where browsers never consult CORS.

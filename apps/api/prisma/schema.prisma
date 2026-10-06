@@ -145,6 +145,9 @@ model CustomerMembership {
   @@index([userId])
 }
 
+/// A tenant boundary for printers, library files, jobs, and settings. Listings hide
+/// soft-deleted rows (`deletedAt`); a later retention sweep performs the cascading
+/// hard delete. Billing ownership is optional so self-hosted workspaces remain valid.
 model Workspace {
   tags        WorkspaceTag[]
   id          String    @id @default(cuid())
@@ -987,6 +990,10 @@ model LibraryFileFavorite {
   @@index([libraryFileId])
 }
 
+/// Archived bytes and attribution for one earlier state of a library file.
+/// Workspace-scoped and immutable after archival; the live `LibraryFile` may change
+/// name, folder, tags, or bytes independently. Deleting the file or workspace
+/// cascades the row, with stored-byte cleanup handled by the library lifecycle.
 model LibraryFileVersion {
   id                        String   @id @default(cuid())
   workspaceId               String
@@ -1183,6 +1190,10 @@ model AuthUser {
   @@index([createdAt])
 }
 
+/// A global user's access to one workspace. The row is the membership;
+/// `loginDisabled` suspends entry without deleting that relationship. Workspace
+/// and user deletion both cascade it. This is hand-scoped in auth policy rather
+/// than automatically filtered by the Prisma workspace extension.
 model AuthWorkspaceMembership {
   userId        String
   workspaceId   String
@@ -1227,6 +1238,9 @@ model AuthGroup {
   @@index([workspaceId, createdAt])
 }
 
+/// Assigns a global user to one permission group. The group's scope determines
+/// whether the grant is platform-wide or workspace-local; user or group deletion
+/// cascades the assignment. It carries no independent permission snapshot.
 model AuthUserGroupMembership {
   userId    String
   groupId   String
@@ -1239,6 +1253,9 @@ model AuthUserGroupMembership {
   @@index([groupId])
 }
 
+/// Workspace-owned machine identity for API access. `revokedAt` disables the
+/// credential while retaining its audit history; deleting the workspace cascades
+/// the row. Group memberships supply live permissions, not a stored snapshot.
 model AuthServiceAccount {
   id          String    @id @default(cuid())
   workspaceId String
@@ -1259,6 +1276,9 @@ model AuthServiceAccount {
   @@index([workspaceId, revokedAt])
 }
 
+/// A service account's live permission-group assignment. The account is
+/// workspace-owned; account or group deletion cascades this join row. No
+/// permission set is snapshotted here.
 model AuthServiceAccountGroupMembership {
   serviceAccountId String
   groupId          String
@@ -1271,6 +1291,9 @@ model AuthServiceAccountGroupMembership {
   @@index([groupId])
 }
 
+/// A passkey for a deployment-global user, independent of any workspace.
+/// Credential state changes as it is used or renamed; deleting the user
+/// cascades the row. Workspace access remains a separate membership decision.
 model AuthPasskeyCredential {
   id           String    @id @default(cuid())
   userId       String
@@ -1290,10 +1313,10 @@ model AuthPasskeyCredential {
   @@index([userId])
 }
 
-// One email/password credential per user, owned by the OSS `auth-password`
-// provider. `passwordHash` is an algorithm-tagged, salted hash (argon2id, or a
-// scrypt fallback), never a reversible secret. `mustChangePassword` is set when
-// an admin sets/resets the password and cleared on the user's next self-change.
+/// One email/password credential per deployment-global user, owned by the OSS
+/// `auth-password` provider. Deleting the user cascades it; workspace access is
+/// decided separately. `passwordHash` is salted and never reversible, while
+/// `mustChangePassword` lasts from an admin reset until the user's next change.
 model AuthPasswordCredential {
   id                  String    @id @default(cuid())
   userId              String    @unique
@@ -1409,6 +1432,9 @@ model OrderTemplate {
   @@index([workspaceId, createdAt])
 }
 
+/// One live option inside a workspace-owned order template. Its required prints
+/// are `OrderTemplatePrint` rows; placing an order snapshots the chosen option
+/// into `OrderVariantSelection`. Deleting the template cascades this variant.
 model OrderTemplateVariant {
   id          String   @id @default(cuid())
   workspaceId String
@@ -1427,6 +1453,10 @@ model OrderTemplateVariant {
   @@index([workspaceId, templateId, position])
 }
 
+/// A live file/plate/quantity requirement of a template variant. Placed orders
+/// snapshot the requirement into `OrderPrint`; later template edits do not rewrite
+/// those units. Deleting the variant cascades this row, while deleting its library
+/// file clears only the optional file link.
 model OrderTemplatePrint {
   id                String   @id @default(cuid())
   workspaceId       String
@@ -1478,6 +1508,9 @@ model Order {
   @@index([workspaceId, status, createdAt])
 }
 
+/// A placed order's snapshot of a chosen template variant and quantity. The
+/// workspace and order own its lifetime; deleting the source template variant
+/// clears only the optional live link and leaves this selection intact.
 model OrderVariantSelection {
   id                  String   @id @default(cuid())
   workspaceId         String

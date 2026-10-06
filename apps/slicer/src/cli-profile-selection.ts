@@ -1,3 +1,10 @@
+/**
+ * Selects CLI profile sidecars for slicing and settings repair.
+ *
+ * A rewritten or browser-prepared 3MF already carries authoritative settings, while the separate
+ * settings-export command loads no 3MF. Keep those file-selection policies distinct so the engine
+ * neither overrides authored values nor loses the machine needed to validate a process preset.
+ */
 import type { SlicingPresetKind } from '@printstream/shared'
 
 /** Anything carrying a preset kind, these selectors care about nothing else. */

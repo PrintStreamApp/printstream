@@ -86,3 +86,30 @@ export function normalizeFallbackPlateLabel(value: string): string {
   const plate = parsePositiveInteger(match[1])
   return plate != null ? `Plate ${plate}` : value
 }
+/**
+ * Show a printer job's friendly plate suffix while preserving custom plate names.
+ * The raw job name remains available for printer-file lookups; this is display only.
+ */
+export function formatPrinterJobDisplayName(input: {
+  jobName: string | null | undefined
+  gcodeFile?: string | null | undefined
+  plate?: number | null | undefined
+}): string {
+  const normalizedJobName = input.jobName?.trim()
+  if (!normalizedJobName) return ''
+
+  const splitIndex = normalizedJobName.lastIndexOf(' - ')
+  if (splitIndex <= 0) return normalizedJobName
+
+  const title = normalizedJobName.slice(0, splitIndex).trim()
+  const rawPlateLabel = normalizedJobName.slice(splitIndex + 3).trim()
+  if (!title || !rawPlateLabel) return normalizedJobName
+
+  const inferredPlate = input.plate ?? inferObservedPrintPlateIndex({ gcodeFile: input.gcodeFile })
+  const normalizedPlateLabel = normalizeFallbackPlateLabel(rawPlateLabel)
+  if (normalizedPlateLabel === rawPlateLabel && inferredPlate == null) {
+    return normalizedJobName
+  }
+
+  return `${title} - ${normalizedPlateLabel}`
+}

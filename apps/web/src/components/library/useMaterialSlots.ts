@@ -26,17 +26,45 @@ import { replaceMaterialRecipe } from './materialSlotReplacement'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { LibraryFile, MixedFilamentConfig, SceneEditFilament, ThreeMfIndex } from '@printstream/shared'
 import type { SlicingPresetSummary } from '@printstream/shared'
+import { resolveProjectFilamentPreset } from '../../lib/filamentPresetResolver'
 import {
   buildFilamentMappings,
   buildInitialFilamentColorSelection,
   buildInitialFilamentMaterialOptionSelection,
   buildInitialFilamentToolheadSelection,
+  buildProfileMaterialOptionId,
   buildSliceDialogProjectFilaments,
   repointMaterialOptionToCompatibleAlias,
   normalizeSliceFilamentColor,
   parseSliceToolheadNozzleId,
   type SliceMaterialOption
 } from '../../lib/slicingPresetMatching'
+
+/**
+ * Saved-name bindings that can replace provisional DTO guesses. Type-family and
+ * machine-default fallbacks remain provisional when the exact catalogue is late.
+ */
+function savedFilamentProfileDefaults(
+  bakedIndex: ThreeMfIndex | null,
+  profiles: SlicingPresetSummary[],
+  machine: SlicingPresetSummary | null
+): Record<number, string> {
+  const defaults: Record<number, string> = {}
+  for (const filament of bakedIndex?.projectFilaments ?? []) {
+    const resolution = resolveProjectFilamentPreset(profiles, {
+      presetName: filament.filamentPresetName ?? filament.filamentName,
+      filamentType: filament.filamentType,
+      isSupport: filament.isSupport ?? null,
+      selectedMachineProfile: machine,
+      selectedPrinterModel: ''
+    })
+    if (resolution.status === 'resolved'
+      && (resolution.matchedBy === 'projectPreset' || resolution.matchedBy === 'presetName')) {
+      defaults[filament.id] = buildProfileMaterialOptionId(resolution.profileId)
+    }
+  }
+  return defaults
+}
 
 /** One project filament slot as the dialogs/panels see it (base slot or session-added slot). */
 export type SliceProjectFilament = ReturnType<typeof buildSliceDialogProjectFilaments>[number]
@@ -456,12 +484,20 @@ export function useMaterialSlots(params: MaterialSlotsParams): MaterialSlots {
   // that null was a moving reference, and a snapshot holding it restored whatever the file had
   // become rather than what the user saw. Whether it is the SESSION's list or merely a view of the
   // file is a separate, explicit fact: `sessionOwned`.
-  const [sessionSlots, setSessionSlots] = useState<SessionFilamentSlot[]>(() => seedPicks(
-    materialiseFrom(baseProjectFilaments),
-    buildInitialFilamentMaterialOptionSelection(file, bakedIndex, filamentProfiles),
-    buildInitialFilamentColorSelection(file, bakedIndex),
-    buildInitialFilamentToolheadSelection(file, bakedIndex)
-  ))
+  // DTO chip labels are shortened display text, so their initial profile match is
+  // provisional. Remember only those guesses until the raw saved preset names
+  // arrive; this must never turn an explicit user pick into a file default.
+  const inferredProfileSeedsRef = useRef<Record<number, string> | null>(null)
+  const [sessionSlots, setSessionSlots] = useState<SessionFilamentSlot[]>(() => {
+    const materialOptionIds = buildInitialFilamentMaterialOptionSelection(file, bakedIndex, filamentProfiles)
+    inferredProfileSeedsRef.current = bakedIndex ? null : materialOptionIds
+    return seedPicks(
+      materialiseFrom(baseProjectFilaments),
+      materialOptionIds,
+      buildInitialFilamentColorSelection(file, bakedIndex),
+      buildInitialFilamentToolheadSelection(file, bakedIndex)
+    )
+  })
   // True once the list is the session's own, an add, a remove, or an undo restoring a specific
   // list. Until then the file may replace it wholesale (a refetch, a version change); afterwards
   // only a save may, by folding the divergence in. Separating this from the STORAGE is what lets
@@ -583,13 +619,42 @@ export function useMaterialSlots(params: MaterialSlotsParams): MaterialSlots {
   // caller identity into an infinite render loop instead of a wasted render.
   useEffect(() => {
     if (!catalogueReady) return
+    const inferredSeeds = bakedIndex ? inferredProfileSeedsRef.current : null
+    const defaults = buildInitialFilamentMaterialOptionSelection(file, bakedIndex, compatibleFilamentProfiles, selectedMachineProfile)
+    const savedDefaults = inferredSeeds
+      ? savedFilamentProfileDefaults(bakedIndex, compatibleFilamentProfiles, selectedMachineProfile)
+      : {}
+    // Read edit intent from the current slots without subscribing this effect
+    // to their identity. Defaults can arrive before all slots exist; the record
+    // writer discards those extra ids, so a slot dependency would keep retrying.
+    const explicitlyEditedIds = new Set(
+      slotListRef.current.filter((slot) => slot.profileEdited).map((slot) => slot.projectFilamentId)
+    )
+    const remainingInferredSeeds = inferredSeeds ? { ...inferredSeeds } : null
+    if (remainingInferredSeeds) {
+      for (const slot of slotListRef.current) {
+        const id = slot.projectFilamentId
+        if (slot.profileEdited || slot.pickedOptionId === '' || savedDefaults[id]) {
+          delete remainingInferredSeeds[id]
+        }
+      }
+    }
     setFilamentMaterialOptionIds((current) => {
-      const defaults = buildInitialFilamentMaterialOptionSelection(file, bakedIndex, compatibleFilamentProfiles, selectedMachineProfile)
       const next: Record<number, string> = { ...defaults }
       for (const [filamentId, optionId] of Object.entries(current)) {
+        const id = Number(filamentId)
+        const savedOptionId = savedDefaults[id]
         if (!optionId) {
           // An explicit cleared choice is not a request to restore the file's preset.
           next[Number(filamentId)] = optionId
+          continue
+        }
+        // The saved raw name supersedes a display-label guess, even if that
+        // guess happens to remain available. A later user edit or clear wins.
+        if (inferredSeeds?.[id] === optionId
+          && !explicitlyEditedIds.has(id)
+          && savedOptionId) {
+          next[id] = savedOptionId
           continue
         }
         if (materialOptions.some((option) => option.id === optionId)) {
@@ -605,6 +670,11 @@ export function useMaterialSlots(params: MaterialSlotsParams): MaterialSlots {
       }
       return recordsEqual(current, next) ? current : next
     })
+    if (remainingInferredSeeds) {
+      // An index may precede a usable catalogue. Retire only resolved or
+      // explicitly edited rows, so a late compatible preset can still bind.
+      inferredProfileSeedsRef.current = remainingInferredSeeds
+    }
   }, [catalogueReady, bakedIndex, compatibleFilamentProfiles, file, filamentProfiles, materialOptions, selectedMachineProfile, setFilamentMaterialOptionIds])
   // Merge baked colours/toolheads UNDER the session's, a late-arriving index fills gaps without
   // overwriting what the user already picked.
@@ -865,6 +935,9 @@ export function useMaterialSlots(params: MaterialSlotsParams): MaterialSlots {
    * values (the editor's undo frames).
    */
   const onProjectSaved = useCallback((): Map<number, number> | null => {
+    // A save persisted the current session. Old display-label guesses must not
+    // acquire authority over newly saved or renumbered rows when it refetches.
+    inferredProfileSeedsRef.current = null
     // A session that never diverged bakes the base unchanged, so nothing moved.
     if (!sessionOwned) return null
     const sourceRemap = buildFilamentSourceRemap(sessionSlots.map((slot) => slot.sourceIndex))

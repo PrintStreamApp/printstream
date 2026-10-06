@@ -14,6 +14,7 @@
  * module-level paint helpers/types are imports below, not params.
  */
 import { remapBaseMaterialPaint } from './lib/materialReplacement'
+import { attachEditorPaintOverlay, effectiveEditorPaintCodes } from './lib/editorPaintOverlay'
 import { useCallback, useEffect, useRef, useState, type Dispatch, type MutableRefObject, type SetStateAction } from 'react'
 import * as THREE from 'three'
 import { isNonRenderableThreeMfPartSubtype } from '@printstream/shared'
@@ -29,14 +30,12 @@ import {
   applySingleTrianglePaint,
   applySmartFill,
   applySupportPaintBrush,
-  buildTrianglePaintOverlay,
   getTriangleScanData,
   type SupportPaintBrushMode,
   type PaintOverlayCache
 } from './lib/supportPaint'
 import {
   PAINT_CHANNEL_SPECS,
-  paintOverlayVisible,
   TRIANGLE_PAINT_CHANNELS,
   effectivePaintTool,
   paintChannelForGizmoMode,
@@ -215,10 +214,7 @@ export function useEditorPaint(params: EditorPaintParams): EditorPaint {
   const effectivePaintCodes = useCallback((mesh: THREE.Mesh, channel: TrianglePaintChannel): SupportPaintCodes | null => {
     const key = meshPaintKey(mesh)
     if (!key) return null
-    const override = stateRef.current?.[PAINT_CHANNEL_SPECS[channel].stateKey]?.[key]
-    if (override) return Object.keys(override).length > 0 ? override : null
-    const base = getGeometryTrianglePaint(mesh.geometry as THREE.BufferGeometry, channel)
-    return channel === 'color' ? remapBaseMaterialPaint(stateRef.current, base) : base
+    return effectiveEditorPaintCodes(mesh, key, channel, stateRef.current)
   }, [stateRef])
 
   /** Replace a tagged mesh's painted-triangle overlay for one channel. */
@@ -237,23 +233,16 @@ export function useEditorPaint(params: EditorPaintParams): EditorPaint {
     }
     let cache = mesh.userData[cacheKey] as PaintOverlayCache | undefined
     if (!cache) { cache = new Map(); mesh.userData[cacheKey] = cache }
-    const overlay = buildTrianglePaintOverlay(mesh.geometry as THREE.BufferGeometry, codes, {
-      palette: spec.palette,
-      name: spec.overlayName,
-      offsetFactor: spec.offsetFactor,
-      ...(channel === 'color' ? { colorForState: colorPaintStateColor } : {})
-    }, cache)
-    if (overlay) {
-      // Match the scene's BambuStudio-parity gating (useEditorScene.applyPaintOverlayVisibility) so a
-      // rebuilt overlay isn't briefly shown out of context: support/seam only for the selected object
-      // while their tool is active; colour always. The scene re-applies on tool/selection changes.
-      let groupKey: string | null = null
-      for (let node: THREE.Object3D | null = mesh; node; node = node.parent) {
-        if (typeof node.userData.instanceKey === 'string') { groupKey = node.userData.instanceKey; break }
-      }
-      overlay.visible = paintOverlayVisible(channel, activePaintChannelRef.current, groupKey === selectedKeyRef.current)
-      mesh.add(overlay)
+    let groupKey: string | null = null
+    for (let node: THREE.Object3D | null = mesh; node; node = node.parent) {
+      if (typeof node.userData.instanceKey === 'string') { groupKey = node.userData.instanceKey; break }
     }
+    attachEditorPaintOverlay(mesh, channel, codes, {
+      activeChannel: activePaintChannelRef.current,
+      selected: groupKey === selectedKeyRef.current,
+      colorForState: colorPaintStateColor,
+      cache
+    })
   }, [colorPaintStateColor, activePaintChannelRef, selectedKeyRef])
 
   // Coalesce overlay rebuilds to at most one per animation frame. buildTrianglePaintOverlay

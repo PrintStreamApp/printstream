@@ -2,7 +2,7 @@
  * Re-export of the shared machine-retarget math. The implementation lives in
  * `@printstream/shared` (`machine-retarget.ts`) so the API's "save as a
  * different printer" flow and this slicer's native cross-model machine switch
- * share one copy. `prepareInputThreeMf` (`index.ts`) calls
+ * share one copy. `prepareInputThreeMf` (`slice-input-preparation.ts`) calls
  * `retargetProjectSettingsToMachine`/`mergeInheritedMachineProfile` to rewrite
  * an input 3MF authored for printer A onto printer B before slicing, the same
  * rewrite the editor's save path uses, with no CLI `--estimate-mode` round

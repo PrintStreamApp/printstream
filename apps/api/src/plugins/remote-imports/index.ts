@@ -56,6 +56,7 @@ import {
   remoteImportMakerWorldSettingsRequestSchema,
   remoteImportResolveRequestSchema,
   remoteImportResolveResponseSchema,
+  remoteImportUploadFieldsSchema,
   remoteImportUploadResponseSchema,
   remoteImportUrlImportRequestSchema
 } from '@printstream/shared'
@@ -346,15 +347,14 @@ export function createRemoteImportsPlugin(input: {
             throw badRequest('No file uploaded')
           }
           const workspaceId = requireRequestWorkspaceId(request)
-          const bridgeId = typeof request.body?.bridgeId === 'string' ? request.body.bridgeId.trim() : ''
-          if (!bridgeId) {
-            await unlink(request.file.path).catch(() => undefined)
-            throw badRequest('Bridge id is required')
+          const parsed = remoteImportUploadFieldsSchema.safeParse(request.body)
+          if (!parsed.success) {
+            await unlink(request.file.path).catch((error: unknown) => {
+              context.logger.warn('Could not remove a rejected remote-import upload', error)
+            })
+            throw badRequest('A valid bridge id and upload destination are required')
           }
-          const folderId = typeof request.body?.folderId === 'string' && request.body.folderId.trim()
-            ? request.body.folderId.trim()
-            : null
-          const sourceUrl = typeof request.body?.sourceUrl === 'string' ? request.body.sourceUrl.trim() : ''
+          const { bridgeId, folderId, sourceUrl = '' } = parsed.data
           // No source URL means the helper posted bytes it had already fetched. The
           // synthetic URL only carries the file NAME through the same classifier, so
           // the response describes the file the same way either path reached it.
@@ -378,7 +378,9 @@ export function createRemoteImportsPlugin(input: {
               canPrintDirectly: isDirectPrintableFileName(file.name)
             }))
           } finally {
-            await unlink(request.file.path).catch(() => undefined)
+            await unlink(request.file.path).catch((error: unknown) => {
+              context.logger.warn('Could not remove a remote-import upload', error)
+            })
           }
         }
       )

@@ -24,6 +24,7 @@
  * the tower warning means.
  */
 import { zoneRequiredNozzle } from '../editorGeometry'
+import type { EditorPlate } from './editorModel'
 
 /** An axis-aligned footprint in plate-local millimetres. */
 export interface TowerRect {
@@ -133,4 +134,30 @@ export function clampPrimeTowerIntoReach(
   }
 
   return { x: current.minX, y: current.minY }
+}
+
+/** Persist a dragged tower on its plate, clamping its measured footprint to shared nozzle reach. */
+export function moveEditorPrimeTower(
+  plate: EditorPlate,
+  corner: { x: number; y: number },
+  footprint: { width: number; depth: number }
+): EditorPlate {
+  if (!plate.primeTower) return plate
+
+  // Scene geometry can still be loading when the drag ends. Keep the requested corner until
+  // the footprint is measurable rather than treating a zero-sized tower as a valid rectangle.
+  const reachable = footprint.width > 0 && footprint.depth > 0
+    ? clampPrimeTowerIntoReach(
+      {
+        minX: corner.x,
+        maxX: corner.x + footprint.width,
+        minY: corner.y,
+        maxY: corner.y + footprint.depth
+      },
+      plate.bed,
+      plate.bed.excludeAreas
+    )
+    : corner
+
+  return { ...plate, primeTower: { ...plate.primeTower, x: reachable.x, y: reachable.y } }
 }

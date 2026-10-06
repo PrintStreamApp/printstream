@@ -175,12 +175,13 @@ export function buildTextSoup(font: Font, options: TextGeometryOptions): Float32
   const box = geometry.boundingBox
   if (box) geometry.translate(-(box.min.x + box.max.x) / 2, -(box.min.y + box.max.y) / 2, 0)
 
-  const nonIndexed = geometry.toNonIndexed()
+  // ExtrudeGeometry may already be non-indexed. Calling toNonIndexed then only warns and clones.
+  const nonIndexed = geometry.index ? geometry.toNonIndexed() : geometry
   const positions = nonIndexed.getAttribute('position')
   const soup = new Float32Array(positions.array.length)
   soup.set(positions.array as Float32Array)
   geometry.dispose()
-  nonIndexed.dispose()
+  if (nonIndexed !== geometry) nonIndexed.dispose()
   return soup
 }
 
@@ -283,9 +284,11 @@ export function buildSurfaceTextSoup(
     basis.setPosition(frame.position.x, frame.position.y, frame.position.z)
     geometry.applyMatrix4(basis)
 
-    const positions = geometry.toNonIndexed().getAttribute('position')
+    const nonIndexed = geometry.index ? geometry.toNonIndexed() : geometry
+    const positions = nonIndexed.getAttribute('position')
     chunks.push(new Float32Array(positions.array as Float32Array))
     geometry.dispose()
+    if (nonIndexed !== geometry) nonIndexed.dispose()
   })
 
   const total = chunks.reduce((sum, chunk) => sum + chunk.length, 0)
