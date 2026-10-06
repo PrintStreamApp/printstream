@@ -24,4 +24,5 @@ export const marketingRoutePaths: ReadonlyArray<string> = Object.values(manifest
 /** True when `pathname` is a public marketing page the light entry can serve without the app shell. */
 export function isMarketingPath(pathname: string, paths: readonly string[] = marketingRoutePaths): boolean {
   return paths.includes(pathname)
+    || (paths.includes('/announcements') && pathname.startsWith('/announcements/'))
 }

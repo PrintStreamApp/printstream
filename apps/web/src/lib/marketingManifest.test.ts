@@ -6,9 +6,12 @@ test('marketing home and info routes use the same manifest on browser and native
   const paths = ['/', '/register', '/get-started', '/privacy', '/terms', '/how-it-works']
   for (const path of paths) assert.equal(isMarketingPath(path, paths), true, path)
   assert.equal(isMarketingPath('/workspaces', paths), false)
+  assert.equal(isMarketingPath('/announcements/klipper-and-more-printers', [...paths, '/announcements']), true)
+  assert.equal(isMarketingPath('/announcements-other', [...paths, '/announcements']), false)
 })
 
 test('the public build without marketing routes keeps root in the app', () => {
   assert.equal(isMarketingPath('/', []), false)
   assert.equal(isMarketingPath('/register', []), false)
+  assert.equal(isMarketingPath('/announcements/klipper-and-more-printers', []), false)
 })

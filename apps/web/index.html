@@ -15,7 +15,7 @@
     <title>PrintStream</title>
     <!-- Default description; the cloud build rewrites this (and the title) per marketing
          route server-side. See apps/api/src/private/cloud/seo/. -->
-    <meta name="description" content="PrintStream: monitor, slice, and send prints to your Bambu Lab printers, and manage your model library, from one focused app." />
+    <meta name="description" content="PrintStream: monitor, slice, send prints, and manage your model library from one focused 3D printer management app." />
     <style>
       :root {
         color-scheme: dark;
@@ -252,7 +252,8 @@
       (function () {
         try {
           var PS_MARKETING_PATHS = [];
-          if (PS_MARKETING_PATHS.indexOf(window.location.pathname) !== -1) {
+          if (PS_MARKETING_PATHS.indexOf(window.location.pathname) !== -1 ||
+              (PS_MARKETING_PATHS.indexOf('/announcements') !== -1 && window.location.pathname.indexOf('/announcements/') === 0)) {
             document.documentElement.classList.add('ps-marketing-boot');
             document.documentElement.style.setProperty('--printstream-body-background', 'radial-gradient(circle at top left, #0f5444 0%, #304159 100%)');
             return;

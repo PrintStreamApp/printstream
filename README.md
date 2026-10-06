@@ -6,6 +6,8 @@
 
 PrintStream is a web app for monitoring and controlling Bambu Lab printers. Open it on your phone, tablet, or desktop, see every printer live, and send prints from a shared file library. It's fully responsive (first-class on desktop and completely supported on mobile, with no surface treated as secondary) and installs like an app (PWA).
 
+The app footer includes product announcements and release notes, with counts of unread articles and versions. Announcements check the public feed when the app opens and hourly while active; the last successful fetch remains available offline.
+
 ## Companion apps
 
 <a href="https://play.google.com/store/apps/details?id=app.printstream"><img alt="Get it on Google Play" src="apps/web/public/store-badges/google-play.png" width="180"></a>

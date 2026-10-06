@@ -4,6 +4,7 @@
  */
 import { z } from 'zod'
 import rawChangelog from '../product-changelog.json'
+import { getUnreadReleaseEntries } from './releaseUnread'
 
 const productReleaseSchema = z.object({
   version: z.string().min(1),
@@ -20,20 +21,18 @@ export type ProductRelease = z.infer<typeof productReleaseSchema>
 /** Release notes embedded in this web build, newest first. */
 export const productReleases = productChangelogSchema.parse(rawChangelog).releases
 
+/** Returns unread releases up to this build, preserving the existing last-read version marker. */
+export function getUnreadProductReleases(currentVersion: string, lastReadVersion: string | null, releases: ReadonlyArray<ProductRelease> = productReleases): readonly ProductRelease[] {
+  return getUnreadReleaseEntries(currentVersion, lastReadVersion, releases)
+}
+
 /** Returns whether this build has release notes the device has not opened yet. */
 export function hasUnreadProductRelease(
   currentVersion: string,
   lastReadVersion: string | null,
   releases: ReadonlyArray<ProductRelease> = productReleases
 ): boolean {
-  return releases.some((release) => release.version === currentVersion)
-    && lastReadVersion !== currentVersion
+  return getUnreadProductReleases(currentVersion, lastReadVersion, releases).length > 0
 }
 
-/** Formats a date-only release value without allowing the browser timezone to move the day. */
-export function formatProductReleaseDate(releasedOn: string): string {
-  return new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'America/Toronto',
-    dateStyle: 'long'
-  }).format(new Date(`${releasedOn}T12:00:00Z`))
-}
+export { formatDateOnly as formatProductReleaseDate } from './dateOnly'

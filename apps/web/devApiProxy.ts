@@ -1,7 +1,7 @@
 /**
  * Dev-only forwarding middleware for API-owned plain HTTP routes (wired in `vite.config.ts`).
  *
- * Replaces Vite's `server.proxy` entry for `/api` and forwards the mobile discovery document.
+ * Replaces Vite's `server.proxy` entry for `/api` and forwards mobile discovery and public news.
  * That entry rides the bundled http-proxy-3,
  * which wedges requests that accompany or FOLLOW an aborted large response: the request never
  * completes and never errors. The editor provokes the trigger constantly because React StrictMode
@@ -43,6 +43,8 @@ export function isDevApiRequest(url: string): boolean {
     || url.startsWith('/api?')
     || url === '/.well-known/printstream-mobile.json'
     || url.startsWith('/.well-known/printstream-mobile.json?')
+    || url === '/announcements.json'
+    || url.startsWith('/announcements.json?')
 }
 
 /**

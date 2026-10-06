@@ -1,20 +1,21 @@
 import { useState, useSyncExternalStore } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
-import NewReleasesRoundedIcon from '@mui/icons-material/NewReleasesRounded'
 import SystemUpdateAltRoundedIcon from '@mui/icons-material/SystemUpdateAltRounded'
-import { Button, Chip, Stack, Tooltip } from '@mui/joy'
+import { Chip, Stack, Tooltip } from '@mui/joy'
 import { extractErrorMessage, type AppUpdateStartResponse, type AppVersionResponse } from '@printstream/shared'
 import { apiFetch } from '../lib/apiClient'
 import { resolveDisplayedAppBuild } from '../lib/appVersionDisplay'
 import { isWebUpdatePending, subscribeWebUpdatePending } from '../lib/appStaleness'
 import { waitForNewBuild } from '../lib/appUpdateRestart'
-import { hasUnreadCompanionRelease } from '../lib/companionChangelog'
-import { hasUnreadProductRelease } from '../lib/productChangelog'
+import { getUnreadCompanionReleases } from '../lib/companionChangelog'
+import { getUnreadProductReleases } from '../lib/productChangelog'
 import { useLocalStorageState } from '../hooks/useLocalStorageState'
 import { isNativeApp, nativeAppBuild } from '../native/bridge'
 import { CompanionChangelogDialog } from './CompanionChangelogDialog'
 import { ConfirmActionDialog } from './ConfirmActionDialog'
 import { ProductChangelogDialog } from './ProductChangelogDialog'
+import { FooterAnnouncements } from './FooterAnnouncements'
+import { FooterUnreadButton, FooterUnreadCount } from './FooterUnreadButton'
 
 const LAST_READ_RELEASE_KEY = 'printstream.productChangelog.lastReadVersion'
 const LAST_READ_COMPANION_RELEASE_KEY = 'printstream.companionChangelog.lastReadVersion'
@@ -32,10 +33,11 @@ interface AppVersionFooterProps {
  * after a deploy, the API can be newer while this tab is waiting for a safe
  * automatic reload. Update availability and permissions remain server-owned.
  * The version is also the entry point to the bundled product changelog. A
- * per-device last-read version gives a newly published entry a one-time visual
- * treatment without adding server-side notification state. Installed native
+ * per-device last-read version counts unread versions in a badge without adding
+ * server-side notification state. Installed native
  * wrappers add their own version beside it so server and app builds cannot be
- * mistaken for each other.
+ * mistaken for each other. Announcements open in a separate online-feed dialog,
+ * using the hosted public feed for self-hosted clients and never bundling editorial news.
  *
  * On the native app the hint is also the TRIGGER: `canApplyUpdate` (settings
  * managers only) makes the chip clickable, and confirming posts
@@ -100,16 +102,16 @@ export function AppVersionFooter({ deployment }: AppVersionFooterProps) {
     parseStoredVersion,
     serializeStoredVersion
   )
-  const releaseUnread = hasUnreadProductRelease(displayedBuild.version, lastReadRelease)
+  const releaseUnreadCount = getUnreadProductReleases(displayedBuild.version, lastReadRelease).length
   const [lastReadCompanionRelease, setLastReadCompanionRelease] = useLocalStorageState<string | null>(
     LAST_READ_COMPANION_RELEASE_KEY,
     null,
     parseStoredVersion,
     serializeStoredVersion
   )
-  const companionReleaseUnread = installedApp
-    ? hasUnreadCompanionRelease(installedApp.version, lastReadCompanionRelease)
-    : false
+  const companionReleaseUnreadCount = installedApp
+    ? getUnreadCompanionReleases(installedApp.version, lastReadCompanionRelease).length
+    : 0
   const update = data?.update
   const lapsed = update?.status === 'updatesLapsed'
   const hasUpdate = update?.status === 'updateAvailable' || lapsed
@@ -117,6 +119,12 @@ export function AppVersionFooter({ deployment }: AppVersionFooterProps) {
   const uiReloadRequired = displayedBuild.reloadRequired || safeReloadPending
   const targetBuild = update?.latestShortRevision ? ` build ${update.latestShortRevision}` : ' the new build'
   const deploymentLabel = deployment === 'self-hosted' ? 'Self-hosted' : 'Cloud'
+
+  const openProductChangelog = () => {
+    // Reading an older build must not move the marker backwards and resurrect already-read versions.
+    if (releaseUnreadCount > 0) setLastReadRelease(displayedBuild.version)
+    setChangelogOpen(true)
+  }
 
   return (
     <Stack
@@ -126,6 +134,7 @@ export function AppVersionFooter({ deployment }: AppVersionFooterProps) {
       useFlexGap
       sx={{ flexWrap: 'wrap', justifyContent: 'center' }}
     >
+      <FooterAnnouncements deployment={deployment} />
       {uiReloadRequired ? (
         <Tooltip
           variant="soft"
@@ -135,41 +144,39 @@ export function AppVersionFooter({ deployment }: AppVersionFooterProps) {
             size="sm"
             variant="soft"
             color="warning"
-            onClick={() => {
-              setLastReadRelease(displayedBuild.version)
-              setChangelogOpen(true)
-            }}
+            endDecorator={<FooterUnreadCount count={releaseUnreadCount} />}
+            aria-label={`View release notes for ${deploymentLabel} PrintStream v${displayedBuild.version}${releaseUnreadCount > 0 ? `, ${releaseUnreadCount} unread` : ''}`}
+            onClick={openProductChangelog}
             sx={{ fontFamily: 'code' }}
           >
             {deploymentLabel} v{displayedBuild.version} (UI reload required)
           </Chip>
         </Tooltip>
       ) : (
-        <FooterVersionButton
-          label={deploymentLabel}
-          version={displayedBuild.version}
-          unread={releaseUnread}
-          tooltip={releaseUnread ? 'See what changed in this version' : 'View release notes'}
+        <FooterUnreadButton
+          unreadCount={releaseUnreadCount}
+          tooltip={releaseUnreadCount > 0 ? `${releaseUnreadCount} unread versions` : 'View release notes'}
           ariaLabel={`View release notes for ${deploymentLabel} PrintStream v${displayedBuild.version}`}
           title={displayedBuild.revision ?? undefined}
-          onClick={() => {
-            setLastReadRelease(displayedBuild.version)
-            setChangelogOpen(true)
-          }}
-        />
+          monospace
+          onClick={openProductChangelog}
+        >
+          {deploymentLabel} v{displayedBuild.version}
+        </FooterUnreadButton>
       )}
       {installedApp && (
-        <FooterVersionButton
-          label={installedApp.label}
-          version={installedApp.version}
-          unread={companionReleaseUnread}
-          tooltip={companionReleaseUnread ? 'See what changed in this app version' : 'View app release notes'}
+        <FooterUnreadButton
+          unreadCount={companionReleaseUnreadCount}
+          tooltip={companionReleaseUnreadCount > 0 ? `${companionReleaseUnreadCount} unread app versions` : 'View app release notes'}
           ariaLabel={`View release notes for ${installedApp.label} v${installedApp.version}`}
+          monospace
           onClick={() => {
-            setLastReadCompanionRelease(installedApp.version)
+            if (companionReleaseUnreadCount > 0) setLastReadCompanionRelease(installedApp.version)
             setCompanionChangelogOpen(true)
           }}
-        />
+        >
+          {installedApp.label} v{installedApp.version}
+        </FooterUnreadButton>
       )}
       {hasUpdate && update && (
         <Tooltip variant="soft" title={describeUpdate(update, canApply)}>
@@ -222,44 +229,6 @@ export function AppVersionFooter({ deployment }: AppVersionFooterProps) {
         />
       )}
     </Stack>
-  )
-}
-
-interface FooterVersionButtonProps {
-  label: string
-  version: string
-  unread: boolean
-  tooltip: string
-  ariaLabel: string
-  title?: string
-  onClick: () => void
-}
-
-/** Keep server and installed-app version entries visually and behaviorally aligned. */
-function FooterVersionButton({
-  label,
-  version,
-  unread,
-  tooltip,
-  ariaLabel,
-  title,
-  onClick
-}: FooterVersionButtonProps) {
-  return (
-    <Tooltip title={tooltip} variant="soft">
-      <Button
-        size="sm"
-        variant={unread ? 'soft' : 'plain'}
-        color={unread ? 'primary' : 'neutral'}
-        startDecorator={unread ? <NewReleasesRoundedIcon fontSize="small" /> : undefined}
-        aria-label={ariaLabel}
-        title={title}
-        onClick={onClick}
-        sx={{ minHeight: 24, fontFamily: 'code', fontSize: 'xs' }}
-      >
-        {label} v{version}
-      </Button>
-    </Tooltip>
   )
 }
 

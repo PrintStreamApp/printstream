@@ -1,5 +1,7 @@
 # Architecture: printstream
 
+The app footer shows Announcements before its version links. Product and installed-app release histories remain bundled with their builds; public news is fetched when the app opens and hourly while active, with a validated last-success cache for offline reading. Unread counts and read markers are local to the device. The hosted editorial catalog, feed route, and marketing article pages live in private modules; the reusable feed contract and reader remain public.
+
 ## High-level flow
 
 `apps/web` is the product client: a Vite-built React PWA styled with Joy UI. It loads data through normal HTTP and holds one authenticated WebSocket connection to `/ws` for live printer updates.

@@ -66,7 +66,7 @@ export default defineConfig(({ command, mode }) => {
         manifest: {
           name: 'PrintStream',
           short_name: 'PrintStream',
-          description: 'Mobile-friendly companion app for Bambu Lab printers.',
+          description: 'Monitor and manage your 3D printers, print jobs and model library.',
           theme_color: '#0d1322',
           background_color: '#070b14',
           display: 'standalone',
