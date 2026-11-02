@@ -30,6 +30,7 @@ export function SlicingPresetAutocomplete({
   placeholder,
   ariaLabel,
   modified,
+  disabled,
   onChange
 }: {
   profiles: SlicingPresetSummary[]
@@ -37,6 +38,7 @@ export function SlicingPresetAutocomplete({
   placeholder: string
   ariaLabel?: string
   /** When true, prefixes the selected name with `*` (Bambu's "modified" marker). */
+  disabled?: boolean
   modified?: boolean
   onChange: (profile: SlicingPresetSummary | null) => void
 }) {
@@ -62,6 +64,7 @@ export function SlicingPresetAutocomplete({
       <Box>
         <DeferredKeyboardAutocomplete
           options={profiles}
+          disabled={disabled}
           // NULL, not undefined. `disableClearable` narrows Joy's value TYPE to `T`, which tempted
           // a `value ?? undefined`, but undefined is how React spells "uncontrolled", so every time
           // the selection stopped being compatible (any printer-model switch) React logged a

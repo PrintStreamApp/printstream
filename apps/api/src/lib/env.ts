@@ -72,7 +72,8 @@ function optionalPositiveIntEnv() {
   return trimmedEnv(z.coerce.number().int().positive().optional())
 }
 
-function booleanEnv(defaultValue: boolean) {
+/** Parse the shared empty-as-unset boolean convention, including private deployment flags. */
+export function booleanEnv(defaultValue: boolean) {
   return trimmedEnv(z.enum(['0', '1', 'false', 'true']).default(defaultValue ? 'true' : 'false').transform((value) => value === '1' || value === 'true'))
 }
 

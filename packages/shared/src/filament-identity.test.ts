@@ -65,6 +65,31 @@ test('tracked spool fields override tray derivation', () => {
   assert.equal(filamentIdentityLabel(identity), "Michael's PLA · Bright White")
 })
 
+test('a tracked colour override supplies both the picker palette and the selected colour', () => {
+  const identity = resolveFilamentIdentity({
+    ...CUSTOM_PLA_WHITE,
+    spool: { brand: 'eSUN', filamentType: 'PETG', colorHex: '#C7372F' }
+  })
+  assert.equal(identity.colorHex, '#C7372F')
+  assert.deepEqual(identity.colors, ['#C7372F'])
+  assert.equal(identity.colorName, 'Red')
+})
+
+test('matching tracked colour retains the live multicolour palette', () => {
+  const identity = resolveFilamentIdentity({
+    ...CUSTOM_PLA_WHITE, colors: ['#FFFFFF', '#000000'],
+    spool: { colorHex: '#ffffff' }
+  })
+  assert.equal(identity.colorHex, '#FFFFFF')
+  assert.deepEqual(identity.colors, ['#FFFFFF', '#000000'])
+})
+
+test('an invalid tracked colour falls back to the live colour and palette', () => {
+  const identity = resolveFilamentIdentity({ ...CUSTOM_PLA_WHITE, spool: { colorHex: 'invalid' } })
+  assert.equal(identity.colorHex, '#FFFFFF')
+  assert.deepEqual(identity.colors, ['#FFFFFF'])
+})
+
 test('Polymaker product-family presets resolve the manufacturer without overriding tracked identity', () => {
   for (const trayInfoIdx of ['GFG60', 'GFB60', 'GFL00', 'GFL01', 'GFL50']) {
     assert.equal(filamentPresetBrandFromId(trayInfoIdx), 'Polymaker')

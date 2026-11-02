@@ -1027,7 +1027,9 @@ export function buildFilamentMappings(
   toolheadIds: Record<number, string>,
   materialOptions: SliceMaterialOption[],
   /** Per-material filament setting overrides (from the material "tune" dialog), keyed by projectFilamentId. */
-  settingOverridesById: Record<number, Record<string, string | string[]>> = {}
+  settingOverridesById: Record<number, Record<string, string | string[]>> = {},
+  /** When supplied, inherited and selected assignments must name a toolhead the target actually offers. */
+  availableToolheadIds?: ReadonlySet<string>
 ): FilamentMappingResult {
   const mappings: FilamentMappingResult['mappings'] = []
   const unresolved: UnresolvedFilamentSlot[] = []
@@ -1049,7 +1051,7 @@ export function buildFilamentMappings(
       unresolved.push({ projectFilamentId: filament.projectFilamentId, label: filament.label, reason: 'staleSelection' })
       continue
     }
-    mappings.push(buildFilamentMapping(filament, option, colors, toolheadIds, settingOverridesById[filament.projectFilamentId]))
+    mappings.push(buildFilamentMapping(filament, option, colors, toolheadIds, settingOverridesById[filament.projectFilamentId], availableToolheadIds))
   }
 
   return { mappings, unresolved }
@@ -1060,14 +1062,26 @@ function buildFilamentMapping(
   option: SliceMaterialOption,
   colors: Record<number, string>,
   toolheadIds: Record<number, string>,
-  overrides: Record<string, string | string[]> | undefined
+  overrides: Record<string, string | string[]> | undefined,
+  availableToolheadIds?: ReadonlySet<string>
 ): ResolvedFilamentMapping {
+  // A cleared UI pick must not resurrect a nozzle from the source archive or a stale tray.
+  // Browser preparation retargets the archive separately; the request must use that same topology.
+  const toolheadId = [
+    toolheadIds[filament.projectFilamentId],
+    option.toolheadId,
+    filament.nozzleId != null ? buildSliceToolheadId(filament.nozzleId) : undefined
+  ].find((id): id is string => {
+    if (typeof id !== 'string' || id.length === 0) return false
+    return !availableToolheadIds || availableToolheadIds.has(id)
+  })
+
   return {
     projectFilamentId: filament.projectFilamentId,
     profileId: option.profileId ?? undefined,
     source: option.source,
     trayId: option.trayId,
-    toolheadId: toolheadIds[filament.projectFilamentId] || option.toolheadId || (filament.nozzleId != null ? buildSliceToolheadId(filament.nozzleId) : undefined),
+    toolheadId,
     materialType: option.materialType,
     material: option.material ?? option.label ?? filament.label,
     color: normalizeSliceFilamentColor(colors[filament.projectFilamentId] ?? filament.color),

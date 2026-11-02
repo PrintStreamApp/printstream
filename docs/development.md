@@ -44,7 +44,7 @@ npm run dev
 ```
 
 The host uses the exact Node/npm pair in `.nvmrc` and `package.json` for the thin launcher (currently
-Node 22.22.3 and npm 10.9.8). Do not run the install with Node 24/npm 11: the engine check rejects
+Node 22.23.4 and npm 10.9.9). Do not run the install with Node 24/npm 11: the engine check rejects
 that pair. The image supplies the matching Node 22 runtime, PostgreSQL tooling, and the slicer
 toolchain. The host bridge uses `ffmpeg` from `PATH` (or `BRIDGE_FFMPEG_PATH`) for camera relay;
 printer status, library storage, and printing still work when it is absent, but camera streaming
@@ -56,7 +56,7 @@ If the pinned host runtime is unavailable, install through the pinned container 
 host ownership:
 
 ```bash
-docker run --rm --user "$(id -u):$(id -g)" --volume "$PWD:/workspace" --workdir /workspace node:22.22.3-bookworm npm ci
+docker run --rm --user "$(id -u):$(id -g)" --volume "$PWD:/workspace" --workdir /workspace node:22.23.4-bookworm npm ci
 ```
 
 ## Validation

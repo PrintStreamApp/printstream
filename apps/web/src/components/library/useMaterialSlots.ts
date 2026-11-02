@@ -560,7 +560,10 @@ export function useMaterialSlots(params: MaterialSlotsParams): MaterialSlots {
         ? (value as (previous: Record<number, T>) => Record<number, T>)(before)
         : value
       if (JSON.stringify(before) === JSON.stringify(next)) return current
-      return current.map((slot) => write(slot, next[slot.projectFilamentId]))
+      // Defaults may still name a deleted slot. Compare the projected list too, otherwise an
+      // ignored stale key creates a new list forever while compatibility effects re-run.
+      const projected = current.map((slot) => write(slot, next[slot.projectFilamentId]))
+      return slotsEqual(current, projected) ? current : projected
     })
   }, [])
 
@@ -980,8 +983,8 @@ export function useMaterialSlots(params: MaterialSlotsParams): MaterialSlots {
   // Built once and reused by every submit path so the host's gates and the request that goes out
   // can never disagree about which slots resolved.
   const filamentMappingResult = useMemo(
-    () => buildFilamentMappings(visibleProjectFilaments, filamentMaterialOptionIds, filamentColors, filamentToolheadIds, materialOptions, filamentSettingOverridesById),
-    [visibleProjectFilaments, filamentMaterialOptionIds, filamentColors, filamentToolheadIds, materialOptions, filamentSettingOverridesById]
+    () => buildFilamentMappings(visibleProjectFilaments, filamentMaterialOptionIds, filamentColors, filamentToolheadIds, materialOptions, filamentSettingOverridesById, offeredToolheadIds),
+    [visibleProjectFilaments, filamentMaterialOptionIds, filamentColors, filamentToolheadIds, materialOptions, filamentSettingOverridesById, offeredToolheadIds]
   )
 
   /**

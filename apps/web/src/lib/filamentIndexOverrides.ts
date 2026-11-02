@@ -17,7 +17,7 @@
  * the same references inside the saved file (`applyFilamentList` /
  * `remapModelSettingsFilamentRefs`); this module covers the session's live override state.
  */
-import { FILAMENT_INDEX_PROCESS_KEYS } from '@printstream/shared'
+import { FILAMENT_INDEX_PROCESS_KEYS, type ProcessConfig } from '@printstream/shared'
 
 /** BambuStudio's "Default" for a filament-index setting: use the object's own filament. */
 const FILAMENT_INDEX_DEFAULT = '0'
@@ -130,4 +130,25 @@ export function permutePerObjectFilamentIndexOverrides<T extends Record<string, 
   remap: ReadonlyMap<number, number>
 ): T {
   return mapPerObjectFilamentIndexOverrides(perObject, (overrides) => permuteFilamentIndexOverrides(overrides, remap))
+}
+
+/**
+ * Materialize the loaded preset's reference values before changing material positions. Session
+ * edits win. Without this step, a preset-owned reference is absent from the override map and a
+ * later preset write resurrects the old position. Call inside the material transaction, so undo
+ * records both the material change and these positional values together.
+ */
+export function withLoadedProcessFilamentReferences(
+  overrides: ProcessConfig,
+  loadedConfig: ProcessConfig | null | undefined
+): ProcessConfig {
+  if (!loadedConfig) return overrides
+  let next = overrides
+  for (const key of FILAMENT_INDEX_PROCESS_KEYS) {
+    const value = loadedConfig[key]
+    if (value === undefined || overrides[key] !== undefined) continue
+    if (next === overrides) next = { ...overrides }
+    next[key] = Array.isArray(value) ? [...value] : value
+  }
+  return next
 }

@@ -81,7 +81,8 @@ export async function applyClientSliceSettings(
     settings = applyProcessProfileToProjectSettings(
       settings,
       process.config,
-      pass.target.processSettingOverrides ?? {}
+      pass.target.processSettingOverrides ?? {},
+      process.preset ? { ...process.preset, parentConfig: process.parentConfig } : undefined
     )
   } else if (pass.target.processSettingOverrides) {
     settings = parseSettings(applyGlobalProcessOverrides(

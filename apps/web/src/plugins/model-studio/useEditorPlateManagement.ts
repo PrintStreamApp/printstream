@@ -42,10 +42,16 @@ export function useEditorPlateManagement({
     updatePlates((plates) => {
       const template = plates[plates.length - 1]
       const bed = template ? { ...template.bed } : { minX: -128, maxX: 128, minY: -128, maxY: 128, maxZ: null, excludeAreas: [] }
+      // Tower enablement is project-wide. A null tower here still inherits a position in the
+      // bake, but hides that obstacle from the viewport, dragging, and placement warnings.
+      // Borrow a known tower if the last plate's scene has not loaded yet; author its corner
+      // explicitly so the renderer and slicer agree, and keep each plate's drag state separate.
+      const sourceTower = template?.primeTower ?? plates.find((plate) => plate.primeTower)?.primeTower
+      const primeTower = sourceTower ? { ...sourceTower, sizing: { ...sourceTower.sizing } } : null
       // The bed follows the project printer; per-plate overrides do not spread to the next plate.
       return reindexPlates([
         ...plates,
-        { index: plates.length + 1, plateId, sourcePlateIndex: null, name: null, ...INHERITED_PLATE_SETTINGS, bed, instances: [], primeTower: null }
+        { index: plates.length + 1, plateId, sourcePlateIndex: null, name: null, ...INHERITED_PLATE_SETTINGS, bed, instances: [], primeTower }
       ])
     })
     setActivePlateIndex(newIndex)

@@ -79,6 +79,8 @@ export interface PlatformWorkspacesViewProps {
 }
 
 export interface PrivatePlatformAdminModule {
+  /** Optional platform billing price-review surface; absent in public builds. */
+  PricingView?: ComponentType
   /** Rendered at `/platform` (platform workspace landing). */
   OverviewView: ComponentType
   /** Rendered at `/platform/workspaces`. */

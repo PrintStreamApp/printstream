@@ -2,7 +2,7 @@
 # packages/sea-runtime/scripts/build-harness.mjs: one Node across every
 # distribution, bumped deliberately (see the root Dockerfile's note).
 # Trixie (not bookworm) because the bundled BambuStudio CLI needs glibc 2.38.
-ARG NODE_VERSION=22.22.3
+ARG NODE_VERSION=22.23.4
 FROM node:${NODE_VERSION}-trixie-slim AS base
 WORKDIR /app
 

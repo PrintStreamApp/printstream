@@ -116,6 +116,8 @@ test('classifyCliFailure keeps the prime-tower advice when the tower IS the conf
   })
   assert.match(message, /purge tower/i)
   assert.match(message, /Mount/)
+  assert.match(message, /supports/i, 'a clear model mesh does not rule out generated support collisions')
+  assert.match(message, /brim/i, 'the rendered tower does not include its generated brim')
   assert.doesNotMatch(message, /WipeTower/, 'the internal name is not shown to the user')
 })
 

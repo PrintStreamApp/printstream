@@ -22,6 +22,7 @@
 import { randomUUID } from 'node:crypto'
 import {
   isPrinterActiveJobStage,
+  isPrinterDeviceFault,
   type NotificationMessage,
   type NotificationTemplateEvent,
   type Printer,
@@ -454,10 +455,10 @@ function isAmsRefillSwitch(message: string | null): boolean {
     && /ams.*ran out.*switching to (?:the )?other ams slot/i.test(message)
 }
 
-/** Flatten the device error and every HMS error into one list of code+message entries. */
+/** Collect faults only; intentional pauses retain their separate warning notification. */
 function readStatusErrors(status: PrinterStatus): StatusErrorEntry[] {
   const entries: StatusErrorEntry[] = []
-  if (status.deviceError) {
+  if (status.deviceError && isPrinterDeviceFault(status.deviceError)) {
     entries.push({
       code: status.deviceError.code,
       message: status.deviceError.message ?? `Printer reported error ${status.deviceError.code}`

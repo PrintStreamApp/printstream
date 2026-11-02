@@ -348,3 +348,45 @@ test('a single-object export is never retargeted', async () => {
   assert.equal(settings.printer_model, 'X1C')
   assert.equal(calls.length, 0, 'an export resolves nothing')
 })
+
+test('browser-stored custom process presets use the tune resolver for both save and prepared slice', async () => {
+  const archive = await x1cProjectArchive()
+  const project = writableProject('Local.3mf')
+  const name = 'Local Ryan'
+  const parentName = '0.20mm Standard @BBL X1C'
+  const config = { name, wall_loops: '4', enable_support: '0', support_object_xy_distance: '0.35' }
+  const requests: string[] = []
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input)
+    requests.push(url)
+    assert.ok(url.includes('/resolve-machine'), 'a stored process must never reach the builtin-only endpoint')
+    return Response.json({ config: { printer_model: 'X1C', nozzle_diameter: ['0.4'] }, name: 'Bambu Lab X1 Carbon 0.4 nozzle' })
+  }) as typeof globalThis.fetch
+  const target = createLocalSaveTarget({
+    archive: () => archive, importStore: createLocalImportStore(), projectFile: () => project.file,
+    onProjectFileChanged: () => {}, filamentPresets: () => [],
+    resolveProcessConfig: async ({ processProfileId }) => {
+      assert.equal(processProfileId, 'local:process:Local Ryan')
+      return { preset: { name, parentName }, config, baseConfig: config,
+        parentConfig: { wall_loops: '2', enable_support: '0', support_object_xy_distance: '0.35' }, overriddenKeys: [] }
+    }
+  })
+  const selection = { mode: 'manualProfile' as const, printerModel: 'X1C',
+    printerProfileId: buildBuiltinSlicingPresetId('machine', 'Bambu Lab X1 Carbon 0.4 nozzle'),
+    processProfileId: 'local:process:Local Ryan', processProfileChosen: true,
+    processSettingOverrides: { enable_support: '1', support_object_xy_distance: '1' } }
+  await target.persist({ ...BASE_PAYLOAD, retarget: selection })
+  assert.ok(target.stageSnapshot)
+  const staged = await target.stageSnapshot({ sceneEdit: BASE_PAYLOAD.sceneEdit, target: selection, slicerTargetId: 't',
+    sourceFileId: null, configurationBaseFileId: null, configurationBaseVersionId: null })
+  assert.ok(staged instanceof Uint8Array)
+  for (const bytes of [project.writes[0]!, staged]) {
+    const saved = JSON.parse(strFromU8(unzipSync(bytes)['Metadata/project_settings.config']!))
+    assert.equal(saved.print_settings_id, name)
+    assert.equal(saved.enable_support, '1')
+    assert.equal(saved.support_object_xy_distance, '1')
+    assert.equal(saved.inherits_group[0], parentName)
+    assert.ok(saved.different_settings_to_system[0].includes('wall_loops'))
+    assert.ok(saved.different_settings_to_system[0].includes('support_object_xy_distance'))
+  }
+})

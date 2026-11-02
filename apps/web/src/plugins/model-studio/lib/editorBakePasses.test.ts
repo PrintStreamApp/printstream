@@ -225,7 +225,9 @@ test('a nozzle change carries the process preset the dialog re-picked with it', 
 
   const plan = await passes.machineRetarget?.(P1S_PROJECT)
   assert.equal(plan?.printerSettingsId, 'Bambu Lab A1 0.4 nozzle', 'the machine still follows')
-  assert.equal(plan?.processConfig?.print_settings_id, repicked, 'and so does the process preset')
+  assert.equal(plan?.processConfig, null, 'the machine pass does not author process twice')
+  const final = await passes.processSettings?.({ ...P1S_PROJECT, printer_settings_id: plan!.printerSettingsId })
+  assert.equal(final?.print_settings_id, repicked, 'the independent process writer follows the selected preset')
 })
 
 test('an unchanged process preset is never re-authored, so hand-tuned values survive', async () => {

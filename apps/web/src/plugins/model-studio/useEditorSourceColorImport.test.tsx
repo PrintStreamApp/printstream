@@ -83,3 +83,22 @@ test('source-colour skip replaces staged geometry without changing filaments', a
   assert.equal(setup.history, 0)
   assert.equal(setup.result.current.pending, null)
 })
+
+test('batch colour dialogs preserve earlier models and advance one at a time on skip or cancel', async () => {
+  const setup = fixture()
+  await act(async () => {
+    for (const importId of ['first', 'second', 'third']) {
+      await setup.result.current.queueSourceColorMapping({ ...staged, importId }, { kind: 'add' })
+    }
+  })
+  assert.equal(setup.result.current.pending?.staged.importId, 'first')
+  act(() => setup.result.current.skipSourceColors())
+  assert.equal(setup.additions.length, 1)
+  assert.equal(setup.result.current.pending?.staged.importId, 'second')
+  act(() => setup.result.current.cancelSourceColors())
+  assert.equal(setup.additions.length, 1, 'cancel must discard only the current model')
+  assert.equal(setup.result.current.pending?.staged.importId, 'third')
+  act(() => setup.result.current.skipSourceColors())
+  assert.equal(setup.additions.length, 2)
+  assert.equal(setup.result.current.pending, null)
+})

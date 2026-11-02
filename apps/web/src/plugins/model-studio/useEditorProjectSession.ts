@@ -6,6 +6,7 @@
  * target retain their caller-owned lifetime. The component still coordinates
  * plate state, scene refs, and saving.
  */
+import type { ProcessConfigResolver } from '../../components/ProcessSettingsDialog'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { createDownloadProgressReporter } from './lib/editorPreparation'
@@ -24,6 +25,7 @@ type Options = {
   projectSourceProp?: EditorProjectSource
   importStore: EditorImportStore
   saveTarget?: EditorSaveTarget
+  resolveProcessConfig?: ProcessConfigResolver
 }
 
 /** Create or adopt a source, register its query set, and clean its session cache on close. */
@@ -35,7 +37,8 @@ export function useEditorProjectSession({
   projectAuxiliariesOpen,
   projectSourceProp,
   importStore,
-  saveTarget
+  saveTarget,
+  resolveProcessConfig
 }: Options) {
   const queryClient = useQueryClient()
   const [projectOpenPhase, setProjectOpenPhase] = useState<ArchiveProjectOpenPhase>(
@@ -78,13 +81,21 @@ export function useEditorProjectSession({
    * and re-fetching would author from whatever the file holds now, which after an earlier save is
    * this session's own output.
    */
+  const processResolverRef = useRef(resolveProcessConfig)
+  processResolverRef.current = resolveProcessConfig
+  const hasProcessResolver = resolveProcessConfig !== undefined
   const workspaceSaveTarget = useMemo(
     () => createApiSaveTarget({
       archive: () => projectSourceRef.current.archive(),
+      resolveProcessConfig: hasProcessResolver ? (request) => {
+        const resolve = processResolverRef.current
+        if (!resolve) throw new Error('The project process resolver is not ready')
+        return resolve(request)
+      } : undefined,
       importStore,
       projectName: () => projectNameRef.current
     }),
-    [importStore]
+    [importStore, hasProcessResolver]
   )
   const effectiveSaveTarget = saveTarget ?? workspaceSaveTarget
   const savesToLocalFile = !effectiveSaveTarget.isLibraryBacked

@@ -406,6 +406,9 @@ slicingRouter.post('/profiles/resolve-process', requireRequestPermission(LIBRARY
   // discarded them (fixed for filament first; same defect, same shape).
   const parentConfig = await resolveBaselineProcessConfig(workspaceId, parsed.data.targetId ?? null, parentPresetNameOf(profileFile))
   const responseBody: ResolveProcessConfigResponse = {
+    preset: { name: profileFile.name, parentName: profileFile.source === 'custom' ? parentPresetNameOf(profileFile) : null },
+    ...(profileFile.source === 'custom' && parentPresetNameOf(profileFile) && !parentConfig
+      ? { baselineOrigin: { kind: 'partial' as const } } : {}),
     config,
     baseConfig: config,
     parentConfig: parentConfig ?? undefined,

@@ -21,6 +21,8 @@
  *
  * Counterpart: `apps/web/src/components/library/SliceFileModal.tsx` (the workspace controller).
  */
+import { useProcessMaterialTransactions } from '../../components/library/useProcessMaterialTransactions'
+import { memoizeProcessPresetResolver } from '../../lib/projectProcessResolver'
 import { resolveSliceDisabledReason } from '../../lib/slicingPresetSelection'
 import { useCallback, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
@@ -42,7 +44,7 @@ import {
   isVisibleProcessProfile,
   mergeProjectSlicingPresets
 } from '../../lib/slicingPresetMatching'
-import { permuteFilamentIndexOverrides, permutePerObjectFilamentIndexOverrides, remapFilamentIndexOverrides, remapPerObjectFilamentIndexOverrides } from '../../lib/filamentIndexOverrides'
+import { withLoadedProcessFilamentReferences, permuteFilamentIndexOverrides, permutePerObjectFilamentIndexOverrides, remapFilamentIndexOverrides, remapPerObjectFilamentIndexOverrides } from '../../lib/filamentIndexOverrides'
 import { useDeepStableValue } from '../../hooks/useDeepStableValue'
 import type { ProcessConfigResolver } from '../../components/ProcessSettingsDialog'
 import type { FilamentConfigResolver } from '../../components/library/FilamentSettingsDialog'
@@ -234,9 +236,11 @@ export function useLocalSliceSettingsController(params: LocalSliceSettingsContro
     () => builtinCache.memoize('filament', resolveBuiltinFilamentViaApi),
     [builtinCache]
   )
-  const resolveProcessConfig = useCallback<ProcessConfigResolver>(
-    (request) => buildLocalProcessConfigResolver({ project, processProfiles: processProfilesRef.current, resolveBuiltin: resolveBuiltinProcess })(request),
-    [project, resolveBuiltinProcess]
+  const resolveProcessConfig = useMemo<ProcessConfigResolver>(
+    () => memoizeProcessPresetResolver((request) => buildLocalProcessConfigResolver({ project, processProfiles: processProfilesRef.current, resolveBuiltin: resolveBuiltinProcess })(request)),
+    // Refreshing browser presets explicitly releases pinned installed baselines.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [project, resolveBuiltinProcess, localProfiles]
   )
   // Same shape for filament: stable identity, live catalogue through a ref.
   const filamentProfilesRef = useRef(unfilteredFilamentProfiles)
@@ -269,12 +273,15 @@ export function useLocalSliceSettingsController(params: LocalSliceSettingsContro
     () => processProfiles.find((profile) => isProjectSlicingPresetId(profile.id))?.id ?? null,
     [processProfiles]
   )
-  // Resolve the project's OWN preset (no target) to derive its genuine deltas, so a machine switch
+  // Resolve the project's OWN preset in the current engine to derive its deltas, so a machine switch
   // carries them onto the new preset, the same mechanism as the workspace host, via the resolver.
+  // Project is the lifetime key, including two opens with identical names.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const processProjectScope = useMemo(() => crypto.randomUUID(), [project])
   const projectProcessResolveQuery = useQuery({
-    queryKey: ['local-project-process-carry', projectProcessProfileId],
-    queryFn: () => resolveProcessConfig({ processProfileId: projectProcessProfileId as string, targetId: null, sourceFileId: null }),
-    enabled: Boolean(projectProcessProfileId),
+    queryKey: ['local-project-process-carry', projectProcessProfileId, processProjectScope, selectedSlicerTargetId, localProfiles],
+    queryFn: () => resolveProcessConfig({ processProfileId: projectProcessProfileId as string, targetId: selectedSlicerTargetId || null, sourceFileId: null }),
+    enabled: Boolean(projectProcessProfileId && (profilesQuery.data?.length ?? 0) > 0),
     staleTime: Infinity
   })
   const carryOverridesOnRepick = useDeepStableValue(
@@ -296,6 +303,7 @@ export function useLocalSliceSettingsController(params: LocalSliceSettingsContro
     plateType,
     bakedProcessProfileName: bakedIndex.processProfileName,
     carryOverridesOnRepick,
+    projectProcessResolution: projectProcessResolveQuery.data,
     catalogueKey: selectedSlicerTargetId,
     catalogueReady: (profilesQuery.data?.length ?? 0) > 0,
     carryOverridesReady: !projectProcessProfileId || projectProcessResolveQuery.isSuccess
@@ -320,15 +328,19 @@ export function useLocalSliceSettingsController(params: LocalSliceSettingsContro
   const baseProjectFilaments = useMemo(() => buildSliceDialogProjectFilaments(file, bakedIndex, selectedPlate), [bakedIndex, file, selectedPlate])
   // Removing a slot must remap the filament-INDEX references living with the process state:
   // see useMaterialSlots.onFilamentRemoved (positions above the removed one shift down).
+  // Read the resolver cache at the gesture, not at render: warm-up resolves without a state write.
+  const readLoadedProcessConfig = useCallback(() => resolveProcessConfig.peekSource?.(processProfileId)?.config
+    ?? (processProfileId === projectProcessProfileId ? projectProcessResolveQuery.data?.config : undefined),
+  [resolveProcessConfig, processProfileId, projectProcessProfileId, projectProcessResolveQuery.data])
   const handleFilamentIndexRemap = useCallback((removedPosition: number, replacementPosition?: number) => {
-    setProcessSettingOverrides((current) => remapFilamentIndexOverrides(current, removedPosition, replacementPosition))
+    setProcessSettingOverrides((current) => remapFilamentIndexOverrides(withLoadedProcessFilamentReferences(current, readLoadedProcessConfig()), removedPosition, replacementPosition))
     setObjectProcessOverrides((current) => remapPerObjectFilamentIndexOverrides(current, removedPosition, replacementPosition))
-  }, [setProcessSettingOverrides])
+  }, [readLoadedProcessConfig, setProcessSettingOverrides])
   // A reorder renumbers every position at once: same duty, permutation form.
   const handleFilamentIndexPermute = useCallback((remap: ReadonlyMap<number, number>) => {
-    setProcessSettingOverrides((current) => permuteFilamentIndexOverrides(current, remap))
+    setProcessSettingOverrides((current) => permuteFilamentIndexOverrides(withLoadedProcessFilamentReferences(current, readLoadedProcessConfig()), remap))
     setObjectProcessOverrides((current) => permutePerObjectFilamentIndexOverrides(current, remap))
-  }, [setProcessSettingOverrides])
+  }, [readLoadedProcessConfig, setProcessSettingOverrides])
   // Declared BEFORE the material core: it feeds the core's nozzle-validity clamp.
   const sliceToolheads = useMemo(() => buildSliceDialogToolheads(nozzleDiameter, nozzleFlow, undefined, selectedPrinterModel), [nozzleDiameter, nozzleFlow, selectedPrinterModel])
   const {
@@ -356,6 +368,16 @@ export function useLocalSliceSettingsController(params: LocalSliceSettingsContro
     // The editor shows every project material (no per-plate narrowing): see the modal's rule.
     onFilamentRemoved: handleFilamentIndexRemap,
     onFilamentReordered: handleFilamentIndexPermute
+  })
+  const materialTransactions = useProcessMaterialTransactions({
+    resolve: resolveProcessConfig,
+    request: { processProfileId, targetId: selectedSlicerTargetId || null, sourceFileId: null },
+    scope: [materialSnapshot, processSettingOverrides, objectProcessOverrides],
+    actions: {
+      onRemoveFilament: handleRemoveFilament,
+      onReorderFilament: handleReorderFilament,
+      onSyncFilaments: handleSyncFilaments
+    }
   })
   const materialToolheadOptions = useMemo(() => {
     const toolheads = buildSliceDialogToolheads(nozzleDiameter, nozzleFlow, undefined, selectedPrinterModel)
@@ -389,6 +411,7 @@ export function useLocalSliceSettingsController(params: LocalSliceSettingsContro
         // from the id alone, and rewriting a project's machine on a derived id threw away
         // hand-tuned printers on ordinary saves.
         printerProfileChosen: targetOrigins.printerProfileId === 'user',
+        processProfileChosen: processProfileSelectionTouchedRef.current,
         // Always sent, empty included: an empty map is how "reset every printer override" is
         // expressed, and omitting it made a reset in this editor save a file that still carried the
         // override. Safe to send unconditionally here in a way it is not for the library host: this
@@ -524,6 +547,7 @@ export function useLocalSliceSettingsController(params: LocalSliceSettingsContro
     setPlateNumber: () => undefined,
     slicePlateOptions: bakedIndex.plates,
     setPreviewFileId: () => undefined,
+    currentProcessProfileId: processProfileId,
     compatibleProcessProfiles,
     selectedProcessProfile,
     processProfileModified: Object.keys(processSettingOverrides).length > 0,
@@ -573,12 +597,13 @@ export function useLocalSliceSettingsController(params: LocalSliceSettingsContro
     openFilamentSettings: setFilamentSettingsFilamentId,
     handleMaterialOptionChange,
     desiredFilaments,
+    materialChangeError: materialTransactions.materialChangeError,
     retargetTarget,
     onAddFilament: handleAddFilament,
-    onSyncFilaments: handleSyncFilaments,
+    onSyncFilaments: materialTransactions.onSyncFilaments,
     onUpsertMixedFilament: handleUpsertMixedFilament,
-    onRemoveFilament: handleRemoveFilament,
-    onReorderFilament: handleReorderFilament,
+    onRemoveFilament: materialTransactions.onRemoveFilament,
+    onReorderFilament: materialTransactions.onReorderFilament,
     configSnapshot,
     restoreConfig,
     materialEditListenerRef,

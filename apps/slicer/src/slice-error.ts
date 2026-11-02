@@ -116,7 +116,8 @@ export function formatSliceToolpathConflictError(output: string): string | null 
     const model = both.startsWith(leading) ? both.slice(leading.length) : both.slice(0, -trailing.length)
     return (
       `The purge tower collides with "${model}"${where}. `
-      + `Move the purge tower somewhere clear of the models, or move that model.`
+      + `Generated supports and the tower's brim can extend beyond the shapes shown in the editor. `
+      + `Move the tower farther clear of the model and its supports, or move that model.`
     )
   }
 

@@ -130,3 +130,17 @@ PrintStream bundles and depends on third-party open-source software under its ow
 ---
 
 [Website](https://printstream.app) · [Terms of Service](https://printstream.app/terms) · [Privacy Policy](https://printstream.app/privacy)
+
+## Remote development with Devkit
+
+Devkit v0.14 keeps `*.localhost` as the default and can add secondary domains in
+the machine's `~/.config/devkit/host.json`. For a remote server, configure
+`secondaryDomains: ["server.home"]` and `preferredDomain: "server.home"`;
+`npm run dev` then uses the preferred hostname while retaining localhost aliases.
+The DNS wildcard must point to the server, and an existing nginx server can forward
+those names to Devkit's private proxy listener. Run `devkit nginx --allow <client-subnet>`
+to generate that forwarding configuration. See the Devkit README for bootstrap
+options and Docker networking.
+
+Use `npm run dev:doctor` to see this checkout's preferred and alternate URLs.
+The domain preference is machine configuration; project settings stay portable.

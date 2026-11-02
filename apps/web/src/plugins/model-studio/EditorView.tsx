@@ -123,7 +123,7 @@ import { useInitialLibraryImport } from './useInitialLibraryImport'
 import { useEditorPlatePacking } from './useEditorPlatePacking'
 import { useEditorPlateManagement } from './useEditorPlateManagement'
 import type { PlacementFootprintCache } from './lib/editorPlacementWarnings'
-import { resolveImportFileSelection, takeSelectedImportFiles } from './lib/importFileSelection'
+import { resolveImportFileSelection, resolveImportFileSelections, takeSelectedImportFiles } from './lib/importFileSelection'
 import {
   addedPartHostId,
   bodyPartSubtype,
@@ -598,8 +598,14 @@ function EditorView({
     projectAuxiliariesOpen,
     projectSourceProp,
     importStore,
-    saveTarget
+    saveTarget,
+    resolveProcessConfig: sliceConfig?.resolveConfig
   })
+  const setProjectProcessSettingsReader = sliceConfig?.setProjectProcessSettingsReader
+  useEffect(() => {
+    setProjectProcessSettingsReader?.(projectSource.loadProjectSettings ? () => projectSource.loadProjectSettings!() : null)
+    return () => setProjectProcessSettingsReader?.(null)
+  }, [projectSource, setProjectProcessSettingsReader])
   // `filamentColors` only changes identity when a colour actually changes, so it's
   // safe as an effect dependency; the ref lets stable callbacks read it live.
   const filamentColors = materials.colorById
@@ -1982,7 +1988,7 @@ function EditorView({
   const clearModelRequest = useCallback(() => setModelRequest(null), [])
   const {
     handleImportFromLibrary,
-    handleImportFile,
+    handleImportFiles,
     handleReplaceFromLibrary,
     handleReplaceFromFile
   } = useEditorModelImportActions({
@@ -3716,18 +3722,20 @@ function EditorView({
             if (files.length === 0) return
             const request = modelRequest
             setModelRequest(null)
-            let selection
+            let selections
             try {
-              selection = resolveImportFileSelection(files, importStore.importableFormats)
+              selections = request
+                ? [resolveImportFileSelection(files, importStore.importableFormats)]
+                : resolveImportFileSelections(files, importStore.importableFormats)
             } catch (error) {
               toast.error(error instanceof Error ? error.message : 'Unable to use the selected files.')
               return
             }
-            const { file, companionFiles } = selection
+            const { file, companionFiles } = selections[0]!
             if (request?.kind === 'replace') void handleReplaceFromFile(request.key, file, companionFiles)
             else if (request?.kind === 'addPart') {
               void handleAddPartVolume(request.key, request.subtype, { kind: 'file', file, companionFiles })
-            } else void handleImportFile(file, companionFiles)
+            } else void handleImportFiles(selections)
           }}
         />
         {contextMenu?.kind === 'object' && (
@@ -3861,6 +3869,7 @@ function EditorView({
 
     {sourceColorImport && (
       <SourceColorImportDialog
+        key={sourceColorImport.staged.importId}
         name={sourceColorImport.staged.name}
         sourceColors={sourceColorImport.sourceColors}
         mesh={sourceColorImport.mesh}

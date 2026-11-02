@@ -32,6 +32,7 @@ import {
   processConfigValuesEqual,
   processSettingsCatalog,
   recommendSupportSettingsForInterfaceFilament,
+  resolvedProcessConfigBaselines,
   validateProcessConfig,
   type ProcessSettingOverrides,
   type ProcessVisibilityContext,
@@ -44,7 +45,9 @@ import {
 import { apiFetch } from '../lib/apiClient'
 import { collectBulkOverridesResult, summarizeBulkOverrides } from '../lib/processBulkOverrides'
 import { useEffectiveSlicerDeveloperMode } from '../lib/slicerDeveloperMode'
-import { SlicingPresetAutocomplete } from './library/SlicingPresetAutocomplete'
+import { canUpdateProcessPreset } from '../lib/processPresetEditPolicy'
+import { useProcessSettingsDraft } from './useProcessSettingsDraft'
+import { ProcessPresetPicker } from './library/ProcessPresetPicker'
 import { usePromptDialog } from './PromptDialogProvider'
 import { SettingsCatalogDialog } from './settings/SettingsCatalogDialog'
 import { SettingsBaselineNote } from './settings/SettingsBaselineNote'
@@ -79,7 +82,7 @@ export interface ProcessSettingsDialogProps {
    * as the slice panel's process dropdown.
    */
   profileOptions?: SlicingPresetSummary[]
-  /** Switch the active profile, carrying the current modifications (relative to the preset). */
+  /** Commit a draft selection and values on Apply, as one undoable host transition. */
   onProfileChange?: (profileId: string, carryOverrides: ProcessSettingOverrides) => void
   /** Restrict the editable catalog to these keys (per-object overrides expose a subset). */
   allowedKeys?: readonly string[]
@@ -121,6 +124,8 @@ export interface ProcessSettingsDialogProps {
    * new user preset. Matches `FilamentSettingsDialogProps.canEditOriginal`.
    */
   canEditOriginal?: boolean
+  /** Host storage/permission policy for any active draft, rather than only the opening preset. */
+  canUpdateProfile?: (profileId: string) => boolean
   /**
    * How the dialog resolves a preset's base config. Defaults to the WORKSPACE route
    * (`/api/slicing/profiles/resolve-process`). The public 3MF editor passes an anonymous resolver
@@ -140,11 +145,19 @@ export interface ProcessSettingsDialogProps {
 }
 
 /** Resolves a preset's base config for the dialog. See {@link ProcessSettingsDialogProps.resolveConfig}. */
-export type ProcessConfigResolver = (request: {
+export type ProcessConfigRequest = {
   processProfileId: string
   targetId: string | null
   sourceFileId: string | null
-}) => Promise<ResolveProcessConfigResponse>
+}
+
+export interface ProcessConfigResolver {
+  (request: ProcessConfigRequest): Promise<ResolveProcessConfigResponse>
+  /** The source remains loaded across engine switches, like Studio's edited preset collection. */
+  resolveSource?: (request: ProcessConfigRequest) => Promise<ResolveProcessConfigResponse>
+  /** Synchronous loaded values for material-removal/reorder transactions. Never starts a lookup. */
+  peekSource?: (profileId: string) => ResolveProcessConfigResponse | undefined
+}
 
 /**
  * The one setting whose change offers a follow-up recommendation (see
@@ -161,6 +174,16 @@ const SUPPORT_INTERFACE_FILAMENT_KEY = 'support_interface_filament'
 
 export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps): JSX.Element {
   const { open, onClose, slicerTargetId, processProfileId, processProfileName, sourceFileId, initialOverrides, initialOverridesByMember, profileOptions, onProfileChange, allowedKeys, baseOverlay, titlePrefix, filamentChoices, applyScope = 'slice', canEditOriginal, initialQuery, resolveConfig, onApply } = props
+  const draft = useProcessSettingsDraft({ open, profileId: processProfileId, overrides: initialOverrides, onProfileChange, onApply })
+  const activeProfileId = draft.profileId
+  const activeOverrides = draft.overrides
+  const activeProfileName = profileOptions?.find((profile) => profile.id === activeProfileId)?.name ?? processProfileName
+  const mayUpdatePreset = canUpdateProcessPreset({
+    activeProfileId,
+    originalProfileId: processProfileId,
+    canEditOriginal,
+    canUpdateProfile: props.canUpdateProfile
+  })
   const allowedKeySet = useMemo(() => (allowedKeys ? new Set(allowedKeys) : null), [allowedKeys])
   const isKeyAllowed = (key: string): boolean => allowedKeySet === null || allowedKeySet.has(key)
   // Reveal BambuStudio's develop-tier options only when developer mode is on (workspace
@@ -176,14 +199,6 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
   // The baseline preset's OWN parent, for the emphasis-only third state. Null until resolved.
   const [parentBaseline, setParentBaseline] = useState<ProcessConfig | null>(null)
   const [bakedKeys, setBakedKeys] = useState<Set<string>>(new Set())
-  /**
-   * True when the 3MF declared a changed-from-system record, making `bakedKeys` the AUTHORITATIVE
-   * modified set rather than an addition to the value diff. See `declaresOverrides` on the resolve
-   * response: BambuStudio applies the declared list and normalizes everything else back to the
-   * preset, so an undeclared difference is drift, not a user's change. False for a file that
-   * recorded nothing, where the value diff is all we have.
-   */
-  const [declaresOverrides, setDeclaresOverrides] = useState(false)
   /**
    * False when the response carried no `baseConfig`: the named preset is not installed, so the
    * baseline is a copy of the profile's own values and a value diff can only ever be empty. The
@@ -235,10 +250,10 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
   // re-render: flashing "Loading…" and resetting the form mid-edit. Depend on a stable
   // content hash instead so it reloads only when the values actually change.
   const baseOverlayKey = JSON.stringify(baseOverlay ?? null)
-  const initialOverridesKey = JSON.stringify(initialOverridesByMember ?? initialOverrides ?? null)
+  const initialOverridesKey = JSON.stringify(initialOverridesByMember ?? activeOverrides ?? null)
 
   useEffect(() => {
-    if (!open || !processProfileId) return
+    if (!open || !activeProfileId) return
     let cancelled = false
     setLoading(true)
     setError(null)
@@ -246,14 +261,14 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
     // Same shape as the filament dialog's default branch, and it is what type-checks that the
     // workspace resolver still satisfies the seam a host may replace.
     const resolve = (resolveConfig ?? resolveWorkspaceProcessConfig)({
-      processProfileId,
+      processProfileId: activeProfileId,
       targetId: slicerTargetId || null,
       sourceFileId: sourceFileId || null
     })
     resolve
       .then((response) => {
         if (cancelled) return
-        const effective = applyProcessConfigDefaults(response.config)
+        const { effective, baseline, parentBaseline } = resolvedProcessConfigBaselines(response)
         if (baseOverlay) {
           // Per-object: the object inherits the global effective config (profile + global
           // overrides); that is both the slice base and the reset target.
@@ -277,20 +292,16 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
           setMixedKeys(seed.mixedKeys)
           setConfig({ ...globalEffective, ...seed.uniformOverrides })
         } else {
-          const baseline = applyProcessConfigDefaults(response.baseConfig)
           setSliceBase(effective)
           setBaseConfig(baseline)
-          setParentBaseline(response.parentConfig
-            ? { ...baseline, ...applyProcessConfigDefaults(response.parentConfig) }
-            : null)
+          setParentBaseline(parentBaseline)
           setBakedKeys(new Set(response.overriddenKeys))
-          setDeclaresOverrides(response.declaresOverrides === true)
           setBaselineResolved(response.baselineResolved !== false)
           setBaselineOrigin(response.baselineOrigin)
           setExplicitKeys(new Set())
           setMixedKeys(new Set())
           setInitialSetKeys(new Set())
-          setConfig({ ...effective, ...initialOverrides })
+          setConfig({ ...effective, ...activeOverrides })
         }
       })
       .catch((err: unknown) => {
@@ -307,7 +318,7 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
     // unstable object identity from the caller doesn't re-fire this on every render. `resolveConfig`
     // must be a STABLE reference (the host memoizes it), or this reloads every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, processProfileId, slicerTargetId, sourceFileId, initialOverridesKey, baseOverlayKey, resolveConfig])
+  }, [open, activeProfileId, slicerTargetId, sourceFileId, initialOverridesKey, baseOverlayKey, resolveConfig])
 
   const fieldStates = useMemo(() => computeProcessFieldStates(config, context), [config, context])
   const accessor = useMemo(() => createProcessConfigAccessor(config), [config])
@@ -331,14 +342,8 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
     // inherited one (see `explicitKeys`), it is still an override.
     if (perObjectMode && explicitKeys.has(key)) return true
     const option = processSettingsCatalog.options[key]
-    if (!baselineResolved) return bakedKeys.has(key)
+    if (!baselineResolved) return bakedKeys.has(key) || !processConfigValuesEqual(sliceBase[key], config[key], option)
     if (processConfigValuesEqual(baseConfig[key], config[key], option)) return false
-    // With a record present, an undeclared difference is version drift between the preset and the
-    // file, which BambuStudio normalizes away, not the user's change. An in-session edit always
-    // counts, because the user just made it.
-    if (declaresOverrides
-      && !bakedKeys.has(key)
-      && processConfigValuesEqual(sliceBase[key], config[key], option)) return false
     return true
   }
 
@@ -554,7 +559,7 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
   const handleApply = () => {
     if (!baseConfig) return
     const result = computeAppliedOverrides()
-    onApply?.(result.overrides, { clearedKeys: result.clearedKeys })
+    draft.apply(result.overrides, { clearedKeys: result.clearedKeys })
     onClose()
   }
 
@@ -585,7 +590,7 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
         }
       })
       const result = computeAppliedOverrides()
-      onApply?.(result.overrides, { clearedKeys: result.clearedKeys })
+      draft.apply(result.overrides, { clearedKeys: result.clearedKeys })
       onClose()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save preset')
@@ -599,7 +604,7 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
     const name = await promptText({
       title: 'Save as custom process preset',
       label: 'Preset name',
-      initialValue: `${processProfileName} (custom)`,
+      initialValue: `${activeProfileName} (custom)`,
       confirmLabel: 'Save preset'
     })
     if (!name || !name.trim()) return
@@ -607,8 +612,8 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
   }
 
   const handleUpdateOriginal = async () => {
-    if (!baseConfig) return
-    await savePreset(processProfileName, true)
+    if (!baseConfig || !mayUpdatePreset) return
+    await savePreset(activeProfileName, true)
   }
 
   /**
@@ -666,17 +671,17 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
           <FormLabel>Preset</FormLabel>
           {/* Same grouped/sorted picker as the slice panel's process dropdown, so the two
               surfaces present the catalog identically (groups, ordering, tooltips). */}
-          <SlicingPresetAutocomplete
+          <ProcessPresetPicker
             profiles={profileOptions}
-            value={profileOptions.find((profile) => profile.id === processProfileId) ?? null}
-            placeholder="Choose a process preset"
-            ariaLabel="Process preset"
-            onChange={(profile) => {
-              if (profile && profile.id !== processProfileId && baseConfig) {
-                // Carry modifications (vs the current preset baseline) onto the new profile.
-                onProfileChange(profile.id, diffProcessConfig(baseConfig, config))
-              }
-            }}
+            value={profileOptions.find((profile) => profile.id === activeProfileId) ?? null}
+            targetId={slicerTargetId || null}
+            sourceFileId={sourceFileId}
+            overrides={activeOverrides}
+            effectiveConfig={config}
+            disabled={loading || baseConfig === null}
+            resolveConfig={resolveConfig}
+            modified={Object.keys(config).some(isModified)}
+            onChange={draft.chooseProfile}
           />
         </FormControl>
       )}
@@ -696,7 +701,7 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
       catalog={processSettingsCatalog}
       initialQuery={initialQuery}
       titlePrefix={titlePrefix ?? 'Process settings'}
-      presetName={processProfileName}
+      presetName={activeProfileName}
       header={header}
       loading={loading}
       loadingLabel="Loading process settings…"
@@ -718,7 +723,7 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
           naming it ("Apply to this project") implies a choice that does not exist: the title
           already says whose settings these are ("Object settings: <name>").
         */
-        onUpdatePreset: !perObjectMode && canEditOriginal ? () => void handleUpdateOriginal() : undefined,
+        onUpdatePreset: !perObjectMode && mayUpdatePreset ? () => void handleUpdateOriginal() : undefined,
         onSaveAsPreset: perObjectMode ? undefined : () => void handleSaveAsPreset(),
         apply: applyScope === 'preset' ? undefined : {
           label: perObjectMode ? 'Apply' : applyScope === 'project' ? 'Apply to this project' : 'Apply to this slice',

@@ -127,13 +127,14 @@ export function LocalEditorSurface({ project, projectFile, importStore, archiveR
   filamentPresetsRef.current = installedFilamentPresets
   const saveTarget = useMemo(
     () => createLocalSaveTarget({
+      resolveProcessConfig,
       archive: archiveRef,
       importStore,
       projectFile: () => projectFile,
       onProjectFileChanged,
       filamentPresets: () => filamentPresetsRef.current
     }),
-    [archiveRef, importStore, projectFile, onProjectFileChanged]
+    [resolveProcessConfig, archiveRef, importStore, projectFile, onProjectFileChanged]
   )
 
   const presetManager = useCallback(
@@ -209,11 +210,15 @@ export function LocalEditorSurface({ project, projectFile, importStore, archiveR
             applyScope="project"
             resolveConfig={resolveProcessConfig}
             onProfileChange={(profileId, carryOverrides) => {
+              controller.settingsEditListenerRef.current?.()
               controller.processProfileSelectionTouchedRef.current = true
               controller.setProcessProfileId(profileId)
               controller.setProcessSettingOverrides(carryOverrides)
             }}
-            onApply={(overrides) => controller.setProcessSettingOverrides(overrides)}
+            onApply={(overrides) => {
+              controller.settingsEditListenerRef.current?.()
+              controller.setProcessSettingOverrides(overrides)
+            }}
           />
         </LazyDialogBoundary>
       )}

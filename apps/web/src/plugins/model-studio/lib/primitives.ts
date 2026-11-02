@@ -36,9 +36,8 @@ function buildPrimitiveGeometry(kind: PrimitiveKind): THREE.BufferGeometry {
  * `CylinderGeometry` and friends write the seam column TWICE, once at `u = 0` and once at `u = 1`,
  * so a texture wraps without smearing. Geometrically the pair is the same point, but it is computed
  * from `angle = 0` and `angle = 2 * PI`, so the two land about 1e-15 apart -- and `toNonIndexed`
- * keeps both. Nothing downstream welds them: `buildStlGeometry` (the staged-import path a primitive
- * actually travels) deliberately does not, and the `mergeVertices` in `meshParseCore` is on the 3MF
- * path only. So a cylinder, sphere or cone reached the mesh boolean with a seam of unpaired edges
+ * keeps both. Neither STL nor 3MF viewport loading moves source positions or closes gaps.
+ * So a cylinder, sphere or cone reached the mesh boolean with a seam of unpaired edges
  * and was refused as "not a closed solid" -- geometry the editor generated itself, pointed at
  * Repair mesh. Volume and rendering are both unaffected, which is why it went unnoticed.
  *

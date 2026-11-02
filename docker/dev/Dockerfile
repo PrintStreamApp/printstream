@@ -3,11 +3,11 @@
 # pinned 2.7.x build needs glibc 2.38 / GLIBCXX_3.4.32. This matches the slicer image's own
 # `node:22-trixie` base, so the runtime libs installed below line up with that proven setup.
 #
-# Node 22 to match what actually SHIPS: the production images and the SEA builds pin 22.22.3
+# Node 22 to match what actually SHIPS: the production images and the SEA builds pin 22.23.4
 # (DEFAULT_NODE_VERSION in packages/sea-runtime/scripts/build-harness.mjs). Host validation and CI
 # select the same pin through .nvmrc; this image keeps the development runtime aligned with them and
 # with the slicer's node:22 base.
-FROM node:22.22.3-trixie
+FROM node:22.23.4-trixie
 
 ARG DEBIAN_FRONTEND=noninteractive
 

@@ -60,7 +60,7 @@ const DEFINITIONS: TemplateDefinition[] = [
     defaults: {
       enabled: true,
       title: '{{printerName}}: Print paused',
-      body: 'Job: {{jobName}}',
+      body: 'Job: {{jobName}}\n{{reason}}',
       includeSnapshot: true
     }
   },

@@ -3,6 +3,8 @@ import { test } from 'node:test'
 import {
   PRINT_CANCELLATION_DEVICE_ERROR_CODES,
   hasPrinterErrorReport,
+  isIntentionalPrintPause,
+  isPrinterDeviceFault,
   isPrintCancellationError,
   isPrinterErrorState,
   wasPrintCancelled
@@ -11,6 +13,33 @@ import {
 const CANCELLED = { code: '0300400C', message: 'The task was canceled.' }
 const CANCELLED_ALT = { code: '0500400E', message: 'Printing was cancelled.' }
 const REAL_FAULT = { code: '0C008043', message: 'Nozzle clumping detected' }
+
+test('only the known intentional pause code is non-faulting, regardless of message', () => {
+  const pause = { code: '03008013', message: 'Task paused due to the pause command added to the file.' }
+  assert.equal(isIntentionalPrintPause(pause), true)
+  assert.equal(isIntentionalPrintPause({ ...pause, message: null }), true)
+  assert.equal(isPrinterDeviceFault(pause), false)
+  assert.equal(isPrinterDeviceFault(CANCELLED), false)
+  assert.equal(isPrinterDeviceFault(null), false)
+  assert.equal(isIntentionalPrintPause(null), false)
+
+  const status = { stage: 'paused' as const, deviceError: pause, hmsErrors: [] }
+  assert.equal(hasPrinterErrorReport(status), false)
+  assert.equal(isPrinterErrorState(status), false)
+  assert.equal(wasPrintCancelled(status), false)
+  assert.equal(isPrinterErrorState({ ...status, stage: 'printing' }), false)
+  // A failure remains a failure even if a prior pause code lingers.
+  assert.equal(isPrinterErrorState({ ...status, stage: 'failed' }), true)
+
+  for (const code of ['03008010', '0300800F', '03008014', 'FFFFFFFF']) {
+    const error = { ...pause, code }
+    assert.equal(isIntentionalPrintPause(error), false)
+    assert.equal(isPrinterDeviceFault(error), true)
+    assert.equal(hasPrinterErrorReport({ ...status, deviceError: error }), true)
+  }
+  assert.equal(hasPrinterErrorReport({ ...status, hmsErrors: [REAL_FAULT] }), true)
+  assert.equal(isPrinterErrorState({ ...status, hmsErrors: [REAL_FAULT] }), true)
+})
 
 test('cancellation codes are recognized case-insensitively and nothing else is', () => {
   assert.equal(isPrintCancellationError(CANCELLED), true)

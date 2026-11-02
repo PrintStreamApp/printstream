@@ -7,10 +7,16 @@
  * - re-associates a known spool (matched by `bambuUuid`) with its current slot,
  * - syncs `remainingGrams` from the printer's reported remain% for
  *   printer-tracked spools (the Bambu half of the hybrid tracking model),
- * - clears the slot association of RFID spools that are no longer present.
+ * - clears the slot association of RFID spools that are no longer present, and
+ *   manual spools displaced by an observed RFID spool at the same location.
  *
- * Manual, non-RFID assignments (`bambuUuid == null`) are never auto-unassigned
- * here: the AMS can only see RFID spools, so it must not clobber them.
+ * Manual, non-RFID assignments survive empty/unreadable trays: the AMS cannot
+ * identify those spools. A readable RFID tag at their location proves replacement,
+ * even when auto-add is off. Otherwise duplicate loaded rows let the web's
+ * location lookup keep returning the old custom identity and colour.
+ * Cleanup uses the status receipt time, not its eventual processing time, so
+ * queued RFID evidence cannot detach a newer manual assignment. The database
+ * checks that boundary atomically with the clear; equal milliseconds defer too.
  *
  * Runs outside any request context, so it uses `rootPrisma` with an explicit
  * workspace filter on every query. A per-printer signature skips DB work when the
@@ -27,7 +33,7 @@
  * - **One pass per printer at a time.** These frames arrive faster than the writes they
  *   trigger, and two overlapping passes resolve each other's stale reads backwards.
  */
-import { resolveFilamentIdentity, type PrinterStatus } from '@printstream/shared'
+import { hasBambuRfidTag, resolveFilamentIdentity, type PrinterStatus } from '@printstream/shared'
 import type { ApiPluginContext } from '../../plugin/types.js'
 import { printerManager } from '../../lib/printer-manager.js'
 import { rootPrisma } from '../../lib/prisma.js'
@@ -47,7 +53,7 @@ type SlotPresence = {
 }
 
 function hasUuid(value: string | null): value is string {
-  return value != null && value.length > 0
+  return value != null && hasBambuRfidTag(value)
 }
 
 export function collectPresences(status: PrinterStatus): SlotPresence[] {
@@ -113,8 +119,9 @@ export function createStatusObserver(context: ApiPluginContext): (status: Printe
 
   return (status: PrinterStatus): void => {
     const printerId = status.printerId
+    const observedAt = new Date()
     const chained = (chains.get(printerId) ?? Promise.resolve())
-      .then(() => handle(status))
+      .then(() => handle(status, observedAt))
       .catch((error) => {
         context.logger.error('Failed to sync filament spools from printer status', { printerId, error })
       })
@@ -126,7 +133,7 @@ export function createStatusObserver(context: ApiPluginContext): (status: Printe
     chains.set(printerId, chained)
   }
 
-  async function handle(status: PrinterStatus): Promise<void> {
+  async function handle(status: PrinterStatus, observedAt: Date): Promise<void> {
     const workspaceId = printerManager.getWorkspaceId(status.printerId)
     if (!workspaceId || !(context.isEnabledForWorkspace?.(workspaceId) ?? true)) return
 
@@ -159,8 +166,7 @@ export function createStatusObserver(context: ApiPluginContext): (status: Printe
 
     const autoAdd = await loadAutoAddBambuSpools(context.settings, workspaceId)
     let mutated = false
-
-    const presentUuids = new Set(presences.map((p) => p.trayUuid))
+    let deferredAssignment = false
 
     for (const presence of presences) {
       const existing = await rootPrisma.filamentSpool.findFirst({
@@ -305,26 +311,35 @@ export function createStatusObserver(context: ApiPluginContext): (status: Printe
       }
     }
 
-    // Clear the association of RFID spools previously loaded on this printer
-    // that are no longer present at their slot. Manual (non-RFID) assignments
-    // are left untouched: the AMS cannot observe them.
+    // RFID is positive evidence of replacement for a manual assignment; an
+    // empty/unreadable slot is not. This also repairs duplicates left by older
+    // versions without depending on auto-add or on which row a lookup returns.
     const loadedHere = await rootPrisma.filamentSpool.findMany({
-      where: { workspaceId, loadedPrinterId: status.printerId, deletedAt: null, NOT: { bambuUuid: null } }
+      where: { workspaceId, loadedPrinterId: status.printerId, deletedAt: null }
     })
     for (const spool of loadedHere) {
-      const stillPresent = spool.bambuUuid != null && presentUuids.has(spool.bambuUuid)
-        && presences.some((p) => p.trayUuid === spool.bambuUuid && p.amsId === spool.loadedAmsId && p.slotId === spool.loadedSlotId)
-      if (!stillPresent) {
-        await rootPrisma.filamentSpool.updateMany({
-          where: { id: spool.id, workspaceId },
+      const tagged = hasBambuRfidTag(spool.bambuUuid)
+      const stillPresent = presences.some((p) => p.trayUuid === spool.bambuUuid && p.amsId === spool.loadedAmsId && p.slotId === spool.loadedSlotId)
+      const replaced = presences.some((p) => p.amsId === spool.loadedAmsId && p.slotId === spool.loadedSlotId)
+      if (tagged ? !stillPresent : replaced) {
+        const result = await rootPrisma.filamentSpool.updateMany({
+          // The location and time checks must be part of the write: a user can
+          // reassign this same slot after either the status or the DB read.
+          where: {
+            id: spool.id, workspaceId, loadedPrinterId: status.printerId, loadedAmsId: spool.loadedAmsId, loadedSlotId: spool.loadedSlotId,
+            ...(!tagged ? { OR: [{ loadedAt: null }, { loadedAt: { lt: observedAt } }] } : {})
+          },
           data: { loadedPrinterId: null, loadedAmsId: null, loadedSlotId: null, loadedAt: null }
         })
-        mutated = true
+        if (result.count > 0) mutated = true
+        else if (!tagged) deferredAssignment = true
       }
     }
 
-    // Everything above landed, so this frame is genuinely handled.
-    lastSignature.set(status.printerId, sig)
+    // A newer assignment needs a later observation, even when RFID is unchanged.
+    // Remembering this signature would suppress that later evidence indefinitely.
+    if (deferredAssignment) lastSignature.delete(status.printerId)
+    else lastSignature.set(status.printerId, sig)
     if (mutated) broadcastSpoolsChanged(context, workspaceId)
   }
 }

@@ -4,7 +4,7 @@
  * Owns the 3MF geometry/scene building primitives reused by both the read-only
  * `PreviewView` and the interactive `EditorView`:
  * - `parseThreeMfModelEntry` decodes a 3MF model XML entry into per-object
- *   `BufferGeometry` (welded + smoothed + planar-patch corrected).
+ *   `BufferGeometry` (smoothed + planar-patch corrected, original positions preserved).
  * - `createThreeMfMatrix` converts a 12-element column-major 3MF transform into a
  *   `THREE.Matrix4`. This convention MUST match the backend writer exactly: the
  *   first nine numbers are the column-major 3x3 rotation/scale, the last three are
@@ -22,20 +22,19 @@ import * as THREE from 'three'
 import { disposeMeshBvh } from './meshBvh'
 import {
   TRIANGLE_PAINT_SOURCES,
-  applyMeshPaint,
+  buildGeometryFromArrays,
+  buildStlGeometry,
   type MeshPaintByChannel,
   type TrianglePaintChannel,
   type TrianglePaintUserDataKey
 } from './meshParseCore'
-import { STLLoader, mergeVertices, toCreasedNormals } from 'three-stdlib'
 import type { LibraryThreeMfScene } from '@printstream/shared'
 import { buildApiUrl } from '../../../lib/apiUrl'
 import { helperVolumeSpec } from './helperVolumes'
 import { fetchModelText } from './modelFetch'
 import { buildTrianglePaintOverlay, SUPPORT_PAINT_COLORS } from './supportPaint'
 
-export const THREE_MF_VERTEX_WELD_TOLERANCE = 5e-2
-export const THREE_MF_SMOOTH_NORMAL_ANGLE = THREE.MathUtils.degToRad(45)
+export { THREE_MF_SMOOTH_NORMAL_ANGLE } from './meshParseCore'
 export const THREE_MF_BED_CLEARANCE_THRESHOLD = 0.35
 
 /** Bed grid spacing (mm): fine lines every minor step, emphasized lines every major step. */
@@ -73,7 +72,7 @@ export function threeMfTransformFromMatrix(matrix: THREE.Matrix4): number[] {
  * attributes, keyed by triangle index in mesh order ('4' enforcer, '8' blocker, longer
  * hex strings are Bambu/Prusa sub-triangle split codes preserved verbatim). Stored on
  * `geometry.userData.supportPaint` / `geometry.userData.seamPaint`; the
- * welding/smoothing pipeline preserves triangle order and count, so index i still
+ * shading pipeline preserves corner positions, triangle order and count, so index i still
  * addresses source triangle i on the final geometry.
  */
 export type SupportPaintCodes = Record<number, string>
@@ -102,7 +101,7 @@ export function getGeometryTrianglePaint(
 
 /**
  * Parse a 3MF model XML entry into a map of Bambu `object_id` to `BufferGeometry`.
- * Geometry is welded, smoothed, and planar-patch corrected so flat faces read
+ * Geometry is smoothed and planar-patch corrected without moving vertices so flat faces read
  * cleanly. Empty objects (no mesh, no triangles) are skipped. Existing support
  * paint is captured on `geometry.userData.supportPaint` (see {@link SupportPaintCodes}).
  */
@@ -149,16 +148,7 @@ export function parseThreeMfModelEntry(xmlText: string): Map<number, THREE.Buffe
       }
     }
 
-    const geometry = new THREE.BufferGeometry()
-    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
-    geometry.setIndex(new THREE.BufferAttribute(indexArray, 1))
-    const weldedGeometry = mergeVertices(geometry, THREE_MF_VERTEX_WELD_TOLERANCE)
-    weldedGeometry.deleteAttribute('normal')
-    const smoothedGeometry = toCreasedNormals(weldedGeometry, THREE_MF_SMOOTH_NORMAL_ANGLE)
-    const correctedGeometry = flattenPlanarPatchNormals(smoothedGeometry)
-    correctedGeometry.computeBoundingSphere()
-    applyMeshPaint(correctedGeometry.userData, paint)
-    geometries.set(objectId, correctedGeometry)
+    geometries.set(objectId, buildGeometryFromArrays({ objectId, positions, index: indexArray, paint }))
   }
 
   return geometries
@@ -171,78 +161,7 @@ export function parseThreeMfModelEntry(xmlText: string): Map<number, THREE.Buffe
  * Vertex normals are computed so flat faces shade consistently with 3MF geometry.
  */
 export function parseStlGeometry(buffer: ArrayBuffer): THREE.BufferGeometry {
-  const geometry = new STLLoader().parse(buffer)
-  geometry.deleteAttribute('normal')
-  geometry.computeVertexNormals()
-  geometry.computeBoundingSphere()
-  return geometry
-}
-
-function flattenPlanarPatchNormals(geometry: THREE.BufferGeometry): THREE.BufferGeometry {
-  const nonIndexedGeometry = geometry.index ? geometry.toNonIndexed() : geometry.clone()
-  if (!nonIndexedGeometry.getAttribute('normal')) {
-    nonIndexedGeometry.computeVertexNormals()
-  }
-
-  const positionAttribute = nonIndexedGeometry.getAttribute('position')
-  const normalAttribute = nonIndexedGeometry.getAttribute('normal')
-  if (!positionAttribute || !normalAttribute) {
-    return nonIndexedGeometry
-  }
-
-  const triangleCount = Math.floor(positionAttribute.count / 3)
-  const normals = new Float32Array(normalAttribute.array)
-  const planarBuckets = new Map<string, { triangles: number[]; normal: THREE.Vector3 }>()
-  const vertexA = new THREE.Vector3()
-  const vertexB = new THREE.Vector3()
-  const vertexC = new THREE.Vector3()
-  const edgeAB = new THREE.Vector3()
-  const edgeAC = new THREE.Vector3()
-  const faceNormal = new THREE.Vector3()
-
-  for (let triangleIndex = 0; triangleIndex < triangleCount; triangleIndex += 1) {
-    const offset = triangleIndex * 3
-    vertexA.fromBufferAttribute(positionAttribute, offset)
-    vertexB.fromBufferAttribute(positionAttribute, offset + 1)
-    vertexC.fromBufferAttribute(positionAttribute, offset + 2)
-    edgeAB.subVectors(vertexB, vertexA)
-    edgeAC.subVectors(vertexC, vertexA)
-    faceNormal.crossVectors(edgeAB, edgeAC)
-    if (faceNormal.lengthSq() < 1e-10) continue
-    faceNormal.normalize()
-
-    const bucketKey = [
-      Math.round(faceNormal.x * 250),
-      Math.round(faceNormal.y * 250),
-      Math.round(faceNormal.z * 250)
-    ].join('|')
-    const bucket = planarBuckets.get(bucketKey)
-    if (bucket) {
-      bucket.triangles.push(triangleIndex)
-      bucket.normal.add(faceNormal)
-    } else {
-      planarBuckets.set(bucketKey, {
-        triangles: [triangleIndex],
-        normal: faceNormal.clone()
-      })
-    }
-  }
-
-  for (const bucket of planarBuckets.values()) {
-    if (bucket.triangles.length < 2) continue
-    const bucketNormal = bucket.normal.normalize()
-    for (const triangleIndex of bucket.triangles) {
-      const normalOffset = triangleIndex * 9
-      for (let vertexIndex = 0; vertexIndex < 3; vertexIndex += 1) {
-        normals[normalOffset + vertexIndex * 3] = bucketNormal.x
-        normals[normalOffset + vertexIndex * 3 + 1] = bucketNormal.y
-        normals[normalOffset + vertexIndex * 3 + 2] = bucketNormal.z
-      }
-    }
-  }
-
-  nonIndexedGeometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3))
-  return nonIndexedGeometry
+  return buildStlGeometry(buffer)
 }
 
 /**

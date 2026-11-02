@@ -9,10 +9,12 @@
 # NODE_VERSION is pinned to the EXACT version the SEA builds embed
 # (DEFAULT_NODE_VERSION in packages/sea-runtime/scripts/build-harness.mjs) so
 # every distribution ships the same runtime; bump BOTH together, deliberately.
-# A floating `node:22` tag once let an image rebuild silently absorb a Node
-# patch (22.23.x) whose TLS regression broke H2D FTPS only on Docker installs
-# while SEA bridges kept working. Never again.
-ARG NODE_VERSION=22.22.3
+# 22.23.4 fixes CVE-2026-111497 in Node's bundled Brotli decoder. The older
+# 22.22.3 pin is vulnerable and must not be restored to avoid the 22.23.1 TLS
+# regression (nodejs/node#64402): printer-ftp.ts already uses fresh tls.connect
+# data sockets, whose session reuse works on 22.23.4. Keep exact runtime parity
+# and track physical H2D acceptance separately from these runtime checks.
+ARG NODE_VERSION=22.23.4
 FROM node:${NODE_VERSION}-bookworm-slim AS base
 WORKDIR /app
 RUN apt-get update \

@@ -26,6 +26,7 @@
  * the solids at once and so can move them together.
  */
 import { escapeXmlAttribute } from './xml-write.js'
+import { formatMeshCoordinate } from './mesh-coordinate.js'
 
 /** One solid to write: a name and its triangles as flat world coordinates (9 numbers per triangle). */
 export interface ThreeMfArchiveSolid {
@@ -52,12 +53,6 @@ const RELS_XML = [
   '</Relationships>'
 ].join('\n')
 
-/** 3MF wants plain decimals; `toFixed` also kills exponent notation on very small coordinates. */
-function coordinate(value: number): string {
-  const rounded = Number(value.toFixed(6))
-  return Object.is(rounded, -0) ? '0' : String(rounded)
-}
-
 /**
  * Build a vanilla (non-Bambu) 3MF holding one object per solid, each placed by an identity build
  * item so the extractor reads them back as one part apiece.
@@ -78,7 +73,7 @@ export function buildVanillaThreeMfEntries(solids: ReadonlyArray<ThreeMfArchiveS
     const vertices: string[] = []
     const triangles: string[] = []
     for (let index = 0; index < count; index += 3) {
-      vertices.push(`     <vertex x="${coordinate(solid.triangles[index]!)}" y="${coordinate(solid.triangles[index + 1]!)}" z="${coordinate(solid.triangles[index + 2]!)}"/>`)
+      vertices.push(`     <vertex x="${formatMeshCoordinate(solid.triangles[index]!)}" y="${formatMeshCoordinate(solid.triangles[index + 1]!)}" z="${formatMeshCoordinate(solid.triangles[index + 2]!)}"/>`)
     }
     // One vertex per corner, unwelded: the extractor re-indexes anyway, and welding here would
     // change the triangle ORDER, which the paint contract depends on staying stable.

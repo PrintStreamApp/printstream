@@ -15,8 +15,9 @@
  * is first. A fresh selection with no prior profile deliberately skips the "nearest" step rather
  * than latching onto an arbitrary preset.
  */
+import { deriveProjectCarryOverrides } from '../../lib/processCarryOverrides'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { isProjectSlicingPresetId, type SlicingPresetSummary } from '@printstream/shared'
+import { isProjectSlicingPresetId, type ResolveProcessConfigResponse, type SlicingPresetSummary } from '@printstream/shared'
 import { dedupeVisibleProcessProfiles, isProcessProfileCompatible } from '../../lib/slicingPresetMatching'
 import {
   extractLayerHeightToken,
@@ -50,6 +51,8 @@ export interface ProcessProfileSelectionInput {
    * stable, or the re-pick effect re-fires every render.
    */
   carryOverridesOnRepick?: Record<string, string | string[]> | null
+  /** The opened project and leaf baseline, needed to distinguish reset values from modifications. */
+  projectProcessResolution?: ResolveProcessConfigResponse
   /** False while the destination engine catalogue is loading; partial lists cannot re-pick. */
   catalogueReady?: boolean
   /** Engine identity, so a changed catalogue cannot masquerade as a deliberate machine change. */
@@ -89,7 +92,7 @@ export function useProcessProfileSelection(input: ProcessProfileSelectionInput):
   const {
     processProfiles, printerCompatibleProcessProfiles, selectedMachineProfile,
     selectedPrinterModel, selectedNozzleDiameters, plateType, bakedProcessProfileName,
-    carryOverridesOnRepick, catalogueKey, catalogueReady = true, carryOverridesReady = true, projectPresetsReady = true
+    carryOverridesOnRepick, projectProcessResolution, catalogueKey, catalogueReady = true, carryOverridesReady = true, projectPresetsReady = true
   } = input
 
   const processProfileSelectionTouchedRef = useRef(false)
@@ -174,19 +177,17 @@ export function useProcessProfileSelection(input: ProcessProfileSelectionInput):
       return (pickStandardProcessProfile(compatibleProcessProfiles) ?? compatibleProcessProfiles[0])?.id ?? null
     })()
     if (!nextId) return
-    // When the re-pick abandons the project's OWN preset for a non-project one (the machine-switch
-    // case), the new preset overwrites every process key at slice time -- so any customization that
-    // lived only in the project's baked config (e.g. wall_loops) would vanish. Materialize the
-    // project's genuine deltas as overrides here, UNDER any existing session edits (which already
-    // survive on their own): an explicit edit still wins on a shared key, and repeated switches stay
-    // idempotent. Switching between builtins carries nothing new because the deltas are already in
-    // the map from the first switch.
+    // Materialize the CURRENT project delta before abandoning its embedded values. Recompute
+    // after session edits: a reset to the leaf baseline must not resurrect the original carry map.
+    // The map-only fallback is retained for callers without a resolved source descriptor.
     if (isProjectSlicingPresetId(processProfileId) && !isProjectSlicingPresetId(nextId) && carryOverridesOnRepick) {
-      setProcessSettingOverrides((prev) => ({ ...carryOverridesOnRepick, ...prev }))
+      setProcessSettingOverrides((prev) => projectProcessResolution
+        ? deriveProjectCarryOverrides(projectProcessResolution, prev)
+        : { ...carryOverridesOnRepick, ...prev })
     }
     selectionMachineRef.current = machineKey
     setProcessProfileId(nextId)
-  }, [catalogueKey, catalogueReady, carryOverridesReady, machineKey, bakedProcessProfileName, carryOverridesOnRepick, compatibleProcessProfiles, hasSelectedProcessProfile, processProfileId, projectPresetsReady, selectedAnyProcessProfile?.name, selectedProcessLayerHeight, selectedMachineProfile?.defaultProcessProfile])
+  }, [catalogueKey, catalogueReady, carryOverridesReady, machineKey, bakedProcessProfileName, carryOverridesOnRepick, projectProcessResolution, compatibleProcessProfiles, hasSelectedProcessProfile, processProfileId, projectPresetsReady, selectedAnyProcessProfile?.name, selectedProcessLayerHeight, selectedMachineProfile?.defaultProcessProfile])
 
   return {
     compatibleProcessProfiles,

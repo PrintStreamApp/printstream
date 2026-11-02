@@ -1,6 +1,6 @@
 /**
- * Tells a genuine printer fault apart from the record a cancelled print leaves
- * behind.
+ * Tells genuine printer faults apart from cancellation records and intentional
+ * pauses. UI grading, recovery actions and API notifications share this policy.
  *
  * Bambu reports a cancellation exactly the way it reports a jam: `gcode_state`
  * goes to FAILED and a `print_error` code is set. Read literally, that makes
@@ -10,9 +10,10 @@
  * thing separating the two cases is the error code, so the question is answered
  * here once and every surface asks it the same way.
  *
- * Owns: the cancellation code list, and the two "is something actually wrong?"
- * predicates shared by the action gates (`printer-actions.js`), the fleet-view
- * grading (`apps/web/src/lib/printersViewHelpers.ts`) and the job recorder
+ * Owns: cancellation and intentional-pause classification, plus the fault
+ * predicates shared by action gates (`printer-actions.js`), fleet-view grading
+ * (`apps/web/src/lib/printersViewHelpers.ts`), notifications
+ * (`apps/api/src/lib/notification-format.ts`) and the job recorder
  * (`apps/api/src/lib/printer-manager.ts`).
  *
  * Vendor note: the codes are Bambu `device_error` identifiers. When the printer
@@ -55,6 +56,21 @@ export function isPrintCancellationError(error: PrinterErrorReport | null | unde
 }
 
 /**
+ * A user/file-requested pause is important, but is not a printer fault. Match
+ * only the canonical device code, never localized message text or all pauses.
+ * BambuStudio's resources/hms/hms_en_094.json names 03008013 as a user pause.
+ * Other pause causes (door open, fan failure, etc.) remain faults.
+ */
+export function isIntentionalPrintPause(error: PrinterErrorReport | null | undefined): boolean {
+  return error?.code.toUpperCase() === '03008013'
+}
+
+/** Whether a device report names a fault; unknown codes fail toward attention. */
+export function isPrinterDeviceFault(error: PrinterErrorReport | null | undefined): boolean {
+  return error != null && !isPrintCancellationError(error) && !isIntentionalPrintPause(error)
+}
+
+/**
  * Whether the printer's terminal state is a cancelled print.
  *
  * Gated on the FAILED stage as well as the code so a stale cancellation error --
@@ -69,7 +85,7 @@ export function wasPrintCancelled(
 
 /**
  * Whether the printer is reporting something wrong RIGHT NOW: any HMS alert, or
- * a device error that is not merely a cancellation record.
+ * a device error that is neither a cancellation record nor an intentional pause.
  *
  * This is the "is there anything to act on?" question. It deliberately ignores
  * the stage, so it stays true for a fault the printer raised without pausing.
@@ -79,7 +95,7 @@ export function hasPrinterErrorReport(
 ): boolean {
   if (!status) return false
   if (status.hmsErrors.length > 0) return true
-  return status.deviceError != null && !isPrintCancellationError(status.deviceError)
+  return isPrinterDeviceFault(status.deviceError)
 }
 
 /**

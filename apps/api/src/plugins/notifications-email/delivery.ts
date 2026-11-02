@@ -21,27 +21,42 @@ import { readEmailSubscribers } from '../../lib/notification-subscribers.js'
 
 /** Builds the notification handler that emails the scope's opted-in users. */
 export function createEmailNotificationHandler(context: ApiPluginContext) {
-  return async function handle(message: NotificationMessage): Promise<void> {
+  const deliver = createEmailDelivery(context, false)
+  return async (message: NotificationMessage): Promise<void> => { await deliver(message) }
+}
+
+/** Durable producers receive actual transport acknowledgement using the SAME opt-ins and scope gates. */
+export function createAcknowledgedEmailNotificationHandler(context: ApiPluginContext) {
+  return createEmailDelivery(context, true)
+}
+
+function createEmailDelivery(context: ApiPluginContext, strict: boolean) {
+  return async function handle(message: NotificationMessage): Promise<boolean> {
+    if (context.isEnabledForWorkspace && !context.isEnabledForWorkspace(message.workspaceId ?? null)) return false
     // The emitter already sends its own transactional email for this event
     // (e.g. support messaging): delivering it here would double-mail.
-    if (message.emailHandledExternally) return
+    if (message.emailHandledExternally) return false
     // Skip cheaply when no transport can deliver (e.g. OSS before SMTP is set up).
-    if (!(await isEmailDeliveryConfigured())) return
+    if (!(await isEmailDeliveryConfigured())) return false
 
     const recipients = message.targetUserIds && message.targetUserIds.length > 0
       ? await resolveTargetedRecipients(context, message.targetUserIds)
       : await resolveScopeSubscriberRecipients(context, message.workspaceId)
-    if (recipients.length === 0) return
+    if (recipients.length === 0) return false
 
     const html = buildEmailHtml(message)
+    let accepted = true
     for (const to of recipients) {
       try {
         await sendEmail({ to, subject: message.title, text: message.body, html })
       } catch (error) {
+        if (strict) throw error
+        accepted = false
         // One bad recipient/transport hiccup must not drop the rest.
         context.logger.warn('failed to send notification email', error)
       }
     }
+    return accepted
   }
 }
 

@@ -15,6 +15,7 @@
  */
 import type { SettingsBaselineOrigin } from './settings-baseline.js'
 import { z } from 'zod'
+import { alignProcessConfigToLayout } from './process-variant-layout.js'
 import { processSettingsCatalog } from './generated/process-settings.generated.js'
 
 export type ProcessSettingType =
@@ -172,16 +173,16 @@ export type ResolveProcessConfigRequest = z.infer<typeof resolveProcessConfigReq
  *   baseline preset can't be resolved.
  */
 export interface ResolveProcessConfigResponse {
+  /** Selected leaf identity and native inheritance; inherited settings cannot supply its name. */
+  preset?: { name: string; parentName: string | null }
   config: ProcessConfig
   baseConfig: ProcessConfig
   parentConfig?: ProcessConfig
   overriddenKeys: string[]
   /**
-   * Whether the 3MF carried a changed-from-system record at all, which makes `overriddenKeys`
-   * AUTHORITATIVE, including when empty. Mirrors BambuStudio, which applies the file's declared
-   * list rather than diffing configs (`update_non_diff_values_to_base_config`): a key that differs
-   * from the preset but is not declared is drift the vendor normalizes away, not a user change.
-   * Absent/false means the writer recorded nothing and the value diff is all we have.
+   * Whether native changed-key metadata was present. This record is measured against the native
+   * parent/system baseline, not necessarily the selected custom leaf. It cannot authorize dropping
+   * effective values or stand in for the project's value diff when the leaf baseline is known.
    */
   declaresOverrides?: boolean
   /**
@@ -764,9 +765,13 @@ export function diffProcessConfig(
   edited: ProcessConfig,
   catalog: ProcessSettingsCatalog = processSettingsCatalog
 ): ProcessSettingOverrides {
+  const baseline = catalog === processSettingsCatalog ? alignProcessConfigToLayout(base, edited) : base
   const overrides: ProcessSettingOverrides = {}
   for (const [key, value] of Object.entries(edited)) {
-    const baseValue = base[key]
+    // Layout is comparison context, never a transferable setting. A declined alignment must not
+    // let Keep changes replace the destination machine's topology with the source's columns.
+    if (key === 'print_extruder_id' || key === 'print_extruder_variant') continue
+    const baseValue = baseline[key]
     if (!processConfigValuesEqual(baseValue, value, catalog.options[key])) {
       overrides[key] = value
     }
@@ -940,6 +945,25 @@ export function resolvedVisibleProcessModifiedKeys(
 }
 
 /**
+ * Shared dialog/badge comparison view. Project values remain authoritative; leaf and parent
+ * baselines are projected onto their declared process layout before defaults or comparisons.
+ * Returned objects are independent of the pinned installed presets. A missing leaf remains a
+ * stand-in baseline; callers must still honor `baselineResolved` when reporting uncertainty.
+ */
+export function resolvedProcessConfigBaselines(response: {
+  config: ProcessConfig
+  baseConfig?: ProcessConfig
+  parentConfig?: ProcessConfig
+}): { effective: ProcessConfig; baseline: ProcessConfig; parentBaseline: ProcessConfig | null } {
+  const effective = applyProcessConfigDefaults(response.config)
+  const baseline = applyProcessConfigDefaults(alignProcessConfigToLayout(response.baseConfig ?? response.config, response.config))
+  const parentBaseline = response.parentConfig
+    ? { ...baseline, ...applyProcessConfigDefaults(alignProcessConfigToLayout(response.parentConfig, response.config)) }
+    : null
+  return { effective, baseline, parentBaseline }
+}
+
+/**
  * Keys the PRESET overrides relative to its own parent: emphasis only.
  *
  * Deliberately NOT part of {@link resolvedProcessModifiedKeys}: BambuStudio keeps the two as
@@ -953,13 +977,12 @@ export function resolvedVisibleProcessModifiedKeys(
 export function resolvedProcessPresetOverrideKeys(
   response: { baseConfig?: ProcessConfig; config: ProcessConfig; parentConfig?: ProcessConfig }
 ): string[] {
-  if (!response.parentConfig) return []
-  const baseline = applyProcessConfigDefaults(response.baseConfig ?? response.config)
-  const parent = { ...baseline, ...applyProcessConfigDefaults(response.parentConfig) }
+  const { baseline, parentBaseline } = resolvedProcessConfigBaselines(response)
+  if (!parentBaseline) return []
   const keys: string[] = []
   for (const key of Object.keys(baseline)) {
     if (!isProcessSettingKey(key)) continue
-    if (!processConfigValuesEqual(parent[key], baseline[key], processSettingsCatalog.options[key])) keys.push(key)
+    if (!processConfigValuesEqual(parentBaseline[key], baseline[key], processSettingsCatalog.options[key])) keys.push(key)
   }
   return keys
 }
@@ -974,13 +997,12 @@ export function resolvedProcessModifiedKeys(
   },
   overrides: ProcessConfig = {}
 ): string[] {
-  const effective = applyProcessConfigDefaults(response.config)
-  const baseline = applyProcessConfigDefaults(response.baseConfig ?? response.config)
+  const { effective, baseline } = resolvedProcessConfigBaselines(response)
   const finalConfig = { ...effective, ...overrides }
   const declared = new Set(response.overriddenKeys ?? [])
   // No preset resolved, so there is no value to diff against: the file's own record is the only
   // evidence a setting was changed, and it is taken at its word. See the filament twin.
-  if (response.baselineResolved === false) return [...declared].filter(isProcessSettingKey)
+  if (response.baselineResolved === false) return [...new Set([...declared, ...Object.keys(overrides)])].filter(isProcessSettingKey)
   const keys: string[] = []
   for (const key of Object.keys(finalConfig)) {
     if (!isProcessSettingKey(key)) continue
@@ -989,11 +1011,6 @@ export function resolvedProcessModifiedKeys(
     // (`PresetCollection::dirty_options`); the declared record decides which of the file's values
     // survive loading, not what counts as changed.
     if (processConfigValuesEqual(baseline[key], finalConfig[key], option)) continue
-    // With a record present, an UNDECLARED difference is drift BambuStudio normalizes away at load,
-    // not this project's change. A key the user edited this session always counts.
-    if (response.declaresOverrides === true
-      && !declared.has(key)
-      && processConfigValuesEqual(effective[key], finalConfig[key], option)) continue
     keys.push(key)
   }
   return keys

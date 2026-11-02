@@ -39,9 +39,11 @@ export type SystemPresetReader = (kind: SlicingPresetKind, name: string) => Prom
 export async function resolveCustomProfileConfig(
   content: string,
   kind: SlicingPresetKind,
-  profileDir: string
+  profileDir: string,
+  selectedName?: string,
+  fallbackFrom: 'system' | 'User' = 'User'
 ): Promise<ProfileRecord> {
-  return resolveCustomProfileConfigWith(content, kind, createFileSystemPresetReader(profileDir))
+  return resolveCustomProfileConfigWith(content, kind, createFileSystemPresetReader(profileDir), selectedName, fallbackFrom)
 }
 
 /**
@@ -51,16 +53,27 @@ export async function resolveCustomProfileConfig(
 export async function resolveCustomProfileConfigWith(
   content: string,
   kind: SlicingPresetKind,
-  readSystemPreset: SystemPresetReader
+  readSystemPreset: SystemPresetReader,
+  selectedName?: string,
+  fallbackFrom: 'system' | 'User' = 'User'
 ): Promise<ProfileRecord> {
   const custom = JSON.parse(content) as ProfileRecord
   const merged = await mergeInheritedBase(custom, kind, readSystemPreset, new Set())
+  // Identity belongs to the selected leaf, never to its inherited settings. Cloud-synced
+  // sparse process presets may carry only print_settings_id, with no name at all.
+  const leafName = selectedName?.trim()
+    || (typeof custom.name === 'string' ? custom.name.trim() : '')
+    || (kind === 'process' && typeof custom.print_settings_id === 'string' ? custom.print_settings_id.trim() : '')
+  if (leafName) {
+    merged.name = leafName
+    if (kind === 'process') merged.print_settings_id = leafName
+  }
   merged.type = kind
-  // A custom preset is a User preset, and the CLI refuses to load one whose `from` says otherwise,
-  // it fails the ENTIRE run with exit 251, naming only the file path. Stamped here rather than at
-  // the write site because the sparse diff may carry no `from` AND resolve no base to inherit one
-  // from, and because presets already stored without it must slice without a data migration.
-  ensureCliSupportedPresetFrom(merged, 'User')
+  // Provenance belongs to the leaf too. Inheriting the parent's `system` label misclassifies a
+  // sparse User preset. Unsupported/missing leaf labels need a CLI-supported fallback or the
+  // entire run fails at exit 251. Builtin callers supply `system`; custom materialization uses User.
+  merged.from = custom.from
+  ensureCliSupportedPresetFrom(merged, fallbackFrom)
   return merged
 }
 

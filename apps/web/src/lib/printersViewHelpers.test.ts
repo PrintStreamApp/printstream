@@ -71,6 +71,17 @@ const stateStatus = (
 
 const CANCELLED_ERROR = { code: '0300400C', message: 'The task was canceled.' }
 
+test('an intentional pause stays in the paused fleet bucket unless a real fault coexists', () => {
+  const pause = { code: '03008013', message: 'Task paused due to the pause command added to the file.' }
+  const paused = stateStatus('paused', pause)
+  assert.equal(derivePrinterStateBucket(paused), 'paused')
+  assert.equal(matchesPrinterStateFilter(paused, 'paused'), true)
+  assert.equal(matchesPrinterStateFilter(paused, 'error'), false)
+  assert.equal(derivePrinterStateBucket(stateStatus('paused', pause, [
+    { code: '0700220000020001', message: 'Filament has run out.' }
+  ])), 'error')
+})
+
 test('a cancelled print does not grade the printer as an error', () => {
   // Cancelling leaves the printer on the FAILED stage with a `print_error`, which
   // is the same shape a jam produces. Graded literally it sorted the printer to

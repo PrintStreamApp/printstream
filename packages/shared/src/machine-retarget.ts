@@ -20,6 +20,9 @@
  * the runtime maps that depend on BOTH the machine topology and the project's filaments
  * (`filament_nozzle_map`, extruder variants, …). See docs/project-printer-retarget.md.
  */
+import { assertValidProcessFilamentReferences } from './process-filament-references.js'
+import { applyProcessPresetBinding, type ProcessPresetBinding } from './process-preset-binding.js'
+import type { ProcessConfig } from './process-settings.js'
 import { canonicalBambuModelKey } from './bambu-model-keys.js'
 import { processConfigValuesEqual, processSettingsCatalog } from './process-settings.js'
 import { PRINTER_PRESET_OPTIONS, PRINT_PRESET_OPTIONS } from './generated/preset-options.generated.js'
@@ -29,11 +32,13 @@ import { rebindProjectFilamentPhysics, type FilamentSlotRebind } from './filamen
 import { machineSettingsCatalog } from './machine-settings.js'
 import {
   extractChangedFromSystemKeys,
+  filamentSlotCount,
   machinePresetSlotIndexFor,
   withChangedFromSystemSlot
 } from './three-mf-project-config.js'
 import { isPrintVariantOption } from './variant-options.js'
 import { dropEngineHostileOverrides } from './settings-value-guard.js'
+import { processVariantColumnIndices } from './process-variant-layout.js'
 
 export type ProfileRecord = Record<string, unknown>
 
@@ -370,7 +375,8 @@ function setInheritsGroupSlot(record: ProfileRecord, slot: 'process' | 'machine'
 export function applyProcessProfileToProjectSettings(
   projectSettings: ProfileRecord,
   processProfile: ProfileRecord,
-  overrides: Record<string, string | string[]> = {}
+  overrides: Record<string, string | string[]> = {},
+  binding?: ProcessPresetBinding
 ): ProfileRecord {
   const next: ProfileRecord = { ...projectSettings }
   for (const [key, value] of Object.entries(processProfile)) {
@@ -379,20 +385,24 @@ export function applyProcessProfileToProjectSettings(
     if (!PRINT_PRESET_OPTIONS.has(key)) continue
     next[key] = cloneValue(value)
   }
-  const name = typeof processProfile.name === 'string' ? processProfile.name.trim() : ''
-  if (name) {
-    next.print_settings_id = name
-    // Same staleness as the machine slot: slot 0 names the process preset's inherited
-    // parent, which would otherwise override the rewritten print_settings_id during the
-    // CLI's compatibility checks.
-    clearInheritsGroupSlot(next, 'process')
-  }
+  // A process's variant columns describe its source machine. Re-index against the final machine
+  // after copying the preset; writing the source pair after retargeting corrupts the topology.
+  retargetProcessExtruderVariants(next, stringArray(next.printer_extruder_variant), stringArray(next.printer_extruder_id))
   // Guarded here too, not just in the bake. This is the path a slice takes when its process preset
   // RESOLVES, i.e. the ordinary one, so without it a save dropped an engine-hostile override while
   // the slice of the same session state still wrote it, and the two files disagreed.
   for (const [key, value] of Object.entries(dropEngineHostileOverrides(overrides))) {
     next[key] = cloneValue(value)
   }
+  assertValidProcessFilamentReferences(next, filamentSlotCount(next))
+  const name = binding?.name ?? (typeof processProfile.name === 'string' ? processProfile.name.trim() : '')
+  if (name) applyProcessPresetBinding(next, processProfile as ProcessConfig, binding ?? {
+    name,
+    // Legacy callers have only a materialized config. Preserve its User lineage conservatively;
+    // callers with a resolved parent supply the exact comparison through binding instead.
+    parentName: (processProfile.from === 'User' || processProfile.from === 'user') ? (typeof processProfile.inherits === 'string' ? processProfile.inherits.trim() || null : null) : null
+  })
+  if (Array.isArray(processProfile.compatible_printers)) next.print_compatible_printers = cloneValue(processProfile.compatible_printers)
   return next
 }
 
@@ -892,8 +902,9 @@ function stringArray(value: unknown): string[] {
  * segfaults the engine mid-load (CLI exit 139), reproduced with the real CLI on a real project.
  *
  * The filament side has the identical rule (`FILAMENT_OPTIONS_WITH_VARIANT`); this is its process
- * twin, and both read their key set from `variant-options.ts` rather than inferring it from lengths. Columns are matched BY VARIANT NAME so a shared variant keeps its own tuned
- * values, falling back to the first column for a variant the source never had. Only keys the
+ * twin, and both read their key set from `variant-options.ts` rather than inferring it from lengths.
+ * Columns match BOTH extruder id and variant, preserving independent tuning on each nozzle.
+ * A new/unidentified target column retains the existing first-column fallback policy. Only keys the
  * process catalog knows are touched, an unrelated array that merely shares the column count
  * (`head_wrap_detect_zone`, `printable_area`) must never be re-indexed.
  */
@@ -915,11 +926,13 @@ function retargetProcessExtruderVariants(
   // checks still flag it, whereas writing a variant list with no matching ids destroys the tuning
   // for certain.
   if (machineExtruderIds.length !== machineVariants.length) return
+  const targetLayout = { print_extruder_variant: machineVariants, print_extruder_id: machineExtruderIds }
+  const columns = processVariantColumnIndices(next, targetLayout)
   const unchanged = sourceVariants.length === machineVariants.length
-    && sourceVariants.every((variant, index) => variant === machineVariants[index])
+    && columns?.every((column, index) => column === index)
   if (unchanged) return
-  const columnForVariant = machineVariants.map((variant) => {
-    const exact = sourceVariants.indexOf(variant)
+  const columnForVariant = machineVariants.map((_variant, index) => {
+    const exact = columns?.[index] ?? -1
     return exact >= 0 ? exact : 0
   })
   for (const [key, value] of Object.entries(next)) {

@@ -11,7 +11,8 @@
  *
  * Counterpart: the api's `routes/editor.ts` bake, whose passes these mirror one for one.
  */
-import { buildBuiltinSlicingPresetId, parseBuiltinSlicingPresetId, processPresetFitsMachine, projectDefinesMachineCompletely, projectMatchesNozzleDiameters, slicingPresetProvenance,
+import { processSettingsForSave } from './clientProcessSettingsPass'
+import { buildBuiltinSlicingPresetId, projectDefinesMachineCompletely, projectMatchesNozzleDiameters, slicingPresetProvenance,
   firstProfileString
 } from '@printstream/shared'
 import type { ExportArrangedThreeMf, MachineRetargetPlan, ProcessConfig, ProfileRecord, SaveArrangedThreeMf, SlicingPresetSummary } from '@printstream/shared'
@@ -80,6 +81,9 @@ export function bakePassesFor(
 
   if (save.retarget) {
     const retarget = save.retarget
+    if (retarget.processProfileId && slicingPresetProvenance(retarget.processProfileId) !== 'project') {
+      passes.processSettings = processSettingsForSave(retarget, slicerTargetId, options)
+    }
     passes.machineRetarget = async (projectSettings) => {
       // GATED on completeness, which is the api's own branch. A retarget target is materialized on
       // essentially every save (the dialog fills it whenever a printer and process are selected), so
@@ -91,9 +95,10 @@ export function bakePassesFor(
       // Complete already means this is at most a same-model PRESET change (an H2D variant, a nozzle
       // size, a user's own tuned machine), which authors the machine and nothing else.
       if (projectDefinesMachineCompletely(projectSettings, retarget.printerModel ?? null)) {
-        return await sameModelPresetPlan(projectSettings, retarget, slicerTargetId, options)
+        const plan = await sameModelPresetPlan(projectSettings, retarget, slicerTargetId, options)
+        return plan && passes.processSettings ? { ...plan, processConfig: null } : plan
       }
-      return await buildMachineRetargetPlan({
+      const plan = await buildMachineRetargetPlan({
         target: retarget,
         slicerTargetId,
         projectSettings,
@@ -101,6 +106,8 @@ export function bakePassesFor(
         resolvers: options.resolvers,
         ...(options.signal ? { signal: options.signal } : {})
       })
+      // The final process pass is the sole author when the selected process can be materialized.
+      return plan && passes.processSettings ? { ...plan, processConfig: null } : plan
     }
     return passes
   }
@@ -179,19 +186,6 @@ async function sameModelPresetPlan(
     return null
   }
 
-  // The PROCESS preset follows only when it genuinely changed. Changing a nozzle re-picks it in the
-  // dialog (a 0.2 process preset is not compatible with a 0.4 machine), and a save that ignored that
-  // left the project naming a preset it is not using: the UI showed one thing and the file recorded
-  // another. Comparing the chosen preset against the one the project NAMES is what separates that
-  // real re-pick from an ordinary save, where both are the same and nothing is written, which is the
-  // over-rewrite this branch exists to avoid.
-  const processConfig = await resolveChangedProcessConfig(projectSettings, retarget, slicerTargetId, options, resolved.name)
-  // Deliberately NO process fallback on this branch, unlike the cross-model retarget. This branch's
-  // contract is "author the machine, leave the process alone", and reselecting here would overwrite
-  // every process key on an ordinary nozzle change, discarding values the user tuned by hand in an
-  // earlier session. It is also unnecessary: a machine-preset change re-picks the process IN THE
-  // DIALOG (`useProcessProfileSelection`), which judges the project's own preset by its lineage, so
-  // a process that no longer fits arrives here already replaced and `chosenProcess` is non-null.
   const plan: MachineRetargetPlan = {
     machineConfig: resolved.config,
     printerSettingsId: resolved.name,
@@ -201,8 +195,7 @@ async function sameModelPresetPlan(
     // The model the resolved preset itself reports, falling back to what the save targeted: the
     // preset is the authority on which machine it describes.
     printerModel: firstProfileString(resolved.config.printer_model) ?? retarget.printerModel ?? '',
-    processConfig,
-    ...(processConfig ? { processSettingOverrides: retarget.processSettingOverrides ?? {} } : {})
+    processConfig: null
   }
 
   // Slots ARE rebound, even though the model has not changed. A filament preset declares the machine
@@ -225,57 +218,6 @@ async function sameModelPresetPlan(
   )
   return { ...plan, filamentRebinds }
 }
-
-/**
- * The chosen process preset's resolved config, but ONLY when the project does not already name it.
- *
- * Null is the ordinary answer: on a save that changed nothing, the chosen preset IS the project's,
- * and authoring it would overwrite process values the user has tuned by hand, which is what the
- * completeness gate exists to prevent. Null also covers a preset this host cannot resolve, and a
- * project preset, whose values already live in the 3MF.
- */
-async function resolveChangedProcessConfig(
-  projectSettings: ProfileRecord,
-  retarget: NonNullable<SaveArrangedThreeMf['retarget']>,
-  slicerTargetId: string | null,
-  options: EditorBakePassOptions,
-  /** The machine preset this plan authors, which the process must declare it fits. */
-  machinePresetName: string
-): Promise<ProfileRecord | null> {
-  const chosenId = retarget.processProfileId
-  if (!chosenId || !options.resolvers.canResolve(chosenId)) return null
-  const current = firstProfileString(projectSettings.print_settings_id)
-  // Compared by NAME, because that is the identity a 3MF carries while the request names an id.
-  const chosenName = parseBuiltinSlicingPresetId(chosenId)?.name ?? null
-  if (current && chosenName && current === chosenName) return null
-  try {
-    const body = await options.resolvers.process(
-      chosenId,
-      slicerTargetId,
-      options.signal ? { signal: options.signal } : undefined
-    )
-    const resolvedName = firstProfileString(body.config?.print_settings_id)
-    // Second chance at the same question, for a preset whose id does not carry its name.
-    if (current && resolvedName && current === resolvedName) return null
-    // Never AUTHOR a process the machine does not accept. The dialog blocks a slice on this, but
-    // nothing blocked a save, so an incompatible pick was written into the file and read back on
-    // the next open as the project's own baseline. Leaving the project's process alone is the same
-    // best-effort degradation every other pass here makes.
-    if (!processPresetFitsMachine(body.config ?? null, machinePresetName)) {
-      console.warn(`[editor] the chosen process preset does not fit ${machinePresetName}; keeping the project's`)
-      return null
-    }
-    return body.config ?? null
-  } catch (error) {
-    rethrowCancellation(error, options.signal)
-    // Best effort, as everywhere in this pass: a process preset that will not resolve leaves the
-    // project's own values alone rather than failing the save.
-    console.warn('[editor] could not resolve the chosen process preset; keeping the project\'s:',
-      error instanceof Error ? error.message : error)
-    return null
-  }
-}
-
 
 /**
  * What each filament slot's preset holds, aligned with `filament_settings_id`.

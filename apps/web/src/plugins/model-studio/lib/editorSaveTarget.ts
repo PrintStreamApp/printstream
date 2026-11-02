@@ -17,6 +17,7 @@
  * sniffing for a controller: the post-save choreography around a library save is order-sensitive
  * (see `useEditorSave`) and must be skipped wholesale, not partially, when there is no library.
  */
+import type { ProcessConfigResolver } from '../../../components/ProcessSettingsDialog'
 import type { ExportArrangedThreeMf, LibraryFile, SaveArrangedThreeMf, SceneEdit, SlicingPresetSummary, SlicingTarget } from '@printstream/shared'
 import { apiFetch } from '../../../lib/apiClient'
 import {
@@ -117,6 +118,8 @@ export interface StageSnapshotInput {
 }
 
 export interface ApiSaveTargetOptions {
+  /** Session resolver pins the preset baseline chosen in the UI through save and slice. */
+  resolveProcessConfig?: ProcessConfigResolver
   /** The bytes this session opened, which every bake authors from. See `editorProjectSource.ts`. */
   archive: () => ThreeMfArchive | null
   /** Staged geometry the `SceneEdit` refers to. */
@@ -162,6 +165,15 @@ function createFilamentCatalogue(): (signal?: AbortSignal) => Promise<readonly S
  */
 export function createApiSaveTarget(options: ApiSaveTargetOptions): EditorSaveTarget {
   const filamentPresets = createFilamentCatalogue()
+  const resolvers = {
+    ...WORKSPACE_RETARGET_RESOLVERS,
+    process: (id: string, targetId: string | null, request?: { signal?: AbortSignal }) => {
+      request?.signal?.throwIfAborted()
+      return options.resolveProcessConfig
+        ? options.resolveProcessConfig({ processProfileId: id, targetId, sourceFileId: null })
+        : WORKSPACE_RETARGET_RESOLVERS.process(id, targetId, request)
+    }
+  }
   const bake = async (
     payload: SaveArrangedThreeMf | ExportArrangedThreeMf,
     signal?: AbortSignal,
@@ -186,7 +198,7 @@ export function createApiSaveTarget(options: ApiSaveTargetOptions): EditorSaveTa
       bakeOptionsFor(payload),
       // The WORKSPACE resolvers, which reach this workspace's own presets as well as the built-ins.
       // That is the whole difference from the public host.
-      bakePassesFor(payload, { resolvers: WORKSPACE_RETARGET_RESOLVERS, filamentPresets, signal })
+      bakePassesFor(payload, { resolvers, filamentPresets, signal })
     ] as const
     const { bytes } = requireCompleteMaterials
       ? await bakeCompleteProjectThreeMf(...bakeArgs, 'save', signal)
@@ -248,7 +260,7 @@ export function createApiSaveTarget(options: ApiSaveTargetOptions): EditorSaveTa
           sliceTarget: {
             target: input.target,
             slicerTargetId: input.slicerTargetId,
-            resolvers: WORKSPACE_RETARGET_RESOLVERS,
+            resolvers,
             ...(signal ? { signal } : {})
           }
         },

@@ -17,6 +17,9 @@
  * every one of those facts had several writers and no owner, which is what made
  * "who set this value?" unanswerable.
  */
+import { useProcessMaterialTransactions } from './useProcessMaterialTransactions'
+import { memoizeProcessPresetResolver, projectProcessResolver } from '../../lib/projectProcessResolver'
+import type { ProcessConfigResolver } from '../ProcessSettingsDialog'
 import { lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { LazyDialogBoundary } from '../LazyDialogBoundary'
 import { slicingTargetWithSavedMaterials } from '../../lib/slicingTargetMaterials'
@@ -50,12 +53,13 @@ import { PER_OBJECT_PROCESS_KEYS,
   isFilamentTrackSwitchReady,
   isProjectNewerThanSlicer,
   isProjectSlicingPresetId,
-  slicingTargetSchema
+  slicingTargetSchema,
+  slicingPresetProvenance
 } from '@printstream/shared'
 import { useNavigate, useParams } from 'react-router-dom'
 import { apiFetch } from '../../lib/apiClient'
 import { deriveProjectCarryOverrides } from '../../lib/processCarryOverrides'
-import { permuteFilamentIndexOverrides, permutePerObjectFilamentIndexOverrides, remapFilamentIndexOverrides, remapPerObjectFilamentIndexOverrides } from '../../lib/filamentIndexOverrides'
+import { withLoadedProcessFilamentReferences, permuteFilamentIndexOverrides, permutePerObjectFilamentIndexOverrides, remapFilamentIndexOverrides, remapPerObjectFilamentIndexOverrides } from '../../lib/filamentIndexOverrides'
 import { resolveSliceDisabledReason } from '../../lib/slicingPresetSelection'
 import {
   buildLoadedPrinterMaterialOptions,
@@ -427,22 +431,30 @@ export function SliceFileModal({
   // re-rendered the whole 3D editor for a temperature tick. Held stable on the projection this
   // dialog actually reads; a real change (tray swapped, nozzle changed) still flows through.
   const selectedPrinterStatus = printerId ? printerStatuses[printerId] : undefined
-  // Resolve the project's OWN process preset against no target, so its system baseline is matched by
-  // name regardless of the machine currently selected, and derive the project's genuine deltas. This
+  // Resolve the project's OWN process by name in the selected engine, independently of the
+  // machine selection, and derive project deltas from the opened archive. This
   // is what the machine-switch fallback carries onto a builtin so a baked customization (e.g. wall
   // loops) isn't lost when the new preset overwrites every process key. Stable per file, so it does
   // not churn as the target changes.
+  const [processReader, setProcessReader] = useState<{ read: () => Promise<string | null>; key: string } | null>(null)
+  const setProjectProcessSettingsReader = useCallback((read: (() => Promise<string | null>) | null) => {
+    setProcessReader(read ? { read, key: crypto.randomUUID() } : null)
+  }, [])
+  const processProfilesRef = useRef(processProfiles)
+  processProfilesRef.current = processProfiles
+  const resolveProcessConfig = useMemo<ProcessConfigResolver>(() => processReader
+    ? projectProcessResolver({ readSettings: processReader.read, profiles: () => processProfilesRef.current, resolveInstalled: resolveWorkspaceProcessConfig })
+    // Refreshing the catalogue explicitly releases the pinned installed baselines.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    : memoizeProcessPresetResolver(resolveWorkspaceProcessConfig), [processReader, profilesSnapshotToken])
   const projectProcessProfileId = useMemo(
     () => processProfiles.find((profile) => isProjectSlicingPresetId(profile.id))?.id ?? null,
     [processProfiles]
   )
   const projectProcessResolveQuery = useQuery({
-    queryKey: ['slice-project-process-carry', projectProcessProfileId, file.id],
-    queryFn: ({ signal }) => resolveWorkspaceProcessConfig(
-      { processProfileId: projectProcessProfileId as string, targetId: null, sourceFileId: file.id },
-      { signal }
-    ),
-    enabled: Boolean(projectProcessProfileId && file.id),
+    queryKey: ['slice-project-process-carry', projectProcessProfileId, file.id, versionId, file.currentVersionNumber, processReader?.key, selectedSlicerTargetId, profilesSnapshotToken],
+    queryFn: () => resolveProcessConfig({ processProfileId: projectProcessProfileId as string, targetId: selectedSlicerTargetId || null, sourceFileId: file.id }),
+    enabled: Boolean(projectProcessProfileId && file.id && liveProfiles.length > 0 && (flow !== 'library' || processReader)),
     staleTime: Infinity
   })
   const carryOverridesOnRepick = useDeepStableValue(
@@ -465,6 +477,7 @@ export function SliceFileModal({
     plateType,
     bakedProcessProfileName: bakedIndex?.processProfileName,
     carryOverridesOnRepick,
+    projectProcessResolution: projectProcessResolveQuery.data,
     // The 3MF index arrives on its own query; until it does the project's own preset is missing
     // from the list, and a re-pick would latch a built-in permanently (see the hook's docs).
     projectPresetsReady: bakedIndex != null || platesQuery.isError,
@@ -545,15 +558,19 @@ export function SliceFileModal({
   )
   // Removing a slot must remap the filament-INDEX references living with the process state:
   // see useMaterialSlots.onFilamentRemoved (positions above the removed one shift down).
+  // Read the resolver cache at the gesture, not at render: warm-up resolves without a state write.
+  const readLoadedProcessConfig = useCallback(() => resolveProcessConfig.peekSource?.(processProfileId)?.config
+    ?? (processProfileId === projectProcessProfileId ? projectProcessResolveQuery.data?.config : undefined),
+  [resolveProcessConfig, processProfileId, projectProcessProfileId, projectProcessResolveQuery.data])
   const handleFilamentIndexRemap = useCallback((removedPosition: number, replacementPosition?: number) => {
-    setProcessSettingOverrides((current) => remapFilamentIndexOverrides(current, removedPosition, replacementPosition))
+    setProcessSettingOverrides((current) => remapFilamentIndexOverrides(withLoadedProcessFilamentReferences(current, readLoadedProcessConfig()), removedPosition, replacementPosition))
     setObjectProcessOverrides((current) => remapPerObjectFilamentIndexOverrides(current, removedPosition, replacementPosition))
-  }, [setProcessSettingOverrides])
+  }, [readLoadedProcessConfig, setProcessSettingOverrides])
   // A reorder renumbers every position at once: same duty, permutation form.
   const handleFilamentIndexPermute = useCallback((remap: ReadonlyMap<number, number>) => {
-    setProcessSettingOverrides((current) => permuteFilamentIndexOverrides(current, remap))
+    setProcessSettingOverrides((current) => permuteFilamentIndexOverrides(withLoadedProcessFilamentReferences(current, readLoadedProcessConfig()), remap))
     setObjectProcessOverrides((current) => permutePerObjectFilamentIndexOverrides(current, remap))
-  }, [setProcessSettingOverrides])
+  }, [readLoadedProcessConfig, setProcessSettingOverrides])
   // Declared BEFORE the material core: it feeds the core's nozzle-validity clamp (a stale
   // dual-nozzle assignment on a single-nozzle machine segfaults the slicer).
   const sliceToolheads = buildSliceDialogToolheads(nozzleDiameter, nozzleFlow, targetMode === 'realPrinter' ? selectedPrinterStatus : undefined, selectedPrinterModel)
@@ -585,6 +602,16 @@ export function SliceFileModal({
     applyBakedMaterialDefaults,
     materialSnapshot, restoreMaterialSnapshot
   } = materialSlots
+  const materialTransactions = useProcessMaterialTransactions({
+    resolve: resolveProcessConfig,
+    request: { processProfileId, targetId: selectedSlicerTargetId || null, sourceFileId: file.id },
+    scope: [materialSnapshot, processSettingOverrides, objectProcessOverrides],
+    actions: {
+      onRemoveFilament: handleRemoveFilament,
+      onReorderFilament: handleReorderFilament,
+      onSyncFilaments: handleSyncFilaments
+    }
+  })
   // Plugins may contribute ephemeral per-material slice settings. Keep them separate from the
   // user's tune-dialog edits so disabling a plugin or changing material removes its contribution,
   // while an explicit user value always wins when the two name the same setting.
@@ -981,6 +1008,7 @@ export function SliceFileModal({
         // from the id alone, and rewriting a project's machine on a derived id threw away
         // hand-tuned printers on ordinary saves.
         printerProfileChosen: targetOrigins.printerProfileId === 'user',
+        processProfileChosen: processProfileSelectionTouchedRef.current,
         printerModel: selectedPrinterModel,
         plateType,
         nozzleDiameters: selectedNozzleDiameters,
@@ -1033,6 +1061,9 @@ export function SliceFileModal({
     nozzleDiameter, setNozzleDiameter, nozzleDiameterOptions, nozzleFlow, setNozzleFlow,
     plateType, setPlateType: handlePlateTypeChange, plateTypeOptions,
     plateMode, setPlateMode, sceneEdit, setSceneEdit, plateNumber, setPlateNumber, slicePlateOptions, setPreviewFileId,
+    setProjectProcessSettingsReader,
+    resolveConfig: resolveProcessConfig,
+    currentProcessProfileId: processProfileId,
     compatibleProcessProfiles, selectedProcessProfile, processProfileModified, setProcessProfileId, setProcessSettingOverrides,
     machineSettingOverrides, setMachineSettingOverrides, machineSettingOverridesKnown,
     machineOverridesModel, setMachineOverridesModel,
@@ -1068,9 +1099,10 @@ export function SliceFileModal({
     filamentSettingOverridesById, openFilamentSettings: setFilamentSettingsFilamentId,
     renderMaterialStatus,
     handleMaterialOptionChange,
-    desiredFilaments, retargetTarget, onAddFilament: handleAddFilament, onSyncFilaments: handleSyncFilaments,
+    materialChangeError: materialTransactions.materialChangeError,
+    desiredFilaments, retargetTarget, onAddFilament: handleAddFilament, onSyncFilaments: materialTransactions.onSyncFilaments,
     onUpsertMixedFilament: handleUpsertMixedFilament,
-    onRemoveFilament: handleRemoveFilament, onReorderFilament: handleReorderFilament,
+    onRemoveFilament: materialTransactions.onRemoveFilament, onReorderFilament: materialTransactions.onReorderFilament,
     configSnapshot, restoreConfig, materialEditListenerRef, onProjectSaved: handleProjectSaved, settingsEditListenerRef,
     // The editor resolves each slot's preset at SAVE time from this, so the saved project carries the
     // material's physics and not just its name. Omitting it is not a smaller feature, it silently
@@ -1349,6 +1381,7 @@ export function SliceFileModal({
             processProfileId={selectedProcessProfile.id}
             processProfileName={selectedProcessProfile.name}
             sourceFileId={file.id}
+            resolveConfig={resolveProcessConfig}
             initialOverrides={processSettingOverrides}
             visibilityContext={{ printerModel: targetMode === 'manualProfile' ? manualPrinterModel : (selectedPrinter?.model ?? '') }}
             profileOptions={compatibleProcessProfiles}
@@ -1356,7 +1389,7 @@ export function SliceFileModal({
             applyScope={editorOnly ? 'project' : 'slice'}
             // Same rule the material dialog next door uses: the workspace's own preset can be
             // updated in place, a built-in or a project-embedded one can only be saved as new.
-            canEditOriginal={!selectedProcessProfile.id.startsWith('builtin:') && !selectedProcessProfile.id.startsWith('project:')}
+            canUpdateProfile={(profileId) => slicingPresetProvenance(profileId) === 'workspace'}
             onProfileChange={(profileId, carryOverrides) => {
               // Snapshot pre-edit state for the editor's undo/dirty (no-op in the simple slice path).
               settingsEditListenerRef.current?.()

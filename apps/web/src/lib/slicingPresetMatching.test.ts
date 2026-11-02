@@ -247,6 +247,14 @@ test('buildLoadedPrinterMaterialOptions labels a tracked custom spool as itself'
   assert.equal(options[0]!.remainingGrams, 420)
   assert.equal(options[0]!.remainPercent, 42)
   assert.ok(options[0]!.metadata?.includes('White'))
+
+  const overridden = buildLoadedPrinterMaterialOptions(source, [], null, 'P1S', {
+    printerId: 'printer-1',
+    resolveSpool: () => ({ spoolId: 'spool-1', brand: "Michael's", filamentType: 'PLA', colorHex: '#C7372F', colorName: 'Red' })
+  })[0]!
+  assert.equal(overridden.color, '#c7372f')
+  assert.deepEqual(overridden.colors, ['#C7372F'], 'the menu swatch must agree with the colour applied on selection')
+  assert.equal(overridden.colorName, 'Red')
 })
 
 test('buildLoadedPrinterMaterialOptions with no tracked spool labels a custom tray by its own identity', async () => {
@@ -1226,4 +1234,34 @@ test('a project process preset stating no nozzle stays compatible at any nozzle'
   const preset = projectProcess('0.20mm Standard @BBL A1')
   assert.equal(isProcessProfileCompatible(preset, null, 'A1', [0.2], 'Textured PEI Plate'), true)
   assert.equal(isProcessProfileCompatible(preset, null, 'A1', [0.8], 'Textured PEI Plate'), true)
+})
+
+
+test('filament mappings discard unavailable source, explicit and tray toolheads after a printer switch', () => {
+  const filaments = [{ projectFilamentId: 1, label: 'PETG', color: '#FFFFFF', nozzleId: 1 }]
+  for (const toolheads of [new Set(['primary']), new Set<string>()]) {
+    const selections: Array<Record<number, string>> = [{}, { 1: 'nozzle-1' }]
+    for (const picks of selections) {
+      const result = buildFilamentMappings(
+        filaments, { 1: 'petg' }, {}, picks,
+        [materialOption({ id: 'petg', toolheadId: 'nozzle-1' })], {}, toolheads
+      )
+      assert.deepEqual(result.unresolved, [])
+      assert.equal(result.mappings[0]?.toolheadId, undefined)
+      assert.equal(result.mappings[0]?.profileId, 'builtin:filament:PETG')
+    }
+  }
+})
+
+test('filament mappings preserve valid dual-nozzle choices and fallbacks', () => {
+  const filaments = [{ projectFilamentId: 1, label: 'PETG', color: '#FFFFFF', nozzleId: 1 }]
+  const offered = new Set(['nozzle-0', 'nozzle-1'])
+  const mapping = (picks: Record<number, string>, loaded: string | null) => buildFilamentMappings(
+    filaments, { 1: 'petg' }, {}, picks,
+    [materialOption({ id: 'petg', toolheadId: loaded })], {}, offered
+  ).mappings[0]
+  assert.equal(mapping({ 1: 'nozzle-0' }, 'nozzle-1')?.toolheadId, 'nozzle-0')
+  assert.equal(mapping({}, 'nozzle-0')?.toolheadId, 'nozzle-0')
+  assert.equal(mapping({}, null)?.toolheadId, 'nozzle-1')
+  assert.equal(mapping({ 1: 'nozzle-2' }, 'nozzle-0')?.toolheadId, 'nozzle-0')
 })

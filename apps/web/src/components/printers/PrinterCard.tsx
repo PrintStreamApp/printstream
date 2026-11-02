@@ -1050,10 +1050,10 @@ function PrinterCardComponent({
           </PrinterJobMediaStrip>
         )}
 
-        {isOnline && printerAttentionSummaryText && !terminalJobSummaryVisible && (
+        {isOnline && printerAttentionSummary && printerAttentionSummaryText && !terminalJobSummaryVisible && (
           <PrinterCardAttentionSummary
             text={printerAttentionSummaryText}
-            isHmsError={printerAttentionSummary?.kind === 'hmsError'}
+            summary={printerAttentionSummary}
             observeRef={cardRef}
             clearing={sendCommand.isPending}
             onClear={clearActivePrinterError}

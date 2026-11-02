@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { after, afterEach, test } from 'node:test'
+import { after, afterEach, beforeEach, mock, test } from 'node:test'
 import { bridgeLibraryThreeMfIndexSchema, buildBuiltinSlicingPresetId, type SlicerFamily, type SlicingPresetSummary } from '@printstream/shared'
 import { installJsdomGlobals } from '../../test-utils/jsdom'
 import type { ClientThreeMfProject } from './lib/clientThreeMfProject'
@@ -12,7 +12,13 @@ const { QueryClient, QueryClientProvider } = await import('@tanstack/react-query
 const { publicSlicerTargetsQueryOptions, publicSlicingPresetsQueryOptions } = await import('./lib/publicSlicingCatalog')
 const { useLocalSliceSettingsController } = await import('./useLocalSliceSettingsController')
 
-afterEach(() => { cleanup() })
+beforeEach(() => {
+  mock.method(globalThis, 'fetch', async () => new Response(JSON.stringify({
+    config: { wall_loops: '2', support_filament: '0' },
+    baseConfig: { wall_loops: '2', support_filament: '0' }, overriddenKeys: []
+  }), { headers: { 'Content-Type': 'application/json' } }))
+})
+afterEach(() => { cleanup(); mock.restoreAll() })
 after(() => { dom.window.close() })
 
 function fakeProject(): ClientThreeMfProject {
@@ -25,7 +31,9 @@ function fakeProject(): ClientThreeMfProject {
     compatiblePrinterModels: ['X1C'],
     processProfileName: '0.20mm Standard @BBL X1C'
   })
-  return { fileName: 'Widget.3mf', sizeBytes: 4096, index } as ClientThreeMfProject
+  return { fileName: 'Widget.3mf', sizeBytes: 4096, index,
+    archive: { indexEntries: () => ({ projectSettingsJson: JSON.stringify({ print_settings_id: index.processProfileName, support_filament: '0' }) }) }
+  } as unknown as ClientThreeMfProject
 }
 
 /**
@@ -229,4 +237,41 @@ test('add then remove a material moves the project filament count', async () => 
   const addedId = get().projectFilaments[2]!.projectFilamentId
   await act(async () => { get().onRemoveFilament(addedId) })
   assert.equal(get().projectFilaments.length, 2, 'the added slot was removed')
+})
+
+for (const operation of ['reorder', 'remove', 'sync'] as const) {
+  test(`the host waits for process resolution before material ${operation}`, async () => {
+    let finish!: (response: Response) => void
+    const pending = new Promise<Response>((resolve) => { finish = resolve })
+    mock.method(globalThis, 'fetch', async () => pending)
+    const get = await renderController()
+    await act(async () => { get().setProcessProfileId(buildBuiltinSlicingPresetId('process', '0.20mm Standard @BBL X1C')) })
+    let checkpoints = 0
+    await act(async () => {
+      if (operation === 'reorder') get().onReorderFilament(0, 2, () => { ++checkpoints })
+      if (operation === 'remove') get().onRemoveFilament(1, 2, () => { ++checkpoints })
+      if (operation === 'sync') get().onSyncFilaments([{ optionId: 'profile:pla-basic', color: '#123456', label: 'PLA' }], () => { ++checkpoints })
+    })
+    assert.deepEqual(get().projectFilaments.map((slot) => slot.projectFilamentId), [1, 2])
+    assert.equal(checkpoints, 0, 'no premature undo checkpoint')
+    await act(async () => { finish(new Response(JSON.stringify({
+      config: { support_filament: '2' }, baseConfig: { support_filament: '2' }, overriddenKeys: []
+    }), { headers: { 'Content-Type': 'application/json' } })) })
+    assert.equal(checkpoints, 1)
+    assert.equal(get().processSettingOverrides.support_filament, operation === 'sync' ? '0' : '1')
+    assert.deepEqual(get().projectFilaments.map((slot) => slot.projectFilamentId), operation === 'reorder' ? [2, 1] : operation === 'remove' ? [2] : [1])
+  })
+}
+
+test('a delayed material gesture cannot replay over a later process edit', async () => {
+  let finish!: (response: Response) => void
+  mock.method(globalThis, 'fetch', () => new Promise<Response>((resolve) => { finish = resolve }))
+  const get = await renderController()
+  await act(async () => { get().setProcessProfileId(buildBuiltinSlicingPresetId('process', '0.20mm Standard @BBL X1C')) })
+  let checkpoints = 0
+  await act(async () => { get().onReorderFilament(0, 2, () => { ++checkpoints }) })
+  await act(async () => { get().setProcessSettingOverrides({ support_filament: '1' }) })
+  await act(async () => { finish(new Response(JSON.stringify({ config: { support_filament: '2' }, baseConfig: {}, overriddenKeys: [] }))) })
+  assert.deepEqual(get().projectFilaments.map((slot) => slot.projectFilamentId), [1, 2])
+  assert.equal(checkpoints, 0)
 })

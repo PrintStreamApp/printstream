@@ -618,6 +618,30 @@ test('nozzle rack controls require an idle printer and idle rack', () => {
   }).allowed, false)
 })
 
+test('an intentional pause offers Resume without fault recovery or warning bypass', () => {
+  const paused = {
+    online: true,
+    stage: 'paused' as const,
+    subStage: null,
+    jobId: 'job-1',
+    deviceError: { code: '03008013', message: 'Task paused due to the pause command added to the file.' },
+    hmsErrors: [],
+    filamentChange: { currentStepIndex: null, currentStepLabel: null, steps: [] },
+    ams: [],
+    externalSpools: []
+  }
+  const actions = getPrinterRecoveryActions(paused).map((action) => action.id)
+  assert.ok(actions.includes('resume'))
+  assert.equal(actions.includes('ignoreHmsError'), false)
+  assert.equal(getCheckAssistantAvailability(paused).allowed, false)
+  assert.equal(getJumpToLiveViewAvailability(paused).allowed, false)
+  assert.equal(getIgnoreHmsErrorAvailability(paused).allowed, false)
+  assert.equal(getCheckAssistantAvailability({
+    ...paused,
+    hmsErrors: [{ code: '0700220000020001', message: 'Filament has run out.' }]
+  }).allowed, true)
+})
+
 test('a cancelled print offers no recovery actions', () => {
   // Cancelling reaches us as FAILED plus a `print_error`, which is the same shape
   // as a fault. Read literally it offered a warning-coloured "Check assistant" for

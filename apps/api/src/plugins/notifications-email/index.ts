@@ -16,7 +16,8 @@ import { unauthorized } from '../../lib/http-error.js'
 import { assertPlatformScopeActor, requestNotificationScope } from '../../lib/notification-scope.js'
 import { subscribePrinterNotifications } from '../../lib/notification-format.js'
 import type { ApiPlugin } from '../../plugin/types.js'
-import { createEmailNotificationHandler } from './delivery.js'
+import { registerAcknowledgedNotificationChannel } from '../../lib/acknowledged-notifications.js'
+import { createEmailNotificationHandler, createAcknowledgedEmailNotificationHandler } from './delivery.js'
 import { readEmailSubscribers, writeEmailSubscribers } from '../../lib/notification-subscribers.js'
 
 export const notificationsEmailPlugin: ApiPlugin = {
@@ -74,6 +75,7 @@ export const notificationsEmailPlugin: ApiPlugin = {
       response.json({ subscribed: false })
     })
 
+    context.onShutdown(registerAcknowledgedNotificationChannel('email', createAcknowledgedEmailNotificationHandler(context)))
     const handle = createEmailNotificationHandler(context)
     const off = subscribePrinterNotifications(context.printerEvents, handle, {
       onError: (error) => context.logger.warn('failed to deliver email notification', error),

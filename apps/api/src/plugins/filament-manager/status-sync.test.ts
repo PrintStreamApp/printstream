@@ -12,7 +12,7 @@ import type { ApiPluginContext } from '../../plugin/types.js'
 import { rootPrisma } from '../../lib/prisma.js'
 import { printerManager } from '../../lib/printer-manager.js'
 import { usePrismaStubs } from '../../test-utils/prisma-stubs.js'
-import { createStatusObserver } from './status-sync.js'
+import { collectPresences, createStatusObserver } from './status-sync.js'
 
 const stub = usePrismaStubs()
 
@@ -61,15 +61,20 @@ interface Harness {
   observe: (status: PrinterStatus) => void
   /** Every `updateMany` the pass issued, so a test can assert what it cleared. */
   updates: Array<{ where: Record<string, unknown>; data: Record<string, unknown> }>
+  loadedQueries: Array<{ where: Record<string, unknown> }>
   settle: () => Promise<void>
 }
 
-function harness(options: { findFirst?: () => unknown; loadedHere?: () => unknown[]; onUpdate?: () => void } = {}): Harness {
+function harness(options: { findFirst?: () => unknown; loadedHere?: () => unknown[]; onUpdate?: () => void; autoAdd?: boolean } = {}): Harness {
   const updates: Harness['updates'] = []
+  const loadedQueries: Harness['loadedQueries'] = []
   printerManager.getWorkspaceId = (() => WORKSPACE_ID) as typeof printerManager.getWorkspaceId
 
   stub(rootPrisma.filamentSpool, 'findFirst', async () => options.findFirst?.() ?? null)
-  stub(rootPrisma.filamentSpool, 'findMany', async () => options.loadedHere?.() ?? [])
+  stub(rootPrisma.filamentSpool, 'findMany', async (args: { where: Record<string, unknown> }) => {
+    loadedQueries.push(args)
+    return options.loadedHere?.() ?? []
+  })
   stub(rootPrisma.filamentSpool, 'create', async () => ({ id: 'created' }))
   stub(rootPrisma.filamentSpool, 'updateMany', async (args: { where: Record<string, unknown>; data: Record<string, unknown> }) => {
     options.onUpdate?.()
@@ -79,7 +84,7 @@ function harness(options: { findFirst?: () => unknown; loadedHere?: () => unknow
 
   const context = {
     logger: { error() {}, warn() {}, info() {}, debug() {} },
-    settings: { forWorkspace: () => ({ get: async () => null, set: async () => {}, delete: async () => {} }) },
+    settings: { forWorkspace: () => ({ get: async () => options.autoAdd === false ? 'false' : null, set: async () => {}, delete: async () => {} }) },
     ws: { broadcast() {} },
     printerEvents: { emit() {} },
     isEnabledForWorkspace: () => true
@@ -88,6 +93,7 @@ function harness(options: { findFirst?: () => unknown; loadedHere?: () => unknow
   return {
     observe: createStatusObserver(context),
     updates,
+    loadedQueries,
     // The observer is fire-and-forget; let its promise chain drain.
     settle: async () => { await new Promise((resolve) => setImmediate(resolve)) }
   }
@@ -99,6 +105,122 @@ const noAmsStatus = (overrides: Partial<PrinterStatus> = {}): PrinterStatus =>
 
 const LOADED_SLOT = { slot: 3, trayUuid: 'UUID-A', remainPercent: 0, filamentType: 'PLA', color: '#00CFCF', colors: ['#00CFCF'], trayInfoIdx: 'GFA00' }
 const EMPTY_SLOT = { slot: 3, trayUuid: null, remainPercent: null, filamentType: null, color: null, colors: [], trayInfoIdx: null }
+
+for (const autoAdd of [true, false]) {
+  test(`RFID replacement detaches custom A4 assignment with auto-add ${autoAdd ? 'on' : 'off'}`, async () => {
+    const custom = loadedRow({ id: 'custom-petg', bambuUuid: null, brand: 'eSUN', filamentType: 'PETG', colorHex: '#FF0000' })
+    const test = harness({ loadedHere: () => [custom], autoAdd })
+
+    test.observe(amsStatus([{ ...LOADED_SLOT, color: '#FFFFFF', colors: ['#FFFFFF'] }]))
+    await test.settle()
+
+    assert.deepEqual(test.loadedQueries[0]?.where, { workspaceId: WORKSPACE_ID, loadedPrinterId: PRINTER_ID, deletedAt: null },
+      'the cleanup query must include manual spools, scoped to this workspace and printer')
+    const cleared = test.updates.filter((update) => update.data.loadedPrinterId === null)
+    assert.equal(cleared.length, 1)
+    const { OR, ...location } = cleared[0]!.where
+    assert.deepEqual(location, { id: 'custom-petg', workspaceId: WORKSPACE_ID, loadedPrinterId: PRINTER_ID, loadedAmsId: 0, loadedSlotId: 3 })
+    assert.ok(Array.isArray(OR))
+    assert.deepEqual(OR[0], { loadedAt: null })
+    assert.ok(OR[1].loadedAt.lt instanceof Date)
+    assert.deepEqual(cleared[0]?.data, { loadedPrinterId: null, loadedAmsId: null, loadedSlotId: null, loadedAt: null })
+  })
+}
+
+for (const scenario of [
+  { name: 'a newer assignment with an unreadable status queued behind it', assignedAt: 2010, duringWrite: false, queueUnreadable: true },
+  { name: 'an assignment in the same millisecond as the observation', assignedAt: 2000, duringWrite: false, queueUnreadable: false },
+  { name: 'an assignment made between the cleanup read and write', assignedAt: 2010, duringWrite: true, queueUnreadable: false }
+]) {
+  test(`stale RFID preserves ${scenario.name}`, async (context) => {
+    context.mock.timers.enable({ apis: ['Date'], now: 2000 })
+    const custom = { ...loadedRow({ bambuUuid: null }), loadedAt: new Date(1000) as Date | null }
+    let release!: () => void
+    let started!: () => void
+    const paused = new Promise<void>((resolve) => { release = resolve })
+    const entered = new Promise<void>((resolve) => { started = resolve })
+    const test = harness({
+      autoAdd: false,
+      findFirst: async () => { started(); await paused; return null },
+      loadedHere: () => [{ ...custom }]
+    })
+    let assignedDuringWrite = false
+    let cleared = 0
+    stub(rootPrisma.filamentSpool, 'updateMany', async (args: Harness['updates'][number]) => {
+      test.updates.push(args)
+      if (scenario.duringWrite && !assignedDuringWrite) {
+        custom.loadedAt = new Date(scenario.assignedAt)
+        assignedDuringWrite = true
+      }
+      // Model Prisma's time predicate against the CURRENT row, not the earlier
+      // findMany snapshot, so removing the atomic guard makes this test fail.
+      const alternatives = args.where.OR as Array<{ loadedAt: null | { lt: Date } }> | undefined
+      const matches = !alternatives || alternatives.some(({ loadedAt }) => loadedAt === null
+        ? custom.loadedAt === null
+        : custom.loadedAt !== null && custom.loadedAt < loadedAt.lt)
+      if (!matches) return { count: 0 }
+      custom.loadedAt = null
+      cleared += 1
+      return { count: 1 }
+    })
+
+    test.observe(amsStatus([LOADED_SLOT]))
+    await entered
+    context.mock.timers.setTime(scenario.assignedAt)
+    if (!scenario.duringWrite) custom.loadedAt = new Date()
+    if (scenario.queueUnreadable) test.observe(amsStatus([{ ...LOADED_SLOT, trayUuid: null }]))
+    // Processing occurs later than BOTH the old observation and the assignment.
+    context.mock.timers.setTime(2020)
+    release()
+    await test.settle()
+    assert.equal(cleared, 0, 'queued evidence must not undo a newer user assignment')
+    assert.equal(custom.loadedAt?.getTime(), scenario.assignedAt)
+
+    context.mock.timers.setTime(2030)
+    test.observe(amsStatus([LOADED_SLOT]))
+    await test.settle()
+    assert.equal(cleared, 1, 'later RFID evidence must be retried even when its signature is unchanged')
+    assert.equal(custom.loadedAt, null)
+  })
+}
+
+test('a known RFID spool repairs an existing duplicate custom assignment at its slot', async () => {
+  const tagged = loadedRow()
+  const custom = loadedRow({ id: 'old-custom', bambuUuid: null })
+  const test = harness({ findFirst: () => tagged, loadedHere: () => [custom, tagged] })
+  test.observe(amsStatus([LOADED_SLOT]))
+  await test.settle()
+  assert.deepEqual(test.updates.filter((update) => update.data.loadedPrinterId === null).map((update) => update.where.id), ['old-custom'])
+})
+
+test('custom assignments survive empty slots, unreadable RFID, and RFID in another slot or AMS', async () => {
+  const test = harness({ loadedHere: () => [loadedRow({ bambuUuid: null })] })
+  for (const slots of [[EMPTY_SLOT], [{ ...LOADED_SLOT, trayUuid: '00000000000000000000000000000000' }], [{ ...LOADED_SLOT, slot: 2 }]]) {
+    test.observe(amsStatus(slots))
+    await test.settle()
+  }
+  const otherUnit = amsStatus([LOADED_SLOT])
+  otherUnit.ams[0]!.unitId = 1
+  test.observe(otherUnit)
+  await test.settle()
+  assert.deepEqual(test.updates, [])
+})
+
+test('RFID on an external spool detaches only the matching external assignment', async () => {
+  const test = harness({ loadedHere: () => [
+    loadedRow({ id: 'left', bambuUuid: null, loadedAmsId: 254, loadedSlotId: null }),
+    loadedRow({ id: 'right', bambuUuid: null, loadedAmsId: 255, loadedSlotId: null })
+  ] })
+  test.observe(amsStatus([EMPTY_SLOT], { externalSpools: [{ ...LOADED_SLOT, amsId: 254 }] as unknown as PrinterStatus['externalSpools'] }))
+  await test.settle()
+  assert.deepEqual(test.updates.map((update) => update.where.id), ['left'])
+})
+
+test('all-zero RFID placeholders are not spool presences', () => {
+  assert.deepEqual(collectPresences(amsStatus([{ ...LOADED_SLOT, trayUuid: '00000000' }], {
+    externalSpools: [{ ...LOADED_SLOT, amsId: 255, trayUuid: '00000000' }] as unknown as PrinterStatus['externalSpools']
+  })), [])
+})
 
 test('a spool removed from its slot loses its association', async () => {
   const test = harness({ loadedHere: () => [loadedRow()] })

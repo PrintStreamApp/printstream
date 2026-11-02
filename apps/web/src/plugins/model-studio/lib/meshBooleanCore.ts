@@ -161,10 +161,9 @@ export function toObjectLocalSoup(soup: Float32Array, worldToObject: THREE.Matri
  * hole is refused before it can be combined.
  *
  * Vertex identity is BIT-EXACT, with no tolerance and no rounding, and that is a correctness
- * property rather than a shortcut. Viewport geometry reaches here already welded: `meshParseCore`
- * runs `mergeVertices` and then `toCreasedNormals`, which de-indexes by COPYING each merged vertex
- * to every corner that uses it, so shared corners hold identical floats and exact keys recover the
- * original connectivity exactly. `applyMatrix4` is deterministic, so that survives the world
+ * property rather than a shortcut. `meshParseCore` preserves source positions when it expands
+ * indexed meshes and computes shading, so shared corners hold identical floats and exact keys
+ * recover the original connectivity exactly. `applyMatrix4` is deterministic, so that survives the world
  * transform too (measured on a 663k-triangle model: 994,844 edges, zero boundary, in local and world
  * space alike, and identical to what a 0.1-micron grid reports).
  *

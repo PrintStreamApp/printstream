@@ -372,7 +372,10 @@ test('replacing an in-use material is one combined undo and redo step', () => {
   const build = (): SliceSettingsController => ({
     ...controller.build(),
     projectFilaments: (controller.read().sessionSlots ?? []).map((entry) => ({ ...entry, usedOnSelectedPlate: true })),
-    onRemoveFilament: (id) => controller.setSessionSlots((controller.read().sessionSlots ?? []).filter((entry) => entry.projectFilamentId !== id))
+    onRemoveFilament: (id, _replacement, beforeCommit) => {
+      beforeCommit?.()
+      controller.setSessionSlots((controller.read().sessionSlots ?? []).filter((entry) => entry.projectFilamentId !== id))
+    }
   })
   const view = renderHook(({ config }) => useEditorHistory({
     stateRef,
@@ -408,7 +411,10 @@ test('unverified source paint requires a replacement and remains one undo step',
   const build = (): SliceSettingsController => ({
     ...controller.build(),
     projectFilaments: (controller.read().sessionSlots ?? []).map((entry) => ({ ...entry, usedOnSelectedPlate: true })),
-    onRemoveFilament: (id) => controller.setSessionSlots((controller.read().sessionSlots ?? []).filter((entry) => entry.projectFilamentId !== id))
+    onRemoveFilament: (id, _replacement, beforeCommit) => {
+      beforeCommit?.()
+      controller.setSessionSlots((controller.read().sessionSlots ?? []).filter((entry) => entry.projectFilamentId !== id))
+    }
   })
   const view = renderHook(({ config }) => useEditorHistory({
     stateRef,
@@ -449,7 +455,10 @@ test('an unused material with a verified unpainted source removes without replac
   const build = (): SliceSettingsController => ({
     ...controller.build(),
     projectFilaments: (controller.read().sessionSlots ?? []).map((entry) => ({ ...entry, usedOnSelectedPlate: false })),
-    onRemoveFilament: (id) => controller.setSessionSlots((controller.read().sessionSlots ?? []).filter((entry) => entry.projectFilamentId !== id))
+    onRemoveFilament: (id, _replacement, beforeCommit) => {
+      beforeCommit?.()
+      controller.setSessionSlots((controller.read().sessionSlots ?? []).filter((entry) => entry.projectFilamentId !== id))
+    }
   })
   const view = renderHook(({ config }) => useEditorHistory({
     stateRef,

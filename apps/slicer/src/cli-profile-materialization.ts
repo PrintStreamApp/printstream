@@ -162,7 +162,7 @@ async function materializeProfileFile(
   // Custom (User) presets are sparse diffs and the BambuStudio CLI does not resolve a
   // process/machine profile's `inherits` chain on --load-settings, so merge the diff onto its
   // system base before handing it to the CLI.
-  let resolved = await resolveCustomProfileConfig(profile.content, profile.kind, profileDir) as ProcessConfig
+  let resolved = await resolveCustomProfileConfig(profile.content, profile.kind, profileDir, profile.name) as ProcessConfig
   if (overrides && Object.keys(overrides).length > 0) {
     for (const [key, value] of Object.entries(overrides)) resolved[key] = value
   }

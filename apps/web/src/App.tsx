@@ -1369,6 +1369,12 @@ export function App() {
                     )}
                   />
                 ) : null}
+                {platformAdmin?.PricingView ? (
+                  <Route path="/platform/billing" element={renderProtectedElement(
+                    canUsePlatformWorkspace && inPlatformMode ? <platformAdmin.PricingView />
+                      : workspaceLandingRouteReady ? <Navigate to={defaultRoute} replace /> : <Typography>Loading…</Typography>
+                  )} />
+                ) : null}
                 {platformAdmin ? (
                   <Route
                     path="/platform/customers"

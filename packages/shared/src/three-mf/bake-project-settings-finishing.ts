@@ -8,6 +8,8 @@ import { inspectProjectInheritsGroup, repairInheritsGroup } from '../repairs/inh
 import { inspectProjectFlushVolumesMatrix, repairFlushMultiplier, repairFlushVolumesMatrix } from '../flush-volumes-matrix.js'
 import { inspectProjectFilamentSelfIndex, repairFilamentSelfIndex } from '../filament-variant-index.js'
 import { dropEngineHostileOverrides } from '../settings-value-guard.js'
+import { extractChangedFromSystemKeys, withChangedFromSystemSlot, filamentSlotCount } from '../three-mf-project-config.js'
+import { PRINT_PRESET_OPTIONS } from '../generated/preset-options.generated.js'
 import { PRINTSTREAM_MODEL_KIND_KEY, PRINTSTREAM_MODEL_KIND_OBJECT_EXPORT } from './index-parser.js'
 
 /**
@@ -90,6 +92,12 @@ export function applyGlobalProcessOverrides(projectSettingsJson: string, overrid
   // resulting throw abandons every key it had not yet applied (`settings-value-guard.ts` has the
   // full trace). Dropping loses nothing: an empty value says only that the box is empty, and
   // omitting the override leaves the setting at whatever it already was.
-  for (const [key, value] of Object.entries(dropEngineHostileOverrides(overrides))) record[key] = value
+  const valid = dropEngineHostileOverrides(overrides)
+  for (const [key, value] of Object.entries(valid)) record[key] = value
+  if (Object.keys(valid).length > 0) {
+    const existing = extractChangedFromSystemKeys(record.different_settings_to_system, 0, () => true)
+    record.different_settings_to_system = withChangedFromSystemSlot(record.different_settings_to_system,
+      0, [...existing, ...Object.keys(valid).filter((key) => PRINT_PRESET_OPTIONS.has(key))], filamentSlotCount(record))
+  }
   return JSON.stringify(record)
 }

@@ -6,7 +6,8 @@
  * print has actually started so the optimistic placeholder can be cleared.
  */
 import {
-  isPrintCancellationError,
+  isPrinterDeviceFault,
+  isIntentionalPrintPause,
   isPrinterActiveJobStage,
   isPrinterIdleCompatibleStage,
   type PrinterStatus
@@ -16,10 +17,10 @@ type ProgressSummaryStatus = Pick<PrinterStatus, 'stage' | 'currentLayer' | 'rem
 type SecondaryStageStatus = Pick<PrinterStatus, 'stage' | 'subStage'>
 type LiveSecondaryStageSummaryStatus = Pick<PrinterStatus, 'online' | 'stage' | 'currentLayer' | 'remainingMinutes'>
 type PendingDispatchStatus = Pick<PrinterStatus, 'online' | 'stage' | 'progressPercent' | 'subStage'>
-type AttentionSummaryStatus = Pick<PrinterStatus, 'deviceError' | 'hmsErrors'>
+type AttentionSummaryStatus = Pick<PrinterStatus, 'deviceError' | 'hmsErrors'> & Partial<Pick<PrinterStatus, 'stage'>>
 
 export interface PrinterAttentionSummary {
-  kind: 'deviceError' | 'hmsError'
+  kind: 'deviceError' | 'hmsError' | 'intentionalPause'
   code: string
   message: string | null
   count: number
@@ -192,12 +193,17 @@ export function shouldShowLiveSecondaryStageSummary(
  * A device error that only records a cancellation is not an attention item: the
  * print ended because someone asked it to, and surfacing "The task was canceled."
  * in the card's warning row reads as a fault the user has to clear.
+ * Intentional pauses stay visible as warnings only while paused; HMS faults
+ * take precedence when the active view includes them.
  */
 export function getPrinterAttentionSummary(
   status: AttentionSummaryStatus | undefined,
   options: { includeHmsErrors?: boolean } = {}
 ): PrinterAttentionSummary | null {
-  if (status?.deviceError && !isPrintCancellationError(status.deviceError)) {
+  if (!status) return null
+
+  const intentionalPause = isIntentionalPrintPause(status.deviceError)
+  if (status.deviceError && isPrinterDeviceFault(status.deviceError)) {
     return {
       kind: 'deviceError',
       code: status.deviceError.code,
@@ -206,12 +212,18 @@ export function getPrinterAttentionSummary(
     }
   }
 
-  if (options.includeHmsErrors === false) {
-    return null
-  }
-
-  const firstHmsError = status?.hmsErrors[0]
+  // Faults take precedence over the informational pause reason. Sticky pause
+  // codes disappear from the summary after Resume, even if firmware retains one.
+  const firstHmsError = options.includeHmsErrors === false ? undefined : status.hmsErrors[0]
   if (!firstHmsError) {
+    if (intentionalPause && status.stage === 'paused' && status.deviceError) {
+      return {
+        kind: 'intentionalPause',
+        code: status.deviceError.code,
+        message: status.deviceError.message,
+        count: 1
+      }
+    }
     return null
   }
 

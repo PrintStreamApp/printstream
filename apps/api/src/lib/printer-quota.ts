@@ -23,9 +23,13 @@
  * populations, so forgetting the override made a cap bypassable with no error
  * anywhere and nothing in the type to notice.
  */
+import type { Prisma } from '@prisma/client'
+import { prisma } from './prisma.js'
 import { conflict } from './http-error.js'
 
 interface PrinterQuotaRegistration {
+  /** Optional final database-only gate, inside the same transaction as insertion. Must never perform provider I/O. */
+  assertCreateInTransaction?: (tx: Prisma.TransactionClient, workspaceId: string) => Promise<void>
   /** Max printers allowed when adding to this workspace, or null for unlimited. */
   getLimit: (workspaceId: string) => Promise<number | null>
   /**
@@ -111,5 +115,16 @@ export function notifyPrinterCountChanged(workspaceId: string): void {
   if (!handler) return
   void Promise.resolve(handler(workspaceId)).catch((error) => {
     console.warn('[printer-quota] onCountChanged handler failed', { workspaceId, error })
+  })
+}
+
+
+/** Keep the final quota check and insert atomic where a deployment registers that policy. External effects belong after return. */
+export async function withPrinterCreationQuota<T>(workspaceId: string, create: (store: Pick<Prisma.TransactionClient, 'printer'>) => Promise<T>): Promise<T> {
+  const guard = registration?.assertCreateInTransaction
+  if (!guard) return create(prisma)
+  return prisma.$transaction(async tx => {
+    await guard(tx, workspaceId)
+    return create(tx)
   })
 }

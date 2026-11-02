@@ -106,3 +106,16 @@ test('replacement positions are resolved against the pre-deletion order', () => 
     support_filament: ['2', '2'], support_interface_filament: '0'
   })
 })
+
+test('loaded preset references follow explicit replacement and subsequent reordering', async () => {
+  const { withLoadedProcessFilamentReferences } = await import('./filamentIndexOverrides')
+  const loaded = { support_filament: '3', support_interface_filament: '1', wall_loops: '4' }
+  const captured = withLoadedProcessFilamentReferences({ layer_height: '0.2' }, loaded)
+  assert.deepEqual(captured, { layer_height: '0.2', support_filament: '3', support_interface_filament: '1' })
+  const removed = remapFilamentIndexOverrides(captured, 3, 1)
+  assert.equal(removed.support_filament, '1')
+  assert.equal(removed.support_interface_filament, '1')
+  const reordered = permuteFilamentIndexOverrides(withLoadedProcessFilamentReferences(removed, loaded), new Map([[1, 2], [2, 1]]))
+  assert.equal(reordered.support_filament, '2')
+  assert.equal(reordered.support_interface_filament, '2')
+})

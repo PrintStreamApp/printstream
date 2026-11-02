@@ -182,12 +182,19 @@ export function resolveFilamentColorName(input: FilamentColorInput): string | nu
 export function resolveFilamentIdentity(
   input: FilamentColorInput & { spool?: FilamentSpoolIdentityInput | null }
 ): ResolvedFilamentIdentity {
-  const display = resolveFilamentDisplay(input)
+  const spool: FilamentSpoolIdentityInput | null = input.materialIdentity ?? input.spool ?? null
+  const spoolColor = normalizeHexColor(spool?.colorHex ?? null)
+  const trayColor = normalizeHexColor(input.color) ?? normalizePalette(input.colors, null)[0] ?? null
+  // A tracked colour override owns the swatch too. Keeping a different live
+  // palette painted the picker white while selecting its scalar colour as red.
+  // Preserve the printer's multi-colour palette when its primary colour agrees.
+  const display = resolveFilamentDisplay(spoolColor && spoolColor !== trayColor
+    ? { ...input, color: spoolColor, colors: [spoolColor] }
+    : input)
   const trayInfoIdx = input.trayInfoIdx?.trim() ?? ''
   const presetName = filamentPresetNameFromId(trayInfoIdx)
   const presetBrand = presetName ? brandFromPresetName(presetName) : null
   const genuineBambu = isGenuineBambuTray(input)
-  const spool: FilamentSpoolIdentityInput | null = input.materialIdentity ?? input.spool ?? null
 
   // Subtype only when the tray's preset id declares it, never inferred from the
   // bare filament type (that inference is what branded custom PLA "PLA Basic").
@@ -198,7 +205,7 @@ export function resolveFilamentIdentity(
   // user-assigned Bambu preset id on custom filament yields no brand claim.
   const trayBrand = genuineBambu ? 'Bambu' : (presetBrand && presetBrand !== 'Bambu' && presetBrand !== 'Generic' ? presetBrand : null)
 
-  const colorHex = normalizeHexColor(spool?.colorHex ?? null) ?? normalizeHexColor(input.color) ?? display.colors[0] ?? null
+  const colorHex = spoolColor ?? normalizeHexColor(input.color) ?? display.colors[0] ?? null
 
   return {
     genuineBambu,

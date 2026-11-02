@@ -237,6 +237,19 @@ model WorkspaceSubscription {
   priceId              String?
   /// Billable printer quantity most recently reported to Paddle.
   printerQuantity      Int       @default(0)
+  /// Null denotes legacy per-printer billing; never reinterpret printerQuantity as blocks.
+  /// Verified initial purchase quote. Null on legacy or non-live receipts that never authorized Pro.
+  billingQuoteId String?
+  pricingVersionId     String?
+  billingCurrency      String?
+  blockQuantity        Int?
+  blockUnitMinor       Int?
+  promoDiscountId      String?
+  promoApplied         Boolean   @default(false)
+  blockPriceId         String?
+  /// Provider event time prevents older webhooks from replacing newer confirmed quantities.
+  providerUpdatedAt    DateTime?
+  billingEffectsPending Boolean @default(false)
   /// Printers granted free by a platform admin: raises the Free-plan cap and is
   /// excluded from Pro per-printer billing.
   compedPrinters       Int       @default(0)
@@ -384,6 +397,17 @@ model SelfHostedSubscription {
   paddleSubscriptionId String?   @unique
   priceId              String?
   printerQuantity      Int       @default(0)
+  /// Null denotes legacy per-printer billing; never reinterpret printerQuantity as blocks.
+  pricingVersionId     String?
+  billingCurrency      String?
+  blockQuantity        Int?
+  blockUnitMinor       Int?
+  promoDiscountId      String?
+  promoApplied         Boolean   @default(false)
+  blockPriceId         String?
+  /// Provider event time prevents older webhooks from replacing newer confirmed quantities.
+  providerUpdatedAt    DateTime?
+  billingEffectsPending Boolean @default(false)
   currentPeriodEnd     DateTime?
   canceledAt           DateTime?
   scheduledCancelAt    DateTime?
@@ -2198,4 +2222,155 @@ model WorkspaceTag {
   spools      FilamentSpool[] @relation("SpoolTags")
 
   @@unique([workspaceId, entityKind, nameKey])
+}
+
+/// Cloud-only global immutable catalog. Retained subscriptions refer to historical
+/// ids; rows must never be swept or rewritten. No customer/workspace data lives here.
+model BillingPriceVersion {
+  id          String   @id
+  environment String
+  fingerprint String
+  /// Null on historical approvals that promised only new-subscriber pricing.
+  priceReductionPolicy String?
+  promoDiscountId String
+  prices      Json
+  bindings    Json
+  effectiveAt DateTime
+  createdAt   DateTime @default(now())
+  @@index([environment])
+}
+
+/// Cloud-only active catalog pointer and monthly review lease, one per provider
+/// environment. Claims are fenced by a random token; no request workspace applies.
+model BillingPricingState {
+  id              String   @id
+  activeVersionId String?
+  reviewPeriod    String?
+  leaseToken      String?
+  leaseUntil      DateTime?
+  lastError       String?
+  updatedAt       DateTime @updatedAt
+}
+
+/// Cloud-only immutable proposal payload plus mutable decision/publication receipt.
+/// Edits insert a new row and supersede the old one. Evidence is retained indefinitely
+/// for billing audit. periodKey is environment-prefixed and unique for monthly runs.
+model BillingPriceReview {
+  id                  String   @id @default(cuid())
+  environment         String
+  periodKey           String?  @unique
+  status              String
+  baseVersionId       String?
+  fingerprint         String
+  prices              Json
+  currentPrices       Json?
+  observations        Json?
+  observationDate     String?
+  driftBasisPoints    Json?
+  checkedAt           DateTime @default(now())
+  expiresAt           DateTime
+  effectiveAt         DateTime?
+  approvedBy          String?
+  approvedAt          DateTime?
+  leaseToken          String?
+  leaseUntil          DateTime?
+  /// Confirmed per-currency/provider bindings accumulated before atomic activation.
+  bindings            Json     @default("[]")
+  /// Set before a non-idempotent create; uncertain outcomes need readback, never blind recreation.
+  pendingBinding      String?
+  error               String?
+  attempts            Int      @default(0)
+  notificationOptionalDispatchedAt DateTime?
+  notificationDeliveredAt  DateTime?
+  notificationToken   String?
+  notificationUntil   DateTime?
+  @@index([environment, status])
+}
+
+/// Cloud-only append-only money-operation history. activeSubscriptionId is unique
+/// while the provider outcome or local effects are unresolved; expiry never clears it.
+/// Subsequent desired blocks may change, but target/preimage remain immutable.
+/// Deferred reductions are evidence-only snapshots with no active identity; a
+/// later editable attempt must create a new fenced operation with fresh evidence.
+model BillingSubscriptionOperation {
+  id                   String   @id
+  environment          String
+  subscriptionId       String
+  activeSubscriptionId String?  @unique
+  product              String
+  kind                 String   @default("quantity")
+  /// Price reductions retain both contracts; quantity operations leave these null.
+  sourcePricingVersionId String?
+  targetUnitMinor      Int?
+  status               String
+  desiredBlocks        Int
+  targetBlocks         Int
+  pricingVersionId     String
+  currency             String
+  priceId              String
+  preimage             Json
+  confirmedReceipt     Json?
+  effectsPending       Boolean  @default(false)
+  error                String?
+  createdAt            DateTime @default(now())
+  submittedAt          DateTime?
+  confirmedAt          DateTime?
+  @@index([environment, status])
+  @@index([subscriptionId, createdAt])
+}
+
+/// Cloud-only provider revision watermark, including cancellation-before-activation
+/// tombstones. Retained as billing evidence even when no licence was ever issued.
+model BillingSubscriptionReceipt {
+  id                String   @id
+  environment       String
+  product           String
+  providerUpdatedAt DateTime
+  status            String
+}
+
+/// Cloud-only durable billing notices. Payloads contain safe ids/counts only;
+/// licence keys and recipients are resolved at delivery time. Retain receipts
+/// for audit; a lease retry may duplicate an externally accepted email.
+model BillingNotificationOutbox {
+  id          String   @id
+  environment String
+  kind        String
+  payload     Json
+  createdAt   DateTime @default(now())
+  sentAt      DateTime?
+  leaseToken  String?
+  leaseUntil  DateTime?
+  attempts    Int      @default(0)
+  error       String?
+  @@index([environment, sentAt, leaseUntil])
+}
+
+/// Cloud-only short-lived checkout initiation quote, scoped to an authorized
+/// workspace or billing account by targetId/product. Once a provider checkout
+/// is issued it remains an immutable version-locked offer; local expiry does
+/// not claim to cancel that provider transaction. Retain issued receipts for audit.
+model BillingCheckoutQuote {
+  id             String   @id @default(cuid())
+  environment    String
+  product        String
+  targetId       String
+  targetKind     String?
+  versionId      String
+  fingerprint    String
+  currency       String
+  blockQuantity  Int
+  regularUnitMinor Int
+  /// Exact provider conversion evidence for one-time products; null for fixed Pro prices.
+  providerSnapshot Json?
+  promoEligible  Boolean
+  expiresAt      DateTime
+  status         String   @default("pending")
+  transactionId  String?  @unique
+  fulfilledAt    DateTime?
+  fulfilledLicenseId String?
+  checkoutUrl    String?
+  error          String?
+  createdAt      DateTime @default(now())
+  @@index([environment, targetId])
 }

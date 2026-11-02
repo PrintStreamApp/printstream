@@ -255,7 +255,9 @@ export const slicingManualProfileTargetSchema = slicingBaseTargetSchema.extend({
    * threw away its start G-code, accelerations and limits. Absent means "not stated": treated as
    * NOT chosen, which is the preserving direction.
    */
-  printerProfileChosen: z.boolean().optional()
+  printerProfileChosen: z.boolean().optional(),
+  /** Explicit process authoring, including an empty override map after reset. Persists across saves. */
+  processProfileChosen: z.boolean().optional()
 })
 export type SlicingManualProfileTarget = z.infer<typeof slicingManualProfileTargetSchema>
 

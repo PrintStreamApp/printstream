@@ -366,3 +366,10 @@ test('the flush-into options are available per object, as BambuStudio has them',
     assert.equal(processSettingsCatalog.options[key]?.type, 'bool')
   }
 })
+
+
+test('an empty native changed record does not hide effective project edits when the leaf resolves', async () => {
+  const { resolvedProcessModifiedKeys } = await import('./process-settings.js')
+  assert.deepEqual(resolvedProcessModifiedKeys({ config: { layer_height: '0.28' }, baseConfig: { layer_height: '0.2' },
+    declaresOverrides: true, overriddenKeys: [] }), ['layer_height'])
+})

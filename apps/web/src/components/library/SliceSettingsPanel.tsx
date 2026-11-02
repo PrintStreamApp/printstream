@@ -12,6 +12,7 @@
  * `MaterialEditDialog`. State stays owned by the caller; only values/setters flow
  * through the controller.
  */
+import { ProcessPresetPicker } from './ProcessPresetPicker'
 import { memo } from 'react'
 import type React from 'react'
 import type { ReactNode } from 'react'
@@ -226,8 +227,11 @@ export interface SliceSettingsController {
    * project's settings from inside the editor; ordinary library invalidations must NOT call it.
    */
   refreshProjectIndex?: () => void
+  /** Editor registers its pinned archive reader; the host uses it for all project process lookups. */
+  setProjectProcessSettingsReader?: (reader: (() => Promise<string | null>) | null) => void
   compatibleProcessProfiles: SlicingPresetSummary[]
   selectedProcessProfile: SlicingPresetSummary | null
+  currentProcessProfileId?: string
   processProfileModified: boolean
   setProcessProfileId: React.Dispatch<React.SetStateAction<string>>
   setProcessSettingOverrides: React.Dispatch<React.SetStateAction<Record<string, string | string[]>>>
@@ -350,17 +354,20 @@ export interface SliceSettingsController {
    * Null when the selection matches the source model (no machine switch needed on save).
    */
   retargetTarget: SlicingManualProfileTarget | null
+  /** Preparation errors leave slots and undo history untouched. */
+  materialChangeError?: string | null
+  // beforeCommit checkpoints scene/config only after asynchronous process preparation succeeds.
   onAddFilament: (choice: AddedMaterialChoice) => void
-  onSyncFilaments: (choices: AddedMaterialChoice[]) => void
+  onSyncFilaments: (choices: AddedMaterialChoice[], beforeCommit?: () => void) => void
   onUpsertMixedFilament: (choice: MixedMaterialChoice) => void
-  onRemoveFilament: (projectFilamentId: number, replacementId?: number) => void
+  onRemoveFilament: (projectFilamentId: number, replacementId?: number, beforeCommit?: () => void) => void
   /**
    * Drag-reorder a material to an insertion gap (0..N, between-rows semantics: same conversion
    * as the plate strip's `movePlate`). Slot NUMBERS are positional identity in the saved 3MF, so
    * the reorder is persisted by the next save renumbering the slots; session ids stay stable
    * meanwhile and row numbers are derived from position. Editor mode only, like add/remove.
    */
-  onReorderFilament: (fromIndex: number, insertAt: number) => void
+  onReorderFilament: (fromIndex: number, insertAt: number, beforeCommit?: () => void) => void
   /**
    * Whether a material is assigned to any object/part (the 3D editor supplies live usage).
    * When true, removal asks for a replacement. Absent means no known scene usage.
@@ -556,7 +563,7 @@ export const SliceSettingsPanel = memo(function SliceSettingsPanel({ controller,
     nozzleDiameter, setNozzleDiameter, nozzleDiameterOptions, nozzleFlow, setNozzleFlow,
     plateType, setPlateType, plateTypeOptions,
     plateMode, setPlateMode, sceneEdit, setSceneEdit, plateNumber, setPlateNumber, slicePlateOptions, setPreviewFileId,
-    compatibleProcessProfiles, selectedProcessProfile, processProfileModified, setProcessProfileId, setProcessSettingOverrides,
+    compatibleProcessProfiles, selectedProcessProfile, currentProcessProfileId, setProcessProfileId, setProcessSettingOverrides,
     processProfileSelectionTouchedRef, selectedSlicerTargetIdForGuards, processSettingOverrides, setProcessSettingsDialogOpen, settingsEditListenerRef, resolveConfig, resolveFilamentConfig,
     settingsSearchKey, setSettingsSearchKey,
     machineSettingOverrides, setMachineSettingOverrides, machineOverridesModel, setMachineOverridesModel,
@@ -649,7 +656,11 @@ export const SliceSettingsPanel = memo(function SliceSettingsPanel({ controller,
   // controller a (fromIndex, insertion gap) pair and the save renumbers the slots. Same pointer
   // state machine as the editor's plate strip, so touch gets hold-to-drag here too.
   const materialRowIndices = useMemo(() => projectFilaments.map((_unused, index) => index), [projectFilaments])
-  const materialDrag = useSingleListReorderDrag({ vertical: true, itemIndices: materialRowIndices, onDrop: onReorderFilament })
+  const materialDrag = useSingleListReorderDrag({
+    vertical: true,
+    itemIndices: materialRowIndices,
+    onDrop: (from, insertAt) => onReorderFilament(from, insertAt)
+  })
   const showMaterialReorder = showMaterialEditing && projectFilaments.length > 1
   // What the printer has loaded, for the Add button's menu. Unlike a material ROW there is no slot
   // to prioritize by nozzle yet, so the list is the plain grouped one; empty for a manual-profile
@@ -1127,18 +1138,20 @@ export const SliceSettingsPanel = memo(function SliceSettingsPanel({ controller,
             <FormLabel>Global</FormLabel>
             <Stack direction="row" spacing={1} alignItems="center">
               <Box sx={{ flex: 1, minWidth: 0 }}>
-                <SlicingPresetAutocomplete
+                <ProcessPresetPicker
                   profiles={compatibleProcessProfiles}
                   value={selectedProcessProfile}
-                  placeholder="Choose a process preset"
-                  ariaLabel="Preset"
-                  modified={processProfileModified || processChangedCount > 0}
-                  onChange={(profile) => {
-                    // Snapshot the pre-switch profile+overrides for undo/dirty (no-op outside the editor).
+                  currentProfileId={currentProcessProfileId}
+                  targetId={selectedSlicerTargetIdForGuards || null}
+                  sourceFileId={file.id}
+                  overrides={processSettingOverrides}
+                  resolveConfig={resolveConfig}
+                  modified={processChangedCount > 0}
+                  onChange={(profileId, overrides) => {
                     settingsEditListenerRef.current?.()
                     processProfileSelectionTouchedRef.current = true
-                    setProcessProfileId(profile?.id ?? '')
-                    setProcessSettingOverrides({})
+                    setProcessProfileId(profileId)
+                    setProcessSettingOverrides(overrides)
                   }}
                 />
               </Box>
@@ -1281,6 +1294,7 @@ export const SliceSettingsPanel = memo(function SliceSettingsPanel({ controller,
                 </IconButton>
               </Tooltip>
             )}
+            {controller.materialChangeError && <Alert color="danger">{controller.materialChangeError}</Alert>}
             {showMaterialEditing && (loadedMaterialsForAdd.length > 0 ? (
               // Same two choices the row swatch offers, for the same reason: a material the printer
               // is already holding should not have to be named by hand.

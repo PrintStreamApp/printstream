@@ -9,6 +9,7 @@ import { after, afterEach, test } from 'node:test'
 import type { LibraryFile, ThreeMfIndex } from '@printstream/shared'
 import { installJsdomGlobals } from '../../test-utils/jsdom'
 import type { SliceProjectFilament } from './useMaterialSlots'
+import { buildSliceMaterialOptions } from '../../lib/slicingPresetMatching'
 
 const dom = installJsdomGlobals()
 
@@ -202,18 +203,25 @@ test('a nozzle the machine does not have is never emitted, and the stale pick is
     baseProjectFilaments: [{ projectFilamentId: 1, label: 'PLA', color: '#111111', nozzleId: 1, usedOnSelectedPlate: true }],
     filamentProfiles: [],
     compatibleFilamentProfiles: [],
-    materialOptions: [],
+    materialOptions: buildSliceMaterialOptions([{ id: 'builtin:filament:PLA', name: 'PLA', kind: 'filament', source: 'builtin' }], []),
     selectedMachineProfile: null,
     toolheadOptions: DUAL
   }
   const view = renderHook((p: typeof props) => useMaterialSlots(p), { initialProps: props })
-  act(() => { view.result.current.setFilamentToolheadIds({ 1: 'nozzle-1' }) })
+  act(() => {
+    view.result.current.setFilamentToolheadIds({ 1: 'nozzle-1' })
+    view.result.current.setFilamentMaterialOptionIds({ 1: 'profile:builtin:filament:PLA' })
+  })
   assert.equal(view.result.current.desiredFilaments?.[0]?.nozzleId, 1, 'the left nozzle is valid on a dual-nozzle machine')
+
+  assert.equal(view.result.current.filamentMappingResult.mappings[0]?.toolheadId, 'nozzle-1')
 
   // Switch to a single-nozzle machine: its only toolhead carries no nozzle id.
   act(() => { view.rerender({ ...props, toolheadOptions: [{ id: 'primary' }] }) })
   assert.equal(view.result.current.desiredFilaments?.[0]?.nozzleId, null, 'no nozzle may be emitted for a single-nozzle machine')
   assert.deepEqual(view.result.current.filamentToolheadIds, {}, 'the stale dual-nozzle pick is dropped from the UI too')
+  assert.deepEqual(view.result.current.filamentMappingResult.unresolved, [])
+  assert.equal(view.result.current.filamentMappingResult.mappings[0]?.toolheadId, undefined, 'the slice request must not restore the source second nozzle after the editor cleared it')
 })
 
 test('a removed slot keeps its per-slot state, so restoring a snapshot brings the material back whole', () => {

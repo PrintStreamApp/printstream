@@ -1,6 +1,6 @@
 /**
- * Owns the pause and commit of a staged model with retained source colours. Geometry, colour
- * paint, and appended project filaments form one user gesture and therefore one history frame.
+ * Owns the ordered queue and commit of staged models with retained source colours. Each model's
+ * geometry, colour paint, and appended project filaments form one gesture and one history frame.
  * EditorView supplies the geometry commit functions and renders SourceColorImportDialog.
  */
 import { useCallback, useState, type MutableRefObject } from 'react'
@@ -51,7 +51,11 @@ export function useEditorSourceColorImport(options: SourceColorImportOptions) {
     importStore, filaments, materialOptionIds, onAddFilament,
     recordCombinedHistory, addStagedImport, replaceWithStagedRef
   } = options
-  const [pending, setPending] = useState<PendingSourceColorImport | null>(null)
+  const [queue, setQueue] = useState<PendingSourceColorImport[]>([])
+  const pending = queue[0] ?? null
+  // A batch may stage another coloured model while the first dialog is open. Preserve each
+  // choice and advance only its head; overwriting pending would silently lose earlier models.
+  const advance = useCallback(() => setQueue((current) => current.slice(1)), [])
   const canAppend = Boolean(onAddFilament && filaments.some((option) => materialOptionIds?.[option.id] != null))
 
   /** Pause a staged model for mapping when it carries source appearance. */
@@ -66,13 +70,14 @@ export function useEditorSourceColorImport(options: SourceColorImportOptions) {
       importStore.fetchMesh(staged.importId)
     ])
     if (!sourceColors) return false
-    setPending({
+    const entry: PendingSourceColorImport = {
       staged,
       sourceColors,
       sourceColorMode,
       mesh: parseStlMesh(new Uint8Array(meshBytes)),
       target
-    })
+    }
+    setQueue((current) => [...current, entry])
     return true
   }, [importStore])
 
@@ -100,9 +105,9 @@ export function useEditorSourceColorImport(options: SourceColorImportOptions) {
     // The controller allocates the predicted ids in order. React batches these filament writes
     // with the geometry and paint, while the combined frame restores both ownership domains.
     for (const filament of plan.appended) onAddFilament?.(filament)
-    setPending(null)
+    advance()
     toast.success(`${pending.target.kind === 'add' ? 'Imported' : 'Replaced with'} ${pending.staged.name} with ${choice.quantized.clusters.length} source colours`)
-  }, [addStagedImport, filaments, materialOptionIds, onAddFilament, pending,
+  }, [addStagedImport, advance, filaments, materialOptionIds, onAddFilament, pending,
     recordCombinedHistory, replaceWithStagedRef])
 
   /** Import the staged geometry while deliberately discarding its source appearance. */
@@ -113,10 +118,10 @@ export function useEditorSourceColorImport(options: SourceColorImportOptions) {
       : replaceWithStagedRef.current(pending.target.key, pending.staged)
     if (!committed) return
     toast.success(`${pending.target.kind === 'add' ? 'Imported' : 'Replaced with'} ${pending.staged.name} without source colours`)
-    setPending(null)
-  }, [addStagedImport, pending, replaceWithStagedRef])
+    advance()
+  }, [addStagedImport, advance, pending, replaceWithStagedRef])
 
-  const cancelSourceColors = useCallback(() => setPending(null), [])
+  const cancelSourceColors = advance
 
   return { pending, canAppend, queueSourceColorMapping,
     applySourceColors, skipSourceColors, cancelSourceColors }

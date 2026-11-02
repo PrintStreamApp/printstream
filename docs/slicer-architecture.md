@@ -1391,6 +1391,8 @@ browser, so the one tier with a genuinely incomplete baseline was also the one t
   strips engine output to the last system line. Both exist because a collision whose real cause was
   one model's supports reaching into another reached the user as one wrong sentence, with the line
   that named both models visible only in the container log.
+  A tower conflict also names the generated supports and tower brim as possible causes: their
+  paths can overlap even when the editor's model mesh and estimated tower box look separate.
 - **A from-scratch project's settings must survive the save.** A new-project scaffold
   (`buildEditedThreeMf(null, …)`) embeds no `Metadata/project_settings.config`, so the save path
   synthesizes one: `buildEditedThreeMf` composes the filament / plate-type (`curr_bed_type`) /
@@ -1625,7 +1627,11 @@ browser, so the one tier with a genuinely incomplete baseline was also the one t
   `<filament>` `group_id` is moved onto the chosen nozzle (it outranks `filament_nozzle_map` once a
   project has concrete slice usage), and `extruder_nozzle_stats` is rebuilt so a stale single-active
   reading can't short-circuit every filament onto one nozzle. The read side (`extractNozzleMapping`)
-  and this write side share `sliceExtruderForNozzleId` so they cannot drift; cover any change with a
+  and this write side share `sliceExtruderForNozzleId` for the physical-extruder conversion. In
+  modern sliced files, a filament's `group_id` references a plate-local `<nozzle id>` whose
+  `extruder_id` is a ONE-based index into `physical_extruder_map`; multiple nozzle groups can feed
+  one physical head. Both parser and editor writer resolve that table before using the extruder
+  map. Legacy files without nozzle entries retain direct extruder group ids. Cover any change with a
   read→write→read round-trip through `buildThreeMfIndex`.
 - **A project snapshot is only written for a slice whose output was persisted.** Snapshot rows are
   exempt from every cleanup pass, so one written for a cancelled, failed, or discarded slice is

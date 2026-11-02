@@ -250,7 +250,7 @@ test('subscribePrinterNotifications formats pause and error messages from status
   assert.equal(received[0]?.category, 'job.paused')
   assert.equal(received[0]?.level, 'warning')
   assert.equal(received[0]?.title, 'Printer 1: Print paused')
-  assert.equal(received[0]?.body, 'Job: Calibration cube')
+  assert.equal(received[0]?.body, 'Job: Calibration cube\nAwaiting user action')
   assert.equal(received[1]?.category, 'job.error')
   assert.equal(received[1]?.level, 'error')
   assert.equal(received[1]?.title, 'Printer 1: Print error')
@@ -270,6 +270,78 @@ function stubNotificationLookups() {
 const HMS_A = { code: '0300-0100-0001', message: 'Nozzle issue' }
 const HMS_B = { code: '0500-0200-0002', message: 'AMS filament jam' }
 const HMS_C = { code: '0700-0300-0003', message: 'Chamber overheating' }
+
+test('an intentional pause sends one warning with its reason and no duplicate error', async () => {
+  stubNotificationLookups()
+  const bus = new PrinterEventBus()
+  const received: NotificationMessage[] = []
+  const dispose = subscribePrinterNotifications(bus, (message) => { received.push(message) })
+  const pause = { code: '03008013', message: 'Task paused due to the pause command added to the file.' }
+
+  bus.emit('status', makeStatus())
+  bus.emit('status', makeStatus({ stage: 'paused', deviceError: pause }))
+  bus.emit('status', makeStatus({ stage: 'paused', deviceError: pause }))
+  // Firmware may retain print_error after Resume.
+  bus.emit('status', makeStatus({ deviceError: pause }))
+  await new Promise((resolve) => setImmediate(resolve))
+  dispose()
+
+  assert.equal(received.length, 1)
+  assert.equal(received[0]?.category, 'job.paused')
+  assert.equal(received[0]?.level, 'warning')
+  assert.equal(received[0]?.body, `Job: Calibration cube\n${pause.message}`)
+})
+
+test('a late intentional pause code does not create an error after the pause warning', async () => {
+  stubNotificationLookups()
+  const bus = new PrinterEventBus()
+  const received: NotificationMessage[] = []
+  const dispose = subscribePrinterNotifications(bus, (message) => { received.push(message) })
+  bus.emit('status', makeStatus())
+  bus.emit('status', makeStatus({ stage: 'paused', subStage: 'M400 pause' }))
+  bus.emit('status', makeStatus({ stage: 'paused', deviceError: { code: '03008013', message: null } }))
+  await new Promise((resolve) => setImmediate(resolve))
+  dispose()
+  assert.deepEqual(received.map(({ category, level }) => ({ category, level })), [
+    { category: 'job.paused', level: 'warning' }
+  ])
+})
+
+test('a concurrent HMS fault still notifies separately from an intentional pause', async () => {
+  stubNotificationLookups()
+  const bus = new PrinterEventBus()
+  const received: NotificationMessage[] = []
+  const dispose = subscribePrinterNotifications(bus, (message) => { received.push(message) })
+  bus.emit('status', makeStatus())
+  bus.emit('status', makeStatus({
+    stage: 'paused',
+    deviceError: { code: '03008013', message: 'Paused by user' },
+    hmsErrors: [HMS_B]
+  }))
+  await new Promise((resolve) => setImmediate(resolve))
+  dispose()
+  assert.equal(received.length, 2)
+  assert.equal(received[0]?.level, 'warning')
+  assert.equal(received[1]?.category, 'job.error')
+  assert.equal(received[1]?.level, 'error')
+  assert.equal(received[1]?.body, 'Job: Calibration cube\nAMS filament jam')
+})
+
+test('unknown faults still notify, while cancellation records do not create errors', async () => {
+  stubNotificationLookups()
+  const bus = new PrinterEventBus()
+  const received: NotificationMessage[] = []
+  const dispose = subscribePrinterNotifications(bus, (message) => { received.push(message) })
+  bus.emit('status', makeStatus())
+  bus.emit('status', makeStatus({ deviceError: { code: '0300400C', message: 'The task was canceled.' } }))
+  bus.emit('status', makeStatus({ deviceError: { code: '0500400E', message: 'Printing was cancelled.' } }))
+  bus.emit('status', makeStatus({ deviceError: { code: 'FFFFFFFF', message: 'Unknown fault' } }))
+  await new Promise((resolve) => setImmediate(resolve))
+  dispose()
+  assert.equal(received.length, 1)
+  assert.equal(received[0]?.level, 'error')
+  assert.equal(received[0]?.body, 'Job: Calibration cube\nUnknown fault')
+})
 
 test('AMS refill handoff stays quiet while a real fault still notifies', async () => {
   stubNotificationLookups()

@@ -48,6 +48,8 @@ const ALLOWED_WRITERS = new Set([
   'packages/shared/src/machine-retarget.ts',
   'packages/shared/src/filament-rebind.ts',
   'packages/shared/src/filament-preset-binding.ts',
+  // Uses the final project's filament identity arrays and shared helpers to write process slot 0.
+  'packages/shared/src/process-preset-binding.ts',
   // The bake's final settings pass delegates `inherits_group` sizing to its repair helper.
   'packages/shared/src/three-mf/bake-project-settings-finishing.ts',
   // The repair stage: it owns the SIZE of `inherits_group`, which is the one defect the writers

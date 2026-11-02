@@ -27,10 +27,11 @@ import { Data, NtExecutable, NtExecutableResource, Resource } from 'resedit'
 export const SEA_SENTINEL_FUSE = 'NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2'
 // The ONE Node version every distribution ships. The Docker image pins its
 // base to the same version (ARG NODE_VERSION in the root Dockerfile); bump
-// both together, deliberately, and let the bump ride through staging. Keeping
-// these aligned is load-bearing: a floating Docker tag once picked up a Node
-// patch whose TLS regression broke H2D FTPS on Docker installs only.
-export const DEFAULT_NODE_VERSION = '22.22.3'
+// both together, deliberately, and let the bump ride through staging. 22.23.4
+// fixes CVE-2026-111497. The FTPS transport already avoids nodejs/node#64402's
+// wrapped-socket session regression with fresh TLS data sockets; retaining an
+// older vulnerable runtime is not a compatibility fix.
+export const DEFAULT_NODE_VERSION = '22.23.4'
 
 /** Node download coordinates per target key (`${process.platform}-${process.arch}`). */
 export const SEA_TARGETS = {

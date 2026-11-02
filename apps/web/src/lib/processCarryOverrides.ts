@@ -9,13 +9,13 @@
  * Why it matters: a project's customizations (e.g. `wall_loops`) live in its BAKED config, not the
  * session override map. On the project's own preset they are used implicitly. The moment a machine
  * switch re-picks a builtin, `applyProcessProfileToProjectSettings` overwrites every process key, so
- * anything not surfaced as an override is silently lost. The caller resolves the project preset
- * against NO target (`targetId: null`) so the system baseline is matched by NAME regardless of the
- * machine currently selected, a machine-scoped resolve would fail to find an A1 baseline once the
- * target is H2D, collapsing the diff to empty and dropping the carry.
+ * anything not surfaced as an override is silently lost. Resolve the selected leaf by name in the
+ * current engine catalogue, independently of the machine selection, and compare current values
+ * AFTER applying session edits, so a reset removes rather than resurrects a saved modification.
  */
 import {
   applyProcessConfigDefaults,
+  isProcessSettingKey,
   diffProcessConfig,
   type ProcessSettingOverrides,
   type ResolveProcessConfigResponse
@@ -27,22 +27,20 @@ import {
  * project with no real deltas.
  *
  * When the baseline resolved, the deltas are the value-diff of the effective config against it. When
- * it did NOT (parent preset not installed, so the endpoint returns the 3MF's own
- * `different_settings_to_system` as `overriddenKeys`), that list is authoritative: valued from the
- * effective config.
+ * it did NOT, keep every explicitly saved process value: incomplete native metadata cannot prove
+ * that a setting was unmodified. The picker explains this conservative transfer to the user.
  */
 export function deriveProjectCarryOverrides(
-  resolve: ResolveProcessConfigResponse | null | undefined
+  resolve: ResolveProcessConfigResponse | null | undefined,
+  sessionOverrides: ProcessSettingOverrides = {}
 ): ProcessSettingOverrides {
-  if (!resolve) return {}
-  const effective = applyProcessConfigDefaults(resolve.config)
-  if (resolve.overriddenKeys.length > 0) {
-    const carry: ProcessSettingOverrides = {}
-    for (const key of resolve.overriddenKeys) {
-      const value = effective[key]
-      if (value !== undefined) carry[key] = value
-    }
-    return carry
+  if (!resolve) return { ...sessionOverrides }
+  const effective = applyProcessConfigDefaults({ ...resolve.config, ...sessionOverrides })
+  if (resolve.baselineResolved === false) {
+    // A missing leaf gives us no way to separate inherited preset values from project changes.
+    // Keep conservatively retains every saved process value, including files whose old writer
+    // emitted an empty native record. Discard is the user's explicit way to take the new baseline.
+    return Object.fromEntries(Object.entries({ ...resolve.config, ...sessionOverrides }).filter(([key]) => isProcessSettingKey(key)))
   }
   return diffProcessConfig(applyProcessConfigDefaults(resolve.baseConfig), effective)
 }

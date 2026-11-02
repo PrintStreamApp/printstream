@@ -19,6 +19,9 @@ export const DEV_PORTS = Object.freeze({
 })
 
 export default {
+  // Private worktree volumes removed by archive; shared caches remain.
+  cleanup: { volumes: ["{project}_slicer-data", "{project}_slicer-work"] },
+
   /**
    * Order matters: these are offsets within this checkout's derived block, so reordering moves
    * every service to a different port. `web` first makes it the block's base, which is the one the
@@ -81,18 +84,22 @@ export default {
    * configuration surface to the app itself.
    *
    * `CLIENT_ORIGIN` lists the shared parent origin first so passkeys registered on the primary
-   * checkout remain valid on nested worktree hosts. The current checkout origin remains allowed
-   * for WebAuthn response and CORS validation. Production does not load this Devkit config.
+   * checkout remain valid on nested worktree hosts within each configured domain. Every configured
+   * checkout origin remains allowed for WebAuthn and CORS. Production does not load this config.
    */
-  env: ({ url, identity, ports, configDir }) => {
-    const checkoutOrigin = new URL(url)
-    checkoutOrigin.hostname = `${identity.repoName}.localhost`
-    const passkeyOrigin = checkoutOrigin.origin
+  env: ({ url, urls = [url], identity, ports, configDir }) => {
+    const clientOrigins = urls.flatMap((origin) => {
+      if (identity.isPrimary) return [origin]
+      const parent = new URL(origin)
+      // A worktree adds exactly one DNS label, regardless of the configured domain suffix.
+      parent.hostname = parent.hostname.split('.').slice(1).join('.')
+      return [parent.origin, origin]
+    })
 
     return {
       API_PORT: DEV_PORTS.api,
       METRICS_PORT: DEV_PORTS.metrics,
-      CLIENT_ORIGIN: identity.isPrimary ? url : `${passkeyOrigin},${url}`,
+      CLIENT_ORIGIN: [...new Set(clientOrigins)].join(','),
       // The bridge runs on the WSL host so Docker Desktop cannot cut it off from the printer LAN.
       // Its API target must therefore be this checkout's derived loopback port, not the container's
       // fixed internal port. Every worktree receives a different `ports.api` value.

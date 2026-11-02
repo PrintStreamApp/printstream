@@ -9,7 +9,7 @@
  */
 import type { PrinterStage, PrinterStatus } from './printer-contracts.js'
 import { isPrinterActiveJobStage } from './printer-capabilities.js'
-import { hasPrinterErrorReport } from './printer-error-state.js'
+import { hasPrinterErrorReport, isIntentionalPrintPause } from './printer-error-state.js'
 import { isFilamentTrackSwitchInstalled, isFilamentTrackSwitchReady } from './filament-track-switch.js'
 
 export type PrinterActionAvailability = {
@@ -140,9 +140,8 @@ export function getLoadFilamentAvailability(
 
 /**
  * Both recovery entry points below run on {@link hasPrinterErrorReport} rather
- * than "any error is set", so a print the user cancelled does not offer a
- * recovery surface. A cancellation reaches us as a FAILED stage plus a
- * `print_error`, which is indistinguishable from a fault without that check.
+ * than "any error is set", so cancellations and intentional pauses do not offer
+ * fault recovery. Both reach us with a `print_error`, just like real faults.
  */
 export function getCheckAssistantAvailability(
   status: Pick<PrinterStatus, 'online' | 'stage' | 'deviceError' | 'hmsErrors'> | null | undefined
@@ -277,6 +276,9 @@ export function getIgnoreHmsErrorAvailability(
   if (status?.online !== true) return blockPrinterAction('Continue is only available while the printer is connected')
   if (status.stage !== 'paused') return blockPrinterAction('Continue is only available while the printer is paused')
   if (status.deviceError == null) return blockPrinterAction('Continue is only available while the printer is paused on a warning')
+  if (isIntentionalPrintPause(status.deviceError)) {
+    return blockPrinterAction('Use Resume to continue an intentional pause')
+  }
   if (isPausedFilamentRunoutWarning(status)) {
     return blockPrinterAction('Continue is not available while the printer is paused on filament runout')
   }

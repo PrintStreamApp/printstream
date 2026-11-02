@@ -11,8 +11,9 @@
  * with the caller: it is a property of the file being written, not of the host writing it. Which
  * passes are WANTED is a different question, answered by `editorBakePasses.ts`.
  *
- * Every pass is best-effort. A save that produced a file the user asked for must not fail because a
- * preset would not resolve; the alternative loses their work over a setting.
+ * Machine recovery passes are best-effort. Explicit process authoring fails the save on resolution
+ * failure rather than acknowledging a choice that was never written. Recovery passes preserve the
+ * existing project when optional catalogue data is unavailable, so recovery cannot discard work.
  */
 import {
   THREE_MF_PROJECT_SETTINGS_ENTRY,
@@ -45,6 +46,7 @@ import { applyClientSliceSettings, type ClientSliceSettingsPass } from './client
  * key it writes in `different_settings_to_system`, and that record is what makes a later machine
  * rebind PRESERVE the user's edit instead of rebinding it away. The MACHINE step then rebuilds the
  * topology (extruder count, per-slot vectors, flush sizing) that every later write indexes by. The
+ * PROCESS authoring then uses the final machine and records its own identity and native deltas. The
  * machine OVERRIDES come last because they share a key space with the resolved preset, so applying
  * them earlier lets the preset overwrite the user's values, which looks exactly like the feature not
  * working. See `applyMachineRetargetToProjectSettings` for the canonical statement of it.
@@ -70,12 +72,19 @@ export async function applyBakeSettingsPasses(
   if (!retargeted && passes.machineTopologyHeal) {
     await healMachineTopologyInEntries(output, edit, passes.machineTopologyHeal)
   }
+  if (passes.processSettings) {
+    const entry = output[THREE_MF_PROJECT_SETTINGS_ENTRY]
+    const settings = entry?.length ? JSON.parse(new TextDecoder().decode(entry)) as ProfileRecord : {}
+    output[THREE_MF_PROJECT_SETTINGS_ENTRY] = new TextEncoder().encode(JSON.stringify(await passes.processSettings(settings, { machineRetargeted: retargeted })))
+  }
   if (passes.machineSettingOverrides) {
     await applyMachineOverridesToEntries(output, passes.machineSettingOverrides)
   }
 }
 
 export interface ClientBakeSettingsPasses {
+  /** Final process authoring, independent of machine changes; rejects on failed resolution. */
+  processSettings?: (settings: ProfileRecord, context?: { machineRetargeted: boolean }) => Promise<ProfileRecord>
   /** Exact engine input authoring. Mutually exclusive with the save-oriented passes below. */
   sliceTarget?: ClientSliceSettingsPass
   /** Public-host policy: clear operating-system post-processing commands after warning the user. */

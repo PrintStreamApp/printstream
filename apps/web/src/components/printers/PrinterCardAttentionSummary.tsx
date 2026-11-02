@@ -6,11 +6,11 @@
 import { type RefObject } from 'react'
 import { IconButton, Stack } from '@mui/joy'
 import { OverflowTooltipText } from '../OverflowTooltipText'
+import type { PrinterAttentionSummary } from '../../lib/printerProgressSummary'
 
 export interface PrinterCardAttentionSummaryProps {
   text: string
-  /** HMS warnings render warning-toned; everything else renders danger-toned. */
-  isHmsError: boolean
+  summary: PrinterAttentionSummary
   observeRef: RefObject<HTMLElement | null>
   clearing: boolean
   onClear?: () => void
@@ -18,7 +18,7 @@ export interface PrinterCardAttentionSummaryProps {
 
 export function PrinterCardAttentionSummary({
   text,
-  isHmsError,
+  summary,
   observeRef,
   clearing,
   onClear
@@ -31,14 +31,14 @@ export function PrinterCardAttentionSummary({
         sx={{
           minWidth: 0,
           flex: 1,
-          color: isHmsError
+          color: summary.kind !== 'deviceError'
             ? 'var(--joy-palette-warning-300)'
             : 'var(--joy-palette-danger-300)'
         }}
         text={text}
         observeRef={observeRef}
       />
-      {onClear && (
+      {onClear && summary.kind !== 'intentionalPause' && (
         <IconButton
           size="sm"
           variant="plain"

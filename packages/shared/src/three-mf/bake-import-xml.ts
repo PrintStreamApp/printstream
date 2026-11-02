@@ -11,6 +11,7 @@ import { parseAttrs } from './index-parser.js'
 import type { ImportedMesh } from './imported-mesh.js'
 import type { TrianglePaintAttribute } from './import-edit-index.js'
 import { escapeXmlAttribute } from './xml-write.js'
+import { formatMeshCoordinate } from './mesh-coordinate.js'
 import { formatThreeMfTransformValue, IDENTITY_THREE_MF_TRANSFORM, productionUuidAttr } from './bake-xml-format.js'
 
 const THREE_MF_3DMODEL_REL_TYPE = 'http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel'
@@ -34,11 +35,6 @@ export function appendImportPartRelationships(baseRelsXml: string | null, partFi
     ...relationships,
     '</Relationships>'
   ].join('\n')
-}
-
-function formatMeshCoordinate(value: number): string {
-  const rounded = Math.round(value * 1e5) / 1e5
-  return Object.is(rounded, -0) ? '0' : String(rounded)
 }
 
 /** Test seam for the import paint contract (see `mesh-import.test.ts`). */

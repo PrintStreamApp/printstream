@@ -63,6 +63,12 @@ export function buildLocalProcessConfigResolver(input: {
       }
       const project = extractProjectProcessConfig(parsed)
       if (!project) throw new Error('Process profile could not be resolved')
+      const storedLeaf = listLocalSlicingPresets().find((preset) => preset.kind === 'process' && preset.name === project.presetName)
+      if (storedLeaf) {
+        const leaf = await buildLocalProcessConfigResolver(input)({ processProfileId: storedLeaf.id, targetId, sourceFileId: null })
+        return { ...leaf, config: project.config, baseConfig: leaf.config,
+          overriddenKeys: project.overriddenKeys, declaresOverrides: project.declaresOverrides }
+      }
       // Baseline, in order of fidelity: (1) a built-in with the EXACT preset name (the project used a
       // standard preset): the value-diff is then the project's own edits; (2) the built-in PARENT of
       // a workspace custom preset (unavailable here), so the diff is a complete, value-accurate
@@ -88,9 +94,8 @@ export function buildLocalProcessConfigResolver(input: {
       // that baseline was a user's change or drift the vendor would normalize away.
       return baseline
         ? { config: project.config, baseConfig: baseline, overriddenKeys: project.overriddenKeys, declaresOverrides: project.declaresOverrides, baselineOrigin }
-        // No preset resolved: `baseConfig` is a stand-in copy, so only the declared record can say
-        // what changed. Flagged explicitly: the payload cannot be told apart from an unmodified
-        // project otherwise. Same contract as the workspace route.
+        // No leaf resolved: `baseConfig` is a stand-in copy. Flag that uncertainty so transfers
+        // conservatively retain explicit project values instead of calling the project unmodified.
         : { config: project.config, baseConfig: project.config, overriddenKeys: project.overriddenKeys, declaresOverrides: project.declaresOverrides, baselineResolved: false, baselineOrigin }
     }
     if (slicingPresetProvenance(processProfileId) === 'builtin') {
@@ -104,9 +109,12 @@ export function buildLocalProcessConfigResolver(input: {
     // until an edit changes it; the parent's values ride in `parentConfig` as emphasis only.
     const stored = listLocalSlicingPresets().find((preset) => preset.id === processProfileId && preset.kind === 'process')
     if (stored) {
-      const { config, parentConfig, parentUnresolved } = await flattenLocalPreset(stored, input.processProfiles,
+      const { config, parentName, parentConfig, parentUnresolved } = await flattenLocalPreset(stored, input.processProfiles,
         async (builtinId) => (await resolveBuiltinProcess(builtinId, targetId)).config ?? null)
+      config.name = stored.name
+      config.print_settings_id = stored.name
       return {
+        preset: { name: stored.name, parentName },
         config,
         baseConfig: config,
         ...(parentConfig ? { parentConfig } : {}),

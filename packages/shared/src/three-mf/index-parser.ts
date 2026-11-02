@@ -122,8 +122,9 @@ export { decodeXmlAttributeValue }
  * v41: each project filament identifies virtual mixed slots, their components, ratios, gradient,
  *      and validation issues. Older cached indexes expose those slots as physical trays.
  * v42: plate indexes include first-layer and ranged later-layer physical filament sequences.
+ * v43: sliced filament groups resolve through each plate's nozzle table before physical mapping.
  */
-export const THREE_MF_INDEX_PARSER_VERSION = 42
+export const THREE_MF_INDEX_PARSER_VERSION = 43
 
 /**
  * Optional archive entries the index parser can use, passed by name rather than by position.
@@ -336,11 +337,12 @@ export function buildThreeMfIndex(
     // the arrangement rule must be able to tell from "sliced, and everything is in one group".
     const optimalAssignment = parseOptimalAssignment(filamentSequenceJson, plate.index)
     if (optimalAssignment) plate.optimalAssignment = optimalAssignment
+    const plateNozzleMap = extractNozzleMapping(projectSettingsJson, sliceInfoXml, plate.index)
     for (const filament of plate.filaments) {
       if (!filament.filamentName) {
         filament.filamentName = projectFilamentMap.get(filament.id)?.filamentName ?? null
       }
-      filament.nozzleId = nozzleMap.get(filament.id) ?? null
+      filament.nozzleId = plateNozzleMap.get(filament.id) ?? null
       filament.chamberTemperature = projectFilamentMap.get(filament.id)?.chamberTemperature ?? null
     }
   }
@@ -826,6 +828,64 @@ function collectPlateNozzleSizes(metaValue: string | undefined, filaments: Bridg
 }
 
 /**
+ * Resolve sliced nozzle groups within their plate, overriding the legacy project hints.
+ * BambuStudio's bbs_3mf importer reads nozzle.extruder_id as one-based; group_id refers to
+ * nozzle.id, NOT an index into physical_extruder_map. Multiple groups can feed one extruder.
+ * Files without a nozzle table retain the older direct-group interpretation below.
+ */
+function extractNozzleMapping(
+  projectSettingsJson: string | null,
+  sliceInfoXml: string | null,
+  plateIndex?: number
+): Map<number, number> {
+  const blocks = (sliceInfoXml?.match(/<plate\b[^>]*>[\s\S]*?<\/plate>/g) ?? [])
+    .filter((block, ordinal) => {
+      if (plateIndex == null) return true
+      // Match parseSliceInfo's fallback for older records without an explicit plate index.
+      const value = /<metadata\s+key="index"\s+value="([^"]*)"\s*\/>/.exec(block)?.[1]
+      const index = Number.parseInt(value ?? '', 10)
+      return (Number.isFinite(index) && index > 0 ? index : ordinal + 1) === plateIndex
+    })
+  const scopedXml = plateIndex == null || sliceInfoXml == null ? sliceInfoXml : blocks.join('\n')
+  const mapping = extractLegacyNozzleMapping(projectSettingsJson, scopedXml)
+  let physicalExtruderMap: string[]
+  try {
+    physicalExtruderMap = stringArray(JSON.parse(projectSettingsJson ?? '{}')?.physical_extruder_map)
+  } catch {
+    return mapping
+  }
+  if (physicalExtruderMap.length < 2) return mapping
+
+  for (const block of blocks) {
+    const nozzleElements = [...block.matchAll(/<nozzle\b([^>]*?)\/?>/g)]
+    if (nozzleElements.length === 0) continue
+    const targets = new Map<number, number>()
+    for (const match of nozzleElements) {
+      const attrs = parseAttrs(match[1] ?? '')
+      const groupId = Number(attrs.id ?? NaN)
+      const extruder = Number(attrs.extruder_id ?? NaN) - 1
+      const target = numberAt(physicalExtruderMap, extruder)
+      if (Number.isInteger(groupId) && groupId >= 0 && target !== null) {
+        targets.set(groupId, normalizeProjectNozzleTarget(target, physicalExtruderMap))
+      }
+    }
+    for (const match of block.matchAll(/<filament\b([^>]*?)\/?>/g)) {
+      const attrs = parseAttrs(match[1] ?? '')
+      const filamentId = Number(attrs.id ?? NaN)
+      if (!Number.isInteger(filamentId) || filamentId <= 0 || attrs.group_id == null) continue
+      const groups = attrs.group_id.split(',').map((id) => id.trim() === '' ? NaN : Number(id))
+      const resolved = groups.map((id) => targets.get(id))
+      const unique = new Set(resolved)
+      // A missing group or a filament that switches between physical heads has no single
+      // nozzle assignment. Never reinterpret its group id as an extruder index in that case.
+      if (unique.size === 1 && resolved[0] != null) mapping.set(filamentId, resolved[0])
+      else mapping.delete(filamentId)
+    }
+  }
+  return mapping
+}
+
+/**
  * Extract per-filament nozzle assignments for dual-nozzle files.
  *
  * The slicer writes two useful hints into `project_settings.config`:
@@ -834,7 +894,7 @@ function collectPlateNozzleSizes(metaValue: string | undefined, filaments: Bridg
  * `slice_info.config` carries `group_id` on `<filament>` elements, that is
  * the stronger signal because it reflects the actual sliced assignment.
  */
-function extractNozzleMapping(
+function extractLegacyNozzleMapping(
   projectSettingsJson: string | null,
   sliceInfoXml: string | null
 ): Map<number, number> {
@@ -947,7 +1007,7 @@ function usesUiOrderedDualNozzleTargets(physicalExtruderMap: string[]): boolean 
 }
 
 /**
- * The slicer-extruder index (a `slice_info` `group_id` / `filament_nozzle_map` slot value)
+ * The slicer-extruder index (a legacy `slice_info` `group_id` / `filament_nozzle_map` slot value)
  * that feeds runtime nozzle `nozzleId` (0 = right, 1 = left) on the project's machine. This is
  * the exact inverse of {@link normalizeProjectNozzleTarget}: it finds the extruder slot `g`
  * whose `physical_extruder_map[g]`, normalized, equals `nozzleId`, so a value written to
@@ -955,6 +1015,7 @@ function usesUiOrderedDualNozzleTargets(physicalExtruderMap: string[]): boolean 
  * The writer that persists an editor nozzle change (`apps/api/src/lib/three-mf-scene-builder.ts`)
  * uses it to keep the read and write paths inverse-free mirrors. Returns null for single-nozzle
  * projects (`physical_extruder_map` shorter than 2) or when no extruder feeds that nozzle.
+ * Modern slice_info nozzle-table ids are a separate space and must be resolved through that table.
  */
 export function sliceExtruderForNozzleId(nozzleId: number, physicalExtruderMap: string[]): number | null {
   if (physicalExtruderMap.length < 2) return null

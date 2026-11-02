@@ -165,13 +165,38 @@ export async function emitPlatformNotification(
   options: PlatformNotificationEmitOptions = {}
 ): Promise<void> {
   try {
+    await dispatchPlatformNotification(event, variables, options)
+  } catch (error) {
+    console.warn('[platform-notifications] failed to emit event', {
+      event, error: error instanceof Error ? error.message : String(error)
+    })
+  }
+}
+
+/**
+ * Dispatch into configured channel handlers, throwing on preparation failure.
+ * True acknowledges bus dispatch only, not external delivery; handlers own their
+ * delivery failures. Durable emitters may retry a failed dispatch with a stable tag.
+ */
+export async function dispatchPlatformNotification(
+  event: string, variables: Record<string, string>, options: PlatformNotificationEmitOptions = {}
+): Promise<boolean> {
+  const message = await preparePlatformNotification(event, variables, options)
+  if (!message) return false
+  printerEvents.emit('platform.notification', { message })
+  return true
+}
+
+/** Render an enabled platform event without pretending event-bus fanout acknowledges delivery. */
+export async function preparePlatformNotification(
+  event: string, variables: Record<string, string>, options: PlatformNotificationEmitOptions = {}
+): Promise<NotificationMessage | null> {
     if (!definitions.has(event)) {
-      console.warn('[platform-notifications] unregistered event dropped', { event })
-      return
+      throw new Error(`Unregistered platform notification event: ${event}`)
     }
     const definition = definitions.get(event)!
     const template = await getPlatformNotificationTemplate(event)
-    if (!template.enabled) return
+    if (!template.enabled) return null
 
     const message: NotificationMessage = {
       id: randomUUID(),
@@ -186,13 +211,7 @@ export async function emitPlatformNotification(
       targetUserIds: options.targetUserIds,
       emailHandledExternally: options.emailHandledExternally
     }
-    printerEvents.emit('platform.notification', { message })
-  } catch (error) {
-    console.warn('[platform-notifications] failed to emit event', {
-      event,
-      error: error instanceof Error ? error.message : String(error)
-    })
-  }
+    return message
 }
 
 /**

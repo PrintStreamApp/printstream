@@ -17,7 +17,7 @@ import { filamentSettingsCatalog } from './filament-settings.js'
 import { filamentKeyWidth, filamentVariantsPerSlot } from './variant-options.js'
 
 export interface ProjectProcessConfig {
-  /** Effective, already-merged process config embedded in the 3MF (catalog keys only). */
+  /** Effective catalog values plus the process column identities needed to compare with a preset. */
   config: ProcessConfig
   /** The project's process preset name (`print_settings_id`), used to resolve the baseline. */
   presetName: string | null
@@ -231,7 +231,10 @@ export function extractProjectProcessConfig(projectSettings: unknown): ProjectPr
   if (!projectSettings || typeof projectSettings !== 'object' || Array.isArray(projectSettings)) return null
   const record = projectSettings as Record<string, unknown>
   const config: ProcessConfig = {}
-  for (const key of Object.keys(processSettingsCatalog.options)) {
+  // These two non-editable fields locate variant values. Dropping them makes a two-column project
+  // appear modified against a seven-column preset, even when its active nozzle values are equal.
+  const keys = [...Object.keys(processSettingsCatalog.options), 'print_extruder_id', 'print_extruder_variant']
+  for (const key of keys) {
     const value = record[key]
     if (typeof value === 'string') {
       config[key] = value

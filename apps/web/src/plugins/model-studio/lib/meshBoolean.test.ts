@@ -187,9 +187,8 @@ test('a coincident flap on a closed solid is covered surface, not a hole', () =>
 })
 
 test('a genuine crack is reported as open rather than tolerated', () => {
-  // The gate is exact on purpose, so this is the honest answer rather than a limitation: viewport
-  // geometry arrives already welded (`meshParseCore` runs `mergeVertices`), so a gap that survives
-  // that is a real defect, and CSG has nothing to say about a surface with a boundary. The editor's
+  // The gate is exact on purpose: viewport loading preserves the source positions, and CSG
+  // has nothing to say about a surface with a boundary, however narrow its gap. The editor's
   // own "Repair mesh" is the fix, which is why the refusal names the operand.
   const cracked = Float32Array.from(CUBE_A)
   for (let i = 0; i < cracked.length; i += 3) {

@@ -54,3 +54,15 @@ test('the host bridge targets this checkout through its derived API port', () =>
   assert.equal(env.API_PORT, '4000')
   assert.equal(env.BRIDGE_SERVER_URL, 'http://127.0.0.1:22071')
 })
+
+test('remote worktrees share their configured parent and retain localhost origins', () => {
+  const env = devkitConfig.env({
+    url: 'http://fix.printstream.server.home',
+    urls: ['http://fix.printstream.server.home', 'http://fix.printstream.localhost'],
+    identity: { repoName: 'printstream', isPrimary: false, slug: 'printstream-fix' },
+    ports: { web: 22070, api: 22071 },
+    configDir: CONFIG_DIR
+  })
+  assert.equal(env.CLIENT_ORIGIN,
+    'http://printstream.server.home,http://fix.printstream.server.home,http://printstream.localhost,http://fix.printstream.localhost')
+})

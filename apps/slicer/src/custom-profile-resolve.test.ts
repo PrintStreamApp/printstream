@@ -144,3 +144,28 @@ test('a sparse diff does not inherit an unsupported `from` from its base', async
 
   assert.equal(merged.from, 'User')
 })
+
+test('a sparse process leaf with only print_settings_id cannot inherit its parent identity', async () => {
+  const merged = await resolveCustomProfileConfigWith(JSON.stringify({
+    inherits: 'Standard', print_settings_id: 'Ryan', sparse_infill_pattern: '3dhoneycomb'
+  }), 'process', async () => ({ name: 'Standard', print_settings_id: 'Standard', enable_support: '0' }))
+  assert.equal(merged.name, 'Ryan')
+  assert.equal(merged.print_settings_id, 'Ryan')
+  assert.equal(merged.enable_support, '0')
+  assert.equal(merged.inherits, 'Standard')
+})
+
+test('the catalogue selected name wins over stale leaf metadata during materialization', async () => {
+  const merged = await resolveCustomProfileConfigWith(JSON.stringify({
+    name: 'Old name', print_settings_id: 'Old name', inherits: 'Standard'
+  }), 'process', async () => ({ name: 'Standard' }), 'Ryan')
+  assert.equal(merged.name, 'Ryan')
+  assert.equal(merged.print_settings_id, 'Ryan')
+})
+
+test('a sparse leaf cannot inherit system provenance from its parent', async () => {
+  const merged = await resolveCustomProfileConfigWith(JSON.stringify({ inherits: 'Standard', print_settings_id: 'Ryan' }),
+    'process', async () => ({ name: 'Standard', from: 'system' }))
+  assert.equal(merged.name, 'Ryan')
+  assert.equal(merged.from, 'User')
+})

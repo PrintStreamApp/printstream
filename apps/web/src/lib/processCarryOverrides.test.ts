@@ -30,22 +30,37 @@ test('a serialization-only difference is not a carried delta', () => {
   assert.deepEqual(deriveProjectCarryOverrides(resolve), {})
 })
 
-test('when the baseline did not resolve, the 3MF changed-from-system keys are authoritative', () => {
+test('when the leaf did not resolve, Keep preserves all explicitly saved values', () => {
   // baseConfig === config (no separate baseline), so a raw diff would find nothing; the endpoint
   // hands back overriddenKeys instead, valued from the effective config.
   const resolve: ResolveProcessConfigResponse = {
     config: { wall_loops: '4', sparse_infill_density: '15%' },
     baseConfig: { wall_loops: '4', sparse_infill_density: '15%' },
-    overriddenKeys: ['wall_loops']
+    overriddenKeys: ['wall_loops'], baselineResolved: false
   }
-  assert.deepEqual(deriveProjectCarryOverrides(resolve), { wall_loops: '4' })
+  assert.deepEqual(deriveProjectCarryOverrides(resolve), { wall_loops: '4', sparse_infill_density: '15%' })
 })
 
 test('an overridden key absent from the config is skipped rather than carried as undefined', () => {
   const resolve: ResolveProcessConfigResponse = {
     config: { wall_loops: '4' },
     baseConfig: { wall_loops: '4' },
-    overriddenKeys: ['wall_loops', 'phantom_key']
+    overriddenKeys: ['wall_loops', 'phantom_key'], baselineResolved: false
   }
   assert.deepEqual(deriveProjectCarryOverrides(resolve), { wall_loops: '4' })
+})
+
+test('native parent differences are not project modifications of the selected custom leaf', () => {
+  assert.deepEqual(deriveProjectCarryOverrides({
+    config: { wall_loops: '4', support_object_xy_distance: '1' },
+    baseConfig: { wall_loops: '4', support_object_xy_distance: '0.35' },
+    parentConfig: { wall_loops: '2', support_object_xy_distance: '0.35' },
+    overriddenKeys: ['wall_loops', 'support_object_xy_distance']
+  }), { support_object_xy_distance: '1' })
+})
+
+test('resetting a baked change before switching removes it from the transfer map', () => {
+  const carry = deriveProjectCarryOverrides({ config: { wall_loops: '4' }, baseConfig: { wall_loops: '2' }, overriddenKeys: ['wall_loops'] }, { wall_loops: '2' })
+  assert.deepEqual(carry, {})
+  assert.deepEqual({ wall_loops: '3', ...carry }, { wall_loops: '3' })
 })

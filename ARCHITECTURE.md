@@ -123,6 +123,8 @@ The named extension points core currently exposes are: `printer.card.actions`, `
 
 A plugin may also expose slots of its own, which is how one plugin extends another without importing it: the orders plugin hosts `orders.itemActions` and `orders.overlays`, and the print-queue plugin fills them.
 
+Printer creation also supports a deployment-owned quota policy through `printer-quota.ts`. Its optional final database check runs in the same short transaction as the insert, so concurrent requests cannot both spend one remaining registration slot. The check must not perform provider requests or other external work. Printer connection, billing reconciliation and notifications happen outside that transaction; without a registered policy the core keeps its normal creation path.
+
 ### Built-in plugins
 
 | Plugin | Side | Description |
@@ -254,5 +256,7 @@ Printer-side file access is intentionally serialized per printer in `printer-ftp
 Core `slot-materials.ts` persists inventory-independent AMS/external-spool identity in workspace-scoped Setting rows. The printer manager loads the cache at startup and decorates status with `materialIdentity`; raw tray type, preset, and colour remain hardware facts. Generic MQTT echoes retain the identity. After confirmation, empty, replaced, or RFID-tagged trays invalidate it; a short pending window tolerates the previous report after command delivery. Reset/rescan, inventory assignment, and printer deletion clear it. Unobservably identical physical replacements cannot be distinguished from the original spool.
 
 The API slot-filament registry and web identity lookup prefer this core identity before optional inventory. Manual assignment invokes the inventory resolver's release callback so later consumption is not charged to the previous spool. Inventory assignment clears the manual identity. Printer payload builders serialize only vendor settings, never PrintStream's brand, product line, or colour name.
+
+Inventory status sync detaches a custom spool when a readable RFID tag proves another spool occupies its exact printer/AMS/slot location, even with automatic inventory creation disabled. Empty trays and unreadable/all-zero tags preserve custom assignments. Cleanup atomically requires the assignment to predate the status receipt time (equal milliseconds defer too); a deferred clear leaves the signature retryable for a later observation. This also repairs duplicate loaded associations from earlier versions instead of letting location lookups return the replaced spool.
 
 Slot compatibility uses the shared `filament-setup-catalog.ts` and `slot-material-compatibility.ts` in the web editors and API command validation. Recognized physical types require a matching hardware type and preset, including inventory assignments; unknown names require an explicit catalog preset. The API validates before sending MQTT or changing ownership. The shared blacklist adapter uses physical brand, material type, and product line for both draft and loaded-slot checks. Print dialogs and the dispatch guard also supply mapped inventory identities, so transferring a manual assignment to inventory preserves its hardware warnings; explicit manual identity takes precedence. A compatibility preset cannot confer product-specific whitelist exemptions; unclassified physical types retain the chosen hardware type's safety checks.

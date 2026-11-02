@@ -364,8 +364,7 @@ export function useEditorHistory({
       setNozzleFlow: (value) => { recordSliceConfigHistory(); sliceConfig.setNozzleFlow(value) },
       onAddFilament: (choice) => { recordSliceConfigHistory(); sliceConfig.onAddFilament(choice) },
       onSyncFilaments: (choices) => {
-        recordSliceConfigHistory()
-        sliceConfig.onSyncFilaments(choices)
+        sliceConfig.onSyncFilaments(choices, recordSliceConfigHistory)
       },
       onUpsertMixedFilament: (choice) => {
         recordSliceConfigHistory()
@@ -381,24 +380,24 @@ export function useEditorHistory({
         if (replacementId !== undefined && (replacementId === projectFilamentId || !ids.includes(replacementId))) return
         if ((usedFilamentIds.has(projectFilamentId) || unverifiedFilamentIds?.has(projectFilamentId)) && replacementId === undefined) return
 
-        recordCombinedHistory()
-        if (stateRef.current) {
-          // Unused deletion still shifts surviving positional settings. Its fallback is never
-          // applied to a known use, because the guard above requires an explicit choice for those.
-          const resolvedReplacement = replacementId ?? ids.find((id) => id !== projectFilamentId)!
-          const next = replaceEditorMaterial(stateRef.current, ids, projectFilamentId, resolvedReplacement)
-          stateRef.current = next
-          setState(next)
-          setRebuildToken((token) => token + 1)
-        }
-        sliceConfig.onRemoveFilament(projectFilamentId, replacementId)
+        sliceConfig.onRemoveFilament(projectFilamentId, replacementId, () => {
+          recordCombinedHistory()
+          if (stateRef.current) {
+            // Unused deletion still shifts surviving positional settings. Its fallback is never
+            // applied to a known use, because the guard above requires an explicit choice for those.
+            const resolvedReplacement = replacementId ?? ids.find((id) => id !== projectFilamentId)!
+            const next = replaceEditorMaterial(stateRef.current, ids, projectFilamentId, resolvedReplacement)
+            stateRef.current = next
+            setState(next)
+            setRebuildToken((token) => token + 1)
+          }
+        })
       },
       // A reorder is one drop gesture, one checkpoint, one Ctrl+Z. The snapshot's sessionSlots
       // carry the order, so undo restores the pre-drag list (and the filament-INDEX overrides,
       // which live in the same snapshot).
       onReorderFilament: (fromIndex: number, insertAt: number) => {
-        recordSliceConfigHistory()
-        sliceConfig.onReorderFilament(fromIndex, insertAt)
+        sliceConfig.onReorderFilament(fromIndex, insertAt, recordSliceConfigHistory)
       },
       // The plate type feeds the plates' `plateType` (written as `curr_bed_type`) into the saved
       // 3MF and is part of the config snapshot, so it undoes like the rest of the target.

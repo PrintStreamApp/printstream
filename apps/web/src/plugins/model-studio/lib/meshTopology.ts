@@ -10,10 +10,9 @@
  * Owns two decisions that callers must not re-make:
  *
  *  - **Vertex identity is BIT-EXACT**, with no tolerance and no rounding. That is a correctness
- *    property, not a shortcut: viewport geometry arrives already welded (`meshParseCore` runs
- *    `mergeVertices` then `toCreasedNormals`, which de-indexes by COPYING each merged vertex into
- *    every corner using it), so shared corners hold identical floats and exact keys recover the
- *    original connectivity. Welding here instead would be a repair posing as an oracle.
+ *    property, not a shortcut: `meshParseCore` preserves every source corner when it expands
+ *    indexed meshes and computes shading, so shared corners hold identical floats and exact keys
+ *    recover the original connectivity. Welding here would be a repair posing as an oracle.
  *  - **Cover multiplicity is divided out**, so a mesh whose every facet is written twice is counted
  *    as the shell it is rather than passing a "no edge used once" test on a wide-open surface.
  *

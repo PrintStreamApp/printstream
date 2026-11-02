@@ -15,6 +15,7 @@
  * `lib/browserMachineRetarget.ts`. Without it a printer switch was simply lost on save: the bake
  * preserves the project's embedded machine, so reopening showed the original printer again.
  */
+import type { ProcessConfigResolver } from '../../../components/ProcessSettingsDialog'
 import type { ExportArrangedThreeMf, SaveArrangedThreeMf, SlicingPresetSummary } from '@printstream/shared'
 import { bakeClientThreeMf, bakeCompleteProjectThreeMf } from './clientThreeMfBake'
 import { PUBLIC_RETARGET_RESOLVERS } from './browserMachineRetarget'
@@ -25,6 +26,8 @@ import type { ThreeMfArchive } from './threeMfArchive'
 import { saveLocalProjectAs, suggestedSaveName, type LocalProjectFile } from './localProjectFile'
 
 export interface LocalSaveTargetOptions {
+  /** Same resolver as the tune dialog, including browser-stored custom process presets. */
+  resolveProcessConfig?: ProcessConfigResolver
   /** The opened project's archive, or null for a project built from scratch in the editor. */
   archive: () => ThreeMfArchive | null
   /** Staged geometry to bake in: the local store holds the meshes the `SceneEdit` refers to. */
@@ -41,6 +44,16 @@ export interface LocalSaveTargetOptions {
 }
 
 export function createLocalSaveTarget(options: LocalSaveTargetOptions): EditorSaveTarget {
+  const resolvers = {
+    ...PUBLIC_RETARGET_RESOLVERS,
+    canResolve: (id: string) => PUBLIC_RETARGET_RESOLVERS.canResolve(id) || (Boolean(options.resolveProcessConfig) && id.startsWith('local:process:')),
+    process: (id: string, targetId: string | null, request?: { signal?: AbortSignal }) => {
+      request?.signal?.throwIfAborted()
+      return options.resolveProcessConfig
+        ? options.resolveProcessConfig({ processProfileId: id, targetId, sourceFileId: null })
+        : PUBLIC_RETARGET_RESOLVERS.process(id, targetId, request)
+    }
+  }
   const bake = async (
     payload: SaveArrangedThreeMf | ExportArrangedThreeMf,
     signal?: AbortSignal,
@@ -52,10 +65,9 @@ export function createLocalSaveTarget(options: LocalSaveTargetOptions): EditorSa
       payload.sceneEdit,
       await options.importStore.importsForBake(signal, importIdsReferencedBy(payload.sceneEdit)),
       bakeOptionsFor(payload),
-      // The anonymous resolvers: this host reaches the built-in catalogue only, which is what makes
-      // it decline a retarget onto a preset it cannot see rather than author half a machine.
+      // Builtin machine/material lookups and the same stored-process resolver as the tune dialog.
       bakePassesFor(payload, {
-        resolvers: PUBLIC_RETARGET_RESOLVERS,
+        resolvers,
         // Already in hand on this host: its catalogue is browser-stored plus the builtin list.
         filamentPresets: async () => options.filamentPresets(),
         signal
@@ -112,7 +124,7 @@ export function createLocalSaveTarget(options: LocalSaveTargetOptions): EditorSa
           sliceTarget: {
             target: input.target,
             slicerTargetId: input.slicerTargetId,
-            resolvers: PUBLIC_RETARGET_RESOLVERS,
+            resolvers,
             ...(signal ? { signal } : {})
           }
         },

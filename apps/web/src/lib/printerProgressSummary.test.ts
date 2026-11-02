@@ -160,6 +160,20 @@ test('getPrinterAttentionSummary surfaces a real device error', () => {
   })
 })
 
+test('intentional pauses retain their reason as a warning and do not hide HMS faults', () => {
+  const deviceError = { code: '03008013', message: 'Task paused due to the pause command added to the file.' }
+  const status = { stage: 'paused' as const, deviceError, hmsErrors: [] }
+  assert.deepEqual(getPrinterAttentionSummary(status), { kind: 'intentionalPause', ...deviceError, count: 1 })
+  assert.deepEqual(getPrinterAttentionSummary(status, { includeHmsErrors: false }), {
+    kind: 'intentionalPause', ...deviceError, count: 1
+  })
+  assert.equal(getPrinterAttentionSummary({ ...status, stage: 'printing' }), null)
+  const fault = { code: '0700220000020001', message: 'Filament has run out.' }
+  assert.deepEqual(getPrinterAttentionSummary({ ...status, hmsErrors: [fault] }), {
+    kind: 'hmsError', ...fault, count: 1
+  })
+})
+
 test('getPrinterAttentionSummary ignores a cancellation record', () => {
   // "The task was canceled." is how the printer reports a cancellation, not a
   // fault. Surfacing it put a warning row with a Clear button on the card of a

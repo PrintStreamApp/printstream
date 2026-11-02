@@ -2,7 +2,7 @@
  * Worker-safe 3MF/STL mesh parsing + geometry processing.
  *
  * This is the heavy, DOM-free core of the editor's geometry load: it turns a 3MF model entry
- * (XML) or a binary STL into processed `THREE.BufferGeometry` (welded, creased, planar-patch
+ * (XML) or a binary STL into processed `THREE.BufferGeometry` (creased, planar-patch
  * corrected). It imports only `three` / `three-stdlib` so it runs unchanged on the main thread
  * (the fallback) AND inside a Web Worker (`meshParseWorker.ts`), which is the point: a single
  * 50 MB+ object would otherwise parse synchronously on the main thread and freeze the UI for
@@ -13,9 +13,9 @@
  * `meshParseCore.test.ts` asserts this regex parser produces the same vertices/indices/paint.
  */
 import * as THREE from 'three'
-import { STLLoader, mergeVertices, toCreasedNormals } from 'three-stdlib'
+import { STLLoader } from 'three-stdlib'
+import { meshWithCreasedNormals } from './meshCreasedNormals'
 
-export const THREE_MF_VERTEX_WELD_TOLERANCE = 5e-2
 export const THREE_MF_SMOOTH_NORMAL_ANGLE = THREE.MathUtils.degToRad(45)
 
 /** Per-triangle paint codes keyed by triangle index (matches threeMfScene's SupportPaintCodes). */
@@ -152,18 +152,22 @@ export function parseThreeMfMeshArrays(xmlText: string): ThreeMfMeshArrays[] {
   return results
 }
 
-/** Build the final processed geometry (weld -> crease -> planar-patch) from raw mesh arrays. */
+/** Build render geometry without moving vertices, merging distinct positions, or reordering faces. */
 export function buildGeometryFromArrays(data: ThreeMfMeshArrays): THREE.BufferGeometry {
   const geometry = new THREE.BufferGeometry()
   geometry.setAttribute('position', new THREE.BufferAttribute(data.positions, 3))
   geometry.setIndex(new THREE.BufferAttribute(data.index, 1))
-  const weldedGeometry = mergeVertices(geometry, THREE_MF_VERTEX_WELD_TOLERANCE)
-  weldedGeometry.deleteAttribute('normal')
-  const smoothedGeometry = toCreasedNormals(weldedGeometry, THREE_MF_SMOOTH_NORMAL_ANGLE)
-  const correctedGeometry = flattenPlanarPatchNormals(smoothedGeometry)
-  correctedGeometry.computeBoundingSphere()
-  applyMeshPaint(correctedGeometry.userData, data.paint)
-  return correctedGeometry
+  const processed = prepareMeshGeometry(geometry)
+  applyMeshPaint(processed.userData, data.paint)
+  return processed
+}
+
+/** STL and 3MF must use identical shading so saving cannot change the object's appearance. */
+function prepareMeshGeometry(geometry: THREE.BufferGeometry): THREE.BufferGeometry {
+  const smoothed = meshWithCreasedNormals(geometry, THREE_MF_SMOOTH_NORMAL_ANGLE)
+  const corrected = flattenPlanarPatchNormals(smoothed)
+  corrected.computeBoundingSphere()
+  return corrected
 }
 
 /** Parse a whole 3MF model entry into per-object processed geometry (DOM-free; worker + fallback). */
@@ -177,11 +181,7 @@ export function buildThreeMfGeometries(xmlText: string): Map<number, THREE.Buffe
 
 /** Decode a binary/ASCII STL into a single processed geometry (used for import-backed meshes). */
 export function buildStlGeometry(buffer: ArrayBuffer): THREE.BufferGeometry {
-  const geometry = new STLLoader().parse(buffer)
-  geometry.deleteAttribute('normal')
-  geometry.computeVertexNormals()
-  geometry.computeBoundingSphere()
-  return geometry
+  return prepareMeshGeometry(new STLLoader().parse(buffer))
 }
 
 /**
@@ -218,7 +218,7 @@ export function flattenPlanarPatchNormals(geometry: THREE.BufferGeometry): THREE
     edgeAB.subVectors(vertexB, vertexA)
     edgeAC.subVectors(vertexC, vertexA)
     faceNormal.crossVectors(edgeAB, edgeAC)
-    if (faceNormal.lengthSq() < 1e-10) continue
+    if (faceNormal.lengthSq() === 0) continue
     faceNormal.normalize()
 
     const bucketKey = [

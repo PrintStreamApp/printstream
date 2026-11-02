@@ -229,13 +229,13 @@ app.post('/profiles/resolve', async (request, response) => {
         path.join(target.profileDir, `${kind}_full`, `${sanitizeProfileFileName(parsed.data.name)}.json`),
         'utf8'
       )
-      record = await resolveCustomProfileConfig(builtinContent, kind, target.profileDir)
+      record = await resolveCustomProfileConfig(builtinContent, kind, target.profileDir, parsed.data.name, 'system')
     } else {
       if (!parsed.data.content) {
         response.status(400).json({ error: `Custom ${kind} profile is missing content` })
         return
       }
-      record = await resolveCustomProfileConfig(parsed.data.content, kind, target.profileDir)
+      record = await resolveCustomProfileConfig(parsed.data.content, kind, target.profileDir, parsed.data.name)
     }
     response.json({ config: record })
   } catch (error) {
@@ -570,7 +570,7 @@ async function readDisplayProfile(filePath: string, kind: SlicingPresetKind, pro
     // leaf JSON alone loses it and the web dialog would treat the profile as
     // compatible with every printer. Merging the base in mirrors how the CLI
     // and the custom-profile path resolve inheritance.
-    const resolved = await resolveCustomProfileConfig(content, kind, profileDir)
+    const resolved = await resolveCustomProfileConfig(content, kind, profileDir, name ?? undefined, 'system')
     return { name, metadata: extractProfileMetadata(resolved) }
   } catch {
     return null

@@ -16,7 +16,7 @@ import {
   getPrinterCalibrationCapabilities,
   getPrinterDisplayCapabilities,
   isPausedFilamentRunoutWarning,
-  isPrintCancellationError,
+  isPrinterDeviceFault,
   type PrinterActivePrintObjects,
   type PrinterAirductMode,
   type PrinterCommand,
@@ -568,12 +568,11 @@ export function PrinterAssistantDialog({
   onOpenLiveView: () => void
   onLoadFilament: () => void
 }) {
-  // A cancellation record is not an attention entry, so an assistant left open
-  // while the print is cancelled underneath does not start listing "The task was
-  // canceled." as a warning to look up.
+  // An assistant left open while status changes must not turn a cancellation
+  // or an intentional pause into a fault to recover from.
   const attentionEntries = status.hmsErrors.length > 0
     ? status.hmsErrors
-    : status.deviceError && !isPrintCancellationError(status.deviceError) ? [status.deviceError] : []
+    : status.deviceError && isPrinterDeviceFault(status.deviceError) ? [status.deviceError] : []
 
   return (
     <Modal open onClose={onClose}>

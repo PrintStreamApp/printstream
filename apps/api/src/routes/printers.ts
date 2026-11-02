@@ -35,7 +35,7 @@ import { serializePrinterNozzleDiameters, toPrinterDto, toPublicPrinterDto } fro
 import { printerManager } from '../lib/printer-manager.js'
 import { syncBridgePrinterConfig } from '../lib/bridge-printer-config.js'
 import { printerDiscovery } from '../lib/printer-discovery.js'
-import { assertPrinterQuotaOrThrow, notifyPrinterCountChanged } from '../lib/printer-quota.js'
+import { assertPrinterQuotaOrThrow, notifyPrinterCountChanged, withPrinterCreationQuota } from '../lib/printer-quota.js'
 import { assertLicenseAllowsPrinterAdd } from '../lib/license-enforcement.js'
 import { validatePrinterLanConnection } from '../lib/printer-connection-validation.js'
 import { readPrinterStats, setManualPrinterStats } from '../lib/printer-stats.js'
@@ -167,20 +167,22 @@ printersRouter.post('/', requireRequestPermission(PRINTERS_MANAGE_PERMISSION), a
   // card). Money must be the last gate the request passes.
   await assertLicenseAllowsPrinterAdd()
   await assertPrinterQuotaOrThrow(workspaceId)
-  const last = await prisma.printer.findFirst({ orderBy: { position: 'desc' } })
-  const created = await prisma.printer.create({
-    data: {
-      workspaceId,
-      name: parsed.data.name,
-      host: parsed.data.host,
-      serial: parsed.data.serial,
-      accessCode: parsed.data.accessCode,
-      model: parsed.data.model,
-      bridgeId: parsed.data.bridgeId ?? null,
-      currentPlateType: parsed.data.currentPlateType,
-      currentNozzleDiameters: serializePrinterNozzleDiameters(parsed.data.currentNozzleDiameters),
-      position: (last?.position ?? -1) + 1
-    }
+  const created = await withPrinterCreationQuota(workspaceId, async store => {
+    const last = await store.printer.findFirst({ where: { workspaceId }, orderBy: { position: 'desc' } })
+    return store.printer.create({
+      data: {
+        workspaceId,
+        name: parsed.data.name,
+        host: parsed.data.host,
+        serial: parsed.data.serial,
+        accessCode: parsed.data.accessCode,
+        model: parsed.data.model,
+        bridgeId: parsed.data.bridgeId ?? null,
+        currentPlateType: parsed.data.currentPlateType,
+        currentNozzleDiameters: serializePrinterNozzleDiameters(parsed.data.currentNozzleDiameters),
+        position: (last?.position ?? -1) + 1
+      }
+    })
   })
   const dto = toPrinterDto(created)
   printerManager.add(dto, created.workspaceId, created.bridgeId)

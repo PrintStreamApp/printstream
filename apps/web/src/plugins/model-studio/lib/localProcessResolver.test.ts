@@ -120,6 +120,8 @@ test('a browser-stored process preset resolves by flattening onto its builtin pa
     const result = await resolver({ processProfileId: 'local:process:0.20mm Ryan @BBL A1', targetId: 't1', sourceFileId: null })
     assert.equal(calls[0]?.id, A1_BUILTIN, 'the declared parent was resolved as a builtin')
     assert.equal(result.config.wall_loops, '4', "the preset's own delta wins")
+    assert.equal(result.config.name, stored[0]!.name, 'the parent cannot supply the leaf identity')
+    assert.deepEqual(result.preset, { name: stored[0]!.name, parentName: '0.20mm Standard @BBL A1' })
     assert.equal(result.config.top_shell_layers, '5', 'the parent fills the keys the delta omits')
     assert.equal(result.baseConfig.wall_loops, '4', 'an installed preset is its own baseline')
     assert.equal(result.parentConfig?.wall_loops, '2', "the parent's values ride along as emphasis only")

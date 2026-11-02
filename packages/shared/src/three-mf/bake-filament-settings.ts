@@ -787,7 +787,8 @@ export function applyNozzleAssignmentToProjectSettings(projectSettingsJson: stri
 
 /**
  * Move each `<filament id=…>`'s `group_id` in `slice_info.config` onto the slicer extruder that
- * feeds its desired runtime nozzle. slice_info's group ids are the authoritative signal the index
+ * feeds its desired runtime nozzle. Modern files reference a plate-local nozzle table; legacy
+ * files use direct extruder groups. slice_info's group ids are the authoritative signal the index
  * parser prefers once a project carries concrete slice usage, so they must follow the assignment or
  * a reopened sliced project shows the pre-edit nozzle. Filaments the edit does not (re)assign, and
  * files without a matching `<filament>` entry, are left byte-for-byte intact. A no-op on
@@ -802,14 +803,44 @@ export function rewriteSliceInfoNozzleGroups(sliceInfoXml: string, filaments: Sc
     if (extruder != null) groupByFilamentId.set(index + 1, extruder)
   })
   if (groupByFilamentId.size === 0) return sliceInfoXml
-  return sliceInfoXml.replace(/<filament\b([^>]*?)(\/?)>(?:<\/filament>)?/g, (match, attrs: string, selfClosing: string) => {
-    const idMatch = attrs.match(/\sid="(\d+)"/)
-    const filamentId = Number.parseInt(idMatch?.[1] ?? '', 10)
-    const group = Number.isInteger(filamentId) ? groupByFilamentId.get(filamentId) : undefined
-    if (group == null) return match
-    const nextAttrs = upsertXmlIntAttribute(attrs, 'group_id', group)
-    return `<filament${nextAttrs}${selfClosing === '/' ? '/>' : '></filament>'}`
-  })
+  const rewritePlate = (block: string): string => {
+    const nozzles = [...block.matchAll(/<nozzle\b([^>]*?)\/?>/g)].map((match) => ({
+      xml: match[0],
+      id: Number(/\sid="(\d+)"/.exec(match[0])?.[1] ?? NaN),
+      extruder: Number(/\sextruder_id="(\d+)"/.exec(match[0])?.[1] ?? NaN) - 1
+    }))
+    const additions: string[] = []
+    let nextId = Math.max(-1, ...nozzles.map((nozzle) => Number.isInteger(nozzle.id) ? nozzle.id : -1)) + 1
+    const rewritten = block.replace(/<filament\b([^>]*?)(\/?)>(?:<\/filament>)?/g, (match, attrs: string, selfClosing: string) => {
+      const filamentId = Number(/\sid="(\d+)"/.exec(attrs)?.[1] ?? NaN)
+      const extruder = groupByFilamentId.get(filamentId)
+      if (extruder == null) return match
+      let group = extruder
+      if (nozzles.length > 0) {
+        const currentId = Number(/\sgroup_id="(\d+)"/.exec(attrs)?.[1] ?? NaN)
+        const current = nozzles.find((nozzle) => nozzle.id === currentId)
+        let target = current?.extruder === extruder ? current : nozzles.find((nozzle) => nozzle.extruder === extruder)
+        if (!target) {
+          // A previously unused head has no table row. Preserve the source nozzle's diameter
+          // and volume metadata rather than inventing a profile; the next slice regenerates it.
+          const template = current ?? nozzles[0]!
+          const id = nextId++
+          const xml = template.xml.replace(/\sid="[^"]*"/, ` id="${id}"`)
+            .replace(/\sextruder_id="[^"]*"/, ` extruder_id="${extruder + 1}"`)
+          target = { xml, id, extruder }
+          nozzles.push(target)
+          additions.push(xml)
+        }
+        group = target.id
+      }
+      const nextAttrs = upsertXmlIntAttribute(attrs, 'group_id', group)
+      return `<filament${nextAttrs}${selfClosing === '/' ? '/>' : '></filament>'}`
+    })
+    return additions.length > 0 ? rewritten.replace('</plate>', `${additions.join('')}</plate>`) : rewritten
+  }
+  return /<plate\b/.test(sliceInfoXml)
+    ? sliceInfoXml.replace(/<plate\b[^>]*>[\s\S]*?<\/plate>/g, rewritePlate)
+    : rewritePlate(sliceInfoXml)
 }
 
 /** Replace an integer XML attribute in an attribute string, or append it when absent. */
