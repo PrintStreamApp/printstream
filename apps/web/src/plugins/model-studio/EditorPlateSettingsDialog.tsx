@@ -9,6 +9,7 @@ import type { ProcessConfigResolver } from '../../components/ProcessSettingsDial
 import type { SliceSettingsController } from '../../components/library/SliceSettingsPanel'
 import { PlateSettingsDialog, type PlateSettingsDraft } from './PlateSettingsDialog'
 import type { EditorState } from './lib/editorModel'
+import { assessEditorPlateByObjectLinkedCopies, selectedSliceEngine } from './lib/editorByObjectLinkedCopies'
 import { plateDisplayName } from './lib/plateName'
 
 const EMPTY_OBJECT_OVERRIDES: ProcessSettingOverrides = {}
@@ -62,6 +63,11 @@ export function EditorPlateSettingsDialog(props: EditorPlateSettingsDialogProps)
           color: sliceConfig?.filamentColors[filament.projectFilamentId] ?? filament.color ?? '#FFFFFF'
         }))}
       hasMixedFilaments={(sliceConfig?.projectFilaments ?? []).some((filament) => filament.mixedFilament != null)}
+      linkedCopyWarnings={(printSequence) => assessEditorPlateByObjectLinkedCopies({
+        plate,
+        engine: selectedSliceEngine(sliceConfig),
+        printSequence
+      }).map((issue) => issue.message)}
       onApply={(settings) => onApply(plate.plateId, settings)}
       onClose={onClose}
     />

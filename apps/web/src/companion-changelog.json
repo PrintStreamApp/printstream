@@ -1,6 +1,13 @@
 {
   "releases": [
     {
+      "version": "1.3.17",
+      "releasedOn": "2026-11-03",
+      "changes": [
+        "On Windows and Linux, left-click the tray icon to show or hide PrintStream. Right-click opens the menu without opening the window."
+      ]
+    },
+    {
       "version": "1.3.16",
       "releasedOn": "2026-09-28",
       "changes": [

@@ -794,7 +794,7 @@ export function parseRootBuildItemTransforms(xml: string): Map<number, number[][
  * is BambuStudio's "Printable" toggle (greyed, excluded from slice); any other/absent value
  * means printable.
  */
-function parseRootBuildItemPrintable(xml: string): Map<number, boolean[]> {
+export function parseRootBuildItemPrintable(xml: string): Map<number, boolean[]> {
   const out = new Map<number, boolean[]>()
   const buildBlock = xml.match(/<build\b[^>]*>[\s\S]*?<\/build>/)?.[0] ?? ''
   for (const match of buildBlock.matchAll(/<item\b([^>]*)\/?>(?:<\/item>)?/g)) {

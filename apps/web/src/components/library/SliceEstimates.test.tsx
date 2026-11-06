@@ -108,3 +108,20 @@ test('each sliced plate previews and prints its own plate index', () => {
   assert.equal(previewPlate, 2)
   assert.equal(printPlate, 1)
 })
+
+test('leads with predicted problems, with or without estimates', () => {
+  const warning = 'Gutter: 1 linked copy will be left out of the print.'
+
+  const withEstimates = renderEstimates({ estimatedPrintTimeSeconds: 600, warnings: [warning] })
+  assert.ok(withEstimates.getByText('This slice may not print as arranged'))
+  assert.ok(withEstimates.getByText(warning))
+  cleanup()
+
+  const withoutEstimates = renderEstimates({ warnings: [warning] })
+  assert.ok(withoutEstimates.getByText(warning))
+  assert.ok(withoutEstimates.getByText(/did not report usage estimates/i))
+  cleanup()
+
+  const none = renderEstimates({ estimatedPrintTimeSeconds: 600 })
+  assert.equal(none.queryByText('This slice may not print as arranged'), null)
+})

@@ -559,6 +559,30 @@ advisory here and auto-applied there (`ConfigManipulation.cpp:733` resets `skirt
 faithfully: `skirt_height` is project-wide, so a dialog scoped to one plate must not rewrite it. An
 unresolved config warns about nothing rather than guessing.
 
+## Linked copies printed by object
+
+Bambu Studio from 2.4.0.70 (and every build we ship) mishandles LINKED copies (several instances of
+one object) when a plate prints by object, and says nothing about it. The engine merges instances of
+one object whose transforms match once XY is zeroed into one print object (`PrintApply.cpp`
+`print_objects_from_model_object`). With exactly one print object on the plate, `is_sequential_print()`
+is false and every copy prints together, layer by layer, under a G-code header that still says
+"by object". With more than one, from 2.6.0.51 the sequential export loop skips any instance whose
+print object equals the previous one's (`GCode.cpp`, `if(object == prev_object) continue;`), so the
+second and later consecutive copies are LEFT OUT of the G-code. Copies at a different rotation, scale
+or height are separate print objects and print correctly. Both were confirmed by slicing on
+2.8.2.61 (a production print came out interleaved; a mixed test plate lost its second copy).
+
+The rule and the verified version lists live once in `three-mf/by-object-linked-copies.ts`. Two
+surfaces ask it. Before slicing, the editor flags the active plate in its viewport issue sheet with a
+one-click "Make copies independent", and the plate settings dialog repeats it. At slice time,
+`apps/api/src/lib/slice-input-warnings.ts` reads the FINAL engine input (after every authoring step,
+because on the legacy path the loaded preset decides the sequence) and attaches the sentences to
+`SlicingMetadata.warnings`, which `SliceEstimates` shows above every slice result and the slice cache
+replays with the output. An engine not on the list warns about nothing, and
+`by-object-linked-copy-classification.test.ts` fails when a vendored Bambu Studio build is not
+classified, so a new engine cannot silently switch the warning off. Re-check the tag's source and add
+it to the defect list, or to the unaffected list once Bambu fixes it.
+
 ## Sidebar order is data, and both halves are portable
 
 Objects and parts drag to reorder in the sidebar (BambuStudio's `ObjectList` drag), through the

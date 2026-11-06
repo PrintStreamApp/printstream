@@ -205,7 +205,8 @@ import { useEditorContextMenuSession } from './useEditorContextMenuSession'
 import { useEditorSelectionSession } from './useEditorSelectionSession'
 import { defaultEditorLayerHeightMm, firstEditorLayerHeightMm } from './lib/editorLayerHeightSettings'
 import { editorFilamentNozzleMap, editorInstanceNozzles } from './lib/editorNozzleReach'
-import { EditorPlacementWarnings } from './EditorPlacementWarnings'
+import { EditorPlacementWarnings, type EditorViewportIssue } from './EditorPlacementWarnings'
+import { useEditorByObjectLinkedCopyIssues } from './useEditorByObjectLinkedCopyIssues'
 import { useEditorSidebarSelectionActions } from './useEditorSidebarSelectionActions'
 import { useEditorFilamentSaveAuthoring } from './useEditorFilamentSaveAuthoring'
 import { computeEditorSelectedTransform as computeSelectedTransform } from './lib/editorSelectedTransform'
@@ -796,11 +797,8 @@ function EditorView({
   const [renderedInstanceKeys, setRenderedInstanceKeys] = useState<ReadonlySet<string>>(new Set())
   const [placementWarnings, setPlacementWarnings] = useState<PlacementWarning[]>([])
   const placementWarningsSetterRef = useRef(setPlacementWarnings)
-  // Dismissing the warnings panel hides the CURRENT set of issues (keyed by the same
-  // JSON signature the validator dedupes on); any change to the set shows it again.
+  // The signature of the viewport issue set the user dismissed (see `viewportIssuesSig`).
   const [dismissedWarningsSig, setDismissedWarningsSig] = useState<string | null>(null)
-  const placementWarningsSig = useMemo(() => JSON.stringify(placementWarnings), [placementWarnings])
-  const placementWarningsVisible = placementWarnings.length > 0 && placementWarningsSig !== dismissedWarningsSig
   const lastWarningSigRef = useRef('')
   useEditorMachineSwitchWarnings({
     targetPrinterModel,
@@ -2313,7 +2311,7 @@ function EditorView({
     onImportsChanged: () => setAddedPartMeshVersion((version) => version + 1)
   }), [stateRef, importStore, sliceConfigRef, setAddedPartMeshVersion])
 
-  const { handleDuplicate, handleCloneWithCount, linkedCopyCountFor, handleMakeIndependent } = useEditorObjectDuplication({
+  const { handleDuplicate, handleCloneWithCount, linkedCopyCountFor, handleMakeIndependent, handleMakeCopiesIndependent } = useEditorObjectDuplication({
     activePlateIndex,
     state,
     stateRef,
@@ -2327,6 +2325,32 @@ function EditorView({
     regenerateThumbnailRef: regenerateActiveThumbnailRef,
     setState
   })
+
+  // Linked copies the engine will mishandle when this plate prints by object (merged into one
+  // layer-by-layer print, or left out of the G-code). Shown with the placement problems, because
+  // both are "this plate will not print as arranged", and the fix is one click away.
+  const linkedCopyIssues = useEditorByObjectLinkedCopyIssues({
+    plate: activePlate,
+    sliceConfig,
+    resolveProcessConfig
+  })
+  const viewportIssues = useMemo<EditorViewportIssue[]>(() => [
+    ...placementWarnings,
+    ...linkedCopyIssues.map((issue) => ({
+      key: `linked-copies:${issue.key}`,
+      selectKey: issue.key,
+      name: issue.name,
+      issues: [issue.summary],
+      fix: { label: 'Make copies independent', onApply: () => handleMakeCopiesIndependent(issue.instanceKeys) }
+    }))
+  ], [placementWarnings, linkedCopyIssues, handleMakeCopiesIndependent])
+  // Dismissing the panel hides the CURRENT set of issues (keyed by the same JSON signature the
+  // validator dedupes on, plus the linked-copy issues); any change to the set shows it again.
+  const viewportIssuesSig = useMemo(
+    () => JSON.stringify({ placement: placementWarnings, linkedCopies: linkedCopyIssues }),
+    [placementWarnings, linkedCopyIssues]
+  )
+  const viewportIssuesVisible = viewportIssues.length > 0 && viewportIssuesSig !== dismissedWarningsSig
 
   const {
     handleDelete,
@@ -3434,10 +3458,10 @@ function EditorView({
                     {viewerError}
                   </Alert>
                 )}
-                {placementWarningsVisible && (
+                {viewportIssuesVisible && (
                   <EditorPlacementWarnings
-                    warnings={placementWarnings}
-                    onDismiss={() => setDismissedWarningsSig(placementWarningsSig)}
+                    warnings={viewportIssues}
+                    onDismiss={() => setDismissedWarningsSig(viewportIssuesSig)}
                     onSelect={setSelectedKey}
                   />
                 )}

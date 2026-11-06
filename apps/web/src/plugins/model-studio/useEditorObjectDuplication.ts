@@ -8,7 +8,7 @@ import { useCallback, useEffect, useRef, type Dispatch, type SetStateAction } fr
 import { toast } from '../../lib/toast'
 import type { usePromptDialog } from '../../components/PromptDialogProvider'
 import { addedPartHostId, duplicateInstance, findFreePlatePosition, instanceLinkageKey,
-  makeInstanceIndependent, placeInstanceAt, type EditorPlate, type EditorState } from './lib/editorModel'
+  makeInstanceIndependent, placeInstanceAt, type EditorInstance, type EditorPlate, type EditorState } from './lib/editorModel'
 import type { createEditorIndependentCopyImports } from './lib/editorIndependentCopyImports'
 
 /** BambuStudio's own upper limit for its number-of-copies prompt. */
@@ -116,6 +116,28 @@ export function useEditorObjectDuplication(options: ObjectDuplicationOptions) {
     return instances.filter((entry) => instanceLinkageKey(entry) === identity).length
   }, [stateRef])
 
+  /**
+   * Split one copy off into its own object and start re-staging what it no longer shares.
+   * Mutates `state` in place; the caller records the undo checkpoint and commits the state.
+   */
+  const unlinkInstance = useCallback((state: EditorState, instance: EditorInstance) => {
+    const sourceObjectId = addedPartHostId(instance)
+    makeInstanceIndependent(state, instance)
+    const cloneObjectId = addedPartHostId(instance)
+    if (sourceObjectId != null && cloneObjectId != null) {
+      independentCopyImports.copyProcessOverrides(sourceObjectId, cloneObjectId)
+    }
+    if (cloneObjectId != null) void independentCopyImports.restageVolumes(cloneObjectId)
+    void independentCopyImports.restageMesh(instance.key)
+  }, [independentCopyImports])
+
+  /** Repaint and commit after one or more copies were unlinked in place. */
+  const commitUnlinked = useCallback(() => {
+    refreshAddedPartMeshes()
+    regenerateThumbnailRef.current?.()
+    setState((current) => current ? { ...current } : current)
+  }, [refreshAddedPartMeshes, regenerateThumbnailRef, setState])
+
   /** Unlink a placed copy while retaining its current scene edits and geometry. */
   const handleMakeIndependent = useCallback((key: string) => {
     const state = stateRef.current
@@ -129,20 +151,34 @@ export function useEditorObjectDuplication(options: ObjectDuplicationOptions) {
       return
     }
     recordHistoryRef.current?.()
-    const sourceObjectId = addedPartHostId(instance)
-    makeInstanceIndependent(state, instance)
-    const cloneObjectId = addedPartHostId(instance)
-    if (sourceObjectId != null && cloneObjectId != null) {
-      independentCopyImports.copyProcessOverrides(sourceObjectId, cloneObjectId)
-    }
-    if (cloneObjectId != null) void independentCopyImports.restageVolumes(cloneObjectId)
-    void independentCopyImports.restageMesh(instance.key)
-    refreshAddedPartMeshes()
-    regenerateThumbnailRef.current?.()
-    setState((current) => current ? { ...current } : current)
+    unlinkInstance(state, instance)
+    commitUnlinked()
     toast.success('This copy is now independent: edits to it no longer affect the others.')
-  }, [independentCopyImports, recordHistoryRef, refreshAddedPartMeshes,
-    regenerateThumbnailRef, setState, stateRef])
+  }, [commitUnlinked, recordHistoryRef, stateRef, unlinkInstance])
 
-  return { handleDuplicate, handleCloneWithCount, linkedCopyCountFor, handleMakeIndependent }
+  /**
+   * Make every copy in `keys` except the first an independent object, as one undo step.
+   *
+   * The fix the by-object linked-copy warning offers: the engine merges linked copies into one
+   * print object (see `lib/editorByObjectLinkedCopies.ts`), so giving each copy its own object is
+   * what lets it print by object. The first copy stays the original, keeping its links elsewhere.
+   */
+  const handleMakeCopiesIndependent = useCallback((keys: readonly string[]) => {
+    const state = stateRef.current
+    if (!state) return
+    const instances = state.plates.flatMap((plate) => plate.instances)
+    const targets = keys.slice(1)
+      .map((key) => instances.find((entry) => entry.key === key))
+      .filter((entry): entry is EditorInstance => entry != null)
+    if (targets.length === 0) return
+
+    recordHistoryRef.current?.()
+    for (const instance of targets) unlinkInstance(state, instance)
+    commitUnlinked()
+
+    const copies = targets.length === 1 ? '1 copy is' : `${targets.length} copies are`
+    toast.success(`${copies} now independent, so every copy prints by object.`)
+  }, [commitUnlinked, recordHistoryRef, stateRef, unlinkInstance])
+
+  return { handleDuplicate, handleCloneWithCount, linkedCopyCountFor, handleMakeIndependent, handleMakeCopiesIndependent }
 }

@@ -29,7 +29,9 @@ import { prisma } from './prisma.js'
 import type { ResolvedSlicingPresetFile } from './slicing-presets.js'
 
 // Version 3 includes artifact-derived per-plate print times in cached result metadata.
-export const SLICE_CACHE_KEY_VERSION = 3
+// Version 4 includes predicted output warnings (by-object linked copies) in that metadata, so an
+// entry stored before the check existed cannot replay an affected slice without its warning.
+export const SLICE_CACHE_KEY_VERSION = 4
 
 export interface SliceCacheLookupInput {
   /** Current request provenance, not the previous cache writer's tags. Excluded from byte identity. */

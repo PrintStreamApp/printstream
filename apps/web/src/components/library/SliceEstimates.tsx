@@ -3,6 +3,9 @@
  * cost) plus optional per-material and per-plate breakdowns, rendered from a slicing
  * job's result `metadata`. A caller with a G-code preview can add per-plate actions.
  *
+ * Also leads with the result's predicted problems ({@link SliceResultWarnings}), because this is
+ * the one view of a finished slice every flow shows before Print; a caller cannot forget them.
+ *
  * Renders the "no usage estimates" fallback line when the slicer reported nothing, so
  * callers can drop it in unconditionally once the job is ready.
  */
@@ -12,6 +15,7 @@ import { Box, Button, Stack, Typography } from '@mui/joy'
 import type { SlicingFilamentMapping, SlicingMaterialUsage, SlicingMetadata } from '@printstream/shared'
 import { formatSecondsDuration } from '../../lib/time'
 import { formatFilamentCost } from '../../lib/filamentCost'
+import { SliceResultWarnings } from './SliceResultWarnings'
 
 export function SliceEstimates({
   metadata,
@@ -47,9 +51,12 @@ export function SliceEstimates({
   const materials = metadata?.materials ?? []
   if (stats.length === 0 && materials.length === 0 && plates.length === 0) {
     return (
-      <Typography level="body-sm" textColor="text.secondary">
-        Slicing finished. The slicer did not report usage estimates for this job.
-      </Typography>
+      <Stack spacing={1}>
+        <SliceResultWarnings metadata={metadata} />
+        <Typography level="body-sm" textColor="text.secondary">
+          Slicing finished. The slicer did not report usage estimates for this job.
+        </Typography>
+      </Stack>
     )
   }
 
@@ -65,6 +72,7 @@ export function SliceEstimates({
 
   return (
     <Stack spacing={1}>
+      <SliceResultWarnings metadata={metadata} />
       {plates.length > 1 && (
         <Typography level="title-sm">All {plates.length} plates</Typography>
       )}

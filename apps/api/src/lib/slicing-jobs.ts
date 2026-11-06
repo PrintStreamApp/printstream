@@ -42,6 +42,7 @@ import {
 } from './slicer-contact.js'
 import { buildEditedThreeMf, createObjectCustomizedThreeMf, embedPlateThumbnails, rekeyReplacedObjectOverrides } from './three-mf.js'
 import { healUnweldedThreeMfMeshes } from './three-mf-mesh-weld.js'
+import { predictSliceInputWarnings } from './slice-input-warnings.js'
 import { resolveSceneEditImports } from './import-store.js'
 import type { ResolvedSlicingPresetFile } from './slicing-presets.js'
 import { withWorkspaceRequestContext, type RequestWorkspaceSummary } from './workspace-context.js'
@@ -758,6 +759,22 @@ export class SlicingJobs {
     }
   }
 
+  /**
+   * The engine family and version this job will run on, for engine-specific predictions. Null when
+   * the target cannot be resolved, which predicts nothing rather than guessing an engine.
+   */
+  private async resolveSlicerEngine(job: SlicingJobState): Promise<{ family: string; version: string } | null> {
+    try {
+      const capabilities = await this.resolveSlicerCapabilities()
+      const targetId = job.request.slicerTargetId ?? capabilities.defaultTargetId
+      const target = capabilities.targets.find((entry) => entry.id === targetId)
+      return target ? { family: target.family, version: target.version } : null
+    } catch (error) {
+      this.logJobEvent(job, 'warn', `Could not resolve the slicer engine for slice warnings: ${(error as Error).message}`)
+      return null
+    }
+  }
+
   private async run(job: SlicingJobState): Promise<void> {
     await withWorkspaceRequestContext(job.workspace, async () => {
       const controller = new AbortController()
@@ -793,7 +810,7 @@ export class SlicingJobs {
         progressController.abort()
         await progressTracker
         this.appendCliOutput(job, result.output.slice(observedOutputCount))
-        job.metadata = result.metadata
+        job.metadata = withSliceWarnings(result.metadata, result.warnings)
         await this.captureSlicerIdentity(job)
         job.outputFileName = normalizeOutputFileName(result.outputFileName ?? job.outputFileName ?? buildDefaultOutputFileName(job.sourceFileName))
         this.setStatus(job, 'saving', slicedArtifactSavingMessage(job.request))
@@ -1063,6 +1080,15 @@ export class SlicingJobs {
         }
       }
 
+      // Read off the FINAL engine input, after every authoring step above, so the prediction
+      // describes the bytes the engine slices. Best-effort; it never fails the slice.
+      const warnings = await predictSliceInputWarnings({
+        sourcePath,
+        plate: job.request.plate,
+        engine: await this.resolveSlicerEngine(job),
+        signal
+      })
+
       // Preparation is done and the project is about to reach the engine: this is the first
       // moment "slicing" is true (see the deliberately absent transition in run()).
       this.setStatus(job, 'slicing', 'Starting the slice')
@@ -1087,6 +1113,7 @@ export class SlicingJobs {
           // was the profile-compatibility retry, which is gone (see the catch below).
           return {
             ...result,
+            warnings,
             preparedProjectPath: await this.stagePreparedProject(job, sourcePath)
           }
         } catch (error) {
@@ -1423,6 +1450,15 @@ export class SlicingJobs {
 
     await this.persistPromise
   }
+}
+
+/**
+ * Attach predicted output problems to the engine's metadata. Kept on the metadata rather than the
+ * job so the slice cache stores and replays them with the output they describe.
+ */
+function withSliceWarnings(metadata: SlicingMetadata, warnings: string[]): SlicingMetadata {
+  if (warnings.length === 0) return metadata
+  return { ...(metadata ?? {}), warnings }
 }
 
 function shouldHideSlicedArtifact(request: CreateSlicingJob): boolean {

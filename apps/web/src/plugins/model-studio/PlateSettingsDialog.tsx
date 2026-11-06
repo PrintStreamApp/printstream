@@ -27,6 +27,11 @@
  * project-wide setting from a dialog scoped to one plate. And an unresolved config warns about
  * NOTHING rather than guessing, which is the safe direction: the process tab still raises (and
  * fixes) the same condition when the user next opens it.
+ *
+ * THE LINKED-COPY WARNING is ours, not Studio's: affected engines merge linked copies into one
+ * print object and then print them together or leave copies out (see
+ * `@printstream/shared/three-mf` `by-object-linked-copies.ts`). It tests the same effective
+ * sequence. The host supplies the assessment because only it knows the plate's copies and engine.
  */
 import WarningAmberRoundedIcon from '@mui/icons-material/WarningAmberRounded'
 import ArrowDownwardRoundedIcon from '@mui/icons-material/ArrowDownwardRounded'
@@ -82,6 +87,11 @@ interface PlateSettingsDialogProps {
   filaments: Array<{ id: number; label: string; color: string }>
   /** Bambu disables custom ordering when any virtual mixed material exists. */
   hasMixedFilaments: boolean
+  /**
+   * The plate's linked-copy warnings under a given effective print sequence (null when unknown),
+   * one sentence each. Omitted by a host that cannot tell, which shows none.
+   */
+  linkedCopyWarnings?: (effectivePrintSequence: string | null) => string[]
   onApply: (settings: PlateSettingsDraft) => void
   onClose: () => void
 }
@@ -114,6 +124,7 @@ export function PlateSettingsDialog({
   globalProcessOverrides,
   filaments,
   hasMixedFilaments,
+  linkedCopyWarnings,
   onApply,
   onClose
 }: PlateSettingsDialogProps) {
@@ -169,6 +180,10 @@ export function PlateSettingsDialog({
   const skirtCollisionRisk = effectiveProcessConfig != null
     && plateSkirtCollisionRisk(draft.printSequence, effectiveProcessConfig)
   const sequenceError = validatePlateFilamentSequences(draft, filamentIds)
+  // The draft's own choice wins; "same as global" falls through to the resolved project value.
+  const effectivePrintSequence = draft.printSequence
+    ?? (effectiveProcessConfig ? createProcessConfigAccessor(effectiveProcessConfig).enum('print_sequence') || null : null)
+  const linkedCopyMessages = linkedCopyWarnings?.(effectivePrintSequence) ?? []
 
   /**
    * What the PROJECT currently sets for one process key, formatted as its own dialog shows it.
@@ -434,6 +449,20 @@ export function PlateSettingsDialog({
             </Typography>
           </Alert>
         )}
+        {linkedCopyMessages.map((message) => (
+          // Names the fix rather than applying it: making copies independent is an object edit,
+          // which belongs in the viewport (its issue sheet offers it in one click).
+          <Alert
+            key={message}
+            size="sm"
+            color="danger"
+            variant="soft"
+            startDecorator={<WarningAmberRoundedIcon />}
+            sx={{ mt: 1 }}
+          >
+            <Typography level="body-xs">{message}</Typography>
+          </Alert>
+        ))}
       </DialogSection>
 
       <DialogSection title="Spiral vase" description="Prints the model as a single continuous outer wall.">

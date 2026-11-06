@@ -25,6 +25,7 @@ function duplicationFixture() {
   initial.plates[0]!.instances.push(source)
   const stateRef: { current: EditorState | null } = { current: initial }
   const restages: Array<{ key: string; live: boolean }> = []
+  const history = { frames: 0 }
   const imports = {
     copyProcessOverrides() {},
     async restageVolumes() {},
@@ -49,14 +50,14 @@ function duplicationFixture() {
       selectExclusive: () => {},
       independentCopyImports: imports,
       promptText: async () => null,
-      recordHistoryRef: { current: () => {} },
+      recordHistoryRef: { current: () => { history.frames += 1 } },
       refreshAddedPartMeshes: () => {},
       regenerateThumbnailRef: { current: null },
       setState
     })
     return { state, ...actions }
   })
-  return { ...view, source, restages }
+  return { ...view, source, restages, history }
 }
 
 test('independent duplication re-homes an import only after its clone is on the live plate', () => {
@@ -78,4 +79,19 @@ test('linked duplication retains one editable identity and does not restage an i
   const clone = fixture.result.current.state!.plates[0]!.instances[1]!
   assert.equal(fixture.result.current.linkedCopyCountFor(clone.key), 2)
   assert.deepEqual(fixture.restages, [])
+})
+
+test('making copies independent unlinks every copy but the first, as one undo step', () => {
+  const fixture = duplicationFixture()
+  act(() => fixture.result.current.handleDuplicate(fixture.source.key, false, 2))
+  const keys = fixture.result.current.state!.plates[0]!.instances.map((instance) => instance.key)
+  assert.equal(fixture.result.current.linkedCopyCountFor(keys[0]!), 3)
+
+  const framesBefore = fixture.history.frames
+  act(() => fixture.result.current.handleMakeCopiesIndependent(keys))
+  assert.equal(fixture.history.frames - framesBefore, 1)
+
+  for (const key of keys) assert.equal(fixture.result.current.linkedCopyCountFor(key), 1, key)
+  // The unlinked copies re-stage their own meshes; the first keeps the original's.
+  assert.deepEqual(fixture.restages.map((entry) => entry.key), keys.slice(1))
 })

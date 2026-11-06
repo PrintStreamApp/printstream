@@ -1871,7 +1871,14 @@ export const slicingMetadataSchema = z.object({
     estimatedFilamentLengthMm: z.number().nonnegative().nullable().optional(),
     estimatedFilamentWeightGrams: z.number().nonnegative().nullable().optional(),
     materials: z.array(slicingMaterialUsageSchema).nullable().optional()
-  })).optional()
+  })).optional(),
+  /**
+   * Problems PrintStream predicts in this output that did not fail the slice, one user-facing
+   * sentence each (today: linked copies the engine mishandles when printing by object, see
+   * `three-mf/by-object-linked-copies.ts`). Computed by the API from the exact engine input, so it
+   * describes what was actually sliced. Absent on outputs sliced before the check existed.
+   */
+  warnings: z.array(z.string()).optional()
 }).optional()
 export type SlicingMetadata = z.infer<typeof slicingMetadataSchema>
 
