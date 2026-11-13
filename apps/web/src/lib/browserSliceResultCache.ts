@@ -12,15 +12,21 @@ export type BrowserSliceResultIdentity = {
   sourceFileId: string
   sourceVersionId: string | null
   input: Omit<SliceFileSubmitInput, 'preparedSourceId'>
+  /** `slicingPresetRevision.ts`: the request names presets by id, and an update keeps the id. */
+  presetRevision: number
 }
 
-/** Retain every user-visible slice input while excluding the disposable prepared-source proof. */
+/**
+ * Retain every user-visible slice input while excluding the disposable prepared-source proof.
+ *
+ * @param presetRevision `currentSlicingPresetRevision()` when the slice was requested
+ */
 export function browserSliceResultIdentity(input: {
   file: { id: string }
   versionId?: string | null
   action?: unknown
   keepDialogOpen?: unknown
-} & SliceFileSubmitInput): BrowserSliceResultIdentity {
+} & SliceFileSubmitInput, presetRevision: number): BrowserSliceResultIdentity {
   const {
     file,
     versionId,
@@ -32,7 +38,8 @@ export function browserSliceResultIdentity(input: {
   return {
     sourceFileId: file.id,
     sourceVersionId: versionId ?? null,
-    input: sliceInput
+    input: sliceInput,
+    presetRevision
   }
 }
 

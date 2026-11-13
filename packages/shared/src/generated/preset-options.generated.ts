@@ -431,6 +431,83 @@ export const PRINTER_PRESET_OPTIONS: ReadonlySet<string> = new Set([
   "default_filament_profile"
 ])
 
+/**
+ * PrintConfig default per SINGLE-VALUE printer option. A machine retarget writes it for an option
+ * the OLD machine's preset defined and the new one does not, which is what Bambu Studio holds after
+ * it replaces the printer preset. Vector and point options are omitted on purpose: their defaults
+ * do not parse faithfully, and the retarget owns those through its topology rules.
+ */
+export const PRINTER_PRESET_DEFAULTS: Readonly<Record<string, string>> = {
+  "printer_technology": "FFF",
+  "bed_custom_texture": "",
+  "bed_custom_model": "",
+  "gcode_flavor": "marlin",
+  "single_extruder_multi_material": "0",
+  "machine_start_gcode": "G28 ; home all axes\nG1 Z5 F5000 ; lift nozzle\n",
+  "machine_end_gcode": "M104 S0 ; turn off temperature\nG28 X0  ; home X axis\nM84     ; disable motors\n",
+  "printing_by_object_gcode": "",
+  "before_layer_change_gcode": "",
+  "layer_change_gcode": "",
+  "time_lapse_gcode": "",
+  "wrapping_detection_gcode": "",
+  "change_filament_gcode": "",
+  "printable_height": "100",
+  "extruder_clearance_dist_to_rod": "40",
+  "extruder_clearance_max_radius": "68",
+  "extruder_clearance_height_to_lid": "120",
+  "extruder_clearance_height_to_rod": "40",
+  "nozzle_height": "4",
+  "master_extruder_id": "1",
+  "silent_mode": "0",
+  "scan_first_layer": "0",
+  "wrapping_detection_layers": "20",
+  "machine_load_filament_time": "0",
+  "machine_unload_filament_time": "0",
+  "ams_filament_load_time_ams": "0",
+  "ams_filament_load_time_ams_lite": "0",
+  "ams_filament_load_time_n3f_s": "0",
+  "ams_filament_unload_time_ams": "0",
+  "ams_filament_unload_time_ams_lite": "0",
+  "ams_filament_unload_time_n3f_s": "0",
+  "default_ams_type": "-1",
+  "machine_pause_gcode": "",
+  "template_custom_gcode": "",
+  "machine_hotend_change_time": "0",
+  "auxiliary_fan": "0",
+  "fan_direction": "undefine",
+  "support_chamber_temp_control": "0",
+  "support_air_filtration": "0",
+  "support_cooling_filter": "0",
+  "cooling_filter_enabled": "0",
+  "printer_structure": "undefine",
+  "farthest_point_timelapse": "0",
+  "printer_notes": "",
+  "print_in_clockwise": "0",
+  "enable_long_retraction_when_cut": "0",
+  "host_type": "octoprint",
+  "print_host": "",
+  "printhost_apikey": "",
+  "print_host_webui": "",
+  "printhost_cafile": "",
+  "printhost_port": "",
+  "printhost_authorization_type": "key",
+  "printhost_user": "",
+  "printhost_password": "",
+  "printhost_ssl_ignore_revoke": "0",
+  "use_relative_e_distances": "1",
+  "use_firmware_retraction": "0",
+  "machine_switch_extruder_time": "5",
+  "enable_pre_heating": "0",
+  "support_object_skip_flush": "0",
+  "bed_temperature_formula": "by_first_filament",
+  "machine_prepare_compensation_time": "260",
+  "group_algo_with_time": "0",
+  "support_fast_purge_mode": "0",
+  "machine_max_force_Y": "0",
+  "machine_bed_mass_Y": "0",
+  "machine_max_printed_mass": "0"
+}
+
 /** Options a PROCESS (print) preset carries: `s_Preset_print_options`. */
 export const PRINT_PRESET_OPTIONS: ReadonlySet<string> = new Set([
   "layer_height",

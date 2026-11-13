@@ -25,7 +25,8 @@ import { applyProcessPresetBinding, type ProcessPresetBinding } from './process-
 import type { ProcessConfig } from './process-settings.js'
 import { canonicalBambuModelKey } from './bambu-model-keys.js'
 import { processConfigValuesEqual, processSettingsCatalog } from './process-settings.js'
-import { PRINTER_PRESET_OPTIONS, PRINT_PRESET_OPTIONS } from './generated/preset-options.generated.js'
+import { PRINTER_PRESET_DEFAULTS, PRINTER_PRESET_OPTIONS, PRINT_PRESET_OPTIONS } from './generated/preset-options.generated.js'
+import { clearManualFilamentMapFromProjectSettings } from './three-mf/manual-filament-map.js'
 import { repairFlushMultiplier, repairFlushVolumesMatrix } from './flush-volumes-matrix.js'
 import { buildFilamentVariantRows } from './filament-variant-index.js'
 import { rebindProjectFilamentPhysics, type FilamentSlotRebind } from './filament-rebind.js'
@@ -36,9 +37,10 @@ import {
   machinePresetSlotIndexFor,
   withChangedFromSystemSlot
 } from './three-mf-project-config.js'
-import { isPrintVariantOption } from './variant-options.js'
+import { isFilamentVariantOption, isPrintVariantOption } from './variant-options.js'
+import { readFilamentVariantRows, relayFilamentVariantValue, sameFilamentVariantRows, type FilamentVariantRow } from './filament-variant-rows.js'
 import { dropEngineHostileOverrides } from './settings-value-guard.js'
-import { processVariantColumnIndices } from './process-variant-layout.js'
+import { layProcessOverrideOnto, processVariantColumnIndices, readProcessVariantLayout, type ProcessVariantLayout } from './process-variant-layout.js'
 
 export type ProfileRecord = Record<string, unknown>
 
@@ -136,6 +138,22 @@ export function retargetProjectSettingsToMachine(
     if (!PRINTER_PRESET_OPTIONS.has(key)) continue
     next[key] = normalizeProfileValueForProject(key, cloneValue(value), projectSettings[key])
   }
+  // An option only the OLD machine's preset defined reverts to its default rather than surviving.
+  // Bambu Studio replaces the whole printer preset on a switch, so an H2D project moved to a P1P
+  // holds the P1P's (default) `bed_temperature_formula` and `master_extruder_id`, not the H2D's
+  // "by_highest_temp" and 2. Single-value options only: see `PRINTER_PRESET_DEFAULTS`.
+  //
+  // Only on a genuine SWITCH. This function also runs against the project's own printer (every
+  // editor slice, the topology heal), where a key the preset file omits holds whatever Studio saved
+  // into the project, possibly the user's own edit, and resetting it would be a silent repair.
+  // G-code templates are never filled: a resolver that omitted one would otherwise get a generic
+  // Marlin start sequence, which is this bug again in a worse form.
+  if (firstProfileString(projectSettings.printer_settings_id) !== target.printerSettingsId) {
+    for (const [key, fallback] of Object.entries(PRINTER_PRESET_DEFAULTS)) {
+      if (key.endsWith('_gcode') || key in machineProfile || !(key in projectSettings)) continue
+      next[key] = normalizeProfileValueForProject(key, fallback, projectSettings[key])
+    }
+  }
   next.printer_settings_id = target.printerSettingsId
   next.printer_model = target.printerModel
   // Re-declare the project's printer-compatibility for the target. The source printer's
@@ -160,7 +178,14 @@ export function retargetProjectSettingsToMachine(
   // block where two are required, and BambuStudio read the missing block out of bounds and
   // segfaulted mid-slice (see flush-volumes-matrix.ts). Re-derive it for the new topology.
   repairFlushSizingForTopology(next)
-  return repairEstimateModeProjectSettings(next, machineProfile)
+  const retargeted = repairEstimateModeProjectSettings(next, machineProfile)
+  // A single-nozzle machine has no nozzle to choose. A Manual map left from a dual-nozzle source
+  // names an extruder the new machine lacks; the browser slice already cleared it, while the save
+  // and the slicer's legacy path kept it. Cleared here, it is cleared on every path.
+  if (stringArray(retargeted.physical_extruder_map).length <= 1) {
+    return clearManualFilamentMapFromProjectSettings(retargeted)
+  }
+  return retargeted
 }
 
 /**
@@ -302,13 +327,23 @@ export function applyMachineSettingOverrides(
  * the one that cannot invent an override nobody made. A key the record NAMES but whose value the
  * preset has since caught up to is dropped for the same reason -- the record is BambuStudio's, and
  * it is not re-checked when a preset changes underneath it.
+ *
+ * The record belongs to the project's OWN printer preset. Pass `presetName` (the preset being
+ * asked about) and a different preset answers `{}`: Bambu Studio never transfers printer-setting
+ * changes to another printer preset (`Tab::select_preset` sets `no_transfer` for the printer tab,
+ * so its dialog offers only Discard or Save), and a P1P start G-code answered "against" an X2D
+ * once reached the engine and printed on the wrong nozzle. The project's preset matches by its
+ * `printer_settings_id` or by the system preset it inherits, so a project whose custom printer
+ * preset is not installed here still answers against the system preset the editor falls back to.
  */
 export function readMachineSettingOverrides(
   projectSettings: ProfileRecord,
-  presetConfig: Record<string, string | string[]>
+  presetConfig: Record<string, string | string[]>,
+  options: { presetName?: string | null } = {}
 ): Record<string, string | string[]> {
   const machineIndex = machinePresetSlotIndexFor(projectSettings)
   if (machineIndex == null) return {}
+  if (options.presetName && !isProjectOwnMachinePreset(projectSettings, machineIndex, options.presetName)) return {}
   // Catalog-filtered HERE and not in the writer: this answer drives a dialog, so a key the dialog
   // cannot render has nothing to show. The writer must stay permissive, or saving would delete the
   // very entries this hides.
@@ -326,6 +361,22 @@ export function readMachineSettingOverrides(
     overrides[key] = value
   }
   return overrides
+}
+
+/**
+ * Whether `presetName` is the printer preset a project's machine record was made against: the
+ * project's own `printer_settings_id`, or the system preset its machine `inherits_group` slot names.
+ * A project that names neither cannot be placed, and answers true so its record is not hidden
+ * from the only preset it could belong to.
+ */
+function isProjectOwnMachinePreset(projectSettings: ProfileRecord, machineIndex: number, presetName: string): boolean {
+  const ownName = firstProfileString(projectSettings.printer_settings_id)
+  // Positional: read the slot directly. `stringArray` drops blank entries, which shifts every slot.
+  const slot = Array.isArray(projectSettings.inherits_group) ? projectSettings.inherits_group[machineIndex] : null
+  const parentName = typeof slot === 'string' && slot.trim() ? slot.trim() : null
+  if (!ownName && !parentName) return true
+  const wanted = presetName.trim()
+  return wanted === ownName || wanted === parentName
 }
 
 
@@ -371,13 +422,23 @@ function setInheritsGroupSlot(record: ProfileRecord, slot: 'process' | 'machine'
  * key from the resolved process profile, sets `print_settings_id`, then applies the user's per-slice
  * overrides on top. Process keys are disjoint from machine keys, so this composes after the machine
  * retarget without clobbering it. The project's filament selection and layout are untouched.
+ *
+ * Overrides are laid onto the final process columns by (extruder id, variant), from the layout they
+ * were authored against (`layProcessOverrideOnto`). That layout defaults to the incoming project's;
+ * a caller that has ALREADY retargeted the machine must pass the pre-retarget layout as
+ * `options.overridesLayout`, because the retarget re-indexed the project's own columns and the
+ * carried overrides still describe the old machine.
  */
 export function applyProcessProfileToProjectSettings(
   projectSettings: ProfileRecord,
   processProfile: ProfileRecord,
   overrides: Record<string, string | string[]> = {},
-  binding?: ProcessPresetBinding
+  binding?: ProcessPresetBinding,
+  options: { overridesLayout?: ProcessVariantLayout | null } = {}
 ): ProfileRecord {
+  const overridesLayout = options.overridesLayout !== undefined
+    ? options.overridesLayout
+    : readProcessVariantLayout(projectSettings)
   const next: ProfileRecord = { ...projectSettings }
   for (const [key, value] of Object.entries(processProfile)) {
     if (NON_SETTING_PROFILE_KEYS.has(key)) continue
@@ -392,7 +453,9 @@ export function applyProcessProfileToProjectSettings(
   // RESOLVES, i.e. the ordinary one, so without it a save dropped an engine-hostile override while
   // the slice of the same session state still wrote it, and the two files disagreed.
   for (const [key, value] of Object.entries(dropEngineHostileOverrides(overrides))) {
-    next[key] = cloneValue(value)
+    next[key] = Array.isArray(value)
+      ? layProcessOverrideOnto(value.map(String), overridesLayout, next, key)
+      : cloneValue(value)
   }
   assertValidProcessFilamentReferences(next, filamentSlotCount(next))
   const name = binding?.name ?? (typeof processProfile.name === 'string' ? processProfile.name.trim() : '')
@@ -484,13 +547,17 @@ export function applyMachineRetargetToProjectSettings(
   projectSettings: ProfileRecord,
   plan: MachineRetargetPlan
 ): ProfileRecord {
+  // The carried process overrides were authored against the SOURCE machine's columns.
+  const sourceProcessLayout = readProcessVariantLayout(projectSettings)
   let next = retargetProjectSettingsToMachine(projectSettings, plan.machineConfig, {
     printerSettingsId: plan.printerSettingsId,
     printerModel: plan.printerModel,
     printerPresetInherits: plan.printerPresetInherits
   })
   if (plan.processConfig) {
-    next = applyProcessProfileToProjectSettings(next, plan.processConfig, plan.processSettingOverrides ?? {})
+    next = applyProcessProfileToProjectSettings(next, plan.processConfig, plan.processSettingOverrides ?? {}, undefined, {
+      overridesLayout: sourceProcessLayout
+    })
   }
   if (plan.filamentRebinds && plan.filamentRebinds.length > 0) {
     next = rebindProjectFilamentPhysics(next, plan.filamentRebinds)
@@ -787,9 +854,16 @@ export function repairEstimateModeProjectSettings(settings: ProfileRecord, machi
     // Built TOGETHER: BambuStudio rejects the whole project ("Invalid configuration file") unless
     // `filament_self_index` has exactly one entry per `filament_extruder_variant` row. Producing
     // them from separate passes is what let them drift: see `buildFilamentVariantLayout`.
+    const slotCount = Math.max(
+      stringArray(next.filament_type).length,
+      stringArray(next.filament_settings_id).length,
+      stringArray(next.filament_colour).length
+    )
+    const sourceRows = readFilamentVariantRows(next, slotCount)
     const layout = buildFilamentVariantRows(printerExtruderVariants, stringArray(next.filament_type))
     next.filament_extruder_variant = layout.variants
     next.filament_self_index = layout.selfIndex
+    relayFilamentVariantValues(next, sourceRows, readFilamentVariantRows(next, slotCount), slotCount)
   }
 
   // `filament_nozzle_map` is indexed by FILAMENT (one entry per project filament, valued with the
@@ -879,6 +953,35 @@ function buildExtruderAmsCount(existingValues: string[], extruderCount: number):
     return existingValues.map((value) => value.endsWith('|4#0') ? `${value.slice(0, -4)}|4#1` : value || '1#0|4#1')
   }
   return Array.from({ length: extruderCount }, () => '1#0|4#1')
+}
+
+/**
+ * Re-lay every variant-scoped filament value from the layout the record HAD to the one just built
+ * for the new machine, by (slot, variant): see `filament-variant-rows.ts`.
+ *
+ * Without it the layout moved and the values did not. A P1P project with two materials the
+ * workspace has no presets for, retargeted to an X2D, got a 12-row layout over 4 values, so the
+ * second material's rows were all out of range and the engine read the FIRST material's
+ * temperature for it. A slot whose material does get a rebind target is rewritten again by
+ * `rebindProjectFilamentPhysics`; this is what the rest are left with.
+ *
+ * Mutates `record`. A value that does not match the old layout is left as it was: it cannot be
+ * attributed, and the repair stage owns stale arrays.
+ */
+function relayFilamentVariantValues(
+  record: Record<string, unknown>,
+  from: FilamentVariantRow[] | null,
+  to: FilamentVariantRow[] | null,
+  slotCount: number
+): void {
+  if (!from || !to || slotCount === 0 || sameFilamentVariantRows(from, to)) return
+  for (const [key, value] of Object.entries(record)) {
+    if (!Array.isArray(value) || !isFilamentVariantOption(key)) continue
+    // The layout's own columns were just written for the new machine.
+    if (key === 'filament_extruder_variant' || key === 'filament_self_index') continue
+    const relayed = relayFilamentVariantValue(value, from, to)
+    if (relayed) record[key] = relayed
+  }
 }
 
 function stringArray(value: unknown): string[] {

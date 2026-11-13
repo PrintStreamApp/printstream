@@ -50,7 +50,7 @@ import {
   remapModelSettingsFilamentRefs
 } from './filament-slot-remap.js'
 export { filamentSlotIdRemap, isIdentityFilamentSlotRemap } from './filament-slot-remap.js'
-export { buildProjectSettingsTransforms } from './bake-project-settings.js'
+export { applyFlushVolumes, buildProjectSettingsTransforms } from './bake-project-settings.js'
 export { applyGlobalProcessOverrides, applyModelKindMarker, repairProjectSettingsDocument } from './bake-project-settings-finishing.js'
 
 export { PAINT_ATTRIBUTE_BY_CHANNEL } from './import-edit-index.js'

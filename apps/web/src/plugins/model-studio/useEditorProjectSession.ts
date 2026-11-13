@@ -119,6 +119,11 @@ export function useEditorProjectSession({
     queryClient.removeQueries({ queryKey: ['library-editor-scene-initial', baseFileId] })
     queryClient.removeQueries({ queryKey: ['library-editor-scenes-rest', baseFileId] })
     queryClient.removeQueries({ queryKey: ['library-editor-auxiliaries', baseFileId] })
+    // Both `staleTime: Infinity` and keyed on `'current'` for the head, so a reopen after a save
+    // would otherwise read the PRE-save project: a retargeted printer's flush grid sized for the old
+    // extruder count (and silently dropped by the bake), or purge volumes reverted on the next edit.
+    queryClient.removeQueries({ queryKey: ['library-editor-embedded-presets', baseFileId] })
+    queryClient.removeQueries({ queryKey: ['library-editor-project-settings', baseFileId] })
     // The file's own DTO goes too. Nothing invalidates this key (`library-files` does not prefix-match
     // `library-file`), so at a 60s staleTime a reopen inside that window inherits the PRE-save row,
     // including `currentVersionNumber`, which seeds the concurrent-save baseline. That made an

@@ -1,7 +1,7 @@
 /** Synthetic dual-nozzle layouts reproduce the CHM comparison without retaining customer data. */
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { alignProcessConfigToLayout } from './process-variant-layout.js'
+import { alignProcessConfigToLayout, layProcessOverrideOnto } from './process-variant-layout.js'
 import { diffProcessConfig, resolvedProcessConfigBaselines, resolvedProcessModifiedKeys, resolvedProcessPresetOverrideKeys } from './process-settings.js'
 import { extractProjectProcessConfig } from './three-mf-project-config.js'
 import { applyProcessPresetBinding } from './process-preset-binding.js'
@@ -70,4 +70,38 @@ test('custom-parent emphasis and native metadata exclude unused nozzle variants 
   applyProcessPresetBinding(record, preset, { name: 'Synthetic custom H2D', parentName: 'Standard', parentConfig: preset })
   assert.equal((record.different_settings_to_system as string[])[0], 'support_interface_speed')
   assert.deepEqual((record.different_settings_to_system as string[]).slice(1), ['filament_flow_ratio', 'machine_start_gcode'])
+})
+
+// An X1C project's process override carried onto an X2D. Verbatim, the 2-column X1C vector left
+// the X2D's Bowden columns out of range, and the engine read the X1C value (150) where the X2D
+// preset says 50. Studio transfers by (extruder id, variant) and keeps the preset elsewhere.
+const X1C_LAYOUT = {
+  print_extruder_variant: ['Direct Drive Standard', 'Direct Drive High Flow'],
+  print_extruder_id: ['1', '1']
+}
+const X2D_PRESET = {
+  print_extruder_variant: ['Direct Drive Standard', 'Direct Drive High Flow', 'Direct Drive E3D High Flow', 'Bowden Standard', 'Bowden High Flow', 'Bowden E3D High Flow'],
+  print_extruder_id: ['1', '1', '1', '2', '2', '2'],
+  outer_wall_speed: ['200', '500', '500', '50', '50', '50']
+}
+
+test('a carried override transfers by extruder and variant, and the preset keeps every other column', () => {
+  assert.deepEqual(
+    layProcessOverrideOnto(['150', '350'], X1C_LAYOUT, X2D_PRESET, 'outer_wall_speed'),
+    ['150', '350', '500', '50', '50', '50']
+  )
+})
+
+test('an override already in the target layout, or a non-variant key, is written as authored', () => {
+  const sixWide = ['1', '2', '3', '4', '5', '6']
+  assert.equal(layProcessOverrideOnto(sixWide, X1C_LAYOUT, X2D_PRESET, 'outer_wall_speed'), sixWide)
+  assert.deepEqual(layProcessOverrideOnto(['3'], X1C_LAYOUT, X2D_PRESET, 'wall_loops'), ['3'])
+})
+
+test('with no known authoring layout the override keeps its columns and the preset fills the tail', () => {
+  assert.deepEqual(
+    layProcessOverrideOnto(['150', '350'], null, X2D_PRESET, 'outer_wall_speed'),
+    ['150', '350', '500', '50', '50', '50']
+  )
+  assert.deepEqual(layProcessOverrideOnto(['150'], null, X2D_PRESET, 'outer_wall_speed'), ['150'], 'a single value is the engine\'s broadcast form')
 })

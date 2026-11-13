@@ -16,6 +16,7 @@
  * megabytes.
  */
 import { unzipArchiveBytes } from './zipArchiveClient'
+import { bumpSlicingPresetRevision } from '../../../lib/slicingPresetRevision'
 import {
   extractUploadedProfiles,
   isPresetArchivePresetEntry,
@@ -75,15 +76,19 @@ export async function addLocalSlicingPresets(file: File): Promise<LocalSlicingPr
 
   const replaced = new Set(added.map((profile) => profile.id))
   writeStorage([...existing.filter((profile) => !replaced.has(profile.id)), ...added])
+  // A re-upload REPLACES a preset under the same id: see `slicingPresetRevision.ts`.
+  bumpSlicingPresetRevision()
   return added
 }
 
 export function removeLocalSlicingPreset(id: string): void {
   writeStorage(listLocalSlicingPresets().filter((profile) => profile.id !== id))
+  bumpSlicingPresetRevision()
 }
 
 export function clearLocalSlicingPresets(): void {
   readStorage()?.removeItem(STORAGE_KEY)
+  bumpSlicingPresetRevision()
 }
 
 /** Turn the picked file into preset entries, inflating a preset archive with fflate. */

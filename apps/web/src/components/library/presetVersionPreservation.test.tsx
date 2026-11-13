@@ -94,7 +94,7 @@ test('clearing machine overrides is not undone by changing engine', () => {
   const wrapper = ({ children }: { children: React.ReactNode }) => React.createElement(QueryClientProvider, { client }, children)
   const view = renderHook(({ target }) => {
     const [current, setCurrent] = React.useState<Record<string, string | string[]>>({})
-    useProjectMachineOverrides({ sourceFileId: 'file', fileVersion: 'v1', machineProfileId: 'machine', slicerTargetId: target, current, onSeed: setCurrent })
+    useProjectMachineOverrides({ sourceFileId: 'file', fileVersion: 'v1', machineProfileId: 'machine', slicerTargetId: target, hasCurrentEdits: Object.keys(current).length > 0, onSeed: (overrides) => setCurrent(overrides) })
     return { current, setCurrent }
   }, { initialProps: { target: 'a' }, wrapper })
   assert.equal(view.result.current.current.machine_max_acceleration_x, '1000')

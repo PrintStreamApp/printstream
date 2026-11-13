@@ -81,7 +81,7 @@ const MachineSettingsDialog = lazy(() => import('../settings/MachineSettingsDial
 // never open.
 const SettingsSearchDialog = lazy(() => import('../settings/SettingsSearchDialog'))
 import type { AddedMaterialChoice, MixedMaterialChoice, SessionFilamentSlot } from './useMaterialSlots'
-import { machineOverridesCarriedWarning, machineTargetConflictWarnings } from '../../lib/machineSwitchWarnings'
+import { machineOverridesSetAsideWarning, machineTargetConflictWarnings } from '../../lib/machineSwitchWarnings'
 import { MaterialEditDialog } from './MaterialEditDialog'
 import { MaterialSwatchButton } from './MaterialSwatchButton'
 import { LoadedMaterialMenuItems } from './LoadedMaterialMenuItems'
@@ -265,12 +265,10 @@ export interface SliceSettingsController {
    */
   machineSettingOverridesKnown: boolean
   /**
-   * The printer model the machine overrides were authored against, so a later machine switch can
-   * SAY that they are still applied. Advisory only: it never rides the save or slice request, and a
-   * stale value costs a slightly-off warning, never a wrong setting.
+   * Printer-setting changes held for a DIFFERENT printer preset, and therefore not applied (see
+   * `lib/machineSettingOverrideScope.ts`). Drives the notice that says so. Null when none.
    */
-  machineOverridesModel: string | null
-  setMachineOverridesModel: React.Dispatch<React.SetStateAction<string | null>>
+  machineOverridesSetAside: { keyCount: number; presetName: string | null } | null
   hasPlateObjects: boolean
   selectedSliceObjectIds: Set<number>
   plateObjects: Array<{ id: number; name: string }>
@@ -490,9 +488,13 @@ export interface SliceConfigSnapshot {
   processProfileSelectionTouched: boolean
   /** Global process-setting overrides, so the editor's undo/redo can revert a global process edit. */
   processSettingOverrides: Record<string, string | string[]>
-  /** The project's machine overrides, so undo can revert an "Apply to this project" printer edit. */
+  /**
+   * The project's HELD machine overrides and the preset they belong to, so undo can revert an
+   * "Apply to this project" printer edit and a printer switch restores them with their scope.
+   */
   machineSettingOverrides: Record<string, string | string[]>
-  machineOverridesModel: string | null
+  machineOverridesPresetId?: string | null
+  machineOverridesPresetName?: string | null
 }
 
 /**
@@ -566,7 +568,7 @@ export const SliceSettingsPanel = memo(function SliceSettingsPanel({ controller,
     compatibleProcessProfiles, selectedProcessProfile, currentProcessProfileId, setProcessProfileId, setProcessSettingOverrides,
     processProfileSelectionTouchedRef, selectedSlicerTargetIdForGuards, processSettingOverrides, setProcessSettingsDialogOpen, settingsEditListenerRef, resolveConfig, resolveFilamentConfig,
     settingsSearchKey, setSettingsSearchKey,
-    machineSettingOverrides, setMachineSettingOverrides, machineOverridesModel, setMachineOverridesModel,
+    machineSettingOverrides, setMachineSettingOverrides, machineOverridesSetAside,
     hasPlateObjects, selectedSliceObjectIds, plateObjects, onToggleSliceObject, openSliceObjectSettings, plateGcode, perObjectSettings,
     projectFilaments, materialOptions, loadedMaterialOptions, printerTrayMap, materialToolheadOptions, filamentTrackSwitchReady,
     filamentMaterialOptionIds, filamentMaterialTypeFilters, setFilamentMaterialTypeFilters,
@@ -785,14 +787,12 @@ export const SliceSettingsPanel = memo(function SliceSettingsPanel({ controller,
     }).length,
     [machineSettingOverrides, showDeveloperOptions]
   )
-  // Kept, not cleared, on a machine switch -- and therefore said out loud. See the helper's header.
-  const machineOverridesCarried = useMemo(
-    () => machineOverridesCarriedWarning({
-      overriddenKeyCount: machineChangedCount,
-      previousPrinterModel: machineOverridesModel,
-      printerModel: selectedPrinterModel
-    }),
-    [machineChangedCount, machineOverridesModel, selectedPrinterModel]
+  // Set aside, not applied, after a printer switch -- and therefore said out loud. See the helper.
+  const machineOverridesNotice = useMemo(
+    () => machineOverridesSetAside
+      ? machineOverridesSetAsideWarning({ setAsideKeyCount: machineOverridesSetAside.keyCount, presetName: machineOverridesSetAside.presetName })
+      : null,
+    [machineOverridesSetAside]
   )
 
   const processChangedCount = useProcessChangedCount({
@@ -1026,11 +1026,11 @@ export const SliceSettingsPanel = memo(function SliceSettingsPanel({ controller,
         {/* A pick this target cannot represent. Sits with the controls it is about, and stays
             visible while the conflict lasts, a toast would vanish while the wrong value remains
             on screen. The pick itself is kept, so switching back restores it. */}
-        {(machineOverridesCarried || (targetConflicts && targetConflicts.length > 0)) && (
+        {(machineOverridesNotice || (targetConflicts && targetConflicts.length > 0)) && (
           <Stack spacing={0.5} sx={{ mt: 1 }}>
-            {machineOverridesCarried && (
-              <Alert key={machineOverridesCarried.key} size="sm" color="warning" variant="soft" startDecorator={<WarningAmberRoundedIcon />}>
-                {machineOverridesCarried.message}
+            {machineOverridesNotice && (
+              <Alert key={machineOverridesNotice.key} size="sm" color="warning" variant="soft" startDecorator={<WarningAmberRoundedIcon />}>
+                {machineOverridesNotice.message}
               </Alert>
             )}
             {machineTargetConflictWarnings(targetConflicts ?? []).map((warning) => (
@@ -1676,7 +1676,6 @@ export const SliceSettingsPanel = memo(function SliceSettingsPanel({ controller,
               // exactly as the process dialog and the material pickers do.
               settingsEditListenerRef.current?.()
               setMachineSettingOverrides(overrides)
-              setMachineOverridesModel(selectedPrinterModel)
             }}
           />
         </LazyDialogBoundary>
@@ -1730,7 +1729,6 @@ export const SliceSettingsPanel = memo(function SliceSettingsPanel({ controller,
                 ...current,
                 enable_filament_dynamic_map: dynamicMapping ? '1' : '0'
               }))
-              setMachineOverridesModel(selectedPrinterModel)
             }
             setFilamentGroupingOpen(false)
           }}

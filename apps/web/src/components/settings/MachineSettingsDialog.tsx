@@ -47,7 +47,7 @@ import {
   setMachineColumnValue,
   type ProcessConfig
 } from '@printstream/shared'
-import { apiFetch } from '../../lib/apiClient'
+import { saveSlicingPreset } from '../../lib/saveSlicingPreset'
 import { resolveWorkspaceMachineConfig } from '../workspaceMachineResolver'
 import { useEffectiveSlicerDeveloperMode } from '../../lib/slicerDeveloperMode'
 import { usePromptDialog } from '../PromptDialogProvider'
@@ -276,16 +276,7 @@ export default function MachineSettingsDialog(props: MachineSettingsDialogProps)
         // ancestry because workspace custom presets cannot currently inherit from one another.
         inheritFrom: !overwrite && !canEditOriginal ? machineProfileName : undefined
       })
-      await apiFetch('/api/slicing/profiles', {
-        method: 'POST',
-        body: {
-          kind: 'machine',
-          fileName: `${name}.json`,
-          encoding: 'utf8',
-          overwrite,
-          content: JSON.stringify(presetConfig, null, 2)
-        }
-      })
+      await saveSlicingPreset({ kind: 'machine', name, overwrite, config: presetConfig })
       onClose()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save preset')

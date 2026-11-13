@@ -16,11 +16,23 @@ export type PreparedSliceStageIdentity = Pick<StageSnapshotInput,
   | 'objectProcessOverrides'
   | 'target'
   | 'slicerTargetId'
->
+> & {
+  /**
+   * `slicingPresetRevision.ts`. The target names presets by id, and the bake resolves their
+   * CONTENT, so an in-place preset update would otherwise reuse bytes baked from the old values.
+   */
+  presetRevision: number
+}
 
-/** Retain only the semantic inputs that determine the staged project bytes and proof. */
-export function preparedSliceStageIdentity(input: StageSnapshotInput): PreparedSliceStageIdentity {
+/**
+ * Retain only the semantic inputs that determine the staged project bytes and proof.
+ *
+ * @param presetRevision `currentSlicingPresetRevision()` read BEFORE staging, so a preset changed
+ *   mid-bake makes the next slice stage again rather than reuse.
+ */
+export function preparedSliceStageIdentity(input: StageSnapshotInput, presetRevision: number): PreparedSliceStageIdentity {
   return {
+    presetRevision,
     sceneEdit: input.sceneEdit,
     sourceFileId: input.sourceFileId,
     configurationBaseFileId: input.configurationBaseFileId,

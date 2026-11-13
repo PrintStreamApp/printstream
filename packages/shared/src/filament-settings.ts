@@ -300,6 +300,18 @@ export function filamentSlotValuesCarryTo(slotConfig: ProcessConfig, presetConfi
 }
 
 /**
+ * A material type in the RAW space Bambu Studio's transfer decision compares, from either spelling
+ * a project can hold. The editor writes the DISPLAY form into a project (`PLA-S` for a support PLA)
+ * and Studio 2.7.1.62 wrote `PLA-BASIC`; both are the raw `PLA` a preset carries, so neither is a
+ * material change. Upper-cased for comparison; null when there is no type.
+ */
+export function filamentTransferType(value: string | null | undefined): string | null {
+  const type = value?.trim().toUpperCase()
+  if (!type) return null
+  return type.replace(/-BASIC$/, '').replace(/-S$/, '')
+}
+
+/**
  * The RAW `filament_type` of a config: what BambuStudio's transfer decision reads.
  *
  * Deliberately not the DERIVED display type. `Tab::select_preset` compares

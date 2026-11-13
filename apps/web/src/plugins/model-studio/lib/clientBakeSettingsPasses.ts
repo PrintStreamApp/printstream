@@ -16,9 +16,11 @@
  * existing project when optional catalogue data is unavailable, so recovery cannot discard work.
  */
 import {
+  THREE_MF_MODEL_SETTINGS_ENTRY,
   THREE_MF_PROJECT_SETTINGS_ENTRY,
   THREE_MF_SLICE_INFO_ENTRY,
-  applyNozzleAssignmentToProjectSettings
+  applyNozzleAssignmentToProjectSettings,
+  clearManualFilamentMapFromModelSettings
 } from '@printstream/shared/three-mf'
 import {
   H2_DUAL_NOZZLE_MODEL_KEYS,
@@ -29,15 +31,18 @@ import {
   extractChangedFromSystemKeys,
   hasDualNozzleMachineShape,
   machinePresetSlotIndexFor,
+  readProcessVariantLayout,
   retargetProjectSettingsToMachine,
   stripSliceInfoPrinterModelId,
   type MachineRetargetPlan,
   type ProcessConfig,
+  type ProcessVariantLayout,
   type ProfileRecord,
   type SceneEdit,
   firstProfileString
 } from '@printstream/shared'
 import { applyClientSliceSettings, type ClientSliceSettingsPass } from './clientSliceSettingsPass'
+import { reapplyFlushVolumesAfterRetarget } from './flushVolumesAfterRetarget'
 
 /**
  * Run every requested pass over the baked archive, in the api's order.
@@ -66,25 +71,46 @@ export async function applyBakeSettingsPasses(
   if (passes.filamentSettingOverrides) {
     await applyFilamentOverridesToEntries(output, passes.filamentSettingOverrides)
   }
+  // Read before the retarget re-indexes them: carried process overrides describe these columns.
+  const sourceProcessLayout = readProcessLayoutFromEntries(output)
   const retargeted = passes.machineRetarget
     ? await applyMachineRetargetToEntries(output, passes.machineRetarget)
     : false
   if (!retargeted && passes.machineTopologyHeal) {
     await healMachineTopologyInEntries(output, edit, passes.machineTopologyHeal)
   }
+  if (retargeted) reapplyFlushVolumesAfterRetarget(output, edit)
   if (passes.processSettings) {
     const entry = output[THREE_MF_PROJECT_SETTINGS_ENTRY]
     const settings = entry?.length ? JSON.parse(new TextDecoder().decode(entry)) as ProfileRecord : {}
-    output[THREE_MF_PROJECT_SETTINGS_ENTRY] = new TextEncoder().encode(JSON.stringify(await passes.processSettings(settings, { machineRetargeted: retargeted })))
+    output[THREE_MF_PROJECT_SETTINGS_ENTRY] = new TextEncoder().encode(JSON.stringify(await passes.processSettings(settings, { machineRetargeted: retargeted, sourceProcessLayout })))
   }
   if (passes.machineSettingOverrides) {
     await applyMachineOverridesToEntries(output, passes.machineSettingOverrides)
   }
 }
 
+/** What the process pass needs to know about the steps before it. */
+export interface ProcessSettingsPassContext {
+  machineRetargeted: boolean
+  /** The project's process columns BEFORE any machine retarget: what carried overrides describe. */
+  sourceProcessLayout?: ProcessVariantLayout | null
+}
+
+/** The stored project's process column layout, or null when it has none or cannot be read. */
+function readProcessLayoutFromEntries(output: Record<string, Uint8Array>): ProcessVariantLayout | null {
+  const entry = output[THREE_MF_PROJECT_SETTINGS_ENTRY]
+  if (!entry?.length) return null
+  try {
+    return readProcessVariantLayout(JSON.parse(new TextDecoder().decode(entry)) as ProfileRecord)
+  } catch {
+    return null
+  }
+}
+
 export interface ClientBakeSettingsPasses {
   /** Final process authoring, independent of machine changes; rejects on failed resolution. */
-  processSettings?: (settings: ProfileRecord, context?: { machineRetargeted: boolean }) => Promise<ProfileRecord>
+  processSettings?: (settings: ProfileRecord, context?: ProcessSettingsPassContext) => Promise<ProfileRecord>
   /** Exact engine input authoring. Mutually exclusive with the save-oriented passes below. */
   sliceTarget?: ClientSliceSettingsPass
   /** Public-host policy: clear operating-system post-processing commands after warning the user. */
@@ -305,9 +331,14 @@ async function applyMachineRetargetToEntries(
   }
   const plan = await resolvePlan(projectSettings)
   if (!plan) return false
-  output[THREE_MF_PROJECT_SETTINGS_ENTRY] = encoder.encode(
-    JSON.stringify(applyMachineRetargetToProjectSettings(projectSettings, plan))
-  )
+  const retargeted = applyMachineRetargetToProjectSettings(projectSettings, plan)
+  output[THREE_MF_PROJECT_SETTINGS_ENTRY] = encoder.encode(JSON.stringify(retargeted))
+  // The plates' half of a dual-nozzle Manual map goes with the project's half, which the retarget
+  // clears for a single-nozzle machine: the CLI reads the mode per plate.
+  const modelSettings = output[THREE_MF_MODEL_SETTINGS_ENTRY]
+  if (modelSettings?.length && retargeted.filament_map_mode === undefined && projectSettings.filament_map_mode !== undefined) {
+    output[THREE_MF_MODEL_SETTINGS_ENTRY] = encoder.encode(clearManualFilamentMapFromModelSettings(decoder.decode(modelSettings)))
+  }
   const sliceInfo = output[THREE_MF_SLICE_INFO_ENTRY]
   if (sliceInfo && sliceInfo.length > 0) {
     output[THREE_MF_SLICE_INFO_ENTRY] = encoder.encode(stripSliceInfoPrinterModelId(decoder.decode(sliceInfo)))

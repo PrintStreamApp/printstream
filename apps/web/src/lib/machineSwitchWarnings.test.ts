@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { SlicingPresetSummary } from '@printstream/shared'
-import { machineSwitchWarnings } from './machineSwitchWarnings'
+import { machineOverridesSetAsideWarning, machineSwitchWarnings } from './machineSwitchWarnings'
 
 const machine = (limits: { minLayerHeight?: number; maxLayerHeight?: number }): SlicingPresetSummary => ({
   id: 'builtin:machine:Bambu Lab A1 mini 0.4 nozzle',
@@ -57,4 +57,12 @@ test('both warnings can fire together, and an unresolved model reads generically
   })
   assert.deepEqual(both.map((warning) => warning.key), ['offBed', 'layerHeight'])
   for (const warning of both) assert.match(warning.message, /this printer/)
+})
+
+test('printer changes held for another preset are named, and nothing set aside says nothing', () => {
+  assert.equal(machineOverridesSetAsideWarning({ setAsideKeyCount: 0, presetName: 'Bambu Lab P1P 0.4 nozzle' }), null)
+  const one = machineOverridesSetAsideWarning({ setAsideKeyCount: 1, presetName: 'Bambu Lab P1P 0.4 nozzle' })
+  assert.match(one!.message, /^1 printer setting this project changed for Bambu Lab P1P 0\.4 nozzle is not applied to this printer\./)
+  const unnamed = machineOverridesSetAsideWarning({ setAsideKeyCount: 2, presetName: null })
+  assert.match(unnamed!.message, /2 printer settings this project changed for another printer are not applied/)
 })

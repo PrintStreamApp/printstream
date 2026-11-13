@@ -13,6 +13,7 @@ import { restoreFilamentPhysics } from '../repairs/restore-filament-physics.js'
 import { resizeParallelPresetRecord } from '../three-mf-project-config.js'
 import { remapMixedFilamentComponentIds, serializeMixedFilamentGradientCurve } from '../mixed-filament.js'
 import { rebuildFilamentSelfIndex, repairFilamentSelfIndex } from '../filament-variant-index.js'
+import { filamentRowsBySlot, readFilamentVariantRows, relayFilamentVariantValue, type FilamentVariantRow } from '../filament-variant-rows.js'
 import type { SceneEditFilament } from '../slicing.js'
 import { normalizeColor, sliceExtruderForNozzleId, stringArray } from './index-parser.js'
 import { filamentSlotIdRemap, isIdentityFilamentSlotRemap } from './filament-slot-remap.js'
@@ -210,6 +211,19 @@ export function applyFilamentList(projectSettingsJson: string, filaments: SceneE
     // slices stayed correct only because slice-prep re-derives mapped columns independently).
     const variantColumns = Array.isArray(record.filament_extruder_variant) ? record.filament_extruder_variant.length : 0
     const variantCount = variantColumns > oldCount && variantColumns % oldCount === 0 ? variantColumns / oldCount : 1
+    // The declared ROWS, which are not a uniform width: a TPU slot owns more of them. The uniform
+    // `variantCount` above cannot describe PLA + TPU on an H2D (3 + 4 rows), so a remove or reorder
+    // there deleted every variant-scoped key as "stale" and left the variant list unpermuted. Each
+    // new slot takes its source slot's rows, so the variant list, every variant-scoped value and
+    // the index below move together (`filament-variant-rows.ts`).
+    const oldRows = variantColumns > 0 ? readFilamentVariantRows(record, oldCount) : null
+    // Only an index that was VALID moves with its rows. A missing or mis-sized one is a stored
+    // defect the Repair stage owns; writing one here would heal it behind the user's back.
+    const selfIndexWasValid = Array.isArray(record.filament_self_index) && record.filament_self_index.length === variantColumns
+    const oldRowsBySlot = oldRows ? filamentRowsBySlot(oldRows, oldCount) : null
+    const newRows: FilamentVariantRow[] | null = oldRows && oldRowsBySlot
+      ? Array.from({ length: newCount }, (_unused, slot) => oldRowsBySlot[sourceFor(slot)]!.map((row) => ({ slot, variant: oldRows[row]!.variant }))).flat()
+      : null
     for (const [key, value] of Object.entries(record)) {
       if (!Array.isArray(value)) continue
       // Machine/extruder-domain arrays are indexed by extruder, not filament, on a machine
@@ -304,8 +318,21 @@ export function applyFilamentList(projectSettingsJson: string, filaments: SceneE
       // acquits wrongly: an ordinary per-slot array whose count happens to equal `slots x variants`
       // gets re-blocked, while a genuine variant key stored at another width is skipped. The layout's
       // own identity column is variant-scoped by definition. See `variant-options.ts`.
+      const variantKeyed = key === 'filament_extruder_variant' || isFilamentVariantOption(key)
+      if (variantKeyed && oldRows && newRows && value.length === oldRows.length) {
+        if (key !== 'filament_extruder_variant' && materialChanged && !authoringPhysics) {
+          // The same drop, and the same gate, as the uniform branch below.
+          delete record[key]
+          continue
+        }
+        const relayed = relayFilamentVariantValue(value, oldRows, newRows, sourceFor)
+        if (relayed) {
+          record[key] = relayed
+          continue
+        }
+      }
       const isVariantExpanded = variantCount > 1 && value.length === oldCount * variantCount
-        && (key === 'filament_extruder_variant' || isFilamentVariantOption(key))
+        && variantKeyed
       if (isVariantExpanded) {
         // Slot i owns the V-wide block starting at i*V. The layout's identity column
         // (`filament_extruder_variant`) must ALWAYS survive by block-remap: losing it breaks the
@@ -360,6 +387,12 @@ export function applyFilamentList(projectSettingsJson: string, filaments: SceneE
         continue
       }
       record[key] = Array.from({ length: newCount }, (_unused, i) => value[sourceFor(i)])
+    }
+    // The index moves WITH the rows it describes: written from the same row list the variant list
+    // and the variant-scoped values were laid out with, so the three cannot disagree. Only when the
+    // list was moved by rows; the type-derived rebuild below still covers every other case.
+    if (newRows && selfIndexWasValid && Array.isArray(record.filament_extruder_variant) && record.filament_extruder_variant.length === newRows.length) {
+      record.filament_self_index = newRows.map((row) => String(row.slot + 1))
     }
     remapMixedFilamentReferences(record, newCount, sourceFor)
     // `different_settings_to_system` and `inherits_group` are PARALLEL PRESET RECORDS,

@@ -48,7 +48,6 @@ import type {
 import {
   LIBRARY_DOWNLOAD_PERMISSION,
   LIBRARY_UPLOAD_PERMISSION,
-  readProjectFlushContext,
   type ThreeMfSettingsRepairReason
 } from '@printstream/shared'
 import {
@@ -78,6 +77,7 @@ import { SliceSettingsPanel, type SliceSettingsController } from '../../componen
 import { EditorPreparationDialog } from './EditorPreparationDialog'
 import { useEditorPreparation } from './useEditorPreparation'
 import { useEditorProjectSession } from './useEditorProjectSession'
+import { useSelectedMachineFlushContext } from './useSelectedMachineFlushContext'
 import { useEditorMaterialUsage } from './useEditorMaterialUsage'
 import { useEditorSettingsRepair } from './useEditorSettingsRepair'
 import type { FilamentConfigResolver } from '../../components/library/FilamentSettingsDialog'
@@ -2879,13 +2879,16 @@ function EditorView({
     [embeddedPresetsQuery.data, state?.removedEmbeddedPresets]
   )
 
-  // Machine + stored purge values for the flushing dialog. Null while the settings are still
+  // Machine + stored purge values for the flushing dialog, for the printer SELECTED rather than the
+  // one the file was saved for (see `flushContextForMachine.ts`). Null while the settings are still
   // loading, for a project that carries none (a from-scratch scaffold), or for a host whose source
   // cannot read them, in each case the Materials section simply shows no button.
-  const projectFlushContext = useMemo(
-    () => readProjectFlushContext(projectSettingsQuery.data ?? null),
-    [projectSettingsQuery.data]
-  )
+  const projectFlushContext = useSelectedMachineFlushContext({
+    projectSettingsJson: projectSettingsQuery.data ?? null,
+    saveTarget: effectiveSaveTarget,
+    machineProfileId: sliceConfig?.selectedMachineProfile?.id,
+    slicerTargetId: sliceConfig?.selectedSlicerTargetId
+  })
   const flushDatasets = useFlushDatasets(sliceConfig?.selectedSlicerTargetId, flushDataPath)
   // Does the engine agree with our port? A diagnostic, cached per target, it only decides how
   // confidently the dialog's footnote can speak. See `flushDatasets.ts`.
@@ -2924,7 +2927,12 @@ function EditorView({
         context: projectFlushContext,
         datasets: flushDatasets,
         calibration: flushCalibration,
-        value: state?.flushVolumes ?? null,
+        // A session edit sized for a different extruder count (made before a printer switch) does not
+        // describe this machine, and the bake drops it for exactly that reason: show the machine's
+        // own values instead of an edit that will not be saved.
+        value: state?.flushVolumes?.matrix && state.flushVolumes.matrix.length !== projectFlushContext.extruderCount
+          ? null
+          : state?.flushVolumes ?? null,
         onChange: handleFlushVolumesChange,
         // Same staged repair the banner offers, reachable from where the defect is actually visible.
         onRepair: settingsRepairReasons.includes('flushMatrix') ? handleRepairInEditor : undefined

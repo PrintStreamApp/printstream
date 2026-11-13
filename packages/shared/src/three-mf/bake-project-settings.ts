@@ -86,8 +86,12 @@ function applyProjectPlateType(projectSettingsJson: string, plateType: string): 
  *
  * The multiplier is per-EXTRUDER and independent of the filament set, so a stale one is conformed
  * rather than dropped.
+ *
+ * Exported because a machine retarget changes the extruder count AFTER the scene bake: the editor
+ * re-applies the edit to the retargeted settings, so a grid authored for the selected machine lands
+ * (it was dropped against the opened file's count) and one authored before the switch does not.
  */
-function applyFlushVolumes(projectSettingsJson: string, flushVolumes: SceneEditFlushVolumes): string {
+export function applyFlushVolumes(projectSettingsJson: string, flushVolumes: SceneEditFlushVolumes): string {
   let parsed: unknown
   try {
     parsed = JSON.parse(projectSettingsJson)

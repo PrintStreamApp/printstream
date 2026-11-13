@@ -14,6 +14,7 @@ import {
   canonicalCurrBedType,
   firstProfileString,
   parseBuiltinSlicingPresetId,
+  readProcessVariantLayout,
   rebindProjectFilamentPhysics,
   retargetProjectSettingsToMachine,
   slicingPresetProvenance,
@@ -36,6 +37,7 @@ import {
   THREE_MF_SLICE_INFO_ENTRY
 } from '@printstream/shared/three-mf'
 import type { RetargetResolvers } from './browserMachineRetarget'
+import { reapplyFlushVolumesAfterRetarget } from './flushVolumesAfterRetarget'
 
 export interface ClientSliceSettingsPass {
   target: SlicingTarget
@@ -65,6 +67,8 @@ export async function applyClientSliceSettings(
   }
   const machine = await pass.resolvers.machine(machineProfileId, pass.slicerTargetId, { signal: pass.signal })
   pass.signal?.throwIfAborted()
+  // Read before the retarget re-indexes them: carried process overrides describe these columns.
+  const sourceProcessLayout = readProcessVariantLayout(settings)
   settings = retargetProjectSettingsToMachine(settings, machine.config, {
     printerSettingsId: machine.name,
     printerModel: firstProfileString(machine.config.printer_model)
@@ -82,7 +86,8 @@ export async function applyClientSliceSettings(
       settings,
       process.config,
       pass.target.processSettingOverrides ?? {},
-      process.preset ? { ...process.preset, parentConfig: process.parentConfig } : undefined
+      process.preset ? { ...process.preset, parentConfig: process.parentConfig } : undefined,
+      { overridesLayout: sourceProcessLayout }
     )
   } else if (pass.target.processSettingOverrides) {
     settings = parseSettings(applyGlobalProcessOverrides(
@@ -126,6 +131,8 @@ export async function applyClientSliceSettings(
     }
   }
   output[THREE_MF_PROJECT_SETTINGS_ENTRY] = encoder.encode(JSON.stringify(settings))
+  // The scene bake checked the purge grid against the OPENED file's extruder count.
+  reapplyFlushVolumesAfterRetarget(output, edit)
 
   const sliceInfo = output[THREE_MF_SLICE_INFO_ENTRY]
   if (sliceInfo?.length) {

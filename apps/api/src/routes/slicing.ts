@@ -551,7 +551,7 @@ slicingRouter.post('/profiles/resolve-machine', requireRequestPermission(LIBRARY
   // actually carries and the next Apply does not silently drop them. Best-effort: a project we
   // cannot read is answered as "no project deltas" rather than failing the dialog.
   const projectOverrides = parsed.data.sourceFileId
-    ? await resolveProjectMachineOverrides(parsed.data.sourceFileId, config, parsed.data.sourceFileUploadedAt ?? null).catch((error: unknown) => {
+    ? await resolveProjectMachineOverrides(parsed.data.sourceFileId, config, profileFile.name, parsed.data.sourceFileUploadedAt ?? null).catch((error: unknown) => {
       // NULL, not `{}`. The dialog stays usable either way, but the two answers mean different
       // things downstream: `{}` states that the project overrides nothing, which licenses the next
       // save to CLEAR the record, while null says we never found out. Answering `{}` for a bridge
@@ -883,11 +883,14 @@ async function resolveProjectProcessConfig(sourceFileId: string | null): Promise
  *
  * This is the I/O around it: which VERSION's bytes to read. The reading itself is
  * `readMachineSettingOverrides`, which lives beside the writer that produced the record, because
- * the two disagreeing is invisible from either side.
+ * the two disagreeing is invisible from either side. `presetName` is the preset being asked about:
+ * a preset other than the project's own answers `{}`, because the record does not transfer to
+ * another printer (see `readMachineSettingOverrides`).
  */
 async function resolveProjectMachineOverrides(
   sourceFileId: string,
   presetConfig: Record<string, string | string[]>,
+  presetName: string,
   uploadedAt: string | null
 ): Promise<Record<string, string | string[]> | null> {
   const sourceFile = await prisma.libraryFile.findUnique({
@@ -912,7 +915,7 @@ async function resolveProjectMachineOverrides(
   const localPath = await resolveLibraryFileToLocalPath(readFrom)
   const buffer = await readEntry(localPath, PROJECT_SETTINGS_ENTRY_PATH)
   const raw = JSON.parse(buffer.toString('utf8')) as Record<string, unknown>
-  return readMachineSettingOverrides(raw, presetConfig)
+  return readMachineSettingOverrides(raw, presetConfig, { presetName })
 }
 
 /**

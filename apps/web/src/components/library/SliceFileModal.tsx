@@ -102,6 +102,7 @@ import {
 import { resolveSlicerTargetId } from '../../lib/machineTargetResolution'
 import { useUnchangedProjectFilamentPresetIds } from './useBakedPresetChanges'
 import { useProjectMachineOverrides } from './useProjectMachineOverrides'
+import { useMachineSettingOverrides } from './useMachineSettingOverrides'
 import { useMachineTarget } from './useMachineTarget'
 import { useMaterialSlots } from './useMaterialSlots'
 import { useHeldSnapshot } from './useHeldSnapshot'
@@ -804,12 +805,18 @@ export function SliceFileModal({
   /**
    * The project's OWN machine settings, as a diff against the resolved printer preset. Held here
    * beside the process overrides because it travels with them everywhere: the slice request, the
-   * save request, the undo snapshot. Cleared by nothing implicitly -- a machine override survives a
-   * preset switch, and the server re-resolves the new preset and lays these back over it.
+   * save request, the undo snapshot. Scoped to the printer preset they were made for: on any other
+   * preset they apply as none, as in Bambu Studio (see `useMachineSettingOverrides`).
    */
-  const [machineSettingOverrides, setMachineSettingOverrides] = useState<Record<string, string | string[]>>({})
-  /** Which printer the overrides above were authored against; drives the carried-overrides warning. */
-  const [machineOverridesModel, setMachineOverridesModel] = useState<string | null>(null)
+  const {
+    machineSettingOverrides,
+    setMachineSettingOverrides,
+    seedMachineSettingOverrides,
+    hasHeldMachineSettingOverrides,
+    machineOverridesSetAside,
+    machineOverridesSnapshot,
+    restoreMachineOverridesSnapshot
+  } = useMachineSettingOverrides(printerProfileId, selectedMachineProfile?.name ?? null)
 
   // Re-hydrate the project's own machine deltas, or the feature is write-only: see the hook.
   // Its return says whether the file's own deltas are KNOWN for the version open. A save clears the
@@ -820,11 +827,12 @@ export function SliceFileModal({
     fileVersion: file.uploadedAt,
     machineProfileId: printerProfileId,
     slicerTargetId: selectedSlicerTargetId,
-    current: machineSettingOverrides,
-    onSeed: useCallback((overrides: Record<string, string | string[]>) => {
-      setMachineSettingOverrides(overrides)
-      setMachineOverridesModel(selectedPrinterModel)
-    }, [selectedPrinterModel])
+    hasCurrentEdits: hasHeldMachineSettingOverrides,
+    // Stamped with the preset the lookup asked about: the server answers a file's record only for
+    // its own printer preset, so these belong to exactly that one.
+    onSeed: useCallback((overrides: Record<string, string | string[]>, presetId: string) => {
+      seedMachineSettingOverrides(overrides, presetId, selectedMachineProfile?.id === presetId ? selectedMachineProfile.name : null)
+    }, [seedMachineSettingOverrides, selectedMachineProfile])
   })
 
   const configSnapshot = useMemo<SliceConfigSnapshot>(() => ({
@@ -835,9 +843,8 @@ export function SliceFileModal({
     processProfileId,
     processProfileSelectionTouched: processProfileSelectionTouchedRef.current,
     processSettingOverrides,
-    machineSettingOverrides,
-    machineOverridesModel
-  }), [selectedSlicerTargetId, machineSnapshot, materialSnapshot, objectProcessOverrides, processProfileId, processSettingOverrides, machineSettingOverrides, machineOverridesModel, processProfileSelectionTouchedRef])
+    ...machineOverridesSnapshot
+  }), [selectedSlicerTargetId, machineSnapshot, materialSnapshot, objectProcessOverrides, processProfileId, processSettingOverrides, machineOverridesSnapshot, processProfileSelectionTouchedRef])
   const restoreConfig = useCallback((snapshot: SliceConfigSnapshot) => {
     setSelectedSlicerTargetId(snapshot.selectedSlicerTargetId)
     restoreMachineSnapshot(snapshot)
@@ -847,9 +854,8 @@ export function SliceFileModal({
     if (snapshot.processProfileId != null) setProcessProfileId(snapshot.processProfileId)
     processProfileSelectionTouchedRef.current = snapshot.processProfileSelectionTouched
     setProcessSettingOverrides(snapshot.processSettingOverrides ?? {})
-    setMachineSettingOverrides(snapshot.machineSettingOverrides ?? {})
-    setMachineOverridesModel(snapshot.machineOverridesModel ?? null)
-  }, [processProfileSelectionTouchedRef, restoreMachineSnapshot, restoreMaterialSnapshot, setProcessProfileId, setProcessSettingOverrides, setSelectedSlicerTargetId])
+    restoreMachineOverridesSnapshot(snapshot)
+  }, [processProfileSelectionTouchedRef, restoreMachineSnapshot, restoreMachineOverridesSnapshot, restoreMaterialSnapshot, setProcessProfileId, setProcessSettingOverrides, setSelectedSlicerTargetId])
   const suggestedOutputFileName = useMemo(() => {
     if (!requiresSinglePlate && plateMode !== 'single') return buildSlicedOutputFileName(file.name)
     return buildSlicedOutputFileName(file.name, {
@@ -1066,7 +1072,7 @@ export function SliceFileModal({
     currentProcessProfileId: processProfileId,
     compatibleProcessProfiles, selectedProcessProfile, processProfileModified, setProcessProfileId, setProcessSettingOverrides,
     machineSettingOverrides, setMachineSettingOverrides, machineSettingOverridesKnown,
-    machineOverridesModel, setMachineOverridesModel,
+    machineOverridesSetAside,
     processProfileSelectionTouchedRef, selectedSlicerTargetIdForGuards: selectedSlicerTargetId, processSettingOverrides, setProcessSettingsDialogOpen,
     settingsSearchKey, setSettingsSearchKey,
     hasPlateObjects, selectedSliceObjectIds, plateObjects,

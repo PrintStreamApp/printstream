@@ -913,9 +913,14 @@ Six rules, five of which fail silently when broken:
   changes. Badging that count is a confident lie, and applying it writes 44 values into the project
   as though the user chose them. An ABSENT record means `{}`: unknown is not modified.
 
-They are kept, not cleared, when the printer changes, and the panel says so
-(`machineOverridesCarriedWarning`) because an override authored against one machine can express
-something another cannot; the dialog's per-key reset is the escape hatch.
+They belong to the printer preset they were made for and never transfer to another one, which is
+Bambu Studio's rule (the printer tab's preset switch always sets `no_transfer`, so Studio offers only
+Discard or Save). Carrying them once sent a P1P start G-code into an X2D slice, which never selected a
+hotend, so the print ran on the wrong nozzle. On any other preset the editor applies them as none
+(`lib/machineSettingOverrideScope.ts`, held by `useMachineSettingOverrides` for both hosts), the
+panel says they are set aside (`machineOverridesSetAsideWarning`), and switching back or undoing the
+switch restores them. The server answers a project's record only for its own printer preset
+(`readMachineSettingOverrides`' `presetName`), so a lookup made after a switch cannot re-seed them.
 
 ### An editor-born project bakes from the editor state, not from its own last save
 

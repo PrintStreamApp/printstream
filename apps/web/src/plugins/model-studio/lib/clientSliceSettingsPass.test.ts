@@ -239,3 +239,75 @@ for (const sessionIds of [[2, 3], [3, 2]]) {
     assert.deepEqual(target.filamentMappings?.map((mapping) => mapping.projectFilamentId), [2, 3], 'session target remains unchanged')
   })
 }
+
+function dualMachineResolvers(config: Record<string, unknown>): RetargetResolvers {
+  return {
+    canResolve: () => true,
+    machine: async () => ({ name: 'Bambu Lab X2D 0.4 nozzle', config }),
+    process: async () => { throw new Error('not used') },
+    filament: async () => { throw new Error('not used') }
+  }
+}
+
+const X2D_CONFIG = {
+  printer_model: 'Bambu Lab X2D',
+  printer_settings_id: 'Bambu Lab X2D 0.4 nozzle',
+  nozzle_diameter: ['0.4', '0.4'],
+  physical_extruder_map: ['1', '0'],
+  default_nozzle_volume_type: ['Standard', 'Standard'],
+  extruder_max_nozzle_count: ['1', '1'],
+  machine_start_gcode: ';===== machine: X2D ===== M620 S[initial_no_support_filament_id]A H[initial_no_support_hotend] B'
+}
+
+function p1pProject(extra: Record<string, unknown> = {}): Record<string, Uint8Array> {
+  return {
+    [THREE_MF_PROJECT_SETTINGS_ENTRY]: encoder.encode(JSON.stringify({
+      printer_model: 'Bambu Lab P1P',
+      printer_settings_id: 'Bambu Lab P1P 0.4 nozzle',
+      nozzle_diameter: ['0.4'],
+      filament_settings_id: ['Generic PLA', 'Generic PETG'],
+      filament_colour: ['#FFFFFF', '#000000'],
+      filament_type: ['PLA', 'PETG'],
+      flush_volumes_matrix: ['0', '280', '280', '0'],
+      machine_start_gcode: ';===== machine: P1P ===== M620 S[initial_extruder]A T[initial_extruder]',
+      ...extra
+    }))
+  }
+}
+
+const X2D_TARGET: SlicingTarget = {
+  mode: 'manualProfile',
+  printerProfileId: 'machine:x2d',
+  printerModel: 'X2D',
+  processProfileId: null,
+  machineSettingOverrides: {},
+  filamentMappings: []
+}
+
+// The reported print: a P1P project switched to an X2D sliced with the P1P's start G-code, which
+// never selects a hotend. With the switch no longer carrying the P1P's printer changes, the X2D's
+// own start sequence is what the engine gets.
+test('a P1P project sliced for an X2D gets the X2D start G-code', async () => {
+  const output = p1pProject()
+  await applyClientSliceSettings(output, { plates: [] } as unknown as SceneEdit, {
+    target: X2D_TARGET,
+    slicerTargetId: null,
+    resolvers: dualMachineResolvers(X2D_CONFIG)
+  })
+  const settings = JSON.parse(decoder.decode(output[THREE_MF_PROJECT_SETTINGS_ENTRY])) as Record<string, unknown>
+  assert.match(String(settings.machine_start_gcode), /machine: X2D/)
+})
+
+// The purge grid is edited for the SELECTED printer (two blocks on an X2D) while the scene bake
+// checks it against the opened P1P file (one block) and drops it. It must land after the retarget.
+test('a purge grid edited for the selected dual-nozzle printer survives the retarget', async () => {
+  const output = p1pProject()
+  const grid = [[[0, 111], [222, 0]], [[0, 333], [444, 0]]]
+  await applyClientSliceSettings(output, { plates: [], flushVolumes: { matrix: grid, multiplier: [1, 1] } } as unknown as SceneEdit, {
+    target: X2D_TARGET,
+    slicerTargetId: null,
+    resolvers: dualMachineResolvers(X2D_CONFIG)
+  })
+  const settings = JSON.parse(decoder.decode(output[THREE_MF_PROJECT_SETTINGS_ENTRY])) as Record<string, unknown>
+  assert.deepEqual(settings.flush_volumes_matrix, ['0', '111', '222', '0', '0', '333', '444', '0'])
+})

@@ -27,7 +27,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { indexOptionBlocks, parseBlock, resolveEnums } from './lib/bambu-config-parse.mjs'
+import { indexOptionBlocks, mapType, parseBlock, resolveEnums } from './lib/bambu-config-parse.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(__dirname, '..', '..')
@@ -98,6 +98,19 @@ const printerKeys = [...new Set([
   ...extractCppIdentifierList(printConfig, 'm_extruder_option_keys =')
 ])].filter((key) => !NON_SETTING_KEYS.has(key))
 const printKeys = extractCppIdentifierList(preset, 's_Preset_print_options').filter((key) => !NON_SETTING_KEYS.has(key))
+// What a printer option holds when a machine preset does not mention it. A machine retarget needs
+// it: Bambu Studio REPLACES the whole printer preset on a switch, so an option only the old machine
+// defined (an H2D's \`bed_temperature_formula\`) reverts to this, never survives onto a P1P.
+// SINGLE-VALUE options only. Vector and point defaults do not survive this parse faithfully (it
+// yields \`thumbnail_size: "2"\` for a \`coPoints\` default), and a wrong value written into a
+// project is worse than a stale one, so those are left to the retarget's explicit topology rules.
+const printerDefaults = {}
+for (const key of printerKeys) {
+  const block = blocks.get(key)
+  if (!block || mapType(block.coType).vector || block.coType === 'coPoint') continue
+  const value = parsed[key]?.default
+  if (value !== undefined) printerDefaults[key] = value
+}
 const defaults = {}
 const withoutDefault = []
 for (const key of keys) {
@@ -149,6 +162,14 @@ export const FILAMENT_PRESET_DEFAULTS: Readonly<Record<string, string>> = ${JSON
  * \`extruder_colour\`: mirroring only the literal \`s_Preset_printer_options\` omits them.
  */
 export const PRINTER_PRESET_OPTIONS: ReadonlySet<string> = new Set(${JSON.stringify(printerKeys, null, 2)})
+
+/**
+ * PrintConfig default per SINGLE-VALUE printer option. A machine retarget writes it for an option
+ * the OLD machine's preset defined and the new one does not, which is what Bambu Studio holds after
+ * it replaces the printer preset. Vector and point options are omitted on purpose: their defaults
+ * do not parse faithfully, and the retarget owns those through its topology rules.
+ */
+export const PRINTER_PRESET_DEFAULTS: Readonly<Record<string, string>> = ${JSON.stringify(printerDefaults, null, 2)}
 
 /** Options a PROCESS (print) preset carries: \`s_Preset_print_options\`. */
 export const PRINT_PRESET_OPTIONS: ReadonlySet<string> = new Set(${JSON.stringify(printKeys, null, 2)})

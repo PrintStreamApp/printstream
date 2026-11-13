@@ -17,9 +17,11 @@
  *   value is preserved (broadcast to the new variant width), never replaced by the preset.
  * - A present key the new preset does not define drops for non-overridden slots (absence =
  *   preset default): kept only while some slot's override needs the column to exist.
- * - Column layout follows the RETARGETED record: `filaments x variants`, the variant width read
- *   from `filament_extruder_variant` (which the machine retarget has already rebuilt for the new
- *   machine). Old values are read variant-aware from whatever width they had.
+ * - Rows follow the RETARGETED record's declared layout (`filament_extruder_variant` owned per row
+ *   by `filament_self_index`, which the machine retarget rebuilt and re-laid values into), and are
+ *   NOT a uniform width: a TPU slot owns more rows. Old values are read at those rows; preset values
+ *   are matched to them by variant name (`filament-variant-rows.ts`). The layout's own two columns
+ *   are never rewritten here.
  *
  * Pure, a parsed record + resolved preset configs in, a new record out. The API resolves the
  * rebind targets (name/alias matching + the slicer's profile resolver) in
@@ -27,9 +29,10 @@
  */
 import { canonicalBambuModelKey } from './bambu-model-keys.js'
 import { withFilamentPressureAdvance } from './filament-pressure-advance.js'
-import { filamentKeyWidth, filamentVariantRowsPerSlot, filamentVariantsPerSlot, isFilamentVariantOption } from './variant-options.js'
+import { filamentKeyWidth, filamentVariantRowsPerSlot, isFilamentVariantOption } from './variant-options.js'
+import { filamentRowsBySlot, readFilamentVariantRows } from './filament-variant-rows.js'
 import { filamentIdForPresetName } from './repairs/filament-ids.js'
-import { filamentSettingsCatalog, FILAMENT_SETTING_KEYS, isFilamentIdentitySettingKey } from './filament-settings.js'
+import { filamentSettingsCatalog, filamentTransferType, FILAMENT_SETTING_KEYS, isFilamentIdentitySettingKey } from './filament-settings.js'
 import { FILAMENT_PRESET_DEFAULTS, FILAMENT_PRESET_OPTIONS } from './generated/preset-options.generated.js'
 import type { ProcessConfig } from './process-settings.js'
 import { extractChangedFromSystemKeys, extractFilamentOverriddenKeys, filamentSlotCount, withChangedFromSystemSlot } from './three-mf-project-config.js'
@@ -71,6 +74,12 @@ export function filamentPresetFamilyName(name: string): string {
  */
 function isRebindableFilamentKey(key: string): boolean {
   return FILAMENT_PRESET_OPTIONS.has(key) || FILAMENT_SETTING_KEYS.has(key)
+}
+
+/** A config value as strings: an array's string entries, a lone string, or nothing. */
+function stringList(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map((entry) => (typeof entry === 'string' ? entry : String(entry)))
+  return typeof value === 'string' ? [value] : []
 }
 
 /** First string of a scalar-or-array config value; null when neither. */
@@ -275,11 +284,36 @@ export function rebindProjectFilamentPhysics(
   if (identityCount === 0 || slots.length !== identityCount) return record
   if (slots.every((slot) => slot.config == null && slot.settingsId == null)) return record
 
-  // Variants the PROJECT declares; the per-KEY width is decided from the option below.
-  const variantCount = filamentVariantsPerSlot(record, identityCount)
-  const overriddenBySlot = slots.map((_slot, index) => new Set(extractFilamentOverriddenKeys(record.different_settings_to_system, index + 1)))
+  // The rows the PROJECT declares, per slot. Not a uniform width: a TPU slot owns more rows than
+  // its neighbours, and dividing pretended otherwise (a PLA + TPU rebind onto an H2D wrote a 6-row
+  // variant list under a 7-row index, which Bambu Studio refuses to open). Null when the rows
+  // cannot be attributed; variant-scoped keys then fall back to the stored stride below.
+  const rows = readFilamentVariantRows(record, identityCount)
+  const rowsBySlot = rows ? filamentRowsBySlot(rows, identityCount) : null
+  // A slot renamed to a different MATERIAL keeps none of its recorded edits: Bambu Studio never
+  // transfers a filament preset's changes across a raw `filament_type` change (`Tab::select_preset`
+  // sets `no_transfer`). Honouring the old record kept a PLA slot's 230 C on the PETG it became.
+  const recordedTypes = Array.isArray(record.filament_type) ? record.filament_type : []
+  const changesMaterial = slots.map((slot, index) => {
+    if (!slot.settingsId || !slot.config) return false
+    const before = filamentTransferType(scalarAt(recordedTypes, index))
+    const after = filamentTransferType(scalarAt(slot.config.filament_type, 0))
+    return Boolean(before && after && before !== after)
+  })
+  const overriddenBySlot = slots.map((_slot, index) => (changesMaterial[index]
+    ? new Set<string>()
+    : new Set(extractFilamentOverriddenKeys(record.different_settings_to_system, index + 1))))
 
   const next: Record<string, unknown> = { ...record }
+  // The record goes with the edits it described, or the next reader would take the new
+  // material's preset values for the user's own changes.
+  if (changesMaterial.some(Boolean) && Array.isArray(record.different_settings_to_system)) {
+    let changedFromSystem: unknown = record.different_settings_to_system
+    changesMaterial.forEach((changes, index) => {
+      if (changes) changedFromSystem = withChangedFromSystemSlot(changedFromSystem, index + 1, [], identityCount)
+    })
+    next.different_settings_to_system = changedFromSystem
+  }
   for (const key of Object.keys(record)) {
     // Gated on every filament option BambuStudio DECLARES, not on the tune dialog's catalogue.
     // The catalogue is scoped to what that dialog exposes, and the keys it omits are exactly the
@@ -289,23 +323,51 @@ export function rebindProjectFilamentPhysics(
     // hit (`filament_extruder_compatibility`), and the same one `bambu-preset-codec.ts` documents.
     // The union keeps any catalogue key the vendored generator has not caught up with.
     if (!isRebindableFilamentKey(key) || isFilamentIdentitySettingKey(key)) continue
+    // The layout's own columns belong to the MACHINE retarget, which built them for the new
+    // machine. `filament_extruder_variant` is itself a variant-scoped filament option, so treating
+    // it as physics rewrote the layout at a guessed width and broke it against the index.
+    if (key === 'filament_extruder_variant' || key === 'filament_self_index') continue
     const value = record[key]
     if (typeof value !== 'string' && !Array.isArray(value)) continue
-    // How wide this option is ALLOWED to be here, from BambuStudio's per-option rule, never from
-    // one number applied to every key. Writing a per-slot key at variant width is what made a
-    // 3-material project reopen with 6 (see `variant-options.ts`).
-    const width = filamentKeyWidth(key, variantCount)
-    // Stride for READING the current value, which may still carry a uniformly-widened layout from a
-    // save made before this rule. Clamped so a stale wide array cannot re-widen the output.
+    // Which rows this key has, from BambuStudio's per-option rule, never from one number applied
+    // to every key: a per-slot key at variant width made a 3-material project reopen with 6.
+    const variantScoped = isFilamentVariantOption(key)
+    const layoutRows = variantScoped && rowsBySlot && rows ? rows : null
+    const fitsLayout = layoutRows != null && Array.isArray(value) && value.length === layoutRows.length
+    // Fallback stride for a value that does not match the declared rows (a save from before the
+    // layout rule). Used only to READ; the output always takes the declared rows.
     const storedWidth = Array.isArray(value) && identityCount > 0 && value.length % identityCount === 0
       ? value.length / identityCount
       : 1
-    const oldWidth = Math.min(storedWidth, width)
+    /** The variant names a slot's output rows carry (one unnamed row for a per-slot key). */
+    const targetVariants = (slot: number): Array<string | null> => layoutRows
+      ? rowsBySlot![slot]!.map((row) => layoutRows[row]!.variant)
+      : [null]
+    /** The stored value for a slot's `position`-th row, read at the rows the record declares. */
+    const storedAt = (slot: number, position: number): string | null => {
+      if (fitsLayout) {
+        const row = rowsBySlot![slot]![position]
+        return row == null ? null : scalarAt(value, row)
+      }
+      return position < storedWidth ? scalarAt(value, slot * storedWidth + position) : null
+    }
     const columns: string[][] = []
     let anyColumn = false
     for (let slot = 0; slot < identityCount; slot++) {
-      const oldScalar = scalarAt(value, slot * oldWidth) ?? scalarAt(value, slot) ?? scalarAt(value, 0)
+      const variants = targetVariants(slot)
+      const width = variants.length
+      const oldScalar = storedAt(slot, 0) ?? scalarAt(value, slot) ?? scalarAt(value, 0)
       const presetValue = slots[slot]?.config?.[key]
+      const presetVariants = stringList(slots[slot]?.config?.filament_extruder_variant)
+      /**
+       * The preset's own value for an output row, by variant name, else by position. Null when the
+       * preset does not spell that column out, so the caller can keep the project's column first.
+       */
+      const presetAt = (variant: number): string | null => {
+        const name = variants[variant]
+        const byName = name != null ? presetVariants.indexOf(name) : -1
+        return scalarAt(presetValue, byName >= 0 ? byName : variant)
+      }
       let slotColumns: string[] | null
       if (overriddenBySlot[slot]!.has(key)) {
         // Genuine user override: survives the machine switch, PER COLUMN. It used to take the
@@ -315,7 +377,7 @@ export function rebindProjectFilamentPhysics(
         // BambuStudio reported the High Flow value as the user's own edit. Keep each column the file
         // actually holds; only a column the file lacks falls back to its first.
         slotColumns = oldScalar != null
-          ? Array.from({ length: width }, (_unused, variant) => scalarAt(value, slot * oldWidth + variant) ?? oldScalar)
+          ? Array.from({ length: width }, (_unused, variant) => storedAt(slot, variant) ?? oldScalar)
           : null
       } else if (presetValue != null) {
         // Rebind to the new variant's value. Preset arrays already carry per-variant columns.
@@ -326,8 +388,8 @@ export function rebindProjectFilamentPhysics(
         // that had merely been re-saved. A column the preset does not supply keeps what the PROJECT
         // already had; only if the file has nothing either does the preset's first column stand in.
         slotColumns = Array.from({ length: width }, (_unused, variant) =>
-          scalarAt(presetValue, variant)
-            ?? scalarAt(value, slot * oldWidth + variant)
+          presetAt(variant)
+            ?? storedAt(slot, variant)
             ?? scalarAt(presetValue, 0)
             ?? '')
       } else {
@@ -350,7 +412,7 @@ export function rebindProjectFilamentPhysics(
         // number cannot follow the new one.
         if (slots[slot]?.config == null) {
           slotColumns = oldScalar != null
-            ? Array.from({ length: width }, (_unused, variant) => scalarAt(value, slot * oldWidth + variant) ?? oldScalar)
+            ? Array.from({ length: width }, (_unused, variant) => storedAt(slot, variant) ?? oldScalar)
             : null
         } else {
           // Same default source as the authoring pass: BambuStudio's PrintConfig default for the
@@ -375,7 +437,13 @@ export function rebindProjectFilamentPhysics(
       delete next[key]
       continue
     }
-    next[key] = columns.flat()
+    // Assembled in LAYOUT order: the index, not slot order, says where each row sits.
+    if (layoutRows) {
+      const taken = Array.from({ length: identityCount }, () => 0)
+      next[key] = layoutRows.map((row) => columns[row.slot]![taken[row.slot]!++] ?? '')
+    } else {
+      next[key] = columns.flat()
+    }
   }
 
   // The MATERIAL is the third part of the same fact as the name and the id below, so all three move

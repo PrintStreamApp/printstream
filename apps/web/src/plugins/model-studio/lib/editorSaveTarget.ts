@@ -18,7 +18,7 @@
  * (see `useEditorSave`) and must be skipped wholesale, not partially, when there is no library.
  */
 import type { ProcessConfigResolver } from '../../../components/ProcessSettingsDialog'
-import type { ExportArrangedThreeMf, LibraryFile, SaveArrangedThreeMf, SceneEdit, SlicingPresetSummary, SlicingTarget } from '@printstream/shared'
+import type { ExportArrangedThreeMf, LibraryFile, ProfileRecord, SaveArrangedThreeMf, SceneEdit, SlicingPresetSummary, SlicingTarget } from '@printstream/shared'
 import { apiFetch } from '../../../lib/apiClient'
 import {
   uploadLibraryFileInChunks,
@@ -89,6 +89,12 @@ export interface EditorSaveTarget {
    * the slice controller to rebase its material overlay. False for a local file.
    */
   readonly isLibraryBacked: boolean
+  /**
+   * Resolve a printer preset this host can retarget onto, through the SAME resolvers its bakes use,
+   * so a view that previews the retarget (the flushing dialog's machine context) sees the machine
+   * the save and slice will write. Null when this host cannot resolve the preset.
+   */
+  resolveMachine?(profileId: string, slicerTargetId: string | null, signal?: AbortSignal): Promise<{ config: ProfileRecord; name: string } | null>
 }
 
 /**
@@ -209,6 +215,9 @@ export function createApiSaveTarget(options: ApiSaveTargetOptions): EditorSaveTa
 
   return {
     isLibraryBacked: true,
+    resolveMachine: async (profileId, slicerTargetId, signal) => (resolvers.canResolve(profileId)
+      ? await resolvers.machine(profileId, slicerTargetId, signal ? { signal } : undefined)
+      : null),
 
     async persist(payload, lifecycle = {}) {
       const bytes = await bake(payload, lifecycle.signal, true)

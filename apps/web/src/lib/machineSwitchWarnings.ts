@@ -17,7 +17,7 @@ import { formatPlateTypeLabel, formatPrinterModelLabel } from './slicingPresetMa
 
 export interface MachineSwitchWarning {
   /** Stable key so a host can dedupe/dismiss. */
-  key: 'offBed' | 'layerHeight' | 'printerModelUnavailable' | 'printerProfileUnavailable' | 'nozzleUnavailable' | 'plateUnavailable' | 'machineOverridesCarried'
+  key: 'offBed' | 'layerHeight' | 'printerModelUnavailable' | 'printerProfileUnavailable' | 'nozzleUnavailable' | 'plateUnavailable' | 'machineOverridesSetAside'
   message: string
 }
 
@@ -117,30 +117,30 @@ export function machineTargetConflictWarnings(conflicts: readonly MachineTargetC
 }
 
 /**
- * The project's own machine settings are still applied after a printer change, and they were
- * authored against a DIFFERENT machine.
+ * The project's own printer-setting changes are NOT applied, because a different printer preset is
+ * selected than the one they were made for.
  *
- * Kept rather than cleared, deliberately: they are the user's work, and silently discarding them on
- * a printer switch is the failure this project's conventions call worse than an unwanted value.
- * But an override is a diff against one specific preset's baseline, so carrying it can express
- * something the new machine cannot do -- a `printable_height` from a taller printer, or an
- * extruder-indexed vector from a dual-nozzle one. So it is carried AND said out loud, and the
- * settings dialog offers a per-key reset for anything the user does not want.
+ * Bambu Studio's rule: printer-setting changes never transfer to another printer preset (the
+ * printer tab always sets `no_transfer`, so its dialog offers only Discard or Save). Carrying them
+ * once sent a P1P start G-code to an X2D, which never selected a hotend and printed on the wrong
+ * nozzle. They are set aside rather than deleted, so switching back (or undoing the switch)
+ * restores them; saying so is what keeps that from being a silent loss.
  *
- * Returns null when there is nothing to say: no overrides, or the machine did not change.
+ * Returns null when there is nothing set aside.
  */
-export function machineOverridesCarriedWarning(input: {
-  overriddenKeyCount: number
-  previousPrinterModel: string | null
-  printerModel: string
+export function machineOverridesSetAsideWarning(input: {
+  /** How many changes are held for the other preset. */
+  setAsideKeyCount: number
+  /** The preset they belong to, when known. */
+  presetName: string | null
 }): MachineSwitchWarning | null {
-  if (input.overriddenKeyCount === 0) return null
-  if (!input.previousPrinterModel || input.previousPrinterModel === input.printerModel) return null
-  const count = input.overriddenKeyCount
+  const count = input.setAsideKeyCount
+  if (count === 0) return null
+  const owner = input.presetName ? ` for ${input.presetName}` : ' for another printer'
   return {
-    key: 'machineOverridesCarried',
-    message: `${count} printer setting${count === 1 ? '' : 's'} you changed for `
-      + `${formatPrinterModelLabel(input.previousPrinterModel)} ${count === 1 ? 'is' : 'are'} still applied to `
-      + `${formatPrinterModelLabel(input.printerModel)}. Check them in the printer settings, or reset the ones you do not want.`
+    key: 'machineOverridesSetAside',
+    message: `${count} printer setting${count === 1 ? '' : 's'} this project changed${owner} `
+      + `${count === 1 ? 'is' : 'are'} not applied to this printer. Printer changes do not carry `
+      + `between printers, as in Bambu Studio. Switch back to use ${count === 1 ? 'it' : 'them'} again.`
   }
 }

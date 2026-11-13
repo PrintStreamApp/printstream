@@ -82,6 +82,9 @@ export function createLocalSaveTarget(options: LocalSaveTargetOptions): EditorSa
 
   return {
     isLibraryBacked: false,
+    resolveMachine: async (profileId, slicerTargetId, signal) => (resolvers.canResolve(profileId)
+      ? await resolvers.machine(profileId, slicerTargetId, signal ? { signal } : undefined)
+      : null),
 
     async persist(payload, lifecycle = {}) {
       const signal = lifecycle.signal

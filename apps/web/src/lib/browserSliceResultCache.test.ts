@@ -2,7 +2,10 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import type { SceneEdit } from '@printstream/shared'
 import type { SliceFileSubmitInput } from './libraryViewHelpers'
-import { browserSliceResultIdentity, canReuseBrowserSliceResult } from './browserSliceResultCache'
+import { browserSliceResultIdentity as identityAt, canReuseBrowserSliceResult } from './browserSliceResultCache'
+
+/** The identity at preset revision 0, for the cases that are not about presets. */
+const browserSliceResultIdentity = (input: Parameters<typeof identityAt>[0]) => identityAt(input, 0)
 
 function sliceInput(overrides: Partial<SliceFileSubmitInput> = {}): SliceFileSubmitInput {
   return {
@@ -73,4 +76,12 @@ test('source version and output placement are part of the open-dialog identity',
 
   assert.equal(canReuseBrowserSliceResult(previous, changedVersion), false)
   assert.equal(canReuseBrowserSliceResult(previous, changedDestination), false)
+})
+
+// A custom preset updated in place keeps its id, so the request alone compares equal. The result
+// sliced with the old values must not be reopened.
+test('a preset write since the slice invalidates the browser result', () => {
+  const input = { file: { id: 'project-1' }, ...sliceInput() }
+  assert.equal(canReuseBrowserSliceResult(identityAt(input, 3), identityAt(input, 3)), true)
+  assert.equal(canReuseBrowserSliceResult(identityAt(input, 3), identityAt(input, 4)), false)
 })

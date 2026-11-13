@@ -63,6 +63,7 @@ export * from './plate-filament-sequence.js'
 // Repairable-defect detection + fixes; see repairs/index.ts for the shared contract.
 export * from './repairs/index.js'
 export * from './filament-variant-index.js'
+export * from './filament-variant-rows.js'
 export * from './machine-retarget.js'
 export * from './process-preset-binding.js'
 export * from './process-variant-layout.js'

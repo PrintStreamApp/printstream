@@ -39,6 +39,7 @@ import {
   preparedSliceStageIdentity,
   type PreparedSliceStageIdentity
 } from './lib/preparedSliceStageCache'
+import { currentSlicingPresetRevision } from '../../lib/slicingPresetRevision'
 
 type PlateThumbnail = { plateIndex: number; png: string }
 
@@ -524,7 +525,7 @@ export function useEditorSave({
       onReconciliationStart,
       onReconciliationRequired
     }
-    const identity = preparedSliceStageIdentity(stageInput)
+    const identity = preparedSliceStageIdentity(stageInput, currentSlicingPresetRevision())
     const previous = preparedSliceStageRef.current
     if (previous && canReusePreparedSliceStage(previous.identity, identity)) {
       signal?.throwIfAborted()

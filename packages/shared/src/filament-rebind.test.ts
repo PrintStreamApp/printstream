@@ -425,3 +425,33 @@ test('a rebind that supplies a config but no rename leaves the material alone', 
   assert.deepEqual(next.filament_ids, ['GFA00'])
   assert.deepEqual(next.nozzle_temperature, ['255'], 'the physics still rebinds')
 })
+
+// Bambu Studio never transfers a filament preset's edits across a raw `filament_type` change. A
+// slot recording a tuned nozzle temperature, rebound from PLA to PETG, kept the PLA's 230.
+test('a rebind to a different material drops the slot\'s recorded edits and their record', () => {
+  const record = {
+    filament_settings_id: ['Bambu PLA Basic @BBL X1C'],
+    filament_colour: ['#FFFFFF'],
+    filament_type: ['PLA'],
+    different_settings_to_system: ['', 'nozzle_temperature', ''],
+    nozzle_temperature: ['230']
+  }
+  const toPetg = rebindProjectFilamentPhysics(record, [{ settingsId: 'Bambu PETG HF @BBL X1C', config: { filament_type: ['PETG'], nozzle_temperature: ['255'] } }])
+  assert.deepEqual(toPetg.nozzle_temperature, ['255'])
+  assert.deepEqual(toPetg.different_settings_to_system, ['', '', ''])
+
+  const toOtherPla = rebindProjectFilamentPhysics(record, [{ settingsId: 'Bambu PLA Matte @BBL X1C', config: { filament_type: ['PLA'], nozzle_temperature: ['220'] } }])
+  assert.deepEqual(toOtherPla.nozzle_temperature, ['230'], 'the same material type carries the edit, as Studio does')
+})
+
+test('a slot recorded in its display type is not a material change against the raw preset type', () => {
+  const record = {
+    filament_settings_id: ['Bambu Support for PLA @BBL X1C'],
+    filament_colour: ['#FFFFFF'],
+    filament_type: ['PLA-S'],
+    different_settings_to_system: ['', 'nozzle_temperature', ''],
+    nozzle_temperature: ['215']
+  }
+  const next = rebindProjectFilamentPhysics(record, [{ settingsId: 'Bambu Support for PLA @BBL X2D', config: { filament_type: ['PLA'], nozzle_temperature: ['220'] } }])
+  assert.deepEqual(next.nozzle_temperature, ['215'], 'the support slot keeps its tune across the machine switch')
+})

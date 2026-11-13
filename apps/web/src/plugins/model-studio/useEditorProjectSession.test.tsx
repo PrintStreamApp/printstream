@@ -60,6 +60,10 @@ test('editor project session loads from one supplied source and drops its stale 
   unmount()
   assert.equal(client.getQueryData(['library-file', 'file-1']), undefined)
   assert.equal(client.getQueryData(['library-editor-scene-initial', 'file-1']), undefined)
+  // Infinity-stale and keyed on 'current': surviving the close made a reopen read the pre-save
+  // project (a retarget's old extruder count in the flushing dialog).
+  assert.equal(client.getQueryData(['library-editor-project-settings', 'file-1', 'current']), undefined)
+  assert.equal(client.getQueryData(['library-editor-embedded-presets', 'file-1', 'current']), undefined)
   assert.equal(calls.includes('dispose'), false, 'a host-supplied source keeps its caller-owned lifetime')
   client.clear()
 })

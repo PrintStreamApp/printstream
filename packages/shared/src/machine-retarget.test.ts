@@ -805,3 +805,59 @@ test('a replacement that does not itself fit is refused, rather than authored be
   })
   assert.equal(fallback, null)
 })
+
+// A dual-nozzle Manual map named an extruder a single-nozzle target lacks; the browser slice
+// cleared it, the save and the slicer's legacy path kept it.
+test('a retarget to a single-nozzle machine clears a dual-nozzle Manual filament map', () => {
+  const next = retargetProjectSettingsToMachine({
+    printer_settings_id: 'Bambu Lab H2D 0.4 nozzle',
+    nozzle_diameter: ['0.4', '0.4'],
+    physical_extruder_map: ['1', '0'],
+    filament_type: ['PLA'],
+    filament_colour: ['#FFFFFF'],
+    filament_map_mode: 'Manual',
+    filament_map: ['2']
+  }, { printer_model: 'Bambu Lab P1P', nozzle_diameter: ['0.4'], physical_extruder_map: ['0'] }, {
+    printerSettingsId: 'Bambu Lab P1P 0.4 nozzle',
+    printerModel: 'Bambu Lab P1P'
+  })
+  assert.equal(next.filament_map_mode, undefined)
+  assert.equal(next.filament_map, undefined)
+})
+
+// Bambu Studio replaces the whole printer preset on a switch, so an option only the old machine
+// defined does not survive: an H2D's "by_highest_temp" bed formula and master extruder 2 stayed on
+// a P1P.
+test('an option only the old machine defined reverts to its default on a retarget', () => {
+  const next = retargetProjectSettingsToMachine({
+    printer_settings_id: 'Bambu Lab H2D 0.4 nozzle',
+    nozzle_diameter: ['0.4', '0.4'],
+    filament_type: ['PLA'],
+    filament_colour: ['#FFFFFF'],
+    bed_temperature_formula: 'by_highest_temp',
+    master_extruder_id: '2',
+    printable_height: '325'
+  }, { printer_model: 'Bambu Lab P1P', nozzle_diameter: ['0.4'], printable_height: '250' }, {
+    printerSettingsId: 'Bambu Lab P1P 0.4 nozzle',
+    printerModel: 'Bambu Lab P1P'
+  })
+  assert.equal(next.bed_temperature_formula, 'by_first_filament')
+  assert.equal(next.master_extruder_id, '1')
+  assert.equal(next.printable_height, '250', 'an option the new machine defines comes from it')
+})
+
+test('retargeting onto the project\'s own printer never resets an option its preset omits', () => {
+  const next = retargetProjectSettingsToMachine({
+    printer_settings_id: 'Bambu Lab H2D 0.4 nozzle',
+    nozzle_diameter: ['0.4', '0.4'],
+    filament_type: ['PLA'],
+    filament_colour: ['#FFFFFF'],
+    bed_temperature_formula: 'by_highest_temp',
+    printing_by_object_gcode: 'G1 Z10 ; mine'
+  }, { printer_model: 'Bambu Lab H2D', nozzle_diameter: ['0.4', '0.4'] }, {
+    printerSettingsId: 'Bambu Lab H2D 0.4 nozzle',
+    printerModel: 'Bambu Lab H2D'
+  })
+  assert.equal(next.bed_temperature_formula, 'by_highest_temp')
+  assert.equal(next.printing_by_object_gcode, 'G1 Z10 ; mine')
+})

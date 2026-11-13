@@ -64,3 +64,65 @@ export function alignProcessConfigToLayout<T extends Record<string, unknown>>(co
   aligned[VARIANT_KEY] = [...reference[VARIANT_KEY] as string[]]
   return aligned as T
 }
+
+/** The pair that names a record's process columns: `print_extruder_variant` + `print_extruder_id`. */
+export interface ProcessVariantLayout {
+  print_extruder_variant: string[]
+  print_extruder_id: string[]
+}
+
+/** A record's process column layout, or null when it declares none or a malformed one. */
+export function readProcessVariantLayout(record: Record<string, unknown>): ProcessVariantLayout | null {
+  if (!layoutKeys(record)) return null
+  return {
+    print_extruder_variant: [...record[VARIANT_KEY] as string[]],
+    print_extruder_id: [...record[ID_KEY] as string[]]
+  }
+}
+
+/**
+ * Lay a process OVERRIDE onto `target`'s columns, given the layout it was authored against.
+ *
+ * Why: an override is carried from the project's old process onto a new machine's preset, and
+ * written verbatim it kept the OLD machine's width. An X1C wall speed `["150","350"]` (DD Standard,
+ * DD High Flow) over an X2D's six columns left the Bowden nozzle's columns out of range, and the
+ * engine's `get_at` read 150 there instead of the preset's 50. Bambu Studio transfers a variant edit
+ * by (extruder id, variant name) (`Tab.cpp` `handle_transfer_action`), and a column it cannot match
+ * keeps the new preset's value; this does the same.
+ *
+ * @param value the override vector
+ * @param authoredLayout the layout `value` was written against; null when unknown
+ * @param target the record being written, already carrying the FINAL layout and the preset's values
+ * @param key the option, to read the preset's value for an unmatched column
+ * @returns the vector to write, or `value` unchanged when it already fits or nothing can be decided
+ */
+export function layProcessOverrideOnto(
+  value: string[],
+  authoredLayout: ProcessVariantLayout | null,
+  target: Record<string, unknown>,
+  key: string
+): string[] {
+  const targetLayout = layoutKeys(target)
+  if (!isPrintVariantOption(key) || !targetLayout || value.length === targetLayout.length) return value
+  const presetValue = target[key]
+  const presetColumn = (row: number): string | undefined => {
+    if (Array.isArray(presetValue)) {
+      const entry = presetValue[row] ?? presetValue[0]
+      return typeof entry === 'string' ? entry : undefined
+    }
+    return typeof presetValue === 'string' ? presetValue : undefined
+  }
+
+  // Known authoring layout of the same width: transfer by identity, as Studio does.
+  if (authoredLayout && authoredLayout.print_extruder_id.length === value.length) {
+    const columns = processVariantColumnIndices(authoredLayout as unknown as Record<string, unknown>, target)
+    if (columns) {
+      return columns.map((column, row) => (column >= 0 ? value[column] : presetColumn(row)) ?? value[0] ?? '')
+    }
+  }
+  // A single value from an unknown layout is the engine's own broadcast form: keep it.
+  if (value.length === 1) return value
+  // Unknown layout, wrong width: keep the columns it does have positionally and let the preset
+  // supply the rest, rather than leave the tail for the engine to read out of range.
+  return targetLayout.map((_key, row) => (row < value.length ? value[row] : presetColumn(row)) ?? value[0] ?? '')
+}

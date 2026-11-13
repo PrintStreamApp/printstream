@@ -25,6 +25,7 @@ const target: SlicingTarget = {
 
 function identity(overrides: Partial<PreparedSliceStageIdentity> = {}): PreparedSliceStageIdentity {
   return {
+    presetRevision: 0,
     sceneEdit,
     sourceFileId: 'source-1',
     configurationBaseFileId: 'source-1',
@@ -40,14 +41,22 @@ test('prepared slice stage ignores lifecycle callbacks but retains every byte-af
   const first = preparedSliceStageIdentity({
     ...identity(),
     onPhase: () => undefined
-  })
+  }, 0)
   const second = preparedSliceStageIdentity({
     ...identity(),
     onProgress: () => undefined
-  })
+  }, 0)
 
   assert.equal(canReusePreparedSliceStage(first, second), true)
   assert.equal(canReusePreparedSliceStage(first, identity({ sceneEdit: { ...sceneEdit, plateType: 'Textured PEI Plate' } })), false)
   assert.equal(canReusePreparedSliceStage(first, identity({ target: { ...target, processProfileId: 'process-2' } })), false)
   assert.equal(canReusePreparedSliceStage(first, identity({ configurationBaseVersionId: 'version-2' })), false)
+})
+
+// The target names presets by id and the bake resolves their content: an in-place preset update
+// keeps the id, so only the revision tells the two stages apart.
+test('a preset write since staging stages again', () => {
+  const first = preparedSliceStageIdentity(identity(), 5)
+  assert.equal(canReusePreparedSliceStage(first, preparedSliceStageIdentity(identity(), 5)), true)
+  assert.equal(canReusePreparedSliceStage(first, preparedSliceStageIdentity(identity(), 6)), false)
 })

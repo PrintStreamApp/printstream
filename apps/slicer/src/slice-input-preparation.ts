@@ -12,7 +12,7 @@ import { z } from 'zod'
 import { isProjectSlicingPresetId, sliceEnvelopeSchema, type SlicingOutputLine, type SlicingPresetFile } from '@printstream/shared'
 import { assertSupportedEmbeddedMachineSwitch, shouldRetargetEmbeddedMachine } from './machine-switch-guard.js'
 import { mergeInheritedMachineProfile, retargetProjectSettingsToMachine } from './machine-switch-repair.js'
-import { applyManualFilamentMapToModelSettings, buildManualNozzleAssignment, buildSlicedArtifactMetadata, isPlatePreviewEntry, metadataChangesFilamentColours, readAuthoredManualFilamentMap, rewriteProjectSettingsMetadata } from './output-metadata.js'
+import { applyManualFilamentMapToModelSettings, buildManualNozzleAssignment, clearManualFilamentMapFromModelSettings, buildSlicedArtifactMetadata, isPlatePreviewEntry, metadataChangesFilamentColours, readAuthoredManualFilamentMap, rewriteProjectSettingsMetadata } from './output-metadata.js'
 import { sanitizeProfileFileName } from './profile-file-name.js'
 import { bedSizeFromPrintableArea, buildObjectPlateIndex, recenterBuildItemsXml } from './recenter-plates.js'
 import { appendStructuredOutput } from './slice-output.js'
@@ -173,9 +173,15 @@ export async function prepareInputThreeMf(input: {
   const manualNozzle = metadata && nozzleAssignmentSettings
     ? buildManualNozzleAssignment(nozzleAssignmentSettings, metadata.filamentByProjectId)
     : null
+  // A switch to a single-nozzle machine clears a dual-nozzle source's per-plate Manual map: the
+  // shared retarget clears the project's half, and the CLI reads the mode from the plates.
+  const switchesToSingleNozzle = Boolean(machineSwitchProfile)
+    && (!Array.isArray(machineSwitchProfile?.physical_extruder_map) || machineSwitchProfile.physical_extruder_map.length <= 1)
   const modelSettingsTransform = manualNozzle
     ? (xml: string) => applyManualFilamentMapToModelSettings(xml, manualNozzle.filament_map.join(' '))
-    : undefined
+    : switchesToSingleNozzle
+      ? clearManualFilamentMapFromModelSettings
+      : undefined
   // A colour change makes the source's embedded plate previews stale (they were rendered
   // with the OLD colours), and because the colours are rewritten into the project below,
   // the CLI's own filament_color_changed check can never notice. Drop the previews from

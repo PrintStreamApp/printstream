@@ -632,3 +632,26 @@ test('a late project material follows its installed preset when the redundant pr
   assert.equal(view.result.current.filamentMaterialOptionIds[3], buildProfileMaterialOptionId(installed.id))
   assert.deepEqual(view.result.current.filamentMappingResult.unresolved, [])
 })
+
+// Bambu Studio never transfers a filament preset's edits onto a preset of a different raw
+// `filament_type` (`Tab::select_preset`). A PLA slot tuned to 230 then switched to PETG used to
+// slice PETG at 230.
+test('changing a slot to a different material type drops its tuning; the same type keeps it', () => {
+  const profile = (id: string, filamentType: string) => ({ id, name: id, kind: 'filament', source: 'builtin', filamentType }) as never
+  const profiles = [profile('pla-a', 'PLA'), profile('pla-b', 'PLA'), profile('petg', 'PETG')]
+  const options = [
+    { id: 'opt-pla-a', profileId: 'pla-a', materialType: 'PLA' },
+    { id: 'opt-pla-b', profileId: 'pla-b', materialType: 'PLA' },
+    { id: 'opt-petg', profileId: 'petg', materialType: 'PETG' }
+  ] as never[]
+  const view = renderSlots()
+  act(() => { view.rerender({ ...view.props, filamentProfiles: profiles, compatibleFilamentProfiles: profiles, materialOptions: options }) })
+  act(() => { view.result.current.handleMaterialOptionChange(1, { id: 'opt-pla-a', profileId: 'pla-a', materialType: 'PLA' } as never) })
+  act(() => { view.result.current.setFilamentSettingOverridesById({ 1: { nozzle_temperature: '230' } }) })
+
+  act(() => { view.result.current.handleMaterialOptionChange(1, { id: 'opt-pla-b', profileId: 'pla-b', materialType: 'PLA' } as never) })
+  assert.deepEqual(view.result.current.filamentSettingOverridesById, { 1: { nozzle_temperature: '230' } }, 'PLA to PLA carries, as Studio does')
+
+  act(() => { view.result.current.handleMaterialOptionChange(1, { id: 'opt-petg', profileId: 'petg', materialType: 'PETG' } as never) })
+  assert.deepEqual(view.result.current.filamentSettingOverridesById, {}, 'PLA tuning never rides onto PETG')
+})

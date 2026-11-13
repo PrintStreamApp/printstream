@@ -26,6 +26,7 @@ import { replaceMaterialRecipe } from './materialSlotReplacement'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { LibraryFile, MixedFilamentConfig, SceneEditFilament, ThreeMfIndex } from '@printstream/shared'
 import type { SlicingPresetSummary } from '@printstream/shared'
+import { slotCurrentRawMaterialType, slotMaterialChangeDropsTuning } from './slotMaterialTransfer'
 import { resolveProjectFilamentPreset } from '../../lib/filamentPresetResolver'
 import {
   buildFilamentMappings,
@@ -508,6 +509,11 @@ export function useMaterialSlots(params: MaterialSlotsParams): MaterialSlots {
   // The editor's unsaved-flag hook for edits applied through the controller's OWN dialogs (which
   // stay mounted behind the editor): see SliceSettingsController.materialEditListenerRef.
   const materialEditListenerRef = useRef<(() => void) | null>(null)
+  // Latest catalogue inputs for callbacks that must stay stable (applyBakedMaterialDefaults, the
+  // material pick): read through a ref so they are immune to where the host's readiness effect
+  // sits in declaration order.
+  const paramsRef = useRef(params)
+  paramsRef.current = params
 
   const slotList = sessionSlots
   // Read by callbacks that must know the CURRENT list without taking it as a dependency.
@@ -868,6 +874,27 @@ export function useMaterialSlots(params: MaterialSlotsParams): MaterialSlots {
   }, [projectFilaments, onFilamentReordered])
 
   const handleMaterialOptionChange = useCallback((projectFilamentId: number, option: SliceMaterialOption | null) => {
+    // Decided from the slot as it is BEFORE this pick: the writes below update its picked id first.
+    const before = slotListRef.current.find((slot) => slot.projectFilamentId === projectFilamentId)
+    const { materialOptions: options, filamentProfiles: profiles, bakedIndex: baked, baseProjectFilaments: base } = paramsRef.current
+    const sourceSlotId = before?.sourceIndex != null ? base[before.sourceIndex]?.projectFilamentId : undefined
+    const dropsTuning = Boolean(before?.settingOverrides) && slotMaterialChangeDropsTuning(
+      slotCurrentRawMaterialType({
+        pickedProfileId: options.find((candidate) => candidate.id === before?.pickedOptionId)?.profileId,
+        profiles,
+        fileFilamentType: baked?.projectFilaments?.find((filament) => filament.id === sourceSlotId)?.filamentType
+      }),
+      option?.profileId ?? null,
+      profiles
+    )
+    if (dropsTuning) {
+      // Tuning made for one material never rides onto another (Bambu Studio's `no_transfer`).
+      setFilamentSettingOverridesById((current) => {
+        const next = { ...current }
+        delete next[projectFilamentId]
+        return next
+      })
+    }
     setFilamentMaterialOptionIds((current) => ({ ...current, [projectFilamentId]: option?.id ?? '' }))
     // Both slot-carried fields in ONE write, so a pick is a single state update rather than two
     // that each re-derive the list.
@@ -887,12 +914,8 @@ export function useMaterialSlots(params: MaterialSlotsParams): MaterialSlots {
     }
     // Notify the editor (if any) so a pick from its picker Modal flips the unsaved-changes flag.
     materialEditListenerRef.current?.()
-  }, [setFilamentMaterialOptionIds, setFilamentColors, setFilamentToolheadIds])
+  }, [setFilamentMaterialOptionIds, setFilamentColors, setFilamentToolheadIds, setFilamentSettingOverridesById])
 
-  // Latest catalogue inputs for applyBakedMaterialDefaults: read through a ref so the callback
-  // is stable and immune to where the host's readiness effect sits in declaration order.
-  const paramsRef = useRef(params)
-  paramsRef.current = params
   const applyBakedMaterialDefaults = useCallback(() => {
     if (paramsRef.current.catalogueReady === false) return
     const { file: f, bakedIndex: baked, filamentProfiles: profiles, compatibleFilamentProfiles: compatible, materialOptions: options, selectedMachineProfile: machine } = paramsRef.current

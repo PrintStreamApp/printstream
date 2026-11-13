@@ -68,6 +68,7 @@ import {
   canReuseBrowserSliceResult,
   type BrowserSliceResultIdentity
 } from '../lib/browserSliceResultCache'
+import { currentSlicingPresetRevision } from '../lib/slicingPresetRevision'
 import { buildApiUrl } from '../lib/apiUrl'
 import { invalidateLibraryQueries } from '../lib/libraryQueryInvalidation'
 import { useAuthBootstrapQuery } from '../lib/authQuery'
@@ -635,7 +636,7 @@ export function LibraryView() {
         setSliceResultTarget({
           sourceFile: variables.file,
           jobId: response.job.id,
-          requestIdentity: browserSliceResultIdentity(variables)
+          requestIdentity: browserSliceResultIdentity(variables, currentSlicingPresetRevision())
         })
       }
     }
@@ -1671,7 +1672,7 @@ export function LibraryView() {
               && cached
               && canReuseBrowserSliceResult(
                 cached.requestIdentity,
-                browserSliceResultIdentity(variables)
+                browserSliceResultIdentity(variables, currentSlicingPresetRevision())
               )
             ) {
               setSliceResultTarget(cached)

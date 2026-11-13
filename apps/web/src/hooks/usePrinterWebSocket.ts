@@ -14,6 +14,7 @@ import { invalidateLibraryListQueries } from '../lib/libraryQueryInvalidation'
 import { invalidatePluginRelatedQueries } from '../lib/pluginQueryInvalidation'
 import { workspaceQueryKeys } from '../lib/workspaceScope'
 import { wsClient } from '../lib/wsClient'
+import { bumpSlicingPresetRevision } from '../lib/slicingPresetRevision'
 
 export function usePrinterWebSocket(enabled = true, scopeKey = 'default'): void {
   const queryClient = useQueryClient()
@@ -146,6 +147,8 @@ export function usePrinterWebSocket(enabled = true, scopeKey = 'default'): void 
           void queryClient.invalidateQueries({ queryKey: ['job-history'] })
         }
         if (event.resource === 'slicing.profiles') {
+          // An overwrite keeps the preset's id, so a cached slice must stop matching too.
+          bumpSlicingPresetRevision()
           void queryClient.invalidateQueries({ queryKey: ['slicing-profiles'] })
         }
         if (event.resource === 'jobs') {

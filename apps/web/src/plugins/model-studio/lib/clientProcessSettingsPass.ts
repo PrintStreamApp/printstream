@@ -6,12 +6,13 @@
 import { applyProcessProfileToProjectSettings, firstProfileString, parseBuiltinSlicingPresetId,
   processPresetFitsMachine, type ProfileRecord, type SaveArrangedThreeMf } from '@printstream/shared'
 import type { EditorBakePassOptions } from './editorBakePasses'
+import type { ProcessSettingsPassContext } from './clientBakeSettingsPasses'
 
 export function processSettingsForSave(
   target: NonNullable<SaveArrangedThreeMf['retarget']>,
   targetId: string | null,
   options: EditorBakePassOptions
-): (settings: ProfileRecord, context?: { machineRetargeted: boolean }) => Promise<ProfileRecord> {
+): (settings: ProfileRecord, context?: ProcessSettingsPassContext) => Promise<ProfileRecord> {
   return async (settings, context) => {
     const id = target.processProfileId!
     const current = firstProfileString(settings.print_settings_id)
@@ -31,6 +32,6 @@ export function processSettingsForSave(
     if (!target.processProfileChosen && current === name) return settings
     return applyProcessProfileToProjectSettings(settings, resolved.config, target.processSettingOverrides ?? {}, {
       name, parentName: resolved.preset?.parentName ?? null, parentConfig: resolved.parentConfig
-    })
+    }, context?.machineRetargeted ? { overridesLayout: context.sourceProcessLayout ?? null } : {})
   }
 }

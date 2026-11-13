@@ -12,6 +12,7 @@ import { buildManualNozzleAssignment, stringArray } from '@printstream/shared/th
 export {
   applyManualFilamentMapToModelSettings,
   buildManualNozzleAssignment,
+  clearManualFilamentMapFromModelSettings,
   readAuthoredManualFilamentMap
 } from '@printstream/shared/three-mf'
 

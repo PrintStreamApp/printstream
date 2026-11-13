@@ -50,6 +50,7 @@ import type { ProcessConfigResolver } from '../../components/ProcessSettingsDial
 import type { FilamentConfigResolver } from '../../components/library/FilamentSettingsDialog'
 import type { SettingFilamentChoice } from '../../components/settings/SettingValueField'
 import type { SliceConfigSnapshot, SliceSettingsController } from '../../components/library/SliceSettingsPanel'
+import { useMachineSettingOverrides } from '../../components/library/useMachineSettingOverrides'
 import { useMachineTarget } from '../../components/library/useMachineTarget'
 import { useMaterialSlots } from '../../components/library/useMaterialSlots'
 import { useProcessProfileSelection } from '../../components/library/useProcessProfileSelection'
@@ -396,12 +397,16 @@ export function useLocalSliceSettingsController(params: LocalSliceSettingsContro
   /**
    * The project's OWN machine settings, as a diff against the resolved printer preset. Held here
    * beside the process overrides because it travels with them everywhere: the slice request, the
-   * save request, the undo snapshot. Cleared by nothing implicitly -- a machine override survives a
-   * preset switch, and the server re-resolves the new preset and lays these back over it.
+   * save request, the undo snapshot. Scoped to the printer preset they were made for: on any other
+   * preset they apply as none, as in Bambu Studio (see `useMachineSettingOverrides`).
    */
-  const [machineSettingOverrides, setMachineSettingOverrides] = useState<Record<string, string | string[]>>({})
-  /** Which printer the overrides above were authored against; drives the carried-overrides warning. */
-  const [machineOverridesModel, setMachineOverridesModel] = useState<string | null>(null)
+  const {
+    machineSettingOverrides,
+    setMachineSettingOverrides,
+    machineOverridesSetAside,
+    machineOverridesSnapshot,
+    restoreMachineOverridesSnapshot
+  } = useMachineSettingOverrides(printerProfileId, selectedMachineProfile?.name ?? null)
 
   const retargetTarget: SlicingManualProfileTarget | null = (printerProfileId.length > 0 && processProfileId.length > 0 && Boolean(targetPrinterModel))
     ? {
@@ -437,9 +442,8 @@ export function useLocalSliceSettingsController(params: LocalSliceSettingsContro
     processProfileId,
     processProfileSelectionTouched: processProfileSelectionTouchedRef.current,
     processSettingOverrides,
-    machineSettingOverrides,
-    machineOverridesModel
-  }), [selectedSlicerTargetId, machineSnapshot, materialSnapshot, objectProcessOverrides, processProfileId, processSettingOverrides, machineSettingOverrides, machineOverridesModel, processProfileSelectionTouchedRef])
+    ...machineOverridesSnapshot
+  }), [selectedSlicerTargetId, machineSnapshot, materialSnapshot, objectProcessOverrides, processProfileId, processSettingOverrides, machineOverridesSnapshot, processProfileSelectionTouchedRef])
   const restoreConfig = useCallback((snapshot: SliceConfigSnapshot) => {
     setSelectedSlicerTargetId(snapshot.selectedSlicerTargetId)
     restoreMachineSnapshot(snapshot)
@@ -448,9 +452,8 @@ export function useLocalSliceSettingsController(params: LocalSliceSettingsContro
     if (snapshot.processProfileId != null) setProcessProfileId(snapshot.processProfileId)
     processProfileSelectionTouchedRef.current = snapshot.processProfileSelectionTouched
     setProcessSettingOverrides(snapshot.processSettingOverrides ?? {})
-    setMachineSettingOverrides(snapshot.machineSettingOverrides ?? {})
-    setMachineOverridesModel(snapshot.machineOverridesModel ?? null)
-  }, [processProfileSelectionTouchedRef, restoreMachineSnapshot, restoreMaterialSnapshot, setProcessProfileId, setProcessSettingOverrides, setSelectedSlicerTargetId])
+    restoreMachineOverridesSnapshot(snapshot)
+  }, [processProfileSelectionTouchedRef, restoreMachineSnapshot, restoreMachineOverridesSnapshot, restoreMaterialSnapshot, setProcessProfileId, setProcessSettingOverrides, setSelectedSlicerTargetId])
 
   const selectedSlicerTarget = slicerTargets.find((target) => target.id === selectedSlicerTargetId) ?? null
   const projectIsNewerThanSlicer = isProjectNewerThanSlicer(file.projectVersion, selectedSlicerTarget?.version)
@@ -561,8 +564,7 @@ export function useLocalSliceSettingsController(params: LocalSliceSettingsContro
     // Always known here: this host reads the project the tab already parsed, so there is no lookup
     // that could leave the map empty for want of an answer.
     machineSettingOverridesKnown: true,
-    machineOverridesModel,
-    setMachineOverridesModel,
+    machineOverridesSetAside,
     setProcessSettingsDialogOpen,
     hasPlateObjects: plateObjects.length > 0,
     selectedSliceObjectIds: new Set(),

@@ -32,7 +32,7 @@ import {
   describeSettingsBaseline,
   isNilSettingValue
 } from '@printstream/shared'
-import { apiFetch } from '../../lib/apiClient'
+import { saveSlicingPreset } from '../../lib/saveSlicingPreset'
 import { resolveWorkspaceFilamentConfig } from './workspaceFilamentResolver'
 import { useEffectiveSlicerDeveloperMode } from '../../lib/slicerDeveloperMode'
 import { usePromptDialog } from '../PromptDialogProvider'
@@ -337,10 +337,7 @@ export default function FilamentSettingsDialog(props: FilamentSettingsDialogProp
     setError(null)
     try {
       const presetConfig: Record<string, string | string[]> = { ...config, name, type: 'filament' }
-      await apiFetch('/api/slicing/profiles', {
-        method: 'POST',
-        body: { kind: 'filament', fileName: `${name}.json`, encoding: 'utf8', overwrite, content: JSON.stringify(presetConfig, null, 2) }
-      })
+      await saveSlicingPreset({ kind: 'filament', name, overwrite, config: presetConfig })
       onApply?.(changedOverrides())
       onClose()
     } catch (err) {

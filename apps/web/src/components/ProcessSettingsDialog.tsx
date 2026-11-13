@@ -42,7 +42,7 @@ import {
   type SettingsBaselineOrigin,
   type SlicingPresetSummary
 } from '@printstream/shared'
-import { apiFetch } from '../lib/apiClient'
+import { saveSlicingPreset } from '../lib/saveSlicingPreset'
 import { collectBulkOverridesResult, summarizeBulkOverrides } from '../lib/processBulkOverrides'
 import { useEffectiveSlicerDeveloperMode } from '../lib/slicerDeveloperMode'
 import { canUpdateProcessPreset } from '../lib/processPresetEditPolicy'
@@ -579,16 +579,7 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
     setError(null)
     try {
       const presetConfig: Record<string, string | string[]> = { ...config, name, type: 'process' }
-      await apiFetch('/api/slicing/profiles', {
-        method: 'POST',
-        body: {
-          kind: 'process',
-          fileName: `${name}.json`,
-          encoding: 'utf8',
-          overwrite,
-          content: JSON.stringify(presetConfig, null, 2)
-        }
-      })
+      await saveSlicingPreset({ kind: 'process', name, overwrite, config: presetConfig })
       const result = computeAppliedOverrides()
       draft.apply(result.overrides, { clearedKeys: result.clearedKeys })
       onClose()

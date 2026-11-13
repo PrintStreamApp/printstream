@@ -117,3 +117,38 @@ test('applying nothing to a project that records nothing leaves the file untouch
   const project = projectWith(3)
   assert.equal(applyMachineSettingOverrides(project, {}, PRESET), project)
 })
+
+// Bambu Studio never transfers printer-setting changes to another printer preset (the printer tab
+// always sets `no_transfer`). Answering a P1P project's start G-code "against" an X2D is how a P1P
+// start sequence reached an X2D slice and the print ran on the wrong nozzle.
+test('a project\'s printer overrides belong only to its own printer preset', () => {
+  const saved = applyMachineSettingOverrides(projectWith(1), { support_air_filtration: '1' }, PRESET)
+
+  assert.deepEqual(
+    readMachineSettingOverrides(saved, PRESET, { presetName: 'Bambu Lab H2D 0.4 nozzle' }),
+    { support_air_filtration: '1' },
+    'asked about its own preset, the record answers'
+  )
+  assert.deepEqual(
+    readMachineSettingOverrides(saved, PRESET, { presetName: 'Bambu Lab X2D 0.4 nozzle' }),
+    {},
+    'asked about another printer, there is nothing to carry'
+  )
+})
+
+test('a project on an uninstalled custom printer preset answers against the system preset it inherits', () => {
+  const saved = applyMachineSettingOverrides(
+    projectWith(1, {
+      printer_settings_id: 'Bambu Lab H2D 0.4 nozzle - Mine',
+      inherits_group: ['', '', 'Bambu Lab H2D 0.4 nozzle']
+    }),
+    { support_air_filtration: '1' },
+    PRESET
+  )
+
+  assert.deepEqual(
+    readMachineSettingOverrides(saved, PRESET, { presetName: 'Bambu Lab H2D 0.4 nozzle' }),
+    { support_air_filtration: '1' }
+  )
+  assert.deepEqual(readMachineSettingOverrides(saved, PRESET, { presetName: 'Bambu Lab P1P 0.4 nozzle' }), {})
+})

@@ -62,9 +62,14 @@ export function useProjectMachineOverrides(input: {
    * answer back from cache and the override read as absent on reopen.
    */
   fileVersion: string
-  /** Live map, so seeding can stand down once the user has authored anything. */
-  current: Record<string, string | string[]>
-  onSeed: (overrides: Record<string, string | string[]>) => void
+  /** Whether the user has authored anything (set-aside changes included), so seeding stands down. */
+  hasCurrentEdits: boolean
+  /**
+   * Adopt the file's overrides. `presetId` is the preset the answer was measured against: the
+   * server answers a file's record only for the file's OWN printer preset (`{}` for any other), so
+   * the caller scopes the seeded map to exactly that preset.
+   */
+  onSeed: (overrides: Record<string, string | string[]>, presetId: string) => void
   /**
    * Called once the server has stated what this file records, INCLUDING when it records nothing.
    * Separate from {@link onSeed}, which only fires when there is something to adopt: the save needs
@@ -93,7 +98,8 @@ export function useProjectMachineOverrides(input: {
   // Null is the server saying it could not read the file; treat it as no answer at all rather than
   // as an empty set, or the save downstream reads it as "this project overrides nothing".
   const overrides = query.data?.projectOverrides ?? undefined
-  const hasCurrent = Object.keys(input.current).length > 0
+  const hasCurrent = input.hasCurrentEdits
+  const presetId = input.machineProfileId
   const onSeed = input.onSeed
   const onKnown = input.onKnown
   useEffect(() => {
@@ -103,7 +109,7 @@ export function useProjectMachineOverrides(input: {
     const decision = machineOverrideSeedDecision({ overrides, seededKey: seededKey.current, key, hasCurrentEdits: hasCurrent })
     if (decision === 'wait') return
     seededKey.current = key
-    if (decision === 'seed') onSeed(overrides!)
+    if (decision === 'seed') onSeed(overrides!, presetId)
     // `hasCurrent` is read at decision time on purpose: it flips the moment we seed, and depending
     // on it would re-enter with a stale key.
     // eslint-disable-next-line react-hooks/exhaustive-deps

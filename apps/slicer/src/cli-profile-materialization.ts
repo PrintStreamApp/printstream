@@ -8,7 +8,7 @@
  */
 import { access, mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
-import type { ProcessConfig, SlicingPresetFile } from '@printstream/shared'
+import { layProcessOverrideOnto, type ProcessConfig, type SlicingPresetFile } from '@printstream/shared'
 import { buildFilamentSlotCoverage, type FilamentSlotRequest } from './filament-slot-coverage.js'
 import { materializePortableBedAssets } from './portable-bed-assets.js'
 import { sanitizeProfileFileName } from './profile-file-name.js'
@@ -148,7 +148,7 @@ async function materializeProfileFile(
     )
     const sanitized = sanitizeBuiltinSlicerProfileJson(builtinContent)
     if (overrides && Object.keys(overrides).length > 0) {
-      await writeFile(profilePath, applyProfileSettingOverrides(sanitized, overrides))
+      await writeFile(profilePath, applyProfileSettingOverrides(sanitized, overrides, profile.kind))
       return profilePath
     }
     await writeFile(profilePath, sanitized)
@@ -164,7 +164,7 @@ async function materializeProfileFile(
   // system base before handing it to the CLI.
   let resolved = await resolveCustomProfileConfig(profile.content, profile.kind, profileDir, profile.name) as ProcessConfig
   if (overrides && Object.keys(overrides).length > 0) {
-    for (const [key, value] of Object.entries(overrides)) resolved[key] = value
+    resolved = layOverridesOntoPreset(resolved, overrides, profile.kind) as ProcessConfig
   }
   if (profile.kind === 'machine') {
     resolved = await materializePortableBedAssets(resolved, outputDir)
@@ -173,9 +173,27 @@ async function materializeProfileFile(
   return profilePath
 }
 
-/** Apply verbatim override values to serialized builtin profile JSON. */
-function applyProfileSettingOverrides(profileJson: string, overrides: Record<string, string | string[]>): string {
+/** Apply override values to serialized builtin profile JSON. */
+function applyProfileSettingOverrides(profileJson: string, overrides: Record<string, string | string[]>, kind: SlicingPresetFile['kind']): string {
   const parsed = JSON.parse(profileJson) as Record<string, unknown>
-  for (const [key, value] of Object.entries(overrides)) parsed[key] = value
-  return `${JSON.stringify(parsed, null, 2)}\n`
+  return `${JSON.stringify(layOverridesOntoPreset(parsed, overrides, kind), null, 2)}\n`
+}
+
+/**
+ * Write overrides over a materialized preset. A PROCESS override can be carried from another
+ * machine's columns; written verbatim, its missing tail columns were read out of range by the
+ * engine (an X1C wall speed reached an X2D's Bowden nozzle). The project this path sees is
+ * already retargeted, so the authoring layout is unknown here: the override keeps its columns in
+ * position and the preset supplies the rest (`layProcessOverrideOnto`).
+ */
+function layOverridesOntoPreset(
+  preset: Record<string, unknown>,
+  overrides: Record<string, string | string[]>,
+  kind: SlicingPresetFile['kind']
+): Record<string, unknown> {
+  const next = { ...preset }
+  for (const [key, value] of Object.entries(overrides)) {
+    next[key] = kind === 'process' && Array.isArray(value) ? layProcessOverrideOnto(value, null, next, key) : value
+  }
+  return next
 }
