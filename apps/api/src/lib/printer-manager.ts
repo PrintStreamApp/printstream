@@ -501,6 +501,7 @@ class PrinterManager {
 
     this.resolvePressureAdvanceProfiles(entry, parsed)
     this.commandReplies.accept(entry.printer.id, parsed)
+    logPrintStartReply(entry.printer.name, parsed)
 
     const delta = parseReport(parsed, entry.printer, entry.status)
     if (!delta) return
@@ -621,6 +622,25 @@ function isTrackedJobLifecycleStatus(status: Pick<PrinterStatus, 'stage'>): bool
 function statusEqualIgnoringObservedAt(a: PrinterStatus, b: PrinterStatus): boolean {
   if (a.observedAt === b.observedAt) return deepEqual(a, b)
   return deepEqual({ ...a, observedAt: '' }, { ...b, observedAt: '' })
+}
+
+/**
+ * Log the printer's own reply to a `project_file` start command (one line per print, so always
+ * on, unlike `LOG_MQTT_TRAFFIC`). It is the one piece of evidence that separates the two ways a
+ * dispatched start can fail to begin, which otherwise look identical (printer stays idle, the
+ * dispatch ends "Printer did not start the print"): NO reply means the command never reached the
+ * printer (bridge/MQTT transport), while a `success` reply followed by no start means the firmware
+ * accepted and then ignored it (reported on P1-series printers). Correlate with the dispatcher's
+ * `[dispatch] print start command for job ...` line by printer and time (that line is written
+ * before the sequence id is stamped). Never fails ingest.
+ */
+function logPrintStartReply(printerName: string, payload: unknown): void {
+  if (!isObject(payload)) return
+  const print = payload.print
+  if (!isObject(print) || print.command !== 'project_file') return
+  console.log(
+    `[printer:${printerName}] project_file reply: result=${String(print.result ?? '')} reason=${String(print.reason ?? '')} sequence_id=${String(print.sequence_id ?? '')}`
+  )
 }
 
 function stampSequenceId(payload: Record<string, unknown>, sequenceId: number): Record<string, unknown> {

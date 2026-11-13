@@ -2161,3 +2161,102 @@ test('recording after source deletion keeps the dispatch tag snapshot and cancel
   await finishTrackedPrintJobRecord({ jobId: 'job-frozen', result: 'cancelled' })
   assert.equal(finishedWrites, 1)
 })
+
+// A start command the printer never acted on (Bambu P1 firmware has been seen to accept the
+// upload and the command and stay idle). After the start grace, the reserved row is closed as
+// `unknown` and the start announced, never reconciled from the printer's stage: that reconcile
+// reads the PREVIOUS print's stage, so a printer still showing `finished` would record a print
+// that never ran as a success. Not `failed` either: that counts it in failed/wasted print stats.
+async function emitUnclaimedStartAfterGrace(stage: PrinterStatus['stage'], online = true, jobKind: 'file' | 'calibration' = 'file') {
+  const writes: Array<{ jobId: string; result: string }> = []
+  const unconfirmed: Array<{ printerId: string; jobId: string }> = []
+  const onUnconfirmed = (event: { printerId: string; jobId: string }) => unconfirmed.push(event)
+
+  registerPendingPrintJobSource('printer-1', {
+    jobKind,
+    jobId: 'dispatch-1',
+    fileId: null,
+    fileName: 'Cube.gcode.3mf',
+    fileSizeBytes: 123,
+    sourceKind: '3mf',
+    plate: 1,
+    useAms: true,
+    bedLevel: true,
+    amsMapping: [0],
+    calibrationOption: null
+  })
+  Object.defineProperty(rootPrisma.printJob, 'findUnique', {
+    value: async () => ({
+      id: 'dispatch-1',
+      startedAt: new Date('2026-11-13T19:00:28.000Z'),
+      finishedAt: null,
+      printerId: 'printer-1',
+      jobName: 'Cube',
+      taskId: null,
+      workspaceId: 'workspace-1',
+      sourceType: 'library',
+      fileId: null,
+      plate: 1,
+      sliceSettingsJson: null,
+      printer: { model: 'P1S' }
+    }),
+    configurable: true
+  })
+  Object.defineProperty(rootPrisma.printJob, 'update', {
+    value: async (input: { where: { id: string }; data: Record<string, unknown> }) => {
+      writes.push({ jobId: input.where.id, result: String(input.data.result ?? '') })
+      return { id: input.where.id }
+    },
+    configurable: true
+  })
+  Object.defineProperty(rootPrisma.printJob, 'findMany', { value: async () => [], configurable: true })
+  Object.defineProperty(rootPrisma.printJob, 'updateMany', { value: async () => ({ count: 0 }), configurable: true })
+  Object.defineProperty(rootPrisma.printerStats, 'upsert', { value: async () => ({}), configurable: true })
+
+  startPrintJobRecorder()
+  printerEvents.on('print-job.start-unconfirmed', onUnconfirmed)
+  try {
+    const startedAt = Date.now()
+    printerEvents.emit('print.job.starting', {
+      printerId: 'printer-1',
+      jobId: 'dispatch-1',
+      taskId: null,
+      fileName: 'Cube.gcode.3mf'
+    })
+    mock.method(Date, 'now', () => startedAt + 61_000)
+    printerEvents.emit('status', { printerId: 'printer-1', online, stage, taskId: null, gcodeFile: null } as unknown as PrinterStatus)
+    // Let the async status handler run to completion.
+    for (let turn = 0; turn < 20; turn += 1) await new Promise((resolve) => setImmediate(resolve))
+  } finally {
+    printerEvents.off('print-job.start-unconfirmed', onUnconfirmed)
+  }
+  return { writes, unconfirmed }
+}
+
+test('a start the printer never acted on is closed and announced once the grace runs out', async () => {
+  const { writes, unconfirmed } = await emitUnclaimedStartAfterGrace('idle')
+
+  assert.deepEqual(writes, [{ jobId: 'dispatch-1', result: 'unknown' }])
+  assert.deepEqual(unconfirmed, [{ printerId: 'printer-1', jobId: 'dispatch-1' }])
+  assert.equal(peekPendingPrintJobSource('printer-1'), null)
+})
+
+test('an unclaimed start on a printer still showing its previous finish is not recorded as a success', async () => {
+  const { writes, unconfirmed } = await emitUnclaimedStartAfterGrace('finished')
+
+  assert.deepEqual(writes, [{ jobId: 'dispatch-1', result: 'unknown' }])
+  assert.equal(unconfirmed.length, 1)
+})
+
+test('an offline printer is not evidence that a start failed', async () => {
+  const { writes, unconfirmed } = await emitUnclaimedStartAfterGrace('idle', false)
+
+  assert.deepEqual(writes, [])
+  assert.deepEqual(unconfirmed, [])
+})
+
+test('an unclaimed calibration start is not declared failed by this rule', async () => {
+  const { unconfirmed } = await emitUnclaimedStartAfterGrace('idle', true, 'calibration')
+
+  assert.deepEqual(unconfirmed, [])
+})

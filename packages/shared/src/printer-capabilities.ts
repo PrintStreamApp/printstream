@@ -262,6 +262,32 @@ export function usesCoreXyMotionSystem(model: PrinterModel): boolean {
   return CORE_XY_MOTION_MODELS.has(model)
 }
 
+const POST_UPLOAD_START_DELAY_MS = 5_000
+const POST_UPLOAD_START_DELAY_MODELS: ReadonlySet<string> = new Set<PrinterModel>(['P1P', 'P1S'])
+
+/**
+ * How long a print dispatch waits between a completed FTPS upload and publishing the
+ * `project_file` start command, in milliseconds. 5s on P1-series printers, 0 elsewhere.
+ *
+ * P1-series firmware has been reported to reply `result: success` to a `project_file` sent
+ * right after the upload and then never start the print; the reported workaround is a ~5s pause
+ * after the upload (Home Assistant community, Oct 2023,
+ * https://community.home-assistant.io/t/bambu-lab-x1-x1c-mqtt/489510?page=35 , where the
+ * suspected cause is the P1 being slow to process the freshly written 3MF). A PrintStream
+ * customer's P1S and P1P showed the same symptom intermittently, with the start command sent
+ * about half a second after the upload. UNVERIFIED here: no capture has yet confirmed that the
+ * pause is what prevents it. Revisit once the API's `project_file reply` log line and the
+ * bridge's print-start ack lines (added alongside this) have recorded a failure, and drop or
+ * widen the model list on that evidence. Only P1P/P1S are listed because that is all the
+ * evidence covers.
+ *
+ * Applies only to a start that follows an upload (the print dispatcher); a start of a file
+ * already on the printer has no fresh upload to wait for.
+ */
+export function postUploadStartDelayMs(model: string): number {
+  return POST_UPLOAD_START_DELAY_MODELS.has(model) ? POST_UPLOAD_START_DELAY_MS : 0
+}
+
 /** Print-start options that Bambu clients expose conditionally by model. */
 export function getPrinterPrintStartOptions(
   model: PrinterModel,

@@ -1450,6 +1450,7 @@ function dispatchStatusColor(status: PrintDispatchJob['status']): 'neutral' | 'p
     case 'queued':
       return 'neutral'
     case 'uploading':
+    case 'starting':
       return 'primary'
     case 'sent':
       return 'success'
@@ -1466,6 +1467,8 @@ function statusLabel(status: PrintDispatchJob['status']): string {
       return 'Queued'
     case 'uploading':
       return 'Uploading'
+    case 'starting':
+      return 'Starting'
     case 'sent':
       return 'Sent'
     case 'cancelled':

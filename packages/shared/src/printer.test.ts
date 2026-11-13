@@ -37,6 +37,7 @@ import {
   supportsPrinterSecondaryChamberLight,
   supportsStoreSentFilesOnExternalStorage,
   usesCoreXyMotionSystem,
+  postUploadStartDelayMs,
   classifyLibraryFileKind
 } from './printer.js'
 
@@ -905,4 +906,14 @@ test('classifyLibraryFileKind recognizes STEP files as a first-class kind', () =
   assert.equal(classifyLibraryFileKind('part.stl'), 'stl')
   assert.equal(classifyLibraryFileKind('project.3mf'), '3mf')
   assert.equal(classifyLibraryFileKind('readme.txt'), 'other')
+})
+
+// Reported P1-series firmware behaviour (see the helper's JSDoc): a start sent right after the
+// upload can be acknowledged and ignored. Only the models the evidence covers get the pause.
+test('only P1-series printers pause between the upload and the start command', () => {
+  assert.equal(postUploadStartDelayMs('P1S'), 5_000)
+  assert.equal(postUploadStartDelayMs('P1P'), 5_000)
+  for (const model of ['X1C', 'X2D', 'P2S', 'A1', 'A1mini', 'H2D', 'unknown', 'not-a-model']) {
+    assert.equal(postUploadStartDelayMs(model), 0, model)
+  }
 })

@@ -355,6 +355,7 @@ export function dispatchStatusColor(status: PrintDispatchJob['status']): 'neutra
     case 'queued':
       return 'neutral'
     case 'uploading':
+    case 'starting':
       return 'primary'
     case 'sent':
       return 'success'
@@ -371,6 +372,8 @@ export function dispatchStatusLabel(status: PrintDispatchJob['status']): string 
       return 'Queued'
     case 'uploading':
       return 'Sending'
+    case 'starting':
+      return 'Starting'
     case 'sent':
       return 'Sent'
     case 'cancelled':

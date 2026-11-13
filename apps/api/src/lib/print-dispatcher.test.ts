@@ -1,10 +1,14 @@
 import assert from 'node:assert/strict'
-import test from 'node:test'
+import test, { mock } from 'node:test'
 import { env } from './env.js'
 import { HttpError } from './http-error.js'
 import { rootPrisma } from './prisma.js'
 import { printDispatcher, getRemotePrintTarget, prunePlateAmsMapping, sanitizeRemoteName, buildProjectFilePrintCommand } from './print-dispatcher.js'
 import { usePrismaStubs } from '../test-utils/prisma-stubs.js'
+import type { Printer, PrinterStatus } from '@printstream/shared'
+import { printerEvents } from './printer-events.js'
+import { printerManager } from './printer-manager.js'
+import { watchPrintStartConfirmation } from './print-start-confirmation.js'
 
 // Pin cloud mode: `assertBridgeAllowsPrinting` skips its update block entirely
 // when `isSelfHostedDeployment()` is true, which the public open-core build is by
@@ -45,7 +49,7 @@ type DispatchJobStateFixture = {
     plate: number
     amsMapping: number[] | null
   }
-  status: 'queued' | 'uploading' | 'sent' | 'cancelled' | 'failed'
+  status: 'queued' | 'uploading' | 'starting' | 'sent' | 'cancelled' | 'failed'
   progressMessage: string
   uploadAttempt: number
   uploadMaxAttempts: number
@@ -604,4 +608,194 @@ test('dispatch recording keeps the live library source separate from its print s
   const metadata = dispatcher.buildPendingStartMetadata(job)
   assert.equal(metadata.fileId, 'shared-snapshot')
   assert.equal(metadata.sourceLibraryFileId, 'original-file')
+})
+
+// --- Waiting for the printer to confirm a start (`starting`) ---------------------------------
+// Handing the start command to the bridge proves nothing: a Bambu P1 has been seen to take the
+// upload and the command and stay idle, which used to read as "sent" while the printer card sat
+// at 0%. The job now waits in `starting` for the printer's verdict.
+
+/** Put a `starting` job in place, wired to the real confirmation watcher as `runJob` wires it. */
+function seedStartingJob(id: string, printerId: string): DispatchJobStateFixture {
+  const fixture = buildDispatchFixture({ id, printerId, printerName: 'Shop P1S', status: 'starting', progressMessage: 'Waiting' })
+  const dispatcher = printDispatcher as unknown as {
+    resolveStart: (job: unknown, outcome: string, message: string) => void
+  }
+  ;(fixture as unknown as { disposeStartConfirmation: () => void }).disposeStartConfirmation = watchPrintStartConfirmation({
+    jobId: id,
+    onOutcome: (outcome) => dispatcher.resolveStart(fixture, outcome, 'Print started')
+  })
+  dispatchJobs().set(id, fixture)
+  return fixture
+}
+
+test('a start the printer confirms ends sent', () => {
+  const job = seedStartingJob('starting-confirmed', 'printer-start-1')
+  try {
+    printerEvents.emit('print-job.started', { jobId: 'starting-confirmed', printer: { id: 'printer-start-1' } as Printer, jobName: 'Cube' })
+    assert.equal(job.status, 'sent')
+    assert.equal(job.progressMessage, 'Print started')
+  } finally {
+    dispatchJobs().delete('starting-confirmed')
+  }
+})
+
+test('a start the printer never acted on ends failed, with a reason, so it can be retried', () => {
+  const job = seedStartingJob('starting-ignored', 'printer-start-2')
+  try {
+    printerEvents.emit('print-job.start-unconfirmed', { printerId: 'printer-start-2', jobId: 'starting-ignored' })
+    assert.equal(job.status, 'failed')
+    assert.equal(job.progressMessage, 'Printer did not start the print')
+    assert.match(job.error ?? '', /Shop P1S did not start printing after the file and the start command were sent/)
+  } finally {
+    dispatchJobs().delete('starting-ignored')
+  }
+})
+
+test('a starting job blocks another dispatch to its printer and cannot be cancelled', async () => {
+  const job = seedStartingJob('starting-guard', 'printer-start-3')
+  try {
+    assert.equal(printDispatcher.hasActiveDispatchForPrinter('printer-start-3'), true)
+    const result = await printDispatcher.cancel('workspace-1', 'starting-guard')
+    assert.equal(result?.status, 'starting')
+    assert.equal(job.cancelRequested, false)
+  } finally {
+    ;(job as unknown as { disposeStartConfirmation: () => void }).disposeStartConfirmation()
+    dispatchJobs().delete('starting-guard')
+  }
+})
+
+test('stop() closes a starting job as sent but unconfirmed, and stops waiting', async () => {
+  const jobs = dispatchJobs()
+  const saved = new Map(jobs)
+  jobs.clear()
+  const job = seedStartingJob('stop-starting', 'printer-start-4')
+  try {
+    await printDispatcher.stop()
+    assert.equal(job.status, 'sent')
+    assert.match(job.progressMessage, /before the printer confirmed it/)
+    // A late verdict after shutdown must not rewrite the outcome.
+    printerEvents.emit('print-job.start-unconfirmed', { printerId: 'printer-start-4', jobId: 'stop-starting' })
+    assert.equal(job.status, 'sent')
+  } finally {
+    jobs.clear()
+    for (const [key, value] of saved) jobs.set(key, value)
+  }
+})
+
+// A retry re-uploads the SAME remote file name, so retrying onto a printer that picked the start
+// up late (and is now printing it) would overwrite the file under the running print.
+test('retry refuses while the printer is busy or offline', () => {
+  const jobs = dispatchJobs()
+  jobs.set('retry-guard', buildDispatchFixture({ id: 'retry-guard', printerId: 'printer-retry', status: 'failed' }))
+  try {
+    mock.method(printerManager, 'getStatus', () => ({ online: true, stage: 'printing' }) as PrinterStatus)
+    assert.throws(() => printDispatcher.retry('workspace-1', 'retry-guard'), (error: unknown) => error instanceof HttpError && error.statusCode === 409)
+    mock.restoreAll()
+    mock.method(printerManager, 'getStatus', () => ({ online: false, stage: 'idle' }) as PrinterStatus)
+    assert.throws(() => printDispatcher.retry('workspace-1', 'retry-guard'), (error: unknown) => error instanceof HttpError && error.statusCode === 409)
+    assert.equal(jobs.get('retry-guard')?.status, 'failed')
+  } finally {
+    mock.restoreAll()
+    jobs.delete('retry-guard')
+  }
+})
+
+// --- Settling pause between the upload and the start command (P1 series) -----------------------
+// Driven through the real `runJob` with its two side-effecting seams stubbed: the FTPS upload
+// (`uploadArtifactWithRetry`) and the MQTT publish (`printerManager.publishCommand`). The pause runs
+// on mocked timers, so nothing here actually waits five seconds.
+
+const SETTLE_MESSAGE = /to settle before starting/
+
+function stubStartPath(model: string) {
+  const published: Array<Record<string, unknown>> = []
+  const cleanups: string[] = []
+  mock.timers.enable({ apis: ['setTimeout'] })
+  mock.method(printerManager, 'getPrinter', (id: string) => ({ id, name: 'Shop printer', model }) as unknown as Printer)
+  mock.method(printerManager, 'publishCommand', (_id: string, payload: Record<string, unknown>) => {
+    published.push(payload)
+    return true
+  })
+  const internals = printDispatcher as unknown as Record<string, unknown>
+  mock.method(internals as { uploadArtifactWithRetry: () => Promise<void> }, 'uploadArtifactWithRetry', async () => undefined)
+  mock.method(internals as { cleanupUploadedArtifact: (job: { id: string }) => Promise<void> }, 'cleanupUploadedArtifact', async (job: { id: string }) => {
+    cleanups.push(job.id)
+  })
+  stubPrisma(rootPrisma.dispatchJob, 'update', async () => ({}))
+  stubPrisma(rootPrisma.printJob, 'findUnique', async ({ where }: { where: { id: string } }) => ({ id: where.id, startedAt: new Date(), finishedAt: null, printerId: 'printer-settle', jobName: 'Cube' }))
+  stubPrisma(rootPrisma.printJob, 'update', async ({ where }: { where: { id: string } }) => ({ id: where.id }))
+  stubPrisma(rootPrisma.printer, 'findUnique', async () => null)
+  return { published, cleanups }
+}
+
+function runDispatch(id: string): { job: DispatchJobStateFixture; done: Promise<void> } {
+  const job = buildDispatchFixture({ id, printerId: `printer-${id}` })
+  ;(job as unknown as { disposeStartConfirmation: null }).disposeStartConfirmation = null
+  dispatchJobs().set(id, job)
+  const runJob = (printDispatcher as unknown as { runJob: (job: unknown) => Promise<void> }).runJob.bind(printDispatcher)
+  return { job, done: runJob(job) }
+}
+
+async function waitUntil(condition: () => boolean): Promise<void> {
+  for (let turn = 0; turn < 500 && !condition(); turn += 1) {
+    await new Promise((resolve) => setImmediate(resolve))
+  }
+  assert.ok(condition(), 'condition never became true')
+}
+
+function cleanupDispatch(job: DispatchJobStateFixture): void {
+  ;(job as unknown as { disposeStartConfirmation: (() => void) | null }).disposeStartConfirmation?.()
+  dispatchJobs().delete(job.id)
+  mock.timers.reset()
+  mock.restoreAll()
+}
+
+test('a P1 printer gets a settling pause between the upload and the start command', async () => {
+  const { published } = stubStartPath('P1S')
+  const { job, done } = runDispatch('settle-p1s')
+  try {
+    await waitUntil(() => SETTLE_MESSAGE.test(job.progressMessage))
+    mock.timers.tick(4_999)
+    for (let turn = 0; turn < 20; turn += 1) await new Promise((resolve) => setImmediate(resolve))
+    assert.equal(published.length, 0)
+
+    mock.timers.tick(1)
+    await done
+    assert.equal(published.length, 1)
+    assert.equal(job.status, 'starting')
+  } finally {
+    cleanupDispatch(job)
+  }
+})
+
+test('other printers get no settling pause', async () => {
+  const { published } = stubStartPath('X1C')
+  const { job, done } = runDispatch('settle-x1c')
+  try {
+    // No timer is ticked, so a pause here would stall: an X1C must reach the start command on
+    // its own. Polled rather than awaited so a regression fails instead of hanging the suite.
+    await waitUntil(() => published.length === 1)
+    await done
+    assert.equal(job.status, 'starting')
+  } finally {
+    cleanupDispatch(job)
+  }
+})
+
+test('a cancel during the settling pause publishes nothing and removes the upload', async () => {
+  const { published, cleanups } = stubStartPath('P1P')
+  const { job, done } = runDispatch('settle-cancel')
+  try {
+    await waitUntil(() => SETTLE_MESSAGE.test(job.progressMessage))
+    const cancelled = await printDispatcher.cancel('workspace-1', 'settle-cancel')
+    assert.equal(cancelled?.cancelRequested, true)
+
+    await done
+    assert.equal(published.length, 0)
+    assert.deepEqual(cleanups, ['settle-cancel'])
+    assert.equal(job.status, 'cancelled')
+  } finally {
+    cleanupDispatch(job)
+  }
 })

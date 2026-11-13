@@ -16,7 +16,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useLocation, useNavigate } from 'react-router-dom'
 import type { PrintDispatchJob } from '@printstream/shared'
 import { apiFetch } from '../lib/apiClient'
-import { isActiveDispatchJob, selectVisibleDispatchJobs } from '../lib/dispatchToastVisibility'
+import { isActiveDispatchJob, isCancellableDispatchJob, selectVisibleDispatchJobs } from '../lib/dispatchToastVisibility'
 import { useWatchedRunningJobIds } from '../lib/toastJobVisibility'
 import { usePrintDispatchJobs } from '../hooks/usePrintDispatchJobs'
 import { formatLibraryFileName } from '../lib/libraryDisplay'
@@ -105,7 +105,8 @@ export function DispatchToasts() {
       statusLabel: dispatchStatusLabel(job.status),
       color,
       active,
-      progress: active ? job.uploadPercent ?? null : null,
+      // Only an upload has a percentage; `starting` waits on the printer (indeterminate).
+      progress: job.status === 'uploading' ? job.uploadPercent ?? null : null,
       summary: `${job.printerName} - ${formatDispatchProgress(job)}`,
       error: job.error,
       onDismiss: () => dismiss(job.id),
@@ -125,7 +126,7 @@ export function DispatchToasts() {
           {/* Cancel and "move to history" are the same call on the server but
               read as different acts, so they get their own icon and wording
               rather than one control that means two things. */}
-          {active && (
+          {isCancellableDispatchJob(job) && (
             <StatusToastIconAction
               label={`Cancel sending ${job.fileName}`}
               color="danger"

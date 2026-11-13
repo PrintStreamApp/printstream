@@ -37,6 +37,16 @@ export interface PrinterEvents {
    */
   'print.job.starting': (event: { printerId: string; jobId: string; taskId: string | null; fileName: string }) => void
   /**
+   * A tracked start that the printer visibly never acted on: it was still reporting a
+   * terminal stage (idle/finished/failed) once the recorder's start grace ran out. The
+   * recorder closes the row quietly as `unknown` (no `print-job.finished`: a print that never
+   * ran is not a failed print); the print dispatcher listens so the send ends `failed` instead
+   * of reading as "sent". The counterpart of
+   * `print-job.started` for the same `jobId`; at most one of the two fires per start (neither,
+   * when the printer stays offline until the pending start expires).
+   */
+  'print-job.start-unconfirmed': (event: { printerId: string; jobId: string }) => void
+  /**
    * Cross-plugin lifecycle for a queue item linked to an order print (the
    * print-queue emits; the orders plugin listens). Keeps the plugins decoupled,
    * neither imports the other, while letting queuing/dispatch advance the order:

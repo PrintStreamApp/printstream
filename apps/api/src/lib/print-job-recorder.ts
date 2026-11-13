@@ -225,10 +225,17 @@ export async function startTrackedPrintJob(input: {
   return null
 }
 
-/** Mark a reserved row `failed` and drop its pending source (start never landed). */
+/**
+ * Close a reserved row whose start never landed and drop its pending source.
+ *
+ * `result` defaults to `failed` (the start command could not be sent at all). An unclaimed
+ * start passes `unknown`: a `failed` row is counted as a failed print in printer stats with
+ * the plate's whole filament weight as waste, which is wrong for a print that never ran.
+ */
 export async function failTrackedPrintJobStart(input: {
   printerId: string
   jobId: string
+  result?: 'failed' | 'unknown'
 }): Promise<void> {
   const pending = peekPendingPrintJobSource(input.printerId)
   if (pending?.jobId === input.jobId) {
@@ -237,7 +244,7 @@ export async function failTrackedPrintJobStart(input: {
   await clearPendingDispatchedPrintSource(input.printerId, input.jobId)
   await finishTrackedPrintJobRecord({
     jobId: input.jobId,
-    result: 'failed'
+    result: input.result ?? 'failed'
   })
 
   const superseded = supersededActiveJobs.get(input.printerId)
@@ -989,6 +996,8 @@ async function onStatus(status: PrinterStatus): Promise<void> {
 
   if (!status.online) return
 
+  if (await failUnclaimedTrackedStart(status)) return
+
   if (!isTerminalPrintJobStage(status.stage)) {
     const taskId = normalizeActivePrintTaskId(status.taskId)
     if (!taskId) return
@@ -1035,6 +1044,55 @@ async function onStatus(status: PrinterStatus): Promise<void> {
   } catch (error) {
     console.error('Failed to reconcile print job from restored printer status', error)
   }
+}
+
+/**
+ * Close a PrintStream-sent start that the printer visibly never acted on, and say so.
+ *
+ * Called for an ONLINE status once the start grace has run out (the caller has already
+ * returned for anything inside it). If the reserved start is still unclaimed (its pending
+ * source was never activated) and the printer is still reporting a terminal stage, the
+ * start command did not take: handing it to the bridge proved nothing, and P1-series
+ * firmware is reported to acknowledge `project_file` and still not start (see
+ * `print-start-confirmation.ts`, the dispatcher-side counterpart). The row is closed as
+ * `unknown` through the same path as a start that never left the API, never reconciled from
+ * the printer's stage: that reconcile reads the PREVIOUS print's stage, so a printer still
+ * showing `finished` would record a print that never ran as a success. Not `failed`: that
+ * would count a print that never ran in the printer's failed-print and wasted-filament stats.
+ * The visible failure belongs to the dispatch (failed, with Retry), which the event drives.
+ *
+ * Positive evidence only: an offline printer never reaches here, and a non-terminal stage
+ * (the printer is busy, perhaps with a late start) is left to the existing paths. File prints
+ * only (dispatcher, SD-card reprint, printer-storage print); calibrations are left alone.
+ *
+ * Returns true when it handled the status. Emits `print-job.start-unconfirmed` so the
+ * dispatcher can turn the send into a visible failure.
+ */
+async function failUnclaimedTrackedStart(status: PrinterStatus): Promise<boolean> {
+  const graceUntil = trackedStartGraceUntil.get(status.printerId)
+  if (graceUntil == null) return false
+  if (!isTerminalPrintJobStage(status.stage)) return false
+
+  // Deleted before any await so concurrent status events cannot both claim this start.
+  trackedStartGraceUntil.delete(status.printerId)
+  const pending = peekPendingPrintJobSource(status.printerId)
+  if (!pending?.jobId) return false
+  // File prints only. A calibration's stage reporting has not been checked against this rule,
+  // so it keeps the plain reconcile rather than risk a false "print failed" alarm.
+  if (pending.jobKind !== 'file') return false
+
+  const waitedSeconds = Math.round((Date.now() - graceUntil + TRACKED_START_GRACE_MS) / 1000)
+  console.warn(
+    `[print-job] printer ${status.printerId} still ${status.stage} ${waitedSeconds}s after the start command for job ${pending.jobId}; the print never started`
+  )
+  try {
+    await failTrackedPrintJobStart({ printerId: status.printerId, jobId: pending.jobId, result: 'unknown' })
+  } catch (error) {
+    console.error('Failed to close an unclaimed print start', error)
+  }
+  // Emitted even if closing the row failed: the dispatch's failure must not depend on a DB write.
+  printerEvents.emit('print-job.start-unconfirmed', { printerId: status.printerId, jobId: pending.jobId })
+  return true
 }
 
 async function syncActiveJobIdentity(

@@ -5,15 +5,21 @@
  * slower models. This module lets HTTP requests enqueue work and return
  * immediately while the API process serializes dispatches per printer.
  * Queued jobs can be cancelled; uploading jobs honor cancellation before
- * publishing the MQTT start command.
+ * publishing the MQTT start command, including during the short settling pause
+ * some models get between the upload and the start (`postUploadStartDelayMs`).
+ * A published start then waits in `starting`
+ * until the printer's own status confirms or refutes it (via the print-job
+ * recorder; see `print-start-confirmation.ts`), because the publish only reaches
+ * the bridge's socket: `sent` means the printer started (or could not be
+ * checked), and a start the printer ignored ends `failed`.
  *
  * Restart contract (durability): dispatch jobs and the per-printer queues are
  * in-memory only. On a *graceful* shutdown (deploy/SIGTERM), `stop()` drains
  * in-flight work: queued jobs are cancelled and in-flight uploads aborted so
  * any landed SD bytes are deleted and the tracked PrintJob record is cancelled.
- * Jobs already 'sent' are left alone: the SD file is the live print, which keeps
- * running and reconciles via the print-job recorder on the next status. An
- * *ungraceful* crash (OOM/SIGKILL) skips `stop()`, so a job caught mid-upload
+ * Jobs already 'sent' are left alone ('starting' ones too, closed as unconfirmed):
+ * the SD file is the live print, which keeps running and reconciles via the
+ * print-job recorder on the next status. An *ungraceful* crash (OOM/SIGKILL) skips `stop()`, so a job caught mid-upload
  * can still leak a partial SD file and leave a taskId-less 'unknown' PrintJob
  * row; that row self-heals only if a later terminal status arrives. A boot-time
  * reconcile for that crash case is intentionally deferred (it must not fail a
@@ -29,6 +35,8 @@ import {
   bridgeUpdateStatusSchema,
   getPrinterPrintStartOptions,
   formatBytes,
+  isPrinterActiveJobStage,
+  postUploadStartDelayMs,
   isPhysicalAmsTrayIndex,
   mappingNeedsExternalSpoolChangeAssist,
   printerModelHasDualNozzles,
@@ -73,11 +81,14 @@ import { ensureLibraryFileReplica, resolveLibraryFileToLocalPath } from './bridg
 import { capturePrintJobTags } from './print-job-tag-capture.js'
 import { recordPrintDispatch } from './metrics.js'
 import { markDispatchStartAttempted, recordDispatchEnqueued, recordDispatchStatus } from './dispatch-journal.js'
+import { watchPrintStartConfirmation, type PrintStartOutcome } from './print-start-confirmation.js'
 
 type DispatchStatus = PrintDispatchJob['status']
 const MAX_UPLOAD_ATTEMPTS = 3
 const UPLOAD_RETRY_BACKOFF_MS = [2_000, 5_000]
-const ACTIVE_DISPATCH_STATUSES: readonly DispatchStatus[] = ['queued', 'uploading']
+// `starting` counts as active: the printer may be about to start this job, so a second
+// dispatch (or a retry) must not overwrite its file on the SD card in the meantime.
+const ACTIVE_DISPATCH_STATUSES: readonly DispatchStatus[] = ['queued', 'uploading', 'starting']
 export const ACTIVE_DISPATCH_CONFLICT_MESSAGE = 'A print is already being dispatched to this printer. Wait for it to finish or cancel it first.'
 
 interface DispatchJobState {
@@ -144,6 +155,11 @@ interface DispatchJobState {
   cancelRequested: boolean
   /** Aborts the in-flight FTPS upload when the job is cancelled mid-transfer. Runtime-only. */
   abortController: AbortController | null
+  /**
+   * Stops waiting for the printer to confirm the start (`starting` only). Runtime-only.
+   * See `print-start-confirmation.ts`.
+   */
+  disposeStartConfirmation: (() => void) | null
 }
 
 interface EnqueueLibraryPrintInput extends PrintFromLibrary {
@@ -355,7 +371,8 @@ class PrintDispatcher {
       startedAt: null,
       finishedAt: null,
       cancelRequested: false,
-      abortController: null
+      abortController: null,
+      disposeStartConfirmation: null
     }
     this.jobs.set(job.id, job)
     // Durable journal (best-effort): lets a restart reconcile this dispatch if it dies
@@ -383,7 +400,9 @@ class PrintDispatcher {
   async cancel(workspaceId: string, jobId: string): Promise<PrintDispatchJob | null> {
     const job = this.jobs.get(jobId)
     if (!job || job.workspaceId !== workspaceId) return null
-    if (job.status === 'sent' || job.status === 'cancelled') {
+    // A `starting` job's command is already on its way to the printer: there is nothing left
+    // to cancel here, and deleting its file could pull it out from under a print that starts.
+    if (job.status === 'sent' || job.status === 'starting' || job.status === 'cancelled') {
       return toDto(job)
     }
     job.cancelRequested = true
@@ -429,15 +448,29 @@ class PrintDispatcher {
       } else if (job.status === 'uploading') {
         job.cancelRequested = true
         job.abortController?.abort()
+      } else if (job.status === 'starting') {
+        // Already sent, so leave it alone like a `sent` job; just stop waiting and say the
+        // outcome was never confirmed rather than leave the journal row open forever.
+        job.disposeStartConfirmation?.()
+        job.disposeStartConfirmation = null
+        this.finish(job, 'sent', 'Start command sent; the server restarted before the printer confirmed it')
       }
     }
     await Promise.allSettled(Array.from(this.printerQueues.values()))
   }
 
+  /**
+   * Re-run a failed dispatch in place (same job id, re-uploaded and re-started).
+   *
+   * Throws a 409 when the printer is offline, busy, or already receiving another dispatch:
+   * a retry re-uploads the SAME remote file name, so retrying a start the printer picked up
+   * late would overwrite the file it is printing.
+   */
   retry(workspaceId: string, jobId: string): PrintDispatchJob | null {
     const job = this.jobs.get(jobId)
     if (!job || job.workspaceId !== workspaceId) return null
     if (job.status !== 'failed') return toDto(job)
+    this.assertPrinterReadyForRetry(job.printerId)
     job.status = 'queued'
     job.progressMessage = 'Waiting to retry'
     job.uploadAttempt = 0
@@ -454,6 +487,17 @@ class PrintDispatcher {
     void recordDispatchStatus(job.id, 'queued', { error: null, finishedAt: null, clearStartAttempt: true })
     this.enqueueForPrinter(job)
     return toDto(job)
+  }
+
+  private assertPrinterReadyForRetry(printerId: string): void {
+    const status = printerManager.getStatus(printerId)
+    if (!status?.online) {
+      throw conflict('The printer is offline. Retry once it reconnects.')
+    }
+    if (isPrinterActiveJobStage(status.stage)) {
+      throw conflict('The printer is busy with a print. Retry once it is idle.')
+    }
+    this.assertNoActiveDispatchForPrinter(printerId)
   }
 
   private enqueueForPrinter(job: DispatchJobState): void {
@@ -489,6 +533,7 @@ class PrintDispatcher {
       } finally {
         await artifact.cleanup()
       }
+      await this.settleAfterUpload(job, printer.model, job.abortController.signal)
       if (job.cancelRequested) {
         // The upload finished before the cancel landed: the bytes are on the printer's
         // SD but no print was started, so delete them rather than leaking the file.
@@ -544,6 +589,25 @@ class PrintDispatcher {
           objectIds: skipObjectIds
         })
         : null
+      // Handing the command to the bridge proves nothing about the printer, so the job waits
+      // in `starting` until the printer's own status confirms it (see
+      // `print-start-confirmation.ts`). Subscribed before publishing so a fast printer cannot
+      // confirm in the gap; `starting` is set first so that outcome is never dropped.
+      // skipObjectIds are per-INSTANCE identify_ids, so their count can exceed the number of
+      // deselected objects: keep the message countless.
+      const startedMessage = skipObjectIds.length > 0
+        ? 'Print started; deselected objects will be skipped'
+        : 'Print started'
+      job.status = 'starting'
+      this.touch(job, `Waiting for ${job.printerName} to start the print`)
+      job.disposeStartConfirmation = watchPrintStartConfirmation({
+        jobId: job.id,
+        onOutcome: (outcome) => this.resolveStart(job, outcome, startedMessage)
+      })
+      const stopWaitingForStart = (): void => {
+        job.disposeStartConfirmation?.()
+        job.disposeStartConfirmation = null
+      }
       const startedJobId = await startTrackedPrintJob({
         jobId: job.id,
         printerId: job.printerId,
@@ -553,10 +617,12 @@ class PrintDispatcher {
         publish: () => printerManager.publishCommand(printer.id, { print: printPayload })
       }).catch((error: unknown) => {
         disarmPostStartSkip?.()
+        stopWaitingForStart()
         throw error
       })
       if (!startedJobId) {
         disarmPostStartSkip?.()
+        stopWaitingForStart()
         console.warn(`[dispatch] MQTT start command failed for printer ${job.printerId} (job ${job.id}): printer disconnected before start`)
         this.finish(job, 'failed', 'Printer disconnected before start command', 'Printer disconnected')
         return
@@ -570,15 +636,7 @@ class PrintDispatcher {
         localPath: job.localPath,
         plate: job.options.plate
       })
-      // Note: skipObjectIds are per-INSTANCE identify_ids, so their count can
-      // exceed the number of deselected objects: keep the message countless.
-      this.finish(
-        job,
-        'sent',
-        skipObjectIds.length > 0
-          ? 'Start command sent; deselected objects will be skipped once the print starts'
-          : 'Start command sent'
-      )
+      // The job stays `starting`; `resolveStart` finishes it once the printer answers.
     } catch (error) {
       if (job.cancelRequested) {
         // The upload was aborted by a cancel mid-transfer. Any partial bytes that
@@ -603,6 +661,51 @@ class PrintDispatcher {
   }
 
   /**
+   * Pause between a completed upload and the start command on printers that need it
+   * (`postUploadStartDelayMs`: P1-series firmware has been reported to ignore a start sent right
+   * after the upload). Still `uploading` while it waits, so a cancel aborts the pause through the
+   * job's abort signal and falls into the ordinary "cancelled after upload" path: nothing is
+   * published and the uploaded file is removed. Never throws.
+   */
+  private async settleAfterUpload(job: DispatchJobState, printerModel: string, signal: AbortSignal): Promise<void> {
+    const delayMs = postUploadStartDelayMs(printerModel)
+    if (delayMs <= 0 || job.cancelRequested) return
+    this.touch(job, `Waiting for ${job.printerName} to settle before starting`)
+    await abortableDelay(delayMs, signal)
+  }
+
+  /**
+   * Finish a `starting` job from the printer's verdict on its start command.
+   *
+   * `not-started` is the failure this state exists for: the printer took the upload and the
+   * command and kept reporting idle, so the send must not read as "sent" (it used to, and the
+   * printer card sat at 0% until the history row quietly closed as "unknown"). Failing it
+   * offers Retry through the usual failed-dispatch surfaces. `unknown` (offline or silent
+   * printer) stays `sent`, but says it could not be confirmed. Ignored unless still `starting`.
+   */
+  private resolveStart(job: DispatchJobState, outcome: PrintStartOutcome, startedMessage: string): void {
+    if (job.status !== 'starting') return
+    job.disposeStartConfirmation = null
+    switch (outcome) {
+      case 'started':
+        this.finish(job, 'sent', startedMessage)
+        return
+      case 'not-started':
+        console.warn(`[dispatch] job ${job.id}: ${job.printerName} never started the print after the start command`)
+        this.finish(
+          job,
+          'failed',
+          'Printer did not start the print',
+          `${job.printerName} did not start printing after the file and the start command were sent. Check the printer for any prompt, error, or start failure, then retry.`
+        )
+        return
+      case 'unknown':
+        this.finish(job, 'sent', 'Start command sent; PrintStream could not confirm that the printer started')
+        return
+    }
+  }
+
+  /**
    * Best-effort removal of an upload's bytes from the printer SD after a cancel. The
    * file may be fully written (cancel landed post-upload) or partially written (cancel
    * aborted the transfer); either way it was never started, so it should not linger.
@@ -620,7 +723,7 @@ class PrintDispatcher {
     job.updatedAt = new Date()
   }
 
-  private finish(job: DispatchJobState, status: DispatchStatus, message: string, error: string | null = null): void {
+  private finish(job: DispatchJobState, status: 'sent' | 'cancelled' | 'failed', message: string, error: string | null = null): void {
     job.status = status
     job.progressMessage = message
     job.error = error
@@ -1263,6 +1366,22 @@ function toDto(job: DispatchJobState): PrintDispatchJob {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/** Wait `ms`, or less if `signal` aborts first. Resolves either way; the caller checks why. */
+function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.resolve()
+  return new Promise((resolve) => {
+    const onAbort = (): void => {
+      clearTimeout(timer)
+      resolve()
+    }
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort)
+      resolve()
+    }, ms)
+    signal.addEventListener('abort', onAbort, { once: true })
+  })
 }
 
 /**

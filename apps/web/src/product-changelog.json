@@ -1,6 +1,14 @@
 {
   "releases": [
     {
+      "version": "1.3.22",
+      "releasedOn": "2026-11-13",
+      "changes": [
+        "When a printer doesn't start a print it was sent, PrintStream now shows the send as failed with a Retry option, instead of reporting success while the printer sits idle at 0%.",
+        "Re-printing a past job on extra printers no longer reuses the original printer's filament slot for printers that had none selected, and now skips any objects you deselected."
+      ]
+    },
+    {
       "version": "1.3.21",
       "releasedOn": "2026-11-13",
       "changes": [

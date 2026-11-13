@@ -77,11 +77,32 @@ export class BridgePrinterMonitor {
       topic,
       payload
     })
+    const isPrintStart = isPrintStartCommand(payload)
     if (existing?.client.connected) {
-      existing.client.publish(topic, JSON.stringify(payload), { qos: 1 })
+      if (!isPrintStart) {
+        existing.client.publish(topic, JSON.stringify(payload), { qos: 1 })
+        return
+      }
+      // Print starts only: record whether the printer's broker acknowledged the publish. The
+      // API cannot see this (it hears back only through status), and a start the printer never
+      // acts on is otherwise indistinguishable from one that never arrived. A missing "acked"
+      // line after "published" points at a half-open connection.
+      const publishedAt = Date.now()
+      console.log(`[bridge:printer:${printer.name}] print start published on the live connection`)
+      existing.client.publish(topic, JSON.stringify(payload), { qos: 1 }, (error) => {
+        const elapsedMs = Date.now() - publishedAt
+        if (error) {
+          console.warn(`[bridge:printer:${printer.name}] print start publish failed after ${elapsedMs}ms: ${error.message}`)
+        } else {
+          console.log(`[bridge:printer:${printer.name}] print start acked by the printer after ${elapsedMs}ms`)
+        }
+      })
       return
     }
 
+    if (isPrintStart) {
+      console.log(`[bridge:printer:${printer.name}] print start published on a one-shot connection (live connection is down)`)
+    }
     await publishPrinterCommand(printer, payload)
   }
 
@@ -331,6 +352,12 @@ export class BridgePrinterMonitor {
       })
     }
   }
+}
+
+/** Whether a relayed command is a `project_file` print start (the one worth tracing end to end). */
+function isPrintStartCommand(payload: Record<string, unknown>): boolean {
+  const print = payload.print
+  return typeof print === 'object' && print !== null && (print as Record<string, unknown>).command === 'project_file'
 }
 
 function samePrinterConnection(left: Printer, right: Printer): boolean {

@@ -7,7 +7,20 @@
 import type { PrintDispatchJob } from '@printstream/shared'
 import { jobBelongsInToastStack } from './toastJobVisibility'
 
+/**
+ * Still in flight: queued, uploading, or `starting` (the start command is out and the printer
+ * has not confirmed it yet). Active jobs keep the toast up, so a start the printer ignores turns
+ * into a visible failure there instead of a "sent" that has already been auto-dismissed.
+ */
 export function isActiveDispatchJob(job: Pick<PrintDispatchJob, 'status'>): boolean {
+  return job.status === 'queued' || job.status === 'uploading' || job.status === 'starting'
+}
+
+/**
+ * Whether a send can still be called off. Not once it is `starting`: the command has already
+ * reached the printer, and the server leaves a `starting` job as it is.
+ */
+export function isCancellableDispatchJob(job: Pick<PrintDispatchJob, 'status'>): boolean {
   return job.status === 'queued' || job.status === 'uploading'
 }
 

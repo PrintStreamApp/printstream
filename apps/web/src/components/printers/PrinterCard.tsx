@@ -840,7 +840,9 @@ function PrinterCardComponent({
                         {dispatchStatusLabel(dispatchJob.status)}
                       </Chip>
                     )}
-                    value={dispatchJob.uploadPercent ?? null}
+                    // Indeterminate once the upload is done: `starting` waits on the printer,
+                    // and a full bar there would read as finished.
+                    value={dispatchJob.status === 'uploading' ? dispatchJob.uploadPercent ?? null : null}
                     color={dispatchProgressColor(dispatchJob.status)}
                     fillColor={dispatchProgressFill(dispatchJob.status)}
                     trackColor={dispatchProgressTrack(dispatchJob.status)}

@@ -121,8 +121,9 @@ export function buildReprintOptions(
   overrides: ReprintJobInput
 ): Omit<PrintFromLibrary, 'fileId'> {
   const recorded = readRecordedPrintStartOptions(row) ?? {}
+  const printerId = overrides.printerId ?? row.printerId
   return printFromLibrarySchema.omit({ fileId: true }).parse({
-    printerId: overrides.printerId ?? row.printerId,
+    printerId,
     useAms: overrides.useAms ?? row.useAms ?? true,
     bedLevel: overrides.bedLevel ?? recorded.bedLevel,
     vibrationCompensation: overrides.vibrationCompensation ?? recorded.vibrationCompensation,
@@ -147,8 +148,29 @@ export function buildReprintOptions(
     // nullable, so handing it an explicit null makes the whole parse throw. The browser
     // always sends its own mapping and so never hit this; an override-less API re-print of
     // a job that recorded no mapping did, and failed before it could dispatch.
-    amsMapping: overrides.amsMapping ?? parseAmsMapping(row.amsMapping) ?? undefined
+    amsMapping: overrides.amsMapping ?? recordedAmsMappingFor(row, printerId) ?? undefined,
+    // Passed straight through: the print dialog offers object deselection on a re-print too,
+    // and dropping these here printed every object the user had unticked.
+    skipObjects: overrides.skipObjects,
+    skipInstances: overrides.skipInstances
   })
+}
+
+/**
+ * The row's recorded tray mapping, but only when the re-print targets the printer that
+ * recorded it.
+ *
+ * A mapping is a list of THAT printer's global tray indices, so it means nothing on another
+ * machine: tray 2 on printer 1 may be an empty slot, a different material, or a unit that does
+ * not exist on printer 2. Re-printing one history job onto several printers sends one request
+ * per printer, and a target whose request carried no mapping of its own (the dialog sends none
+ * when that printer reports no selectable trays) used to inherit printer 1's trays here. With
+ * no mapping the dispatch falls back to the printer's own default, exactly as a fresh library
+ * print does.
+ */
+function recordedAmsMappingFor(row: ReprintJobRow, targetPrinterId: string): number[] | null {
+  if (targetPrinterId !== row.printerId) return null
+  return parseAmsMapping(row.amsMapping)
 }
 
 /**

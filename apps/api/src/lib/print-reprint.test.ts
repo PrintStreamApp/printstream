@@ -173,6 +173,32 @@ test('a job that recorded no AMS mapping re-prints instead of failing to parse',
   assert.equal(options.bedLevel, 'auto')
 })
 
+// Re-printing one history job onto several printers sends one request per printer. A tray
+// mapping is a list of the ORIGINAL printer's tray indices, so a target whose request carried no
+// mapping of its own must not inherit it: it means a different (or no) slot on another machine.
+test('a re-print onto another printer never inherits the original printer\'s tray mapping', () => {
+  const row = makeRow({ printerId: 'printer-1', amsMapping: '[2,-1,7]' })
+
+  assert.equal(buildReprintOptions(row, { printerId: 'printer-2' }).amsMapping, undefined)
+  assert.deepEqual(buildReprintOptions(row, { printerId: 'printer-1' }).amsMapping, [2, -1, 7])
+  assert.deepEqual(buildReprintOptions(row, {}).amsMapping, [2, -1, 7])
+})
+
+test('a re-print onto another printer still uses the mapping chosen for that printer', () => {
+  const row = makeRow({ printerId: 'printer-1', amsMapping: '[2,-1,7]' })
+
+  assert.deepEqual(buildReprintOptions(row, { printerId: 'printer-2', amsMapping: [0, -1, 1] }).amsMapping, [0, -1, 1])
+})
+
+// The print dialog offers per-object deselection on a re-print as well; dropping it here
+// printed every object the user had unticked.
+test('a re-print keeps the objects the user deselected', () => {
+  const options = buildReprintOptions(makeRow(), { skipObjects: [3], skipInstances: [41, 42] })
+
+  assert.deepEqual(options.skipObjects, [3])
+  assert.deepEqual(options.skipInstances, [41, 42])
+})
+
 // A library job reaches history with no `fileId` when its retained snapshot was reclaimed. That is
 // a file job whose file is MISSING, not a foreign one: collapsing it to 'external' made the card
 // claim "Started outside PrintStream" for a print PrintStream dispatched, and made the re-print

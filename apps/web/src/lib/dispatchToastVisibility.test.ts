@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import type { PrintDispatchJob } from '@printstream/shared'
-import { selectVisibleDispatchJobs } from './dispatchToastVisibility'
+import { isActiveDispatchJob, isCancellableDispatchJob, selectVisibleDispatchJobs } from './dispatchToastVisibility'
 
 function makeJob(overrides: Partial<PrintDispatchJob>): PrintDispatchJob {
   return {
@@ -53,4 +53,14 @@ test('selectVisibleDispatchJobs keeps recent undismissed jobs visible', () => {
     selectVisibleDispatchJobs(jobs, new Set(), new Set(), Date.parse('2026-05-04T10:00:30.000Z')).map((job) => job.id),
     ['job-sent']
   )
+})
+// `starting` = the start command is out and the printer has not confirmed it. It must keep the
+// toast up (so a start the printer ignores surfaces there as a failure rather than after a
+// "sent" toast has auto-dismissed) without offering a Cancel that can no longer do anything.
+test('a starting send stays in flight but can no longer be cancelled', () => {
+  const starting = makeJob({ status: 'starting' })
+  assert.equal(isActiveDispatchJob(starting), true)
+  assert.equal(isCancellableDispatchJob(starting), false)
+  assert.deepEqual(selectVisibleDispatchJobs([starting], new Set(), new Set()).map((job) => job.id), ['job-1'])
+  assert.equal(isCancellableDispatchJob(makeJob({ status: 'uploading' })), true)
 })

@@ -1910,9 +1910,18 @@ export const printFromLibrarySchema = z.object({
 })
 export type PrintFromLibrary = z.infer<typeof printFromLibrarySchema>
 
+/**
+ * A dispatch's lifecycle. `starting` sits between the start command leaving the API and the
+ * printer confirming it: handing the command to the bridge proves nothing about the printer,
+ * and P1-series firmware can even acknowledge `project_file` and then never start. So `sent`
+ * means "the printer started (or could not be checked)", and a start the printer visibly
+ * ignored ends `failed`, which offers Retry. `starting` is still in flight (it blocks another
+ * dispatch to the printer) but can no longer be cancelled: the command is already out.
+ */
 export const printDispatchStatusSchema = z.enum([
   'queued',
   'uploading',
+  'starting',
   'sent',
   'cancelled',
   'failed'
