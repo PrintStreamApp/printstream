@@ -74,13 +74,7 @@ load. Cancelled requests dispose their results, and returning to a previous sele
 an already-disposed resource. The live bed updates before any asynchronous object rebuild, so
 a populated plate does not keep the previous mesh while its models are being rebuilt.
 
-The workspace editor holds its preset catalogue against background refreshes. An explicit slicer
-version change releases that snapshot immediately, including when the destination catalogue is
-already cached. Material initialization runs for every target change even if machine readiness
-stays true across the switch; otherwise the settings panel can remain stuck loading. Until the
-new catalogue and machine target are ready, material reconciliation must preserve the session's
-picks rather than interpret missing options as incompatibility. Initialization fills defaults while
-preserving valid session presets and edited colours, including on a cached version switch.
+The workspace editor holds its preset catalogue against background refreshes. An explicit slicer version change releases that snapshot immediately, including when the destination catalogue is already cached. Successful printer, process, and material preset saves invalidate the catalogue and explicitly refresh the editor's snapshot, as do successful writes from the preset manager and closing it. A manager write retains its refresh callback even if the manager closes before the request completes. The old snapshot stays held until the refreshed catalogue arrives; releasing it before the request completes would freeze the old cached list again. Failed reads retain the held catalogue. Save completion publishes the admitted settings draft before catalogue invalidation can retire its source identity. An open process-settings draft holds its resolver across catalogue-only updates, releasing it when the dialog closes or the actual project source or engine changes. Material initialization runs for every target change even if machine readiness stays true across the switch; otherwise the settings panel can remain stuck loading. Until the new catalogue and machine target are ready, material reconciliation must preserve the session's picks rather than interpret missing options as incompatibility. Initialization fills defaults while preserving valid session presets and edited colours, including on a cached version switch.
 
 Material presets, colours, and nozzle assignments may arrive before their slots. Their initial
 seeding must run again when the slots appear, filling missing values while preserving explicit

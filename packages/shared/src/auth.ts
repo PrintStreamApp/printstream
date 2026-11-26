@@ -424,6 +424,18 @@ export const emailCodeVerifyResponseSchema = z.object({
 
 export type EmailCodeVerifyResponse = z.infer<typeof emailCodeVerifyResponseSchema>
 
+/** Fixed-account cloud development sign-in; the request cannot select an identity or workspace. */
+export const developmentSignInRequestSchema = z.object({
+  accessKey: z.string().min(1).max(512)
+}).strict()
+
+export const developmentSignInStatusSchema = z.object({ available: z.boolean() })
+export const developmentSignInResponseSchema = z.object({
+  authenticated: z.literal(true),
+  actor: authActorSummarySchema
+})
+export type DevelopmentSignInStatus = z.infer<typeof developmentSignInStatusSchema>
+
 // ---------------------------------------------------------------------------
 // Password auth (the OSS email/password provider, `auth-password`)
 //

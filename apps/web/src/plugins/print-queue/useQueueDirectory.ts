@@ -1,6 +1,6 @@
 /**
  * Search / status-filter / status-grouping / pagination state for the Queue view,
- * persisted across reloads under stable `print-queue.*` keys. Sort is intentionally
+ * persisted across reloads under the keys in `storageKeys.ts`. Sort is intentionally
  * locked to "Manual order": the backlog is hand-ordered (drag / move up-down), so
  * exposing other sort fields would fight the manual order. Display only: filtering and
  * grouping never change the underlying order used by reorder.
@@ -8,6 +8,7 @@
 import { useMemo, useState } from 'react'
 import type { QueueItem, QueueItemStatus } from '@printstream/shared'
 import { useLocalStorageState } from '../../hooks/useLocalStorageState'
+import { queueGroupKey, queuePageSizeKey, queueStatusesKey } from './storageKeys'
 
 export const QUEUE_GROUP_OPTIONS = [
   { value: 'none', label: 'No grouping' },
@@ -77,9 +78,9 @@ export interface QueueDirectory {
 
 export function useQueueDirectory(items: QueueItem[]): QueueDirectory {
   const [search, setSearch] = useState('')
-  const [group, setGroup] = useLocalStorageState<QueueGroupBy>('print-queue.group', 'none', parseGroup, String)
-  const [pageSize, setPageSize] = useLocalStorageState<QueuePageSize>('print-queue.pageSize', 25, parsePageSize, String)
-  const [statuses, setStatuses] = useLocalStorageState<QueueItemStatus[]>('print-queue.statuses', [], parseStatuses, JSON.stringify)
+  const [group, setGroup] = useLocalStorageState<QueueGroupBy>(queueGroupKey, 'none', parseGroup, String)
+  const [pageSize, setPageSize] = useLocalStorageState<QueuePageSize>(queuePageSizeKey, 25, parsePageSize, String)
+  const [statuses, setStatuses] = useLocalStorageState<QueueItemStatus[]>(queueStatusesKey, [], parseStatuses, JSON.stringify)
   const [page, setPage] = useState(1)
 
   const statusFacets = useMemo(() => STATUS_ORDER.filter((status) => items.some((item) => item.status === status)), [items])

@@ -23,6 +23,7 @@
 import type { GeneralSettings } from '@printstream/shared'
 import { useQuery } from '@tanstack/react-query'
 import { useLocalStorageState } from '../hooks/useLocalStorageState'
+import { printerDefaultViewIdKeys } from './storageKeys'
 import { apiFetch } from './apiClient'
 import { OVERVIEW_VIEW_ROUTE_ID } from './printerViewRoutes'
 import { useWorkspacePreferenceScopeKey } from './workspacePreferenceScope'
@@ -43,7 +44,7 @@ function serializeStoredOverride(value: PrinterViewDefaultOverride): string {
 export function useDefaultPrinterViewOverride(): [PrinterViewDefaultOverride, (value: PrinterViewDefaultOverride) => void] {
   const scopeKey = useWorkspacePreferenceScopeKey()
   const [value, setValue] = useLocalStorageState<PrinterViewDefaultOverride>(
-    `bambu.printers.defaultViewId.${scopeKey}`,
+    printerDefaultViewIdKeys.at(scopeKey),
     null,
     parseStoredOverride,
     serializeStoredOverride

@@ -2,12 +2,13 @@
 import { useCallback } from 'react'
 import type { ProductAnnouncement } from '@printstream/shared'
 import { useLocalStorageState } from './useLocalStorageState'
+import { announcementReadSlugsKeys } from '../lib/storageKeys'
 import { countUnreadAnnouncements, EMPTY_READ_ANNOUNCEMENTS, mergeReadAnnouncementSlugs, parseReadAnnouncementSlugs } from '../lib/announcementUnread'
 
 /** Marks only fetched articles that the dialog actually renders, preserving markers for older entries. */
 export function useAnnouncementReadState(feedUrl: string) {
   const [readSlugs, setReadSlugs] = useLocalStorageState<readonly string[]>(
-    `printstream.announcements.readSlugs:${feedUrl}`,
+    announcementReadSlugsKeys.at(feedUrl),
     EMPTY_READ_ANNOUNCEMENTS,
     parseReadAnnouncementSlugs
   )

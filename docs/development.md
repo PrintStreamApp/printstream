@@ -120,99 +120,64 @@ if the worktree already has one, Devkit leaves it alone. Use `npm run dev:remove
 feature checkout; it tears down the checkout, removes the worktree, and deletes its private database,
 slicer-data, and slicer-work volumes while preserving the shared slicer-engine cache.
 `npm run dev:host -- prune` remains available for database volumes orphaned by worktrees removed
-outside this workflow.
+outside this workflow. `npm run dev:cleanup` removes a linked worktree's private containers, network,
+database, and slicer volumes but leaves the worktree itself; Devkit's README
+(https://github.com/Dynamic-Solutions-Canada/devkit#readme) covers cleanup, runtime selection, and remote
+development.
 
 Only one dev stack may run for a checkout. A second `npm run dev` exits before starting watchers and
-names the occupied web/API ports. In host mode those ports are part of the proxy identity, so Vite
+names the active host launcher/bridge or occupied web/API ports. Admission occurs before Devkit
+preflight, so a rejected duplicate does not replace the existing proxy route or reinstall the
+running checkout's dependencies. In host mode those ports are part of the proxy identity, so Vite
 also refuses a collision instead of silently moving to a URL the checkout hostname does not serve.
+
+If the host launcher was killed while its checkout containers survived, use:
+
+```bash
+npm run dev -- --resume
+```
+
+The generic hardware-free target in `compose.klipper-emulator.yml` uses its own
+explicit project, `printstream-klipper-emulator`. Keep it separate from the app's
+Compose project: safe resume deliberately refuses unexpected services in the
+app project. If an older invocation created `printstream-klipper-1`, inspect and
+retain its `/printer/printer_data` volume before moving only that emulator
+container. An external-volume override can reuse the verified old volume; do
+not delete it or use `--remove-orphans` against the app project.
+
+Resume verifies the observed Compose project, exact configuration files, checkout source mount,
+node command, loopback web/API port bindings, and healthy database. A configured remote slicer
+must already be running in that same project. Foreign services, overridden Compose definitions,
+duplicate host launchers, and independently running host bridges are refused before any proxy
+write. Stop an existing host bridge deliberately before resuming; resume never kills or adopts it.
+
+Resume attaches to node logs, starts the existing host bridge supervisor against the same API port,
+and registers this new launcher's proxy lease. It does not run dependency installation, migrations,
+compiler builds, engine setup, or Compose recreation, so the surviving volumes, bridge state and
+installed slicer remain untouched. Existing source-staleness health checks still apply: resume is
+reconnection, not a freshness repair. Ctrl-C stops only this attachment's bridge and removes its
+route, preserving the containers. `npm run dev:down` remains the explicit complete teardown path.
+Resume requires Linux host process inspection (including WSL); it fails closed when that inspection
+or Docker ownership cannot be established. Normal startup remains appropriate for a stopped stack.
+Stopping the adopted node container also ends its log follower and this attachment,
+removing the proxy route. After a deliberate node restart, reattach with `--resume`;
+the removed route otherwise returns the proxy's plain `404 page not found` to all
+background requests. Before a schema/client upgrade, stop application writers and
+back up the database named by the application's `DATABASE_URL`, which may differ
+from the container's initial `POSTGRES_DB`.
+The host launcher lease is outside `node_modules`, under Devkit's `printstream-runners` directory.
+Dead runner leases are reclaimed, but the brief admission guard is never stolen automatically. If
+a launcher dies during that guard, the error names its file: inspect its recorded PID and remove
+the abandoned guard only after establishing that the owning process exited.
 
 The container API and host bridge each run under the same polling supervisor rather than `tsx
 watch`. If WSL or the container runtime kills a service child under memory pressure, the supervisor
 logs the exit and restarts it with bounded backoff; edits to service source or compiled shared
-dependencies also trigger a reload. This keeps the proxy from remaining alive with a permanently
-missing API or bridge behind it.
-
-After that, `npm run dev` prints where the checkout is answering:
-
-```
-  printstream / slice-crash-gate  →  http://slice-crash-gate.printstream.localhost
-  direct                          →  http://localhost:31180
-```
-
-Hostnames nest as `<worktree>.<repo>.localhost`, which browsers resolve to loopback with no hosts file and no DNS setup. The direct URL is always printed too, so a problem with the proxy never blocks you.
-
-### What it sets up
-
-| Piece | Where | Ownership |
-| --- | --- | --- |
-| Traefik proxy on IPv4 and IPv6 loopback port 80 | `~/.config/devkit/infra` | every project on the machine |
-| Node, Postgres, and the optional slicer | this checkout's Compose stack | this checkout only |
-| Printer bridge | WSL host process targeting the checkout's derived API port | this checkout only |
-| Baseline database + `data/` archive | `~/.config/devkit/baselines` | every worktree of one clone |
-
-Slicer project inputs, generated output, and temporary work are always checkout-private. In Compose,
-that state lives in the project-scoped `slicer-work` volume; host mode uses a directory keyed by the
-checkout identity. Only reusable artifacts are shared: content-addressed container images, downloaded
-engine binaries, and the host toolchain/profile cache. Shared cache locations must never hold project
-files or branch-specific generated output.
-
-The first `npm run dev` restores the portable SQL baseline and filesystem archive, then applies
-whatever migrations that branch adds. The archive includes the development bridge's identity under
-`apps/bridge/data`, so the isolated checkout reconnects the bridge represented by its cloned database
-instead of registering a new unpaired one. The bridge-owned file library travels with the database,
-so keep it limited to the small set of reference projects needed for development; API fallback data
-under `data/` travels too. Refresh the snapshot after changing those reference projects or
-deliberately pairing or replacing the primary development bridge.
-
-Devkit records a successful filesystem restore in `data/.devkit-baseline-restored`. Test uploads
-created before the first start do not suppress that restore. Existing files are never overwritten,
-so upgrading Devkit does not replace a bridge identity that an affected worktree already generated.
-Removing the receipt retries restoration of missing files on the next start; it does not reset the
-database or replace existing bridge credentials.
-
-### Commands
-
-| Command | What it does |
-| --- | --- |
-| `npm run dev:doctor` | prints the state of every precondition, and the command that fixes each |
-| `npm run dev:host -- snapshot` | refreshes the portable baseline from the current checkout |
-| `npm run dev:host -- reset` | recreates a worktree's database volume; `-- --empty` skips the baseline |
-| `npm run dev:host -- prune` | finds volumes whose worktree is gone; add `-- --yes` to remove them |
-| `npm run dev:host -- infra` | restarts the machine proxy and this checkout's database |
-| `npm run dev:remove-worktree` | tears down and removes the current linked worktree and its private volumes; the guarded agent workflows normally call this |
-| `devproxy ls` | every `*.localhost` name registered on this machine, PrintStream's and others' |
-
-Refresh the baseline explicitly when primary-checkout data should become the starting point for new
-worktrees. `dev:host -- reset` deliberately refuses on the primary checkout because its database is
-the source for snapshots, not disposable state.
-
-### Naming any other project on the machine
-
-The proxy is shared, so anything on the machine can answer on a `*.localhost` name, not just PrintStream checkouts. `npm run dev:bootstrap` puts a `devproxy` CLI on your PATH for that:
-
-```bash
-devproxy add myapp 3000                  # http://myapp.localhost
-devproxy add issue-123.myapp 3001        # http://issue-123.myapp.localhost
-devproxy ls                              # what is registered, and whether it answers
-devproxy rm myapp
-```
-
-It takes a hostname and a port and knows nothing else, so the target can be a host process or a container publishing a port. The `.localhost` suffix is added when you leave it off and is not optional: browsers resolve `*.localhost` to loopback with no hosts file and no DNS, which is what makes the whole design setup-free (Windows resolves it too, so a WSL dev server is reachable from a Windows browser by name).
-
-Two differences from the routes `npm run dev` writes, which `devproxy ls` labels `checkout`: a `devproxy` route is permanent until you remove it, where a checkout's is tied to that dev server's lifetime; and `devproxy rm` refuses to delete a checkout's route, because the next `npm run dev` would just write it back.
-
-`dev:bootstrap` links the package's `devkit` and `devproxy` executables into `~/.local/bin`. Re-running it refreshes those links while leaving the installed stack under `~/.config/devkit/infra` alone.
-
-### Local configuration in worktrees
-
-Devkit's `worktreeFiles` allowlist in `devkit.config.mjs` names ignored local configuration a new worktree needs. PrintStream lists `.env`, so `npm run dev:prepare-worktree` copies the primary checkout's file without starting development infrastructure. The first `npm run dev` rechecks it before loading. Copying is create-only: edit a worktree's `.env` when that branch needs different values and later preparation or starts will preserve it.
-
-Devkit publishes its derived `DATABASE_URL` into the development processes it starts. Full
-validation also receives the checkout database's loopback URL from its database-only preflight;
-direct test and Prisma commands still read `.env`, which is why inheriting the primary checkout's
-file matters.
-
-Shared implementation lives in `@ryanewen/devkit`; PrintStream's ports, environment, inherited files, baseline paths, and project-specific checks live in `devkit.config.mjs`.
+dependencies also trigger a reload. Unchanged compiler rewrites, type declarations
+and test outputs do not reload services; runtime additions, deletions and content
+changes do. This keeps the proxy from remaining alive with a permanently missing
+API or bridge behind it, without disconnecting printers for a no-op rebuild.
+Supervisor changes take effect on the next normal dev launch.
 
 ## Slicer sidecar in development
 
@@ -318,4 +283,6 @@ The aggregate test runner uses Node's compact `dot` reporter by default to keep 
 
 ## Maintainer utilities
 
-If you refresh the branded web assets, keep `apps/web/public/icon.svg` as the default icon source and `apps/web/public/maskable-icon.svg` as the Android launcher-safe source. Regenerate the derived PNG install assets by rendering the SVG in a browser and writing the normalized square PNGs from that render, never with a CLI rasterizer: see the branded-asset rule in the web development notes and `apps/web/public/README.md`.
+The Home Assistant integration's Python is checked by `npm run check:ha-python` (part of validate): ruff lint and format checks plus its `unittest` suite, run in a small Python 3.12 image (the oldest Python the minimum Home Assistant, 2024.11, allows) built from `integrations/home-assistant/tooling.Dockerfile`, so the host needs Docker but no Python packages.
+
+App icons come from the masters in `assets/brand/` (`icon.svg`, `icon-maskable.svg`): run `npm run icons` after changing one, and `npm run check:icons` (part of validate) fails when a committed icon no longer matches. `assets/brand/README.md` explains which outputs devkit-icons writes and the two that are generated here instead.

@@ -30,6 +30,7 @@ import {
   Typography
 } from '@mui/joy'
 import { BackAwareModal } from './BackAwareModal'
+import { ScrollableDialogBody, ScrollableModalDialog } from './ScrollableDialog'
 import type { ReactNode } from 'react'
 
 export function FormDialog({
@@ -45,6 +46,7 @@ export function FormDialog({
   submitDisabled = false,
   secondaryActions,
   width = 'min(640px, 100%)',
+  scrollable = false,
   children
 }: {
   open?: boolean
@@ -62,14 +64,19 @@ export function FormDialog({
   /** Optional actions placed between dismiss and confirm, preserving the shared footer order. */
   secondaryActions?: ReactNode
   width?: string
+  /** Keep title and actions visible while a long form body scrolls. */
+  scrollable?: boolean
   children: ReactNode
 }) {
+  const DialogShell = scrollable ? ScrollableModalDialog : ModalDialog
+  const DialogBody = scrollable ? ScrollableDialogBody : DialogContent
+
   return (
     <BackAwareModal open={open} onClose={() => { if (!busy) onClose() }}>
-      <ModalDialog variant="outlined" sx={{ width }}>
+      <DialogShell variant="outlined" sx={{ width }}>
         <ModalClose disabled={busy} />
         <DialogTitle>{title}</DialogTitle>
-        <DialogContent>
+        <DialogBody>
           <Stack spacing={2}>
             {description ? (
               <Typography level="body-sm" textColor="text.tertiary">{description}</Typography>
@@ -81,7 +88,7 @@ export function FormDialog({
               </Alert>
             ) : null}
           </Stack>
-        </DialogContent>
+        </DialogBody>
         <DialogActions>
           <Button variant="plain" color="neutral" disabled={busy} onClick={onClose}>{cancelLabel}</Button>
           {secondaryActions}
@@ -89,7 +96,7 @@ export function FormDialog({
             <Button loading={busy} disabled={submitDisabled} onClick={onSubmit}>{submitLabel}</Button>
           )}
         </DialogActions>
-      </ModalDialog>
+      </DialogShell>
     </BackAwareModal>
   )
 }

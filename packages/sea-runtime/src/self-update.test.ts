@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
+import { setImmediate as yieldToIo } from 'node:timers/promises'
 import { gzipSync } from 'node:zlib'
 import {
   clearStaleHoldBack,
@@ -42,6 +43,17 @@ async function makeInstall(): Promise<{ dir: string; exePath: string; updateStat
 
 function responseOf(bytes: Buffer): () => Promise<Response> {
   return async () => new Response(new Uint8Array(bytes), { status: 200 })
+}
+
+/** Wait for the real destination write before rejecting its download stream. */
+async function waitForDownloadedPrefix(targetPath: string, prefix: Buffer): Promise<void> {
+  const deadline = Date.now() + 5_000
+  while (Date.now() < deadline) {
+    const written = await readFile(targetPath).catch(() => null)
+    if (written?.equals(prefix)) return
+    await yieldToIo()
+  }
+  assert.fail('The download did not write its prefix before the stream failure')
 }
 
 test('downloadVerifiedExecutable writes a verified binary to the target path', async () => {
@@ -130,6 +142,67 @@ test('downloadVerifiedExecutable removes the partial file on checksum, size, or 
     await rm(install.dir, { recursive: true, force: true })
   }
 })
+
+for (const failure of ['interrupted body', 'truncated gzip', 'invalid gzip'] as const) {
+  test(`downloadVerifiedExecutable removes a partial file after ${failure} without changing the install`, async () => {
+    const install = await makeInstall()
+    try {
+      const state = Buffer.from('{"bootAttempts":1,"retained":"update-state"}\n')
+      const holdBack = Buffer.from('{"sourceFingerprint":"retained-hold-back"}\n')
+      await writeFile(install.updateStateFile, state)
+      await writeFile(install.heldBackFile, holdBack)
+
+      const targetPath = `${install.exePath}.new`
+      const bytes = Buffer.alloc(128 * 1024, 'downloaded executable')
+      const good = signedSha256(bytes)
+      const interrupted = new Error('Owned update download stream interrupted')
+      let fetchResponse: () => Promise<Response>
+
+      if (failure === 'interrupted body') {
+        const prefix = bytes.subarray(0, 1024)
+        fetchResponse = async () => new Response(new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new Uint8Array(prefix))
+          },
+          async pull(controller) {
+            await waitForDownloadedPrefix(targetPath, prefix)
+            controller.error(interrupted)
+          }
+        }))
+      } else {
+        const compressed = failure === 'truncated gzip'
+          ? gzipSync(bytes).subarray(0, -8)
+          : Buffer.from('This is not a gzip stream')
+        fetchResponse = responseOf(compressed)
+      }
+
+      await assert.rejects(() => downloadVerifiedExecutable({
+        fetchResponse,
+        targetPath,
+        ...good,
+        sizeBytes: bytes.length,
+        publicKeyPem,
+        ...(failure === 'interrupted body' ? {} : { compression: 'gzip' as const }),
+        artifactName: 'App update binary'
+      }), (error: unknown) => {
+        if (failure === 'interrupted body') {
+          assert.equal(error, interrupted, 'Keep the original stream rejection')
+        } else {
+          assert.equal((error as NodeJS.ErrnoException).code,
+            failure === 'truncated gzip' ? 'Z_BUF_ERROR' : 'Z_DATA_ERROR')
+        }
+        return true
+      })
+
+      assert.deepEqual(await readFile(install.exePath), OLD_BINARY)
+      assert.deepEqual(await readFile(install.updateStateFile), state)
+      assert.deepEqual(await readFile(install.heldBackFile), holdBack)
+      await assert.rejects(() => stat(targetPath), { code: 'ENOENT' })
+    } finally {
+      await rm(install.dir, { recursive: true, force: true })
+    }
+  })
+}
 
 test('swapExecutableInPlace backs up the old binary and restores it on failure', async () => {
   const install = await makeInstall()

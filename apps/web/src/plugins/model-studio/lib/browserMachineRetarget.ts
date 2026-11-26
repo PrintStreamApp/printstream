@@ -151,6 +151,16 @@ export interface MachineRetargetInput {
   signal?: AbortSignal
 }
 
+/**
+ * The direct parent (`inherits`) of a CUSTOM (workspace) machine preset, or null for a system one.
+ * BambuStudio accepts a process through this parent only when the machine is not a system preset,
+ * so the null for system machines is load-bearing, not a missing value.
+ */
+export function customMachineParentName(printerProfileId: string | null | undefined, machineConfig: ProfileRecord): string | null {
+  if (!printerProfileId || slicingPresetProvenance(printerProfileId) !== 'workspace') return null
+  return firstProfileString(machineConfig.inherits) ?? null
+}
+
 /** Best-effort retargeting degrades ordinary lookup failures, but never cancellation. */
 function rethrowCancellation(error: unknown, signal?: AbortSignal): void {
   signal?.throwIfAborted()
@@ -192,14 +202,13 @@ export async function buildMachineRetargetPlan(input: MachineRetargetInput): Pro
     input.slicerTargetId,
     resolvers,
     machine.name,
+    customMachineParentName(target.printerProfileId, machine.config),
     input.signal
   )
   const plan: MachineRetargetPlan = {
     machineConfig: machine.config,
     printerSettingsId: machine.name,
-    printerPresetInherits: slicingPresetProvenance(target.printerProfileId) === 'workspace'
-      ? firstProfileString(machine.config.inherits)
-      : null,
+    printerPresetInherits: customMachineParentName(target.printerProfileId, machine.config),
     printerModel,
     // Nothing chosen leaves the project's OWN process, which is right only while that process still
     // fits the machine being authored. When it does not, this is where BambuStudio would have
@@ -227,6 +236,7 @@ async function resolveTargetProcessConfig(
   slicerTargetId: string | null,
   resolvers: RetargetResolvers,
   machinePresetName: string,
+  machineParentName: string | null,
   signal?: AbortSignal
 ): Promise<ProfileRecord | null> {
   if (!target.processProfileId || !resolvers.canResolve(target.processProfileId)) return null
@@ -239,7 +249,7 @@ async function resolveTargetProcessConfig(
     // A process the target machine does not accept is not authored: the retarget's job is to make
     // the project openable on the new printer, and writing settings that machine refuses does the
     // opposite. Null leaves the project's embedded process, which is this function's own contract.
-    if (!processPresetFitsMachine(body.config ?? null, machinePresetName)) {
+    if (!processPresetFitsMachine(body.config ?? null, machinePresetName, machineParentName)) {
       console.warn(`[editor] the chosen process preset does not fit ${machinePresetName}; keeping the project's`)
       return null
     }
@@ -273,6 +283,7 @@ async function resolveProcessFallbackForMachine(
     projectSettings: input.projectSettings,
     machineConfig: machine.config,
     printerSettingsId: machine.name,
+    printerPresetInherits: customMachineParentName(input.target?.printerProfileId, machine.config),
     resolveSystemProcess: (name) => resolveBuiltinProcessByName(name, input.slicerTargetId, resolvers, input.signal),
     log: (message) => console.warn(`[editor] ${message}`)
   })

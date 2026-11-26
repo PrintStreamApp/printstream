@@ -3,11 +3,14 @@ import { after, afterEach, test } from 'node:test'
 import { CssVarsProvider } from '@mui/joy/styles'
 import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import React from 'react'
-import type { LibraryFile } from '@printstream/shared'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import type { LibraryFile, LibraryFolder } from '@printstream/shared'
 import { shouldShowLibraryPlateTypeTags } from '../lib/libraryFileTags'
 import { getMeshThumbnailProvider, registerMeshThumbnailProvider } from '../lib/modelThumbnailRegistry'
 import { installJsdomGlobals } from '../test-utils/jsdom'
-import { FileThumbnail } from './LibraryBrowser'
+import { FileThumbnail, LibraryBrowser, LIBRARY_DRAG_MIME, type LibraryDragItem } from './LibraryBrowser'
+import { PaginatedLibraryBrowser } from './library/PaginatedLibraryBrowser'
+import type { LibraryGroupBy } from '../lib/libraryDirectory'
 
 const dom = installJsdomGlobals()
 const originalMeshProvider = getMeshThumbnailProvider()
@@ -105,3 +108,72 @@ test('shouldShowLibraryPlateTypeTags keeps plate chips on gcode AND unsliced 3MF
   assert.equal(shouldShowLibraryPlateTypeTags(unslicedThreeMfFile), true)
   assert.equal(shouldShowLibraryPlateTypeTags({ ...unslicedThreeMfFile, kind: 'stl' }), false)
 })
+
+for (const viewMode of ['icon', 'list'] as const) {
+  for (const group of ['none', 'fileType', 'letter', 'dateAdded'] satisfies LibraryGroupBy[]) {
+    test(`LibraryBrowser moves a file into a folder in ${viewMode} view grouped by ${group}`, () => {
+      const folder: LibraryFolder = { id: 'destination', name: 'Destination', parentId: null }
+      const moves: Array<{ item: LibraryDragItem; target: LibraryFolder }> = []
+      const sort = { key: 'name', dir: 'asc' } as const
+      const queryClient = new QueryClient({ defaultOptions: { queries: { enabled: false, retry: false, gcTime: Infinity } } })
+      const view = render(
+        <CssVarsProvider>
+          <QueryClientProvider client={queryClient}>
+            <PaginatedLibraryBrowser
+              group={group}
+              sort={sort}
+              filteredFolders={[folder]}
+              filteredFiles={[bridgeBackedFile]}
+              filteredItemCount={2}
+              pagedFolders={[folder]}
+              pagedFiles={[bridgeBackedFile]}
+              pagination={{ showingLabel: '2 items', currentPage: 1, pageCount: 1, onPageChange() {} }}
+              renderBrowser={(folders, files) => (
+                <LibraryBrowser
+                  folders={folders}
+                  files={files}
+                  viewMode={viewMode}
+                  sort={sort}
+                  onFolderOpen={() => {}}
+                  onItemDrop={(item, target) => moves.push({ item, target })}
+                />
+              )}
+            />
+          </QueryClientProvider>
+        </CssVarsProvider>
+      )
+      const source = view.getByRole('img', { name: bridgeBackedFile.name }).closest('[draggable="true"]')!
+      const target = view.getByText(folder.name).closest('[draggable="true"]')!
+      const payloads = new Map<string, string>()
+      let protectedMode = false
+      const dataTransfer = {
+        effectAllowed: 'none',
+        dropEffect: 'none',
+        get types() { return [...payloads.keys()] },
+        setData(type: string, value: string) { payloads.set(type, value) },
+        // Real browsers hide payload contents until drop, but expose MIME types during dragover.
+        getData(type: string) { return protectedMode ? '' : payloads.get(type) ?? '' }
+      }
+
+      assert.equal(fireEvent.dragOver(target, { dataTransfer: { types: ['Files'], dropEffect: 'none' } }), true,
+        'OS file uploads must not be accepted as library moves')
+
+      fireEvent.dragStart(source, { dataTransfer })
+      assert.ok(payloads.has(LIBRARY_DRAG_MIME))
+      protectedMode = true
+      const accepted = !fireEvent.dragOver(target, { dataTransfer })
+      assert.equal(accepted, true, 'folder must accept dragover so the browser permits a drop')
+      assert.equal(dataTransfer.dropEffect, 'move')
+      protectedMode = false
+      fireEvent.drop(target, { dataTransfer })
+      assert.deepEqual(moves, [{ item: { type: 'file', file: bridgeBackedFile }, target: folder }])
+      fireEvent.dragEnd(source, { dataTransfer })
+
+      fireEvent.dragStart(target, { dataTransfer })
+      assert.equal(fireEvent.dragOver(target, { dataTransfer }), true, 'a folder cannot accept itself')
+      fireEvent.drop(target, { dataTransfer })
+      assert.equal(moves.length, 1)
+      fireEvent.dragEnd(target, { dataTransfer })
+    })
+  }
+}

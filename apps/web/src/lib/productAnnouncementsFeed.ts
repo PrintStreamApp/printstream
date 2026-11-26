@@ -4,6 +4,8 @@
  * staging and production cannot replace each other's news. Failures retain the last success.
  */
 import { getProductAnnouncementPath, parseProductAnnouncementsCatalog, type ProductAnnouncementsCatalog } from '@printstream/shared'
+import { readStoredValue, writeStoredValue } from './browserStorageKeys'
+import { announcementLastFetchKeys } from './storageKeys'
 
 export const HOSTED_ANNOUNCEMENTS_FEED_URL = 'https://printstream.app/announcements.json'
 const FETCH_TIMEOUT_MS = 10_000
@@ -16,7 +18,7 @@ export interface FetchedAnnouncements {
 /** Reads only a previously fetched, validated catalog; malformed or unavailable storage is ignored. */
 export function readCachedAnnouncements(feedUrl: string): FetchedAnnouncements | undefined {
   try {
-    const raw = localStorage.getItem(cacheKey(feedUrl))
+    const raw = readStoredValue(announcementLastFetchKeys.at(feedUrl))
     if (!raw) return undefined
     const value = JSON.parse(raw) as { catalog?: unknown; fetchedAt?: unknown }
     if (typeof value.fetchedAt !== 'number' || !Number.isFinite(value.fetchedAt) || value.fetchedAt <= 0) return undefined
@@ -46,11 +48,8 @@ export async function fetchAnnouncementsFeed(feedUrl: string, signal: AbortSigna
     controller.signal.throwIfAborted()
     const fetched = { catalog, fetchedAt: Date.now() }
 
-    try {
-      localStorage.setItem(cacheKey(feedUrl), JSON.stringify(fetched))
-    } catch {
-      // Private browsing or quota pressure may prevent persistence; the fetched news still displays.
-    }
+    // Best-effort: private browsing or quota pressure may prevent persistence; the news still displays.
+    writeStoredValue(announcementLastFetchKeys.at(feedUrl), JSON.stringify(fetched))
     return fetched
   } finally {
     clearTimeout(timeout)
@@ -63,7 +62,3 @@ export function announcementArticleUrl(feedUrl: string, slug: string, pageUrl: s
   return new URL(getProductAnnouncementPath(slug), new URL(feedUrl, pageUrl)).href
 }
 
-/** Namespaces public feed caches by source, independently of accounts and workspaces. */
-function cacheKey(feedUrl: string): string {
-  return `printstream.announcements.lastFetch:${feedUrl}`
-}

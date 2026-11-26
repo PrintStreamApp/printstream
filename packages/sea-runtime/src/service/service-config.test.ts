@@ -31,6 +31,25 @@ test('systemd unit reflects the spec and the optional documentation URL', () => 
   assert.match(withDocs, /Documentation=https:\/\/example\.test/)
 })
 
+test('systemd runtime directory is opt-in and retains the owning service account', () => {
+  assert.doesNotMatch(generateSystemdUnit(baseSpec), /RuntimeDirectory/)
+  const unit = generateSystemdUnit({ ...baseSpec, runtimeDirectory: { name: 'sample-app', mode: 0o755 } })
+  assert.match(unit, /^RuntimeDirectory=sample-app$/m)
+  assert.match(unit, /^RuntimeDirectoryMode=0755$/m)
+  assert.match(unit, /^User=sample-app$/m)
+  assert.match(unit, /^WorkingDirectory=\/var\/lib\/sample-app$/m)
+  assert.match(generateSystemdUnit({ ...baseSpec, runtimeDirectory: { name: 'sample-app' } }), /^RuntimeDirectoryMode=0755$/m)
+})
+
+test('systemd refuses runtime directory traversal, directives and malformed modes', () => {
+  for (const name of ['../sample-app', 'sample/app', 'sample\nUser=root', '']) {
+    assert.throws(() => generateSystemdUnit({ ...baseSpec, runtimeDirectory: { name } }), /one safe name/)
+  }
+  for (const mode of [-1, 0o1777, 1.5, NaN]) {
+    assert.throws(() => generateSystemdUnit({ ...baseSpec, runtimeDirectory: { name: 'sample-app', mode } }), /permission mode/)
+  }
+})
+
 test('WinSW config and paths reflect the spec (win32 layout)', () => {
   const config = generateWinswConfig(baseSpec)
   assert.match(config, /<id>sample-app<\/id>/)
@@ -50,6 +69,22 @@ test('WinSW config emits a service account only when one is set', () => {
   assert.match(withAccount, /<serviceaccount>/)
   assert.match(withAccount, /<username>NT AUTHORITY\\NetworkService<\/username>/)
   assert.match(withAccount, /<allowservicelogon>true<\/allowservicelogon>/)
+})
+
+test('WinSW explicit stop uses separate start arguments without appending run to the helper', () => {
+  const config = generateWinswConfig({ ...baseSpec, exePath: 'C:\\Program Files\\Sample\\sample.exe',
+    stopCommand: { exePath: 'C:\\Program Files\\Sample\\sample.exe', args: ['internal-stop', 'a&b'] } })
+  assert.match(config, /<startarguments>run<\/startarguments>/)
+  assert.doesNotMatch(config, /<arguments>/)
+  assert.match(config, /<stopexecutable>C:\\Program Files\\Sample\\sample.exe<\/stopexecutable>/)
+  assert.match(config, /<stoparguments>internal-stop a&amp;b<\/stoparguments>/)
+  assert.match(config, /<stoptimeout>15 sec<\/stoptimeout>/)
+})
+
+test('WinSW consumers without a stop helper retain the original argument contract', () => {
+  const config = generateWinswConfig(baseSpec)
+  assert.match(config, /<arguments>run<\/arguments>/)
+  assert.doesNotMatch(config, /<startarguments>|<stoparguments>|<stopexecutable>/)
 })
 
 /**

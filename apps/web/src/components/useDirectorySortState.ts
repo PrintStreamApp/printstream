@@ -22,6 +22,7 @@
 import { useCallback, useMemo } from 'react'
 import type { DirectorySortDirection, DirectorySortOption } from './DirectoryControls'
 import { useLocalStorageState } from '../hooks/useLocalStorageState'
+import type { StorageKeyRef } from '../lib/browserStorageKeys'
 
 /**
  * Reads a scalar preference that may be stored in either of two formats.
@@ -50,21 +51,17 @@ export function useDirectorySortState<T extends string>({
   defaultSortBy,
   defaultDirection = 'desc',
   ariaLabel,
-  legacySortByKeys = [],
-  legacySortDirectionKeys = [],
   onChange
 }: {
-  /** Storage key for the field. A persisted identifier: renaming one needs `legacySortByKeys`. */
-  sortByKey: string
-  sortDirectionKey: string
+  /** Declared storage keys (`lib/browserStorageKeys.ts`), which bring their own former names. */
+  sortByKey: StorageKeyRef
+  sortDirectionKey: StorageKeyRef
   /** The menu's options, and the set a stored field is validated against. */
   options: ReadonlyArray<DirectorySortOption<T>>
   defaultSortBy: T
   defaultDirection?: DirectorySortDirection
   /** Per-view copy, e.g. "Sort customers". */
   ariaLabel: string
-  legacySortByKeys?: ReadonlyArray<string>
-  legacySortDirectionKeys?: ReadonlyArray<string>
   /**
    * Run after either half changes: pass `() => setPage(1)`. Optional only
    * because a caller may already reset the page by another route (the workspace
@@ -110,15 +107,13 @@ export function useDirectorySortState<T extends string>({
     sortByKey,
     defaultSortBy,
     parseSortBy,
-    String,
-    legacySortByKeys
+    String
   )
   const [sortDirection, setSortDirection] = useLocalStorageState<DirectorySortDirection>(
     sortDirectionKey,
     defaultDirection,
     parseDirection,
-    String,
-    legacySortDirectionKeys
+    String
   )
 
   const sortProps = useMemo(() => ({

@@ -1,5 +1,6 @@
 import { useCallback } from 'react'
 import { useLocalStorageState } from './useLocalStorageState'
+import type { StorageKeyRef } from '../lib/browserStorageKeys'
 
 /**
  * localStorage-backed state for a JSON-serializable UI preference (a directory
@@ -17,15 +18,15 @@ import { useLocalStorageState } from './useLocalStorageState'
  * (`setValue(prev => ...)`) work, which is what per-field setters built on top of
  * a combined preferences object rely on.
  *
- * `legacyKeys` migrates a RENAMED preference: a storage key is a persisted
- * identifier, so renaming one without a read-through silently resets everyone's
- * saved value on the first load after a deploy.
+ * The key is a declared one (`lib/browserStorageKeys.ts`), whose former names
+ * migrate a RENAMED preference; `extraLegacyKeys` adds old names a family could
+ * not derive.
  */
 export function usePersistentState<T>(
-  key: string,
+  storageKey: StorageKeyRef,
   fallback: T,
   sanitize: (value: unknown) => T,
-  legacyKeys: ReadonlyArray<string> = []
+  extraLegacyKeys: ReadonlyArray<string> = []
 ): [T, React.Dispatch<React.SetStateAction<T>>] {
   const parse = useCallback((raw: string): T | null => {
     try {
@@ -34,7 +35,7 @@ export function usePersistentState<T>(
       return null
     }
   }, [sanitize])
-  const [value, setValue] = useLocalStorageState<T>(key, fallback, parse, undefined, legacyKeys)
+  const [value, setValue] = useLocalStorageState<T>(storageKey, fallback, parse, undefined, extraLegacyKeys)
   // useLocalStorageState's setter is the underlying useState dispatch, so it
   // genuinely supports functional updaters even though its type narrows that away.
   return [value, setValue as React.Dispatch<React.SetStateAction<T>>]

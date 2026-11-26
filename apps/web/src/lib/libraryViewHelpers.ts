@@ -14,7 +14,7 @@
  * concerns; keep new pure helpers here rather than re-growing the view.
  *
  * Note: a few names here (`parseLibraryViewMode`, `parseLibrarySort`,
- * `collectDistinctLibraryFilterValues`, `LIBRARY_VIEW_MODE_KEY`, ...) mirror
+ * `collectDistinctLibraryFilterValues`, ...) mirror
  * copies in `printersViewHelpers.ts` / `printerViewConstants.ts`. These are
  * deliberate per-view copies, not a shared contract; do not dedupe them.
  */
@@ -54,13 +54,6 @@ import { LIBRARY_GROUP_OPTIONS, type LibraryGroupBy } from './libraryDirectory'
 import { amsUnitLetter, type PrinterTrayGroup as PrinterTrayGroupBase } from './printerTrayMapping'
 import { type LibrarySort, type LibraryViewMode } from '../components/LibraryBrowser'
 
-export const LIBRARY_VIEW_MODE_KEY = 'bambu.library.viewMode'
-export const LIBRARY_SORT_KEY = 'bambu.library.sort'
-export const LIBRARY_PAGE_SIZE_KEY = 'bambu.library.pageSize'
-export const LIBRARY_FILE_TYPE_FILTERS_KEY = 'bambu.library.fileTypeFilters'
-export const LIBRARY_PRINTER_MODEL_FILTERS_KEY = 'bambu.library.printerModelFilters'
-export const LIBRARY_NOZZLE_SIZE_FILTERS_KEY = 'bambu.library.nozzleSizeFilters'
-export const LIBRARY_PLATE_TYPE_FILTERS_KEY = 'bambu.library.plateTypeFilters'
 export const LIBRARY_PAGE_SIZE_OPTIONS = [25, 50, 100] as const
 export const LIBRARY_SORT_OPTIONS = [
   { value: 'name', label: 'Name' },
@@ -69,7 +62,6 @@ export const LIBRARY_SORT_OPTIONS = [
   { value: 'mostPrinted', label: 'Most printed' },
   { value: 'lastPrinted', label: 'Last printed' }
 ] as const
-export const LIBRARY_GROUP_KEY = 'bambu.library.group'
 export function parseLibraryGroup(raw: string): LibraryGroupBy | null {
   return LIBRARY_GROUP_OPTIONS.some((option) => option.value === raw) ? (raw as LibraryGroupBy) : null
 }

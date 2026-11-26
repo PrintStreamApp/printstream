@@ -213,6 +213,8 @@ export const bridgeCrashReportMessageSchema = z.object({
 
 export const bridgePrinterStatusMessageSchema = z.object({
   type: z.literal('bridge.printer.status'),
+  // Only sources freshly observed in this frame may reconcile durable faults.
+  faultSources: z.array(z.enum(['hms', 'device_error'])).optional(),
   printer: printerStatusSchema
 })
 
@@ -875,6 +877,12 @@ export const bridgeLibraryThreeMfIndexSchema = z.object({
   /** Project filaments designated as support material (`support_filament`/`support_interface_filament`/`filament_is_support`). */
   supportFilamentIds: z.array(z.number().int().positive()).default([]),
   printerProfileName: z.string().nullable().default(null),
+  /**
+   * The CUSTOM printer preset's own parent (the machine slot of `inherits_group`), which the engine
+   * judges process compatibility by in place of the printer's name. Null for a system printer, and
+   * on an index from a bridge older than parser v44 (read as "no parent", i.e. behaves as before).
+   */
+  printerProfileInherits: z.string().nullable().default(null),
   processProfileName: z.string().nullable().default(null),
   /**
    * The system process preset the project's own process was derived from (`inherits_group[0]`).

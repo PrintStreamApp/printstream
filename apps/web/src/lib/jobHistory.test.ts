@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { PrintJob } from '@printstream/shared'
-import { formatJobDispatchDetails } from './jobHistory.js'
+import { formatJobDispatchDetails, shouldShowJobsConnectionPlaceholder } from './jobHistory.js'
 
 function makeJob(overrides: Partial<PrintJob>): PrintJob {
   return {
@@ -74,4 +74,13 @@ test('formatJobDispatchDetails says so when the stored file has been reclaimed',
     formatJobDispatchDetails(makeJob({ jobKind: 'file', fileId: null, fileSizeBytes: 1_536, plate: 2 })),
     'Plate 2 - 1.5 KB - Stored file no longer available'
   )
+})
+
+
+test('disconnected bridges preserve standalone fault history and uncertain active jobs', () => {
+  const disconnected = { hasNoConnectedBridges: true, historyLoaded: true, jobsLoaded: true, historyCount: 0, inProgressCount: 0 }
+  assert.equal(shouldShowJobsConnectionPlaceholder({ ...disconnected, historyCount: 1 }), false, 'a standalone fault keeps History visible without a connected bridge')
+  assert.equal(shouldShowJobsConnectionPlaceholder({ ...disconnected, inProgressCount: 1 }), false, 'an unfinished job and its uncertain faults remain visible')
+  assert.equal(shouldShowJobsConnectionPlaceholder({ ...disconnected, historyLoaded: false }), false, 'an in-flight history read is not an empty workspace')
+  assert.equal(shouldShowJobsConnectionPlaceholder(disconnected), true, 'a truly empty disconnected workspace keeps the connection help')
 })

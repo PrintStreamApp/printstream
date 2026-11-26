@@ -11,7 +11,7 @@ import { isNativeApp } from '../../native/bridge'
 import { BrowserAssistPanel } from './BrowserAssistPanel'
 import { CandidatePicker } from './CandidatePicker'
 import type { RemoteImportErrorGuidance } from './errorGuidance'
-import type { RemoteImportsController } from './RemoteImportsView'
+import type { RemoteImportsController } from './useRemoteImportsController'
 
 export function FromUrlImportDialog({
   controller,
@@ -115,7 +115,7 @@ export function FromUrlImportDialog({
         />
         <FormHelperText>
           {isNativeApp()
-            ? 'A pasted MakerWorld model page uses the workspace Bambu account. The Browse buttons use their own website session instead.'
+            ? 'A pasted MakerWorld model page uses the workspace Bambu account. Browsing from the Upload menu uses its own website session instead.'
             : 'MakerWorld and Printables model pages, plus direct links to supported printable files.'}
         </FormHelperText>
       </FormControl>

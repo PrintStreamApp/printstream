@@ -10,7 +10,7 @@
  * can never wedge startup permanently. It guards the runtime itself, independent
  * of the control channel (a named pipe / Unix socket, which binds no port).
  */
-import { closeSync, mkdirSync, openSync, readFileSync, rmSync, writeSync } from 'node:fs'
+import { closeSync, lstatSync, mkdirSync, openSync, readFileSync, rmSync, writeSync } from 'node:fs'
 import path from 'node:path'
 
 /**
@@ -75,4 +75,30 @@ function isProcessAlive(pid: number): boolean {
     // (e.g. the LocalSystem service vs a user launch), still alive.
     return (error as NodeJS.ErrnoException).code === 'EPERM'
   }
+}
+
+/**
+ * Destructive teardown needs proof that an existing single-instance holder is
+ * gone. Missing/dead holders are retired; malformed/unreadable/live holders
+ * refuse deletion. Unlike startup's guard, this deliberately never fails open.
+ */
+export function assertSingleInstanceRetired(lockPath: string): void {
+  let metadata
+  try { metadata = lstatSync(lockPath) } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+    throw error
+  }
+  if (!metadata.isFile() || metadata.isSymbolicLink()) throw new Error('Substituted runtime instance lock refused')
+  // Once a path was observed, disappearance/read failure is an uncertain race,
+  // not permission to treat an unreadable or replaced holder as absent.
+  const content = readFileSync(lockPath, 'utf8').trim()
+  const pid = Number(content)
+  if (!/^[1-9][0-9]*$/.test(content) || !Number.isSafeInteger(pid)) {
+    throw new Error('Runtime retirement cannot be established from its instance lock')
+  }
+  try { process.kill(pid, 0) } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ESRCH') return
+    throw error
+  }
+  throw new Error('Runtime is still active; installed files and DATA were retained')
 }

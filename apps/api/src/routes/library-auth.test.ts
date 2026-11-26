@@ -1088,6 +1088,7 @@ test('library plates responses require private revalidation', async () => {
       supportFilamentIds: [],
       printerProfileName: null,
       processProfileName: null,
+      printerProfileInherits: null,
       processProfileInherits: null
     })
   })

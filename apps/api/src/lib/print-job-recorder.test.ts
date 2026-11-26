@@ -24,10 +24,11 @@ import {
   resolvePrintJobIdByTaskId,
   setPrintJobSnapshotEnsurerForTests,
   startPrintJobRecorder,
+  waitForPrintJobRecorderIdle,
   stopPrintJobRecorder,
   upsertTrackedPrintJobRecord
 } from './print-job-recorder.js'
-import { restorePrismaMethodsAfterEach } from '../test-utils/prisma-stubs.js'
+import { usePrismaStubs, restorePrismaMethodsAfterEach } from '../test-utils/prisma-stubs.js'
 
 const printer: Printer = {
   id: 'printer-1',
@@ -43,6 +44,8 @@ const printer: Printer = {
   updatedAt: new Date(0).toISOString()
 }
 
+const usePrismaStubsForRace = usePrismaStubs()
+
 const tempDirs = new Set<string>()
 beforeEach(() => {
   Object.defineProperty(rootPrisma.printer, 'findUnique', { value: async () => null, configurable: true })
@@ -50,11 +53,14 @@ beforeEach(() => {
   Object.defineProperty(rootPrisma.filamentSpool, 'findMany', { value: async () => [], configurable: true })
 })
 
+afterEach(async () => { await waitForPrintJobRecorderIdle() })
+
 // Snapshot + auto-restore every rootPrisma method the suite overrides, so the tests can keep using
 // raw Object.defineProperty at their setup sites without hand-tracking originals or a restore block.
 restorePrismaMethodsAfterEach([
   [rootPrisma.workspaceTag, 'findMany'],
   [rootPrisma.filamentSpool, 'findMany'],
+  [rootPrisma.printJob, 'findMany'],
   [rootPrisma.printJob, 'findFirst'],
   [rootPrisma.printJob, 'findUnique'],
   [rootPrisma.printJob, 'create'],
@@ -114,12 +120,12 @@ async function createFilamentUsageArchive(fileName = 'fixture.gcode.3mf'): Promi
 
 // Deadline-based (not iteration-count-based): polls on setImmediate so it resolves the moment the
 // async work settles, but a saturated CPU that needs more event-loop turns no longer trips it early.
-async function waitForAssertion(assertion: () => void, timeoutMs = 2_000): Promise<void> {
+async function waitForAssertion(assertion: () => void | Promise<void>, timeoutMs = 2_000): Promise<void> {
   const deadline = Date.now() + timeoutMs
   let lastError: unknown = null
   for (;;) {
     try {
-      assertion()
+      await assertion()
       return
     } catch (error) {
       lastError = error
@@ -837,7 +843,7 @@ test('status reconciliation closes stale unfinished jobs when a terminal status 
   assert.equal(updates[0]?.where.id, 'job-new')
   assert.equal(updates[0]?.data.result, 'unknown')
   assert.equal(updates[0]?.data.progressPercent, 42)
-  assert.deepEqual(updateManyCalls[0]?.where, { id: { in: ['job-old'] } })
+  assert.deepEqual(updateManyCalls[0]?.where, { id: { in: ['job-old'] }, startedAt: { lte: updates[0]?.data.finishedAt } })
   assert.equal(updateManyCalls[0]?.data.result, 'unknown')
   assert.equal(updateManyCalls[0]?.data.progressPercent, null)
 })
@@ -933,7 +939,7 @@ test('status reconciliation closes stale unfinished jobs when the terminal task 
   assert.equal(updates[0]?.where.id, 'job-new')
   assert.equal(updates[0]?.data.result, 'success')
   assert.equal(updates[0]?.data.progressPercent, 100)
-  assert.deepEqual(updateManyCalls[0]?.where, { id: { in: ['job-old'] } })
+  assert.deepEqual(updateManyCalls[0]?.where, { id: { in: ['job-old'] }, startedAt: { lte: updates[0]?.data.finishedAt } })
   assert.equal(updateManyCalls[0]?.data.result, 'unknown')
 })
 
@@ -1027,7 +1033,7 @@ test('status reconciliation closes unrelated stale unfinished jobs after matchin
 
   assert.equal(updates[0]?.where.id, 'job-current')
   assert.equal(updates[0]?.data.result, 'success')
-  assert.deepEqual(updateManyCalls[0]?.where, { id: { in: ['job-old'] } })
+  assert.deepEqual(updateManyCalls[0]?.where, { id: { in: ['job-old'] }, startedAt: { lte: updates[0]?.data.finishedAt } })
   assert.equal(updateManyCalls[0]?.data.result, 'unknown')
 })
 
@@ -1774,6 +1780,7 @@ test('overlapping status starts only create one external print record for the sa
     resolveCreate = resolve
   })
 
+  Object.defineProperty(rootPrisma.printJob, 'findFirst', { value: async () => null, configurable: true })
   Object.defineProperty(rootPrisma.printer, 'findUnique', {
     value: async () => ({ workspaceId: 'workspace-1' }),
     configurable: true
@@ -1913,7 +1920,7 @@ test('status reconciliation prefers the library-backed unfinished row and closes
   assert.equal(updates.length, 1)
   assert.equal(updates[0]?.where.id, 'library-1')
   assert.equal(updates[0]?.data.result, 'unknown')
-  assert.deepEqual(updateManyCalls[0]?.where, { id: { in: ['external-1'] } })
+  assert.deepEqual(updateManyCalls[0]?.where, { id: { in: ['external-1'] }, startedAt: { lte: updates[0]?.data.finishedAt } })
   assert.equal(updateManyCalls[0]?.data.result, 'unknown')
 })
 
@@ -2260,3 +2267,118 @@ test('an unclaimed calibration start is not declared failed by this rule', async
 
   assert.deepEqual(unconfirmed, [])
 })
+
+
+test('terminal status then job.finished awaiting activation cannot finish or clear a newer active task', async () => {
+  const stub = usePrismaStubsForRace
+  let releaseA!: () => void
+  let reachedA!: () => void
+  const gate = new Promise<void>((resolve) => { releaseA = resolve })
+  const seen = new Promise<void>((resolve) => { reachedA = resolve })
+  const observedStart = '2026-10-25T16:00:00.000Z'
+  const observedEnd = '2026-10-25T16:01:00.000Z'
+  let live = { printerId: printer.id, online: true, stage: 'printing', taskId: 'task-a', observedAt: observedStart } as PrinterStatus
+  const finished: Array<{ id: string; result: unknown; finishedAt: unknown }> = []
+  const b = {
+    id: 'job-b', jobName: 'B', taskId: 'task-b', printerId: printer.id, sourceType: 'external',
+    printerFilePath: null, plate: null, fileId: null, thumbnailPath: null, startedAt: new Date('2026-10-25T16:02:00.000Z')
+  }
+  let markBDurable!: () => void
+  const bDurable = new Promise<void>((resolve) => { markBDurable = resolve })
+  stub(rootPrisma.printer, 'findUnique', async () => ({ workspaceId: 'workspace-1' }))
+  stub(rootPrisma.libraryFile, 'findMany', async () => [])
+  stub(rootPrisma.printJob, 'findMany', async ({ where }: { where: { taskId?: string; startedAt?: { lte: Date } } }) => {
+    if (where.taskId) return []
+    await bDurable
+    return !where.startedAt || b.startedAt <= where.startedAt.lte ? [b] : []
+  })
+  stub(rootPrisma.printJob, 'findFirst', async (args: { where: { taskId: string } }) => {
+    if (args.where.taskId === 'task-a') { reachedA(); await gate; return null }
+    markBDurable()
+    return b
+  })
+  stub(rootPrisma.printJob, 'create', async () => ({ id: 'job-a', jobName: 'A' }))
+  stub(rootPrisma.printJob, 'findUnique', async () => ({
+    id: 'job-a', startedAt: new Date(observedStart), workspaceId: 'workspace-1', sourceType: 'external', fileId: null,
+    printerStatsRecordedAt: new Date(), printer: { model: 'P1S' }
+  }))
+  stub(rootPrisma.printJob, 'update', async (args: { where: { id: string }; data: Record<string, unknown> }) => {
+    if (args.data.finishedAt) finished.push({ id: args.where.id, result: args.data.result, finishedAt: args.data.finishedAt })
+    return { id: args.where.id }
+  })
+  mock.method(printerManager, 'getStatus', () => live)
+  mock.method(printerManager, 'getPrinter', () => undefined)
+  startPrintJobRecorder()
+  printerEvents.emit('status', live)
+  await seen
+  live = { ...live, stage: 'finished', observedAt: observedEnd }
+  printerEvents.emit('status', live)
+  printerEvents.emit('job.finished', { printer, jobName: 'A', result: 'success' })
+  live = { ...live, stage: 'printing', taskId: 'task-b', observedAt: '2026-10-25T16:02:00.000Z' }
+  printerEvents.emit('status', live)
+  try {
+    await waitForAssertion(async () => { assert.equal(await resolveRelevantPrintJobId(printer.id), 'job-b') })
+  } finally { releaseA() }
+  await waitForPrintJobRecorderIdle()
+  assert.equal(finished.length, 1)
+  assert.equal(finished[0]?.id, 'job-a')
+  assert.equal((finished[0]?.finishedAt as Date).toISOString(), observedEnd)
+  assert.equal(await resolveRelevantPrintJobId(printer.id), 'job-b')
+})
+
+for (const reportedTask of [null, 'missing-task', 'task-a']) {
+  test(`terminal recovery with ${reportedTask ?? 'no task'} excludes a job becoming durable during reconciliation`, async () => {
+    const stub = usePrismaStubsForRace
+    const observedEnd = new Date('2026-10-25T16:01:00.000Z')
+    const a = {
+      id: 'job-a', printerId: printer.id, taskId: 'task-a', jobName: 'A', printerFilePath: null,
+      sourceType: 'external', fileId: null, thumbnailPath: null, startedAt: new Date('2026-10-25T16:00:00.000Z')
+    }
+    const b = { ...a, id: 'job-b', taskId: 'task-b', jobName: 'B', startedAt: new Date('2026-10-25T16:02:00.000Z') }
+    const stale = { ...a, id: 'stale', taskId: null }
+    const rows = [a, stale]
+    const writes: Array<{ id: string; data: Record<string, unknown> }> = []
+    let releaseRead!: () => void
+    let reachedRead!: () => void
+    const gate = new Promise<void>((resolve) => { releaseRead = resolve })
+    const seen = new Promise<void>((resolve) => { reachedRead = resolve })
+    let firstRead = true
+    stub(rootPrisma.printer, 'findUnique', async () => ({ workspaceId: 'workspace-1' }))
+    stub(rootPrisma.printJob, 'findMany', async ({ where }: { where: { taskId?: string; startedAt?: { lte: Date } } }) => {
+      if (firstRead) {
+        firstRead = false
+        reachedRead()
+        await gate
+      }
+      return rows.filter((row) => !writes.some((write) => write.id === row.id)
+        && (!where.taskId || row.taskId === where.taskId)
+        && (!where.startedAt || row.startedAt <= where.startedAt.lte))
+    })
+    stub(rootPrisma.printJob, 'findUnique', async ({ where }: { where: { id: string } }) => ({
+      ...rows.find((row) => row.id === where.id), workspaceId: 'workspace-1', printerStatsRecordedAt: new Date(),
+      finishedAt: null, printer: { model: 'P1S' }
+    }))
+    stub(rootPrisma.printJob, 'update', async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => {
+      writes.push({ id: where.id, data })
+      return { id: where.id }
+    })
+    stub(rootPrisma.printJob, 'updateMany', async ({ where, data }: { where: { id: { in: string[] }; startedAt?: { lte: Date } }; data: Record<string, unknown> }) => {
+      assert.equal(where.startedAt?.lte.toISOString(), observedEnd.toISOString(), 'cleanup retains the original observation boundary')
+      for (const row of rows) {
+        if (where.id.in.includes(row.id) && (!where.startedAt || row.startedAt <= where.startedAt.lte)) writes.push({ id: row.id, data })
+      }
+      return { count: where.id.in.length }
+    })
+    mock.method(printerManager, 'getPrinter', () => undefined)
+    startPrintJobRecorder()
+    printerEvents.emit('status', {
+      printerId: printer.id, online: true, taskId: reportedTask, stage: 'finished', observedAt: observedEnd.toISOString()
+    } as PrinterStatus)
+    await seen
+    rows.push(b)
+    releaseRead()
+    await waitForPrintJobRecorderIdle()
+    assert.deepEqual(writes.map((write) => write.id), ['job-a', 'stale'])
+    assert.ok(writes.every((write) => (write.data.finishedAt as Date).toISOString() === observedEnd.toISOString()))
+  })
+}

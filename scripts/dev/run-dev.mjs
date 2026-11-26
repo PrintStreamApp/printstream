@@ -36,12 +36,18 @@ import { fileURLToPath } from 'node:url'
 import {
   checkoutCompose,
   checkoutComposeLifecycle,
+  checkoutIdentity,
+  checkoutPorts,
+  devkitConfig,
   inheritWorktreeFiles,
+  loadProjectConfig,
   preflight
-} from '@ryanewen/devkit'
+} from '@dynamic-solutions-canada/devkit'
 import { DEV_PORTS } from '../../devkit.config.mjs'
 import { assertHostDevPortsAvailable } from './dev-port-guard.mjs'
 import { hostBridgeProcessSpec, stopHostService } from './host-bridge.mjs'
+import { acquireDevRunnerLease, assertNoCheckoutHostProcesses, devRunnerAdmissionRole } from './dev-host-admission.mjs'
+import { inspectRunningContainers, qualifyDevResume, runDevResume } from './dev-resume.mjs'
 import {
   inspectSlicerSource,
   slicerComposeUpArgs,
@@ -52,6 +58,14 @@ import {
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const containerRuntime = process.argv.includes('--container-runtime')
 const teardown = process.argv.includes('--down')
+const resume = process.argv.includes('--resume')
+
+// Resume is a host attachment, never a request to run the container's startup
+// repairs. Refuse conflicting modes before config inheritance or any bootstrap.
+if (resume && (containerRuntime || teardown)) {
+  console.error('\n[dev] --resume cannot be combined with --container-runtime or --down\n')
+  process.exit(1)
+}
 
 // A linked worktree does not receive ignored files from Git. Devkit inherits the explicitly-listed
 // local config from the primary checkout before this runner tries to read it, without replacing a
@@ -72,12 +86,40 @@ if (existsSync(path.join(repoRoot, '.env'))) process.loadEnvFile(path.join(repoR
 let hostMode = null
 if (!containerRuntime) {
   try {
+    // Admission precedes preflight: a duplicate must not overwrite the live proxy lease or run
+    // npm ci against another runner's source-mounted dependencies. Resume intentionally skips
+    // all preflight repairs because the surviving services are already the authoritative runtime.
+    const config = devkitConfig()
+    const identity = config ? checkoutIdentity(repoRoot) : null
+    if (resume && (teardown || !identity)) throw new Error('--resume requires enabled host Devkit and cannot be combined with --down')
+    // A background launch's first process only hands off to its detached child, which does the
+    // admission below for real (see `devRunnerAdmissionRole`).
+    const admissionRole = devRunnerAdmissionRole()
+    if (identity && !teardown && admissionRole !== 'launcher') {
+      const project = await loadProjectConfig(repoRoot)
+      const ports = checkoutPorts(identity, project.ports)
+      const preview = {
+        config, identity, project, ports,
+        url: `http://${identity.hostname}${config.proxyPort === 80 ? '' : `:${config.proxyPort}`}`
+      }
+      const lease = acquireDevRunnerLease({ configDir: config.configDir, slug: identity.slug })
+      process.once('exit', lease.release)
+      // The background child's parent is the launcher waiting for it to report ready.
+      assertNoCheckoutHostProcesses(repoRoot, admissionRole === 'background-child' ? { ignorePids: [process.ppid] } : undefined)
+      if (resume) {
+        const qualified = qualifyDevResume(preview, inspectRunningContainers(), {
+          repoRoot,
+          remoteSlicer: (process.env.PRINTSTREAM_DEV_SLICER || '').toLowerCase() === 'remote'
+        })
+        process.exit(await runDevResume(preview, qualified, { repoRoot }))
+      }
+      await assertHostDevPortsAvailable(preview)
+    }
     hostMode = await preflight({ repoRoot, teardown })
     if (!hostMode) {
       console.error('\n[dev] Devkit is not enabled; run `npm run dev:bootstrap` once on this host.\n')
       process.exit(1)
     }
-    if (!teardown) await assertHostDevPortsAvailable(hostMode)
   } catch (error) {
     console.error(`\n[dev] ${error.message}\n`)
     process.exit(1)

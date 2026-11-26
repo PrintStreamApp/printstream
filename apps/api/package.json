@@ -1,6 +1,6 @@
 {
   "name": "@printstream/api",
-  "version": "1.3.22",
+  "version": "1.3.23",
   "private": true,
   "type": "module",
   "exports": {
@@ -11,7 +11,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "predev": "npm run build --workspace @printstream/shared",
-    "dev": "NODE_OPTIONS=\"--require ../../scripts/dev/exit-with-parent.cjs\" node ../../scripts/dev/run-service-dev.mjs --name=api --entry=src/server.ts --watch=src --watch=../../packages/shared/dist --watch=../../packages/bridge-runtime/dist",
+    "dev": "NODE_OPTIONS=\"--require ../../scripts/dev/exit-with-parent.cjs\" node ../../scripts/dev/run-service-dev.mjs --name=api --entry=src/server.ts --watch=src --watch=.env --watch=../../packages/shared/dist --watch=../../packages/bridge-runtime/dist",
     "prisma:db:push": "prisma db push",
     "prisma:migrate:dev": "prisma migrate dev",
     "prisma:generate": "prisma generate",
@@ -26,9 +26,9 @@
     "@opentelemetry/resources": "^2.8.0",
     "@opentelemetry/sdk-metrics": "^2.8.0",
     "@opentelemetry/semantic-conventions": "^1.41.1",
-    "@printstream/bridge-runtime": "1.3.22",
-    "@printstream/sea-runtime": "1.3.22",
-    "@printstream/shared": "1.3.22",
+    "@printstream/bridge-runtime": "1.3.23",
+    "@printstream/sea-runtime": "1.3.23",
+    "@printstream/shared": "1.3.23",
     "@prisma/client": "^6.5.0",
     "@simplewebauthn/server": "^13.3.0",
     "@types/yauzl": "^2.10.3",

@@ -5,6 +5,8 @@
  * shell retains it after authentication until the user acts on the matching released client offer.
  * Native wrappers never qualify.
  */
+import { readStoredValue, removeStoredValue, writeStoredValue } from './browserStorageKeys'
+import { nativeAppPromotionAfterSignInKey, nativeAppPromotionDevResetKey, nativeAppPromotionDismissedKeys } from './storageKeys'
 
 export type NativeAppPromotionPlatform = 'android' | 'windows'
 
@@ -20,9 +22,6 @@ export interface NativeAppPlatformHints {
   uaDataPlatform?: string
 }
 
-const PROMPT_AFTER_SIGN_IN_KEY = 'printstream.nativeAppPromotion.afterSignIn.v1'
-const DISMISSED_KEY_PREFIX = 'printstream.nativeAppPromotion.dismissed.v1.'
-const DEVELOPMENT_RESET_KEY = 'printstream.nativeAppPromotion.devReset.v1'
 
 const PLATFORM_CONFIG: Record<NativeAppPromotionPlatform, NativeAppPromotion> = {
   android: {
@@ -39,29 +38,18 @@ const PLATFORM_CONFIG: Record<NativeAppPromotionPlatform, NativeAppPromotion> = 
 
 /** Remember that this tab displayed sign-in, including across an OAuth redirect. */
 export function flagNativeAppPromotionAfterSignIn(): void {
-  try {
-    window.sessionStorage.setItem(PROMPT_AFTER_SIGN_IN_KEY, '1')
-  } catch {
-    // Storage-denied browsers skip optional promotion UI.
-  }
+  // Best-effort: storage-denied browsers skip optional promotion UI.
+  writeStoredValue(nativeAppPromotionAfterSignInKey, '1')
 }
 
 /** Check whether sign-in requested an app offer without consuming it before the user acts. */
 export function hasNativeAppPromotionAfterSignInFlag(): boolean {
-  try {
-    return window.sessionStorage.getItem(PROMPT_AFTER_SIGN_IN_KEY) === '1'
-  } catch {
-    return false
-  }
+  return readStoredValue(nativeAppPromotionAfterSignInKey) === '1'
 }
 
 /** Clear the post-sign-in request after the offer is dismissed or followed. */
 export function clearNativeAppPromotionAfterSignInFlag(): void {
-  try {
-    window.sessionStorage.removeItem(PROMPT_AFTER_SIGN_IN_KEY)
-  } catch {
-    // Storage-denied browsers have no retained signal to clear.
-  }
+  removeStoredValue(nativeAppPromotionAfterSignInKey)
 }
 
 /** Resolve a released native client from low-entropy browser platform hints. */
@@ -84,34 +72,24 @@ export function detectNativeAppPromotion(navigatorLike: Navigator = navigator): 
 }
 
 export function isNativeAppPromotionDismissed(platform: NativeAppPromotionPlatform): boolean {
-  try {
-    return window.localStorage.getItem(`${DISMISSED_KEY_PREFIX}${platform}`) != null
-  } catch {
-    return false
-  }
+  return readStoredValue(nativeAppPromotionDismissedKeys.at(platform)) != null
 }
 
 /** Clear a stale dismissal once per dev tab without weakening real user dismissals. */
 export function resetNativeAppPromotionDismissalForDevelopment(
   platform: NativeAppPromotionPlatform
 ): void {
-  try {
-    if (window.sessionStorage.getItem(DEVELOPMENT_RESET_KEY) === '1') return
+  // Storage-denied browsers have no durable dismissal to reset; the helpers are best-effort.
+  if (readStoredValue(nativeAppPromotionDevResetKey) === '1') return
 
-    window.localStorage.removeItem(`${DISMISSED_KEY_PREFIX}${platform}`)
-    window.sessionStorage.setItem(DEVELOPMENT_RESET_KEY, '1')
-  } catch {
-    // Storage-denied browsers have no durable dismissal to reset.
-  }
+  removeStoredValue(nativeAppPromotionDismissedKeys.at(platform))
+  writeStoredValue(nativeAppPromotionDevResetKey, '1')
 }
 
 /** Suppress this platform's offer on this browser after either dialog action. */
 export function dismissNativeAppPromotion(platform: NativeAppPromotionPlatform): void {
-  try {
-    window.localStorage.setItem(`${DISMISSED_KEY_PREFIX}${platform}`, new Date().toISOString())
-  } catch {
-    // Without durable storage the offer may return on a later sign-in.
-  }
+  // Best-effort: without durable storage the offer may return on a later sign-in.
+  writeStoredValue(nativeAppPromotionDismissedKeys.at(platform), new Date().toISOString())
 }
 
 function detectNativeAppPromotionPlatform(

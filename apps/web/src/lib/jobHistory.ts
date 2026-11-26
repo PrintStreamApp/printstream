@@ -12,3 +12,18 @@ export function formatJobDispatchDetails(job: PrintJob): string {
   if (!job.fileId) parts.push('Stored file no longer available')
   return parts.join(' - ')
 }
+
+/** A connection outage must not hide durable jobs or fault history that can still be read. */
+export function shouldShowJobsConnectionPlaceholder(input: {
+  hasNoConnectedBridges: boolean
+  historyLoaded: boolean
+  jobsLoaded: boolean
+  historyCount: number
+  inProgressCount: number
+}): boolean {
+  return input.hasNoConnectedBridges
+    && input.historyLoaded
+    && input.jobsLoaded
+    && input.historyCount === 0
+    && input.inProgressCount === 0
+}

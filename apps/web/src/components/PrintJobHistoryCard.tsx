@@ -1,3 +1,4 @@
+import { PrinterFaultDetails } from './PrinterFaultDetails'
 import { Box, Card, CardContent, Chip, Stack, Tooltip, Typography, type ColorPaletteProp } from '@mui/joy'
 import type { ReactNode } from 'react'
 import type { PrintJob } from '@printstream/shared'
@@ -16,9 +17,11 @@ export function PrintJobHistoryCard({
   action,
   showPrinterLink = true,
   mediaSize = 'default',
+  canDeleteFaults = false,
   cardVariant = 'outlined'
 }: {
   job: PrintJob
+  canDeleteFaults?: boolean
   action?: ReactNode
   showPrinterLink?: boolean
   mediaSize?: 'default' | 'compact'
@@ -72,6 +75,7 @@ export function PrintJobHistoryCard({
             <Box sx={{ display: { xs: 'flex', sm: 'none' }, maxWidth: '100%' }}>
               <JobHistoryMedia job={job} size={mediaSize} />
             </Box>
+            <PrinterFaultDetails faults={job.faults ?? []} canDelete={canDeleteFaults} />
             {job.activity.length > 0 ? (
               <Stack spacing={0.5} sx={{ pt: 0.25, minWidth: 0 }}>
                 {job.activity.slice(0, 3).map((entry) => (

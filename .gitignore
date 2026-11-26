@@ -1,15 +1,16 @@
-tmp/
+# Part 1: stack template (Node/TypeScript web monorepo, plus the Python Home Assistant integration).
 node_modules/
 dist/
 .vite/
+*.tsbuildinfo
+*.log
 __pycache__/
 *.pyc
-*.log
-.env
-.env.local
-.env.*.local
-.secrets/
-.backups/
+
+# Part 2: project rules, each with the reason it exists.
+
+# Runtime data written by the dev stack and local runs. Only the demo library files the app serves
+# stay tracked (one of them is 6.3 MB).
 /data/*
 !/data/demo-library/
 /data/demo-library/*
@@ -17,16 +18,8 @@ __pycache__/
 !/data/demo-library/Card Holder (3 rows).gcode.3mf
 !/data/demo-library/Number Plates.gcode.3mf
 !/data/demo-library/Tire Rotation Markers.gcode.3mf
-# Ad-hoc 3MF fixtures dropped in the repo root while investigating a file (multi-megabyte,
-# user-specific). Real fixtures live beside their tests or under /data/demo-library.
-/*.3mf
 apps/api/data/
 apps/api/prisma/data/
-# Transient BambuStudio CLI output written to CWD when the slicer (or a manual CLI probe)
-# runs in-workspace. Slice output itself goes to SLICER_WORK_DIR (/tmp); this stray file
-# lands wherever the CLI was launched from (the slicer workspace or the repo root).
-apps/slicer/result.json
-/result.json
 apps/bridge/data/
 apps/bridge/apps/bridge/data/
 # Bridge/demo runtime state written relative to CWD when a process is launched from `apps/`
@@ -35,23 +28,49 @@ apps/bridge/apps/bridge/data/
 # the stray directory deleted, but this stays: the two entries above are the same class of bug from
 # other paths, and the cost of being wrong here is committing a live credential.
 apps/data/
-apps/bridge/release/
+
+# Ad-hoc 3MF fixtures dropped in the repo root while investigating a file (multi-megabyte,
+# user-specific). Real fixtures live beside their tests or under /data/demo-library.
+/*.3mf
+
+# Transient BambuStudio CLI output written to CWD when the slicer (or a manual CLI probe)
+# runs in-workspace. Slice output itself goes to SLICER_WORK_DIR (/tmp); this stray file
+# lands wherever the CLI was launched from (the slicer workspace or the repo root).
+apps/slicer/result.json
+/result.json
+
+# SEA download caches for the bridge and the native server. Their build output now goes to the
+# shared /.artifacts/ (below); the two release/ folders are where older checkouts wrote it and
+# can be deleted.
 apps/bridge/.cache/
-apps/server/release/
 apps/server/.cache/
+apps/bridge/release/
+apps/server/release/
+
 # Capacitor's platform trees are generated from the maintained mobile overlays.
-# Firebase config and release signing material are injected locally/through CI.
+# Firebase config is injected locally or through CI (release signing material is covered below).
 apps/mobile/android/
 apps/mobile/ios/
-apps/mobile/release.keystore
 google-services.json
+
+# Windows client build output and generated packaging images (signing material is covered below).
+# Electron packages now go to /.artifacts/; the artifacts/ folder is where older checkouts wrote them.
+apps/desktop/**/bin/
+apps/desktop/**/obj/
+apps/desktop/artifacts/
+apps/desktop/PrintStream.Desktop/app.ico
+apps/desktop/PrintStream.Desktop/Images/
+
+# A developer's local scratch notes on work in progress, never shared.
 docs/current-work-status.md
+
+# Local SQLite files from tools and experiments; the app's database is PostgreSQL.
 *.db
 *.db-journal
 *.db-wal
 *.db-shm
-.DS_Store
-# Deployment-local copies live at the repo root; the nested
+
+# Deployment-local copies of the tracked *.example files, made at the repo root on a server.
 /compose.yml
 /nginx.conf
 
@@ -64,18 +83,31 @@ docs/current-work-status.md
 # `git add -A`: the original is already ignored, but the copy was not.
 *.bak
 
-# TypeScript incremental build info (per-package, kept out of git/CI)
-*.tsbuildinfo
-
 # ESLint results cache (`npm run lint`). Developer-local and machine-specific: it keys results
 # on a content hash per file, so sharing it across machines or branches buys nothing and risks
 # masking a real finding. CI always runs it cold.
 .eslintcache
 
-# Windows client build outputs and local signing material.
-apps/desktop/**/bin/
-apps/desktop/**/obj/
-apps/desktop/artifacts/
-apps/desktop/PrintStream.Desktop/app.ico
-apps/desktop/PrintStream.Desktop/Images/
-apps/desktop/**/*.pfx
+# Part 3: the shared block, last.
+# Shared block (HYG-6), from winui-app-kit build/shared.gitignore. Paste it unchanged as the last part
+# of every repo's .gitignore, so no earlier line can un-ignore what it covers. Change it in the kit.
+/.artifacts/
+/.windows-build/
+/.worktrees/
+.secrets/
+.aws/
+.env
+.env.*
+!.env*.example
+tmp/
+.backups/
+*.pfx
+*.cer
+*.der
+*.keystore
+*.jks
+local.properties
+.vs/
+.idea/
+.DS_Store
+Thumbs.db

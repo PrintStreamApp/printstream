@@ -24,6 +24,7 @@ import {
   type SlicingPresetKind,
   type UploadedProfileEntry
 } from '@printstream/shared'
+import { localSlicingProfilesKey } from '../storageKeys'
 
 /** One preset held in the browser, before it is matched against a catalogue. */
 export interface LocalSlicingPreset {
@@ -38,12 +39,15 @@ export interface LocalSlicingPreset {
 export class LocalSlicingPresetError extends Error {}
 
 /**
+ * The declared key (`localSlicingProfilesKey`), read and written directly (storage-direct-ok):
+ * unlike a preference, a failed write here must reach the user, which the registry's best-effort
+ * helpers would hide.
+ *
  * Keeps the legacy `…Profiles` spelling on purpose. Everything else in this area was renamed
- * profile -> preset, but this key names data already sitting in users' browsers: renaming it
- * would silently orphan every preset they have uploaded to the public editor. Reserved, not
- * missed: migrate it only with a read-old/write-new pass.
+ * profile -> preset, but this key names data already sitting in users' browsers: renaming it would
+ * need a read-old/write-new pass for no gain, since the name already fits D-105.
  */
-const STORAGE_KEY = 'printstream.modelStudio.localSlicingProfiles'
+const STORAGE_KEY = localSlicingProfilesKey.key
 
 /** Read every stored preset. A corrupt store yields nothing rather than breaking the settings page. */
 export function listLocalSlicingPresets(): LocalSlicingPreset[] {

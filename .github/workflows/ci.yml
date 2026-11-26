@@ -5,14 +5,27 @@ name: CI
 # workflows so a broken Android runner cannot make unrelated release evidence
 # look red. Push-to-main coverage matters for the public repo, which receives
 # snapshot exports as direct pushes to main rather than PRs.
+#
+# Also a reusable gate (CI-4): every publishing workflow calls this as its first job
+# (`uses: ./.github/workflows/ci.yml`) and its publish jobs need it, so nothing ships
+# from a tree this has not passed. `staging` is covered because staging images and
+# packages are built from it.
 on:
   push:
-    branches: [main]
+    branches: [main, staging]
   pull_request:
     branches: [main]
+  workflow_call:
 
+# Least privilege by default (CI-5): jobs that need more widen it at job level.
+permissions:
+  contents: read
+
+# The workflow name is part of the group because, when another workflow calls this one as
+# its gate, `github.workflow` is the caller's: without it the caller's gate and this
+# workflow's own push run would share a group on the same ref and cancel each other.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -41,10 +54,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Set up Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -55,8 +68,18 @@ jobs:
       - name: Generate Prisma client and apply migrations
         run: |
           npm run db:generate
-          node scripts/dev/wait-for-db.mjs
+          npx devkit-wait-for-db
           node scripts/bootstrap-prisma-migrations.mjs
+
+      # validate's Store hero check draws text with devkit's pinned fonts (about 27 MB),
+      # which it would otherwise download on every run. The key follows the lockfile,
+      # so a devkit update that changes the pins starts a fresh cache.
+      - name: Cache devkit fonts
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/devkit/fonts
+          key: devkit-fonts-${{ hashFiles('package-lock.json') }}
+          restore-keys: devkit-fonts-
 
       # Tests resolve workspace packages through their built dist entry points.
       - name: Build and validate
@@ -75,8 +98,8 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
 

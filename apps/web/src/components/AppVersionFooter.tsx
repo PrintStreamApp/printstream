@@ -1,5 +1,5 @@
 import { useState, useSyncExternalStore } from 'react'
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { useMutation } from '@tanstack/react-query'
 import SystemUpdateAltRoundedIcon from '@mui/icons-material/SystemUpdateAltRounded'
 import { Chip, Stack, Tooltip } from '@mui/joy'
 import { extractErrorMessage, type AppUpdateStartResponse, type AppVersionResponse } from '@printstream/shared'
@@ -10,15 +10,14 @@ import { waitForNewBuild } from '../lib/appUpdateRestart'
 import { getUnreadCompanionReleases } from '../lib/companionChangelog'
 import { getUnreadProductReleases } from '../lib/productChangelog'
 import { useLocalStorageState } from '../hooks/useLocalStorageState'
-import { isNativeApp, nativeAppBuild } from '../native/bridge'
+import { useInstalledAppBuild, useServerAppVersion } from '../hooks/useAppVersionQueries'
 import { CompanionChangelogDialog } from './CompanionChangelogDialog'
 import { ConfirmActionDialog } from './ConfirmActionDialog'
 import { ProductChangelogDialog } from './ProductChangelogDialog'
 import { FooterAnnouncements } from './FooterAnnouncements'
 import { FooterUnreadButton, FooterUnreadCount } from './FooterUnreadButton'
+import { companionChangelogLastReadKey, productChangelogLastReadKey } from '../lib/storageKeys'
 
-const LAST_READ_RELEASE_KEY = 'printstream.productChangelog.lastReadVersion'
-const LAST_READ_COMPANION_RELEASE_KEY = 'printstream.companionChangelog.lastReadVersion'
 const parseStoredVersion = (raw: string): string | null => raw.trim() || null
 const serializeStoredVersion = (value: string | null): string => value ?? ''
 
@@ -51,20 +50,8 @@ interface AppVersionFooterProps {
  * still a chip and not a warning: the build they own keeps running.
  */
 export function AppVersionFooter({ deployment }: AppVersionFooterProps) {
-  const { data } = useQuery({
-    queryKey: ['app', 'version'],
-    queryFn: ({ signal }) => apiFetch<AppVersionResponse>('/api/app/version', { signal }),
-    retry: false,
-    staleTime: 10 * 60_000,
-    refetchOnWindowFocus: false
-  })
-  const { data: installedApp } = useQuery({
-    queryKey: ['native-app', 'build'],
-    queryFn: readNativeAppBuildForFooter,
-    enabled: isNativeApp(),
-    retry: false,
-    staleTime: Infinity
-  })
+  const { data } = useServerAppVersion()
+  const { data: installedApp } = useInstalledAppBuild()
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [changelogOpen, setChangelogOpen] = useState(false)
   const [companionChangelogOpen, setCompanionChangelogOpen] = useState(false)
@@ -97,14 +84,14 @@ export function AppVersionFooter({ deployment }: AppVersionFooterProps) {
 
   const displayedBuild = resolveDisplayedAppBuild(data)
   const [lastReadRelease, setLastReadRelease] = useLocalStorageState<string | null>(
-    LAST_READ_RELEASE_KEY,
+    productChangelogLastReadKey,
     null,
     parseStoredVersion,
     serializeStoredVersion
   )
   const releaseUnreadCount = getUnreadProductReleases(displayedBuild.version, lastReadRelease).length
   const [lastReadCompanionRelease, setLastReadCompanionRelease] = useLocalStorageState<string | null>(
-    LAST_READ_COMPANION_RELEASE_KEY,
+    companionChangelogLastReadKey,
     null,
     parseStoredVersion,
     serializeStoredVersion
@@ -233,14 +220,6 @@ export function AppVersionFooter({ deployment }: AppVersionFooterProps) {
 }
 
 /** Older native hosts lack version discovery; an absent footer label is the compatible fallback. */
-async function readNativeAppBuildForFooter() {
-  try {
-    return await nativeAppBuild()
-  } catch {
-    // This optional identity must not turn an otherwise supported older app into an operational error.
-    return null
-  }
-}
 
 function describePendingUiReload(uiVersion: string, serverVersion: string | null): string {
   const versionDifference = serverVersion && serverVersion !== uiVersion

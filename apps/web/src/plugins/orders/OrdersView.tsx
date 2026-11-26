@@ -71,19 +71,10 @@ import {
   TemplateDialog
 } from './components/OrderDialogs'
 import { ORDERS_LIST_QUERY_KEY, useOrderPrintCompletionSync } from './useOrderPrintCompletionSync'
+import { activeOrdersPageSizeKey, activeOrdersSortDirKey, activeOrdersSortKey, completedOrdersPageSizeKey, completedOrdersSortDirKey, completedOrdersSortKey, orderTemplatesPageSizeKey } from './storageKeys'
 
 type SliceFlowSubmitInput = Parameters<ComponentProps<typeof SliceFileModal>['onSubmit']>[0]
 type SliceFlowSubmitAction = Parameters<ComponentProps<typeof SliceFileModal>['onSubmit']>[1]
-
-// localStorage keys for the orders directory controls (sort + page size of each
-// list). Search text and the current page index stay ephemeral on purpose.
-const ACTIVE_SORT_KEY = 'printstream.orders.active.sort'
-const ACTIVE_SORT_DIR_KEY = 'printstream.orders.active.sortDir'
-const ACTIVE_PAGE_SIZE_KEY = 'printstream.orders.active.pageSize'
-const COMPLETED_SORT_KEY = 'printstream.orders.completed.sort'
-const COMPLETED_SORT_DIR_KEY = 'printstream.orders.completed.sortDir'
-const COMPLETED_PAGE_SIZE_KEY = 'printstream.orders.completed.pageSize'
-const TEMPLATES_PAGE_SIZE_KEY = 'printstream.orders.templates.pageSize'
 
 const ORDER_SORT_VALUES = new Set<string>(ORDER_SORT_OPTIONS.map((option) => option.value))
 
@@ -127,13 +118,13 @@ export function OrdersView() {
   const [templateSearch, setTemplateSearch] = useState('')
   const [activeOrderSearch, setActiveOrderSearch] = useState('')
   const [completedOrderSearch, setCompletedOrderSearch] = useState('')
-  const [activeOrderSortValue, setActiveOrderSortValue] = usePersistentState<OrderSortValue>(ACTIVE_SORT_KEY, 'updated', sanitizeOrderSort)
-  const [activeOrderSortDirection, setActiveOrderSortDirection] = usePersistentState<DirectorySortDirection>(ACTIVE_SORT_DIR_KEY, 'desc', sanitizeSortDirection)
-  const [completedOrderSortValue, setCompletedOrderSortValue] = usePersistentState<OrderSortValue>(COMPLETED_SORT_KEY, 'updated', sanitizeOrderSort)
-  const [completedOrderSortDirection, setCompletedOrderSortDirection] = usePersistentState<DirectorySortDirection>(COMPLETED_SORT_DIR_KEY, 'desc', sanitizeSortDirection)
-  const [templatesPageSize, setTemplatesPageSize] = usePersistentState<number>(TEMPLATES_PAGE_SIZE_KEY, LIST_PAGE_SIZE_OPTIONS[0], sanitizeTemplatesPageSize)
-  const [activeOrdersPageSize, setActiveOrdersPageSize] = usePersistentState<number>(ACTIVE_PAGE_SIZE_KEY, 10, sanitizePageSize)
-  const [completedOrdersPageSize, setCompletedOrdersPageSize] = usePersistentState<number>(COMPLETED_PAGE_SIZE_KEY, 10, sanitizePageSize)
+  const [activeOrderSortValue, setActiveOrderSortValue] = usePersistentState<OrderSortValue>(activeOrdersSortKey, 'updated', sanitizeOrderSort)
+  const [activeOrderSortDirection, setActiveOrderSortDirection] = usePersistentState<DirectorySortDirection>(activeOrdersSortDirKey, 'desc', sanitizeSortDirection)
+  const [completedOrderSortValue, setCompletedOrderSortValue] = usePersistentState<OrderSortValue>(completedOrdersSortKey, 'updated', sanitizeOrderSort)
+  const [completedOrderSortDirection, setCompletedOrderSortDirection] = usePersistentState<DirectorySortDirection>(completedOrdersSortDirKey, 'desc', sanitizeSortDirection)
+  const [templatesPageSize, setTemplatesPageSize] = usePersistentState<number>(orderTemplatesPageSizeKey, LIST_PAGE_SIZE_OPTIONS[0], sanitizeTemplatesPageSize)
+  const [activeOrdersPageSize, setActiveOrdersPageSize] = usePersistentState<number>(activeOrdersPageSizeKey, 10, sanitizePageSize)
+  const [completedOrdersPageSize, setCompletedOrdersPageSize] = usePersistentState<number>(completedOrdersPageSizeKey, 10, sanitizePageSize)
   const [templatesPage, setTemplatesPage] = useState(0)
   const [activeOrdersPage, setActiveOrdersPage] = useState(0)
   const [completedOrdersPage, setCompletedOrdersPage] = useState(0)

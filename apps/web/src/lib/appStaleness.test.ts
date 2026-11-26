@@ -10,6 +10,7 @@ import assert from 'node:assert/strict'
 import { after, before, beforeEach, test } from 'node:test'
 import type { JSDOM } from 'jsdom'
 import { installJsdomGlobals } from '../test-utils/jsdom'
+import { staleReloadTargetKey } from './storageKeys'
 
 type StalenessModule = typeof import('./appStaleness')
 type BusyModule = typeof import('./appBusy')
@@ -199,14 +200,14 @@ test('does not auto-reload a second time toward a build that never arrived', asy
   // The loop guard. A reload that lands on the new build clears this record; one that
   // comes back still stale leaves it, and the second detection must stop rather than
   // spin the tab (and, in production, every tab at once).
-  window.sessionStorage.setItem('printstream:stale-reload-target', 'build-new')
+  window.sessionStorage.setItem(staleReloadTargetKey.key, 'build-new')
   staleness.observeServedWebBuildId('build-new')
   await settleProbe()
   assert.equal(reloads, 0)
 })
 
 test('a stale record for a different build does not block a fresh update', async () => {
-  window.sessionStorage.setItem('printstream:stale-reload-target', 'build-abandoned')
+  window.sessionStorage.setItem(staleReloadTargetKey.key, 'build-abandoned')
   staleness.observeServedWebBuildId('build-new')
   await settleProbe()
   assert.equal(reloads, 1)
@@ -215,7 +216,7 @@ test('a stale record for a different build does not block a fresh update', async
 test('records the build it is reloading toward, so the next load can tell if it landed', async () => {
   staleness.observeServedWebBuildId('build-new')
   await settleProbe()
-  assert.equal(window.sessionStorage.getItem('printstream:stale-reload-target'), 'build-new')
+  assert.equal(window.sessionStorage.getItem(staleReloadTargetKey.key), 'build-new')
 })
 
 test('a rollback to the running build cancels the pending update', async () => {
@@ -259,7 +260,7 @@ test('dismissing the manual notice does not permanently silence it', async () =>
   // The manual-only branch arms no idle watcher, so the toast is the only remaining
   // signal. If its id outlived the toast, `showUpdateNotice` would early-return forever
   // and the user would be stranded on a stale build with nothing on screen.
-  window.sessionStorage.setItem('printstream:stale-reload-target', 'build-new')
+  window.sessionStorage.setItem(staleReloadTargetKey.key, 'build-new')
   staleness.observeServedWebBuildId('build-new')
   await settleProbe()
 
@@ -314,7 +315,7 @@ test('worker activation refreshes a confirmed stale page only once', async () =>
   await staleness.checkForServedWebUpdate()
   await settleProbe()
   assert.equal(reloads, 1)
-  assert.equal(window.sessionStorage.getItem('printstream:stale-reload-target'), 'build-new')
+  assert.equal(window.sessionStorage.getItem(staleReloadTargetKey.key), 'build-new')
 })
 
 test('worker activation protects work and reloads after it finishes', async () => {

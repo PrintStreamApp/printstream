@@ -188,6 +188,21 @@ than its name. Reading the name alone is not enough: `compatible_printers` is no
 nozzle, so a 0.4 to 0.6 switch on the same model passed every name rule and still failed the slice.
 A parent that is not installed falls back to the name rules, because unknown is not a mismatch.
 
+The containment rule is the one the slicing CLI enforces (`BambuStudio.cpp:2330-2336`, `:2924-2944`):
+a process fits when its `compatible_printers` is empty or names the machine's SYSTEM identity, which
+is the machine preset's own name for a system preset and its DIRECT parent (`inherits`) for a custom
+one. A user's custom "P1P 0.4 nozzle" therefore accepts stock P1P process presets, because it cannot
+change its model or nozzle; a system machine is never accepted through a parent, and grandparents
+are not checked. Studio's GUI (`is_compatible_with_printer`, `Preset.cpp:778-810`) additionally
+accepts a process naming the custom preset itself, but the CLI never tests that name, so such a pick
+would pass the picker and be refused at slice time (exit 239); we follow the CLI. A custom machine
+with no recorded parent falls back to its own name. For a printer that exists only inside the
+project, the parent comes from the 3MF index's `printerProfileInherits` (the machine slot of `inherits_group`,
+located by filament count like every other slot read; the last entry on a correctly sized record); an index from before parser v44 has no field and the printer
+is judged by its own name, as before. The
+picker (`declaredCompatiblePrintersAccept`) and the save (`processPresetFitsMachine`) share one
+implementation, `declaredPrintersAcceptMachine`, and both receive the parent only for a custom machine (the save takes it from the machine it authored, not from the project's `inherits_group`, which is not always writable).
+
 So the picker drops such a preset on a machine switch and re-picks a compatible one, which makes the
 save choose a process and the retarget fallback never fire. Existing files stay as they are until
 they are re-saved; nothing heals at rest.

@@ -1,11 +1,9 @@
-# Match game-is-up: keep build context small and reproducible.
-# Never copy real env files into the build context (they hold secrets, and the
-# build is env-independent; db:generate uses a placeholder). Keep the templates.
-.env
-.env.*
-!.env*.example
+# Match game-is-up: keep build context small and reproducible. Secrets are excluded by the
+# block at the end of this file.
 node_modules
 **/node_modules
+# Nested task worktrees (user-level rule: .worktrees/<name>/) are separate checkouts.
+.worktrees
 **/dist
 # The incremental state must go wherever dist goes. Excluding the OUTPUT while shipping tsc's record
 # that it was already produced makes the in-image build a silent no-op: `tsc` reads .tsbuildinfo,
@@ -18,7 +16,6 @@ node_modules
 **/.cache
 .git
 .github
-.husky
 .vscode
 **/coverage
 data
@@ -30,9 +27,26 @@ data
 !data/demo-captures/**
 apps/api/data
 apps/bridge/release
+.artifacts
 !apps/web/src/data
 !apps/web/src/data/**
 apps/web/public/README.md
 deploy
 *.log
 tmp
+
+# Secrets, at every depth (SEC-7), last so no exception above can re-include one. Docker matches a
+# bare `.env` only at the context root, so a nested env file, dev certificate or key would otherwise
+# be copied into the image. Env templates stay (db:generate uses a placeholder, not a real .env).
+**/.env
+**/.env.*
+!.env*.example
+**/.secrets
+**/.aws
+**/*.pfx
+**/*.cer
+**/*.der
+**/*.keystore
+**/*.jks
+.windows-build
+.backups

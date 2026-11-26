@@ -38,14 +38,11 @@ import { REMOTE_IMPORT_THUMBNAIL_CSP_SOURCES } from '@printstream/shared'
 // (which never load Paddle.js), it only widens what the cloud checkout needs.
 const PADDLE = 'https://*.paddle.com'
 
-// Cloudflare Web Analytics. When a deployment is proxied by Cloudflare with
-// Web Analytics enabled, the edge injects its RUM beacon into served HTML:
-// a script from `static.cloudflareinsights.com` that POSTs measurements to
-// `cloudflareinsights.com` (newer beacons use same-origin `/cdn-cgi/rum`,
-// which `'self'` already covers). The app never references these hosts, so
-// the allowance is inert unless that edge feature is actually on.
-const CLOUDFLARE_INSIGHTS_SCRIPT = 'https://static.cloudflareinsights.com'
-const CLOUDFLARE_INSIGHTS_BEACON = 'https://cloudflareinsights.com'
+// Cloudflare Web Analytics is deliberately NOT allowed. Its edge-injected RUM beacon
+// (`static.cloudflareinsights.com`, posting to `cloudflareinsights.com`) is third-party
+// measurement the product does not disclose (LOG-9), and it is switched off for
+// printstream.app. Leaving it out means that if the edge feature is ever switched back on,
+// the beacon is blocked or reported here instead of running silently.
 const PRINTSTREAM_CLOUD = 'https://printstream.app'
 
 // Model-provider cover images shown by the remote-imports plugin's import page.
@@ -66,8 +63,8 @@ const CSP_DIRECTIVES: Record<string, string[]> = {
   'media-src': ["'self'", 'data:', 'blob:'],
   'font-src': ["'self'", 'data:'],
   'style-src': ["'self'", "'unsafe-inline'", PADDLE],
-  'script-src': ["'self'", "'unsafe-inline'", PADDLE, CLOUDFLARE_INSIGHTS_SCRIPT],
-  'connect-src': ["'self'", PADDLE, CLOUDFLARE_INSIGHTS_BEACON, PRINTSTREAM_CLOUD],
+  'script-src': ["'self'", "'unsafe-inline'", PADDLE],
+  'connect-src': ["'self'", PADDLE, PRINTSTREAM_CLOUD],
   'frame-src': ["'self'", PADDLE],
   'worker-src': ["'self'", 'blob:']
 }

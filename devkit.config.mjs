@@ -4,7 +4,7 @@
  *
  * Everything else (how this checkout is named, which database it gets, how it is proxied, how a new
  * worktree is seeded) lives in the shared package and is identical for every project on the
- * machine. See https://github.com/RyanEwen/devkit.
+ * machine. See https://github.com/Dynamic-Solutions-Canada/devkit#readme.
  *
  * Counterpart: `scripts/dev/run-dev.mjs`, the only caller of `preflight()`.
  */

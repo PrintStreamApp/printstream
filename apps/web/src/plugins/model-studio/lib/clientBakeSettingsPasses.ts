@@ -73,9 +73,10 @@ export async function applyBakeSettingsPasses(
   }
   // Read before the retarget re-indexes them: carried process overrides describe these columns.
   const sourceProcessLayout = readProcessLayoutFromEntries(output)
-  const retargeted = passes.machineRetarget
+  const retargetPlan = passes.machineRetarget
     ? await applyMachineRetargetToEntries(output, passes.machineRetarget)
-    : false
+    : null
+  const retargeted = retargetPlan !== null
   if (!retargeted && passes.machineTopologyHeal) {
     await healMachineTopologyInEntries(output, edit, passes.machineTopologyHeal)
   }
@@ -83,7 +84,7 @@ export async function applyBakeSettingsPasses(
   if (passes.processSettings) {
     const entry = output[THREE_MF_PROJECT_SETTINGS_ENTRY]
     const settings = entry?.length ? JSON.parse(new TextDecoder().decode(entry)) as ProfileRecord : {}
-    output[THREE_MF_PROJECT_SETTINGS_ENTRY] = new TextEncoder().encode(JSON.stringify(await passes.processSettings(settings, { machineRetargeted: retargeted, sourceProcessLayout })))
+    output[THREE_MF_PROJECT_SETTINGS_ENTRY] = new TextEncoder().encode(JSON.stringify(await passes.processSettings(settings, { machineRetargeted: retargeted, sourceProcessLayout, machineParentName: retargetPlan?.printerPresetInherits })))
   }
   if (passes.machineSettingOverrides) {
     await applyMachineOverridesToEntries(output, passes.machineSettingOverrides)
@@ -95,6 +96,12 @@ export interface ProcessSettingsPassContext {
   machineRetargeted: boolean
   /** The project's process columns BEFORE any machine retarget: what carried overrides describe. */
   sourceProcessLayout?: ProcessVariantLayout | null
+  /**
+   * The custom machine's direct parent as this save authored it (null for a system machine), or
+   * undefined when no machine was authored. The project's own `inherits_group` machine slot cannot
+   * stand in for it: it is not written when the file has no `inherits_group` or a short one.
+   */
+  machineParentName?: string | null
 }
 
 /** The stored project's process column layout, or null when it has none or cannot be read. */
@@ -303,7 +310,8 @@ async function applyMachineOverridesToEntries(
 }
 
 /**
- * Rewrite the baked archive's settings entries for the target machine, in place.
+ * Rewrite the baked archive's settings entries for the target machine, in place. Returns the plan it
+ * applied (so later passes can read what it authored), or null when nothing was retargeted.
  *
  * A project with no `project_settings.config` (a from-scratch scaffold) is retargeted from an empty
  * object, exactly as the api does: the resolved machine supplies every field, the way BambuStudio
@@ -314,7 +322,7 @@ async function applyMachineOverridesToEntries(
 async function applyMachineRetargetToEntries(
   output: Record<string, Uint8Array>,
   resolvePlan: (projectSettings: ProfileRecord) => Promise<MachineRetargetPlan | null>
-): Promise<boolean> {
+): Promise<MachineRetargetPlan | null> {
   const decoder = new TextDecoder()
   const encoder = new TextEncoder()
   const existing = output[THREE_MF_PROJECT_SETTINGS_ENTRY]
@@ -326,11 +334,11 @@ async function applyMachineRetargetToEntries(
       // Abort the retarget rather than replacing settings we could not read: see the doc above.
       console.warn('[editor] project settings could not be parsed; saving without the machine retarget:',
         error instanceof Error ? error.message : error)
-      return false
+      return null
     }
   }
   const plan = await resolvePlan(projectSettings)
-  if (!plan) return false
+  if (!plan) return null
   const retargeted = applyMachineRetargetToProjectSettings(projectSettings, plan)
   output[THREE_MF_PROJECT_SETTINGS_ENTRY] = encoder.encode(JSON.stringify(retargeted))
   // The plates' half of a dual-nozzle Manual map goes with the project's half, which the retarget
@@ -343,5 +351,5 @@ async function applyMachineRetargetToEntries(
   if (sliceInfo && sliceInfo.length > 0) {
     output[THREE_MF_SLICE_INFO_ENTRY] = encoder.encode(stripSliceInfoPrinterModelId(decoder.decode(sliceInfo)))
   }
-  return true
+  return plan
 }

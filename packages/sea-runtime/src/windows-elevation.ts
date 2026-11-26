@@ -9,7 +9,7 @@
  * This is generic/public plumbing: the launch-tray-in-user-session helper is
  * parameterized by a scheduled-task name so each app keeps its own task.
  */
-import { spawn, spawnSync } from 'node:child_process'
+import { spawnSync } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -190,58 +190,8 @@ exit $script:result
   }
 }
 
-/**
- * Removes the install dir after this process exits. The dir holds the running
- * executable, locked by this uninstaller and any leftover tray process, so a
- * detached, hidden PowerShell waits, kills any remaining `<exeBaseName>`
- * processes to release the lock, then retries the delete. This is why uninstall
- * does not ask the operator to delete the program folder by hand.
- *
- * **Best-effort, but no longer silent.** Every step suppressed its errors, so a
- * failure left ~100 MB of executable in Program Files with nothing written
- * anywhere: found only by looking. It now retries for a minute rather than ten
- * seconds (an antivirus scan of a 100 MB binary outlasts the old window easily)
- * and, if it still cannot delete, records why under %TEMP%. %TEMP% and not the
- * app's own logs directory: a purging uninstall has just deleted that.
- */
-export function buildInstallDirCleanupScript(installDir: string, exeBaseName: string): string {
-  const dir = installDir.replaceAll("'", "''")
-  const name = exeBaseName.replaceAll("'", "''")
-  const logName = `${exeBaseName.replaceAll("'", "''")}-uninstall-cleanup.log`
-  return [
-    'Start-Sleep -Seconds 4',
-    `Get-Process -Name '${name}' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue`,
-    '$err = $null',
-    // 120 x 500ms = a minute. The old ten seconds was not enough for a
-    // real-time antivirus scan to finish with a ~100 MB executable and let go.
-    'for ($i = 0; $i -lt 120; $i++) {',
-    `  if (-not (Test-Path -LiteralPath '${dir}')) { break }`,
-    // try/catch on ONE entry: the array is joined with '; ', and a semicolon
-    // between the two blocks makes PowerShell reject the try as unterminated.
-    `  try { Remove-Item -LiteralPath '${dir}' -Recurse -Force -ErrorAction Stop; break } catch { $err = $_.Exception.Message }`,
-    '  Start-Sleep -Milliseconds 500',
-    '}',
-    // Only on failure: a successful uninstall should leave nothing behind,
-    // including a log nobody will ever delete.
-    `if (Test-Path -LiteralPath '${dir}') {`,
-    `  $line = ((Get-Date).ToString('s')) + ' could not remove ${dir}: ' + $err`,
-    `  Add-Content -LiteralPath (Join-Path $env:TEMP '${logName}') -Value $line -ErrorAction SilentlyContinue`,
-    '}'
-  ].join('; ')
-}
-
-export function scheduleWindowsInstallDirCleanup(installDir: string, exeBaseName: string): void {
-  const script = buildInstallDirCleanupScript(installDir, exeBaseName)
-  try {
-    spawn('powershell', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', script], {
-      detached: true,
-      stdio: 'ignore',
-      windowsHide: true
-    }).unref()
-  } catch {
-    // Best-effort.
-  }
-}
+// Stable generic exports; focused cleanup owns exact process/path targeting.
+export { buildInstallDirCleanupScript, scheduleWindowsInstallDirCleanup } from './windows-install-cleanup.js'
 
 /**
  * Launches the tray in the *interactive user's* (unelevated) session. A tray

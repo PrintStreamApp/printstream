@@ -13,9 +13,11 @@ import {
 import { jobsRouter } from './jobs.js'
 import type { RequestAuthContext } from '../lib/auth-context.js'
 import { prisma } from '../lib/prisma.js'
-import { restorePrismaMethodsAfterEach } from '../test-utils/prisma-stubs.js'
+import { usePrismaStubs, restorePrismaMethodsAfterEach } from '../test-utils/prisma-stubs.js'
 import { HttpError } from '../lib/http-error.js'
 import type { RequestWorkspaceSummary } from '../lib/workspace-context.js'
+
+const stub = usePrismaStubs()
 
 const TEST_WORKSPACE = { id: 'workspace-1', slug: 'workspace-1', name: 'Workspace 1' } as const
 
@@ -196,6 +198,40 @@ test('job history deletion passes authorization with the delete permission', asy
 
     assert.notEqual(response.status, 401)
     assert.notEqual(response.status, 403)
+  })
+})
+
+test('fault deletion requires history-delete permission and atomically rejects active or uncertain rows', async () => {
+  let calls = 0
+  stub(prisma.printerFault, 'findFirst', async () => ({ id: 'fault' }))
+  stub(prisma.printerFault, 'deleteMany', async (args: { where: Record<string, unknown> }) => {
+    calls += 1
+    assert.equal(args.where.workspaceId, TEST_WORKSPACE.id)
+    assert.deepEqual(args.where.observedClearedAt, { not: null })
+    assert.deepEqual(args.where.gaps, { none: { endedAt: null } })
+    return { count: 0 }
+  })
+  const auth = { authEnabled: true, actor: { type: 'user' as const, userId: 'user-1' }, permissions: [JOBS_VIEW_PERMISSION], runtimePolicy: { demoMode: false } }
+  await withJobsApp({ auth, workspace: TEST_WORKSPACE }, async (baseUrl) => {
+    assert.equal((await fetch(`${baseUrl}/api/jobs/faults/fault`, { method: 'DELETE' })).status, 403)
+  })
+  assert.equal(calls, 0)
+  await withJobsApp({ auth: { ...auth, permissions: [JOBS_DELETE_PERMISSION] }, workspace: TEST_WORKSPACE }, async (baseUrl) => {
+    assert.equal((await fetch(`${baseUrl}/api/jobs/faults/fault`, { method: 'DELETE' })).status, 400)
+  })
+  assert.equal(calls, 1)
+})
+
+test('fault deletion succeeds only for an owned cleared occurrence', async () => {
+  stub(prisma.printerFault, 'findFirst', async (args: { where: Record<string, unknown> }) => {
+    assert.equal(args.where.workspaceId, TEST_WORKSPACE.id)
+    return { id: 'cleared' }
+  })
+  stub(prisma.printerFault, 'deleteMany', async () => ({ count: 1 }))
+  await withJobsApp({ auth: {
+    authEnabled: true, actor: { type: 'user', userId: 'user-1' }, permissions: [JOBS_DELETE_PERMISSION], runtimePolicy: { demoMode: false }
+  }, workspace: TEST_WORKSPACE }, async (baseUrl) => {
+    assert.equal((await fetch(`${baseUrl}/api/jobs/faults/cleared`, { method: 'DELETE' })).status, 204)
   })
 })
 

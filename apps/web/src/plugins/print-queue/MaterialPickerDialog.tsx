@@ -43,7 +43,7 @@ export function MaterialPickerDialog({
   color: string | null
   requiredGrams?: number | null
 }) {
-  const tagFilter = useTagFilter('spool', 'queue.material-picker')
+  const tagFilter = useTagFilter('spool', 'printQueue.materialPicker', 'queue.material-picker')
   const { matches: matchesTags, searchText: tagSearchText, value: selectedTagIds } = tagFilter
   const [search, setSearch] = useState('')
   // Default to filtering to the sliced file's (compatible) type so the picker leads with usable

@@ -86,9 +86,10 @@ FROM base AS bridge
 ARG NODE_VERSION
 ENV NODE_ENV=production
 # Enable the bundle self-update driver (the launcher below can activate what it
-# installs) and converge automatically, matching the standalone packaging.
-ENV BRIDGE_BUNDLE_SELF_UPDATE=true
-ENV BRIDGE_AUTO_UPDATE=true
+# installs). With it on, the bridge converges automatically unless
+# BRIDGE_UPDATE_MODE says otherwise, matching the standalone packaging. The mode
+# is not baked here, so an operator's older BRIDGE_AUTO_UPDATE still counts.
+ENV BRIDGE_BUNDLE_SELF_UPDATE_ENABLED=true
 # The runner ABI embeds the EXACT pinned Node version: an app bundle installs
 # only onto a runner with an identical runtime, so new JS never runs on a
 # different Node than it was built for (see the NODE_VERSION note at the top).

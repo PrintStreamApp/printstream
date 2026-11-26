@@ -30,6 +30,7 @@ import type {
 import { objectHeadOf, readObjectProcessOverridesFromHead } from './object-overrides.js'
 import { decodeXmlAttributeValue } from './xml-write.js'
 import { canonicalCurrBedType } from '../plate-types.js'
+import { readMachineInheritsSlot } from '../three-mf-project-config.js'
 import { parseProjectMixedFilaments } from '../mixed-filament.js'
 import {
   parseFirstLayerFilamentSequence,
@@ -123,8 +124,13 @@ export { decodeXmlAttributeValue }
  *      and validation issues. Older cached indexes expose those slots as physical trays.
  * v42: plate indexes include first-layer and ranged later-layer physical filament sequences.
  * v43: sliced filament groups resolve through each plate's nozzle table before physical mapping.
+ * v44: `printerProfileInherits`, the project machine preset's own parent (the machine slot of
+ *      `inherits_group`). For a custom printer it is the name the engine judges process compatibility by, so
+ *      without it a project saved on a custom P1P refuses every stock P1P process in the picker
+ *      while the engine accepts them. A v43 cache has it on no file, and nothing else about the
+ *      entry would invalidate it.
  */
-export const THREE_MF_INDEX_PARSER_VERSION = 43
+export const THREE_MF_INDEX_PARSER_VERSION = 44
 
 /**
  * Optional archive entries the index parser can use, passed by name rather than by position.
@@ -765,9 +771,20 @@ export function extractProjectNozzleSizes(projectSettingsJson: string | null): s
  * while keeping its own process carries a parent for the OLD machine, and only this field makes that
  * visible before the engine refuses it. Empty means "the process IS a system preset", exactly as the
  * engine reads an empty slot, so it is reported as absent rather than as the leaf's own name.
+ *
+ * `printerProfileInherits` is the machine's twin: the machine slot of `inherits_group`, located by
+ * filament count through `readMachineInheritsSlot` (on a correctly sized record that is the LAST
+ * entry, which is where the engine reads it, `BambuStudio.cpp:1998-2008`). Non-empty means a CUSTOM printer, and the engine then judges every process by this parent
+ * instead of the printer's own name (`:2330-2336`, `:2924-2944`). Empty means a system printer,
+ * judged by its own name, so it is reported as absent.
  */
-function extractBakedProfileNames(projectSettingsJson: string | null): { printerProfileName: string | null; processProfileName: string | null; processProfileInherits: string | null } {
-  const none = { printerProfileName: null, processProfileName: null, processProfileInherits: null }
+function extractBakedProfileNames(projectSettingsJson: string | null): {
+  printerProfileName: string | null
+  printerProfileInherits: string | null
+  processProfileName: string | null
+  processProfileInherits: string | null
+} {
+  const none = { printerProfileName: null, printerProfileInherits: null, processProfileName: null, processProfileInherits: null }
   if (!projectSettingsJson) return none
 
   let parsed: unknown
@@ -781,6 +798,7 @@ function extractBakedProfileNames(projectSettingsJson: string | null): { printer
   const inheritsGroup = Array.isArray(record.inherits_group) ? record.inherits_group : []
   return {
     printerProfileName: firstStringValue(record.printer_settings_id),
+    printerProfileInherits: readMachineInheritsSlot(record),
     processProfileName: firstStringValue(record.print_settings_id) ?? firstStringValue(record.default_print_profile),
     // Slot 0 in every case, which no filament-count arithmetic can get wrong (the MACHINE slot is
     // the one that moves with the filament count: see `machinePresetSlotIndexFor`).

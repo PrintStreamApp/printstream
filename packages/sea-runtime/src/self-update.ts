@@ -20,6 +20,7 @@
  * Counterparts: `apps/bridge/src/private/sea/self-update.ts` (the bridge driver)
  * and `apps/api/src/lib/native-update-apply.ts` (the server driver).
  */
+import { withWindowsInstallOperation } from './windows-install-operation.js'
 import { createHash, createPublicKey, verify } from 'node:crypto'
 import { createWriteStream } from 'node:fs'
 import { chmod, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
@@ -71,7 +72,8 @@ export function verifyDetachedSha256Signature(input: {
 
 /**
  * Downloads a release binary to `targetPath` and verifies size, sha256, and the
- * detached signature; the partial file is removed on any failure. The caller
+ * detached signature. Failed downloads are discarded after the stream pipeline
+ * settles; cleanup is best-effort and never replaces the original failure. The caller
  * supplies the response so app-specific concerns (licensed redirects, origin
  * pinning) stay out of the shared path. The manifest's sha256/sizeBytes always
  * describe the DECOMPRESSED executable, so gzip-published assets are
@@ -100,15 +102,16 @@ export async function downloadVerifiedExecutable(input: {
       callback(null, chunk)
     }
   })
-  const downloadStream = Readable.fromWeb(response.body as WebReadableStream<Uint8Array>)
-  const fileStream = createWriteStream(input.targetPath, { mode: 0o755 })
-  if (input.compression === 'gzip') {
-    await pipeline(downloadStream, createGunzip(), hashTap, fileStream)
-  } else {
-    await pipeline(downloadStream, hashTap, fileStream)
-  }
-
   try {
+    const downloadStream = Readable.fromWeb(response.body as WebReadableStream<Uint8Array>)
+    const fileStream = createWriteStream(input.targetPath, { mode: 0o755 })
+    // Await stream retirement before cleanup, including body and decompression failures.
+    if (input.compression === 'gzip') {
+      await pipeline(downloadStream, createGunzip(), hashTap, fileStream)
+    } else {
+      await pipeline(downloadStream, hashTap, fileStream)
+    }
+
     const downloaded = await stat(input.targetPath)
     if (downloaded.size !== input.sizeBytes) {
       throw new Error(`${input.artifactName} size does not match the manifest.`)
@@ -137,15 +140,17 @@ export async function swapExecutableInPlace(input: {
   exePath: string
   newFilePath: string
 }): Promise<string> {
-  const backupPath = await clearOrDisplace(`${input.exePath}.old`)
-  await rename(input.exePath, backupPath)
-  try {
-    await rename(input.newFilePath, input.exePath)
-  } catch (error) {
-    await rename(backupPath, input.exePath).catch(() => undefined)
-    throw error
-  }
-  return backupPath
+  return withWindowsInstallOperation(input.exePath, async () => {
+    const backupPath = await clearOrDisplace(`${input.exePath}.old`)
+    await rename(input.exePath, backupPath)
+    try {
+      await rename(input.newFilePath, input.exePath)
+    } catch (error) {
+      await rename(backupPath, input.exePath).catch(() => undefined)
+      throw error
+    }
+    return backupPath
+  })
 }
 
 /**
@@ -174,29 +179,33 @@ export async function noteBootAttemptAndMaybeRollback(input: {
   exePath: string
   maxAttempts?: number
 }): Promise<BootAttemptOutcome> {
-  const state = await readSelfUpdateState(input.updateStateFile)
-  if (!state) return 'no-pending-update'
+  if (!await readSelfUpdateState(input.updateStateFile)) return 'no-pending-update'
+  return withWindowsInstallOperation(input.exePath, async () => {
+    const state = await readSelfUpdateState(input.updateStateFile)
+    if (!state) return 'no-pending-update'
 
-  const attempts = state.bootAttempts + 1
-  const maxAttempts = input.maxAttempts ?? MAX_BOOT_ATTEMPTS
-  if (attempts > maxAttempts && await pathExists(state.backupPath)) {
-    const failedPath = `${input.exePath}.failed`
-    await rm(failedPath, { force: true }).catch(() => undefined)
-    await rename(input.exePath, failedPath)
-    try {
-      await rename(state.backupPath, input.exePath)
-    } catch (error) {
-      await rename(failedPath, input.exePath).catch(() => undefined)
-      throw error
+    assertOwnedBackupPath(input.exePath, state.backupPath)
+    const attempts = state.bootAttempts + 1
+    const maxAttempts = input.maxAttempts ?? MAX_BOOT_ATTEMPTS
+    if (attempts > maxAttempts && await pathExists(state.backupPath)) {
+      const failedPath = `${input.exePath}.failed`
+      await rm(failedPath, { force: true }).catch(() => undefined)
+      await rename(input.exePath, failedPath)
+      try {
+        await rename(state.backupPath, input.exePath)
+      } catch (error) {
+        await rename(failedPath, input.exePath).catch(() => undefined)
+        throw error
+      }
+      await writeHeldBackFingerprint(input.heldBackFile, state.toFingerprint)
+      await rm(input.updateStateFile, { force: true }).catch(() => undefined)
+      console.error(`Build ${state.toFingerprint.slice(0, 12)} failed to start ${maxAttempts} times after self-update; rolled back and held the build back.`)
+      return 'rolled-back'
     }
-    await writeHeldBackFingerprint(input.heldBackFile, state.toFingerprint)
-    await rm(input.updateStateFile, { force: true }).catch(() => undefined)
-    console.error(`Build ${state.toFingerprint.slice(0, 12)} failed to start ${maxAttempts} times after self-update; rolled back and held the build back.`)
-    return 'rolled-back'
-  }
 
-  await writeSelfUpdateState(input.updateStateFile, { ...state, bootAttempts: attempts })
-  return 'counted'
+    await writeSelfUpdateState(input.updateStateFile, { ...state, bootAttempts: attempts })
+    return 'counted'
+  }, path.dirname(input.updateStateFile))
 }
 
 /**
@@ -208,25 +217,28 @@ export async function rollbackSelfUpdate(input: {
   updateStateFile: string
   heldBackFile: string
 }): Promise<void> {
-  const state = await readSelfUpdateState(input.updateStateFile)
-  const backupPath = state?.backupPath ?? `${input.exePath}.old`
-  if (!await pathExists(backupPath)) {
-    throw new Error('No previous binary is available to roll back to.')
-  }
-  const discardedPath = `${input.exePath}.rollback-tmp`
-  await rm(discardedPath, { force: true }).catch(() => undefined)
-  await rename(input.exePath, discardedPath)
-  try {
-    await rename(backupPath, input.exePath)
-  } catch (error) {
-    await rename(discardedPath, input.exePath).catch(() => undefined)
-    throw error
-  }
-  await rm(discardedPath, { force: true }).catch(() => undefined)
-  if (state) {
-    await writeHeldBackFingerprint(input.heldBackFile, state.toFingerprint)
-  }
-  await rm(input.updateStateFile, { force: true }).catch(() => undefined)
+  return withWindowsInstallOperation(input.exePath, async () => {
+    const state = await readSelfUpdateState(input.updateStateFile)
+    const backupPath = state?.backupPath ?? `${input.exePath}.old`
+    assertOwnedBackupPath(input.exePath, backupPath)
+    if (!await pathExists(backupPath)) {
+      throw new Error('No previous binary is available to roll back to.')
+    }
+    const discardedPath = `${input.exePath}.rollback-tmp`
+    await rm(discardedPath, { force: true }).catch(() => undefined)
+    await rename(input.exePath, discardedPath)
+    try {
+      await rename(backupPath, input.exePath)
+    } catch (error) {
+      await rename(discardedPath, input.exePath).catch(() => undefined)
+      throw error
+    }
+    await rm(discardedPath, { force: true }).catch(() => undefined)
+    if (state) {
+      await writeHeldBackFingerprint(input.heldBackFile, state.toFingerprint)
+    }
+    await rm(input.updateStateFile, { force: true }).catch(() => undefined)
+  }, path.dirname(input.updateStateFile))
 }
 
 /** Finalizes a pending self-update: drops the rollback backup and bookkeeping. */
@@ -234,13 +246,17 @@ export async function confirmSelfUpdateHealthy(input: {
   updateStateFile: string
   exePath: string
 }): Promise<boolean> {
-  const state = await readSelfUpdateState(input.updateStateFile)
-  if (!state) return false
-  await rm(state.backupPath, { force: true }).catch(() => undefined)
-  await rm(`${input.exePath}.failed`, { force: true }).catch(() => undefined)
-  await rm(`${input.exePath}.new`, { force: true }).catch(() => undefined)
-  await rm(input.updateStateFile, { force: true })
-  return true
+  if (!await readSelfUpdateState(input.updateStateFile)) return false
+  return withWindowsInstallOperation(input.exePath, async () => {
+    const state = await readSelfUpdateState(input.updateStateFile)
+    if (!state) return false
+    assertOwnedBackupPath(input.exePath, state.backupPath)
+    await rm(state.backupPath, { force: true }).catch(() => undefined)
+    await rm(`${input.exePath}.failed`, { force: true }).catch(() => undefined)
+    await rm(`${input.exePath}.new`, { force: true }).catch(() => undefined)
+    await rm(input.updateStateFile, { force: true })
+    return true
+  }, path.dirname(input.updateStateFile))
 }
 
 export async function readHeldBackFingerprint(heldBackFile: string): Promise<string | null> {
@@ -297,4 +313,16 @@ export async function writeSelfUpdateState(filePath: string, state: SelfUpdateSt
 
 async function pathExists(filePath: string): Promise<boolean> {
   return stat(filePath).then(() => true, () => false)
+}
+
+/** DATA is bookkeeping, never authority to rename/delete another installation. */
+function assertOwnedBackupPath(exePath: string, backupPath: string): void {
+  const normalize = (value: string): string => process.platform === 'win32'
+    ? path.win32.resolve(value).toLowerCase()
+    : path.resolve(value)
+  const expected = `${normalize(exePath)}.old`
+  const observed = normalize(backupPath)
+  if (observed !== expected && !(observed.startsWith(`${expected}-`) && /^\d+$/.test(observed.slice(expected.length + 1)))) {
+    throw new Error('Update backup belongs to a different executable; installed files were retained')
+  }
 }

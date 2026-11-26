@@ -163,7 +163,7 @@ export function HomeAssistantSettingsPanel() {
                 Create the required access token in the section below, then keep it ready for the Home Assistant setup flow.
               </ListItem>
               <ListItem>
-                Restart Home Assistant, add the <strong>PrintStream Bridge</strong> integration, and enter the base URL shown above plus that access token.
+                Restart Home Assistant, add the <strong>PrintStream</strong> integration, and enter the base URL shown above plus that access token.
               </ListItem>
               <ListItem>
                 The integration auto-registers the bundled custom-card resource, so the three

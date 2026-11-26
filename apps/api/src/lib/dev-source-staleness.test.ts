@@ -106,6 +106,22 @@ test('missing roots are skipped rather than failing the scan', async (t) => {
   assert.ok(result.lastCheckedAt)
 })
 
+test('explicit configuration file roots report freshness without reporting contents', async (t) => {
+  const { root, baseMs } = await makeTree(t)
+  const relative = 'apps/api/.env'
+  const file = path.join(root, relative)
+  await writeFile(file, 'QA_CREDENTIAL=never-report-this-value')
+  // Whole seconds avoid filesystem-specific submillisecond utimes rounding.
+  const modified = new Date(Math.floor((baseMs + 30_000) / 1000) * 1000)
+  await utimes(file, modified, modified)
+
+  const result = await evaluateSourceStaleness({ roots: [...ROOTS, relative], startedAtMs: baseMs, root })
+  assert.equal(result.stale, true)
+  assert.equal(result.newestPath, relative)
+  assert.equal(result.newestModifiedAt, modified.toISOString())
+  assert.equal(JSON.stringify(result).includes('never-report-this-value'), false)
+})
+
 test('WATCH_ROOTS covers everything the dev script tells the service supervisor to watch', async () => {
   // The two lists live in different files with no link between them, so this is the regression that
   // will actually happen: someone adds a `--watch` and the detector silently stops seeing it.

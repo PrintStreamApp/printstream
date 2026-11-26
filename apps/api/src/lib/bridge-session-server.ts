@@ -391,7 +391,7 @@ function handleAuthenticatedMessage(
     }
     case 'bridge.printer.status': {
       bridgeSessionManager.setPrinterStatus(bridgeId, message.printer)
-      printerManager.ingestBridgeStatus(message.printer, bridgeId)
+      printerManager.ingestBridgeStatus(message.printer, bridgeId, message.faultSources)
       return
     }
     case 'bridge.printer.removed': {

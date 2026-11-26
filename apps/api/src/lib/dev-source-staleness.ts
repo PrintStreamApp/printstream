@@ -32,7 +32,7 @@ import { env } from './env.js'
  * there but missing here is a staleness this cannot see; a root here but not there would report a
  * change that was never going to reload anything, which is a false alarm and worse than silence.
  */
-export const WATCH_ROOTS = ['apps/api/src', 'packages/shared/dist', 'packages/bridge-runtime/dist']
+export const WATCH_ROOTS = ['apps/api/src', 'apps/api/.env', 'packages/shared/dist', 'packages/bridge-runtime/dist']
 
 /**
  * Files inside a watched root that the SERVER never imports, and which therefore never reload it.
@@ -68,7 +68,7 @@ const processStartedAtMs = Date.now() - Math.round(process.uptime() * 1000)
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..')
 
 /**
- * The newest mtime under `roots`, or null when none of them exist.
+ * The newest mtime in watched directories or explicit files, or null when none exist.
  *
  * Skips `node_modules` (never watched, and the walk would dwarf everything else). A root that does
  * not exist is skipped rather than treated as an error: a fresh checkout has no `dist` yet, and
@@ -102,7 +102,24 @@ async function newestModified(roots: readonly string[], base: string): Promise<{
     }
   }
 
-  for (const root of roots) await walk(path.join(base, root))
+  for (const root of roots) {
+    const absolute = path.join(base, root)
+    try {
+      const info = await stat(absolute)
+      if (info.isFile()) {
+        // Explicit configuration roots include dotfiles. Inspect only metadata:
+        // configuration contents and credentials never enter this diagnostic.
+        if (!newest || info.mtimeMs > newest.atMs) {
+          newest = { atMs: info.mtimeMs, path: path.relative(base, absolute) }
+        }
+        continue
+      }
+    } catch {
+      // Fresh checkouts and atomic replacements can temporarily lack a root.
+      continue
+    }
+    await walk(absolute)
+  }
   return newest
 }
 

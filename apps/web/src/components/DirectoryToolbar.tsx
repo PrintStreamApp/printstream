@@ -49,12 +49,12 @@ import {
 import { ViewModeToggle } from './ViewModeToggle'
 import { useMobileViewport } from './useMobileViewport'
 import { useLocalStorageState } from '../hooks/useLocalStorageState'
+import { directoryToolbarPinnedKeys } from '../lib/storageKeys'
 
 /**
  * Pin state persists per toolbar surface (like sort/grouping/page size), keyed by
  * the caller's `pinStorageKey`. Without a key it falls back to one shared flag.
  */
-const TOOLBAR_PINNED_KEY = 'directory.toolbar.pinned'
 function parsePinned(raw: string): boolean | null {
   return raw === 'true' ? true : raw === 'false' ? false : null
 }
@@ -401,7 +401,7 @@ export function DirectoryPrimaryToolbar<TSort extends string, TPageSize extends 
   } : baseFilters
   const isMobile = useMobileViewport()
   const [pinned, setPinned] = useLocalStorageState<boolean>(
-    pinStorageKey ? `${TOOLBAR_PINNED_KEY}.${pinStorageKey}` : TOOLBAR_PINNED_KEY,
+    directoryToolbarPinnedKeys.at(pinStorageKey ?? 'default'),
     false,
     parsePinned,
     String

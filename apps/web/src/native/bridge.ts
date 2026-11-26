@@ -3,12 +3,14 @@
  * native capabilities declared here so browser code can detect the host without
  * reaching into Capacitor globals or learning implementation details.
  */
-import { Capacitor, registerPlugin } from '@capacitor/core'
+import { buildModelImportFileName } from '@printstream/shared'
+import { Capacitor, registerPlugin, type PluginListenerHandle } from '@capacitor/core'
 import {
   desktopPlatform,
   desktopRequest,
   isNativeDesktop,
-  supportsDesktopModelBrowserImport
+  supportsDesktopModelBrowserImport,
+  supportsDesktopModelImportDestination
 } from './desktopBridge'
 
 export type NativeModelProvider = 'makerworld' | 'printables'
@@ -28,8 +30,26 @@ export interface PrintStreamInstancePlugin {
   menu(options: { view: 'switcher' | 'startup' | 'settings' | 'billing' }): Promise<void>
 }
 
+export interface NativeModelDestination {
+  bridgeId: string
+  folderId: string | null
+  /** Editable base name, with the original extension owned by the capture. */
+  outputFileName?: string
+}
+
+type ChooseModelDestination = (fileName: string) => Promise<NativeModelDestination | null>
+
+declare global {
+  interface Window {
+    /** Scoped to one user-initiated native import; never installed in provider pages. */
+    __printstreamChooseModelDestination?: ChooseModelDestination
+  }
+}
+
 interface ModelBrowserPlugin {
-  capabilities(): Promise<{ providers: NativeModelProvider[] }>
+  capabilities(): Promise<{ providers: NativeModelProvider[]; destinationSelection?: boolean }>
+  addListener(event: 'destinationRequested', listener: (event: { requestId: string; fileName: string }) => void): Promise<PluginListenerHandle>
+  completeDestination(options: { requestId: string; cancelled?: boolean; bridgeId?: string; folderId?: string | null; fileName?: string }): Promise<void>
   downloadAndImport(options: {
     provider: NativeModelProvider
     modelUrl: string
@@ -38,6 +58,7 @@ interface ModelBrowserPlugin {
     bridgeId: string | null
     folderId: string | null
     defaultFolderName: string
+    promptForDestination: true
   }): Promise<{ file: unknown; openAfterImport?: 'model-studio' } | { externalOpened: true } | { importUrl: string }>
 }
 
@@ -96,12 +117,14 @@ function desktopAppLabel(platform: ReturnType<typeof desktopPlatform>): string {
 /** Discover only providers implemented by this installed native wrapper version. */
 export async function nativeModelImportProviders(): Promise<NativeModelProvider[]> {
   if (isNativeDesktop()) {
+    if (!supportsDesktopModelImportDestination()) return []
     return (['makerworld', 'printables'] as const)
       .filter((provider) => supportsDesktopModelBrowserImport(provider))
   }
   if (!isNativeAndroid() || !Capacitor.isPluginAvailable('PrintStreamModelBrowser')) return []
   try {
     const result = await androidModelBrowser.capabilities()
+    if (!result.destinationSelection) return []
     return result.providers.filter((provider): provider is NativeModelProvider => (
       provider === 'makerworld' || provider === 'printables'
     ))
@@ -112,18 +135,40 @@ export async function nativeModelImportProviders(): Promise<NativeModelProvider[
 
 /** Dispatch a user-driven provider download through the active native host. */
 export async function downloadAndImportFromModelProvider(
-  options: Parameters<ModelBrowserPlugin['downloadAndImport']>[0]
+  options: Parameters<ModelBrowserPlugin['downloadAndImport']>[0],
+  chooseDestination: ChooseModelDestination
 ): Promise<
   { file: unknown; openAfterImport?: 'model-studio' }
   | { externalOpened: true }
   | { importUrl: string }
   | { cancelled: true }
 > {
+  let listener: PluginListenerHandle | null = null
+  if (window.__printstreamChooseModelDestination) throw new Error('A model browser is already open.')
+  const chooseCapturedDestination = async (fileName: string) => {
+    const destination = await chooseDestination(fileName)
+    if (!destination) return null
+    return { ...destination, fileName: buildModelImportFileName(fileName, destination.outputFileName) }
+  }
+  window.__printstreamChooseModelDestination = chooseCapturedDestination
   try {
     if (isNativeDesktop()) return await desktopRequest('modelBrowser.downloadAndImport', options)
     if (!isNativeAndroid() || !Capacitor.isPluginAvailable('PrintStreamModelBrowser')) {
       throw new Error('This installed app does not support model-site browsing.')
     }
+    listener = await androidModelBrowser.addListener('destinationRequested', (event) => {
+      void (async () => {
+        let destination: Awaited<ReturnType<typeof chooseCapturedDestination>> = null
+        try {
+          destination = await chooseCapturedDestination(event.fileName)
+        } finally {
+          await androidModelBrowser.completeDestination({
+            requestId: event.requestId,
+            ...(destination ?? { cancelled: true })
+          })
+        }
+      })().catch((error) => { console.warn('Could not reply to the model destination request', error) })
+    })
     return await androidModelBrowser.downloadAndImport(options)
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
@@ -131,5 +176,8 @@ export async function downloadAndImportFromModelProvider(
       return { cancelled: true }
     }
     throw error
+  } finally {
+    delete window.__printstreamChooseModelDestination
+    await listener?.remove()
   }
 }

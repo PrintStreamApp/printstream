@@ -8,9 +8,10 @@
  * about the raw MQTT payload shape.
  *
  * This is the base layer of the printer contract: it depends only on `zod` and
- * `./logs.js`, never on the capability tables or action-availability logic.
+ * lightweight shared schemas, never on capability tables or action-availability logic.
  */
 import { z } from 'zod'
+import { printerFaultSchema } from './printer-faults.js'
 import { slotMaterialIdentitySchema } from './slot-material.js'
 import { auditLogEntrySchema } from './logs.js'
 import { preservedSliceSettingsSchema, sceneEditSvgPartSchema, sceneEditTextInfoSchema } from './slicing.js'
@@ -1234,6 +1235,7 @@ export const printJobSetupSchema = z.object({
 export type PrintJobSetup = z.infer<typeof printJobSetupSchema>
 
 export const printJobSchema = z.object({
+  faults: z.array(printerFaultSchema).optional(),
   id: z.string(),
   printerId: z.string(),
   printerName: z.string(),
@@ -1793,6 +1795,17 @@ export const libraryBrowseResponseSchema = z.object({
 })
 export type LibraryBrowseResponse = z.infer<typeof libraryBrowseResponseSchema>
 
+/** Exact save-name conflict lookup, independent of the capped directory listing. */
+export const librarySaveConflictQuerySchema = z.object({
+  bridgeId: z.string().trim().min(1).max(200),
+  folderId: z.string().trim().min(1).max(200).optional(),
+  fileName: z.string().trim().min(1).max(255)
+})
+export const librarySaveConflictResponseSchema = z.object({
+  file: z.object({ id: z.string(), name: z.string() }).nullable()
+})
+export type LibrarySaveConflictResponse = z.infer<typeof librarySaveConflictResponseSchema>
+
 export const printerPrintStartBooleanStateSchema = z.object({
   supported: z.boolean(),
   current: z.boolean().nullable()
@@ -2108,6 +2121,12 @@ export const threeMfIndexSchema = z.object({
   /** Project filaments designated as support material; used as "in use" for the remove-guard even when no object references them directly. */
   supportFilamentIds: z.array(z.number().int().positive()).default([]),
   printerProfileName: z.string().nullable().default(null),
+  /**
+   * The CUSTOM printer preset's own parent (the machine slot of `inherits_group`). Counterpart of the
+   * bridge index's field of the same name. Null for a system printer, and on an index from an older
+   * server, which reads as "no parent" and never as a guess.
+   */
+  printerProfileInherits: z.string().nullable().default(null),
   processProfileName: z.string().nullable().default(null),
   /**
    * The system process preset the project's own process was derived from (`inherits_group[0]`), the

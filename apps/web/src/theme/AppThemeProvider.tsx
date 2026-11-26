@@ -37,15 +37,15 @@
 import { CssVarsProvider } from '@mui/joy/styles'
 import type { Theme } from '@mui/joy/styles'
 import type { ReactNode } from 'react'
+import { readStoredValue, writeStoredValue } from '../lib/browserStorageKeys'
+import { colorModeKey, colorSchemeKey } from '../lib/storageKeys'
 
 /**
- * Namespaced so a co-located Joy surface writing Joy's default `joy-mode` cannot
- * reach us. Changing these strings strands every browser's stored value on the old
- * key: harmless here (the only legal value is the one we force anyway), but it
- * would matter the moment the mode becomes a real preference.
+ * Namespaced (`colorModeKey`, `colorSchemeKey` in `lib/storageKeys.ts`) so a co-located Joy surface
+ * writing Joy's default `joy-mode` cannot reach us. Changing these names strands every browser's
+ * stored value on the old key: harmless here (the only legal value is the one we force anyway), but
+ * it would matter the moment the mode becomes a real preference.
  */
-const MODE_STORAGE_KEY = 'printstream-color-mode'
-const COLOR_SCHEME_STORAGE_KEY = 'printstream-color-scheme'
 
 /** The only mode this app supports. */
 const FORCED_MODE = 'dark'
@@ -60,13 +60,9 @@ const FORCED_MODE = 'dark'
  * namespaced key still holds, and the key has no legal value other than `dark`.
  */
 function forceDarkMode(): void {
-  if (typeof window === 'undefined') return
-  try {
-    if (window.localStorage.getItem(MODE_STORAGE_KEY) !== FORCED_MODE) {
-      window.localStorage.setItem(MODE_STORAGE_KEY, FORCED_MODE)
-    }
-  } catch {
-    // Storage unavailable; the namespaced key and defaultMode still resolve dark.
+  // Best-effort: with storage unavailable, the namespaced key and defaultMode still resolve dark.
+  if (readStoredValue(colorModeKey) !== FORCED_MODE) {
+    writeStoredValue(colorModeKey, FORCED_MODE)
   }
 }
 
@@ -77,8 +73,8 @@ export function AppThemeProvider({ theme, children }: { theme: Theme; children: 
     <CssVarsProvider
       theme={theme}
       defaultMode={FORCED_MODE}
-      modeStorageKey={MODE_STORAGE_KEY}
-      colorSchemeStorageKey={COLOR_SCHEME_STORAGE_KEY}
+      modeStorageKey={colorModeKey.key}
+      colorSchemeStorageKey={colorSchemeKey.key}
     >
       {children}
     </CssVarsProvider>

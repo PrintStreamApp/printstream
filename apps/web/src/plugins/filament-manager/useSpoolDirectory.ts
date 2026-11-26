@@ -5,10 +5,10 @@
  * visible/grouped/paged spools identically.
  *
  * The display preferences, sort field + direction, grouping, filter facets,
- * page size, and view mode, persist to localStorage under `storageKey` so they
- * survive a reload; the search box and the current page index stay ephemeral.
- * Each caller passes its own key (see {@link SPOOL_DIRECTORY_PREFS_KEY} /
- * {@link SPOOL_PICKER_PREFS_KEY}) so the tab and the picker don't share state.
+ * page size, and view mode, persist to localStorage so they survive a reload;
+ * the search box and the current page index stay ephemeral. The Filament tab and
+ * each picker keep their own (`SPOOL_DIRECTORIES`), so a filter set while
+ * picking a spool never leaks into the main inventory view.
  */
 import { useTagFilter, type TagFilter } from '../../hooks/useTagFilter'
 import { useCallback, useDeferredValue, useEffect, useMemo, useState } from 'react'
@@ -16,7 +16,8 @@ import type { FilamentSpool, FilamentSpoolStatus } from '@printstream/shared'
 import type { DirectorySortDirection, DirectoryViewMode } from '../../components/DirectoryControls'
 import { useMobileViewport } from '../../components/useMobileViewport'
 import { usePersistentState } from '../../hooks/usePersistentState'
-import { PAGE_SIZE_OPTIONS, SPOOL_DIRECTORY_PREFS_KEY } from './constants'
+import { PAGE_SIZE_OPTIONS } from './constants'
+import { SPOOL_DIRECTORIES, type SpoolDirectoryKind } from './storageKeys'
 import {
   applyFilters, countActiveFilters, deriveFacets, groupSpools, sortSpools,
   SPOOL_GROUP_OPTIONS, SPOOL_SORT_OPTIONS, STATUS_LABELS,
@@ -104,16 +105,18 @@ function sanitizeSpoolDirectoryPrefs(value: unknown): SpoolDirectoryPrefs {
   }
 }
 
+
 export function useSpoolDirectory(
   spools: FilamentSpool[],
-  options?: { storageKey?: string }
+  options?: { directory?: SpoolDirectoryKind }
 ): SpoolDirectory {
-  const tagFilter = useTagFilter('spool', options?.storageKey ?? 'filament')
+  const directory = SPOOL_DIRECTORIES[options?.directory ?? 'page']
+  const tagFilter = useTagFilter('spool', directory.tagArea, directory.legacyTagArea)
   const { matches: matchesTags, searchText: tagSearchText } = tagFilter
   const [search, setSearch] = useState('')
   const deferredSearch = useDeferredValue(search)
   const [prefs, setPrefs] = usePersistentState<SpoolDirectoryPrefs>(
-    options?.storageKey ?? SPOOL_DIRECTORY_PREFS_KEY,
+    directory.prefsKey,
     DEFAULT_PREFS,
     sanitizeSpoolDirectoryPrefs
   )

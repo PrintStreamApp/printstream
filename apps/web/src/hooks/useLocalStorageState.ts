@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import type { StorageKeyRef } from '../lib/browserStorageKeys'
 
 /**
  * Small localStorage-backed state helper for UI preferences. Storage is
@@ -15,10 +16,10 @@ import { useCallback, useEffect, useRef, useState } from 'react'
  * Same-tab only, deliberately: the `storage` event would also sync other TABS, which is a broader
  * behaviour change than the bug requires. Revisit if a preference ever needs to follow across tabs.
  *
- * **Renaming a key needs `legacyKeys`.** A storage key is a persisted identifier: renaming one
- * without a read-through silently resets everybody's saved preference on the first load after a
- * deploy, which nobody reports as a bug because it looks like they never set it. Pass the old
- * name(s) and the first load migrates the value forward.
+ * **Keys are declared, not typed inline.** The key comes from `lib/browserStorageKeys.ts` (CONF-7),
+ * whose declaration carries the key's former names: a storage key is a persisted identifier, and
+ * renaming one without a read-through silently resets everybody's saved preference on the first
+ * load after a deploy, which nobody reports as a bug because it looks like they never set it.
  */
 
 /** Listeners per storage key, so a write can reach the other instances reading it. */
@@ -43,18 +44,21 @@ function notifyKey(key: string, serialized: string): void {
 }
 
 export function useLocalStorageState<T>(
-  key: string,
+  /** A declared key (`lib/browserStorageKeys.ts`), which brings its own former names. */
+  storageKey: StorageKeyRef,
   fallback: T,
   parse: (raw: string) => T | null,
   serialize: (value: T) => string = JSON.stringify,
   /**
-   * Former names for this key, newest first. Read only when `key` itself holds
-   * nothing; the next write lands on `key`, so the migration happens once and
-   * the old entry is simply left behind rather than deleted (another tab on the
-   * previous build may still be reading it).
+   * Former names beyond the declaration's own, for a key whose old name could not be derived from
+   * its family (a tag filter's). Read, like the declared ones, only when `key` itself holds
+   * nothing; the next write lands on `key`, so the migration happens once and the old entry is
+   * simply left behind rather than deleted (another tab on the previous build may still read it).
    */
-  legacyKeys: ReadonlyArray<string> = []
+  extraLegacyKeys: ReadonlyArray<string> = []
 ): [T, (value: T) => void, boolean] {
+  const key = storageKey.key
+  const legacyKeys = [...storageKey.legacyKeys, ...extraLegacyKeys]
   // Stable across renders so callers can pass an inline array literal without
   // re-running the read on every render.
   const legacyKeysRef = useRef(legacyKeys)

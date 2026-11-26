@@ -11,8 +11,8 @@
  * `apps/api/src/lib/client-sessions.ts`.
  */
 import { buildApiUrl } from './apiUrl'
+import { tabSessionIdKey } from './storageKeys'
 
-const TAB_SESSION_KEY = 'printstream.tabSessionId'
 
 /**
  * Falls back to a per-page-load id when `sessionStorage` is unavailable (private modes, embedded
@@ -30,11 +30,15 @@ export function readTabSessionId(): string {
     fallbackId ??= createId()
     return fallbackId
   }
+  // Direct access, unlike the other declared keys (storage-direct-ok): the fallback below depends on
+  // storage THROWING, which the registry's best-effort helpers hide, and a silently failed write would
+  // hand out a new id on every call. The old name is read so an open tab keeps its id across a deploy.
   try {
-    const existing = window.sessionStorage.getItem(TAB_SESSION_KEY)
+    const existing = window.sessionStorage.getItem(tabSessionIdKey.key)
     if (existing) return existing
-    const created = createId()
-    window.sessionStorage.setItem(TAB_SESSION_KEY, created)
+    const carried = tabSessionIdKey.legacyKeys.map((legacy) => window.sessionStorage.getItem(legacy)).find((value) => value != null)
+    const created = carried ?? createId()
+    window.sessionStorage.setItem(tabSessionIdKey.key, created)
     return created
   } catch {
     fallbackId ??= createId()

@@ -4,16 +4,29 @@ import { matchesTagFilter, type TagEntityKind } from '@printstream/shared'
 import { usePersistentState } from './usePersistentState'
 import { useEntityTags } from './useEntityTags'
 import { readCurrentWorkspaceScopeKey } from '../lib/workspaceScope'
+import { tagFilterKeys } from '../lib/storageKeys'
 
 const EMPTY: string[] = []
 function parseIds(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((id): id is string => typeof id === 'string') : []
 }
 
-export function useTagFilter(kind: TagEntityKind, storageKey: string) {
+/**
+ * A tag filter's selection, remembered per surface and per workspace route scope.
+ *
+ * @param area which surface this is (`library`, `printers.overview`); part of the declared key.
+ * @param legacyArea the fragment the surface's key was built from before keys were declared, when
+ *   it differs from `area`, so a saved selection carries over.
+ */
+export function useTagFilter(kind: TagEntityKind, area: string, legacyArea: string = area) {
   const tags = useEntityTags(kind)
   const scope = readCurrentWorkspaceScopeKey()
-  const [value, onChange] = usePersistentState(`${storageKey}.tags.${scope}`, EMPTY, parseIds)
+  const [value, onChange] = usePersistentState(
+    tagFilterKeys.at(`${area}.${scope}`),
+    EMPTY,
+    parseIds,
+    [`${legacyArea}.tags.${scope}`]
+  )
   useEffect(() => {
     if (!tags.isSuccess) return
     const known = new Set(tags.tags.map((tag) => tag.id))

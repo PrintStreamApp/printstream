@@ -120,6 +120,24 @@ export function machinePresetSlotIndex(filamentCount: number): number {
 }
 
 /**
+ * The direct parent a project's machine slot names in `inherits_group`, or null.
+ *
+ * Non-empty means a CUSTOM printer, which the engine judges process compatibility by this parent
+ * instead of its own name (`BambuStudio.cpp:2330-2336`, `:2924-2944`). Null when the slot is blank
+ * (a system printer), absent, or cannot be located: the slot comes from the FILAMENT COUNT via
+ * {@link machinePresetSlotIndexFor}, never from the array's length, so a record with no
+ * `filament_colour` or one too short to hold the slot reports nothing rather than a filament's
+ * parent. (The CLI's own read takes the last entry; on a correctly sized record the two agree.)
+ */
+export function readMachineInheritsSlot(record: Record<string, unknown>): string | null {
+  if (!Array.isArray(record.inherits_group)) return null
+  const index = machinePresetSlotIndexFor(record)
+  if (index == null || index >= record.inherits_group.length) return null
+  const value = record.inherits_group[index]
+  return typeof value === 'string' && value.trim() ? value.trim() : null
+}
+
+/**
  * Read one slot's changed-from-system keys, filtered to a catalog. Slot-agnostic so the process,
  * filament and machine readers cannot drift apart on separator or trimming.
  */

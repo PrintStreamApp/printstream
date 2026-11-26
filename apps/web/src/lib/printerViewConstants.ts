@@ -26,8 +26,6 @@ export const CANCELLED_COLOR = 'var(--joy-palette-neutral-500)'
 // Manually added usage (user-entered stats adjustments) in breakdown charts.
 export const MANUAL_COLOR = 'var(--joy-palette-warning-500)'
 
-export const LIBRARY_VIEW_MODE_KEY = 'bambu.library.viewMode'
-export const LIBRARY_SORT_KEY = 'bambu.library.sort'
 export const DUAL_NOZZLE_PRINTER_MODELS: PrinterModel[] = ['X2D', 'H2D', 'H2DPRO', 'H2C']
 
 export const EMPTY_PRINTERS: Printer[] = []
@@ -35,10 +33,6 @@ export const EMPTY_PRINT_JOBS: PrintJob[] = []
 export const EMPTY_PRINTER_VIEWS: PrinterView[] = []
 export const HISTORY_PAGE_SIZE_OPTIONS = [10, 25, 50] as const
 export const HISTORY_SORT_OPTIONS = [{ value: 'date', label: 'Date' }] as const
-export const PRINTER_HISTORY_VIEW_MODE_KEY = 'printstream.printers.history.viewMode'
-export const PRINTER_HISTORY_SORT_DIR_KEY = 'printstream.printers.history.sortDir'
-export const PRINTER_HISTORY_RESULT_FILTER_KEY = 'printstream.printers.history.resultFilter'
-export const PRINTER_HISTORY_PAGE_SIZE_KEY = 'printstream.printers.history.pageSize'
 
 export const OVERVIEW_VIEW_OPTION_VALUE = '__overview__'
 export const NEW_VIEW_OPTION_VALUE = '__new__'

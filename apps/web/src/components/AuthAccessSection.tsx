@@ -97,12 +97,6 @@ import {
   SESSION_DURATION_OPTIONS,
   type SessionDurationSelectValue,
   shouldAutoOpenCreatedUserEditor,
-  USER_DIRECTORY_VIEW_MODE_KEY,
-  USER_DIRECTORY_SORT_KEY,
-  USER_DIRECTORY_SORT_DIR_KEY,
-  USER_DIRECTORY_STATUS_FILTER_KEY,
-  USER_DIRECTORY_ROLE_FILTERS_KEY,
-  USER_DIRECTORY_PAGE_SIZE_KEY,
   USER_PAGE_SIZE_OPTIONS
 } from './authAccessHelpers'
 import { buildPermissionSections, RolePermissionsMatrix } from './permissionMatrix'
@@ -117,6 +111,7 @@ import {
   DeleteAuthUserDialog,
   SupportAccessPermissionsDialog
 } from './authAccessDialogs'
+import { userDirectoryPageSizeKey, userDirectoryRoleFiltersKey, userDirectorySortDirKey, userDirectorySortKey, userDirectoryStatusFilterKey, userDirectoryViewModeKey } from '../lib/storageKeys'
 
 // Defaults mirror the persisted user-directory controls' fallbacks below.
 const DEFAULT_USER_SORT_KEY: UserSortKey = 'name'
@@ -254,33 +249,33 @@ export function AuthAccessSection({
   const [userSearch, setUserSearch] = useState('')
   // Sort, filters, and page size persist across reloads; search and page stay ephemeral.
   const [userStatusFilter, setUserStatusFilter] = usePersistentState<UserStatusFilter>(
-    USER_DIRECTORY_STATUS_FILTER_KEY,
+    userDirectoryStatusFilterKey,
     DEFAULT_USER_STATUS_FILTER,
     sanitizeUserStatusFilter
   )
   const [userRoleFilters, setUserRoleFilters] = usePersistentState<string[]>(
-    USER_DIRECTORY_ROLE_FILTERS_KEY,
+    userDirectoryRoleFiltersKey,
     [],
     sanitizeUserRoleFilters
   )
   const [userSortKey, setUserSortKey] = usePersistentState<UserSortKey>(
-    USER_DIRECTORY_SORT_KEY,
+    userDirectorySortKey,
     DEFAULT_USER_SORT_KEY,
     sanitizeUserSortKey
   )
   const [userSortDirection, setUserSortDirection] = usePersistentState<UserSortDirection>(
-    USER_DIRECTORY_SORT_DIR_KEY,
+    userDirectorySortDirKey,
     DEFAULT_USER_SORT_DIRECTION,
     sanitizeUserSortDirection
   )
   const [userPage, setUserPage] = useState(1)
   const [userPageSize, setUserPageSize] = usePersistentState<number>(
-    USER_DIRECTORY_PAGE_SIZE_KEY,
+    userDirectoryPageSizeKey,
     DEFAULT_USER_PAGE_SIZE,
     sanitizeUserPageSize
   )
   const [userViewMode, setUserViewMode] = useLocalStorageState<DirectoryViewMode>(
-    USER_DIRECTORY_VIEW_MODE_KEY,
+    userDirectoryViewModeKey,
     'icon',
     parseUserDirectoryViewMode,
     String

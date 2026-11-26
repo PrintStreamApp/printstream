@@ -15,7 +15,7 @@
  * This supervisor makes them self-healing:
  *  - it runs the service under plain `tsx` (which EXITS on crash) and restarts it
  *    on any exit, cause-agnostic, with crash-loop backoff;
- *  - it polls the configured source and compiled dependency roots for mtime changes and restarts on
+ *  - it polls the configured source and compiled dependency roots for content changes and restarts on
  *    change: hot-reload that works regardless of inotify reliability (the same cross-package reload
  *    the old `--include` globs provided).
  *
@@ -24,8 +24,8 @@
  * bridge command historically loads the repo `.env` itself.
  */
 import { spawn } from 'node:child_process'
-import { readdirSync, statSync } from 'node:fs'
 import path from 'node:path'
+import { scanServiceWatchRoots } from './lib/service-watch-state.mjs'
 
 const serviceDir = process.cwd()
 const repoRoot = path.resolve(serviceDir, '../..')
@@ -40,8 +40,6 @@ const CHANGE_DEBOUNCE_MS = 200
 const MIN_BACKOFF_MS = 500
 const MAX_BACKOFF_MS = 10_000
 const HEALTHY_UPTIME_MS = 3_000
-const IGNORED_SUFFIXES = ['.test.ts', '.test.tsx']
-const IGNORED_DIRECTORIES = new Set(['node_modules', 'test-utils', '__fixtures__'])
 
 let child = null
 let shuttingDown = false
@@ -104,48 +102,18 @@ function restartForChange(changedPath) {
 }
 
 // --- polling watcher (inotify-independent) ---
-const mtimes = new Map()
+let observations = scanServiceWatchRoots(watchRoots).observations
 
 function scanForChanges() {
-  let changed = null
-  for (const root of watchRoots) {
-    walk(root, (file, mtimeMs) => {
-      const prev = mtimes.get(file)
-      mtimes.set(file, mtimeMs)
-      if (prev !== undefined && prev !== mtimeMs && !changed) changed = file
-    })
-  }
+  const scan = scanServiceWatchRoots(watchRoots, observations)
+  observations = scan.observations
+  const changed = scan.changedPath
   if (changed) {
     if (debounceTimer) clearTimeout(debounceTimer)
     debounceTimer = setTimeout(() => restartForChange(changed), CHANGE_DEBOUNCE_MS)
   }
 }
 
-function walk(dir, visit) {
-  let entries
-  try {
-    entries = readdirSync(dir, { withFileTypes: true })
-  } catch {
-    return
-  }
-  for (const dirent of entries) {
-    if (IGNORED_DIRECTORIES.has(dirent.name) || dirent.name.startsWith('.')) continue
-    const full = path.join(dir, dirent.name)
-    if (dirent.isDirectory()) {
-      walk(full, visit)
-    } else if (/\.(ts|js|mjs|cjs|json)$/.test(dirent.name)
-      && !IGNORED_SUFFIXES.some((suffix) => dirent.name.endsWith(suffix))) {
-      try {
-        visit(full, statSync(full).mtimeMs)
-      } catch {
-        // file vanished mid-scan (e.g. tsc rewrite); ignore
-      }
-    }
-  }
-}
-
-// Seed the mtime snapshot so the first scan doesn't trigger a spurious reload.
-for (const root of watchRoots) walk(root, (file, mtimeMs) => mtimes.set(file, mtimeMs))
 const watchTimer = setInterval(scanForChanges, WATCH_INTERVAL_MS)
 
 function shutdown(signal) {

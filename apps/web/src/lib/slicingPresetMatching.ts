@@ -23,6 +23,7 @@ import type {
   ThreeMfIndex,
   ThreeMfPlate
 } from '@printstream/shared'
+import { declaredPrintersAcceptMachine } from '@printstream/shared'
 import {
   amsTrayIndex,
   brandFromPresetName,
@@ -121,7 +122,14 @@ export function sortSlicingPresets(profiles: SlicingPresetSummary[]): SlicingPre
 
 export function buildProjectSlicingPresets(bakedIndex: ThreeMfIndex | null, kind: SlicingPresetSummary['kind']): SlicingPresetSummary[] {
   if (!bakedIndex) return []
-  if (kind === 'machine') return buildProjectSlicingPresetList(kind, bakedIndex.printerProfileName ? [bakedIndex.printerProfileName] : [])
+  // The machine carries its parent too, which is what the engine judges a CUSTOM printer by (see
+  // `printerProfileInherits`). A system printer's slot is blank, so it stays parentless and is
+  // judged by its own name; an index from before parser v44 has no field and behaves the same.
+  if (kind === 'machine') {
+    return buildProjectSlicingPresetList(kind, bakedIndex.printerProfileName
+      ? [{ name: bakedIndex.printerProfileName, derivedFrom: bakedIndex.printerProfileInherits }]
+      : [])
+  }
   // The process preset carries its LINEAGE. A project preset declares no compatibility of its own,
   // so without the parent the only evidence about which machine it was authored for is its own
   // name, and a name like "0.20mm Speed - Tablet Mount" states nothing. The engine has no such
@@ -172,8 +180,7 @@ export function buildProjectSlicingPresetList(
    * rather than one parent for the list: a lineage is evidence about which printer a preset was
    * authored for, and `isProcessProfileCompatible` treats it as authoritative, so stamping one
    * entry's parent onto its neighbours would refuse (or admit) presets on somebody else's record.
-   * Today only the single-element process call carries one, but the machine call already passes a
-   * list through here.
+   * Today the single-element process and machine calls are the only ones that carry one.
    */
   entries: ReadonlyArray<string | { name: string; derivedFrom?: string | null }>
 ): SlicingPresetSummary[] {
@@ -375,8 +382,8 @@ export function isProcessProfileCompatible(
     // and it is not part of the engine's process-vs-printer decision either.
     if (parent) {
       // The ENGINE's rule, not the permissive one used for an ordinary preset: a literal
-      // `compatible_printers` containment of the machine PRESET name
-      // (`BambuStudio.cpp:2937-2941`). It has to be the engine's, because the save's own fallback
+      // `compatible_printers` containment of the machine PRESET name, or for a custom machine of its
+      // direct parent INSTEAD (`BambuStudio.cpp:2330-2336`, `:2937-2941`). It has to be the engine's, because the save's own fallback
       // (`processPresetFitsMachine`) tests exactly this, and a picker that answered more loosely
       // would offer a preset the save then silently replaced -- discarding the project's tuned
       // process values with no UI signal, which is the "refused by a check the dialog did not show"
@@ -385,7 +392,7 @@ export function isProcessProfileCompatible(
       // nothing about a nozzle, so a 0.4 -> 0.6 switch passed every name rule and still failed.
       // Deliberately not `matchesPlateType`: the plate type is the PROJECT's, not something
       // inherited, and it is not part of the engine's process-vs-printer decision either.
-      if (selectedMachineProfile) return declaredCompatiblePrintersAccept(parent, selectedMachineProfile.name)
+      if (selectedMachineProfile) return declaredCompatiblePrintersAccept(parent, selectedMachineProfile)
       // No machine preset resolved yet: nothing to compare against, so fall through to the
       // permissive axes rather than refusing on absent evidence.
       return matchesCompatiblePrinters(parent, selectedMachineProfile, model)
@@ -433,7 +440,8 @@ export function namesADifferentPrinterModel(profile: SlicingPresetSummary, model
 
 /**
  * BambuStudio's own compatibility test, over a preset SUMMARY: does its declared
- * `compatible_printers` literally name this machine preset?
+ * `compatible_printers` literally name this machine's system identity: its own name for a system
+ * preset, its direct parent INSTEAD for a custom one (workspace or project-embedded)?
  *
  * The web-side twin of `processPresetFitsMachine` (`@printstream/shared/machine-retarget`), which
  * the SAVE applies, and deliberately the same string comparison the engine makes rather than the
@@ -443,11 +451,11 @@ export function namesADifferentPrinterModel(profile: SlicingPresetSummary, model
  */
 export function declaredCompatiblePrintersAccept(
   profile: SlicingPresetSummary,
-  machinePresetName: string | null | undefined
+  machinePreset: SlicingPresetSummary | null | undefined
 ): boolean {
-  const declared = (profile.compatiblePrinters ?? []).map((entry) => entry.trim()).filter(Boolean)
-  if (declared.length === 0 || !machinePresetName) return true
-  return declared.includes(machinePresetName.trim())
+  // The parent counts only for a CUSTOM machine; a system preset is never accepted through one.
+  const parent = machinePreset?.source === 'custom' ? machinePreset.derivedFromPresetName : null
+  return declaredPrintersAcceptMachine(profile.compatiblePrinters ?? [], machinePreset?.name, parent)
 }
 
 /**

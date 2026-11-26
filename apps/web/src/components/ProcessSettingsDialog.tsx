@@ -42,7 +42,7 @@ import {
   type SettingsBaselineOrigin,
   type SlicingPresetSummary
 } from '@printstream/shared'
-import { saveSlicingPreset } from '../lib/saveSlicingPreset'
+import { useSaveSlicingPreset } from './settings/useSaveSlicingPreset'
 import { collectBulkOverridesResult, summarizeBulkOverrides } from '../lib/processBulkOverrides'
 import { useEffectiveSlicerDeveloperMode } from '../lib/slicerDeveloperMode'
 import { canUpdateProcessPreset } from '../lib/processPresetEditPolicy'
@@ -59,6 +59,8 @@ import type { SettingFilamentChoice } from './settings/SettingValueField'
 export interface ProcessSettingsDialogProps {
   open: boolean
   onClose: () => void
+  /** Releases the caller's held catalogue after a successful preset save. */
+  onPresetSaved?: () => void | Promise<void>
   slicerTargetId: string
   processProfileId: string
   processProfileName: string
@@ -175,6 +177,7 @@ const SUPPORT_INTERFACE_FILAMENT_KEY = 'support_interface_filament'
 export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps): JSX.Element {
   const { open, onClose, slicerTargetId, processProfileId, processProfileName, sourceFileId, initialOverrides, initialOverridesByMember, profileOptions, onProfileChange, allowedKeys, baseOverlay, titlePrefix, filamentChoices, applyScope = 'slice', canEditOriginal, initialQuery, resolveConfig, onApply } = props
   const draft = useProcessSettingsDraft({ open, profileId: processProfileId, overrides: initialOverrides, onProfileChange, onApply })
+  const saveSlicingPreset = useSaveSlicingPreset(props.onPresetSaved)
   const activeProfileId = draft.profileId
   const activeOverrides = draft.overrides
   const activeProfileName = profileOptions?.find((profile) => profile.id === activeProfileId)?.name ?? processProfileName
@@ -579,10 +582,11 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
     setError(null)
     try {
       const presetConfig: Record<string, string | string[]> = { ...config, name, type: 'process' }
-      await saveSlicingPreset({ kind: 'process', name, overwrite, config: presetConfig })
-      const result = computeAppliedOverrides()
-      draft.apply(result.overrides, { clearedKeys: result.clearedKeys })
-      onClose()
+      await saveSlicingPreset({ kind: 'process', name, overwrite, config: presetConfig }, () => {
+        const result = computeAppliedOverrides()
+        draft.apply(result.overrides, { clearedKeys: result.clearedKeys })
+        onClose()
+      })
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save preset')
     } finally {

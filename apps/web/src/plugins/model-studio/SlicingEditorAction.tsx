@@ -67,7 +67,7 @@ export function SlicingEditorAction(props: Record<string, unknown>) {
   // This host HAS a workspace, so its manager is the workspace one. The public editor supplies its own
   // browser-storage manager instead: see `LocalEditorSurface`.
   const presetManager = useCallback(
-    (managerProps: { open: boolean; onClose: () => void }) => <SlicingPresetsDialog {...managerProps} />,
+    (managerProps: { open: boolean; onClose: () => void; onPresetsChanged?: () => void | Promise<void> }) => <SlicingPresetsDialog {...managerProps} />,
     []
   )
 

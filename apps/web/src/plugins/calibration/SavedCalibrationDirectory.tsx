@@ -13,6 +13,7 @@ import { PaginatedSection } from '../../components/PaginationFooter'
 import { EmptyState } from '../../components/EmptyState'
 import { usePersistentState } from '../../hooks/usePersistentState'
 import { calibrationKindLabel, calibrationValueLabel, calibrationPrinterTargetLabel } from './runPresentation'
+import { savedCalibrationDirectionKey, savedCalibrationDirectoryKey, savedCalibrationSortKey } from './storageKeys'
 
 const SORT_OPTIONS = [
   { value: 'updatedAt', label: 'Last updated' },
@@ -49,10 +50,10 @@ export function SavedCalibrationDirectory({ results, runs, printers, children }:
   const [search, setSearch] = useState('')
   const deferredSearch = useDeferredValue(search)
   const [page, setPage] = useState(1)
-  const [prefs, setPrefs] = usePersistentState('printstream.calibration.saved.directory', DEFAULT_PREFS, sanitizePrefs)
+  const [prefs, setPrefs] = usePersistentState(savedCalibrationDirectoryKey, DEFAULT_PREFS, sanitizePrefs)
   const { sortBy, sortDirection, sortProps } = useDirectorySortState({
-    sortByKey: 'printstream.calibration.saved.sort',
-    sortDirectionKey: 'printstream.calibration.saved.direction',
+    sortByKey: savedCalibrationSortKey,
+    sortDirectionKey: savedCalibrationDirectionKey,
     options: SORT_OPTIONS,
     defaultSortBy: 'updatedAt',
     ariaLabel: 'Sort saved calibrations',

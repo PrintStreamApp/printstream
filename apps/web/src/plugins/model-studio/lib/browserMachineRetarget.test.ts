@@ -22,7 +22,7 @@ import {
   type ResolveProcessConfigResponse,
   type SlicingManualProfileTarget
 } from '@printstream/shared'
-import { PUBLIC_RETARGET_RESOLVERS, WORKSPACE_RETARGET_RESOLVERS, buildMachineRetargetPlan, type RetargetResolvers } from './browserMachineRetarget'
+import { PUBLIC_RETARGET_RESOLVERS, WORKSPACE_RETARGET_RESOLVERS, buildMachineRetargetPlan, customMachineParentName, type RetargetResolvers } from './browserMachineRetarget'
 
 /**
  * The resolve responses carry the settings-catalog value types, which are narrower than the plain
@@ -434,4 +434,11 @@ test('a project with no settings to read makes no lineage lookup at all', async 
   }))
   assert.equal(plan?.processConfig, null)
   assert.deepEqual(processNames, [])
+})
+
+test('customMachineParentName gives the parent for a workspace machine and null for every other provenance', () => {
+  const config = { inherits: 'Bambu Lab P1P 0.4 nozzle' }
+  assert.equal(customMachineParentName('custom:7c1d0f3e-0000-4000-8000-000000000000', config), 'Bambu Lab P1P 0.4 nozzle')
+  assert.equal(customMachineParentName(buildBuiltinSlicingPresetId('machine', 'Bambu Lab P1S 0.4 nozzle'), config), null)
+  assert.equal(customMachineParentName(null, config), null)
 })

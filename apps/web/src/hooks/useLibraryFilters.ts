@@ -15,16 +15,12 @@ import {
 } from '../lib/libraryDirectory'
 import {
   collectDistinctLibraryFilterValues,
-  LIBRARY_FILE_TYPE_FILTERS_KEY,
-  LIBRARY_NOZZLE_SIZE_FILTERS_KEY,
-  LIBRARY_PAGE_SIZE_KEY,
   LIBRARY_PAGE_SIZE_OPTIONS,
-  LIBRARY_PLATE_TYPE_FILTERS_KEY,
-  LIBRARY_PRINTER_MODEL_FILTERS_KEY
-} from '../lib/libraryViewHelpers'
+  } from '../lib/libraryViewHelpers'
 import { usePersistentState } from './usePersistentState'
 import type { LibrarySort } from '../components/LibraryBrowser'
 import type { LibraryFile, LibraryFolder } from '@printstream/shared'
+import { libraryFileTypeFiltersKey, libraryNozzleSizeFiltersKey, libraryPageSizeKey, libraryPlateTypeFiltersKey, libraryPrinterModelFiltersKey } from '../lib/storageKeys'
 
 type LibraryPageSize = (typeof LIBRARY_PAGE_SIZE_OPTIONS)[number]
 
@@ -109,12 +105,12 @@ export function libraryFacetsEmpty(filters: Pick<LibraryFilters,
 export function useLibraryFilters(params: LibraryFiltersParams): LibraryFilters {
   const { tagFilter, visibleFiles, childFolders, currentFolderId, requestedBridgeId, deferredSearch, sort, favoritesOnly } = params
   const { matches: matchesTags, searchText: tagSearchText } = tagFilter
-  const [fileTypeFilters, setFileTypeFilters] = usePersistentState<string[]>(LIBRARY_FILE_TYPE_FILTERS_KEY, EMPTY_FILTER_VALUES, sanitizeFilterValues)
-  const [printerModelFilters, setPrinterModelFilters] = usePersistentState<string[]>(LIBRARY_PRINTER_MODEL_FILTERS_KEY, EMPTY_FILTER_VALUES, sanitizeFilterValues)
-  const [nozzleSizeFilters, setNozzleSizeFilters] = usePersistentState<string[]>(LIBRARY_NOZZLE_SIZE_FILTERS_KEY, EMPTY_FILTER_VALUES, sanitizeFilterValues)
-  const [plateTypeFilters, setPlateTypeFilters] = usePersistentState<string[]>(LIBRARY_PLATE_TYPE_FILTERS_KEY, EMPTY_FILTER_VALUES, sanitizeFilterValues)
+  const [fileTypeFilters, setFileTypeFilters] = usePersistentState<string[]>(libraryFileTypeFiltersKey, EMPTY_FILTER_VALUES, sanitizeFilterValues)
+  const [printerModelFilters, setPrinterModelFilters] = usePersistentState<string[]>(libraryPrinterModelFiltersKey, EMPTY_FILTER_VALUES, sanitizeFilterValues)
+  const [nozzleSizeFilters, setNozzleSizeFilters] = usePersistentState<string[]>(libraryNozzleSizeFiltersKey, EMPTY_FILTER_VALUES, sanitizeFilterValues)
+  const [plateTypeFilters, setPlateTypeFilters] = usePersistentState<string[]>(libraryPlateTypeFiltersKey, EMPTY_FILTER_VALUES, sanitizeFilterValues)
   const [filtersDialogOpen, setFiltersDialogOpen] = useState(false)
-  const [pageSize, setPageSize] = usePersistentState<LibraryPageSize>(LIBRARY_PAGE_SIZE_KEY, 25, sanitizeLibraryPageSize)
+  const [pageSize, setPageSize] = usePersistentState<LibraryPageSize>(libraryPageSizeKey, 25, sanitizeLibraryPageSize)
   const [page, setPage] = useState(1)
 
   const fileTypeOptions = useMemo(

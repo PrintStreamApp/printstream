@@ -167,6 +167,15 @@ export const remoteImportResolveResponseSchema = z.object({
 
 export type RemoteImportResolveResponse = z.infer<typeof remoteImportResolveResponseSchema>
 
+/** A downloaded temporary model, with the actual filename used by the save picker. */
+export const remoteImportPreparedResponseSchema = z.object({
+  id: z.string().uuid(),
+  fileName: z.string().min(1),
+  sizeBytes: z.number().int().nonnegative(),
+  expiresAt: z.string().datetime()
+})
+export type RemoteImportPreparedResponse = z.infer<typeof remoteImportPreparedResponseSchema>
+
 export const remoteImportUrlImportRequestSchema = z.object({
   url: z.string().trim().url(),
   /**
@@ -176,11 +185,17 @@ export const remoteImportUrlImportRequestSchema = z.object({
    */
   bridgeId: z.string().trim().min(1),
   /**
-   * Library folder to import into. Absent means the default `Imported models`
-   * folder on `bridgeId`. When present it also decides the bridge (a folder already
-   * belongs to one), so the two cannot disagree.
+   * Library folder to import into. Without destinationSelected, absent/null keeps
+   * the legacy helper's default `Imported models` folder. With confirmation, null
+   * selects the bridge root. A real folder must belong to bridgeId.
    */
-  folderId: z.string().trim().min(1).nullish()
+  folderId: z.string().trim().min(1).nullish(),
+  /** Explicit confirmation makes a null folder the bridge root; legacy helpers retain their default folder. */
+  destinationSelected: z.boolean().optional(),
+  /** Editable base name; the downloaded file's actual extension is preserved. */
+  outputFileName: z.string().trim().min(1).max(255).optional(),
+  /** When present, use exactly these prepared bytes instead of downloading again. */
+  preparedImportId: z.string().uuid().optional()
 })
 
 export type RemoteImportUrlImportRequest = z.infer<typeof remoteImportUrlImportRequestSchema>

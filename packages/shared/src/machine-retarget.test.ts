@@ -4,12 +4,15 @@ import {
   applyMachineRetargetToProjectSettings,
   applyMachineSettingOverrides,
   applyProcessProfileToProjectSettings,
+  declaredPrintersAcceptMachine,
+  processPresetFitsMachine,
   projectProcessSystemName,
   resolveRetargetProcessFallback,
   retargetProjectSettingsToMachine,
   stripSliceInfoPrinterModelId,
   type ProfileRecord
 } from './machine-retarget.js'
+import { readMachineInheritsSlot } from './three-mf-project-config.js'
 
 // A single-extruder A1-mini-ish project (only the fields that matter here).
 const a1Project = {
@@ -860,4 +863,50 @@ test('retargeting onto the project\'s own printer never resets an option its pre
   })
   assert.equal(next.bed_temperature_formula, 'by_highest_temp')
   assert.equal(next.printing_by_object_gcode, 'G1 Z10 ; mine')
+})
+
+test('compatible_printers containment: empty, own name, custom parent, never a system parent', () => {
+  const stock = ['Bambu Lab P1P 0.4 nozzle']
+  // Empty declaration accepts everything.
+  assert.equal(declaredPrintersAcceptMachine([], 'Anything'), true)
+  // A custom machine inheriting the stock printer accepts a process declaring the stock printer.
+  assert.equal(declaredPrintersAcceptMachine(stock, 'Mike P1P', 'Bambu Lab P1P 0.4 nozzle'), true)
+  // A system machine (no parent passed) is not accepted through any parent.
+  assert.equal(declaredPrintersAcceptMachine(stock, 'Bambu Lab P1S 0.4 nozzle', null), false)
+  // Declaring neither the name nor the parent is rejected.
+  assert.equal(declaredPrintersAcceptMachine(stock, 'Mike A1', 'Bambu Lab A1 0.4 nozzle'), false)
+  // The slicing CLI never tests a custom preset's own name, so naming only it is refused here too.
+  assert.equal(declaredPrintersAcceptMachine(['Mike P1P'], 'Mike P1P', 'Bambu Lab P1P 0.4 nozzle'), false)
+  // A custom machine with no recorded parent falls back to its own name.
+  assert.equal(declaredPrintersAcceptMachine(['Mike P1P'], 'Mike P1P', null), true)
+  assert.equal(processPresetFitsMachine({ compatible_printers: stock }, 'Mike P1P', 'Bambu Lab P1P 0.4 nozzle'), true)
+  assert.equal(processPresetFitsMachine({ compatible_printers: stock }, 'Mike P1P'), false)
+})
+
+test('a custom machine whose parent still accepts the process keeps it; a system machine reselects', async () => {
+  const catalogue: Record<string, ProfileRecord> = {
+    '0.20mm Strength @BBL P1P': { name: '0.20mm Strength @BBL P1P', compatible_printers: ['Bambu Lab P1P 0.4 nozzle'] }
+  }
+  const run = (printerPresetInherits: string | null) => resolveRetargetProcessFallback({
+    projectSettings: { print_settings_id: 'x', printer_model: 'Bambu Lab A1', inherits_group: ['0.20mm Strength @BBL P1P', '', ''] },
+    machineConfig: { printer_model: 'Bambu Lab P1P', default_print_profile: 'missing' },
+    printerSettingsId: 'Mine P1P',
+    printerPresetInherits,
+    resolveSystemProcess: async (name) => catalogue[name] ?? null
+  })
+  assert.equal(await run('Bambu Lab P1P 0.4 nozzle'), null, 'parent accepted: nothing to switch away from')
+  assert.equal(await run(null), null, 'refused and no replacement resolves: kept, never guessed')
+})
+
+test('readMachineInheritsSlot reads the custom parent, and is null when the slot is blank or not writable', () => {
+  assert.equal(readMachineInheritsSlot({ filament_colour: ['#fff'], inherits_group: ['', '', 'Bambu Lab P1P 0.4 nozzle'] }), 'Bambu Lab P1P 0.4 nozzle')
+  assert.equal(readMachineInheritsSlot({ filament_colour: ['#fff'], inherits_group: ['', '', ''] }), null)
+  assert.equal(readMachineInheritsSlot({}), null)
+  assert.equal(readMachineInheritsSlot({ filament_colour: ['#fff'], inherits_group: [] }), null)
+  assert.equal(readMachineInheritsSlot({ inherits_group: ['', '', 'Bambu Lab P1P 0.4 nozzle'] }), null, 'no filament count: cannot be located')
+})
+
+test('compatible_printers containment never consults a grandparent', () => {
+  // Studio checks the DIRECT parent only (Preset.cpp: "FIXME only check the parent now").
+  assert.equal(declaredPrintersAcceptMachine(['Bambu Lab P1P 0.4 nozzle'], 'Mine', 'My other custom printer'), false)
 })

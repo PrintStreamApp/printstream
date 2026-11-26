@@ -25,6 +25,7 @@ import { BackAwareModal } from './BackAwareModal'
 import { useDialogPresentationState } from '../hooks/useDialogPresentationState'
 import { useMobileViewport } from './useMobileViewport'
 import { dialogPresentationProps } from '../lib/dialogPresentation'
+import { previewMaximizedKey } from '../lib/storageKeys'
 
 export interface LazyDialogFallbackProps {
   /** What is opening, as the user would say it. Announced to screen readers. */
@@ -79,7 +80,7 @@ function LoadingBody({
 export function LazyDialogFallback({ label, description, variant = 'dialog', onClose }: LazyDialogFallbackProps) {
   const isMobile = useMobileViewport()
   const { presentation: requestedPreviewPresentation } = useDialogPresentationState({
-    maximizedStorageKey: variant === 'preview' ? 'bambu.preview.maximized' : null,
+    maximizedStorageKey: variant === 'preview' ? previewMaximizedKey : null,
     base: variant === 'maximized' ? 'maximized' : undefined
   })
   const previewPresentation = isMobile && requestedPreviewPresentation === 'standard'

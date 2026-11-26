@@ -1,23 +1,15 @@
 /* eslint-disable react-refresh/only-export-components -- plugin entry exports a lazy route intentionally */
 /**
- * Remote imports plugin (web side).
- *
- * Imported files land in the bridge-backed library, so this is a library surface, not its own
- * top-level section: the import sub-view at `/library/import` is where users paste provider
- * URLs, review detection results, and import.
- *
- * Reached from MENU entries on the surfaces that already do this job, the library's Upload
- * split button and the printers page's Print split button, rather than a toolbar button of
- * its own. Importing from a URL is another way to do what those controls already do, so a
- * third adjacent button just competed with them.
- *
- * `/import/*` stays mounted (unlisted) because the Chrome helper extension hands off to that
- * path with `candidates` / `uploadedFile` query params; existing links must keep working.
+ * Remote imports extend the library Upload menu with direct MakerWorld, Printables,
+ * and URL actions. A persistent overlay owns each flow after the menu closes.
+ * Legacy `/library/import` and `/import/*` routes preserve printer-menu and browser
+ * helper handoffs with candidates / uploadedFile query parameters.
  */
 import { Suspense, lazy } from 'react'
 import { Typography } from '@mui/joy'
 import type { WebPlugin } from '../../plugin/types'
 import { LibraryImportMenuAction, PrinterImportMenuAction } from './ImportMenuActions'
+import { LibraryImportOverlayHost } from './LibraryImportOverlayHost'
 import { RemoteImportsSettingsPanel } from './RemoteImportsSettingsPanel'
 
 const RemoteImportsView = lazy(async () => {
@@ -49,6 +41,7 @@ export const remoteImportsPlugin: WebPlugin = {
   ],
   slots: [
     { name: 'library.upload.menu', component: LibraryImportMenuAction },
+    { name: 'shell.overlays', component: LibraryImportOverlayHost },
     { name: 'printers.print.menu', component: PrinterImportMenuAction }
   ],
   settingsPanel: RemoteImportsSettingsPanel

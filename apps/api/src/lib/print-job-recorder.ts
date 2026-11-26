@@ -23,6 +23,7 @@
  * printer row. Metadata-column writes tolerate a DB still missing the newest
  * columns (logged, then retried without them) so recording never blocks a print.
  */
+import { linkPrintJobFaults } from './printer-fault-recorder.js'
 import { capturePrintJobTags } from './print-job-tag-capture.js'
 import { withOptionalPrintSource } from './print-job-source-link.js'
 import { randomUUID } from 'node:crypto'
@@ -138,22 +139,40 @@ export function setPrintJobSnapshotEnsurerForTests(
   printJobSnapshotEnsurer = ensurer ?? ensurePrintJobSnapshot
 }
 
+const recorderTasks = new Set<Promise<void>>()
+
+/** EventEmitter does not await async listeners; retain their work for shutdown and test teardown. */
+function trackRecorderTask(task: Promise<void>): void {
+  const observed = task.catch((error) => console.error('[print-job-recorder] event persistence failed', error))
+  recorderTasks.add(observed)
+  void observed.finally(() => recorderTasks.delete(observed))
+}
+
+function onStatusEvent(status: PrinterStatus): void { trackRecorderTask(onStatus(status)) }
+function onJobStartedEvent(event: Parameters<typeof onJobStarted>[0]): void { trackRecorderTask(onJobStarted(event)) }
+function onJobFinishedEvent(event: Parameters<typeof onJobFinished>[0]): void { trackRecorderTask(onJobFinished(event)) }
+
+/** Flush accepted job events before stopping the fault recorder or restoring test persistence. */
+export async function waitForPrintJobRecorderIdle(): Promise<void> {
+  while (recorderTasks.size) await Promise.all(recorderTasks)
+}
+
 export function startPrintJobRecorder(): void {
   if (started) return
   started = true
   printerEvents.on('print.job.starting', onTrackedJobStarting)
-  printerEvents.on('status', onStatus)
-  printerEvents.on('job.started', onJobStarted)
-  printerEvents.on('job.finished', onJobFinished)
+  printerEvents.on('status', onStatusEvent)
+  printerEvents.on('job.started', onJobStartedEvent)
+  printerEvents.on('job.finished', onJobFinishedEvent)
 }
 
 export function stopPrintJobRecorder(): void {
   if (!started) return
   started = false
   printerEvents.off('print.job.starting', onTrackedJobStarting)
-  printerEvents.off('status', onStatus)
-  printerEvents.off('job.started', onJobStarted)
-  printerEvents.off('job.finished', onJobFinished)
+  printerEvents.off('status', onStatusEvent)
+  printerEvents.off('job.started', onJobStartedEvent)
+  printerEvents.off('job.finished', onJobFinishedEvent)
   clearDelayedThumbnailPersists()
   activeJobs.clear()
   activeJobTaskIds.clear()
@@ -317,6 +336,7 @@ async function onJobStarted(event: { printer: { id: string; name: string }; jobN
 
     if (taskId) {
       await activateExternalPrintJob({
+        observedAt: status?.observedAt,
         printerId: event.printer.id,
         observedJobName: event.jobName,
         taskId,
@@ -399,6 +419,7 @@ export async function createPrintJobStartRecord(input: {
       }
     })
   }
+  await linkPrintJobFaults(printer.workspaceId, input.printerId, created.id)
   // Each created job that targets a library file is one print of that file: roll it
   // into the file's denormalized print-history counters for the library sorts.
   await bumpLibraryFilePrintStats(data.fileId, data.startedAt)
@@ -508,7 +529,9 @@ export async function upsertTrackedPrintJobRecord(input: {
     })
   }
 
-  broadcastJobsChanged(await readPrinterWorkspaceId(input.printerId))
+  const workspaceId = await readPrinterWorkspaceId(input.printerId)
+  if (workspaceId) await linkPrintJobFaults(workspaceId, input.printerId, input.jobId)
+  broadcastJobsChanged(workspaceId)
 }
 
 async function resolvePrintJobPlateDetails(input: {
@@ -589,7 +612,8 @@ async function updateFinishedPrintJob(jobId: string, data: {
   filamentUsedMeters: number | null
   result: 'success' | 'failed' | 'cancelled' | 'unknown'
 }): Promise<void> {
-  await rootPrisma.printJob.update({ where: { id: jobId }, data })
+  const job = await rootPrisma.printJob.update({ where: { id: jobId }, data })
+  if (job?.workspaceId && job?.printerId) await linkPrintJobFaults(job.workspaceId, job.printerId, jobId)
 }
 
 function mapStoredJobKind(jobKind: PendingPrintJobSource['jobKind']): 'library' | 'calibration' | 'external' {
@@ -604,12 +628,13 @@ function mapStoredJobKind(jobKind: PendingPrintJobSource['jobKind']): 'library' 
   }
 }
 
-async function readUnfinishedPrintJobRows(printerId: string, taskId: string): Promise<UnfinishedPrintJobRow[]> {
+async function readUnfinishedPrintJobRows(printerId: string, taskId: string, observedNoLaterThan?: Date): Promise<UnfinishedPrintJobRow[]> {
   return await rootPrisma.printJob.findMany({
     where: {
       printerId,
       finishedAt: null,
-      taskId
+      taskId,
+      ...(observedNoLaterThan ? { startedAt: { lte: observedNoLaterThan } } : {})
     },
     orderBy: { startedAt: 'desc' },
     select: {
@@ -626,11 +651,12 @@ async function readUnfinishedPrintJobRows(printerId: string, taskId: string): Pr
   })
 }
 
-async function readAllUnfinishedPrintJobRows(printerId: string): Promise<UnfinishedPrintJobRow[]> {
+async function readAllUnfinishedPrintJobRows(printerId: string, observedNoLaterThan: Date): Promise<UnfinishedPrintJobRow[]> {
   return await rootPrisma.printJob.findMany({
     where: {
       printerId,
-      finishedAt: null
+      finishedAt: null,
+      startedAt: { lte: observedNoLaterThan }
     },
     orderBy: { startedAt: 'desc' },
     select: {
@@ -668,9 +694,18 @@ function scoreUnfinishedPrintJob(row: UnfinishedPrintJobRow): number {
   return score
 }
 
-async function readPreferredUnfinishedPrintJob(printerId: string, taskId: string): Promise<UnfinishedPrintJobRow | null> {
-  const rows = await readUnfinishedPrintJobRows(printerId, taskId)
+async function readPreferredUnfinishedPrintJob(printerId: string, taskId: string, observedNoLaterThan?: Date): Promise<UnfinishedPrintJobRow | null> {
+  const rows = await readUnfinishedPrintJobRows(printerId, taskId, observedNoLaterThan)
   return pickPreferredUnfinishedPrintJob(rows)
+}
+
+/** Batch-close paths must also finalize fault coverage before notifying Jobs readers. */
+async function broadcastClosedJobs(printerId: string, jobIds: string[]): Promise<void> {
+  const workspaceId = await readPrinterWorkspaceId(printerId)
+  if (workspaceId) {
+    for (const jobId of jobIds) await linkPrintJobFaults(workspaceId, printerId, jobId)
+  }
+  broadcastJobsChanged(workspaceId)
 }
 
 async function closeDuplicateUnfinishedPrintJobs(input: {
@@ -681,7 +716,7 @@ async function closeDuplicateUnfinishedPrintJobs(input: {
   progressPercent?: number | null
   result?: 'success' | 'failed' | 'cancelled' | 'unknown'
 }): Promise<void> {
-  const rows = await readUnfinishedPrintJobRows(input.printerId, input.taskId)
+  const rows = await readUnfinishedPrintJobRows(input.printerId, input.taskId, input.finishedAt)
   const duplicateIds = rows
     .filter((row) => row.id !== input.preferredJobId)
     .map((row) => row.id)
@@ -689,7 +724,8 @@ async function closeDuplicateUnfinishedPrintJobs(input: {
 
   await rootPrisma.printJob.updateMany({
     where: {
-      id: { in: duplicateIds }
+      id: { in: duplicateIds },
+      ...(input.finishedAt ? { startedAt: { lte: input.finishedAt } } : {})
     },
     data: {
       finishedAt: input.finishedAt ?? new Date(),
@@ -701,15 +737,15 @@ async function closeDuplicateUnfinishedPrintJobs(input: {
   console.warn(
     `[print-job-recorder] closed ${duplicateIds.length} duplicate unfinished print job${duplicateIds.length === 1 ? '' : 's'} for ${input.printerId}:${input.taskId}`
   )
-  broadcastJobsChanged(await readPrinterWorkspaceId(input.printerId))
+  await broadcastClosedJobs(input.printerId, duplicateIds)
 }
 
 async function closeStaleUnfinishedPrintJobsForPrinter(input: {
   printerId: string
   preferredJobId: string
-  finishedAt?: Date
+  finishedAt: Date
 }): Promise<void> {
-  const rows = await readAllUnfinishedPrintJobRows(input.printerId)
+  const rows = await readAllUnfinishedPrintJobRows(input.printerId, input.finishedAt)
   const staleJobIds = rows
     .filter((row) => row.id !== input.preferredJobId)
     .map((row) => row.id)
@@ -717,10 +753,11 @@ async function closeStaleUnfinishedPrintJobsForPrinter(input: {
 
   await rootPrisma.printJob.updateMany({
     where: {
-      id: { in: staleJobIds }
+      id: { in: staleJobIds },
+      startedAt: { lte: input.finishedAt }
     },
     data: {
-      finishedAt: input.finishedAt ?? new Date(),
+      finishedAt: input.finishedAt,
       progressPercent: null,
       result: 'unknown'
     }
@@ -729,7 +766,7 @@ async function closeStaleUnfinishedPrintJobsForPrinter(input: {
   console.warn(
     `[print-job-recorder] closed ${staleJobIds.length} stale unfinished print job${staleJobIds.length === 1 ? '' : 's'} for ${input.printerId}`
   )
-  broadcastJobsChanged(await readPrinterWorkspaceId(input.printerId))
+  await broadcastClosedJobs(input.printerId, staleJobIds)
 }
 
 function mapTerminalStatusResult(stage: PrinterStatus['stage']): 'success' | 'failed' | 'unknown' {
@@ -738,14 +775,15 @@ function mapTerminalStatusResult(stage: PrinterStatus['stage']): 'success' | 'fa
   return 'unknown'
 }
 
-async function reconcileTerminalStatusWithoutMatchingTask(status: PrinterStatus): Promise<void> {
-  const rows = await readAllUnfinishedPrintJobRows(status.printerId)
+/** Recovery may select only rows that existed at the captured terminal observation. */
+async function reconcileTerminalStatusWithoutMatchingTask(status: PrinterStatus, finishedAt: Date): Promise<void> {
+  const rows = await readAllUnfinishedPrintJobRows(status.printerId, finishedAt)
   const preferred = pickPreferredUnfinishedPrintJob(rows)
   if (!preferred) return
 
-  const finishedAt = new Date()
   await finishTrackedPrintJobRecord({
     jobId: preferred.id,
+    observedFinishedAt: finishedAt.toISOString(),
     result: mapTerminalStatusResult(status.stage),
     progressPercent: normalizeProgressPercent(status.progressPercent),
     captureSnapshot: true
@@ -762,6 +800,7 @@ export async function finishTrackedPrintJobRecord(input: {
   result: 'success' | 'failed' | 'cancelled' | 'unknown'
   progressPercent?: number | null
   captureSnapshot?: boolean
+  observedFinishedAt?: string
 }): Promise<void> {
   const existing = await rootPrisma.printJob.findUnique({
     where: { id: input.jobId },
@@ -781,7 +820,9 @@ export async function finishTrackedPrintJobRecord(input: {
   })
   if (!existing) return
 
-  const finishedAt = existing.finishedAt ?? new Date()
+  const finishedAt = existing.finishedAt ?? new Date(input.observedFinishedAt ?? new Date().toISOString())
+  // An observed terminal event cannot finish a later reservation of the same row.
+  if (existing.startedAt > finishedAt) return
   const plateDetails = input.result === 'unknown'
     ? null
     : await resolvePrintJobPlateDetails({
@@ -883,22 +924,37 @@ export async function cancelTrackedPrintJobRecord(input: {
 }
 
 async function onJobFinished(event: { printer: { id: string }; jobName: string; result: 'success' | 'failed' | 'cancelled' }): Promise<void> {
-  let jobId = activeJobs.get(event.printer.id)
+  const terminalStatus = printerManager.getStatus(event.printer.id)
+  const finishedAt = new Date(terminalStatus?.observedAt ?? new Date().toISOString())
+  const taskIdAtFinish = normalizeActivePrintTaskId(terminalStatus?.taskId)
+  const activeIdAtFinish = activeJobs.get(event.printer.id)
+  const activeTaskAtFinish = activeJobTaskIds.get(event.printer.id)
+  const trackedTaskId = taskIdAtFinish ?? activeTaskAtFinish ?? null
+  const pendingExternal = taskIdAtFinish ? externalJobActivations.get(`${event.printer.id}:${taskIdAtFinish}`) : undefined
+  const pendingMetadata = peekPendingPrintJobSource(event.printer.id)
+  const pendingTracked = pendingMetadata && (!taskIdAtFinish || pendingMetadata.taskId === taskIdAtFinish)
+    ? pendingTrackedJobActivations.get(event.printer.id) : undefined
   trackedStartGraceUntil.delete(event.printer.id)
-  const trackedTaskId = activeJobTaskIds.get(event.printer.id) ?? normalizeActivePrintTaskId(printerManager.getStatus(event.printer.id)?.taskId)
-  if (!jobId) {
-    const taskId = normalizeActivePrintTaskId(printerManager.getStatus(event.printer.id)?.taskId)
-    if (!taskId) return
 
-    const existing = await readPreferredUnfinishedPrintJob(event.printer.id, taskId)
-    jobId = existing?.id
+  // Bind the terminal observation before awaiting activation: another print may
+  // replace the active map while the old job's storage lookup is still running.
+  let jobId = activeIdAtFinish && (!trackedTaskId || !activeTaskAtFinish || trackedTaskId === activeTaskAtFinish)
+    ? activeIdAtFinish : undefined
+  try {
+    if (!jobId && pendingExternal) jobId = (await pendingExternal) ?? undefined
+    if (!jobId && pendingTracked) jobId = (await pendingTracked) ?? undefined
+    if (!jobId && taskIdAtFinish) jobId = (await readPreferredUnfinishedPrintJob(event.printer.id, taskIdAtFinish, finishedAt))?.id
+  } catch (error) {
+    console.error('Failed to resolve print job for terminal observation', error)
+    return
   }
   if (!jobId) return
-  activeJobs.delete(event.printer.id)
-  activeJobTaskIds.delete(event.printer.id)
-  activeJobPrinterFilePaths.delete(event.printer.id)
-  const finishedAt = new Date()
-  const progressPercent = normalizeProgressPercent(printerManager.getStatus(event.printer.id)?.progressPercent)
+  if (activeJobs.get(event.printer.id) === jobId) {
+    activeJobs.delete(event.printer.id)
+    activeJobTaskIds.delete(event.printer.id)
+    activeJobPrinterFilePaths.delete(event.printer.id)
+  }
+  const progressPercent = normalizeProgressPercent(terminalStatus?.progressPercent)
   try {
     const existing = await rootPrisma.printJob.findUnique({
       where: { id: jobId },
@@ -912,6 +968,7 @@ async function onJobFinished(event: { printer: { id: string }; jobName: string; 
         printer: { select: { model: true } }
       }
     })
+    if (existing && existing.startedAt > finishedAt) return
     const plateDetails = await resolvePrintJobPlateDetails({
       workspaceId: existing?.workspaceId ?? '',
       sourceType: existing?.sourceType ?? 'external',
@@ -974,15 +1031,23 @@ async function onJobFinished(event: { printer: { id: string }; jobName: string; 
 }
 
 async function onStatus(status: PrinterStatus): Promise<void> {
+  const terminal = isTerminalPrintJobStage(status.stage)
+  const taskId = normalizeActivePrintTaskId(status.taskId)
+  const finishedAt = new Date(status.observedAt ?? new Date().toISOString())
+  const pendingMetadata = peekPendingPrintJobSource(status.printerId)
+  const pendingExternal = taskId ? externalJobActivations.get(`${status.printerId}:${taskId}`) : undefined
+  const pendingTracked = pendingMetadata && (!taskId || pendingMetadata.taskId === taskId)
+    ? pendingTrackedJobActivations.get(status.printerId) : undefined
   const activeJobId = activeJobs.get(status.printerId)
-  if (activeJobId) {
+  const activeTaskId = activeJobTaskIds.get(status.printerId)
+  if (activeJobId && (!terminal || !taskId || !activeTaskId || activeTaskId === taskId)) {
     await syncActiveJobIdentity(status.printerId, activeJobId, status.taskId, status.gcodeFile)
     return
   }
 
   const withinTrackedStartGrace = (trackedStartGraceUntil.get(status.printerId) ?? 0) > Date.now()
   if (withinTrackedStartGrace) {
-    if (status.online && !isTerminalPrintJobStage(status.stage)) {
+    if (status.online && !terminal) {
       const trackedJobId = await activatePendingTrackedPrintJob({
         printerId: status.printerId,
         observedJobName: null,
@@ -998,10 +1063,10 @@ async function onStatus(status: PrinterStatus): Promise<void> {
 
   if (await failUnclaimedTrackedStart(status)) return
 
-  if (!isTerminalPrintJobStage(status.stage)) {
-    const taskId = normalizeActivePrintTaskId(status.taskId)
+  if (!terminal) {
     if (!taskId) return
     await activateExternalPrintJob({
+      observedAt: status.observedAt,
       printerId: status.printerId,
       observedJobName: status.jobName ?? deriveObservedJobName(status.gcodeFile, status.taskId),
       taskId,
@@ -1010,20 +1075,24 @@ async function onStatus(status: PrinterStatus): Promise<void> {
     return
   }
 
-  const taskId = normalizeActivePrintTaskId(status.taskId)
+  // PrinterManager emits status before job.finished. That finish handler owns
+  // this live activation and captures its exact promise before awaiting it.
+  // Falling back to an arbitrary row here could instead finish the next print.
+  if (pendingExternal || pendingTracked) return
+
   if (!taskId) {
     try {
-      await reconcileTerminalStatusWithoutMatchingTask(status)
+      await reconcileTerminalStatusWithoutMatchingTask(status, finishedAt)
     } catch (error) {
       console.error('Failed to reconcile stale print jobs from terminal printer status without task id', error)
     }
     return
   }
 
-  const existing = await readPreferredUnfinishedPrintJob(status.printerId, taskId)
+  const existing = await readPreferredUnfinishedPrintJob(status.printerId, taskId, finishedAt)
   if (!existing) {
     try {
-      await reconcileTerminalStatusWithoutMatchingTask(status)
+      await reconcileTerminalStatusWithoutMatchingTask(status, finishedAt)
     } catch (error) {
       console.error('Failed to reconcile stale print jobs from terminal printer status without a matching task id', error)
     }
@@ -1033,13 +1102,15 @@ async function onStatus(status: PrinterStatus): Promise<void> {
   try {
     await finishTrackedPrintJobRecord({
       jobId: existing.id,
+      observedFinishedAt: finishedAt.toISOString(),
       result: mapTerminalStatusResult(status.stage),
       progressPercent: normalizeProgressPercent(status.progressPercent),
       captureSnapshot: true
     })
     await closeStaleUnfinishedPrintJobsForPrinter({
       printerId: status.printerId,
-      preferredJobId: existing.id
+      preferredJobId: existing.id,
+      finishedAt
     })
   } catch (error) {
     console.error('Failed to reconcile print job from restored printer status', error)
@@ -1130,6 +1201,9 @@ async function syncActiveJobIdentity(
     activeJobPrinterFilePaths.set(printerId, nextPrinterFilePath)
   }
 
+  const workspaceId = await readPrinterWorkspaceId(printerId)
+  if (workspaceId) await linkPrintJobFaults(workspaceId, printerId, jobId)
+
   const effectiveTaskId = nextTaskId ?? currentTaskId
   if (effectiveTaskId) {
     await closeDuplicateUnfinishedPrintJobs({
@@ -1180,6 +1254,7 @@ async function activatePendingTrackedPrintJob(input: {
         where: { id: superseded.jobId, finishedAt: null },
         data: { finishedAt: new Date(), progressPercent: null, result: 'unknown' }
       })
+      await broadcastClosedJobs(input.printerId, [superseded.jobId])
       supersededActiveJobs.delete(input.printerId)
     }
 
@@ -1219,12 +1294,24 @@ async function activatePendingTrackedPrintJob(input: {
   }
 }
 
+/** A delayed old activation must not replace a newer observed task's association. */
+function assignObservedActiveJob(printerId: string, taskId: string, jobId: string, printerFilePath: string | null): boolean {
+  const currentTask = normalizeActivePrintTaskId(printerManager.getStatus(printerId)?.taskId)
+  if (currentTask && currentTask !== taskId) return false
+  activeJobs.set(printerId, jobId)
+  activeJobTaskIds.set(printerId, taskId)
+  activeJobPrinterFilePaths.set(printerId, printerFilePath)
+  return true
+}
+
 async function activateExternalPrintJob(input: {
+  observedAt?: string
   printerId: string
   observedJobName: string | null
   taskId: string
   observedPrinterFilePath: string | null
 }): Promise<string | null> {
+  const firstObservedAt = new Date(input.observedAt ?? new Date().toISOString())
   const activationKey = `${input.printerId}:${input.taskId}`
   const pendingActivation = externalJobActivations.get(activationKey)
   if (pendingActivation) return await pendingActivation
@@ -1258,10 +1345,8 @@ async function activateExternalPrintJob(input: {
     })
 
     if (existing) {
-      activeJobs.set(input.printerId, existing.id)
-      activeJobTaskIds.set(input.printerId, input.taskId)
       const currentPrinterFilePath = normalizeExactPrinterFilePath(existing.printerFilePath)
-      activeJobPrinterFilePaths.set(input.printerId, currentPrinterFilePath)
+      assignObservedActiveJob(input.printerId, input.taskId, existing.id, currentPrinterFilePath)
       if (
         (nextObservedJobName && nextObservedJobName !== existing.jobName)
         || (nextPrinterFilePath && nextPrinterFilePath !== currentPrinterFilePath)
@@ -1285,7 +1370,7 @@ async function activateExternalPrintJob(input: {
               : {})
           }
         })
-        if (nextPrinterFilePath) {
+        if (nextPrinterFilePath && activeJobs.get(input.printerId) === existing.id) {
           activeJobPrinterFilePaths.set(input.printerId, nextPrinterFilePath)
         }
       }
@@ -1309,10 +1394,13 @@ async function activateExternalPrintJob(input: {
         taskId: input.taskId,
         preferredJobId: existing.id
       })
+      const workspaceId = await readPrinterWorkspaceId(input.printerId)
+      if (workspaceId) await linkPrintJobFaults(workspaceId, input.printerId, existing.id)
       return existing.id
     }
 
     const created = await createPrintJobStartRecord({
+      startedAt: firstObservedAt,
       printerId: input.printerId,
       jobName: nextObservedJobName || input.taskId,
       metadata: {
@@ -1332,9 +1420,7 @@ async function activateExternalPrintJob(input: {
       }
     })
 
-    activeJobs.set(input.printerId, created.id)
-    activeJobTaskIds.set(input.printerId, input.taskId)
-    activeJobPrinterFilePaths.set(input.printerId, nextPrinterFilePath)
+    assignObservedActiveJob(input.printerId, input.taskId, created.id, nextPrinterFilePath)
     if (matchedLibraryFile) {
       scheduleDelayedThumbnailPersist({
         jobId: created.id,

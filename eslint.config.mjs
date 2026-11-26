@@ -10,6 +10,10 @@ export default tseslint.config(
       '**/dist/**',
       '**/.vite/**',
       '**/node_modules/**',
+      // Nested task worktrees are separate checkouts with their own lint runs.
+      '.worktrees/**',
+      // Build output (LAYOUT-10): packaged apps and SEA bundles.
+      '.artifacts/**',
       'tmp/**',
       // Gitignored runtime data, incl. public-repo export snapshots.
       'data/**',

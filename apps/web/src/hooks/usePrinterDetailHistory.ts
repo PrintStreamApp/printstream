@@ -16,11 +16,8 @@ import { formatDateTime } from '../lib/time'
 import { HISTORY_RESULTS, parseHistoryViewMode } from '../lib/printersViewHelpers'
 import {
   HISTORY_PAGE_SIZE_OPTIONS,
-  PRINTER_HISTORY_PAGE_SIZE_KEY,
-  PRINTER_HISTORY_RESULT_FILTER_KEY,
-  PRINTER_HISTORY_SORT_DIR_KEY,
-  PRINTER_HISTORY_VIEW_MODE_KEY
-} from '../lib/printerViewConstants'
+  } from '../lib/printerViewConstants'
+import { printerHistoryPageSizeKey, printerHistoryResultFilterKey, printerHistorySortDirKey, printerHistoryViewModeKey } from '../lib/storageKeys'
 
 const HISTORY_PAGE_SIZES = new Set<number>(HISTORY_PAGE_SIZE_OPTIONS)
 const HISTORY_RESULT_SET = new Set<PrintJob['result']>(HISTORY_RESULTS)
@@ -60,23 +57,23 @@ export function usePrinterDetailHistory(jobs: readonly PrintJob[] | undefined, p
   const [detailHistorySearch, setDetailHistorySearch] = useState('')
   const deferredDetailHistorySearch = useDeferredValue(detailHistorySearch)
   const [detailHistoryResults, setDetailHistoryResults] = usePersistentState<PrintJob['result'][]>(
-    PRINTER_HISTORY_RESULT_FILTER_KEY,
+    printerHistoryResultFilterKey,
     [],
     sanitizeHistoryResults
   )
   const [detailHistorySortDirection, setDetailHistorySortDirection] = usePersistentState<DirectorySortDirection>(
-    PRINTER_HISTORY_SORT_DIR_KEY,
+    printerHistorySortDirKey,
     'desc',
     sanitizeHistorySortDirection
   )
   const [detailHistoryPage, setDetailHistoryPage] = useState(0)
   const [detailHistoryPageSize, setDetailHistoryPageSize] = usePersistentState<number>(
-    PRINTER_HISTORY_PAGE_SIZE_KEY,
+    printerHistoryPageSizeKey,
     HISTORY_PAGE_SIZE_OPTIONS[0],
     sanitizeHistoryPageSize
   )
   const [detailHistoryViewMode, setDetailHistoryViewMode] = useLocalStorageState<DirectoryViewMode>(
-    PRINTER_HISTORY_VIEW_MODE_KEY,
+    printerHistoryViewModeKey,
     'list',
     parseHistoryViewMode,
     String

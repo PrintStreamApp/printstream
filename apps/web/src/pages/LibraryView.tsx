@@ -115,11 +115,8 @@ import { PaginatedLibraryBrowser } from '../components/library/PaginatedLibraryB
 import { useLibrarySelection } from '../hooks/useLibrarySelection'
 import {
   buildCreateSlicingJobBody,
-  LIBRARY_GROUP_KEY,
   LIBRARY_PAGE_SIZE_OPTIONS,
-  LIBRARY_SORT_KEY,
   LIBRARY_SORT_OPTIONS,
-  LIBRARY_VIEW_MODE_KEY,
   parseLibraryGroup,
   parseLibrarySort,
   parseLibraryViewMode,
@@ -132,6 +129,7 @@ import { PrintModal } from '../components/library/PrintModal'
 import { SliceFileModal } from '../components/library/SliceFileModal'
 import { SliceResultModal, SliceThenPrintModal } from '../components/library/SliceThenPrintModal'
 import { ListSkeleton } from '../components/ListSkeleton'
+import { libraryGroupKey, librarySortKey, libraryViewModeKey } from '../lib/storageKeys'
 
 /**
  * What the library's file picker offers: every staged-import format, plus G-code.
@@ -232,7 +230,7 @@ export function LibraryView() {
   const [dragMoveError, setDragMoveError] = useState<string | null>(null)
   const [draggedLibraryItem, setDraggedLibraryItem] = useState<LibraryDragItem | null>(null)
   const [viewMode, setViewMode] = useLocalStorageState<LibraryViewMode>(
-    LIBRARY_VIEW_MODE_KEY,
+    libraryViewModeKey,
     'list',
     parseLibraryViewMode,
     String
@@ -268,8 +266,8 @@ export function LibraryView() {
   // the browse query: the API applies them before its recency cap, so the top files
   // / a user's favorites surface even past the cap. The hook still re-sorts the
   // returned page client-side (and owns the metadata filters).
-  const [sort, setSort] = useLocalStorageState<LibrarySort>(LIBRARY_SORT_KEY, { key: 'name', dir: 'asc' }, parseLibrarySort)
-  const [group, setGroup] = useLocalStorageState<LibraryGroupBy>(LIBRARY_GROUP_KEY, 'none', parseLibraryGroup, String)
+  const [sort, setSort] = useLocalStorageState<LibrarySort>(librarySortKey, { key: 'name', dir: 'asc' }, parseLibrarySort)
+  const [group, setGroup] = useLocalStorageState<LibraryGroupBy>(libraryGroupKey, 'none', parseLibraryGroup, String)
   // "Favorite Files" is its own route (bookmarkable + in history). Derive the mode
   // from the path rather than local state; the toggle navigates to/from it.
   const favoritesOnly = isLibraryFavoritesPath(location.pathname)

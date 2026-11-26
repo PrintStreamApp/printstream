@@ -16,14 +16,17 @@ import { useScrollbarGutter } from '../../hooks/useScrollbarGutter'
 import { BackAwareModal } from '../BackAwareModal'
 import { ScrollableModalDialog } from '../ScrollableDialog'
 import { SlicingPresetsSettingsSection } from '../settings/slicing-presets/SlicingPresetsSection'
+import { SlicingPresetsChangedContext, type SlicingPresetsChanged } from '../settings/useRefreshSlicingPresets'
 
-export function SlicingPresetsDialog({ open, onClose }: {
+export function SlicingPresetsDialog({ open, onClose, onPresetsChanged }: {
   open: boolean
   /**
    * Callers refresh their slicing catalogue here: the editor renders from a snapshot taken at
    * open, so a preset edited in this dialog reaches it only because closing says so.
    */
   onClose: () => void
+  /** Successful writes refresh the host even if this dialog closed before the request completed. */
+  onPresetsChanged?: SlicingPresetsChanged
 }): JSX.Element {
   // The dialog body is the scroll container the manager's toolbar pins to, so it takes the
   // scrollbar treatment directly rather than through ScrollableDialogBody.
@@ -38,7 +41,9 @@ export function SlicingPresetsDialog({ open, onClose }: {
           sx={{ flex: 1, minHeight: 0, minWidth: 0, overflowX: 'hidden', mt: 1.5, ...gutter.scrollAreaSx }}
         >
           <Box sx={gutter.contentSx}>
-            <SlicingPresetsSettingsSection stickyTop={0} stickySurface="background.surface" />
+            <SlicingPresetsChangedContext.Provider value={onPresetsChanged}>
+              <SlicingPresetsSettingsSection stickyTop={0} stickySurface="background.surface" />
+            </SlicingPresetsChangedContext.Provider>
           </Box>
         </Box>
         <DialogActions>

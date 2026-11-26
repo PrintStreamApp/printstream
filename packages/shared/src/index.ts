@@ -121,5 +121,8 @@ export * from './slot-material-compatibility.js'
 export * from './tags.js'
 export * from './desktop.js'
 export * from './desktop-host.js'
+export * from './model-import-file-name.js'
 
 export { nativeNotificationAccount, anonymousNotificationAccount } from './native-notification-account.js'
+
+export * from './printer-faults.js'

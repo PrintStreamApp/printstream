@@ -273,3 +273,29 @@ test('an unreadable or partial grouping is dropped rather than salvaged', () => 
   const absent = buildThreeMfIndex(TWO_PLATE_SLICE_INFO, null)
   assert.equal('optimalAssignment' in (absent.plates[0] ?? {}), false)
 })
+
+test('the index carries a CUSTOM printer\'s parent from the machine slot of inherits_group', () => {
+  // The machine slot (the last entry on a correctly sized record, where `BambuStudio.cpp:1998-2008`
+  // reads it): non-empty makes the printer custom, and the engine then judges every process by that
+  // parent instead of the printer's own name.
+  const custom = buildThreeMfIndex(null, JSON.stringify({
+    printer_settings_id: 'Mike P1P 0.4 nozzle',
+    filament_colour: ['#FFFFFF'],
+    inherits_group: ['0.20mm Strength @BBL P1P', '', 'Bambu Lab P1P 0.4 nozzle']
+  }))
+  assert.equal(custom.printerProfileName, 'Mike P1P 0.4 nozzle')
+  assert.equal(custom.printerProfileInherits, 'Bambu Lab P1P 0.4 nozzle')
+
+  // A blank machine slot is a system printer, judged by its own name: no parent.
+  assert.equal(buildThreeMfIndex(null, JSON.stringify({
+    printer_settings_id: 'Bambu Lab P1P 0.4 nozzle',
+    filament_colour: ['#FFFFFF'],
+    inherits_group: ['0.20mm Strength @BBL P1P', '', '']
+  })).printerProfileInherits, null)
+  // A record too short for the slot, or with no filament count to locate it, reports nothing
+  // rather than another slot's parent.
+  assert.equal(buildThreeMfIndex(null, JSON.stringify({ filament_colour: ['#FFFFFF'], inherits_group: ['0.20mm Strength @BBL P1P'] })).printerProfileInherits, null)
+  assert.equal(buildThreeMfIndex(null, JSON.stringify({ inherits_group: ['', '', 'Bambu Lab P1P 0.4 nozzle'] })).printerProfileInherits, null)
+  assert.equal(buildThreeMfIndex(null, JSON.stringify({ print_settings_id: 'x' })).printerProfileInherits, null)
+  assert.equal(buildThreeMfIndex(null, null).printerProfileInherits, null)
+})

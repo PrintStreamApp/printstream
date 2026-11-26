@@ -25,6 +25,7 @@ export function FooterAnnouncements({ deployment }: { deployment: 'cloud' | 'sel
         unreadCount={unreadCount}
         tooltip={unreadCount > 0 ? `${unreadCount} unread announcements` : 'View announcements'}
         ariaLabel="View announcements"
+        monospace
         onClick={() => setOpen(true)}
       >
         Announcements

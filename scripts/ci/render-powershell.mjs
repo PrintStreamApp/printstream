@@ -80,7 +80,18 @@ const scripts = {
   // These four are built inline as `[...].join('; ')`, which is how a `try` and
   // its `catch` ended up separated by a semicolon and rejected outright. Found
   // by parsing, not by review.
-  'install-dir-cleanup.ps1': buildInstallDirCleanupScript("C:\\Program Files\\PrintStream's Bridge", 'printstream-bridge'),
+  // The cleanup script is only built for an admitted install operation (see
+  // windows-install-operation.ts); this fixture mirrors the one in its unit test.
+  'install-dir-cleanup.ps1': buildInstallDirCleanupScript("C:\\Program Files\\PrintStream's Bridge", 'printstream-bridge', {
+    installDir: "C:\\Program Files\\PrintStream's Bridge",
+    serviceId: 'printstream-bridge',
+    token: 'fixture-token',
+    directory: 'C:\\Program Files\\.sea-operation-render',
+    claim: 'C:\\Program Files\\.sea-operation-render\\active.json',
+    active: true,
+    transferred: true,
+    pending: new Set()
+  }),
   'user-session-tray.ps1': buildUserSessionTrayScript(AWKWARD, 'tray run', "PrintStream's TrayLaunch"),
   'hide-own-console.ps1': buildHideOwnConsoleScript(),
   'start-menu-shortcut.ps1': buildShortcutScript(

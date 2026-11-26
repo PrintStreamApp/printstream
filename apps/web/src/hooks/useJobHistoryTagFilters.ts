@@ -6,6 +6,7 @@ import { usePersistentState } from './usePersistentState'
 import { useAuthBootstrapQuery } from '../lib/authQuery'
 import { apiFetch } from '../lib/apiClient'
 import { readCurrentWorkspaceScopeKey } from '../lib/workspaceScope'
+import { tagFilterKeys } from '../lib/storageKeys'
 
 const EMPTY: JobTag[] = []
 const EMPTY_IDS: string[] = []
@@ -16,7 +17,12 @@ function parseIds(value: unknown): string[] {
 /** Prune only after a successful archive read; live catalog edits cannot clear historical selections. */
 function useHistoryTagFilter(kind: TagEntityKind, scope: string, catalog: JobTag[], ready: boolean) {
   const tags = useMemo(() => catalog.filter((tag) => tag.entityKind === kind), [catalog, kind])
-  const [value, onChange] = usePersistentState(`jobs.history.${kind}.tags.${scope}`, EMPTY_IDS, parseIds)
+  const [value, onChange] = usePersistentState(
+    tagFilterKeys.at(`jobs.history.${kind}.${scope}`),
+    EMPTY_IDS,
+    parseIds,
+    [`jobs.history.${kind}.tags.${scope}`]
+  )
   useEffect(() => {
     if (!ready) return
     const known = new Set(tags.map((tag) => tag.id))

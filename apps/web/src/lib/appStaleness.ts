@@ -48,9 +48,8 @@
 import { isAppBusy, subscribeAppBusy } from './appBusy'
 import { toast } from './toast'
 import { readLocalWebBuildId } from './webBuildId'
+import { staleReloadTargetKey } from './storageKeys'
 
-/** Records the build a reload was aimed at, so a failed attempt cannot be repeated blindly. */
-const RELOAD_ATTEMPT_KEY = 'printstream:stale-reload-target'
 
 /**
  * Written next to the bundle by `apps/web/webBuildIdPlugin.ts`, and re-read to CONFIRM a
@@ -100,8 +99,13 @@ let reloadPage: () => void = () => {
 function readReloadAttempt(): string | null {
   // Storage can be unavailable (disabled cookies, some private modes). Losing the guard
   // is worse than losing the feature, so an unreadable store means we never auto-reload.
+  //
+  // The record (`staleReloadTargetKey`) is read and written directly (storage-direct-ok): the
+  // registry's helpers are best-effort and would hide the failed write this guard depends on.
   try {
-    return window.sessionStorage.getItem(RELOAD_ATTEMPT_KEY)
+    return window.sessionStorage.getItem(staleReloadTargetKey.key)
+      ?? staleReloadTargetKey.legacyKeys.map((legacy) => window.sessionStorage.getItem(legacy)).find((value) => value != null)
+      ?? null
   } catch {
     return null
   }
@@ -109,8 +113,12 @@ function readReloadAttempt(): string | null {
 
 function writeReloadAttempt(buildId: string | null): boolean {
   try {
-    if (buildId === null) window.sessionStorage.removeItem(RELOAD_ATTEMPT_KEY)
-    else window.sessionStorage.setItem(RELOAD_ATTEMPT_KEY, buildId)
+    if (buildId === null) {
+      window.sessionStorage.removeItem(staleReloadTargetKey.key)
+      for (const legacy of staleReloadTargetKey.legacyKeys) window.sessionStorage.removeItem(legacy)
+    } else {
+      window.sessionStorage.setItem(staleReloadTargetKey.key, buildId)
+    }
     return true
   } catch {
     return false

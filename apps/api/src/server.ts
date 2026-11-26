@@ -7,7 +7,8 @@
  * imports only the embedded-postgres supervisor (which is careful not to import
  * the env module) and defers the real server to a dynamic `import('./index.js')`
  * once the database URL is settled. See `embedded-postgres.ts` for the ordering
- * rationale.
+ * rationale. (env-direct-read-ok: pre-env boot stage, it publishes the URL the
+ * env module then parses.)
  *
  * When `EMBEDDED_POSTGRES` is disabled (the Docker and cloud deployments, which
  * connect to an external `DATABASE_URL`) this is a

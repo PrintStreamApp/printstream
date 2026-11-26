@@ -20,8 +20,6 @@ test('allows blob:/data: images and media for camera frames and thumbnails', () 
 })
 
 const PADDLE = 'https://*.paddle.com'
-const CF_INSIGHTS_SCRIPT = 'https://static.cloudflareinsights.com'
-const CF_INSIGHTS_BEACON = 'https://cloudflareinsights.com'
 const PRINTSTREAM_CLOUD = 'https://printstream.app'
 // Apex + wildcard per host: `*.example.com` does not cover the apex in CSP, but
 // `sanitizeRemoteImportThumbnailUrl` accepts it, so both forms must be listed.
@@ -43,13 +41,12 @@ test('locks down the high-value directives', () => {
 })
 
 test('cross-origin allow-list is exactly the required product services and provider images', () => {
-  // The cloud checkout needs Paddle.js + its iframe/APIs, Cloudflare's
-  // edge-injected Web Analytics beacon needs its script + measurement hosts, and
-  // remote-import candidate cards need the model providers' cover images.
+  // The cloud checkout needs Paddle.js + its iframe/APIs, and remote-import
+  // candidate cards need the model providers' cover images.
   // Nothing else may be cross-origin.
   const expected: Record<string, string[]> = {
-    'script-src': [PADDLE, CF_INSIGHTS_SCRIPT],
-    'connect-src': [PADDLE, CF_INSIGHTS_BEACON, PRINTSTREAM_CLOUD],
+    'script-src': [PADDLE],
+    'connect-src': [PADDLE, PRINTSTREAM_CLOUD],
     'frame-src': [PADDLE],
     'img-src': [PADDLE, ...PROVIDER_IMAGES],
     'style-src': [PADDLE]
@@ -66,7 +63,7 @@ test('does not allow unsafe-eval or unexpected cross-origin script', () => {
   const scriptSrc = directives.get('script-src') ?? []
   assert.ok(scriptSrc.includes("'self'"))
   assert.ok(!scriptSrc.includes("'unsafe-eval'"), 'production script-src must not allow eval')
-  assert.ok(scriptSrc.every((s) => !s.startsWith('http') || s === PADDLE || s === CF_INSIGHTS_SCRIPT), 'only Paddle + CF insights allowed cross-origin')
+  assert.ok(scriptSrc.every((s) => !s.startsWith('http') || s === PADDLE), 'only Paddle allowed cross-origin')
 })
 
 test('allows the model-studio web worker (worker-src self blob:)', () => {
@@ -92,4 +89,12 @@ test('report-uri is appended when a sink is configured, omitted otherwise', () =
   assert.ok(!policy.includes('report-uri'))
   const withSink = buildContentSecurityPolicy({ reportUri: '/api/csp-report' })
   assert.ok(withSink.endsWith('report-uri /api/csp-report'))
+})
+
+test('never allows Cloudflare Web Analytics, so its edge beacon cannot run undisclosed', () => {
+  // LOG-9: the RUM beacon Cloudflare can inject at the edge is undisclosed third-party measurement.
+  // It is off for printstream.app; this keeps it from being re-allowed by accident.
+  assert.ok(!policy.includes('cloudflareinsights'), 'the default policy must not mention cloudflareinsights')
+  const withAnalytics = buildContentSecurityPolicy({ analyticsOrigin: 'https://analytics.example.com' })
+  assert.ok(!withAnalytics.includes('cloudflareinsights'), 'the analytics-enabled policy must not mention cloudflareinsights')
 })

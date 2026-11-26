@@ -8,6 +8,8 @@ import { spawnSync } from 'node:child_process'
 export interface RunCommandOptions {
   /** Return null instead of throwing when the command exits non-zero. */
   allowFailure?: boolean
+  /** Bound a native helper without changing unbounded legacy callers. A timeout remains a command failure. */
+  timeoutMs?: number
 }
 
 export function runCommand(command: string, args: string[], options: RunCommandOptions = {}): string | null {
@@ -15,7 +17,8 @@ export function runCommand(command: string, args: string[], options: RunCommandO
   // console on double-click), so a console child (winsw, sc, icacls, net,
   // powershell) spawned without this would pop its own visible console window.
   // These are all background service-management commands; none want a window.
-  const result = spawnSync(command, args, { encoding: 'utf8', windowsHide: true })
+  const result = spawnSync(command, args, { encoding: 'utf8', windowsHide: true,
+    ...(options.timeoutMs === undefined ? {} : { timeout: options.timeoutMs }) })
   if (result.error) {
     if (options.allowFailure) return null
     throw new Error(`Could not run ${command}: ${result.error.message}`)

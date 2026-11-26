@@ -23,8 +23,6 @@ import { useSpoolDirectory } from './useSpoolDirectory'
 import { SpoolFormDialog } from './SpoolFormDialog'
 import { toast } from '../../lib/toast'
 
-const CALIBRATION_PICKER_PREFS_KEY = 'printstream.filament.calibration-picker'
-
 interface IdentitySuggestions {
   brand: string[]
   filamentType: string[]
@@ -77,7 +75,7 @@ export function CalibrationSpoolPicker(props: Record<string, unknown>) {
     () => selectedIds.map((id) => allSpools.find((spool) => spool.id === id)).filter((spool): spool is FilamentSpool => spool != null),
     [allSpools, selectedIds]
   )
-  const directory = useSpoolDirectory(eligibleSpools, { storageKey: CALIBRATION_PICKER_PREFS_KEY })
+  const directory = useSpoolDirectory(eligibleSpools, { directory: 'calibrationPicker' })
   const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds])
   const loadedSpool = findLoadedSpoolForSlot(allSpools, { printerId, amsId, slotId })
   const initialValues = useMemo<Partial<SpoolCreateInput>>(() => ({

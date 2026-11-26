@@ -6,6 +6,19 @@
 import type { PrinterCardContentSettings, PrinterModel, PrinterViewSort } from '@printstream/shared'
 import { defaultPrinterViewSort } from '@printstream/shared'
 import { useLocalStorageState } from './useLocalStorageState.js'
+import {
+  printerCardContentSettingsKeys,
+  printerCardsPerRowKeys,
+  printerModelFilterKeys,
+  printerNozzleDiameterFilterKeys,
+  printerOverviewGroupKeys,
+  printerOverviewPageSizeKeys,
+  printerPlateTypeFilterKeys,
+  printerSingleCardContentSettingsKeys,
+  printerStateFilterKeys,
+  printerViewPrinterIdsKeys,
+  printerViewSortKeys
+} from '../lib/storageKeys'
 import { useDefaultPrinterViewOverride, useSharedDefaultPrinterViewId } from '../lib/printerViewDefaults.js'
 import { DEFAULT_SINGLE_PRINTER_CARD_CONTENT_SETTINGS } from '../lib/printerViewConstants.js'
 import {
@@ -27,37 +40,37 @@ import {
 /** Return workspace-scoped dashboard preferences and their setters. */
 export function usePrinterOverviewPreferences(workspacePreferenceScopeKey: string) {
   const [cardsPerRow, setCardsPerRow] = useLocalStorageState(
-    `bambu.printers.cardsPerRow.${workspacePreferenceScopeKey}`,
+    printerCardsPerRowKeys.at(workspacePreferenceScopeKey),
     3,
     parseCardsPerRow,
     String
   )
   const [stateFilter, setStateFilter] = useLocalStorageState<PrinterStateFilter>(
-    `bambu.printers.stateFilter.${workspacePreferenceScopeKey}`,
+    printerStateFilterKeys.at(workspacePreferenceScopeKey),
     'all',
     parsePrinterStateFilter,
     String
   )
   const [modelFilter, setModelFilter] = useLocalStorageState<PrinterModel[]>(
-    `bambu.printers.modelFilter.${workspacePreferenceScopeKey}`,
+    printerModelFilterKeys.at(workspacePreferenceScopeKey),
     [],
     parsePrinterModelFilter,
     JSON.stringify
   )
   const [nozzleDiameterFilter, setNozzleDiameterFilter] = useLocalStorageState<string[]>(
-    `bambu.printers.nozzleDiameterFilter.${workspacePreferenceScopeKey}`,
+    printerNozzleDiameterFilterKeys.at(workspacePreferenceScopeKey),
     [],
     parseStoredStringArray,
     JSON.stringify
   )
   const [plateTypeFilter, setPlateTypeFilter] = useLocalStorageState<string[]>(
-    `bambu.printers.plateTypeFilter.${workspacePreferenceScopeKey}`,
+    printerPlateTypeFilterKeys.at(workspacePreferenceScopeKey),
     [],
     parseStoredStringArray,
     JSON.stringify
   )
   const [printerCardContentSettings, setPrinterCardContentSettings] = useLocalStorageState<PrinterCardContentSettings>(
-    `bambu.printers.cardContentSettings.${workspacePreferenceScopeKey}`,
+    printerCardContentSettingsKeys.at(workspacePreferenceScopeKey),
     DEFAULT_PRINTER_CARD_CONTENT_SETTINGS,
     parsePrinterCardContentSettings,
     JSON.stringify
@@ -66,19 +79,19 @@ export function usePrinterOverviewPreferences(workspacePreferenceScopeKey: strin
   // a workspace preference shared across every printer, independent of the
   // multi-printer Overview/saved-view settings above.
   const [singlePrinterCardContentSettings, setSinglePrinterCardContentSettings] = useLocalStorageState<PrinterCardContentSettings>(
-    `bambu.printers.singleCardContentSettings.${workspacePreferenceScopeKey}`,
+    printerSingleCardContentSettingsKeys.at(workspacePreferenceScopeKey),
     DEFAULT_SINGLE_PRINTER_CARD_CONTENT_SETTINGS,
     parsePrinterCardContentSettings,
     JSON.stringify
   )
   const [defaultViewPrinterIds, setDefaultViewPrinterIds] = useLocalStorageState<string[]>(
-    `bambu.printers.viewPrinterIds.${workspacePreferenceScopeKey}`,
+    printerViewPrinterIdsKeys.at(workspacePreferenceScopeKey),
     [],
     parseStoredStringArray,
     JSON.stringify
   )
   const [defaultViewSort, setDefaultViewSort] = useLocalStorageState<PrinterViewSort>(
-    `bambu.printers.viewSort.${workspacePreferenceScopeKey}`,
+    printerViewSortKeys.at(workspacePreferenceScopeKey),
     defaultPrinterViewSort,
     parsePrinterViewSort,
     encodePrinterViewSort
@@ -92,13 +105,13 @@ export function usePrinterOverviewPreferences(workspacePreferenceScopeKey: strin
   // Overview has no server row, so its grouping is a local pref; saved views store
   // grouping server-side on the view itself.
   const [overviewGroup, setOverviewGroup] = useLocalStorageState<PrinterGroupBy>(
-    `bambu.printers.overviewGroup.${workspacePreferenceScopeKey}`,
+    printerOverviewGroupKeys.at(workspacePreferenceScopeKey),
     'none',
     parsePrinterGroupBy,
     String
   )
   const [overviewPageSize, setOverviewPageSize] = useLocalStorageState<number>(
-    `bambu.printers.overviewPageSize.${workspacePreferenceScopeKey}`,
+    printerOverviewPageSizeKeys.at(workspacePreferenceScopeKey),
     PRINTER_OVERVIEW_PAGE_SIZE_OPTIONS[1],
     parsePrinterOverviewPageSize,
     String

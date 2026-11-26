@@ -1,6 +1,6 @@
 import type { ApiPluginInfo } from '../../lib/pluginSettings'
-
-const ENROLLMENT_PROMPT_DISMISSED_KEY = 'bambu.notifications-browser.enrollment-prompt-dismissed.v1'
+import { readStoredValue, writeStoredValue } from '../../lib/browserStorageKeys'
+import { enrollmentPromptDismissedKey } from './storageKeys'
 
 interface BrowserNotificationsSupportState {
   secureContext: boolean
@@ -42,19 +42,10 @@ export function isBrowserNotificationsPluginEnabled(plugins: ApiPluginInfo[]): b
 }
 
 export function readEnrollmentPromptDismissed(): boolean {
-  if (typeof window === 'undefined') return false
-  try {
-    return window.localStorage.getItem(ENROLLMENT_PROMPT_DISMISSED_KEY) === '1'
-  } catch {
-    return false
-  }
+  return readStoredValue(enrollmentPromptDismissedKey) === '1'
 }
 
 export function dismissEnrollmentPrompt(): void {
-  if (typeof window === 'undefined') return
-  try {
-    window.localStorage.setItem(ENROLLMENT_PROMPT_DISMISSED_KEY, '1')
-  } catch {
-    // Ignore storage failures; the prompt may reappear next load.
-  }
+  // Best-effort: after a storage failure the prompt may reappear next load.
+  writeStoredValue(enrollmentPromptDismissedKey, '1')
 }

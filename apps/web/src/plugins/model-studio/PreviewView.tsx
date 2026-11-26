@@ -77,6 +77,8 @@ import { buildGcodeLayerEventMarkers, maxGcodeLayerHeightReference, type GcodeLa
 import { toThreeMfIndexDto } from '@printstream/shared/three-mf'
 import { readInMemoryPlateGcode, type InMemoryGcodePreviewSource } from './lib/inMemoryGcodePreview'
 import { useMobileViewport } from '../../components/useMobileViewport'
+import { previewGcodeMarkersKey, previewGcodeShowTravelKey, previewGcodeStatsOpenKey, previewGcodeViewModeKey, previewPlateStripCollapsedKey } from './storageKeys'
+import { previewMaximizedKey } from '../../lib/storageKeys'
 
 const PLATED_PREVIEW_GRID_SIZE = 320
 /**
@@ -236,23 +238,23 @@ export function PreviewView(props: Record<string, unknown>) {
   // because it pins the multi-MB position arrays the preview itself deliberately frees.
   const [gcodeConflictInput, setGcodeConflictInput] = useState<ParsedGcodeLayers | null>(null)
   const [gcodeStatsOpen, setGcodeStatsOpen] = useLocalStorageState(
-    'bambu.preview.gcodeStatsOpen',
+    previewGcodeStatsOpenKey,
     true,
     (raw) => (raw === 'true' ? true : raw === 'false' ? false : null),
     String
   )
   // How the toolpath is coloured, and whether travel is drawn. Both are per-device preferences:
   // they describe how this person likes to READ a preview, not anything about the file, so they
-  // follow `bambu.preview.*` like the panel's own collapsed state. An unknown stored mode (a build
+  // persist like the panel's own collapsed state (`storageKeys.ts`). An unknown stored mode (a build
   // that dropped one) falls back rather than leaving the picker on a value it cannot render.
   const [gcodeViewMode, setGcodeViewMode] = useLocalStorageState<GcodeViewMode>(
-    'bambu.preview.gcodeViewMode',
+    previewGcodeViewModeKey,
     'feature',
     (raw) => (isGcodeViewMode(raw) ? raw : null),
     String
   )
   const [gcodeShowTravel, setGcodeShowTravel] = useLocalStorageState(
-    'bambu.preview.gcodeShowTravel',
+    previewGcodeShowTravelKey,
     false,
     (raw) => (raw === 'true' ? true : raw === 'false' ? false : null),
     String
@@ -260,7 +262,7 @@ export function PreviewView(props: Record<string, unknown>) {
   // Retract / unretract / seam / wipe. Stored as one JSON object rather than four keys because
   // they are read and written together; an unparseable value falls back to all-off.
   const [gcodeMarkers, setGcodeMarkers] = useLocalStorageState<GcodeMarkerVisibility>(
-    'bambu.preview.gcodeMarkers',
+    previewGcodeMarkersKey,
     NO_GCODE_MARKERS,
     (raw) => {
       try {
@@ -282,7 +284,7 @@ export function PreviewView(props: Record<string, unknown>) {
   // Collapsed plate strip (name-only chips, no thumbnails) mirrors the editor's
   // bambu.editor.plateStripCollapsed preference but is tracked separately.
   const [plateStripCollapsed, setPlateStripCollapsed] = useLocalStorageState(
-    'bambu.preview.plateStripCollapsed',
+    previewPlateStripCollapsedKey,
     false,
     (raw) => (raw === 'true' ? true : raw === 'false' ? false : null),
     String
@@ -291,7 +293,7 @@ export function PreviewView(props: Record<string, unknown>) {
   // header too. Both come from the shared dialog modes, which also own the rule that only the
   // maximized preference is remembered: see `hooks/useDialogPresentationState.ts`.
   const { presentation: requestedPresentation, maximized, setMaximized, fullScreen, setFullScreen } = useDialogPresentationState({
-    maximizedStorageKey: 'bambu.preview.maximized'
+    maximizedStorageKey: previewMaximizedKey
   })
   // A phone's standard dialog is already full width; making its viewport shorter only creates a
   // second size with no useful distinction. Keep the desktop preference intact and force the

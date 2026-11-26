@@ -32,7 +32,8 @@ import { libraryFacetsEmpty, useLibraryFilters } from '../../hooks/useLibraryFil
 import { useLocalStorageState } from '../../hooks/useLocalStorageState'
 import { LIBRARY_GROUP_OPTIONS, type LibraryGroupBy } from '../../lib/libraryDirectory'
 import { parseLibraryViewMode, parseLibrarySort } from '../../lib/printersViewHelpers'
-import { LIBRARY_VIEW_MODE_KEY, LIBRARY_SORT_KEY, LIBRARY_GROUP_KEY, LIBRARY_PAGE_SIZE_OPTIONS, LIBRARY_SORT_OPTIONS, parseLibraryGroup } from '../../lib/libraryViewHelpers'
+import { LIBRARY_PAGE_SIZE_OPTIONS, LIBRARY_SORT_OPTIONS, parseLibraryGroup } from '../../lib/libraryViewHelpers'
+import { libraryGroupKey, librarySortKey, libraryViewModeKey } from '../../lib/storageKeys'
 
 export function LibraryPickerModal({
   printerName,
@@ -59,17 +60,17 @@ export function LibraryPickerModal({
   const [searchAllFolders, setSearchAllFolders] = useState(false)
   const allFolderSearch = searchAllFolders ? deferredSearch.trim() : ''
   const [viewMode, setViewMode] = useLocalStorageState<LibraryViewMode>(
-    LIBRARY_VIEW_MODE_KEY,
+    libraryViewModeKey,
     'list',
     parseLibraryViewMode,
     String
   )
   const [sort, setSort] = useLocalStorageState<LibrarySort>(
-    LIBRARY_SORT_KEY,
+    librarySortKey,
     { key: 'name', dir: 'asc' },
     parseLibrarySort
   )
-  const [group, setGroup] = useLocalStorageState<LibraryGroupBy>(LIBRARY_GROUP_KEY, 'none', parseLibraryGroup, String)
+  const [group, setGroup] = useLocalStorageState<LibraryGroupBy>(libraryGroupKey, 'none', parseLibraryGroup, String)
   const [favoritesOnly, setFavoritesOnly] = useState(false)
 
   const tagFilter = useTagFilter('file', 'library')

@@ -42,6 +42,7 @@ import { readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Client } from 'pg'
+import { env } from './env.js'
 
 const moduleDir = path.dirname(fileURLToPath(import.meta.url))
 
@@ -52,8 +53,10 @@ const moduleDir = path.dirname(fileURLToPath(import.meta.url))
  */
 export function defaultMigrationsDir(): string {
   // The packaged (SEA) build has no source tree on disk; it extracts the
-  // migration SQL as an asset and points here via this env override.
-  return process.env.PRINTSTREAM_MIGRATIONS_DIR ?? path.resolve(moduleDir, '..', '..', 'prisma', 'migrations')
+  // migration SQL as an asset and points here via this env override. Importing
+  // the env module here is safe: this module is first loaded after the database
+  // URL is settled (see `server.ts`).
+  return env.PRINTSTREAM_MIGRATIONS_DIR ?? path.resolve(moduleDir, '..', '..', 'prisma', 'migrations')
 }
 
 /** A single checked-in migration: its directory name, SQL body, and checksum. */

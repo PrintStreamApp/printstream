@@ -11,7 +11,7 @@ import FolderOpenRoundedIcon from '@mui/icons-material/FolderOpenRounded'
 import GridViewRoundedIcon from '@mui/icons-material/GridViewRounded'
 import ViewListRoundedIcon from '@mui/icons-material/ViewListRounded'
 import { useQuery } from '@tanstack/react-query'
-import type { LibraryBrowseResponse, LibraryFolder } from '@printstream/shared'
+import type { LibraryBrowseResponse, LibraryFolder, LibrarySaveConflictResponse } from '@printstream/shared'
 import { apiFetch } from '../lib/apiClient'
 import { formatLibraryFileName, splitLibraryFileNameForRename } from '../lib/libraryDisplay'
 import { findLibrarySaveConflict } from '../lib/librarySaveConflict'
@@ -52,6 +52,8 @@ export function LibraryDestinationDialog({
   fileNameField?: {
     label: string
     initialValue: string
+    /** Retain edits if a caller switches storage and remounts the folder browser. */
+    onChange?: (value: string) => void
     /**
      * Extension the server appends to the saved name (e.g. '.gcode.3mf').
      * Shown read-only at the end of the input so the final filename is clear
@@ -115,7 +117,20 @@ export function LibraryDestinationDialog({
   const trimmedOutputFileName = fileNameField?.extension && rawOutputFileName.toLowerCase().endsWith(fileNameField.extension.toLowerCase())
     ? rawOutputFileName.slice(0, -fileNameField.extension.length).trim()
     : rawOutputFileName
-  const canSubmit = (fileNameField ? trimmedOutputFileName.length > 0 : true) && !submitting
+  const needsExactLookup = Boolean(showFiles && fileNameField && destinationFilesQuery.data?.truncated)
+  const finalFileName = `${trimmedOutputFileName}${fileNameField?.extension ?? ''}`
+  const conflictQuery = useQuery({
+    queryKey: ['library-browse', 'save-conflict', bridgeId, currentFolderId, finalFileName],
+    queryFn: ({ signal }) => {
+      const params = new URLSearchParams({ bridgeId: bridgeId ?? '', fileName: finalFileName })
+      if (currentFolderId) params.set('folderId', currentFolderId)
+      return apiFetch<LibrarySaveConflictResponse>(`/api/library/save-conflict?${params}`, { signal })
+    },
+    enabled: needsExactLookup && Boolean(bridgeId) && Boolean(trimmedOutputFileName)
+  })
+  const fileListingReady = !showFiles || (destinationFilesQuery.isSuccess && !destinationFilesQuery.isFetching
+    && (!needsExactLookup || (conflictQuery.isSuccess && !conflictQuery.isFetching)))
+  const canSubmit = (fileNameField ? trimmedOutputFileName.length > 0 : true) && !submitting && fileListingReady
 
   // A save name collides only when the FINAL name (base + declared extension)
   // matches an existing file exactly: the server's replace predicate. A looser
@@ -123,10 +138,12 @@ export function LibraryDestinationDialog({
   // `benchy` + `.gcode.3mf` next to `benchy.gcode`).
   const conflictingFile = useMemo(() => {
     if (!showFiles || !fileNameField) return null
+    if (needsExactLookup) return conflictQuery.data?.file ?? null
     return findLibrarySaveConflict(destinationFiles, trimmedOutputFileName, fileNameField.extension)
-  }, [destinationFiles, fileNameField, showFiles, trimmedOutputFileName])
+  }, [conflictQuery.data, destinationFiles, fileNameField, needsExactLookup, showFiles, trimmedOutputFileName])
 
   const submit = async () => {
+    if (!canSubmit) return
     if (conflictingFile) {
       const confirmed = await confirm({
         title: 'Replace existing file?',
@@ -162,7 +179,10 @@ export function LibraryDestinationDialog({
                 <Input
                   {...nameInputProps}
                   value={outputFileName}
-                  onChange={(event) => setOutputFileName(event.target.value)}
+                  onChange={(event) => {
+                    setOutputFileName(event.target.value)
+                    fileNameField.onChange?.(event.target.value)
+                  }}
                   endDecorator={fileNameField.extension ? (
                     <Typography level="body-sm" textColor="text.tertiary" sx={{ userSelect: 'none' }}>
                       {fileNameField.extension}
@@ -226,7 +246,11 @@ export function LibraryDestinationDialog({
                 sort={DESTINATION_DIALOG_SORT}
                 onFolderOpen={(folder) => setCurrentFolderId(folder.id)}
                 onFilePick={fileNameField
-                  ? (file) => setOutputFileName(splitLibraryFileNameForRename(file.name).baseName)
+                  ? (file) => {
+                      const baseName = splitLibraryFileNameForRename(file.name).baseName
+                      setOutputFileName(baseName)
+                      fileNameField.onChange?.(baseName)
+                    }
                   : undefined}
                 isFilePickable={fileNameField ? () => true : undefined}
                 emptyState={
@@ -249,6 +273,9 @@ export function LibraryDestinationDialog({
           </Stack>
         </ScrollableDialogBody>
         {error && <Typography color="danger" level="body-sm">{error}</Typography>}
+        {showFiles && (destinationFilesQuery.isError || conflictQuery.isError) && (
+          <Typography color="danger" level="body-sm">Could not load existing files. Close this dialog and try again before saving.</Typography>
+        )}
         <Stack direction="row" spacing={1} justifyContent="flex-end" sx={{ pt: 1 }}>
           <Button variant="plain" onClick={onClose}>Cancel</Button>
           <Button

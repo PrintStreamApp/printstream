@@ -38,9 +38,9 @@ export interface RunTrayInput {
    */
   statusFile: string
   /**
-   * The service's log directory, opened by the tray's "View logs" item. Baked in
-   * at launch (not read from the status file) so it works even when the service
-   * is down, exactly when the operator needs the logs.
+   * Windows service file logs, opened by the tray's "View logs" item. Linux
+   * reads the system journal using identity.appId as the installed service id.
+   * Both targets are fixed at launch so logs remain reachable after a stop.
    */
   logsDir: string
 }
@@ -104,7 +104,7 @@ async function prepareTrayCommand(
     }
     const icons = await writeTrayIconFiles(workDir)
     const scriptPath = path.join(workDir, 'tray.py')
-    await writeFile(scriptPath, generateLinuxTrayScript({ iconPath: icons.pngPath, appName, statusFile, logsDir, exePath }), 'utf8')
+    await writeFile(scriptPath, generateLinuxTrayScript({ iconPath: icons.pngPath, appName, statusFile, serviceId: input.identity.appId, exePath }), 'utf8')
     return { executable: 'python3', args: [scriptPath] }
   }
 

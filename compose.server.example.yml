@@ -18,7 +18,11 @@ services:
     environment:
       POSTGRES_DB: printstream
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      # Required, with no default: an example that ships a working password is
+      # copied to production unchanged. Read only when the database volume is
+      # first created; changing it later does not change the stored password
+      # (docs/deployment.md has the rotation steps).
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (a long random value, see .env.server.example)}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d printstream"]
       interval: 10s
@@ -52,7 +56,9 @@ services:
     environment:
       NODE_ENV: production
       API_PORT: 4000
-      DATABASE_URL: ${DATABASE_URL:-postgresql://postgres:postgres@db:5432/printstream?schema=public}
+      # Built from POSTGRES_PASSWORD so the two cannot disagree. Set DATABASE_URL
+      # in .env only to point the API at a different database.
+      DATABASE_URL: ${DATABASE_URL:-postgresql://postgres:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/printstream?schema=public}
       # Compose does not pass values from .env into a container unless they are
       # listed here. Without this, stored credentials remain plaintext.
       SECRETS_KEY: ${SECRETS_KEY:-}

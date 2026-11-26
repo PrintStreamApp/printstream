@@ -153,7 +153,7 @@ export function usePrinterWebSocket(enabled = true, scopeKey = 'default'): void 
         }
         if (event.resource === 'jobs') {
           void queryClient.invalidateQueries({ queryKey: ['jobs'] })
-          // Print jobs are half of the merged Jobs history.
+          // Print jobs and durable printer faults share the merged Jobs history.
           void queryClient.invalidateQueries({ queryKey: ['job-history'] })
           // A finished job also rewrites the durable counters derived from it
           // (`recordFinishedPrinterStats`), and nothing else refreshed them. The printer

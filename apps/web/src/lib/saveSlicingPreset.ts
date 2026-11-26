@@ -12,13 +12,16 @@
 import { apiFetch } from './apiClient'
 import { bumpSlicingPresetRevision } from './slicingPresetRevision'
 
-export async function saveSlicingPreset(input: {
+export interface SaveSlicingPresetInput {
   kind: 'machine' | 'process' | 'filament'
   name: string
   /** True updates the existing custom preset of this name in place. */
   overwrite: boolean
   config: Record<string, unknown>
-}): Promise<void> {
+}
+
+/** Dialogs reach this through `useSaveSlicingPreset`, which also refreshes the preset lists. */
+export async function saveSlicingPreset(input: SaveSlicingPresetInput): Promise<void> {
   await apiFetch('/api/slicing/profiles', {
     method: 'POST',
     body: {

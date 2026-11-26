@@ -434,6 +434,7 @@ export async function retargetSavedProjectMachine(input: RetargetSavedProjectInp
     projectSettings,
     machineConfig,
     printerSettingsId: machineFile.name,
+    printerPresetInherits: machineFile.source === 'custom' ? firstString(machineConfig.inherits) : null,
     resolveSystemProcess: (name) => resolveBuiltinProcessConfigByName(input.slicerTargetId, name),
     log: (message) => console.warn(`[editor-save] ${message}`)
   })

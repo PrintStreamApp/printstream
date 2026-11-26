@@ -12,52 +12,6 @@ import {
   type AppThemeSetting
 } from '@printstream/shared'
 
-export const DEVICE_APP_THEME_OVERRIDE_KEY = 'printstream.general.appTheme.override'
-/**
- * Platform surfaces keep their own device override so a theme chosen inside
- * a workspace never restyles the platform workspace (and vice versa).
- */
-export const DEVICE_PLATFORM_APP_THEME_OVERRIDE_KEY = 'printstream.general.appTheme.override.platform'
-/**
- * The billing scope's own theme, per device.
- *
- * It needs a third key because it is neither of the other two. The scope has no
- * workspace context, so it used to fall through to the WORKSPACE device
- * override paired with the shared setting, and a shared setting read without a
- * workspace resolves to the `platform:` scope, which is the OPERATOR's. A
- * customer's billing pages were therefore styled by whatever theme the operator
- * had chosen for the platform.
- *
- * Device-only, deliberately: a per-account shared theme would need a new server
- * scope, and the thing a customer actually wants here is for their own screen
- * to match the workspace they just came from.
- */
-export const DEVICE_BILLING_APP_THEME_OVERRIDE_KEY = 'printstream.general.appTheme.override.billing'
-/**
- * Cache of the last theme background the app painted ({ background, color }
- * JSON). The index.html pre-bundle script applies it before first paint so
- * the boot splash matches the theme that loads afterwards instead of
- * flashing a mismatched backdrop.
- */
-export const BOOT_BACKGROUND_CACHE_KEY = 'printstream.appearance.bootBackground'
-export const DEVICE_LANDING_PAGE_OVERRIDE_KEY_PREFIX = 'printstream.general.landingPage.override'
-export const DEVICE_NAV_TAB_ORDER_OVERRIDE_KEY_PREFIX = 'printstream.general.navTabOrder.override'
-export const DEVICE_UNCONSTRAINED_WIDTH_OVERRIDE_KEY = 'bambu.general.unconstrainedWidth.override'
-/**
- * Per-device override for the workspace-wide "developer slicer settings"
- * default. Device-global (like the theme override), so the preference to see
- * BambuStudio's develop-tier options follows the browser across workspaces.
- */
-export const DEVICE_SLICER_DEVELOPER_MODE_OVERRIDE_KEY = 'printstream.slicer.developerMode.override'
-/**
- * Model studio viewport overrides. Workspace-scoped (like the nav-order and landing-page overrides,
- * and unlike the device-global theme/developer-mode ones): each workspace sets its own shared
- * default, so a device override that leaked across workspaces would silently shadow a default it
- * was never chosen against. The suffix is the workspace slug: see `lib/editorViewportSettings.ts`.
- */
-export const DEVICE_EDITOR_SHOW_BED_MODEL_OVERRIDE_KEY_PREFIX = 'printstream.editor.bedModel3d.override'
-export const DEVICE_EDITOR_SIDEBAR_SIDE_OVERRIDE_KEY_PREFIX = 'printstream.editor.sidebarSide.override'
-
 export function workspaceScopedRoutePath(path: string): string {
   return path === '/' ? '/workspaces/:workspaceSlug' : `/workspaces/:workspaceSlug${path}`
 }

@@ -26,8 +26,8 @@ import { usePersistentState } from '../../../hooks/usePersistentState'
 import { PluginSlot } from '../../../plugin/PluginSlot'
 import { SlicingPresetKindPanel } from './SlicingPresetKindPanel'
 import { SlicingPresetUploadCard } from './SlicingPresetUploadCard'
+import { slicingPresetKindTabKey } from '../../../lib/storageKeys'
 
-const SLICING_PRESET_KIND_TAB_KEY = 'printstream.slicingPresets.kindTab'
 
 const PROFILE_KINDS: ReadonlyArray<{ kind: SlicingPresetKind; emptyDescription: string }> = [
   { kind: 'machine', emptyDescription: 'Upload a BambuStudio printer preset to slice with your own machine settings.' },
@@ -45,7 +45,7 @@ export function SlicingPresetsSettingsSection({ stickyTop, stickySurface }: {
   /** Passed through to the pinned toolbar's background; see DirectoryPrimaryToolbar. */
   stickySurface?: string
 } = {}): JSX.Element {
-  const [activeKind, setActiveKind] = usePersistentState<SlicingPresetKind>(SLICING_PRESET_KIND_TAB_KEY, 'machine', sanitizeSlicingPresetKindTab)
+  const [activeKind, setActiveKind] = usePersistentState<SlicingPresetKind>(slicingPresetKindTabKey, 'machine', sanitizeSlicingPresetKindTab)
   const profilesQuery = useQuery({
     queryKey: ['slicing-profiles'],
     queryFn: ({ signal }) => apiFetch<SlicingPresetsResponse>('/api/slicing/profiles', { signal })

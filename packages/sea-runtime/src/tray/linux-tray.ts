@@ -9,11 +9,13 @@
  * support is best-effort: the script exits with code 3 when GTK bindings are
  * missing and the runner explains the CLI remains available.
  */
+import { linuxJournalViewerScript } from './linux-journal-viewer.js'
+
 export function generateLinuxTrayScript(input: {
   iconPath: string
   appName: string
   statusFile: string
-  logsDir: string
+  serviceId: string
   exePath: string
 }): string {
   return `#!/usr/bin/env python3
@@ -23,7 +25,7 @@ import subprocess
 import sys
 
 STATUS_FILE = ${pyQuote(input.statusFile)}
-LOGS_DIR = ${pyQuote(input.logsDir)}
+SERVICE_UNIT = ${pyQuote(`${input.serviceId}.service`)}
 ICON_PATH = ${pyQuote(input.iconPath)}
 APP_NAME = ${pyQuote(input.appName)}
 EXE_PATH = ${pyQuote(input.exePath)}
@@ -47,6 +49,7 @@ except (ImportError, ValueError):
     except (ImportError, ValueError):
         AppIndicator3 = None
 
+${linuxJournalViewerScript}
 
 def bridge_status():
     try:
@@ -159,10 +162,7 @@ class Tray:
                 pass
 
     def view_logs(self, *_args):
-        try:
-            subprocess.Popen(["xdg-open", LOGS_DIR])
-        except Exception:
-            pass
+        show_service_logs()
 
     def open_connect_page(self, *_args):
         if self.connect_url:
@@ -242,16 +242,22 @@ class Tray:
             self.code_item.hide()
             self.connect_item.hide()
             self.copy_code_item.hide()
-        self.workspace_url = status.get("workspaceUrl") or ""
-        if self.workspace_url:
-            self.workspace_item.show()
-        else:
+            self.connect_url = ""
+            self.connect_code = ""
+            self.workspace_url = ""
             self.workspace_item.hide()
             self.update_item.hide()
             self.start_service_item.show()
             self.stop_service_item.hide()
             self.restart_service_item.hide()
             return True
+        # Workspace is optional even for a live bridge. Its absence never
+        # means the server stopped, and a server uses appUrl instead.
+        self.workspace_url = status.get("workspaceUrl") or ""
+        if self.workspace_url:
+            self.workspace_item.show()
+        else:
+            self.workspace_item.hide()
         # Prefer the app's own human wording for the lifecycle; fall back to the
         # raw token for an app (or an older service) that publishes no label.
         lifecycle = status.get("lifecycleLabel") or status.get("lifecycle", "unknown")
@@ -264,8 +270,15 @@ class Tray:
         self.start_service_item.hide()
         self.stop_service_item.show()
         self.restart_service_item.show()
-        build = status.get("build") or {}
-        version = build.get("buildRevision") or build.get("releaseFingerprint")
+        # Server status carries a fingerprint string; bridge status carries an
+        # object. Both providers retain these existing publisher contracts.
+        build = status.get("build")
+        if isinstance(build, str):
+            version = build
+        elif isinstance(build, dict):
+            version = build.get("buildRevision") or build.get("releaseFingerprint")
+        else:
+            version = None
         if version:
             self.version_item.set_label("Version: " + str(version)[:12])
             self.version_item.show()

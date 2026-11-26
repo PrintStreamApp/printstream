@@ -4,7 +4,7 @@
  * metadata together. Resolution failures reject the save so it cannot mark unsaved edits as saved.
  */
 import { applyProcessProfileToProjectSettings, firstProfileString, parseBuiltinSlicingPresetId,
-  processPresetFitsMachine, type ProfileRecord, type SaveArrangedThreeMf } from '@printstream/shared'
+  processPresetFitsMachine, readMachineInheritsSlot, type ProfileRecord, type SaveArrangedThreeMf } from '@printstream/shared'
 import type { EditorBakePassOptions } from './editorBakePasses'
 import type { ProcessSettingsPassContext } from './clientBakeSettingsPasses'
 
@@ -26,7 +26,7 @@ export function processSettingsForSave(
     const name = resolved.preset?.name ?? firstProfileString(resolved.config.name) ?? firstProfileString(resolved.config.print_settings_id)
     if (!name) throw new Error('The selected process preset has no identity. Your changes have not been saved.')
     const machine = firstProfileString(settings.printer_settings_id)
-    if (machine && !processPresetFitsMachine(resolved.config, machine)) {
+    if (machine && !processPresetFitsMachine(resolved.config, machine, context?.machineParentName !== undefined ? context.machineParentName : readMachineInheritsSlot(settings))) {
       throw new Error(`The selected process preset is incompatible with ${machine}. Your changes have not been saved.`)
     }
     if (!target.processProfileChosen && current === name) return settings

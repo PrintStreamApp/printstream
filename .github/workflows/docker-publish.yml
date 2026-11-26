@@ -31,12 +31,16 @@
 # This file ships into the public repo via the snapshot export and is GUARDED to
 # run ONLY there: the private monorepo deploys over SSH and must never publish an
 # image built from private (cloud) source.
-name: Publish Docker images
+name: Publish Docker Images
 
 on:
   push:
     branches: [main]
   workflow_dispatch:
+
+# Least privilege by default (CI-5): jobs that need more widen it at job level.
+permissions:
+  contents: read
 
 # Every snapshot is a versioned release. Let each one finish so a later push
 # cannot leave the earlier SemVer with only part of its image set published.
@@ -45,7 +49,13 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # CI-4: the repository gate runs first, and nothing below publishes unless it passed.
+  gate:
+    uses: ./.github/workflows/ci.yml
+
   version:
+    needs: gate
+    timeout-minutes: 10
     if: github.repository == 'PrintStreamApp/printstream'
     runs-on: ubuntu-latest
     permissions:
@@ -55,7 +65,7 @@ jobs:
       tag: ${{ steps.product.outputs.tag }}
       prerelease: ${{ steps.product.outputs.prerelease }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -108,6 +118,8 @@ jobs:
   # Build the combined app image once per architecture on a native runner and
   # push each result by digest (no tag yet: the merge job assembles the tags).
   build-app:
+    # Per-architecture image build; the arm64 runner is the slow one (about 8 minutes warm, far longer cold).
+    timeout-minutes: 90
     needs: version
     # Only the public open-core repo publishes; skipped in the private mirror.
     if: github.repository == 'PrintStreamApp/printstream'
@@ -126,23 +138,23 @@ jobs:
             platform: linux/arm64
             runner: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ghcr.io/printstreamapp/printstream
 
       - id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: Dockerfile
@@ -166,7 +178,7 @@ jobs:
           touch "${{ runner.temp }}/digests/${digest#sha256:}"
 
       - name: Upload digest
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: digests-printstream-${{ matrix.arch }}
           path: ${{ runner.temp }}/digests/*
@@ -177,7 +189,7 @@ jobs:
       # image people pull to run just a LAN bridge, without the API/web/Prisma
       # weight of the combined image. Same multi-arch + push-by-digest pattern.
       - id: build-bridge
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: Dockerfile
@@ -194,7 +206,7 @@ jobs:
           touch "${{ runner.temp }}/digests-bridge/${digest#sha256:}"
 
       - name: Upload bridge digest
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: bridge-digests-${{ matrix.arch }}
           path: ${{ runner.temp }}/digests-bridge/*
@@ -203,6 +215,7 @@ jobs:
 
   # Merge the per-arch digests into a single multi-arch manifest and tag it.
   merge-app:
+    timeout-minutes: 15
     needs: [version, build-app]
     if: github.repository == 'PrintStreamApp/printstream'
     runs-on: ubuntu-latest
@@ -211,22 +224,22 @@ jobs:
       packages: write
     steps:
       - name: Download digests
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: ${{ runner.temp }}/digests
           pattern: digests-printstream-*
           merge-multiple: true
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ghcr.io/printstreamapp/printstream
           tags: |
@@ -246,6 +259,7 @@ jobs:
 
   # Merge the per-arch bridge digests into a single multi-arch manifest and tag it.
   merge-bridge:
+    timeout-minutes: 15
     needs: [version, build-app]
     if: github.repository == 'PrintStreamApp/printstream'
     runs-on: ubuntu-latest
@@ -254,22 +268,22 @@ jobs:
       packages: write
     steps:
       - name: Download digests
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: ${{ runner.temp }}/digests
           pattern: bridge-digests-*
           merge-multiple: true
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ghcr.io/printstreamapp/printstream-bridge
           tags: |
@@ -294,6 +308,8 @@ jobs:
   # Building natively (not under QEMU) keeps the arm64 build's npm install and the
   # sysroot apt closure on a real arm64 CPU.
   build-slicer:
+    # Per-architecture slicer image, including the x86 sysroot layers.
+    timeout-minutes: 90
     needs: version
     if: github.repository == 'PrintStreamApp/printstream'
     runs-on: ${{ matrix.runner }}
@@ -311,23 +327,23 @@ jobs:
             platform: linux/arm64
             runner: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ghcr.io/printstreamapp/printstream-slicer
 
       - id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: apps/slicer/Dockerfile
@@ -344,7 +360,7 @@ jobs:
           touch "${{ runner.temp }}/digests/${digest#sha256:}"
 
       - name: Upload digest
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: slicer-digests-${{ matrix.arch }}
           path: ${{ runner.temp }}/digests/*
@@ -353,6 +369,7 @@ jobs:
 
   # Merge the per-arch slicer digests into a single multi-arch manifest and tag it.
   merge-slicer:
+    timeout-minutes: 15
     needs: [version, build-slicer]
     if: github.repository == 'PrintStreamApp/printstream'
     runs-on: ubuntu-latest
@@ -361,22 +378,22 @@ jobs:
       packages: write
     steps:
       - name: Download digests
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: ${{ runner.temp }}/digests
           pattern: slicer-digests-*
           merge-multiple: true
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ghcr.io/printstreamapp/printstream-slicer
           tags: |
@@ -395,13 +412,14 @@ jobs:
         run: docker buildx imagetools inspect "ghcr.io/printstreamapp/printstream-slicer:${{ needs.version.outputs.version }}"
 
   release:
+    timeout-minutes: 10
     needs: [version, merge-app, merge-bridge, merge-slicer]
     if: github.repository == 'PrintStreamApp/printstream'
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Create the matching GitHub release once
         env:
@@ -432,7 +450,7 @@ jobs:
             printf '%s\n\n' '```'
             printf '%s\n\n' 'All three tags identify the image set built from this release commit. The `sha-` tags remain available for immutable provenance.'
             cat generated-notes.md
-            printf '\n\n%s\n' '*AI disclosure: these release notes and the related code were written with the assistance of AI.*'
+            printf '\n\n%s\n' '*AI disclosure: this release and the related code were written with the assistance of AI.*'
           } > release-notes.md
 
           release_args=()

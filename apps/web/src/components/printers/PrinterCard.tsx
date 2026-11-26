@@ -31,6 +31,7 @@ import {
 } from '../../components/printerJobProgressTone'
 import { OverflowTooltipText } from '../../components/OverflowTooltipText'
 import { useLocalStorageState } from '../../hooks/useLocalStorageState'
+import { printerExternalSpoolsExpandedKeys } from '../../lib/storageKeys'
 import {
   formatSecondaryStageLabel,
   getPrinterAttentionSummary
@@ -180,7 +181,7 @@ function PrinterCardComponent({
   const [editingSlot, setEditingSlot] = useState<{ unit: AmsUnit; slot: AmsSlot } | null>(null)
   const [editingExternalSpool, setEditingExternalSpool] = useState<ExternalSpool | null>(null)
   const [externalSpoolsExpanded, setExternalSpoolsExpanded] = useLocalStorageState<boolean>(
-    `bambu.printers.externalSpoolsExpanded.${printer.id}`,
+    printerExternalSpoolsExpandedKeys.at(printer.id),
     false,
     parseStoredBoolean,
     String

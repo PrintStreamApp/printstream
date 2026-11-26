@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { LibraryFile, SlicingPresetSummary, ThreeMfFilament, ThreeMfIndex, ThreeMfProjectFilament } from '@printstream/shared'
-import { resolveInitialManualPrinterModel, isProcessProfileCompatible, buildFilamentMappings, buildBakedFilamentProfileSelection, buildProcessFilamentChoices, buildProjectSlicingPresets, buildSliceDialogProjectFilaments, plateModelFilamentIds, buildProfileMaterialOptionId, buildRedundantProjectPresetCandidates, buildSliceMaterialOptions, buildInventoryMaterialOptions, filterSliceMaterialOptions, isFilamentProfileCompatible, repointMaterialOptionToCompatibleAlias, resolvableMaterialProfileId, narrowMaterialOptions, resolveProfileMaterialType, slicingPresetsResponseIsUsable, type SliceMaterialOption } from './slicingPresetMatching'
+import { resolveInitialManualPrinterModel, isProcessProfileCompatible, buildFilamentMappings, buildBakedFilamentProfileSelection, buildProcessFilamentChoices, buildProjectSlicingPresets, buildSliceDialogProjectFilaments, plateModelFilamentIds, buildProfileMaterialOptionId, buildRedundantProjectPresetCandidates, buildSliceMaterialOptions, buildInventoryMaterialOptions, filterSliceMaterialOptions, isFilamentProfileCompatible, repointMaterialOptionToCompatibleAlias, resolvableMaterialProfileId, narrowMaterialOptions, resolveProfileMaterialType, slicingPresetsResponseIsUsable, declaredCompatiblePrintersAccept, type SliceMaterialOption } from './slicingPresetMatching'
 import { formatSlicingPresetBrandedName, formatSlicingPresetDisplayName } from './slicingPresetSelection'
 
 function materialOption(overrides: Partial<SliceMaterialOption> & { id: string }): SliceMaterialOption {
@@ -110,6 +110,7 @@ function bakedIndex(overrides: Partial<ThreeMfIndex> = {}): ThreeMfIndex {
     compatiblePrinterModels: [],
     supportFilamentIds: [],
     printerProfileName: null,
+    printerProfileInherits: null,
     processProfileName: null,
     processProfileInherits: null,
     ...overrides
@@ -1264,4 +1265,69 @@ test('filament mappings preserve valid dual-nozzle choices and fallbacks', () =>
   assert.equal(mapping({}, 'nozzle-0')?.toolheadId, 'nozzle-0')
   assert.equal(mapping({}, null)?.toolheadId, 'nozzle-1')
   assert.equal(mapping({ 1: 'nozzle-2' }, 'nozzle-0')?.toolheadId, 'nozzle-0')
+})
+
+test('declaredCompatiblePrintersAccept: custom machine accepts its direct parent, a system machine never does', () => {
+  const process: SlicingPresetSummary = {
+    id: 'builtin:process:p1p', source: 'builtin', kind: 'process',
+    name: '0.20mm Strength @BBL P1P', compatiblePrinters: ['Bambu Lab P1P 0.4 nozzle']
+  }
+  const custom: SlicingPresetSummary = {
+    id: 'custom:machine:mine', source: 'custom', kind: 'machine',
+    name: 'Mine P1P', derivedFromPresetName: 'Bambu Lab P1P 0.4 nozzle'
+  }
+  const system: SlicingPresetSummary = {
+    id: 'builtin:machine:p1s', source: 'builtin', kind: 'machine',
+    name: 'Bambu Lab P1S 0.4 nozzle', derivedFromPresetName: 'Bambu Lab P1P 0.4 nozzle'
+  }
+  assert.equal(declaredCompatiblePrintersAccept(process, custom), true)
+  assert.equal(declaredCompatiblePrintersAccept(process, system), false)
+  assert.equal(declaredCompatiblePrintersAccept(process, { ...custom, derivedFromPresetName: 'Bambu Lab A1 0.4 nozzle' }), false)
+  assert.equal(declaredCompatiblePrintersAccept({ ...process, compatiblePrinters: [] }, system), true)
+})
+
+test('a project saved on a custom printer accepts its own stock-lineage process through the PROJECT machine', () => {
+  // Mike's case end to end, with the printer as the project's own embedded machine (what the editor
+  // and slice dialog default to), not a workspace preset. The project's process is derived from
+  // "0.20mm Strength @BBL P1P", which declares only the stock P1P; the custom printer's last
+  // inherits_group entry names that stock P1P, and the engine judges the process by it.
+  const strengthP1p: SlicingPresetSummary = {
+    id: 'builtin:process:strength-p1p', source: 'builtin', kind: 'process',
+    name: '0.20mm Strength @BBL P1P', compatiblePrinters: ['Bambu Lab P1P 0.4 nozzle']
+  }
+  const index = bakedIndex({
+    printerProfileName: 'Mike P1P 0.4 nozzle',
+    printerProfileInherits: 'Bambu Lab P1P 0.4 nozzle',
+    processProfileName: '0.20mm Speed - Tablet Mount',
+    processProfileInherits: '0.20mm Strength @BBL P1P'
+  })
+  const [machine] = buildProjectSlicingPresets(index, 'machine')
+  const [process] = buildProjectSlicingPresets(index, 'process')
+
+  assert.equal(machine?.derivedFromPresetName, 'Bambu Lab P1P 0.4 nozzle', 'the project machine summary carries its parent')
+  assert.equal(isProcessProfileCompatible(process!, machine!, 'P1P', [0.4], '', [strengthP1p]), true)
+
+  // Same file without the field (an index from before parser v44): no parent, so judged by its own
+  // name, exactly as before. Absent is never a guess.
+  const [legacyMachine] = buildProjectSlicingPresets({ ...index, printerProfileInherits: null }, 'machine')
+  assert.equal(legacyMachine?.derivedFromPresetName, undefined)
+  assert.equal(isProcessProfileCompatible(process!, legacyMachine!, 'P1P', [0.4], '', [strengthP1p]), false)
+})
+
+test('a project machine with a blank slot is judged by its own name', () => {
+  const strengthP1p: SlicingPresetSummary = {
+    id: 'builtin:process:strength-p1p', source: 'builtin', kind: 'process',
+    name: '0.20mm Strength @BBL P1P', compatiblePrinters: ['Bambu Lab P1P 0.4 nozzle']
+  }
+  const index = bakedIndex({
+    printerProfileName: 'Bambu Lab P1P 0.4 nozzle',
+    processProfileName: '0.20mm Speed - Tablet Mount',
+    processProfileInherits: '0.20mm Strength @BBL P1P'
+  })
+  const [machine] = buildProjectSlicingPresets(index, 'machine')
+  const [process] = buildProjectSlicingPresets(index, 'process')
+  assert.equal(machine?.derivedFromPresetName, undefined)
+  assert.equal(isProcessProfileCompatible(process!, machine!, 'P1P', [0.4], '', [strengthP1p]), true)
+  const [otherMachine] = buildProjectSlicingPresets({ ...index, printerProfileName: 'Bambu Lab P1S 0.4 nozzle' }, 'machine')
+  assert.equal(isProcessProfileCompatible(process!, otherMachine!, 'P1S', [0.4], '', [strengthP1p]), false)
 })

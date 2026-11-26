@@ -15,6 +15,7 @@ import type { PointerEvent as ReactPointerEvent } from 'react'
 import { useLocalStorageState } from '../../../hooks/useLocalStorageState'
 // Type-only: the settings dialog owns the viewport-preference contract (core), this consumes it.
 import type { EditorSidebarSide } from '../../../components/library/EditorSettingsDialog'
+import { editorSidebarWidthKey } from '../storageKeys'
 
 export const EDITOR_SIDEBAR_DEFAULT_WIDTH = 388
 export const EDITOR_SIDEBAR_MIN_WIDTH = 300
@@ -36,7 +37,7 @@ export interface SidebarResizeHandleProps {
 
 export function useSidebarResize(side: EditorSidebarSide = 'right'): { sidebarWidth: number; resizeHandleProps: SidebarResizeHandleProps } {
   const [sidebarWidth, setSidebarWidth] = useLocalStorageState<number>(
-    'editor.sidebarWidth',
+    editorSidebarWidthKey,
     EDITOR_SIDEBAR_DEFAULT_WIDTH,
     parseStoredWidth,
     String

@@ -1,6 +1,23 @@
 {
   "releases": [
     {
+      "version": "1.3.23",
+      "releasedOn": "2026-11-26",
+      "changes": [
+        "Jobs history now records printer faults, including ones that happen between prints, and links each fault to the print it affected. You can filter history to show them.",
+        "Import models straight into your library from MakerWorld, Printables or a web link in Library Upload, and choose where each model is saved and what it's called.",
+        "Dragging files onto a library folder now works in every grouping.",
+        "A custom printer preset now accepts the process presets made for the printer it's based on.",
+        "Model Studio's preset lists update right after you save, upload or remove a preset.",
+        "Dialog buttons stay in view while you scroll a long dialog.",
+        "About, in the main menu, shows your version and update status, with links to the source code, privacy policy, support, license and third-party notices.",
+        "The privacy policy now describes the anonymous usage counts the hosted service keeps and how website visits are counted.",
+        "Self-hosted: a database still using the old default password now logs a warning at every start, with the steps to change it. A production server also refuses to start without DATABASE_URL instead of falling back to a development default.",
+        "Self-hosted: BRIDGE_UPDATE_MODE (automatic, manual or pinned) replaces the two older bridge update settings, which keep working.",
+        "PrintStream server app: on Linux, the tray's logs come from the system journal. On Windows, updates protect the installation and the tray status stays accurate."
+      ]
+    },
+    {
       "version": "1.3.22",
       "releasedOn": "2026-11-13",
       "changes": [
@@ -119,7 +136,7 @@
       "version": "1.3.9",
       "releasedOn": "2026-09-21",
       "changes": [
-        "Find PrintStream\u2019s Android, Windows, and Linux apps from the new Apps section, including Linux AppImage and Debian packages for x64 and ARM64.",
+        "Find PrintStream’s Android, Windows, and Linux apps from the new Apps section, including Linux AppImage and Debian packages for x64 and ARM64.",
         "Check for updates from App settings, with installation handled by Google Play, Microsoft Store, or the matching Linux package."
       ]
     },

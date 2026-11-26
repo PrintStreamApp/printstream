@@ -77,7 +77,7 @@ export function PrinterPickerDialog({
    */
   anyOption?: { label: string; description?: string }
 }) {
-  const tagFilter = useTagFilter('printer', 'printer-picker')
+  const tagFilter = useTagFilter('printer', 'printerPicker', 'printer-picker')
   const { matches: matchesTags, searchText: tagSearchText } = tagFilter
   const [search, setSearch] = useState('')
   const [models, setModels] = useState<string[]>([])

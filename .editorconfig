@@ -1,0 +1,20 @@
+# Shared basics (STYLE-1), the same text as the [*] and two-space sections of winui-app-kit's
+# canonical .editorconfig. The web family has no canonical copy yet; replace this file with it once one exists.
+root = true
+
+# Basics for every file.
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+# Two-space languages.
+[*.{ts,tsx,js,mjs,cjs,json,jsonc,yml,yaml,css,scss,md}]
+indent_size = 2
+
+# Formats that require CRLF.
+[*.{cmd,bat}]
+end_of_line = crlf

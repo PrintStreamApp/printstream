@@ -14,7 +14,7 @@ import CompareArrowsRoundedIcon from '@mui/icons-material/CompareArrowsRounded'
 import SearchRoundedIcon from '@mui/icons-material/SearchRounded'
 import { Alert, Button, FormControl, FormLabel, Select, Sheet, Stack, Tooltip, Typography } from '@mui/joy'
 import { extractErrorMessage, MAX_EXPORTABLE_SLICING_PRESETS, type SlicingCapabilities, type SlicingPresetSummary } from '@printstream/shared'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery } from '@tanstack/react-query'
 import { apiFetch } from '../../../lib/apiClient'
 import { apiFetchRaw, readApiErrorMessage } from '../../../lib/apiFetchRaw'
 import { downloadBlob } from '../../../lib/downloadBlob'
@@ -59,6 +59,8 @@ import { PaginatedSection } from '../../PaginationFooter'
 import { usePromptDialog } from '../../PromptDialogProvider'
 import { usePersistentState } from '../../../hooks/usePersistentState'
 import { SlicingPresetRow } from './SlicingPresetRow'
+import { useRefreshSlicingPresets } from '../useRefreshSlicingPresets'
+import { slicingPresetPageSizeKey, slicingPresetSortDirKey, slicingPresetSortKey } from '../../../lib/storageKeys'
 
 const SLICING_PRESET_PAGE_SIZE_OPTIONS = [10, 25, 50] as const
 type SlicingPresetPageSize = (typeof SLICING_PRESET_PAGE_SIZE_OPTIONS)[number]
@@ -94,12 +96,6 @@ const SLICING_PRESET_SORT_OPTIONS_BY_KIND: Record<
   process: slicingPresetSortOptions('process'),
   filament: slicingPresetSortOptions('filament')
 }
-
-// Legacy `slicingProfiles` spelling reserved: these are persisted per-device display prefs, and
-// renaming them would silently reset every user's sort and page size. See the localSlicingPresets note.
-const SLICING_PRESET_SORT_KEY = 'printstream.slicingProfiles.sort'
-const SLICING_PRESET_SORT_DIR_KEY = 'printstream.slicingProfiles.sortDir'
-const SLICING_PRESET_PAGE_SIZE_KEY = 'printstream.slicingProfiles.pageSize'
 
 type SlicingPresetSortPreferences = Record<SlicingPresetKind, SlicingPresetPanelSortValue>
 
@@ -157,7 +153,7 @@ export function SlicingPresetKindPanel({ kind, profiles, emptyDescription, stick
 }): JSX.Element {
   const facets = SLICING_PRESET_FACETS[kind]
   const sortOptions = SLICING_PRESET_SORT_OPTIONS_BY_KIND[kind]
-  const queryClient = useQueryClient()
+  const refreshPresets = useRefreshSlicingPresets()
   const { confirm } = usePromptDialog()
   const [search, setSearch] = React.useState('')
   const [facetSelections, setFacetSelections] = React.useState<SlicingPresetFacetSelections>({})
@@ -181,13 +177,13 @@ export function SlicingPresetKindPanel({ kind, profiles, emptyDescription, stick
   // it resets with the panel rather than persisting across tabs.
   const [groupFacetId, setGroupFacetId] = React.useState<string>(NO_GROUPING)
   const [sortPreferences, setSortPreferences] = usePersistentState<SlicingPresetSortPreferences>(
-    SLICING_PRESET_SORT_KEY,
+    slicingPresetSortKey,
     DEFAULT_SLICING_PRESET_SORT_PREFERENCES,
     sanitizeSlicingPresetSort
   )
   const sortValue = sortPreferences[kind]
-  const [sortDirection, setSortDirection] = usePersistentState<DirectorySortDirection>(SLICING_PRESET_SORT_DIR_KEY, DEFAULT_SLICING_PRESET_SORT_DIRECTION, sanitizeSlicingPresetSortDirection)
-  const [pageSize, setPageSize] = usePersistentState<SlicingPresetPageSize>(SLICING_PRESET_PAGE_SIZE_KEY, SLICING_PRESET_PAGE_SIZE_OPTIONS[0], sanitizeSlicingPresetPageSize)
+  const [sortDirection, setSortDirection] = usePersistentState<DirectorySortDirection>(slicingPresetSortDirKey, DEFAULT_SLICING_PRESET_SORT_DIRECTION, sanitizeSlicingPresetSortDirection)
+  const [pageSize, setPageSize] = usePersistentState<SlicingPresetPageSize>(slicingPresetPageSizeKey, SLICING_PRESET_PAGE_SIZE_OPTIONS[0], sanitizeSlicingPresetPageSize)
   const [page, setPage] = React.useState(0)
   const [selectionMode, setSelectionMode] = React.useState(false)
   const [selectedProfileIds, setSelectedProfileIds] = React.useState<string[]>([])
@@ -200,7 +196,7 @@ export function SlicingPresetKindPanel({ kind, profiles, emptyDescription, stick
     },
     onSuccess: async (_data, deletedProfileIds) => {
       setSelectedProfileIds((current) => current.filter((profileId) => !deletedProfileIds.includes(profileId)))
-      await queryClient.invalidateQueries({ queryKey: ['slicing-profiles'] })
+      await refreshPresets()
     }
   })
   const deleteError = deleteProfiles.error ? extractErrorMessage(deleteProfiles.error) : null

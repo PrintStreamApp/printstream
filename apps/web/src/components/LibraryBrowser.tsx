@@ -189,8 +189,11 @@ export function LibraryBrowser({
 
   const handleFolderDragOver = (folder: LibraryFolder) => (event: DragEvent<HTMLElement>) => {
     const draggedItem = draggedItemRef.current
-    if (!onItemDrop || !draggedItem) return
-    if (draggedItem.type === 'folder' && draggedItem.folder.id === folder.id) return
+    if (!onItemDrop) return
+    // Grouped results render folders and files in separate browser instances. During
+    // dragover the browser exposes only MIME types, so read the payload on drop.
+    if (!draggedItem && !Array.from(event.dataTransfer.types).includes(LIBRARY_DRAG_MIME)) return
+    if (draggedItem?.type === 'folder' && draggedItem.folder.id === folder.id) return
     event.preventDefault()
     event.dataTransfer.dropEffect = 'move'
     setDragOverFolderId(folder.id)

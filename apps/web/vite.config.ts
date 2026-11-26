@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { defineConfig, loadEnv } from 'vite'
+import { devkitViteServer } from '@dynamic-solutions-canada/devkit/vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 import { devApiProxy } from './devApiProxy.ts'
@@ -24,7 +25,7 @@ function pickViteEnv(source: NodeJS.ProcessEnv): Record<string, string> {
 export default defineConfig(({ command, mode }) => {
   const fileEnv = loadEnv(mode, fileURLToPath(new URL('../..', import.meta.url)), 'VITE_')
   // `loadEnv` reads .env FILES only, so a value exported by a parent process would be silently
-  // ignored. Multi-checkout dev mode (via @ryanewen/devkit) publishes the port and hostname for
+  // ignored. Multi-checkout dev mode (via @dynamic-solutions-canada/devkit) publishes the port and hostname for
   // this checkout that way, so process.env has to win -- and it also lets a one-off
   // `VITE_API_PORT=4001 npm run dev` work, which reads like it should and previously did not.
   const env = { ...fileEnv, ...pickViteEnv(process.env) }
@@ -102,18 +103,15 @@ export default defineConfig(({ command, mode }) => {
       })
     ],
     server: {
-      // Multi-checkout dev mode derives a per-checkout port and publishes that exact port through
-      // Devkit's proxy. It is an identity there, not a preference: falling through to the next port
-      // would start a web server the advertised hostname cannot reach. Outside host mode, retain
-      // Vite's ordinary fallback behavior for standalone/local use.
-      port: Number(env.VITE_DEV_PORT ?? 5173),
+      // Port, bind address, allowed hosts and the `.worktrees/` watch ignore come from devkit
+      // (`devkitViteServer`, see its README): the port devkit's proxy publishes for this checkout,
+      // an explicit IPv4 bind under devkit (Docker Desktop's WSL forwarding does not relay the IPv6
+      // wildcard), and every hostname routed here, including a tunnel's (`VITE_DEV_ALLOWED_HOSTS`).
+      ...devkitViteServer(env),
+      // The port is an identity under devkit, not a preference: falling through to the next port
+      // would start a web server the advertised hostname cannot reach. Outside devkit, keep Vite's
+      // ordinary fallback for standalone use.
       strictPort: Boolean(env.VITE_DEV_PORT),
-      // `true` binds the IPv6 wildcard, which Docker Desktop's WSL host forwarding does not relay:
-      // a container reaching `host.docker.internal` gets connection-refused, so multi-checkout dev
-      // mode's proxy answers 502 for a dev server that is plainly up on its direct port. Host mode
-      // therefore publishes an explicit IPv4 bind through devkit; everyone else
-      // keeps the dual-stack default.
-      host: env.VITE_DEV_HOST || true,
       // Enforce a CSP in dev so the resource directives (notably img/media/connect
       // for camera frames + proxied MJPEG) are exercised here, matching the policy
       // the API serves in production (apps/api/src/lib/content-security-policy.ts).
@@ -135,8 +133,8 @@ export default defineConfig(({ command, mode }) => {
           "media-src 'self' data: blob:",
           "font-src 'self' data:",
           "style-src 'self' 'unsafe-inline' https://*.paddle.com",
-          "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://*.paddle.com https://static.cloudflareinsights.com",
-          "connect-src 'self' ws: wss: https://*.paddle.com https://cloudflareinsights.com https://printstream.app",
+          "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://*.paddle.com",
+          "connect-src 'self' ws: wss: https://*.paddle.com https://printstream.app",
           "frame-src 'self' https://*.paddle.com",
           "worker-src 'self' blob:",
           // The Vite proxy forwards this to the local API's violation sink, so
@@ -144,12 +142,6 @@ export default defineConfig(({ command, mode }) => {
           'report-uri /api/csp-report'
         ].join('; ')
       },
-      // When the dev server runs from source behind a TLS-terminating reverse proxy
-      // (e.g. cloudflared → tunnel.printstream.example.com), Vite's host check would reject the
-      // proxied Host, allow it via VITE_DEV_ALLOWED_HOSTS (comma-separated).
-      allowedHosts: env.VITE_DEV_ALLOWED_HOSTS
-        ? env.VITE_DEV_ALLOWED_HOSTS.split(',').map((host) => host.trim()).filter(Boolean)
-        : undefined,
       // HMR is left to Vite's client inference rather than a forced host/port: the client dials the
       // SAME origin that served the page, ws://localhost:5173 for local access and
       // wss://<proxy-host>(:443) through the tunnel, so BOTH access paths get HMR. The old

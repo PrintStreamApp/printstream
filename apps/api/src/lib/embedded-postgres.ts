@@ -28,7 +28,9 @@
  * imported. That makes this supervisor a deliberate **pre-env** boundary: the
  * `server.ts` entrypoint calls it before importing the app, and it reads its own
  * handful of settings from `process.env` rather than from the env module it must
- * precede. This is the one place outside `env.ts` that reads `process.env`.
+ * precede. The `server.ts` entrypoint shares this boundary (env-direct-read-ok:
+ * pre-env boot stage). Every other API file reads the env module, which Rule 4 of
+ * `scripts/source-hygiene.test.mjs` enforces.
  *
  * A single-instance guard via Postgres' own `postmaster.pid` keeps two app
  * instances from opening one data dir; Postgres is crash-safe, so an abrupt stop

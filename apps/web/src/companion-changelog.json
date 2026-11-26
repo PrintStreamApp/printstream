@@ -1,6 +1,14 @@
 {
   "releases": [
     {
+      "version": "1.3.18",
+      "releasedOn": "2026-11-26",
+      "changes": [
+        "Importing a model from the MakerWorld browser lets you choose where each model is saved and what it's called.",
+        "A sharper app icon on Windows, at every size."
+      ]
+    },
+    {
       "version": "1.3.17",
       "releasedOn": "2026-11-03",
       "changes": [

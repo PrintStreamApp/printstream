@@ -227,3 +227,29 @@ test('selected tags filter before pagination and intersect text search', () => {
   assert.equal(result.total, 1)
   assert.equal(result.entries[0]?.kind === 'print' && result.entries[0].printJob.id, 'tagged')
 })
+
+test('standalone faults merge before server pagination, have their own type, and result filters hide only standalone entries', () => {
+  const printerFault = {
+    id: 'idle-reference', printerId: 'printer-a', printerName: 'Fault printer',
+    startedAt: '2026-08-01T11:30:00.000Z', endedAt: null,
+    fault: {
+      id: 'one-occurrence', source: 'hms' as const, code: '0700801100020001', message: 'Filament exhausted',
+      firstObservedAt: '2026-08-01T10:30:00.000Z', lastObservedAt: '2026-08-01T11:30:00.000Z',
+      observedClearedAt: null, state: 'active' as const, alreadyPresent: true, gaps: []
+    }
+  }
+  const input = { printJobs: [printJob({ faults: [printerFault.fault] })], slicingJobs: [slicingJob({})], printerFaults: [printerFault], printerNameFor }
+  const first = selectJobHistoryPage({ ...input, query: query({ pageSize: 1 }) })
+  const second = selectJobHistoryPage({ ...input, query: query({ pageSize: 1, page: 2 }) })
+  assert.equal(first.entries[0]?.kind, 'slicing')
+  assert.equal(second.entries[0]?.kind, 'printer-fault')
+  assert.equal(second.total, 3)
+  assert.equal(second.totalUnfiltered, 3)
+  assert.ok(second.printerOptions.some((printer) => printer.name === 'Fault printer') || second.printerOptions.some((printer) => printer.id === 'printer-a'))
+  const result = selectJobHistoryPage({ ...input, query: query({ results: ['success'] }) })
+  assert.deepEqual(result.entries.map((entry) => entry.kind), ['slicing', 'print'])
+  assert.equal(result.entries[1]?.kind === 'print' && result.entries[1].printJob.faults?.length, 1)
+  const onlyFaults = selectJobHistoryPage({ ...input, query: query({ kinds: ['printer-fault'], printerIds: ['printer-a'], search: 'filament exhausted' }) })
+  assert.equal(onlyFaults.total, 1)
+  assert.equal(selectJobHistoryPage({ ...input, query: query({ tagIds: ['tag'] }), matchesTags: () => false }).total, 0)
+})

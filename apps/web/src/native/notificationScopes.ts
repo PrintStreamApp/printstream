@@ -1,5 +1,6 @@
 /** Personal notification destinations for one authenticated origin, never support-only workspaces. */
 import { nativeNotificationAccount, type AuthBootstrap } from '@printstream/shared'
+import { mobileNotificationOfferKeys } from '../lib/storageKeys'
 
 export interface NotificationScope {
   id: string
@@ -28,5 +29,7 @@ export function notificationScopes(bootstrap: AuthBootstrap | undefined): Notifi
 export function notificationSelectionKey(bootstrap: AuthBootstrap | undefined): string | null {
   const scopes = notificationScopes(bootstrap)
   if (!scopes.length) return null
-  return `printstream.mobile-notifications.v2:${encodeURIComponent(nativeNotificationAccount(bootstrap)!)}:${scopes.map(({ id }) => encodeURIComponent(id)).sort().join(',')}`
+  return mobileNotificationOfferKeys.keyFor(
+    `${encodeURIComponent(nativeNotificationAccount(bootstrap)!)}:${scopes.map(({ id }) => encodeURIComponent(id)).sort().join(',')}`
+  )
 }

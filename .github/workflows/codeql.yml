@@ -1,4 +1,4 @@
-name: "CodeQL Advanced Security Scan"
+name: CodeQL
 
 # Public-snapshot security scan. The private source repository cannot run
 # CodeQL without a GitHub Advanced Security licence, so the job gates itself
@@ -11,8 +11,18 @@ on:
   schedule:
     - cron: '30 4 * * 0' # Run weekly at 04:30 on Sunday
 
+# Least privilege by default (CI-5): jobs that need more widen it at job level.
+permissions:
+  contents: read
+
+# A check: a newer run supersedes this one.
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   analyze:
+    timeout-minutes: 30
     name: Analyze
     # CodeQL is free on the public repo only; the private monorepo would need
     # a GitHub Advanced Security license, so skip it there.
@@ -25,15 +35,15 @@ jobs:
 
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v5
+      uses: actions/checkout@v7
 
     - name: Initialize CodeQL
-      uses: github/codeql-action/init@v3
+      uses: github/codeql-action/init@v4
       with:
         languages: javascript
         config-file: ./.github/codeql/codeql-config.yml
 
     - name: Perform CodeQL Analysis
-      uses: github/codeql-action/analyze@v3
+      uses: github/codeql-action/analyze@v4
       with:
         category: "/language:javascript"

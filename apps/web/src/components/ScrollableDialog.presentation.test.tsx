@@ -4,14 +4,6 @@ import { installJsdomGlobals } from '../test-utils/jsdom'
 
 const dom = installJsdomGlobals()
 
-// ScrollableDialogBody measures overflow via rAF, which jsdom does not provide.
-const animationFrameWindow = dom.window as unknown as {
-  requestAnimationFrame: (callback: () => void) => number
-  cancelAnimationFrame: (handle: number) => void
-}
-animationFrameWindow.requestAnimationFrame = (callback) => dom.window.setTimeout(callback, 0) as unknown as number
-animationFrameWindow.cancelAnimationFrame = (handle) => dom.window.clearTimeout(handle)
-
 // Joy's Modal does SSR detection at import time, so load @mui/joy and the component under test only
 // after the jsdom globals exist.
 const React = (await import('react')).default

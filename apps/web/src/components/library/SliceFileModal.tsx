@@ -106,6 +106,7 @@ import { useMachineSettingOverrides } from './useMachineSettingOverrides'
 import { useMachineTarget } from './useMachineTarget'
 import { useMaterialSlots } from './useMaterialSlots'
 import { useHeldSnapshot } from './useHeldSnapshot'
+import { useSlicingPresetsSnapshot } from './useSlicingPresetsSnapshot'
 import { useProcessProfileSelection } from './useProcessProfileSelection'
 import { SliceSettingsPanel, type SliceSettingsController, type SliceConfigSnapshot } from './SliceSettingsPanel'
 import { sceneEditForPreparedSlice } from './preparedSlicePayload'
@@ -278,14 +279,11 @@ export function SliceFileModal({
   // The editor owns the whole surface in the library flow, so it, not the slim dialog, is what
   // the snapshot protects. `flow`/`file.kind` are fixed for a mounted dialog (it is keyed per file).
   const editorOwnsSurface = flow === 'library' && file.kind === '3mf'
-  const [profilesSnapshotToken, setProfilesSnapshotToken] = useState(0)
-  /** Re-take the catalogue snapshot. The editor calls this after the user edits presets. */
-  const refreshSlicingPresets = useCallback(() => { setProfilesSnapshotToken((token) => token + 1) }, [])
-  const profiles = useHeldSnapshot(liveProfiles, {
+  const { profiles, refresh: refreshSlicingPresets, revision: profilesSnapshotToken } = useSlicingPresetsSnapshot(liveProfiles, {
     hold: editorOwnsSurface,
     ready: liveProfiles.length > 0,
-    token: profilesSnapshotToken,
-    scope: selectedSlicerTargetId
+    scope: selectedSlicerTargetId,
+    refetch: slicingPresetsQuery.refetch
   })
   // "Should have profiles but don't yet", not merely "the query is actively fetching". The slicer
   // can briefly return an empty list while restarting, so the query throws and retries with backoff;
@@ -448,6 +446,14 @@ export function SliceFileModal({
     // Refreshing the catalogue explicitly releases the pinned installed baselines.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     : memoizeProcessPresetResolver(resolveWorkspaceProcessConfig), [processReader, profilesSnapshotToken])
+  // A completed manager upload may refresh baselines while a different process draft is open.
+  // Hold that draft's resolver until it closes, but release it for real source/engine changes.
+  const processSettingsResolver = useHeldSnapshot(resolveProcessConfig, {
+    hold: processSettingsDialogOpen,
+    ready: true,
+    token: 0,
+    scope: JSON.stringify([processReader?.key, selectedSlicerTargetId, file.id, versionId])
+  })
   const projectProcessProfileId = useMemo(
     () => processProfiles.find((profile) => isProjectSlicingPresetId(profile.id))?.id ?? null,
     [processProfiles]
@@ -1343,7 +1349,7 @@ export function SliceFileModal({
       )}
       {/* Top level for the same reason as the settings dialogs below: it has to stack
           above this dialog rather than inside its scrolling body. */}
-      <SlicingPresetsDialog open={slicingPresetsOpen} onClose={() => setSlicingPresetsOpen(false)} />
+      <SlicingPresetsDialog open={slicingPresetsOpen} onClose={() => setSlicingPresetsOpen(false)} onPresetsChanged={refreshSlicingPresets} />
       {/* Per-object + process settings dialogs live at the top level so they stack
           above the editor in editor-only mode (and above the slim dialog otherwise). */}
       {editingSliceObject && selectedProcessProfile && (
@@ -1387,12 +1393,13 @@ export function SliceFileModal({
             processProfileId={selectedProcessProfile.id}
             processProfileName={selectedProcessProfile.name}
             sourceFileId={file.id}
-            resolveConfig={resolveProcessConfig}
+            resolveConfig={processSettingsResolver}
             initialOverrides={processSettingOverrides}
             visibilityContext={{ printerModel: targetMode === 'manualProfile' ? manualPrinterModel : (selectedPrinter?.model ?? '') }}
             profileOptions={compatibleProcessProfiles}
             filamentChoices={processFilamentChoices}
             applyScope={editorOnly ? 'project' : 'slice'}
+            onPresetSaved={refreshSlicingPresets}
             // Same rule the material dialog next door uses: the workspace's own preset can be
             // updated in place, a built-in or a project-embedded one can only be saved as new.
             canUpdateProfile={(profileId) => slicingPresetProvenance(profileId) === 'workspace'}
@@ -1431,6 +1438,7 @@ export function SliceFileModal({
               sourceFileId={file.id}
               projectFilamentId={filamentSettingsFilamentId}
               initialOverrides={filamentSettingOverridesById[filamentSettingsFilamentId] ?? {}}
+              onPresetSaved={refreshSlicingPresets}
               canEditOriginal={canEditOriginal}
               applyScope={editorOnly ? 'project' : 'slice'}
               onApply={(overrides) => {

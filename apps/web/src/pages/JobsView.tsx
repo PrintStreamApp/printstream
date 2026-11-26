@@ -1,3 +1,6 @@
+import { shouldShowJobsConnectionPlaceholder } from '../lib/jobHistory'
+import { PrinterFaultDetails } from '../components/PrinterFaultDetails'
+import { PrinterFaultHistoryCard } from '../components/PrinterFaultHistoryCard'
 import { useJobHistoryTagFilters } from '../hooks/useJobHistoryTagFilters'
 import { JobHistoryTagFilters } from '../components/tags/JobHistoryTagFilters'
 import { Box, Button, Card, CardContent, Chip, FormControl, ListItemDecorator, MenuItem, Select, Stack, Typography } from '@mui/joy'
@@ -94,8 +97,10 @@ import { PrintModal } from '../components/library/PrintModal'
 import { SliceThenPrintFlow } from '../components/library/SliceThenPrintFlow'
 import { SplitButton } from '../components/SplitButton'
 import { ListSkeleton } from '../components/ListSkeleton'
+import { jobHistoryKindFilterKey, jobHistoryPageSizeKey, jobHistoryPrinterFilterKey, jobHistoryResultFilterKey, jobHistorySortDirKey, jobHistorySortKey, jobHistoryViewModeKey } from '../lib/storageKeys'
 
 interface LiveJob {
+  faults: NonNullable<PrintJob['faults']>
   jobId: string
   printerId: string
   printerName: string
@@ -123,13 +128,6 @@ const HISTORY_SORT_OPTIONS = [
   { value: 'ended', label: 'Ended' },
   { value: 'started', label: 'Started' }
 ] as const
-const HISTORY_VIEW_MODE_KEY = 'printstream.jobs.history.viewMode'
-const HISTORY_SORT_KEY = 'printstream.jobs.history.sort'
-const HISTORY_SORT_DIR_KEY = 'printstream.jobs.history.sortDir'
-const HISTORY_RESULT_FILTER_KEY = 'printstream.jobs.history.resultFilter'
-const HISTORY_KIND_FILTER_KEY = 'printstream.jobs.history.kindFilter'
-const HISTORY_PRINTER_FILTER_KEY = 'printstream.jobs.history.printerFilter'
-const HISTORY_PAGE_SIZE_KEY = 'printstream.jobs.history.pageSize'
 
 type HistorySortValue = (typeof HISTORY_SORT_OPTIONS)[number]['value']
 
@@ -158,7 +156,7 @@ function sanitizeHistoryPrinterIds(value: unknown): string[] {
 
 function sanitizeHistoryKinds(value: unknown): JobHistoryKind[] {
   if (!Array.isArray(value)) return []
-  return value.filter((entry): entry is JobHistoryKind => entry === 'print' || entry === 'slicing')
+  return value.filter((entry): entry is JobHistoryKind => entry === 'print' || entry === 'slicing' || entry === 'printer-fault')
 }
 
 function sanitizeHistoryPageSize(value: unknown): number {
@@ -235,15 +233,15 @@ export function JobsView() {
   const historyTags = useJobHistoryTagFilters()
   const [historySearch, setHistorySearch] = useState('')
   const deferredHistorySearch = useDeferredValue(historySearch)
-  const [historyPrinterIds, setHistoryPrinterIds] = usePersistentState<string[]>(HISTORY_PRINTER_FILTER_KEY, [], sanitizeHistoryPrinterIds)
-  const [historyResults, setHistoryResults] = usePersistentState<PrintJob['result'][]>(HISTORY_RESULT_FILTER_KEY, [], sanitizeHistoryResults)
-  const [historyKinds, setHistoryKinds] = usePersistentState<JobHistoryKind[]>(HISTORY_KIND_FILTER_KEY, [], sanitizeHistoryKinds)
-  const [historySortValue, setHistorySortValue] = usePersistentState<HistorySortValue>(HISTORY_SORT_KEY, 'ended', sanitizeHistorySort)
-  const [historySortDirection, setHistorySortDirection] = usePersistentState<DirectorySortDirection>(HISTORY_SORT_DIR_KEY, 'desc', sanitizeHistorySortDirection)
+  const [historyPrinterIds, setHistoryPrinterIds] = usePersistentState<string[]>(jobHistoryPrinterFilterKey, [], sanitizeHistoryPrinterIds)
+  const [historyResults, setHistoryResults] = usePersistentState<PrintJob['result'][]>(jobHistoryResultFilterKey, [], sanitizeHistoryResults)
+  const [historyKinds, setHistoryKinds] = usePersistentState<JobHistoryKind[]>(jobHistoryKindFilterKey, [], sanitizeHistoryKinds)
+  const [historySortValue, setHistorySortValue] = usePersistentState<HistorySortValue>(jobHistorySortKey, 'ended', sanitizeHistorySort)
+  const [historySortDirection, setHistorySortDirection] = usePersistentState<DirectorySortDirection>(jobHistorySortDirKey, 'desc', sanitizeHistorySortDirection)
   const [historyPage, setHistoryPage] = useState(0)
-  const [historyPageSize, setHistoryPageSize] = usePersistentState<number>(HISTORY_PAGE_SIZE_KEY, HISTORY_PAGE_SIZE_OPTIONS[0], sanitizeHistoryPageSize)
+  const [historyPageSize, setHistoryPageSize] = usePersistentState<number>(jobHistoryPageSizeKey, HISTORY_PAGE_SIZE_OPTIONS[0], sanitizeHistoryPageSize)
   const [historyViewMode, setHistoryViewMode] = useLocalStorageState<DirectoryViewMode>(
-    HISTORY_VIEW_MODE_KEY,
+    jobHistoryViewModeKey,
     'list',
     parseHistoryViewMode,
     String
@@ -252,7 +250,7 @@ export function JobsView() {
   const authEnabled = authBootstrapQuery.data?.authEnabled ?? false
   const permissions = authBootstrapQuery.data?.permissions ?? []
   const canOpenBridgesSettings = authBootstrapQuery.data?.capabilities.canManageSettings ?? false
-  const showNoConnectedBridgesPlaceholder = authBootstrapQuery.isSuccess
+  const hasNoConnectedBridges = authBootstrapQuery.isSuccess
     && authBootstrapQuery.data?.workspace != null
     && !authBootstrapQuery.data.workspaceHasConnectedBridges
   const hasPermission = (permission: Permission) => !authEnabled || permissions.includes(permission)
@@ -267,11 +265,11 @@ export function JobsView() {
   const workspaceScopeKey = readCurrentWorkspaceScopeKey()
   const jobsQuery = useQuery({
     queryKey: ['jobs'],
-    queryFn: () => apiFetch<{ jobs: PrintJob[] }>('/api/jobs'),
-    enabled: canViewJobs && !showNoConnectedBridgesPlaceholder
+    queryFn: ({ signal }) => apiFetch<{ jobs: PrintJob[] }>('/api/jobs', { signal }),
+    enabled: canViewJobs
   })
-  const slicingJobsQuery = useSlicingJobs({ enabled: canViewJobs && !showNoConnectedBridgesPlaceholder })
-  // The merged print+slicing history, paged/filtered/sorted SERVER-side (GET /api/jobs/history:
+  const slicingJobsQuery = useSlicingJobs({ enabled: canViewJobs })
+  // The merged print, slicing and printer-fault history, paged/filtered/sorted SERVER-side (GET /api/jobs/history:
   // the shared selectJobHistoryPage owns the semantics). Every control that changes what a page
   // contains is part of the key; the page index itself is requested 1-based.
   const historyQuery = useQuery({
@@ -300,13 +298,13 @@ export function JobsView() {
     // Keep the previous page on screen while the next one loads, so paging/filtering never
     // flashes the list away (the workspaces directory sets the precedent).
     placeholderData: keepPreviousData,
-    enabled: canViewJobs && !showNoConnectedBridgesPlaceholder
+    enabled: canViewJobs
   })
-  const dispatchQuery = usePrintDispatchJobs({ enabled: canViewJobs && !showNoConnectedBridgesPlaceholder })
+  const dispatchQuery = usePrintDispatchJobs({ enabled: canViewJobs })
   const printersQuery = useQuery({
     queryKey: ['printers'],
     queryFn: () => apiFetch<{ printers: Printer[] }>('/api/printers'),
-    enabled: canViewPrinters && !showNoConnectedBridgesPlaceholder
+    enabled: canViewPrinters
   })
   const statusQuery = useQuery<Record<string, PrinterStatus>>({
     queryKey: workspaceQueryKeys.printerStatus(workspaceScopeKey),
@@ -437,6 +435,7 @@ export function JobsView() {
         if (!persistedJob && !status) return null
 
         return {
+          faults: persistedJob?.faults ?? [],
           jobId: persistedJob?.id ?? `live:${printerId}`,
           printerId,
           printerName: printerNames.get(printerId) ?? persistedJob?.printerName ?? 'Unknown printer',
@@ -504,6 +503,14 @@ export function JobsView() {
   }, [])
 
   const inProgressCount = activeSlicingJobs.length + dispatchQueue.length + liveJobs.length
+  // Durable history, including uncertain faults, remains available during an outage.
+  const showNoConnectedBridgesPlaceholder = shouldShowJobsConnectionPlaceholder({
+    hasNoConnectedBridges,
+    historyLoaded: historyQuery.isSuccess,
+    jobsLoaded: jobsQuery.isSuccess,
+    historyCount: historyTotalUnfiltered,
+    inProgressCount
+  })
   const sections: SectionNavEntry[] = [
     ...pluginSections,
     { id: 'active', label: 'Active', desktopLabel: 'In progress', count: inProgressCount },
@@ -683,7 +690,7 @@ export function JobsView() {
               </Card>
             )
           })}
-          {liveJobs.map((job) => <ActiveJobCard key={job.jobId} job={job} canViewCamera={canViewCamera} workspaceSlug={workspaceSlug} />)}
+          {liveJobs.map((job) => <ActiveJobCard key={job.jobId} job={job} canDeleteFaults={canDeleteJobs} canViewCamera={canViewCamera} workspaceSlug={workspaceSlug} />)}
         </Stack>
       </Box>
 
@@ -735,12 +742,13 @@ export function JobsView() {
                           renderValue={() => historyKinds.length === 0
                             ? null
                             : historyKinds.length === 1
-                              ? (historyKinds[0] === 'print' ? 'Print' : 'Slicing')
-                              : 'All types'}
+                              ? (historyKinds[0] === 'print' ? 'Print' : historyKinds[0] === 'slicing' ? 'Slicing' : 'Printer faults')
+                              : historyKinds.length === 3 ? 'All types' : `${historyKinds.length} types`}
                           slotProps={{ listbox: { disablePortal: true } }}
                         >
                           <MultiSelectOption value="print" selected={historyKinds.includes('print')}>Print</MultiSelectOption>
                           <MultiSelectOption value="slicing" selected={historyKinds.includes('slicing')}>Slicing</MultiSelectOption>
+                          <MultiSelectOption value="printer-fault" selected={historyKinds.includes('printer-fault')}>Printer faults</MultiSelectOption>
                         </Select>
                       </FormControl>
                       <FormControl>
@@ -843,6 +851,7 @@ export function JobsView() {
                 }}
               >
                 {visibleHistoryEntries.map(({ entry, derived }) => {
+                  if (entry.kind === 'printer-fault') return <PrinterFaultHistoryCard key={derived.id} period={entry.printerFault} canDelete={canDeleteJobs} />
                   if (entry.kind === 'slicing') {
                     const job = entry.slicingJob
                     const deleteAction = canDeleteJobs ? (
@@ -975,7 +984,7 @@ export function JobsView() {
                       {deleteAction}
                     </Stack>
                   ) : undefined
-                  return <PrintJobHistoryCard key={job.id} job={job} action={action} />
+                  return <PrintJobHistoryCard key={job.id} job={job} action={action} canDeleteFaults={canDeleteJobs} />
                 })}
               </Box>
             </PaginatedSection>
@@ -1023,7 +1032,7 @@ export function JobsView() {
       <ConfirmActionDialog
         open={deleteHistoryJobTarget != null}
         title="Delete history entry?"
-        description={deleteHistoryJobTarget ? `Delete "${deleteHistoryJobTarget.jobName}" from print history? This also removes any saved cover and snapshot images for this job.` : ''}
+        description={deleteHistoryJobTarget ? `Delete "${deleteHistoryJobTarget.jobName}" from print history? This also removes any saved cover and snapshot images for this job. Printer fault history is preserved.` : ''}
         confirmLabel="Delete history entry"
         pending={deleteHistoryJob.isPending && deleteHistoryJob.variables === deleteHistoryJobTarget?.id}
         onClose={() => setDeleteHistoryJobTarget(null)}
@@ -1242,7 +1251,7 @@ function SlicingJobHistoryCard({ job, printerName, action }: { job: SlicingJob; 
   )
 }
 
-function ActiveJobCard({ job, canViewCamera, workspaceSlug }: { job: LiveJob; canViewCamera: boolean; workspaceSlug?: string }) {
+function ActiveJobCard({ job, canViewCamera, workspaceSlug, canDeleteFaults }: { job: LiveJob; canViewCamera: boolean; workspaceSlug?: string; canDeleteFaults: boolean }) {
   const navigate = useNavigate()
   const cameraSupported = job.printerModel ? getPrinterDisplayCapabilities(job.printerModel).camera : false
   const [pendingStartWarning, setPendingStartWarning] = useState(false)
@@ -1342,6 +1351,7 @@ function ActiveJobCard({ job, canViewCamera, workspaceSlug }: { job: LiveJob; ca
             </Stack>
           </Stack>
 
+          <PrinterFaultDetails faults={job.faults} canDelete={canDeleteFaults} />
           <PrinterJobMediaStrip
             cover={{ title: displayJobName, src: coverUrl, loaded: coverLoaded, failed: coverFailed }}
             camera={canViewCamera && cameraSupported ? {

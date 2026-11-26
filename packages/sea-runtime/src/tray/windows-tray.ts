@@ -135,11 +135,15 @@ $timer.add_Tick({
     $codeItem.Visible = $false
     $connectItem.Visible = $false
     $copyCodeItem.Visible = $false
+    $workspaceItem.Visible = $false
     $updateItem.Visible = $false
     $startServiceItem.Visible = $true
     $stopServiceItem.Visible = $false
     $restartServiceItem.Visible = $false
     $script:appUrl = ''
+    $script:workspaceUrl = ''
+    $script:connectUrl = ''
+    $script:connectCode = ''
     $notify.Text = $appName + ' - not running'
     return
   }
@@ -154,8 +158,15 @@ $timer.add_Tick({
   $lifecycleText = [string]$s.lifecycleLabel
   if (-not $lifecycleText) { $lifecycleText = [string]$s.lifecycle }
   $statusItem.Text = 'Status: ' + $lifecycleText
-  $ver = $s.build.buildRevision
-  if (-not $ver) { $ver = $s.build.releaseFingerprint }
+  # The server publishes a fingerprint string; the bridge publishes a build
+  # object. Preserve both existing display contracts without changing status.
+  $ver = ''
+  if ($s.build -is [string]) {
+    $ver = $s.build
+  } elseif ($s.build) {
+    $ver = $s.build.buildRevision
+    if (-not $ver) { $ver = $s.build.releaseFingerprint }
+  }
   if ($ver) {
     $verText = [string]$ver
     $versionItem.Text = 'Version: ' + $verText.Substring(0, [Math]::Min(12, $verText.Length))

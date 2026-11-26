@@ -2,6 +2,11 @@ process.env.NODE_ENV = 'test'
 
 import assert from 'node:assert/strict'
 import { afterEach, beforeEach, mock, test } from 'node:test'
+import { randomUUID } from 'node:crypto'
+import { rm } from 'node:fs/promises'
+import path from 'node:path'
+import { printFromLibrarySchema } from '@printstream/shared'
+import { THREE_MF_INDEX_PARSER_VERSION } from '@printstream/shared/three-mf'
 import type { PrintDispatchJob, PrintFromLibrary, Printer } from '@printstream/shared'
 import { bridgeSessionManager } from './bridge-session-manager.js'
 import { enqueueLibraryPrint, validateLibraryPrint } from './library-printing.js'
@@ -10,6 +15,8 @@ import { printerManager } from './printer-manager.js'
 import { prisma, rootPrisma } from './prisma.js'
 import { withWorkspaceRequestContext } from './workspace-context.js'
 import { usePrismaStubs } from '../test-utils/prisma-stubs.js'
+import { reprintJobFromRow } from './print-reprint.js'
+import { libraryDir } from './library-paths.js'
 
 const stub = usePrismaStubs()
 beforeEach(() => { stub(prisma.workspaceTag, 'findMany', async () => []) })
@@ -20,6 +27,94 @@ const originalPrinterFindFirst = prisma.printer.findFirst
 const originalIsConnected = bridgeSessionManager.isConnected
 const originalGetPrinter = printerManager.getPrinter
 const originalEnqueueSnapshotPrint = printDispatcher.enqueueSnapshotPrint
+
+// Exercise history reconstruction and the real library entrypoint up to the upload queue.
+// Stopping at enqueueSnapshotPrint keeps this regression from contacting a printer.
+for (const selection of [
+  { skipInstances: [153] },
+  { skipObjects: [7] },
+  { skipInstances: [153], skipObjects: [7] },
+  { skipInstances: [], skipObjects: [] },
+  {}
+]) {
+  test(`history reprint forwards object exclusions to upload dispatch: ${JSON.stringify(selection)}`, async (t) => {
+    const bridgeId = `reprint-test-${randomUUID()}`
+    t.after(() => rm(path.join(libraryDir, '_bridge-derived-cache', bridgeId), { recursive: true, force: true }))
+    const source = {
+      ...makeLibraryFile({ id: 'history-snapshot' }),
+      ownerBridgeId: bridgeId,
+      name: 'parts.gcode.3mf',
+      kind: '3mf',
+      storedPath: 'parts.gcode.3mf'
+    }
+    stub(prisma.libraryFile, 'findFirst', async () => source)
+    stub(prisma.printer, 'findFirst', async () => makePrinter())
+    printerManager.getPrinter = () => makePrinter()
+    bridgeSessionManager.isConnected = () => true
+    t.mock.method(bridgeSessionManager, 'requestRpc', async (_bridgeId: string, method: string) => {
+      assert.equal(method, 'library.inspect3mf')
+      return {
+        parserVersion: THREE_MF_INDEX_PARSER_VERSION,
+        index: {
+          plates: [{
+            index: 3,
+            name: null,
+            gcodeFile: 'Metadata/plate_3.gcode',
+            pickFile: null,
+            thumbnailFile: null,
+            plateType: null,
+            nozzleSizes: [],
+            filaments: [],
+            objects: []
+          }],
+          projectFilaments: [],
+          compatiblePrinterModels: []
+        }
+      }
+    })
+
+    const dispatched: unknown[] = []
+    printDispatcher.enqueueSnapshotPrint = async (input) => {
+      dispatched.push({
+        snapshotId: input.snapshot.id,
+        plate: input.plate,
+        skipObjects: input.skipObjects,
+        skipInstances: input.skipInstances
+      })
+      return makeJob()
+    }
+
+    // Match the route's partial request schema before invoking its real orchestration.
+    const overrides = printFromLibrarySchema.omit({ fileId: true, printerId: true }).partial().parse({
+      plate: 3,
+      ...selection
+    })
+    const result = await reprintJobFromRow({
+      row: {
+        id: 'history-job',
+        printerId: 'printer-1',
+        sourceType: 'library',
+        fileId: source.id,
+        calibrationOption: null,
+        useAms: true,
+        bedLevel: true,
+        plate: 3,
+        amsMapping: null
+      },
+      overrides,
+      workspaceId: 'workspace-1',
+      assertPermission: (kind) => assert.equal(kind, 'file')
+    })
+
+    assert.equal(result.kind, 'file')
+    assert.deepEqual(dispatched, [{
+      snapshotId: source.id,
+      plate: 3,
+      skipObjects: selection.skipObjects,
+      skipInstances: selection.skipInstances
+    }])
+  })
+}
 
 afterEach(() => {
   prisma.libraryFile.findFirst = originalLibraryFileFindFirst

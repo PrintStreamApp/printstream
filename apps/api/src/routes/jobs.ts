@@ -12,6 +12,7 @@
  * history row may carry rich PrintStream metadata (library file, plate, AMS
  * mapping) or almost none for an external job.
  */
+import { readJobFaults, readStandaloneFaultHistory, deleteClearedPrinterFault } from '../lib/printer-fault-history.js'
 import { jobHistoryTagMatcher, readJobHistoryTags, jobHistoryTagCatalog } from '../lib/job-history-tags.js'
 import { Router } from 'express'
 import { Prisma } from '@prisma/client'
@@ -19,6 +20,7 @@ import { z } from 'zod'
 import {
   type AuditLogEntry,
   type PrintJob,
+  type PrinterFault,
   isActiveSlicingJob,
   jobHistoryQuerySchema,
   jobHistoryResponseSchema,
@@ -180,8 +182,9 @@ jobsRouter.get('/', requireRequestPermission(JOBS_VIEW_PERMISSION), async (reque
     startedAt: row.startedAt,
     finishedAt: row.finishedAt
   })), workspaceId)
+  const faultsByJob = await readJobFaults(workspaceId, rows.map((row) => row.id))
   response.json({
-    jobs: await Promise.all(rows.map(async (row) => await toPrintJobDto(row, activityByJobId.get(row.id) ?? [])))
+    jobs: await Promise.all(rows.map(async (row) => await toPrintJobDto(row, activityByJobId.get(row.id) ?? [], faultsByJob.get(row.id) ?? [])))
   })
 })
 
@@ -193,11 +196,11 @@ jobsRouter.get('/history/tags', requireRequestPermission(JOBS_VIEW_PERMISSION), 
 })
 
 /**
- * The merged job history, finished prints + terminal slicing jobs, filtered, sorted, and
+ * The merged job history, finished prints, terminal slicing jobs and standalone faults, filtered, sorted, and
  * PAGED server-side (the shared `selectJobHistoryPage` owns the semantics; the Jobs view's
  * history section is the counterpart). Pagination lives here because the history is a MERGE of
- * two sources: the browser cannot page a merged list correctly from two independently-paged
- * endpoints, and shipping both full histories (the old shape) grew without bound. Both source
+ * independent sources: the browser cannot page a merged list correctly from two independently-paged
+ * endpoints, and shipping both full histories (the old shape) grew without bound. The source
  * sets are still materialized server-side per request, same cost `GET /` always paid, so this
  * bounds the wire, not the server; see the note on `selectJobHistoryPage`.
  */
@@ -212,13 +215,15 @@ jobsRouter.get('/history', requireRequestPermission(JOBS_VIEW_PERMISSION), async
     startedAt: row.startedAt,
     finishedAt: row.finishedAt
   })), workspaceId)
-  const printJobs = await Promise.all(rows.map(async (row) => await toPrintJobDto(row, activityByJobId.get(row.id) ?? [])))
+  const faultsByJob = await readJobFaults(workspaceId, rows.map((row) => row.id))
+  const printJobs = await Promise.all(rows.map(async (row) => await toPrintJobDto(row, activityByJobId.get(row.id) ?? [], faultsByJob.get(row.id) ?? [])))
   const terminalSlicingJobs = slicingJobs.list(workspaceId).filter((job) => !isActiveSlicingJob(job))
   const printers = await prisma.printer.findMany({ where: { workspaceId }, select: { id: true, name: true } })
   const printerNames = new Map(printers.map((printer) => [printer.id, printer.name]))
   const tagsByJob = await readJobHistoryTags(workspaceId, terminalSlicingJobs)
   const result = selectJobHistoryPage({
     printJobs,
+    printerFaults: await readStandaloneFaultHistory(workspaceId),
     slicingJobs: terminalSlicingJobs,
     query: parsedQuery.data,
     matchesAdditionalSearch: jobHistoryTagMatcher(tagsByJob, parsedQuery.data.search),
@@ -227,6 +232,18 @@ jobsRouter.get('/history', requireRequestPermission(JOBS_VIEW_PERMISSION), async
   })
   // Gzip-piped like the slicing list: a 100-row page of jobs is still repetitive JSON.
   await sendModelBuffer(request, response, Buffer.from(JSON.stringify(jobHistoryResponseSchema.parse(result)), 'utf8'), 'application/json')
+})
+
+jobsRouter.delete('/faults/:id', requireRequestPermission(JOBS_DELETE_PERMISSION), async (request, response) => {
+  const workspaceId = requireRequestWorkspaceId(request)
+  const id = requireRouteParam(request.params.id, 'Fault id')
+  await deleteClearedPrinterFault(workspaceId, id)
+  annotateRequestAuditLog(request, {
+    action: 'delete-printer-fault', resource: 'printer fault',
+    summary: 'Deleted a cleared printer fault occurrence from history.', metadata: { faultId: id }
+  })
+  broadcastJobsChanged(workspaceId)
+  response.status(204).end()
 })
 
 jobsRouter.delete('/:id', requireRequestPermission(JOBS_DELETE_PERMISSION), async (request, response) => {
@@ -430,10 +447,11 @@ function readPrintJobSetup(value: string | null): PrintJob['printSetup'] {
   }
 }
 
-async function toPrintJobDto(row: PrintJobRow, activity: AuditLogEntry[]) {
+async function toPrintJobDto(row: PrintJobRow, activity: AuditLogEntry[], faults: PrinterFault[] = []) {
   const jobKind = toPrintJobKind(row.sourceType)
   const projectFilamentChips = await resolveJobProjectFilamentChips(row)
   return {
+    faults,
     id: row.id,
     printerId: row.printerId,
     printerName: 'printer' in row ? row.printer.name : row.printerName,

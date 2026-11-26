@@ -17,7 +17,6 @@ import {
   readProcessVariantLayout,
   rebindProjectFilamentPhysics,
   retargetProjectSettingsToMachine,
-  slicingPresetProvenance,
   stripSliceInfoPrinterModelId,
   type ProcessConfig,
   type ProfileRecord,
@@ -36,7 +35,7 @@ import {
   THREE_MF_PROJECT_SETTINGS_ENTRY,
   THREE_MF_SLICE_INFO_ENTRY
 } from '@printstream/shared/three-mf'
-import type { RetargetResolvers } from './browserMachineRetarget'
+import { customMachineParentName, type RetargetResolvers } from './browserMachineRetarget'
 import { reapplyFlushVolumesAfterRetarget } from './flushVolumesAfterRetarget'
 
 export interface ClientSliceSettingsPass {
@@ -73,9 +72,7 @@ export async function applyClientSliceSettings(
     printerSettingsId: machine.name,
     printerModel: firstProfileString(machine.config.printer_model)
       ?? (pass.target.mode === 'manualProfile' ? pass.target.printerModel : machine.name),
-    printerPresetInherits: slicingPresetProvenance(machineProfileId) === 'workspace'
-      ? firstProfileString(machine.config.inherits)
-      : null
+    printerPresetInherits: customMachineParentName(machineProfileId, machine.config)
   })
 
   const processProfileId = pass.target.processProfileId

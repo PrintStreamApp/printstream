@@ -68,12 +68,12 @@ import {
 } from './lib/parameterTable'
 import {
   PARAMETER_TABLE_AVAILABLE_KEYS,
-  PARAMETER_TABLE_COLUMNS_STORAGE_KEY,
   parameterTableColumnLabel,
   sanitizeParameterTableColumns
 } from './lib/parameterTableColumns'
 import type { EditorState } from './lib/editorModel'
 import type { PartMember } from './lib/selectionModel'
+import { parameterTableColumnsKey, parameterTableMaximizedKey } from './storageKeys'
 
 /**
  * Everything between the dialog's outer width and the grid's scroller: 20px of `ModalDialog`
@@ -132,11 +132,11 @@ export function ParameterTableDialog({
   // renders no toggle. This one keeps the toggle -- a wide grid is worth shrinking to compare
   // against the viewport behind it -- and gets its default width from the dialog's own `maxWidth`.
   const { presentation, maximized, setMaximized } = useDialogPresentationState({
-    maximizedStorageKey: 'printstream.editor.parameterTable.maximized'
+    maximizedStorageKey: parameterTableMaximizedKey
   })
 
   const [columns, setColumns] = useLocalStorageState<string[]>(
-    PARAMETER_TABLE_COLUMNS_STORAGE_KEY,
+    parameterTableColumnsKey,
     sanitizeParameterTableColumns(null),
     (raw) => sanitizeParameterTableColumns(JSON.parse(raw) as unknown)
   )

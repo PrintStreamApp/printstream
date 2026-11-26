@@ -5,6 +5,7 @@ import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import type { JSDOM } from 'jsdom'
 import { installJsdomGlobals } from '../test-utils/jsdom'
 import { useDirectorySortState } from './useDirectorySortState'
+import { testStorageKey } from '../test-utils/storageKeyRef'
 
 /**
  * What a persisted sort must survive.
@@ -13,7 +14,7 @@ import { useDirectorySortState } from './useDirectorySortState'
  * sort as JSON through `usePersistentState` (`"createdAt"`, with quotes) and now
  * reads through this hook, which writes the bare value. If the read did not
  * accept both, every operator's saved sort would silently reset to the default on
- * the first load after deploy: the exact failure `legacyDirectoryKey` exists to
+ * the first load after deploy: the exact failure a declared key's former names exist to
  * prevent, and one nobody reports as a bug because it looks like they never set
  * it.
  */
@@ -44,13 +45,12 @@ let pageResets = 0
 
 function SortHarness({ legacySortByKeys = [] }: { legacySortByKeys?: ReadonlyArray<string> }) {
   const { sortBy, sortDirection, sortProps } = useDirectorySortState<Field>({
-    sortByKey: 'directory.sortBy',
-    sortDirectionKey: 'directory.sortDirection',
+    sortByKey: testStorageKey('directory.sortBy', legacySortByKeys),
+    sortDirectionKey: testStorageKey('directory.sortDirection'),
     options: OPTIONS,
     defaultSortBy: 'name',
     defaultDirection: 'asc',
     ariaLabel: 'Sort things',
-    legacySortByKeys,
     onChange: () => { pageResets += 1 }
   })
   return (

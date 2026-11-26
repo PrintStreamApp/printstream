@@ -9,7 +9,7 @@
 import { spawnSync } from 'node:child_process'
 import path from 'node:path'
 
-import { checkoutIdentity } from '@ryanewen/devkit'
+import { checkoutIdentity } from '@dynamic-solutions-canada/devkit'
 
 /** Parse the path and checked-out branch for every registered worktree. */
 export function parseWorktreeList(output) {

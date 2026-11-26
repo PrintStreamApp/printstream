@@ -30,13 +30,13 @@ import { SourceColorPreview } from './SourceColorPreview'
 import {
   APPEND_SOURCE_COLOR,
   matchSourceColorsToFilaments,
-  OBJ_IMPORT_GAMMA_PREFERENCE_KEY,
   recommendedSourceColorCount,
   sanitizeObjImportGammaPreference,
   sourceColorHex,
   type SourceColorImportChoice,
   type SourceColorMapping
 } from './lib/sourceColorImport'
+import { objImportGammaCorrectionKey } from './storageKeys'
 
 interface SourceColorImportDialogProps {
   name: string
@@ -70,7 +70,7 @@ export function SourceColorImportDialog({
   const [smoothLevel, setSmoothLevel] = useState(5)
   const [draftSmoothLevel, setDraftSmoothLevel] = useState(5)
   const [gammaCorrect, setGammaCorrect] = usePersistentState(
-    OBJ_IMPORT_GAMMA_PREFERENCE_KEY,
+    objImportGammaCorrectionKey,
     false,
     sanitizeObjImportGammaPreference
   )

@@ -2,7 +2,6 @@ import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
 import { printerStatusSchema } from '@printstream/shared'
 import {
-  UPDATES_STORAGE_KEY,
   parseFirmwareStatusEvent,
   firmwareStillPendingInstall,
   formatFirmwareChipLabel,
@@ -13,7 +12,6 @@ import {
   getInstallableVersions,
   getModuleFirmware,
   getPendingPublishedVersion,
-  getUpdatesStorageKey,
   getSelectedPrerequisite,
   getSelectedReleaseNotes,
   isActiveUploadStatus,
@@ -32,6 +30,7 @@ import {
   type UpdatesResponse,
   type UploadProgress
 } from './state.js'
+import { firmwareUpdatesCacheKeys } from './storageKeys'
 
 const sampleUpdate: UpdateReport = {
   printerId: 'printer-1',
@@ -97,9 +96,9 @@ test('storage helpers round-trip cached updates per workspace and ignore invalid
   writeStoredUpdates('workspace-2', otherUpdates)
   assert.deepEqual(readStoredUpdates('workspace-1'), updates)
   assert.deepEqual(readStoredUpdates('workspace-2'), otherUpdates)
-  assert.equal(storage.getItem(UPDATES_STORAGE_KEY), null)
+  assert.equal(storage.getItem(firmwareUpdatesCacheKeys.prefix), null)
 
-  storage.setItem(getUpdatesStorageKey('workspace-1'), '{invalid json')
+  storage.setItem(firmwareUpdatesCacheKeys.keyFor('workspace-1'), '{invalid json')
   assert.equal(readStoredUpdates('workspace-1'), undefined)
 })
 

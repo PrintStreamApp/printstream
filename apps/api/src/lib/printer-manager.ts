@@ -27,6 +27,7 @@ import {
   type PrinterStatus,
   type PrinterConnectionValidation
 } from '@printstream/shared'
+import { readFaultSourceObservation, type FaultSourceObservation } from './printer-fault-observation.js'
 import { env } from './env.js'
 import { decorateSlotMaterials, loadSlotMaterials } from './slot-materials.js'
 import { PrinterCommandReplies } from './printer-command-replies.js'
@@ -153,7 +154,8 @@ class PrinterManager {
     existing.status = { ...existing.status, printerId: printer.id }
     printerEvents.emit('printer.updated', printer)
     if (hostChanged || accessChanged || serialChanged || bridgeChanged) {
-      // Reconnect under new credentials.
+      // Reconnect under new credentials. Cached fault values are uncertain until fresh sources arrive.
+      this.emitFaultGap(printer.id)
       this.clearPendingPressureAdvanceRequests(printer.id, 'Printer connection restarted')
       this.managed.delete(printer.id)
       this.connect(printer)
@@ -347,15 +349,18 @@ class PrinterManager {
       return
     }
 
-    this.applyStatusDelta(entry, delta)
+    this.applyStatusDelta(entry, delta, readFaultSourceObservation(report, entry.printer.serial))
   }
 
-  ingestBridgeStatus(status: PrinterStatus, bridgeId: string): void {
+  ingestBridgeStatus(status: PrinterStatus, bridgeId: string, faultSources: Array<'hms' | 'device_error'> = []): void {
     const entry = this.managed.get(status.printerId)
     if (!entry || this.bridgeIds.get(status.printerId) !== bridgeId) return
 
     this.cancelPendingBridgePrinterOffline(status.printerId)
-    this.applyStatusDelta(entry, status)
+    const sources: FaultSourceObservation = {}
+    if (faultSources.includes('hms')) sources.hms = status.hmsErrors
+    if (faultSources.includes('device_error')) sources.device_error = status.deviceError ? [status.deviceError] : []
+    this.applyStatusDelta(entry, status, sources)
   }
 
   /**
@@ -390,6 +395,7 @@ class PrinterManager {
   markBridgeDisconnected(bridgeId: string): void {
     for (const [printerId, printerBridgeId] of this.bridgeIds.entries()) {
       if (printerBridgeId !== bridgeId) continue
+      this.emitFaultGap(printerId)
       this.scheduleBridgePrinterOffline(printerId)
     }
   }
@@ -506,7 +512,7 @@ class PrinterManager {
     const delta = parseReport(parsed, entry.printer, entry.status)
     if (!delta) return
 
-    this.applyStatusDelta(entry, delta)
+    this.applyStatusDelta(entry, delta, readFaultSourceObservation(parsed, entry.printer.serial))
   }
 
   private mergeAndEmit(entry: ManagedPrinter, delta: Partial<PrinterStatus>): PrinterStatus {
@@ -516,7 +522,7 @@ class PrinterManager {
       ...delta,
       printerId: entry.printer.id,
       lastJobName: resolveLastJobName(entry, delta),
-      observedAt: new Date().toISOString()
+      observedAt: delta.observedAt ?? new Date().toISOString()
     })
     // Suppress redundant emits: bridges (and some report paths) deliver the
     // same status repeatedly, and `observedAt` is the only field that differs
@@ -526,14 +532,30 @@ class PrinterManager {
     if (statusEqualIgnoringObservedAt(previous, next)) {
       return previous
     }
+    if (previous.online && !next.online) this.emitFaultGap(entry.printer.id)
     entry.status = next
     printerEvents.emit('status', next)
     return next
   }
 
-  private applyStatusDelta(entry: ManagedPrinter, delta: Partial<PrinterStatus>): PrinterStatus {
+  /** An outage is recorded immediately even while live status uses its reconnect grace. */
+  private emitFaultGap(printerId: string): void {
+    const workspaceId = this.workspaceIds.get(printerId)
+    if (workspaceId) printerEvents.emit('fault.gap', { workspaceId, printerId, observedAt: new Date().toISOString() })
+  }
+
+  private applyStatusDelta(entry: ManagedPrinter, delta: Partial<PrinterStatus>, sources: FaultSourceObservation = {}): PrinterStatus {
     const previousStatus = entry.status
-    const merged = this.mergeAndEmit(entry, { ...delta, online: true })
+    const observedAt = new Date().toISOString()
+    const workspaceId = this.workspaceIds.get(entry.printer.id)
+    // Emit before status listeners begin async job activation, including unchanged clear reports.
+    if (workspaceId) printerEvents.emit('fault.observed', {
+      workspaceId,
+      status: { ...previousStatus, ...delta, online: true, observedAt },
+      sources,
+      jobEnded: isPrinterActiveJobStage(previousStatus.stage) && !isPrinterActiveJobStage(delta.stage ?? previousStatus.stage)
+    })
+    const merged = this.mergeAndEmit(entry, { ...delta, online: true, observedAt })
 
     const previousStage = entry.lastStage
     const previousTrackedJob = isTrackedJobLifecycleStatus(previousStatus)

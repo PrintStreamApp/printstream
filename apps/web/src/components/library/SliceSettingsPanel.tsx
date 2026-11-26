@@ -217,11 +217,11 @@ export interface SliceSettingsController {
   setPreviewFileId: React.Dispatch<React.SetStateAction<string | null>>
   // Process
   /**
-   * Re-take the host's snapshot of the slicer catalogue. The editor renders from a snapshot taken
-   * at open (ambient refetches must not redraw it), so a preset the user edits in the manager only
-   * reaches it because the editor calls this afterwards.
+   * Refresh the host's slicer catalogue after a preset save or after closing the manager.
+   * The editor holds a snapshot against ambient updates; workspace hosts wait for fresh data
+   * before adopting it, while browser-only hosts re-read local storage synchronously.
    */
-  refreshSlicingPresets?: () => void
+  refreshSlicingPresets?: () => void | Promise<void>
   /**
    * Re-take the host's snapshot of the parsed 3MF index. Called after a Repair, which rewrites the
    * project's settings from inside the editor; ordinary library invalidations must NOT call it.
@@ -1664,6 +1664,7 @@ export const SliceSettingsPanel = memo(function SliceSettingsPanel({ controller,
             slicerTargetId={selectedSlicerTargetIdForGuards}
             machineProfileId={selectedMachineProfile.id}
             machineProfileName={selectedMachineProfile.name}
+            onPresetSaved={controller.refreshSlicingPresets}
             canEditOriginal={selectedMachineProfile.source === 'custom'}
             // Mirrors the process and filament dialogs: only the EDITOR saves into the project.
             // The prepare-print dialog's edit rides that one slice, so promising "this project"

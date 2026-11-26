@@ -196,3 +196,151 @@ test('no em dash appears anywhere in the tree', () => {
       + `separate sentence:\n  ${offenders.join('\n  ')}`
   )
 })
+
+/**
+ * Rule 4 - the API reads its environment only through `apps/api/src/lib/env.ts` (CONF-9, SEC-6).
+ *
+ * That module parses `process.env` once with a schema, so a missing or malformed variable stops
+ * the server at start with a clear message, and production refusals live in one place. A direct
+ * read elsewhere skips both: it sees the raw string, applies its own default, and is invisible to
+ * anyone auditing what the server can be configured to do.
+ *
+ * A few files genuinely cannot use the module, and each says why in its header next to an
+ * `env-direct-read-ok` marker: the pre-env boot stage, which must settle the database URL before
+ * the module parses it; standalone CLI scripts that load `.env` themselves; and a separate,
+ * validated environment module for cloud-only variables. The marker sits in the file rather than
+ * in a list here because this test ships in the public snapshot, and a list would publish the
+ * names of files that do not.
+ *
+ * Tests and test support (`.test.` files, `src/test-utils/`) set variables freely and are exempt.
+ * Untracked files are scanned too, for the same reason as Rule 3: a new file is where this drifts.
+ */
+const API_SOURCE_PREFIX = 'apps/api/src/'
+const API_ENV_MODULE = 'apps/api/src/lib/env.ts'
+
+/** Whether an API source file is test code, which may read and set `process.env` freely. */
+function isApiTestCode(name) {
+  return name.includes('.test.') || name.startsWith(`${API_SOURCE_PREFIX}test-utils/`)
+}
+
+test('the API reads process.env only through its env module', () => {
+  const list = (extra) => execFileSync('git', ['ls-files', '-z', ...extra, '--', API_SOURCE_PREFIX], {
+    cwd: repoRoot,
+    maxBuffer: 64 * 1024 * 1024
+  }).toString('utf8').split('\0').filter(Boolean)
+  const names = [...list([]), ...list(['--others', '--exclude-standard'])]
+
+  // Guards against the rule passing vacuously after a move: the module must exist and be the reader.
+  assert.ok(names.includes(API_ENV_MODULE), `${API_ENV_MODULE} must exist for this rule to mean anything`)
+
+  const offenders = []
+  for (const name of names) {
+    if (!SCRIPT_EXTENSIONS.has(path.extname(name).toLowerCase())) continue
+    if (name === API_ENV_MODULE || isApiTestCode(name)) continue
+    let contents
+    try {
+      const absolute = path.join(repoRoot, name)
+      if (!statSync(absolute).isFile()) continue
+      contents = readFileSync(absolute, 'utf8')
+    } catch {
+      continue
+    }
+    if (!contents.includes('process.env') || contents.includes('env-direct-read-ok')) continue
+
+    contents.split('\n').forEach((line, index) => {
+      // Prose about the rule (doc comments, line comments) is not a read.
+      if (/^\s*(\/\/|\/\*|\*)/.test(line)) return
+      if (/\bprocess\.env\b/.test(line)) offenders.push(`${name}:${index + 1}`)
+    })
+  }
+
+  assert.deepEqual(
+    offenders,
+    [],
+    `read the environment through ${API_ENV_MODULE} (add the variable to its schema), or, if the `
+      + 'file genuinely runs before that module can load, say why in its header with an '
+      + `env-direct-read-ok marker:\n  ${offenders.join('\n  ')}`
+  )
+})
+
+/**
+ * Rule 5 - web browser storage keys are declared, not typed inline (CONF-7, D-105).
+ *
+ * Every localStorage and sessionStorage key lives in a `storageKeys.ts` (one per owner: core, each
+ * plugin, the private cloud module) through `apps/web/src/lib/browserStorageKeys.ts`, which is what
+ * lets a key be listed, reset, checked for collisions, and renamed with its saved value carried
+ * over. A key typed inline escapes all of that, and a renamed one silently resets everybody's
+ * preference.
+ *
+ * Two checks over the web app's non-test source:
+ * - a string that looks like a storage key (starting `printstream.` or `bambu.`) appears only in a
+ *   `storageKeys.ts` or the registry itself;
+ * - `localStorage` / `sessionStorage` are touched only by the registry, the storage hook, or a file
+ *   that says why it must use the store directly next to a `storage-direct-ok` marker (code whose
+ *   behaviour depends on the store throwing, which the registry's best-effort helpers hide).
+ *
+ * The storage hooks also take only a declared key, so most inline keys fail the type check first.
+ */
+const WEB_SOURCE_PREFIX = 'apps/web/src/'
+const STORAGE_KEY_LITERAL = /['"`](printstream|bambu)\.[a-zA-Z]/
+const STORAGE_API = /\b(localStorage|sessionStorage)\b/
+
+/** Web files exempt from the storage rule: tests and their helpers. */
+function isWebTestCode(name) {
+  return name.includes('.test.') || name.includes('.testkit.') || name.startsWith(`${WEB_SOURCE_PREFIX}test-utils/`)
+}
+
+/** Files allowed to hold storage key literals: the declarations and the registry. */
+function declaresStorageKeys(name) {
+  return name.endsWith('/storageKeys.ts') || name === `${WEB_SOURCE_PREFIX}lib/browserStorageKeys.ts`
+}
+
+test('the web app declares its browser storage keys and reaches storage through the registry', () => {
+  const list = (extra) => execFileSync('git', ['ls-files', '-z', ...extra, '--', WEB_SOURCE_PREFIX], {
+    cwd: repoRoot,
+    maxBuffer: 64 * 1024 * 1024
+  }).toString('utf8').split('\0').filter(Boolean)
+  const names = [...new Set([...list([]), ...list(['--others', '--exclude-standard'])])]
+
+  // Guards against passing vacuously after a move.
+  assert.ok(names.includes(`${WEB_SOURCE_PREFIX}lib/browserStorageKeys.ts`), 'the storage key registry must exist')
+
+  const literalOffenders = []
+  const accessOffenders = []
+  for (const name of names) {
+    if (!SCRIPT_EXTENSIONS.has(path.extname(name).toLowerCase())) continue
+    if (isWebTestCode(name)) continue
+    let contents
+    try {
+      const absolute = path.join(repoRoot, name)
+      if (!statSync(absolute).isFile()) continue
+      contents = readFileSync(absolute, 'utf8')
+    } catch {
+      continue
+    }
+
+    const directAccessAllowed = declaresStorageKeys(name)
+      || name === `${WEB_SOURCE_PREFIX}hooks/useLocalStorageState.ts`
+      || contents.includes('storage-direct-ok')
+    contents.split('\n').forEach((line, index) => {
+      // Prose (doc comments, line comments) is not code.
+      if (/^\s*(\/\/|\/\*|\*)/.test(line)) return
+      if (!declaresStorageKeys(name) && STORAGE_KEY_LITERAL.test(line)) literalOffenders.push(`${name}:${index + 1}`)
+      if (!directAccessAllowed && STORAGE_API.test(line)) accessOffenders.push(`${name}:${index + 1}`)
+    })
+  }
+
+  assert.deepEqual(
+    literalOffenders,
+    [],
+    'declare browser storage keys in the owner\'s storageKeys.ts (apps/web/src/lib/browserStorageKeys.ts):\n  '
+      + literalOffenders.join('\n  ')
+  )
+  assert.deepEqual(
+    accessOffenders,
+    [],
+    'read and write browser storage through readStoredValue / writeStoredValue or the storage hooks, or say '
+      + 'why the file needs the store directly next to a storage-direct-ok marker:\n  '
+      + accessOffenders.join('\n  ')
+  )
+})

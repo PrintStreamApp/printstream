@@ -26,11 +26,8 @@ import {
 } from '../lib/libraryNavigation'
 import { LIBRARY_GROUP_OPTIONS, type LibraryGroupBy } from '../lib/libraryDirectory'
 import {
-  LIBRARY_GROUP_KEY,
   LIBRARY_PAGE_SIZE_OPTIONS,
-  LIBRARY_SORT_KEY,
   LIBRARY_SORT_OPTIONS,
-  LIBRARY_VIEW_MODE_KEY,
   parseLibraryGroup
 } from '../lib/libraryViewHelpers'
 import { parseLibrarySort, parseLibraryViewMode } from '../lib/printersViewHelpers'
@@ -44,6 +41,7 @@ import { DirectoryPrimaryToolbar } from './DirectoryToolbar'
 import { LibraryMetadataFilters } from './library/LibraryMetadataFilters'
 import { PaginatedLibraryBrowser } from './library/PaginatedLibraryBrowser'
 import { libraryFacetsEmpty, useLibraryFilters } from '../hooks/useLibraryFilters'
+import { libraryGroupKey, librarySortKey, libraryViewModeKey } from '../lib/storageKeys'
 
 export function LibraryFilePickerDialog({
   title,
@@ -75,9 +73,9 @@ export function LibraryFilePickerDialog({
   const deferredSearch = useDeferredValue(search)
   // View mode, sort, and grouping persist under the shared library keys, so the
   // picker opens with the same preferences as the Library page and the other pickers.
-  const [viewMode, setViewMode] = useLocalStorageState<LibraryViewMode>(LIBRARY_VIEW_MODE_KEY, 'list', parseLibraryViewMode, String)
-  const [sort, setSort] = useLocalStorageState<LibrarySort>(LIBRARY_SORT_KEY, { key: 'name', dir: 'asc' }, parseLibrarySort)
-  const [group, setGroup] = useLocalStorageState<LibraryGroupBy>(LIBRARY_GROUP_KEY, 'none', parseLibraryGroup, String)
+  const [viewMode, setViewMode] = useLocalStorageState<LibraryViewMode>(libraryViewModeKey, 'list', parseLibraryViewMode, String)
+  const [sort, setSort] = useLocalStorageState<LibrarySort>(librarySortKey, { key: 'name', dir: 'asc' }, parseLibrarySort)
+  const [group, setGroup] = useLocalStorageState<LibraryGroupBy>(libraryGroupKey, 'none', parseLibraryGroup, String)
   const [favoritesOnly, setFavoritesOnly] = useState(false)
 
   const tagFilter = useTagFilter('file', 'library')

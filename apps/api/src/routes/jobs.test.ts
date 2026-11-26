@@ -5,7 +5,7 @@ import { createWriteStream } from 'node:fs'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { test } from 'node:test'
+import { beforeEach, test } from 'node:test'
 import express from 'express'
 import yazl from 'yazl'
 import type { AddressInfo } from 'node:net'
@@ -17,7 +17,13 @@ import { HttpError } from '../lib/http-error.js'
 import { prisma } from '../lib/prisma.js'
 import { rootPrisma } from '../lib/prisma.js'
 import type { RequestWorkspaceSummary } from '../lib/workspace-context.js'
-import { restorePrismaMethodsAfterEach } from '../test-utils/prisma-stubs.js'
+import { usePrismaStubs, restorePrismaMethodsAfterEach } from '../test-utils/prisma-stubs.js'
+
+const stubFaults = usePrismaStubs()
+beforeEach(() => {
+  stubFaults(prisma.printJobFault, 'findMany', async () => [])
+  stubFaults(rootPrisma.auditLog, 'findMany', async () => [])
+})
 
 const TEST_WORKSPACE = { id: 'workspace-1', slug: 'workspace-1', name: 'Workspace 1' } as const
 
@@ -503,3 +509,31 @@ async function createFilamentChipArchive(): Promise<string> {
   })
   return archivePath
 }
+test('history endpoint merges standalone printer faults before filters, totals and paging', async () => {
+  stubFaults(prisma.printJob, 'findMany', async () => [])
+  stubFaults(prisma.printer, 'findMany', async () => [{ id: 'printer-1', name: 'Printer 1' }])
+  stubFaults(prisma.printerFault, 'findMany', async (args: { where: { workspaceId: string } }) => {
+    assert.equal(args.where.workspaceId, TEST_WORKSPACE.id)
+    return [{
+      id: 'fault', workspaceId: TEST_WORKSPACE.id, printerId: 'printer-1', source: 'hms', code: 'CODE', message: 'Filament exhausted',
+      firstObservedAt: new Date('2026-10-25T16:00:00.000Z'), lastObservedAt: new Date('2026-10-25T16:01:00.000Z'), observedClearedAt: null,
+      printer: { name: 'Printer 1' }, gaps: [], idlePeriods: [{ id: 'idle', startedAt: new Date('2026-10-25T16:00:00.000Z'), endedAt: null }],
+      jobSpans: [], _count: { jobs: 0 }
+    }]
+  })
+  await withJobsApp({ auth: {
+    authEnabled: true, actor: { type: 'user', userId: 'user-1' }, permissions: [JOBS_VIEW_PERMISSION], runtimePolicy: { demoMode: false }
+  }, workspace: TEST_WORKSPACE }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/jobs/history?kinds=printer-fault&printerIds=printer-1&pageSize=1`)
+    assert.equal(response.status, 200)
+    const page = await response.json() as { total: number; totalUnfiltered: number; entries: Array<{ kind: string }> }
+    assert.equal(page.total, 1)
+    assert.equal(page.totalUnfiltered, 1)
+    assert.equal(page.entries[0]?.kind, 'printer-fault')
+    const results = await fetch(`${baseUrl}/api/jobs/history?results=failed`)
+    assert.equal(results.status, 200)
+    const filtered = await results.json() as { total: number; totalUnfiltered: number }
+    assert.equal(filtered.total, 0)
+    assert.equal(filtered.totalUnfiltered, 1)
+  })
+})

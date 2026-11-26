@@ -32,17 +32,39 @@ after(() => {
 })
 
 /**
- * Wait out jsdom's history traversal, which is genuinely asynchronous: `SessionHistory` queues the
- * traversal and then its `popstate` through `setTimeout`, so a `history.back()` lands a task or two
- * later. Awaiting a promise settles none of that, which is why this is a real timer.
+ * Steps Back and waits until `reached()` holds, or until `timeoutMs` passes.
  *
- * A close REQUEST needs no wait -- `handleClose` hands the reason straight to the consumer,
- * synchronously -- so the only other place this is used is where a reason is asserted ABSENT (the
- * scrim). There the wait IS the check: a wrapper that routed the click through `history.back()`, as
- * this one once did for every reason, would report the close a task later, and an assertion made
- * immediately would read that as a pass.
+ * jsdom's history traversal is genuinely asynchronous: `SessionHistory` queues the traversal and
+ * then its `popstate` through `setTimeout`, so a `history.back()` lands a task or two later, and
+ * later still on a loaded CI runner. It can also take more than one traversal: when Back lands on
+ * an entry an earlier dialog left behind, the wrapper steps back again by itself before the dialog
+ * underneath hears about it. So this waits for the outcome, not for a fixed delay or a single
+ * `popstate`, which keeps the test independent of runner speed.
+ *
+ * It resolves rather than rejects on timeout, so the caller's own assertion reports what happened.
+ *
+ * @param reached the outcome the Back press should produce, usually a close the dialog recorded.
+ * @param timeoutMs how long to keep checking; only a Back press that never arrives uses it all.
  */
-function waitForHistoryTraversal() {
+async function goBackUntil(reached: () => boolean, timeoutMs = 2000): Promise<void> {
+  dom.window.history.back()
+
+  const deadline = Date.now() + timeoutMs
+  while (!reached() && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+}
+
+/**
+ * A fixed wait, used only where a close is asserted ABSENT (the scrim, and the outer dialog under
+ * a closed inner one), so there is no outcome to wait for. There the wait IS the check: a close
+ * that arrives a task later would read as a pass to an assertion made immediately. A slow runner
+ * can only make these checks pass late, never fail them.
+ *
+ * A close REQUEST needs no wait: `handleClose` hands the reason straight to the consumer,
+ * synchronously.
+ */
+function waitOutALateClose() {
   return new Promise((resolve) => setTimeout(resolve, 50))
 }
 
@@ -125,8 +147,7 @@ test('an Escape the dialog declines leaves its history entry alone', async () =>
 
   // The entry must still be there, which is observable as Back still closing THIS dialog. With the
   // entry already spent, Back belongs to whatever is underneath and the route navigates away.
-  dom.window.history.back()
-  await waitForHistoryTraversal()
+  await goBackUntil(() => reasons.length === 2)
 
   cleanup()
   // `closeClick`, not `backdropClick`: Back is a deliberate dismissal and has to survive the
@@ -179,7 +200,7 @@ test('a dialog opened over a declined close does not re-fire it', async () => {
   }))
   // The inner dialog's close DOES spend its history entry, so give that traversal time to land on
   // the outer dialog, which is the whole failure this test exists for.
-  await waitForHistoryTraversal()
+  await waitOutALateClose()
 
   cleanup()
   assert.deepEqual(reasons, ['closeClick'], 'closing the inner dialog must not re-ask the outer one')
@@ -272,7 +293,7 @@ for (const [scrimName, selector] of Object.entries(SCRIM_SELECTORS)) {
 
     clickTheScrim(selector)
     // Kept: the assertion is an ABSENCE, so a close that merely arrived late would pass without it.
-    await waitForHistoryTraversal()
+    await waitOutALateClose()
 
     cleanup()
     assert.deepEqual(reasons, [], `${scrimName} must not ask the dialog to close`)
@@ -318,8 +339,7 @@ test('Back is distinguishable from the close button without changing the reason'
 
   // Declined above (the handler only records), so the dialog's history entry is still there for
   // Back to spend -- which is what makes the second gesture reach this same handler.
-  dom.window.history.back()
-  await waitForHistoryTraversal()
+  await goBackUntil(() => seen.length === 2)
 
   cleanup()
   assert.deepEqual(seen, [

@@ -179,6 +179,11 @@ model Workspace {
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
+  faults                 PrinterFault[]
+  faultGaps              PrinterFaultGap[]
+  jobFaults              PrintJobFault[]
+  faultJobSpans           PrinterFaultJobSpan[]
+  faultIdlePeriods       PrinterFaultIdlePeriod[]
   printers               Printer[]
   bridges                Bridge[]
   jobs                   PrintJob[]
@@ -445,6 +450,7 @@ model Printer {
 
   workspace            Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   bridge               Bridge?         @relation(fields: [bridgeId], references: [id], onDelete: SetNull)
+  faults               PrinterFault[]
   jobs                 PrintJob[]
   dispatchJobs         DispatchJob[]
   startedOrderPrints   OrderPrint[]    @relation("OrderPrintStartedPrinter")
@@ -452,6 +458,7 @@ model Printer {
   queueItemTargets     QueueItem[]     @relation("QueueItemTargetPrinter")
   queueItemLastRuns    QueueItem[]     @relation("QueueItemLastPrinter")
 
+  @@unique([workspaceId, id])
   @@unique([workspaceId, serial])
   @@index([workspaceId, bridgeId, position])
   @@index([workspaceId, position])
@@ -525,6 +532,7 @@ model Bridge {
 /// rolled up at finish and are NOT reverted when a job row is later deleted:
 /// deleting history does not rewrite the aggregates.
 model PrintJob {
+  faults                 PrintJobFault[]
   id                     String    @id @default(cuid())
   workspaceId            String
   printerId              String
@@ -601,6 +609,7 @@ model PrintJob {
   orderPrints   OrderPrint[] @relation("OrderPrintLastJob")
   queueItems    QueueItem[]  @relation("QueueItemLastJob")
 
+  @@unique([workspaceId, id])
   @@index([workspaceId, printerId, startedAt])
   @@index([workspaceId, printerId, finishedAt, startedAt])
   @@index([workspaceId, printerId, taskId])
@@ -2373,4 +2382,89 @@ model BillingCheckoutQuote {
   error          String?
   createdAt      DateTime @default(now())
   @@index([environment, targetId])
+}
+
+/// One meaningful HMS or device-error occurrence, tenant-owned and independent of jobs.
+/// Cleared only by a fresh report of its own source. Job deletion never removes it.
+/// Message is a resolved snapshot; no historical times are inferred from old jobs.
+model PrinterFault {
+  id                String   @id @default(cuid())
+  workspaceId       String
+  printerId         String
+  source            String
+  code              String
+  message           String?
+  firstObservedAt   DateTime
+  lastObservedAt    DateTime
+  observedClearedAt DateTime?
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  printer Printer @relation(fields: [workspaceId, printerId], references: [workspaceId, id], onDelete: Cascade)
+  gaps PrinterFaultGap[]
+  jobs PrintJobFault[]
+  idlePeriods PrinterFaultIdlePeriod[]
+  jobSpans PrinterFaultJobSpan[]
+
+  @@unique([workspaceId, id])
+  @@index([workspaceId, printerId, observedClearedAt])
+}
+
+/// An observation outage for one occurrence; retained after reconnect.
+/// Open gaps mean uncertainty, never a clear. Source-specific reconciliation closes them.
+model PrinterFaultGap {
+  id          String @id @default(cuid())
+  workspaceId String
+  faultId     String
+  startedAt   DateTime
+  endedAt     DateTime?
+  reason      String
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  fault PrinterFault @relation(fields: [workspaceId, faultId], references: [workspaceId, id], onDelete: Cascade)
+
+  @@index([workspaceId, faultId])
+}
+
+/// Links the same occurrence to every affected job, including preparation and pauses.
+/// Job deletion removes only this link; the occurrence remains independently readable.
+model PrintJobFault {
+  workspaceId String
+  jobId       String
+  faultId     String
+  alreadyPresent Boolean
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  job PrintJob @relation(fields: [workspaceId, jobId], references: [workspaceId, id], onDelete: Cascade)
+  fault PrinterFault @relation(fields: [workspaceId, faultId], references: [workspaceId, id], onDelete: Cascade)
+
+  @@id([jobId, faultId])
+  @@index([workspaceId, faultId])
+}
+
+/// Idle visibility for an occurrence, including subsequent gaps between jobs.
+/// Closing an idle period does not clear or restart its fault. No pre-feature backfill.
+model PrinterFaultIdlePeriod {
+  id String @id @default(cuid())
+  workspaceId String
+  faultId String
+  startedAt DateTime
+  endedAt DateTime?
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  fault PrinterFault @relation(fields: [workspaceId, faultId], references: [workspaceId, id], onDelete: Cascade)
+
+  @@index([workspaceId, startedAt])
+}
+
+/// Observed job coverage retained independently of job deletion. The immutable job key
+/// is deliberately not a foreign key: deleting a job must not erase fault boundaries.
+/// Source idle observations remain intact; history subtracts these spans at read time.
+model PrinterFaultJobSpan {
+  workspaceId String
+  faultId String
+  jobKey String
+  startedAt DateTime
+  endedAt DateTime?
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  fault PrinterFault @relation(fields: [workspaceId, faultId], references: [workspaceId, id], onDelete: Cascade)
+
+  @@id([faultId, jobKey])
+  @@index([workspaceId, jobKey])
 }

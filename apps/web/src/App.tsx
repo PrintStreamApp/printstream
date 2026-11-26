@@ -43,13 +43,6 @@ import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-
 import { AppShell, type ShellTab } from './components/AppShell'
 import { ScrollReset } from './components/ScrollReset'
 import {
-  DEVICE_APP_THEME_OVERRIDE_KEY,
-  DEVICE_BILLING_APP_THEME_OVERRIDE_KEY,
-  DEVICE_PLATFORM_APP_THEME_OVERRIDE_KEY,
-  BOOT_BACKGROUND_CACHE_KEY,
-  DEVICE_LANDING_PAGE_OVERRIDE_KEY_PREFIX,
-  DEVICE_NAV_TAB_ORDER_OVERRIDE_KEY_PREFIX,
-  DEVICE_UNCONSTRAINED_WIDTH_OVERRIDE_KEY,
   catchAllRouteDecision,
   parseNullableAppLandingPageSetting,
   parseNullableAppThemeSetting,
@@ -59,6 +52,16 @@ import {
   workspaceScopedRoutePath
 } from './appShellHelpers'
 import { orderNavTabs } from './lib/navTabOrder'
+import { writeStoredValue } from './lib/browserStorageKeys'
+import {
+  appThemeOverrideKey,
+  billingAppThemeOverrideKey,
+  bootBackgroundKey,
+  landingPageOverrideKeys,
+  navTabOrderOverrideKeys,
+  platformAppThemeOverrideKey,
+  unconstrainedWidthOverrideKey
+} from './lib/storageKeys'
 import { marketingModule, platformAdminModule, PrivateBillingEntryView } from './lib/privateModules'
 import { BridgeUpdateBanner } from './components/BridgeUpdateBanner'
 import { LicenseBanner } from './components/LicenseBanner'
@@ -71,6 +74,8 @@ import { NativeAppDownloadsDialog } from './components/NativeAppDownloadsDialog'
 import { BILLING_SCOPE_SECTION_ICONS } from './components/billingScopeSectionIcons'
 import { HelpFeedbackMenuItem } from './components/HelpFeedbackMenuItem'
 import { HelpFeedbackDialog } from './components/HelpFeedbackDialog'
+import { AboutDialog } from './components/AboutDialog'
+import { AboutMenuItem } from './components/AboutMenuItem'
 import { PluginSlot } from './plugin/PluginSlot'
 import { StaticPluginSlot } from './plugin/StaticPluginSlot'
 import { DeleteOperationToasts } from './components/DeleteOperationToasts'
@@ -212,6 +217,7 @@ export function App() {
   // when an item closes it. Keeping the state inside the item made the dialog
   // disappear in the same click that requested it.
   const [helpFeedbackOpen, setHelpFeedbackOpen] = useState(false)
+  const [aboutOpen, setAboutOpen] = useState(false)
   const [nativeAppDownloadsOpen, setNativeAppDownloadsOpen] = useState(false)
   const openNativeAppDownloads = useCallback(() => setNativeAppDownloadsOpen(true), [])
   const [pendingWorkspaceRoute, setPendingWorkspaceRoute] = useState<{
@@ -347,34 +353,34 @@ export function App() {
     routeWorkspaceSlug ? `workspace:${routeWorkspaceSlug}` : 'platform'
   )
   const [deviceUnconstrainedWidthOverride, setDeviceUnconstrainedWidthOverride] = useLocalStorageState<boolean | null>(
-    DEVICE_UNCONSTRAINED_WIDTH_OVERRIDE_KEY,
+    unconstrainedWidthOverrideKey,
     null,
     parseNullableBoolean
   )
   const [deviceAppThemeOverride, setDeviceAppThemeOverride] = useLocalStorageState<AppThemeSetting | null>(
-    DEVICE_APP_THEME_OVERRIDE_KEY,
+    appThemeOverrideKey,
     null,
     parseNullableAppThemeSetting
   )
   const [devicePlatformAppThemeOverride, setDevicePlatformAppThemeOverride] = useLocalStorageState<AppThemeSetting | null>(
-    DEVICE_PLATFORM_APP_THEME_OVERRIDE_KEY,
+    platformAppThemeOverrideKey,
     null,
     parseNullableAppThemeSetting
   )
   // Read-only here: the billing Settings panel owns the writes, and this hook
   // is notified of them because they share the key.
   const [deviceBillingAppThemeOverride] = useLocalStorageState<AppThemeSetting | null>(
-    DEVICE_BILLING_APP_THEME_OVERRIDE_KEY,
+    billingAppThemeOverrideKey,
     null,
     parseNullableAppThemeSetting
   )
-  const deviceLandingPageOverrideKey = `${DEVICE_LANDING_PAGE_OVERRIDE_KEY_PREFIX}.${activeWorkspaceSlug ?? routeWorkspaceSlug ?? 'ambient'}`
+  const deviceLandingPageOverrideKey = landingPageOverrideKeys.at(activeWorkspaceSlug ?? routeWorkspaceSlug ?? 'ambient')
   const [deviceLandingPageOverride, setDeviceLandingPageOverride, deviceLandingPageOverrideLoaded] = useLocalStorageState<AppLandingPageSetting | null>(
     deviceLandingPageOverrideKey,
     null,
     parseNullableAppLandingPageSetting
   )
-  const deviceNavTabOrderOverrideKey = `${DEVICE_NAV_TAB_ORDER_OVERRIDE_KEY_PREFIX}.${activeWorkspaceSlug ?? routeWorkspaceSlug ?? 'ambient'}`
+  const deviceNavTabOrderOverrideKey = navTabOrderOverrideKeys.at(activeWorkspaceSlug ?? routeWorkspaceSlug ?? 'ambient')
   const [deviceNavTabOrderOverride, setDeviceNavTabOrderOverride] = useLocalStorageState<string[] | null>(
     deviceNavTabOrderOverrideKey,
     null,
@@ -1001,6 +1007,7 @@ export function App() {
       {selfHostedDeployment && hasWorkspaceContext && canManageSettings
         ? <NativeBillingMenuItem />
         : null}
+      <AboutMenuItem onOpen={() => setAboutOpen(true)} />
     </>
   )
   const platformOverviewRouteElement = renderProtectedElement(
@@ -1057,14 +1064,11 @@ export function App() {
     const themeBodyColor = workspaceTheme.colorSchemes.dark.palette.background.body
     document.querySelector('meta[name="theme-color"]')?.setAttribute('content', themeBodyColor)
     if (isMarketingRoute || isPublicInfoRoute) return
-    try {
-      window.localStorage.setItem(BOOT_BACKGROUND_CACHE_KEY, JSON.stringify({
-        background: workspaceChrome.bodyBackground,
-        color: themeBodyColor
-      }))
-    } catch {
-      /* best-effort; private browsing or full storage just keeps the neutral boot tone */
-    }
+    // Best-effort: private browsing or full storage just keeps the neutral boot tone.
+    writeStoredValue(bootBackgroundKey, JSON.stringify({
+      background: workspaceChrome.bodyBackground,
+      color: themeBodyColor
+    }))
   }, [workspaceChrome, workspaceTheme, isMarketingRoute, isPublicInfoRoute])
 
   useEffect(() => {
@@ -1246,6 +1250,13 @@ export function App() {
                     />
                     {helpFeedbackOpen ? (
                       <HelpFeedbackDialog onClose={() => setHelpFeedbackOpen(false)} />
+                    ) : null}
+                    {aboutOpen ? (
+                      <AboutDialog
+                        deployment={selfHostedDeployment ? 'self-hosted' : 'cloud'}
+                        onClose={() => setAboutOpen(false)}
+                        onOpenSupport={inPlatformMode ? undefined : () => setHelpFeedbackOpen(true)}
+                      />
                     ) : null}
                     {!isNativeApp() ? (
                       <NativeAppDownloadsDialog

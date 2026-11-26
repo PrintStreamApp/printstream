@@ -15,8 +15,8 @@
  * `persistLibraryFileFromLocalPath`, so imports get the same folder/bridge
  * resolution, content dedupe, versioning, actor attribution, audit entry, and
  * bridge-byte rollback as a normal upload. This plugin owns only what is
- * import-specific: URL classification, the guarded download, and the
- * `Imported models` landing folder.
+ * import-specific: URL classification, guarded temporary download preparation,
+ * destination confirmation, and the legacy helper landing folder.
  *
  * Counterparts: `apps/web/src/plugins/remote-imports/` (the import view) and the
  * out-of-repo Chrome helper extension, which is the only caller of `/resolve`,
@@ -26,9 +26,13 @@
  * - `GET  /capabilities`: providers, importable/direct-print types, landing folder.
  * - `GET  /extension-context`: sign-in + workspace bootstrap for the extension.
  * - `POST /resolve`: detect provider and import strategy for a pasted URL.
- * - `POST /import-url`: download a direct file URL into the library.
+ * - `POST /prepare-url`: retain a temporary download and report its actual filename.
+ * - `DELETE /prepared/:id`: discard a pending temporary download.
+ * - `POST /import-url`: save prepared bytes, or import a legacy direct URL.
  * - `POST /import-upload`: accept file bytes from the browser helper / extension.
  */
+import { buildModelImportFileName } from '@printstream/shared'
+import { PreparedImports } from './prepared-imports.js'
 import { lookup as dnsLookup } from 'node:dns/promises'
 import { createWriteStream } from 'node:fs'
 import { isIP } from 'node:net'
@@ -56,6 +60,8 @@ import {
   remoteImportMakerWorldSettingsRequestSchema,
   remoteImportResolveRequestSchema,
   remoteImportResolveResponseSchema,
+  remoteImportPreparedResponseSchema,
+  type RemoteImportUploadResponse,
   remoteImportUploadFieldsSchema,
   remoteImportUploadResponseSchema,
   remoteImportUrlImportRequestSchema
@@ -72,7 +78,7 @@ import { env } from '../../lib/env.js'
 import { badRequest, HttpError } from '../../lib/http-error.js'
 import { ensureLibraryFolderPath, persistLibraryFileFromLocalPath, toCreatedLibraryFileDto } from '../../lib/library-files.js'
 import { rootPrisma } from '../../lib/prisma.js'
-import { requireRequestWorkspaceId, singleUploadWithLimit } from '../../lib/request-helpers.js'
+import { requireRequestWorkspaceId, requireRouteParam, singleUploadWithLimit } from '../../lib/request-helpers.js'
 import { hasSupportAccessBypass, listSupportAccessibleWorkspaces, readSupportAccessPermissionsForWorkspaces } from '../../lib/support-access.js'
 import { filterEnabledWorkspaces } from '../../lib/workspace-availability.js'
 import { listWorkspaces } from '../../lib/workspace-resolution.js'
@@ -193,6 +199,60 @@ export function createRemoteImportsPlugin(input: {
     version: '0.1.0',
     description: 'Import printable files from direct URLs and prepare provider page URLs for browser-assisted handoff.',
     async register(context) {
+      const prepared = new PreparedImports<RemoteImportUploadResponse>(uploadDir, (message, error) => context.logger.warn(message, error))
+      context.onShutdown(() => prepared.close())
+      const preparedOwner = (request: Request): string => {
+        const actor = request.auth.actor
+        const identity = actor.type === 'user' ? actor.userId : actor.type === 'service-account' ? actor.serviceAccountId : 'anonymous'
+        return JSON.stringify([requireRequestWorkspaceId(request), actor.type, identity])
+      }
+
+      context.router.post('/prepare-url', requireRequestPermission(LIBRARY_UPLOAD_PERMISSION), requireFileUploadsAllowed, async (request, response) => {
+        const parsed = remoteImportResolveRequestSchema.safeParse(request.body)
+        if (!parsed.success) throw badRequest('Invalid model URL')
+        // Preparation retains temporary bytes only. The final library save owns the audit entry.
+        skipRequestAuditLog(request)
+        const cancellation = new AbortController()
+        const closed = () => { if (!response.writableEnded) cancellation.abort() }
+        response.once('close', closed)
+        try {
+          const result = await prepared.prepare(preparedOwner(request), async (deadline) => {
+            const signal = AbortSignal.any([deadline, cancellation.signal])
+            const url = parsed.data.url
+            const makerWorldRef = parseMakerWorldModelUrl(url)
+            let downloadUrl = url
+            let fileNameOverride: string | undefined
+            if (makerWorldRef) {
+              const credential = await resolveOptedInMakerWorldCredential(context, requireRequestWorkspaceId(request))
+              const target = await resolveMakerWorldDownload({ ...makerWorldRef, credential })
+              downloadUrl = target.downloadUrl
+              fileNameOverride = target.fileName
+            } else {
+              const resolution = detectRemoteImportUrl(url)
+              if (resolution.strategy !== 'server-download' || !resolution.directFileKind || resolution.directFileKind === 'other') throw badRequest(resolution.message)
+            }
+            signal.throwIfAborted()
+            const download = await downloadToTemp(downloadUrl, { fileNameOverride, prepared: true, signal })
+            if (!isImportableLibraryFileKind(classifyLibraryFileKind(download.fileName))) {
+              await cleanupTempPath(download.cleanupPath)
+              throw badRequest(IMPORTABLE_EXTENSIONS_MESSAGE)
+            }
+            return { ...download, sourceUrl: url }
+          })
+          if (response.destroyed) await prepared.cancel(result.id, preparedOwner(request))
+          else response.json(remoteImportPreparedResponseSchema.parse(result))
+        } finally {
+          response.off('close', closed)
+        }
+      })
+
+      context.router.delete('/prepared/:id', requireRequestPermission(LIBRARY_UPLOAD_PERMISSION), async (request, response) => {
+        // Discards temporary download bytes and cannot change any library row.
+        skipRequestAuditLog(request)
+        await prepared.cancel(requireRouteParam(request.params.id, 'Prepared import id'), preparedOwner(request))
+        response.status(204).end()
+      })
+
       context.router.get('/capabilities', requireRequestPermission(LIBRARY_UPLOAD_PERMISSION), async (request, response) => {
         const workspaceId = requireRequestWorkspaceId(request)
         response.json(remoteImportCapabilitiesResponseSchema.parse({
@@ -279,6 +339,21 @@ export function createRemoteImportsPlugin(input: {
           const importUrl = parsed.data.url
           const resolution = detectRemoteImportUrl(importUrl)
 
+          if (parsed.data.preparedImportId) {
+            const result = await prepared.confirm(parsed.data.preparedImportId, preparedOwner(request), JSON.stringify(parsed.data), async (download) => {
+              if (download.sourceUrl !== importUrl) throw badRequest('The prepared model URL changed. Import it again.')
+              const file = await createLibraryImport({
+                request, workspaceId, bridgeId: parsed.data.bridgeId,
+                originalName: download.fileName, sourcePath: download.filePath, sizeBytes: download.sizeBytes,
+                folderId: parsed.data.folderId ?? null, destinationSelected: true,
+                outputFileName: parsed.data.outputFileName, persistLibraryFile
+              })
+              return remoteImportUploadResponseSchema.parse({ file, resolution, canPrintDirectly: isDirectPrintableFileName(file.name) })
+            })
+            response.status(201).json(result)
+            return
+          }
+
           // A MakerWorld model page has no direct file URL, but the connected Bambu
           // account can resolve one. Tried BEFORE the server-download check, which
           // would otherwise reject the page as "needs a browser helper": the answer
@@ -297,6 +372,8 @@ export function createRemoteImportsPlugin(input: {
                 sourcePath: download.filePath,
                 sizeBytes: download.sizeBytes,
                 folderId: parsed.data.folderId ?? null,
+                destinationSelected: parsed.data.destinationSelected,
+                outputFileName: parsed.data.outputFileName,
                 persistLibraryFile
               })
               response.status(201).json(remoteImportUploadResponseSchema.parse({
@@ -324,6 +401,8 @@ export function createRemoteImportsPlugin(input: {
               sourcePath: download.filePath,
               sizeBytes: download.sizeBytes,
               folderId: parsed.data.folderId ?? null,
+              destinationSelected: parsed.data.destinationSelected,
+              outputFileName: parsed.data.outputFileName,
               persistLibraryFile
             })
             response.status(201).json(remoteImportUploadResponseSchema.parse({
@@ -578,28 +657,39 @@ async function createLibraryImport(input: {
   originalName: string
   sourcePath: string
   sizeBytes: number
-  /** Chosen destination; null means the default `Imported models` folder. */
+  /** Null is the bridge root only after an explicit destination confirmation. */
+  destinationSelected?: boolean
+  /** Legacy helpers without a confirmation still use the default import folder. */
   folderId: string | null
+  outputFileName?: string
   persistLibraryFile: typeof persistLibraryFileFromLocalPath
 }): Promise<LibraryFile> {
   const safeOriginalName = sanitizeImportFileName(input.originalName)
+  let savedFileName: string
+  try {
+    savedFileName = buildModelImportFileName(safeOriginalName, input.outputFileName)
+  } catch (error) {
+    throw badRequest(error instanceof Error ? error.message : 'Invalid filename')
+  }
   if (!isImportableLibraryFileKind(classifyLibraryFileKind(safeOriginalName))) {
     throw badRequest(IMPORTABLE_EXTENSIONS_MESSAGE)
   }
 
-  // Only create the landing folder when the caller named no destination, an import
-  // into a chosen folder must not also mint `Imported models` as a side effect.
-  const folderId = input.folderId ?? await ensureLibraryFolderPath({
-    workspaceId: input.workspaceId,
-    bridgeId: input.bridgeId,
-    baseFolderId: null,
-    segments: [IMPORTED_MODELS_FOLDER_NAME]
-  })
+  // Explicit root selections must not silently redirect into the legacy helper folder.
+  let folderId = input.folderId
+  if (folderId === null && !input.destinationSelected) {
+    folderId = await ensureLibraryFolderPath({
+      workspaceId: input.workspaceId,
+      bridgeId: input.bridgeId,
+      baseFolderId: null,
+      segments: [IMPORTED_MODELS_FOLDER_NAME]
+    })
+  }
 
   const { file } = await input.persistLibraryFile({
     workspaceId: input.workspaceId,
     sourcePath: input.sourcePath,
-    fileName: safeOriginalName,
+    fileName: savedFileName,
     sizeBytes: input.sizeBytes,
     folderId,
     // The folder wins when both are present (`persistLibraryFileFromLocalPath` reads
@@ -621,6 +711,8 @@ export async function downloadToTempFile(url: string, options: {
    * only exists in the API response that produced the link.
    */
   fileNameOverride?: string
+  prepared?: boolean
+  signal?: AbortSignal
 } = {}): Promise<{
   fileName: string
   filePath: string
@@ -628,46 +720,51 @@ export async function downloadToTempFile(url: string, options: {
   sizeBytes: number
 }> {
   await mkdir(uploadDir, { recursive: true })
-  const tempRoot = await mkdtemp(path.join(uploadDir, 'download-'))
-  const response = await fetchRemoteImportUrl(url)
-  if (!response.ok) {
-    await cleanupTempPath(tempRoot)
-    throw badRequest(`Remote file responded ${response.status}`)
-  }
-  if (!response.body) {
-    await cleanupTempPath(tempRoot)
-    throw badRequest('Remote file response had no body')
-  }
-
-  const headerFileName = parseContentDispositionFileName(response.headers.get('content-disposition'))
-  const urlFileName = extractUrlFileName(url)
-  const originalName = sanitizeImportFileName(options.fileNameOverride ?? headerFileName ?? urlFileName ?? 'imported-file')
-  const targetPath = path.join(tempRoot, originalName)
-  const contentLength = parseContentLength(response.headers.get('content-length'))
-  if (contentLength != null && contentLength > MAX_IMPORT_BYTES) {
-    await cleanupTempPath(tempRoot)
-    throw new HttpError(413, `File exceeds ${Math.round(MAX_IMPORT_BYTES / (1024 * 1024))} MB upload limit`)
-  }
+  const tempRoot = await mkdtemp(path.join(uploadDir, options.prepared ? 'prepared-' : 'download-'))
   try {
-    await writeRemoteImportBody(response.body as unknown as NodeReadableStream<Uint8Array>, targetPath, MAX_IMPORT_BYTES)
+    const response = await fetchRemoteImportUrl(url, options.signal)
+    if (!response.ok) {
+      await cleanupTempPath(tempRoot)
+      throw badRequest(`Remote file responded ${response.status}`)
+    }
+    if (!response.body) {
+      await cleanupTempPath(tempRoot)
+      throw badRequest('Remote file response had no body')
+    }
+
+    const headerFileName = parseContentDispositionFileName(response.headers.get('content-disposition'))
+    const urlFileName = extractUrlFileName(url)
+    const originalName = sanitizeImportFileName(options.fileNameOverride ?? headerFileName ?? urlFileName ?? 'imported-file')
+    const targetPath = path.join(tempRoot, originalName)
+    const contentLength = parseContentLength(response.headers.get('content-length'))
+    if (contentLength != null && contentLength > MAX_IMPORT_BYTES) {
+      await cleanupTempPath(tempRoot)
+      throw new HttpError(413, `File exceeds ${Math.round(MAX_IMPORT_BYTES / (1024 * 1024))} MB upload limit`)
+    }
+    try {
+      await writeRemoteImportBody(response.body as unknown as NodeReadableStream<Uint8Array>, targetPath, MAX_IMPORT_BYTES, options.signal)
+    } catch (error) {
+      await cleanupTempPath(tempRoot)
+      throw error
+    }
+    const fileStat = await stat(targetPath)
+    return {
+      fileName: originalName,
+      filePath: targetPath,
+      cleanupPath: tempRoot,
+      sizeBytes: fileStat.size
+    }
   } catch (error) {
     await cleanupTempPath(tempRoot)
     throw error
   }
-  const fileStat = await stat(targetPath)
-  return {
-    fileName: originalName,
-    filePath: targetPath,
-    cleanupPath: tempRoot,
-    sizeBytes: fileStat.size
-  }
 }
 
-async function fetchRemoteImportUrl(url: string): Promise<globalThis.Response> {
+async function fetchRemoteImportUrl(url: string, signal?: AbortSignal): Promise<globalThis.Response> {
   let currentUrl = url
   for (let redirectCount = 0; redirectCount <= MAX_REMOTE_IMPORT_REDIRECTS; redirectCount += 1) {
     await assertRemoteImportUrlAllowed(currentUrl)
-    const response = await fetch(currentUrl, { redirect: 'manual' })
+    const response = await fetch(currentUrl, { redirect: 'manual', signal })
     if (!isRedirectResponse(response.status)) return response
 
     const location = response.headers.get('location')
@@ -731,7 +828,7 @@ export function isBlockedRemoteImportAddress(address: string): boolean {
   return false
 }
 
-async function writeRemoteImportBody(body: NodeReadableStream<Uint8Array>, targetPath: string, maxBytes: number): Promise<void> {
+async function writeRemoteImportBody(body: NodeReadableStream<Uint8Array>, targetPath: string, maxBytes: number, signal?: AbortSignal): Promise<void> {
   let receivedBytes = 0
   const limitedBody = new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -756,7 +853,7 @@ async function writeRemoteImportBody(body: NodeReadableStream<Uint8Array>, targe
       }
     }
   })
-  await pipeline(Readable.fromWeb(limitedBody as unknown as NodeReadableStream<Uint8Array>), createWriteStream(targetPath))
+  await pipeline(Readable.fromWeb(limitedBody as unknown as NodeReadableStream<Uint8Array>), createWriteStream(targetPath), { signal })
 }
 
 function isRedirectResponse(status: number): boolean {

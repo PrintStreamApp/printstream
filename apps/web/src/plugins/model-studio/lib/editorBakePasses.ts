@@ -18,7 +18,7 @@ import { buildBuiltinSlicingPresetId, projectDefinesMachineCompletely, projectMa
 import type { ExportArrangedThreeMf, MachineRetargetPlan, ProcessConfig, ProfileRecord, SaveArrangedThreeMf, SlicingPresetSummary } from '@printstream/shared'
 import type { ThreeMfBakeOptions } from '@printstream/shared/three-mf'
 import type { ClientBakeSettingsPasses } from './clientBakeSettingsPasses'
-import { buildMachineRetargetPlan, resolveFilamentRebinds, type RetargetResolvers } from './browserMachineRetarget'
+import { buildMachineRetargetPlan, customMachineParentName, resolveFilamentRebinds, type RetargetResolvers } from './browserMachineRetarget'
 
 export interface EditorBakePassOptions {
   /** What this host can resolve. See `browserMachineRetarget.ts` for why it is injected. */
@@ -189,9 +189,7 @@ async function sameModelPresetPlan(
   const plan: MachineRetargetPlan = {
     machineConfig: resolved.config,
     printerSettingsId: resolved.name,
-    printerPresetInherits: slicingPresetProvenance(retarget.printerProfileId) === 'workspace'
-      ? firstProfileString(resolved.config.inherits)
-      : null,
+    printerPresetInherits: customMachineParentName(retarget.printerProfileId, resolved.config),
     // The model the resolved preset itself reports, falling back to what the save targeted: the
     // preset is the authority on which machine it describes.
     printerModel: firstProfileString(resolved.config.printer_model) ?? retarget.printerModel ?? '',

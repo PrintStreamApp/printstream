@@ -458,7 +458,8 @@ export function buildLibraryStoredPath(fileName: string): string {
   return `${Date.now()}-${randomBytes(4).toString('hex')}-${safe}`
 }
 
-async function findLibraryOverwriteTarget(input: {
+/** Match one visible row by its exact saved name and tenant-owned library location. */
+export async function findLibraryOverwriteTarget(input: {
   workspaceId: string
   ownerBridgeId: string
   folderId: string | null

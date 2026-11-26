@@ -361,7 +361,7 @@ interface EditorViewProps {
    * it is exactly what made the public editor open a dialog whose every request 403s. A host with
    * no manager passes nothing and the button does not render at all.
    */
-  presetManager?: (props: { open: boolean; onClose: () => void }) => ReactNode
+  presetManager?: (props: { open: boolean; onClose: () => void; onPresetsChanged?: () => void | Promise<void> }) => ReactNode
   /**
    * Status for a host-provided preset source (the Bambu Cloud sync chip), forwarded to
    * `SliceSettingsPanel`. Only the workspace host passes one: the public editor has no
@@ -945,6 +945,9 @@ function EditorView({
   const sliceConfigRef = useRef(sliceConfig)
   sliceConfigRef.current = sliceConfig
   // Declared here rather than beside `openSlicingPresets` because it reads the controller ref.
+  const refreshSlicingPresets = useCallback(async () => {
+    await sliceConfigRef.current?.refreshSlicingPresets?.()
+  }, [])
   const closeSlicingPresets = useCallback(() => {
     setSlicingPresetsOpen(false)
     // The editor renders from a catalogue snapshot taken at open, so a preset added or removed in
@@ -3897,7 +3900,7 @@ function EditorView({
       />
     )}
 
-    {presetManager?.({ open: slicingPresetsOpen, onClose: closeSlicingPresets })}
+    {presetManager?.({ open: slicingPresetsOpen, onClose: closeSlicingPresets, onPresetsChanged: refreshSlicingPresets })}
 
     {sourceColorImport && (
       <SourceColorImportDialog

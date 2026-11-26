@@ -229,7 +229,7 @@ export async function sendLibraryFilePlates(
     `plates:complete-index:v${THREE_MF_INDEX_PARSER_VERSION}`
   )) return
   if (row.kind !== '3mf' && row.kind !== 'gcode') {
-    response.json({ plates: [], projectFilaments: [], compatiblePrinterModels: [], supportFilamentIds: [], printerProfileName: null, processProfileName: null, processProfileInherits: null } satisfies LibraryThreeMfIndexDto)
+    response.json({ plates: [], projectFilaments: [], compatiblePrinterModels: [], supportFilamentIds: [], printerProfileName: null, printerProfileInherits: null, processProfileName: null, processProfileInherits: null } satisfies LibraryThreeMfIndexDto)
     return
   }
   const signal = requestAbortSignal(request, response)

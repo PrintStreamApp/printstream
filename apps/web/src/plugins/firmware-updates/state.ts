@@ -1,4 +1,6 @@
 import { wsEventSchema } from '@printstream/shared'
+import { readStoredValue, writeStoredValue } from '../../lib/browserStorageKeys'
+import { firmwareUpdatesCacheKeys } from './storageKeys'
 
 /**
  * Intermediate "stepping-stone" firmware a printer must install before it can flash
@@ -81,12 +83,6 @@ export interface FirmwareStatusSnapshot {
   sdCardPresent: boolean | null
 }
 
-export const UPDATES_STORAGE_KEY = 'bambu.firmware-updates.cache.v1'
-
-export function getUpdatesStorageKey(scopeKey: string): string {
-  return `${UPDATES_STORAGE_KEY}.${scopeKey}`
-}
-
 export function isActiveUploadStatus(status: UploadStatus | undefined): boolean {
   return status === 'preparing' || status === 'downloading' || status === 'uploading'
 }
@@ -96,9 +92,8 @@ export function shouldPollUploadProgress(progress: UploadProgress | undefined): 
 }
 
 export function readStoredUpdates(scopeKey: string): UpdatesResponse | undefined {
-  if (typeof window === 'undefined') return undefined
   try {
-    const raw = window.localStorage.getItem(getUpdatesStorageKey(scopeKey))
+    const raw = readStoredValue(firmwareUpdatesCacheKeys.at(scopeKey))
     if (!raw) return undefined
     return JSON.parse(raw) as UpdatesResponse
   } catch {
@@ -107,12 +102,8 @@ export function readStoredUpdates(scopeKey: string): UpdatesResponse | undefined
 }
 
 export function writeStoredUpdates(scopeKey: string, data: UpdatesResponse): void {
-  if (typeof window === 'undefined') return
-  try {
-    window.localStorage.setItem(getUpdatesStorageKey(scopeKey), JSON.stringify(data))
-  } catch {
-    // Ignore storage failures; the live query result still works.
-  }
+  // Best-effort: after a storage failure the live query result still works.
+  writeStoredValue(firmwareUpdatesCacheKeys.at(scopeKey), JSON.stringify(data))
 }
 
 export function parseUploadProgressEvent(raw: unknown): UploadProgress | null {

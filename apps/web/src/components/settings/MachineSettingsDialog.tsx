@@ -47,7 +47,7 @@ import {
   setMachineColumnValue,
   type ProcessConfig
 } from '@printstream/shared'
-import { saveSlicingPreset } from '../../lib/saveSlicingPreset'
+import { useSaveSlicingPreset } from './useSaveSlicingPreset'
 import { resolveWorkspaceMachineConfig } from '../workspaceMachineResolver'
 import { useEffectiveSlicerDeveloperMode } from '../../lib/slicerDeveloperMode'
 import { usePromptDialog } from '../PromptDialogProvider'
@@ -58,6 +58,8 @@ import type { SettingsCatalogAdapter, SettingsFieldColumn } from './settingsCata
 export interface MachineSettingsDialogProps {
   open: boolean
   onClose: () => void
+  /** Releases the caller's held catalogue after a successful preset save. */
+  onPresetSaved?: () => void | Promise<void>
   slicerTargetId: string
   /** Slicing preset id of the printer (`builtin:machine:…` or a custom id). */
   machineProfileId: string
@@ -91,6 +93,7 @@ const PAGE_ID_BY_KEY: ReadonlyMap<string, string> = new Map(
 
 export default function MachineSettingsDialog(props: MachineSettingsDialogProps): JSX.Element {
   const { open, onClose, slicerTargetId, machineProfileId, machineProfileName, canEditOriginal, applyScope = 'preset', initialOverrides, initialQuery, onApply } = props
+  const saveSlicingPreset = useSaveSlicingPreset(props.onPresetSaved)
   // Content-keyed, not identity-keyed: hosts build this map inline, so keying the load effect on
   // the object itself would refetch and reset the form on every parent render (see apps/web/the development notes).
   const initialOverridesKey = JSON.stringify(initialOverrides ?? null)
@@ -276,8 +279,7 @@ export default function MachineSettingsDialog(props: MachineSettingsDialogProps)
         // ancestry because workspace custom presets cannot currently inherit from one another.
         inheritFrom: !overwrite && !canEditOriginal ? machineProfileName : undefined
       })
-      await saveSlicingPreset({ kind: 'machine', name, overwrite, config: presetConfig })
-      onClose()
+      await saveSlicingPreset({ kind: 'machine', name, overwrite, config: presetConfig }, onClose)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save preset')
     } finally {

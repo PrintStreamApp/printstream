@@ -7,7 +7,6 @@ import type { QuantizedSourceColors } from '@printstream/shared/three-mf'
 import type { FilamentOption } from '../../../components/library/PlateGcodeSections'
 
 export const APPEND_SOURCE_COLOR = 'append' as const
-export const OBJ_IMPORT_GAMMA_PREFERENCE_KEY = 'printstream.modelStudio.objImportGammaCorrection'
 export type SourceColorMapping = number | typeof APPEND_SOURCE_COLOR
 export type SourceColorMode = 'vertex' | 'material' | 'texture'
 

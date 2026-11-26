@@ -13,6 +13,8 @@ Copy the tracked env template first, then edit the resulting workspace-local
 cp .env.server.example .env
 ```
 
+Set `POSTGRES_PASSWORD` in `.env` to a long random value of letters and digits (for example the output of `openssl rand -hex 32`). The stack refuses to start without it, and there is no default, because a default in a public example file is a password everyone knows. The API's database URL is built from it, so it is the only database setting a normal install needs. Upgrading an existing install? Its database already has a password, so follow [Rotating the database password](#rotating-the-database-password) instead of choosing a new value here.
+
 Copy the tracked stack template first, then edit the resulting workspace-local
 `compose.yml` for the host you are actually deploying:
 
@@ -59,6 +61,18 @@ per Customer. Unread support replies are emailed to the account holder after
 five minutes. Licence and installation context is retained only as private
 operator context and is not part of public attribution.
 
+### Rotating the database password
+
+Older versions of `compose.server.example.yml` set the database password to `postgres`. That default is public, so if your deployment started from one of those versions, rotate it; the server logs a warning at every start until you do. PostgreSQL reads `POSTGRES_PASSWORD` only when it first creates the database volume, so setting the variable alone does not change an existing database:
+
+```bash
+NEW_PASSWORD="$(openssl rand -hex 32)"
+POSTGRES_PASSWORD=postgres docker compose exec db psql -U postgres -c "ALTER USER postgres PASSWORD '$NEW_PASSWORD';"
+echo "$NEW_PASSWORD"   # store it in .env, below
+```
+
+The `POSTGRES_PASSWORD=postgres` prefix only lets Compose read a `compose.yml` that already requires the variable; `psql` inside the container does not use it. Then set `POSTGRES_PASSWORD` to the new value in `.env`, delete any `DATABASE_URL` line there that still contains the old password, update your `compose.yml` from the current example, and restart with `docker compose up -d`. Do it in that order: setting a new value without the `ALTER USER` step leaves the API unable to sign in to the database.
+
 ### Updating
 
 ```bash
@@ -84,7 +98,7 @@ PrintStream reaches your printers through a bridge: an outbound client that live
 
 ### Bundled bridge (default)
 
-A single-host install runs a bundled `bridge` service for you (with its own `printstream-bridge-data` volume for bridge state plus bridge-local library/dispatch files) in **managed-bridge mode** (`MANAGED_BRIDGE=true`): one workspace, one server-owned bridge that pairs itself on first start, and the Bridges settings page stays hidden because there is nothing for you to manage. There is no secret to set: the API generates a provisioning token at `MANAGED_BRIDGE_TOKEN_FILE` on the shared `printstream-provision` volume, and the bundled bridge reads it from the same path to authenticate its one-time pairing. Because that token lives in a private file rather than on the network, this is safe regardless of how the API is exposed.
+A single-host install runs a bundled `bridge` service for you (with its own `printstream-bridge-data` volume for bridge state plus bridge-local library/dispatch files) in **managed-bridge mode** (`MANAGED_BRIDGE=true`): one workspace, one server-owned bridge that pairs itself on first start, and the Bridges settings page stays hidden because there is nothing for you to manage. There is no bridge secret to set: the API generates a provisioning token at `MANAGED_BRIDGE_TOKEN_FILE` on the shared `printstream-provision` volume, and the bundled bridge reads it from the same path to authenticate its one-time pairing. Because that token lives in a private file rather than on the network, this is safe regardless of how the API is exposed.
 
 Set `MANAGED_BRIDGE=false` to turn this off: the bundled bridge then waits to be paired by hand and the Bridges settings page reappears (the connect-code flow below). That's the mode to use when you want more than one bridge, or a bridge on another machine.
 

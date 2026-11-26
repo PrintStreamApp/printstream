@@ -21,7 +21,7 @@ export async function prepareValidationDatabase({
   probe = canConnect
 }) {
   prepareDevkit ??= async (options) => {
-    const { prepareDatabase } = await import('@ryanewen/devkit')
+    const { prepareDatabase } = await import('@dynamic-solutions-canada/devkit')
     return prepareDatabase(options)
   }
   const explicitAdminUrl = environment.TEST_ADMIN_DATABASE_URL

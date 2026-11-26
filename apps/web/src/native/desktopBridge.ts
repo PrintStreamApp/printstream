@@ -5,6 +5,7 @@ export {
   isDesktopMakerWorldChallengeTest,
   isNativeDesktop,
   supportsDesktopModelBrowserImport,
+  supportsDesktopModelImportDestination,
   supportsDesktopMakerWorldImport,
   supportsDesktopNotifications
 } from '@printstream/shared'

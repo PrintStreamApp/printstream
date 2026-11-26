@@ -14,11 +14,15 @@
  * The bridge has no UI of its own and keeps the single tray entry, which is why
  * `entries` is optional rather than required.
  */
+import { withWindowsInstallOperation } from '../windows-install-operation.js'
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import type { StandaloneAppIdentity } from '../paths.js'
 import { runCommand } from '../service/exec.js'
 import { trayIconIcoBuffer, trayIconPngBuffer } from './icons.js'
+import { windowsVbsCommandLiteral, windowsWscriptPath } from '../windows-hidden-launch.js'
+
+export { windowsWscriptPath } from '../windows-hidden-launch.js'
 
 /** One application-menu entry. */
 export interface TrayLauncherEntry {
@@ -112,8 +116,8 @@ export function ensureWindowsTrayVbs(exePath: string): string {
  */
 export function ensureWindowsLaunchVbs(exePath: string, args: string[], vbsName: string): string {
   const vbsPath = path.win32.join(path.win32.dirname(exePath), vbsName)
-  const commandLine = [`""${exePath}""`, ...args].join(' ')
-  const contents = `CreateObject("WScript.Shell").Run "${commandLine}", 0, False\r\n`
+  const commandLine = windowsVbsCommandLiteral(exePath, args)
+  const contents = `CreateObject("WScript.Shell").Run ${commandLine}, 0, False\r\n`
 
   // Idempotent, and that is the point rather than an optimisation. Setup reaches
   // here from three places (Start Menu shortcut, login autostart, and the tray
@@ -132,33 +136,33 @@ export function ensureWindowsLaunchVbs(exePath: string, args: string[], vbsName:
   // never the path being written. `renameSync` is MoveFileEx with
   // replace-existing: a reader sees the old file or the new one, never a
   // half-written one.
-  const tempPath = `${vbsPath}.${process.pid}.tmp`
-  writeFileSync(tempPath, contents)
-  try {
-    renameSync(tempPath, vbsPath)
-  } catch (error) {
-    rmSync(tempPath, { force: true })
-    throw error
-  }
-  return vbsPath
-}
-
-export function windowsWscriptPath(): string {
-  return path.win32.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'wscript.exe')
+  return withWindowsInstallOperation(exePath, () => {
+    const tempPath = `${vbsPath}.${process.pid}.tmp`
+    writeFileSync(tempPath, contents)
+    try {
+      renameSync(tempPath, vbsPath)
+    } catch (error) {
+      rmSync(tempPath, { force: true })
+      throw error
+    }
+    return vbsPath
+  })
 }
 
 function installWindowsLauncher(
   identity: StandaloneAppIdentity, exePath: string, entries: TrayLauncherEntry[]
 ): void {
-  const iconPath = path.win32.join(path.win32.dirname(exePath), 'app.ico')
-  writeFileSync(iconPath, trayIconIcoBuffer())
-  for (const entry of entries) {
-    const vbsPath = ensureWindowsLaunchVbs(exePath, entry.args, entry.vbsName)
-    const script = buildShortcutScript(
-      windowsShortcutPath(identity, entry), windowsWscriptPath(), vbsPath, iconPath, entry.description
-    )
-    runCommand('powershell', ['-NoProfile', '-Command', script], { allowFailure: true })
-  }
+  return withWindowsInstallOperation(exePath, () => {
+    const iconPath = path.win32.join(path.win32.dirname(exePath), 'app.ico')
+    writeFileSync(iconPath, trayIconIcoBuffer())
+    for (const entry of entries) {
+      const vbsPath = ensureWindowsLaunchVbs(exePath, entry.args, entry.vbsName)
+      const script = buildShortcutScript(
+        windowsShortcutPath(identity, entry), windowsWscriptPath(), vbsPath, iconPath, entry.description
+      )
+      runCommand('powershell', ['-NoProfile', '-Command', script], { allowFailure: true })
+    }
+  })
 }
 
 /** Exported so CI can parse it: this is PowerShell that nothing else checks. */

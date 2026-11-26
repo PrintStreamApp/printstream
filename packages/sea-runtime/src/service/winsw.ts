@@ -9,6 +9,7 @@
  * injected via `createWinswController({ resolveWinswAsset })` rather than read
  * here, this module stays free of any app-specific SEA accessor.
  */
+import { withWindowsInstallOperation } from '../windows-install-operation.js'
 import { mkdir, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
@@ -18,6 +19,7 @@ const winPath = path.win32
 import { escapeXml } from './xml.js'
 import { commandSucceeds, runCommand } from './exec.js'
 import type { ServiceSpec } from './spec.js'
+import { observeServiceInstallation, type ServiceInstallation } from './installation.js'
 
 /** Conventional SEA asset key the app embeds the WinSW binary under. */
 export const WINSW_ASSET_KEY = 'winsw.exe'
@@ -70,6 +72,11 @@ export function ensureServiceRecoveryActions(spec: ServiceSpec): boolean {
 }
 
 export function generateWinswConfig(spec: ServiceSpec): string {
+  // WinSW 2 appends legacy arguments to BOTH start and stop arguments. A
+  // configured stop helper therefore uses startarguments without arguments.
+  const processArguments = spec.stopCommand
+    ? `  <startarguments>${escapeXml(spec.args.join(' '))}</startarguments>\n  <stopexecutable>${escapeXml(spec.stopCommand.exePath)}</stopexecutable>\n  <stoparguments>${escapeXml(spec.stopCommand.args.join(' '))}</stoparguments>`
+    : `  <arguments>${escapeXml(spec.args.join(' '))}</arguments>`
   const environmentEntries = Object.entries(spec.env)
     .map(([key, value]) => `  <env name="${escapeXml(key)}" value="${escapeXml(value)}"/>`)
     .join('\n')
@@ -90,7 +97,7 @@ export function generateWinswConfig(spec: ServiceSpec): string {
   <name>${escapeXml(spec.displayName)}</name>
   <description>${escapeXml(spec.description)}</description>
   <executable>${escapeXml(spec.exePath)}</executable>
-  <arguments>${escapeXml(spec.args.join(' '))}</arguments>
+${processArguments}
   <workingdirectory>${escapeXml(spec.dataDir)}</workingdirectory>
 ${environmentEntries}
 ${serviceAccount}  <!--
@@ -118,6 +125,28 @@ ${RECOVERY_RESTART_DELAYS_SEC.map((seconds) => `  <onfailure action="restart" de
 `
 }
 
+/** Give WinSW's configured stop budget room to settle, while bounding a wedged helper. */
+const WINSW_TEARDOWN_TIMEOUT_MS = 60_000
+
+/** Query the original installed wrapper through the shared strict SCM observer. */
+function observeWinswInstallation(spec: ServiceSpec): ServiceInstallation {
+  return observeServiceInstallation('win32', { installDir: winPath.dirname(spec.exePath), serviceId: spec.id })
+}
+
+/**
+ * WinSW 2.12.0 supports stopwait; plain stop returns during StopPending.
+ * A successful helper exit is still not an observed inactive service, and does
+ * not establish the application's clean-shutdown marker or DATA retirement.
+ */
+function stopWinswService(spec: ServiceSpec, current = observeWinswInstallation(spec)): void {
+  if (current === 'inactive') return
+  if (current === 'absent') throw new Error('Windows service is not installed')
+  runCommand(winswWrapperPath(spec), ['stopwait'], { timeoutMs: WINSW_TEARDOWN_TIMEOUT_MS })
+  if (observeWinswInstallation(spec) !== 'inactive') {
+    throw new Error('Windows service did not establish inactive state; installed files retained')
+  }
+}
+
 /**
  * Builds the Windows (WinSW) service controller. The WinSW binary is supplied by
  * the app via `resolveWinswAsset` (its SEA asset), keeping this module free of
@@ -126,25 +155,37 @@ ${RECOVERY_RESTART_DELAYS_SEC.map((seconds) => `  <onfailure action="restart" de
 export function createWinswController(options: WinswControllerOptions) {
   return {
     async install(spec: ServiceSpec): Promise<void> {
-      const winswBinary = options.resolveWinswAsset()
-      if (!winswBinary) {
-        throw new Error('The Windows service wrapper is only available in the packaged executable.')
-      }
-      await mkdir(spec.dataDir, { recursive: true })
-      await mkdir(spec.logsDir, { recursive: true })
-      const wrapperPath = winswWrapperPath(spec)
-      await writeFile(wrapperPath, winswBinary)
-      await writeFile(winswConfigPath(spec), generateWinswConfig(spec), 'utf8')
-      runCommand(wrapperPath, ['install'])
-      runCommand(wrapperPath, ['start'])
+      return withWindowsInstallOperation(spec.exePath, async () => {
+        const winswBinary = options.resolveWinswAsset()
+        if (!winswBinary) {
+          throw new Error('The Windows service wrapper is only available in the packaged executable.')
+        }
+        await mkdir(spec.dataDir, { recursive: true })
+        await mkdir(spec.logsDir, { recursive: true })
+        const wrapperPath = winswWrapperPath(spec)
+        await writeFile(wrapperPath, winswBinary)
+        await writeFile(winswConfigPath(spec), generateWinswConfig(spec), 'utf8')
+        runCommand(wrapperPath, ['install'])
+        runCommand(wrapperPath, ['start'])
+      }, spec.dataDir)
     },
 
     async uninstall(spec: ServiceSpec): Promise<void> {
-      const wrapperPath = winswWrapperPath(spec)
-      runCommand(wrapperPath, ['stop'], { allowFailure: true })
-      runCommand(wrapperPath, ['uninstall'])
-      await rm(winswConfigPath(spec), { force: true })
-      await rm(wrapperPath, { force: true })
+      return withWindowsInstallOperation(spec.exePath, async () => {
+        const wrapperPath = winswWrapperPath(spec)
+        const current = observeWinswInstallation(spec)
+        if (current !== 'absent') {
+          stopWinswService(spec, current)
+          // WinSW uninstall succeeds even when SCM only marks a running/open
+          // service for deletion. Keep both artifacts until absence is observed.
+          runCommand(wrapperPath, ['uninstall'], { timeoutMs: WINSW_TEARDOWN_TIMEOUT_MS })
+          if (observeWinswInstallation(spec) !== 'absent') {
+            throw new Error('Windows service removal is unqualified; installed files retained')
+          }
+        }
+        await rm(winswConfigPath(spec), { force: true })
+        await rm(wrapperPath, { force: true })
+      }, spec.dataDir)
     },
 
     start(spec: ServiceSpec): void {
@@ -152,7 +193,7 @@ export function createWinswController(options: WinswControllerOptions) {
     },
 
     stop(spec: ServiceSpec): void {
-      runCommand(winswWrapperPath(spec), ['stop'])
+      stopWinswService(spec)
     },
 
     restart(spec: ServiceSpec): void {

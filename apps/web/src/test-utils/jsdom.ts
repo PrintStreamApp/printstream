@@ -25,6 +25,11 @@ export function installJsdomGlobals(options: InstallJsdomOptions = {}): JSDOM {
   const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: options.url ?? 'http://localhost/' })
   const { window } = dom
   const matches = options.matchMedia ?? (() => false)
+  // Scrollers use window's APIs while React helpers use globals. Keep both on
+  // the same DOM-owned timers so closing this fixture cancels every frame.
+  const requestAnimationFrame = (callback: FrameRequestCallback) => window.setTimeout(() => callback(Date.now()), 0)
+  const cancelAnimationFrame = (handle: number) => window.clearTimeout(handle)
+  Object.assign(window, { requestAnimationFrame, cancelAnimationFrame })
 
   const matchMedia = (query: string) => ({
     matches: matches(query),
@@ -58,8 +63,8 @@ export function installJsdomGlobals(options: InstallJsdomOptions = {}): JSDOM {
     DocumentFragment: window.DocumentFragment,
     MutationObserver: window.MutationObserver,
     getComputedStyle: window.getComputedStyle.bind(window),
-    requestAnimationFrame: (callback: FrameRequestCallback) => setTimeout(() => callback(Date.now()), 0),
-    cancelAnimationFrame: (handle: number) => clearTimeout(handle)
+    requestAnimationFrame,
+    cancelAnimationFrame
   })
 
   Object.defineProperty(globalThis, 'matchMedia', { configurable: true, value: matchMedia })

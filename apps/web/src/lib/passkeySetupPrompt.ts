@@ -17,48 +17,31 @@
  * phone should not suppress the offer later on a desktop where a new passkey
  * would still help.
  */
+import { readStoredValue, removeStoredValue, writeStoredValue } from './browserStorageKeys'
+import { passkeySetupDismissedKeys, passkeySetupPromptKey } from './storageKeys'
 
-const PROMPT_FLAG_KEY = 'printstream.passkeySetupPrompt'
-const DISMISSED_KEY_PREFIX = 'printstream.passkeySetupPromptDismissed.'
 
 /** Raise the flag; the shell overlay offers passkey setup after navigation. */
 export function flagPasskeySetupPrompt(): void {
-  try {
-    window.sessionStorage.setItem(PROMPT_FLAG_KEY, '1')
-  } catch {
-    // Storage unavailable (private mode, quota): silently skip the offer.
-  }
+  // Best-effort: with storage unavailable (private mode, quota) the offer is silently skipped.
+  writeStoredValue(passkeySetupPromptKey, '1')
 }
 
 export function readPasskeySetupPromptFlag(): boolean {
-  try {
-    return window.sessionStorage.getItem(PROMPT_FLAG_KEY) === '1'
-  } catch {
-    return false
-  }
+  return readStoredValue(passkeySetupPromptKey) === '1'
 }
 
 export function clearPasskeySetupPromptFlag(): void {
-  try {
-    window.sessionStorage.removeItem(PROMPT_FLAG_KEY)
-  } catch {
-    // Ignore: worst case the offer shows again this session.
-  }
+  // Best-effort: worst case the offer shows again this session.
+  removeStoredValue(passkeySetupPromptKey)
 }
 
 /** Record that this user declined the offer on this device. */
 export function dismissPasskeySetupPrompt(userId: string): void {
-  try {
-    window.localStorage.setItem(`${DISMISSED_KEY_PREFIX}${userId}`, new Date().toISOString())
-  } catch {
-    // Ignore: without storage the dismissal just does not persist.
-  }
+  // Best-effort: without storage the dismissal just does not persist.
+  writeStoredValue(passkeySetupDismissedKeys.at(userId), new Date().toISOString())
 }
 
 export function isPasskeySetupPromptDismissed(userId: string): boolean {
-  try {
-    return window.localStorage.getItem(`${DISMISSED_KEY_PREFIX}${userId}`) != null
-  } catch {
-    return false
-  }
+  return readStoredValue(passkeySetupDismissedKeys.at(userId)) != null
 }

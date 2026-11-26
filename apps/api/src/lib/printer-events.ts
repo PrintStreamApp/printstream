@@ -6,10 +6,14 @@
  * module avoids a circular import between the manager and the WS layer
  * and gives plugins a stable subscription surface.
  */
+import type { FaultSourceObservation } from './printer-fault-observation.js'
 import { EventEmitter } from 'node:events'
 import type { DiscoveredPrinter, NotificationMessage, Printer, PrinterStatus } from '@printstream/shared'
 
 export interface PrinterEvents {
+  /** Fresh source fields, independent of cached status fan-out and its deduplication. */
+  'fault.observed': (event: { workspaceId: string; status: PrinterStatus; sources: FaultSourceObservation; jobEnded?: boolean }) => void
+  'fault.gap': (event: { workspaceId: string; printerId: string; observedAt: string }) => void
   'status': (status: PrinterStatus) => void
   'job.started': (event: { printer: Printer; jobName: string }) => void
   'job.finished': (event: { printer: Printer; jobName: string; result: 'success' | 'failed' | 'cancelled' }) => void

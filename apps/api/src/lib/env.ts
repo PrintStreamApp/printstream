@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { config as loadDotenv } from 'dotenv'
 import { z } from 'zod'
 import { readFileSync } from 'node:fs'
+import { checkProductionEnvironment } from './env-production-guards.js'
 
 const envModuleDir = path.dirname(fileURLToPath(import.meta.url))
 const workspaceRoot = path.resolve(envModuleDir, '../../../../')
@@ -86,6 +87,9 @@ function optionalBooleanEnv() {
 }
 
 const envSchema = z.object({
+  // Optional fixed existing account for cloud development only. Never expose the key to Vite.
+  DEV_AUTH_USER_ID: optionalStringEnv(),
+  DEV_AUTH_ACCESS_KEY: optionalStringEnv(),
   API_PORT: positiveIntEnv(4000),
   // The connection string the app uses. In the native self-hosted build the
   // `EMBEDDED_POSTGRES` switch starts a local cluster and rewrites this before
@@ -301,6 +305,16 @@ const envSchema = z.object({
    */
   PG_DUMP_PATH: optionalStringEnv(),
   PG_RESTORE_PATH: optionalStringEnv(),
+  /**
+   * The embedded cluster's binary folder, set by the native (SEA) server before the API loads.
+   * The backup tools look for `pg_dump` and `pg_restore` there before falling back to PATH.
+   */
+  EMBEDDED_POSTGRES_BIN_DIR: optionalStringEnv(),
+  /**
+   * Where the migration SQL lives. Unset in a source checkout and the Docker image (the tracked
+   * `apps/api/prisma/migrations`); the native server extracts the SQL as an asset and sets this.
+   */
+  PRINTSTREAM_MIGRATIONS_DIR: optionalStringEnv(),
   LIBRARY_MAX_UPLOAD_BYTES: positiveIntEnv(1024 * 1024 * 1024),
   LIBRARY_TRANSIENT_RETENTION_DAYS: positiveIntEnv(7),
   LIBRARY_RECYCLE_RETENTION_DAYS: positiveIntEnv(30),
@@ -491,6 +505,24 @@ const envSchema = z.object({
 
 const parsedEnv = envSchema.parse(process.env)
 
+// SEC-6: production refuses unsafe settings at start rather than running with them. The rules,
+// and the self-hosted exceptions to them, are in `env-production-guards.ts`. The raw DATABASE_URL
+// is passed because the schema has already filled in its development default by now.
+const productionGuards = checkProductionEnvironment({
+  nodeEnv: parsedEnv.NODE_ENV,
+  rawDatabaseUrl: process.env.DATABASE_URL,
+  devAuthUserId: parsedEnv.DEV_AUTH_USER_ID,
+  devAuthAccessKey: parsedEnv.DEV_AUTH_ACCESS_KEY
+})
+if (productionGuards.errors.length > 0) {
+  throw new Error(`Refusing to start:\n- ${productionGuards.errors.join('\n- ')}`)
+}
+for (const warning of productionGuards.warnings) {
+  // Plain console, like the rest of the API. This runs before `logs.ts` starts capturing, so the
+  // warning reaches the process output (`docker compose logs`), not the in-app Logs page.
+  console.warn(`[env] ${warning}`)
+}
+
 /** `SLICER_SERVICE_URL` split into normalized (trailing-slash-free) base URLs. */
 const slicerServiceUrls = (parsedEnv.SLICER_SERVICE_URL ?? '')
   .split(',')
@@ -519,6 +551,8 @@ const slicingMaxConcurrentJobs = parsedEnv.SLICING_MAX_CONCURRENT_JOBS
 
 export const env = {
   ...parsedEnv,
+  // The ordinary default is development; a credential shortcut needs an explicit opt-in mode.
+  DEV_AUTH_EXPLICIT_DEVELOPMENT: process.env.NODE_ENV === 'development',
   SLICER_SERVICE_URLS: slicerServiceUrls,
   // One concurrent slice per slicer instance unless explicitly overridden.
   SLICING_MAX_CONCURRENT_JOBS: slicingMaxConcurrentJobs,

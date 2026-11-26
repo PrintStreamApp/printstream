@@ -19,7 +19,7 @@
  */
 import { useQuery } from '@tanstack/react-query'
 import type { GeneralSettings } from '@printstream/shared'
-import { DEVICE_SLICER_DEVELOPER_MODE_OVERRIDE_KEY } from '../appShellHelpers'
+import { slicerDeveloperModeOverrideKey } from './storageKeys'
 import { useLocalStorageState } from '../hooks/useLocalStorageState'
 import { apiFetch } from './apiClient'
 import { useViewportSettingsDeviceOnly } from './editorViewportSettings'
@@ -40,7 +40,7 @@ function serializeNullableBoolean(value: boolean | null): string {
  */
 export function useSlicerDeveloperModeOverride(): [boolean | null, (value: boolean | null) => void] {
   const [value, setValue] = useLocalStorageState<boolean | null>(
-    DEVICE_SLICER_DEVELOPER_MODE_OVERRIDE_KEY,
+    slicerDeveloperModeOverrideKey,
     null,
     parseNullableBoolean,
     serializeNullableBoolean

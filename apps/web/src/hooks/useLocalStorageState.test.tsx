@@ -5,6 +5,7 @@ import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import type { JSDOM } from 'jsdom'
 import { installJsdomGlobals } from '../test-utils/jsdom'
 import { useLocalStorageState } from './useLocalStorageState'
+import { testStorageKey } from '../test-utils/storageKeyRef'
 
 let dom: JSDOM
 
@@ -22,7 +23,7 @@ after(() => {
 })
 
 function StoredValue({ storageKey }: { storageKey: string }) {
-  const [value, setValue] = useLocalStorageState(storageKey, 'fallback', (raw) => raw, String)
+  const [value, setValue] = useLocalStorageState(testStorageKey(storageKey), 'fallback', (raw) => raw, String)
   return (
     <button type="button" onClick={() => setValue('updated')}>
       {value}
@@ -76,7 +77,7 @@ test('a write reaches every instance reading the same key', async () => {
 /** A JSON preference: `parse` returns a fresh object each call, so a naive sync loops forever. */
 function JsonReader({ testid }: { testid: string }) {
   const [value, setValue] = useLocalStorageState<{ n: number }>(
-    'json-pref',
+    testStorageKey('json-pref'),
     { n: 0 },
     (raw) => { try { return JSON.parse(raw) as { n: number } } catch { return null } }
   )
@@ -104,13 +105,13 @@ test('an object-valued preference syncs without bouncing between instances', asy
 function PlainWriter() {
   // A RAW serializer, so what lands in storage is not JSON at all. The default is `JSON.stringify`,
   // which would have made the reader's `JSON.parse` succeed and prove nothing.
-  const [value, setValue] = useLocalStorageState<string>('mixed-parsers', 'a', (raw) => raw, (plain) => plain)
+  const [value, setValue] = useLocalStorageState<string>(testStorageKey('mixed-parsers'), 'a', (raw) => raw, (plain) => plain)
   return <button type="button" data-testid="plain" onClick={() => setValue('not json')}>{value}</button>
 }
 
 function StrictJsonReader() {
   // No try/catch here ON PURPOSE: the hook is what must survive a throwing parser.
-  const [value] = useLocalStorageState<{ n: number }>('mixed-parsers', { n: 7 }, (raw) => JSON.parse(raw) as { n: number })
+  const [value] = useLocalStorageState<{ n: number }>(testStorageKey('mixed-parsers'), { n: 7 }, (raw) => JSON.parse(raw) as { n: number })
   return <span data-testid="strict">{String(value.n)}</span>
 }
 

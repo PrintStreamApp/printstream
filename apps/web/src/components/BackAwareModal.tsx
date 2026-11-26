@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useRef, type ComponentProps } from 'react'
+import { useCallback, useEffect, useRef, useState, type ComponentProps } from 'react'
 import { Modal } from '@mui/joy'
 import React from 'react'
 import { setAppBusy } from '../lib/appBusy'
 import { backGestureCloseEvent } from './dialogBackGesture'
+import { isDialogPopupEvent, useDialogPopupAccessibility } from './useDialogPopupAccessibility'
 
 type JoyModalProps = ComponentProps<typeof Modal>
 type BackAwareModalOnClose = NonNullable<JoyModalProps['onClose']>
@@ -292,10 +293,12 @@ export function BackAwareModal({ open, onClose, dismissOnBackdropClick = false, 
     }
   }, [])
 
+  const [modalRoot, setModalRoot] = useState<HTMLDivElement | null>(null)
+
   /**
    * A close REQUEST, never a close: `onClose` is the consumer's to answer.
    *
-   * Every reason is handed straight over without touching history, and the entry is spent by
+   * Accepted reasons are handed over without touching history, and the entry is spent by
    * `syncClosedDialog` if the dialog actually closes -- which is the only moment that knows.
    * Hopping first spent the entry either way, which is wrong for any dialog that can DECLINE:
    * the 3MF editor backs out of its active tool on Escape, and answers "Discard unsaved changes?"
@@ -311,11 +314,16 @@ export function BackAwareModal({ open, onClose, dismissOnBackdropClick = false, 
    * A scrim click is dropped here rather than passed on, so no dialog has to remember to ignore
    * it: MUI removed `disableBackdropClick` in v5 and documents exactly this check as the
    * replacement. See `dismissOnBackdropClick` for the opt-out and why it is off by default.
+   * An Escape from an expanded owned popup closes that popup before requesting dialog close.
    */
   const handleClose = useCallback<BackAwareModalOnClose>((event, reason) => {
     if (reason === 'backdropClick' && !dismissOnBackdropClick) return
+    // Joy closes Select's portal on Escape but also bubbles the key to Modal.
+    // Let the active owned popup spend this key; the next Escape closes the dialog.
+    if (reason === 'escapeKeyDown' && isDialogPopupEvent(modalRoot, 'target' in event ? event.target : null)) return
     onCloseRef.current?.(event, reason)
-  }, [dismissOnBackdropClick])
+  }, [dismissOnBackdropClick, modalRoot])
+  useDialogPopupAccessibility(modalRoot, open)
 
-  return <Modal open={open} onClose={handleClose} disableAutoFocus disableRestoreFocus {...props} />
+  return <Modal ref={setModalRoot} open={open} onClose={handleClose} disableAutoFocus disableRestoreFocus {...props} />
 }

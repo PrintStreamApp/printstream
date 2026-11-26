@@ -32,9 +32,9 @@ import {
   describeSettingsBaseline,
   isNilSettingValue
 } from '@printstream/shared'
-import { saveSlicingPreset } from '../../lib/saveSlicingPreset'
 import { resolveWorkspaceFilamentConfig } from './workspaceFilamentResolver'
 import { useEffectiveSlicerDeveloperMode } from '../../lib/slicerDeveloperMode'
+import { useSaveSlicingPreset } from '../settings/useSaveSlicingPreset'
 import { usePromptDialog } from '../PromptDialogProvider'
 import { SettingsCatalogDialog } from '../settings/SettingsCatalogDialog'
 import { SettingsBaselineNote } from '../settings/SettingsBaselineNote'
@@ -43,6 +43,8 @@ import type { SettingsCatalogAdapter } from '../settings/settingsCatalogAdapter'
 export interface FilamentSettingsDialogProps {
   open: boolean
   onClose: () => void
+  /** Releases the caller's held catalogue after a successful preset save. */
+  onPresetSaved?: () => void | Promise<void>
   slicerTargetId: string
   /** Slicing profile id of the material (`builtin:filament:…`, a custom id, or `project:filament:…`). */
   filamentProfileId: string
@@ -101,6 +103,7 @@ export type FilamentConfigResolver = (request: {
 
 export default function FilamentSettingsDialog(props: FilamentSettingsDialogProps): JSX.Element {
   const { open, onClose, slicerTargetId, filamentProfileId, filamentProfileName, filamentPresetFullName, sourceFileId, projectFilamentId, initialOverrides, canEditOriginal, applyScope = 'slice', initialQuery, resolveConfig, onApply } = props
+  const saveSlicingPreset = useSaveSlicingPreset(props.onPresetSaved)
   // The shell applies the develop-tier gate itself; this only tells it which mode it is in.
   const showDeveloperOptions = useEffectiveSlicerDeveloperMode()
   const { promptText } = usePromptDialog()
@@ -337,9 +340,10 @@ export default function FilamentSettingsDialog(props: FilamentSettingsDialogProp
     setError(null)
     try {
       const presetConfig: Record<string, string | string[]> = { ...config, name, type: 'filament' }
-      await saveSlicingPreset({ kind: 'filament', name, overwrite, config: presetConfig })
-      onApply?.(changedOverrides())
-      onClose()
+      await saveSlicingPreset({ kind: 'filament', name, overwrite, config: presetConfig }, () => {
+        onApply?.(changedOverrides())
+        onClose()
+      })
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save preset')
     } finally {

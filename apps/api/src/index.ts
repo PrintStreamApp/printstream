@@ -25,7 +25,8 @@ import { pluginRegistry } from './plugin/registry.js'
 import { loadInstalledExternalPlugins } from './plugin/installer.js'
 import { loadNotificationTemplates } from './lib/notification-templates.js'
 import { startNotificationSnapshotPrecapture } from './lib/notification-snapshots.js'
-import { startPrintJobRecorder, stopPrintJobRecorder } from './lib/print-job-recorder.js'
+import { startPrinterFaultRecorder, stopPrinterFaultRecorder } from './lib/printer-fault-recorder.js'
+import { startPrintJobRecorder, stopPrintJobRecorder, waitForPrintJobRecorderIdle } from './lib/print-job-recorder.js'
 import { startDispatchReconcile, stopDispatchReconcile } from './lib/dispatch-reconcile.js'
 import {
   startActivePrintObjectCache,
@@ -125,6 +126,7 @@ void finalizeApp()
     // `job.finished` handler runs first and the cached frame is ready
     // by the time the notification plugins format their messages.
     try {
+      await startPrinterFaultRecorder()
       startPrintJobRecorder()
     } catch (error) {
       console.error('Failed to start print job recorder', error)
@@ -213,7 +215,7 @@ function shutdown(signal: NodeJS.Signals) {
   // tsx/nodemon restarts indefinitely. Force-drop them so the process
   // exits promptly.
   httpServer.closeAllConnections?.()
-  void Promise.allSettled([printDispatcher.stop(), deleteOperationDispatcher.waitForIdle(), printerManager.stop(), pluginRegistry.shutdown()])
+  void Promise.allSettled([waitForPrintJobRecorderIdle().then(stopPrinterFaultRecorder), printDispatcher.stop(), deleteOperationDispatcher.waitForIdle(), printerManager.stop(), pluginRegistry.shutdown()])
     // Drain boot-stage teardown (e.g. stopping the embedded Postgres cluster,
     // registered by server.ts) before exiting, within the force-exit budget below.
     .then(runShutdownHooks)

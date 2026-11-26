@@ -1,8 +1,8 @@
 /**
- * The merged job-history contract: finished PRINT jobs and terminal SLICING jobs presented as
+ * The merged job-history contract: finished print jobs, terminal slicing jobs, and standalone printer faults presented as
  * one filterable, sortable, server-paginated list (the Jobs view's "Job history" section).
  *
- * The history must page as a MERGED list, interleaving two independently-paged sources cannot
+ * The history must page as a MERGED list, interleaving independently-paged sources cannot
  * produce correct random-access pages, so the API merges, filters, sorts, and pages here
  * (`selectJobHistoryPage`, called by `GET /api/jobs/history`) and the web renders the page it is
  * given (`JobsView`, the counterpart). The derivation of an entry's identity/result/sort-keys/
@@ -18,6 +18,7 @@
  * The query's list parameters (`printerIds`, `results`) ride the URL comma-separated.
  */
 import { z } from 'zod'
+import { printerFaultHistorySchema, type PrinterFaultHistory } from './printer-faults.js'
 import { formatLibraryFileName } from './library-display.js'
 import { printJobSchema, type PrintJob } from './printer-contracts.js'
 import { getSlicingJobStatusLabel, slicingJobSchema, type SlicingJob } from './slicing.js'
@@ -36,7 +37,7 @@ export function slicingHistoryResult(job: SlicingJob): PrintJob['result'] {
 
 const commaSeparated = z.string().default('').transform((value) => value.split(',').filter(Boolean))
 
-export const jobHistoryKindSchema = z.enum(['print', 'slicing'])
+export const jobHistoryKindSchema = z.enum(['print', 'slicing', 'printer-fault'])
 export type JobHistoryKind = z.infer<typeof jobHistoryKindSchema>
 
 export const jobHistoryQuerySchema = z.object({
@@ -54,7 +55,8 @@ export type JobHistoryQuery = z.infer<typeof jobHistoryQuerySchema>
 
 export const jobHistoryEntrySchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('print'), printJob: printJobSchema }),
-  z.object({ kind: z.literal('slicing'), slicingJob: slicingJobSchema })
+  z.object({ kind: z.literal('slicing'), slicingJob: slicingJobSchema }),
+  z.object({ kind: z.literal('printer-fault'), printerFault: printerFaultHistorySchema })
 ])
 export type JobHistoryEntry = z.infer<typeof jobHistoryEntrySchema>
 
@@ -78,7 +80,7 @@ export type JobHistoryResponse = z.infer<typeof jobHistoryResponseSchema>
 export interface JobHistoryDerivedFields {
   id: string
   printerId: string | null
-  result: PrintJob['result']
+  result: PrintJob['result'] | null
   startedAt: string
   endedAt: string
   searchHaystack: string
@@ -109,6 +111,18 @@ export function deriveJobHistoryFields(
       ].join(' ').toLowerCase()
     }
   }
+  if (entry.kind === 'printer-fault') {
+    const period = entry.printerFault
+    const fault = period.fault
+    return {
+      id: period.id,
+      printerId: period.printerId,
+      result: null,
+      startedAt: period.startedAt,
+      endedAt: period.endedAt ?? period.startedAt,
+      searchHaystack: ['Printer faults', period.printerName, fault.source, fault.code, fault.message, fault.state, fault.firstObservedAt, period.startedAt].join(' ').toLowerCase()
+    }
+  }
   const job = entry.slicingJob
   const printerId = job.target.mode === 'realPrinter' ? job.target.printerId : null
   const printerName = printerId ? (printerNameFor(printerId) ?? printerId) : 'Manual profile'
@@ -133,11 +147,12 @@ export function deriveJobHistoryFields(
  * Merge, filter, sort, and page the history. Callers pass FINISHED print jobs and TERMINAL
  * slicing jobs only: active work belongs to the live sections, not history.
  *
- * Materializes both full sets to merge them; fine into the tens of thousands of jobs this
+ * Materializes the full source sets to merge them; fine into the tens of thousands of jobs this
  * bounds the WIRE payload for (the old endpoint shipped the whole set to the browser instead).
  * Revisit with a database-side union if server-side cost ever matters.
  */
 export function selectJobHistoryPage(input: {
+  printerFaults?: ReadonlyArray<PrinterFaultHistory>
   printJobs: ReadonlyArray<PrintJob>
   slicingJobs: ReadonlyArray<SlicingJob>
   query: JobHistoryQuery
@@ -149,6 +164,7 @@ export function selectJobHistoryPage(input: {
 }): JobHistoryResponse {
   const { query } = input
   const entries: Array<{ entry: JobHistoryEntry; derived: JobHistoryDerivedFields }> = [
+    ...(input.printerFaults ?? []).map((printerFault) => ({ kind: 'printer-fault', printerFault } as const)),
     ...input.slicingJobs.map((slicingJob) => ({ kind: 'slicing', slicingJob } as const)),
     ...input.printJobs.map((printJob) => ({ kind: 'print', printJob } as const))
   ].map((entry) => ({ entry, derived: deriveJobHistoryFields(entry, input.printerNameFor) }))
@@ -158,7 +174,7 @@ export function selectJobHistoryPage(input: {
       if (derived.printerId == null) return []
       const name = entry.kind === 'print'
         ? entry.printJob.printerName
-        : input.printerNameFor(derived.printerId) ?? derived.printerId
+        : entry.kind === 'printer-fault' ? entry.printerFault.printerName : input.printerNameFor(derived.printerId) ?? derived.printerId
       return [{ id: derived.printerId, name }]
     })
     .filter((printer, index, printers) => printers.findIndex((entry) => entry.id === printer.id) === index)
@@ -171,7 +187,7 @@ export function selectJobHistoryPage(input: {
   const filtered = entries.filter(({ entry, derived }) => {
     if (kinds.size > 0 && !kinds.has(entry.kind)) return false
     if (printerIds.size > 0 && (derived.printerId == null || !printerIds.has(derived.printerId))) return false
-    if (results.size > 0 && !results.has(derived.result)) return false
+    if (results.size > 0 && (derived.result == null || !results.has(derived.result))) return false
     if (query.tagIds.length > 0 && !input.matchesTags?.(entry)) return false
     if (!search) return true
     return derived.searchHaystack.includes(search) || (input.matchesAdditionalSearch?.(entry) ?? false)
@@ -180,9 +196,11 @@ export function selectJobHistoryPage(input: {
   filtered.sort((left, right) => {
     const leftDate = query.sortBy === 'started' ? left.derived.startedAt : left.derived.endedAt
     const rightDate = query.sortBy === 'started' ? right.derived.startedAt : right.derived.endedAt
-    return query.sortDirection === 'desc'
+    const order = query.sortDirection === 'desc'
       ? rightDate.localeCompare(leftDate)
       : leftDate.localeCompare(rightDate)
+    // Stable ordering across equal observation timestamps and random-access pages.
+    return order || `${left.entry.kind}:${left.derived.id}`.localeCompare(`${right.entry.kind}:${right.derived.id}`)
   })
 
   const start = (query.page - 1) * query.pageSize

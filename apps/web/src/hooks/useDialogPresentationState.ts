@@ -17,13 +17,15 @@ import {
   type DialogPresentation,
   type DialogPresentationInputs
 } from '../lib/dialogPresentation'
+import { readStoredValue, writeStoredValue, type StorageKeyRef } from '../lib/browserStorageKeys'
 
 export interface DialogPresentationStateOptions extends Pick<DialogPresentationInputs, 'base' | 'locked'> {
   /**
-   * localStorage key for the maximized preference. Pass `null` for a dialog with no maximize toggle
-   * (one whose `base` is already `maximized`), nothing is read or written.
+   * Declared storage key for the maximized preference (`lib/browserStorageKeys.ts`). Pass `null` for
+   * a dialog with no maximize toggle (one whose `base` is already `maximized`): nothing is read or
+   * written.
    */
-  maximizedStorageKey: string | null
+  maximizedStorageKey: StorageKeyRef | null
 }
 
 export interface DialogPresentationState {
@@ -34,14 +36,10 @@ export interface DialogPresentationState {
   setFullScreen: (next: boolean) => void
 }
 
-function readMaximizedPreference(key: string | null, fallback: boolean): boolean {
-  if (!key || typeof window === 'undefined') return fallback
-  try {
-    const raw = window.localStorage.getItem(key)
-    return raw === 'true' ? true : raw === 'false' ? false : fallback
-  } catch {
-    return fallback
-  }
+function readMaximizedPreference(key: StorageKeyRef | null, fallback: boolean): boolean {
+  if (!key) return fallback
+  const raw = readStoredValue(key)
+  return raw === 'true' ? true : raw === 'false' ? false : fallback
 }
 
 export function useDialogPresentationState(options: DialogPresentationStateOptions): DialogPresentationState {
@@ -51,12 +49,7 @@ export function useDialogPresentationState(options: DialogPresentationStateOptio
 
   const setMaximized = useCallback((next: boolean) => {
     setMaximizedState(next)
-    if (!maximizedStorageKey || typeof window === 'undefined') return
-    try {
-      window.localStorage.setItem(maximizedStorageKey, String(next))
-    } catch {
-      /* ignore unavailable storage */
-    }
+    if (maximizedStorageKey) writeStoredValue(maximizedStorageKey, String(next))
   }, [maximizedStorageKey])
 
   const presentation = useMemo(

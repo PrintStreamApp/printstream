@@ -24,7 +24,7 @@
 import { createContext, createElement, useContext, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import type { EditorSidebarSideSetting, GeneralSettings } from '@printstream/shared'
-import { DEVICE_EDITOR_SHOW_BED_MODEL_OVERRIDE_KEY_PREFIX, DEVICE_EDITOR_SIDEBAR_SIDE_OVERRIDE_KEY_PREFIX } from '../appShellHelpers'
+import { editorShowBedModelOverrideKeys, editorSidebarSideOverrideKeys } from './storageKeys'
 import { useLocalStorageState } from '../hooks/useLocalStorageState'
 import { useAuthBootstrapQuery } from './authQuery'
 import { apiFetch } from './apiClient'
@@ -97,7 +97,7 @@ function useSharedGeneralSettings(): GeneralSettings | undefined {
 export function useShowBedModelOverride(): [boolean | null, (value: boolean | null) => void] {
   const workspace = useWorkspaceKeySuffix()
   const [value, setValue] = useLocalStorageState<boolean | null>(
-    `${DEVICE_EDITOR_SHOW_BED_MODEL_OVERRIDE_KEY_PREFIX}.${workspace}`,
+    editorShowBedModelOverrideKeys.at(workspace),
     null,
     parseNullableBoolean,
     serializeNullable
@@ -109,7 +109,7 @@ export function useShowBedModelOverride(): [boolean | null, (value: boolean | nu
 export function useSidebarSideOverride(): [EditorSidebarSideSetting | null, (value: EditorSidebarSideSetting | null) => void] {
   const workspace = useWorkspaceKeySuffix()
   const [value, setValue] = useLocalStorageState<EditorSidebarSideSetting | null>(
-    `${DEVICE_EDITOR_SIDEBAR_SIDE_OVERRIDE_KEY_PREFIX}.${workspace}`,
+    editorSidebarSideOverrideKeys.at(workspace),
     null,
     parseNullableSide,
     serializeNullable

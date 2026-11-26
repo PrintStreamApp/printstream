@@ -5,6 +5,7 @@ import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import type { JSDOM } from 'jsdom'
 import { installJsdomGlobals } from '../test-utils/jsdom'
 import { usePersistentState } from './usePersistentState'
+import { testStorageKey } from '../test-utils/storageKeyRef'
 
 let dom: JSDOM
 
@@ -38,7 +39,7 @@ function sanitize(value: unknown): Prefs {
 }
 
 function Harness({ storageKey }: { storageKey: string }) {
-  const [prefs, setPrefs] = usePersistentState<Prefs>(storageKey, DEFAULTS, sanitize)
+  const [prefs, setPrefs] = usePersistentState<Prefs>(testStorageKey(storageKey), DEFAULTS, sanitize)
   return (
     <button type="button" onClick={() => setPrefs((prev) => ({ ...prev, group: 'type' }))}>
       {prefs.group}:{prefs.page}

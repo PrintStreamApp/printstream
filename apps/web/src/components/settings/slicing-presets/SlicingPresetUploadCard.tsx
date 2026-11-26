@@ -8,13 +8,14 @@
 import React from 'react'
 import { Alert, Box, Button, Card, CardContent, Stack, Typography } from '@mui/joy'
 import { extractErrorMessage, type SlicingPresetResponse } from '@printstream/shared'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation } from '@tanstack/react-query'
 import { ApiError, apiFetch } from '../../../lib/apiClient'
 import { usePromptDialog } from '../../PromptDialogProvider'
 import { buildSlicingPresetUpload } from './slicingPresetUpload'
+import { useRefreshSlicingPresets } from '../useRefreshSlicingPresets'
 
 export function SlicingPresetUploadCard(): JSX.Element {
-  const queryClient = useQueryClient()
+  const refreshPresets = useRefreshSlicingPresets()
   const { confirm } = usePromptDialog()
   const inputRef = React.useRef<HTMLInputElement | null>(null)
   const [uploadError, setUploadError] = React.useState<string | null>(null)
@@ -28,9 +29,7 @@ export function SlicingPresetUploadCard(): JSX.Element {
         method: 'POST',
         body: await buildSlicingPresetUpload(file, overwrite)
       }),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ['slicing-profiles'] })
-    }
+    onSuccess: refreshPresets
   })
 
   async function handleUploadFile(file: File) {

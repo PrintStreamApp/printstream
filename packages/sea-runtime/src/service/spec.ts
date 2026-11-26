@@ -31,6 +31,10 @@ export interface ServiceSpec {
   /** Absolute path of the installed executable the service runs. */
   exePath: string
   args: string[]
+  /** Windows-only explicit graceful-stop helper; absent keeps legacy WinSW behavior. */
+  stopCommand?: { exePath: string; args: string[] }
+  /** Linux-only service-owned /run leaf; directory mode defaults to 0755. */
+  runtimeDirectory?: { name: string; mode?: number }
   dataDir: string
   logsDir: string
   /** Environment pinned in the service definition (e.g. BRIDGE_DATA_DIR). */
@@ -39,6 +43,12 @@ export interface ServiceSpec {
   configFile?: string
   /** POSIX user the service runs as (Linux only). */
   serviceUser?: string
+  /**
+   * Linux-only opt-in for a dedicated install directory the service must own
+   * before its first launch (including its executable for in-place updates).
+   * Trusted installers supply the exact directory; never inferred from exePath.
+   */
+  writableInstallDir?: string
   /**
    * Windows-only: the built-in account the service logs on as (e.g.
    * `NT AUTHORITY\\NetworkService`). When unset the service runs as LocalSystem.

@@ -6,7 +6,7 @@
  * pre-parsed plate metadata rather than raw XML). Two call sites had that call copied out, the
  * project open path and the geometry-import path, and the index decides which PLATE an import is
  * extracted from, so a drift between them would not error, it would silently import different
- * geometry. The parser's own checklist (the API development notes) anticipates new index inputs,
+ * geometry. The parser's own checklist (routed from the API development notes) anticipates new index inputs,
  * which is exactly when a second copy gets missed.
  *
  * Counterpart: `readPlateIndex` in `apps/api/src/lib/three-mf-reader.ts` (the same parse, Node ZIP).

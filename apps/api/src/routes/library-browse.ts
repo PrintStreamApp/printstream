@@ -8,6 +8,8 @@ import type { LibraryFile as LibraryFileModel, Prisma } from '@prisma/client'
 import type { Router } from 'express'
 import {
   libraryBrowseResponseSchema,
+  librarySaveConflictQuerySchema,
+  librarySaveConflictResponseSchema,
   LIBRARY_VIEW_PERMISSION,
   librarySortKeySchema,
   librarySortDirectionSchema,
@@ -17,7 +19,9 @@ import {
 } from '@printstream/shared'
 import { requireRequestPermission } from '../lib/authorization.js'
 import { bridgeSessionManager } from '../lib/bridge-session-manager.js'
-import { notFound } from '../lib/http-error.js'
+import { badRequest, notFound } from '../lib/http-error.js'
+import { findLibraryOverwriteTarget } from '../lib/library-files.js'
+import { requireRequestWorkspaceId } from '../lib/request-helpers.js'
 import { getFavoritedFileIds, resolveFavoriteOwnerKey } from '../lib/library-favorites.js'
 import { libraryTagWhere, parseLibraryTagIds } from '../lib/library-tag-filters.js'
 import { visibleLibraryFilesWhere } from '../lib/library-visibility.js'
@@ -73,6 +77,18 @@ export function registerLibraryBrowseRoutes(
   router: Router,
   toDto: (row: LibraryFileModel, options: { cacheOnly: boolean; favorite: boolean }) => Promise<LibraryFileDto>
 ): void {
+  router.get('/save-conflict', requireRequestPermission(LIBRARY_VIEW_PERMISSION), async (request, response) => {
+    const query = librarySaveConflictQuerySchema.safeParse(request.query)
+    if (!query.success) throw badRequest('Invalid library save destination')
+    const row = await findLibraryOverwriteTarget({
+      workspaceId: requireRequestWorkspaceId(request),
+      ownerBridgeId: query.data.bridgeId,
+      folderId: query.data.folderId ?? null,
+      name: query.data.fileName
+    })
+    response.json(librarySaveConflictResponseSchema.parse({ file: row ? { id: row.id, name: row.name } : null }))
+  })
+
   router.get('/', requireRequestPermission(LIBRARY_VIEW_PERMISSION), async (request, response) => {
     const folderId = parseFolderQuery(request.query.folderId)
     const workspaceId = request.workspace?.id ?? null

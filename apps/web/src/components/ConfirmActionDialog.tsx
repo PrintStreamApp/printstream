@@ -13,6 +13,7 @@ export function ConfirmActionDialog({
   color = 'danger',
   confirmDecorator = <DeleteRoundedIcon />,
   pending = false,
+  confirmDisabled = false,
   error = null,
   onClose,
   onConfirm
@@ -24,6 +25,8 @@ export function ConfirmActionDialog({
   cancelLabel?: string
   color?: ColorPaletteProp
   confirmDecorator?: ReactNode
+  /** Disable only confirmation while keeping Cancel available after live authority changes. */
+  confirmDisabled?: boolean
   pending?: boolean
   error?: string | null
   onClose: () => void
@@ -54,6 +57,7 @@ export function ConfirmActionDialog({
             variant="solid"
             color={color}
             loading={pending}
+            disabled={confirmDisabled}
             startDecorator={confirmDecorator}
             onClick={onConfirm}
           >

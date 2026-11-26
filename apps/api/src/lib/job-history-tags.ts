@@ -26,6 +26,7 @@ export function jobHistoryTagCatalog(byJob: ReadonlyMap<string, JobTag[]>): JobT
 export function jobHistoryTagMatcher(byJob: ReadonlyMap<string, JobTag[]>, search: string, tagIds: readonly string[] = []): (entry: JobHistoryEntry) => boolean {
   const query = search.toLocaleLowerCase()
   return (entry) => {
+    if (entry.kind === 'printer-fault') return false
     const id = entry.kind === 'print' ? entry.printJob.id : entry.slicingJob.id
     const tags = byJob.get(`${entry.kind}:${id}`) ?? []
     if (tagIds.length) return tagIds.every((id) => tags.some((tag) => tag.id === id))

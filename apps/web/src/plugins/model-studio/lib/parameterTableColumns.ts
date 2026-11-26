@@ -39,9 +39,6 @@ export const PARAMETER_TABLE_DEFAULT_KEYS: readonly string[] = [
   'brim_type'
 ]
 
-/** Per-device storage key for the chosen columns. Display preference, so it never leaves the browser. */
-export const PARAMETER_TABLE_COLUMNS_STORAGE_KEY = 'printstream.editor.parameterTable.columns'
-
 /**
  * A stored column choice, made safe to render.
  *

@@ -1,7 +1,9 @@
 process.env.NODE_ENV = 'test'
 
 import assert from 'node:assert/strict'
-import { rm } from 'node:fs/promises'
+import { rm, mkdtemp, stat } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 import { test } from 'node:test'
 import express from 'express'
 import type { AddressInfo } from 'node:net'
@@ -728,6 +730,106 @@ test('an import into a chosen folder does not create the default folder', async 
   assert.equal(calls[0]?.hidden, false)
 })
 
+test('an explicitly confirmed bridge root does not create the default import folder', async () => {
+  const { calls, persist } = recordingPersist()
+  let folderCreateCount = 0
+  stub(prisma.libraryFolder, 'findFirst', async () => null)
+  stub(prisma.libraryFolder, 'create', async () => {
+    folderCreateCount += 1
+    return { id: 'should-not-happen', ownerBridgeId: 'bridge-1' }
+  })
+
+  const plugin = createRemoteImportsPlugin({
+    async downloadToTempFile() {
+      return {
+        fileName: 'mesh.stl',
+        filePath: '/tmp/mesh.stl',
+        cleanupPath: '/tmp/mesh.stl',
+        sizeBytes: 2048
+      }
+    },
+    persistLibraryFile: persist
+  })
+
+  await withRemoteImportsApp({
+    authEnabled: false,
+    actor: { type: 'anonymous' },
+    permissions: [],
+    runtimePolicy: { demoMode: false }
+  }, async ({ baseUrl }) => {
+    const response = await fetch(`${baseUrl}/api/plugins/remote-imports/import-url`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        url: 'https://downloads.example.com/mesh.stl',
+        bridgeId: 'bridge-1',
+        folderId: null,
+        destinationSelected: true
+      })
+    })
+
+    assert.equal(response.status, 201)
+    assert.equal((await response.json()).canPrintDirectly, false)
+  }, plugin)
+
+  assert.equal(folderCreateCount, 0)
+  assert.equal(calls[0]?.folderId, null)
+  // Imports are never hidden: the option is gone from the contract, and a hidden row
+  // would be invisible in the library the user just imported into.
+  assert.equal(calls[0]?.hidden, false)
+})
+
+test('a chosen import filename preserves spaces and the original extension', async () => {
+  const { calls, persist } = recordingPersist()
+  let folderCreateCount = 0
+  stub(prisma.libraryFolder, 'findFirst', async () => null)
+  stub(prisma.libraryFolder, 'create', async () => {
+    folderCreateCount += 1
+    return { id: 'should-not-happen', ownerBridgeId: 'bridge-1' }
+  })
+
+  const plugin = createRemoteImportsPlugin({
+    async downloadToTempFile() {
+      return {
+        fileName: 'mesh.gcode.3mf',
+        filePath: '/tmp/mesh.stl',
+        cleanupPath: '/tmp/mesh.stl',
+        sizeBytes: 2048
+      }
+    },
+    persistLibraryFile: persist
+  })
+
+  await withRemoteImportsApp({
+    authEnabled: false,
+    actor: { type: 'anonymous' },
+    permissions: [],
+    runtimePolicy: { demoMode: false }
+  }, async ({ baseUrl }) => {
+    const response = await fetch(`${baseUrl}/api/plugins/remote-imports/import-url`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        url: 'https://downloads.example.com/mesh.stl',
+        bridgeId: 'bridge-1',
+        folderId: null,
+        destinationSelected: true,
+        outputFileName: 'My renamed model'
+      })
+    })
+
+    assert.equal(response.status, 201)
+    assert.equal((await response.json()).canPrintDirectly, true)
+  }, plugin)
+
+  assert.equal(folderCreateCount, 0)
+  assert.equal(calls[0]?.folderId, null)
+  assert.equal(calls[0]?.fileName, 'My renamed model.gcode.3mf')
+  // Imports are never hidden: the option is gone from the contract, and a hidden row
+  // would be invisible in the library the user just imported into.
+  assert.equal(calls[0]?.hidden, false)
+})
+
 test('remote imports do not store bytes when the third-party folder cannot be prepared', async () => {
   const { calls, persist } = recordingPersist()
   stub(prisma.libraryFolder, 'findFirst', async () => null)
@@ -805,6 +907,7 @@ async function withRemoteImportsApp(
   // bambu-cloud-sync, so the test registers a resolver the same way that plugin does.
   const unregisterAccount = bambuAccountResolvers.register(async () => workspaceState.bambuAccount ?? null)
 
+  const shutdowns: Array<() => void | Promise<void>> = []
   await plugin.register({
     pluginName: 'remote-imports',
     logger: { info() {}, warn() {}, error() {} },
@@ -820,7 +923,7 @@ async function withRemoteImportsApp(
         return this
       }
     },
-    onShutdown() {},
+    onShutdown(callback) { shutdowns.push(callback) },
     registerPrintGuard() { return () => undefined },
     registerAuthProvider() { return () => undefined },
     registerSlotFilamentResolver() { return () => undefined },
@@ -835,8 +938,43 @@ async function withRemoteImportsApp(
   } finally {
     unregisterAccount()
     await close(server)
+    for (const shutdown of shutdowns) await shutdown()
   }
 }
+
+test('prepared URL imports confirm the actual extension once, retain bytes, and cancel without a library write', async () => {
+  const { persist, calls } = recordingPersist()
+  let downloads = 0
+  const directories: string[] = []
+  const plugin = createRemoteImportsPlugin({ persistLibraryFile: persist, downloadToTempFile: async () => {
+    downloads += 1
+    const directory = await mkdtemp(path.join(tmpdir(), 'prepared-test-'))
+    directories.push(directory)
+    return { fileName: 'actual.gcode.3mf', filePath: path.join(directory, 'actual.gcode.3mf'), cleanupPath: directory, sizeBytes: 100 }
+  } })
+  const auth: RequestAuthContext = { authEnabled: true, actor: { type: 'user', userId: 'creator' }, permissions: [LIBRARY_UPLOAD_PERMISSION], runtimePolicy: { demoMode: false } }
+  await withRemoteImportsApp(auth, async ({ baseUrl }) => {
+    const post = (endpoint: string, body: unknown) => fetch(`${baseUrl}/api/plugins/remote-imports/${endpoint}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    const prepared = await (await post('prepare-url', { url: 'https://downloads.example/model.stl' })).json()
+    assert.equal(prepared.fileName, 'actual.gcode.3mf')
+    assert.equal(calls.length, 0)
+    const choice = { url: 'https://downloads.example/model.stl', preparedImportId: prepared.id, bridgeId: 'chosen-bridge', folderId: null, outputFileName: 'Chosen', destinationSelected: true }
+    auth.actor = { type: 'user', userId: 'other' }
+    assert.equal((await post('import-url', choice)).status, 404)
+    auth.actor = { type: 'user', userId: 'creator' }
+    assert.equal((await post('import-url', choice)).status, 201)
+    assert.equal((await post('import-url', choice)).status, 201)
+    assert.equal(downloads, 1)
+    assert.equal(calls.length, 1)
+    assert.equal(calls[0]?.fileName, 'Chosen.gcode.3mf')
+    assert.equal(calls[0]?.bridgeId, 'chosen-bridge')
+    await assert.rejects(stat(directories[0]!))
+    const next = await (await post('prepare-url', { url: 'https://downloads.example/other.stl' })).json()
+    assert.equal((await fetch(`${baseUrl}/api/plugins/remote-imports/prepared/${next.id}`, { method: 'DELETE' })).status, 204)
+    assert.equal(calls.length, 1)
+    await assert.rejects(stat(directories[1]!))
+  }, plugin)
+})
 
 function listen(app: express.Express): Promise<Server> {
   return new Promise((resolve, reject) => {

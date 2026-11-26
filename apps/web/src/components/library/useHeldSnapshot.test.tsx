@@ -4,7 +4,8 @@ import { after, afterEach, test } from 'node:test'
 import { installJsdomGlobals } from '../../test-utils/jsdom'
 
 const dom = installJsdomGlobals()
-const { renderHook, cleanup } = await import('@testing-library/react')
+const { renderHook, act, cleanup } = await import('@testing-library/react')
+const React = await import('react')
 const { useHeldSnapshot } = await import('./useHeldSnapshot')
 afterEach(cleanup)
 after(() => dom.window.close())
@@ -27,4 +28,33 @@ test('drops the previous engine while waiting, then holds the new ready catalogu
   assert.deepEqual(view.result.current, [])
   view.rerender({ ...props, scope: 'b', value: ['B'] })
   assert.deepEqual(view.result.current, ['B'])
+})
+
+test('an open process draft survives a catalogue resolver refresh but releases on source changes or close', () => {
+  const first = async () => 'first baseline'
+  const refreshed = async () => 'refreshed baseline'
+  const props = { value: first, hold: true, ready: true, token: 0, scope: 'project-a:engine-a' }
+  const view = renderHook((p: typeof props) => {
+    const resolver = useHeldSnapshot(p.value, p)
+    const [draft, setDraft] = React.useState('preset')
+    // Mirrors the process dialog's initialization when its resolver identity changes.
+    React.useEffect(() => { setDraft('preset') }, [resolver])
+    return { resolver, draft, setDraft }
+  }, { initialProps: props })
+  act(() => { view.result.current.setDraft('edited') })
+  view.rerender({ ...props, value: refreshed })
+  assert.equal(view.result.current.resolver, first)
+  assert.equal(view.result.current.draft, 'edited')
+
+  view.rerender({ ...props, value: refreshed, scope: 'project-a:engine-b' })
+  assert.equal(view.result.current.resolver, refreshed)
+  assert.equal(view.result.current.draft, 'preset')
+  act(() => { view.result.current.setDraft('engine-b edit') })
+  view.rerender({ ...props, value: first, scope: 'project-b:engine-b' })
+  assert.equal(view.result.current.resolver, first)
+  assert.equal(view.result.current.draft, 'preset')
+
+  view.rerender({ ...props, value: refreshed, hold: false, scope: 'project-b:engine-b' })
+  view.rerender({ ...props, value: refreshed, scope: 'project-b:engine-b' })
+  assert.equal(view.result.current.resolver, refreshed)
 })

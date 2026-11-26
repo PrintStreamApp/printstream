@@ -11,6 +11,7 @@ import { useLocalStorageState } from '../../hooks/useLocalStorageState'
 import { useEffectiveSidebarSide } from '../../lib/editorViewportSettings'
 import { choosePlateStripOrientation, EDITOR_GRID_GAP_PX } from './lib/editorChromeLayout'
 import { useSidebarResize } from './lib/useSidebarResize'
+import { editorSidebarCollapsedKey } from './storageKeys'
 
 interface EditorChromeLayoutOptions {
   hosting: 'dialog' | 'page' | undefined
@@ -23,7 +24,7 @@ export function useEditorChromeLayout({ hosting }: EditorChromeLayoutOptions) {
   const { sidebarWidth, resizeHandleProps } = useSidebarResize(sidebarSide)
   const isMobile = useMobileViewport()
   const [sidebarCollapsed, setSidebarCollapsed] = useLocalStorageState<boolean>(
-    'bambu.editor.sidebarCollapsed',
+    editorSidebarCollapsedKey,
     false,
     (raw) => (raw === 'true' ? true : raw === 'false' ? false : null),
     String

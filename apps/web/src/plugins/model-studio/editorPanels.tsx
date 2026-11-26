@@ -92,6 +92,7 @@ import { useListReorderDrag, useSingleListReorderDrag, type ListReorderGroup } f
 import { ListReorderCaret } from '../../components/ListReorderCaret'
 import { PLATE_PICKER_TILE_WIDTH_PX } from '../../components/platePickerLayout'
 import type { FilamentOption } from './EditorView'
+import { editorPlateStripCollapsedKey } from './storageKeys'
 
 /**
  * Hover rule for the tool rail: opens every button's collapsed label together, so the rail
@@ -227,7 +228,7 @@ export function PlateThumbnailStrip({
   // Collapsed mode trades the thumbnails for name-only chips so the 3D viewport gets the
   // vertical space back; the preference sticks across sessions.
   const [collapsed, setCollapsed] = useLocalStorageState(
-    'bambu.editor.plateStripCollapsed',
+    editorPlateStripCollapsedKey,
     false,
     (raw) => (raw === 'true' ? true : raw === 'false' ? false : null),
     String

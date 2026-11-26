@@ -3,7 +3,8 @@
  * onboarding paths can be remembered; never store auth codes or arbitrary URLs.
  * Session storage survives the document navigations between the app's shells.
  */
-const RETURN_KEY = 'printstream.native.returnPath'
+import { readStoredValue, removeStoredValue, writeStoredValue } from '../lib/browserStorageKeys'
+import { nativeReturnPathKey } from '../lib/storageKeys'
 
 /** Keep only local product/onboarding paths, dropping query strings and fragments. */
 export function nativeReturnPath(value: string): string | null {
@@ -19,16 +20,17 @@ export function nativeReturnPath(value: string): string | null {
 export function rememberNativeReturnPath(pathname: string): void {
   const path = nativeReturnPath(pathname)
   if (!path) return
-  try { sessionStorage.setItem(RETURN_KEY, path) } catch { /* Navigation works without storage. */ }
+  // Best-effort: navigation works without storage.
+  writeStoredValue(nativeReturnPathKey, path)
 }
 
 /** Info pages return to their caller; onboarding itself can always return to welcome. */
 export function readNativeReturnPath(currentPath: string): string | null {
   if (nativeReturnPath(currentPath)) return null
-  try { return nativeReturnPath(sessionStorage.getItem(RETURN_KEY) ?? '') } catch { return null }
+  return nativeReturnPath(readStoredValue(nativeReturnPathKey) ?? '')
 }
 
 /** Clear excursion history when returning to the native chooser, not the login session. */
 export function clearNativeReturnPath(): void {
-  try { sessionStorage.removeItem(RETURN_KEY) } catch { /* Best effort. */ }
+  removeStoredValue(nativeReturnPathKey)
 }

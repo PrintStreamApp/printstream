@@ -24,14 +24,14 @@ export function registerPrinterStoragePlatesRoute(router: Router): void {
     const filePath = normalizePrinterPath(request.query.path)
     const signal = requestAbortSignal(request, response)
     if (path.extname(filePath).toLowerCase() !== '.3mf') {
-      response.json({ plates: [], projectFilaments: [], compatiblePrinterModels: [], supportFilamentIds: [], printerProfileName: null, processProfileName: null, processProfileInherits: null } satisfies ThreeMfIndex)
+      response.json({ plates: [], projectFilaments: [], compatiblePrinterModels: [], supportFilamentIds: [], printerProfileName: null, printerProfileInherits: null, processProfileName: null, processProfileInherits: null } satisfies ThreeMfIndex)
       return
     }
 
     try {
       const index = await readPrinterStorageThreeMfIndex(printer, filePath, signal)
       if (!index) {
-        response.json({ plates: [], projectFilaments: [], compatiblePrinterModels: [], supportFilamentIds: [], printerProfileName: null, processProfileName: null, processProfileInherits: null } satisfies ThreeMfIndex)
+        response.json({ plates: [], projectFilaments: [], compatiblePrinterModels: [], supportFilamentIds: [], printerProfileName: null, printerProfileInherits: null, processProfileName: null, processProfileInherits: null } satisfies ThreeMfIndex)
         return
       }
       response.json({
@@ -60,6 +60,7 @@ export function registerPrinterStoragePlatesRoute(router: Router): void {
         compatiblePrinterModels: index.compatiblePrinterModels,
         supportFilamentIds: index.supportFilamentIds,
         printerProfileName: index.printerProfileName,
+        printerProfileInherits: index.printerProfileInherits,
         processProfileName: index.processProfileName,
         processProfileInherits: index.processProfileInherits,
         // The print dialog warns when this disagrees with the machine, so it has to survive the

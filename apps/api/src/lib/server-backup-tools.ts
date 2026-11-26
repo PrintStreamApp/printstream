@@ -90,7 +90,7 @@ async function resolveTool(name: string, override: string | undefined): Promise<
   if (override) {
     return (await isExecutableFile(override)) ? override : null
   }
-  const embeddedBinDir = process.env.EMBEDDED_POSTGRES_BIN_DIR
+  const embeddedBinDir = env.EMBEDDED_POSTGRES_BIN_DIR
   if (embeddedBinDir) {
     const exeName = process.platform === 'win32' ? `${name}.exe` : name
     const candidate = path.join(embeddedBinDir, exeName)

@@ -95,3 +95,11 @@ export function formatSecondsDuration(seconds: number): string {
   const minutes = Math.round(seconds / 60)
   return formatMinutesDuration(minutes)
 }
+/** Full observation timestamp in an explicit IANA zone, always using a 12-hour clock. */
+export function formatDateTimeInZone(value: Date | string | number, timeZone: string): string {
+  const date = normalizeDate(value)
+  if (!date) return ''
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone, year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true
+  }).format(date).replace(/\bAM\b/gi, 'a.m.').replace(/\bPM\b/gi, 'p.m.')
+}

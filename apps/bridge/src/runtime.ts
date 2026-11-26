@@ -46,7 +46,7 @@ import {
   streamFrames,
   validatePrinterLanConnection
 } from '@printstream/bridge-runtime'
-import { env } from './env.js'
+import { bridgeEnvNotices, env } from './env.js'
 import { getBridgeLogs, installBridgeLogCapture } from './bridge-logs.js'
 import {
   getCaptureStatus,
@@ -196,6 +196,12 @@ export class BridgeRuntimeClient {
       )
     }
 
+    // Deprecated or contradictory settings, once per start, so an operator reading the log can fix
+    // them. Here rather than in env.ts so they reach the captured log in both packagings.
+    for (const notice of bridgeEnvNotices) {
+      console.warn(`Configuration: ${notice}`)
+    }
+
     this.updateStatus({
       lifecycle: 'starting',
       message: 'Starting bridge runtime.'
@@ -208,7 +214,7 @@ export class BridgeRuntimeClient {
     // Only an explicitly supplied driver can self-update. The default image-pull
     // driver merely reports a manual command, so periodically invoking it would
     // add traffic without ever converging the bridge.
-    if (env.BRIDGE_AUTO_UPDATE && this.options.updateDriver) {
+    if (env.BRIDGE_UPDATE_MODE === 'automatic' && this.options.updateDriver) {
       schedulePeriodicBridgeUpdate(async () => {
         await this.runAutomaticBridgeUpdate()
       })
@@ -266,7 +272,7 @@ export class BridgeRuntimeClient {
     })
     await this.updateDriver.confirmHealthy()
 
-    if (env.BRIDGE_AUTO_UPDATE && await this.runAutomaticBridgeUpdate()) {
+    if (env.BRIDGE_UPDATE_MODE === 'automatic' && await this.runAutomaticBridgeUpdate()) {
       return
     }
 

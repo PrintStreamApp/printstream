@@ -6,6 +6,7 @@ interface DesktopHost {
     platform?: 'win32' | 'darwin' | 'linux'
     makerWorldBrowserImport?: boolean
     modelBrowserImport?: readonly ('makerworld' | 'printables')[]
+    modelImportDestination?: boolean
     makerWorldChallengeTest?: boolean
     notifications?: boolean
   }
@@ -37,6 +38,11 @@ export function supportsDesktopModelBrowserImport(provider: 'makerworld' | 'prin
   const capabilities = desktopHost()?.capabilities
   if (capabilities?.modelBrowserImport?.includes(provider)) return true
   return provider === 'makerworld' && capabilities?.makerWorldBrowserImport === true
+}
+
+/** Whether the host waits for a library destination after each provider download. */
+export function supportsDesktopModelImportDestination(): boolean {
+  return desktopHost()?.capabilities?.modelImportDestination === true
 }
 
 /** True only when Electron was explicitly launched with its local challenge fixture enabled. */

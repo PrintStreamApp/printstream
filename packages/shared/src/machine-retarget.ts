@@ -668,20 +668,57 @@ export function projectMatchesNozzleDiameters(
  * mismatch" rule the rest of the compatibility code follows, and is what keeps a hand-written or
  * project-embedded preset from being refused for saying too little.
  *
+ * A CUSTOM machine is also accepted through its direct parent, see {@link declaredPrintersAcceptMachine}.
+ *
  * Used as a WRITE guard rather than a picker: authoring a process preset the machine does not accept
  * bakes settings the engine will refuse or silently fall back from, into a file the user keeps.
  */
 export function processPresetFitsMachine(
   processConfig: ProfileRecord | null | undefined,
-  machinePresetName: string | null | undefined
+  machinePresetName: string | null | undefined,
+  machineParentName?: string | null
 ): boolean {
   if (!processConfig || !machinePresetName) return true
   const declared = processConfig.compatible_printers
   const names = Array.isArray(declared)
     ? declared.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
     : typeof declared === 'string' && declared.trim() ? [declared] : []
-  if (names.length === 0) return true
-  return names.some((name) => name.trim() === machinePresetName.trim())
+  return declaredPrintersAcceptMachine(names, machinePresetName, machineParentName)
+}
+
+/**
+ * The literal `compatible_printers` containment rule, over an already-read declaration. The ONE
+ * implementation behind both the save's {@link processPresetFitsMachine} and the web picker's
+ * `declaredCompatiblePrintersAccept`, so the two cannot disagree.
+ *
+ * A process fits when it declares nothing, or names the machine's SYSTEM identity: the machine
+ * preset's own name for a system printer, and its DIRECT parent (`inherits`) INSTEAD for a custom
+ * one. That is the rule the slicing CLI enforces (`BambuStudio.cpp:2330-2336`, `:2924-2944`).
+ * Studio's GUI (`is_compatible_with_printer`, `Preset.cpp:778-810`) also accepts a custom printer's
+ * own name, but the CLI never tests it, so we follow the CLI. The parent case exists because a
+ * user's custom "P1P 0.4 nozzle" cannot change its model or nozzle, so stock process presets written
+ * for the stock printer stay valid on it. Grandparents are never checked. A custom machine with no
+ * recorded parent falls back to its own name.
+ *
+ * @param machineParentName The custom machine's direct parent, or null/undefined for a system
+ *   machine (which must NOT be accepted through any parent: a system preset's own `inherits` is a
+ *   common base, not a printer).
+ */
+export function declaredPrintersAcceptMachine(
+  declaredPrinters: readonly string[],
+  machinePresetName: string | null | undefined,
+  machineParentName?: string | null
+): boolean {
+  const declared = declaredPrinters.map((entry) => entry.trim()).filter(Boolean)
+  const machine = machinePresetName?.trim()
+  if (declared.length === 0 || !machine) return true
+  // A custom machine is judged by its parent ALONE, as the slicing CLI does
+  // (`BambuStudio.cpp:2330-2336`, `:2924-2944`: `new_printer_system_name` is the custom preset's
+  // `inherits`, and its own name is never tested). Studio's GUI also accepts the own name
+  // (`Preset.cpp:803`), but a process that only names the custom preset would pass the picker and
+  // then be refused at slice time (exit 239), so we apply the stricter, slice-true rule.
+  const parent = machineParentName?.trim()
+  return declared.includes(parent || machine)
 }
 
 /**
@@ -742,6 +779,8 @@ export async function resolveRetargetProcessFallback(input: {
   machineConfig: ProfileRecord
   /** The machine preset name being authored, which `compatible_printers` is matched against. */
   printerSettingsId: string
+  /** The custom machine's direct parent (`printerPresetInherits`); null/absent for a system machine. */
+  printerPresetInherits?: string | null
   /** Resolve a system process preset by NAME, with its `inherits` chain merged; null if unknown. */
   resolveSystemProcess: (name: string) => Promise<ProfileRecord | null>
   log?: (message: string) => void
@@ -761,7 +800,7 @@ export async function resolveRetargetProcessFallback(input: {
   if (!currentName) return null
   const current = await input.resolveSystemProcess(currentName)
   // Unknown parent, or one that still accepts the target: nothing to switch away from.
-  if (!current || processPresetFitsMachine(current, input.printerSettingsId)) return null
+  if (!current || processPresetFitsMachine(current, input.printerSettingsId, input.printerPresetInherits)) return null
 
   const fallbackName = machineDefaultProcessName(input.machineConfig)
   const fallback = fallbackName ? await input.resolveSystemProcess(fallbackName) : null
@@ -770,7 +809,7 @@ export async function resolveRetargetProcessFallback(input: {
   // blanking that slot is the whole point: a nameless config would copy its values over the project
   // and leave it pointing at the OLD printer's process, which the engine still refuses (exit 239)
   // while the user's settings have silently changed underneath them. Worse than doing nothing.
-  if (!fallback || !firstProfileString(fallback.name) || !processPresetFitsMachine(fallback, input.printerSettingsId)) {
+  if (!fallback || !firstProfileString(fallback.name) || !processPresetFitsMachine(fallback, input.printerSettingsId, input.printerPresetInherits)) {
     input.log?.(`the project's process "${currentName}" does not fit ${input.printerSettingsId} and no compatible replacement resolved; keeping it`)
     return null
   }
